@@ -57,6 +57,40 @@ q() { az "$@" 2>/dev/null || true; }
 # DLZ resource group Reader (ARM list for DLZ-hosted navigators)
 grant "$READER" "/subscriptions/$SUB/resourceGroups/$DLZ_RG" "Reader on DLZ RG"
 
+# ---------------------------------------------------------------------------
+# Bring-Your-Own reused resources (cross-sub aware). When the operator points
+# Loom at an EXISTING resource in another RG/subscription (via byo-wizard.sh /
+# the EXISTING_* exports), grant the Console UAMI the same navigator role on THAT
+# resource — at its real subscription scope. Additive: the discovery-based grants
+# below still cover Loom-provisioned (own) resources. No-op when the matching
+# EXISTING_* var is unset. (Cross-sub grants require the running principal to hold
+# role-assignment rights in the target sub; Purview data-plane roles are granted
+# in the Purview portal, not here — see full-deployment-and-byo.md §3b.)
+# ---------------------------------------------------------------------------
+byo_grant() { # byo_grant ROLE NAME RG SUB PROVIDER/TYPE LABEL
+  local role="$1" name="$2" rg="$3" sub="$4" rt="$5" label="$6"
+  [[ -z "$name" ]] && return 0
+  [[ -z "$rg" ]] && { echo "  - BYO $label: set its _RG to grant cross-RG/sub — skipping"; return 0; }
+  grant "$role" "/subscriptions/${sub:-$SUB}/resourceGroups/$rg/providers/$rt/$name" "BYO $label"
+}
+byo_grant "$EH_DATA_OWNER" "${EXISTING_EVENTHUB_NAMESPACE:-}" "${EXISTING_EVENTHUB_RG:-}" "${EXISTING_EVENTHUB_SUB:-}" "Microsoft.EventHub/namespaces" "Event Hubs Data Owner (reused)"
+byo_grant "$CONTRIBUTOR"   "${EXISTING_EVENTHUB_NAMESPACE:-}" "${EXISTING_EVENTHUB_RG:-}" "${EXISTING_EVENTHUB_SUB:-}" "Microsoft.EventHub/namespaces" "Contributor on EH (reused)"
+byo_grant "$COSMOS_CONTRIB" "${EXISTING_COSMOS_ACCOUNT:-}" "${EXISTING_COSMOS_ACCOUNT_RG:-}" "${EXISTING_COSMOS_ACCOUNT_SUB:-}" "Microsoft.DocumentDB/databaseAccounts" "DocumentDB Account Contributor (reused)"
+byo_grant "$SEARCH_CONTRIB" "${EXISTING_AI_SEARCH_SERVICE:-}" "${EXISTING_AI_SEARCH_RG:-}" "${EXISTING_AI_SEARCH_SUB:-}" "Microsoft.Search/searchServices" "Search Service Contributor (reused)"
+byo_grant "$SEARCH_DATA"    "${EXISTING_AI_SEARCH_SERVICE:-}" "${EXISTING_AI_SEARCH_RG:-}" "${EXISTING_AI_SEARCH_SUB:-}" "Microsoft.Search/searchServices" "Search Index Data Contributor (reused)"
+byo_grant "$COG_CONTRIB"    "${EXISTING_AOAI:-${EXISTING_AOAI_ACCOUNT:-}}" "${EXISTING_AOAI_RG:-}" "${EXISTING_AOAI_SUB:-}" "Microsoft.CognitiveServices/accounts" "Cognitive Services Contributor (reused)"
+# Cosmos reused account also needs the data-plane Built-in Data Contributor.
+if [[ -n "${EXISTING_COSMOS_ACCOUNT:-}" && -n "${EXISTING_COSMOS_ACCOUNT_RG:-}" ]]; then
+  echo "  BYO Cosmos data-plane: Built-in Data Contributor (reused ${EXISTING_COSMOS_ACCOUNT})"
+  MSYS_NO_PATHCONV=1 az cosmosdb sql role assignment create \
+    --account-name "$EXISTING_COSMOS_ACCOUNT" -g "$EXISTING_COSMOS_ACCOUNT_RG" \
+    ${EXISTING_COSMOS_ACCOUNT_SUB:+--subscription "$EXISTING_COSMOS_ACCOUNT_SUB"} \
+    --role-definition-id "00000000-0000-0000-0000-000000000002" \
+    --principal-id "$UAMI_PRINCIPAL" --scope "/" -o none 2>&1 \
+    | grep -vi "already\|exists\|Conflict" || true
+  echo "  ✓ Cosmos DB Built-in Data Contributor (reused ${EXISTING_COSMOS_ACCOUNT})"
+fi
+
 # Event Hubs namespace
 EH_NS="$(q eventhubs namespace list -g "$DLZ_RG" --query "[0].name" -o tsv)"
 if [[ -n "$EH_NS" ]]; then

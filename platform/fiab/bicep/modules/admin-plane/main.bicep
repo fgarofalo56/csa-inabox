@@ -593,6 +593,25 @@ param existingFoundryAccountName string = ''
 @description('Resource group of the existing Foundry/AOAI account. Empty defaults to this admin RG.')
 param existingFoundryRg string = ''
 
+// ---- Bring-your-own existing services — cross-sub (…Sub) dimension for the
+// four admin-plane reuse pairs PLUS the remaining reusable services (Purview,
+// Synapse, Cosmos, Event Hubs, Databricks) per
+// docs/fiab/design/full-deployment-and-byo.md §4.2. Consolidated into ONE object
+// param (the module is near Bicep's 256-param limit). Each field is a pure
+// string pass-through used to build the LOOM_<SVC>_SUB Console env var (clients
+// fall back to LOOM_SUBSCRIPTION_ID when empty) and/or override the navigator
+// binding (reuse > provisioned). NOT used as Bicep `existing` cross-sub
+// references — post-deploy RBAC is granted by grant-navigator-rbac.sh against
+// whatever sub resolves here. Emitted by scripts/csa-loom/byo-wizard.sh. Keys:
+//   aiSearchSub, apimSub, adxClusterSub, foundrySub,
+//   purviewAccount, purviewRg, purviewSub,
+//   synapseWorkspace, synapseRg, synapseSub,
+//   cosmosAccount, cosmosRg, cosmosSub,
+//   eventHubNamespace, eventHubRg, eventHubSub,
+//   databricksWorkspace, databricksRg, databricksSub, databricksHostname
+@description('Bring-your-own existing-service overrides (cross-sub …Sub + Purview/Synapse/Cosmos/EventHubs/Databricks). See the key list in admin-plane/main.bicep; emitted by byo-wizard.sh.')
+param byoExisting object = {}
+
 @description('Azure ML workspace name backing the notebook AML path (deploy-planner mlWorkspace module). Empty → the AML notebook toggle honest-gates (LOOM_AML_WORKSPACE unset).')
 param amlWorkspaceName string = ''
 @description('Resource group of the Azure ML workspace. Empty defaults to this admin RG.')
@@ -603,6 +622,34 @@ var byoAiSearchRg = !empty(existingAiSearchRg) ? existingAiSearchRg : resourceGr
 var byoApimRg     = !empty(existingApimRg) ? existingApimRg : resourceGroup().name
 var byoAdxRg      = !empty(existingAdxClusterRg) ? existingAdxClusterRg : resourceGroup().name
 var byoFoundryRg  = !empty(existingFoundryRg) ? existingFoundryRg : resourceGroup().name
+// Cross-sub (…Sub) resolution — empty falls back to the deployment subscription.
+var byoAiSearchSub = !empty(byoExisting.?aiSearchSub ?? '') ? byoExisting.aiSearchSub : subscription().subscriptionId
+var byoApimSub     = !empty(byoExisting.?apimSub ?? '') ? byoExisting.apimSub : subscription().subscriptionId
+var byoAdxSub      = !empty(byoExisting.?adxClusterSub ?? '') ? byoExisting.adxClusterSub : subscription().subscriptionId
+var byoFoundrySub  = !empty(byoExisting.?foundrySub ?? '') ? byoExisting.foundrySub : subscription().subscriptionId
+// Purview — existingPurviewAccount overrides loomPurviewAccount (reuse > param).
+var existingPurviewAccount = byoExisting.?purviewAccount ?? ''
+var existingPurviewRg      = byoExisting.?purviewRg ?? ''
+var effPurviewAccount = !empty(existingPurviewAccount) ? existingPurviewAccount : loomPurviewAccount
+var byoPurviewSub     = !empty(byoExisting.?purviewSub ?? '') ? byoExisting.purviewSub : subscription().subscriptionId
+// Synapse navigator — reuse > provisioned DLZ workspace.
+var existingSynapseWorkspace = byoExisting.?synapseWorkspace ?? ''
+var effSynapseWorkspace = !empty(existingSynapseWorkspace) ? existingSynapseWorkspace : loomSynapseWorkspace
+var byoSynapseRg        = !empty(byoExisting.?synapseRg ?? '') ? byoExisting.synapseRg : loomDlzRg
+var byoSynapseSub       = !empty(byoExisting.?synapseSub ?? '') ? byoExisting.synapseSub : subscription().subscriptionId
+// Cosmos control-plane navigator — reuse > provisioned DLZ account.
+var existingCosmosAccount = byoExisting.?cosmosAccount ?? ''
+var effCosmosAccount = !empty(existingCosmosAccount) ? existingCosmosAccount : loomCosmosAccount
+var effCosmosRg      = !empty(byoExisting.?cosmosRg ?? '') ? byoExisting.cosmosRg : (!empty(loomCosmosAccountRg) ? loomCosmosAccountRg : loomDlzRg)
+var byoCosmosSub     = !empty(byoExisting.?cosmosSub ?? '') ? byoExisting.cosmosSub : subscription().subscriptionId
+// Event Hubs navigator — reuse > provisioned DLZ namespace.
+var existingEventHubNamespace = byoExisting.?eventHubNamespace ?? ''
+var effEventHubNamespace = !empty(existingEventHubNamespace) ? existingEventHubNamespace : loomEventHubNamespace
+var effEventHubRg        = !empty(byoExisting.?eventHubRg ?? '') ? byoExisting.eventHubRg : (!empty(loomEventHubRg) ? loomEventHubRg : loomDlzRg)
+var byoEventHubSub       = !empty(byoExisting.?eventHubSub ?? '') ? byoExisting.eventHubSub : (!empty(loomEventHubSub) ? loomEventHubSub : subscription().subscriptionId)
+// Databricks navigator — reuse hostname > provisioned/patched hostname.
+var existingDatabricksHostname = byoExisting.?databricksHostname ?? ''
+var effDatabricksHostname = !empty(existingDatabricksHostname) ? existingDatabricksHostname : loomDatabricksHostname
 // Sovereign-cloud ADX (Kusto) hostname suffix — Commercial/GCC vs GCC-High/IL5.
 // Used only for the BYO (existingAdxClusterName) path; the provisioned cluster
 // uses adxCluster.outputs.clusterUri (ARM-generated, already cloud-correct).
@@ -1603,7 +1650,9 @@ module appDeployments 'app-deployments.bicep' = if (containerPlatform == 'contai
             // Activator run-history Microsoft.AlertsManagement/alerts). Mirrors the
             // sovereign-cloud selection already used by adf-client.ts.
             { name: 'LOOM_ARM_ENDPOINT', value: boundary == 'GCC-High' || boundary == 'IL5' ? 'https://management.usgovcloudapi.net' : 'https://management.azure.com' }
-            { name: 'LOOM_SYNAPSE_WORKSPACE', value: loomSynapseWorkspace }
+            { name: 'LOOM_SYNAPSE_WORKSPACE', value: effSynapseWorkspace }
+            { name: 'LOOM_SYNAPSE_RG', value: byoSynapseRg }
+            { name: 'LOOM_SYNAPSE_SUB', value: byoSynapseSub }
             { name: 'LOOM_SYNAPSE_DEDICATED_POOL', value: loomSynapseDedicatedPool }
             // Direct Lake warm-cache TTL (seconds). Semantic-model queries within
             // this window are served from the Power BI in-memory VertiPaq cache;
@@ -1774,10 +1823,10 @@ module appDeployments 'app-deployments.bicep' = if (containerPlatform == 'contai
             { name: 'LOOM_ASA_LOCATION', value: loomAsaLocation }
             // Event Hubs namespace navigator (Eventstream editor left pane) —
             // defaults RG/sub to LOOM_DLZ_RG / LOOM_SUBSCRIPTION_ID when unset.
-            { name: 'LOOM_EVENTHUB_NAMESPACE', value: loomEventHubNamespace }
+            { name: 'LOOM_EVENTHUB_NAMESPACE', value: effEventHubNamespace }
             { name: 'LOOM_EH_SCHEMA_GROUP', value: loomEhSchemaGroup }
-            { name: 'LOOM_EVENTHUB_RG', value: loomEventHubRg }
-            { name: 'LOOM_EVENTHUB_SUB', value: loomEventHubSub }
+            { name: 'LOOM_EVENTHUB_RG', value: effEventHubRg }
+            { name: 'LOOM_EVENTHUB_SUB', value: byoEventHubSub }
             // Business Events publishing surface (/business-events) — Event Grid
             // custom-topic channel + durable Event Hub channel + governed
             // event-type registry (Cosmos). The Event Grid sub/RG default to the
@@ -1808,7 +1857,7 @@ module appDeployments 'app-deployments.bicep' = if (containerPlatform == 'contai
             // wizard) AND the workspace-monitoring provisioner (LAW→EH→ADX live
             // feed). An explicit workspaceMonitorEventHubNamespaceId override wins;
             // otherwise derived from the navigator namespace/RG/sub (DLZ fallback).
-            { name: 'LOOM_EVENTHUB_NAMESPACE_RESOURCE_ID', value: !empty(workspaceMonitorEventHubNamespaceId) ? workspaceMonitorEventHubNamespaceId : (empty(loomEventHubNamespace) ? '' : '/subscriptions/${empty(loomEventHubSub) ? subscription().subscriptionId : loomEventHubSub}/resourceGroups/${empty(loomEventHubRg) ? loomDlzRg : loomEventHubRg}/providers/Microsoft.EventHub/namespaces/${loomEventHubNamespace}') }
+            { name: 'LOOM_EVENTHUB_NAMESPACE_RESOURCE_ID', value: !empty(workspaceMonitorEventHubNamespaceId) ? workspaceMonitorEventHubNamespaceId : (empty(effEventHubNamespace) ? '' : '/subscriptions/${byoEventHubSub}/resourceGroups/${effEventHubRg}/providers/Microsoft.EventHub/namespaces/${effEventHubNamespace}') }
             // Cloud-aware ARM base. Commercial → management.azure.com (default);
             // GCC-High / IL5 → management.usgovcloudapi.net. Read by eventhubs-
             // client, the eventhouse ingest/preview routes, adf/azure-sql clients.
@@ -1824,7 +1873,7 @@ module appDeployments 'app-deployments.bicep' = if (containerPlatform == 'contai
             // singular hostname is what databricks-client.ts reads; the real
             // value embeds a non-deterministic workspace id so it is patched
             // post-deploy from the DLZ workspaceUrl (see loomDatabricksHostname).
-            { name: 'LOOM_DATABRICKS_HOSTNAME', value: loomDatabricksHostname }
+            { name: 'LOOM_DATABRICKS_HOSTNAME', value: effDatabricksHostname }
             // The same hostname also backs the workspace Spark / compute
             // configuration surface (Settings → Spark compute; F13) — instance
             // pools, runtime, environment libraries, and job defaults. No extra
@@ -1855,6 +1904,7 @@ module appDeployments 'app-deployments.bicep' = if (containerPlatform == 'contai
             { name: 'LOOM_KUSTO_DM_URI',       value: !empty(existingAdxClusterName) ? 'https://ingest-${existingAdxClusterName}.${location}.${kustoSuffix}' : (adxEnabled ? adxCluster!.outputs.clusterDataIngestionUri : '') }
             { name: 'LOOM_KUSTO_CLUSTER_NAME', value: !empty(existingAdxClusterName) ? existingAdxClusterName : (adxEnabled ? adxCluster!.outputs.clusterName : '') }
             { name: 'LOOM_KUSTO_RG',           value: !empty(existingAdxClusterName) ? byoAdxRg : (adxEnabled ? resourceGroup().name : '') }
+            { name: 'LOOM_KUSTO_SUB',          value: !empty(existingAdxClusterName) ? byoAdxSub : ((adxEnabled) ? subscription().subscriptionId : '') }
             { name: 'LOOM_KUSTO_LOCATION',     value: (!empty(existingAdxClusterName) || adxEnabled) ? location : '' }
             // Per-DLZ ADX database is named loomdb-<domain>; the single-sub DLZ
             // uses domain "default" → loomdb-default. For a reused cluster the real
@@ -1901,6 +1951,7 @@ module appDeployments 'app-deployments.bicep' = if (containerPlatform == 'contai
             // AI Search navigator + the loom-items grounding index + help copilot.
             // RG/sub fall back to LOOM_AI_SEARCH_RG / LOOM_SUBSCRIPTION_ID.
             { name: 'LOOM_AI_SEARCH_SERVICE',  value: !empty(existingAiSearchService) ? existingAiSearchService : (aiSearchEnabled ? aiSearch!.outputs.searchName : '') }
+            { name: 'LOOM_AI_SEARCH_SUB',      value: !empty(existingAiSearchService) ? byoAiSearchSub : (aiSearchEnabled ? subscription().subscriptionId : '') }
             // Optional storage connection string for AI Search indexer debug-session
             // state (ms-az-cognitive-search-debugsession container). Empty by default;
             // operators set it (or supply per-session in the UI) to enable debug
@@ -1913,12 +1964,14 @@ module appDeployments 'app-deployments.bicep' = if (containerPlatform == 'contai
             // APIM navigator (apis/products/named-values/backends/subscriptions) + marketplace.
             { name: 'LOOM_APIM_NAME',          value: !empty(existingApimName) ? existingApimName : (apimEnabled ? apim!.outputs.apimName : '') }
             { name: 'LOOM_APIM_RG',            value: !empty(existingApimName) ? byoApimRg : (apimEnabled ? resourceGroup().name : '') }
+            { name: 'LOOM_APIM_SUB',           value: !empty(existingApimName) ? byoApimSub : (apimEnabled ? subscription().subscriptionId : '') }
             // Cosmos DB control-plane navigator (databases/containers/sprocs). This
             // is the USER-navigated account (distinct from Loom's own store at
             // LOOM_COSMOS_ENDPOINT) and lives in the DLZ RG. Requires the Console
             // UAMI to hold "DocumentDB Account Contributor" (granted in cosmos.bicep).
-            { name: 'LOOM_COSMOS_ACCOUNT',     value: loomCosmosAccount }
-            { name: 'LOOM_COSMOS_ACCOUNT_RG',  value: !empty(loomCosmosAccountRg) ? loomCosmosAccountRg : loomDlzRg }
+            { name: 'LOOM_COSMOS_ACCOUNT',     value: effCosmosAccount }
+            { name: 'LOOM_COSMOS_ACCOUNT_RG',  value: effCosmosRg }
+            { name: 'LOOM_COSMOS_ACCOUNT_SUB', value: byoCosmosSub }
             // Item-level Share (per-Azure-SQL-database Access control / IAM).
             // The RG of the SQL server(s); the Console UAMI holds constrained
             // RBAC-Admin here (sql-database-share-rbac.bicep) so the Share dialog
@@ -2144,8 +2197,10 @@ module appDeployments 'app-deployments.bicep' = if (containerPlatform == 'contai
           //   2. purview-csa-loom-<location> when `purviewEnabled = true`
           //      and no explicit account name was supplied
           // ----------------------------------------------------------------
-          !empty(loomPurviewAccount) ? [
-            { name: 'LOOM_PURVIEW_ACCOUNT', value: loomPurviewAccount }
+          !empty(effPurviewAccount) ? [
+            { name: 'LOOM_PURVIEW_ACCOUNT', value: effPurviewAccount }
+            { name: 'LOOM_PURVIEW_RG', value: existingPurviewRg }
+            { name: 'LOOM_PURVIEW_SUB', value: byoPurviewSub }
           ] : (purviewEnabled ? [
             { name: 'LOOM_PURVIEW_ACCOUNT', value: 'purview-csa-loom-${location}' }
           ] : []),
@@ -2158,8 +2213,8 @@ module appDeployments 'app-deployments.bicep' = if (containerPlatform == 'contai
           // is 100% functional Azure-native per no-fabric-dependency.md). The UC
           // API is Commercial-only today; GCC/GCC-High/IL5 fall back to the
           // Cosmos governance-domain list automatically.
-          !empty(loomPurviewAccount) ? [
-            { name: 'LOOM_PURVIEW_UC_ENDPOINT', value: 'https://${loomPurviewAccount}.purview.azure.com' }
+          !empty(effPurviewAccount) ? [
+            { name: 'LOOM_PURVIEW_UC_ENDPOINT', value: 'https://${effPurviewAccount}.purview.azure.com' }
             { name: 'LOOM_PURVIEW_UC_API_VERSION', value: '2026-03-20-preview' }
           ] : (purviewEnabled ? [
             { name: 'LOOM_PURVIEW_UC_ENDPOINT', value: 'https://purview-csa-loom-${location}.purview.azure.com' }
@@ -2312,7 +2367,7 @@ module appDeployments 'app-deployments.bicep' = if (containerPlatform == 'contai
             // (Databricks workspace URLs embed a non-deterministic id). Empty
             // until patched post-deploy from the DLZ workspaceUrl, so UC gates
             // honestly rather than calling a phantom host (per no-vaporware.md).
-            { name: 'LOOM_DATABRICKS_HOSTNAMES', value: loomDatabricksHostname }
+            { name: 'LOOM_DATABRICKS_HOSTNAMES', value: effDatabricksHostname }
           ] : [],
           // Fabric API base is always set — the runtime gates on UAMI authz.
           [
@@ -2409,6 +2464,7 @@ module appDeployments 'app-deployments.bicep' = if (containerPlatform == 'contai
             // Models / Quota / Keys / Networking / RBAC tabs and the
             // data-agent test chat. Empty when AI Foundry isn't deployed.
             { name: 'LOOM_FOUNDRY_RG', value: byoFoundryRg }
+            { name: 'LOOM_FOUNDRY_SUB', value: byoFoundrySub }
             { name: 'LOOM_FOUNDRY_NAME', value: (aiFoundryEnabled && empty(existingFoundryAccountName)) ? aiFoundry!.outputs.hubName : '' }
             // Azure AI Content Safety endpoint — copilot persona moderation
             // pipeline (Prompt Shields + harm analyze). Empty when the Content
@@ -2427,6 +2483,7 @@ module appDeployments 'app-deployments.bicep' = if (containerPlatform == 'contai
             // The model-hosting account lives in this admin-plane RG. foundry-cs-client.ts
             // reads LOOM_AOAI_RG (falls back to LOOM_FOUNDRY_RG, but pin it explicitly).
             { name: 'LOOM_AOAI_RG', value: byoFoundryRg }
+            { name: 'LOOM_AOAI_SUB', value: byoFoundrySub }
             // Foundry region — foundry-client.ts reads this for region-scoped
             // quota/model calls; falls back to a hard-coded 'eastus2' otherwise.
             { name: 'LOOM_FOUNDRY_REGION', value: location }
