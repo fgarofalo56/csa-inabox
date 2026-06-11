@@ -73,6 +73,9 @@ export async function POST(req: NextRequest) {
         tables: Array.isArray(body?.tables) ? body.tables : [],
         // Snowflake-only: also mirror Snowflake-managed Iceberg tables.
         includeIcebergTables: !!body?.includeIcebergTables,
+        // Ongoing-replication mode (snapshot | incremental | continuous) — consumed
+        // by the engine to pick snapshot vs. watermark-incremental vs. ADF CDC/copy.
+        syncMode: body?.syncMode || srcProps.syncMode || undefined,
         // Source-specific fields surfaced by the wizard for BigQuery (projectId)
         // and Oracle (serviceName + on-prem data gateway/SHIR + syncUser). Stored
         // flat so Start/edit/monitor read them without re-parsing the definition.

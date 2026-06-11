@@ -71,6 +71,7 @@ export async function GET(req: NextRequest, ctx: { params: Promise<{ id: string 
         connectionId: st.connectionId, tables: st.tables || [],
         includeIcebergTables: !!st.includeIcebergTables,
         projectId: st.projectId, serviceName: st.serviceName, gateway: st.gateway, syncUser: st.syncUser,
+        syncMode: st.syncMode,
       },
       lastRun: st.lastRun || null,
       tables,
@@ -135,6 +136,7 @@ export async function PATCH(req: NextRequest, ctx: { params: Promise<{ id: strin
       syncUser: body?.syncUser !== undefined ? body.syncUser : state.syncUser,
       tables,
       includeIcebergTables: body?.includeIcebergTables !== undefined ? !!body.includeIcebergTables : state.includeIcebergTables,
+      syncMode: body?.syncMode !== undefined ? body.syncMode : state.syncMode,
     };
     const next: WorkspaceItem = {
       ...existing,
@@ -152,6 +154,7 @@ export async function PATCH(req: NextRequest, ctx: { params: Promise<{ id: strin
         connectionId: nextState.connectionId, tables: nextState.tables,
         includeIcebergTables: !!nextState.includeIcebergTables,
         projectId: nextState.projectId, serviceName: nextState.serviceName, gateway: nextState.gateway, syncUser: nextState.syncUser,
+        syncMode: nextState.syncMode,
       },
     });
   } catch (e: any) {

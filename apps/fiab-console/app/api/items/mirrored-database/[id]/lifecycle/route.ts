@@ -46,6 +46,10 @@ function sourceFromState(state: Record<string, any>): MirrorSource {
     database: String(state?.database || def.database || ''),
     tables,
     includeIcebergTables: !!(state?.includeIcebergTables ?? def.includeIcebergTables),
+    syncMode: ((): MirrorSource['syncMode'] => {
+      const m = String(state?.syncMode ?? def.syncMode ?? '').trim();
+      return m === 'snapshot' || m === 'incremental' || m === 'continuous' ? m : undefined;
+    })(),
   };
 }
 

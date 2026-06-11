@@ -66,3 +66,28 @@ missing `@adobe/css-tools` / `@azure/abort-controller` (documented store corrupt
 from parallel agents) that breaks the global jest-dom setup file used by render
 suites. Live E2E receipt (ADF run id + ABFS Delta listing) to be attached by the
 operator against a real Azure SQL source.
+
+## Ongoing CDC + Snowflake copy runtime (audit-t105)
+
+Ongoing change capture is now built for every directly-readable source, and
+Snowflake replicates via a real ADF Copy runtime — all Azure-native, no Fabric:
+
+| Source | Ongoing engine | Backend |
+|---|---|---|
+| Azure SQL DB / MI / SQL Server | SQL Change Tracking delta, or ADF CDC resource (opt-in) | `azure-sql-client` CHANGETABLE / `adfcdcs` |
+| PostgreSQL | watermark-incremental on an auto-detected monotonic column (updated-at / serial) | `postgres-flex-client` pg-wire. **Not** `adfcdcs` — PG is not a valid CDC-resource source (corrected latent wiring). |
+| Cosmos DB | `_ts`-watermark incremental (changed docs since last sync) | `cosmos-data-client` `queryItems` with `c._ts > @since` |
+| Snowflake | ADF **Copy** pipeline (Delete→Copy full refresh → Bronze **Parquet**) + schedule trigger | `adf-client` `upsertDataset`/`upsertPipeline`/`runPipeline`/`upsertTrigger`; `runMirrorAdfCopy` |
+
+The wizard's **Sync mode** dropdown (snapshot / incremental / continuous) is a
+fixed allowlist carried into `mirroring.json` + item state and consumed by Start.
+Insert/update fidelity for PG/Cosmos matches the SQL Change-Tracking engine;
+physical-delete propagation is a disclosed follow-up across all watermark engines.
+
+New env vars (default-empty / `1h`, threaded root `main.bicep` → `admin-plane`):
+`LOOM_MIRROR_SNOWFLAKE_LINKED_SERVICE`, `LOOM_MIRROR_COPY_CADENCE`. The two
+pre-existing linked-service vars are now threaded from the root template too.
+
+`lib/azure/__tests__/mirror-adf-copy.test.ts` locks the Copy spec (Delete→Copy
+delete-then-copy, SnowflakeSource → ParquetSink, schedule trigger, honest gates)
+and asserts PostgreSQL never reaches `upsertAdfCdc`.

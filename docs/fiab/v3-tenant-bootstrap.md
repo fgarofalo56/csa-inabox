@@ -1179,6 +1179,25 @@ prerequisite the wizard surfaces as an honest gate:
 |---|---|---|
 | **Google BigQuery** | GCP project id, dataset, Key Vault connection holding the service-account JSON | An ADF **GoogleBigQueryV2** linked service bound to the service-account key; the SA needs **BigQuery Data Viewer** + **BigQuery Job User** on the project. Point `LOOM_MIRROR_SOURCE_LINKED_SERVICE` at it. |
 | **Oracle** | host, service name/SID, on-prem data gateway (SHIR), sync user, Key Vault connection holding the sync-user secret | An **on-prem data gateway / self-hosted integration runtime** that can reach the Oracle listener, plus an ADF **Oracle** linked service bound to it. The sync user needs `CREATE SESSION`, `SELECT_CATALOG_ROLE`, `EXECUTE_CATALOG_ROLE`, `SELECT ANY TABLE`, `LOGMINING` (see Learn). Point `LOOM_MIRROR_SOURCE_LINKED_SERVICE` at it. |
+| **Snowflake** | account/host, database, Key Vault connection holding the Snowflake credential, sync mode | An ADF **Snowflake** linked service (credential in Key Vault). Set `LOOM_MIRROR_SNOWFLAKE_LINKED_SERVICE` to it (falls back to `LOOM_MIRROR_SOURCE_LINKED_SERVICE`) + `LOOM_MIRROR_ADLS_LINKED_SERVICE` for the Bronze sink. Snowflake mirrors via an ADF **Copy** pipeline (delete-then-copy full refresh → Bronze Parquet) + a schedule trigger on `LOOM_MIRROR_COPY_CADENCE` (default `1h`). |
+
+### Ongoing CDC per source — what each `syncMode` actually does {#mirror-ongoing-cdc}
+
+The wizard's **Sync mode** control (snapshot · incremental · continuous) is carried
+into `mirroring.json` `source.typeProperties.syncMode` and persisted to item state;
+**Start** reads it and picks the real Azure-native engine — no Fabric:
+
+| Source | Incremental engine | Notes |
+|---|---|---|
+| **Azure SQL DB / MI / SQL Server** | SQL **Change Tracking** delta (CHANGETABLE), or ADF **CDC** resource → Bronze Delta when `LOOM_ADF_NAME` + the two linked-service vars are set (`continuous`). | Watermark = `CHANGE_TRACKING_CURRENT_VERSION`. |
+| **PostgreSQL** | **Watermark-incremental** on an auto-detected monotonic column (updated-at timestamp / serial id) — the PG analog of Change Tracking. | PG is **not** a valid ADF `adfcdcs` source, so it never uses the CDC resource. Insert/update fidelity; physical deletes are a disclosed follow-up. |
+| **Cosmos DB** | **`_ts`-watermark incremental** — each Start reads only documents whose server-stamped `_ts` advanced. | No analytical-store / Synapse Link required (that is Fabric-adjacent and deprecated for new projects); the transactional `_ts` watermark is the no-Fabric path. |
+| **Snowflake** | ADF **Copy** runtime — delete-then-copy full refresh → Bronze Parquet, re-run on the `LOOM_MIRROR_COPY_CADENCE` schedule trigger (`incremental`/`continuous`). `snapshot` = one-time load, no trigger. | Needs the Snowflake + ADLS linked services above. |
+
+New env vars (all default-empty / `1h`, threaded root `main.bicep` → `admin-plane`):
+`LOOM_MIRROR_SNOWFLAKE_LINKED_SERVICE`, `LOOM_MIRROR_COPY_CADENCE`. The pre-existing
+`LOOM_MIRROR_SOURCE_LINKED_SERVICE` / `LOOM_MIRROR_ADLS_LINKED_SERVICE` are now also
+threaded from the root template (previously admin-plane-only).
 
 Until the linked services are configured, **Start** returns a precise gate naming
 the exact env var + grants (no fake "Running"), and **Verify** returns a
