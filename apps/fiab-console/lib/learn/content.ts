@@ -673,7 +673,8 @@ export type LearnSection =
  * so users can browse/search every scenario and open the full walkthrough. Built
  * on CSA Loom (Azure-native), never Fabric. `appId` (when set) is the matching
  * one-click content-bundle app (installable real example with sample data) — the
- * install/import wizard is wired in a follow-up; today the card opens the doc.
+ * Learn use-case card surfaces an "Install live example" button that opens the
+ * shared InstallAppDialog and runs the real install → provision → seed flow.
  * primaryUrl points at the verified use-cases index (no fabricated deep links).
  */
 const USE_CASES: ReadonlyArray<{
@@ -723,6 +724,14 @@ export interface LearnTopic {
   /** Published thumbnail URL (editor guides only); undefined → use icon art. */
   thumbUrl?: string;
   preview?: boolean;
+  /**
+   * When set, this topic maps to an installable content-bundle app. The Learn
+   * use-case card surfaces an "Install live example" button that opens the
+   * shared InstallAppDialog and drives the real install → provision → seed flow
+   * via POST /api/apps/{appId}/install. Comes straight from the typed USE_CASES
+   * table — never freeform.
+   */
+  appId?: string;
 }
 
 /** The 8 numbered, end-to-end walkthroughs under docs/fiab/tutorials/. */
@@ -812,6 +821,7 @@ export function getLearnCatalog(): LearnTopic[] {
       id: `usecase:${u.id}`, title: u.title, summary: u.summary,
       section: 'Use cases', category: u.category, visualType: u.visualType,
       primaryUrl: loomDocUrl('use-cases'), primaryLabel: 'Walkthrough', hasLoomDoc: true,
+      appId: u.appId,
     });
   }
 

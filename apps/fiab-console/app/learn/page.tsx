@@ -21,10 +21,10 @@
 
 import * as React from 'react';
 import {
-  Text, Badge, Dropdown, Option, makeStyles, tokens, mergeClasses,
+  Text, Badge, Dropdown, Option, Button, makeStyles, tokens, mergeClasses,
 } from '@fluentui/react-components';
 import {
-  BookOpen24Regular, Open16Regular, DocumentBulletList16Regular,
+  BookOpen24Regular, Open16Regular, DocumentBulletList16Regular, ArrowDownload16Regular,
 } from '@fluentui/react-icons';
 import { PageShell } from '@/lib/components/page-shell';
 import { Section, Toolbar } from '@/lib/components/ui/section';
@@ -32,6 +32,7 @@ import { ViewToggle, type LoomView } from '@/lib/components/ui/view-toggle';
 import { TileGrid } from '@/lib/components/ui/tile-grid';
 import { itemVisual } from '@/lib/components/ui/item-type-visual';
 import { LearnTopicCard } from '@/lib/components/learn/learn-topic-card';
+import { InstallAppDialog } from '@/lib/components/apps/install-app-dialog';
 import { getCoreSurfaceTutorials } from '@/lib/components/learn/core-surface-tutorials';
 import {
   getLearnCatalog, loomDocUrl, type LearnTopic, type LearnSection,
@@ -163,6 +164,8 @@ export default function LearnPage(): React.ReactElement {
   const [category, setCategory] = React.useState<string>('all');
   const [sort, setSort] = React.useState<SortKey>('relevance');
   const [view, setView] = React.useState<LoomView>('tile');
+  // List-view "Install live example" → opens the shared wizard for one app.
+  const [installTopic, setInstallTopic] = React.useState<{ appId: string; title: string } | null>(null);
 
   // Category options depend on the selected section (so the list stays sane).
   const categories = React.useMemo(() => {
@@ -363,6 +366,16 @@ export default function LearnPage(): React.ReactElement {
                         MS Learn <Open16Regular />
                       </a>
                     )}
+                    {t.appId && (
+                      <Button
+                        size="small"
+                        appearance="primary"
+                        icon={<ArrowDownload16Regular />}
+                        onClick={() => setInstallTopic({ appId: t.appId!, title: t.title })}
+                      >
+                        Install live example
+                      </Button>
+                    )}
                   </div>
                 </div>
               );
@@ -386,6 +399,17 @@ export default function LearnPage(): React.ReactElement {
           </a>
         </Text>
       </div>
+
+      {/* Shared install wizard for the list-view "Install live example" action.
+          (Tile view renders its own per-card dialog inside LearnTopicCard.) */}
+      {installTopic && (
+        <InstallAppDialog
+          appId={installTopic.appId}
+          appName={installTopic.title}
+          open={!!installTopic}
+          onOpenChange={(o) => { if (!o) setInstallTopic(null); }}
+        />
+      )}
     </PageShell>
   );
 }
