@@ -320,8 +320,12 @@ const useStyles = makeStyles({
     alignItems: 'flex-end',
     gap: tokens.spacingHorizontalS,
     padding: tokens.spacingHorizontalL,
+    paddingBottom: tokens.spacingVerticalS,
     borderTop: `1px solid ${tokens.colorNeutralStroke2}`,
     backgroundColor: tokens.colorNeutralBackground1,
+    // Subtle upward elevation so the pinned bar reads as layered above the
+    // scrolling transcript.
+    boxShadow: '0 -2px 8px rgba(0,0,0,0.04)',
   },
   composerInput: { flex: 1, minWidth: 0 },
   composerHint: {
