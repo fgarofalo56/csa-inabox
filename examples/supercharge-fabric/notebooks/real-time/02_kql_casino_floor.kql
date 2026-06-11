@@ -1,0 +1,371 @@
+// ============================================================
+// Casino Floor Monitoring - KQL Queries for Real-Time Intelligence
+// ============================================================
+// These queries are designed for Azure Data Explorer (ADX) / KQL Database
+// Use with Real-Time Dashboards for live casino floor monitoring
+
+// ============================================================
+// SECTION 1: SLOT MACHINE MONITORING
+// ============================================================
+
+// --- Real-Time Slot Activity (Last 5 Minutes) ---
+SlotTelemetry
+| where ingestion_time() > ago(5m)
+| summarize
+    EventCount = count(),
+    TotalCoinIn = sum(coin_in),
+    TotalCoinOut = sum(coin_out),
+    TotalJackpots = countif(event_type == "JACKPOT"),
+    MachinesActive = dcount(machine_id)
+| project
+    TimeWindow = "Last 5 Minutes",
+    EventCount,
+    TotalCoinIn,
+    TotalCoinOut,
+    NetWin = TotalCoinIn - TotalCoinOut,
+    TotalJackpots,
+    MachinesActive
+
+// --- Jackpot Alerts (Real-Time) ---
+SlotTelemetry
+| where event_type == "JACKPOT"
+| where ingestion_time() > ago(1h)
+| project
+    Timestamp = event_timestamp,
+    MachineId = machine_id,
+    ZoneId = zone_id,
+    JackpotAmount = jackpot_amount,
+    MachineType = machine_type,
+    AlertLevel = case(
+        jackpot_amount >= 10000, "HIGH",
+        jackpot_amount >= 5000, "MEDIUM",
+        "STANDARD"
+    )
+| order by Timestamp desc
+
+// --- Machine Status Overview ---
+SlotTelemetry
+| where ingestion_time() > ago(15m)
+| summarize
+    LastSeen = max(event_timestamp),
+    EventCount = count(),
+    LastEvent = arg_max(event_timestamp, event_type)
+    by machine_id, zone_id
+| extend
+    Status = case(
+        datetime_diff('minute', now(), LastSeen) > 10, "OFFLINE",
+        datetime_diff('minute', now(), LastSeen) > 5, "IDLE",
+        "ACTIVE"
+    )
+| summarize
+    ActiveMachines = countif(Status == "ACTIVE"),
+    IdleMachines = countif(Status == "IDLE"),
+    OfflineMachines = countif(Status == "OFFLINE")
+    by zone_id
+| order by zone_id asc
+
+// --- Slot Performance by Zone (Hourly) ---
+SlotTelemetry
+| where event_timestamp > ago(24h)
+| summarize
+    CoinIn = sum(coin_in),
+    CoinOut = sum(coin_out),
+    Hands = countif(event_type == "HAND_COMPLETE"),
+    Jackpots = countif(event_type == "JACKPOT")
+    by zone_id, bin(event_timestamp, 1h)
+| extend
+    NetWin = CoinIn - CoinOut,
+    HoldPct = round(100.0 * (CoinIn - CoinOut) / CoinIn, 2)
+| order by event_timestamp desc, zone_id asc
+
+// --- Machines Requiring Attention ---
+SlotTelemetry
+| where ingestion_time() > ago(1h)
+| where event_type in ("DOOR_OPEN", "TILT", "HOPPER_LOW", "BILL_JAM", "ERROR")
+| summarize
+    ErrorCount = count(),
+    FirstError = min(event_timestamp),
+    LastError = max(event_timestamp),
+    ErrorTypes = make_set(event_type)
+    by machine_id, zone_id
+| where ErrorCount >= 2 or bag_has_key(set_union(ErrorTypes, dynamic([])), "TILT")
+| order by ErrorCount desc
+
+// ============================================================
+// SECTION 2: TABLE GAMES MONITORING
+// ============================================================
+
+// --- Active Tables Dashboard ---
+TableGames
+| where ingestion_time() > ago(5m)
+| summarize
+    LastActivity = max(event_timestamp),
+    HandsPlayed = countif(event_type == "HAND_COMPLETE"),
+    TotalDrop = sum(bet_amount),
+    TotalPayout = sum(win_amount)
+    by table_id, game_type, dealer_id
+| extend
+    NetWin = TotalDrop - TotalPayout,
+    HoldPct = round(100.0 * (TotalDrop - TotalPayout) / TotalDrop, 2)
+| order by game_type asc, table_id asc
+
+// --- High Roller Activity ---
+TableGames
+| where ingestion_time() > ago(30m)
+| where bet_amount >= 500
+| summarize
+    BetCount = count(),
+    TotalWagered = sum(bet_amount),
+    TotalWon = sum(win_amount),
+    MaxBet = max(bet_amount)
+    by player_id, game_type
+| where TotalWagered >= 5000
+| extend PlayerNet = TotalWon - TotalWagered
+| order by TotalWagered desc
+
+// --- Dealer Performance (Shift) ---
+TableGames
+| where event_timestamp > ago(8h)
+| where event_type == "HAND_COMPLETE"
+| summarize
+    HandsDealt = count(),
+    TotalDrop = sum(bet_amount),
+    TotalPayout = sum(win_amount),
+    AvgBet = avg(bet_amount)
+    by dealer_id, game_type
+| extend
+    HoldPct = round(100.0 * (TotalDrop - TotalPayout) / TotalDrop, 2),
+    HandsPerHour = round(HandsDealt / 8.0, 1)
+| order by game_type, HandsDealt desc
+
+// ============================================================
+// SECTION 3: COMPLIANCE MONITORING
+// ============================================================
+
+// --- CTR Threshold Transactions (Real-Time) ---
+FinancialTransactions
+| where ingestion_time() > ago(1h)
+| where amount >= 10000
+| project
+    Timestamp = transaction_timestamp,
+    TransactionId = transaction_id,
+    PlayerId = player_id,
+    Amount = amount,
+    TransactionType = transaction_type,
+    CTRStatus = case(
+        ctr_filed == true, "FILED",
+        "PENDING"
+    )
+| order by Timestamp desc
+
+// --- Structuring Detection (Rolling 24h) ---
+FinancialTransactions
+| where transaction_timestamp > ago(24h)
+| where amount between (8000 .. 9999)
+| summarize
+    NearCTRCount = count(),
+    TotalAmount = sum(amount),
+    Transactions = make_list(pack("time", transaction_timestamp, "amount", amount))
+    by player_id
+| where NearCTRCount >= 2
+| extend
+    SuspicionLevel = case(
+        TotalAmount >= 10000 and NearCTRCount >= 3, "HIGH",
+        TotalAmount >= 10000 and NearCTRCount >= 2, "MEDIUM",
+        "MONITOR"
+    )
+| order by SuspicionLevel asc, TotalAmount desc
+
+// --- W-2G Jackpot Filings ---
+SlotTelemetry
+| where event_type == "JACKPOT"
+| where jackpot_amount >= 1200
+| where event_timestamp > ago(24h)
+| project
+    Timestamp = event_timestamp,
+    MachineId = machine_id,
+    PlayerId = player_id,
+    Amount = jackpot_amount,
+    W2GRequired = true,
+    FilingStatus = "PENDING"
+| order by Timestamp desc
+
+// ============================================================
+// SECTION 4: SECURITY MONITORING
+// ============================================================
+
+// --- Security Events Dashboard ---
+SecurityEvents
+| where ingestion_time() > ago(15m)
+| summarize
+    EventCount = count(),
+    CriticalCount = countif(severity_level == "CRITICAL"),
+    HighCount = countif(severity_level == "HIGH")
+    by location_id, event_category
+| where CriticalCount > 0 or HighCount > 0
+| order by CriticalCount desc, HighCount desc
+
+// --- Active Incidents Requiring Response ---
+SecurityEvents
+| where ingestion_time() > ago(30m)
+| where requires_dispatch == true
+| project
+    Timestamp = event_timestamp,
+    Location = location_id,
+    IncidentType = incident_type,
+    Severity = severity_level,
+    ThreatScore = threat_score,
+    ResponseDeadline = response_sla_timestamp,
+    MinutesToSLA = datetime_diff('minute', response_sla_timestamp, now())
+| where MinutesToSLA > -30  // Show events up to 30 min past SLA
+| order by MinutesToSLA asc
+
+// --- Exclusion Alerts ---
+SecurityEvents
+| where event_type == "EXCLUSION_VIOLATION"
+| where ingestion_time() > ago(1h)
+| project
+    Timestamp = event_timestamp,
+    Location = location_id,
+    PersonId = person_id,
+    ExclusionType = exclusion_type,
+    AlertLevel = "CRITICAL"
+| order by Timestamp desc
+
+// --- Location Hotspot Analysis ---
+SecurityEvents
+| where ingestion_time() > ago(1h)
+| summarize
+    EventCount = count(),
+    AvgThreatScore = avg(threat_score),
+    MaxThreatScore = max(threat_score),
+    IncidentTypes = make_set(incident_type)
+    by location_id
+| where EventCount >= 5 or MaxThreatScore >= 75
+| extend
+    HotspotLevel = case(
+        EventCount >= 10 or MaxThreatScore >= 90, "CRITICAL",
+        EventCount >= 7 or MaxThreatScore >= 75, "HIGH",
+        "ELEVATED"
+    )
+| order by HotspotLevel asc, EventCount desc
+
+// ============================================================
+// SECTION 5: EXECUTIVE DASHBOARD QUERIES
+// ============================================================
+
+// --- Real-Time Casino Summary ---
+let SlotMetrics = SlotTelemetry
+| where ingestion_time() > ago(5m)
+| summarize
+    SlotCoinIn = sum(coin_in),
+    SlotCoinOut = sum(coin_out),
+    SlotMachinesActive = dcount(machine_id),
+    SlotJackpots = countif(event_type == "JACKPOT");
+let TableMetrics = TableGames
+| where ingestion_time() > ago(5m)
+| summarize
+    TableDrop = sum(bet_amount),
+    TablePayout = sum(win_amount),
+    TablesActive = dcount(table_id),
+    HandsPlayed = countif(event_type == "HAND_COMPLETE");
+let SecurityMetrics = SecurityEvents
+| where ingestion_time() > ago(15m)
+| summarize
+    SecurityEvents = count(),
+    CriticalIncidents = countif(severity_level == "CRITICAL");
+SlotMetrics
+| extend TableMetrics
+| extend SecurityMetrics
+| project
+    Timestamp = now(),
+    SlotNetWin = SlotCoinIn - SlotCoinOut,
+    SlotMachinesActive,
+    SlotJackpots,
+    TableNetWin = TableDrop - TablePayout,
+    TablesActive,
+    HandsPlayed,
+    SecurityEvents,
+    CriticalIncidents
+
+// --- Hourly Trend (Last 12 Hours) ---
+SlotTelemetry
+| where event_timestamp > ago(12h)
+| summarize
+    CoinIn = sum(coin_in),
+    CoinOut = sum(coin_out),
+    Jackpots = countif(event_type == "JACKPOT")
+    by bin(event_timestamp, 1h)
+| extend NetWin = CoinIn - CoinOut
+| order by event_timestamp asc
+| render timechart
+
+// --- Zone Performance Comparison ---
+SlotTelemetry
+| where event_timestamp > ago(1h)
+| summarize
+    CoinIn = sum(coin_in),
+    CoinOut = sum(coin_out),
+    MachineCount = dcount(machine_id)
+    by zone_id
+| extend
+    NetWin = CoinIn - CoinOut,
+    HoldPct = round(100.0 * (CoinIn - CoinOut) / CoinIn, 2),
+    PerMachineWin = round((CoinIn - CoinOut) / MachineCount, 2)
+| order by NetWin desc
+| render barchart
+
+// ============================================================
+// SECTION 6: ANOMALY DETECTION
+// ============================================================
+
+// --- Unusual Machine Activity ---
+SlotTelemetry
+| where event_timestamp > ago(1h)
+| summarize
+    EventCount = count(),
+    CoinIn = sum(coin_in),
+    AvgCoinIn = avg(coin_in)
+    by machine_id, zone_id
+| join kind=leftouter (
+    SlotTelemetry
+    | where event_timestamp between (ago(7d) .. ago(1h))
+    | summarize
+        HistoricalAvgEvents = avg(EventCount),
+        HistoricalAvgCoinIn = avg(CoinIn)
+        by machine_id
+    | summarize
+        HistoricalAvgEvents = avg(HistoricalAvgEvents),
+        HistoricalAvgCoinIn = avg(HistoricalAvgCoinIn)
+) on machine_id
+| extend
+    EventDeviation = (EventCount - HistoricalAvgEvents) / HistoricalAvgEvents * 100,
+    CoinInDeviation = (CoinIn - HistoricalAvgCoinIn) / HistoricalAvgCoinIn * 100
+| where abs(EventDeviation) > 50 or abs(CoinInDeviation) > 50
+| order by abs(CoinInDeviation) desc
+
+// --- Player Session Anomalies ---
+TableGames
+| where event_timestamp > ago(2h)
+| summarize
+    SessionDuration = datetime_diff('minute', max(event_timestamp), min(event_timestamp)),
+    TotalWagered = sum(bet_amount),
+    TotalWon = sum(win_amount),
+    HandsPlayed = countif(event_type == "HAND_COMPLETE"),
+    MaxBet = max(bet_amount)
+    by player_id, session_id
+| extend
+    AvgBetPerHand = TotalWagered / HandsPlayed,
+    WinRate = 100.0 * TotalWon / TotalWagered
+| where WinRate > 150 or MaxBet > 10 * AvgBetPerHand
+| extend
+    AnomalyType = case(
+        WinRate > 150, "HIGH_WIN_RATE",
+        MaxBet > 10 * AvgBetPerHand, "BET_SPIKE",
+        "OTHER"
+    )
+| order by WinRate desc
+
+// ============================================================
+// End of KQL Query Library
+// ============================================================

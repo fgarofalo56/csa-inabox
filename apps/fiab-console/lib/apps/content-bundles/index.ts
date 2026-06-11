@@ -35,6 +35,13 @@ import dataGovernance from './app-data-governance';
 import realTimeDashboards from './app-real-time-dashboards';
 import hybridTopology from './app-hybrid-topology';
 import workspaceMonitoring from './app-workspace-monitoring';
+import superchargeBronze from './app-supercharge-bronze';
+import superchargeSilver from './app-supercharge-silver';
+import superchargeGold from './app-supercharge-gold';
+import superchargeMl from './app-supercharge-ml';
+import superchargeStreaming from './app-supercharge-streaming';
+import superchargeUtils from './app-supercharge-utils';
+import superchargeGuide from './app-supercharge-guide';
 
 const REGISTRY: Record<string, AppBundle> = {
   [casinoAnalytics.appId]: casinoAnalytics,
@@ -59,6 +66,13 @@ const REGISTRY: Record<string, AppBundle> = {
   [realTimeDashboards.appId]: realTimeDashboards,
   [hybridTopology.appId]: hybridTopology,
   [workspaceMonitoring.appId]: workspaceMonitoring,
+  [superchargeBronze.appId]: superchargeBronze,
+  [superchargeSilver.appId]: superchargeSilver,
+  [superchargeGold.appId]: superchargeGold,
+  [superchargeMl.appId]: superchargeMl,
+  [superchargeStreaming.appId]: superchargeStreaming,
+  [superchargeUtils.appId]: superchargeUtils,
+  [superchargeGuide.appId]: superchargeGuide,
 };
 
 export function getBundle(appId: string): AppBundle | undefined {
