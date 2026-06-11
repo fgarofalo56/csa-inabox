@@ -132,7 +132,8 @@ function ServiceNodeImpl({ data, selected }: NodeProps) {
         }} />
       ) : null}
       {def?.planOnly && (
-        <span title="Plan-only — no one-button bicep toggle yet" style={{
+        <span role="img" aria-label="Plan-only — no one-button bicep toggle yet"
+          title="Plan-only — no one-button bicep toggle yet" style={{
           flexShrink: 0, width: 7, height: 7, borderRadius: 4,
           background: tokens.colorPaletteMarigoldBackground3,
         }} />
@@ -161,6 +162,10 @@ function ServiceIconChip({
   // endpoint is unreachable in an air-gapped/sovereign boundary), drop to the
   // bundled raster / Fluent glyph instead of leaving a broken-image box.
   const [remoteOk, setRemoteOk] = React.useState(true);
+  // Re-arm the remote attempt whenever the slug changes so a recycled chip
+  // (React Flow reuses node instances) never suppresses a valid icon because a
+  // previous, different slug had 404'd.
+  React.useEffect(() => { setRemoteOk(true); }, [remote]);
   const showRemote = !!remote && remoteOk;
   return (
     <span
