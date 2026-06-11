@@ -2205,7 +2205,13 @@ export function DataAgentEditor({ item, id }: { item: FabricItemType; id: string
     description: '',
     alias: '',
   });
-  const [tab, setTab] = useState<'build' | 'copilot' | 'test' | 'publish' | 'inspect'>('build');
+  // Initial tab honors a ?tab= deep-link (the /data-agent pane's "Configure"
+  // and "Publish…" actions route here with ?tab=copilot / ?tab=publish).
+  const [tab, setTab] = useState<'build' | 'copilot' | 'test' | 'publish' | 'inspect'>(() => {
+    if (typeof window === 'undefined') return 'build';
+    const t = new URLSearchParams(window.location.search).get('tab');
+    return (t === 'copilot' || t === 'test' || t === 'publish' || t === 'inspect') ? t : 'build';
+  });
 
   // ---- source picker data (real Loom items) ----
   const [pickerType, setPickerType] = useState<DaSourceType>('warehouse');
