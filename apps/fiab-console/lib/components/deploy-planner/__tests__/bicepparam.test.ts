@@ -4,12 +4,16 @@
  * knobs (no drift = no vaporware).
  */
 import { describe, it, expect } from 'vitest';
+import { readFileSync } from 'node:fs';
+import { fileURLToPath } from 'node:url';
+import { dirname, resolve } from 'node:path';
 import {
   flagsForServices, serviceByKey, serviceVisual,
   SERVICE_CATALOG, SERVICE_COUNT, TOGGLEABLE_SERVICE_COUNT,
   configFor, coerceConfigValue, defaultConfig, resolveConfigValue,
   CONFIGURABLE_SERVICE_COUNT,
 } from '../service-catalog';
+import { iconUrl } from '../../ui/item-type-visual';
 import { planToBicepparam } from '../bicepparam';
 import type { PlanSubscription } from '../types';
 
@@ -177,3 +181,74 @@ describe('planToBicepparam — per-resource config emission', () => {
   });
 });
 
+describe('catalog breadth — all-Azure-service-types coverage', () => {
+  it('offers a broad catalog (≥ 70 distinct Azure service types)', () => {
+    // audit-T119: the planner should surface ALL Azure service types, not a
+    // thin curated subset. Each entry is a real Azure service, honestly tagged.
+    expect(SERVICE_COUNT).toBeGreaterThanOrEqual(70);
+  });
+
+  it('keeps every plan-only addition honest (no fake bicep knobs)', () => {
+    // Newly-added breadth services have no one-button toggle yet, so they must
+    // be plan-only with a null bicepFlag — never emitting a fake param.
+    for (const s of SERVICE_CATALOG) {
+      if (s.planOnly) expect(s.bicepFlag).toBeNull();
+    }
+  });
+});
+
+describe('Atlas Diag icon slugs (audit-T119 defect A)', () => {
+  it('every service carries a canonical kebab-case iconSlug (or none)', () => {
+    for (const s of SERVICE_CATALOG) {
+      if (s.iconSlug !== undefined) {
+        // kebab-case only — no camelCase, spaces, or uppercase that would make
+        // the Atlas Diag / Azure-icon URL 404.
+        expect(s.iconSlug).toMatch(/^[a-z0-9]+(?:-[a-z0-9]+)*$/);
+      }
+    }
+  });
+
+  it('iconUrl resolves a .svg URL from iconSlug when the base is configured', () => {
+    const prev = process.env.NEXT_PUBLIC_LOOM_ICON_BASE;
+    process.env.NEXT_PUBLIC_LOOM_ICON_BASE = 'https://icons.example/loom';
+    try {
+      for (const s of SERVICE_CATALOG) {
+        const url = iconUrl(s.iconSlug ?? s.key);
+        expect(url).toBeDefined();
+        expect(url).toMatch(/\.svg$/);
+        // the slug (kebab-case) must survive into the URL, not the camelCase key
+        if (s.iconSlug) expect(url).toContain(s.iconSlug);
+      }
+    } finally {
+      if (prev === undefined) delete process.env.NEXT_PUBLIC_LOOM_ICON_BASE;
+      else process.env.NEXT_PUBLIC_LOOM_ICON_BASE = prev;
+    }
+  });
+
+  it('iconUrl stays undefined (bundled fallback) when the base is unset', () => {
+    const prev = process.env.NEXT_PUBLIC_LOOM_ICON_BASE;
+    delete process.env.NEXT_PUBLIC_LOOM_ICON_BASE;
+    try {
+      expect(iconUrl('container-apps')).toBeUndefined();
+    } finally {
+      if (prev !== undefined) process.env.NEXT_PUBLIC_LOOM_ICON_BASE = prev;
+    }
+  });
+});
+
+describe('bicep drift guard (no-vaporware)', () => {
+  const here = dirname(fileURLToPath(import.meta.url));
+  const mainBicep = readFileSync(
+    resolve(here, '../../../../../../platform/fiab/bicep/main.bicep'),
+    'utf8',
+  );
+
+  it('every catalog bicepFlag is a real param in platform/fiab/bicep/main.bicep', () => {
+    const flags = [...new Set(
+      SERVICE_CATALOG.map((s) => s.bicepFlag).filter((f): f is string => !!f),
+    )];
+    expect(flags.length).toBeGreaterThan(0);
+    const missing = flags.filter((f) => !new RegExp(`param\\s+${f}\\s+bool`).test(mainBicep));
+    expect(missing).toEqual([]);
+  });
+});

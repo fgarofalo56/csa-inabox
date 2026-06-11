@@ -84,3 +84,86 @@ path never requires a Fabric/Power BI tenant.
   edge after deleting a connected service.
 - `az bicep build -f platform/fiab/bicep/main.bicep` compiles with the new
   params (defaults preserve `params/commercial-full.bicepparam`).
+
+---
+
+# deploy-planner — parity with the Azure deployment / architecture planning surface
+
+**Surface:** `apps/fiab-console/lib/components/deploy-planner/` →
+`/admin/deploy-planner`
+**Source UI:** Azure portal "Deploy to Azure" / architecture planning + the
+official Azure architecture icon set (`Azure_Public_Service_Icons`). This is a
+Loom-native planner (subscriptions → domains → services) that emits the real
+`.bicepparam` consumed by `az deployment sub create -f
+platform/fiab/bicep/main.bicep`.
+
+This doc tracks **audit-T119** (deep-dive functional gap #3): *"deploy-planner
+should offer ALL Azure service types as draggable nodes and use the Atlas Diag
+icon API for icons, on a bounded canvas."*
+
+## Feature inventory → Loom coverage
+
+| Capability | Status | Backend / mechanism |
+|---|---|---|
+| All Azure service types as draggable palette nodes | ✅ | `SERVICE_CATALOG` (78 services across 6 categories) — drag (`application/x-loom-service` MIME) + click + keyboard add |
+| Service icons from the Atlas Diag icon API | ✅ | `iconUrl(def.iconSlug ?? def.key)` — canonical kebab-case `iconSlug` per service resolves against `NEXT_PUBLIC_LOOM_ICON_BASE`; was previously keyed on the camelCase `key`, which 404'd |
+| Graceful icon fallback (no broken-image boxes) | ✅ | `ServiceIconChip` 3-tier chain: remote Atlas Diag `<img>` (with `onError` → fallback) → bundled `/azure-icons/*.png` → Fluent glyph |
+| Bounded canvas (doesn't grow the page) | ✅ | `body` grid `height: calc(100vh - 220px)`, palette `overflowY:auto`, `.canvas` `overflow:hidden`, React Flow `fitView` + `minZoom 0.3` / `maxZoom 2` |
+| Search + category filter + collapsible groups | ✅ | `query`/`catFilter`/`collapsedCats` state; counts auto-update from `SERVICE_COUNT` |
+| Subscriptions / domains / nested service nodes | ✅ | React Flow nested nodes (`subscription` → `domain` → `service`) |
+| Boundary + region per subscription (sovereign clouds) | ✅ | `PlanSubscription.boundary` (Commercial/GCC/GCC-High/IL5), `BOUNDARY_TINT`, `BOUNDARY_DEFAULT_REGION` |
+| Persist plan | ✅ | `GET`/`PUT /api/admin/deploy-plan` → Cosmos tenant-settings |
+| Export bicepparam | ✅ | `planToBicepparam()` — unions selected services → real `*Enabled` flags |
+| Honest deploy model (no fake auto-deploy) | ✅ | three states: toggleable `bicepFlag`, `core` (`null`), `planOnly` (real Azure, no toggle, never emits a param) |
+
+## Atlas Diag icon slug fix (defect A)
+
+Service `key`s are camelCase (`containerApps`, `aiFoundry`). `iconUrl()`
+lowercases and appends `.svg`, producing `containerapps.svg` — a slug that does
+not exist in the Atlas Diag / Azure-architecture-icon namespace, so the remote
+`<img>` 404'd for nearly every service. Each `ServiceDef` now carries a
+canonical kebab-case `iconSlug` (`container-apps`, `azure-openai`,
+`databricks-sql-warehouse`, …) — mirroring the kebab-case slugs in
+`item-type-visual`'s `REGISTRY` where one exists, otherwise the official Azure
+architecture-icon basename. Both render call sites use `iconSlug ?? key`.
+
+## Catalog breadth (defect B)
+
+The catalog grew from 57 → **78** real Azure service types. New entries are
+tagged `planOnly: true` (real Azure, no one-button bicep toggle yet) so the
+plan stays honest — they never emit a bicep param. Additions span App
+Configuration, Container Apps Jobs, HDInsight, Data Share, Cosmos Gremlin,
+Azure Maps, Bot Service, Translator, AI Video Indexer, Azure Relay,
+Notification Hubs, API Center, Application Insights, Managed Grafana, Azure
+Lighthouse, Azure Bastion, NAT Gateway, Traffic Manager, ExpressRoute, and
+DDoS Protection.
+
+## Per-cloud notes (sovereign clouds)
+
+- **Icon hosting**: `NEXT_PUBLIC_LOOM_ICON_BASE` is a single public base URL.
+  In GCC-High / IL5 the Atlas Diag icon endpoint must be hosted in-boundary
+  (no Commercial CDN egress). Because the remote icon is progressive-only and
+  the chip falls back to bundled `/azure-icons` PNGs + Fluent glyphs (now with
+  `onError`), the planner is fully functional air-gapped.
+- **Service availability**: cloud-limited services keep an honest
+  `description` note (e.g. Front Door "(Commercial)"). The palette is *not*
+  gated by boundary (operators plan across clouds); the bicepparam export binds
+  region/boundary, and an unavailable service simply should not be promoted to
+  a real flag in that cloud's param file.
+
+## No-vaporware / no-Fabric posture
+
+- Every toggleable `bicepFlag` is a real `param <x>Enabled bool` in
+  `platform/fiab/bicep/main.bicep` — guarded by a vitest drift test
+  (`bicepparam.test.ts` → "bicep drift guard").
+- `fabricCapacity` is `planOnly` and labeled "Loom never requires it; the
+  Azure-native lake is the default" — no hard Fabric dependency.
+- `purviewData` describes the Azure-native ADLS lake catalog (no OneLake/Fabric
+  requirement on the default path).
+
+## Tests
+
+`apps/fiab-console/lib/components/deploy-planner/__tests__/bicepparam.test.ts`
+(16 cases): flag mapping, bicepparam emission, catalog breadth (≥70),
+plan-only honesty, `iconSlug` kebab-case + `iconUrl` round-trip (set/unset
+base), and the bicep drift guard.
