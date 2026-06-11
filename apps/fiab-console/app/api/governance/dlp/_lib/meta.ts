@@ -17,14 +17,22 @@ export interface DlpRestriction {
   id: string;
   at: string;
   by: string;
-  scopeType: 'adls-container' | 'warehouse' | 'kql-database';
+  scopeType: 'adls-container' | 'adls-path' | 'warehouse' | 'warehouse-schema' | 'kql-database';
   scopeRef: string;
+  /** adls-path only: the directory/file (relative to the container) that was restricted. */
+  subPath?: string;
+  /** warehouse-schema only: the SQL schema that SELECT was denied on. */
+  schema?: string;
+  /** warehouse-schema only: the exact DENY statement executed (for auditability). */
+  statement?: string;
   principalId: string;
   principalName?: string;
   revokedRoleAssignmentIds: string[];
   revokedRoleNames: string[];
   exemptPrincipalIds: string[];
   armConfirmed: boolean;
+  /** adls-path only: read-back confirmed the principal's ACL entry is gone. */
+  aclConfirmed?: boolean;
 }
 
 export interface DlpMetaDoc {

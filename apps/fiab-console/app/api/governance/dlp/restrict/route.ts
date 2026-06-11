@@ -6,8 +6,10 @@
  *
  * Body:
  *   {
- *     scopeType: 'adls-container' | 'warehouse' | 'kql-database',
+ *     scopeType: 'adls-container' | 'adls-path' | 'warehouse' | 'warehouse-schema' | 'kql-database',
  *     scopeRef:  string,                 // container name / kql db / 'warehouse'
+ *     subPath?:  string,                 // adls-path: directory/file under the container
+ *     schema?:   string,                 // warehouse-schema: SQL schema to DENY SELECT on
  *     principalId: string,               // Entra object id to restrict
  *     principalName?: string,            // UPN / display name (needed for SQL/ADX)
  *     exemptPrincipalIds?: string[]      // never-restrict list
@@ -17,6 +19,10 @@
  *   1. Reads the container's current Storage data-plane role assignments (ARM).
  *   2. Revokes every assignment held by the target principal (real ARM DELETE).
  *   3. Re-reads assignments (ARM) to CONFIRM the principal no longer holds any.
+ * For adls-path scopes it removes the principal from the directory/file POSIX
+ * ACL (access + default scope) and reads the ACL back to confirm removal.
+ * For warehouse-schema scopes it executes `DENY SELECT ON SCHEMA::[s]` against
+ * the env-bound Synapse dedicated pool (real TDS).
  * For warehouse / kql-database scopes it replays the inverse data-plane grant
  * via revokeStructuredGrant (real Synapse SQL / ADX command).
  *
@@ -27,14 +33,15 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { getSession } from '@/lib/auth/session';
 import { tenantSettingsContainer } from '@/lib/azure/cosmos-client';
-import { listContainerRoleAssignments, revokeContainerRoleAssignment } from '@/lib/azure/adls-client';
-import { revokeStructuredGrant, type PrincipalType } from '@/lib/azure/access-policy-client';
+import { listContainerRoleAssignments, revokeContainerRoleAssignment, removePrincipalFromPathAcl } from '@/lib/azure/adls-client';
+import { revokeStructuredGrant, denySchemaAccess, type PrincipalType } from '@/lib/azure/access-policy-client';
 import { loadDlpMeta, saveDlpMeta, type DlpRestriction } from '../_lib/meta';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
 
-type ScopeType = 'adls-container' | 'warehouse' | 'kql-database';
+type ScopeType = 'adls-container' | 'adls-path' | 'warehouse' | 'warehouse-schema' | 'kql-database';
+const SCOPE_TYPES: ScopeType[] = ['adls-container', 'adls-path', 'warehouse', 'warehouse-schema', 'kql-database'];
 
 export async function POST(req: NextRequest) {
   const s = getSession();
@@ -42,6 +49,8 @@ export async function POST(req: NextRequest) {
   const body = await req.json().catch(() => ({}));
   const scopeType = String(body?.scopeType || '') as ScopeType;
   const scopeRef = String(body?.scopeRef || '').trim();
+  const subPath = body?.subPath ? String(body.subPath).trim().replace(/^\/+|\/+$/g, '') : '';
+  const schema = body?.schema ? String(body.schema).trim() : '';
   const principalId = String(body?.principalId || '').trim();
   const principalName = body?.principalName ? String(body.principalName) : undefined;
   const principalType = (['User', 'Group', 'ServicePrincipal'].includes(body?.principalType)
@@ -49,12 +58,22 @@ export async function POST(req: NextRequest) {
   const exemptPrincipalIds: string[] = Array.isArray(body?.exemptPrincipalIds)
     ? body.exemptPrincipalIds.map((x: unknown) => String(x)) : [];
 
-  if (!['adls-container', 'warehouse', 'kql-database'].includes(scopeType)) {
-    return NextResponse.json({ ok: false, error: 'scopeType must be adls-container | warehouse | kql-database' }, { status: 400 });
+  if (!SCOPE_TYPES.includes(scopeType)) {
+    return NextResponse.json({ ok: false, error: `scopeType must be one of ${SCOPE_TYPES.join(' | ')}` }, { status: 400 });
   }
   if (!principalId) return NextResponse.json({ ok: false, error: 'principalId is required' }, { status: 400 });
-  if (scopeType !== 'warehouse' && !scopeRef) {
+  // warehouse / warehouse-schema resolve their target from env; others need scopeRef.
+  if (scopeType !== 'warehouse' && scopeType !== 'warehouse-schema' && !scopeRef) {
     return NextResponse.json({ ok: false, error: 'scopeRef is required' }, { status: 400 });
+  }
+  if (scopeType === 'adls-path' && !subPath) {
+    return NextResponse.json({ ok: false, error: 'subPath (the directory/file under the container) is required for adls-path scope' }, { status: 400 });
+  }
+  if (scopeType === 'warehouse-schema' && !schema) {
+    return NextResponse.json({ ok: false, error: 'schema is required for warehouse-schema scope' }, { status: 400 });
+  }
+  if (scopeType === 'warehouse-schema' && !principalName) {
+    return NextResponse.json({ ok: false, error: 'principalName (UPN) is required to DENY warehouse schema access' }, { status: 400 });
   }
 
   // Exempt principals are never restricted — honest no-op (not a silent skip).
@@ -69,6 +88,9 @@ export async function POST(req: NextRequest) {
   const revokedRoleAssignmentIds: string[] = [];
   const revokedRoleNames: string[] = [];
   let armConfirmed = false;
+  let aclConfirmed: boolean | undefined;
+  let executedStatement: string | undefined;
+  let note: string | undefined;
 
   try {
     if (scopeType === 'adls-container') {
@@ -90,6 +112,33 @@ export async function POST(req: NextRequest) {
       // ARM read-back confirmation.
       const after = await listContainerRoleAssignments(scopeRef);
       armConfirmed = !after.some((a) => a.principalId === principalId);
+    } else if (scopeType === 'adls-path') {
+      // Remove the principal from the directory/file POSIX ACL (access+default),
+      // then read the ACL back to confirm. Honest note: container-level Storage
+      // RBAC is NOT affected by an ACL edit.
+      const res = await removePrincipalFromPathAcl(scopeRef, subPath, principalId);
+      if (!res.removed) {
+        return NextResponse.json({
+          ok: true, restricted: false,
+          detail: `Principal holds no explicit ACL entry on "${scopeRef}/${subPath}" — nothing to revoke. If the principal can still read it, they hold a container-level Storage RBAC role; restrict at the ADLS container scope instead.`,
+          aclConfirmed: true, armConfirmed: false, revokedRoleNames: [], revokedRoleAssignmentIds: [],
+        });
+      }
+      aclConfirmed = res.aclConfirmed;
+      revokedRoleNames.push(`acl:${res.scopesRemoved.join('+') || 'access'}`);
+      note = 'ACL entry removed. A principal holding container-level Storage RBAC is unaffected by a path ACL change — restrict at the container scope to cover that.';
+    } else if (scopeType === 'warehouse-schema') {
+      const r = await denySchemaAccess({ principalName: principalName!, schema });
+      if (r.status === 'error') {
+        return NextResponse.json({ ok: false, error: `Schema DENY failed: ${(r.detail || '').slice(0, 400)}` }, { status: 502 });
+      }
+      if (r.status === 'pending') {
+        return NextResponse.json({ ok: false, error: r.detail || 'Warehouse not configured.', code: 'warehouse_not_configured' }, { status: 503 });
+      }
+      executedStatement = r.statement;
+      revokedRoleNames.push(`DENY SELECT ON SCHEMA::${schema}`);
+      armConfirmed = false;
+      note = 'DENY applied. DENY does not terminate in-flight sessions — to cut access immediately, kill the principal’s active requests/sessions on the pool.';
     } else {
       // warehouse / kql-database — replay the inverse data-plane grant for each
       // permission level so any prior read/write/admin grant is removed.
@@ -141,9 +190,13 @@ export async function POST(req: NextRequest) {
     at: new Date().toISOString(),
     by: s.claims.upn || tenantId,
     scopeType, scopeRef: scopeRef || 'warehouse',
+    ...(subPath ? { subPath } : {}),
+    ...(schema ? { schema } : {}),
+    ...(executedStatement ? { statement: executedStatement } : {}),
     principalId, principalName,
     revokedRoleAssignmentIds, revokedRoleNames,
     exemptPrincipalIds, armConfirmed,
+    ...(aclConfirmed !== undefined ? { aclConfirmed } : {}),
   };
   try {
     const meta = await loadDlpMeta(tenantId);
@@ -160,9 +213,11 @@ export async function POST(req: NextRequest) {
     ok: true,
     restricted: true,
     armConfirmed,
+    aclConfirmed,
     revokedRoleNames,
     revokedRoleAssignmentIds,
     policiesUpdated,
+    note,
     restriction,
   });
 }

@@ -751,6 +751,58 @@ export async function setAcl(
   return { ok: true };
 }
 
+export interface PathAclRevokeResult {
+  /** true when the principal's ACL entries were present and have been removed. */
+  removed: boolean;
+  /** true when a read-back of the path ACL confirms no entry for the principal remains. */
+  aclConfirmed: boolean;
+  /** Number of ACL entries (access + default scope) removed for the principal. */
+  removedEntries: number;
+  /** ACL scopes the principal still resolved through (informational). */
+  scopesRemoved: Array<'access' | 'default'>;
+}
+
+/**
+ * DLP path-level restrict for ADLS Gen2: remove a principal from the POSIX ACL
+ * of a directory/file (both the `access` and `default` scopes so newly-created
+ * children do not re-inherit the grant), then read the ACL back to CONFIRM the
+ * principal no longer holds an explicit entry. Mirrors the ARM read-back used
+ * for container-level RBAC revoke.
+ *
+ * Caveat (encoded honestly by the caller): an ACL edit only restricts a
+ * principal granted *via ACL*. A principal that holds container-level Storage
+ * RBAC (Storage Blob Data *) is unaffected by an ACL change — the caller should
+ * surface that rather than report a silent success.
+ */
+export async function removePrincipalFromPathAcl(
+  container: string,
+  path: string,
+  principalId: string,
+): Promise<PathAclRevokeResult> {
+  const current = await getAcl(container, path);
+  const mine = current.filter(
+    (a) => (a.type === 'user' || a.type === 'group') && a.entityId === principalId,
+  );
+  if (mine.length === 0) {
+    return { removed: false, aclConfirmed: true, removedEntries: 0, scopesRemoved: [] };
+  }
+  const reduced = current.filter(
+    (a) => !((a.type === 'user' || a.type === 'group') && a.entityId === principalId),
+  );
+  await setAcl(container, path, reduced);
+  // Read-back confirmation.
+  const after = await getAcl(container, path);
+  const stillThere = after.some(
+    (a) => (a.type === 'user' || a.type === 'group') && a.entityId === principalId,
+  );
+  return {
+    removed: true,
+    aclConfirmed: !stillThere,
+    removedEntries: mine.length,
+    scopesRemoved: Array.from(new Set(mine.map((a) => a.scope))),
+  };
+}
+
 // ============================================================
 // Azure RBAC role-assignments at the container scope.
 // Used by the Lakehouse "Permissions" dialog to grant Storage
