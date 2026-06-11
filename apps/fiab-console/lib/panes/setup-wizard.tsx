@@ -672,7 +672,7 @@ export function SetupWizardPane() {
       {/* ── Content panel ─────────────────────────────────────────────── */}
       <div className={styles.panel}>
         {state.step === 'intro' && (
-          <div className={styles.hero}>
+          <div className={styles.hero} data-tour="setup-intro">
             <span className={styles.heroIconChip} aria-hidden><Rocket24Regular /></span>
             <Title2>Set up a new Data Landing Zone</Title2>
             <Body1>

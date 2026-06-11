@@ -64,7 +64,7 @@ export function TopbarSearch() {
   }
 
   return (
-    <div className={s.root}>
+    <div className={s.root} data-tour="search">
       <Input
         ref={ref}
         className={s.input}

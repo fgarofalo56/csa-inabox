@@ -18,7 +18,7 @@ import {
 import {
   SignOut24Regular, Settings24Regular, Person24Regular,
   Question24Regular, ChatHelp24Regular,
-  Navigation24Regular,
+  Navigation24Regular, Library24Regular, CompassNorthwest24Regular,
 } from '@fluentui/react-icons';
 import Link from 'next/link';
 import { LeftNav } from './left-nav';
@@ -36,6 +36,7 @@ import { TabStrip } from './tab-strip';
 import { SavedStatus } from './saved-status';
 import { NotificationsButton } from './notifications-button';
 import { GlobalJobToaster } from './global-job-toaster';
+import { OnboardingTour, openTour } from './onboarding/onboarding-tour';
 
 interface MeResponse {
   authenticated: boolean;
@@ -164,7 +165,7 @@ export function AppShell({ children }: { children: ReactNode }) {
             aria-expanded={!navCollapsed} />
         </Tooltip>
         <Tooltip content="CSA Loom — Cloud Scale Analytics · Weaving every Azure data service into one experience" relationship="label">
-          <Link href="/" className={styles.brand} aria-label="CSA Loom (Cloud Scale Analytics) — home">
+          <Link href="/" className={styles.brand} aria-label="CSA Loom (Cloud Scale Analytics) — home" data-tour="brand">
             <LoomLogo variant="icon" size={28} />
             {!navCollapsed && <span className={styles.wordmark}>CSA Loom</span>}
           </Link>
@@ -176,7 +177,7 @@ export function AppShell({ children }: { children: ReactNode }) {
         <div className={styles.actions} role="toolbar" aria-label="Global actions">
           <Tooltip content="Help Copilot — ask anything about CSA Loom (Ctrl+/)" relationship="label">
             <Button appearance="transparent" className={styles.iconBtn} icon={<CopilotIcon />}
-              onClick={openHelpCopilot} aria-label="Open Help Copilot" />
+              onClick={openHelpCopilot} aria-label="Open Help Copilot" data-tour="copilot" />
           </Tooltip>
           <NotificationsButton />
           <Tooltip content="Send feedback" relationship="label">
@@ -184,10 +185,24 @@ export function AppShell({ children }: { children: ReactNode }) {
               onClick={openFeedback} aria-label="Send feedback" />
           </Tooltip>
           <ThemeToggle color="white" />
-          <Tooltip content="Help — Learn library" relationship="label">
-            <Button appearance="transparent" className={styles.iconBtn} icon={<Question24Regular />}
-              as="a" href="/learn" aria-label="Help — open Learn library" />
-          </Tooltip>
+          <Menu>
+            <MenuTrigger disableButtonEnhancement>
+              <Tooltip content="Help — Learn library & guided tour" relationship="label">
+                <Button appearance="transparent" className={styles.iconBtn} icon={<Question24Regular />}
+                  aria-label="Help — Learn library and guided tour" data-tour="help" />
+              </Tooltip>
+            </MenuTrigger>
+            <MenuPopover>
+              <MenuList>
+                <MenuItem icon={<Library24Regular />} onClick={() => { window.location.href = '/learn'; }}>
+                  Learn library
+                </MenuItem>
+                <MenuItem icon={<CompassNorthwest24Regular />} onClick={openTour}>
+                  Take the guided tour
+                </MenuItem>
+              </MenuList>
+            </MenuPopover>
+          </Menu>
           <Tooltip content="Admin & settings" relationship="label">
             <Button appearance="transparent" className={styles.iconBtn} icon={<Settings24Regular />}
               as="a" href="/admin" aria-label="Admin and settings" />
@@ -214,7 +229,7 @@ export function AppShell({ children }: { children: ReactNode }) {
           )}
         </div>
       </header>
-      <nav className={styles.nav}>
+      <nav className={styles.nav} data-tour="nav">
         <div className={styles.navMain}><LeftNav collapsed={navCollapsed} /></div>
         <div className={styles.navFooter}>
           <Tooltip content="Send feedback" relationship="label">
@@ -235,6 +250,7 @@ export function AppShell({ children }: { children: ReactNode }) {
       <FeedbackWidget />
       <GlobalErrorListeners />
       <GlobalJobToaster />
+      <OnboardingTour />
     </div>
   );
 }
