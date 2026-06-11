@@ -212,7 +212,6 @@ export function LearnTopicCard({ topic }: { topic: LearnTopic }): React.ReactEle
               {topic.appLabel ?? 'Install app'}
             </a>
           )}
-          )}
         </div>
       </div>
 
