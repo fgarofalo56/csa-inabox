@@ -20,7 +20,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import {
   Subtitle2, Body1, Caption1, Badge, Button, Input, Textarea, Spinner,
-  Tab, TabList,
+  Card, Tab, TabList,
   Table, TableHeader, TableRow, TableHeaderCell, TableBody, TableCell,
   MessageBar, MessageBarBody, MessageBarTitle,
   Tree, TreeItem, TreeItemLayout,
@@ -34,6 +34,10 @@ import {
   Link20Regular, Flash20Regular, Dismiss16Regular,
   ShieldCheckmark20Regular, Mail16Regular, ArrowSync16Regular,
   DataUsage20Regular, ArrowUpload16Regular,
+  Settings20Regular, Money20Regular, BranchFork20Regular,
+  Table20Regular, ChartMultiple20Regular,
+  ArrowDownload16Regular, ArrowSortUp16Regular, ArrowSortDown16Regular,
+  Save16Regular, DataTrending20Regular,
 } from '@fluentui/react-icons';
 import { ItemEditorChrome } from './item-editor-chrome';
 import { NewItemBrowseGate } from './new-item-gate';
@@ -66,6 +70,18 @@ import {
   type OntologyEntityBinding,
   type DaSource,
 } from './_family-utils';
+import {
+  cellKey, getCell, rowTotal, periodTotal, grandTotal,
+  cloneScenarioCells, dropScenarioCells, computeVariance, newId,
+  defaultScenarios, defaultPlanningSheet,
+  flattenPlanCells, filterPlanRows, sortPlanRows,
+  periodSeries, forecastPeriods, linearFit, ganttLayout, planInsights,
+  applyMappingsToActuals,
+  type PlanScenario, type PlanScenarioKind,
+  type PlanningSheet, type PlanSemanticModelRef, type PlanBackingDb,
+  type PlanCellRow, type PlanRowSortKey, type PeriodPoint, type GanttBar,
+  type PlanSourceMapping,
+} from './_plan-model';
 
 /**
  * Defensive array coercion for persisted Cosmos state. Legacy / hand-edited /
@@ -216,6 +232,46 @@ const useStyles = makeStyles({
   },
   ontoLoading: { display: 'flex', alignItems: 'center', gap: tokens.spacingHorizontalS, color: tokens.colorNeutralForeground3 },
   ontoStartBtn: { alignSelf: 'flex-start' },
+
+  /* ---- Plan PowerTable / Intelligence / InfoBridge (audit-T64 finish) ---- */
+  planSection: {
+    display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalM,
+    padding: tokens.spacingVerticalL, borderRadius: tokens.borderRadiusXLarge,
+    border: `1px solid ${tokens.colorNeutralStroke2}`, backgroundColor: tokens.colorNeutralBackground1,
+  },
+  planSectionHead: { display: 'flex', alignItems: 'center', gap: tokens.spacingHorizontalS, flexWrap: 'wrap' },
+  planSectionIcon: {
+    display: 'flex', alignItems: 'center', justifyContent: 'center', width: '32px', height: '32px', flexShrink: 0,
+    borderRadius: tokens.borderRadiusMedium, backgroundColor: tokens.colorBrandBackground2, color: tokens.colorBrandForeground1,
+  },
+  planToolbar: {
+    display: 'flex', gap: tokens.spacingHorizontalS, alignItems: 'flex-end', flexWrap: 'wrap',
+    padding: tokens.spacingVerticalS, borderRadius: tokens.borderRadiusLarge, backgroundColor: tokens.colorNeutralBackground2,
+  },
+  planGridScroll: { overflowX: 'auto', maxHeight: '460px', overflowY: 'auto', borderRadius: tokens.borderRadiusMedium, border: `1px solid ${tokens.colorNeutralStroke2}` },
+  planSortable: { cursor: 'pointer', userSelect: 'none' },
+  planEmpty: {
+    display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', gap: tokens.spacingVerticalS,
+    padding: tokens.spacingVerticalXXL, borderRadius: tokens.borderRadiusLarge,
+    border: `1px dashed ${tokens.colorNeutralStroke2}`, backgroundColor: tokens.colorNeutralBackground2,
+    color: tokens.colorNeutralForeground3, textAlign: 'center',
+  },
+  planKpiRow: { display: 'flex', gap: tokens.spacingHorizontalM, flexWrap: 'wrap' },
+  planKpi: {
+    display: 'flex', flexDirection: 'column', gap: '2px', minWidth: '140px', flex: '1 1 140px',
+    padding: tokens.spacingVerticalM, borderRadius: tokens.borderRadiusLarge,
+    border: `1px solid ${tokens.colorNeutralStroke2}`, borderLeftWidth: '4px', borderLeftColor: tokens.colorBrandStroke1,
+    backgroundColor: tokens.colorNeutralBackground1,
+  },
+  planKpiValue: { fontSize: tokens.fontSizeHero700, fontWeight: tokens.fontWeightSemibold, lineHeight: tokens.lineHeightHero700 },
+  planInsight: {
+    display: 'flex', alignItems: 'flex-start', gap: tokens.spacingHorizontalS,
+    padding: tokens.spacingVerticalS, borderRadius: tokens.borderRadiusMedium, backgroundColor: tokens.colorNeutralBackground2,
+  },
+  ganttRow: { display: 'flex', alignItems: 'center', gap: tokens.spacingHorizontalS, padding: '3px 0' },
+  ganttLabel: { width: '180px', flexShrink: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' },
+  ganttTrack: { position: 'relative', flex: 1, height: '20px', borderRadius: tokens.borderRadiusSmall, backgroundColor: tokens.colorNeutralBackground3 },
+  ganttBar: { position: 'absolute', top: '3px', height: '14px', borderRadius: tokens.borderRadiusSmall, minWidth: '4px' },
 });
 
 // ----- ML Model -----
@@ -1636,6 +1692,17 @@ interface PlanState {
   approvalReason?: string | null;
   approverEmail?: string;
   linkedSemanticModelId?: string;
+  // audit-T64 — EPM/CPM planning surface (budgets / forecasts / scenarios).
+  sheets?: PlanningSheet[];
+  scenarios?: PlanScenario[];
+  activeSheetId?: string;
+  activeScenarioId?: string;
+  semanticModelRef?: PlanSemanticModelRef;
+  backingDb?: PlanBackingDb;
+  // audit-T64 finish — InfoBridge source-system → line-item mappings.
+  infoBridge?: PlanSourceMapping[];
+  // Intelligence forecast horizon (periods to project); persisted per plan.
+  forecastHorizon?: number;
   [k: string]: unknown;
 }
 
@@ -1839,13 +1906,973 @@ function PlanApprovalPanel({
   );
 }
 
+// ===================================================================
+// audit-T64 — Plan (preview) EPM/CPM surface
+//
+// Azure-native parity of Microsoft Fabric's **Plan (preview)** Fabric IQ item:
+// budgets, forecasts, scenario modeling, variance — over a bound semantic model
+// (for actuals) and an opt-in Azure SQL backing store (for governed writeback).
+// NO Microsoft Fabric dependency: planning cells persist to Cosmos by default
+// and the entire surface works with LOOM_DEFAULT_FABRIC_WORKSPACE unset.
+//   Backends: PATCH /api/items/plan/[id] (Cosmos),
+//             GET/POST /api/items/plan/[id]/binding (semantic models + backing),
+//             POST /api/items/plan/[id]/writeback (Azure SQL MERGE).
+// ===================================================================
+
+/** Seed planning collections so a legacy task-only plan still renders fully. */
+function ensureSheets(prev: PlanState): PlanningSheet[] {
+  const cur = arr<PlanningSheet>(prev.sheets);
+  return cur.length ? cur : [defaultPlanningSheet()];
+}
+function ensureScenarios(prev: PlanState): PlanScenario[] {
+  const cur = arr<PlanScenario>(prev.scenarios);
+  return cur.length ? cur : defaultScenarios();
+}
+const fmtNum = (n: number) =>
+  (Number.isFinite(n) ? n : 0).toLocaleString(undefined, { maximumFractionDigits: 0 });
+
+/**
+ * Settings flyout — semantic-model connection + Azure SQL backing store, the
+ * Azure-native parity of Fabric Plan's "Settings → model + database connection".
+ */
+function PlanSettingsFlyout({
+  id, state, setState, open, onClose,
+}: {
+  id: string;
+  state: PlanState;
+  setState: (updater: (prev: PlanState) => PlanState) => void;
+  open: boolean;
+  onClose: () => void;
+}) {
+  const [models, setModels] = useState<Array<{ id: string; name: string }>>([]);
+  const [backing, setBacking] = useState<{ configured: boolean; server?: string; database?: string; gate?: { missing: string; reason: string; remediation: string } } | null>(null);
+  const [loading, setLoading] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const [msg, setMsg] = useState<{ intent: 'success' | 'error' | 'warning'; text: string } | null>(null);
+
+  useEffect(() => {
+    if (!open || !id || id === 'new') return;
+    setLoading(true); setMsg(null);
+    fetch(`/api/items/plan/${encodeURIComponent(id)}/binding`)
+      .then((r) => r.json().catch(() => ({})))
+      .then((j) => {
+        if (j?.ok) { setModels(arr(j.semanticModels)); setBacking(j.backing || null); }
+        else setMsg({ intent: 'error', text: j?.error || 'Failed to load settings.' });
+      })
+      .catch((e) => setMsg({ intent: 'error', text: e?.message || String(e) }))
+      .finally(() => setLoading(false));
+  }, [open, id]);
+
+  const ref = state.semanticModelRef;
+  const selectModel = (modelId: string) => {
+    const m = models.find((x) => x.id === modelId);
+    setState((prev) => ({ ...prev, semanticModelRef: m ? { itemId: m.id, displayName: m.name } : undefined }));
+  };
+  const provision = async () => {
+    if (!id || id === 'new') { setMsg({ intent: 'error', text: 'Save the plan first.' }); return; }
+    setBusy(true); setMsg(null);
+    try {
+      const r = await fetch(`/api/items/plan/${encodeURIComponent(id)}/binding`, {
+        method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ action: 'provision' }),
+      });
+      const j = await r.json().catch(() => ({}));
+      if (!r.ok) {
+        setMsg({ intent: j?.gate ? 'warning' : 'error', text: j?.gate ? `${j.gate.reason} ${j.gate.remediation}` : (j?.error || `HTTP ${r.status}`) });
+        return;
+      }
+      setBacking({ configured: true, server: j.server, database: j.database });
+      setState((prev) => ({ ...prev, backingDb: { kind: 'azure-sql', serverName: j.server, dbName: j.database, provisionedAt: new Date().toISOString() } }));
+      setMsg({ intent: 'success', text: j.message || 'Backing store ready.' });
+    } catch (e: any) {
+      setMsg({ intent: 'error', text: e?.message || String(e) });
+    } finally { setBusy(false); }
+  };
+
+  return (
+    <Dialog open={open} onOpenChange={(_, d) => { if (!d.open) onClose(); }}>
+      <DialogSurface>
+        <DialogBody>
+          <DialogTitle>Plan settings</DialogTitle>
+          <DialogContent>
+            <div style={{ display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalM }}>
+              {loading && <Spinner size="tiny" label="Loading settings…" labelPosition="after" />}
+              <Field label="Semantic model (actuals source)" hint="Plan-vs-actual variance reads measures from this bound model. Azure-native: Loom semantic model / AAS — no Power BI workspace required.">
+                <Dropdown
+                  placeholder={models.length ? 'Select a semantic model…' : 'No semantic models found'}
+                  value={ref?.displayName || ''}
+                  selectedOptions={ref ? [ref.itemId] : []}
+                  onOptionSelect={(_, d) => selectModel(d.optionValue || '')}
+                  disabled={models.length === 0}
+                >
+                  {models.map((m) => <Option key={m.id} value={m.id}>{m.name}</Option>)}
+                </Dropdown>
+              </Field>
+
+              <div style={{ height: 1, background: tokens.colorNeutralStroke2 }} />
+
+              <Subtitle2 style={{ display: 'flex', alignItems: 'center', gap: 6 }}><Database20Regular /> Backing store (writeback)</Subtitle2>
+              {backing?.configured ? (
+                <MessageBar intent="success">
+                  <MessageBarBody>
+                    <MessageBarTitle>Azure SQL configured</MessageBarTitle>
+                    Writeback target: <strong>{backing.database}</strong> on <strong>{backing.server}</strong>. Saved planning cells MERGE into <code>dbo.loom_plan_cells</code>.
+                  </MessageBarBody>
+                </MessageBar>
+              ) : (
+                <MessageBar intent="warning">
+                  <MessageBarBody>
+                    <MessageBarTitle>No Azure SQL writeback store</MessageBarTitle>
+                    {backing?.gate?.reason || 'Planning cells persist to Cosmos and the plan is fully functional.'}{' '}
+                    {backing?.gate ? <>Set <code>{backing.gate.missing}</code>. {backing.gate.remediation}</> : null}
+                  </MessageBarBody>
+                </MessageBar>
+              )}
+              <Button
+                icon={busy ? <Spinner size="tiny" /> : <Database20Regular />}
+                onClick={provision}
+                disabled={busy || (backing?.configured === false && !!backing?.gate)}
+                appearance={backing?.configured ? 'secondary' : 'primary'}
+                style={{ alignSelf: 'flex-start' }}
+              >
+                {backing?.configured ? 'Re-provision tables' : 'Provision backing store'}
+              </Button>
+
+              {msg && (
+                <MessageBar intent={msg.intent}>
+                  <MessageBarBody>{msg.text}</MessageBarBody>
+                </MessageBar>
+              )}
+            </div>
+          </DialogContent>
+          <DialogActions>
+            <Button appearance="primary" onClick={onClose}>Done</Button>
+          </DialogActions>
+        </DialogBody>
+      </DialogSurface>
+    </Dialog>
+  );
+}
+
+/** The planning-sheet grid: dimensions on rows, periods on columns, scenarios, variance. */
+function PlanningSheetPanel({
+  id, state, setState, save, saving,
+}: {
+  id: string;
+  state: PlanState;
+  setState: (updater: (prev: PlanState) => PlanState) => void;
+  save: (next?: PlanState) => Promise<boolean>;
+  saving: boolean;
+}) {
+  const sheets = ensureSheets(state);
+  const scenarios = ensureScenarios(state);
+  const activeSheetId = sheets.some((s) => s.id === state.activeSheetId) ? (state.activeSheetId as string) : sheets[0].id;
+  const activeScenarioId = scenarios.some((s) => s.id === state.activeScenarioId) ? (state.activeScenarioId as string) : scenarios[0].id;
+  const sheet = sheets.find((s) => s.id === activeSheetId) || sheets[0];
+  const scenario = scenarios.find((s) => s.id === activeScenarioId) || scenarios[0];
+
+  const [showVariance, setShowVariance] = useState(false);
+  const [settingsOpen, setSettingsOpen] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const [msg, setMsg] = useState<{ intent: 'success' | 'error' | 'warning'; text: string } | null>(null);
+
+  // All sheet mutations funnel through here so the seeded defaults persist.
+  const mutateSheet = (sheetId: string, mut: (s: PlanningSheet) => PlanningSheet) =>
+    setState((prev) => ({
+      ...prev,
+      sheets: ensureSheets(prev).map((s) => (s.id === sheetId ? mut(s) : s)),
+      scenarios: ensureScenarios(prev),
+      activeSheetId, activeScenarioId,
+    }));
+
+  const setCell = (lineItemId: string, periodId: string, raw: string) => {
+    const value = raw === '' ? 0 : Number(raw);
+    if (!Number.isFinite(value)) return;
+    mutateSheet(sheet.id, (s) => ({ ...s, cells: { ...s.cells, [cellKey(lineItemId, periodId, activeScenarioId)]: value } }));
+  };
+  const setActual = (lineItemId: string, raw: string) => {
+    const value = raw === '' ? 0 : Number(raw);
+    if (!Number.isFinite(value)) return;
+    mutateSheet(sheet.id, (s) => ({ ...s, actuals: { ...(s.actuals || {}), [lineItemId]: value } }));
+  };
+  const addLineItem = () => mutateSheet(sheet.id, (s) => ({ ...s, lineItems: [...s.lineItems, { id: newId('li'), name: 'New line item', kind: 'input' }] }));
+  const renameLineItem = (liId: string, name: string) => mutateSheet(sheet.id, (s) => ({ ...s, lineItems: s.lineItems.map((li) => (li.id === liId ? { ...li, name } : li)) }));
+  const removeLineItem = (liId: string) => mutateSheet(sheet.id, (s) => ({ ...s, lineItems: s.lineItems.filter((li) => li.id !== liId) }));
+  const addPeriod = () => mutateSheet(sheet.id, (s) => ({ ...s, periods: [...s.periods, { id: newId('p'), label: `P${s.periods.length + 1}` }] }));
+  const renamePeriod = (pId: string, label: string) => mutateSheet(sheet.id, (s) => ({ ...s, periods: s.periods.map((p) => (p.id === pId ? { ...p, label } : p)) }));
+  const removePeriod = (pId: string) => mutateSheet(sheet.id, (s) => ({ ...s, periods: s.periods.filter((p) => p.id !== pId) }));
+
+  const addSheet = () => {
+    const ns = { ...defaultPlanningSheet(), id: newId('sheet'), name: `Sheet ${sheets.length + 1}`, cells: {}, actuals: {} };
+    setState((prev) => ({ ...prev, sheets: [...ensureSheets(prev), ns], scenarios: ensureScenarios(prev), activeSheetId: ns.id, activeScenarioId }));
+  };
+  const setActiveSheet = (sid: string) => setState((prev) => ({ ...prev, sheets: ensureSheets(prev), scenarios: ensureScenarios(prev), activeSheetId: sid, activeScenarioId }));
+  const setActiveScenario = (scid: string) => setState((prev) => ({ ...prev, sheets: ensureSheets(prev), scenarios: ensureScenarios(prev), activeSheetId, activeScenarioId: scid }));
+
+  // Branch the active scenario into a new custom scenario, cloning every sheet's
+  // cells so the new branch starts from the source's assumptions.
+  const branchScenario = () => {
+    const nid = newId('sc');
+    setState((prev) => {
+      const sc = ensureScenarios(prev);
+      const src = sc.find((x) => x.id === activeScenarioId) || sc[0];
+      const nextScenarios = [...sc, { id: nid, name: `${src.name} (copy)`, kind: 'custom' as PlanScenarioKind }];
+      const nextSheets = ensureSheets(prev).map((s) => ({ ...s, cells: cloneScenarioCells(s.cells, activeScenarioId, nid) }));
+      return { ...prev, scenarios: nextScenarios, sheets: nextSheets, activeSheetId, activeScenarioId: nid };
+    });
+  };
+  const removeScenario = (scid: string) => {
+    if (scenarios.length <= 1) { setMsg({ intent: 'warning', text: 'A plan needs at least one scenario.' }); return; }
+    setState((prev) => {
+      const sc = ensureScenarios(prev).filter((x) => x.id !== scid);
+      const nextSheets = ensureSheets(prev).map((s) => ({ ...s, cells: dropScenarioCells(s.cells, scid) }));
+      return { ...prev, scenarios: sc, sheets: nextSheets, activeSheetId, activeScenarioId: sc[0].id };
+    });
+  };
+  const renameScenario = (scid: string, name: string) =>
+    setState((prev) => ({ ...prev, scenarios: ensureScenarios(prev).map((x) => (x.id === scid ? { ...x, name } : x)), sheets: ensureSheets(prev), activeSheetId, activeScenarioId }));
+
+  // Writeback the active sheet's cells (all scenarios) into Azure SQL.
+  const writeback = async () => {
+    if (!id || id === 'new') { setMsg({ intent: 'warning', text: 'Save the plan first.' }); return; }
+    const cells = Object.entries(sheet.cells).map(([k, value]) => {
+      const [lineItemId, periodId, scenarioId] = k.split('|');
+      return { lineItemId, periodId, scenarioId, value };
+    });
+    if (cells.length === 0) { setMsg({ intent: 'warning', text: 'No cells to write back yet.' }); return; }
+    setBusy(true); setMsg(null);
+    try {
+      await save(); // persist to Cosmos first (the always-works default)
+      const r = await fetch(`/api/items/plan/${encodeURIComponent(id)}/writeback`, {
+        method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ sheetId: sheet.id, cells }),
+      });
+      const j = await r.json().catch(() => ({}));
+      if (!r.ok) {
+        setMsg({ intent: j?.gate ? 'warning' : 'error', text: j?.gate ? `Saved to Cosmos. SQL writeback skipped: set ${j.gate.missing}. ${j.gate.remediation}` : (j?.error || `HTTP ${r.status}`) });
+        return;
+      }
+      setMsg({ intent: 'success', text: j.message || `${j.written} cells written to Azure SQL.` });
+    } catch (e: any) {
+      setMsg({ intent: 'error', text: e?.message || String(e) });
+    } finally { setBusy(false); }
+  };
+
+  const variance = computeVariance(sheet, activeScenarioId, sheet.actuals || {});
+  const inputItems = sheet.lineItems.filter((li) => li.kind === 'input');
+
+  return (
+    <div style={{ display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalM }}>
+      <MessageBar intent="info">
+        <MessageBarBody>
+          <MessageBarTitle>Planning sheet</MessageBarTitle>
+          Build budgets / forecasts across periods, branch what-if scenarios, and compare plan vs actuals — the Azure-native
+          parity of Microsoft Fabric Plan (preview). Cells persist to Cosmos; <strong>Write back</strong> MERGEs them into an
+          Azure SQL store when one is configured (Settings). No Microsoft Fabric capacity required.
+        </MessageBarBody>
+      </MessageBar>
+
+      {/* Toolbar: sheet · scenario · branch · variance · writeback · settings */}
+      <div style={{ display: 'flex', gap: tokens.spacingHorizontalM, alignItems: 'flex-end', flexWrap: 'wrap' }}>
+        <Field label="Sheet">
+          <Dropdown value={sheet.name} selectedOptions={[sheet.id]} onOptionSelect={(_, d) => setActiveSheet(d.optionValue || sheet.id)} style={{ minWidth: 180 }}>
+            {sheets.map((s) => <Option key={s.id} value={s.id}>{s.name}</Option>)}
+          </Dropdown>
+        </Field>
+        <Button icon={<Add20Regular />} onClick={addSheet}>New sheet</Button>
+        <Field label="Scenario">
+          <Dropdown value={scenario.name} selectedOptions={[scenario.id]} onOptionSelect={(_, d) => setActiveScenario(d.optionValue || scenario.id)} style={{ minWidth: 180 }}>
+            {scenarios.map((sc) => <Option key={sc.id} value={sc.id} text={sc.name}>{sc.name} · {sc.kind}</Option>)}
+          </Dropdown>
+        </Field>
+        <Button icon={<BranchFork20Regular />} onClick={branchScenario}>Branch scenario</Button>
+        <Switch label="Variance vs actuals" checked={showVariance} onChange={(_, d) => setShowVariance(d.checked)} />
+        <div style={{ flex: 1 }} />
+        <Button icon={busy ? <Spinner size="tiny" /> : <ArrowUpload16Regular />} onClick={writeback} disabled={busy}>Write back</Button>
+        <Button icon={<Settings20Regular />} onClick={() => setSettingsOpen(true)}>Settings</Button>
+      </div>
+
+      {/* Scenario rename / delete row */}
+      <div style={{ display: 'flex', gap: tokens.spacingHorizontalS, alignItems: 'center', flexWrap: 'wrap' }}>
+        <Badge appearance="filled" color="brand">{scenario.kind}</Badge>
+        <Input value={scenario.name} onChange={(_, d) => renameScenario(scenario.id, d.value)} style={{ maxWidth: 220 }} aria-label="Scenario name" />
+        {scenarios.length > 1 && <Button size="small" appearance="subtle" icon={<Dismiss16Regular />} onClick={() => removeScenario(scenario.id)}>Delete scenario</Button>}
+        <Caption1 style={{ color: tokens.colorNeutralForeground3, marginLeft: 'auto' }}>
+          Scenario total: <strong>{fmtNum(grandTotal(sheet, activeScenarioId))}</strong>
+        </Caption1>
+      </div>
+
+      {/* Planning grid */}
+      <Card style={{ padding: 0, overflowX: 'auto' }}>
+        <Table aria-label="Planning sheet grid" size="small">
+          <TableHeader>
+            <TableRow>
+              <TableHeaderCell style={{ minWidth: 200 }}>
+                <span style={{ display: 'inline-flex', alignItems: 'center', gap: 4 }}><Money20Regular /> Line item</span>
+              </TableHeaderCell>
+              {sheet.periods.map((p) => (
+                <TableHeaderCell key={p.id} style={{ minWidth: 90 }}>
+                  <span style={{ display: 'inline-flex', alignItems: 'center', gap: 2 }}>
+                    <Input size="small" value={p.label} onChange={(_, d) => renamePeriod(p.id, d.value)} style={{ maxWidth: 70 }} aria-label="Period label" />
+                    {sheet.periods.length > 1 && <Button size="small" appearance="transparent" icon={<Dismiss16Regular />} onClick={() => removePeriod(p.id)} aria-label="Remove period" />}
+                  </span>
+                </TableHeaderCell>
+              ))}
+              <TableHeaderCell style={{ minWidth: 90 }}>Total</TableHeaderCell>
+              {showVariance && <TableHeaderCell style={{ minWidth: 100 }}>Actual</TableHeaderCell>}
+              {showVariance && <TableHeaderCell style={{ minWidth: 80 }}>Δ</TableHeaderCell>}
+              {showVariance && <TableHeaderCell style={{ minWidth: 70 }}>Δ%</TableHeaderCell>}
+              <TableHeaderCell />
+            </TableRow>
+          </TableHeader>
+          <TableBody>
+            {inputItems.length === 0 && (
+              <TableRow>
+                <TableCell colSpan={sheet.periods.length + (showVariance ? 6 : 3)}>
+                  <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: tokens.spacingVerticalXS, padding: tokens.spacingVerticalL, color: tokens.colorNeutralForeground3 }}>
+                    <Money20Regular />
+                    <Body1>No line items yet</Body1>
+                    <Caption1>Add a line item to start building this plan&apos;s budget across periods.</Caption1>
+                    <Button size="small" icon={<Add20Regular />} onClick={addLineItem} style={{ marginTop: tokens.spacingVerticalXS }}>Add line item</Button>
+                  </div>
+                </TableCell>
+              </TableRow>
+            )}
+            {inputItems.map((li) => {
+              const v = variance.find((x) => x.lineItemId === li.id);
+              return (
+                <TableRow key={li.id}>
+                  <TableCell><Input value={li.name} onChange={(_, d) => renameLineItem(li.id, d.value)} aria-label="Line item name" /></TableCell>
+                  {sheet.periods.map((p) => (
+                    <TableCell key={p.id}>
+                      <Input
+                        type="number"
+                        value={String(getCell(sheet.cells, li.id, p.id, activeScenarioId) || '')}
+                        onChange={(_, d) => setCell(li.id, p.id, d.value)}
+                        style={{ maxWidth: 80 }}
+                        aria-label={`${li.name} ${p.label}`}
+                      />
+                    </TableCell>
+                  ))}
+                  <TableCell><strong>{fmtNum(rowTotal(sheet, activeScenarioId, li.id))}</strong></TableCell>
+                  {showVariance && (
+                    <TableCell>
+                      <Input type="number" value={String((sheet.actuals || {})[li.id] || '')} onChange={(_, d) => setActual(li.id, d.value)} style={{ maxWidth: 90 }} aria-label={`Actual ${li.name}`} />
+                    </TableCell>
+                  )}
+                  {showVariance && (
+                    <TableCell style={{ color: (v?.delta || 0) < 0 ? tokens.colorPaletteRedForeground1 : tokens.colorPaletteGreenForeground1 }}>
+                      {fmtNum(v?.delta || 0)}
+                    </TableCell>
+                  )}
+                  {showVariance && (
+                    <TableCell>{v?.pct == null ? '—' : `${Math.round(v.pct * 100)}%`}</TableCell>
+                  )}
+                  <TableCell><Button size="small" appearance="subtle" icon={<Dismiss16Regular />} onClick={() => removeLineItem(li.id)} aria-label="Remove line item" /></TableCell>
+                </TableRow>
+              );
+            })}
+            {/* Period-total footer row */}
+            <TableRow style={{ backgroundColor: tokens.colorNeutralBackground2 }}>
+              <TableCell><strong>Total</strong></TableCell>
+              {sheet.periods.map((p) => (
+                <TableCell key={p.id}><strong>{fmtNum(periodTotal(sheet, activeScenarioId, p.id))}</strong></TableCell>
+              ))}
+              <TableCell><strong>{fmtNum(grandTotal(sheet, activeScenarioId))}</strong></TableCell>
+              {showVariance && <TableCell><strong>{fmtNum(variance.reduce((a, x) => a + x.actual, 0))}</strong></TableCell>}
+              {showVariance && <TableCell><strong>{fmtNum(variance.reduce((a, x) => a + x.delta, 0))}</strong></TableCell>}
+              {showVariance && <TableCell />}
+              <TableCell />
+            </TableRow>
+          </TableBody>
+        </Table>
+      </Card>
+
+      <div style={{ display: 'flex', gap: tokens.spacingHorizontalS, flexWrap: 'wrap' }}>
+        <Button icon={<Add20Regular />} onClick={addLineItem}>Add line item</Button>
+        <Button icon={<Add20Regular />} onClick={addPeriod}>Add period</Button>
+        <Button appearance="primary" onClick={() => save()} disabled={saving}>{saving ? 'Saving…' : 'Save plan'}</Button>
+      </div>
+
+      {state.semanticModelRef && (
+        <Caption1 style={{ color: tokens.colorNeutralForeground3 }}>
+          <Link20Regular style={{ verticalAlign: 'middle' }} /> Actuals source: <strong>{state.semanticModelRef.displayName}</strong> (semantic model)
+        </Caption1>
+      )}
+
+      {msg && (
+        <MessageBar intent={msg.intent}>
+          <MessageBarBody>{msg.text}</MessageBarBody>
+        </MessageBar>
+      )}
+
+      <PlanSettingsFlyout id={id} state={state} setState={setState} open={settingsOpen} onClose={() => setSettingsOpen(false)} />
+    </div>
+  );
+}
+
+/**
+ * Inline multi-point SVG line chart for the Intelligence trend/forecast visual.
+ * Pure SVG (no chart dep) over the REAL period-subtotal series; forecast points
+ * render dashed. Azure-native — computed from plan cells, no Fabric.
+ */
+function PlanTrendChart({ points, height = 200 }: { points: PeriodPoint[]; height?: number }) {
+  const width = 560;
+  const padL = 48, padR = 16, padT = 16, padB = 28;
+  const innerW = width - padL - padR;
+  const innerH = height - padT - padB;
+  const vals = points.map((p) => p.value);
+  const max = Math.max(1, ...vals);
+  const min = Math.min(0, ...vals);
+  const span = Math.max(1, max - min);
+  const x = (i: number) => padL + (points.length <= 1 ? innerW / 2 : (i / (points.length - 1)) * innerW);
+  const y = (v: number) => padT + innerH - ((v - min) / span) * innerH;
+  const histPts = points.filter((p) => !p.forecast);
+  const linePath = (subset: PeriodPoint[]) =>
+    subset.map((p) => `${x(points.indexOf(p))},${y(p.value)}`).join(' ');
+  return (
+    <svg width="100%" viewBox={`0 0 ${width} ${height}`} role="img" aria-label="Plan trend chart" style={{ maxWidth: width }}>
+      {/* gridlines + axis labels */}
+      {[0, 0.25, 0.5, 0.75, 1].map((f) => {
+        const gy = padT + innerH - f * innerH;
+        return (
+          <g key={f}>
+            <line x1={padL} y1={gy} x2={width - padR} y2={gy} stroke={tokens.colorNeutralStroke2} strokeWidth={1} />
+            <text x={padL - 6} y={gy + 3} textAnchor="end" fontSize={10} fill={tokens.colorNeutralForeground3}>
+              {Math.round(min + f * span).toLocaleString()}
+            </text>
+          </g>
+        );
+      })}
+      {/* historical line */}
+      <polyline points={linePath(histPts)} fill="none" stroke={tokens.colorBrandStroke1} strokeWidth={2.5} />
+      {/* forecast line (dashed) — joins last historical point onward */}
+      {points.some((p) => p.forecast) && (
+        <polyline
+          points={linePath([histPts[histPts.length - 1], ...points.filter((p) => p.forecast)].filter(Boolean) as PeriodPoint[])}
+          fill="none" stroke={tokens.colorPalettePurpleForeground2} strokeWidth={2.5} strokeDasharray="5 4"
+        />
+      )}
+      {/* points + x labels */}
+      {points.map((p, i) => (
+        <g key={p.periodId}>
+          <circle cx={x(i)} cy={y(p.value)} r={3.5} fill={p.forecast ? tokens.colorPalettePurpleForeground2 : tokens.colorBrandForeground1} />
+          <text x={x(i)} y={height - 10} textAnchor="middle" fontSize={10} fill={tokens.colorNeutralForeground3}>{p.label}</text>
+        </g>
+      ))}
+    </svg>
+  );
+}
+
+/** Mutate a single planning cell in the correct sheet (PowerTable two-way edit). */
+function setPlanCellByKey(
+  setState: (updater: (prev: PlanState) => PlanState) => void,
+  sheetId: string, key: string, value: number,
+) {
+  setState((prev) => ({
+    ...prev,
+    sheets: ensureSheets(prev).map((sh) => (sh.id === sheetId ? { ...sh, cells: { ...sh.cells, [key]: value } } : sh)),
+    scenarios: ensureScenarios(prev),
+  }));
+}
+
+/**
+ * PowerTable — the Azure-native parity of Fabric Plan's no-code, SQL-bound grid
+ * (/fabric/iq/plan/powertable-overview). Flattens every plan cell into one
+ * editable, sortable, filterable grid bound 1:1 to the `dbo.loom_plan_cells`
+ * columns. Two-way writeback: edits persist to Cosmos (always) and MERGE into
+ * Azure SQL (when configured). "Load from SQL" reads the persisted rows back.
+ */
+function PlanPowerTablePanel({
+  id, state, setState, save, saving,
+}: {
+  id: string;
+  state: PlanState;
+  setState: (updater: (prev: PlanState) => PlanState) => void;
+  save: (next?: PlanState) => Promise<boolean>;
+  saving: boolean;
+}) {
+  const s = useStyles();
+  const sheets = ensureSheets(state);
+  const scenarios = ensureScenarios(state);
+  const rows = useMemo(() => flattenPlanCells(sheets, scenarios), [sheets, scenarios]);
+
+  const [query, setQuery] = useState('');
+  const [sortKey, setSortKey] = useState<PlanRowSortKey>('lineItem');
+  const [sortDir, setSortDir] = useState<'asc' | 'desc'>('asc');
+  const [busy, setBusy] = useState(false);
+  const [msg, setMsg] = useState<{ intent: 'success' | 'error' | 'warning'; text: string } | null>(null);
+  // Persisted SQL rows (read-back) keyed by composite key for a "drift" badge.
+  const [sqlByKey, setSqlByKey] = useState<Record<string, number> | null>(null);
+
+  const view = useMemo(() => sortPlanRows(filterPlanRows(rows, query), sortKey, sortDir), [rows, query, sortKey, sortDir]);
+
+  const toggleSort = (k: PlanRowSortKey) => {
+    if (k === sortKey) setSortDir((d) => (d === 'asc' ? 'desc' : 'asc'));
+    else { setSortKey(k); setSortDir('asc'); }
+  };
+  const SortIcon = ({ k }: { k: PlanRowSortKey }) =>
+    k !== sortKey ? null : sortDir === 'asc' ? <ArrowSortUp16Regular /> : <ArrowSortDown16Regular />;
+
+  const editCell = (row: PlanCellRow, raw: string) => {
+    const v = raw === '' ? 0 : Number(raw);
+    if (!Number.isFinite(v)) return;
+    setPlanCellByKey(setState, row.sheetId, row.key, v);
+  };
+
+  // Two-way writeback: persist to Cosmos, then MERGE the visible sheet's cells
+  // into Azure SQL via the real writeback route.
+  const writeBackAll = async () => {
+    if (!id || id === 'new') { setMsg({ intent: 'warning', text: 'Save the plan first.' }); return; }
+    setBusy(true); setMsg(null);
+    try {
+      await save();
+      // Group cells by sheet and POST each (the route is per-sheet).
+      let total = 0; let gated: string | null = null;
+      for (const sheet of sheets) {
+        const cells = Object.entries(sheet.cells).map(([k, value]) => {
+          const [lineItemId, periodId, scenarioId] = k.split('|');
+          return { lineItemId, periodId, scenarioId, value };
+        });
+        if (cells.length === 0) continue;
+        const r = await fetch(`/api/items/plan/${encodeURIComponent(id)}/writeback`, {
+          method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ sheetId: sheet.id, cells }),
+        });
+        const j = await r.json().catch(() => ({}));
+        if (r.status === 503 && j?.gate) { gated = `${j.gate.reason} Set ${j.gate.missing}.`; break; }
+        if (!r.ok) { setMsg({ intent: 'error', text: j?.error || `HTTP ${r.status}` }); setBusy(false); return; }
+        total += Number(j.written || 0);
+      }
+      if (gated) setMsg({ intent: 'warning', text: `Saved to Cosmos. Azure SQL writeback skipped: ${gated}` });
+      else setMsg({ intent: 'success', text: `${total} cell${total === 1 ? '' : 's'} written back to Azure SQL.` });
+    } catch (e: any) {
+      setMsg({ intent: 'error', text: e?.message || String(e) });
+    } finally { setBusy(false); }
+  };
+
+  const loadFromSql = async () => {
+    if (!id || id === 'new') { setMsg({ intent: 'warning', text: 'Save the plan first.' }); return; }
+    setBusy(true); setMsg(null);
+    try {
+      const r = await fetch(`/api/items/plan/${encodeURIComponent(id)}/writeback`);
+      const j = await r.json().catch(() => ({}));
+      if (r.status === 503 && j?.gate) { setMsg({ intent: 'warning', text: `${j.gate.reason} Set ${j.gate.missing}. PowerTable is bound to the in-editor (Cosmos) cells.` }); return; }
+      if (!r.ok || !j?.ok) { setMsg({ intent: 'error', text: j?.error || `HTTP ${r.status}` }); return; }
+      const map: Record<string, number> = {};
+      for (const c of j.cells || []) map[cellKey(c.lineItemId, c.periodId, c.scenarioId)] = Number(c.value);
+      setSqlByKey(map);
+      setMsg({ intent: 'success', text: `Loaded ${j.count} persisted row${j.count === 1 ? '' : 's'} from ${j.database}. Cells differing from the editor are flagged.` });
+    } catch (e: any) {
+      setMsg({ intent: 'error', text: e?.message || String(e) });
+    } finally { setBusy(false); }
+  };
+
+  const colName: Record<PlanRowSortKey, string> = { sheetName: 'Sheet', lineItem: 'Line item', period: 'Period', scenario: 'Scenario', value: 'Value' };
+
+  return (
+    <div className={s.planSection}>
+      <div className={s.planSectionHead}>
+        <span className={s.planSectionIcon}><Table20Regular /></span>
+        <div style={{ flex: 1, minWidth: 200 }}>
+          <Subtitle2>PowerTable</Subtitle2>
+          <Caption1 as="p" block style={{ color: tokens.colorNeutralForeground3 }}>
+            No-code, SQL-bound grid over every plan cell with two-way writeback — the Azure-native parity of Fabric Plan&apos;s PowerTable. Edit any value inline; it persists to Cosmos and MERGEs into <code>dbo.loom_plan_cells</code> on write back.
+          </Caption1>
+        </div>
+        <Badge appearance="tint" color="brand">{rows.length} cell{rows.length === 1 ? '' : 's'}</Badge>
+      </div>
+
+      <div className={s.planToolbar}>
+        <Field label="Filter rows" style={{ minWidth: 220, flex: '1 1 220px' }}>
+          <Input value={query} onChange={(_, d) => setQuery(d.value)} placeholder="line item, period, scenario, value…" contentBefore={<ArrowDownload16Regular style={{ visibility: 'hidden', width: 0 }} />} />
+        </Field>
+        <Button icon={busy ? <Spinner size="tiny" /> : <Save16Regular />} onClick={writeBackAll} disabled={busy || saving}>Write back to SQL</Button>
+        <Button icon={busy ? <Spinner size="tiny" /> : <ArrowDownload16Regular />} onClick={loadFromSql} disabled={busy}>Load from SQL</Button>
+        <Button appearance="primary" onClick={() => save()} disabled={saving}>{saving ? 'Saving…' : 'Save'}</Button>
+      </div>
+
+      {rows.length === 0 ? (
+        <div className={s.planEmpty}>
+          <Table20Regular fontSize={28} />
+          <Body1>No plan cells yet. Add line items and periods on the <strong>Planning</strong> sheet, then enter values — they appear here as an editable grid.</Body1>
+        </div>
+      ) : (
+        <div className={s.planGridScroll}>
+          <Table size="small" aria-label="PowerTable cell grid">
+            <TableHeader>
+              <TableRow>
+                {(['sheetName', 'lineItem', 'period', 'scenario', 'value'] as PlanRowSortKey[]).map((k) => (
+                  <TableHeaderCell key={k} className={s.planSortable} onClick={() => toggleSort(k)}>
+                    <span style={{ display: 'inline-flex', alignItems: 'center', gap: 4 }}>{colName[k]}<SortIcon k={k} /></span>
+                  </TableHeaderCell>
+                ))}
+              </TableRow>
+            </TableHeader>
+            <TableBody>
+              {view.map((row) => {
+                const drift = sqlByKey && Object.prototype.hasOwnProperty.call(sqlByKey, row.key) && sqlByKey[row.key] !== row.value;
+                return (
+                  <TableRow key={row.key}>
+                    <TableCell>{row.sheetName}</TableCell>
+                    <TableCell>{row.lineItem}</TableCell>
+                    <TableCell>{row.period}</TableCell>
+                    <TableCell><Badge appearance="outline">{row.scenario}</Badge></TableCell>
+                    <TableCell>
+                      <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                        <Input type="number" value={String(row.value || '')} onChange={(_, d) => editCell(row, d.value)} style={{ maxWidth: 110 }} aria-label={`${row.lineItem} ${row.period} ${row.scenario}`} />
+                        {drift && <Badge appearance="tint" color="warning" title={`Azure SQL has ${sqlByKey![row.key]}`}>SQL {fmtNum(sqlByKey![row.key])}</Badge>}
+                      </div>
+                    </TableCell>
+                  </TableRow>
+                );
+              })}
+            </TableBody>
+          </Table>
+        </div>
+      )}
+
+      {msg && <MessageBar intent={msg.intent}><MessageBarBody>{msg.text}</MessageBarBody></MessageBar>}
+    </div>
+  );
+}
+
+/**
+ * Intelligence — Fabric Plan's auto-insights surface (variance reports, trend +
+ * forecast, Gantt). Azure-native parity: every visual is computed from the real
+ * plan cells / tasks (no Fabric, no mock). Forecast is an OLS extrapolation of
+ * the period-subtotal trend; Gantt lays out the Project tasks by due date.
+ */
+function PlanIntelligencePanel({
+  state, setState, scenarioName, activeScenarioId, sheet, tasks,
+}: {
+  state: PlanState;
+  setState: (updater: (prev: PlanState) => PlanState) => void;
+  scenarioName: string;
+  activeScenarioId: string;
+  sheet: PlanningSheet;
+  tasks: PlanTask[];
+}) {
+  const s = useStyles();
+  const horizon = typeof state.forecastHorizon === 'number' ? state.forecastHorizon : 2;
+  const series = useMemo(() => forecastPeriods(sheet, activeScenarioId, horizon), [sheet, activeScenarioId, horizon]);
+  const hist = useMemo(() => periodSeries(sheet, activeScenarioId), [sheet, activeScenarioId]);
+  const fit = useMemo(() => linearFit(hist.map((p) => p.value)), [hist]);
+  const variance = useMemo(() => computeVariance(sheet, activeScenarioId, sheet.actuals || {}), [sheet, activeScenarioId]);
+  const insights = useMemo(() => planInsights(sheet, activeScenarioId, variance), [sheet, activeScenarioId, variance]);
+  const bars: GanttBar[] = useMemo(() => ganttLayout(tasks), [tasks]);
+
+  const total = grandTotal(sheet, activeScenarioId);
+  const forecastTotal = series.filter((p) => p.forecast).reduce((a, p) => a + p.value, 0);
+  const trendLabel = fit.slope > 0 ? 'Upward' : fit.slope < 0 ? 'Downward' : 'Flat';
+  const varianceWithActuals = variance.filter((v) => v.actual !== 0);
+  const totalDelta = varianceWithActuals.reduce((a, v) => a + v.delta, 0);
+
+  const barColor = (st: PlanTask['status'], overdue: boolean) =>
+    overdue ? tokens.colorPaletteRedBackground3
+      : st === 'done' ? tokens.colorPaletteGreenBackground3
+        : st === 'doing' ? tokens.colorBrandBackground
+          : tokens.colorNeutralForeground3;
+
+  return (
+    <div style={{ display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalL }}>
+      {/* KPI strip */}
+      <div className={s.planKpiRow}>
+        <div className={s.planKpi}>
+          <Caption1 style={{ color: tokens.colorNeutralForeground3 }}>Scenario total ({scenarioName})</Caption1>
+          <span className={s.planKpiValue}>{fmtNum(total)}</span>
+        </div>
+        <div className={s.planKpi}>
+          <Caption1 style={{ color: tokens.colorNeutralForeground3 }}>Trend (R² {fit.r2.toFixed(2)})</Caption1>
+          <span className={s.planKpiValue} style={{ color: fit.slope < 0 ? tokens.colorPaletteRedForeground1 : tokens.colorPaletteGreenForeground1 }}>{trendLabel}</span>
+        </div>
+        <div className={s.planKpi}>
+          <Caption1 style={{ color: tokens.colorNeutralForeground3 }}>Forecast +{horizon} period{horizon === 1 ? '' : 's'}</Caption1>
+          <span className={s.planKpiValue}>{fmtNum(forecastTotal)}</span>
+        </div>
+        <div className={s.planKpi}>
+          <Caption1 style={{ color: tokens.colorNeutralForeground3 }}>Variance vs actuals</Caption1>
+          <span className={s.planKpiValue} style={{ color: totalDelta < 0 ? tokens.colorPaletteRedForeground1 : tokens.colorPaletteGreenForeground1 }}>{varianceWithActuals.length ? fmtNum(totalDelta) : '—'}</span>
+        </div>
+      </div>
+
+      {/* Trend + forecast chart */}
+      <div className={s.planSection}>
+        <div className={s.planSectionHead}>
+          <span className={s.planSectionIcon}><DataTrending20Regular /></span>
+          <div style={{ flex: 1 }}>
+            <Subtitle2>Trend &amp; forecast</Subtitle2>
+            <Caption1 as="p" block style={{ color: tokens.colorNeutralForeground3 }}>
+              Period subtotals for <strong>{scenarioName}</strong>; dashed line is an ordinary-least-squares projection.
+            </Caption1>
+          </div>
+          <Field label="Forecast periods" orientation="horizontal">
+            <Dropdown
+              value={String(horizon)} selectedOptions={[String(horizon)]} style={{ minWidth: 80 }}
+              onOptionSelect={(_, d) => { const h = Number(d.optionValue); if (Number.isFinite(h)) setState((p) => ({ ...p, forecastHorizon: h })); }}
+            >
+              {[0, 1, 2, 3, 4, 6].map((h) => <Option key={h} value={String(h)}>{h}</Option>)}
+            </Dropdown>
+          </Field>
+        </div>
+        {hist.length === 0 ? (
+          <div className={s.planEmpty}><Body1>No periods to chart yet — add periods + values on the Planning sheet.</Body1></div>
+        ) : (
+          <PlanTrendChart points={series} />
+        )}
+      </div>
+
+      {/* Computed insights */}
+      <div className={s.planSection}>
+        <div className={s.planSectionHead}>
+          <span className={s.planSectionIcon}><Sparkle20Regular /></span>
+          <Subtitle2>Insights</Subtitle2>
+          <Badge appearance="tint" color="informative">computed</Badge>
+        </div>
+        {insights.map((line, i) => (
+          <div key={i} className={s.planInsight}>
+            <ChartMultiple20Regular style={{ color: tokens.colorBrandForeground1, flexShrink: 0 }} />
+            <Body1>{line}</Body1>
+          </div>
+        ))}
+      </div>
+
+      {/* Variance report */}
+      <div className={s.planSection}>
+        <div className={s.planSectionHead}>
+          <span className={s.planSectionIcon}><Money20Regular /></span>
+          <Subtitle2>Variance report</Subtitle2>
+        </div>
+        <Table size="small" aria-label="Variance report">
+          <TableHeader><TableRow>
+            <TableHeaderCell>Line item</TableHeaderCell>
+            <TableHeaderCell>Plan</TableHeaderCell>
+            <TableHeaderCell>Actual</TableHeaderCell>
+            <TableHeaderCell>Δ</TableHeaderCell>
+            <TableHeaderCell>Δ%</TableHeaderCell>
+          </TableRow></TableHeader>
+          <TableBody>
+            {variance.length === 0 && <TableRow><TableCell>No input line items.</TableCell><TableCell /><TableCell /><TableCell /><TableCell /></TableRow>}
+            {variance.map((v) => (
+              <TableRow key={v.lineItemId}>
+                <TableCell>{v.name}</TableCell>
+                <TableCell>{fmtNum(v.plan)}</TableCell>
+                <TableCell>{fmtNum(v.actual)}</TableCell>
+                <TableCell style={{ color: v.delta < 0 ? tokens.colorPaletteRedForeground1 : tokens.colorPaletteGreenForeground1 }}>{fmtNum(v.delta)}</TableCell>
+                <TableCell>{v.pct == null ? '—' : `${Math.round(v.pct * 100)}%`}</TableCell>
+              </TableRow>
+            ))}
+          </TableBody>
+        </Table>
+        <Caption1 style={{ color: tokens.colorNeutralForeground3 }}>Actuals come from the Planning sheet / InfoBridge mappings (Azure-native — no Fabric).</Caption1>
+      </div>
+
+      {/* Gantt over project tasks */}
+      <div className={s.planSection}>
+        <div className={s.planSectionHead}>
+          <span className={s.planSectionIcon}><BranchFork20Regular /></span>
+          <Subtitle2>Delivery Gantt</Subtitle2>
+          <Caption1 style={{ color: tokens.colorNeutralForeground3 }}>{tasks.length} task{tasks.length === 1 ? '' : 's'} · bars span dependency → due date</Caption1>
+        </div>
+        {bars.length === 0 ? (
+          <div className={s.planEmpty}><Body1>No project tasks yet — add tasks (with due dates) on the <strong>Project tasks</strong> tab to populate the Gantt.</Body1></div>
+        ) : (
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
+            {bars.map((b, i) => (
+              <div key={i} className={s.ganttRow}>
+                <Caption1 className={s.ganttLabel} title={b.title}>{b.title}</Caption1>
+                <div className={s.ganttTrack}>
+                  <div
+                    className={s.ganttBar}
+                    style={{ left: `${b.startPct * 100}%`, width: `${b.widthPct * 100}%`, backgroundColor: barColor(b.status, b.overdue) }}
+                    title={`${b.status}${b.due ? ` · due ${b.due}` : ''}${b.overdue ? ' · overdue' : ''}${b.hasDep ? ' · has dependency' : ''}`}
+                  />
+                </div>
+                <Caption1 style={{ width: 92, flexShrink: 0, color: b.overdue ? tokens.colorPaletteRedForeground1 : tokens.colorNeutralForeground3 }}>{b.due || '—'}</Caption1>
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
+/**
+ * InfoBridge — Fabric Plan's source-system integration/mapping surface. The
+ * Azure-native parity: map each plan line item to a source field (a Loom
+ * semantic-model measure, warehouse/lakehouse column, or a manual value), persist
+ * the mappings to Cosmos, and "Push to actuals" so mapped values flow into the
+ * Planning variance overlay. Live automated pull from the bound model is an
+ * honest XMLA-gated extension. No Microsoft Fabric dependency.
+ */
+function PlanInfoBridgePanel({
+  id, state, setState, save, saving,
+}: {
+  id: string;
+  state: PlanState;
+  setState: (updater: (prev: PlanState) => PlanState) => void;
+  save: (next?: PlanState) => Promise<boolean>;
+  saving: boolean;
+}) {
+  const st = useStyles();
+  const sheets = ensureSheets(state);
+  const scenarios = ensureScenarios(state);
+  const activeSheetId = sheets.some((x) => x.id === state.activeSheetId) ? (state.activeSheetId as string) : sheets[0].id;
+  const sheet = sheets.find((x) => x.id === activeSheetId) || sheets[0];
+  const inputItems = sheet.lineItems.filter((li) => li.kind === 'input');
+  const mappings = arr<PlanSourceMapping>(state.infoBridge);
+
+  // Real owned source items for the picker (warehouse / lakehouse / semantic-model).
+  const [sources, setSources] = useState<Record<string, { id: string; name: string }[]>>({});
+  const [msg, setMsg] = useState<{ intent: 'success' | 'error' | 'warning'; text: string } | null>(null);
+  const loadSources = useCallback(async () => {
+    for (const type of ['warehouse', 'lakehouse', 'semantic-model']) {
+      try {
+        const r = await fetch(`/api/items/by-type?types=${encodeURIComponent(type)}`);
+        const j = await r.json().catch(() => ({}));
+        const items = (j.items || []).map((it: any) => ({ id: it.id, name: it.displayName || it.id }));
+        setSources((prev) => ({ ...prev, [type]: items }));
+      } catch { /* honest empty picker */ }
+    }
+  }, []);
+  useEffect(() => { void loadSources(); }, [loadSources]);
+
+  const mappingFor = (liId: string) => mappings.find((m) => m.lineItemId === liId);
+  const upsertMapping = (liId: string, patch: Partial<PlanSourceMapping>) => {
+    setState((prev) => {
+      const cur = arr<PlanSourceMapping>(prev.infoBridge);
+      const existing = cur.find((m) => m.lineItemId === liId);
+      const next: PlanSourceMapping = existing
+        ? { ...existing, ...patch }
+        : { lineItemId: liId, sourceKind: 'manual', ...patch };
+      return { ...prev, infoBridge: [...cur.filter((m) => m.lineItemId !== liId), next] };
+    });
+  };
+  const clearMapping = (liId: string) =>
+    setState((prev) => ({ ...prev, infoBridge: arr<PlanSourceMapping>(prev.infoBridge).filter((m) => m.lineItemId !== liId) }));
+
+  // Close the loop: write mapped current-actuals into the active sheet's actuals
+  // map (feeds the Planning variance overlay), then persist.
+  const pushToActuals = async () => {
+    if (mappings.length === 0) { setMsg({ intent: 'warning', text: 'Add at least one mapping first.' }); return; }
+    let nextState: PlanState | null = null;
+    setState((prev) => {
+      const nextActuals = applyMappingsToActuals(sheet.actuals, arr<PlanSourceMapping>(prev.infoBridge));
+      nextState = {
+        ...prev,
+        sheets: ensureSheets(prev).map((x) => (x.id === sheet.id ? { ...x, actuals: nextActuals } : x)),
+        scenarios: ensureScenarios(prev),
+      };
+      return nextState;
+    });
+    if (nextState && id !== 'new') await save(nextState);
+    const applied = mappings.filter((m) => typeof m.currentActual === 'number').length;
+    setMsg({ intent: 'success', text: `Pushed ${applied} mapped value${applied === 1 ? '' : 's'} into ${sheet.name} actuals. Open the Planning tab → "Variance vs actuals" to see them.` });
+  };
+
+  const sourceKinds: PlanSourceMapping['sourceKind'][] = ['semantic-model', 'warehouse', 'lakehouse', 'manual'];
+  const kindLabel: Record<PlanSourceMapping['sourceKind'], string> = {
+    'semantic-model': 'Semantic model', warehouse: 'Warehouse', lakehouse: 'Lakehouse', manual: 'Manual',
+  };
+
+  return (
+    <div className={st.planSection}>
+      <div className={st.planSectionHead}>
+        <span className={st.planSectionIcon}><Link20Regular /></span>
+        <div style={{ flex: 1, minWidth: 200 }}>
+          <Subtitle2>InfoBridge</Subtitle2>
+          <Caption1 as="p" block style={{ color: tokens.colorNeutralForeground3 }}>
+            Map each line item to a source system so planning stays aligned with actuals — the Azure-native parity of Fabric Plan&apos;s InfoBridge. Mappings persist to the plan; <strong>Push to actuals</strong> flows mapped values into the Planning variance overlay.
+          </Caption1>
+        </div>
+        <Button appearance="primary" icon={<ArrowSync16Regular />} onClick={pushToActuals} disabled={saving}>Push to actuals</Button>
+      </div>
+
+      {state.semanticModelRef ? (
+        <MessageBar intent="info">
+          <MessageBarBody>
+            Bound actuals model: <strong>{state.semanticModelRef.displayName}</strong>. Map a line item to a <em>Semantic model</em> measure here; automated live pull requires the model&apos;s XMLA endpoint (set <code>LOOM_AAS_XMLA_ENDPOINT</code> or use the manual value below). Mapped values feed the Planning variance overlay either way.
+          </MessageBarBody>
+        </MessageBar>
+      ) : (
+        <MessageBar intent="warning">
+          <MessageBarBody>
+            No semantic model bound. Bind one in <strong>Settings</strong> (Planning tab) to map measures as actuals, or use <em>Manual</em> mappings — both feed variance.
+          </MessageBarBody>
+        </MessageBar>
+      )}
+
+      {inputItems.length === 0 ? (
+        <div className={st.planEmpty}><Body1>No line items to map. Add input line items on the Planning sheet first.</Body1></div>
+      ) : (
+        <Table size="small" aria-label="InfoBridge source mappings">
+          <TableHeader><TableRow>
+            <TableHeaderCell>Line item</TableHeaderCell>
+            <TableHeaderCell>Source kind</TableHeaderCell>
+            <TableHeaderCell>Source item</TableHeaderCell>
+            <TableHeaderCell>Field / measure</TableHeaderCell>
+            <TableHeaderCell>Current actual</TableHeaderCell>
+            <TableHeaderCell />
+          </TableRow></TableHeader>
+          <TableBody>
+            {inputItems.map((li) => {
+              const m = mappingFor(li.id);
+              const kind = m?.sourceKind || 'manual';
+              const list = kind === 'manual' ? [] : (sources[kind] || []);
+              return (
+                <TableRow key={li.id}>
+                  <TableCell><strong>{li.name}</strong></TableCell>
+                  <TableCell>
+                    <Dropdown
+                      value={kindLabel[kind]} selectedOptions={[kind]} style={{ minWidth: 150 }}
+                      onOptionSelect={(_, d) => upsertMapping(li.id, { sourceKind: (d.optionValue as PlanSourceMapping['sourceKind']) || 'manual', sourceItemId: undefined, sourceName: undefined })}
+                    >
+                      {sourceKinds.map((k) => <Option key={k} value={k}>{kindLabel[k]}</Option>)}
+                    </Dropdown>
+                  </TableCell>
+                  <TableCell>
+                    {kind === 'manual' ? (
+                      <Caption1 style={{ color: tokens.colorNeutralForeground3 }}>—</Caption1>
+                    ) : list.length === 0 ? (
+                      <Caption1 style={{ color: tokens.colorNeutralForeground3 }}>No {kindLabel[kind]} items</Caption1>
+                    ) : (
+                      <Dropdown
+                        value={m?.sourceName || ''} selectedOptions={m?.sourceItemId ? [m.sourceItemId] : []} placeholder={`Select ${kindLabel[kind]}`} style={{ minWidth: 160 }}
+                        onOptionSelect={(_, d) => { const it = list.find((x) => x.id === d.optionValue); upsertMapping(li.id, { sourceItemId: it?.id, sourceName: it?.name }); }}
+                      >
+                        {list.map((it) => <Option key={it.id} value={it.id}>{it.name}</Option>)}
+                      </Dropdown>
+                    )}
+                  </TableCell>
+                  <TableCell>
+                    <Input value={m?.field || ''} onChange={(_, d) => upsertMapping(li.id, { field: d.value })} placeholder={kind === 'semantic-model' ? 'measure name' : 'column'} style={{ maxWidth: 150 }} />
+                  </TableCell>
+                  <TableCell>
+                    <Input type="number" value={m?.currentActual != null ? String(m.currentActual) : ''} onChange={(_, d) => upsertMapping(li.id, { currentActual: d.value === '' ? undefined : Number(d.value) })} placeholder="actual value" style={{ maxWidth: 120 }} />
+                  </TableCell>
+                  <TableCell>{m && <Button size="small" appearance="subtle" icon={<Dismiss16Regular />} aria-label={`Clear mapping for ${li.name}`} onClick={() => clearMapping(li.id)} />}</TableCell>
+                </TableRow>
+              );
+            })}
+          </TableBody>
+        </Table>
+      )}
+
+      <div style={{ display: 'flex', gap: tokens.spacingHorizontalS }}>
+        <Button appearance="secondary" onClick={() => save()} disabled={saving}>{saving ? 'Saving…' : 'Save mappings'}</Button>
+      </div>
+
+      {msg && <MessageBar intent={msg.intent}><MessageBarBody>{msg.text}</MessageBarBody></MessageBar>}
+    </div>
+  );
+}
+
 export function PlanEditor({ item, id }: { item: FabricItemType; id: string }) {
   const s = useStyles();
   const { state, setState, loading, saving, error, savedAt, save, dirty } = useItemState<PlanState>('plan', id, {
     tasks: [{ title: 'Define semantic model', owner: '', due: '', status: 'todo' }],
   });
-  // v3.28 Phase 4.5: functional setState so rapid Update/Add/Delete edits don't
-  // clobber each other via the stale `state` captured at click-time.
+  const [tab, setTab] = useState<'planning' | 'tasks' | 'powertable' | 'intelligence' | 'infobridge'>('planning');
+
+  // ----- Project-tasks helpers (audit-T13 surface, preserved) -----
   const update = (idx: number, patch: Partial<PlanTask>) => {
     setState((prev) => {
       const next = [...arr<PlanTask>(prev.tasks)];
@@ -1862,8 +2889,13 @@ export function PlanEditor({ item, id }: { item: FabricItemType; id: string }) {
     tasks: arr<PlanTask>(prev.tasks).filter((_, i) => i !== idx),
   }));
 
-  // v3.27: D-upgrade — compute and surface progress + overdue counts.
   const taskList = arr<PlanTask>(state.tasks);
+  // Active sheet/scenario for the Intelligence tab (mirrors PlanningSheetPanel's
+  // resolution so both surfaces read the same scenario the user is editing).
+  const intelSheets = ensureSheets(state);
+  const intelScenarios = ensureScenarios(state);
+  const intelSheet = intelSheets.find((x) => x.id === state.activeSheetId) || intelSheets[0];
+  const intelScenario = intelScenarios.find((x) => x.id === state.activeScenarioId) || intelScenarios[0];
   const counts = taskList.reduce(
     (acc, t) => { acc[t.status] = (acc[t.status] || 0) + 1; return acc; },
     {} as Record<PlanTask['status'], number>,
@@ -1878,9 +2910,11 @@ export function PlanEditor({ item, id }: { item: FabricItemType; id: string }) {
 
   const ribbon: RibbonTab[] = useMemo(() => [
     { id: 'home', label: 'Home', groups: [
+      { label: 'Plan', actions: [
+        { label: saving ? 'Saving…' : 'Save', onClick: () => save(), disabled: saving || dirty === false },
+      ]},
       { label: 'Tasks', actions: [
         { label: 'New task', onClick: add },
-        { label: saving ? 'Saving…' : 'Save', onClick: () => save(), disabled: saving || dirty === false },
       ]},
     ]},
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -1890,52 +2924,87 @@ export function PlanEditor({ item, id }: { item: FabricItemType; id: string }) {
     <ItemEditorChrome item={item} id={id} ribbon={ribbon} main={
       <div className={s.pad}>
         {loading && <Spinner size="small" label="Loading…" labelPosition="after" />}
-        <MessageBar intent="info">
-          <MessageBarBody>
-            <MessageBarTitle>Plan runtime</MessageBarTitle>
-            Plan rows save to Cosmos. Progress + status badges surface real counts; overdue tasks (due date passed and not done) get a danger badge. Route the plan through the approval workflow below — on approval, plan metrics write back to a linked semantic model via XMLA (Azure-native, no Fabric / Power Automate).
-          </MessageBarBody>
-        </MessageBar>
-        <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
-          <Badge appearance="filled" color="brand">{total} task{total === 1 ? '' : 's'}</Badge>
-          <Badge appearance="outline">to-do: {todo}</Badge>
-          <Badge appearance="filled" color="warning">doing: {doing}</Badge>
-          <Badge appearance="filled" color="success">done: {done}</Badge>
-          {overdue > 0 && <Badge appearance="filled" color="danger">overdue: {overdue}</Badge>}
-          <Caption1 style={{ marginLeft: 8 }}>{pct}% complete</Caption1>
-          <div style={{ flex: 1, height: 6, backgroundColor: tokens.colorNeutralBackground3, borderRadius: 3, overflow: 'hidden', minWidth: 120, maxWidth: 240 }}>
-            <div style={{ width: `${pct}%`, height: '100%', backgroundColor: tokens.colorBrandStroke1, transition: 'width 0.2s' }} />
+        <TabList selectedValue={tab} onTabSelect={(_, d) => setTab(d.value as typeof tab)}>
+          <Tab value="planning" icon={<Money20Regular />}>Planning</Tab>
+          <Tab value="tasks" icon={<ShieldCheckmark20Regular />}>Project tasks</Tab>
+          <Tab value="powertable" icon={<Table20Regular />}>PowerTable</Tab>
+          <Tab value="intelligence" icon={<ChartMultiple20Regular />}>Intelligence</Tab>
+          <Tab value="infobridge" icon={<Link20Regular />}>InfoBridge</Tab>
+        </TabList>
+
+        {tab === 'planning' && (
+          <PlanningSheetPanel id={id} state={state} setState={setState} save={save} saving={saving} />
+        )}
+
+        {tab === 'tasks' && (
+          <div style={{ display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalM }}>
+            <MessageBar intent="info">
+              <MessageBarBody>
+                <MessageBarTitle>Project tasks</MessageBarTitle>
+                Track the plan&apos;s delivery tasks and route the plan through the Azure-native approval Logic App. On approval,
+                plan metrics write back to a linked semantic model via XMLA (no Fabric / Power Automate).
+              </MessageBarBody>
+            </MessageBar>
+            <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
+              <Badge appearance="filled" color="brand">{total} task{total === 1 ? '' : 's'}</Badge>
+              <Badge appearance="outline">to-do: {todo}</Badge>
+              <Badge appearance="filled" color="warning">doing: {doing}</Badge>
+              <Badge appearance="filled" color="success">done: {done}</Badge>
+              {overdue > 0 && <Badge appearance="filled" color="danger">overdue: {overdue}</Badge>}
+              <Caption1 style={{ marginLeft: 8 }}>{pct}% complete</Caption1>
+              <div style={{ flex: 1, height: 6, backgroundColor: tokens.colorNeutralBackground3, borderRadius: 3, overflow: 'hidden', minWidth: 120, maxWidth: 240 }}>
+                <div style={{ width: `${pct}%`, height: '100%', backgroundColor: tokens.colorBrandStroke1, transition: 'width 0.2s' }} />
+              </div>
+            </div>
+            <Table aria-label="Plan tasks" size="small">
+              <TableHeader><TableRow>
+                <TableHeaderCell>Task</TableHeaderCell>
+                <TableHeaderCell>Owner</TableHeaderCell>
+                <TableHeaderCell>Due</TableHeaderCell>
+                <TableHeaderCell>Status</TableHeaderCell>
+                <TableHeaderCell>Depends on</TableHeaderCell>
+                <TableHeaderCell />
+              </TableRow></TableHeader>
+              <TableBody>
+                {taskList.map((t, i) => (
+                  <TableRow key={i}>
+                    <TableCell><Input value={t.title} onChange={(_, d) => update(i, { title: d.value })} /></TableCell>
+                    <TableCell><Input value={t.owner} onChange={(_, d) => update(i, { owner: d.value })} /></TableCell>
+                    <TableCell><Input type="date" value={t.due} onChange={(_, d) => update(i, { due: d.value })} /></TableCell>
+                    <TableCell>
+                      <select value={t.status} onChange={(e) => update(i, { status: e.target.value as PlanTask['status'] })}
+                        style={{ padding: 4, borderRadius: 4, border: `1px solid ${tokens.colorNeutralStroke2}`, background: tokens.colorNeutralBackground1, color: tokens.colorNeutralForeground1 }}>
+                        <option value="todo">todo</option><option value="doing">doing</option><option value="done">done</option>
+                      </select>
+                    </TableCell>
+                    <TableCell><Input value={t.dependsOn || ''} onChange={(_, d) => update(i, { dependsOn: d.value })} placeholder="task title" /></TableCell>
+                    <TableCell><Button size="small" onClick={() => remove(i)}>Delete</Button></TableCell>
+                  </TableRow>
+                ))}
+              </TableBody>
+            </Table>
+            <Button onClick={add} style={{ alignSelf: 'flex-start' }}>+ New task</Button>
+            <PlanApprovalPanel id={id} tasks={taskList} state={state} setState={setState} save={save} />
           </div>
-        </div>
-        <Table aria-label="Plan tasks" size="small">
-          <TableHeader><TableRow>
-            <TableHeaderCell>Task</TableHeaderCell>
-            <TableHeaderCell>Owner</TableHeaderCell>
-            <TableHeaderCell>Due</TableHeaderCell>
-            <TableHeaderCell>Status</TableHeaderCell>
-            <TableHeaderCell>Depends on</TableHeaderCell>
-            <TableHeaderCell />
-          </TableRow></TableHeader>
-          <TableBody>
-            {taskList.map((t, i) => (
-              <TableRow key={i}>
-                <TableCell><Input value={t.title} onChange={(_, d) => update(i, { title: d.value })} /></TableCell>
-                <TableCell><Input value={t.owner} onChange={(_, d) => update(i, { owner: d.value })} /></TableCell>
-                <TableCell><Input type="date" value={t.due} onChange={(_, d) => update(i, { due: d.value })} /></TableCell>
-                <TableCell>
-                  <select value={t.status} onChange={(e) => update(i, { status: e.target.value as PlanTask['status'] })}
-                    style={{ padding: 4, borderRadius: 4, border: `1px solid ${tokens.colorNeutralStroke2}`, background: tokens.colorNeutralBackground1, color: tokens.colorNeutralForeground1 }}>
-                    <option value="todo">todo</option><option value="doing">doing</option><option value="done">done</option>
-                  </select>
-                </TableCell>
-                <TableCell><Input value={t.dependsOn || ''} onChange={(_, d) => update(i, { dependsOn: d.value })} placeholder="task title" /></TableCell>
-                <TableCell><Button size="small" onClick={() => remove(i)}>Delete</Button></TableCell>
-              </TableRow>
-            ))}
-          </TableBody>
-        </Table>
-        <Button onClick={add} style={{ alignSelf: 'flex-start' }}>+ New task</Button>
-        <PlanApprovalPanel id={id} tasks={taskList} state={state} setState={setState} save={save} />
+        )}
+
+        {tab === 'powertable' && (
+          <PlanPowerTablePanel id={id} state={state} setState={setState} save={save} saving={saving} />
+        )}
+        {tab === 'intelligence' && (
+          <PlanIntelligencePanel
+            state={state}
+            setState={setState}
+            scenarioName={intelScenario.name}
+            activeScenarioId={intelScenario.id}
+            sheet={intelSheet}
+            tasks={taskList}
+          />
+        )}
+        {tab === 'infobridge' && (
+          <PlanInfoBridgePanel id={id} state={state} setState={setState} save={save} saving={saving} />
+        )}
+
         <SaveBar saving={saving} savedAt={savedAt} error={error} dirty={dirty} onSave={() => save()} />
       </div>
     } />

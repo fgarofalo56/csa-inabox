@@ -869,26 +869,26 @@ export const FABRIC_ITEM_TYPES: readonly FabricItemType[] = [
   { slug: 'plan', displayName: 'Plan', restType: 'Plan', category: 'Fabric IQ', preview: true,
     description: 'Collaborative planning sheets with writeback and approvals.',
     learnContent: {
-      "overview": "A Plan is declarative state for a set of items and their dependencies (preview) — like Terraform for Loom items: diffable, reviewable, applyable. Use it to capture and version the intended shape of a workspace.",
+      "overview": "A Plan (preview) is the Fabric IQ EPM/CPM item: build budgets and forecasts across periods, branch what-if scenarios, and compare plan vs actuals. In Loom it is Azure-native — planning cells persist to Cosmos and write back to an Azure SQL database; actuals come from a bound semantic model. No Microsoft Fabric capacity required.",
       "steps": [
         {
-          "title": "Declare desired items",
-          "body": "List the items and bindings the plan should produce."
+          "title": "Add line items and periods",
+          "body": "Define budget/forecast line items on the Planning sheet and the periods (months, quarters) to plan across."
         },
         {
-          "title": "Diff against current",
-          "body": "Compare the plan to what actually exists in the workspace."
+          "title": "Branch scenarios",
+          "body": "Create baseline, optimistic, pessimistic, and custom scenarios; each branch clones the source assumptions so you can model what-ifs side by side."
         },
         {
-          "title": "Review the change",
-          "body": "Inspect the add/change/remove set before applying."
+          "title": "Compare plan vs actuals",
+          "body": "Turn on the variance overlay to see Δ and Δ% against actuals from the bound semantic model (or entered manually)."
         },
         {
-          "title": "Apply the plan",
-          "body": "Apply to reconcile the workspace to the declared state."
+          "title": "Write back to Azure SQL",
+          "body": "Configure a backing Azure SQL database in Settings, then Write back to MERGE planning cells into dbo.loom_plan_cells for governed, queryable storage."
         }
       ],
-      "docsUrl": "https://learn.microsoft.com/fabric/fundamentals/fabric-iq"
+      "docsUrl": "https://learn.microsoft.com/fabric/iq/plan/overview"
     } },
   { slug: 'map', displayName: 'Map', restType: 'Map', category: 'Fabric IQ', preview: true,
     description: 'Geospatial visualization layered over Lakehouse, KQL, and Ontology data.',
