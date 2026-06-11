@@ -53,6 +53,47 @@ import {
 export type ServiceCategory =
   | 'compute' | 'data' | 'ai' | 'integration' | 'governance' | 'networking';
 
+/**
+ * A single configurable knob for a planned resource. Constrained-choice only
+ * (per .claude/rules — no freeform JSON config): `select` renders a Dropdown
+ * whose options are the EXACT `@allowed` set on the backing bicep module
+ * param, `number` renders a SpinButton bounded by the module's
+ * `@minValue`/`@maxValue`, and `text` is reserved for genuinely-freeform Azure
+ * fields (e.g. a Linux runtime string) validated by `pattern`.
+ *
+ * `bicepParam` is the top-level main.bicep parameter the deploy-planner emitter
+ * writes this value into; main.bicep forwards it to the module (so export →
+ * `az deployment sub create` actually applies the SKU/tier/runtime choice and
+ * does not drift — see no-vaporware.md "Bicep sync").
+ */
+export interface ConfigField {
+  /** Sub-key under PlanSubscription.serviceConfigs[serviceKey]. */
+  key: string;
+  label: string;
+  type: 'select' | 'number' | 'text';
+  /** Allowed values for `select` — MUST mirror the module's @allowed list. */
+  allowed?: string[];
+  /** Bounds for `number` — MUST mirror the module's @minValue/@maxValue. */
+  min?: number;
+  max?: number;
+  /** Default value (also the module default) shown when nothing is set. */
+  default: ConfigValue;
+  /** Regex a `text` value must match (Azure naming/runtime constraint). */
+  pattern?: string;
+  /** Top-level main.bicep param this value is emitted into. */
+  bicepParam: string;
+  /**
+   * How the value is rendered in the .bicepparam: 'int' (bare) or 'string'
+   * (quoted). Defaults to 'int' for type==='number', else 'string'. Override
+   * for a numeric-looking select whose bicep param is an int (e.g. storage GB).
+   */
+  emit?: 'int' | 'string';
+  /** One-line helper shown under the control. */
+  help?: string;
+}
+
+export type ConfigValue = string | number;
+
 export interface ServiceDef {
   key: string;
   label: string;
@@ -73,6 +114,13 @@ export interface ServiceDef {
   color: string;
   /** Short description shown in the tile tooltip. */
   description: string;
+  /**
+   * Constrained-choice config knobs for this resource (SKU/tier/runtime), each
+   * mapped 1:1 to a real main.bicep param. Present only for toggleable services
+   * whose bicep module exposes @allowed knobs. Core / plan-only services have
+   * none (a config knob there would be a fake — see no-vaporware.md).
+   */
+  config?: ConfigField[];
 }
 
 export const SERVICE_CATEGORY_ORDER: Array<{ id: ServiceCategory; label: string; color: string }> = [
@@ -102,10 +150,24 @@ export const SERVICE_CATALOG: ServiceDef[] = [
     description: 'Managed Kubernetes — enables the optional Atlas-on-AKS workload.' },
   { key: 'appService', label: 'App Service', category: 'compute', bicepFlag: 'appServiceEnabled',
     glyph: Globe24Regular, icon: 'App-Services.png', color: '#0078d4',
-    description: 'PaaS web app / API hosting (Linux B1 plan + web app, HTTPS-only).' },
+    description: 'PaaS web app / API hosting (Linux B1 plan + web app, HTTPS-only).',
+    config: [
+      { key: 'planSku', label: 'Plan SKU', type: 'select', allowed: ['B1', 'B2', 'S1', 'P0v3', 'P1v3'],
+        default: 'B1', bicepParam: 'appServicePlanSku', help: 'B1 is the cheapest functional Linux dedicated tier.' },
+      { key: 'linuxFxVersion', label: 'Runtime stack', type: 'text', default: 'NODE|20-lts',
+        pattern: '^[A-Za-z0-9.+_-]+\\|[A-Za-z0-9.+_-]+$', bicepParam: 'appServiceLinuxFxVersion',
+        help: 'Linux runtime e.g. NODE|20-lts, DOTNETCORE|8.0, PYTHON|3.12.' },
+    ] },
   { key: 'functions', label: 'Azure Functions', category: 'compute', bicepFlag: 'functionsEnabled',
     glyph: Code24Regular, icon: 'Function-Apps.png', color: '#0078d4',
-    description: 'Serverless event-driven compute (Consumption Linux plan + backing storage).' },
+    description: 'Serverless event-driven compute (Consumption Linux plan + backing storage).',
+    config: [
+      { key: 'workerRuntime', label: 'Worker runtime', type: 'select', allowed: ['node', 'python', 'dotnet-isolated', 'java'],
+        default: 'node', bicepParam: 'functionsWorkerRuntime' },
+      { key: 'linuxFxVersion', label: 'Runtime version', type: 'text', default: 'Node|20',
+        pattern: '^[A-Za-z0-9.+_-]+\\|[A-Za-z0-9.+_-]+$', bicepParam: 'functionsLinuxFxVersion',
+        help: 'e.g. Node|20, Python|3.12, DOTNET-ISOLATED|8.0, Java|17.' },
+    ] },
   { key: 'containerInstances', label: 'Container Instances', category: 'compute', bicepFlag: 'containerInstancesEnabled',
     glyph: Box24Regular, icon: 'Container-Instances.png', color: '#0078d4',
     description: 'Single-shot serverless containers (sample image group, start/stop-able).' },
@@ -152,13 +214,30 @@ export const SERVICE_CATALOG: ServiceDef[] = [
     description: 'Near-100% SQL Server compatibility, fully managed. Plan-only — needs a delegated subnet + ~hours-long provision, so it is not a single self-contained toggle.' },
   { key: 'postgres', label: 'PostgreSQL Flexible', category: 'data', bicepFlag: 'postgresEnabled',
     glyph: Database24Regular, color: '#117865',
-    description: 'Managed PostgreSQL (flexible server, Entra-only auth) + starter DB.' },
+    description: 'Managed PostgreSQL (flexible server, Entra-only auth) + starter DB.',
+    config: [
+      { key: 'version', label: 'PostgreSQL version', type: 'select', allowed: ['13', '14', '15', '16'],
+        default: '16', bicepParam: 'postgresVersion' },
+      { key: 'storageSizeGB', label: 'Storage (GB)', type: 'select', allowed: ['32', '64', '128', '256', '512'],
+        default: '32', emit: 'int', bicepParam: 'postgresStorageSizeGB' },
+    ] },
   { key: 'mysql', label: 'MySQL Flexible', category: 'data', bicepFlag: 'mysqlEnabled',
     glyph: Database24Regular, color: '#117865',
-    description: 'Managed MySQL (flexible server) + starter DB.' },
+    description: 'Managed MySQL (flexible server) + starter DB.',
+    config: [
+      { key: 'version', label: 'MySQL version', type: 'select', allowed: ['5.7', '8.0.21'],
+        default: '8.0.21', bicepParam: 'mysqlVersion' },
+      { key: 'storageSizeGB', label: 'Storage (GB)', type: 'number', min: 20, max: 16384,
+        default: 20, bicepParam: 'mysqlStorageSizeGB', help: '20–16384 GB.' },
+    ] },
   { key: 'redis', label: 'Cache for Redis', category: 'data', bicepFlag: 'redisEnabled',
     glyph: DataHistogram24Regular, color: '#117865',
-    description: 'In-memory cache / session store (Basic C0, Entra auth enabled).' },
+    description: 'In-memory cache / session store (Basic C0, Entra auth enabled).',
+    config: [
+      { key: 'skuName', label: 'SKU', type: 'select', allowed: ['Basic', 'Standard', 'Premium'],
+        default: 'Basic', bicepParam: 'redisSkuName',
+        help: 'Basic = single node; Standard = replicated; Premium = clustering + persistence. The family + capacity are set automatically to a valid pairing.' },
+    ] },
   { key: 'fabricCapacity', label: 'Fabric Capacity (F-SKU)', category: 'data', bicepFlag: null, planOnly: true,
     glyph: Layer24Regular, color: '#117865',
     description: 'Microsoft Fabric capacity backing the Loom workspace. Plan-only — F-SKU + Fabric tenant admin gating, not a self-contained sub-deployment toggle.' },
@@ -313,3 +392,55 @@ export function flagsForServices(keys: string[]): Record<string, boolean> {
 export const SERVICE_COUNT = SERVICE_CATALOG.length;
 /** How many of those have a real one-button bicep toggle. */
 export const TOGGLEABLE_SERVICE_COUNT = SERVICE_CATALOG.filter((s) => s.bicepFlag).length;
+
+/** The config schema for a service key, or [] if it exposes no knobs. */
+export function configFor(key: string): ConfigField[] {
+  return BY_KEY.get(key)?.config ?? [];
+}
+
+/** How many services expose configurable knobs (for QA / tests). */
+export const CONFIGURABLE_SERVICE_COUNT = SERVICE_CATALOG.filter((s) => s.config?.length).length;
+
+/**
+ * Validate + coerce one raw value against a ConfigField. Returns the coerced
+ * value when valid, or `undefined` when it should be rejected (out of the
+ * @allowed set, NaN, out of bounds, or failing the text pattern). This is the
+ * single gate shared by the UI and the server sanitizer so neither can write a
+ * value the bicep module's @allowed/@minValue would reject.
+ */
+export function coerceConfigValue(field: ConfigField, raw: unknown): ConfigValue | undefined {
+  if (field.type === 'number') {
+    const n = typeof raw === 'number' ? raw : Number(String(raw).trim());
+    if (!Number.isFinite(n)) return undefined;
+    const v = Math.round(n);
+    if (field.min !== undefined && v < field.min) return undefined;
+    if (field.max !== undefined && v > field.max) return undefined;
+    return v;
+  }
+  const sv = String(raw);
+  if (field.type === 'select') {
+    return field.allowed?.includes(sv) ? sv : undefined;
+  }
+  // text
+  if (sv.length === 0 || sv.length > 256) return undefined;
+  if (field.pattern && !new RegExp(field.pattern).test(sv)) return undefined;
+  return sv;
+}
+
+/** A service's config object filled with each field's default value. */
+export function defaultConfig(key: string): Record<string, ConfigValue> {
+  const out: Record<string, ConfigValue> = {};
+  for (const f of configFor(key)) out[f.key] = f.default;
+  return out;
+}
+
+/**
+ * Resolve the effective value for one field (stored value if valid, else the
+ * default). Used by both the panel and the emitter so they always agree.
+ */
+export function resolveConfigValue(field: ConfigField, stored: Record<string, ConfigValue> | undefined): ConfigValue {
+  const raw = stored?.[field.key];
+  if (raw === undefined) return field.default;
+  const c = coerceConfigValue(field, raw);
+  return c === undefined ? field.default : c;
+}

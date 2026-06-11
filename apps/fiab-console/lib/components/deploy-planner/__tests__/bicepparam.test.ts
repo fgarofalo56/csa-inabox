@@ -7,6 +7,8 @@ import { describe, it, expect } from 'vitest';
 import {
   flagsForServices, serviceByKey, serviceVisual,
   SERVICE_CATALOG, SERVICE_COUNT, TOGGLEABLE_SERVICE_COUNT,
+  configFor, coerceConfigValue, defaultConfig, resolveConfigValue,
+  CONFIGURABLE_SERVICE_COUNT,
 } from '../service-catalog';
 import { planToBicepparam } from '../bicepparam';
 import type { PlanSubscription } from '../types';
@@ -93,3 +95,85 @@ describe('catalog coverage + honesty', () => {
     expect(v.color).toMatch(/^#/);
   });
 });
+
+describe('per-resource config schema + coercion', () => {
+  it('exposes config only on toggleable services (never core/plan-only)', () => {
+    expect(CONFIGURABLE_SERVICE_COUNT).toBeGreaterThanOrEqual(5);
+    for (const def of SERVICE_CATALOG) {
+      if (def.config?.length) {
+        expect(def.bicepFlag, `${def.key} has config so must be toggleable`).toBeTruthy();
+        expect(def.planOnly).toBeFalsy();
+        for (const f of def.config) {
+          expect(f.bicepParam).toBeTruthy();
+          if (f.type === 'select') expect(f.allowed && f.allowed.length).toBeTruthy();
+        }
+      }
+    }
+  });
+
+  it('coerces / rejects values against the field constraints', () => {
+    const redisSku = configFor('redis').find((f) => f.key === 'skuName')!;
+    expect(coerceConfigValue(redisSku, 'Premium')).toBe('Premium');
+    expect(coerceConfigValue(redisSku, 'Mega')).toBeUndefined(); // not in @allowed
+
+    const myStore = configFor('mysql').find((f) => f.key === 'storageSizeGB')!;
+    expect(coerceConfigValue(myStore, 64)).toBe(64);
+    expect(coerceConfigValue(myStore, 5)).toBeUndefined();      // below min
+    expect(coerceConfigValue(myStore, 999999)).toBeUndefined(); // above max
+    expect(coerceConfigValue(myStore, 'NaN')).toBeUndefined();
+
+    const fx = configFor('appService').find((f) => f.key === 'linuxFxVersion')!;
+    expect(coerceConfigValue(fx, 'NODE|20-lts')).toBe('NODE|20-lts');
+    expect(coerceConfigValue(fx, 'not a runtime')).toBeUndefined(); // fails pattern
+  });
+
+  it('defaultConfig + resolveConfigValue fall back to the module default', () => {
+    const d = defaultConfig('redis');
+    expect(d.skuName).toBe('Basic');
+    const fld = configFor('redis').find((f) => f.key === 'skuName')!;
+    expect(resolveConfigValue(fld, undefined)).toBe('Basic');
+    expect(resolveConfigValue(fld, { skuName: 'Premium' })).toBe('Premium');
+    expect(resolveConfigValue(fld, { skuName: 'bogus' })).toBe('Basic'); // invalid → default
+  });
+});
+
+describe('planToBicepparam — per-resource config emission', () => {
+  const sub: PlanSubscription = {
+    id: 'sub-1', name: 'Primary', boundary: 'Commercial',
+    domains: [
+      { domainId: 'core', name: 'Core', services: ['redis', 'appService', 'postgres', 'storage'] },
+    ],
+    serviceConfigs: {
+      redis: { skuName: 'Premium' },
+      appService: { planSku: 'P1v3', linuxFxVersion: 'PYTHON|3.12' },
+      postgres: { version: '15', storageSizeGB: 128 },
+    },
+  };
+
+  it('emits config params for selected toggleable services with the right literal type', () => {
+    const out = planToBicepparam(sub);
+    expect(out).toContain("param redisSkuName = 'Premium'");
+    expect(out).toContain("param appServicePlanSku = 'P1v3'");
+    expect(out).toContain("param appServiceLinuxFxVersion = 'PYTHON|3.12'");
+    expect(out).toContain("param postgresVersion = '15'"); // string param, quoted
+    expect(out).toContain('param postgresStorageSizeGB = 128'); // int param, bare
+  });
+
+  it('falls back to defaults when a service is selected but unconfigured', () => {
+    const out = planToBicepparam({
+      ...sub,
+      serviceConfigs: {},
+    });
+    expect(out).toContain("param redisSkuName = 'Basic'");
+    expect(out).toContain("param appServicePlanSku = 'B1'");
+    expect(out).toContain("param postgresStorageSizeGB = 32");
+  });
+
+  it('emits NO config for unselected or core/plan-only services', () => {
+    const out = planToBicepparam(sub);
+    expect(out).not.toContain('mysqlVersion');      // mysql not selected
+    expect(out).not.toContain('functionsWorkerRuntime'); // functions not selected
+    // storage is core (no bicepFlag, no config) → no config params for it
+  });
+});
+

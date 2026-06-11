@@ -18,28 +18,29 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   ReactFlow, ReactFlowProvider, Background, BackgroundVariant, Controls, MiniMap,
-  useReactFlow, type Node, type NodeTypes,
+  useReactFlow, MarkerType, type Node, type Edge, type Connection, type NodeTypes,
 } from '@xyflow/react';
 import '@xyflow/react/dist/style.css';
 import {
   Button, Badge, Caption1, Subtitle2, Body1, Input, Dropdown, Option, Field, Tooltip,
   Dialog, DialogSurface, DialogBody, DialogTitle, DialogContent, DialogActions,
-  MessageBar, MessageBarBody, MessageBarTitle, Spinner, Textarea,
+  MessageBar, MessageBarBody, MessageBarTitle, Spinner, Textarea, SpinButton,
   makeStyles, tokens,
 } from '@fluentui/react-components';
 import {
   Add20Regular, Save20Regular, ArrowDownload20Regular, Delete20Regular, Search16Regular,
-  ChevronDown20Regular, ChevronRight20Regular,
+  ChevronDown20Regular, ChevronRight20Regular, CheckmarkCircle20Regular, Settings20Regular,
 } from '@fluentui/react-icons';
 import { SubscriptionNode, DomainNode, ServiceNode, ServiceIconChip } from './deploy-plan-nodes';
 import {
   SERVICE_CATALOG, SERVICE_CATEGORY_ORDER, servicesByCategory, serviceByKey, serviceVisual,
-  SERVICE_COUNT, TOGGLEABLE_SERVICE_COUNT,
-  type ServiceDef, type ServiceCategory,
+  SERVICE_COUNT, TOGGLEABLE_SERVICE_COUNT, configFor, resolveConfigValue,
+  type ServiceDef, type ServiceCategory, type ConfigField,
 } from './service-catalog';
 import { iconUrl } from '../ui/item-type-visual';
 import { planToBicepparam } from './bicepparam';
-import type { PlanSubscription } from './types';
+import { validatePlan, parseServiceNodeId, type PlanIssue } from './plan-validation';
+import type { PlanSubscription, ConfigValue } from './types';
 
 const nodeTypes: NodeTypes = { subscription: SubscriptionNode, domain: DomainNode, service: ServiceNode };
 
@@ -107,7 +108,27 @@ type Selection =
   | { kind: 'subscription'; si: number }
   | { kind: 'domain'; si: number; di: number }
   | { kind: 'service'; si: number; di: number; key: string }
+  | { kind: 'edge'; si: number; idx: number }
   | null;
+
+/** Build the React Flow dependency edges from each subscription's edges[]. */
+function buildEdges(subs: PlanSubscription[], sel: Selection): Edge[] {
+  const edges: Edge[] = [];
+  subs.forEach((sub, si) => {
+    (sub.edges || []).forEach((e, idx) => {
+      const selected = sel?.kind === 'edge' && sel.si === si && sel.idx === idx;
+      edges.push({
+        id: `e:${si}:${idx}`,
+        source: e.from,
+        target: e.to,
+        selected,
+        style: { stroke: selected ? tokens.colorBrandStroke1 : tokens.colorNeutralStroke1, strokeWidth: selected ? 2.5 : 1.5 },
+        markerEnd: { type: MarkerType.ArrowClosed, color: selected ? tokens.colorBrandStroke1 : tokens.colorNeutralStroke1 },
+      });
+    });
+  });
+  return edges;
+}
 
 const useStyles = makeStyles({
   root: {
@@ -176,6 +197,38 @@ const useStyles = makeStyles({
     overflow: 'hidden', background: tokens.colorNeutralBackground3,
     boxShadow: tokens.shadow2,
   },
+  // Inspector card shared by the three context panels below the canvas, so they
+  // read as one consistent surface family with the palette + canvas (token
+  // radius/shadow, not ad-hoc px) instead of borderless boxes.
+  card: {
+    border: `1px solid ${tokens.colorNeutralStroke2}`,
+    borderRadius: tokens.borderRadiusLarge,
+    background: tokens.colorNeutralBackground1,
+    boxShadow: tokens.shadow2,
+    padding: tokens.spacingVerticalM,
+  },
+  subEditor: {
+    display: 'flex', gap: tokens.spacingHorizontalM,
+    alignItems: 'flex-end', flexWrap: 'wrap',
+  },
+  svcConfig: {
+    display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalS,
+  },
+  svcConfigHead: {
+    display: 'flex', alignItems: 'center', gap: tokens.spacingHorizontalS,
+  },
+  fieldRow: {
+    display: 'flex', gap: tokens.spacingHorizontalL,
+    flexWrap: 'wrap', alignItems: 'flex-end',
+  },
+  edgeInspector: {
+    display: 'flex', gap: tokens.spacingHorizontalS,
+    alignItems: 'center', flexWrap: 'wrap',
+  },
+  issueList: {
+    display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalXS,
+  },
+  spacer: { flex: 1 },
 });
 
 const MIME = 'application/x-loom-service';
@@ -229,14 +282,40 @@ function PlannerInner() {
 
   // ---- node graph ----
   const { nodes, rects } = useMemo(() => buildNodes(subs, sel), [subs, sel]);
+  const edges = useMemo(() => buildEdges(subs, sel), [subs, sel]);
   rectsRef.current = rects;
 
+  // ---- plan validation (live) ----
+  const issues = useMemo(() => validatePlan(subs), [subs]);
+  const errorCount = issues.filter((i) => i.level === 'error').length;
+  const [showIssues, setShowIssues] = useState(false);
+
   const onNodeClick = useCallback((_: unknown, n: Node) => {
-    const [kind, si, di, key] = n.id.split(':');
+    const [kind, si, di, ...rest] = n.id.split(':');
     if (kind === 'sub') setSel({ kind: 'subscription', si: Number(si) });
     else if (kind === 'dom') setSel({ kind: 'domain', si: Number(si), di: Number(di) });
-    else if (kind === 'svc') setSel({ kind: 'service', si: Number(si), di: Number(di), key });
+    else if (kind === 'svc') setSel({ kind: 'service', si: Number(si), di: Number(di), key: rest.join(':') });
   }, []);
+
+  const onEdgeClick = useCallback((_: unknown, e: Edge) => {
+    const [, si, idx] = e.id.split(':');
+    setSel({ kind: 'edge', si: Number(si), idx: Number(idx) });
+  }, []);
+
+  // ---- connect two service nodes → a dependency edge ----
+  const onConnect = useCallback((c: Connection) => {
+    if (!c.source || !c.target || c.source === c.target) return;
+    const from = parseServiceNodeId(c.source);
+    if (!from) return; // only service→service edges are meaningful
+    if (!parseServiceNodeId(c.target)) return;
+    mutate((d) => {
+      const sub = d[from.si];
+      if (!sub) return;
+      if (!sub.edges) sub.edges = [];
+      if (sub.edges.some((e) => e.from === c.source && e.to === c.target)) return; // de-dupe
+      sub.edges.push({ from: c.source!, to: c.target! });
+    });
+  }, [mutate]);
 
   // ---- add a service to a domain (by index) ----
   const addServiceTo = useCallback((si: number, di: number, key: string) => {
@@ -290,6 +369,34 @@ function PlannerInner() {
   const deleteSelected = useCallback(() => {
     if (!sel) return;
     mutate((d) => {
+      if (sel.kind === 'edge') {
+        const sub = d[sel.si];
+        if (sub?.edges) sub.edges.splice(sel.idx, 1);
+        return;
+      }
+      // Gather every edge across the plan, remap node-id indices for the
+      // structural delete, then redistribute (positional node ids shift when a
+      // domain or subscription is removed, so edges must be remapped to stay
+      // honest — never left dangling).
+      const all: { from: string; to: string }[] = [];
+      for (const su of d) for (const e of su.edges || []) all.push({ ...e });
+
+      const remapId = (id: string): string | null => {
+        const p = parseServiceNodeId(id);
+        if (!p) return id;
+        if (sel.kind === 'service') {
+          return (p.si === sel.si && p.di === sel.di && p.key === sel.key) ? null : id;
+        }
+        if (sel.kind === 'domain') {
+          if (p.si !== sel.si) return id;
+          if (p.di === sel.di) return null;
+          return p.di > sel.di ? `svc:${p.si}:${p.di - 1}:${p.key}` : id;
+        }
+        // subscription
+        if (p.si === sel.si) return null;
+        return p.si > sel.si ? `svc:${p.si - 1}:${p.di}:${p.key}` : id;
+      };
+
       if (sel.kind === 'service') {
         const dom = d[sel.si]?.domains[sel.di];
         if (dom) dom.services = dom.services.filter((k) => k !== sel.key);
@@ -298,6 +405,19 @@ function PlannerInner() {
       } else if (sel.kind === 'subscription') {
         d.splice(sel.si, 1);
       }
+
+      const remapped: { from: string; to: string }[] = [];
+      for (const e of all) {
+        const from = remapId(e.from);
+        const to = remapId(e.to);
+        if (from && to && from !== to) remapped.push({ from, to });
+      }
+      for (const su of d) su.edges = [];
+      for (const e of remapped) {
+        const fp = parseServiceNodeId(e.from);
+        if (fp && d[fp.si]) (d[fp.si].edges ||= []).push(e);
+      }
+      for (const su of d) if (su.edges && su.edges.length === 0) su.edges = undefined;
     });
     setSel(null);
   }, [sel, mutate]);
@@ -305,6 +425,19 @@ function PlannerInner() {
   const patchSelectedSub = useCallback((patch: Partial<PlanSubscription>) => {
     if (sel?.kind !== 'subscription') return;
     mutate((d) => { Object.assign(d[sel.si], patch); });
+  }, [sel, mutate]);
+
+  // ---- per-resource config (SKU / tier / runtime) ----
+  const patchServiceConfig = useCallback((fieldKey: string, value: ConfigValue) => {
+    if (sel?.kind !== 'service') return;
+    const svcKey = sel.key;
+    mutate((d) => {
+      const sub = d[sel.si];
+      if (!sub) return;
+      if (!sub.serviceConfigs) sub.serviceConfigs = {};
+      if (!sub.serviceConfigs[svcKey]) sub.serviceConfigs[svcKey] = {};
+      sub.serviceConfigs[svcKey][fieldKey] = value;
+    });
   }, [sel, mutate]);
 
   // ---- save ----
@@ -330,6 +463,9 @@ function PlannerInner() {
   const matchCount = SERVICE_CATALOG.filter(matches).length;
 
   const selectedSub = sel?.kind === 'subscription' ? subs[sel.si] : null;
+  const selectedSvc = sel?.kind === 'service'
+    ? { def: serviceByKey(sel.key), stored: subs[sel.si]?.serviceConfigs?.[sel.key], subName: subs[sel.si]?.name }
+    : null;
 
   if (loading) return <Spinner label="Loading deployment plan…" />;
 
@@ -337,12 +473,14 @@ function PlannerInner() {
     <div className={s.root}>
       <MessageBar intent="info">
         <MessageBarBody>
-          <MessageBarTitle>Planning, not deploying</MessageBarTitle>
+          <MessageBarTitle>Architecture builder</MessageBarTitle>
           Plan from a catalog of {SERVICE_COUNT} Azure service types ({TOGGLEABLE_SERVICE_COUNT} have a
           one-button bicep toggle; <Badge size="tiny" appearance="outline" color="warning">plan</Badge> services
           are real Azure but not auto-provisioned by main.bicep yet, so they are not written as bicep params).
-          Save persists this plan to Cosmos. To deploy, use <strong>Export bicepparam</strong> on a
-          subscription, then run <code>az deployment sub create -f platform/fiab/bicep/main.bicep -p &lt;file&gt;.bicepparam</code>
+          Drop services into domains, <strong>select a service to configure its SKU / tier / runtime</strong>, and
+          drag from a service&apos;s right edge to another to record a dependency. Save persists to Cosmos. To
+          deploy, use <strong>Export bicepparam</strong> on a subscription, then run
+          {' '}<code>az deployment sub create -f platform/fiab/bicep/main.bicep -p &lt;file&gt;.bicepparam</code>
           {' '}or trigger the deploy-fiab workflow. Domains come from{' '}
           <a href="/admin/domains">Admin → Domains</a>.
         </MessageBarBody>
@@ -352,9 +490,16 @@ function PlannerInner() {
         <Button appearance="primary" icon={<Add20Regular />} onClick={addSubscription}>Add subscription</Button>
         <Button icon={<Add20Regular />} disabled={sel?.kind !== 'subscription' && sel?.kind !== 'domain'} onClick={addDomainToSelectedSub}>Add domain</Button>
         <Button icon={<Delete20Regular />} disabled={!sel} onClick={deleteSelected}>
-          Remove {sel?.kind || 'selection'}
+          Remove {sel?.kind === 'edge' ? 'dependency' : sel?.kind || 'selection'}
         </Button>
-        <div style={{ flex: 1 }} />
+        <Button
+          icon={errorCount ? <Delete20Regular /> : <CheckmarkCircle20Regular />}
+          onClick={() => setShowIssues((v) => !v)}
+          appearance={errorCount ? 'outline' : 'subtle'}
+        >
+          Validate{issues.length ? ` (${errorCount} error${errorCount === 1 ? '' : 's'}, ${issues.length - errorCount} warning${issues.length - errorCount === 1 ? '' : 's'})` : ' ✓'}
+        </Button>
+        <div className={s.spacer} />
         <Button icon={<ArrowDownload20Regular />} disabled={!selectedSub} onClick={() => selectedSub && setExportSub(selectedSub)}>
           Export bicepparam
         </Button>
@@ -369,6 +514,23 @@ function PlannerInner() {
           No domains yet. Create business domains in <a href="/admin/domains">Admin → Domains</a> first; they become the
           containers you plan services into.
         </MessageBarBody></MessageBar>
+      )}
+
+      {showIssues && (
+        <div className={s.issueList} data-testid="plan-issues">
+          {issues.length === 0 ? (
+            <MessageBar intent="success"><MessageBarBody>
+              <MessageBarTitle>Plan is valid</MessageBarTitle>
+              No issues found. Every dependency points at a planned service and nothing is left dangling.
+            </MessageBarBody></MessageBar>
+          ) : (
+            issues.map((iss, i) => (
+              <MessageBar key={i} intent={iss.level === 'error' ? 'error' : 'warning'}>
+                <MessageBarBody>{iss.message}</MessageBarBody>
+              </MessageBar>
+            ))
+          )}
+        </div>
       )}
 
       <div className={s.body}>
@@ -460,11 +622,13 @@ function PlannerInner() {
         <div className={s.canvas} onDrop={onDrop} onDragOver={onDragOver} data-canvas="deploy-planner">
           <ReactFlow
             nodes={nodes}
-            edges={[]}
+            edges={edges}
             nodeTypes={nodeTypes}
             onNodeClick={onNodeClick}
+            onEdgeClick={onEdgeClick}
+            onConnect={onConnect}
             onPaneClick={() => setSel(null)}
-            nodesConnectable={false}
+            nodesConnectable
             nodesDraggable={false}
             minZoom={0.3}
             maxZoom={2}
@@ -487,7 +651,7 @@ function PlannerInner() {
 
       {/* selected-subscription inline editor */}
       {selectedSub && (
-        <div style={{ display: 'flex', gap: 12, alignItems: 'flex-end', flexWrap: 'wrap', padding: 12, border: `1px solid ${tokens.colorNeutralStroke2}`, borderRadius: 6 }}>
+        <div className={`${s.card} ${s.subEditor}`}>
           <Field label="Subscription name">
             <Input value={selectedSub.name} onChange={(_, d) => patchSelectedSub({ name: d.value })} />
           </Field>
@@ -505,6 +669,76 @@ function PlannerInner() {
           </Field>
         </div>
       )}
+
+      {/* selected-service per-resource config panel */}
+      {selectedSvc?.def && (
+        <div data-testid="service-config-panel" className={`${s.card} ${s.svcConfig}`}>
+          <div className={s.svcConfigHead}>
+            <Settings20Regular style={{ color: selectedSvc.def.color }} />
+            <Subtitle2>{selectedSvc.def.label}</Subtitle2>
+            {selectedSvc.subName && <Caption1 style={{ color: tokens.colorNeutralForeground3 }}>in {selectedSvc.subName}</Caption1>}
+            {!selectedSvc.def.bicepFlag && !selectedSvc.def.planOnly && (
+              <Badge size="small" appearance="outline" color="informative">core</Badge>
+            )}
+            {selectedSvc.def.planOnly && (
+              <Badge size="small" appearance="outline" color="warning">plan-only</Badge>
+            )}
+          </div>
+
+          {selectedSvc.def.config?.length ? (
+            <>
+              <Caption1 style={{ color: tokens.colorNeutralForeground3 }}>
+                These choices are written into the exported bicepparam and applied by{' '}
+                <code>az deployment sub create</code> — the options match the module&apos;s allowed values for this boundary.
+              </Caption1>
+              <div className={s.fieldRow}>
+                {selectedSvc.def.config.map((field) => (
+                  <ConfigFieldControl
+                    key={field.key}
+                    field={field}
+                    value={resolveConfigValue(field, selectedSvc.stored)}
+                    onChange={(v) => patchServiceConfig(field.key, v)}
+                  />
+                ))}
+              </div>
+            </>
+          ) : selectedSvc.def.planOnly ? (
+            <MessageBar intent="warning"><MessageBarBody>
+              <MessageBarTitle>Plan-only — no auto-deploy knobs</MessageBarTitle>
+              {selectedSvc.def.label} is real Azure but is not provisioned by main.bicep, so it has no exported
+              configuration. Provision it separately (its description explains why). It still documents intent on the canvas.
+            </MessageBarBody></MessageBar>
+          ) : !selectedSvc.def.bicepFlag ? (
+            <MessageBar intent="info"><MessageBarBody>
+              <MessageBarTitle>Core service — always deployed</MessageBarTitle>
+              {selectedSvc.def.label} is part of every Loom deployment, so it has no opt-in toggle or SKU choice here.
+            </MessageBarBody></MessageBar>
+          ) : (
+            <MessageBar intent="info"><MessageBarBody>
+              {selectedSvc.def.label} deploys with its module defaults — no configurable SKU/tier is exposed for it yet.
+            </MessageBarBody></MessageBar>
+          )}
+        </div>
+      )}
+
+      {/* selected-dependency (edge) inspector */}
+      {sel?.kind === 'edge' && (() => {
+        const e = subs[sel.si]?.edges?.[sel.idx];
+        const from = e && parseServiceNodeId(e.from);
+        const to = e && parseServiceNodeId(e.to);
+        return (
+          <div className={`${s.card} ${s.edgeInspector}`}>
+            <Subtitle2>Dependency</Subtitle2>
+            {from && to ? (
+              <Body1>
+                {serviceByKey(from.key)?.label || from.key} <strong>→</strong> {serviceByKey(to.key)?.label || to.key}
+              </Body1>
+            ) : <Body1>—</Body1>}
+            <div className={s.spacer} />
+            <Button size="small" icon={<Delete20Regular />} onClick={deleteSelected}>Remove dependency</Button>
+          </div>
+        );
+      })()}
 
       {/* bicepparam export dialog */}
       <Dialog open={!!exportSub} onOpenChange={(_, d) => { if (!d.open) setExportSub(null); }}>
@@ -536,5 +770,64 @@ export function DeploymentPlannerView() {
     <ReactFlowProvider>
       <PlannerInner />
     </ReactFlowProvider>
+  );
+}
+
+/**
+ * One constrained config control. `select` → Dropdown of the module's @allowed
+ * set; `number` → SpinButton bounded by @minValue/@maxValue; `text` → Input
+ * validated against the field pattern. No freeform JSON (per .claude rules).
+ */
+function ConfigFieldControl({
+  field, value, onChange,
+}: {
+  field: ConfigField;
+  value: ConfigValue;
+  onChange: (v: ConfigValue) => void;
+}) {
+  if (field.type === 'select') {
+    const sv = String(value);
+    return (
+      <Field label={field.label} hint={field.help}>
+        <Dropdown
+          value={sv}
+          selectedOptions={[sv]}
+          onOptionSelect={(_, d) => { if (d.optionValue !== undefined) onChange(d.optionValue); }}
+          aria-label={field.label}
+        >
+          {(field.allowed || []).map((opt) => <Option key={opt} value={opt}>{opt}</Option>)}
+        </Dropdown>
+      </Field>
+    );
+  }
+  if (field.type === 'number') {
+    const nv = Number(value);
+    return (
+      <Field label={field.label} hint={field.help}>
+        <SpinButton
+          value={Number.isFinite(nv) ? nv : Number(field.default)}
+          min={field.min}
+          max={field.max}
+          onChange={(_, d) => {
+            const next = d.value ?? (d.displayValue !== undefined ? Number(d.displayValue) : undefined);
+            if (next !== undefined && Number.isFinite(next)) onChange(next);
+          }}
+          aria-label={field.label}
+        />
+      </Field>
+    );
+  }
+  // text
+  const tv = String(value);
+  const invalid = !!field.pattern && tv.length > 0 && !new RegExp(field.pattern).test(tv);
+  return (
+    <Field
+      label={field.label}
+      hint={field.help}
+      validationState={invalid ? 'warning' : 'none'}
+      validationMessage={invalid ? 'Does not match the expected format.' : undefined}
+    >
+      <Input value={tv} onChange={(_, d) => onChange(d.value)} aria-label={field.label} />
+    </Field>
   );
 }

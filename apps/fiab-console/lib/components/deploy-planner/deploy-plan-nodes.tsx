@@ -13,7 +13,7 @@
 
 import * as React from 'react';
 import { memo } from 'react';
-import { type NodeProps } from '@xyflow/react';
+import { Handle, Position, type NodeProps } from '@xyflow/react';
 import { Badge, Caption1, tokens } from '@fluentui/react-components';
 import { serviceByKey, serviceVisual } from './service-catalog';
 import { iconUrl } from '../ui/item-type-visual';
@@ -98,6 +98,10 @@ function ServiceNodeImpl({ data, selected }: NodeProps) {
   const vis = serviceVisual(d.serviceKey);
   const Glyph = vis.glyph;
   const remote = iconUrl(d.serviceKey); // optional Atlas Diag enhancement
+  const handleStyle: React.CSSProperties = {
+    width: 8, height: 8, background: tokens.colorBrandBackground,
+    border: `1px solid ${tokens.colorNeutralBackground1}`,
+  };
   return (
     <div
       data-plan-service={d.serviceKey}
@@ -112,18 +116,26 @@ function ServiceNodeImpl({ data, selected }: NodeProps) {
         boxSizing: 'border-box',
       }}
     >
+      <Handle type="target" position={Position.Left} style={handleStyle} isConnectable />
       <ServiceIconChip def={def} vis={vis} Glyph={Glyph} remote={remote} size={26} iconPx={16} radius={6} />
       <span style={{
         flex: 1, minWidth: 0,
         fontSize: 11, fontWeight: 500, color: tokens.colorNeutralForeground1,
         whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis',
       }}>{vis.label}</span>
+      {def?.config?.length ? (
+        <span title="Has configurable SKU / tier" style={{
+          flexShrink: 0, width: 7, height: 7, borderRadius: 4,
+          background: tokens.colorBrandBackground,
+        }} />
+      ) : null}
       {def?.planOnly && (
         <span title="Plan-only — no one-button bicep toggle yet" style={{
           flexShrink: 0, width: 7, height: 7, borderRadius: 4,
           background: tokens.colorPaletteMarigoldBackground3,
         }} />
       )}
+      <Handle type="source" position={Position.Right} style={handleStyle} isConnectable />
     </div>
   );
 }

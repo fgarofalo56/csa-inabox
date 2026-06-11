@@ -4,12 +4,16 @@
  *
  * The plan's per-domain service sets are unioned into the bicep feature flags
  * (a service deployed in ANY domain turns its flag on for that subscription's
- * deployment), and the domain ids become `dlzDomainNames`. This is the same
- * shape as params/commercial.bicepparam / gcc-high.bicepparam, so the visual
- * plan stays in sync with what bicep actually deploys (no drift = no vaporware).
+ * deployment), and the domain ids become `dlzDomainNames`. Per-resource config
+ * (SKU/tier/runtime) is written as the matching top-level main.bicep params, so
+ * the visual plan stays in sync with what bicep actually deploys (no drift = no
+ * vaporware). main.bicep forwards each param to its deploy-planner module, so
+ * the exported file applies the chosen SKU/tier — not just the module default.
  */
-import { flagsForServices, SERVICE_CATALOG } from './service-catalog';
-import type { PlanSubscription } from './types';
+import {
+  flagsForServices, SERVICE_CATALOG, serviceByKey, resolveConfigValue, type ConfigField,
+} from './service-catalog';
+import type { PlanSubscription, ConfigValue } from './types';
 
 const BOUNDARY_DEFAULT_REGION: Record<string, string> = {
   'Commercial': 'eastus2',
@@ -17,6 +21,13 @@ const BOUNDARY_DEFAULT_REGION: Record<string, string> = {
   'GCC-High': 'usgovvirginia',
   'IL5': 'usgovarizona',
 };
+
+/** Render one config value as a bicepparam literal (quoted string or bare int). */
+function formatBicepValue(field: ConfigField, value: ConfigValue): string {
+  const asInt = field.emit === 'int' || (field.emit === undefined && field.type === 'number');
+  if (asInt) return String(Math.round(Number(value)));
+  return `'${String(value).replace(/'/g, "\\'")}'`;
+}
 
 export function planToBicepparam(sub: PlanSubscription): string {
   const boundary = sub.boundary || 'Commercial';
@@ -47,5 +58,24 @@ export function planToBicepparam(sub: PlanSubscription): string {
   for (const flag of uniqueFlags) {
     lines.push(`param ${flag} = ${onFlags[flag] ? 'true' : 'false'}`);
   }
+
+  // Per-resource config — only for SELECTED toggleable services that expose a
+  // config schema. Core / plan-only services emit nothing (no fake knobs).
+  const configLines: string[] = [];
+  for (const key of [...allServices].sort()) {
+    const def = serviceByKey(key);
+    if (!def?.bicepFlag || !def.config?.length) continue;
+    const stored = sub.serviceConfigs?.[key];
+    for (const field of def.config) {
+      const value = resolveConfigValue(field, stored);
+      configLines.push(`param ${field.bicepParam} = ${formatBicepValue(field, value)}`);
+    }
+  }
+  if (configLines.length) {
+    lines.push('');
+    lines.push('// Per-resource configuration (SKU / tier / runtime)');
+    lines.push(...configLines);
+  }
+
   return lines.join('\n') + '\n';
 }
