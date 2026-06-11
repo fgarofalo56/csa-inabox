@@ -11,11 +11,14 @@
  * The dialog drives the REAL install → provision → seed flow end to end:
  *   1. user picks a workspace (+ optional folder),
  *   2. chooses whether to deploy artifacts to live Azure services,
- *   3. POST /api/apps/{appId}/install creates every bundled item via the
- *      shared createOwnedItem helper (seeds state.content from the bundle)
- *      and runs runProvisioning() against the real Azure-native provisioners
- *      (lakehouse → ADLS+Delta, warehouse → Synapse, kql-db → ADX,
- *      activator → Azure Monitor, eventstream → Event Hubs, …).
+ *   3. POST /api/apps/{appId}/install returns 202 { jobId }; the install runs
+ *      async server-side (item creation via the shared createOwnedItem helper +
+ *      runProvisioning() against the real Azure-native provisioners — lakehouse
+ *      → ADLS+Delta, warehouse → Synapse, kql-db → ADX, activator → Azure
+ *      Monitor, eventstream → Event Hubs, …). The dialog polls
+ *      /api/apps/install-jobs/{jobId} every 5s (via the module-scope jobs-store,
+ *      so a long provision survives the dialog closing / tab switching — a
+ *      backgrounded install raises a Fluent toast naming the app on completion).
  *
  * The provisioning report (per-item created / exists / remediation / failed,
  * with honest infra gates and a per-step Retry) renders INSIDE the dialog so
@@ -30,9 +33,10 @@ import {
   Button, Badge, Caption1,
   MessageBar, MessageBarBody, MessageBarTitle,
   Dialog, DialogTrigger, DialogSurface, DialogBody, DialogTitle, DialogContent, DialogActions,
-  Dropdown, Option, Field, Switch, RadioGroup, Radio, Input, Spinner,
-  makeStyles, tokens,
+  Dropdown, Option, Field, Switch, RadioGroup, Radio, Input, ProgressBar,
+  makeStyles, mergeClasses, tokens,
 } from '@fluentui/react-components';
+import { useJobsStore } from '@/lib/state/jobs-store';
 
 interface AppItemRef { type: string; template?: string; displayName?: string; }
 interface AppDoc {
@@ -62,43 +66,71 @@ interface ProvisionReport {
 }
 
 const useStyles = makeStyles({
-  body: { display: 'flex', flexDirection: 'column', gap: '12px' },
-  hint: { fontSize: '13px', color: tokens.colorNeutralForeground2 },
+  body: { display: 'flex', flexDirection: 'column', rowGap: tokens.spacingVerticalM },
+  hint: { fontSize: tokens.fontSizeBase200, color: tokens.colorNeutralForeground2 },
   report: {
-    paddingTop: '12px', paddingRight: '12px', paddingBottom: '12px', paddingLeft: '12px',
-    borderRadius: '8px',
+    padding: tokens.spacingVerticalM,
+    borderRadius: tokens.borderRadiusMedium,
     border: `1px solid ${tokens.colorNeutralStroke2}`,
     backgroundColor: tokens.colorNeutralBackground2,
-    marginTop: '4px',
+    marginTop: tokens.spacingVerticalXXS,
     maxHeight: '320px',
     overflowY: 'auto',
+  },
+  // Async install progress block.
+  progress: { display: 'flex', flexDirection: 'column', rowGap: tokens.spacingVerticalXS },
+  progressHint: { color: tokens.colorNeutralForeground3 },
+  // Installed-items result rows.
+  resultRow: {
+    display: 'flex', alignItems: 'center', columnGap: tokens.spacingHorizontalXS,
+    flexWrap: 'wrap', fontSize: tokens.fontSizeBase200, marginTop: tokens.spacingVerticalXXS,
+  },
+  resultErr: { color: tokens.colorPaletteRedForeground1 },
+  // Provisioning-report per-step blocks.
+  step: {
+    fontSize: tokens.fontSizeBase200,
+    marginTop: tokens.spacingVerticalS,
+    paddingTop: tokens.spacingVerticalS,
+  },
+  stepDivider: { borderTop: `1px solid ${tokens.colorNeutralStroke3}` },
+  stepHead: {
+    display: 'flex', alignItems: 'center', columnGap: tokens.spacingHorizontalXS, flexWrap: 'wrap',
+  },
+  resourceId: { display: 'block', fontFamily: 'monospace', color: tokens.colorNeutralForeground3 },
+  gate: {
+    marginTop: tokens.spacingVerticalXS, padding: tokens.spacingVerticalS,
+    backgroundColor: tokens.colorNeutralBackground3, borderRadius: tokens.borderRadiusSmall,
+  },
+  gateTitle: { fontWeight: tokens.fontWeightSemibold },
+  gateBody: { marginTop: tokens.spacingVerticalXS },
+  gateLink: { display: 'inline-block', marginTop: tokens.spacingVerticalXS },
+  gateRetry: { marginTop: tokens.spacingVerticalS },
+  stepErr: {
+    marginTop: tokens.spacingVerticalXS, color: tokens.colorPaletteRedForeground1,
+    fontSize: tokens.fontSizeBase100,
+  },
+  stepLog: { marginTop: tokens.spacingVerticalXS },
+  stepLogSummary: {
+    cursor: 'pointer', fontSize: tokens.fontSizeBase100, color: tokens.colorNeutralForeground3,
+  },
+  stepLogList: {
+    marginTop: tokens.spacingVerticalXS, marginLeft: tokens.spacingHorizontalL,
+    fontSize: tokens.fontSizeBase100, color: tokens.colorNeutralForeground2,
   },
 });
 
 /**
- * Read an install response as JSON, but tolerate a non-JSON body — a long
- * deploy (8 real Azure resources) can exceed the edge gateway timeout, which
- * returns an HTML 502/504 page. `r.json()` on that throws the cryptic
- * "Unexpected token '<'". Instead we read text-first and, when it isn't JSON,
- * return an honest gate explaining the install is still running server-side.
+ * Map the server job's coarse phase to a human progress label. The install runs
+ * async (202 + poll) so the gateway-timeout band-aid is gone — we show real
+ * forward progress instead.
  */
-async function readJsonOrGate(r: Response, deploy: boolean): Promise<any> {
-  const text = await r.text().catch(() => '');
-  try {
-    return text ? JSON.parse(text) : { ok: false, error: `Empty response (HTTP ${r.status}).` };
-  } catch {
-    const looksHtml = /^\s*<(?:!doctype|html)/i.test(text);
-    if (looksHtml || r.status === 502 || r.status === 504) {
-      return {
-        ok: false,
-        error:
-          `The install request exceeded the gateway timeout (HTTP ${r.status})` +
-          (deploy
-            ? ' while provisioning live Azure services. The items were created in the workspace and provisioning may still be finishing server-side — refresh the workspace in a minute to see them. Tip: install with "Deploy artifacts" OFF first, then provision items individually to avoid the timeout.'
-            : '. Refresh the workspace in a moment to see the installed items.'),
-      };
-    }
-    return { ok: false, error: `Unexpected non-JSON response (HTTP ${r.status}): ${text.slice(0, 200)}` };
+function phaseLabel(phase?: string): string {
+  switch (phase) {
+    case 'creating-items': return 'Creating workspace items';
+    case 'provisioning': return 'Provisioning live Azure services';
+    case 'finalizing': return 'Finalizing';
+    case 'done': return 'Done';
+    default: return 'Installing';
   }
 }
 
@@ -134,6 +166,14 @@ export function InstallAppDialog({
   const [mode, setMode] = React.useState<'shared' | 'dedicated'>('shared');
   const [provisionReport, setProvisionReport] = React.useState<ProvisionReport | null>(null);
   const [retrying, setRetrying] = React.useState<string | null>(null);
+  const [activeJobId, setActiveJobId] = React.useState<string | null>(null);
+
+  // Module-scope async-install kickoff + poll (task-019). Owning the poll in the
+  // jobs-store means a long provision survives the dialog closing / tab nav and
+  // raises a completion toast naming the app. The dialog selects its active job
+  // to render live percentComplete.
+  const startInstall = useJobsStore((st) => st.startInstall);
+  const activeJob = useJobsStore((st) => st.jobs.find((j) => j.id === activeJobId) || null);
 
   // Resolve the item count from the tenant catalog when the caller didn't pass
   // one (the Learn use-case card only knows the appId).
@@ -184,48 +224,47 @@ export function InstallAppDialog({
   const install = async () => {
     if (!pickedWs) return;
     setInstalling(true); setInstallErr(null); setInstallResult(null); setProvisionReport(null);
-    try {
-      const folderId = await resolveFolderId();
-      const r = await fetch(`/api/apps/${appId}/install`, {
-        method: 'POST',
-        headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ workspaceId: pickedWs, deploy, mode, folderId }),
-      });
-      const j = await readJsonOrGate(r, deploy);
-      if (!r.ok || !j.ok) {
-        setInstallErr(j?.error || `HTTP ${r.status}`);
-      } else {
-        setInstallResult(j.installed || []);
-        setProvisionReport(j.provision || null);
-      }
-    } catch (e: any) {
-      setInstallErr(e?.message || String(e));
-    } finally { setInstalling(false); }
+    const folderId = await resolveFolderId();
+    // Kick off the async install via the jobs-store; it POSTs (202 { jobId }) and
+    // owns the 5s poll. onDone fires on terminal status whether or not the dialog
+    // is still mounted.
+    const localId = startInstall({
+      appId, appName, workspaceId: pickedWs, deploy, mode, folderId,
+      onDone: (r) => {
+        setInstalling(false);
+        if (!r.ok && r.error) { setInstallErr(r.error); return; }
+        setInstallResult((r.installed as InstallResult[]) || []);
+        setProvisionReport((r.provision as ProvisionReport) || null);
+      },
+    });
+    setActiveJobId(localId);
   };
 
-  // Retry a single provisioning step (re-runs the install on JUST that
-  // item, then merges the result into the report).
-  const retryStep = async (step: ProvisionStep) => {
+  // Retry: re-run the full async install. It is idempotent — items matching
+  // name+type are skipped (status 'existed') and only remediation/failed items
+  // re-provision against the real backend — so a single re-run resolves the
+  // remediation step that prompted the Retry.
+  const retryStep = (step: ProvisionStep) => {
+    if (!pickedWs) return;
     setRetrying(step.cosmosItemId);
-    try {
-      const r = await fetch(`/api/apps/${appId}/install`, {
-        method: 'POST',
-        headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ workspaceId: pickedWs, deploy: true, mode }),
-      });
-      const j = await readJsonOrGate(r, true);
-      if (r.ok && j.ok && j.provision) {
-        setProvisionReport(j.provision);
-      }
-    } finally {
-      setRetrying(null);
-    }
+    const localId = startInstall({
+      appId, appName, workspaceId: pickedWs, deploy: true, mode, folderId: null,
+      onDone: (r) => {
+        setRetrying(null);
+        if (r.installed) setInstallResult(r.installed as InstallResult[]);
+        if (r.provision) setProvisionReport(r.provision as ProvisionReport);
+      },
+    });
+    setActiveJobId(localId);
   };
 
-  // Reset the result panes when the dialog is dismissed so a re-open starts clean.
+  // Reset the result panes when the dialog is dismissed so a re-open starts
+  // clean. The async install job keeps running server-side regardless — its
+  // completion toast (raised by the global job toaster) names the app.
   const handleOpenChange = (next: boolean) => {
     if (!next) {
       setInstallResult(null); setProvisionReport(null); setInstallErr(null);
+      setActiveJobId(null);
     }
     onOpenChange(next);
   };
@@ -313,25 +352,40 @@ export function InstallAppDialog({
                 </>
               )}
 
-              {installing && <Spinner label="Installing + provisioning…" />}
+              {installing && (
+                <div className={s.progress} data-testid="install-progress">
+                  <ProgressBar
+                    value={(activeJob?.percentComplete ?? 0) / 100}
+                    thickness="large"
+                  />
+                  <Caption1>
+                    {phaseLabel(activeJob?.installPhase)} — {activeJob?.percentComplete ?? 0}%
+                    {activeJob?.totalItems ? ` · ${activeJob.totalItems} items` : ''}
+                  </Caption1>
+                  <Caption1 className={s.progressHint}>
+                    Long provisions (ADX, Synapse pools, pipelines) run in the
+                    background — you can close this dialog and a toast will name
+                    the app when it finishes.
+                  </Caption1>
+                </div>
+              )}
 
               {installResult && (
                 <MessageBar intent="success">
                   <MessageBarTitle>Installed {installResult.length} items</MessageBarTitle>
                   <MessageBarBody>
                     {installResult.map((it, i) => (
-                      <div key={i} style={{ fontSize: 13, marginTop: 4 }}>
+                      <div key={i} className={s.resultRow}>
                         <Badge appearance={it.status === 'created' ? 'filled' : 'outline'}
                           color={it.status === 'created' ? 'success' : it.status === 'existed' ? 'informative' : 'danger'}>
                           {it.status}
                         </Badge>
-                        {' '}
                         {it.id ? (
                           <Link href={`/items/${it.itemType}/${it.id}`}>{it.displayName}</Link>
                         ) : (
                           <span>{it.displayName}</span>
                         )}
-                        {it.error && <span style={{ color: tokens.colorPaletteRedForeground1 }}> — {it.error}</span>}
+                        {it.error && <span className={s.resultErr}> — {it.error}</span>}
                       </div>
                     ))}
                   </MessageBarBody>
@@ -351,32 +405,33 @@ export function InstallAppDialog({
                     </MessageBarTitle>
                     <MessageBarBody>
                       {provisionReport.steps.map((st, i) => (
-                        <div key={i} style={{ fontSize: 13, marginTop: 8, paddingTop: 8, borderTop: i > 0 ? `1px solid ${tokens.colorNeutralStroke3}` : 'none' }}>
-                          <Badge appearance="filled" color={
-                            st.result.status === 'created' || st.result.status === 'exists' ? 'success'
-                            : st.result.status === 'remediation' ? 'warning'
-                            : st.result.status === 'skipped' ? 'subtle'
-                            : 'danger'
-                          }>
-                            {st.result.status}
-                          </Badge>
-                          {' '}
-                          <strong>{st.itemType}</strong> — {st.displayName}
+                        <div key={i} className={mergeClasses(s.step, i > 0 && s.stepDivider)}>
+                          <div className={s.stepHead}>
+                            <Badge appearance="filled" color={
+                              st.result.status === 'created' || st.result.status === 'exists' ? 'success'
+                              : st.result.status === 'remediation' ? 'warning'
+                              : st.result.status === 'skipped' ? 'subtle'
+                              : 'danger'
+                            }>
+                              {st.result.status}
+                            </Badge>
+                            <span><strong>{st.itemType}</strong> — {st.displayName}</span>
+                          </div>
                           {st.result.resourceId && (
-                            <Caption1 style={{ display: 'block', fontFamily: 'monospace', color: tokens.colorNeutralForeground3 }}>
+                            <Caption1 className={s.resourceId}>
                               Azure id: {st.result.resourceId}
                             </Caption1>
                           )}
                           {st.result.gate && (
-                            <div style={{ marginTop: 4, padding: 8, backgroundColor: tokens.colorNeutralBackground3, borderRadius: 4 }}>
-                              <div style={{ fontWeight: 600 }}>Remediation required: {st.result.gate.reason}</div>
-                              <div style={{ marginTop: 4 }}>{st.result.gate.remediation}</div>
+                            <div className={s.gate}>
+                              <div className={s.gateTitle}>Remediation required: {st.result.gate.reason}</div>
+                              <div className={s.gateBody}>{st.result.gate.remediation}</div>
                               {st.result.gate.link && (
-                                <a href={st.result.gate.link} target="_blank" rel="noreferrer" style={{ display: 'inline-block', marginTop: 4 }}>
+                                <a href={st.result.gate.link} target="_blank" rel="noreferrer" className={s.gateLink}>
                                   Open admin step →
                                 </a>
                               )}
-                              <div style={{ marginTop: 8 }}>
+                              <div className={s.gateRetry}>
                                 <Button size="small" onClick={() => retryStep(st)} disabled={retrying === st.cosmosItemId}>
                                   {retrying === st.cosmosItemId ? 'Retrying…' : 'Retry'}
                                 </Button>
@@ -384,16 +439,16 @@ export function InstallAppDialog({
                             </div>
                           )}
                           {st.result.error && !st.result.gate && (
-                            <div style={{ marginTop: 4, color: tokens.colorPaletteRedForeground1, fontSize: 12 }}>
+                            <div className={s.stepErr}>
                               {st.result.error}
                             </div>
                           )}
                           {(st.result.steps?.length || 0) > 0 && (
-                            <details style={{ marginTop: 4 }}>
-                              <summary style={{ cursor: 'pointer', fontSize: 12, color: tokens.colorNeutralForeground3 }}>
+                            <details className={s.stepLog}>
+                              <summary className={s.stepLogSummary}>
                                 Step log ({st.result.steps?.length})
                               </summary>
-                              <ul style={{ marginTop: 4, marginLeft: 16, fontSize: 12, color: tokens.colorNeutralForeground2 }}>
+                              <ul className={s.stepLogList}>
                                 {st.result.steps?.map((line, ix) => <li key={ix}>{line}</li>)}
                               </ul>
                             </details>

@@ -85,6 +85,27 @@ export function GlobalJobToaster() {
           </Toast>,
           { intent: 'error', timeout: 12000 },
         );
+      } else if (job.kind === 'app-install' && job.status === 'success') {
+        const partial = job.installOutcome === 'partial';
+        dispatchToast(
+          <Toast>
+            <ToastTitle>Installed {job.appName || job.lakehouseName}</ToastTitle>
+            <ToastBody>
+              {partial
+                ? 'Some items need remediation — open the app install report to review and retry.'
+                : 'All items installed and provisioned. Open the workspace to start using them.'}
+            </ToastBody>
+          </Toast>,
+          { intent: partial ? 'warning' : 'success', timeout: 8000 },
+        );
+      } else if (job.kind === 'app-install' && job.status === 'error') {
+        dispatchToast(
+          <Toast>
+            <ToastTitle>Install failed — {job.appName || job.lakehouseName}</ToastTitle>
+            <ToastBody>{job.error || 'Unknown error'}</ToastBody>
+          </Toast>,
+          { intent: 'error', timeout: 12000 },
+        );
       }
     };
 

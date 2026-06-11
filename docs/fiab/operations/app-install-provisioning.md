@@ -88,6 +88,61 @@ POST /api/apps/<appId>/install
 All other editor types are Cosmos-only at install time (their state.content
 remains the source of truth until the user clicks Save in the editor).
 
+## Async install + progress polling (task-019)
+
+A 10-12 item app whose provisioners hit real long-running Azure operations
+(ADX cluster create, Synapse dedicated-pool resume of 1-3 min, Databricks job
+run-now + poll, ADF/Synapse pipeline createRun + poll, Logic App run) routinely
+exceeds the edge gateway's ~30s window. `PROVISION_CONCURRENCY = 6` + dedicated-
+pool pre-warm narrowed that window but could not eliminate it, so a long install
+used to return an HTML 504 that the dialog could only translate into a "still
+running server-side, refresh in a minute" band-aid.
+
+The install is now **truly asynchronous**, mirroring how the underlying Azure
+(ARM `202` + `Location` + `Retry-After`) and Fabric (`202` + `x-ms-operation-id`
++ `percentComplete`) control planes themselves report long operations:
+
+1. `POST /api/apps/[id]/install` validates auth + workspace + app, writes a
+   `running` `AppInstallJob` to the `app-install-jobs` Cosmos container (PK
+   `/tenantId`), fires the full install (item creation → provisioning → result
+   write-back) in a **floating promise** (the Container App Node process stays
+   alive across the response, so the loop completes — same mechanism as
+   `/api/data-products/import`), and returns **`202 { ok, jobId, totalItems }`**
+   immediately.
+2. The dialog (via the module-scope `jobs-store`, so the poll survives the dialog
+   closing / tab navigation) polls **`GET /api/apps/install-jobs/[jobId]`** every
+   5s. The job doc carries `status` (`running | done | partial | failed`),
+   `phase` (`creating-items | provisioning | finalizing | done`),
+   `percentComplete` (0-100), the per-item `installed[]`, and — on completion —
+   the full `provision` `ProvisionReport`. A backgrounded install raises a Fluent
+   toast naming the app when it finishes.
+
+```jsonc
+// Kickoff response
+{ "ok": true, "jobId": "8f3c…", "totalItems": 11 }   // HTTP 202
+
+// Poll response: GET /api/apps/install-jobs/8f3c…
+{
+  "ok": true,
+  "job": {
+    "id": "8f3c…", "appId": "app-iot-realtime", "workspaceId": "…",
+    "status": "running", "phase": "provisioning", "percentComplete": 64,
+    "totalItems": 11, "createdItems": 11,
+    "installed": [ { "itemType": "eventhouse", "id": "…", "status": "created" } ],
+    "provision": { /* ProvisionReport, set once provisioning completes */ }
+  }
+}
+```
+
+The progress callback (`RunProvisioningOpts.onProgress`) persists
+`percentComplete` after each bounded-concurrency batch, so the bar advances in
+real time across the provision phase. Item creation maps to 0→35%, provisioning
+to 35→95%, finalize to 100%. The `app-install-jobs` container is ARM-provisioned
+in `cosmos.bicep` (`loomContainers`) and lazily `createIfNotExists`-ed in
+`cosmos-client.ts` — no Fabric dependency; this is cloud-agnostic plumbing over
+the Azure-native provisioner backends (Fabric remains opt-in per item).
+
+
 ## Per-app provisioner table
 
 | App                          | Live provisioned at install        | Cosmos-only                |

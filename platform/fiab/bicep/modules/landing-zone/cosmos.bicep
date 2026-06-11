@@ -161,6 +161,10 @@ var loomContainers = [
   { name: 'org-visuals',       partitionKey: '/tenantId' }
   { name: 'azure-connections', partitionKey: '/tenantId' }
   { name: 'env-config',        partitionKey: '/tenantId' }
+  // Async app-install job tracking (task-019). PK /tenantId matches
+  // cosmos-client.ts so every install-dialog poll is a single-partition
+  // point-read. createIfNotExists in ensure() remains the hotfix fallback.
+  { name: 'app-install-jobs',  partitionKey: '/tenantId' }
 ]
 
 resource loomDb 'Microsoft.DocumentDB/databaseAccounts/sqlDatabases@2024-12-01-preview' = {
