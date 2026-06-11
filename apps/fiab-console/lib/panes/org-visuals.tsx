@@ -39,8 +39,27 @@ interface OrgVisual {
 
 const useStyles = makeStyles({
   explainer: { display: 'flex', gap: tokens.spacingHorizontalM, alignItems: 'flex-start' },
-  uploadGrid: { display: 'flex', gap: '12px', alignItems: 'flex-end', flexWrap: 'wrap' },
-  fileBtn: { display: 'flex', alignItems: 'center', gap: '8px' },
+  uploadGrid: {
+    display: 'flex',
+    columnGap: tokens.spacingHorizontalM,
+    rowGap: tokens.spacingVerticalM,
+    alignItems: 'flex-end',
+    flexWrap: 'wrap',
+  },
+  field: { minWidth: '180px' },
+  fileField: { minWidth: '200px' },
+  // keep picker buttons from blowing out the row when a long file name is chosen
+  pickerBtn: {
+    maxWidth: '240px',
+    justifyContent: 'flex-start',
+  },
+  iconCell: {
+    width: '24px',
+    height: '24px',
+    borderRadius: tokens.borderRadiusSmall,
+    objectFit: 'contain',
+    display: 'block',
+  },
 });
 
 function fmt(iso?: string): string {
@@ -163,7 +182,7 @@ export function OrgVisualsPane() {
     {
       key: 'icon', label: '', width: 44, sortable: false, filterable: false,
       render: (v) => v.iconDataUri
-        ? <img src={v.iconDataUri} alt="" width={24} height={24} style={{ borderRadius: 4, objectFit: 'contain', display: 'block' }} />
+        ? <img src={v.iconDataUri} alt={`${v.name} icon`} className={s.iconCell} />
         : <Caption1 style={{ color: tokens.colorNeutralForeground3 }}>—</Caption1>,
     },
     { key: 'name', label: 'Name', width: 200, getValue: (v) => v.name, render: (v) => <strong>{v.name}</strong> },
@@ -236,22 +255,22 @@ export function OrgVisualsPane() {
             style={{ display: 'none' }}
             onChange={(e) => setIcon(e.target.files?.[0] || null)}
           />
-          <Field label="Bundle (.pbiviz)">
-            <Button icon={<DocumentArrowUp20Regular />} onClick={() => fileRef.current?.click()} disabled={!!gate || uploading}>
+          <Field label="Bundle (.pbiviz)" className={s.fileField}>
+            <Button className={s.pickerBtn} icon={<DocumentArrowUp20Regular />} onClick={() => fileRef.current?.click()} disabled={!!gate || uploading} title={file?.name}>
               {file ? file.name : 'Choose file…'}
             </Button>
           </Field>
-          <Field label="Name">
+          <Field label="Name" className={s.field}>
             <Input value={name} onChange={(_, d) => setName(d.value)} placeholder="e.g. Custom bar chart" disabled={!!gate || uploading} />
           </Field>
-          <Field label="Version">
+          <Field label="Version" className={s.field}>
             <Input value={version} onChange={(_, d) => setVersion(d.value)} placeholder="e.g. 1.0.0" disabled={!!gate || uploading} />
           </Field>
-          <Field label="Description (optional)">
+          <Field label="Description (optional)" className={s.field}>
             <Input value={description} onChange={(_, d) => setDescription(d.value)} placeholder="What this visual does" disabled={!!gate || uploading} />
           </Field>
-          <Field label="Icon (optional)" hint="PNG/JPEG/SVG, ≤256 KB">
-            <Button icon={<ImageAdd20Regular />} onClick={() => iconRef.current?.click()} disabled={!!gate || uploading}>
+          <Field label="Icon (optional)" hint="PNG/JPEG/SVG, ≤256 KB" className={s.fileField}>
+            <Button className={s.pickerBtn} icon={<ImageAdd20Regular />} onClick={() => iconRef.current?.click()} disabled={!!gate || uploading} title={icon?.name}>
               {icon ? icon.name : 'Choose icon…'}
             </Button>
           </Field>
