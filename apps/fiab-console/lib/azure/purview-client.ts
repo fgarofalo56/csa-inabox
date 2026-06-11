@@ -1138,6 +1138,247 @@ export async function listScanRuns(sourceName: string, scanName: string): Promis
 }
 
 // ============================================================
+// Scan plane (cont.) — custom classification rules + scan rule sets + scans.
+//
+// These are the writes that make Loom's classification taxonomy ACTUALLY
+// classify data on a scan (vs. only living in Cosmos). Grounded in:
+//   - Custom classification rules:
+//       PUT {base}/scan/classificationrules/{name}?api-version=2022-07-01-preview
+//       https://learn.microsoft.com/purview/data-map-classification-custom
+//       https://learn.microsoft.com/rest/api/purview/scanningdataplane/classification-rules
+//       (Az.Purview: New-AzPurviewClassificationRule)
+//   - Scan rule sets (bind custom rules into a scan):
+//       PUT {base}/scan/scanrulesets/{name}?api-version=2022-07-01-preview
+//       https://learn.microsoft.com/purview/data-map-scan-rule-set
+//       (Az.Purview: New-AzPurviewScanRuleset)
+//   - Scan definitions (so a Loom-created scan can be triggered):
+//       PUT {base}/scan/datasources/{ds}/scans/{scan}?api-version=2022-07-01-preview
+//       https://learn.microsoft.com/purview/register-scan-synapse-workspace#scan
+//
+// NOTE: per Purview classification best-practice, custom classifications are
+// NOT included in any default (System) scan rule set — to auto-assign a custom
+// classification a scan must use a CUSTOM scan rule set that includes the rule.
+// Custom classification rules are also ENGLISH-only; non-Latin patterns are
+// passed through and Purview validates them (its error surfaces verbatim via
+// PurviewError — never silently dropped).
+// ============================================================
+
+/** A regex classification rule pattern (the only pattern kind the scan plane exposes). */
+export interface PurviewRegexPattern {
+  kind: 'Regex';
+  pattern: string;
+}
+
+export interface PurviewClassificationRule {
+  name: string;
+  classificationName?: string;
+  ruleStatus?: string;
+  description?: string;
+  columnPatterns?: PurviewRegexPattern[];
+  dataPatterns?: PurviewRegexPattern[];
+  minimumPercentageMatch?: number;
+  raw?: unknown;
+}
+
+export interface PurviewScanRuleset {
+  name: string;
+  kind?: string;
+  includedCustomClassificationRuleNames?: string[];
+  excludedSystemClassifications?: string[];
+  raw?: unknown;
+}
+
+/**
+ * Create-or-replace a CUSTOM classification rule (idempotent — PUT).
+ *   PUT /scan/classificationrules/{name}
+ *   body: { kind:'Custom', properties:{ classificationName, ruleStatus:'Enabled',
+ *           description?, columnPatterns?, dataPatterns?, minimumPercentageMatch? } }
+ *
+ * `classificationName` is the (namespaced) classification the rule applies to a
+ * matching column/data value during a scan — e.g. `LOOM.<TENANT>.PII`. Column
+ * and data patterns are supplied as plain regex strings and wrapped as
+ * `{kind:'Regex', pattern}` here. Needs the Loom UAMI "Data Source
+ * Administrator" on the root collection (classic Data Map metadata policy —
+ * granted by scripts/csa-loom/grant-purview-datamap-role.sh ROLE=data-source-administrator).
+ */
+export async function upsertCustomClassificationRule(rule: {
+  name: string;
+  classificationName: string;
+  description?: string;
+  columnPatterns?: string[];
+  dataPatterns?: string[];
+  minimumPercentageMatch?: number;
+}): Promise<PurviewClassificationRule> {
+  purviewAccount();
+  if (!rule?.name) throw new PurviewError(400, null, 'name is required');
+  if (!rule?.classificationName) throw new PurviewError(400, null, 'classificationName is required');
+  const properties: Record<string, unknown> = {
+    classificationName: rule.classificationName,
+    ruleStatus: 'Enabled',
+    ...(rule.description ? { description: rule.description } : {}),
+  };
+  const cols = (rule.columnPatterns || []).map((p) => (p || '').trim()).filter(Boolean);
+  const data = (rule.dataPatterns || []).map((p) => (p || '').trim()).filter(Boolean);
+  if (cols.length) properties.columnPatterns = cols.map((pattern): PurviewRegexPattern => ({ kind: 'Regex', pattern }));
+  if (data.length) properties.dataPatterns = data.map((pattern): PurviewRegexPattern => ({ kind: 'Regex', pattern }));
+  if (typeof rule.minimumPercentageMatch === 'number') properties.minimumPercentageMatch = rule.minimumPercentageMatch;
+  const res = await purviewFetch(`/scan/classificationrules/${encodeURIComponent(rule.name)}`, {
+    method: 'PUT',
+    apiVersion: SCAN_API_VERSION,
+    body: JSON.stringify({ kind: 'Custom', properties }),
+  });
+  const raw = await readJson<any>(res);
+  return {
+    name: raw?.name || rule.name,
+    classificationName: raw?.properties?.classificationName ?? rule.classificationName,
+    ruleStatus: raw?.properties?.ruleStatus,
+    description: raw?.properties?.description,
+    columnPatterns: raw?.properties?.columnPatterns,
+    dataPatterns: raw?.properties?.dataPatterns,
+    minimumPercentageMatch: raw?.properties?.minimumPercentageMatch,
+    raw,
+  };
+}
+
+/** GET /scan/classificationrules — all classification rules (System + Custom). */
+export async function listClassificationRules(): Promise<PurviewClassificationRule[]> {
+  purviewAccount();
+  const res = await purviewFetch('/scan/classificationrules', { apiVersion: SCAN_API_VERSION });
+  if (res.status === 404) return [];
+  const j = await readJson<{ value?: any[] }>(res);
+  return (j?.value || []).map((raw): PurviewClassificationRule => ({
+    name: raw?.name,
+    classificationName: raw?.properties?.classificationName,
+    ruleStatus: raw?.properties?.ruleStatus,
+    description: raw?.properties?.description,
+    columnPatterns: raw?.properties?.columnPatterns,
+    dataPatterns: raw?.properties?.dataPatterns,
+    minimumPercentageMatch: raw?.properties?.minimumPercentageMatch,
+    raw,
+  }));
+}
+
+/** DELETE /scan/classificationrules/{name}. Returns false on 404. */
+export async function deleteCustomClassificationRule(name: string): Promise<boolean> {
+  purviewAccount();
+  if (!name) throw new PurviewError(400, null, 'name is required');
+  const res = await purviewFetch(`/scan/classificationrules/${encodeURIComponent(name)}`, {
+    method: 'DELETE',
+    apiVersion: SCAN_API_VERSION,
+  });
+  if (res.status === 404) return false;
+  await readJson<unknown>(res);
+  return true;
+}
+
+/**
+ * Create-or-replace a CUSTOM scan rule set that includes the given custom
+ * classification rules (idempotent — PUT).
+ *   PUT /scan/scanrulesets/{name}
+ *   body: { kind:'<AdlsGen2|AzureSqlDatabase|...>',
+ *           properties:{ includedCustomClassificationRuleNames:[...],
+ *                        excludedSystemClassifications?:[...] } }
+ *
+ * `kind` is the data-source kind the rule set applies to (a rule set is
+ * source-kind-scoped in Purview). Required so the scan that references it can
+ * auto-assign the custom classifications during a scan run.
+ */
+export async function upsertScanRuleset(ruleset: {
+  name: string;
+  kind: string;
+  description?: string;
+  includedCustomClassificationRuleNames?: string[];
+  excludedSystemClassifications?: string[];
+}): Promise<PurviewScanRuleset> {
+  purviewAccount();
+  if (!ruleset?.name) throw new PurviewError(400, null, 'name is required');
+  if (!ruleset?.kind) throw new PurviewError(400, null, 'kind is required');
+  const included = [...new Set((ruleset.includedCustomClassificationRuleNames || []).filter(Boolean))];
+  const properties: Record<string, unknown> = {
+    ...(ruleset.description ? { description: ruleset.description } : {}),
+    ...(included.length ? { includedCustomClassificationRuleNames: included } : {}),
+    ...(ruleset.excludedSystemClassifications?.length
+      ? { excludedSystemClassifications: ruleset.excludedSystemClassifications }
+      : {}),
+  };
+  const res = await purviewFetch(`/scan/scanrulesets/${encodeURIComponent(ruleset.name)}`, {
+    method: 'PUT',
+    apiVersion: SCAN_API_VERSION,
+    body: JSON.stringify({ kind: ruleset.kind, properties }),
+  });
+  const raw = await readJson<any>(res);
+  return {
+    name: raw?.name || ruleset.name,
+    kind: raw?.kind || ruleset.kind,
+    includedCustomClassificationRuleNames: raw?.properties?.includedCustomClassificationRuleNames ?? included,
+    excludedSystemClassifications: raw?.properties?.excludedSystemClassifications,
+    raw,
+  };
+}
+
+/** GET /scan/scanrulesets — custom scan rule sets defined on the account. */
+export async function listScanRulesets(): Promise<PurviewScanRuleset[]> {
+  purviewAccount();
+  const res = await purviewFetch('/scan/scanrulesets', { apiVersion: SCAN_API_VERSION });
+  if (res.status === 404) return [];
+  const j = await readJson<{ value?: any[] }>(res);
+  return (j?.value || []).map((raw): PurviewScanRuleset => ({
+    name: raw?.name,
+    kind: raw?.kind,
+    includedCustomClassificationRuleNames: raw?.properties?.includedCustomClassificationRuleNames,
+    excludedSystemClassifications: raw?.properties?.excludedSystemClassifications,
+    raw,
+  }));
+}
+
+/**
+ * Create-or-replace a scan definition on a registered data source (idempotent —
+ * PUT). A scan must exist before a run can be triggered (triggerScanRun).
+ *   PUT /scan/datasources/{ds}/scans/{scan}
+ *   body: { kind:'<AdlsGen2Msi|AzureSqlDatabaseCredential|...>',
+ *           properties:{ scanRulesetName, scanRulesetType:'System'|'Custom',
+ *                        collection?:{ referenceName, type:'CollectionReference' } } }
+ *
+ * Use scanRulesetType:'Custom' with a Loom-built scan rule set (upsertScanRuleset)
+ * to make the taxonomy's custom classification rules apply on the scan; use
+ * 'System' for the built-in classifications only.
+ */
+export async function upsertScan(payload: {
+  sourceName: string;
+  scanName: string;
+  kind: string;
+  scanRulesetName: string;
+  scanRulesetType?: 'System' | 'Custom';
+  collectionRef?: string;
+}): Promise<PurviewScan> {
+  purviewAccount();
+  if (!payload?.sourceName) throw new PurviewError(400, null, 'sourceName is required');
+  if (!payload?.scanName) throw new PurviewError(400, null, 'scanName is required');
+  if (!payload?.kind) throw new PurviewError(400, null, 'kind is required');
+  if (!payload?.scanRulesetName) throw new PurviewError(400, null, 'scanRulesetName is required');
+  const properties: Record<string, unknown> = {
+    scanRulesetName: payload.scanRulesetName,
+    scanRulesetType: payload.scanRulesetType || 'System',
+    ...(payload.collectionRef
+      ? { collection: { referenceName: payload.collectionRef, type: 'CollectionReference' } }
+      : {}),
+  };
+  const res = await purviewFetch(
+    `/scan/datasources/${encodeURIComponent(payload.sourceName)}/scans/${encodeURIComponent(payload.scanName)}`,
+    { method: 'PUT', apiVersion: SCAN_API_VERSION, body: JSON.stringify({ kind: payload.kind, properties }) },
+  );
+  const raw = await readJson<any>(res);
+  if (!raw) throw new PurviewError(500, null, 'Purview returned empty body on upsertScan');
+  return {
+    id: raw?.id || raw?.name || payload.scanName,
+    name: raw?.name || payload.scanName,
+    kind: raw?.kind || payload.kind,
+    schedule: raw?.properties?.schedule,
+    raw,
+  };
+}
+
+// ============================================================
 // NEW unified-catalog-only concepts — HONEST GATE.
 //
 // Business domains, data products, and unified-catalog data-quality rules live

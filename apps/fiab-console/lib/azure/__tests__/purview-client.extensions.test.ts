@@ -99,6 +99,87 @@ describe('purview-client (classic Data Map)', () => {
     expect((init as any).method).toBe('PUT');
   });
 
+  // --- Deeper scan depth: custom classification rules + scan rule sets + scans ---
+
+  it('upsertCustomClassificationRule PUTs kind=Custom with wrapped Regex patterns', async () => {
+    fetchMock.mockResolvedValue(new Response(JSON.stringify({
+      name: 'Loom_AAAA_SSN', properties: { classificationName: 'LOOM.AAAA.PII', ruleStatus: 'Enabled' },
+    }), { status: 200 }));
+    const mod = await import('../purview-client');
+    const rule = await mod.upsertCustomClassificationRule({
+      name: 'Loom_AAAA_SSN',
+      classificationName: 'LOOM.AAAA.PII',
+      columnPatterns: ['.*ssn.*'],
+      dataPatterns: ['\\d{3}-\\d{2}-\\d{4}'],
+      minimumPercentageMatch: 60,
+    });
+    expect(rule.classificationName).toBe('LOOM.AAAA.PII');
+    const [url, init] = fetchMock.mock.calls[0];
+    expect(url).toContain('/scan/classificationrules/Loom_AAAA_SSN');
+    expect(url).toContain('api-version=2022-07-01-preview');
+    expect((init as any).method).toBe('PUT');
+    const body = JSON.parse((init as any).body);
+    expect(body.kind).toBe('Custom');
+    expect(body.properties.classificationName).toBe('LOOM.AAAA.PII');
+    expect(body.properties.ruleStatus).toBe('Enabled');
+    expect(body.properties.columnPatterns).toEqual([{ kind: 'Regex', pattern: '.*ssn.*' }]);
+    expect(body.properties.dataPatterns).toEqual([{ kind: 'Regex', pattern: '\\d{3}-\\d{2}-\\d{4}' }]);
+    expect(body.properties.minimumPercentageMatch).toBe(60);
+  });
+
+  it('upsertCustomClassificationRule throws PurviewNotConfiguredError when unset', async () => {
+    delete process.env.LOOM_PURVIEW_ACCOUNT;
+    const mod = await import('../purview-client');
+    await expect(mod.upsertCustomClassificationRule({ name: 'x', classificationName: 'y' }))
+      .rejects.toBeInstanceOf(mod.PurviewNotConfiguredError);
+  });
+
+  it('upsertScanRuleset PUTs the kind + includedCustomClassificationRuleNames (de-duped)', async () => {
+    fetchMock.mockResolvedValue(new Response(JSON.stringify({
+      name: 'Loom_AAAA_AdlsGen2', kind: 'AdlsGen2',
+      properties: { includedCustomClassificationRuleNames: ['Loom_AAAA_SSN'] },
+    }), { status: 200 }));
+    const mod = await import('../purview-client');
+    const rs = await mod.upsertScanRuleset({
+      name: 'Loom_AAAA_AdlsGen2', kind: 'AdlsGen2',
+      includedCustomClassificationRuleNames: ['Loom_AAAA_SSN', 'Loom_AAAA_SSN'],
+    });
+    expect(rs.kind).toBe('AdlsGen2');
+    const [url, init] = fetchMock.mock.calls[0];
+    expect(url).toContain('/scan/scanrulesets/Loom_AAAA_AdlsGen2');
+    expect((init as any).method).toBe('PUT');
+    const body = JSON.parse((init as any).body);
+    expect(body.kind).toBe('AdlsGen2');
+    expect(body.properties.includedCustomClassificationRuleNames).toEqual(['Loom_AAAA_SSN']);
+  });
+
+  it('upsertScan PUTs the scan definition with scanRulesetName + type + collection', async () => {
+    fetchMock.mockResolvedValue(new Response(JSON.stringify({
+      name: 'nightly', kind: 'AdlsGen2Msi', properties: { scanRulesetName: 'Loom_AAAA_AdlsGen2' },
+    }), { status: 200 }));
+    const mod = await import('../purview-client');
+    const scan = await mod.upsertScan({
+      sourceName: 'lake-prod', scanName: 'nightly', kind: 'AdlsGen2Msi',
+      scanRulesetName: 'Loom_AAAA_AdlsGen2', scanRulesetType: 'Custom', collectionRef: 'finance',
+    });
+    expect(scan.name).toBe('nightly');
+    const [url, init] = fetchMock.mock.calls[0];
+    expect(url).toContain('/scan/datasources/lake-prod/scans/nightly');
+    expect((init as any).method).toBe('PUT');
+    const body = JSON.parse((init as any).body);
+    expect(body.kind).toBe('AdlsGen2Msi');
+    expect(body.properties.scanRulesetName).toBe('Loom_AAAA_AdlsGen2');
+    expect(body.properties.scanRulesetType).toBe('Custom');
+    expect(body.properties.collection).toEqual({ referenceName: 'finance', type: 'CollectionReference' });
+  });
+
+  it('deleteCustomClassificationRule returns false on 404', async () => {
+    fetchMock.mockResolvedValue(new Response('', { status: 404 }));
+    const mod = await import('../purview-client');
+    const ok = await mod.deleteCustomClassificationRule('does-not-exist');
+    expect(ok).toBe(false);
+  });
+
   it('listGlossaryTerms walks Atlas v2 glossaries → terms when no guid is provided', async () => {
     // First call: list glossaries
     fetchMock.mockResolvedValueOnce(new Response(JSON.stringify([

@@ -9,7 +9,10 @@
  *   GET ?source=<name>                   → list scans defined on a source
  *   GET ?source=<name>&scan=<n>&runs=1   → list last 10 runs for a scan
  *   POST { name, kind, properties }      → register a new source
- *   POST { source, scan, run: true }     → trigger a scan run
+ *   POST { define:true, source, scan, kind, scanRulesetName, scanRulesetType?, collection?, run? }
+ *                                        → create/replace a scan definition (and
+ *                                          optionally trigger it when run:true)
+ *   POST { source, scan, run: true }     → trigger an existing scan run
  *   DELETE ?name=<source>                → de-register a source
  *
  * Purview-not-configured / cross-cloud → 503 with the structured hint (so the
@@ -19,7 +22,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import { getSession } from '@/lib/auth/session';
 import {
   listDataSources, registerDataSource, deleteDataSource,
-  listScansForSource, listScanRuns, triggerScanRun,
+  listScansForSource, listScanRuns, triggerScanRun, upsertScan,
 } from '@/lib/azure/purview-client';
 import { handleSecurityError } from '@/app/api/admin/security/_lib/error-handling';
 
@@ -56,6 +59,27 @@ export async function POST(req: NextRequest) {
   try { body = await req.json(); } catch { return NextResponse.json({ ok: false, error: 'invalid JSON' }, { status: 400 }); }
 
   try {
+    // Define a scan (create-or-replace) and optionally trigger it:
+    //   { define:true, source, scan, kind, scanRulesetName, scanRulesetType?, collection?, run? }
+    if (body?.define && body?.source && body?.scan) {
+      if (!body?.kind || !body?.scanRulesetName) {
+        return NextResponse.json({ ok: false, error: 'kind and scanRulesetName are required to define a scan' }, { status: 400 });
+      }
+      const scan = await upsertScan({
+        sourceName: body.source,
+        scanName: body.scan,
+        kind: body.kind,
+        scanRulesetName: body.scanRulesetName,
+        scanRulesetType: body.scanRulesetType === 'Custom' ? 'Custom' : 'System',
+        collectionRef: body.collection || undefined,
+      });
+      // Chain a run when asked, so "define + run now" is a single call.
+      if (body?.run) {
+        const run = await triggerScanRun(body.source, body.scan);
+        return NextResponse.json({ ok: true, scan, ...run }, { status: 202 });
+      }
+      return NextResponse.json({ ok: true, scan }, { status: 201 });
+    }
     // Trigger a scan run: { source, scan, run: true }
     if (body?.run && body?.source && body?.scan) {
       const result = await triggerScanRun(body.source, body.scan);
