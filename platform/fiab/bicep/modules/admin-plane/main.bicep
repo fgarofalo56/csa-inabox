@@ -223,6 +223,9 @@ param copilotMafEnabled bool = false
 @description('Expose the unified Fabric IQ MCP tool surface (/api/iq/mcp) to EXTERNAL agents (Microsoft Agent 365, Azure AI Foundry, Copilot Studio) via Bearer-token auth. Console users always reach it via their MSAL session; this flag only gates the token path. When true the Console gets LOOM_IQ_MCP_ENABLED=true plus the shared LOOM_INTERNAL_TOKEN used as the default Bearer secret.')
 param loomIqMcpEnabled bool = false
 
+@description('Provision an Azure Files share + managedEnvironments/storages registration so the loom-mcp Container App can persist deployable MCP-server state across revisions. Container Apps only (Commercial / GCC); on AKS boundaries the MCP workload uses an Azure Files PersistentVolumeClaim instead. The Console "Mount persistence" admin control re-mounts the share imperatively.')
+param mcpPersistenceEnabled bool = true
+
 // Shared internal trust token for the MAF → Console tool-dispatch callback.
 // Deterministic on the admin RG so the value injected into BOTH the Console and
 // the MAF app matches without a round-trip. Internal-network use only.
@@ -981,6 +984,75 @@ module containerPlatformModule 'container-platform.bicep' = {
   }
 }
 
+// ---------------------------------------------------------------------------
+// MCP persistence — Azure Files share + managedEnvironments/storages mount
+// ---------------------------------------------------------------------------
+//
+// Container Apps does NOT support identity-based access to Azure file shares
+// (Microsoft Learn — "Use storage mounts in Azure Container Apps"), so the
+// storages registration uses the storage-account KEY (allowSharedKeyAccess must
+// be true on THIS account; the app's own env secrets stay Key Vault-backed).
+// Container Apps only — on AKS boundaries the MCP workload uses an Azure Files
+// PVC (gitopsManifest path). Azure-native; no Microsoft Fabric dependency.
+var mcpFilesActive = mcpPersistenceEnabled && containerPlatform == 'containerApps' && deployAppsEnabled
+var mcpStorageAccountName = take('samcp${uniqueString(resourceGroup().id)}', 24)
+var mcpShareName = 'mcp-data'
+var mcpStorageRegistrationName = 'mcp-data'
+var mcpMountPath = '/data'
+// Managed-environment name — MUST match the deterministic name in
+// container-platform.bicep (cae-csa-loom-${location}). Resolvable at the start
+// of deployment (the storages child name cannot reference a module output).
+var mcpCaeName = 'cae-csa-loom-${location}'
+
+resource mcpStorage 'Microsoft.Storage/storageAccounts@2024-01-01' = if (mcpFilesActive) {
+  name: mcpStorageAccountName
+  location: location
+  tags: complianceTags
+  kind: 'StorageV2'
+  sku: { name: 'Standard_LRS' }
+  properties: {
+    allowBlobPublicAccess: false
+    // REQUIRED by Container Apps Azure Files mounts (identity mounts unsupported).
+    allowSharedKeyAccess: true
+    minimumTlsVersion: 'TLS1_2'
+    supportsHttpsTrafficOnly: true
+    largeFileSharesState: 'Enabled'
+    // The Container Apps SMB mount reaches the share over the Azure backbone;
+    // AzureServices bypass keeps the account closed to the public internet for
+    // ad-hoc access while permitting the managed-environment mount. Production
+    // hardening (a private endpoint on the `file` sub-resource +
+    // privatelink.file DNS zone) is the follow-up for fully-locked-down tenants.
+    networkAcls: {
+      defaultAction: 'Allow'
+      bypass: 'AzureServices'
+    }
+  }
+
+  resource fileServices 'fileServices@2024-01-01' = {
+    name: 'default'
+    resource share 'shares@2024-01-01' = {
+      name: mcpShareName
+      properties: { shareQuota: 100 }
+    }
+  }
+}
+
+// Register the share on the managed environment. The console's
+// container-apps-arm-client re-PUTs this exact resource on the "Mount
+// persistence" admin action (same accountKey-from-listKeys path).
+resource mcpEnvStorage 'Microsoft.App/managedEnvironments/storages@2024-03-01' = if (mcpFilesActive) {
+  name: '${mcpCaeName}/${mcpStorageRegistrationName}'
+  dependsOn: [ containerPlatformModule ]
+  properties: {
+    azureFile: {
+      accountName: mcpStorageAccountName
+      accountKey: mcpFilesActive ? mcpStorage!.listKeys().keys[0].value : ''
+      shareName: mcpShareName
+      accessMode: 'ReadWrite'
+    }
+  }
+}
+
 // =====================================================================
 // 7. AI Search
 // =====================================================================
@@ -1393,6 +1465,10 @@ module aiDefense 'ai-defense.bicep' = {
 
 module appDeployments 'app-deployments.bicep' = if (containerPlatform == 'containerApps' && deployAppsEnabled) {
   name: 'app-deployments'
+  // The loom-mcp app references the mcp-data managedEnvironments/storages
+  // registration by name — make the storages resource a hard predecessor so
+  // the mount exists before the container app is created.
+  dependsOn: mcpFilesActive ? [ mcpEnvStorage ] : []
   params: {
     location: location
     containerPlatform: containerPlatform
@@ -1437,6 +1513,17 @@ module appDeployments 'app-deployments.bicep' = if (containerPlatform == 'contai
             { name: 'LOOM_LOCATION', value: location }
             { name: 'LOOM_AI_SEARCH_RG', value: byoAiSearchRg }
             { name: 'LOOM_ACA_RG', value: resourceGroup().name }
+            // Managed-environment name + MCP Azure Files persistence wiring. The
+            // console's container-apps-arm-client re-mounts the share via the
+            // "Mount persistence" admin action (listKeys → upsertEnvStorage →
+            // deployMcpContainerApp). Empty when mcpPersistenceEnabled is false
+            // → the route shows an honest config gate (no Fabric dependency).
+            { name: 'LOOM_ACA_ENVIRONMENT', value: containerPlatform == 'containerApps' ? containerPlatformModule.outputs.caeName : '' }
+            { name: 'LOOM_MCP_FILES_ACCOUNT', value: mcpFilesActive ? mcpStorageAccountName : '' }
+            { name: 'LOOM_MCP_FILES_SHARE', value: mcpFilesActive ? mcpShareName : '' }
+            { name: 'LOOM_MCP_FILES_RG', value: resourceGroup().name }
+            { name: 'LOOM_MCP_STORAGE_NAME', value: mcpStorageRegistrationName }
+            { name: 'LOOM_MCP_DATA_DIR', value: mcpMountPath }
             { name: 'LOOM_DLZ_RG', value: loomDlzRg }
             // AAS resource group for the datamart-migration server (aas.bicep
             // deploys it into the DLZ RG). The migrate route falls back to
@@ -2444,6 +2531,21 @@ module appDeployments 'app-deployments.bicep' = if (containerPlatform == 'contai
         tier: 'mcp'
         minReplicas: 1
         maxReplicas: 3
+        // Azure Files persistence (Container Apps only). The share is registered
+        // on the CAE as mcpEnvStorage above; here we attach it as a volume +
+        // mount so deployable MCP-server state survives revisions. Empty arrays
+        // when mcpPersistenceEnabled is false → no mount (Azure-native default
+        // still works without persistence). app-deployments.bicep passes these
+        // through to template.volumes / container.volumeMounts.
+        volumes: mcpFilesActive ? [
+          { name: 'mcp-data-vol', storageType: 'AzureFile', storageName: mcpStorageRegistrationName }
+        ] : []
+        volumeMounts: mcpFilesActive ? [
+          { volumeName: 'mcp-data-vol', mountPath: mcpMountPath }
+        ] : []
+        env: mcpFilesActive ? [
+          { name: 'LOOM_MCP_DATA_DIR', value: mcpMountPath }
+        ] : []
       }
       {
         name: 'loom-setup-orchestrator'

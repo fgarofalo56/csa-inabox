@@ -131,8 +131,17 @@ resource caeApps 'Microsoft.App/containerApps@2025-02-02-preview' = [for app in 
               initialDelaySeconds: 5
             }
           ]
+          // Optional Azure Files volume mounts. Each entry:
+          //   { volumeName, mountPath, subPath? } referencing a template volume
+          //   below (storageType AzureFile, storageName = a
+          //   managedEnvironments/storages resource on the CAE). The console's
+          //   container-apps-arm-client mirrors this exact shape on the
+          //   imperative PUT so bicep + the in-app deploy path stay in lockstep.
+          volumeMounts: contains(app, 'volumeMounts') ? app.volumeMounts : []
         }
       ]
+      // Azure Files / EmptyDir volumes referenced by container volumeMounts.
+      volumes: contains(app, 'volumes') ? app.volumes : []
       scale: {
         minReplicas: contains(app, 'minReplicas') ? app.minReplicas : 1
         maxReplicas: contains(app, 'maxReplicas') ? app.maxReplicas : 3

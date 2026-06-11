@@ -106,6 +106,11 @@ export default function ScalingPage() {
   const [foundrySel, setFoundrySel] = useState<Record<string, { vmSize?: string; minNodeCount?: number; maxNodeCount?: number }>>({});
   const [foundryState, setFoundryState] = useState<Record<string, { applying?: boolean; error?: string; ok?: string }>>({});
 
+  // MCP container app — Azure Files mount (persistence). Deploy path, not a SKU dial.
+  const [mcpData, setMcpData] = useState<any>(null);
+  const [mcpSel, setMcpSel] = useState<{ mountPath?: string; accessMode?: 'ReadWrite' | 'ReadOnly' }>({});
+  const [mcpState, setMcpState] = useState<{ applying?: boolean; error?: string; ok?: string }>({});
+
   useEffect(() => {
     // Parallel fetch all GETs.
     Promise.all([
@@ -119,12 +124,14 @@ export default function ScalingPage() {
       jsonGet('/api/admin/scaling/cosmos'),
       jsonGet('/api/admin/scaling/container-apps'),
       jsonGet('/api/admin/scaling/foundry-compute'),
-    ]).then(([cap, dwu, adx, wh, cl, srch, apim, cos, aca, fnd]) => {
+      jsonGet('/api/admin/mcp-servers/deploy'),
+    ]).then(([cap, dwu, adx, wh, cl, srch, apim, cos, aca, fnd, mcp]) => {
       // 401 across the board means unauthed
       if (cap?.error === 'unauthenticated') { setUnauth(true); return; }
       setCapacityData(cap); setDwuData(dwu); setAdxData(adx);
       setWhData(wh); setClusterData(cl); setSearchData(srch);
       setApimData(apim); setCosmosData(cos); setAcaData(aca); setFoundryData(fnd);
+      setMcpData(mcp);
     }).catch(() => { /* keep partials */ });
   }, []);
 
@@ -571,6 +578,59 @@ export default function ScalingPage() {
                 );
               })}
               {acaData?.ok && (acaData.apps?.length ?? 0) === 0 && <Caption1>No container apps in this RG.</Caption1>}
+
+              {/* MCP server — Azure Files mount (persistence). Deploy path, not a SKU dial. */}
+              <div style={{ borderTop: `1px solid ${tokens.colorNeutralStroke2}`, paddingTop: 10, marginTop: 4 }}>
+                <Caption1 style={{ textTransform: 'uppercase', letterSpacing: '0.06em', fontSize: 11, color: tokens.colorNeutralForeground2 }}>
+                  MCP server — persistent storage (Azure Files)
+                </Caption1>
+                {mcpData && !mcpData.ok ? (
+                  <MessageBar intent="warning" style={{ marginTop: 6 }}>
+                    <MessageBarBody>
+                      {mcpData.error}{mcpData.hint ? ` — ${mcpData.hint}` : ''}
+                    </MessageBarBody>
+                  </MessageBar>
+                ) : (
+                  <div style={{ border: `1px solid ${tokens.colorNeutralStroke2}`, borderRadius: 4, padding: 10, marginTop: 6 }}>
+                    <Caption1>
+                      Mounts <strong>{mcpData?.config?.shareName || 'the MCP file share'}</strong> on{' '}
+                      <strong>{mcpData?.config?.storageAccount || '…'}</strong> into the loom-mcp container at the
+                      mount path below. Applying rolls a new revision (brief connection drop).
+                    </Caption1>
+                    <div style={{ display: 'flex', gap: 8, marginTop: 8, alignItems: 'flex-end', flexWrap: 'wrap' }}>
+                      <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+                        <Caption1 style={{ textTransform: 'uppercase', letterSpacing: '0.06em', fontSize: 10 }}>Mount path</Caption1>
+                        <Input style={{ width: 160 }} value={mcpSel.mountPath ?? mcpData?.config?.mountPath ?? '/data'}
+                          onChange={(_, d) => setMcpSel({ ...mcpSel, mountPath: d.value })} />
+                      </div>
+                      <ScalePicker
+                        label="Access mode"
+                        options={[{ value: 'ReadWrite', label: 'ReadWrite' }, { value: 'ReadOnly', label: 'ReadOnly' }]}
+                        value={mcpSel.accessMode ?? 'ReadWrite'}
+                        onChange={(v) => setMcpSel({ ...mcpSel, accessMode: v as 'ReadWrite' | 'ReadOnly' })}
+                      />
+                      <button
+                        onClick={async () => {
+                          setMcpState({ applying: true });
+                          try {
+                            const r = await jsonPost('/api/admin/mcp-servers/deploy', {
+                              mountPath: mcpSel.mountPath ?? mcpData?.config?.mountPath,
+                              accessMode: mcpSel.accessMode ?? 'ReadWrite',
+                            });
+                            setMcpState({ ok: `Mounted at ${r.mountPath} — new revision rolling` });
+                          } catch (e: any) { setMcpState({ error: e.message }); }
+                        }}
+                        disabled={mcpState.applying}
+                        style={{ padding: '6px 16px', borderRadius: 4, border: 'none', background: tokens.colorBrandBackground, color: tokens.colorNeutralForegroundOnBrand, cursor: 'pointer', opacity: mcpState.applying ? 0.5 : 1, fontSize: 12 }}
+                      >
+                        {mcpState.applying ? 'Mounting…' : 'Mount persistence'}
+                      </button>
+                    </div>
+                    {mcpState.error && <Caption1 style={{ color: tokens.colorPaletteRedForeground1 }}>{mcpState.error}</Caption1>}
+                    {mcpState.ok && <Caption1 style={{ color: tokens.colorPaletteGreenForeground1 }}>{mcpState.ok}</Caption1>}
+                  </div>
+                )}
+              </div>
             </div>
           }
         />
