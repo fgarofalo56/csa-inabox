@@ -4,8 +4,16 @@ Inventory of every back-end the Unified Catalog federates over.
 
 ## Endpoint
 
-- `GET /api/catalog/metastores` — list UC metastores (federated across workspaces, deduped by `metastore_id`), Fabric / OneLake workspaces, and the configured Purview account
-- `POST /api/catalog/metastores` body `{ source: 'unity-catalog', hostname }` — **probe** a new Databricks workspace. Persistent registration still requires a bicep flip on `LOOM_DATABRICKS_HOSTNAMES`; the probe lets the admin pre-validate that the metastore admin group already includes the Loom UAMI before they push the bicep change.
+- `GET /api/catalog/metastores` — list UC metastores (federated across workspaces, deduped by `metastore_id`), the **persisted registrations** (Cosmos), account metastores (attach picker), Fabric / OneLake workspaces, and the configured Purview account
+- `POST /api/catalog/metastores` body `{ source: 'unity-catalog', hostname, workspaceNumericId?, metastoreId?, defaultCatalog?, registerPurview?, runScan?, purviewCollection?, scan?: { httpPath, credentialName, integrationRuntimeName? } }` — **persistently register** a Databricks workspace:
+  1. Probe its UC catalogs (no account-admin needed).
+  2. **Persist** the registration to Cosmos (`metastore-registrations`, PK `/tenantId`, id = workspaceUrl) — this alone makes it **survive Console reloads with no bicep flip**.
+  3. If `metastoreId` given + `LOOM_DATABRICKS_ACCOUNT_ID` set → **attach** the workspace to the UC metastore via the account-plane `PUT /accounts/{id}/workspaces/{wsId}/metastore`. A 403 surfaces the account-admin gate (the rest of the call still succeeds).
+  4. If `registerPurview` + `LOOM_PURVIEW_ACCOUNT` set → register the workspace as an *Azure Databricks Unity Catalog* Purview source; optionally `runScan` (define + trigger). The scan gates honestly when no Key-Vault Access-Token credential + SQL Warehouse HTTP path is supplied (managed identity is **not** a Databricks scan auth option).
+
+## Persistence (survives reloads — no bicep flip)
+
+Registrations are stored in the `metastore-registrations` Cosmos container (one doc per `workspaceUrl`, PK `/tenantId`). The UC federation reader unions `LOOM_DATABRICKS_HOSTNAMES` (env) with the persisted `workspaceUrl`s (`resolveWorkspaceHostnames()`), so a registered workspace is federated on every subsequent load automatically — the bicep flip on `LOOM_DATABRICKS_HOSTNAMES` is no longer required for a registration to stick.
 
 ## Multi-workspace federation
 
@@ -13,7 +21,8 @@ The console reads `LOOM_DATABRICKS_HOSTNAMES` (comma-separated) and falls back t
 
 ## NotConfigured gates
 
-- Unity → if `LOOM_DATABRICKS_HOSTNAMES`/`LOOM_DATABRICKS_HOSTNAME` is unset, the page shows the structured hint with the env var name + bicep module
+- Unity → if `LOOM_DATABRICKS_HOSTNAMES`/`LOOM_DATABRICKS_HOSTNAME` is unset AND no workspace is persisted, the page shows the structured hint with the env var name + bicep module
+- UC metastore attach → if `LOOM_DATABRICKS_ACCOUNT_ID` is unset, the attach picker shows an honest "one-click attach not configured" MessageBar (registration + catalog listing still work)
 - Fabric → if the UAMI is not in the Fabric service-principals tenant setting, the upstream 403 surfaces verbatim
 - Purview → if `LOOM_PURVIEW_ACCOUNT` is unset, the page renders an account-not-configured MessageBar
 

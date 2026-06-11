@@ -18,14 +18,16 @@
  * and a top summary <TileGrid> of <ItemTile>s for the three backends.
  */
 
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useState, type CSSProperties } from 'react';
 import { CatalogShell } from '@/lib/components/catalog/catalog-shell';
 import {
-  Spinner, Button, Input, Field, Dropdown, Option, MessageBar, MessageBarBody,
-  MessageBarTitle, MessageBarActions, Body1, Caption1, Badge, makeStyles, tokens,
+  Spinner, Button, Input, Field, Dropdown, Option, Checkbox, MessageBar, MessageBarBody,
+  MessageBarTitle, MessageBarActions, Table, TableHeader, TableRow, TableHeaderCell,
+  TableBody, TableCell, Subtitle2, Body1, Caption1, Badge, Divider, makeStyles, tokens,
 } from '@fluentui/react-components';
 import {
   Add24Regular, ArrowSync24Regular, DatabaseLink24Regular, Globe24Regular,
+  ShieldTask24Regular, CheckmarkCircle24Filled, Link24Regular,
 } from '@fluentui/react-icons';
 import { Section } from '@/lib/components/ui/section';
 import { LoomDataTable, type LoomColumn } from '@/lib/components/ui/loom-data-table';
@@ -36,8 +38,14 @@ interface UnityMeta { metastore_id: string; name: string; region?: string; works
 interface OneLakeWs { id: string; displayName: string; capacityId?: string; }
 interface ProbeCatalog { name: string; catalog_type?: string; owner?: string; }
 interface DiscoverableWs {
-  id: string; name: string; workspaceUrl: string;
+  id: string; name: string; workspaceUrl: string; workspaceNumericId?: string;
   location?: string; resourceGroup?: string; subscriptionId: string; sku?: string;
+}
+interface AccountMetastore { metastore_id: string; name: string; region?: string; }
+interface Registration {
+  id: string; workspaceUrl: string; workspaceName?: string; metastoreId?: string;
+  ucAttached: boolean; purviewRegistered: boolean; purviewScanned: boolean;
+  purviewSourceName?: string; lastScanRunId?: string; registeredAt: string;
 }
 interface AccountAdminGate {
   title: string; detail: string;
@@ -87,6 +95,20 @@ const useStyles = makeStyles({
   okIcon: { color: tokens.colorPaletteGreenForeground1 },
 });
 
+// Inline style helpers for the persisted-registration / UC-attach / Purview-scan
+// sub-sections (added with audit-t141 — keep alongside the redesigned Sections).
+const card: CSSProperties = {
+  padding: 20,
+  border: `1px solid ${tokens.colorNeutralStroke2}`,
+  borderRadius: tokens.borderRadiusXLarge,
+  backgroundColor: tokens.colorNeutralBackground1,
+  marginBottom: 20,
+  boxShadow: tokens.shadow4,
+};
+const sectionHead: CSSProperties = {
+  display: 'flex', alignItems: 'center', gap: 10, marginBottom: 14,
+};
+
 export default function MetastoresPage() {
   const s = useStyles();
   const [data, setData] = useState<any>(null);
@@ -100,6 +122,14 @@ export default function MetastoresPage() {
   const [registering, setRegistering] = useState(false);
   const [probeResult, setProbeResult] = useState<any>(null);
   const [probeError, setProbeError] = useState<string | null>(null);
+
+  // Attach + Purview options.
+  const [selectedMetastore, setSelectedMetastore] = useState<string>('');
+  const [registerPurview, setRegisterPurview] = useState(false);
+  const [runScan, setRunScan] = useState(false);
+  const [scanHttpPath, setScanHttpPath] = useState('');
+  const [scanCredential, setScanCredential] = useState('');
+  const [scanIR, setScanIR] = useState('');
 
   const load = useCallback(async () => {
     setLoading(true); setError(null);
@@ -115,6 +145,9 @@ export default function MetastoresPage() {
   useEffect(() => { load(); }, [load]);
 
   const discoverable: DiscoverableWs[] = data?.discoverableWorkspaces ?? [];
+  const accountMetastores: AccountMetastore[] = data?.accountMetastores ?? [];
+  const registrations: Registration[] = data?.registrations ?? [];
+  const selectedWsObj = discoverable.find((w) => w.workspaceUrl === selectedWs);
 
   async function register() {
     const host = manualMode ? manualHost.trim() : selectedWs;
@@ -125,11 +158,27 @@ export default function MetastoresPage() {
     try {
       const r = await fetch('/api/catalog/metastores', {
         method: 'POST', headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ source: 'unity-catalog', hostname: host }),
+        body: JSON.stringify({
+          source: 'unity-catalog',
+          hostname: host,
+          workspaceName: selectedWsObj?.name,
+          workspaceArmId: selectedWsObj?.id,
+          workspaceNumericId: selectedWsObj?.workspaceNumericId,
+          metastoreId: selectedMetastore || undefined,
+          registerPurview,
+          runScan,
+          scan: runScan ? {
+            httpPath: scanHttpPath.trim() || undefined,
+            credentialName: scanCredential.trim() || undefined,
+            integrationRuntimeName: scanIR.trim() || undefined,
+          } : undefined,
+        }),
       });
       const j = await r.json();
       if (!j.ok) { setProbeError(j.error || 'registration failed'); setProbeResult(j); return; }
       setProbeResult(j);
+      // Refresh the persisted list so the new row + badges appear.
+      load();
     } catch (e: any) {
       setProbeError(e?.message || String(e));
     } finally {
@@ -137,7 +186,6 @@ export default function MetastoresPage() {
     }
   }
 
-  const selectedWsObj = discoverable.find((w) => w.workspaceUrl === selectedWs);
   const gate: AccountAdminGate | undefined = data?.accountAdminGate;
 
   const unity: UnityMeta[] = Array.isArray(data?.unity) ? data.unity : [];
@@ -257,6 +305,70 @@ export default function MetastoresPage() {
             </TileGrid>
           </div>
 
+          {/* ---------- Persisted registrations ---------- */}
+          {registrations.length > 0 && (
+            <div style={card}>
+              <div style={sectionHead}>
+                <Link24Regular style={{ color: tokens.colorBrandForeground1 }} />
+                <Subtitle2>Registered Databricks workspaces</Subtitle2>
+                <Badge appearance="tint" color="brand">{registrations.length}</Badge>
+              </div>
+              <Body1 style={{ color: tokens.colorNeutralForeground3, marginBottom: 12 }}>
+                These registrations persist across Console reloads — no bicep redeploy required.
+              </Body1>
+              <Table aria-label="Persisted registrations" size="medium">
+                <TableHeader>
+                  <TableRow>
+                    <TableHeaderCell>Workspace</TableHeaderCell>
+                    <TableHeaderCell>UC metastore</TableHeaderCell>
+                    <TableHeaderCell>Purview</TableHeaderCell>
+                    <TableHeaderCell>Registered</TableHeaderCell>
+                  </TableRow>
+                </TableHeader>
+                <TableBody>
+                  {registrations.map((r) => (
+                    <TableRow key={r.id}>
+                      <TableCell>
+                        <div style={{ display: 'flex', flexDirection: 'column' }}>
+                          <strong>{r.workspaceName || r.workspaceUrl}</strong>
+                          <Caption1 style={{ color: tokens.colorNeutralForeground3 }}>{r.workspaceUrl}</Caption1>
+                        </div>
+                      </TableCell>
+                      <TableCell>
+                        {r.ucAttached ? (
+                          <Badge appearance="tint" color="success" icon={<CheckmarkCircle24Filled />}>
+                            Attached
+                          </Badge>
+                        ) : (
+                          <Badge appearance="outline" color="informative">Not attached</Badge>
+                        )}
+                        {r.metastoreId && (
+                          <Caption1 style={{ display: 'block', color: tokens.colorNeutralForeground3, marginTop: 2 }}>
+                            {r.metastoreId}
+                          </Caption1>
+                        )}
+                      </TableCell>
+                      <TableCell>
+                        {r.purviewScanned ? (
+                          <Badge appearance="tint" color="success">Scanned</Badge>
+                        ) : r.purviewRegistered ? (
+                          <Badge appearance="tint" color="brand">Source registered</Badge>
+                        ) : (
+                          <Badge appearance="outline" color="informative">—</Badge>
+                        )}
+                      </TableCell>
+                      <TableCell>
+                        <Caption1 style={{ color: tokens.colorNeutralForeground3 }}>
+                          {r.registeredAt ? new Date(r.registeredAt).toLocaleString() : '—'}
+                        </Caption1>
+                      </TableCell>
+                    </TableRow>
+                  ))}
+                </TableBody>
+              </Table>
+            </div>
+          )}
+
           {/* ---------- Databricks Unity Catalog ---------- */}
           <div id="sec-unity">
             <Section
@@ -329,8 +441,11 @@ export default function MetastoresPage() {
           <Section title="Register a Databricks workspace">
             <Caption1 className={s.desc}>
               Pick a workspace the Console identity can see, then register it to list its Unity
-              Catalog. Listing catalogs does not require account-admin.
+              Catalog. The registration is saved and survives Console reloads. Listing catalogs
+              does not require account-admin. Optionally attach it to a UC metastore and catalog
+              it in Purview.
             </Caption1>
+
 
             {data.discoveryError && (
               <MessageBar intent="info" className={s.mbBottom}>
@@ -382,7 +497,7 @@ export default function MetastoresPage() {
                 onClick={register}
                 disabled={registering || (manualMode ? !manualHost.trim() : !selectedWs)}
               >
-                {registering ? 'Registering…' : 'Register & list catalogs'}
+                {registering ? 'Registering…' : 'Register'}
               </Button>
             </div>
 
@@ -395,6 +510,99 @@ export default function MetastoresPage() {
               {manualMode ? '← Choose from discovered workspaces' : 'Enter a hostname manually instead'}
             </Button>
 
+            {/* ---------- Attach to a UC metastore ---------- */}
+            <Divider style={{ margin: '16px 0' }} />
+            <div style={sectionHead}>
+              <Link24Regular style={{ color: tokens.colorBrandForeground1 }} />
+              <Subtitle2>Attach to a Unity Catalog metastore (optional)</Subtitle2>
+            </div>
+            {data.accountApiConfigured === false ? (
+              <MessageBar intent="info" style={{ marginBottom: 12 }}>
+                <MessageBarBody>
+                  <MessageBarTitle>One-click attach not configured</MessageBarTitle>
+                  {data.accountApiHint?.detail || 'Set LOOM_DATABRICKS_ACCOUNT_ID to enable metastore attach.'}
+                  {data.accountApiHint?.missingEnvVar && (
+                    <div style={{ marginTop: 6, fontSize: 12 }}>
+                      Env var: <code>{data.accountApiHint.missingEnvVar}</code> · Bicep: <code>{data.accountApiHint.bicepModule}</code>
+                    </div>
+                  )}
+                </MessageBarBody>
+              </MessageBar>
+            ) : (
+              <Field
+                label="UC metastore"
+                hint={accountMetastores.length
+                  ? 'Select the metastore to attach the workspace to (needs Databricks account admin).'
+                  : (data.accountMetastoresError || 'No account metastores listable — the UAMI may not be an account admin.')}
+              >
+                <Dropdown
+                  placeholder={accountMetastores.length ? 'Leave unset to skip attach…' : 'None listable'}
+                  disabled={accountMetastores.length === 0}
+                  value={accountMetastores.find((m) => m.metastore_id === selectedMetastore)?.name || ''}
+                  selectedOptions={selectedMetastore ? [selectedMetastore] : []}
+                  onOptionSelect={(_, d) => setSelectedMetastore(d.optionValue || '')}
+                >
+                  {accountMetastores.map((m) => (
+                    <Option key={m.metastore_id} value={m.metastore_id} text={`${m.name} — ${m.metastore_id}`}>
+                      <div style={{ display: 'flex', flexDirection: 'column' }}>
+                        <strong>{m.name}</strong>
+                        <Caption1 style={{ color: tokens.colorNeutralForeground3 }}>
+                          {m.metastore_id}{m.region ? ` · ${m.region}` : ''}
+                        </Caption1>
+                      </div>
+                    </Option>
+                  ))}
+                </Dropdown>
+              </Field>
+            )}
+
+            {/* ---------- Purview registration + scan ---------- */}
+            <Divider style={{ margin: '16px 0' }} />
+            <div style={sectionHead}>
+              <ShieldTask24Regular style={{ color: tokens.colorBrandForeground1 }} />
+              <Subtitle2>Catalog in Microsoft Purview (optional)</Subtitle2>
+            </div>
+            {data.purview ? (
+              <>
+                <Checkbox
+                  checked={registerPurview}
+                  onChange={(_, d) => setRegisterPurview(!!d.checked)}
+                  label="Register this workspace as an Azure Databricks Unity Catalog source in Purview"
+                />
+                {registerPurview && (
+                  <>
+                    <Checkbox
+                      checked={runScan}
+                      onChange={(_, d) => setRunScan(!!d.checked)}
+                      label="Define + run a scan to catalog its metadata"
+                      style={{ marginTop: 4 }}
+                    />
+                    {runScan && (
+                      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12, marginTop: 8 }}>
+                        <Field label="SQL Warehouse HTTP path" hint="/sql/1.0/warehouses/…">
+                          <Input value={scanHttpPath} onChange={(_, d) => setScanHttpPath(d.value)} placeholder="/sql/1.0/warehouses/abc123" />
+                        </Field>
+                        <Field label="Purview credential (Key Vault Access Token)" hint="Name of the PAT credential in Purview">
+                          <Input value={scanCredential} onChange={(_, d) => setScanCredential(d.value)} placeholder="dbx-pat-credential" />
+                        </Field>
+                        <Field label="Integration runtime (optional)" hint="Defaults to the managed Azure IR">
+                          <Input value={scanIR} onChange={(_, d) => setScanIR(d.value)} placeholder="AzureAutoResolveIntegrationRuntime" />
+                        </Field>
+                      </div>
+                    )}
+                    <Caption1 style={{ display: 'block', marginTop: 6, color: tokens.colorNeutralForeground3 }}>
+                      Databricks scans require an Access Token stored in Key Vault (managed identity is not supported for
+                      Databricks) plus a running SQL Warehouse. Without scan config, only the source is registered.
+                    </Caption1>
+                  </>
+                )}
+              </>
+            ) : (
+              <MessageBar intent="warning">
+                <MessageBarBody>{data.purviewError || 'Purview not configured'}</MessageBarBody>
+              </MessageBar>
+            )}
+
             {probeError && (
               <MessageBar intent="error" className={s.mbTop}>
                 <MessageBarBody><MessageBarTitle>Registration failed</MessageBarTitle>{probeError}</MessageBarBody>
@@ -405,10 +613,13 @@ export default function MetastoresPage() {
               <Section bare className={s.probeResultCard}>
                 <div className={s.probeHead}>
                   <DatabaseLink24Regular className={s.okIcon} />
-                  <Body1><strong>{probeResult.probed}</strong> registered</Body1>
+                  <Body1><strong>{probeResult.probed}</strong> registered &amp; persisted</Body1>
                   <Badge appearance="tint" color="success">
                     {(probeResult.catalogs?.length ?? 0)} catalog{probeResult.catalogs?.length === 1 ? '' : 's'}
                   </Badge>
+                  {probeResult.registration?.ucAttached && <Badge appearance="tint" color="brand">UC attached</Badge>}
+                  {probeResult.registration?.purviewRegistered && <Badge appearance="tint" color="brand">Purview source</Badge>}
+                  {probeResult.registration?.purviewScanned && <Badge appearance="tint" color="success">Scan triggered</Badge>}
                 </div>
 
                 {probeResult.accountAdminGate && (
@@ -416,6 +627,36 @@ export default function MetastoresPage() {
                     <MessageBarBody>
                       <MessageBarTitle>{probeResult.accountAdminGate.title}</MessageBarTitle>
                       {probeResult.accountAdminGate.detail}
+                    </MessageBarBody>
+                  </MessageBar>
+                )}
+
+                {/* Per-step honest outcomes */}
+                {probeResult.steps?.attach?.gate && (
+                  <MessageBar intent="info" style={{ marginBottom: 10 }}>
+                    <MessageBarBody>{probeResult.steps.attach.gate.detail}</MessageBarBody>
+                  </MessageBar>
+                )}
+                {probeResult.steps?.attach?.error && (
+                  <MessageBar intent="warning" style={{ marginBottom: 10 }}>
+                    <MessageBarBody>Attach: {probeResult.steps.attach.error}</MessageBarBody>
+                  </MessageBar>
+                )}
+                {probeResult.steps?.purview?.gate && (
+                  <MessageBar intent="info" style={{ marginBottom: 10 }}>
+                    <MessageBarBody>{probeResult.steps.purview.gate.detail || probeResult.steps.purview.gate.followUp}</MessageBarBody>
+                  </MessageBar>
+                )}
+                {probeResult.steps?.purview?.error && (
+                  <MessageBar intent="warning" style={{ marginBottom: 10 }}>
+                    <MessageBarBody>Purview: {probeResult.steps.purview.error}</MessageBarBody>
+                  </MessageBar>
+                )}
+                {probeResult.steps?.purview?.scanGate && (
+                  <MessageBar intent="info" style={{ marginBottom: 10 }}>
+                    <MessageBarBody>
+                      <MessageBarTitle>{probeResult.steps.purview.scanGate.title}</MessageBarTitle>
+                      {probeResult.steps.purview.scanGate.detail}
                     </MessageBarBody>
                   </MessageBar>
                 )}
