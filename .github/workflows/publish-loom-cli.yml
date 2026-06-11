@@ -1,0 +1,61 @@
+name: publish-loom-cli
+
+# Publishes the @csa-loom/cli npm package (the `loom` CLI).
+#
+# Isolated from the repo's Python release-please flow on purpose: tag-triggered
+# so cutting a CLI release never touches the shared release PR machinery.
+#
+# Cut a release by pushing a tag:   git tag loom-cli-v0.1.0 && git push --tags
+# Or run manually via "Run workflow" (workflow_dispatch) for a dry-run.
+#
+# Requires repo/org secret NPM_TOKEN (an npm automation token with publish
+# rights to the @csa-loom scope). Without it, the publish step is skipped and
+# the build/test still run as a CI gate.
+
+on:
+  push:
+    tags:
+      - 'loom-cli-v*'
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: 'Build + test only; do not publish'
+        type: boolean
+        default: true
+
+permissions:
+  contents: read
+  id-token: write # npm provenance
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    defaults:
+      run:
+        working-directory: apps/loom-cli
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+
+      - uses: actions/setup-node@39370e3970a6d050c480ffad4ff0ed4d3fdee5af # v4
+        with:
+          node-version: '20'
+          registry-url: 'https://registry.npmjs.org'
+
+      - name: Install (CLI has no runtime deps; installs devDeps only)
+        run: npm install --no-audit --no-fund
+
+      - name: Typecheck
+        run: npm run typecheck
+
+      - name: Test
+        run: npm test
+
+      - name: Build
+        run: npm run build
+
+      - name: Publish to npm
+        if: ${{ github.event_name == 'push' && startsWith(github.ref, 'refs/tags/loom-cli-v') }}
+        run: npm publish --provenance --access public
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
