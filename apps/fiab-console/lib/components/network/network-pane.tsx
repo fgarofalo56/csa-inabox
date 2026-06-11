@@ -21,7 +21,7 @@ import {
   Spinner, MessageBar, MessageBarBody, MessageBarTitle, Button, Badge,
   Table, TableHeader, TableRow, TableHeaderCell, TableBody, TableCell,
   Subtitle2, Body1, Body1Strong, Caption1, Divider, Accordion, AccordionItem,
-  AccordionHeader, AccordionPanel, tokens,
+  AccordionHeader, AccordionPanel, Link, tokens,
 } from '@fluentui/react-components';
 import {
   Copy24Regular, Checkmark24Regular, ServerMultipleRegular,
@@ -135,7 +135,7 @@ function VnetGatewayCard() {
       <div style={head}>
         <PlugConnected24Regular />
         <Subtitle2>Virtual network (VNet) data gateway</Subtitle2>
-        <Badge appearance="outline" color="brand">Fabric tenant capability</Badge>
+        <Badge appearance="outline" color="brand" style={{ marginLeft: 'auto' }}>Fabric tenant capability</Badge>
       </div>
 
       <MessageBar intent="info" style={{ marginBottom: 12 }}>
@@ -175,7 +175,15 @@ function VnetGatewayCard() {
               </TableRow>
             </TableHeader>
             <TableBody>
-              {r.prereqs.map((p) => (
+              {r.prereqs.length === 0 ? (
+                <TableRow>
+                  <TableCell colSpan={3}>
+                    <Caption1 style={{ color: tokens.colorNeutralForeground3 }}>
+                      No prerequisites reported for this cloud boundary.
+                    </Caption1>
+                  </TableCell>
+                </TableRow>
+              ) : r.prereqs.map((p) => (
                 <TableRow key={p.id}>
                   <TableCell>
                     <Body1Strong>{p.label}</Body1Strong>
@@ -190,7 +198,7 @@ function VnetGatewayCard() {
                     <Caption1>{p.detail}</Caption1>
                     {p.docUrl && (
                       <Caption1 block style={{ marginTop: 2 }}>
-                        <a href={p.docUrl} target="_blank" rel="noreferrer">Microsoft Learn</a>
+                        <Link href={p.docUrl} target="_blank" rel="noreferrer">Microsoft Learn</Link>
                       </Caption1>
                     )}
                   </TableCell>
