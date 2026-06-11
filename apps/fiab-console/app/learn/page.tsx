@@ -182,12 +182,16 @@ const useStyles = makeStyles({
     display: 'inline-flex', alignItems: 'center', gap: '4px',
     color: tokens.colorBrandForeground1, fontWeight: tokens.fontWeightSemibold,
     fontSize: tokens.fontSizeBase300, textDecorationLine: 'none',
+    borderRadius: tokens.borderRadiusSmall,
     ':hover': { textDecorationLine: 'underline' },
+    ':focus-visible': { outline: `2px solid ${tokens.colorBrandStroke1}`, outlineOffset: '2px' },
   },
   listSecondary: {
     display: 'inline-flex', alignItems: 'center', gap: '4px',
     color: tokens.colorNeutralForeground3, fontSize: tokens.fontSizeBase200,
-    textDecorationLine: 'none', ':hover': { textDecorationLine: 'underline' },
+    textDecorationLine: 'none', borderRadius: tokens.borderRadiusSmall,
+    ':hover': { textDecorationLine: 'underline' },
+    ':focus-visible': { outline: `2px solid ${tokens.colorBrandStroke1}`, outlineOffset: '2px' },
   },
   listApp: {
     display: 'inline-flex', alignItems: 'center', gap: '4px',
