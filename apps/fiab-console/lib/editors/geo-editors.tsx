@@ -214,8 +214,13 @@ export function GeoMapEditor({ item, id }: { item: FabricItemType; id: string })
 
 function GeoMapEditorBody({ item, id }: { item: FabricItemType; id: string }) {
   const s = useStyles();
+  // Deployed Azure Maps account, surfaced from bicep as
+  // NEXT_PUBLIC_LOOM_AZURE_MAPS_ACCOUNT (Next.js inlines NEXT_PUBLIC_* at build
+  // time). Prefills the account field so the editor uses the *deployed*
+  // account rather than a free-text placeholder.
+  const configuredMapsAccount = process.env.NEXT_PUBLIC_LOOM_AZURE_MAPS_ACCOUNT || '';
   const { state, setState, loading, saving, savedAt, error, dirty, save } = useGeoItemState<GeoMapState>('geo-map', id, {
-    account: '', style: 'main', tileLayerUrl: '', overlayGeoJson: GEO_MAP_SAMPLE_OVERLAY,
+    account: configuredMapsAccount, style: 'main', tileLayerUrl: '', overlayGeoJson: GEO_MAP_SAMPLE_OVERLAY,
   });
   const [previewMsg, setPreviewMsg] = useState<{ intent: 'success' | 'error'; text: string } | null>(null);
   const canSave = dirty && !saving;
@@ -274,7 +279,10 @@ function GeoMapEditorBody({ item, id }: { item: FabricItemType; id: string }) {
             </MessageBar>
           )}
           <div className={s.field}><Label>Azure Maps account name</Label>
-            <Input value={state.account} onChange={(_: unknown, d: any) => setState((p) => ({ ...p, account: d.value }))} placeholder="maps-csa-loom" />
+            <Input value={state.account} onChange={(_: unknown, d: any) => setState((p) => ({ ...p, account: d.value }))} placeholder={configuredMapsAccount || 'maps-csa-loom'} />
+            {configuredMapsAccount && (
+              <Caption1>Deployed account <code>{configuredMapsAccount}</code> is bound from <code>NEXT_PUBLIC_LOOM_AZURE_MAPS_ACCOUNT</code>. Override above to point at a different Maps account.</Caption1>
+            )}
           </div>
           <div className={s.field}><Label>Style</Label>
             <Input value={state.style} onChange={(_: unknown, d: any) => setState((p) => ({ ...p, style: d.value }))} placeholder="main" />

@@ -75,6 +75,11 @@ param openaiEmbeddingsModel = 'text-embedding-3-large'
 // Power BI
 param powerBiSku = 'F64'                  // F-SKU available in GCC-H
 
+// Azure Maps — NOT available in GCC-High. azure-maps.bicep already gates on
+// boundary == Commercial || GCC, so this is documentary; the geo-map / map
+// editors render their honest-gate MessageBars here.
+param azureMapsEnabled = false
+
 // Network
 param hubVnetCidr = '10.0.0.0/16'
 

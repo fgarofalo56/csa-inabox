@@ -188,6 +188,25 @@ fi
 add LOOM_PURVIEW_ACCOUNT "$PURVIEW"
 
 # ---------------------------------------------------------------------------
+# Azure Maps — geo-map / map editors (static-tile basemap + reverse-geocode).
+# Global, non-regional account; reuse-first, else discover in the admin RG.
+# NOTE: bicep injects the primary key via a KV secretRef; this drift-bridge
+# injects it as a plain env var (the live app can't mint new secretRefs in a
+# --set-env-vars merge). The account NAME is not a secret.
+# ---------------------------------------------------------------------------
+MAPS_ACCT="${EXISTING_AZURE_MAPS_ACCOUNT:-}"
+MAPS_RG="${EXISTING_AZURE_MAPS_RG:-$ADMIN_RG}"
+if [[ -z "$MAPS_ACCT" ]]; then
+  MAPS_ACCT="$(q maps account list -g "$MAPS_RG" --query "[0].name" -o tsv)"
+fi
+add LOOM_AZURE_MAPS_ACCOUNT "$MAPS_ACCT"
+add NEXT_PUBLIC_LOOM_AZURE_MAPS_ACCOUNT "$MAPS_ACCT"
+if [[ -n "$MAPS_ACCT" ]]; then
+  MAPS_KEY="$(q maps account keys list -g "$MAPS_RG" -n "$MAPS_ACCT" --query "primaryKey" -o tsv)"
+  add NEXT_PUBLIC_LOOM_AZURE_MAPS_KEY "$MAPS_KEY"
+fi
+
+# ---------------------------------------------------------------------------
 # Apply — one merge update => one new console revision.
 # ---------------------------------------------------------------------------
 echo

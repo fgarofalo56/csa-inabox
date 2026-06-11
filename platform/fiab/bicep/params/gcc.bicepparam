@@ -48,6 +48,11 @@ param openaiEmbeddingsModel = 'text-embedding-3-large'
 // Power BI — GCC limitation
 param powerBiSku = 'P1'   // P-SKU only; F-SKU NOT in GCC
 
+// Azure Maps — Gen2 account deploys by default in GCC (azure-maps.bicep gates
+// on boundary == Commercial || GCC). Set EXISTING_AZURE_MAPS_ACCOUNT to bring
+// your own; leave unset to provision a fresh account + bind the env automatically.
+param loomAzureMapsAccount = readEnvironmentVariable('EXISTING_AZURE_MAPS_ACCOUNT', '')
+
 // Network
 param hubVnetCidr = '10.0.0.0/16'
 
