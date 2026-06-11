@@ -20,7 +20,7 @@ import { dedicatedTarget, executeQuery as synapseExecute } from './synapse-sql-c
 import { executeMgmtCommand, defaultDatabase, kustoConfigGate } from './kusto-client';
 
 export type AccessPermission = 'read' | 'write' | 'admin';
-export type AccessScopeType = 'adls-container' | 'warehouse' | 'kql-database' | 'workspace' | 'item' | 'collection';
+export type AccessScopeType = 'adls-container' | 'adls-path' | 'warehouse' | 'warehouse-schema' | 'kql-database' | 'workspace' | 'item' | 'collection';
 export type PrincipalType = 'User' | 'Group' | 'ServicePrincipal';
 
 /** Permission → Storage data-plane role for ADLS-container scopes. */
@@ -188,5 +188,91 @@ export async function revokeStructuredGrant(input: AccessGrantInput): Promise<vo
     }
   } catch {
     /* best-effort revoke — never block the policy delete */
+  }
+}
+
+// ══════════════════════════════════════════════════════════════════════════
+// DLP RESTRICT — schema-level enforcement on Synapse dedicated SQL.
+//
+// Restrict-access semantics map to **DENY** (an explicit block that overrides
+// any role-based grant), per the Microsoft Purview "Restrict access" action for
+// Fabric/Synapse. `DENY SELECT ON SCHEMA::[s]` is honored for Azure Synapse
+// dedicated pools and Fabric Warehouse. NOTE: DENY/REVOKE does not terminate
+// in-flight sessions — to cut access immediately, active requests must also be
+// killed (surfaced to the caller).
+//   https://learn.microsoft.com/sql/t-sql/statements/deny-schema-permissions-transact-sql
+//   https://learn.microsoft.com/azure/synapse-analytics/sql/shared-databases-access-control
+// ══════════════════════════════════════════════════════════════════════════
+
+export interface SchemaDenyInput {
+  /** UPN / display name of the Entra principal to block (required: CREATE USER). */
+  principalName: string;
+  /** SQL schema to deny SELECT on (e.g. `sales`, `dbo`). */
+  schema: string;
+}
+
+export interface SchemaDenyResult {
+  status: 'active' | 'pending' | 'error';
+  /** The exact DDL executed (for the audit record). */
+  statement?: string;
+  database?: string;
+  detail?: string;
+}
+
+/**
+ * Enumerate user schemas in the env-bound Synapse dedicated pool so the DLP
+ * wizard can present a dropdown (no free-text schema per loom-no-freeform-config).
+ * Returns an honest gate when the warehouse is not configured.
+ */
+export async function listWarehouseSchemas(): Promise<{ schemas: string[] } | { gate: string }> {
+  let target;
+  try { target = dedicatedTarget(); }
+  catch {
+    return { gate: 'The Azure-native warehouse is not configured: set LOOM_SYNAPSE_WORKSPACE and LOOM_SYNAPSE_DEDICATED_POOL to enumerate SQL schemas.' };
+  }
+  // User schemas only (system schema_ids fall outside 5..16383).
+  const res = await synapseExecute(
+    target,
+    `SELECT name FROM sys.schemas WHERE schema_id BETWEEN 5 AND 16383 ORDER BY name;`,
+  );
+  const schemas = (res.rows || [])
+    .map((r) => String((r as unknown[])[0] ?? '').trim())
+    .filter(Boolean);
+  return { schemas };
+}
+
+/** DLP restrict: DENY SELECT on a SQL schema to a principal (creating the user if absent). */
+export async function denySchemaAccess(input: SchemaDenyInput): Promise<SchemaDenyResult> {
+  const name = (input.principalName || '').trim();
+  const schema = (input.schema || '').trim();
+  if (!name) return { status: 'error', detail: 'A principal UPN / name is required to DENY warehouse schema access.' };
+  if (!schema) return { status: 'error', detail: 'A SQL schema name is required.' };
+  let target;
+  try { target = dedicatedTarget(); }
+  catch {
+    return { status: 'pending', detail: 'The Azure-native warehouse is not configured: set LOOM_SYNAPSE_WORKSPACE and LOOM_SYNAPSE_DEDICATED_POOL to enforce schema-level restrict.' };
+  }
+  const statement =
+    `IF NOT EXISTS (SELECT 1 FROM sys.database_principals WHERE name = ${sqlString(name)})\n` +
+    `  CREATE USER ${sqlBracket(name)} FROM EXTERNAL PROVIDER;\n` +
+    `DENY SELECT ON SCHEMA::${sqlBracket(schema)} TO ${sqlBracket(name)};`;
+  try {
+    await synapseExecute(target, statement);
+    return { status: 'active', statement, database: target.database, detail: `Denied SELECT on schema [${schema}] to ${name}.` };
+  } catch (e: any) {
+    return { status: 'error', statement, detail: (e?.message || String(e)).slice(0, 400) };
+  }
+}
+
+/** Inverse of {@link denySchemaAccess}: REVOKE the schema DENY (best-effort). */
+export async function revokeSchemaDeny(input: SchemaDenyInput): Promise<void> {
+  try {
+    const name = (input.principalName || '').trim();
+    const schema = (input.schema || '').trim();
+    if (!name || !schema) return;
+    const target = dedicatedTarget();
+    await synapseExecute(target, `REVOKE SELECT ON SCHEMA::${sqlBracket(schema)} TO ${sqlBracket(name)};`);
+  } catch {
+    /* best-effort */
   }
 }

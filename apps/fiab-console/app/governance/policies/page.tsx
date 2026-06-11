@@ -38,7 +38,7 @@ interface DlpMeta {
   enabled?: boolean;
   lastScannedAt?: string;
   scanTriggeredAt?: string;
-  restrictions?: Array<{ id: string; at: string; principalName?: string; principalId: string; scopeType: string; scopeRef: string; revokedRoleNames: string[]; armConfirmed: boolean }>;
+  restrictions?: Array<{ id: string; at: string; principalName?: string; principalId: string; scopeType: string; scopeRef: string; subPath?: string; schema?: string; revokedRoleNames: string[]; armConfirmed: boolean; aclConfirmed?: boolean }>;
 }
 
 const KINDS = ['DLP', 'Masking', 'RLS', 'Retention', 'Access'] as const;
@@ -81,8 +81,15 @@ export default function PoliciesPage() {
   const [scanMsg, setScanMsg] = useState<{ intent: 'warning' | 'success' | 'error'; title: string; body: string; portalLink?: string } | null>(null);
   // Restrict-access dialog
   const [rstOpen, setRstOpen] = useState(false);
-  const [rstScope, setRstScope] = useState<'adls-container' | 'warehouse' | 'kql-database'>('adls-container');
+  const [rstScope, setRstScope] = useState<'adls-container' | 'adls-path' | 'warehouse' | 'warehouse-schema' | 'kql-database'>('adls-container');
   const [rstRef, setRstRef] = useState('');
+  // adls-path: container + drill-down directory picker; warehouse-schema: schema dropdown.
+  const [rstSubPath, setRstSubPath] = useState('');
+  const [rstPathItems, setRstPathItems] = useState<Array<{ name: string; isDirectory: boolean }>>([]);
+  const [rstPathLoading, setRstPathLoading] = useState(false);
+  const [rstSchema, setRstSchema] = useState('');
+  const [rstSchemas, setRstSchemas] = useState<string[]>([]);
+  const [rstSchemaGate, setRstSchemaGate] = useState<string | null>(null);
   const [rstQuery, setRstQuery] = useState('');
   const [rstKind, setRstKind] = useState<'user' | 'group'>('user');
   const [rstResults, setRstResults] = useState<Array<{ id: string; type: string; displayName: string; upn?: string }>>([]);
@@ -122,6 +129,8 @@ export default function PoliciesPage() {
   const [accScope, setAccScope] = useState<'adls-container' | 'warehouse' | 'kql-database'>('adls-container');
   const [accKqlDb, setAccKqlDb] = useState('');
   const [kqlItems, setKqlItems] = useState<Array<{ id: string; name: string }>>([]);
+  // ADLS containers (shared by the access + restrict ADLS-path pickers).
+  const [containers, setContainers] = useState<string[]>([]);
 
   const searchPrincipals = useCallback(async () => {
     const q = accQuery.trim();
@@ -146,6 +155,35 @@ export default function PoliciesPage() {
     fetch('/api/items/by-type?types=kql-database').then((r) => r.json()).then((d) => {
       setKqlItems((d?.items || []).map((x: any) => ({ id: x.id, name: x.displayName || x.id })));
     }).catch(() => {});
+    fetch('/api/lakehouse/containers').then((r) => r.json()).then((d) => {
+      setContainers((d?.containers || []).map((c: any) => c.name).filter(Boolean));
+    }).catch(() => {});
+  }, []);
+
+  // Drill the directory tree of an ADLS container for the restrict path picker.
+  const loadRstPaths = useCallback(async (container: string, prefix: string) => {
+    if (!container) { setRstPathItems([]); return; }
+    setRstPathLoading(true);
+    try {
+      const r = await fetch(`/api/lakehouse/paths?container=${encodeURIComponent(container)}&prefix=${encodeURIComponent(prefix)}`);
+      const j = await r.json();
+      setRstPathItems(j.ok ? (j.paths || []).map((p: any) => ({ name: p.name, isDirectory: !!p.isDirectory })) : []);
+    } catch { setRstPathItems([]); }
+    finally { setRstPathLoading(false); }
+  }, []);
+
+  // Enumerate Synapse SQL schemas for the warehouse-schema restrict dropdown.
+  const loadRstSchemas = useCallback(async () => {
+    setRstSchemaGate(null);
+    try {
+      const r = await fetch('/api/governance/dlp/schemas');
+      const j = await r.json();
+      if (r.status === 503 || j?.code === 'warehouse_not_configured') {
+        setRstSchemas([]); setRstSchemaGate(j?.error || 'The Azure-native warehouse is not configured.');
+        return;
+      }
+      setRstSchemas(j.ok ? (j.schemas || []) : []);
+    } catch (e: any) { setRstSchemas([]); setRstSchemaGate(e?.message || String(e)); }
   }, []);
 
   const buildScope = (): string => scopeType === 'tenant' ? 'tenant' : `${scopeType}:${scopeTarget}`;
@@ -236,8 +274,16 @@ export default function PoliciesPage() {
 
   async function doRestrict() {
     if (!rstPicked) { setRstMsg({ intent: 'error', title: 'Pick a principal', body: 'Search and select the user/group to restrict.' }); return; }
-    if (rstScope !== 'warehouse' && !rstRef.trim()) {
-      setRstMsg({ intent: 'error', title: 'Scope required', body: `Enter the ${rstScope === 'adls-container' ? 'ADLS container' : 'KQL database'} to restrict.` });
+    if ((rstScope === 'adls-container' || rstScope === 'adls-path' || rstScope === 'kql-database') && !rstRef.trim()) {
+      setRstMsg({ intent: 'error', title: 'Scope required', body: `Select the ${rstScope === 'kql-database' ? 'KQL database' : 'ADLS container'} to restrict.` });
+      return;
+    }
+    if (rstScope === 'adls-path' && !rstSubPath.trim()) {
+      setRstMsg({ intent: 'error', title: 'Path required', body: 'Select the directory/file under the container to restrict.' });
+      return;
+    }
+    if (rstScope === 'warehouse-schema' && !rstSchema) {
+      setRstMsg({ intent: 'error', title: 'Schema required', body: 'Select the SQL schema to deny access on.' });
       return;
     }
     setRstBusy(true); setRstMsg(null);
@@ -246,7 +292,9 @@ export default function PoliciesPage() {
         method: 'POST', headers: { 'content-type': 'application/json' },
         body: JSON.stringify({
           scopeType: rstScope,
-          scopeRef: rstScope === 'warehouse' ? 'warehouse' : rstRef.trim(),
+          scopeRef: (rstScope === 'warehouse' || rstScope === 'warehouse-schema') ? 'warehouse' : rstRef.trim(),
+          subPath: rstScope === 'adls-path' ? rstSubPath.trim() : undefined,
+          schema: rstScope === 'warehouse-schema' ? rstSchema : undefined,
           principalId: rstPicked.id,
           principalName: rstPicked.upn || rstPicked.name,
           principalType: rstPicked.type,
@@ -261,10 +309,11 @@ export default function PoliciesPage() {
         setRstMsg({ intent: 'warning', title: 'Nothing to revoke', body: j.detail || 'Principal held no matching access.' });
       } else {
         const roles = (j.revokedRoleNames || []).join(', ') || '—';
+        const confirmedNote = j.armConfirmed ? ' Confirmed via ARM read-back.' : j.aclConfirmed ? ' Confirmed via ACL read-back.' : '';
         setRstMsg({
           intent: 'success',
-          title: 'Access revoked',
-          body: `Revoked ${roles} for ${rstPicked.name}.${j.armConfirmed ? ' Confirmed via ARM read-back.' : ''}${j.policiesUpdated ? ` ${j.policiesUpdated} policy record(s) updated.` : ''}`,
+          title: 'Access restricted',
+          body: `Revoked ${roles} for ${rstPicked.name}.${confirmedNote}${j.policiesUpdated ? ` ${j.policiesUpdated} policy record(s) updated.` : ''}${j.note ? ` ${j.note}` : ''}`,
         });
       }
       loadDlp(); load();
@@ -520,9 +569,14 @@ export default function PoliciesPage() {
             <Caption1 block style={{ color: tokens.colorNeutralForeground3, marginBottom: 4 }}>Recent restrict-access actions</Caption1>
             <div className={s.chips}>
               {dlpMeta!.restrictions!.slice(0, 8).map((r) => (
-                <Badge key={r.id} appearance="tint" color={r.armConfirmed ? 'success' : 'warning'}
-                  title={`${r.at.slice(0, 16).replace('T', ' ')} · ${r.revokedRoleNames.join(', ') || 'no roles'}${r.armConfirmed ? ' · ARM-confirmed' : ''}`}>
-                  {(r.principalName || r.principalId).slice(0, 28)} ⊘ {r.scopeType === 'adls-container' ? r.scopeRef : r.scopeType}
+                <Badge key={r.id} appearance="tint" color={(r.armConfirmed || r.aclConfirmed) ? 'success' : 'warning'}
+                  title={`${r.at.slice(0, 16).replace('T', ' ')} · ${r.revokedRoleNames.join(', ') || 'no roles'}${r.armConfirmed ? ' · ARM-confirmed' : r.aclConfirmed ? ' · ACL-confirmed' : ''}`}>
+                  {(r.principalName || r.principalId).slice(0, 28)} ⊘ {
+                    r.scopeType === 'adls-container' ? r.scopeRef
+                      : r.scopeType === 'adls-path' ? `${r.scopeRef}/${r.subPath || ''}`
+                      : r.scopeType === 'warehouse-schema' ? `schema ${r.schema || ''}`
+                      : r.scopeType
+                  }
                 </Badge>
               ))}
             </div>
@@ -729,25 +783,51 @@ export default function PoliciesPage() {
             <DialogContent>
               <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
                 <Caption1 style={{ color: tokens.colorNeutralForeground3 }}>
-                  Revokes a principal&apos;s <strong>real</strong> data-plane access on a scope. ADLS
-                  containers revoke a Storage RBAC role assignment (confirmed via ARM read-back);
-                  warehouse/KQL replay the inverse SQL/ADX grant. Exempt principals are never touched.
+                  Revokes a principal&apos;s <strong>real</strong> data-plane access on a scope.
+                  ADLS containers revoke a Storage RBAC role assignment (ARM read-back); ADLS paths
+                  remove the principal from the directory POSIX ACL (ACL read-back); warehouse schemas
+                  apply <code>DENY SELECT ON SCHEMA</code> on the Synapse pool; warehouse/KQL replay the
+                  inverse grant. Exempt principals are never touched.
                 </Caption1>
 
                 <div style={{ display: 'flex', gap: 12 }}>
                   <Field label="Scope (data plane)" style={{ flex: 1 }}>
                     <Dropdown
-                      value={rstScope === 'adls-container' ? 'ADLS container' : rstScope === 'warehouse' ? 'Warehouse (Synapse SQL)' : 'KQL database (ADX)'}
+                      value={
+                        rstScope === 'adls-container' ? 'ADLS container'
+                          : rstScope === 'adls-path' ? 'ADLS path (directory/file)'
+                          : rstScope === 'warehouse' ? 'Warehouse (Synapse SQL)'
+                          : rstScope === 'warehouse-schema' ? 'Warehouse schema (Synapse SQL)'
+                          : 'KQL database (ADX)'}
                       selectedOptions={[rstScope]}
-                      onOptionSelect={(_, d) => { setRstScope((d.optionValue as typeof rstScope) || 'adls-container'); setRstRef(''); }}>
+                      onOptionSelect={(_, d) => {
+                        const v = (d.optionValue as typeof rstScope) || 'adls-container';
+                        setRstScope(v); setRstRef(''); setRstSubPath(''); setRstPathItems([]); setRstSchema('');
+                        if (v === 'warehouse-schema') loadRstSchemas();
+                      }}>
                       <Option value="adls-container">ADLS container</Option>
+                      <Option value="adls-path">ADLS path (directory/file)</Option>
                       <Option value="warehouse">Warehouse (Synapse SQL)</Option>
+                      <Option value="warehouse-schema">Warehouse schema (Synapse SQL)</Option>
                       <Option value="kql-database">KQL database (ADX)</Option>
                     </Dropdown>
                   </Field>
                   {rstScope === 'adls-container' && (
                     <Field label="ADLS container" style={{ flex: 1 }}>
-                      <Input value={rstRef} placeholder="bronze" onChange={(_, d) => setRstRef(d.value)} />
+                      <Dropdown placeholder={containers.length ? 'Select…' : 'No containers found'} disabled={!containers.length}
+                        value={rstRef} selectedOptions={rstRef ? [rstRef] : []}
+                        onOptionSelect={(_, d) => setRstRef(d.optionValue || '')}>
+                        {containers.map((c) => <Option key={c} value={c}>{c}</Option>)}
+                      </Dropdown>
+                    </Field>
+                  )}
+                  {rstScope === 'adls-path' && (
+                    <Field label="ADLS container" style={{ flex: 1 }}>
+                      <Dropdown placeholder={containers.length ? 'Select…' : 'No containers found'} disabled={!containers.length}
+                        value={rstRef} selectedOptions={rstRef ? [rstRef] : []}
+                        onOptionSelect={(_, d) => { const c = d.optionValue || ''; setRstRef(c); setRstSubPath(''); loadRstPaths(c, ''); }}>
+                        {containers.map((c) => <Option key={c} value={c}>{c}</Option>)}
+                      </Dropdown>
                     </Field>
                   )}
                   {rstScope === 'kql-database' && (
@@ -759,7 +839,65 @@ export default function PoliciesPage() {
                       </Dropdown>
                     </Field>
                   )}
+                  {rstScope === 'warehouse-schema' && (
+                    <Field label="SQL schema" style={{ flex: 1 }}>
+                      <Dropdown placeholder={rstSchemas.length ? 'Select…' : (rstSchemaGate ? 'Warehouse not configured' : 'No schemas found')}
+                        disabled={!rstSchemas.length}
+                        value={rstSchema} selectedOptions={rstSchema ? [rstSchema] : []}
+                        onOptionSelect={(_, d) => setRstSchema(d.optionValue || '')}>
+                        {rstSchemas.map((sc) => <Option key={sc} value={sc}>{sc}</Option>)}
+                      </Dropdown>
+                    </Field>
+                  )}
                 </div>
+
+                {/* ADLS path drill-down picker — click a directory to descend. */}
+                {rstScope === 'adls-path' && rstRef && (
+                  <Field label="Path under the container"
+                    hint="ACLs restrict a principal granted via ACL. A principal holding container-level Storage RBAC is unaffected — restrict at the container scope to cover that.">
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+                      <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+                        <Caption1 style={{ fontFamily: 'Consolas, monospace' }}>{rstRef}/{rstSubPath || ''}</Caption1>
+                        {rstSubPath && (
+                          <Button size="small" appearance="subtle"
+                            onClick={() => { const parent = rstSubPath.split('/').slice(0, -1).join('/'); setRstSubPath(parent); loadRstPaths(rstRef, parent); }}>
+                            ↑ up
+                          </Button>
+                        )}
+                        {rstPathLoading && <Spinner size="tiny" />}
+                      </div>
+                      <div className={s.pickList}>
+                        {rstPathItems.length === 0 && !rstPathLoading && (
+                          <Caption1 style={{ color: tokens.colorNeutralForeground3 }}>No sub-paths here.</Caption1>
+                        )}
+                        {rstPathItems.map((p) => {
+                          const leaf = p.name.split('/').pop() || p.name;
+                          const selected = rstSubPath === p.name;
+                          return (
+                            <Button key={p.name} appearance={selected ? 'primary' : 'subtle'} style={{ justifyContent: 'flex-start' }}
+                              onClick={() => { setRstSubPath(p.name); if (p.isDirectory) loadRstPaths(rstRef, p.name); }}>
+                              {p.isDirectory ? '📁' : '📄'} {leaf}
+                            </Button>
+                          );
+                        })}
+                      </div>
+                    </div>
+                  </Field>
+                )}
+                {rstScope === 'warehouse-schema' && rstSchemaGate && (
+                  <MessageBar intent="warning">
+                    <MessageBarBody>
+                      <MessageBarTitle>Warehouse not configured</MessageBarTitle>
+                      {rstSchemaGate} Set <code>LOOM_SYNAPSE_WORKSPACE</code> and <code>LOOM_SYNAPSE_DEDICATED_POOL</code> on the Console Container App.
+                    </MessageBarBody>
+                  </MessageBar>
+                )}
+                {rstScope === 'warehouse-schema' && (
+                  <Caption1 style={{ color: tokens.colorNeutralForeground3 }}>
+                    Applies <code>DENY SELECT ON SCHEMA</code> to the principal on the configured Synapse dedicated pool.
+                    DENY does not terminate in-flight sessions — kill active requests to cut access immediately.
+                  </Caption1>
+                )}
 
                 <Field label="Principal to restrict — search Entra users / groups">
                   <div style={{ display: 'flex', gap: 8 }}>
