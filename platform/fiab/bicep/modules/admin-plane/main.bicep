@@ -18,6 +18,9 @@ param loomAzureCloud string = ''
 @allowed(['containerApps', 'aks'])
 param containerPlatform string
 
+@description('Optional registry/host prefix MCP catalog images are mirrored to (e.g. an ACR login server for air-gapped boundaries). Empty pulls from the upstream Docker MCP catalog / mcr.microsoft.com. Read by lib/azure/mcp-catalog.ts resolveCatalogImage().')
+param loomMcpCatalogRegistry string = ''
+
 @description('Functions host SKU. Reserved for v3.x — declared so the orchestrator contract is stable while the Functions host wiring is deferred.')
 #disable-next-line no-unused-params
 param functionsHostSku string
@@ -942,6 +945,9 @@ module keyvault 'keyvault.bicep' = {
     consolePrincipalId: identity.outputs.uamiConsolePrincipalId
     mcpPrincipalId: identity.outputs.uamiMcpPrincipalId
     consolePrincipalNeedsCmkRole: consolePrincipalNeedsCmkBind
+    // MCP app UAMI gets Key Vault Secrets User (read-only) so catalog-deployed
+    // MCP servers can resolve their auth secret via Container Apps secretRef.
+    mcpPrincipalId: identity.outputs.uamiMcpPrincipalId
     skipRoleGrants: skipRoleGrants
     privateEndpointSubnetId: network.outputs.privateEndpointsSubnetId
     privateDnsZoneVaultId: network.outputs.privateDnsZoneIds.keyvault
@@ -1465,6 +1471,18 @@ module aiDefense 'ai-defense.bicep' = {
 //                     Mirroring, Direct-Lake Shim, Presidio if Gov)
 // =====================================================================
 
+// MCP catalog Azure Files share + Container Apps env storage. Catalog-deployed
+// MCP servers (filesystem/git/memory) mount this at /data. Container Apps path
+// only — the AKS boundaries deploy MCP workloads via the GitOps manifest path.
+module mcpStorage 'mcp-storage.bicep' = if (containerPlatform == 'containerApps' && deployAppsEnabled) {
+  name: 'mcp-storage'
+  params: {
+    location: location
+    caeName: containerPlatformModule.outputs.caeName
+    complianceTags: complianceTags
+  }
+}
+
 module appDeployments 'app-deployments.bicep' = if (containerPlatform == 'containerApps' && deployAppsEnabled) {
   name: 'app-deployments'
   // The loom-mcp app references the mcp-data managedEnvironments/storages
@@ -1498,6 +1516,25 @@ module appDeployments 'app-deployments.bicep' = if (containerPlatform == 'contai
             { name: 'NEXT_PUBLIC_LOOM_VERSION', value: loomVersion }
             { name: 'LOOM_SUBSCRIPTION_ID', value: subscription().subscriptionId }
             { name: 'LOOM_ADMIN_RG', value: resourceGroup().name }
+            // MCP catalog deploy (admin → Copilot & Agents → Deploy from catalog).
+            // The deploy/status/delete BFF routes PUT/GET/DELETE
+            // Microsoft.App/containerApps via ARM, binding each server to the MCP
+            // UAMI and (optionally) mounting the Loom MCP Azure Files share. These
+            // are wired only on the Container Apps boundary; on AKS the deploy
+            // route honest-gates (LOOM_CONTAINER_PLATFORM=aks).
+            { name: 'LOOM_CONTAINER_PLATFORM', value: containerPlatform }
+            { name: 'LOOM_CAE_ID', value: containerPlatform == 'containerApps' ? containerPlatformModule.outputs.caeId : '' }
+            { name: 'LOOM_CAE_NAME', value: containerPlatform == 'containerApps' ? containerPlatformModule.outputs.caeName : '' }
+            { name: 'LOOM_CAE_DEFAULT_DOMAIN', value: containerPlatform == 'containerApps' ? containerPlatformModule.outputs.caeDefaultDomain : '' }
+            { name: 'LOOM_ACR_LOGIN_SERVER', value: registry.outputs.acrLoginServer }
+            { name: 'LOOM_MCP_UAMI_ID', value: identity.outputs.uamiMcpId }
+            { name: 'LOOM_MCP_UAMI_CLIENT_ID', value: identity.outputs.uamiMcpClientId }
+            // Azure Files env-storage name for catalog MCP servers that mount /data.
+            { name: 'LOOM_MCP_STORAGE_NAME', value: (containerPlatform == 'containerApps' && deployAppsEnabled) ? mcpStorage!.outputs.envStorageName : '' }
+            { name: 'LOOM_MCP_FILE_SHARE', value: (containerPlatform == 'containerApps' && deployAppsEnabled) ? mcpStorage!.outputs.fileShareName : '' }
+            // Optional ACR mirror prefix for catalog MCP images in air-gapped
+            // boundaries (empty → upstream Docker MCP catalog / mcr.microsoft.com).
+            { name: 'LOOM_MCP_CATALOG_REGISTRY', value: loomMcpCatalogRegistry }
             // F15 Advanced networking — the workspace networking pane writes NSG
             // security rules (IP firewall + trusted instances) + private
             // endpoints (inbound protection + outbound rules) over ARM on the hub
