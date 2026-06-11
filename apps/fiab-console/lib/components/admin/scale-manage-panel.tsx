@@ -150,23 +150,15 @@ export function ScaleManagePanel() {
                     onClick={() => act(it, { action: 'pause' })}>Pause</Button>
                 </>
               )}
-              {it.kind === 'shir-vmss' && (
+              {(it.kind === 'shir-vmss' || it.kind === 'purview-shir-vmss') && (
                 <>
-                  <Button size="small" appearance="primary" icon={<Play16Regular />} disabled={isBusy || (it.capacity ?? 0) > 0}
+                  <Button size="small" appearance="primary" icon={isBusy ? <Spinner size="tiny" /> : <Play16Regular />} disabled={isBusy || (it.capacity ?? 0) > 0}
                     onClick={() => act(it, { action: 'scale', capacity: 4 })}>Start (4)</Button>
                   <Button size="small" icon={<Pause16Regular />} disabled={isBusy || (it.capacity ?? 0) === 0}
                     onClick={() => act(it, { action: 'scale', capacity: 0 })}>Stop (0)</Button>
                 </>
               )}
-              {it.kind === 'purview-shir-vmss' && (
-                <>
-                  <Button size="small" appearance="primary" icon={<Play16Regular />} disabled={isBusy || (it.capacity ?? 0) > 0}
-                    onClick={() => act(it, { action: 'scale', capacity: 4 })}>Start (4)</Button>
-                  <Button size="small" icon={<Pause16Regular />} disabled={isBusy || (it.capacity ?? 0) === 0}
-                    onClick={() => act(it, { action: 'scale', capacity: 0 })}>Stop (0)</Button>
-                </>
-              )}
-              <Button size="small" appearance="subtle" icon={<ArrowSync16Regular />} onClick={load} disabled={isBusy} title="Refresh" />
+              <Button size="small" appearance="subtle" icon={<ArrowSync16Regular />} onClick={load} disabled={isBusy} title="Refresh state" aria-label={`Refresh ${it.name}`} />
             </div>
 
             {msg && msg.id === id && (
