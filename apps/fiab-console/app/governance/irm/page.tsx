@@ -68,12 +68,23 @@ const useStyles = makeStyles({
     gap: 12, marginBottom: 20,
   },
   statCard: {
-    padding: 16, borderRadius: 8,
+    position: 'relative', padding: 16, borderRadius: 8, overflow: 'hidden',
     border: `1px solid ${tokens.colorNeutralStroke2}`,
     backgroundColor: tokens.colorNeutralBackground1,
+    transition: 'box-shadow 120ms ease, transform 120ms ease',
+    ':hover': { boxShadow: tokens.shadow8, transform: 'translateY(-1px)' },
   },
-  statVal: { fontSize: 28, fontWeight: 600, color: tokens.colorBrandForeground1 },
+  statCardAlert: {
+    borderColor: tokens.colorPaletteRedBorder2,
+    '::before': {
+      content: '""', position: 'absolute', insetBlock: 0, insetInlineStart: 0, width: 3,
+      backgroundColor: tokens.colorPaletteRedBackground3,
+    },
+  },
+  statVal: { fontSize: 28, fontWeight: 600, color: tokens.colorBrandForeground1, lineHeight: '32px' },
+  statValAlert: { color: tokens.colorPaletteRedForeground1 },
   statLabel: { fontSize: 12, color: tokens.colorNeutralForeground3 },
+  sectionHeader: { display: 'flex', alignItems: 'center', gap: 8, marginBottom: 8 },
   settings: {
     padding: 16, borderRadius: 8, marginBottom: 20,
     border: `1px solid ${tokens.colorNeutralStroke2}`,
@@ -86,7 +97,7 @@ const useStyles = makeStyles({
     display: 'flex', flexDirection: 'column', gap: 2,
     padding: '8px 0',
   },
-  toolbar: { display: 'flex', justifyContent: 'flex-end', gap: 8, marginBottom: 12 },
+  toolbar: { display: 'flex', flexWrap: 'wrap', justifyContent: 'flex-end', gap: 8, marginBottom: 12 },
 });
 
 const sevColor = (s: Severity): 'danger' | 'warning' | 'informative' =>
@@ -257,12 +268,12 @@ export default function IrmPage() {
       {data && !loading && (
         <>
           <div className={s.statsRow}>
-            <div className={s.statCard}>
-              <div className={s.statVal}>{data.kpis.usersAtRisk}</div>
+            <div className={`${s.statCard} ${data.kpis.usersAtRisk > 0 ? s.statCardAlert : ''}`}>
+              <div className={`${s.statVal} ${data.kpis.usersAtRisk > 0 ? s.statValAlert : ''}`}>{data.kpis.usersAtRisk}</div>
               <div className={s.statLabel}>users at risk</div>
             </div>
-            <div className={s.statCard}>
-              <div className={s.statVal}>{data.kpis.unusualVolumeAlerts}</div>
+            <div className={`${s.statCard} ${data.kpis.unusualVolumeAlerts > 0 ? s.statCardAlert : ''}`}>
+              <div className={`${s.statVal} ${data.kpis.unusualVolumeAlerts > 0 ? s.statValAlert : ''}`}>{data.kpis.unusualVolumeAlerts}</div>
               <div className={s.statLabel}>unusual-volume alerts</div>
             </div>
             <div className={s.statCard}>
@@ -283,7 +294,12 @@ export default function IrmPage() {
             </div>
           </div>
 
-          <Subtitle2 style={{ display: 'block', marginBottom: 8 }}>Risk indicators</Subtitle2>
+          <div className={s.sectionHeader}>
+            <Subtitle2>Risk indicators</Subtitle2>
+            {data.findings.length > 0 && (
+              <Badge appearance="tint" color={sevColor(data.findings[0].severity)} size="small">{data.findings.length}</Badge>
+            )}
+          </div>
           {data.findings.length === 0 ? (
             <MessageBar intent="success" style={{ marginBottom: 20 }}>
               <MessageBarBody>
@@ -325,7 +341,12 @@ export default function IrmPage() {
             </div>
           )}
 
-          <Subtitle2 style={{ display: 'block', marginBottom: 8 }}>Top actors by risk</Subtitle2>
+          <div className={s.sectionHeader}>
+            <Subtitle2>Top actors by risk</Subtitle2>
+            {data.topActors.length > 0 && (
+              <Badge appearance="tint" color="brand" size="small">{data.topActors.length}</Badge>
+            )}
+          </div>
           {data.topActors.length === 0 ? (
             <Caption1 style={{ color: tokens.colorNeutralForeground3, display: 'flex', alignItems: 'center', gap: 6 }}>
               <ShieldError24Regular style={{ color: tokens.colorPaletteGreenForeground1 }} /> No flagged actors.

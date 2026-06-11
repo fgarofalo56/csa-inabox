@@ -35,6 +35,8 @@ const useStyles = makeStyles({
   sidebar: {
     display: 'flex', flexDirection: 'column', gap: 2,
     borderRight: `1px solid ${tokens.colorNeutralStroke2}`, paddingRight: 12,
+    position: 'sticky', top: 16, alignSelf: 'start',
+    maxHeight: 'calc(100vh - 32px)', overflowY: 'auto',
   },
   item: {
     display: 'flex', flexDirection: 'column', gap: 2,
