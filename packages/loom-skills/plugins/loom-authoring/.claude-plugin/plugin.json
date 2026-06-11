@@ -1,0 +1,7 @@
+{
+  "name": "loom-authoring",
+  "version": "0.1.0",
+  "description": "Developer skills for authoring CSA Loom items on Azure-native backends. Components are declared in the loom-collection marketplace entry.",
+  "author": { "name": "Frank Garofalo" },
+  "license": "MIT"
+}
