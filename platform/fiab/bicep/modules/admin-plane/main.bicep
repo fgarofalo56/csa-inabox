@@ -59,6 +59,9 @@ param atlasOnAksEnabled bool
 @description('Wire LOOM_DATABRICKS_HOSTNAMES into the console for Unity Catalog federation')
 param databricksUnityCatalogEnabled bool = false
 
+@description('Optional Databricks SQL warehouse id used to read Unity Catalog system-table lineage (system.access.table_lineage). Empty = the unified-lineage service falls back to the REST lineage-tracking preview. Requires the Loom UAMI to have USE SCHEMA + SELECT on system.access in the metastore.')
+param loomDatabricksLineageWarehouseId string = ''
+
 @description('Notebook per-cell execution backend (F16). Azure-native default is Synapse Spark Livy. Set to "databricks" to opt into the Databricks Execution Context API, or "aml-ci" to execute against an Azure ML Compute-Instance Jupyter kernel (listNotebookAccessToken → Jupyter contents + kernel WebSocket; reuses LOOM_AML_*/LOOM_FOUNDRY_* + LOOM_SUBSCRIPTION_ID, no new vars). Must NOT be "databricks" at IL5.')
 @allowed(['', 'synapse', 'databricks', 'aml-ci'])
 param loomNotebookBackend string = ''
@@ -2497,6 +2500,13 @@ module appDeployments 'app-deployments.bicep' = if (containerPlatform == 'contai
             // until patched post-deploy from the DLZ workspaceUrl, so UC gates
             // honestly rather than calling a phantom host (per no-vaporware.md).
             { name: 'LOOM_DATABRICKS_HOSTNAMES', value: effDatabricksHostname }
+          ] : [],
+          // Unified-lineage system-table warehouse (optional). When set, the
+          // /api/.../lineage routes read system.access.table_lineage for the
+          // entity-aware (notebook/job/pipeline) lineage depth; empty falls
+          // back to the REST lineage-tracking preview. See unified-lineage.ts.
+          !empty(loomDatabricksLineageWarehouseId) ? [
+            { name: 'LOOM_DATABRICKS_LINEAGE_WAREHOUSE_ID', value: loomDatabricksLineageWarehouseId }
           ] : [],
           // Fabric API base is always set — the runtime gates on UAMI authz.
           [

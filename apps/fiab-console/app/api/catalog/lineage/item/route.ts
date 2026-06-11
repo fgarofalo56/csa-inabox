@@ -1,9 +1,17 @@
 /**
- * GET /api/catalog/lineage/item?source=...&id=...&type=...&host=...&workspaceId=...
+ * GET /api/catalog/lineage/item?source=...&id=...&type=...&host=...&workspaceId=...&merge=true
  *   Per-item lineage resolver. Returns upstream + downstream items from real relationships.
  *   - onelake: semantic-model→report (admin scan), dataflow→table, pipeline→item, mirror→table
  *   - purview: Atlas relationships
  *   - unity-catalog: table lineage tracking
+ *
+ *   When `merge=true` the resolver returns the UNIFIED graph: it overlays the
+ *   asset's own source with the other Azure-native lineage sources (Purview
+ *   Data Map + Unity Catalog + Weave/Thread edges) collapsed by a common asset
+ *   identity (see lib/azure/unified-lineage.ts). Per-source gates are reported
+ *   in `sources[]` so one source's gate never blanks the graph. Fabric/OneLake
+ *   focus assets are NOT unified (the admin scan is opt-in only); they keep the
+ *   single-source behaviour below.
  */
 import { NextRequest, NextResponse } from 'next/server';
 import { getSession } from '@/lib/auth/session';
@@ -11,11 +19,12 @@ import { getLineageSubgraph, PurviewNotConfiguredError, PurviewError } from '@/l
 import { getTableLineage, UnityCatalogNotConfiguredError, UnityCatalogError } from '@/lib/azure/unity-catalog-client';
 import { getWorkspaceLineage, OneLakeError, OneLakeLineageNotSupportedError } from '@/lib/azure/onelake-catalog-client';
 import { getFabricItem } from '@/lib/azure/fabric-client';
+import { getUnifiedLineage } from '@/lib/azure/unified-lineage';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
 
-export interface CanvasLineageNode { id: string; label: string; type?: string; source: 'purview'|'unity-catalog'|'onelake'; focus?: boolean; columns?: string[]; openHref?: string; multiSource?: string[]; }
+export interface CanvasLineageNode { id: string; label: string; type?: string; source: 'purview'|'unity-catalog'|'onelake'|'weave'; focus?: boolean; columns?: string[]; openHref?: string; multiSource?: string[]; identity?: string; }
 export interface CanvasLineageEdge { from: string; to: string; type?: string; }
 
 export async function GET(req: NextRequest) {
@@ -25,7 +34,26 @@ export async function GET(req: NextRequest) {
   const id = req.nextUrl.searchParams.get('id') || '';
   const host = req.nextUrl.searchParams.get('host') || '';
   const workspaceId = req.nextUrl.searchParams.get('workspaceId') || '';
+  const merge = req.nextUrl.searchParams.get('merge') === 'true';
+  const itemId = req.nextUrl.searchParams.get('itemId') || undefined;
   if (!source || !id) return NextResponse.json({ ok: false, error: 'source and id required' }, { status: 400 });
+
+  // Unified merge: overlay the asset's own source with the other Azure-native
+  // lineage sources. Fabric/OneLake focus assets stay single-source.
+  if (merge && (source === 'purview' || source === 'unity-catalog')) {
+    try {
+      const result = await getUnifiedLineage({
+        session: s,
+        purviewGuid: source === 'purview' ? id : undefined,
+        ucFullName: source === 'unity-catalog' ? id : undefined,
+        ucHost: source === 'unity-catalog' ? (host || undefined) : undefined,
+        itemId,
+      });
+      return NextResponse.json({ source, merged: true, ...result });
+    } catch (e: any) {
+      return NextResponse.json({ ok: false, error: e?.message || String(e) }, { status: 500 });
+    }
+  }
 
   try {
     if (source === 'purview') {
