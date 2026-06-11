@@ -168,27 +168,29 @@ export default function ScalingPage() {
   const [mcpState, setMcpState] = useState<{ applying?: boolean; error?: string; ok?: string }>({});
 
   useEffect(() => {
-    // Parallel fetch all GETs.
-    Promise.all([
-      jsonGet('/api/admin/scaling/capacity'),
-      jsonGet('/api/admin/scaling/synapse-dwu'),
-      jsonGet('/api/admin/scaling/adx'),
-      jsonGet('/api/admin/scaling/databricks-warehouse'),
-      jsonGet('/api/admin/scaling/databricks-cluster'),
-      jsonGet('/api/admin/scaling/ai-search'),
-      jsonGet('/api/admin/scaling/apim'),
-      jsonGet('/api/admin/scaling/cosmos'),
-      jsonGet('/api/admin/scaling/container-apps'),
-      jsonGet('/api/admin/scaling/foundry-compute'),
-      jsonGet('/api/admin/mcp-servers/deploy'),
-    ]).then(([cap, dwu, adx, wh, cl, srch, apim, cos, aca, fnd, mcp]) => {
-      // 401 across the board means unauthed
+    // Fire every GET in parallel but populate each card independently as its
+    // own response lands — one slow backend no longer holds the whole page on
+    // a spinner. `cancelled` guards against setState after unmount.
+    let cancelled = false;
+    const when = <T,>(fn: (v: T) => void) => (v: T) => { if (!cancelled) fn(v); };
+
+    // Capacity is the primary probe for the unauthenticated state.
+    jsonGet('/api/admin/scaling/capacity').then(when((cap: any) => {
       if (cap?.error === 'unauthenticated') { setUnauth(true); return; }
-      setCapacityData(cap); setDwuData(dwu); setAdxData(adx);
-      setWhData(wh); setClusterData(cl); setSearchData(srch);
-      setApimData(apim); setCosmosData(cos); setAcaData(aca); setFoundryData(fnd);
-      setMcpData(mcp);
-    }).catch(() => { /* keep partials */ });
+      setCapacityData(cap);
+    }));
+    jsonGet('/api/admin/scaling/synapse-dwu').then(when(setDwuData));
+    jsonGet('/api/admin/scaling/adx').then(when(setAdxData));
+    jsonGet('/api/admin/scaling/databricks-warehouse').then(when(setWhData));
+    jsonGet('/api/admin/scaling/databricks-cluster').then(when(setClusterData));
+    jsonGet('/api/admin/scaling/ai-search').then(when(setSearchData));
+    jsonGet('/api/admin/scaling/apim').then(when(setApimData));
+    jsonGet('/api/admin/scaling/cosmos').then(when(setCosmosData));
+    jsonGet('/api/admin/scaling/container-apps').then(when(setAcaData));
+    jsonGet('/api/admin/scaling/foundry-compute').then(when(setFoundryData));
+    jsonGet('/api/admin/mcp-servers/deploy').then(when(setMcpData));
+
+    return () => { cancelled = true; };
   }, []);
 
   if (unauth) {
@@ -204,8 +206,8 @@ export default function ScalingPage() {
   // Inline status (error/ok) shown under each Apply button.
   const statusCell = (st: { error?: string; ok?: string }) => (
     <>
-      {st.error && <Caption1 className={styles.errorText}>{st.error}</Caption1>}
-      {st.ok && <Caption1 className={styles.okText}>{st.ok}</Caption1>}
+      {st.error && <Caption1 role="alert" className={styles.errorText}>{st.error}</Caption1>}
+      {st.ok && <Caption1 role="status" className={styles.okText}>{st.ok}</Caption1>}
     </>
   );
 
