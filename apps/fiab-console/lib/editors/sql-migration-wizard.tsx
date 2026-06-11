@@ -49,7 +49,7 @@ import {
   CheckmarkCircle20Filled,
   Warning20Filled,
   Info20Regular,
-  DatabasePlug20Regular,
+  DatabasePlugConnected20Regular,
   DocumentArrowDown20Regular,
 } from '@fluentui/react-icons';
 
@@ -539,7 +539,7 @@ export function SqlMigrationWizard() {
           <div className={s.actions} style={{ marginTop: 12 }}>
             <Button
               appearance="primary"
-              icon={importing ? <Spinner size="tiny" /> : <DatabasePlug20Regular />}
+              icon={importing ? <Spinner size="tiny" /> : <DatabasePlugConnected20Regular />}
               disabled={importing || availableKinds.every((k) => !selectedKinds.has(k))}
               onClick={runImport}
             >
