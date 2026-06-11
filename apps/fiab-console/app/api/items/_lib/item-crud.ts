@@ -17,6 +17,7 @@ import {
   upsertGovernanceItem, deleteGovernanceItem, docForGovernanceItem, isCatalogDataType,
 } from '@/lib/azure/governance-catalog-index';
 import { autoOnboardToPurview } from '@/lib/azure/purview-autoonboard';
+import { reconcileThreadEdgesOnDelete, restoreThreadEdgesForItem } from '@/lib/thread/thread-edges';
 import { labelRank } from '@/lib/governance/label-propagation';
 import type { Workspace, WorkspaceItem } from '@/lib/types/workspace';
 
@@ -375,6 +376,9 @@ export async function deleteOwnedItem(
   // Remove the data-product mirror from the discovery index (best-effort; no-throw).
   if (itemType === 'data-product') void deleteDataProductDoc(`dp:${current.id}`);
   void deleteGovernanceItem(current.id);
+  // Auto-reconcile lineage — hard-remove every Thread edge touching this item so
+  // the Weave lineage graph never shows stale edges (best-effort; no-throw).
+  void reconcileThreadEdgesOnDelete(tenantId, current.id, { mode: 'remove' });
   return true;
 }
 
@@ -464,6 +468,10 @@ export async function softDeleteOwnedItem(
   void deleteLoomDoc(`it:${current.id}`);
   if (itemType === 'data-product') void deleteDataProductDoc(`dp:${current.id}`);
   void deleteGovernanceItem(current.id);
+  // Auto-reconcile lineage — tombstone (don't hard-remove) every Thread edge
+  // touching this item so the Weave graph hides stale lineage while the item is
+  // recycled; restoreOwnedItem un-tombstones it (best-effort; no-throw).
+  void reconcileThreadEdgesOnDelete(tenantId, current.id, { mode: 'tombstone' });
   return resource!;
 }
 
@@ -501,6 +509,9 @@ export async function restoreOwnedItem(
   void upsertLoomDoc(docForItem(restored!, tenantId));
   void mirrorDataProduct(restored!, tenantId);
   void mirrorGovernanceDoc(restored!, tenantId);
+  // Auto-reconcile lineage — un-tombstone every Thread edge this item's
+  // soft-delete had hidden, bringing its lineage back (best-effort; no-throw).
+  void restoreThreadEdgesForItem(tenantId, restored!.id);
   return restored!;
 }
 
@@ -517,5 +528,7 @@ export async function purgeRecycledItem(itemId: string, tenantId: string): Promi
   void deleteLoomDoc(`it:${current.id}`);
   if (current.itemType === 'data-product') void deleteDataProductDoc(`dp:${current.id}`);
   void deleteGovernanceItem(current.id);
+  // Auto-reconcile lineage — hard-remove the item's edges on permanent purge.
+  void reconcileThreadEdgesOnDelete(tenantId, current.id, { mode: 'remove' });
   return true;
 }

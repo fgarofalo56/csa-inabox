@@ -8,26 +8,43 @@
  * Power BI model, API publish). Real data from GET /api/thread/edges (Cosmos
  * `thread-edges`); an empty graph is an honest empty state, not an error.
  *
- * Fluent v9 + Loom tokens (loom-design-standards). A Tile | List ViewToggle
- * switches between an ItemTile grid (one card per edge, keyed on the target
- * item's visual) and the shared LoomDataTable (sortable / filterable /
- * resizable). Loom targets deep-link to their editor; external targets (e.g. a
- * Power BI model) open in the service. The view choice persists to localStorage.
+ * Three views (Graph | Tiles | List), toggled with a Fluent TabList — the same
+ * dual affordance the Microsoft Purview portal lineage tab and Databricks
+ * Catalog Explorer use (interactive graph + tabular relationships), plus the
+ * Loom ItemTile grid used across collection surfaces:
+ *   • Graph — the shared LineageCanvas (@xyflow/react): nodes typed by object,
+ *     directional arrow edges, click-to-focus the upstream/downstream chain,
+ *     minimap, search filter, "Open item" deep-link. Identical engine to the
+ *     Unified Catalog → Lineage tab so both surfaces look and behave the same.
+ *   • Tiles — an ItemTile grid (one card per edge, keyed on the target item's
+ *     visual).
+ *   • List — the shared LoomDataTable (sortable / filterable / resizable).
+ *
+ * Deleted/recycled items no longer appear: the BFF excludes tombstoned edges
+ * (see reconcileThreadEdgesOnDelete), so stale lineage never shows here.
+ *
+ * Fluent v9 + Loom tokens (loom-design-standards). Loom targets deep-link to
+ * their editor; external targets (e.g. a Power BI model) open in the service.
+ * The view choice persists to localStorage.
  */
 
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import {
   Title2, Body1, Caption1, Badge, Card, Spinner, MessageBar, MessageBarBody,
-  MessageBarTitle, Link as FluentLink, makeStyles, tokens,
+  MessageBarTitle, Link as FluentLink, TabList, Tab, Button, makeStyles, tokens,
 } from '@fluentui/react-components';
 import {
   Branch24Regular, ArrowRight16Regular, Open16Regular,
+  Flowchart20Regular, Table20Regular, Grid20Regular, ZoomFit20Regular,
 } from '@fluentui/react-icons';
 import { LoomDataTable, type LoomColumn } from '@/lib/components/ui/loom-data-table';
-import { ViewToggle, type LoomView } from '@/lib/components/ui/view-toggle';
 import { ItemTile } from '@/lib/components/ui/item-tile';
 import { TileGrid } from '@/lib/components/ui/tile-grid';
+import {
+  LineageCanvas, type LineageCanvasHandle,
+  type CanvasLineageNode, type CanvasLineageEdge,
+} from '@/lib/components/catalog/lineage-canvas';
 
 interface ThreadEdge {
   id: string;
@@ -36,6 +53,8 @@ interface ThreadEdge {
   toExternal?: boolean; toLink?: string;
   action: string; createdAt: string; createdBy?: string;
 }
+
+type ThreadView = 'graph' | 'tile' | 'list';
 
 const LS_VIEW = 'loom.thread.viewMode.v1';
 
@@ -67,7 +86,7 @@ const useStyles = makeStyles({
   kpiNum: { fontSize: tokens.fontSizeHero700, fontWeight: tokens.fontWeightSemibold, lineHeight: '1' },
   endpoint: { display: 'inline-flex', alignItems: 'center', gap: tokens.spacingHorizontalXXS },
   arrow: { color: tokens.colorNeutralForeground3, verticalAlign: 'middle' },
-  toolbar: { display: 'flex', alignItems: 'center', justifyContent: 'flex-end' },
+  toolbar: { display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: tokens.spacingHorizontalM, flexWrap: 'wrap' },
   tileFooter: { display: 'inline-flex', alignItems: 'center', gap: tokens.spacingHorizontalXS, flexWrap: 'wrap' },
 });
 
@@ -79,18 +98,57 @@ function typeColor(t: string): 'brand' | 'success' | 'warning' | 'informative' |
   return 'subtle';
 }
 
+/**
+ * Adapt the flat Thread edge list into the {nodes, edges} contract the shared
+ * LineageCanvas consumes. Endpoints are deduped into typed nodes; an external
+ * target (e.g. a Power BI model) is keyed separately so it never collides with
+ * a Loom item id and deep-links to the external service via openHref.
+ */
+function threadEdgesToGraph(edges: ThreadEdge[]): { nodes: CanvasLineageNode[]; edges: CanvasLineageEdge[] } {
+  const nodes = new Map<string, CanvasLineageNode>();
+  const out: CanvasLineageEdge[] = [];
+  const keyFor = (id: string, external?: boolean, link?: string) =>
+    external ? `ext:${link || id}` : id;
+
+  for (const e of edges) {
+    const fromKey = keyFor(e.fromItemId);
+    const toKey = keyFor(e.toItemId, e.toExternal, e.toLink);
+    if (!nodes.has(fromKey)) {
+      nodes.set(fromKey, {
+        id: fromKey,
+        label: e.fromName || e.fromItemId,
+        type: e.fromType,
+        source: 'loom',
+        openHref: `/items/${e.fromType}/${e.fromItemId}`,
+      });
+    }
+    if (!nodes.has(toKey)) {
+      nodes.set(toKey, {
+        id: toKey,
+        label: e.toName || e.toItemId,
+        type: e.toType,
+        source: 'loom',
+        openHref: e.toExternal ? (e.toLink || undefined) : `/items/${e.toType}/${e.toItemId}`,
+      });
+    }
+    out.push({ from: fromKey, to: toKey, type: ACTION_LABEL[e.action] || e.action });
+  }
+  return { nodes: [...nodes.values()], edges: out };
+}
+
 export default function ThreadLineagePage() {
   const styles = useStyles();
   const router = useRouter();
   const [edges, setEdges] = useState<ThreadEdge[] | null>(null);
   const [error, setError] = useState<string | null>(null);
-  const [view, setView] = useState<LoomView>('tile');
+  const [view, setView] = useState<ThreadView>('graph');
+  const canvasRef = useRef<LineageCanvasHandle>(null);
 
   // Hydrate + persist the view choice (SSR-safe; ignore quota / private mode).
   useEffect(() => {
     try {
       const raw = window.localStorage.getItem(LS_VIEW);
-      if (raw === 'tile' || raw === 'list') setView(raw);
+      if (raw === 'graph' || raw === 'tile' || raw === 'list') setView(raw);
     } catch { /* ignore */ }
   }, []);
   useEffect(() => {
@@ -114,6 +172,7 @@ export default function ThreadLineagePage() {
   }, []);
 
   const hasRows = !!edges && edges.length > 0;
+  const hasEdges = (edges?.length || 0) > 0;
 
   const kpis = useMemo(() => {
     const list = edges || [];
@@ -127,6 +186,8 @@ export default function ThreadLineagePage() {
     }
     return { total: list.length, sources: sources.size, targets: targets.size, byAction };
   }, [edges]);
+
+  const graph = useMemo(() => threadEdgesToGraph(edges || []), [edges]);
 
   const openEdge = (e: ThreadEdge) => {
     if (e.toExternal && e.toLink) window.open(e.toLink, '_blank', 'noreferrer');
@@ -181,6 +242,7 @@ export default function ThreadLineagePage() {
       <Body1 className={styles.intro}>
         The Loom Thread graph — every <strong>Weave</strong> integration you’ve created across editors,
         showing what feeds what. Use <strong>Weave</strong> on any item’s editor to add an edge.
+        Deleting an item automatically removes its lineage here.
       </Body1>
 
       {hasRows && (
@@ -194,8 +256,6 @@ export default function ThreadLineagePage() {
         </div>
       )}
 
-
-
       {error && (
         <MessageBar intent="error">
           <MessageBarBody>
@@ -207,7 +267,16 @@ export default function ThreadLineagePage() {
 
       {hasRows && (
         <div className={styles.toolbar}>
-          <ViewToggle value={view} onChange={setView} ariaLabel="Lineage view" />
+          <TabList selectedValue={view} onTabSelect={(_, d) => setView(d.value as ThreadView)}>
+            <Tab value="graph" icon={<Flowchart20Regular />}>Graph</Tab>
+            <Tab value="tile" icon={<Grid20Regular />}>Tiles</Tab>
+            <Tab value="list" icon={<Table20Regular />}>List</Tab>
+          </TabList>
+          {view === 'graph' && hasEdges && (
+            <Button size="small" appearance="subtle" icon={<ZoomFit20Regular />} onClick={() => canvasRef.current?.fitToScreen()}>
+              Fit to screen
+            </Button>
+          )}
         </div>
       )}
 
@@ -234,6 +303,16 @@ export default function ThreadLineagePage() {
             />
           ))}
         </TileGrid>
+      ) : view === 'graph' ? (
+        hasEdges ? (
+          <LineageCanvas ref={canvasRef} nodes={graph.nodes} edges={graph.edges} />
+        ) : (
+          <MessageBar intent="info">
+            <MessageBarBody>
+              No Weave edges yet. Open any data item’s editor and choose “Weave” to wire it into another Loom service.
+            </MessageBarBody>
+          </MessageBar>
+        )
       ) : (
         <LoomDataTable<ThreadEdge>
           columns={columns}

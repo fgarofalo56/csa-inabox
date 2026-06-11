@@ -59,7 +59,7 @@ import {
 // returns (app/api/catalog/lineage/route.ts).
 // ---------------------------------------------------------------------------
 
-export type LineageSource = 'purview' | 'unity-catalog' | 'onelake';
+export type LineageSource = 'purview' | 'unity-catalog' | 'onelake' | 'loom';
 
 export interface CanvasLineageNode {
   id: string;
@@ -130,6 +130,7 @@ const SOURCE_LABEL: Record<LineageSource, string> = {
   purview: 'Purview',
   'unity-catalog': 'Unity Catalog',
   onelake: 'OneLake / Fabric',
+  loom: 'Loom Thread',
 };
 
 // ---------------------------------------------------------------------------
