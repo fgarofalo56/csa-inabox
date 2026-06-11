@@ -18,6 +18,7 @@ export type HelpStep =
   | { kind: 'tool_call'; name: string; args: unknown; callId: string }
   | { kind: 'tool_result'; name: string; callId: string; durationMs: number; result?: unknown; error?: string }
   | { kind: 'citation'; citations: Citation[] }
+  | { kind: 'proposed_change'; target: string; before: string; after: string; lang?: string; summary?: string; callId?: string }
   | { kind: 'handoff'; reason: string; deepLink: string; suggestedPrompt: string }
   | { kind: 'final'; content: string }
   | { kind: 'error'; error: string };
@@ -78,6 +79,13 @@ function StepRow({ step, classes }: { step: HelpStep; classes: ReturnType<typeof
   }
   if (step.kind === 'thought') {
     return <div className={classes.step}>💭 {step.content.slice(0, 120)}</div>;
+  }
+  if (step.kind === 'proposed_change') {
+    return (
+      <div className={classes.step} data-testid="proposed-change-row">
+        ✎ proposed a fix to <strong>{step.target}</strong> — review the diff above
+      </div>
+    );
   }
   return null;
 }

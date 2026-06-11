@@ -23,7 +23,7 @@ import {
 import {
   Comment24Regular, History24Regular, Share24Regular,
   BookOpen24Regular, Dismiss24Regular, Copy16Regular,
-  ShieldLock24Regular,
+  ShieldLock24Regular, Sparkle16Regular,
 } from '@fluentui/react-icons';
 import { getLearn } from '@/lib/learn/content';
 import { SensitivityLabelPane } from './label-flyout';
@@ -116,7 +116,7 @@ export function ItemSidePanel({ type, id }: Props) {
           {open === 'history' && <HistoryPane type={type} id={id} />}
           {open === 'share'   && <SharePane   type={type} id={id} />}
           {open === 'sensitivity' && <SensitivityLabelPane type={type} id={id} />}
-          {open === 'learn'   && <LearnPane   type={type} onClose={() => setOpen(null)} />}
+          {open === 'learn'   && <LearnPane   type={type} id={id} onClose={() => setOpen(null)} />}
         </DrawerBody>
       </Drawer>
     </div>
@@ -252,10 +252,11 @@ function SharePane({ type, id }: Props) {
   );
 }
 
-function LearnPane({ type, onClose }: { type: string; onClose: () => void }) {
+function LearnPane({ type, id, onClose }: { type: string; id?: string; onClose: () => void }) {
   const styles = useStyles();
   const learn = getLearn(type);
   const [dismiss, setDismiss] = useState(false);
+  const [activeStep, setActiveStep] = useState(0);
   const save = async () => {
     if (dismiss) {
       await fetch('/api/user-prefs', {
@@ -264,6 +265,25 @@ function LearnPane({ type, onClose }: { type: string; onClose: () => void }) {
       }).catch(() => {});
     }
     onClose();
+  };
+  /** Hand the active step to the Help Copilot (tutorial-step awareness +
+   *  auto-error-detect). Dispatches the same CustomEvent the widget listens
+   *  for, then opens the widget. */
+  const helpWithStep = (index: number) => {
+    if (typeof window === 'undefined' || !learn?.steps) return;
+    const raw = learn.steps[index];
+    const stepTitle = typeof raw === 'string' ? `Step ${index + 1}` : raw.title;
+    const stepBody = typeof raw === 'string' ? raw : `${raw.title}${raw.body ? ` — ${raw.body}` : ''}`;
+    window.dispatchEvent(new CustomEvent('csaloom:tutorial-step', {
+      detail: {
+        id: `editor:${type}${id && id !== 'new' ? `#${id}` : ''}`,
+        stepIndex: index,
+        stepTitle,
+        stepBody,
+        totalSteps: learn.steps.length,
+      },
+    }));
+    window.dispatchEvent(new Event('csaloom:open-copilot'));
   };
   if (!learn) {
     return (
@@ -284,13 +304,40 @@ function LearnPane({ type, onClose }: { type: string; onClose: () => void }) {
       {learn.summary && <p>{learn.summary}</p>}
       {learn.steps && learn.steps.length > 0 && (
         <ol style={{ paddingLeft: 18 }}>
-          {learn.steps.map((s, i) => (
-            <li key={i} style={{ marginBottom: 8 }}>
-              {typeof s === 'string' ? s : (
-                <><b>{s.title}</b>{s.body ? ` — ${s.body}` : ''}</>
-              )}
-            </li>
-          ))}
+          {learn.steps.map((s, i) => {
+            const isActive = i === activeStep;
+            return (
+              <li
+                key={i}
+                aria-current={isActive ? 'step' : undefined}
+                style={{
+                  marginBottom: 8,
+                  padding: isActive ? 'var(--loom-space-2)' : 0,
+                  borderRadius: 'var(--loom-radius-sm)',
+                  backgroundColor: isActive ? tokens.colorNeutralBackground2 : 'transparent',
+                  transition: 'background-color 120ms ease, padding 120ms ease',
+                }}
+                onMouseEnter={() => setActiveStep(i)}
+                onFocus={() => setActiveStep(i)}
+              >
+                {typeof s === 'string' ? s : (
+                  <><b>{s.title}</b>{s.body ? ` — ${s.body}` : ''}</>
+                )}
+                <div style={{ marginTop: 4 }}>
+                  <Button
+                    appearance="subtle"
+                    size="small"
+                    icon={<Sparkle16Regular />}
+                    onClick={() => helpWithStep(i)}
+                    aria-label={`Get Copilot help with step ${i + 1}`}
+                    data-testid={`learn-step-help-${i}`}
+                  >
+                    Help with this step
+                  </Button>
+                </div>
+              </li>
+            );
+          })}
         </ol>
       )}
       {learn.tip && (
