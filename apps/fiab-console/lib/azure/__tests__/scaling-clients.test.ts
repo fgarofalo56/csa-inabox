@@ -161,6 +161,102 @@ describe('container-apps-arm-client / updateContainerAppScale', () => {
   });
 });
 
+describe('container-apps-arm-client / deployMcpContainerApp + Azure Files', () => {
+  beforeEach(() => {
+    delete process.env.LOOM_AKS_CLUSTER_NAME;
+    delete process.env.LOOM_CONTAINER_PLATFORM;
+    process.env.LOOM_ACA_ENVIRONMENT = 'cae-test';
+    process.env.LOOM_MCP_FILES_ACCOUNT = 'samcptest';
+    process.env.LOOM_MCP_FILES_SHARE = 'mcp-data';
+    process.env.LOOM_MCP_STORAGE_NAME = 'mcp-data';
+    process.env.LOOM_MCP_FILES_RG = 'rg-admin';
+    process.env.LOOM_MCP_DATA_DIR = '/data';
+  });
+
+  it('upsertEnvStorage PUTs the managedEnvironments/storages azureFile body', async () => {
+    const calls = captureFetch(() => ({ body: { name: 'mcp-data', properties: { provisioningState: 'Succeeded' } } }));
+    const { upsertEnvStorage } = await import('../container-apps-arm-client');
+    const out = await upsertEnvStorage({
+      storageName: 'mcp-data', accountName: 'samcptest', accountKey: 'KEY==', shareName: 'mcp-data', accessMode: 'ReadWrite',
+    });
+    expect(calls[0].url).toMatch(/Microsoft\.App\/managedEnvironments\/cae-test\/storages\/mcp-data/);
+    expect(calls[0].init?.method).toBe('PUT');
+    const body = JSON.parse(String(calls[0].init?.body));
+    expect(body.properties.azureFile).toEqual({
+      accountName: 'samcptest', accountKey: 'KEY==', shareName: 'mcp-data', accessMode: 'ReadWrite',
+    });
+    expect(out.name).toBe('mcp-data');
+  });
+
+  it('upsertEnvStorage rejects a missing account key (identity mounts unsupported)', async () => {
+    captureFetch(() => ({ body: {} }));
+    const { upsertEnvStorage } = await import('../container-apps-arm-client');
+    await expect(upsertEnvStorage({
+      storageName: 'mcp-data', accountName: 'samcptest', accountKey: '', shareName: 'mcp-data',
+    })).rejects.toThrow(/accountKey required/);
+  });
+
+  it('getStorageAccountKey POSTs listKeys and returns the primary key', async () => {
+    const calls = captureFetch(() => ({ body: { keys: [{ keyName: 'key1', value: 'PRIMARY==' }, { keyName: 'key2', value: 'SECONDARY==' }] } }));
+    const { getStorageAccountKey } = await import('../container-apps-arm-client');
+    const key = await getStorageAccountKey('samcptest', 'rg-admin');
+    expect(calls[0].url).toMatch(/Microsoft\.Storage\/storageAccounts\/samcptest\/listKeys/);
+    expect(calls[0].init?.method).toBe('POST');
+    expect(key).toBe('PRIMARY==');
+  });
+
+  it('deployMcpContainerApp GETs then PUTs with volumes + volumeMounts + secretRef env', async () => {
+    const calls = captureFetch((url, init) => {
+      if (init?.method === 'PUT') return { body: { id: '/x', name: 'loom-mcp', location: 'eastus2', properties: { provisioningState: 'Updating' } } };
+      // initial GET of the existing loom-mcp app
+      return { body: {
+        id: '/x', name: 'loom-mcp', location: 'eastus2',
+        identity: { type: 'UserAssigned', userAssignedIdentities: { '/sub/uami-mcp': {} } },
+        properties: {
+          configuration: { activeRevisionsMode: 'Single', secrets: [] },
+          template: { containers: [{ name: 'loom-mcp', image: 'acr/loom-mcp:v0.1', env: [] }], scale: { minReplicas: 1, maxReplicas: 3 } },
+        },
+      } };
+    });
+    const { deployMcpContainerApp } = await import('../container-apps-arm-client');
+    await deployMcpContainerApp({
+      name: 'loom-mcp', storageName: 'mcp-data', mountPath: '/data',
+      secrets: [{ name: 'loom-internal-token', keyVaultUrl: 'https://kv.vault.azure.net/secrets/loom-internal-token' }],
+      env: [{ name: 'LOOM_MCP_DATA_DIR', value: '/data' }, { name: 'LOOM_INTERNAL_TOKEN', secretRef: 'loom-internal-token' }],
+    });
+    const put = calls.find(c => c.init?.method === 'PUT')!;
+    expect(put.url).toMatch(/Microsoft\.App\/containerApps\/loom-mcp/);
+    const body = JSON.parse(String(put.init?.body));
+    expect(body.properties.template.volumes).toEqual([
+      { name: 'mcp-data-vol', storageType: 'AzureFile', storageName: 'mcp-data' },
+    ]);
+    expect(body.properties.template.containers[0].volumeMounts).toEqual([
+      { volumeName: 'mcp-data-vol', mountPath: '/data' },
+    ]);
+    // KV-backed secret carries the app's own UAMI identity.
+    expect(body.properties.configuration.secrets).toContainEqual({
+      name: 'loom-internal-token', keyVaultUrl: 'https://kv.vault.azure.net/secrets/loom-internal-token', identity: '/sub/uami-mcp',
+    });
+    // secretRef env wiring preserved.
+    expect(body.properties.template.containers[0].env).toContainEqual({ name: 'LOOM_INTERNAL_TOKEN', secretRef: 'loom-internal-token' });
+    expect(body.properties.template.containers[0].env).toContainEqual({ name: 'LOOM_MCP_DATA_DIR', value: '/data' });
+  });
+
+  it('deployMcpContainerApp rejects a relative mountPath and a leading-slash subPath', async () => {
+    captureFetch(() => ({ body: {} }));
+    const { deployMcpContainerApp } = await import('../container-apps-arm-client');
+    await expect(deployMcpContainerApp({ storageName: 'mcp-data', mountPath: 'data' })).rejects.toThrow(/absolute path/);
+    await expect(deployMcpContainerApp({ storageName: 'mcp-data', mountPath: '/data', subPath: '/sub' })).rejects.toThrow(/subPath must not start/);
+  });
+
+  it('honest-gates with AcaPlatformError on the AKS boundary', async () => {
+    process.env.LOOM_AKS_CLUSTER_NAME = 'aks-test';
+    const mod = await import('../container-apps-arm-client');
+    await expect(mod.deployMcpContainerApp({ storageName: 'mcp-data', mountPath: '/data' })).rejects.toThrow(mod.AcaPlatformError);
+    await expect(mod.upsertEnvStorage({ storageName: 'mcp-data', accountName: 'a', accountKey: 'k', shareName: 's' })).rejects.toThrow(mod.AcaPlatformError);
+  });
+});
+
 describe('aks-arm-client / scaleAksAgentPool', () => {
   beforeEach(() => {
     process.env.LOOM_AKS_CLUSTER_NAME = 'aks-test';

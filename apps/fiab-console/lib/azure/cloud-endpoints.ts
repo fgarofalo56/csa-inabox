@@ -668,6 +668,26 @@ export function getBlobSuffix(): string {
   return isGovCloud() ? 'blob.core.usgovcloudapi.net' : 'blob.core.windows.net';
 }
 
+/**
+ * Azure Files (SMB) storage hostname suffix (no leading dot, no account
+ * prefix). Mirrors `getBlobSuffix()`'s Commercial-vs-Gov split:
+ *   Commercial / GCC : file.core.windows.net
+ *   GCC-High / IL5 / DoD : file.core.usgovcloudapi.net
+ *
+ * Used to build the Azure Files share FQDN that an Azure Container Apps
+ * `managedEnvironments/storages` resource mounts (and the AKS Azure Files PVC
+ * in the Gov boundaries). GCC runs on Commercial Azure endpoints, so
+ * `isGovCloud()` (false for GCC) correctly yields the Commercial suffix.
+ */
+export function getFileSuffix(): string {
+  return isGovCloud() ? 'file.core.usgovcloudapi.net' : 'file.core.windows.net';
+}
+
+/** Build the Azure Files share endpoint base URL for a storage account name. */
+export function fileEndpointFromName(account: string): string {
+  return `https://${account}.${getFileSuffix()}`;
+}
+
 /** Azure OpenAI data-plane hostname suffix (no scheme, no account prefix). */
 export function getOpenAiSuffix(): string {
   return isGovCloud() ? 'openai.azure.us' : 'openai.azure.com';
