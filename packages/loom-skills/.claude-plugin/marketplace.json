@@ -1,0 +1,106 @@
+{
+  "name": "loom-collection",
+  "metadata": {
+    "description": "CSA Loom skills collection — Azure-native client patterns that teach AI coding agents the correct Loom BFF routes and lib/azure clients. The Loom analogue of microsoft/skills-for-fabric, but every default path is Azure-native (no real Microsoft Fabric / Power BI dependency) and sovereign-cloud aware (Commercial / GCC / GCC-High / DoD).",
+    "version": "0.1.0"
+  },
+  "owner": {
+    "name": "CSA Loom",
+    "email": "noreply@example.com"
+  },
+  "plugins": [
+    {
+      "name": "loom-skills",
+      "source": "./plugins/loom-skills",
+      "description": "Complete bundle: all CSA Loom Azure-native client-pattern skills for authoring, consuming and operating Loom data items without a Microsoft Fabric dependency.",
+      "version": "0.1.0",
+      "skills": [
+        "./skills/loom-cloud-endpoints",
+        "./skills/loom-lakehouse",
+        "./skills/loom-warehouse",
+        "./skills/loom-eventhouse-kql",
+        "./skills/loom-eventstream",
+        "./skills/loom-data-pipeline",
+        "./skills/loom-activator",
+        "./skills/loom-mirrored-database",
+        "./skills/loom-semantic-model-report",
+        "./skills/loom-search-and-catalog",
+        "./skills/loom-items-bff"
+      ],
+      "mcpServers": {
+        "loom-bridge": {
+          "type": "http",
+          "url": "${LOOM_MCP_BRIDGE_URL}",
+          "headers": { "Authorization": "Bearer ${LOOM_MCP_BRIDGE_TOKEN}" }
+        },
+        "loom-iq": {
+          "type": "http",
+          "url": "${LOOM_IQ_MCP_URL}",
+          "headers": { "Authorization": "Bearer ${LOOM_IQ_TOKEN}" }
+        }
+      },
+      "repository": "https://github.com/Frank-Garofalo/csa-inabox",
+      "keywords": ["csa-loom", "azure", "fabric-parity", "azure-native", "lakehouse", "warehouse", "kql", "adx", "eventstream", "sovereign-cloud"],
+      "license": "MIT"
+    },
+    {
+      "name": "loom-authoring",
+      "source": "./plugins/loom-authoring",
+      "description": "Developer skills for AUTHORING CSA Loom items on Azure-native backends — lakehouse (ADLS+Delta), warehouse (Synapse), eventhouse (ADX), eventstream (Event Hubs), pipelines (Synapse/ADF), mirroring (ADF CDC) and semantic models.",
+      "version": "0.1.0",
+      "skills": [
+        "./skills/loom-cloud-endpoints",
+        "./skills/loom-lakehouse",
+        "./skills/loom-warehouse",
+        "./skills/loom-eventhouse-kql",
+        "./skills/loom-eventstream",
+        "./skills/loom-data-pipeline",
+        "./skills/loom-mirrored-database",
+        "./skills/loom-semantic-model-report",
+        "./skills/loom-items-bff"
+      ],
+      "mcpServers": {},
+      "repository": "https://github.com/Frank-Garofalo/csa-inabox",
+      "keywords": ["csa-loom", "azure", "authoring", "developer", "fabric-parity"],
+      "license": "MIT"
+    },
+    {
+      "name": "loom-consumption",
+      "source": "./plugins/loom-consumption",
+      "description": "Consumer skills for QUERYING and DISCOVERING CSA Loom data — search/catalog (Azure AI Search), semantic model / report consumption, KQL over ADX, and T-SQL over Synapse.",
+      "version": "0.1.0",
+      "skills": [
+        "./skills/loom-cloud-endpoints",
+        "./skills/loom-search-and-catalog",
+        "./skills/loom-semantic-model-report",
+        "./skills/loom-eventhouse-kql",
+        "./skills/loom-warehouse"
+      ],
+      "mcpServers": {
+        "loom-iq": {
+          "type": "http",
+          "url": "${LOOM_IQ_MCP_URL}",
+          "headers": { "Authorization": "Bearer ${LOOM_IQ_TOKEN}" }
+        }
+      },
+      "repository": "https://github.com/Frank-Garofalo/csa-inabox",
+      "keywords": ["csa-loom", "azure", "consumption", "query", "search", "ai-search"],
+      "license": "MIT"
+    },
+    {
+      "name": "loom-operations",
+      "source": "./plugins/loom-operations",
+      "description": "Operations skills for CSA Loom — sovereign-cloud endpoint resolution, Azure Monitor activators/alerts, and the generic item BFF contract (session, honest config gates, real backends).",
+      "version": "0.1.0",
+      "skills": [
+        "./skills/loom-cloud-endpoints",
+        "./skills/loom-activator",
+        "./skills/loom-items-bff"
+      ],
+      "mcpServers": {},
+      "repository": "https://github.com/Frank-Garofalo/csa-inabox",
+      "keywords": ["csa-loom", "azure", "operations", "monitoring", "endpoints", "sovereign-cloud"],
+      "license": "MIT"
+    }
+  ]
+}

@@ -1,0 +1,18 @@
+{
+  "mcpServers": {
+    "loom-bridge": {
+      "type": "http",
+      "url": "${LOOM_MCP_BRIDGE_URL}",
+      "headers": {
+        "Authorization": "Bearer ${LOOM_MCP_BRIDGE_TOKEN}"
+      }
+    },
+    "loom-iq": {
+      "type": "http",
+      "url": "${LOOM_IQ_MCP_URL}",
+      "headers": {
+        "Authorization": "Bearer ${LOOM_IQ_TOKEN}"
+      }
+    }
+  }
+}
