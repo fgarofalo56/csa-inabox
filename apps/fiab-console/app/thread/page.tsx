@@ -15,6 +15,7 @@
 
 import { useEffect, useMemo, useState } from 'react';
 import { useRouter } from 'next/navigation';
+import { clientFetch } from '@/lib/client-fetch';
 import {
   Title2, Body1, Caption1, Badge, Card, Spinner, MessageBar, MessageBarBody,
   MessageBarTitle, Link as FluentLink, makeStyles, tokens,
@@ -69,7 +70,7 @@ export default function ThreadLineagePage() {
     let cancelled = false;
     (async () => {
       try {
-        const r = await fetch('/api/thread/edges');
+        const r = await clientFetch('/api/thread/edges');
         const j = await r.json();
         if (cancelled) return;
         if (!r.ok || j?.ok === false) { setError(j?.error || `HTTP ${r.status}`); setEdges([]); return; }

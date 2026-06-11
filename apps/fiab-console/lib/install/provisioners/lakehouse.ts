@@ -61,6 +61,7 @@
  *     https://learn.microsoft.com/fabric/data-engineering/lakehouse-api#get-lakehouse-properties
  */
 import { FabricError, fabricHint } from '@/lib/azure/fabric-client';
+import { fetchWithTimeout } from '@/lib/azure/fetch-with-timeout';
 import type { Provisioner, ProvisionResult } from './types';
 import { ChainedTokenCredential, DefaultAzureCredential, ManagedIdentityCredential } from '@azure/identity';
 import {
@@ -160,7 +161,7 @@ async function oneLakePutFile(
   const bytes = Buffer.from(content, 'utf-8');
 
   // 1. Create (truncate) the file resource.
-  const create = await fetch(`${base}?resource=file`, {
+  const create = await fetchWithTimeout(`${base}?resource=file`, {
     method: 'PUT',
     headers: { authorization: `Bearer ${token}` },
     cache: 'no-store',
@@ -169,7 +170,7 @@ async function oneLakePutFile(
     return { ok: false, status: create.status, detail: (await create.text()).slice(0, 200) };
   }
   // 2. Append the bytes at offset 0.
-  const append = await fetch(`${base}?action=append&position=0`, {
+  const append = await fetchWithTimeout(`${base}?action=append&position=0`, {
     method: 'PATCH',
     headers: { authorization: `Bearer ${token}`, 'content-type': 'application/octet-stream' },
     body: bytes,
@@ -179,7 +180,7 @@ async function oneLakePutFile(
     return { ok: false, status: append.status, detail: (await append.text()).slice(0, 200) };
   }
   // 3. Flush — commit the appended bytes at the final length.
-  const flush = await fetch(`${base}?action=flush&position=${bytes.length}`, {
+  const flush = await fetchWithTimeout(`${base}?action=flush&position=${bytes.length}`, {
     method: 'PATCH',
     headers: { authorization: `Bearer ${token}` },
     cache: 'no-store',
@@ -223,7 +224,7 @@ async function kickLoadTableFromCsv(
   const loadUrl = `${FABRIC_BASE}/workspaces/${encodeURIComponent(workspaceId)}/lakehouses/${encodeURIComponent(
     lakehouseId,
   )}/tables/${encodeURIComponent(tableName)}/load`;
-  const res = await fetch(loadUrl, {
+  const res = await fetchWithTimeout(loadUrl, {
     method: 'POST',
     headers: { authorization: `Bearer ${token}`, 'content-type': 'application/json' },
     body: JSON.stringify({
@@ -253,7 +254,7 @@ async function kickLoadTableFromCsv(
 async function peekLoadOperation(opUrl: string): Promise<{ done: boolean; ok: boolean; detail: string }> {
   try {
     const token = await getToken(FABRIC_SCOPE);
-    const poll = await fetch(opUrl, { headers: { authorization: `Bearer ${token}` }, cache: 'no-store' });
+    const poll = await fetchWithTimeout(opUrl, { headers: { authorization: `Bearer ${token}` }, cache: 'no-store' });
     if (!poll.ok) return { done: false, ok: true, detail: '' };
     const j: any = await poll.json().catch(() => null);
     const status = j?.Status ?? j?.status;
@@ -277,7 +278,7 @@ async function peekLoadOperation(opUrl: string): Promise<{ done: boolean; ok: bo
 /** Resolve the lakehouse's OneLake Files path (confirms the IDs are real). */
 async function getLakehouseProps(workspaceId: string, lakehouseId: string): Promise<any | null> {
   const token = await getToken(FABRIC_SCOPE);
-  const res = await fetch(
+  const res = await fetchWithTimeout(
     `${FABRIC_BASE}/workspaces/${encodeURIComponent(workspaceId)}/lakehouses/${encodeURIComponent(lakehouseId)}`,
     { headers: { authorization: `Bearer ${token}` }, cache: 'no-store' },
   );
@@ -287,7 +288,7 @@ async function getLakehouseProps(workspaceId: string, lakehouseId: string): Prom
 
 async function fabricCall(path: string, method: 'GET' | 'POST', body?: unknown): Promise<{ status: number; body: any; location?: string }> {
   const token = await getToken(FABRIC_SCOPE);
-  const res = await fetch(`${FABRIC_BASE}${path}`, {
+  const res = await fetchWithTimeout(`${FABRIC_BASE}${path}`, {
     method,
     headers: { authorization: `Bearer ${token}`, 'content-type': 'application/json', accept: 'application/json' },
     body: body !== undefined ? JSON.stringify(body) : undefined,

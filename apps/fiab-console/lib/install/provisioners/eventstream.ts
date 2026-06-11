@@ -25,6 +25,7 @@ import {
   EventHubsArmError,
 } from '@/lib/azure/eventhubs-client';
 import type { Provisioner, ProvisionResult } from './types';
+import { fetchWithTimeout } from '@/lib/azure/fetch-with-timeout';
 
 const FABRIC_BASE = process.env.LOOM_FABRIC_BASE || 'https://api.fabric.microsoft.com/v1';
 const uamiClientId = process.env.LOOM_UAMI_CLIENT_ID;
@@ -158,7 +159,7 @@ function buildDefinition(content: any, displayName: string): { format: string; p
 // ── Fabric Eventstream backend (opt-in: LOOM_EVENT_BACKEND=fabric + bound ws) ─
 async function provisionFabricEventstream(input: any, steps: string[], ws: string): Promise<ProvisionResult> {
   const tok = await token();
-  const listRes = await fetch(`${FABRIC_BASE}/workspaces/${encodeURIComponent(ws)}/eventstreams`, {
+  const listRes = await fetchWithTimeout(`${FABRIC_BASE}/workspaces/${encodeURIComponent(ws)}/eventstreams`, {
     headers: { authorization: `Bearer ${tok}` },
     cache: 'no-store',
   });
@@ -178,7 +179,7 @@ async function provisionFabricEventstream(input: any, steps: string[], ws: strin
   const definition = buildDefinition(input.content, input.displayName);
 
   if (match?.id) {
-    const updateRes = await fetch(`${FABRIC_BASE}/workspaces/${encodeURIComponent(ws)}/eventstreams/${encodeURIComponent(match.id)}/updateDefinition`, {
+    const updateRes = await fetchWithTimeout(`${FABRIC_BASE}/workspaces/${encodeURIComponent(ws)}/eventstreams/${encodeURIComponent(match.id)}/updateDefinition`, {
       method: 'POST',
       headers: { authorization: `Bearer ${tok}`, 'content-type': 'application/json' },
       body: JSON.stringify({ definition }),
@@ -192,7 +193,7 @@ async function provisionFabricEventstream(input: any, steps: string[], ws: strin
     return { status: 'exists', resourceId: match.id, secondaryIds: { backend: 'fabric', fabricWorkspaceId: ws }, steps };
   }
 
-  const createRes = await fetch(`${FABRIC_BASE}/workspaces/${encodeURIComponent(ws)}/eventstreams`, {
+  const createRes = await fetchWithTimeout(`${FABRIC_BASE}/workspaces/${encodeURIComponent(ws)}/eventstreams`, {
     method: 'POST',
     headers: { authorization: `Bearer ${tok}`, 'content-type': 'application/json' },
     body: JSON.stringify({ displayName: input.displayName, description: `Installed from ${input.appId}`, definition }),

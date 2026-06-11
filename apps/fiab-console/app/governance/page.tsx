@@ -43,6 +43,7 @@ import { ItemTile } from '@/lib/components/ui/item-tile';
 import { TileGrid } from '@/lib/components/ui/tile-grid';
 import { LoomDataTable, type LoomColumn } from '@/lib/components/ui/loom-data-table';
 import { itemVisual } from '@/lib/components/ui/item-type-visual';
+import { clientFetch } from '@/lib/client-fetch';
 
 interface Kpis {
   totalItems: number; sensitiveCoveragePct: number; classificationCoveragePct: number;
@@ -237,7 +238,7 @@ export default function GovernancePage() {
   useEffect(() => {
     (async () => {
       try {
-        const r = await fetch('/api/governance/insights');
+        const r = await clientFetch('/api/governance/insights');
         const j: InsightsResponse = await r.json();
         if (j.ok) {
           if (j.kpis) setKpis(j.kpis);

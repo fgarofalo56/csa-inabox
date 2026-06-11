@@ -10,6 +10,7 @@ import {
 import { ArrowSync24Regular, Open16Regular } from '@fluentui/react-icons';
 import { GovernanceShell } from '@/lib/components/governance-shell';
 import { LoomDataTable, type LoomColumn } from '@/lib/components/ui/loom-data-table';
+import { clientFetch } from '@/lib/client-fetch';
 
 interface CoverageRow { type: string; total: number; labeled: number; classified: number; owned: number; endorsed: number }
 interface PolicyRow { name: string; type?: string; scope?: string; enabled: boolean; updatedAt?: string }
@@ -63,7 +64,7 @@ export default function InsightsPage() {
   const load = async () => {
     setLoading(true); setError(null);
     try {
-      const r = await fetch('/api/governance/insights');
+      const r = await clientFetch('/api/governance/insights');
       const j = await r.json();
       if (!j.ok) { setError(j.error); return; }
       setData(j);

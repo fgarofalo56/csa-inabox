@@ -103,6 +103,11 @@ resource caeApps 'Microsoft.App/containerApps@2025-02-02-preview' = [for app in 
               { name: 'LOOM_AML_INSTANCE', value: amlInstance }
               { name: 'LOOM_AML_WORKSPACE_ID', value: amlWorkspaceId }
               { name: 'LOOM_AML_PORTAL_BASE', value: amlPortalBase }
+              // Server-side per-request HTTP timeout (ms) applied by
+              // lib/azure/fetch-with-timeout to every ARM/Fabric round-trip so a
+              // hung backend can't make a BFF route (and the page) spin forever.
+              // Matches the in-code default; raise it for slow sovereign regions.
+              { name: 'LOOM_SERVER_FETCH_TIMEOUT_MS', value: '30000' }
             ],
             contains(app, 'env') ? app.env : []
           )

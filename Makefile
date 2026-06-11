@@ -91,6 +91,9 @@ test-e2e: ## Run integration tests (offline, DuckDB only)
 test-e2e-live: ## Run all integration tests (requires Azure connection)
 	pytest tests/integration/ -v --tb=short
 
+console-perf: ## Per-route page-load timing report (slowest-first). Set LOOM_BASE_URL + LOOM_STORAGE_STATE for an authed run.
+	cd apps/fiab-console && node scripts/perf-harness.mjs
+
 test-dbt: ## Compile and test dbt models
 	cd domains/shared/dbt && dbt compile --profiles-dir .
 	cd domains/shared/dbt && dbt test --profiles-dir .

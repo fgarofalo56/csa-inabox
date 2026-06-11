@@ -30,6 +30,7 @@
 
 import { ChainedTokenCredential, DefaultAzureCredential, ManagedIdentityCredential } from '@azure/identity';
 import { armBase, armScope } from './cloud-endpoints';
+import { fetchWithTimeout } from './fetch-with-timeout';
 
 const FABRIC_BASE = process.env.LOOM_FABRIC_BASE || 'https://api.fabric.microsoft.com/v1';
 const FABRIC_SCOPE = 'https://api.fabric.microsoft.com/.default';
@@ -89,7 +90,7 @@ async function call<T = any>(path: string, opts: CallOpts = {}): Promise<T> {
     const s = qs.toString();
     if (s) url += (url.includes('?') ? '&' : '?') + s;
   }
-  const res = await fetch(url, {
+  const res = await fetchWithTimeout(url, {
     method,
     headers: {
       'authorization': `Bearer ${token}`,
