@@ -19,6 +19,8 @@ const files = (args && Array.isArray(args.files) && args.files.length) ? args.fi
 const maxTasks = (args && args.maxTasks) || 0
 const FANOUT = (args && Number(args.fanout)) || 5
 const chunk = (a, n) => { const o = []; for (let i = 0; i < a.length; i += n) o.push(a.slice(i, i + n)); return o }
+const rng = (a, b) => { const o = []; for (let i = a; i <= b; i++) o.push('audit-t' + i); return o }
+const WAVE_IDS = { 4: ['audit-t29','audit-t30','audit-t36'], 5: ['audit-t31','audit-t32','audit-t33','audit-t35'], 6: rng(37,43), 7: rng(44,49), 8: rng(50,87), 9: rng(88,105), 10: rng(106,123), 11: rng(124,146) }
 
 const researchPrompt = (t) => `READ-ONLY research for ONE CSA Loom parity task. Repo ${REPO}.\nTASK: ${t.title}\nGOAL:\n${t.goal}\nFILES: ${t.files || '(decide)'}\n` +
   `Ground in REAL Azure/Fabric behavior (microsoft_docs_search via ToolSearch) + the existing Loom code this touches (Grep/Read apps/fiab-console/**, platform/fiab/bicep/**). Quote real symbols. Output a concrete build plan + per-cloud note. Honor no-vaporware, no-fabric-dependency (Azure-native default), loom-no-freeform-config, ui-parity, bicep+bootstrap sync.`
@@ -55,7 +57,9 @@ try { tasks = JSON.parse(planText.slice(planText.indexOf('['), planText.lastInde
 if (maxTasks > 0) tasks = tasks.slice(0, maxTasks)
 const excludeIds = ((args && args.exclude) || []).map((s) => String(s).toLowerCase())
 if (excludeIds.length) tasks = tasks.filter((t) => !excludeIds.includes(String(t.id || '').toLowerCase()))
-log(`Wave ${auditWave || '?'}: ${tasks.length} tasks, fanout ${FANOUT}${excludeIds.length ? `, excluded ${excludeIds.join(',')}` : ''}`)
+const onlyIds = ((args && args.taskIds && args.taskIds.length) ? args.taskIds : (WAVE_IDS[auditWave] || [])).map((s) => String(s).toLowerCase())
+if (onlyIds.length) tasks = tasks.filter((t) => onlyIds.includes(String(t.id || '').toLowerCase()))
+log(`Wave ${auditWave || '?'}: ${tasks.length} tasks, fanout ${FANOUT}${onlyIds.length ? `, ids=${onlyIds.join(',')}` : ''}${excludeIds.length ? `, excluded ${excludeIds.join(',')}` : ''}`)
 if (!tasks.length) return { tasks: 0, shipped: [] }
 
 phase('Research')
