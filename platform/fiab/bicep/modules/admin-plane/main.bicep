@@ -374,6 +374,12 @@ param loomApprovalLogicAppRg string = ''
 @secure()
 param loomApprovalCallbackSecret string = ''
 
+@description('audit-T64: Azure SQL logical server (name or FQDN) that holds the Plan (preview) writeback table dbo.loom_plan_cells. Empty -> planning cells persist to Cosmos (always works) and the Plan editor shows an honest "set LOOM_PLAN_BACKING_SQL_*" gate. No Microsoft Fabric dependency (replaces Fabric\'s auto-provisioned Fabric SQL database).')
+param loomPlanBackingSqlServer string = ''
+
+@description('audit-T64: Azure SQL database name for the Plan (preview) writeback store. Pairs with loomPlanBackingSqlServer. Grant the Console UAMI db_ddladmin + db_datawriter on this database (plan-backing-sql.bicep). Empty -> Cosmos-only.')
+param loomPlanBackingSqlDatabase string = ''
+
 @description('F4: Key Vault URI for schedule-time pipeline parameter overrides. Empty defaults to the admin-plane vault (Console UAMI already has Secrets Officer there). Set to a separate vault URI to source parameters from elsewhere (grant the Console identity "Key Vault Secrets User" on it).')
 param loomParamKeyVaultUri string = ''
 
@@ -1859,6 +1865,14 @@ module appDeployments 'app-deployments.bicep' = if (containerPlatform == 'contai
             // audit-T13: optional shared secret guarding the Plan approval
             // callback (/api/items/plan/<id>/approval-callback). Empty = open.
             { name: 'LOOM_APPROVAL_CALLBACK_SECRET', value: loomApprovalCallbackSecret }
+            // audit-T64: Plan (preview) EPM/CPM writeback store. Azure SQL DB
+            // receiving planning-sheet cell writeback (dbo.loom_plan_cells).
+            // Empty -> planning cells persist to Cosmos (always works) and the
+            // Plan editor surfaces an honest "set LOOM_PLAN_BACKING_SQL_*" gate.
+            // Azure-native parity of Fabric's auto-provisioned Fabric SQL DB —
+            // no Microsoft Fabric dependency.
+            { name: 'LOOM_PLAN_BACKING_SQL_SERVER', value: loomPlanBackingSqlServer }
+            { name: 'LOOM_PLAN_BACKING_SQL_DATABASE', value: loomPlanBackingSqlDatabase }
             // Report subscriptions (scheduled report export + email). The
             // Function name is non-empty only when reportSubscriptionsEnabled —
             // the subscriptions BFF surfaces an honest delivery gate to the
