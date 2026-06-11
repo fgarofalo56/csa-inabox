@@ -14,8 +14,13 @@
  *   - Lineage      : link to existing /governance/lineage
  *
  * Every fetch surfaces structured errors. A 503 with `code:
- * purview_not_configured` renders the NotConfiguredBar with the bicep +
- * env + role remediation. Other 4xx/5xx render an error MessageBar.
+ * purview_not_configured` (env var unset) OR a 403 with `code:
+ * purview_not_authorized` (UAMI lacks a Data Map role) renders the
+ * NotConfiguredBar with the bicep + env + role remediation — never a bare 403.
+ * A single status banner (driven by /api/governance/purview/status →
+ * probePurview) sits above the sub-tabs so the operator sees the wiring state
+ * (live / role_missing / not_configured) at a glance. Other 4xx/5xx render an
+ * error MessageBar.
  */
 
 import { useCallback, useEffect, useState } from 'react';
@@ -65,8 +70,16 @@ async function fetchJson<T>(url: string, init: RequestInit = {}): Promise<ApiSta
   try {
     const r = await fetch(url, init);
     const j = await r.json();
-    if (r.status === 503 && j?.code?.endsWith('_not_configured')) {
-      return { loading: false, data: null, notConfigured: j.hint, error: j.error, errorStatus: 503 };
+    // Honest gates render the NotConfiguredBar (never a raw red error):
+    //   503 + *_not_configured        → Purview/MIP/DLP not provisioned (env var unset)
+    //   403 + purview_not_authorized  → account reachable but the Console UAMI lacks a
+    //                                   Data Map role on the root collection (the
+    //                                   "Not authorized to access account" 403). The
+    //                                   BFF attaches the grant remediation in j.hint.
+    const isNotConfigured = r.status === 503 && j?.code?.endsWith('_not_configured');
+    const isNotAuthorized = r.status === 403 && j?.code === 'purview_not_authorized';
+    if (isNotConfigured || isNotAuthorized) {
+      return { loading: false, data: null, notConfigured: j.hint, error: j.error, errorStatus: r.status };
     }
     if (!r.ok) {
       return { loading: false, data: null, error: j?.error || `HTTP ${r.status}`, errorStatus: r.status };
@@ -79,12 +92,67 @@ async function fetchJson<T>(url: string, init: RequestInit = {}): Promise<ApiSta
 
 type SubTab = 'sources' | 'scans' | 'classifications' | 'glossary' | 'domains' | 'dq' | 'sensitivity' | 'lineage';
 
+/**
+ * PurviewStatusBanner — one wiring-state banner above the sub-tabs, driven by
+ * GET /api/governance/purview/status (→ probePurview). Renders the
+ * NotConfiguredBar honest gate when the account is unset (reason:
+ * 'not_configured'), the UAMI lacks a Data Map role (reason: 'role_missing' —
+ * the 403 this task fixes), or the host is unreachable (reason:
+ * 'upstream_error'). When reason === 'live' it renders nothing so the sub-tabs
+ * show real data. Fail-open: a failed probe is silent (the per-section fetches
+ * still surface their own gates).
+ */
+interface PurviewStatus {
+  ok: boolean;
+  configured: boolean;
+  account: string | null;
+  reason: 'live' | 'not_configured' | 'role_missing' | 'upstream_error';
+  message?: string;
+  hint?: NotConfiguredHint;
+}
+
+function PurviewStatusBanner() {
+  const [status, setStatus] = useState<PurviewStatus | null>(null);
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      try {
+        const r = await fetch('/api/governance/purview/status');
+        const j = (await r.json()) as PurviewStatus;
+        if (!cancelled) setStatus(j);
+      } catch {
+        /* fail-open — per-section fetches still surface their own gates */
+      }
+    })();
+    return () => { cancelled = true; };
+  }, []);
+
+  if (!status || status.reason === 'live') return null;
+
+  const surface =
+    status.reason === 'role_missing'
+      ? 'Microsoft Purview Data Map (managed identity not authorized)'
+      : 'Microsoft Purview Data Map';
+  return (
+    <div style={{ marginBottom: 12 }}>
+      <NotConfiguredBar
+        surface={surface}
+        hint={status.hint}
+        rawError={status.message}
+        portalLink="https://web.purview.azure.com/"
+        portalLabel="Open Microsoft Purview"
+      />
+    </div>
+  );
+}
+
 export function PurviewPanel() {
   const s = useStyles();
   const [tab, setTab] = useState<SubTab>('sources');
 
   return (
     <div>
+      <PurviewStatusBanner />
       <TabList
         className={s.subTabs}
         selectedValue={tab}
