@@ -84,6 +84,14 @@ const useStyles = makeStyles({
     borderRadius: tokens.borderRadiusMedium,
     flexShrink: 0,
   },
+  // Clamp the tile description to 3 lines so every tile in a TileGrid row
+  // keeps an even height — long catalog blurbs otherwise make the grid ragged.
+  tileDesc: {
+    display: '-webkit-box',
+    WebkitLineClamp: 3,
+    WebkitBoxOrient: 'vertical',
+    overflow: 'hidden',
+  },
 });
 
 /** The slug that drives an app tile's icon + color: the dominant bundled item. */
@@ -234,7 +242,13 @@ export default function AppsPage() {
         type={appVisualType(a)}
         title={a.name}
         subtitle={a.category ?? 'App'}
-        meta={a.description}
+        meta={
+          a.description ? (
+            <span className={styles.tileDesc} title={a.description}>
+              {a.description}
+            </span>
+          ) : undefined
+        }
         badge={
           bundleCount > 0 ? (
             <Badge appearance="outline" color="informative" size="small">
