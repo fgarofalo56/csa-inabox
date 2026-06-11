@@ -1,0 +1,7 @@
+{
+  "name": "loom-skills",
+  "version": "0.1.0",
+  "description": "Complete bundle of CSA Loom Azure-native client-pattern skills. Components (skills, MCP servers) are declared in the loom-collection marketplace entry.",
+  "author": { "name": "Frank Garofalo" },
+  "license": "MIT"
+}

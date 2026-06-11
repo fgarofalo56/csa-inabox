@@ -1,0 +1,35 @@
+{
+  "name": "@csa-loom/loom-skills",
+  "version": "0.1.0",
+  "private": false,
+  "description": "Azure-native Loom client patterns for AI coding agents (the CSA Loom analogue of microsoft/skills-for-fabric). Documentation-only bundle of SKILL.md guides — no runtime code.",
+  "license": "MIT",
+  "author": "Frank Garofalo",
+  "keywords": [
+    "csa-loom",
+    "azure",
+    "fabric-parity",
+    "claude-code",
+    "github-copilot",
+    "skills",
+    "ai-agents",
+    "sovereign-cloud"
+  ],
+  "files": [
+    "skills/",
+    "scripts/",
+    "plugins/",
+    ".claude-plugin/",
+    ".mcp.json",
+    "CLAUDE.md",
+    "AGENTS.md",
+    ".cursorrules",
+    ".windsurfrules",
+    "README.md",
+    "LICENSE"
+  ],
+  "scripts": {
+    "token": "bash scripts/loom-token.sh",
+    "probe": "bash scripts/loom-endpoint-probe.sh"
+  }
+}

@@ -32,6 +32,12 @@ env:
   DLZ_RG: rg-csa-loom-dlz-default-eastus2
   ADF: adf-loom-default-eastus2
   VMSS: vmss-loom-shir-default
+  # Shared admin-zone Purview SHIR (separate VMSS in the admin RG — a Purview
+  # SHIR can't share a machine with the ADF SHIR). Scaled down when no Purview
+  # scan run is active. Leave PURVIEW_ACCOUNT empty to skip this arm entirely.
+  ADMIN_RG: rg-csa-loom-admin-eastus2
+  PURVIEW_VMSS: vmss-loom-pvw-shir-default
+  PURVIEW_ACCOUNT: ''
 
 concurrency:
   group: shir-idle-stop
@@ -95,3 +101,69 @@ jobs:
           echo "Idle — scaling SHIR VMSS '$VMSS' to 0."
           az vmss scale -g "$DLZ_RG" -n "$VMSS" --new-capacity 0
           echo "::notice::SHIR VMSS '$VMSS' scaled to 0 (idle ${IDLE_MIN}m+)."
+
+      - name: Scale Purview SHIR VMSS to zero when no scan is running
+        if: ${{ env.PURVIEW_ACCOUNT != '' }}
+        run: |
+          set -uo pipefail
+          az account set --subscription "$SUB"
+
+          # 1) Does the Purview SHIR VMSS exist + what's its current capacity?
+          CAP="$(az vmss show -g "$ADMIN_RG" -n "$PURVIEW_VMSS" --query 'sku.capacity' -o tsv 2>/dev/null || echo '')"
+          if [ -z "$CAP" ]; then
+            echo "::notice::Purview SHIR VMSS '$PURVIEW_VMSS' not found in $ADMIN_RG — no Purview SHIR deployed. No-op."
+            exit 0
+          fi
+          echo "Purview SHIR VMSS '$PURVIEW_VMSS' current capacity: $CAP"
+          if [ "$CAP" = "0" ]; then
+            echo "::notice::Already scaled to zero. No-op."
+            exit 0
+          fi
+
+          # 2) Any Purview scan run in a non-terminal state across all sources?
+          #    Enumerate data sources → scans → runs via the scanning data plane.
+          #    Same fail-safe contract as the ADF arm: on ANY query error we
+          #    leave the VMSS UP (never scale down on uncertainty).
+          PVW_HOST="https://${PURVIEW_ACCOUNT}.purview.azure.com"
+          API="api-version=2022-07-01-preview"
+          RES="https://purview.azure.net"
+
+          SOURCES="$(az rest --method get --resource "$RES" \
+            --url "${PVW_HOST}/scan/datasources?${API}" \
+            --query "value[].name" -o tsv 2>/dev/null || echo 'ERR')"
+          if [ "$SOURCES" = "ERR" ]; then
+            echo "::warning::Could not list Purview data sources (host/perm). Leaving VMSS as-is (fail-safe)."
+            exit 0
+          fi
+
+          ACTIVE=0
+          QUERY_FAILED=0
+          for SRC in $SOURCES; do
+            SCANS="$(az rest --method get --resource "$RES" \
+              --url "${PVW_HOST}/scan/datasources/${SRC}/scans?${API}" \
+              --query "value[].name" -o tsv 2>/dev/null || echo 'ERR')"
+            if [ "$SCANS" = "ERR" ]; then QUERY_FAILED=1; break; fi
+            for SCAN in $SCANS; do
+              RUNNING="$(az rest --method get --resource "$RES" \
+                --url "${PVW_HOST}/scan/datasources/${SRC}/scans/${SCAN}/runs?${API}" \
+                --query "length(value[?status=='Running' || status=='Queued' || status=='InProgress' || status=='Accepted'])" -o tsv 2>/dev/null || echo 'ERR')"
+              if [ "$RUNNING" = "ERR" ]; then QUERY_FAILED=1; break; fi
+              ACTIVE=$((ACTIVE + RUNNING))
+            done
+            if [ "$QUERY_FAILED" = "1" ]; then break; fi
+          done
+
+          if [ "$QUERY_FAILED" = "1" ]; then
+            echo "::warning::Could not query Purview scan runs. Leaving VMSS as-is (fail-safe — never scale down on uncertainty)."
+            exit 0
+          fi
+          echo "Active (Running/Queued/InProgress) Purview scan runs: $ACTIVE"
+          if [ "$ACTIVE" != "0" ]; then
+            echo "::notice::$ACTIVE active scan run(s) — keeping the Purview SHIR up."
+            exit 0
+          fi
+
+          # 3) Idle → scale to zero.
+          echo "No active scans — scaling Purview SHIR VMSS '$PURVIEW_VMSS' to 0."
+          az vmss scale -g "$ADMIN_RG" -n "$PURVIEW_VMSS" --new-capacity 0
+          echo "::notice::Purview SHIR VMSS '$PURVIEW_VMSS' scaled to 0 (no active scans)."

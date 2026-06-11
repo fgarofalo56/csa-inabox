@@ -52,7 +52,10 @@ function required(k: string): string {
   return v;
 }
 
-function sub(): string { return required('LOOM_SUBSCRIPTION_ID'); }
+// LOOM_SYNAPSE_SUB wins when set (a reused Synapse workspace in another
+// subscription, emitted by the BYO wizard); falls back to LOOM_SUBSCRIPTION_ID
+// (the deployment sub) when empty so cross-sub reuse hits the right ARM scope.
+function sub(): string { return process.env.LOOM_SYNAPSE_SUB || required('LOOM_SUBSCRIPTION_ID'); }
 function rg():  string { return required('LOOM_DLZ_RG'); }
 function ws():  string { return required('LOOM_SYNAPSE_WORKSPACE'); }
 

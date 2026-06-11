@@ -40,6 +40,17 @@ off in GCC-High / IL5.
 | 10 | Status: real head commit / SHA | `GET .../commits?$top=1` | `GET /repos/{o}/{r}/commits/{branch}` |
 | 11 | Disconnect (clear bind) | KV secret delete + Cosmos delete | same |
 | 12 | Credential secured server-side | PAT/SPN → Key Vault `secretRef` | PAT → Key Vault `secretRef` |
+| 13 | GitHub Enterprise Cloud (ghe.com) host | n/a | same provider over `api.<subdomain>.ghe.com` |
+
+GHE.com note (Fabric Build 2026, Learn `fabric/cicd/github-data-residency-support`):
+Fabric "treats GHE.com as part of the **existing GitHub provider — not a new
+provider**", using the same UI/API. For ghe.com the *repository is mandatory*
+(no org-level browse), each connection is a **dedicated single repo**, and the
+PAT is minted per-host on the ghe.com tenant. The REST base for a data-residency
+tenant with subdomain `SUB` is `https://api.SUB.ghe.com` (not the GHES-style
+`/api/v3`). Loom mirrors this: a structured **GitHub host** selector (GitHub.com
+vs GitHub Enterprise Cloud) + a constrained subdomain field; the API base is
+derived in code by `githubApiBase(host)`, never from a raw pasted URL.
 
 ## Loom coverage
 
@@ -57,6 +68,7 @@ off in GCC-High / IL5.
 | 10 | ✅ built | GET `/git/status` → `adoLastCommit` / `githubLastCommit` (live head SHA) |
 | 11 | ✅ built | DELETE `/git` → `deleteBinding` (KV + Cosmos) |
 | 12 | ✅ built | `saveBinding` writes `loom-git-{ws}-{pat|spn}` to Key Vault; Cosmos keeps only `secretRef` |
+| 13 | ✅ built | GitHub host `RadioGroup` + subdomain field; `githubApiBase()` → `api.<sub>.ghe.com`; `githubHost` on the binding threads through every `github*` REST call |
 
 Zero ❌, zero stub banners — every inventory row is built and calls real REST.
 
@@ -73,12 +85,20 @@ Zero ❌, zero stub banners — every inventory row is built and calls real REST
 
 ## Per-cloud matrix
 
-| Cloud | Azure DevOps | GitHub | Notes |
-|-------|--------------|--------|-------|
-| Commercial | ✅ `dev.azure.com` | ✅ `api.github.com` | both providers shown |
-| GCC | ✅ `dev.azure.com` | ✅ `api.github.com` | GCC runs on Commercial Azure endpoints; GitHub reachable |
-| GCC-High | ✅ `dev.azure.com` | ⚠️ hidden + honest note | GitHub has no FedRAMP-High authorization (`githubCloudGate` → 503) |
-| IL5 / DoD | ✅ `dev.azure.com` | ⚠️ hidden + honest note | same gate (`detectLoomCloud()` = GCC-High/DoD) |
+| Cloud | Azure DevOps | GitHub.com | GitHub Enterprise Cloud (ghe.com) | Notes |
+|-------|--------------|------------|-----------------------------------|-------|
+| Commercial | ✅ `dev.azure.com` | ✅ `api.github.com` | ✅ `api.<sub>.ghe.com` | all three shown |
+| GCC | ✅ `dev.azure.com` | ✅ `api.github.com` | ✅ `api.<sub>.ghe.com` | GCC runs on Commercial Azure endpoints; GitHub reachable |
+| GCC-High | ✅ `dev.azure.com` | ⚠️ hidden + honest note | ⚠️ hidden + honest note | GitHub (incl. ghe.com) has no FedRAMP-High authorization (`githubCloudGate` → 503) |
+| IL5 / DoD | ✅ `dev.azure.com` | ⚠️ hidden + honest note | ⚠️ hidden + honest note | same gate (`detectLoomCloud()` = GCC-High/DoD) |
+
+GHE.com keeps repository content in the EMU's region (data residency) but is
+still **commercial GitHub SaaS** — it does NOT unlock GitHub in sovereign Loom
+boundaries, so the same `githubCloudGate()` keeps it hidden in GCC-High / IL5.
+No new infra/env is required: the ghe.com host is **per-binding** (user-supplied
+subdomain stored on the Cosmos `workspace-git` doc as `githubHost`), the PAT
+reuses the existing Key Vault wiring (`LOOM_KEY_VAULT_URI`), and Front Door's
+existing `/api/admin/workspaces/.../git` Allow rule already covers the path.
 
 Azure DevOps Services has **no** Government endpoint — every customer (including
 federal) authenticates against `dev.azure.com`, so ADO is available in every

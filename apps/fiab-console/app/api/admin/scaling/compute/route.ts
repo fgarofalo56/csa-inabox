@@ -24,7 +24,7 @@ export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
 
 interface Scalable {
-  kind: 'adx' | 'synapse-pool' | 'shir-vmss';
+  kind: 'adx' | 'synapse-pool' | 'shir-vmss' | 'purview-shir-vmss';
   name: string;
   sku?: string;
   capacity?: number;
@@ -85,6 +85,21 @@ export async function GET() {
     }
   } catch (e: any) { errors.push({ kind: 'shir-vmss', error: e?.message || String(e) }); }
 
+  // Shared admin-zone Purview SHIR VMSS (separate from the DLZ ADF SHIR).
+  try {
+    const { purviewShirVmssConfig, getVmssStatus } = await import('@/lib/azure/vmss-client');
+    const cfg = purviewShirVmssConfig();
+    if (cfg) {
+      const v = await getVmssStatus(cfg);
+      const running = v.nodes.filter((n) => n.provisioningState === 'Succeeded').length;
+      resources.push({
+        kind: 'purview-shir-vmss', name: v.name, capacity: v.capacity,
+        state: v.capacity === 0 ? 'Stopped (0)' : `${running}/${v.capacity} nodes`,
+        actions: ['scale'],
+      });
+    }
+  } catch (e: any) { if (process.env.LOOM_PURVIEW_SHIR_VMSS_NAME) errors.push({ kind: 'purview-shir-vmss', error: e?.message || String(e) }); }
+
   return NextResponse.json({ ok: true, resources, errors });
 }
 
@@ -111,6 +126,13 @@ export async function POST(req: NextRequest) {
       if (!cfg) return NextResponse.json({ ok: false, error: 'SHIR VMSS not configured (LOOM_SHIR_VMSS_NAME).' }, { status: 400 });
       await scaleVmss(cfg, typeof body.capacity === 'number' ? body.capacity : 0);
       return NextResponse.json({ ok: true, kind: 'shir-vmss', message: `Scaling SHIR to ${body.capacity} node(s).` });
+    }
+    if (body.kind === 'purview-shir-vmss' && body.action === 'scale') {
+      const { purviewShirVmssConfig, scaleVmss } = await import('@/lib/azure/vmss-client');
+      const cfg = purviewShirVmssConfig();
+      if (!cfg) return NextResponse.json({ ok: false, error: 'Purview SHIR VMSS not configured (LOOM_PURVIEW_SHIR_VMSS_NAME).' }, { status: 400 });
+      await scaleVmss(cfg, typeof body.capacity === 'number' ? body.capacity : 0);
+      return NextResponse.json({ ok: true, kind: 'purview-shir-vmss', message: `Scaling Purview SHIR to ${body.capacity} node(s).` });
     }
     return NextResponse.json({ ok: false, error: `Unsupported kind/action: ${body.kind}/${body.action}` }, { status: 400 });
   } catch (e: any) {

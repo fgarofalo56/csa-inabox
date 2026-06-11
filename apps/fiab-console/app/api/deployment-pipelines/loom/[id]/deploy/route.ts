@@ -21,7 +21,6 @@
  */
 import { NextRequest } from 'next/server';
 import crypto from 'node:crypto';
-import { getSession } from '@/lib/auth/session';
 import { listAllOwnedItems, createOwnedItem, updateOwnedItem } from '@/app/api/items/_lib/item-crud';
 import { PROVISIONERS, resolveTarget } from '@/lib/install/provisioning-engine';
 import { applyStageRules } from '@/lib/install/pipeline-deploy';
@@ -30,15 +29,16 @@ import { pipelineHistoryContainer } from '@/lib/azure/cosmos-client';
 import type { ProvisionResult } from '@/lib/install/provisioners/types';
 import type { LoomPipelineHistoryRecord } from '@/lib/types/loom-pipeline';
 import type { WorkspaceItem } from '@/lib/types/workspace';
-import { jok, jerr, loadPipeline, stageWorkspaceId, loadStageRules } from '../../_lib/pipeline-store';
+import { jok, jerr, loadPipeline, stageWorkspaceId, loadStageRules, resolveCaller } from '../../_lib/pipeline-store';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
 
 export async function POST(req: NextRequest, ctx: { params: Promise<{ id: string }> }) {
-  const s = getSession();
-  if (!s) return jerr('unauthenticated', 401, 'unauthorized');
-  const tenantId = s.claims.oid;
+  const caller = resolveCaller(req);
+  if (!caller) return jerr('unauthenticated', 401, 'unauthorized');
+  const s = caller.session;
+  const tenantId = caller.tenantId;
   const { id } = await ctx.params;
 
   const body = await req.json().catch(() => ({}));
@@ -183,7 +183,7 @@ export async function POST(req: NextRequest, ctx: { params: Promise<{ id: string
       steps,
       startedAt: now,
       completedAt: now,
-      startedBy: s.claims.upn || s.claims.email || tenantId,
+      startedBy: caller.actor,
     };
     try {
       const hist = await pipelineHistoryContainer();

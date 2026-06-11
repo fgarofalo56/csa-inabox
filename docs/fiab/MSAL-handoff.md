@@ -101,3 +101,40 @@ MSAL authority and the sign-out URL both flip to
 `login.microsoftonline.us` automatically. Redirect URIs in the app reg
 must use the Gov cloud hostnames.
 
+## CLI sign-in (`loom` CLI — device code)
+
+The `loom` CLI (`@csa-loom/cli`) signs in via `POST /api/auth/cli-session`,
+which runs the OAuth 2.0 **device-authorization grant** (RFC 8628) server-side
+using the SAME Entra app registration as the browser flow (no new app, no new
+secret, no new Azure resource). It mints the identical encrypted `loom_session`
+cookie and returns the value to the CLI, which stores it `0600` and replays it
+as the `Cookie` header — the same contract the browser uses.
+
+One-time app-registration change (device code requires a public-client flow to
+be allowed on the SAME `AZURE_CLIENT_ID`):
+
+```bash
+# Enable public client flows (idempotent) on the existing Loom app reg.
+az ad app update --id "$APP_ID" --set isFallbackPublicClient=true
+```
+
+No env-var or Container App change is needed — the route reuses
+`LOOM_MSAL_CLIENT_ID`/`AZURE_CLIENT_ID`, `AZURE_TENANT_ID`, `SESSION_SECRET`,
+and `AZURE_CLOUD` that the browser sign-in already requires. The Gov-cloud
+authority switch is inherited verbatim from `lib/auth/msal.ts`.
+
+For non-interactive / CI use, the CLI also supports
+`loom auth login --service-principal` which calls the same route with a
+client-credentials grant (the SP's `oid` becomes the tenant partition). That
+path needs no app-registration change.
+
+Verify after enabling:
+
+```bash
+loom auth login --api-url https://<console-host>
+#   prints a code + https://microsoft.com/devicelogin ; sign in, then:
+loom auth status        # verifiedLive: true
+loom workspace list
+```
+
+

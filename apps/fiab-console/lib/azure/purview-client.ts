@@ -1118,6 +1118,49 @@ export async function triggerScanRun(sourceName: string, scanName: string): Prom
   return { runId: raw?.runId || runId, raw };
 }
 
+/**
+ * Detect whether a Purview scan executes on a SELF-HOSTED integration runtime —
+ * the signal that the shared admin-zone Purview SHIR VMSS must be scaled up
+ * before triggering the scan.
+ *
+ * A Purview scan definition references its IR via `properties.connectedVia
+ * .referenceName` (the scanning data plane's IR reference). When present, we
+ * read that IR (GET /scan/integrationruntimes/{name}) and treat it as
+ * self-hosted when its kind/type is "SelfHosted" (managed/Azure-auto IRs are
+ * "Managed"/absent). Fail-open: any read failure returns false so a scan is
+ * never blocked by detection.
+ *
+ *   GET /scan/datasources/{src}/scans/{scan}?api-version=2022-07-01-preview
+ *   GET /scan/integrationruntimes/{name}?api-version=2022-07-01-preview
+ * https://learn.microsoft.com/rest/api/purview/scanningdataplane/scans/get
+ * https://learn.microsoft.com/rest/api/purview/scanningdataplane/integration-runtimes/get
+ */
+export async function scanUsesSelfHostedIr(sourceName: string, scanName: string): Promise<boolean> {
+  try {
+    if (!sourceName || !scanName) return false;
+    const sRes = await purviewFetch(
+      `/scan/datasources/${encodeURIComponent(sourceName)}/scans/${encodeURIComponent(scanName)}`,
+      { apiVersion: SCAN_API_VERSION },
+    );
+    if (sRes.status === 404) return false;
+    const scan = await readJson<any>(sRes);
+    const irName: string | undefined =
+      scan?.properties?.connectedVia?.referenceName ??
+      scan?.properties?.integrationRuntimeReference?.referenceName;
+    if (!irName || typeof irName !== 'string') return false; // managed/AutoResolve IR — no SHIR
+    const irRes = await purviewFetch(
+      `/scan/integrationruntimes/${encodeURIComponent(irName)}`,
+      { apiVersion: SCAN_API_VERSION },
+    );
+    if (irRes.status === 404) return false;
+    const ir = await readJson<any>(irRes);
+    const kind = (ir?.kind || ir?.properties?.type || ir?.type || '').toString().toLowerCase();
+    return kind === 'selfhosted';
+  } catch {
+    return false;
+  }
+}
+
 /** GET /scan/datasources/{name}/scans/{scan}/runs — last N scan runs. */
 export async function listScanRuns(sourceName: string, scanName: string): Promise<PurviewScanRun[]> {
   purviewAccount();

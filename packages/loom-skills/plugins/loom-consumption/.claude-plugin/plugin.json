@@ -1,0 +1,7 @@
+{
+  "name": "loom-consumption",
+  "version": "0.1.0",
+  "description": "Consumer skills for querying and discovering CSA Loom data. Components are declared in the loom-collection marketplace entry.",
+  "author": { "name": "Frank Garofalo" },
+  "license": "MIT"
+}

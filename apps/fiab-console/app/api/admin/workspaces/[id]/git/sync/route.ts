@@ -22,7 +22,7 @@ import { loadBinding, resolveSecret, recordSync } from '@/lib/azure/git-binding-
 import {
   serializeItem, itemFilePath, workspaceManifestPath, serializeManifest,
   adoGetBranchTip, adoExistingPaths, adoPushFiles,
-  githubBatchCommit, githubCloudGate,
+  githubBatchCommit, githubCloudGate, githubApiBase,
   type SyncFile, GitIntegrationError,
 } from '@/lib/clients/git-integration-client';
 
@@ -120,6 +120,7 @@ export async function POST(_req: NextRequest, props: { params: Promise<{ id: str
       }
       const result = await githubBatchCommit({
         owner: binding.githubOwner, repo: binding.githubRepo, branch: binding.branch, files, message: comment, pat,
+        base: githubApiBase(binding.githubHost),
       });
       commitId = result.commitId;
     }

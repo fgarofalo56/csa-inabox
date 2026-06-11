@@ -227,6 +227,9 @@ param copilotMafEnabled bool = false
 @description('Expose the unified Fabric IQ MCP tool surface (/api/iq/mcp) to EXTERNAL agents (Microsoft Agent 365, Azure AI Foundry, Copilot Studio) via Bearer-token auth. Console users always reach it via their MSAL session; this flag only gates the token path. When true the Console gets LOOM_IQ_MCP_ENABLED=true plus the shared LOOM_INTERNAL_TOKEN used as the default Bearer secret.')
 param loomIqMcpEnabled bool = false
 
+@description('Enable the headless CI Bearer-token path on the Loom deployment-pipeline routes (/api/deployment-pipelines/loom/**) so an Azure DevOps / GitHub Actions agent can drive deploys + management via the CSA Loom DevOps task/extension (Fabric "fabric-devops-pipelines" parity). Console users always reach these routes via their MSAL session; this flag only gates the token path, which fails closed when off. When true the Console gets LOOM_PIPELINE_CI_ENABLED=true plus the shared LOOM_INTERNAL_TOKEN as the default Bearer secret (set a dedicated LOOM_CI_TOKEN Key Vault secret to isolate CI from the broader internal-trust token).')
+param loomPipelineCiEnabled bool = false
+
 @description('Provision an Azure Files share + managedEnvironments/storages registration so the loom-mcp Container App can persist deployable MCP-server state across revisions. Container Apps only (Commercial / GCC); on AKS boundaries the MCP workload uses an Azure Files PersistentVolumeClaim instead. The Console "Mount persistence" admin control re-mounts the share imperatively.')
 param mcpPersistenceEnabled bool = true
 
@@ -303,6 +306,25 @@ param loomAasModel string = ''
 
 @description('Scaled self-hosted IR VMSS name (backs the SHIR metrics tile + scale controls). Defaults to the single-sub DLZ name; empty disables the SHIR surface (honest gate).')
 param loomShirVmssName string = 'vmss-loom-shir-default'
+
+@description('Deploy the SHARED admin-zone Purview self-hosted IR VMSS (scale-to-zero). A Purview SHIR cannot be the DLZ ADF SHIR (Microsoft constraint — separate machine), so this is its own VMSS. Honest-gated: only deploys when purviewEnabled AND purviewIrAuthKey AND purviewShirAdminPassword are all set.')
+param purviewShirEnabled bool = true
+
+@description('Purview self-hosted IR node auth key (authKey1) from the Purview scanning data plane (Data Map → Source management → Integration runtimes, or the scanning REST API). Empty = honest gate (the Purview SHIR VMSS is not deployed; the auto-scale-up still no-ops cleanly). Store in Key Vault and pass at deploy.')
+@secure()
+param purviewIrAuthKey string = ''
+
+@description('Local admin password for the Purview SHIR VMSS nodes (from Key Vault). Empty = honest gate (the Purview SHIR VMSS is not deployed).')
+@secure()
+param purviewShirAdminPassword string = ''
+
+@description('Target node count the Purview scan-trigger automation scales the Purview SHIR VMSS TO (created at 0). 1-8.')
+@minValue(1)
+@maxValue(8)
+param purviewShirMaxNodes int = 4
+
+@description('Purview SHIR VMSS name — emitted to the Console as LOOM_PURVIEW_SHIR_VMSS_NAME so the BFF can scale it up before a SHIR-using scan. Must match purview-shir.bicep naming (vmss-loom-pvw-shir-<domain>).')
+param loomPurviewShirVmssName string = 'vmss-loom-pvw-shir-default'
 
 @description('Loom Azure Data Factory resource group. Empty defaults to LOOM_DLZ_RG.')
 param loomAdfRg string = ''
@@ -593,6 +615,26 @@ param existingFoundryAccountName string = ''
 @description('Resource group of the existing Foundry/AOAI account. Empty defaults to this admin RG.')
 param existingFoundryRg string = ''
 
+// ---- Bring-your-own existing services — cross-sub (…Sub) dimension for the
+// four admin-plane reuse pairs PLUS the remaining reusable services (Purview,
+// Synapse, Cosmos, Event Hubs, Databricks) per
+// docs/fiab/design/full-deployment-and-byo.md §4.2. Consolidated into ONE object
+// param (the module is near Bicep's 256-param limit). Each field is a pure
+// string pass-through used to build the LOOM_<SVC>_SUB Console env var (clients
+// fall back to LOOM_SUBSCRIPTION_ID when empty) and/or override the navigator
+// binding (reuse > provisioned). NOT used as Bicep `existing` cross-sub
+// references — post-deploy RBAC is granted by grant-navigator-rbac.sh against
+// whatever sub resolves here. Emitted by scripts/csa-loom/byo-wizard.sh. Keys:
+//   aiSearchSub, apimSub, adxClusterSub, foundrySub,
+//   purviewAccount,            (purviewRg/purviewSub are ignored — account-host data-plane)
+//   synapseWorkspace, synapseRg, synapseSub,
+//   cosmosAccount, cosmosRg, cosmosSub,
+//   adfFactory, adfRg, adfSub,
+//   eventHubNamespace, eventHubRg, eventHubSub,
+//   databricksWorkspace, databricksRg, databricksSub, databricksHostname
+@description('Bring-your-own existing-service overrides (cross-sub …Sub + Purview/Synapse/Cosmos/EventHubs/Databricks). See the key list in admin-plane/main.bicep; emitted by byo-wizard.sh.')
+param byoExisting object = {}
+
 @description('Azure ML workspace name backing the notebook AML path (deploy-planner mlWorkspace module). Empty → the AML notebook toggle honest-gates (LOOM_AML_WORKSPACE unset).')
 param amlWorkspaceName string = ''
 @description('Resource group of the Azure ML workspace. Empty defaults to this admin RG.')
@@ -603,6 +645,43 @@ var byoAiSearchRg = !empty(existingAiSearchRg) ? existingAiSearchRg : resourceGr
 var byoApimRg     = !empty(existingApimRg) ? existingApimRg : resourceGroup().name
 var byoAdxRg      = !empty(existingAdxClusterRg) ? existingAdxClusterRg : resourceGroup().name
 var byoFoundryRg  = !empty(existingFoundryRg) ? existingFoundryRg : resourceGroup().name
+// Cross-sub (…Sub) resolution — empty falls back to the deployment subscription.
+var byoAiSearchSub = !empty(byoExisting.?aiSearchSub ?? '') ? byoExisting.aiSearchSub : subscription().subscriptionId
+var byoApimSub     = !empty(byoExisting.?apimSub ?? '') ? byoExisting.apimSub : subscription().subscriptionId
+var byoAdxSub      = !empty(byoExisting.?adxClusterSub ?? '') ? byoExisting.adxClusterSub : subscription().subscriptionId
+var byoFoundrySub  = !empty(byoExisting.?foundrySub ?? '') ? byoExisting.foundrySub : subscription().subscriptionId
+// Purview — existingPurviewAccount overrides loomPurviewAccount (reuse > param).
+// The Purview catalog data-plane is reached by account host (`{account}.purview.azure.com`)
+// + a UAMI data-plane role assigned in the Purview portal — it is subscription-
+// agnostic, so a reused cross-sub Purview needs no LOOM_PURVIEW_SUB/RG env wire
+// (the account name alone resolves it). Those vars were dropped to avoid a dead wire.
+var existingPurviewAccount = byoExisting.?purviewAccount ?? ''
+var effPurviewAccount = !empty(existingPurviewAccount) ? existingPurviewAccount : loomPurviewAccount
+// Synapse navigator — reuse > provisioned DLZ workspace.
+var existingSynapseWorkspace = byoExisting.?synapseWorkspace ?? ''
+var effSynapseWorkspace = !empty(existingSynapseWorkspace) ? existingSynapseWorkspace : loomSynapseWorkspace
+var byoSynapseRg        = !empty(byoExisting.?synapseRg ?? '') ? byoExisting.synapseRg : loomDlzRg
+var byoSynapseSub       = !empty(byoExisting.?synapseSub ?? '') ? byoExisting.synapseSub : subscription().subscriptionId
+// Cosmos control-plane navigator — reuse > provisioned DLZ account.
+var existingCosmosAccount = byoExisting.?cosmosAccount ?? ''
+var effCosmosAccount = !empty(existingCosmosAccount) ? existingCosmosAccount : loomCosmosAccount
+var effCosmosRg      = !empty(byoExisting.?cosmosRg ?? '') ? byoExisting.cosmosRg : (!empty(loomCosmosAccountRg) ? loomCosmosAccountRg : loomDlzRg)
+var byoCosmosSub     = !empty(byoExisting.?cosmosSub ?? '') ? byoExisting.cosmosSub : subscription().subscriptionId
+// Data Factory navigator — reuse > provisioned DLZ factory. Name/RG/Sub flow
+// into LOOM_ADF_NAME/RG/SUB, which adf-client reads (sub/rg fall back to the
+// deployment sub + DLZ RG when empty).
+var existingAdfFactory = byoExisting.?adfFactory ?? ''
+var effAdfName = !empty(existingAdfFactory) ? existingAdfFactory : loomAdfName
+var effAdfRg   = !empty(byoExisting.?adfRg ?? '') ? byoExisting.adfRg : (!empty(loomAdfRg) ? loomAdfRg : loomDlzRg)
+var byoAdfSub  = !empty(byoExisting.?adfSub ?? '') ? byoExisting.adfSub : subscription().subscriptionId
+// Event Hubs navigator — reuse > provisioned DLZ namespace.
+var existingEventHubNamespace = byoExisting.?eventHubNamespace ?? ''
+var effEventHubNamespace = !empty(existingEventHubNamespace) ? existingEventHubNamespace : loomEventHubNamespace
+var effEventHubRg        = !empty(byoExisting.?eventHubRg ?? '') ? byoExisting.eventHubRg : (!empty(loomEventHubRg) ? loomEventHubRg : loomDlzRg)
+var byoEventHubSub       = !empty(byoExisting.?eventHubSub ?? '') ? byoExisting.eventHubSub : (!empty(loomEventHubSub) ? loomEventHubSub : subscription().subscriptionId)
+// Databricks navigator — reuse hostname > provisioned/patched hostname.
+var existingDatabricksHostname = byoExisting.?databricksHostname ?? ''
+var effDatabricksHostname = !empty(existingDatabricksHostname) ? existingDatabricksHostname : loomDatabricksHostname
 // Sovereign-cloud ADX (Kusto) hostname suffix — Commercial/GCC vs GCC-High/IL5.
 // Used only for the BYO (existingAdxClusterName) path; the provisioned cluster
 // uses adxCluster.outputs.clusterUri (ARM-generated, already cloud-correct).
@@ -1424,6 +1503,35 @@ module catalog 'catalog.bicep' = {
 }
 
 // =====================================================================
+// 10a. Shared admin-zone Purview Self-Hosted IR (SHIR) VMSS — scale-to-zero.
+//
+// A Purview SHIR MUST be a separate machine from the DLZ ADF SHIR (Microsoft
+// constraint — see purview-shir.bicep header). This pre-deploys ONE shared
+// Purview SHIR VMSS in the admin hub that scans many Purview data sources; the
+// Console scales it 0→N before a SHIR-using scan and the idle-stop workflow
+// scales it back to 0. Honest-gated: only deploys when Purview is enabled AND
+// the operator supplied a Purview IR auth key + a node admin password (both
+// @secure, empty by default). At IL5 (Atlas-on-AKS primary, no Purview) this
+// stays off — purviewEnabled is false there.
+// =====================================================================
+
+module purviewShir 'purview-shir.bicep' = if (purviewShirEnabled && purviewEnabled && !empty(purviewIrAuthKey) && !empty(purviewShirAdminPassword)) {
+  name: 'purview-shir'
+  params: {
+    location: location
+    domainName: 'default'
+    subnetId: '${network.outputs.hubVnetId}/subnets/snet-reserved'
+    adminPassword: purviewShirAdminPassword
+    purviewIrAuthKey: purviewIrAuthKey
+    maxNodes: purviewShirMaxNodes
+    consolePrincipalId: identity.outputs.uamiConsolePrincipalId
+    skipRoleGrants: skipRoleGrants
+    workspaceId: monitoring.outputs.lawId
+    complianceTags: complianceTags
+  }
+}
+
+// =====================================================================
 // 10b. Azure Maps account (geoanalytics backing)
 //
 // Backs the geo-map / geo-pipeline / map editors. Only deploys in
@@ -1446,6 +1554,18 @@ module azureMaps 'azure-maps.bicep' = if (azureMapsEnabled && (boundary == 'Comm
     complianceTags: complianceTags
   }
 }
+
+// Effective Maps account name fed to every Console env binding below.
+// When the module deploys (Commercial/GCC + enabled) we use its
+// non-deterministic generated name; otherwise we fall back to the BYO /
+// live-override input (`loomAzureMapsAccount`). A conditional-module output
+// resolves to '' when its condition is false, so this expression is always
+// safe. This closes the gap where the account deployed but
+// `LOOM_AZURE_MAPS_ACCOUNT` + the `NEXT_PUBLIC_LOOM_AZURE_MAPS_KEY` secretRef
+// were never bound (the param defaulted to '' and was never fed the output).
+var effectiveMapsAccount = (azureMapsEnabled && (boundary == 'Commercial' || boundary == 'GCC'))
+  ? azureMaps!.outputs.mapsAccountName
+  : loomAzureMapsAccount
 
 // =====================================================================
 // 11. AI defense (Defender for AI workaround in Gov)
@@ -1603,7 +1723,9 @@ module appDeployments 'app-deployments.bicep' = if (containerPlatform == 'contai
             // Activator run-history Microsoft.AlertsManagement/alerts). Mirrors the
             // sovereign-cloud selection already used by adf-client.ts.
             { name: 'LOOM_ARM_ENDPOINT', value: boundary == 'GCC-High' || boundary == 'IL5' ? 'https://management.usgovcloudapi.net' : 'https://management.azure.com' }
-            { name: 'LOOM_SYNAPSE_WORKSPACE', value: loomSynapseWorkspace }
+            { name: 'LOOM_SYNAPSE_WORKSPACE', value: effSynapseWorkspace }
+            { name: 'LOOM_SYNAPSE_RG', value: byoSynapseRg }
+            { name: 'LOOM_SYNAPSE_SUB', value: byoSynapseSub }
             { name: 'LOOM_SYNAPSE_DEDICATED_POOL', value: loomSynapseDedicatedPool }
             // Direct Lake warm-cache TTL (seconds). Semantic-model queries within
             // this window are served from the Power BI in-memory VertiPaq cache;
@@ -1686,8 +1808,9 @@ module appDeployments 'app-deployments.bicep' = if (containerPlatform == 'contai
             // the App Config path; set to an App Configuration endpoint and grant
             // the Console identity "App Configuration Data Reader" to enable.
             { name: 'LOOM_PARAM_APPCONFIG', value: loomParamAppConfigEndpoint }
-            { name: 'LOOM_ADF_NAME', value: loomAdfName }
-            { name: 'LOOM_ADF_RG', value: !empty(loomAdfRg) ? loomAdfRg : loomDlzRg }
+            { name: 'LOOM_ADF_NAME', value: effAdfName }
+            { name: 'LOOM_ADF_RG', value: effAdfRg }
+            { name: 'LOOM_ADF_SUB', value: byoAdfSub }
             // Public Console base URL baked into the materialized-lake-view
             // "Refresh materialized lake view" ADF pipeline's callback activity.
             // Empty = the refresh route derives the origin from the request.
@@ -1741,6 +1864,12 @@ module appDeployments 'app-deployments.bicep' = if (containerPlatform == 'contai
             { name: 'LOOM_HDINSIGHT_LINKED_SERVICE', value: loomHdinsightLinkedService }
             { name: 'NEXT_PUBLIC_LOOM_HDINSIGHT_LINKED_SERVICE', value: loomHdinsightLinkedService }
             { name: 'LOOM_SHIR_VMSS_NAME', value: loomShirVmssName }
+            // Shared admin-zone Purview SHIR VMSS — the BFF scales this 0→N
+            // before a Purview scan that uses the self-hosted IR, and the
+            // idle-stop workflow scales it back to 0. It lives in the admin RG
+            // (LOOM_ADMIN_RG), NOT the DLZ — a Purview SHIR can't share a
+            // machine with the ADF SHIR. Empty disables the surface (honest gate).
+            { name: 'LOOM_PURVIEW_SHIR_VMSS_NAME', value: (purviewShirEnabled && purviewEnabled && !empty(purviewIrAuthKey) && !empty(purviewShirAdminPassword)) ? loomPurviewShirVmssName : '' }
             // Capacity & compute → Scale & manage drawer → AKS node-pool scaling.
             // Only populated on the AKS container platform (GCC-High / IL5); on
             // Commercial / GCC these are empty and the drawer's AKS section
@@ -1774,10 +1903,10 @@ module appDeployments 'app-deployments.bicep' = if (containerPlatform == 'contai
             { name: 'LOOM_ASA_LOCATION', value: loomAsaLocation }
             // Event Hubs namespace navigator (Eventstream editor left pane) —
             // defaults RG/sub to LOOM_DLZ_RG / LOOM_SUBSCRIPTION_ID when unset.
-            { name: 'LOOM_EVENTHUB_NAMESPACE', value: loomEventHubNamespace }
+            { name: 'LOOM_EVENTHUB_NAMESPACE', value: effEventHubNamespace }
             { name: 'LOOM_EH_SCHEMA_GROUP', value: loomEhSchemaGroup }
-            { name: 'LOOM_EVENTHUB_RG', value: loomEventHubRg }
-            { name: 'LOOM_EVENTHUB_SUB', value: loomEventHubSub }
+            { name: 'LOOM_EVENTHUB_RG', value: effEventHubRg }
+            { name: 'LOOM_EVENTHUB_SUB', value: byoEventHubSub }
             // Business Events publishing surface (/business-events) — Event Grid
             // custom-topic channel + durable Event Hub channel + governed
             // event-type registry (Cosmos). The Event Grid sub/RG default to the
@@ -1808,7 +1937,7 @@ module appDeployments 'app-deployments.bicep' = if (containerPlatform == 'contai
             // wizard) AND the workspace-monitoring provisioner (LAW→EH→ADX live
             // feed). An explicit workspaceMonitorEventHubNamespaceId override wins;
             // otherwise derived from the navigator namespace/RG/sub (DLZ fallback).
-            { name: 'LOOM_EVENTHUB_NAMESPACE_RESOURCE_ID', value: !empty(workspaceMonitorEventHubNamespaceId) ? workspaceMonitorEventHubNamespaceId : (empty(loomEventHubNamespace) ? '' : '/subscriptions/${empty(loomEventHubSub) ? subscription().subscriptionId : loomEventHubSub}/resourceGroups/${empty(loomEventHubRg) ? loomDlzRg : loomEventHubRg}/providers/Microsoft.EventHub/namespaces/${loomEventHubNamespace}') }
+            { name: 'LOOM_EVENTHUB_NAMESPACE_RESOURCE_ID', value: !empty(workspaceMonitorEventHubNamespaceId) ? workspaceMonitorEventHubNamespaceId : (empty(effEventHubNamespace) ? '' : '/subscriptions/${byoEventHubSub}/resourceGroups/${effEventHubRg}/providers/Microsoft.EventHub/namespaces/${effEventHubNamespace}') }
             // Cloud-aware ARM base. Commercial → management.azure.com (default);
             // GCC-High / IL5 → management.usgovcloudapi.net. Read by eventhubs-
             // client, the eventhouse ingest/preview routes, adf/azure-sql clients.
@@ -1824,7 +1953,7 @@ module appDeployments 'app-deployments.bicep' = if (containerPlatform == 'contai
             // singular hostname is what databricks-client.ts reads; the real
             // value embeds a non-deterministic workspace id so it is patched
             // post-deploy from the DLZ workspaceUrl (see loomDatabricksHostname).
-            { name: 'LOOM_DATABRICKS_HOSTNAME', value: loomDatabricksHostname }
+            { name: 'LOOM_DATABRICKS_HOSTNAME', value: effDatabricksHostname }
             // The same hostname also backs the workspace Spark / compute
             // configuration surface (Settings → Spark compute; F13) — instance
             // pools, runtime, environment libraries, and job defaults. No extra
@@ -1855,6 +1984,7 @@ module appDeployments 'app-deployments.bicep' = if (containerPlatform == 'contai
             { name: 'LOOM_KUSTO_DM_URI',       value: !empty(existingAdxClusterName) ? 'https://ingest-${existingAdxClusterName}.${location}.${kustoSuffix}' : (adxEnabled ? adxCluster!.outputs.clusterDataIngestionUri : '') }
             { name: 'LOOM_KUSTO_CLUSTER_NAME', value: !empty(existingAdxClusterName) ? existingAdxClusterName : (adxEnabled ? adxCluster!.outputs.clusterName : '') }
             { name: 'LOOM_KUSTO_RG',           value: !empty(existingAdxClusterName) ? byoAdxRg : (adxEnabled ? resourceGroup().name : '') }
+            { name: 'LOOM_KUSTO_SUB',          value: !empty(existingAdxClusterName) ? byoAdxSub : ((adxEnabled) ? subscription().subscriptionId : '') }
             { name: 'LOOM_KUSTO_LOCATION',     value: (!empty(existingAdxClusterName) || adxEnabled) ? location : '' }
             // Per-DLZ ADX database is named loomdb-<domain>; the single-sub DLZ
             // uses domain "default" → loomdb-default. For a reused cluster the real
@@ -1901,6 +2031,7 @@ module appDeployments 'app-deployments.bicep' = if (containerPlatform == 'contai
             // AI Search navigator + the loom-items grounding index + help copilot.
             // RG/sub fall back to LOOM_AI_SEARCH_RG / LOOM_SUBSCRIPTION_ID.
             { name: 'LOOM_AI_SEARCH_SERVICE',  value: !empty(existingAiSearchService) ? existingAiSearchService : (aiSearchEnabled ? aiSearch!.outputs.searchName : '') }
+            { name: 'LOOM_AI_SEARCH_SUB',      value: !empty(existingAiSearchService) ? byoAiSearchSub : (aiSearchEnabled ? subscription().subscriptionId : '') }
             // Optional storage connection string for AI Search indexer debug-session
             // state (ms-az-cognitive-search-debugsession container). Empty by default;
             // operators set it (or supply per-session in the UI) to enable debug
@@ -1913,12 +2044,14 @@ module appDeployments 'app-deployments.bicep' = if (containerPlatform == 'contai
             // APIM navigator (apis/products/named-values/backends/subscriptions) + marketplace.
             { name: 'LOOM_APIM_NAME',          value: !empty(existingApimName) ? existingApimName : (apimEnabled ? apim!.outputs.apimName : '') }
             { name: 'LOOM_APIM_RG',            value: !empty(existingApimName) ? byoApimRg : (apimEnabled ? resourceGroup().name : '') }
+            { name: 'LOOM_APIM_SUB',           value: !empty(existingApimName) ? byoApimSub : (apimEnabled ? subscription().subscriptionId : '') }
             // Cosmos DB control-plane navigator (databases/containers/sprocs). This
             // is the USER-navigated account (distinct from Loom's own store at
             // LOOM_COSMOS_ENDPOINT) and lives in the DLZ RG. Requires the Console
             // UAMI to hold "DocumentDB Account Contributor" (granted in cosmos.bicep).
-            { name: 'LOOM_COSMOS_ACCOUNT',     value: loomCosmosAccount }
-            { name: 'LOOM_COSMOS_ACCOUNT_RG',  value: !empty(loomCosmosAccountRg) ? loomCosmosAccountRg : loomDlzRg }
+            { name: 'LOOM_COSMOS_ACCOUNT',     value: effCosmosAccount }
+            { name: 'LOOM_COSMOS_ACCOUNT_RG',  value: effCosmosRg }
+            { name: 'LOOM_COSMOS_ACCOUNT_SUB', value: byoCosmosSub }
             // Item-level Share (per-Azure-SQL-database Access control / IAM).
             // The RG of the SQL server(s); the Console UAMI holds constrained
             // RBAC-Admin here (sql-database-share-rbac.bicep) so the Share dialog
@@ -1967,7 +2100,12 @@ module appDeployments 'app-deployments.bicep' = if (containerPlatform == 'contai
             { name: 'LOOM_COSMOS_VECTOR_ENDPOINT',   value: loomCosmosVectorEndpoint }
             { name: 'LOOM_COSMOS_VECTOR_DATABASE',   value: loomCosmosVectorDatabase }
             { name: 'LOOM_COSMOS_VECTOR_CONTAINER',  value: loomCosmosVectorContainer }
-            { name: 'LOOM_AZURE_MAPS_ACCOUNT',       value: loomAzureMapsAccount }
+            { name: 'LOOM_AZURE_MAPS_ACCOUNT',       value: effectiveMapsAccount }
+            // Account name is not a secret (the key is, and stays in KV /
+            // secretRef). Mirroring it as NEXT_PUBLIC lets the geo-map / map
+            // editors prefill + display the deployed account, so the geo
+            // surfaces verifiably "use the deployed account".
+            { name: 'NEXT_PUBLIC_LOOM_AZURE_MAPS_ACCOUNT', value: effectiveMapsAccount }
             { name: 'LOOM_KUSTO_CLUSTER',            value: !empty(existingAdxClusterName) ? existingAdxClusterName : (adxEnabled ? adxCluster!.outputs.clusterName : '') }
             { name: 'NEXT_PUBLIC_LOOM_KUSTO_CLUSTER', value: !empty(existingAdxClusterName) ? existingAdxClusterName : (adxEnabled ? adxCluster!.outputs.clusterName : '') }
             // Phase 2 — RBAC tenant-admin bootstrap + install-time provisioning targets
@@ -2060,7 +2198,7 @@ module appDeployments 'app-deployments.bicep' = if (containerPlatform == 'contai
           // Azure Maps subscription key — exposed to SPA as NEXT_PUBLIC_
           // so the MapEditor can use the static-map URL. AAD-auth path
           // doesn't need this. Only set when the maps account is wired.
-          !empty(loomAzureMapsAccount) ? [
+          !empty(effectiveMapsAccount) ? [
             { name: 'NEXT_PUBLIC_LOOM_AZURE_MAPS_KEY', secretRef: 'loom-azure-maps-key' }
           ] : [],
           // Posture-refresh Function host key — only when the Function URL is wired.
@@ -2144,8 +2282,8 @@ module appDeployments 'app-deployments.bicep' = if (containerPlatform == 'contai
           //   2. purview-csa-loom-<location> when `purviewEnabled = true`
           //      and no explicit account name was supplied
           // ----------------------------------------------------------------
-          !empty(loomPurviewAccount) ? [
-            { name: 'LOOM_PURVIEW_ACCOUNT', value: loomPurviewAccount }
+          !empty(effPurviewAccount) ? [
+            { name: 'LOOM_PURVIEW_ACCOUNT', value: effPurviewAccount }
           ] : (purviewEnabled ? [
             { name: 'LOOM_PURVIEW_ACCOUNT', value: 'purview-csa-loom-${location}' }
           ] : []),
@@ -2158,8 +2296,8 @@ module appDeployments 'app-deployments.bicep' = if (containerPlatform == 'contai
           // is 100% functional Azure-native per no-fabric-dependency.md). The UC
           // API is Commercial-only today; GCC/GCC-High/IL5 fall back to the
           // Cosmos governance-domain list automatically.
-          !empty(loomPurviewAccount) ? [
-            { name: 'LOOM_PURVIEW_UC_ENDPOINT', value: 'https://${loomPurviewAccount}.purview.azure.com' }
+          !empty(effPurviewAccount) ? [
+            { name: 'LOOM_PURVIEW_UC_ENDPOINT', value: 'https://${effPurviewAccount}.purview.azure.com' }
             { name: 'LOOM_PURVIEW_UC_API_VERSION', value: '2026-03-20-preview' }
           ] : (purviewEnabled ? [
             { name: 'LOOM_PURVIEW_UC_ENDPOINT', value: 'https://purview-csa-loom-${location}.purview.azure.com' }
@@ -2312,7 +2450,7 @@ module appDeployments 'app-deployments.bicep' = if (containerPlatform == 'contai
             // (Databricks workspace URLs embed a non-deterministic id). Empty
             // until patched post-deploy from the DLZ workspaceUrl, so UC gates
             // honestly rather than calling a phantom host (per no-vaporware.md).
-            { name: 'LOOM_DATABRICKS_HOSTNAMES', value: loomDatabricksHostname }
+            { name: 'LOOM_DATABRICKS_HOSTNAMES', value: effDatabricksHostname }
           ] : [],
           // Fabric API base is always set — the runtime gates on UAMI authz.
           [
@@ -2409,6 +2547,7 @@ module appDeployments 'app-deployments.bicep' = if (containerPlatform == 'contai
             // Models / Quota / Keys / Networking / RBAC tabs and the
             // data-agent test chat. Empty when AI Foundry isn't deployed.
             { name: 'LOOM_FOUNDRY_RG', value: byoFoundryRg }
+            { name: 'LOOM_FOUNDRY_SUB', value: byoFoundrySub }
             { name: 'LOOM_FOUNDRY_NAME', value: (aiFoundryEnabled && empty(existingFoundryAccountName)) ? aiFoundry!.outputs.hubName : '' }
             // Azure AI Content Safety endpoint — copilot persona moderation
             // pipeline (Prompt Shields + harm analyze). Empty when the Content
@@ -2427,6 +2566,7 @@ module appDeployments 'app-deployments.bicep' = if (containerPlatform == 'contai
             // The model-hosting account lives in this admin-plane RG. foundry-cs-client.ts
             // reads LOOM_AOAI_RG (falls back to LOOM_FOUNDRY_RG, but pin it explicitly).
             { name: 'LOOM_AOAI_RG', value: byoFoundryRg }
+            { name: 'LOOM_AOAI_SUB', value: byoFoundrySub }
             // Foundry region — foundry-client.ts reads this for region-scoped
             // quota/model calls; falls back to a hard-coded 'eastus2' otherwise.
             { name: 'LOOM_FOUNDRY_REGION', value: location }
@@ -2526,6 +2666,12 @@ module appDeployments 'app-deployments.bicep' = if (containerPlatform == 'contai
             // always work. On → Agent 365 / Foundry can ground on ontology +
             // semantic + live-signals via the shared internal Bearer token.
             { name: 'LOOM_IQ_MCP_ENABLED', value: string(loomIqMcpEnabled) }
+            // Headless CI Bearer-token path on the deployment-pipeline routes
+            // (/api/deployment-pipelines/loom/**). Off → only Console-session
+            // callers; the Azure DevOps / GitHub Actions task is rejected. On →
+            // the CSA Loom DevOps task can drive deploys + management using the
+            // shared internal Bearer token (or a dedicated LOOM_CI_TOKEN secret).
+            { name: 'LOOM_PIPELINE_CI_ENABLED', value: string(loomPipelineCiEnabled) }
           ],
           // MAF orchestration tier (GCC-High / IL5). When the loom-copilot-maf
           // Container App deploys, set LOOM_MAF_ENDPOINT so copilot-orchestrator
@@ -2534,10 +2680,11 @@ module appDeployments 'app-deployments.bicep' = if (containerPlatform == 'contai
           copilotMafActive ? [
             { name: 'LOOM_MAF_ENDPOINT', value: copilotMaf!.outputs.mafInternalEndpoint }
           ] : [],
-          // Shared internal trust token — wired when EITHER the MAF tier is
-          // active OR the IQ MCP external-agent path is enabled. Used as the
-          // default IQ MCP Bearer secret (LOOM_IQ_MCP_TOKEN overrides if set).
-          (copilotMafActive || loomIqMcpEnabled) ? [
+          // Shared internal trust token — wired when ANY token-authenticated path
+          // is active: the MAF tier, the IQ MCP external-agent path, OR the
+          // deployment-pipeline CI path. Used as the default Bearer secret for
+          // all three (LOOM_IQ_MCP_TOKEN / LOOM_CI_TOKEN override per-path).
+          (copilotMafActive || loomIqMcpEnabled || loomPipelineCiEnabled) ? [
             { name: 'LOOM_INTERNAL_TOKEN', secretRef: 'loom-internal-token' }
           ] : [],
           // MCP stdio→HTTP/SSE bridge (apps/fiab-mcp-bridge). Deployed alongside
@@ -2553,7 +2700,7 @@ module appDeployments 'app-deployments.bicep' = if (containerPlatform == 'contai
             { name: 'loom-msal-client-secret', value: loomMsalClientSecret }
             { name: 'session-secret', value: empty(loomSessionSecret) ? guid(resourceGroup().id, 'loom-session-secret-v1') : loomSessionSecret }
           ] : [],
-          !empty(loomAzureMapsAccount) ? [
+          !empty(effectiveMapsAccount) ? [
             // Read from KV at deploy time. The azure-maps module wrote the
             // primary key here as 'loom-azure-maps-primary-key' on the
             // Loom Key Vault.
@@ -2571,9 +2718,11 @@ module appDeployments 'app-deployments.bicep' = if (containerPlatform == 'contai
             { name: 'loom-paginated-render-key', keyVaultUrl: '${keyvault.outputs.keyVaultUri}secrets/${loomPaginatedRenderKeySecretName}', identity: identity.outputs.uamiConsoleId }
           ] : [],
           // Shared internal trust token for the MAF → Console tool-dispatch
-          // callback (GCC-High / IL5) AND the default Bearer secret for the IQ
-          // MCP external-agent path. Same deterministic value the MAF app gets.
-          (copilotMafActive || loomIqMcpEnabled) ? [
+          // callback (GCC-High / IL5), the default Bearer secret for the IQ
+          // MCP external-agent path, AND the default Bearer secret for the
+          // deployment-pipeline CI path. Same deterministic value all consumers
+          // get. Set a dedicated LOOM_CI_TOKEN secret to isolate CI if desired.
+          (copilotMafActive || loomIqMcpEnabled || loomPipelineCiEnabled) ? [
             { name: 'loom-internal-token', value: loomInternalToken }
           ] : []
         )

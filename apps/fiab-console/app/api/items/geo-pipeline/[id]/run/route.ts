@@ -25,6 +25,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { getSession } from '@/lib/auth/session';
 import { runPipeline, getPipelineParameters, adfConfigGate } from '@/lib/azure/adf-client';
+import { prewarmShirForPipeline } from '@/lib/azure/shir-autoscale';
 import { loadPipelineItem } from '@/lib/azure/pipeline-binding';
 
 export const runtime = 'nodejs';
@@ -81,6 +82,7 @@ export async function POST(_req: NextRequest, ctx: { params: Promise<{ id: strin
       else parametersSkipped.push(k);
     }
 
+    const shir = await prewarmShirForPipeline(adfPipelineName);
     const res = await runPipeline(adfPipelineName, paramMap);
     return NextResponse.json({
       ok: true,
@@ -89,6 +91,7 @@ export async function POST(_req: NextRequest, ctx: { params: Promise<{ id: strin
       parametersUsed,
       parametersSkipped,
       parameters: paramMap,
+      ...(shir || {}),
     });
   } catch (e: any) {
     const msg = e?.message || String(e);

@@ -15,6 +15,7 @@ import {
   normalizeFolder,
   githubCloudGate,
   githubAvailable,
+  githubApiBase,
   ADO_ZERO_OBJECT_ID,
   type WorkspaceManifest,
 } from '../git-integration-client';
@@ -152,5 +153,33 @@ describe('githubCloudGate', () => {
 describe('constants', () => {
   it('ADO zero object id is 40 zeros', () => {
     expect(ADO_ZERO_OBJECT_ID).toBe('0'.repeat(40));
+  });
+});
+
+describe('githubApiBase (ghe.com data-residency host)', () => {
+  it('defaults to api.github.com when host is empty / github.com', () => {
+    expect(githubApiBase()).toBe('https://api.github.com');
+    expect(githubApiBase('')).toBe('https://api.github.com');
+    expect(githubApiBase('  ')).toBe('https://api.github.com');
+    expect(githubApiBase('github.com')).toBe('https://api.github.com');
+    expect(githubApiBase('GitHub.com')).toBe('https://api.github.com');
+    expect(githubApiBase('api.github.com')).toBe('https://api.github.com');
+  });
+  it('derives api.<subdomain>.ghe.com from a bare subdomain', () => {
+    expect(githubApiBase('octocorp')).toBe('https://api.octocorp.ghe.com');
+  });
+  it('derives the host from a <subdomain>.ghe.com value', () => {
+    expect(githubApiBase('octocorp.ghe.com')).toBe('https://api.octocorp.ghe.com');
+    expect(githubApiBase('OCTOCORP.GHE.COM')).toBe('https://api.octocorp.ghe.com');
+  });
+  it('strips scheme and path from a full URL or repo URL', () => {
+    expect(githubApiBase('https://octocorp.ghe.com')).toBe('https://api.octocorp.ghe.com');
+    expect(githubApiBase('https://octocorp.ghe.com/my-org/my-repo')).toBe('https://api.octocorp.ghe.com');
+  });
+  it('collapses an api.<sub>.ghe.com value to the same base', () => {
+    expect(githubApiBase('api.octocorp.ghe.com')).toBe('https://api.octocorp.ghe.com');
+  });
+  it('falls back to api.github.com when the subdomain is unusable', () => {
+    expect(githubApiBase('.ghe.com')).toBe('https://api.github.com');
   });
 });

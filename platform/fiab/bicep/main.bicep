@@ -174,8 +174,14 @@ param aiSearchEnabled bool = false
 @description('Deploy ADX shared cluster (admin-plane) + per-DLZ ADX databases. Backs the RTI editor family — Eventhouse, KQL Database, KQL Queryset, KQL Dashboard, Eventstream. Default on as of 2026-05-27 (sweep-rti). Set false to skip ~$140/mo Dev SKU cluster.')
 param adxEnabled bool = true
 
+@description('Deploy a Gremlin-capable Cosmos DB account (EnableGremlin) + NoSQL vector account in each DLZ. Backs the cosmos-gremlin-graph (graph editor) and vector-store editors. Default on — the graph editor requires a Gremlin account at create-time (a NoSQL account cannot be converted). Set false to skip ~2 Cosmos accounts/DLZ.')
+param cosmosGraphVectorEnabled bool = true
+
 @description('Deploy the MAF (Microsoft Agent Framework, Gov AOAI-direct) orchestration-tier Container App (loom-copilot-maf). Set true in the GCC-High / IL5 params. The admin-plane gates activation on boundary∈{GCC-High,IL5} + containerPlatform==containerApps + deployAppsEnabled, so it is a safe no-op on the AKS path (the Console copilot-orchestrator then uses its documented Gov AOAI-direct fallback). Requires the loom-copilot-maf image pushed to ACR first.')
 param copilotMafEnabled bool = false
+
+@description('Enable the headless CI Bearer-token path on the Loom deployment-pipeline routes so an Azure DevOps / GitHub Actions agent can drive deploys + management via the CSA Loom DevOps task (Fabric "fabric-devops-pipelines" parity). Off by default — Console-session callers always work; this only gates the token path, which fails closed when off. When true the Console gets LOOM_PIPELINE_CI_ENABLED=true plus the shared LOOM_INTERNAL_TOKEN as the default Bearer secret. Cloud-agnostic: the ADO task talks only to the tenant own Loom URL + Entra, never api.fabric.microsoft.com.')
+param loomPipelineCiEnabled bool = false
 
 // ---------- Bring-your-own existing services (reuse instead of provision-new) ----------
 // Set any of these (via params/<boundary>.bicepparam readEnvironmentVariable('EXISTING_*',''))
@@ -197,6 +203,61 @@ param existingAdxClusterRg string = ''
 param existingFoundryAccountName string = ''
 @description('Resource group of the existing Foundry/AOAI account.')
 param existingFoundryRg string = ''
+
+// ---- Cross-subscription (…Sub) dimension + remaining BYO services (full
+// reuse-vs-new surface per docs/fiab/design/full-deployment-and-byo.md §4.2).
+// All are forwarded to the admin-plane module, where they build the
+// LOOM_<SVC>_SUB Console env vars + override the navigator binding when set.
+// Emit these from scripts/csa-loom/byo-wizard.sh (the bicepparam generator).
+@description('Subscription id of the existing AI Search service (cross-sub reuse).')
+param existingAiSearchSub string = ''
+@description('Subscription id of the existing APIM service (cross-sub reuse).')
+param existingApimSub string = ''
+@description('Subscription id of the existing ADX cluster (cross-sub reuse).')
+param existingAdxClusterSub string = ''
+@description('Subscription id of the existing Foundry/AOAI account (cross-sub reuse).')
+param existingFoundrySub string = ''
+@description('Reuse an existing Microsoft Purview account (short name). Overrides loomPurviewAccount.')
+param existingPurviewAccount string = ''
+@description('Resource group of the existing Purview account.')
+param existingPurviewRg string = ''
+@description('Subscription id of the existing Purview account (cross-sub reuse).')
+param existingPurviewSub string = ''
+@description('Reuse an existing Synapse workspace (name) for the navigator.')
+param existingSynapseWorkspace string = ''
+@description('Resource group of the existing Synapse workspace.')
+param existingSynapseRg string = ''
+@description('Subscription id of the existing Synapse workspace (cross-sub reuse).')
+param existingSynapseSub string = ''
+@description('Reuse an existing Cosmos DB account (name) for the control-plane navigator.')
+param existingCosmosAccount string = ''
+@description('Resource group of the existing Cosmos account.')
+param existingCosmosRg string = ''
+@description('Subscription id of the existing Cosmos account (cross-sub reuse).')
+param existingCosmosSub string = ''
+@description('Reuse an existing Event Hubs namespace (name) for the Eventstream navigator.')
+param existingEventHubNamespace string = ''
+@description('Resource group of the existing Event Hubs namespace.')
+param existingEventHubRg string = ''
+@description('Subscription id of the existing Event Hubs namespace (cross-sub reuse).')
+param existingEventHubSub string = ''
+@description('Reuse an existing Databricks workspace (name) — informational for RBAC.')
+param existingDatabricksWorkspace string = ''
+@description('Resource group of the existing Databricks workspace.')
+param existingDatabricksRg string = ''
+@description('Subscription id of the existing Databricks workspace (cross-sub reuse).')
+param existingDatabricksSub string = ''
+@description('Reuse an existing Databricks workspace hostname (adb-*.azuredatabricks.net). Overrides the navigator binding; the byo-wizard resolves this from workspaceUrl.')
+param existingDatabricksHostname string = ''
+@description('Reuse an existing Data Factory (name) for the Data Factory navigator / pipeline mounts.')
+param existingAdfFactory string = ''
+@description('Resource group of the existing Data Factory.')
+param existingAdfRg string = ''
+@description('Subscription id of the existing Data Factory (cross-sub reuse).')
+param existingAdfSub string = ''
+
+@description('Microsoft Fabric mode. DEFAULT false (Azure-native, no Fabric dependency per no-fabric-dependency.md). When false, no Fabric capacity/workspace is bound and loomDefaultFabricWorkspace is forced empty; the Console gates Fabric calls on UAMI authz and stays fully functional on Azure-native backends. Set true ONLY to opt into a bound Fabric workspace.')
+param fabricEnabled bool = false
 
 // ---------- Deploy-planner service toggles ----------
 // Each flag wires a self-contained module under modules/deploy-planner/** that
@@ -372,6 +433,14 @@ param appImageTags object = {
 
 var adminPlaneRgName = 'rg-csa-loom-admin-${location}'
 
+// T95 — Cosmos data-plane host suffixes, sovereign-cloud-specific. The DLZ
+// cosmos-graph-vector module computes the same suffixes; we mirror them here
+// so the deterministic-name endpoints wired into the Console env (below) match
+// the accounts the module actually deploys. Commercial/GCC → azure.com;
+// GCC-High/IL5 (Azure US Government) → azure.us.
+var gremlinHostSuffix = (boundary == 'GCC-High' || boundary == 'IL5') ? 'gremlin.cosmos.azure.us' : 'gremlin.cosmos.azure.com'
+var cosmosDocSuffix = (boundary == 'GCC-High' || boundary == 'IL5') ? 'azure.us' : 'azure.com'
+
 resource adminPlaneRg 'Microsoft.Resources/resourceGroups@2024-03-01' = {
   name: adminPlaneRgName
   location: location
@@ -423,6 +492,7 @@ module adminPlane 'modules/admin-plane/main.bicep' = {
     aiSearchEnabled: aiSearchEnabled
     adxEnabled: adxEnabled
     copilotMafEnabled: copilotMafEnabled
+    loomPipelineCiEnabled: loomPipelineCiEnabled
     existingAiSearchService: existingAiSearchService
     existingAiSearchRg: existingAiSearchRg
     existingApimName: existingApimName
@@ -431,6 +501,34 @@ module adminPlane 'modules/admin-plane/main.bicep' = {
     existingAdxClusterRg: existingAdxClusterRg
     existingFoundryAccountName: existingFoundryAccountName
     existingFoundryRg: existingFoundryRg
+    // Consolidated BYO overrides (cross-sub …Sub + Purview/Synapse/Cosmos/
+    // EventHubs/Databricks) — one object param keeps admin-plane under Bicep's
+    // 256-param ceiling. Emitted by scripts/csa-loom/byo-wizard.sh.
+    byoExisting: {
+      aiSearchSub: existingAiSearchSub
+      apimSub: existingApimSub
+      adxClusterSub: existingAdxClusterSub
+      foundrySub: existingFoundrySub
+      purviewAccount: existingPurviewAccount
+      purviewRg: existingPurviewRg
+      purviewSub: existingPurviewSub
+      synapseWorkspace: existingSynapseWorkspace
+      synapseRg: existingSynapseRg
+      synapseSub: existingSynapseSub
+      cosmosAccount: existingCosmosAccount
+      cosmosRg: existingCosmosRg
+      cosmosSub: existingCosmosSub
+      eventHubNamespace: existingEventHubNamespace
+      eventHubRg: existingEventHubRg
+      eventHubSub: existingEventHubSub
+      databricksWorkspace: existingDatabricksWorkspace
+      databricksRg: existingDatabricksRg
+      databricksSub: existingDatabricksSub
+      databricksHostname: existingDatabricksHostname
+      adfFactory: existingAdfFactory
+      adfRg: existingAdfRg
+      adfSub: existingAdfSub
+    }
     // Azure ML workspace for the notebook AML path. Name is the deterministic
     // deploy-planner ml-workspace.bicep name (uniqueString over the DLZ RG), so
     // we wire it WITHOUT referencing dpMlWorkspace.outputs (that module depends
@@ -444,13 +542,28 @@ module adminPlane 'modules/admin-plane/main.bicep' = {
     loomVanityDomain: loomVanityDomain
     loomStorageAccount: take('saloomdefault${uniqueString(singleDlzRg.id)}', 24)
     loomCosmosAccount: take('cosmos-loom-default-${uniqueString(singleDlzRg.id)}', 44)
-    // Forward the Cosmos data-plane endpoints to the console so the vector-store
-    // and graph editors bind to the deployed account by default (no manual
-    // config). Vector search runs on the NoSQL document endpoint; the Gremlin
-    // editor honest-gates because the default account is NoSQL-only (set this
-    // when a Gremlin-capable Cosmos account is deployed — see full-deployment-and-byo).
-    loomCosmosVectorEndpoint: 'https://${take('cosmos-loom-default-${uniqueString(singleDlzRg.id)}', 44)}.documents.azure.com:443/'
-    loomCosmosGremlinEndpoint: ''
+    // Forward the Cosmos data-plane endpoints to the Console so the vector-store
+    // and graph editors bind to the deployed accounts by default (no manual
+    // config). The DLZ `cosmos-graph-vector` module (cosmosGraphVectorEnabled,
+    // default on) creates a dedicated Gremlin account + a dedicated NoSQL vector
+    // account, named deterministically as `cosmos-loom-gremlin-default-<uniq>`
+    // and `cosmos-loom-vec-default-<uniq>` over the DLZ RG id. We compute those
+    // names inline here rather than reading singleDlz.outputs.* because
+    // `adminPlane` deploys BEFORE `singleDlz` (and singleDlz depends on
+    // adminPlane outputs) — referencing the DLZ output would create a cycle.
+    // This is the same deterministic-name pattern used for amlWorkspaceName /
+    // loomCosmosAccount above. Database/graph names match the module's literals
+    // (loom-graph / default / loom-vectors / docs-vec); they are NOT optional —
+    // the gremlin client defaults to graphdb/graph which the module never
+    // creates, so a bare endpoint would target a non-existent db/graph.
+    // Multi-sub mode can't be wired from a single admin-plane (one Console env,
+    // N DLZs) — operators run scripts/csa-loom/patch-navigator-env.sh there.
+    loomCosmosVectorEndpoint: (deploymentMode == 'single-sub' && cosmosGraphVectorEnabled) ? 'https://${take('cosmos-loom-vec-default-${uniqueString(singleDlzRg.id)}', 44)}.documents.${cosmosDocSuffix}:443/' : ''
+    loomCosmosVectorDatabase: (deploymentMode == 'single-sub' && cosmosGraphVectorEnabled) ? 'loom-vectors' : ''
+    loomCosmosVectorContainer: (deploymentMode == 'single-sub' && cosmosGraphVectorEnabled) ? 'docs-vec' : ''
+    loomCosmosGremlinEndpoint: (deploymentMode == 'single-sub' && cosmosGraphVectorEnabled) ? 'wss://${take('cosmos-loom-gremlin-default-${uniqueString(singleDlzRg.id)}', 44)}.${gremlinHostSuffix}:443/' : ''
+    loomCosmosGremlinDatabase: (deploymentMode == 'single-sub' && cosmosGraphVectorEnabled) ? 'loom-graph' : ''
+    loomCosmosGremlinGraph: (deploymentMode == 'single-sub' && cosmosGraphVectorEnabled) ? 'default' : ''
     // Bind the console's warehouse/SQL env (LOOM_SYNAPSE_WORKSPACE /
     // LOOM_SYNAPSE_DEDICATED_POOL) to the DLZ Synapse workspace + dedicated pool
     // the landing-zone provisions (synapse.bicep: 'syn-loom-${domainName}-${location}'
@@ -472,7 +585,10 @@ module adminPlane 'modules/admin-plane/main.bicep' = {
     loomMsalClientSecret: loomMsalClientSecret
     loomSessionSecret: loomSessionSecret
     loomMirrorBackend: loomMirrorBackend
-    loomDefaultFabricWorkspace: loomDefaultFabricWorkspace
+    // No-Fabric mode (default): force the bound workspace empty so nothing
+    // hard-depends on a Fabric capacity/workspace (no-fabric-dependency.md). Set
+    // fabricEnabled=true ONLY to opt into a bound Fabric workspace.
+    loomDefaultFabricWorkspace: fabricEnabled ? loomDefaultFabricWorkspace : ''
     loomVersion: loomVersion
     appImageTags: appImageTags
     // Standalone AML workspace coords for the AML control-plane navigator.
@@ -538,6 +654,7 @@ module singleDlz 'modules/landing-zone/main.bicep' = if (deploymentMode == 'sing
     consolePrincipalNeedsCmkBind: consolePrincipalNeedsCmkBind
     shirAdminPassword: shirAdminPassword
     recycleRetentionDays: recycleRetentionDays
+    cosmosGraphVectorEnabled: cosmosGraphVectorEnabled
   }
 }
 
@@ -615,6 +732,7 @@ module dlz 'modules/landing-zone/main.bicep' = [for (subId, i) in dlzSubscriptio
     consolePrincipalNeedsCmkBind: consolePrincipalNeedsCmkBind
     shirAdminPassword: shirAdminPassword
     recycleRetentionDays: recycleRetentionDays
+    cosmosGraphVectorEnabled: cosmosGraphVectorEnabled
   }
 }]
 

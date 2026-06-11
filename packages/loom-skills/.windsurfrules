@@ -1,0 +1,37 @@
+# Windsurf rules — CSA Loom Azure-native client patterns
+# (mirror of AGENTS.md / CLAUDE.md for Cursor; full detail in skills/<name>/SKILL.md)
+
+CSA Loom has NO hard dependency on real Microsoft Fabric or Power BI. Every item
+type works 100% on Azure-native backends BY DEFAULT. When generating or editing
+CSA Loom code:
+
+- Call the Azure-native client, NEVER api.fabric.microsoft.com / api.powerbi.com /
+  onelake.dfs.fabric.microsoft.com on the default path. Fabric is opt-in only
+  (LOOM_<ITEM>_BACKEND=fabric + a bound workspace).
+- Do not gate a feature on fabricWorkspaceId without an Azure-native fallback in
+  the same function.
+
+Item -> Azure-native backend -> client (under apps/fiab-console/lib/azure/):
+- lakehouse            -> ADLS Gen2 + Delta            -> adls-client.ts, synapse-sql-client.ts   (/api/lakehouse, /api/onelake)
+- warehouse            -> Synapse dedicated SQL pool   -> synapse-sql-client.ts, synapse-pool-arm.ts (/api/warehouse)
+- kql-database         -> Azure Data Explorer (ADX)    -> kusto-client.ts, kusto-arm-client.ts     (/api/adx)
+- eventstream          -> Azure Event Hubs             -> eventhubs-client.ts, stream-analytics-client.ts (/api/eventhubs)
+- data-pipeline        -> Synapse pipeline / ADF       -> synapse-dev-client.ts, adf-client.ts     (/api/adf)
+- activator            -> Azure Monitor alert          -> monitor-client.ts                        (/api/monitor)
+- mirrored-database    -> ADF CDC -> ADLS Delta        -> adf-client.ts, mirror-engine.ts          (/api/items)
+- semantic-model/report-> Loom-native over Synapse/AAS -> aas-client.ts, paginated-report-client.ts (/api/powerbi)
+- search/catalog       -> Azure AI Search + Cosmos     -> loom-search.ts, loom-docs-index.ts       (/api/ai-search)
+
+Hosts differ per sovereign cloud (Commercial / GCC / GCC-High / DoD). NEVER
+hard-code management.azure.com / kusto.windows.net / dfs.core.windows.net.
+Derive every host from apps/fiab-console/lib/azure/cloud-endpoints.ts helpers
+(armBase(), kustoSuffix(), dfsSuffix(), getGraphHost()) keyed off detectLoomCloud().
+
+Auth: ChainedTokenCredential(ManagedIdentityCredential({clientId: LOOM_UAMI_CLIENT_ID}),
+DefaultAzureCredential()) with per-resource .default scopes from cloud-endpoints.
+
+BFF routes return { ok: true, data } | { ok: false, error, code? } with a real
+HTTP status. Missing infra -> honest config gate (HTTP 503, code:'not_configured'),
+never a mock array / return [] / hard-coded sample data.
+
+See README.md and skills/<name>/SKILL.md for full patterns.

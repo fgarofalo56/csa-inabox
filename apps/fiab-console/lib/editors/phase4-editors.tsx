@@ -1966,6 +1966,9 @@ export function MapEditor({ item, id }: { item: FabricItemType; id: string }) {
   // simplest no-deps integration: just emit an <img>. Falls back to a
   // MessageBar gate when LOOM_AZURE_MAPS_SUBSCRIPTION_KEY isn't set.
   const mapsKey = process.env.NEXT_PUBLIC_LOOM_AZURE_MAPS_KEY;
+  // Deployed Azure Maps account name (bicep binds NEXT_PUBLIC_LOOM_AZURE_MAPS_ACCOUNT).
+  // Surfaced in the basemap subtitle so the surface shows the account it uses.
+  const configuredMapsAccount = process.env.NEXT_PUBLIC_LOOM_AZURE_MAPS_ACCOUNT || '';
   const centerLon = bbox ? (bbox.minLon + bbox.maxLon) / 2 : -122.33;
   const centerLat = bbox ? (bbox.minLat + bbox.maxLat) / 2 : 47.61;
   // Naive zoom heuristic in `_family-utils.bboxToZoom` (vitest-covered).
@@ -2013,7 +2016,7 @@ export function MapEditor({ item, id }: { item: FabricItemType; id: string }) {
         {validateMsg && <MessageBar intent={validateMsg.intent}><MessageBarBody>{validateMsg.text}</MessageBarBody></MessageBar>}
         {!parseErr && (
           <>
-            <Subtitle2>Map{tileUrl ? ` (Azure Maps basemap · zoom ${zoom}, center ${centerLat.toFixed(3)}, ${centerLon.toFixed(3)})` : ' (vector overlay)'}</Subtitle2>
+            <Subtitle2>Map{tileUrl ? ` (Azure Maps basemap${configuredMapsAccount ? ` · ${configuredMapsAccount}` : ''} · zoom ${zoom}, center ${centerLat.toFixed(3)}, ${centerLon.toFixed(3)})` : ' (vector overlay)'}</Subtitle2>
             <GeoJsonMap geojson={parsedGeo} rasterUrl={tileUrl} />
           </>
         )}

@@ -9,6 +9,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { getSession } from '@/lib/auth/session';
 import { runPipeline } from '@/lib/azure/adf-client';
+import { prewarmShirForPipeline } from '@/lib/azure/shir-autoscale';
 import { resolveBinding, bindingErrorResponse } from '@/lib/azure/pipeline-binding';
 
 export const runtime = 'nodejs';
@@ -27,8 +28,10 @@ export async function POST(req: NextRequest, ctx: { params: Promise<{ id: string
     return NextResponse.json(errBody, { status });
   }
   try {
+    // Scale the SHIR VMSS up first if this pipeline runs on a Self-Hosted IR.
+    const shir = await prewarmShirForPipeline(pipelineName);
     const res = await runPipeline(pipelineName, body?.params || {});
-    return NextResponse.json({ ok: true, boundTo: pipelineName, ...res });
+    return NextResponse.json({ ok: true, boundTo: pipelineName, ...res, ...(shir || {}) });
   } catch (e: any) {
     return NextResponse.json({ ok: false, error: e?.message || String(e) }, { status: 502 });
   }

@@ -8,6 +8,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { getSession } from '@/lib/auth/session';
 import { listScansForSource, listScanRuns, triggerScanRun } from '@/lib/azure/purview-client';
+import { prewarmPurviewShirForScan } from '@/lib/azure/shir-autoscale';
 import { handleSecurityError } from '../../_lib/error-handling';
 
 export const runtime = 'nodejs';
@@ -40,7 +41,10 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ ok: false, error: 'source and scan are required' }, { status: 400 });
   }
   try {
+    // Scale the shared Purview SHIR VMSS up first if this scan runs on a
+    // SelfHosted IR (fail-open — never blocks the scan).
+    const shir = await prewarmPurviewShirForScan(body.source, body.scan);
     const result = await triggerScanRun(body.source, body.scan);
-    return NextResponse.json({ ok: true, ...result }, { status: 202 });
+    return NextResponse.json({ ok: true, ...result, ...(shir || {}) }, { status: 202 });
   } catch (e) { return handleSecurityError(e); }
 }

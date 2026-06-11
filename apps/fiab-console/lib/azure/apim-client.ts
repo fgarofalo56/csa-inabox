@@ -41,8 +41,21 @@ function required(k: string): string {
   return v;
 }
 
+/**
+ * Resolve the APIM subscription. Honors LOOM_APIM_SUB (a reused APIM service in
+ * another subscription, set by the BYO wizard) and falls back to
+ * LOOM_SUBSCRIPTION_ID (the deployment sub) when empty — so cross-sub reuse
+ * targets the right ARM scope instead of silently 403/404-ing against the
+ * deployment sub. Required: throws when neither is set.
+ */
+function apimSub(): string {
+  const v = process.env.LOOM_APIM_SUB || process.env.LOOM_SUBSCRIPTION_ID;
+  if (!v) throw new Error('Missing env var: LOOM_APIM_SUB or LOOM_SUBSCRIPTION_ID');
+  return v;
+}
+
 function apimBase(): string {
-  const sub = required('LOOM_SUBSCRIPTION_ID');
+  const sub = apimSub();
   const rg = process.env.LOOM_APIM_RG || 'rg-csa-loom-admin-eastus2';
   const name = process.env.LOOM_APIM_NAME || 'apim-csa-loom-eastus2';
   return `${armBase()}/subscriptions/${sub}/resourceGroups/${rg}/providers/Microsoft.ApiManagement/service/${name}`;
@@ -56,7 +69,7 @@ function apimBase(): string {
  * databricksConfigGate / synapseConfigGate so BFF routes can 503 cleanly.
  */
 export function apimConfigGate(): { missing: string } | null {
-  if (!process.env.LOOM_SUBSCRIPTION_ID) return { missing: 'LOOM_SUBSCRIPTION_ID' };
+  if (!process.env.LOOM_APIM_SUB && !process.env.LOOM_SUBSCRIPTION_ID) return { missing: 'LOOM_SUBSCRIPTION_ID' };
   // RG + name have deployment defaults; only flag when neither default nor
   // override resolves (defaults always resolve, so this is future-proofing for
   // deployments that null them out explicitly).
@@ -68,7 +81,7 @@ export function apimConfigGate(): { missing: string } | null {
 /** The resolved APIM target, for surfacing in the UI. */
 export function apimTarget(): { subscriptionId?: string; resourceGroup: string; name: string } {
   return {
-    subscriptionId: process.env.LOOM_SUBSCRIPTION_ID,
+    subscriptionId: process.env.LOOM_APIM_SUB || process.env.LOOM_SUBSCRIPTION_ID,
     resourceGroup: process.env.LOOM_APIM_RG || 'rg-csa-loom-admin-eastus2',
     name: process.env.LOOM_APIM_NAME || 'apim-csa-loom-eastus2',
   };

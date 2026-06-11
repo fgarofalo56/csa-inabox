@@ -1,0 +1,61 @@
+{
+  "$schema": "https://raw.githubusercontent.com/Microsoft/azure-pipelines-task-lib/master/tasks.schema.json",
+  "id": "0da591bb-beac-4ae3-b2c6-368b3a121963",
+  "name": "LoomCompare",
+  "friendlyName": "CSA Loom — Compare stages",
+  "description": "Content-level diff between two stages of a CSA Loom deployment pipeline. Use as a pre-deploy gate. Talks only to your own Loom Console.",
+  "helpMarkDown": "Requires `loomPipelineCiEnabled=true` + a CI Bearer token. See tools/ado-loom-task/README.md.",
+  "category": "Deploy",
+  "visibility": ["Build", "Release"],
+  "runsOn": ["Agent", "DeploymentGroup"],
+  "author": "CSA Loom",
+  "version": { "Major": 1, "Minor": 0, "Patch": 0 },
+  "instanceNameFormat": "Loom compare $(sourceStageId) vs $(targetStageId)",
+  "groups": [{ "name": "auth", "displayName": "Connection & authentication", "isExpanded": true }],
+  "inputs": [
+    {
+      "name": "loomBaseUrl",
+      "type": "string",
+      "label": "Loom Console base URL",
+      "required": true,
+      "groupName": "auth",
+      "helpMarkDown": "Your Loom Console origin, e.g. https://loom.contoso.com."
+    },
+    {
+      "name": "userOid",
+      "type": "string",
+      "label": "Acting user OID (x-user-oid)",
+      "required": true,
+      "groupName": "auth"
+    },
+    {
+      "name": "loomToken",
+      "type": "string",
+      "label": "Loom CI Bearer token",
+      "required": true,
+      "groupName": "auth",
+      "helpMarkDown": "Set to a **secret** variable, e.g. $(LOOM_CI_TOKEN)."
+    },
+    { "name": "pipelineId", "type": "string", "label": "Pipeline id", "required": true },
+    { "name": "sourceStageId", "type": "string", "label": "Source stage id", "required": true },
+    { "name": "targetStageId", "type": "string", "label": "Target stage id", "required": true },
+    {
+      "name": "failOnDifferences",
+      "type": "boolean",
+      "label": "Fail when the stages differ",
+      "defaultValue": "false",
+      "required": false,
+      "helpMarkDown": "Fail the task when any item differs / is missing between source and target."
+    }
+  ],
+  "outputVariables": [
+    { "name": "same", "description": "Items identical in both stages." },
+    { "name": "different", "description": "Items present in both but with differing definitions." },
+    { "name": "onlyInSource", "description": "Items present only in the source stage." },
+    { "name": "notInSource", "description": "Items present only in the target stage." },
+    { "name": "differences", "description": "different + onlyInSource + notInSource." }
+  ],
+  "execution": {
+    "Node20_1": { "target": "index.js" }
+  }
+}

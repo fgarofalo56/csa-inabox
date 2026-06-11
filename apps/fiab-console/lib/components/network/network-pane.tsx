@@ -21,11 +21,13 @@ import {
   Spinner, MessageBar, MessageBarBody, MessageBarTitle, Button, Badge,
   Table, TableHeader, TableRow, TableHeaderCell, TableBody, TableCell,
   Subtitle2, Body1, Body1Strong, Caption1, Divider, Accordion, AccordionItem,
-  AccordionHeader, AccordionPanel, tokens,
+  AccordionHeader, AccordionPanel, Link, tokens,
 } from '@fluentui/react-components';
 import {
   Copy24Regular, Checkmark24Regular, ServerMultipleRegular,
   Globe24Regular, ShieldLock24Regular, DocumentBulletList24Regular,
+  PlugConnected24Regular, Checkmark16Filled, Warning16Filled,
+  Info16Filled, Dismiss16Filled,
 } from '@fluentui/react-icons';
 import { NetworkTopologyCanvas } from './topology-canvas';
 
@@ -68,6 +70,155 @@ function CopyButton({ text, label = 'Copy' }: { text: string; label?: string }) 
       icon={done ? <Checkmark24Regular /> : <Copy24Regular />} onClick={copy} disabled={!text}>
       {done ? 'Copied' : label}
     </Button>
+  );
+}
+
+// ── VNet data gateway (Fabric tenant capability) — honest read-only gate ──
+type GwPrereqStatus = 'met' | 'unmet' | 'tenant' | 'unavailable';
+interface GwPrereq {
+  id: string; label: string; status: GwPrereqStatus; detail: string;
+  azureDetectable: boolean; docUrl?: string;
+}
+interface GwDelegatedSubnet { vnet: string; subnet: string; subscriptionId: string; resourceGroup?: string; }
+interface GwReadiness {
+  cloud: string; capabilityAvailable: boolean;
+  rpRegistrationState: string | null; rpRegistered: boolean;
+  delegatedSubnets: GwDelegatedSubnet[]; prereqs: GwPrereq[]; azureNativeDefault: string;
+}
+interface GwApiResp { ok: boolean; readiness?: GwReadiness; error?: string; gate?: { reason?: string; remediation?: string }; }
+
+function gwBadge(status: GwPrereqStatus) {
+  switch (status) {
+    case 'met':
+      return <Badge appearance="tint" color="success" icon={<Checkmark16Filled />}>Detected in Azure</Badge>;
+    case 'unmet':
+      return <Badge appearance="tint" color="warning" icon={<Warning16Filled />}>Action needed</Badge>;
+    case 'tenant':
+      return <Badge appearance="tint" color="informative" icon={<Info16Filled />}>Fabric tenant action</Badge>;
+    case 'unavailable':
+    default:
+      return <Badge appearance="tint" color="danger" icon={<Dismiss16Filled />}>Not available in this cloud</Badge>;
+  }
+}
+
+/**
+ * VNet data gateway status card. A VNet data gateway is a Fabric / Power
+ * Platform TENANT capability — Loom does NOT create one (no-fabric-dependency).
+ * This card reads /api/network/vnet-data-gateway (Reader-only ARM detection of
+ * the Microsoft.PowerPlatform RP + delegated subnet) and renders an honest
+ * prerequisite checklist: Azure-detectable rows get a real success/warning
+ * badge; the tenant-only rows are clearly labeled as Fabric-admin actions Loom
+ * cannot perform. No "create gateway" control — the Azure-native private-
+ * endpoint plane above is the supported default.
+ */
+function VnetGatewayCard() {
+  const [gw, setGw] = useState<GwApiResp | null>(null);
+  const [gwLoading, setGwLoading] = useState(true);
+
+  useEffect(() => {
+    let alive = true;
+    (async () => {
+      try {
+        const r = await fetch('/api/network/vnet-data-gateway');
+        const j = (await r.json()) as GwApiResp;
+        if (alive) setGw(j);
+      } catch (e: any) {
+        if (alive) setGw({ ok: false, error: e?.message || String(e) });
+      } finally { if (alive) setGwLoading(false); }
+    })();
+    return () => { alive = false; };
+  }, []);
+
+  const r = gw?.readiness;
+  return (
+    <div style={card}>
+      <div style={head}>
+        <PlugConnected24Regular />
+        <Subtitle2>Virtual network (VNet) data gateway</Subtitle2>
+        <Badge appearance="outline" color="brand" style={{ marginLeft: 'auto' }}>Fabric tenant capability</Badge>
+      </div>
+
+      <MessageBar intent="info" style={{ marginBottom: 12 }}>
+        <MessageBarBody>
+          <MessageBarTitle>Tenant-managed — Loom does not provision this.</MessageBarTitle>
+          A VNet data gateway is enabled by a <strong>Fabric administrator</strong> (Power Platform admin
+          center → Data → Virtual network data gateways → <em>Manage gateway installers</em>) and requires a
+          Power BI/Fabric <strong>Premium capacity</strong>. CSA Loom cannot toggle that tenant switch or create
+          the gateway. The supported Azure-native default for private connectivity is the
+          <strong> private-endpoint plane</strong> shown above — no Fabric capacity, workspace, or gateway required.
+        </MessageBarBody>
+      </MessageBar>
+
+      {gwLoading && <Spinner label="Reading VNet-gateway prerequisites…" />}
+
+      {!gwLoading && gw && !gw.ok && (
+        <MessageBar intent="warning">
+          <MessageBarBody>
+            <MessageBarTitle>Couldn’t read the Azure prerequisites</MessageBarTitle>
+            {gw.gate?.remediation || gw.error}
+          </MessageBarBody>
+        </MessageBar>
+      )}
+
+      {!gwLoading && r && (
+        <>
+          <Body1 style={{ display: 'block', marginBottom: 10, color: tokens.colorNeutralForeground3 }}>
+            Cloud boundary: <Body1Strong>{r.cloud}</Body1Strong>
+            {!r.capabilityAvailable && ' — VNet data gateways are not offered in this sovereign cloud.'}
+          </Body1>
+          <Table size="small" aria-label="VNet data gateway prerequisites">
+            <TableHeader>
+              <TableRow>
+                <TableHeaderCell>Prerequisite</TableHeaderCell>
+                <TableHeaderCell>Status</TableHeaderCell>
+                <TableHeaderCell>Detail</TableHeaderCell>
+              </TableRow>
+            </TableHeader>
+            <TableBody>
+              {r.prereqs.length === 0 ? (
+                <TableRow>
+                  <TableCell colSpan={3}>
+                    <Caption1 style={{ color: tokens.colorNeutralForeground3 }}>
+                      No prerequisites reported for this cloud boundary.
+                    </Caption1>
+                  </TableCell>
+                </TableRow>
+              ) : r.prereqs.map((p) => (
+                <TableRow key={p.id}>
+                  <TableCell>
+                    <Body1Strong>{p.label}</Body1Strong>
+                    {!p.azureDetectable && (
+                      <Caption1 block style={{ color: tokens.colorNeutralForeground3 }}>
+                        Loom cannot verify this — Fabric/Power BI tenant action.
+                      </Caption1>
+                    )}
+                  </TableCell>
+                  <TableCell>{gwBadge(p.status)}</TableCell>
+                  <TableCell>
+                    <Caption1>{p.detail}</Caption1>
+                    {p.docUrl && (
+                      <Caption1 block style={{ marginTop: 2 }}>
+                        <Link href={p.docUrl} target="_blank" rel="noreferrer">Microsoft Learn</Link>
+                      </Caption1>
+                    )}
+                  </TableCell>
+                </TableRow>
+              ))}
+            </TableBody>
+          </Table>
+          {r.delegatedSubnets.length > 0 && (
+            <Body1 style={{ display: 'block', marginTop: 10 }}>
+              Delegated subnet(s) ready for a gateway:{' '}
+              <code>{r.delegatedSubnets.map((s) => `${s.vnet}/${s.subnet}`).join(', ')}</code>
+            </Body1>
+          )}
+          <Divider style={{ margin: '12px 0' }} />
+          <Body1 style={{ display: 'block', color: tokens.colorNeutralForeground2 }}>
+            {r.azureNativeDefault}
+          </Body1>
+        </>
+      )}
+    </div>
   );
 }
 
@@ -311,6 +462,9 @@ export function NetworkPane() {
           <code> *.sql.azuresynapse.net</code> endpoint the same way.
         </Body1>
       </div>
+
+      {/* 5 · VNet data gateway (Fabric tenant capability) — honest gate */}
+      <VnetGatewayCard />
 
       <Caption1>
         Inventory reads live from ARM (Microsoft.Network/privateEndpoints) via the Console identity. See the

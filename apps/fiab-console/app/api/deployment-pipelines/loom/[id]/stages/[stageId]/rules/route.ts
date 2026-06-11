@@ -9,19 +9,18 @@
  * deployment rules — Cosmos-backed, real, editable (no portal-only gate).
  */
 import { NextRequest } from 'next/server';
-import { getSession } from '@/lib/auth/session';
 import { allowedKeysForKind, RULE_KINDS, type LoomDeployRule, type LoomRuleKind } from '@/lib/types/loom-pipeline';
-import { jok, jerr, loadPipeline, stageWorkspaceId, loadStageRules, saveStageRules } from '../../../../_lib/pipeline-store';
+import { jok, jerr, loadPipeline, stageWorkspaceId, loadStageRules, saveStageRules, resolveCaller } from '../../../../_lib/pipeline-store';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
 
-export async function GET(_req: NextRequest, ctx: { params: Promise<{ id: string; stageId: string }> }) {
-  const s = getSession();
-  if (!s) return jerr('unauthenticated', 401, 'unauthorized');
+export async function GET(req: NextRequest, ctx: { params: Promise<{ id: string; stageId: string }> }) {
+  const caller = resolveCaller(req);
+  if (!caller) return jerr('unauthenticated', 401, 'unauthorized');
   const { id, stageId } = await ctx.params;
   try {
-    const pipeline = await loadPipeline(s.claims.oid, id);
+    const pipeline = await loadPipeline(caller.tenantId, id);
     if (!pipeline) return jerr('pipeline not found', 404, 'not_found');
     if (!stageWorkspaceId(pipeline, stageId)) return jerr('stage not found in pipeline', 404, 'not_found');
     const rules = await loadStageRules(id, stageId);
@@ -32,8 +31,8 @@ export async function GET(_req: NextRequest, ctx: { params: Promise<{ id: string
 }
 
 export async function PUT(req: NextRequest, ctx: { params: Promise<{ id: string; stageId: string }> }) {
-  const s = getSession();
-  if (!s) return jerr('unauthenticated', 401, 'unauthorized');
+  const caller = resolveCaller(req);
+  if (!caller) return jerr('unauthenticated', 401, 'unauthorized');
   const { id, stageId } = await ctx.params;
 
   const body = await req.json().catch(() => ({}));
@@ -58,10 +57,10 @@ export async function PUT(req: NextRequest, ctx: { params: Promise<{ id: string;
   }
 
   try {
-    const pipeline = await loadPipeline(s.claims.oid, id);
+    const pipeline = await loadPipeline(caller.tenantId, id);
     if (!pipeline) return jerr('pipeline not found', 404, 'not_found');
     if (!stageWorkspaceId(pipeline, stageId)) return jerr('stage not found in pipeline', 404, 'not_found');
-    const saved = await saveStageRules(id, stageId, rules, s.claims.upn || s.claims.email || s.claims.oid);
+    const saved = await saveStageRules(id, stageId, rules, caller.actor);
     return jok({ rules: saved });
   } catch (e) {
     return jerr((e as Error).message || 'Failed to save rules');

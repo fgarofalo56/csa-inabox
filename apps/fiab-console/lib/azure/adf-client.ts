@@ -44,8 +44,12 @@ function required(k: string): string {
   return v;
 }
 
-function sub(): string { return required('LOOM_SUBSCRIPTION_ID'); }
-function rg():  string { return required('LOOM_DLZ_RG'); }
+// LOOM_ADF_SUB / LOOM_ADF_RG win for a reused Data Factory in another
+// subscription / resource group (BYO wizard); fall back to the deployment sub
+// (LOOM_SUBSCRIPTION_ID) and DLZ RG (LOOM_DLZ_RG) when empty so cross-sub reuse
+// targets the correct factory instead of the deployment one.
+function sub(): string { return process.env.LOOM_ADF_SUB || required('LOOM_SUBSCRIPTION_ID'); }
+function rg():  string { return process.env.LOOM_ADF_RG || required('LOOM_DLZ_RG'); }
 function adfName(): string { return required('LOOM_ADF_NAME'); }
 
 function base(): string {
@@ -914,6 +918,99 @@ export async function deleteIntegrationRuntime(name: string): Promise<void> {
   const r = await call(`${base()}/integrationruntimes/${encodeURIComponent(name)}?api-version=${API}`, { method: 'DELETE' });
   if (!r.ok && r.status !== 200 && r.status !== 204) {
     throw new Error(`deleteIntegrationRuntime failed ${r.status}: ${await r.text()}`);
+  }
+}
+
+/**
+ * Detect whether a pipeline's run will execute (in whole or part) on a
+ * Self-Hosted Integration Runtime — the signal that the SHIR VMSS must be
+ * scaled up before the run.
+ *
+ * ADF's IR-selection rule: a Copy (or other data-movement) activity runs on the
+ * SHIR when the linked service it (or its dataset) uses carries
+ * `connectVia: { referenceName, type: 'IntegrationRuntimeReference' }` pointing
+ * at a SelfHosted IR. We therefore:
+ *   1. getPipeline(name) and walk properties.activities[], collecting every
+ *      referenced linked service name — directly via activity.linkedServiceName
+ *      and indirectly via any dataset reference's linked service.
+ *   2. Resolve each linked service; if its properties.connectVia is an
+ *      IntegrationRuntimeReference, check whether that IR is SelfHosted (against
+ *      the factory's IR list, fetched once).
+ *
+ * Returns true on the first SelfHosted match. Fail-open: any error (pipeline /
+ * LS / IR read failure) returns false so the run is never blocked by detection
+ * — the worst case is the SHIR isn't pre-warmed, which the activity itself
+ * surfaces. Grounded in:
+ *   https://learn.microsoft.com/azure/data-factory/concepts-integration-runtime#determining-which-ir-to-use
+ *   https://learn.microsoft.com/azure/data-factory/concepts-linked-services#linked-service-json
+ */
+export async function pipelineUsesSelfHostedIr(pipelineName: string): Promise<boolean> {
+  try {
+    const pipeline = await getPipeline(pipelineName);
+    const activities = (pipeline.properties?.activities || []) as Array<Record<string, any>>;
+    if (!activities.length) return false;
+
+    // Collect the linked-service names referenced by activities (directly and
+    // via dataset references) plus the dataset names we must resolve to LS.
+    const lsNames = new Set<string>();
+    const datasetNames = new Set<string>();
+    const collectFromRefArray = (arr: unknown, into: Set<string>, refType: string) => {
+      if (!Array.isArray(arr)) return;
+      for (const e of arr) {
+        const ref = (e as any)?.referenceName ?? (e as any)?.[refType.toLowerCase()]?.referenceName;
+        if (typeof ref === 'string') into.add(ref);
+      }
+    };
+    for (const act of activities) {
+      const tp = (act?.typeProperties || {}) as Record<string, any>;
+      const lsRef = act?.linkedServiceName?.referenceName;
+      if (typeof lsRef === 'string') lsNames.add(lsRef);
+      // Copy activity inputs/outputs are dataset references.
+      collectFromRefArray(act?.inputs, datasetNames, 'DatasetReference');
+      collectFromRefArray(act?.outputs, datasetNames, 'DatasetReference');
+      // Lookup/GetMetadata/etc. carry a single dataset on typeProperties.dataset.
+      const dsRef = tp?.dataset?.referenceName;
+      if (typeof dsRef === 'string') datasetNames.add(dsRef);
+      // Copy source/sink also reference datasets in some shapes.
+      for (const side of [tp?.source, tp?.sink]) {
+        const r = side?.dataset?.referenceName;
+        if (typeof r === 'string') datasetNames.add(r);
+      }
+    }
+
+    // Resolve dataset → linked service.
+    await Promise.all(
+      [...datasetNames].map(async (dn) => {
+        try {
+          const ds = await getDataset(dn);
+          const r = ds.properties?.linkedServiceName?.referenceName;
+          if (typeof r === 'string') lsNames.add(r);
+        } catch { /* skip unresolvable dataset */ }
+      }),
+    );
+
+    if (!lsNames.size) return false;
+
+    // Build the set of SelfHosted IR names once.
+    const irs = await listIntegrationRuntimes();
+    const selfHosted = new Set(
+      irs.filter((ir) => ir.properties?.type === 'SelfHosted').map((ir) => ir.name),
+    );
+    if (!selfHosted.size) return false;
+
+    // Any linked service pinned (connectVia) to a SelfHosted IR ⇒ true.
+    for (const name of lsNames) {
+      try {
+        const ls = await getLinkedService(name);
+        const cv = (ls.properties as any)?.connectVia;
+        if (cv?.type === 'IntegrationRuntimeReference' && typeof cv?.referenceName === 'string' && selfHosted.has(cv.referenceName)) {
+          return true;
+        }
+      } catch { /* skip unresolvable LS */ }
+    }
+    return false;
+  } catch {
+    return false;
   }
 }
 

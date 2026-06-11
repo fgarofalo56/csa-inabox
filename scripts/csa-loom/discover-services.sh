@@ -29,10 +29,14 @@ echo
 HAVE_GRAPH=0
 az graph query -q "Resources | limit 1" -o none 2>/dev/null && HAVE_GRAPH=1
 
-# type -> friendly label -> EXISTING_* var prefix
-# (rg/sub captured so cross-sub reuse is explicit)
-scan() { # scan "<arm type>" "<label>" "<EXISTING var base>"
-  local type="$1" label="$2" var="$3"
+# type -> friendly label -> EXISTING_* var names
+# (rg/sub captured so cross-sub reuse is explicit). The name/rg/sub var names are
+# the CANONICAL EXISTING_* vars shared with byo-wizard.sh, the bicepparam
+# readEnvironmentVariable() block, and patch-navigator-env.sh — so the discover
+# output sources cleanly into a deploy or the post-deploy scripts (fixes the
+# historical RG/SUB var-name drift).
+scan() { # scan "<arm type>" "<label>" "<name var>" "<rg var>" "<sub var>"
+  local type="$1" label="$2" var="$3" rgvar="$4" subvar="$5"
   echo "## $label"
   local found=0
   if [[ "$HAVE_GRAPH" == "1" ]]; then
@@ -40,15 +44,15 @@ scan() { # scan "<arm type>" "<label>" "<EXISTING var base>"
       [[ -z "$name" ]] && continue
       found=1
       echo "  • $name   (rg=$rg sub=$sub)"
-      echo "    export ${var}=$name ${var}_RG=$rg ${var}_SUB=$sub"
-    done < <(q graph query -q "Resources | where type =~ '$type' | project name, resourceGroup, subscriptionId" --first 50 -o tsv)
+      echo "    export ${var}=$name ${rgvar}=$rg ${subvar}=$sub"
+    done < <(q graph query -q "Resources | where type =~ '$type' | project name, resourceGroup, subscriptionId" --first 50 --query "data[].[name,resourceGroup,subscriptionId]" -o tsv)
   else
     for s in $SUBS; do
       while IFS=$'\t' read -r name rg; do
         [[ -z "$name" ]] && continue
         found=1
         echo "  • $name   (rg=$rg sub=$s)"
-        echo "    export ${var}=$name ${var}_RG=$rg ${var}_SUB=$s"
+        echo "    export ${var}=$name ${rgvar}=$rg ${subvar}=$s"
       done < <(q resource list --subscription "$s" --resource-type "$type" --query "[].{n:name,r:resourceGroup}" -o tsv)
     done
   fi
@@ -56,20 +60,20 @@ scan() { # scan "<arm type>" "<label>" "<EXISTING var base>"
   echo
 }
 
-scan "Microsoft.Search/searchServices"            "AI Search"            "EXISTING_AI_SEARCH_SERVICE"
-scan "Microsoft.ApiManagement/service"            "API Management"       "EXISTING_APIM"
-scan "Microsoft.DocumentDB/databaseAccounts"      "Cosmos DB"            "EXISTING_COSMOS_ACCOUNT"
-scan "Microsoft.EventHub/namespaces"              "Event Hubs"           "EXISTING_EVENTHUB_NAMESPACE"
-scan "Microsoft.Databricks/workspaces"            "Databricks"           "EXISTING_DATABRICKS"
-scan "Microsoft.Kusto/clusters"                   "ADX / Kusto"          "EXISTING_KUSTO_CLUSTER"
-scan "Microsoft.Synapse/workspaces"               "Synapse"              "EXISTING_SYNAPSE"
-scan "Microsoft.DataFactory/factories"            "Data Factory"         "EXISTING_ADF"
-scan "Microsoft.CognitiveServices/accounts"       "Cognitive/AI Services" "EXISTING_AOAI"
-scan "Microsoft.MachineLearningServices/workspaces" "AI Foundry / ML hub" "EXISTING_FOUNDRY"
-scan "Microsoft.Purview/accounts"                 "Purview"              "EXISTING_PURVIEW"
-scan "Microsoft.Sql/servers"                      "Azure SQL Server"     "EXISTING_AZURE_SQL"
-scan "Microsoft.Storage/storageAccounts"          "Storage (ADLS Gen2)"  "EXISTING_STORAGE"
-scan "Microsoft.KeyVault/vaults"                  "Key Vault"            "EXISTING_KEYVAULT"
+scan "Microsoft.Search/searchServices"            "AI Search"            "EXISTING_AI_SEARCH_SERVICE"  "EXISTING_AI_SEARCH_RG"      "EXISTING_AI_SEARCH_SUB"
+scan "Microsoft.ApiManagement/service"            "API Management"       "EXISTING_APIM"               "EXISTING_APIM_RG"           "EXISTING_APIM_SUB"
+scan "Microsoft.DocumentDB/databaseAccounts"      "Cosmos DB"            "EXISTING_COSMOS_ACCOUNT"     "EXISTING_COSMOS_ACCOUNT_RG" "EXISTING_COSMOS_ACCOUNT_SUB"
+scan "Microsoft.EventHub/namespaces"              "Event Hubs"           "EXISTING_EVENTHUB_NAMESPACE" "EXISTING_EVENTHUB_RG"       "EXISTING_EVENTHUB_SUB"
+scan "Microsoft.Databricks/workspaces"            "Databricks"           "EXISTING_DATABRICKS"         "EXISTING_DATABRICKS_RG"     "EXISTING_DATABRICKS_SUB"
+scan "Microsoft.Kusto/clusters"                   "ADX / Kusto"          "EXISTING_KUSTO_CLUSTER"      "EXISTING_KUSTO_RG"          "EXISTING_KUSTO_SUB"
+scan "Microsoft.Synapse/workspaces"               "Synapse"              "EXISTING_SYNAPSE"            "EXISTING_SYNAPSE_RG"        "EXISTING_SYNAPSE_SUB"
+scan "Microsoft.DataFactory/factories"            "Data Factory"         "EXISTING_ADF"                "EXISTING_ADF_RG"            "EXISTING_ADF_SUB"
+scan "Microsoft.CognitiveServices/accounts"       "Cognitive/AI Services" "EXISTING_AOAI"              "EXISTING_AOAI_RG"           "EXISTING_AOAI_SUB"
+scan "Microsoft.MachineLearningServices/workspaces" "AI Foundry / ML hub" "EXISTING_FOUNDRY"           "EXISTING_FOUNDRY_RG"        "EXISTING_FOUNDRY_SUB"
+scan "Microsoft.Purview/accounts"                 "Purview"              "EXISTING_PURVIEW"            "EXISTING_PURVIEW_RG"        "EXISTING_PURVIEW_SUB"
+scan "Microsoft.Sql/servers"                      "Azure SQL Server"     "EXISTING_AZURE_SQL"          "EXISTING_AZURE_SQL_RG"      "EXISTING_AZURE_SQL_SUB"
+scan "Microsoft.Storage/storageAccounts"          "Storage (ADLS Gen2)"  "EXISTING_STORAGE"            "EXISTING_STORAGE_RG"        "EXISTING_STORAGE_SUB"
+scan "Microsoft.KeyVault/vaults"                  "Key Vault"            "EXISTING_KEYVAULT"           "EXISTING_KEYVAULT_RG"       "EXISTING_KEYVAULT_SUB"
 
 echo "# To REUSE an existing resource: export the matching block above, then run"
 echo "#   bash scripts/csa-loom/patch-navigator-env.sh   (env)"

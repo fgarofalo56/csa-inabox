@@ -29,6 +29,9 @@ import {
 import {
   Add20Regular, Delete20Regular, ArrowSync20Regular, Play20Regular, Stop20Regular,
 } from '@fluentui/react-icons';
+import {
+  DS_TYPES, FILE_DS_TYPES, TABLE_DS_TYPES, buildDatasetTypeProperties,
+} from '@/lib/azure/adf-dataset-builder';
 
 type ManageTab = 'linked-services' | 'datasets' | 'integration-runtimes';
 
@@ -97,23 +100,6 @@ const LS_FORMS: LsForm[] = [
     { key: 'accessKeyId', label: 'Access key ID', required: true },
     { key: 'secretAccessKey', label: 'Secret access key', secret: true, required: true } ] },
 ];
-
-const DS_TYPES = [
-  'DelimitedText', 'Json', 'Parquet', 'Avro', 'Orc', 'Binary', 'AzureSqlTable', 'AzureSqlDWTable',
-];
-const FILE_DS_TYPES = new Set(['DelimitedText', 'Json', 'Parquet', 'Avro', 'Orc', 'Binary']);
-const TABLE_DS_TYPES = new Set(['AzureSqlTable', 'AzureSqlDWTable']);
-
-/** Map a linked-service connector type → the ADF dataset location `type`. */
-function locationTypeFor(lsType?: string): string {
-  switch (lsType) {
-    case 'AzureBlobFS': return 'AzureBlobFSLocation';
-    case 'AmazonS3': return 'AmazonS3Location';
-    case 'AzureFileStorage': return 'AzureFileStorageLocation';
-    case 'AzureBlobStorage':
-    default: return 'AzureBlobStorageLocation';
-  }
-}
 
 async function readJson(res: Response): Promise<any> {
   const text = await res.text();
@@ -300,33 +286,20 @@ export function ManagePanel({ open, onOpenChange, backend = 'adf' }: { open: boo
     setDsBusy(true); setDsError(null);
     try {
       // Build typeProperties from the guided fields — never raw JSON.
-      let typeProperties: any = {};
-      if (FILE_DS_TYPES.has(dsType)) {
-        const lsType = lsList.find((l) => l.name === dsLinkedService)?.type;
-        const locType = locationTypeFor(lsType);
-        const containerKey = locType === 'AzureBlobFSLocation' ? 'fileSystem'
-          : locType === 'AmazonS3Location' ? 'bucketName' : 'container';
-        const location: any = { type: locType };
-        if (dsContainer.trim()) location[containerKey] = dsContainer.trim();
-        if (dsFolder.trim()) location.folderPath = dsFolder.trim();
-        if (dsFile.trim()) location.fileName = dsFile.trim();
-        typeProperties.location = location;
-        if (dsCompression !== 'none') {
-          typeProperties.compressionCodec = dsCompression; // parquet/avro/orc/delimited
-          if (dsType === 'Json' || dsType === 'DelimitedText') {
-            typeProperties.compression = { type: dsCompression };
-          }
-        }
-        if (dsType === 'DelimitedText') {
-          typeProperties.columnDelimiter = dsColumnDelimiter || ',';
-          typeProperties.firstRowAsHeader = dsFirstRowHeader;
-          if (dsQuoteChar) typeProperties.quoteChar = dsQuoteChar;
-          if (dsEscapeChar) typeProperties.escapeChar = dsEscapeChar;
-        }
-      } else if (TABLE_DS_TYPES.has(dsType)) {
-        if (dsSchema.trim()) typeProperties.schema = dsSchema.trim();
-        if (dsTable.trim()) typeProperties.table = dsTable.trim();
-      }
+      const typeProperties = buildDatasetTypeProperties({
+        type: dsType,
+        linkedServiceType: lsList.find((l) => l.name === dsLinkedService)?.type,
+        container: dsContainer,
+        folder: dsFolder,
+        file: dsFile,
+        compression: dsCompression,
+        columnDelimiter: dsColumnDelimiter,
+        firstRowAsHeader: dsFirstRowHeader,
+        quoteChar: dsQuoteChar,
+        escapeChar: dsEscapeChar,
+        schema: dsSchema,
+        table: dsTable,
+      });
       const properties = {
         type: dsType,
         linkedServiceName: { referenceName: dsLinkedService, type: 'LinkedServiceReference' as const },

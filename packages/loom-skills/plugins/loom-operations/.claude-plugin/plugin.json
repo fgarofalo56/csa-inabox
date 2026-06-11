@@ -1,0 +1,7 @@
+{
+  "name": "loom-operations",
+  "version": "0.1.0",
+  "description": "Operations skills for CSA Loom endpoints, activators and the item BFF contract. Components are declared in the loom-collection marketplace entry.",
+  "author": { "name": "Frank Garofalo" },
+  "license": "MIT"
+}

@@ -313,6 +313,14 @@ var dnsZones = [
   'privatelink.dev.azuresynapse.${boundary == 'GCC-High' || boundary == 'IL5' ? 'usgovcloudapi.net' : 'net'}'
   // v2 — Azure Data Factory (Pipeline / Dataset / Trigger editors)
   'privatelink.${boundary == 'GCC-High' || boundary == 'IL5' ? 'datafactory.azure.us' : 'adf.azure.com'}'
+  // T95 — Cosmos Gremlin (graph editor). The Gremlin account's private
+  // endpoint (groupIds: ['Gremlin']) resolves on a DEDICATED zone, NOT the
+  // NoSQL documents zone at index 8. Because the Gremlin account sets
+  // publicNetworkAccess: 'Disabled', the wss://<acct>.gremlin.cosmos.azure.*
+  // host only resolves when this zone is linked to the hub VNet. Without it
+  // the DLZ falls back to the documents zone and the cosmos-gremlin-graph
+  // editor fails at runtime. Gov: gremlin.cosmos.azure.us.
+  'privatelink.gremlin.cosmos.azure.${boundary == 'GCC-High' || boundary == 'IL5' ? 'us' : 'com'}'
 ]
 
 resource privateDnsZones 'Microsoft.Network/privateDnsZones@2024-06-01' = [for zone in dnsZones: {
@@ -438,4 +446,9 @@ output privateDnsZoneIds object = {
   // data-pipeline / copy-job / mapping-data-flow editors have no real factory to
   // drive. Exposing it lets main.bicep thread the zone into the landing zone.
   adf: privateDnsZones[19].id
+  // T95 — Cosmos Gremlin zone (index 20). The DLZ cosmos-graph-vector module
+  // reads adminPlanePrivateDnsZoneIds.cosmosGremlin for the Gremlin PE's DNS
+  // group. Without this key it falls back to the NoSQL documents zone and the
+  // graph editor's wss:// host never resolves over Private Link.
+  cosmosGremlin: privateDnsZones[20].id
 }
