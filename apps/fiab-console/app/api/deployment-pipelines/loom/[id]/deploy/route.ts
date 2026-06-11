@@ -63,7 +63,19 @@ export async function POST(req: NextRequest, ctx: { params: Promise<{ id: string
     const tgtWs = stageWorkspaceId(pipeline, targetStageId);
     if (!srcWs) return jerr('source stage not found in pipeline', 400, 'bad_request');
     if (!tgtWs) return jerr('target stage not found in pipeline', 400, 'bad_request');
-    if (srcWs === tgtWs) return jerr('source and target stages share a workspace', 400, 'bad_request');
+    if (srcWs === tgtWs) {
+      // Legacy pipelines created before the distinct-workspace guard could
+      // bind two stages to the same workspace. Such a pipeline can never
+      // promote (the deploy would modify its own source). Tell the operator
+      // exactly how to fix it rather than surfacing a raw "promote error".
+      const srcName = pipeline.stages.find((st) => st.id === sourceStageId)?.displayName || 'source';
+      const tgtName = pipeline.stages.find((st) => st.id === targetStageId)?.displayName || 'target';
+      return jerr(
+        `Stages "${srcName}" and "${tgtName}" are bound to the same workspace, so content can't be promoted between them. Re-bind one stage to a distinct workspace, then deploy again.`,
+        400,
+        'duplicate_workspace',
+      );
+    }
 
     const [sourceItemsAll, targetItemsBefore, rules] = await Promise.all([
       listAllOwnedItems(tenantId, srcWs),

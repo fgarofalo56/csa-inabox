@@ -17,7 +17,12 @@
  */
 import { NextRequest, NextResponse } from 'next/server';
 import { getSession } from '@/lib/auth/session';
-import { assignWorkspaceToStage, unassignWorkspaceFromStage, FabricError } from '@/lib/azure/fabric-client';
+import {
+  assignWorkspaceToStage,
+  unassignWorkspaceFromStage,
+  listDeploymentPipelineStages,
+  FabricError,
+} from '@/lib/azure/fabric-client';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -44,6 +49,28 @@ export async function POST(req: NextRequest, ctx: { params: Promise<{ id: string
   if (!workspaceId) return NextResponse.json({ ok: false, error: 'workspaceId required' }, { status: 400 });
 
   try {
+    // A workspace can only belong to one stage of a pipeline
+    // (learn.microsoft.com/fabric/cicd/deployment-pipelines/assign-pipeline,
+    // limitation 1.2). Reject re-using a workspace already assigned to a
+    // different stage up front, with a clear message, instead of letting a
+    // later promote fail as an opaque "self-modification" error.
+    try {
+      const stages = await listDeploymentPipelineStages(id);
+      const conflict = stages.find((st) => st.id !== stageId && st.workspaceId === workspaceId);
+      if (conflict) {
+        return NextResponse.json(
+          {
+            ok: false,
+            error: `That workspace is already assigned to stage "${conflict.displayName}". Each stage needs its own workspace so content can be promoted between stages.`,
+            code: 'duplicate_workspace',
+          },
+          { status: 400 },
+        );
+      }
+    } catch (e) {
+      if (!(e instanceof FabricError && (e.status === 401 || e.status === 403))) throw e;
+    }
+
     await assignWorkspaceToStage(id, stageId, workspaceId);
     return NextResponse.json({ ok: true, data: { assigned: true } });
   } catch (e) {

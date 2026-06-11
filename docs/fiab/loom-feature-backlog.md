@@ -113,7 +113,6 @@ policies / data-quality / domains tables → sortable `LoomDataTable`.
 15→30m; app-install gateway-timeout honest message; Copilot build-assist tool fixes.
 
 ### Still open
-- "Self-Modification Pipeline" promote error — needs the surface/URL to locate.
 - Mirroring backend: feed KV connection creds into the live mirror (Fabric
   connection/gateway-limited; needs the no-Fabric mirroring reframe or live verify).
 - Purview scan-based discovery (register sources + scan runs) — beyond per-item tagging.
