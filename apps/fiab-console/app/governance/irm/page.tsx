@@ -217,31 +217,31 @@ export default function IrmPage() {
           <div className={s.settingsGrid}>
             <Field label="Volume z-score cutoff">
               <SpinButton value={draft.volumeZ} step={0.5} min={0} max={6}
-                onChange={(_, dt) => patchDraft({ volumeZ: dt.value ?? Number(dt.displayValue) || draft.volumeZ })} />
+                onChange={(_, dt) => patchDraft({ volumeZ: dt.value ?? (Number(dt.displayValue) || draft.volumeZ) })} />
             </Field>
             <Field label="Min exfil events (floor)">
               <SpinButton value={draft.minVolumeEvents} step={1} min={1}
-                onChange={(_, dt) => patchDraft({ minVolumeEvents: dt.value ?? Number(dt.displayValue) || draft.minVolumeEvents })} />
+                onChange={(_, dt) => patchDraft({ minVolumeEvents: dt.value ?? (Number(dt.displayValue) || draft.minVolumeEvents) })} />
             </Field>
             <Field label="Min off-hours events">
               <SpinButton value={draft.minOffHoursEvents} step={1} min={1}
-                onChange={(_, dt) => patchDraft({ minOffHoursEvents: dt.value ?? Number(dt.displayValue) || draft.minOffHoursEvents })} />
+                onChange={(_, dt) => patchDraft({ minOffHoursEvents: dt.value ?? (Number(dt.displayValue) || draft.minOffHoursEvents) })} />
             </Field>
             <Field label="Min privileged ops">
               <SpinButton value={draft.privilegedMinEvents} step={1} min={1}
-                onChange={(_, dt) => patchDraft({ privilegedMinEvents: dt.value ?? Number(dt.displayValue) || draft.privilegedMinEvents })} />
+                onChange={(_, dt) => patchDraft({ privilegedMinEvents: dt.value ?? (Number(dt.displayValue) || draft.privilegedMinEvents) })} />
             </Field>
             <Field label="Min pipeline runs">
               <SpinButton value={draft.pipelineMinRuns} step={1} min={1}
-                onChange={(_, dt) => patchDraft({ pipelineMinRuns: dt.value ?? Number(dt.displayValue) || draft.pipelineMinRuns })} />
+                onChange={(_, dt) => patchDraft({ pipelineMinRuns: dt.value ?? (Number(dt.displayValue) || draft.pipelineMinRuns) })} />
             </Field>
             <Field label="Business hours start">
               <SpinButton value={draft.businessStart} step={1} min={0} max={24}
-                onChange={(_, dt) => patchDraft({ businessStart: dt.value ?? Number(dt.displayValue) || draft.businessStart })} />
+                onChange={(_, dt) => patchDraft({ businessStart: dt.value ?? (Number(dt.displayValue) || draft.businessStart) })} />
             </Field>
             <Field label="Business hours end">
               <SpinButton value={draft.businessEnd} step={1} min={0} max={24}
-                onChange={(_, dt) => patchDraft({ businessEnd: dt.value ?? Number(dt.displayValue) || draft.businessEnd })} />
+                onChange={(_, dt) => patchDraft({ businessEnd: dt.value ?? (Number(dt.displayValue) || draft.businessEnd) })} />
             </Field>
             <Field label="Timezone">
               <Dropdown value={draft.timezone} selectedOptions={[draft.timezone]}
