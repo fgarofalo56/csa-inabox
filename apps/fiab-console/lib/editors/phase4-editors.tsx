@@ -20,7 +20,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import {
   Subtitle2, Body1, Caption1, Badge, Button, Input, Textarea, Spinner,
-  Tab, TabList,
+  Card, Tab, TabList,
   Table, TableHeader, TableRow, TableHeaderCell, TableBody, TableCell,
   MessageBar, MessageBarBody, MessageBarTitle,
   Tree, TreeItem, TreeItemLayout,
@@ -1979,7 +1979,7 @@ function PlanSettingsFlyout({
               <Button
                 icon={busy ? <Spinner size="tiny" /> : <Database20Regular />}
                 onClick={provision}
-                disabled={busy || backing?.configured === false && !!backing?.gate}
+                disabled={busy || (backing?.configured === false && !!backing?.gate)}
                 appearance={backing?.configured ? 'secondary' : 'primary'}
                 style={{ alignSelf: 'flex-start' }}
               >
@@ -2150,7 +2150,7 @@ function PlanningSheetPanel({
       </div>
 
       {/* Planning grid */}
-      <div style={{ overflowX: 'auto' }}>
+      <Card style={{ padding: 0, overflowX: 'auto' }}>
         <Table aria-label="Planning sheet grid" size="small">
           <TableHeader>
             <TableRow>
@@ -2173,6 +2173,18 @@ function PlanningSheetPanel({
             </TableRow>
           </TableHeader>
           <TableBody>
+            {inputItems.length === 0 && (
+              <TableRow>
+                <TableCell colSpan={sheet.periods.length + (showVariance ? 6 : 3)}>
+                  <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: tokens.spacingVerticalXS, padding: tokens.spacingVerticalL, color: tokens.colorNeutralForeground3 }}>
+                    <Money20Regular />
+                    <Body1>No line items yet</Body1>
+                    <Caption1>Add a line item to start building this plan&apos;s budget across periods.</Caption1>
+                    <Button size="small" icon={<Add20Regular />} onClick={addLineItem} style={{ marginTop: tokens.spacingVerticalXS }}>Add line item</Button>
+                  </div>
+                </TableCell>
+              </TableRow>
+            )}
             {inputItems.map((li) => {
               const v = variance.find((x) => x.lineItemId === li.id);
               return (
@@ -2208,7 +2220,7 @@ function PlanningSheetPanel({
               );
             })}
             {/* Period-total footer row */}
-            <TableRow>
+            <TableRow style={{ backgroundColor: tokens.colorNeutralBackground2 }}>
               <TableCell><strong>Total</strong></TableCell>
               {sheet.periods.map((p) => (
                 <TableCell key={p.id}><strong>{fmtNum(periodTotal(sheet, activeScenarioId, p.id))}</strong></TableCell>
@@ -2221,7 +2233,7 @@ function PlanningSheetPanel({
             </TableRow>
           </TableBody>
         </Table>
-      </div>
+      </Card>
 
       <div style={{ display: 'flex', gap: tokens.spacingHorizontalS, flexWrap: 'wrap' }}>
         <Button icon={<Add20Regular />} onClick={addLineItem}>Add line item</Button>
