@@ -1392,6 +1392,10 @@ module apim 'apim.bicep' = if (apimEnabled && empty(existingApimName)) {
     appInsightsInstrumentationKey: monitoring.outputs.appInsightsInstrumentationKey
     workspaceId: monitoring.outputs.lawId
     complianceTags: complianceTags
+    // Console UAMI → "API Management Service Contributor" at the APIM scope so
+    // the Admin → API Management panes work by default (no manual RBAC grant).
+    consolePrincipalId: identity.outputs.uamiConsolePrincipalId
+    skipRoleGrants: skipRoleGrants
     seedSampleApi: seedSampleApi
   }
 }
