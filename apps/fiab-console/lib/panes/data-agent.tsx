@@ -225,6 +225,7 @@ const useStyles = makeStyles({
     overflow: 'hidden',
   },
   chatHead: {
+    flexShrink: 0,
     display: 'flex',
     alignItems: 'center',
     gap: tokens.spacingHorizontalM,
@@ -314,6 +315,7 @@ const useStyles = makeStyles({
 
   // --- composer (pinned) -------------------------------------------------
   composer: {
+    flexShrink: 0,
     display: 'flex',
     alignItems: 'flex-end',
     gap: tokens.spacingHorizontalS,
@@ -323,6 +325,7 @@ const useStyles = makeStyles({
   },
   composerInput: { flex: 1, minWidth: 0 },
   composerHint: {
+    flexShrink: 0,
     color: tokens.colorNeutralForeground4,
     paddingLeft: tokens.spacingHorizontalL,
     paddingRight: tokens.spacingHorizontalL,
@@ -632,7 +635,7 @@ export function DataAgentPane() {
 
         {/* Honest infra-gate — full surface still renders. */}
         {gate && (
-          <MessageBar intent="warning" style={{ margin: tokens.spacingHorizontalL, marginBottom: 0 }}>
+          <MessageBar intent="warning" style={{ flexShrink: 0, margin: tokens.spacingHorizontalL, marginBottom: 0 }}>
             <MessageBarBody>
               <MessageBarTitle>Foundry Agent Service not configured</MessageBarTitle>
               {gate.hint || gate.error}
