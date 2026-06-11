@@ -1,0 +1,7 @@
+# Azure Functions
+bin/
+obj/
+.python_packages/
+local.settings.json
+Modules/
+*.zip

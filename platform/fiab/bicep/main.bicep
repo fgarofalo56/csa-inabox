@@ -73,6 +73,21 @@ param loomPurviewAccount string = ''
 @description('Enable Microsoft Information Protection reads via Microsoft Graph for the Console (sensitivity labels + label policies + apply-label evaluation). Requires the Console UAMI to be admin-consented for InformationProtectionPolicy.Read.All + SensitivityLabel.Evaluate. Defaults off — the bootstrap workflow flips the AppRoles, then operators re-deploy with this true.')
 param loomMipEnabled bool = false
 
+@description('Enable sensitivity-label + label-policy CRUD (create/edit/delete) via the SCC PowerShell sidecar (azure-functions/scc-labels). Microsoft Graph has no write surface for labels/policies, so CRUD runs through Security & Compliance PowerShell with certificate-based app auth (Exchange.ManageAsApp + Compliance Administrator). Defaults off — bootstrap provisions the SCC app + auth cert, then operators re-deploy with this true. Label/policy READS work regardless; only CRUD is gated.')
+param loomMipAdminEnabled bool = false
+
+@description('Entra app (client) id for the SCC labels sidecar. Set by bootstrap after the SCC app + cert are created.')
+param sccAppId string = ''
+
+@description('Auth certificate thumbprint for the SCC labels sidecar (WEBSITE_LOAD_CERTIFICATES).')
+param sccCertThumbprint string = ''
+
+@description('Tenant onmicrosoft.com domain for Connect-IPPSSession -Organization. Empty falls back to the deployment tenant default at bootstrap.')
+param sccOrganization string = ''
+
+@description('Optional SCC PowerShell ConnectionUri override for sovereign clouds (Gov/GCC-High/DoD).')
+param sccConnectionUri string = ''
+
 @description('Enable Purview DLP reads via Microsoft Graph for the Console (DLP policies + rules + alerts + simulate). Requires Console UAMI Policy.Read.All + SecurityAlert.Read.All admin-consented. Note: the DLP /beta endpoints are tenant-preview-gated — the Loom panel surfaces a precise 404→501 hint when the tenant has not opted into the Graph DLP preview.')
 param loomDlpEnabled bool = false
 
@@ -589,6 +604,11 @@ module adminPlane 'modules/admin-plane/main.bicep' = {
     loomSynapseDedicatedPool: 'loompool'
     loomPurviewAccount: loomPurviewAccount
     loomMipEnabled: loomMipEnabled
+    loomMipAdminEnabled: loomMipAdminEnabled
+    sccAppId: sccAppId
+    sccCertThumbprint: sccCertThumbprint
+    sccOrganization: sccOrganization
+    sccConnectionUri: sccConnectionUri
     loomDlpEnabled: loomDlpEnabled
     loomPowerBiAdminLabels: loomPowerBiAdminLabels
     loomPowerbiXmlaEndpoint: loomPowerbiXmlaEndpoint
