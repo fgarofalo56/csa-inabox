@@ -15,10 +15,11 @@
 
 import * as React from 'react';
 import {
-  Text, Badge, makeStyles, tokens, mergeClasses,
+  Text, Badge, Button, makeStyles, tokens, mergeClasses,
 } from '@fluentui/react-components';
-import { Open16Regular, BookOpen16Regular } from '@fluentui/react-icons';
+import { Open16Regular, BookOpen16Regular, ArrowDownload16Regular } from '@fluentui/react-icons';
 import { itemVisual } from '@/lib/components/ui/item-type-visual';
+import { InstallAppDialog } from '@/lib/components/apps/install-app-dialog';
 import type { LearnTopic } from '@/lib/learn/content';
 
 const useStyles = makeStyles({
@@ -132,6 +133,9 @@ export function LearnTopicCard({ topic }: { topic: LearnTopic }): React.ReactEle
   const Icon = visual.icon;
   // Thumbnail can 404 on the published site for some slugs → fall back to icon art.
   const [imgOk, setImgOk] = React.useState<boolean>(!!topic.thumbUrl);
+  // When the topic maps to an installable content-bundle app, the footer shows
+  // an "Install live example" button that opens the shared install wizard.
+  const [installOpen, setInstallOpen] = React.useState(false);
 
   const showImg = !!topic.thumbUrl && imgOk;
 
@@ -182,8 +186,27 @@ export function LearnTopicCard({ topic }: { topic: LearnTopic }): React.ReactEle
               MS Learn <Open16Regular />
             </a>
           )}
+          {topic.appId && (
+            <Button
+              size="small"
+              appearance="primary"
+              icon={<ArrowDownload16Regular />}
+              onClick={() => setInstallOpen(true)}
+            >
+              Install live example
+            </Button>
+          )}
         </div>
       </div>
+
+      {topic.appId && (
+        <InstallAppDialog
+          appId={topic.appId}
+          appName={topic.title}
+          open={installOpen}
+          onOpenChange={setInstallOpen}
+        />
+      )}
     </article>
   );
 }
