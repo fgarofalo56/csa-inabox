@@ -72,6 +72,44 @@ failover). Forward migration planning (`fiab-migrate snapshot` demo,
 migration plan walkthrough, hybrid topology discussion). CoE charter
 document review. Final readout to exec sponsor.
 
+## Day-by-day curriculum
+
+Each day ships a facilitator guide (timing, talking points, exercises) and a
+participant lab guide (hands-on steps against the **live** Loom from Day 1) in
+one page:
+
+<div class="grid cards" markdown>
+
+-   :material-rocket-launch: [**Day 1 — Foundation & Deploy**](day-1-foundation.md)
+
+    Kickoff, prerequisites, `.bicepparam`, `azd up`, first DLZ, Console health.
+
+-   :material-database-import: [**Day 2 — Ingest & Mirroring & Catalog**](day-2-ingest.md)
+
+    Ingest synthetic IoT, configure a mirrored database, Purview-primary catalog.
+
+-   :material-layers-triple: [**Day 3 — Transform & Lakehouse & Warehouse**](day-3-transform.md)
+
+    Bronze → Silver → Gold medallion, dbt + Git, Synapse SQL, KQL over ADX.
+
+-   :material-chart-box: [**Day 4 — BI & AI & Direct Lake & Data Agents**](day-4-bi-ai.md)
+
+    Semantic model + report, Direct-Lake-Shim (honest latency), Data Agents.
+
+-   :material-cog-sync: [**Day 5 — Operate & Govern & Forward-Migrate**](day-5-operate.md)
+
+    Monitoring, cost, DR drill, forward-migration plan, CoE charter, readout.
+
+</div>
+
+## Workshop materials
+
+- [Datasets](../datasets/index.md) — CUI-safe synthetic (IoT, financial, clinical)
+- [CoE charter template](../templates/coe-charter.md)
+- [Pre-workshop readiness checklist](../templates/readiness-checklist.md)
+- [Post-workshop survey + outcome metrics](../templates/post-survey.md)
+- Slide decks: `make loom-decks` renders each day page to PPTX/PDF (Marp)
+
 ## Federal-specific content emphasis
 
 - Per-boundary `.bicepparam` walkthrough (GCC-H vs IL5)

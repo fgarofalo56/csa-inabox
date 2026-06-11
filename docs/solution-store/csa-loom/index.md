@@ -43,16 +43,54 @@ azd up
 | GCC-High / IL4 | ✅ | — |
 | DoD IL5 | — | ✅ |
 
-## Cost
+## Cost (Bicep-derived)
 
-CSA Loom IP is **free in v1**. You pay only for Azure consumption
-underneath:
-- Sample F8 Commercial deployment: ~$3-5K/month
-- Sample F8 GCC-High deployment: ~$4-6K/month
+CSA Loom IP is **free in v1**. You pay only for Azure consumption underneath.
+The sample monthly estimates below are **derived from the SKUs in the shipped
+deploy parameters** (`platform/fiab/bicep/params/*.bicepparam`) — each line
+traces to a real `param`, so the estimate moves with the deployment, not a
+hand-waved figure.
+
+### Commercial baseline — `commercial.bicepparam`
+
+| Component | Bicep param → value | Approx. monthly (list) |
+|---|---|---|
+| API Management | `apimSku = 'PremiumV2'` (1 unit) | ~$2,800 |
+| Azure Data Explorer (eventhouse/KQL) | ADX cluster (small prod / dev) | ~$400-900 |
+| Databricks (Premium, jobs, scale-to-0) | `databricksSqlWarehouseEnabled = true` | ~$300-800 |
+| Azure OpenAI | `openaiChatModel = 'gpt-4o'` (moderate use) | ~$200-600 |
+| Container Apps + Functions | `containerPlatform = 'containerApps'`, `functionsHostSku = 'FlexConsumption'` | ~$200-450 |
+| ADLS Gen2 + Delta, Cosmos, Key Vault, Monitor | base platform (1-5 TB) | ~$150-450 |
+| **Base total (Loom-native)** | capacity baseline `capacitySku = 'F8'` | **~$3-5K / month** |
+| *Power BI F-SKU (optional)* | `powerBiSku = 'F64'` — **not required**; Loom-native tabular layer is the default | *+~$5K if enabled* |
+
+### GCC-High / IL4 — `gcc-high.bicepparam`
+
+Higher because Gov substitutes pricier SKUs (no Container Apps / FlexConsumption
+at IL4+):
+
+| Component | Bicep param → value | Approx. monthly (list) |
+|---|---|---|
+| API Management | `apimSku = 'Premium'` (1 unit) | ~$2,800 |
+| Compute platform | `containerPlatform = 'aks'` (Container Apps not at IL4+) | ~$500-900 |
+| Functions | `functionsHostSku = 'EP1'` (Flex not in Gov) | ~$150-300 |
+| Azure Data Explorer | ADX cluster (Gov region) | ~$400-900 |
+| Azure OpenAI Gov | `openaiChatModel = 'gpt-4o'` (Gov endpoints) | ~$200-600 |
+| ADLS + Cosmos + KV + Monitor | base platform | ~$150-450 |
+| **Base total (Loom-native)** | `capacitySku = 'F8'` | **~$4-6K / month** |
+
+!!! note "These are list-price approximations"
+    Actual cost depends on data volume, query/agent usage, compute auto-scale,
+    and your Azure agreement (MACC, reservations, EA discounts). Re-derive for
+    your boundary by reading the SKUs in your chosen `.bicepparam` against the
+    [Azure Pricing Calculator](https://azure.microsoft.com/pricing/calculator/),
+    or run the deploy with `azd provision --preview` to enumerate billable
+    resources. The **Loom-native path needs no Power BI / Fabric SKU** — Power BI
+    is an opt-in line item, never a requirement.
 
 [Detailed cost breakdown →](../../fiab/operations/cost.md)
 
-> **Marketplace listing + pricing model deferred to backlog.**
+> **Marketplace listing + pricing model deferred to backlog** (per AMENDMENTS A4).
 > See [`docs/fiab/deployment/marketplace.md`](../../fiab/deployment/marketplace.md)
 > for the future pricing roadmap placeholder.
 

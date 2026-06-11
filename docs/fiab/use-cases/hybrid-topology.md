@@ -1,5 +1,7 @@
 # Hybrid Fabric Commercial + CSA Loom Gov
 
+![Hybrid topology — Fabric Commercial and CSA Loom Gov running side-by-side](../../assets/images/hero/fiab/use-cases.svg){ .architecture-hero loading="eager" }
+
 The most common federal customer pattern: Microsoft Fabric in
 Commercial + CSA Loom in Gov, running side-by-side with bridging.
 
@@ -154,4 +156,7 @@ above without forcing customers into a single-cloud bet.
 - [Forward to Fabric runbook](../runbooks/forward-migrate-to-fabric.md)
 - [Forward to Fabric operations](../operations/forward-to-fabric.md)
 - [Compliance — feature × boundary matrix](../compliance/feature-boundary-matrix.md)
+- Workload: [OneLake parity](../workloads/onelake-parity.md)
+- Tutorial: [08 — Forward-migrate to Fabric](../tutorials/08-forward-migrate-to-fabric.md)
+- Example: [Retail end-to-end](../examples/retail-e2e.md)
 - Existing: [Multi-Cloud Data Virtualization](../../use-cases/multi-cloud-data-virtualization.md)

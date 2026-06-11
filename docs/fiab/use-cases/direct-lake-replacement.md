@@ -1,5 +1,7 @@
 # Direct Lake-Replacement Pattern
 
+![Direct Lake-replacement — migrating legacy BI to the warm-cache materializer pattern](../../assets/images/hero/fiab/use-cases.svg){ .architecture-hero loading="eager" }
+
 !!! info "Comparative positioning note"
     This document is written from the
     perspective of Microsoft Azure, Cloud Scale Analytics, and CSA Loom. Any
@@ -188,4 +190,5 @@ delivered** and acceptable for the user's experience.
 - [Direct Lake parity workload](../workloads/direct-lake-parity.md)
 - [Direct-Lake Shim service](../services/direct-lake-shim.md)
 - [Tutorial 03 — Direct Lake parity](../tutorials/03-direct-lake-parity.md)
+- Example: [Retail end-to-end](../examples/retail-e2e.md)
 - Existing migration: [Tableau to Power BI migration](../../migrations/tableau-to-powerbi/index.md)

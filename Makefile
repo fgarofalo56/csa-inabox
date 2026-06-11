@@ -258,6 +258,9 @@ helm-lint:  ## Run helm lint --strict + template render on the portal chart
 
 # --- Cleanup ---
 
+loom-decks: ## Build CSA Loom marketing + workshop slide decks (PPTX+PDF) from markdown
+	python scripts/csa-loom/build-decks.py $(if $(DECK),$(DECK),) $(if $(FORMAT),--format $(FORMAT),)
+
 clean: ## Remove build artifacts and caches
 	-find . -type d -name "__pycache__" -exec rm -rf {} + 2>/dev/null
 	-find . -type d -name ".ruff_cache" -exec rm -rf {} + 2>/dev/null

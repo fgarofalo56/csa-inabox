@@ -1,5 +1,7 @@
 # Federal Data Mesh on CSA Loom
 
+![Federal data mesh — domain-DLZ federation under a central Loom governance plane](../../assets/images/hero/fiab/use-cases.svg){ .architecture-hero loading="eager" }
+
 A federal department running multiple agencies as autonomous domains,
 each with their own data products + analytics — federated under a
 central governance plane.
@@ -105,5 +107,9 @@ allocated across agencies.
 - [Multi-Agency Onboarding use case](multi-agency-onboarding.md)
 - [Hybrid topology use case](hybrid-topology.md)
 - [Tenancy model ADR](../adr/0011-tenancy-model.md)
-- [Marketplace tutorial](../tutorials/07-marketplace-data-product.md)
+- Workload: [Data engineering](../workloads/data-engineering.md) ·
+  [Lakehouse](../workloads/lakehouse.md)
+- Tutorial: [01 — First workspace](../tutorials/01-first-workspace.md) ·
+  [07 — Marketplace data product](../tutorials/07-marketplace-data-product.md)
+- Example: [IoT streaming](../examples/iot-streaming.md)
 - Existing parent: [Government Data Analytics on Azure](../../use-cases/government-data-analytics.md)
