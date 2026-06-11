@@ -14,7 +14,7 @@ import {
   Building24Regular, ArrowSync24Regular, PanelLeftContract24Regular,
   PanelLeftExpand24Regular, Globe24Regular, Heart24Regular,
   Tag24Regular, TagMultiple24Regular, Sparkle24Regular, Code24Regular, DataPie24Regular,
-  Wrench24Regular,
+  Wrench24Regular, ShieldLock24Regular,
   type FluentIcon,
 } from '@fluentui/react-icons';
 
@@ -38,6 +38,7 @@ const SECTIONS: Section[] = [
   { href: '/admin/audit-logs', label: 'Audit logs', icon: ClipboardTask24Regular, description: 'Microsoft 365 audit log activity for every Fabric operation.' },
   { href: '/admin/usage', label: 'Usage metrics', icon: ChartMultiple24Regular, description: 'Feature usage & adoption report, item inventory, item details.' },
   { href: '/admin/copilot-usage', label: 'Copilot usage', icon: Sparkle24Regular, description: 'Per-persona Copilot token consumption from App Insights — real prompt + completion tokens by persona, model, day, and user (hashed). No synthetic numbers.' },
+  { href: '/admin/security?tab=dspm', label: 'DSPM for AI', icon: ShieldLock24Regular, description: 'AI data-security posture: which agents / Copilots touch sensitive-labeled data, the max sensitivity label exposed, its protection state, and real per-agent usage. The Azure-native 1:1 of Purview DSPM for AI.' },
   { href: '/admin/users', label: 'Users & licenses', icon: People24Regular, description: 'Power BI / Fabric license assignments and user inventory.' },
   { href: '/admin/workspaces', label: 'Workspaces', icon: Building24Regular, description: 'Tenant-wide inventory: every workspace, owner, capacity, state.' },
   { href: '/admin/network', label: 'Network & DNS', icon: Globe24Regular, description: 'Private endpoints, copy/paste hosts-file override, and enterprise DNS guidance for reaching the private-by-default Azure services.' },
