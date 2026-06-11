@@ -36,6 +36,7 @@ The old `/realtime-hub` page was a thin wrapper around `ItemsByTypePane` listing
 | **Sample data** quick-start | ✅ built — `SampleData` connector (no connection required) | eventstream source `type` enum |
 | Task cards: Get events, Subscribe to events, Explore data in motion | ✅ built — three task cards at the top of the page | wired to the dialogs/drawers above |
 | Honest infra-gate when the UAMI isn't authorized in Fabric | ⚠️ honest-gate — `MessageBar intent="warning"` naming the SP-toggle + `LOOM_UAMI_CLIENT_ID` workspace-role requirement; **full hub UI still renders** | 401/403 `FabricError` passed through verbatim with `hint` |
+| **Tile | List** view of "All data streams" (Loom house-style) | ✅ built — `ViewToggle` switches the streams collection between a colour-coded `ItemTile` grid and the sortable `LoomDataTable`; choice persisted to `localStorage` (`loom.realtime-hub.streams.viewMode.v1`). The per-row action menu (Preview / Endpoints / Open) is reused as the tile overflow kebab. | client-side over the same `/api/realtime-hub/streams` data |
 
 ## Tracked follow-ups (honest, not faked)
 
