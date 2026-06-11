@@ -3135,6 +3135,23 @@ module sqlDatabaseShareRbac 'sql-database-share-rbac.bicep' = if (!skipRoleGrant
   }
 }
 
+// audit-T64 — Plan (preview) backing SQL database (Azure-native parity of
+// Fabric Plan's auto-provisioned Fabric SQL database). Opt-in: only when
+// loomPlanBackingSqlServer names an EXISTING Azure SQL logical server. Creates
+// the serverless `loom-plan` database (dbo.loom_plan_cells is created
+// idempotently by the writeback BFF). Deploys into the SQL server's RG.
+// No Microsoft Fabric dependency — planning cells always persist to Cosmos
+// first; this DB is the governed, queryable writeback target.
+module planBackingSql '../shared/plan-backing-sql.bicep' = if (!empty(loomPlanBackingSqlServer)) {
+  name: 'console-plan-backing-sql'
+  scope: resourceGroup(!empty(loomSqlServerRg) ? loomSqlServerRg : loomDlzRg)
+  params: {
+    sqlServerName: split(loomPlanBackingSqlServer, '.')[0]
+    databaseName: !empty(loomPlanBackingSqlDatabase) ? loomPlanBackingSqlDatabase : 'loom-plan'
+    location: location
+  }
+}
+
 // =====================================================================
 // Compute & Storage scale tab — SQL DB Contributor on the SQL server RG so
 // the Console UAMI can PATCH database compute SKUs (DTU / vCore / serverless).

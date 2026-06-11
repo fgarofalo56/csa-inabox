@@ -19,7 +19,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { getSession } from '@/lib/auth/session';
 import { loadOwnedItem } from '../../../_lib/item-crud';
-import { resolvePlanBacking, writebackCells, type WritebackCell } from '@/lib/azure/plan-backing-store';
+import { resolvePlanBacking, writebackCells, readPlanCells, type WritebackCell } from '@/lib/azure/plan-backing-store';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -29,6 +29,42 @@ const MAX_CELLS = 5000;
 
 function err(error: string, status: number, extra?: Record<string, unknown>) {
   return NextResponse.json({ ok: false, error, ...(extra || {}) }, { status });
+}
+
+/**
+ * GET → the persisted planning cells for this plan, read back from the Azure
+ * SQL writeback store (the read half of PowerTable's two-way SQL binding).
+ * Honest 503 gate naming LOOM_PLAN_BACKING_SQL_* when no store is configured —
+ * PowerTable then binds to the in-editor (Cosmos) cells instead.
+ */
+export async function GET(_req: NextRequest, ctx: { params: Promise<{ id: string }> }) {
+  const s = getSession();
+  if (!s) return err('unauthenticated', 401);
+  const { id } = await ctx.params;
+  if (!id || id === 'new') return err('save the plan first (no id yet)', 400);
+
+  const plan = await loadOwnedItem(id, ITEM_TYPE, s.claims.oid);
+  if (!plan) return err('plan not found', 404);
+
+  const resolved = resolvePlanBacking();
+  if (!resolved.ok) {
+    return err(
+      `Backing store not configured (missing ${resolved.gate.missing}).`,
+      503,
+      { gate: resolved.gate },
+    );
+  }
+
+  const result = await readPlanCells(resolved.config, id);
+  if (!result.ok) return err(result.error || 'read failed', 502);
+
+  return NextResponse.json({
+    ok: true,
+    cells: result.cells,
+    count: result.cells.length,
+    server: resolved.config.server,
+    database: resolved.config.database,
+  });
 }
 
 export async function POST(req: NextRequest, ctx: { params: Promise<{ id: string }> }) {

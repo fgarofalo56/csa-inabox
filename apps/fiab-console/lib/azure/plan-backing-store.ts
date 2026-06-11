@@ -136,3 +136,54 @@ WHEN NOT MATCHED THEN INSERT (plan_id, sheet_id, line_item_id, period_id, scenar
     return { ok: false, written: 0, error: e?.message || String(e) };
   }
 }
+
+export interface PersistedPlanCell {
+  sheetId: string;
+  lineItemId: string;
+  periodId: string;
+  scenarioId: string;
+  value: number;
+  updatedAt: string | null;
+}
+
+export interface ReadResult {
+  ok: boolean;
+  cells: PersistedPlanCell[];
+  error?: string;
+}
+
+/**
+ * SELECT the persisted planning cells for a plan from Azure SQL — the read half
+ * of PowerTable's two-way SQL binding. Parameterized (no interpolation of the
+ * plan id). Returns an empty set (ok:true) when the table hasn't been created
+ * yet, so the first read of a never-written plan is not an error.
+ */
+export async function readPlanCells(cfg: PlanBackingConfig, planId: string): Promise<ReadResult> {
+  try {
+    const sqlText = `
+IF OBJECT_ID('dbo.loom_plan_cells', 'U') IS NULL
+  SELECT TOP 0 CAST(NULL AS NVARCHAR(128)) AS sheet_id, CAST(NULL AS NVARCHAR(128)) AS line_item_id,
+         CAST(NULL AS NVARCHAR(128)) AS period_id, CAST(NULL AS NVARCHAR(128)) AS scenario_id,
+         CAST(NULL AS FLOAT) AS value, CAST(NULL AS DATETIME2) AS updated_at;
+ELSE
+  SELECT sheet_id, line_item_id, period_id, scenario_id, value, updated_at
+  FROM dbo.loom_plan_cells WHERE plan_id = @p0
+  ORDER BY sheet_id, line_item_id, period_id, scenario_id;`;
+    const rows = await executeParameterized<{
+      sheet_id: string; line_item_id: string; period_id: string; scenario_id: string; value: number; updated_at: unknown;
+    }>(cfg.server, cfg.database, sqlText, [planId]);
+    const cells: PersistedPlanCell[] = rows
+      .filter((r) => r.sheet_id != null)
+      .map((r) => ({
+        sheetId: r.sheet_id,
+        lineItemId: r.line_item_id,
+        periodId: r.period_id,
+        scenarioId: r.scenario_id,
+        value: Number(r.value),
+        updatedAt: r.updated_at ? new Date(r.updated_at as string).toISOString() : null,
+      }));
+    return { ok: true, cells };
+  } catch (e: any) {
+    return { ok: false, cells: [], error: e?.message || String(e) };
+  }
+}

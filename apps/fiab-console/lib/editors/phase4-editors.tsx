@@ -36,6 +36,8 @@ import {
   DataUsage20Regular, ArrowUpload16Regular,
   Settings20Regular, Money20Regular, BranchFork20Regular,
   Table20Regular, ChartMultiple20Regular,
+  ArrowDownload16Regular, ArrowSortUp16Regular, ArrowSortDown16Regular,
+  Save16Regular, DataTrending20Regular,
 } from '@fluentui/react-icons';
 import { ItemEditorChrome } from './item-editor-chrome';
 import { NewItemBrowseGate } from './new-item-gate';
@@ -72,8 +74,13 @@ import {
   cellKey, getCell, rowTotal, periodTotal, grandTotal,
   cloneScenarioCells, dropScenarioCells, computeVariance, newId,
   defaultScenarios, defaultPlanningSheet,
+  flattenPlanCells, filterPlanRows, sortPlanRows,
+  periodSeries, forecastPeriods, linearFit, ganttLayout, planInsights,
+  applyMappingsToActuals,
   type PlanScenario, type PlanScenarioKind,
   type PlanningSheet, type PlanSemanticModelRef, type PlanBackingDb,
+  type PlanCellRow, type PlanRowSortKey, type PeriodPoint, type GanttBar,
+  type PlanSourceMapping,
 } from './_plan-model';
 
 /**
@@ -225,6 +232,46 @@ const useStyles = makeStyles({
   },
   ontoLoading: { display: 'flex', alignItems: 'center', gap: tokens.spacingHorizontalS, color: tokens.colorNeutralForeground3 },
   ontoStartBtn: { alignSelf: 'flex-start' },
+
+  /* ---- Plan PowerTable / Intelligence / InfoBridge (audit-T64 finish) ---- */
+  planSection: {
+    display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalM,
+    padding: tokens.spacingVerticalL, borderRadius: tokens.borderRadiusXLarge,
+    border: `1px solid ${tokens.colorNeutralStroke2}`, backgroundColor: tokens.colorNeutralBackground1,
+  },
+  planSectionHead: { display: 'flex', alignItems: 'center', gap: tokens.spacingHorizontalS, flexWrap: 'wrap' },
+  planSectionIcon: {
+    display: 'flex', alignItems: 'center', justifyContent: 'center', width: '32px', height: '32px', flexShrink: 0,
+    borderRadius: tokens.borderRadiusMedium, backgroundColor: tokens.colorBrandBackground2, color: tokens.colorBrandForeground1,
+  },
+  planToolbar: {
+    display: 'flex', gap: tokens.spacingHorizontalS, alignItems: 'flex-end', flexWrap: 'wrap',
+    padding: tokens.spacingVerticalS, borderRadius: tokens.borderRadiusLarge, backgroundColor: tokens.colorNeutralBackground2,
+  },
+  planGridScroll: { overflowX: 'auto', maxHeight: '460px', overflowY: 'auto', borderRadius: tokens.borderRadiusMedium, border: `1px solid ${tokens.colorNeutralStroke2}` },
+  planSortable: { cursor: 'pointer', userSelect: 'none' },
+  planEmpty: {
+    display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', gap: tokens.spacingVerticalS,
+    padding: tokens.spacingVerticalXXL, borderRadius: tokens.borderRadiusLarge,
+    border: `1px dashed ${tokens.colorNeutralStroke2}`, backgroundColor: tokens.colorNeutralBackground2,
+    color: tokens.colorNeutralForeground3, textAlign: 'center',
+  },
+  planKpiRow: { display: 'flex', gap: tokens.spacingHorizontalM, flexWrap: 'wrap' },
+  planKpi: {
+    display: 'flex', flexDirection: 'column', gap: '2px', minWidth: '140px', flex: '1 1 140px',
+    padding: tokens.spacingVerticalM, borderRadius: tokens.borderRadiusLarge,
+    border: `1px solid ${tokens.colorNeutralStroke2}`, borderLeftWidth: '4px', borderLeftColor: tokens.colorBrandStroke1,
+    backgroundColor: tokens.colorNeutralBackground1,
+  },
+  planKpiValue: { fontSize: tokens.fontSizeHero700, fontWeight: tokens.fontWeightSemibold, lineHeight: tokens.lineHeightHero700 },
+  planInsight: {
+    display: 'flex', alignItems: 'flex-start', gap: tokens.spacingHorizontalS,
+    padding: tokens.spacingVerticalS, borderRadius: tokens.borderRadiusMedium, backgroundColor: tokens.colorNeutralBackground2,
+  },
+  ganttRow: { display: 'flex', alignItems: 'center', gap: tokens.spacingHorizontalS, padding: '3px 0' },
+  ganttLabel: { width: '180px', flexShrink: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' },
+  ganttTrack: { position: 'relative', flex: 1, height: '20px', borderRadius: tokens.borderRadiusSmall, backgroundColor: tokens.colorNeutralBackground3 },
+  ganttBar: { position: 'absolute', top: '3px', height: '14px', borderRadius: tokens.borderRadiusSmall, minWidth: '4px' },
 });
 
 // ----- ML Model -----
@@ -1652,6 +1699,10 @@ interface PlanState {
   activeScenarioId?: string;
   semanticModelRef?: PlanSemanticModelRef;
   backingDb?: PlanBackingDb;
+  // audit-T64 finish — InfoBridge source-system → line-item mappings.
+  infoBridge?: PlanSourceMapping[];
+  // Intelligence forecast horizon (periods to project); persisted per plan.
+  forecastHorizon?: number;
   [k: string]: unknown;
 }
 
@@ -2258,21 +2309,558 @@ function PlanningSheetPanel({
   );
 }
 
-/** Honest Preview gate for the sheet kinds not in Phase-1 (PowerTable/Intelligence/InfoBridge). */
-function PlanPreviewSheet({ title, blurb, source }: { title: string; blurb: string; source: string }) {
+/**
+ * Inline multi-point SVG line chart for the Intelligence trend/forecast visual.
+ * Pure SVG (no chart dep) over the REAL period-subtotal series; forecast points
+ * render dashed. Azure-native — computed from plan cells, no Fabric.
+ */
+function PlanTrendChart({ points, height = 200 }: { points: PeriodPoint[]; height?: number }) {
+  const width = 560;
+  const padL = 48, padR = 16, padT = 16, padB = 28;
+  const innerW = width - padL - padR;
+  const innerH = height - padT - padB;
+  const vals = points.map((p) => p.value);
+  const max = Math.max(1, ...vals);
+  const min = Math.min(0, ...vals);
+  const span = Math.max(1, max - min);
+  const x = (i: number) => padL + (points.length <= 1 ? innerW / 2 : (i / (points.length - 1)) * innerW);
+  const y = (v: number) => padT + innerH - ((v - min) / span) * innerH;
+  const histPts = points.filter((p) => !p.forecast);
+  const linePath = (subset: PeriodPoint[]) =>
+    subset.map((p) => `${x(points.indexOf(p))},${y(p.value)}`).join(' ');
   return (
-    <div style={{ display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalM }}>
-      <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-        <Subtitle2>{title}</Subtitle2>
-        <Badge appearance="tint" color="warning">Preview</Badge>
+    <svg width="100%" viewBox={`0 0 ${width} ${height}`} role="img" aria-label="Plan trend chart" style={{ maxWidth: width }}>
+      {/* gridlines + axis labels */}
+      {[0, 0.25, 0.5, 0.75, 1].map((f) => {
+        const gy = padT + innerH - f * innerH;
+        return (
+          <g key={f}>
+            <line x1={padL} y1={gy} x2={width - padR} y2={gy} stroke={tokens.colorNeutralStroke2} strokeWidth={1} />
+            <text x={padL - 6} y={gy + 3} textAnchor="end" fontSize={10} fill={tokens.colorNeutralForeground3}>
+              {Math.round(min + f * span).toLocaleString()}
+            </text>
+          </g>
+        );
+      })}
+      {/* historical line */}
+      <polyline points={linePath(histPts)} fill="none" stroke={tokens.colorBrandStroke1} strokeWidth={2.5} />
+      {/* forecast line (dashed) — joins last historical point onward */}
+      {points.some((p) => p.forecast) && (
+        <polyline
+          points={linePath([histPts[histPts.length - 1], ...points.filter((p) => p.forecast)].filter(Boolean) as PeriodPoint[])}
+          fill="none" stroke={tokens.colorPalettePurpleForeground2} strokeWidth={2.5} strokeDasharray="5 4"
+        />
+      )}
+      {/* points + x labels */}
+      {points.map((p, i) => (
+        <g key={p.periodId}>
+          <circle cx={x(i)} cy={y(p.value)} r={3.5} fill={p.forecast ? tokens.colorPalettePurpleForeground2 : tokens.colorBrandForeground1} />
+          <text x={x(i)} y={height - 10} textAnchor="middle" fontSize={10} fill={tokens.colorNeutralForeground3}>{p.label}</text>
+        </g>
+      ))}
+    </svg>
+  );
+}
+
+/** Mutate a single planning cell in the correct sheet (PowerTable two-way edit). */
+function setPlanCellByKey(
+  setState: (updater: (prev: PlanState) => PlanState) => void,
+  sheetId: string, key: string, value: number,
+) {
+  setState((prev) => ({
+    ...prev,
+    sheets: ensureSheets(prev).map((sh) => (sh.id === sheetId ? { ...sh, cells: { ...sh.cells, [key]: value } } : sh)),
+    scenarios: ensureScenarios(prev),
+  }));
+}
+
+/**
+ * PowerTable — the Azure-native parity of Fabric Plan's no-code, SQL-bound grid
+ * (/fabric/iq/plan/powertable-overview). Flattens every plan cell into one
+ * editable, sortable, filterable grid bound 1:1 to the `dbo.loom_plan_cells`
+ * columns. Two-way writeback: edits persist to Cosmos (always) and MERGE into
+ * Azure SQL (when configured). "Load from SQL" reads the persisted rows back.
+ */
+function PlanPowerTablePanel({
+  id, state, setState, save, saving,
+}: {
+  id: string;
+  state: PlanState;
+  setState: (updater: (prev: PlanState) => PlanState) => void;
+  save: (next?: PlanState) => Promise<boolean>;
+  saving: boolean;
+}) {
+  const s = useStyles();
+  const sheets = ensureSheets(state);
+  const scenarios = ensureScenarios(state);
+  const rows = useMemo(() => flattenPlanCells(sheets, scenarios), [sheets, scenarios]);
+
+  const [query, setQuery] = useState('');
+  const [sortKey, setSortKey] = useState<PlanRowSortKey>('lineItem');
+  const [sortDir, setSortDir] = useState<'asc' | 'desc'>('asc');
+  const [busy, setBusy] = useState(false);
+  const [msg, setMsg] = useState<{ intent: 'success' | 'error' | 'warning'; text: string } | null>(null);
+  // Persisted SQL rows (read-back) keyed by composite key for a "drift" badge.
+  const [sqlByKey, setSqlByKey] = useState<Record<string, number> | null>(null);
+
+  const view = useMemo(() => sortPlanRows(filterPlanRows(rows, query), sortKey, sortDir), [rows, query, sortKey, sortDir]);
+
+  const toggleSort = (k: PlanRowSortKey) => {
+    if (k === sortKey) setSortDir((d) => (d === 'asc' ? 'desc' : 'asc'));
+    else { setSortKey(k); setSortDir('asc'); }
+  };
+  const SortIcon = ({ k }: { k: PlanRowSortKey }) =>
+    k !== sortKey ? null : sortDir === 'asc' ? <ArrowSortUp16Regular /> : <ArrowSortDown16Regular />;
+
+  const editCell = (row: PlanCellRow, raw: string) => {
+    const v = raw === '' ? 0 : Number(raw);
+    if (!Number.isFinite(v)) return;
+    setPlanCellByKey(setState, row.sheetId, row.key, v);
+  };
+
+  // Two-way writeback: persist to Cosmos, then MERGE the visible sheet's cells
+  // into Azure SQL via the real writeback route.
+  const writeBackAll = async () => {
+    if (!id || id === 'new') { setMsg({ intent: 'warning', text: 'Save the plan first.' }); return; }
+    setBusy(true); setMsg(null);
+    try {
+      await save();
+      // Group cells by sheet and POST each (the route is per-sheet).
+      let total = 0; let gated: string | null = null;
+      for (const sheet of sheets) {
+        const cells = Object.entries(sheet.cells).map(([k, value]) => {
+          const [lineItemId, periodId, scenarioId] = k.split('|');
+          return { lineItemId, periodId, scenarioId, value };
+        });
+        if (cells.length === 0) continue;
+        const r = await fetch(`/api/items/plan/${encodeURIComponent(id)}/writeback`, {
+          method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ sheetId: sheet.id, cells }),
+        });
+        const j = await r.json().catch(() => ({}));
+        if (r.status === 503 && j?.gate) { gated = `${j.gate.reason} Set ${j.gate.missing}.`; break; }
+        if (!r.ok) { setMsg({ intent: 'error', text: j?.error || `HTTP ${r.status}` }); setBusy(false); return; }
+        total += Number(j.written || 0);
+      }
+      if (gated) setMsg({ intent: 'warning', text: `Saved to Cosmos. Azure SQL writeback skipped: ${gated}` });
+      else setMsg({ intent: 'success', text: `${total} cell${total === 1 ? '' : 's'} written back to Azure SQL.` });
+    } catch (e: any) {
+      setMsg({ intent: 'error', text: e?.message || String(e) });
+    } finally { setBusy(false); }
+  };
+
+  const loadFromSql = async () => {
+    if (!id || id === 'new') { setMsg({ intent: 'warning', text: 'Save the plan first.' }); return; }
+    setBusy(true); setMsg(null);
+    try {
+      const r = await fetch(`/api/items/plan/${encodeURIComponent(id)}/writeback`);
+      const j = await r.json().catch(() => ({}));
+      if (r.status === 503 && j?.gate) { setMsg({ intent: 'warning', text: `${j.gate.reason} Set ${j.gate.missing}. PowerTable is bound to the in-editor (Cosmos) cells.` }); return; }
+      if (!r.ok || !j?.ok) { setMsg({ intent: 'error', text: j?.error || `HTTP ${r.status}` }); return; }
+      const map: Record<string, number> = {};
+      for (const c of j.cells || []) map[cellKey(c.lineItemId, c.periodId, c.scenarioId)] = Number(c.value);
+      setSqlByKey(map);
+      setMsg({ intent: 'success', text: `Loaded ${j.count} persisted row${j.count === 1 ? '' : 's'} from ${j.database}. Cells differing from the editor are flagged.` });
+    } catch (e: any) {
+      setMsg({ intent: 'error', text: e?.message || String(e) });
+    } finally { setBusy(false); }
+  };
+
+  const colName: Record<PlanRowSortKey, string> = { sheetName: 'Sheet', lineItem: 'Line item', period: 'Period', scenario: 'Scenario', value: 'Value' };
+
+  return (
+    <div className={s.planSection}>
+      <div className={s.planSectionHead}>
+        <span className={s.planSectionIcon}><Table20Regular /></span>
+        <div style={{ flex: 1, minWidth: 200 }}>
+          <Subtitle2>PowerTable</Subtitle2>
+          <Caption1 as="p" block style={{ color: tokens.colorNeutralForeground3 }}>
+            No-code, SQL-bound grid over every plan cell with two-way writeback — the Azure-native parity of Fabric Plan&apos;s PowerTable. Edit any value inline; it persists to Cosmos and MERGEs into <code>dbo.loom_plan_cells</code> on write back.
+          </Caption1>
+        </div>
+        <Badge appearance="tint" color="brand">{rows.length} cell{rows.length === 1 ? '' : 's'}</Badge>
       </div>
-      <MessageBar intent="info">
-        <MessageBarBody>
-          <MessageBarTitle>{title} — coming in a follow-up</MessageBarTitle>
-          {blurb} Tracked in the Plan parity spec ({source}). The Planning sheet (budgets / forecasts / scenarios / variance)
-          is fully functional now; this sheet kind lands in a later phase per the no-vaporware preview policy.
-        </MessageBarBody>
-      </MessageBar>
+
+      <div className={s.planToolbar}>
+        <Field label="Filter rows" style={{ minWidth: 220, flex: '1 1 220px' }}>
+          <Input value={query} onChange={(_, d) => setQuery(d.value)} placeholder="line item, period, scenario, value…" contentBefore={<ArrowDownload16Regular style={{ visibility: 'hidden', width: 0 }} />} />
+        </Field>
+        <Button icon={busy ? <Spinner size="tiny" /> : <Save16Regular />} onClick={writeBackAll} disabled={busy || saving}>Write back to SQL</Button>
+        <Button icon={busy ? <Spinner size="tiny" /> : <ArrowDownload16Regular />} onClick={loadFromSql} disabled={busy}>Load from SQL</Button>
+        <Button appearance="primary" onClick={() => save()} disabled={saving}>{saving ? 'Saving…' : 'Save'}</Button>
+      </div>
+
+      {rows.length === 0 ? (
+        <div className={s.planEmpty}>
+          <Table20Regular fontSize={28} />
+          <Body1>No plan cells yet. Add line items and periods on the <strong>Planning</strong> sheet, then enter values — they appear here as an editable grid.</Body1>
+        </div>
+      ) : (
+        <div className={s.planGridScroll}>
+          <Table size="small" aria-label="PowerTable cell grid">
+            <TableHeader>
+              <TableRow>
+                {(['sheetName', 'lineItem', 'period', 'scenario', 'value'] as PlanRowSortKey[]).map((k) => (
+                  <TableHeaderCell key={k} className={s.planSortable} onClick={() => toggleSort(k)}>
+                    <span style={{ display: 'inline-flex', alignItems: 'center', gap: 4 }}>{colName[k]}<SortIcon k={k} /></span>
+                  </TableHeaderCell>
+                ))}
+              </TableRow>
+            </TableHeader>
+            <TableBody>
+              {view.map((row) => {
+                const drift = sqlByKey && Object.prototype.hasOwnProperty.call(sqlByKey, row.key) && sqlByKey[row.key] !== row.value;
+                return (
+                  <TableRow key={row.key}>
+                    <TableCell>{row.sheetName}</TableCell>
+                    <TableCell>{row.lineItem}</TableCell>
+                    <TableCell>{row.period}</TableCell>
+                    <TableCell><Badge appearance="outline">{row.scenario}</Badge></TableCell>
+                    <TableCell>
+                      <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                        <Input type="number" value={String(row.value || '')} onChange={(_, d) => editCell(row, d.value)} style={{ maxWidth: 110 }} aria-label={`${row.lineItem} ${row.period} ${row.scenario}`} />
+                        {drift && <Badge appearance="tint" color="warning" title={`Azure SQL has ${sqlByKey![row.key]}`}>SQL {fmtNum(sqlByKey![row.key])}</Badge>}
+                      </div>
+                    </TableCell>
+                  </TableRow>
+                );
+              })}
+            </TableBody>
+          </Table>
+        </div>
+      )}
+
+      {msg && <MessageBar intent={msg.intent}><MessageBarBody>{msg.text}</MessageBarBody></MessageBar>}
+    </div>
+  );
+}
+
+/**
+ * Intelligence — Fabric Plan's auto-insights surface (variance reports, trend +
+ * forecast, Gantt). Azure-native parity: every visual is computed from the real
+ * plan cells / tasks (no Fabric, no mock). Forecast is an OLS extrapolation of
+ * the period-subtotal trend; Gantt lays out the Project tasks by due date.
+ */
+function PlanIntelligencePanel({
+  state, setState, scenarioName, activeScenarioId, sheet, tasks,
+}: {
+  state: PlanState;
+  setState: (updater: (prev: PlanState) => PlanState) => void;
+  scenarioName: string;
+  activeScenarioId: string;
+  sheet: PlanningSheet;
+  tasks: PlanTask[];
+}) {
+  const s = useStyles();
+  const horizon = typeof state.forecastHorizon === 'number' ? state.forecastHorizon : 2;
+  const series = useMemo(() => forecastPeriods(sheet, activeScenarioId, horizon), [sheet, activeScenarioId, horizon]);
+  const hist = useMemo(() => periodSeries(sheet, activeScenarioId), [sheet, activeScenarioId]);
+  const fit = useMemo(() => linearFit(hist.map((p) => p.value)), [hist]);
+  const variance = useMemo(() => computeVariance(sheet, activeScenarioId, sheet.actuals || {}), [sheet, activeScenarioId]);
+  const insights = useMemo(() => planInsights(sheet, activeScenarioId, variance), [sheet, activeScenarioId, variance]);
+  const bars: GanttBar[] = useMemo(() => ganttLayout(tasks), [tasks]);
+
+  const total = grandTotal(sheet, activeScenarioId);
+  const forecastTotal = series.filter((p) => p.forecast).reduce((a, p) => a + p.value, 0);
+  const trendLabel = fit.slope > 0 ? 'Upward' : fit.slope < 0 ? 'Downward' : 'Flat';
+  const varianceWithActuals = variance.filter((v) => v.actual !== 0);
+  const totalDelta = varianceWithActuals.reduce((a, v) => a + v.delta, 0);
+
+  const barColor = (st: PlanTask['status'], overdue: boolean) =>
+    overdue ? tokens.colorPaletteRedBackground3
+      : st === 'done' ? tokens.colorPaletteGreenBackground3
+        : st === 'doing' ? tokens.colorBrandBackground
+          : tokens.colorNeutralForeground3;
+
+  return (
+    <div style={{ display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalL }}>
+      {/* KPI strip */}
+      <div className={s.planKpiRow}>
+        <div className={s.planKpi}>
+          <Caption1 style={{ color: tokens.colorNeutralForeground3 }}>Scenario total ({scenarioName})</Caption1>
+          <span className={s.planKpiValue}>{fmtNum(total)}</span>
+        </div>
+        <div className={s.planKpi}>
+          <Caption1 style={{ color: tokens.colorNeutralForeground3 }}>Trend (R² {fit.r2.toFixed(2)})</Caption1>
+          <span className={s.planKpiValue} style={{ color: fit.slope < 0 ? tokens.colorPaletteRedForeground1 : tokens.colorPaletteGreenForeground1 }}>{trendLabel}</span>
+        </div>
+        <div className={s.planKpi}>
+          <Caption1 style={{ color: tokens.colorNeutralForeground3 }}>Forecast +{horizon} period{horizon === 1 ? '' : 's'}</Caption1>
+          <span className={s.planKpiValue}>{fmtNum(forecastTotal)}</span>
+        </div>
+        <div className={s.planKpi}>
+          <Caption1 style={{ color: tokens.colorNeutralForeground3 }}>Variance vs actuals</Caption1>
+          <span className={s.planKpiValue} style={{ color: totalDelta < 0 ? tokens.colorPaletteRedForeground1 : tokens.colorPaletteGreenForeground1 }}>{varianceWithActuals.length ? fmtNum(totalDelta) : '—'}</span>
+        </div>
+      </div>
+
+      {/* Trend + forecast chart */}
+      <div className={s.planSection}>
+        <div className={s.planSectionHead}>
+          <span className={s.planSectionIcon}><DataTrending20Regular /></span>
+          <div style={{ flex: 1 }}>
+            <Subtitle2>Trend &amp; forecast</Subtitle2>
+            <Caption1 as="p" block style={{ color: tokens.colorNeutralForeground3 }}>
+              Period subtotals for <strong>{scenarioName}</strong>; dashed line is an ordinary-least-squares projection.
+            </Caption1>
+          </div>
+          <Field label="Forecast periods" orientation="horizontal">
+            <Dropdown
+              value={String(horizon)} selectedOptions={[String(horizon)]} style={{ minWidth: 80 }}
+              onOptionSelect={(_, d) => { const h = Number(d.optionValue); if (Number.isFinite(h)) setState((p) => ({ ...p, forecastHorizon: h })); }}
+            >
+              {[0, 1, 2, 3, 4, 6].map((h) => <Option key={h} value={String(h)}>{h}</Option>)}
+            </Dropdown>
+          </Field>
+        </div>
+        {hist.length === 0 ? (
+          <div className={s.planEmpty}><Body1>No periods to chart yet — add periods + values on the Planning sheet.</Body1></div>
+        ) : (
+          <PlanTrendChart points={series} />
+        )}
+      </div>
+
+      {/* Computed insights */}
+      <div className={s.planSection}>
+        <div className={s.planSectionHead}>
+          <span className={s.planSectionIcon}><Sparkle20Regular /></span>
+          <Subtitle2>Insights</Subtitle2>
+          <Badge appearance="tint" color="informative">computed</Badge>
+        </div>
+        {insights.map((line, i) => (
+          <div key={i} className={s.planInsight}>
+            <ChartMultiple20Regular style={{ color: tokens.colorBrandForeground1, flexShrink: 0 }} />
+            <Body1>{line}</Body1>
+          </div>
+        ))}
+      </div>
+
+      {/* Variance report */}
+      <div className={s.planSection}>
+        <div className={s.planSectionHead}>
+          <span className={s.planSectionIcon}><Money20Regular /></span>
+          <Subtitle2>Variance report</Subtitle2>
+        </div>
+        <Table size="small" aria-label="Variance report">
+          <TableHeader><TableRow>
+            <TableHeaderCell>Line item</TableHeaderCell>
+            <TableHeaderCell>Plan</TableHeaderCell>
+            <TableHeaderCell>Actual</TableHeaderCell>
+            <TableHeaderCell>Δ</TableHeaderCell>
+            <TableHeaderCell>Δ%</TableHeaderCell>
+          </TableRow></TableHeader>
+          <TableBody>
+            {variance.length === 0 && <TableRow><TableCell>No input line items.</TableCell><TableCell /><TableCell /><TableCell /><TableCell /></TableRow>}
+            {variance.map((v) => (
+              <TableRow key={v.lineItemId}>
+                <TableCell>{v.name}</TableCell>
+                <TableCell>{fmtNum(v.plan)}</TableCell>
+                <TableCell>{fmtNum(v.actual)}</TableCell>
+                <TableCell style={{ color: v.delta < 0 ? tokens.colorPaletteRedForeground1 : tokens.colorPaletteGreenForeground1 }}>{fmtNum(v.delta)}</TableCell>
+                <TableCell>{v.pct == null ? '—' : `${Math.round(v.pct * 100)}%`}</TableCell>
+              </TableRow>
+            ))}
+          </TableBody>
+        </Table>
+        <Caption1 style={{ color: tokens.colorNeutralForeground3 }}>Actuals come from the Planning sheet / InfoBridge mappings (Azure-native — no Fabric).</Caption1>
+      </div>
+
+      {/* Gantt over project tasks */}
+      <div className={s.planSection}>
+        <div className={s.planSectionHead}>
+          <span className={s.planSectionIcon}><BranchFork20Regular /></span>
+          <Subtitle2>Delivery Gantt</Subtitle2>
+          <Caption1 style={{ color: tokens.colorNeutralForeground3 }}>{tasks.length} task{tasks.length === 1 ? '' : 's'} · bars span dependency → due date</Caption1>
+        </div>
+        {bars.length === 0 ? (
+          <div className={s.planEmpty}><Body1>No project tasks yet — add tasks (with due dates) on the <strong>Project tasks</strong> tab to populate the Gantt.</Body1></div>
+        ) : (
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
+            {bars.map((b, i) => (
+              <div key={i} className={s.ganttRow}>
+                <Caption1 className={s.ganttLabel} title={b.title}>{b.title}</Caption1>
+                <div className={s.ganttTrack}>
+                  <div
+                    className={s.ganttBar}
+                    style={{ left: `${b.startPct * 100}%`, width: `${b.widthPct * 100}%`, backgroundColor: barColor(b.status, b.overdue) }}
+                    title={`${b.status}${b.due ? ` · due ${b.due}` : ''}${b.overdue ? ' · overdue' : ''}${b.hasDep ? ' · has dependency' : ''}`}
+                  />
+                </div>
+                <Caption1 style={{ width: 92, flexShrink: 0, color: b.overdue ? tokens.colorPaletteRedForeground1 : tokens.colorNeutralForeground3 }}>{b.due || '—'}</Caption1>
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
+/**
+ * InfoBridge — Fabric Plan's source-system integration/mapping surface. The
+ * Azure-native parity: map each plan line item to a source field (a Loom
+ * semantic-model measure, warehouse/lakehouse column, or a manual value), persist
+ * the mappings to Cosmos, and "Push to actuals" so mapped values flow into the
+ * Planning variance overlay. Live automated pull from the bound model is an
+ * honest XMLA-gated extension. No Microsoft Fabric dependency.
+ */
+function PlanInfoBridgePanel({
+  id, state, setState, save, saving,
+}: {
+  id: string;
+  state: PlanState;
+  setState: (updater: (prev: PlanState) => PlanState) => void;
+  save: (next?: PlanState) => Promise<boolean>;
+  saving: boolean;
+}) {
+  const st = useStyles();
+  const sheets = ensureSheets(state);
+  const scenarios = ensureScenarios(state);
+  const activeSheetId = sheets.some((x) => x.id === state.activeSheetId) ? (state.activeSheetId as string) : sheets[0].id;
+  const sheet = sheets.find((x) => x.id === activeSheetId) || sheets[0];
+  const inputItems = sheet.lineItems.filter((li) => li.kind === 'input');
+  const mappings = arr<PlanSourceMapping>(state.infoBridge);
+
+  // Real owned source items for the picker (warehouse / lakehouse / semantic-model).
+  const [sources, setSources] = useState<Record<string, { id: string; name: string }[]>>({});
+  const [msg, setMsg] = useState<{ intent: 'success' | 'error' | 'warning'; text: string } | null>(null);
+  const loadSources = useCallback(async () => {
+    for (const type of ['warehouse', 'lakehouse', 'semantic-model']) {
+      try {
+        const r = await fetch(`/api/items/by-type?types=${encodeURIComponent(type)}`);
+        const j = await r.json().catch(() => ({}));
+        const items = (j.items || []).map((it: any) => ({ id: it.id, name: it.displayName || it.id }));
+        setSources((prev) => ({ ...prev, [type]: items }));
+      } catch { /* honest empty picker */ }
+    }
+  }, []);
+  useEffect(() => { void loadSources(); }, [loadSources]);
+
+  const mappingFor = (liId: string) => mappings.find((m) => m.lineItemId === liId);
+  const upsertMapping = (liId: string, patch: Partial<PlanSourceMapping>) => {
+    setState((prev) => {
+      const cur = arr<PlanSourceMapping>(prev.infoBridge);
+      const existing = cur.find((m) => m.lineItemId === liId);
+      const next: PlanSourceMapping = existing
+        ? { ...existing, ...patch }
+        : { lineItemId: liId, sourceKind: 'manual', ...patch };
+      return { ...prev, infoBridge: [...cur.filter((m) => m.lineItemId !== liId), next] };
+    });
+  };
+  const clearMapping = (liId: string) =>
+    setState((prev) => ({ ...prev, infoBridge: arr<PlanSourceMapping>(prev.infoBridge).filter((m) => m.lineItemId !== liId) }));
+
+  // Close the loop: write mapped current-actuals into the active sheet's actuals
+  // map (feeds the Planning variance overlay), then persist.
+  const pushToActuals = async () => {
+    if (mappings.length === 0) { setMsg({ intent: 'warning', text: 'Add at least one mapping first.' }); return; }
+    let nextState: PlanState | null = null;
+    setState((prev) => {
+      const nextActuals = applyMappingsToActuals(sheet.actuals, arr<PlanSourceMapping>(prev.infoBridge));
+      nextState = {
+        ...prev,
+        sheets: ensureSheets(prev).map((x) => (x.id === sheet.id ? { ...x, actuals: nextActuals } : x)),
+        scenarios: ensureScenarios(prev),
+      };
+      return nextState;
+    });
+    if (nextState && id !== 'new') await save(nextState);
+    const applied = mappings.filter((m) => typeof m.currentActual === 'number').length;
+    setMsg({ intent: 'success', text: `Pushed ${applied} mapped value${applied === 1 ? '' : 's'} into ${sheet.name} actuals. Open the Planning tab → "Variance vs actuals" to see them.` });
+  };
+
+  const sourceKinds: PlanSourceMapping['sourceKind'][] = ['semantic-model', 'warehouse', 'lakehouse', 'manual'];
+  const kindLabel: Record<PlanSourceMapping['sourceKind'], string> = {
+    'semantic-model': 'Semantic model', warehouse: 'Warehouse', lakehouse: 'Lakehouse', manual: 'Manual',
+  };
+
+  return (
+    <div className={st.planSection}>
+      <div className={st.planSectionHead}>
+        <span className={st.planSectionIcon}><Link20Regular /></span>
+        <div style={{ flex: 1, minWidth: 200 }}>
+          <Subtitle2>InfoBridge</Subtitle2>
+          <Caption1 as="p" block style={{ color: tokens.colorNeutralForeground3 }}>
+            Map each line item to a source system so planning stays aligned with actuals — the Azure-native parity of Fabric Plan&apos;s InfoBridge. Mappings persist to the plan; <strong>Push to actuals</strong> flows mapped values into the Planning variance overlay.
+          </Caption1>
+        </div>
+        <Button appearance="primary" icon={<ArrowSync16Regular />} onClick={pushToActuals} disabled={saving}>Push to actuals</Button>
+      </div>
+
+      {state.semanticModelRef ? (
+        <MessageBar intent="info">
+          <MessageBarBody>
+            Bound actuals model: <strong>{state.semanticModelRef.displayName}</strong>. Map a line item to a <em>Semantic model</em> measure here; automated live pull requires the model&apos;s XMLA endpoint (set <code>LOOM_AAS_XMLA_ENDPOINT</code> or use the manual value below). Mapped values feed the Planning variance overlay either way.
+          </MessageBarBody>
+        </MessageBar>
+      ) : (
+        <MessageBar intent="warning">
+          <MessageBarBody>
+            No semantic model bound. Bind one in <strong>Settings</strong> (Planning tab) to map measures as actuals, or use <em>Manual</em> mappings — both feed variance.
+          </MessageBarBody>
+        </MessageBar>
+      )}
+
+      {inputItems.length === 0 ? (
+        <div className={st.planEmpty}><Body1>No line items to map. Add input line items on the Planning sheet first.</Body1></div>
+      ) : (
+        <Table size="small" aria-label="InfoBridge source mappings">
+          <TableHeader><TableRow>
+            <TableHeaderCell>Line item</TableHeaderCell>
+            <TableHeaderCell>Source kind</TableHeaderCell>
+            <TableHeaderCell>Source item</TableHeaderCell>
+            <TableHeaderCell>Field / measure</TableHeaderCell>
+            <TableHeaderCell>Current actual</TableHeaderCell>
+            <TableHeaderCell />
+          </TableRow></TableHeader>
+          <TableBody>
+            {inputItems.map((li) => {
+              const m = mappingFor(li.id);
+              const kind = m?.sourceKind || 'manual';
+              const list = kind === 'manual' ? [] : (sources[kind] || []);
+              return (
+                <TableRow key={li.id}>
+                  <TableCell><strong>{li.name}</strong></TableCell>
+                  <TableCell>
+                    <Dropdown
+                      value={kindLabel[kind]} selectedOptions={[kind]} style={{ minWidth: 150 }}
+                      onOptionSelect={(_, d) => upsertMapping(li.id, { sourceKind: (d.optionValue as PlanSourceMapping['sourceKind']) || 'manual', sourceItemId: undefined, sourceName: undefined })}
+                    >
+                      {sourceKinds.map((k) => <Option key={k} value={k}>{kindLabel[k]}</Option>)}
+                    </Dropdown>
+                  </TableCell>
+                  <TableCell>
+                    {kind === 'manual' ? (
+                      <Caption1 style={{ color: tokens.colorNeutralForeground3 }}>—</Caption1>
+                    ) : list.length === 0 ? (
+                      <Caption1 style={{ color: tokens.colorNeutralForeground3 }}>No {kindLabel[kind]} items</Caption1>
+                    ) : (
+                      <Dropdown
+                        value={m?.sourceName || ''} selectedOptions={m?.sourceItemId ? [m.sourceItemId] : []} placeholder={`Select ${kindLabel[kind]}`} style={{ minWidth: 160 }}
+                        onOptionSelect={(_, d) => { const it = list.find((x) => x.id === d.optionValue); upsertMapping(li.id, { sourceItemId: it?.id, sourceName: it?.name }); }}
+                      >
+                        {list.map((it) => <Option key={it.id} value={it.id}>{it.name}</Option>)}
+                      </Dropdown>
+                    )}
+                  </TableCell>
+                  <TableCell>
+                    <Input value={m?.field || ''} onChange={(_, d) => upsertMapping(li.id, { field: d.value })} placeholder={kind === 'semantic-model' ? 'measure name' : 'column'} style={{ maxWidth: 150 }} />
+                  </TableCell>
+                  <TableCell>
+                    <Input type="number" value={m?.currentActual != null ? String(m.currentActual) : ''} onChange={(_, d) => upsertMapping(li.id, { currentActual: d.value === '' ? undefined : Number(d.value) })} placeholder="actual value" style={{ maxWidth: 120 }} />
+                  </TableCell>
+                  <TableCell>{m && <Button size="small" appearance="subtle" icon={<Dismiss16Regular />} aria-label={`Clear mapping for ${li.name}`} onClick={() => clearMapping(li.id)} />}</TableCell>
+                </TableRow>
+              );
+            })}
+          </TableBody>
+        </Table>
+      )}
+
+      <div style={{ display: 'flex', gap: tokens.spacingHorizontalS }}>
+        <Button appearance="secondary" onClick={() => save()} disabled={saving}>{saving ? 'Saving…' : 'Save mappings'}</Button>
+      </div>
+
+      {msg && <MessageBar intent={msg.intent}><MessageBarBody>{msg.text}</MessageBarBody></MessageBar>}
     </div>
   );
 }
@@ -2302,6 +2890,12 @@ export function PlanEditor({ item, id }: { item: FabricItemType; id: string }) {
   }));
 
   const taskList = arr<PlanTask>(state.tasks);
+  // Active sheet/scenario for the Intelligence tab (mirrors PlanningSheetPanel's
+  // resolution so both surfaces read the same scenario the user is editing).
+  const intelSheets = ensureSheets(state);
+  const intelScenarios = ensureScenarios(state);
+  const intelSheet = intelSheets.find((x) => x.id === state.activeSheetId) || intelSheets[0];
+  const intelScenario = intelScenarios.find((x) => x.id === state.activeScenarioId) || intelScenarios[0];
   const counts = taskList.reduce(
     (acc, t) => { acc[t.status] = (acc[t.status] || 0) + 1; return acc; },
     {} as Record<PlanTask['status'], number>,
@@ -2395,25 +2989,20 @@ export function PlanEditor({ item, id }: { item: FabricItemType; id: string }) {
         )}
 
         {tab === 'powertable' && (
-          <PlanPreviewSheet
-            title="PowerTable"
-            blurb="No-code, SQL-bound app builder with two-way writeback, forms, lookups, row/column security, approval routing, and Gantt views."
-            source="docs/fiab/plan-parity-spec.md §PowerTable"
-          />
+          <PlanPowerTablePanel id={id} state={state} setState={setState} save={save} saving={saving} />
         )}
         {tab === 'intelligence' && (
-          <PlanPreviewSheet
-            title="Intelligence"
-            blurb="Auto-generated variance reports, trend/forecast widgets, Gantt with dependencies, and AI-assisted commentary over plan data."
-            source="docs/fiab/plan-parity-spec.md §Intelligence"
+          <PlanIntelligencePanel
+            state={state}
+            setState={setState}
+            scenarioName={intelScenario.name}
+            activeScenarioId={intelScenario.id}
+            sheet={intelSheet}
+            tasks={taskList}
           />
         )}
         {tab === 'infobridge' && (
-          <PlanPreviewSheet
-            title="InfoBridge"
-            blurb="Connect and map external/OneLake/Synapse source systems to keep planning data aligned with actuals."
-            source="docs/fiab/plan-parity-spec.md §InfoBridge"
-          />
+          <PlanInfoBridgePanel id={id} state={state} setState={setState} save={save} saving={saving} />
         )}
 
         <SaveBar saving={saving} savedAt={savedAt} error={error} dirty={dirty} onSave={() => save()} />

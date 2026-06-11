@@ -11,6 +11,9 @@ import {
   cellKey, getCell, rowTotal, periodTotal, grandTotal,
   cloneScenarioCells, dropScenarioCells, computeVariance,
   defaultScenarios, defaultPlanningSheet, type PlanningSheet,
+  flattenPlanCells, filterPlanRows, sortPlanRows,
+  periodSeries, linearFit, forecastPeriods, ganttLayout,
+  planInsights, applyMappingsToActuals, type PlanSourceMapping,
 } from '../_plan-model';
 
 function seeded(): PlanningSheet {
@@ -86,5 +89,104 @@ describe('_plan-model variance', () => {
     const s = defaultPlanningSheet();
     const v = computeVariance(s, 'baseline', { revenue: 50 });
     expect(v.find((r) => r.lineItemId === 'revenue')!.pct).toBeNull();
+  });
+});
+
+describe('_plan-model PowerTable flatten/filter/sort', () => {
+  it('flattenPlanCells emits one row per (input line item × period × scenario)', () => {
+    const s = seeded();
+    const rows = flattenPlanCells([s], defaultScenarios());
+    // 2 input line items with values (revenue, cogs) but opex is also an input → 3 inputs × 4 periods × 3 scenarios.
+    expect(rows.length).toBe(3 * 4 * 3);
+    const rev = rows.find((r) => r.lineItemId === 'revenue' && r.periodId === 'q1' && r.scenarioId === 'baseline')!;
+    expect(rev.value).toBe(100);
+    expect(rev.key).toBe(cellKey('revenue', 'q1', 'baseline'));
+  });
+  it('filterPlanRows matches across labelled columns', () => {
+    const rows = flattenPlanCells([seeded()], defaultScenarios());
+    expect(filterPlanRows(rows, 'revenue').every((r) => r.lineItem === 'Revenue')).toBe(true);
+    expect(filterPlanRows(rows, '').length).toBe(rows.length);
+  });
+  it('sortPlanRows orders numerically by value', () => {
+    const rows = flattenPlanCells([seeded()], defaultScenarios());
+    const asc = sortPlanRows(rows, 'value', 'asc');
+    expect(asc[0].value).toBeLessThanOrEqual(asc[asc.length - 1].value);
+    const desc = sortPlanRows(rows, 'value', 'desc');
+    expect(desc[0].value).toBeGreaterThanOrEqual(desc[desc.length - 1].value);
+  });
+});
+
+describe('_plan-model Intelligence trend/forecast', () => {
+  it('periodSeries returns one subtotal point per period', () => {
+    const s = seeded();
+    const ser = periodSeries(s, 'baseline');
+    expect(ser.map((p) => p.label)).toEqual(['Q1', 'Q2', 'Q3', 'Q4']);
+    expect(ser[0].value).toBe(140); // 100 + 40
+  });
+  it('linearFit recovers a known slope/intercept', () => {
+    const fit = linearFit([0, 2, 4, 6]); // y = 2x
+    expect(fit.slope).toBeCloseTo(2, 6);
+    expect(fit.intercept).toBeCloseTo(0, 6);
+    expect(fit.r2).toBeCloseTo(1, 6);
+  });
+  it('linearFit is flat for n<2', () => {
+    expect(linearFit([5]).slope).toBe(0);
+    expect(linearFit([]).intercept).toBe(0);
+  });
+  it('forecastPeriods appends horizon flagged points extrapolating the trend', () => {
+    const s = defaultPlanningSheet();
+    // revenue 100,200,300,400 → period subtotals trend +100/period.
+    s.cells[cellKey('revenue', 'q1', 'baseline')] = 100;
+    s.cells[cellKey('revenue', 'q2', 'baseline')] = 200;
+    s.cells[cellKey('revenue', 'q3', 'baseline')] = 300;
+    s.cells[cellKey('revenue', 'q4', 'baseline')] = 400;
+    const fc = forecastPeriods(s, 'baseline', 2);
+    expect(fc.length).toBe(6);
+    expect(fc[4].forecast).toBe(true);
+    expect(fc[4].value).toBeCloseTo(500, 5);
+    expect(fc[5].value).toBeCloseTo(600, 5);
+  });
+  it('forecastPeriods with horizon 0 returns the history unchanged', () => {
+    const s = seeded();
+    expect(forecastPeriods(s, 'baseline', 0).length).toBe(4);
+  });
+});
+
+describe('_plan-model Gantt layout', () => {
+  it('lays out bars as fractions of the project window with dependency offset', () => {
+    const bars = ganttLayout([
+      { title: 'A', owner: '', due: '2026-01-10', status: 'done' },
+      { title: 'B', owner: '', due: '2026-01-20', status: 'doing', dependsOn: 'A' },
+    ], '2026-01-15');
+    expect(bars.length).toBe(2);
+    const b = bars.find((x) => x.title === 'B')!;
+    expect(b.hasDep).toBe(true);
+    expect(b.startPct).toBeCloseTo(0, 5); // dep A due = project min
+    expect(b.widthPct).toBeCloseTo(1, 5);
+    expect(b.overdue).toBe(false);
+  });
+  it('flags overdue not-done tasks', () => {
+    const bars = ganttLayout([{ title: 'late', owner: '', due: '2026-01-01', status: 'todo' }], '2026-02-01');
+    expect(bars[0].overdue).toBe(true);
+  });
+});
+
+describe('_plan-model InfoBridge mappings', () => {
+  it('applyMappingsToActuals writes mapped current actuals onto line items', () => {
+    const mappings: PlanSourceMapping[] = [
+      { lineItemId: 'revenue', sourceKind: 'semantic-model', sourceItemId: 'sm1', field: 'TotalRevenue', currentActual: 440 },
+      { lineItemId: 'cogs', sourceKind: 'manual' }, // no currentActual → ignored
+    ];
+    const next = applyMappingsToActuals({ opex: 10 }, mappings);
+    expect(next.revenue).toBe(440);
+    expect(next.opex).toBe(10); // preserved
+    expect(next.cogs).toBeUndefined();
+  });
+  it('planInsights produces a non-empty narrative', () => {
+    const s = seeded();
+    const v = computeVariance(s, 'baseline', { revenue: 440 });
+    const lines = planInsights(s, 'baseline', v);
+    expect(lines.length).toBeGreaterThan(1);
+    expect(lines.join(' ')).toMatch(/variance|period/i);
   });
 });
