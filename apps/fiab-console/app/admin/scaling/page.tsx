@@ -2,8 +2,8 @@
 
 import { useEffect, useState } from 'react';
 import {
-  Body1, Title3, Caption1, MessageBar, MessageBarBody, MessageBarTitle,
-  Input, makeStyles, tokens,
+  Body1, Caption1, MessageBar, MessageBarBody, MessageBarTitle,
+  Input, Button, makeStyles, tokens,
 } from '@fluentui/react-components';
 import {
   Grid24Regular, DatabasePerson24Regular, Flash24Regular, Database24Regular,
@@ -190,7 +190,8 @@ export default function ScalingPage() {
                         value={pending}
                         onChange={(v) => setCapacitySel({ ...capacitySel, [cap.id]: v })}
                       />
-                      <button
+                      <Button
+                        appearance="primary"
                         onClick={async () => {
                           setCapacityState({ ...capacityState, [cap.id]: { applying: true } });
                           try {
@@ -201,14 +202,9 @@ export default function ScalingPage() {
                           }
                         }}
                         disabled={st.applying || pending === cap.sku}
-                        style={{
-                          padding: '6px 16px', borderRadius: 4, border: 'none',
-                          background: tokens.colorBrandBackground, color: tokens.colorNeutralForegroundOnBrand,
-                          cursor: 'pointer', opacity: (st.applying || pending === cap.sku) ? 0.5 : 1,
-                        }}
                       >
                         {st.applying ? 'Applying…' : 'Apply'}
-                      </button>
+                      </Button>
                     </div>
                     <CostPreview family="fabric-capacity" currentSku={cap.sku} targetSku={pending} />
                     {st.error && <Caption1 style={{ color: tokens.colorPaletteRedForeground1 }}>{st.error}</Caption1>}
@@ -240,7 +236,8 @@ export default function ScalingPage() {
                     <Caption1><strong>{pool.name}</strong> ({pool.sku?.name} · {pool.status || 'Online'})</Caption1>
                     <div style={{ display: 'flex', gap: 12, marginTop: 8, alignItems: 'flex-end', flexWrap: 'wrap' }}>
                       <ScalePicker label="Target DWU" options={skuOpts(DWU_SKUS)} value={pending} onChange={(v) => setDwuSel({ ...dwuSel, [pool.name]: v })} />
-                      <button
+                      <Button
+                        appearance="primary"
                         onClick={async () => {
                           setDwuState({ ...dwuState, [pool.name]: { applying: true } });
                           try {
@@ -251,10 +248,9 @@ export default function ScalingPage() {
                           }
                         }}
                         disabled={st.applying || pending === pool.sku?.name}
-                        style={{ padding: '6px 16px', borderRadius: 4, border: 'none', background: tokens.colorBrandBackground, color: tokens.colorNeutralForegroundOnBrand, cursor: 'pointer', opacity: (st.applying || pending === pool.sku?.name) ? 0.5 : 1 }}
                       >
                         {st.applying ? 'Applying…' : 'Apply'}
-                      </button>
+                      </Button>
                     </div>
                     <CostPreview family="synapse-dwu" currentSku={pool.sku?.name} targetSku={pending} />
                     {st.error && <Caption1 style={{ color: tokens.colorPaletteRedForeground1 }}>{st.error}</Caption1>}
@@ -313,7 +309,8 @@ export default function ScalingPage() {
                     <Caption1><strong>{w.name}</strong> ({w.cluster_size} · {w.state || 'Stopped'})</Caption1>
                     <div style={{ display: 'flex', gap: 12, marginTop: 8, alignItems: 'flex-end', flexWrap: 'wrap' }}>
                       <ScalePicker label="cluster_size" options={skuOpts(WAREHOUSE_SIZES)} value={pending} onChange={(v) => setWhSel({ ...whSel, [w.id]: v })} />
-                      <button
+                      <Button
+                        appearance="primary"
                         onClick={async () => {
                           setWhState({ ...whState, [w.id]: { applying: true } });
                           try {
@@ -322,10 +319,9 @@ export default function ScalingPage() {
                           } catch (e: any) { setWhState({ ...whState, [w.id]: { error: e.message } }); }
                         }}
                         disabled={st.applying || pending === w.cluster_size}
-                        style={{ padding: '6px 16px', borderRadius: 4, border: 'none', background: tokens.colorBrandBackground, color: tokens.colorNeutralForegroundOnBrand, cursor: 'pointer', opacity: (st.applying || pending === w.cluster_size) ? 0.5 : 1 }}
                       >
                         {st.applying ? 'Applying…' : 'Apply'}
-                      </button>
+                      </Button>
                     </div>
                     <CostPreview family="databricks-warehouse" currentSku={w.cluster_size} targetSku={pending} />
                     {st.error && <Caption1 style={{ color: tokens.colorPaletteRedForeground1 }}>{st.error}</Caption1>}
@@ -373,7 +369,8 @@ export default function ScalingPage() {
                           onChange={(_, d) => setClusterSel({ ...clusterSel, [c.cluster_id]: { ...clusterSel[c.cluster_id], num_workers: parseInt(d.value, 10) || 0 } })}
                         />
                       </div>
-                      <button
+                      <Button
+                        appearance="primary"
                         onClick={async () => {
                           setClusterState({ ...clusterState, [c.cluster_id]: { applying: true } });
                           try {
@@ -386,10 +383,9 @@ export default function ScalingPage() {
                           } catch (e: any) { setClusterState({ ...clusterState, [c.cluster_id]: { error: e.message } }); }
                         }}
                         disabled={st.applying}
-                        style={{ padding: '6px 16px', borderRadius: 4, border: 'none', background: tokens.colorBrandBackground, color: tokens.colorNeutralForegroundOnBrand, cursor: 'pointer', opacity: st.applying ? 0.5 : 1 }}
                       >
                         {st.applying ? 'Applying…' : 'Apply'}
-                      </button>
+                      </Button>
                     </div>
                     {st.error && <Caption1 style={{ color: tokens.colorPaletteRedForeground1 }}>{st.error}</Caption1>}
                     {st.ok && <Caption1 style={{ color: tokens.colorPaletteGreenForeground1 }}>{st.ok}</Caption1>}
@@ -511,7 +507,9 @@ export default function ScalingPage() {
                           <Input type="number" style={{ width: 100 }} value={String(sel.maxRu ?? cn.maxRu ?? '')}
                             onChange={(_, d) => setCosmosSel({ ...cosmosSel, [cn.id]: { ...sel, maxRu: parseInt(d.value, 10) || undefined, ru: undefined } })} />
                         </div>
-                        <button
+                        <Button
+                          appearance="primary"
+                          size="small"
                           onClick={async () => {
                             setCosmosState({ ...cosmosState, [cn.id]: { applying: true } });
                             try {
@@ -520,10 +518,9 @@ export default function ScalingPage() {
                             } catch (e: any) { setCosmosState({ ...cosmosState, [cn.id]: { error: e.message } }); }
                           }}
                           disabled={st.applying || (!sel.ru && !sel.maxRu)}
-                          style={{ padding: '4px 12px', borderRadius: 4, border: 'none', background: tokens.colorBrandBackground, color: tokens.colorNeutralForegroundOnBrand, cursor: 'pointer', opacity: (st.applying || (!sel.ru && !sel.maxRu)) ? 0.5 : 1, fontSize: 12 }}
                         >
                           {st.applying ? '…' : 'Apply'}
-                        </button>
+                        </Button>
                       </div>
                     )}
                     {st.error && <Caption1 style={{ color: tokens.colorPaletteRedForeground1 }}>{st.error}</Caption1>}
@@ -567,7 +564,9 @@ export default function ScalingPage() {
                         <Input type="number" style={{ width: 70 }} value={String(pendingMax)}
                           onChange={(_, d) => setAcaSel({ ...acaSel, [a.name]: { ...sel, maxReplicas: parseInt(d.value, 10) || 1 } })} />
                       </div>
-                      <button
+                      <Button
+                        appearance="primary"
+                        size="small"
                         onClick={async () => {
                           setAcaState({ ...acaState, [a.name]: { applying: true } });
                           try {
@@ -581,10 +580,9 @@ export default function ScalingPage() {
                           } catch (e: any) { setAcaState({ ...acaState, [a.name]: { error: e.message } }); }
                         }}
                         disabled={st.applying}
-                        style={{ padding: '4px 12px', borderRadius: 4, border: 'none', background: tokens.colorBrandBackground, color: tokens.colorNeutralForegroundOnBrand, cursor: 'pointer', opacity: st.applying ? 0.5 : 1, fontSize: 12 }}
                       >
                         {st.applying ? '…' : 'Apply'}
-                      </button>
+                      </Button>
                     </div>
                     {st.error && <Caption1 style={{ color: tokens.colorPaletteRedForeground1 }}>{st.error}</Caption1>}
                     {st.ok && <Caption1 style={{ color: tokens.colorPaletteGreenForeground1 }}>{st.ok}</Caption1>}
@@ -624,8 +622,9 @@ export default function ScalingPage() {
                         value={mcpSel.accessMode ?? 'ReadWrite'}
                         onChange={(v) => setMcpSel({ ...mcpSel, accessMode: v as 'ReadWrite' | 'ReadOnly' })}
                       />
-                      <button
-                        type="button"
+                      <Button
+                        appearance="primary"
+                        size="small"
                         aria-label="Mount Azure Files persistence onto the MCP container"
                         onClick={async () => {
                           setMcpState({ applying: true });
@@ -638,10 +637,9 @@ export default function ScalingPage() {
                           } catch (e: any) { setMcpState({ error: e.message }); }
                         }}
                         disabled={mcpState.applying}
-                        style={{ padding: '6px 16px', borderRadius: 4, border: 'none', background: tokens.colorBrandBackground, color: tokens.colorNeutralForegroundOnBrand, cursor: mcpState.applying ? 'default' : 'pointer', opacity: mcpState.applying ? 0.5 : 1, fontSize: 12 }}
                       >
                         {mcpState.applying ? 'Mounting…' : 'Mount persistence'}
-                      </button>
+                      </Button>
                     </div>
                     {mcpState.error && <Caption1 role="alert" style={{ display: 'block', marginTop: 6, color: tokens.colorPaletteRedForeground1 }}>{mcpState.error}</Caption1>}
                     {mcpState.ok && <Caption1 role="status" style={{ display: 'block', marginTop: 6, color: tokens.colorPaletteGreenForeground1 }}>{mcpState.ok}</Caption1>}
@@ -689,7 +687,9 @@ export default function ScalingPage() {
                           <Input type="number" style={{ width: 70 }} value={String(sel.maxNodeCount ?? 1)}
                             onChange={(_, d) => setFoundrySel({ ...foundrySel, [c.name]: { ...sel, maxNodeCount: parseInt(d.value, 10) || 1 } })} />
                         </div>
-                        <button
+                        <Button
+                          appearance="primary"
+                          size="small"
                           onClick={async () => {
                             setFoundryState({ ...foundryState, [c.name]: { applying: true } });
                             try {
@@ -698,10 +698,9 @@ export default function ScalingPage() {
                             } catch (e: any) { setFoundryState({ ...foundryState, [c.name]: { error: e.message } }); }
                           }}
                           disabled={st.applying}
-                          style={{ padding: '4px 12px', borderRadius: 4, border: 'none', background: tokens.colorBrandBackground, color: tokens.colorNeutralForegroundOnBrand, cursor: 'pointer', opacity: st.applying ? 0.5 : 1, fontSize: 12 }}
                         >
                           {st.applying ? '…' : 'Apply'}
-                        </button>
+                        </Button>
                       </div>
                     )}
                     {st.error && <Caption1 style={{ color: tokens.colorPaletteRedForeground1 }}>{st.error}</Caption1>}
