@@ -193,7 +193,29 @@ if [[ -z "$PURVIEW" ]]; then
   done
 fi
 add LOOM_PURVIEW_ACCOUNT "$PURVIEW"
-[[ -n "$PURVIEW" ]] && add LOOM_PURVIEW_SUB "${EXISTING_PURVIEW_SUB:-}"
+# Purview catalog data-plane is account-host based + portal-granted — it needs
+# no subscription/RG env wire (LOOM_PURVIEW_SUB/RG were dropped as dead wires).
+
+# ---------------------------------------------------------------------------
+# Synapse navigator — set the reused workspace's subscription for cross-sub
+# reuse (synapse-dev-client / synapse-pool-arm read LOOM_SYNAPSE_SUB, falling
+# back to the deployment sub when empty). The DLZ-provisioned path needs no
+# patch (LOOM_SYNAPSE_WORKSPACE is wired at deploy time).
+# ---------------------------------------------------------------------------
+[[ -n "${EXISTING_SYNAPSE:-}" ]] && add LOOM_SYNAPSE_WORKSPACE "${EXISTING_SYNAPSE}"
+[[ -n "${EXISTING_SYNAPSE:-}" && -n "${EXISTING_SYNAPSE_SUB:-}" ]] && add LOOM_SYNAPSE_SUB "${EXISTING_SYNAPSE_SUB}"
+
+# ---------------------------------------------------------------------------
+# Data Factory navigator — reuse an existing factory (any RG/sub). adf-client
+# reads LOOM_ADF_NAME + LOOM_ADF_RG/SUB (RG/sub fall back to the DLZ RG +
+# deployment sub when empty).
+# ---------------------------------------------------------------------------
+ADF_NAME="${EXISTING_ADF:-}"
+if [[ -n "$ADF_NAME" ]]; then
+  add LOOM_ADF_NAME "$ADF_NAME"
+  [[ -n "${EXISTING_ADF_RG:-}" ]]  && add LOOM_ADF_RG  "${EXISTING_ADF_RG}"
+  [[ -n "${EXISTING_ADF_SUB:-}" ]] && add LOOM_ADF_SUB "${EXISTING_ADF_SUB}"
+fi
 
 # ---------------------------------------------------------------------------
 # Apply — one merge update => one new console revision.

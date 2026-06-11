@@ -63,7 +63,12 @@ function required(k: string): string {
   if (!v) throw new Error(`Missing env var: ${k}`);
   return v;
 }
-function sub(): string { return required('LOOM_SUBSCRIPTION_ID'); }
+// LOOM_AOAI_SUB wins for a reused Cognitive Services / AOAI account in another
+// subscription (BYO wizard), then LOOM_FOUNDRY_SUB (the Foundry hub's sub), then
+// LOOM_SUBSCRIPTION_ID (deployment). Keeps cross-sub AOAI navigation on-target.
+function sub(): string {
+  return process.env.LOOM_AOAI_SUB || process.env.LOOM_FOUNDRY_SUB || required('LOOM_SUBSCRIPTION_ID');
+}
 function rg(): string { return process.env.LOOM_FOUNDRY_RG || 'rg-csa-loom-admin-eastus2'; }
 
 async function token(): Promise<string> {

@@ -604,9 +604,10 @@ param existingFoundryRg string = ''
 // references — post-deploy RBAC is granted by grant-navigator-rbac.sh against
 // whatever sub resolves here. Emitted by scripts/csa-loom/byo-wizard.sh. Keys:
 //   aiSearchSub, apimSub, adxClusterSub, foundrySub,
-//   purviewAccount, purviewRg, purviewSub,
+//   purviewAccount,            (purviewRg/purviewSub are ignored — account-host data-plane)
 //   synapseWorkspace, synapseRg, synapseSub,
 //   cosmosAccount, cosmosRg, cosmosSub,
+//   adfFactory, adfRg, adfSub,
 //   eventHubNamespace, eventHubRg, eventHubSub,
 //   databricksWorkspace, databricksRg, databricksSub, databricksHostname
 @description('Bring-your-own existing-service overrides (cross-sub …Sub + Purview/Synapse/Cosmos/EventHubs/Databricks). See the key list in admin-plane/main.bicep; emitted by byo-wizard.sh.')
@@ -628,10 +629,12 @@ var byoApimSub     = !empty(byoExisting.?apimSub ?? '') ? byoExisting.apimSub : 
 var byoAdxSub      = !empty(byoExisting.?adxClusterSub ?? '') ? byoExisting.adxClusterSub : subscription().subscriptionId
 var byoFoundrySub  = !empty(byoExisting.?foundrySub ?? '') ? byoExisting.foundrySub : subscription().subscriptionId
 // Purview — existingPurviewAccount overrides loomPurviewAccount (reuse > param).
+// The Purview catalog data-plane is reached by account host (`{account}.purview.azure.com`)
+// + a UAMI data-plane role assigned in the Purview portal — it is subscription-
+// agnostic, so a reused cross-sub Purview needs no LOOM_PURVIEW_SUB/RG env wire
+// (the account name alone resolves it). Those vars were dropped to avoid a dead wire.
 var existingPurviewAccount = byoExisting.?purviewAccount ?? ''
-var existingPurviewRg      = byoExisting.?purviewRg ?? ''
 var effPurviewAccount = !empty(existingPurviewAccount) ? existingPurviewAccount : loomPurviewAccount
-var byoPurviewSub     = !empty(byoExisting.?purviewSub ?? '') ? byoExisting.purviewSub : subscription().subscriptionId
 // Synapse navigator — reuse > provisioned DLZ workspace.
 var existingSynapseWorkspace = byoExisting.?synapseWorkspace ?? ''
 var effSynapseWorkspace = !empty(existingSynapseWorkspace) ? existingSynapseWorkspace : loomSynapseWorkspace
@@ -642,6 +645,13 @@ var existingCosmosAccount = byoExisting.?cosmosAccount ?? ''
 var effCosmosAccount = !empty(existingCosmosAccount) ? existingCosmosAccount : loomCosmosAccount
 var effCosmosRg      = !empty(byoExisting.?cosmosRg ?? '') ? byoExisting.cosmosRg : (!empty(loomCosmosAccountRg) ? loomCosmosAccountRg : loomDlzRg)
 var byoCosmosSub     = !empty(byoExisting.?cosmosSub ?? '') ? byoExisting.cosmosSub : subscription().subscriptionId
+// Data Factory navigator — reuse > provisioned DLZ factory. Name/RG/Sub flow
+// into LOOM_ADF_NAME/RG/SUB, which adf-client reads (sub/rg fall back to the
+// deployment sub + DLZ RG when empty).
+var existingAdfFactory = byoExisting.?adfFactory ?? ''
+var effAdfName = !empty(existingAdfFactory) ? existingAdfFactory : loomAdfName
+var effAdfRg   = !empty(byoExisting.?adfRg ?? '') ? byoExisting.adfRg : (!empty(loomAdfRg) ? loomAdfRg : loomDlzRg)
+var byoAdfSub  = !empty(byoExisting.?adfSub ?? '') ? byoExisting.adfSub : subscription().subscriptionId
 // Event Hubs navigator — reuse > provisioned DLZ namespace.
 var existingEventHubNamespace = byoExisting.?eventHubNamespace ?? ''
 var effEventHubNamespace = !empty(existingEventHubNamespace) ? existingEventHubNamespace : loomEventHubNamespace
@@ -1735,8 +1745,9 @@ module appDeployments 'app-deployments.bicep' = if (containerPlatform == 'contai
             // the App Config path; set to an App Configuration endpoint and grant
             // the Console identity "App Configuration Data Reader" to enable.
             { name: 'LOOM_PARAM_APPCONFIG', value: loomParamAppConfigEndpoint }
-            { name: 'LOOM_ADF_NAME', value: loomAdfName }
-            { name: 'LOOM_ADF_RG', value: !empty(loomAdfRg) ? loomAdfRg : loomDlzRg }
+            { name: 'LOOM_ADF_NAME', value: effAdfName }
+            { name: 'LOOM_ADF_RG', value: effAdfRg }
+            { name: 'LOOM_ADF_SUB', value: byoAdfSub }
             // Public Console base URL baked into the materialized-lake-view
             // "Refresh materialized lake view" ADF pipeline's callback activity.
             // Empty = the refresh route derives the origin from the request.
@@ -2199,8 +2210,6 @@ module appDeployments 'app-deployments.bicep' = if (containerPlatform == 'contai
           // ----------------------------------------------------------------
           !empty(effPurviewAccount) ? [
             { name: 'LOOM_PURVIEW_ACCOUNT', value: effPurviewAccount }
-            { name: 'LOOM_PURVIEW_RG', value: existingPurviewRg }
-            { name: 'LOOM_PURVIEW_SUB', value: byoPurviewSub }
           ] : (purviewEnabled ? [
             { name: 'LOOM_PURVIEW_ACCOUNT', value: 'purview-csa-loom-${location}' }
           ] : []),

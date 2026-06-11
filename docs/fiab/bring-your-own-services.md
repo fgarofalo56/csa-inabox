@@ -68,8 +68,18 @@ Each `BYO_<KEY>` = `reuse:<name>[:<rg>[:<sub>]]` | `new` | `gate`. Gov boundarie
 
 Every reuse pair captures **name + RG + subscription** (`…_SUB`) so cross-sub
 reuse (e.g. a shared-governance-sub Purview) is a first-class deploy-time input.
-The `…_SUB` value flows into the `LOOM_<SVC>_SUB` Console env var (clients fall
-back to `LOOM_SUBSCRIPTION_ID` when empty).
+The `…_SUB` value flows into the `LOOM_<SVC>_SUB` Console env var, which the
+matching navigator client reads (`apim-client` → `LOOM_APIM_SUB`,
+`synapse-dev-client`/`synapse-pool-arm` → `LOOM_SYNAPSE_SUB`,
+`cosmos-account-client` → `LOOM_COSMOS_ACCOUNT_SUB`, `foundry-client` →
+`LOOM_FOUNDRY_SUB`, `foundry-cs-client` → `LOOM_AOAI_SUB`, `adf-client` →
+`LOOM_ADF_SUB`), falling back to `LOOM_SUBSCRIPTION_ID` when empty. The matching
+management-plane RBAC role is granted on the reused resource in **its**
+subscription by `grant-navigator-rbac.sh`. **Purview is the exception:** its
+catalog data-plane is reached by account host (`{account}.purview.azure.com`) +
+a portal-granted role, so it is subscription-agnostic — `EXISTING_PURVIEW_RG`/
+`_SUB` are captured for discovery only and there is no `LOOM_PURVIEW_SUB`/`_RG`
+runtime env wire.
 
 | Service | Reuse env var(s) | `*Enabled` flag (new) | UAMI role granted on reuse |
 |---|---|---|---|
@@ -77,12 +87,12 @@ back to `LOOM_SUBSCRIPTION_ID` when empty).
 | API Management | `EXISTING_APIM` (+`_RG` +`_SUB`) | `apimEnabled` | API Management Service Contributor |
 | ADX / Kusto | `EXISTING_KUSTO_CLUSTER` (+`_RG` +`_SUB`) | `adxEnabled` | AllDatabasesAdmin principal assignment |
 | AI Foundry / AOAI | `EXISTING_AOAI` (+`_RG` +`_SUB`) | `aiFoundryEnabled` | Cognitive Services Contributor |
-| Purview | `EXISTING_PURVIEW` (+`_RG` +`_SUB`) → sets `existingPurviewAccount` (overrides `loomPurviewAccount`) | `purviewEnabled` | Data Curator + Data Product Owner (Purview portal, data-plane) |
+| Purview | `EXISTING_PURVIEW` (+`_RG` +`_SUB`, discovery only) → sets `existingPurviewAccount` (overrides `loomPurviewAccount`) | `purviewEnabled` | Data Curator + Data Product Owner (Purview portal, data-plane) |
 | Cosmos (navigator) | `EXISTING_COSMOS_ACCOUNT` (+`_RG` +`_SUB`) | DLZ-provisioned | DocumentDB Account Contributor + Built-in Data Contributor |
 | Event Hubs | `EXISTING_EVENTHUB_NAMESPACE` (+`_RG` +`_SUB`) | DLZ-provisioned | Event Hubs Data Owner + Contributor |
 | Synapse | `EXISTING_SYNAPSE` (+`_RG` +`_SUB`) | DLZ-provisioned | Synapse Admin (bootstrap) |
 | Databricks | `EXISTING_DATABRICKS` (+`_RG` +`_SUB`) + `EXISTING_DATABRICKS_HOSTNAME` | DLZ-provisioned | SCIM workspace SP (bootstrap) |
-| Data Factory | `EXISTING_ADF` (+`_RG` +`_SUB`) | DLZ-provisioned | ADF Contributor (bootstrap) |
+| Data Factory | `EXISTING_ADF` (+`_RG` +`_SUB`) → `LOOM_ADF_NAME`/`_RG`/`_SUB` | DLZ-provisioned | Data Factory Contributor |
 | Azure SQL | bound per-item in the editor (any server) | — | per-server Entra admin |
 | Microsoft Fabric | `fabricEnabled` (default **false** — Azure-native, no Fabric dependency) | — | n/a (opt-in only) |
 

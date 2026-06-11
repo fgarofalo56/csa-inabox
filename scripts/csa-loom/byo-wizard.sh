@@ -138,6 +138,7 @@ SERVICES=(
   "purview|Microsoft Purview|Microsoft.Purview/accounts||existingPurviewAccount|existingPurviewRg|existingPurviewSub|EXISTING_PURVIEW|EXISTING_PURVIEW_RG|EXISTING_PURVIEW_SUB|purviewEnabled"
   "synapse|Synapse|Microsoft.Synapse/workspaces||existingSynapseWorkspace|existingSynapseRg|existingSynapseSub|EXISTING_SYNAPSE|EXISTING_SYNAPSE_RG|EXISTING_SYNAPSE_SUB|"
   "cosmos|Cosmos DB|Microsoft.DocumentDB/databaseAccounts||existingCosmosAccount|existingCosmosRg|existingCosmosSub|EXISTING_COSMOS_ACCOUNT|EXISTING_COSMOS_ACCOUNT_RG|EXISTING_COSMOS_ACCOUNT_SUB|"
+  "adf|Data Factory|Microsoft.DataFactory/factories||existingAdfFactory|existingAdfRg|existingAdfSub|EXISTING_ADF|EXISTING_ADF_RG|EXISTING_ADF_SUB|"
   "eventhubs|Event Hubs|Microsoft.EventHub/namespaces||existingEventHubNamespace|existingEventHubRg|existingEventHubSub|EXISTING_EVENTHUB_NAMESPACE|EXISTING_EVENTHUB_RG|EXISTING_EVENTHUB_SUB|"
   "databricks|Databricks|Microsoft.Databricks/workspaces||existingDatabricksWorkspace|existingDatabricksRg|existingDatabricksSub|EXISTING_DATABRICKS|EXISTING_DATABRICKS_RG|EXISTING_DATABRICKS_SUB|"
 )

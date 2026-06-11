@@ -43,6 +43,8 @@ COG_CONTRIB="25fbc0a9-bd7c-42a3-aa1a-3b75d497ee68"     # Cognitive Services Cont
 READER="acdd72a7-3385-48ef-bd42-f606fba81ae7"          # Reader
 STORAGE_BLOB_CONTRIB="ba92f5b4-2d11-453d-a403-e96b0029c9fe" # Storage Blob Data Contributor
 LOGIC_CONTRIB="87a39d53-fc1b-424a-814c-f7e04687dc9e"   # Logic App Contributor
+ADF_CONTRIB="673868aa-7521-48a0-acc6-0f60742d39f5"     # Data Factory Contributor
+APIM_CONTRIB="312a565d-c81f-4fd8-895a-4e21e48d571c"    # API Management Service Contributor
 
 grant() { # grant ROLE_GUID SCOPE LABEL
   local role="$1" scope="$2" label="$3"
@@ -79,6 +81,12 @@ byo_grant "$COSMOS_CONTRIB" "${EXISTING_COSMOS_ACCOUNT:-}" "${EXISTING_COSMOS_AC
 byo_grant "$SEARCH_CONTRIB" "${EXISTING_AI_SEARCH_SERVICE:-}" "${EXISTING_AI_SEARCH_RG:-}" "${EXISTING_AI_SEARCH_SUB:-}" "Microsoft.Search/searchServices" "Search Service Contributor (reused)"
 byo_grant "$SEARCH_DATA"    "${EXISTING_AI_SEARCH_SERVICE:-}" "${EXISTING_AI_SEARCH_RG:-}" "${EXISTING_AI_SEARCH_SUB:-}" "Microsoft.Search/searchServices" "Search Index Data Contributor (reused)"
 byo_grant "$COG_CONTRIB"    "${EXISTING_AOAI:-${EXISTING_AOAI_ACCOUNT:-}}" "${EXISTING_AOAI_RG:-}" "${EXISTING_AOAI_SUB:-}" "Microsoft.CognitiveServices/accounts" "Cognitive Services Contributor (reused)"
+# APIM / Synapse / Data Factory navigators read ARM in the reused resource's
+# subscription (apim-client reads LOOM_APIM_SUB, synapse-* reads LOOM_SYNAPSE_SUB,
+# adf-client reads LOOM_ADF_SUB) — grant the matching management-plane role THERE.
+byo_grant "$APIM_CONTRIB"   "${EXISTING_APIM:-}"    "${EXISTING_APIM_RG:-}"    "${EXISTING_APIM_SUB:-}"    "Microsoft.ApiManagement/service"   "API Management Service Contributor (reused)"
+byo_grant "$CONTRIBUTOR"    "${EXISTING_SYNAPSE:-}" "${EXISTING_SYNAPSE_RG:-}" "${EXISTING_SYNAPSE_SUB:-}" "Microsoft.Synapse/workspaces"      "Contributor on Synapse workspace (reused)"
+byo_grant "$ADF_CONTRIB"    "${EXISTING_ADF:-}"     "${EXISTING_ADF_RG:-}"     "${EXISTING_ADF_SUB:-}"     "Microsoft.DataFactory/factories"   "Data Factory Contributor (reused)"
 # Cosmos reused account also needs the data-plane Built-in Data Contributor.
 if [[ -n "${EXISTING_COSMOS_ACCOUNT:-}" && -n "${EXISTING_COSMOS_ACCOUNT_RG:-}" ]]; then
   echo "  BYO Cosmos data-plane: Built-in Data Contributor (reused ${EXISTING_COSMOS_ACCOUNT})"

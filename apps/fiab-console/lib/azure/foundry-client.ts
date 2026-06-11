@@ -39,8 +39,13 @@ function required(k: string): string {
   return v;
 }
 
+// LOOM_FOUNDRY_SUB wins for a reused Foundry hub/AOAI account in another
+// subscription (BYO wizard); falls back to LOOM_SUBSCRIPTION_ID (deployment
+// sub) when empty so cross-sub reuse builds the correct ARM scope.
+function foundrySub(): string { return process.env.LOOM_FOUNDRY_SUB || required('LOOM_SUBSCRIPTION_ID'); }
+
 function foundryBase(): string {
-  const sub = required('LOOM_SUBSCRIPTION_ID');
+  const sub = foundrySub();
   const rg = process.env.LOOM_FOUNDRY_RG || 'rg-csa-loom-admin-eastus2';
   const name = process.env.LOOM_FOUNDRY_NAME || 'aifoundry-csa-loom-eastus2';
   return `${armBase()}/subscriptions/${sub}/resourceGroups/${rg}/providers/Microsoft.MachineLearningServices/workspaces/${name}`;
@@ -536,7 +541,7 @@ function rg(): string {
   return process.env.LOOM_FOUNDRY_RG || 'rg-csa-loom-admin-eastus2';
 }
 function sub(): string {
-  return required('LOOM_SUBSCRIPTION_ID');
+  return process.env.LOOM_FOUNDRY_SUB || required('LOOM_SUBSCRIPTION_ID');
 }
 function hubName(): string {
   return process.env.LOOM_FOUNDRY_NAME || 'aifoundry-csa-loom-eastus2';
@@ -1730,7 +1735,7 @@ export class AmlScheduleNotConfiguredError extends Error {
  */
 export function amlScheduleConfig(): AmlScheduleConfig {
   const missing: string[] = [];
-  const subscriptionId = process.env.LOOM_SUBSCRIPTION_ID;
+  const subscriptionId = process.env.LOOM_FOUNDRY_SUB || process.env.LOOM_SUBSCRIPTION_ID;
   if (!subscriptionId) missing.push('LOOM_SUBSCRIPTION_ID');
   const workspace = process.env.LOOM_AML_WORKSPACE || process.env.LOOM_FOUNDRY_NAME;
   if (!workspace) missing.push('LOOM_AML_WORKSPACE');

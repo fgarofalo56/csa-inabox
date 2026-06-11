@@ -20,8 +20,12 @@ function required(k: string): string {
   return v;
 }
 
+// LOOM_SYNAPSE_SUB wins for a reused workspace in another subscription (BYO
+// wizard), else the deployment sub. Keeps cross-sub Synapse pool ops on-target.
+function synapseSub(): string { return process.env.LOOM_SYNAPSE_SUB || required('LOOM_SUBSCRIPTION_ID'); }
+
 function poolUrl(): string {
-  const sub = required('LOOM_SUBSCRIPTION_ID');
+  const sub = synapseSub();
   const rg = required('LOOM_DLZ_RG');
   const ws = required('LOOM_SYNAPSE_WORKSPACE');
   const pool = required('LOOM_SYNAPSE_DEDICATED_POOL');
@@ -58,7 +62,7 @@ export async function getPoolState(): Promise<{ state: PoolState; sku: string; s
 }
 
 export async function resumePool(): Promise<void> {
-  const sub = required('LOOM_SUBSCRIPTION_ID');
+  const sub = synapseSub();
   const rg = required('LOOM_DLZ_RG');
   const ws = required('LOOM_SYNAPSE_WORKSPACE');
   const pool = required('LOOM_SYNAPSE_DEDICATED_POOL');
@@ -70,7 +74,7 @@ export async function resumePool(): Promise<void> {
 }
 
 export async function pausePool(): Promise<void> {
-  const sub = required('LOOM_SUBSCRIPTION_ID');
+  const sub = synapseSub();
   const rg = required('LOOM_DLZ_RG');
   const ws = required('LOOM_SYNAPSE_WORKSPACE');
   const pool = required('LOOM_SYNAPSE_DEDICATED_POOL');

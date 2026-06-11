@@ -243,6 +243,12 @@ param existingDatabricksRg string = ''
 param existingDatabricksSub string = ''
 @description('Reuse an existing Databricks workspace hostname (adb-*.azuredatabricks.net). Overrides the navigator binding; the byo-wizard resolves this from workspaceUrl.')
 param existingDatabricksHostname string = ''
+@description('Reuse an existing Data Factory (name) for the Data Factory navigator / pipeline mounts.')
+param existingAdfFactory string = ''
+@description('Resource group of the existing Data Factory.')
+param existingAdfRg string = ''
+@description('Subscription id of the existing Data Factory (cross-sub reuse).')
+param existingAdfSub string = ''
 
 @description('Microsoft Fabric mode. DEFAULT false (Azure-native, no Fabric dependency per no-fabric-dependency.md). When false, no Fabric capacity/workspace is bound and loomDefaultFabricWorkspace is forced empty; the Console gates Fabric calls on UAMI authz and stays fully functional on Azure-native backends. Set true ONLY to opt into a bound Fabric workspace.')
 param fabricEnabled bool = false
@@ -504,6 +510,9 @@ module adminPlane 'modules/admin-plane/main.bicep' = {
       databricksRg: existingDatabricksRg
       databricksSub: existingDatabricksSub
       databricksHostname: existingDatabricksHostname
+      adfFactory: existingAdfFactory
+      adfRg: existingAdfRg
+      adfSub: existingAdfSub
     }
     // Azure ML workspace for the notebook AML path. Name is the deterministic
     // deploy-planner ml-workspace.bicep name (uniqueString over the DLZ RG), so
