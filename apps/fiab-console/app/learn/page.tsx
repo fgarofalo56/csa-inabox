@@ -25,6 +25,7 @@ import {
 } from '@fluentui/react-components';
 import {
   BookOpen24Regular, Open16Regular, DocumentBulletList16Regular, ArrowDownload16Regular,
+  NotebookAdd24Regular,
 } from '@fluentui/react-icons';
 import { PageShell } from '@/lib/components/page-shell';
 import { Section, Toolbar } from '@/lib/components/ui/section';
@@ -34,6 +35,7 @@ import { itemVisual } from '@/lib/components/ui/item-type-visual';
 import { LearnTopicCard } from '@/lib/components/learn/learn-topic-card';
 import { InstallAppDialog } from '@/lib/components/apps/install-app-dialog';
 import { getCoreSurfaceTutorials } from '@/lib/components/learn/core-surface-tutorials';
+import { NotebookImportWizard } from '@/lib/learn/notebook-import-wizard';
 import {
   getLearnCatalog, loomDocUrl, type LearnTopic, type LearnSection,
 } from '@/lib/learn/content';
@@ -89,6 +91,38 @@ const useStyles = makeStyles({
 
   filters: { display: 'flex', alignItems: 'center', gap: tokens.spacingHorizontalS, flexWrap: 'wrap' },
   drop: { minWidth: '150px' },
+
+  // quick-action band — import a prebuilt notebook into a workspace
+  quickAction: {
+    display: 'flex',
+    flexDirection: 'column',
+    gap: tokens.spacingVerticalM,
+    padding: tokens.spacingVerticalL,
+    borderRadius: tokens.borderRadiusLarge,
+    border: `1px solid ${tokens.colorNeutralStroke2}`,
+    background: `linear-gradient(135deg, ${tokens.colorNeutralBackground2} 0%, ${tokens.colorNeutralBackground1} 80%)`,
+    marginBottom: tokens.spacingVerticalXXL,
+  },
+  quickActionHead: {
+    display: 'flex',
+    alignItems: 'center',
+    gap: tokens.spacingHorizontalL,
+    flexWrap: 'wrap',
+  },
+  quickActionIcon: {
+    display: 'inline-flex',
+    alignItems: 'center',
+    justifyContent: 'center',
+    width: '44px',
+    height: '44px',
+    borderRadius: tokens.borderRadiusMedium,
+    backgroundColor: tokens.colorBrandBackground2,
+    color: tokens.colorBrandForeground2,
+    flexShrink: 0,
+  },
+  quickActionText: { display: 'flex', flexDirection: 'column', gap: '2px', flex: 1, minWidth: '240px' },
+  quickActionTitle: { fontWeight: tokens.fontWeightSemibold, fontSize: tokens.fontSizeBase400 },
+  quickActionSub: { color: tokens.colorNeutralForeground3, lineHeight: 1.5, maxWidth: '72ch' },
 
   sectionHead: { display: 'flex', flexDirection: 'column', gap: '2px', marginBottom: tokens.spacingVerticalS },
   sectionBlurb: { color: tokens.colorNeutralForeground3, lineHeight: 1.5 },
@@ -247,6 +281,22 @@ export default function LearnPage(): React.ReactElement {
             </span>
           </div>
         </div>
+      </div>
+
+      {/* Quick action: import a prebuilt notebook into a workspace, with or
+          without seeded ADLS sample data. Real provisioning end-to-end. */}
+      <div className={s.quickAction}>
+        <div className={s.quickActionHead}>
+          <span className={s.quickActionIcon} aria-hidden><NotebookAdd24Regular /></span>
+          <div className={s.quickActionText}>
+            <Text className={s.quickActionTitle}>Start hands-on in a workspace</Text>
+            <Text size={200} className={s.quickActionSub}>
+              Import a prebuilt Spark / Databricks notebook straight into a workspace — optionally
+              with seeded ADLS Delta sample tables so it runs against real data on first open.
+            </Text>
+          </div>
+        </div>
+        <NotebookImportWizard />
       </div>
 
       {/* Controls */}

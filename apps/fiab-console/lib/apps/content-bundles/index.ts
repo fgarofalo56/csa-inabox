@@ -11,7 +11,7 @@
  * doc size stays under the 2 MB Cosmos per-doc limit; the rich content
  * is applied client-side-of-Cosmos by the install route at create time.
  */
-import type { AppBundle } from './types';
+import type { AppBundle, BundleItem, LakehouseContent } from './types';
 
 import casinoAnalytics from './app-casino-analytics';
 import iotRealtime from './app-iot-realtime';
@@ -104,4 +104,92 @@ export function resolveBundleItem(
     content: match.content,
     learnDoc: match.learnDoc,
   };
+}
+
+/** Item types whose bundle content is a NotebookContent (Synapse Spark /
+ * Databricks / Fabric notebooks). The notebook-import wizard offers exactly
+ * these as importable prebuilt notebooks. */
+export const NOTEBOOK_ITEM_TYPES = ['notebook', 'databricks-notebook', 'synapse-notebook'] as const;
+
+/** Does a lakehouse BundleItem carry seedable sample rows? */
+function lakehouseHasSampleData(item: BundleItem): boolean {
+  if (item.itemType !== 'lakehouse') return false;
+  const c = item.content as LakehouseContent;
+  if (c?.kind !== 'lakehouse') return false;
+  return (c.deltaTables || []).some((t) => Array.isArray(t.sampleRows) && t.sampleRows.length > 0);
+}
+
+/** A single prebuilt notebook the Learning-Hub import wizard can offer. */
+export interface NotebookImportOption {
+  /** The owning app bundle id (used to also seed its sample-data lakehouses). */
+  bundleId: string;
+  /** Friendly bundle label (the app id, humanised — bundles carry no name). */
+  bundleLabel: string;
+  /** The notebook item's displayName — disambiguates bundles with >1 notebook. */
+  notebookDisplayName: string;
+  /** notebook | databricks-notebook | synapse-notebook. */
+  itemType: string;
+  description: string;
+  /** Cell count, surfaced in the picker so the user sees notebook depth. */
+  cellCount: number;
+  /** True when the bundle ships at least one lakehouse with sample rows the
+   * "with sample data" option can seed into ADLS Delta. */
+  hasSampleData: boolean;
+}
+
+/** Humanise an app bundle id (`app-ml-pipeline` → `ML Pipeline`) for display. */
+function humaniseBundleId(appId: string): string {
+  return appId
+    .replace(/^app-/, '')
+    .split('-')
+    .map((w) => (w.length <= 3 ? w.toUpperCase() : w.charAt(0).toUpperCase() + w.slice(1)))
+    .join(' ');
+}
+
+/**
+ * Enumerate every prebuilt notebook across all registered bundles, flagging
+ * which bundles can additionally seed real ADLS sample data. Drives the
+ * Learning-Hub notebook-import wizard's picker. Real registry data — no mocks.
+ */
+export function listNotebookImports(): NotebookImportOption[] {
+  const out: NotebookImportOption[] = [];
+  for (const b of Object.values(REGISTRY)) {
+    const hasSampleData = b.items.some(lakehouseHasSampleData);
+    for (const item of b.items) {
+      if (!(NOTEBOOK_ITEM_TYPES as readonly string[]).includes(item.itemType)) continue;
+      const cells = (item.content as { cells?: unknown[] })?.cells;
+      out.push({
+        bundleId: b.appId,
+        bundleLabel: humaniseBundleId(b.appId),
+        notebookDisplayName: item.displayName,
+        itemType: item.itemType,
+        description: item.description,
+        cellCount: Array.isArray(cells) ? cells.length : 0,
+        hasSampleData,
+      });
+    }
+  }
+  return out;
+}
+
+/**
+ * Return a bundle's notebook BundleItems (optionally filtered to one by
+ * displayName). Used by the import route to resolve the exact notebook the
+ * wizard picked without the resolveBundleItem() first-of-type fallback. */
+export function getBundleNotebooks(appId: string, displayName?: string): BundleItem[] {
+  const b = REGISTRY[appId];
+  if (!b) return [];
+  const nbs = b.items.filter((i) => (NOTEBOOK_ITEM_TYPES as readonly string[]).includes(i.itemType));
+  if (displayName) return nbs.filter((i) => i.displayName === displayName);
+  return nbs;
+}
+
+/**
+ * Return a bundle's lakehouse BundleItems that carry seedable sample rows.
+ * The "with sample data" import path provisions these alongside the notebook
+ * so the lakehouse provisioner writes the real CSVs into ADLS Delta. */
+export function getSampleDataLakehouses(appId: string): BundleItem[] {
+  const b = REGISTRY[appId];
+  if (!b) return [];
+  return b.items.filter(lakehouseHasSampleData);
 }
