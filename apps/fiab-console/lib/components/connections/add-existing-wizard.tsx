@@ -40,14 +40,25 @@ const useStyles = makeStyles({
   search: { flex: 1, minWidth: '220px' },
   statusRow: { display: 'flex', alignItems: 'center', gap: tokens.spacingHorizontalS, flexWrap: 'wrap' },
   meta: { color: tokens.colorNeutralForeground3 },
-  list: { display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalXS, maxHeight: '46vh', overflowY: 'auto', paddingRight: tokens.spacingHorizontalXS },
-  subHeader: { display: 'flex', alignItems: 'center', gap: tokens.spacingHorizontalXS, marginTop: tokens.spacingVerticalS },
+  list: { display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalM, maxHeight: '46vh', overflowY: 'auto', paddingRight: tokens.spacingHorizontalXS },
+  group: { display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalXS },
+  subHeader: { display: 'flex', alignItems: 'center', gap: tokens.spacingHorizontalXS, marginBottom: tokens.spacingVerticalXXS },
   row: {
     display: 'flex', alignItems: 'center', gap: tokens.spacingHorizontalM,
-    padding: tokens.spacingVerticalS, borderRadius: tokens.borderRadiusMedium,
+    padding: tokens.spacingVerticalS, paddingLeft: tokens.spacingHorizontalM, paddingRight: tokens.spacingHorizontalM,
+    borderRadius: tokens.borderRadiusMedium,
     border: `1px solid ${tokens.colorNeutralStroke2}`,
+    backgroundColor: tokens.colorNeutralBackground1,
+    transitionProperty: 'background-color, border-color, box-shadow',
+    transitionDuration: tokens.durationFaster,
+    transitionTimingFunction: tokens.curveEasyEase,
+    ':hover': {
+      backgroundColor: tokens.colorNeutralBackground1Hover,
+      borderColor: tokens.colorNeutralStroke1,
+      boxShadow: tokens.shadow2,
+    },
   },
-  rowIcon: { flexShrink: 0 },
+  rowIcon: { flexShrink: 0, display: 'inline-flex', fontSize: '20px' },
   rowText: { display: 'flex', flexDirection: 'column', minWidth: 0, flex: 1 },
   rowName: { fontWeight: tokens.fontWeightSemibold, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' },
   rowSub: { color: tokens.colorNeutralForeground3, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' },
@@ -247,7 +258,7 @@ export function AddExistingConnectionWizard({
                     <div className={s.empty}>No matching resources.</div>
                   )}
                   {grouped.map((g) => (
-                    <div key={g.sub}>
+                    <div key={g.sub} className={s.group}>
                       <div className={s.subHeader}>
                         <Badge appearance="outline" size="small" color="informative">Subscription</Badge>
                         <Caption1 className={s.meta} title={g.sub}>{g.label}</Caption1>
