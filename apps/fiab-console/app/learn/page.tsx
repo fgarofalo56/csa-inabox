@@ -25,7 +25,7 @@ import {
 } from '@fluentui/react-components';
 import {
   BookOpen24Regular, Open16Regular, DocumentBulletList16Regular, ArrowDownload16Regular,
-  NotebookAdd24Regular,
+  NotebookAdd24Regular, Apps16Regular,
 } from '@fluentui/react-icons';
 import { PageShell } from '@/lib/components/page-shell';
 import { Section, Toolbar } from '@/lib/components/ui/section';
@@ -169,6 +169,12 @@ const useStyles = makeStyles({
     display: 'inline-flex', alignItems: 'center', gap: '4px',
     color: tokens.colorNeutralForeground3, fontSize: tokens.fontSizeBase200,
     textDecorationLine: 'none', ':hover': { textDecorationLine: 'underline' },
+  },
+  listApp: {
+    display: 'inline-flex', alignItems: 'center', gap: '4px',
+    color: tokens.colorPaletteGreenForeground1, fontWeight: tokens.fontWeightSemibold,
+    fontSize: tokens.fontSizeBase200, textDecorationLine: 'none',
+    ':hover': { textDecorationLine: 'underline' },
   },
   list: { display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalS },
 });
@@ -425,6 +431,13 @@ export default function LearnPage(): React.ReactElement {
                       >
                         Install live example
                       </Button>
+                    )}
+                    {t.appHref && (
+                      <a className={s.listApp} href={t.appHref}>
+                        <Apps16Regular />
+                        {t.appLabel ?? 'Install app'}
+                      </a>
+                    )}
                     )}
                   </div>
                 </div>

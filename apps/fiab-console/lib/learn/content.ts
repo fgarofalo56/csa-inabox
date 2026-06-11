@@ -21,6 +21,8 @@
  */
 
 import { findItemType, FABRIC_ITEM_TYPES, type WorkloadCategory } from '@/lib/catalog/fabric-item-types';
+import { getBundle } from '@/lib/apps/content-bundles';
+import { CATALOG_META } from '@/lib/apps/content-bundles/catalog-meta';
 
 export interface LearnEntry {
   title: string;
@@ -671,36 +673,78 @@ export type LearnSection =
 /**
  * Real-world use cases from the CSA-in-a-Box docs — surfaced in the Learning Hub
  * so users can browse/search every scenario and open the full walkthrough. Built
- * on CSA Loom (Azure-native), never Fabric. `appId` (when set) is the matching
- * one-click content-bundle app (installable real example with sample data) — the
- * Learn use-case card surfaces an "Install live example" button that opens the
- * shared InstallAppDialog and runs the real install → provision → seed flow.
- * primaryUrl points at the verified use-cases index (no fabricated deep links).
+ * on CSA Loom (Azure-native), never Fabric.
+ *
+ * • `docPath` is the per-use-case relative MkDocs path → each card deep-links to
+ *   its OWN authored walkthrough doc (step-by-step content + architecture
+ *   visuals), NOT the shared index. Every path resolves to a file that exists on
+ *   disk under docs/ (no fabricated deep links, no dead links).
+ * • `appId` (when set) is the matching one-click content-bundle app — an
+ *   installable real example with sample data. The Learn use-case card surfaces
+ *   an "Install live example" button that opens the shared InstallAppDialog and
+ *   runs the real install → provision → seed flow, and/or a second "Install app"
+ *   link to /apps/<appId>. Every appId here is registered in BOTH the
+ *   content-bundle REGISTRY and CATALOG_META, so the app is discoverable +
+ *   installable (no vaporware deep link to a non-existent app).
+ *
+ * Spans both doc sites: commercial scenarios (docs/use-cases/), sovereign/Gov
+ * scenarios (docs/fiab/use-cases/), solution accelerators (docs/learn/08-solutions/),
+ * and industry blueprints (docs/industries/).
  */
 const USE_CASES: ReadonlyArray<{
-  id: string; title: string; summary: string; category: string; visualType: string; appId?: string;
+  id: string; title: string; summary: string; category: string; visualType: string;
+  /** Per-use-case relative MkDocs doc path → the card's own walkthrough deep link. */
+  docPath: string;
+  /** Matching one-click content-bundle app id (installable example), when one exists. */
+  appId?: string;
 }> = [
-  { id: 'doj-antitrust', title: 'DOJ Antitrust Analytics', summary: 'Antitrust compliance + investigation analytics — step-by-step domain build on Loom.', category: 'Government', visualType: 'warehouse' },
-  { id: 'gov-data-analytics', title: 'Government Data Analytics', summary: 'General government analytics platform on Azure-native Loom services.', category: 'Government', visualType: 'lakehouse' },
-  { id: 'dot-transportation', title: 'DOT Transportation Analytics', summary: 'Department of Transportation data analytics end to end.', category: 'Government', visualType: 'kql-database' },
-  { id: 'faa-aviation', title: 'FAA Aviation Analytics', summary: 'Federal Aviation Administration analytics on Loom.', category: 'Government', visualType: 'eventstream' },
-  { id: 'epa-environmental', title: 'EPA Environmental Analytics', summary: 'Environmental Protection Agency data analytics.', category: 'Government', visualType: 'lakehouse' },
-  { id: 'noaa-climate', title: 'NOAA Climate & Ocean Analytics', summary: 'Climate + oceanographic data analysis at scale.', category: 'Government', visualType: 'notebook' },
-  { id: 'nasa-earth', title: 'NASA Earth Science Analytics', summary: 'Earth-science data pipelines + analysis.', category: 'Government', visualType: 'notebook' },
-  { id: 'interior-resources', title: 'Interior Natural Resources', summary: 'Natural-resources management analytics.', category: 'Government', visualType: 'warehouse' },
-  { id: 'usda-agriculture', title: 'USDA Agricultural Analytics', summary: 'Department of Agriculture data solutions.', category: 'Government', visualType: 'lakehouse' },
-  { id: 'usps-postal', title: 'USPS Postal Operations', summary: 'Postal-service operational analytics.', category: 'Government', visualType: 'kql-dashboard' },
-  { id: 'commerce-economic', title: 'Commerce Economic Analytics', summary: 'Economic data + trade analytics.', category: 'Government', visualType: 'semantic-model' },
-  { id: 'ihs-tribal-health', title: 'IHS & Tribal Health Analytics', summary: 'Indian Health Service + tribal healthcare data.', category: 'Healthcare', visualType: 'lakehouse', appId: 'app-healthcare-popmgt' },
-  { id: 'rti-anomaly', title: 'Real-Time Anomaly Detection', summary: 'Fraud + anomaly detection on streaming data (Event Hubs → ADX → Activator).', category: 'Real-Time', visualType: 'activator', appId: 'app-iot-realtime' },
-  { id: 'casino-gaming', title: 'Casino & Gaming Analytics', summary: 'Player-grain facts, real-time win/loss, high-roller Activator alerts.', category: 'Industry', visualType: 'warehouse', appId: 'app-casino-analytics' },
-  { id: 'fed-cyber', title: 'Federal Cybersecurity & Threat Analytics', summary: 'Threat detection + security analytics on Loom.', category: 'Cybersecurity', visualType: 'kql-database' },
-  { id: 'unified-analytics', title: 'Unified Analytics', summary: 'Consolidated analytics — the Fabric experience on Azure-native Loom.', category: 'Platform', visualType: 'lakehouse' },
-  { id: 'data-virtualization', title: 'Data Virtualization', summary: 'Cross-cloud data access without copies.', category: 'Multi-Cloud', visualType: 'data-product' },
-  { id: 'api-first-ai', title: 'API-First Multi-Model AI Ecosystem', summary: 'AI + data through an API-gateway architecture (APIM).', category: 'API-First', visualType: 'apim-api' },
-  { id: 'dataverse-integration', title: 'Dataverse API Integration', summary: 'Microsoft Dataverse connectivity + analytics.', category: 'API-First', visualType: 'dataverse-table' },
-  { id: 'eam-apim', title: 'Enterprise Asset Management via APIM', summary: 'Asset management exposed + governed through API Management.', category: 'API-First', visualType: 'apim-product' },
-  { id: 'cross-platform', title: 'Cross-Platform Integration', summary: 'Integration across multiple platforms + clouds.', category: 'Multi-Cloud', visualType: 'data-pipeline' },
+  // ── Commercial + federal-agency scenarios (docs/use-cases/) ───────────────
+  { id: 'doj-antitrust', title: 'DOJ Antitrust Analytics', summary: 'Antitrust compliance + investigation analytics — step-by-step domain build on Loom.', category: 'Government', visualType: 'warehouse', docPath: 'use-cases/doj-antitrust-deep-dive' },
+  { id: 'gov-data-analytics', title: 'Government Data Analytics', summary: 'General government analytics platform on Azure-native Loom services.', category: 'Government', visualType: 'lakehouse', docPath: 'use-cases/government-data-analytics' },
+  { id: 'dot-transportation', title: 'DOT Transportation Analytics', summary: 'Department of Transportation data analytics end to end.', category: 'Government', visualType: 'kql-database', docPath: 'use-cases/dot-transportation-analytics' },
+  { id: 'faa-aviation', title: 'FAA Aviation Analytics', summary: 'Federal Aviation Administration analytics on Loom.', category: 'Government', visualType: 'eventstream', docPath: 'use-cases/faa-aviation-analytics' },
+  { id: 'epa-environmental', title: 'EPA Environmental Analytics', summary: 'Environmental Protection Agency data analytics.', category: 'Government', visualType: 'lakehouse', docPath: 'use-cases/epa-environmental-analytics' },
+  { id: 'noaa-climate', title: 'NOAA Climate & Ocean Analytics', summary: 'Climate + oceanographic data analysis at scale.', category: 'Government', visualType: 'notebook', docPath: 'use-cases/noaa-climate-analytics' },
+  { id: 'nasa-earth', title: 'NASA Earth Science Analytics', summary: 'Earth-science data pipelines + analysis.', category: 'Government', visualType: 'notebook', docPath: 'use-cases/nasa-earth-science-analytics' },
+  { id: 'interior-resources', title: 'Interior Natural Resources', summary: 'Natural-resources management analytics.', category: 'Government', visualType: 'warehouse', docPath: 'use-cases/interior-natural-resources-analytics' },
+  { id: 'usda-agriculture', title: 'USDA Agricultural Analytics', summary: 'Department of Agriculture data solutions.', category: 'Government', visualType: 'lakehouse', docPath: 'use-cases/usda-agriculture-analytics' },
+  { id: 'usps-postal', title: 'USPS Postal Operations', summary: 'Postal-service operational analytics.', category: 'Government', visualType: 'kql-dashboard', docPath: 'use-cases/usps-postal-analytics' },
+  { id: 'commerce-economic', title: 'Commerce Economic Analytics', summary: 'Economic data + trade analytics.', category: 'Government', visualType: 'semantic-model', docPath: 'use-cases/commerce-economic-analytics' },
+  { id: 'ihs-tribal-health', title: 'IHS & Tribal Health Analytics', summary: 'Indian Health Service + tribal healthcare data.', category: 'Healthcare', visualType: 'lakehouse', docPath: 'use-cases/tribal-health-analytics', appId: 'app-healthcare-popmgt' },
+  { id: 'rti-anomaly', title: 'Real-Time Anomaly Detection', summary: 'Fraud + anomaly detection on streaming data (Event Hubs → ADX → Activator).', category: 'Real-Time', visualType: 'activator', docPath: 'use-cases/realtime-intelligence-anomaly-detection', appId: 'app-iot-realtime' },
+  { id: 'casino-gaming', title: 'Casino & Gaming Analytics', summary: 'Player-grain facts, real-time win/loss, high-roller Activator alerts.', category: 'Industry', visualType: 'warehouse', docPath: 'use-cases/casino-gaming-analytics', appId: 'app-casino-analytics' },
+  { id: 'fed-cyber', title: 'Federal Cybersecurity & Threat Analytics', summary: 'Threat detection + security analytics on Loom.', category: 'Cybersecurity', visualType: 'kql-database', docPath: 'use-cases/cybersecurity-threat-analytics' },
+  { id: 'unified-analytics', title: 'Unified Analytics', summary: 'Consolidated analytics — the Fabric experience on Azure-native Loom.', category: 'Platform', visualType: 'lakehouse', docPath: 'use-cases/fabric-unified-analytics' },
+  { id: 'data-virtualization', title: 'Data Virtualization', summary: 'Cross-cloud data access without copies.', category: 'Multi-Cloud', visualType: 'data-product', docPath: 'use-cases/multi-cloud-data-virtualization' },
+  { id: 'api-first-ai', title: 'API-First Multi-Model AI Ecosystem', summary: 'AI + data through an API-gateway architecture (APIM).', category: 'API-First', visualType: 'apim-api', docPath: 'use-cases/api-first-multi-model-ai-ecosystem' },
+  { id: 'dataverse-integration', title: 'Dataverse API Integration', summary: 'Microsoft Dataverse connectivity + analytics.', category: 'API-First', visualType: 'dataverse-table', docPath: 'use-cases/dataverse-api-integration' },
+  { id: 'eam-apim', title: 'Enterprise Asset Management via APIM', summary: 'Asset management exposed + governed through API Management.', category: 'API-First', visualType: 'apim-product', docPath: 'use-cases/enterprise-asset-management-apim' },
+  { id: 'cross-platform', title: 'Cross-Platform Integration', summary: 'Integration across multiple platforms + clouds.', category: 'Multi-Cloud', visualType: 'data-pipeline', docPath: 'use-cases/cross-platform-integration-fabric' },
+  { id: 'antitrust-analytics', title: 'Antitrust Market Analytics', summary: 'Market-concentration + merger-review analytics workflow on Loom.', category: 'Government', visualType: 'warehouse', docPath: 'use-cases/antitrust-analytics' },
+  { id: 'ai-document-ediscovery', title: 'AI Document Analytics & eDiscovery', summary: 'LLM-assisted document review, classification, and eDiscovery on Azure-native AI Search + Foundry.', category: 'Legal & eDiscovery', visualType: 'ai-search-index', docPath: 'use-cases/ai-document-analytics-ediscovery' },
+
+  // ── Sovereign / Gov-cloud scenarios (docs/fiab/use-cases/) ────────────────
+  { id: 'federal-data-mesh', title: 'Federal Data Mesh', summary: 'Domain-oriented, governed data mesh across federal agencies on Loom.', category: 'Government — Sovereign', visualType: 'data-product', docPath: 'fiab/use-cases/federal-data-mesh', appId: 'app-federal-data-mesh' },
+  { id: 'multi-agency-onboarding', title: 'Multi-Agency Onboarding', summary: 'Onboard multiple agencies into a shared, isolated Loom platform.', category: 'Government — Sovereign', visualType: 'powerplatform-environment', docPath: 'fiab/use-cases/multi-agency-onboarding', appId: 'app-multi-agency-onboarding' },
+  { id: 'direct-lake-replacement', title: 'Direct Lake Replacement', summary: 'Replace Fabric Direct Lake with the Azure-native warm-cache semantic layer.', category: 'Government — Sovereign', visualType: 'semantic-model', docPath: 'fiab/use-cases/direct-lake-replacement', appId: 'app-direct-lake-replacement' },
+  { id: 'sovereign-ai-agents', title: 'Sovereign AI Agents', summary: 'Air-gapped, sovereign AI Foundry agents grounded in agency data.', category: 'Government — Sovereign', visualType: 'ai-foundry-project', docPath: 'fiab/use-cases/sovereign-ai-agents', appId: 'app-sovereign-ai-agents' },
+  { id: 'hybrid-topology', title: 'Hybrid Topology', summary: 'Hybrid on-prem + Gov-cloud Loom topology for regulated workloads.', category: 'Government — Sovereign', visualType: 'plan', docPath: 'fiab/use-cases/hybrid-topology', appId: 'app-hybrid-topology' },
+
+  // ── Solution accelerators (docs/learn/08-solutions/) ──────────────────────
+  { id: 'sol-azure-realtime', title: 'Azure Real-Time Analytics Accelerator', summary: 'End-to-end streaming analytics accelerator — Event Hubs → ADX → dashboards.', category: 'Solution accelerators', visualType: 'eventstream', docPath: 'learn/08-solutions/azure-realtime-analytics', appId: 'app-azure-realtime-analytics' },
+  { id: 'sol-change-feed', title: 'Change Feed Processor', summary: 'Cosmos DB change-feed → near-real-time downstream processing pattern.', category: 'Solution accelerators', visualType: 'mirrored-database', docPath: 'learn/08-solutions/change-feed-processor', appId: 'app-change-feed-processor' },
+  { id: 'sol-data-governance', title: 'Data Governance & Lineage', summary: 'Catalog, classify, and trace column-level lineage across the platform.', category: 'Solution accelerators', visualType: 'data-product', docPath: 'learn/08-solutions/data-governance/lineage', appId: 'app-data-governance' },
+  { id: 'sol-logic-apps', title: 'Logic Apps Integration', summary: 'Event-driven orchestration + integration with Azure Logic Apps.', category: 'Solution accelerators', visualType: 'data-pipeline', docPath: 'learn/08-solutions/logic-apps-integration', appId: 'app-logic-apps-integration' },
+  { id: 'sol-ml-pipeline', title: 'ML Pipeline Accelerator', summary: 'Train, register, and operationalize models with an MLflow-backed pipeline.', category: 'Solution accelerators', visualType: 'ml-experiment', docPath: 'learn/08-solutions/ml-pipeline', appId: 'app-ml-pipeline' },
+  { id: 'sol-realtime-dashboards', title: 'Real-Time Dashboards', summary: 'Live operational dashboards over ADX with KQL-driven tiles.', category: 'Solution accelerators', visualType: 'kql-dashboard', docPath: 'learn/08-solutions/real-time-dashboards', appId: 'app-real-time-dashboards' },
+
+  // ── Industry blueprints (docs/industries/) ────────────────────────────────
+  { id: 'ind-financial-services', title: 'Financial Services Blueprint', summary: 'Risk, fraud, and regulatory analytics blueprint for financial services.', category: 'Industry', visualType: 'warehouse', docPath: 'industries/financial-services' },
+  { id: 'ind-manufacturing', title: 'Manufacturing Blueprint', summary: 'IoT + OEE + predictive-maintenance analytics for manufacturing.', category: 'Industry', visualType: 'eventstream', docPath: 'industries/manufacturing' },
+  { id: 'ind-retail-cpg', title: 'Retail & CPG Blueprint', summary: 'Demand forecasting, personalization, and supply-chain analytics.', category: 'Industry', visualType: 'lakehouse', docPath: 'industries/retail-cpg' },
+  { id: 'ind-energy-utilities', title: 'Energy & Utilities Blueprint', summary: 'Grid telemetry, smart-meter, and outage analytics.', category: 'Industry', visualType: 'kql-database', docPath: 'industries/energy-utilities' },
+  { id: 'ind-telco', title: 'Telecommunications Blueprint', summary: 'Network performance, churn, and usage analytics for telco.', category: 'Industry', visualType: 'eventstream', docPath: 'industries/telco' },
+  { id: 'ind-life-sciences', title: 'Life Sciences & Genomics Blueprint', summary: 'Genomics, clinical-trial, and research analytics for life sciences.', category: 'Industry', visualType: 'notebook', docPath: 'industries/life-sciences' },
 ];
 
 export interface LearnTopic {
@@ -721,6 +765,15 @@ export interface LearnTopic {
   msLearnUrl?: string;
   /** True when a real CSA Loom doc backs the primary link. */
   hasLoomDoc: boolean;
+  /**
+   * INTERNAL app-install link — relative Next route /apps/<appId> for the
+   * matching one-click content-bundle app (NOT run through loomDocUrl; it is a
+   * same-origin route, never a docs URL). Only set when the appId is registered
+   * in both the bundle REGISTRY and CATALOG_META (installable + discoverable).
+   */
+  appHref?: string;
+  /** Label for the app-install link (e.g. "Install app"). */
+  appLabel?: string;
   /** Published thumbnail URL (editor guides only); undefined → use icon art. */
   thumbUrl?: string;
   preview?: boolean;
@@ -815,13 +868,17 @@ export function getLearnCatalog(): LearnTopic[] {
     });
   }
 
-  // Real-world use cases (CSA-in-a-Box scenarios, built on Loom).
+  // Real-world use cases (CSA-in-a-Box scenarios, built on Loom). Each card
+  // deep-links to its OWN authored walkthrough doc; when a matching content
+  // bundle is registered (in both the REGISTRY and CATALOG_META) the card also
+  // offers a one-click "Install app" link to the internal /apps/<id> route.
   for (const u of USE_CASES) {
+    const appInstallable = !!u.appId && !!getBundle(u.appId) && !!CATALOG_META[u.appId];
     topics.push({
       id: `usecase:${u.id}`, title: u.title, summary: u.summary,
       section: 'Use cases', category: u.category, visualType: u.visualType,
-      primaryUrl: loomDocUrl('use-cases'), primaryLabel: 'Walkthrough', hasLoomDoc: true,
-      appId: u.appId,
+      primaryUrl: loomDocUrl(u.docPath), primaryLabel: 'Walkthrough', hasLoomDoc: true,
+      ...(appInstallable ? { appId: u.appId, appHref: `/apps/${u.appId}`, appLabel: 'Install app' } : {}),
     });
   }
 
