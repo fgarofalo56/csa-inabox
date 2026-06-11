@@ -69,7 +69,7 @@ add LOOM_DATABRICKS_HOSTNAMES "$DBX_HOST"
 # ---------------------------------------------------------------------------
 # ADX / Kusto — shared cluster lives in the admin plane.
 # ---------------------------------------------------------------------------
-KUSTO_NAME="${EXISTING_KUSTO_CLUSTER_NAME:-}"
+KUSTO_NAME="${EXISTING_KUSTO_CLUSTER:-${EXISTING_KUSTO_CLUSTER_NAME:-}}"
 KUSTO_RG="${EXISTING_KUSTO_RG:-$ADMIN_RG}"
 if [[ -z "$KUSTO_NAME" ]]; then
   KUSTO_NAME="$(q kusto cluster list -g "$KUSTO_RG" --query "[0].name" -o tsv)"
@@ -79,6 +79,7 @@ if [[ -n "$KUSTO_NAME" ]]; then
   add LOOM_KUSTO_CLUSTER_URI  "$KUSTO_URI"
   add LOOM_KUSTO_CLUSTER_NAME "$KUSTO_NAME"
   add LOOM_KUSTO_RG           "$KUSTO_RG"
+  add LOOM_KUSTO_SUB          "${EXISTING_KUSTO_SUB:-}"
   add LOOM_KUSTO_LOCATION     "$LOCATION"
   # default database — prefer a loomdb-* db, else the first non-system db.
   # ADX `database list` returns names as "<cluster>/<db>", so strip the prefix.
@@ -100,17 +101,19 @@ if [[ -z "$SEARCH_NAME" ]]; then
 fi
 add LOOM_AI_SEARCH_SERVICE "$SEARCH_NAME"
 [[ -n "$SEARCH_NAME" ]] && add LOOM_AI_SEARCH_RG "$SEARCH_RG"
+[[ -n "$SEARCH_NAME" ]] && add LOOM_AI_SEARCH_SUB "${EXISTING_AI_SEARCH_SUB:-}"
 
 # ---------------------------------------------------------------------------
 # APIM — reuse-first, else discover in admin RG.
 # ---------------------------------------------------------------------------
-APIM_NAME="${EXISTING_APIM_NAME:-}"
+APIM_NAME="${EXISTING_APIM:-${EXISTING_APIM_NAME:-}}"
 APIM_RG="${EXISTING_APIM_RG:-$ADMIN_RG}"
 if [[ -z "$APIM_NAME" ]]; then
   APIM_NAME="$(q apim list -g "$APIM_RG" --query "[0].name" -o tsv)"
 fi
 add LOOM_APIM_NAME "$APIM_NAME"
 [[ -n "$APIM_NAME" ]] && add LOOM_APIM_RG "$APIM_RG"
+[[ -n "$APIM_NAME" ]] && add LOOM_APIM_SUB "${EXISTING_APIM_SUB:-}"
 
 # ---------------------------------------------------------------------------
 # Cosmos (control-plane navigator) — the DLZ account (distinct from Loom's own
@@ -124,6 +127,7 @@ if [[ -z "$COSMOS_ACCT" ]]; then
 fi
 add LOOM_COSMOS_ACCOUNT "$COSMOS_ACCT"
 [[ -n "$COSMOS_ACCT" ]] && add LOOM_COSMOS_ACCOUNT_RG "$COSMOS_RG"
+[[ -n "$COSMOS_ACCT" ]] && add LOOM_COSMOS_ACCOUNT_SUB "${EXISTING_COSMOS_ACCOUNT_SUB:-}"
 
 # ---------------------------------------------------------------------------
 # Cosmos Gremlin (graph editor) + NoSQL vector (vector-store editor) — the DLZ
@@ -176,12 +180,13 @@ if [[ -z "$EH_NS" ]]; then
 fi
 add LOOM_EVENTHUB_NAMESPACE "$EH_NS"
 [[ -n "$EH_NS" ]] && add LOOM_EVENTHUB_RG "$EH_RG"
+[[ -n "$EH_NS" ]] && add LOOM_EVENTHUB_SUB "${EXISTING_EVENTHUB_SUB:-}"
 
 # ---------------------------------------------------------------------------
 # AI Foundry — AOAI model-hosting account + Foundry project (Copilot backend +
 # data-agent Publish). Only when Foundry is actually deployed.
 # ---------------------------------------------------------------------------
-AOAI_NAME="${EXISTING_AOAI_ACCOUNT:-}"
+AOAI_NAME="${EXISTING_AOAI:-${EXISTING_AOAI_ACCOUNT:-}}"
 AOAI_RG="${EXISTING_AOAI_RG:-$ADMIN_RG}"
 if [[ -z "$AOAI_NAME" ]]; then
   AOAI_NAME="$(q cognitiveservices account list -g "$AOAI_RG" --query "[?kind=='AIServices'].name | [0]" -o tsv)"
@@ -189,6 +194,8 @@ fi
 if [[ -n "$AOAI_NAME" ]]; then
   add LOOM_AOAI_ACCOUNT "$AOAI_NAME"
   add LOOM_AOAI_RG      "$AOAI_RG"
+  add LOOM_AOAI_SUB     "${EXISTING_AOAI_SUB:-}"
+  add LOOM_FOUNDRY_SUB  "${EXISTING_AOAI_SUB:-}"
   AOAI_EP="$(q cognitiveservices account show -n "$AOAI_NAME" -g "$AOAI_RG" --query "properties.endpoint" -o tsv)"
   add LOOM_AOAI_ENDPOINT "$AOAI_EP"
   # First chat deployment (for the in-console copilot orchestrator)
@@ -227,6 +234,29 @@ if [[ -z "$PURVIEW" ]]; then
   done
 fi
 add LOOM_PURVIEW_ACCOUNT "$PURVIEW"
+# Purview catalog data-plane is account-host based + portal-granted — it needs
+# no subscription/RG env wire (LOOM_PURVIEW_SUB/RG were dropped as dead wires).
+
+# ---------------------------------------------------------------------------
+# Synapse navigator — set the reused workspace's subscription for cross-sub
+# reuse (synapse-dev-client / synapse-pool-arm read LOOM_SYNAPSE_SUB, falling
+# back to the deployment sub when empty). The DLZ-provisioned path needs no
+# patch (LOOM_SYNAPSE_WORKSPACE is wired at deploy time).
+# ---------------------------------------------------------------------------
+[[ -n "${EXISTING_SYNAPSE:-}" ]] && add LOOM_SYNAPSE_WORKSPACE "${EXISTING_SYNAPSE}"
+[[ -n "${EXISTING_SYNAPSE:-}" && -n "${EXISTING_SYNAPSE_SUB:-}" ]] && add LOOM_SYNAPSE_SUB "${EXISTING_SYNAPSE_SUB}"
+
+# ---------------------------------------------------------------------------
+# Data Factory navigator — reuse an existing factory (any RG/sub). adf-client
+# reads LOOM_ADF_NAME + LOOM_ADF_RG/SUB (RG/sub fall back to the DLZ RG +
+# deployment sub when empty).
+# ---------------------------------------------------------------------------
+ADF_NAME="${EXISTING_ADF:-}"
+if [[ -n "$ADF_NAME" ]]; then
+  add LOOM_ADF_NAME "$ADF_NAME"
+  [[ -n "${EXISTING_ADF_RG:-}" ]]  && add LOOM_ADF_RG  "${EXISTING_ADF_RG}"
+  [[ -n "${EXISTING_ADF_SUB:-}" ]] && add LOOM_ADF_SUB "${EXISTING_ADF_SUB}"
+fi
 
 # ---------------------------------------------------------------------------
 # Azure Maps — geo-map / map editors (static-tile basemap + reverse-geocode).

@@ -82,7 +82,7 @@ export interface CosmosConfigGate {
  * The BFF turns a non-null gate into a 503 { ok:false, code:'not_configured' }.
  */
 export function cosmosConfigGate(): CosmosConfigGate | null {
-  const sub = process.env.LOOM_SUBSCRIPTION_ID;
+  const sub = process.env.LOOM_COSMOS_ACCOUNT_SUB || process.env.LOOM_SUBSCRIPTION_ID;
   const rg = process.env.LOOM_COSMOS_ACCOUNT_RG;
   const acct = process.env.LOOM_COSMOS_ACCOUNT;
   const hint =
@@ -107,7 +107,9 @@ function required(k: string): string {
 }
 
 function accountBase(): string {
-  const sub = required('LOOM_SUBSCRIPTION_ID');
+  // LOOM_COSMOS_ACCOUNT_SUB wins for a reused account in another subscription
+  // (BYO wizard); else the deployment sub. Keeps cross-sub navigation on-target.
+  const sub = process.env.LOOM_COSMOS_ACCOUNT_SUB || required('LOOM_SUBSCRIPTION_ID');
   const rg = required('LOOM_COSMOS_ACCOUNT_RG');
   const acct = required('LOOM_COSMOS_ACCOUNT');
   return `${armBase()}/subscriptions/${sub}/resourceGroups/${rg}/providers/Microsoft.DocumentDB/databaseAccounts/${acct}`;

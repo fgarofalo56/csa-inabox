@@ -44,8 +44,12 @@ function required(k: string): string {
   return v;
 }
 
-function sub(): string { return required('LOOM_SUBSCRIPTION_ID'); }
-function rg():  string { return required('LOOM_DLZ_RG'); }
+// LOOM_ADF_SUB / LOOM_ADF_RG win for a reused Data Factory in another
+// subscription / resource group (BYO wizard); fall back to the deployment sub
+// (LOOM_SUBSCRIPTION_ID) and DLZ RG (LOOM_DLZ_RG) when empty so cross-sub reuse
+// targets the correct factory instead of the deployment one.
+function sub(): string { return process.env.LOOM_ADF_SUB || required('LOOM_SUBSCRIPTION_ID'); }
+function rg():  string { return process.env.LOOM_ADF_RG || required('LOOM_DLZ_RG'); }
 function adfName(): string { return required('LOOM_ADF_NAME'); }
 
 function base(): string {

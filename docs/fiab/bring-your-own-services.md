@@ -38,26 +38,71 @@ Reuse is resolved at three layers, all idempotent:
 bash scripts/csa-loom/discover-services.sh
 ```
 
+## Generate a BYO bicepparam (the wizard)
+
+`scripts/csa-loom/byo-wizard.sh` is a **bicepparam generator**: it scans every
+subscription you can see, prompts **reuse / new / honest-gate** per service, and
+writes a ready `params/<name>.generated.bicepparam` (drop-in for
+`az deployment sub create -p`) plus a matching `temp/<name>.byo-exports.sh` with
+the canonical `EXISTING_*` exports for the post-deploy scripts.
+
+```bash
+# Interactive (default boundary commercial-full):
+bash scripts/csa-loom/byo-wizard.sh --boundary commercial-full
+
+# Non-interactive (CI / 1-button) — drive each choice via env:
+BYO_NONINTERACTIVE=1 \
+  BYO_PURVIEW='reuse:dmlz-dev-purview-eastus:rg-dmlz-dev-governance-eastus:<sub>' \
+  BYO_APIM='reuse:dml-ai-east-aigateway:rg-dlz-aiml-stack-dev:<sub>' \
+  BYO_AISEARCH=new BYO_ADX=gate \
+  bash scripts/csa-loom/byo-wizard.sh --boundary commercial-full --non-interactive
+# → az deployment sub create -f platform/fiab/bicep/main.bicep \
+#     -p platform/fiab/bicep/params/commercial-full.generated.bicepparam -l <region>
+# → source temp/commercial-full.generated.byo-exports.sh && bash scripts/csa-loom/grant-navigator-rbac.sh
+```
+
+Each `BYO_<KEY>` = `reuse:<name>[:<rg>[:<sub>]]` | `new` | `gate`. Gov boundaries
+(`gcc`, `gcc-high`, `il5`) force `fabricEnabled=false` (no Microsoft Fabric).
+
 ## Per-service reference
+
+Every reuse pair captures **name + RG + subscription** (`…_SUB`) so cross-sub
+reuse (e.g. a shared-governance-sub Purview) is a first-class deploy-time input.
+The `…_SUB` value flows into the `LOOM_<SVC>_SUB` Console env var, which the
+matching navigator client reads (`apim-client` → `LOOM_APIM_SUB`,
+`synapse-dev-client`/`synapse-pool-arm` → `LOOM_SYNAPSE_SUB`,
+`cosmos-account-client` → `LOOM_COSMOS_ACCOUNT_SUB`, `foundry-client` →
+`LOOM_FOUNDRY_SUB`, `foundry-cs-client` → `LOOM_AOAI_SUB`, `adf-client` →
+`LOOM_ADF_SUB`), falling back to `LOOM_SUBSCRIPTION_ID` when empty. The matching
+management-plane RBAC role is granted on the reused resource in **its**
+subscription by `grant-navigator-rbac.sh`. **Purview is the exception:** its
+catalog data-plane is reached by account host (`{account}.purview.azure.com`) +
+a portal-granted role, so it is subscription-agnostic — `EXISTING_PURVIEW_RG`/
+`_SUB` are captured for discovery only and there is no `LOOM_PURVIEW_SUB`/`_RG`
+runtime env wire.
 
 | Service | Reuse env var(s) | `*Enabled` flag (new) | UAMI role granted on reuse |
 |---|---|---|---|
-| AI Search | `EXISTING_AI_SEARCH_SERVICE` (+`_RG`) | `aiSearchEnabled` | Search Service + Index Data Contributor (+ enables AAD auth) |
-| API Management | `EXISTING_APIM` (+`_RG`) | `apimEnabled` | API Management Service Contributor |
-| ADX / Kusto | `EXISTING_KUSTO_CLUSTER` (+`_RG`) | `adxEnabled` | AllDatabasesAdmin principal assignment |
-| AI Foundry / AOAI | `EXISTING_AOAI` (+`_RG`) | `aiFoundryEnabled` | Cognitive Services Contributor |
-| Purview | `LOOM_PURVIEW_ACCOUNT` | `purviewEnabled` | (Graph app-roles via bootstrap) |
-| Cosmos (navigator) | `EXISTING_COSMOS_ACCOUNT` (+`_RG`) | DLZ-provisioned | DocumentDB Account Contributor |
-| Event Hubs | `EXISTING_EVENTHUB_NAMESPACE` (+`_RG`) | DLZ-provisioned | Event Hubs Data Owner + Contributor |
-| Databricks | `EXISTING_DATABRICKS_HOSTNAME` | DLZ-provisioned | SCIM workspace SP (bootstrap) |
-| Synapse / ADF | DLZ-provisioned (always) | — | Synapse Admin / ADF Contributor (bootstrap) |
+| AI Search | `EXISTING_AI_SEARCH_SERVICE` (+`_RG` +`_SUB`) | `aiSearchEnabled` | Search Service + Index Data Contributor (+ enables AAD auth) |
+| API Management | `EXISTING_APIM` (+`_RG` +`_SUB`) | `apimEnabled` | API Management Service Contributor |
+| ADX / Kusto | `EXISTING_KUSTO_CLUSTER` (+`_RG` +`_SUB`) | `adxEnabled` | AllDatabasesAdmin principal assignment |
+| AI Foundry / AOAI | `EXISTING_AOAI` (+`_RG` +`_SUB`) | `aiFoundryEnabled` | Cognitive Services Contributor |
+| Purview | `EXISTING_PURVIEW` (+`_RG` +`_SUB`, discovery only) → sets `existingPurviewAccount` (overrides `loomPurviewAccount`) | `purviewEnabled` | Data Curator + Data Product Owner (Purview portal, data-plane) |
+| Cosmos (navigator) | `EXISTING_COSMOS_ACCOUNT` (+`_RG` +`_SUB`) | DLZ-provisioned | DocumentDB Account Contributor + Built-in Data Contributor |
+| Event Hubs | `EXISTING_EVENTHUB_NAMESPACE` (+`_RG` +`_SUB`) | DLZ-provisioned | Event Hubs Data Owner + Contributor |
+| Synapse | `EXISTING_SYNAPSE` (+`_RG` +`_SUB`) | DLZ-provisioned | Synapse Admin (bootstrap) |
+| Databricks | `EXISTING_DATABRICKS` (+`_RG` +`_SUB`) + `EXISTING_DATABRICKS_HOSTNAME` | DLZ-provisioned | SCIM workspace SP (bootstrap) |
+| Data Factory | `EXISTING_ADF` (+`_RG` +`_SUB`) → `LOOM_ADF_NAME`/`_RG`/`_SUB` | DLZ-provisioned | Data Factory Contributor |
 | Azure SQL | bound per-item in the editor (any server) | — | per-server Entra admin |
+| Microsoft Fabric | `fabricEnabled` (default **false** — Azure-native, no Fabric dependency) | — | n/a (opt-in only) |
 
 > The four admin-plane services (AI Search, APIM, ADX, Foundry) gate their
 > *provisioning module* on `empty(existing<Svc>)`, so naming an existing one
 > never deploys a duplicate. DLZ services always provision a per-domain
-> instance; to reuse instead, set the `EXISTING_*` override (the env-patch +
-> RBAC scripts wire/grant the existing one).
+> instance; to reuse instead, set the `EXISTING_*` override (the bicep wires the
+> Console env to the reused resource; the RBAC + env-patch scripts grant/wire it).
+> `…_SUB` values are pure string pass-throughs (NOT Bicep `existing` cross-sub
+> references); post-deploy RBAC targets the resolved subscription.
 
 ## Examples
 
@@ -67,6 +112,7 @@ everything else new:
 ```bash
 export EXISTING_AI_SEARCH_SERVICE=my-shared-search
 export EXISTING_AI_SEARCH_RG=rg-shared-ai
+export EXISTING_AI_SEARCH_SUB=<sub-id>   # only when cross-subscription
 az deployment sub create -f platform/fiab/bicep/main.bicep \
   -p platform/fiab/bicep/params/commercial-full.bicepparam
 # then, post-deploy:
@@ -75,10 +121,11 @@ EXISTING_AI_SEARCH_SERVICE=my-shared-search EXISTING_AI_SEARCH_RG=rg-shared-ai \
 ```
 
 Reuse the tenant Purview (only one Enterprise Purview is allowed per tenant, so
-this is almost always a reuse):
+this is almost always a reuse — often cross-subscription):
 
 ```bash
-export LOOM_PURVIEW_ACCOUNT=my-tenant-purview
+export EXISTING_PURVIEW=my-tenant-purview
+export EXISTING_PURVIEW_SUB=<governance-sub-id>
 ```
 
 Point the live console at an existing APIM without redeploying bicep:
@@ -87,3 +134,4 @@ Point the live console at an existing APIM without redeploying bicep:
 EXISTING_APIM=my-apim EXISTING_APIM_RG=rg-apim \
   bash scripts/csa-loom/patch-navigator-env.sh
 ```
+
