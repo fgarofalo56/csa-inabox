@@ -31,7 +31,7 @@ const SECTIONS = [
 ];
 
 const useStyles = makeStyles({
-  layout: { display: 'grid', gridTemplateColumns: '280px 1fr', gap: 24, minHeight: '60vh' },
+  layout: { display: 'grid', gridTemplateColumns: '280px minmax(0, 1fr)', gap: 24, minHeight: '60vh' },
   sidebar: {
     display: 'flex', flexDirection: 'column', gap: 2,
     borderRight: `1px solid ${tokens.colorNeutralStroke2}`, paddingRight: 12,
