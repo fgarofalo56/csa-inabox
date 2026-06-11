@@ -1450,6 +1450,18 @@ module azureMaps 'azure-maps.bicep' = if (azureMapsEnabled && (boundary == 'Comm
   }
 }
 
+// Effective Maps account name fed to every Console env binding below.
+// When the module deploys (Commercial/GCC + enabled) we use its
+// non-deterministic generated name; otherwise we fall back to the BYO /
+// live-override input (`loomAzureMapsAccount`). A conditional-module output
+// resolves to '' when its condition is false, so this expression is always
+// safe. This closes the gap where the account deployed but
+// `LOOM_AZURE_MAPS_ACCOUNT` + the `NEXT_PUBLIC_LOOM_AZURE_MAPS_KEY` secretRef
+// were never bound (the param defaulted to '' and was never fed the output).
+var effectiveMapsAccount = (azureMapsEnabled && (boundary == 'Commercial' || boundary == 'GCC'))
+  ? azureMaps!.outputs.mapsAccountName
+  : loomAzureMapsAccount
+
 // =====================================================================
 // 11. AI defense (Defender for AI workaround in Gov)
 // =====================================================================
@@ -1970,7 +1982,12 @@ module appDeployments 'app-deployments.bicep' = if (containerPlatform == 'contai
             { name: 'LOOM_COSMOS_VECTOR_ENDPOINT',   value: loomCosmosVectorEndpoint }
             { name: 'LOOM_COSMOS_VECTOR_DATABASE',   value: loomCosmosVectorDatabase }
             { name: 'LOOM_COSMOS_VECTOR_CONTAINER',  value: loomCosmosVectorContainer }
-            { name: 'LOOM_AZURE_MAPS_ACCOUNT',       value: loomAzureMapsAccount }
+            { name: 'LOOM_AZURE_MAPS_ACCOUNT',       value: effectiveMapsAccount }
+            // Account name is not a secret (the key is, and stays in KV /
+            // secretRef). Mirroring it as NEXT_PUBLIC lets the geo-map / map
+            // editors prefill + display the deployed account, so the geo
+            // surfaces verifiably "use the deployed account".
+            { name: 'NEXT_PUBLIC_LOOM_AZURE_MAPS_ACCOUNT', value: effectiveMapsAccount }
             { name: 'LOOM_KUSTO_CLUSTER',            value: !empty(existingAdxClusterName) ? existingAdxClusterName : (adxEnabled ? adxCluster!.outputs.clusterName : '') }
             { name: 'NEXT_PUBLIC_LOOM_KUSTO_CLUSTER', value: !empty(existingAdxClusterName) ? existingAdxClusterName : (adxEnabled ? adxCluster!.outputs.clusterName : '') }
             // Phase 2 — RBAC tenant-admin bootstrap + install-time provisioning targets
@@ -2063,7 +2080,7 @@ module appDeployments 'app-deployments.bicep' = if (containerPlatform == 'contai
           // Azure Maps subscription key — exposed to SPA as NEXT_PUBLIC_
           // so the MapEditor can use the static-map URL. AAD-auth path
           // doesn't need this. Only set when the maps account is wired.
-          !empty(loomAzureMapsAccount) ? [
+          !empty(effectiveMapsAccount) ? [
             { name: 'NEXT_PUBLIC_LOOM_AZURE_MAPS_KEY', secretRef: 'loom-azure-maps-key' }
           ] : [],
           // Posture-refresh Function host key — only when the Function URL is wired.
@@ -2563,7 +2580,7 @@ module appDeployments 'app-deployments.bicep' = if (containerPlatform == 'contai
             { name: 'loom-msal-client-secret', value: loomMsalClientSecret }
             { name: 'session-secret', value: empty(loomSessionSecret) ? guid(resourceGroup().id, 'loom-session-secret-v1') : loomSessionSecret }
           ] : [],
-          !empty(loomAzureMapsAccount) ? [
+          !empty(effectiveMapsAccount) ? [
             // Read from KV at deploy time. The azure-maps module wrote the
             // primary key here as 'loom-azure-maps-primary-key' on the
             // Loom Key Vault.

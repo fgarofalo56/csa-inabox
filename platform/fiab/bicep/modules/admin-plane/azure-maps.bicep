@@ -24,9 +24,9 @@ param location string
 @allowed(['Commercial', 'GCC', 'GCC-High', 'IL5'])
 param boundary string
 
-@description('Azure Maps account SKU. S0 = consumption only; S1 (Standard) = unlimited transactions per second + AAD support.')
+@description('Azure Maps account SKU. S0/S1 are Gen1 (retirement path); G2 is the Gen2 SKU that matches kind:Gen2 (AVM default) and supports AAD + unlimited TPS.')
 @allowed(['S0', 'S1', 'G2'])
-param sku string = 'S1'
+param sku string = 'G2'
 
 @description('Console UAMI principal ID — granted Azure Maps Data Reader.')
 param consolePrincipalId string

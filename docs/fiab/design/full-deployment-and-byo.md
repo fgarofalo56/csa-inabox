@@ -66,7 +66,7 @@ spoke VNet, **Databricks** `adb-loom-default-eastus2`, **Cosmos**
 | Expected (param) | Live | Why it's off | UI impact |
 |---|---|---|---|
 | AI Search **native** (`aiSearchEnabled`) | **NOT deployed** (param `false`, eastus2 capacity exhausted) | reused instead → `search-loom-westus3` + `dlz-aisearch-dev-eastus2` wired | none — reuse covers it |
-| **Azure Maps** account (`azureMapsEnabled=true` default) | **NOT present** in admin RG; `LOOM_AZURE_MAPS_ACCOUNT` unset | the deployed revision predates the maps module, or module errored | geo-map / map editors gate to OSM |
+| **Azure Maps** account (`azureMapsEnabled=true` default) | **NOT present** in admin RG; `LOOM_AZURE_MAPS_ACCOUNT` unset | the deployed revision predates the maps module **and** the bicep self-wiring gap (audit-T94, now fixed: the module output is fed to `LOOM_AZURE_MAPS_ACCOUNT` + `NEXT_PUBLIC_LOOM_AZURE_MAPS_ACCOUNT` automatically; `patch-navigator-env.sh` discovers it on the live path) | geo-map / map editors gate to OSM until the fix redeploys / the patch runs |
 | **Cosmos Gremlin + NoSQL Vector** | DLZ module emits outputs but **top-level `main.bicep` never passes them to admin-plane** | wiring gap in `main.bicep` (outputs exist on `singleDlz`, not forwarded) | graph + vector-store editors gate |
 | **Purview** env (`LOOM_PURVIEW_ACCOUNT`) | **UNSET on live console** | existing Purview is in **DMLZ sub**, not scanned by `patch-navigator-env.sh` | `/admin/security` Purview tab + `/catalog` Purview federation + `register-purview` → 501/503 |
 | **MIP / DLP** (`loomMipEnabled`/`loomDlpEnabled`) | unset (off by default) | requires Graph AppRole admin-consent first | `/admin/security` MIP + DLP tabs → 503 (expected, honest gate) |
@@ -378,13 +378,15 @@ env patches + portal role grants.
 
 ### P1 — close the remaining honest gates
 
-3. **Azure Maps**: deploy a Maps account (Gen2 / G2) in the admin RG, store its
-   primary key in `kv-loom-…` as `loom-azure-maps-primary-key`, then
-   `--set-env-vars LOOM_AZURE_MAPS_ACCOUNT=<name>` + add the
-   `NEXT_PUBLIC_LOOM_AZURE_MAPS_KEY` secretRef. (The `azure-maps.bicep` module
-   already does all of this — the live revision just predates it; a targeted
-   re-run of the admin-plane module or a manual Maps account + env patch both
-   work.) Lights up geo-map / map editors.
+3. **Azure Maps**: now fully automatic on a fresh deploy. `azure-maps.bicep`
+   provisions a Gen2 / `G2` account, writes the primary key to KV as
+   `loom-azure-maps-primary-key`, and (audit-T94) `main.bicep` feeds the module
+   output into `LOOM_AZURE_MAPS_ACCOUNT` + `NEXT_PUBLIC_LOOM_AZURE_MAPS_ACCOUNT`
+   and the `NEXT_PUBLIC_LOOM_AZURE_MAPS_KEY` secretRef — no manual
+   `--set-env-vars` step. For an already-running revision that predates the fix,
+   run `scripts/csa-loom/patch-navigator-env.sh` (it discovers the Maps account
+   + primary key and patches the live console). To bring your own account, set
+   `EXISTING_AZURE_MAPS_ACCOUNT`. Lights up geo-map / map editors.
 4. **Cosmos Gremlin + Vector**: enable `cosmosGraphVectorEnabled` on the DLZ
    Cosmos account (it defaults true — verify the graph/vector containers exist
    on `cosmos-loom-default-mwfaiy3trukkk`), then patch the console:
