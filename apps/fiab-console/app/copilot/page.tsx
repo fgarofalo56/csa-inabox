@@ -19,9 +19,9 @@
 
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import {
-  Title1, Title3, Body1, Caption1, Badge, Button, Spinner, Text,
+  Title1, Body1, Caption1, Badge, Button, Spinner, Text,
   MessageBar, MessageBarBody, MessageBarTitle, MessageBarActions,
-  makeStyles, tokens, mergeClasses,
+  makeStyles, tokens,
 } from '@fluentui/react-components';
 import {
   BotSparkle24Filled, Sparkle20Regular, ArrowRight20Regular,
@@ -273,22 +273,9 @@ export default function CopilotPage() {
     },
   ], []);
 
-  // ── Launched: full-screen shared console (unchanged shared widget) ──────
+  // ── Launched: full-screen shared console (owns its own hero + Back CTA) ──
   if (launched) {
-    return (
-      <div className={styles.consoleWrap}>
-        <div className={styles.consoleBar}>
-          <span className={styles.consoleTitle}>
-            <BotSparkle24Filled className={styles.brandIcon} />
-            <Title3 className={styles.flushTitle}>Loom Copilot</Title3>
-          </span>
-          <Button appearance="subtle" onClick={() => { setLaunched(false); loadSessions(); }}>
-            Back to overview
-          </Button>
-        </div>
-        <CopilotConsoleView />
-      </div>
-    );
+    return <CopilotConsoleView onBack={() => { setLaunched(false); loadSessions(); }} />;
   }
 
   // ── Landing surface ─────────────────────────────────────────────────────
@@ -436,6 +423,8 @@ export default function CopilotPage() {
           <div className={styles.loadingRow}><Spinner size="tiny" /> <Caption1>Loading sessions…</Caption1></div>
         ) : sessions.length === 0 ? (
           <Caption1>No Copilot sessions yet. Launch Copilot and run your first prompt.</Caption1>
+        ) : filteredSessions.length === 0 ? (
+          <Caption1>No sessions match “{sessionQuery}”.</Caption1>
         ) : sessionView === 'tile' ? (
           <TileGrid minTileWidth={300}>
             {filteredSessions.map((sess) => (
