@@ -481,6 +481,111 @@ export async function deployMcpContainerApp(opts: McpDeployOptions): Promise<Con
   return shape(await r.json());
 }
 
+/** A Key Vault-backed Container App secret (per the MCP catalog deploy). */
+export interface AcaSecretRef {
+  /** Secret name as referenced by `secretRef` in env. */
+  name: string;
+  /** Full Key Vault secret URL: `<vaultUrl>/secrets/<secretName>`. */
+  keyVaultUrl: string;
+  /** UAMI resource id that resolves the secret (must hold KV Secrets User). */
+  identity: string;
+}
+
+/** A Container App env entry: a plain value OR a secretRef to an AcaSecretRef. */
+export type AcaEnvVar = { name: string; value: string } | { name: string; secretRef: string };
+
+export interface CreateMcpContainerAppOpts {
+  /** Container App name (DNS-label safe: lowercase letters/digits/dashes). */
+  name: string;
+  /** Managed-environment (CAE) resource id. */
+  environmentId: string;
+  /** Deployment region (ARM `location`). */
+  location: string;
+  /** UAMI resource id assigned to the app (resolves KV secrets + pulls image). */
+  uamiId: string;
+  /** Container image reference. */
+  image: string;
+  /** Internal ingress target port. */
+  targetPort: number;
+  /** Env vars (plain + secretRef). */
+  env: AcaEnvVar[];
+  /** Key Vault-backed secrets. */
+  secrets: AcaSecretRef[];
+  /** Optional entrypoint override. */
+  command?: string[];
+  /** Optional args. */
+  args?: string[];
+  /** Optional ACR/registry login server (for private registries). */
+  registryServer?: string;
+}
+
+/**
+ * Create (PUT) a Container App for a catalog-deployed MCP server. Internal
+ * ingress only (reachable from the console + copilot on the CAE VNet, never
+ * public). Secrets are Key Vault-backed and resolved by the assigned UAMI.
+ *
+ * Real ARM REST — `PUT Microsoft.App/containerApps/{name}`. Returns the shaped
+ * app info; a 201/202 (async create) returns a provisioning placeholder. Throws
+ * AcaArmError verbatim on failure so the route surfaces the precise ARM message.
+ */
+export async function createMcpContainerApp(opts: CreateMcpContainerAppOpts): Promise<ContainerAppInfo> {
+  const cfg = readAcaConfig();
+  const container: any = {
+    name: opts.name,
+    image: opts.image,
+    env: opts.env,
+    resources: { cpu: 0.5, memory: '1Gi' },
+  };
+  if (opts.command && opts.command.length) container.command = opts.command;
+  if (opts.args && opts.args.length) container.args = opts.args;
+
+  const body: any = {
+    location: opts.location,
+    identity: {
+      type: 'UserAssigned',
+      userAssignedIdentities: { [opts.uamiId]: {} },
+    },
+    properties: {
+      environmentId: opts.environmentId,
+      configuration: {
+        activeRevisionsMode: 'Single',
+        ingress: {
+          external: false,
+          targetPort: opts.targetPort,
+          transport: 'auto',
+        },
+        secrets: opts.secrets.map((s) => ({
+          name: s.name,
+          keyVaultUrl: s.keyVaultUrl,
+          identity: s.identity,
+        })),
+        ...(opts.registryServer
+          ? { registries: [{ server: opts.registryServer, identity: opts.uamiId }] }
+          : {}),
+      },
+      template: {
+        containers: [container],
+        scale: { minReplicas: 1, maxReplicas: 2 },
+      },
+    },
+  };
+
+  const r = await callArm(
+    `${appUrl(cfg, opts.name)}?api-version=${ACA_API}`,
+    { method: 'PUT', body: JSON.stringify(body) },
+  );
+  if (!r.ok && r.status !== 201 && r.status !== 202) {
+    throw new AcaArmError(r.status, await r.text(), `createMcpContainerApp(${opts.name}) failed ${r.status}`);
+  }
+  if (r.status === 202) {
+    return {
+      id: opts.name, name: opts.name, location: opts.location,
+      provisioningState: 'Provisioning',
+    };
+  }
+  return shape(await r.json());
+}
+
 // ---------------------------------------------------------------------------
 // MCP Azure Files persistence config (env-wired by admin-plane/main.bicep)
 // ---------------------------------------------------------------------------

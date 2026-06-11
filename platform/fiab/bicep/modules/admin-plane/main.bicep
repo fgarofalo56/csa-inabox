@@ -940,6 +940,7 @@ module keyvault 'keyvault.bicep' = {
     hsmIsolated: keyVaultHsmIsolated
     adminEntraGroupId: adminEntraGroupId
     consolePrincipalId: identity.outputs.uamiConsolePrincipalId
+    mcpPrincipalId: identity.outputs.uamiMcpPrincipalId
     consolePrincipalNeedsCmkRole: consolePrincipalNeedsCmkBind
     skipRoleGrants: skipRoleGrants
     privateEndpointSubnetId: network.outputs.privateEndpointsSubnetId
@@ -1609,6 +1610,18 @@ module appDeployments 'app-deployments.bicep' = if (containerPlatform == 'contai
             // resource id used as the storage account's CMK encryption identity.
             { name: 'LOOM_KEY_VAULT_ID', value: keyvault.outputs.keyVaultId }
             { name: 'LOOM_UAMI_RESOURCE_ID', value: identity.outputs.uamiConsoleId }
+            // MCP browse-catalog + deploy wizard (External MCP Tools). The deploy
+            // route provisions a catalog MCP server as an INTERNAL Container App in
+            // this CAE, wires per-field Key Vault secrets, and registers it for
+            // Copilot. caeId/caeDefaultDomain are '' on the AKS sovereign boundary
+            // (GCC-High / IL5) — the route then surfaces an honest gate. The MCP
+            // UAMI (uami-loom-mcp) resolves the deployed app's KV secrets at runtime
+            // (granted "Key Vault Secrets User" by keyvault.bicep mcpPrincipalId);
+            // the Console UAMI gets "Managed Identity Operator" (mcp-catalog-rbac)
+            // so it can assign that identity to the new app.
+            { name: 'LOOM_ACA_ENV_ID', value: containerPlatformModule.outputs.caeId }
+            { name: 'LOOM_ACA_ENV_DOMAIN', value: containerPlatformModule.outputs.caeDefaultDomain }
+            { name: 'LOOM_MCP_CATALOG_UAMI_ID', value: identity.outputs.uamiMcpId }
             // F4: schedule-time pipeline parameter overrides. KV defaults to the
             // admin-plane vault (Console UAMI already has Secrets Officer there);
             // point at a separate vault by overriding loomParamKeyVaultUri and
@@ -2807,6 +2820,17 @@ param loomVanityDomain string = ''
 // =====================================================================
 module scalingRbac 'scaling-rbac.bicep' = {
   name: 'console-scaling-rbac'
+  params: {
+    consolePrincipalId: identity.outputs.uamiConsolePrincipalId
+    skipRoleGrants: skipRoleGrants
+  }
+}
+
+// MCP browse-catalog + deploy wizard — Console UAMI gets "Managed Identity
+// Operator" so it can assign uami-loom-mcp to catalog-deployed MCP Container
+// Apps (Contributor alone can't attach a user-assigned identity).
+module mcpCatalogRbac 'mcp-catalog-rbac.bicep' = {
+  name: 'console-mcp-catalog-rbac'
   params: {
     consolePrincipalId: identity.outputs.uamiConsolePrincipalId
     skipRoleGrants: skipRoleGrants

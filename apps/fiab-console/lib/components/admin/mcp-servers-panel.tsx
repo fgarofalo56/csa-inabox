@@ -19,11 +19,12 @@ import {
   Button, Dialog, DialogTrigger, DialogContent, DialogBody, DialogTitle,
   Dropdown, Option, Field, Input, Checkbox, Spinner, Badge,
   MessageBar, MessageBarBody, MessageBarTitle,
-  Caption1, Body2, Body1, makeStyles, tokens, Divider,
+  Caption1, Body1, Text, makeStyles, tokens, Divider,
   Table, TableHeader, TableRow, TableHeaderCell, TableBody, TableCell,
 } from '@fluentui/react-components';
-import { Add20Regular, Edit20Regular, Delete20Regular, ArrowClockwise20Regular, Checkmark20Regular, Sparkle20Regular } from '@fluentui/react-icons';
+import { Add20Regular, Edit20Regular, Delete20Regular, ArrowClockwise20Regular, Checkmark20Regular, Sparkle20Regular, Search20Regular, PlugDisconnected24Regular } from '@fluentui/react-icons';
 import { Section } from '@/lib/components/ui/section';
+import { McpCatalogBrowser } from '@/lib/components/admin/mcp-catalog-wizard';
 import type { McpServerConfig, McpServerConfigDoc } from '@/lib/types/mcp-config';
 
 interface BuiltinStatus {
@@ -36,16 +37,10 @@ interface BuiltinStatus {
 }
 
 const useStyles = makeStyles({
-  grid: {
-    display: 'grid',
-    gridTemplateColumns: 'repeat(auto-fit, minmax(280px, 1fr))',
-    gap: tokens.spacingHorizontalL,
-    rowGap: tokens.spacingVerticalL,
-  },
-  hint: { color: tokens.colorNeutralForeground3, fontSize: '12px' },
+  hint: { color: tokens.colorNeutralForeground3, fontSize: tokens.fontSizeBase200 },
   bar: { display: 'flex', gap: tokens.spacingHorizontalM, alignItems: 'center', flexWrap: 'wrap' },
   spacer: { flex: 1 },
-  testStatus: { display: 'flex', alignItems: 'center', gap: tokens.spacingHorizontalXS },
+  testStatus: { display: 'flex', alignItems: 'center', gap: tokens.spacingHorizontalXS, marginTop: tokens.spacingVerticalXXS },
   tableWrap: { overflowX: 'auto' },
   cardGrid: {
     display: 'grid',
@@ -53,17 +48,40 @@ const useStyles = makeStyles({
     gap: tokens.spacingHorizontalM,
     marginTop: tokens.spacingVerticalM,
   },
-  gateDetail: {
-    display: 'block',
-    marginTop: tokens.spacingVerticalXS,
-    color: tokens.colorNeutralForeground3,
-  },
   inlineError: {
     display: 'block',
     marginTop: tokens.spacingVerticalXS,
     color: tokens.colorPaletteRedForeground1,
   },
   meta: { color: tokens.colorNeutralForeground3 },
+  actions: { display: 'flex', gap: tokens.spacingHorizontalXS },
+  sectionHead: {
+    display: 'flex',
+    alignItems: 'center',
+    gap: tokens.spacingHorizontalM,
+    flexWrap: 'wrap',
+    marginTop: tokens.spacingVerticalM,
+    marginBottom: tokens.spacingVerticalS,
+  },
+  filter: { minWidth: '220px', marginLeft: 'auto' },
+  count: { color: tokens.colorNeutralForeground3 },
+  emptyState: {
+    display: 'flex',
+    flexDirection: 'column',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: tokens.spacingVerticalS,
+    paddingTop: tokens.spacingVerticalXXL,
+    paddingBottom: tokens.spacingVerticalXXL,
+    color: tokens.colorNeutralForeground3,
+    textAlign: 'center',
+  },
+  emptyIcon: { fontSize: '32px', color: tokens.colorNeutralForeground4 },
+  nameCell: { display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalXXS },
+  gateDetail: { display: 'block', marginTop: tokens.spacingVerticalXS, color: tokens.colorNeutralForeground3, fontSize: tokens.fontSizeBase200 },
+  errLine: { marginTop: tokens.spacingVerticalXS, color: tokens.colorPaletteRedForeground1, fontSize: tokens.fontSizeBase200 },
+  endpointNote: { fontSize: tokens.fontSizeBase200, color: tokens.colorNeutralForeground3 },
+  toolList: { marginTop: tokens.spacingVerticalS, fontSize: tokens.fontSizeBase200 },
 });
 
 function McpServerForm({
@@ -77,6 +95,7 @@ function McpServerForm({
   onCancel: () => void;
   isSaving: boolean;
 }) {
+  const s = useStyles();
   const [form, setForm] = useState<McpServerConfig>(server ? {
     name: (server as any).name || '',
     endpoint: (server as any).endpoint || '',
@@ -193,7 +212,7 @@ function McpServerForm({
             <MessageBarTitle>Connection successful</MessageBarTitle>
             Found {testResult.toolCount} tool{testResult.toolCount === 1 ? '' : 's'}
             {testResult.tools && testResult.tools.length > 0 && (
-              <div style={{ marginTop: tokens.spacingVerticalS, fontSize: 12 }}>
+              <div className={s.toolList}>
                 {testResult.tools.map((t) => <div key={t.name}>{t.name}</div>)}
               </div>
             )}
@@ -239,6 +258,7 @@ function BuiltinMcpCard({
   onRegister: (config: McpServerConfig) => Promise<void>;
   busy: boolean;
 }) {
+  const s = useStyles();
   const [status, setStatus] = useState<BuiltinStatus | null>(null);
   const [loading, setLoading] = useState(true);
   const [registering, setRegistering] = useState(false);
@@ -263,7 +283,7 @@ function BuiltinMcpCard({
         <MessageBarBody>
           <MessageBarTitle>Loom built-in MCP tools (optional, not provisioned)</MessageBarTitle>
           {status.gate?.message}
-          <div style={{ marginTop: 6, fontSize: 12 }}>
+          <div className={s.gateDetail}>
             Set <code>{status.gate?.envVar}</code> on the console after deploying{' '}
             <code>{status.gate?.deployModule}</code> (see <code>{status.gate?.deploymentDoc}</code>).
           </div>
@@ -295,8 +315,8 @@ function BuiltinMcpCard({
       <MessageBarBody>
         <MessageBarTitle>{status.name || 'Loom built-in tools'}</MessageBarTitle>
         {status.description}{' '}
-        <span style={{ fontSize: 12, color: tokens.colorNeutralForeground3 }}>({status.endpoint})</span>
-        {error && <div style={{ marginTop: 6, color: tokens.colorPaletteRedForeground1, fontSize: 12 }}>{error}</div>}
+        <span className={s.endpointNote}>({status.endpoint})</span>
+        {error && <div className={s.errLine}>{error}</div>}
       </MessageBarBody>
       {alreadyRegistered ? (
         <Badge appearance="tint" color="success">Registered</Badge>
@@ -463,6 +483,7 @@ export function McpServersPanel() {
   const [editingId, setEditingId] = useState<string | null>(null);
   const [showAdd, setShowAdd] = useState(false);
   const [saving, setSaving] = useState(false);
+  const [filter, setFilter] = useState('');
 
   const load = useCallback(async () => {
     setLoading(true); setLoadError(null);
@@ -524,6 +545,18 @@ export function McpServersPanel() {
 
   const editingServer = servers.find((s) => s.serverId === editingId);
 
+  const q = filter.trim().toLowerCase();
+  const filteredServers = useMemo(
+    () =>
+      q
+        ? servers.filter((srv) =>
+            srv.name.toLowerCase().includes(q) ||
+            srv.endpoint.toLowerCase().includes(q) ||
+            (srv.description || '').toLowerCase().includes(q))
+        : servers,
+    [servers, q],
+  );
+
   return (
     <Section title="External MCP Tools">
       <Body1 className={s.hint}>
@@ -541,11 +574,47 @@ export function McpServersPanel() {
 
       <BridgeMcpCard servers={servers} onRegister={(config) => save(undefined, config)} busy={saving} />
 
+      <Divider />
+      <Text weight="semibold">Browse library</Text>
+      <McpCatalogBrowser
+        onDeployed={(server) => setServers((prev) => (prev.some((p) => p.serverId === server.serverId) ? prev : [...prev, server]))}
+      />
+
+      <Divider />
+      <div className={s.sectionHead}>
+        <Text weight="semibold">Registered servers</Text>
+        {servers.length > 0 && (
+          <Caption1 className={s.count}>
+            {q ? `${filteredServers.length} of ${servers.length}` : `${servers.length} server${servers.length === 1 ? '' : 's'}`}
+          </Caption1>
+        )}
+        {servers.length > 0 && (
+          <Input
+            className={s.filter}
+            size="small"
+            value={filter}
+            onChange={(_, d) => setFilter(d.value)}
+            contentBefore={<Search20Regular />}
+            placeholder="Filter by name, endpoint…"
+            aria-label="Filter registered MCP servers"
+          />
+        )}
+      </div>
       {servers.length === 0 ? (
-        <Caption1>No MCP servers registered yet.</Caption1>
+        <div className={s.emptyState}>
+          <PlugDisconnected24Regular className={s.emptyIcon} />
+          <Text weight="semibold">No MCP servers registered yet</Text>
+          <Caption1>Deploy one from the library above, or add an external server manually.</Caption1>
+        </div>
+      ) : filteredServers.length === 0 ? (
+        <div className={s.emptyState}>
+          <Search20Regular className={s.emptyIcon} />
+          <Text weight="semibold">No servers match “{filter}”</Text>
+          <Button appearance="subtle" size="small" onClick={() => setFilter('')}>Clear filter</Button>
+        </div>
       ) : (
         <div className={s.tableWrap}>
-          <Table>
+          <Table aria-label="Registered MCP servers">
             <TableHeader>
               <TableRow>
                 <TableHeaderCell>Name</TableHeaderCell>
@@ -556,11 +625,13 @@ export function McpServersPanel() {
               </TableRow>
             </TableHeader>
             <TableBody>
-              {servers.map((server) => (
+              {filteredServers.map((server) => (
                 <TableRow key={server.serverId}>
                   <TableCell>
-                    <Body2 style={{ fontWeight: tokens.fontWeightSemibold }}>{server.name}</Body2>
-                    {server.description && <Caption1>{server.description}</Caption1>}
+                    <div className={s.nameCell}>
+                      <Text weight="semibold">{server.name}</Text>
+                      {server.description && <Caption1>{server.description}</Caption1>}
+                    </div>
                   </TableCell>
                   <TableCell><Caption1>{server.endpoint.replace(/^https:\/\//, '').slice(0, 40)}</Caption1></TableCell>
                   <TableCell>
@@ -584,18 +655,20 @@ export function McpServersPanel() {
                     )}
                   </TableCell>
                   <TableCell>
-                    <Button
-                      icon={<Edit20Regular />}
-                      size="small"
-                      onClick={() => setEditingId(server.serverId)}
-                      disabled={saving}
-                    >Edit</Button>
-                    <Button
-                      icon={<Delete20Regular />}
-                      size="small"
-                      onClick={() => void deleteServer(server.serverId)}
-                      disabled={saving}
-                    >Delete</Button>
+                    <div className={s.actions}>
+                      <Button
+                        icon={<Edit20Regular />}
+                        size="small"
+                        onClick={() => setEditingId(server.serverId)}
+                        disabled={saving}
+                      >Edit</Button>
+                      <Button
+                        icon={<Delete20Regular />}
+                        size="small"
+                        onClick={() => void deleteServer(server.serverId)}
+                        disabled={saving}
+                      >Delete</Button>
+                    </div>
                   </TableCell>
                 </TableRow>
               ))}

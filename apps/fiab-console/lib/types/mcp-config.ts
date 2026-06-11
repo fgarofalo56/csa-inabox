@@ -24,6 +24,22 @@ export interface McpServerConfig {
   description?: string;
   /** Whether this server is enabled for tool discovery. */
   enabled: boolean;
+  /**
+   * Catalog entry id this server was deployed from (when provisioned via the
+   * MCP browse-catalog + deploy wizard). Empty for manually-registered servers.
+   */
+  catalogId?: string;
+  /**
+   * Non-secret config values captured at deploy time, keyed by configSchema key.
+   * Secret fields are NEVER stored here — only their Key Vault secret names live
+   * in `secretRefs`.
+   */
+  configValues?: Record<string, string>;
+  /**
+   * Key Vault secret NAMES (never values) for each secret configSchema field,
+   * keyed by configSchema key. Resolved at the container runtime via secretRef.
+   */
+  secretRefs?: Record<string, string>;
 }
 
 export interface McpServerConfigDoc extends McpServerConfig {

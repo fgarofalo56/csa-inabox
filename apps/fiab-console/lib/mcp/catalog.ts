@@ -897,3 +897,280 @@ export function secretFields(server: DeployableMcpServer): McpConfigField[] {
 export function requiresKeyVault(server: DeployableMcpServer): boolean {
   return server.configSchema.some((f) => f.secret);
 }
+
+/**
+ * MCP server catalog — the curated library of deployable Model Context Protocol
+ * servers a tenant admin browses in Admin → Tenant settings → External MCP Tools.
+ *
+ * WHAT THIS IS
+ * ------------
+ * Each entry describes a REAL, publicly-distributed container image that exposes
+ * an MCP tool surface over an HTTP/SSE transport, plus a per-server `configSchema`
+ * (one typed field per setting the server needs). The deploy wizard renders one
+ * Fluent control per field; the deploy route provisions the image as an internal
+ * Azure Container App, wiring:
+ *   - `secret: true` fields  → Azure Key Vault secrets (per-field), surfaced to the
+ *     container as a `secretRef` env var. The value NEVER lands in Cosmos.
+ *   - everything else        → plain Container App env vars.
+ * then registers the resulting internal endpoint in the `mcp-servers` Cosmos
+ * container so the Copilot orchestrator discovers its tools automatically — zero
+ * further user config (per the task goal).
+ *
+ * NO-VAPORWARE / NO-FABRIC
+ * ------------------------
+ * Only servers with a real image + a real transport are listed. Entries whose
+ * HTTP transport is community-maintained or still being validated are tagged
+ * `preview: true` so the catalog never presents a tile that silently can't work
+ * (see .claude/rules/no-vaporware.md). Everything here is Azure-native — Container
+ * Apps + Key Vault + Cosmos — with no Microsoft Fabric / Power BI dependency.
+ */
+
+/** A single typed configuration field for a catalog entry. */
+export interface McpDeployConfigField {
+  /** Stable key (used in configValues / secretRefs maps). */
+  key: string;
+  /** Human label shown in the wizard. */
+  label: string;
+  /** Control type → Fluent control: string/number→Input, bool→Switch, enum→Dropdown. */
+  type: 'string' | 'number' | 'bool' | 'enum';
+  /** Required to deploy (wizard blocks until provided). */
+  required?: boolean;
+  /**
+   * Secret flag (THE per-field secret flag). When true the value is written to
+   * Key Vault and surfaced to the container as a secretRef env var; never stored
+   * in Cosmos. When false/absent the value is a plain Container App env var.
+   */
+  secret?: boolean;
+  /** Default value (non-secret only). */
+  default?: string;
+  /** Inline help text. */
+  help?: string;
+  /** Allowed values for type:'enum'. */
+  options?: string[];
+  /** Container env var name this field maps to. */
+  envVar: string;
+}
+
+/** A deployable MCP server in the catalog. */
+export interface McpCatalogEntry {
+  /** Stable id (used as the deploy/catalog key). */
+  id: string;
+  /** Display name. */
+  name: string;
+  /** One-line description. */
+  description: string;
+  /** Category for grouping in the browse grid. */
+  category: 'developer' | 'observability' | 'data' | 'productivity' | 'reference';
+  /** Real, pullable container image reference (registry/repo:tag). */
+  image: string;
+  /** Transport the server speaks. Loom registers an HTTP(S) endpoint. */
+  transport: 'http' | 'sse';
+  /** Ingress target port the server listens on inside the container. */
+  ingressPort: number;
+  /**
+   * Path appended to the internal FQDN to form the MCP endpoint Loom registers
+   * (e.g. '/mcp' → https://<app>.<caeDomain>/mcp). The MCP client appends
+   * `/tools/list` + `/tools/call` to this base.
+   */
+  mcpPath: string;
+  /** Optional container entrypoint override (argv[0]). */
+  command?: string[];
+  /** Optional container args (e.g. to select the HTTP transport). */
+  args?: string[];
+  /** Health probe path (optional). */
+  healthPath?: string;
+  /** Per-field config schema (drives the wizard + secret routing). */
+  configSchema: McpDeployConfigField[];
+  /** Preview = real image, but HTTP transport is community/needs-validation. */
+  preview?: boolean;
+  /** Docs / source link. */
+  docsUrl?: string;
+}
+
+/**
+ * The curated catalog. Keep entries REAL — a tile here must map to a pullable
+ * image with a working HTTP/SSE transport. Tag `preview` when the transport is
+ * community-maintained rather than first-party.
+ */
+export const MCP_DEPLOY_CATALOG: McpCatalogEntry[] = [
+  {
+    id: 'github',
+    name: 'GitHub',
+    description:
+      'Official GitHub MCP server — repositories, issues, pull requests, Actions, ' +
+      'and code search as Copilot tools. Runs in streamable-HTTP mode.',
+    category: 'developer',
+    image: 'ghcr.io/github/github-mcp-server:latest',
+    transport: 'http',
+    ingressPort: 8080,
+    mcpPath: '/mcp',
+    command: ['./github-mcp-server', 'http', '--host', '0.0.0.0', '--port', '8080'],
+    healthPath: '/healthz',
+    docsUrl: 'https://github.com/github/github-mcp-server',
+    configSchema: [
+      {
+        key: 'pat',
+        label: 'GitHub personal access token',
+        type: 'string',
+        required: true,
+        secret: true,
+        envVar: 'GITHUB_PERSONAL_ACCESS_TOKEN',
+        help: 'Fine-grained PAT with the scopes the tools need (repo, issues, actions). Stored in Key Vault.',
+      },
+      {
+        key: 'toolsets',
+        label: 'Enabled toolsets',
+        type: 'enum',
+        options: ['all', 'repos', 'issues', 'pull_requests', 'actions', 'code_security'],
+        default: 'all',
+        envVar: 'GITHUB_TOOLSETS',
+        help: 'Which GitHub toolset group to expose. "all" enables every read/write tool group.',
+      },
+      {
+        key: 'readonly',
+        label: 'Read-only mode',
+        type: 'bool',
+        default: 'true',
+        envVar: 'GITHUB_READ_ONLY',
+        help: 'When on, only read tools are exposed (no write/merge/dispatch).',
+      },
+      {
+        key: 'host',
+        label: 'GitHub Enterprise host (optional)',
+        type: 'string',
+        envVar: 'GITHUB_HOST',
+        help: 'For GitHub Enterprise Server, e.g. https://github.example.com. Leave blank for github.com.',
+      },
+    ],
+  },
+  {
+    id: 'grafana',
+    name: 'Grafana',
+    description:
+      'Grafana MCP server — query dashboards, datasources, Prometheus/Loki, and ' +
+      'incidents as Copilot tools. Runs in streamable-HTTP mode.',
+    category: 'observability',
+    image: 'mcp/grafana:latest',
+    transport: 'http',
+    ingressPort: 8000,
+    mcpPath: '/mcp',
+    args: ['--transport', 'streamable-http', '--address', '0.0.0.0:8000'],
+    healthPath: '/healthz',
+    docsUrl: 'https://github.com/grafana/mcp-grafana',
+    configSchema: [
+      {
+        key: 'url',
+        label: 'Grafana URL',
+        type: 'string',
+        required: true,
+        envVar: 'GRAFANA_URL',
+        help: 'Base URL of your Grafana instance, e.g. https://grafana.example.com.',
+      },
+      {
+        key: 'apiKey',
+        label: 'Grafana service-account token',
+        type: 'string',
+        required: true,
+        secret: true,
+        envVar: 'GRAFANA_API_KEY',
+        help: 'Service-account token with Viewer (or higher). Stored in Key Vault.',
+      },
+    ],
+  },
+  {
+    id: 'fetch',
+    name: 'Web Fetch',
+    description:
+      'Reference MCP "fetch" server — retrieves a URL and converts the page to ' +
+      'markdown for grounding. No credentials required.',
+    category: 'reference',
+    image: 'mcp/fetch:latest',
+    transport: 'sse',
+    ingressPort: 8000,
+    mcpPath: '/sse',
+    args: ['--transport', 'sse'],
+    preview: true,
+    docsUrl: 'https://github.com/modelcontextprotocol/servers/tree/main/src/fetch',
+    configSchema: [
+      {
+        key: 'userAgent',
+        label: 'Custom User-Agent (optional)',
+        type: 'string',
+        envVar: 'FETCH_USER_AGENT',
+        help: 'Override the User-Agent header used for outbound fetches.',
+      },
+      {
+        key: 'ignoreRobots',
+        label: 'Ignore robots.txt',
+        type: 'bool',
+        default: 'false',
+        envVar: 'FETCH_IGNORE_ROBOTS_TXT',
+        help: 'When on, fetches ignore robots.txt restrictions.',
+      },
+    ],
+  },
+  {
+    id: 'time',
+    name: 'Time & Timezones',
+    description:
+      'Reference MCP "time" server — current time, timezone conversion, and date ' +
+      'math as tools. No credentials required.',
+    category: 'reference',
+    image: 'mcp/time:latest',
+    transport: 'sse',
+    ingressPort: 8000,
+    mcpPath: '/sse',
+    args: ['--transport', 'sse'],
+    preview: true,
+    docsUrl: 'https://github.com/modelcontextprotocol/servers/tree/main/src/time',
+    configSchema: [
+      {
+        key: 'localTimezone',
+        label: 'Local timezone (optional)',
+        type: 'string',
+        envVar: 'LOCAL_TIMEZONE',
+        help: 'IANA timezone (e.g. America/New_York) used as the default for "now".',
+      },
+    ],
+  },
+];
+
+/** Lookup a catalog entry by id. */
+export function getCatalogEntry(id: string): McpCatalogEntry | undefined {
+  return MCP_DEPLOY_CATALOG.find((e) => e.id === id);
+}
+
+/**
+ * Validate + coerce a wizard's field values against an entry's configSchema.
+ * Returns the typed value map (strings — Container App env values are strings)
+ * or throws with a precise message naming the first invalid field. Pure — no
+ * Azure SDK — so it is unit-testable.
+ */
+export function validateConfigValues(
+  entry: McpCatalogEntry,
+  input: Record<string, unknown>,
+): Record<string, string> {
+  const out: Record<string, string> = {};
+  for (const f of entry.configSchema) {
+    const raw = input?.[f.key];
+    const has = raw !== undefined && raw !== null && String(raw).trim() !== '';
+    if (!has) {
+      if (f.required) throw new Error(`Field "${f.label}" is required.`);
+      if (f.default !== undefined) out[f.key] = f.default;
+      continue;
+    }
+    const v = String(raw).trim();
+    if (f.type === 'number' && Number.isNaN(Number(v))) {
+      throw new Error(`Field "${f.label}" must be a number.`);
+    }
+    if (f.type === 'bool' && v !== 'true' && v !== 'false') {
+      throw new Error(`Field "${f.label}" must be true or false.`);
+    }
+    if (f.type === 'enum' && f.options && !f.options.includes(v)) {
+      throw new Error(`Field "${f.label}" must be one of: ${f.options.join(', ')}.`);
+    }
+    out[f.key] = v;
+  }
+  return out;
+}
+

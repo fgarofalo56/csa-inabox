@@ -13,11 +13,13 @@ import {
   DefaultAzureCredential,
   ManagedIdentityCredential,
 } from '@azure/identity';
+import { kvScope, kvSuffix } from './cloud-endpoints';
 import type { McpToolsListResponse, McpToolsCallRequest, McpToolsCallResponse } from '../types/mcp-config';
 
 // Resolve Key Vault secrets over the KV REST API (no @azure/keyvault-secrets
 // dependency) using the same UAMI→DefaultAzureCredential chain every Loom
-// Azure client uses. KV secret scope is https://vault.azure.net/.default.
+// Azure client uses. KV host suffix + scope are sovereign-cloud aware (Gov uses
+// *.vault.usgovcloudapi.net + the matching scope) via cloud-endpoints helpers.
 const uamiClientId = process.env.LOOM_UAMI_CLIENT_ID || process.env.AZURE_CLIENT_ID;
 const kvCredential = uamiClientId
   ? new ChainedTokenCredential(new ManagedIdentityCredential({ clientId: uamiClientId }), new DefaultAzureCredential())
@@ -36,16 +38,16 @@ export async function resolveAuthHeader(
   if (authMethod === 'key-vault') {
     const parts = authValue.split('/');
     const secretName = parts.pop() || authValue;
-    // Vault URL: explicit "https://..." prefix in the ref, else the named vault,
-    // else LOOM_KEY_VAULT_URL.
-    let vaultUrl = process.env.LOOM_KEY_VAULT_URL || '';
+    // Vault URL: explicit "https://..." prefix in the ref, else the named vault
+    // (sovereign-cloud-aware suffix), else LOOM_KEY_VAULT_URL / LOOM_KEY_VAULT_URI.
+    let vaultUrl = process.env.LOOM_KEY_VAULT_URL || process.env.LOOM_KEY_VAULT_URI || '';
     if (parts.length) {
       const head = parts.join('/');
-      vaultUrl = head.startsWith('http') ? head : `https://${head}.vault.azure.net`;
+      vaultUrl = head.startsWith('http') ? head : `https://${head}.${kvSuffix()}`;
     }
     if (!vaultUrl) throw new Error('LOOM_KEY_VAULT_URL not set for MCP Key Vault auth');
     try {
-      const tok = await kvCredential.getToken('https://vault.azure.net/.default');
+      const tok = await kvCredential.getToken(kvScope());
       const res = await fetch(`${vaultUrl.replace(/\/$/, '')}/secrets/${encodeURIComponent(secretName)}?api-version=7.4`, {
         headers: { authorization: `Bearer ${tok?.token}` },
         cache: 'no-store',
