@@ -57,6 +57,24 @@ const useStyles = makeStyles({
   bar: { display: 'flex', gap: tokens.spacingHorizontalM, alignItems: 'center', flexWrap: 'wrap' },
   spacer: { flex: 1 },
   dialogGrid: { display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalM, minWidth: '420px' },
+  actions: { display: 'flex', gap: tokens.spacingHorizontalXS, flexWrap: 'wrap' },
+  cellStack: { display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalXXS },
+  gateVars: { marginTop: tokens.spacingVerticalXS, fontSize: '12px' },
+  code: {
+    fontFamily: tokens.fontFamilyMonospace,
+    backgroundColor: tokens.colorNeutralBackground3,
+    padding: `0 ${tokens.spacingHorizontalXS}`,
+    borderRadius: tokens.borderRadiusSmall,
+  },
+  empty: {
+    display: 'flex',
+    flexDirection: 'column',
+    alignItems: 'center',
+    gap: tokens.spacingVerticalXS,
+    padding: tokens.spacingVerticalXXL,
+    color: tokens.colorNeutralForeground3,
+    textAlign: 'center',
+  },
 });
 
 function egressBadge(egress: CatalogEntry['egress']) {
@@ -200,8 +218,14 @@ export function McpCatalogPanel({
             <MessageBarTitle>Deploy not configured</MessageBarTitle>
             {gate.message}
             {gate.missing.length > 0 && (
-              <div style={{ marginTop: 6, fontSize: 12 }}>
-                Set <code>{gate.missing.join('</code>, <code>')}</code> on the loom-console container app.
+              <div className={s.gateVars}>
+                Set{' '}
+                {gate.missing.map((v, i) => (
+                  <span key={v}>
+                    {i > 0 ? ', ' : ''}<code className={s.code}>{v}</code>
+                  </span>
+                ))}{' '}
+                on the loom-console container app.
               </div>
             )}
           </MessageBarBody>
@@ -227,8 +251,10 @@ export function McpCatalogPanel({
                 return (
                   <TableRow key={server.serverId}>
                     <TableCell>
-                      <Body1Strong>{server.name}</Body1Strong>
-                      <Caption1>{server.deployment?.image}</Caption1>
+                      <div className={s.cellStack}>
+                        <Body1Strong>{server.name}</Body1Strong>
+                        <Caption1>{server.deployment?.image}</Caption1>
+                      </div>
                     </TableCell>
                     <TableCell><Caption1>{server.deployment?.containerAppName}</Caption1></TableCell>
                     <TableCell>
@@ -238,18 +264,20 @@ export function McpCatalogPanel({
                       )}
                     </TableCell>
                     <TableCell>
-                      <Button
-                        icon={<ArrowClockwise20Regular />}
-                        size="small"
-                        onClick={() => void refreshStatus(server)}
-                        disabled={busyId === server.serverId}
-                      >Status</Button>
-                      <Button
-                        icon={<Delete20Regular />}
-                        size="small"
-                        onClick={() => void teardown(server)}
-                        disabled={busyId === server.serverId}
-                      >Delete</Button>
+                      <div className={s.actions}>
+                        <Button
+                          icon={<ArrowClockwise20Regular />}
+                          size="small"
+                          onClick={() => void refreshStatus(server)}
+                          disabled={busyId === server.serverId}
+                        >Status</Button>
+                        <Button
+                          icon={<Delete20Regular />}
+                          size="small"
+                          onClick={() => void teardown(server)}
+                          disabled={busyId === server.serverId}
+                        >Delete</Button>
+                      </div>
                     </TableCell>
                   </TableRow>
                 );
@@ -260,39 +288,49 @@ export function McpCatalogPanel({
       )}
 
       {/* Catalog */}
-      <div className={s.tableWrap}>
-        <Table>
-          <TableHeader>
-            <TableRow>
-              <TableHeaderCell>Server</TableHeaderCell>
-              <TableHeaderCell>Egress</TableHeaderCell>
-              <TableHeaderCell>License</TableHeaderCell>
-              <TableHeaderCell>Deploy</TableHeaderCell>
-            </TableRow>
-          </TableHeader>
-          <TableBody>
-            {catalog.map((entry) => (
-              <TableRow key={entry.id}>
-                <TableCell>
-                  <Body1Strong>{entry.name}</Body1Strong>
-                  <Caption1>{entry.description}</Caption1>
-                </TableCell>
-                <TableCell>{egressBadge(entry.egress)}</TableCell>
-                <TableCell><Caption1>{entry.license} · {entry.maintainer}</Caption1></TableCell>
-                <TableCell>
-                  <Button
-                    icon={<CloudArrowUp20Regular />}
-                    size="small"
-                    appearance="primary"
-                    disabled={!deployConfigured}
-                    onClick={() => openDeploy(entry)}
-                  >Deploy</Button>
-                </TableCell>
+      {catalog.length === 0 ? (
+        <div className={s.empty}>
+          <CloudArrowUp20Regular />
+          <Body2>No catalog servers are available in this deployment.</Body2>
+          <Caption1>The vetted allow-list ships with Loom; try refreshing.</Caption1>
+        </div>
+      ) : (
+        <div className={s.tableWrap}>
+          <Table>
+            <TableHeader>
+              <TableRow>
+                <TableHeaderCell>Server</TableHeaderCell>
+                <TableHeaderCell>Egress</TableHeaderCell>
+                <TableHeaderCell>License</TableHeaderCell>
+                <TableHeaderCell>Deploy</TableHeaderCell>
               </TableRow>
-            ))}
-          </TableBody>
-        </Table>
-      </div>
+            </TableHeader>
+            <TableBody>
+              {catalog.map((entry) => (
+                <TableRow key={entry.id}>
+                  <TableCell>
+                    <div className={s.cellStack}>
+                      <Body1Strong>{entry.name}</Body1Strong>
+                      <Caption1>{entry.description}</Caption1>
+                    </div>
+                  </TableCell>
+                  <TableCell>{egressBadge(entry.egress)}</TableCell>
+                  <TableCell><Caption1>{entry.license} · {entry.maintainer}</Caption1></TableCell>
+                  <TableCell>
+                    <Button
+                      icon={<CloudArrowUp20Regular />}
+                      size="small"
+                      appearance="primary"
+                      disabled={!deployConfigured}
+                      onClick={() => openDeploy(entry)}
+                    >Deploy</Button>
+                  </TableCell>
+                </TableRow>
+              ))}
+            </TableBody>
+          </Table>
+        </div>
+      )}
 
       <div className={s.bar}>
         <div className={s.spacer} />
