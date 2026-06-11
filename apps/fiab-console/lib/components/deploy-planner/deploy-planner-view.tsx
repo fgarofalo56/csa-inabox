@@ -25,11 +25,14 @@ import {
   Button, Badge, Caption1, Subtitle2, Body1, Input, Dropdown, Option, Field, Tooltip,
   Dialog, DialogSurface, DialogBody, DialogTitle, DialogContent, DialogActions,
   MessageBar, MessageBarBody, MessageBarTitle, Spinner, Textarea, SpinButton,
+  Table, TableHeader, TableRow, TableHeaderCell, TableBody, TableCell, TableCellLayout,
+  Divider, Link,
   makeStyles, tokens,
 } from '@fluentui/react-components';
 import {
   Add20Regular, Save20Regular, ArrowDownload20Regular, Delete20Regular, Search16Regular,
   ChevronDown20Regular, ChevronRight20Regular, CheckmarkCircle20Regular, Settings20Regular,
+  Money20Regular, Open16Regular,
 } from '@fluentui/react-icons';
 import { SubscriptionNode, DomainNode, ServiceNode, ServiceIconChip } from './deploy-plan-nodes';
 import {
@@ -40,9 +43,23 @@ import {
 import { iconUrl } from '../ui/item-type-visual';
 import { planToBicepparam } from './bicepparam';
 import { validatePlan, parseServiceNodeId, type PlanIssue } from './plan-validation';
+import {
+  pricingCalculatorUrl, serviceDetailsUrl, breakdownToCsv, breakdownToJson, downloadText,
+} from './pricing-calculator-link';
+import type { CostSummary } from './cost-estimate';
 import type { PlanSubscription, ConfigValue } from './types';
 
 const nodeTypes: NodeTypes = { subscription: SubscriptionNode, domain: DomainNode, service: ServiceNode };
+
+/** Format a monthly figure as a whole-dollar currency string (no cents noise). */
+function fmtMoney(v: number, currency: string): string {
+  const n = Number.isFinite(v) ? v : 0;
+  try {
+    return new Intl.NumberFormat('en-US', { style: 'currency', currency: currency || 'USD', maximumFractionDigits: n < 10 ? 2 : 0 }).format(n);
+  } catch {
+    return `${currency || 'USD'} ${n.toFixed(2)}`;
+  }
+}
 
 // layout constants
 const SUB_PAD_X = 16, SUB_HEADER = 36, SUB_GAP = 28, SUB_BOTTOM = 16;
@@ -229,6 +246,43 @@ const useStyles = makeStyles({
     display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalXS,
   },
   spacer: { flex: 1 },
+  // ---- cost-estimate dialog ----
+  // Bound the report height so a many-domain plan scrolls inside the dialog
+  // instead of pushing the action bar off-screen.
+  costScroll: {
+    maxHeight: '64vh', overflowY: 'auto',
+    paddingRight: tokens.spacingHorizontalXS,
+  },
+  costBody: { display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalM },
+  costDomain: {
+    display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalXS,
+    paddingTop: tokens.spacingVerticalS, paddingBottom: tokens.spacingVerticalS,
+    paddingLeft: tokens.spacingHorizontalM, paddingRight: tokens.spacingHorizontalM,
+    borderRadius: tokens.borderRadiusMedium,
+    border: `1px solid ${tokens.colorNeutralStroke2}`,
+    backgroundColor: tokens.colorNeutralBackground1,
+  },
+  costDomainHead: { display: 'flex', alignItems: 'baseline', gap: tokens.spacingHorizontalS },
+  costDomainTotal: { marginLeft: 'auto', fontWeight: tokens.fontWeightSemibold },
+  costTotalRow: {
+    display: 'flex', alignItems: 'center', gap: tokens.spacingHorizontalS,
+    paddingTop: tokens.spacingVerticalS, paddingBottom: tokens.spacingVerticalS,
+    paddingLeft: tokens.spacingHorizontalM, paddingRight: tokens.spacingHorizontalM,
+    borderRadius: tokens.borderRadiusMedium,
+    backgroundColor: tokens.colorBrandBackground2,
+    border: `1px solid ${tokens.colorBrandStroke2}`,
+  },
+  costGrand: {
+    marginLeft: 'auto',
+    fontSize: tokens.fontSizeBase600, fontWeight: tokens.fontWeightBold,
+    color: tokens.colorBrandForeground1,
+  },
+  costMuted: { color: tokens.colorNeutralForeground3 },
+  costSku: { fontSize: tokens.fontSizeBase200 },
+  costUnit: { fontSize: tokens.fontSizeBase200, color: tokens.colorNeutralForeground3 },
+  costFootnote: { color: tokens.colorNeutralForeground3, fontStyle: 'italic' },
+  costUnest: { display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalXXS },
+  costUnestList: { marginTop: tokens.spacingVerticalXS, marginBottom: 0, paddingLeft: tokens.spacingHorizontalXXL },
 });
 
 const MIME = 'application/x-loom-service';
@@ -254,6 +308,11 @@ function PlannerInner() {
     });
   }, []);
   const [exportSub, setExportSub] = useState<PlanSubscription | null>(null);
+  const [costOpen, setCostOpen] = useState(false);
+  const [costSub, setCostSub] = useState<PlanSubscription | null>(null);
+  const [costSummary, setCostSummary] = useState<CostSummary | null>(null);
+  const [costBusy, setCostBusy] = useState(false);
+  const [costErr, setCostErr] = useState<string | null>(null);
   const rectsRef = useRef<DomainRect[]>([]);
 
   // ---- load ----
@@ -455,6 +514,21 @@ function PlannerInner() {
     finally { setBusy(false); }
   }, [subs]);
 
+  // ---- estimate cost (public Azure Retail Prices API) ----
+  const estimateCost = useCallback(async (sub: PlanSubscription) => {
+    setCostSub(sub); setCostOpen(true); setCostBusy(true); setCostErr(null); setCostSummary(null);
+    try {
+      const r = await fetch('/api/admin/deploy-plan/cost-estimate', {
+        method: 'POST', headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ subscription: sub }),
+      });
+      const j = await r.json();
+      if (!j.ok) throw new Error(j.error || 'cost estimate failed');
+      setCostSummary(j.summary as CostSummary);
+    } catch (e: any) { setCostErr(e?.message || String(e)); }
+    finally { setCostBusy(false); }
+  }, []);
+
   const q = query.trim().toLowerCase();
   const matches = (def: ServiceDef) =>
     (catFilter === 'all' || def.category === catFilter) &&
@@ -481,7 +555,8 @@ function PlannerInner() {
           drag from a service&apos;s right edge to another to record a dependency. Save persists to Cosmos. To
           deploy, use <strong>Export bicepparam</strong> on a subscription, then run
           {' '}<code>az deployment sub create -f platform/fiab/bicep/main.bicep -p &lt;file&gt;.bicepparam</code>
-          {' '}or trigger the deploy-fiab workflow. Domains come from{' '}
+          {' '}or trigger the deploy-fiab workflow. <strong>Estimate cost</strong> prices the selected
+          subscription against the public Azure Retail Prices API (best-effort list price). Domains come from{' '}
           <a href="/admin/domains">Admin → Domains</a>.
         </MessageBarBody>
       </MessageBar>
@@ -500,6 +575,9 @@ function PlannerInner() {
           Validate{issues.length ? ` (${errorCount} error${errorCount === 1 ? '' : 's'}, ${issues.length - errorCount} warning${issues.length - errorCount === 1 ? '' : 's'})` : ' ✓'}
         </Button>
         <div className={s.spacer} />
+        <Button icon={<Money20Regular />} disabled={!selectedSub} onClick={() => selectedSub && estimateCost(selectedSub)}>
+          Estimate cost
+        </Button>
         <Button icon={<ArrowDownload20Regular />} disabled={!selectedSub} onClick={() => selectedSub && setExportSub(selectedSub)}>
           Export bicepparam
         </Button>
@@ -757,6 +835,156 @@ function PlannerInner() {
             <DialogActions>
               <Button onClick={() => { if (exportSub) navigator.clipboard?.writeText(planToBicepparam(exportSub)); }}>Copy</Button>
               <Button appearance="primary" onClick={() => setExportSub(null)}>Close</Button>
+            </DialogActions>
+          </DialogBody>
+        </DialogSurface>
+      </Dialog>
+
+      {/* cost-estimate report dialog */}
+      <Dialog open={costOpen} onOpenChange={(_, d) => { if (!d.open) setCostOpen(false); }}>
+        <DialogSurface style={{ maxWidth: 940, width: '94vw' }}>
+          <DialogBody>
+            <DialogTitle>Estimated monthly cost — {costSub?.name}</DialogTitle>
+            <DialogContent className={s.costScroll}>
+              {costBusy && <Spinner label="Pricing the plan against the Azure Retail Prices API…" />}
+              {costErr && (
+                <MessageBar intent="error"><MessageBarBody>
+                  <MessageBarTitle>Cost estimate failed</MessageBarTitle>{costErr}
+                </MessageBarBody></MessageBar>
+              )}
+              {!costBusy && !costErr && costSummary && (
+                <div className={s.costBody}>
+                  <MessageBar intent="info"><MessageBarBody>
+                    <MessageBarTitle>Best-effort list-price estimate</MessageBarTitle>
+                    Computed from the public <strong>Azure Retail Prices API</strong> for{' '}
+                    <code>{costSummary.region}</code> ({costSummary.boundary}), in {costSummary.currency}.
+                    {costSummary.source === 'fallback-list-price' && ' Live API was unreachable — showing cached Azure list prices.'}
+                    {costSummary.source === 'mixed' && ' Some rows fell back to cached Azure list prices (labelled below).'}
+                    {' '}Each row is a single <em>representative</em> SKU at on-demand list price — not an exact bill.
+                  </MessageBarBody></MessageBar>
+
+                  {costSummary.govDisclaimer && (
+                    <MessageBar intent="warning"><MessageBarBody>
+                      <MessageBarTitle>Azure Government pricing differs</MessageBarTitle>
+                      The Retail Prices API has no public Azure Government endpoint, so these figures are{' '}
+                      <strong>Commercial list prices for reference only</strong>. Use the Azure Government pricing
+                      pages or your EA price sheet for authoritative Gov ({costSummary.boundary}) cost.
+                    </MessageBarBody></MessageBar>
+                  )}
+
+                  {costSummary.byDomain.map((dom) => (
+                    <div key={dom.domainId} className={s.costDomain}>
+                      <div className={s.costDomainHead}>
+                        <Subtitle2>{dom.name}</Subtitle2>
+                        <span className={s.costDomainTotal}>
+                          {fmtMoney(dom.monthly, costSummary.currency)}/mo
+                        </span>
+                      </div>
+                      {dom.rows.length === 0 ? (
+                        <Caption1 className={s.costMuted}>No priced services in this domain.</Caption1>
+                      ) : (
+                        <Table size="small" aria-label={`Cost breakdown for ${dom.name}`}>
+                          <TableHeader>
+                            <TableRow>
+                              <TableHeaderCell>Service</TableHeaderCell>
+                              <TableHeaderCell>Representative SKU</TableHeaderCell>
+                              <TableHeaderCell>Unit price</TableHeaderCell>
+                              <TableHeaderCell>Monthly</TableHeaderCell>
+                            </TableRow>
+                          </TableHeader>
+                          <TableBody>
+                            {dom.rows.map((r) => (
+                              <TableRow key={`${dom.domainId}:${r.key}`}>
+                                <TableCell>
+                                  <TableCellLayout
+                                    media={<ServiceIconChip def={serviceByKey(r.key) as ServiceDef} vis={serviceVisual(r.key)} Glyph={serviceVisual(r.key).glyph} remote={iconUrl(r.key)} size={22} iconPx={13} radius={5} />}
+                                  >
+                                    {r.label}
+                                    {r.source === 'fallback-list-price' && (
+                                      <Badge size="tiny" appearance="outline" color="warning" style={{ marginLeft: 6 }}>list</Badge>
+                                    )}
+                                  </TableCellLayout>
+                                </TableCell>
+                                <TableCell>
+                                  <Tooltip content={r.assumed} relationship="description">
+                                    <span className={s.costSku}>
+                                      {r.sku}{' '}
+                                      {r.pricingDetailsUrl && (
+                                        <Link href={serviceDetailsUrl(r)} target="_blank" rel="noreferrer" aria-label={`${r.label} pricing details`}>
+                                          <Open16Regular style={{ verticalAlign: 'middle' }} />
+                                        </Link>
+                                      )}
+                                    </span>
+                                  </Tooltip>
+                                </TableCell>
+                                <TableCell>
+                                  <span className={s.costUnit}>
+                                    {fmtMoney(r.unitPrice, costSummary.currency)} / {r.unit}
+                                  </span>
+                                </TableCell>
+                                <TableCell><strong>{fmtMoney(r.monthly, costSummary.currency)}</strong></TableCell>
+                              </TableRow>
+                            ))}
+                          </TableBody>
+                        </Table>
+                      )}
+                    </div>
+                  ))}
+
+                  <Divider />
+                  <div className={s.costTotalRow}>
+                    <Subtitle2>Estimated total</Subtitle2>
+                    <span className={s.costGrand}>
+                      {fmtMoney(costSummary.total, costSummary.currency)}/mo
+                    </span>
+                  </div>
+
+                  {costSummary.unestimated.length > 0 && (
+                    <div className={s.costUnest}>
+                      <Caption1 style={{ fontWeight: tokens.fontWeightSemibold }}>Not estimated ({costSummary.unestimated.length})</Caption1>
+                      <ul className={s.costUnestList}>
+                        {costSummary.unestimated.map((u) => (
+                          <li key={u.key}>
+                            <Caption1>{u.label} — <span className={s.costMuted}>{u.reason}</span></Caption1>
+                          </li>
+                        ))}
+                      </ul>
+                    </div>
+                  )}
+
+                  <Caption1 className={s.costFootnote}>
+                    Excludes reserved-instance / savings-plan discounts, regional differential, egress, storage,
+                    and SLA surcharges. For an authoritative quote use the Azure Pricing Calculator (the deep-link
+                    opens the tool — it does not auto-fill; download the breakdown below to transcribe or attach it).
+                  </Caption1>
+                </div>
+              )}
+            </DialogContent>
+            <DialogActions>
+              <Button
+                icon={<Open16Regular />}
+                as="a"
+                href={pricingCalculatorUrl(costSummary?.boundary || costSub?.boundary)}
+                target="_blank"
+                rel="noreferrer"
+              >
+                Open Azure Pricing Calculator
+              </Button>
+              <Button
+                icon={<ArrowDownload20Regular />}
+                disabled={!costSummary}
+                onClick={() => costSummary && downloadText(`${(costSub?.name || 'plan').toLowerCase().replace(/[^a-z0-9]+/g, '-')}-cost-estimate.csv`, breakdownToCsv(costSummary), 'text/csv')}
+              >
+                Download CSV
+              </Button>
+              <Button
+                icon={<ArrowDownload20Regular />}
+                disabled={!costSummary}
+                onClick={() => costSummary && downloadText(`${(costSub?.name || 'plan').toLowerCase().replace(/[^a-z0-9]+/g, '-')}-cost-estimate.json`, breakdownToJson(costSummary), 'application/json')}
+              >
+                Download JSON
+              </Button>
+              <Button appearance="primary" onClick={() => setCostOpen(false)}>Close</Button>
             </DialogActions>
           </DialogBody>
         </DialogSurface>

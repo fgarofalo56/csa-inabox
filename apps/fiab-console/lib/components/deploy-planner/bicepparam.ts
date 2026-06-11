@@ -15,7 +15,11 @@ import {
 } from './service-catalog';
 import type { PlanSubscription, ConfigValue } from './types';
 
-const BOUNDARY_DEFAULT_REGION: Record<string, string> = {
+/**
+ * Default `armRegionName` per boundary. Exported so the cost-estimate route
+ * resolves the same region the bicepparam export would deploy into.
+ */
+export const BOUNDARY_DEFAULT_REGION: Record<string, string> = {
   'Commercial': 'eastus2',
   'GCC': 'usgovvirginia',
   'GCC-High': 'usgovvirginia',
