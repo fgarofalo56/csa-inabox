@@ -5,7 +5,7 @@ export default function RealTimeHubPage() {
   return (
     <PageShell
       title="Real-Time hub"
-      subtitle="The single place to discover and connect all streaming data across your tenant — every eventstream and KQL table, plus Get events to connect Microsoft, Fabric, Azure, and external sources."
+      subtitle="Your DEPLOYED streams catalog — every Loom eventstream and KQL table, with preview, test, endpoints, and open-editor actions. Use Connect a source to add Microsoft, Azure, and external sources. To discover raw Azure sources across all subscriptions, see the RTI catalog."
     >
       <RealTimeHubView />
     </PageShell>

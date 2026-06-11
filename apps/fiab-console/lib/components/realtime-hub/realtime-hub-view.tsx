@@ -15,10 +15,14 @@
  *    (Data, Type, Source item, Workspace) and per-row actions (Preview data,
  *    Endpoints, Open eventstream/KQL DB). Built on the shared LoomDataTable
  *    (sortable / resizable / per-column filter) with colour-coded type icons.
- *  - Preview flyout: recent events for a stream/table via the real Kusto
- *    query path (/api/realtime-hub/preview).
- *  - Endpoints flyout: live connection endpoints from the eventstream
- *    definition (/api/realtime-hub/endpoints).
+ *  - Preview drawer: recent events for a KQL table via the real Kusto query
+ *    path (/api/realtime-hub/preview) — shared StreamPreviewDrawer.
+ *  - Endpoints drawer: live connection endpoints from the eventstream
+ *    definition (/api/realtime-hub/endpoints) — shared StreamEndpointsDrawer.
+ *
+ * This page is the DEPLOYED-streams catalog (your eventstreams + KQL tables).
+ * To DISCOVER and connect raw Azure sources across every subscription, use the
+ * RTI catalog (/rti-hub) — cross-linked below.
  *
  * Every control calls a real BFF route backed by real Fabric/Kusto REST.
  * When the Console UAMI isn't authorized in the Fabric tenant, an honest
@@ -28,15 +32,14 @@
 import { useEffect, useMemo, useState } from 'react';
 import Link from 'next/link';
 import {
-  Spinner, Badge, Button, MessageBar, MessageBarBody, MessageBarTitle,
-  Menu, MenuTrigger, MenuPopover, MenuList, MenuItem, Drawer, DrawerHeader,
-  DrawerHeaderTitle, DrawerBody, Caption1, Subtitle2, Body1, Field, Input,
-  makeStyles, mergeClasses, tokens,
+  Spinner, Badge, Button, Link as FluentLink, MessageBar, MessageBarBody, MessageBarTitle,
+  Menu, MenuTrigger, MenuPopover, MenuList, MenuItem,
+  Caption1, Input, makeStyles, tokens,
 } from '@fluentui/react-components';
 import {
   Search20Regular, MoreHorizontal20Regular, Eye20Regular,
-  PlugConnected20Regular, Flow20Regular, Dismiss20Regular, ArrowSync20Regular,
-  Pulse24Regular, Flash24Regular, PlugConnected24Regular, Flow24Regular,
+  PlugConnected20Regular, Flow20Regular, ArrowSync20Regular,
+  Pulse24Regular, Flash24Regular,
 } from '@fluentui/react-icons';
 import { SignInRequired } from '@/lib/components/sign-in-required';
 import { Section } from '@/lib/components/ui/section';
@@ -48,6 +51,8 @@ import { TileGrid } from '@/lib/components/ui/tile-grid';
 import { ConnectSourceDialog } from './connect-source-dialog';
 import { SourceGallery } from './source-gallery';
 import { SOURCE_CONNECTORS, type SourceConnector } from './source-catalog';
+import { StreamPreviewDrawer } from './stream-preview-drawer';
+import { StreamEndpointsDrawer } from './stream-endpoints-drawer';
 
 interface DataStreamRow {
   id: string; name: string; dataType: 'stream' | 'table';
@@ -58,7 +63,6 @@ interface StreamsResponse {
   warnings?: Array<{ workspace: string; error: string }>;
   error?: string; hint?: string;
 }
-interface EndpointRow { name: string; role: string; type?: string; properties?: Record<string, unknown>; }
 
 const LS_REALTIME_STREAMS_VIEW = 'loom.realtime-hub.streams.viewMode.v1';
 
@@ -92,65 +96,6 @@ const useStyles = makeStyles({
     borderRadius: tokens.borderRadiusMedium,
   },
   dataName: { overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', fontWeight: tokens.fontWeightSemibold },
-  drawerSection: { marginBottom: tokens.spacingVerticalM },
-  kv: { fontFamily: 'monospace', fontSize: '12px', whiteSpace: 'pre-wrap', wordBreak: 'break-all' },
-  // Section-actions row holding the view toggle + refresh.
-  sectionActions: {
-    display: 'inline-flex', alignItems: 'center', gap: tokens.spacingHorizontalS,
-  },
-  // Inline-flex wrapper for a Section title with a trailing count badge.
-  sectionTitleRow: {
-    display: 'inline-flex', alignItems: 'center', gap: tokens.spacingHorizontalS,
-  },
-  // Caption above the source gallery.
-  introCaption: {
-    display: 'block', marginBottom: tokens.spacingVerticalM, color: tokens.colorNeutralForeground3,
-  },
-  // Strip the default anchor underline on Link-wrapped menu items.
-  linkReset: { textDecoration: 'none' },
-  // Top-level infra-gate / warning message bars.
-  msgBar: { marginBottom: tokens.spacingVerticalL },
-  // Empty-state card for the "All data streams" section.
-  emptyState: {
-    padding: tokens.spacingVerticalXXL, borderRadius: tokens.borderRadiusXLarge,
-    border: `1px dashed ${tokens.colorNeutralStroke2}`,
-    backgroundColor: tokens.colorNeutralBackground2, color: tokens.colorNeutralForeground2,
-    fontSize: '14px', textAlign: 'center', lineHeight: 1.6,
-  },
-  // Spacing helpers inside the drawers (replace inline marginTop styles).
-  drawerSpacerS: { marginTop: tokens.spacingVerticalS },
-  drawerSpacerM: { marginTop: tokens.spacingVerticalM },
-  resultWrap: {
-    overflowX: 'auto', maxHeight: '420px', overflowY: 'auto',
-    marginTop: tokens.spacingVerticalS,
-    border: `1px solid ${tokens.colorNeutralStroke2}`,
-    borderRadius: tokens.borderRadiusMedium,
-  },
-  // Endpoint card in the Endpoints drawer.
-  endpointCard: {
-    marginTop: tokens.spacingVerticalM, padding: tokens.spacingVerticalM,
-    border: `1px solid ${tokens.colorNeutralStroke2}`, borderRadius: tokens.borderRadiusMedium,
-  },
-  endpointHead: { display: 'flex', gap: tokens.spacingHorizontalS, alignItems: 'center' },
-  resultTable: {
-    width: '100%', borderCollapse: 'collapse', fontSize: '12px',
-    '& th': {
-      position: 'sticky', top: 0, zIndex: 1,
-      textAlign: 'left', padding: '6px 8px',
-      backgroundColor: tokens.colorNeutralBackground2,
-      fontWeight: tokens.fontWeightSemibold,
-      borderBottom: `1px solid ${tokens.colorNeutralStroke1}`,
-      whiteSpace: 'nowrap',
-    },
-    '& td': {
-      padding: '6px 8px',
-      borderBottom: `1px solid ${tokens.colorNeutralStroke3}`,
-      whiteSpace: 'nowrap',
-    },
-    '& tbody tr:hover td': {
-      backgroundColor: tokens.colorNeutralBackground1Hover,
-    },
-  },
 });
 
 export function RealTimeHubView() {
@@ -169,19 +114,9 @@ export function RealTimeHubView() {
   const [connectOpen, setConnectOpen] = useState(false);
   const [connectInitial, setConnectInitial] = useState<SourceConnector | null>(null);
 
-  // Preview drawer
-  const [previewRow, setPreviewRow] = useState<DataStreamRow | null>(null);
-  const [previewTable, setPreviewTable] = useState('');
-  const [previewDb, setPreviewDb] = useState('');
-  const [previewBusy, setPreviewBusy] = useState(false);
-  const [previewErr, setPreviewErr] = useState<string | null>(null);
-  const [previewResult, setPreviewResult] = useState<{ columns: string[]; rows: unknown[][]; rowCount: number; executionMs: number } | null>(null);
-
-  // Endpoints drawer
-  const [endpointsRow, setEndpointsRow] = useState<DataStreamRow | null>(null);
-  const [endpointsBusy, setEndpointsBusy] = useState(false);
-  const [endpointsErr, setEndpointsErr] = useState<string | null>(null);
-  const [endpoints, setEndpoints] = useState<EndpointRow[] | null>(null);
+  // Shared drawers — preview (KQL table) + endpoints (eventstream definition).
+  const [previewTarget, setPreviewTarget] = useState<{ title: string; db?: string; table?: string } | null>(null);
+  const [endpointsTarget, setEndpointsTarget] = useState<{ name: string; workspaceId: string; id: string } | null>(null);
 
   function load() {
     setData(null); setLoadErr(null);
@@ -201,22 +136,15 @@ export function RealTimeHubView() {
 
   useEffect(load, []);
 
-  // Hydrate the persisted streams view mode (SSR-safe).
+  // Hydrate + persist the streams view mode (SSR-safe; ignore quota / private mode).
   useEffect(() => {
     try {
       const raw = window.localStorage.getItem(LS_REALTIME_STREAMS_VIEW);
       if (raw === 'tile' || raw === 'list') setView(raw);
-    } catch {
-      /* ignore (quota / private mode) */
-    }
+    } catch { /* ignore */ }
   }, []);
-
   useEffect(() => {
-    try {
-      window.localStorage.setItem(LS_REALTIME_STREAMS_VIEW, view);
-    } catch {
-      /* ignore */
-    }
+    try { window.localStorage.setItem(LS_REALTIME_STREAMS_VIEW, view); } catch { /* ignore */ }
   }, [view]);
 
   // Loom workspaces for the Connect-source dialog (Azure-native default) — so a
@@ -247,38 +175,6 @@ export function RealTimeHubView() {
     setConnectOpen(true);
   }
 
-  function openPreview(row: DataStreamRow) {
-    setPreviewRow(row);
-    setPreviewTable('');
-    setPreviewDb(row.dataType === 'table' ? row.name : '');
-    setPreviewResult(null); setPreviewErr(null);
-  }
-  async function runPreview() {
-    if (!previewRow) return;
-    setPreviewBusy(true); setPreviewErr(null); setPreviewResult(null);
-    try {
-      const res = await fetch('/api/realtime-hub/preview', {
-        method: 'POST', headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ database: previewDb || undefined, table: previewTable.trim(), limit: 50 }),
-      });
-      const j = await res.json().catch(() => ({}));
-      if (!res.ok || !j.ok) { setPreviewErr(j.error || `Preview failed (HTTP ${res.status}).`); return; }
-      setPreviewResult({ columns: j.columns, rows: j.rows, rowCount: j.rowCount, executionMs: j.executionMs });
-    } catch (e: any) { setPreviewErr(e?.message || String(e)); }
-    finally { setPreviewBusy(false); }
-  }
-
-  async function openEndpoints(row: DataStreamRow) {
-    setEndpointsRow(row); setEndpoints(null); setEndpointsErr(null); setEndpointsBusy(true);
-    try {
-      const res = await fetch(`/api/realtime-hub/endpoints?workspaceId=${encodeURIComponent(row.workspaceId)}&eventstreamId=${encodeURIComponent(row.id)}`);
-      const j = await res.json().catch(() => ({}));
-      if (!res.ok || !j.ok) { setEndpointsErr(j.error || `Failed (HTTP ${res.status}).`); return; }
-      setEndpoints(j.endpoints || []);
-    } catch (e: any) { setEndpointsErr(e?.message || String(e)); }
-    finally { setEndpointsBusy(false); }
-  }
-
   const loading = data === null;
   const streams = data?.streams || [];
   const streamCount = streams.filter((s) => s.dataType === 'stream').length;
@@ -295,11 +191,17 @@ export function RealTimeHubView() {
       </MenuTrigger>
       <MenuPopover>
         <MenuList>
-          <MenuItem icon={<Eye20Regular />} onClick={() => openPreview(s)}>Preview data</MenuItem>
+          <MenuItem icon={<Eye20Regular />}
+            onClick={() => setPreviewTarget({ title: s.name, db: s.dataType === 'table' ? s.name : '', table: '' })}>
+            Preview data
+          </MenuItem>
           {s.dataType === 'stream' && (
-            <MenuItem icon={<PlugConnected20Regular />} onClick={() => openEndpoints(s)}>Endpoints</MenuItem>
+            <MenuItem icon={<PlugConnected20Regular />}
+              onClick={() => setEndpointsTarget({ name: s.name, workspaceId: s.workspaceId, id: s.id })}>
+              Endpoints
+            </MenuItem>
           )}
-          <Link href={`/items/${s.dataType === 'stream' ? 'eventstream' : 'kql-database'}/${s.id}`} className={styles.linkReset}>
+          <Link href={`/items/${s.dataType === 'stream' ? 'eventstream' : 'kql-database'}/${s.id}`} style={{ textDecoration: 'none' }}>
             <MenuItem icon={<Flow20Regular />}>
               Open {s.dataType === 'stream' ? 'eventstream' : 'KQL database'}
             </MenuItem>
@@ -370,7 +272,7 @@ export function RealTimeHubView() {
         </div>
         <div className={styles.stat}>
           <span className={styles.statChip} style={{ backgroundColor: '#0078d41f', color: 'var(--loom-accent-blue)' }} aria-hidden>
-            <PlugConnected24Regular />
+            <PlugConnected20Regular style={{ width: 24, height: 24 }} />
           </span>
           <div>
             <div className={styles.statNum}>{SOURCE_CONNECTORS.length}</div>
@@ -379,7 +281,7 @@ export function RealTimeHubView() {
         </div>
         <div className={styles.stat}>
           <span className={styles.statChip} style={{ backgroundColor: '#4b1d8f1f', color: 'var(--loom-accent-purple)' }} aria-hidden>
-            <Flow24Regular />
+            <Flow20Regular style={{ width: 24, height: 24 }} />
           </span>
           <div>
             <div className={styles.statNum}>{loading ? '—' : (data?.workspaceCount ?? workspaceOptions.length)}</div>
@@ -389,7 +291,7 @@ export function RealTimeHubView() {
       </div>
 
       {loadErr && (
-        <MessageBar intent="warning" className={styles.msgBar}>
+        <MessageBar intent="warning" style={{ marginBottom: 16 }}>
           <MessageBarBody>
             <MessageBarTitle>Real-Time hub is not fully connected to Fabric</MessageBarTitle>
             {loadErr.error}
@@ -403,7 +305,7 @@ export function RealTimeHubView() {
       )}
 
       {(data?.warnings && data.warnings.length > 0) && (
-        <MessageBar intent="info" className={styles.msgBar}>
+        <MessageBar intent="info" style={{ marginBottom: 16 }}>
           <MessageBarBody>
             Some workspaces could not be enumerated: {data.warnings.slice(0, 3).map((w) => w.workspace).join(', ')}
             {data.warnings.length > 3 ? ` (+${data.warnings.length - 3} more)` : ''}.
@@ -420,9 +322,11 @@ export function RealTimeHubView() {
           </Button>
         }
       >
-        <Caption1 className={styles.introCaption}>
+        <Caption1 style={{ display: 'block', marginBottom: 12, color: tokens.colorNeutralForeground3 }}>
           Connect Microsoft, Azure, database CDC, and external streaming sources. Each tile creates a real CSA Loom
           Eventstream item carrying the chosen source.
+          {' '}Want to discover the raw Azure sources (Event Hubs, IoT Hub, ADX) across every subscription?{' '}
+          <FluentLink href="/rti-hub">Open the RTI catalog</FluentLink>.
         </Caption1>
         <SourceGallery onPick={openConnect} />
       </Section>
@@ -430,7 +334,7 @@ export function RealTimeHubView() {
       {/* All data streams */}
       <Section
         title={
-          <span className={styles.sectionTitleRow}>
+          <span style={{ display: 'inline-flex', alignItems: 'center', gap: 8 }}>
             All data streams
             {data?.workspaceCount != null && (
               <Badge appearance="tint">{streams.length} across {data.workspaceCount} workspaces</Badge>
@@ -438,7 +342,7 @@ export function RealTimeHubView() {
           </span>
         }
         actions={
-          <span className={styles.sectionActions}>
+          <span style={{ display: 'inline-flex', alignItems: 'center', gap: 8 }}>
             <ViewToggle value={view} onChange={setView} ariaLabel="Stream view" />
             <Button appearance="subtle" icon={<ArrowSync20Regular />} onClick={load}>Refresh</Button>
           </span>
@@ -452,14 +356,22 @@ export function RealTimeHubView() {
         {loading ? (
           <Spinner label="Loading data streams…" />
         ) : streams.length === 0 ? (
-          <div className={styles.emptyState}>
+          <div style={{
+            padding: 28, borderRadius: 12, border: `1px dashed ${tokens.colorNeutralStroke2}`,
+            backgroundColor: tokens.colorNeutralBackground2, color: tokens.colorNeutralForeground2,
+            fontSize: 14, textAlign: 'center', lineHeight: 1.6,
+          }}>
             No data streams visible yet.<br />
             Use <b>Connect a source</b> above to connect a Microsoft source and create your first eventstream — it is
             created as a real CSA Loom Eventstream item and will then appear here.
           </div>
         ) : view === 'tile' ? (
           filtered.length === 0 ? (
-            <div className={styles.emptyState}>No streams match the current search.</div>
+            <div style={{
+              padding: 28, borderRadius: 12, border: `1px dashed ${tokens.colorNeutralStroke2}`,
+              backgroundColor: tokens.colorNeutralBackground2, color: tokens.colorNeutralForeground2,
+              fontSize: 14, textAlign: 'center', lineHeight: 1.6,
+            }}>No streams match the current search.</div>
           ) : (
             <TileGrid minTileWidth={280}>
               {filtered.map((s) => (
@@ -500,72 +412,23 @@ export function RealTimeHubView() {
         initialConnector={connectInitial}
       />
 
-      {/* Preview drawer */}
-      <Drawer open={!!previewRow} position="end" size="medium" onOpenChange={(_, d) => { if (!d.open) setPreviewRow(null); }}>
-        <DrawerHeader>
-          <DrawerHeaderTitle action={<Button appearance="subtle" icon={<Dismiss20Regular />} onClick={() => setPreviewRow(null)} />}>
-            Preview — {previewRow?.name}
-          </DrawerHeaderTitle>
-        </DrawerHeader>
-        <DrawerBody>
-          <div className={styles.drawerSection}>
-            <Caption1>Preview reads recent rows from the backing Eventhouse / KQL table via the real Kusto query path.</Caption1>
-          </div>
-          <Field label="KQL database" className={styles.drawerSection}>
-            <Input value={previewDb} placeholder="Eventhouse / KQL database name (defaults to loomdb-default)"
-              onChange={(_, d) => setPreviewDb(d.value)} />
-          </Field>
-          <Field label="Table" required className={styles.drawerSection}>
-            <Input value={previewTable} placeholder="KQL table to preview (e.g. Events)" onChange={(_, d) => setPreviewTable(d.value)} />
-          </Field>
-          <Button appearance="primary" icon={<Eye20Regular />} disabled={!previewTable.trim() || previewBusy} onClick={runPreview}>
-            {previewBusy ? 'Reading…' : 'Preview recent events'}
-          </Button>
-          {previewErr && <MessageBar intent="error" className={styles.drawerSpacerM}><MessageBarBody>{previewErr}</MessageBarBody></MessageBar>}
-          {previewResult && (
-            <div className={styles.drawerSpacerM}>
-              <Caption1>{previewResult.rowCount} rows · {previewResult.executionMs} ms</Caption1>
-              <div className={styles.resultWrap}>
-                <table className={styles.resultTable}>
-                  <thead><tr>{previewResult.columns.map((c) => <th key={c}>{c}</th>)}</tr></thead>
-                  <tbody>
-                    {previewResult.rows.slice(0, 50).map((row, i) => (
-                      <tr key={i}>{row.map((cell, j) => <td key={j}>{cell == null ? '' : String(cell)}</td>)}</tr>
-                    ))}
-                  </tbody>
-                </table>
-              </div>
-            </div>
-          )}
-        </DrawerBody>
-      </Drawer>
+      {/* Preview data (KQL table) — shared drawer */}
+      <StreamPreviewDrawer
+        open={!!previewTarget}
+        onClose={() => setPreviewTarget(null)}
+        title={previewTarget?.title || ''}
+        defaultDb={previewTarget?.db}
+        defaultTable={previewTarget?.table}
+      />
 
-      {/* Endpoints drawer */}
-      <Drawer open={!!endpointsRow} position="end" size="medium" onOpenChange={(_, d) => { if (!d.open) setEndpointsRow(null); }}>
-        <DrawerHeader>
-          <DrawerHeaderTitle action={<Button appearance="subtle" icon={<Dismiss20Regular />} onClick={() => setEndpointsRow(null)} />}>
-            Endpoints — {endpointsRow?.name}
-          </DrawerHeaderTitle>
-        </DrawerHeader>
-        <DrawerBody>
-          <Caption1>Live connection endpoints pulled from the eventstream definition (sources, destinations, streams).</Caption1>
-          {endpointsBusy && <Spinner label="Pulling definition…" className={styles.drawerSpacerM} />}
-          {endpointsErr && <MessageBar intent="error" className={styles.drawerSpacerM}><MessageBarBody>{endpointsErr}</MessageBarBody></MessageBar>}
-          {endpoints && endpoints.length === 0 && <Body1 className={styles.drawerSpacerM}>No endpoints in this eventstream yet.</Body1>}
-          {endpoints && endpoints.map((ep, i) => (
-            <div key={i} className={styles.endpointCard}>
-              <div className={styles.endpointHead}>
-                <Subtitle2>{ep.name}</Subtitle2>
-                <Badge appearance="outline" size="small">{ep.role}</Badge>
-                {ep.type && <Badge appearance="tint" size="small">{ep.type}</Badge>}
-              </div>
-              {ep.properties && Object.keys(ep.properties).length > 0 && (
-                <pre className={mergeClasses(styles.kv, styles.drawerSpacerS)}>{JSON.stringify(ep.properties, null, 2)}</pre>
-              )}
-            </div>
-          ))}
-        </DrawerBody>
-      </Drawer>
+      {/* Endpoints (eventstream definition) — shared drawer */}
+      <StreamEndpointsDrawer
+        open={!!endpointsTarget}
+        onClose={() => setEndpointsTarget(null)}
+        name={endpointsTarget?.name || ''}
+        workspaceId={endpointsTarget?.workspaceId || ''}
+        eventstreamId={endpointsTarget?.id || ''}
+      />
     </>
   );
 }
