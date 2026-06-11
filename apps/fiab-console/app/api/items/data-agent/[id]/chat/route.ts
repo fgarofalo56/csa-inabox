@@ -15,6 +15,8 @@ import { NextRequest, NextResponse } from 'next/server';
 import { getSession } from '@/lib/auth/session';
 import { loadOwnedItem } from '../../../_lib/item-crud';
 import { chatGrounded, NoAoaiDeploymentError, type DataAgentConfig, type ChatTurn } from '@/lib/azure/data-agent-client';
+import { emitCopilotUsage } from '@/lib/azure/copilot-orchestrator';
+import { resolveAgentSourceLabels } from '@/lib/azure/dspm-ai-client';
 import type { WorkspaceItem } from '@/lib/types/workspace';
 
 export const runtime = 'nodejs';
@@ -64,6 +66,36 @@ export async function POST(req: NextRequest, ctx: { params: Promise<{ id: string
 
   try {
     const answer = await chatGrounded(cfg, history, question);
+
+    // Fire-and-forget DSPM-for-AI usage receipt: stamp the copilot.usage event
+    // with the agent id + the sensitivity labels of the data this agent touched
+    // so the admin "DSPM for AI" report can attribute sensitive-data access per
+    // agent. Never blocks/breaks the response (telemetry is best-effort).
+    if (answer.usage && (answer.usage.totalTokens || 0) > 0) {
+      void (async () => {
+        try {
+          const { labels, maxLabel } = await resolveAgentSourceLabels(
+            session.claims.oid,
+            cfg.sources.map((src) => ({ id: src.id, name: src.name })),
+          );
+          await emitCopilotUsage(
+            { ...answer.usage!, aoaiCalls: 1, toolCalls: answer.tools?.length || 0 },
+            answer.model || 'data-agent',
+            `data-agent:${id}`,
+            session.claims.oid,
+            'data-agent',
+            {
+              agentId: id,
+              agentName: item!.displayName,
+              sensitivityLabel: maxLabel || undefined,
+              sensitivityLabels: labels,
+              dataSources: answer.sourcesAvailable,
+            },
+          );
+        } catch { /* telemetry must never affect the chat response */ }
+      })();
+    }
+
     return NextResponse.json({ ok: true, ...answer });
   } catch (e: any) {
     if (e instanceof NoAoaiDeploymentError) {

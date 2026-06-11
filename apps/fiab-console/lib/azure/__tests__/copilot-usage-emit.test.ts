@@ -85,4 +85,45 @@ describe('emitCopilotUsage', () => {
     );
     expect(fetchMock).not.toHaveBeenCalled();
   });
+
+  it('adds the DSPM-for-AI data dimension (agent_id + sensitivity_label) when supplied', async () => {
+    process.env.APPLICATIONINSIGHTS_CONNECTION_STRING =
+      'InstrumentationKey=abc;IngestionEndpoint=https://x.in.applicationinsights.azure.com/';
+    const fetchMock = vi.fn().mockResolvedValue({ ok: true, status: 200, text: async () => '' });
+    vi.stubGlobal('fetch', fetchMock);
+
+    await emitCopilotUsage(USAGE, 'gpt-4o', 'sess-da', 'oid-da', 'data-agent', {
+      agentId: 'agent-123',
+      agentName: 'Sales agent',
+      sensitivityLabel: 'Confidential',
+      sensitivityLabels: ['Internal', 'Confidential'],
+      dataSources: ['Sales WH', 'Orders LH'],
+    });
+
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    const props = JSON.parse(fetchMock.mock.calls[0][1].body as string).data.baseData.properties;
+    // Base schema is preserved.
+    expect(props.persona).toBe('data-agent');
+    expect(props.total_tokens).toBe('165');
+    // New data dimension surfaces for KQL summarize-by-agent / by-label.
+    expect(props.agent_id).toBe('agent-123');
+    expect(props.agent_name).toBe('Sales agent');
+    expect(props.sensitivity_label).toBe('Confidential');
+    expect(props.sensitivity_labels).toBe('Internal,Confidential');
+    expect(props.data_sources).toBe('Sales WH,Orders LH');
+  });
+
+  it('omits the data dimension when no extra is supplied (base schema intact)', async () => {
+    process.env.APPLICATIONINSIGHTS_CONNECTION_STRING =
+      'InstrumentationKey=abc;IngestionEndpoint=https://x.in.applicationinsights.azure.com/';
+    const fetchMock = vi.fn().mockResolvedValue({ ok: true, status: 200, text: async () => '' });
+    vi.stubGlobal('fetch', fetchMock);
+
+    await emitCopilotUsage(USAGE, 'gpt-4o', 'sess-x', 'oid-x', 'cross-item');
+
+    const props = JSON.parse(fetchMock.mock.calls[0][1].body as string).data.baseData.properties;
+    expect(props.agent_id).toBeUndefined();
+    expect(props.sensitivity_label).toBeUndefined();
+    expect(props.data_sources).toBeUndefined();
+  });
 });

@@ -1336,10 +1336,31 @@ function _parseAiConnStr(s: string): { iKey: string; endpoint: string } | null {
 }
 
 /**
+ * Optional data-dimension for a Copilot/agent turn — powers the DSPM-for-AI
+ * posture report (which agent touched which sensitivity-labeled data). All
+ * fields are optional; when present they are added to the `copilot.usage`
+ * envelope as extra `customDimensions` (Properties) so KQL can summarize usage
+ * `by agent_id` / `by sensitivity_label` without breaking the existing schema.
+ */
+export interface CopilotUsageExtra {
+  /** The Loom item id of the agent that served the turn (data-agent etc.). */
+  agentId?: string;
+  /** Human-readable agent name (for display in the report). */
+  agentName?: string;
+  /** Highest-ranked sensitivity label across the data the agent touched. */
+  sensitivityLabel?: string;
+  /** Distinct sensitivity labels the agent's sources carry. */
+  sensitivityLabels?: string[];
+  /** Names of the data sources the agent is grounded on. */
+  dataSources?: string[];
+}
+
+/**
  * Fire-and-forget App Insights receipt for a completed Copilot turn. `persona`
- * identifies the Copilot surface (e.g. `cross-item`, `notebook`) so the admin
- * panel can break token consumption out per persona. Never awaited on the hot
- * path; never throws.
+ * identifies the Copilot surface (e.g. `cross-item`, `notebook`, `data-agent`)
+ * so the admin panel can break token consumption out per persona. The optional
+ * `extra` adds the DSPM-for-AI data dimension (agent id + touched sensitivity
+ * labels). Never awaited on the hot path; never throws.
  */
 export async function emitCopilotUsage(
   usage: OrchestratorUsage,
@@ -1347,6 +1368,7 @@ export async function emitCopilotUsage(
   sessionId: string,
   userOid: string,
   persona: string,
+  extra?: CopilotUsageExtra,
 ): Promise<void> {
   const connStr = process.env.APPLICATIONINSIGHTS_CONNECTION_STRING;
   if (!connStr) return; // honest gate — App Insights unconfigured → no-op
@@ -1357,6 +1379,25 @@ export async function emitCopilotUsage(
   try {
     const { createHash } = await import('crypto');
     const userHash = createHash('sha256').update(String(userOid)).digest('hex').slice(0, 16);
+    const properties: Record<string, string> = {
+      persona,
+      model,
+      prompt_tokens: String(usage.promptTokens),
+      completion_tokens: String(usage.completionTokens),
+      total_tokens: String(usage.totalTokens),
+      aoai_calls: String(usage.aoaiCalls),
+      tool_calls: String(usage.toolCalls),
+      user_oid_hash: userHash,
+      session_id: sessionId,
+      boundary: process.env.CSA_LOOM_BOUNDARY || 'Commercial',
+    };
+    // DSPM-for-AI data dimension (only added when supplied — keeps the base
+    // schema intact for callers that don't ground on data sources).
+    if (extra?.agentId) properties.agent_id = extra.agentId;
+    if (extra?.agentName) properties.agent_name = extra.agentName;
+    if (extra?.sensitivityLabel) properties.sensitivity_label = extra.sensitivityLabel;
+    if (extra?.sensitivityLabels?.length) properties.sensitivity_labels = extra.sensitivityLabels.join(',');
+    if (extra?.dataSources?.length) properties.data_sources = extra.dataSources.join(',');
     await fetch(`${ai.endpoint}/v2/track`, {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
@@ -1373,18 +1414,7 @@ export async function emitCopilotUsage(
           baseData: {
             ver: 2,
             name: 'copilot.usage',
-            properties: {
-              persona,
-              model,
-              prompt_tokens: String(usage.promptTokens),
-              completion_tokens: String(usage.completionTokens),
-              total_tokens: String(usage.totalTokens),
-              aoai_calls: String(usage.aoaiCalls),
-              tool_calls: String(usage.toolCalls),
-              user_oid_hash: userHash,
-              session_id: sessionId,
-              boundary: process.env.CSA_LOOM_BOUNDARY || 'Commercial',
-            },
+            properties,
           },
         },
       }),

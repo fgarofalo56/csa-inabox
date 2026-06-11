@@ -29,6 +29,7 @@ import { PurviewPanel } from '@/lib/components/admin-security/purview-panel';
 import { MipPanel } from '@/lib/components/admin-security/mip-panel';
 import { DlpPanel } from '@/lib/components/admin-security/dlp-panel';
 import { AuditPanel } from '@/lib/components/admin-security/audit-panel';
+import { DspmAiPanel } from '@/lib/components/admin-security/dspm-ai-panel';
 import { Section } from '@/lib/components/ui/section';
 import { LoomDataTable, type LoomColumn } from '@/lib/components/ui/loom-data-table';
 
@@ -83,11 +84,19 @@ function labelColor(l: string): any {
   return 'subtle';
 }
 
-type TopTab = 'overview' | 'purview' | 'mip' | 'dlp' | 'audit';
+type TopTab = 'overview' | 'purview' | 'mip' | 'dlp' | 'dspm' | 'audit';
 
 export default function SecurityPage() {
   const s = useStyles();
   const [tab, setTab] = useState<TopTab>('overview');
+
+  // Honor the ?tab= deep-link (e.g. the "DSPM for AI" admin-shell nav entry).
+  useEffect(() => {
+    const t = new URLSearchParams(window.location.search).get('tab');
+    if (t && ['overview', 'purview', 'mip', 'dlp', 'dspm', 'audit'].includes(t)) {
+      setTab(t as TopTab);
+    }
+  }, []);
 
   return (
     <AdminShell sectionTitle="Security & governance">
@@ -107,6 +116,7 @@ export default function SecurityPage() {
         <Tab value="purview">Purview</Tab>
         <Tab value="mip">Information Protection</Tab>
         <Tab value="dlp">DLP</Tab>
+        <Tab value="dspm">DSPM for AI</Tab>
         <Tab value="audit">Audit</Tab>
       </TabList>
 
@@ -115,6 +125,7 @@ export default function SecurityPage() {
       {tab === 'purview' && <Section bare><PurviewPanel /></Section>}
       {tab === 'mip' && <Section bare><MipPanel /></Section>}
       {tab === 'dlp' && <Section bare><DlpPanel /></Section>}
+      {tab === 'dspm' && <Section bare><DspmAiPanel /></Section>}
       {tab === 'audit' && <Section bare><AuditPanel /></Section>}
     </AdminShell>
   );
