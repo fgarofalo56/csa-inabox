@@ -137,11 +137,17 @@ const useStyles = makeStyles({
     borderRadius: tokens.borderRadiusMedium, backgroundColor: tokens.colorNeutralBackground2,
     display: 'flex', flexDirection: 'column', gap: '8px', minWidth: 0,
   },
-  metricValue: { fontSize: '28px', fontWeight: 700, color: tokens.colorBrandForeground1 },
+  metricValue: { fontSize: '28px', fontWeight: 700, color: tokens.colorBrandForeground1, lineHeight: '32px' },
   barRow: { display: 'flex', alignItems: 'center', gap: '8px', minWidth: 0 },
   barLabel: { width: '140px', flexShrink: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' },
   barTrack: { flex: 1, height: '14px', background: tokens.colorNeutralBackground3, borderRadius: '7px', overflow: 'hidden' },
-  barFill: { height: '100%', background: tokens.colorBrandBackground, borderRadius: '7px' },
+  barFill: { height: '100%', background: tokens.colorBrandBackground, borderRadius: '7px', transition: 'width 240ms ease' },
+  barValue: { width: '70px', textAlign: 'right', flexShrink: 0, fontVariantNumeric: 'tabular-nums' },
+  // shared layout helpers
+  vstack: { display: 'flex', flexDirection: 'column', gap: '6px', minWidth: 0 },
+  wizForm: { display: 'flex', flexDirection: 'column', gap: '12px', minWidth: 0 },
+  pageName: { flex: 1, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' },
+  compTitle: { flex: 1, minWidth: 0 },
 });
 
 function CopyBtn({ text }: { text: string }) {
@@ -615,7 +621,7 @@ export function RayfinAppEditor({ id }: { item?: unknown; id: string }) {
           <DialogBody>
             <DialogTitle>Scaffold an app from your model</DialogTitle>
             <DialogContent>
-              <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+              <div className={s.wizForm}>
                 {!binding.model ? (
                   <MessageBar intent="warning"><MessageBarBody>
                     <MessageBarTitle>No model bound</MessageBarTitle>
@@ -729,10 +735,11 @@ function AppBuilder(props: AppBuilderProps) {
           {appPages.length === 0 ? <Caption1>No pages yet. Add a page or use the wizard.</Caption1> : null}
           {appPages.map((p) => (
             <div key={p.id} className={p.id === activePageId ? s.pageRowActive : s.pageRow}
-              role="button" tabIndex={0} onClick={() => setActivePageId(p.id)}
-              onKeyDown={(e) => { if (e.key === 'Enter') setActivePageId(p.id); }}>
+              role="button" tabIndex={0} aria-pressed={p.id === activePageId} aria-label={`Page ${p.name}`}
+              onClick={() => setActivePageId(p.id)}
+              onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); setActivePageId(p.id); } }}>
               <Apps20Regular />
-              <span style={{ flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{p.name}</span>
+              <span className={s.pageName}>{p.name}</span>
               <Badge size="small" appearance="tint">{p.components.length}</Badge>
               <Tooltip content="Delete page" relationship="label">
                 <Button size="small" appearance="subtle" icon={<Delete20Regular />} aria-label={`Delete page ${p.name}`}
@@ -834,12 +841,12 @@ function ChartView({ s, rendered }: { s: ReturnType<typeof useStyles>; rendered:
   const values = rows.map((r) => Number(r[valIdx]) || 0);
   const max = Math.max(...values, 0) || 1;
   return (
-    <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+    <div className={s.vstack}>
       {rows.slice(0, 20).map((r, i) => (
         <div key={i} className={s.barRow}>
           <Caption1 className={s.barLabel}>{fmtCell(r[catIdx])}</Caption1>
           <div className={s.barTrack}><div className={s.barFill} style={{ width: `${Math.round((values[i] / max) * 100)}%` }} /></div>
-          <Caption1 style={{ width: 70, textAlign: 'right' }}>{fmtCell(r[valIdx])}</Caption1>
+          <Caption1 className={s.barValue}>{fmtCell(r[valIdx])}</Caption1>
         </div>
       ))}
     </div>
@@ -881,7 +888,7 @@ function ComponentEditor({ s, comp, objects, entities, rendered, onChange, onDel
     <div className={s.compCard}>
       <div className={s.head}>
         {KIND_ICON[kind]}
-        <Input value={comp.title} aria-label="Component title" style={{ flex: 1, minWidth: 0 }}
+        <Input value={comp.title} aria-label="Component title" className={s.compTitle}
           onChange={(_, d) => onChange({ title: d.value })} />
         <Badge appearance="tint">{KIND_LABEL[kind]}</Badge>
         <Tooltip content="Remove component" relationship="label">
@@ -944,7 +951,7 @@ function ComponentEditor({ s, comp, objects, entities, rendered, onChange, onDel
         rendered.ok === false ? (
           <MessageBar intent="error"><MessageBarBody>{rendered.error || 'Render failed.'}</MessageBarBody></MessageBar>
         ) : isDataComponent(kind) ? (
-          <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+          <div className={s.vstack}>
             <div className={s.metaRow}>
               <Badge appearance="tint" color="informative">{rendered.rowCount ?? 0} row{(rendered.rowCount ?? 0) === 1 ? '' : 's'}</Badge>
               {typeof rendered.executionMs === 'number' ? <Badge appearance="tint" color="brand">{rendered.executionMs} ms</Badge> : null}
