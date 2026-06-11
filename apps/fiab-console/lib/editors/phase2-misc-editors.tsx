@@ -33,6 +33,9 @@ import type { FabricItemType } from '@/lib/catalog/fabric-item-types';
 import type { RibbonTab } from '@/lib/components/ribbon';
 import { KeyValueGrid } from '@/lib/components/ui/key-value-grid';
 import { ComputePicker } from '@/lib/components/compute-picker';
+import {
+  DocumentRegular, DocumentSettingsRegular, CodeRegular, DocumentTextRegular,
+} from '@fluentui/react-icons';
 import { DbtModelGraph } from '@/lib/components/dbt/dbt-model-graph';
 import { MonacoTextarea } from '@/lib/components/editor/monaco-textarea';
 import { emptyProjectGraph, type DbtProjectGraph } from '@/lib/dbt/dbt-project-model';
@@ -48,6 +51,23 @@ const useStyles = makeStyles({
   status: { display: 'flex', gap: 8, alignItems: 'center' },
   resultBox: { marginTop: 16, borderTop: `1px solid ${tokens.colorNeutralStroke2}`, paddingTop: 12 },
   mono: { fontFamily: 'Consolas, "Cascadia Code", monospace', fontSize: 12 },
+  fileGrid: {
+    display: 'grid', gridTemplateColumns: '260px 1fr', gap: tokens.spacingHorizontalM,
+    minHeight: 360, alignItems: 'stretch',
+  },
+  fileList: {
+    display: 'flex', flexDirection: 'column', gap: 2,
+    border: `1px solid ${tokens.colorNeutralStroke2}`, borderRadius: tokens.borderRadiusMedium,
+    backgroundColor: tokens.colorNeutralBackground2,
+    padding: tokens.spacingVerticalXS, overflowY: 'auto', maxHeight: 480,
+  },
+  fileBtn: { justifyContent: 'flex-start', fontFamily: tokens.fontFamilyMonospace, fontSize: 12 },
+  filePane: { display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalXS, minWidth: 0 },
+  filePaneHeader: {
+    display: 'flex', alignItems: 'center', gap: 6,
+    fontFamily: tokens.fontFamilyMonospace, fontSize: 12,
+    color: tokens.colorNeutralForeground2,
+  },
   json: {
     width: '100%', minHeight: 120, padding: 10,
     fontFamily: 'Consolas, "Cascadia Code", monospace', fontSize: 12,
@@ -75,6 +95,22 @@ function fmtTs(ts?: string | number): string {
   if (!ts) return '—';
   const d = typeof ts === 'number' ? new Date(ts) : new Date(ts);
   return Number.isNaN(d.getTime()) ? String(ts) : d.toLocaleString();
+}
+
+// File-tree affordances for the dbt "Generated files" browser.
+function fileIcon(path: string) {
+  if (path.endsWith('.sql')) return <CodeRegular />;
+  if (path.endsWith('.yml') || path.endsWith('.yaml')) return <DocumentSettingsRegular />;
+  if (path.endsWith('.md')) return <DocumentTextRegular />;
+  return <DocumentRegular />;
+}
+
+function fileLang(path: string | null): 'sql' | 'yaml' | 'markdown' | 'plaintext' {
+  if (!path) return 'plaintext';
+  if (path.endsWith('.sql')) return 'sql';
+  if (path.endsWith('.yml') || path.endsWith('.yaml')) return 'yaml';
+  if (path.endsWith('.md')) return 'markdown';
+  return 'plaintext';
 }
 
 interface PoolDTO { name: string; properties?: { sparkVersion?: string; nodeSize?: string } }
@@ -629,27 +665,51 @@ export function DbtJobEditor({ item, id }: { item: FabricItemType; id: string })
             <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
               <div className={styles.toolbar}>
                 <Button appearance="primary" onClick={generate} disabled={!canGenerate}>Generate project files</Button>
-                {busy && <Spinner size="tiny" />}
+                {busy && <Spinner size="tiny" label="Generating…" labelPosition="after" />}
+                {genFiles && genFiles.length > 0 && !busy && (
+                  <Badge appearance="tint" color="success">{genFiles.length} file{genFiles.length === 1 ? '' : 's'}</Badge>
+                )}
               </div>
               {genErr && <MessageBar intent="error"><MessageBarBody><MessageBarTitle>Could not generate</MessageBarTitle>{genErr}</MessageBarBody></MessageBar>}
-              {!genFiles && !genErr && <Caption1>Click “Generate project files” to produce the dbt project (dbt_project.yml, profiles.yml, models, tests) from the builder graph.</Caption1>}
+              {!genFiles && !genErr && (
+                <MessageBar intent="info">
+                  <MessageBarBody>
+                    Select <strong>Generate project files</strong> to produce the dbt project
+                    (<code>dbt_project.yml</code>, <code>profiles.yml</code>, models, and tests) from the builder graph.
+                  </MessageBarBody>
+                </MessageBar>
+              )}
+              {genFiles && genFiles.length === 0 && !genErr && (
+                <MessageBar intent="warning">
+                  <MessageBarBody>
+                    The generator returned no files — add at least one model on the <strong>Builder</strong> tab, then generate again.
+                  </MessageBarBody>
+                </MessageBar>
+              )}
               {genFiles && genFiles.length > 0 && (
-                <div style={{ display: 'grid', gridTemplateColumns: '260px 1fr', gap: 12, minHeight: 360 }}>
-                  <div style={{ display: 'flex', flexDirection: 'column', gap: 2, borderRight: `1px solid ${tokens.colorNeutralStroke2}`, paddingRight: 8, overflowY: 'auto', maxHeight: 460 }}>
+                <div className={styles.fileGrid}>
+                  <div className={styles.fileList} role="listbox" aria-label="Generated dbt project files">
                     {genFiles.map((f) => (
                       <Button key={f.path} size="small"
+                        role="option"
+                        aria-selected={selectedFile === f.path}
+                        icon={fileIcon(f.path)}
                         appearance={selectedFile === f.path ? 'primary' : 'subtle'}
-                        style={{ justifyContent: 'flex-start', fontFamily: 'monospace', fontSize: 12 }}
+                        className={styles.fileBtn}
                         onClick={() => setSelectedFile(f.path)}>
                         {f.path}
                       </Button>
                     ))}
                   </div>
-                  <div>
+                  <div className={styles.filePane}>
+                    <div className={styles.filePaneHeader}>
+                      {fileIcon(selectedFile || '')}
+                      <span>{selectedFile || 'Select a file'}</span>
+                    </div>
                     <MonacoTextarea
                       value={genFiles.find((f) => f.path === selectedFile)?.content || ''}
                       onChange={() => {}}
-                      language={selectedFile?.endsWith('.sql') ? 'sql' : 'yaml'}
+                      language={fileLang(selectedFile)}
                       height={440}
                       readOnly
                       ariaLabel="Generated file content"
