@@ -698,6 +698,31 @@ export async function importNotebook(
   await asJsonOrThrow<unknown>(res, 'importNotebook');
 }
 
+/**
+ * Import an arbitrary file (not a notebook) into a workspace folder using
+ * `format: AUTO`. This is how a generated dbt project (dbt_project.yml,
+ * profiles.yml, models/**.sql, schema.yml) lands in a workspace directory so a
+ * Databricks Job dbt_task can run it with `source: WORKSPACE` +
+ * `project_directory`. Workspace "files in workspace" hold arbitrary text.
+ * Learn: /azure/databricks/files/workspace.
+ */
+export async function importWorkspaceFile(
+  path: string,
+  content: string,
+  overwrite = true,
+): Promise<void> {
+  const res = await dbxFetch('/api/2.0/workspace/import', {
+    method: 'POST',
+    body: JSON.stringify({
+      path,
+      format: 'AUTO',
+      content: Buffer.from(content, 'utf-8').toString('base64'),
+      overwrite,
+    }),
+  });
+  await asJsonOrThrow<unknown>(res, 'importWorkspaceFile');
+}
+
 export async function deleteWorkspaceObject(path: string, recursive = false): Promise<void> {
   const res = await dbxFetch('/api/2.0/workspace/delete', {
     method: 'POST',
