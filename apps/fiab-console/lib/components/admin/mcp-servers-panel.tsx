@@ -298,6 +298,145 @@ function BuiltinMcpCard({
   );
 }
 
+interface BridgeStatus {
+  configured: boolean;
+  reachable?: boolean;
+  base?: string;
+  error?: string;
+  servers?: Array<{ id: string; name: string; description: string; launcher: string; package: string; endpoint: string }>;
+  gate?: { message: string; envVar: string; deployModule: string; deploymentDoc: string };
+}
+
+/**
+ * BridgeMcpCard — surfaces the stdio→HTTP/SSE bridge (apps/fiab-mcp-bridge).
+ * Each bridged stdio server (npx/uvx) from the bridge catalog is offered for
+ * one-click registration as a normal McpServerConfig (endpoint = bridge URL).
+ * Honest gate (env var + deploy module) when LOOM_MCP_BRIDGE_URL is unset;
+ * honest "unreachable" state when set but the bridge can't be reached.
+ * Read from GET /api/admin/mcp-servers/bridge.
+ */
+function BridgeMcpCard({
+  servers,
+  onRegister,
+  busy,
+}: {
+  servers: McpServerConfigDoc[];
+  onRegister: (config: McpServerConfig) => Promise<void>;
+  busy: boolean;
+}) {
+  const [status, setStatus] = useState<BridgeStatus | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [registeringId, setRegisteringId] = useState<string | null>(null);
+  const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    let cancelled = false;
+    fetch('/api/admin/mcp-servers/bridge')
+      .then((r) => r.json())
+      .then((j) => { if (!cancelled) setStatus(j.ok ? j : null); })
+      .catch(() => { if (!cancelled) setStatus(null); })
+      .finally(() => { if (!cancelled) setLoading(false); });
+    return () => { cancelled = true; };
+  }, []);
+
+  if (loading || !status) return null;
+
+  // Not provisioned → honest gate.
+  if (!status.configured) {
+    return (
+      <MessageBar intent="info">
+        <MessageBarBody>
+          <MessageBarTitle>MCP stdio→HTTP/SSE bridge (optional, not provisioned)</MessageBarTitle>
+          {status.gate?.message}
+          <div style={{ marginTop: 6, fontSize: 12 }}>
+            Set <code>{status.gate?.envVar}</code> on the console after deploying{' '}
+            <code>{status.gate?.deployModule}</code> (see <code>{status.gate?.deploymentDoc}</code>).
+          </div>
+        </MessageBarBody>
+      </MessageBar>
+    );
+  }
+
+  // Configured but unreachable → honest error state.
+  if (status.reachable === false) {
+    return (
+      <MessageBar intent="warning">
+        <MessageBarBody>
+          <MessageBarTitle>MCP bridge configured but unreachable</MessageBarTitle>
+          Bridge at <code>{status.base}</code> did not respond: {status.error}. Confirm the
+          <code> loom-mcp-bridge</code> Container App is running and reachable on the Loom vnet.
+        </MessageBarBody>
+      </MessageBar>
+    );
+  }
+
+  const bridged = status.servers || [];
+  if (bridged.length === 0) {
+    return (
+      <MessageBar intent="info" icon={<Sparkle20Regular />}>
+        <MessageBarBody>
+          <MessageBarTitle>MCP bridge connected — no servers enabled</MessageBarTitle>
+          The stdio→HTTP/SSE bridge is reachable at <code>{status.base}</code> but its catalog
+          (<code>loom-mcp-bridge.json</code>) has no enabled servers for this cloud.
+        </MessageBarBody>
+      </MessageBar>
+    );
+  }
+
+  return (
+    <Section title="Bridged stdio MCP servers (npx / uvx)">
+      <Body1 style={{ color: tokens.colorNeutralForeground3, fontSize: 12 }}>
+        These stdio MCP servers run on the Loom MCP bridge (<code>{status.base}</code>) and are
+        exposed over HTTP. Register any one as a normal external MCP server with a single click.
+      </Body1>
+      {error && <div style={{ color: tokens.colorPaletteRedForeground1, fontSize: 12 }}>{error}</div>}
+      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(300px, 1fr))', gap: tokens.spacingHorizontalM, marginTop: tokens.spacingVerticalM }}>
+        {bridged.map((b) => {
+          const alreadyRegistered = servers.some((s) => s.endpoint === b.endpoint);
+          const register = async () => {
+            setRegisteringId(b.id); setError(null);
+            try {
+              await onRegister({
+                name: b.name,
+                endpoint: b.endpoint,
+                authMethod: 'header',
+                description: b.description || `Bridged stdio MCP server (${b.launcher} ${b.package}).`,
+                enabled: true,
+              });
+            } catch (e: any) {
+              setError(e?.message || String(e));
+            } finally { setRegisteringId(null); }
+          };
+          return (
+            <MessageBar key={b.id} intent={alreadyRegistered ? 'success' : 'info'} icon={<Sparkle20Regular />}>
+              <MessageBarBody>
+                <MessageBarTitle>{b.name}</MessageBarTitle>
+                {b.description}{' '}
+                <span style={{ fontSize: 12, color: tokens.colorNeutralForeground3 }}>
+                  ({b.launcher} {b.package})
+                </span>
+              </MessageBarBody>
+              {alreadyRegistered ? (
+                <Badge appearance="tint" color="success">Registered</Badge>
+              ) : (
+                <Button
+                  appearance="primary"
+                  size="small"
+                  icon={<Add20Regular />}
+                  disabled={registeringId === b.id || busy}
+                  onClick={() => void register()}
+                >
+                  {registeringId === b.id ? 'Registering…' : 'Register'}
+                </Button>
+              )}
+            </MessageBar>
+          );
+        })}
+      </div>
+    </Section>
+  );
+}
+
 export function McpServersPanel() {
   const s = useStyles();
   const [servers, setServers] = useState<McpServerConfigDoc[]>([]);
@@ -381,6 +520,8 @@ export function McpServersPanel() {
       )}
 
       <BuiltinMcpCard servers={servers} onRegister={(config) => save(undefined, config)} busy={saving} />
+
+      <BridgeMcpCard servers={servers} onRegister={(config) => save(undefined, config)} busy={saving} />
 
       {servers.length === 0 ? (
         <Caption1>No MCP servers registered yet.</Caption1>

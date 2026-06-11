@@ -1,0 +1,75 @@
+{
+  "$schema": "https://schemas.modelcontextprotocol.io/loom-mcp-bridge-config.json",
+  "bridge": {
+    "name": "csa-loom-mcp-bridge",
+    "version": "0.1.0",
+    "description": "stdio→HTTP/SSE bridge for npx/uvx MCP servers. Exposes each catalog entry as an HTTP endpoint the Loom Console External-MCP panel can register one-click. Boundary-aware: entries tagged for a cloud Loom is NOT running in are disabled."
+  },
+  "transport": {
+    "type": "http",
+    "host": "0.0.0.0",
+    "port": 8080,
+    "tls": {
+      "$comment": "TLS terminated at the Container App / AKS ingress; the pod listens HTTP.",
+      "mode": "ingress-terminated"
+    }
+  },
+  "servers": [
+    {
+      "id": "everything",
+      "displayName": "MCP Reference (everything)",
+      "description": "Official MCP reference server exercising tools, prompts, and resources. Use to validate the bridge end-to-end. No outbound network.",
+      "transport": "stdio",
+      "launcher": "npx",
+      "launcherArgs": ["-y"],
+      "package": "@modelcontextprotocol/server-everything",
+      "args": [],
+      "envAllowlist": [],
+      "outputTransport": "sse",
+      "boundaries": ["AzureCloud", "AzureUSGovernment"],
+      "enabled": true
+    },
+    {
+      "id": "time",
+      "displayName": "Time & timezone",
+      "description": "Current time and timezone conversion. Pure compute, no outbound network — safe in every boundary.",
+      "transport": "stdio",
+      "launcher": "uvx",
+      "launcherArgs": [],
+      "package": "mcp-server-time",
+      "args": [],
+      "envAllowlist": [],
+      "outputTransport": "sse",
+      "boundaries": ["AzureCloud", "AzureUSGovernment"],
+      "enabled": true
+    },
+    {
+      "id": "git",
+      "displayName": "Git repository tools",
+      "description": "Read/inspect a Git repository mounted into the bridge (status, log, diff, show). Repo path supplied via the MCP_GIT_REPO env var (allow-listed).",
+      "transport": "stdio",
+      "launcher": "uvx",
+      "launcherArgs": [],
+      "package": "mcp-server-git",
+      "args": [],
+      "envAllowlist": ["MCP_GIT_REPO"],
+      "outputTransport": "sse",
+      "boundaries": ["AzureCloud", "AzureUSGovernment"],
+      "enabled": true
+    },
+    {
+      "id": "fetch",
+      "displayName": "Web fetch",
+      "description": "Fetch and convert web content to markdown. Reaches arbitrary public URLs — COMMERCIAL/GCC only; excluded from Gov-High/IL5 catalogs by boundary tag.",
+      "transport": "stdio",
+      "launcher": "uvx",
+      "launcherArgs": [],
+      "package": "mcp-server-fetch",
+      "args": [],
+      "envAllowlist": [],
+      "outputTransport": "sse",
+      "boundaries": ["AzureCloud"],
+      "enabled": false
+    }
+  ]
+}

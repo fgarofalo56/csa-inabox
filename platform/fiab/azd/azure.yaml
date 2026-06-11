@@ -36,6 +36,13 @@ services:
     docker:
       path: ./Dockerfile.wrapper
 
+  mcp-bridge:
+    project: ../../apps/fiab-mcp-bridge
+    language: ts
+    host: containerapp
+    docker:
+      path: ./Dockerfile
+
   activator-engine:
     project: ../../apps/fiab-activator-engine
     language: csharp
