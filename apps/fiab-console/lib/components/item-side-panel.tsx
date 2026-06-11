@@ -23,10 +23,11 @@ import {
 import {
   Comment24Regular, History24Regular, Share24Regular,
   BookOpen24Regular, Dismiss24Regular, Copy16Regular,
-  ShieldLock24Regular, Sparkle16Regular,
+  ShieldLock24Regular, Sparkle16Regular, Tag24Regular,
 } from '@fluentui/react-icons';
 import { getLearn } from '@/lib/learn/content';
 import { SensitivityLabelPane } from './label-flyout';
+import { ClassificationPane } from './classification-flyout';
 
 interface Props { type: string; id: string; }
 
@@ -51,7 +52,7 @@ const useStyles = makeStyles({
 
 export function ItemSidePanel({ type, id }: Props) {
   const styles = useStyles();
-  const [open, setOpen] = useState<null | 'comments' | 'history' | 'share' | 'learn' | 'sensitivity'>(null);
+  const [open, setOpen] = useState<null | 'comments' | 'history' | 'share' | 'learn' | 'sensitivity' | 'classifications'>(null);
   const isNew = id === 'new';
 
   // Auto-open Learn for first visit, unless dismissed — OR unless the
@@ -93,6 +94,10 @@ export function ItemSidePanel({ type, id }: Props) {
         <Button appearance="subtle" icon={<ShieldLock24Regular />} onClick={() => !isNew && setOpen('sensitivity')}
           aria-label="Sensitivity label" disabled={isNew} />
       </Tooltip>
+      <Tooltip content="Classifications" relationship="label">
+        <Button appearance="subtle" icon={<Tag24Regular />} onClick={() => !isNew && setOpen('classifications')}
+          aria-label="Classifications" disabled={isNew} />
+      </Tooltip>
       <Tooltip content="Learn about this item" relationship="label">
         <Button appearance="subtle" icon={<BookOpen24Regular />} onClick={() => setOpen('learn')}
           aria-label="Learn about this item" />
@@ -108,6 +113,7 @@ export function ItemSidePanel({ type, id }: Props) {
             {open === 'history' && 'Version history'}
             {open === 'share' && 'Share'}
             {open === 'sensitivity' && 'Sensitivity label'}
+            {open === 'classifications' && 'Classifications'}
             {open === 'learn' && 'Learn about this item'}
           </DrawerHeaderTitle>
         </DrawerHeader>
@@ -116,6 +122,7 @@ export function ItemSidePanel({ type, id }: Props) {
           {open === 'history' && <HistoryPane type={type} id={id} />}
           {open === 'share'   && <SharePane   type={type} id={id} />}
           {open === 'sensitivity' && <SensitivityLabelPane type={type} id={id} />}
+          {open === 'classifications' && <ClassificationPane type={type} id={id} />}
           {open === 'learn'   && <LearnPane   type={type} id={id} onClose={() => setOpen(null)} />}
         </DrawerBody>
       </Drawer>

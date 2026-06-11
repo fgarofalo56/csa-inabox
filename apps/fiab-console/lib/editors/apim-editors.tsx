@@ -2266,9 +2266,11 @@ export function DataProductEditor({ item, id }: { item: FabricItemType; id: stri
   const [dsName, setDsName] = useState('');
   const [dsType, setDsType] = useState('fabric_lakehouse');
   const [dsQName, setDsQName] = useState('');
-  const [dsClass, setDsClass] = useState('');
+  const [dsClass, setDsClass] = useState<string[]>([]);
   // Governance label taxonomy (/api/governance/classification-types) so dataset
-  // classifications are PICKED from the tenant's standard set, not free-typed.
+  // classifications are PICKED from the tenant's standard set, not free-typed
+  // (.claude/rules/loom-no-freeform-config.md). No free-text fallback: when the
+  // taxonomy is empty the form shows an honest deep-link to the admin page.
   const [classTypes, setClassTypes] = useState<string[]>([]);
   useEffect(() => {
     fetch('/api/governance/classification-types')
@@ -2276,7 +2278,7 @@ export function DataProductEditor({ item, id }: { item: FabricItemType; id: stri
       .then((j) => { if (j?.ok) setClassTypes((j.types || []).map((t: any) => t.name).filter(Boolean)); })
       .catch(() => {});
   }, []);
-  const dsClassSelected = dsClass.split(',').map((c) => c.trim()).filter(Boolean);
+  const dsClassSelected = dsClass;
   const [dsBusy, setDsBusy] = useState(false);
   const [dsMsg, setDsMsg] = useState<{ intent: 'success' | 'error'; text: string } | null>(null);
 
@@ -2567,7 +2569,7 @@ export function DataProductEditor({ item, id }: { item: FabricItemType; id: stri
   const registerDataset = useCallback(async () => {
     if (!dsName.trim() || !dsQName.trim()) { setDsMsg({ intent: 'error', text: 'Name and qualified name are required.' }); return; }
     setDsBusy(true); setDsMsg(null);
-    const classifications = dsClass.split(',').map((c) => c.trim()).filter(Boolean);
+    const classifications = dsClass.map((c) => c.trim()).filter(Boolean);
     try {
       // register-via-Atlas through the existing cross-source register route.
       const r = await fetch('/api/catalog/register', {
@@ -2591,7 +2593,7 @@ export function DataProductEditor({ item, id }: { item: FabricItemType; id: stri
       setState((prev) => ({ ...prev, datasets: [...(prev.datasets || []), ds] }));
       setDirty(true);
       setDsMsg({ intent: 'success', text: `Registered ${dsName} (guid ${ds.guid || 'assigned'}). Save to persist the link.` });
-      setDsName(''); setDsQName(''); setDsClass('');
+      setDsName(''); setDsQName(''); setDsClass([]);
     } catch (e: any) { setDsMsg({ intent: 'error', text: e?.message || String(e) }); }
     finally { setDsBusy(false); }
   }, [dsName, dsType, dsQName, dsClass, state.domain]);
@@ -3087,11 +3089,18 @@ export function DataProductEditor({ item, id }: { item: FabricItemType; id: stri
                 {classTypes.length > 0 ? (
                   <Dropdown multiselect placeholder="Select labels…"
                     value={dsClassSelected.join(', ')} selectedOptions={dsClassSelected}
-                    onOptionSelect={(_, d) => setDsClass((d.selectedOptions || []).join(', '))}>
+                    onOptionSelect={(_, d) => setDsClass(d.selectedOptions || [])}>
                     {classTypes.map((c) => <Option key={c} value={c}>{c}</Option>)}
                   </Dropdown>
                 ) : (
-                  <Input value={dsClass} onChange={(_, d) => setDsClass(d.value)} placeholder="PII, Confidential (comma-separated)" />
+                  <MessageBar intent="warning">
+                    <MessageBarBody>
+                      No classification taxonomy is defined yet. Add labels in{' '}
+                      <a href="/governance/classifications" target="_blank" rel="noreferrer" style={{ fontWeight: 600 }}>
+                        Governance → Classifications
+                      </a>{' '}— classifications are picked from the taxonomy, never free-typed.
+                    </MessageBarBody>
+                  </MessageBar>
                 )}
               </Field>
             </div>
