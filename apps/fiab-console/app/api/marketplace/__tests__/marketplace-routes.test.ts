@@ -25,16 +25,20 @@ vi.mock('@/lib/azure/apim-client', async () => {
     listSubscriptions: vi.fn(),
     createSubscription: vi.fn(),
     getSubscriptionKeys: vi.fn(),
+    getApi: vi.fn(),
+    testApiCall: vi.fn(),
   };
 });
 
 import { GET as catalogGET } from '../catalog/route';
 import { GET as subsGET, POST as subsPOST } from '../subscriptions/route';
 import { POST as keysPOST } from '../subscriptions/[sid]/keys/route';
+import { POST as testCallPOST } from '../../items/apim-api/[id]/test-call/route';
 import { getSession } from '@/lib/auth/session';
 import {
   listProducts, listProductApis, listApis, getServiceInfo,
   listSubscriptions, createSubscription, getSubscriptionKeys,
+  getApi, testApiCall,
 } from '@/lib/azure/apim-client';
 
 function getReq(url = 'http://x/') {
@@ -46,6 +50,7 @@ function bodyReq(body: any, url = 'http://x/') {
   return { nextUrl: u, url, json: async () => body } as any;
 }
 const ctx = (sid: string) => ({ params: Promise.resolve({ sid }) });
+const idCtx = (id: string) => ({ params: Promise.resolve({ id }) });
 
 const ORIG = { name: process.env.LOOM_APIM_NAME, sub: process.env.LOOM_SUBSCRIPTION_ID };
 
@@ -190,6 +195,21 @@ describe('POST /api/marketplace/subscriptions (subscribe)', () => {
     expect(res.status).toBe(201);
     expect(createSubscription).toHaveBeenCalledWith(expect.objectContaining({ api: 'orders', allApis: false }));
   });
+
+  it('passes state:active through to createSubscription for an auto-approved subscribe', async () => {
+    (createSubscription as any).mockResolvedValue({ id: '/s/sub-orders', name: 'sub-orders', state: 'active' });
+    const res = await subsPOST(bodyReq({ api: 'orders', state: 'active' }));
+    expect(res.status).toBe(201);
+    const j = await res.json();
+    expect(j.subscription.state).toBe('active');
+    expect(createSubscription).toHaveBeenCalledWith(expect.objectContaining({ state: 'active' }));
+  });
+
+  it('ignores a non-active state (defaults to submitted)', async () => {
+    (createSubscription as any).mockResolvedValue({ id: '/s/sub-orders', name: 'sub-orders', state: 'submitted' });
+    await subsPOST(bodyReq({ api: 'orders', state: 'bogus' }));
+    expect(createSubscription).toHaveBeenCalledWith(expect.objectContaining({ state: undefined }));
+  });
 });
 
 describe('POST /api/marketplace/subscriptions/[sid]/keys', () => {
@@ -215,5 +235,49 @@ describe('POST /api/marketplace/subscriptions/[sid]/keys', () => {
     expect(j.ok).toBe(true);
     expect(j.primaryKey).toBe('PRIMARY');
     expect(getSubscriptionKeys).toHaveBeenCalledWith('sub1');
+  });
+});
+
+describe('POST /api/items/apim-api/[id]/test-call (Try console)', () => {
+  beforeEach(() => {
+    (getSession as any).mockReturnValue({ claims: { oid: 'u' } });
+    (getApi as any).mockResolvedValue({ id: '/a/orders', name: 'orders', path: 'orders' });
+  });
+
+  it('401 without a session', async () => {
+    (getSession as any).mockReturnValue(null);
+    const res = await testCallPOST(bodyReq({ method: 'GET' }), idCtx('orders'));
+    expect(res.status).toBe(401);
+  });
+
+  it('404 when the API does not exist', async () => {
+    (getApi as any).mockResolvedValue(null);
+    const res = await testCallPOST(bodyReq({ method: 'GET' }), idCtx('missing'));
+    expect(res.status).toBe(404);
+  });
+
+  it('forwards subscriptionId + subscriptionKey to testApiCall and echoes status/keySource', async () => {
+    (testApiCall as any).mockResolvedValue({ status: 200, statusText: 'OK', headers: { 'content-type': 'application/json' }, body: '{}', gatewayUrl: 'https://gw', keySource: 'subscription' });
+    const res = await testCallPOST(bodyReq({ method: 'GET', urlTemplate: '/status', subscriptionId: 'loom-sample-sub' }), idCtx('orders'));
+    expect(res.status).toBe(200);
+    const j = await res.json();
+    expect(j.ok).toBe(true);
+    expect(j.status).toBe(200);
+    expect(j.keySource).toBe('subscription');
+    expect(testApiCall).toHaveBeenCalledWith(expect.objectContaining({
+      apiPath: 'orders', urlTemplate: '/status', subscriptionId: 'loom-sample-sub',
+    }));
+  });
+
+  it('passes a pasted subscriptionKey through (manual-entry path)', async () => {
+    (testApiCall as any).mockResolvedValue({ status: 200, statusText: 'OK', headers: {}, body: '', gatewayUrl: 'https://gw', keySource: 'provided' });
+    await testCallPOST(bodyReq({ method: 'GET', subscriptionKey: 'PASTED-KEY' }), idCtx('orders'));
+    expect(testApiCall).toHaveBeenCalledWith(expect.objectContaining({ subscriptionKey: 'PASTED-KEY' }));
+  });
+
+  it('omits blank subscriptionId/subscriptionKey', async () => {
+    (testApiCall as any).mockResolvedValue({ status: 200, statusText: 'OK', headers: {}, body: '', gatewayUrl: 'https://gw', keySource: 'master' });
+    await testCallPOST(bodyReq({ method: 'GET', subscriptionId: '  ', subscriptionKey: '' }), idCtx('orders'));
+    expect(testApiCall).toHaveBeenCalledWith(expect.objectContaining({ subscriptionId: undefined, subscriptionKey: undefined }));
   });
 });

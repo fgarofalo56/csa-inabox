@@ -14,8 +14,13 @@
  *   - Lineage      : link to existing /governance/lineage
  *
  * Every fetch surfaces structured errors. A 503 with `code:
- * purview_not_configured` renders the NotConfiguredBar with the bicep +
- * env + role remediation. Other 4xx/5xx render an error MessageBar.
+ * purview_not_configured` (env var unset) OR a 403 with `code:
+ * purview_not_authorized` (UAMI lacks a Data Map role) renders the
+ * NotConfiguredBar with the bicep + env + role remediation — never a bare 403.
+ * A single status banner (driven by /api/governance/purview/status →
+ * probePurview) sits above the sub-tabs so the operator sees the wiring state
+ * (live / role_missing / not_configured) at a glance. Other 4xx/5xx render an
+ * error MessageBar.
  */
 
 import { useCallback, useEffect, useState } from 'react';
@@ -30,24 +35,82 @@ import {
 } from '@fluentui/react-components';
 import {
   ArrowSync24Regular, Add20Regular, Delete20Regular, Play20Regular, Open16Regular,
+  Search20Regular, DatabaseSearch24Regular,
 } from '@fluentui/react-icons';
 import { NotConfiguredBar, type NotConfiguredHint } from './not-configured-bar';
 
 const useStyles = makeStyles({
-  subTabs: { marginBottom: 12 },
+  subTabs: { marginBottom: tokens.spacingVerticalM },
+  statusBannerWrap: { marginBottom: tokens.spacingVerticalM },
   section: {
-    padding: 12, borderRadius: 8,
+    padding: tokens.spacingVerticalL,
+    borderRadius: tokens.borderRadiusLarge,
     border: `1px solid ${tokens.colorNeutralStroke2}`,
     backgroundColor: tokens.colorNeutralBackground1,
+    boxShadow: tokens.shadow2,
   },
-  toolbar: { display: 'flex', gap: 8, marginBottom: 8, alignItems: 'center' },
-  fieldStack: { display: 'flex', flexDirection: 'column', gap: 10, minWidth: 360 },
+  toolbar: {
+    display: 'flex',
+    gap: tokens.spacingHorizontalS,
+    marginBottom: tokens.spacingVerticalM,
+    alignItems: 'center',
+    flexWrap: 'wrap',
+  },
+  grow: { marginRight: 'auto' },
+  filter: { minWidth: 220 },
+  fieldStack: {
+    display: 'flex', flexDirection: 'column',
+    gap: tokens.spacingVerticalM, minWidth: 360,
+  },
   linkOut: {
-    display: 'inline-flex', alignItems: 'center', gap: 4,
-    padding: '8px 12px',
-    border: `1px solid ${tokens.colorNeutralStroke2}`, borderRadius: 6,
+    display: 'inline-flex', alignItems: 'center', gap: tokens.spacingHorizontalXS,
+    padding: `${tokens.spacingVerticalS} ${tokens.spacingHorizontalM}`,
+    border: `1px solid ${tokens.colorNeutralStroke2}`,
+    borderRadius: tokens.borderRadiusMedium,
     textDecoration: 'none', color: tokens.colorBrandForeground1,
-    fontSize: 13,
+    fontSize: tokens.fontSizeBase300,
+    fontWeight: tokens.fontWeightSemibold,
+    transitionDuration: tokens.durationFaster,
+    transitionProperty: 'background-color, border-color',
+    ':hover': {
+      backgroundColor: tokens.colorNeutralBackground1Hover,
+      borderColor: tokens.colorNeutralStroke1,
+    },
+  },
+  muted: { color: tokens.colorNeutralForeground3 },
+  sectionTitle: {
+    display: 'flex', alignItems: 'center', gap: tokens.spacingHorizontalS,
+    marginBottom: tokens.spacingVerticalS,
+  },
+  linkCaption: {
+    color: tokens.colorNeutralForeground3,
+    marginBottom: tokens.spacingVerticalS,
+  },
+  emptyState: {
+    display: 'flex', flexDirection: 'column', alignItems: 'center',
+    gap: tokens.spacingVerticalS,
+    padding: `${tokens.spacingVerticalXXL} ${tokens.spacingHorizontalL}`,
+    color: tokens.colorNeutralForeground3,
+    textAlign: 'center',
+  },
+  emptyIcon: { fontSize: '28px', color: tokens.colorNeutralForeground4 },
+  table: { marginTop: tokens.spacingVerticalXS },
+  code: {
+    fontSize: tokens.fontSizeBase100,
+    fontFamily: tokens.fontFamilyMonospace,
+    color: tokens.colorNeutralForeground2,
+  },
+  codeWrap: {
+    fontSize: tokens.fontSizeBase100,
+    fontFamily: tokens.fontFamilyMonospace,
+    color: tokens.colorNeutralForeground2,
+    wordBreak: 'break-all',
+  },
+  actionCell: { textAlign: 'right', width: '48px' },
+  srOnly: {
+    position: 'absolute', width: '1px', height: '1px',
+    padding: 0, margin: '-1px', overflow: 'hidden',
+    clip: 'rect(0,0,0,0)', whiteSpace: 'nowrap', border: 0,
   },
 });
 
@@ -65,8 +128,16 @@ async function fetchJson<T>(url: string, init: RequestInit = {}): Promise<ApiSta
   try {
     const r = await fetch(url, init);
     const j = await r.json();
-    if (r.status === 503 && j?.code?.endsWith('_not_configured')) {
-      return { loading: false, data: null, notConfigured: j.hint, error: j.error, errorStatus: 503 };
+    // Honest gates render the NotConfiguredBar (never a raw red error):
+    //   503 + *_not_configured        → Purview/MIP/DLP not provisioned (env var unset)
+    //   403 + purview_not_authorized  → account reachable but the Console UAMI lacks a
+    //                                   Data Map role on the root collection (the
+    //                                   "Not authorized to access account" 403). The
+    //                                   BFF attaches the grant remediation in j.hint.
+    const isNotConfigured = r.status === 503 && j?.code?.endsWith('_not_configured');
+    const isNotAuthorized = r.status === 403 && j?.code === 'purview_not_authorized';
+    if (isNotConfigured || isNotAuthorized) {
+      return { loading: false, data: null, notConfigured: j.hint, error: j.error, errorStatus: r.status };
     }
     if (!r.ok) {
       return { loading: false, data: null, error: j?.error || `HTTP ${r.status}`, errorStatus: r.status };
@@ -79,12 +150,68 @@ async function fetchJson<T>(url: string, init: RequestInit = {}): Promise<ApiSta
 
 type SubTab = 'sources' | 'scans' | 'classifications' | 'glossary' | 'domains' | 'dq' | 'sensitivity' | 'lineage';
 
+/**
+ * PurviewStatusBanner — one wiring-state banner above the sub-tabs, driven by
+ * GET /api/governance/purview/status (→ probePurview). Renders the
+ * NotConfiguredBar honest gate when the account is unset (reason:
+ * 'not_configured'), the UAMI lacks a Data Map role (reason: 'role_missing' —
+ * the 403 this task fixes), or the host is unreachable (reason:
+ * 'upstream_error'). When reason === 'live' it renders nothing so the sub-tabs
+ * show real data. Fail-open: a failed probe is silent (the per-section fetches
+ * still surface their own gates).
+ */
+interface PurviewStatus {
+  ok: boolean;
+  configured: boolean;
+  account: string | null;
+  reason: 'live' | 'not_configured' | 'role_missing' | 'upstream_error';
+  message?: string;
+  hint?: NotConfiguredHint;
+}
+
+function PurviewStatusBanner() {
+  const s = useStyles();
+  const [status, setStatus] = useState<PurviewStatus | null>(null);
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      try {
+        const r = await fetch('/api/governance/purview/status');
+        const j = (await r.json()) as PurviewStatus;
+        if (!cancelled) setStatus(j);
+      } catch {
+        /* fail-open — per-section fetches still surface their own gates */
+      }
+    })();
+    return () => { cancelled = true; };
+  }, []);
+
+  if (!status || status.reason === 'live') return null;
+
+  const surface =
+    status.reason === 'role_missing'
+      ? 'Microsoft Purview Data Map (managed identity not authorized)'
+      : 'Microsoft Purview Data Map';
+  return (
+    <div className={s.statusBannerWrap}>
+      <NotConfiguredBar
+        surface={surface}
+        hint={status.hint}
+        rawError={status.message}
+        portalLink="https://web.purview.azure.com/"
+        portalLabel="Open Microsoft Purview"
+      />
+    </div>
+  );
+}
+
 export function PurviewPanel() {
   const s = useStyles();
   const [tab, setTab] = useState<SubTab>('sources');
 
   return (
     <div>
+      <PurviewStatusBanner />
       <TabList
         className={s.subTabs}
         selectedValue={tab}
@@ -127,6 +254,7 @@ function DataSourcesSection() {
   const [state, setState] = useState<ApiState<SourcesPayload>>(emptyState());
   const [open, setOpen] = useState(false);
   const [creating, setCreating] = useState(false);
+  const [filter, setFilter] = useState('');
   const [form, setForm] = useState({ name: '', kind: 'AzureSqlDatabase', endpoint: '' });
 
   const load = useCallback(async () => {
@@ -171,7 +299,16 @@ function DataSourcesSection() {
   return (
     <div className={s.section}>
       <div className={s.toolbar}>
-        <Subtitle2 style={{ marginRight: 'auto' }}>Registered data sources</Subtitle2>
+        <Subtitle2 className={s.grow}>Registered data sources</Subtitle2>
+        <Input
+          className={s.filter}
+          size="small"
+          value={filter}
+          onChange={(_: unknown, d: any) => setFilter(d.value)}
+          placeholder="Filter by name or kind"
+          contentBefore={<Search20Regular />}
+          aria-label="Filter data sources"
+        />
         <Button icon={<ArrowSync24Regular />} onClick={load} disabled={state.loading}>Refresh</Button>
         <Dialog open={open} onOpenChange={(_: unknown, d: any) => setOpen(d.open)}>
           <DialogTrigger disableButtonEnhancement>
@@ -231,37 +368,55 @@ function DataSourcesSection() {
         </MessageBar>
       )}
       {!state.loading && state.data?.ok && (state.data.sources || []).length === 0 && (
-        <Caption1 block style={{ color: tokens.colorNeutralForeground3 }}>
-          No data sources registered yet. Click <strong>Register source</strong> to add one.
-        </Caption1>
+        <div className={s.emptyState}>
+          <DatabaseSearch24Regular className={s.emptyIcon} />
+          <Caption1 block>
+            No data sources registered yet. Click <strong>Register source</strong> to add one.
+          </Caption1>
+        </div>
       )}
-      {!state.loading && state.data?.ok && (state.data.sources || []).length > 0 && (
-        <Table size="small" aria-label="Registered data sources">
-          <TableHeader>
-            <TableRow>
-              <TableHeaderCell>Name</TableHeaderCell>
-              <TableHeaderCell>Kind</TableHeaderCell>
-              <TableHeaderCell>Endpoint</TableHeaderCell>
-              <TableHeaderCell>Collection</TableHeaderCell>
-              <TableHeaderCell></TableHeaderCell>
-            </TableRow>
-          </TableHeader>
-          <TableBody>
-            {state.data.sources!.map((src) => (
-              <TableRow key={src.id || src.name}>
-                <TableCell><strong>{src.name}</strong></TableCell>
-                <TableCell><Badge appearance="outline">{src.kind || 'Unknown'}</Badge></TableCell>
-                <TableCell><code style={{ fontSize: 11 }}>{src.endpoint || '—'}</code></TableCell>
-                <TableCell>{src.collectionId || '—'}</TableCell>
-                <TableCell>
-                  <Button icon={<Delete20Regular />} appearance="subtle" size="small"
-                    onClick={() => remove(src.name)} aria-label={`Delete ${src.name}`} />
-                </TableCell>
+      {!state.loading && state.data?.ok && (() => {
+        const rows = (state.data!.sources || []).filter((src) => {
+          const q = filter.trim().toLowerCase();
+          if (!q) return true;
+          return (src.name || '').toLowerCase().includes(q) || (src.kind || '').toLowerCase().includes(q);
+        });
+        if ((state.data!.sources || []).length === 0) return null;
+        if (rows.length === 0) {
+          return (
+            <Caption1 block className={s.muted}>
+              No data sources match “{filter}”.
+            </Caption1>
+          );
+        }
+        return (
+          <Table size="small" aria-label="Registered data sources" className={s.table}>
+            <TableHeader>
+              <TableRow>
+                <TableHeaderCell>Name</TableHeaderCell>
+                <TableHeaderCell>Kind</TableHeaderCell>
+                <TableHeaderCell>Endpoint</TableHeaderCell>
+                <TableHeaderCell>Collection</TableHeaderCell>
+                <TableHeaderCell className={s.actionCell}><span className={s.srOnly}>Actions</span></TableHeaderCell>
               </TableRow>
-            ))}
-          </TableBody>
-        </Table>
-      )}
+            </TableHeader>
+            <TableBody>
+              {rows.map((src) => (
+                <TableRow key={src.id || src.name}>
+                  <TableCell><strong>{src.name}</strong></TableCell>
+                  <TableCell><Badge appearance="outline">{src.kind || 'Unknown'}</Badge></TableCell>
+                  <TableCell><code className={s.codeWrap}>{src.endpoint || '—'}</code></TableCell>
+                  <TableCell>{src.collectionId || '—'}</TableCell>
+                  <TableCell className={s.actionCell}>
+                    <Button icon={<Delete20Regular />} appearance="subtle" size="small"
+                      onClick={() => remove(src.name)} aria-label={`De-register ${src.name}`} />
+                  </TableCell>
+                </TableRow>
+              ))}
+            </TableBody>
+          </Table>
+        );
+      })()}
     </div>
   );
 }
@@ -331,7 +486,7 @@ function ScansSection() {
   return (
     <div className={s.section}>
       <div className={s.toolbar}>
-        <Subtitle2 style={{ marginRight: 'auto' }}>Scans</Subtitle2>
+        <Subtitle2 className={s.grow}>Scans</Subtitle2>
         {sources.data?.sources && (
           <Dropdown
             value={selectedSource}
@@ -355,18 +510,18 @@ function ScansSection() {
       )}
       {selectedSource && scans.loading && <Spinner label="Loading scans…" />}
       {selectedSource && scans.data?.ok && (scans.data.scans || []).length === 0 && (
-        <Caption1 block style={{ color: tokens.colorNeutralForeground3 }}>
-          No scans defined on source <code>{selectedSource}</code>. Configure one in the Purview portal.
+        <Caption1 block className={s.muted}>
+          No scans defined on source <code className={s.code}>{selectedSource}</code>. Configure one in the Purview portal.
         </Caption1>
       )}
       {selectedSource && scans.data?.ok && (scans.data.scans || []).length > 0 && (
-        <Table size="small" aria-label="Scans">
+        <Table size="small" aria-label="Scans" className={s.table}>
           <TableHeader>
             <TableRow>
               <TableHeaderCell>Name</TableHeaderCell>
               <TableHeaderCell>Kind</TableHeaderCell>
               <TableHeaderCell>Last runs</TableHeaderCell>
-              <TableHeaderCell></TableHeaderCell>
+              <TableHeaderCell className={s.actionCell}><span className={s.srOnly}>Run scan</span></TableHeaderCell>
             </TableRow>
           </TableHeader>
           <TableBody>
@@ -383,7 +538,7 @@ function ScansSection() {
                     )}
                     {!r && <Button size="small" onClick={() => loadRuns(scan.name)}>Show runs</Button>}
                   </TableCell>
-                  <TableCell>
+                  <TableCell className={s.actionCell}>
                     <Button size="small" icon={<Play20Regular />} appearance="primary"
                       onClick={() => triggerRun(scan.name)}>Run</Button>
                   </TableCell>
@@ -419,7 +574,7 @@ function ClassificationsSection() {
   return (
     <div className={s.section}>
       <div className={s.toolbar}>
-        <Subtitle2 style={{ marginRight: 'auto' }}>Classification hits</Subtitle2>
+        <Subtitle2 className={s.grow}>Classification hits</Subtitle2>
         <a className={s.linkOut} href="/governance/classifications">
           Open classifications page <Open16Regular />
         </a>
@@ -433,8 +588,13 @@ function ClassificationsSection() {
       {state.notConfigured && (
         <NotConfiguredBar surface="Classifications" hint={state.notConfigured} />
       )}
+      {!state.loading && !state.error && !state.notConfigured && state.data?.ok && (state.data.classifications || []).length === 0 && (
+        <Caption1 block className={s.muted}>
+          No classification hits recorded yet. Run a Purview scan to populate classification results.
+        </Caption1>
+      )}
       {state.data?.ok && (state.data.classifications || []).length > 0 && (
-        <Table size="small" aria-label="Classifications">
+        <Table size="small" aria-label="Classifications" className={s.table}>
           <TableHeader>
             <TableRow>
               <TableHeaderCell>Classification</TableHeaderCell>
@@ -510,7 +670,7 @@ function GlossarySection() {
   return (
     <div className={s.section}>
       <div className={s.toolbar}>
-        <Subtitle2 style={{ marginRight: 'auto' }}>Glossary terms</Subtitle2>
+        <Subtitle2 className={s.grow}>Glossary terms</Subtitle2>
         <Button icon={<ArrowSync24Regular />} onClick={load} disabled={state.loading}>Refresh</Button>
         <Dialog open={open} onOpenChange={(_: unknown, d: any) => setOpen(d.open)}>
           <DialogTrigger disableButtonEnhancement>
@@ -550,12 +710,12 @@ function GlossarySection() {
         </MessageBar>
       )}
       {state.data?.ok && (state.data.terms || []).length === 0 && (
-        <Caption1 block style={{ color: tokens.colorNeutralForeground3 }}>
+        <Caption1 block className={s.muted}>
           No glossary terms found in this Purview account. Create one above (requires at least one glossary to exist).
         </Caption1>
       )}
       {state.data?.ok && (state.data.terms || []).length > 0 && (
-        <Table size="small" aria-label="Glossary terms">
+        <Table size="small" aria-label="Glossary terms" className={s.table}>
           <TableHeader>
             <TableRow>
               <TableHeaderCell>Term</TableHeaderCell>
@@ -622,7 +782,7 @@ function DomainsSection() {
   return (
     <div className={s.section}>
       <div className={s.toolbar}>
-        <Subtitle2 style={{ marginRight: 'auto' }}>Governance domains</Subtitle2>
+        <Subtitle2 className={s.grow}>Governance domains</Subtitle2>
         <Button icon={<ArrowSync24Regular />} onClick={load} disabled={state.loading}>Refresh</Button>
         <Dialog open={open} onOpenChange={(_: unknown, d: any) => setOpen(d.open)}>
           <DialogTrigger disableButtonEnhancement>
@@ -666,10 +826,10 @@ function DomainsSection() {
         </MessageBar>
       )}
       {state.data?.ok && (state.data.domains || []).length === 0 && (
-        <Caption1 block style={{ color: tokens.colorNeutralForeground3 }}>No governance domains yet. Create one to start grouping data products.</Caption1>
+        <Caption1 block className={s.muted}>No governance domains yet. Create one to start grouping data products.</Caption1>
       )}
       {state.data?.ok && (state.data.domains || []).length > 0 && (
-        <Table size="small" aria-label="Governance domains">
+        <Table size="small" aria-label="Governance domains" className={s.table}>
           <TableHeader>
             <TableRow>
               <TableHeaderCell>Name</TableHeaderCell>
@@ -684,7 +844,7 @@ function DomainsSection() {
                 <TableCell><strong>{d.name}</strong></TableCell>
                 <TableCell><Badge appearance="outline">{d.type || '—'}</Badge></TableCell>
                 <TableCell><Caption1>{(d.description || '').slice(0, 100)}</Caption1></TableCell>
-                <TableCell><code style={{ fontSize: 11 }}>{d.id}</code></TableCell>
+                <TableCell><code className={s.code}>{d.id}</code></TableCell>
               </TableRow>
             ))}
           </TableBody>
@@ -716,7 +876,10 @@ function DataQualitySection() {
 
   return (
     <div className={s.section}>
-      <Subtitle2 block style={{ marginBottom: 8 }}>Data quality rules <Badge appearance="tint" color="warning">Preview</Badge></Subtitle2>
+      <div className={s.sectionTitle}>
+        <Subtitle2>Data quality rules</Subtitle2>
+        <Badge appearance="tint" color="warning">Preview</Badge>
+      </div>
       {state.loading && <Spinner label="Loading DQ rules…" />}
       {state.notConfigured && <NotConfiguredBar surface="Data quality" hint={state.notConfigured} portalLink="https://web.purview.azure.com/resource/dataquality" portalLabel="Open Purview Data Quality" />}
       {state.error && !state.notConfigured && (
@@ -730,7 +893,7 @@ function DataQualitySection() {
         </MessageBar>
       )}
       {state.data?.ok && (state.data.rules || []).length > 0 && (
-        <Table size="small" aria-label="DQ rules">
+        <Table size="small" aria-label="DQ rules" className={s.table}>
           <TableHeader>
             <TableRow>
               <TableHeaderCell>Rule</TableHeaderCell>
@@ -744,7 +907,7 @@ function DataQualitySection() {
               <TableRow key={r.id}>
                 <TableCell><strong>{r.name}</strong></TableCell>
                 <TableCell>{r.scope || '—'}</TableCell>
-                <TableCell><code style={{ fontSize: 11 }}>{(r.expression || '').slice(0, 120)}</code></TableCell>
+                <TableCell><code className={s.code}>{(r.expression || '').slice(0, 120)}</code></TableCell>
                 <TableCell>{r.enabled ? <Badge color="success">on</Badge> : <Badge color="subtle">off</Badge>}</TableCell>
               </TableRow>
             ))}
@@ -763,9 +926,9 @@ function SensitivitySection() {
   const s = useStyles();
   return (
     <div className={s.section}>
-      <Subtitle2 block style={{ marginBottom: 8 }}>Sensitivity coverage</Subtitle2>
-      <Caption1 block style={{ color: tokens.colorNeutralForeground3, marginBottom: 8 }}>
-        Loom already ships a real sensitivity coverage view at <code>/governance/sensitivity</code> backed by Cosmos. Open it for per-type label distribution + unlabeled-item drilldown.
+      <Subtitle2 block className={s.sectionTitle}>Sensitivity coverage</Subtitle2>
+      <Caption1 block className={s.linkCaption}>
+        Loom already ships a real sensitivity coverage view at <code className={s.code}>/governance/sensitivity</code> backed by Cosmos. Open it for per-type label distribution + unlabeled-item drilldown.
       </Caption1>
       <a className={s.linkOut} href="/governance/sensitivity">
         Open sensitivity coverage <Open16Regular />
@@ -778,9 +941,9 @@ function LineageSection() {
   const s = useStyles();
   return (
     <div className={s.section}>
-      <Subtitle2 block style={{ marginBottom: 8 }}>Lineage</Subtitle2>
-      <Caption1 block style={{ color: tokens.colorNeutralForeground3, marginBottom: 8 }}>
-        Lineage already has a dedicated page at <code>/governance/lineage</code> with upstream/downstream graph rendering. Open it for asset-level lineage exploration.
+      <Subtitle2 block className={s.sectionTitle}>Lineage</Subtitle2>
+      <Caption1 block className={s.linkCaption}>
+        Lineage already has a dedicated page at <code className={s.code}>/governance/lineage</code> with upstream/downstream graph rendering. Open it for asset-level lineage exploration.
       </Caption1>
       <a className={s.linkOut} href="/governance/lineage">
         Open lineage explorer <Open16Regular />

@@ -35,16 +35,25 @@ interface DnsRecord { fqdn: string; ips: string[]; zone: string; }
 interface PrivateEndpoint {
   id: string; name: string; resourceGroup?: string; location?: string;
   connectedResourceName?: string; groupIds: string[]; state?: string; dns: DnsRecord[];
+  subnetId?: string; subnetName?: string;
 }
 interface VNetLite {
   id: string; name: string; subscriptionId: string; resourceGroup?: string;
   addressPrefixes: string[];
-  subnets: { name: string; addressPrefix?: string; privateEndpointCount: number; delegations: string[] }[];
+  subnets: { id?: string; name: string; addressPrefix?: string; privateEndpointCount: number; delegations: string[]; nsgId?: string }[];
+}
+interface NsgRuleLite {
+  name: string; direction: string; access: string; priority: number;
+  protocol: string; sourcePrefix: string; destPrefix: string; sourcePort: string; destPort: string;
+}
+interface NsgLite {
+  id: string; name: string; subscriptionId: string; resourceGroup?: string;
+  location?: string; subnetIds: string[]; rules: NsgRuleLite[];
 }
 interface ApiResp {
   ok: boolean; count?: number; endpoints?: PrivateEndpoint[]; zones?: string[];
   hostsBlock?: string; error?: string; hint?: string;
-  vnets?: VNetLite[]; dnsZones?: { name: string; records: DnsRecord[] }[];
+  vnets?: VNetLite[]; nsgs?: NsgLite[]; dnsZones?: { name: string; records: DnsRecord[] }[];
 }
 
 const card: React.CSSProperties = {
@@ -365,6 +374,39 @@ export function NetworkPane() {
         </div>
       )}
 
+      {/* 2b-2 · Network security groups */}
+      {!loading && data?.ok && (data.nsgs?.length ?? 0) > 0 && (
+        <div style={card}>
+          <div style={head}>
+            <ShieldLock24Regular />
+            <Subtitle2>Network security groups ({data.nsgs?.length ?? 0})</Subtitle2>
+          </div>
+          <Table size="small" aria-label="Network security groups">
+            <TableHeader>
+              <TableRow>
+                <TableHeaderCell>NSG</TableHeaderCell>
+                <TableHeaderCell>Attached subnets</TableHeaderCell>
+                <TableHeaderCell>Rules</TableHeaderCell>
+                <TableHeaderCell>Deny rules</TableHeaderCell>
+              </TableRow>
+            </TableHeader>
+            <TableBody>
+              {(data.nsgs || []).map((n) => (
+                <TableRow key={n.id}>
+                  <TableCell><Body1Strong>{n.name}</Body1Strong></TableCell>
+                  <TableCell>{n.subnetIds.map((s) => s.split('/').pop()).join(', ') || '—'}</TableCell>
+                  <TableCell>{n.rules.length}</TableCell>
+                  <TableCell>{n.rules.filter((r) => r.access === 'Deny').length}</TableCell>
+                </TableRow>
+              ))}
+            </TableBody>
+          </Table>
+          <Caption1 block style={{ marginTop: 8, color: tokens.colorNeutralForeground3 }}>
+            Select an NSG node in the topology below to view its full inbound/outbound security-rule grid.
+          </Caption1>
+        </div>
+      )}
+
       {/* 2c · Topology graph */}
       {!loading && data?.ok && ((data.vnets?.length ?? 0) > 0 || (data.endpoints?.length ?? 0) > 0) && (
         <div style={card}>
@@ -373,9 +415,9 @@ export function NetworkPane() {
             <Subtitle2>CSA Loom network topology</Subtitle2>
           </div>
           <Body1 style={{ display: 'block', marginBottom: 10, color: tokens.colorNeutralForeground3 }}>
-            vNets → subnets → private endpoints → the Azure service each fronts.
+            vNets → subnets → NSGs → private endpoints → the Azure service each fronts. Select any node for its live ARM detail.
           </Body1>
-          <NetworkTopologyCanvas data={{ endpoints: (data.endpoints || []) as any, vnets: (data.vnets || []) as any, zones: data.zones || [] }} />
+          <NetworkTopologyCanvas data={{ endpoints: (data.endpoints || []) as any, vnets: (data.vnets || []) as any, nsgs: (data.nsgs || []) as any, zones: data.zones || [] }} />
         </div>
       )}
 

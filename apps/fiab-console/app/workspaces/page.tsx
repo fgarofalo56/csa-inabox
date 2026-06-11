@@ -1,37 +1,35 @@
 'use client';
 
 /**
- * /workspaces — rich workspace browser.
+ * /workspaces — rich workspace browser, built on the shared Loom UI primitives.
  *
- * Features:
- *   - Tile / list view toggle (persisted in localStorage `loom.workspaces.viewMode.v1`)
- *   - Live search across name + description (debounced 150ms)
- *   - Sort menu: Name a-z/z-a, Created newest/oldest, Last accessed
- *     newest/oldest, Item count most/least (persisted)
- *   - Filter menu: capacity (none / shared / dedicated), domain (dynamic
- *     from data), owner (Me / All); filter chips render below the toolbar
- *   - Pin toggle per workspace (persisted in localStorage
- *     `loom.workspaces.pinned.v1`); pinned float to the top of either
- *     view, separated by a divider
- *   - Color-coded tile icons:
- *       has capacity   -> blue
- *       domain-tagged  -> purple
- *       neither        -> green
- *   - Item count fetched via /api/workspaces?count=true (single aggregate)
+ * Layout (Web 3.0 standard, see docs/fiab/design/ui-web3-guide.md):
+ *   - PageShell header + New-workspace action (CreateWorkspaceDialog).
+ *   - Toolbar: debounced SearchBox + Sort menu + Filter menu + admin
+ *     multi-select controls on the left, a Tile | List ViewToggle on the right.
+ *   - Filter chips row + (admin) bulk-action bar.
+ *   - Sectioned results: a "Pinned" Section floats pinned workspaces above an
+ *     "All workspaces" Section. Each Section renders the active view:
+ *       tile  -> TileGrid + ItemTile
+ *       list  -> LoomDataTable (per-column sort + filter, resizable columns)
  *
- * BFF contract: this page reads from /api/workspaces?count=true. The
- * underlying route is the same — it just adds an `itemCount` field per
- * workspace. No mock data.
+ * Persisted in localStorage: view mode, sort mode, pinned set.
+ *
+ * Data is real: GET /api/workspaces?count=true (listWorkspacesWithCounts) for
+ * the rows, GET /api/workspaces/bulk-delete for the admin probe, /api/auth/me
+ * for the "owner: me" filter. Workspaces are Loom-native, Cosmos-backed — no
+ * Fabric dependency; capacity/domain bindings are optional + best-effort.
  */
 
 import { useCallback, useEffect, useMemo, useState } from 'react';
-import Link from 'next/link';
 import { useRouter } from 'next/navigation';
-import { useQuery, useQueryClient } from '@tanstack/react-query';
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import {
   Badge,
   Body1,
   Button,
+  Caption1,
+  Checkbox,
   Dialog,
   DialogActions,
   DialogBody,
@@ -41,52 +39,42 @@ import {
   DialogTrigger,
   Field,
   Input,
-  Caption1,
-  Checkbox,
   MessageBar,
   MessageBarBody,
-  Select,
   Menu,
   MenuItem,
-  MenuItemRadio,
   MenuItemCheckbox,
+  MenuItemRadio,
   MenuList,
   MenuPopover,
   MenuTrigger,
+  Select,
   Spinner,
-  Table,
-  TableBody,
-  TableCell,
-  TableHeader,
-  TableHeaderCell,
-  TableRow,
+  Text,
   Textarea,
   Tooltip,
   makeStyles,
-  mergeClasses,
   tokens,
-  useId,
 } from '@fluentui/react-components';
 import {
   Add24Regular,
   ArrowSort20Regular,
   Apps20Regular,
-  Building20Regular,
-  ChevronDown16Regular,
-  Database20Regular,
+  Delete20Regular,
   Dismiss12Regular,
   Filter20Regular,
-  Folder20Regular,
-  Grid20Regular,
-  List20Regular,
-  Open16Regular,
+  MoreHorizontal20Regular,
   Pin16Filled,
   PinOff16Regular,
-  Search20Regular,
-  Delete20Regular,
 } from '@fluentui/react-icons';
 import { PageShell } from '@/lib/components/page-shell';
 import { SignInRequired } from '@/lib/components/sign-in-required';
+import { Section, Toolbar } from '@/lib/components/ui/section';
+import { ViewToggle, type LoomView } from '@/lib/components/ui/view-toggle';
+import { ItemTile } from '@/lib/components/ui/item-tile';
+import { TileGrid } from '@/lib/components/ui/tile-grid';
+import { LoomDataTable, type LoomColumn } from '@/lib/components/ui/loom-data-table';
+import { itemVisual } from '@/lib/components/ui/item-type-visual';
 import {
   bulkDeleteWorkspaces,
   createWorkspace,
@@ -95,7 +83,6 @@ import {
   type BulkDeleteResult,
   type Workspace,
 } from '@/lib/api/workspaces';
-import { useMutation } from '@tanstack/react-query';
 
 // ---------------------------------------------------------------------------
 // localStorage helpers (safe SSR — return defaults until client mounts)
@@ -105,7 +92,6 @@ const LS_VIEW = 'loom.workspaces.viewMode.v1';
 const LS_PINNED = 'loom.workspaces.pinned.v1';
 const LS_SORT = 'loom.workspaces.sortMode.v1';
 
-type ViewMode = 'tile' | 'list';
 type SortMode =
   | 'lastAccessed-desc'
   | 'lastAccessed-asc'
@@ -137,51 +123,18 @@ function writeLS(key: string, value: unknown): void {
 }
 
 // ---------------------------------------------------------------------------
-// Styles
+// Page-level styles (only what the primitives don't supply: chips, bulk bar,
+// empty states, the create-dialog form column)
 // ---------------------------------------------------------------------------
 
 const useStyles = makeStyles({
-  root: { display: 'flex', flexDirection: 'column', gap: '14px' },
-
-  toolbar: {
-    display: 'flex',
-    gap: '10px',
-    alignItems: 'center',
-    flexWrap: 'wrap',
-  },
-  toolbarSpacer: { flex: 1 },
-
-  search: { flex: '1 1 280px', minWidth: '200px', maxWidth: '420px' },
-
-  viewToggle: {
-    display: 'inline-flex',
-    borderRadius: '6px',
-    border: `1px solid ${tokens.colorNeutralStroke2}`,
-    overflow: 'hidden',
-  },
-  viewToggleBtn: {
-    border: 'none',
-    backgroundColor: tokens.colorNeutralBackground1,
-    color: tokens.colorNeutralForeground2,
-    padding: '6px 10px',
-    cursor: 'pointer',
-    display: 'inline-flex',
-    alignItems: 'center',
-    gap: '4px',
-    fontSize: '13px',
-    ':hover': { backgroundColor: tokens.colorNeutralBackground1Hover },
-  },
-  viewToggleBtnActive: {
-    backgroundColor: tokens.colorBrandBackground2,
-    color: tokens.colorBrandForeground2,
-  },
-
   chipRow: {
     display: 'flex',
     flexWrap: 'wrap',
     gap: '6px',
     alignItems: 'center',
     minHeight: '24px',
+    marginBottom: tokens.spacingVerticalM,
   },
   chip: {
     display: 'inline-flex',
@@ -216,193 +169,69 @@ const useStyles = makeStyles({
     fontWeight: 600,
     padding: '3px 6px',
   },
-
-  // Section header (Pinned / All)
-  sectionHead: {
-    fontSize: '11px',
-    fontWeight: 700,
-    textTransform: 'uppercase',
-    letterSpacing: '0.06em',
-    color: tokens.colorNeutralForeground3,
-    marginTop: '4px',
-    marginBottom: '6px',
-  },
-  divider: {
-    height: '1px',
-    backgroundColor: tokens.colorNeutralStroke2,
-    marginTop: '14px',
-    marginBottom: '14px',
-  },
-
-  // Tile view
-  grid: {
-    display: 'grid',
-    gridTemplateColumns: 'repeat(auto-fill, minmax(280px, 1fr))',
-    gap: '14px',
-  },
-  tile: {
-    position: 'relative',
-    paddingTop: '16px',
-    paddingRight: '16px',
-    paddingBottom: '16px',
-    paddingLeft: '16px',
-    borderRadius: '12px',
-    border: `1px solid ${tokens.colorNeutralStroke2}`,
-    backgroundColor: tokens.colorNeutralBackground1,
-    color: tokens.colorNeutralForeground1,
-    textDecoration: 'none',
-    display: 'flex',
-    flexDirection: 'column',
-    gap: '8px',
-    minHeight: '150px',
-    cursor: 'pointer',
-    transition: 'transform 0.15s, box-shadow 0.15s, border-color 0.15s',
-    ':hover': {
-      transform: 'translateY(-2px)',
-      boxShadow: tokens.shadow8,
-      borderColor: tokens.colorBrandStroke1,
-    },
-  },
-  tileHeader: { display: 'flex', alignItems: 'flex-start', gap: '12px' },
-  iconBox: {
-    width: '40px',
-    height: '40px',
-    borderRadius: '8px',
-    display: 'inline-flex',
-    alignItems: 'center',
-    justifyContent: 'center',
-    flexShrink: 0,
-  },
-  iconBoxBlue: {
-    backgroundColor: tokens.colorPaletteBlueBackground2,
-    color: tokens.colorPaletteBlueForeground2,
-  },
-  iconBoxPurple: {
-    backgroundColor: tokens.colorPalettePurpleBackground2,
-    color: tokens.colorPalettePurpleForeground2,
-  },
-  iconBoxGreen: {
-    backgroundColor: tokens.colorPaletteGreenBackground2,
-    color: tokens.colorPaletteGreenForeground2,
-  },
-  tileTitleCol: { flex: 1, minWidth: 0, display: 'flex', flexDirection: 'column', gap: '2px' },
-  tileName: {
-    fontSize: '15px',
-    fontWeight: 600,
-    lineHeight: 1.3,
-    overflow: 'hidden',
-    textOverflow: 'ellipsis',
-    whiteSpace: 'nowrap',
-  },
-  tileDesc: {
-    fontSize: '13px',
-    color: tokens.colorNeutralForeground2,
-    lineHeight: 1.45,
-    display: '-webkit-box',
-    WebkitLineClamp: 2,
-    WebkitBoxOrient: 'vertical',
-    overflow: 'hidden',
-  },
-  tileMeta: {
-    fontSize: '11px',
-    color: tokens.colorNeutralForeground3,
-    display: 'flex',
-    flexWrap: 'wrap',
-    gap: '4px',
-    alignItems: 'center',
-    marginTop: 'auto',
-  },
-  pinBtn: {
-    position: 'absolute',
-    top: '8px',
-    right: '8px',
-    border: 'none',
-    backgroundColor: 'transparent',
-    color: tokens.colorNeutralForeground3,
-    cursor: 'pointer',
-    padding: '4px',
-    borderRadius: '6px',
-    display: 'inline-flex',
-    alignItems: 'center',
-    justifyContent: 'center',
-    ':hover': {
-      backgroundColor: tokens.colorNeutralBackground1Hover,
-      color: tokens.colorNeutralForeground1,
-    },
-  },
-  pinBtnActive: { color: tokens.colorBrandForeground1 },
-
-  // List view
-  tableWrap: {
-    border: `1px solid ${tokens.colorNeutralStroke2}`,
-    borderRadius: '8px',
-    overflow: 'hidden',
-    backgroundColor: tokens.colorNeutralBackground1,
-  },
-  rowName: {
-    fontWeight: 600,
-    color: tokens.colorNeutralForeground1,
-    textDecoration: 'none',
-    ':hover': { color: tokens.colorBrandForeground1, textDecoration: 'underline' },
-  },
-  rowDesc: { color: tokens.colorNeutralForeground2, fontSize: '12px' },
-  selectCol: { width: '36px', paddingLeft: '10px', paddingRight: '0px' },
-  selectTileBox: {
-    position: 'absolute',
-    top: '8px',
-    left: '8px',
-    zIndex: 1,
-  },
-  tileSelected: {
-    boxShadow: `0 0 0 2px ${tokens.colorBrandStroke1}`,
-  },
   bulkBar: {
     display: 'flex',
     alignItems: 'center',
     gap: '10px',
     flexWrap: 'wrap',
     padding: '8px 12px',
-    borderRadius: '8px',
+    borderRadius: tokens.borderRadiusLarge,
     backgroundColor: tokens.colorNeutralBackground3,
     border: `1px solid ${tokens.colorNeutralStroke2}`,
+    marginBottom: tokens.spacingVerticalM,
   },
   bulkBarSpacer: { flex: 1 },
-  pinCol: { width: '36px', paddingLeft: '10px', paddingRight: '0px' },
-  countCol: { width: '90px' },
-  dateCol: { width: '150px' },
-  actionsCol: { width: '120px', textAlign: 'right' },
-  inlineBtn: {
-    border: 'none',
-    background: 'transparent',
-    color: tokens.colorNeutralForeground3,
-    cursor: 'pointer',
+  nameCell: {
     display: 'inline-flex',
     alignItems: 'center',
-    padding: '4px',
-    borderRadius: '4px',
-    ':hover': {
-      color: tokens.colorBrandForeground1,
-      backgroundColor: tokens.colorNeutralBackground1Hover,
-    },
+    gap: '8px',
+    minWidth: 0,
   },
-
-  // Empty states
+  nameChip: {
+    display: 'inline-flex',
+    alignItems: 'center',
+    justifyContent: 'center',
+    width: '24px',
+    height: '24px',
+    borderRadius: tokens.borderRadiusMedium,
+    flexShrink: 0,
+  },
+  actionsCell: {
+    display: 'inline-flex',
+    alignItems: 'center',
+    gap: '2px',
+  },
   empty: {
-    paddingTop: '32px',
-    paddingRight: '32px',
-    paddingBottom: '32px',
-    paddingLeft: '32px',
+    paddingTop: tokens.spacingVerticalXXXL,
+    paddingRight: tokens.spacingHorizontalXXL,
+    paddingBottom: tokens.spacingVerticalXXXL,
+    paddingLeft: tokens.spacingHorizontalXXL,
     textAlign: 'center',
     color: tokens.colorNeutralForeground3,
     border: `1px dashed ${tokens.colorNeutralStroke2}`,
-    borderRadius: '12px',
+    borderRadius: tokens.borderRadiusXLarge,
+    backgroundColor: tokens.colorNeutralBackground2,
     lineHeight: 1.6,
     display: 'flex',
     flexDirection: 'column',
-    gap: '12px',
+    gap: tokens.spacingVerticalM,
     alignItems: 'center',
   },
-
+  emptyIcon: {
+    display: 'inline-flex',
+    alignItems: 'center',
+    justifyContent: 'center',
+    width: '56px',
+    height: '56px',
+    borderRadius: tokens.borderRadiusCircular,
+    marginBottom: tokens.spacingVerticalXS,
+  },
+  emptyHint: {
+    color: tokens.colorNeutralForeground3,
+  },
+  dialogHint: {
+    color: tokens.colorNeutralForeground3,
+  },
   formCol: { display: 'flex', flexDirection: 'column', gap: '12px' },
 });
 
@@ -471,7 +300,8 @@ function compareSort(a: Workspace, b: Workspace, mode: SortMode): number {
 }
 
 // ---------------------------------------------------------------------------
-// CreateWorkspaceDialog — preserved from prior pane, slightly trimmed
+// CreateWorkspaceDialog — preserved verbatim (real capacities/domains, with an
+// honest free-text fallback when the upstream API is unavailable)
 // ---------------------------------------------------------------------------
 
 interface CapacityLite { id: string; displayName: string; sku: string; state?: string }
@@ -613,7 +443,7 @@ function CreateWorkspaceDialog({ onCreated }: { onCreated?: () => void }) {
                 )}
               </Field>
               {(capacity || domain) && (
-                <Caption1 style={{ color: 'var(--colorNeutralForeground3, #707070)' }}>
+                <Caption1 className={styles.dialogHint}>
                   When you save: Capacity is assigned via the Fabric REST <code>assignToCapacity</code>{' '}
                   (queued until your first PBI-backed artifact creates the underlying Fabric group),
                   and Domain triggers a Purview catalog register + marketplace publish. Both run as
@@ -654,10 +484,9 @@ export default function WorkspacesPage() {
   const styles = useStyles();
   const router = useRouter();
   const qc = useQueryClient();
-  const searchId = useId('ws-search');
 
   // ----- persisted state -----
-  const [viewMode, setViewMode] = useState<ViewMode>('tile');
+  const [view, setView] = useState<LoomView>('tile');
   const [sortMode, setSortMode] = useState<SortMode>('lastAccessed-desc');
   const [pinned, setPinned] = useState<Set<string>>(new Set());
   const [hydrated, setHydrated] = useState(false);
@@ -671,8 +500,8 @@ export default function WorkspacesPage() {
 
   // Hydrate persisted state on mount
   useEffect(() => {
-    const v = readLS<ViewMode>(LS_VIEW, 'tile');
-    if (v === 'tile' || v === 'list') setViewMode(v);
+    const v = readLS<LoomView>(LS_VIEW, 'tile');
+    if (v === 'tile' || v === 'list') setView(v);
     const s = readLS<SortMode>(LS_SORT, 'lastAccessed-desc');
     if (SORT_OPTIONS.some(o => o.value === s)) setSortMode(s);
     const p = readLS<string[]>(LS_PINNED, []);
@@ -689,8 +518,8 @@ export default function WorkspacesPage() {
   // Persist view/sort/pinned on change (only after hydration to avoid
   // overwriting saved state with the SSR defaults on first render)
   useEffect(() => {
-    if (hydrated) writeLS(LS_VIEW, viewMode);
-  }, [viewMode, hydrated]);
+    if (hydrated) writeLS(LS_VIEW, view);
+  }, [view, hydrated]);
   useEffect(() => {
     if (hydrated) writeLS(LS_SORT, sortMode);
   }, [sortMode, hydrated]);
@@ -757,7 +586,7 @@ export default function WorkspacesPage() {
       setSelected(new Set());
       setConfirmOpen(false);
     }
-  }, [isAdmin]);
+  }, [canBulkDelete]);
 
   // ----- filter + sort pipeline -----
   const visible = useMemo(() => {
@@ -775,11 +604,6 @@ export default function WorkspacesPage() {
     if (domainFilters.size > 0) {
       rows = rows.filter(w => w.domain && domainFilters.has(w.domain));
     }
-    // Owner filter: "me" matches workspaces the current session created.
-    // We don't know the current upn/email/oid here without an extra fetch;
-    // until then "me" is best-effort: nothing should match unless we can
-    // pull it from the session. The /api/auth/me endpoint exposes this, so
-    // we lazy-load it below.
     return rows;
   }, [data, search, capacityFilters, domainFilters]);
 
@@ -827,7 +651,6 @@ export default function WorkspacesPage() {
     setSelected(prev => {
       const next = new Set(prev);
       if (visibleIds.every(id => next.has(id))) {
-        // toggle off
         for (const id of visibleIds) next.delete(id);
       } else {
         for (const id of visibleIds) next.add(id);
@@ -859,8 +682,6 @@ export default function WorkspacesPage() {
     onSuccess: result => {
       setBulkResult(result);
       setConfirmOpen(false);
-      // Drop successfully-deleted ids from the selection; keep failures so the
-      // admin can see + retry them.
       setSelected(prev => {
         const next = new Set(prev);
         for (const id of result.deleted) next.delete(id);
@@ -894,205 +715,246 @@ export default function WorkspacesPage() {
       return n;
     });
 
-  // ----- render helpers -----
-  const renderTile = (ws: Workspace) => (
-    <div
-      key={ws.id}
-      className={mergeClasses(styles.tile, selectMode && selected.has(ws.id) && styles.tileSelected)}
-      onClick={() => {
-        if (selectMode) toggleSelect(ws.id);
-        else router.push(`/workspaces/${ws.id}`);
-      }}
-      role="link"
-      tabIndex={0}
-      onKeyDown={e => {
-        if (e.key === 'Enter' || e.key === ' ') {
-          e.preventDefault();
-          if (selectMode) toggleSelect(ws.id);
-          else router.push(`/workspaces/${ws.id}`);
-        }
-      }}
-    >
-      {selectMode && canBulkDelete && (
-        <div className={styles.selectTileBox} onClick={e => e.stopPropagation()}>
-          <Checkbox
-            checked={selected.has(ws.id)}
-            onChange={() => toggleSelect(ws.id)}
-            aria-label={`Select ${ws.name}`}
+  const selectable = selectMode && canBulkDelete;
+
+  const openWorkspace = useCallback(
+    (ws: Workspace) => {
+      if (selectable) toggleSelect(ws.id);
+      else router.push(`/workspaces/${ws.id}`);
+    },
+    [selectable, toggleSelect, router],
+  );
+
+  // ----- per-workspace kebab menu (Open / Settings / Pin·Unpin) -----
+  const workspaceMenu = useCallback(
+    (ws: Workspace) => (
+      <Menu>
+        <MenuTrigger disableButtonEnhancement>
+          <Button
+            appearance="subtle"
+            size="small"
+            icon={<MoreHorizontal20Regular />}
+            aria-label={`More actions for ${ws.name}`}
           />
-        </div>
-      )}
-      <button
-        type="button"
-        className={mergeClasses(styles.pinBtn, pinned.has(ws.id) && styles.pinBtnActive)}
-        aria-label={pinned.has(ws.id) ? `Unpin ${ws.name}` : `Pin ${ws.name}`}
-        aria-pressed={pinned.has(ws.id)}
-        onClick={e => {
-          e.stopPropagation();
-          togglePin(ws.id);
-        }}
-      >
-        {pinned.has(ws.id) ? <Pin16Filled /> : <PinOff16Regular />}
-      </button>
-      <div className={styles.tileHeader}>
-        <span
-          className={mergeClasses(
-            styles.iconBox,
-            ws.capacity
-              ? styles.iconBoxBlue
-              : ws.domain
-                ? styles.iconBoxPurple
-                : styles.iconBoxGreen,
-          )}
-          aria-hidden
-        >
-          {ws.capacity ? (
-            <Database20Regular />
-          ) : ws.domain ? (
-            <Building20Regular />
-          ) : (
-            <Folder20Regular />
-          )}
-        </span>
-        <div className={styles.tileTitleCol}>
-          <div className={styles.tileName} title={ws.name}>{ws.name}</div>
-          {ws.description && <div className={styles.tileDesc}>{ws.description}</div>}
-        </div>
-      </div>
-      <div className={styles.tileMeta}>
-        {typeof ws.itemCount === 'number' && (
-          <Badge appearance="tint" color="informative" icon={<Apps20Regular />}>
-            {ws.itemCount} {ws.itemCount === 1 ? 'item' : 'items'}
-          </Badge>
-        )}
-        {ws.capacity && (
-          <Badge appearance="outline" color="brand">
-            {ws.capacity}
-          </Badge>
-        )}
-        {ws.domain && (
-          <Badge appearance="outline" color="severe">
-            {ws.domain}
-          </Badge>
-        )}
-        <span>
-          {ws.lastAccessedAt
-            ? `Opened ${new Date(ws.lastAccessedAt).toLocaleDateString()}`
-            : `Created ${new Date(ws.createdAt).toLocaleDateString()}`}
-        </span>
-      </div>
-    </div>
+        </MenuTrigger>
+        <MenuPopover>
+          <MenuList>
+            <MenuItem onClick={() => router.push(`/workspaces/${ws.id}`)}>Open</MenuItem>
+            <MenuItem onClick={() => router.push(`/workspaces/${ws.id}?settings=1`)}>Settings</MenuItem>
+            <MenuItem
+              icon={pinned.has(ws.id) ? <Pin16Filled /> : <PinOff16Regular />}
+              onClick={() => togglePin(ws.id)}
+            >
+              {pinned.has(ws.id) ? 'Unpin' : 'Pin'}
+            </MenuItem>
+          </MenuList>
+        </MenuPopover>
+      </Menu>
+    ),
+    [router, pinned, togglePin],
   );
 
-  const renderList = (rows: Workspace[]) => (
-    <div className={styles.tableWrap}>
-      <Table size="small" aria-label="Workspaces">
-        <TableHeader>
-          <TableRow>
-            {selectMode && canBulkDelete && (
-              <TableHeaderCell className={styles.selectCol}>
-                <Checkbox
-                  checked={allVisibleSelected ? true : someVisibleSelected ? 'mixed' : false}
-                  onChange={selectAllVisible}
-                  aria-label="Select all visible workspaces"
-                />
-              </TableHeaderCell>
-            )}
-            <TableHeaderCell className={styles.pinCol} aria-label="Pin" />
-            <TableHeaderCell>Name</TableHeaderCell>
-            <TableHeaderCell>Description</TableHeaderCell>
-            <TableHeaderCell className={styles.countCol}>Items</TableHeaderCell>
-            <TableHeaderCell className={styles.dateCol}>Created</TableHeaderCell>
-            <TableHeaderCell className={styles.dateCol}>Last accessed</TableHeaderCell>
-            <TableHeaderCell className={styles.actionsCol}>Actions</TableHeaderCell>
-          </TableRow>
-        </TableHeader>
-        <TableBody>
-          {rows.map(ws => (
-            <TableRow key={ws.id} appearance={selectMode && selected.has(ws.id) ? 'brand' : undefined}>
-              {selectMode && canBulkDelete && (
-                <TableCell className={styles.selectCol}>
-                  <Checkbox
-                    checked={selected.has(ws.id)}
-                    onChange={() => toggleSelect(ws.id)}
-                    aria-label={`Select ${ws.name}`}
-                  />
-                </TableCell>
+  // ----- tile renderer -----
+  const renderTile = useCallback(
+    (ws: Workspace) => {
+      const isPinned = pinned.has(ws.id);
+      const isSelected = selectable && selected.has(ws.id);
+      const footer = (
+        <>
+          {typeof ws.itemCount === 'number' && (
+            <Badge appearance="tint" color="informative" icon={<Apps20Regular />}>
+              {ws.itemCount} {ws.itemCount === 1 ? 'item' : 'items'}
+            </Badge>
+          )}
+          {ws.capacity && (
+            <Badge appearance="outline" color="brand">{ws.capacity}</Badge>
+          )}
+          {ws.domain && (
+            <Badge appearance="outline" color="severe">{ws.domain}</Badge>
+          )}
+        </>
+      );
+      return (
+        <ItemTile
+          key={ws.id}
+          type="workspace"
+          title={ws.name}
+          subtitle={ws.description || 'Workspace'}
+          meta={
+            ws.lastAccessedAt
+              ? `Opened ${new Date(ws.lastAccessedAt).toLocaleDateString()}`
+              : `Created ${new Date(ws.createdAt).toLocaleDateString()}`
+          }
+          selected={!!isSelected}
+          badge={
+            isPinned ? (
+              <Badge size="small" appearance="tint" color="brand" icon={<Pin16Filled />}>
+                Pinned
+              </Badge>
+            ) : undefined
+          }
+          overflowMenu={
+            selectable ? (
+              <Checkbox
+                checked={selected.has(ws.id)}
+                onChange={() => toggleSelect(ws.id)}
+                aria-label={`Select ${ws.name}`}
+              />
+            ) : (
+              workspaceMenu(ws)
+            )
+          }
+          footer={footer}
+          onClick={() => openWorkspace(ws)}
+        />
+      );
+    },
+    [pinned, selectable, selected, toggleSelect, workspaceMenu, openWorkspace],
+  );
+
+  // ----- list columns (LoomDataTable) -----
+  const columns = useMemo<LoomColumn<Workspace>[]>(() => {
+    const cols: LoomColumn<Workspace>[] = [];
+    if (selectable) {
+      cols.push({
+        key: '__select',
+        label: '',
+        sortable: false,
+        filterable: false,
+        width: 44,
+        minWidth: 44,
+        render: (w) => (
+          <span onClick={(e) => e.stopPropagation()} role="presentation">
+            <Checkbox
+              checked={selected.has(w.id)}
+              onChange={() => toggleSelect(w.id)}
+              aria-label={`Select ${w.name}`}
+            />
+          </span>
+        ),
+      });
+    }
+    cols.push(
+      {
+        key: 'name',
+        label: 'Name',
+        sortable: true,
+        filterable: true,
+        filterType: 'text',
+        width: 280,
+        getValue: (w) => w.name,
+        render: (w) => {
+          const visual = itemVisual('workspace');
+          return (
+            <span className={styles.nameCell}>
+              <span
+                className={styles.nameChip}
+                style={{ backgroundColor: `${visual.color}1f` }}
+                aria-hidden
+              >
+                <visual.icon style={{ width: 16, height: 16, color: visual.color }} />
+              </span>
+              {pinned.has(w.id) && (
+                <Pin16Filled style={{ color: tokens.colorBrandForeground1, flexShrink: 0 }} aria-label="Pinned" />
               )}
-              <TableCell className={styles.pinCol}>
-                <button
-                  type="button"
-                  className={mergeClasses(styles.inlineBtn, pinned.has(ws.id) && styles.pinBtnActive)}
-                  aria-label={pinned.has(ws.id) ? `Unpin ${ws.name}` : `Pin ${ws.name}`}
-                  aria-pressed={pinned.has(ws.id)}
-                  onClick={() => togglePin(ws.id)}
-                >
-                  {pinned.has(ws.id) ? <Pin16Filled /> : <PinOff16Regular />}
-                </button>
-              </TableCell>
-              <TableCell>
-                <Link href={`/workspaces/${ws.id}`} className={styles.rowName}>
-                  {ws.name}
-                </Link>
-              </TableCell>
-              <TableCell>
-                <span className={styles.rowDesc}>{ws.description ?? '—'}</span>
-              </TableCell>
-              <TableCell className={styles.countCol}>
-                {typeof ws.itemCount === 'number' ? ws.itemCount : '—'}
-              </TableCell>
-              <TableCell className={styles.dateCol}>
-                {ws.createdAt ? new Date(ws.createdAt).toLocaleDateString() : '—'}
-              </TableCell>
-              <TableCell className={styles.dateCol}>
-                {ws.lastAccessedAt ? new Date(ws.lastAccessedAt).toLocaleDateString() : '—'}
-              </TableCell>
-              <TableCell className={styles.actionsCol}>
-                <Tooltip content="Open" relationship="label">
-                  <Link href={`/workspaces/${ws.id}`} className={styles.inlineBtn} aria-label={`Open ${ws.name}`}>
-                    <Open16Regular />
-                  </Link>
-                </Tooltip>
-                <Menu>
-                  <MenuTrigger disableButtonEnhancement>
-                    <button
-                      type="button"
-                      className={styles.inlineBtn}
-                      aria-label={`More actions for ${ws.name}`}
-                    >
-                      <ChevronDown16Regular />
-                    </button>
-                  </MenuTrigger>
-                  <MenuPopover>
-                    <MenuList>
-                      <MenuItem onClick={() => router.push(`/workspaces/${ws.id}`)}>Open</MenuItem>
-                      <MenuItem onClick={() => router.push(`/workspaces/${ws.id}?settings=1`)}>Settings</MenuItem>
-                      <MenuItem onClick={() => togglePin(ws.id)}>
-                        {pinned.has(ws.id) ? 'Unpin' : 'Pin'}
-                      </MenuItem>
-                    </MenuList>
-                  </MenuPopover>
-                </Menu>
-              </TableCell>
-            </TableRow>
-          ))}
-        </TableBody>
-      </Table>
-    </div>
-  );
+              <Text weight="semibold">{w.name}</Text>
+            </span>
+          );
+        },
+      },
+      {
+        key: 'description',
+        label: 'Description',
+        sortable: true,
+        filterable: true,
+        filterType: 'text',
+        width: 300,
+        getValue: (w) => w.description ?? '',
+        render: (w) => <Text>{w.description || '—'}</Text>,
+      },
+      {
+        key: 'items',
+        label: 'Items',
+        sortable: true,
+        filterable: false,
+        width: 90,
+        getValue: (w) => w.itemCount ?? 0,
+        render: (w) => (typeof w.itemCount === 'number' ? String(w.itemCount) : '—'),
+      },
+      {
+        key: 'created',
+        label: 'Created',
+        sortable: true,
+        filterable: true,
+        filterType: 'date',
+        width: 160,
+        getValue: (w) => w.createdAt ?? '',
+        render: (w) => (w.createdAt ? new Date(w.createdAt).toLocaleDateString() : '—'),
+      },
+      {
+        key: 'lastAccessed',
+        label: 'Last accessed',
+        sortable: true,
+        filterable: true,
+        filterType: 'date',
+        width: 160,
+        getValue: (w) => w.lastAccessedAt ?? '',
+        render: (w) => (w.lastAccessedAt ? new Date(w.lastAccessedAt).toLocaleDateString() : '—'),
+      },
+      {
+        key: '__actions',
+        label: 'Actions',
+        sortable: false,
+        filterable: false,
+        width: 120,
+        render: (w) => (
+          <span className={styles.actionsCell} onClick={(e) => e.stopPropagation()} role="presentation">
+            <Tooltip content={pinned.has(w.id) ? 'Unpin' : 'Pin'} relationship="label">
+              <Button
+                appearance="subtle"
+                size="small"
+                aria-label={pinned.has(w.id) ? `Unpin ${w.name}` : `Pin ${w.name}`}
+                aria-pressed={pinned.has(w.id)}
+                icon={
+                  pinned.has(w.id) ? (
+                    <Pin16Filled style={{ color: tokens.colorBrandForeground1 }} />
+                  ) : (
+                    <PinOff16Regular />
+                  )
+                }
+                onClick={() => togglePin(w.id)}
+              />
+            </Tooltip>
+            {workspaceMenu(w)}
+          </span>
+        ),
+      },
+    );
+    return cols;
+  }, [selectable, selected, pinned, toggleSelect, togglePin, workspaceMenu, styles]);
 
-  const renderSection = (rows: Workspace[]) =>
-    viewMode === 'tile' ? (
-      <div className={styles.grid}>{rows.map(renderTile)}</div>
+  // ----- render a collection in the active view -----
+  const renderCollection = (rows: Workspace[]) =>
+    view === 'tile' ? (
+      <TileGrid>{rows.map(renderTile)}</TileGrid>
     ) : (
-      renderList(rows)
+      <LoomDataTable
+        columns={columns}
+        rows={rows}
+        getRowId={(w) => w.id}
+        onRowClick={openWorkspace}
+        ariaLabel="Workspaces"
+        empty="No workspaces match these filters."
+      />
     );
 
   // ---------------------------------------------------------------------------
   // Render
   // ---------------------------------------------------------------------------
 
-  const headerActions = <CreateWorkspaceDialog onCreated={() => qc.invalidateQueries({ queryKey: ['workspaces', 'withCounts'] })} />;
+  const headerActions = (
+    <CreateWorkspaceDialog onCreated={() => qc.invalidateQueries({ queryKey: ['workspaces', 'withCounts'] })} />
+  );
 
   return (
     <PageShell
@@ -1100,344 +962,309 @@ export default function WorkspacesPage() {
       subtitle="A workspace is where you collaborate on items — lakehouses, notebooks, warehouses, reports, and everything else."
       actions={headerActions}
     >
-      <div className={styles.root}>
-        {/* Toolbar */}
-        <div className={styles.toolbar} role="toolbar" aria-label="Workspace browser toolbar">
-          <Input
-            id={searchId}
-            className={styles.search}
-            placeholder="Search workspaces…"
-            value={searchRaw}
-            onChange={(_, d) => setSearchRaw(d.value)}
-            contentBefore={<Search20Regular />}
-            aria-label="Search workspaces"
-          />
-
-          {/* Sort menu */}
-          <Menu>
-            <MenuTrigger disableButtonEnhancement>
-              <Button icon={<ArrowSort20Regular />} appearance="subtle">
-                {`Sort: ${sortLabel(sortMode)}`}
-              </Button>
-            </MenuTrigger>
-            <MenuPopover>
-              <MenuList
-                checkedValues={{ sort: [sortMode] }}
-                onCheckedValueChange={(_, d) => {
-                  const next = (d.checkedItems?.[0] as SortMode) ?? sortMode;
-                  setSortMode(next);
-                }}
-              >
-                {SORT_OPTIONS.map(opt => (
-                  <MenuItemRadio key={opt.value} name="sort" value={opt.value}>
-                    {opt.label}
-                  </MenuItemRadio>
-                ))}
-              </MenuList>
-            </MenuPopover>
-          </Menu>
-
-          {/* Filter menu */}
-          <Menu>
-            <MenuTrigger disableButtonEnhancement>
-              <Button icon={<Filter20Regular />} appearance="subtle">
-                {totalFilterCount > 0 ? `Filter (${totalFilterCount})` : 'Filter'}
-              </Button>
-            </MenuTrigger>
-            <MenuPopover>
-              <MenuList
-                checkedValues={{
-                  capacity: Array.from(capacityFilters),
-                  domain: Array.from(domainFilters),
-                  owner: [ownerFilter],
-                }}
-                onCheckedValueChange={(_, d) => {
-                  if (d.name === 'capacity') {
-                    setCapacityFilters(new Set((d.checkedItems ?? []) as CapacityFilter[]));
-                  } else if (d.name === 'domain') {
-                    setDomainFilters(new Set((d.checkedItems ?? []) as string[]));
-                  } else if (d.name === 'owner') {
-                    setOwnerFilter((d.checkedItems?.[0] as OwnerFilter) ?? 'all');
-                  }
-                }}
-              >
-                <MenuItem disabled>Capacity</MenuItem>
-                <MenuItemCheckbox name="capacity" value="none">None</MenuItemCheckbox>
-                <MenuItemCheckbox name="capacity" value="shared">Shared</MenuItemCheckbox>
-                <MenuItemCheckbox name="capacity" value="dedicated">Dedicated</MenuItemCheckbox>
-                {domainOptions.length > 0 && <MenuItem disabled>Domain</MenuItem>}
-                {domainOptions.map(d => (
-                  <MenuItemCheckbox key={d} name="domain" value={d}>
-                    {d}
-                  </MenuItemCheckbox>
-                ))}
-                <MenuItem disabled>Owner</MenuItem>
-                <MenuItemRadio name="owner" value="all">All</MenuItemRadio>
-                <MenuItemRadio name="owner" value="me">Me</MenuItemRadio>
-              </MenuList>
-            </MenuPopover>
-          </Menu>
-
-          {/* Admin: multi-select toggle + one-click test selection */}
-          {isAdmin && (
-            <>
-              <Button
-                appearance={selectMode ? 'primary' : 'subtle'}
-                aria-pressed={selectMode}
-                onClick={() => {
-                  setSelectMode(s => {
-                    const next = !s;
-                    if (!next) setSelected(new Set());
-                    return next;
-                  });
-                }}
-              >
-                {selectMode ? 'Done selecting' : 'Select'}
-              </Button>
-              {testRows.length > 0 && (
-                <Tooltip
-                  content={`Select ${testRows.length} test workspace${testRows.length === 1 ? '' : 's'} (uat-/e2e-/test-/tmp-…)`}
-                  relationship="label"
-                >
-                  <Button appearance="subtle" onClick={selectTest}>
-                    {`Select test (${testRows.length})`}
-                  </Button>
-                </Tooltip>
-              )}
-            </>
-          )}
-
-          <div className={styles.toolbarSpacer} />
-
-          {/* View mode toggle */}
-          <div className={styles.viewToggle} role="group" aria-label="View mode">
-            <button
-              type="button"
-              className={mergeClasses(
-                styles.viewToggleBtn,
-                viewMode === 'tile' && styles.viewToggleBtnActive,
-              )}
-              aria-pressed={viewMode === 'tile'}
-              aria-label="Tile view"
-              onClick={() => setViewMode('tile')}
-            >
-              <Grid20Regular />
-              <span>Tiles</span>
-            </button>
-            <button
-              type="button"
-              className={mergeClasses(
-                styles.viewToggleBtn,
-                viewMode === 'list' && styles.viewToggleBtnActive,
-              )}
-              aria-pressed={viewMode === 'list'}
-              aria-label="List view"
-              onClick={() => setViewMode('list')}
-            >
-              <List20Regular />
-              <span>List</span>
-            </button>
-          </div>
-        </div>
-
-        {/* Filter chips */}
-        {(totalFilterCount > 0 || search) && (
-          <div className={styles.chipRow} aria-label="Active filters">
-            {search && (
-              <span className={styles.chip}>
-                Search: "{searchRaw}"
-                <button
-                  type="button"
-                  aria-label="Clear search"
-                  className={styles.chipBtn}
-                  onClick={() => setSearchRaw('')}
-                >
-                  <Dismiss12Regular />
-                </button>
-              </span>
-            )}
-            {Array.from(capacityFilters).map(c => (
-              <span key={`cap-${c}`} className={styles.chip}>
-                Capacity: {c}
-                <button
-                  type="button"
-                  aria-label={`Remove capacity filter ${c}`}
-                  className={styles.chipBtn}
-                  onClick={() => removeCapacity(c)}
-                >
-                  <Dismiss12Regular />
-                </button>
-              </span>
-            ))}
-            {Array.from(domainFilters).map(d => (
-              <span key={`dom-${d}`} className={styles.chip}>
-                Domain: {d}
-                <button
-                  type="button"
-                  aria-label={`Remove domain filter ${d}`}
-                  className={styles.chipBtn}
-                  onClick={() => removeDomain(d)}
-                >
-                  <Dismiss12Regular />
-                </button>
-              </span>
-            ))}
-            {ownerFilter === 'me' && (
-              <span className={styles.chip}>
-                Owner: Me
-                <button
-                  type="button"
-                  aria-label="Remove owner filter"
-                  className={styles.chipBtn}
-                  onClick={() => setOwnerFilter('all')}
-                >
-                  <Dismiss12Regular />
-                </button>
-              </span>
-            )}
-            <button type="button" className={styles.clearAllBtn} onClick={clearAll}>
-              Clear all
-            </button>
-          </div>
-        )}
-
-        {/* Bulk action bar (admin + select mode) */}
-        {canBulkDelete && selectMode && (
-          <div className={styles.bulkBar} role="region" aria-label="Bulk actions">
-            <Checkbox
-              checked={allVisibleSelected ? true : someVisibleSelected ? 'mixed' : false}
-              onChange={selectAllVisible}
-              label={allVisibleSelected ? 'Deselect all' : 'Select all visible'}
-            />
-            <span>{`${selected.size} selected`}</span>
-            {selected.size > 0 && (
-              <Button appearance="subtle" size="small" onClick={clearSelection}>
-                Clear
-              </Button>
-            )}
-            <div className={styles.bulkBarSpacer} />
-            <Button
-              appearance="primary"
-              icon={<Delete20Regular />}
-              disabled={selected.size === 0 || bulkMut.isPending}
-              onClick={() => setConfirmOpen(true)}
-            >
-              {`Delete selected (${selected.size})`}
+      {/* Toolbar: search + sort + filter + admin select (left), view toggle (right) */}
+      <Toolbar
+        search={searchRaw}
+        onSearch={setSearchRaw}
+        searchPlaceholder="Search workspaces…"
+        actions={<ViewToggle value={view} onChange={setView} ariaLabel="Workspace view" />}
+      >
+        {/* Sort menu */}
+        <Menu>
+          <MenuTrigger disableButtonEnhancement>
+            <Button icon={<ArrowSort20Regular />} appearance="subtle">
+              {`Sort: ${sortLabel(sortMode)}`}
             </Button>
-          </div>
-        )}
+          </MenuTrigger>
+          <MenuPopover>
+            <MenuList
+              checkedValues={{ sort: [sortMode] }}
+              onCheckedValueChange={(_, d) => {
+                const next = (d.checkedItems?.[0] as SortMode) ?? sortMode;
+                setSortMode(next);
+              }}
+            >
+              {SORT_OPTIONS.map(opt => (
+                <MenuItemRadio key={opt.value} name="sort" value={opt.value}>
+                  {opt.label}
+                </MenuItemRadio>
+              ))}
+            </MenuList>
+          </MenuPopover>
+        </Menu>
 
-        {/* Bulk-delete result */}
-        {bulkResult && (
-          <MessageBar intent={bulkResult.failed.length > 0 ? 'warning' : 'success'}>
-            <MessageBarBody>
-              Deleted {bulkResult.deleted.length} workspace
-              {bulkResult.deleted.length === 1 ? '' : 's'}.
-              {bulkResult.failed.length > 0 && (
-                <> {bulkResult.failed.length} failed: {bulkResult.failed
-                  .map(f => `${nameById.get(f.id) ?? f.id} (${f.error})`)
-                  .join(', ')}.</>
-              )}
-            </MessageBarBody>
-          </MessageBar>
-        )}
-
-        {/* Confirm dialog */}
-        <Dialog open={confirmOpen} onOpenChange={(_, d) => setConfirmOpen(d.open)}>
-          <DialogSurface>
-            <DialogBody>
-              <DialogTitle>{`Delete ${selected.size} workspace${selected.size === 1 ? '' : 's'}?`}</DialogTitle>
-              <DialogContent>
-                <div className={styles.formCol}>
-                  <Body1>
-                    This permanently deletes the selected workspaces and every item inside them
-                    (lakehouses, notebooks, reports, etc.) from Cosmos. This cannot be undone.
-                  </Body1>
-                  <div style={{ maxHeight: 180, overflowY: 'auto' }}>
-                    <ul style={{ margin: 0, paddingLeft: 18 }}>
-                      {Array.from(selected).slice(0, 50).map(id => (
-                        <li key={id}>{nameById.get(id) ?? id}</li>
-                      ))}
-                    </ul>
-                    {selected.size > 50 && (
-                      <Caption1>…and {selected.size - 50} more.</Caption1>
-                    )}
-                  </div>
-                  {bulkMut.error && (
-                    <MessageBar intent="error">
-                      <MessageBarBody>{(bulkMut.error as Error).message}</MessageBarBody>
-                    </MessageBar>
-                  )}
-                </div>
-              </DialogContent>
-              <DialogActions>
-                <DialogTrigger disableButtonEnhancement>
-                  <Button appearance="secondary" disabled={bulkMut.isPending}>
-                    Cancel
-                  </Button>
-                </DialogTrigger>
-                <Button
-                  appearance="primary"
-                  icon={<Delete20Regular />}
-                  disabled={selected.size === 0 || bulkMut.isPending}
-                  onClick={() => {
-                    setBulkResult(null);
-                    bulkMut.mutate(Array.from(selected));
-                  }}
-                >
-                  {bulkMut.isPending ? 'Deleting…' : `Delete ${selected.size}`}
-                </Button>
-              </DialogActions>
-            </DialogBody>
-          </DialogSurface>
-        </Dialog>
-
-        {/* Unauth / error / loading */}
-        {unauth && <SignInRequired subject="workspaces" />}
-        {isLoading && <Spinner label="Loading workspaces…" />}
-        {error && !unauth && (
-          <MessageBar intent="error">
-            <MessageBarBody>
-              Failed to load workspaces: {(error as Error).message}
-            </MessageBarBody>
-          </MessageBar>
-        )}
-
-        {/* Empty state — no workspaces at all */}
-        {!isLoading && !error && data && data.length === 0 && (
-          <div className={styles.empty}>
-            <Body1>
-              No workspaces yet. Click <b>+ New workspace</b> to create your first one.
-            </Body1>
-            <Body1>
-              A workspace is a Cosmos-backed container that owns items, permissions, and SCM bindings.
-            </Body1>
-          </div>
-        )}
-
-        {/* Empty after filtering */}
-        {!isLoading && !error && data && data.length > 0 && sorted.length === 0 && (
-          <div className={styles.empty}>
-            <Body1>No workspaces match these filters.</Body1>
-            <Button appearance="primary" onClick={clearAll}>
-              Clear filters
+        {/* Filter menu */}
+        <Menu>
+          <MenuTrigger disableButtonEnhancement>
+            <Button icon={<Filter20Regular />} appearance="subtle">
+              {totalFilterCount > 0 ? `Filter (${totalFilterCount})` : 'Filter'}
             </Button>
-          </div>
-        )}
+          </MenuTrigger>
+          <MenuPopover>
+            <MenuList
+              checkedValues={{
+                capacity: Array.from(capacityFilters),
+                domain: Array.from(domainFilters),
+                owner: [ownerFilter],
+              }}
+              onCheckedValueChange={(_, d) => {
+                if (d.name === 'capacity') {
+                  setCapacityFilters(new Set((d.checkedItems ?? []) as CapacityFilter[]));
+                } else if (d.name === 'domain') {
+                  setDomainFilters(new Set((d.checkedItems ?? []) as string[]));
+                } else if (d.name === 'owner') {
+                  setOwnerFilter((d.checkedItems?.[0] as OwnerFilter) ?? 'all');
+                }
+              }}
+            >
+              <MenuItem disabled>Capacity</MenuItem>
+              <MenuItemCheckbox name="capacity" value="none">None</MenuItemCheckbox>
+              <MenuItemCheckbox name="capacity" value="shared">Shared</MenuItemCheckbox>
+              <MenuItemCheckbox name="capacity" value="dedicated">Dedicated</MenuItemCheckbox>
+              {domainOptions.length > 0 && <MenuItem disabled>Domain</MenuItem>}
+              {domainOptions.map(d => (
+                <MenuItemCheckbox key={d} name="domain" value={d}>
+                  {d}
+                </MenuItemCheckbox>
+              ))}
+              <MenuItem disabled>Owner</MenuItem>
+              <MenuItemRadio name="owner" value="all">All</MenuItemRadio>
+              <MenuItemRadio name="owner" value="me">Me</MenuItemRadio>
+            </MenuList>
+          </MenuPopover>
+        </Menu>
 
-        {/* Pinned section */}
-        {pinnedRows.length > 0 && (
+        {/* Admin: multi-select toggle + one-click test selection */}
+        {isAdmin && (
           <>
-            <div className={styles.sectionHead}>Pinned</div>
-            {renderSection(pinnedRows)}
-            <div className={styles.divider} />
-            <div className={styles.sectionHead}>All workspaces</div>
+            <Button
+              appearance={selectMode ? 'primary' : 'subtle'}
+              aria-pressed={selectMode}
+              onClick={() => {
+                setSelectMode(s => {
+                  const next = !s;
+                  if (!next) setSelected(new Set());
+                  return next;
+                });
+              }}
+            >
+              {selectMode ? 'Done selecting' : 'Select'}
+            </Button>
+            {testRows.length > 0 && (
+              <Tooltip
+                content={`Select ${testRows.length} test workspace${testRows.length === 1 ? '' : 's'} (uat-/e2e-/test-/tmp-…)`}
+                relationship="label"
+              >
+                <Button appearance="subtle" onClick={selectTest}>
+                  {`Select test (${testRows.length})`}
+                </Button>
+              </Tooltip>
+            )}
           </>
         )}
+      </Toolbar>
 
-        {/* Unpinned section (or all rows if nothing is pinned) */}
-        {unpinnedRows.length > 0 && renderSection(unpinnedRows)}
-      </div>
+      {/* Filter chips */}
+      {totalFilterCount > 0 && (
+        <div className={styles.chipRow} aria-label="Active filters">
+          {Array.from(capacityFilters).map(c => (
+            <span key={`cap-${c}`} className={styles.chip}>
+              Capacity: {c}
+              <button
+                type="button"
+                aria-label={`Remove capacity filter ${c}`}
+                className={styles.chipBtn}
+                onClick={() => removeCapacity(c)}
+              >
+                <Dismiss12Regular />
+              </button>
+            </span>
+          ))}
+          {Array.from(domainFilters).map(d => (
+            <span key={`dom-${d}`} className={styles.chip}>
+              Domain: {d}
+              <button
+                type="button"
+                aria-label={`Remove domain filter ${d}`}
+                className={styles.chipBtn}
+                onClick={() => removeDomain(d)}
+              >
+                <Dismiss12Regular />
+              </button>
+            </span>
+          ))}
+          {ownerFilter === 'me' && (
+            <span className={styles.chip}>
+              Owner: Me
+              <button
+                type="button"
+                aria-label="Remove owner filter"
+                className={styles.chipBtn}
+                onClick={() => setOwnerFilter('all')}
+              >
+                <Dismiss12Regular />
+              </button>
+            </span>
+          )}
+          <button type="button" className={styles.clearAllBtn} onClick={clearAll}>
+            Clear all
+          </button>
+        </div>
+      )}
+
+      {/* Bulk action bar (admin + select mode) */}
+      {selectable && (
+        <div className={styles.bulkBar} role="region" aria-label="Bulk actions">
+          <Checkbox
+            checked={allVisibleSelected ? true : someVisibleSelected ? 'mixed' : false}
+            onChange={selectAllVisible}
+            label={allVisibleSelected ? 'Deselect all' : 'Select all visible'}
+          />
+          <span>{`${selected.size} selected`}</span>
+          {selected.size > 0 && (
+            <Button appearance="subtle" size="small" onClick={clearSelection}>
+              Clear
+            </Button>
+          )}
+          <div className={styles.bulkBarSpacer} />
+          <Button
+            appearance="primary"
+            icon={<Delete20Regular />}
+            disabled={selected.size === 0 || bulkMut.isPending}
+            onClick={() => setConfirmOpen(true)}
+          >
+            {`Delete selected (${selected.size})`}
+          </Button>
+        </div>
+      )}
+
+      {/* Bulk-delete result */}
+      {bulkResult && (
+        <MessageBar intent={bulkResult.failed.length > 0 ? 'warning' : 'success'}>
+          <MessageBarBody>
+            Deleted {bulkResult.deleted.length} workspace
+            {bulkResult.deleted.length === 1 ? '' : 's'}.
+            {bulkResult.failed.length > 0 && (
+              <> {bulkResult.failed.length} failed: {bulkResult.failed
+                .map(f => `${nameById.get(f.id) ?? f.id} (${f.error})`)
+                .join(', ')}.</>
+            )}
+          </MessageBarBody>
+        </MessageBar>
+      )}
+
+      {/* Confirm dialog */}
+      <Dialog open={confirmOpen} onOpenChange={(_, d) => setConfirmOpen(d.open)}>
+        <DialogSurface>
+          <DialogBody>
+            <DialogTitle>{`Delete ${selected.size} workspace${selected.size === 1 ? '' : 's'}?`}</DialogTitle>
+            <DialogContent>
+              <div className={styles.formCol}>
+                <Body1>
+                  This permanently deletes the selected workspaces and every item inside them
+                  (lakehouses, notebooks, reports, etc.) from Cosmos. This cannot be undone.
+                </Body1>
+                <div style={{ maxHeight: 180, overflowY: 'auto' }}>
+                  <ul style={{ margin: 0, paddingLeft: 18 }}>
+                    {Array.from(selected).slice(0, 50).map(id => (
+                      <li key={id}>{nameById.get(id) ?? id}</li>
+                    ))}
+                  </ul>
+                  {selected.size > 50 && (
+                    <Caption1>…and {selected.size - 50} more.</Caption1>
+                  )}
+                </div>
+                {bulkMut.error && (
+                  <MessageBar intent="error">
+                    <MessageBarBody>{(bulkMut.error as Error).message}</MessageBarBody>
+                  </MessageBar>
+                )}
+              </div>
+            </DialogContent>
+            <DialogActions>
+              <DialogTrigger disableButtonEnhancement>
+                <Button appearance="secondary" disabled={bulkMut.isPending}>
+                  Cancel
+                </Button>
+              </DialogTrigger>
+              <Button
+                appearance="primary"
+                icon={<Delete20Regular />}
+                disabled={selected.size === 0 || bulkMut.isPending}
+                onClick={() => {
+                  setBulkResult(null);
+                  bulkMut.mutate(Array.from(selected));
+                }}
+              >
+                {bulkMut.isPending ? 'Deleting…' : `Delete ${selected.size}`}
+              </Button>
+            </DialogActions>
+          </DialogBody>
+        </DialogSurface>
+      </Dialog>
+
+      {/* Unauth / error / loading */}
+      {unauth && <SignInRequired subject="workspaces" />}
+      {isLoading && <Spinner label="Loading workspaces…" />}
+      {error && !unauth && (
+        <MessageBar intent="error">
+          <MessageBarBody>
+            Failed to load workspaces: {(error as Error).message}
+          </MessageBarBody>
+        </MessageBar>
+      )}
+
+      {/* Empty state — no workspaces at all */}
+      {!isLoading && !error && data && data.length === 0 && (
+        <div className={styles.empty}>
+          {(() => {
+            const v = itemVisual('workspace');
+            return (
+              <span
+                className={styles.emptyIcon}
+                style={{ backgroundColor: `${v.color}1f` }}
+                aria-hidden
+              >
+                <v.icon style={{ width: 28, height: 28, color: v.color }} />
+              </span>
+            );
+          })()}
+          <Body1>
+            No workspaces yet. Click <b>+ New workspace</b> to create your first one.
+          </Body1>
+          <Caption1 className={styles.emptyHint}>
+            A workspace is a Cosmos-backed container that owns items, permissions, and SCM bindings.
+          </Caption1>
+          <CreateWorkspaceDialog
+            onCreated={() => qc.invalidateQueries({ queryKey: ['workspaces', 'withCounts'] })}
+          />
+        </div>
+      )}
+
+      {/* Empty after filtering */}
+      {!isLoading && !error && data && data.length > 0 && sorted.length === 0 && (
+        <div className={styles.empty}>
+          <span className={styles.emptyIcon} style={{ backgroundColor: tokens.colorNeutralBackground3 }} aria-hidden>
+            <Filter20Regular style={{ width: 26, height: 26, color: tokens.colorNeutralForeground3 }} />
+          </span>
+          <Body1>No workspaces match these filters.</Body1>
+          <Button appearance="primary" onClick={clearAll}>
+            Clear filters
+          </Button>
+        </div>
+      )}
+
+      {/* Pinned section (floats above All when anything is pinned) */}
+      {pinnedRows.length > 0 && (
+        <Section title="Pinned">{renderCollection(pinnedRows)}</Section>
+      )}
+
+      {/* All workspaces (or the only section when nothing is pinned) */}
+      {unpinnedRows.length > 0 && (
+        <Section title={pinnedRows.length > 0 ? 'All workspaces' : 'Workspaces'}>
+          {renderCollection(unpinnedRows)}
+        </Section>
+      )}
     </PageShell>
   );
 }

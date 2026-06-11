@@ -22,21 +22,26 @@
 import { useEffect, useMemo, useState } from 'react';
 import Link from 'next/link';
 import {
-  Spinner, Badge, Button, MessageBar, MessageBarBody, MessageBarTitle,
-  Menu, MenuTrigger, MenuPopover, MenuList, MenuItem,
+  Spinner, Badge, Button, Link as FluentLink, MessageBar, MessageBarBody, MessageBarTitle,
+  Menu, MenuTrigger, MenuPopover, MenuList, MenuItem, MenuDivider,
   TabList, Tab, Caption1, makeStyles, tokens,
   Toaster, Toast, ToastTitle, ToastBody, useToastController, useId,
 } from '@fluentui/react-components';
 import {
   MoreHorizontal20Regular, PlugConnected20Regular,
   ArrowSync20Regular, Pulse24Regular, Iot24Regular, DatabaseStack16Regular,
-  Alert20Regular, Open20Regular, DataUsage24Regular,
+  Alert20Regular, DataUsage24Regular,
+  Eye20Regular, Flow20Regular,
 } from '@fluentui/react-icons';
 import { SignInRequired } from '@/lib/components/sign-in-required';
 import { Section } from '@/lib/components/ui/section';
 import { LoomDataTable, type LoomColumn } from '@/lib/components/ui/loom-data-table';
 import { ConnectSourceDialog } from './connect-source-dialog';
 import { SOURCE_CONNECTORS, sourceVisual, type SourceConnector } from './source-catalog';
+import { StreamPreviewDrawer } from './stream-preview-drawer';
+import { StreamEndpointsDrawer } from './stream-endpoints-drawer';
+import { EventTestDrawer, type EventTestTarget } from './event-test-drawer';
+import { streamRowActions, editorLabel } from './rti-hub-actions';
 
 // ---- Response shapes (mirror app/api/rti-hub/route.ts) ----
 interface SubscribePreFill { sourceType: string; sourceName: string; properties: Record<string, unknown>; }
@@ -61,7 +66,6 @@ const KIND_LABEL: Record<string, string> = {
   iothub: 'IoT Hub', 'adx-cluster': 'ADX cluster', 'kql-database': 'KQL database',
   eventhouse: 'Eventhouse', 'azure-event': 'Azure event', 'fabric-event': 'Fabric event',
 };
-const LOOM_ITEM_KINDS = new Set(['eventstream', 'kql-database', 'eventhouse']);
 
 const useStyles = makeStyles({
   stats: {
@@ -146,6 +150,11 @@ export function RtiHubView() {
   const [connectInitial, setConnectInitial] = useState<SourceConnector | null>(null);
   const [connectProps, setConnectProps] = useState<Record<string, string> | null>(null);
   const [connectName, setConnectName] = useState<string | null>(null);
+
+  // Stream actions: preview (KQL), endpoints (eventstream), peek/send test events.
+  const [previewTarget, setPreviewTarget] = useState<{ title: string; db?: string; table?: string } | null>(null);
+  const [endpointsTarget, setEndpointsTarget] = useState<{ name: string; workspaceId: string; id: string } | null>(null);
+  const [eventTestTarget, setEventTestTarget] = useState<{ title: string; target: EventTestTarget } | null>(null);
 
   function load() {
     setData(null); setGate(null); setLoadErr(null);
@@ -282,7 +291,10 @@ export function RtiHubView() {
     {
       key: 'actions', label: 'Actions', sortable: false, filterable: false, width: 120,
       render: (r) => {
-        const isLoomItem = LOOM_ITEM_KINDS.has(r.kind);
+        const a = streamRowActions(r.kind);
+        // The Event Hub entity carries its hub name in the pre-fill (eventHubName)
+        // — fall back to the row name for the data-plane peek/send target.
+        const hubName = String((r.subscribePreFill.properties as any)?.eventHubName || r.name);
         return (
           <Menu>
             <MenuTrigger disableButtonEnhancement>
@@ -290,13 +302,41 @@ export function RtiHubView() {
             </MenuTrigger>
             <MenuPopover>
               <MenuList>
-                <MenuItem icon={<PlugConnected20Regular />} onClick={() => subscribe(r)}>Subscribe</MenuItem>
-                <MenuItem icon={<Alert20Regular />} onClick={() => makeActivator(r)}>Create activator</MenuItem>
-                {isLoomItem && r.link && (
+                {/* Preview / test — what each kind actually supports. */}
+                {a.previewTestEvents && (
+                  <MenuItem icon={<Eye20Regular />}
+                    onClick={() => setEventTestTarget({ title: r.name, target: { kind: 'eventstream', id: r.id } })}>
+                    Preview / test events
+                  </MenuItem>
+                )}
+                {a.peekSendEvents && (
+                  <MenuItem icon={<Eye20Regular />}
+                    onClick={() => setEventTestTarget({ title: r.name, target: { kind: 'eventhub', hub: hubName } })}>
+                    Peek / send events
+                  </MenuItem>
+                )}
+                {a.previewData && (
+                  <MenuItem icon={<Eye20Regular />}
+                    onClick={() => setPreviewTarget({ title: r.name, db: r.name, table: '' })}>
+                    Preview data
+                  </MenuItem>
+                )}
+                {a.endpoints && r.workspaceId && (
+                  <MenuItem icon={<PlugConnected20Regular />}
+                    onClick={() => setEndpointsTarget({ name: r.name, workspaceId: r.workspaceId!, id: r.id })}>
+                    Endpoints
+                  </MenuItem>
+                )}
+                {a.openEditor && r.link && (
                   <Link href={r.link} style={{ textDecoration: 'none' }}>
-                    <MenuItem icon={<Open20Regular />}>Open item</MenuItem>
+                    <MenuItem icon={<Flow20Regular />}>
+                      {a.previewData ? `Query / open ${editorLabel(r.kind)}` : `Open ${editorLabel(r.kind)} editor`}
+                    </MenuItem>
                   </Link>
                 )}
+                <MenuDivider />
+                <MenuItem icon={<PlugConnected20Regular />} onClick={() => subscribe(r)}>Subscribe</MenuItem>
+                <MenuItem icon={<Alert20Regular />} onClick={() => makeActivator(r)}>Create activator</MenuItem>
               </MenuList>
             </MenuPopover>
           </Menu>
@@ -418,7 +458,10 @@ export function RtiHubView() {
         <Caption1 style={{ display: 'block', marginBottom: 12, color: tokens.colorNeutralForeground3 }}>
           Every streaming source across your subscriptions — Event Hubs, IoT Hub, ADX, and Loom eventstreams —
           discovered live via Azure Resource Graph. Click <b>Subscribe</b> on any source to create a real Loom
-          eventstream pre-filled with that source.
+          eventstream pre-filled with that source. Already-deployed Loom items also offer <b>Preview / test</b>,{' '}
+          <b>Endpoints</b>, <b>Query</b>, and <b>Open editor</b>.
+          {' '}Looking for just your deployed eventstreams &amp; KQL tables?{' '}
+          <FluentLink href="/realtime-hub">Open the Real-Time hub</FluentLink>.
         </Caption1>
 
         <div className={styles.tabs}>
@@ -440,6 +483,16 @@ export function RtiHubView() {
         {fabricGated && data?.fabricGateReason && tab === 'azureEvents' && (
           <MessageBar intent="info" style={{ marginBottom: 12 }}>
             <MessageBarBody>{data.fabricGateReason}</MessageBarBody>
+          </MessageBar>
+        )}
+
+        {tab === 'dataStreams' && !loading && rows.length > 0 && (
+          <MessageBar intent="info" style={{ marginBottom: 12 }}>
+            <MessageBarBody>
+              Rows tagged <b>Eventstream</b>, <b>KQL database</b>, or <b>Eventhouse</b> are deployed Loom items you can{' '}
+              preview, test, query, and open. Rows tagged <b>Event Hub</b>, <b>EH namespace</b>, <b>IoT Hub</b>, or{' '}
+              <b>ADX cluster</b> are discovered Azure resources you <b>Subscribe</b> to wire into a Loom eventstream.
+            </MessageBarBody>
           </MessageBar>
         )}
 
@@ -479,6 +532,32 @@ export function RtiHubView() {
         initialConnector={connectInitial}
         initialProps={connectProps}
         initialDisplayName={connectName}
+      />
+
+      {/* Preview data (KQL / Eventhouse rows) */}
+      <StreamPreviewDrawer
+        open={!!previewTarget}
+        onClose={() => setPreviewTarget(null)}
+        title={previewTarget?.title || ''}
+        defaultDb={previewTarget?.db}
+        defaultTable={previewTarget?.table}
+      />
+
+      {/* Endpoints (Loom eventstream rows) */}
+      <StreamEndpointsDrawer
+        open={!!endpointsTarget}
+        onClose={() => setEndpointsTarget(null)}
+        name={endpointsTarget?.name || ''}
+        workspaceId={endpointsTarget?.workspaceId || ''}
+        eventstreamId={endpointsTarget?.id || ''}
+      />
+
+      {/* Preview / test live events (Loom eventstream + Event Hub entity rows) */}
+      <EventTestDrawer
+        open={!!eventTestTarget}
+        onClose={() => setEventTestTarget(null)}
+        title={eventTestTarget?.title || ''}
+        target={eventTestTarget?.target || null}
       />
 
       <Toaster toasterId={toasterId} position="bottom-end" limit={4} />

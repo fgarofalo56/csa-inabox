@@ -2,7 +2,19 @@
 
 Source UI: Fabric **Workspaces** flyout/list + Admin → **Workspaces**
 Reference: <https://learn.microsoft.com/fabric/get-started/workspaces>
-Run date: 2026-06-09
+Run date: 2026-06-11
+
+> **2026-06-11 redesign (audit-t109):** `/workspaces` was rebuilt on the shared
+> Loom UI primitives — `Section`/`Toolbar`, `ViewToggle`, `TileGrid`+`ItemTile`,
+> and `LoomDataTable` — replacing the page's ~50 hand-rolled `makeStyles` classes
+> and three bespoke render functions. List view now gets per-column header sort,
+> resizable columns, and the standard per-column filter row for free; tile view
+> uses `ItemTile` with the kebab overflow menu (Open / Settings / Pin) and a
+> footer badge row (item count, capacity, domain). All behaviour below is
+> preserved. Two visual changes: tiles take their icon/colour from
+> `itemVisual('workspace')` (a single neutral chip, matching `/browse`) rather
+> than the old capacity/domain/none colour split — the capacity + domain signal
+> now reads from the footer badges instead.
 
 Loom surfaces:
 
@@ -32,13 +44,15 @@ Microsoft Fabric** — both surfaces render and operate with
 
 | Capability | Status | Backend |
 |---|---|---|
-| Tile view + List view toggle (persisted) | ✅ Built | `localStorage` `loom.workspaces.viewMode.v1` |
-| Live search (debounced 150ms) across name + description | ✅ Built | Client filter |
-| Sort: Name A-Z/Z-A, Created newest/oldest, Last accessed, Item count | ✅ Built | Client sort; persisted `loom.workspaces.sortMode.v1` |
-| Filter: capacity (none/shared/dedicated), domain (dynamic), owner (Me/All) | ✅ Built | Client filter + chip rendering |
-| Pin toggle per workspace (pinned float to top) | ✅ Built | `localStorage` `loom.workspaces.pinned.v1` |
-| Colour-coded tiles (capacity / domain / neither) | ✅ Built | `itemVisual()` |
+| Tile view + List view toggle (persisted) | ✅ Built | `ViewToggle` + `localStorage` `loom.workspaces.viewMode.v1` |
+| Live search (debounced 150ms) across name + description | ✅ Built | `Toolbar` SearchBox → client filter |
+| Sort: Name A-Z/Z-A, Created newest/oldest, Last accessed, Item count | ✅ Built | Toolbar Sort menu (tile order) + `LoomDataTable` header sort (list); persisted `loom.workspaces.sortMode.v1` |
+| Filter: capacity (none/shared/dedicated), domain (dynamic), owner (Me/All) | ✅ Built | Toolbar Filter menu + chips; list view adds per-column filters |
+| Pin toggle per workspace (pinned float to top) | ✅ Built | Kebab Pin/Unpin + `localStorage` `loom.workspaces.pinned.v1`; pinned render in their own `Section` |
+| Per-workspace overflow menu (Open / Settings / Pin) | ✅ Built | `ItemTile.overflowMenu` (tile) + actions column (list) |
+| Tile visuals + footer badges (item count / capacity / domain) | ✅ Built | `itemVisual('workspace')` + Fluent `Badge` footer row |
 | Item-count aggregation | ✅ Built | `GET /api/workspaces?count=true` → Cosmos GROUP BY `workspaceId` |
+| Admin multi-select + bulk delete (owned/test/all) | ✅ Built | `GET /api/workspaces/bulk-delete` probe + `bulkDeleteWorkspaces()`; select-mode renders tile checkboxes + a leading list column + select-all bulk bar |
 | Create workspace | ✅ Built | `CreateWorkspaceDialog` (see `workspace-create.md`) |
 
 ### Admin inventory (`/admin/workspaces`)

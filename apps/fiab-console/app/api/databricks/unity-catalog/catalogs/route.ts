@@ -109,11 +109,15 @@ export async function PATCH(req: NextRequest) {
   if (!name) return NextResponse.json({ ok: false, error: 'name is required' }, { status: 400 });
   const owner = body?.owner !== undefined ? String(body.owner).trim() : undefined;
   const comment = body?.comment !== undefined ? String(body.comment) : undefined;
-  if (owner === undefined && comment === undefined) {
-    return NextResponse.json({ ok: false, error: 'provide owner and/or comment to update' }, { status: 400 });
+  // Rename (UC `new_name`). Requires the caller to own the catalog AND hold
+  // CREATE CATALOG on the metastore + USE CATALOG (Learn: Manage catalogs →
+  // Update a catalog). A UC 403 is surfaced verbatim.
+  const newName = body?.new_name !== undefined ? String(body.new_name).trim() : undefined;
+  if (owner === undefined && comment === undefined && !newName) {
+    return NextResponse.json({ ok: false, error: 'provide owner, comment, and/or new_name to update' }, { status: 400 });
   }
   try {
-    const catalog = await patchUcCatalog(name, { owner, comment });
+    const catalog = await patchUcCatalog(name, { owner, comment, new_name: newName });
     return NextResponse.json({ ok: true, catalog });
   } catch (e: any) {
     return NextResponse.json({ ok: false, error: e?.message || String(e) }, { status: e?.status || 502 });
