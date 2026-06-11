@@ -130,8 +130,14 @@ export function ApiMarketplace() {
   const [tHeaders, setTHeaders] = useState('');
   const [tBody, setTBody] = useState('');
   const [tBusy, setTBusy] = useState(false);
-  const [tResp, setTResp] = useState<{ status: number; statusText: string; headers: Record<string, string>; body: string } | null>(null);
+  const [tResp, setTResp] = useState<{ status: number; statusText: string; headers: Record<string, string>; body: string; keySource?: string } | null>(null);
   const [tErr, setTErr] = useState<string | null>(null);
+  // Subscription/key selection for the Try console + curl samples. tSubId is a
+  // subscription (sid) whose key the server resolves; tKey is a key pasted by
+  // the user (overrides the resolved one). Either makes the gateway return 200
+  // for a subscription-required API instead of 401.
+  const [tSubId, setTSubId] = useState('');
+  const [tKey, setTKey] = useState('');
 
   // subscriptions
   const [subs, setSubs] = useState<{ loading: boolean; data: SubscriptionSummary[]; error?: string }>({ loading: false, data: [] });
@@ -139,7 +145,7 @@ export function ApiMarketplace() {
 
   // subscribe dialog
   const [subOpen, setSubOpen] = useState(false);
-  const [subTarget, setSubTarget] = useState<{ kind: 'product' | 'api'; id: string; name: string } | null>(null);
+  const [subTarget, setSubTarget] = useState<{ kind: 'product' | 'api'; id: string; name: string; approvalRequired?: boolean } | null>(null);
   const [subBusy, setSubBusy] = useState(false);
   const [subMsg, setSubMsg] = useState<{ intent: 'success' | 'error'; text: string } | null>(null);
 
@@ -192,6 +198,9 @@ export function ApiMarketplace() {
   }, []);
 
   useEffect(() => { loadCatalog(); }, [loadCatalog]);
+  // Subscriptions back both the "My subscriptions" tab AND the Try-console key
+  // picker, so load them up-front (the route 503-gates cleanly when unconfigured).
+  useEffect(() => { loadSubscriptions(); }, [loadSubscriptions]);
   useEffect(() => { if (view === 'subscriptions') loadSubscriptions(); }, [view, loadSubscriptions]);
 
   const loadOps = useCallback(async (apiId: string) => {
@@ -218,6 +227,7 @@ export function ApiMarketplace() {
     setSelApi(api); setDetailTab('overview');
     setOps({ loading: false, data: [] }); setSpec({ loading: false });
     setTResp(null); setTErr(null); setTTemplate(''); setTMethod('GET');
+    setTSubId(''); setTKey('');
   }, []);
 
   // lazy-load detail tabs
@@ -242,17 +252,19 @@ export function ApiMarketplace() {
         body: JSON.stringify({
           method: tMethod, urlTemplate: tTemplate, headers,
           body: ['GET', 'HEAD'].includes(tMethod) ? undefined : tBody,
+          subscriptionId: tSubId || undefined,
+          subscriptionKey: tKey.trim() || undefined,
         }),
       });
       const j = await r.json().catch(() => ({}));
       if (!j?.ok) { setTErr(j?.error || `HTTP ${r.status}`); return; }
-      setTResp({ status: j.status, statusText: j.statusText, headers: j.headers || {}, body: j.body || '' });
+      setTResp({ status: j.status, statusText: j.statusText, headers: j.headers || {}, body: j.body || '', keySource: j.keySource });
     } catch (e: any) { setTErr(e?.message || String(e)); }
     finally { setTBusy(false); }
-  }, [selApi, tMethod, tTemplate, tHeaders, tBody]);
+  }, [selApi, tMethod, tTemplate, tHeaders, tBody, tSubId, tKey]);
 
   // ---------------- subscribe ----------------
-  const openSubscribe = useCallback((target: { kind: 'product' | 'api'; id: string; name: string }) => {
+  const openSubscribe = useCallback((target: { kind: 'product' | 'api'; id: string; name: string; approvalRequired?: boolean }) => {
     setSubTarget(target); setSubMsg(null); setSubOpen(true);
   }, []);
 
@@ -260,20 +272,25 @@ export function ApiMarketplace() {
     if (!subTarget) return;
     setSubBusy(true); setSubMsg(null);
     try {
-      const body = subTarget.kind === 'product'
+      // Auto-provision an ACTIVE subscription (key works immediately) unless the
+      // product requires admin approval — then APIM creates it 'submitted' and
+      // it stays pending. API-scoped subscriptions have no approval concept.
+      const wantActive = !subTarget.approvalRequired;
+      const body: Record<string, unknown> = subTarget.kind === 'product'
         ? { product: subTarget.id, displayName: subTarget.name }
         : { api: subTarget.id, displayName: subTarget.name };
+      if (wantActive) body.state = 'active';
       const r = await fetch('/api/marketplace/subscriptions', {
         method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body),
       });
       const j = await r.json().catch(() => ({}));
       if (!j?.ok) { setSubMsg({ intent: 'error', text: j?.error || `HTTP ${r.status}` }); return; }
-      const st = j.subscription?.state || 'submitted';
+      const st = j.subscription?.state || (wantActive ? 'active' : 'submitted');
       setSubMsg({
         intent: 'success',
         text: st === 'submitted'
           ? 'Access requested. The subscription is pending administrator approval.'
-          : `Subscribed. Subscription "${j.subscription?.name}" is ${st}.`,
+          : `Subscribed. Subscription "${j.subscription?.name}" is ${st} — its key is active now (open it under My subscriptions → Use this API, or pick it in the Try console).`,
       });
       loadSubscriptions();
     } catch (e: any) { setSubMsg({ intent: 'error', text: e?.message || String(e) }); }
@@ -288,6 +305,22 @@ export function ApiMarketplace() {
       else setKeyCache((p) => ({ ...p, [sid]: { primaryKey: `(error: ${j?.error || r.status})` } }));
     } catch (e: any) { setKeyCache((p) => ({ ...p, [sid]: { primaryKey: `(error: ${e?.message})` } })); }
   }, []);
+
+  // Resolve a subscription's primary key (from cache, else reveal it). Returns
+  // the key so the Try console can inject it into the visible key field.
+  const ensureKey = useCallback(async (sid: string): Promise<string | undefined> => {
+    const cached = keyCache[sid]?.primaryKey;
+    if (cached && !cached.startsWith('(error')) return cached;
+    try {
+      const r = await fetch(`/api/marketplace/subscriptions/${encodeURIComponent(sid)}/keys`, { method: 'POST' });
+      const j = await r.json().catch(() => ({}));
+      if (j?.ok) {
+        setKeyCache((p) => ({ ...p, [sid]: { primaryKey: j.primaryKey, secondaryKey: j.secondaryKey } }));
+        return j.primaryKey;
+      }
+    } catch { /* key resolution is best-effort; server resolves it on send too */ }
+    return undefined;
+  }, [keyCache]);
 
   // ---------------- subscription management ----------------
   const renameSub = useCallback(async () => {
@@ -366,6 +399,33 @@ export function ApiMarketplace() {
     const all = [...products.flatMap((p) => p.apis), ...apis];
     return all.find((a) => (a.name || a.id) === apiName) || { id: apiName, name: apiName } as ApiSummary;
   }, [useSub, products, apis]);
+
+  // Subscriptions usable to call the selected API in the Try console: an
+  // API-scoped sub matching it, an all-APIs sub, or a product-scoped sub whose
+  // product contains it. Mirrors how APIM matches a key to a request.
+  const trySubs = useMemo(() => {
+    if (!selApi) return [] as SubscriptionSummary[];
+    const apiKey = selApi.name || selApi.id;
+    const productsWithApi = new Set<string>();
+    for (const p of products) if (p.apis.some((a) => (a.name || a.id) === apiKey)) productsWithApi.add(p.name || p.id);
+    return (subs.data || []).filter((su) => {
+      const sc = su.scope || '';
+      const apiM = sc.match(/\/apis\/([^/]+)$/);
+      if (apiM) return decodeURIComponent(apiM[1]) === apiKey;
+      if (/\/apis$/.test(sc)) return true; // all-APIs scope
+      const prodM = sc.match(/\/products\/([^/]+)$/);
+      if (prodM) return productsWithApi.has(decodeURIComponent(prodM[1]));
+      return false;
+    });
+  }, [selApi, subs.data, products]);
+
+  // Pick a subscription for the Try console: stash its sid + inject its key.
+  const pickTrySub = useCallback(async (sid: string) => {
+    setTSubId(sid);
+    if (!sid) { setTKey(''); return; }
+    const k = await ensureKey(sid);
+    if (k) setTKey(k);
+  }, [ensureKey]);
 
   const buildMiniApp = useCallback(async () => {
     if (!subApi || !miniWs) return;
@@ -516,6 +576,16 @@ export function ApiMarketplace() {
         </Button>
       </div>
 
+      <MessageBar intent="info">
+        <MessageBarBody>
+          <MessageBarTitle>API marketplace</MessageBarTitle>
+          Publishes <strong>operational APIs</strong> fronted by Azure API Management — subscribe for a
+          key, then call them over HTTP (the <code>Ocp-Apim-Subscription-Key</code> header). To discover
+          governed <strong>datasets</strong> (lakehouses, warehouses, semantic models) instead, use the{' '}
+          <a href="/data-products">Data marketplace</a>.
+        </MessageBarBody>
+      </MessageBar>
+
       {gate && (
         <MessageBar intent="warning">
           <MessageBarBody>
@@ -573,7 +643,7 @@ export function ApiMarketplace() {
                         badge={
                           <Button
                             size="small" appearance="primary" icon={<Add20Regular />}
-                            onClick={(e) => { e.stopPropagation(); openSubscribe({ kind: 'product', id: p.name || p.id, name: p.displayName || p.name }); }}
+                            onClick={(e) => { e.stopPropagation(); openSubscribe({ kind: 'product', id: p.name || p.id, name: p.displayName || p.name, approvalRequired: p.approvalRequired }); }}
                           >
                             {p.approvalRequired ? 'Request' : 'Subscribe'}
                           </Button>
@@ -594,7 +664,7 @@ export function ApiMarketplace() {
                         render: (r) => (
                           <Button
                             size="small" appearance="primary" icon={<Add20Regular />}
-                            onClick={(e) => { e.stopPropagation(); openSubscribe({ kind: 'product', id: r.name || r.id, name: r.displayName || r.name }); }}
+                            onClick={(e) => { e.stopPropagation(); openSubscribe({ kind: 'product', id: r.name || r.id, name: r.displayName || r.name, approvalRequired: r.approvalRequired }); }}
                           >
                             {r.approvalRequired ? 'Request' : 'Subscribe'}
                           </Button>
@@ -784,7 +854,26 @@ export function ApiMarketplace() {
 
           {detailTab === 'tryit' && (
             <div className={s.tabBody}>
-              <Body1>Sends a real request through the APIM gateway. The all-access subscription key is attached server-side; it never reaches the browser.</Body1>
+              <Body1>
+                Sends a real request through the APIM gateway from the Console (in-VNet), then shows the live
+                status, headers, and body. For a subscription-required API, pick one of your subscriptions or
+                paste a key below — it is attached as <code>Ocp-Apim-Subscription-Key</code> so the call returns
+                200 instead of 401.
+              </Body1>
+              {selApi.subscriptionRequired && trySubs.length === 0 && !tKey.trim() && (
+                <MessageBar intent="warning">
+                  <MessageBarBody>
+                    <MessageBarTitle>No subscription key yet</MessageBarTitle>
+                    This API requires a subscription key. Subscribe to get an active key, or paste one below.
+                  </MessageBarBody>
+                  <MessageBarActions>
+                    <Button size="small" icon={<Add20Regular />}
+                      onClick={() => openSubscribe({ kind: 'api', id: selApi.name || selApi.id, name: selApi.displayName || selApi.name })}>
+                      Subscribe to this API
+                    </Button>
+                  </MessageBarActions>
+                </MessageBar>
+              )}
               <div className={s.tryGrid}>
                 <Field label="Method">
                   <Dropdown value={tMethod} selectedOptions={[tMethod]} onOptionSelect={(_, d) => d.optionValue && setTMethod(d.optionValue)}>
@@ -793,6 +882,24 @@ export function ApiMarketplace() {
                 </Field>
                 <Field label="URL template (appended to the API path)">
                   <Input value={tTemplate} onChange={(_, d) => setTTemplate(d.value)} placeholder="/orders/{id}" />
+                </Field>
+                <Field label="Subscription (resolves its key server-side)">
+                  <Dropdown
+                    placeholder={trySubs.length ? 'Select a subscription' : 'No matching subscriptions'}
+                    disabled={trySubs.length === 0}
+                    value={trySubs.find((su) => su.name === tSubId) ? (trySubs.find((su) => su.name === tSubId)!.displayName || tSubId) : ''}
+                    selectedOptions={tSubId ? [tSubId] : []}
+                    onOptionSelect={(_, d) => pickTrySub(d.optionValue || '')}
+                  >
+                    {trySubs.map((su) => (
+                      <Option key={su.name} value={su.name} text={su.displayName || su.name}>
+                        {su.displayName || su.name} {su.state ? `(${su.state})` : ''}
+                      </Option>
+                    ))}
+                  </Dropdown>
+                </Field>
+                <Field label="Subscription key (override — paste one to use it directly)">
+                  <Input type="password" value={tKey} onChange={(_, d) => setTKey(d.value)} placeholder="Ocp-Apim-Subscription-Key" />
                 </Field>
                 <Field label="Request headers (one per line, Name: value)" style={{ gridColumn: '1 / -1' }}>
                   <Textarea value={tHeaders} onChange={(_, d) => setTHeaders(d.value)} rows={2} placeholder={'Accept: application/json'} />
@@ -814,6 +921,21 @@ export function ApiMarketplace() {
                       {tResp.status} {tResp.statusText}
                     </Badge>
                     <Caption1>{tResp.headers['content-type'] || ''}</Caption1>
+                    <Badge appearance="outline">
+                      key: {tResp.keySource === 'subscription' ? 'selected subscription'
+                        : tResp.keySource === 'provided' ? 'pasted key'
+                        : tResp.keySource === 'master' ? 'all-access (master)'
+                        : 'none'}
+                    </Badge>
+                  </div>
+                  {tResp.status === 401 && tResp.keySource === 'none' && (
+                    <MessageBar intent="warning"><MessageBarBody>
+                      401 — no subscription key was attached. Pick a subscription or paste a key above, then resend.
+                    </MessageBarBody></MessageBar>
+                  )}
+                  <Caption1 style={{ color: tokens.colorNeutralForeground3 }}>Response headers</Caption1>
+                  <div className={s.code} role="region" aria-label="Response headers">
+                    {Object.entries(tResp.headers).map(([k, v]) => `${k}: ${v}`).join('\n') || '(none)'}
                   </div>
                   <Caption1 style={{ color: tokens.colorNeutralForeground3 }}>Response body</Caption1>
                   <div className={s.code}>{tResp.body || '(empty)'}</div>

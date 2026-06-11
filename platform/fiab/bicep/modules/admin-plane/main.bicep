@@ -28,6 +28,9 @@ param functionsHostSku string
 @description('APIM SKU')
 param apimSku string
 
+@description('Seed a self-contained sample API + product + active subscription in the Loom-provisioned APIM so the API Marketplace Try console + curl samples work out of the box. Ignored for BYO-APIM (existingApimName).')
+param seedSampleApi bool = true
+
 @description('Catalog primary')
 param catalogPrimary string
 
@@ -1349,9 +1352,9 @@ module apim 'apim.bicep' = if (apimEnabled && empty(existingApimName)) {
     appInsightsInstrumentationKey: monitoring.outputs.appInsightsInstrumentationKey
     workspaceId: monitoring.outputs.lawId
     complianceTags: complianceTags
+    seedSampleApi: seedSampleApi
   }
 }
-
 // =====================================================================
 // 9b. Shared ADX cluster (admin-plane scope). DLZ databases attach here.
 // =====================================================================
