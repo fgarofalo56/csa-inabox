@@ -1652,3 +1652,26 @@ cloud-agnostic; the Monitor signals use the sovereign LA endpoint
 
 
 
+
+
+## Governance → Data quality + Master data (Unity Catalog grant)
+
+Governance → **Data quality** (Delta constraints + Databricks Lakehouse
+Monitoring) and Governance → **Master data** (golden-record match/merge) run on
+the workspace Databricks SQL Warehouse. The on-demand rule **run** and the
+Kusto/Synapse paths need no extra grant. Two actions write to Unity Catalog and
+require a one-time grant to the Console UAMI on the target schema:
+
+- MDM golden-record table creation (`CREATE OR REPLACE TABLE <golden>`).
+- Lakehouse Monitoring metric tables + dashboard.
+
+Grant (run once as a UC metastore admin, replacing the principal + schema):
+
+```sql
+GRANT USE CATALOG ON CATALOG main TO `<console-uami-app-id>`;
+GRANT USE SCHEMA, CREATE TABLE, MODIFY, SELECT ON SCHEMA main.mdm TO `<console-uami-app-id>`;
+```
+
+Until this grant is in place, the Data quality Monitors tab and MDM merge show an
+honest MessageBar (the constraint/merge call returns the precise UC permission
+error) — no fake success. No Microsoft Fabric or Power BI workspace is involved.

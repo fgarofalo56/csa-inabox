@@ -2027,6 +2027,18 @@ module appDeployments 'app-deployments.bicep' = if (containerPlatform == 'contai
             // (ALTER TABLE … CLUSTER BY). Blank → route auto-selects the first
             // RUNNING SQL Warehouse.
             { name: 'LOOM_DATABRICKS_SQL_WAREHOUSE_ID', value: loomDatabricksSqlWarehouseId }
+            // Governance → Data quality (run/results/monitors) and Master data
+            // management (match/merge → golden records) REUSE the Databricks /
+            // Synapse / Kusto bindings above (LOOM_DATABRICKS_SQL_WAREHOUSE_ID,
+            // LOOM_SYNAPSE_WORKSPACE, LOOM_KUSTO_CLUSTER_URI) — no new env var or
+            // top-level resource is required (constraint-based DQ + self-built
+            // MDM avoid partner SaaS, honoring no-fabric-dependency). The Console
+            // UAMI already holds Storage Blob Data Contributor + the Databricks
+            // access-connector grant (see databricks-storage-rbac, tasks #87/#92).
+            // One-time admin action for MDM golden-record table creation +
+            // Databricks Lakehouse Monitoring: grant the Console UAMI Unity
+            // Catalog USE_CATALOG/USE_SCHEMA + CREATE TABLE/MODIFY (and SELECT)
+            // on the target schema — documented in docs/fiab/v3-tenant-bootstrap.md.
             // Notebook per-cell execution backend (F16). Empty/'synapse' → Azure-
             // native Synapse Spark Livy (default). 'databricks' opts into the
             // Databricks Execution Context API. LOOM_CLOUD_TIER=IL5 makes the BFF
