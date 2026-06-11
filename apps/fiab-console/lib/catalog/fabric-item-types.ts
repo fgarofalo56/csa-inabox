@@ -963,6 +963,83 @@ export const FABRIC_ITEM_TYPES: readonly FabricItemType[] = [
       "docsUrl": "https://learn.microsoft.com/fabric/data-activator/activator-introduction"
     } },
 
+  // ── Palantir-class migration surfaces (audit-T29 / deep T50-T57) ──
+  // Doc-only mappings in docs/migrations/palantir-foundry/ are superseded here
+  // by built Azure-native item types. All default Azure-native (no Fabric / no
+  // Power BI workspace) per .claude/rules/no-fabric-dependency.md.
+  { slug: 'workshop-app', displayName: 'Workshop app', restType: 'WorkshopApp', category: 'Fabric IQ', preview: true,
+    description: 'Operational low-code app bound to an Ontology — object views, link traversal, and write-back actions.',
+    learnContent: {
+      "overview": "Workshop is Palantir Foundry's low-code operational application builder. The CSA Loom equivalent (Atelier) binds an app to a Loom Ontology rather than to a database: pages render object views over the ontology's entity types, and actions write back to the bound Lakehouse/Warehouse. Azure-native — it runs on Azure Container Apps over the ontology's existing data bindings; no Microsoft Fabric workspace required.",
+      "steps": [
+        { "title": "Bind an ontology", "body": "Pick a saved Ontology in this workspace; its entity types become the app's object views." },
+        { "title": "Add object views", "body": "Choose which entity types to surface as pages and which properties to show." },
+        { "title": "Wire write-back actions", "body": "Define actions (create / update) that write back through the ontology's bound Lakehouse / Warehouse." },
+        { "title": "Run an action", "body": "Test an action; Loom records a Thread edge from the app to the ontology so lineage stays accurate." }
+      ],
+      "docsUrl": "https://learn.microsoft.com/power-apps/maker/canvas-apps/getting-started"
+    } },
+  { slug: 'slate-app', displayName: 'Slate app', restType: 'SlateApp', category: 'Fabric IQ', preview: true,
+    description: 'Custom HTML/JS dashboard app generated over an Ontology SDK / Data API and deployed to Azure Static Web Apps.',
+    learnContent: {
+      "overview": "Slate is Palantir Foundry's pixel-perfect custom application builder. The CSA Loom equivalent authors a widget-and-query app spec over the Ontology SDK / Data API, then generates a deployable Azure Static Web Apps bundle (HTML/JS) — the same target the migration doc maps Slate onto. Azure-native: no Fabric workspace required; the generated app calls the ontology Data API published through APIM.",
+      "steps": [
+        { "title": "Pick a data binding", "body": "Bind to an Ontology SDK or Data API Builder endpoint that exposes the query results the app needs." },
+        { "title": "Add widgets", "body": "Compose table / chart / metric widgets, each bound to a named query." },
+        { "title": "Generate the bundle", "body": "Loom emits a real index.html + app.js + staticwebapp.config.json artifact you can deploy to Azure Static Web Apps." },
+        { "title": "Deploy", "body": "Copy the generated bundle into your SWA repo, or wire it through the release-environment promotion flow." }
+      ],
+      "docsUrl": "https://learn.microsoft.com/azure/static-web-apps/overview"
+    } },
+  { slug: 'ontology-sdk', displayName: 'Ontology SDK', restType: 'OntologySdk', category: 'Fabric IQ', preview: true,
+    description: 'Typed TypeScript / Python SDK + REST Data API generated over an Ontology’s object, link, and action types.',
+    learnContent: {
+      "overview": "Palantir's OSDK (Ontology SDK) generates a typed client over ontology objects, links, and actions. The CSA Loom equivalent points Microsoft Data API Builder (DAB) at an ontology's bound data source and generates a typed TS/Python client from the ontology's parsed entity types. Azure-native: DAB runs on Azure Container Apps and the REST/GraphQL endpoint publishes through APIM — no Fabric workspace required.",
+      "steps": [
+        { "title": "Bind an ontology", "body": "Pick a saved Ontology; its entity types + bound Lakehouse/Warehouse define the SDK surface." },
+        { "title": "Generate the SDK", "body": "Loom emits real typed TypeScript and Python client source from the ontology's object / link / action types." },
+        { "title": "Review the Data API", "body": "Inspect the generated DAB entity config (REST + GraphQL) that backs the SDK." },
+        { "title": "Publish", "body": "Publish the Data API through APIM so apps (incl. Slate) can call the typed endpoints." }
+      ],
+      "docsUrl": "https://learn.microsoft.com/azure/data-api-builder/overview"
+    } },
+  { slug: 'release-environment', displayName: 'Release environment', restType: 'ReleaseEnvironment', category: 'Fabric IQ', preview: true,
+    description: 'Promotion / release orchestration across workspaces — Azure Deployment Environments + ARM deployment history.',
+    learnContent: {
+      "overview": "Palantir Apollo orchestrates promotion of artifacts across environments. The CSA Loom equivalent (Shuttle) models dev → test → prod stages over Loom workspaces, surfaces real Azure Resource Manager deployment history, and — when a DevCenter project is configured — provisions catalog-driven Azure Deployment Environments. Azure-native: it builds on the existing deployment-pipelines ARM + git backend; no Fabric required.",
+      "steps": [
+        { "title": "Define stages", "body": "Add the promotion stages (e.g. dev, test, prod) and map each to a Loom workspace." },
+        { "title": "Review ARM history", "body": "See the real Azure Resource Manager deployments across the Loom resource groups for each stage." },
+        { "title": "Configure environments", "body": "When LOOM_DEVCENTER_PROJECT is set, pick a catalog environment definition (Bicep) to provision per stage." },
+        { "title": "Promote", "body": "Record a promotion between two stages; Loom tracks the promotion and the environment it targeted." }
+      ],
+      "docsUrl": "https://learn.microsoft.com/azure/deployment-environments/overview-what-is-azure-deployment-environments"
+    } },
+  { slug: 'health-check', displayName: 'Health check', restType: 'HealthCheck', category: 'Fabric IQ', preview: true,
+    description: 'Data-freshness / SLA monitoring with real Azure Monitor scheduled-query alert rules.',
+    learnContent: {
+      "overview": "Palantir Foundry Health Checks watch pipelines and datasets for freshness and SLA breaches. The CSA Loom equivalent creates real Azure Monitor scheduled-query alert rules (scheduledQueryRules) over Log Analytics that fire when an item's data goes stale or a row-count / freshness threshold is crossed. Azure-native default (Fabric Reflex is opt-in via LOOM_ACTIVATOR_BACKEND=fabric) — no Fabric required.",
+      "steps": [
+        { "title": "Pick a check type", "body": "Choose freshness, row-count, or a custom KQL condition over the Log Analytics workspace." },
+        { "title": "Set the schedule", "body": "Choose how often the rule evaluates and the lookback window (e.g. evaluate every 5 minutes over 15 minutes)." },
+        { "title": "Add a notification", "body": "Optionally attach an email receiver; Loom creates a real Azure Monitor action group." },
+        { "title": "Create the rule", "body": "Loom creates the scheduledQueryRule on Azure Monitor, or shows exactly which env var / RBAC grant is missing." }
+      ],
+      "docsUrl": "https://learn.microsoft.com/azure/azure-monitor/alerts/alerts-types#log-alerts"
+    } },
+  { slug: 'aip-logic', displayName: 'AIP Logic function', restType: 'AipLogic', category: 'Fabric IQ', preview: true,
+    description: 'No-code typed LLM function — typed input → ordered LLM / tool steps → typed output, callable as an endpoint.',
+    learnContent: {
+      "overview": "Palantir AIP Logic builds no-code, typed LLM-backed functions (typed input → ordered LLM/extract/branch steps → typed output). The CSA Loom equivalent (Spindle) authors the typed input schema and ordered steps with dropdowns (no freeform JSON), then exposes a callable function endpoint that runs against the live Azure OpenAI deployment the Foundry hub resolves. Azure-native default — no Fabric required; an honest gate names the AOAI env var when no model is deployed.",
+      "steps": [
+        { "title": "Define typed inputs", "body": "Add named input parameters with types (string / number / boolean) using the field builder." },
+        { "title": "Add ordered steps", "body": "Add LLM-prompt, extract, or branch steps from a dropdown — no freeform JSON." },
+        { "title": "Define the output", "body": "Set the typed output shape the function returns." },
+        { "title": "Invoke", "body": "Run the function with sample inputs; it executes against the live Azure OpenAI deployment, or shows the AOAI remediation gate." }
+      ],
+      "docsUrl": "https://learn.microsoft.com/azure/ai-services/openai/overview"
+    } },
+
   // Power BI
   { slug: 'semantic-model', displayName: 'Semantic model', restType: 'SemanticModel', category: 'Power BI',
     description: 'Tables, relationships, measures, and roles backing Power BI reports.',
