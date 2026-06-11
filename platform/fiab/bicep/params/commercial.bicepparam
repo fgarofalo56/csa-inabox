@@ -62,6 +62,12 @@ param capacitySku = 'F8'
 // Databricks feature flags
 param databricksUnityCatalogEnabled = true
 param databricksSqlWarehouseEnabled = true
+// Set to your Databricks ACCOUNT id (GUID) to configure Unity Catalog by default
+// (regional metastore + default catalog + Console-UAMI account_admin), so Browse >
+// Unity Catalog shows a real configured catalog. Requires a one-time step making
+// the Console UAMI a Databricks account admin — docs/fiab/catalog/metastores.md.
+// Empty = UC enabled later via the post-deploy bootstrap workflow.
+param databricksAccountId = ''
 
 // Security
 param defenderForAIEnabled = true

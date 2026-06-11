@@ -55,6 +55,9 @@ param capacitySku string
 @description('Databricks Unity Catalog managed availability')
 param databricksUnityCatalogEnabled bool
 
+@description('Databricks ACCOUNT id (GUID). Set this to configure Unity Catalog by DEFAULT: the deploy creates/assigns the regional UC metastore + a default catalog and grants the Console UAMI account_admin, so Browse > Unity Catalog shows a real configured catalog. Requires a one-time human step making the Console UAMI a Databricks account admin (docs/fiab/catalog/metastores.md). Empty = UC enabled later via the post-deploy bootstrap workflow (never a hard deploy blocker). Commercial + GCC only.')
+param databricksAccountId string = ''
+
 @description('Databricks SQL Warehouse availability')
 param databricksSqlWarehouseEnabled bool
 
@@ -72,6 +75,21 @@ param loomPurviewAccount string = ''
 
 @description('Enable Microsoft Information Protection reads via Microsoft Graph for the Console (sensitivity labels + label policies + apply-label evaluation). Requires the Console UAMI to be admin-consented for InformationProtectionPolicy.Read.All + SensitivityLabel.Evaluate. Defaults off — the bootstrap workflow flips the AppRoles, then operators re-deploy with this true.')
 param loomMipEnabled bool = false
+
+@description('Enable sensitivity-label + label-policy CRUD (create/edit/delete) via the SCC PowerShell sidecar (azure-functions/scc-labels). Microsoft Graph has no write surface for labels/policies, so CRUD runs through Security & Compliance PowerShell with certificate-based app auth (Exchange.ManageAsApp + Compliance Administrator). Defaults off — bootstrap provisions the SCC app + auth cert, then operators re-deploy with this true. Label/policy READS work regardless; only CRUD is gated.')
+param loomMipAdminEnabled bool = false
+
+@description('Entra app (client) id for the SCC labels sidecar. Set by bootstrap after the SCC app + cert are created.')
+param sccAppId string = ''
+
+@description('Auth certificate thumbprint for the SCC labels sidecar (WEBSITE_LOAD_CERTIFICATES).')
+param sccCertThumbprint string = ''
+
+@description('Tenant onmicrosoft.com domain for Connect-IPPSSession -Organization. Empty falls back to the deployment tenant default at bootstrap.')
+param sccOrganization string = ''
+
+@description('Optional SCC PowerShell ConnectionUri override for sovereign clouds (Gov/GCC-High/DoD).')
+param sccConnectionUri string = ''
 
 @description('Enable Purview DLP reads via Microsoft Graph for the Console (DLP policies + rules + alerts + simulate). Defaults ON — the post-deploy bootstrap grants Console UAMI Policy.Read.All + SecurityAlert.Read.All by default, so the /admin/security DLP tab is wired out of the box. DLP alerts + violations (security/alerts_v2, GA in every cloud) light up as soon as admin consent is issued; the policy-list segment (informationProtection/dataLossPreventionPolicies, /beta) and simulate are preview-gated and surface a precise honest MessageBar where unavailable. The Azure-native restrict-access enforcement (Restrict tab → ADLS/Synapse/ADX revokes) needs no Graph at all.')
 param loomDlpEnabled bool = true
@@ -179,6 +197,12 @@ param cosmosGraphVectorEnabled bool = true
 
 @description('Deploy the MAF (Microsoft Agent Framework, Gov AOAI-direct) orchestration-tier Container App (loom-copilot-maf). Set true in the GCC-High / IL5 params. The admin-plane gates activation on boundary∈{GCC-High,IL5} + containerPlatform==containerApps + deployAppsEnabled, so it is a safe no-op on the AKS path (the Console copilot-orchestrator then uses its documented Gov AOAI-direct fallback). Requires the loom-copilot-maf image pushed to ACR first.')
 param copilotMafEnabled bool = false
+
+@description('Deploy the browser-driven Setup Orchestrator Container App (loom-setup-orchestrator) so the Setup Wizard\'s Deploy submits the real subscription-scoped ARM deployment (templateLink to main.json). Off by default — flip on once the loom-setup-orchestrator image is in ACR + the template is published (Container Apps boundaries + deployAppsEnabled). When enabled, the Setup Orchestrator identity (the Console UAMI) is granted Contributor on the Admin Plane subscription AND each multi-sub spoke subscription so it can deploy across subscriptions.')
+param setupOrchestratorEnabled bool = false
+
+@description('templateLink URI to the compiled main.json the Setup Orchestrator submits (publish via `az bicep build -f platform/fiab/bicep/main.bicep`). Threaded to the orchestrator as LOOM_SETUP_TEMPLATE_URI. Empty = the orchestrator honestly fails the Deploy with the publish remediation rather than faking success.')
+param setupTemplateUri string = ''
 
 @description('Enable the headless CI Bearer-token path on the Loom deployment-pipeline routes so an Azure DevOps / GitHub Actions agent can drive deploys + management via the CSA Loom DevOps task (Fabric "fabric-devops-pipelines" parity). Off by default — Console-session callers always work; this only gates the token path, which fails closed when off. When true the Console gets LOOM_PIPELINE_CI_ENABLED=true plus the shared LOOM_INTERNAL_TOKEN as the default Bearer secret. Cloud-agnostic: the ADO task talks only to the tenant own Loom URL + Entra, never api.fabric.microsoft.com.')
 param loomPipelineCiEnabled bool = false
@@ -356,6 +380,55 @@ param defenderCloudEnabled bool = false
 @description('Assign a sample built-in audit policy at the subscription scope (Azure Policy navigator).')
 param policyEnabled bool = false
 
+// ---------- Deploy-planner per-resource config ----------
+// SKU / tier / runtime knobs the Deployment planner's per-resource config panel
+// writes into the generated .bicepparam, forwarded to the deploy-planner modules
+// below so an exported plan applies the chosen SKU — not just module defaults.
+// @allowed mirrors the module decorators (single source of truth) so an invalid
+// value is rejected at compile time. Interdependent knobs (Redis family/capacity)
+// are DERIVED here from the chosen SKU so every combination stays valid.
+
+@description('Azure Cache for Redis SKU (deploy-planner). Family + capacity are derived to a valid pairing.')
+@allowed(['Basic', 'Standard', 'Premium'])
+param redisSkuName string = 'Basic'
+
+@description('App Service plan SKU (deploy-planner).')
+@allowed(['B1', 'B2', 'S1', 'P0v3', 'P1v3'])
+param appServicePlanSku string = 'B1'
+
+@description('App Service Linux runtime stack (deploy-planner), e.g. NODE|20-lts, DOTNETCORE|8.0, PYTHON|3.12.')
+param appServiceLinuxFxVersion string = 'NODE|20-lts'
+
+@description('Azure Functions worker runtime (deploy-planner).')
+@allowed(['node', 'python', 'dotnet-isolated', 'java'])
+param functionsWorkerRuntime string = 'node'
+
+@description('Azure Functions Linux runtime version (deploy-planner), e.g. Node|20, Python|3.12.')
+param functionsLinuxFxVersion string = 'Node|20'
+
+@description('PostgreSQL Flexible Server major version (deploy-planner).')
+@allowed(['13', '14', '15', '16'])
+param postgresVersion string = '16'
+
+@description('PostgreSQL Flexible Server storage size in GB (deploy-planner).')
+@allowed([32, 64, 128, 256, 512])
+param postgresStorageSizeGB int = 32
+
+@description('MySQL Flexible Server version (deploy-planner).')
+@allowed(['5.7', '8.0.21'])
+param mysqlVersion string = '8.0.21'
+
+@description('MySQL Flexible Server storage size in GB (deploy-planner).')
+@minValue(20)
+@maxValue(16384)
+param mysqlStorageSizeGB int = 20
+
+// Derive a valid Redis family + capacity for the chosen SKU (Premium uses the
+// P family starting at capacity 1; Basic/Standard use the C family at 0).
+var redisIsPremium = redisSkuName == 'Premium'
+var redisSkuFamily = redisIsPremium ? 'P' : 'C'
+var redisSkuCapacity = redisIsPremium ? 1 : 0
+
 // ---------- User access patterns ----------
 
 @description('Deploy a P2S VPN Gateway (AAD-auth, OpenVPN) in the hub VNet. ~30 min provisioning, ~$30/mo. Default off.')
@@ -505,6 +578,8 @@ module adminPlane 'modules/admin-plane/main.bicep' = {
     aiSearchEnabled: aiSearchEnabled
     adxEnabled: adxEnabled
     copilotMafEnabled: copilotMafEnabled
+    setupOrchestratorEnabled: setupOrchestratorEnabled
+    setupTemplateUri: setupTemplateUri
     loomPipelineCiEnabled: loomPipelineCiEnabled
     existingAiSearchService: existingAiSearchService
     existingAiSearchRg: existingAiSearchRg
@@ -553,7 +628,18 @@ module adminPlane 'modules/admin-plane/main.bicep' = {
     appGatewayEnabled: appGatewayEnabled
     frontDoorEnabled: frontDoorEnabled
     loomVanityDomain: loomVanityDomain
-    loomStorageAccount: take('saloomdefault${uniqueString(singleDlzRg.id)}', 24)
+    // Single-sub: the DLZ ADLS account name is deterministic over singleDlzRg
+    // (matches landing-zone/storage.bicep's saName) so the Console binds to the
+    // real account — LOOM_ADLS_ACCOUNT / LOOM_*_URL / LOOM_ORG_VISUALS_URL all
+    // resolve and the org-visuals RBAC grant targets it. MUST be empty in
+    // multi-sub: singleDlzRg is NOT deployed there, so deriving from its .id
+    // would yield a phantom `saloomdefault…` account — emitting env vars that
+    // point at a non-existent account (Embed codes / Org visuals SAS minting
+    // would 500 instead of showing the honest config gate). Empty here makes
+    // those panes honest-gate; operators wire multi-sub DLZ accounts post-deploy
+    // via scripts/csa-loom/patch-navigator-env.sh (same pattern as the Cosmos
+    // endpoints below).
+    loomStorageAccount: deploymentMode == 'single-sub' ? take('saloomdefault${uniqueString(singleDlzRg.id)}', 24) : ''
     loomCosmosAccount: take('cosmos-loom-default-${uniqueString(singleDlzRg.id)}', 44)
     // Forward the Cosmos data-plane endpoints to the Console so the vector-store
     // and graph editors bind to the deployed accounts by default (no manual
@@ -589,6 +675,11 @@ module adminPlane 'modules/admin-plane/main.bicep' = {
     loomSynapseDedicatedPool: 'loompool'
     loomPurviewAccount: loomPurviewAccount
     loomMipEnabled: loomMipEnabled
+    loomMipAdminEnabled: loomMipAdminEnabled
+    sccAppId: sccAppId
+    sccCertThumbprint: sccCertThumbprint
+    sccOrganization: sccOrganization
+    sccConnectionUri: sccConnectionUri
     loomDlpEnabled: loomDlpEnabled
     loomPowerBiAdminLabels: loomPowerBiAdminLabels
     loomPowerbiXmlaEndpoint: loomPowerbiXmlaEndpoint
@@ -663,6 +754,8 @@ module singleDlz 'modules/landing-zone/main.bicep' = if (deploymentMode == 'sing
     catalogEndpoint: adminPlane.outputs.catalogEndpoint
     databricksUnityCatalogEnabled: databricksUnityCatalogEnabled
     databricksSqlWarehouseEnabled: databricksSqlWarehouseEnabled
+    databricksAccountId: databricksAccountId
+    databricksUcScriptUamiId: adminPlane.outputs.uamiConsoleId
     storageRequireCmk: storageRequireCmk
     powerBiSku: powerBiSku
     complianceTags: complianceTags
@@ -741,6 +834,8 @@ module dlz 'modules/landing-zone/main.bicep' = [for (subId, i) in dlzSubscriptio
     catalogEndpoint: adminPlane.outputs.catalogEndpoint
     databricksUnityCatalogEnabled: databricksUnityCatalogEnabled
     databricksSqlWarehouseEnabled: databricksSqlWarehouseEnabled
+    databricksAccountId: databricksAccountId
+    databricksUcScriptUamiId: adminPlane.outputs.uamiConsoleId
     storageRequireCmk: storageRequireCmk
     powerBiSku: powerBiSku
     complianceTags: complianceTags
@@ -778,6 +873,8 @@ module dpPostgres 'modules/deploy-planner/postgres.bicep' = if (deploymentMode =
   scope: singleDlzRg
   params: {
     location: location
+    postgresVersion: postgresVersion
+    storageSizeGB: postgresStorageSizeGB
     entraAdminObjectId: dpConsolePrincipalId
     entraAdminName: adminPlane.outputs.uamiConsoleName
     complianceTags: complianceTags
@@ -789,6 +886,8 @@ module dpMysql 'modules/deploy-planner/mysql.bicep' = if (deploymentMode == 'sin
   scope: singleDlzRg
   params: {
     location: location
+    mysqlVersion: mysqlVersion
+    storageSizeGB: mysqlStorageSizeGB
     entraAdminObjectId: dpConsolePrincipalId
     entraAdminName: adminPlane.outputs.uamiConsoleName
     complianceTags: complianceTags
@@ -800,6 +899,9 @@ module dpRedis 'modules/deploy-planner/redis.bicep' = if (deploymentMode == 'sin
   scope: singleDlzRg
   params: {
     location: location
+    skuName: redisSkuName
+    skuFamily: redisSkuFamily
+    skuCapacity: redisSkuCapacity
     consolePrincipalId: dpConsolePrincipalId
     complianceTags: complianceTags
   }
@@ -893,6 +995,8 @@ module dpAppService 'modules/deploy-planner/app-service.bicep' = if (deploymentM
   scope: singleDlzRg
   params: {
     location: location
+    planSku: appServicePlanSku
+    linuxFxVersion: appServiceLinuxFxVersion
     consolePrincipalId: dpConsolePrincipalId
     skipRoleGrants: skipRoleGrants
     complianceTags: complianceTags
@@ -904,6 +1008,8 @@ module dpFunctions 'modules/deploy-planner/functions.bicep' = if (deploymentMode
   scope: singleDlzRg
   params: {
     location: location
+    functionsWorkerRuntime: functionsWorkerRuntime
+    linuxFxVersion: functionsLinuxFxVersion
     consolePrincipalId: dpConsolePrincipalId
     skipRoleGrants: skipRoleGrants
     complianceTags: complianceTags
@@ -1130,6 +1236,34 @@ module rtiHubRbac 'modules/admin-plane/rti-hub-rbac.bicep' = {
     skipRoleGrants: skipRoleGrants
   }
 }
+
+// =====================================================================
+// Setup Orchestrator deploy-auth — Contributor at SUBSCRIPTION scope.
+//
+// The Setup Orchestrator (setup-orchestrator.bicep) runs `az deployment sub
+// create` AS the Console UAMI. To deploy a Data Landing Zone it needs
+// Contributor at the TARGET subscription scope — for multi-sub rollouts that
+// means Contributor on the Admin Plane (hub) sub AND every spoke sub in
+// dlzSubscriptionIds. Both grants are made only when setupOrchestratorEnabled
+// (the orchestrator principal arrives empty otherwise → the module no-ops).
+// =====================================================================
+module setupOrchestratorHubRbac 'modules/admin-plane/setup-orchestrator-rbac.bicep' = {
+  name: 'setup-orchestrator-hub-rbac'
+  scope: subscription()
+  params: {
+    orchestratorPrincipalId: setupOrchestratorEnabled ? dpConsolePrincipalId : ''
+    skipRoleGrants: skipRoleGrants
+  }
+}
+
+module setupOrchestratorSpokeRbac 'modules/admin-plane/setup-orchestrator-rbac.bicep' = [for (subId, i) in dlzSubscriptionIds: if (deploymentMode == 'multi-sub' && setupOrchestratorEnabled) {
+  name: 'setup-orchestrator-spoke-rbac-${i}'
+  scope: subscription(subId)
+  params: {
+    orchestratorPrincipalId: dpConsolePrincipalId
+    skipRoleGrants: skipRoleGrants
+  }
+}]
 
 output dlzSynapseWorkspaceName string = deploymentMode == 'single-sub' ? singleDlz.outputs.synapseWorkspaceName : ''
 output dlzSynapseDedicatedPoolName string = deploymentMode == 'single-sub' ? singleDlz.outputs.synapseDedicatedPoolName : ''

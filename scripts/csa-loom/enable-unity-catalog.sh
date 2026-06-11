@@ -26,25 +26,45 @@
 #     --region eastus2 \
 #     --workspace-id 7405613013893759 \
 #     --uami-app-id  c6272de5-3c4e-4b72-8b57-71b2e950209b \
+#     [--workspace-host adb-7405613013893759.19.azuredatabricks.net] \
+#     [--default-catalog main] \
 #     [--metastore-name loom-eastus2] [--storage-root abfss://uc@acct.dfs.core.windows.net/]
+#
+# DEFAULT-ON CATALOG (2026-06 — "Unity Catalog configured by default"):
+#   After assigning the metastore, this script makes the workspace's DEFAULT
+#   CATALOG deterministic so Browse > Unity Catalog shows a real, usable catalog:
+#     1. If --workspace-host is given (the workspace REST host, reachable while
+#        public access is temporarily enabled in the post-deploy bootstrap), it
+#        CREATEs the default catalog via the workspace UC REST 2.1 (tolerating a
+#        409 if it already exists), then pins it as default_catalog_name.
+#     2. If no host is reachable, it does NOT force default_catalog_name to a
+#        name that may not exist (the old "main" bug). Accounts created after
+#        2023-11-09 auto-create a workspace catalog and set it as the default on
+#        assignment, so Browse still shows a catalog; older accounts get the
+#        catalog created on the next bootstrap run with a reachable host.
+#   This keeps the assignment idempotent and never leaves a dangling default.
 #
 # Find the account id: Databricks account console (accounts.azuredatabricks.net)
 # → top-right user menu → the GUID after "Account ID", or the ?account_id= URL.
 set -euo pipefail
 
 ACCOUNT_HOST="https://accounts.azuredatabricks.net"
+DBX_RESOURCE="2ff814a6-3304-4ab8-85cb-cd0e6f879c1d"   # Azure Databricks AAD app
 REGION="" WORKSPACE_ID="" UAMI_APP_ID="" METASTORE_NAME="" STORAGE_ROOT=""
+WORKSPACE_HOST="" DEFAULT_CATALOG="main"
 ACCOUNT_ID="${DATABRICKS_ACCOUNT_ID:-}"
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
-    --account-id)     ACCOUNT_ID="$2"; shift 2 ;;
-    --region)         REGION="$2"; shift 2 ;;
-    --workspace-id)   WORKSPACE_ID="$2"; shift 2 ;;
-    --uami-app-id)    UAMI_APP_ID="$2"; shift 2 ;;
-    --metastore-name) METASTORE_NAME="$2"; shift 2 ;;
-    --storage-root)   STORAGE_ROOT="$2"; shift 2 ;;
-    -h|--help) sed -n '2,30p' "$0"; exit 0 ;;
+    --account-id)      ACCOUNT_ID="$2"; shift 2 ;;
+    --region)          REGION="$2"; shift 2 ;;
+    --workspace-id)    WORKSPACE_ID="$2"; shift 2 ;;
+    --uami-app-id)     UAMI_APP_ID="$2"; shift 2 ;;
+    --workspace-host)  WORKSPACE_HOST="$2"; shift 2 ;;
+    --default-catalog) DEFAULT_CATALOG="$2"; shift 2 ;;
+    --metastore-name)  METASTORE_NAME="$2"; shift 2 ;;
+    --storage-root)    STORAGE_ROOT="$2"; shift 2 ;;
+    -h|--help) sed -n '2,46p' "$0"; exit 0 ;;
     *) echo "Unknown arg: $1" >&2; exit 1 ;;
   esac
 done
@@ -52,9 +72,11 @@ done
 [[ -z "$ACCOUNT_ID" ]] && { echo "ERROR: set DATABRICKS_ACCOUNT_ID or pass --account-id" >&2; exit 1; }
 [[ -z "$REGION" || -z "$WORKSPACE_ID" ]] && { echo "ERROR: --region and --workspace-id are required" >&2; exit 1; }
 METASTORE_NAME="${METASTORE_NAME:-loom-${REGION}}"
+# Normalize the workspace host (strip scheme / trailing slash) if supplied.
+WORKSPACE_HOST="${WORKSPACE_HOST#https://}"; WORKSPACE_HOST="${WORKSPACE_HOST#http://}"; WORKSPACE_HOST="${WORKSPACE_HOST%/}"
 
 echo ">>> Acquiring Databricks account-console AAD token"
-TOKEN="$(az account get-access-token --resource 2ff814a6-3304-4ab8-85cb-cd0e6f879c1d --query accessToken -o tsv)"
+TOKEN="$(az account get-access-token --resource "$DBX_RESOURCE" --query accessToken -o tsv)"
 API="${ACCOUNT_HOST}/api/2.0/accounts/${ACCOUNT_ID}"
 auth=(-H "Authorization: Bearer ${TOKEN}" -H "Content-Type: application/json")
 
@@ -74,9 +96,47 @@ else
 fi
 
 echo ">>> Assigning metastore ${METASTORE_ID} to workspace ${WORKSPACE_ID}"
+# Assign WITHOUT forcing default_catalog_name yet — we only pin a default once we
+# know the catalog exists (avoids leaving a dangling default that points at a
+# non-existent catalog, which leaves Browse empty). Accounts created after
+# 2023-11-09 auto-create a workspace catalog + set it as default here.
 curl -s "${auth[@]}" -X PUT "${API}/workspaces/${WORKSPACE_ID}/metastore" \
-  -d "$(jq -n --arg m "$METASTORE_ID" '{metastore_id:$m, default_catalog_name:"main"}')" >/dev/null
+  -d "$(jq -n --arg m "$METASTORE_ID" '{metastore_id:$m}')" >/dev/null
 echo "    assigned."
+
+# ---------------------------------------------------------------------------
+# Make the DEFAULT CATALOG deterministic so Browse > Unity Catalog shows a real
+# catalog. Requires a reachable workspace REST host (public access temporarily
+# enabled by the post-deploy bootstrap, or in-VNet). Best-effort: if the host is
+# unreachable we leave the account's auto-created default catalog in place.
+# ---------------------------------------------------------------------------
+if [[ -n "$WORKSPACE_HOST" ]]; then
+  WS_API="https://${WORKSPACE_HOST}/api/2.1/unity-catalog"
+  echo ">>> Ensuring default catalog '${DEFAULT_CATALOG}' exists on ${WORKSPACE_HOST}"
+  # The deploy identity is metastore admin (account_admin → metastore admin), so
+  # CREATE CATALOG succeeds. Tolerate 409/ALREADY_EXISTS.
+  CREATE_CODE="$(curl -s -o /tmp/uc_catalog.json -w '%{http_code}' --max-time 60 \
+    "${auth[@]}" -X POST "${WS_API}/catalogs" \
+    -d "$(jq -n --arg n "$DEFAULT_CATALOG" '{name:$n, comment:"Loom default catalog (auto-provisioned)"}')" || echo "000")"
+  if [[ "$CREATE_CODE" == "200" || "$CREATE_CODE" == "201" ]]; then
+    echo "    created catalog '${DEFAULT_CATALOG}'."
+  elif [[ "$CREATE_CODE" == "409" ]] || grep -qi "already exists\|ALREADY_EXISTS" /tmp/uc_catalog.json 2>/dev/null; then
+    echo "    catalog '${DEFAULT_CATALOG}' already exists — reusing."
+  else
+    echo "    WARN: catalog create returned HTTP ${CREATE_CODE} (workspace host may be unreachable); leaving account default in place." >&2
+    DEFAULT_CATALOG=""   # don't pin a default we couldn't confirm exists
+  fi
+  if [[ -n "$DEFAULT_CATALOG" ]]; then
+    echo ">>> Pinning default_catalog_name=${DEFAULT_CATALOG} on workspace ${WORKSPACE_ID}"
+    curl -s "${auth[@]}" -X PUT "${API}/workspaces/${WORKSPACE_ID}/metastore" \
+      -d "$(jq -n --arg m "$METASTORE_ID" --arg c "$DEFAULT_CATALOG" '{metastore_id:$m, default_catalog_name:$c}')" >/dev/null
+    echo "    default catalog pinned."
+  fi
+else
+  echo ">>> No --workspace-host supplied — relying on the account's auto-created"
+  echo "    workspace catalog as the default. (Pass --workspace-host to force a"
+  echo "    named default catalog on older accounts.)"
+fi
 
 if [[ -n "$UAMI_APP_ID" ]]; then
   echo ">>> Ensuring UAMI ${UAMI_APP_ID} is an account service principal + account admin"
@@ -102,4 +162,5 @@ fi
 
 echo ""
 echo "✓ Unity Catalog enabled. Metastore ${METASTORE_ID} assigned to workspace ${WORKSPACE_ID}."
-echo "  The Loom /catalog surface lists metastores + catalogs now (no redeploy)."
+[[ -n "$WORKSPACE_HOST" && -n "$DEFAULT_CATALOG" ]] && echo "  Default catalog: ${DEFAULT_CATALOG}."
+echo "  The Loom /catalog surface + Databricks Browse > Unity Catalog list catalogs now (no redeploy)."

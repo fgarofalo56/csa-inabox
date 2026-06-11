@@ -200,6 +200,32 @@ principal is free-text rather than a directory picker.
 
 - Env var consumed: **`LOOM_DATABRICKS_HOSTNAME`** (shared with the rest of the
   Databricks surface — no new app-env entry).
+- **Unity Catalog is configured by DEFAULT (2026-06).** The deploy now creates +
+  assigns the regional UC metastore, creates a default catalog, and grants the
+  Console UAMI `account_admin`, so **Browse > Unity Catalog shows a real
+  configured metastore/catalog after a stock deploy** — no manual account-console
+  clicking. Two synced enablement paths share the same logic
+  (`scripts/csa-loom/enable-unity-catalog.sh`):
+  - **Bicep (`az deployment ... -p commercial.bicepparam`):**
+    `platform/fiab/bicep/modules/landing-zone/databricks-uc-bootstrap.bicep` runs a
+    `deploymentScripts@2023-08-01` (AzureCLI) as the Console UAMI. Wired in
+    `landing-zone/main.bicep` (section 3b) `if (ucSupported && !empty(databricksAccountId)
+    && !empty(databricksUcScriptUamiId) && !empty(consoleUamiAppId))`. Inputs:
+    `databricksAccountId` (typed param, surfaced in `params/{commercial,commercial-full,gcc}.bicepparam`),
+    `workspaceNumericId` / `workspaceHost` (new `databricks.bicep` outputs), and
+    `adminPlane.outputs.uamiConsoleId` as the script identity.
+  - **Post-deploy workflow (repair / re-run):**
+    `.github/workflows/csa-loom-post-deploy-bootstrap.yml` step *"Enable Unity
+    Catalog (metastore + default catalog + UAMI account-admin)"* runs the same
+    script with `--workspace-host "$DBX_HOST"` (public access is temporarily
+    enabled in that job) so the default catalog is created + pinned.
+  - **One-time human requirement (honest gate per `no-vaporware.md`):** the script
+    identity (Console UAMI for the bicep path, deploy SP for the workflow path) must
+    be a **Databricks account admin** — granted once via the account console. When
+    absent, the script logs a warning and the deploy continues (UC enablement is
+    never a hard blocker); the Browse UC group shows an actionable empty-state.
+  - **Boundary matrix:** Commercial + GCC enable UC by default (`ucSupported`).
+    GCC-High / IL5 use the Hive metastore — the UC-bootstrap module is skipped.
 - Roles: console UAMI needs metastore/securable privileges (`CREATE CATALOG`,
   `CREATE SCHEMA`, `CREATE TABLE`, object ownership / `MANAGE`); SCIM-bootstrapped per
   `platform/fiab/bicep/modules/landing-zone/databricks*.bicep`. A 403 renders the
@@ -210,7 +236,9 @@ principal is free-text rather than a directory picker.
   verbatim as a 403 if absent. **Foreign catalogs** need `CREATE FOREIGN CATALOG`
   on the connection and **Delta-Sharing catalogs** need `USE PROVIDER` — both are
   UC privileges, not Azure roles, and 403 verbatim when missing.
-- No new Azure resource or Cosmos container.
+- No new Cosmos container. The only new Azure resource is the one-shot UC-bootstrap
+  `deploymentScript` (auto-cleaned on success).
+
 
 ## Verification
 

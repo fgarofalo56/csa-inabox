@@ -50,21 +50,32 @@ jobs:
 
       - name: Grant Console UAMI Purview Data Map roles (data-plane)
         env:
-          PURVIEW_ACCOUNT: purview-csa-loom-eastus2
+          # De-hardcoded so a non-eastus2 / non-Commercial deploy grants the right
+          # account on the right host. Override via repo var LOOM_PURVIEW_ACCOUNT
+          # (the bicep output catalog.purviewAccountName, e.g. purview-csa-loom-<region>);
+          # falls back to the live Commercial default. PURVIEW_CLOUD drives the
+          # Data Map host TLD (.us in US Gov) inside the grant script — it mirrors
+          # purviewBase()'s isGovCloud() switch so the grant targets the SAME host
+          # the Console probes. The token audience stays https://purview.azure.net
+          # in all clouds.
+          PURVIEW_ACCOUNT: ${{ vars.LOOM_PURVIEW_ACCOUNT || 'purview-csa-loom-eastus2' }}
+          PURVIEW_CLOUD: ${{ vars.LOOM_CLOUD || vars.AZURE_CLOUD || 'AzureCloud' }}
         run: |
           set -uo pipefail
           # Classic Purview Data Map permissions are data-plane (collection
           # metadata policy), not ARM RBAC — so they can't be set in bicep. The
           # deploy SP created the Purview account, so it is the root Collection
           # Admin and can grant the Console UAMI the roles it needs for the
-          # catalog/scan/glossary/lineage surfaces (fixes the /governance scan +
-          # sources "Not authorized to access account" 403). data-reader is
-          # included for the F5 lakehouse MIP-label-on-download lookup (reading
-          # the sensitivity label scanned onto an ADLS path). Idempotent.
+          # catalog/scan/glossary/lineage surfaces (fixes the /admin/security +
+          # /governance scan + sources "Not authorized to access account" 403).
+          # data-reader is included for the F5 lakehouse MIP-label-on-download
+          # lookup (reading the sensitivity label scanned onto an ADLS path).
+          # Idempotent.
           chmod +x scripts/csa-loom/grant-purview-datamap-role.sh
           for ROLE in data-reader data-curator data-source-administrator collection-administrator; do
-            echo "== granting Console UAMI '$ROLE' on $PURVIEW_ACCOUNT root collection =="
-            PURVIEW_ACCOUNT="$PURVIEW_ACCOUNT" CONSOLE_UAMI_PRINCIPAL="$CONSOLE_UAMI_PRINCIPAL" ROLE="$ROLE" \
+            echo "== granting Console UAMI '$ROLE' on $PURVIEW_ACCOUNT root collection (cloud=$PURVIEW_CLOUD) =="
+            PURVIEW_ACCOUNT="$PURVIEW_ACCOUNT" PURVIEW_CLOUD="$PURVIEW_CLOUD" \
+              CONSOLE_UAMI_PRINCIPAL="$CONSOLE_UAMI_PRINCIPAL" ROLE="$ROLE" \
               bash scripts/csa-loom/grant-purview-datamap-role.sh \
               || echo "::warning::Purview '$ROLE' grant failed — the deploy SP may not be Collection Admin on $PURVIEW_ACCOUNT (add it once in the Purview portal, then re-run)."
           done
@@ -246,14 +257,17 @@ jobs:
             echo
           fi
 
-      - name: Enable Unity Catalog (assign metastore + UAMI account-admin)
-        # Opt-in + best-effort. Runs against the Databricks ACCOUNT API (not the
-        # network-locked workspace), so no public-access toggle needed. Requires:
+      - name: Enable Unity Catalog (metastore + default catalog + UAMI account-admin)
+        # Default-on UC enablement. Runs against the Databricks ACCOUNT API
+        # (accounts.azuredatabricks.net, NOT the network-locked workspace) to
+        # create/assign the metastore + grant the Console UAMI account-admin, and
+        # against the WORKSPACE REST (reachable here because public access is
+        # temporarily Enabled above) to create + pin the DEFAULT CATALOG so
+        # Browse > Unity Catalog shows a real configured catalog. Requires:
         #   - var/secret DATABRICKS_ACCOUNT_ID (the account GUID), AND
         #   - the deploy SP to be a Databricks ACCOUNT ADMIN (one-time human step).
         # If either is absent the step prints how to do it and continues — UC
-        # enablement is never a hard deploy blocker. Without it the catalog still
-        # lists per-workspace catalogs once a metastore is assigned manually.
+        # enablement is never a hard deploy blocker.
         env:
           DATABRICKS_ACCOUNT_ID: ${{ vars.DATABRICKS_ACCOUNT_ID || secrets.DATABRICKS_ACCOUNT_ID }}
         run: |
@@ -272,9 +286,13 @@ jobs:
             echo "::warning::Could not resolve Databricks workspaceId/region — skipping UC auto-enable."; exit 0
           fi
           chmod +x scripts/csa-loom/enable-unity-catalog.sh
-          # Tolerate non-account-admin deploy SP: warn, don't fail the bootstrap.
+          # --workspace-host is reachable because public access is Enabled above;
+          # it lets the script CREATE + pin the default catalog so Browse shows a
+          # real configured catalog. Tolerate non-account-admin deploy SP: warn,
+          # don't fail the bootstrap.
           bash scripts/csa-loom/enable-unity-catalog.sh \
             --region "$REGION" --workspace-id "$WS_ID" --uami-app-id "$CONSOLE_UAMI_CLIENT" \
+            --workspace-host "$DBX_HOST" --default-catalog main \
             || echo "::warning::UC auto-enable failed (deploy SP likely not a Databricks account admin). See docs/fiab/catalog/metastores.md"
 
       - name: Restore Databricks public access disabled
@@ -544,6 +562,39 @@ jobs:
             echo "    Open Entra ID → Enterprise applications → Console UAMI → Permissions"
             echo "    Click 'Grant admin consent for <tenant>'"
             echo "    Without consent, /admin/security MIP+DLP tabs render the NotConfigured MessageBar."
+          fi
+
+      - name: Provision SCC labels sidecar (label & policy CRUD)
+        if: always()
+        continue-on-error: true
+        run: |
+          # Sets up the Security & Compliance PowerShell sidecar that backs
+          # sensitivity-label + label-policy CRUD (create/edit/delete) on
+          # /admin/security. Microsoft Graph has no write surface for labels or
+          # policies, so CRUD runs through SCC PowerShell (New-/Set-/Remove-Label
+          # and *-LabelPolicy) via the azure-functions/scc-labels Function app,
+          # authenticated with a certificate-based app (Exchange.ManageAsApp +
+          # Compliance Administrator).
+          #
+          # This step performs the automatable parts (app registration, the
+          # Exchange.ManageAsApp grant, the Compliance Administrator role
+          # assignment, and — when the Function app exists — publishing the
+          # code). The auth certificate upload + Tenant Admin consent + the
+          # re-deploy with loomMipAdminEnabled=true remain one-time manual
+          # actions, printed at the end of the script. Until then label/policy
+          # READS work and CRUD returns the honest 'mip_admin_not_configured'
+          # gate (no vaporware).
+          set +e
+          SCC_FUNCTION_APP=$(az functionapp list -g "$ADMIN_RG" --query "[?starts_with(name,'func-scclbl-')].name | [0]" -o tsv 2>/dev/null)
+          if [ -n "$SCC_FUNCTION_APP" ]; then
+            echo "Found SCC labels Function app: $SCC_FUNCTION_APP — provisioning + publishing code."
+            SCC_FUNCTION_APP="$SCC_FUNCTION_APP" SCC_FUNCTION_RG="$ADMIN_RG" \
+              bash scripts/csa-loom/provision-scc-labels-sidecar.sh || true
+          else
+            echo "No func-scclbl-* Function app found in $ADMIN_RG."
+            echo "Deploy with loomMipAdminEnabled=true to create it, then re-run this job."
+            echo "Running the app/role provisioning portion now so the SCC app exists ahead of the next deploy:"
+            bash scripts/csa-loom/provision-scc-labels-sidecar.sh || true
           fi
 
       - name: Publish Govern posture-refresh Function code (if the app exists)

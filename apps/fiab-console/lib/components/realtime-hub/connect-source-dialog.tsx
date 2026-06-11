@@ -23,12 +23,15 @@ import {
 } from '@fluentui/react-components';
 import {
   ArrowLeft20Regular, Open20Regular, PlugConnected20Regular, Search20Regular,
-  ArrowClockwise16Regular, Certificate20Regular,
+  ArrowClockwise16Regular, Certificate20Regular, Add16Regular, Dismiss16Regular,
 } from '@fluentui/react-icons';
 import {
-  SOURCE_CONNECTORS, SOURCE_CATEGORIES, sourceVisual,
-  type SourceConnector, type SourceCategory, type SourceField,
+  SOURCE_CONNECTORS, SOURCE_CATEGORIES, sourceVisual, SCOPE_KEYS,
+  type SourceConnector, type SourceCategory, type SourceField, type ResourceSelectSource,
 } from './source-catalog';
+
+/** Sentinel option value for the inline "+ Create new…" affordance. */
+const CREATE_SENTINEL = '__loom_create_new__';
 
 const useStyles = makeStyles({
   surface: { maxWidth: '900px', width: '90vw' },
@@ -38,9 +41,10 @@ const useStyles = makeStyles({
     borderRight: `1px solid ${tokens.colorNeutralStroke2}`, paddingRight: '8px',
   },
   catItem: {
-    textAlign: 'left', padding: '8px 12px', borderRadius: '4px', background: 'transparent',
+    textAlign: 'left', padding: '8px 12px', borderRadius: tokens.borderRadiusMedium, background: 'transparent',
     border: 'none', cursor: 'pointer', color: tokens.colorNeutralForeground1, fontSize: '14px',
     ':hover': { backgroundColor: tokens.colorNeutralBackground2Hover },
+    ':focus-visible': { outline: `2px solid ${tokens.colorStrokeFocus2}`, outlineOffset: '1px' },
   },
   catItemActive: { backgroundColor: tokens.colorBrandBackground2, color: tokens.colorBrandForeground1, fontWeight: 600 },
   rightCol: { display: 'flex', flexDirection: 'column', gap: '12px', minHeight: 0 },
@@ -68,8 +72,9 @@ const useStyles = makeStyles({
   cardTags: { display: 'flex', gap: tokens.spacingHorizontalXS, marginTop: tokens.spacingVerticalXS, flexWrap: 'wrap' },
   formHead: { display: 'flex', alignItems: 'center', gap: tokens.spacingHorizontalM },
   emptyGrid: {
-    gridColumn: '1 / -1', padding: tokens.spacingVerticalXXL, textAlign: 'center',
-    color: tokens.colorNeutralForeground3,
+    gridColumn: '1 / -1', padding: tokens.spacingVerticalXXL,
+    display: 'flex', flexDirection: 'column', alignItems: 'center', gap: tokens.spacingVerticalS,
+    textAlign: 'center', color: tokens.colorNeutralForeground3,
   },
   form: { display: 'flex', flexDirection: 'column', gap: '12px' },
   sectionHead: {
@@ -83,6 +88,15 @@ const useStyles = makeStyles({
   certOption: { display: 'flex', alignItems: 'center', gap: tokens.spacingHorizontalS, minWidth: 0, width: '100%' },
   certOptionIcon: { flexShrink: 0, color: tokens.colorNeutralForeground3 },
   certOptionName: { flex: 1, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' },
+  createPanel: {
+    display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalS,
+    border: `1px solid ${tokens.colorBrandStroke2}`, borderRadius: tokens.borderRadiusMedium,
+    padding: tokens.spacingVerticalM, marginTop: tokens.spacingVerticalXS,
+    backgroundColor: tokens.colorNeutralBackground2,
+  },
+  createPanelHead: { display: 'flex', alignItems: 'center', gap: tokens.spacingHorizontalXS, fontWeight: tokens.fontWeightSemibold },
+  createTwoCol: { display: 'grid', gridTemplateColumns: '1fr 1fr', gap: tokens.spacingHorizontalS },
+  createActions: { display: 'flex', gap: tokens.spacingHorizontalS, justifyContent: 'flex-end' },
 });
 
 interface Props {
@@ -194,6 +208,156 @@ export function ConnectSourceDialog({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [open, hasCertFields]);
 
+  // ---- Cascading resource-select state (Event Hubs / IoT Hub dropdowns) ----
+  interface ResourceOption { name: string; description?: string; subscriptionId?: string; resourceGroup?: string; location?: string }
+  const [optCache, setOptCache] = useState<Record<string, ResourceOption[]>>({});
+  const [optLoading, setOptLoading] = useState<Record<string, boolean>>({});
+  const [optError, setOptError] = useState<Record<string, string | null>>({});
+  // Global honest infra-gate when no subscription is configured for discovery.
+  const [optGate, setOptGate] = useState<{ hint: string; bicep?: string } | null>(null);
+  // Inline create-if-missing state, keyed by field.
+  const [createField, setCreateField] = useState<string | null>(null);
+  const [createName, setCreateName] = useState('');
+  const [createPartitions, setCreatePartitions] = useState('2');
+  const [createRetention, setCreateRetention] = useState('1');
+  const [createBusy, setCreateBusy] = useState(false);
+  const [createErr, setCreateErr] = useState<string | null>(null);
+
+  const hasResourceFields = !!picked?.fields.some((f) => f.kind === 'resource-select');
+
+  /** Build the /options query string for a resource-select field from current props. */
+  function optionsQuery(src: ResourceSelectSource): string {
+    const q = new URLSearchParams();
+    q.set('kind', src.optionsKind);
+    if (src.optionsKind === 'namespaces') q.set('service', src.service || 'eventhub');
+    if (props.subscriptionId) q.set('subscriptionId', props.subscriptionId);
+    if (props.resourceGroup) q.set('resourceGroup', props.resourceGroup);
+    if (props.namespace) q.set('namespace', props.namespace);
+    if (props.eventHubName) q.set('eventHub', props.eventHubName);
+    if (props.iotHubName) q.set('hubName', props.iotHubName);
+    return q.toString();
+  }
+
+  const depsSatisfied = (f: SourceField) => (f.source?.dependsOn || []).every((k) => (props[k] || '').trim());
+
+  async function loadOptions(f: SourceField) {
+    const src = f.source;
+    if (!src) return;
+    setOptLoading((l) => ({ ...l, [f.key]: true }));
+    setOptError((e) => ({ ...e, [f.key]: null }));
+    try {
+      const res = await fetch(`/api/realtime-hub/options?${optionsQuery(src)}`, { cache: 'no-store' });
+      const j = await res.json().catch(() => ({}));
+      if (res.status === 503 && j.code === 'not_configured') {
+        setOptGate({ hint: j.hint || 'Set LOOM_SUBSCRIPTION_ID so source discovery can enumerate resources.', bicep: j.bicep });
+        return;
+      }
+      if (!res.ok || !j.ok) {
+        setOptError((e) => ({ ...e, [f.key]: j.error || `Could not list options (HTTP ${res.status}).` }));
+        return;
+      }
+      setOptGate(null);
+      setOptCache((c) => ({ ...c, [f.key]: Array.isArray(j.options) ? j.options : [] }));
+    } catch (e: any) {
+      setOptError((er) => ({ ...er, [f.key]: e?.message || String(e) }));
+    } finally {
+      setOptLoading((l) => ({ ...l, [f.key]: false }));
+    }
+  }
+
+  // Lazily load each resource-select field's options once its parent selections
+  // are satisfied. Re-runs whenever a parent scope value changes (cascade).
+  const scopeSig = picked
+    ? `${picked.id}|${props.subscriptionId || ''}|${props.resourceGroup || ''}|${props.namespace || ''}|${props.eventHubName || ''}|${props.iotHubName || ''}`
+    : '';
+  useEffect(() => {
+    if (!open || !picked || optGate) return;
+    for (const f of picked.fields) {
+      if (f.kind !== 'resource-select' || !f.source) continue;
+      if (!depsSatisfied(f)) continue;
+      if (optCache[f.key] || optLoading[f.key] || optError[f.key]) continue;
+      loadOptions(f);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [open, scopeSig, optGate]);
+
+  /** Select a resource-select value, capturing scope + clearing dependents (cascade). */
+  function selectResource(f: SourceField, value: string, option?: ResourceOption) {
+    const fields = picked?.fields || [];
+    // Transitively collect every field that (directly or indirectly) depends on f.
+    const cleared = new Set<string>();
+    let frontier = [f.key];
+    while (frontier.length) {
+      const nextFrontier: string[] = [];
+      for (const df of fields) {
+        if (cleared.has(df.key)) continue;
+        if ((df.source?.dependsOn || []).some((k) => frontier.includes(k))) {
+          cleared.add(df.key);
+          nextFrontier.push(df.key);
+        }
+      }
+      frontier = nextFrontier;
+    }
+    setProps((p) => {
+      const next: Record<string, string> = { ...p, [f.key]: value };
+      if (f.source?.captureScope) {
+        next.subscriptionId = option?.subscriptionId || '';
+        next.resourceGroup = option?.resourceGroup || '';
+      }
+      for (const k of cleared) next[k] = '';
+      return next;
+    });
+    setOptCache((c) => { const n = { ...c }; for (const k of cleared) delete n[k]; return n; });
+    setOptError((e) => { const n = { ...e }; for (const k of cleared) n[k] = null; return n; });
+  }
+
+  function openCreate(f: SourceField) {
+    setCreateField(f.key); setCreateName(''); setCreatePartitions('2'); setCreateRetention('1'); setCreateErr(null);
+  }
+
+  async function runCreate(f: SourceField) {
+    const src = f.source;
+    if (!src?.createKind) return;
+    const name = createName.trim();
+    if (!name) { setCreateErr('Name is required.'); return; }
+    setCreateBusy(true); setCreateErr(null);
+    try {
+      const body: Record<string, unknown> = { kind: src.createKind };
+      if (src.createKind === 'eventhub') {
+        Object.assign(body, {
+          subscriptionId: props.subscriptionId, resourceGroup: props.resourceGroup, namespace: props.namespace,
+          eventHub: name, partitionCount: Number(createPartitions) || 2, retentionDays: Number(createRetention) || 1,
+        });
+      } else if (src.createKind === 'consumerGroup') {
+        Object.assign(body, {
+          subscriptionId: props.subscriptionId, resourceGroup: props.resourceGroup, namespace: props.namespace,
+          eventHub: props.eventHubName, consumerGroup: name,
+        });
+      } else if (src.createKind === 'iotConsumerGroup') {
+        Object.assign(body, {
+          hubName: props.iotHubName, consumerGroup: name,
+          subscriptionId: props.subscriptionId, resourceGroup: props.resourceGroup,
+        });
+      }
+      const res = await fetch('/api/realtime-hub/provision', {
+        method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body),
+      });
+      const j = await res.json().catch(() => ({}));
+      if (!res.ok || !j.ok) { setCreateErr(j.error || `Create failed (HTTP ${res.status}).`); return; }
+      const created = String(j?.created?.name || name);
+      // Refresh the list so the new resource appears, then select it.
+      setOptCache((c) => { const n = { ...c }; delete n[f.key]; return n; });
+      setOptError((e) => ({ ...e, [f.key]: null }));
+      selectResource(f, created);
+      setCreateField(null);
+      await loadOptions(f);
+    } catch (e: any) {
+      setCreateErr(e?.message || String(e));
+    } finally {
+      setCreateBusy(false);
+    }
+  }
+
   const connectors = useMemo(() => {
     const q = query.trim().toLowerCase();
     return SOURCE_CONNECTORS.filter((c) =>
@@ -205,20 +369,32 @@ export function ConnectSourceDialog({
     setError(null); setErrorHint(null); setSuccess(null); setBusy(false);
     setCreatedLink(null);
     setCerts([]); setCertVaultUri(null); setCertGate(null); setCertError(null); setCertsLoading(false);
+    setOptCache({}); setOptLoading({}); setOptError({}); setOptGate(null);
+    setCreateField(null); setCreateName(''); setCreateErr(null); setCreateBusy(false);
   }
 
   function pick(c: SourceConnector, preProps?: Record<string, string>, preName?: string) {
     setPicked(c);
     setDisplayName(preName?.trim() || `${c.name.replace(/[^a-z0-9]+/gi, '-').toLowerCase()}-stream`);
-    // Keep only property values whose keys this connector actually exposes.
+    // Seed defaults, then keep pre-filled values whose keys this connector
+    // exposes — plus the canonical scope keys (subscriptionId / resourceGroup /
+    // namespace) that the RTI hub Subscribe action carries even though they
+    // aren't user-visible fields.
     const allowed: Record<string, string> = {};
+    for (const f of c.fields) if (f.defaultValue) allowed[f.key] = f.defaultValue;
     if (preProps) {
       for (const f of c.fields) {
         const v = preProps[f.key];
         if (v != null && String(v).trim()) allowed[f.key] = String(v);
       }
+      for (const k of SCOPE_KEYS) {
+        const v = preProps[k];
+        if (v != null && String(v).trim()) allowed[k] = String(v);
+      }
     }
     setProps(allowed);
+    setOptCache({}); setOptLoading({}); setOptError({}); setOptGate(null);
+    setCreateField(null);
     setError(null); setErrorHint(null); setSuccess(null); setCreatedLink(null);
   }
 
@@ -238,6 +414,13 @@ export function ConnectSourceDialog({
         if (!isFieldVisible(f)) continue;            // skip fields hidden by an off toggle
         const v = (props[f.key] || '').trim();
         if (v) properties[f.key] = v;
+      }
+      // Forward the captured Azure scope (namespace's subscription + RG) so the
+      // eventstream source can bind against the exact discovered resource — even
+      // though these are not user-visible form fields.
+      for (const k of SCOPE_KEYS) {
+        const v = (props[k] || '').trim();
+        if (v && !properties[k]) properties[k] = v;
       }
       // Tell the backend which Key Vault the chosen mTLS certs live in so it can
       // persist a resolvable {vaultUri, certName} reference (never the material).
@@ -421,6 +604,104 @@ export function ConnectSourceDialog({
                           </div>
                         </Field>,
                       );
+                    } else if (f.kind === 'resource-select') {
+                      const src = f.source!;
+                      const opts = optCache[f.key] || [];
+                      const loading = !!optLoading[f.key];
+                      const err = optError[f.key];
+                      const deps = src.dependsOn || [];
+                      const depsOk = deps.every((k) => (props[k] || '').trim());
+                      const cur = props[f.key] || '';
+                      const isCreating = createField === f.key;
+                      const parentLabel = deps.length
+                        ? (picked!.fields.find((x) => x.key === deps[deps.length - 1])?.label?.toLowerCase() || 'parent')
+                        : '';
+                      const placeholder =
+                        optGate ? 'Subscription not configured'
+                        : !depsOk ? `Select ${parentLabel} first`
+                        : loading ? 'Loading…'
+                        : opts.length === 0 ? (src.creatable ? 'None found — create one below' : 'None found')
+                        : 'Select…';
+                      nodes.push(
+                        <Field key={f.key} label={f.label} required={f.required} hint={f.help}
+                          validationState={err ? 'error' : undefined} validationMessage={err || undefined}>
+                          <div className={styles.certRow}>
+                            <div className={styles.certGrow}>
+                              <Dropdown
+                                aria-label={f.label}
+                                disabled={!!optGate || !depsOk || loading}
+                                placeholder={placeholder}
+                                selectedOptions={cur ? [cur] : []}
+                                value={cur}
+                                onOptionSelect={(_, d) => {
+                                  if (d.optionValue === CREATE_SENTINEL) { openCreate(f); return; }
+                                  const opt = opts.find((o) => o.name === d.optionValue);
+                                  selectResource(f, d.optionValue || '', opt);
+                                }}
+                              >
+                                {opts.map((o) => (
+                                  <Option key={o.name} value={o.name} text={o.name}>
+                                    <span className={styles.certOption}>
+                                      <span className={styles.certOptionName}>{o.name}</span>
+                                      {o.description && (
+                                        <Caption1 style={{ color: tokens.colorNeutralForeground3, flexShrink: 0 }}>{o.description}</Caption1>
+                                      )}
+                                    </span>
+                                  </Option>
+                                ))}
+                                {src.creatable && depsOk && (
+                                  <Option key={CREATE_SENTINEL} value={CREATE_SENTINEL} text="Create new…">
+                                    <span className={styles.certOption}>
+                                      <Add16Regular className={styles.certOptionIcon} />
+                                      <span className={styles.certOptionName}>Create new…</span>
+                                    </span>
+                                  </Option>
+                                )}
+                              </Dropdown>
+                            </div>
+                            <Button appearance="subtle" icon={<ArrowClockwise16Regular />}
+                              aria-label={`Refresh ${f.label}`}
+                              disabled={!!optGate || !depsOk || loading}
+                              onClick={() => {
+                                setOptCache((c) => { const n = { ...c }; delete n[f.key]; return n; });
+                                setOptError((e) => ({ ...e, [f.key]: null }));
+                                loadOptions(f);
+                              }} />
+                          </div>
+                          {isCreating && (
+                            <div className={styles.createPanel}>
+                              <div className={styles.createPanelHead}>
+                                <Add16Regular /> Create new {f.label.toLowerCase()}
+                              </div>
+                              <Field label="Name" required>
+                                <Input value={createName} onChange={(_, d) => setCreateName(d.value)}
+                                  placeholder={src.createKind === 'eventhub' ? 'telemetry' : 'loom-receiver'} />
+                              </Field>
+                              {src.createKind === 'eventhub' && (
+                                <div className={styles.createTwoCol}>
+                                  <Field label="Partitions" hint="1–32">
+                                    <Input type="number" value={createPartitions} onChange={(_, d) => setCreatePartitions(d.value)} />
+                                  </Field>
+                                  <Field label="Retention (days)" hint="1–7">
+                                    <Input type="number" value={createRetention} onChange={(_, d) => setCreateRetention(d.value)} />
+                                  </Field>
+                                </div>
+                              )}
+                              {createErr && (
+                                <MessageBar intent="error"><MessageBarBody>{createErr}</MessageBarBody></MessageBar>
+                              )}
+                              <div className={styles.createActions}>
+                                <Button appearance="subtle" icon={<Dismiss16Regular />} disabled={createBusy}
+                                  onClick={() => { setCreateField(null); setCreateErr(null); }}>Cancel</Button>
+                                <Button appearance="primary" icon={createBusy ? <Spinner size="tiny" /> : <Add16Regular />}
+                                  disabled={createBusy || !createName.trim()} onClick={() => runCreate(f)}>
+                                  {createBusy ? 'Creating…' : 'Create & select'}
+                                </Button>
+                              </div>
+                            </div>
+                          )}
+                        </Field>,
+                      );
                     } else {
                       nodes.push(
                         <Field key={f.key} label={f.label} required={f.required} hint={f.help}>
@@ -445,6 +726,14 @@ export function ConnectSourceDialog({
                       <FluentLink href="https://learn.microsoft.com/fabric/real-time-intelligence/event-streams/add-source-mqtt" target="_blank">
                         MQTT mTLS certificate requirements
                       </FluentLink>
+                    </MessageBarBody>
+                  </MessageBar>
+                )}
+                {hasResourceFields && optGate && (
+                  <MessageBar intent="warning">
+                    <MessageBarBody>
+                      <MessageBarTitle>Source discovery not configured</MessageBarTitle>
+                      {optGate.hint}{optGate.bicep ? <> See <code>{optGate.bicep}</code>.</> : null}
                     </MessageBarBody>
                   </MessageBar>
                 )}
@@ -512,7 +801,11 @@ export function ConnectSourceDialog({
                       );
                     })}
                     {connectors.length === 0 && (
-                      <Body1 className={styles.emptyGrid}>No sources match &quot;{query}&quot;.</Body1>
+                      <div className={styles.emptyGrid}>
+                        <Search20Regular style={{ width: 32, height: 32, color: tokens.colorNeutralForeground4 }} aria-hidden />
+                        <Body1>No sources match &quot;{query}&quot;.</Body1>
+                        <Button appearance="subtle" size="small" onClick={() => setQuery('')}>Clear search</Button>
+                      </div>
                     )}
                   </div>
                 </div>

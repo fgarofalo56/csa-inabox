@@ -98,11 +98,14 @@ export async function PATCH(req: NextRequest) {
   }
   const owner = body?.owner !== undefined ? String(body.owner).trim() : undefined;
   const comment = body?.comment !== undefined ? String(body.comment) : undefined;
-  if (owner === undefined && comment === undefined) {
-    return NextResponse.json({ ok: false, error: 'provide owner and/or comment to update' }, { status: 400 });
+  // Rename (UC `new_name`). Requires the caller to own the schema + USE CATALOG
+  // on the parent catalog (Learn: Manage schemas). A UC 403 surfaces verbatim.
+  const newName = body?.new_name !== undefined ? String(body.new_name).trim() : undefined;
+  if (owner === undefined && comment === undefined && !newName) {
+    return NextResponse.json({ ok: false, error: 'provide owner, comment, and/or new_name to update' }, { status: 400 });
   }
   try {
-    const schema = await patchUcSchema(fullName, { owner, comment });
+    const schema = await patchUcSchema(fullName, { owner, comment, new_name: newName });
     return NextResponse.json({ ok: true, schema });
   } catch (e: any) {
     return NextResponse.json({ ok: false, error: e?.message || String(e) }, { status: e?.status || 502 });

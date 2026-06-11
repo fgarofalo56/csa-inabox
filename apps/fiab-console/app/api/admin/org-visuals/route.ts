@@ -2,7 +2,8 @@
  * F23 — Organizational custom visuals BFF.
  *
  * GET    /api/admin/org-visuals                         → { ok, visuals }
- * POST   /api/admin/org-visuals      multipart: name, version, file(.pbiviz)
+ * POST   /api/admin/org-visuals      multipart: name, version, file(.pbiviz),
+ *                                    optional description, optional icon(image)
  *                                                        → { ok, visual }
  * PUT    /api/admin/org-visuals?id=<id>  body { enabled } → { ok, visual }
  * DELETE /api/admin/org-visuals?id=<id>                 → { ok }
@@ -28,6 +29,7 @@ export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
 
 const MAX_BUNDLE_BYTES = 64 * 1024 * 1024; // 64 MB — generous for .pbiviz bundles.
+const MAX_ICON_BYTES = 256 * 1024; // 256 KB — small icon kept inline as a data: URI.
 
 function err(error: string, status: number) {
   return NextResponse.json({ ok: false, error }, { status });
@@ -92,6 +94,7 @@ export async function POST(req: NextRequest) {
   const file = form.get('file');
   const name = String(form.get('name') || '').trim();
   const version = String(form.get('version') || '').trim();
+  const description = String(form.get('description') || '').trim();
   if (!file || typeof file === 'string') return err('file is required', 400);
   if (!name) return err('name is required', 400);
   if (!version) return err('version is required', 400);
@@ -101,9 +104,24 @@ export async function POST(req: NextRequest) {
   if (buf.length === 0) return err('uploaded file is empty', 400);
   if (buf.length > MAX_BUNDLE_BYTES) return err(`bundle exceeds ${MAX_BUNDLE_BYTES} bytes`, 413);
 
+  // Optional icon (parity with Fabric's "Add visual" Icon field). Stored inline
+  // as a small data: URI on the metadata doc — no second blob / SAS round-trip.
+  let iconDataUri: string | undefined;
+  const icon = form.get('icon');
+  if (icon && typeof icon !== 'string') {
+    const type = icon.type || 'image/png';
+    if (!type.startsWith('image/')) return err('icon must be an image', 400);
+    const iconBuf = Buffer.from(await icon.arrayBuffer());
+    if (iconBuf.length > MAX_ICON_BYTES) return err(`icon exceeds ${MAX_ICON_BYTES} bytes`, 413);
+    if (iconBuf.length > 0) iconDataUri = `data:${type};base64,${iconBuf.toString('base64')}`;
+  }
+
   try {
-    const visual = await uploadOrgVisual(tenantId, who, name, fileName, version, buf);
-    await audit(tenantId, who, 'org-visual.upload', { visualId: visual.id, name, version, fileName, size: visual.size });
+    const visual = await uploadOrgVisual(tenantId, who, name, fileName, version, buf, {
+      ...(description ? { description } : {}),
+      ...(iconDataUri ? { iconDataUri } : {}),
+    });
+    await audit(tenantId, who, 'org-visual.upload', { visualId: visual.id, name, version, fileName, size: visual.size, hasIcon: !!iconDataUri });
     return NextResponse.json({ ok: true, visual });
   } catch (e: any) {
     if (e instanceof NotConfiguredError) return notConfigured();

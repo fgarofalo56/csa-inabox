@@ -38,6 +38,7 @@ const ARM_SCOPE = armScope();
 const SUBSCRIPTIONS_API = '2022-12-01';
 const PE_API = '2024-03-01';
 const NIC_API = '2024-03-01';
+const NSG_API = '2024-05-01';
 
 const uamiClientId = process.env.LOOM_UAMI_CLIENT_ID || process.env.AZURE_CLIENT_ID;
 const credential: ChainedTokenCredential | DefaultAzureCredential = uamiClientId
@@ -81,6 +82,11 @@ export interface PrivateEndpointInfo {
   groupIds: string[];
   /** Provisioning + connection state. */
   state?: string;
+  /** ARM id of the subnet the PE's NIC lives in (`properties.subnet.id`) — the
+   * authoritative key for drawing accurate PE→subnet topology edges. */
+  subnetId?: string;
+  /** Friendly subnet name (last id segment of {@link subnetId}). */
+  subnetName?: string;
   /** FQDN→IP→zone mappings derived from customDnsConfigs. */
   dns: PrivateDnsRecord[];
   /** Private IP(s) on the endpoint NIC — the authoritative IP for the hosts file
@@ -166,6 +172,7 @@ function shape(raw: any, subscriptionId: string): PrivateEndpointInfo {
       ips: Array.isArray(d.ipAddresses) ? d.ipAddresses : [],
       zone: privatelinkZoneFor(d.fqdn),
     }));
+  const subnetId: string | undefined = raw?.properties?.subnet?.id;
   return {
     id,
     name: raw?.name || id.split('/').pop() || 'private-endpoint',
@@ -176,6 +183,8 @@ function shape(raw: any, subscriptionId: string): PrivateEndpointInfo {
     connectedResourceName: connId ? connId.split('/').pop() : undefined,
     groupIds,
     state: conns[0]?.properties?.privateLinkServiceConnectionState?.status || raw?.properties?.provisioningState,
+    subnetId,
+    subnetName: subnetId ? subnetId.split('/').pop() : undefined,
     dns,
     _nicId: raw?.properties?.networkInterfaces?.[0]?.id,
   };
@@ -235,7 +244,11 @@ export interface PrivateDnsZoneInfo {
   name: string; subscriptionId: string; resourceGroup?: string; records: PrivateDnsRecord[];
 }
 export interface SubnetInfo {
+  /** Full ARM id of the subnet (key for subnet↔NSG / subnet↔PE topology edges). */
+  id?: string;
   name: string; addressPrefix?: string; privateEndpointCount: number; delegations: string[];
+  /** ARM id of the NSG attached to this subnet, if any. */
+  nsgId?: string;
 }
 export interface VNetInfo {
   id: string; name: string; subscriptionId: string; resourceGroup?: string;
@@ -293,10 +306,12 @@ export async function listVirtualNetworks(): Promise<VNetInfo[]> {
     for (const v of vnets) {
       const rg = /\/resourceGroups\/([^/]+)\//i.exec(v?.id || '')?.[1];
       const subnets: SubnetInfo[] = (v?.properties?.subnets || []).map((s: any) => ({
+        id: s?.id,
         name: s?.name || '',
         addressPrefix: s?.properties?.addressPrefix || (s?.properties?.addressPrefixes || [])[0],
         privateEndpointCount: (s?.properties?.privateEndpoints || []).length,
         delegations: (s?.properties?.delegations || []).map((d: any) => d?.properties?.serviceName).filter(Boolean),
+        nsgId: s?.properties?.networkSecurityGroup?.id,
       }));
       out.push({
         id: v?.id || '', name: v?.name || '', subscriptionId: sub, resourceGroup: rg,
@@ -308,12 +323,117 @@ export async function listVirtualNetworks(): Promise<VNetInfo[]> {
   return out;
 }
 
+// ── Network Security Groups (per-subnet firewall rules) ─────────────────────
+//
+// The hub VNet attaches an NSG (`nsg-<subnet>`) to every non-system workload
+// subnet (see platform/fiab/bicep/modules/admin-plane/network.bicep). Reading
+// them gives the topology its security-boundary nodes + a clickable rule table
+// (priority/direction/access/protocol/source→dest:port), matching the Azure
+// portal's "Network security group → Inbound/Outbound security rules" blade.
+//
+// Real ARM REST — no mocks:
+//   GET /subscriptions/{sub}/providers/Microsoft.Network/networkSecurityGroups
+//       ?api-version=2024-05-01
+//   → properties.securityRules[].properties.{priority,direction,access,protocol,
+//       sourceAddressPrefix(es), destinationAddressPrefix(es), destinationPortRange(s)}
+//   → properties.subnets[].id   (which subnets the NSG is attached to)
+//
+// Needs Reader (Microsoft.Network/networkSecurityGroups/read). Best-effort per
+// subscription so one inaccessible sub never blanks the topology.
+// Learn: https://learn.microsoft.com/rest/api/virtualnetwork/network-security-groups/list-all
+
+export interface NsgRule {
+  name: string;
+  direction: string;            // Inbound | Outbound
+  access: string;               // Allow | Deny
+  priority: number;
+  protocol: string;             // Tcp | Udp | * ...
+  sourcePrefix: string;         // single or comma-joined source address prefixes
+  destPrefix: string;           // single or comma-joined destination address prefixes
+  sourcePort: string;
+  destPort: string;             // single or comma-joined destination ports
+}
+
+export interface NsgInfo {
+  id: string;
+  name: string;
+  subscriptionId: string;
+  resourceGroup?: string;
+  location?: string;
+  /** ARM ids of the subnets this NSG is attached to. */
+  subnetIds: string[];
+  /** Custom + default security rules, sorted by priority within each direction. */
+  rules: NsgRule[];
+}
+
+/** Map a single ARM securityRule to the flat {@link NsgRule} shape. Handles the
+ * singular vs. plural (`*Prefix` vs `*Prefixes`, `*PortRange` vs `*PortRanges`)
+ * ARM variants. PURE — unit-testable, no ARM/identity. */
+export function shapeNsgRule(raw: any): NsgRule {
+  const p = raw?.properties || {};
+  const join = (single: any, plural: any): string => {
+    const arr = Array.isArray(plural) ? plural.filter(Boolean) : [];
+    if (arr.length) return arr.join(', ');
+    return single != null && single !== '' ? String(single) : '*';
+  };
+  return {
+    name: raw?.name || '',
+    direction: p.direction || '',
+    access: p.access || '',
+    priority: typeof p.priority === 'number' ? p.priority : Number(p.priority) || 0,
+    protocol: p.protocol || '*',
+    sourcePrefix: join(p.sourceAddressPrefix, p.sourceAddressPrefixes),
+    destPrefix: join(p.destinationAddressPrefix, p.destinationAddressPrefixes),
+    sourcePort: join(p.sourcePortRange, p.sourcePortRanges),
+    destPort: join(p.destinationPortRange, p.destinationPortRanges),
+  };
+}
+
+/** Map an ARM NSG resource to {@link NsgInfo}. PURE — unit-testable. */
+export function shapeNsg(raw: any, subscriptionId: string): NsgInfo {
+  const id: string = raw?.id || '';
+  const rg = /\/resourceGroups\/([^/]+)\//i.exec(id)?.[1];
+  const ruleSources: any[] = [
+    ...(raw?.properties?.securityRules || []),
+    ...(raw?.properties?.defaultSecurityRules || []),
+  ];
+  const rules = ruleSources
+    .map(shapeNsgRule)
+    .sort((a, b) => a.direction.localeCompare(b.direction) || a.priority - b.priority);
+  const subnetIds: string[] = (raw?.properties?.subnets || [])
+    .map((s: any) => s?.id)
+    .filter(Boolean);
+  return {
+    id,
+    name: raw?.name || id.split('/').pop() || 'nsg',
+    subscriptionId,
+    resourceGroup: rg,
+    location: raw?.location,
+    subnetIds,
+    rules,
+  };
+}
+
 /**
- * Build the COMPLETE hosts-file override from the union of every private DNS
- * zone A-record AND every private-endpoint DNS record (dedup by FQDN, first IP
- * wins). This guarantees every private-only service gets an `IP  FQDN` line —
- * not just the endpoints that echoed an IP in customDnsConfigs.
+ * Every network security group the Console identity can read across the target
+ * subscription(s). Per-subscription failures are swallowed so one inaccessible
+ * sub doesn't blank the list — the topology degrades gracefully.
  */
+export async function listNetworkSecurityGroups(): Promise<NsgInfo[]> {
+  const subs = await targetSubscriptionIds();
+  const out: NsgInfo[] = [];
+  for (const sub of subs) {
+    let raws: any[] = [];
+    try {
+      raws = await armList<any>(
+        `/subscriptions/${sub}/providers/Microsoft.Network/networkSecurityGroups?api-version=${NSG_API}`,
+      );
+    } catch { continue; }
+    for (const r of raws) out.push(shapeNsg(r, sub));
+  }
+  out.sort((a, b) => a.name.localeCompare(b.name));
+  return out;
+}
 export function buildHostsBlock(endpoints: PrivateEndpointInfo[], zones: PrivateDnsZoneInfo[]): string {
   const map = new Map<string, string>();
   for (const z of zones) for (const r of z.records) for (const ip of r.ips) {

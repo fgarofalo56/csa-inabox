@@ -10,6 +10,7 @@ import {
 import { Add24Regular, Delete20Regular, ArrowSync24Regular, Info20Regular } from '@fluentui/react-icons';
 import { AdminShell } from '@/lib/components/admin-shell';
 import { Section, Toolbar } from '@/lib/components/ui/section';
+import { useAdminTabStyles } from '@/lib/components/ui/admin-tab-styles';
 import { LoomDataTable, type LoomColumn } from '@/lib/components/ui/loom-data-table';
 
 interface SensitivityLabel {
@@ -24,12 +25,16 @@ interface SensitivityLabel {
 const useStyles = makeStyles({
   explainer: { display: 'flex', gap: tokens.spacingHorizontalM, alignItems: 'flex-start' },
   swatch: { width: '16px', height: '16px', borderRadius: '3px', display: 'inline-block', verticalAlign: 'middle', marginRight: '8px', flexShrink: 0 },
+  swatchRow: { display: 'flex', alignItems: 'center', gap: tokens.spacingHorizontalXS },
+  colorRow: { display: 'flex', gap: tokens.spacingHorizontalXS },
+  presetSwatch: { width: '28px', height: '28px', borderRadius: tokens.borderRadiusMedium, cursor: 'pointer' },
 });
 
 const PRESET_COLORS = ['#c50f1f', '#bc4b09', '#0f6cbd', '#107c10', '#8a8886', '#7719aa', '#dca900', '#3aaaaa'];
 
 export default function SensitivityLabelsPage() {
   const s = useStyles();
+  const a = useAdminTabStyles();
   const [labels, setLabels] = useState<SensitivityLabel[] | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -95,9 +100,9 @@ export default function SensitivityLabelsPage() {
   }, [labels, q]);
 
   const columns: LoomColumn<SensitivityLabel>[] = useMemo(() => [
-    { key: 'name', label: 'Label', width: 180, getValue: (l) => l.name, render: (l) => <span style={{ display: 'flex', alignItems: 'center', gap: '6px' }}><span className={s.swatch} style={{ backgroundColor: l.color }} /><strong>{l.name}</strong></span> },
-    { key: 'color', label: 'Color', width: 100, getValue: (l) => l.color, render: (l) => <code style={{ fontSize: '11px' }}>{l.color}</code> },
-    { key: 'protectionNote', label: 'Protection note', width: 240, render: (l) => l.protectionNote ? <Caption1>{l.protectionNote}</Caption1> : <Caption1 style={{ color: tokens.colorNeutralForeground3 }}>—</Caption1> },
+    { key: 'name', label: 'Label', width: 180, getValue: (l) => l.name, render: (l) => <span className={s.swatchRow}><span className={s.swatch} style={{ backgroundColor: l.color }} /><strong>{l.name}</strong></span> },
+    { key: 'color', label: 'Color', width: 100, getValue: (l) => l.color, render: (l) => <code className={a.codeCell}>{l.color}</code> },
+    { key: 'protectionNote', label: 'Protection note', width: 240, render: (l) => l.protectionNote ? <Caption1>{l.protectionNote}</Caption1> : <Caption1 className={a.muted}>—</Caption1> },
     { key: 'createdBy', label: 'Created by', width: 160, render: (l) => <Caption1>{l.createdBy}</Caption1> },
     { key: 'actions', label: '', width: 110, sortable: false, filterable: false, render: (l) => <Button size='small' appearance='subtle' icon={<Delete20Regular />} onClick={(e) => { e.stopPropagation(); remove(l.id); }} aria-label={`Delete label ${l.name}`}>Delete</Button> },
   ], [s]);
@@ -106,22 +111,22 @@ export default function SensitivityLabelsPage() {
     <AdminShell sectionTitle='Sensitivity labels'>
       <Section title='About sensitivity labels'>
         <div className={s.explainer}>
-          <Info20Regular style={{ color: tokens.colorBrandForeground1, flexShrink: 0, marginTop: '2px' }} />
-          <Body1 style={{ color: tokens.colorNeutralForeground2, lineHeight: 1.5 }}>
+          <Info20Regular className={a.infoIcon} />
+          <Body1 className={a.explainerText}>
             Sensitivity labels are Loom-native tags (distinct from Microsoft Purview Information Protection labels). Each label carries a <strong>name</strong>, a <strong>color</strong> for visual distinction, and an optional <strong>protection note</strong> describing DLP rules or handling requirements. Use these to classify assets by sensitivity level: Restricted, Confidential, Internal, Public.
           </Body1>
         </div>
       </Section>
 
-      <MessageBar intent='warning' style={{ marginBottom: '16px' }}>
+      <MessageBar intent='warning' className={a.messageBar}>
         <MessageBarBody>
           <MessageBarTitle>Applied on next scan</MessageBarTitle>
           Sensitivity labels are applied during the next catalog scan. Create labels here, then apply them to assets via the item editors.
         </MessageBarBody>
       </MessageBar>
 
-      {error && <MessageBar intent='error' style={{ marginBottom: '16px' }}><MessageBarBody><MessageBarTitle>Could not load labels</MessageBarTitle>{error}</MessageBarBody></MessageBar>}
-      {actionErr && <MessageBar intent='error' style={{ marginBottom: '16px' }}><MessageBarBody>{actionErr}</MessageBarBody></MessageBar>}
+      {error && <MessageBar intent='error' className={a.messageBar}><MessageBarBody><MessageBarTitle>Could not load labels</MessageBarTitle>{error}</MessageBarBody></MessageBar>}
+      {actionErr && <MessageBar intent='error' className={a.messageBar}><MessageBarBody>{actionErr}</MessageBarBody></MessageBar>}
 
       <Section title='Sensitivity labels' actions={<><Button icon={<ArrowSync24Regular />} onClick={load} disabled={loading}>Refresh</Button><Button appearance='primary' icon={<Add24Regular />} onClick={() => setCreateOpen(true)}>Add label</Button></> }>
         <Toolbar search={q} onSearch={setQ} searchPlaceholder='Search by name, protection note...' />
@@ -133,10 +138,10 @@ export default function SensitivityLabelsPage() {
           <DialogBody>
             <DialogTitle>Add sensitivity label</DialogTitle>
             <DialogContent>
-              <div style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
-                <div><Caption1 style={{ display: 'block', marginBottom: '4px' }}>Label name</Caption1><Input value={newName} onChange={(_, d) => setNewName(d.value)} placeholder='e.g. Confidential' style={{ width: '100%' }} /></div>
-                <div><Caption1 style={{ display: 'block', marginBottom: '4px' }}>Color</Caption1><div style={{ display: 'flex', gap: '6px' }}>{PRESET_COLORS.map((c) => <button key={c} type='button' onClick={() => setNewColor(c)} aria-label={`Pick color ${c}`} style={{ width: '28px', height: '28px', borderRadius: '4px', backgroundColor: c, cursor: 'pointer', border: newColor === c ? `2px solid ${tokens.colorBrandStroke1}` : `1px solid ${tokens.colorNeutralStroke2}` }} />)}</div></div>
-                <div><Caption1 style={{ display: 'block', marginBottom: '4px' }}>Protection note (optional)</Caption1><Textarea value={newProtectionNote} onChange={(_, d) => setNewProtectionNote(d.value)} placeholder='e.g. DLP: Do not share outside the org. Encrypt email attachments.' resize='vertical' style={{ width: '100%' }} /></div>
+              <div className={a.dialogGrid}>
+                <div><Caption1 className={a.fieldLabel}>Label name</Caption1><Input value={newName} onChange={(_, d) => setNewName(d.value)} placeholder='e.g. Confidential' className={a.fullWidth} /></div>
+                <div><Caption1 className={a.fieldLabel}>Color</Caption1><div className={s.colorRow}>{PRESET_COLORS.map((c) => <button key={c} type='button' onClick={() => setNewColor(c)} aria-label={`Pick color ${c}`} className={s.presetSwatch} style={{ backgroundColor: c, border: newColor === c ? `2px solid ${tokens.colorBrandStroke1}` : `1px solid ${tokens.colorNeutralStroke2}` }} />)}</div></div>
+                <div><Caption1 className={a.fieldLabel}>Protection note (optional)</Caption1><Textarea value={newProtectionNote} onChange={(_, d) => setNewProtectionNote(d.value)} placeholder='e.g. DLP: Do not share outside the org. Encrypt email attachments.' resize='vertical' className={a.fullWidth} /></div>
               </div>
             </DialogContent>
             <DialogActions>

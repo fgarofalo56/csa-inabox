@@ -50,11 +50,19 @@ export interface LineageDrawerProps {
   onOpenChange?: (open: boolean) => void;
 }
 
+interface SourceStatus {
+  source: string;
+  ok: boolean;
+  gate?: string;
+  nodeCount?: number;
+}
+
 interface LineageData {
   backend: string;
   nodes: CanvasLineageNode[];
   edges: CanvasLineageEdge[];
   focusId?: string;
+  sources?: SourceStatus[];
 }
 
 interface GateHint {
@@ -108,7 +116,7 @@ export function LineageDrawer({
           setErr(j?.error || 'Failed to load lineage');
           return;
         }
-        setData({ backend: j.backend, nodes: j.nodes || [], edges: j.edges || [], focusId: j.focusId });
+        setData({ backend: j.backend, nodes: j.nodes || [], edges: j.edges || [], focusId: j.focusId, sources: Array.isArray(j.sources) ? j.sources : undefined });
       })
       .catch((e) => setErr(e?.message || String(e)))
       .finally(() => setLoading(false));
@@ -206,6 +214,19 @@ export function LineageDrawer({
 
           {data && !loading && (
             <>
+              {/* Honest per-source gates: one source's missing config never
+                  blanks the unified graph — the other sources still draw. */}
+              {(data.sources || []).filter((x) => !x.ok).map((src) => (
+                <MessageBar key={src.source} intent="warning">
+                  <MessageBarBody>
+                    <MessageBarTitle>
+                      {src.source === 'unity-catalog' ? 'Unity Catalog' : src.source === 'purview' ? 'Purview' : src.source}
+                      {' '}lineage not merged
+                    </MessageBarTitle>
+                    {src.gate}
+                  </MessageBarBody>
+                </MessageBar>
+              ))}
               {data.edges.length === 0 && (
                 <MessageBar intent="info">
                   <MessageBarBody>

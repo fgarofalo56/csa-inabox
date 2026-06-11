@@ -24,6 +24,18 @@ export interface OrgVisualDoc {
   size: number;
   /** Semantic version, e.g. "1.0.0". */
   version: string;
+  /**
+   * Optional admin-authored description (parity with Fabric's "Add visual"
+   * Description field). Shown alongside the visual in the registry.
+   */
+  description?: string;
+  /**
+   * Optional small icon rendered in the visualization pane / registry, stored
+   * inline as a `data:` URI (image/png|jpeg|svg+xml). Parity with Fabric's
+   * "Add visual" Icon field. Kept inline (not a second blob) so it renders
+   * directly with no SAS round-trip; capped small by the BFF.
+   */
+  iconDataUri?: string;
   /** Tenant-wide availability toggle. */
   enabled: boolean;
   uploadedAt: string;

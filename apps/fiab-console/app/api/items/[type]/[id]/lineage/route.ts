@@ -36,22 +36,17 @@ import { NextRequest, NextResponse } from 'next/server';
 import { getSession } from '@/lib/auth/session';
 import { detectLoomCloud, type LoomCloud } from '@/lib/azure/cloud-endpoints';
 import {
-  getTableLineage,
-  listWorkspaceHostnames,
   UnityCatalogNotConfiguredError,
   UnityCatalogError,
 } from '@/lib/azure/unity-catalog-client';
 import {
-  getLineageSubgraph,
   PurviewNotConfiguredError,
   PurviewError,
+  type PurviewLineageGraph,
 } from '@/lib/azure/purview-client';
+import { getUnifiedLineage } from '@/lib/azure/unified-lineage';
 import { itemsContainer, workspacesContainer } from '@/lib/azure/cosmos-client';
 import type { Workspace, WorkspaceItem } from '@/lib/types/workspace';
-import type {
-  CanvasLineageNode,
-  CanvasLineageEdge,
-} from '@/lib/components/catalog/lineage-canvas';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -195,109 +190,30 @@ function guidFromItem(item: WorkspaceItem | null): string | null {
   return typeof c === 'string' && c ? c : null;
 }
 
-function shortName(fullName: string): string {
-  const parts = fullName.split('.');
-  return parts[parts.length - 1] || fullName;
+/** Does the path segment look like a UC `catalog.schema.table` full name? */
+function looksLikeUcFullName(s: string): boolean {
+  return /^[\w$]+\.[\w$]+\.[\w$]+$/.test(s);
 }
 
-// ------------------------------------------------------------------
-// Backend implementations
-// ------------------------------------------------------------------
-
-async function ucLineage(
-  type: string,
-  id: string,
-  item: WorkspaceItem | null,
-  hostOverride: string,
-  keyOverride: string,
-): Promise<NextResponse> {
-  const fullName = keyOverride || ucKeyFromItem(item) || id;
-  const hosts = listWorkspaceHostnames(); // throws UnityCatalogNotConfiguredError when unset
-  const host = hostOverride || hosts[0];
-  const ucEdges = await getTableLineage(host, fullName);
-  const seen = new Map<string, CanvasLineageNode>();
-  const edges: CanvasLineageEdge[] = [];
-  const ensure = (nid: string) => {
-    if (!seen.has(nid)) {
-      seen.set(nid, {
-        id: nid,
-        label: shortName(nid),
-        type: 'table',
-        source: 'unity-catalog',
-        focus: nid === fullName,
-      });
-    }
-  };
-  for (const e of ucEdges) {
-    ensure(e.source);
-    ensure(e.target);
-    edges.push({ from: e.source, to: e.target });
+/** Normalize an Apache Atlas-on-AKS lineage response into the same shape
+ *  Purview's getLineageSubgraph returns, so the unified-lineage service can
+ *  treat it as the `purview`-badged source on IL5 / DoD. */
+function normalizeAtlasGraph(guid: string, raw: AtlasLineageResponse): PurviewLineageGraph {
+  const guidEntityMap: PurviewLineageGraph['guidEntityMap'] = {};
+  for (const [k, v] of Object.entries(raw.guidEntityMap || {})) {
+    const e: any = v;
+    guidEntityMap[k] = {
+      guid: e?.guid || k,
+      displayText: e?.displayText || e?.attributes?.qualifiedName || e?.attributes?.name,
+      typeName: e?.typeName,
+    };
   }
-  ensure(fullName); // focus node always present even with zero edges
-  const nodes = [...seen.values()];
-  if (item) {
-    const fn = nodes.find((n) => n.id === fullName);
-    if (fn) fn.openHref = `/items/${type}/${encodeURIComponent(id)}`;
-  }
-  return NextResponse.json({
-    ok: true,
-    backend: 'unity-catalog' as Backend,
-    cloud: detectLoomCloud(),
-    nodes,
-    edges,
-    focusId: fullName,
-  });
-}
-
-async function atlasFamilyLineage(
-  backend: Extract<Backend, 'purview' | 'atlas-aks'>,
-  type: string,
-  id: string,
-  item: WorkspaceItem | null,
-  keyOverride: string,
-  depth: number,
-): Promise<NextResponse> {
-  const guid = keyOverride || guidFromItem(item) || id;
-  const graph =
-    backend === 'purview'
-      ? await getLineageSubgraph(guid, depth)
-      : await atlasAksFetch(guid, depth);
-
-  const nodes: CanvasLineageNode[] = Object.entries(graph.guidEntityMap).map(
-    ([k, v]: [string, any]) => ({
-      id: v?.guid || k,
-      label: v?.displayText || v?.attributes?.qualifiedName || v?.attributes?.name || k,
-      type: v?.typeName,
-      source: 'purview',
-      focus: (v?.guid || k) === guid,
-    }),
-  );
-  if (!nodes.some((n) => n.id === guid)) {
-    nodes.push({
-      id: guid,
-      label: item?.displayName || guid,
-      type,
-      source: 'purview',
-      focus: true,
-    });
-  }
-  const edges: CanvasLineageEdge[] = (graph.relations || []).map((r: any) => ({
-    from: r.fromEntityId,
-    to: r.toEntityId,
-    type: r.relationshipId || r.relationshipType,
+  const relations = (raw.relations || []).map((r: any) => ({
+    fromEntityId: r.fromEntityId,
+    toEntityId: r.toEntityId,
+    relationshipType: r.relationshipId || r.relationshipType,
   }));
-  if (item) {
-    const fn = nodes.find((n) => n.id === guid);
-    if (fn) fn.openHref = `/items/${type}/${encodeURIComponent(id)}`;
-  }
-  return NextResponse.json({
-    ok: true,
-    backend,
-    cloud: detectLoomCloud(),
-    nodes,
-    edges,
-    focusId: guid,
-  });
+  return { baseEntityGuid: guid, guidEntityMap, relations };
 }
 
 // ------------------------------------------------------------------
@@ -350,15 +266,46 @@ export async function GET(
     item = null;
   }
 
+  // Resolve the focus keys for every source from item state. The cloud boundary
+  // still chooses the PRIMARY backend (badge), but the unified service overlays
+  // the other Azure-native sources + Weave/Thread edges when their keys resolve
+  // (per .claude/rules/no-fabric-dependency.md — Azure-native, never Fabric).
+  const ucFromState = ucKeyFromItem(item) || undefined;
+  const guidFromState = guidFromItem(item) || undefined;
+
+  let backend: Backend;
+  const baseInput = { session, itemId: id, itemType: type, depth, weaveDepth: depth };
+  let ucFullName: string | undefined;
+  let purviewGuid: string | undefined;
+  let atlasFetcher: ((g: string, d: number) => Promise<PurviewLineageGraph>) | undefined;
+
+  if (cloud === 'Commercial' || cloud === 'GCC') {
+    backend = 'unity-catalog';
+    ucFullName =
+      keyOverride || ucFromState || (looksLikeUcFullName(id) ? id : undefined);
+    purviewGuid = guidFromState;
+  } else if (cloud === 'GCC-High') {
+    backend = 'purview';
+    purviewGuid = keyOverride || guidFromState || (looksLikeUcFullName(id) ? undefined : id);
+    ucFullName = ucFromState;
+  } else {
+    // DoD / IL5 — Apache Atlas-on-AKS (own gate). Inject its fetcher so the
+    // unified service treats it as the `purview`-badged Atlas source.
+    backend = 'atlas-aks';
+    purviewGuid = keyOverride || guidFromState || (looksLikeUcFullName(id) ? undefined : id);
+    ucFullName = ucFromState;
+    atlasFetcher = async (g: string, d: number) => normalizeAtlasGraph(g, await atlasAksFetch(g, d));
+  }
+
   try {
-    if (cloud === 'Commercial' || cloud === 'GCC') {
-      return await ucLineage(type, id, item, hostOverride, keyOverride);
-    }
-    if (cloud === 'GCC-High') {
-      return await atlasFamilyLineage('purview', type, id, item, keyOverride, depth);
-    }
-    // DoD / IL5
-    return await atlasFamilyLineage('atlas-aks', type, id, item, keyOverride, depth);
+    const result = await getUnifiedLineage({
+      ...baseInput,
+      ucFullName,
+      ucHost: hostOverride || undefined,
+      purviewGuid,
+      atlasFetcher,
+    });
+    return NextResponse.json({ ...result, backend, cloud });
   } catch (e: any) {
     return gateOrError(e);
   }

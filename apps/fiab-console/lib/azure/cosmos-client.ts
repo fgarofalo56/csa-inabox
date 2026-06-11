@@ -158,6 +158,13 @@ let _orgVisuals: Container | null = null;
 // since the value lives in an ACA secret. Created lazily so a fresh
 // environment needs no extra ARM/Bicep step beyond the account+database.
 let _envConfig: Container | null = null;
+// Catalog → Metastores: persistent Databricks workspace registrations. One row
+// per registered workspace (id = workspaceUrl, PK /tenantId so the per-tenant
+// federation list hits a single physical partition). Records the UC metastore
+// attach state + Purview source/scan state so a registration survives a Console
+// reload WITHOUT a bicep flip of LOOM_DATABRICKS_HOSTNAMES. Created lazily so a
+// fresh environment needs no extra ARM/Bicep step beyond the account+database.
+let _metastoreRegistrations: Container | null = null;
 let _ensured = false;
 
 /**
@@ -277,6 +284,33 @@ export interface ReportDeliveryLog {
   fileSizeBytes?: number;           // size of the exported file (succeeded only)
   blobPath?: string;                // ADLS path the export was archived to (succeeded only)
   error?: string;                   // failure detail (failed only)
+}
+
+/**
+ * Persistent Databricks workspace registration for the Unified Catalog →
+ * Metastores surface. One row per registered workspace (id = workspaceUrl),
+ * partitioned by /tenantId. The Cosmos doc is what makes a registration survive
+ * a Console reload WITHOUT a bicep flip of LOOM_DATABRICKS_HOSTNAMES — the BFF
+ * unions these workspaceUrls with the env hostnames so federation picks them up.
+ */
+export interface MetastoreRegistration {
+  id: string;                       // == workspaceUrl (host, no scheme)
+  tenantId: string;                 // partition key — registrant oid
+  workspaceUrl: string;             // adb-….azuredatabricks.net (host, no scheme)
+  workspaceName?: string;           // friendly ARM name when registered from the picker
+  workspaceArmId?: string;          // ARM resource id (when known)
+  workspaceNumericId?: string;      // Databricks numeric workspace id (for UC attach)
+  metastoreId?: string;             // attached UC metastore id (when attached)
+  defaultCatalog?: string;          // default catalog name set on attach (e.g. 'main')
+  ucAttached: boolean;              // true once assignMetastore() succeeded
+  purviewSourceName?: string;       // Purview Data Map data-source name (when registered)
+  purviewScanName?: string;         // Purview scan name (when defined)
+  lastScanRunId?: string;           // last triggered scan run id
+  purviewRegistered: boolean;       // true once the Purview source was registered
+  purviewScanned: boolean;          // true once a scan run was triggered
+  registeredAt: string;             // ISO timestamp
+  registeredBy?: string;            // registrant oid / upn
+  updatedAt?: string;
 }
 
 function endpoint(): string {
@@ -579,6 +613,11 @@ async function ensure() {
   // Admin runtime env/config — one doc per tenant holding desired env-var
   // values (non-secret) + secret-set flags, PK /tenantId.
   _envConfig = await mk('env-config', '/tenantId');
+  // Catalog → Metastores: persistent Databricks workspace registrations. One row
+  // per registered workspace (id = workspaceUrl), PK /tenantId so the federation
+  // list hits a single physical partition. Survives Console reloads without a
+  // bicep flip of LOOM_DATABRICKS_HOSTNAMES.
+  _metastoreRegistrations = await mk('metastore-registrations', '/tenantId');
   _ensured = true;
 }
 
@@ -631,6 +670,8 @@ export async function embedCodesContainer(): Promise<Container> { await ensure()
 export async function orgVisualsContainer(): Promise<Container> { await ensure(); return _orgVisuals!; }
 /** Admin runtime env/config — desired deployment env-var state, PK /tenantId. */
 export async function envConfigContainer(): Promise<Container> { await ensure(); return _envConfig!; }
+/** Catalog → Metastores: persistent Databricks workspace registrations, PK /tenantId. */
+export async function metastoreRegistrationsContainer(): Promise<Container> { await ensure(); return _metastoreRegistrations!; }
 
 // Foundation admin containers (shared cloud-endpoints resolver task).
 /** Admin Workspace Catalog — one row per Loom-managed workspace, PK /tenantId. */
@@ -783,6 +824,7 @@ const KNOWN_CONTAINER_IDS = [
   'workspace-spark-config',
   'embed-codes', 'org-visuals',
   'env-config',
+  'metastore-registrations',
 ];
 
 /** List all Loom containers with their current throughput shape. */
