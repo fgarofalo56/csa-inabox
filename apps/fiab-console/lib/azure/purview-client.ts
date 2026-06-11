@@ -138,7 +138,7 @@ export class PurviewError extends Error {
 // Configuration
 // ============================================================
 
-function notConfiguredHint(missing: string): PurviewNotConfiguredHint {
+export function notConfiguredHint(missing: string): PurviewNotConfiguredHint {
   return {
     missingEnvVar: missing,
     bicepModule: 'platform/fiab/bicep/modules/admin-plane/catalog.bicep',

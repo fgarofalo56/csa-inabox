@@ -38,7 +38,7 @@ import {
   deleteCustomClassificationRule,
   isPurviewConfigured,
   getPurviewAccountName,
-  PurviewNotConfiguredError,
+  notConfiguredHint,
   PurviewError,
   type PurviewNotConfiguredHint,
 } from './purview-client';
@@ -156,10 +156,9 @@ export async function syncClassificationTaxonomyToPurview(
 ): Promise<ClassificationSyncResult> {
   const account = getPurviewAccountName();
   if (!isPurviewConfigured()) {
-    // Honest gate — not an error. Surface the same hint the client would throw.
-    let hint: PurviewNotConfiguredHint | undefined;
-    try { /* trigger to capture the structured hint */ await ensureClassificationDefs([]); }
-    catch (e) { if (e instanceof PurviewNotConfiguredError) hint = e.hint; }
+    // Honest gate — not an error. Surface the same structured hint the client
+    // throws on a not-configured call, computed directly (no dead probe: an
+    // empty-array ensureClassificationDefs() early-returns and never throws).
     return {
       purviewConfigured: false,
       account: null,
@@ -167,7 +166,7 @@ export async function syncClassificationTaxonomyToPurview(
       ruleCount: 0,
       syncedRules: [],
       scanRulesets: [],
-      hint,
+      hint: notConfiguredHint('LOOM_PURVIEW_ACCOUNT'),
     };
   }
 

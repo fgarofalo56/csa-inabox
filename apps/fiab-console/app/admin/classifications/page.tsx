@@ -43,6 +43,7 @@ const useStyles = makeStyles({
     alignItems: 'flex-start',
   },
   field: { display: 'flex', flexDirection: 'column', gap: '12px' },
+  banner: { marginBottom: tokens.spacingVerticalL },
 });
 
 const CLASSIFICATION_OPTIONS = ['PII', 'PHI', 'PCI', 'Confidential', 'Internal', 'Public', 'Restricted', 'Other'];
@@ -179,28 +180,28 @@ export default function ClassificationsPage() {
 
       {/* Live Purview sync state — replaces the old static "applied on next scan" banner. */}
       {!purviewConfigured ? (
-        <MessageBar intent='warning' style={{ marginBottom: '16px' }}>
+        <MessageBar intent='warning' className={s.banner}>
           <MessageBarBody>
             <MessageBarTitle>Microsoft Purview not provisioned</MessageBarTitle>
             Rules are saved to the Loom catalog. To push them as Purview custom classification rules and run scans, set <code>LOOM_PURVIEW_ACCOUNT</code> (deployed by <code>platform/fiab/bicep/modules/admin-plane/catalog.bicep</code>) and grant the Console UAMI <strong>Data Source Administrator</strong> on the root collection.
           </MessageBarBody>
         </MessageBar>
       ) : sync?.error ? (
-        <MessageBar intent='error' style={{ marginBottom: '16px' }}>
+        <MessageBar intent='error' className={s.banner}>
           <MessageBarBody>
             <MessageBarTitle>Purview sync failed</MessageBarTitle>
             {sync.error} — verify the Console UAMI holds <strong>Data Source Administrator</strong> on <code>{purview?.account}</code> (root collection). Rules are still saved in the Loom catalog.
           </MessageBarBody>
         </MessageBar>
       ) : sync?.synced ? (
-        <MessageBar intent='success' style={{ marginBottom: '16px' }}>
+        <MessageBar intent='success' className={s.banner}>
           <MessageBarBody>
             <MessageBarTitle>Synced to Microsoft Purview</MessageBarTitle>
             {sync.ruleCount} classification rule(s) pushed to <code>{sync.account}</code>{sync.scanRulesets?.length ? ` and included in scan rule sets: ${sync.scanRulesets.map((rs) => rs.name).join(', ')}` : ''}. Use <strong>Run scan now</strong> to apply them. Existing classifications on assets are not removed retroactively.
           </MessageBarBody>
         </MessageBar>
       ) : (
-        <MessageBar intent='info' style={{ marginBottom: '16px' }}>
+        <MessageBar intent='info' className={s.banner}>
           <MessageBarBody>
             <MessageBarTitle>Connected to Microsoft Purview</MessageBarTitle>
             Account <code>{purview?.account}</code>. Adding or deleting a rule syncs it to Purview automatically; use <strong>Sync to Purview</strong> to re-push the full taxonomy, then <strong>Run scan now</strong>.
@@ -208,8 +209,8 @@ export default function ClassificationsPage() {
         </MessageBar>
       )}
 
-      {error && <MessageBar intent='error' style={{ marginBottom: '16px' }}><MessageBarBody><MessageBarTitle>Could not load rules</MessageBarTitle>{error}</MessageBarBody></MessageBar>}
-      {actionErr && <MessageBar intent='error' style={{ marginBottom: '16px' }}><MessageBarBody>{actionErr}</MessageBarBody></MessageBar>}
+      {error && <MessageBar intent='error' className={s.banner}><MessageBarBody><MessageBarTitle>Could not load rules</MessageBarTitle>{error}</MessageBarBody></MessageBar>}
+      {actionErr && <MessageBar intent='error' className={s.banner}><MessageBarBody>{actionErr}</MessageBarBody></MessageBar>}
 
       <Section
         title='Classification rules'

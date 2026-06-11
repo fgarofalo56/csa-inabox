@@ -25,6 +25,13 @@ vi.mock('../purview-client', () => {
     deleteCustomClassificationRule: vi.fn(async () => true),
     isPurviewConfigured: vi.fn(() => true),
     getPurviewAccountName: vi.fn(() => 'purview-test'),
+    notConfiguredHint: vi.fn((missing: string) => ({
+      missingEnvVar: missing,
+      bicepModule: 'platform/fiab/bicep/modules/admin-plane/catalog.bicep',
+      bicepStatus: 'classic Data Map account',
+      rolesRequired: [],
+      followUp: 'set LOOM_PURVIEW_ACCOUNT',
+    })),
   };
 });
 
@@ -105,13 +112,14 @@ describe('syncClassificationTaxonomyToPurview', () => {
 
   it('honest gate (no error) when LOOM_PURVIEW_ACCOUNT unset', async () => {
     (client.isPurviewConfigured as any).mockReturnValue(false);
-    (client.ensureClassificationDefs as any).mockRejectedValueOnce(
-      new (client as any).PurviewNotConfiguredError({ missingEnvVar: 'LOOM_PURVIEW_ACCOUNT' }),
-    );
     const res = await syncClassificationTaxonomyToPurview([rule({})], TENANT);
     expect(res.purviewConfigured).toBe(false);
     expect(res.synced).toBe(false);
+    // Hint is computed deterministically from notConfiguredHint — NOT via a
+    // dead empty-array probe (ensureClassificationDefs early-returns on []).
+    expect(client.notConfiguredHint).toHaveBeenCalledWith('LOOM_PURVIEW_ACCOUNT');
     expect(res.hint?.missingEnvVar).toBe('LOOM_PURVIEW_ACCOUNT');
+    expect(client.ensureClassificationDefs).not.toHaveBeenCalled();
     expect(client.upsertCustomClassificationRule).not.toHaveBeenCalled();
   });
 
