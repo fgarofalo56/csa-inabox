@@ -599,8 +599,9 @@ export default function ScalingPage() {
                     </Caption1>
                     <div style={{ display: 'flex', gap: 8, marginTop: 8, alignItems: 'flex-end', flexWrap: 'wrap' }}>
                       <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
-                        <Caption1 style={{ textTransform: 'uppercase', letterSpacing: '0.06em', fontSize: 10 }}>Mount path</Caption1>
-                        <Input style={{ width: 160 }} value={mcpSel.mountPath ?? mcpData?.config?.mountPath ?? '/data'}
+                        <Caption1 id="mcp-mount-path-label" style={{ textTransform: 'uppercase', letterSpacing: '0.06em', fontSize: 10 }}>Mount path</Caption1>
+                        <Input style={{ width: 160 }} aria-labelledby="mcp-mount-path-label" placeholder="/data"
+                          value={mcpSel.mountPath ?? mcpData?.config?.mountPath ?? '/data'}
                           onChange={(_, d) => setMcpSel({ ...mcpSel, mountPath: d.value })} />
                       </div>
                       <ScalePicker
@@ -610,6 +611,8 @@ export default function ScalingPage() {
                         onChange={(v) => setMcpSel({ ...mcpSel, accessMode: v as 'ReadWrite' | 'ReadOnly' })}
                       />
                       <button
+                        type="button"
+                        aria-label="Mount Azure Files persistence onto the MCP container"
                         onClick={async () => {
                           setMcpState({ applying: true });
                           try {
@@ -621,13 +624,13 @@ export default function ScalingPage() {
                           } catch (e: any) { setMcpState({ error: e.message }); }
                         }}
                         disabled={mcpState.applying}
-                        style={{ padding: '6px 16px', borderRadius: 4, border: 'none', background: tokens.colorBrandBackground, color: tokens.colorNeutralForegroundOnBrand, cursor: 'pointer', opacity: mcpState.applying ? 0.5 : 1, fontSize: 12 }}
+                        style={{ padding: '6px 16px', borderRadius: 4, border: 'none', background: tokens.colorBrandBackground, color: tokens.colorNeutralForegroundOnBrand, cursor: mcpState.applying ? 'default' : 'pointer', opacity: mcpState.applying ? 0.5 : 1, fontSize: 12 }}
                       >
                         {mcpState.applying ? 'Mounting…' : 'Mount persistence'}
                       </button>
                     </div>
-                    {mcpState.error && <Caption1 style={{ color: tokens.colorPaletteRedForeground1 }}>{mcpState.error}</Caption1>}
-                    {mcpState.ok && <Caption1 style={{ color: tokens.colorPaletteGreenForeground1 }}>{mcpState.ok}</Caption1>}
+                    {mcpState.error && <Caption1 role="alert" style={{ display: 'block', marginTop: 6, color: tokens.colorPaletteRedForeground1 }}>{mcpState.error}</Caption1>}
+                    {mcpState.ok && <Caption1 role="status" style={{ display: 'block', marginTop: 6, color: tokens.colorPaletteGreenForeground1 }}>{mcpState.ok}</Caption1>}
                   </div>
                 )}
               </div>
