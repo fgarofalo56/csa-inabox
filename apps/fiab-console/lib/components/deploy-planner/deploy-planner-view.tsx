@@ -197,6 +197,38 @@ const useStyles = makeStyles({
     overflow: 'hidden', background: tokens.colorNeutralBackground3,
     boxShadow: tokens.shadow2,
   },
+  // Inspector card shared by the three context panels below the canvas, so they
+  // read as one consistent surface family with the palette + canvas (token
+  // radius/shadow, not ad-hoc px) instead of borderless boxes.
+  card: {
+    border: `1px solid ${tokens.colorNeutralStroke2}`,
+    borderRadius: tokens.borderRadiusLarge,
+    background: tokens.colorNeutralBackground1,
+    boxShadow: tokens.shadow2,
+    padding: tokens.spacingVerticalM,
+  },
+  subEditor: {
+    display: 'flex', gap: tokens.spacingHorizontalM,
+    alignItems: 'flex-end', flexWrap: 'wrap',
+  },
+  svcConfig: {
+    display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalS,
+  },
+  svcConfigHead: {
+    display: 'flex', alignItems: 'center', gap: tokens.spacingHorizontalS,
+  },
+  fieldRow: {
+    display: 'flex', gap: tokens.spacingHorizontalL,
+    flexWrap: 'wrap', alignItems: 'flex-end',
+  },
+  edgeInspector: {
+    display: 'flex', gap: tokens.spacingHorizontalS,
+    alignItems: 'center', flexWrap: 'wrap',
+  },
+  issueList: {
+    display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalXS,
+  },
+  spacer: { flex: 1 },
 });
 
 const MIME = 'application/x-loom-service';
@@ -467,7 +499,7 @@ function PlannerInner() {
         >
           Validate{issues.length ? ` (${errorCount} error${errorCount === 1 ? '' : 's'}, ${issues.length - errorCount} warning${issues.length - errorCount === 1 ? '' : 's'})` : ' ✓'}
         </Button>
-        <div style={{ flex: 1 }} />
+        <div className={s.spacer} />
         <Button icon={<ArrowDownload20Regular />} disabled={!selectedSub} onClick={() => selectedSub && setExportSub(selectedSub)}>
           Export bicepparam
         </Button>
@@ -485,7 +517,7 @@ function PlannerInner() {
       )}
 
       {showIssues && (
-        <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }} data-testid="plan-issues">
+        <div className={s.issueList} data-testid="plan-issues">
           {issues.length === 0 ? (
             <MessageBar intent="success"><MessageBarBody>
               <MessageBarTitle>Plan is valid</MessageBarTitle>
@@ -619,7 +651,7 @@ function PlannerInner() {
 
       {/* selected-subscription inline editor */}
       {selectedSub && (
-        <div style={{ display: 'flex', gap: 12, alignItems: 'flex-end', flexWrap: 'wrap', padding: 12, border: `1px solid ${tokens.colorNeutralStroke2}`, borderRadius: 6 }}>
+        <div className={`${s.card} ${s.subEditor}`}>
           <Field label="Subscription name">
             <Input value={selectedSub.name} onChange={(_, d) => patchSelectedSub({ name: d.value })} />
           </Field>
@@ -640,8 +672,8 @@ function PlannerInner() {
 
       {/* selected-service per-resource config panel */}
       {selectedSvc?.def && (
-        <div data-testid="service-config-panel" style={{ padding: 12, border: `1px solid ${tokens.colorNeutralStroke2}`, borderRadius: 6, display: 'flex', flexDirection: 'column', gap: 10 }}>
-          <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+        <div data-testid="service-config-panel" className={`${s.card} ${s.svcConfig}`}>
+          <div className={s.svcConfigHead}>
             <Settings20Regular style={{ color: selectedSvc.def.color }} />
             <Subtitle2>{selectedSvc.def.label}</Subtitle2>
             {selectedSvc.subName && <Caption1 style={{ color: tokens.colorNeutralForeground3 }}>in {selectedSvc.subName}</Caption1>}
@@ -659,7 +691,7 @@ function PlannerInner() {
                 These choices are written into the exported bicepparam and applied by{' '}
                 <code>az deployment sub create</code> — the options match the module&apos;s allowed values for this boundary.
               </Caption1>
-              <div style={{ display: 'flex', gap: 16, flexWrap: 'wrap', alignItems: 'flex-end' }}>
+              <div className={s.fieldRow}>
                 {selectedSvc.def.config.map((field) => (
                   <ConfigFieldControl
                     key={field.key}
@@ -695,14 +727,14 @@ function PlannerInner() {
         const from = e && parseServiceNodeId(e.from);
         const to = e && parseServiceNodeId(e.to);
         return (
-          <div style={{ padding: 12, border: `1px solid ${tokens.colorNeutralStroke2}`, borderRadius: 6, display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
+          <div className={`${s.card} ${s.edgeInspector}`}>
             <Subtitle2>Dependency</Subtitle2>
             {from && to ? (
               <Body1>
                 {serviceByKey(from.key)?.label || from.key} <strong>→</strong> {serviceByKey(to.key)?.label || to.key}
               </Body1>
             ) : <Body1>—</Body1>}
-            <div style={{ flex: 1 }} />
+            <div className={s.spacer} />
             <Button size="small" icon={<Delete20Regular />} onClick={deleteSelected}>Remove dependency</Button>
           </div>
         );
