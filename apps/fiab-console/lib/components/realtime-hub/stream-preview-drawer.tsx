@@ -21,9 +21,38 @@ import { Dismiss20Regular, Eye20Regular } from '@fluentui/react-icons';
 
 const useStyles = makeStyles({
   section: { marginBottom: tokens.spacingVerticalM },
+  resultMeta: { display: 'flex', alignItems: 'center', gap: tokens.spacingHorizontalS, marginBottom: tokens.spacingVerticalS },
+  resultScroll: {
+    marginTop: tokens.spacingVerticalS,
+    maxHeight: '420px', overflow: 'auto',
+    border: `1px solid ${tokens.colorNeutralStroke2}`,
+    borderRadius: tokens.borderRadiusMedium,
+    backgroundColor: tokens.colorNeutralBackground1,
+  },
   resultTable: { width: '100%', borderCollapse: 'collapse', fontSize: '12px' },
-  th: { textAlign: 'left', borderBottom: `1px solid ${tokens.colorNeutralStroke2}`, padding: '4px' },
-  td: { padding: '4px', borderBottom: `1px solid ${tokens.colorNeutralStroke3}` },
+  th: {
+    position: 'sticky', top: 0, zIndex: 1,
+    textAlign: 'left', fontWeight: tokens.fontWeightSemibold,
+    color: tokens.colorNeutralForeground2,
+    backgroundColor: tokens.colorNeutralBackground2,
+    borderBottom: `1px solid ${tokens.colorNeutralStroke1}`,
+    padding: `${tokens.spacingVerticalXS} ${tokens.spacingHorizontalS}`,
+    whiteSpace: 'nowrap',
+  },
+  tr: { ':nth-child(even)': { backgroundColor: tokens.colorNeutralBackground2 } },
+  td: {
+    padding: `${tokens.spacingVerticalXS} ${tokens.spacingHorizontalS}`,
+    borderBottom: `1px solid ${tokens.colorNeutralStroke3}`,
+    maxWidth: '280px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
+    fontVariantNumeric: 'tabular-nums',
+  },
+  emptyRows: {
+    marginTop: tokens.spacingVerticalS, padding: tokens.spacingVerticalL,
+    textAlign: 'center', color: tokens.colorNeutralForeground3,
+    border: `1px dashed ${tokens.colorNeutralStroke2}`,
+    borderRadius: tokens.borderRadiusMedium,
+    backgroundColor: tokens.colorNeutralBackground2,
+  },
 });
 
 interface PreviewResult { columns: string[]; rows: unknown[][]; rowCount: number; executionMs: number }
@@ -96,17 +125,30 @@ export function StreamPreviewDrawer({ open, onClose, title, defaultDb, defaultTa
         {err && <MessageBar intent="error" style={{ marginTop: 12 }}><MessageBarBody>{err}</MessageBarBody></MessageBar>}
         {result && (
           <div style={{ marginTop: 16 }}>
-            <Caption1>{result.rowCount} rows · {result.executionMs} ms</Caption1>
-            <div style={{ overflowX: 'auto', marginTop: 8 }}>
-              <table className={styles.resultTable}>
-                <thead><tr>{result.columns.map((c) => <th key={c} className={styles.th}>{c}</th>)}</tr></thead>
-                <tbody>
-                  {result.rows.slice(0, 50).map((row, i) => (
-                    <tr key={i}>{row.map((cell, j) => <td key={j} className={styles.td}>{cell == null ? '' : String(cell)}</td>)}</tr>
-                  ))}
-                </tbody>
-              </table>
+            <div className={styles.resultMeta}>
+              <Caption1>{result.rowCount} {result.rowCount === 1 ? 'row' : 'rows'} · {result.executionMs} ms</Caption1>
             </div>
+            {result.rows.length === 0 ? (
+              <div className={styles.emptyRows}>
+                Query returned no rows. The table exists but has no events in the previewed window.
+              </div>
+            ) : (
+              <div className={styles.resultScroll}>
+                <table className={styles.resultTable}>
+                  <thead><tr>{result.columns.map((c) => <th key={c} className={styles.th}>{c}</th>)}</tr></thead>
+                  <tbody>
+                    {result.rows.slice(0, 50).map((row, i) => (
+                      <tr key={i} className={styles.tr}>
+                        {row.map((cell, j) => {
+                          const text = cell == null ? '' : String(cell);
+                          return <td key={j} className={styles.td} title={text}>{text}</td>;
+                        })}
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            )}
           </div>
         )}
       </DrawerBody>
