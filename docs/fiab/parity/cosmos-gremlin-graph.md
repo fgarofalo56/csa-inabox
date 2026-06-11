@@ -31,3 +31,18 @@ https://learn.microsoft.com/azure/cosmos-db/gremlin/overview
 ## Backend per control
 - Run / Edges / Vertices / addV / addE / executionProfile → `POST /api/items/cosmos-gremlin-graph/[id]/query` → `executeGremlin()` (gremlin npm + AAD/account-key). Returns **503 honest-gate** with the exact env vars (`LOOM_COSMOS_GREMLIN_ENDPOINT`, optional `LOOM_COSMOS_GREMLIN_KEY`, Cosmos Data Contributor role) when the runtime is not provisioned — full UI still renders.
 - Graph viz: client-side `extractGraph()` recognises GraphSON vertex/edge shapes.
+
+## Deployment (T95, 2026-06)
+A Gremlin-capable Cosmos account is **deployed by default** — `cosmosGraphVectorEnabled`
+(default `true`) provisions `modules/landing-zone/cosmos-graph-vector.bicep`
+(account `kind: GlobalDocumentDB` + `capabilities: [EnableGremlin]`, db `loom-graph`,
+graph `default`, Console UAMI granted Cosmos Built-in Data Contributor). The Gremlin
+capability is fixed at account-creation, so the default NoSQL account cannot back this
+editor — the dedicated account is the only valid path. On a **single-sub** deploy,
+top-level `main.bicep` wires `LOOM_COSMOS_GREMLIN_ENDPOINT` (`wss://<acct>.${gremlinSuffix}:443/`),
+`_DATABASE=loom-graph`, `_GRAPH=default` into the Console env from the deterministic
+account name (sovereign suffix `gremlin.cosmos.azure.us` in Gov). A dedicated
+`privatelink.gremlin.cosmos.azure.*` private DNS zone (added to `admin-plane/network.bicep`)
+resolves the `wss://` host over Private Link. **Multi-sub** uses
+`scripts/csa-loom/patch-navigator-env.sh` (discovers the account + sets the same vars).
+The 503 honest-gate above only appears when `cosmosGraphVectorEnabled=false`.

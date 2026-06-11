@@ -126,6 +126,47 @@ add LOOM_COSMOS_ACCOUNT "$COSMOS_ACCT"
 [[ -n "$COSMOS_ACCT" ]] && add LOOM_COSMOS_ACCOUNT_RG "$COSMOS_RG"
 
 # ---------------------------------------------------------------------------
+# Cosmos Gremlin (graph editor) + NoSQL vector (vector-store editor) — the DLZ
+# cosmos-graph-vector module (cosmosGraphVectorEnabled, default on) deploys
+# DEDICATED accounts: cosmos-loom-gremlin-<domain>-* (EnableGremlin) and
+# cosmos-loom-vec-<domain>-*. Single-sub deploys wire these straight from
+# main.bicep; multi-sub (one Console env, N DLZs) and any live re-sync wire
+# them here. The Gremlin data-plane host uses a sovereign suffix
+# (gremlin.cosmos.azure.us in Azure US Government). DB/graph names are the
+# module literals (loom-graph/default, loom-vectors/docs-vec) — the gremlin
+# client's graphdb/graph defaults don't exist, so they must be set explicitly.
+# ---------------------------------------------------------------------------
+CLOUD_NAME="$(q cloud show --query name -o tsv)"
+if [[ "$CLOUD_NAME" == "AzureUSGovernment" ]]; then GREMLIN_SUFFIX="gremlin.cosmos.azure.us"; else GREMLIN_SUFFIX="gremlin.cosmos.azure.com"; fi
+
+GREMLIN_ACCT="${EXISTING_COSMOS_GREMLIN_ACCOUNT:-}"
+GREMLIN_RG="${EXISTING_COSMOS_GREMLIN_RG:-$DLZ_RG}"
+if [[ -z "$GREMLIN_ACCT" ]]; then
+  GREMLIN_ACCT="$(q cosmosdb list -g "$GREMLIN_RG" --query "[?starts_with(name,'cosmos-loom-gremlin')].name | [0]" -o tsv)"
+fi
+if [[ -n "$GREMLIN_ACCT" ]]; then
+  GREMLIN_EP="wss://${GREMLIN_ACCT}.${GREMLIN_SUFFIX}:443/"
+  add LOOM_COSMOS_GREMLIN_ENDPOINT             "$GREMLIN_EP"
+  add NEXT_PUBLIC_LOOM_COSMOS_GREMLIN_ENDPOINT "$GREMLIN_EP"
+  add LOOM_COSMOS_GREMLIN_DATABASE             "loom-graph"
+  add LOOM_COSMOS_GREMLIN_GRAPH                "default"
+else
+  add LOOM_COSMOS_GREMLIN_ENDPOINT ""   # honest gate in the graph editor
+fi
+
+VEC_ACCT="${EXISTING_COSMOS_VECTOR_ACCOUNT:-}"
+VEC_RG="${EXISTING_COSMOS_VECTOR_RG:-$DLZ_RG}"
+if [[ -z "$VEC_ACCT" ]]; then
+  VEC_ACCT="$(q cosmosdb list -g "$VEC_RG" --query "[?starts_with(name,'cosmos-loom-vec')].name | [0]" -o tsv)"
+fi
+if [[ -n "$VEC_ACCT" ]]; then
+  VEC_EP="$(q cosmosdb show -n "$VEC_ACCT" -g "$VEC_RG" --query "documentEndpoint" -o tsv)"
+  add LOOM_COSMOS_VECTOR_ENDPOINT  "$VEC_EP"
+  add LOOM_COSMOS_VECTOR_DATABASE  "loom-vectors"
+  add LOOM_COSMOS_VECTOR_CONTAINER "docs-vec"
+fi
+
+# ---------------------------------------------------------------------------
 # Event Hubs — the DLZ namespace (Eventstream navigator).
 # ---------------------------------------------------------------------------
 EH_NS="${EXISTING_EVENTHUB_NAMESPACE:-}"
