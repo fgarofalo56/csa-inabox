@@ -48,6 +48,13 @@ export interface ItemTileProps {
   onClick?: () => void;
   /** Render the icon chip larger (default 'md'). */
   size?: 'md' | 'lg';
+  /**
+   * Draw a brand selection ring around the tile. Used by multi-select surfaces
+   * (e.g. admin bulk operations) to mark a tile as picked. Purely visual — the
+   * caller owns the selection state and renders its own checkbox (typically in
+   * the `overflowMenu` slot, whose clicks are already isolated from `onClick`).
+   */
+  selected?: boolean;
 }
 
 /** Tier a sensitivity-label name onto a Fluent Badge colour. */
@@ -84,6 +91,11 @@ const useStyles = makeStyles({
       outline: `2px solid ${tokens.colorStrokeFocus2}`,
       outlineOffset: '2px',
     },
+  },
+  selectedRing: {
+    border: `1px solid ${tokens.colorBrandStroke1}`,
+    boxShadow: `0 0 0 1px ${tokens.colorBrandStroke1}`,
+    backgroundColor: tokens.colorBrandBackground2,
   },
   head: {
     display: 'flex',
@@ -162,6 +174,7 @@ export function ItemTile({
   footer,
   onClick,
   size = 'md',
+  selected = false,
 }: ItemTileProps): React.ReactElement {
   const styles = useStyles();
   const visual = itemVisual(type);
@@ -170,9 +183,14 @@ export function ItemTile({
 
   return (
     <div
-      className={mergeClasses(styles.tile, onClick ? styles.clickable : undefined)}
+      className={mergeClasses(
+        styles.tile,
+        onClick ? styles.clickable : undefined,
+        selected ? styles.selectedRing : undefined,
+      )}
       role={onClick ? 'button' : undefined}
       tabIndex={onClick ? 0 : undefined}
+      aria-pressed={onClick && selected ? true : undefined}
       onClick={onClick}
       onKeyDown={
         onClick
