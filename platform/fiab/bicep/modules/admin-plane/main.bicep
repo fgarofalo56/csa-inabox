@@ -779,8 +779,8 @@ param sccOrganization string = ''
 @description('Optional SCC PowerShell ConnectionUri override for sovereign clouds (Gov/GCC-High/DoD). Empty uses the Commercial default.')
 param sccConnectionUri string = ''
 
-@description('Enable Purview DLP (policies / rules / alerts / simulate) calls via Microsoft Graph. Requires Console UAMI Policy.Read.All + SecurityAlert.Read.All admin-consented. When false, /admin/security DLP tab returns 503.')
-param loomDlpEnabled bool = false
+@description('Enable Purview DLP (policies / rules / alerts / simulate) calls via Microsoft Graph. Defaults ON: the post-deploy bootstrap grants Console UAMI Policy.Read.All + SecurityAlert.Read.All by default, so LOOM_DLP_ENABLED is injected out of the box and the /admin/security DLP tab is wired (no "not wired in this deployment"). Alerts/violations work in every cloud once admin consent is issued; the preview-gated policy segment + simulate surface honest MessageBars where unavailable; the Restrict-access tab uses Azure-native ADLS/Synapse/ADX revokes with no Graph dependency.')
+param loomDlpEnabled bool = true
 
 // ---------------------------------------------------------------------------
 // Govern → Admin view (F2) "View more" embedded report backend.

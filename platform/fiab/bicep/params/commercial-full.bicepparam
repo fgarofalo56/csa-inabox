@@ -50,7 +50,9 @@ param loomPurviewAccount = readEnvironmentVariable('LOOM_PURVIEW_ACCOUNT', 'dmlz
 // workflow grants the Graph AppRoles AND admin consent is issued.
 // Set LOOM_MIP_ENABLED / LOOM_DLP_ENABLED env vars to flip these on.
 param loomMipEnabled = bool(readEnvironmentVariable('LOOM_MIP_ENABLED', 'false'))
-param loomDlpEnabled = bool(readEnvironmentVariable('LOOM_DLP_ENABLED', 'false'))
+// DLP defaults ON: the bootstrap grants the DLP AppRoles by default, so the
+// DLP tab is wired out of the box. Override with LOOM_DLP_ENABLED=false to gate it.
+param loomDlpEnabled = bool(readEnvironmentVariable('LOOM_DLP_ENABLED', 'true'))
 param loomIdentityPickerEnabled = bool(readEnvironmentVariable('LOOM_IDENTITY_PICKER_ENABLED', 'false'))
 // Headless CI Bearer-token path on the deployment-pipeline routes (Azure DevOps /
 // GitHub Actions task — Fabric fabric-devops-pipelines parity). Off by default;

@@ -536,7 +536,7 @@ jobs:
             for ROLE in \
               "InformationProtectionPolicy.Read.All:19da66cb-0fb0-4390-b071-ebc76a349482" \
               "SensitivityLabel.Evaluate:57f0b71b-a759-45a0-9a0f-cc099fbd9a44" \
-              "Policy.Read.All:572fea84-0151-49b2-9301-11cb16974376" \
+              "Policy.Read.All:246dd0d5-5bd0-4def-940b-0421030a5b68" \
               "SecurityAlert.Read.All:bf394140-e372-4bf9-a898-299cfc7564e5" \
             ; do
               NAME="${ROLE%%:*}"
