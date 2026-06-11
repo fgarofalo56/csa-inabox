@@ -25,6 +25,7 @@ import {
 } from '@fluentui/react-components';
 import {
   ArrowSync24Regular, ShieldLockFilled, ShieldProhibitedFilled,
+  Bot24Regular, Warning24Regular, TagMultiple24Regular,
 } from '@fluentui/react-icons';
 import { Section } from '@/lib/components/ui/section';
 import { LoomDataTable, type LoomColumn } from '@/lib/components/ui/loom-data-table';
@@ -73,18 +74,30 @@ function labelColor(l: string | null): 'danger' | 'warning' | 'informative' | 's
 }
 
 const useStyles = makeStyles({
-  intro: { color: tokens.colorNeutralForeground3, marginBottom: tokens.spacingVerticalL, display: 'block' },
+  intro: { color: tokens.colorNeutralForeground3, marginBottom: tokens.spacingVerticalL, display: 'block', maxWidth: '880px', lineHeight: tokens.lineHeightBase300 },
+  code: {
+    fontFamily: tokens.fontFamilyMonospace, fontSize: '12px',
+    padding: '1px 5px', borderRadius: tokens.borderRadiusSmall,
+    backgroundColor: tokens.colorNeutralBackground3, color: tokens.colorNeutralForeground2,
+  },
   statsRow: {
-    display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(190px, 1fr))',
+    display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(200px, 1fr))',
     gap: tokens.spacingHorizontalL, marginBottom: tokens.spacingVerticalL,
   },
   statCard: {
     padding: tokens.spacingVerticalL, borderRadius: tokens.borderRadiusLarge,
     border: `1px solid ${tokens.colorNeutralStroke2}`,
-    backgroundColor: tokens.colorNeutralBackground2,
-    display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalXS,
+    backgroundColor: tokens.colorNeutralBackground1,
+    boxShadow: tokens.shadow2,
+    display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalS,
+    transition: 'box-shadow 0.15s ease, transform 0.15s ease',
+    ':hover': { boxShadow: tokens.shadow8, transform: 'translateY(-2px)' },
   },
-  statVal: { fontSize: '30px', lineHeight: '34px', fontWeight: tokens.fontWeightSemibold, color: tokens.colorBrandForeground1 },
+  statHead: { display: 'flex', alignItems: 'center', justifyContent: 'space-between' },
+  statIcon: { fontSize: '22px', color: tokens.colorNeutralForeground3, flexShrink: 0 },
+  statIconAlert: { fontSize: '22px', color: tokens.colorPaletteRedForeground1, flexShrink: 0 },
+  statVal: { fontSize: '32px', lineHeight: '34px', fontWeight: tokens.fontWeightSemibold, color: tokens.colorBrandForeground1 },
+  statValAlert: { fontSize: '32px', lineHeight: '34px', fontWeight: tokens.fontWeightSemibold, color: tokens.colorPaletteRedForeground1 },
   statLabel: { fontSize: '12px', color: tokens.colorNeutralForeground3, textTransform: 'uppercase', letterSpacing: '0.04em' },
   chips: { display: 'flex', flexWrap: 'wrap', gap: tokens.spacingHorizontalS },
   sourceChips: { display: 'flex', flexWrap: 'wrap', gap: '4px' },
@@ -173,7 +186,7 @@ export function DspmAiPanel({ days = 30 }: { days?: number }) {
         Which AI agents and Copilots touch sensitive-labeled data. For every agent in the estate
         this report resolves the sensitivity label of each grounded data source (Cosmos), ranks
         the most-sensitive label and its protection state (Microsoft Graph Information Protection),
-        and attributes real usage from the <code>copilot.usage</code> telemetry the agent chat path
+        and attributes real usage from the <code className={s.code}>copilot.usage</code> telemetry the agent chat path
         emits (Log Analytics KQL). No Microsoft Fabric / Power BI dependency. No synthetic data.
       </Body1>
 
@@ -219,15 +232,26 @@ export function DspmAiPanel({ days = 30 }: { days?: number }) {
           >
             <div className={s.statsRow}>
               <div className={s.statCard}>
-                <div className={s.statVal}>{resp.summary.agentCount}</div>
+                <div className={s.statHead}>
+                  <div className={s.statVal}>{resp.summary.agentCount}</div>
+                  <Bot24Regular className={s.statIcon} />
+                </div>
                 <div className={s.statLabel}>AI agents</div>
               </div>
               <div className={s.statCard}>
-                <div className={s.statVal}>{resp.summary.agentsTouchingSensitive}</div>
+                <div className={s.statHead}>
+                  <div className={resp.summary.agentsTouchingSensitive > 0 ? s.statValAlert : s.statVal}>
+                    {resp.summary.agentsTouchingSensitive}
+                  </div>
+                  <Warning24Regular className={resp.summary.agentsTouchingSensitive > 0 ? s.statIconAlert : s.statIcon} />
+                </div>
                 <div className={s.statLabel}>touch labeled data</div>
               </div>
               <div className={s.statCard}>
-                <div className={s.statVal}>{resp.summary.labelCounts.length}</div>
+                <div className={s.statHead}>
+                  <div className={s.statVal}>{resp.summary.labelCounts.length}</div>
+                  <TagMultiple24Regular className={s.statIcon} />
+                </div>
                 <div className={s.statLabel}>distinct labels exposed</div>
               </div>
             </div>
