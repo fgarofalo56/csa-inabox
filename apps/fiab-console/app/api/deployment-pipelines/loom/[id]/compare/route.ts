@@ -9,18 +9,17 @@
  * Shape: { ok, data: { sourceStageId, targetStageId, pairs, summary } }
  */
 import { NextRequest } from 'next/server';
-import { getSession } from '@/lib/auth/session';
 import { listAllOwnedItems } from '@/app/api/items/_lib/item-crud';
 import { computePipelineDiff } from '@/lib/install/pipeline-compare';
-import { jok, jerr, loadPipeline, stageWorkspaceId } from '../../_lib/pipeline-store';
+import { jok, jerr, loadPipeline, stageWorkspaceId, resolveCaller } from '../../_lib/pipeline-store';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
 
 export async function GET(req: NextRequest, ctx: { params: Promise<{ id: string }> }) {
-  const s = getSession();
-  if (!s) return jerr('unauthenticated', 401, 'unauthorized');
-  const tenantId = s.claims.oid;
+  const caller = resolveCaller(req);
+  if (!caller) return jerr('unauthenticated', 401, 'unauthorized');
+  const tenantId = caller.tenantId;
   const { id } = await ctx.params;
 
   const source = (req.nextUrl.searchParams.get('source') || '').trim();

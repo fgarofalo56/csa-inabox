@@ -48,6 +48,10 @@ param loomPurviewAccount = readEnvironmentVariable('LOOM_PURVIEW_ACCOUNT', 'dmlz
 param loomMipEnabled = bool(readEnvironmentVariable('LOOM_MIP_ENABLED', 'false'))
 param loomDlpEnabled = bool(readEnvironmentVariable('LOOM_DLP_ENABLED', 'false'))
 param loomIdentityPickerEnabled = bool(readEnvironmentVariable('LOOM_IDENTITY_PICKER_ENABLED', 'false'))
+// Headless CI Bearer-token path on the deployment-pipeline routes (Azure DevOps /
+// GitHub Actions task — Fabric fabric-devops-pipelines parity). Off by default;
+// set LOOM_PIPELINE_CI_ENABLED=true to let the CSA Loom DevOps task drive deploys.
+param loomPipelineCiEnabled = bool(readEnvironmentVariable('LOOM_PIPELINE_CI_ENABLED', 'false'))
 param storageRequireCmk = false
 param keyVaultHsmIsolated = false
 param atlasOnAksEnabled = false
