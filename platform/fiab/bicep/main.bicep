@@ -356,6 +356,55 @@ param defenderCloudEnabled bool = false
 @description('Assign a sample built-in audit policy at the subscription scope (Azure Policy navigator).')
 param policyEnabled bool = false
 
+// ---------- Deploy-planner per-resource config ----------
+// SKU / tier / runtime knobs the Deployment planner's per-resource config panel
+// writes into the generated .bicepparam, forwarded to the deploy-planner modules
+// below so an exported plan applies the chosen SKU — not just module defaults.
+// @allowed mirrors the module decorators (single source of truth) so an invalid
+// value is rejected at compile time. Interdependent knobs (Redis family/capacity)
+// are DERIVED here from the chosen SKU so every combination stays valid.
+
+@description('Azure Cache for Redis SKU (deploy-planner). Family + capacity are derived to a valid pairing.')
+@allowed(['Basic', 'Standard', 'Premium'])
+param redisSkuName string = 'Basic'
+
+@description('App Service plan SKU (deploy-planner).')
+@allowed(['B1', 'B2', 'S1', 'P0v3', 'P1v3'])
+param appServicePlanSku string = 'B1'
+
+@description('App Service Linux runtime stack (deploy-planner), e.g. NODE|20-lts, DOTNETCORE|8.0, PYTHON|3.12.')
+param appServiceLinuxFxVersion string = 'NODE|20-lts'
+
+@description('Azure Functions worker runtime (deploy-planner).')
+@allowed(['node', 'python', 'dotnet-isolated', 'java'])
+param functionsWorkerRuntime string = 'node'
+
+@description('Azure Functions Linux runtime version (deploy-planner), e.g. Node|20, Python|3.12.')
+param functionsLinuxFxVersion string = 'Node|20'
+
+@description('PostgreSQL Flexible Server major version (deploy-planner).')
+@allowed(['13', '14', '15', '16'])
+param postgresVersion string = '16'
+
+@description('PostgreSQL Flexible Server storage size in GB (deploy-planner).')
+@allowed([32, 64, 128, 256, 512])
+param postgresStorageSizeGB int = 32
+
+@description('MySQL Flexible Server version (deploy-planner).')
+@allowed(['5.7', '8.0.21'])
+param mysqlVersion string = '8.0.21'
+
+@description('MySQL Flexible Server storage size in GB (deploy-planner).')
+@minValue(20)
+@maxValue(16384)
+param mysqlStorageSizeGB int = 20
+
+// Derive a valid Redis family + capacity for the chosen SKU (Premium uses the
+// P family starting at capacity 1; Basic/Standard use the C family at 0).
+var redisIsPremium = redisSkuName == 'Premium'
+var redisSkuFamily = redisIsPremium ? 'P' : 'C'
+var redisSkuCapacity = redisIsPremium ? 1 : 0
+
 // ---------- User access patterns ----------
 
 @description('Deploy a P2S VPN Gateway (AAD-auth, OpenVPN) in the hub VNet. ~30 min provisioning, ~$30/mo. Default off.')
@@ -778,6 +827,8 @@ module dpPostgres 'modules/deploy-planner/postgres.bicep' = if (deploymentMode =
   scope: singleDlzRg
   params: {
     location: location
+    postgresVersion: postgresVersion
+    storageSizeGB: postgresStorageSizeGB
     entraAdminObjectId: dpConsolePrincipalId
     entraAdminName: adminPlane.outputs.uamiConsoleName
     complianceTags: complianceTags
@@ -789,6 +840,8 @@ module dpMysql 'modules/deploy-planner/mysql.bicep' = if (deploymentMode == 'sin
   scope: singleDlzRg
   params: {
     location: location
+    mysqlVersion: mysqlVersion
+    storageSizeGB: mysqlStorageSizeGB
     entraAdminObjectId: dpConsolePrincipalId
     entraAdminName: adminPlane.outputs.uamiConsoleName
     complianceTags: complianceTags
@@ -800,6 +853,9 @@ module dpRedis 'modules/deploy-planner/redis.bicep' = if (deploymentMode == 'sin
   scope: singleDlzRg
   params: {
     location: location
+    skuName: redisSkuName
+    skuFamily: redisSkuFamily
+    skuCapacity: redisSkuCapacity
     consolePrincipalId: dpConsolePrincipalId
     complianceTags: complianceTags
   }
@@ -893,6 +949,8 @@ module dpAppService 'modules/deploy-planner/app-service.bicep' = if (deploymentM
   scope: singleDlzRg
   params: {
     location: location
+    planSku: appServicePlanSku
+    linuxFxVersion: appServiceLinuxFxVersion
     consolePrincipalId: dpConsolePrincipalId
     skipRoleGrants: skipRoleGrants
     complianceTags: complianceTags
@@ -904,6 +962,8 @@ module dpFunctions 'modules/deploy-planner/functions.bicep' = if (deploymentMode
   scope: singleDlzRg
   params: {
     location: location
+    functionsWorkerRuntime: functionsWorkerRuntime
+    linuxFxVersion: functionsLinuxFxVersion
     consolePrincipalId: dpConsolePrincipalId
     skipRoleGrants: skipRoleGrants
     complianceTags: complianceTags
