@@ -50,21 +50,32 @@ jobs:
 
       - name: Grant Console UAMI Purview Data Map roles (data-plane)
         env:
-          PURVIEW_ACCOUNT: purview-csa-loom-eastus2
+          # De-hardcoded so a non-eastus2 / non-Commercial deploy grants the right
+          # account on the right host. Override via repo var LOOM_PURVIEW_ACCOUNT
+          # (the bicep output catalog.purviewAccountName, e.g. purview-csa-loom-<region>);
+          # falls back to the live Commercial default. PURVIEW_CLOUD drives the
+          # Data Map host TLD (.us in US Gov) inside the grant script — it mirrors
+          # purviewBase()'s isGovCloud() switch so the grant targets the SAME host
+          # the Console probes. The token audience stays https://purview.azure.net
+          # in all clouds.
+          PURVIEW_ACCOUNT: ${{ vars.LOOM_PURVIEW_ACCOUNT || 'purview-csa-loom-eastus2' }}
+          PURVIEW_CLOUD: ${{ vars.LOOM_CLOUD || vars.AZURE_CLOUD || 'AzureCloud' }}
         run: |
           set -uo pipefail
           # Classic Purview Data Map permissions are data-plane (collection
           # metadata policy), not ARM RBAC — so they can't be set in bicep. The
           # deploy SP created the Purview account, so it is the root Collection
           # Admin and can grant the Console UAMI the roles it needs for the
-          # catalog/scan/glossary/lineage surfaces (fixes the /governance scan +
-          # sources "Not authorized to access account" 403). data-reader is
-          # included for the F5 lakehouse MIP-label-on-download lookup (reading
-          # the sensitivity label scanned onto an ADLS path). Idempotent.
+          # catalog/scan/glossary/lineage surfaces (fixes the /admin/security +
+          # /governance scan + sources "Not authorized to access account" 403).
+          # data-reader is included for the F5 lakehouse MIP-label-on-download
+          # lookup (reading the sensitivity label scanned onto an ADLS path).
+          # Idempotent.
           chmod +x scripts/csa-loom/grant-purview-datamap-role.sh
           for ROLE in data-reader data-curator data-source-administrator collection-administrator; do
-            echo "== granting Console UAMI '$ROLE' on $PURVIEW_ACCOUNT root collection =="
-            PURVIEW_ACCOUNT="$PURVIEW_ACCOUNT" CONSOLE_UAMI_PRINCIPAL="$CONSOLE_UAMI_PRINCIPAL" ROLE="$ROLE" \
+            echo "== granting Console UAMI '$ROLE' on $PURVIEW_ACCOUNT root collection (cloud=$PURVIEW_CLOUD) =="
+            PURVIEW_ACCOUNT="$PURVIEW_ACCOUNT" PURVIEW_CLOUD="$PURVIEW_CLOUD" \
+              CONSOLE_UAMI_PRINCIPAL="$CONSOLE_UAMI_PRINCIPAL" ROLE="$ROLE" \
               bash scripts/csa-loom/grant-purview-datamap-role.sh \
               || echo "::warning::Purview '$ROLE' grant failed — the deploy SP may not be Collection Admin on $PURVIEW_ACCOUNT (add it once in the Purview portal, then re-run)."
           done
