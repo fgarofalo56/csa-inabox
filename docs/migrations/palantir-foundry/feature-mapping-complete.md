@@ -31,7 +31,7 @@ This reference maps **65 Palantir Foundry features** across 10 capability domain
 | Total features mapped      | 65    |
 | Full parity (XS–M effort)  | 48    |
 | Partial parity (L effort)  | 12    |
-| Known gaps (XL or roadmap) | 5     |
+| Known gaps (XL or roadmap) | 7     |
 
 ### Migration complexity key
 
@@ -223,7 +223,9 @@ This reference maps **65 Palantir Foundry features** across 10 capability domain
 | ------------------------ | ------------------------------------ | ------------------ | ---------------------------------------------------------- |
 | **CSA Copilot**          | AIP Agents / Quiver deeper NL        | CSA-0008 (roadmap) | Copilot Studio provides partial coverage today             |
 | **Object Explorer UX**   | Pixel-perfect ontology drill UX      | CSA-0129 (partial) | Purview Data Catalog + portal marketplace                  |
-| **IL6 coverage**         | Classified SCI workloads             | Out of scope       | Recommend Foundry or bespoke Azure Top-Secret tenant       |
+| **IL6 coverage**         | Classified SCI workloads             | Out of scope (audit-T35) | Recommend Foundry or bespoke Azure Top-Secret tenant; csa-inabox is not authorized to IL6 / Azure Government Secret — sponsor-specific deploys only (see [ADR-0001](../adr/0001-fabric-feature-scope.md)) |
+| **Phonograph object store** | Sub-100 ms transactional ontology object store | Out of scope / by design (audit-T35, PMF-GAP-1) | Loom's real-time path is an Azure **analytics** pipeline (Event Hubs → Stream Analytics `100ms–2s` / Real-Time Intelligence sub-second over ADX, see [benchmarks](benchmarks.md)), not a sub-100 ms OLTP object backbone. For low-latency editable objects pair it with **Cosmos DB / Azure SQL**. Disclosed in the live Real-Time hub UI. |
+| **Ontology writeback**   | Live object writeback round-trip     | Out of scope / by design (audit-T35, PMF-GAP-5) | No live object writeback in the streaming path; analyst edits use a **separate** Power Apps form + SQL-endpoint / Fabric-notebook path ([analytics-migration §7](analytics-migration.md)) |
 | **Vertex full fidelity** | Complex system-of-systems simulation | N/A                | Azure Digital Twins for complex cases; Power BI for simple |
 | **MCP ecosystem**        | Palantir MCP / Ontology MCP maturity | Emerging           | Fabric MCP announced; ecosystem maturing rapidly           |
 
