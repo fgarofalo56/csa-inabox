@@ -27,6 +27,10 @@ import {
 } from '@fluentui/react-icons';
 import { ItemEditorChrome } from './item-editor-chrome';
 import { BackendStateBar } from '@/lib/components/backend-state-bar';
+import {
+  DS_TYPES, DS_TYPE_LABELS, FILE_DS_TYPES, TABLE_DS_TYPES, COMPRESSION_CODECS,
+  containerLabelFor, locationTypeFor, buildDatasetTypeProperties, readDatasetTypeProperties,
+} from '@/lib/azure/adf-dataset-builder';
 import type { FabricItemType } from '@/lib/catalog/fabric-item-types';
 import type { RibbonTab } from '@/lib/components/ribbon';
 import { ComputePicker } from '@/lib/components/compute-picker';
@@ -718,7 +722,8 @@ interface AdfDatasetDTO {
 }
 interface AdfLinkedServiceDTO { name: string; properties: { type: string } }
 
-const ADF_DATASET_TYPES = ['Parquet', 'DelimitedText', 'Json', 'Avro', 'AzureSqlTable', 'AzureBlob'];
+// Dataset types Loom exposes a guided builder for (shared with the Manage hub).
+const ADF_DATASET_TYPES = DS_TYPES;
 
 export function AdfDatasetEditor({ item, id }: { item: FabricItemType; id: string }) {
   const s = useStyles();
@@ -726,9 +731,21 @@ export function AdfDatasetEditor({ item, id }: { item: FabricItemType; id: strin
   const [linkedServices, setLinkedServices] = useState<AdfLinkedServiceDTO[]>([]);
   const [selected, setSelected] = useState<string>(id);
   const [ds, setDs] = useState<AdfDatasetDTO | null>(null);
-  const [type, setType] = useState<string>('Parquet');
+  const [type, setType] = useState<string>('DelimitedText');
   const [linkedService, setLinkedService] = useState<string>('');
-  const [path, setPath] = useState<string>('');
+  // Guided location/format config (no raw typeProperties JSON — loom_no_freeform_config).
+  const [container, setContainer] = useState<string>('');
+  const [folder, setFolder] = useState<string>('');
+  const [file, setFile] = useState<string>('');
+  const [compression, setCompression] = useState<string>('none');
+  const [columnDelimiter, setColumnDelimiter] = useState<string>(',');
+  const [rowDelimiter, setRowDelimiter] = useState<string>('');
+  const [firstRowAsHeader, setFirstRowAsHeader] = useState<boolean>(true);
+  const [quoteChar, setQuoteChar] = useState<string>('"');
+  const [escapeChar, setEscapeChar] = useState<string>('\\');
+  const [encodingName, setEncodingName] = useState<string>('');
+  const [tableSchema, setTableSchema] = useState<string>('');
+  const [tableName, setTableName] = useState<string>('');
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
 
@@ -760,16 +777,23 @@ export function AdfDatasetEditor({ item, id }: { item: FabricItemType; id: strin
       const j = await r.json();
       if (!j.ok) throw new Error(j.error || 'get failed');
       setDs(j.dataset);
-      setType(j.dataset?.properties?.type || 'Parquet');
+      const dsType = j.dataset?.properties?.type || 'DelimitedText';
+      setType(dsType);
       setLinkedService(j.dataset?.properties?.linkedServiceName?.referenceName || '');
-      const tp = j.dataset?.properties?.typeProperties || {};
-      setPath(
-        tp?.location?.folderPath
-        ?? tp?.location?.fileName
-        ?? tp?.tableName
-        ?? tp?.fileName
-        ?? '',
-      );
+      // Hydrate the guided builder fields from typeProperties so datasets round-trip.
+      const g = readDatasetTypeProperties(j.dataset?.properties?.typeProperties);
+      setContainer(g.container || '');
+      setFolder(g.folder || '');
+      setFile(g.file || '');
+      setCompression(g.compression || 'none');
+      setColumnDelimiter(g.columnDelimiter || ',');
+      setRowDelimiter(g.rowDelimiter || '');
+      setFirstRowAsHeader(g.firstRowAsHeader ?? true);
+      setQuoteChar(g.quoteChar || '"');
+      setEscapeChar(g.escapeChar || '\\');
+      setEncodingName(g.encodingName || '');
+      setTableSchema(g.schema || '');
+      setTableName(g.table || '');
     } catch (e: any) { setError(e?.message || String(e)); }
   }, []);
 
@@ -783,23 +807,25 @@ export function AdfDatasetEditor({ item, id }: { item: FabricItemType; id: strin
     }
     setBusy(true); setError(null);
     try {
-      // Build a sensible typeProperties block per type
-      let typeProperties: Record<string, any> = {};
-      if (type === 'AzureSqlTable') {
-        typeProperties = { schema: 'dbo', table: path };
-      } else if (path) {
-        // file-based: split folder / file if there's a slash
-        const ix = path.lastIndexOf('/');
-        const folder = ix >= 0 ? path.slice(0, ix) : '';
-        const file = ix >= 0 ? path.slice(ix + 1) : path;
-        typeProperties = {
-          location: {
-            type: 'AzureBlobFSLocation',
-            fileName: file,
-            folderPath: folder,
-          },
-        };
-      }
+      // Build typeProperties from the guided location/format fields — never raw JSON.
+      // The location type derives from the selected linked service's connector type.
+      const lsType = linkedServices.find((l) => l.name === linkedService)?.properties?.type;
+      const typeProperties = buildDatasetTypeProperties({
+        type,
+        linkedServiceType: lsType,
+        container,
+        folder,
+        file,
+        compression,
+        columnDelimiter,
+        rowDelimiter,
+        firstRowAsHeader,
+        quoteChar,
+        escapeChar,
+        encodingName,
+        schema: tableSchema,
+        table: tableName,
+      });
       const body: AdfDatasetDTO = {
         name: selected,
         properties: {
@@ -820,7 +846,9 @@ export function AdfDatasetEditor({ item, id }: { item: FabricItemType; id: strin
       await loadDataset(selected);
     } catch (e: any) { setError(e?.message || String(e)); }
     finally { setBusy(false); }
-  }, [selected, linkedService, type, path, ds, loadDataset]);
+  }, [selected, linkedService, linkedServices, type, container, folder, file, compression,
+      columnDelimiter, rowDelimiter, firstRowAsHeader, quoteChar, escapeChar, encodingName,
+      tableSchema, tableName, ds, loadDataset]);
 
   // v3.28 Phase 4.5: Ctrl+S triggers Save. Mirrors ADF Studio behavior.
   useEffect(() => {
@@ -853,12 +881,18 @@ export function AdfDatasetEditor({ item, id }: { item: FabricItemType; id: strin
     }
     setBusy(true); setError(null);
     try {
+      // Seed an empty DelimitedText dataset; the guided builder fills typeProperties on Save.
+      const seedLs = linkedServices[0];
+      const typeProperties = buildDatasetTypeProperties({
+        type: 'DelimitedText',
+        linkedServiceType: seedLs.properties?.type,
+      });
       const body: AdfDatasetDTO = {
         name,
         properties: {
-          type: 'Parquet',
-          linkedServiceName: { referenceName: linkedServices[0].name, type: 'LinkedServiceReference' },
-          typeProperties: { location: { type: 'AzureBlobFSLocation', fileName: '', folderPath: '' } },
+          type: 'DelimitedText',
+          linkedServiceName: { referenceName: seedLs.name, type: 'LinkedServiceReference' },
+          typeProperties,
         },
       };
       const r = await fetch('/api/items/adf-dataset', {
@@ -921,8 +955,8 @@ export function AdfDatasetEditor({ item, id }: { item: FabricItemType; id: strin
           <div className={s.row}>
             <div className={s.field}>
               <Caption1>Type</Caption1>
-              <Dropdown value={type} selectedOptions={[type]} onOptionSelect={(_, d) => setType(d.optionValue || 'Parquet')}>
-                {ADF_DATASET_TYPES.map((t) => <Option key={t} value={t}>{t}</Option>)}
+              <Dropdown value={DS_TYPE_LABELS[type] || type} selectedOptions={[type]} onOptionSelect={(_, d) => setType(d.optionValue || 'DelimitedText')}>
+                {ADF_DATASET_TYPES.map((t) => <Option key={t} value={t} text={DS_TYPE_LABELS[t] || t}>{DS_TYPE_LABELS[t] || t}</Option>)}
               </Dropdown>
             </div>
             <div className={s.field}>
@@ -932,10 +966,84 @@ export function AdfDatasetEditor({ item, id }: { item: FabricItemType; id: strin
               </Dropdown>
             </div>
           </div>
-          <div className={s.field}>
-            <Caption1>{type === 'AzureSqlTable' ? 'Table name' : 'Path (folder/file or wildcard)'}</Caption1>
-            <Input value={path} onChange={(_, d) => setPath(d.value)} placeholder={type === 'AzureSqlTable' ? 'dbo.FactSales' : 'raw/orders/year=2026/*.parquet'} />
-          </div>
+          {FILE_DS_TYPES.has(type) && (
+            <>
+              <Caption1>Location ({containerLabelFor(locationTypeFor(linkedServices.find((l) => l.name === linkedService)?.properties?.type))} / folder / file — derived from the linked service connector)</Caption1>
+              <div className={s.row}>
+                <div className={s.field}>
+                  <Caption1>{containerLabelFor(locationTypeFor(linkedServices.find((l) => l.name === linkedService)?.properties?.type))}</Caption1>
+                  <Input value={container} onChange={(_, d) => setContainer(d.value)} placeholder="raw" />
+                </div>
+                <div className={s.field}>
+                  <Caption1>Folder path</Caption1>
+                  <Input value={folder} onChange={(_, d) => setFolder(d.value)} placeholder="orders/year=2026" />
+                </div>
+                <div className={s.field}>
+                  <Caption1>File name</Caption1>
+                  <Input value={file} onChange={(_, d) => setFile(d.value)} placeholder="*.parquet (or @dataset().fileName)" />
+                </div>
+              </div>
+              <div className={s.row}>
+                <div className={s.field}>
+                  <Caption1>Compression</Caption1>
+                  <Dropdown value={compression} selectedOptions={[compression]} onOptionSelect={(_, d) => setCompression(d.optionValue || 'none')}>
+                    {COMPRESSION_CODECS.map((c) => <Option key={c} value={c}>{c}</Option>)}
+                  </Dropdown>
+                </div>
+              </div>
+              {type === 'DelimitedText' && (
+                <>
+                  <Subtitle2>Delimited text format</Subtitle2>
+                  <div className={s.row}>
+                    <div className={s.field}>
+                      <Caption1>Column delimiter</Caption1>
+                      <Dropdown value={columnDelimiter} selectedOptions={[columnDelimiter]} onOptionSelect={(_, d) => setColumnDelimiter(d.optionValue || ',')}>
+                        {[{ v: ',', l: 'Comma (,)' }, { v: '\t', l: 'Tab (\\t)' }, { v: ';', l: 'Semicolon (;)' }, { v: '|', l: 'Pipe (|)' }, { v: ' ', l: 'Space' }].map((o) => <Option key={o.v} value={o.v} text={o.l}>{o.l}</Option>)}
+                      </Dropdown>
+                    </div>
+                    <div className={s.field}>
+                      <Caption1>Row delimiter</Caption1>
+                      <Dropdown value={rowDelimiter || '(default)'} selectedOptions={[rowDelimiter]} onOptionSelect={(_, d) => setRowDelimiter(d.optionValue === '(default)' ? '' : (d.optionValue || ''))}>
+                        {[{ v: '', l: '(default)' }, { v: '\n', l: 'Line feed (\\n)' }, { v: '\r\n', l: 'CRLF (\\r\\n)' }, { v: '\r', l: 'Carriage return (\\r)' }].map((o) => <Option key={o.l} value={o.v || '(default)'} text={o.l}>{o.l}</Option>)}
+                      </Dropdown>
+                    </div>
+                    <div className={s.field}>
+                      <Caption1>Encoding</Caption1>
+                      <Input value={encodingName} onChange={(_, d) => setEncodingName(d.value)} placeholder="UTF-8" />
+                    </div>
+                  </div>
+                  <div className={s.row}>
+                    <div className={s.field}>
+                      <Caption1>Quote character</Caption1>
+                      <Input value={quoteChar} onChange={(_, d) => setQuoteChar(d.value)} placeholder={'"'} />
+                    </div>
+                    <div className={s.field}>
+                      <Caption1>Escape character</Caption1>
+                      <Input value={escapeChar} onChange={(_, d) => setEscapeChar(d.value)} placeholder={'\\'} />
+                    </div>
+                    <div className={s.field} style={{ justifyContent: 'flex-end' }}>
+                      <Switch checked={firstRowAsHeader} onChange={(_, d) => setFirstRowAsHeader(!!d.checked)} label="First row as header" />
+                    </div>
+                  </div>
+                </>
+              )}
+            </>
+          )}
+          {TABLE_DS_TYPES.has(type) && (
+            <>
+              <Caption1>Table reference</Caption1>
+              <div className={s.row}>
+                <div className={s.field}>
+                  <Caption1>Schema</Caption1>
+                  <Input value={tableSchema} onChange={(_, d) => setTableSchema(d.value)} placeholder="dbo" />
+                </div>
+                <div className={s.field}>
+                  <Caption1>Table</Caption1>
+                  <Input value={tableName} onChange={(_, d) => setTableName(d.value)} placeholder="FactSales" />
+                </div>
+              </div>
+            </>
+          )}
           <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginTop: 8 }}>
             <Subtitle2>Schema ({ds?.properties.schema?.length || 0} columns)</Subtitle2>
             <Button size="small" icon={<Add20Regular />} disabled={!selected} onClick={addColumn}>Add column</Button>
