@@ -9,6 +9,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { getSession } from '@/lib/auth/session';
 import { getDomainsStore, DomainsBackendGateError } from '@/lib/azure/domains-client';
+import { isDomainTenantAdmin } from '@/lib/azure/domain-hierarchy';
 import { writeDomainAudit } from '@/lib/governance/domain-audit';
 
 export const runtime = 'nodejs';
@@ -29,6 +30,14 @@ export async function PATCH(
     // under a parent, null/'' to move to root). Cosmos reparents + mirrors the
     // Purview collection; the Fabric backend honestly 501s (no move endpoint).
     if (body.parentDomainId !== undefined) {
+      // Reparenting is a tenant-admin-only action (mirrors Fabric role rules and
+      // PATCH /api/admin/domains, which rejects `parentId` from non-tenant-admins).
+      if (!isDomainTenantAdmin(s.claims.oid)) {
+        return NextResponse.json(
+          { ok: false, error: 'Only a tenant admin may move (reparent) a domain.' },
+          { status: 403 },
+        );
+      }
       const newParentId =
         body.parentDomainId === null || String(body.parentDomainId).trim() === ''
           ? undefined

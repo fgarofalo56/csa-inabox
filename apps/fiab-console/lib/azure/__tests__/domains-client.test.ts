@@ -200,7 +200,9 @@ describe('domains-client — DomainStore adapters (F4)', () => {
   it('cosmosDomainStore.moveDomain reparents in Cosmos + reparents the Purview collection, NO Fabric call', async () => {
     const mod = await import('../domains-client');
     const store = mod.cosmosDomainStore;
-    // Seed a root domain that has a Purview mirror, then move it under a parent.
+    // Seed the target parent, then a root domain that has a Purview mirror, then
+    // move the latter under the parent.
+    await store.createDomain('tenant-1', { id: 'finance', name: 'Finance' }, 'alice@contoso.com');
     await store.createDomain('tenant-1', { id: 'sub', name: 'Sub', description: 'd' }, 'alice@contoso.com');
     purviewCalls.length = 0;
     const moved = await store.moveDomain('tenant-1', 'sub', 'finance', 'bob@contoso.com');
@@ -216,6 +218,7 @@ describe('domains-client — DomainStore adapters (F4)', () => {
   it('cosmosDomainStore.moveDomain to root clears the parent (parentId undefined)', async () => {
     const mod = await import('../domains-client');
     const store = mod.cosmosDomainStore;
+    await store.createDomain('tenant-1', { id: 'finance', name: 'Finance' }, 'alice@contoso.com');
     await store.createDomain('tenant-1', { id: 'sub2', name: 'Sub2', parentDomainId: 'finance' }, 'alice@contoso.com');
     const moved = await store.moveDomain('tenant-1', 'sub2', undefined, 'bob@contoso.com');
     expect(moved.parentDomainId).toBeUndefined();
@@ -227,6 +230,50 @@ describe('domains-client — DomainStore adapters (F4)', () => {
     await mod.cosmosDomainStore.createDomain('tenant-1', { id: 'self', name: 'Self' }, 'alice@contoso.com');
     await expect(
       mod.cosmosDomainStore.moveDomain('tenant-1', 'self', 'self', 'bob@contoso.com'),
+    ).rejects.toMatchObject({ status: 400 });
+  });
+
+  it('cosmosDomainStore.moveDomain rejects a non-existent target parent (400)', async () => {
+    const mod = await import('../domains-client');
+    await mod.cosmosDomainStore.createDomain('tenant-1', { id: 'orphan', name: 'Orphan' }, 'alice@contoso.com');
+    await expect(
+      mod.cosmosDomainStore.moveDomain('tenant-1', 'orphan', 'ghost', 'bob@contoso.com'),
+    ).rejects.toMatchObject({ status: 400 });
+    // The move never persisted a dangling parent.
+    expect(domainDocs.get('orphan').parentDomainId).toBeUndefined();
+  });
+
+  it('cosmosDomainStore.moveDomain rejects a cycle (moving a root under its own child)', async () => {
+    const mod = await import('../domains-client');
+    const store = mod.cosmosDomainStore;
+    // A is root, B is A's child. Moving A under B would form A→B→A.
+    await store.createDomain('tenant-1', { id: 'a', name: 'A' }, 'alice@contoso.com');
+    await store.createDomain('tenant-1', { id: 'b', name: 'B', parentDomainId: 'a' }, 'alice@contoso.com');
+    await expect(
+      store.moveDomain('tenant-1', 'a', 'b', 'bob@contoso.com'),
+    ).rejects.toMatchObject({ status: 400 });
+    expect(domainDocs.get('a').parentDomainId).toBeUndefined();
+  });
+
+  it('cosmosDomainStore.moveDomain rejects nesting under a subdomain (two-level cap)', async () => {
+    const mod = await import('../domains-client');
+    const store = mod.cosmosDomainStore;
+    await store.createDomain('tenant-1', { id: 'root', name: 'Root' }, 'alice@contoso.com');
+    await store.createDomain('tenant-1', { id: 'child', name: 'Child', parentDomainId: 'root' }, 'alice@contoso.com');
+    await store.createDomain('tenant-1', { id: 'other', name: 'Other' }, 'alice@contoso.com');
+    await expect(
+      store.moveDomain('tenant-1', 'other', 'child', 'bob@contoso.com'),
+    ).rejects.toMatchObject({ status: 400 });
+  });
+
+  it('cosmosDomainStore.moveDomain rejects moving a domain that itself has subdomains', async () => {
+    const mod = await import('../domains-client');
+    const store = mod.cosmosDomainStore;
+    await store.createDomain('tenant-1', { id: 'parent', name: 'Parent' }, 'alice@contoso.com');
+    await store.createDomain('tenant-1', { id: 'kid', name: 'Kid', parentDomainId: 'parent' }, 'alice@contoso.com');
+    await store.createDomain('tenant-1', { id: 'target', name: 'Target' }, 'alice@contoso.com');
+    await expect(
+      store.moveDomain('tenant-1', 'parent', 'target', 'bob@contoso.com'),
     ).rejects.toMatchObject({ status: 400 });
   });
 

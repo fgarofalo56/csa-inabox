@@ -34,6 +34,7 @@ import {
   domainCollectionName,
   isPurviewConfigured,
 } from './purview-client';
+import { validateDomainMove } from './domain-hierarchy';
 import {
   ChainedTokenCredential,
   DefaultAzureCredential,
@@ -250,9 +251,20 @@ export const cosmosDomainStore: DomainStore = {
       err.status = 404;
       throw err;
     }
-    if (newParentId === id) {
-      const err: any = new Error('A domain cannot be its own parent.');
-      err.status = 400;
+    // Enforce the SAME two-level hierarchy invariants as PATCH /api/admin/domains
+    // (self-parent, missing target, cycle, two-level cap). Load the tenant's
+    // domains so the target + descendant chain can be checked — without this the
+    // governance move path could corrupt the tree and break the unified mapper's
+    // root-vs-subdomain (catalog-vs-schema) determination.
+    const all = await this.listDomains(tenantId);
+    const moveErr = validateDomainMove(
+      all.map((d) => ({ id: d.id, parentId: d.parentDomainId })),
+      id,
+      newParentId,
+    );
+    if (moveErr) {
+      const err: any = new Error(moveErr.message);
+      err.status = moveErr.status;
       throw err;
     }
     const moved: LoomDomain = {

@@ -40,6 +40,7 @@ import {
   type UnifiedMirrorResult,
   type UnityLinkStatus,
 } from '@/lib/azure/unified-domain-mapper';
+import { validateDomainMove, isDomainTenantAdmin } from '@/lib/azure/domain-hierarchy';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -190,16 +191,14 @@ async function workspaceCounts(tenantId: string): Promise<Record<string, number>
 /**
  * Is the caller a Fabric/tenant-level admin (vs a domain-scoped admin)?
  * Tenant admins may change a domain's name and admin list; domain admins
- * may not (mirrors Fabric's role rules). When neither LOOM_TENANT_ADMIN_OID
- * nor LOOM_TENANT_ADMIN_GROUP_ID is configured, the whole console is already
+ * may not (mirrors Fabric's role rules). Delegates to the shared
+ * isDomainTenantAdmin so this route and PATCH /api/governance/domains
+ * enforce the identical rule. When neither LOOM_TENANT_ADMIN_OID nor
+ * LOOM_TENANT_ADMIN_GROUP_ID is configured, the whole console is already
  * admin-gated, so every authenticated session is treated as a tenant admin.
  */
 function isTenantAdmin(oid: string): boolean {
-  const adminOids = (process.env.LOOM_TENANT_ADMIN_OID || '')
-    .split(/[,;\s]+/).map((x) => x.trim().toLowerCase()).filter(Boolean);
-  const adminGroup = (process.env.LOOM_TENANT_ADMIN_GROUP_ID || '').trim();
-  if (adminOids.length === 0 && !adminGroup) return true;
-  return adminOids.includes((oid || '').toLowerCase());
+  return isDomainTenantAdmin(oid);
 }
 
 /** Is a given Loom domain mirrored into the Unity Catalog metastore? */
@@ -218,8 +217,15 @@ export async function GET() {
   const tenantId = s.claims.oid;
   try {
     const doc = await loadOrSeed(tenantId, s.claims.upn || tenantId);
+    // Catalog names this tenant's domains actually map to (root → its own
+    // catalog; subdomain → its parent's catalog). Passed to unityLinkStatus so
+    // it only fans out schema-list calls for domain-derived catalogs instead of
+    // every catalog in the metastore (avoids a per-load N+1 against Databricks).
+    const domainCatalogs = Array.from(
+      new Set(doc.items.map((d) => (d.parentId ? unityName(d.parentId) : unityName(d.id)))),
+    );
     const [purview, counts, unity] = await Promise.all([
-      purviewStatus(), workspaceCounts(tenantId), unityLinkStatus(),
+      purviewStatus(), workspaceCounts(tenantId), unityLinkStatus(domainCatalogs),
     ]);
     const purviewNames = new Set(
       purview.configured ? purview.domains.map((d) => (d.name || '').toLowerCase()) : [],
@@ -376,28 +382,11 @@ export async function PATCH(req: NextRequest) {
       newParentId = body.parentId === null || String(body.parentId).trim() === ''
         ? undefined : String(body.parentId).trim();
       if (newParentId !== domain.parentId) {
-        if (newParentId === id) {
-          return NextResponse.json({ ok: false, error: 'A domain cannot be its own parent.' }, { status: 400 });
-        }
-        if (newParentId) {
-          const parent = doc.items.find((d) => d.id === newParentId);
-          if (!parent) {
-            return NextResponse.json({ ok: false, error: `Target parent '${newParentId}' not found.` }, { status: 400 });
-          }
-          if (parent.parentId) {
-            return NextResponse.json(
-              { ok: false, error: 'Cannot nest under a subdomain — domains are at most two levels (domain → subdomain).' },
-              { status: 400 },
-            );
-          }
-          // Moving a domain that itself has subdomains under another domain would
-          // create a third level. Reject (move its subdomains out first).
-          if (doc.items.some((d) => d.parentId === id)) {
-            return NextResponse.json(
-              { ok: false, error: 'Move this domain’s subdomains out first - a subdomain can’t have its own subdomains.' },
-              { status: 400 },
-            );
-          }
+        // Shared two-level hierarchy invariants (self-parent, missing target,
+        // cycle, two-level cap) — identical to PATCH /api/governance/domains.
+        const moveErr = validateDomainMove(doc.items, id, newParentId);
+        if (moveErr) {
+          return NextResponse.json({ ok: false, error: moveErr.message }, { status: moveErr.status });
         }
         moved = true;
       }

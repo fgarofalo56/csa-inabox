@@ -261,8 +261,14 @@ export interface UnityLinkStatus {
  * Read which UC catalogs/schemas exist so the Domains UI can show a per-domain
  * "Unity Catalog linked" badge. Never throws — an unconfigured workspace or a
  * 403 returns `configured:false` + an honest hint.
+ *
+ * @param domainCatalogNames When provided, schema-list fan-out is restricted to
+ *   the catalogs the tenant's domains actually map to (root → its catalog;
+ *   subdomain → its parent's catalog). This avoids an N+1 schema-list call
+ *   against the metastore for EVERY catalog on every Domains-page load. When
+ *   omitted, schemas are listed for all catalogs (legacy/full scan).
  */
-export async function unityLinkStatus(): Promise<UnityLinkStatus> {
+export async function unityLinkStatus(domainCatalogNames?: string[]): Promise<UnityLinkStatus> {
   if (!unityConfigured()) {
     return {
       configured: false,
@@ -275,10 +281,17 @@ export async function unityLinkStatus(): Promise<UnityLinkStatus> {
     const catalogs = await listUcCatalogs();
     const names = catalogs.map((c) => (c.name || '').toLowerCase()).filter(Boolean);
     const schemasByCatalog: Record<string, string[]> = {};
-    // Only fetch schemas for the catalogs that look domain-derived to keep this
-    // cheap; the UI matches subdomains against their parent catalog's schemas.
+    // Only fetch schemas for catalogs the caller's domains actually map to (when
+    // an allow-list is supplied) — the UI matches subdomains against their parent
+    // catalog's schemas, so listing schemas for unrelated catalogs is wasted
+    // round-trips against the Databricks metastore. With no allow-list, fall back
+    // to the full scan.
+    const allow = domainCatalogNames
+      ? new Set(domainCatalogNames.map((n) => (n || '').toLowerCase()).filter(Boolean))
+      : undefined;
+    const toInspect = allow ? names.filter((n) => allow.has(n)) : names;
     await Promise.all(
-      names.map(async (cat) => {
+      toInspect.map(async (cat) => {
         try {
           const schemas = await listUcSchemas(cat);
           schemasByCatalog[cat] = schemas
