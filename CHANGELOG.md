@@ -25,6 +25,40 @@ This file is maintained automatically by
 [Conventional Commits](https://www.conventionalcommits.org/). See
 [RELEASE.md](RELEASE.md) for the release process.
 
+## [0.37.0](https://github.com/fgarofalo56/csa-inabox/compare/csa-inabox-v0.36.0...csa-inabox-v0.37.0) (2026-06-11)
+
+
+### Features
+
+* **csa-loom:** Azure DevOps pipeline task for Loom deploys (audit-t91) ([#1177](https://github.com/fgarofalo56/csa-inabox/issues/1177)) ([de83280](https://github.com/fgarofalo56/csa-inabox/commit/de83280fa182e9a8f4ab2aca24f5a608fb237eff))
+* **csa-loom:** bind Azure Maps account to env + prefill geo surfaces (audit-t94) ([#1178](https://github.com/fgarofalo56/csa-inabox/issues/1178)) ([2543cad](https://github.com/fgarofalo56/csa-inabox/commit/2543cad4b26746ffb1ef271e1afa5068ee910cfc))
+* **csa-loom:** BYO wizard + bicepparam generator (existing&lt;Svc&gt;{Name,Rg,Sub} for every service) (audit-t93) ([#1182](https://github.com/fgarofalo56/csa-inabox/issues/1182)) ([6c0bd8e](https://github.com/fgarofalo56/csa-inabox/commit/6c0bd8edbc665d782a81798e0f74a42d8d265a71))
+* **csa-loom:** deepen Purview auto-classification + scan trigger (audit-t104) ([#1189](https://github.com/fgarofalo56/csa-inabox/issues/1189)) ([0c3b2b7](https://github.com/fgarofalo56/csa-inabox/commit/0c3b2b737951b1f4ff1bedb94e8ffbe954f7aad3))
+* **csa-loom:** DLP restrict-access for ADLS Gen2 paths + Synapse SQL schemas (audit-t99) ([#1185](https://github.com/fgarofalo56/csa-inabox/issues/1185)) ([f7e1fb9](https://github.com/fgarofalo56/csa-inabox/commit/f7e1fb9ee424917351e77f8ed75d5cb6f0e1d9f3))
+* **csa-loom:** DSPM-for-AI posture report (audit-t100) ([#1187](https://github.com/fgarofalo56/csa-inabox/issues/1187)) ([940b324](https://github.com/fgarofalo56/csa-inabox/commit/940b3249733b2c78785cec2584cd46b428d5439e))
+* **csa-loom:** GitHub Enterprise Cloud (ghe.com) Git integration (audit-t89) ([#1174](https://github.com/fgarofalo56/csa-inabox/issues/1174)) ([4d8c922](https://github.com/fgarofalo56/csa-inabox/commit/4d8c922d39e07f9bed6f68c0a007c94bc2fd3ca4))
+* **csa-loom:** guided dataset location/format builder (audit-T96) ([#1179](https://github.com/fgarofalo56/csa-inabox/issues/1179)) ([c27ed60](https://github.com/fgarofalo56/csa-inabox/commit/c27ed60160ede01af8fecac8e2862fca749852b3))
+* **csa-loom:** honest VNet data gateway tenant gate in Network UI (audit-t98) ([#1183](https://github.com/fgarofalo56/csa-inabox/issues/1183)) ([acf2c96](https://github.com/fgarofalo56/csa-inabox/commit/acf2c963ff839e10088841470c9a36e73a090d2e))
+* **csa-loom:** IRM-for-Lakehouse insider-risk indicators dashboard (audit-t101) ([#1186](https://github.com/fgarofalo56/csa-inabox/issues/1186)) ([7e421bb](https://github.com/fgarofalo56/csa-inabox/commit/7e421bb542571131b5e827f9cf1712f4200e72fb))
+* **csa-loom:** item editors pick classifications from the tenant taxonomy (audit-t103) ([#1188](https://github.com/fgarofalo56/csa-inabox/issues/1188)) ([f2dbf21](https://github.com/fgarofalo56/csa-inabox/commit/f2dbf2175f4a2235f8fdaa4a9e1f4d60aa347934))
+* **csa-loom:** MCP copy-job + dataflow author/run tools (audit-t92) ([#1173](https://github.com/fgarofalo56/csa-inabox/issues/1173)) ([0ce6525](https://github.com/fgarofalo56/csa-inabox/commit/0ce6525bd3e6bfcf29dabf21016fcfe5ddaa68a8))
+* **csa-loom:** ongoing CDC for PostgreSQL + Cosmos + Snowflake ADF copy runtime (audit-t105) ([#1190](https://github.com/fgarofalo56/csa-inabox/issues/1190)) ([8fb91d6](https://github.com/fgarofalo56/csa-inabox/commit/8fb91d612f7a8cfc255347d7a11cbd66032c956e))
+* **csa-loom:** publish loom CLI npm package wrapping the Loom REST API (audit-t90) ([#1176](https://github.com/fgarofalo56/csa-inabox/issues/1176)) ([0cd39ab](https://github.com/fgarofalo56/csa-inabox/commit/0cd39ab7aa6def3725b66b55be7fbd1c188930ed))
+* **csa-loom:** shared admin-zone Purview SHIR + auto-scale-up on trigger (audit-t97) ([#1181](https://github.com/fgarofalo56/csa-inabox/issues/1181)) ([31599d1](https://github.com/fgarofalo56/csa-inabox/commit/31599d11bc3ca87172ec42494a912140b68e287c))
+
+
+### Bug Fixes
+
+* **csa-loom:** enforce warehouse + ADX access-policy grants (audit-t102) ([#1184](https://github.com/fgarofalo56/csa-inabox/issues/1184)) ([cb12c17](https://github.com/fgarofalo56/csa-inabox/commit/cb12c17067e83a71bea0439658ce830870933a53))
+* **csa-loom:** parenthesize ??/|| mix in IRM SpinButton onChange handlers ([#1191](https://github.com/fgarofalo56/csa-inabox/issues/1191)) ([2af8550](https://github.com/fgarofalo56/csa-inabox/commit/2af855011a207478f34154e5408a4bcbe4036378))
+* **csa-loom:** use valid DatabasePlugConnected20Regular icon in SQL migration wizard ([#1171](https://github.com/fgarofalo56/csa-inabox/issues/1171)) ([39dd8c4](https://github.com/fgarofalo56/csa-inabox/commit/39dd8c440cf518fcb0c9aa8548ba9f658c6f9ceb))
+* **csa-loom:** wire Gremlin Cosmos account into Console env + add private DNS zone (audit-t95) ([#1180](https://github.com/fgarofalo56/csa-inabox/issues/1180)) ([4d20bdb](https://github.com/fgarofalo56/csa-inabox/commit/4d20bdb038572f1f8ca129d6389cac9a6cf3137c))
+
+
+### Documentation
+
+* **loom-skills:** Azure-native client-pattern skills bundle for AI coding agents (audit-t88) ([#1175](https://github.com/fgarofalo56/csa-inabox/issues/1175)) ([55d8b3e](https://github.com/fgarofalo56/csa-inabox/commit/55d8b3e1b66e81c5dc72c8d31de21b43a3bc79b5))
+
 ## [0.36.0](https://github.com/fgarofalo56/csa-inabox/compare/csa-inabox-v0.35.0...csa-inabox-v0.36.0) (2026-06-11)
 
 
