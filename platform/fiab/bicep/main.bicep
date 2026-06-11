@@ -180,8 +180,11 @@ param cosmosGraphVectorEnabled bool = true
 @description('Deploy the MAF (Microsoft Agent Framework, Gov AOAI-direct) orchestration-tier Container App (loom-copilot-maf). Set true in the GCC-High / IL5 params. The admin-plane gates activation on boundary∈{GCC-High,IL5} + containerPlatform==containerApps + deployAppsEnabled, so it is a safe no-op on the AKS path (the Console copilot-orchestrator then uses its documented Gov AOAI-direct fallback). Requires the loom-copilot-maf image pushed to ACR first.')
 param copilotMafEnabled bool = false
 
-@description('Deploy the browser-driven Setup Orchestrator Container App (loom-setup-orchestrator) so the Setup Wizard\'s Deploy runs the real az deployment sub create. Off by default — flip on once the loom-setup-orchestrator image is in ACR (Container Apps boundaries + deployAppsEnabled). When enabled, the Setup Orchestrator identity (the Console UAMI) is granted Contributor on the Admin Plane subscription AND each multi-sub spoke subscription so it can deploy across subscriptions.')
+@description('Deploy the browser-driven Setup Orchestrator Container App (loom-setup-orchestrator) so the Setup Wizard\'s Deploy submits the real subscription-scoped ARM deployment (templateLink to main.json). Off by default — flip on once the loom-setup-orchestrator image is in ACR + the template is published (Container Apps boundaries + deployAppsEnabled). When enabled, the Setup Orchestrator identity (the Console UAMI) is granted Contributor on the Admin Plane subscription AND each multi-sub spoke subscription so it can deploy across subscriptions.')
 param setupOrchestratorEnabled bool = false
+
+@description('templateLink URI to the compiled main.json the Setup Orchestrator submits (publish via `az bicep build -f platform/fiab/bicep/main.bicep`). Threaded to the orchestrator as LOOM_SETUP_TEMPLATE_URI. Empty = the orchestrator honestly fails the Deploy with the publish remediation rather than faking success.')
+param setupTemplateUri string = ''
 
 @description('Enable the headless CI Bearer-token path on the Loom deployment-pipeline routes so an Azure DevOps / GitHub Actions agent can drive deploys + management via the CSA Loom DevOps task (Fabric "fabric-devops-pipelines" parity). Off by default — Console-session callers always work; this only gates the token path, which fails closed when off. When true the Console gets LOOM_PIPELINE_CI_ENABLED=true plus the shared LOOM_INTERNAL_TOKEN as the default Bearer secret. Cloud-agnostic: the ADO task talks only to the tenant own Loom URL + Entra, never api.fabric.microsoft.com.')
 param loomPipelineCiEnabled bool = false
@@ -509,6 +512,7 @@ module adminPlane 'modules/admin-plane/main.bicep' = {
     adxEnabled: adxEnabled
     copilotMafEnabled: copilotMafEnabled
     setupOrchestratorEnabled: setupOrchestratorEnabled
+    setupTemplateUri: setupTemplateUri
     loomPipelineCiEnabled: loomPipelineCiEnabled
     existingAiSearchService: existingAiSearchService
     existingAiSearchRg: existingAiSearchRg

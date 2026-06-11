@@ -2,9 +2,10 @@
 //
 // The browser-driven Setup Wizard's "Deploy" step POSTs the captured deployment
 // config to this internal service (LOOM_SETUP_ORCHESTRATOR_URL on the console),
-// which runs the real `az deployment sub create -f platform/fiab/bicep/main.bicep`
-// for single- AND multi-subscription Data Landing Zone rollouts under its own
-// identity — then reports progress the wizard polls via /api/setup/deploy-status.
+// which submits a real **subscription-scoped ARM deployment** of main.bicep
+// (compiled to a main.json templateLink, LOOM_SETUP_TEMPLATE_URI) for single- AND
+// multi-subscription Data Landing Zone rollouts under its own identity — then
+// reports progress the wizard polls via /api/setup/deploy-status.
 //
 // Modeled on mcp-catalog-app.bicep / copilot/maf.bicep: a UserAssigned-identity
 // Container App with INTERNAL ingress only (reachable from the console over the
@@ -30,7 +31,7 @@ param location string
 @description('Container Apps managed-environment (CAE) resource id.')
 param environmentId string
 
-@description('UserAssigned identity resource id assigned to the app (runs az deployment sub create + pulls the image). This identity must hold Contributor on every target subscription — see setup-orchestrator-rbac.bicep.')
+@description('UserAssigned identity resource id assigned to the app (submits the subscription-scoped ARM deployment + pulls the image). This identity must hold Contributor on every target subscription — see setup-orchestrator-rbac.bicep.')
 param uamiId string
 
 @description('UserAssigned identity client id (AZURE_CLIENT_ID inside the container).')
@@ -51,6 +52,9 @@ param internalToken string = ''
 
 @description('ARM management endpoint for the active cloud (https://management.azure.com | https://management.usgovcloudapi.net).')
 param armEndpoint string
+
+@description('templateLink URI to the compiled main.json the orchestrator submits (publish via `az bicep build -f platform/fiab/bicep/main.bicep`). Empty = orchestrator honestly fails the deploy with the publish remediation rather than faking success.')
+param setupTemplateUri string = ''
 
 @description('Application Insights connection string for telemetry. Empty disables.')
 param appInsightsConnectionString string = ''
@@ -102,6 +106,7 @@ resource app 'Microsoft.App/containerApps@2024-03-01' = {
               { name: 'LOOM_ARM_ENDPOINT', value: armEndpoint }
               { name: 'PORT', value: string(targetPort) }
             ],
+            empty(setupTemplateUri) ? [] : [ { name: 'LOOM_SETUP_TEMPLATE_URI', value: setupTemplateUri } ],
             hasToken ? [ { name: 'LOOM_INTERNAL_TOKEN', secretRef: 'internal-token' } ] : [],
             empty(appInsightsConnectionString) ? [] : [
               { name: 'APPLICATIONINSIGHTS_CONNECTION_STRING', value: appInsightsConnectionString }

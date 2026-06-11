@@ -6,27 +6,28 @@ export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
 
 /**
- * POST /api/setup/deploy — Setup Orchestrator gate.
+ * POST /api/setup/deploy — Setup Wizard "Deploy" step.
  *
- * The Setup Wizard's "Deploy" step requires a real Setup Orchestrator
- * service (FastAPI in setup-orchestrator/) that kicks off `azd deploy`
- * and tracks progress in Cosmos. That service is NOT deployed in the
- * current Loom environment — per .claude/rules/no-vaporware.md this
- * route returns 503 with the exact remediation rather than a fake
- * deploymentId that animates a stub progress UI.
+ * Validates the captured config (most importantly a real **subscriptionId**
+ * and region for `az deployment sub create`) then tries three tiers in order:
  *
- * Before reaching the orchestrator gate the route VALIDATES the wizard
- * captured the fields a `az deployment sub create` actually needs — most
- * importantly the **subscriptionId**. The old wizard never collected one,
- * so the deploy POSTed an incomplete config and failed opaquely. We now
- * return 400 with a precise list of what's missing instead.
+ *   1. **Setup Orchestrator** — when LOOM_SETUP_ORCHESTRATOR_URL is wired
+ *      (setup-orchestrator.bicep deployed), POST the config to the internal
+ *      orchestrator, which submits a real subscription-scoped ARM deployment
+ *      under its managed identity and returns a deployment_id to poll via
+ *      /api/setup/deploy-status. The signed-in user's oid is forwarded as
+ *      `x-loom-caller-oid` for the orchestrator's elevation path.
+ *   2. **GitHub workflow dispatch** — when LOOM_GITHUB_ACTIONS_TOKEN is set,
+ *      dispatch the boundary's deploy workflow (which runs the real deploy in
+ *      CI) and return the run to stream.
+ *   3. **Honest copy-paste gate (503)** — neither backend wired: return the
+ *      exact `az deployment sub create` command pre-filled with the selected
+ *      subscription(s), region, and boundary. The UI renders a Fluent
+ *      MessageBar. No fake deploymentId, no simulated progress
+ *      (per .claude/rules/no-vaporware.md).
  *
- * Until the Orchestrator service ships:
- *   - The Bicep parameters captured in the wizard are echoed back, and the
- *     remediation `az deployment sub create` command is templated with the
- *     **selected subscription id and region** so the user can copy-paste
- *     and run it directly.
- *   - The UI renders an honest Fluent MessageBar pointing at those commands.
+ * The orchestrator Container App is off by default (setupOrchestratorEnabled);
+ * until its image + template are published the deploy uses tiers 2/3.
  */
 
 interface SetupConfig {
@@ -127,19 +128,27 @@ export async function POST(req: NextRequest) {
       const headers: Record<string, string> = { 'content-type': 'application/json' };
       const internalToken = (process.env.LOOM_INTERNAL_TOKEN || '').trim();
       if (internalToken) headers.authorization = `Bearer ${internalToken}`;
-      const orchRes = await fetch(`${orchUrl}/deploy`, {
+      // The orchestrator's JIT/elevation path keys off the signed-in user's
+      // object id — forward it as the header it reads (x-loom-caller-oid).
+      if (session.claims?.oid) headers['x-loom-caller-oid'] = session.claims.oid;
+      // The orchestrator FastAPI serves POST /api/setup/deploy (see
+      // apps/fiab-setup-orchestrator/src/loom_setup_orchestrator/main.py).
+      const orchRes = await fetch(`${orchUrl}/api/setup/deploy`, {
         method: 'POST',
         headers,
         body: JSON.stringify({ ...body, region }),
       });
       const oj: any = await orchRes.json().catch(() => ({}));
-      if (orchRes.ok && (oj.deploymentId || oj.id)) {
+      // The orchestrator's DeployResponse is snake_case (deployment_id / stream_url).
+      const deploymentId = oj.deployment_id || oj.deploymentId || oj.id;
+      if (orchRes.ok && deploymentId) {
         return NextResponse.json(
           {
             ok: true,
             deploymentMode: 'orchestrator',
-            deploymentId: oj.deploymentId || oj.id,
-            statusUrl: `/api/setup/deploy-status?id=${encodeURIComponent(oj.deploymentId || oj.id)}`,
+            deploymentId,
+            streamUrl: oj.stream_url || oj.streamUrl,
+            statusUrl: `/api/setup/deploy-status?id=${encodeURIComponent(deploymentId)}`,
             message: 'Deployment accepted by the Setup Orchestrator.',
           },
           { status: 202 },

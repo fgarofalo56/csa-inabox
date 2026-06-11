@@ -222,8 +222,11 @@ param appImageTags object = {
   setupOrchestrator: 'v0.1'
 }
 
-@description('Deploy the browser-driven Setup Orchestrator Container App (loom-setup-orchestrator) so the Setup Wizard\'s Deploy runs the real az deployment sub create. Container Apps only (Commercial / GCC); on AKS boundaries deploy it via the cluster GitOps path. Requires the loom-setup-orchestrator image pushed to ACR + deployAppsEnabled. Off by default — flip on once the image exists. The Setup Orchestrator UAMI (the Console UAMI) is granted Contributor per target subscription by main.bicep\'s setup-orchestrator-rbac module.')
+@description('Deploy the browser-driven Setup Orchestrator Container App (loom-setup-orchestrator) so the Setup Wizard\'s Deploy submits the real subscription-scoped ARM deployment (templateLink to main.json). Container Apps only (Commercial / GCC); on AKS boundaries deploy it via the cluster GitOps path. Requires the loom-setup-orchestrator image pushed to ACR + deployAppsEnabled. Off by default — flip on once the image + template are published. The Setup Orchestrator UAMI (the Console UAMI) is granted Contributor per target subscription by main.bicep\'s setup-orchestrator-rbac module.')
 param setupOrchestratorEnabled bool = false
+
+@description('templateLink URI to the compiled main.json the Setup Orchestrator submits (publish via `az bicep build -f platform/fiab/bicep/main.bicep`). Empty = the orchestrator honestly fails the Deploy with the publish remediation rather than faking success.')
+param setupTemplateUri string = ''
 
 @description('Deploy the MAF (Gov AOAI-direct) orchestration-tier Container App (loom-copilot-maf). Only honored in GCC-High / IL5 with containerPlatform==containerApps + deployAppsEnabled. Requires the loom-copilot-maf image pushed to ACR first.')
 param copilotMafEnabled bool = false
@@ -2922,12 +2925,13 @@ module copilotMaf '../copilot/maf.bicep' = if (copilotMafActive) {
   }
 }
 
-// Setup Orchestrator Container App (loom-setup-orchestrator) — runs the real
-// `az deployment sub create` for the Setup Wizard's Deploy step. Runs AS the
-// Console UAMI (identity.outputs.uamiConsole*), which main.bicep grants
-// Contributor per target subscription via setup-orchestrator-rbac. Internal
-// ingress; the Console reaches it at LOOM_SETUP_ORCHESTRATOR_URL with the shared
-// internal token. Azure-native (Container Apps + ARM) — no Fabric dependency.
+// Setup Orchestrator Container App (loom-setup-orchestrator) — submits the real
+// subscription-scoped ARM deployment of main.json (templateLink) for the Setup
+// Wizard's Deploy step. Runs AS the Console UAMI (identity.outputs.uamiConsole*),
+// which main.bicep grants Contributor per target subscription via
+// setup-orchestrator-rbac. Internal ingress; the Console reaches it at
+// LOOM_SETUP_ORCHESTRATOR_URL with the shared internal token. Azure-native
+// (Container Apps + ARM) — no Fabric dependency.
 module setupOrchestrator 'setup-orchestrator.bicep' = if (setupOrchestratorActive) {
   name: 'setup-orchestrator'
   params: {
@@ -2940,6 +2944,7 @@ module setupOrchestrator 'setup-orchestrator.bicep' = if (setupOrchestratorActiv
     targetPort: 8080
     internalToken: loomInternalToken
     armEndpoint: boundary == 'GCC-High' || boundary == 'IL5' ? 'https://management.usgovcloudapi.net' : 'https://management.azure.com'
+    setupTemplateUri: setupTemplateUri
     appInsightsConnectionString: monitoring.outputs.appInsightsConnectionString
     complianceTags: complianceTags
   }

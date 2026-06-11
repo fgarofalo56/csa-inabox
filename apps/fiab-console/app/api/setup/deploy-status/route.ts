@@ -1,7 +1,7 @@
 /**
  * GET /api/setup/deploy-status?id=<deploymentId>
  *   Streams the live status of a deployment the Setup Orchestrator is running.
- *   Proxies the orchestrator's `GET {LOOM_SETUP_ORCHESTRATOR_URL}/deploy/{id}`
+ *   Proxies the orchestrator's `GET {LOOM_SETUP_ORCHESTRATOR_URL}/api/setup/{id}`
  *   over the CAE-internal ingress (Bearer LOOM_INTERNAL_TOKEN), so the wizard's
  *   "done" step can poll real progress without exposing the orchestrator.
  *
@@ -46,14 +46,16 @@ export async function GET(req: NextRequest) {
     const headers: Record<string, string> = { accept: 'application/json' };
     const internalToken = (process.env.LOOM_INTERNAL_TOKEN || '').trim();
     if (internalToken) headers.authorization = `Bearer ${internalToken}`;
-    const res = await fetch(`${orchUrl}/deploy/${encodeURIComponent(id)}`, { headers, cache: 'no-store' });
+    const res = await fetch(`${orchUrl}/api/setup/${encodeURIComponent(id)}`, { headers, cache: 'no-store' });
     const j: any = await res.json().catch(() => ({}));
     if (!res.ok) {
       return NextResponse.json(
-        { ok: false, error: j.error || j.message || `Orchestrator status ${res.status}` },
+        { ok: false, error: j.error || j.message || j.detail || `Orchestrator status ${res.status}` },
         { status: 502 },
       );
     }
+    // The orchestrator's DeploymentStatus is snake_case (deployment_id,
+    // current_stage, started_at, …); pass it through verbatim alongside ok.
     return NextResponse.json({ ok: true, deploymentId: id, ...j });
   } catch (e: any) {
     return NextResponse.json(

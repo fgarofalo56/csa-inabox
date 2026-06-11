@@ -88,17 +88,35 @@ maps boundary → param file from this verified set (no invented names).
 | a | **Single-sub auto-uses the Admin Plane subscription** (no dropdown); multi-sub multi-selects spoke subs | ✅ | `GET /api/setup/config` (LOOM_SUBSCRIPTION_ID/LOOM_LOCATION), `GET /api/setup/subscriptions` |
 | b | **Full per-boundary region list**, live ARM `subscriptions/{id}/locations` for the chosen sub with authoritative static fallback (Commercial/GCC=Public, GCC-High/IL5=US Gov, DoD=US DoD) | ✅ | `GET /api/setup/regions`, `lib/azure/azure-regions.ts` |
 | c | **Visual architecture diagram** of the planned deployment (reuses the T132 React Flow canvas), shown alongside the generated Bicep on Review | ✅ | `lib/components/setup/deployment-diagram.tsx` |
-| d | **Deploy-by-default Setup Orchestrator** runs the real multi-sub `az deployment sub create`; honest fallbacks to GitHub dispatch then copy-paste `az` | ✅ (image-in-ACR gate, like every Loom app) | `setup-orchestrator.bicep`, `POST /api/setup/deploy`, `GET /api/setup/deploy-status` |
+| d | **Setup Orchestrator** submits the real subscription-scoped ARM deployment (single- AND multi-sub) under its managed identity; honest fallbacks to GitHub dispatch then copy-paste `az` | ✅ orchestrator path is real (ARM SDK `begin_create_or_update_at_subscription_scope`); ⚠️ opt-in (image+template gate, off by default) | `orchestrator.py` `run_bicep_deploy`, `setup-orchestrator.bicep`, `POST /api/setup/deploy`, `GET /api/setup/deploy-status` |
 | d2 | **Multi-sub deploy auth** — orchestrator identity (Console UAMI) gets Contributor at the hub sub AND each spoke sub | ✅ | `setup-orchestrator-rbac.bicep` (subscription-scoped, looped per `dlzSubscriptionIds`) |
 | e | **Wire existing DLZ(s)** discovered via Azure Resource Graph, wired into the Admin Plane with no re-deploy | ✅ | `GET /api/setup/existing-dlzs`, `POST /api/setup/wire-existing` |
 
-Honest gate: the orchestrator Container App defaults OFF (`setupOrchestratorEnabled`)
-until the `loom-setup-orchestrator` image is in ACR — same gate every Loom app
-carries. On AKS boundaries it deploys via the cluster GitOps path. The deploy BFF
-tier order is orchestrator → GitHub workflow-dispatch → copy-paste `az`, so the
-wizard's Deploy is always functional, never a dead button (no-vaporware.md). The
-review diagram only renders Azure-native services the deployment actually
-provisions; works with `LOOM_DEFAULT_FABRIC_WORKSPACE` unset (no-fabric-dependency.md).
+How the orchestrator tier actually deploys (no simulation): the Console BFF
+`POST /api/setup/deploy` forwards the captured config (+ the signed-in user's
+`x-loom-caller-oid`) to the orchestrator's `POST /api/setup/deploy`; the
+orchestrator's `run_bicep_deploy` builds a `ResourceManagementClient` under its
+UAMI and calls **`deployments.begin_create_or_update_at_subscription_scope`**
+against the hub subscription with a templateLink to the published `main.json`
+(`LOOM_SETUP_TEMPLATE_URI`) and the captured boundary / deploymentMode /
+capacitySku / `dlzDomainNames` / `dlzSubscriptionIds`. It polls the LRO and only
+reports `succeeded` when ARM returns `provisioningState == Succeeded` — any other
+terminal state, or a missing template URI, fails honestly (no fake progress, per
+no-vaporware.md). The wizard polls real status via `GET /api/setup/deploy-status`
+→ orchestrator `GET /api/setup/{id}`.
+
+**Scope note — NOT deploy-by-default yet.** The orchestrator Container App
+defaults OFF (`setupOrchestratorEnabled=false`) and `LOOM_SETUP_TEMPLATE_URI`
+defaults empty — the standard Loom image-in-ACR gate plus a published-template
+gate. Until the `loom-setup-orchestrator` image is in ACR and the `main.json`
+templateLink is published, the deploy BFF uses the GitHub workflow-dispatch tier
+(when `LOOM_GITHUB_ACTIONS_TOKEN` is set) or the copy-paste `az deployment sub
+create` tier — so the wizard's Deploy is always functional, never a dead button.
+Flip `setupOrchestratorEnabled=true` + set `setupTemplateUri` once both artifacts
+ship to make the orchestrator the default path. On AKS boundaries the orchestrator
+deploys via the cluster GitOps path. The review diagram only renders Azure-native
+services the deployment actually provisions; works with
+`LOOM_DEFAULT_FABRIC_WORKSPACE` unset (no-fabric-dependency.md).
 
 Verification (audit-t142): `tsc --noEmit` clean on every touched file;
 `az bicep build` clean for both new modules; wiring into `main.bicep` adds zero
