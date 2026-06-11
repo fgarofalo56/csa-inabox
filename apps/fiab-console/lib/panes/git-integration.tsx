@@ -24,7 +24,7 @@
 import { useCallback, useEffect, useState } from 'react';
 import {
   Field, Input, Dropdown, Option, Button, Spinner, Badge, Divider,
-  Radio, RadioGroup, Caption1, Body1Strong,
+  Radio, RadioGroup, Caption1, Body1Strong, Tooltip,
   MessageBar, MessageBarBody, MessageBarTitle,
   makeStyles, tokens,
 } from '@fluentui/react-components';
@@ -39,7 +39,7 @@ type AuthMethod = 'pat' | 'spn';
 interface BindingView {
   provider: Provider;
   adoOrg?: string; adoProject?: string; repoId?: string; repoName?: string;
-  githubOwner?: string; githubRepo?: string;
+  githubOwner?: string; githubRepo?: string; githubHost?: string;
   branch: string; folder: string;
   authMethod: AuthMethod;
   status: 'connected' | 'error';
@@ -62,12 +62,46 @@ const useStyles = makeStyles({
   meta: { fontSize: '12px', color: tokens.colorNeutralForeground3 },
   mono: { fontFamily: tokens.fontFamilyMonospace, fontSize: '12px' },
   spacer: { flex: 1 },
+  grow: { flex: 1 },
+  loading: {
+    display: 'flex', alignItems: 'center', justifyContent: 'center',
+    minHeight: '120px', padding: '14px', borderRadius: tokens.borderRadiusMedium,
+    border: `1px solid ${tokens.colorNeutralStroke2}`, backgroundColor: tokens.colorNeutralBackground1,
+  },
+  commit: {
+    display: 'inline-flex', alignItems: 'center', gap: '2px',
+    fontFamily: tokens.fontFamilyMonospace, fontSize: '12px',
+  },
 });
 
 async function getJson(url: string, init?: RequestInit) {
   const res = await fetch(url, { cache: 'no-store', ...init });
   const json = await res.json().catch(() => ({}));
   return { res, json };
+}
+
+/** Short commit SHA with a one-click copy affordance (Fabric/portal pattern). */
+function CommitSha({ sha }: { sha: string }) {
+  const styles = useStyles();
+  const [copied, setCopied] = useState(false);
+  const copy = useCallback(() => {
+    void navigator.clipboard?.writeText(sha).then(() => {
+      setCopied(true);
+      setTimeout(() => setCopied(false), 1500);
+    }).catch(() => {});
+  }, [sha]);
+  return (
+    <span className={styles.commit}>
+      <span className={styles.mono}>{sha.slice(0, 8)}</span>
+      <Tooltip content={copied ? 'Copied' : 'Copy full commit SHA'} relationship="label">
+        <Button
+          appearance="subtle" size="small"
+          icon={copied ? <Checkmark16Filled /> : <Copy16Regular />}
+          onClick={copy} aria-label="Copy commit SHA"
+        />
+      </Tooltip>
+    </span>
+  );
 }
 
 export function GitIntegrationPane({ workspaceId, embeddedMode: _embeddedMode }: { workspaceId: string; embeddedMode?: boolean }) {
@@ -88,7 +122,7 @@ export function GitIntegrationPane({ workspaceId, embeddedMode: _embeddedMode }:
 
   useEffect(() => { void load(); }, [load]);
 
-  if (loading) return <Spinner size="tiny" label="Loading Git integration…" />;
+  if (loading) return <div className={styles.loading}><Spinner size="small" label="Loading Git integration…" /></div>;
 
   return (
     <div className={styles.root}>
@@ -112,6 +146,9 @@ function ConnectedView({ workspaceId, binding, onChanged }: { workspaceId: strin
   const [remoteHead, setRemoteHead] = useState<{ commitId: string; commitDate?: string; authorName?: string } | null>(null);
   const [remoteError, setRemoteError] = useState<string | null>(null);
 
+  const ghHostLabel = binding.githubHost
+    ? (binding.githubHost.includes('.') ? binding.githubHost.replace(/^https?:\/\//, '').replace(/\/.*$/, '') : `${binding.githubHost}.ghe.com`)
+    : 'github.com';
   const repoLabel = binding.provider === 'ado'
     ? `${binding.adoOrg}/${binding.adoProject}/${binding.repoName || binding.repoId}`
     : `${binding.githubOwner}/${binding.githubRepo}`;
@@ -151,6 +188,9 @@ function ConnectedView({ workspaceId, binding, onChanged }: { workspaceId: strin
         <Badge appearance="outline" color={binding.provider === 'ado' ? 'informative' : 'subtle'}>
           {binding.provider === 'ado' ? 'Azure DevOps' : 'GitHub'}
         </Badge>
+        {binding.provider === 'github' && (
+          <Badge appearance="outline" color={binding.githubHost ? 'brand' : 'subtle'}>{ghHostLabel}</Badge>
+        )}
         {binding.status === 'connected'
           ? <Badge appearance="tint" color="success" icon={<Checkmark16Filled />}>Connected</Badge>
           : <Badge appearance="tint" color="danger">Error</Badge>}
@@ -165,7 +205,7 @@ function ConnectedView({ workspaceId, binding, onChanged }: { workspaceId: strin
         <Caption1 className={styles.meta}>
           Last sync {new Date(binding.lastSyncAt).toLocaleString()} ·{' '}
           {binding.lastSyncCommitId && (
-            <>commit <span className={styles.mono}>{binding.lastSyncCommitId.slice(0, 8)}</span> · </>)}
+            <>commit <CommitSha sha={binding.lastSyncCommitId} /> · </>)}
           {binding.lastSyncFileCount ?? 0} file(s)
         </Caption1>
       ) : (
@@ -183,7 +223,7 @@ function ConnectedView({ workspaceId, binding, onChanged }: { workspaceId: strin
         {remoteError && <MessageBar intent="warning"><MessageBarBody>{remoteError}</MessageBarBody></MessageBar>}
         {!remoteError && remoteHead && (
           <Caption1 className={styles.meta}>
-            <span className={styles.mono}>{remoteHead.commitId.slice(0, 8)}</span>
+            <CommitSha sha={remoteHead.commitId} />
             {remoteHead.authorName ? ` · ${remoteHead.authorName}` : ''}
             {remoteHead.commitDate ? ` · ${new Date(remoteHead.commitDate).toLocaleString()}` : ''}
           </Caption1>
@@ -233,9 +273,13 @@ function ConnectWizard({ workspaceId, caps, onConnected }: { workspaceId: string
   const [repoName, setRepoName] = useState('');
 
   // GitHub.
+  const [ghHostKind, setGhHostKind] = useState<'github.com' | 'ghe'>('github.com');
+  const [ghSubdomain, setGhSubdomain] = useState('');
   const [ghOwner, setGhOwner] = useState('');
   const [ghRepos, setGhRepos] = useState<{ fullName: string; owner: string; name: string; defaultBranch?: string }[]>([]);
   const [ghRepo, setGhRepo] = useState('');
+  // ghe.com: dedicated single-repo entry (no org-level browse, per Fabric).
+  const [ghRepoInput, setGhRepoInput] = useState('');
 
   // Shared.
   const [branches, setBranches] = useState<string[]>([]);
@@ -290,15 +334,18 @@ function ConnectWizard({ workspaceId, caps, onConnected }: { workspaceId: string
 
   const loadGhBranches = useCallback(async (owner: string, repo: string) => {
     setBusyAction('gh-branches'); setError(null);
-    const { res, json } = await meta(`?action=gh-branches&owner=${encodeURIComponent(owner)}&repo=${encodeURIComponent(repo)}`);
+    const host = ghHostKind === 'ghe' ? `&host=${encodeURIComponent(ghSubdomain.trim())}` : '';
+    const { res, json } = await meta(`?action=gh-branches&owner=${encodeURIComponent(owner)}&repo=${encodeURIComponent(repo)}${host}`);
     if (!res.ok || !json.ok) setError(json?.error || `HTTP ${res.status}`);
     else setBranches((json.branches || []).map((b: any) => b.name));
     setBusyAction(null);
-  }, [meta]);
+  }, [meta, ghHostKind, ghSubdomain]);
 
   const canConnect = pat.trim() && branch.trim() && (
     provider === 'ado' ? org.trim() && project.trim() && repoId.trim()
-      : ghOwner.trim() && ghRepo.trim()
+      : provider === 'github' && ghHostKind === 'ghe'
+        ? ghSubdomain.trim() && ghOwner.trim() && ghRepoInput.trim()
+        : ghOwner.trim() && ghRepo.trim()
   );
 
   const connect = useCallback(async () => {
@@ -309,8 +356,14 @@ function ConnectWizard({ workspaceId, caps, onConnected }: { workspaceId: string
       payload.authMethod = authMethod;
       if (authMethod === 'spn') { payload.spnTenantId = spnTenantId.trim(); payload.spnClientId = spnClientId.trim(); }
     } else {
-      const found = ghRepos.find((r) => r.fullName === ghRepo);
-      payload.githubOwner = found?.owner || ghOwner.trim(); payload.githubRepo = found?.name || ghRepo;
+      if (ghHostKind === 'ghe') {
+        payload.githubHost = ghSubdomain.trim();
+        payload.githubOwner = ghOwner.trim();
+        payload.githubRepo = ghRepoInput.trim();
+      } else {
+        const found = ghRepos.find((r) => r.fullName === ghRepo);
+        payload.githubOwner = found?.owner || ghOwner.trim(); payload.githubRepo = found?.name || ghRepo;
+      }
     }
     const { res, json } = await getJson(`/api/admin/workspaces/${workspaceId}/git`, {
       method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(payload),
@@ -321,7 +374,7 @@ function ConnectWizard({ workspaceId, caps, onConnected }: { workspaceId: string
     await getJson(`/api/admin/workspaces/${workspaceId}/git/sync`, { method: 'POST' }).catch(() => {});
     setConnecting(false);
     onConnected();
-  }, [provider, branch, folder, pat, org, project, repoId, repoName, authMethod, spnTenantId, spnClientId, ghRepos, ghRepo, ghOwner, workspaceId, onConnected]);
+  }, [provider, branch, folder, pat, org, project, repoId, repoName, authMethod, spnTenantId, spnClientId, ghRepos, ghRepo, ghOwner, ghHostKind, ghSubdomain, ghRepoInput, workspaceId, onConnected]);
 
   return (
     <div className={styles.card}>
@@ -330,9 +383,10 @@ function ConnectWizard({ workspaceId, caps, onConnected }: { workspaceId: string
         <Body1Strong>Connect to source control</Body1Strong>
       </div>
       <Caption1 className={styles.meta}>
-        Bind this workspace to an Azure DevOps or GitHub repository. &quot;Sync now&quot; commits every
-        item as <span className={styles.mono}>*.item.json</span> to the chosen branch. The token is
-        stored in Key Vault, never in the workspace.
+        Bind this workspace to an Azure DevOps or GitHub repository (GitHub.com or GitHub
+        Enterprise Cloud with data residency, <span className={styles.mono}>ghe.com</span>).
+        &quot;Sync now&quot; commits every item as <span className={styles.mono}>*.item.json</span> to
+        the chosen branch. The token is stored in Key Vault, never in the workspace.
       </Caption1>
 
       <Field label="Provider">
@@ -361,10 +415,10 @@ function ConnectWizard({ workspaceId, caps, onConnected }: { workspaceId: string
           </Field>
           {authMethod === 'spn' && (
             <div className={styles.row}>
-              <Field label="SPN tenant id" style={{ flex: 1 }}>
+              <Field label="SPN tenant id" className={styles.grow}>
                 <Input value={spnTenantId} onChange={(_, d) => setSpnTenantId(d.value)} placeholder="00000000-0000-…" />
               </Field>
-              <Field label="SPN client id" style={{ flex: 1 }}>
+              <Field label="SPN client id" className={styles.grow}>
                 <Input value={spnClientId} onChange={(_, d) => setSpnClientId(d.value)} placeholder="00000000-0000-…" />
               </Field>
             </div>
@@ -374,7 +428,7 @@ function ConnectWizard({ workspaceId, caps, onConnected }: { workspaceId: string
           </Field>
           <Field label="Organization" required>
             <div className={styles.row}>
-              <Input value={org} onChange={(_, d) => setOrg(d.value)} placeholder="myorg" style={{ flex: 1 }} />
+              <Input value={org} onChange={(_, d) => setOrg(d.value)} placeholder="myorg" className={styles.grow} />
               <Button onClick={loadAdoProjects} disabled={busyAction === 'projects' || !org.trim() || !pat.trim()}>
                 {busyAction === 'projects' ? 'Loading…' : 'Load projects'}
               </Button>
@@ -401,28 +455,60 @@ function ConnectWizard({ workspaceId, caps, onConnected }: { workspaceId: string
         </>
       ) : (
         <>
-          <Field label="Personal Access Token (repo scope)" required>
+          <Field label="GitHub host" hint="GitHub Enterprise Cloud with data residency uses the same GitHub provider over an api.<subdomain>.ghe.com base.">
+            <RadioGroup value={ghHostKind} layout="horizontal"
+              onChange={(_, d) => { setGhHostKind(d.value as 'github.com' | 'ghe'); setGhRepos([]); setGhRepo(''); setBranches([]); setError(null); }}>
+              <Radio value="github.com" label="GitHub.com" />
+              <Radio value="ghe" label="GitHub Enterprise Cloud (ghe.com)" />
+            </RadioGroup>
+          </Field>
+          <Field label="Personal Access Token (repo scope)" required
+            hint={ghHostKind === 'ghe' ? 'Mint the token on your <subdomain>.ghe.com tenant — ghe.com PATs are per-host.' : undefined}>
             <Input type="password" value={pat} onChange={(_, d) => setPat(d.value)} placeholder="paste token" />
           </Field>
-          <Field label="Owner / organization (blank = your repos)">
-            <div className={styles.row}>
-              <Input value={ghOwner} onChange={(_, d) => setGhOwner(d.value)} placeholder="my-org (optional)" style={{ flex: 1 }} />
-              <Button onClick={loadGhRepos} disabled={busyAction === 'gh-repos' || !pat.trim()}>
-                {busyAction === 'gh-repos' ? 'Loading…' : 'Load repos'}
-              </Button>
-            </div>
-          </Field>
-          <Field label="Repository" required>
-            <Dropdown value={ghRepo} selectedOptions={ghRepo ? [ghRepo] : []} placeholder="Select a repository"
-              disabled={ghRepos.length === 0}
-              onOptionSelect={(_, d) => {
-                const r = ghRepos.find((x) => x.fullName === d.optionValue);
-                setGhRepo(r?.fullName || ''); setBranch(r?.defaultBranch || 'main'); setBranches([]);
-                if (r) void loadGhBranches(r.owner, r.name);
-              }}>
-              {ghRepos.map((r) => <Option key={r.fullName} value={r.fullName}>{r.fullName}</Option>)}
-            </Dropdown>
-          </Field>
+
+          {ghHostKind === 'ghe' ? (
+            <>
+              <Field label="Enterprise subdomain" required hint="The <subdomain> in <subdomain>.ghe.com — e.g. octocorp.">
+                <Input value={ghSubdomain} onChange={(_, d) => { setGhSubdomain(d.value); setBranches([]); }} placeholder="octocorp"
+                  contentAfter={<Caption1 className={styles.meta}>.ghe.com</Caption1>} />
+              </Field>
+              <Field label="Owner / organization" required hint="ghe.com connects to one dedicated repository (no org-level browse).">
+                <Input value={ghOwner} onChange={(_, d) => { setGhOwner(d.value); setBranches([]); }} placeholder="my-org" />
+              </Field>
+              <Field label="Repository" required>
+                <div className={styles.row}>
+                  <Input value={ghRepoInput} onChange={(_, d) => { setGhRepoInput(d.value); setBranches([]); }} placeholder="my-repo" className={styles.grow} />
+                  <Button onClick={() => void loadGhBranches(ghOwner.trim(), ghRepoInput.trim())}
+                    disabled={busyAction === 'gh-branches' || !pat.trim() || !ghSubdomain.trim() || !ghOwner.trim() || !ghRepoInput.trim()}>
+                    {busyAction === 'gh-branches' ? 'Loading…' : 'Load branches'}
+                  </Button>
+                </div>
+              </Field>
+            </>
+          ) : (
+            <>
+              <Field label="Owner / organization (blank = your repos)">
+                <div className={styles.row}>
+                  <Input value={ghOwner} onChange={(_, d) => setGhOwner(d.value)} placeholder="my-org (optional)" className={styles.grow} />
+                  <Button onClick={loadGhRepos} disabled={busyAction === 'gh-repos' || !pat.trim()}>
+                    {busyAction === 'gh-repos' ? 'Loading…' : 'Load repos'}
+                  </Button>
+                </div>
+              </Field>
+              <Field label="Repository" required>
+                <Dropdown value={ghRepo} selectedOptions={ghRepo ? [ghRepo] : []} placeholder="Select a repository"
+                  disabled={ghRepos.length === 0}
+                  onOptionSelect={(_, d) => {
+                    const r = ghRepos.find((x) => x.fullName === d.optionValue);
+                    setGhRepo(r?.fullName || ''); setBranch(r?.defaultBranch || 'main'); setBranches([]);
+                    if (r) void loadGhBranches(r.owner, r.name);
+                  }}>
+                  {ghRepos.map((r) => <Option key={r.fullName} value={r.fullName}>{r.fullName}</Option>)}
+                </Dropdown>
+              </Field>
+            </>
+          )}
         </>
       )}
 

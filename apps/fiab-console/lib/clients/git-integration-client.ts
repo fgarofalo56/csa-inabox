@@ -313,6 +313,40 @@ export function githubAvailable(): boolean {
   return githubCloudGate() === null;
 }
 
+/**
+ * Resolve the GitHub REST API base for a host value. This treats GitHub
+ * Enterprise Cloud **with data residency** (`<subdomain>.ghe.com`) as part of
+ * the SAME GitHub provider — not a new one — exactly as Fabric does. All Git
+ * Integration REST calls use identical paths on both hosts.
+ *
+ *   - empty / `github.com` / `api.github.com`  → `https://api.github.com`
+ *   - a ghe.com tenant (any of: bare subdomain `octocorp`, `octocorp.ghe.com`,
+ *     `https://octocorp.ghe.com`, or a full repo URL
+ *     `https://octocorp.ghe.com/org/repo`) → `https://api.<subdomain>.ghe.com`
+ *
+ * The ghe.com data-residency REST host is `api.<subdomain>.ghe.com` (NOT the
+ * GitHub-Enterprise-Server `/<host>/api/v3` shape) — confirmed via the GitHub
+ * Enterprise Cloud data-residency quickstart. Scheme/path are stripped
+ * defensively so a pasted URL or bare subdomain both resolve correctly.
+ */
+export function githubApiBase(host?: string): string {
+  const raw = (host || '').trim();
+  if (!raw) return GH_BASE;
+  // Strip scheme and everything from the first slash (path), lowercase the host.
+  const hostOnly = raw.replace(/^https?:\/\//i, '').replace(/\/.*$/, '').toLowerCase();
+  if (!hostOnly || hostOnly === 'github.com' || hostOnly === 'api.github.com') return GH_BASE;
+  // Derive the data-residency subdomain.
+  let sub: string;
+  if (hostOnly.endsWith('.ghe.com')) {
+    sub = hostOnly.slice(0, -'.ghe.com'.length).replace(/^api\./, '');
+  } else {
+    sub = hostOnly; // a bare subdomain like "octocorp"
+  }
+  sub = sub.replace(/[^a-z0-9-]/g, '');
+  if (!sub) return GH_BASE;
+  return `https://api.${sub}.ghe.com`;
+}
+
 async function ghFetch(url: string, pat: string, init?: RequestInit): Promise<Response> {
   const gate = githubCloudGate();
   if (gate) throw gate;
@@ -358,13 +392,14 @@ export interface GhBranch { name: string; sha: string; }
 
 /**
  * List repositories the token can write. When `ownerOrOrg` is blank we list the
- * authenticated user's repos; otherwise the org's repos.
+ * authenticated user's repos; otherwise the org's repos. `base` selects the host
+ * (github.com by default, or `api.<sub>.ghe.com` for an Enterprise Cloud tenant).
  */
-export async function githubListRepos(ownerOrOrg: string, pat: string): Promise<GhRepo[]> {
+export async function githubListRepos(ownerOrOrg: string, pat: string, base: string = GH_BASE): Promise<GhRepo[]> {
   const owner = (ownerOrOrg || '').trim();
   const url = owner
-    ? `${GH_BASE}/orgs/${encodeURIComponent(owner)}/repos?per_page=100&sort=full_name`
-    : `${GH_BASE}/user/repos?per_page=100&sort=full_name&affiliation=owner,collaborator,organization_member`;
+    ? `${base}/orgs/${encodeURIComponent(owner)}/repos?per_page=100&sort=full_name`
+    : `${base}/user/repos?per_page=100&sort=full_name&affiliation=owner,collaborator,organization_member`;
   const res = await ghFetch(url, pat);
   const j = await ghJson<any[]>(res, 'list repositories');
   return (j || []).map((r) => ({
@@ -376,16 +411,16 @@ export async function githubListRepos(ownerOrOrg: string, pat: string): Promise<
   }));
 }
 
-export async function githubListBranches(owner: string, repo: string, pat: string): Promise<GhBranch[]> {
-  const res = await ghFetch(`${GH_BASE}/repos/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}/branches?per_page=100`, pat);
+export async function githubListBranches(owner: string, repo: string, pat: string, base: string = GH_BASE): Promise<GhBranch[]> {
+  const res = await ghFetch(`${base}/repos/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}/branches?per_page=100`, pat);
   const j = await ghJson<any[]>(res, 'list branches');
   return (j || []).map((b) => ({ name: b.name, sha: b.commit?.sha }));
 }
 
 /** Branch tip commit SHA, or null when the branch does not exist yet. */
-export async function githubGetBranchSha(owner: string, repo: string, branch: string, pat: string): Promise<string | null> {
+export async function githubGetBranchSha(owner: string, repo: string, branch: string, pat: string, base: string = GH_BASE): Promise<string | null> {
   const res = await ghFetch(
-    `${GH_BASE}/repos/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}/git/ref/${encodeURIComponent('heads/' + branch)}`,
+    `${base}/repos/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}/git/ref/${encodeURIComponent('heads/' + branch)}`,
     pat,
   );
   if (res.status === 404) return null;
@@ -400,6 +435,8 @@ export interface GhCommitArgs {
   files: SyncFile[];
   message: string;
   pat: string;
+  /** GitHub REST base — github.com by default, or `api.<sub>.ghe.com`. */
+  base?: string;
 }
 
 /**
@@ -410,11 +447,12 @@ export interface GhCommitArgs {
  */
 export async function githubBatchCommit(args: GhCommitArgs): Promise<GitCommitStatus> {
   const { owner, repo, branch, pat } = args;
-  const parentSha = await githubGetBranchSha(owner, repo, branch, pat);
+  const base = args.base || GH_BASE;
+  const parentSha = await githubGetBranchSha(owner, repo, branch, pat, base);
 
   let baseTree: string | undefined;
   if (parentSha) {
-    const commitRes = await ghFetch(`${GH_BASE}/repos/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}/git/commits/${parentSha}`, pat);
+    const commitRes = await ghFetch(`${base}/repos/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}/git/commits/${parentSha}`, pat);
     const commit = await ghJson<{ tree?: { sha: string } }>(commitRes, 'read parent commit');
     baseTree = commit.tree?.sha;
   }
@@ -423,7 +461,7 @@ export async function githubBatchCommit(args: GhCommitArgs): Promise<GitCommitSt
   const treeItems: { path: string; mode: '100644'; type: 'blob'; sha: string }[] = [];
   for (const f of args.files) {
     const blobRes = await ghFetch(
-      `${GH_BASE}/repos/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}/git/blobs`,
+      `${base}/repos/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}/git/blobs`,
       pat,
       { method: 'POST', body: JSON.stringify({ content: f.content, encoding: 'utf-8' }) },
     );
@@ -433,7 +471,7 @@ export async function githubBatchCommit(args: GhCommitArgs): Promise<GitCommitSt
 
   // Create tree.
   const treeRes = await ghFetch(
-    `${GH_BASE}/repos/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}/git/trees`,
+    `${base}/repos/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}/git/trees`,
     pat,
     { method: 'POST', body: JSON.stringify(baseTree ? { base_tree: baseTree, tree: treeItems } : { tree: treeItems }) },
   );
@@ -441,7 +479,7 @@ export async function githubBatchCommit(args: GhCommitArgs): Promise<GitCommitSt
 
   // Create commit.
   const commitRes = await ghFetch(
-    `${GH_BASE}/repos/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}/git/commits`,
+    `${base}/repos/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}/git/commits`,
     pat,
     { method: 'POST', body: JSON.stringify({ message: args.message, tree: tree.sha, parents: parentSha ? [parentSha] : [] }) },
   );
@@ -450,14 +488,14 @@ export async function githubBatchCommit(args: GhCommitArgs): Promise<GitCommitSt
   // Advance / create the ref.
   if (parentSha) {
     const patchRes = await ghFetch(
-      `${GH_BASE}/repos/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}/git/refs/${encodeURIComponent('heads/' + branch)}`,
+      `${base}/repos/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}/git/refs/${encodeURIComponent('heads/' + branch)}`,
       pat,
       { method: 'PATCH', body: JSON.stringify({ sha: commit.sha, force: false }) },
     );
     await ghJson(patchRes, 'advance branch ref');
   } else {
     const postRes = await ghFetch(
-      `${GH_BASE}/repos/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}/git/refs`,
+      `${base}/repos/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}/git/refs`,
       pat,
       { method: 'POST', body: JSON.stringify({ ref: `refs/heads/${branch}`, sha: commit.sha }) },
     );
@@ -467,9 +505,9 @@ export async function githubBatchCommit(args: GhCommitArgs): Promise<GitCommitSt
   return { commitId: commit.sha, comment: args.message };
 }
 
-export async function githubLastCommit(owner: string, repo: string, branch: string, pat: string): Promise<GitCommitStatus | null> {
+export async function githubLastCommit(owner: string, repo: string, branch: string, pat: string, base: string = GH_BASE): Promise<GitCommitStatus | null> {
   const res = await ghFetch(
-    `${GH_BASE}/repos/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}/commits/${encodeURIComponent(branch)}`,
+    `${base}/repos/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}/commits/${encodeURIComponent(branch)}`,
     pat,
   );
   if (res.status === 404 || res.status === 409) return null; // 409 = empty repo

@@ -12,7 +12,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import { getSession } from '@/lib/auth/session';
 import { workspacesContainer } from '@/lib/azure/cosmos-client';
 import { loadBinding, resolveSecret, toView } from '@/lib/azure/git-binding-store';
-import { adoLastCommit, githubLastCommit, githubCloudGate, GitIntegrationError } from '@/lib/clients/git-integration-client';
+import { adoLastCommit, githubLastCommit, githubCloudGate, githubApiBase, GitIntegrationError } from '@/lib/clients/git-integration-client';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -58,7 +58,7 @@ export async function GET(_req: NextRequest, props: { params: Promise<{ id: stri
     } else if (binding.provider === 'github' && binding.githubOwner && binding.githubRepo) {
       const gate = githubCloudGate();
       if (gate) { remoteError = gate.message; }
-      else remoteHead = await githubLastCommit(binding.githubOwner, binding.githubRepo, binding.branch, pat);
+      else remoteHead = await githubLastCommit(binding.githubOwner, binding.githubRepo, binding.branch, pat, githubApiBase(binding.githubHost));
     }
   } catch (e: any) {
     remoteError = e instanceof GitIntegrationError ? e.message : (e?.message || 'could not read remote head');
