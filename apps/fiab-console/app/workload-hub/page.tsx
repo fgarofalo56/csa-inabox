@@ -103,9 +103,21 @@ const useStyles = makeStyles({
   ctaCard: {
     display: 'flex', alignItems: 'center',
     gap: tokens.spacingHorizontalXL, flexWrap: 'wrap',
+    marginTop: tokens.spacingVerticalL,
   },
   ctaText: { flex: 1, minWidth: '240px' },
+  ctaSub: { color: tokens.colorNeutralForeground2, marginTop: tokens.spacingVerticalXS },
   spinnerWrap: { padding: tokens.spacingVerticalM },
+  // Name-cell list rendering: static layout extracted; chip tint + icon colour
+  // stay inline (data-driven), per item-tile.tsx:194-200.
+  nameCell: { display: 'inline-flex', alignItems: 'center', gap: '10px', minWidth: 0 },
+  nameChip: {
+    display: 'inline-flex', alignItems: 'center', justifyContent: 'center',
+    width: '28px', height: '28px', borderRadius: tokens.borderRadiusMedium, flexShrink: 0,
+  },
+  nameChipIcon: { width: '18px', height: '18px' },
+  muted2: { color: tokens.colorNeutralForeground2 },
+  muted3: { color: tokens.colorNeutralForeground3 },
 });
 
 /**
@@ -217,16 +229,13 @@ export default function WorkloadHubPage() {
       render: (w) => {
         const v = itemVisual(workloadType(w));
         return (
-          <span style={{ display: 'inline-flex', alignItems: 'center', gap: 10, minWidth: 0 }}>
+          <span className={s.nameCell}>
             <span
-              style={{
-                display: 'inline-flex', alignItems: 'center', justifyContent: 'center',
-                width: 28, height: 28, borderRadius: tokens.borderRadiusMedium,
-                backgroundColor: `${v.color}1f`, flexShrink: 0,
-              }}
+              className={s.nameChip}
+              style={{ backgroundColor: `${v.color}1f` }}
               aria-hidden
             >
-              <v.icon style={{ width: 18, height: 18, color: v.color }} />
+              <v.icon className={s.nameChipIcon} style={{ color: v.color }} />
             </span>
             <Text weight="semibold">{w.name}</Text>
             {w.category === 'CSA' && (
@@ -240,7 +249,7 @@ export default function WorkloadHubPage() {
       key: 'description', label: 'Description', sortable: true, filterable: true, width: 420,
       getValue: (w) => w.description ?? '',
       render: (w) => (
-        <Text style={{ color: tokens.colorNeutralForeground2 }}>{w.description || '—'}</Text>
+        <Text className={s.muted2}>{w.description || '—'}</Text>
       ),
     },
     {
@@ -248,13 +257,13 @@ export default function WorkloadHubPage() {
       getValue: (w) => (w.featureSlugs || []).length,
       render: (w) => <Text>{(w.featureSlugs || []).length}</Text>,
     },
-  ], []);
+  ], [s]);
 
   function collection(list: Workload[], total: number, label: string) {
     if (view === 'tile') {
       if (list.length === 0) {
         return (
-          <Text style={{ color: tokens.colorNeutralForeground3 }}>
+          <Text className={s.muted3}>
             {total === 0 ? `No ${label} available.` : `No ${label} match "${q}".`}
           </Text>
         );
@@ -343,10 +352,10 @@ export default function WorkloadHubPage() {
               </MessageBarBody>
             </MessageBar>
           )}
-          <div className={s.ctaCard} style={{ marginTop: tokens.spacingVerticalL }}>
+          <div className={s.ctaCard}>
             <div className={s.ctaText}>
               <Text weight="semibold" block>Browse the full workload catalog</Text>
-              <Text size={200} block style={{ color: tokens.colorNeutralForeground2, marginTop: 4 }}>
+              <Text size={200} block className={s.ctaSub}>
                 Compliance, Geoanalytics, Graph + Vector, and other optional accelerators ship with Loom but
                 stay opt-in until you enable them.
               </Text>
