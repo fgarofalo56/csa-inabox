@@ -202,19 +202,35 @@ const useStyles = makeStyles({
     gap: '2px',
   },
   empty: {
-    paddingTop: '32px',
-    paddingRight: '32px',
-    paddingBottom: '32px',
-    paddingLeft: '32px',
+    paddingTop: tokens.spacingVerticalXXXL,
+    paddingRight: tokens.spacingHorizontalXXL,
+    paddingBottom: tokens.spacingVerticalXXXL,
+    paddingLeft: tokens.spacingHorizontalXXL,
     textAlign: 'center',
     color: tokens.colorNeutralForeground3,
     border: `1px dashed ${tokens.colorNeutralStroke2}`,
     borderRadius: tokens.borderRadiusXLarge,
+    backgroundColor: tokens.colorNeutralBackground2,
     lineHeight: 1.6,
     display: 'flex',
     flexDirection: 'column',
-    gap: '12px',
+    gap: tokens.spacingVerticalM,
     alignItems: 'center',
+  },
+  emptyIcon: {
+    display: 'inline-flex',
+    alignItems: 'center',
+    justifyContent: 'center',
+    width: '56px',
+    height: '56px',
+    borderRadius: tokens.borderRadiusCircular,
+    marginBottom: tokens.spacingVerticalXS,
+  },
+  emptyHint: {
+    color: tokens.colorNeutralForeground3,
+  },
+  dialogHint: {
+    color: tokens.colorNeutralForeground3,
   },
   formCol: { display: 'flex', flexDirection: 'column', gap: '12px' },
 });
@@ -427,7 +443,7 @@ function CreateWorkspaceDialog({ onCreated }: { onCreated?: () => void }) {
                 )}
               </Field>
               {(capacity || domain) && (
-                <Caption1 style={{ color: 'var(--colorNeutralForeground3, #707070)' }}>
+                <Caption1 className={styles.dialogHint}>
                   When you save: Capacity is assigned via the Fabric REST <code>assignToCapacity</code>{' '}
                   (queued until your first PBI-backed artifact creates the underlying Fabric group),
                   and Domain triggers a Purview catalog register + marketplace publish. Both run as
@@ -1201,18 +1217,36 @@ export default function WorkspacesPage() {
       {/* Empty state — no workspaces at all */}
       {!isLoading && !error && data && data.length === 0 && (
         <div className={styles.empty}>
+          {(() => {
+            const v = itemVisual('workspace');
+            return (
+              <span
+                className={styles.emptyIcon}
+                style={{ backgroundColor: `${v.color}1f` }}
+                aria-hidden
+              >
+                <v.icon style={{ width: 28, height: 28, color: v.color }} />
+              </span>
+            );
+          })()}
           <Body1>
             No workspaces yet. Click <b>+ New workspace</b> to create your first one.
           </Body1>
-          <Body1>
+          <Caption1 className={styles.emptyHint}>
             A workspace is a Cosmos-backed container that owns items, permissions, and SCM bindings.
-          </Body1>
+          </Caption1>
+          <CreateWorkspaceDialog
+            onCreated={() => qc.invalidateQueries({ queryKey: ['workspaces', 'withCounts'] })}
+          />
         </div>
       )}
 
       {/* Empty after filtering */}
       {!isLoading && !error && data && data.length > 0 && sorted.length === 0 && (
         <div className={styles.empty}>
+          <span className={styles.emptyIcon} style={{ backgroundColor: tokens.colorNeutralBackground3 }} aria-hidden>
+            <Filter20Regular style={{ width: 26, height: 26, color: tokens.colorNeutralForeground3 }} />
+          </span>
           <Body1>No workspaces match these filters.</Body1>
           <Button appearance="primary" onClick={clearAll}>
             Clear filters
