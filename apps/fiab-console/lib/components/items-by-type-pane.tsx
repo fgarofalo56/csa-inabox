@@ -17,7 +17,7 @@ import {
 import { Add20Regular, Search20Regular } from '@fluentui/react-icons';
 import { NewItemDialog } from '@/lib/components/new-item-dialog';
 import { SignInRequired } from '@/lib/components/sign-in-required';
-import { findItemType } from '@/lib/catalog/fabric-item-types';
+import { findItemType, type WorkloadCategory } from '@/lib/catalog/fabric-item-types';
 
 interface OwnedItem {
   id: string; itemType: string; workspaceId: string;
@@ -70,7 +70,7 @@ const useStyles = makeStyles({
   },
 });
 
-export function ItemsByTypePane({ types, emptyHint }: Props) {
+export function ItemsByTypePane({ types, emptyHint, defaultCategoryForNew }: Props) {
   const styles = useStyles();
   const [items, setItems] = useState<OwnedItem[] | null>(null);
   const [unauth, setUnauth] = useState(false);
@@ -107,7 +107,7 @@ export function ItemsByTypePane({ types, emptyHint }: Props) {
           contentBefore={<Search20Regular />}
           placeholder="Filter items by name or description…"
           value={q} onChange={(_, d) => setQ(d.value)} />
-        <NewItemDialog />
+        <NewItemDialog defaultCategory={defaultCategoryForNew as WorkloadCategory | undefined} />
       </div>
       {items === null && <Spinner label="Loading items…" />}
       {items !== null && items.length === 0 && (
