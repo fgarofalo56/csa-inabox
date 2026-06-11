@@ -246,6 +246,43 @@ const useStyles = makeStyles({
     display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalXS,
   },
   spacer: { flex: 1 },
+  // ---- cost-estimate dialog ----
+  // Bound the report height so a many-domain plan scrolls inside the dialog
+  // instead of pushing the action bar off-screen.
+  costScroll: {
+    maxHeight: '64vh', overflowY: 'auto',
+    paddingRight: tokens.spacingHorizontalXS,
+  },
+  costBody: { display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalM },
+  costDomain: {
+    display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalXS,
+    paddingTop: tokens.spacingVerticalS, paddingBottom: tokens.spacingVerticalS,
+    paddingLeft: tokens.spacingHorizontalM, paddingRight: tokens.spacingHorizontalM,
+    borderRadius: tokens.borderRadiusMedium,
+    border: `1px solid ${tokens.colorNeutralStroke2}`,
+    backgroundColor: tokens.colorNeutralBackground1,
+  },
+  costDomainHead: { display: 'flex', alignItems: 'baseline', gap: tokens.spacingHorizontalS },
+  costDomainTotal: { marginLeft: 'auto', fontWeight: tokens.fontWeightSemibold },
+  costTotalRow: {
+    display: 'flex', alignItems: 'center', gap: tokens.spacingHorizontalS,
+    paddingTop: tokens.spacingVerticalS, paddingBottom: tokens.spacingVerticalS,
+    paddingLeft: tokens.spacingHorizontalM, paddingRight: tokens.spacingHorizontalM,
+    borderRadius: tokens.borderRadiusMedium,
+    backgroundColor: tokens.colorBrandBackground2,
+    border: `1px solid ${tokens.colorBrandStroke2}`,
+  },
+  costGrand: {
+    marginLeft: 'auto',
+    fontSize: tokens.fontSizeBase600, fontWeight: tokens.fontWeightBold,
+    color: tokens.colorBrandForeground1,
+  },
+  costMuted: { color: tokens.colorNeutralForeground3 },
+  costSku: { fontSize: tokens.fontSizeBase200 },
+  costUnit: { fontSize: tokens.fontSizeBase200, color: tokens.colorNeutralForeground3 },
+  costFootnote: { color: tokens.colorNeutralForeground3, fontStyle: 'italic' },
+  costUnest: { display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalXXS },
+  costUnestList: { marginTop: tokens.spacingVerticalXS, marginBottom: 0, paddingLeft: tokens.spacingHorizontalXXL },
 });
 
 const MIME = 'application/x-loom-service';
@@ -808,7 +845,7 @@ function PlannerInner() {
         <DialogSurface style={{ maxWidth: 940, width: '94vw' }}>
           <DialogBody>
             <DialogTitle>Estimated monthly cost — {costSub?.name}</DialogTitle>
-            <DialogContent>
+            <DialogContent className={s.costScroll}>
               {costBusy && <Spinner label="Pricing the plan against the Azure Retail Prices API…" />}
               {costErr && (
                 <MessageBar intent="error"><MessageBarBody>
@@ -816,7 +853,7 @@ function PlannerInner() {
                 </MessageBarBody></MessageBar>
               )}
               {!costBusy && !costErr && costSummary && (
-                <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+                <div className={s.costBody}>
                   <MessageBar intent="info"><MessageBarBody>
                     <MessageBarTitle>Best-effort list-price estimate</MessageBarTitle>
                     Computed from the public <strong>Azure Retail Prices API</strong> for{' '}
@@ -836,15 +873,15 @@ function PlannerInner() {
                   )}
 
                   {costSummary.byDomain.map((dom) => (
-                    <div key={dom.domainId} style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
-                      <div style={{ display: 'flex', alignItems: 'baseline', gap: 8 }}>
+                    <div key={dom.domainId} className={s.costDomain}>
+                      <div className={s.costDomainHead}>
                         <Subtitle2>{dom.name}</Subtitle2>
-                        <span style={{ marginLeft: 'auto', fontWeight: 600 }}>
+                        <span className={s.costDomainTotal}>
                           {fmtMoney(dom.monthly, costSummary.currency)}/mo
                         </span>
                       </div>
                       {dom.rows.length === 0 ? (
-                        <Caption1 style={{ color: tokens.colorNeutralForeground3 }}>No priced services in this domain.</Caption1>
+                        <Caption1 className={s.costMuted}>No priced services in this domain.</Caption1>
                       ) : (
                         <Table size="small" aria-label={`Cost breakdown for ${dom.name}`}>
                           <TableHeader>
@@ -870,7 +907,7 @@ function PlannerInner() {
                                 </TableCell>
                                 <TableCell>
                                   <Tooltip content={r.assumed} relationship="description">
-                                    <span style={{ fontSize: 12 }}>
+                                    <span className={s.costSku}>
                                       {r.sku}{' '}
                                       {r.pricingDetailsUrl && (
                                         <Link href={serviceDetailsUrl(r)} target="_blank" rel="noreferrer" aria-label={`${r.label} pricing details`}>
@@ -881,7 +918,7 @@ function PlannerInner() {
                                   </Tooltip>
                                 </TableCell>
                                 <TableCell>
-                                  <span style={{ fontSize: 12, color: tokens.colorNeutralForeground3 }}>
+                                  <span className={s.costUnit}>
                                     {fmtMoney(r.unitPrice, costSummary.currency)} / {r.unit}
                                   </span>
                                 </TableCell>
@@ -895,27 +932,27 @@ function PlannerInner() {
                   ))}
 
                   <Divider />
-                  <div style={{ display: 'flex', alignItems: 'baseline', gap: 8 }}>
+                  <div className={s.costTotalRow}>
                     <Subtitle2>Estimated total</Subtitle2>
-                    <span style={{ marginLeft: 'auto', fontSize: 18, fontWeight: 700 }}>
+                    <span className={s.costGrand}>
                       {fmtMoney(costSummary.total, costSummary.currency)}/mo
                     </span>
                   </div>
 
                   {costSummary.unestimated.length > 0 && (
-                    <div>
-                      <Caption1 style={{ fontWeight: 600 }}>Not estimated ({costSummary.unestimated.length})</Caption1>
-                      <ul style={{ margin: '4px 0 0', paddingLeft: 18 }}>
+                    <div className={s.costUnest}>
+                      <Caption1 style={{ fontWeight: tokens.fontWeightSemibold }}>Not estimated ({costSummary.unestimated.length})</Caption1>
+                      <ul className={s.costUnestList}>
                         {costSummary.unestimated.map((u) => (
                           <li key={u.key}>
-                            <Caption1>{u.label} — <span style={{ color: tokens.colorNeutralForeground3 }}>{u.reason}</span></Caption1>
+                            <Caption1>{u.label} — <span className={s.costMuted}>{u.reason}</span></Caption1>
                           </li>
                         ))}
                       </ul>
                     </div>
                   )}
 
-                  <Caption1 style={{ color: tokens.colorNeutralForeground3, fontStyle: 'italic' }}>
+                  <Caption1 className={s.costFootnote}>
                     Excludes reserved-instance / savings-plan discounts, regional differential, egress, storage,
                     and SLA surcharges. For an authoritative quote use the Azure Pricing Calculator (the deep-link
                     opens the tool — it does not auto-fill; download the breakdown below to transcribe or attach it).
