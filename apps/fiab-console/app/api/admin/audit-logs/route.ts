@@ -31,6 +31,7 @@ import {
 import {
   queryLoomAppEvents,
   MonitorNotConfiguredError,
+  MonitorError,
 } from '@/lib/azure/monitor-client';
 
 export const runtime = 'nodejs';
@@ -51,6 +52,19 @@ interface AuditRow {
   category?: string;
   message?: string;
   [k: string]: unknown;
+}
+
+// Detect an azure-identity credential-acquisition failure (the MI/dev chain
+// could not produce a token) so the route can render an honest gate instead of
+// leaking a raw `ChainedTokenCredential authentication failed …` stack trace.
+function isCredentialError(err: unknown): boolean {
+  const e = err as { name?: string; message?: string } | null;
+  const name = e?.name || '';
+  if (name === 'AggregateAuthenticationError' || name === 'CredentialUnavailableError' || name === 'AuthenticationError') {
+    return true;
+  }
+  const msg = e?.message || '';
+  return /ChainedTokenCredential|DefaultAzureCredential|ManagedIdentityCredential|EnvironmentCredential|authentication failed/i.test(msg);
 }
 
 export async function GET(req: NextRequest) {
@@ -153,6 +167,8 @@ export async function GET(req: NextRequest) {
         gates.purview = `Purview audit unavailable: ${err.message}`;
       } else if (err instanceof PurviewError && (err.status === 401 || err.status === 403)) {
         gates.purview = `Purview audit: the Loom UAMI lacks a Data Map role (${err.status}). Grant "Data Reader" on the root collection via scripts/csa-loom/grant-purview-datamap-role.sh.`;
+      } else if (isCredentialError(err)) {
+        gates.purview = 'Purview audit: the Console managed identity could not authenticate. Confirm LOOM_UAMI_CLIENT_ID is set in admin-plane/main.bicep apps[] env and the user-assigned identity is attached to the Console Container App.';
       } else {
         gates.purview = `Purview audit: ${(err as Error)?.message || String(err)}`;
       }
@@ -165,6 +181,16 @@ export async function GET(req: NextRequest) {
       const err = laRes.reason;
       if (err instanceof MonitorNotConfiguredError) {
         gates.la = 'Log Analytics unavailable: set LOOM_LOG_ANALYTICS_WORKSPACE_ID in admin-plane/main.bicep apps[] env.';
+      } else if (err instanceof MonitorError && (err.status === 401 || err.status === 403)) {
+        // Token acquired but the workspace rejected the read — the UAMI lacks
+        // a read role on the LA workspace. Bootstrap grants Monitoring
+        // Contributor on the Loom RGs (which cascades read to the LAW).
+        gates.la = `Log Analytics: the Loom Console managed identity lacks read on the workspace (${err.status}). Grant "Monitoring Reader" (or "Log Analytics Reader") on LOOM_LOG_ANALYTICS_WORKSPACE_ID — the csa-loom-post-deploy-bootstrap workflow grants Monitoring Contributor on the Loom resource groups.`;
+      } else if (isCredentialError(err)) {
+        // azure-identity ChainedTokenCredential/DefaultAzureCredential failed
+        // to acquire a token at all — the Console managed identity could not
+        // authenticate. Never leak the raw credential stack trace.
+        gates.la = 'Log Analytics: the Console managed identity could not authenticate. Confirm LOOM_UAMI_CLIENT_ID is set in admin-plane/main.bicep apps[] env and the user-assigned identity is attached to the Console Container App.';
       } else {
         gates.la = `Log Analytics: ${(err as Error)?.message || String(err)}`;
       }

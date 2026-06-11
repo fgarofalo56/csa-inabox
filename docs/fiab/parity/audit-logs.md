@@ -73,6 +73,18 @@ Zero ❌, zero stub banners.
   `consolePurviewAuditNote` output in `catalog.bicep` documents this grant.
 - `LOOM_LOG_ANALYTICS_WORKSPACE_ID` unset → `MonitorNotConfiguredError` → yellow
   MessageBar. Env var is already wired in `admin-plane/main.bicep`.
+- LA token acquired but workspace rejects the read (401/403) → `MonitorError` →
+  MessageBar naming "Monitoring Reader / Log Analytics Reader" on the workspace.
+  The `csa-loom-post-deploy-bootstrap.yml` workflow already grants the Console
+  UAMI **Monitoring Contributor** on the Loom RGs (which cascades workspace
+  read), so a fresh deploy clears this gate automatically.
+- LA credential could not authenticate (`AggregateAuthenticationError` /
+  `CredentialUnavailableError`, or a message naming the azure-identity chain) →
+  honest MessageBar naming `LOOM_UAMI_CLIENT_ID` + the Console UAMI assignment.
+  This is the fix for the live `Log Analytics: ChainedTokenCredential
+  authentication failed …` raw-stack-trace leak — the route now maps it to an
+  actionable gate via `isCredentialError()` instead of echoing the chain.
+  Same sanitization applies to the Purview gate's generic branch.
 
 ## Verification
 

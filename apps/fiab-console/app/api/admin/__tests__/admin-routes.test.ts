@@ -124,9 +124,20 @@ const queryLoomAppEventsMock = vi.fn();
 class FakeMonitorNotConfigured extends Error {
   constructor(public missing: string[]) { super(`Monitor not configured: ${missing.join(', ')}`); }
 }
+class FakeMonitorError extends Error {
+  status: number;
+  body: unknown;
+  constructor(message: string, status: number, body?: unknown) {
+    super(message);
+    this.name = 'MonitorError';
+    this.status = status;
+    this.body = body;
+  }
+}
 vi.mock('@/lib/azure/monitor-client', () => ({
   queryLoomAppEvents: (...args: any[]) => queryLoomAppEventsMock(...args),
   MonitorNotConfiguredError: FakeMonitorNotConfigured,
+  MonitorError: FakeMonitorError,
 }));
 
 // feature-gate — let tests flip the gate result
@@ -356,6 +367,52 @@ describe('/api/admin/audit-logs', () => {
     expect(j.ok).toBe(true);
     expect(j.gates.purview).toMatch(/Purview audit unavailable/);
     expect(j.gates.la).toMatch(/LOOM_LOG_ANALYTICS_WORKSPACE_ID/);
+  });
+
+  it('GET maps a Log Analytics 403 to an honest RBAC gate (not a raw error)', async () => {
+    containers.auditLog._setQuery(() => []);
+    queryAuditLogMock.mockResolvedValue({ events: [], lastPage: true });
+    queryLoomAppEventsMock.mockRejectedValue(new FakeMonitorError('Forbidden', 403));
+    const { GET } = await import('@/app/api/admin/audit-logs/route');
+    const j = await (await GET(req('/api/admin/audit-logs'))).json();
+    expect(j.ok).toBe(true);
+    expect(j.gates.la).toMatch(/Monitoring Reader|Log Analytics Reader/);
+    expect(j.gates.la).toMatch(/csa-loom-post-deploy-bootstrap/);
+  });
+
+  it('GET maps an azure-identity credential failure to an honest gate without leaking the stack trace', async () => {
+    containers.auditLog._setQuery(() => []);
+    queryAuditLogMock.mockResolvedValue({ events: [], lastPage: true });
+    const credErr: any = new Error(
+      'ChainedTokenCredential authentication failed.\n\tEnvironmentCredential: ...\n\tManagedIdentityCredential: ...\n\tAzure CLI: ...',
+    );
+    credErr.name = 'AggregateAuthenticationError';
+    queryLoomAppEventsMock.mockRejectedValue(credErr);
+    const { GET } = await import('@/app/api/admin/audit-logs/route');
+    const j = await (await GET(req('/api/admin/audit-logs'))).json();
+    expect(j.ok).toBe(true);
+    expect(j.gates.la).toMatch(/managed identity could not authenticate/);
+    expect(j.gates.la).toMatch(/LOOM_UAMI_CLIENT_ID/);
+    // The raw credential chain message must NOT leak into the gate.
+    expect(j.gates.la).not.toMatch(/ChainedTokenCredential/);
+    expect(j.gates.la).not.toMatch(/EnvironmentCredential/);
+  });
+
+  it('GET still renders Cosmos rows when Log Analytics auth fails (graceful degrade)', async () => {
+    containers.auditLog._setQuery(() => [
+      { id: 'c1', tenantId: 'tenant-oid', who: 'a@contoso.com', kind: 'item.save', itemId: 'it1', at: '2026-05-10T00:00:00Z' },
+    ]);
+    queryAuditLogMock.mockResolvedValue({ events: [], lastPage: true });
+    const credErr: any = new Error('ChainedTokenCredential authentication failed');
+    credErr.name = 'AggregateAuthenticationError';
+    queryLoomAppEventsMock.mockRejectedValue(credErr);
+    const { GET } = await import('@/app/api/admin/audit-logs/route');
+    const r = await GET(req('/api/admin/audit-logs'));
+    const j = await r.json();
+    expect(r.status).toBe(200);
+    expect(j.rows).toHaveLength(1);
+    expect(j.rows[0].source).toBe('cosmos');
+    expect(j.gates.la).toBeTruthy();
   });
 
   it('GET merges Cosmos + Purview + Log Analytics rows and sorts DESC by time', async () => {
