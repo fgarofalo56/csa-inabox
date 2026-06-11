@@ -36,11 +36,18 @@ export interface SourceField {
    *  - 'select'   single-choice dropdown (uses `options`)
    *  - 'toggle'   boolean switch that reveals the fields whose `showWhen` names it
    *  - 'cert'     Key Vault certificate picker (CA or client cert for mTLS)
+   *  - 'resource-select' cascading dropdown populated from a REAL subscription
+   *    query (GET /api/realtime-hub/options); optionally create-if-missing via
+   *    POST /api/realtime-hub/provision. See {@link ResourceSelectSource}.
    */
-  kind?: 'text' | 'textarea' | 'password' | 'select' | 'toggle' | 'cert';
+  kind?: 'text' | 'textarea' | 'password' | 'select' | 'toggle' | 'cert' | 'resource-select';
   help?: string;
   /** Options for `kind: 'select'`. */
   options?: Array<{ value: string; label: string }>;
+  /** Default value applied when the connector form opens (e.g. '$Default'). */
+  defaultValue?: string;
+  /** Present when `kind === 'resource-select'` — drives the dropdown + create. */
+  source?: ResourceSelectSource;
   /**
    * Conditional visibility: this field renders only when the named toggle field
    * (a `kind: 'toggle'` key) is on. Used by the MQTT mTLS panel so the CA/client
@@ -50,6 +57,40 @@ export interface SourceField {
   /** Group fields under a collapsible/visual section header in the dialog. */
   section?: string;
 }
+
+/**
+ * Binds a `resource-select` field to the /api/realtime-hub/options endpoint and
+ * (optionally) the /api/realtime-hub/provision create-if-missing endpoint. The
+ * dialog forwards the canonical scope props it holds (subscriptionId,
+ * resourceGroup, namespace, eventHubName→eventHub, iotHubName→hubName) as query
+ * params, so a field only declares which it depends on.
+ */
+export interface ResourceSelectSource {
+  /** Which list the options endpoint should return. */
+  optionsKind: 'namespaces' | 'eventhubs' | 'consumerGroups' | 'authRules' | 'iotConsumerGroups';
+  /** For optionsKind:'namespaces' — Event Hubs namespaces vs IoT hubs. */
+  service?: 'eventhub' | 'iothub';
+  /** Prop keys that must be set before the list can load (cascading parents). */
+  dependsOn?: string[];
+  /** Show an inline "+ Create new…" affordance that really provisions + selects. */
+  creatable?: boolean;
+  /** Provision kind posted to /api/realtime-hub/provision for the create path. */
+  createKind?: 'eventhub' | 'consumerGroup' | 'iotConsumerGroup';
+  /**
+   * When true, selecting an option also captures its subscriptionId +
+   * resourceGroup into props (used by the namespace / IoT-hub picker so the
+   * dependent dropdowns know which scope to query).
+   */
+  captureScope?: boolean;
+}
+
+/**
+ * Canonical scope prop keys the connect dialog tracks for source binding even
+ * though some are NOT user-visible fields (captured from a namespace / IoT-hub
+ * selection or pre-filled from the RTI hub Subscribe action). The dialog
+ * preserves these across `pick()` and forwards them as the source `properties`.
+ */
+export const SCOPE_KEYS = ['subscriptionId', 'resourceGroup', 'namespace'] as const;
 
 export interface SourceConnector {
   /** Stable id used in the dialog. */
@@ -74,9 +115,27 @@ export const SOURCE_CONNECTORS: SourceConnector[] = [
     sourceType: 'AzureEventHub',
     description: 'Fully managed real-time data ingestion service.',
     fields: [
-      { key: 'eventHubName', label: 'Event Hub name', required: true, placeholder: 'telemetry' },
-      { key: 'consumerGroupName', label: 'Consumer group', placeholder: '$Default' },
-      { key: 'dataConnectionId', label: 'Connection id', help: 'Existing Fabric cloud connection GUID for the Event Hubs namespace.' },
+      {
+        key: 'namespace', label: 'Event Hubs namespace', required: true, kind: 'resource-select',
+        help: 'Namespaces discovered across your subscription(s) via Azure Resource Graph.',
+        source: { optionsKind: 'namespaces', service: 'eventhub', captureScope: true },
+      },
+      {
+        key: 'eventHubName', label: 'Event hub', required: true, kind: 'resource-select',
+        placeholder: 'telemetry',
+        help: 'Event hubs in the selected namespace. No hubs yet? Create one inline.',
+        source: { optionsKind: 'eventhubs', dependsOn: ['namespace'], creatable: true, createKind: 'eventhub' },
+      },
+      {
+        key: 'consumerGroupName', label: 'Consumer group', kind: 'resource-select', defaultValue: '$Default',
+        help: 'Consumer groups on the selected event hub. Create a dedicated one inline.',
+        source: { optionsKind: 'consumerGroups', dependsOn: ['namespace', 'eventHubName'], creatable: true, createKind: 'consumerGroup' },
+      },
+      {
+        key: 'keyName', label: 'Shared access policy (optional)', kind: 'resource-select',
+        help: 'SAS policy whose key authorizes the connection. Leave blank to use Entra (UAMI Data Receiver) — the secure default.',
+        source: { optionsKind: 'authRules', dependsOn: ['namespace', 'eventHubName'] },
+      },
     ],
   },
   {
@@ -86,8 +145,16 @@ export const SOURCE_CONNECTORS: SourceConnector[] = [
     sourceType: 'AzureIoTHub',
     description: 'Managed service for IoT device data and telemetry.',
     fields: [
-      { key: 'consumerGroupName', label: 'Consumer group', placeholder: '$Default' },
-      { key: 'dataConnectionId', label: 'Connection id', help: 'Existing Fabric cloud connection GUID for the IoT Hub.' },
+      {
+        key: 'iotHubName', label: 'IoT Hub', required: true, kind: 'resource-select',
+        help: 'IoT Hubs discovered across your subscription(s) via Azure Resource Graph.',
+        source: { optionsKind: 'namespaces', service: 'iothub', captureScope: true },
+      },
+      {
+        key: 'consumerGroupName', label: 'Consumer group', kind: 'resource-select', defaultValue: '$Default',
+        help: 'Consumer groups on the hub\'s built-in Event Hubs endpoint. Create a dedicated one inline.',
+        source: { optionsKind: 'iotConsumerGroups', dependsOn: ['iotHubName'], creatable: true, createKind: 'iotConsumerGroup' },
+      },
     ],
   },
   {

@@ -69,6 +69,9 @@ export interface DatabricksWorkspaceSummary {
   name: string;
   /** Hostname (`adb-….azuredatabricks.net`), no scheme — what the UC client uses. */
   workspaceUrl: string;
+  /** Databricks numeric workspace id (`properties.workspaceId`) — required by the
+   *  account-plane metastore-assignment API. May be absent on older ARM payloads. */
+  workspaceNumericId?: string;
   location?: string;
   resourceGroup?: string;
   subscriptionId: string;
@@ -146,6 +149,10 @@ function shape(raw: any, subscriptionId: string): DatabricksWorkspaceSummary | n
     id,
     name: raw?.name || url,
     workspaceUrl: url.replace(/^https?:\/\//, '').replace(/\/$/, ''),
+    workspaceNumericId:
+      raw?.properties?.workspaceId !== undefined && raw?.properties?.workspaceId !== null
+        ? String(raw.properties.workspaceId)
+        : undefined,
     location: raw?.location,
     resourceGroup: rgMatch?.[1],
     subscriptionId,

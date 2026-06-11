@@ -42,7 +42,9 @@ export async function listOrgVisuals(tenantId: string): Promise<OrgVisualDoc[]> 
 
 /**
  * Upload a custom-visual bundle: store the real bytes in Blob, write the Cosmos
- * metadata (enabled=false until explicitly enabled tenant-wide).
+ * metadata (enabled=false until explicitly enabled tenant-wide). Optional
+ * `description` + `iconDataUri` carry parity with Fabric's "Add visual" dialog
+ * and are persisted inline on the metadata doc.
  */
 export async function uploadOrgVisual(
   tenantId: string,
@@ -51,6 +53,7 @@ export async function uploadOrgVisual(
   fileName: string,
   version: string,
   body: Buffer,
+  opts: { description?: string; iconDataUri?: string } = {},
 ): Promise<OrgVisualDoc> {
   const account = orgVisualsAccount();
   const id = randomUUID();
@@ -73,6 +76,8 @@ export async function uploadOrgVisual(
     blobPath,
     size: up.size,
     version,
+    ...(opts.description ? { description: opts.description } : {}),
+    ...(opts.iconDataUri ? { iconDataUri: opts.iconDataUri } : {}),
     enabled: false,
     uploadedAt: now,
     uploadedBy: who,

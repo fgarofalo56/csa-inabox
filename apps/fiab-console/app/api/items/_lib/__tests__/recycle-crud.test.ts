@@ -12,6 +12,8 @@ const h = vi.hoisted(() => ({
   deleteLoomDoc: vi.fn(),
   upsertLoomDoc: vi.fn(),
   deleteGovernanceItem: vi.fn(),
+  reconcileThreadEdgesOnDelete: vi.fn(),
+  restoreThreadEdgesForItem: vi.fn(),
 }));
 
 // ── Cosmos mock: items.query().fetchAll(), item(id,pk).replace()/.delete(),
@@ -46,6 +48,12 @@ vi.mock('@/lib/azure/purview-autoonboard', () => ({ autoOnboardToPurview: vi.fn(
 // ── ADLS soft-delete / restore — the dynamic imports inside item-crud. ──────
 vi.mock('@/lib/azure/adls-client', () => ({
   softDeleteDirectory: h.softDeleteDirectory, unDeleteDirectory: h.unDeleteDirectory,
+}));
+
+// ── Thread-edge lineage reconcile — best-effort hooks fired on delete/restore. ─
+vi.mock('@/lib/thread/thread-edges', () => ({
+  reconcileThreadEdgesOnDelete: h.reconcileThreadEdgesOnDelete,
+  restoreThreadEdgesForItem: h.restoreThreadEdgesForItem,
 }));
 
 import { softDeleteOwnedItem, restoreOwnedItem, purgeRecycledItem } from '../item-crud';
@@ -84,6 +92,8 @@ describe('softDeleteOwnedItem', () => {
     // No ADLS hints → no soft-delete calls, no adlsRefs.
     expect(h.softDeleteDirectory).not.toHaveBeenCalled();
     expect(r.adlsRefs).toBeUndefined();
+    // Lineage auto-reconcile: tombstone (not hard-remove) the item's edges.
+    expect(h.reconcileThreadEdgesOnDelete).toHaveBeenCalledWith(TENANT, 'item-1', { mode: 'tombstone' });
   });
 
   it('soft-deletes supplied ADLS folders and captures their deletionId', async () => {
@@ -127,6 +137,8 @@ describe('restoreOwnedItem', () => {
     expect((out!.state as any).sensitivityLabel).toBe('Confidential');
     expect(h.unDeleteDirectory).toHaveBeenCalledWith('bronze', 'lakehouses/sales-lh', 'del-99');
     expect(h.upsertLoomDoc).toHaveBeenCalled();
+    // Lineage auto-reconcile: un-tombstone the item's edges on restore.
+    expect(h.restoreThreadEdgesForItem).toHaveBeenCalledWith(TENANT, 'item-1');
   });
 
   it('returns null when the id is not a recycled item', async () => {
@@ -145,6 +157,8 @@ describe('purgeRecycledItem', () => {
     expect(h.itemDelete).toHaveBeenCalledWith('item-1', 'ws-1');
     expect(h.deleteLoomDoc).toHaveBeenCalledWith('it:item-1');
     expect(h.deleteGovernanceItem).toHaveBeenCalledWith('item-1');
+    // Lineage auto-reconcile: hard-remove the item's edges on purge.
+    expect(h.reconcileThreadEdgesOnDelete).toHaveBeenCalledWith(TENANT, 'item-1', { mode: 'remove' });
   });
 
   it('returns false when the item is not in the recycle bin', async () => {

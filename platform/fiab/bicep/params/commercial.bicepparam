@@ -62,6 +62,12 @@ param capacitySku = 'F8'
 // Databricks feature flags
 param databricksUnityCatalogEnabled = true
 param databricksSqlWarehouseEnabled = true
+// Set to your Databricks ACCOUNT id (GUID) to configure Unity Catalog by default
+// (regional metastore + default catalog + Console-UAMI account_admin), so Browse >
+// Unity Catalog shows a real configured catalog. Requires a one-time step making
+// the Console UAMI a Databricks account admin — docs/fiab/catalog/metastores.md.
+// Empty = UC enabled later via the post-deploy bootstrap workflow.
+param databricksAccountId = ''
 
 // Security
 param defenderForAIEnabled = true
@@ -88,7 +94,11 @@ param loomAzureMapsAccount = readEnvironmentVariable('EXISTING_AZURE_MAPS_ACCOUN
 // AND a Tenant Administrator clicks Grant admin consent. After that,
 // flip these to true and redeploy admin-plane.
 param loomMipEnabled = false
-param loomDlpEnabled = false
+// DLP defaults ON: the post-deploy bootstrap grants the DLP AppRoles by
+// default, so the /admin/security DLP tab is wired out of the box (alerts +
+// violations + Azure-native restrict-access). The policy segment + simulate
+// honest-gate where the Graph DLP preview isn't enabled.
+param loomDlpEnabled = true
 param loomIdentityPickerEnabled = false
 param storageRequireCmk = false
 param keyVaultHsmIsolated = false

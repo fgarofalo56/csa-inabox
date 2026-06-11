@@ -79,9 +79,33 @@ describe('dlp-graph-client', () => {
     }), { status: 200 }));
     const mod = await import('../dlp-graph-client');
     const policies = await mod.listDlpPolicies();
+    // Policy reads must target the informationProtection navigation property
+    // (Get-MgBetaInformationProtectionDataLossPreventionPolicy), NOT security/.
+    const [url] = fetchMock.mock.calls[0];
+    expect(url).toContain('/beta/informationProtection/dataLossPreventionPolicies');
+    expect(url).not.toContain('/beta/security/dataLossPreventionPolicies');
     expect(policies).toHaveLength(2);
     expect(policies[0]).toMatchObject({ id: 'p1', mode: 'enforce', ruleCount: 2 });
     expect(policies[1]).toMatchObject({ id: 'p2', status: 'Disabled', locations: ['Exchange'] });
+  });
+
+  it('lists DLP rules via the informationProtection policyRules navigation property', async () => {
+    process.env.LOOM_DLP_ENABLED = 'true';
+    fetchMock.mockResolvedValue(new Response(JSON.stringify({
+      value: [{ id: 'r1', name: 'SSN rule', priority: 0, isEnabled: true }],
+    }), { status: 200 }));
+    const mod = await import('../dlp-graph-client');
+    const rules = await mod.listDlpRules('p1');
+    const [url] = fetchMock.mock.calls[0];
+    expect(url).toContain('/beta/informationProtection/dataLossPreventionPolicies/p1/policyRules');
+    expect(rules).toHaveLength(1);
+    expect(rules[0]).toMatchObject({ id: 'r1', isEnabled: true });
+  });
+
+  it('passes assertEnabled (no throw) once LOOM_DLP_ENABLED=true — DLP wired by default', async () => {
+    process.env.LOOM_DLP_ENABLED = 'true';
+    const mod = await import('../dlp-graph-client');
+    expect(() => mod.__testing.assertEnabled()).not.toThrow();
   });
 
   it('lists DLP alerts with a default 30-day filter', async () => {

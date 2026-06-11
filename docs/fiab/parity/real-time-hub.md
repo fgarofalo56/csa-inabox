@@ -13,6 +13,10 @@ Backend service: **Fabric REST** (`https://api.fabric.microsoft.com/v1`, scope `
 
 There is **no separate "Real-Time hub REST API"** — the Fabric hub is composed on top of (1) the Eventstream definition REST API (create item whose topology carries the chosen source) and (2) per-workspace item listing (eventstreams + KQL databases). Loom mirrors that composition exactly.
 
+## Relationship to `/rti-hub` (RTI catalog)
+
+`/realtime-hub` (this surface) is the **deployed-streams catalog** — your eventstreams + KQL tables with Preview / Endpoints / Open, plus the Connect-source gallery. `/rti-hub` is the **discover-and-connect catalog** — every Event Hub / IoT Hub / ADX cluster across all subscriptions (Azure Resource Graph) you can Subscribe into a Loom eventstream. The two are cross-linked in both directions (a caption link in each), and share one implementation of the Preview + Endpoints drawers (`lib/components/realtime-hub/stream-preview-drawer.tsx`, `stream-endpoints-drawer.tsx`) so they never diverge.
+
 ## The problem this fixes
 
 The old `/realtime-hub` page was a thin wrapper around `ItemsByTypePane` listing Cosmos items by type (`eventstream`, `eventhouse`, `kql-database`, …). It did **not** call any Fabric Real-Time hub surface: no tenant-wide data-stream discovery, no Get-events / Connect-source flow, no Microsoft/Fabric/Azure source connectors, no preview, no endpoints. Operator verdict: "doesn't really work at all… looks more like vaporware." This rebuild wires the page to real Fabric + Kusto REST.
@@ -28,7 +32,7 @@ The old `/realtime-hub` page was a thin wrapper around `ItemsByTypePane` listing
 | Row action: **Open eventstream / Open KQL database** | ✅ built — menu links to `/items/eventstream/{id}` and `/items/kql-database/{id}` (existing working editors) | navigates to live editor routes |
 | Stream **endpoints** (Event Hub-compatible / custom-endpoint / source connection info) | ✅ built — Endpoints drawer (sources/destinations/streams from the live definition) | `GET /api/realtime-hub/endpoints` → `getEventstreamDefinition` (real Fabric `getDefinition`) |
 | **Get events / Connect data source** wizard | ✅ built — ConnectSourceDialog (category list + connector grid + dynamic connection form) | `POST /api/realtime-hub/connect-source` → `connectEventstreamSource` (real `POST /workspaces/{ws}/eventstreams` with Base64 `eventstream.json`) |
-| **Microsoft sources**: Azure Event Hubs, IoT Hub, Service Bus (preview) | ✅ built — `AzureEventHub` / `AzureIoTHub` / `AzureServiceBus` connectors | eventstream source `type` enum |
+| **Microsoft sources**: Azure Event Hubs, IoT Hub, Service Bus (preview) | ✅ built — `AzureEventHub` / `AzureIoTHub` / `AzureServiceBus` connectors. EH/IoT bind via **cascading dropdowns populated from a real subscription query** (namespace → event hub → consumer group / key name) with inline **"+ Create new…"** — see the dedicated section below | eventstream source `type` enum + `/api/realtime-hub/options` + `/api/realtime-hub/provision` |
 | **Database CDC**: Azure SQL DB / SQL MI / Cosmos DB / PostgreSQL / MySQL CDC | ✅ built — `AzureSQLDBCDC` / `AzureSQLMIDBCDC` / `AzureCosmosDBCDC` / `PostgreSQLCDC` / `MySQLCDC` | eventstream source `type` enum |
 | **External streams**: Apache Kafka, Confluent, Amazon MSK, Kinesis, Google Pub/Sub | ✅ built — `ApacheKafka` / `ConfluentCloud` / `AmazonMSKKafka` / `AmazonKinesis` / `GooglePubSub` | eventstream source `type` enum |
 | **Fabric events**: Workspace item events, Job events, OneLake events | ✅ built — `FabricWorkspaceItemEvents` / `FabricJobEvents` / `FabricOneLakeEvents` connectors + dedicated "Subscribe to Fabric/Azure events" task card | creates a real eventstream with the Fabric-event source `type` |
@@ -36,6 +40,7 @@ The old `/realtime-hub` page was a thin wrapper around `ItemsByTypePane` listing
 | **Sample data** quick-start | ✅ built — `SampleData` connector (no connection required) | eventstream source `type` enum |
 | Task cards: Get events, Subscribe to events, Explore data in motion | ✅ built — three task cards at the top of the page | wired to the dialogs/drawers above |
 | Honest infra-gate when the UAMI isn't authorized in Fabric | ⚠️ honest-gate — `MessageBar intent="warning"` naming the SP-toggle + `LOOM_UAMI_CLIENT_ID` workspace-role requirement; **full hub UI still renders** | 401/403 `FabricError` passed through verbatim with `hint` |
+| **Tile | List** view of "All data streams" (Loom house-style) | ✅ built — `ViewToggle` switches the streams collection between a colour-coded `ItemTile` grid and the sortable `LoomDataTable`; choice persisted to `localStorage` (`loom.realtime-hub.streams.viewMode.v1`). The per-row action menu (Preview / Endpoints / Open) is reused as the tile overflow kebab. | client-side over the same `/api/realtime-hub/streams` data |
 
 ## Tracked follow-ups (honest, not faked)
 
@@ -45,6 +50,23 @@ The old `/realtime-hub` page was a thin wrapper around `ItemsByTypePane` listing
 | **Visualize data** (create Real-Time dashboard from a KQL table) | ➡️ delegated | Handled by the existing KQL-dashboard editor (`/items/kql-dashboard/new`); not duplicated on the hub. |
 | Per-stream-node **Activate / Deactivate** | ⚠️ disclosed | Not in the public Eventstream REST surface (portal-only toggle) — disclosed honestly per `no-vaporware.md`, consistent with the Eventstream editor. |
 | **Business events** (preview) | ⚠️ tracked | Preview-only Fabric feature; tracked follow-up for the preview pass. |
+
+## Azure-native source binding — dropdowns + create-if-missing (audit-t134)
+
+Mirrors the Fabric Real-Time hub **Azure tab** of "Add source → Azure Event Hubs / IoT Hub" one-for-one, but **Azure-native by default** (no Fabric cloud connection). In Fabric the wizard offers: select **event hub** from a dropdown populated from the chosen namespace, select **consumer group** from a dropdown (or enter a custom one), select the **key name** from a dropdown, and filter Azure resources by **subscription / resource group / region**. Loom builds every one of these against real ARM / Azure Resource Graph — no empty dropdowns, no freeform GUIDs.
+
+| Fabric Azure-tab control | Loom coverage | Backend (real REST) |
+| --- | --- | --- |
+| **Namespace / IoT Hub** picker (Azure tab) | ✅ `resource-select` dropdown enumerated cross-subscription; carries subscription/RG/region filter facets | `GET /api/realtime-hub/options?kind=namespaces[&service=iothub]` → `listStreamingResourcesViaGraph(rtiSubscriptionScope())` (Azure Resource Graph) |
+| **Event hub** dropdown (populated from the namespace) | ✅ `resource-select` depends on namespace; inline **"+ Create new…"** (partitions + retention) | `…?kind=eventhubs` → `listEventHubsIn(scope)`; create → `POST /provision {kind:'eventhub'}` → `ensureEventHub` (idempotent ARM PUT) |
+| **Consumer group** dropdown (or custom) | ✅ `resource-select` depends on event hub; `$Default` always present; inline create | `…?kind=consumerGroups` → `listConsumerGroupsIn`; create → `ensureConsumerGroup` |
+| **Key name** dropdown (SAS policy) | ✅ `resource-select` optional; blank = Entra (UAMI Data Receiver), the secure default | `…?kind=authRules` → `listEventHubAuthRulesIn` |
+| **IoT Hub consumer group** dropdown + custom | ✅ `resource-select` over the hub's built-in `events` endpoint; inline create | `…?kind=iotConsumerGroups` → `listIoTHubConsumerGroups`; create → `ensureIoTHubConsumerGroup` |
+| Filter by subscription / resource group / region | ✅ facets returned with the namespaces list | same `kind=namespaces` payload (`facets`) |
+| Honest infra-gate when no subscription configured | ⚠️ honest-gate — `MessageBar intent="warning"` naming `LOOM_SUBSCRIPTION_ID` + the RBAC bicep module; full form still renders | `GET /options` 503 `code:'not_configured'` (mirrors `GET /api/rti-hub`) |
+| Fabric **cloud connection GUID** field | ➖ removed from the Azure-native default (Fabric-only concept; `dataConnectionId` only applies behind `LOOM_EVENTSTREAM_BACKEND=fabric`) | n/a on default path |
+
+RBAC: discovery dropdowns need subscription-scoped **Reader** (already granted by `admin-plane/rti-hub-rbac.bicep`). Create-if-missing needs **Contributor** on the target namespace — granted on the env-pinned namespace by `landing-zone/eventhubs.bicep`; for create against **arbitrary** discovered namespaces set `grantSubscriptionContributor=true` on `rti-hub-rbac.bicep` (opt-in, off by default for least privilege). ARM 403/throttling errors are surfaced verbatim (status + body) so the dialog shows the real reason.
 
 ## Backend per control
 

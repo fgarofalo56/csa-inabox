@@ -81,20 +81,85 @@ describe('listResources', () => {
 });
 
 describe('listResourceHealth', () => {
-  it('hits ResourceHealth availabilityStatuses and keys by resourceId', async () => {
-    const calls = captureFetch(() => ({
-      body: {
-        value: [{
-          id: '/subscriptions/sub-1/resourceGroups/rg-admin/providers/Microsoft.App/containerApps/aca1/providers/Microsoft.ResourceHealth/availabilityStatuses/current',
-          properties: { availabilityState: 'Available', summary: 'ok' },
-        }],
-      },
-    }));
+  it('fast path: a single Resource Graph query, keyed by resourceId (no crawl)', async () => {
+    const calls = captureFetch((url) => {
+      if (url.includes('Microsoft.ResourceGraph/resources')) {
+        return { body: { data: [{
+          ResourceId: '/subscriptions/sub-1/resourcegroups/rg-admin/providers/microsoft.app/containerapps/aca1',
+          AvailabilityState: 'Available', Summary: 'ok',
+        }] } };
+      }
+      return { body: { value: [] } };
+    });
     const { listResourceHealth } = await import('../monitor-client');
     const map = await listResourceHealth();
-    expect(calls[0].url).toContain('/providers/Microsoft.ResourceHealth/availabilityStatuses?api-version=2023-10-01-preview');
+    // One ARG POST; the slow availabilityStatuses crawl is NOT hit when ARG has rows.
+    expect(calls[0].url).toContain('/providers/Microsoft.ResourceGraph/resources?api-version=2022-10-01');
+    expect(calls[0].init?.method).toBe('POST');
+    const argBody = JSON.parse(String(calls[0].init?.body));
+    expect(argBody.subscriptions).toEqual(['sub-1']);
+    expect(argBody.query).toContain('HealthResources');
+    expect(calls.some((c) => c.url.includes('availabilityStatuses'))).toBe(false);
     const key = '/subscriptions/sub-1/resourcegroups/rg-admin/providers/microsoft.app/containerapps/aca1';
     expect(map[key].availabilityState).toBe('Available');
+  });
+
+  it('falls back to the availabilityStatuses crawl when Resource Graph returns no rows', async () => {
+    const calls = captureFetch((url) => {
+      if (url.includes('Microsoft.ResourceGraph/resources')) return { body: { data: [] } };
+      return { body: { value: [{
+        id: '/subscriptions/sub-1/resourceGroups/rg-admin/providers/Microsoft.App/containerApps/aca1/providers/Microsoft.ResourceHealth/availabilityStatuses/current',
+        properties: { availabilityState: 'Available', summary: 'ok' },
+      }] } };
+    });
+    const { listResourceHealth } = await import('../monitor-client');
+    const map = await listResourceHealth();
+    expect(calls.some((c) => c.url.includes('Microsoft.ResourceGraph/resources'))).toBe(true);
+    expect(calls.some((c) => c.url.includes('/providers/Microsoft.ResourceHealth/availabilityStatuses?api-version=2023-10-01-preview'))).toBe(true);
+    const key = '/subscriptions/sub-1/resourcegroups/rg-admin/providers/microsoft.app/containerapps/aca1';
+    expect(map[key].availabilityState).toBe('Available');
+  });
+
+  it('falls back to the crawl when Resource Graph errors (RBAC / provider unavailable)', async () => {
+    captureFetch((url) => {
+      if (url.includes('Microsoft.ResourceGraph/resources')) return { status: 403, body: { error: { message: 'forbidden' } } };
+      return { body: { value: [{
+        id: '/subscriptions/sub-1/resourceGroups/rg-admin/providers/Microsoft.App/containerApps/aca1/providers/Microsoft.ResourceHealth/availabilityStatuses/current',
+        properties: { availabilityState: 'Degraded' },
+      }] } };
+    });
+    const { listResourceHealth } = await import('../monitor-client');
+    const map = await listResourceHealth();
+    const key = '/subscriptions/sub-1/resourcegroups/rg-admin/providers/microsoft.app/containerapps/aca1';
+    expect(map[key].availabilityState).toBe('Degraded');
+  });
+});
+
+describe('Monitor TTL cache', () => {
+  it('memoizes listResources so a repeat call does not re-hit ARM, and clearMonitorCache forces a refetch', async () => {
+    const calls = captureFetch(() => ({ body: { value: [] } }));
+    const { listResources, clearMonitorCache } = await import('../monitor-client');
+    await listResources();
+    const afterFirst = calls.length;
+    expect(afterFirst).toBeGreaterThan(0);
+    await listResources();
+    expect(calls.length).toBe(afterFirst); // served from the in-process memo
+    clearMonitorCache();
+    await listResources();
+    expect(calls.length).toBeGreaterThan(afterFirst); // memo cleared → re-fetch
+  });
+
+  it('does not cache failures — the next call retries Azure', async () => {
+    let attempt = 0;
+    captureFetch(() => {
+      attempt++;
+      // First listResources() call: fail one of the per-RG fetches so Promise.all rejects.
+      if (attempt <= 2) return { status: 500, body: { error: { message: 'boom' } } };
+      return { body: { value: [] } };
+    });
+    const { listResources } = await import('../monitor-client');
+    await expect(listResources()).rejects.toBeTruthy();
+    await expect(listResources()).resolves.toEqual([]); // failure was evicted
   });
 });
 

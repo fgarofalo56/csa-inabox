@@ -278,6 +278,48 @@ if [[ -n "$MAPS_ACCT" ]]; then
 fi
 
 # ---------------------------------------------------------------------------
+# DLZ ADLS Gen2 storage account — backs the medallion lakehouse URLs, CSV
+# imports, and the org-visuals container (Embed codes F22 + Organizational
+# visuals F23). In single-sub the account name is deterministic and wired at
+# deploy time; in MULTI-SUB the per-DLZ accounts live in separate subs, so
+# admin-plane/main.bicep leaves loomStorageAccount empty (no phantom account)
+# and the embed-codes / org-visuals panes honest-gate. This block discovers the
+# real DLZ HNS-enabled (Data Lake) account and wires LOOM_ORG_VISUALS_URL +
+# LOOM_ADLS_ACCOUNT + the medallion / CSV URLs so those surfaces light up.
+# Reuse-first via EXISTING_LOOM_STORAGE_ACCOUNT (any RG), else discover in DLZ_RG.
+# ---------------------------------------------------------------------------
+SA_ACCT="${EXISTING_LOOM_STORAGE_ACCOUNT:-}"
+SA_RG="${EXISTING_LOOM_STORAGE_RG:-$DLZ_RG}"
+if [[ -z "$SA_ACCT" ]]; then
+  # Prefer a Loom-named Data Lake (HNS) account, else the first HNS account.
+  SA_ACCT="$(q storage account list -g "$SA_RG" \
+      --query "[?starts_with(name,'saloom') && isHnsEnabled].name | [0]" -o tsv)"
+  [[ -z "$SA_ACCT" ]] && SA_ACCT="$(q storage account list -g "$SA_RG" \
+      --query "[?isHnsEnabled].name | [0]" -o tsv)"
+fi
+if [[ -n "$SA_ACCT" ]]; then
+  # Resolve the cloud-correct blob/dfs suffixes from the account's endpoints
+  # (handles Commercial core.windows.net vs Gov core.usgovcloudapi.net).
+  SA_BLOB="$(q storage account show -n "$SA_ACCT" -g "$SA_RG" --query "primaryEndpoints.blob" -o tsv)"
+  SA_DFS="$(q storage account show -n "$SA_ACCT" -g "$SA_RG"  --query "primaryEndpoints.dfs"  -o tsv)"
+  SA_BLOB="${SA_BLOB%/}"
+  SA_DFS="${SA_DFS%/}"
+  add LOOM_ADLS_ACCOUNT     "$SA_ACCT"
+  if [[ -n "$SA_BLOB" ]]; then
+    add LOOM_ORG_VISUALS_URL "$SA_BLOB/org-visuals"   # Embed codes (F22) + Org visuals (F23)
+  fi
+  if [[ -n "$SA_DFS" ]]; then
+    add LOOM_BRONZE_URL      "$SA_DFS/bronze"
+    add LOOM_SILVER_URL      "$SA_DFS/silver"
+    add LOOM_GOLD_URL        "$SA_DFS/gold"
+    add LOOM_LANDING_URL     "$SA_DFS/landing"
+    add LOOM_CSV_IMPORTS_URL "$SA_DFS/csv-imports"
+  fi
+else
+  echo "  - DLZ ADLS account not found in $SA_RG — leaving Embed codes / lakehouse URLs honestly gated"
+fi
+
+# ---------------------------------------------------------------------------
 # Apply — one merge update => one new console revision.
 # ---------------------------------------------------------------------------
 echo

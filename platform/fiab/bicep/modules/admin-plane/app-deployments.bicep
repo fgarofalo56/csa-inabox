@@ -46,6 +46,9 @@ param amlWorkspaceId string = ''
 @description('AML portal base for the VS Code for the Web deep-link. Default ml.azure.com (Commercial).')
 param amlPortalBase string = 'https://ml.azure.com'
 
+@description('Optional override for the public Azure Retail Prices API host used by the Deployment planner cost estimator. Empty = default prices.azure.com. Set for sovereign/air-gapped mirrors.')
+param retailPricesBase string = ''
+
 @description('App definitions — name, image, UAMI ID, app-specific env, ingress port, scale rules')
 param apps array
 
@@ -103,6 +106,10 @@ resource caeApps 'Microsoft.App/containerApps@2025-02-02-preview' = [for app in 
               { name: 'LOOM_AML_INSTANCE', value: amlInstance }
               { name: 'LOOM_AML_WORKSPACE_ID', value: amlWorkspaceId }
               { name: 'LOOM_AML_PORTAL_BASE', value: amlPortalBase }
+              // Deployment planner cost estimator → public Azure Retail Prices
+              // API. Empty = default prices.azure.com (no auth, Commercial cloud).
+              // Read only by the Console app; ignored elsewhere.
+              { name: 'LOOM_RETAIL_PRICES_BASE', value: retailPricesBase }
             ],
             contains(app, 'env') ? app.env : []
           )

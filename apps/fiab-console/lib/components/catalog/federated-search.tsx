@@ -88,11 +88,14 @@ const useStyles = makeStyles({
     alignItems: 'center',
     gap: tokens.spacingHorizontalM,
     flexWrap: 'wrap',
+    minWidth: 0,
   },
   search: {
-    width: '100%',
+    // flex (not a hard width) so the box shrinks with the body track instead of
+    // imposing a min-content floor that pushes content across the sidebar rule.
+    flex: '1 1 280px',
     maxWidth: '360px',
-    minWidth: '220px',
+    minWidth: 0,
   },
   searchHint: {
     color: tokens.colorNeutralForeground3,
@@ -102,6 +105,7 @@ const useStyles = makeStyles({
     gap: tokens.spacingHorizontalS,
     alignItems: 'center',
     flexWrap: 'wrap',
+    minWidth: 0,
   },
   chipRowSpaced: {
     marginTop: tokens.spacingVerticalM,

@@ -46,12 +46,13 @@ import {
 } from '@xyflow/react';
 import '@xyflow/react/dist/style.css';
 import {
-  Badge, Button, Caption1, Text, Tooltip, makeStyles, tokens,
+  Badge, Button, Caption1, Input, Text, Tooltip, makeStyles, tokens,
 } from '@fluentui/react-components';
 import {
   FullScreenMaximize20Regular, Organization20Regular, TargetRegular,
   Table16Regular, Document16Regular, Notebook16Regular, Flow16Regular,
   ChartMultiple16Regular, Database16Regular, Box16Regular, BranchFork16Regular,
+  Search16Regular, Dismiss16Regular,
 } from '@fluentui/react-icons';
 
 // ---------------------------------------------------------------------------
@@ -59,7 +60,7 @@ import {
 // returns (app/api/catalog/lineage/route.ts).
 // ---------------------------------------------------------------------------
 
-export type LineageSource = 'purview' | 'unity-catalog' | 'onelake';
+export type LineageSource = 'purview' | 'unity-catalog' | 'onelake' | 'loom' | 'weave';
 
 export interface CanvasLineageNode {
   id: string;
@@ -74,6 +75,13 @@ export interface CanvasLineageNode {
   openHref?: string;
   /** Set when the same asset was matched in >1 source during a merge. */
   multiSource?: string[];
+  /**
+   * Canonical cross-source identity (qualifiedName / storage path / UC
+   * full_name / Loom item id) the unified-lineage merge collapsed this node
+   * on. Carried purely as metadata for the detail panel — the canvas does not
+   * read it for layout. See lib/azure/unified-lineage.ts.
+   */
+  identity?: string;
 }
 
 export interface CanvasLineageEdge {
@@ -103,6 +111,12 @@ const TYPE_STYLES: Record<string, TypeStyle> = {
   dashboard: { color: 'var(--loom-accent-magenta)', Icon: ChartMultiple16Regular, kind: 'Dashboard' },
   lakehouse: { color: 'var(--loom-accent-emerald)', Icon: Database16Regular, kind: 'Lakehouse' },
   process: { color: '#605E5C', Icon: Box16Regular, kind: 'Process' },
+  // Weave (Loom Thread) edge endpoints — the integration mesh recorded in the
+  // thread-edges Cosmos container (notebook attach, data-agent source, Power BI
+  // model, API publish). These are Loom items, not Azure/Fabric assets.
+  'powerbi-model': { color: 'var(--loom-accent-magenta)', Icon: ChartMultiple16Regular, kind: 'Power BI model' },
+  'data-agent': { color: 'var(--loom-accent-emerald)', Icon: BranchFork16Regular, kind: 'Data agent' },
+  'data-api-builder': { color: 'var(--loom-accent-teal)', Icon: Flow16Regular, kind: 'Data API' },
 };
 
 const FALLBACK_STYLE: TypeStyle = { color: '#605E5C', Icon: Box16Regular, kind: 'Asset' };
@@ -114,6 +128,9 @@ function styleForType(type?: string): TypeStyle {
   if (TYPE_STYLES[t]) return TYPE_STYLES[t];
   // Atlas type names like "azure_sql_table", "powerbi_report", "databricks_table".
   if (t.includes('column')) return { color: 'var(--loom-accent-emerald)', Icon: BranchFork16Regular, kind: 'Column' };
+  if (t.includes('powerbi') || t.includes('power-bi') || t.includes('semantic')) return TYPE_STYLES['powerbi-model'];
+  if (t.includes('agent')) return TYPE_STYLES['data-agent'];
+  if (t.includes('api')) return TYPE_STYLES['data-api-builder'];
   if (t.includes('notebook')) return TYPE_STYLES.notebook;
   if (t.includes('report')) return TYPE_STYLES.report;
   if (t.includes('dashboard')) return TYPE_STYLES.dashboard;
@@ -130,6 +147,8 @@ const SOURCE_LABEL: Record<LineageSource, string> = {
   purview: 'Purview',
   'unity-catalog': 'Unity Catalog',
   onelake: 'OneLake / Fabric',
+  loom: 'Loom Thread',
+  weave: 'Weave',
 };
 
 // ---------------------------------------------------------------------------
@@ -280,11 +299,7 @@ const useStyles = makeStyles({
     border: `1px solid ${tokens.colorNeutralStroke2}`,
     borderRadius: 6, padding: 4,
   },
-  searchInput: {
-    border: 'none', outline: 'none', background: 'transparent',
-    color: tokens.colorNeutralForeground1, fontSize: 13, width: 150,
-    padding: '2px 4px',
-  },
+  search: { width: 184 },
   legend: {
     display: 'flex', flexWrap: 'wrap', gap: 8, maxWidth: 340,
     background: tokens.colorNeutralBackground1,
@@ -405,7 +420,6 @@ const LineageCanvasInner = forwardRef<LineageCanvasHandle, LineageCanvasProps>(f
           animated: active && dimAny,
           style: { stroke: color, strokeWidth: active ? 1.75 : 1, opacity: active ? 1 : 0.4 },
           markerEnd: { type: MarkerType.ArrowClosed, color, width: 16, height: 16 },
-          label: e.type && e.type !== 'dataset_process_inputs' ? undefined : undefined,
         } as Edge;
       });
   }, [srcEdges, srcNodes, activeIds, dimAny]);
@@ -451,12 +465,27 @@ const LineageCanvasInner = forwardRef<LineageCanvasHandle, LineageCanvasProps>(f
 
         <Panel position="top-left">
           <div className={s.toolbar}>
-            <Search20Filter />
-            <input
-              className={s.searchInput}
+            <Input
+              size="small"
+              className={s.search}
+              appearance="filled-lighter"
+              contentBefore={<Search16Regular />}
+              contentAfter={
+                search
+                  ? (
+                    <Button
+                      size="small"
+                      appearance="transparent"
+                      icon={<Dismiss16Regular />}
+                      aria-label="Clear filter"
+                      onClick={() => setSearch('')}
+                    />
+                  )
+                  : undefined
+              }
               placeholder="Filter assets…"
               value={search}
-              onChange={(e) => setSearch(e.target.value)}
+              onChange={(_, d) => setSearch(d.value)}
               aria-label="Filter lineage assets by name or type"
             />
             <Tooltip content={focusMode ? 'Focus mode on — showing only the selected asset’s chain' : 'Focus on asset — isolate the upstream+downstream chain of the selected node'} relationship="label">
@@ -556,15 +585,6 @@ const LineageCanvasInner = forwardRef<LineageCanvasHandle, LineageCanvasProps>(f
     </div>
   );
 });
-
-// Small inline search glyph (avoids importing an icon name that may drift).
-function Search20Filter() {
-  return (
-    <svg width="16" height="16" viewBox="0 0 20 20" aria-hidden style={{ color: tokens.colorNeutralForeground3, marginLeft: 2 }}>
-      <path fill="currentColor" d="M8.5 3a5.5 5.5 0 0 1 4.23 9.02l4.12 4.13a.75.75 0 0 1-1.06 1.06l-4.13-4.12A5.5 5.5 0 1 1 8.5 3Zm0 1.5a4 4 0 1 0 0 8 4 4 0 0 0 0-8Z" />
-    </svg>
-  );
-}
 
 /** Public component — wraps the inner canvas in a ReactFlowProvider. */
 export const LineageCanvas = forwardRef<LineageCanvasHandle, LineageCanvasProps>(function LineageCanvas(props, ref) {

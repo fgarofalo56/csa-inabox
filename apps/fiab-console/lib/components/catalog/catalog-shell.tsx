@@ -22,7 +22,11 @@ const SECTIONS = [
 const useStyles = makeStyles({
   layout: {
     display: 'grid',
-    gridTemplateColumns: '280px 1fr',
+    // minmax(0, 1fr) — the content track must be allowed to shrink below its
+    // min-content size. A bare 1fr is minmax(auto, 1fr) whose auto floor is
+    // content-driven, so the search/picker cards force the track wide and
+    // visually overflow into (and across) the sidebar's vertical rule.
+    gridTemplateColumns: '280px minmax(0, 1fr)',
     gap: tokens.spacingHorizontalXXL,
     minHeight: '60vh',
   },
