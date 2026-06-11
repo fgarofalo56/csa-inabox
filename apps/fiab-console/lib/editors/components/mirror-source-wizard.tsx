@@ -124,6 +124,13 @@ const useStyles = makeStyles({
     backgroundColor: tokens.colorBrandBackground2, color: tokens.colorBrandForeground1,
   },
   icebergBody: { display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalXXS, minWidth: 0 },
+  syncCard: {
+    display: 'flex', alignItems: 'flex-start', gap: tokens.spacingHorizontalM,
+    marginTop: tokens.spacingVerticalM, padding: tokens.spacingVerticalM,
+    borderRadius: tokens.borderRadiusMedium, border: `1px solid ${tokens.colorNeutralStroke2}`,
+    borderLeft: `4px solid ${tokens.colorBrandStroke1}`, backgroundColor: tokens.colorNeutralBackground2,
+  },
+  syncBody: { display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalXXS, flexGrow: 1, minWidth: 0 },
 });
 
 function toB64(s: string): string {
@@ -478,17 +485,22 @@ export function MirrorSourceWizard(props: MirrorSourceWizardProps) {
                 <Caption1 style={{ color: tokens.colorNeutralForeground3 }}>
                   Optional — leave all unchecked to mirror <strong>every</strong> table the engine discovers. Or load + pick a subset.
                 </Caption1>
-                <Field label="Sync mode" style={{ marginTop: 10 }}
-                  hint={SOURCE_SYNC_NOTE[createSrc] || 'How ongoing changes are replicated after the initial load.'}>
-                  <Dropdown
-                    value={SYNC_MODE_OPTIONS.find((o) => o.id === syncMode)?.name || ''}
-                    selectedOptions={[syncMode]}
-                    onOptionSelect={(_, d) => { if (d.optionValue) setSyncMode(d.optionValue as typeof syncMode); }}>
-                    {SYNC_MODE_OPTIONS.map((o) => (
-                      <Option key={o.id} value={o.id} text={o.name}>{o.name}</Option>
-                    ))}
-                  </Dropdown>
-                </Field>
+                <div className={s.syncCard}>
+                  <span className={s.icebergIcon}><ArrowSync20Regular /></span>
+                  <div className={s.syncBody}>
+                    <Field label="Sync mode"
+                      hint={SOURCE_SYNC_NOTE[createSrc] || 'How ongoing changes are replicated after the initial load.'}>
+                      <Dropdown
+                        value={SYNC_MODE_OPTIONS.find((o) => o.id === syncMode)?.name || ''}
+                        selectedOptions={[syncMode]}
+                        onOptionSelect={(_, d) => { if (d.optionValue) setSyncMode(d.optionValue as typeof syncMode); }}>
+                        {SYNC_MODE_OPTIONS.map((o) => (
+                          <Option key={o.id} value={o.id} text={o.name}>{o.name}</Option>
+                        ))}
+                      </Dropdown>
+                    </Field>
+                  </div>
+                </div>
                 {createSrc === 'Snowflake' && (
                   <div className={s.icebergCard}>
                     <span className={s.icebergIcon}><Layer20Regular /></span>
