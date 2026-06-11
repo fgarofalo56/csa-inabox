@@ -13,6 +13,10 @@ Backend service: **Fabric REST** (`https://api.fabric.microsoft.com/v1`, scope `
 
 There is **no separate "Real-Time hub REST API"** — the Fabric hub is composed on top of (1) the Eventstream definition REST API (create item whose topology carries the chosen source) and (2) per-workspace item listing (eventstreams + KQL databases). Loom mirrors that composition exactly.
 
+## Relationship to `/rti-hub` (RTI catalog)
+
+`/realtime-hub` (this surface) is the **deployed-streams catalog** — your eventstreams + KQL tables with Preview / Endpoints / Open, plus the Connect-source gallery. `/rti-hub` is the **discover-and-connect catalog** — every Event Hub / IoT Hub / ADX cluster across all subscriptions (Azure Resource Graph) you can Subscribe into a Loom eventstream. The two are cross-linked in both directions (a caption link in each), and share one implementation of the Preview + Endpoints drawers (`lib/components/realtime-hub/stream-preview-drawer.tsx`, `stream-endpoints-drawer.tsx`) so they never diverge.
+
 ## The problem this fixes
 
 The old `/realtime-hub` page was a thin wrapper around `ItemsByTypePane` listing Cosmos items by type (`eventstream`, `eventhouse`, `kql-database`, …). It did **not** call any Fabric Real-Time hub surface: no tenant-wide data-stream discovery, no Get-events / Connect-source flow, no Microsoft/Fabric/Azure source connectors, no preview, no endpoints. Operator verdict: "doesn't really work at all… looks more like vaporware." This rebuild wires the page to real Fabric + Kusto REST.
