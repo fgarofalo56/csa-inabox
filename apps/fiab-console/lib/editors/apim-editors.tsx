@@ -1962,7 +1962,10 @@ interface DataProductState {
   bundle: string[];
   // Lifecycle state — mirrors Purview Unified Catalog data-product states
   // (Draft → Published → Expired). Delete (F13) requires Draft or Expired.
-  lifecycleStatus?: 'Draft' | 'Published' | 'Expired';
+  // NOTE: two vocabularies coexist — the Purview-mirror dropdown uses TitleCase
+  // ('Draft'/'Published'/'Expired') while the F6 publish/expire status API uses
+  // UPPERCASE ('DRAFT'/'PUBLISHED'/'EXPIRED'). The union keeps both working.
+  lifecycleStatus?: 'Draft' | 'Published' | 'Expired' | 'PUBLISHED' | 'DRAFT' | 'EXPIRED';
   // Phase 2 parity surfaces — datasets/assets, linked glossary terms.
   datasets?: DataProductDataset[];
   glossaryLinks?: DataProductGlossaryLink[];
@@ -1981,7 +1984,7 @@ interface DataProductState {
   accessPolicy?: DataProductAccessPolicy;
   // F6 — Publish/Unpublish/Expire lifecycle. Cosmos is the source of truth;
   // managed via POST /api/data-products/[id]/status. Unset == Draft.
-  lifecycleStatus?: 'PUBLISHED' | 'DRAFT' | 'EXPIRED';
+  // (lifecycleStatus declared above as a union of both casings.)
   lifecycleStatusAt?: string;
   // F21 Publish-as-API edge — populated by
   // POST /api/items/data-product/[id]/publish-api on success. The subscription

@@ -559,10 +559,10 @@ export function UserDataFunctionEditor({ item, id }: { item: FabricItemType; id:
 
   const addLibrary = () => {
     if (!libName.trim()) return;
-    setState((p) => ({ ...p, libraries: [...arr<{ name: string }>(p.libraries), { name: libName.trim(), version: libVer.trim() || undefined, kind: libKind }] }));
+    setState((p) => ({ ...p, libraries: [...arr<UdfLibrary>(p.libraries), { name: libName.trim(), version: libVer.trim() || undefined, kind: libKind }] }));
     setLibName(''); setLibVer('');
   };
-  const removeLibrary = (name: string) => setState((p) => ({ ...p, libraries: arr<{ name: string }>(p.libraries).filter((l) => l.name !== name) }));
+  const removeLibrary = (name: string) => setState((p) => ({ ...p, libraries: arr<UdfLibrary>(p.libraries).filter((l) => l.name !== name) }));
 
   const runTest = useCallback(async () => {
     if (!selectedFn) return;
@@ -841,7 +841,7 @@ export function VariableLibraryEditor({ item, id }: { item: FabricItemType; id: 
               selectedOptions={[state.activeValueSet || 'default']}
               onOptionSelect={(_, d) => d.optionValue && setState((p) => ({ ...p, activeValueSet: d.optionValue }))}
             >
-              {VL_VALUE_SETS.map((v) => <Option key={v} value={v}>{v}{v === (state.activeValueSet || 'default') ? ' (active)' : ''}</Option>)}
+              {VL_VALUE_SETS.map((v) => <Option key={v} value={v}>{`${v}${v === (state.activeValueSet || 'default') ? ' (active)' : ''}`}</Option>)}
             </Dropdown>
           </Field>
           <Table aria-label="Variables" size="small">
