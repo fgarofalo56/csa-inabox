@@ -20,7 +20,7 @@
  */
 
 import {
-  Subtitle2, Caption1, Input, Dropdown, Option, Button, Badge, Textarea,
+  Subtitle2, Caption1, Body1, Input, Dropdown, Option, Button, Badge, Textarea,
   MessageBar, MessageBarBody, MessageBarTitle, Spinner,
   Table, TableHeader, TableRow, TableHeaderCell, TableBody, TableCell,
   Tab, TabList,
@@ -34,7 +34,7 @@ import type { RibbonTab } from '@/lib/components/ribbon';
 import { KeyValueGrid } from '@/lib/components/ui/key-value-grid';
 import { ComputePicker } from '@/lib/components/compute-picker';
 import {
-  DocumentRegular, DocumentSettingsRegular, CodeRegular, DocumentTextRegular,
+  DocumentRegular, DocumentSettingsRegular, CodeRegular, DocumentTextRegular, HistoryRegular,
 } from '@fluentui/react-icons';
 import { DbtModelGraph } from '@/lib/components/dbt/dbt-model-graph';
 import { MonacoTextarea } from '@/lib/components/editor/monaco-textarea';
@@ -51,6 +51,21 @@ const useStyles = makeStyles({
   status: { display: 'flex', gap: 8, alignItems: 'center' },
   resultBox: { marginTop: 16, borderTop: `1px solid ${tokens.colorNeutralStroke2}`, paddingTop: 12 },
   mono: { fontFamily: 'Consolas, "Cascadia Code", monospace', fontSize: 12 },
+  builderHeader: {
+    display: 'flex', alignItems: 'center', gap: tokens.spacingHorizontalS, flexWrap: 'wrap',
+    color: tokens.colorNeutralForeground2,
+  },
+  emptyState: {
+    display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center',
+    gap: tokens.spacingVerticalXS, textAlign: 'center',
+    padding: `${tokens.spacingVerticalXXL} ${tokens.spacingHorizontalL}`,
+    color: tokens.colorNeutralForeground3,
+    border: `1px dashed ${tokens.colorNeutralStroke2}`,
+    borderRadius: tokens.borderRadiusLarge,
+    backgroundColor: tokens.colorNeutralBackground2,
+    marginTop: tokens.spacingVerticalS,
+  },
+  emptyIcon: { fontSize: '28px', color: tokens.colorNeutralForeground4 },
   fileGrid: {
     display: 'grid', gridTemplateColumns: '260px 1fr', gap: tokens.spacingHorizontalM,
     minHeight: 360, alignItems: 'stretch',
@@ -628,10 +643,12 @@ export function DbtJobEditor({ item, id }: { item: FabricItemType; id: string })
           {tab === 'builder' && (
             <>
               {dbxWs.workspace && project.target?.adapter === 'databricks' && (
-                <Caption1>
-                  Databricks workspace <code>{dbxWs.workspace.hostname}</code> ·
-                  <a href={dbxWs.workspace.url} target="_blank" rel="noreferrer" style={{ marginLeft: 6 }}>open</a>
-                </Caption1>
+                <div className={styles.builderHeader}>
+                  <Caption1>
+                    Databricks workspace <code>{dbxWs.workspace.hostname}</code>
+                  </Caption1>
+                  <a href={dbxWs.workspace.url} target="_blank" rel="noreferrer">open</a>
+                </div>
               )}
               {project.target?.adapter === 'databricks' && (
                 <div className={styles.field}>
@@ -799,7 +816,11 @@ export function DbtJobEditor({ item, id }: { item: FabricItemType; id: string })
               <div className={styles.resultBox}>
                 <Subtitle2>Recent runs</Subtitle2>
                 {runs.length === 0 ? (
-                  <Caption1>No runs yet (Databricks job runs appear here; Synapse runs show their log above).</Caption1>
+                  <div className={styles.emptyState}>
+                    <HistoryRegular className={styles.emptyIcon} />
+                    <Body1>No runs yet</Body1>
+                    <Caption1>Databricks job runs appear here; Synapse / Fabric runs show their log above.</Caption1>
+                  </div>
                 ) : (
                   <Table size="small" aria-label="dbt runs">
                     <TableHeader>

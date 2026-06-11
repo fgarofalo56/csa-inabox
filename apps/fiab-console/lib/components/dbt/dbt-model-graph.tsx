@@ -90,6 +90,17 @@ const useStyles = makeStyles({
   nodeTitle: { display: 'flex', alignItems: 'center', gap: '6px', fontWeight: 600, fontSize: tokens.fontSizeBase300 },
   nodeSub: { fontSize: tokens.fontSizeBase200, color: tokens.colorNeutralForeground3, fontFamily: tokens.fontFamilyMonospace },
   testRow: { display: 'flex', gap: '4px', alignItems: 'center' },
+  inspectorForm: { display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalS },
+  twoCol: { display: 'flex', gap: tokens.spacingHorizontalS },
+  flex1: { flex: 1 },
+  testCard: {
+    display: 'flex', flexDirection: 'column', gap: '4px',
+    ...shorthands.border('1px', 'solid', tokens.colorNeutralStroke2),
+    ...shorthands.padding(tokens.spacingVerticalXS, tokens.spacingHorizontalXS),
+    ...shorthands.borderRadius(tokens.borderRadiusSmall),
+    backgroundColor: tokens.colorNeutralBackground2,
+  },
+  testTopRow: { display: 'flex', gap: '4px', alignItems: 'center' },
   emptyHint: {
     position: 'absolute', inset: 0, display: 'flex', alignItems: 'center', justifyContent: 'center',
     pointerEvents: 'none', color: tokens.colorNeutralForeground3, zIndex: 1, textAlign: 'center', padding: '24px',
@@ -382,6 +393,7 @@ function DbtCanvas(props: CanvasProps) {
 function SourceInspector({ value, onChange, onDelete }: {
   value: DbtSource; onChange: (p: Partial<DbtSource>) => void; onDelete: () => void;
 }) {
+  const s = useStyles();
   return (
     <>
       <Label weight="semibold">Source table</Label>
@@ -399,12 +411,12 @@ function SourceInspector({ value, onChange, onDelete }: {
       </Field>
       <Divider />
       <Label size="small">Freshness (optional)</Label>
-      <div style={{ display: 'flex', gap: 8 }}>
-        <Field label="Warn after (h)" style={{ flex: 1 }}>
+      <div className={s.twoCol}>
+        <Field label="Warn after (h)" className={s.flex1}>
           <SpinButton min={0} value={value.freshnessWarnHours ?? 0}
             onChange={(_, d) => onChange({ freshnessWarnHours: d.value ?? Number(d.displayValue) ?? 0 })} aria-label="Warn after hours" />
         </Field>
-        <Field label="Error after (h)" style={{ flex: 1 }}>
+        <Field label="Error after (h)" className={s.flex1}>
           <SpinButton min={0} value={value.freshnessErrorHours ?? 0}
             onChange={(_, d) => onChange({ freshnessErrorHours: d.value ?? Number(d.displayValue) ?? 0 })} aria-label="Error after hours" />
         </Field>
@@ -422,6 +434,7 @@ function ModelInspector({ value, allModels, sources, onChange, onDelete }: {
   value: DbtModel; allModels: DbtModel[]; sources: DbtSource[];
   onChange: (p: Partial<DbtModel>) => void; onDelete: () => void;
 }) {
+  const s = useStyles();
   const refOptions = allModels.filter((m) => m.name !== value.name).map((m) => m.name);
   const sourceOptions = sources.map((sc) => `${sc.name}.${sc.table}`);
   const tests = value.tests || [];
@@ -432,19 +445,19 @@ function ModelInspector({ value, allModels, sources, onChange, onDelete }: {
   const rmTest = (i: number) => onChange({ tests: tests.filter((_, j) => j !== i) });
 
   return (
-    <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+    <div className={s.inspectorForm}>
       <Label weight="semibold">Model · {value.name}</Label>
       <Field label="Model name">
         <Input value={value.name} onChange={(_, d) => onChange({ name: d.value })} />
       </Field>
-      <div style={{ display: 'flex', gap: 8 }}>
-        <Field label="Layer" style={{ flex: 1 }}>
+      <div className={s.twoCol}>
+        <Field label="Layer" className={s.flex1}>
           <Dropdown value={value.layer} selectedOptions={[value.layer]}
             onOptionSelect={(_, d) => onChange({ layer: (d.optionValue as MedallionLayer) || 'bronze' })}>
             {LAYERS.map((l) => <Option key={l} value={l}>{l}</Option>)}
           </Dropdown>
         </Field>
-        <Field label="Materialization" style={{ flex: 1 }}>
+        <Field label="Materialization" className={s.flex1}>
           <Dropdown value={value.materialized} selectedOptions={[value.materialized]}
             onOptionSelect={(_, d) => onChange({ materialized: (d.optionValue as Materialization) || 'view' })}>
             {MATERIALIZATIONS.map((m) => <Option key={m} value={m}>{m}</Option>)}
@@ -477,8 +490,8 @@ function ModelInspector({ value, allModels, sources, onChange, onDelete }: {
       <Divider />
       <Label size="small">Tests</Label>
       {tests.map((t, i) => (
-        <div key={i} style={{ display: 'flex', flexDirection: 'column', gap: 4, border: `1px solid ${tokens.colorNeutralStroke2}`, padding: 6, borderRadius: 4 }}>
-          <div style={{ display: 'flex', gap: 4, alignItems: 'center' }}>
+        <div key={i} className={s.testCard}>
+          <div className={s.testTopRow}>
             <Dropdown style={{ minWidth: 130 }} value={t.type} selectedOptions={[t.type]}
               onOptionSelect={(_, d) => updTest(i, { type: (d.optionValue as DbtTest['type']) || 'not_null' })} aria-label={`Test ${i + 1} type`}>
               {TEST_TYPES.map((tt) => <Option key={tt} value={tt}>{tt}</Option>)}
@@ -492,9 +505,9 @@ function ModelInspector({ value, allModels, sources, onChange, onDelete }: {
               onChange={(_, d) => updTest(i, { values: d.value.split(',').map((v) => v.trim()).filter(Boolean) })} aria-label={`Test ${i + 1} values`} />
           )}
           {t.type === 'relationships' && (
-            <div style={{ display: 'flex', gap: 4 }}>
-              <Input style={{ flex: 1 }} placeholder="to model" value={t.to || ''} onChange={(_, d) => updTest(i, { to: d.value })} aria-label={`Test ${i + 1} to`} />
-              <Input style={{ flex: 1 }} placeholder="field" value={t.field || ''} onChange={(_, d) => updTest(i, { field: d.value })} aria-label={`Test ${i + 1} field`} />
+            <div className={s.twoCol}>
+              <Input className={s.flex1} placeholder="to model" value={t.to || ''} onChange={(_, d) => updTest(i, { to: d.value })} aria-label={`Test ${i + 1} to`} />
+              <Input className={s.flex1} placeholder="field" value={t.field || ''} onChange={(_, d) => updTest(i, { field: d.value })} aria-label={`Test ${i + 1} field`} />
             </div>
           )}
         </div>
@@ -512,8 +525,9 @@ const ADAPTERS: { value: DbtAdapter; label: string }[] = [
 ];
 
 function TargetSummary({ target, onEdit }: { target: DbtTarget; onEdit: () => void }) {
+  const s = useStyles();
   return (
-    <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+    <div className={s.inspectorForm}>
       <Body1>Target</Body1>
       <Caption1>Adapter: <strong>{target.adapter}</strong></Caption1>
       <Button size="small" appearance="secondary" onClick={onEdit}>Edit target</Button>
@@ -522,8 +536,9 @@ function TargetSummary({ target, onEdit }: { target: DbtTarget; onEdit: () => vo
 }
 
 function TargetInspector({ value, onChange }: { value: DbtTarget; onChange: (p: Partial<DbtTarget>) => void }) {
+  const s = useStyles();
   return (
-    <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+    <div className={s.inspectorForm}>
       <Label weight="semibold">Run target</Label>
       <Field label="Adapter">
         <Dropdown value={ADAPTERS.find((a) => a.value === value.adapter)?.label || value.adapter} selectedOptions={[value.adapter]}
