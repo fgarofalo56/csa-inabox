@@ -7,20 +7,19 @@
  * were re-provisioned. Cosmos-only; tenant-scoped via the parent pipeline.
  */
 import { NextRequest } from 'next/server';
-import { getSession } from '@/lib/auth/session';
 import { pipelineHistoryContainer } from '@/lib/azure/cosmos-client';
 import type { LoomPipelineHistoryRecord } from '@/lib/types/loom-pipeline';
-import { jok, jerr, loadPipeline } from '../../_lib/pipeline-store';
+import { jok, jerr, loadPipeline, resolveCaller } from '../../_lib/pipeline-store';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
 
-export async function GET(_req: NextRequest, ctx: { params: Promise<{ id: string }> }) {
-  const s = getSession();
-  if (!s) return jerr('unauthenticated', 401, 'unauthorized');
+export async function GET(req: NextRequest, ctx: { params: Promise<{ id: string }> }) {
+  const caller = resolveCaller(req);
+  if (!caller) return jerr('unauthenticated', 401, 'unauthorized');
   const { id } = await ctx.params;
   try {
-    const pipeline = await loadPipeline(s.claims.oid, id);
+    const pipeline = await loadPipeline(caller.tenantId, id);
     if (!pipeline) return jerr('pipeline not found', 404, 'not_found');
     const c = await pipelineHistoryContainer();
     const { resources } = await c.items

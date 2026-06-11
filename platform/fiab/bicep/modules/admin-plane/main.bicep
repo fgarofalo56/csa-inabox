@@ -227,6 +227,9 @@ param copilotMafEnabled bool = false
 @description('Expose the unified Fabric IQ MCP tool surface (/api/iq/mcp) to EXTERNAL agents (Microsoft Agent 365, Azure AI Foundry, Copilot Studio) via Bearer-token auth. Console users always reach it via their MSAL session; this flag only gates the token path. When true the Console gets LOOM_IQ_MCP_ENABLED=true plus the shared LOOM_INTERNAL_TOKEN used as the default Bearer secret.')
 param loomIqMcpEnabled bool = false
 
+@description('Enable the headless CI Bearer-token path on the Loom deployment-pipeline routes (/api/deployment-pipelines/loom/**) so an Azure DevOps / GitHub Actions agent can drive deploys + management via the CSA Loom DevOps task/extension (Fabric "fabric-devops-pipelines" parity). Console users always reach these routes via their MSAL session; this flag only gates the token path, which fails closed when off. When true the Console gets LOOM_PIPELINE_CI_ENABLED=true plus the shared LOOM_INTERNAL_TOKEN as the default Bearer secret (set a dedicated LOOM_CI_TOKEN Key Vault secret to isolate CI from the broader internal-trust token).')
+param loomPipelineCiEnabled bool = false
+
 @description('Provision an Azure Files share + managedEnvironments/storages registration so the loom-mcp Container App can persist deployable MCP-server state across revisions. Container Apps only (Commercial / GCC); on AKS boundaries the MCP workload uses an Azure Files PersistentVolumeClaim instead. The Console "Mount persistence" admin control re-mounts the share imperatively.')
 param mcpPersistenceEnabled bool = true
 
@@ -2526,6 +2529,12 @@ module appDeployments 'app-deployments.bicep' = if (containerPlatform == 'contai
             // always work. On → Agent 365 / Foundry can ground on ontology +
             // semantic + live-signals via the shared internal Bearer token.
             { name: 'LOOM_IQ_MCP_ENABLED', value: string(loomIqMcpEnabled) }
+            // Headless CI Bearer-token path on the deployment-pipeline routes
+            // (/api/deployment-pipelines/loom/**). Off → only Console-session
+            // callers; the Azure DevOps / GitHub Actions task is rejected. On →
+            // the CSA Loom DevOps task can drive deploys + management using the
+            // shared internal Bearer token (or a dedicated LOOM_CI_TOKEN secret).
+            { name: 'LOOM_PIPELINE_CI_ENABLED', value: string(loomPipelineCiEnabled) }
           ],
           // MAF orchestration tier (GCC-High / IL5). When the loom-copilot-maf
           // Container App deploys, set LOOM_MAF_ENDPOINT so copilot-orchestrator
@@ -2534,10 +2543,11 @@ module appDeployments 'app-deployments.bicep' = if (containerPlatform == 'contai
           copilotMafActive ? [
             { name: 'LOOM_MAF_ENDPOINT', value: copilotMaf!.outputs.mafInternalEndpoint }
           ] : [],
-          // Shared internal trust token — wired when EITHER the MAF tier is
-          // active OR the IQ MCP external-agent path is enabled. Used as the
-          // default IQ MCP Bearer secret (LOOM_IQ_MCP_TOKEN overrides if set).
-          (copilotMafActive || loomIqMcpEnabled) ? [
+          // Shared internal trust token — wired when ANY token-authenticated path
+          // is active: the MAF tier, the IQ MCP external-agent path, OR the
+          // deployment-pipeline CI path. Used as the default Bearer secret for
+          // all three (LOOM_IQ_MCP_TOKEN / LOOM_CI_TOKEN override per-path).
+          (copilotMafActive || loomIqMcpEnabled || loomPipelineCiEnabled) ? [
             { name: 'LOOM_INTERNAL_TOKEN', secretRef: 'loom-internal-token' }
           ] : [],
           // MCP stdio→HTTP/SSE bridge (apps/fiab-mcp-bridge). Deployed alongside
@@ -2571,9 +2581,11 @@ module appDeployments 'app-deployments.bicep' = if (containerPlatform == 'contai
             { name: 'loom-paginated-render-key', keyVaultUrl: '${keyvault.outputs.keyVaultUri}secrets/${loomPaginatedRenderKeySecretName}', identity: identity.outputs.uamiConsoleId }
           ] : [],
           // Shared internal trust token for the MAF → Console tool-dispatch
-          // callback (GCC-High / IL5) AND the default Bearer secret for the IQ
-          // MCP external-agent path. Same deterministic value the MAF app gets.
-          (copilotMafActive || loomIqMcpEnabled) ? [
+          // callback (GCC-High / IL5), the default Bearer secret for the IQ
+          // MCP external-agent path, AND the default Bearer secret for the
+          // deployment-pipeline CI path. Same deterministic value all consumers
+          // get. Set a dedicated LOOM_CI_TOKEN secret to isolate CI if desired.
+          (copilotMafActive || loomIqMcpEnabled || loomPipelineCiEnabled) ? [
             { name: 'loom-internal-token', value: loomInternalToken }
           ] : []
         )

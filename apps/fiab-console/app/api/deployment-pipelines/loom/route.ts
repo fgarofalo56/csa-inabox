@@ -13,19 +13,18 @@
  */
 import { NextRequest } from 'next/server';
 import crypto from 'node:crypto';
-import { getSession } from '@/lib/auth/session';
 import { loomPipelinesContainer } from '@/lib/azure/cosmos-client';
 import type { LoomPipeline, LoomPipelineStage } from '@/lib/types/loom-pipeline';
-import { jok, jerr, listPipelines, ownedWorkspace } from './_lib/pipeline-store';
+import { jok, jerr, listPipelines, ownedWorkspace, resolveCaller } from './_lib/pipeline-store';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
 
-export async function GET() {
-  const s = getSession();
-  if (!s) return jerr('unauthenticated', 401, 'unauthorized');
+export async function GET(req: NextRequest) {
+  const caller = resolveCaller(req);
+  if (!caller) return jerr('unauthenticated', 401, 'unauthorized');
   try {
-    const pipelines = await listPipelines(s.claims.oid);
+    const pipelines = await listPipelines(caller.tenantId);
     return jok({ pipelines });
   } catch (e) {
     return jerr((e as Error).message || 'Failed to list pipelines');
@@ -33,9 +32,9 @@ export async function GET() {
 }
 
 export async function POST(req: NextRequest) {
-  const s = getSession();
-  if (!s) return jerr('unauthenticated', 401, 'unauthorized');
-  const tenantId = s.claims.oid;
+  const caller = resolveCaller(req);
+  if (!caller) return jerr('unauthenticated', 401, 'unauthorized');
+  const tenantId = caller.tenantId;
 
   const body = await req.json().catch(() => ({}));
   const displayName = String(body?.displayName || '').trim();
@@ -91,7 +90,7 @@ export async function POST(req: NextRequest) {
     stages,
     createdAt: now,
     updatedAt: now,
-    createdBy: s.claims.upn || s.claims.email || tenantId,
+    createdBy: caller.actor,
   };
 
   try {

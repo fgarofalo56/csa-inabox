@@ -1,0 +1,54 @@
+{
+  "$schema": "https://raw.githubusercontent.com/Microsoft/azure-pipelines-task-lib/master/tasks.schema.json",
+  "id": "97e5ce6c-dd4c-4996-ba45-edc7f984d55c",
+  "name": "LoomListPipelines",
+  "friendlyName": "CSA Loom — List deployment pipelines",
+  "description": "List the tenant's CSA Loom deployment pipelines (and their stage ids) so a pipeline can discover the ids it needs. Talks only to your own Loom Console.",
+  "helpMarkDown": "Requires `loomPipelineCiEnabled=true` + a CI Bearer token. See tools/ado-loom-task/README.md.",
+  "category": "Utility",
+  "visibility": ["Build", "Release"],
+  "runsOn": ["Agent", "DeploymentGroup"],
+  "author": "CSA Loom",
+  "version": { "Major": 1, "Minor": 0, "Patch": 0 },
+  "instanceNameFormat": "Loom: list deployment pipelines",
+  "groups": [{ "name": "auth", "displayName": "Connection & authentication", "isExpanded": true }],
+  "inputs": [
+    {
+      "name": "loomBaseUrl",
+      "type": "string",
+      "label": "Loom Console base URL",
+      "required": true,
+      "groupName": "auth",
+      "helpMarkDown": "Your Loom Console origin, e.g. https://loom.contoso.com."
+    },
+    {
+      "name": "userOid",
+      "type": "string",
+      "label": "Acting user OID (x-user-oid)",
+      "required": true,
+      "groupName": "auth"
+    },
+    {
+      "name": "loomToken",
+      "type": "string",
+      "label": "Loom CI Bearer token",
+      "required": true,
+      "groupName": "auth",
+      "helpMarkDown": "Set to a **secret** variable, e.g. $(LOOM_CI_TOKEN)."
+    },
+    {
+      "name": "expectPipelineName",
+      "type": "string",
+      "label": "Expected pipeline name (optional)",
+      "required": false,
+      "helpMarkDown": "When set, the task fails if no pipeline with this display name exists, and publishes its id as the matchedPipelineId output."
+    }
+  ],
+  "outputVariables": [
+    { "name": "pipelineCount", "description": "Number of pipelines the tenant owns." },
+    { "name": "matchedPipelineId", "description": "Id of the pipeline matching expectPipelineName (when set)." }
+  ],
+  "execution": {
+    "Node20_1": { "target": "index.js" }
+  }
+}

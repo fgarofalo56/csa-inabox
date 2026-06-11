@@ -177,6 +177,9 @@ param adxEnabled bool = true
 @description('Deploy the MAF (Microsoft Agent Framework, Gov AOAI-direct) orchestration-tier Container App (loom-copilot-maf). Set true in the GCC-High / IL5 params. The admin-plane gates activation on boundary∈{GCC-High,IL5} + containerPlatform==containerApps + deployAppsEnabled, so it is a safe no-op on the AKS path (the Console copilot-orchestrator then uses its documented Gov AOAI-direct fallback). Requires the loom-copilot-maf image pushed to ACR first.')
 param copilotMafEnabled bool = false
 
+@description('Enable the headless CI Bearer-token path on the Loom deployment-pipeline routes so an Azure DevOps / GitHub Actions agent can drive deploys + management via the CSA Loom DevOps task (Fabric "fabric-devops-pipelines" parity). Off by default — Console-session callers always work; this only gates the token path, which fails closed when off. When true the Console gets LOOM_PIPELINE_CI_ENABLED=true plus the shared LOOM_INTERNAL_TOKEN as the default Bearer secret. Cloud-agnostic: the ADO task talks only to the tenant own Loom URL + Entra, never api.fabric.microsoft.com.')
+param loomPipelineCiEnabled bool = false
+
 // ---------- Bring-your-own existing services (reuse instead of provision-new) ----------
 // Set any of these (via params/<boundary>.bicepparam readEnvironmentVariable('EXISTING_*',''))
 // to reuse an EXISTING resource in any RG/sub instead of provisioning a new one.
@@ -423,6 +426,7 @@ module adminPlane 'modules/admin-plane/main.bicep' = {
     aiSearchEnabled: aiSearchEnabled
     adxEnabled: adxEnabled
     copilotMafEnabled: copilotMafEnabled
+    loomPipelineCiEnabled: loomPipelineCiEnabled
     existingAiSearchService: existingAiSearchService
     existingAiSearchRg: existingAiSearchRg
     existingApimName: existingApimName

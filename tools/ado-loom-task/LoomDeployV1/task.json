@@ -1,0 +1,107 @@
+{
+  "$schema": "https://raw.githubusercontent.com/Microsoft/azure-pipelines-task-lib/master/tasks.schema.json",
+  "id": "5a0bd685-b811-4144-b11e-921125bcf739",
+  "name": "LoomDeploy",
+  "friendlyName": "CSA Loom — Deploy (deployment pipeline)",
+  "description": "Promote content between two stages of a CSA Loom deployment pipeline via the Loom REST API (Azure-native parity for Fabric deployment pipelines). Talks only to your own Loom Console — never api.fabric.microsoft.com.",
+  "helpMarkDown": "Requires the Loom Console deployed with `loomPipelineCiEnabled=true` and a Bearer token (`LOOM_CI_TOKEN`, or `LOOM_INTERNAL_TOKEN` when that is unset). Pass the token via a **secret** pipeline variable. See tools/ado-loom-task/README.md.",
+  "category": "Deploy",
+  "visibility": ["Build", "Release"],
+  "runsOn": ["Agent", "DeploymentGroup"],
+  "author": "CSA Loom",
+  "version": { "Major": 1, "Minor": 0, "Patch": 0 },
+  "instanceNameFormat": "Loom deploy $(sourceStageId) → $(targetStageId)",
+  "groups": [
+    { "name": "auth", "displayName": "Connection & authentication", "isExpanded": true },
+    { "name": "advanced", "displayName": "Advanced", "isExpanded": false }
+  ],
+  "inputs": [
+    {
+      "name": "loomBaseUrl",
+      "type": "string",
+      "label": "Loom Console base URL",
+      "required": true,
+      "groupName": "auth",
+      "helpMarkDown": "Your Loom Console origin, e.g. https://loom.contoso.com (no trailing path)."
+    },
+    {
+      "name": "userOid",
+      "type": "string",
+      "label": "Acting user OID (x-user-oid)",
+      "required": true,
+      "groupName": "auth",
+      "helpMarkDown": "The Entra object id (oid) of the tenant the deploy acts as. Becomes the pipeline owner/partition key."
+    },
+    {
+      "name": "loomToken",
+      "type": "string",
+      "label": "Loom CI Bearer token",
+      "required": true,
+      "groupName": "auth",
+      "helpMarkDown": "Bearer token matching LOOM_CI_TOKEN (or LOOM_INTERNAL_TOKEN). Set this to a **secret** variable, e.g. $(LOOM_CI_TOKEN)."
+    },
+    {
+      "name": "pipelineId",
+      "type": "string",
+      "label": "Pipeline id",
+      "required": true,
+      "helpMarkDown": "The Loom deployment-pipeline id (uuid). Discover it with the LoomListPipelines task."
+    },
+    {
+      "name": "sourceStageId",
+      "type": "string",
+      "label": "Source stage id",
+      "required": true,
+      "helpMarkDown": "Stage id to promote FROM."
+    },
+    {
+      "name": "targetStageId",
+      "type": "string",
+      "label": "Target stage id",
+      "required": true,
+      "helpMarkDown": "Stage id to promote INTO. Must be a distinct workspace from the source."
+    },
+    {
+      "name": "deployMode",
+      "type": "pickList",
+      "label": "Deploy mode",
+      "defaultValue": "full",
+      "required": true,
+      "options": { "full": "Full — promote every item", "selective": "Selective — only the listed items" },
+      "helpMarkDown": "Full promotes all source items; Selective promotes only the items you list below."
+    },
+    {
+      "name": "items",
+      "type": "multiLine",
+      "label": "Items (selective)",
+      "required": false,
+      "visibleRule": "deployMode = selective",
+      "helpMarkDown": "One `itemType:sourceItemId` per line, e.g. `semantic-model:6f1c…`."
+    },
+    {
+      "name": "note",
+      "type": "string",
+      "label": "Deploy note",
+      "required": false,
+      "groupName": "advanced",
+      "helpMarkDown": "Optional note stored on the deploy receipt (history)."
+    },
+    {
+      "name": "failOnPartial",
+      "type": "boolean",
+      "label": "Fail the task on a partial deploy",
+      "defaultValue": "true",
+      "required": false,
+      "groupName": "advanced",
+      "helpMarkDown": "When some items deploy and others fail, fail the task (true) or mark it succeeded-with-issues (false)."
+    }
+  ],
+  "outputVariables": [
+    { "name": "operationId", "description": "Deploy receipt (operation) id." },
+    { "name": "status", "description": "succeeded | partial | failed." },
+    { "name": "deployedCount", "description": "Number of items promoted into the target stage." }
+  ],
+  "execution": {
+    "Node20_1": { "target": "index.js" }
+  }
+}

@@ -1,0 +1,43 @@
+{
+  "manifestVersion": 1,
+  "id": "csa-loom-devops-pipelines",
+  "name": "CSA Loom — DevOps deployment pipelines",
+  "version": "1.0.0",
+  "publisher": "csa-loom",
+  "public": false,
+  "targets": [{ "id": "Microsoft.VisualStudio.Services" }],
+  "description": "Azure DevOps tasks that drive CSA Loom deployment pipelines (deploy, compare, list) through the Loom REST API. Azure-native parity for the Fabric fabric-devops-pipelines extension — talks only to your own Loom Console, never api.fabric.microsoft.com, so it works in Commercial, GCC, GCC-High, IL5 and air-gapped Azure DevOps Server.",
+  "categories": ["Azure Pipelines"],
+  "tags": ["loom", "deployment", "ci-cd", "fabric", "azure", "deploy"],
+  "icons": { "default": "images/icon.png" },
+  "content": {
+    "details": { "path": "overview.md" }
+  },
+  "files": [
+    { "path": "LoomDeployV1" },
+    { "path": "LoomCompareV1" },
+    { "path": "LoomListPipelinesV1" },
+    { "path": "common" },
+    { "path": "images", "addressable": true }
+  ],
+  "contributions": [
+    {
+      "id": "loom-deploy-task",
+      "type": "ms.vss-distributed-task.task",
+      "targets": ["ms.vss-distributed-task.tasks"],
+      "properties": { "name": "LoomDeployV1" }
+    },
+    {
+      "id": "loom-compare-task",
+      "type": "ms.vss-distributed-task.task",
+      "targets": ["ms.vss-distributed-task.tasks"],
+      "properties": { "name": "LoomCompareV1" }
+    },
+    {
+      "id": "loom-list-pipelines-task",
+      "type": "ms.vss-distributed-task.task",
+      "targets": ["ms.vss-distributed-task.tasks"],
+      "properties": { "name": "LoomListPipelinesV1" }
+    }
+  ]
+}

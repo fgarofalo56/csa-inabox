@@ -1,0 +1,15 @@
+{
+  "name": "csa-loom-ado-task",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Azure DevOps extension with tasks that drive CSA Loom deployment pipelines via the Loom REST API.",
+  "scripts": {
+    "test": "node --test test/inputs.test.js",
+    "package": "tfx extension create --manifest-globs vss-extension.json --rev-version",
+    "package:dev": "tfx extension create --manifest-globs vss-extension.json --overrides-file overrides.dev.json"
+  },
+  "license": "MIT",
+  "devDependencies": {
+    "tfx-cli": "^0.x"
+  }
+}

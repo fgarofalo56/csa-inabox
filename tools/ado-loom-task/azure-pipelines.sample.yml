@@ -1,0 +1,90 @@
+# Example: promote a CSA Loom deployment pipeline from Dev → Test → Prod.
+#
+# Prereqs:
+#   1. Install this extension into your Azure DevOps org (Marketplace, or
+#      side-load the .vsix for Azure DevOps Server / Gov).
+#   2. Deploy the Loom Console with loomPipelineCiEnabled=true
+#      (az deployment sub create ... -p loomPipelineCiEnabled=true), OR set the
+#      LOOM_PIPELINE_CI_ENABLED=true app setting on the Console container.
+#   3. Create a SECRET pipeline variable `LOOM_CI_TOKEN` whose value is the
+#      Console's LOOM_CI_TOKEN (or LOOM_INTERNAL_TOKEN when no dedicated CI
+#      token is set). Store it in a variable group or the pipeline's secret vars.
+#
+# The userOid is the Entra object id (oid) of the tenant that owns the pipeline.
+
+trigger:
+  - main
+
+pool:
+  vmImage: ubuntu-latest
+
+variables:
+  - group: loom-ci            # provides the secret LOOM_CI_TOKEN
+  - name: loomBaseUrl
+    value: https://loom.contoso.com
+  - name: userOid
+    value: 00000000-0000-0000-0000-000000000000
+  - name: pipelineId
+    value: 11111111-1111-1111-1111-111111111111
+  - name: devStageId
+    value: 22222222-2222-2222-2222-222222222222
+  - name: testStageId
+    value: 33333333-3333-3333-3333-333333333333
+  - name: prodStageId
+    value: 44444444-4444-4444-4444-444444444444
+
+steps:
+  # Optional discovery — resolve the pipeline id by name and fail fast if absent.
+  - task: LoomListPipelines@1
+    displayName: List Loom pipelines
+    inputs:
+      loomBaseUrl: $(loomBaseUrl)
+      userOid: $(userOid)
+      loomToken: $(LOOM_CI_TOKEN)
+      expectPipelineName: 'Sales analytics'
+
+  # Gate: fail the build if Dev and Test have drifted (optional).
+  - task: LoomCompare@1
+    displayName: Compare Dev → Test
+    inputs:
+      loomBaseUrl: $(loomBaseUrl)
+      userOid: $(userOid)
+      loomToken: $(LOOM_CI_TOKEN)
+      pipelineId: $(pipelineId)
+      sourceStageId: $(devStageId)
+      targetStageId: $(testStageId)
+      failOnDifferences: false
+
+  # Promote everything from Dev into Test.
+  - task: LoomDeploy@1
+    name: deployToTest
+    displayName: Deploy Dev → Test (full)
+    inputs:
+      loomBaseUrl: $(loomBaseUrl)
+      userOid: $(userOid)
+      loomToken: $(LOOM_CI_TOKEN)
+      pipelineId: $(pipelineId)
+      sourceStageId: $(devStageId)
+      targetStageId: $(testStageId)
+      deployMode: full
+      note: 'CI promote from build $(Build.BuildNumber)'
+      failOnPartial: true
+
+  # Selective promote into Prod after manual approval (use an Environment).
+  - task: LoomDeploy@1
+    displayName: Deploy Test → Prod (selective)
+    inputs:
+      loomBaseUrl: $(loomBaseUrl)
+      userOid: $(userOid)
+      loomToken: $(LOOM_CI_TOKEN)
+      pipelineId: $(pipelineId)
+      sourceStageId: $(testStageId)
+      targetStageId: $(prodStageId)
+      deployMode: selective
+      items: |
+        semantic-model:6f1c0a2e-...
+        report:9b2d4f8a-...
+      failOnPartial: true
+
+  - script: echo "Deployed operation $(deployToTest.operationId) status=$(deployToTest.status)"
+    displayName: Show deploy output
