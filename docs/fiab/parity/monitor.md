@@ -70,3 +70,50 @@ the Cosmos-backed item telemetry (who deployed/edited what).
 - `pnpm build` clean; `/monitor` route prerenders.
 - Live probe (minted-session browser walk) pending — not available in the
   worktree environment; to run post-merge against the deployed Console.
+
+## Load-performance hardening (audit-t117)
+
+The Monitor surface was slow to load because each visible tab re-ran its full
+Azure read on every mount/revisit and every Refresh click, dominated by the
+whole-subscription resource-health crawl and the heavy ADF+Synapse activity
+KQL. Three Azure-native, zero-new-RBAC fixes address this — all still work with
+`LOOM_DEFAULT_FABRIC_WORKSPACE` unset (ARM + Azure Resource Graph + Log
+Analytics only; no Fabric/Power BI host on any path):
+
+1. **Server-side TTL memo** (`monitor-client.ts`, `cached()`): `listResources()`,
+   `listResourceHealth()` and `queryActivityFeed()` are memoized in-process
+   (inventory 60 s, health/activities 45 s; overridable via
+   `LOOM_MONITOR_{INVENTORY,HEALTH,ACTIVITY}_TTL_MS`). The Promise is cached, so
+   N concurrent callers share ONE Azure round-trip, and a tab-revisit / Refresh
+   inside the window is served from memory. Failures are evicted (never cached),
+   so the next call retries Azure. `clearMonitorCache()` is exported for tests /
+   an explicit hard-refresh path.
+2. **Resource-health fast path via Azure Resource Graph**: `listResourceHealth()`
+   issues ONE `Microsoft.ResourceGraph/resources` POST querying the
+   `HealthResources` table instead of the paginated subscription-wide
+   `availabilityStatuses` crawl. Because ARG's `HealthResources` coverage is
+   VM-leaning and the Loom estate is PaaS-heavy, when ARG returns no rows (or its
+   provider is unavailable / RBAC-blocked) the code falls back to the
+   authoritative `availabilityStatuses` crawl — no coverage regression, honest
+   per `no-vaporware.md`. ARG honours the caller's RBAC; the Console UAMI's
+   existing subscription-scoped **Reader** grant (`main.bicep` → `rti-hub-rbac`,
+   already deployed for the RTI hub) plus **Monitoring Reader** cover it, so
+   **no new role assignment** is required.
+3. **Client debounce on the Activities window** (`monitor-hub.tsx`): the `days`
+   dropdown is debounced 300 ms before refetching, so changing the window no
+   longer fires the heavy union KQL per intermediate value; the dropdown +
+   caption still reflect the selection instantly.
+
+The deliberate two-stage Overview split (fast `/api/monitor/inventory` first
+paint, slow `/api/monitor/health` in parallel and non-blocking) is preserved —
+it is NOT regressed into a single blocking aggregate.
+
+### Verification (audit-t117)
+
+- `lib/azure/__tests__/monitor-client.test.ts` — 31/31 green, including the ARG
+  fast path, the crawl fallback on empty/error, the TTL memo (repeat call does
+  not re-hit ARM; `clearMonitorCache()` forces a refetch), and failure
+  non-caching.
+- `npx tsc --noEmit` — touched files clean (monitor-client.ts, monitor-hub.tsx).
+- No new env var is required to run (the three `*_TTL_MS` vars are optional
+  tuning overrides with sane defaults); no new RBAC.

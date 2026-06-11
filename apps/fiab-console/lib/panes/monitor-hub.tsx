@@ -79,8 +79,10 @@ const useStyles = makeStyles({
     padding: tokens.spacingVerticalM, borderRadius: tokens.borderRadiusLarge,
     border: `1px solid ${tokens.colorNeutralStroke2}`,
     backgroundColor: tokens.colorNeutralBackground1,
+    boxShadow: tokens.shadow2,
     display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalXXS,
   },
+  notice: { marginBottom: tokens.spacingVerticalM },
   statLabel: {
     fontSize: '11px', color: tokens.colorNeutralForeground3, fontWeight: 600,
     textTransform: 'uppercase', letterSpacing: '0.05em',
@@ -141,10 +143,19 @@ export function MonitorHubPane() {
   const [q, setQ] = useState('');
   const [tick, setTick] = useState(0);
 
+  // Debounce the window dropdown so rapid changes don't each fire the heavy
+  // ADF+Synapse union KQL — only the settled value triggers a refetch. The
+  // dropdown + caption still reflect `days` instantly for a responsive UI.
+  const [debouncedDays, setDebouncedDays] = useState(days);
+  useEffect(() => {
+    const h = setTimeout(() => setDebouncedDays(days), 300);
+    return () => clearTimeout(h);
+  }, [days]);
+
   useEffect(() => {
     let alive = true;
     setData(null); setErr(null);
-    const params = new URLSearchParams({ days });
+    const params = new URLSearchParams({ days: debouncedDays });
     fetch(`/api/monitor/activities?${params.toString()}`)
       .then(async (r) => {
         if (!alive) return;
@@ -155,7 +166,7 @@ export function MonitorHubPane() {
       })
       .catch((e) => { if (alive) { setErr(String(e)); setData({ ok: false }); } });
     return () => { alive = false; };
-  }, [days, tick]);
+  }, [debouncedDays, tick]);
 
   const refresh = useCallback(() => setTick((t) => t + 1), []);
 
@@ -269,7 +280,7 @@ export function MonitorHubPane() {
       </div>
 
       {gate && (
-        <MessageBar intent="warning">
+        <MessageBar intent="warning" className={styles.notice}>
           <MessageBarBody>
             <MessageBarTitle>Activity feed unavailable — Log Analytics not configured</MessageBarTitle>
             {gate.message} Missing: <strong>{gate.missing.join(', ')}</strong>. Set it on the Console
@@ -280,7 +291,7 @@ export function MonitorHubPane() {
       )}
 
       {err && (
-        <MessageBar intent="error">
+        <MessageBar intent="error" className={styles.notice}>
           <MessageBarBody>
             <MessageBarTitle>Couldn&apos;t load activity history</MessageBarTitle>
             {err}
@@ -321,7 +332,7 @@ export function MonitorHubPane() {
           <Caption1 className={styles.caption}>
             {tableRows.length} of {rows.length} run{rows.length === 1 ? '' : 's'} · run history from
             Log Analytics{data?.synapseIncluded ? ' (ADF + Synapse)' : ' (ADF)'} · last{' '}
-            {days === '1' ? '24 hours' : `${days} days`}
+            {debouncedDays === '1' ? '24 hours' : `${debouncedDays} days`}
           </Caption1>
         )}
       </Section>
