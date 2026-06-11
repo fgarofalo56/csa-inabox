@@ -1,19 +1,40 @@
 'use client';
 
+/**
+ * Catalog → Metastores & accounts.
+ *
+ * Three real governance backends, each on the Azure-native default path:
+ *   • Databricks Unity Catalog — listed via the UC REST API. Listing
+ *     metastores needs account/metastore admin; listing a workspace's
+ *     catalogs does NOT, which is why the "Register a workspace" probe leads
+ *     with listCatalogs. The honest account-admin gate is preserved.
+ *   • Fabric / OneLake — strictly opt-in and soft-failing (no-fabric-dependency):
+ *     the page never blocks when no OneLake workspace is visible.
+ *   • Microsoft Purview — account + endpoint derived from the configured
+ *     short name; an honest infra-gate renders when not configured.
+ *
+ * Presentation-only redesign over the existing GET/POST /api/catalog/metastores
+ * route: raw <Table> blocks → LoomDataTable, hand-rolled cards → <Section>,
+ * and a top summary <TileGrid> of <ItemTile>s for the three backends.
+ */
+
 import { useCallback, useEffect, useState } from 'react';
 import { CatalogShell } from '@/lib/components/catalog/catalog-shell';
 import {
   Spinner, Button, Input, Field, Dropdown, Option, MessageBar, MessageBarBody,
-  MessageBarTitle, MessageBarActions, Table, TableHeader, TableRow, TableHeaderCell,
-  TableBody, TableCell, Subtitle2, Body1, Caption1, Badge, Divider, tokens,
+  MessageBarTitle, MessageBarActions, Body1, Caption1, Badge, makeStyles, tokens,
 } from '@fluentui/react-components';
 import {
-  Add24Regular, ArrowSync24Regular, Database24Regular,
-  Cloud24Regular, DatabaseLink24Regular, ShieldTask24Regular, Globe24Regular,
+  Add24Regular, ArrowSync24Regular, DatabaseLink24Regular, Globe24Regular,
 } from '@fluentui/react-icons';
+import { Section } from '@/lib/components/ui/section';
+import { LoomDataTable, type LoomColumn } from '@/lib/components/ui/loom-data-table';
+import { ItemTile } from '@/lib/components/ui/item-tile';
+import { TileGrid } from '@/lib/components/ui/tile-grid';
 
 interface UnityMeta { metastore_id: string; name: string; region?: string; workspace_hostname: string; }
 interface OneLakeWs { id: string; displayName: string; capacityId?: string; }
+interface ProbeCatalog { name: string; catalog_type?: string; owner?: string; }
 interface DiscoverableWs {
   id: string; name: string; workspaceUrl: string;
   location?: string; resourceGroup?: string; subscriptionId: string; sku?: string;
@@ -23,20 +44,51 @@ interface AccountAdminGate {
   remediation: { role: string; identity: string; where: string };
 }
 
-const card: React.CSSProperties = {
-  padding: 20,
-  border: `1px solid ${tokens.colorNeutralStroke2}`,
-  borderRadius: tokens.borderRadiusXLarge,
-  backgroundColor: tokens.colorNeutralBackground1,
-  marginBottom: 20,
-  boxShadow: tokens.shadow4,
-};
-
-const sectionHead: React.CSSProperties = {
-  display: 'flex', alignItems: 'center', gap: 10, marginBottom: 14,
-};
+const useStyles = makeStyles({
+  intro: {
+    display: 'block', color: tokens.colorNeutralForeground3,
+    marginBottom: tokens.spacingVerticalL, maxWidth: '760px',
+  },
+  summaryWrap: { marginBottom: tokens.spacingVerticalXXL },
+  registerGrid: {
+    display: 'grid', gridTemplateColumns: '1fr auto',
+    gap: tokens.spacingHorizontalM, alignItems: 'end',
+  },
+  switchMode: { marginTop: tokens.spacingVerticalXS, paddingLeft: 0 },
+  probeResultCard: { marginTop: tokens.spacingVerticalM, marginBottom: 0 },
+  desc: {
+    display: 'block', color: tokens.colorNeutralForeground3,
+    marginBottom: tokens.spacingVerticalM, maxWidth: '720px',
+  },
+  gateRemediation: {
+    marginTop: tokens.spacingVerticalS, fontSize: '12px', lineHeight: 1.6,
+  },
+  metaName: { display: 'flex', flexDirection: 'column' },
+  caption3: { color: tokens.colorNeutralForeground3 },
+  hint: { whiteSpace: 'pre-wrap', marginTop: '8px', fontSize: '11px' },
+  probeHead: {
+    display: 'flex', alignItems: 'center', gap: tokens.spacingHorizontalS,
+    marginBottom: tokens.spacingVerticalS,
+  },
+  probeFollow: {
+    display: 'block', marginTop: tokens.spacingVerticalS,
+    color: tokens.colorNeutralForeground3,
+  },
+  purviewEndpoint: {
+    display: 'block', color: tokens.colorNeutralForeground3, marginTop: tokens.spacingVerticalXS,
+  },
+  mbTop: { marginTop: tokens.spacingVerticalM },
+  mbBottom: { marginBottom: tokens.spacingVerticalM },
+  spinner: { marginTop: tokens.spacingVerticalXXL },
+  errorList: {
+    margin: 0, marginTop: tokens.spacingVerticalXS,
+    paddingLeft: tokens.spacingHorizontalXXL,
+  },
+  okIcon: { color: tokens.colorPaletteGreenForeground1 },
+});
 
 export default function MetastoresPage() {
+  const s = useStyles();
   const [data, setData] = useState<any>(null);
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
@@ -88,126 +140,208 @@ export default function MetastoresPage() {
   const selectedWsObj = discoverable.find((w) => w.workspaceUrl === selectedWs);
   const gate: AccountAdminGate | undefined = data?.accountAdminGate;
 
+  const unity: UnityMeta[] = Array.isArray(data?.unity) ? data.unity : [];
+  const onelake: OneLakeWs[] = Array.isArray(data?.onelake) ? data.onelake : [];
+
+  const scrollTo = (id: string) => () =>
+    document.getElementById(id)?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+
+  const unityColumns: LoomColumn<UnityMeta>[] = [
+    {
+      key: 'name', label: 'Metastore', sortable: true, filterable: true, filterType: 'text',
+      getValue: (m) => m.name,
+      render: (m) => (
+        <span className={s.metaName}>
+          <strong>{m.name}</strong>
+          <Caption1 className={s.caption3}>{m.metastore_id}</Caption1>
+        </span>
+      ),
+    },
+    {
+      key: 'region', label: 'Region', sortable: true, filterable: true, filterType: 'select', width: 160,
+      getValue: (m) => m.region || '—',
+      render: (m) => m.region || '—',
+    },
+    {
+      key: 'workspace_hostname', label: 'Workspace', sortable: true, filterable: true, filterType: 'text',
+      getValue: (m) => m.workspace_hostname,
+      render: (m) => m.workspace_hostname,
+    },
+  ];
+
+  const probeColumns: LoomColumn<ProbeCatalog>[] = [
+    {
+      key: 'name', label: 'Catalog', sortable: true, filterable: true, filterType: 'text',
+      getValue: (c) => c.name, render: (c) => <strong>{c.name}</strong>,
+    },
+    {
+      key: 'catalog_type', label: 'Type', sortable: true, filterable: true, filterType: 'select', width: 180,
+      getValue: (c) => c.catalog_type || '—', render: (c) => c.catalog_type || '—',
+    },
+    {
+      key: 'owner', label: 'Owner', sortable: true, filterable: true, filterType: 'text',
+      getValue: (c) => c.owner || '—', render: (c) => c.owner || '—',
+    },
+  ];
+
+  const onelakeColumns: LoomColumn<OneLakeWs>[] = [
+    {
+      key: 'displayName', label: 'Workspace', sortable: true, filterable: true, filterType: 'text',
+      getValue: (w) => w.displayName, render: (w) => <strong>{w.displayName}</strong>,
+    },
+    {
+      key: 'capacityId', label: 'Capacity', sortable: true, filterable: true, filterType: 'text',
+      getValue: (w) => w.capacityId || '—', render: (w) => w.capacityId || '—',
+    },
+  ];
+
   return (
     <CatalogShell sectionTitle="Metastores & accounts">
+      <Caption1 className={s.intro}>
+        The governance backends wired into this deployment — Databricks Unity Catalog,
+        Fabric / OneLake (opt-in), and Microsoft Purview. All are read live from their
+        Azure-native data planes; OneLake stays optional and never blocks the page.
+      </Caption1>
+
       {error && (
-        <MessageBar intent="error" style={{ marginBottom: 16 }}>
-          <MessageBarBody><MessageBarTitle>Couldn’t load metastores</MessageBarTitle>{error}</MessageBarBody>
+        <MessageBar intent="error" className={s.mbBottom}>
+          <MessageBarBody><MessageBarTitle>Couldn&apos;t load metastores</MessageBarTitle>{error}</MessageBarBody>
           <MessageBarActions>
             <Button size="small" icon={<ArrowSync24Regular />} onClick={load}>Retry</Button>
           </MessageBarActions>
         </MessageBar>
       )}
-      {loading && !error && <Spinner label="Loading metastores…" style={{ marginTop: 32 }} />}
+      {loading && !error && <Spinner label="Loading metastores…" className={s.spinner} />}
 
       {data && (
         <>
+          {/* ---------- Summary tiles ---------- */}
+          <div className={s.summaryWrap}>
+            <TileGrid minTileWidth={260}>
+              <ItemTile
+                type="unity-catalog"
+                title="Databricks Unity Catalog"
+                subtitle="Metastores & catalogs"
+                meta="Click to view metastores"
+                badge={
+                  <Badge appearance="tint" color={unity.length ? 'brand' : 'informative'}>
+                    {unity.length ? `${unity.length} metastore${unity.length === 1 ? '' : 's'}` : 'Register a workspace'}
+                  </Badge>
+                }
+                onClick={scrollTo('sec-unity')}
+              />
+              <ItemTile
+                type="onelake-workspace"
+                title="Fabric / OneLake"
+                subtitle="Opt-in workspaces"
+                meta="Click to view workspaces"
+                badge={
+                  <Badge appearance="tint" color={onelake.length ? 'brand' : 'informative'}>
+                    {onelake.length ? `${onelake.length} workspace${onelake.length === 1 ? '' : 's'}` : 'Not configured'}
+                  </Badge>
+                }
+                onClick={scrollTo('sec-onelake')}
+              />
+              <ItemTile
+                type="purview-account"
+                title="Microsoft Purview"
+                subtitle="Data governance account"
+                meta="Click to view account"
+                badge={
+                  <Badge appearance="tint" color={data.purview ? 'success' : 'warning'}>
+                    {data.purview ? 'Configured' : 'Not configured'}
+                  </Badge>
+                }
+                onClick={scrollTo('sec-purview')}
+              />
+            </TileGrid>
+          </div>
+
           {/* ---------- Databricks Unity Catalog ---------- */}
-          <div style={card}>
-            <div style={sectionHead}>
-              <Database24Regular style={{ color: tokens.colorBrandForeground1 }} />
-              <Subtitle2>Databricks Unity Catalog</Subtitle2>
-              {data.unity?.length > 0 && (
-                <Badge appearance="tint" color="brand">{data.unity.length} metastore{data.unity.length === 1 ? '' : 's'}</Badge>
+          <div id="sec-unity">
+            <Section
+              title="Databricks Unity Catalog"
+              actions={
+                unity.length > 0 ? (
+                  <Badge appearance="tint" color="brand">
+                    {unity.length} metastore{unity.length === 1 ? '' : 's'}
+                  </Badge>
+                ) : undefined
+              }
+            >
+              {/* Honest account-admin gate — the page still renders everything else. */}
+              {gate && (
+                <MessageBar intent="warning" className={s.mbBottom}>
+                  <MessageBarBody>
+                    <MessageBarTitle>{gate.title}</MessageBarTitle>
+                    {gate.detail}
+                    <div className={s.gateRemediation}>
+                      <div><strong>Role:</strong> {gate.remediation.role}</div>
+                      <div><strong>Identity:</strong> <code>{gate.remediation.identity}</code></div>
+                      <div><strong>Where:</strong> {gate.remediation.where}</div>
+                    </div>
+                  </MessageBarBody>
+                </MessageBar>
               )}
-            </div>
 
-            {/* Honest account-admin gate — the page still renders everything else. */}
-            {gate && (
-              <MessageBar intent="warning" style={{ marginBottom: 14 }}>
-                <MessageBarBody>
-                  <MessageBarTitle>{gate.title}</MessageBarTitle>
-                  {gate.detail}
-                  <div style={{ marginTop: 10, fontSize: 12, lineHeight: 1.6 }}>
-                    <div><strong>Role:</strong> {gate.remediation.role}</div>
-                    <div><strong>Identity:</strong> <code>{gate.remediation.identity}</code></div>
-                    <div><strong>Where:</strong> {gate.remediation.where}</div>
-                  </div>
-                </MessageBarBody>
-              </MessageBar>
-            )}
+              {data.unityError ? (
+                <MessageBar intent="warning">
+                  <MessageBarBody>
+                    <MessageBarTitle>Unity Catalog not configured</MessageBarTitle>{data.unityError}
+                    {data.unityHint && (
+                      <pre className={s.hint}>{JSON.stringify(data.unityHint, null, 2)}</pre>
+                    )}
+                  </MessageBarBody>
+                </MessageBar>
+              ) : unity.length === 0 && !gate ? (
+                <Body1 className={s.caption3}>
+                  No metastores discovered. Confirm the Loom UAMI is in the UC metastore admin group,
+                  or register a workspace below.
+                </Body1>
+              ) : unity.length > 0 ? (
+                <LoomDataTable<UnityMeta>
+                  columns={unityColumns}
+                  rows={unity}
+                  getRowId={(m) => m.metastore_id}
+                  ariaLabel="Unity metastores"
+                  empty="No metastores discovered for the Console identity."
+                />
+              ) : null}
 
-            {data.unityError ? (
-              <MessageBar intent="warning">
-                <MessageBarBody>
-                  <MessageBarTitle>Unity Catalog not configured</MessageBarTitle>{data.unityError}
-                  {data.unityHint && (
-                    <pre style={{ marginTop: 8, fontSize: 11, whiteSpace: 'pre-wrap' }}>
-                      {JSON.stringify(data.unityHint, null, 2)}
-                    </pre>
-                  )}
-                </MessageBarBody>
-              </MessageBar>
-            ) : data.unity?.length === 0 && !gate ? (
-              <Body1 style={{ color: tokens.colorNeutralForeground3 }}>
-                No metastores discovered. Confirm the Loom UAMI is in the UC metastore admin group,
-                or register a workspace below.
-              </Body1>
-            ) : data.unity?.length > 0 ? (
-              <Table aria-label="Unity metastores" size="medium">
-                <TableHeader>
-                  <TableRow>
-                    <TableHeaderCell>Metastore</TableHeaderCell>
-                    <TableHeaderCell>Region</TableHeaderCell>
-                    <TableHeaderCell>Workspace</TableHeaderCell>
-                  </TableRow>
-                </TableHeader>
-                <TableBody>
-                  {(data.unity as UnityMeta[]).map((m) => (
-                    <TableRow key={m.metastore_id}>
-                      <TableCell>
-                        <div style={{ display: 'flex', flexDirection: 'column' }}>
-                          <strong>{m.name}</strong>
-                          <Caption1 style={{ color: tokens.colorNeutralForeground3 }}>{m.metastore_id}</Caption1>
-                        </div>
-                      </TableCell>
-                      <TableCell>{m.region || '—'}</TableCell>
-                      <TableCell>{m.workspace_hostname}</TableCell>
-                    </TableRow>
-                  ))}
-                </TableBody>
-              </Table>
-            ) : null}
+              {/* Per-workspace (non-admin) errors that aren't the account-admin gate. */}
+              {Array.isArray(data.unityWorkspaceErrors) &&
+                data.unityWorkspaceErrors.filter((w: any) => !w.accountAdmin).length > 0 && (
+                <MessageBar intent="warning" className={s.mbTop}>
+                  <MessageBarBody>
+                    <MessageBarTitle>Some workspaces were unreachable</MessageBarTitle>
+                    <ul className={s.errorList}>
+                      {data.unityWorkspaceErrors
+                        .filter((w: any) => !w.accountAdmin)
+                        .map((w: any) => <li key={w.workspace_hostname}><code>{w.workspace_hostname}</code>: {w.message}</li>)}
+                    </ul>
+                  </MessageBarBody>
+                </MessageBar>
+              )}
+            </Section>
+          </div>
 
-            {/* Per-workspace (non-admin) errors that aren't the account-admin gate. */}
-            {Array.isArray(data.unityWorkspaceErrors) &&
-              data.unityWorkspaceErrors.filter((w: any) => !w.accountAdmin).length > 0 && (
-              <MessageBar intent="warning" style={{ marginTop: 14 }}>
-                <MessageBarBody>
-                  <MessageBarTitle>Some workspaces were unreachable</MessageBarTitle>
-                  <ul style={{ margin: '6px 0 0', paddingLeft: 18 }}>
-                    {data.unityWorkspaceErrors
-                      .filter((w: any) => !w.accountAdmin)
-                      .map((w: any) => <li key={w.workspace_hostname}><code>{w.workspace_hostname}</code>: {w.message}</li>)}
-                  </ul>
-                </MessageBarBody>
-              </MessageBar>
-            )}
-
-            <Divider style={{ margin: '20px 0 16px' }} />
-
-            {/* ---------- Register a Databricks workspace ---------- */}
-            <div style={sectionHead}>
-              <Add24Regular style={{ color: tokens.colorBrandForeground1 }} />
-              <Subtitle2>Register a Databricks workspace</Subtitle2>
-            </div>
-            <Body1 style={{ color: tokens.colorNeutralForeground3, marginBottom: 12 }}>
+          {/* ---------- Register a Databricks workspace ---------- */}
+          <Section title="Register a Databricks workspace">
+            <Caption1 className={s.desc}>
               Pick a workspace the Console identity can see, then register it to list its Unity
               Catalog. Listing catalogs does not require account-admin.
-            </Body1>
+            </Caption1>
 
             {data.discoveryError && (
-              <MessageBar intent="info" style={{ marginBottom: 12 }}>
+              <MessageBar intent="info" className={s.mbBottom}>
                 <MessageBarBody>
-                  Couldn’t enumerate workspaces over ARM ({data.discoveryError}). Use manual entry below —
+                  Couldn&apos;t enumerate workspaces over ARM ({data.discoveryError}). Use manual entry below —
                   grant the Console UAMI <strong>Reader</strong> on the target subscriptions to populate the picker.
                 </MessageBarBody>
               </MessageBar>
             )}
 
-            <div style={{
-              display: 'grid', gridTemplateColumns: '1fr auto', gap: 12, alignItems: 'end',
-            }}>
+            <div className={s.registerGrid}>
               {manualMode ? (
                 <Field label="Workspace hostname" hint="e.g. adb-1234567890.19.azuredatabricks.net">
                   <Input
@@ -231,9 +365,9 @@ export default function MetastoresPage() {
                   >
                     {discoverable.map((w) => (
                       <Option key={w.id || w.workspaceUrl} value={w.workspaceUrl} text={`${w.name} — ${w.workspaceUrl}`}>
-                        <div style={{ display: 'flex', flexDirection: 'column' }}>
+                        <div className={s.metaName}>
                           <strong>{w.name}</strong>
-                          <Caption1 style={{ color: tokens.colorNeutralForeground3 }}>
+                          <Caption1 className={s.caption3}>
                             {w.workspaceUrl}{w.location ? ` · ${w.location}` : ''}{w.resourceGroup ? ` · ${w.resourceGroup}` : ''}
                           </Caption1>
                         </div>
@@ -255,27 +389,22 @@ export default function MetastoresPage() {
             <Button
               appearance="transparent"
               size="small"
-              style={{ marginTop: 6, paddingLeft: 0 }}
+              className={s.switchMode}
               onClick={() => { setManualMode((m) => !m); setProbeResult(null); setProbeError(null); }}
             >
               {manualMode ? '← Choose from discovered workspaces' : 'Enter a hostname manually instead'}
             </Button>
 
             {probeError && (
-              <MessageBar intent="error" style={{ marginTop: 12 }}>
+              <MessageBar intent="error" className={s.mbTop}>
                 <MessageBarBody><MessageBarTitle>Registration failed</MessageBarTitle>{probeError}</MessageBarBody>
               </MessageBar>
             )}
 
             {probeResult?.ok && (
-              <div style={{
-                marginTop: 14, padding: 16,
-                border: `1px solid ${tokens.colorNeutralStroke2}`,
-                borderRadius: tokens.borderRadiusLarge,
-                backgroundColor: tokens.colorNeutralBackground2,
-              }}>
-                <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 10 }}>
-                  <DatabaseLink24Regular style={{ color: tokens.colorPaletteGreenForeground1 }} />
+              <Section bare className={s.probeResultCard}>
+                <div className={s.probeHead}>
+                  <DatabaseLink24Regular className={s.okIcon} />
                   <Body1><strong>{probeResult.probed}</strong> registered</Body1>
                   <Badge appearance="tint" color="success">
                     {(probeResult.catalogs?.length ?? 0)} catalog{probeResult.catalogs?.length === 1 ? '' : 's'}
@@ -283,7 +412,7 @@ export default function MetastoresPage() {
                 </div>
 
                 {probeResult.accountAdminGate && (
-                  <MessageBar intent="warning" style={{ marginBottom: 10 }}>
+                  <MessageBar intent="warning" className={s.mbBottom}>
                     <MessageBarBody>
                       <MessageBarTitle>{probeResult.accountAdminGate.title}</MessageBarTitle>
                       {probeResult.accountAdminGate.detail}
@@ -292,88 +421,74 @@ export default function MetastoresPage() {
                 )}
 
                 {Array.isArray(probeResult.catalogs) && probeResult.catalogs.length > 0 ? (
-                  <Table aria-label="Catalogs in workspace" size="small">
-                    <TableHeader>
-                      <TableRow>
-                        <TableHeaderCell>Catalog</TableHeaderCell>
-                        <TableHeaderCell>Type</TableHeaderCell>
-                        <TableHeaderCell>Owner</TableHeaderCell>
-                      </TableRow>
-                    </TableHeader>
-                    <TableBody>
-                      {probeResult.catalogs.map((c: any) => (
-                        <TableRow key={c.name}>
-                          <TableCell><strong>{c.name}</strong></TableCell>
-                          <TableCell>{c.catalog_type || '—'}</TableCell>
-                          <TableCell>{c.owner || '—'}</TableCell>
-                        </TableRow>
-                      ))}
-                    </TableBody>
-                  </Table>
+                  <LoomDataTable<ProbeCatalog>
+                    columns={probeColumns}
+                    rows={probeResult.catalogs as ProbeCatalog[]}
+                    getRowId={(c) => c.name}
+                    ariaLabel="Catalogs in workspace"
+                    noFilters
+                    empty="No catalogs visible to the Console identity in this workspace yet."
+                  />
                 ) : (
-                  <Caption1 style={{ color: tokens.colorNeutralForeground3 }}>
+                  <Caption1 className={s.caption3}>
                     No catalogs visible to the Console identity in this workspace yet.
                   </Caption1>
                 )}
 
                 {probeResult.followUp && (
-                  <Caption1 style={{ display: 'block', marginTop: 10, color: tokens.colorNeutralForeground3 }}>
+                  <Caption1 className={s.probeFollow}>
                     To make this registration permanent: {probeResult.followUp.action}
                   </Caption1>
                 )}
-              </div>
+              </Section>
             )}
-          </div>
+          </Section>
 
           {/* ---------- Fabric / OneLake ---------- */}
-          <div style={card}>
-            <div style={sectionHead}>
-              <Cloud24Regular style={{ color: tokens.colorBrandForeground1 }} />
-              <Subtitle2>Fabric / OneLake</Subtitle2>
-              {Array.isArray(data.onelake) && data.onelake.length > 0 && (
-                <Badge appearance="tint" color="brand">{data.onelake.length} workspace{data.onelake.length === 1 ? '' : 's'}</Badge>
+          <div id="sec-onelake">
+            <Section
+              title="Fabric / OneLake"
+              actions={
+                onelake.length > 0 ? (
+                  <Badge appearance="tint" color="brand">
+                    {onelake.length} workspace{onelake.length === 1 ? '' : 's'}
+                  </Badge>
+                ) : undefined
+              }
+            >
+              {data.onelakeError ? (
+                <MessageBar intent="warning"><MessageBarBody>{data.onelakeError}</MessageBarBody></MessageBar>
+              ) : onelake.length === 0 ? (
+                <Body1 className={s.caption3}>
+                  No OneLake workspaces visible. Fabric / OneLake is opt-in — Loom&apos;s catalog
+                  works fully on the Azure-native backends above without it.
+                </Body1>
+              ) : (
+                <LoomDataTable<OneLakeWs>
+                  columns={onelakeColumns}
+                  rows={onelake}
+                  getRowId={(w) => w.id}
+                  ariaLabel="OneLake workspaces"
+                  empty="No OneLake workspaces visible."
+                />
               )}
-            </div>
-            {data.onelakeError ? (
-              <MessageBar intent="warning"><MessageBarBody>{data.onelakeError}</MessageBarBody></MessageBar>
-            ) : data.onelake?.length === 0 ? (
-              <Body1 style={{ color: tokens.colorNeutralForeground3 }}>No OneLake workspaces visible.</Body1>
-            ) : (
-              <Table aria-label="OneLake workspaces" size="medium">
-                <TableHeader>
-                  <TableRow>
-                    <TableHeaderCell>Workspace</TableHeaderCell>
-                    <TableHeaderCell>Capacity</TableHeaderCell>
-                  </TableRow>
-                </TableHeader>
-                <TableBody>
-                  {(data.onelake as OneLakeWs[]).map((w) => (
-                    <TableRow key={w.id}>
-                      <TableCell><strong>{w.displayName}</strong></TableCell>
-                      <TableCell>{w.capacityId || '—'}</TableCell>
-                    </TableRow>
-                  ))}
-                </TableBody>
-              </Table>
-            )}
+            </Section>
           </div>
 
           {/* ---------- Microsoft Purview ---------- */}
-          <div style={card}>
-            <div style={sectionHead}>
-              <ShieldTask24Regular style={{ color: tokens.colorBrandForeground1 }} />
-              <Subtitle2>Microsoft Purview</Subtitle2>
-            </div>
-            {data.purview ? (
-              <Body1>
-                Account <code>{data.purview.account}</code>
-                <Caption1 style={{ display: 'block', color: tokens.colorNeutralForeground3, marginTop: 4 }}>
-                  {data.purview.endpoint}
-                </Caption1>
-              </Body1>
-            ) : (
-              <MessageBar intent="warning"><MessageBarBody>{data.purviewError}</MessageBarBody></MessageBar>
-            )}
+          <div id="sec-purview">
+            <Section title="Microsoft Purview">
+              {data.purview ? (
+                <Body1>
+                  Account <code>{data.purview.account}</code>
+                  <Caption1 className={s.purviewEndpoint}>
+                    {data.purview.endpoint}
+                  </Caption1>
+                </Body1>
+              ) : (
+                <MessageBar intent="warning"><MessageBarBody>{data.purviewError}</MessageBarBody></MessageBar>
+              )}
+            </Section>
           </div>
 
           <Button onClick={load} icon={<ArrowSync24Regular />} appearance="secondary">Refresh</Button>
