@@ -29,7 +29,7 @@
 
 import { create } from 'zustand';
 
-export type JobKind = 'upload' | 'load-to-table' | 'sql-query';
+export type JobKind = 'upload' | 'load-to-table' | 'sql-query' | 'app-install';
 export type JobStatus = 'running' | 'success' | 'error' | 'cancelled';
 
 export interface LoomJob {
@@ -61,6 +61,23 @@ export interface LoomJob {
     executionMs: number;
     truncated: boolean;
   };
+  // ── app-install (task-019) ────────────────────────────────────────────────
+  /** app-install: the app's display name (shown in the completion toast). */
+  appName?: string;
+  /** app-install: server-side AppInstallJob id being polled. */
+  serverJobId?: string;
+  /** app-install: 0-100 live progress mirrored from the server job doc. */
+  percentComplete?: number;
+  /** app-install: coarse server phase ('creating-items' | 'provisioning' | …). */
+  installPhase?: string;
+  /** app-install: total item count reported by the kickoff 202. */
+  totalItems?: number;
+  /** app-install: terminal server outcome ('done' | 'partial' | 'failed'). */
+  installOutcome?: 'done' | 'partial' | 'failed';
+  /** app-install: per-item create results (for the dialog's installed panel). */
+  installResult?: Array<{ itemType: string; id?: string; displayName: string; status: string; error?: string }>;
+  /** app-install: final ProvisionReport (opaque here; the dialog casts it). */
+  provisionReport?: unknown;
 }
 
 export interface JobToastDetail {
@@ -132,6 +149,30 @@ interface RecordLoadArgs {
   tableName: string;
 }
 
+/** Result handed to the InstallAppDialog's onDone when an async install ends. */
+export interface InstallJobDone {
+  ok: boolean;
+  outcome?: 'done' | 'partial' | 'failed';
+  installed?: Array<{ itemType: string; id?: string; displayName: string; status: string; error?: string }>;
+  provision?: unknown;
+  error?: string;
+}
+
+interface StartInstallArgs {
+  appId: string;
+  appName: string;
+  workspaceId: string;
+  deploy: boolean;
+  mode: 'shared' | 'dedicated';
+  folderId: string | null;
+  /**
+   * Foreground completion callback. Fires whether or not the dialog is still
+   * mounted; when backgrounded (dialog closed / tab switched) the completed job
+   * stays in the store and the global toaster raises the toast naming the app.
+   */
+  onDone?: (r: InstallJobDone) => void;
+}
+
 interface SqlQueryDone {
   ok: boolean;
   queryResult?: LoomJob['queryResult'];
@@ -171,6 +212,14 @@ interface JobsState {
    * database. Returns the job id.
    */
   startSqlQuery(args: StartSqlQueryArgs): string;
+  /**
+   * Kick off a TRUE async app install (task-019): POST /api/apps/{id}/install
+   * returns 202 { jobId }; this owns the 5s poll of
+   * /api/apps/install-jobs/{jobId} at MODULE scope so a long provision survives
+   * the dialog closing / tab switching. Returns the local job id; the dialog
+   * selects the job by id to render live percentComplete.
+   */
+  startInstall(args: StartInstallArgs): string;
   /** Record a load-to-Delta-table hand-off (notebook prefilled + opened). Returns the job id. */
   recordLoadToTable(args: RecordLoadArgs): string;
   /** Abort an in-flight upload via its AbortController. */
@@ -321,6 +370,115 @@ export const useJobsStore = create<JobsState>((set, get) => ({
       });
 
     set((s) => ({ jobs: [...s.jobs, initial] }));
+    return id;
+  },
+
+  startInstall: ({ appId, appName, workspaceId, deploy, mode, folderId, onDone }) => {
+    const id = nextId();
+    const initial: LoomJob = {
+      id,
+      kind: 'app-install',
+      lakehouseName: appName, // reused by the generic toaster title path
+      appName,
+      container: 'install', // neutral — install jobs are not container-scoped
+      fileName: appName,
+      status: 'running',
+      startedAt: Date.now(),
+      percentComplete: 0,
+      installPhase: 'creating-items',
+    };
+    set((s) => ({ jobs: [...s.jobs, initial] }));
+
+    // Terminal-state writer shared by the kickoff-failure and poll-completion paths.
+    const finish = (patch: Partial<LoomJob>, done: InstallJobDone) => {
+      let updated: LoomJob | undefined;
+      set((s) => ({
+        jobs: s.jobs.map((j) => {
+          if (j.id !== id) return j;
+          updated = { ...j, completedAt: Date.now(), ...patch };
+          return updated;
+        }),
+      }));
+      if (updated) fireJobEvent(updated);
+      onDone?.(done);
+    };
+
+    // Poll the server job doc every 5s at MODULE scope (survives unmount).
+    const poll = (serverJobId: string) => {
+      const tick = async () => {
+        try {
+          const r = await fetch(`/api/apps/install-jobs/${encodeURIComponent(serverJobId)}`);
+          const ct = r.headers.get('content-type') || '';
+          const j: any = ct.includes('application/json') ? await r.json().catch(() => null) : null;
+          if (r.ok && j?.ok && j.job) {
+            const job = j.job as {
+              status: 'running' | 'done' | 'partial' | 'failed';
+              phase: string;
+              percentComplete: number;
+              installed?: InstallJobDone['installed'];
+              provision?: unknown;
+              error?: string;
+            };
+            if (job.status === 'running') {
+              set((s) => ({
+                jobs: s.jobs.map((x) => (x.id === id
+                  ? { ...x, percentComplete: job.percentComplete ?? x.percentComplete, installPhase: job.phase }
+                  : x)),
+              }));
+            } else {
+              const outcome: 'done' | 'partial' | 'failed' = job.status;
+              finish(
+                {
+                  status: outcome === 'failed' ? 'error' : 'success',
+                  percentComplete: 100,
+                  installPhase: 'done',
+                  installOutcome: outcome,
+                  installResult: job.installed,
+                  provisionReport: job.provision,
+                  error: job.error,
+                },
+                { ok: outcome !== 'failed', outcome, installed: job.installed, provision: job.provision, error: job.error },
+              );
+              return; // stop polling
+            }
+          }
+          // Non-OK / transient — keep polling (the worker may still be writing).
+        } catch {
+          // transient network error — keep polling
+        }
+        setTimeout(tick, 5000);
+      };
+      setTimeout(tick, 2500); // first poll quickly, then every 5s
+    };
+
+    // Kickoff: POST returns 202 { jobId }. fetch at MODULE scope.
+    (async () => {
+      try {
+        const r = await fetch(`/api/apps/${encodeURIComponent(appId)}/install`, {
+          method: 'POST',
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify({ workspaceId, deploy, mode, folderId }),
+        });
+        const ct = r.headers.get('content-type') || '';
+        const j: any = ct.includes('application/json') ? await r.json().catch(() => null) : null;
+        if (!r.ok || !j?.ok || !j.jobId) {
+          const error = j?.error || `Install kickoff failed (HTTP ${r.status}).`;
+          finish({ status: 'error', percentComplete: 100, installPhase: 'done', error }, { ok: false, error });
+          return;
+        }
+        const serverJobId = j.jobId as string;
+        set((s) => ({
+          jobs: s.jobs.map((x) => (x.id === id
+            ? { ...x, serverJobId, totalItems: j.totalItems }
+            : x)),
+        }));
+        poll(serverJobId);
+      } catch (e: any) {
+        const error = e?.message || String(e);
+        finish({ status: 'error', percentComplete: 100, installPhase: 'done', error }, { ok: false, error });
+      }
+    })();
+
     return id;
   },
 

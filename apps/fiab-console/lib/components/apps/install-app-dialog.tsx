@@ -11,11 +11,14 @@
  * The dialog drives the REAL install → provision → seed flow end to end:
  *   1. user picks a workspace (+ optional folder),
  *   2. chooses whether to deploy artifacts to live Azure services,
- *   3. POST /api/apps/{appId}/install creates every bundled item via the
- *      shared createOwnedItem helper (seeds state.content from the bundle)
- *      and runs runProvisioning() against the real Azure-native provisioners
- *      (lakehouse → ADLS+Delta, warehouse → Synapse, kql-db → ADX,
- *      activator → Azure Monitor, eventstream → Event Hubs, …).
+ *   3. POST /api/apps/{appId}/install returns 202 { jobId }; the install runs
+ *      async server-side (item creation via the shared createOwnedItem helper +
+ *      runProvisioning() against the real Azure-native provisioners — lakehouse
+ *      → ADLS+Delta, warehouse → Synapse, kql-db → ADX, activator → Azure
+ *      Monitor, eventstream → Event Hubs, …). The dialog polls
+ *      /api/apps/install-jobs/{jobId} every 5s (via the module-scope jobs-store,
+ *      so a long provision survives the dialog closing / tab switching — a
+ *      backgrounded install raises a Fluent toast naming the app on completion).
  *
  * The provisioning report (per-item created / exists / remediation / failed,
  * with honest infra gates and a per-step Retry) renders INSIDE the dialog so
@@ -30,9 +33,10 @@ import {
   Button, Badge, Caption1,
   MessageBar, MessageBarBody, MessageBarTitle,
   Dialog, DialogTrigger, DialogSurface, DialogBody, DialogTitle, DialogContent, DialogActions,
-  Dropdown, Option, Field, Switch, RadioGroup, Radio, Input, Spinner,
+  Dropdown, Option, Field, Switch, RadioGroup, Radio, Input, ProgressBar,
   makeStyles, tokens,
 } from '@fluentui/react-components';
+import { useJobsStore } from '@/lib/state/jobs-store';
 
 interface AppItemRef { type: string; template?: string; displayName?: string; }
 interface AppDoc {
@@ -76,29 +80,17 @@ const useStyles = makeStyles({
 });
 
 /**
- * Read an install response as JSON, but tolerate a non-JSON body — a long
- * deploy (8 real Azure resources) can exceed the edge gateway timeout, which
- * returns an HTML 502/504 page. `r.json()` on that throws the cryptic
- * "Unexpected token '<'". Instead we read text-first and, when it isn't JSON,
- * return an honest gate explaining the install is still running server-side.
+ * Map the server job's coarse phase to a human progress label. The install runs
+ * async (202 + poll) so the gateway-timeout band-aid is gone — we show real
+ * forward progress instead.
  */
-async function readJsonOrGate(r: Response, deploy: boolean): Promise<any> {
-  const text = await r.text().catch(() => '');
-  try {
-    return text ? JSON.parse(text) : { ok: false, error: `Empty response (HTTP ${r.status}).` };
-  } catch {
-    const looksHtml = /^\s*<(?:!doctype|html)/i.test(text);
-    if (looksHtml || r.status === 502 || r.status === 504) {
-      return {
-        ok: false,
-        error:
-          `The install request exceeded the gateway timeout (HTTP ${r.status})` +
-          (deploy
-            ? ' while provisioning live Azure services. The items were created in the workspace and provisioning may still be finishing server-side — refresh the workspace in a minute to see them. Tip: install with "Deploy artifacts" OFF first, then provision items individually to avoid the timeout.'
-            : '. Refresh the workspace in a moment to see the installed items.'),
-      };
-    }
-    return { ok: false, error: `Unexpected non-JSON response (HTTP ${r.status}): ${text.slice(0, 200)}` };
+function phaseLabel(phase?: string): string {
+  switch (phase) {
+    case 'creating-items': return 'Creating workspace items';
+    case 'provisioning': return 'Provisioning live Azure services';
+    case 'finalizing': return 'Finalizing';
+    case 'done': return 'Done';
+    default: return 'Installing';
   }
 }
 
@@ -134,6 +126,14 @@ export function InstallAppDialog({
   const [mode, setMode] = React.useState<'shared' | 'dedicated'>('shared');
   const [provisionReport, setProvisionReport] = React.useState<ProvisionReport | null>(null);
   const [retrying, setRetrying] = React.useState<string | null>(null);
+  const [activeJobId, setActiveJobId] = React.useState<string | null>(null);
+
+  // Module-scope async-install kickoff + poll (task-019). Owning the poll in the
+  // jobs-store means a long provision survives the dialog closing / tab nav and
+  // raises a completion toast naming the app. The dialog selects its active job
+  // to render live percentComplete.
+  const startInstall = useJobsStore((st) => st.startInstall);
+  const activeJob = useJobsStore((st) => st.jobs.find((j) => j.id === activeJobId) || null);
 
   // Resolve the item count from the tenant catalog when the caller didn't pass
   // one (the Learn use-case card only knows the appId).
@@ -184,48 +184,47 @@ export function InstallAppDialog({
   const install = async () => {
     if (!pickedWs) return;
     setInstalling(true); setInstallErr(null); setInstallResult(null); setProvisionReport(null);
-    try {
-      const folderId = await resolveFolderId();
-      const r = await fetch(`/api/apps/${appId}/install`, {
-        method: 'POST',
-        headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ workspaceId: pickedWs, deploy, mode, folderId }),
-      });
-      const j = await readJsonOrGate(r, deploy);
-      if (!r.ok || !j.ok) {
-        setInstallErr(j?.error || `HTTP ${r.status}`);
-      } else {
-        setInstallResult(j.installed || []);
-        setProvisionReport(j.provision || null);
-      }
-    } catch (e: any) {
-      setInstallErr(e?.message || String(e));
-    } finally { setInstalling(false); }
+    const folderId = await resolveFolderId();
+    // Kick off the async install via the jobs-store; it POSTs (202 { jobId }) and
+    // owns the 5s poll. onDone fires on terminal status whether or not the dialog
+    // is still mounted.
+    const localId = startInstall({
+      appId, appName, workspaceId: pickedWs, deploy, mode, folderId,
+      onDone: (r) => {
+        setInstalling(false);
+        if (!r.ok && r.error) { setInstallErr(r.error); return; }
+        setInstallResult((r.installed as InstallResult[]) || []);
+        setProvisionReport((r.provision as ProvisionReport) || null);
+      },
+    });
+    setActiveJobId(localId);
   };
 
-  // Retry a single provisioning step (re-runs the install on JUST that
-  // item, then merges the result into the report).
-  const retryStep = async (step: ProvisionStep) => {
+  // Retry: re-run the full async install. It is idempotent — items matching
+  // name+type are skipped (status 'existed') and only remediation/failed items
+  // re-provision against the real backend — so a single re-run resolves the
+  // remediation step that prompted the Retry.
+  const retryStep = (step: ProvisionStep) => {
+    if (!pickedWs) return;
     setRetrying(step.cosmosItemId);
-    try {
-      const r = await fetch(`/api/apps/${appId}/install`, {
-        method: 'POST',
-        headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ workspaceId: pickedWs, deploy: true, mode }),
-      });
-      const j = await readJsonOrGate(r, true);
-      if (r.ok && j.ok && j.provision) {
-        setProvisionReport(j.provision);
-      }
-    } finally {
-      setRetrying(null);
-    }
+    const localId = startInstall({
+      appId, appName, workspaceId: pickedWs, deploy: true, mode, folderId: null,
+      onDone: (r) => {
+        setRetrying(null);
+        if (r.installed) setInstallResult(r.installed as InstallResult[]);
+        if (r.provision) setProvisionReport(r.provision as ProvisionReport);
+      },
+    });
+    setActiveJobId(localId);
   };
 
-  // Reset the result panes when the dialog is dismissed so a re-open starts clean.
+  // Reset the result panes when the dialog is dismissed so a re-open starts
+  // clean. The async install job keeps running server-side regardless — its
+  // completion toast (raised by the global job toaster) names the app.
   const handleOpenChange = (next: boolean) => {
     if (!next) {
       setInstallResult(null); setProvisionReport(null); setInstallErr(null);
+      setActiveJobId(null);
     }
     onOpenChange(next);
   };
@@ -313,7 +312,23 @@ export function InstallAppDialog({
                 </>
               )}
 
-              {installing && <Spinner label="Installing + provisioning…" />}
+              {installing && (
+                <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }} data-testid="install-progress">
+                  <ProgressBar
+                    value={(activeJob?.percentComplete ?? 0) / 100}
+                    thickness="large"
+                  />
+                  <Caption1>
+                    {phaseLabel(activeJob?.installPhase)} — {activeJob?.percentComplete ?? 0}%
+                    {activeJob?.totalItems ? ` · ${activeJob.totalItems} items` : ''}
+                  </Caption1>
+                  <Caption1 style={{ color: tokens.colorNeutralForeground3 }}>
+                    Long provisions (ADX, Synapse pools, pipelines) run in the
+                    background — you can close this dialog and a toast will name
+                    the app when it finishes.
+                  </Caption1>
+                </div>
+              )}
 
               {installResult && (
                 <MessageBar intent="success">

@@ -1,40 +1,56 @@
 /**
  * POST /api/apps/[id]/install — install an app's bundled items into a
  * caller-chosen workspace, then optionally (Phase 2) provision the
- * matching REAL artifacts in Fabric / ADX / Synapse / AI Search.
+ * matching REAL artifacts in Azure-native backends (ADX / Synapse / Event
+ * Hubs / Azure Monitor / AI Search; Fabric strictly opt-in).
+ *
+ * ASYNC (task-019). A long install — creating 10-12 Cosmos items then
+ * provisioning each into a real Azure backend (ADX cluster create, Synapse
+ * dedicated-pool resume, Databricks job run-now+poll, ADF/Synapse pipeline
+ * createRun+poll, Logic App run) — routinely exceeds the edge gateway's ~30s
+ * window and used to 504. This route now:
+ *   1. validates auth + workspace + app (fast),
+ *   2. writes a `running` AppInstallJob to Cosmos,
+ *   3. fires the full install in a FLOATING promise (the Container App Node
+ *      process stays alive across the response, so the loop completes — same
+ *      mechanism as /api/data-products/import),
+ *   4. returns 202 { ok, jobId, totalItems } immediately.
+ * The dialog polls GET /api/apps/install-jobs/[jobId] every 5s for live
+ * phase + percentComplete + the final ProvisionReport.
  *
  * Body:
  *   {
  *     workspaceId: string,
  *     deploy?: boolean,             // Phase 2 — default true
  *     mode?: 'shared' | 'dedicated',// Phase 2 — default 'shared'
+ *     folderId?: string,            // optional install target folder
  *     targetOverrides?: {...},      // Phase 2 — dedicated-mode resource ids
  *   }
  *
- * Reads the curated app from /api/apps-catalog (Cosmos apps-catalog).
- * For each `items[i]` in the app: creates a workspace item via the same
- * createOwnedItem helper the per-type editors use, so they pick it up in
- * their normal list flow + the item gets mirrored into AI Search /
- * audit-log automatically. Then, when deploy===true, calls the Phase-2
- * provisioning-engine which dispatches per-itemType provisioners that
- * hit the actual Azure REST surfaces.
- *
- * Result:
- *   {
- *     ok, app, workspaceId,
- *     installed: [{itemType, id, displayName, status:'created'|'existed'|'failed', error?}],
- *     provision?: { outcome, mode, target, steps:[ {itemType, displayName, cosmosItemId, result} ] }
- *   }
+ * Reads the curated app from /api/apps-catalog (Cosmos apps-catalog). For each
+ * `items[i]` in the app: creates a workspace item via the same createOwnedItem
+ * helper the per-type editors use, so they pick it up in their normal list flow
+ * + the item gets mirrored into AI Search / audit-log automatically. Then, when
+ * deploy===true, calls the Phase-2 provisioning-engine which dispatches
+ * per-itemType provisioners that hit the actual Azure REST surfaces.
  */
 import { NextRequest, NextResponse } from 'next/server';
 import { getSession } from '@/lib/auth/session';
-import { appsCatalogContainer, itemsContainer, workspacesContainer } from '@/lib/azure/cosmos-client';
+import {
+  appsCatalogContainer,
+  itemsContainer,
+  workspacesContainer,
+  appInstallJobsContainer,
+  type AppInstallJob,
+} from '@/lib/azure/cosmos-client';
 import { createOwnedItem } from '@/app/api/items/_lib/item-crud';
 import { resolveBundleItem, getBundle } from '@/lib/apps/content-bundles';
 import { runProvisioning, type ProvisionReport } from '@/lib/install/provisioning-engine';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
+
+type Session = NonNullable<ReturnType<typeof getSession>>;
 
 interface AppItemRef {
   type: string;
@@ -98,18 +114,6 @@ export async function POST(req: NextRequest, props: { params: Promise<{ id: stri
   }
   if (!app) return NextResponse.json({ ok: false, error: `app '${params.id}' not found` }, { status: 404 });
 
-  const items = await itemsContainer();
-  // Existing items in this workspace, for dedup.
-  const { resources: existing } = await items.items
-    .query({
-      query: 'SELECT c.id, c.itemType, c.displayName, c.state FROM c WHERE c.workspaceId = @w',
-      parameters: [{ name: '@w', value: workspaceId }],
-    }, { partitionKey: workspaceId })
-    .fetchAll();
-  const existsKey = new Set<string>(
-    (existing as any[]).map(e => `${e.itemType}::${(e.displayName || '').toLowerCase()}`),
-  );
-
   // When a bundle is registered for this app, its items[] is the source
   // of truth (it may add extra items beyond the Cosmos catalog shape, such
   // as walkthrough notebooks). Otherwise fall back to the Cosmos catalog.
@@ -118,170 +122,280 @@ export async function POST(req: NextRequest, props: { params: Promise<{ id: stri
     ? bundleForApp.items.map(b => ({ type: b.itemType, displayName: b.displayName }))
     : (app.items || []);
 
-  const installed: Array<{
-    itemType: string;
-    id?: string;
-    displayName: string;
-    status: string;
-    error?: string;
-    content?: unknown;
-  }> = [];
-  for (const ref of refs) {
-    // Resolve rich starter content (notebook cells, KQL DDL, dbt models,
-    // dashboard tiles, etc.) from the in-process bundle registry.
-    // Pass ref.displayName so bundles with multiple items of the same
-    // itemType (e.g. logic-apps-integration's three distinct logic-app
-    // workflows) resolve to the RIGHT item instead of collapsing onto the
-    // first one — keeping each workflow's own name + WDL content.
-    const bundle = resolveBundleItem(app.id, ref.type, ref.displayName);
-    const displayName = bundle?.displayName || ref.displayName || `${app.name} · ${ref.type}`;
-    const description = bundle?.description || `Installed from app '${app.name}'${ref.template ? ` · template: ${ref.template}` : ''}`;
-    const state: Record<string, unknown> = {
-      sourceApp: app.id,
-      ...(ref.template ? { template: ref.template } : {}),
-      ...(bundle?.content ? { content: bundle.content } : {}),
-      ...(bundle?.learnDoc ? { learnDoc: bundle.learnDoc } : {}),
-    };
-    // Notebook items: project the bundle's NotebookContent.cells into the
-    // editor's read shape (state.cells / state.defaultLang) so the notebook
-    // opens FULLY POPULATED with every markdown + code cell — instead of an
-    // empty notebook whose content is stranded in the "bundle" pane. Covers
-    // notebook, synapse-notebook, and databricks-notebook item types.
-    const nbc = bundle?.content as { kind?: string; cells?: unknown[]; defaultLang?: string } | undefined;
-    if (nbc?.kind === 'notebook' && Array.isArray(nbc.cells) && nbc.cells.length > 0) {
-      state.cells = nbc.cells;
-      state.defaultLang = nbc.defaultLang || 'pyspark';
-    }
-    const key = `${ref.type}::${displayName.toLowerCase()}`;
-    if (existsKey.has(key)) {
-      const match = (existing as any[]).find(e => e.itemType === ref.type && (e.displayName || '').toLowerCase() === displayName.toLowerCase());
-      installed.push({ itemType: ref.type, id: match?.id, displayName, status: 'existed', content: match?.state?.content || bundle?.content });
-      continue;
-    }
-    const r = await createOwnedItem(s, ref.type, {
-      workspaceId,
-      displayName,
-      description,
-      state,
-      folderId,
-    });
-    if (r.ok) {
-      installed.push({ itemType: ref.type, id: r.item.id, displayName, status: 'created', content: bundle?.content });
-    } else {
-      installed.push({ itemType: ref.type, displayName, status: 'failed', error: r.error });
-    }
+  // Write the `running` job doc, then fire the install in the background and
+  // return 202. The whole install (item creation → provisioning → result
+  // write-back) now runs in a floating promise so a long provision can't 504.
+  const tenantId = s.claims.oid;
+  const jobId = crypto.randomUUID();
+  const now = new Date().toISOString();
+  const initial: AppInstallJob = {
+    id: jobId,
+    tenantId,
+    appId: app.id,
+    appName: app.name,
+    workspaceId,
+    status: 'running',
+    phase: 'creating-items',
+    deploy,
+    mode,
+    totalItems: refs.length,
+    createdItems: 0,
+    percentComplete: 0,
+    installed: [],
+    createdAt: now,
+    updatedAt: now,
+    createdBy: s.claims.upn || s.claims.email || tenantId,
+  };
+  try {
+    const jobs = await appInstallJobsContainer();
+    await jobs.items.create<AppInstallJob>(initial);
+  } catch (e: any) {
+    return NextResponse.json({ ok: false, error: `Failed to create install job: ${e?.message || e}` }, { status: 500 });
   }
 
-  // Auto-attach the app's installed lakehouse(s) to its notebooks, so each
-  // notebook opens with the data sources it needs already attached (no manual
-  // wiring). First lakehouse is the default source.
-  try {
-    const lakehouses = installed
-      .filter((i) => i.itemType === 'lakehouse' && i.id)
-      .map((i, idx) => ({ kind: 'lakehouse' as const, id: i.id!, displayName: i.displayName, isDefault: idx === 0 }));
-    if (lakehouses.length > 0) {
-      const itemsC = await itemsContainer();
-      const nbItems = installed.filter(
-        (i) => i.id && ['notebook', 'databricks-notebook', 'synapse-notebook'].includes(i.itemType),
-      );
-      for (const nb of nbItems) {
-        try {
-          const { resource } = await itemsC.item(nb.id!, workspaceId).read<any>();
-          if (resource) {
-            resource.state = { ...(resource.state || {}), attachedSources: lakehouses };
-            await itemsC.item(nb.id!, workspaceId).replace(resource);
-          }
-        } catch { /* best-effort attach */ }
-      }
-    }
-  } catch { /* best-effort */ }
+  // Fire the worker. The Container App Node process stays alive across the
+  // response, so the loop completes and the poll observes the progress.
+  void runInstallJob(s, jobId, app, refs, workspaceId, { deploy, mode, folderId, targetOverrides });
 
-  // Phase 2: run live-service provisioning.
-  let provision: ProvisionReport | undefined;
+  return NextResponse.json(
+    { ok: true, jobId, totalItems: refs.length },
+    { status: 202 },
+  );
+}
+
+interface InstalledItem {
+  itemType: string;
+  id?: string;
+  displayName: string;
+  status: string;
+  error?: string;
+  content?: unknown;
+}
+
+/**
+ * The async install worker. Runs the full Phase-1 (item creation) + lakehouse
+ * auto-attach + Phase-2 (provisioning) + result write-back, persisting progress
+ * to the app-install-jobs Cosmos doc as it advances. Never throws — a
+ * catastrophic failure is recorded on the job doc (status:'failed').
+ */
+async function runInstallJob(
+  s: Session,
+  jobId: string,
+  app: AppDoc,
+  refs: AppItemRef[],
+  workspaceId: string,
+  opts: { deploy: boolean; mode: 'shared' | 'dedicated'; folderId: string | null; targetOverrides?: Record<string, unknown> },
+): Promise<void> {
+  const tenantId = s.claims.oid;
+  const { deploy, mode, folderId, targetOverrides } = opts;
+  const total = refs.length;
+
+  // Phase weights: item creation 0→35%, provisioning 35→95%, finalize 95→100%.
+  const CREATE_CEIL = total > 0 ? 35 : 95;
+  const PROVISION_FLOOR = 35;
+  const PROVISION_CEIL = 95;
+
+  const persist = async (patch: Partial<AppInstallJob>): Promise<void> => {
+    try {
+      const jobs = await appInstallJobsContainer();
+      const { resource } = await jobs.item(jobId, tenantId).read<AppInstallJob>();
+      if (!resource) return;
+      const next: AppInstallJob = { ...resource, ...patch, updatedAt: new Date().toISOString() };
+      await jobs.item(jobId, tenantId).replace<AppInstallJob>(next);
+    } catch {
+      // best-effort progress write — never throw out of the worker
+    }
+  };
+
   try {
-    provision = await runProvisioning(
-      s,
-      app.id,
-      workspaceId,
-      installed.filter((i) => i.id).map((i) => ({ itemType: i.itemType, id: i.id, displayName: i.displayName, content: i.content })),
-      { deploy, mode, targetOverrides },
+    const items = await itemsContainer();
+    // Existing items in this workspace, for dedup.
+    const { resources: existing } = await items.items
+      .query({
+        query: 'SELECT c.id, c.itemType, c.displayName, c.state FROM c WHERE c.workspaceId = @w',
+        parameters: [{ name: '@w', value: workspaceId }],
+      }, { partitionKey: workspaceId })
+      .fetchAll();
+    const existsKey = new Set<string>(
+      (existing as any[]).map(e => `${e.itemType}::${(e.displayName || '').toLowerCase()}`),
     );
 
-    // Stamp each Cosmos item with the provisioning result so the editor
-    // surfaces "Backed by Fabric notebook <id>" instead of an empty
-    // canvas.  Best-effort — failures here don't block the install.
-    for (const step of provision.steps) {
-      if (!step.cosmosItemId) continue;
-      try {
-        const { resource: cur } = await items.item(step.cosmosItemId, workspaceId).read<any>();
-        if (!cur) continue;
-        const nextState: Record<string, unknown> = {
-          ...(cur.state || {}),
-          provisioning: {
-            status: step.result.status,
-            resourceId: step.result.resourceId,
-            secondaryIds: step.result.secondaryIds,
-            gate: step.result.gate,
-            error: step.result.error,
-            mode,
-            at: new Date().toISOString(),
-          },
-        };
-        // Pipeline items (adf-pipeline / synapse-pipeline) bind to a real Azure
-        // pipeline via `state.pipelineName` — the pipeline GET route's
-        // resolveBinding() 412s ("unbound") and never reaches its state.content
-        // fallback when this is missing, so the designer canvas opens EMPTY even
-        // though the bundle stamped a full activity graph. The provisioner
-        // already computed the Azure pipeline name (secondaryIds.pipelineName);
-        // stamp it as the binding here so the editor loads either the live
-        // pipeline OR the built-out content fallback, and Run/Validate target
-        // the real backend. Don't clobber a name the user already bound.
-        const sec = (step.result.secondaryIds || {}) as Record<string, string>;
-        if (
-          (step.itemType === 'adf-pipeline' || step.itemType === 'synapse-pipeline') &&
-          sec.pipelineName &&
-          !(cur.state as any)?.pipelineName
-        ) {
-          nextState.pipelineName = sec.pipelineName;
-          if (sec.backend === 'synapse' && process.env.LOOM_SYNAPSE_WORKSPACE) {
-            nextState.workspace = process.env.LOOM_SYNAPSE_WORKSPACE;
-          }
-          if (sec.backend === 'adf' && process.env.LOOM_ADF_NAME) {
-            nextState.factory = process.env.LOOM_ADF_NAME;
-          }
+    // ── Phase 1: create the Cosmos items ────────────────────────────────────
+    const installed: InstalledItem[] = [];
+    for (let i = 0; i < refs.length; i++) {
+      const ref = refs[i];
+      // Resolve rich starter content (notebook cells, KQL DDL, dbt models,
+      // dashboard tiles, etc.) from the in-process bundle registry. Pass
+      // ref.displayName so bundles with multiple items of the same itemType
+      // resolve to the RIGHT item instead of collapsing onto the first one.
+      const bundle = resolveBundleItem(app.id, ref.type, ref.displayName);
+      const displayName = bundle?.displayName || ref.displayName || `${app.name} · ${ref.type}`;
+      const description = bundle?.description || `Installed from app '${app.name}'${ref.template ? ` · template: ${ref.template}` : ''}`;
+      const state: Record<string, unknown> = {
+        sourceApp: app.id,
+        ...(ref.template ? { template: ref.template } : {}),
+        ...(bundle?.content ? { content: bundle.content } : {}),
+        ...(bundle?.learnDoc ? { learnDoc: bundle.learnDoc } : {}),
+      };
+      // Notebook items: project the bundle's NotebookContent.cells into the
+      // editor's read shape so the notebook opens FULLY POPULATED.
+      const nbc = bundle?.content as { kind?: string; cells?: unknown[]; defaultLang?: string } | undefined;
+      if (nbc?.kind === 'notebook' && Array.isArray(nbc.cells) && nbc.cells.length > 0) {
+        state.cells = nbc.cells;
+        state.defaultLang = nbc.defaultLang || 'pyspark';
+      }
+      const key = `${ref.type}::${displayName.toLowerCase()}`;
+      if (existsKey.has(key)) {
+        const match = (existing as any[]).find(e => e.itemType === ref.type && (e.displayName || '').toLowerCase() === displayName.toLowerCase());
+        installed.push({ itemType: ref.type, id: match?.id, displayName, status: 'existed', content: match?.state?.content || bundle?.content });
+      } else {
+        const r = await createOwnedItem(s, ref.type, { workspaceId, displayName, description, state, folderId });
+        if (r.ok) {
+          installed.push({ itemType: ref.type, id: r.item.id, displayName, status: 'created', content: bundle?.content });
+        } else {
+          installed.push({ itemType: ref.type, displayName, status: 'failed', error: r.error });
         }
-        // Logic App items bind to a live Microsoft.Logic/workflows resource via
-        // state.logicAppName — the logic-app GET/run routes resolve this (plus
-        // secondaryIds.subscriptionId/resourceGroup) to fetch + run the real
-        // workflow; without it the editor still opens built-out from
-        // state.content.definition. Don't clobber a name already bound.
-        if (step.itemType === 'logic-app' && sec.workflowName && !(cur.state as any)?.logicAppName) {
-          nextState.logicAppName = sec.workflowName;
-        }
-        await items.item(step.cosmosItemId, workspaceId).replace({ ...cur, state: nextState, updatedAt: new Date().toISOString() });
-      } catch { /* swallow — provisioning record is best-effort */ }
+      }
+      // Persist create progress so the poll shows the item count advancing.
+      const pct = total > 0 ? Math.round(((i + 1) / total) * CREATE_CEIL) : CREATE_CEIL;
+      await persist({
+        createdItems: i + 1,
+        percentComplete: pct,
+        installed: installed.map(stripContent),
+      });
     }
-  } catch (e: any) {
-    // Engine itself failed catastrophically — return a partial report so
-    // the UI shows the failure rather than silently swallowing.
-    provision = {
-      outcome: 'partial',
-      mode,
-      target: { mode },
-      steps: installed.map((it) => ({
-        itemType: it.itemType,
-        displayName: it.displayName,
-        cosmosItemId: it.id || '',
-        result: { status: 'failed', error: e?.message || String(e), steps: [] },
-      })),
-    };
-  }
 
-  return NextResponse.json({
-    ok: true,
-    app: app.id,
-    workspaceId,
-    installed: installed.map((i) => ({ itemType: i.itemType, id: i.id, displayName: i.displayName, status: i.status, ...(i.error ? { error: i.error } : {}) })),
-    provision,
-  });
+    // Auto-attach the app's installed lakehouse(s) to its notebooks.
+    try {
+      const lakehouses = installed
+        .filter((it) => it.itemType === 'lakehouse' && it.id)
+        .map((it, idx) => ({ kind: 'lakehouse' as const, id: it.id!, displayName: it.displayName, isDefault: idx === 0 }));
+      if (lakehouses.length > 0) {
+        const nbItems = installed.filter(
+          (it) => it.id && ['notebook', 'databricks-notebook', 'synapse-notebook'].includes(it.itemType),
+        );
+        for (const nb of nbItems) {
+          try {
+            const { resource } = await items.item(nb.id!, workspaceId).read<any>();
+            if (resource) {
+              resource.state = { ...(resource.state || {}), attachedSources: lakehouses };
+              await items.item(nb.id!, workspaceId).replace(resource);
+            }
+          } catch { /* best-effort attach */ }
+        }
+      }
+    } catch { /* best-effort */ }
+
+    // ── Phase 2: live-service provisioning ──────────────────────────────────
+    await persist({ phase: 'provisioning', percentComplete: PROVISION_FLOOR, installed: installed.map(stripContent) });
+
+    const provisionInput = installed.filter((it) => it.id).map((it) => ({ itemType: it.itemType, id: it.id, displayName: it.displayName, content: it.content }));
+    const provisionTotal = provisionInput.length;
+    let provision: ProvisionReport;
+    try {
+      provision = await runProvisioning(
+        s,
+        app.id,
+        workspaceId,
+        provisionInput,
+        {
+          deploy,
+          mode,
+          targetOverrides,
+          onProgress: async (done, totalItems) => {
+            const span = PROVISION_CEIL - PROVISION_FLOOR;
+            const pct = PROVISION_FLOOR + (totalItems > 0 ? Math.round((done / totalItems) * span) : span);
+            await persist({ percentComplete: pct });
+          },
+        },
+      );
+
+      // Stamp each Cosmos item with the provisioning result so the editor
+      // surfaces "Backed by …" instead of an empty canvas. Best-effort.
+      for (const step of provision.steps) {
+        if (!step.cosmosItemId) continue;
+        try {
+          const { resource: cur } = await items.item(step.cosmosItemId, workspaceId).read<any>();
+          if (!cur) continue;
+          const nextState: Record<string, unknown> = {
+            ...(cur.state || {}),
+            provisioning: {
+              status: step.result.status,
+              resourceId: step.result.resourceId,
+              secondaryIds: step.result.secondaryIds,
+              gate: step.result.gate,
+              error: step.result.error,
+              mode,
+              at: new Date().toISOString(),
+            },
+          };
+          const sec = (step.result.secondaryIds || {}) as Record<string, string>;
+          if (
+            (step.itemType === 'adf-pipeline' || step.itemType === 'synapse-pipeline') &&
+            sec.pipelineName &&
+            !(cur.state as any)?.pipelineName
+          ) {
+            nextState.pipelineName = sec.pipelineName;
+            if (sec.backend === 'synapse' && process.env.LOOM_SYNAPSE_WORKSPACE) {
+              nextState.workspace = process.env.LOOM_SYNAPSE_WORKSPACE;
+            }
+            if (sec.backend === 'adf' && process.env.LOOM_ADF_NAME) {
+              nextState.factory = process.env.LOOM_ADF_NAME;
+            }
+          }
+          if (step.itemType === 'logic-app' && sec.workflowName && !(cur.state as any)?.logicAppName) {
+            nextState.logicAppName = sec.workflowName;
+          }
+          await items.item(step.cosmosItemId, workspaceId).replace({ ...cur, state: nextState, updatedAt: new Date().toISOString() });
+        } catch { /* swallow — provisioning record is best-effort */ }
+      }
+    } catch (e: any) {
+      // Engine itself failed catastrophically — record a partial report so the
+      // UI shows the failure rather than silently swallowing.
+      provision = {
+        outcome: 'partial',
+        mode,
+        target: { mode },
+        steps: provisionInput.map((it) => ({
+          itemType: it.itemType,
+          displayName: it.displayName,
+          cosmosItemId: it.id || '',
+          result: { status: 'failed', error: e?.message || String(e), steps: [] },
+        })),
+      };
+    }
+
+    // ── Finalize: derive terminal status from the provision outcome ──────────
+    await persist({ phase: 'finalizing', percentComplete: PROVISION_CEIL });
+
+    const createFailed = installed.some((it) => it.status === 'failed');
+    let status: AppInstallJob['status'];
+    if (!deploy || provisionTotal === 0) {
+      status = createFailed ? 'partial' : 'done';
+    } else if (provision.outcome === 'all-created' || provision.outcome === 'skipped') {
+      status = createFailed ? 'partial' : 'done';
+    } else if (provision.outcome === 'partial' || provision.outcome === 'all-remediation') {
+      status = 'partial';
+    } else {
+      status = 'partial';
+    }
+
+    await persist({
+      status,
+      phase: 'done',
+      percentComplete: 100,
+      installed: installed.map(stripContent),
+      provision,
+    });
+  } catch (e: any) {
+    // Worker itself threw before/around the loop — surface a failed job rather
+    // than a job stuck on 'running' forever.
+    await persist({ status: 'failed', phase: 'done', percentComplete: 100, error: e?.message || String(e) });
+  }
+}
+
+/** Drop the heavy `content` blob before persisting the per-item list to Cosmos —
+ * the dialog only needs itemType/id/displayName/status/error. */
+function stripContent(it: InstalledItem): AppInstallJob['installed'][number] {
+  return { itemType: it.itemType, id: it.id, displayName: it.displayName, status: it.status, ...(it.error ? { error: it.error } : {}) };
 }
