@@ -17,6 +17,8 @@ import {
 import {
   DatabasePlugConnected20Regular, Key20Regular, ShieldKeyhole20Regular,
 } from '@fluentui/react-icons';
+import { itemVisual } from '@/lib/components/ui/item-type-visual';
+import { CONN_TILE_SLUG } from '@/lib/azure/connectable-types';
 
 export interface ConnectionView {
   id: string; name: string; type: string; authMethod: string; hasSecret: boolean;
@@ -108,7 +110,12 @@ export function ConnectionBuilder({
               <Field label="Source type" required>
                 <Dropdown value={typeLabel} selectedOptions={[type]} disabled={!!lockType}
                   onOptionSelect={(_, d) => setType(d.optionValue || 'azure-sql')}>
-                  {TYPES.map((t) => <Option key={t.value} value={t.value}>{t.label}</Option>)}
+                  {TYPES.map((t) => {
+                    const TypeIcon = itemVisual(CONN_TILE_SLUG[t.value as keyof typeof CONN_TILE_SLUG] ?? t.value).icon;
+                    return (
+                      <Option key={t.value} value={t.value} text={t.label} media={<TypeIcon />}>{t.label}</Option>
+                    );
+                  })}
                 </Dropdown>
               </Field>
               <Field label="Authentication" required hint={methodObj?.hint}>

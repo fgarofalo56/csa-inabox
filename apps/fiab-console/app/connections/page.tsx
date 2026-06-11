@@ -20,13 +20,15 @@ import {
 } from '@fluentui/react-components';
 import {
   PlugConnected24Regular, Add20Regular, Delete20Regular, Key16Regular, ShieldKeyhole16Regular,
-  MoreHorizontal20Regular,
+  MoreHorizontal20Regular, CloudDatabase20Regular,
 } from '@fluentui/react-icons';
 import { LoomDataTable, type LoomColumn } from '@/lib/components/ui/loom-data-table';
 import { ViewToggle, type LoomView } from '@/lib/components/ui/view-toggle';
 import { ItemTile } from '@/lib/components/ui/item-tile';
 import { TileGrid } from '@/lib/components/ui/tile-grid';
+import { itemVisual } from '@/lib/components/ui/item-type-visual';
 import { ConnectionBuilder, type ConnectionView } from '@/lib/components/connections/connection-builder';
+import { AddExistingConnectionWizard } from '@/lib/components/connections/add-existing-wizard';
 
 const LS_VIEW = 'loom.connections.viewMode.v1';
 
@@ -44,6 +46,7 @@ const useStyles = makeStyles({
 const TYPE_LABEL: Record<string, string> = {
   'azure-sql': 'Azure SQL', 'synapse-dedicated': 'Synapse Dedicated', 'synapse-serverless': 'Synapse Serverless',
   'databricks-sql': 'Databricks SQL', 'postgres': 'PostgreSQL', 'storage-adls': 'ADLS / Storage', 'cosmos': 'Cosmos DB', 'generic-sql': 'SQL Server',
+  'event-hub': 'Event Hubs', 'service-bus': 'Service Bus', 'key-vault': 'Key Vault',
 };
 const METHOD_LABEL: Record<string, string> = {
   'entra-mi': 'Managed identity', 'sql-password': 'SQL password', 'connection-string': 'Connection string',
@@ -51,9 +54,8 @@ const METHOD_LABEL: Record<string, string> = {
 };
 
 /**
- * Connection-type → item-type-visual slug, so a tile reuses the existing
- * visual registry (icon + brand colour) instead of inventing a new slug.
- * Unmapped types (e.g. postgres) fall through to itemVisual()'s neutral glyph.
+ * Connection-type → item-type-visual slug, so a tile / list row reuses the
+ * existing visual registry (icon + brand colour) instead of inventing a slug.
  */
 const CONN_TILE_TYPE: Record<string, string> = {
   'azure-sql': 'azure-sql-database',
@@ -62,7 +64,11 @@ const CONN_TILE_TYPE: Record<string, string> = {
   'synapse-serverless': 'synapse-serverless-sql-pool',
   'databricks-sql': 'databricks-sql-warehouse',
   'cosmos': 'cosmos-account',
-  'storage-adls': 'lakehouse',
+  'storage-adls': 'storage-adls',
+  'postgres': 'postgres',
+  'event-hub': 'event-hub',
+  'service-bus': 'service-bus',
+  'key-vault': 'key-vault',
 };
 
 export default function ConnectionsPage() {
@@ -70,6 +76,7 @@ export default function ConnectionsPage() {
   const [conns, setConns] = useState<ConnectionView[] | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [builderOpen, setBuilderOpen] = useState(false);
+  const [addExistingOpen, setAddExistingOpen] = useState(false);
   const [busy, setBusy] = useState(false);
   const [view, setView] = useState<LoomView>('tile');
 
@@ -106,7 +113,18 @@ export default function ConnectionsPage() {
 
   const columns: LoomColumn<ConnectionView>[] = [
     { key: 'name', label: 'Name', sortable: true, filterable: true, getValue: (c) => c.name, render: (c) => <strong>{c.name}</strong> },
-    { key: 'type', label: 'Type', sortable: true, filterable: true, getValue: (c) => TYPE_LABEL[c.type] || c.type, render: (c) => <Badge appearance="tint" color="brand" size="small">{TYPE_LABEL[c.type] || c.type}</Badge> },
+    {
+      key: 'type', label: 'Type', sortable: true, filterable: true, getValue: (c) => TYPE_LABEL[c.type] || c.type,
+      render: (c) => {
+        const TypeIcon = itemVisual(CONN_TILE_TYPE[c.type] ?? c.type).icon;
+        return (
+          <span className={s.authLine}>
+            <TypeIcon style={{ fontSize: 16 }} />
+            <Badge appearance="tint" color="brand" size="small">{TYPE_LABEL[c.type] || c.type}</Badge>
+          </span>
+        );
+      },
+    },
     {
       key: 'authMethod', label: 'Auth', sortable: true, filterable: true, getValue: (c) => METHOD_LABEL[c.authMethod] || c.authMethod,
       render: (c) => (
@@ -141,6 +159,7 @@ export default function ConnectionsPage() {
 
       <div className={s.bar}>
         <Button appearance="primary" icon={<Add20Regular />} onClick={() => setBuilderOpen(true)}>New connection</Button>
+        <Button appearance="secondary" icon={<CloudDatabase20Regular />} onClick={() => setAddExistingOpen(true)}>Add existing</Button>
         {hasRows && (
           <span className={s.toggleSlot}>
             <ViewToggle value={view} onChange={setView} ariaLabel="Connection view" />
@@ -201,6 +220,7 @@ export default function ConnectionsPage() {
       )}
 
       <ConnectionBuilder open={builderOpen} onClose={() => setBuilderOpen(false)} onCreated={() => void load()} />
+      <AddExistingConnectionWizard open={addExistingOpen} onClose={() => setAddExistingOpen(false)} onImported={() => void load()} />
     </div>
   );
 }

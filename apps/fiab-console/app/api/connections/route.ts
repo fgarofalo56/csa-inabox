@@ -18,7 +18,7 @@ import {
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
 
-const TYPES: ConnectionType[] = ['azure-sql', 'synapse-dedicated', 'synapse-serverless', 'databricks-sql', 'postgres', 'storage-adls', 'cosmos', 'generic-sql'];
+const TYPES: ConnectionType[] = ['azure-sql', 'synapse-dedicated', 'synapse-serverless', 'databricks-sql', 'postgres', 'storage-adls', 'cosmos', 'generic-sql', 'event-hub', 'service-bus', 'key-vault'];
 const METHODS: AuthMethod[] = ['entra-mi', 'sql-password', 'connection-string', 'account-key', 'service-principal'];
 
 export async function GET() {
@@ -50,6 +50,9 @@ export async function POST(req: NextRequest) {
       host: body?.host, database: body?.database, username: body?.username,
       spnTenantId: body?.spnTenantId, spnClientId: body?.spnClientId,
       description: body?.description, secret: body?.secret,
+      armResourceId: body?.armResourceId, subscriptionId: body?.subscriptionId,
+      resourceGroup: body?.resourceGroup, location: body?.location,
+      origin: body?.origin === 'existing' ? 'existing' : undefined,
     });
     return NextResponse.json({ ok: true, connection: conn }, { status: 201 });
   } catch (e: any) {

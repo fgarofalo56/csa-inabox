@@ -57,6 +57,8 @@ import {
   // Geo / graph / vector
   Diversity24Regular, Branch24Regular, Earth24Regular, VirtualNetwork24Regular,
   PersonChat24Regular,
+  // Connectables (Add-existing import)
+  LockClosed24Regular,
   // Fallback
   Document24Regular,
 } from '@fluentui/react-icons';
@@ -266,6 +268,13 @@ const REGISTRY: Record<string, Entry> = {
   'unity-catalog':     { icon: DatabaseLink24Regular,   family: 'databricks', label: 'Unity Catalog' },
   'onelake-workspace': { icon: Cloud24Regular,          family: 'data-eng',   label: 'OneLake Workspace' },
   'purview-account':   { icon: ShieldTask24Regular,     family: 'api',        label: 'Purview Account' },
+
+  // ── Connection source types (the /connections "Add existing" picker) ──
+  'postgres':          { icon: Database24Regular,       family: 'database', label: 'PostgreSQL' },
+  'storage-adls':      { icon: Cloud24Regular,          family: 'data-eng', label: 'ADLS / Storage' },
+  'event-hub':         { icon: Pulse24Regular,          family: 'rti',      label: 'Event Hubs' },
+  'service-bus':       { icon: Channel24Regular,        family: 'rti',      label: 'Service Bus' },
+  'key-vault':         { icon: LockClosed24Regular,     family: 'api',      label: 'Key Vault' },
 };
 
 /** Derive a Title Case label from a slug ("kql-database" → "Kql Database"). */
