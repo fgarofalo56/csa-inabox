@@ -26,6 +26,7 @@ const SECTIONS = [
   { href: '/governance/scans',            label: 'Scans & sources',    desc: 'Register data sources, schedule scans, monitor scan history.' },
   { href: '/governance/policies',         label: 'Access policies',    desc: 'DLP, masking, RLS/CLS, Purview access policies.' },
   { href: '/governance/insights',         label: 'Insights',           desc: 'Compliance reports, ownership coverage, endorsement trends.' },
+  { href: '/governance/irm',              label: 'Insider risk',       desc: 'IRM indicators — unusual volume, off-hours access, privileged access over audit logs + Monitor.' },
   { href: '/governance/purview',          label: 'Purview portal',     desc: 'Embedded Microsoft Purview — full Atlas catalog and Unified Catalog.' },
 ];
 
