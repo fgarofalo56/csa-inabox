@@ -40,10 +40,30 @@ Tools exposed:
     - ``loom_diagnose_run``      — per-activity output for one run (the Output
       pane: which activity failed and why).
 
-Write tools (``loom_upsert_pipeline``, ``loom_run_pipeline``) require the Function
-App identity to hold **Data Factory Contributor** on the factory; read/diagnose
-tools work with **Reader**. Missing permission surfaces as the raw ARM 403 in the
-tool error (honest, not swallowed).
+  copy job (simplified data movement — the Loom copy-job item)
+    - ``loom_run_copy_job``      — materialise a Copy-job spec into a real ADF
+      pipeline (Full / Incremental-watermark / native-CDC) + its datasets and
+      run it. Mirrors the console BFF
+      apps/fiab-console/app/api/items/copy-job/[id]/run/route.ts.
+
+  data flow (Dataflow Gen2 — Power Query / WranglingDataFlow)
+    - ``loom_get_dataflow``      — full definition of one data flow.
+    - ``loom_author_dataflow``   — create/update a Power Query (M) Wrangling
+      data flow. Mirrors adf-client.ts ``upsertWranglingDataFlow``.
+    - ``loom_run_dataflow``      — run a Wrangling data flow via an
+      ExecuteWranglingDataflow wrapper pipeline. Mirrors ``runWranglingDataFlow``.
+
+Write tools (``loom_upsert_pipeline``, ``loom_run_pipeline``, ``loom_run_copy_job``,
+``loom_author_dataflow``, ``loom_run_dataflow``) require the Function App identity
+to hold **Data Factory Contributor** on the factory; read/diagnose tools work with
+**Reader**. Missing permission surfaces as the raw ARM 403 in the tool error
+(honest, not swallowed).
+
+Incremental / CDC copy jobs additionally require the watermark / LSN checkpoint
+control DB. When ``LOOM_COPYJOB_CONTROL_SQL_SERVER`` is unset those modes return a
+precise honest gate naming the env var + the bicep module
+(platform/fiab/bicep/modules/admin-plane/copy-job-control.bicep, which creates
+dbo.copy_watermark + dbo.usp_write_watermark). Full-mode copy needs no control DB.
 """
 
 from __future__ import annotations
@@ -333,6 +353,444 @@ def _diagnose_run(args: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+# ── data flow: get / author / run (Dataflow Gen2 — Power Query) ─────────────────
+#
+# The Azure-native backend for Dataflow Gen2 (Power Query Online) is an ADF
+# ``WranglingDataFlow`` resource that a pipeline invokes via an
+# ``ExecuteWranglingDataflow`` activity (no Microsoft Fabric). These mirror
+# adf-client.ts upsertWranglingDataFlow / runWranglingDataFlow exactly.
+
+def _get_dataflow(args: dict[str, Any]) -> dict[str, Any]:
+    name = _validate_name(args.get("name", ""))
+    body = _ok_json(_arm_request("GET", f"/dataflows/{name}"), f"get data flow {name}")
+    return {"name": body.get("name"), "properties": body.get("properties")}
+
+
+def _author_dataflow(args: dict[str, Any]) -> dict[str, Any]:
+    """Create/update a Power Query (M) Wrangling data flow.
+
+    ``sources`` binds query names in the M script to ADF datasets when the query
+    reads from a connector; an inline ``#table(...)`` query needs no source.
+    """
+    name = _validate_name(args.get("name", ""))
+    m_script = args.get("script")
+    if not isinstance(m_script, str) or not m_script.strip():
+        raise ToolError("`script` (the Power Query / M mashup text) is required.")
+    raw_sources = args.get("sources") or []
+    if not isinstance(raw_sources, list):
+        raise ToolError("`sources` must be an array of {name, datasetName} objects.")
+    sources = []
+    for s in raw_sources:
+        if not isinstance(s, dict) or not (s.get("name") or "").strip():
+            raise ToolError("each `sources` entry needs a `name` (the query name in the M script).")
+        entry: dict[str, Any] = {"name": s["name"]}
+        ds = (s.get("datasetName") or "").strip()
+        if ds:
+            entry["dataset"] = {"referenceName": ds, "type": "DatasetReference"}
+        sources.append(entry)
+    payload = {
+        "name": name,
+        "properties": {
+            "type": "WranglingDataFlow",
+            "typeProperties": {
+                "sources": sources,
+                "script": m_script,
+                "documentLocale": "en-US",
+            },
+        },
+    }
+    body = _ok_json(_arm_request("PUT", f"/dataflows/{name}", body=payload), f"author data flow {name}")
+    return {
+        "name": body.get("name") or name,
+        "type": "WranglingDataFlow",
+        "sources": len(sources),
+        "saved": True,
+    }
+
+
+def _run_dataflow(args: dict[str, Any]) -> dict[str, Any]:
+    """Run a Wrangling data flow via an ExecuteWranglingDataflow wrapper pipeline.
+
+    Each ``sinks`` entry maps an output query → an ADF dataset to write to.
+    """
+    df_name = _validate_name(args.get("name", ""))
+    raw_sinks = args.get("sinks") or []
+    if not isinstance(raw_sinks, list):
+        raise ToolError("`sinks` must be an array of {queryName, sinkName, datasetName} objects.")
+    sinks = []
+    for s in raw_sinks:
+        if not isinstance(s, dict) or not all((s.get(k) or "").strip() for k in ("queryName", "sinkName", "datasetName")):
+            raise ToolError("each `sinks` entry needs `queryName`, `sinkName`, and `datasetName`.")
+        sinks.append(s)
+    compute_type = (args.get("computeType") or "General").strip() or "General"
+    core_count = int(args.get("coreCount", 8) or 8)
+
+    def _sink_ref(s: dict[str, Any]) -> dict[str, Any]:
+        return {"name": s["sinkName"], "dataset": {"referenceName": s["datasetName"], "type": "DatasetReference"}}
+
+    type_props: dict[str, Any] = {
+        "dataFlow": {"referenceName": df_name, "type": "DataFlowReference"},
+        "integrationRuntime": {"referenceName": "AutoResolveIntegrationRuntime", "type": "IntegrationRuntimeReference"},
+        "compute": {"computeType": compute_type, "coreCount": core_count},
+    }
+    if sinks:
+        type_props["sinks"] = {s["sinkName"]: _sink_ref(s) for s in sinks}
+        type_props["queries"] = [{"queryName": s["queryName"], "dataflowSinks": [_sink_ref(s)]} for s in sinks]
+    pipeline_name = f"loom-pq-run-{df_name}"
+    pipeline = {
+        "name": pipeline_name,
+        "properties": {
+            "description": f"Loom Power Query (Dataflow Gen2) run for {df_name}",
+            "activities": [{"name": "RunDataflow", "type": "ExecuteWranglingDataflow", "dependsOn": [], "typeProperties": type_props}],
+            "annotations": ["loom", "dataflow-gen2"],
+        },
+    }
+    _ok_json(_arm_request("PUT", f"/pipelines/{pipeline_name}", body=pipeline), f"materialise wrapper pipeline {pipeline_name}")
+    run = _ok_json(_arm_request("POST", f"/pipelines/{pipeline_name}/createRun", body={}), f"run data flow {df_name}")
+    return {"dataflow": df_name, "pipelineName": pipeline_name, "runId": run.get("runId"), "started": True}
+
+
+# ── copy job: materialise + run (Full / Incremental / CDC) ──────────────────────
+#
+# A 1:1 Python port of the console BFF
+# apps/fiab-console/app/api/items/copy-job/[id]/run/route.ts. Builds REAL ADF
+# datasets + (for Incremental/CDC) a control linked service + the activity-graph
+# pipeline, then triggers a run. No Microsoft Fabric: ADF + Azure SQL only.
+
+_CONTROL_LS = "loom-copy-control-sql"
+_SQL_SOURCE = {"AzureSqlSource", "SqlServerSource", "SqlMISource", "AzureSqlDWSource"}
+_SQL_SINK = {"AzureSqlSink", "SqlServerSink", "SqlMISink", "AzureSqlDWSink"}
+
+
+def _is_sql_source(t: str) -> bool: return t in _SQL_SOURCE
+def _is_sql_sink(t: str) -> bool: return t in _SQL_SINK
+
+
+def _split_table(t: str) -> tuple[str, str]:
+    i = (t or "").find(".")
+    if i < 0:
+        return "dbo", t or ""
+    return t[:i], t[i + 1:]
+
+
+def _dataset_type(activity_type: str) -> str:
+    if activity_type in _SQL_SOURCE or activity_type in _SQL_SINK:
+        if activity_type.startswith("SqlServer"):
+            return "SqlServerTable"
+        if activity_type.startswith("SqlMI"):
+            return "AzureSqlMITable"
+        if activity_type.startswith("AzureSqlDW"):
+            return "AzureSqlDWTable"
+        return "AzureSqlTable"
+    if activity_type.startswith("Parquet"):
+        return "Parquet"
+    if activity_type.startswith("DelimitedText"):
+        return "DelimitedText"
+    if activity_type.startswith("Json"):
+        return "Json"
+    if activity_type.startswith("AzureTable"):
+        return "AzureTable"
+    return "Binary"
+
+
+def _dataset_type_props(ds_type: str, table_or_path: str | None) -> dict[str, Any]:
+    if ds_type.endswith("Table") and ds_type != "AzureTable":
+        schema, table = _split_table(table_or_path or "")
+        return {"schema": schema, "table": table}
+    if ds_type == "AzureTable":
+        return {"tableName": table_or_path or ""}
+    path = (table_or_path or "").lstrip("/")
+    seg = path.split("/")
+    file_system = seg.pop(0) if seg else ""
+    folder_path = "/".join(seg)
+    loc: dict[str, Any] = {"type": "AzureBlobFSLocation", "fileSystem": file_system}
+    if folder_path:
+        loc["folderPath"] = folder_path
+    return {"location": loc}
+
+
+def _build_dataset(name: str, activity_type: str, linked_service: str, table_or_path: str | None) -> dict[str, Any]:
+    ds_type = _dataset_type(activity_type)
+    return {
+        "name": name,
+        "properties": {
+            "type": ds_type,
+            "linkedServiceName": {"referenceName": linked_service, "type": "LinkedServiceReference"},
+            "schema": [],
+            "typeProperties": _dataset_type_props(ds_type, table_or_path),
+        },
+    }
+
+
+def _translator(mappings: list[dict[str, str]] | None) -> dict[str, Any] | None:
+    if not mappings:
+        return None
+    return {
+        "type": "TabularTranslator",
+        "mappings": [{"source": {"name": m.get("source")}, "sink": {"name": m.get("sink")}} for m in mappings],
+    }
+
+
+def _sink_props(spec: dict[str, Any]) -> dict[str, Any]:
+    sink = spec["sink"]
+    type_ = sink["type"]
+    sink_table = sink.get("table") or ""
+    write_mode = spec.get("writeMode")
+    props: dict[str, Any] = {"type": type_}
+    if _is_sql_sink(type_):
+        if write_mode == "Overwrite" and sink_table:
+            props["preCopyScript"] = f"TRUNCATE TABLE {sink_table}"
+        elif write_mode == "Merge":
+            keys = [k.strip() for k in (spec.get("mergeKeys") or "").split(",") if k.strip()]
+            props["writeBehavior"] = "upsert"
+            props["upsertSettings"] = {"useTempDB": True, "keys": keys}
+            props["sqlWriterUseTableLock"] = False
+    else:
+        store: dict[str, Any] = {"type": "AzureBlobFSWriteSettings"}
+        if write_mode == "Overwrite":
+            store["copyBehavior"] = "Overwrite"
+        props["storeSettings"] = store
+    return props
+
+
+def _full_pipeline(name: str, spec: dict[str, Any], src_ds: str, snk_ds: str) -> dict[str, Any]:
+    src = spec["source"]
+    src_query = src.get("query") or (
+        f"SELECT * FROM {src['sourceTable']}" if _is_sql_source(src["type"]) and src.get("sourceTable") else None
+    )
+    tx = _translator(spec.get("mappings"))
+    source_tp: dict[str, Any] = {"type": src["type"]}
+    if src_query:
+        source_tp["sqlReaderQuery"] = src_query
+    type_props: dict[str, Any] = {"source": source_tp, "sink": _sink_props(spec), "enableStaging": False}
+    if tx:
+        type_props["translator"] = tx
+    return {
+        "name": f"loom-copy-{name}",
+        "properties": {
+            "description": f"Loom copy-job {name} (Full · {spec.get('writeMode') or 'Append'})",
+            "activities": [{
+                "name": "Copy", "type": "Copy",
+                "inputs": [{"referenceName": src_ds, "type": "DatasetReference"}],
+                "outputs": [{"referenceName": snk_ds, "type": "DatasetReference"}],
+                "typeProperties": type_props,
+            }],
+            "annotations": ["loom", "copy-job", name, "full"],
+        },
+    }
+
+
+def _incremental_pipeline(name: str, spec: dict[str, Any], src_ds: str, snk_ds: str) -> dict[str, Any]:
+    src = spec["source"]
+    source_table = src["sourceTable"]
+    wm = spec["watermarkCol"]
+    source_name = spec.get("sourceName") or source_table
+    tx = _translator(spec.get("mappings"))
+    old_val = "@{activity('LookupOldWatermark').output.resultSets[0].rows[0].last_value}"
+    new_val = "@{activity('LookupNewWatermark').output.resultSets[0].rows[0].new_value}"
+    bounded_query = f"SELECT * FROM {source_table} WHERE {wm} > '{old_val}' AND {wm} <= '{new_val}'"
+    copy_tp: dict[str, Any] = {"source": {"type": src["type"], "sqlReaderQuery": bounded_query}, "sink": _sink_props(spec), "enableStaging": False}
+    if tx:
+        copy_tp["translator"] = tx
+    return {
+        "name": f"loom-copy-{name}",
+        "properties": {
+            "description": f"Loom copy-job {name} (Incremental · watermark {wm})",
+            "activities": [
+                {
+                    "name": "LookupOldWatermark", "type": "Script",
+                    "linkedServiceName": {"referenceName": _CONTROL_LS, "type": "LinkedServiceReference"},
+                    "typeProperties": {"scripts": [{"type": "Query", "text":
+                        f"SELECT ISNULL(last_value, '1900-01-01T00:00:00Z') AS last_value "
+                        f"FROM dbo.copy_watermark WHERE source = '{source_name}' AND table_name = '{source_table}'"}]},
+                },
+                {
+                    "name": "LookupNewWatermark", "type": "Script",
+                    "linkedServiceName": {"referenceName": src["linkedService"], "type": "LinkedServiceReference"},
+                    "typeProperties": {"scripts": [{"type": "Query", "text": f"SELECT MAX({wm}) AS new_value FROM {source_table}"}]},
+                },
+                {
+                    "name": "IncrementalCopyActivity", "type": "Copy",
+                    "dependsOn": [
+                        {"activity": "LookupOldWatermark", "dependencyConditions": ["Succeeded"]},
+                        {"activity": "LookupNewWatermark", "dependencyConditions": ["Succeeded"]},
+                    ],
+                    "inputs": [{"referenceName": src_ds, "type": "DatasetReference"}],
+                    "outputs": [{"referenceName": snk_ds, "type": "DatasetReference"}],
+                    "typeProperties": copy_tp,
+                },
+                {
+                    "name": "UpdateWatermark", "type": "SqlServerStoredProcedure",
+                    "dependsOn": [{"activity": "IncrementalCopyActivity", "dependencyConditions": ["Succeeded"]}],
+                    "linkedServiceName": {"referenceName": _CONTROL_LS, "type": "LinkedServiceReference"},
+                    "typeProperties": {"storedProcedureName": "dbo.usp_write_watermark", "storedProcedureParameters": {
+                        "source": {"value": source_name, "type": "String"},
+                        "table_name": {"value": source_table, "type": "String"},
+                        "last_value": {"value": new_val, "type": "String"},
+                    }},
+                },
+            ],
+            "annotations": ["loom", "copy-job", name, "incremental"],
+        },
+    }
+
+
+def _default_capture_instance(source_table: str) -> str:
+    schema, table = _split_table(source_table)
+    return f"{schema}_{table}"
+
+
+def _cdc_pipeline(name: str, spec: dict[str, Any], src_ds: str, snk_ds: str) -> dict[str, Any]:
+    src = spec["source"]
+    source_table = src["sourceTable"]
+    source_name = spec.get("sourceName") or source_table
+    capture_instance = spec.get("cdcCaptureInstance") or _default_capture_instance(source_table)
+    tx = _translator(spec.get("mappings"))
+    old_lsn_hex = "@{activity('LookupOldLsn').output.resultSets[0].rows[0].last_lsn_hex}"
+    max_lsn_hex = "@{activity('LookupMaxLsn').output.resultSets[0].rows[0].max_lsn_hex}"
+    net_changes_query = (
+        f"DECLARE @from_lsn binary(10) = CONVERT(binary(10), '{old_lsn_hex}', 1); "
+        f"DECLARE @to_lsn binary(10) = CONVERT(binary(10), '{max_lsn_hex}', 1); "
+        f"IF @from_lsn IS NULL SET @from_lsn = sys.fn_cdc_get_min_lsn('{capture_instance}'); "
+        f"ELSE SET @from_lsn = sys.fn_cdc_increment_lsn(@from_lsn); "
+        f"SELECT * FROM cdc.fn_cdc_get_net_changes_{capture_instance}(@from_lsn, @to_lsn, 'all');"
+    )
+    copy_tp: dict[str, Any] = {"source": {"type": src["type"], "sqlReaderQuery": net_changes_query}, "sink": _sink_props(spec), "enableStaging": False}
+    if tx:
+        copy_tp["translator"] = tx
+    return {
+        "name": f"loom-copy-{name}",
+        "properties": {
+            "description": f"Loom copy-job {name} (CDC · capture {capture_instance})",
+            "activities": [
+                {
+                    "name": "LookupOldLsn", "type": "Script",
+                    "linkedServiceName": {"referenceName": _CONTROL_LS, "type": "LinkedServiceReference"},
+                    "typeProperties": {"scripts": [{"type": "Query", "text":
+                        f"SELECT last_value AS last_lsn_hex "
+                        f"FROM dbo.copy_watermark WHERE source = '{source_name}' AND table_name = '{source_table}'"}]},
+                },
+                {
+                    "name": "LookupMaxLsn", "type": "Script",
+                    "linkedServiceName": {"referenceName": src["linkedService"], "type": "LinkedServiceReference"},
+                    "typeProperties": {"scripts": [{"type": "Query", "text":
+                        "SELECT master.dbo.fn_varbintohexstr(sys.fn_cdc_get_max_lsn()) AS max_lsn_hex"}]},
+                },
+                {
+                    "name": "CdcCopyActivity", "type": "Copy",
+                    "dependsOn": [
+                        {"activity": "LookupOldLsn", "dependencyConditions": ["Succeeded"]},
+                        {"activity": "LookupMaxLsn", "dependencyConditions": ["Succeeded"]},
+                    ],
+                    "inputs": [{"referenceName": src_ds, "type": "DatasetReference"}],
+                    "outputs": [{"referenceName": snk_ds, "type": "DatasetReference"}],
+                    "typeProperties": copy_tp,
+                },
+                {
+                    "name": "UpdateWatermark", "type": "SqlServerStoredProcedure",
+                    "dependsOn": [{"activity": "CdcCopyActivity", "dependencyConditions": ["Succeeded"]}],
+                    "linkedServiceName": {"referenceName": _CONTROL_LS, "type": "LinkedServiceReference"},
+                    "typeProperties": {"storedProcedureName": "dbo.usp_write_watermark", "storedProcedureParameters": {
+                        "source": {"value": source_name, "type": "String"},
+                        "table_name": {"value": source_table, "type": "String"},
+                        "last_value": {"value": max_lsn_hex, "type": "String"},
+                    }},
+                },
+            ],
+            "annotations": ["loom", "copy-job", name, "cdc"],
+        },
+    }
+
+
+def _validate_side(side: Any, which: str) -> dict[str, Any]:
+    if not isinstance(side, dict):
+        raise ToolError(f"`{which}` must be an object with at least `linkedService` and `type`.")
+    if not (side.get("linkedService") or "").strip():
+        raise ToolError(f"`{which}.linkedService` is required (the ADF linked service name for the {which}).")
+    if not (side.get("type") or "").strip():
+        raise ToolError(f"`{which}.type` is required (e.g. AzureSqlSource / ParquetSink).")
+    return side
+
+
+def _run_copy_job(args: dict[str, Any]) -> dict[str, Any]:
+    name = _validate_name(args.get("name", ""))
+    source = _validate_side(args.get("source"), "source")
+    sink = _validate_side(args.get("sink"), "sink")
+    if not (sink.get("table") or "").strip():
+        raise ToolError("`sink.table` (the destination table or path) is required.")
+    mode_in = (args.get("mode") or "Full")
+    mode = "Incremental" if mode_in == "Incremental" else "CDC" if mode_in == "CDC" else "Full"
+    write_mode = args.get("writeMode")
+    mappings = args.get("mappings")
+    if mappings is not None and not isinstance(mappings, list):
+        raise ToolError("`mappings` must be an array of {source, sink} column-mapping objects.")
+    spec: dict[str, Any] = {
+        "source": source, "sink": sink, "mode": mode, "writeMode": write_mode,
+        "watermarkCol": args.get("watermarkCol"), "sourceName": args.get("sourceName"),
+        "cdcCaptureInstance": args.get("cdcCaptureInstance"), "mergeKeys": args.get("mergeKeys"),
+        "mappings": mappings,
+    }
+
+    uses_control = mode in ("Incremental", "CDC")
+    if mode == "Incremental":
+        if not (source.get("sourceTable") or "").strip():
+            raise ToolError("`source.sourceTable` is required for incremental copy.")
+        if not (spec.get("watermarkCol") or "").strip():
+            raise ToolError("`watermarkCol` is required for incremental copy.")
+        if not _is_sql_source(source["type"]):
+            raise ToolError("incremental copy requires a SQL-family source (the watermark is read with MAX(<column>) against the source table).")
+    if mode == "CDC":
+        if not (source.get("sourceTable") or "").strip():
+            raise ToolError("`source.sourceTable` is required for CDC copy.")
+        if not _is_sql_source(source["type"]):
+            raise ToolError("CDC copy requires a SQL-family source (Azure SQL / SQL Server / SQL MI) with native change data capture enabled.")
+        if write_mode != "Merge" or not (spec.get("mergeKeys") or "").strip():
+            raise ToolError("CDC copy applies net changes by key — set `writeMode` to Merge and provide `mergeKeys`.")
+
+    control_server = (os.environ.get("LOOM_COPYJOB_CONTROL_SQL_SERVER") or "").strip()
+    if uses_control and not control_server:
+        checkpoint = "LSN checkpoint" if mode == "CDC" else "watermark"
+        raise ToolError(
+            f"LOOM_COPYJOB_CONTROL_SQL_SERVER is not set on the MCP Function App, so the {checkpoint} "
+            "control table cannot be reached. Deploy "
+            "platform/fiab/bicep/modules/admin-plane/copy-job-control.bicep (it creates dbo.copy_watermark + "
+            "dbo.usp_write_watermark) and set LOOM_COPYJOB_CONTROL_SQL_SERVER (+ LOOM_COPYJOB_CONTROL_SQL_DB) "
+            "on the MCP Function App. Full-mode copy works without this."
+        )
+
+    # Datasets — real ADF child resources referenced by the Copy activity.
+    src_ds = f"loom-copy-{name}-src"
+    snk_ds = f"loom-copy-{name}-snk"
+    _ok_json(_arm_request("PUT", f"/datasets/{src_ds}", body=_build_dataset(src_ds, source["type"], source["linkedService"], source.get("sourceTable"))), f"upsert dataset {src_ds}")
+    _ok_json(_arm_request("PUT", f"/datasets/{snk_ds}", body=_build_dataset(snk_ds, sink["type"], sink["linkedService"], sink.get("table"))), f"upsert dataset {snk_ds}")
+
+    if uses_control:
+        control_db = (os.environ.get("LOOM_COPYJOB_CONTROL_SQL_DB") or "loom-control").strip() or "loom-control"
+        control_ls = {
+            "name": _CONTROL_LS,
+            "properties": {
+                "type": "AzureSqlDatabase",
+                "description": "Loom copy-job watermark / CDC LSN checkpoint control DB (dbo.copy_watermark).",
+                "typeProperties": {
+                    "server": control_server,
+                    "database": control_db,
+                    "authenticationType": "SystemAssignedManagedIdentity",
+                },
+            },
+        }
+        _ok_json(_arm_request("PUT", f"/linkedservices/{_CONTROL_LS}", body=control_ls), f"upsert linked service {_CONTROL_LS}")
+
+    pipeline_name = f"loom-copy-{name}"
+    pipeline = (
+        _incremental_pipeline(name, spec, src_ds, snk_ds) if mode == "Incremental"
+        else _cdc_pipeline(name, spec, src_ds, snk_ds) if mode == "CDC"
+        else _full_pipeline(name, spec, src_ds, snk_ds)
+    )
+    _ok_json(_arm_request("PUT", f"/pipelines/{pipeline_name}", body=pipeline), f"upsert pipeline {pipeline_name}")
+    run = _ok_json(_arm_request("POST", f"/pipelines/{pipeline_name}/createRun", body={}), f"run copy job {name}")
+    return {"copyJob": name, "pipelineName": pipeline_name, "mode": mode, "runId": run.get("runId"), "started": True}
+
+
 # ── registry ─────────────────────────────────────────────────────────────────
 
 def build_tools() -> dict[str, Any]:
@@ -448,6 +906,126 @@ def build_tools() -> dict[str, Any]:
                     "required": ["runId"],
                 },
                 _diagnose_run,
+            ),
+            Tool(
+                "loom_get_dataflow",
+                "Get the full definition (type, sources, script, sinks) of one data flow. Read-only.",
+                {
+                    "type": "object",
+                    "properties": {"name": {"type": "string", "description": "Data flow name."}},
+                    "required": ["name"],
+                },
+                _get_dataflow,
+            ),
+            Tool(
+                "loom_author_dataflow",
+                "Create or update a Power Query (Dataflow Gen2 / WranglingDataFlow) data flow from an M "
+                "mashup `script`. `sources` binds query names in the script to existing ADF datasets. "
+                "Azure-native, no Microsoft Fabric. Requires Data Factory Contributor.",
+                {
+                    "type": "object",
+                    "properties": {
+                        "name": {"type": "string", "description": "Data flow name (1-140 chars, [A-Za-z0-9_-])."},
+                        "script": {"type": "string", "description": "The Power Query / M mashup text (the dataflow's content)."},
+                        "sources": {
+                            "type": "array",
+                            "description": "Bind each M query that reads from a connector to an ADF dataset. Inline #table() queries need no source.",
+                            "items": {
+                                "type": "object",
+                                "properties": {
+                                    "name": {"type": "string", "description": "Query name in the M script."},
+                                    "datasetName": {"type": "string", "description": "ADF dataset the query reads from."},
+                                },
+                                "required": ["name"],
+                            },
+                        },
+                    },
+                    "required": ["name", "script"],
+                },
+                _author_dataflow,
+            ),
+            Tool(
+                "loom_run_dataflow",
+                "Run a Power Query (Dataflow Gen2) data flow via an ExecuteWranglingDataflow wrapper "
+                "pipeline and return its runId. `sinks` map output queries to destination datasets. "
+                "Requires Data Factory Contributor.",
+                {
+                    "type": "object",
+                    "properties": {
+                        "name": {"type": "string", "description": "Data flow name to run."},
+                        "sinks": {
+                            "type": "array",
+                            "description": "Map each output query to an ADF dataset to write its result to.",
+                            "items": {
+                                "type": "object",
+                                "properties": {
+                                    "queryName": {"type": "string", "description": "Output query whose result is written."},
+                                    "sinkName": {"type": "string", "description": "Unique sink name within the activity."},
+                                    "datasetName": {"type": "string", "description": "Destination ADF dataset."},
+                                },
+                                "required": ["queryName", "sinkName", "datasetName"],
+                            },
+                        },
+                        "computeType": {"type": "string", "description": "Spark compute type (General / MemoryOptimized / ComputeOptimized). Default General."},
+                        "coreCount": {"type": "integer", "description": "Spark core count (default 8)."},
+                    },
+                    "required": ["name"],
+                },
+                _run_dataflow,
+            ),
+            Tool(
+                "loom_run_copy_job",
+                "Run a Loom copy job: materialise a Full / Incremental-watermark / native-CDC copy into a "
+                "real ADF pipeline (+ its source/sink datasets) and trigger it. Simplified data movement "
+                "(Fabric Copy job parity) on Azure Data Factory — no Microsoft Fabric. Incremental/CDC "
+                "require LOOM_COPYJOB_CONTROL_SQL_SERVER (honest gate otherwise). Requires Data Factory Contributor.",
+                {
+                    "type": "object",
+                    "properties": {
+                        "name": {"type": "string", "description": "Copy-job name; derives pipeline `loom-copy-<name>` and datasets."},
+                        "source": {
+                            "type": "object",
+                            "description": "Source binding.",
+                            "properties": {
+                                "linkedService": {"type": "string", "description": "ADF linked service name for the source store."},
+                                "type": {"type": "string", "description": "Copy source type, e.g. AzureSqlSource, ParquetSource."},
+                                "sourceTable": {"type": "string", "description": "Source table (schema.table) — required for Incremental/CDC."},
+                                "query": {"type": "string", "description": "Optional explicit source query (Full mode)."},
+                            },
+                            "required": ["linkedService", "type"],
+                        },
+                        "sink": {
+                            "type": "object",
+                            "description": "Destination binding.",
+                            "properties": {
+                                "linkedService": {"type": "string", "description": "ADF linked service name for the sink store."},
+                                "type": {"type": "string", "description": "Copy sink type, e.g. AzureSqlSink, ParquetSink."},
+                                "table": {"type": "string", "description": "Destination table (schema.table) or file path."},
+                            },
+                            "required": ["linkedService", "type", "table"],
+                        },
+                        "mode": {"type": "string", "enum": ["Full", "Incremental", "CDC"], "description": "Copy mode (default Full)."},
+                        "writeMode": {"type": "string", "enum": ["Append", "Overwrite", "Merge"], "description": "Sink write behaviour. Merge required for CDC."},
+                        "watermarkCol": {"type": "string", "description": "Watermark column (Incremental mode)."},
+                        "sourceName": {"type": "string", "description": "Logical source key in the watermark control table (defaults to sourceTable)."},
+                        "cdcCaptureInstance": {"type": "string", "description": "SQL Server CDC capture instance (CDC mode; defaults to <schema>_<table>)."},
+                        "mergeKeys": {"type": "string", "description": "Comma-separated upsert/merge key columns (Merge / CDC)."},
+                        "mappings": {
+                            "type": "array",
+                            "description": "Optional column mappings.",
+                            "items": {
+                                "type": "object",
+                                "properties": {
+                                    "source": {"type": "string"},
+                                    "sink": {"type": "string"},
+                                },
+                                "required": ["source", "sink"],
+                            },
+                        },
+                    },
+                    "required": ["name", "source", "sink"],
+                },
+                _run_copy_job,
             ),
         ]
     }

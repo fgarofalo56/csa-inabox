@@ -72,6 +72,12 @@ param dlzResourceGroup string = ''
 @description('Loom default Data Factory name backing the data-movement (pipeline/copy-job/dataflow) tools. Empty = those tools honest-gate.')
 param adfName string = ''
 
+@description('Azure SQL server FQDN hosting the copy-job watermark / CDC LSN checkpoint control DB (dbo.copy_watermark). Empty = loom_run_copy_job Incremental/CDC modes honest-gate; Full mode still works. Deploy platform/fiab/bicep/modules/admin-plane/copy-job-control.bicep to create the control table + dbo.usp_write_watermark.')
+param copyJobControlSqlServer string = ''
+
+@description('Database name of the copy-job control DB (default loom-control).')
+param copyJobControlSqlDatabase string = 'loom-control'
+
 @description('ARM endpoint (Gov: https://management.usgovcloudapi.net).')
 param armEndpoint string = environment().resourceManager
 
@@ -144,6 +150,8 @@ resource functionApp 'Microsoft.Web/sites@2024-04-01' = {
         { name: 'LOOM_AI_SEARCH_INDEX', value: aiSearchIndex }
         { name: 'LOOM_DLZ_RG', value: dlzResourceGroup }
         { name: 'LOOM_ADF_NAME', value: adfName }
+        { name: 'LOOM_COPYJOB_CONTROL_SQL_SERVER', value: copyJobControlSqlServer }
+        { name: 'LOOM_COPYJOB_CONTROL_SQL_DB', value: copyJobControlSqlDatabase }
         { name: 'LOOM_ARM_ENDPOINT', value: armEndpoint }
       ]
     }
