@@ -35,8 +35,14 @@ const EXPECTED_COUNT: Record<string, number> = {
   'app-supercharge-guide': 7,
 };
 
-// no-fabric-dependency.md forbidden control-plane hosts.
-const FORBIDDEN = /api\.fabric\.microsoft\.com|api\.powerbi\.com|onelake\.dfs\.fabric/;
+// no-fabric-dependency.md forbidden hosts. Broad on purpose: ANY Fabric /
+// Power BI sub-domain (api / datawarehouse / database / kusto / graphql /
+// onelake) is a hard-dependency violation, not just the control-plane hosts.
+// learn.microsoft.com/.../fabric/... doc links do NOT contain ".fabric.microsoft.com".
+const FORBIDDEN = /\.fabric\.microsoft\.com|\.powerbi\.com|onelake\.(dfs|blob)\.fabric/;
+
+// no-vaporware.md: dead Fabric-pointing placeholder cells are forbidden.
+const PLACEHOLDER = /\[placeholder\]|Production deployments wire/;
 
 const VALID_LANGS = new Set(['pyspark', 'spark', 'sparksql', 'sparkr', 'python', 'tsql']);
 
@@ -89,6 +95,18 @@ describe('Supercharge-Fabric Loom-native bundles', () => {
         const content = item.content as NotebookContent;
         for (const cell of content.cells) {
           expect(FORBIDDEN.test(cell.source), `${id}/${item.displayName} cell ${cell.id} must not reference a Fabric/OneLake/Power BI host`).toBe(false);
+        }
+      }
+    }
+  });
+
+  it('ships zero dead Fabric placeholder cells (no-vaporware)', () => {
+    for (const id of SUPERCHARGE_IDS) {
+      const bundle = getBundle(id) as AppBundle;
+      for (const item of bundle.items) {
+        const content = item.content as NotebookContent;
+        for (const cell of content.cells) {
+          expect(PLACEHOLDER.test(cell.source), `${id}/${item.displayName} cell ${cell.id} must not ship a dead "[placeholder]" / "Production deployments wire" Fabric stub`).toBe(false);
         }
       }
     }

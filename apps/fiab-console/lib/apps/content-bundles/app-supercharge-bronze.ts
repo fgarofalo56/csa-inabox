@@ -3719,7 +3719,7 @@ const CELLS_BRONZE_56_TELECOM_CDR: NotebookCell[] = [
   {
     "id": "bronze-56-telecom-cdr-c2",
     "type": "code",
-    "source": "from datetime import datetime\n\nfrom pyspark.sql import SparkSession\nfrom pyspark.sql.functions import (\n    col,\n    current_timestamp,\n    input_file_name,\n    lit,\n)\nfrom pyspark.sql.types import (\n    DoubleType,\n    IntegerType,\n    LongType,\n    StringType,\n    StructField,\n    StructType,\n    TimestampType,\n)\n\n# Configuration\nSOURCE_PATH = \"Files/output/telecom_cdr_sample.parquet\"\nTARGET_TABLE = \"lh_bronze.bronze_telecom_cdr\"\nBATCH_ID = datetime.now().strftime(\"%Y%m%d_%H%M%S\")\nCHECKPOINT_PATH = \"abfss://onelake/checkpoints/bronze_telecom_cdr\"\n\nprint(f\"Source: {SOURCE_PATH}\")\nprint(f\"Target: {TARGET_TABLE}\")\nprint(f\"Batch ID: {BATCH_ID}\")",
+    "source": "from datetime import datetime\n\nfrom pyspark.sql import SparkSession\nfrom pyspark.sql.functions import (\n    col,\n    current_timestamp,\n    input_file_name,\n    lit,\n)\nfrom pyspark.sql.types import (\n    DoubleType,\n    IntegerType,\n    LongType,\n    StringType,\n    StructField,\n    StructType,\n    TimestampType,\n)\n\n# Configuration\nSOURCE_PATH = \"Files/output/telecom_cdr_sample.parquet\"\nTARGET_TABLE = \"lh_bronze.bronze_telecom_cdr\"\nBATCH_ID = datetime.now().strftime(\"%Y%m%d_%H%M%S\")\nCHECKPOINT_PATH = \"abfss://onelake@{{ADLS_ACCOUNT}}.dfs.core.windows.net/checkpoints/bronze_telecom_cdr\"\n\nprint(f\"Source: {SOURCE_PATH}\")\nprint(f\"Target: {TARGET_TABLE}\")\nprint(f\"Batch ID: {BATCH_ID}\")",
     "lang": "pyspark"
   },
   {

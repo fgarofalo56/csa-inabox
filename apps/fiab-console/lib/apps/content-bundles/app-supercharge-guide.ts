@@ -44,7 +44,7 @@ const CELLS_HITCHHIKERS_GUIDE_01_GUIDE_CONNECTIVITY: NotebookCell[] = [
   {
     "id": "hitchhikers-guide-01-guide-connectivity-c0",
     "type": "code",
-    "source": "# Fabric notebook source\n# MAGIC %md\n# MAGIC # 🧭 Hitchhiker's Guide — 01: Connectivity\n# MAGIC\n# MAGIC > Everything that goes \"how do I connect Fabric to ___?\". Each section\n# MAGIC > is independent. **Look up the section you need; ignore the rest.**\n# MAGIC\n# MAGIC | Section | Source / target |\n# MAGIC |---|---|\n# MAGIC | A | ADLS Gen2 |\n# MAGIC | B | Amazon S3 |\n# MAGIC | C | Google Cloud Storage |\n# MAGIC | D | On-prem SQL Server (gateway) |\n# MAGIC | E | Snowflake |\n# MAGIC | F | Synapse Serverless SQL |\n# MAGIC | G | Databricks Delta tables |\n# MAGIC | H | Fabric Warehouse (T-SQL endpoint) |\n# MAGIC | I | Fabric SQL Database |\n# MAGIC | J | Lakehouse SQL endpoint |\n# MAGIC | K | Eventhouse / KQL DB |\n# MAGIC | L | GraphQL endpoint |\n# MAGIC | M | Power BI semantic model (Semantic Link / sempy) |\n# MAGIC | N | Fabric REST API |\n# MAGIC | O | Cosmos DB mirror |\n# MAGIC | P | PostgreSQL / MySQL mirror |",
+    "source": "# Fabric notebook source\n# MAGIC %md\n# MAGIC # 🧭 Hitchhiker's Guide — 01: Connectivity (Azure-native)\n# MAGIC\n# MAGIC > Everything that goes \"how do I connect Loom to ___?\". Each section\n# MAGIC > is independent. **Look up the section you need; ignore the rest.**\n# MAGIC >\n# MAGIC > Every recipe below is **Azure-native by default** (Synapse, ADLS Gen2,\n# MAGIC > Azure SQL, ADX, Data API Builder, ARM) and runs with no Microsoft\n# MAGIC > Fabric capacity or workspace. Where a Fabric equivalent exists it is\n# MAGIC > called out only as an **opt-in alternative**.\n# MAGIC\n# MAGIC | Section | Source / target |\n# MAGIC |---|---|\n# MAGIC | A | ADLS Gen2 |\n# MAGIC | B | Amazon S3 |\n# MAGIC | C | Google Cloud Storage |\n# MAGIC | D | On-prem SQL Server (gateway) |\n# MAGIC | E | Snowflake |\n# MAGIC | F | Synapse Serverless SQL |\n# MAGIC | G | Databricks Delta tables |\n# MAGIC | H | Synapse dedicated SQL pool / warehouse (T-SQL endpoint) |\n# MAGIC | I | Azure SQL Database |\n# MAGIC | J | Lakehouse SQL endpoint (Synapse Serverless) |\n# MAGIC | K | Azure Data Explorer (ADX) / KQL DB |\n# MAGIC | L | GraphQL endpoint (Data API Builder) |\n# MAGIC | M | Loom semantic model (Synapse tabular layer) |\n# MAGIC | N | Azure Resource Manager (control plane) |\n# MAGIC | O | Cosmos DB (Synapse Link CDC → ADLS) |\n# MAGIC | P | PostgreSQL / MySQL (ADF CDC → ADLS) |",
     "lang": "pyspark"
   },
   {
@@ -55,7 +55,7 @@ const CELLS_HITCHHIKERS_GUIDE_01_GUIDE_CONNECTIVITY: NotebookCell[] = [
   {
     "id": "hitchhikers-guide-01-guide-connectivity-c2",
     "type": "code",
-    "source": "mssparkutils.fs.mount(\n    \"abfss://mycontainer@mystorageaccount.dfs.core.windows.net\",\n    \"/mydata\",\n)\nmssparkutils.fs.ls(\"/mydata\")\n# 🔗 https://learn.microsoft.com/en-us/fabric/data-engineering/notebookutils/notebookutils-file-system",
+    "source": "mssparkutils.fs.mount(\n    \"abfss://mycontainer@mystorageaccount.dfs.core.windows.net\",\n    \"/mydata\",\n)\nmssparkutils.fs.ls(\"/mydata\")\n# 🔗 https://learn.microsoft.com/en-us/azure/storage/blobs/data-lake-storage-introduction",
     "lang": "pyspark"
   },
   {
@@ -83,7 +83,7 @@ const CELLS_HITCHHIKERS_GUIDE_01_GUIDE_CONNECTIVITY: NotebookCell[] = [
   {
     "id": "hitchhikers-guide-01-guide-connectivity-c7",
     "type": "markdown",
-    "source": "## B — Amazon S3\n\nRecommended: an **OneLake shortcut** registered via REST."
+    "source": "## B — Amazon S3\n\nAzure-native default: read the bucket directly with Spark and land it as\nADLS Gen2 Bronze Delta (Loom medallion default)."
   },
   {
     "id": "hitchhikers-guide-01-guide-connectivity-c8",
@@ -105,93 +105,93 @@ const CELLS_HITCHHIKERS_GUIDE_01_GUIDE_CONNECTIVITY: NotebookCell[] = [
   {
     "id": "hitchhikers-guide-01-guide-connectivity-c11",
     "type": "markdown",
-    "source": "## D — On-prem SQL Server\n\n- Install the **On-premises data gateway** (Enterprise, v3000.214.2+).\n- Create a Fabric cloud connection of type SQL Server, choose the gateway.\n- For private VNet sources, use a **virtual network data gateway** or\n  **MPE → Private Link Service → ExpressRoute/VPN**.\n- For continuous CDC, use **SQL Server mirroring**.\n\n🔗 [connect-to-on-premise-sources-using-managed-private-endpoints](https://learn.microsoft.com/en-us/fabric/security/connect-to-on-premise-sources-using-managed-private-endpoints)\n🔗 [sql-server-tutorial](https://learn.microsoft.com/en-us/fabric/mirroring/sql-server-tutorial)"
+    "source": "## D — On-prem SQL Server\n\n- Install the **Self-hosted Integration Runtime (SHIR)** in Synapse/ADF\n  (the Azure-native gateway) on a host with line of sight to the source.\n- For private VNet sources, use a **Managed VNet IR + Managed Private\n  Endpoint** to the SQL Server, or Private Link / ExpressRoute / VPN.\n- For continuous CDC, use a **Synapse/ADF mapping data flow or Change\n  Data Capture copy** landing into ADLS Bronze Delta.\n\n🔗 [create-self-hosted-integration-runtime](https://learn.microsoft.com/en-us/azure/data-factory/create-self-hosted-integration-runtime)\n🔗 [tutorial-incremental-copy-change-data-capture-feature-portal](https://learn.microsoft.com/en-us/azure/data-factory/tutorial-incremental-copy-change-data-capture-feature-portal)"
   },
   {
     "id": "hitchhikers-guide-01-guide-connectivity-c12",
     "type": "markdown",
-    "source": "## E — Snowflake\n\nThree ways:\n1. **Mirror** (recommended — CDC into OneLake Delta).\n2. **Spark connector** in a notebook for ad-hoc reads.\n3. **Snowflake-managed Iceberg DB item** when Snowflake owns Iceberg.\n\n🔗 [mirroring/snowflake](https://learn.microsoft.com/en-us/fabric/mirroring/snowflake),\n[create-snowflake-database-item](https://learn.microsoft.com/en-us/fabric/onelake/snowflake/create-snowflake-database-item)"
+    "source": "## E — Snowflake\n\nAzure-native ways:\n1. **Spark connector** in a notebook for ad-hoc reads (below).\n2. **ADF/Synapse Snowflake connector + CDC copy** into ADLS Bronze Delta\n   (recommended for scheduled, incremental replication).\n3. **Iceberg interop** — read Snowflake-managed Iceberg tables from Spark.\n\n🔗 [connector-snowflake](https://learn.microsoft.com/en-us/azure/data-factory/connector-snowflake)"
   },
   {
     "id": "hitchhikers-guide-01-guide-connectivity-c13",
     "type": "code",
-    "source": "sf_secret = mssparkutils.credentials.getSecret(\"https://myvault.vault.azure.net/\", \"snowflake-pwd\")\nsfopts = {\n  \"sfURL\": \"myacct.snowflakecomputing.com\",\n  \"sfUser\": \"FABRIC_READER\",\n  \"sfPassword\": sf_secret,\n  \"sfDatabase\": \"ANALYTICS\",\n  \"sfSchema\": \"PUBLIC\",\n  \"sfWarehouse\": \"COMPUTE_WH\",\n}\ndf = (spark.read.format(\"snowflake\").options(**sfopts).option(\"dbtable\", \"DIM_CUSTOMER\").load())",
+    "source": "sf_secret = mssparkutils.credentials.getSecret(\"https://myvault.vault.azure.net/\", \"snowflake-pwd\")\nsfopts = {\n  \"sfURL\": \"myacct.snowflakecomputing.com\",\n  \"sfUser\": \"LOOM_READER\",\n  \"sfPassword\": sf_secret,\n  \"sfDatabase\": \"ANALYTICS\",\n  \"sfSchema\": \"PUBLIC\",\n  \"sfWarehouse\": \"COMPUTE_WH\",\n}\ndf = (spark.read.format(\"snowflake\").options(**sfopts).option(\"dbtable\", \"DIM_CUSTOMER\").load())",
     "lang": "pyspark"
   },
   {
     "id": "hitchhikers-guide-01-guide-connectivity-c14",
     "type": "markdown",
-    "source": "## F — Synapse Serverless SQL pool\n\nNo first-party mirror. Best pattern: **shortcut to the underlying ADLS\nparquet** that Synapse Serverless reads, and skip Synapse at query time."
+    "source": "## F — Synapse Serverless SQL pool\n\nThe Loom lakehouse SQL endpoint **is** Synapse Serverless. Query the ADLS\nDelta tables directly via `synapsesql`, or read the parquet/Delta path in\nSpark and skip the SQL hop entirely."
   },
   {
     "id": "hitchhikers-guide-01-guide-connectivity-c15",
     "type": "markdown",
-    "source": "## G — Databricks Delta tables\n\n| Source posture | Best pattern |\n|---|---|\n| UC-governed table | **Mirrored Databricks Catalog** |\n| Non-UC ADLS-managed Delta | OneLake **ADLS Gen2 shortcut** |\n| Ad-hoc Databricks job reading OneLake | **Direct ABFS from Databricks** with OAuth |\n\n🔗 [azure-databricks](https://learn.microsoft.com/en-us/fabric/mirroring/azure-databricks),\n[onelake-azure-databricks](https://learn.microsoft.com/en-us/fabric/onelake/onelake-azure-databricks)\n\nSee tutorial 57 for end-to-end examples of all three."
+    "source": "## G — Databricks Delta tables\n\n| Source posture | Azure-native pattern |\n|---|---|\n| ADLS-managed Delta | **Direct ABFS read** with workspace identity / OAuth |\n| Unity Catalog table | Read the underlying ADLS Delta path, or UC Delta Sharing |\n| Scheduled replication | **ADF/Synapse copy** Databricks → ADLS Bronze Delta |\n\n🔗 [databricks abfs access](https://learn.microsoft.com/en-us/azure/databricks/connect/storage/azure-storage)\n\nSee tutorial 57 for end-to-end examples."
   },
   {
     "id": "hitchhikers-guide-01-guide-connectivity-c16",
     "type": "markdown",
-    "source": "## H — Fabric Warehouse from a notebook (T-SQL endpoint)"
+    "source": "## H — Synapse dedicated SQL pool / warehouse from a notebook (T-SQL endpoint)\n\nAzure-native default: the Spark–Synapse connector (`synapsesql`) reads and\nwrites the dedicated SQL pool with AAD/workspace-identity auth — no\nconnection string, no Fabric."
   },
   {
     "id": "hitchhikers-guide-01-guide-connectivity-c17",
     "type": "code",
-    "source": "import struct, pyodbc\n\ntoken_bytes = mssparkutils.credentials.getToken(\n    \"https://analysis.windows.net/powerbi/api\"\n).encode(\"utf-16-le\")\ntoken_struct = struct.pack(f\"<I{len(token_bytes)}s\", len(token_bytes), token_bytes)\nSQL_COPT_SS_ACCESS_TOKEN = 1256\n\nconn_str = (\n    \"Driver={ODBC Driver 18 for SQL Server};\"\n    f\"Server=<workspace>-<dataworkspace-id>.datawarehouse.fabric.microsoft.com,1433;\"\n    f\"Database=<warehouse>;\"\n    \"Encrypt=yes;TrustServerCertificate=no;\"\n)\ncn = pyodbc.connect(conn_str, attrs_before={SQL_COPT_SS_ACCESS_TOKEN: token_struct})\n# Or the Spark connector:\ndf = spark.read.synapsesql(\"warehouse.dbo.dim_customer\")\n# 🔗 https://learn.microsoft.com/en-us/fabric/data-engineering/spark-data-warehouse-connector",
+    "source": "# Azure-native default: Spark connector against the Synapse dedicated SQL pool.\ndf = spark.read.synapsesql(\"loom_warehouse.dbo.dim_customer\")\n# 🔗 https://learn.microsoft.com/en-us/azure/synapse-analytics/spark/synapse-spark-sql-pool-import-export\n\n# Opt-in: pyodbc against the Synapse dedicated SQL endpoint with an AAD token.\nimport struct, pyodbc\n\ntoken_bytes = mssparkutils.credentials.getToken(\n    \"https://database.windows.net/\"\n).encode(\"utf-16-le\")\ntoken_struct = struct.pack(f\"<I{len(token_bytes)}s\", len(token_bytes), token_bytes)\nSQL_COPT_SS_ACCESS_TOKEN = 1256\n\nconn_str = (\n    \"Driver={ODBC Driver 18 for SQL Server};\"\n    \"Server=<synapse-workspace>.sql.azuresynapse.net,1433;\"\n    \"Database=<dedicated-pool>;\"\n    \"Encrypt=yes;TrustServerCertificate=no;\"\n)\ncn = pyodbc.connect(conn_str, attrs_before={SQL_COPT_SS_ACCESS_TOKEN: token_struct})",
     "lang": "pyspark"
   },
   {
     "id": "hitchhikers-guide-01-guide-connectivity-c18",
     "type": "markdown",
-    "source": "## I — Fabric SQL Database"
+    "source": "## I — Azure SQL Database\n\nAzure-native equivalent of the Fabric SQL DB recipe. Use the Azure SQL\nserver endpoint with `ActiveDirectoryDefault` (workspace identity)."
   },
   {
     "id": "hitchhikers-guide-01-guide-connectivity-c19",
     "type": "code",
-    "source": "conn_str = (\n    \"Driver={ODBC Driver 18 for SQL Server};\"\n    \"Server=<workspace-guid>.database.fabric.microsoft.com,1433;\"\n    \"Database=<db>;\"\n    \"Encrypt=yes;TrustServerCertificate=no;\"\n    \"Authentication=ActiveDirectoryDefault;\"\n)\n# After `az login` (locally) or in a notebook with workspace identity,\n# ActiveDirectoryDefault reuses cached credentials. ODBC 18+ required.\n# 🔗 https://learn.microsoft.com/en-us/fabric/database/sql/connect-jupyter-notebook",
+    "source": "conn_str = (\n    \"Driver={ODBC Driver 18 for SQL Server};\"\n    \"Server=<sql-server-name>.database.windows.net,1433;\"\n    \"Database=<db>;\"\n    \"Encrypt=yes;TrustServerCertificate=no;\"\n    \"Authentication=ActiveDirectoryDefault;\"\n)\n# After `az login` (locally) or in a notebook with workspace identity,\n# ActiveDirectoryDefault reuses cached credentials. ODBC 18+ required.\n# 🔗 https://learn.microsoft.com/en-us/azure/azure-sql/database/connect-query-python",
     "lang": "pyspark"
   },
   {
     "id": "hitchhikers-guide-01-guide-connectivity-c20",
     "type": "markdown",
-    "source": "## J — Lakehouse SQL endpoint\n\nSame pyodbc pattern as H/I. Get the server name from the SQL analytics\nendpoint property on the lakehouse item."
+    "source": "## J — Lakehouse SQL endpoint\n\nThe Loom lakehouse SQL endpoint is **Synapse Serverless SQL** over the\nADLS Delta tables. Use the same pyodbc pattern as H/I against\n`<workspace>-ondemand.sql.azuresynapse.net`, or `spark.read.synapsesql`."
   },
   {
     "id": "hitchhikers-guide-01-guide-connectivity-c21",
     "type": "markdown",
-    "source": "## K — Eventhouse / KQL DB"
+    "source": "## K — Azure Data Explorer (ADX) / KQL DB"
   },
   {
     "id": "hitchhikers-guide-01-guide-connectivity-c22",
     "type": "code",
-    "source": "kusto_token = mssparkutils.credentials.getToken(\"kusto\")\ndf = (\n    spark.read\n    .format(\"com.microsoft.kusto.spark.synapse.datasource\")\n    .option(\"accessToken\", kusto_token)\n    .option(\"kustoCluster\", \"https://<cluster-uri>.kusto.fabric.microsoft.com\")\n    .option(\"kustoDatabase\", \"<db>\")\n    .option(\"kustoQuery\", \"T | take 10\")\n    .load()\n)\n# Or read directly from OneLake-availability path:\ndf = spark.read.format(\"delta\").load(\n    \"abfss://<ws-guid>@{{ADLS_ACCOUNT}}.dfs.core.windows.net/<eh-guid>/Tables/MyTable\"\n)\n# 🔗 https://learn.microsoft.com/en-us/fabric/real-time-intelligence/spark-connector\n# 🔗 https://learn.microsoft.com/en-us/fabric/real-time-intelligence/event-house-onelake-availability",
+    "source": "# Azure-native: ADX cluster (the Loom eventhouse/KQL backend). The Kusto Spark\n# connector reads the cluster with an AAD/workspace-identity token.\nkusto_token = mssparkutils.credentials.getToken(\"https://kusto.kusto.windows.net\")\ndf = (\n    spark.read\n    .format(\"com.microsoft.kusto.spark.synapse.datasource\")\n    .option(\"accessToken\", kusto_token)\n    .option(\"kustoCluster\", \"https://<cluster>.<region>.kusto.windows.net\")\n    .option(\"kustoDatabase\", \"<db>\")\n    .option(\"kustoQuery\", \"T | take 10\")\n    .load()\n)\n# Or read the materialized Delta export directly from ADLS:\ndf = spark.read.format(\"delta\").load(\n    \"abfss://eventhouse@{{ADLS_ACCOUNT}}.dfs.core.windows.net/<db>/Tables/MyTable\"\n)\n# 🔗 https://learn.microsoft.com/en-us/azure/data-explorer/spark-connector",
     "lang": "pyspark"
   },
   {
     "id": "hitchhikers-guide-01-guide-connectivity-c23",
     "type": "markdown",
-    "source": "## L — GraphQL endpoint"
+    "source": "## L — GraphQL endpoint (Data API Builder)"
   },
   {
     "id": "hitchhikers-guide-01-guide-connectivity-c24",
     "type": "code",
-    "source": "import requests\ntoken = mssparkutils.credentials.getToken(\"https://analysis.windows.net/powerbi/api\")\nendpoint = \"https://<graphql>.graphql.fabric.microsoft.com/v1/workspaces/<ws>/graphqlapis/<api>/graphql\"\nquery = \"{ products(first: 5) { items { productId name listPrice } } }\"\nr = requests.post(endpoint, headers={\"Authorization\": f\"Bearer {token}\"}, json={\"query\": query})\nr.json()\n# 🔗 https://learn.microsoft.com/en-us/fabric/data-engineering/connect-apps-api-graphql",
+    "source": "import requests\nfrom azure.identity import DefaultAzureCredential\n\n# Azure-native: the Loom GraphQL surface is served by Data API Builder (DAB)\n# over Synapse SQL / Azure SQL — hosted as a Container App. Authenticate with\n# the workspace identity (Entra ID), not a Fabric/Power BI token.\ncred = DefaultAzureCredential()\ntoken = cred.get_token(\"api://<dab-app-id>/.default\").token\nendpoint = \"https://<loom-dab>.azurecontainerapps.io/graphql\"\nquery = \"{ products(first: 5) { items { productId name listPrice } } }\"\nr = requests.post(endpoint, headers={\"Authorization\": f\"Bearer {token}\"}, json={\"query\": query})\nr.json()\n# 🔗 https://learn.microsoft.com/en-us/azure/data-api-builder/graphql",
     "lang": "pyspark"
   },
   {
     "id": "hitchhikers-guide-01-guide-connectivity-c25",
     "type": "markdown",
-    "source": "## M — Power BI semantic model via Semantic Link (sempy)"
+    "source": "## M — Loom semantic model (Synapse tabular layer)"
   },
   {
     "id": "hitchhikers-guide-01-guide-connectivity-c26",
     "type": "code",
-    "source": "import sempy.fabric as fabric\nfabric.list_datasets()\nfabric.list_tables(\"Customer Profitability Sample\")\nfabric.list_measures(\"Customer Profitability Sample\")\ndf = fabric.read_table(\"Customer Profitability Sample\", \"Customer\")\n# 🔗 https://learn.microsoft.com/en-us/fabric/data-science/read-write-power-bi-python",
+    "source": "# Azure-native: the Loom semantic layer is a tabular model over the Synapse\n# warehouse / lakehouse (no Power BI workspace). Read measures/tables through\n# the Synapse SQL endpoint (the semantic layer's serving surface).\ndf = spark.read.synapsesql(\"loom_warehouse.semantic.customer_profitability\")\n# Or query the Loom semantic-model API: GET /api/items/semantic-model/<id>/tables\n# 🔗 https://learn.microsoft.com/en-us/azure/analysis-services/analysis-services-overview",
     "lang": "pyspark"
   },
   {
     "id": "hitchhikers-guide-01-guide-connectivity-c27",
     "type": "markdown",
-    "source": "## N — Fabric REST API"
+    "source": "## N — Azure Resource Manager (control plane)"
   },
   {
     "id": "hitchhikers-guide-01-guide-connectivity-c28",
@@ -202,12 +202,12 @@ const CELLS_HITCHHIKERS_GUIDE_01_GUIDE_CONNECTIVITY: NotebookCell[] = [
   {
     "id": "hitchhikers-guide-01-guide-connectivity-c29",
     "type": "markdown",
-    "source": "## O — Cosmos DB via mirror\n\nProvision a mirrored Cosmos DB item from the Fabric portal — data\nlands as Delta in OneLake. Background replication is **free**; query\nthe OneLake Delta projection in Spark or Direct Lake (avoid hitting\nCosmos directly, which still charges RU).\n\n🔗 [azure-cosmos-db](https://learn.microsoft.com/en-us/fabric/mirroring/azure-cosmos-db)"
+    "source": "## O — Cosmos DB (Synapse Link CDC → ADLS)\n\nEnable **Azure Synapse Link** on the Cosmos DB account — the analytical\nstore lands as columnar data you query from Synapse Spark/SQL without\ntouching the transactional store (no RU burn). For a Delta projection,\nrun a Synapse/ADF copy from the analytical store into ADLS Bronze Delta.\n\n🔗 [synapse-link](https://learn.microsoft.com/en-us/azure/cosmos-db/synapse-link)"
   },
   {
     "id": "hitchhikers-guide-01-guide-connectivity-c30",
     "type": "markdown",
-    "source": "## P — PostgreSQL / MySQL mirror\n\n- **Azure Database for PostgreSQL** → native mirror item.\n- **Azure Database for MySQL** → native mirror item.\n- **On-prem or generic PG/MySQL** → on-prem data gateway + Copy Job CDC,\n  or write your own **Open Mirroring** producer.\n\n🔗 [PostgreSQL mirroring](https://learn.microsoft.com/en-us/azure/postgresql/flexible-server/concepts-fabric-mirroring),\n[MySQL mirroring](https://learn.microsoft.com/en-us/azure/mysql/integration/fabric-mirroring-mysql)"
+    "source": "## P — PostgreSQL / MySQL (ADF CDC → ADLS)\n\n- **Azure Database for PostgreSQL / MySQL** → ADF/Synapse CDC copy into\n  ADLS Bronze Delta, or read directly with the Spark JDBC connector.\n- **On-prem or generic PG/MySQL** → Self-hosted IR + ADF Change Data\n  Capture copy.\n\n🔗 [connector-azure-database-for-postgresql](https://learn.microsoft.com/en-us/azure/data-factory/connector-azure-database-for-postgresql),\n[connector-azure-database-for-mysql](https://learn.microsoft.com/en-us/azure/data-factory/connector-azure-database-for-mysql)"
   }
 ];
 

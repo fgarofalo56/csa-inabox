@@ -1,9 +1,14 @@
 # Fabric notebook source
 # MAGIC %md
-# MAGIC # 🧭 Hitchhiker's Guide — 01: Connectivity
+# MAGIC # 🧭 Hitchhiker's Guide — 01: Connectivity (Azure-native)
 # MAGIC
-# MAGIC > Everything that goes "how do I connect Fabric to ___?". Each section
+# MAGIC > Everything that goes "how do I connect Loom to ___?". Each section
 # MAGIC > is independent. **Look up the section you need; ignore the rest.**
+# MAGIC >
+# MAGIC > Every recipe below is **Azure-native by default** (Synapse, ADLS Gen2,
+# MAGIC > Azure SQL, ADX, Data API Builder, ARM) and runs with no Microsoft
+# MAGIC > Fabric capacity or workspace. Where a Fabric equivalent exists it is
+# MAGIC > called out only as an **opt-in alternative**.
 # MAGIC
 # MAGIC | Section | Source / target |
 # MAGIC |---|---|
@@ -14,15 +19,15 @@
 # MAGIC | E | Snowflake |
 # MAGIC | F | Synapse Serverless SQL |
 # MAGIC | G | Databricks Delta tables |
-# MAGIC | H | Fabric Warehouse (T-SQL endpoint) |
-# MAGIC | I | Fabric SQL Database |
-# MAGIC | J | Lakehouse SQL endpoint |
-# MAGIC | K | Eventhouse / KQL DB |
-# MAGIC | L | GraphQL endpoint |
-# MAGIC | M | Power BI semantic model (Semantic Link / sempy) |
-# MAGIC | N | Fabric REST API |
-# MAGIC | O | Cosmos DB mirror |
-# MAGIC | P | PostgreSQL / MySQL mirror |
+# MAGIC | H | Synapse dedicated SQL pool / warehouse (T-SQL endpoint) |
+# MAGIC | I | Azure SQL Database |
+# MAGIC | J | Lakehouse SQL endpoint (Synapse Serverless) |
+# MAGIC | K | Azure Data Explorer (ADX) / KQL DB |
+# MAGIC | L | GraphQL endpoint (Data API Builder) |
+# MAGIC | M | Loom semantic model (Synapse tabular layer) |
+# MAGIC | N | Azure Resource Manager (control plane) |
+# MAGIC | O | Cosmos DB (Synapse Link CDC → ADLS) |
+# MAGIC | P | PostgreSQL / MySQL (ADF CDC → ADLS) |
 
 # COMMAND ----------
 
@@ -40,7 +45,7 @@ mssparkutils.fs.mount(
     "/mydata",
 )
 mssparkutils.fs.ls("/mydata")
-# 🔗 https://learn.microsoft.com/en-us/fabric/data-engineering/notebookutils/notebookutils-file-system
+# 🔗 https://learn.microsoft.com/en-us/azure/storage/blobs/data-lake-storage-introduction
 
 # COMMAND ----------
 
@@ -84,7 +89,8 @@ df = spark.read.format("delta").load(f"abfss://c@{acct}.dfs.core.windows.net/pat
 # MAGIC %md
 # MAGIC ## B — Amazon S3
 # MAGIC
-# MAGIC Recommended: an **OneLake shortcut** registered via REST.
+# MAGIC Azure-native default: read the bucket directly with Spark and land it as
+# MAGIC ADLS Gen2 Bronze Delta (Loom medallion default).
 
 # COMMAND ----------
 # Azure-native: ADLS Gen2 has no "shortcut" object — read the foreign store
@@ -127,34 +133,35 @@ print(f"Loaded {gcs_path} -> {adls_dst}")
 # MAGIC %md
 # MAGIC ## D — On-prem SQL Server
 # MAGIC
-# MAGIC - Install the **On-premises data gateway** (Enterprise, v3000.214.2+).
-# MAGIC - Create a Fabric cloud connection of type SQL Server, choose the gateway.
-# MAGIC - For private VNet sources, use a **virtual network data gateway** or
-# MAGIC   **MPE → Private Link Service → ExpressRoute/VPN**.
-# MAGIC - For continuous CDC, use **SQL Server mirroring**.
+# MAGIC - Install the **Self-hosted Integration Runtime (SHIR)** in Synapse/ADF
+# MAGIC   (the Azure-native gateway) on a host with line of sight to the source.
+# MAGIC - For private VNet sources, use a **Managed VNet IR + Managed Private
+# MAGIC   Endpoint** to the SQL Server, or Private Link / ExpressRoute / VPN.
+# MAGIC - For continuous CDC, use a **Synapse/ADF mapping data flow or Change
+# MAGIC   Data Capture copy** landing into ADLS Bronze Delta.
 # MAGIC
-# MAGIC 🔗 [connect-to-on-premise-sources-using-managed-private-endpoints](https://learn.microsoft.com/en-us/fabric/security/connect-to-on-premise-sources-using-managed-private-endpoints)
-# MAGIC 🔗 [sql-server-tutorial](https://learn.microsoft.com/en-us/fabric/mirroring/sql-server-tutorial)
+# MAGIC 🔗 [create-self-hosted-integration-runtime](https://learn.microsoft.com/en-us/azure/data-factory/create-self-hosted-integration-runtime)
+# MAGIC 🔗 [tutorial-incremental-copy-change-data-capture-feature-portal](https://learn.microsoft.com/en-us/azure/data-factory/tutorial-incremental-copy-change-data-capture-feature-portal)
 
 # COMMAND ----------
 
 # MAGIC %md
 # MAGIC ## E — Snowflake
 # MAGIC
-# MAGIC Three ways:
-# MAGIC 1. **Mirror** (recommended — CDC into OneLake Delta).
-# MAGIC 2. **Spark connector** in a notebook for ad-hoc reads.
-# MAGIC 3. **Snowflake-managed Iceberg DB item** when Snowflake owns Iceberg.
+# MAGIC Azure-native ways:
+# MAGIC 1. **Spark connector** in a notebook for ad-hoc reads (below).
+# MAGIC 2. **ADF/Synapse Snowflake connector + CDC copy** into ADLS Bronze Delta
+# MAGIC    (recommended for scheduled, incremental replication).
+# MAGIC 3. **Iceberg interop** — read Snowflake-managed Iceberg tables from Spark.
 # MAGIC
-# MAGIC 🔗 [mirroring/snowflake](https://learn.microsoft.com/en-us/fabric/mirroring/snowflake),
-# MAGIC [create-snowflake-database-item](https://learn.microsoft.com/en-us/fabric/onelake/snowflake/create-snowflake-database-item)
+# MAGIC 🔗 [connector-snowflake](https://learn.microsoft.com/en-us/azure/data-factory/connector-snowflake)
 
 # COMMAND ----------
 
 sf_secret = mssparkutils.credentials.getSecret("https://myvault.vault.azure.net/", "snowflake-pwd")
 sfopts = {
   "sfURL": "myacct.snowflakecomputing.com",
-  "sfUser": "FABRIC_READER",
+  "sfUser": "LOOM_READER",
   "sfPassword": sf_secret,
   "sfDatabase": "ANALYTICS",
   "sfSchema": "PUBLIC",
@@ -167,134 +174,151 @@ df = (spark.read.format("snowflake").options(**sfopts).option("dbtable", "DIM_CU
 # MAGIC %md
 # MAGIC ## F — Synapse Serverless SQL pool
 # MAGIC
-# MAGIC No first-party mirror. Best pattern: **shortcut to the underlying ADLS
-# MAGIC parquet** that Synapse Serverless reads, and skip Synapse at query time.
+# MAGIC The Loom lakehouse SQL endpoint **is** Synapse Serverless. Query the ADLS
+# MAGIC Delta tables directly via `synapsesql`, or read the parquet/Delta path in
+# MAGIC Spark and skip the SQL hop entirely.
 
 # COMMAND ----------
 
 # MAGIC %md
 # MAGIC ## G — Databricks Delta tables
 # MAGIC
-# MAGIC | Source posture | Best pattern |
+# MAGIC | Source posture | Azure-native pattern |
 # MAGIC |---|---|
-# MAGIC | UC-governed table | **Mirrored Databricks Catalog** |
-# MAGIC | Non-UC ADLS-managed Delta | OneLake **ADLS Gen2 shortcut** |
-# MAGIC | Ad-hoc Databricks job reading OneLake | **Direct ABFS from Databricks** with OAuth |
+# MAGIC | ADLS-managed Delta | **Direct ABFS read** with workspace identity / OAuth |
+# MAGIC | Unity Catalog table | Read the underlying ADLS Delta path, or UC Delta Sharing |
+# MAGIC | Scheduled replication | **ADF/Synapse copy** Databricks → ADLS Bronze Delta |
 # MAGIC
-# MAGIC 🔗 [azure-databricks](https://learn.microsoft.com/en-us/fabric/mirroring/azure-databricks),
-# MAGIC [onelake-azure-databricks](https://learn.microsoft.com/en-us/fabric/onelake/onelake-azure-databricks)
+# MAGIC 🔗 [databricks abfs access](https://learn.microsoft.com/en-us/azure/databricks/connect/storage/azure-storage)
 # MAGIC
-# MAGIC See tutorial 57 for end-to-end examples of all three.
+# MAGIC See tutorial 57 for end-to-end examples.
 
 # COMMAND ----------
 
 # MAGIC %md
-# MAGIC ## H — Fabric Warehouse from a notebook (T-SQL endpoint)
+# MAGIC ## H — Synapse dedicated SQL pool / warehouse from a notebook (T-SQL endpoint)
+# MAGIC
+# MAGIC Azure-native default: the Spark–Synapse connector (`synapsesql`) reads and
+# MAGIC writes the dedicated SQL pool with AAD/workspace-identity auth — no
+# MAGIC connection string, no Fabric.
 
 # COMMAND ----------
 
+# Azure-native default: Spark connector against the Synapse dedicated SQL pool.
+df = spark.read.synapsesql("loom_warehouse.dbo.dim_customer")
+# 🔗 https://learn.microsoft.com/en-us/azure/synapse-analytics/spark/synapse-spark-sql-pool-import-export
+
+# Opt-in: pyodbc against the Synapse dedicated SQL endpoint with an AAD token.
 import struct, pyodbc
 
 token_bytes = mssparkutils.credentials.getToken(
-    "https://analysis.windows.net/powerbi/api"
+    "https://database.windows.net/"
 ).encode("utf-16-le")
 token_struct = struct.pack(f"<I{len(token_bytes)}s", len(token_bytes), token_bytes)
 SQL_COPT_SS_ACCESS_TOKEN = 1256
 
 conn_str = (
     "Driver={ODBC Driver 18 for SQL Server};"
-    f"Server=<workspace>-<dataworkspace-id>.datawarehouse.fabric.microsoft.com,1433;"
-    f"Database=<warehouse>;"
+    "Server=<synapse-workspace>.sql.azuresynapse.net,1433;"
+    "Database=<dedicated-pool>;"
     "Encrypt=yes;TrustServerCertificate=no;"
 )
 cn = pyodbc.connect(conn_str, attrs_before={SQL_COPT_SS_ACCESS_TOKEN: token_struct})
-# Or the Spark connector:
-df = spark.read.synapsesql("warehouse.dbo.dim_customer")
-# 🔗 https://learn.microsoft.com/en-us/fabric/data-engineering/spark-data-warehouse-connector
 
 # COMMAND ----------
 
 # MAGIC %md
-# MAGIC ## I — Fabric SQL Database
+# MAGIC ## I — Azure SQL Database
+# MAGIC
+# MAGIC Azure-native equivalent of the Fabric SQL DB recipe. Use the Azure SQL
+# MAGIC server endpoint with `ActiveDirectoryDefault` (workspace identity).
 
 # COMMAND ----------
 
 conn_str = (
     "Driver={ODBC Driver 18 for SQL Server};"
-    "Server=<workspace-guid>.database.fabric.microsoft.com,1433;"
+    "Server=<sql-server-name>.database.windows.net,1433;"
     "Database=<db>;"
     "Encrypt=yes;TrustServerCertificate=no;"
     "Authentication=ActiveDirectoryDefault;"
 )
 # After `az login` (locally) or in a notebook with workspace identity,
 # ActiveDirectoryDefault reuses cached credentials. ODBC 18+ required.
-# 🔗 https://learn.microsoft.com/en-us/fabric/database/sql/connect-jupyter-notebook
+# 🔗 https://learn.microsoft.com/en-us/azure/azure-sql/database/connect-query-python
 
 # COMMAND ----------
 
 # MAGIC %md
 # MAGIC ## J — Lakehouse SQL endpoint
 # MAGIC
-# MAGIC Same pyodbc pattern as H/I. Get the server name from the SQL analytics
-# MAGIC endpoint property on the lakehouse item.
+# MAGIC The Loom lakehouse SQL endpoint is **Synapse Serverless SQL** over the
+# MAGIC ADLS Delta tables. Use the same pyodbc pattern as H/I against
+# MAGIC `<workspace>-ondemand.sql.azuresynapse.net`, or `spark.read.synapsesql`.
 
 # COMMAND ----------
 
 # MAGIC %md
-# MAGIC ## K — Eventhouse / KQL DB
+# MAGIC ## K — Azure Data Explorer (ADX) / KQL DB
 
 # COMMAND ----------
 
-kusto_token = mssparkutils.credentials.getToken("kusto")
+# Azure-native: ADX cluster (the Loom eventhouse/KQL backend). The Kusto Spark
+# connector reads the cluster with an AAD/workspace-identity token.
+kusto_token = mssparkutils.credentials.getToken("https://kusto.kusto.windows.net")
 df = (
     spark.read
     .format("com.microsoft.kusto.spark.synapse.datasource")
     .option("accessToken", kusto_token)
-    .option("kustoCluster", "https://<cluster-uri>.kusto.fabric.microsoft.com")
+    .option("kustoCluster", "https://<cluster>.<region>.kusto.windows.net")
     .option("kustoDatabase", "<db>")
     .option("kustoQuery", "T | take 10")
     .load()
 )
-# Or read directly from OneLake-availability path:
+# Or read the materialized Delta export directly from ADLS:
 df = spark.read.format("delta").load(
-    "abfss://<ws-guid>@{{ADLS_ACCOUNT}}.dfs.core.windows.net/<eh-guid>/Tables/MyTable"
+    "abfss://eventhouse@{{ADLS_ACCOUNT}}.dfs.core.windows.net/<db>/Tables/MyTable"
 )
-# 🔗 https://learn.microsoft.com/en-us/fabric/real-time-intelligence/spark-connector
-# 🔗 https://learn.microsoft.com/en-us/fabric/real-time-intelligence/event-house-onelake-availability
+# 🔗 https://learn.microsoft.com/en-us/azure/data-explorer/spark-connector
 
 # COMMAND ----------
 
 # MAGIC %md
-# MAGIC ## L — GraphQL endpoint
+# MAGIC ## L — GraphQL endpoint (Data API Builder)
 
 # COMMAND ----------
 
 import requests
-token = mssparkutils.credentials.getToken("https://analysis.windows.net/powerbi/api")
-endpoint = "https://<graphql>.graphql.fabric.microsoft.com/v1/workspaces/<ws>/graphqlapis/<api>/graphql"
+from azure.identity import DefaultAzureCredential
+
+# Azure-native: the Loom GraphQL surface is served by Data API Builder (DAB)
+# over Synapse SQL / Azure SQL — hosted as a Container App. Authenticate with
+# the workspace identity (Entra ID), not a Fabric/Power BI token.
+cred = DefaultAzureCredential()
+token = cred.get_token("api://<dab-app-id>/.default").token
+endpoint = "https://<loom-dab>.azurecontainerapps.io/graphql"
 query = "{ products(first: 5) { items { productId name listPrice } } }"
 r = requests.post(endpoint, headers={"Authorization": f"Bearer {token}"}, json={"query": query})
 r.json()
-# 🔗 https://learn.microsoft.com/en-us/fabric/data-engineering/connect-apps-api-graphql
+# 🔗 https://learn.microsoft.com/en-us/azure/data-api-builder/graphql
 
 # COMMAND ----------
 
 # MAGIC %md
-# MAGIC ## M — Power BI semantic model via Semantic Link (sempy)
+# MAGIC ## M — Loom semantic model (Synapse tabular layer)
 
 # COMMAND ----------
 
-import sempy.fabric as fabric
-fabric.list_datasets()
-fabric.list_tables("Customer Profitability Sample")
-fabric.list_measures("Customer Profitability Sample")
-df = fabric.read_table("Customer Profitability Sample", "Customer")
-# 🔗 https://learn.microsoft.com/en-us/fabric/data-science/read-write-power-bi-python
+# Azure-native: the Loom semantic layer is a tabular model over the Synapse
+# warehouse / lakehouse (no Power BI workspace). Read measures/tables through
+# the Synapse SQL endpoint (the semantic layer's serving surface).
+df = spark.read.synapsesql("loom_warehouse.semantic.customer_profitability")
+# Or query the Loom semantic-model API: GET /api/items/semantic-model/<id>/tables
+# 🔗 https://learn.microsoft.com/en-us/azure/analysis-services/analysis-services-overview
 
 # COMMAND ----------
 
 # MAGIC %md
-# MAGIC ## N — Fabric REST API
+# MAGIC ## N — Azure Resource Manager (control plane)
 
 # COMMAND ----------
 import requests
@@ -314,24 +338,24 @@ r.json()
 # COMMAND ----------
 
 # MAGIC %md
-# MAGIC ## O — Cosmos DB via mirror
+# MAGIC ## O — Cosmos DB (Synapse Link CDC → ADLS)
 # MAGIC
-# MAGIC Provision a mirrored Cosmos DB item from the Fabric portal — data
-# MAGIC lands as Delta in OneLake. Background replication is **free**; query
-# MAGIC the OneLake Delta projection in Spark or Direct Lake (avoid hitting
-# MAGIC Cosmos directly, which still charges RU).
+# MAGIC Enable **Azure Synapse Link** on the Cosmos DB account — the analytical
+# MAGIC store lands as columnar data you query from Synapse Spark/SQL without
+# MAGIC touching the transactional store (no RU burn). For a Delta projection,
+# MAGIC run a Synapse/ADF copy from the analytical store into ADLS Bronze Delta.
 # MAGIC
-# MAGIC 🔗 [azure-cosmos-db](https://learn.microsoft.com/en-us/fabric/mirroring/azure-cosmos-db)
+# MAGIC 🔗 [synapse-link](https://learn.microsoft.com/en-us/azure/cosmos-db/synapse-link)
 
 # COMMAND ----------
 
 # MAGIC %md
-# MAGIC ## P — PostgreSQL / MySQL mirror
+# MAGIC ## P — PostgreSQL / MySQL (ADF CDC → ADLS)
 # MAGIC
-# MAGIC - **Azure Database for PostgreSQL** → native mirror item.
-# MAGIC - **Azure Database for MySQL** → native mirror item.
-# MAGIC - **On-prem or generic PG/MySQL** → on-prem data gateway + Copy Job CDC,
-# MAGIC   or write your own **Open Mirroring** producer.
+# MAGIC - **Azure Database for PostgreSQL / MySQL** → ADF/Synapse CDC copy into
+# MAGIC   ADLS Bronze Delta, or read directly with the Spark JDBC connector.
+# MAGIC - **On-prem or generic PG/MySQL** → Self-hosted IR + ADF Change Data
+# MAGIC   Capture copy.
 # MAGIC
-# MAGIC 🔗 [PostgreSQL mirroring](https://learn.microsoft.com/en-us/azure/postgresql/flexible-server/concepts-fabric-mirroring),
-# MAGIC [MySQL mirroring](https://learn.microsoft.com/en-us/azure/mysql/integration/fabric-mirroring-mysql)
+# MAGIC 🔗 [connector-azure-database-for-postgresql](https://learn.microsoft.com/en-us/azure/data-factory/connector-azure-database-for-postgresql),
+# MAGIC [connector-azure-database-for-mysql](https://learn.microsoft.com/en-us/azure/data-factory/connector-azure-database-for-mysql)

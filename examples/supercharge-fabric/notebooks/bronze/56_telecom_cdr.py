@@ -49,7 +49,7 @@ from pyspark.sql.types import (
 SOURCE_PATH = "Files/output/telecom_cdr_sample.parquet"
 TARGET_TABLE = "lh_bronze.bronze_telecom_cdr"
 BATCH_ID = datetime.now().strftime("%Y%m%d_%H%M%S")
-CHECKPOINT_PATH = "abfss://onelake/checkpoints/bronze_telecom_cdr"
+CHECKPOINT_PATH = "abfss://onelake@{{ADLS_ACCOUNT}}.dfs.core.windows.net/checkpoints/bronze_telecom_cdr"
 
 print(f"Source: {SOURCE_PATH}")
 print(f"Target: {TARGET_TABLE}")

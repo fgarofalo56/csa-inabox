@@ -76,7 +76,15 @@ function finalHostSafety(text) {
     .replace(/https:\/\/api\.fabric\.microsoft\.com/g, 'https://management.azure.com')
     .replace(/https:\/\/api\.powerbi\.com[^\s")']*/g, 'https://<region>.asazure.windows.net')
     .replace(/api\.fabric\.microsoft\.com/g, 'management.azure.com')
-    .replace(/api\.powerbi\.com/g, 'asazure.windows.net');
+    .replace(/api\.powerbi\.com/g, 'asazure.windows.net')
+    // Data-plane Fabric hosts → Azure-native counterparts (backstop; the guide
+    // source already presents these Azure-native, this catches future drift).
+    .replace(/\.datawarehouse\.fabric\.microsoft\.com/g, '.sql.azuresynapse.net')
+    .replace(/\.database\.fabric\.microsoft\.com/g, '.database.windows.net')
+    .replace(/\.kusto\.fabric\.microsoft\.com/g, '.kusto.windows.net')
+    .replace(/\.graphql\.fabric\.microsoft\.com/g, '.azurecontainerapps.io')
+    // OneLake blob host (dfs variant handled in universalTransforms).
+    .replace(/onelake\.blob\.fabric\.microsoft\.com/g, '{{ADLS_ACCOUNT}}.blob.core.windows.net');
 }
 
 /**
@@ -469,7 +477,9 @@ function main() {
   }
 
   // Guard: no forbidden Fabric tokens may survive in the emitted bundles.
-  const forbidden = /api\.fabric\.microsoft\.com|api\.powerbi\.com|onelake\.dfs\.fabric/;
+  // Mirrors the broadened contract test (supercharge-bundles.test.ts): ANY
+  // *.fabric.microsoft.com / *.powerbi.com host, plus OneLake dfs/blob hosts.
+  const forbidden = /\.fabric\.microsoft\.com|\.powerbi\.com|onelake\.(dfs|blob)\.fabric/;
   const offenders = [];
   for (const layer of LAYERS) {
     const outName = `app-supercharge-${layer.dir === 'hitchhikers-guide' ? 'guide' : layer.dir}.ts`;
