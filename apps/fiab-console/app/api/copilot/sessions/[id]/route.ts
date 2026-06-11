@@ -19,7 +19,10 @@
  */
 import { NextResponse } from 'next/server';
 import { getSession as getAuthSession } from '@/lib/auth/session';
-import { getSession as getCopilotSession } from '@/lib/azure/copilot-orchestrator';
+import {
+  getSession as getCopilotSession,
+  updateSessionMeta,
+} from '@/lib/azure/copilot-orchestrator';
 import {
   copilotSessionsContainer,
   copilotFeedbackContainer,
@@ -80,15 +83,44 @@ interface FeedbackBody {
   improvement?: string;
 }
 
-/** PATCH /api/copilot/sessions/[id] — per-message thumbs up/down. */
+interface MetaBody {
+  /** Rename the session. */
+  title?: string;
+  /** Pin / unpin (favorite) the session. */
+  pinned?: boolean;
+}
+
+/**
+ * PATCH /api/copilot/sessions/[id]
+ *   - {title?, pinned?}              → rename / pin the session (left-rail mgmt)
+ *   - {rating, messageIndex, ...}    → per-message thumbs up/down feedback
+ * The branch is chosen by which fields are present; rename/pin take precedence.
+ */
 export async function PATCH(req: Request, ctx: { params: Promise<{ id: string }> }) {
   const auth = getAuthSession();
   if (!auth) {
     return NextResponse.json({ ok: false, error: 'unauthenticated' }, { status: 401 });
   }
   const id = (await ctx.params).id;
-  const body: Partial<FeedbackBody> = await req.json().catch(() => ({}));
+  const body: Partial<FeedbackBody & MetaBody> = await req.json().catch(() => ({}));
+  const userOid = auth.claims.oid || auth.claims.upn || auth.claims.email || 'unknown';
 
+  // ── Rename / pin branch (session management) ──────────────────────────────
+  if (typeof body.title === 'string' || typeof body.pinned === 'boolean') {
+    try {
+      const patched = await updateSessionMeta(id, userOid, {
+        title: typeof body.title === 'string' ? body.title : undefined,
+        pinned: typeof body.pinned === 'boolean' ? body.pinned : undefined,
+      });
+      return NextResponse.json({ ok: true, ...patched });
+    } catch (e: any) {
+      const msg = e?.message || String(e);
+      const status = msg === 'not_found' ? 404 : msg === 'forbidden' ? 403 : 502;
+      return NextResponse.json({ ok: false, error: msg }, { status });
+    }
+  }
+
+  // ── Feedback branch (per-message thumbs) ──────────────────────────────────
   const rating = (body.rating || '') as string;
   if (rating !== 'up' && rating !== 'down') {
     return NextResponse.json(
@@ -102,7 +134,6 @@ export async function PATCH(req: Request, ctx: { params: Promise<{ id: string }>
       { status: 400 },
     );
   }
-  const userOid = auth.claims.oid || auth.claims.upn || auth.claims.email || 'unknown';
   const improvement = (body.improvement || '').slice(0, 1000);
 
   try {

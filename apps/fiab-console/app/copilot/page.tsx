@@ -273,22 +273,9 @@ export default function CopilotPage() {
     },
   ], []);
 
-  // ── Launched: full-screen shared console (unchanged shared widget) ──────
+  // ── Launched: full-screen shared console (owns its own hero + Back CTA) ──
   if (launched) {
-    return (
-      <div className={styles.consoleWrap}>
-        <div className={styles.consoleBar}>
-          <span className={styles.consoleTitle}>
-            <BotSparkle24Filled className={styles.brandIcon} />
-            <Title3 className={styles.flushTitle}>Loom Copilot</Title3>
-          </span>
-          <Button appearance="subtle" onClick={() => { setLaunched(false); loadSessions(); }}>
-            Back to overview
-          </Button>
-        </div>
-        <CopilotConsoleView />
-      </div>
-    );
+    return <CopilotConsoleView onBack={() => { setLaunched(false); loadSessions(); }} />;
   }
 
   // ── Landing surface ─────────────────────────────────────────────────────
