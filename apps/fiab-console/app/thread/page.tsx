@@ -113,6 +113,8 @@ export default function ThreadLineagePage() {
     return () => { cancelled = true; };
   }, []);
 
+  const hasRows = !!edges && edges.length > 0;
+
   const kpis = useMemo(() => {
     const list = edges || [];
     const byAction = new Map<string, number>();
@@ -170,8 +172,6 @@ export default function ThreadLineagePage() {
     { key: 'createdBy', label: 'By', sortable: true, filterable: true, width: 200, getValue: (r) => r.createdBy || '' },
   ];
 
-  const hasRows = !!edges && edges.length > 0;
-
   return (
     <div className={styles.root}>
       <div className={styles.header}>
@@ -183,14 +183,18 @@ export default function ThreadLineagePage() {
         showing what feeds what. Use <strong>Weave</strong> on any item’s editor to add an edge.
       </Body1>
 
-      <div className={styles.kpis}>
-        <Card className={styles.kpi}><span className={styles.kpiNum}>{kpis.total}</span><Caption1>Total edges</Caption1></Card>
-        <Card className={styles.kpi}><span className={styles.kpiNum}>{kpis.sources}</span><Caption1>Source items</Caption1></Card>
-        <Card className={styles.kpi}><span className={styles.kpiNum}>{kpis.targets}</span><Caption1>Targets</Caption1></Card>
-        {[...kpis.byAction.entries()].map(([a, n]) => (
-          <Card key={a} className={styles.kpi}><span className={styles.kpiNum}>{n}</span><Caption1>{ACTION_LABEL[a] || a}</Caption1></Card>
-        ))}
-      </div>
+      {hasRows && (
+        <div className={styles.kpis}>
+          <Card className={styles.kpi}><span className={styles.kpiNum}>{kpis.total}</span><Caption1>Total edges</Caption1></Card>
+          <Card className={styles.kpi}><span className={styles.kpiNum}>{kpis.sources}</span><Caption1>Source items</Caption1></Card>
+          <Card className={styles.kpi}><span className={styles.kpiNum}>{kpis.targets}</span><Caption1>Targets</Caption1></Card>
+          {[...kpis.byAction.entries()].map(([a, n]) => (
+            <Card key={a} className={styles.kpi}><span className={styles.kpiNum}>{n}</span><Caption1>{ACTION_LABEL[a] || a}</Caption1></Card>
+          ))}
+        </div>
+      )}
+
+
 
       {error && (
         <MessageBar intent="error">

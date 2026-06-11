@@ -135,7 +135,9 @@ export default function DataProductsPage() {
   return (
     <PageShell title="Data products" subtitle="Curated, governed data products — Microsoft Purview Unified Catalog parity">
       <div className={s.bar}>
-        <Subtitle2>{rows.length} data product{rows.length === 1 ? '' : 's'}</Subtitle2>
+        {loading
+          ? <Subtitle2>Data products</Subtitle2>
+          : <Subtitle2>{rows.length} data product{rows.length === 1 ? '' : 's'}</Subtitle2>}
         <div className={s.actions}>
           {hasRows && <ViewToggle value={view} onChange={setView} ariaLabel="Data product view" />}
           <Button appearance="primary" icon={<Add20Regular />} onClick={() => router.push('/data-products/new')}>
