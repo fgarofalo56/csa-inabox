@@ -3,6 +3,17 @@
 Source UI: https://learn.microsoft.com/fabric/apps/overview · https://github.com/microsoft/rayfin
 Build 2026 references: Rayfin code-first BaaS (general case) + #28 "build web apps backed by semantic models".
 
+> **Decision (audit-T145): Rayfin is code-first; Atelier is the visual builder.**
+> The real Fabric Apps / Rayfin product has **no visual page/component
+> designer** — it is `npm create @microsoft/rayfin` + a coding agent. Forcing a
+> drag-drop canvas onto Rayfin would be vaporware that contradicts the product,
+> so Loom keeps Rayfin **artifact-emitting** (model.ts / connector / CLI). The
+> visual, multi-page low-code **builder** lives in **Atelier** (`workshop-app`,
+> see `docs/fiab/parity/atelier-app.md`). The two are aligned by one shared
+> app-definition schema (`lib/apps/app-definition.ts`): the Rayfin **Model
+> binding → "Create Atelier app"** button lifts a binding into a visual Atelier
+> page over the **same** Azure Analysis Services model.
+
 The Rayfin CLI runs on the developer's machine, so Loom follows the honest
 generate-artifact pattern (like the deploy planner emitting bicep): it authors
 the spec, runs the **real** model binding against Azure backends, and emits the
@@ -37,6 +48,7 @@ Azure REST/data-plane — no mock data.
 | Compose read view (measures + group-by)     | ✅ built | client multi-select → `buildReadViewDax()` (SUMMARIZECOLUMNS / ROW) |
 | Preview bound data                          | ✅ built | POST `/api/items/rayfin-app/preview` → `executeDax()` real XMLA round-trip |
 | Read-view connector codegen                 | ✅ built | `generateConnector()` emits `rayfin/data/model-view.ts` with the exact validated DAX |
+| **Use in Atelier** (audit-T145 alignment)   | ✅ built | "Create Atelier app" → `appDefFromRayfinBinding()` → POST `/api/cosmos-items/workshop-app` (a visual app over the same AAS model) |
 | AAS not configured                          | ⚠️ honest gate | all model-binding routes return `{ ok:false, gate }` 503; editor renders a Fluent MessageBar naming `LOOM_AAS_SERVER_NAME` + the AAS bicep module |
 
 Zero ❌, zero stub banners.

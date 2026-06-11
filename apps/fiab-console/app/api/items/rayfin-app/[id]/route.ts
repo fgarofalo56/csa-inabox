@@ -31,7 +31,7 @@ export async function GET(_req: NextRequest, ctx: { params: Promise<{ id: string
     if (!item) return NextResponse.json({ error: 'not found' }, { status: 404 });
     return NextResponse.json({
       id: item.id, displayName: item.displayName, description: item.description,
-      state: item.state || {}, updatedAt: item.updatedAt || null,
+      workspaceId: item.workspaceId, state: item.state || {}, updatedAt: item.updatedAt || null,
     });
   } catch (e: any) {
     return NextResponse.json({ error: e?.message || String(e) }, { status: 500 });

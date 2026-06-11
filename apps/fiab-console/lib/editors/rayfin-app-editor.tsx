@@ -42,6 +42,7 @@ import {
   Rocket20Regular, Open20Regular, Database20Regular, Play20Regular, ArrowSync20Regular,
 } from '@fluentui/react-icons';
 import { MonacoTextarea } from '@/lib/components/editor/monaco-textarea';
+import { appDefFromRayfinBinding } from '@/lib/apps/app-definition';
 
 type FieldType = 'text' | 'boolean' | 'date' | 'number';
 interface EntityField { name: string; type: FieldType; }
@@ -275,6 +276,11 @@ export function RayfinAppEditor({ id }: { item?: unknown; id: string }) {
   const [previewErr, setPreviewErr] = useState<string | null>(null);
   const [previewing, setPreviewing] = useState(false);
 
+  // audit-T145 alignment — lift this binding into a visual Atelier app.
+  const [wsId, setWsId] = useState('');
+  const [atelierBusy, setAtelierBusy] = useState(false);
+  const [atelierMsg, setAtelierMsg] = useState<{ intent: 'success' | 'error'; text: string; itemId?: string } | null>(null);
+
   const binding = spec.binding ?? DEFAULT_BINDING;
 
   useEffect(() => {
@@ -283,6 +289,7 @@ export function RayfinAppEditor({ id }: { item?: unknown; id: string }) {
       try {
         const r = await fetch(`/api/items/rayfin-app/${encodeURIComponent(id)}`);
         const j = await r.json().catch(() => ({}));
+        if (alive && typeof j?.workspaceId === 'string') setWsId(j.workspaceId);
         const saved = (j?.state?.spec || j?.item?.state?.spec || j?.definition?.state?.spec) as RayfinSpec | undefined;
         if (alive && saved && Array.isArray(saved.entities)) {
           setSpec({ ...DEFAULT_SPEC, ...saved, binding: { ...DEFAULT_BINDING, ...(saved.binding || {}) } });
@@ -292,6 +299,26 @@ export function RayfinAppEditor({ id }: { item?: unknown; id: string }) {
     })();
     return () => { alive = false; };
   }, [id]);
+
+  // Create a visual Atelier (workshop-app) app seeded with this model binding as
+  // a page — the concrete code-first (Rayfin) → visual (Atelier) bridge. Both
+  // builders share the AppDefinition schema + read the SAME Azure Analysis
+  // Services model (no-fabric-dependency / no-vaporware).
+  const createAtelierApp = useCallback(async () => {
+    const def = appDefFromRayfinBinding(binding, spec.appName);
+    if (!def || !wsId) return;
+    setAtelierBusy(true); setAtelierMsg(null);
+    try {
+      const r = await fetch('/api/cosmos-items/workshop-app', {
+        method: 'POST', headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ workspaceId: wsId, displayName: `${spec.appName || binding.model} (Atelier)`, state: { appDef: def } }),
+      });
+      const j = await r.json().catch(() => ({}));
+      if (!j?.ok || !j.item?.id) { setAtelierMsg({ intent: 'error', text: j?.error || `HTTP ${r.status}` }); return; }
+      setAtelierMsg({ intent: 'success', text: 'Created an Atelier app from this binding.', itemId: j.item.id });
+    } catch (e: any) { setAtelierMsg({ intent: 'error', text: e?.message || String(e) }); }
+    finally { setAtelierBusy(false); }
+  }, [binding, spec.appName, wsId]);
 
   // Load bindable models when the binding tab is first opened.
   const loadModels = useCallback(async () => {
@@ -608,6 +635,27 @@ export function RayfinAppEditor({ id }: { item?: unknown; id: string }) {
             <Divider />
             <div className={s.head}><Subtitle2>rayfin/data/model-view.ts</Subtitle2><div className={s.spacer}><CopyBtn text={connector} /></div></div>
             <MonacoTextarea value={connector} onChange={() => { /* read-only */ }} language="typescript" height={220} readOnly lineNumbers={false} ariaLabel="Generated model-bound connector" />
+
+            <Divider />
+            <div className={s.head}>
+              <Subtitle2>Use in Atelier</Subtitle2>
+              <div className={s.headActions}>
+                <Button appearance="outline" icon={<Open20Regular />} disabled={atelierBusy || !binding.model || (binding.measures.length === 0 && binding.groupBy.length === 0) || !wsId}
+                  onClick={createAtelierApp}>{atelierBusy ? 'Creating…' : 'Create Atelier app'}</Button>
+              </div>
+            </div>
+            <Caption1>
+              Lift this semantic-model binding into a visual Atelier (low-code) app — a page bound to the SAME Azure
+              Analysis Services model. Atelier is Loom&apos;s visual builder; Rayfin stays code-first (audit-T145).
+            </Caption1>
+            {atelierMsg ? (
+              <MessageBar intent={atelierMsg.intent}>
+                <MessageBarBody>
+                  {atelierMsg.text}
+                  {atelierMsg.itemId ? <> <a href={`/items/workshop-app/${encodeURIComponent(atelierMsg.itemId)}`}>Open the Atelier app →</a></> : null}
+                </MessageBarBody>
+              </MessageBar>
+            ) : null}
           </div>
         </div>
       )}

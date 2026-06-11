@@ -22,7 +22,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import {
   Subtitle2, Body1, Caption1, Badge, Button, Input, Textarea, Spinner,
-  Tab, TabList, Field, Dropdown, Option,
+  Tab, TabList, Field, Dropdown, Option, Checkbox, Tooltip,
   Table, TableHeader, TableRow, TableHeaderCell, TableBody, TableCell,
   MessageBar, MessageBarBody, MessageBarTitle,
   makeStyles, tokens,
@@ -36,6 +36,10 @@ import { ItemEditorChrome } from './item-editor-chrome';
 import { NewItemCreateGate } from './new-item-gate';
 import type { FabricItemType } from '@/lib/catalog/fabric-item-types';
 import type { RibbonTab } from '@/lib/components/ribbon';
+import {
+  type AppDefinition, type AppPage, type AppComponent, type ComponentKind,
+  migrateWorkshopState, newId, summarizeAppDef,
+} from '@/lib/apps/app-definition';
 
 const useStyles = makeStyles({
   pad: { padding: tokens.spacingVerticalL, display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalL },
@@ -257,88 +261,317 @@ function useOntologyBinding(slug: string, id: string) {
 }
 
 // ───────────────────────── Workshop app (Atelier) ─────────────────────────
-interface WorkshopAction { id: string; label: string; kind: 'create' | 'update'; entity: string }
+// The visual, multi-page low-code app BUILDER (audit-T145). Pages hold a palette
+// of components (table / metric / text); each data component binds either an
+// ontology entity type (read/written via Synapse) or an Azure Analysis Services
+// semantic model (the same model a Rayfin app binds — DAX over XMLA). All real
+// backend, dropdown-driven config, Azure-native default. See lib/apps/app-definition.ts.
 interface WorkshopState {
   boundOntologyId?: string; boundOntologyName?: string;
-  objectViews?: string[]; actions?: WorkshopAction[]; [k: string]: unknown;
+  /** New format. */ appDef?: AppDefinition;
+  /** Legacy v0 (migrated on load). */ objectViews?: string[]; actions?: unknown[];
+  [k: string]: unknown;
 }
+
+interface BindableModelLite { name: string; storageMode?: string }
+interface ModelObjectsLite { measures: { name: string; table?: string }[]; columns: { table: string; name: string; dataType?: string }[] }
+interface PreviewState { busy?: boolean; columns?: string[]; rows?: unknown[][]; error?: string; gate?: boolean }
+
+function gbParseKey(k: string): { table: string; column: string } { const i = k.indexOf('|'); return i < 0 ? { table: '', column: k } : { table: k.slice(0, i), column: k.slice(i + 1) }; }
+function gbMakeKey(t: string, c: string): string { return `${t}|${c}`; }
+function fmtCellW(v: unknown): string { return v === null || v === undefined ? '' : String(v); }
 
 export function WorkshopAppEditor({ item, id }: { item: FabricItemType; id: string }) {
   const s = useStyles();
-  const { state, setState, loading, saving, error, savedAt, save, dirty } = useItemState<WorkshopState>('workshop-app', id, { objectViews: [], actions: [] });
+  const { state, setState, loading, saving, error, savedAt, save, dirty } = useItemState<WorkshopState>('workshop-app', id, {});
   const onto = useOntologyBinding('workshop-app', id);
   const [pickOnto, setPickOnto] = useState('');
+  const classes = onto.surface?.classes || [];
+
+  // Migrated, always-current app definition (reads state.appDef, else legacy v0).
+  const appDef = useMemo(() => migrateWorkshopState(state), [state]);
+  const updateDef = useCallback((next: AppDefinition) => setState((p) => ({ ...p, appDef: next })), [setState]);
+  const counts = summarizeAppDef(appDef);
+
+  // ── Page selection ──
+  const [activePageId, setActivePageId] = useState('');
+  useEffect(() => {
+    if (appDef.pages.length && !appDef.pages.some((p) => p.id === activePageId)) setActivePageId(appDef.pages[0].id);
+  }, [appDef, activePageId]);
+  const activePage = appDef.pages.find((p) => p.id === activePageId) || null;
+  const [editingId, setEditingId] = useState('');
+  const editing = activePage?.components.find((c) => c.id === editingId) || null;
+
+  // ── Page / component mutators ──
+  const addPage = useCallback(() => {
+    const pg: AppPage = { id: newId('pg'), name: `Page ${appDef.pages.length + 1}`, components: [] };
+    updateDef({ ...appDef, pages: [...appDef.pages, pg] }); setActivePageId(pg.id);
+  }, [appDef, updateDef]);
+  const renamePage = useCallback((pid: string, name: string) => updateDef({ ...appDef, pages: appDef.pages.map((p) => p.id === pid ? { ...p, name } : p) }), [appDef, updateDef]);
+  const removePage = useCallback((pid: string) => updateDef({ ...appDef, pages: appDef.pages.filter((p) => p.id !== pid) }), [appDef, updateDef]);
+  const addComponent = useCallback((kind: ComponentKind) => {
+    if (!activePage) return;
+    const comp: AppComponent = { id: newId('cmp'), kind, title: `${kind[0].toUpperCase()}${kind.slice(1)} ${activePage.components.length + 1}`, ...(kind === 'text' ? { text: '' } : { binding: { source: 'ontology-entity', entity: '', top: 50 } }) };
+    updateDef({ ...appDef, pages: appDef.pages.map((p) => p.id === activePage.id ? { ...p, components: [...p.components, comp] } : p) });
+    setEditingId(comp.id);
+  }, [appDef, activePage, updateDef]);
+  const updateComponent = useCallback((cid: string, patch: Partial<AppComponent>) => updateDef({ ...appDef, pages: appDef.pages.map((p) => p.id === activePageId ? { ...p, components: p.components.map((c) => c.id === cid ? { ...c, ...patch } : c) } : p) }), [appDef, activePageId, updateDef]);
+  const removeComponent = useCallback((cid: string) => { updateDef({ ...appDef, pages: appDef.pages.map((p) => p.id === activePageId ? { ...p, components: p.components.filter((c) => c.id !== cid) } : p) }); if (editingId === cid) setEditingId(''); }, [appDef, activePageId, updateDef, editingId]);
+
+  // ── Actions ──
   const [actLabel, setActLabel] = useState('');
   const [actKind, setActKind] = useState<'create' | 'update'>('create');
   const [actEntity, setActEntity] = useState('');
-
-  const classes = onto.surface?.classes || [];
-  const objectViews = Array.isArray(state.objectViews) ? state.objectViews : [];
-  const actions = Array.isArray(state.actions) ? state.actions : [];
-
-  const toggleView = useCallback((name: string) => {
-    setState((p) => {
-      const cur = Array.isArray(p.objectViews) ? p.objectViews : [];
-      return { ...p, objectViews: cur.includes(name) ? cur.filter((v) => v !== name) : [...cur, name] };
-    });
-  }, [setState]);
-
   const addAction = useCallback(() => {
     const label = actLabel.trim(); if (!label || !actEntity) return;
-    setState((p) => ({ ...p, actions: [...(Array.isArray(p.actions) ? p.actions : []), { id: `act_${Date.now()}`, label, kind: actKind, entity: actEntity }] }));
+    updateDef({ ...appDef, actions: [...appDef.actions, { id: newId('act'), label, kind: actKind, entity: actEntity }] });
     setActLabel(''); setActEntity('');
-  }, [actLabel, actKind, actEntity, setState]);
+  }, [actLabel, actKind, actEntity, appDef, updateDef]);
+  const removeAction = useCallback((aid: string) => updateDef({ ...appDef, actions: appDef.actions.filter((a) => a.id !== aid) }), [appDef, updateDef]);
 
-  const removeAction = useCallback((aid: string) => {
-    setState((p) => ({ ...p, actions: (Array.isArray(p.actions) ? p.actions : []).filter((a) => a.id !== aid) }));
-  }, [setState]);
+  // ── New-app wizard (inline stepper) ──
+  const [wizardOpen, setWizardOpen] = useState(false);
+  const [wizardPick, setWizardPick] = useState<string[]>([]);
+  const generateFromOntology = useCallback(() => {
+    const chosen = wizardPick.filter((n) => classes.some((c) => c.name === n));
+    if (chosen.length === 0) return;
+    const pages: AppPage[] = chosen.map((entity) => ({
+      id: newId('pg'), name: entity,
+      components: [{ id: newId('cmp'), kind: 'table' as ComponentKind, title: `${entity} list`, binding: { source: 'ontology-entity', entity, top: 50 } }],
+    }));
+    const actions = chosen.map((entity) => ({ id: newId('act'), label: `New ${entity}`, kind: 'create' as const, entity }));
+    updateDef({ ...appDef, pages: [...appDef.pages, ...pages], actions: [...appDef.actions, ...actions] });
+    if (pages[0]) setActivePageId(pages[0].id);
+    setWizardOpen(false); setWizardPick([]);
+  }, [wizardPick, classes, appDef, updateDef]);
 
-  // Run a real "list" data action against the bound ontology's warehouse source
-  // (Synapse dedicated SQL pool via /run-action) or surface an honest gate.
-  const [runEntity, setRunEntity] = useState('');
-  const [runBusy, setRunBusy] = useState(false);
-  const [runMsg, setRunMsg] = useState<{ intent: 'error' | 'warning'; text: string } | null>(null);
-  const [runResult, setRunResult] = useState<{ entityType: string; columns: string[]; rows: unknown[][] } | null>(null);
-  const runActionList = useCallback(async (entityType: string) => {
-    setRunBusy(true); setRunMsg(null); setRunResult(null); setRunEntity(entityType);
+  // ── AAS model catalogue (shared; reuses the Rayfin model-binding routes) ──
+  const [models, setModels] = useState<BindableModelLite[] | null>(null);
+  const [modelsBusy, setModelsBusy] = useState(false);
+  const [modelsGate, setModelsGate] = useState<string | null>(null);
+  const [modelObjects, setModelObjects] = useState<Record<string, ModelObjectsLite>>({});
+  const loadModels = useCallback(async () => {
+    setModelsBusy(true); setModelsGate(null);
     try {
-      const r = await fetch(`/api/items/workshop-app/${encodeURIComponent(id)}/run-action`, {
-        method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ entityType, op: 'list', top: 50 }),
-      });
+      const r = await fetch('/api/items/rayfin-app/models');
       const j = await r.json().catch(() => ({}));
+      if (j?.ok) setModels(Array.isArray(j.models) ? j.models : []);
+      else if (j?.gate) { setModels([]); setModelsGate(`${j.error || 'Azure Analysis Services not configured'} — set ${j.gate.missing}.`); }
+      else { setModels([]); setModelsGate(j?.error || `HTTP ${r.status}`); }
+    } catch (e: any) { setModels([]); setModelsGate(e?.message || String(e)); }
+    finally { setModelsBusy(false); }
+  }, []);
+  const loadModelObjects = useCallback(async (model: string) => {
+    if (!model || modelObjects[model]) return;
+    try {
+      const r = await fetch(`/api/items/rayfin-app/model-objects?model=${encodeURIComponent(model)}`);
+      const j = await r.json().catch(() => ({}));
+      if (j?.ok) setModelObjects((p) => ({ ...p, [model]: { measures: j.measures || [], columns: j.columns || [] } }));
+    } catch { /* surfaced when previewing */ }
+  }, [modelObjects]);
+  useEffect(() => {
+    if (editing?.binding?.source === 'aas-model') {
+      if (models === null && !modelsBusy) void loadModels();
+      if (editing.binding.model) void loadModelObjects(editing.binding.model);
+    }
+  }, [editing, models, modelsBusy, loadModels, loadModelObjects]);
+
+  // ── Live preview (per component) ──
+  const [previews, setPreviews] = useState<Record<string, PreviewState>>({});
+  const previewComponent = useCallback(async (comp: AppComponent) => {
+    const b = comp.binding; if (!b) return;
+    setPreviews((p) => ({ ...p, [comp.id]: { busy: true } }));
+    try {
+      let j: any;
+      if (b.source === 'ontology-entity') {
+        if (!b.entity) { setPreviews((p) => ({ ...p, [comp.id]: { error: 'Pick an ontology entity to bind.' } })); return; }
+        const op = b.groupBy && b.groupBy.length ? 'aggregate' : 'list';
+        const r = await fetch(`/api/items/workshop-app/${encodeURIComponent(id)}/data`, {
+          method: 'POST', headers: { 'content-type': 'application/json' },
+          body: JSON.stringify({ entityType: b.entity, op, top: b.top || 50, groupBy: b.groupBy, columns: b.columns }),
+        });
+        j = await r.json().catch(() => ({}));
+      } else {
+        if (!b.model) { setPreviews((p) => ({ ...p, [comp.id]: { error: 'Pick a semantic model to bind.' } })); return; }
+        const groupBy = b.groupBy.map((k) => gbParseKey(k));
+        const r = await fetch('/api/items/rayfin-app/preview', {
+          method: 'POST', headers: { 'content-type': 'application/json' },
+          body: JSON.stringify({ model: b.model, measures: b.measures, groupBy, topN: b.topN }),
+        });
+        j = await r.json().catch(() => ({}));
+      }
       if (!j?.ok) {
-        const gate = j?.gate ? ` ${j.gate.remediation || ''}` : '';
-        setRunMsg({ intent: j?.gate ? 'warning' : 'error', text: `${j?.error || `HTTP ${r.status}`}${gate}` });
+        const gateTxt = j?.gate ? ` ${j.gate.remediation || j.gate.detail || ''}` : '';
+        setPreviews((p) => ({ ...p, [comp.id]: { error: `${j?.error || 'Preview failed'}${gateTxt}`, gate: !!j?.gate } }));
         return;
       }
-      setRunResult({ entityType, columns: Array.isArray(j.columns) ? j.columns : [], rows: Array.isArray(j.rows) ? j.rows : [] });
+      setPreviews((p) => ({ ...p, [comp.id]: { columns: Array.isArray(j.columns) ? j.columns : [], rows: Array.isArray(j.rows) ? j.rows : [] } }));
+    } catch (e: any) { setPreviews((p) => ({ ...p, [comp.id]: { error: e?.message || String(e) } })); }
+  }, [id]);
+
+  // ── Action runner (real write-back over Synapse) ──
+  const [runActionId, setRunActionId] = useState('');
+  const [runCols, setRunCols] = useState<string[]>([]);
+  const [runVals, setRunVals] = useState<Record<string, string>>({});
+  const [runKeyCol, setRunKeyCol] = useState('');
+  const [runKeyVal, setRunKeyVal] = useState('');
+  const [runBusy, setRunBusy] = useState(false);
+  const [runMsg, setRunMsg] = useState<{ intent: 'success' | 'error' | 'warning'; text: string } | null>(null);
+  const openRunner = useCallback(async (action: { id: string; entity: string }) => {
+    setRunActionId(action.id); setRunVals({}); setRunKeyCol(''); setRunKeyVal(''); setRunMsg(null); setRunCols([]); setRunBusy(true);
+    try {
+      const r = await fetch(`/api/items/workshop-app/${encodeURIComponent(id)}/data`, {
+        method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ entityType: action.entity, op: 'list', top: 1 }),
+      });
+      const j = await r.json().catch(() => ({}));
+      if (!j?.ok) { const g = j?.gate ? ` ${j.gate.remediation || ''}` : ''; setRunMsg({ intent: j?.gate ? 'warning' : 'error', text: `${j?.error || `HTTP ${r.status}`}${g}` }); return; }
+      setRunCols(Array.isArray(j.columns) ? j.columns : []);
     } catch (e: any) { setRunMsg({ intent: 'error', text: e?.message || String(e) }); }
     finally { setRunBusy(false); }
   }, [id]);
+  const submitRunner = useCallback(async (action: { kind: 'create' | 'update'; entity: string }) => {
+    const values: Record<string, string> = {};
+    for (const [k, v] of Object.entries(runVals)) if (v !== '') values[k] = v;
+    if (Object.keys(values).length === 0) { setRunMsg({ intent: 'error', text: 'Enter at least one column value.' }); return; }
+    if (action.kind === 'update' && !runKeyCol) { setRunMsg({ intent: 'error', text: 'Pick a key column for the update.' }); return; }
+    setRunBusy(true); setRunMsg(null);
+    try {
+      const body: Record<string, unknown> = { entityType: action.entity, op: action.kind, values };
+      if (action.kind === 'update') body.key = { column: runKeyCol, value: runKeyVal };
+      const r = await fetch(`/api/items/workshop-app/${encodeURIComponent(id)}/run-action`, {
+        method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body),
+      });
+      const j = await r.json().catch(() => ({}));
+      if (!j?.ok) { const g = j?.gate ? ` ${j.gate.remediation || ''}` : ''; setRunMsg({ intent: j?.gate ? 'warning' : 'error', text: `${j?.error || `HTTP ${r.status}`}${g}` }); return; }
+      setRunMsg({ intent: 'success', text: `${action.kind === 'create' ? 'Inserted' : 'Updated'} ${j.recordsAffected ?? 0} row(s) in ${action.entity}.` });
+    } catch (e: any) { setRunMsg({ intent: 'error', text: e?.message || String(e) }); }
+    finally { setRunBusy(false); }
+  }, [id, runVals, runKeyCol, runKeyVal]);
 
   const ribbon: RibbonTab[] = useMemo(() => [
     { id: 'home', label: 'Home', groups: [
       { label: 'App', actions: [
         { label: saving ? 'Saving…' : 'Save', onClick: () => save(), disabled: saving || !dirty },
+        { label: 'Add page', onClick: addPage },
       ]},
     ]},
-  ], [save, saving, dirty]);
+  ], [save, saving, dirty, addPage]);
 
-  if (id === 'new') return <NewItemCreateGate item={item} createLabel="Create Workshop app" intro="An operational low-code app bound to a Loom Ontology. Object views render the ontology's entity types; actions write back through the bound Lakehouse/Warehouse. Azure-native — no Fabric required." />;
+  if (id === 'new') return <NewItemCreateGate item={item} createLabel="Create Atelier app" intro="A visual, multi-page low-code app bound to a Loom Ontology and/or Azure Analysis Services semantic models. Pages hold table / metric / text components with real data bindings, plus write-back actions. Runs on the Azure-native backend (Synapse + AAS) — no Microsoft Fabric required." />;
+
+  const bindingEditor = (comp: AppComponent) => {
+    const b = comp.binding;
+    if (comp.kind === 'text') {
+      return <Field label="Text content"><Textarea value={comp.text || ''} onChange={(_, d) => updateComponent(comp.id, { text: d.value })} rows={4} placeholder="Markdown-free static copy shown on the page." /></Field>;
+    }
+    if (!b) return null;
+    const objs = b.source === 'aas-model' ? modelObjects[b.model] : undefined;
+    const prev = previews[comp.id];
+    return (
+      <div className={s.pad} style={{ padding: 0, gap: tokens.spacingVerticalM }}>
+        <Field label="Data source">
+          <Dropdown value={b.source === 'aas-model' ? 'Semantic model (Azure Analysis Services)' : 'Ontology entity (Synapse)'} selectedOptions={[b.source]}
+            onOptionSelect={(_, d) => updateComponent(comp.id, { binding: d.optionValue === 'aas-model'
+              ? { source: 'aas-model', model: '', measures: [], groupBy: [], topN: 100 }
+              : { source: 'ontology-entity', entity: '', top: 50 } })}>
+            <Option value="ontology-entity">Ontology entity (Synapse)</Option>
+            <Option value="aas-model">Semantic model (Azure Analysis Services)</Option>
+          </Dropdown>
+        </Field>
+
+        {b.source === 'ontology-entity' ? (
+          <>
+            <Field label="Ontology entity">
+              <Dropdown value={b.entity} selectedOptions={b.entity ? [b.entity] : []} placeholder={classes.length ? 'Select an object type' : 'Bind an ontology first'}
+                onOptionSelect={(_, d) => updateComponent(comp.id, { binding: { ...b, entity: d.optionValue || '' } })}>
+                {classes.map((c) => <Option key={c.name} value={c.name}>{c.name}</Option>)}
+              </Dropdown>
+            </Field>
+            <Field label="Max rows"><Input type="number" value={String(b.top ?? 50)} onChange={(_, d) => updateComponent(comp.id, { binding: { ...b, top: Math.min(Math.max(Number(d.value) || 50, 1), 1000) } })} /></Field>
+            {prev?.columns && prev.columns.length > 0 && (
+              <Field label="Group by (count) — optional" hint="Selecting columns switches this component to an aggregate view.">
+                <div className={s.addBar} style={{ gap: tokens.spacingHorizontalXS }}>
+                  {prev.columns.filter((c) => c !== 'count').map((col) => (
+                    <Checkbox key={col} label={col} checked={(b.groupBy || []).includes(col)}
+                      onChange={() => updateComponent(comp.id, { binding: { ...b, groupBy: (b.groupBy || []).includes(col) ? (b.groupBy || []).filter((g) => g !== col) : [...(b.groupBy || []), col] } })} />
+                  ))}
+                </div>
+              </Field>
+            )}
+          </>
+        ) : (
+          <>
+            {modelsGate && <MessageBar intent="warning"><MessageBarBody><MessageBarTitle>Azure Analysis Services not configured</MessageBarTitle>{modelsGate}</MessageBarBody></MessageBar>}
+            <Field label="Semantic model">
+              <Dropdown value={b.model} selectedOptions={b.model ? [b.model] : []} placeholder={modelsBusy ? 'Listing models…' : 'Select a model'}
+                onOptionSelect={(_, d) => updateComponent(comp.id, { binding: { ...b, model: d.optionValue || '', measures: [], groupBy: [] } })}>
+                {(models || []).map((m) => <Option key={m.name} value={m.name}>{m.storageMode ? `${m.name} · ${m.storageMode}` : m.name}</Option>)}
+              </Dropdown>
+            </Field>
+            {b.model && objs && (
+              <>
+                <Field label={`Measures (${b.measures.length} selected)`}>
+                  <div className={s.addBar} style={{ gap: tokens.spacingHorizontalXS }}>
+                    {objs.measures.length === 0 ? <Caption1 className={s.hint}>No measures on this model.</Caption1> : objs.measures.map((m) => (
+                      <Checkbox key={m.name} label={m.table ? `${m.name} · ${m.table}` : m.name} checked={b.measures.includes(m.name)}
+                        onChange={() => updateComponent(comp.id, { binding: { ...b, measures: b.measures.includes(m.name) ? b.measures.filter((x) => x !== m.name) : [...b.measures, m.name] } })} />
+                    ))}
+                  </div>
+                </Field>
+                <Field label={`Group by (${b.groupBy.length} selected)`}>
+                  <div className={s.addBar} style={{ gap: tokens.spacingHorizontalXS }}>
+                    {objs.columns.length === 0 ? <Caption1 className={s.hint}>No columns on this model.</Caption1> : objs.columns.map((c) => {
+                      const key = gbMakeKey(c.table, c.name);
+                      return <Checkbox key={key} label={`${c.table}[${c.name}]`} checked={b.groupBy.includes(key)}
+                        onChange={() => updateComponent(comp.id, { binding: { ...b, groupBy: b.groupBy.includes(key) ? b.groupBy.filter((x) => x !== key) : [...b.groupBy, key] } })} />;
+                    })}
+                  </div>
+                </Field>
+                <Field label="Max rows"><Input type="number" value={String(b.topN)} onChange={(_, d) => updateComponent(comp.id, { binding: { ...b, topN: Math.min(Math.max(Number(d.value) || 100, 1), 1000) } })} /></Field>
+              </>
+            )}
+          </>
+        )}
+
+        <div className={s.addBar} style={{ backgroundColor: 'transparent', padding: 0 }}>
+          <Button appearance="primary" icon={<Play20Regular />} disabled={prev?.busy} onClick={() => previewComponent(comp)}>{prev?.busy ? 'Running…' : 'Preview data'}</Button>
+        </div>
+        {prev?.error && <MessageBar intent={prev.gate ? 'warning' : 'error'}><MessageBarBody>{prev.error}</MessageBarBody></MessageBar>}
+        {prev?.columns && (
+          comp.kind === 'metric' && prev.rows && prev.rows.length > 0 ? (
+            <div className={s.row}><Subtitle2>{fmtCellW(prev.rows[0][prev.rows[0].length - 1])}</Subtitle2><Caption1 className={s.hint}>{prev.columns[prev.columns.length - 1]}</Caption1></div>
+          ) : (
+            <div className={s.tableWrap}>
+              <Table size="small" aria-label={`${comp.title} preview`}>
+                <TableHeader><TableRow>{prev.columns.map((col) => <TableHeaderCell key={col}>{col}</TableHeaderCell>)}</TableRow></TableHeader>
+                <TableBody>
+                  {(prev.rows || []).slice(0, 50).map((row, ri) => (
+                    <TableRow key={ri}>{(Array.isArray(row) ? row : []).map((cell, ci) => <TableCell key={ci}>{fmtCellW(cell)}</TableCell>)}</TableRow>
+                  ))}
+                </TableBody>
+              </Table>
+            </div>
+          )
+        )}
+      </div>
+    );
+  };
+
+  const runnerAction = appDef.actions.find((a) => a.id === runActionId) || null;
 
   return (
     <ItemEditorChrome item={item} id={id} ribbon={ribbon} main={
       <div className={s.pad}>
         {loading && <Spinner size="small" label="Loading…" labelPosition="after" />}
         <MessageBar intent="info"><MessageBarBody>
-          <MessageBarTitle>Workshop app (Palantir Workshop → Atelier)</MessageBarTitle>
-          Bind a Loom Ontology, choose which object types become app pages, and define write-back actions. The app runs on Azure Container Apps over the ontology's bound Lakehouse/Warehouse — no Microsoft Fabric required.
+          <MessageBarTitle>Atelier — visual low-code app builder (Palantir Workshop)</MessageBarTitle>
+          Bind a Loom Ontology and/or Azure Analysis Services semantic models, design pages with table / metric / text components, preview live data, and define write-back actions. Runs on the Azure-native backend (Synapse + AAS) — no Microsoft Fabric required. {counts.pages} page(s), {counts.components} component(s), {counts.actions} action(s).
         </MessageBarBody></MessageBar>
 
         <div className={s.section}>
-          <SectionHead icon={<Link20Regular />} title="Bound ontology" hint="Pick a saved Ontology; its object/link types become the app's object views." />
+          <SectionHead icon={<Link20Regular />} title="Bound ontology" hint="Pick a saved Ontology; its object types become bindable data for ontology-entity components and write-back actions." />
           {!onto.loaded ? <div className={s.empty}><Spinner size="tiny" /></div> : onto.ontologies.length === 0 ? (
-            <MessageBar intent="warning"><MessageBarBody>No ontologies found. Create an Ontology item first, then bind it here.</MessageBarBody></MessageBar>
+            <MessageBar intent="warning"><MessageBarBody>No ontologies found. Create an Ontology item first, then bind it here. (Semantic-model components work without an ontology.)</MessageBarBody></MessageBar>
           ) : (
             <div className={s.addBar}>
               <Field label="Ontology" style={{ minWidth: 280 }}>
@@ -351,45 +584,83 @@ export function WorkshopAppEditor({ item, id }: { item: FabricItemType; id: stri
               <Button appearance="primary" icon={<Database20Regular />} disabled={onto.busy || !(pickOnto || onto.boundOntologyId)} onClick={() => onto.bind(pickOnto || onto.boundOntologyId)}>
                 {onto.busy ? 'Binding…' : 'Bind ontology'}
               </Button>
+              <span className={s.spacer} />
+              <Button appearance="outline" icon={<Add20Regular />} disabled={classes.length === 0} onClick={() => { setWizardOpen((v) => !v); setWizardPick([]); }}>
+                {wizardOpen ? 'Close wizard' : 'New app wizard'}
+              </Button>
             </div>
           )}
           {onto.msg && <MessageBar intent={onto.msg.intent}><MessageBarBody>{onto.msg.text}</MessageBarBody></MessageBar>}
         </div>
 
-        <div className={s.section}>
-          <SectionHead icon={<Database20Regular />} title="Object views" hint="Choose which ontology object types render as app pages." />
-          {classes.length === 0 ? <div className={s.empty}><Caption1>Bind an ontology with object types to choose views.</Caption1></div> : (
-            classes.map((c) => (
-              <div key={c.name} className={s.row}>
-                <Body1><strong>{c.name}</strong></Body1>
-                {c.parent && <Caption1 className={s.hint}>: {c.parent}</Caption1>}
-                <span className={s.spacer} />
-                <Button size="small" appearance="subtle" icon={<Play20Regular />} disabled={runBusy} onClick={() => runActionList(c.name)} title="List rows from the bound warehouse source">
-                  {runBusy && runEntity === c.name ? 'Running…' : 'List rows'}
-                </Button>
-                <Button size="small" appearance={objectViews.includes(c.name) ? 'primary' : 'outline'} onClick={() => toggleView(c.name)}>
-                  {objectViews.includes(c.name) ? 'In app' : 'Add view'}
-                </Button>
-              </div>
-            ))
-          )}
-          {runMsg && <MessageBar intent={runMsg.intent}><MessageBarBody>{runMsg.text}</MessageBarBody></MessageBar>}
-          {runResult && (
-            <div className={s.tableWrap}>
-            <Table size="small" aria-label={`${runResult.entityType} rows`}>
-              <TableHeader><TableRow>{runResult.columns.map((col) => <TableHeaderCell key={col}>{col}</TableHeaderCell>)}</TableRow></TableHeader>
-              <TableBody>
-                {runResult.rows.slice(0, 50).map((row, ri) => (
-                  <TableRow key={ri}>{(Array.isArray(row) ? row : []).map((cell, ci) => <TableCell key={ci}>{cell === null || cell === undefined ? '' : String(cell)}</TableCell>)}</TableRow>
-                ))}
-              </TableBody>
-            </Table>
+        {wizardOpen && classes.length > 0 && (
+          <div className={s.section}>
+            <SectionHead icon={<Flash20Regular />} title="New app wizard" hint="Pick object types — Loom generates one page per type (a live table) plus a create action for each." />
+            <div className={s.addBar} style={{ gap: tokens.spacingHorizontalXS }}>
+              {classes.map((c) => (
+                <Checkbox key={c.name} label={c.name} checked={wizardPick.includes(c.name)}
+                  onChange={() => setWizardPick((p) => p.includes(c.name) ? p.filter((x) => x !== c.name) : [...p, c.name])} />
+              ))}
             </div>
-          )}
+            <div className={s.addBar} style={{ backgroundColor: 'transparent', padding: 0 }}>
+              <Button appearance="primary" icon={<Add20Regular />} disabled={wizardPick.length === 0} onClick={generateFromOntology}>Generate {wizardPick.length || ''} page(s)</Button>
+            </div>
+          </div>
+        )}
+
+        <div className={s.grid2}>
+          {/* Pages + component tree */}
+          <div className={s.section}>
+            <SectionHead icon={<Database20Regular />} title="Pages" hint="Each page is a screen in the app. Select a page to edit its components." />
+            <div className={s.addBar} style={{ backgroundColor: 'transparent', padding: 0 }}>
+              <Button size="small" appearance="outline" icon={<Add20Regular />} onClick={addPage}>Add page</Button>
+            </div>
+            {appDef.pages.length === 0 ? <div className={s.empty}><Caption1>No pages yet. Add a page or run the New app wizard.</Caption1></div> : appDef.pages.map((p) => (
+              <div key={p.id} className={s.row} style={p.id === activePageId ? { borderColor: tokens.colorBrandStroke1 } : undefined}>
+                <Button size="small" appearance={p.id === activePageId ? 'primary' : 'subtle'} onClick={() => { setActivePageId(p.id); setEditingId(''); }}>{p.id === activePageId ? 'Editing' : 'Open'}</Button>
+                <Input value={p.name} aria-label={`Page ${p.name} name`} onChange={(_, d) => renamePage(p.id, d.value)} />
+                <Caption1 className={s.hint}>{p.components.length} cmp</Caption1>
+                <span className={s.spacer} />
+                <Tooltip content="Remove page" relationship="label">
+                  <Button size="small" appearance="subtle" icon={<Dismiss16Regular />} aria-label={`Remove page ${p.name}`} onClick={() => removePage(p.id)} />
+                </Tooltip>
+              </div>
+            ))}
+
+            {activePage && (
+              <>
+                <div className={s.sectionHead} style={{ marginTop: tokens.spacingVerticalS }}>
+                  <Body1><strong>Components on “{activePage.name}”</strong></Body1>
+                </div>
+                <div className={s.addBar} style={{ backgroundColor: 'transparent', padding: 0 }}>
+                  <Button size="small" appearance="outline" icon={<Add20Regular />} onClick={() => addComponent('table')}>Table</Button>
+                  <Button size="small" appearance="outline" icon={<Add20Regular />} onClick={() => addComponent('metric')}>Metric</Button>
+                  <Button size="small" appearance="outline" icon={<Add20Regular />} onClick={() => addComponent('text')}>Text</Button>
+                </div>
+                {activePage.components.length === 0 ? <div className={s.empty}><Caption1>No components. Add a table, metric, or text block.</Caption1></div> : activePage.components.map((c) => (
+                  <div key={c.id} className={s.row} style={c.id === editingId ? { borderColor: tokens.colorBrandStroke1 } : undefined}>
+                    <Badge appearance="tint" color="brand">{c.kind}</Badge>
+                    <Input value={c.title} aria-label={`Component ${c.title} title`} onChange={(_, d) => updateComponent(c.id, { title: d.value })} />
+                    <span className={s.spacer} />
+                    <Button size="small" appearance={c.id === editingId ? 'primary' : 'subtle'} onClick={() => setEditingId(c.id === editingId ? '' : c.id)}>{c.id === editingId ? 'Editing' : 'Configure'}</Button>
+                    <Tooltip content="Remove component" relationship="label">
+                      <Button size="small" appearance="subtle" icon={<Dismiss16Regular />} aria-label={`Remove ${c.title}`} onClick={() => removeComponent(c.id)} />
+                    </Tooltip>
+                  </div>
+                ))}
+              </>
+            )}
+          </div>
+
+          {/* Component inspector + preview */}
+          <div className={s.section}>
+            <SectionHead icon={<Play20Regular />} title="Component inspector" hint="Configure the selected component's data binding and preview its real data." />
+            {!editing ? <div className={s.empty}><Caption1>Select a component to configure its binding and preview live data.</Caption1></div> : bindingEditor(editing)}
+          </div>
         </div>
 
         <div className={s.section}>
-          <SectionHead icon={<Flash20Regular />} title="Write-back actions" hint="Define create / update actions over the bound object types." />
+          <SectionHead icon={<Flash20Regular />} title="Write-back actions" hint="Define create / update actions over the bound object types, then run them against the live Synapse backend." />
           <div className={s.addBar}>
             <Field label="Action label"><Input value={actLabel} onChange={(_, d) => setActLabel(d.value)} placeholder="e.g. Approve order" /></Field>
             <Field label="Kind"><Dropdown value={actKind} selectedOptions={[actKind]} onOptionSelect={(_, d) => setActKind((d.optionValue as 'create' | 'update') || 'create')}>
@@ -402,13 +673,42 @@ export function WorkshopAppEditor({ item, id }: { item: FabricItemType; id: stri
             </Field>
             <Button appearance="primary" icon={<Add20Regular />} disabled={!actLabel.trim() || !actEntity} onClick={addAction}>Add action</Button>
           </div>
-          {actions.length === 0 ? <div className={s.empty}><Caption1>No actions yet.</Caption1></div> : actions.map((a) => (
-            <div key={a.id} className={s.row}>
-              <Badge appearance="tint" color={a.kind === 'create' ? 'success' : 'brand'}>{a.kind}</Badge>
-              <Body1><strong>{a.label}</strong></Body1>
-              <Caption1 className={s.hint}>→ {a.entity}</Caption1>
-              <span className={s.spacer} />
-              <Button size="small" appearance="subtle" icon={<Dismiss16Regular />} aria-label={`Remove ${a.label}`} onClick={() => removeAction(a.id)}>Remove</Button>
+          {appDef.actions.length === 0 ? <div className={s.empty}><Caption1>No actions yet.</Caption1></div> : appDef.actions.map((a) => (
+            <div key={a.id}>
+              <div className={s.row}>
+                <Badge appearance="tint" color={a.kind === 'create' ? 'success' : 'brand'}>{a.kind}</Badge>
+                <Body1><strong>{a.label}</strong></Body1>
+                <Caption1 className={s.hint}>→ {a.entity}</Caption1>
+                <span className={s.spacer} />
+                <Button size="small" appearance="outline" icon={<Play20Regular />} disabled={runBusy && runActionId === a.id} onClick={() => openRunner(a)}>{runActionId === a.id && runBusy ? 'Loading…' : 'Run'}</Button>
+                <Button size="small" appearance="subtle" icon={<Dismiss16Regular />} aria-label={`Remove ${a.label}`} onClick={() => removeAction(a.id)}>Remove</Button>
+              </div>
+              {runActionId === a.id && runnerAction && (
+                <div className={s.section} style={{ marginTop: tokens.spacingVerticalXS }}>
+                  {runCols.length === 0 && !runMsg ? <Caption1 className={s.hint}>Loading the target table's columns…</Caption1> : (
+                    <>
+                      {runCols.map((col) => (
+                        <Field key={col} label={col}><Input value={runVals[col] || ''} onChange={(_, d) => setRunVals((p) => ({ ...p, [col]: d.value }))} placeholder="value (leave blank to skip)" /></Field>
+                      ))}
+                      {a.kind === 'update' && (
+                        <div className={s.addBar}>
+                          <Field label="Key column" style={{ minWidth: 180 }}>
+                            <Dropdown value={runKeyCol} selectedOptions={runKeyCol ? [runKeyCol] : []} placeholder="match on…" onOptionSelect={(_, d) => setRunKeyCol(d.optionValue || '')}>
+                              {runCols.map((col) => <Option key={col} value={col}>{col}</Option>)}
+                            </Dropdown>
+                          </Field>
+                          <Field label="Key value"><Input value={runKeyVal} onChange={(_, d) => setRunKeyVal(d.value)} /></Field>
+                        </div>
+                      )}
+                      <div className={s.addBar} style={{ backgroundColor: 'transparent', padding: 0 }}>
+                        <Button appearance="primary" icon={<Flash20Regular />} disabled={runBusy} onClick={() => submitRunner(a)}>{runBusy ? 'Running…' : `Run ${a.kind}`}</Button>
+                        <Button appearance="subtle" onClick={() => { setRunActionId(''); setRunMsg(null); }}>Close</Button>
+                      </div>
+                    </>
+                  )}
+                  {runMsg && <MessageBar intent={runMsg.intent}><MessageBarBody>{runMsg.text}</MessageBarBody></MessageBar>}
+                </div>
+              )}
             </div>
           ))}
         </div>

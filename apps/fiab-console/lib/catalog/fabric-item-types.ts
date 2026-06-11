@@ -88,7 +88,7 @@ export const FABRIC_ITEM_TYPES: readonly FabricItemType[] = [
   { slug: 'rayfin-app', displayName: 'Rayfin app', restType: 'RayfinApp', category: 'Fabric Apps', preview: true,
     description: 'Code-first app backend (database, auth, Data APIs, storage) — and model-bound web apps backed by a real semantic model — deployed with the Rayfin SDK + CLI.',
     learnContent: {
-      "overview": "Rayfin is Microsoft's open-source Backend-as-a-Service for Fabric (Build 2026 preview). You define data models, auth, APIs, storage, and business logic in TypeScript with the @microsoft/rayfin-core decorators, then `npx rayfin up` deploys it to your Fabric workspace. Beyond the general code-first case, Build 2026 #28 lets you build a web app backed by a real semantic model — in Loom's Model binding tab you pick a model, select its measures + group-by fields, see a live data preview, and Loom emits a typed read-view connector. The Azure-native default for model binding is Azure Analysis Services, so it works with no Fabric or Power BI workspace. The Rayfin CLI itself runs on your dev machine; Loom authors the spec and emits the SDK model, the connector, and the exact deploy commands.",
+      "overview": "Rayfin is Microsoft's open-source Backend-as-a-Service for Fabric (Build 2026 preview). You define data models, auth, APIs, storage, and business logic in TypeScript with the @microsoft/rayfin-core decorators, then `npx rayfin up` deploys it to your Fabric workspace. Rayfin is deliberately CODE-FIRST — the real product has no visual page/component designer (it is `npm create @microsoft/rayfin` plus a coding agent), so Loom keeps it code-first too: it authors the spec and emits the SDK model, the connector, and the exact deploy commands. For a VISUAL, low-code app builder (pages, components, data bindings, write-back actions), use the Atelier app type — Build a model binding here, then click \"Create Atelier app\" to lift it into a visual app over the SAME Azure Analysis Services model (audit-T145). Beyond the general code-first case, Build 2026 #28 lets you build a web app backed by a real semantic model — in Loom's Model binding tab you pick a model, select its measures + group-by fields, see a live data preview, and Loom emits a typed read-view connector. The Azure-native default for model binding is Azure Analysis Services, so it works with no Fabric or Power BI workspace. The Rayfin CLI itself runs on your dev machine.",
       "steps": [
         {
           "title": "Define entities + services",
@@ -967,15 +967,15 @@ export const FABRIC_ITEM_TYPES: readonly FabricItemType[] = [
   // Doc-only mappings in docs/migrations/palantir-foundry/ are superseded here
   // by built Azure-native item types. All default Azure-native (no Fabric / no
   // Power BI workspace) per .claude/rules/no-fabric-dependency.md.
-  { slug: 'workshop-app', displayName: 'Workshop app', restType: 'WorkshopApp', category: 'Fabric IQ', preview: true,
-    description: 'Operational low-code app bound to an Ontology — object views, link traversal, and write-back actions.',
+  { slug: 'workshop-app', displayName: 'Atelier app', restType: 'WorkshopApp', category: 'Fabric IQ', preview: true,
+    description: 'Visual low-code app builder — multi-page layouts, a table / metric / text component palette, real data bindings (Ontology entities via Synapse, semantic models via AAS), and write-back actions.',
     learnContent: {
-      "overview": "Workshop is Palantir Foundry's low-code operational application builder. The CSA Loom equivalent (Atelier) binds an app to a Loom Ontology rather than to a database: pages render object views over the ontology's entity types, and actions write back to the bound Lakehouse/Warehouse. Azure-native — it runs on Azure Container Apps over the ontology's existing data bindings; no Microsoft Fabric workspace required.",
+      "overview": "Atelier is CSA Loom's VISUAL, low-code application builder (Palantir Workshop parity, audit-T51 / T145). Design multi-page apps from a component palette — tables, metric cards, and text blocks — and bind each data component to a real Azure-native source: a Loom Ontology entity type (read/written through the Synapse dedicated SQL pool) or an Azure Analysis Services semantic model (the same model a Rayfin app binds, read via DAX over XMLA). A \"New app\" wizard generates a page + create action per ontology object type; write-back actions run real parameterized INSERT/UPDATE against Synapse. It runs on Azure Container Apps over the bound data — no Microsoft Fabric workspace required. Atelier is the visual builder; the Rayfin app type is the code-first sibling (both share one app-definition schema).",
       "steps": [
-        { "title": "Bind an ontology", "body": "Pick a saved Ontology in this workspace; its entity types become the app's object views." },
-        { "title": "Add object views", "body": "Choose which entity types to surface as pages and which properties to show." },
-        { "title": "Wire write-back actions", "body": "Define actions (create / update) that write back through the ontology's bound Lakehouse / Warehouse." },
-        { "title": "Run an action", "body": "Test an action; Loom records a Thread edge from the app to the ontology so lineage stays accurate." }
+        { "title": "Bind data", "body": "Bind a saved Ontology (its object types back ontology-entity components and actions), and/or pick Azure Analysis Services semantic models for model-bound components." },
+        { "title": "Design pages", "body": "Add pages and drop table / metric / text components onto each. Use the New app wizard to scaffold a page per ontology object type in one click." },
+        { "title": "Bind + preview each component", "body": "Configure a component's data binding with dropdowns (no JSON), then click Preview to see its real rows from Synapse or its real DAX result from the semantic model." },
+        { "title": "Wire + run write-back actions", "body": "Define create / update actions over the bound object types and run them — Loom executes real parameterized SQL against the bound Synapse warehouse and records a Thread edge to the ontology." }
       ],
       "docsUrl": "https://learn.microsoft.com/power-apps/maker/canvas-apps/getting-started"
     } },
