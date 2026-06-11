@@ -32,6 +32,7 @@ import {
   Text,
   Link as FluentLink,
   makeStyles,
+  mergeClasses,
   tokens,
 } from '@fluentui/react-components';
 import {
@@ -104,7 +105,29 @@ const useStyles = makeStyles({
     gap: tokens.spacingHorizontalS,
     marginTop: tokens.spacingVerticalXS,
   },
-  count: { color: tokens.colorNeutralForeground3, whiteSpace: 'nowrap' },
+  dots: { display: 'inline-flex', alignItems: 'center', gap: '6px' },
+  dot: {
+    width: '7px',
+    height: '7px',
+    padding: 0,
+    border: 'none',
+    borderRadius: tokens.borderRadiusCircular,
+    backgroundColor: tokens.colorNeutralStroke1,
+    cursor: 'pointer',
+    transitionProperty: 'background-color, width',
+    transitionDuration: tokens.durationNormal,
+    ':hover': { backgroundColor: tokens.colorNeutralStroke1Hover },
+    ':focus-visible': {
+      outline: `2px solid ${tokens.colorStrokeFocus2}`,
+      outlineOffset: '2px',
+    },
+  },
+  dotActive: {
+    width: '18px',
+    borderRadius: tokens.borderRadiusMedium,
+    backgroundColor: tokens.colorBrandBackground,
+    ':hover': { backgroundColor: tokens.colorBrandBackgroundHover },
+  },
   footerBtns: { display: 'flex', alignItems: 'center', gap: tokens.spacingHorizontalXS },
 });
 
@@ -252,6 +275,12 @@ export function OnboardingTour() {
     setStepIndex(pi);
   }, [stepIndex, persistStep]);
 
+  const goTo = useCallback((i: number) => {
+    const clamped = Math.min(Math.max(i, 0), TOUR_STEPS.length - 1);
+    persistStep(clamped);
+    setStepIndex(clamped);
+  }, [persistStep]);
+
   if (!open || !target) return null;
   const step = TOUR_STEPS[stepIndex];
   if (!step) return null;
@@ -283,7 +312,22 @@ export function OnboardingTour() {
           </FluentLink>
         )}
         <div className={styles.footer}>
-          <Text className={styles.count} size={200}>{stepIndex + 1} of {TOUR_STEPS.length}</Text>
+          <div
+            className={styles.dots}
+            role="group"
+            aria-label={`Step ${stepIndex + 1} of ${TOUR_STEPS.length}`}
+          >
+            {TOUR_STEPS.map((s, i) => (
+              <button
+                key={s.id}
+                type="button"
+                className={mergeClasses(styles.dot, i === stepIndex && styles.dotActive)}
+                aria-label={`Go to step ${i + 1}: ${s.title}`}
+                aria-current={i === stepIndex ? 'step' : undefined}
+                onClick={() => goTo(i)}
+              />
+            ))}
+          </div>
           <div className={styles.footerBtns}>
             <Button appearance="subtle" size="small" onClick={dismiss}>Skip</Button>
             {stepIndex > 0 && (
