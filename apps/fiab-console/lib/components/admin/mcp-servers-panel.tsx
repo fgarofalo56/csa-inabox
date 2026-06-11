@@ -47,6 +47,23 @@ const useStyles = makeStyles({
   spacer: { flex: 1 },
   testStatus: { display: 'flex', alignItems: 'center', gap: tokens.spacingHorizontalXS },
   tableWrap: { overflowX: 'auto' },
+  cardGrid: {
+    display: 'grid',
+    gridTemplateColumns: 'repeat(auto-fit, minmax(300px, 1fr))',
+    gap: tokens.spacingHorizontalM,
+    marginTop: tokens.spacingVerticalM,
+  },
+  gateDetail: {
+    display: 'block',
+    marginTop: tokens.spacingVerticalXS,
+    color: tokens.colorNeutralForeground3,
+  },
+  inlineError: {
+    display: 'block',
+    marginTop: tokens.spacingVerticalXS,
+    color: tokens.colorPaletteRedForeground1,
+  },
+  meta: { color: tokens.colorNeutralForeground3 },
 });
 
 function McpServerForm({
@@ -324,6 +341,7 @@ function BridgeMcpCard({
   onRegister: (config: McpServerConfig) => Promise<void>;
   busy: boolean;
 }) {
+  const styles = useStyles();
   const [status, setStatus] = useState<BridgeStatus | null>(null);
   const [loading, setLoading] = useState(true);
   const [registeringId, setRegisteringId] = useState<string | null>(null);
@@ -348,10 +366,10 @@ function BridgeMcpCard({
         <MessageBarBody>
           <MessageBarTitle>MCP stdio→HTTP/SSE bridge (optional, not provisioned)</MessageBarTitle>
           {status.gate?.message}
-          <div style={{ marginTop: 6, fontSize: 12 }}>
+          <Caption1 className={styles.gateDetail}>
             Set <code>{status.gate?.envVar}</code> on the console after deploying{' '}
             <code>{status.gate?.deployModule}</code> (see <code>{status.gate?.deploymentDoc}</code>).
-          </div>
+          </Caption1>
         </MessageBarBody>
       </MessageBar>
     );
@@ -385,12 +403,12 @@ function BridgeMcpCard({
 
   return (
     <Section title="Bridged stdio MCP servers (npx / uvx)">
-      <Body1 style={{ color: tokens.colorNeutralForeground3, fontSize: 12 }}>
+      <Caption1 className={styles.meta}>
         These stdio MCP servers run on the Loom MCP bridge (<code>{status.base}</code>) and are
         exposed over HTTP. Register any one as a normal external MCP server with a single click.
-      </Body1>
-      {error && <div style={{ color: tokens.colorPaletteRedForeground1, fontSize: 12 }}>{error}</div>}
-      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(300px, 1fr))', gap: tokens.spacingHorizontalM, marginTop: tokens.spacingVerticalM }}>
+      </Caption1>
+      {error && <Caption1 className={styles.inlineError}>{error}</Caption1>}
+      <div className={styles.cardGrid}>
         {bridged.map((b) => {
           const alreadyRegistered = servers.some((s) => s.endpoint === b.endpoint);
           const register = async () => {
@@ -412,9 +430,9 @@ function BridgeMcpCard({
               <MessageBarBody>
                 <MessageBarTitle>{b.name}</MessageBarTitle>
                 {b.description}{' '}
-                <span style={{ fontSize: 12, color: tokens.colorNeutralForeground3 }}>
+                <Caption1 className={styles.meta}>
                   ({b.launcher} {b.package})
-                </span>
+                </Caption1>
               </MessageBarBody>
               {alreadyRegistered ? (
                 <Badge appearance="tint" color="success">Registered</Badge>
