@@ -3,7 +3,8 @@
 import { useEffect, useMemo, useState } from 'react';
 import { AdminShell } from '@/lib/components/admin-shell';
 import {
-  Body1, Caption1, Badge, Button,
+  Body1, Caption1, Badge, Button, Spinner,
+  MessageBar, MessageBarBody, MessageBarTitle,
   makeStyles, tokens,
 } from '@fluentui/react-components';
 import { ArrowSync24Regular, Checkmark24Filled, ArrowDownload24Regular } from '@fluentui/react-icons';
@@ -258,7 +259,7 @@ export default function UpdatesPage() {
         run the linked GitHub Actions deploy with the new tag to pull updates.
       </Body1>
       {loading ? (
-        <Section><Body1>Checking for updates…</Body1></Section>
+        <Section><Spinner size="small" label="Checking for updates…" labelPosition="after" /></Section>
       ) : info ? (
         <>
           <Section title="Version status">
@@ -330,7 +331,18 @@ export default function UpdatesPage() {
             </div>
           </Section>
         </>
-      ) : null}
+      ) : (
+        <Section title="Version status">
+          <MessageBar intent="error" className={a.messageBar}>
+            <MessageBarBody>
+              <MessageBarTitle>Could not check for updates</MessageBarTitle>
+              The version service did not return a response. Confirm the console can reach
+              GitHub, then re-check.
+            </MessageBarBody>
+          </MessageBar>
+          <Button appearance="secondary" icon={<ArrowSync24Regular />} onClick={load}>Re-check</Button>
+        </Section>
+      )}
     </AdminShell>
   );
 }
