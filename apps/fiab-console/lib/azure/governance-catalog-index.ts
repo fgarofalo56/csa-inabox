@@ -18,6 +18,7 @@
  * `governance-catalog-shapes` module and is re-exported here.
  */
 
+import { fetchWithTimeout } from '@/lib/azure/fetch-with-timeout';
 import {
   ChainedTokenCredential,
   ManagedIdentityCredential,
@@ -92,11 +93,11 @@ export async function ensureGovernanceCatalogIndex(): Promise<{ created: boolean
   try {
     const base = searchEndpointBase(service());
     const tok = await token();
-    const get = await fetch(`${base}/indexes/${INDEX}?api-version=${SEARCH_API}`, {
+    const get = await fetchWithTimeout(`${base}/indexes/${INDEX}?api-version=${SEARCH_API}`, {
       headers: { authorization: `Bearer ${tok}` },
     });
     if (get.status === 200) return { created: false, ok: true };
-    const put = await fetch(`${base}/indexes/${INDEX}?api-version=${SEARCH_API}`, {
+    const put = await fetchWithTimeout(`${base}/indexes/${INDEX}?api-version=${SEARCH_API}`, {
       method: 'PUT',
       headers: { authorization: `Bearer ${tok}`, 'content-type': 'application/json' },
       body: JSON.stringify({ name: INDEX, ...INDEX_DEFINITION }),
@@ -117,7 +118,7 @@ export async function upsertGovernanceItem(doc: GovernanceCatalogDoc): Promise<v
   try {
     const base = searchEndpointBase(service());
     const tok = await token();
-    await fetch(`${base}/indexes/${INDEX}/docs/index?api-version=${SEARCH_API}`, {
+    await fetchWithTimeout(`${base}/indexes/${INDEX}/docs/index?api-version=${SEARCH_API}`, {
       method: 'POST',
       headers: { authorization: `Bearer ${tok}`, 'content-type': 'application/json' },
       body: JSON.stringify({ value: [{ '@search.action': 'mergeOrUpload', ...doc }] }),
@@ -131,7 +132,7 @@ export async function upsertGovernanceItems(docs: GovernanceCatalogDoc[]): Promi
   try {
     const base = searchEndpointBase(service());
     const tok = await token();
-    const res = await fetch(`${base}/indexes/${INDEX}/docs/index?api-version=${SEARCH_API}`, {
+    const res = await fetchWithTimeout(`${base}/indexes/${INDEX}/docs/index?api-version=${SEARCH_API}`, {
       method: 'POST',
       headers: { authorization: `Bearer ${tok}`, 'content-type': 'application/json' },
       body: JSON.stringify({ value: docs.map((d) => ({ '@search.action': 'mergeOrUpload', ...d })) }),
@@ -152,7 +153,7 @@ export async function deleteGovernanceItem(id: string): Promise<void> {
   try {
     const base = searchEndpointBase(service());
     const tok = await token();
-    await fetch(`${base}/indexes/${INDEX}/docs/index?api-version=${SEARCH_API}`, {
+    await fetchWithTimeout(`${base}/indexes/${INDEX}/docs/index?api-version=${SEARCH_API}`, {
       method: 'POST',
       headers: { authorization: `Bearer ${tok}`, 'content-type': 'application/json' },
       body: JSON.stringify({ value: [{ '@search.action': 'delete', id }] }),
@@ -180,7 +181,7 @@ export async function searchGovernanceCatalog(opts: CatalogSearchOpts): Promise<
     count: true,
   });
   if (typeof opts.skip === 'number' && opts.skip > 0) body.skip = opts.skip;
-  const res = await fetch(`${base}/indexes/${INDEX}/docs/search?api-version=${SEARCH_API}`, {
+  const res = await fetchWithTimeout(`${base}/indexes/${INDEX}/docs/search?api-version=${SEARCH_API}`, {
     method: 'POST',
     headers: { authorization: `Bearer ${tok}`, 'content-type': 'application/json' },
     body: JSON.stringify(body),

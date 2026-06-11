@@ -15,6 +15,7 @@
  * the required capability / role, the surface renders an honest MessageBar with
  * the exact remediation.
  */
+import { clientFetch } from '@/lib/client-fetch';
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import {
   Spinner, MessageBar, MessageBarBody, MessageBarTitle, Button, Caption1, Body1, Subtitle2, Title2,
@@ -62,6 +63,15 @@ const useStyles = makeStyles({
   grants: { display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalS, marginTop: tokens.spacingVerticalM },
   empty: { padding: tokens.spacingVerticalXXL, color: tokens.colorNeutralForeground3, fontSize: '13px' },
   wsPicker: { maxWidth: '480px', marginBottom: tokens.spacingVerticalL },
+  hidden: { display: 'none' },
+  fieldNote: { marginTop: tokens.spacingVerticalXS },
+  minW0: { minWidth: 0 },
+  capDesc: { display: 'block', marginTop: tokens.spacingVerticalXS },
+  capId: {
+    display: 'block', marginTop: tokens.spacingVerticalXS,
+    fontFamily: 'monospace', color: tokens.colorNeutralForeground3,
+  },
+  noteStack: { marginTop: tokens.spacingVerticalS },
 });
 
 export default function PermissionsPage() {
@@ -80,10 +90,10 @@ export default function PermissionsPage() {
       </TabList>
 
       {/* Keep both mounted to preserve each tab's loaded state; hide the inactive one. */}
-      <div style={{ display: tab === 'features' ? 'block' : 'none' }}>
+      <div className={tab === 'features' ? undefined : styles.hidden}>
         <FeaturePermissionsTab styles={styles} />
       </div>
-      <div style={{ display: tab === 'workspace-access' ? 'block' : 'none' }}>
+      <div className={tab === 'workspace-access' ? undefined : styles.hidden}>
         <WorkspaceAccessTab styles={styles} active={tab === 'workspace-access'} />
       </div>
     </AdminShell>
@@ -109,8 +119,8 @@ function FeaturePermissionsTab({ styles }: { styles: Styles }) {
     setError(null);
     try {
       const [capRes, grantRes] = await Promise.all([
-        fetch('/api/admin/permissions/capabilities', { cache: 'no-store' }),
-        fetch('/api/admin/permissions/grants', { cache: 'no-store' }),
+        clientFetch('/api/admin/permissions/capabilities', { cache: 'no-store' }),
+        clientFetch('/api/admin/permissions/grants', { cache: 'no-store' }),
       ]);
       if (capRes.status === 401 || capRes.status === 403) {
         const j = await capRes.json().catch(() => ({}));
@@ -152,9 +162,9 @@ function FeaturePermissionsTab({ styles }: { styles: Styles }) {
       <MessageBar intent="warning">
         <MessageBarBody>
           <MessageBarTitle>{error.message}</MessageBarTitle>
-          {error.remediation && <div style={{ marginTop: 4 }}>{error.remediation}</div>}
+          {error.remediation && <div className={styles.fieldNote}>{error.remediation}</div>}
           {!error.remediation && (
-            <div style={{ marginTop: 4 }}>
+            <div className={styles.fieldNote}>
               Only members of the tenant-admin group (env <code>LOOM_TENANT_ADMIN_GROUP_ID</code>) or the user with <code>LOOM_TENANT_ADMIN_OID</code> can manage feature permissions before any grants exist.
             </div>
           )}
@@ -183,10 +193,10 @@ function FeaturePermissionsTab({ styles }: { styles: Styles }) {
             {selected ? (
               <>
                 <div className={styles.header}>
-                  <div style={{ minWidth: 0 }}>
+                  <div className={styles.minW0}>
                     <Title2 className={styles.titleRow}><ShieldKeyhole24Regular /> {selected.name}</Title2>
-                    <Caption1 style={{ display: 'block', marginTop: 4 }}>{selected.description}</Caption1>
-                    <Caption1 style={{ display: 'block', marginTop: 4, fontFamily: 'monospace', color: tokens.colorNeutralForeground3 }}>
+                    <Caption1 className={styles.capDesc}>{selected.description}</Caption1>
+                    <Caption1 className={styles.capId}>
                       {selected.id}
                     </Caption1>
                   </div>
@@ -199,7 +209,7 @@ function FeaturePermissionsTab({ styles }: { styles: Styles }) {
                   {grantsForSelected.length === 0 && (
                     <div className={styles.empty}>
                       <Body1>No grants yet for this capability.</Body1>
-                      <div style={{ marginTop: 8 }}>
+                      <div className={styles.noteStack}>
                         Tenant admins always have full access; add explicit grants to delegate.
                       </div>
                     </div>
@@ -243,7 +253,7 @@ function WorkspaceAccessTab({ styles, active }: { styles: Styles; active: boolea
     let cancelled = false;
     (async () => {
       try {
-        const res = await fetch('/api/admin/workspaces', { cache: 'no-store' });
+        const res = await clientFetch('/api/admin/workspaces', { cache: 'no-store' });
         const json = await res.json();
         if (cancelled) return;
         if (!res.ok || !json.ok) { setError(json?.error || `HTTP ${res.status}`); setWorkspaces([]); return; }

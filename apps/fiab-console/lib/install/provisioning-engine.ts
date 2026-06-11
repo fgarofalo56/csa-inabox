@@ -173,6 +173,16 @@ export interface RunProvisioningOpts {
   mode: DeploymentMode;
   /** Per-tenant target overrides — typically empty in shared mode. */
   targetOverrides?: Partial<ProvisionTarget>;
+  /**
+   * Progress callback fired after EACH bounded-concurrency batch completes
+   * (task-019 — async install progress). `done` is the number of items whose
+   * provisioner has returned; `total` is the full item count. The async install
+   * worker uses this to persist live percentComplete to the app-install-jobs
+   * Cosmos doc so the dialog's poll shows real forward progress. Best-effort:
+   * the engine fences the call, so a throwing/awaiting callback never sinks the
+   * provision. Omitted on the synchronous (non-job) callers.
+   */
+  onProgress?: (done: number, total: number) => void | Promise<void>;
 }
 
 /** Max number of items provisioned concurrently. Bounds the fan-out so a
@@ -406,6 +416,12 @@ export async function runProvisioning(
     settled.forEach((step, j) => {
       out[start + j] = step;
     });
+    // Persist live progress after each batch (task-019). Fenced so a slow/throwing
+    // job-doc write never sinks the provision.
+    if (opts.onProgress) {
+      const done = Math.min(start + batch.length, installed.length);
+      try { await opts.onProgress(done, installed.length); } catch { /* best-effort */ }
+    }
   }
 
   // Post-provision PAIRING pass — after every primary item is provisioned,

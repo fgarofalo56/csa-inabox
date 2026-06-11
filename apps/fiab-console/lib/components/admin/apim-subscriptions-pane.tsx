@@ -2,15 +2,48 @@
 
 import { useEffect, useMemo, useState } from 'react';
 import {
-  makeStyles, tokens, Spinner, MessageBar, MessageBarBody, Button, Badge,
-  Caption1, Dialog, DialogTrigger, DialogSurface, DialogContent, DialogBody, DialogTitle,
+  makeStyles, shorthands, tokens, Spinner, MessageBar, MessageBarBody, Button, Badge,
+  Caption1, Dialog, DialogSurface, DialogContent, DialogBody, DialogTitle, Tooltip,
 } from '@fluentui/react-components';
-import { CheckmarkCircle24Regular, DismissCircle24Regular } from '@fluentui/react-icons';
+import {
+  CheckmarkCircle24Regular, DismissCircle24Regular, Copy24Regular, Checkmark24Regular,
+} from '@fluentui/react-icons';
 import { Section, Toolbar } from '@/lib/components/ui/section';
 import { LoomDataTable, type LoomColumn } from '@/lib/components/ui/loom-data-table';
 import { ApimSubscriptionSummary } from '@/lib/azure/apim-client';
+import { apimFetchJson } from './apim-pane-fetch';
+
+const useStyles = makeStyles({
+  keyList: {
+    display: 'flex',
+    flexDirection: 'column',
+    rowGap: tokens.spacingVerticalL,
+  },
+  keyRow: {
+    display: 'flex',
+    alignItems: 'center',
+    columnGap: tokens.spacingHorizontalS,
+  },
+  keyCode: {
+    flexGrow: 1,
+    fontFamily: tokens.fontFamilyMonospace,
+    fontSize: tokens.fontSizeBase200,
+    ...shorthands.padding(tokens.spacingVerticalS, tokens.spacingHorizontalM),
+    ...shorthands.border('1px', 'solid', tokens.colorNeutralStroke2),
+    borderRadius: tokens.borderRadiusMedium,
+    backgroundColor: tokens.colorNeutralBackground2,
+    overflowX: 'auto',
+    whiteSpace: 'nowrap',
+    color: tokens.colorNeutralForeground1,
+  },
+  keyCodeEmpty: {
+    color: tokens.colorNeutralForeground3,
+    fontStyle: 'italic',
+  },
+});
 
 export function ApimSubscriptionsPane() {
+  const styles = useStyles();
   const [subscriptions, setSubscriptions] = useState<ApimSubscriptionSummary[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -18,19 +51,30 @@ export function ApimSubscriptionsPane() {
   const [selectedSub, setSelectedSub] = useState<ApimSubscriptionSummary | null>(null);
   const [showKeysDialog, setShowKeysDialog] = useState(false);
   const [keys, setKeys] = useState<{ primaryKey?: string; secondaryKey?: string } | null>(null);
+  const [copiedKey, setCopiedKey] = useState<string | null>(null);
+
+  async function copyKey(label: string, value?: string) {
+    if (!value) return;
+    try {
+      await navigator.clipboard.writeText(value);
+      setCopiedKey(label);
+      setTimeout(() => setCopiedKey((c) => (c === label ? null : c)), 1500);
+    } catch {
+      /* clipboard unavailable (insecure context) — silently no-op */
+    }
+  }
 
   useEffect(() => {
-    fetch('/api/items/apim-subscriptions')
-      .then((r) => r.json())
+    apimFetchJson('/api/apim/subscriptions')
       .then((d) => {
         if (d.ok && Array.isArray(d.subscriptions)) {
-          setSubscriptions(d.subscriptions);
+          setSubscriptions(d.subscriptions as ApimSubscriptionSummary[]);
         } else {
-          setError(d.error || 'Failed to load subscriptions');
+          setError((d.error as string) || 'Failed to load subscriptions');
         }
         setLoading(false);
       })
-      .catch((e) => { setError(String(e)); setLoading(false); });
+      .catch((e) => { setError(e instanceof Error ? e.message : String(e)); setLoading(false); });
   }, []);
 
   const visibleSubs = useMemo(() => {
@@ -44,49 +88,56 @@ export function ApimSubscriptionsPane() {
 
   async function handleApprove(sub: ApimSubscriptionSummary) {
     try {
-      const res = await fetch(`/api/items/apim-subscriptions/${sub.name}`, {
+      const d = await apimFetchJson(`/api/apim/subscriptions/${encodeURIComponent(sub.name)}`, {
         method: 'PATCH',
+        headers: { 'content-type': 'application/json' },
         body: JSON.stringify({ state: 'active' }),
       });
-      const d = await res.json();
       if (d.ok) {
         setSubscriptions((prev) =>
           prev.map((s) => (s.name === sub.name ? { ...s, state: 'active' } : s))
         );
+      } else {
+        setError((d.error as string) || 'Approve failed');
       }
     } catch (e) {
-      console.error('Approve failed:', e);
+      setError(e instanceof Error ? e.message : String(e));
     }
   }
 
   async function handleRejectOrSuspend(sub: ApimSubscriptionSummary) {
     try {
-      const res = await fetch(`/api/items/apim-subscriptions/${sub.name}`, {
+      const d = await apimFetchJson(`/api/apim/subscriptions/${encodeURIComponent(sub.name)}`, {
         method: 'PATCH',
+        headers: { 'content-type': 'application/json' },
         body: JSON.stringify({ state: 'suspended' }),
       });
-      const d = await res.json();
       if (d.ok) {
         setSubscriptions((prev) =>
           prev.map((s) => (s.name === sub.name ? { ...s, state: 'suspended' } : s))
         );
+      } else {
+        setError((d.error as string) || 'Suspend failed');
       }
     } catch (e) {
-      console.error('Suspend failed:', e);
+      setError(e instanceof Error ? e.message : String(e));
     }
   }
 
   async function handleShowKeys(sub: ApimSubscriptionSummary) {
     setSelectedSub(sub);
     setShowKeysDialog(true);
+    setKeys(null);
     try {
-      const res = await fetch(`/api/items/apim-subscriptions/${sub.name}/keys`);
-      const d = await res.json();
+      const d = await apimFetchJson(`/api/apim/subscriptions/${encodeURIComponent(sub.name)}/keys`);
       if (d.ok) {
-        setKeys({ primaryKey: d.primaryKey, secondaryKey: d.secondaryKey });
+        setKeys({ primaryKey: d.primaryKey as string | undefined, secondaryKey: d.secondaryKey as string | undefined });
+      } else {
+        setKeys({ primaryKey: undefined, secondaryKey: undefined });
       }
     } catch (e) {
       console.error('Load keys failed:', e);
+      setKeys({ primaryKey: undefined, secondaryKey: undefined });
     }
   }
 
@@ -131,20 +182,24 @@ export function ApimSubscriptionsPane() {
       render: (s) => (
         <div style={{ display: 'flex', gap: tokens.spacingHorizontalS, flexWrap: 'wrap' }}>
           {s.state === 'submitted' && (
-            <Button
-              size="small"
-              icon={<CheckmarkCircle24Regular />}
-              onClick={() => handleApprove(s)}
-              title="Approve subscription"
-            />
+            <Tooltip content="Approve subscription" relationship="label">
+              <Button
+                size="small"
+                icon={<CheckmarkCircle24Regular />}
+                onClick={() => handleApprove(s)}
+                aria-label={`Approve subscription ${s.displayName}`}
+              />
+            </Tooltip>
           )}
           {(s.state === 'submitted' || s.state === 'active') && (
-            <Button
-              size="small"
-              icon={<DismissCircle24Regular />}
-              onClick={() => handleRejectOrSuspend(s)}
-              title={s.state === 'submitted' ? 'Reject' : 'Suspend'}
-            />
+            <Tooltip content={s.state === 'submitted' ? 'Reject' : 'Suspend'} relationship="label">
+              <Button
+                size="small"
+                icon={<DismissCircle24Regular />}
+                onClick={() => handleRejectOrSuspend(s)}
+                aria-label={`${s.state === 'submitted' ? 'Reject' : 'Suspend'} subscription ${s.displayName}`}
+              />
+            </Tooltip>
           )}
           <Button size="small" onClick={() => handleShowKeys(s)}>
             Keys
@@ -189,34 +244,48 @@ export function ApimSubscriptionsPane() {
               <DialogTitle>{selectedSub.displayName} — API Keys</DialogTitle>
               <DialogContent>
               {keys ? (
-                <div style={{ display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalM }}>
+                <div className={styles.keyList}>
                   <div>
                     <Caption1 style={{ fontWeight: 600 }}>Primary key</Caption1>
-                    <code style={{
-                      display: 'block',
-                      marginTop: '8px',
-                      padding: '8px',
-                      backgroundColor: tokens.colorNeutralBackground2,
-                      borderRadius: tokens.borderRadiusMedium,
-                      overflow: 'auto',
-                      maxWidth: '400px',
-                    }}>
-                      {keys.primaryKey || '(not set)'}
-                    </code>
+                    <div className={styles.keyRow} style={{ marginTop: '8px' }}>
+                      <code className={`${styles.keyCode}${keys.primaryKey ? '' : ` ${styles.keyCodeEmpty}`}`}>
+                        {keys.primaryKey || '(not set)'}
+                      </code>
+                      <Tooltip
+                        content={copiedKey === 'primary' ? 'Copied' : 'Copy primary key'}
+                        relationship="label"
+                      >
+                        <Button
+                          size="small"
+                          appearance="subtle"
+                          icon={copiedKey === 'primary' ? <Checkmark24Regular /> : <Copy24Regular />}
+                          disabled={!keys.primaryKey}
+                          onClick={() => copyKey('primary', keys.primaryKey)}
+                          aria-label="Copy primary key"
+                        />
+                      </Tooltip>
+                    </div>
                   </div>
                   <div>
                     <Caption1 style={{ fontWeight: 600 }}>Secondary key</Caption1>
-                    <code style={{
-                      display: 'block',
-                      marginTop: '8px',
-                      padding: '8px',
-                      backgroundColor: tokens.colorNeutralBackground2,
-                      borderRadius: tokens.borderRadiusMedium,
-                      overflow: 'auto',
-                      maxWidth: '400px',
-                    }}>
-                      {keys.secondaryKey || '(not set)'}
-                    </code>
+                    <div className={styles.keyRow} style={{ marginTop: '8px' }}>
+                      <code className={`${styles.keyCode}${keys.secondaryKey ? '' : ` ${styles.keyCodeEmpty}`}`}>
+                        {keys.secondaryKey || '(not set)'}
+                      </code>
+                      <Tooltip
+                        content={copiedKey === 'secondary' ? 'Copied' : 'Copy secondary key'}
+                        relationship="label"
+                      >
+                        <Button
+                          size="small"
+                          appearance="subtle"
+                          icon={copiedKey === 'secondary' ? <Checkmark24Regular /> : <Copy24Regular />}
+                          disabled={!keys.secondaryKey}
+                          onClick={() => copyKey('secondary', keys.secondaryKey)}
+                          aria-label="Copy secondary key"
+                        />
+                      </Tooltip>
+                    </div>
                   </div>
                 </div>
               ) : (

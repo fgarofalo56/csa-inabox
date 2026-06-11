@@ -18,6 +18,7 @@
  * Works without Graph by default (UPN + activity + legacy roles from Cosmos).
  */
 
+import { clientFetch } from '@/lib/client-fetch';
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import {
   Spinner, Badge, Caption1, Body1, Button,
@@ -173,7 +174,7 @@ export default function UsersPage() {
   const load = useCallback(async () => {
     setLoading(true); setError(null);
     try {
-      const r = await fetch('/api/admin/users');
+      const r = await clientFetch('/api/admin/users');
       const j = await r.json();
       if (!j.ok) { setError(j.error || 'failed'); return; }
       setUsers(j.users || []);

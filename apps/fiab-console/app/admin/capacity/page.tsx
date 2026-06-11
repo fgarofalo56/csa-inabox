@@ -1,5 +1,6 @@
 'use client';
 
+import { clientFetch } from '@/lib/client-fetch';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { AdminShell } from '@/lib/components/admin-shell';
 import {
@@ -209,7 +210,7 @@ function CostCell({ resourceId, onCost }: { resourceId: string; onCost: (id: str
       if (cached.status === 'ok') onCost(resourceId, cached.cost, cached.currency);
       return;
     }
-    costLimit(() => fetch(`/api/admin/capacity/cost?resourceId=${encodeURIComponent(resourceId)}`, { cache: 'no-store' }).then((r) => r.json()))
+    costLimit(() => clientFetch(`/api/admin/capacity/cost?resourceId=${encodeURIComponent(resourceId)}`, { cache: 'no-store' }).then((r) => r.json()))
       .then((j: any) => {
         let result: CostResult;
         if (j?.ok) result = { status: 'ok', cost: Number(j.cost) || 0, currency: j.currency || 'USD' };
@@ -246,7 +247,7 @@ function UtilizationSparkCell({ res }: { res: AzureRes }) {
     let cancelled = false;
     const cached = utilCache.get(res.id);
     if (cached) { setState(cached); return; }
-    utilLimit(() => fetch('/api/admin/capacity/utilization', {
+    utilLimit(() => clientFetch('/api/admin/capacity/utilization', {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify({ resourceId: res.id, resourceType: res.type, timespan: 'P1D', interval: 'PT15M' }),
@@ -304,7 +305,7 @@ function DetailPane({ res, viz, onClose }: { res: AzureRes; viz: VizConfig | nul
 
   const load = useCallback(() => {
     setErr(null); setGate(null);
-    fetch('/api/admin/capacity/utilization', {
+    clientFetch('/api/admin/capacity/utilization', {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify({ resourceId: res.id, resourceType: res.type, allMetrics: true, timespan: 'P1D', interval: 'PT15M' }),
@@ -426,7 +427,7 @@ export default function CapacityPage() {
   useEffect(() => {
     const ctrl = new AbortController();
     const timer = setTimeout(() => ctrl.abort(), 15000);
-    fetch('/api/admin/azure-resources', { signal: ctrl.signal, cache: 'no-store' }).then(r => {
+    clientFetch('/api/admin/azure-resources', { signal: ctrl.signal, cache: 'no-store' }).then(r => {
       if (r.status === 401 || r.status === 403) { setUnauth(true); return null; }
       return r.json();
     }).then(d => { if (d) setData(d); })
@@ -437,7 +438,7 @@ export default function CapacityPage() {
 
   // Load the rich-viz (Grafana / Power BI) deep-link config once.
   useEffect(() => {
-    fetch('/api/admin/capacity/viz-config', { cache: 'no-store' })
+    clientFetch('/api/admin/capacity/viz-config', { cache: 'no-store' })
       .then((r) => (r.ok ? r.json() : null))
       .then((j) => { if (j?.ok) setViz({ isGov: j.isGov, grafana: j.grafana, powerbi: j.powerbi }); })
       .catch(() => { /* viz links are optional */ });

@@ -22,7 +22,7 @@ from typing import Any, Literal
 
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import StreamingResponse
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 
 from .orchestrator import OrchestratorBase, FoundryOrchestrator, MafOrchestrator
 from .deployment_state import DeploymentStateStore
@@ -46,11 +46,30 @@ configure_telemetry(
 
 
 class DeployRequest(BaseModel):
+    """Deploy payload the Console BFF (/api/setup/deploy) POSTs.
+
+    The wizard sends camelCase keys, so every field carries a camelCase
+    ``alias`` and ``populate_by_name=True`` lets the deterministic tests still
+    construct it with the snake_case field names. Extra wizard state fields are
+    ignored.
+    """
+
+    model_config = ConfigDict(populate_by_name=True, extra="ignore")
+
     boundary: Literal["Commercial", "GCC", "GCC-High", "IL5"]
     mode: Literal["single-sub", "multi-sub"]
-    domain_name: str = Field(min_length=1, max_length=64, pattern=r"^[a-z0-9-]+$")
-    capacity_sku: Literal["F2", "F4", "F8", "F32", "F64", "F128", "F512"]
+    domain_name: str = Field(min_length=1, max_length=64, pattern=r"^[a-z0-9-]+$", alias="domainName")
+    capacity_sku: Literal["F2", "F4", "F8", "F32", "F64", "F128", "F512"] = Field(alias="capacitySku")
+    # The hub/admin subscription the subscription-scoped deployment targets.
+    subscription_id: str | None = Field(default=None, alias="subscriptionId")
     target_subscription_id: str | None = None
+    # Region the `az deployment sub create` lands in (wizard sends both).
+    region: str | None = None
+    location: str | None = None
+    # Multi-sub: parallel arrays the main.bicep `[for]` loop consumes.
+    dlz_subscription_ids: list[str] | None = Field(default=None, alias="dlzSubscriptionIds")
+    dlz_domain_names: list[str] | None = Field(default=None, alias="dlzDomainNames")
+    vanity_domain: str | None = Field(default=None, alias="vanityDomain")
 
 
 class DeployResponse(BaseModel):

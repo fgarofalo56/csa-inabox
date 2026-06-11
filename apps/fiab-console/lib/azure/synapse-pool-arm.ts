@@ -6,6 +6,7 @@
 
 import { DefaultAzureCredential, ManagedIdentityCredential, ChainedTokenCredential } from '@azure/identity';
 import { armBase, armScope } from './cloud-endpoints';
+import { fetchWithTimeout } from './fetch-with-timeout';
 
 const ARM_SCOPE = armScope();
 const ARM_API = '2021-06-01';
@@ -35,7 +36,7 @@ function poolUrl(): string {
 async function armFetch(url: string, init?: RequestInit): Promise<Response> {
   const token = await credential.getToken(ARM_SCOPE);
   if (!token?.token) throw new Error('Failed to acquire ARM token');
-  return fetch(url, {
+  return fetchWithTimeout(url, {
     ...init,
     headers: {
       ...(init?.headers || {}),

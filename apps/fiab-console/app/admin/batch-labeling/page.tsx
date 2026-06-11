@@ -10,6 +10,7 @@
  * green, failure in red, with the verbatim status/error text.
  */
 
+import { clientFetch } from '@/lib/client-fetch';
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import {
   Spinner, Badge, Caption1, Body1, Button, Checkbox, Dropdown, Option, Divider,
@@ -97,7 +98,7 @@ export default function BatchLabelingPage() {
     setLoading(true);
     setError(null);
     try {
-      const r = await fetch('/api/admin/batch-labeling');
+      const r = await clientFetch('/api/admin/batch-labeling');
       const j = await r.json();
       if (!j.ok) { setError(j.error || `HTTP ${r.status}`); return; }
       setData(j);
@@ -149,7 +150,7 @@ export default function BatchLabelingPage() {
     setResults(null);
     try {
       const chosen = items.filter((i) => selected.has(i.id)).map((i) => ({ id: i.id, workspaceId: i.workspaceId }));
-      const r = await fetch('/api/admin/batch-labeling', {
+      const r = await clientFetch('/api/admin/batch-labeling', {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
         body: JSON.stringify({

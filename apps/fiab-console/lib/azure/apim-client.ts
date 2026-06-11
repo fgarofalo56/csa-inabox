@@ -17,6 +17,7 @@
  * BFF can surface APIM's own validation messages to the editor UI.
  */
 
+import { fetchWithTimeout } from '@/lib/azure/fetch-with-timeout';
 import {
   DefaultAzureCredential,
   ManagedIdentityCredential,
@@ -109,7 +110,7 @@ async function apimFetch(
     : '';
   const url = `${apimBase()}${path}${sep}api-version=${APIM_API}${query}`;
   const { query: _q, ...rest } = init;
-  return fetch(url, {
+  return fetchWithTimeout(url, {
     ...rest,
     headers: {
       ...(rest.headers || {}),
@@ -166,7 +167,7 @@ export async function getApimService(): Promise<ApimServiceShape | null> {
   const token = await credential.getToken(ARM_SCOPE);
   if (!token?.token) throw new Error('Failed to acquire ARM token for APIM');
   const url = `${apimBase()}?api-version=${APIM_API}`;
-  const res = await fetch(url, {
+  const res = await fetchWithTimeout(url, {
     headers: {
       authorization: `Bearer ${token.token}`,
       'content-type': 'application/json',
@@ -203,7 +204,7 @@ export async function updateApimSku(
   if (!token?.token) throw new Error('Failed to acquire ARM token for APIM');
   const url = `${apimBase()}?api-version=${APIM_API}`;
   const body = { sku: { name: newSku, capacity } };
-  const res = await fetch(url, {
+  const res = await fetchWithTimeout(url, {
     method: 'PATCH',
     headers: {
       authorization: `Bearer ${token.token}`,
@@ -1028,11 +1029,26 @@ export async function getSubscriptionKeys(subscriptionId: string): Promise<{ pri
   return { primaryKey: j?.primaryKey, secondaryKey: j?.secondaryKey };
 }
 
+/** Where the subscription key attached to a test call came from. */
+export type TestCallKeySource = 'provided' | 'subscription' | 'master' | 'none';
+
 /**
  * Execute a test request through the APIM gateway, exactly as the portal Test
  * console does: gateway URL + the API path + operation urlTemplate, with the
- * Ocp-Apim-Subscription-Key header set from the all-access subscription
- * (subscriptionId "master"). Returns status, headers, and body text.
+ * Ocp-Apim-Subscription-Key header.
+ *
+ * Key resolution (highest precedence first) — fixes the 401 caused by always
+ * falling back to the built-in all-access "master" subscription, which an admin
+ * can suspend/rename (Microsoft explicitly advises against using it for routine
+ * access):
+ *   1. `subscriptionKey`  — a caller-supplied key (the marketplace "paste a key"
+ *                           / selected-subscription path). Used verbatim.
+ *   2. `subscriptionId`   — resolve the active subscription's primary key
+ *                           server-side via listSecrets (the key never leaves
+ *                           Azure until revealed to the authenticated session).
+ *   3. `master`           — the all-access subscription, last-resort only.
+ * The chosen source is returned as `keySource` so the UI can show which key the
+ * gateway saw (and prompt the user to pick/enter one when none was usable).
  */
 export async function testApiCall(args: {
   apiPath: string;
@@ -1041,17 +1057,39 @@ export async function testApiCall(args: {
   headers?: Record<string, string>;
   body?: string;
   query?: Record<string, string>;
-}): Promise<{ status: number; statusText: string; headers: Record<string, string>; body: string; gatewayUrl: string }> {
+  /** A subscription (sid) whose key should be resolved + attached server-side. */
+  subscriptionId?: string;
+  /** A raw subscription key supplied by the caller (manual entry). Wins over id. */
+  subscriptionKey?: string;
+}): Promise<{
+  status: number; statusText: string; headers: Record<string, string>;
+  body: string; gatewayUrl: string; keySource: TestCallKeySource;
+}> {
   const svc = await getServiceInfo();
   const gatewayUrl = svc?.gatewayUrl;
   if (!gatewayUrl) throw new ApimError(502, null, 'Could not resolve APIM gateway URL');
 
-  // The built-in all-access subscription is named "master".
   let key: string | undefined;
-  try {
-    const keys = await getSubscriptionKeys('master');
-    key = keys.primaryKey;
-  } catch { /* fall through — call may be anonymous (subscriptionRequired=false) */ }
+  let keySource: TestCallKeySource = 'none';
+
+  const provided = args.subscriptionKey?.trim();
+  if (provided) {
+    key = provided;
+    keySource = 'provided';
+  }
+  if (!key && args.subscriptionId) {
+    try {
+      const keys = await getSubscriptionKeys(args.subscriptionId);
+      if (keys.primaryKey) { key = keys.primaryKey; keySource = 'subscription'; }
+    } catch { /* fall through to master */ }
+  }
+  if (!key) {
+    // The built-in all-access subscription is named "master".
+    try {
+      const keys = await getSubscriptionKeys('master');
+      if (keys.primaryKey) { key = keys.primaryKey; keySource = 'master'; }
+    } catch { /* fall through — call may be anonymous (subscriptionRequired=false) */ }
+  }
 
   // Compose: gateway + path + urlTemplate. Strip a leading slash on the
   // template; replace {path-params} with empty (caller bakes them into query).
@@ -1063,7 +1101,7 @@ export async function testApiCall(args: {
   const headers: Record<string, string> = { ...(args.headers || {}) };
   if (key) headers['Ocp-Apim-Subscription-Key'] = key;
 
-  const res = await fetch(url, {
+  const res = await fetchWithTimeout(url, {
     method: args.method || 'GET',
     headers,
     body: ['GET', 'HEAD'].includes((args.method || 'GET').toUpperCase()) ? undefined : args.body,
@@ -1071,7 +1109,7 @@ export async function testApiCall(args: {
   const respHeaders: Record<string, string> = {};
   res.headers.forEach((v, k) => { respHeaders[k] = v; });
   const text = await res.text();
-  return { status: res.status, statusText: res.statusText, headers: respHeaders, body: text, gatewayUrl };
+  return { status: res.status, statusText: res.statusText, headers: respHeaders, body: text, gatewayUrl, keySource };
 }
 
 // ---------------- Service / health ----------------

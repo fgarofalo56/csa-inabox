@@ -26,6 +26,7 @@
  * opaque "Unexpected token <".
  */
 
+import { fetchWithTimeout } from '@/lib/azure/fetch-with-timeout';
 import {
   DefaultAzureCredential,
   ManagedIdentityCredential,
@@ -149,7 +150,7 @@ async function call(path: string, opts: CallOpts = {}): Promise<Response> {
   const tok = await searchToken();
   const params = new URLSearchParams({ 'api-version': opts.apiVersion || SEARCH_DATA_API, ...(opts.query || {}) });
   const url = `${serviceBase(service)}${path}?${params.toString()}`;
-  return fetch(url, {
+  return fetchWithTimeout(url, {
     method: opts.method || 'GET',
     headers: {
       authorization: `Bearer ${tok}`,

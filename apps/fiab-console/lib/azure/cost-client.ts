@@ -18,6 +18,7 @@
  *   https://learn.microsoft.com/rest/api/cost-management/query/usage
  *   GET  .../providers/Microsoft.Consumption/budgets?api-version=2023-05-01
  */
+import { fetchWithTimeout } from '@/lib/azure/fetch-with-timeout';
 import {
   ChainedTokenCredential,
   DefaultAzureCredential,
@@ -74,7 +75,7 @@ async function costQuery(subscriptionId: string, body: unknown): Promise<any> {
   const maxAttempts = 5;
   let lastErr: MonitorError | null = null;
   for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
-    const res = await fetch(url, {
+    const res = await fetchWithTimeout(url, {
       method: 'POST',
       headers: { authorization: `Bearer ${t.token}`, 'content-type': 'application/json', accept: 'application/json' },
       body: JSON.stringify(body),
@@ -166,7 +167,7 @@ async function periodTotal(sub: string, timeframe: CostTimeframe, loomRgs: Set<s
 async function listBudgets(sub: string): Promise<CostBudget[]> {
   try {
     const t = await credential.getToken(ARM_SCOPE);
-    const res = await fetch(`${ARM}/subscriptions/${sub}/providers/Microsoft.Consumption/budgets?api-version=${BUDGETS_API}`, {
+    const res = await fetchWithTimeout(`${ARM}/subscriptions/${sub}/providers/Microsoft.Consumption/budgets?api-version=${BUDGETS_API}`, {
       headers: { authorization: `Bearer ${t?.token}`, accept: 'application/json' }, cache: 'no-store',
     });
     if (!res.ok) return [];

@@ -18,6 +18,7 @@
  * Errors are wrapped in ActivatorError with status + body.
  */
 
+import { fetchWithTimeout } from '@/lib/azure/fetch-with-timeout';
 import { ChainedTokenCredential, DefaultAzureCredential, ManagedIdentityCredential } from '@azure/identity';
 
 const FABRIC_BASE = process.env.LOOM_FABRIC_BASE || 'https://api.fabric.microsoft.com/v1';
@@ -57,7 +58,7 @@ async function call<T = any>(path: string, opts: CallOpts = {}): Promise<T> {
   const method = opts.method ?? 'GET';
   const token = await getToken();
   const url = `${FABRIC_BASE}${path}`;
-  const res = await fetch(url, {
+  const res = await fetchWithTimeout(url, {
     method,
     headers: {
       'authorization': `Bearer ${token}`,

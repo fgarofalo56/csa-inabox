@@ -10,6 +10,7 @@
  * on the real data already fetched from /api/admin/audit-logs.
  */
 
+import { clientFetch } from '@/lib/client-fetch';
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import {
   Spinner, Badge, Caption1, Body1, Button, Dropdown, Option, Field, Input,
@@ -136,7 +137,7 @@ export default function AuditLogsPage() {
       if (user) params.set('user', user);
       if (itemId) params.set('itemId', itemId);
       params.set('top', '500');
-      const r = await fetch(`/api/admin/audit-logs?${params.toString()}`);
+      const r = await clientFetch(`/api/admin/audit-logs?${params.toString()}`);
       const j: AuditResponse = await r.json();
       if (!j.ok) { setError(j.error || 'failed'); return; }
       setRows(j.rows || []);

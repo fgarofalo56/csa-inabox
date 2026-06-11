@@ -49,6 +49,7 @@
  *     when the AppRole grants are missing / not yet consented).
  */
 
+import { fetchWithTimeout } from '@/lib/azure/fetch-with-timeout';
 import {
   ChainedTokenCredential,
   DefaultAzureCredential,
@@ -169,7 +170,7 @@ async function graphFetch(path: string, init: RequestInit = {}): Promise<Respons
   const token = await credential.getToken(GRAPH_SCOPE);
   if (!token?.token) throw new GraphIdentityError(500, null, 'Failed to acquire Microsoft Graph token');
   const url = path.startsWith('http') ? path : `${GRAPH_V1}${path}`;
-  return fetch(url, {
+  return fetchWithTimeout(url, {
     ...init,
     cache: 'no-store',
     headers: {

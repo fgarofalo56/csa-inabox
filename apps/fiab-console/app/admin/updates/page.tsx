@@ -1,14 +1,56 @@
 'use client';
 
+import { clientFetch } from '@/lib/client-fetch';
 import { useEffect, useMemo, useState } from 'react';
 import { AdminShell } from '@/lib/components/admin-shell';
 import {
-  Body1, Caption1, Badge, Button,
+  Body1, Caption1, Badge, Button, Spinner,
+  MessageBar, MessageBarBody, MessageBarTitle,
   makeStyles, tokens,
 } from '@fluentui/react-components';
 import { ArrowSync24Regular, Checkmark24Filled, ArrowDownload24Regular } from '@fluentui/react-icons';
 import { Section } from '@/lib/components/ui/section';
+import { useAdminTabStyles } from '@/lib/components/ui/admin-tab-styles';
 import { LoomDataTable, type LoomColumn } from '@/lib/components/ui/loom-data-table';
+
+/**
+ * Markdown styling atoms. Defined at module scope so the MarkdownNotes
+ * component (and, via a passed className, the renderInline helper) can move
+ * every static rule off inline styles and onto Fluent tokens — including
+ * replacing the hardcoded rgba(127,127,127,0.15) code background with a
+ * theme-aware neutral so release notes render correctly in dark mode.
+ */
+const useMdStyles = makeStyles({
+  codeSpan: {
+    fontFamily: 'Consolas, monospace',
+    fontSize: '0.9em',
+    backgroundColor: tokens.colorNeutralBackground3,
+    padding: '1px 4px',
+    borderRadius: tokens.borderRadiusSmall,
+  },
+  heading: { fontWeight: 600, marginBottom: tokens.spacingVerticalXS },
+  list: {
+    marginTop: tokens.spacingVerticalXS,
+    marginBottom: tokens.spacingVerticalXS,
+    paddingLeft: '20px',
+  },
+  item: { marginBottom: '2px' },
+  pre: {
+    fontFamily: 'Consolas, monospace',
+    fontSize: '12px',
+    padding: tokens.spacingVerticalS,
+    backgroundColor: tokens.colorNeutralBackground3,
+    borderRadius: tokens.borderRadiusMedium,
+    overflowX: 'auto',
+    marginTop: tokens.spacingVerticalS,
+    marginBottom: tokens.spacingVerticalS,
+  },
+  para: {
+    marginTop: tokens.spacingVerticalS,
+    marginBottom: tokens.spacingVerticalS,
+    lineHeight: 1.5,
+  },
+});
 
 /**
  * Lightweight markdown → JSX renderer. Covers the subset GitHub release
@@ -17,7 +59,7 @@ import { LoomDataTable, type LoomColumn } from '@/lib/components/ui/loom-data-ta
  * No external dep — pulling in react-markdown for ~5 markdown nodes per
  * release note would be overkill.
  */
-function renderInline(line: string, key: number): React.ReactNode {
+function renderInline(line: string, key: number, codeClass: string): React.ReactNode {
   // [text](url)
   let parts: React.ReactNode[] = [line];
   parts = parts.flatMap((p, i) => {
@@ -35,7 +77,7 @@ function renderInline(line: string, key: number): React.ReactNode {
     return out;
   });
   // **bold**
-  parts = parts.flatMap((p, i) => {
+  parts = parts.flatMap<React.ReactNode>((p, i) => {
     if (typeof p !== 'string') return [p];
     const segs = p.split(/(\*\*[^*]+\*\*)/g);
     return segs.map((seg, j) =>
@@ -45,12 +87,12 @@ function renderInline(line: string, key: number): React.ReactNode {
     );
   });
   // `code`
-  parts = parts.flatMap((p, i) => {
+  parts = parts.flatMap<React.ReactNode>((p, i) => {
     if (typeof p !== 'string') return [p];
     const segs = p.split(/(`[^`]+`)/g);
     return segs.map((seg, j) =>
       seg.startsWith('`') && seg.endsWith('`')
-        ? <code key={`c${key}-${i}-${j}`} style={{ fontFamily: 'Consolas, monospace', fontSize: '0.9em', background: 'rgba(127,127,127,0.15)', padding: '1px 4px', borderRadius: 3 }}>{seg.slice(1, -1)}</code>
+        ? <code key={`c${key}-${i}-${j}`} className={codeClass}>{seg.slice(1, -1)}</code>
         : seg
     );
   });
@@ -58,6 +100,7 @@ function renderInline(line: string, key: number): React.ReactNode {
 }
 
 function MarkdownNotes({ text }: { text: string }) {
+  const md = useMdStyles();
   const blocks = useMemo(() => {
     if (!text?.trim()) return [];
     const lines = text.replace(/\r\n/g, '\n').split('\n');
@@ -107,25 +150,21 @@ function MarkdownNotes({ text }: { text: string }) {
       {blocks.map((b, i) => {
         if (b.kind === 'h') {
           const size = b.level === 1 ? 18 : b.level === 2 ? 16 : 14;
-          return <div key={i} style={{ fontSize: size, fontWeight: 600, marginTop: i ? 12 : 0, marginBottom: 6 }}>{renderInline(b.text, i)}</div>;
+          return <div key={i} className={md.heading} style={{ fontSize: size, marginTop: i ? 12 : 0 }}>{renderInline(b.text, i, md.codeSpan)}</div>;
         }
         if (b.kind === 'ul') {
           return (
-            <ul key={i} style={{ marginTop: 4, marginBottom: 4, paddingLeft: 20 }}>
-              {b.items.map((it, j) => <li key={j} style={{ marginBottom: 2 }}>{renderInline(it, j)}</li>)}
+            <ul key={i} className={md.list}>
+              {b.items.map((it, j) => <li key={j} className={md.item}>{renderInline(it, j, md.codeSpan)}</li>)}
             </ul>
           );
         }
         if (b.kind === 'code') {
           return (
-            <pre key={i} style={{
-              fontFamily: 'Consolas, monospace', fontSize: 12, padding: 8,
-              backgroundColor: 'rgba(127,127,127,0.15)', borderRadius: 4,
-              overflow: 'auto', margin: '8px 0',
-            }}>{b.text}</pre>
+            <pre key={i} className={md.pre}>{b.text}</pre>
           );
         }
-        return <p key={i} style={{ margin: '6px 0', lineHeight: 1.5 }}>{renderInline(b.text, i)}</p>;
+        return <p key={i} className={md.para}>{renderInline(b.text, i, md.codeSpan)}</p>;
       })}
     </>
   );
@@ -168,16 +207,19 @@ const useStyles = makeStyles({
     backgroundColor: tokens.colorNeutralBackground2, borderRadius: tokens.borderRadiusMedium,
     fontSize: '12px', color: tokens.colorNeutralForeground3, lineHeight: 1.5,
   },
+  heroCol: { flex: 1, minWidth: '160px' },
+  badgeWrap: { marginTop: tokens.spacingVerticalS },
 });
 
 export default function UpdatesPage() {
   const s = useStyles();
+  const a = useAdminTabStyles();
   const [info, setInfo] = useState<VersionInfo | null>(null);
   const [loading, setLoading] = useState(true);
 
   async function load() {
     setLoading(true);
-    try { setInfo(await fetch('/api/version').then((r) => r.json())); }
+    try { setInfo(await clientFetch('/api/version').then((r) => r.json())); }
     finally { setLoading(false); }
   }
 
@@ -189,7 +231,7 @@ export default function UpdatesPage() {
       render: (r) => (
         <span>
           <strong>{r.tag}</strong>
-          {r.prerelease && <Badge appearance="outline" color="warning" size="small" style={{ marginLeft: 8 }}>pre-release</Badge>}
+          {r.prerelease && <Badge appearance="outline" color="warning" size="small" className={a.badgeGap}>pre-release</Badge>}
         </span>
       ),
     },
@@ -218,18 +260,18 @@ export default function UpdatesPage() {
         run the linked GitHub Actions deploy with the new tag to pull updates.
       </Body1>
       {loading ? (
-        <Section><Body1>Checking for updates…</Body1></Section>
+        <Section><Spinner size="small" label="Checking for updates…" labelPosition="after" /></Section>
       ) : info ? (
         <>
           <Section title="Version status">
             <div className={s.hero}>
-              <div style={{ flex: 1, minWidth: 160 }}>
+              <div className={s.heroCol}>
                 <Caption1>Currently running</Caption1>
-                <div style={{ marginTop: 6 }}><span className={s.vBadge}>{info.current}</span></div>
+                <div className={s.badgeWrap}><span className={s.vBadge}>{info.current}</span></div>
               </div>
-              <div style={{ flex: 1, minWidth: 160 }}>
+              <div className={s.heroCol}>
                 <Caption1>Latest upstream ({info.repo})</Caption1>
-                <div style={{ marginTop: 6 }}>
+                <div className={s.badgeWrap}>
                   {info.upstream
                     ? <span className={s.vBadge}>{info.upstream.tag}</span>
                     : <Caption1>(unable to reach GitHub: {info.error ?? 'unknown'})</Caption1>}
@@ -290,7 +332,18 @@ export default function UpdatesPage() {
             </div>
           </Section>
         </>
-      ) : null}
+      ) : (
+        <Section title="Version status">
+          <MessageBar intent="error" className={a.messageBar}>
+            <MessageBarBody>
+              <MessageBarTitle>Could not check for updates</MessageBarTitle>
+              The version service did not return a response. Confirm the console can reach
+              GitHub, then re-check.
+            </MessageBarBody>
+          </MessageBar>
+          <Button appearance="secondary" icon={<ArrowSync24Regular />} onClick={load}>Re-check</Button>
+        </Section>
+      )}
     </AdminShell>
   );
 }

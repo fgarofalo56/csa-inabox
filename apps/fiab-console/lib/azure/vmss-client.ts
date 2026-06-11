@@ -12,6 +12,7 @@
  * Auth: ChainedTokenCredential(UAMI → DefaultAzureCredential) on the ARM scope.
  * Needs Virtual Machine Contributor on the VMSS (granted in shir.bicep).
  */
+import { fetchWithTimeout } from '@/lib/azure/fetch-with-timeout';
 import {
   ChainedTokenCredential,
   DefaultAzureCredential,
@@ -98,7 +99,7 @@ function basePath(c: VmssConfig): string {
 }
 
 async function armFetch(path: string, init?: RequestInit): Promise<any> {
-  const res = await fetch(`${ARM}${path}`, {
+  const res = await fetchWithTimeout(`${ARM}${path}`, {
     ...init,
     headers: {
       authorization: `Bearer ${await token()}`,

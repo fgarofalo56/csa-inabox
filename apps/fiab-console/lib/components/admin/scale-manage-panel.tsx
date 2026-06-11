@@ -74,6 +74,7 @@ export function ScaleManagePanel() {
   const [busy, setBusy] = useState<string | null>(null);
   const [msg, setMsg] = useState<{ id: string; text: string; ok: boolean } | null>(null);
   const [skuSel, setSkuSel] = useState<Record<string, string>>({});
+  const [nodeSel, setNodeSel] = useState<Record<string, number>>({});
 
   const load = useCallback(async () => {
     setError(null);
@@ -114,6 +115,7 @@ export function ScaleManagePanel() {
         const m = KIND_META[it.kind];
         const isBusy = busy === id;
         const sel = skuSel[id] ?? it.sku ?? it.skuOptions?.[0] ?? '';
+        const nodes = nodeSel[id] ?? (typeof it.capacity === 'number' ? it.capacity : 0);
         return (
           <div key={id} className={s.card}>
             <div className={s.accent} style={{ backgroundColor: m.accent }} aria-hidden />
@@ -152,10 +154,23 @@ export function ScaleManagePanel() {
               )}
               {(it.kind === 'shir-vmss' || it.kind === 'purview-shir-vmss') && (
                 <>
-                  <Button size="small" appearance="primary" icon={isBusy ? <Spinner size="tiny" /> : <Play16Regular />} disabled={isBusy || (it.capacity ?? 0) > 0}
-                    onClick={() => act(it, { action: 'scale', capacity: 4 })}>Start (4)</Button>
-                  <Button size="small" icon={<Pause16Regular />} disabled={isBusy || (it.capacity ?? 0) === 0}
-                    onClick={() => act(it, { action: 'scale', capacity: 0 })}>Stop (0)</Button>
+                  <Select
+                    value={String(nodes)}
+                    onChange={(_, d) => setNodeSel((p) => ({ ...p, [id]: Number(d.value) }))}
+                    disabled={isBusy}
+                    aria-label={`Node count for ${it.name}`}
+                    style={{ width: 120 }}
+                  >
+                    {[0, 1, 2, 3, 4, 6, 8].map((n) => (
+                      <option key={n} value={n}>{n === 0 ? 'Stop (0)' : `${n} node${n === 1 ? '' : 's'}`}</option>
+                    ))}
+                  </Select>
+                  <Button size="small" appearance="primary"
+                    icon={isBusy ? <Spinner size="tiny" /> : (nodes === 0 ? <Pause16Regular /> : <Play16Regular />)}
+                    disabled={isBusy || nodes === (it.capacity ?? 0)}
+                    onClick={() => act(it, { action: 'scale', capacity: nodes })}>
+                    {isBusy ? 'Scaling…' : (nodes === 0 ? 'Stop' : 'Set nodes')}
+                  </Button>
                 </>
               )}
               <Button size="small" appearance="subtle" icon={<ArrowSync16Regular />} onClick={load} disabled={isBusy} title="Refresh state" aria-label={`Refresh ${it.name}`} />

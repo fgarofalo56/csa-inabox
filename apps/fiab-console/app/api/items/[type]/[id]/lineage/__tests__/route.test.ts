@@ -1,13 +1,16 @@
 /**
  * Unit tests for /api/items/[type]/[id]/lineage BFF route.
  *
- * Asserts the cloud-boundary backend selection + honest-gate behaviour that the
- * lineage drawer relies on:
+ * The route now delegates to the UNIFIED lineage service (audit-t138): it
+ * resolves per-cloud focus keys and overlays Unity Catalog + Purview + Weave.
+ * Asserts:
  *   1. unauthenticated → 401
- *   2. Commercial/GCC → Unity Catalog; a real upstream edge maps to a graph edge
- *   3. Unity Catalog not configured → 501 { gate:'lineage-backend-not-configured' }
- *      with a named hint (NOT an empty 200 graph)
- *   4. GCC-High → Purview Atlas relationships
+ *   2. Commercial/GCC → Unity Catalog primary; a real upstream edge maps to a
+ *      graph edge; backend='unity-catalog'
+ *   3. Unity Catalog not configured → NOT fatal: the request still returns 200
+ *      with the focus node, and the UC gate is reported in sources[] (graceful
+ *      degradation per no-vaporware.md — the other sources still render)
+ *   4. GCC-High → Purview Atlas relationships; backend='purview'
  */
 import { describe, it, expect, beforeEach, vi } from 'vitest';
 
@@ -52,15 +55,19 @@ vi.mock('@/lib/auth/session', () => ({ getSession: vi.fn() }));
 vi.mock('@/lib/azure/cloud-endpoints', () => ({ detectLoomCloud: vi.fn(), isGovCloud: vi.fn() }));
 vi.mock('@/lib/azure/unity-catalog-client', () => ({
   getTableLineage: vi.fn(),
+  getTableLineageSystemTables: vi.fn(),
+  lineageWarehouseId: vi.fn(() => null),
   listWorkspaceHostnames: vi.fn(),
   UnityCatalogNotConfiguredError: H.UnityCatalogNotConfiguredError,
   UnityCatalogError: H.UnityCatalogError,
 }));
 vi.mock('@/lib/azure/purview-client', () => ({
   getLineageSubgraph: vi.fn(),
+  isPurviewConfigured: vi.fn(() => true),
   PurviewNotConfiguredError: H.PurviewNotConfiguredError,
   PurviewError: H.PurviewError,
 }));
+vi.mock('@/lib/thread/thread-edges', () => ({ listThreadEdges: vi.fn(async () => []) }));
 vi.mock('@/lib/azure/cosmos-client', () => ({
   itemsContainer: vi.fn(async () => ({
     items: { query: () => ({ fetchAll: async () => ({ resources: [] }) }) },
@@ -73,8 +80,13 @@ vi.mock('@/lib/azure/cosmos-client', () => ({
 import { GET } from '../route';
 import { getSession } from '@/lib/auth/session';
 import { detectLoomCloud } from '@/lib/azure/cloud-endpoints';
-import { getTableLineage, listWorkspaceHostnames } from '@/lib/azure/unity-catalog-client';
-import { getLineageSubgraph } from '@/lib/azure/purview-client';
+import {
+  getTableLineage,
+  listWorkspaceHostnames,
+  lineageWarehouseId,
+} from '@/lib/azure/unity-catalog-client';
+import { getLineageSubgraph, isPurviewConfigured } from '@/lib/azure/purview-client';
+import { listThreadEdges } from '@/lib/thread/thread-edges';
 
 function call(url: string, type = 'lakehouse', id = 'cat.sch.tbl') {
   const u = new URL(url);
@@ -84,6 +96,9 @@ function call(url: string, type = 'lakehouse', id = 'cat.sch.tbl') {
 
 beforeEach(() => {
   vi.resetAllMocks();
+  (lineageWarehouseId as any).mockReturnValue(null);
+  (isPurviewConfigured as any).mockReturnValue(true);
+  (listThreadEdges as any).mockResolvedValue([]);
 });
 
 describe('GET /api/items/[type]/[id]/lineage', () => {
@@ -96,6 +111,7 @@ describe('GET /api/items/[type]/[id]/lineage', () => {
   it('Commercial → Unity Catalog: a real upstream edge renders a lineage edge', async () => {
     (getSession as any).mockReturnValue({ claims: { oid: 'u' } });
     (detectLoomCloud as any).mockReturnValue('Commercial');
+    (isPurviewConfigured as any).mockReturnValue(false); // no Purview overlay this test
     (listWorkspaceHostnames as any).mockReturnValue(['adb-123.azuredatabricks.net']);
     (getTableLineage as any).mockResolvedValue([
       { source: 'up.sch.tbl', target: 'cat.sch.tbl', workspace_hostname: 'adb-123.azuredatabricks.net' },
@@ -113,9 +129,10 @@ describe('GET /api/items/[type]/[id]/lineage', () => {
     expect(getTableLineage).toHaveBeenCalledWith('adb-123.azuredatabricks.net', 'cat.sch.tbl');
   });
 
-  it('Unity Catalog not configured → 501 named gate, never an empty graph', async () => {
+  it('Unity Catalog not configured → graceful: 200 with focus node + UC gate in sources[]', async () => {
     (getSession as any).mockReturnValue({ claims: { oid: 'u' } });
     (detectLoomCloud as any).mockReturnValue('Commercial');
+    (isPurviewConfigured as any).mockReturnValue(false);
     (listWorkspaceHostnames as any).mockImplementation(() => {
       throw new H.UnityCatalogNotConfiguredError({
         missingEnvVar: 'LOOM_DATABRICKS_HOSTNAMES (or LOOM_DATABRICKS_HOSTNAME)',
@@ -125,18 +142,21 @@ describe('GET /api/items/[type]/[id]/lineage', () => {
       });
     });
 
-    const res = await call('http://x/api/items/lakehouse/cat.sch.tbl/lineage');
-    expect(res.status).toBe(501);
+    const res = await call('http://x/api/items/lakehouse/cat.sch.tbl/lineage?key=cat.sch.tbl');
+    expect(res.status).toBe(200);
     const j = await res.json();
-    expect(j.ok).toBe(false);
-    expect(j.gate).toBe('lineage-backend-not-configured');
-    expect(j.hint.missingEnvVar).toContain('LOOM_DATABRICKS_HOSTNAMES');
-    expect(j.nodes).toBeUndefined();
+    expect(j.ok).toBe(true);
+    const uc = j.sources.find((s: any) => s.source === 'unity-catalog');
+    expect(uc.ok).toBe(false);
+    expect(uc.gate).toContain('LOOM_DATABRICKS_HOSTNAMES');
+    // The focus node still renders (Weave focus) — never an empty graph.
+    expect(j.nodes.length).toBeGreaterThanOrEqual(1);
   });
 
   it('GCC-High → Purview Atlas relationships', async () => {
     (getSession as any).mockReturnValue({ claims: { oid: 'u' } });
     (detectLoomCloud as any).mockReturnValue('GCC-High');
+    (isPurviewConfigured as any).mockReturnValue(true);
     (getLineageSubgraph as any).mockResolvedValue({
       baseEntityGuid: 'g-focus',
       guidEntityMap: {

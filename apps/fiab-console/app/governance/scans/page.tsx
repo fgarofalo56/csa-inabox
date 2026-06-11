@@ -15,6 +15,7 @@
  * register/run actions disable themselves.
  */
 
+import { clientFetch } from '@/lib/client-fetch';
 import { useCallback, useEffect, useState } from 'react';
 import {
   Spinner, Badge, Caption1, Body1, Subtitle2, Button, Input, Field, Dropdown, Option,
@@ -81,7 +82,7 @@ export default function GovernanceScansPage() {
     if (!live) { setSources(null); return; }
     setLoading(true); setError(null);
     try {
-      const r = await fetch('/api/governance/scans');
+      const r = await clientFetch('/api/governance/scans');
       const j = await r.json();
       if (!j.ok) { setError(j.error || `HTTP ${r.status}`); return; }
       setSources(j.sources || []);
@@ -95,7 +96,7 @@ export default function GovernanceScansPage() {
     if (!name.trim()) { setActionErr('name required'); return; }
     setBusy(true); setActionErr(null);
     try {
-      const r = await fetch('/api/governance/scans', {
+      const r = await clientFetch('/api/governance/scans', {
         method: 'POST', headers: { 'content-type': 'application/json' },
         body: JSON.stringify({ name: name.trim(), kind, properties: endpoint ? { endpoint } : {} }),
       });
@@ -110,7 +111,7 @@ export default function GovernanceScansPage() {
   async function removeSource(n: string) {
     if (!confirm(`De-register source "${n}"?`)) return;
     try {
-      const r = await fetch(`/api/governance/scans?name=${encodeURIComponent(n)}`, { method: 'DELETE' });
+      const r = await clientFetch(`/api/governance/scans?name=${encodeURIComponent(n)}`, { method: 'DELETE' });
       const j = await r.json();
       if (j.ok) loadSources(); else setActionErr(j.error);
     } catch (e: any) { setActionErr(e?.message || String(e)); }
@@ -119,7 +120,7 @@ export default function GovernanceScansPage() {
   async function openScans(src: Source) {
     setDrawerSource(src); setScans(null); setRunsByScan({});
     try {
-      const r = await fetch(`/api/governance/scans?source=${encodeURIComponent(src.name)}`);
+      const r = await clientFetch(`/api/governance/scans?source=${encodeURIComponent(src.name)}`);
       const j = await r.json();
       if (j.ok) setScans(j.scans || []); else setActionErr(j.error);
     } catch (e: any) { setActionErr(e?.message || String(e)); }
@@ -128,7 +129,7 @@ export default function GovernanceScansPage() {
   async function loadRuns(scanName: string) {
     if (!drawerSource) return;
     try {
-      const r = await fetch(`/api/governance/scans?source=${encodeURIComponent(drawerSource.name)}&scan=${encodeURIComponent(scanName)}&runs=1`);
+      const r = await clientFetch(`/api/governance/scans?source=${encodeURIComponent(drawerSource.name)}&scan=${encodeURIComponent(scanName)}&runs=1`);
       const j = await r.json();
       if (j.ok) setRunsByScan((m) => ({ ...m, [scanName]: j.runs || [] }));
     } catch { /* ignore */ }
@@ -137,7 +138,7 @@ export default function GovernanceScansPage() {
   async function triggerRun(scanName: string) {
     if (!drawerSource) return;
     try {
-      const r = await fetch('/api/governance/scans', {
+      const r = await clientFetch('/api/governance/scans', {
         method: 'POST', headers: { 'content-type': 'application/json' },
         body: JSON.stringify({ source: drawerSource.name, scan: scanName, run: true }),
       });

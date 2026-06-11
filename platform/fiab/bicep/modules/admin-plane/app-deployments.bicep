@@ -46,6 +46,9 @@ param amlWorkspaceId string = ''
 @description('AML portal base for the VS Code for the Web deep-link. Default ml.azure.com (Commercial).')
 param amlPortalBase string = 'https://ml.azure.com'
 
+@description('Optional override for the public Azure Retail Prices API host used by the Deployment planner cost estimator. Empty = default prices.azure.com. Set for sovereign/air-gapped mirrors.')
+param retailPricesBase string = ''
+
 @description('App definitions — name, image, UAMI ID, app-specific env, ingress port, scale rules')
 param apps array
 
@@ -103,6 +106,20 @@ resource caeApps 'Microsoft.App/containerApps@2025-02-02-preview' = [for app in 
               { name: 'LOOM_AML_INSTANCE', value: amlInstance }
               { name: 'LOOM_AML_WORKSPACE_ID', value: amlWorkspaceId }
               { name: 'LOOM_AML_PORTAL_BASE', value: amlPortalBase }
+              // Server-side per-request HTTP timeout (ms) applied by
+              // lib/azure/fetch-with-timeout to every ARM/Fabric round-trip so a
+              // hung backend can't make a BFF route (and the page) spin forever.
+              // Matches the in-code default; raise it for slow sovereign regions.
+              { name: 'LOOM_SERVER_FETCH_TIMEOUT_MS', value: '30000' }
+              // Longer ceiling for LLM inference round-trips (AOAI chat
+              // completions, multi-iteration agent loops) so a normal long
+              // generation isn't aborted at the 30s metadata budget — still
+              // bounded so a wedged inference endpoint can't pin a worker.
+              { name: 'LOOM_LLM_FETCH_TIMEOUT_MS', value: '120000' }
+              // Deployment planner cost estimator → public Azure Retail Prices
+              // API. Empty = default prices.azure.com (no auth, Commercial cloud).
+              // Read only by the Console app; ignored elsewhere.
+              { name: 'LOOM_RETAIL_PRICES_BASE', value: retailPricesBase }
             ],
             contains(app, 'env') ? app.env : []
           )

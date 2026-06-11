@@ -17,11 +17,12 @@
  *   • Honest infra-gate MessageBar when AOAI isn't reachable (real remediation).
  */
 
+import { clientFetch } from '@/lib/client-fetch';
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import {
-  Title1, Title3, Body1, Caption1, Badge, Button, Spinner, Text,
+  Title1, Body1, Caption1, Badge, Button, Spinner, Text,
   MessageBar, MessageBarBody, MessageBarTitle, MessageBarActions,
-  makeStyles, tokens, mergeClasses,
+  makeStyles, tokens,
 } from '@fluentui/react-components';
 import {
   BotSparkle24Filled, Sparkle20Regular, ArrowRight20Regular,
@@ -185,6 +186,19 @@ const useStyles = makeStyles({
     paddingLeft: tokens.spacingHorizontalL, paddingRight: tokens.spacingHorizontalL,
   },
   consoleTitle: { display: 'inline-flex', alignItems: 'center', gap: tokens.spacingHorizontalS },
+  // ── Residual inline-style extractions ─────────────────────────────────
+  brandIcon: { color: tokens.colorBrandForeground1 },
+  flushTitle: { margin: 0 },
+  // Hero glyph: on the brand gradient, so foreground-on-brand (was '#fff').
+  heroIconGlyph: { width: '38px', height: '38px', color: tokens.colorNeutralForegroundOnBrand },
+  // Outline CTA over the hero gradient — on-brand text (was inline color:'#fff').
+  // The translucent border has no token, so it stays inline (griffel rejects the
+  // borderColor 4-side shorthand anyway).
+  heroOutlineBtn: {
+    color: tokens.colorNeutralForegroundOnBrand,
+  },
+  gatedBar: { marginBottom: tokens.spacingVerticalXXL },
+  remediationNote: { marginTop: tokens.spacingVerticalS },
 });
 
 const EXAMPLES = [
@@ -207,7 +221,7 @@ export default function CopilotPage() {
   const loadStatus = useCallback(async () => {
     setStatusLoading(true);
     try {
-      const r = await fetch('/api/copilot/status');
+      const r = await clientFetch('/api/copilot/status');
       const j = await r.json();
       setStatus(j);
     } catch {
@@ -220,7 +234,7 @@ export default function CopilotPage() {
   const loadSessions = useCallback(async () => {
     setSessionsLoading(true);
     try {
-      const r = await fetch('/api/copilot/sessions');
+      const r = await clientFetch('/api/copilot/sessions');
       const j = await r.json();
       setSessions(j.ok ? (j.sessions ?? []) : []);
     } catch {
@@ -260,22 +274,9 @@ export default function CopilotPage() {
     },
   ], []);
 
-  // ── Launched: full-screen shared console (unchanged shared widget) ──────
+  // ── Launched: full-screen shared console (owns its own hero + Back CTA) ──
   if (launched) {
-    return (
-      <div className={styles.consoleWrap}>
-        <div className={styles.consoleBar}>
-          <span className={styles.consoleTitle}>
-            <BotSparkle24Filled style={{ color: tokens.colorBrandForeground1 }} />
-            <Title3 style={{ margin: 0 }}>Loom Copilot</Title3>
-          </span>
-          <Button appearance="subtle" onClick={() => { setLaunched(false); loadSessions(); }}>
-            Back to overview
-          </Button>
-        </div>
-        <CopilotConsoleView />
-      </div>
-    );
+    return <CopilotConsoleView onBack={() => { setLaunched(false); loadSessions(); }} />;
   }
 
   // ── Landing surface ─────────────────────────────────────────────────────
@@ -286,7 +287,7 @@ export default function CopilotPage() {
         <div className={styles.heroGlow} aria-hidden />
         <div className={styles.heroRow}>
           <span className={styles.heroIcon} aria-hidden>
-            <BotSparkle24Filled style={{ width: 38, height: 38, color: '#fff' }} />
+            <BotSparkle24Filled className={styles.heroIconGlyph} />
           </span>
           <div className={styles.heroText}>
             <Title1 className={styles.heroTitle}>Loom Copilot</Title1>
@@ -328,7 +329,8 @@ export default function CopilotPage() {
               <Button
                 appearance="outline"
                 size="large"
-                style={{ color: '#fff', borderColor: 'rgba(255,255,255,0.4)' }}
+                className={styles.heroOutlineBtn}
+                style={{ borderColor: 'rgba(255,255,255,0.4)' }}
                 icon={<Open16Regular />}
                 as="a"
                 href="/items/cross-item-copilot/default"
@@ -342,7 +344,7 @@ export default function CopilotPage() {
 
       {/* Honest infra-gate when AOAI isn't reachable */}
       {!statusLoading && status && !ready && (
-        <MessageBar intent={status.aoai?.ok ? 'warning' : 'info'} style={{ marginBottom: tokens.spacingVerticalXXL }}>
+        <MessageBar intent={status.aoai?.ok ? 'warning' : 'info'} className={styles.gatedBar}>
           <MessageBarBody>
             <MessageBarTitle>Orchestrator not fully ready</MessageBarTitle>
             {status.aoai?.ok
@@ -350,7 +352,7 @@ export default function CopilotPage() {
               : `Azure OpenAI is not reachable — ${status.aoai?.error || 'unknown error'}. ` +
                 `The ${toolCount} registered tools can still be invoked directly inside the console.`}
             {status.aoai?.remediation && (
-              <div style={{ marginTop: tokens.spacingVerticalS }}>{status.aoai.remediation}</div>
+              <div className={styles.remediationNote}>{status.aoai.remediation}</div>
             )}
           </MessageBarBody>
           <MessageBarActions>
@@ -422,6 +424,8 @@ export default function CopilotPage() {
           <div className={styles.loadingRow}><Spinner size="tiny" /> <Caption1>Loading sessions…</Caption1></div>
         ) : sessions.length === 0 ? (
           <Caption1>No Copilot sessions yet. Launch Copilot and run your first prompt.</Caption1>
+        ) : filteredSessions.length === 0 ? (
+          <Caption1>No sessions match “{sessionQuery}”.</Caption1>
         ) : sessionView === 'tile' ? (
           <TileGrid minTileWidth={300}>
             {filteredSessions.map((sess) => (

@@ -19,6 +19,7 @@
  * UAMI needs `Cognitive Services Contributor` (deployments + keys) at the
  * account scope; `Reader` is enough for the read-only tabs.
  */
+import { fetchWithTimeout } from '@/lib/azure/fetch-with-timeout';
 import {
   DefaultAzureCredential,
   ManagedIdentityCredential,
@@ -86,7 +87,7 @@ async function armFetch(
   const query = init.query ? '&' + new URLSearchParams(init.query).toString() : '';
   const url = `${armBase()}${fullPath}${sep}api-version=${init.apiVersion || CS_API}${query}`;
   const { query: _q, apiVersion: _av, ...rest } = init;
-  return fetch(url, {
+  return fetchWithTimeout(url, {
     ...rest,
     headers: { ...(rest.headers || {}), authorization: `Bearer ${tok}`, 'content-type': 'application/json' },
   });
@@ -510,7 +511,7 @@ export async function chatCompletion(
   if (params.maxTokens !== undefined) body.max_tokens = params.maxTokens;
   if (params.topP !== undefined) body.top_p = params.topP;
   if (params.stop && params.stop.length) body.stop = params.stop;
-  const res = await fetch(url, {
+  const res = await fetchWithTimeout(url, {
     method: 'POST',
     headers: { authorization: `Bearer ${tok}`, 'content-type': 'application/json' },
     body: JSON.stringify(body),
@@ -573,7 +574,7 @@ async function evalsFetch(acct: CsAccount, path: string, init: RequestInit = {})
   const tok = await dataPlaneToken();
   const sep = path.includes('?') ? '&' : '?';
   const url = `${endpoint}/openai/v1${path}${sep}api-version=${AOAI_EVALS_API}`;
-  return fetch(url, {
+  return fetchWithTimeout(url, {
     ...init,
     headers: {
       ...(init.headers || {}),
@@ -678,7 +679,7 @@ async function uploadOpenAIFile(acct: CsAccount, fileName: string, content: stri
   form.append('purpose', purpose);
   form.append('file', new Blob([content], { type: 'application/jsonl' }), fileName || 'dataset.jsonl');
   const url = `${endpoint}/openai/v1/files?api-version=${AOAI_EVALS_API}`;
-  const res = await fetch(url, {
+  const res = await fetchWithTimeout(url, {
     method: 'POST',
     // NB: do NOT set content-type — fetch sets the multipart boundary itself.
     headers: { authorization: `Bearer ${tok}`, 'aoai-evals': 'preview' },
@@ -864,7 +865,7 @@ async function ftFetch(acct: CsAccount, path: string, init: RequestInit = {}): P
   const tok = await dataPlaneToken();
   const sep = path.includes('?') ? '&' : '?';
   const url = `${endpoint}/openai/v1${path}${sep}api-version=${AOAI_FT_API}`;
-  return fetch(url, {
+  return fetchWithTimeout(url, {
     ...init,
     headers: { ...(init.headers || {}), authorization: `Bearer ${tok}`, 'content-type': 'application/json' },
   });
@@ -958,7 +959,7 @@ export async function generateImage(
   if (params.size) body.size = params.size;
   if (params.quality) body.quality = params.quality;
   if (params.style) body.style = params.style;
-  const res = await fetch(url, {
+  const res = await fetchWithTimeout(url, {
     method: 'POST',
     headers: { authorization: `Bearer ${tok}`, 'content-type': 'application/json' },
     body: JSON.stringify(body),
@@ -986,7 +987,7 @@ export async function transcribeAudio(
   const url = `${endpoint}/openai/deployments/${encodeURIComponent(deploymentName)}/audio/transcriptions?api-version=${AOAI_AUDIO_API}`;
   const form = new FormData();
   form.append('file', audio, fileName || 'audio.wav');
-  const res = await fetch(url, {
+  const res = await fetchWithTimeout(url, {
     method: 'POST',
     headers: { authorization: `Bearer ${tok}` },
     body: form,

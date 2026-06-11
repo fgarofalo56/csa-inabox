@@ -29,6 +29,7 @@
  *   invalid one. Fields and vectorConfig are likewise validated against the
  *   create-index schema.
  */
+import { fetchWithTimeout } from '@/lib/azure/fetch-with-timeout';
 import { ChainedTokenCredential, DefaultAzureCredential, ManagedIdentityCredential } from '@azure/identity';
 import type { Provisioner, ProvisionResult } from './types';
 
@@ -312,7 +313,7 @@ export const aiSearchProvisioner: Provisioner = async (input): Promise<Provision
     ...(cleanProfiles.length > 0 ? { scoringProfiles: cleanProfiles } : {}),
   };
 
-  const putRes = await fetch(`https://${svc}.search.windows.net/indexes/${indexName}?api-version=${SEARCH_API}`, {
+  const putRes = await fetchWithTimeout(`https://${svc}.search.windows.net/indexes/${indexName}?api-version=${SEARCH_API}`, {
     method: 'PUT',
     headers: { authorization: `Bearer ${tok}`, 'content-type': 'application/json' },
     body: JSON.stringify(indexBody),
@@ -339,7 +340,7 @@ export const aiSearchProvisioner: Provisioner = async (input): Promise<Provision
   // Push sample docs if any.
   const sampleDocs: any[] = Array.isArray(content.sampleDocs) ? content.sampleDocs : [];
   if (sampleDocs.length > 0) {
-    const ingestRes = await fetch(`https://${svc}.search.windows.net/indexes/${indexName}/docs/index?api-version=${SEARCH_API}`, {
+    const ingestRes = await fetchWithTimeout(`https://${svc}.search.windows.net/indexes/${indexName}/docs/index?api-version=${SEARCH_API}`, {
       method: 'POST',
       headers: { authorization: `Bearer ${tok}`, 'content-type': 'application/json' },
       body: JSON.stringify({ value: sampleDocs.map((d) => ({ '@search.action': 'mergeOrUpload', ...d })) }),

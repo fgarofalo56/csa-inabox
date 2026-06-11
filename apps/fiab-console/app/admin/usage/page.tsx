@@ -19,6 +19,7 @@
  * Embedded (Commercial) or Managed Grafana (Gov) via /api/admin/usage/embed.
  */
 
+import { clientFetch } from '@/lib/client-fetch';
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import {
   Spinner, Caption1, Body1, Subtitle2, Button, Badge,
@@ -29,6 +30,7 @@ import {
 import { ArrowSync24Regular, Open16Regular, Dismiss16Regular, Open24Regular } from '@fluentui/react-icons';
 import { AdminShell } from '@/lib/components/admin-shell';
 import { Section } from '@/lib/components/ui/section';
+import { useAdminTabStyles } from '@/lib/components/ui/admin-tab-styles';
 import { LoomDataTable, type LoomColumn } from '@/lib/components/ui/loom-data-table';
 import { itemVisual } from '@/lib/components/ui/item-type-visual';
 import { PowerBIEmbedFrame } from '@/lib/components/embed/powerbi-embed';
@@ -210,10 +212,13 @@ const useStyles = makeStyles({
     border: `1px solid ${tokens.colorNeutralStroke2}`,
     borderRadius: tokens.borderRadiusMedium,
   },
+  featureSelect: { minWidth: '180px' },
+  docIcon: { fontSize: '14px', verticalAlign: 'middle' },
 });
 
 export default function UsagePage() {
   const s = useStyles();
+  const a = useAdminTabStyles();
   const [data, setData] = useState<Usage | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -228,7 +233,7 @@ export default function UsagePage() {
     try {
       const qs = new URLSearchParams({ days: String(d) });
       if (feat) qs.set('feature', feat);
-      const r = await fetch(`/api/admin/usage?${qs.toString()}`);
+      const r = await clientFetch(`/api/admin/usage?${qs.toString()}`);
       const j = await r.json();
       if (!j.ok) { setError(j.error || 'failed'); return; }
       setData(j);
@@ -244,7 +249,7 @@ export default function UsagePage() {
     let cancelled = false;
     (async () => {
       try {
-        const r = await fetch('/api/admin/usage/embed');
+        const r = await clientFetch('/api/admin/usage/embed');
         const j = await r.json();
         if (!cancelled) setEmbed(j);
       } catch { if (!cancelled) setEmbed(null); }
@@ -330,7 +335,7 @@ export default function UsagePage() {
       </Body1>
 
       {error && (
-        <MessageBar intent="error" style={{ marginBottom: tokens.spacingVerticalL }}>
+        <MessageBar intent="error" className={a.messageBar}>
           <MessageBarBody>
             <MessageBarTitle>Could not load usage</MessageBarTitle>
             {error}
@@ -363,7 +368,7 @@ export default function UsagePage() {
             selectedOptions={featureFilter ? [featureFilter] : []}
             disabled={loading || featureOptions.length === 0}
             onOptionSelect={(_, d2) => setFeatureFilter(d2.optionValue === '__all__' ? null : (d2.optionValue ?? null))}
-            style={{ minWidth: 180 }}
+            className={s.featureSelect}
           >
             <Option value="__all__" text="All features">All features</Option>
             {featureOptions.map((f) => (
@@ -609,7 +614,7 @@ export default function UsagePage() {
                   {embed.hint?.bicepStatus && (
                     <MessageBarActions>
                       <FluentLink href="https://learn.microsoft.com/azure/managed-grafana/" target="_blank">
-                        <Open24Regular style={{ fontSize: 14, verticalAlign: 'middle' }} /> Managed Grafana docs
+                        <Open24Regular className={s.docIcon} /> Managed Grafana docs
                       </FluentLink>
                     </MessageBarActions>
                   )}

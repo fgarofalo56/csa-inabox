@@ -24,6 +24,7 @@
  * no-op) so the editor can surface an honest infra gate.
  */
 
+import { fetchWithTimeout } from '@/lib/azure/fetch-with-timeout';
 import {
   ChainedTokenCredential,
   ManagedIdentityCredential,
@@ -145,11 +146,11 @@ export async function ensureDataProductsIndex(): Promise<{ created: boolean; ok:
     const svc = serviceName();
     const tok = await searchToken();
     const base = serviceBase(svc);
-    const get = await fetch(`${base}/indexes/${DATA_PRODUCTS_INDEX}?api-version=${SEARCH_API}`, {
+    const get = await fetchWithTimeout(`${base}/indexes/${DATA_PRODUCTS_INDEX}?api-version=${SEARCH_API}`, {
       headers: { authorization: `Bearer ${tok}` },
     });
     if (get.status === 200) return { created: false, ok: true };
-    const put = await fetch(`${base}/indexes/${DATA_PRODUCTS_INDEX}?api-version=${SEARCH_API}`, {
+    const put = await fetchWithTimeout(`${base}/indexes/${DATA_PRODUCTS_INDEX}?api-version=${SEARCH_API}`, {
       method: 'PUT',
       headers: { authorization: `Bearer ${tok}`, 'content-type': 'application/json' },
       body: JSON.stringify({ name: DATA_PRODUCTS_INDEX, ...DATA_PRODUCTS_INDEX_DEFINITION }),
@@ -172,7 +173,7 @@ export async function upsertDataProductDoc(doc: DataProductDoc): Promise<void> {
     const tok = await searchToken();
     // Ensure the index exists on first write (cheap GET when it already does).
     await ensureDataProductsIndex();
-    await fetch(`${serviceBase(svc)}/indexes/${DATA_PRODUCTS_INDEX}/docs/index?api-version=${SEARCH_API}`, {
+    await fetchWithTimeout(`${serviceBase(svc)}/indexes/${DATA_PRODUCTS_INDEX}/docs/index?api-version=${SEARCH_API}`, {
       method: 'POST',
       headers: { authorization: `Bearer ${tok}`, 'content-type': 'application/json' },
       body: JSON.stringify({ value: [{ '@search.action': 'mergeOrUpload', ...doc }] }),
@@ -188,7 +189,7 @@ export async function deleteDataProductDoc(id: string): Promise<void> {
   try {
     const svc = serviceName();
     const tok = await searchToken();
-    await fetch(`${serviceBase(svc)}/indexes/${DATA_PRODUCTS_INDEX}/docs/index?api-version=${SEARCH_API}`, {
+    await fetchWithTimeout(`${serviceBase(svc)}/indexes/${DATA_PRODUCTS_INDEX}/docs/index?api-version=${SEARCH_API}`, {
       method: 'POST',
       headers: { authorization: `Bearer ${tok}`, 'content-type': 'application/json' },
       body: JSON.stringify({ value: [{ '@search.action': 'delete', id }] }),
@@ -253,7 +254,7 @@ export async function searchDataProducts(opts: DataProductSearchOpts): Promise<D
   };
   if (orderBy) body.orderby = orderBy;
 
-  const res = await fetch(`${serviceBase(svc)}/indexes/${DATA_PRODUCTS_INDEX}/docs/search?api-version=${SEARCH_API}`, {
+  const res = await fetchWithTimeout(`${serviceBase(svc)}/indexes/${DATA_PRODUCTS_INDEX}/docs/search?api-version=${SEARCH_API}`, {
     method: 'POST',
     headers: { authorization: `Bearer ${tok}`, 'content-type': 'application/json' },
     body: JSON.stringify(body),

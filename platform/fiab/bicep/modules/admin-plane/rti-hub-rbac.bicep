@@ -25,11 +25,30 @@ param consolePrincipalId string
 @description('When true, skip the role grant (e.g. re-deploy where RBAC already exists or the deployer lacks User Access Administrator).')
 param skipRoleGrants bool = false
 
+@description('When true, additionally grant the Console UAMI Contributor at this subscription scope so the Real-Time Hub "Connect a source" dialog can CREATE-IF-MISSING event hubs / consumer groups in ANY discovered namespace (not just the env-pinned one). Reader (always granted) only lights up the discovery dropdowns; create needs Contributor. Default false — create-if-missing then works against the env-pinned namespace, which already has a namespace-scoped Contributor grant via landing-zone/eventhubs.bicep.')
+param grantSubscriptionContributor bool = false
+
 // Reader - acdd72a7-3385-48ef-bd42-f606fba81ae7
 resource rtiHubArgReader 'Microsoft.Authorization/roleAssignments@2022-04-01' = if (!empty(consolePrincipalId) && !skipRoleGrants) {
   name: guid(subscription().id, consolePrincipalId, 'rti-hub-arg-reader')
   properties: {
     roleDefinitionId: subscriptionResourceId('Microsoft.Authorization/roleDefinitions', 'acdd72a7-3385-48ef-bd42-f606fba81ae7')
+    principalId: consolePrincipalId
+    principalType: 'ServicePrincipal'
+  }
+}
+
+// Contributor (subscription scope, OPT-IN) - b24988ac-6180-42a0-ab88-20f7382dd24c
+// Powers the connect dialog's "+ Create new…" affordance (POST /api/realtime-hub/provision)
+// against arbitrary discovered Event Hubs / IoT Hub namespaces cross-subscription.
+// Off by default (least privilege): the env-pinned namespace already has a
+// namespace-scoped Contributor grant, so create-if-missing works there without
+// this broad grant. Flip on only when operators need to create resources in
+// namespaces outside the Loom landing-zone RG.
+resource rtiHubCreateContributor 'Microsoft.Authorization/roleAssignments@2022-04-01' = if (!empty(consolePrincipalId) && !skipRoleGrants && grantSubscriptionContributor) {
+  name: guid(subscription().id, consolePrincipalId, 'rti-hub-create-contributor')
+  properties: {
+    roleDefinitionId: subscriptionResourceId('Microsoft.Authorization/roleDefinitions', 'b24988ac-6180-42a0-ab88-20f7382dd24c')
     principalId: consolePrincipalId
     principalType: 'ServicePrincipal'
   }

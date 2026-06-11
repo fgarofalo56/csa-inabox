@@ -25,6 +25,7 @@
  *
  * No mocks. Every call hits real Graph REST.
  */
+import { fetchWithTimeout } from '@/lib/azure/fetch-with-timeout';
 import { ChainedTokenCredential, DefaultAzureCredential, ManagedIdentityCredential } from '@azure/identity';
 import { graphBase, graphScope } from './cloud-endpoints';
 
@@ -84,7 +85,7 @@ function permHint(status: number): string | undefined {
 async function graphFetch(path: string, init?: RequestInit): Promise<any> {
   const token = await graphToken();
   const url = path.startsWith('http') ? path : `${graphBase()}${path}`;
-  const res = await fetch(url, {
+  const res = await fetchWithTimeout(url, {
     ...init,
     headers: {
       authorization: `Bearer ${token}`,

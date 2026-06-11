@@ -27,6 +27,7 @@
  * lacks the Logic App Contributor role the create / run surfaces a precise
  * 401/403 remediation gate (the workflow itself, if it was created, is real).
  */
+import { fetchWithTimeout } from '@/lib/azure/fetch-with-timeout';
 import {
   DefaultAzureCredential,
   ManagedIdentityCredential,
@@ -103,7 +104,7 @@ function workflowUrl(cfg: LogicAppArmConfig, name: string): string {
 export async function callLogicArm(url: string, init?: RequestInit): Promise<Response> {
   const t = await credential.getToken(ARM_SCOPE);
   if (!t?.token) throw new LogicAppError(401, undefined, 'Failed to acquire ARM token');
-  return fetch(url, {
+  return fetchWithTimeout(url, {
     ...init,
     headers: {
       ...(init?.headers || {}),

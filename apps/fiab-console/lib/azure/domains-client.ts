@@ -26,13 +26,16 @@
  *                  DomainsBackendGateError if backend=fabric
  */
 
+import { fetchWithTimeout } from '@/lib/azure/fetch-with-timeout';
 import { governanceDomainsContainer } from './cosmos-client';
 import {
   createBusinessDomain,
   updateBusinessDomain,
   deleteBusinessDomain,
+  domainCollectionName,
   isPurviewConfigured,
 } from './purview-client';
+import { validateDomainMove } from './domain-hierarchy';
 import {
   ChainedTokenCredential,
   DefaultAzureCredential,
@@ -75,6 +78,15 @@ export interface LoomDomain {
   parentDomainId?: string;
   purviewCollectionId?: string;
   fabricDomainId?: string;
+  /**
+   * Unity Catalog mirror coordinates (Azure-native governance back-end). A root
+   * domain maps to a UC CATALOG, a subdomain to a UC SCHEMA under the parent's
+   * catalog. Populated best-effort by the unified-domain mapper; absent when
+   * Databricks is unconfigured (no hard dependency).
+   */
+  unityCatalogName?: string;
+  unityWorkspaceHost?: string;
+  unitySchemas?: string[];
   createdAt: string;
   createdBy: string;
   updatedAt?: string;
@@ -107,6 +119,20 @@ export interface DomainStore {
     who: string,
   ): Promise<LoomDomain>;
   deleteDomain(tenantId: string, id: string): Promise<void>;
+  /**
+   * Reparent a domain (move it under `newParentId`, or to root when undefined).
+   * Cosmos is authoritative; the Purview collection mirror is reparented
+   * best-effort. Unity Catalog has NO move operation (a catalog is top-level; a
+   * schema can't change catalogs), so a UC mirror keeps its mapping — the
+   * unified mapper surfaces that honestly. The Fabric Admin adapter throws
+   * (Fabric Admin REST has no move-domain endpoint).
+   */
+  moveDomain(
+    tenantId: string,
+    id: string,
+    newParentId: string | undefined,
+    who: string,
+  ): Promise<LoomDomain>;
   assignWorkspaces(
     tenantId: string,
     domainId: string,
@@ -218,6 +244,54 @@ export const cosmosDomainStore: DomainStore = {
     await c.item(id, tenantId).delete();
   },
 
+  async moveDomain(tenantId, id, newParentId, who) {
+    const c = await governanceDomainsContainer();
+    const { resource } = await c.item(id, tenantId).read<LoomDomain>();
+    if (!resource) {
+      const err: any = new Error(`Domain '${id}' not found`);
+      err.status = 404;
+      throw err;
+    }
+    // Enforce the SAME two-level hierarchy invariants as PATCH /api/admin/domains
+    // (self-parent, missing target, cycle, two-level cap). Load the tenant's
+    // domains so the target + descendant chain can be checked — without this the
+    // governance move path could corrupt the tree and break the unified mapper's
+    // root-vs-subdomain (catalog-vs-schema) determination.
+    const all = await this.listDomains(tenantId);
+    const moveErr = validateDomainMove(
+      all.map((d) => ({ id: d.id, parentId: d.parentDomainId })),
+      id,
+      newParentId,
+    );
+    if (moveErr) {
+      const err: any = new Error(moveErr.message);
+      err.status = moveErr.status;
+      throw err;
+    }
+    const moved: LoomDomain = {
+      ...resource,
+      parentDomainId: newParentId,
+      updatedAt: new Date().toISOString(),
+      updatedBy: who,
+    };
+    // Best-effort Purview collection reparent (idempotent PUT re-asserts the new
+    // parentCollection). Never blocks the Cosmos write — Purview is optional and
+    // there is NO Fabric dependency on this path.
+    if (isPurviewConfigured() && moved.purviewCollectionId) {
+      try {
+        await updateBusinessDomain(moved.purviewCollectionId, {
+          name: moved.name,
+          description: moved.description,
+          parentId: newParentId ? domainCollectionName(newParentId) : undefined,
+        });
+      } catch {
+        /* Non-fatal. */
+      }
+    }
+    await c.item(id, tenantId).replace(moved);
+    return moved;
+  },
+
   async assignWorkspaces(tenantId, domainId, workspaceIds) {
     // Cosmos-native: patch each workspace doc to set domain = domainId.
     // Import lazily to avoid any circular-init ordering concerns.
@@ -265,7 +339,7 @@ async function fabricAdminFetch(path: string, opts: RequestInit = {}): Promise<R
   // the API returns 400. (MS Learn: "Domains - Create Domain".)
   const base = FABRIC_BASE.replace(/\/+$/, '');
   const url = `${base}/admin${path}?preview=false`;
-  return fetch(url, {
+  return fetchWithTimeout(url, {
     ...opts,
     headers: {
       Authorization: `Bearer ${token.token}`,
@@ -361,6 +435,20 @@ export const fabricAdminDomainStore: DomainStore = {
     if (!res.ok && res.status !== 404) {
       throw new Error(`Fabric Admin deleteDomain failed: ${res.status}`);
     }
+  },
+
+  async moveDomain(_tenantId, _id, _newParentId, _who): Promise<LoomDomain> {
+    // The Fabric Admin Domains REST API has NO move/reparent endpoint — PATCH
+    // /v1/admin/domains/{id} only accepts displayName/description (MS Learn:
+    // "Domains - Update Domain"). Surface that honestly rather than faking it.
+    // (Cosmos is the default backend and DOES support move; this only fires when
+    // LOOM_DOMAINS_BACKEND=fabric is explicitly opted in.)
+    const err: any = new Error(
+      'Moving a domain is not supported by the Fabric Admin backend (no reparent endpoint). ' +
+        'Use the default Cosmos backend (unset LOOM_DOMAINS_BACKEND) to reparent domains.',
+    );
+    err.status = 501;
+    throw err;
   },
 
   async assignWorkspaces(_tenantId, domainId, workspaceIds) {

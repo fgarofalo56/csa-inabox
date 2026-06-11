@@ -17,6 +17,7 @@
  * from a real ADF WranglingDataFlow run (Save & Run), exactly like a ribbon step.
  */
 
+import { fetchWithTimeout } from '@/lib/azure/fetch-with-timeout';
 import { cogScope } from './cloud-endpoints';
 import type { AoaiTarget } from './copilot-orchestrator';
 import { DATAFLOW_COPILOT_PERSONA } from './copilot-personas-dataflow';
@@ -148,7 +149,7 @@ async function chat(target: AoaiTarget, messages: ChatMessage[], jsonObject: boo
   if (jsonObject) base.response_format = { type: 'json_object' };
 
   const send = (withTemperature: boolean, withJson: boolean) =>
-    fetch(url, {
+    fetchWithTimeout(url, {
       method: 'POST',
       headers: { authorization: `Bearer ${token}`, 'content-type': 'application/json' },
       body: JSON.stringify({

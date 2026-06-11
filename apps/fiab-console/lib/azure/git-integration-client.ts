@@ -1,3 +1,4 @@
+import { fetchWithTimeout } from '@/lib/azure/fetch-with-timeout';
 /**
  * Git integration client — real commit / pull / status against Azure DevOps
  * Repos (REST API 7.1) or GitHub (REST API v3). Mirrors Fabric's Git
@@ -379,13 +380,13 @@ export async function getHeadSha(config: GitRepoConfig, pat: string): Promise<st
     const url = `${adoApiBase(config.repoHost)}/${org}/${encodeURIComponent(project)}/_apis/git/repositories/${encodeURIComponent(
       repo,
     )}/refs?filter=${encodeURIComponent(`heads/${config.branch}`)}&api-version=7.1`;
-    const res = await fetch(url, { headers: { authorization: adoAuthHeader(pat) }, cache: 'no-store' });
+    const res = await fetchWithTimeout(url, { headers: { authorization: adoAuthHeader(pat) }, cache: 'no-store' });
     const j = await jsonOrThrow(res, 'ADO get-ref');
     return j?.value?.[0]?.objectId ?? null;
   }
   const { owner, repo } = parseGitHubPath(config.repoPath);
   const url = `${githubApiBase()}/repos/${owner}/${repo}/git/ref/${encodeURIComponent(`heads/${config.branch}`)}`;
-  const res = await fetch(url, {
+  const res = await fetchWithTimeout(url, {
     headers: { authorization: githubAuthHeader(pat), accept: 'application/vnd.github+json' },
     cache: 'no-store',
   });
@@ -408,7 +409,7 @@ export async function listRepoFiles(config: GitRepoConfig, pat: string): Promise
       `${adoApiBase(config.repoHost)}/${org}/${encodeURIComponent(project)}/_apis/git/repositories/${encodeURIComponent(repo)}/items` +
       `?scopePath=${encodeURIComponent(scope)}&recursionLevel=Full` +
       `&versionDescriptor.versionType=Branch&versionDescriptor.version=${encodeURIComponent(config.branch)}&api-version=7.1`;
-    const res = await fetch(url, { headers: { authorization: adoAuthHeader(pat) }, cache: 'no-store' });
+    const res = await fetchWithTimeout(url, { headers: { authorization: adoAuthHeader(pat) }, cache: 'no-store' });
     if (res.status === 404) return [];
     const j = await jsonOrThrow(res, 'ADO list-items');
     return (j?.value || [])
@@ -419,7 +420,7 @@ export async function listRepoFiles(config: GitRepoConfig, pat: string): Promise
   if (!head) return [];
   const { owner, repo } = parseGitHubPath(config.repoPath);
   const url = `${githubApiBase()}/repos/${owner}/${repo}/git/trees/${head}?recursive=1`;
-  const res = await fetch(url, {
+  const res = await fetchWithTimeout(url, {
     headers: { authorization: githubAuthHeader(pat), accept: 'application/vnd.github+json' },
     cache: 'no-store',
   });
@@ -437,7 +438,7 @@ export async function getFileContent(config: GitRepoConfig, pat: string, filePat
       `${adoApiBase(config.repoHost)}/${org}/${encodeURIComponent(project)}/_apis/git/repositories/${encodeURIComponent(repo)}/items` +
       `?path=${encodeURIComponent('/' + filePath.replace(/^\//, ''))}&includeContent=true` +
       `&versionDescriptor.versionType=Branch&versionDescriptor.version=${encodeURIComponent(config.branch)}&api-version=7.1`;
-    const res = await fetch(url, {
+    const res = await fetchWithTimeout(url, {
       headers: { authorization: adoAuthHeader(pat), accept: 'application/json' },
       cache: 'no-store',
     });
@@ -450,7 +451,7 @@ export async function getFileContent(config: GitRepoConfig, pat: string, filePat
     .split('/')
     .map(encodeURIComponent)
     .join('/')}?ref=${encodeURIComponent(config.branch)}`;
-  const res = await fetch(url, {
+  const res = await fetchWithTimeout(url, {
     headers: { authorization: githubAuthHeader(pat), accept: 'application/vnd.github+json' },
     cache: 'no-store',
   });
@@ -509,7 +510,7 @@ async function commitItemsAdo(config: GitRepoConfig, pat: string, files: Seriali
   const url = `${adoApiBase(config.repoHost)}/${org}/${encodeURIComponent(project)}/_apis/git/repositories/${encodeURIComponent(
     repo,
   )}/pushes?api-version=7.1`;
-  const res = await fetch(url, {
+  const res = await fetchWithTimeout(url, {
     method: 'POST',
     headers: { authorization: adoAuthHeader(pat), 'content-type': 'application/json' },
     body: JSON.stringify(body),
@@ -535,7 +536,7 @@ async function commitItemsGitHub(
   // base_tree from the head commit's tree, if the branch exists.
   let baseTree: string | undefined;
   if (head) {
-    const cres = await fetch(`${base}/repos/${owner}/${repo}/git/commits/${head}`, { headers: h, cache: 'no-store' });
+    const cres = await fetchWithTimeout(`${base}/repos/${owner}/${repo}/git/commits/${head}`, { headers: h, cache: 'no-store' });
     const cj = await jsonOrThrow(cres, 'GitHub get-commit');
     baseTree = cj?.tree?.sha;
   }
@@ -543,7 +544,7 @@ async function commitItemsGitHub(
   // Blobs.
   const tree: any[] = [];
   for (const f of files) {
-    const bres = await fetch(`${base}/repos/${owner}/${repo}/git/blobs`, {
+    const bres = await fetchWithTimeout(`${base}/repos/${owner}/${repo}/git/blobs`, {
       method: 'POST',
       headers: h,
       body: JSON.stringify({ content: f.content, encoding: 'utf-8' }),
@@ -554,7 +555,7 @@ async function commitItemsGitHub(
   }
 
   // Tree.
-  const tres = await fetch(`${base}/repos/${owner}/${repo}/git/trees`, {
+  const tres = await fetchWithTimeout(`${base}/repos/${owner}/${repo}/git/trees`, {
     method: 'POST',
     headers: h,
     body: JSON.stringify({ ...(baseTree ? { base_tree: baseTree } : {}), tree }),
@@ -563,7 +564,7 @@ async function commitItemsGitHub(
   const tj = await jsonOrThrow(tres, 'GitHub create-tree');
 
   // Commit.
-  const cmres = await fetch(`${base}/repos/${owner}/${repo}/git/commits`, {
+  const cmres = await fetchWithTimeout(`${base}/repos/${owner}/${repo}/git/commits`, {
     method: 'POST',
     headers: h,
     body: JSON.stringify({
@@ -579,7 +580,7 @@ async function commitItemsGitHub(
 
   // Ref update (or create on first push to a new branch).
   if (head) {
-    const rres = await fetch(`${base}/repos/${owner}/${repo}/git/refs/${encodeURIComponent(`heads/${config.branch}`)}`, {
+    const rres = await fetchWithTimeout(`${base}/repos/${owner}/${repo}/git/refs/${encodeURIComponent(`heads/${config.branch}`)}`, {
       method: 'PATCH',
       headers: h,
       body: JSON.stringify({ sha: newSha, force: false }),
@@ -587,7 +588,7 @@ async function commitItemsGitHub(
     });
     await jsonOrThrow(rres, 'GitHub update-ref');
   } else {
-    const rres = await fetch(`${base}/repos/${owner}/${repo}/git/refs`, {
+    const rres = await fetchWithTimeout(`${base}/repos/${owner}/${repo}/git/refs`, {
       method: 'POST',
       headers: h,
       body: JSON.stringify({ ref: `refs/heads/${config.branch}`, sha: newSha }),

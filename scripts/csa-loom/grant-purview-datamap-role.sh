@@ -30,15 +30,27 @@
 set -uo pipefail
 
 PURVIEW_ACCOUNT="${PURVIEW_ACCOUNT:-${LOOM_PURVIEW_ACCOUNT:-purview-csa-loom-eastus2}}"
-# Normalize a pasted URL / -api host down to the short account name.
-PURVIEW_ACCOUNT="$(echo "$PURVIEW_ACCOUNT" | sed -E 's#^https?://##; s#-api\.purview\.azure\.com.*$##; s#\.purview\.azure\.com.*$##; s#/+$##')"
+# Normalize a pasted URL / -api host (Commercial .com OR US Gov .us) down to the
+# short account name.
+PURVIEW_ACCOUNT="$(echo "$PURVIEW_ACCOUNT" | sed -E 's#^https?://##; s#-api\.purview\.azure\.(com|us).*$##; s#\.purview\.azure\.(com|us).*$##; s#/+$##')"
 
 # Console UAMI principal (object) id — the identity the BFF runs as.
 UAMI_PRINCIPAL="${CONSOLE_UAMI_PRINCIPAL:-${UAMI_PRINCIPAL:-e61f3eb3-c646-4183-8198-4c4a34cd9a01}}"
 ROLE="${ROLE:-data-curator}"   # data-curator | data-reader | data-source-administrator | collection-administrator
 API_VERSION="2021-07-01"
 RESOURCE="https://purview.azure.net"
-BASE="https://${PURVIEW_ACCOUNT}.purview.azure.com"
+# Per-cloud Data Map host TLD: `.us` in the US Government clouds (GCC-High / IL5 /
+# DoD — all AzureUSGovernment), `.com` everywhere else. Mirrors purviewBase()'s
+# isGovCloud() switch in apps/fiab-console/lib/azure/purview-client.ts so the
+# grant targets the SAME host the Console probes. Drive off PURVIEW_CLOUD, else
+# the standard LOOM_CLOUD / AZURE_CLOUD signals. The token audience (RESOURCE)
+# stays https://purview.azure.net in ALL clouds — only the endpoint host changes.
+PURVIEW_CLOUD="${PURVIEW_CLOUD:-${LOOM_CLOUD:-${AZURE_CLOUD:-AzureCloud}}}"
+case "$(echo "$PURVIEW_CLOUD" | tr '[:upper:]' '[:lower:]')" in
+  *usgov*|*government*|*gcc-high*|*gcchigh*|*il5*|*dod*) PURVIEW_TLD="us" ;;
+  *) PURVIEW_TLD="com" ;;
+esac
+BASE="https://${PURVIEW_ACCOUNT}.purview.azure.${PURVIEW_TLD}"
 ROLE_SUFFIX="purviewmetadatarole_builtin_${ROLE}"
 
 echo "== CSA Loom — Purview classic Data Map role grant =="

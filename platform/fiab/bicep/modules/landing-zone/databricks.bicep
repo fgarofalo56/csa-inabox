@@ -133,6 +133,16 @@ output workspaceName string = workspace.name
 output ucSupported bool = ucSupported
 output managedRgId string = workspace.properties.managedResourceGroupId
 
+// Numeric Databricks workspace id (e.g. 7405613013893759) — what the Databricks
+// ACCOUNT API uses to assign a Unity Catalog metastore
+// (PUT /accounts/{id}/workspaces/{workspaceNumericId}/metastore). Consumed by
+// databricks-uc-bootstrap.bicep so UC is configured by default.
+output workspaceNumericId string = string(workspace.properties.workspaceId)
+
+// Bare workspace REST host (no scheme) — the UC default-catalog create call uses
+// this against the WORKSPACE UC REST 2.1. Consumed by databricks-uc-bootstrap.bicep.
+output workspaceHost string = workspace.properties.workspaceUrl
+
 // Access Connector system-assigned MI principal id — empty when UC is not
 // supported (connector skipped). Consumed by databricks-storage-rbac.bicep to
 // grant Storage Blob Data Contributor on the lakehouse ADLS account.

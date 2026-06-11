@@ -22,7 +22,9 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { getSession } from '@/lib/auth/session';
 import { tenantSettingsContainer } from '@/lib/azure/cosmos-client';
-import type { PlanSubscription } from '@/lib/components/deploy-planner/types';
+import type { PlanSubscription, ServiceConfig } from '@/lib/components/deploy-planner/types';
+import { configFor, coerceConfigValue } from '@/lib/components/deploy-planner/service-catalog';
+import { pruneEdges } from '@/lib/components/deploy-planner/plan-validation';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -94,9 +96,31 @@ export async function GET() {
   }
 }
 
+/**
+ * Validate one service's stored config against the catalog schema: drop unknown
+ * keys and coerce each value through the SAME gate the UI uses (so a value the
+ * bicep module's @allowed / @minValue would reject never reaches Cosmos and so
+ * never reaches the exported bicepparam).
+ */
+function sanitizeServiceConfigs(raw: unknown): Record<string, ServiceConfig> | undefined {
+  if (!raw || typeof raw !== 'object') return undefined;
+  const out: Record<string, ServiceConfig> = {};
+  for (const [key, val] of Object.entries(raw as Record<string, unknown>)) {
+    const fields = configFor(key);
+    if (!fields.length || !val || typeof val !== 'object') continue;
+    const cfg: ServiceConfig = {};
+    for (const field of fields) {
+      const coerced = coerceConfigValue(field, (val as Record<string, unknown>)[field.key]);
+      if (coerced !== undefined) cfg[field.key] = coerced;
+    }
+    if (Object.keys(cfg).length) out[key] = cfg;
+  }
+  return Object.keys(out).length ? out : undefined;
+}
+
 function sanitize(subs: unknown): PlanSubscription[] {
   if (!Array.isArray(subs)) return [];
-  return subs.slice(0, 50).map((raw: any, i): PlanSubscription => ({
+  const clean: PlanSubscription[] = subs.slice(0, 50).map((raw: any, i): PlanSubscription => ({
     id: String(raw?.id || `sub-${i + 1}`).slice(0, 80),
     name: String(raw?.name || `Subscription ${i + 1}`).slice(0, 120),
     boundary: ['Commercial', 'GCC-High', 'GCC', 'IL5'].includes(raw?.boundary) ? raw.boundary : 'Commercial',
@@ -106,7 +130,18 @@ function sanitize(subs: unknown): PlanSubscription[] {
       name: String(d?.name || d?.domainId || '').slice(0, 120),
       services: Array.isArray(d?.services) ? d.services.map((x: any) => String(x)).slice(0, 64) : [],
     })) : [],
+    serviceConfigs: sanitizeServiceConfigs(raw?.serviceConfigs),
+    edges: Array.isArray(raw?.edges)
+      ? raw.edges.slice(0, 200).map((e: any) => ({ from: String(e?.from || ''), to: String(e?.to || '') }))
+      : [],
   }));
+  // Prune edges against the cleaned plan so persisted edges always point at
+  // real service nodes (drops stale/duplicate/self edges).
+  for (const sub of clean) {
+    const pruned = pruneEdges(clean, sub.edges);
+    sub.edges = pruned.length ? pruned : undefined;
+  }
+  return clean;
 }
 
 export async function PUT(req: NextRequest) {

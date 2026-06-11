@@ -13,6 +13,7 @@
  * still appears (isDiscoverable) with a Request-Access CTA instead of "Open".
  */
 
+import { clientFetch } from '@/lib/client-fetch';
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import {
   Badge, Caption1, Body1, Input, Button, Title3,
@@ -145,7 +146,7 @@ export default function GovernanceCatalogPage() {
     if (!selected) return;
     setReqBusy(true); setReqResult(null);
     try {
-      const r = await fetch('/api/catalog/request-access', {
+      const r = await clientFetch('/api/catalog/request-access', {
         method: 'POST', headers: { 'content-type': 'application/json' },
         body: JSON.stringify({
           assetId: selected.id, assetName: selected.displayName, itemType: selected.itemType,
@@ -161,7 +162,7 @@ export default function GovernanceCatalogPage() {
 
   // Live tenant domains for the domain scope selector (Cosmos-backed).
   useEffect(() => {
-    fetch('/api/admin/domains')
+    clientFetch('/api/admin/domains')
       .then((r) => r.json())
       .then((j) => { if (j?.ok) setDomains((j.domains || []).map((d: any) => ({ id: d.id, name: d.name }))); })
       .catch(() => {});
@@ -176,7 +177,7 @@ export default function GovernanceCatalogPage() {
       if (domainFilter) params.set('domain', domainFilter);
       if (endorsementFilter) params.set('endorsement', endorsementFilter);
       if (sensitivityFilter) params.set('sensitivity', sensitivityFilter);
-      const r = await fetch(`/api/governance/catalog?${params.toString()}`);
+      const r = await clientFetch(`/api/governance/catalog?${params.toString()}`);
       const j = await r.json();
       if (!j.ok) { setError(j.error || 'failed'); return; }
       setAssets(j.assets || []);
@@ -193,7 +194,7 @@ export default function GovernanceCatalogPage() {
   const reindex = useCallback(async () => {
     setReindexBusy(true); setReindexMsg(null);
     try {
-      const r = await fetch('/api/admin/governance-catalog/reindex', { method: 'POST' });
+      const r = await clientFetch('/api/admin/governance-catalog/reindex', { method: 'POST' });
       const j = await r.json();
       if (j.ok) {
         setReindexMsg({ ok: true, text: `Indexed ${j.indexed} asset${j.indexed === 1 ? '' : 's'}${j.indexCreated ? ' (index created)' : ''}.` });

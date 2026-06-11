@@ -18,6 +18,7 @@
  *   - enableSqlServer2025Features(server, db)             — runs SET options for JSON_AGG / regex / vector (no-op on SQL Server 2022 or older — caller gets a MessageBar).
  */
 
+import { fetchWithTimeout } from '@/lib/azure/fetch-with-timeout';
 import { ChainedTokenCredential, DefaultAzureCredential, ManagedIdentityCredential } from '@azure/identity';
 import sql from 'mssql';
 import { armBase, getSqlSuffix } from './cloud-endpoints';
@@ -66,7 +67,7 @@ async function armToken(): Promise<string> {
 async function armRequest<T = any>(path: string, init: RequestInit = {}): Promise<T> {
   const token = await armToken();
   const url = `${arm()}${path}`;
-  const res = await fetch(url, {
+  const res = await fetchWithTimeout(url, {
     ...init,
     headers: {
       'authorization': `Bearer ${token}`,
@@ -763,7 +764,7 @@ async function pollScaleLro(url: string | null, token: string, timeoutMs = 600_0
   while (Date.now() < deadline) {
     let res: Response;
     try {
-      res = await fetch(url, { headers: { authorization: `Bearer ${token}` }, cache: 'no-store' });
+      res = await fetchWithTimeout(url, { headers: { authorization: `Bearer ${token}` }, cache: 'no-store' });
     } catch {
       return undefined; // transient — caller re-GETs the resource for the real state
     }
@@ -822,7 +823,7 @@ export async function scaleDatabase(spec: ScaleDatabaseSpec): Promise<ScaleDatab
 
   // 3. PATCH via raw fetch so we can read the LRO headers (armRequest discards them).
   const token = await armToken();
-  const patchRes = await fetch(`${arm()}${dbPath}`, {
+  const patchRes = await fetchWithTimeout(`${arm()}${dbPath}`, {
     method: 'PATCH',
     headers: {
       authorization: `Bearer ${token}`,

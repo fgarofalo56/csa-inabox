@@ -14,8 +14,9 @@
 import { NextResponse } from 'next/server';
 import { getSession } from '@/lib/auth/session';
 import {
-  listPrivateEndpoints, listPrivateDnsZones, listVirtualNetworks, buildHostsBlock,
-  NetworkDiscoveryError, type PrivateDnsZoneInfo, type VNetInfo,
+  listPrivateEndpoints, listPrivateDnsZones, listVirtualNetworks, listNetworkSecurityGroups,
+  buildHostsBlock,
+  NetworkDiscoveryError, type PrivateDnsZoneInfo, type VNetInfo, type NsgInfo,
 } from '@/lib/azure/network-discovery';
 
 export const runtime = 'nodejs';
@@ -33,8 +34,10 @@ export async function GET() {
     // are best-effort: a missing Reader on these scopes never blanks the PEs.
     let dnsZones: PrivateDnsZoneInfo[] = [];
     let vnets: VNetInfo[] = [];
+    let nsgs: NsgInfo[] = [];
     try { dnsZones = await listPrivateDnsZones(); } catch { /* keep PE-derived hosts */ }
     try { vnets = await listVirtualNetworks(); } catch { /* topology degrades gracefully */ }
+    try { nsgs = await listNetworkSecurityGroups(); } catch { /* topology omits NSG nodes */ }
 
     const hostsBlock = buildHostsBlock(endpoints, dnsZones);
     // Union of zone names from PE records + the discovered private DNS zones.
@@ -50,6 +53,7 @@ export async function GET() {
       zones,
       dnsZones,
       vnets,
+      nsgs,
       hostsBlock: hostsBlock.split('\n').length > 1 ? hostsBlock : '',
     });
   } catch (e: any) {

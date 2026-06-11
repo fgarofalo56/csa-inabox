@@ -28,6 +28,9 @@ param consolePrincipalId string = ''
 @description('Skip role-assignment grants — set true when re-provisioning an environment that already has the grants, to avoid RoleAssignmentExists.')
 param skipRoleGrants bool = false
 
+@description('Allow App Insights telemetry ingestion over the public endpoint. MUST stay true on the default (Commercial / GCC) deploy: the Console orchestrator (emitCopilotUsage) and the copilot-chat Function POST copilot.usage / chat.request custom events to the connection string IngestionEndpoint (*.in.applicationinsights.azure[.us]). With this Disabled and no Azure Monitor Private Link Scope (AMPLS) wired, every custom event is silently dropped — the AppEvents table is never created and the /admin Copilot usage panel can never leave the no-events state. Set false ONLY in a boundary where a separately-provisioned AMPLS + private endpoint carries ingestion privately.')
+param publicIngestionEnabled bool = true
+
 // =====================================================================
 // Log Analytics Workspace
 // =====================================================================
@@ -90,7 +93,12 @@ resource appInsights 'Microsoft.Insights/components@2020-02-02' = {
     Application_Type: 'web'
     WorkspaceResourceId: law.id
     IngestionMode: 'LogAnalytics'
-    publicNetworkAccessForIngestion: 'Disabled'
+    // Ingestion MUST be reachable for custom events (copilot.usage, chat.request,
+    // loom-audit) to land in the LAW. Previously hard-Disabled with no AMPLS,
+    // which silently dropped all telemetry and left the Copilot usage panel
+    // permanently empty. Defaults to Enabled; flip the param only with a real
+    // AMPLS in place. Query stays Enabled so the Console UAMI can read the LAW.
+    publicNetworkAccessForIngestion: publicIngestionEnabled ? 'Enabled' : 'Disabled'
     publicNetworkAccessForQuery: 'Enabled'
   }
 }

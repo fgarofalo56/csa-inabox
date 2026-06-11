@@ -29,6 +29,7 @@ import {
   ChainedTokenCredential,
 } from '@azure/identity';
 import { armBase, armScope } from './cloud-endpoints';
+import { fetchWithTimeout } from './fetch-with-timeout';
 
 const ARM_SCOPE = armScope();
 const KUSTO_API = '2023-08-15';
@@ -86,7 +87,7 @@ function clusterUrl(cfg: KustoClusterArmConfig): string {
 async function callArm(url: string, init?: RequestInit): Promise<Response> {
   const t = await credential.getToken(ARM_SCOPE);
   if (!t?.token) throw new KustoArmError(401, undefined, 'Failed to acquire ARM token');
-  return fetch(url, {
+  return fetchWithTimeout(url, {
     ...init,
     headers: {
       ...(init?.headers || {}),

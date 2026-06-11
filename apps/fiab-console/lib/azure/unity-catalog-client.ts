@@ -28,6 +28,7 @@
  * No mocks. No `return []` placeholders. Every export hits api.azuredatabricks
  * or throws `UnityCatalogError` with status + body + endpoint.
  */
+import { fetchWithTimeout } from '@/lib/azure/fetch-with-timeout';
 import {
   ChainedTokenCredential,
   DefaultAzureCredential,
@@ -108,6 +109,46 @@ export function listWorkspaceHostnames(): string[] {
   });
 }
 
+/**
+ * Resolve the full federation hostname set: the env-configured hosts UNIONed
+ * with every workspace persisted in the `metastore-registrations` Cosmos
+ * container. This is what makes a registration **survive a Console reload**
+ * without a bicep flip of `LOOM_DATABRICKS_HOSTNAMES` — the operator registers
+ * a workspace, it lands in Cosmos, and every subsequent federation read picks
+ * it up automatically.
+ *
+ * The Cosmos read is best-effort: if Cosmos is unreachable (or the env var that
+ * names it is unset), we silently fall back to the env hosts so a Cosmos outage
+ * degrades gracefully rather than blanking the catalog. Likewise, if neither
+ * env hosts NOR persisted rows exist, the env-only `listWorkspaceHostnames()`
+ * throws the structured NotConfigured gate.
+ */
+export async function resolveWorkspaceHostnames(): Promise<string[]> {
+  const set = new Set<string>();
+  let envError: unknown;
+  try {
+    for (const h of listWorkspaceHostnames()) set.add(h);
+  } catch (e) {
+    // Defer the NotConfigured throw until we know Cosmos has nothing either.
+    envError = e;
+  }
+  try {
+    const { metastoreRegistrationsContainer } = await import('./cosmos-client');
+    const c = await metastoreRegistrationsContainer();
+    const { resources } = await c.items
+      .query<{ workspaceUrl?: string }>('SELECT c.workspaceUrl FROM c')
+      .fetchAll();
+    for (const r of resources) {
+      const h = (r?.workspaceUrl || '').replace(/^https?:\/\//, '').replace(/\/$/, '');
+      if (h) set.add(h);
+    }
+  } catch {
+    // Cosmos unreachable / not configured — env hosts still apply.
+  }
+  if (set.size === 0 && envError) throw envError;
+  return Array.from(set);
+}
+
 async function dbxToken(): Promise<string> {
   const t = await credential.getToken(DBX_SCOPE);
   if (!t?.token) throw new UnityCatalogError('Failed to acquire Databricks AAD token', 401);
@@ -125,7 +166,7 @@ async function ucFetch<T = any>(
     const qs = new URLSearchParams(init.query).toString();
     if (qs) url += (url.includes('?') ? '&' : '?') + qs;
   }
-  const res = await fetch(url, {
+  const res = await fetchWithTimeout(url, {
     method: init?.method ?? 'GET',
     headers: {
       authorization: `Bearer ${token}`,
@@ -253,7 +294,7 @@ export async function listMetastoresFromWorkspace(host: string): Promise<UCMetas
  *  is returned once; the `workspace_hostname` field reports the first
  *  workspace we observed it from. */
 export async function listAllMetastores(): Promise<UCMetastore[]> {
-  const hosts = listWorkspaceHostnames();
+  const hosts = await resolveWorkspaceHostnames();
   const seen = new Map<string, UCMetastore>();
   for (const host of hosts) {
     try {
@@ -484,6 +525,123 @@ export async function getTableLineage(host: string, fullName: string): Promise<U
   return edges;
 }
 
+/**
+ * The SQL warehouse id used for `system.access.*` lineage reads. Optional —
+ * when unset the unified-lineage service falls back to the REST
+ * `lineage-tracking` preview endpoint ({@link getTableLineage}).
+ *
+ * The Databricks **system tables** (`system.access.table_lineage` /
+ * `system.access.column_lineage`) are the durable, queryable lineage store and
+ * — unlike the REST preview — expose the producing **entity** of each edge
+ * (NOTEBOOK / JOB / PIPELINE / DASHBOARD / DBSQL_QUERY), which is what gives the
+ * "table → pipeline/notebook → table" depth the unified graph needs.
+ *   https://learn.microsoft.com/azure/databricks/admin/system-tables/lineage
+ */
+export function lineageWarehouseId(): string | null {
+  return process.env.LOOM_DATABRICKS_LINEAGE_WAREHOUSE_ID || null;
+}
+
+/** A producing process behind a table-lineage edge (the `entity_*` columns of
+ *  `system.access.table_lineage`). */
+export interface UCSystemLineageEntity {
+  /** NOTEBOOK | JOB | PIPELINE | DASHBOARD_V3 | DBSQL_QUERY | … */
+  entityType: string;
+  entityId: string;
+  /** The table this entity wrote (the edge's target side), when present. */
+  target?: string;
+  /** The table this entity read (the edge's source side), when present. */
+  source?: string;
+}
+
+export interface UCSystemLineage {
+  /** table full_name → table full_name edges. */
+  edges: UCLineageEdge[];
+  /** The producing notebooks / jobs / pipelines / dashboards. */
+  entities: UCSystemLineageEntity[];
+}
+
+/**
+ * Table + entity lineage for a focus table from the Databricks **system
+ * tables** (`system.access.table_lineage`). Returns the 1-hop neighbourhood
+ * (rows where the focus is the source OR the target) — the same default
+ * expansion the Databricks Catalog Explorer lineage graph shows, which then
+ * lazily loads further hops on click.
+ *
+ * Unlike {@link getTableLineage} (REST preview, table↔table only), every row
+ * also carries the producing `entity_type` / `entity_id`, so the unified graph
+ * can draw the process nodes (notebook / job / pipeline / dashboard) between
+ * the source and target tables.
+ *
+ * Parameter binding (`:fn`) keeps the focus full_name out of the SQL string
+ * (injection-safe — Databricks binds it server-side).
+ *
+ * Honest gate: if `system.access` is not enabled in the metastore (or the Loom
+ * UAMI lacks `USE SCHEMA` / `SELECT` on it), the query fails and we re-throw a
+ * typed {@link UnityCatalogError} naming the exact remediation, rather than
+ * silently returning an empty graph (per no-vaporware.md). Callers may fall
+ * back to {@link getTableLineage}.
+ */
+export async function getTableLineageSystemTables(
+  host: string,
+  fullName: string,
+  warehouseId: string,
+): Promise<UCSystemLineage> {
+  const sql = `SELECT source_table_full_name, target_table_full_name, entity_type, entity_id
+    FROM system.access.table_lineage
+    WHERE source_table_full_name = :fn OR target_table_full_name = :fn
+    LIMIT 1000`;
+  let result: QueryResult;
+  try {
+    result = await executeStatement(warehouseId, sql, undefined, undefined, [
+      { name: 'fn', value: fullName, type: 'STRING' },
+    ]);
+  } catch (e: any) {
+    const msg = String(e?.message || e);
+    if (/TABLE_OR_VIEW_NOT_FOUND|system\.access|PERMISSION_DENIED|does not exist|cannot be found|UNRESOLVED|INSUFFICIENT_PERMISSIONS/i.test(msg)) {
+      throw new UnityCatalogError(
+        `Unity Catalog system-table lineage is unavailable: ${msg}. Enable the ` +
+          `system.access schema in the Unity Catalog metastore and grant the Loom ` +
+          `UAMI USE SCHEMA + SELECT on system.access (see ` +
+          `scripts/csa-loom/grant-databricks-system-tables-role.sh).`,
+        typeof e?.status === 'number' ? e.status : 403,
+        e?.body,
+        'system.access.table_lineage',
+      );
+    }
+    throw e;
+  }
+  const idx = (name: string) => result.columns.indexOf(name);
+  const iSrc = idx('source_table_full_name');
+  const iTgt = idx('target_table_full_name');
+  const iEt = idx('entity_type');
+  const iEid = idx('entity_id');
+  const edges: UCLineageEdge[] = [];
+  const entities: UCSystemLineageEntity[] = [];
+  const seenEdge = new Set<string>();
+  const seenEnt = new Set<string>();
+  for (const row of result.rows) {
+    const src = iSrc >= 0 ? (row[iSrc] as string | null) : null;
+    const tgt = iTgt >= 0 ? (row[iTgt] as string | null) : null;
+    const et = iEt >= 0 ? (row[iEt] as string | null) : null;
+    const eid = iEid >= 0 ? (row[iEid] as string | null) : null;
+    if (src && tgt) {
+      const k = `${src}->${tgt}`;
+      if (!seenEdge.has(k)) {
+        seenEdge.add(k);
+        edges.push({ source: src, target: tgt, workspace_hostname: host });
+      }
+    }
+    if (et && eid) {
+      const k = `${et}:${eid}:${tgt || ''}:${src || ''}`;
+      if (!seenEnt.has(k)) {
+        seenEnt.add(k);
+        entities.push({ entityType: et, entityId: eid, target: tgt || undefined, source: src || undefined });
+      }
+    }
+  }
+  return { edges, entities };
+}
+
 // ============================================================
 // Federated search over UC
 // ============================================================
@@ -512,7 +670,7 @@ export interface UCSearchHit {
  */
 export async function searchUnity(q: string, limit = 50): Promise<UCSearchHit[]> {
   const ql = q.toLowerCase().trim();
-  const hosts = listWorkspaceHostnames();
+  const hosts = await resolveWorkspaceHostnames();
   const hits: UCSearchHit[] = [];
   for (const host of hosts) {
     let cats: UCCatalog[] = [];

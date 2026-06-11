@@ -33,6 +33,7 @@
  * the BFF route can surface them to the editor.
  */
 
+import { fetchWithTimeout } from '@/lib/azure/fetch-with-timeout';
 import { ChainedTokenCredential, DefaultAzureCredential, ManagedIdentityCredential } from '@azure/identity';
 import { getPbiGovHost, getPbiScope, getPbiEmbedHostname } from './cloud-endpoints';
 
@@ -108,7 +109,7 @@ async function call<T = any>(path: string, opts: CallOpts = {}): Promise<T> {
     const s = qs.toString();
     if (s) url += (url.includes('?') ? '&' : '?') + s;
   }
-  const res = await fetch(url, {
+  const res = await fetchWithTimeout(url, {
     method,
     headers: {
       'authorization': `Bearer ${token}`,
@@ -708,7 +709,7 @@ export async function enhancedRefreshDataset(
 ): Promise<{ requestId: string }> {
   const token = await getToken(POWERBI_SCOPE);
   const url = `${POWERBI_BASE}/groups/${encodeURIComponent(workspaceId)}/datasets/${encodeURIComponent(datasetId)}/refreshes`;
-  const res = await fetch(url, {
+  const res = await fetchWithTimeout(url, {
     method: 'POST',
     headers: { authorization: `Bearer ${token}`, 'content-type': 'application/json', accept: 'application/json' },
     body: JSON.stringify({ type: 'full', commitMode: 'transactional', ...body }),
@@ -1075,7 +1076,7 @@ export async function getReportExportFile(
 ): Promise<{ bytes: ArrayBuffer; contentType: string }> {
   const token = await getToken(POWERBI_SCOPE);
   const url = `${POWERBI_BASE}/groups/${encodeURIComponent(workspaceId)}/reports/${encodeURIComponent(reportId)}/exports/${encodeURIComponent(exportId)}/file`;
-  const res = await fetch(url, {
+  const res = await fetchWithTimeout(url, {
     headers: { authorization: `Bearer ${token}` },
     cache: 'no-store',
   });
@@ -1582,7 +1583,7 @@ export async function updateFabricModelDefinition(
 export async function downloadReportDefinition(workspaceId: string, reportId: string): Promise<string> {
   const token = await getToken(POWERBI_SCOPE);
   const url = `${POWERBI_BASE}/groups/${encodeURIComponent(workspaceId)}/reports/${encodeURIComponent(reportId)}/Export`;
-  const res = await fetch(url, { headers: { authorization: `Bearer ${token}` }, cache: 'no-store' });
+  const res = await fetchWithTimeout(url, { headers: { authorization: `Bearer ${token}` }, cache: 'no-store' });
   if (!res.ok) {
     const text = await res.text().catch(() => '');
     throw new PowerBiError(text || `rdl download failed (${res.status})`, res.status, text, url);

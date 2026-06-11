@@ -28,6 +28,7 @@
  * an AsyncIterable so the BFF can SSE-pipe them straight to the UI.
  */
 
+import { fetchWithTimeout, LLM_FETCH_TIMEOUT_MS } from '@/lib/azure/fetch-with-timeout';
 import {
   ChainedTokenCredential,
   DefaultAzureCredential,
@@ -299,6 +300,17 @@ export interface ToolDef {
   service: string;
   parameters: Record<string, unknown>; // JSON Schema object
   handler: (args: any, ctx: ToolContext) => Promise<unknown>;
+  /**
+   * Optional one-line "when to use" hint surfaced in the Copilot console
+   * right-rail tool catalog (self-explanatory tools, audit-T121). Falls back to
+   * `description` in the UI when absent — no tool ever renders blank.
+   */
+  whenToUse?: string;
+  /**
+   * True when the tool reads the active editor context (query / schema) — the
+   * console badges these so the user knows the tool grounds on what's open.
+   */
+  readsContext?: boolean;
 }
 
 export class LoomToolRegistry {
@@ -1097,11 +1109,11 @@ async function callAoai(
   // retry once with the default sampling (no temperature). Works by default
   // across both classic chat models and the newer reasoning models.
   const send = async (withTemperature: boolean) =>
-    fetch(url, {
+    fetchWithTimeout(url, {
       method: 'POST',
       headers: { authorization: `Bearer ${token}`, 'content-type': 'application/json' },
       body: JSON.stringify(withTemperature ? { ...base, temperature: 0.2 } : base),
-    });
+    }, LLM_FETCH_TIMEOUT_MS);
 
   let res = await send(true);
   if (res.status === 400) {
@@ -1133,13 +1145,13 @@ async function aoaiCompleteText(
   const url = `${target.endpoint}/openai/deployments/${encodeURIComponent(target.deployment)}/chat/completions?api-version=${target.apiVersion}`;
   const token = await aoaiToken();
   const send = (withTemperature: boolean) =>
-    fetch(url, {
+    fetchWithTimeout(url, {
       method: 'POST',
       headers: { authorization: `Bearer ${token}`, 'content-type': 'application/json' },
       body: JSON.stringify(
         withTemperature ? { messages, temperature: 0.2, max_tokens: 2048 } : { messages, max_tokens: 2048 },
       ),
-    });
+    }, LLM_FETCH_TIMEOUT_MS);
   let res = await send(true);
   if (res.status === 400) {
     const t = await res.text();
@@ -1178,7 +1190,7 @@ export async function aoaiCompleteJson<T = Record<string, unknown>>(
   const url = `${target.endpoint}/openai/deployments/${encodeURIComponent(target.deployment)}/chat/completions?api-version=${target.apiVersion}`;
   const token = await aoaiToken();
   const send = (withTemperature: boolean) =>
-    fetch(url, {
+    fetchWithTimeout(url, {
       method: 'POST',
       headers: { authorization: `Bearer ${token}`, 'content-type': 'application/json' },
       body: JSON.stringify(
@@ -1186,7 +1198,7 @@ export async function aoaiCompleteJson<T = Record<string, unknown>>(
           ? { messages, temperature: 0.1, max_tokens: maxTokens, response_format: { type: 'json_object' } }
           : { messages, max_tokens: maxTokens, response_format: { type: 'json_object' } },
       ),
-    });
+    }, LLM_FETCH_TIMEOUT_MS);
   let res = await send(true);
   if (res.status === 400) {
     const t = await res.text();
@@ -1398,7 +1410,7 @@ export async function emitCopilotUsage(
     if (extra?.sensitivityLabel) properties.sensitivity_label = extra.sensitivityLabel;
     if (extra?.sensitivityLabels?.length) properties.sensitivity_labels = extra.sensitivityLabels.join(',');
     if (extra?.dataSources?.length) properties.data_sources = extra.dataSources.join(',');
-    await fetch(`${ai.endpoint}/v2/track`, {
+    await fetchWithTimeout(`${ai.endpoint}/v2/track`, {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify({
@@ -1452,11 +1464,11 @@ async function* orchestrateViaMaf(
 
   let res: Response;
   try {
-    res = await fetch(url, {
+    res = await fetchWithTimeout(url, {
       method: 'POST',
       headers: { 'content-type': 'application/json', 'x-user-oid': userOid },
       body: JSON.stringify({ prompt, sessionId, maxIterations: opts.maxIterations }),
-    });
+    }, LLM_FETCH_TIMEOUT_MS);
   } catch (e: any) {
     const step: OrchestratorStep = {
       kind: 'error',
@@ -1874,12 +1886,16 @@ export interface SessionSummary {
   createdAt: string;
   updatedAt: string;
   stepCount: number;
+  /** User-supplied session title (rename). Falls back to the prompt in the UI. */
+  title?: string;
+  /** Pinned/favorited — pinned sessions sort to the top of the left rail. */
+  pinned?: boolean;
 }
 
 export async function listSessions(userOid: string, limit = 50): Promise<SessionSummary[]> {
   const c = await copilotSessionsContainer();
   const q = {
-    query: 'SELECT TOP @n c.id, c.sessionId, c.userOid, c.prompt, c.createdAt, c.updatedAt, ARRAY_LENGTH(c.steps) AS stepCount FROM c WHERE c.userOid = @u ORDER BY c.updatedAt DESC',
+    query: 'SELECT TOP @n c.id, c.sessionId, c.userOid, c.prompt, c.title, c.pinned, c.createdAt, c.updatedAt, ARRAY_LENGTH(c.steps) AS stepCount FROM c WHERE c.userOid = @u ORDER BY c.updatedAt DESC',
     parameters: [
       { name: '@n', value: limit },
       { name: '@u', value: userOid },
@@ -1893,4 +1909,28 @@ export async function getSession(sessionId: string): Promise<any | null> {
   const c = await copilotSessionsContainer();
   const r = await c.item(sessionId, sessionId).read<any>().catch(() => ({ resource: null }));
   return r.resource;
+}
+
+/**
+ * Update mutable session metadata (rename / pin) on the Cosmos session doc.
+ * Real read-modify-write against `copilot-sessions` (PK /sessionId) with an
+ * ownership check — never lets one user mutate another's session. Returns the
+ * patched fields the UI cares about. Throws `not_found` / `forbidden` for the
+ * route to map to 404 / 403.
+ */
+export async function updateSessionMeta(
+  sessionId: string,
+  userOid: string,
+  patch: { title?: string; pinned?: boolean },
+): Promise<{ title?: string; pinned?: boolean }> {
+  const c = await copilotSessionsContainer();
+  const existing = await c.item(sessionId, sessionId).read<any>().catch(() => ({ resource: null }));
+  if (!existing.resource) throw new Error('not_found');
+  const doc = existing.resource;
+  if (doc.userOid && doc.userOid !== userOid) throw new Error('forbidden');
+  if (typeof patch.title === 'string') doc.title = patch.title.slice(0, 200);
+  if (typeof patch.pinned === 'boolean') doc.pinned = patch.pinned;
+  doc.updatedAt = new Date().toISOString();
+  await c.item(sessionId, sessionId).replace(doc);
+  return { title: doc.title, pinned: doc.pinned };
 }

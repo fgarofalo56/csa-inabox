@@ -14,8 +14,18 @@
  *
  *   GET  https://graph.microsoft.com/beta/security/informationProtection/sensitivityLabels
  *   GET  https://graph.microsoft.com/beta/security/informationProtection/sensitivityLabels/{id}
- *   GET  https://graph.microsoft.com/beta/security/informationProtection/policy/labels      (label policies)
- *   POST https://graph.microsoft.com/beta/me/informationProtection/policy/labels/evaluateApplication
+ *   POST https://graph.microsoft.com/beta/security/informationProtection/sensitivityLabels/evaluateApplication
+ *
+ * NOTE on label POLICIES and label CRUD: Microsoft Graph exposes NO app-only
+ * (UAMI) surface to read tenant label policies, nor any surface to
+ * create/edit/delete sensitivity-label definitions or policies. The previous
+ * implementation called `GET /beta/security/informationProtection/policy/labels`
+ * — that path does NOT exist app-only and returned HTTP 400. Label/policy
+ * management lives only in Security & Compliance PowerShell (New-Label /
+ * Set-Label / Remove-Label, New-LabelPolicy / Set-LabelPolicy /
+ * Remove-LabelPolicy). Those flows are handled by the SCC PowerShell sidecar —
+ * see `scc-labels-client.ts`. This client now owns only the Graph-backed READ
+ * of label definitions plus the evaluate (recommendation) call.
  *
  * App permissions (admin-consent required, granted in post-deploy bootstrap):
  *   - InformationProtectionPolicy.Read.All  (19da66cb-0fb0-4390-b071-ebc76a349482)
@@ -36,6 +46,7 @@
  *     the AppRole grant is missing).
  */
 
+import { fetchWithTimeout } from '@/lib/azure/fetch-with-timeout';
 import {
   ChainedTokenCredential,
   DefaultAzureCredential,
@@ -134,7 +145,7 @@ async function graphFetch(path: string, init: RequestInit = {}): Promise<Respons
   const token = await credential.getToken(graphScope());
   if (!token?.token) throw new MipError(500, null, 'Failed to acquire Microsoft Graph token');
   const url = `${graphBase()}${path}`;
-  return fetch(url, {
+  return fetchWithTimeout(url, {
     ...init,
     headers: {
       ...(init.headers || {}),
@@ -194,17 +205,6 @@ export interface SensitivityLabelUsageRights {
   allowExport: boolean;
   allowCopy: boolean;
   allowPrint: boolean;
-}
-
-export interface SensitivityLabelPolicy {
-  id: string;
-  name?: string;
-  displayName?: string;
-  description?: string;
-  isMandatory?: boolean;
-  defaultLabelId?: string;
-  scopes?: string[];
-  raw?: unknown;
 }
 
 // ============================================================
@@ -268,38 +268,14 @@ export async function getSensitivityLabel(id: string): Promise<SensitivityLabel 
 }
 
 /**
- * List sensitivity label policies (which labels are published to which
- * users / groups / locations).
- *
- * Backing call: GET /beta/security/informationProtection/policy/labels
- *
- * Note: this is the "policy" view of labels (scope + default + mandatory),
- * distinct from the "definition" view above.
- */
-export async function listLabelPolicies(): Promise<SensitivityLabelPolicy[]> {
-  assertEnabled();
-  const endpoint = '/beta/security/informationProtection/policy/labels';
-  const res = await graphFetch(endpoint);
-  const j = await readJson<{ value?: any[] }>(res, endpoint);
-  return (j?.value || []).map((raw): SensitivityLabelPolicy => ({
-    id: raw?.id,
-    name: raw?.name || raw?.displayName,
-    displayName: raw?.displayName,
-    description: raw?.description,
-    isMandatory: raw?.isMandatory,
-    defaultLabelId: raw?.defaultLabelId,
-    scopes: Array.isArray(raw?.scopes) ? raw.scopes : undefined,
-    raw,
-  }));
-}
-
-/**
  * Evaluate which labels would apply to a given piece of content. Used by
  * the "Apply label to a Loom item" inline action — the BFF sends the
  * item's metadata + a few hundred chars of preview text to MIP, and MIP
  * returns the recommended label.
  *
- * Backing call: POST /beta/me/informationProtection/policy/labels/evaluateApplication
+ * Backing call (app-only / service-principal variant — NOT the delegated
+ * `/me/...policy/labels/...` path, which 400s under a UAMI):
+ *   POST /beta/security/informationProtection/sensitivityLabels/evaluateApplication
  *
  * Returns the raw evaluation response. Caller is responsible for mapping
  * the recommended label id back to a sensitivity label in the UI.
@@ -315,7 +291,7 @@ export async function evaluateLabel(payload: {
   };
 }): Promise<unknown> {
   assertEnabled();
-  const endpoint = '/beta/me/informationProtection/policy/labels/evaluateApplication';
+  const endpoint = '/beta/security/informationProtection/sensitivityLabels/evaluateApplication';
   const res = await graphFetch(endpoint, {
     method: 'POST',
     body: JSON.stringify(payload),

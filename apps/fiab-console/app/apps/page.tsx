@@ -5,28 +5,39 @@
  * /api/apps-catalog (Cosmos apps-catalog container, partitioned by
  * tenantId = session.claims.oid). Each card links to /apps/[id].
  *
- * Polished card layout mirrors /workloads:
- *   - per-card iconBox (40x40, brand/purple/green by category)
- *   - section grouping by category with count badge
- *   - 4-zone card: header (icon + name + bundle badge) → description
- *     → item-type pills → footer (category badge + Install button)
- *   - hover lift (translate -2px + shadow8 + brandStroke1 border)
+ * Web 3.0 surface built on the shared Loom UI primitives (mirrors /browse
+ * and /workloads):
+ *   - Toolbar: constrained SearchBox + count Badge + a single Tile|List
+ *     ViewToggle (persisted in localStorage).
+ *   - Tile view: apps grouped into <Section> cards by category, each a
+ *     <TileGrid> of <ItemTile>s. The tile inherits the dominant bundled
+ *     item's icon+color from the item-type-visual registry; bundle count is
+ *     a header badge; item-type chips + the Install button live in footer.
+ *   - List view: one <LoomDataTable> over all visible apps with sortable,
+ *     filterable columns (category becomes a constrained multiselect for
+ *     free — no raw text config).
+ *
+ * Pure presentational refactor over the existing real /api/apps-catalog
+ * backend — no new backend, no Fabric calls. Install actions stay deferred
+ * to the /apps/[id] detail route (workspace picker + install POST live there).
  */
 
+import { clientFetch } from '@/lib/client-fetch';
 import { useEffect, useMemo, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import {
-  Spinner, makeStyles, tokens, Input, Badge, Button, Caption1, Subtitle2, Tooltip,
+  Spinner, tokens, Badge, Button, Subtitle2, Text, Tooltip,
+  makeStyles,
 } from '@fluentui/react-components';
-import {
-  Database24Regular, DataLine24Regular, Flow24Regular, Bot24Regular,
-  ServerRegular, ChartMultiple24Regular, Earth24Regular,
-  Shield24Regular, Diversity24Regular, Code24Regular, Cloud24Regular,
-  AppGeneric24Regular, Search24Regular, PuzzlePieceRegular,
-  Sparkle24Regular, ArrowDownload20Regular,
-} from '@fluentui/react-icons';
+import { ArrowDownload20Regular } from '@fluentui/react-icons';
 import { PageShell } from '@/lib/components/page-shell';
 import { SignInRequired } from '@/lib/components/sign-in-required';
+import { Section, Toolbar } from '@/lib/components/ui/section';
+import { ViewToggle, type LoomView } from '@/lib/components/ui/view-toggle';
+import { ItemTile } from '@/lib/components/ui/item-tile';
+import { TileGrid } from '@/lib/components/ui/tile-grid';
+import { LoomDataTable, type LoomColumn } from '@/lib/components/ui/loom-data-table';
+import { itemVisual } from '@/lib/components/ui/item-type-visual';
 
 interface AppItemRef { type: string; template?: string; displayName?: string; }
 interface AppDoc {
@@ -35,147 +46,68 @@ interface AppDoc {
   items?: AppItemRef[];
 }
 
+/** A category group of apps for the tile view. */
+interface CategoryGroup { label: string; items: AppDoc[]; }
+
+const LS_APPS_VIEW = 'loom.apps.viewMode.v1';
+
 const useStyles = makeStyles({
-  toolbar: {
-    display: 'flex', gap: 12, alignItems: 'center', marginBottom: 24,
-    paddingBottom: 16, borderBottom: `1px solid ${tokens.colorNeutralStroke2}`,
-  },
-  toolbarSpacer: { flex: 1 },
-  section: { marginBottom: 32 },
-  sectionHeader: {
-    display: 'flex', alignItems: 'center', gap: 12, marginBottom: 12,
-    paddingBottom: 8, borderBottom: `1px solid ${tokens.colorNeutralStroke2}`,
-  },
-  sectionTitle: {
-    fontSize: 16, fontWeight: 600, color: tokens.colorNeutralForeground1,
-  },
-  sectionCount: {
-    color: tokens.colorNeutralForeground3, fontSize: 13,
-  },
-  grid: {
-    display: 'grid',
-    gridTemplateColumns: 'repeat(auto-fill, minmax(320px, 1fr))',
-    gap: 16,
-  },
-  card: {
-    paddingTop: 18, paddingRight: 18, paddingBottom: 18, paddingLeft: 18,
-    borderRadius: 10,
-    border: `1px solid ${tokens.colorNeutralStroke2}`,
-    backgroundColor: tokens.colorNeutralBackground1,
-    cursor: 'pointer',
-    transition: 'transform 0.15s ease, box-shadow 0.15s ease, border-color 0.15s ease',
-    display: 'flex', flexDirection: 'column', gap: 10,
-    minHeight: 200,
-    ':hover': {
-      transform: 'translateY(-2px)',
-      boxShadow: tokens.shadow8,
-      borderColor: tokens.colorBrandStroke1,
-    },
-  },
-  cardHeader: { display: 'flex', alignItems: 'flex-start', gap: 12 },
-  iconBox: {
-    width: 40, height: 40, borderRadius: 8,
-    display: 'flex', alignItems: 'center', justifyContent: 'center',
-    flexShrink: 0,
-    color: tokens.colorBrandForeground1,
-    backgroundColor: tokens.colorBrandBackground2,
-  },
-  iconBoxAi: {
-    color: tokens.colorPalettePurpleForeground2,
-    backgroundColor: tokens.colorPalettePurpleBackground2,
-  },
-  iconBoxData: {
-    color: tokens.colorPaletteGreenForeground2,
-    backgroundColor: tokens.colorPaletteGreenBackground2,
-  },
-  iconBoxIndustry: {
-    color: tokens.colorPaletteMarigoldForeground2,
-    backgroundColor: tokens.colorPaletteMarigoldBackground2,
-  },
-  iconBoxSecurity: {
-    color: tokens.colorPaletteRedForeground2,
-    backgroundColor: tokens.colorPaletteRedBackground2,
-  },
-  titleCol: {
-    display: 'flex', flexDirection: 'column', gap: 4,
-    minWidth: 0, flex: 1,
-  },
-  name: {
-    fontSize: 15, fontWeight: 600, color: tokens.colorNeutralForeground1,
-    lineHeight: 1.3,
-  },
-  bundleBadge: { alignSelf: 'flex-start' },
-  desc: {
-    fontSize: 13, color: tokens.colorNeutralForeground2, lineHeight: 1.5,
-    overflow: 'hidden', display: '-webkit-box',
-    WebkitLineClamp: 3, WebkitBoxOrient: 'vertical',
-    flex: 1,
-  },
-  pills: { display: 'flex', gap: 4, flexWrap: 'wrap' },
-  pill: {
-    fontSize: 11, padding: '2px 8px', borderRadius: 999,
-    backgroundColor: tokens.colorNeutralBackground2,
-    color: tokens.colorNeutralForeground2,
-    whiteSpace: 'nowrap',
-  },
-  footer: {
-    display: 'flex', alignItems: 'center', justifyContent: 'space-between',
-    gap: 8, marginTop: 4,
-    paddingTop: 10, borderTop: `1px solid ${tokens.colorNeutralStroke3}`,
+  countBadges: {
+    display: 'flex',
+    gap: tokens.spacingHorizontalS,
+    alignItems: 'center',
+    flexWrap: 'wrap',
   },
   empty: {
-    padding: 32, borderRadius: 10,
+    padding: tokens.spacingVerticalL,
+    borderRadius: tokens.borderRadiusLarge,
     border: `1px dashed ${tokens.colorNeutralStroke2}`,
     color: tokens.colorNeutralForeground3,
-    fontSize: 13, textAlign: 'center', lineHeight: 1.5,
+    fontSize: '13px',
+    textAlign: 'center',
+    lineHeight: 1.6,
+  },
+  spinnerWrap: {
+    padding: tokens.spacingVerticalM,
+  },
+  nameCell: {
+    display: 'inline-flex',
+    alignItems: 'center',
+    gap: tokens.spacingHorizontalS,
+    minWidth: 0,
+  },
+  nameChip: {
+    display: 'inline-flex',
+    alignItems: 'center',
+    justifyContent: 'center',
+    width: '24px',
+    height: '24px',
+    borderRadius: tokens.borderRadiusMedium,
+    flexShrink: 0,
+  },
+  // Clamp the tile description to 3 lines so every tile in a TileGrid row
+  // keeps an even height — long catalog blurbs otherwise make the grid ragged.
+  tileDesc: {
+    display: '-webkit-box',
+    WebkitLineClamp: 3,
+    WebkitBoxOrient: 'vertical',
+    overflow: 'hidden',
   },
 });
 
-/** Pick an icon based on app id / name / category. */
-function appIcon(id: string, name: string, category?: string): React.ReactNode {
-  const key = (id + ' ' + name + ' ' + (category ?? '')).toLowerCase();
-  if (key.includes('copilot') || key.includes('agent') || key.includes('chatbot')) return <Bot24Regular />;
-  if (key.includes('ai') || key.includes('ml') || key.includes('genai')) return <Sparkle24Regular />;
-  if (key.includes('warehouse') || key.includes('sql') || key.includes('lakehouse')) return <Database24Regular />;
-  if (key.includes('realtime') || key.includes('streaming') || key.includes('event')) return <DataLine24Regular />;
-  if (key.includes('pipeline') || key.includes('factory') || key.includes('ingest')) return <Flow24Regular />;
-  if (key.includes('database') || key.includes('cosmos')) return <ServerRegular />;
-  if (key.includes('bi') || key.includes('report') || key.includes('dashboard')) return <ChartMultiple24Regular />;
-  if (key.includes('geo') || key.includes('map') || key.includes('spatial')) return <Earth24Regular />;
-  if (key.includes('fedramp') || key.includes('compliance') || key.includes('security') || key.includes('audit')) return <Shield24Regular />;
-  if (key.includes('industry') || key.includes('retail') || key.includes('healthcare') || key.includes('finance')) return <Diversity24Regular />;
-  if (key.includes('graph') || key.includes('vector') || key.includes('search')) return <PuzzlePieceRegular />;
-  if (key.includes('code') || key.includes('dev')) return <Code24Regular />;
-  if (key.includes('platform') || key.includes('cloud')) return <Cloud24Regular />;
-  return <AppGeneric24Regular />;
+/** The slug that drives an app tile's icon + color: the dominant bundled item. */
+function appVisualType(a: AppDoc): string {
+  return a.items?.[0]?.type ?? 'app';
 }
 
-/** Map app category to an icon-box color treatment. */
-function iconBoxTone(category?: string): 'ai' | 'data' | 'industry' | 'security' | 'brand' {
-  const key = (category ?? '').toLowerCase();
-  if (key.includes('ai') || key.includes('agent') || key.includes('copilot') || key.includes('ml')) return 'ai';
-  if (key.includes('data') || key.includes('analytics') || key.includes('warehouse') || key.includes('lakehouse') || key.includes('engineering')) return 'data';
-  if (key.includes('industry') || key.includes('retail') || key.includes('healthcare') || key.includes('finance') || key.includes('public')) return 'industry';
-  if (key.includes('security') || key.includes('compliance') || key.includes('governance') || key.includes('fedramp')) return 'security';
-  return 'brand';
-}
-
-/** Friendly label for the item-type pills (e.g. "synapse-dedicated-sql-pool" → "synapse dedicated sql pool"). */
-function pillLabel(s: string): string {
-  return s.replace(/-/g, ' ');
-}
-
-interface Section { label: string; items: AppDoc[]; }
-
-/** Bucket apps by category, with deterministic section ordering. */
-function bucket(apps: AppDoc[]): Section[] {
+/** Bucket apps by category, with deterministic section ordering ("Other" last). */
+function bucket(apps: AppDoc[]): CategoryGroup[] {
   const byCat = new Map<string, AppDoc[]>();
   for (const a of apps) {
     const cat = a.category?.trim() || 'Other';
     if (!byCat.has(cat)) byCat.set(cat, []);
     byCat.get(cat)!.push(a);
   }
-  // Deterministic alpha order; force "Other" last.
   const labels = Array.from(byCat.keys()).sort((x, y) => {
     if (x === 'Other') return 1;
     if (y === 'Other') return -1;
@@ -185,14 +117,33 @@ function bucket(apps: AppDoc[]): Section[] {
 }
 
 export default function AppsPage() {
-  const s = useStyles();
+  const styles = useStyles();
   const router = useRouter();
   const [apps, setApps] = useState<AppDoc[] | null>(null);
   const [unauth, setUnauth] = useState(false);
   const [q, setQ] = useState('');
+  const [view, setView] = useState<LoomView>('tile');
+
+  // Hydrate the persisted view mode (SSR-safe).
+  useEffect(() => {
+    try {
+      const raw = window.localStorage.getItem(LS_APPS_VIEW);
+      if (raw === 'tile' || raw === 'list') setView(raw);
+    } catch {
+      /* ignore (quota / private mode) */
+    }
+  }, []);
 
   useEffect(() => {
-    fetch('/api/apps-catalog').then(r => {
+    try {
+      window.localStorage.setItem(LS_APPS_VIEW, view);
+    } catch {
+      /* ignore */
+    }
+  }, [view]);
+
+  useEffect(() => {
+    clientFetch('/api/apps-catalog').then(r => {
       if (r.status === 401 || r.status === 403) { setUnauth(true); setApps([]); return null; }
       return r.json();
     }).then(d => {
@@ -213,8 +164,137 @@ export default function AppsPage() {
   const totalCount = (apps ?? []).length;
   const shownCount = visible.length;
 
+  // List-view columns: sortable + filterable. category/publisher/types are
+  // low-cardinality → LoomDataTable renders them as constrained multiselect
+  // dropdowns (no free-form config); only `name` stays free-text.
+  const columns = useMemo<LoomColumn<AppDoc>[]>(() => [
+    {
+      key: 'name',
+      label: 'Name',
+      sortable: true,
+      filterable: true,
+      width: 320,
+      getValue: (a) => a.name,
+      render: (a) => {
+        const visual = itemVisual(appVisualType(a));
+        const Icon = visual.icon;
+        return (
+          <span className={styles.nameCell}>
+            <span
+              className={styles.nameChip}
+              style={{ backgroundColor: `${visual.color}1f` }}
+              aria-hidden
+            >
+              <Icon style={{ width: 16, height: 16, color: visual.color }} />
+            </span>
+            <Text weight="semibold">{a.name}</Text>
+          </span>
+        );
+      },
+    },
+    {
+      key: 'category',
+      label: 'Category',
+      sortable: true,
+      filterable: true,
+      width: 180,
+      getValue: (a) => a.category ?? 'Other',
+    },
+    {
+      key: 'bundle',
+      label: 'Items',
+      sortable: true,
+      filterable: false,
+      width: 110,
+      getValue: (a) => a.items?.length ?? 0,
+    },
+    {
+      key: 'types',
+      label: 'Item types',
+      sortable: true,
+      filterable: true,
+      width: 280,
+      getValue: (a) =>
+        Array.from(new Set((a.items ?? []).map(i => i.type)))
+          .map(t => itemVisual(t).label)
+          .join(', '),
+    },
+    {
+      key: 'publisher',
+      label: 'Publisher',
+      sortable: true,
+      filterable: true,
+      width: 180,
+      getValue: (a) => a.publisher ?? '—',
+    },
+  ], [styles.nameCell, styles.nameChip]);
+
   function openApp(a: AppDoc) {
     router.push(`/apps/${a.id}`);
+  }
+
+  /** One app as an ItemTile (tile view). */
+  function renderTile(a: AppDoc) {
+    const bundleCount = a.items?.length ?? 0;
+    const itemTypes = Array.from(new Set((a.items ?? []).map(i => i.type)));
+    return (
+      <ItemTile
+        key={a.id}
+        type={appVisualType(a)}
+        title={a.name}
+        subtitle={a.category ?? 'App'}
+        meta={
+          a.description ? (
+            <span className={styles.tileDesc} title={a.description}>
+              {a.description}
+            </span>
+          ) : undefined
+        }
+        badge={
+          bundleCount > 0 ? (
+            <Badge appearance="outline" color="informative" size="small">
+              Bundle of {bundleCount} item{bundleCount === 1 ? '' : 's'}
+            </Badge>
+          ) : undefined
+        }
+        footer={
+          <>
+            {itemTypes.slice(0, 4).map(t => (
+              <Badge key={t} appearance="tint" color="subtle" size="small">
+                {itemVisual(t).label}
+              </Badge>
+            ))}
+            {itemTypes.length > 4 && (
+              <Tooltip
+                content={itemTypes.slice(4).map(t => itemVisual(t).label).join(', ')}
+                relationship="description"
+              >
+                <Badge appearance="tint" color="subtle" size="small">
+                  +{itemTypes.length - 4} more
+                </Badge>
+              </Tooltip>
+            )}
+            <Button
+              appearance="primary"
+              size="small"
+              icon={<ArrowDownload20Regular />}
+              style={{ marginLeft: 'auto' }}
+              onClick={(e) => {
+                // footer sits inside the tile's clickable surface — stop the
+                // click bubbling so Install defers to the detail page (where
+                // the workspace picker + install POST live) without a double
+                // navigation.
+                e.stopPropagation();
+                openApp(a);
+              }}
+            >
+              Install
+            </Button>
+          </>
+        }
+        onClick={() => openApp(a)}
+      />
+    );
   }
 
   return (
@@ -224,29 +304,35 @@ export default function AppsPage() {
     >
       {unauth && <SignInRequired subject="the apps catalog" />}
 
-      <div className={s.toolbar}>
-        <Input
-          contentBefore={<Search24Regular />}
-          placeholder="Filter by name, category, or bundled item type…"
-          value={q}
-          onChange={(_, d) => setQ(d.value)}
-          style={{ flex: 1, maxWidth: 480 }}
-        />
-        <div className={s.toolbarSpacer} />
-        {apps !== null && (
-          <Caption1 style={{ color: tokens.colorNeutralForeground3 }}>
-            {filter ? `${shownCount} of ${totalCount} apps` : `${totalCount} apps`}
-          </Caption1>
-        )}
-      </div>
+      <Toolbar
+        search={q}
+        onSearch={setQ}
+        searchPlaceholder="Filter by name, category, or bundled item type…"
+        actions={
+          apps !== null ? (
+            <div className={styles.countBadges}>
+              <Badge appearance="outline">
+                {filter ? `${shownCount} of ${totalCount} apps` : `${totalCount} apps`}
+              </Badge>
+              {shownCount > 0 && (
+                <ViewToggle value={view} onChange={setView} ariaLabel="Apps view" />
+              )}
+            </div>
+          ) : undefined
+        }
+      />
 
-      {apps === null && <Spinner label="Loading apps…" />}
+      {apps === null && (
+        <div className={styles.spinnerWrap}>
+          <Spinner label="Loading apps…" />
+        </div>
+      )}
 
       {apps !== null && apps.length === 0 && (
-        <div className={s.empty}>
+        <div className={styles.empty}>
           <Subtitle2 style={{ display: 'block', marginBottom: 8 }}>No apps in this tenant yet</Subtitle2>
           <div>
-            Run <code>scripts/csa-loom/seed-catalogs.sh</code> to seed the 10 curated CSA apps.
+            Run <code>scripts/csa-loom/seed-catalogs.sh</code> to seed the curated CSA apps.
           </div>
           <div style={{ marginTop: 4 }}>
             First sign-in also triggers a copy from the GLOBAL seed.
@@ -255,99 +341,32 @@ export default function AppsPage() {
       )}
 
       {apps !== null && apps.length > 0 && shownCount === 0 && (
-        <div className={s.empty}>No apps match &ldquo;{q}&rdquo;.</div>
+        <div className={styles.empty}>No apps match &ldquo;{q}&rdquo;.</div>
       )}
 
-      {sections.map((section) => (
-        <div key={section.label} className={s.section}>
-          <div className={s.sectionHeader}>
-            <div className={s.sectionTitle}>{section.label}</div>
-            <Caption1 className={s.sectionCount}>· {section.items.length}</Caption1>
-          </div>
-          <div className={s.grid}>
-            {section.items.map((a) => {
-              const tone = iconBoxTone(a.category);
-              const iconClass =
-                tone === 'ai' ? `${s.iconBox} ${s.iconBoxAi}` :
-                tone === 'data' ? `${s.iconBox} ${s.iconBoxData}` :
-                tone === 'industry' ? `${s.iconBox} ${s.iconBoxIndustry}` :
-                tone === 'security' ? `${s.iconBox} ${s.iconBoxSecurity}` :
-                s.iconBox;
-              const bundleCount = a.items?.length ?? 0;
-              const itemTypes = Array.from(new Set((a.items ?? []).map(i => i.type)));
-              return (
-                <div
-                  key={a.id}
-                  className={s.card}
-                  role="button"
-                  tabIndex={0}
-                  onClick={() => openApp(a)}
-                  onKeyDown={(e) => {
-                    if (e.key === 'Enter' || e.key === ' ') {
-                      e.preventDefault();
-                      openApp(a);
-                    }
-                  }}
-                >
-                  <div className={s.cardHeader}>
-                    <div className={iconClass}>{appIcon(a.id, a.name, a.category)}</div>
-                    <div className={s.titleCol}>
-                      <div className={s.name}>{a.name}</div>
-                      {bundleCount > 0 && (
-                        <Badge
-                          appearance="outline"
-                          color="informative"
-                          size="small"
-                          className={s.bundleBadge}
-                        >
-                          Bundle of {bundleCount} item{bundleCount === 1 ? '' : 's'}
-                        </Badge>
-                      )}
-                    </div>
-                  </div>
+      {/* Tile view: one Section card per category. */}
+      {shownCount > 0 && view === 'tile' &&
+        sections.map((section) => (
+          <Section key={section.label} title={`${section.label} · ${section.items.length}`}>
+            <TileGrid minTileWidth={320}>
+              {section.items.map(renderTile)}
+            </TileGrid>
+          </Section>
+        ))}
 
-                  {a.description && <div className={s.desc}>{a.description}</div>}
-
-                  {itemTypes.length > 0 && (
-                    <div className={s.pills}>
-                      {itemTypes.slice(0, 4).map(t => (
-                        <span key={t} className={s.pill}>{pillLabel(t)}</span>
-                      ))}
-                      {itemTypes.length > 4 && (
-                        <Tooltip
-                          content={itemTypes.slice(4).map(pillLabel).join(', ')}
-                          relationship="description"
-                        >
-                          <span className={s.pill}>+{itemTypes.length - 4} more</span>
-                        </Tooltip>
-                      )}
-                    </div>
-                  )}
-
-                  <div className={s.footer}>
-                    <Badge appearance="tint" color="brand" size="small">
-                      {a.category ?? 'App'}
-                    </Badge>
-                    <Button
-                      appearance="primary"
-                      size="small"
-                      icon={<ArrowDownload20Regular />}
-                      onClick={(e) => {
-                        // Defer to the detail page where the workspace
-                        // picker + install POST live.
-                        e.stopPropagation();
-                        openApp(a);
-                      }}
-                    >
-                      Install
-                    </Button>
-                  </div>
-                </div>
-              );
-            })}
-          </div>
-        </div>
-      ))}
+      {/* List view: one flat table; category becomes a filterable column. */}
+      {shownCount > 0 && view === 'list' && (
+        <Section title={`All apps · ${shownCount}`}>
+          <LoomDataTable
+            columns={columns}
+            rows={visible}
+            getRowId={(a) => a.id}
+            onRowClick={(a) => openApp(a)}
+            ariaLabel="All apps"
+            empty="No apps match this filter."
+          />
+        </Section>
+      )}
     </PageShell>
   );
 }

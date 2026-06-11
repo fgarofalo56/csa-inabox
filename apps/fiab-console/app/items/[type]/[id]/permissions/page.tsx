@@ -8,6 +8,7 @@
  * opens the multi-step ShareItemDialog to grant access. Each row can be revoked
  * (Cosmos row + ADLS POSIX ACL + ARM Storage RBAC removed).
  */
+import { clientFetch } from '@/lib/client-fetch';
 import { use, useCallback, useEffect, useState } from 'react';
 import {
   Spinner, MessageBar, MessageBarBody, MessageBarTitle, Button, Badge, Persona, Caption1,
@@ -55,7 +56,7 @@ export default function ItemPermissionsPage(props: Props) {
   const load = useCallback(async () => {
     setLoading(true); setError(null);
     try {
-      const res = await fetch(`/api/items/${type}/${id}/permissions`, { cache: 'no-store' });
+      const res = await clientFetch(`/api/items/${type}/${id}/permissions`, { cache: 'no-store' });
       const json = await res.json();
       if (!res.ok) { setError(json?.error || `Failed (${res.status})`); return; }
       setRows(json.permissions || []);
@@ -71,7 +72,7 @@ export default function ItemPermissionsPage(props: Props) {
   useEffect(() => { load(); }, [load]);
 
   const revoke = useCallback(async (permissionId: string) => {
-    const res = await fetch(`/api/items/${type}/${id}/permissions?permissionId=${encodeURIComponent(permissionId)}`, { method: 'DELETE' });
+    const res = await clientFetch(`/api/items/${type}/${id}/permissions?permissionId=${encodeURIComponent(permissionId)}`, { method: 'DELETE' });
     if (res.ok) load();
     else {
       const j = await res.json().catch(() => ({}));

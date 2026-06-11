@@ -32,6 +32,7 @@
  *   https://learn.microsoft.com/azure/templates/microsoft.machinelearningservices/workspaces/jobs
  *   https://learn.microsoft.com/azure/machine-learning/how-to-deploy-with-rest (datastore + blob upload)
  */
+import { fetchWithTimeout } from '@/lib/azure/fetch-with-timeout';
 import {
   DefaultAzureCredential,
   ManagedIdentityCredential,
@@ -144,7 +145,7 @@ function wsArmId(cfg: AmlSparkConfig): string {
 async function armFetch(path: string, init?: RequestInit): Promise<Response> {
   const sep = path.includes('?') ? '&' : '?';
   const url = `${armBase()}${path}${sep}api-version=${AML_API_VERSION}`;
-  return fetch(url, {
+  return fetchWithTimeout(url, {
     ...init,
     headers: {
       ...(init?.headers || {}),
@@ -182,7 +183,7 @@ async function defaultBlobStore(cfg: AmlSparkConfig): Promise<BlobStore> {
 /** Upload a UTF-8 text blob (BlockBlob) to the workspace blob container. */
 async function putBlob(store: BlobStore, blobPath: string, content: string): Promise<void> {
   const url = `https://${store.account}.${blobSuffix()}/${store.container}/${blobPath}`;
-  const r = await fetch(url, {
+  const r = await fetchWithTimeout(url, {
     method: 'PUT',
     headers: {
       authorization: `Bearer ${await storageToken()}`,
@@ -200,7 +201,7 @@ async function putBlob(store: BlobStore, blobPath: string, content: string): Pro
 /** Read a text blob back; returns null on 404 (job hasn't written it). */
 async function getBlobText(store: BlobStore, blobPath: string): Promise<string | null> {
   const url = `https://${store.account}.${blobSuffix()}/${store.container}/${blobPath}`;
-  const r = await fetch(url, {
+  const r = await fetchWithTimeout(url, {
     headers: {
       authorization: `Bearer ${await storageToken()}`,
       'x-ms-version': '2021-12-02',

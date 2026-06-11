@@ -10,6 +10,7 @@
  *   adb-7405613013893759.19.azuredatabricks.net
  */
 
+import { fetchWithTimeout } from '@/lib/azure/fetch-with-timeout';
 import {
   DefaultAzureCredential,
   ManagedIdentityCredential,
@@ -51,7 +52,7 @@ async function dbxToken(): Promise<string> {
 
 async function dbxFetch(path: string, init?: RequestInit): Promise<Response> {
   const token = await dbxToken();
-  return fetch(`https://${host()}${path}`, {
+  return fetchWithTimeout(`https://${host()}${path}`, {
     ...init,
     headers: {
       ...(init?.headers || {}),
@@ -1761,7 +1762,7 @@ export async function deleteRepo(repoId: number): Promise<void> {
  */
 export async function writeUcVolumesFile(volumePath: string, content: string): Promise<void> {
   const token = await dbxToken();
-  const res = await fetch(
+  const res = await fetchWithTimeout(
     `https://${host()}/api/2.0/fs/files${volumePath.startsWith('/') ? '' : '/'}${volumePath}?overwrite=true`,
     {
       method: 'PUT',
@@ -1782,7 +1783,7 @@ export async function writeUcVolumesFile(volumePath: string, content: string): P
  */
 export async function deleteUcVolumesFile(volumePath: string): Promise<void> {
   const token = await dbxToken();
-  const res = await fetch(
+  const res = await fetchWithTimeout(
     `https://${host()}/api/2.0/fs/files${volumePath.startsWith('/') ? '' : '/'}${volumePath}`,
     { method: 'DELETE', headers: { authorization: `Bearer ${token}` } },
   );

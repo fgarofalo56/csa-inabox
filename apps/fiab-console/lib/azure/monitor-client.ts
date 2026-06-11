@@ -24,6 +24,7 @@
  * still renders.
  */
 
+import { fetchWithTimeout } from '@/lib/azure/fetch-with-timeout';
 import {
   ChainedTokenCredential,
   DefaultAzureCredential,
@@ -43,6 +44,16 @@ const METRICS_API = '2023-10-01';
 const ACTIVITY_LOG_API = '2015-04-01';
 const RESOURCE_HEALTH_API = '2023-10-01-preview';
 const METRIC_ALERTS_API = '2018-03-01';
+// Azure Resource Graph — the single-call fast path for resource health.
+const RESOURCE_GRAPH_API = '2022-10-01';
+
+// Short server-side TTLs for the heavy read paths (see the TTL-cache block
+// below). Tuned so a tab revisit / Refresh click inside the window is served
+// from the in-process memo instead of re-hitting Azure, while data older than
+// ~a minute refreshes. Overridable via env for ops tuning.
+const INVENTORY_TTL_MS = Number(process.env.LOOM_MONITOR_INVENTORY_TTL_MS) || 60_000;
+const HEALTH_TTL_MS = Number(process.env.LOOM_MONITOR_HEALTH_TTL_MS) || 45_000;
+const ACTIVITY_TTL_MS = Number(process.env.LOOM_MONITOR_ACTIVITY_TTL_MS) || 45_000;
 
 const uamiClientId = process.env.LOOM_UAMI_CLIENT_ID || process.env.AZURE_CLIENT_ID;
 const credential = uamiClientId
@@ -120,7 +131,7 @@ async function token(scope: string): Promise<string> {
 async function armGet(path: string): Promise<any> {
   const tk = await token(ARM_SCOPE);
   const url = path.startsWith('http') ? path : `${ARM}${path}`;
-  const res = await fetch(url, {
+  const res = await fetchWithTimeout(url, {
     headers: { authorization: `Bearer ${tk}`, accept: 'application/json' },
     cache: 'no-store',
   });
@@ -137,7 +148,7 @@ async function armGet(path: string): Promise<any> {
 async function armPut(path: string, body: unknown): Promise<any> {
   const tk = await token(ARM_SCOPE);
   const url = path.startsWith('http') ? path : `${ARM}${path}`;
-  const res = await fetch(url, {
+  const res = await fetchWithTimeout(url, {
     method: 'PUT',
     headers: { authorization: `Bearer ${tk}`, accept: 'application/json', 'content-type': 'application/json' },
     body: JSON.stringify(body),
@@ -156,7 +167,7 @@ async function armPut(path: string, body: unknown): Promise<any> {
 async function armPost(path: string, body: unknown): Promise<{ status: number; json: any; operationLocation?: string }> {
   const tk = await token(ARM_SCOPE);
   const url = path.startsWith('http') ? path : `${ARM}${path}`;
-  const res = await fetch(url, {
+  const res = await fetchWithTimeout(url, {
     method: 'POST',
     headers: { authorization: `Bearer ${tk}`, accept: 'application/json', 'content-type': 'application/json' },
     body: JSON.stringify(body),
@@ -177,7 +188,7 @@ async function armPost(path: string, body: unknown): Promise<{ status: number; j
 async function armPatch(path: string, body: unknown): Promise<any> {
   const tk = await token(ARM_SCOPE);
   const url = path.startsWith('http') ? path : `${ARM}${path}`;
-  const res = await fetch(url, {
+  const res = await fetchWithTimeout(url, {
     method: 'PATCH',
     headers: { authorization: `Bearer ${tk}`, accept: 'application/json', 'content-type': 'application/json' },
     body: JSON.stringify(body),
@@ -196,7 +207,7 @@ async function armPatch(path: string, body: unknown): Promise<any> {
 async function armDelete(path: string): Promise<void> {
   const tk = await token(ARM_SCOPE);
   const url = path.startsWith('http') ? path : `${ARM}${path}`;
-  const res = await fetch(url, {
+  const res = await fetchWithTimeout(url, {
     method: 'DELETE',
     headers: { authorization: `Bearer ${tk}`, accept: 'application/json' },
     cache: 'no-store',
@@ -210,6 +221,42 @@ async function armDelete(path: string): Promise<void> {
     throw new MonitorError(msg, res.status, json || text);
   }
 }
+
+// ----------------------------------------------------------------------------
+// TTL cache — server-side memo for the heavy Monitor read paths
+// ----------------------------------------------------------------------------
+//
+// The Monitor surface re-runs the same expensive Azure reads on every tab
+// revisit and every Refresh click: the resource inventory (one ARM list per
+// Loom RG), the resource-health crawl, and the activity-feed KQL. None of
+// those change second-to-second, so a short module-level TTL memo serves
+// tab-revisits and Refresh-spam from process memory instead of re-hitting
+// Azure — without changing first-paint semantics. In-flight de-duplication
+// (we cache the Promise, not the resolved value) means N concurrent callers
+// share ONE Azure round-trip. Pure in-process Map — no new dependency, no env
+// requirement, no Fabric. Failures are evicted so the next call retries Azure.
+
+interface CacheEntry<T> { at: number; val: Promise<T>; }
+const _monitorCache = new Map<string, CacheEntry<unknown>>();
+
+function cached<T>(key: string, ttlMs: number, fn: () => Promise<T>): Promise<T> {
+  const now = Date.now();
+  const hit = _monitorCache.get(key) as CacheEntry<T> | undefined;
+  if (hit && now - hit.at < ttlMs) return hit.val;
+  const entry: CacheEntry<T> = {
+    at: now,
+    val: fn().catch((e) => {
+      // Don't cache failures — evict (only if still ours) so the next call retries.
+      if (_monitorCache.get(key) === (entry as CacheEntry<unknown>)) _monitorCache.delete(key);
+      throw e;
+    }),
+  };
+  _monitorCache.set(key, entry as CacheEntry<unknown>);
+  return entry.val;
+}
+
+/** Drop all memoized Monitor reads (test hook / explicit hard-refresh path). */
+export function clearMonitorCache(): void { _monitorCache.clear(); }
 
 // ----------------------------------------------------------------------------
 // 1) Resource inventory — ARM list resources across the Loom RGs
@@ -233,28 +280,36 @@ function rgFromId(id: string): string {
 /** List every Azure resource the Loom platform deployed across its RGs. */
 export async function listResources(): Promise<LoomResource[]> {
   const cfg = readMonitorConfig();
-  const all: LoomResource[] = [];
-  await Promise.all(
-    cfg.resourceGroups.map(async (rg) => {
-      const j = await armGet(
-        `/subscriptions/${cfg.subscriptionId}/resourceGroups/${rg}/resources?api-version=${ARM_RESOURCES_API}`,
+  // TTL-memoized: the inventory only shifts when resources are created/deleted,
+  // so a tab revisit / Refresh inside the window is served from memory.
+  return cached(
+    `resources:${cfg.subscriptionId}:${cfg.resourceGroups.join(',')}`,
+    INVENTORY_TTL_MS,
+    async () => {
+      const all: LoomResource[] = [];
+      await Promise.all(
+        cfg.resourceGroups.map(async (rg) => {
+          const j = await armGet(
+            `/subscriptions/${cfg.subscriptionId}/resourceGroups/${rg}/resources?api-version=${ARM_RESOURCES_API}`,
+          );
+          for (const r of j?.value || []) {
+            all.push({
+              id: r.id,
+              name: r.name,
+              type: r.type,
+              location: r.location,
+              resourceGroup: rgFromId(r.id) || rg,
+              kind: r.kind,
+              sku: r.sku?.name,
+            });
+          }
+        }),
       );
-      for (const r of j?.value || []) {
-        all.push({
-          id: r.id,
-          name: r.name,
-          type: r.type,
-          location: r.location,
-          resourceGroup: rgFromId(r.id) || rg,
-          kind: r.kind,
-          sku: r.sku?.name,
-        });
-      }
-    }),
+      // Stable sort by type then name for a predictable inventory grid.
+      all.sort((a, b) => (a.type === b.type ? a.name.localeCompare(b.name) : a.type.localeCompare(b.type)));
+      return all;
+    },
   );
-  // Stable sort by type then name for a predictable inventory grid.
-  all.sort((a, b) => (a.type === b.type ? a.name.localeCompare(b.name) : a.type.localeCompare(b.type)));
-  return all;
 }
 
 // ----------------------------------------------------------------------------
@@ -270,15 +325,93 @@ export interface ResourceHealthStatus {
 }
 
 /**
- * Current availability status for every resource in the subscription.
- * ResourceHealth only emits statuses for resource types it monitors; we
- * key results by resourceId so the inventory grid can join on them.
+ * Current availability status for every resource in the subscription, keyed by
+ * lowercased resourceId so the inventory grid can join on them.
+ *
+ * Fast path: a single Azure Resource Graph query (`HealthResources`) — ONE ARM
+ * round-trip. ARG honours the caller's RBAC. Because ARG's HealthResources
+ * coverage is documented as VM-leaning and Loom's estate is PaaS-heavy, when
+ * ARG yields nothing (or its provider is unavailable) we fall back to the
+ * authoritative subscription-wide `availabilityStatuses` crawl rather than
+ * report empty health. TTL-memoized so tab revisits / Refresh are instant.
  */
 export async function listResourceHealth(): Promise<Record<string, ResourceHealthStatus>> {
   const cfg = readMonitorConfig();
+  return cached(`health:${cfg.subscriptionId}`, HEALTH_TTL_MS, async () => {
+    // Fast path: one Resource Graph call instead of the paginated crawl.
+    try {
+      const arg = await resourceHealthViaResourceGraph(cfg.subscriptionId);
+      if (Object.keys(arg).length > 0) return arg;
+      // ARG returned no rows (PaaS-heavy estate not covered by HealthResources)
+      // — fall through to the authoritative availabilityStatuses crawl.
+    } catch {
+      // ARG provider not registered / unavailable / RBAC — fall back to crawl.
+    }
+    return resourceHealthViaCrawl(cfg.subscriptionId);
+  });
+}
+
+/**
+ * Resource health via Azure Resource Graph (`HealthResources`) — the documented
+ * single-query pattern (learn.microsoft.com/azure/service-health/resource-graph-health-samples).
+ * One POST (paged by `$skipToken` only for very large estates) versus the
+ * subscription crawl's per-page round-trips. Returns {} when ARG has no health
+ * rows for this subscription so the caller can fall back.
+ */
+async function resourceHealthViaResourceGraph(
+  subscriptionId: string,
+): Promise<Record<string, ResourceHealthStatus>> {
+  const out: Record<string, ResourceHealthStatus> = {};
+  const query = [
+    'HealthResources',
+    "| where type =~ 'microsoft.resourcehealth/availabilitystatuses'",
+    '| project',
+    '    ResourceId = tolower(tostring(properties.targetResourceId)),',
+    '    AvailabilityState = tostring(properties.availabilityState),',
+    '    Summary = tostring(properties.summary),',
+    '    ReasonType = tostring(properties.reasonType),',
+    '    OccurredTime = tostring(properties.occurredTime)',
+  ].join('\n');
+
+  let skipToken: string | undefined;
+  let guard = 0;
+  do {
+    guard++;
+    const options: Record<string, unknown> = { resultFormat: 'objectArray' };
+    if (skipToken) options.$skipToken = skipToken;
+    const { json } = await armPost(
+      `/providers/Microsoft.ResourceGraph/resources?api-version=${RESOURCE_GRAPH_API}`,
+      { subscriptions: [subscriptionId], query, options },
+    );
+    const data: any[] = Array.isArray(json?.data) ? json.data : [];
+    for (const row of data) {
+      const resourceId = String(row?.ResourceId || '').toLowerCase();
+      if (!resourceId) continue;
+      out[resourceId] = {
+        resourceId,
+        availabilityState: row?.AvailabilityState || 'Unknown',
+        summary: row?.Summary || undefined,
+        reasonType: row?.ReasonType || undefined,
+        occurredTime: row?.OccurredTime || undefined,
+      };
+    }
+    skipToken = (json?.$skipToken as string) || undefined;
+  } while (skipToken && guard < 20);
+  return out;
+}
+
+/**
+ * Authoritative fallback: the subscription-wide Microsoft.ResourceHealth
+ * `availabilityStatuses` list, paginated via nextLink. Slower than ARG (one
+ * round-trip per page) but covers the PaaS resource types ARG's HealthResources
+ * table omits. Unchanged behaviour from the pre-ARG implementation.
+ */
+async function resourceHealthViaCrawl(
+  subscriptionId: string,
+): Promise<Record<string, ResourceHealthStatus>> {
   const out: Record<string, ResourceHealthStatus> = {};
   let next: string | null =
-    `/subscriptions/${cfg.subscriptionId}/providers/Microsoft.ResourceHealth/availabilityStatuses?api-version=${RESOURCE_HEALTH_API}`;
+    `/subscriptions/${subscriptionId}/providers/Microsoft.ResourceHealth/availabilityStatuses?api-version=${RESOURCE_HEALTH_API}`;
   let guard = 0;
   while (next && guard < 20) {
     guard++;
@@ -430,7 +563,7 @@ export async function queryLogs(kql: string, timespan = 'P1D'): Promise<LogQuery
   if (!kql?.trim()) throw new MonitorError('query required', 400);
   const tk = await token(LA_SCOPE);
   const url = `${LA_ENDPOINT}/v1/workspaces/${workspaceId}/query`;
-  const res = await fetch(url, {
+  const res = await fetchWithTimeout(url, {
     method: 'POST',
     headers: {
       authorization: `Bearer ${tk}`,
@@ -579,8 +712,25 @@ export interface ActivityFeedOpts {
  *
  * Honest gate: throws MonitorNotConfiguredError when
  * LOOM_LOG_ANALYTICS_WORKSPACE_ID is unset, so the route renders a MessageBar.
+ *
+ * TTL-memoized (keyed by workspace + window/limit/union flags) so re-opening
+ * the Activities tab or mashing Refresh inside the window is served from memory
+ * instead of re-running the heavy ADF+Synapse union KQL from cold.
  */
 export async function queryActivityFeed(opts: ActivityFeedOpts = {}): Promise<ActivityFeedRow[]> {
+  const workspaceId = logAnalyticsWorkspaceId();
+  if (!workspaceId) throw new MonitorNotConfiguredError(['LOOM_LOG_ANALYTICS_WORKSPACE_ID']);
+  const days = Math.min(90, Math.max(1, opts.days ?? 30));
+  const limit = Math.min(500, Math.max(1, opts.limit ?? 200));
+  const includeSynapse = opts.includeSynapse !== false;
+  const includeArmLog = opts.includeArmLog === true;
+  const key = `activities:${workspaceId}:${days}:${limit}:${includeSynapse}:${includeArmLog}`;
+  return cached(key, ACTIVITY_TTL_MS, () =>
+    _queryActivityFeed({ days, limit, includeSynapse, includeArmLog }),
+  );
+}
+
+async function _queryActivityFeed(opts: ActivityFeedOpts = {}): Promise<ActivityFeedRow[]> {
   const workspaceId = logAnalyticsWorkspaceId();
   if (!workspaceId) throw new MonitorNotConfiguredError(['LOOM_LOG_ANALYTICS_WORKSPACE_ID']);
 

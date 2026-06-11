@@ -82,6 +82,15 @@ jobs:
         # class the 2026-06-04 scaffold audit caught. Pure node, no install.
         run: node scripts/check-item-routes.mjs
 
+      - name: No bare server-fetch guard
+        if: steps.changed.outputs.console == 'true'
+        working-directory: apps/fiab-console
+        # Fails if any server module in lib/azure/** or lib/install/** does a bare
+        # global fetch( instead of fetchWithTimeout — the "no-timeout" defect class
+        # PR #1198 eliminated. Keeps "every server caller inherits the ceiling"
+        # true going forward. Pure node, no install.
+        run: node scripts/no-bare-server-fetch.mjs
+
       - name: Install pnpm
         if: steps.changed.outputs.console == 'true'
         run: npm install -g pnpm@9

@@ -17,6 +17,10 @@ export async function GET() {
     description: t.description,
     service: t.service,
     parameters: t.parameters,
+    // Optional self-explanatory metadata (audit-T121) — undefined when a tool
+    // hasn't set it; the UI falls back to `description`.
+    whenToUse: t.whenToUse,
+    readsContext: t.readsContext,
   }));
   const grouped: Record<string, typeof tools> = {};
   for (const t of tools) {

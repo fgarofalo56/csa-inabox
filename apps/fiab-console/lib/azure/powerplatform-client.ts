@@ -22,6 +22,7 @@
  * BFF + editor can render a clean MessageBar with remediation hint.
  */
 
+import { fetchWithTimeout } from '@/lib/azure/fetch-with-timeout';
 import {
   ChainedTokenCredential, DefaultAzureCredential, ManagedIdentityCredential,
   ClientSecretCredential, type TokenCredential,
@@ -146,7 +147,7 @@ async function call<T = any>(url: string, scope: string, opts: CallOpts = {}): P
     const s = qs.toString();
     if (s) full += (full.includes('?') ? '&' : '?') + s;
   }
-  const res = await fetch(full, {
+  const res = await fetchWithTimeout(full, {
     method,
     headers: {
       'authorization': `Bearer ${token}`,
@@ -416,7 +417,7 @@ async function bapCallWithHeaders<T = any>(
     const s = qs.toString();
     if (s) full += (full.includes('?') ? '&' : '?') + s;
   }
-  const res = await fetch(full, {
+  const res = await fetchWithTimeout(full, {
     method,
     headers: {
       'authorization': `Bearer ${token}`,
@@ -900,7 +901,7 @@ export async function addColumn(
   const endpoint = `${url}/api/data/v9.2/EntityDefinitions(LogicalName='${encodeURIComponent(logicalName)}')/Attributes`;
   // Use the raw fetch path so we can read the OData-EntityId header on the 204.
   const token = await getToken(scope);
-  const res = await fetch(endpoint, {
+  const res = await fetchWithTimeout(endpoint, {
     method: 'POST',
     headers: {
       'authorization': `Bearer ${token}`,

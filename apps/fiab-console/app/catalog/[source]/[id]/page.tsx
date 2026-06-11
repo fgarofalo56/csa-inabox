@@ -1,5 +1,6 @@
 'use client';
 
+import { clientFetch } from '@/lib/client-fetch';
 import { useEffect, useState } from 'react';
 import { useParams, useSearchParams } from 'next/navigation';
 import { CatalogShell } from '@/lib/components/catalog/catalog-shell';
@@ -33,7 +34,7 @@ export default function AssetDetailPage() {
     const p = new URLSearchParams({ source });
     if (host) p.set('host', host);
     if (workspaceId) p.set('workspaceId', workspaceId);
-    fetch(`/api/catalog/asset/${encodeURIComponent(id)}?${p.toString()}`)
+    clientFetch(`/api/catalog/asset/${encodeURIComponent(id)}?${p.toString()}`)
       .then((r) => r.json())
       .then((j) => {
         if (!alive) return;

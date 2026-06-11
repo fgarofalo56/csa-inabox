@@ -34,6 +34,20 @@ export interface ThreadEdge {
   action: string;
   createdAt: string;
   createdBy?: string;
+  /**
+   * Tombstone — set when one of this edge's endpoints was soft-deleted (moved
+   * to the Recycle bin). A tombstoned edge is hidden from the lineage graph by
+   * default (so it never shows stale lineage) but is NOT removed, so restoring
+   * the recycled item un-tombstones it. Mirrors Purview/Atlas relationship
+   * status DELETED, where deleted entities are retained, not purged.
+   */
+  deletedAt?: string;
+  /**
+   * Which endpoint item id(s) caused the tombstone. An edge can be tombstoned
+   * by either endpoint; it only becomes visible again once EVERY tombstoning
+   * item has been restored (this set is empty).
+   */
+  staleItemIds?: string[];
 }
 
 export interface RecordEdgeInput {
@@ -80,15 +94,117 @@ export async function recordThreadEdge(session: SessionPayload, input: RecordEdg
   }
 }
 
-/** List the caller's Thread edges (most recent first). */
-export async function listThreadEdges(session: SessionPayload): Promise<ThreadEdge[]> {
+/**
+ * List the caller's Thread edges (most recent first).
+ *
+ * Tombstoned edges (an endpoint was deleted/recycled) are excluded by default
+ * so the lineage graph never shows stale lineage. Pass `{ includeStale: true }`
+ * to return them too (e.g. an audit view).
+ */
+export async function listThreadEdges(
+  session: SessionPayload,
+  opts: { includeStale?: boolean } = {},
+): Promise<ThreadEdge[]> {
   const tenantId = session.claims.oid;
   const container = await threadEdgesContainer();
+  const where = opts.includeStale
+    ? 'c.tenantId = @t'
+    : 'c.tenantId = @t AND (NOT IS_DEFINED(c.deletedAt) OR c.deletedAt = null)';
   const { resources } = await container.items
     .query<ThreadEdge>({
-      query: 'SELECT * FROM c WHERE c.tenantId = @t ORDER BY c.createdAt DESC',
+      query: `SELECT * FROM c WHERE ${where} ORDER BY c.createdAt DESC`,
       parameters: [{ name: '@t', value: tenantId }],
     })
     .fetchAll();
   return resources || [];
+}
+
+/**
+ * Auto-reconcile the lineage graph when a Loom item is deleted.
+ *
+ * Finds every edge where the item is the source OR the target (within the
+ * tenant partition) and either:
+ *   • `mode:'remove'`    — hard-deletes the edge (used on a permanent delete /
+ *     recycle-bin purge). The edge is gone for good, matching Purview's
+ *     incremental-scan rule that a hard-deleted asset is not re-ingested.
+ *   • `mode:'tombstone'` — stamps `deletedAt` + records the item id in
+ *     `staleItemIds` (used on soft-delete / move-to-recycle-bin). The edge is
+ *     hidden but recoverable, so a recycle-bin restore brings the lineage back.
+ *
+ * Best-effort — never throws (matches the recordThreadEdge contract: lineage
+ * reconciliation must never make a delete fail).
+ */
+export async function reconcileThreadEdgesOnDelete(
+  tenantId: string,
+  itemId: string,
+  opts: { mode: 'remove' | 'tombstone' },
+): Promise<void> {
+  if (!tenantId || !itemId) return;
+  try {
+    const container = await threadEdgesContainer();
+    const { resources } = await container.items
+      .query<ThreadEdge>({
+        query: 'SELECT * FROM c WHERE c.tenantId = @t AND (c.fromItemId = @id OR c.toItemId = @id)',
+        parameters: [
+          { name: '@t', value: tenantId },
+          { name: '@id', value: itemId },
+        ],
+      })
+      .fetchAll();
+    for (const edge of resources || []) {
+      try {
+        if (opts.mode === 'remove') {
+          await container.item(edge.id, tenantId).delete();
+        } else {
+          const staleItemIds = Array.from(new Set([...(edge.staleItemIds || []), itemId]));
+          await container.items.upsert<ThreadEdge>({
+            ...edge,
+            deletedAt: edge.deletedAt || new Date().toISOString(),
+            staleItemIds,
+          });
+        }
+      } catch {
+        /* per-edge best-effort — keep reconciling the rest */
+      }
+    }
+  } catch {
+    /* reconcile is best-effort — never block the delete */
+  }
+}
+
+/**
+ * Un-tombstone edges when a soft-deleted item is restored from the Recycle bin.
+ * Removes `itemId` from each edge's `staleItemIds`; an edge only becomes visible
+ * again once NO tombstoning item remains (so an edge tombstoned by both
+ * endpoints stays hidden until both are restored). Best-effort, never throws.
+ */
+export async function restoreThreadEdgesForItem(tenantId: string, itemId: string): Promise<void> {
+  if (!tenantId || !itemId) return;
+  try {
+    const container = await threadEdgesContainer();
+    const { resources } = await container.items
+      .query<ThreadEdge>({
+        query: 'SELECT * FROM c WHERE c.tenantId = @t AND IS_DEFINED(c.deletedAt) AND ARRAY_CONTAINS(c.staleItemIds, @id)',
+        parameters: [
+          { name: '@t', value: tenantId },
+          { name: '@id', value: itemId },
+        ],
+      })
+      .fetchAll();
+    for (const edge of resources || []) {
+      try {
+        const staleItemIds = (edge.staleItemIds || []).filter((id) => id !== itemId);
+        const next: ThreadEdge = { ...edge, staleItemIds };
+        if (staleItemIds.length === 0) {
+          delete next.deletedAt;
+          delete next.staleItemIds;
+        }
+        await container.items.upsert<ThreadEdge>(next);
+      } catch {
+        /* per-edge best-effort */
+      }
+    }
+  } catch {
+    /* best-effort — never block the restore */
+  }
 }

@@ -8,6 +8,7 @@ import {
 } from '@fluentui/react-components';
 import { Section, Toolbar } from '@/lib/components/ui/section';
 import { ApimServiceShape } from '@/lib/azure/apim-client';
+import { apimFetchJson } from './apim-pane-fetch';
 
 const useStyles = makeStyles({
   stats: {
@@ -39,36 +40,37 @@ export function ApimServicePane() {
   const [scaling, setScaling] = useState(false);
 
   useEffect(() => {
-    fetch('/api/items/apim-service')
-      .then((r) => r.json())
+    apimFetchJson('/api/apim/service')
       .then((d) => {
         if (d.ok && d.service) {
-          setService(d.service);
-          setNewSku(d.service.sku.name);
-          setNewCapacity(d.service.sku.capacity);
+          const svc = d.service as ApimServiceShape;
+          setService(svc);
+          setNewSku(svc.sku.name);
+          setNewCapacity(svc.sku.capacity);
         } else {
-          setError(d.error || 'Failed to load service');
+          setError((d.error as string) || 'Failed to load service');
         }
         setLoading(false);
       })
-      .catch((e) => { setError(String(e)); setLoading(false); });
+      .catch((e) => { setError(e instanceof Error ? e.message : String(e)); setLoading(false); });
   }, []);
 
   async function handleScale() {
     setScaling(true);
+    setError(null);
     try {
-      const res = await fetch('/api/items/apim-service', {
+      const d = await apimFetchJson('/api/apim/service', {
         method: 'PATCH',
+        headers: { 'content-type': 'application/json' },
         body: JSON.stringify({ sku: newSku, capacity: newCapacity }),
       });
-      const d = await res.json();
       if (d.ok && d.service) {
-        setService(d.service);
+        setService(d.service as ApimServiceShape);
       } else {
-        setError(d.error || 'Scale operation failed');
+        setError((d.error as string) || 'Scale operation failed');
       }
     } catch (e) {
-      setError(String(e));
+      setError(e instanceof Error ? e.message : String(e));
     } finally {
       setScaling(false);
     }

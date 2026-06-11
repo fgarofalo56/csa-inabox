@@ -31,6 +31,7 @@
  * non-functional state is an honest gate (GraphDriveNotConfiguredError → 503).
  */
 
+import { fetchWithTimeout } from '@/lib/azure/fetch-with-timeout';
 import {
   ChainedTokenCredential,
   DefaultAzureCredential,
@@ -162,7 +163,7 @@ async function graphFetch<T>(path: string): Promise<T> {
   const url = path.startsWith('http') ? path : `${GRAPH_V1}${path}`;
   let res: Response;
   try {
-    res = await fetch(url, {
+    res = await fetchWithTimeout(url, {
       cache: 'no-store',
       headers: {
         authorization: `Bearer ${token.token}`,

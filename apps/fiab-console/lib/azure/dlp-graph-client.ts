@@ -10,12 +10,17 @@
  *   in beta + partially still PowerShell-only. Specifically:
  *
  *   - Listing DLP policies via Graph:
- *       GET https://graph.microsoft.com/beta/security/dataLossPreventionPolicies
- *     This endpoint exists in /beta and returns a paged collection. It is
- *     read-only and gated by `Policy.Read.All` app permission.
+ *       GET https://graph.microsoft.com/beta/informationProtection/dataLossPreventionPolicies
+ *     This is the `dataLossPreventionPolicies` navigation property under
+ *     `informationProtection` (backing cmdlet
+ *     Get-MgBetaInformationProtectionDataLossPreventionPolicy, module
+ *     Microsoft.Graph.Beta.Identity.SignIns). It exists in /beta and returns a
+ *     paged collection. It is read-only and gated by `Policy.Read.All`.
+ *     (The older `security/dataLossPreventionPolicies` path returned
+ *     "Resource not found for the segment" — it was never a real Graph route.)
  *
  *   - Listing DLP rules per policy:
- *       GET https://graph.microsoft.com/beta/security/dataLossPreventionPolicies/{id}/rules
+ *       GET https://graph.microsoft.com/beta/informationProtection/dataLossPreventionPolicies/{id}/policyRules
  *     Also read-only on /beta.
  *
  *   - Recent DLP alerts:
@@ -47,6 +52,7 @@
  *   LOOM_CLOUD_BOUNDARY — Commercial / GCC / GCC-High / IL5 (drives the gate).
  */
 
+import { fetchWithTimeout } from '@/lib/azure/fetch-with-timeout';
 import {
   ChainedTokenCredential,
   DefaultAzureCredential,
@@ -154,9 +160,9 @@ function assertEnabled() {
 function graphDlpUnavailableHint(): DlpNotConfiguredHint {
   const h = notConfiguredHint('LOOM_DLP_ENABLED');
   h.bicepStatus =
-    'LOOM_DLP_ENABLED=true and the Console UAMI holds Policy.Read.All, but Microsoft Graph does not expose a readable DLP policy segment for this tenant — the /beta/security/dataLossPreventionPolicies endpoint returns "Resource not found for the segment". DLP policy authoring/reads are still Purview-compliance-portal + Security & Compliance PowerShell only outside the Graph DLP preview.';
+    'LOOM_DLP_ENABLED=true and the Console UAMI holds Policy.Read.All, but Microsoft Graph does not expose a readable DLP policy segment for this tenant — the /beta/informationProtection/dataLossPreventionPolicies endpoint returns "Resource not found for the segment". DLP policy authoring/reads are still Purview-compliance-portal + Security & Compliance PowerShell only outside the Graph DLP preview.';
   h.followUp =
-    'Manage DLP policies in the Microsoft Purview portal (https://purview.microsoft.com → Data loss prevention → Policies) or via Security & Compliance PowerShell (Get-DlpCompliancePolicy). Loom will list them here automatically once Microsoft Graph exposes the dataLossPreventionPolicies segment to this tenant (request enrollment in the Graph DLP preview via a Microsoft support ticket referencing /beta/security/dataLossPreventionPolicies). DLP alerts (Alerts tab) and label-based MIP reads work today.';
+    'Manage DLP policies in the Microsoft Purview portal (https://purview.microsoft.com → Data loss prevention → Policies) or via Security & Compliance PowerShell (Get-DlpCompliancePolicy). Loom will list them here automatically once Microsoft Graph exposes the dataLossPreventionPolicies segment to this tenant (request enrollment in the Graph DLP preview via a Microsoft support ticket referencing /beta/informationProtection/dataLossPreventionPolicies). DLP alerts (Alerts tab), the Restrict-access tab, and label-based MIP reads work today.';
   return h;
 }
 
@@ -172,7 +178,7 @@ function graphDlpGovUnavailableHint(): DlpNotConfiguredHint {
   const h = notConfiguredHint('LOOM_DLP_ENABLED');
   h.bicepStatus =
     `LOOM_DLP_ENABLED=true, but this deployment runs in ${label}. Microsoft Graph's ` +
-    '/beta/security/dataLossPreventionPolicies segment is not available in the US ' +
+    '/beta/informationProtection/dataLossPreventionPolicies segment is not available in the US ' +
     'Government (graph.microsoft.us) or DoD (dod-graph.microsoft.us) roots as of 2026. ' +
     'DLP violations (alerts_v2) and restrict-access enforcement remain fully operational.';
   h.followUp =
@@ -198,7 +204,7 @@ async function graphFetch(path: string, init: RequestInit = {}): Promise<Respons
   const token = await credential.getToken(graphScope());
   if (!token?.token) throw new DlpError(500, null, 'Failed to acquire Microsoft Graph token');
   const url = `${graphBase()}${path}`;
-  return fetch(url, {
+  return fetchWithTimeout(url, {
     ...init,
     headers: {
       ...(init.headers || {}),
@@ -306,19 +312,18 @@ export interface DlpScanStatus {
  * List Purview DLP policies. Returns the raw policy list shaped down to
  * the fields the /admin/security panel renders.
  *
- * Backing call: GET /beta/security/dataLossPreventionPolicies
+ * Backing call: GET /beta/informationProtection/dataLossPreventionPolicies
  *
  * If the tenant hasn't opted into the DLP-via-Graph preview, the endpoint
- * returns 404 and this function returns `[]`. The caller's BFF route is
- * responsible for distinguishing "empty tenant" from "preview not enabled"
- * (callers can re-check by inspecting `getMeta()`).
+ * returns 404 / 400 "Resource not found for the segment" and this function
+ * surfaces an honest configured-but-unavailable gate (graphDlpUnavailableHint).
  */
 export async function listDlpPolicies(): Promise<DlpPolicy[]> {
   assertEnabled();
   // Gov/DoD Graph roots don't expose the /beta DLP policy segment — gate
   // honestly before even calling Graph (alerts/violations still work).
   if (!graphDlpPolicyApiAvailable()) throw new DlpNotConfiguredError(graphDlpGovUnavailableHint());
-  const endpoint = '/beta/security/dataLossPreventionPolicies';
+  const endpoint = '/beta/informationProtection/dataLossPreventionPolicies';
   const res = await graphFetch(endpoint);
   if (res.status === 404) throw new DlpNotConfiguredError(graphDlpUnavailableHint());
   let j: { value?: any[] } | null;
@@ -345,13 +350,13 @@ export async function listDlpPolicies(): Promise<DlpPolicy[]> {
 /**
  * List rules attached to a given DLP policy.
  *
- * Backing call: GET /beta/security/dataLossPreventionPolicies/{id}/rules
+ * Backing call: GET /beta/informationProtection/dataLossPreventionPolicies/{id}/policyRules
  */
 export async function listDlpRules(policyId: string): Promise<DlpRule[]> {
   assertEnabled();
   if (!graphDlpPolicyApiAvailable()) throw new DlpNotConfiguredError(graphDlpGovUnavailableHint());
   if (!policyId) throw new DlpError(400, null, 'policyId is required');
-  const endpoint = `/beta/security/dataLossPreventionPolicies/${encodeURIComponent(policyId)}/rules`;
+  const endpoint = `/beta/informationProtection/dataLossPreventionPolicies/${encodeURIComponent(policyId)}/policyRules`;
   const res = await graphFetch(endpoint);
   if (res.status === 404) throw new DlpNotConfiguredError(graphDlpUnavailableHint());
   let j: { value?: any[] } | null;

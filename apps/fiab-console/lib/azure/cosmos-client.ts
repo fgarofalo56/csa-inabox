@@ -51,6 +51,7 @@ let _threadEdges: Container | null = null;
 let _connections: Container | null = null;
 let _maintenanceJobs: Container | null = null;
 let _dataproductJobs: Container | null = null;
+let _appInstallJobs: Container | null = null;
 let _labelPropagation: Container | null = null;
 let _postureAggregates: Container | null = null;
 let _recommendedActions: Container | null = null;
@@ -158,6 +159,13 @@ let _orgVisuals: Container | null = null;
 // since the value lives in an ACA secret. Created lazily so a fresh
 // environment needs no extra ARM/Bicep step beyond the account+database.
 let _envConfig: Container | null = null;
+// Catalog → Metastores: persistent Databricks workspace registrations. One row
+// per registered workspace (id = workspaceUrl, PK /tenantId so the per-tenant
+// federation list hits a single physical partition). Records the UC metastore
+// attach state + Purview source/scan state so a registration survives a Console
+// reload WITHOUT a bicep flip of LOOM_DATABRICKS_HOSTNAMES. Created lazily so a
+// fresh environment needs no extra ARM/Bicep step beyond the account+database.
+let _metastoreRegistrations: Container | null = null;
 let _ensured = false;
 
 /**
@@ -230,6 +238,56 @@ export interface DataProductImportJob {
 }
 
 /**
+ * Async app-install job record (harness task-019 — true async install).
+ *
+ * A long app install (creating 10-12 Cosmos items, then provisioning each into
+ * a REAL Azure backend — ADX cluster create, Synapse dedicated-pool resume,
+ * Databricks job run, ADF/Synapse pipeline createRun+poll, Logic App run) can
+ * exceed the edge gateway's ~30s window. Rather than block the HTTP response on
+ * the whole provision (which 504s), POST /api/apps/[id]/install now writes a
+ * `running` job here, returns 202 { jobId }, and finishes the install in a
+ * floating promise that survives the response (the Container App Node process
+ * stays alive). The dialog polls GET /api/apps/install-jobs/[jobId] every 5s for
+ * live phase + percentComplete + the final ProvisionReport.
+ *
+ * One row per install run, partitioned by tenant so every poll is a
+ * single-partition point-read. Created lazily (createIfNotExists) + ARM-
+ * provisioned in cosmos.bicep so a fresh environment needs no extra step.
+ *
+ * `percentComplete` mirrors the Fabric/ARM long-running-operation contract
+ * (Fabric LRO `percentComplete`, ARM async `status`), so the UI shows real
+ * forward progress across phases instead of a spinner that may 504.
+ */
+export interface AppInstallJob {
+  id: string;            // jobId (UUID)
+  tenantId: string;      // partition key — caller's oid
+  appId: string;
+  appName?: string;
+  workspaceId: string;
+  status: 'running' | 'done' | 'partial' | 'failed';
+  /** Coarse phase for the progress label. */
+  phase: 'creating-items' | 'provisioning' | 'finalizing' | 'done';
+  /** Whether live-service provisioning was requested (the wizard's Deploy switch). */
+  deploy: boolean;
+  mode: 'shared' | 'dedicated';
+  totalItems: number;
+  createdItems: number;
+  /** 0-100 — forward progress across create + provision + finalize. */
+  percentComplete: number;
+  /** Per-item create results (created | existed | failed). */
+  installed: Array<{ itemType: string; id?: string; displayName: string; status: string; error?: string }>;
+  /** Final provisioning report (set once the provision phase completes). Typed
+   *  structurally so this low-level module stays decoupled from the engine. */
+  provision?: unknown;
+  /** Catastrophic worker error (the install loop itself threw) — distinct from
+   *  per-item provision failures captured inside `provision`. */
+  error?: string;
+  createdAt: string;
+  updatedAt: string;
+  createdBy?: string;
+}
+
+/**
  * Report subscription — a scheduled, recurring export+email delivery of a
  * Power BI report (Azure-native parity with Fabric/Power BI "Subscribe to
  * report" + "Subscriptions"). One row per subscription, partitioned by the
@@ -277,6 +335,33 @@ export interface ReportDeliveryLog {
   fileSizeBytes?: number;           // size of the exported file (succeeded only)
   blobPath?: string;                // ADLS path the export was archived to (succeeded only)
   error?: string;                   // failure detail (failed only)
+}
+
+/**
+ * Persistent Databricks workspace registration for the Unified Catalog →
+ * Metastores surface. One row per registered workspace (id = workspaceUrl),
+ * partitioned by /tenantId. The Cosmos doc is what makes a registration survive
+ * a Console reload WITHOUT a bicep flip of LOOM_DATABRICKS_HOSTNAMES — the BFF
+ * unions these workspaceUrls with the env hostnames so federation picks them up.
+ */
+export interface MetastoreRegistration {
+  id: string;                       // == workspaceUrl (host, no scheme)
+  tenantId: string;                 // partition key — registrant oid
+  workspaceUrl: string;             // adb-….azuredatabricks.net (host, no scheme)
+  workspaceName?: string;           // friendly ARM name when registered from the picker
+  workspaceArmId?: string;          // ARM resource id (when known)
+  workspaceNumericId?: string;      // Databricks numeric workspace id (for UC attach)
+  metastoreId?: string;             // attached UC metastore id (when attached)
+  defaultCatalog?: string;          // default catalog name set on attach (e.g. 'main')
+  ucAttached: boolean;              // true once assignMetastore() succeeded
+  purviewSourceName?: string;       // Purview Data Map data-source name (when registered)
+  purviewScanName?: string;         // Purview scan name (when defined)
+  lastScanRunId?: string;           // last triggered scan run id
+  purviewRegistered: boolean;       // true once the Purview source was registered
+  purviewScanned: boolean;          // true once a scan run was triggered
+  registeredAt: string;             // ISO timestamp
+  registeredBy?: string;            // registrant oid / upn
+  updatedAt?: string;
 }
 
 function endpoint(): string {
@@ -409,6 +494,10 @@ async function ensure() {
   // extra ARM/Bicep step beyond the account+database. Named distinctly from the
   // marketplace 'dataproduct-jobs' container below (different partition key).
   _dataproductJobs = await mk('dataproduct-import-jobs', '/tenantId');
+  // Async app-install jobs (task-019) — one row per install run, PK /tenantId so
+  // the install dialog's 5s poll hits a single physical partition. Created lazily
+  // (createIfNotExists) here AND ARM-provisioned in cosmos.bicep's loomContainers.
+  _appInstallJobs = await mk('app-install-jobs', '/tenantId');
   // Sensitivity-label downstream propagation state (F15). One row per item
   // (id = 'prop:<itemId>'), written by the label-propagation timer Function
   // and read live-overlaid by the lineage view. PK /tenantId so the governance
@@ -579,6 +668,11 @@ async function ensure() {
   // Admin runtime env/config — one doc per tenant holding desired env-var
   // values (non-secret) + secret-set flags, PK /tenantId.
   _envConfig = await mk('env-config', '/tenantId');
+  // Catalog → Metastores: persistent Databricks workspace registrations. One row
+  // per registered workspace (id = workspaceUrl), PK /tenantId so the federation
+  // list hits a single physical partition. Survives Console reloads without a
+  // bicep flip of LOOM_DATABRICKS_HOSTNAMES.
+  _metastoreRegistrations = await mk('metastore-registrations', '/tenantId');
   _ensured = true;
 }
 
@@ -589,6 +683,7 @@ export async function threadEdgesContainer(): Promise<Container> { await ensure(
 export async function connectionsContainer(): Promise<Container> { await ensure(); return _connections!; }
 export async function maintenanceJobsContainer(): Promise<Container> { await ensure(); return _maintenanceJobs!; }
 export async function dataproductJobsContainer(): Promise<Container> { await ensure(); return _dataproductJobs!; }
+export async function appInstallJobsContainer(): Promise<Container> { await ensure(); return _appInstallJobs!; }
 export async function labelPropagationContainer(): Promise<Container> { await ensure(); return _labelPropagation!; }
 export async function postureAggregatesContainer(): Promise<Container> { await ensure(); return _postureAggregates!; }
 export async function recommendedActionsContainer(): Promise<Container> { await ensure(); return _recommendedActions!; }
@@ -631,6 +726,8 @@ export async function embedCodesContainer(): Promise<Container> { await ensure()
 export async function orgVisualsContainer(): Promise<Container> { await ensure(); return _orgVisuals!; }
 /** Admin runtime env/config — desired deployment env-var state, PK /tenantId. */
 export async function envConfigContainer(): Promise<Container> { await ensure(); return _envConfig!; }
+/** Catalog → Metastores: persistent Databricks workspace registrations, PK /tenantId. */
+export async function metastoreRegistrationsContainer(): Promise<Container> { await ensure(); return _metastoreRegistrations!; }
 
 // Foundation admin containers (shared cloud-endpoints resolver task).
 /** Admin Workspace Catalog — one row per Loom-managed workspace, PK /tenantId. */
@@ -762,7 +859,7 @@ const KNOWN_CONTAINER_IDS = [
   'workspace-permissions', 'workspace-git',
   'tenant-themes', 'tenant-settings', 'marketplace-listings',
   'feature-permissions', 'lakehouse-shortcuts', 'lakehouse-schemas', 'thread-edges', 'connections',
-  'maintenance-jobs', 'dataproduct-import-jobs',
+  'maintenance-jobs', 'dataproduct-import-jobs', 'app-install-jobs',
   'label-propagation',
   'posture-aggregates', 'recommended-actions',
   'posture-aggregates-admin', 'recommended-actions-admin',
@@ -783,6 +880,7 @@ const KNOWN_CONTAINER_IDS = [
   'workspace-spark-config',
   'embed-codes', 'org-visuals',
   'env-config',
+  'metastore-registrations',
 ];
 
 /** List all Loom containers with their current throughput shape. */

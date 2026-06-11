@@ -29,6 +29,7 @@
  * No mocks. No stubs. All non-Cosmos calls hit ARM / Graph / (opt-in) Fabric.
  */
 
+import { fetchWithTimeout } from '@/lib/azure/fetch-with-timeout';
 import {
   ChainedTokenCredential,
   DefaultAzureCredential,
@@ -135,7 +136,7 @@ interface ArmResponse<T = any> {
 
 async function armFetch<T = any>(url: string, init: RequestInit = {}): Promise<ArmResponse<T>> {
   const token = await armToken();
-  const res = await fetch(url, {
+  const res = await fetchWithTimeout(url, {
     ...init,
     headers: {
       ...(init.headers || {}),
@@ -235,7 +236,7 @@ async function fabricAddRole(
 ): Promise<SideEffectResult> {
   try {
     const token = await fabricToken();
-    const res = await fetch(`${fabricBase()}/workspaces/${fabricWorkspace}/roleAssignments`, {
+    const res = await fetchWithTimeout(`${fabricBase()}/workspaces/${fabricWorkspace}/roleAssignments`, {
       method: 'POST',
       headers: { authorization: `Bearer ${token}`, 'content-type': 'application/json', accept: 'application/json' },
       cache: 'no-store',
@@ -258,7 +259,7 @@ async function fabricAddRole(
 async function fabricRemoveRole(fabricWorkspace: string, principalId: string): Promise<SideEffectResult> {
   try {
     const token = await fabricToken();
-    const res = await fetch(`${fabricBase()}/workspaces/${fabricWorkspace}/roleAssignments/${principalId}`, {
+    const res = await fetchWithTimeout(`${fabricBase()}/workspaces/${fabricWorkspace}/roleAssignments/${principalId}`, {
       method: 'DELETE',
       headers: { authorization: `Bearer ${token}`, accept: 'application/json' },
       cache: 'no-store',
@@ -475,7 +476,7 @@ async function graphUserInGroup(token: string, groupId: string, userId: string):
   // Microsoft Graph: members/{id} existence check across the transitive closure.
   const url = `${graphBase()}/groups/${groupId}/transitiveMembers/${userId}?$select=id`;
   try {
-    const res = await fetch(url, {
+    const res = await fetchWithTimeout(url, {
       headers: { authorization: `Bearer ${token}`, accept: 'application/json', ConsistencyLevel: 'eventual' },
       cache: 'no-store',
     });
@@ -492,7 +493,7 @@ async function graphUserInGroup(token: string, groupId: string, userId: string):
   let guard = 0;
   while (next && guard < 50) {
     guard += 1;
-    const res: Response = await fetch(next, {
+    const res: Response = await fetchWithTimeout(next, {
       headers: { authorization: `Bearer ${token}`, accept: 'application/json', ConsistencyLevel: 'eventual' },
       cache: 'no-store',
     });

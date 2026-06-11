@@ -23,6 +23,7 @@
  * via eventhubsConfigGate() and the navigator shows a single honest infra-gate.
  */
 
+import { fetchWithTimeout } from '@/lib/azure/fetch-with-timeout';
 import {
   DefaultAzureCredential,
   ManagedIdentityCredential,
@@ -94,7 +95,7 @@ function nsUrl(cfg: EventHubsConfig): string {
 async function callArm(url: string, init?: RequestInit): Promise<Response> {
   const t = await credential.getToken(ARM_SCOPE);
   if (!t?.token) throw new EventHubsArmError(401, undefined, 'Failed to acquire ARM token');
-  return fetch(url, {
+  return fetchWithTimeout(url, {
     ...init,
     headers: {
       ...(init?.headers || {}),
@@ -151,10 +152,19 @@ function shapeEventHub(raw: any): EventHubEntity {
   };
 }
 
-export async function listEventHubs(): Promise<EventHubEntity[]> {
-  const cfg = readEventHubsConfig();
+/**
+ * List the event hubs of an ARBITRARY namespace (subscription + RG + namespace
+ * supplied by the caller). This is what the Real-Time Hub connect dialog uses:
+ * it discovers many namespaces cross-subscription via Resource Graph, then lists
+ * the hubs of whichever one the user picks — NOT the single env-pinned namespace.
+ */
+export async function listEventHubsIn(cfg: EventHubsConfig): Promise<EventHubEntity[]> {
   const raw = await armList(`${nsUrl(cfg)}/eventhubs?api-version=${EH_API}`);
   return raw.map(shapeEventHub);
+}
+
+export async function listEventHubs(): Promise<EventHubEntity[]> {
+  return listEventHubsIn(readEventHubsConfig());
 }
 
 export interface CreateEventHubSpec {
@@ -163,8 +173,8 @@ export interface CreateEventHubSpec {
   messageRetentionInDays?: number; // 1–7 (standard)
 }
 
-export async function createEventHub(spec: CreateEventHubSpec): Promise<EventHubEntity> {
-  const cfg = readEventHubsConfig();
+/** Create an event hub in an arbitrary namespace (PUT). */
+export async function createEventHubIn(cfg: EventHubsConfig, spec: CreateEventHubSpec): Promise<EventHubEntity> {
   const name = spec.name.trim();
   const properties: Record<string, unknown> = {
     partitionCount: spec.partitionCount ?? 2,
@@ -176,6 +186,26 @@ export async function createEventHub(spec: CreateEventHubSpec): Promise<EventHub
   );
   if (!r.ok) throw new EventHubsArmError(r.status, await r.text(), `createEventHub failed ${r.status}`);
   return shapeEventHub(await r.json());
+}
+
+export async function createEventHub(spec: CreateEventHubSpec): Promise<EventHubEntity> {
+  return createEventHubIn(readEventHubsConfig(), spec);
+}
+
+/**
+ * Create-if-missing an event hub: returns the existing entity when it already
+ * exists, otherwise PUTs it. Backs the connect dialog's "+ Create new…" path so
+ * re-selecting an existing name never errors and existing partition/retention
+ * settings are preserved rather than reset to defaults.
+ */
+export async function ensureEventHub(cfg: EventHubsConfig, spec: CreateEventHubSpec): Promise<EventHubEntity> {
+  const name = spec.name.trim();
+  const probe = await callArm(`${nsUrl(cfg)}/eventhubs/${encodeURIComponent(name)}?api-version=${EH_API}`);
+  if (probe.ok) return shapeEventHub(await probe.json());
+  if (probe.status !== 404) {
+    throw new EventHubsArmError(probe.status, await probe.text(), `ensureEventHub probe failed ${probe.status}`);
+  }
+  return createEventHubIn(cfg, spec);
 }
 
 export async function deleteEventHub(name: string): Promise<void> {
@@ -199,8 +229,7 @@ export interface ConsumerGroup {
   createdAt?: string;
 }
 
-export async function listConsumerGroups(eventHub: string): Promise<ConsumerGroup[]> {
-  const cfg = readEventHubsConfig();
+export async function listConsumerGroupsIn(cfg: EventHubsConfig, eventHub: string): Promise<ConsumerGroup[]> {
   const raw = await armList(
     `${nsUrl(cfg)}/eventhubs/${encodeURIComponent(eventHub)}/consumergroups?api-version=${EH_API}`,
   );
@@ -212,12 +241,16 @@ export async function listConsumerGroups(eventHub: string): Promise<ConsumerGrou
   }));
 }
 
-export async function createConsumerGroup(
+export async function listConsumerGroups(eventHub: string): Promise<ConsumerGroup[]> {
+  return listConsumerGroupsIn(readEventHubsConfig(), eventHub);
+}
+
+export async function createConsumerGroupIn(
+  cfg: EventHubsConfig,
   eventHub: string,
   name: string,
   userMetadata?: string,
 ): Promise<ConsumerGroup> {
-  const cfg = readEventHubsConfig();
   const properties: Record<string, unknown> = {};
   if (userMetadata) properties.userMetadata = userMetadata;
   const r = await callArm(
@@ -227,6 +260,30 @@ export async function createConsumerGroup(
   if (!r.ok) throw new EventHubsArmError(r.status, await r.text(), `createConsumerGroup failed ${r.status}`);
   const c: any = await r.json();
   return { name: c?.name, eventHub, userMetadata: c?.properties?.userMetadata, createdAt: c?.properties?.createdAt };
+}
+
+export async function createConsumerGroup(
+  eventHub: string,
+  name: string,
+  userMetadata?: string,
+): Promise<ConsumerGroup> {
+  return createConsumerGroupIn(readEventHubsConfig(), eventHub, name, userMetadata);
+}
+
+/**
+ * Create-if-missing a consumer group. The built-in "$Default" group always
+ * exists, so it is short-circuited (ARM rejects PUT on it). The consumer-group
+ * PUT is idempotent for user groups, so this is a thin wrapper that lets the
+ * connect dialog's "+ Create new…" path be safely re-run.
+ */
+export async function ensureConsumerGroup(
+  cfg: EventHubsConfig,
+  eventHub: string,
+  name: string,
+): Promise<ConsumerGroup> {
+  const cg = name.trim();
+  if (!cg || cg === '$Default') return { name: '$Default', eventHub };
+  return createConsumerGroupIn(cfg, eventHub, cg);
 }
 
 export async function deleteConsumerGroup(eventHub: string, name: string): Promise<void> {
@@ -310,8 +367,7 @@ export interface AuthorizationRule {
   scope: 'namespace' | string; // 'namespace' or the parent event hub name
 }
 
-export async function listNamespaceAuthRules(): Promise<AuthorizationRule[]> {
-  const cfg = readEventHubsConfig();
+export async function listNamespaceAuthRulesIn(cfg: EventHubsConfig): Promise<AuthorizationRule[]> {
   const raw = await armList(`${nsUrl(cfg)}/authorizationRules?api-version=${EH_API}`);
   return raw.map((a: any) => ({
     name: a?.name,
@@ -320,8 +376,11 @@ export async function listNamespaceAuthRules(): Promise<AuthorizationRule[]> {
   }));
 }
 
-export async function listEventHubAuthRules(eventHub: string): Promise<AuthorizationRule[]> {
-  const cfg = readEventHubsConfig();
+export async function listNamespaceAuthRules(): Promise<AuthorizationRule[]> {
+  return listNamespaceAuthRulesIn(readEventHubsConfig());
+}
+
+export async function listEventHubAuthRulesIn(cfg: EventHubsConfig, eventHub: string): Promise<AuthorizationRule[]> {
   const raw = await armList(
     `${nsUrl(cfg)}/eventhubs/${encodeURIComponent(eventHub)}/authorizationRules?api-version=${EH_API}`,
   );
@@ -330,6 +389,10 @@ export async function listEventHubAuthRules(eventHub: string): Promise<Authoriza
     rights: a?.properties?.rights || [],
     scope: eventHub,
   }));
+}
+
+export async function listEventHubAuthRules(eventHub: string): Promise<AuthorizationRule[]> {
+  return listEventHubAuthRulesIn(readEventHubsConfig(), eventHub);
 }
 
 /**
@@ -944,7 +1007,7 @@ export async function listStreamingResourcesViaGraph(
     guard++;
     const body: Record<string, unknown> = { subscriptions, query: kql };
     if (skipToken) body.options = { $skipToken: skipToken };
-    const r = await fetch(`${ARG_URL}?api-version=${ARG_API}`, {
+    const r = await fetchWithTimeout(`${ARG_URL}?api-version=${ARG_API}`, {
       method: 'POST',
       headers: { authorization: `Bearer ${t.token}`, 'content-type': 'application/json' },
       body: JSON.stringify(body),
@@ -1067,7 +1130,7 @@ export async function putSchemaVersion(
   const t = await credential.getToken(EVENTHUBS_DATA_SCOPE);
   if (!t?.token) throw new EventHubsArmError(401, undefined, 'Failed to acquire Event Hubs data-plane token');
   const url = `${ehSchemaRegistryBase()}/$schemagroups/${encodeURIComponent(group)}/schemas/${encodeURIComponent(name)}?api-version=${SR_API}`;
-  const r = await fetch(url, {
+  const r = await fetchWithTimeout(url, {
     method: 'PUT',
     headers: {
       authorization: `Bearer ${t.token}`,

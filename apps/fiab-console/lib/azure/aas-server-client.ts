@@ -45,6 +45,7 @@
  * either succeeds with real Azure data or throws AasError with a status + body.
  */
 
+import { fetchWithTimeout } from '@/lib/azure/fetch-with-timeout';
 import {
   ChainedTokenCredential,
   DefaultAzureCredential,
@@ -129,7 +130,7 @@ export function envAasServerRegion(): string {
 async function armCall(url: string, init?: RequestInit): Promise<Response> {
   const tok = await credential.getToken(armScope());
   if (!tok?.token) throw new AasError('Failed to acquire ARM token', 401);
-  return fetch(url, {
+  return fetchWithTimeout(url, {
     ...init,
     headers: {
       ...(init?.headers || {}),
@@ -157,7 +158,7 @@ async function armJson<T>(url: string, label: string, init?: RequestInit): Promi
 async function dpCall(url: string, init?: RequestInit): Promise<Response> {
   const tok = await credential.getToken(aasScope());
   if (!tok?.token) throw new AasError('Failed to acquire AAS data-plane token', 401);
-  return fetch(url, {
+  return fetchWithTimeout(url, {
     ...init,
     headers: {
       ...(init?.headers || {}),
@@ -380,7 +381,7 @@ export async function command(dbName: string, tmslJson: string): Promise<AasComm
     + '</Body></Envelope>';
   const tok = await credential.getToken(aasScope());
   if (!tok?.token) throw new AasError('Failed to acquire AAS XMLA token', 401);
-  const r = await fetch(url, {
+  const r = await fetchWithTimeout(url, {
     method: 'POST',
     headers: {
       authorization: `Bearer ${tok.token}`,
