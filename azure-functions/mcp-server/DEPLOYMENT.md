@@ -30,9 +30,13 @@ dataflow Loom items. **No Microsoft Fabric dependency** (works with
 | `loom_list_pipelines` | consume | List pipelines + activity counts | ADF `…/pipelines` |
 | `loom_get_pipeline` | consume | Full pipeline definition | ADF `…/pipelines/{name}` |
 | `loom_list_dataflows` | consume | List mapping/wrangling data flows | ADF `…/dataflows` |
+| `loom_get_dataflow` | consume | Full data flow definition | ADF `…/dataflows/{name}` |
 | `loom_upsert_pipeline` | **author** | Create/update a pipeline (activities JSON) | ADF `PUT …/pipelines/{name}` |
 | `loom_validate_pipeline` | author | Syntactic/reference validation | ADF `…/validatePipeline` |
+| `loom_author_dataflow` | **author** | Create/update a Power Query (Dataflow Gen2) data flow | ADF `PUT …/dataflows/{name}` |
 | `loom_run_pipeline` | **run** | Trigger a run, return runId | ADF `…/pipelines/{name}/createRun` |
+| `loom_run_dataflow` | **run** | Run a Dataflow Gen2 via an ExecuteWranglingDataflow wrapper pipeline | ADF `PUT …/pipelines` + `…/createRun` |
+| `loom_run_copy_job` | **run** | Materialise + run a Full/Incremental/CDC copy job (Fabric Copy job parity) | ADF datasets + linked service + pipeline + `…/createRun` |
 | `loom_list_pipeline_runs` | diagnose | Recent runs (status, duration, error) | ADF `…/queryPipelineRuns` |
 | `loom_diagnose_run` | diagnose | Per-activity output for one run | ADF `…/queryActivityruns` |
 
@@ -40,6 +44,14 @@ The author/run tools require **Data Factory Contributor** on the factory; the
 read/diagnose tools work with **Reader**. Configure with the `adfName` +
 `dlzResourceGroup` deploy params; when unset, the data-movement tools
 honest-gate (a precise error naming the missing app setting).
+
+`loom_run_copy_job` **Incremental** (watermark) and **CDC** (native SQL change
+tracking) modes additionally need the watermark / LSN checkpoint control DB. Set
+`LOOM_COPYJOB_CONTROL_SQL_SERVER` (+ optional `LOOM_COPYJOB_CONTROL_SQL_DB`,
+default `loom-control`) on the Function App and deploy
+`platform/fiab/bicep/modules/admin-plane/copy-job-control.bicep` (it creates
+`dbo.copy_watermark` + `dbo.usp_write_watermark`). When the control server is
+unset, those two modes honest-gate; **Full** mode copy works without it.
 
 All tools call real Azure REST with the Function App's managed
 identity. When a backing service/permission is missing, the tool returns an

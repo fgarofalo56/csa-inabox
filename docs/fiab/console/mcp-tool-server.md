@@ -27,6 +27,40 @@ mocks.
 | `loom_list_resources` | ARM `…/resources` | "Set `LOOM_RESOURCE_GROUPS` / grant Reader on the RGs" |
 | `loom_list_deployments` | ARM `…/deployments` | "Set `LOOM_RESOURCE_GROUPS` / grant Reader on the RGs" |
 
+### Data-movement / pipeline tools
+
+Backed by the same Azure Data Factory the console BFF uses
+(`apps/fiab-console/lib/azure/adf-client.ts`) — real ARM REST against
+`Microsoft.DataFactory/factories` via the Function App's managed identity. **No
+Microsoft Fabric**: ADF is the Azure-native default backend for the
+data-pipeline / copy-job / dataflow Loom items. Read/diagnose tools need
+**Reader**; write/run tools need **Data Factory Contributor**. All gate honestly
+on `LOOM_SUBSCRIPTION_ID` / `LOOM_DLZ_RG` / `LOOM_ADF_NAME` when unset.
+
+| Tool | Surface | Backend (ADF REST) |
+|------|---------|--------------------|
+| `loom_list_pipelines` | consume | `GET /pipelines` |
+| `loom_get_pipeline` | consume | `GET /pipelines/{n}` |
+| `loom_list_dataflows` | consume | `GET /dataflows` |
+| `loom_get_dataflow` | consume | `GET /dataflows/{n}` |
+| `loom_upsert_pipeline` | author | `PUT /pipelines/{n}` |
+| `loom_validate_pipeline` | author | `POST /validatePipeline` \| `/pipelines/{n}/validate` |
+| `loom_author_dataflow` | author | `PUT /dataflows/{n}` (WranglingDataFlow / Power Query M) |
+| `loom_run_pipeline` | run | `POST /pipelines/{n}/createRun` |
+| `loom_run_dataflow` | run | ExecuteWranglingDataflow wrapper pipeline + `createRun` |
+| `loom_run_copy_job` | run | datasets + (Inc/CDC) control linked service + Full/Incremental/CDC pipeline + `createRun` |
+| `loom_list_pipeline_runs` | diagnose | `POST /queryPipelineRuns` |
+| `loom_diagnose_run` | diagnose | `POST /pipelineruns/{id}/queryActivityruns` |
+
+`loom_run_copy_job` is the Fabric **Copy job** parity surface (simplified data
+movement). Full mode needs only ADF; **Incremental** (watermark) and **CDC**
+(native SQL change tracking) modes additionally require the watermark / LSN
+checkpoint control DB — when `LOOM_COPYJOB_CONTROL_SQL_SERVER` is unset those
+modes return an honest gate naming the env var + the bicep module
+(`platform/fiab/bicep/modules/admin-plane/copy-job-control.bicep`, which creates
+`dbo.copy_watermark` + `dbo.usp_write_watermark`). `loom_author_dataflow` /
+`loom_run_dataflow` are the Azure-native Dataflow Gen2 (Power Query) surface.
+
 ## Transport & auth
 
 Stateless Streamable-HTTP (JSON-RPC over a single `POST /api/mcp`). Every request
