@@ -79,8 +79,10 @@ const useStyles = makeStyles({
     padding: tokens.spacingVerticalM, borderRadius: tokens.borderRadiusLarge,
     border: `1px solid ${tokens.colorNeutralStroke2}`,
     backgroundColor: tokens.colorNeutralBackground1,
+    boxShadow: tokens.shadow2,
     display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalXXS,
   },
+  notice: { marginBottom: tokens.spacingVerticalM },
   statLabel: {
     fontSize: '11px', color: tokens.colorNeutralForeground3, fontWeight: 600,
     textTransform: 'uppercase', letterSpacing: '0.05em',
@@ -278,7 +280,7 @@ export function MonitorHubPane() {
       </div>
 
       {gate && (
-        <MessageBar intent="warning">
+        <MessageBar intent="warning" className={styles.notice}>
           <MessageBarBody>
             <MessageBarTitle>Activity feed unavailable — Log Analytics not configured</MessageBarTitle>
             {gate.message} Missing: <strong>{gate.missing.join(', ')}</strong>. Set it on the Console
@@ -289,7 +291,7 @@ export function MonitorHubPane() {
       )}
 
       {err && (
-        <MessageBar intent="error">
+        <MessageBar intent="error" className={styles.notice}>
           <MessageBarBody>
             <MessageBarTitle>Couldn&apos;t load activity history</MessageBarTitle>
             {err}
@@ -330,7 +332,7 @@ export function MonitorHubPane() {
           <Caption1 className={styles.caption}>
             {tableRows.length} of {rows.length} run{rows.length === 1 ? '' : 's'} · run history from
             Log Analytics{data?.synapseIncluded ? ' (ADF + Synapse)' : ' (ADF)'} · last{' '}
-            {days === '1' ? '24 hours' : `${days} days`}
+            {debouncedDays === '1' ? '24 hours' : `${debouncedDays} days`}
           </Caption1>
         )}
       </Section>
