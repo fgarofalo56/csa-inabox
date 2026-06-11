@@ -46,10 +46,24 @@ Zero ❌. Zero stub banners.
 
 ## Per-cloud
 
+`LOOM_ORG_VISUALS_URL` is wired by `admin-plane/main.bicep` from the DLZ ADLS
+account (`loomStorageAccount`). That account is only deterministically known in
+**single-sub** mode (Commercial / Commercial-full / GCC). In **multi-sub** mode
+(GCC-High / IL5) the per-DLZ storage accounts live in separate subscriptions, so
+a single Console env can't bind one by default — `loomStorageAccount` is empty,
+`LOOM_ORG_VISUALS_URL` is omitted, and the pane shows the honest `NotConfiguredBar`
+gate. Operators wire it post-deploy via `scripts/csa-loom/patch-navigator-env.sh`
+(same pattern as the Cosmos endpoints). The earlier bug — deriving the account
+from `singleDlzRg.id` unconditionally — pointed the env var at a phantom
+`saloomdefault…` account in multi-sub, so SAS minting 500'd instead of gating;
+fixed in audit-T128 and pinned by `embed-codes-bicep-wiring.test.ts`.
+
 | | Commercial | GCC | GCC-High | IL5/DoD |
 |-|-----------|-----|----------|---------|
+| Deployment mode | single-sub | single-sub | multi-sub | multi-sub |
 | Blob suffix | `blob.core.windows.net` | `blob.core.windows.net` | `blob.core.usgovcloudapi.net` | `blob.core.usgovcloudapi.net` |
-| User-delegation SAS | ✅ | ✅ | ✅ | ✅ |
+| Wired by default | ✅ | ✅ | ⚠️ honest-gate (patch script) | ⚠️ honest-gate (patch script) |
+| User-delegation SAS | ✅ | ✅ | ✅ (once wired) | ✅ (once wired) |
 | SAS max TTL | 7 days | 7 days | 7 days | 7 days |
 | Fabric/Power BI dependency | none | none | none | none |
 
@@ -59,3 +73,10 @@ Zero ❌. Zero stub banners.
 writes a real manifest blob + mints a SAS; revoke deletes the blob + flips
 status. With `LOOM_ORG_VISUALS_URL` unset the route returns a 503 + hint and the
 pane renders `NotConfiguredBar`. No `LOOM_DEFAULT_FABRIC_WORKSPACE` required.
+
+`npx vitest run lib/clients/__tests__/embed-codes-bicep-wiring.test.ts` — pins
+the deployment wiring: `loomStorageAccount` is gated on single-sub (no phantom
+account in multi-sub), `LOOM_ORG_VISUALS_URL` + `orgVisualsRbac` are emitted only
+when the account is set, the `org-visuals` Blob + `embed-codes` Cosmos containers
+exist by default, and the RBAC module grants Blob Data Contributor (container) +
+Blob Delegator (account, for the user-delegation key).

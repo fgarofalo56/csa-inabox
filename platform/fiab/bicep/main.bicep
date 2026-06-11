@@ -553,7 +553,18 @@ module adminPlane 'modules/admin-plane/main.bicep' = {
     appGatewayEnabled: appGatewayEnabled
     frontDoorEnabled: frontDoorEnabled
     loomVanityDomain: loomVanityDomain
-    loomStorageAccount: take('saloomdefault${uniqueString(singleDlzRg.id)}', 24)
+    // Single-sub: the DLZ ADLS account name is deterministic over singleDlzRg
+    // (matches landing-zone/storage.bicep's saName) so the Console binds to the
+    // real account — LOOM_ADLS_ACCOUNT / LOOM_*_URL / LOOM_ORG_VISUALS_URL all
+    // resolve and the org-visuals RBAC grant targets it. MUST be empty in
+    // multi-sub: singleDlzRg is NOT deployed there, so deriving from its .id
+    // would yield a phantom `saloomdefault…` account — emitting env vars that
+    // point at a non-existent account (Embed codes / Org visuals SAS minting
+    // would 500 instead of showing the honest config gate). Empty here makes
+    // those panes honest-gate; operators wire multi-sub DLZ accounts post-deploy
+    // via scripts/csa-loom/patch-navigator-env.sh (same pattern as the Cosmos
+    // endpoints below).
+    loomStorageAccount: deploymentMode == 'single-sub' ? take('saloomdefault${uniqueString(singleDlzRg.id)}', 24) : ''
     loomCosmosAccount: take('cosmos-loom-default-${uniqueString(singleDlzRg.id)}', 44)
     // Forward the Cosmos data-plane endpoints to the Console so the vector-store
     // and graph editors bind to the deployed accounts by default (no manual
