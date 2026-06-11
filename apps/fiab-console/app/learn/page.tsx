@@ -468,7 +468,6 @@ export default function LearnPage(): React.ReactElement {
                         {t.appLabel ?? 'Install app'}
                       </a>
                     )}
-                    )}
                   </div>
                 </div>
               );
