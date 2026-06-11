@@ -34,6 +34,7 @@ import { itemVisual } from '@/lib/components/ui/item-type-visual';
 import { LearnTopicCard } from '@/lib/components/learn/learn-topic-card';
 import { InstallAppDialog } from '@/lib/components/apps/install-app-dialog';
 import { getCoreSurfaceTutorials } from '@/lib/components/learn/core-surface-tutorials';
+import { NotebookImportWizard } from '@/lib/learn/notebook-import-wizard';
 import {
   getLearnCatalog, loomDocUrl, type LearnTopic, type LearnSection,
 } from '@/lib/learn/content';
@@ -247,6 +248,12 @@ export default function LearnPage(): React.ReactElement {
             </span>
           </div>
         </div>
+      </div>
+
+      {/* Quick action: import a prebuilt notebook into a workspace, with or
+          without seeded ADLS sample data. Real provisioning end-to-end. */}
+      <div style={{ marginBottom: tokens.spacingVerticalL }}>
+        <NotebookImportWizard />
       </div>
 
       {/* Controls */}
