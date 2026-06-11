@@ -282,7 +282,7 @@ export default function ThreadLineagePage() {
 
       {edges == null ? (
         <Spinner label="Loading lineage…" />
-      ) : view === 'tile' && hasRows ? (
+      ) : error && !hasEdges ? null : view === 'tile' && hasRows ? (
         <TileGrid>
           {edges.map((e) => (
             <ItemTile
