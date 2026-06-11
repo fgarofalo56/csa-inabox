@@ -25,6 +25,32 @@ This file is maintained automatically by
 [Conventional Commits](https://www.conventionalcommits.org/). See
 [RELEASE.md](RELEASE.md) for the release process.
 
+## [0.35.0](https://github.com/fgarofalo56/csa-inabox/compare/csa-inabox-v0.34.0...csa-inabox-v0.35.0) (2026-06-11)
+
+
+### Features
+
+* **csa-loom:** all-3-dimension tutorial capture + coverage gate (audit-t33) ([#1148](https://github.com/fgarofalo56/csa-inabox/issues/1148)) ([5599394](https://github.com/fgarofalo56/csa-inabox/commit/5599394a2fe6e1e109dbfa0dfc99e30c6e0a1ad6))
+* **csa-loom:** Palantir migration surfaces as Azure-native item types (audit-T29) ([#1151](https://github.com/fgarofalo56/csa-inabox/issues/1151)) ([7b5e070](https://github.com/fgarofalo56/csa-inabox/commit/7b5e070d037eeca14deb266fdc50e9a82baa5bbc))
+* **csa-loom:** wire + verify IL5/GCC-High full-stack deploy (A-4/PMF-64) ([#1149](https://github.com/fgarofalo56/csa-inabox/issues/1149)) ([86968e7](https://github.com/fgarofalo56/csa-inabox/commit/86968e7468f40608a75c80fac74aa470043b26dd))
+
+
+### Bug Fixes
+
+* **csa-loom:** block self-referential deployment pipelines (C-86 promote error) ([#1146](https://github.com/fgarofalo56/csa-inabox/issues/1146)) ([ae03947](https://github.com/fgarofalo56/csa-inabox/commit/ae03947a2d6b9434812123aef8a3d8e05138b00b))
+
+
+### Documentation
+
+* **csa-loom:** honest-gap disclosure for Foundry Phonograph / IL6 / writeback (audit-T35) ([#1145](https://github.com/fgarofalo56/csa-inabox/issues/1145)) ([e2dbedb](https://github.com/fgarofalo56/csa-inabox/commit/e2dbedb89259f3c99ee6bbf9e0d9fc7df56f3eba))
+* **csa-loom:** PRP-21/22/23/25 marketing+workshops+use-cases+solution-store (audit-T32) ([#1150](https://github.com/fgarofalo56/csa-inabox/issues/1150)) ([eb3ef9b](https://github.com/fgarofalo56/csa-inabox/commit/eb3ef9b3ad7d778f652ae9077f609367a99d8e57))
+* **csa-loom:** Wave-4 parity-doc re-audit + Scorecard rev.6 (audit-T31) ([#1147](https://github.com/fgarofalo56/csa-inabox/issues/1147)) ([a3650e9](https://github.com/fgarofalo56/csa-inabox/commit/a3650e98a01a05801e737d9681d1ac0edeea29fe))
+
+
+### Miscellaneous
+
+* **csa-loom:** hardcode deterministic WAVE_IDS map in fast builder ([#1152](https://github.com/fgarofalo56/csa-inabox/issues/1152)) ([879d883](https://github.com/fgarofalo56/csa-inabox/commit/879d883286780ba33b60e1b2dd1ed768bb802d04))
+
 ## [0.34.0](https://github.com/fgarofalo56/csa-inabox/compare/csa-inabox-v0.33.0...csa-inabox-v0.34.0) (2026-06-10)
 
 
