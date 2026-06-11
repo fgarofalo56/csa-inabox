@@ -41,6 +41,44 @@ Azure REST/data-plane — no mock data.
 
 Zero ❌, zero stub banners.
 
+## Visual app builder (audit-T145)
+
+**Decision — standalone, in the Rayfin/Fabric-Apps surface (not Weave/Atelier).**
+The task asked whether the low-code visual builder should live under Weave/Atelier
+(audit-T51) or standalone. On the Azure-native build there is **no separate
+Atelier (`workshop-app`) item type**, and the real Fabric-Apps app-building flow
+(`npm create @microsoft/rayfin --template dataapp`) is itself a **code-first +
+GitHub Copilot codegen** flow — there is no WYSIWYG Fabric canvas to mirror. So a
+Loom-hosted visual builder with a **real Azure runtime** is the honest home, and
+it lives standalone inside this Rayfin editor's **App builder** tab. (If an
+Atelier surface is later added, it should reuse `rayfin-app-model.ts` +
+`rayfin-model-binding.ts` rather than fork them.)
+
+The builder is a genuine low-code surface — pages → components → data bindings —
+with a real backend: the **app definition** persists on the Cosmos item
+(`state.spec.app`) and a **runtime** executes every data component's read view
+live over XMLA. It does **not** pretend to run the Microsoft Rayfin CLI in the
+browser (that runs on the dev machine); instead Loom emits a typed
+`rayfin/app.config.ts` artifact (the same generate-artifact pattern), while the
+live preview proves each binding against the real Azure Analysis Services model.
+
+| Capability (low-code app builder)                          | Status | Backend per control |
+|------------------------------------------------------------|--------|---------------------|
+| Pages: add / rename / delete / select                      | ✅ built | client app definition → persisted on `state.spec.app` via PUT `/api/items/rayfin-app/[id]` |
+| Component palette (Table / Metric / Chart / Form / Text)   | ✅ built | `emptyComponent()` typed model — no freeform JSON (loom-no-freeform-config) |
+| Bind a data component to the model (measures + group-by)   | ✅ built | reuses the bound model's introspected objects (`/model-objects`) |
+| Per-component live preview                                 | ✅ built | POST `/api/items/rayfin-app/preview` → `executeDax()` real XMLA |
+| **Run app preview (runtime)** — render every component live | ✅ built | POST `/api/items/rayfin-app/[id]/render` → per-component `buildReadViewDax()` + `previewReadView()` real XMLA |
+| Metric / chart / table render of live rows                 | ✅ built | runtime rows → Fluent metric card / CSS bar chart / data grid |
+| Form component bound to a Rayfin entity                    | ✅ built | entity dropdown; write-back runs in the **deployed** app (honest — no fake POST in Loom) |
+| Scaffold wizard (model → measure + category → starter app) | ✅ built | `scaffoldAppDefinition()` builds an Overview page (metric + table + chart) |
+| `rayfin/app.config.ts` codegen                             | ✅ built | `generateAppConfig()` emits typed pages → components → DAX |
+| App definition validation                                  | ✅ built | `validateAppDefinition()` (duplicate ids, unbound model, empty chart) |
+| AAS not configured                                         | ⚠️ honest gate | render route returns `{ ok:false, gate }` 503; builder shows MessageBar naming `LOOM_AAS_SERVER_NAME` |
+
+Tests: `lib/editors/__tests__/rayfin-app-model.test.ts` (21 cases — DAX, codegen,
+scaffold, validation). Zero ❌, zero stub banners.
+
 ## No-Fabric-dependency
 
 The model-binding DEFAULT backend is **Azure Analysis Services** (a standalone
