@@ -19,9 +19,9 @@
 
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import {
-  Title1, Title3, Body1, Caption1, Badge, Button, Spinner, Text,
+  Title1, Body1, Caption1, Badge, Button, Spinner, Text,
   MessageBar, MessageBarBody, MessageBarTitle, MessageBarActions,
-  makeStyles, tokens, mergeClasses,
+  makeStyles, tokens,
 } from '@fluentui/react-components';
 import {
   BotSparkle24Filled, Sparkle20Regular, ArrowRight20Regular,
@@ -423,6 +423,8 @@ export default function CopilotPage() {
           <div className={styles.loadingRow}><Spinner size="tiny" /> <Caption1>Loading sessions…</Caption1></div>
         ) : sessions.length === 0 ? (
           <Caption1>No Copilot sessions yet. Launch Copilot and run your first prompt.</Caption1>
+        ) : filteredSessions.length === 0 ? (
+          <Caption1>No sessions match “{sessionQuery}”.</Caption1>
         ) : sessionView === 'tile' ? (
           <TileGrid minTileWidth={300}>
             {filteredSessions.map((sess) => (
