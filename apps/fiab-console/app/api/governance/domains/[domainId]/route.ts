@@ -25,6 +25,18 @@ export async function PATCH(
   const { domainId } = await ctx.params;
   const body = await req.json().catch(() => ({}));
   try {
+    // MOVE (reparent) — when the body carries `parentDomainId` (string to nest
+    // under a parent, null/'' to move to root). Cosmos reparents + mirrors the
+    // Purview collection; the Fabric backend honestly 501s (no move endpoint).
+    if (body.parentDomainId !== undefined) {
+      const newParentId =
+        body.parentDomainId === null || String(body.parentDomainId).trim() === ''
+          ? undefined
+          : String(body.parentDomainId).trim();
+      const moved = await getDomainsStore().moveDomain(tenantId, domainId, newParentId, who);
+      await writeDomainAudit(tenantId, who, 'update', { domainId, move: { parentDomainId: newParentId } });
+      return NextResponse.json({ ok: true, domain: moved, moved: true });
+    }
     const domain = await getDomainsStore().updateDomain(
       tenantId,
       domainId,

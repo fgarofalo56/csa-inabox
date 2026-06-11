@@ -138,3 +138,64 @@ swatches/icons; Loom-native labels), per `no-vaporware.md` and
   the Image tab, assign a workspace (and confirm the override warning when it's
   already assigned elsewhere), and confirm `/governance/domains` reflects the
   same data read-only.
+
+---
+
+## Unified domain mapping + MOVE + Unity Catalog (audit-t140, 2026-06-11)
+
+A Loom domain is now **one concept written through to BOTH Azure-native
+governance back-ends in parallel** by `lib/azure/unified-domain-mapper.ts`,
+with full CRUD **+ reparent (MOVE)** surfaced on the editable
+`/catalog/domains` page (and the Move action on `/admin/domains`). Cosmos
+remains authoritative; both mirrors are best-effort and independently optional —
+**no Microsoft Fabric / Power BI dependency on any path**.
+
+| Capability | Status | Backend |
+|---|---|---|
+| Loom domain ⇄ **Purview collection**; subdomain ⇄ **child collection** | ✅ Built | `createBusinessDomain`/`updateBusinessDomain`/`deleteBusinessDomain` (PUT/DELETE `/collections/{ref}`), guarded by `isPurviewConfigured()` |
+| Loom root domain ⇄ **Unity Catalog catalog**; subdomain ⇄ **UC schema** | ✅ Built | `createUcCatalog`/`createUcSchema` + `patchUcCatalog`/`patchUcSchema` + `deleteUc*`, guarded by `databricksConfigGate()` |
+| **MOVE / reparent** a domain or subdomain | ✅ Built | `PATCH /api/admin/domains?id=` body `{parentId}` → Cosmos reparent + Purview collection reparent; `getDomainsStore().moveDomain` for the governance store |
+| MOVE in Unity Catalog | ⚠️ Honest note | UC has **no** move (catalog is top-level; a schema can't change catalogs) — mapper returns `unity.moveSupported=false`, the UC mapping is unchanged (never faked) |
+| Edit collections + sub-collections (add / rename / re-describe) | ✅ Built | POST/PATCH route + `/catalog/domains` Add / New subdomain / Edit dialogs |
+| UC catalog/schema **rename** through the BFF | ✅ Built | `PATCH /api/databricks/unity-catalog/catalogs` & `…/schemas` now accept `new_name` → `patchUc*` (`UcMetadataPatch.new_name`) |
+| Per-domain Purview + Unity link badges | ✅ Built | `GET /api/admin/domains` returns `purviewLinked` + `unityLinked` (via `unityLinkStatus()` listing UC catalogs/schemas) |
+| Domains **no longer empty** (fresh tenant) | ✅ Built | `loadOrSeed` seeds a starter set (Finance / Sales & Marketing / Operations + People subdomain) — REAL editable Cosmos domains, not placeholders |
+| Two-level hierarchy enforced (domain → subdomain) | ✅ Built | POST + PATCH/move reject nesting under a subdomain, self-parenting, and deleting a parent that still has subdomains |
+| Move authorization (tenant-admin only) | ✅ Built | PATCH rejects `parentId` from non-tenant-admins (403) |
+
+### Move depth/cycle rules (grounded)
+
+Unity Catalog is a fixed three-level namespace `catalog.schema.table`; a catalog
+has no parent and a schema cannot change catalogs (Learn: UC securable-objects).
+Fabric "subdomains have general settings only" (one level of nesting). So Loom
+caps the domain tree at **two levels** and rejects: self-parenting, a parent
+that is itself a subdomain, moving a domain that has subdomains, and deleting a
+domain that still has subdomains.
+
+### Per-cloud (unified mapper)
+
+| Cloud | Purview collection mirror | Unity Catalog mirror | Move |
+|---|---|---|---|
+| Commercial / GCC | `.purview.azure.com/collections` (UAMI Collection Admin) | `LOOM_DATABRICKS_HOSTNAME` workspace; UAMI needs CREATE CATALOG on the metastore | Cosmos + Purview reparent; UC `moveSupported=false` |
+| GCC-High | `.purview.azure.us/collections` | Same (Gov Databricks workspace) | Same |
+| IL5 | `.purview.azure.us/collections` | Same; `LOOM_DOMAINS_BACKEND=fabric` throws `DomainsBackendGateError` (Fabric Admin not IL5) | Cosmos authoritative; never Fabric |
+
+### Bicep sync (audit-t140)
+
+No new env vars or resources. The unified mapper keys entirely off the three
+existing gates already wired in `admin-plane/main.bicep`:
+`LOOM_PURVIEW_ACCOUNT`, `LOOM_DATABRICKS_HOSTNAME`, `LOOM_DOMAINS_BACKEND`.
+UC catalog rename/create additionally needs the console UAMI to hold
+`CREATE CATALOG` / `MANAGE` on the Unity Catalog metastore (a Databricks-side
+grant, not ARM RBAC) — surfaced as an honest note, never a Fabric requirement.
+
+### Verification (audit-t140)
+
+- `npx tsc --noEmit` clean on all touched files (run in the worktree).
+- Vitest: `unified-domain-mapper.test.ts` (7), extended `domains-client.test.ts`
+  (`moveDomain` Cosmos + Purview reparent; Fabric 501 gate), extended
+  `admin/domains/route.test.ts` (move + cycle/depth/own-parent/parent-with-kids
+  rejections; mirror response shape) — all green.
+- Both back-ends unconfigured → mapper persists to Cosmos and reports
+  `skipped:true` for each mirror (never throws) — proven by test.
+

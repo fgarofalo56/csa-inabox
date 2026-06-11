@@ -21,7 +21,7 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import {
   Spinner, Badge, Caption1, Body1, Input, Textarea, Button,
-  MessageBar, MessageBarBody, MessageBarTitle, Checkbox,
+  MessageBar, MessageBarBody, MessageBarTitle, Checkbox, Dropdown, Option,
   Dialog, DialogSurface, DialogBody, DialogTitle, DialogContent, DialogActions,
   Menu, MenuTrigger, MenuPopover, MenuList, MenuItem,
   makeStyles, tokens,
@@ -29,6 +29,7 @@ import {
 import {
   Add24Regular, Delete20Regular, ArrowSync24Regular, Info20Regular,
   MoreHorizontal20Regular, Settings20Regular, BranchFork20Regular, Folder20Regular,
+  ArrowMove20Regular,
 } from '@fluentui/react-icons';
 import { AdminShell } from '@/lib/components/admin-shell';
 import { Section, Toolbar } from '@/lib/components/ui/section';
@@ -87,6 +88,11 @@ export default function DomainsPage() {
 
   // Assign-workspaces dialog.
   const [assignFor, setAssignFor] = useState<Domain | null>(null);
+
+  // Move (reparent) dialog.
+  const [moveFor, setMoveFor] = useState<Domain | null>(null);
+  const [moveParent, setMoveParent] = useState<string>('');
+  const [moving, setMoving] = useState(false);
 
   const load = useCallback(async () => {
     setLoading(true); setError(null);
@@ -153,6 +159,24 @@ export default function DomainsPage() {
     setDomains((prev) => prev ? prev.map((d) => d.id === updated.id ? { ...d, ...updated } : d) : prev);
     setSelected((prev) => prev && prev.id === updated.id ? { ...prev, ...updated } : prev);
   }, []);
+
+  function openMove(d: Domain) { setMoveFor(d); setMoveParent(d.parentId || ''); setActionErr(null); }
+
+  async function doMove() {
+    if (!moveFor) return;
+    setMoving(true); setActionErr(null);
+    try {
+      const r = await fetch(`/api/admin/domains?id=${encodeURIComponent(moveFor.id)}`, {
+        method: 'PATCH', headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ parentId: moveParent || null }),
+      });
+      const j = await r.json();
+      if (!j.ok) { setActionErr(j.error || `HTTP ${r.status}`); return; }
+      setMoveFor(null);
+      await load();
+    } catch (e: any) { setActionErr(e?.message || String(e)); }
+    finally { setMoving(false); }
+  }
 
   const purviewNames = useMemo(() => new Set(
     purview && purview.configured ? purview.domains.map((d) => (d.name || '').toLowerCase()) : [],
@@ -239,6 +263,7 @@ export default function DomainsPage() {
               {!d.parentId && (
                 <MenuItem icon={<BranchFork20Regular />} onClick={() => openCreate(d.id)}>New subdomain</MenuItem>
               )}
+              <MenuItem icon={<ArrowMove20Regular />} disabled={!isTenantAdmin} onClick={() => openMove(d)}>Move…</MenuItem>
               <MenuItem icon={<Delete20Regular />} onClick={() => remove(d.id)}>Delete</MenuItem>
             </MenuList>
           </MenuPopover>
@@ -390,6 +415,43 @@ export default function DomainsPage() {
           onDone={() => { setAssignFor(null); load(); }}
         />
       )}
+
+      {/* Move (reparent) dialog */}
+      <Dialog open={!!moveFor} onOpenChange={(_, d) => { if (!d.open) setMoveFor(null); }}>
+        <DialogSurface>
+          <DialogBody>
+            <DialogTitle>Move {moveFor?.name}</DialogTitle>
+            <DialogContent>
+              <div className={s.createGrid}>
+                <div>
+                  <Caption1 style={{ display: 'block', marginBottom: 4 }}>New parent domain</Caption1>
+                  <Dropdown
+                    value={moveParent ? (nameById[moveParent] || moveParent) : 'Root (no parent)'}
+                    selectedOptions={[moveParent]}
+                    onOptionSelect={(_, d) => setMoveParent(d.optionValue || '')}
+                    style={{ width: '100%' }}
+                  >
+                    <Option value="">Root (no parent)</Option>
+                    {(domains || [])
+                      .filter((p) => !p.parentId && p.id !== moveFor?.id)
+                      .map((p) => <Option key={p.id} value={p.id}>{p.name}</Option>)}
+                  </Dropdown>
+                </div>
+                <Caption1 style={{ color: tokens.colorNeutralForeground3 }}>
+                  Domains are at most two levels (domain → subdomain). Moving reparents the mirrored Purview
+                  collection; Unity Catalog has no move operation, so its catalog/schema mapping is unchanged.
+                </Caption1>
+              </div>
+            </DialogContent>
+            <DialogActions>
+              <Button appearance="secondary" onClick={() => setMoveFor(null)}>Cancel</Button>
+              <Button appearance="primary" onClick={doMove} disabled={moving}>
+                {moving ? 'Moving…' : 'Move'}
+              </Button>
+            </DialogActions>
+          </DialogBody>
+        </DialogSurface>
+      </Dialog>
     </AdminShell>
   );
 }

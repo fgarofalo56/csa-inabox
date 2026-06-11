@@ -74,6 +74,8 @@ vi.mock('../cosmos-client', () => ({
 
 vi.mock('../purview-client', () => ({
   isPurviewConfigured: () => !!process.env.LOOM_PURVIEW_ACCOUNT,
+  domainCollectionName: (idOrName: string) =>
+    (idOrName || 'domain').toLowerCase().replace(/[^a-z0-9-]+/g, '-').slice(0, 36) || 'domain',
   createBusinessDomain: async (body: any) => {
     purviewCalls.push(['create', body]);
     return { id: `col-${body.id}`, name: body.name, description: body.description };
@@ -193,5 +195,46 @@ describe('domains-client — DomainStore adapters (F4)', () => {
     await expect(
       mod.cosmosDomainStore.updateDomain('tenant-1', 'nope', { name: 'X' }, 'alice@contoso.com'),
     ).rejects.toMatchObject({ status: 404 });
+  });
+
+  it('cosmosDomainStore.moveDomain reparents in Cosmos + reparents the Purview collection, NO Fabric call', async () => {
+    const mod = await import('../domains-client');
+    const store = mod.cosmosDomainStore;
+    // Seed a root domain that has a Purview mirror, then move it under a parent.
+    await store.createDomain('tenant-1', { id: 'sub', name: 'Sub', description: 'd' }, 'alice@contoso.com');
+    purviewCalls.length = 0;
+    const moved = await store.moveDomain('tenant-1', 'sub', 'finance', 'bob@contoso.com');
+    expect(moved.parentDomainId).toBe('finance');
+    expect(domainDocs.get('sub').parentDomainId).toBe('finance');
+    // Purview collection reparented (update with parentId = parent's collection slug).
+    const upd = purviewCalls.find((c) => c[0] === 'update');
+    expect(upd).toBeTruthy();
+    expect(upd![2].parentId).toBe('finance');
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it('cosmosDomainStore.moveDomain to root clears the parent (parentId undefined)', async () => {
+    const mod = await import('../domains-client');
+    const store = mod.cosmosDomainStore;
+    await store.createDomain('tenant-1', { id: 'sub2', name: 'Sub2', parentDomainId: 'finance' }, 'alice@contoso.com');
+    const moved = await store.moveDomain('tenant-1', 'sub2', undefined, 'bob@contoso.com');
+    expect(moved.parentDomainId).toBeUndefined();
+    expect(domainDocs.get('sub2').parentDomainId).toBeUndefined();
+  });
+
+  it('cosmosDomainStore.moveDomain rejects a domain as its own parent', async () => {
+    const mod = await import('../domains-client');
+    await mod.cosmosDomainStore.createDomain('tenant-1', { id: 'self', name: 'Self' }, 'alice@contoso.com');
+    await expect(
+      mod.cosmosDomainStore.moveDomain('tenant-1', 'self', 'self', 'bob@contoso.com'),
+    ).rejects.toMatchObject({ status: 400 });
+  });
+
+  it('fabricAdminDomainStore.moveDomain honestly 501s (no Fabric move endpoint)', async () => {
+    process.env.LOOM_DOMAINS_BACKEND = 'fabric';
+    const mod = await import('../domains-client');
+    await expect(
+      mod.fabricAdminDomainStore.moveDomain('tenant-1', 'x', 'y', 'who'),
+    ).rejects.toMatchObject({ status: 501 });
   });
 });

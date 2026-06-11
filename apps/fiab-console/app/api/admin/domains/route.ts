@@ -5,35 +5,41 @@
  * workspaces (Finance, Operations, Mission-Ops…). It carries owners, a
  * description, and a color, and is the unit Loom uses to organize the
  * tenant's data estate — the same concept Microsoft Purview calls a
- * "business domain" and Fabric calls a "domain". Adding a domain here
- * creates that grouping in the Loom Cosmos store immediately; workspaces
- * tag themselves to it via their `domain` field, and the governance layer
- * (Purview) can mirror it as a business domain when Purview is provisioned.
+ * "business domain" and Fabric calls a "domain".
  *
- * GET  /api/admin/domains — list tenant domains (+ per-domain workspace count +
- *                            Purview link status when configured)
- * POST /api/admin/domains   body: { id, name, description?, color?, owners?, admins?, parentId? }
- * PATCH /api/admin/domains?id=...  body: subset of mutable fields (settings side-pane)
+ * UNIFIED MAPPING (this route): a Loom domain is written through to BOTH
+ * governance back-ends in parallel by lib/azure/unified-domain-mapper:
+ *   • Microsoft Purview classic Data Map — domain ⇄ COLLECTION, subdomain ⇄
+ *     child collection. Create / rename / re-describe / MOVE / delete.
+ *   • Databricks Unity Catalog — root domain ⇄ CATALOG, subdomain ⇄ SCHEMA
+ *     under the parent's catalog. Create / re-comment / delete (UC has no
+ *     reparent — surfaced honestly).
+ * Cosmos (`tenant-settings` doc `domains:<tenant>`) stays AUTHORITATIVE; both
+ * mirrors are best-effort and never block the write. NO Fabric dependency —
+ * both back-ends are Azure-native and independently optional.
+ *
+ * GET   /api/admin/domains — list tenant domains (+ workspace count + Purview &
+ *                            Unity Catalog link status when configured)
+ * POST  /api/admin/domains   body: { id, name, description?, color?, owners?, admins?, parentId? }
+ * PATCH /api/admin/domains?id=...  body: subset of mutable fields, incl. `parentId` (MOVE)
  * DELETE /api/admin/domains?id=...
- *
- * Backed by Cosmos tenant-settings container under id="domains:<tenantId>"
- * to avoid spinning up a new container for a low-cardinality list. The
- * Purview business-domain mirror is honest-gated: when LOOM_PURVIEW_ACCOUNT
- * is unset we still return the Cosmos domains and a `purview.gated` flag
- * explaining the one-time provisioning step.
  */
 import { NextRequest, NextResponse } from 'next/server';
 import { getSession } from '@/lib/auth/session';
 import { tenantSettingsContainer, workspacesContainer } from '@/lib/azure/cosmos-client';
 import {
   listBusinessDomains,
-  createBusinessDomain,
-  updateBusinessDomain,
-  deleteBusinessDomain,
-  domainCollectionName,
-  isPurviewConfigured,
   PurviewNotConfiguredError,
 } from '@/lib/azure/purview-client';
+import {
+  mirrorDomainUpsert,
+  mirrorDomainMove,
+  mirrorDomainDelete,
+  unityLinkStatus,
+  unityName,
+  type UnifiedMirrorResult,
+  type UnityLinkStatus,
+} from '@/lib/azure/unified-domain-mapper';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -71,7 +77,10 @@ interface DomainItem {
   imageKey?: string;
   /** Parent domain id when this is a subdomain. */
   parentId?: string;
+  /** Mirror link ids written by the unified mapper. */
   purviewDomainId?: string;
+  unityCatalogName?: string;
+  unitySchemaName?: string;
   createdAt: string;
   createdBy: string;
   updatedAt?: string;
@@ -86,7 +95,28 @@ interface DomainsDoc {
   updatedAt: string;
 }
 
-async function loadOrSeed(tenantId: string, _who: string): Promise<DomainsDoc> {
+/**
+ * Starter domain set seeded into a tenant's domains doc the first time it is
+ * created — so the Domains surface is never empty in a fresh environment (the
+ * "empty domains" finding). These are REAL, fully-editable Cosmos domains (the
+ * user can rename / move / delete them), not hard-coded UI placeholders. Mirrors
+ * the canonical Fabric sample domains (Finance / Sales & Marketing / Operations
+ * with an HR subdomain) so the hierarchy + move flow has content to act on.
+ */
+function starterDomains(who: string): DomainItem[] {
+  const now = new Date().toISOString();
+  const base = (id: string, name: string, description: string, parentId?: string): DomainItem => ({
+    id, name, description, parentId, createdAt: now, createdBy: who,
+  });
+  return [
+    base('finance', 'Finance', 'Financial planning, reporting, and chargeback data products.'),
+    base('sales-marketing', 'Sales & Marketing', 'Pipeline, campaign, and customer-360 data products.'),
+    base('operations', 'Operations', 'Supply-chain, logistics, and operational telemetry.'),
+    base('people', 'People & HR', 'Workforce, recruiting, and people-analytics data products.', 'operations'),
+  ];
+}
+
+async function loadOrSeed(tenantId: string, who: string): Promise<DomainsDoc> {
   const c = await tenantSettingsContainer();
   const docId = `domains:${tenantId}`;
   try {
@@ -94,7 +124,7 @@ async function loadOrSeed(tenantId: string, _who: string): Promise<DomainsDoc> {
     if (resource) return resource;
   } catch (e: any) { if (e?.code !== 404) throw e; }
   const seed: DomainsDoc = {
-    id: docId, tenantId, kind: 'domains', items: [],
+    id: docId, tenantId, kind: 'domains', items: starterDomains(who),
     updatedAt: new Date().toISOString(),
   } as any;
   await c.items.create(seed);
@@ -172,16 +202,36 @@ function isTenantAdmin(oid: string): boolean {
   return adminOids.includes((oid || '').toLowerCase());
 }
 
+/** Is a given Loom domain mirrored into the Unity Catalog metastore? */
+function unityLinkedFor(d: DomainItem, unity: UnityLinkStatus): boolean {
+  if (!unity.configured) return false;
+  if (d.parentId) {
+    const cat = unityName(d.parentId);
+    return (unity.schemasByCatalog[cat] || []).includes(unityName(d.id));
+  }
+  return unity.catalogs.includes(unityName(d.id));
+}
+
 export async function GET() {
   const s = getSession();
   if (!s) return NextResponse.json({ ok: false, error: 'unauthenticated' }, { status: 401 });
   const tenantId = s.claims.oid;
   try {
     const doc = await loadOrSeed(tenantId, s.claims.upn || tenantId);
-    const [purview, counts] = await Promise.all([purviewStatus(), workspaceCounts(tenantId)]);
-    const domains = doc.items.map((d) => ({ ...d, workspaceCount: counts[d.id] || 0 }));
+    const [purview, counts, unity] = await Promise.all([
+      purviewStatus(), workspaceCounts(tenantId), unityLinkStatus(),
+    ]);
+    const purviewNames = new Set(
+      purview.configured ? purview.domains.map((d) => (d.name || '').toLowerCase()) : [],
+    );
+    const domains = doc.items.map((d) => ({
+      ...d,
+      workspaceCount: counts[d.id] || 0,
+      purviewLinked: purviewNames.has((d.name || '').toLowerCase()),
+      unityLinked: unityLinkedFor(d, unity),
+    }));
     return NextResponse.json({
-      ok: true, domains, updatedAt: doc.updatedAt, purview,
+      ok: true, domains, updatedAt: doc.updatedAt, purview, unity,
       isTenantAdmin: isTenantAdmin(s.claims.oid),
       imageStorageConfigured: !!process.env.LOOM_DOMAIN_IMAGE_STORAGE,
     });
@@ -202,6 +252,17 @@ function normalizeOwners(raw: unknown): string[] | undefined {
   return undefined;
 }
 
+/** Apply the mirror ids returned by the unified mapper onto the stored item. */
+function applyMirrorIds(item: DomainItem, mirror: UnifiedMirrorResult): void {
+  if (mirror.purview.ok && !mirror.purview.skipped) {
+    item.purviewDomainId = item.purviewDomainId || item.id;
+  }
+  if (mirror.unity.ok && !mirror.unity.skipped) {
+    if (mirror.unity.catalog) item.unityCatalogName = mirror.unity.catalog;
+    if (mirror.unity.schema) item.unitySchemaName = mirror.unity.schema;
+  }
+}
+
 export async function POST(req: NextRequest) {
   const s = getSession();
   if (!s) return NextResponse.json({ ok: false, error: 'unauthenticated' }, { status: 401 });
@@ -217,46 +278,43 @@ export async function POST(req: NextRequest) {
     if (doc.items.some((d) => d.id === id)) {
       return NextResponse.json({ ok: false, error: `domain '${id}' already exists` }, { status: 409 });
     }
+    const parentId = body?.parentId ? String(body.parentId).trim() : undefined;
+    // A subdomain must reference an existing parent (Fabric parity). Reject a
+    // dangling parentId rather than silently creating an orphan, and forbid
+    // nesting under a subdomain (domains are at most two levels: domain →
+    // subdomain — matches UC catalog→schema and Fabric "subdomains only").
+    if (parentId) {
+      const parent = doc.items.find((d) => d.id === parentId);
+      if (!parent) {
+        return NextResponse.json({ ok: false, error: `parent domain '${parentId}' not found` }, { status: 400 });
+      }
+      if (parent.parentId) {
+        return NextResponse.json(
+          { ok: false, error: 'A subdomain cannot itself contain subdomains — domains are at most two levels (domain → subdomain).' },
+          { status: 400 },
+        );
+      }
+    }
     const newItem: DomainItem = {
       id, name,
       description: body?.description || undefined,
       color: body?.color || undefined,
       owners: normalizeOwners(body?.owners),
       admins: normalizeOwners(body?.admins),
-      parentId: body?.parentId ? String(body.parentId).trim() : undefined,
+      parentId,
       createdAt: new Date().toISOString(),
       createdBy: s.claims.upn || tenantId,
     };
-    // A subdomain must reference an existing parent (Fabric parity: subdomains
-    // hang off a domain). Reject a dangling parentId rather than silently
-    // creating an orphan.
-    if (newItem.parentId && !doc.items.some((d) => d.id === newItem.parentId)) {
-      return NextResponse.json({ ok: false, error: `parent domain '${newItem.parentId}' not found` }, { status: 400 });
-    }
-    // Best-effort Purview mirror: a Loom domain ⇄ a Purview collection on the
-    // classic Data Map account. Never blocks the Cosmos write (Purview is
-    // optional); a grant/auth error is surfaced in `purviewMirror` for the UI.
-    let purviewMirror: { ok: boolean; id?: string; error?: string } | undefined;
-    if (isPurviewConfigured()) {
-      try {
-        // A subdomain mirrors as a CHILD collection under its parent's
-        // collection (Fabric/Purview parity). The parent's ≤36-char collection
-        // referenceName is derived deterministically from the parent's Loom id,
-        // so it resolves even if the parent was mirrored in an earlier request.
-        const mirrored = await createBusinessDomain({
-          id, name, description: newItem.description,
-          parentId: newItem.parentId ? domainCollectionName(newItem.parentId) : undefined,
-        });
-        newItem.purviewDomainId = mirrored.id;
-        purviewMirror = { ok: true, id: mirrored.id };
-      } catch (e: any) {
-        purviewMirror = { ok: false, error: e?.message || String(e) };
-      }
-    }
+    // Unified write-through to Purview + Unity Catalog (best-effort; neither
+    // blocks the Cosmos write — both are independently optional, no Fabric dep).
+    const mirror = await mirrorDomainUpsert(
+      { id, name, description: newItem.description, parentId }, 'create',
+    );
+    applyMirrorIds(newItem, mirror);
     doc.items.push(newItem);
     doc.updatedAt = new Date().toISOString();
     await c.item(docId, tenantId).replace(doc);
-    return NextResponse.json({ ok: true, domain: newItem, domains: doc.items, purviewMirror });
+    return NextResponse.json({ ok: true, domain: newItem, domains: doc.items, mirror });
   } catch (e: any) {
     return NextResponse.json({ ok: false, error: e?.message || String(e) }, { status: 500 });
   }
@@ -265,18 +323,18 @@ export async function POST(req: NextRequest) {
 /**
  * PATCH /api/admin/domains?id=...
  *
- * Settings side-pane writer. Body carries any subset of the mutable fields:
+ * Settings side-pane writer + MOVE. Body carries any subset of the mutable
+ * fields, plus the move verb:
  *   { name?, description?, color?, imageKey?, admins?, owners?,
- *     contributors?: { scope, users? },
- *     defaultDomainUsers?: string[],
- *     delegatedSettings?: { defaultSensitivityLabelId?, defaultSensitivityLabelName?,
- *                           defaultSensitivityLabelSource?, certificationEnabled?,
- *                           certificationUrl?, certifiers? } }
+ *     contributors?: { scope, users? }, defaultDomainUsers?: string[],
+ *     delegatedSettings?: {...},
+ *     parentId?: string | null   ← MOVE: reparent the domain (null/'' → root) }
  *
  * Authorization (mirrors Fabric role rules):
- *   - Tenant/Fabric admin -> may change anything, including `name` and `admins`.
- *   - Domain admin (UPN in domain.admins) -> may change everything EXCEPT `name`
- *     and `admins` (Fabric: domain admins can't rename or change admin list).
+ *   - Tenant/Fabric admin -> may change anything, including `name`, `admins`,
+ *     and `parentId` (move).
+ *   - Domain admin (UPN in domain.admins) -> may change everything EXCEPT
+ *     `name`, `admins`, and `parentId`.
  *   - Anyone else -> 403.
  */
 export async function PATCH(req: NextRequest) {
@@ -304,11 +362,45 @@ export async function PATCH(req: NextRequest) {
       );
     }
     // Fields only a tenant admin may change.
-    if (!tenantAdmin && (body?.name !== undefined || body?.admins !== undefined)) {
+    if (!tenantAdmin && (body?.name !== undefined || body?.admins !== undefined || body?.parentId !== undefined)) {
       return NextResponse.json(
-        { ok: false, error: "Domain admins can't change the domain name or admin list - that requires a tenant admin." },
+        { ok: false, error: "Domain admins can't rename, change the admin list, or move the domain - that requires a tenant admin." },
         { status: 403 },
       );
+    }
+
+    // --- MOVE (reparent) validation ------------------------------------------
+    let moved = false;
+    let newParentId: string | undefined = domain.parentId;
+    if (body?.parentId !== undefined) {
+      newParentId = body.parentId === null || String(body.parentId).trim() === ''
+        ? undefined : String(body.parentId).trim();
+      if (newParentId !== domain.parentId) {
+        if (newParentId === id) {
+          return NextResponse.json({ ok: false, error: 'A domain cannot be its own parent.' }, { status: 400 });
+        }
+        if (newParentId) {
+          const parent = doc.items.find((d) => d.id === newParentId);
+          if (!parent) {
+            return NextResponse.json({ ok: false, error: `Target parent '${newParentId}' not found.` }, { status: 400 });
+          }
+          if (parent.parentId) {
+            return NextResponse.json(
+              { ok: false, error: 'Cannot nest under a subdomain — domains are at most two levels (domain → subdomain).' },
+              { status: 400 },
+            );
+          }
+          // Moving a domain that itself has subdomains under another domain would
+          // create a third level. Reject (move its subdomains out first).
+          if (doc.items.some((d) => d.parentId === id)) {
+            return NextResponse.json(
+              { ok: false, error: 'Move this domain’s subdomains out first - a subdomain can’t have its own subdomains.' },
+              { status: 400 },
+            );
+          }
+        }
+        moved = true;
+      }
     }
 
     // Merge only the provided fields.
@@ -343,6 +435,7 @@ export async function PATCH(req: NextRequest) {
         ...(ds.certifiers !== undefined ? { certifiers: normalizeOwners(ds.certifiers) } : {}),
       };
     }
+    if (moved) domain.parentId = newParentId;
 
     domain.updatedAt = new Date().toISOString();
     domain.updatedBy = s.claims.upn || tenantId;
@@ -350,28 +443,17 @@ export async function PATCH(req: NextRequest) {
     doc.updatedAt = new Date().toISOString();
     await c.item(docId, tenantId).replace(doc);
 
-    // Best-effort: mirror name/description edits to the Purview classic
-    // collection (PUT /collections is an idempotent create-or-update — there is
-    // no PATCH for collections). Re-asserts the parent so a subdomain's mirror
-    // keeps its place in the collection hierarchy. Never blocks the Cosmos write
-    // (Purview is optional); a grant/auth error surfaces in `purviewMirror`.
-    let purviewMirror: { ok: boolean; error?: string } | undefined;
-    if (
-      isPurviewConfigured() && domain.purviewDomainId &&
-      (body?.name !== undefined || body?.description !== undefined)
-    ) {
-      try {
-        await updateBusinessDomain(domain.id, {
-          name: domain.name,
-          description: domain.description,
-          parentId: domain.parentId ? domainCollectionName(domain.parentId) : undefined,
-        });
-        purviewMirror = { ok: true };
-      } catch (e: any) {
-        purviewMirror = { ok: false, error: e?.message || String(e) };
-      }
+    // Unified mirror: a MOVE reparents the Purview collection (UC has no move →
+    // honest note); any other edit re-asserts name/description on both back-ends.
+    let mirror: UnifiedMirrorResult | undefined;
+    const spec = { id: domain.id, name: domain.name, description: domain.description, parentId: domain.parentId };
+    if (moved) {
+      mirror = await mirrorDomainMove({ ...spec, parentId: undefined }, newParentId);
+    } else if (body?.name !== undefined || body?.description !== undefined) {
+      mirror = await mirrorDomainUpsert(spec, 'update');
     }
-    return NextResponse.json({ ok: true, domain, purviewMirror });
+    if (mirror) applyMirrorIds(domain, mirror);
+    return NextResponse.json({ ok: true, domain, mirror, moved });
   } catch (e: any) {
     return NextResponse.json({ ok: false, error: e?.message || String(e) }, { status: 500 });
   }
@@ -387,19 +469,23 @@ export async function DELETE(req: NextRequest) {
     const c = await tenantSettingsContainer();
     const docId = `domains:${tenantId}`;
     const doc = await loadOrSeed(tenantId, s.claims.upn || tenantId);
-    const before = doc.items.length;
     const removed = doc.items.find((d) => d.id === id);
-    doc.items = doc.items.filter((d) => d.id !== id);
-    if (doc.items.length === before) return NextResponse.json({ ok: false, error: 'not found' }, { status: 404 });
-    // Best-effort: remove the mirrored Purview collection too. Non-fatal.
-    let purviewMirror: { ok: boolean; error?: string } | undefined;
-    if (isPurviewConfigured() && removed?.purviewDomainId) {
-      try { await deleteBusinessDomain(removed.purviewDomainId); purviewMirror = { ok: true }; }
-      catch (e: any) { purviewMirror = { ok: false, error: e?.message || String(e) }; }
+    if (!removed) return NextResponse.json({ ok: false, error: 'not found' }, { status: 404 });
+    // Block deleting a parent that still has subdomains (would orphan them).
+    if (doc.items.some((d) => d.parentId === id)) {
+      return NextResponse.json(
+        { ok: false, error: 'Delete or move this domain’s subdomains first.' },
+        { status: 409 },
+      );
     }
+    doc.items = doc.items.filter((d) => d.id !== id);
+    // Unified mirror cleanup (best-effort, never throws).
+    const mirror = await mirrorDomainDelete({
+      id: removed.id, name: removed.name, description: removed.description, parentId: removed.parentId,
+    });
     doc.updatedAt = new Date().toISOString();
     await c.item(docId, tenantId).replace(doc);
-    return NextResponse.json({ ok: true, domains: doc.items, purviewMirror });
+    return NextResponse.json({ ok: true, domains: doc.items, mirror });
   } catch (e: any) {
     return NextResponse.json({ ok: false, error: e?.message || String(e) }, { status: 500 });
   }
