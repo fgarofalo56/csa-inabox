@@ -120,7 +120,12 @@ const useStyles = makeStyles({
   // Spacing helpers inside the drawers (replace inline marginTop styles).
   drawerSpacerS: { marginTop: tokens.spacingVerticalS },
   drawerSpacerM: { marginTop: tokens.spacingVerticalM },
-  resultWrap: { overflowX: 'auto', marginTop: tokens.spacingVerticalS },
+  resultWrap: {
+    overflowX: 'auto', maxHeight: '420px', overflowY: 'auto',
+    marginTop: tokens.spacingVerticalS,
+    border: `1px solid ${tokens.colorNeutralStroke2}`,
+    borderRadius: tokens.borderRadiusMedium,
+  },
   // Endpoint card in the Endpoints drawer.
   endpointCard: {
     marginTop: tokens.spacingVerticalM, padding: tokens.spacingVerticalM,
@@ -130,12 +135,20 @@ const useStyles = makeStyles({
   resultTable: {
     width: '100%', borderCollapse: 'collapse', fontSize: '12px',
     '& th': {
-      textAlign: 'left', padding: '4px',
-      borderBottom: `1px solid ${tokens.colorNeutralStroke2}`,
+      position: 'sticky', top: 0, zIndex: 1,
+      textAlign: 'left', padding: '6px 8px',
+      backgroundColor: tokens.colorNeutralBackground2,
+      fontWeight: tokens.fontWeightSemibold,
+      borderBottom: `1px solid ${tokens.colorNeutralStroke1}`,
+      whiteSpace: 'nowrap',
     },
     '& td': {
-      padding: '4px',
+      padding: '6px 8px',
       borderBottom: `1px solid ${tokens.colorNeutralStroke3}`,
+      whiteSpace: 'nowrap',
+    },
+    '& tbody tr:hover td': {
+      backgroundColor: tokens.colorNeutralBackground1Hover,
     },
   },
 });
