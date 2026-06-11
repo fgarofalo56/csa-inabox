@@ -381,33 +381,41 @@ function RestrictSection() {
   const s = useStyles();
   const [scope, setScope] = useState<RestrictScope>('adls-container');
   const [containers, setContainers] = useState<string[]>([]);
+  const [containersLoading, setContainersLoading] = useState(true);
   const [container, setContainer] = useState('');
   const [subPath, setSubPath] = useState('');
   const [schemas, setSchemas] = useState<string[]>([]);
+  const [schemasLoading, setSchemasLoading] = useState(false);
   const [schemaGate, setSchemaGate] = useState<string | null>(null);
   const [schema, setSchema] = useState('');
   const [kqlDbs, setKqlDbs] = useState<{ id: string; name: string }[]>([]);
+  const [kqlLoading, setKqlLoading] = useState(true);
   const [kqlDb, setKqlDb] = useState('');
   const [principal, setPrincipal] = useState<IdentityHit | null>(null);
   const [running, setRunning] = useState(false);
   const [result, setResult] = useState<RestrictResult | null>(null);
   const [err, setErr] = useState<string | null>(null);
   const [history, setHistory] = useState<RestrictionRow[]>([]);
+  const [historyLoaded, setHistoryLoaded] = useState(false);
 
   const loadHistory = useCallback(async () => {
     try {
       const j = await fetch('/api/governance/dlp/meta').then((r) => r.json());
       setHistory(Array.isArray(j?.restrictions) ? j.restrictions : []);
-    } catch { /* best-effort */ }
+    } catch { /* best-effort */ } finally { setHistoryLoaded(true); }
   }, []);
 
   useEffect(() => {
+    setContainersLoading(true);
     fetch('/api/lakehouse/containers').then((r) => r.json())
       .then((d) => setContainers((d?.containers || []).map((c: any) => c.name).filter(Boolean)))
-      .catch(() => {});
+      .catch(() => {})
+      .finally(() => setContainersLoading(false));
+    setKqlLoading(true);
     fetch('/api/items/by-type?types=kql-database').then((r) => r.json())
       .then((d) => setKqlDbs((d?.items || []).map((x: any) => ({ id: x.id, name: x.displayName || x.id }))))
-      .catch(() => {});
+      .catch(() => {})
+      .finally(() => setKqlLoading(false));
     loadHistory();
   }, [loadHistory]);
 
@@ -415,6 +423,7 @@ function RestrictSection() {
   useEffect(() => {
     if (scope !== 'warehouse-schema') return;
     setSchemaGate(null);
+    setSchemasLoading(true);
     fetch('/api/governance/dlp/schemas').then(async (r) => {
       const j = await r.json();
       if (r.status === 503 || j?.code === 'warehouse_not_configured') {
@@ -422,7 +431,8 @@ function RestrictSection() {
         return;
       }
       setSchemas(j?.ok ? (j.schemas || []) : []);
-    }).catch((e: any) => { setSchemas([]); setSchemaGate(e?.message || String(e)); });
+    }).catch((e: any) => { setSchemas([]); setSchemaGate(e?.message || String(e)); })
+      .finally(() => setSchemasLoading(false));
   }, [scope]);
 
   const needsRef = scope === 'adls-container' || scope === 'adls-path' || scope === 'kql-database';
@@ -490,7 +500,7 @@ function RestrictSection() {
         {(scope === 'adls-container' || scope === 'adls-path') && (
           <Field label="ADLS container">
             <Dropdown
-              placeholder={containers.length ? 'Select a container' : 'No containers found'}
+              placeholder={containersLoading ? 'Loading containers…' : containers.length ? 'Select a container' : 'No containers found'}
               value={container}
               selectedOptions={container ? [container] : []}
               onOptionSelect={(_, d) => setContainer(d.optionValue || '')}
@@ -507,7 +517,7 @@ function RestrictSection() {
         {scope === 'kql-database' && (
           <Field label="KQL database">
             <Dropdown
-              placeholder={kqlDbs.length ? 'Select a KQL database' : 'No KQL databases found'}
+              placeholder={kqlLoading ? 'Loading KQL databases…' : kqlDbs.length ? 'Select a KQL database' : 'No KQL databases found'}
               value={kqlDbs.find((k) => k.id === kqlDb)?.name}
               selectedOptions={kqlDb ? [kqlDb] : []}
               onOptionSelect={(_, d) => setKqlDb(d.optionValue || '')}
@@ -522,7 +532,7 @@ function RestrictSection() {
               <MessageBar intent="warning"><MessageBarBody>{schemaGate}</MessageBarBody></MessageBar>
             ) : (
               <Dropdown
-                placeholder={schemas.length ? 'Select a schema' : 'Loading schemas…'}
+                placeholder={schemasLoading ? 'Loading schemas…' : schemas.length ? 'Select a schema' : 'No schemas found'}
                 value={schema}
                 selectedOptions={schema ? [schema] : []}
                 onOptionSelect={(_, d) => setSchema(d.optionValue || '')}
@@ -569,6 +579,11 @@ function RestrictSection() {
         </MessageBar>
       )}
 
+      {historyLoaded && history.length === 0 && (
+        <Caption1 block style={{ color: tokens.colorNeutralForeground3, marginTop: 16 }}>
+          No restrict-access actions recorded yet.
+        </Caption1>
+      )}
       {history.length > 0 && (
         <div style={{ marginTop: 16 }}>
           <Subtitle2 block style={{ marginBottom: 6 }}>Recent restrict-access actions</Subtitle2>
