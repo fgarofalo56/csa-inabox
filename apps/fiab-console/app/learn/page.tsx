@@ -182,12 +182,16 @@ const useStyles = makeStyles({
     display: 'inline-flex', alignItems: 'center', gap: '4px',
     color: tokens.colorBrandForeground1, fontWeight: tokens.fontWeightSemibold,
     fontSize: tokens.fontSizeBase300, textDecorationLine: 'none',
+    borderRadius: tokens.borderRadiusSmall,
     ':hover': { textDecorationLine: 'underline' },
+    ':focus-visible': { outline: `2px solid ${tokens.colorBrandStroke1}`, outlineOffset: '2px' },
   },
   listSecondary: {
     display: 'inline-flex', alignItems: 'center', gap: '4px',
     color: tokens.colorNeutralForeground3, fontSize: tokens.fontSizeBase200,
-    textDecorationLine: 'none', ':hover': { textDecorationLine: 'underline' },
+    textDecorationLine: 'none', borderRadius: tokens.borderRadiusSmall,
+    ':hover': { textDecorationLine: 'underline' },
+    ':focus-visible': { outline: `2px solid ${tokens.colorBrandStroke1}`, outlineOffset: '2px' },
   },
   listApp: {
     display: 'inline-flex', alignItems: 'center', gap: '4px',
@@ -310,6 +314,12 @@ export default function LearnPage(): React.ReactElement {
               <span className={s.statNum}>{all.length - missing}</span>
               <Text size={200} className={s.statLbl}>Loom guides live</Text>
             </span>
+            {missing > 0 && (
+              <span className={s.stat}>
+                <span className={s.statNum}>{missing}</span>
+                <Text size={200} className={s.statLbl}>guides in backlog</Text>
+              </span>
+            )}
           </div>
         </div>
       </div>
