@@ -88,7 +88,11 @@ param loomAzureMapsAccount = readEnvironmentVariable('EXISTING_AZURE_MAPS_ACCOUN
 // AND a Tenant Administrator clicks Grant admin consent. After that,
 // flip these to true and redeploy admin-plane.
 param loomMipEnabled = false
-param loomDlpEnabled = false
+// DLP defaults ON: the post-deploy bootstrap grants the DLP AppRoles by
+// default, so the /admin/security DLP tab is wired out of the box (alerts +
+// violations + Azure-native restrict-access). The policy segment + simulate
+// honest-gate where the Graph DLP preview isn't enabled.
+param loomDlpEnabled = true
 param loomIdentityPickerEnabled = false
 param storageRequireCmk = false
 param keyVaultHsmIsolated = false

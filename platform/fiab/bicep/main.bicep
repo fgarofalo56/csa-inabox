@@ -73,8 +73,8 @@ param loomPurviewAccount string = ''
 @description('Enable Microsoft Information Protection reads via Microsoft Graph for the Console (sensitivity labels + label policies + apply-label evaluation). Requires the Console UAMI to be admin-consented for InformationProtectionPolicy.Read.All + SensitivityLabel.Evaluate. Defaults off — the bootstrap workflow flips the AppRoles, then operators re-deploy with this true.')
 param loomMipEnabled bool = false
 
-@description('Enable Purview DLP reads via Microsoft Graph for the Console (DLP policies + rules + alerts + simulate). Requires Console UAMI Policy.Read.All + SecurityAlert.Read.All admin-consented. Note: the DLP /beta endpoints are tenant-preview-gated — the Loom panel surfaces a precise 404→501 hint when the tenant has not opted into the Graph DLP preview.')
-param loomDlpEnabled bool = false
+@description('Enable Purview DLP reads via Microsoft Graph for the Console (DLP policies + rules + alerts + simulate). Defaults ON — the post-deploy bootstrap grants Console UAMI Policy.Read.All + SecurityAlert.Read.All by default, so the /admin/security DLP tab is wired out of the box. DLP alerts + violations (security/alerts_v2, GA in every cloud) light up as soon as admin consent is issued; the policy-list segment (informationProtection/dataLossPreventionPolicies, /beta) and simulate are preview-gated and surface a precise honest MessageBar where unavailable. The Azure-native restrict-access enforcement (Restrict tab → ADLS/Synapse/ADX revokes) needs no Graph at all.')
+param loomDlpEnabled bool = true
 
 @description('Enable the Power BI Admin InformationProtection.setLabels API for /admin/batch-labeling Power BI propagation. Requires loomMipEnabled=true plus the Console UAMI to be a Fabric Administrator (a one-time M365/Entra admin action, not an ARM role). Defaults off; batch labeling still writes Cosmos + Purview when false.')
 param loomPowerBiAdminLabels bool = false

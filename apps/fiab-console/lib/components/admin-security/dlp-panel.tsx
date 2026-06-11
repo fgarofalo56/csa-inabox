@@ -21,11 +21,12 @@ import {
   Spinner, Button, Badge,
   Table, TableHeader, TableRow, TableHeaderCell, TableBody, TableCell,
   MessageBar, MessageBarBody, MessageBarTitle, Caption1, Subtitle2,
-  Textarea, Field,
+  Textarea, Field, Dropdown, Option, Input,
   makeStyles, tokens,
 } from '@fluentui/react-components';
-import { ArrowSync24Regular } from '@fluentui/react-icons';
+import { ArrowSync24Regular, ShieldProhibited24Regular } from '@fluentui/react-icons';
 import { NotConfiguredBar, type NotConfiguredHint } from './not-configured-bar';
+import { IdentityPicker, type IdentityHit } from '../ui/identity-picker';
 
 const useStyles = makeStyles({
   subTabs: { marginBottom: 12 },
@@ -63,7 +64,7 @@ async function fetchJson<T>(url: string, init: RequestInit = {}): Promise<ApiSta
   } catch (e: any) { return { loading: false, data: null, error: e?.message || String(e) }; }
 }
 
-type SubTab = 'policies' | 'violations' | 'alerts' | 'simulate';
+type SubTab = 'policies' | 'violations' | 'alerts' | 'restrict' | 'simulate';
 
 interface PolicyRow {
   id: string; name?: string; displayName?: string; description?: string;
@@ -101,12 +102,14 @@ export function DlpPanel() {
         <Tab value="policies">Policies</Tab>
         <Tab value="violations">Violations</Tab>
         <Tab value="alerts">Alerts</Tab>
+        <Tab value="restrict">Restrict access</Tab>
         <Tab value="simulate">Simulate</Tab>
       </TabList>
 
       {tab === 'policies' && <PoliciesSection />}
       {tab === 'violations' && <ViolationsSection />}
       {tab === 'alerts' && <AlertsSection />}
+      {tab === 'restrict' && <RestrictSection />}
       {tab === 'simulate' && <SimulateSection />}
     </div>
   );
@@ -154,7 +157,7 @@ function PoliciesSection() {
             )}
             {state.errorStatus === 404 && (
               <Caption1 block style={{ marginTop: 6 }}>
-                The Graph DLP /beta endpoint returned 404 — this tenant is likely not enrolled in the DLP-via-Graph preview. Open a Microsoft support ticket referencing <code>/beta/security/dataLossPreventionPolicies</code>.
+                The Graph DLP /beta endpoint returned 404 — this tenant is likely not enrolled in the DLP-via-Graph preview. Open a Microsoft support ticket referencing <code>/beta/informationProtection/dataLossPreventionPolicies</code>. The Restrict-access tab works without this preview.
               </Caption1>
             )}
           </MessageBarBody>
@@ -338,6 +341,265 @@ function AlertsSection() {
             ))}
           </TableBody>
         </Table>
+      )}
+    </div>
+  );
+}
+
+// ────────────────────────────────────────────────────────────────────────────
+// Restrict access — Azure-native DLP "Restrict access" enforcement.
+//
+// Fabric DLP's "Restrict access" action has no Fabric dependency in Loom: it
+// revokes REAL data-plane access on the Azure-native scope (ADLS Gen2 RBAC /
+// POSIX ACL, Synapse SQL DENY, ADX). Backed by POST /api/governance/dlp/restrict
+// (real ARM DELETE + read-back / TDS DENY / ADX revoke, recorded in Cosmos).
+// Works in every cloud with LOOM_DEFAULT_FABRIC_WORKSPACE unset — no Graph,
+// no Purview, no Fabric. This is the audit-T99 Azure-native parity surface.
+// ────────────────────────────────────────────────────────────────────────────
+
+type RestrictScope = 'adls-container' | 'adls-path' | 'warehouse' | 'warehouse-schema' | 'kql-database';
+
+const RESTRICT_SCOPES: { key: RestrictScope; label: string }[] = [
+  { key: 'adls-container', label: 'ADLS container (Storage RBAC)' },
+  { key: 'adls-path', label: 'ADLS path (POSIX ACL)' },
+  { key: 'warehouse', label: 'Warehouse (Synapse SQL role)' },
+  { key: 'warehouse-schema', label: 'Warehouse schema (DENY SELECT)' },
+  { key: 'kql-database', label: 'KQL database (ADX)' },
+];
+
+interface RestrictResult {
+  ok: boolean; restricted?: boolean; armConfirmed?: boolean; aclConfirmed?: boolean;
+  revokedRoleNames?: string[]; policiesUpdated?: number; note?: string; detail?: string; error?: string;
+}
+interface RestrictionRow {
+  id: string; at: string; principalName?: string; principalId: string;
+  scopeType: string; scopeRef: string; subPath?: string; schema?: string;
+  revokedRoleNames?: string[]; armConfirmed?: boolean; aclConfirmed?: boolean;
+}
+
+function RestrictSection() {
+  const s = useStyles();
+  const [scope, setScope] = useState<RestrictScope>('adls-container');
+  const [containers, setContainers] = useState<string[]>([]);
+  const [container, setContainer] = useState('');
+  const [subPath, setSubPath] = useState('');
+  const [schemas, setSchemas] = useState<string[]>([]);
+  const [schemaGate, setSchemaGate] = useState<string | null>(null);
+  const [schema, setSchema] = useState('');
+  const [kqlDbs, setKqlDbs] = useState<{ id: string; name: string }[]>([]);
+  const [kqlDb, setKqlDb] = useState('');
+  const [principal, setPrincipal] = useState<IdentityHit | null>(null);
+  const [running, setRunning] = useState(false);
+  const [result, setResult] = useState<RestrictResult | null>(null);
+  const [err, setErr] = useState<string | null>(null);
+  const [history, setHistory] = useState<RestrictionRow[]>([]);
+
+  const loadHistory = useCallback(async () => {
+    try {
+      const j = await fetch('/api/governance/dlp/meta').then((r) => r.json());
+      setHistory(Array.isArray(j?.restrictions) ? j.restrictions : []);
+    } catch { /* best-effort */ }
+  }, []);
+
+  useEffect(() => {
+    fetch('/api/lakehouse/containers').then((r) => r.json())
+      .then((d) => setContainers((d?.containers || []).map((c: any) => c.name).filter(Boolean)))
+      .catch(() => {});
+    fetch('/api/items/by-type?types=kql-database').then((r) => r.json())
+      .then((d) => setKqlDbs((d?.items || []).map((x: any) => ({ id: x.id, name: x.displayName || x.id }))))
+      .catch(() => {});
+    loadHistory();
+  }, [loadHistory]);
+
+  // Synapse schemas load lazily when the warehouse-schema scope is chosen.
+  useEffect(() => {
+    if (scope !== 'warehouse-schema') return;
+    setSchemaGate(null);
+    fetch('/api/governance/dlp/schemas').then(async (r) => {
+      const j = await r.json();
+      if (r.status === 503 || j?.code === 'warehouse_not_configured') {
+        setSchemas([]); setSchemaGate(j?.error || 'The Azure-native warehouse is not configured.');
+        return;
+      }
+      setSchemas(j?.ok ? (j.schemas || []) : []);
+    }).catch((e: any) => { setSchemas([]); setSchemaGate(e?.message || String(e)); });
+  }, [scope]);
+
+  const needsRef = scope === 'adls-container' || scope === 'adls-path' || scope === 'kql-database';
+  const scopeRef = scope === 'kql-database' ? kqlDb
+    : (scope === 'warehouse' || scope === 'warehouse-schema') ? 'warehouse' : container;
+
+  const canRun = !!principal && !running &&
+    (!needsRef || !!scopeRef) &&
+    (scope !== 'adls-path' || !!subPath.trim()) &&
+    (scope !== 'warehouse-schema' || !!schema);
+
+  const run = async () => {
+    if (!principal) { setErr('Select a principal to restrict.'); return; }
+    setRunning(true); setErr(null); setResult(null);
+    try {
+      const r = await fetch('/api/governance/dlp/restrict', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({
+          scopeType: scope,
+          scopeRef,
+          subPath: scope === 'adls-path' ? subPath.trim() : undefined,
+          schema: scope === 'warehouse-schema' ? schema : undefined,
+          principalId: principal.id,
+          principalName: principal.upn || principal.mail || principal.displayName,
+          principalType: principal.type === 'group' ? 'Group' : principal.type === 'spn' ? 'ServicePrincipal' : 'User',
+        }),
+      });
+      const j: RestrictResult = await r.json();
+      if (!r.ok || j.ok === false) {
+        setErr(j.error || `HTTP ${r.status}`);
+      } else {
+        setResult(j);
+        loadHistory();
+      }
+    } catch (e: any) {
+      setErr(e?.message || String(e));
+    } finally { setRunning(false); }
+  };
+
+  return (
+    <div className={s.section}>
+      <div className={s.toolbar}>
+        <Subtitle2 style={{ marginRight: 'auto' }}>Restrict access</Subtitle2>
+        <Button icon={<ArrowSync24Regular />} onClick={loadHistory}>Refresh history</Button>
+      </div>
+      <Caption1 block style={{ color: tokens.colorNeutralForeground3, marginBottom: 10 }}>
+        The Azure-native equivalent of Microsoft Purview DLP&apos;s &quot;Restrict access&quot; action.
+        Revokes a principal&apos;s real data-plane access on the selected scope — Storage RBAC / POSIX ACL,
+        Synapse SQL <code>DENY</code>, or ADX — and records the change. No Microsoft Fabric or Power BI
+        dependency; works against the Azure-native backend directly.
+      </Caption1>
+
+      <div className={s.fieldStack}>
+        <Field label="Scope type">
+          <Dropdown
+            value={RESTRICT_SCOPES.find((x) => x.key === scope)?.label}
+            selectedOptions={[scope]}
+            onOptionSelect={(_, d) => { setScope(d.optionValue as RestrictScope); setResult(null); setErr(null); }}
+          >
+            {RESTRICT_SCOPES.map((x) => <Option key={x.key} value={x.key}>{x.label}</Option>)}
+          </Dropdown>
+        </Field>
+
+        {(scope === 'adls-container' || scope === 'adls-path') && (
+          <Field label="ADLS container">
+            <Dropdown
+              placeholder={containers.length ? 'Select a container' : 'No containers found'}
+              value={container}
+              selectedOptions={container ? [container] : []}
+              onOptionSelect={(_, d) => setContainer(d.optionValue || '')}
+            >
+              {containers.map((c) => <Option key={c} value={c}>{c}</Option>)}
+            </Dropdown>
+          </Field>
+        )}
+        {scope === 'adls-path' && (
+          <Field label="Path under the container (directory or file)" hint="e.g. bronze/finance/q1.parquet">
+            <Input value={subPath} onChange={(_, d) => setSubPath(d.value)} placeholder="directory/or/file" />
+          </Field>
+        )}
+        {scope === 'kql-database' && (
+          <Field label="KQL database">
+            <Dropdown
+              placeholder={kqlDbs.length ? 'Select a KQL database' : 'No KQL databases found'}
+              value={kqlDbs.find((k) => k.id === kqlDb)?.name}
+              selectedOptions={kqlDb ? [kqlDb] : []}
+              onOptionSelect={(_, d) => setKqlDb(d.optionValue || '')}
+            >
+              {kqlDbs.map((k) => <Option key={k.id} value={k.id}>{k.name}</Option>)}
+            </Dropdown>
+          </Field>
+        )}
+        {scope === 'warehouse-schema' && (
+          <Field label="Warehouse schema (DENY SELECT)">
+            {schemaGate ? (
+              <MessageBar intent="warning"><MessageBarBody>{schemaGate}</MessageBarBody></MessageBar>
+            ) : (
+              <Dropdown
+                placeholder={schemas.length ? 'Select a schema' : 'Loading schemas…'}
+                value={schema}
+                selectedOptions={schema ? [schema] : []}
+                onOptionSelect={(_, d) => setSchema(d.optionValue || '')}
+              >
+                {schemas.map((sc) => <Option key={sc} value={sc}>{sc}</Option>)}
+              </Dropdown>
+            )}
+          </Field>
+        )}
+        {scope === 'warehouse' && (
+          <Caption1 block style={{ color: tokens.colorNeutralForeground3 }}>
+            Targets the env-bound Synapse dedicated SQL pool (warehouse). Revokes the principal&apos;s read/write/admin grants.
+          </Caption1>
+        )}
+
+        <Field label="Principal to restrict">
+          <IdentityPicker selected={principal} onSelect={(h) => setPrincipal(h || null)} placeholder="Search users, groups, or service principals…" />
+        </Field>
+
+        <div>
+          <Button appearance="primary" icon={<ShieldProhibited24Regular />} disabled={!canRun} onClick={run}>
+            {running ? 'Restricting…' : 'Restrict access'}
+          </Button>
+        </div>
+      </div>
+
+      {err && (
+        <MessageBar intent="error" style={{ marginTop: 12 }}>
+          <MessageBarBody><MessageBarTitle>Restrict failed</MessageBarTitle>{err}</MessageBarBody>
+        </MessageBar>
+      )}
+      {result && (
+        <MessageBar intent={result.restricted ? 'success' : 'info'} style={{ marginTop: 12 }}>
+          <MessageBarBody>
+            <MessageBarTitle>{result.restricted ? 'Access restricted' : 'Nothing to revoke'}</MessageBarTitle>
+            {result.detail || (result.restricted
+              ? `Revoked: ${(result.revokedRoleNames || []).join(', ') || '—'}${result.armConfirmed ? ' (ARM read-back confirmed)' : ''}${result.aclConfirmed ? ' (ACL read-back confirmed)' : ''}.`
+              : 'The principal held no matching access on this scope.')}
+            {typeof result.policiesUpdated === 'number' && result.policiesUpdated > 0 && (
+              <Caption1 block style={{ marginTop: 4 }}>{result.policiesUpdated} matching Access policy marked restricted.</Caption1>
+            )}
+            {result.note && <Caption1 block style={{ marginTop: 4 }}>{result.note}</Caption1>}
+          </MessageBarBody>
+        </MessageBar>
+      )}
+
+      {history.length > 0 && (
+        <div style={{ marginTop: 16 }}>
+          <Subtitle2 block style={{ marginBottom: 6 }}>Recent restrict-access actions</Subtitle2>
+          <Table size="small" aria-label="DLP restrict-access history">
+            <TableHeader>
+              <TableRow>
+                <TableHeaderCell>When</TableHeaderCell>
+                <TableHeaderCell>Principal</TableHeaderCell>
+                <TableHeaderCell>Scope</TableHeaderCell>
+                <TableHeaderCell>Revoked</TableHeaderCell>
+              </TableRow>
+            </TableHeader>
+            <TableBody>
+              {history.slice(0, 10).map((r) => (
+                <TableRow key={r.id}>
+                  <TableCell><Caption1>{r.at?.slice(0, 16) || '—'}</Caption1></TableCell>
+                  <TableCell><Caption1>{r.principalName || r.principalId}</Caption1></TableCell>
+                  <TableCell>
+                    <Caption1>{
+                      r.scopeType === 'adls-container' ? r.scopeRef
+                        : r.scopeType === 'adls-path' ? `${r.scopeRef}/${r.subPath || ''}`
+                        : r.scopeType === 'warehouse-schema' ? `schema ${r.schema || ''}`
+                        : r.scopeType
+                    }</Caption1>
+                  </TableCell>
+                  <TableCell><Caption1>{(r.revokedRoleNames || []).join(', ') || '—'}</Caption1></TableCell>
+                </TableRow>
+              ))}
+            </TableBody>
+          </Table>
+        </div>
       )}
     </div>
   );
