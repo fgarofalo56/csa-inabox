@@ -546,6 +546,39 @@ jobs:
             echo "    Without consent, /admin/security MIP+DLP tabs render the NotConfigured MessageBar."
           fi
 
+      - name: Provision SCC labels sidecar (label & policy CRUD)
+        if: always()
+        continue-on-error: true
+        run: |
+          # Sets up the Security & Compliance PowerShell sidecar that backs
+          # sensitivity-label + label-policy CRUD (create/edit/delete) on
+          # /admin/security. Microsoft Graph has no write surface for labels or
+          # policies, so CRUD runs through SCC PowerShell (New-/Set-/Remove-Label
+          # and *-LabelPolicy) via the azure-functions/scc-labels Function app,
+          # authenticated with a certificate-based app (Exchange.ManageAsApp +
+          # Compliance Administrator).
+          #
+          # This step performs the automatable parts (app registration, the
+          # Exchange.ManageAsApp grant, the Compliance Administrator role
+          # assignment, and — when the Function app exists — publishing the
+          # code). The auth certificate upload + Tenant Admin consent + the
+          # re-deploy with loomMipAdminEnabled=true remain one-time manual
+          # actions, printed at the end of the script. Until then label/policy
+          # READS work and CRUD returns the honest 'mip_admin_not_configured'
+          # gate (no vaporware).
+          set +e
+          SCC_FUNCTION_APP=$(az functionapp list -g "$ADMIN_RG" --query "[?starts_with(name,'func-scclbl-')].name | [0]" -o tsv 2>/dev/null)
+          if [ -n "$SCC_FUNCTION_APP" ]; then
+            echo "Found SCC labels Function app: $SCC_FUNCTION_APP — provisioning + publishing code."
+            SCC_FUNCTION_APP="$SCC_FUNCTION_APP" SCC_FUNCTION_RG="$ADMIN_RG" \
+              bash scripts/csa-loom/provision-scc-labels-sidecar.sh || true
+          else
+            echo "No func-scclbl-* Function app found in $ADMIN_RG."
+            echo "Deploy with loomMipAdminEnabled=true to create it, then re-run this job."
+            echo "Running the app/role provisioning portion now so the SCC app exists ahead of the next deploy:"
+            bash scripts/csa-loom/provision-scc-labels-sidecar.sh || true
+          fi
+
       - name: Publish Govern posture-refresh Function code (if the app exists)
         if: always()
         run: |

@@ -16,6 +16,7 @@
 import { NextResponse } from 'next/server';
 import { PurviewError, PurviewNotConfiguredError } from '@/lib/azure/purview-client';
 import { MipError, MipNotConfiguredError } from '@/lib/azure/mip-graph-client';
+import { SccError, SccNotConfiguredError } from '@/lib/azure/scc-labels-client';
 import { DlpError, DlpNotConfiguredError } from '@/lib/azure/dlp-graph-client';
 
 export function handleSecurityError(e: unknown): NextResponse {
@@ -28,6 +29,12 @@ export function handleSecurityError(e: unknown): NextResponse {
   if (e instanceof MipNotConfiguredError) {
     return NextResponse.json(
       { ok: false, error: e.message, code: 'mip_not_configured', hint: e.hint },
+      { status: 503 },
+    );
+  }
+  if (e instanceof SccNotConfiguredError) {
+    return NextResponse.json(
+      { ok: false, error: e.message, code: 'mip_admin_not_configured', hint: e.hint },
       { status: 503 },
     );
   }
@@ -55,6 +62,14 @@ export function handleSecurityError(e: unknown): NextResponse {
   }
   if (e instanceof DlpError) {
     const code = e.status >= 400 && e.status < 500 ? 'dlp_client_error' : 'dlp_upstream_error';
+    const status = e.status >= 400 && e.status < 500 ? e.status : 502;
+    return NextResponse.json(
+      { ok: false, error: e.message, code, status: e.status, body: e.body, endpoint: e.endpoint },
+      { status },
+    );
+  }
+  if (e instanceof SccError) {
+    const code = e.status >= 400 && e.status < 500 ? 'scc_client_error' : 'scc_upstream_error';
     const status = e.status >= 400 && e.status < 500 ? e.status : 502;
     return NextResponse.json(
       { ok: false, error: e.message, code, status: e.status, body: e.body, endpoint: e.endpoint },

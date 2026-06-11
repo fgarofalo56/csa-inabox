@@ -737,6 +737,21 @@ param loomPurviewAccount string = ''
 @description('Enable Microsoft Information Protection (sensitivity labels / label policies) calls via Microsoft Graph. Requires the Console UAMI to have InformationProtectionPolicy.Read.All admin-consented. When false, /admin/security Information Protection tab returns 503.')
 param loomMipEnabled bool = false
 
+@description('Enable sensitivity-label + label-policy CRUD (create/edit/delete) via the SCC PowerShell sidecar. Deploys azure-functions/scc-labels and wires LOOM_MIP_ADMIN_ENABLED / LOOM_SCC_LABELS_ENDPOINT / LOOM_SCC_LABELS_KEY into the Console. The sidecar needs the SCC app (Exchange.ManageAsApp + Compliance Administrator) + auth cert provisioned in post-deploy bootstrap. When false (default), label/policy READS still work but CRUD returns the honest 503 mip_admin_not_configured gate.')
+param loomMipAdminEnabled bool = false
+
+@description('Entra app (client) id for the SCC labels sidecar (Connect-IPPSSession -AppId). Set by bootstrap once the app + cert exist.')
+param sccAppId string = ''
+
+@description('Auth certificate thumbprint for the SCC labels sidecar (loaded via WEBSITE_LOAD_CERTIFICATES).')
+param sccCertThumbprint string = ''
+
+@description('Tenant onmicrosoft.com domain passed to Connect-IPPSSession -Organization (e.g. contoso.onmicrosoft.com).')
+param sccOrganization string = ''
+
+@description('Optional SCC PowerShell ConnectionUri override for sovereign clouds (Gov/GCC-High/DoD). Empty uses the Commercial default.')
+param sccConnectionUri string = ''
+
 @description('Enable Purview DLP (policies / rules / alerts / simulate) calls via Microsoft Graph. Requires Console UAMI Policy.Read.All + SecurityAlert.Read.All admin-consented. When false, /admin/security DLP tab returns 503.')
 param loomDlpEnabled bool = false
 
@@ -2330,6 +2345,15 @@ module appDeployments 'app-deployments.bicep' = if (containerPlatform == 'contai
           loomMipEnabled ? [
             { name: 'LOOM_MIP_ENABLED', value: 'true' }
           ] : [],
+          // SCC labels sidecar wiring — enables label/policy CRUD (create/edit/
+          // delete) + policy reads. Endpoint + host key come from the deployed
+          // scc-labels Function (only present when loomMipAdminEnabled). When
+          // unset the Console renders the honest mip_admin_not_configured gate.
+          loomMipAdminEnabled ? [
+            { name: 'LOOM_MIP_ADMIN_ENABLED', value: 'true' }
+            { name: 'LOOM_SCC_LABELS_ENDPOINT', value: sccLabels.outputs.endpoint }
+            { name: 'LOOM_SCC_LABELS_KEY', value: sccLabels.outputs.functionKey }
+          ] : [],
           // Sovereign Graph base for MIP — GCC-High / IL5 use graph.microsoft.us.
           // mip-graph-client reads LOOM_MIP_GRAPH_BASE (defaults to graph.microsoft.com).
           boundary == 'GCC-High' || boundary == 'IL5' ? [
@@ -2960,6 +2984,24 @@ module reportSubscriptions 'report-subscriptions-function.bicep' = if (reportSub
     subscriptionLogicAppName: loomSubscriptionLogicAppName
     subscriptionLogicAppRg: resourceGroup().name
     loomDlzRg: loomDlzRg
+    appInsightsConnectionString: monitoring.outputs.appInsightsConnectionString
+    complianceTags: complianceTags
+  }
+}
+
+// SCC sensitivity-label CRUD sidecar (PowerShell). Performs New-/Set-/Remove-
+// Label and *-LabelPolicy via Security & Compliance PowerShell — the only API
+// that can create/edit/delete labels & policies (Graph has no write surface).
+// Opt-in: requires the SCC app + auth cert provisioned in post-deploy bootstrap.
+// When loomMipAdminEnabled=false the Console renders the honest CRUD gate.
+module sccLabels 'scc-labels-function.bicep' = if (loomMipAdminEnabled) {
+  name: 'scc-labels-function'
+  params: {
+    location: location
+    sccAppId: sccAppId
+    sccCertThumbprint: sccCertThumbprint
+    sccOrganization: sccOrganization
+    sccConnectionUri: sccConnectionUri
     appInsightsConnectionString: monitoring.outputs.appInsightsConnectionString
     complianceTags: complianceTags
   }
