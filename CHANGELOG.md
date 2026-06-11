@@ -25,6 +25,32 @@ This file is maintained automatically by
 [Conventional Commits](https://www.conventionalcommits.org/). See
 [RELEASE.md](RELEASE.md) for the release process.
 
+## [0.36.0](https://github.com/fgarofalo56/csa-inabox/compare/csa-inabox-v0.35.0...csa-inabox-v0.36.0) (2026-06-11)
+
+
+### Features
+
+* **csa-loom:** admin runtime env/config management UI (audit-t49) ([#1164](https://github.com/fgarofalo56/csa-inabox/issues/1164)) ([fb4421f](https://github.com/fgarofalo56/csa-inabox/commit/fb4421f2a426f3dfd2c6ace4eefeeddf8fac1930))
+* **csa-loom:** convert all Supercharge-Fabric notebooks to Loom-native bundles (audit-t40) ([#1162](https://github.com/fgarofalo56/csa-inabox/issues/1162)) ([8529fa1](https://github.com/fgarofalo56/csa-inabox/commit/8529fa14c4f5c3986614f977799668f8cf0ce7e9))
+* **csa-loom:** deep-link 40 use-case LearnTopics + app-install links (audit-t37) ([#1158](https://github.com/fgarofalo56/csa-inabox/issues/1158)) ([e83dde3](https://github.com/fgarofalo56/csa-inabox/commit/e83dde3c183a05a31f4826868e1f73b34119b0b5))
+* **csa-loom:** deep-link Learn use cases + enforce Loom-docs-first links (audit-T43) ([#1165](https://github.com/fgarofalo56/csa-inabox/issues/1165)) ([f30521b](https://github.com/fgarofalo56/csa-inabox/commit/f30521b6d1c550a7d8b145ef319db2157e3c225b))
+* **csa-loom:** guided in-product onboarding tour (audit-t42) ([#1168](https://github.com/fgarofalo56/csa-inabox/issues/1168)) ([136c39a](https://github.com/fgarofalo56/csa-inabox/commit/136c39a64ada788a413dfa6a08993ce002eff93f))
+* **csa-loom:** Learning Hub Copilot — tutorial-step context + auto-error-detect + apply-fix (audit-T41) ([#1167](https://github.com/fgarofalo56/csa-inabox/issues/1167)) ([1e76449](https://github.com/fgarofalo56/csa-inabox/commit/1e7644928efbdc2d6eb8bda6fe61a9e87e377f59))
+* **csa-loom:** Learning-Hub notebook import wizard (audit-t39) ([#1157](https://github.com/fgarofalo56/csa-inabox/issues/1157)) ([8adff00](https://github.com/fgarofalo56/csa-inabox/commit/8adff0021660381524e6aba953e26df63c8726a7))
+* **csa-loom:** MCP browse-catalog + deploy wizard (per-field KV secrets) (audit-t45) ([#1163](https://github.com/fgarofalo56/csa-inabox/issues/1163)) ([9fa6ecd](https://github.com/fgarofalo56/csa-inabox/commit/9fa6ecd726ed31e17da87f8cfba14aa39fbc9a32))
+* **csa-loom:** MCP catalog deploy/status/delete BFF + bicep (audit-t48) ([#1166](https://github.com/fgarofalo56/csa-inabox/issues/1166)) ([92aadeb](https://github.com/fgarofalo56/csa-inabox/commit/92aadeb088dda8d15392a22abff37239e36e435c))
+* **csa-loom:** MCP deploy-to-Container-Apps + Azure Files mount (audit-t46) ([#1161](https://github.com/fgarofalo56/csa-inabox/issues/1161)) ([29f96d0](https://github.com/fgarofalo56/csa-inabox/commit/29f96d00b6cbfe5574e0873d9b05dfdf8bbb53b4))
+* **csa-loom:** MCP deployable-catalog data file (audit-t44) ([#1159](https://github.com/fgarofalo56/csa-inabox/issues/1159)) ([af2322c](https://github.com/fgarofalo56/csa-inabox/commit/af2322c9c6ad0937f5dc8e32e3be27ea5081fbcc))
+* **csa-loom:** MCP stdio-&gt;HTTP/SSE bridge for npx/uvx servers (audit-t47) ([#1160](https://github.com/fgarofalo56/csa-inabox/issues/1160)) ([be7a955](https://github.com/fgarofalo56/csa-inabox/commit/be7a955cd8d8c904ca6de3aff71617a6c35fdbd8))
+* **csa-loom:** wire Learn use-case "Install live example" wizard (audit-t38) ([#1156](https://github.com/fgarofalo56/csa-inabox/issues/1156)) ([d895a2e](https://github.com/fgarofalo56/csa-inabox/commit/d895a2e0fd03d16c6b9217d7645742722b0d3c2e))
+
+
+### Bug Fixes
+
+* **csa-loom:** close JSX expression in palantir AIP-Logic editor ([#1154](https://github.com/fgarofalo56/csa-inabox/issues/1154)) ([2cd5bcd](https://github.com/fgarofalo56/csa-inabox/commit/2cd5bcde8e41380d76956cc4fff0362844fc8ec4))
+* **csa-loom:** remove orphaned JSX close from learn app-install merge ([#1169](https://github.com/fgarofalo56/csa-inabox/issues/1169)) ([88adcf9](https://github.com/fgarofalo56/csa-inabox/commit/88adcf9d342ab0a6026e0ef23f1b9ddc29c1219b))
+* **csa-loom:** use style weight for Body2 in mcp-servers panel ([#1170](https://github.com/fgarofalo56/csa-inabox/issues/1170)) ([ed3e21a](https://github.com/fgarofalo56/csa-inabox/commit/ed3e21a5a3c2cc7c50de8ad06b59f47dcd7ded7f))
+
 ## [0.35.0](https://github.com/fgarofalo56/csa-inabox/compare/csa-inabox-v0.34.0...csa-inabox-v0.35.0) (2026-06-11)
 
 
