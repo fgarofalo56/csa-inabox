@@ -62,9 +62,27 @@ const useStyles = makeStyles({
     display: 'flex', alignItems: 'center', gap: tokens.spacingHorizontalS,
     padding: tokens.spacingVerticalS, borderRadius: tokens.borderRadiusMedium,
     border: `1px solid ${tokens.colorNeutralStroke2}`, backgroundColor: tokens.colorNeutralBackground1,
+    minWidth: 0,
+  },
+  rowActive: {
+    borderColor: tokens.colorBrandStroke1,
+    backgroundColor: tokens.colorBrandBackground2,
   },
   spacer: { flex: 1 },
-  grid2: { display: 'grid', gridTemplateColumns: '1fr 1fr', gap: tokens.spacingHorizontalM },
+  grid2: {
+    display: 'grid', gridTemplateColumns: 'minmax(0, 1fr) minmax(0, 1fr)', gap: tokens.spacingHorizontalM,
+    alignItems: 'start',
+    '@media (max-width: 900px)': { gridTemplateColumns: 'minmax(0, 1fr)' },
+  },
+  metricCard: {
+    display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalXXS,
+    padding: tokens.spacingVerticalL, borderRadius: tokens.borderRadiusMedium,
+    border: `1px solid ${tokens.colorNeutralStroke2}`, backgroundColor: tokens.colorNeutralBackground2,
+  },
+  metricValue: {
+    fontSize: tokens.fontSizeHero700, fontWeight: tokens.fontWeightSemibold,
+    lineHeight: tokens.lineHeightHero700, color: tokens.colorBrandForeground1,
+  },
   codeWrap: {
     display: 'flex', flexDirection: 'column', overflow: 'hidden',
     borderRadius: tokens.borderRadiusMedium, border: `1px solid ${tokens.colorNeutralStroke2}`,
@@ -539,13 +557,20 @@ export function WorkshopAppEditor({ item, id }: { item: FabricItemType; id: stri
         {prev?.error && <MessageBar intent={prev.gate ? 'warning' : 'error'}><MessageBarBody>{prev.error}</MessageBarBody></MessageBar>}
         {prev?.columns && (
           comp.kind === 'metric' && prev.rows && prev.rows.length > 0 ? (
-            <div className={s.row}><Subtitle2>{fmtCellW(prev.rows[0][prev.rows[0].length - 1])}</Subtitle2><Caption1 className={s.hint}>{prev.columns[prev.columns.length - 1]}</Caption1></div>
+            <div className={s.metricCard}>
+              <span className={s.metricValue}>{fmtCellW(prev.rows[0][prev.rows[0].length - 1])}</span>
+              <Caption1 className={s.hint}>{prev.columns[prev.columns.length - 1]}</Caption1>
+            </div>
           ) : (
             <div className={s.tableWrap}>
               <Table size="small" aria-label={`${comp.title} preview`}>
                 <TableHeader><TableRow>{prev.columns.map((col) => <TableHeaderCell key={col}>{col}</TableHeaderCell>)}</TableRow></TableHeader>
                 <TableBody>
-                  {(prev.rows || []).slice(0, 50).map((row, ri) => (
+                  {(prev.rows || []).length === 0 ? (
+                    <TableRow>
+                      <TableCell colSpan={prev.columns.length}><Caption1 className={s.hint}>No rows returned for this binding.</Caption1></TableCell>
+                    </TableRow>
+                  ) : (prev.rows || []).slice(0, 50).map((row, ri) => (
                     <TableRow key={ri}>{(Array.isArray(row) ? row : []).map((cell, ci) => <TableCell key={ci}>{fmtCellW(cell)}</TableCell>)}</TableRow>
                   ))}
                 </TableBody>
@@ -616,7 +641,7 @@ export function WorkshopAppEditor({ item, id }: { item: FabricItemType; id: stri
               <Button size="small" appearance="outline" icon={<Add20Regular />} onClick={addPage}>Add page</Button>
             </div>
             {appDef.pages.length === 0 ? <div className={s.empty}><Caption1>No pages yet. Add a page or run the New app wizard.</Caption1></div> : appDef.pages.map((p) => (
-              <div key={p.id} className={s.row} style={p.id === activePageId ? { borderColor: tokens.colorBrandStroke1 } : undefined}>
+              <div key={p.id} className={`${s.row}${p.id === activePageId ? ` ${s.rowActive}` : ''}`}>
                 <Button size="small" appearance={p.id === activePageId ? 'primary' : 'subtle'} onClick={() => { setActivePageId(p.id); setEditingId(''); }}>{p.id === activePageId ? 'Editing' : 'Open'}</Button>
                 <Input value={p.name} aria-label={`Page ${p.name} name`} onChange={(_, d) => renamePage(p.id, d.value)} />
                 <Caption1 className={s.hint}>{p.components.length} cmp</Caption1>
@@ -638,7 +663,7 @@ export function WorkshopAppEditor({ item, id }: { item: FabricItemType; id: stri
                   <Button size="small" appearance="outline" icon={<Add20Regular />} onClick={() => addComponent('text')}>Text</Button>
                 </div>
                 {activePage.components.length === 0 ? <div className={s.empty}><Caption1>No components. Add a table, metric, or text block.</Caption1></div> : activePage.components.map((c) => (
-                  <div key={c.id} className={s.row} style={c.id === editingId ? { borderColor: tokens.colorBrandStroke1 } : undefined}>
+                  <div key={c.id} className={`${s.row}${c.id === editingId ? ` ${s.rowActive}` : ''}`}>
                     <Badge appearance="tint" color="brand">{c.kind}</Badge>
                     <Input value={c.title} aria-label={`Component ${c.title} title`} onChange={(_, d) => updateComponent(c.id, { title: d.value })} />
                     <span className={s.spacer} />
