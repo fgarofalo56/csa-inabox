@@ -281,7 +281,7 @@ function GeoMapEditorBody({ item, id }: { item: FabricItemType; id: string }) {
           <div className={s.field}><Label>Azure Maps account name</Label>
             <Input value={state.account} onChange={(_: unknown, d: any) => setState((p) => ({ ...p, account: d.value }))} placeholder={configuredMapsAccount || 'maps-csa-loom'} />
             {configuredMapsAccount && (
-              <Caption1>Deployed account <code>{configuredMapsAccount}</code> is bound from <code>NEXT_PUBLIC_LOOM_AZURE_MAPS_ACCOUNT</code>. Override above to point at a different Maps account.</Caption1>
+              <Caption1 style={{ color: tokens.colorNeutralForeground3 }}>Deployed account <code>{configuredMapsAccount}</code> is bound from <code>NEXT_PUBLIC_LOOM_AZURE_MAPS_ACCOUNT</code>. Override above to point at a different Maps account.</Caption1>
             )}
           </div>
           <div className={s.field}><Label>Style</Label>
