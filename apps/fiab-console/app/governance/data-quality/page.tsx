@@ -272,8 +272,8 @@ function RunTab() {
         <Field label="Tables (comma-sep, optional)" style={{ flex: 1, minWidth: 220 }}><Input value={tables} onChange={(_, d) => setTables(d.value)} placeholder="all enabled rules if blank" /></Field>
       </div>
 
-      {gate && <MessageBar intent="warning"><MessageBarBody><MessageBarTitle>Engine not configured</MessageBarTitle>{gate.error} Set the <code>{gate.missing}</code> app setting on the Console (admin-plane bicep).</MessageBarBody></MessageBar>}
-      {error && <MessageBar intent="error"><MessageBarBody>{error}</MessageBarBody></MessageBar>}
+      {gate && <MessageBar intent="warning" style={{ marginBottom: 12 }}><MessageBarBody><MessageBarTitle>Engine not configured</MessageBarTitle>{gate.error} Set the <code>{gate.missing}</code> app setting on the Console (admin-plane bicep).</MessageBarBody></MessageBar>}
+      {error && <MessageBar intent="error" style={{ marginBottom: 12 }}><MessageBarBody>{error}</MessageBarBody></MessageBar>}
 
       {run && (<>
         <div className={s.toolbar}>
@@ -367,8 +367,8 @@ function MonitorsTab() {
         <Button appearance="primary" onClick={load} disabled={busy || !table.trim()} style={{ alignSelf: 'flex-end' }}>Load</Button>
       </div>
 
-      {gate && <MessageBar intent="warning"><MessageBarBody><MessageBarTitle>Databricks not configured</MessageBarTitle>{gate.error} Set <code>{gate.missing}</code> on the Console (admin-plane bicep).</MessageBarBody></MessageBar>}
-      {error && <MessageBar intent="error"><MessageBarBody>{error}</MessageBarBody></MessageBar>}
+      {gate && <MessageBar intent="warning" style={{ marginBottom: 12 }}><MessageBarBody><MessageBarTitle>Databricks not configured</MessageBarTitle>{gate.error} Set <code>{gate.missing}</code> on the Console (admin-plane bicep).</MessageBarBody></MessageBar>}
+      {error && <MessageBar intent="error" style={{ marginBottom: 12 }}><MessageBarBody>{error}</MessageBarBody></MessageBar>}
 
       {data && <>
         <Subtitle2 style={{ display: 'block', marginTop: 16, marginBottom: 8 }}>Delta enforced constraints</Subtitle2>

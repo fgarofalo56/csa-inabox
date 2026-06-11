@@ -19,7 +19,7 @@
 import { useCallback, useEffect, useState } from 'react';
 import {
   Spinner, Button, Badge, Body1, Caption1, Subtitle2, Text,
-  TabList, Tab, Field, Input, Dropdown, Option,
+  TabList, Tab, Field, Input, Dropdown, Option, Textarea,
   Dialog, DialogSurface, DialogBody, DialogTitle, DialogContent, DialogActions,
   MessageBar, MessageBarBody, MessageBarTitle,
   makeStyles, tokens,
@@ -277,7 +277,7 @@ function RefDataTab() {
                 </div>
                 <Field label="Description"><Input value={desc} onChange={(_, d) => setDesc(d.value)} /></Field>
                 <Field label="Entries (one per line: code, label)" hint="Saving bumps the version.">
-                  <textarea value={entriesText} onChange={(e) => setEntriesText(e.target.value)} rows={8} placeholder={'US, United States\nGB, United Kingdom'} style={{ width: '100%', fontFamily: 'monospace', padding: 8, borderRadius: 6, border: `1px solid ${tokens.colorNeutralStroke1}` }} />
+                  <Textarea value={entriesText} onChange={(_, d) => setEntriesText(d.value)} rows={8} resize="vertical" placeholder={'US, United States\nGB, United Kingdom'} textarea={{ style: { fontFamily: 'monospace' } }} />
                 </Field>
               </div>
             </DialogContent>
@@ -330,8 +330,8 @@ function MatchTab({ models }: { models: MdmModel[] }) {
         </Field>
         <Field label="Min score %" style={{ minWidth: 140 }}><Input type="number" value={minScore} onChange={(_, d) => setMinScore(d.value)} /></Field>
       </div>
-      {gate && <MessageBar intent="warning"><MessageBarBody><MessageBarTitle>Databricks not configured</MessageBarTitle>{gate.error} Set <code>{gate.missing}</code> on the Console (admin-plane bicep).</MessageBarBody></MessageBar>}
-      {error && <MessageBar intent="error"><MessageBarBody>{error}</MessageBarBody></MessageBar>}
+      {gate && <MessageBar intent="warning" style={{ marginBottom: 12 }}><MessageBarBody><MessageBarTitle>Databricks not configured</MessageBarTitle>{gate.error} Set <code>{gate.missing}</code> on the Console (admin-plane bicep).</MessageBarBody></MessageBar>}
+      {error && <MessageBar intent="error" style={{ marginBottom: 12 }}><MessageBarBody>{error}</MessageBarBody></MessageBar>}
       {candidates && <LoomDataTable<MatchCandidate> columns={cols} rows={candidates} getRowId={(c) => `${c.idA}|${c.idB}`} empty="No candidate pairs at or above the threshold." />}
     </Section>
   );
@@ -392,7 +392,7 @@ function GoldenTab({ models }: { models: MdmModel[] }) {
           </Dropdown>
         </Field>
       </div>
-      {gate && <MessageBar intent="warning"><MessageBarBody><MessageBarTitle>Databricks not configured</MessageBarTitle>{gate.error} Set <code>{gate.missing}</code> on the Console (admin-plane bicep).</MessageBarBody></MessageBar>}
+      {gate && <MessageBar intent="warning" style={{ marginBottom: 12 }}><MessageBarBody><MessageBarTitle>Databricks not configured</MessageBarTitle>{gate.error} Set <code>{gate.missing}</code> on the Console (admin-plane bicep).</MessageBarBody></MessageBar>}
       {info && <MessageBar intent="success" style={{ marginBottom: 12 }}><MessageBarBody>{info}</MessageBarBody></MessageBar>}
       {error && <MessageBar intent="error" style={{ marginBottom: 12 }}><MessageBarBody>{error}</MessageBarBody></MessageBar>}
       {data && <>
