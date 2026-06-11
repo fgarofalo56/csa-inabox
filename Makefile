@@ -1,4 +1,4 @@
-.PHONY: help setup setup-all lint test validate deploy-dev deploy-prod deploy-adf prerequisites seed seed-azure clean security typecheck-platform portal-dev portal-dev-stop portal-test portal-lint portal-docker teardown-dev teardown-staging teardown-prod teardown-example sample-up sample-down helm-lint
+.PHONY: help setup setup-all lint test validate deploy-dev deploy-prod deploy-adf prerequisites seed seed-azure clean security typecheck-platform portal-dev portal-dev-stop portal-test portal-lint portal-docker teardown-dev teardown-staging teardown-prod teardown-example sample-up sample-down helm-lint redeploy-gov-il5 redeploy-gov-gcch
 
 # Default target
 help: ## Show this help
@@ -136,6 +136,14 @@ teardown-staging: ## Tear down staging platform resources (interactive confirmat
 teardown-prod: ## Tear down production platform resources (interactive confirmation, NEVER --yes)
 	@echo "Refusing to use --yes against prod; you will be prompted to type DESTROY-prod."
 	bash scripts/deploy/teardown-platform.sh --env prod
+
+# --- Gov full-stack teardown -> redeploy (CSA Loom IL5 / GCC-High, A-4/PMF-64) ---
+
+redeploy-gov-il5: ## IL5 full-stack teardown->redeploy (Gov sub). What-if: make redeploy-gov-il5 WHATIF=1
+	bash scripts/csa-loom/redeploy-gov.sh --boundary il5 $(if $(WHATIF),--what-if) $(if $(YES),--yes)
+
+redeploy-gov-gcch: ## GCC-High full-stack teardown->redeploy (Gov sub). What-if: make redeploy-gov-gcch WHATIF=1
+	bash scripts/csa-loom/redeploy-gov.sh --boundary gcc-high $(if $(WHATIF),--what-if) $(if $(YES),--yes)
 
 teardown-example: ## Tear down a single vertical example: make teardown-example VERTICAL=usda
 	@if [ -z "$(VERTICAL)" ]; then echo "Usage: make teardown-example VERTICAL=<name>"; exit 1; fi

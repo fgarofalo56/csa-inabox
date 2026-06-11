@@ -1,0 +1,134 @@
+name: deploy-fiab-il5
+
+# CSA Loom — deploy validation against DoD IL5 (Azure Government, IL5-accredited
+# services only). Sibling of deploy-fiab-gcch.yml (A-4 / PMF-64).
+#
+# whatif-only  — validates Bicep + Gov auth without provisioning (default, safe).
+# full         — teardown -> redeploy -> RBAC grants -> smoke via the
+#                scripts/csa-loom/redeploy-gov.sh orchestration, i.e. the
+#                acceptance "teardown->redeploy in a clean Gov sub" run.
+#
+# Manual approval gate (il5-deploy environment protection) since this deploys
+# into an IL5 Gov subscription.
+
+on:
+  workflow_dispatch:
+    inputs:
+      run_mode:
+        description: 'Run mode — whatif-only validates Bicep + auth; full does teardown->redeploy->smoke.'
+        type: choice
+        default: whatif-only
+        options:
+          - whatif-only
+          - full
+
+permissions:
+  contents: read
+  issues: write
+
+env:
+  AZURE_CLOUD: AzureUSGovernment
+  AZURE_LOCATION: usgovvirginia
+  CSA_LOOM_BOUNDARY: IL5
+
+jobs:
+  precheck:
+    name: Verify Gov secrets are configured
+    runs-on: ubuntu-latest
+    outputs:
+      configured: ${{ steps.check.outputs.configured }}
+    steps:
+      - id: check
+        env:
+          C: ${{ secrets.AZURE_GOV_CLIENT_ID }}
+          S: ${{ secrets.AZURE_GOV_CLIENT_SECRET }}
+          T: ${{ secrets.AZURE_GOV_TENANT_ID }}
+          U: ${{ secrets.AZURE_GOV_SUBSCRIPTION_ID }}
+        run: |
+          if [[ -z "$C" || -z "$S" || -z "$T" || -z "$U" ]]; then
+            echo "configured=false" >> $GITHUB_OUTPUT
+            echo "::warning::AZURE_GOV_* secrets not configured — skipping."
+            echo "::warning::Bootstrap per docs/fiab/runbooks/secrets-bootstrap.md"
+          else
+            echo "configured=true" >> $GITHUB_OUTPUT
+          fi
+
+  deploy-validate:
+    name: Deploy + validate CSA Loom in IL5
+    needs: precheck
+    if: needs.precheck.outputs.configured == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 150
+    environment: il5-deploy   # requires manual approval
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Azure login (Gov sub) — limitlessdata_deploy SP
+        uses: Azure/login@v2
+        with:
+          creds: |
+            {
+              "clientId": "${{ secrets.AZURE_GOV_CLIENT_ID }}",
+              "clientSecret": "${{ secrets.AZURE_GOV_CLIENT_SECRET }}",
+              "tenantId": "${{ secrets.AZURE_GOV_TENANT_ID }}",
+              "subscriptionId": "${{ secrets.AZURE_GOV_SUBSCRIPTION_ID }}",
+              "activeDirectoryEndpointUrl": "https://login.microsoftonline.us",
+              "resourceManagerEndpointUrl": "https://management.usgovcloudapi.net/",
+              "sqlManagementEndpointUrl": "https://management.core.usgovcloudapi.net:8443/",
+              "galleryEndpointUrl": "https://gallery.usgovcloudapi.net/",
+              "managementEndpointUrl": "https://management.core.usgovcloudapi.net/"
+            }
+          environment: AzureUSGovernment
+
+      - name: Set Azure cloud to Gov
+        run: az cloud set --name AzureUSGovernment
+
+      - name: Setup Bicep
+        run: az bicep install
+
+      - name: Bicep what-if (IL5 params)
+        run: |
+          az deployment sub what-if \
+            --name csa-loom-il5-ci-${{ github.run_id }} \
+            --location $AZURE_LOCATION \
+            --template-file platform/fiab/bicep/main.bicep \
+            --parameters platform/fiab/bicep/params/il5.bicepparam \
+            --parameters adminEntraGroupId=${{ secrets.FIAB_GOV_ADMIN_GROUP_ID }}
+
+      - name: Teardown -> redeploy -> smoke (full mode only)
+        if: inputs.run_mode == 'full'
+        env:
+          FIAB_GOV_ADMIN_GROUP_ID: ${{ secrets.FIAB_GOV_ADMIN_GROUP_ID }}
+          LOOM_MSAL_CLIENT_ID: ${{ secrets.LOOM_GOV_MSAL_CLIENT_ID }}
+          LOOM_MSAL_CLIENT_SECRET: ${{ secrets.LOOM_GOV_MSAL_CLIENT_SECRET }}
+        run: bash scripts/csa-loom/redeploy-gov.sh --boundary il5 --yes
+
+      - name: Note dry-run completion
+        if: success() && inputs.run_mode == 'whatif-only'
+        run: echo "✅ whatif-only run complete. IL5 Bicep + auth validated; no resources provisioned."
+
+      - name: Notify on failure
+        if: failure()
+        uses: actions/github-script@v7
+        env:
+          # Parameterized: set the repo/org variable FIAB_GOV_DEPLOY_TRACKING_ISSUE
+          # to an OPEN tracking issue. Previously hard-coded to #279 ("CSA Loom — v1
+          # build roadmap"), which is CLOSED and generic — comments there were lost.
+          # When unset, the step logs a warning instead of posting (the job is still
+          # marked failed by `if: failure()`).
+          TRACKING_ISSUE: ${{ vars.FIAB_GOV_DEPLOY_TRACKING_ISSUE }}
+        with:
+          script: |
+            const issue = parseInt(process.env.TRACKING_ISSUE || '', 10);
+            const body = `❌ deploy-fiab-il5 failed in run ${context.runId}. Federal CSU should investigate.`;
+            if (Number.isInteger(issue) && issue > 0) {
+              await github.rest.issues.createComment({
+                issue_number: issue,
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                body,
+              });
+            } else {
+              core.warning('FIAB_GOV_DEPLOY_TRACKING_ISSUE repo variable not set — skipping issue comment. ' + body);
+            }

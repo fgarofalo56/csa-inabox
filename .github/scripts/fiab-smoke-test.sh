@@ -134,6 +134,34 @@ for svc in activator-engine mirroring-engine; do
 done
 
 # ---------------------------------------------------------------------
+# Test 8: Copilot orchestration tier (GCC-High / IL5 MAF — A-4 / PMF-64)
+# ---------------------------------------------------------------------
+# The loom-copilot-maf Container App is VNet-internal (never public), so we
+# cannot probe its /health directly from the smoke-test runner. Instead we
+# verify the Console's orchestration route is wired + auth-gated (the route
+# that proxies to MAF when LOOM_MAF_ENDPOINT is set on a Gov boundary, and
+# otherwise falls through to Gov AOAI-direct). MAF_ENDPOINT (from the
+# deployment's copilotMafEndpoint output) is reported for the receipt.
+if [[ "$BOUNDARY" == "GCC-High" || "$BOUNDARY" == "IL5" ]]; then
+  echo "Test 8: Copilot orchestrate route enforces auth (MAF tier wiring)"
+  RESPONSE=$(curl -fsS -o /dev/null -w "%{http_code}" --max-time 30 \
+    -X POST "${CONSOLE_URL}/api/copilot/orchestrate" \
+    -H "Content-Type: application/json" -d '{}' || echo "000")
+  if [[ "$RESPONSE" != "401" && "$RESPONSE" != "403" ]]; then
+    fail "expected 401/403 (unauth) at /api/copilot/orchestrate, got $RESPONSE"
+  else
+    pass
+  fi
+  if [[ -n "${MAF_ENDPOINT:-}" ]]; then
+    echo "  ℹ️  MAF tier active — copilotMafEndpoint=${MAF_ENDPOINT}"
+  else
+    echo "  ℹ️  MAF tier inactive on this compute path — Console uses Gov AOAI-direct fallback"
+  fi
+else
+  echo "Test 8: SKIPPED (MAF orchestration tier is GCC-High / IL5 only)"
+fi
+
+# ---------------------------------------------------------------------
 # Summary
 # ---------------------------------------------------------------------
 echo
