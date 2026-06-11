@@ -59,7 +59,7 @@ import {
 // returns (app/api/catalog/lineage/route.ts).
 // ---------------------------------------------------------------------------
 
-export type LineageSource = 'purview' | 'unity-catalog' | 'onelake' | 'loom';
+export type LineageSource = 'purview' | 'unity-catalog' | 'onelake' | 'loom' | 'weave';
 
 export interface CanvasLineageNode {
   id: string;
@@ -74,6 +74,13 @@ export interface CanvasLineageNode {
   openHref?: string;
   /** Set when the same asset was matched in >1 source during a merge. */
   multiSource?: string[];
+  /**
+   * Canonical cross-source identity (qualifiedName / storage path / UC
+   * full_name / Loom item id) the unified-lineage merge collapsed this node
+   * on. Carried purely as metadata for the detail panel — the canvas does not
+   * read it for layout. See lib/azure/unified-lineage.ts.
+   */
+  identity?: string;
 }
 
 export interface CanvasLineageEdge {
@@ -103,6 +110,12 @@ const TYPE_STYLES: Record<string, TypeStyle> = {
   dashboard: { color: 'var(--loom-accent-magenta)', Icon: ChartMultiple16Regular, kind: 'Dashboard' },
   lakehouse: { color: 'var(--loom-accent-emerald)', Icon: Database16Regular, kind: 'Lakehouse' },
   process: { color: '#605E5C', Icon: Box16Regular, kind: 'Process' },
+  // Weave (Loom Thread) edge endpoints — the integration mesh recorded in the
+  // thread-edges Cosmos container (notebook attach, data-agent source, Power BI
+  // model, API publish). These are Loom items, not Azure/Fabric assets.
+  'powerbi-model': { color: 'var(--loom-accent-magenta)', Icon: ChartMultiple16Regular, kind: 'Power BI model' },
+  'data-agent': { color: 'var(--loom-accent-emerald)', Icon: BranchFork16Regular, kind: 'Data agent' },
+  'data-api-builder': { color: 'var(--loom-accent-teal)', Icon: Flow16Regular, kind: 'Data API' },
 };
 
 const FALLBACK_STYLE: TypeStyle = { color: '#605E5C', Icon: Box16Regular, kind: 'Asset' };
@@ -114,6 +127,9 @@ function styleForType(type?: string): TypeStyle {
   if (TYPE_STYLES[t]) return TYPE_STYLES[t];
   // Atlas type names like "azure_sql_table", "powerbi_report", "databricks_table".
   if (t.includes('column')) return { color: 'var(--loom-accent-emerald)', Icon: BranchFork16Regular, kind: 'Column' };
+  if (t.includes('powerbi') || t.includes('power-bi') || t.includes('semantic')) return TYPE_STYLES['powerbi-model'];
+  if (t.includes('agent')) return TYPE_STYLES['data-agent'];
+  if (t.includes('api')) return TYPE_STYLES['data-api-builder'];
   if (t.includes('notebook')) return TYPE_STYLES.notebook;
   if (t.includes('report')) return TYPE_STYLES.report;
   if (t.includes('dashboard')) return TYPE_STYLES.dashboard;
@@ -131,6 +147,7 @@ const SOURCE_LABEL: Record<LineageSource, string> = {
   'unity-catalog': 'Unity Catalog',
   onelake: 'OneLake / Fabric',
   loom: 'Loom Thread',
+  weave: 'Weave',
 };
 
 // ---------------------------------------------------------------------------
