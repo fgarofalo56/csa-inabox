@@ -1591,4 +1591,45 @@ requires an ADX cluster in the Gov cloud (`iq_list_signal_tables` /
 `iq_query_signals` return an honest gate naming `LOOM_ADX_CLUSTER_URI` when one
 isn't provisioned). Ontology + semantic layers work with no extra infra.
 
+## Insider Risk Management for Lakehouse — indicator thresholds {#irm-lakehouse}
+
+Governance → **Insider risk** computes insider-risk indicators (unusual data
+volume, off-hours / weekend access, privileged access) live over the Loom
+audit log + Azure Monitor. There is **no Microsoft Fabric / Purview-IRM
+dependency** and **no new env var or Azure resource** to provision:
+
+- The primary signal is the Cosmos `audit-log` container — always available,
+  needs no extra grant (it is the same container the Audit logs surface reads).
+- The optional Monitor signals (app-access events, lakehouse-load volume,
+  privileged control-plane ops) reuse the shared Log Analytics workspace
+  (`LOOM_LOG_ANALYTICS_WORKSPACE_ID`) and the UAMI's existing **Monitoring
+  Reader** + **Log Analytics Reader** grants used by `monitor-client`. When the
+  workspace id is unset the dashboard still renders and computes the
+  Cosmos-backed indicators; the Monitor signals degrade to an honest warning
+  MessageBar.
+
+### One-time config (optional)
+
+Indicator selection and thresholds are stored as a **structured** tenant
+settings document `irm:<tenantId>` in the existing `tenant-settings` Cosmos
+container. It is created on first save from the in-app **Indicators &
+thresholds** panel (Switch toggles + SpinButtons + a timezone Dropdown — no
+freeform JSON) via `POST /api/governance/irm`; no migration or deployment step
+is required. Defaults: 30-day window, `volumeZ=2`, business hours 07:00–19:00
+UTC, weekends flagged, with `unusual-volume` + `off-hours-access` enabled and
+`high-pipeline-volume` + `privileged-access` opt-in (mirroring Purview IRM's
+"indicators off by default" stance).
+
+### Bicep sync
+
+No new module. Reuses `platform/fiab/bicep/modules/shared/diagnostic-settings.bicep`
+(Log Analytics workspace) and the existing Cosmos `audit-log` / `tenant-settings`
+containers. Server: `apps/fiab-console/app/api/governance/irm/route.ts`; engine:
+`apps/fiab-console/lib/azure/irm-client.ts`; UI: `apps/fiab-console/app/governance/irm/page.tsx`.
+
+In **GCC-High / DoD** the dashboard works the same — the Cosmos path is
+cloud-agnostic; the Monitor signals use the sovereign LA endpoint
+(`LOOM_LOG_ANALYTICS_ENDPOINT`) already resolved by `monitor-client`.
+
+
 
