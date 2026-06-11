@@ -27,9 +27,22 @@ import {
   type ChatMsg, type HelpStep,
 } from './messages';
 import type { Citation } from './citations';
+import { CopilotDiff, type ProposedChange } from '../copilot-diff';
+import { applyChange } from '@/lib/copilot/apply-change';
 
 const EVT_OPEN = 'csaloom:open-copilot';
 const EVT_TOGGLE = 'csaloom:toggle-copilot';
+/** Dispatched by the tutorial stepper (item-side-panel LearnPane) to tell the
+ *  widget which step the user wants help with. detail: TutorialStepDetail. */
+const EVT_TUTORIAL_STEP = 'csaloom:tutorial-step';
+
+export interface TutorialStepDetail {
+  id: string;
+  stepIndex: number;
+  stepTitle?: string;
+  stepBody?: string;
+  totalSteps?: number;
+}
 
 export function openHelpCopilot() {
   window.dispatchEvent(new Event(EVT_OPEN));
@@ -92,7 +105,7 @@ function parseSse(buffer: string): { events: Array<{ event: string; data: string
 
 /** Derive a friendly page label + (when on an item) its type/id from the route,
  *  so the agent is aware of what the user is looking at. */
-function pageContextFromPath(pathname: string | null): { path: string; label: string; itemType?: string; itemId?: string } {
+function pageContextFromPath(pathname: string | null): { path: string; label: string; itemType?: string; itemId?: string; workspaceId?: string } {
   const path = pathname || '/';
   const seg = path.split('/').filter(Boolean);
   // /workspaces/:wsId/items/:itemType/:itemId  OR  /items/:itemType/:itemId
@@ -100,6 +113,9 @@ function pageContextFromPath(pathname: string | null): { path: string; label: st
   let itemType: string | undefined;
   let itemId: string | undefined;
   if (itemsIdx >= 0 && seg[itemsIdx + 1]) { itemType = seg[itemsIdx + 1]; itemId = seg[itemsIdx + 2]; }
+  // workspaceId when the route is /workspaces/:wsId/...
+  const wsIdx = seg.indexOf('workspaces');
+  const workspaceId = wsIdx >= 0 && seg[wsIdx + 1] && seg[wsIdx + 1] !== 'items' ? seg[wsIdx + 1] : undefined;
 
   const LABELS: Record<string, string> = {
     '': 'Home', browse: 'Browse', workspaces: 'Workspaces', copilot: 'Loom Copilot',
@@ -115,7 +131,7 @@ function pageContextFromPath(pathname: string | null): { path: string; label: st
   } else {
     label = LABELS[seg[0] || ''] || (seg[0] ? seg[0].replace(/-/g, ' ') : 'Home');
   }
-  return { path, label, itemType, itemId };
+  return { path, label, itemType, itemId, workspaceId };
 }
 
 export function HelpCopilotWidget() {
@@ -128,6 +144,8 @@ export function HelpCopilotWidget() {
   const [busy, setBusy] = useState(false);
   const [gateError, setGateError] = useState<string | null>(null);
   const [searchBackend, setSearchBackend] = useState<'ai-search' | 'cosmos' | 'unknown'>('unknown');
+  const [tutorial, setTutorial] = useState<TutorialStepDetail | null>(null);
+  const [pendingFix, setPendingFix] = useState<ProposedChange | null>(null);
   const sessionRef = useRef<string | null>(null);
   const bodyRef = useRef<HTMLDivElement>(null);
 
@@ -137,12 +155,23 @@ export function HelpCopilotWidget() {
     const k = (e: KeyboardEvent) => {
       if ((e.ctrlKey || e.metaKey) && e.key === '/') { e.preventDefault(); t(); }
     };
+    // Tutorial stepper → seed step context + open the widget. The next send()
+    // attaches this tutorial step to the request context.
+    const step = (e: Event) => {
+      const detail = (e as CustomEvent<TutorialStepDetail>).detail;
+      if (detail && detail.id) {
+        setTutorial(detail);
+        setOpen(true);
+      }
+    };
     window.addEventListener(EVT_OPEN, o);
     window.addEventListener(EVT_TOGGLE, t);
+    window.addEventListener(EVT_TUTORIAL_STEP, step as EventListener);
     window.addEventListener('keydown', k);
     return () => {
       window.removeEventListener(EVT_OPEN, o);
       window.removeEventListener(EVT_TOGGLE, t);
+      window.removeEventListener(EVT_TUTORIAL_STEP, step as EventListener);
       window.removeEventListener('keydown', k);
     };
   }, []);
@@ -166,6 +195,25 @@ export function HelpCopilotWidget() {
     setMsgs([]);
     sessionRef.current = null;
     setGateError(null);
+    setTutorial(null);
+    setPendingFix(null);
+  }
+
+  /** Keep: apply the approved edit to the open editor via the bridge registry.
+   *  If the editor has since closed (no bridge), say so honestly rather than
+   *  pretending the change applied. */
+  function keepFix(change: ProposedChange) {
+    const applied = applyChange(change.target, change.after);
+    setPendingFix(null);
+    setMsgs((m) => [
+      ...m,
+      {
+        who: 'system',
+        text: applied
+          ? `Applied the fix to ${change.target}.`
+          : `Could not apply — the editor for ${change.target} is no longer open. Re-open it and ask again.`,
+      },
+    ]);
   }
 
   async function send(text: string) {
@@ -188,7 +236,17 @@ export function HelpCopilotWidget() {
       const res = await fetch('/api/help-copilot/chat', {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ prompt, sessionId: sessionRef.current ?? undefined, context: pageCtx }),
+        body: JSON.stringify({
+          prompt,
+          sessionId: sessionRef.current ?? undefined,
+          context: {
+            ...pageCtx,
+            tutorial: tutorial ?? undefined,
+            receiptScope: pageCtx.itemId
+              ? { itemId: pageCtx.itemId, itemType: pageCtx.itemType, workspaceId: pageCtx.workspaceId }
+              : undefined,
+          },
+        }),
       });
 
       if (res.status === 503) {
@@ -251,6 +309,18 @@ export function HelpCopilotWidget() {
                     setTimeout(() => { window.location.href = r.slug!; }, 800);
                   }
                 }
+                if (step.kind === 'proposed_change') {
+                  // Open the approval-gated Keep/Undo diff. Mutation happens ONLY
+                  // on Keep (handled below); never here.
+                  setPendingFix({
+                    target: step.target,
+                    before: step.before,
+                    after: step.after,
+                    lang: step.lang,
+                    summary: step.summary,
+                    callId: step.callId,
+                  });
+                }
                 return { ...x, steps: [...(x.steps ?? []), step] };
               }));
             } catch {}
@@ -271,6 +341,7 @@ export function HelpCopilotWidget() {
   if (!open) return null;
 
   return (
+    <>
     <aside className={s.panel} aria-label="CSA Loom Help Copilot" role="dialog" data-testid="help-copilot-widget">
       <div className={s.header}>
         <div className={s.title}>
@@ -279,6 +350,12 @@ export function HelpCopilotWidget() {
           <Badge appearance="tint" size="small" color="brand" title={`Aware you're on: ${pageCtx.label} (${pageCtx.path})`}>
             on: {pageCtx.label}
           </Badge>
+          {tutorial && (
+            <Badge appearance="tint" size="small" color="success" data-testid="help-tutorial-badge"
+              title={tutorial.stepTitle ? `Step: ${tutorial.stepTitle}` : tutorial.id}>
+              step {tutorial.stepIndex + 1}{tutorial.totalSteps ? `/${tutorial.totalSteps}` : ''}
+            </Badge>
+          )}
         </div>
         <Button appearance="subtle" size="small" icon={<ArrowReset20Regular />}
           onClick={reset} aria-label="New conversation" disabled={busy} title="New conversation" />
@@ -316,5 +393,8 @@ export function HelpCopilotWidget() {
         <span>Answers from docs + repo</span>
       </div>
     </aside>
+    {/* Approval-gated fix diff — mutates the open editor ONLY on Keep. */}
+    <CopilotDiff change={pendingFix} onKeep={keepFix} onUndo={() => setPendingFix(null)} />
+    </>
   );
 }

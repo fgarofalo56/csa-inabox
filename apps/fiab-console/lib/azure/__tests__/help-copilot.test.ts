@@ -43,8 +43,17 @@ let fakeCs: ReturnType<typeof makeFakeContainer>;
 vi.mock('@/lib/azure/cosmos-client', () => {
   return {
     copilotSessionsContainer: async () => fakeCs,
+    itemsContainer: async () => fakeCs,
+    auditLogContainer: async () => fakeCs,
   };
 });
+
+// help-receipts is exercised in its own suite against mocked cosmos/adf; here
+// we stub it so the readReceipts TOOL can be tested without real backends.
+const gatherReceiptsMock = vi.fn();
+vi.mock('@/lib/azure/help-receipts', () => ({
+  gatherReceipts: (...args: any[]) => gatherReceiptsMock(...args),
+}));
 
 vi.mock('@/lib/azure/copilot-orchestrator', async () => {
   const actual = await vi.importActual<any>('@/lib/azure/copilot-orchestrator');
@@ -89,6 +98,8 @@ import {
   isSearchConfigured,
   buildCorpus,
 } from '../loom-docs-index';
+
+import { extractProposedChange, PROPOSED_CHANGE_KEY } from '../../copilot/proposed-change';
 
 // ---------- Fixtures ----------
 
@@ -207,6 +218,110 @@ describe('help-copilot tool handlers', () => {
     const [url, init] = fetchMock.mock.calls[0] as any[];
     expect(url).toContain('api.github.com/repos/fgarofalo56/csa-inabox/issues');
     expect(init.headers.authorization).toBe('Bearer gh_test_token');
+  });
+});
+
+// ---------- readReceipts tool (auto-error-detect) ----------
+
+describe('readReceipts tool', () => {
+  function getToolsWithScope(scope?: any) {
+    const cs: any[] = [];
+    const tools = __internal.buildTools({
+      recordCitations: (c) => cs.push(...c),
+      upstreamRepo: { owner: 'fgarofalo56', name: 'csa-inabox' },
+      githubToken: undefined,
+      receiptScope: scope,
+    });
+    return { tools, cs };
+  }
+
+  beforeEach(() => { gatherReceiptsMock.mockReset(); });
+
+  it('surfaces a remediation gate and records a citation', async () => {
+    gatherReceiptsMock.mockResolvedValue({
+      itemId: 'itm-1',
+      itemType: 'data-pipeline',
+      provisioning: {
+        found: true,
+        status: 'remediation',
+        gate: { reason: 'Event Hubs namespace not set', remediation: 'Set LOOM_EVENTHUBS_NAMESPACE', link: 'https://x' },
+      },
+      audit: [{ action: 'install', summary: 'created', at: '2026-06-10T00:00:00Z' }],
+    });
+    const { tools, cs } = getToolsWithScope({ itemId: 'itm-1', itemType: 'data-pipeline' });
+    const t = tools.find((x) => x.name === 'readReceipts')!;
+    expect(t).toBeTruthy();
+    const { result, citations } = await t.handler({ source: 'all' });
+    expect((result as any).provisioning.status).toBe('remediation');
+    expect((result as any).provisioning.gate.remediation).toContain('LOOM_EVENTHUBS_NAMESPACE');
+    expect(citations!.some((c) => c.id === 'receipt:provisioning:itm-1')).toBe(true);
+    expect(cs.some((c) => c.id.startsWith('receipt:'))).toBe(true);
+    // gatherReceipts called with the scoped item id
+    expect(gatherReceiptsMock).toHaveBeenCalledWith({ itemId: 'itm-1', itemType: 'data-pipeline', source: 'all' });
+  });
+
+  it('errors honestly when no item is in scope', async () => {
+    const { tools } = getToolsWithScope(undefined);
+    const t = tools.find((x) => x.name === 'readReceipts')!;
+    const { result } = await t.handler({ source: 'runs' });
+    expect((result as any).ok).toBe(false);
+    expect((result as any).error).toContain('Open an item editor');
+    expect(gatherReceiptsMock).not.toHaveBeenCalled();
+  });
+
+  it('surfaces failed runs as a citation', async () => {
+    gatherReceiptsMock.mockResolvedValue({
+      itemId: 'itm-2',
+      runs: {
+        configured: true,
+        pipelineName: 'pl-ingest',
+        failedRuns: [{ runId: 'r1', pipelineName: 'pl-ingest', status: 'Failed', message: 'sink timeout' }],
+        failedActivities: [{ activityName: 'CopyData', status: 'Failed', message: 'sink timeout' }],
+      },
+    });
+    const { tools } = getToolsWithScope({ itemId: 'itm-2', itemType: 'data-pipeline' });
+    const t = tools.find((x) => x.name === 'readReceipts')!;
+    const { citations } = await t.handler({ source: 'runs' });
+    expect(citations!.some((c) => c.id === 'receipt:runs:itm-2')).toBe(true);
+    expect(citations!.find((c) => c.id === 'receipt:runs:itm-2')!.preview).toContain('sink timeout');
+  });
+});
+
+// ---------- proposeFix tool (approval-gated apply-fix) ----------
+
+describe('proposeFix tool', () => {
+  function getTools() {
+    return __internal.buildTools({
+      recordCitations: () => {},
+      upstreamRepo: { owner: 'fgarofalo56', name: 'csa-inabox' },
+      githubToken: undefined,
+    });
+  }
+
+  it('attaches a proposed-change sentinel that round-trips via extractProposedChange', async () => {
+    const tools = getTools();
+    const t = tools.find((x) => x.name === 'proposeFix')!;
+    const { result } = await t.handler({
+      target: 'notebook-cell:cell-7',
+      before: 'df = spark.read.parquet(path)',
+      after: 'df = spark.read.format("delta").load(path)',
+      lang: 'python',
+      summary: 'Use Delta format',
+    });
+    expect((result as any)[PROPOSED_CHANGE_KEY]).toBeTruthy();
+    const { publicResult, proposed } = extractProposedChange(result);
+    expect((publicResult as any)[PROPOSED_CHANGE_KEY]).toBeUndefined();
+    expect(proposed!.target).toBe('notebook-cell:cell-7');
+    expect(proposed!.after).toContain('delta');
+    expect(proposed!.lang).toBe('python');
+  });
+
+  it('rejects a non-deterministic target', async () => {
+    const tools = getTools();
+    const t = tools.find((x) => x.name === 'proposeFix')!;
+    const { result } = await t.handler({ target: 'random-thing', before: 'a', after: 'b' });
+    expect((result as any).ok).toBe(false);
+    expect((result as any)[PROPOSED_CHANGE_KEY]).toBeUndefined();
   });
 });
 

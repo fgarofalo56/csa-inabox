@@ -36,6 +36,11 @@ import {
   isSearchConfigured,
   type DocHit,
 } from './loom-docs-index';
+import { gatherReceipts, type ReceiptSource } from './help-receipts';
+import {
+  PROPOSED_CHANGE_KEY,
+  extractProposedChange,
+} from '../copilot/proposed-change';
 import type { TenantCopilotConfig } from '../types/copilot-config';
 
 // ---------- Credential (for AOAI scope) ----------
@@ -77,9 +82,30 @@ export type HelpStep =
   | { kind: 'tool_call'; name: string; args: unknown; callId: string }
   | { kind: 'tool_result'; name: string; callId: string; durationMs: number; result?: unknown; error?: string }
   | { kind: 'citation'; citations: Citation[] }
+  | { kind: 'proposed_change'; target: string; before: string; after: string; lang?: string; summary?: string; callId?: string }
   | { kind: 'handoff'; reason: string; deepLink: string; suggestedPrompt: string }
   | { kind: 'final'; content: string }
   | { kind: 'error'; error: string; code?: string };
+
+/** Where the user is in an in-app tutorial, so the agent can diagnose against
+ *  THIS step's expected outcome rather than answering generically. */
+export interface TutorialContext {
+  /** Tutorial id, e.g. "editor:lakehouse" or "tutorial:02-first-lakehouse". */
+  id: string;
+  /** 0-based index of the active step. */
+  stepIndex: number;
+  stepTitle?: string;
+  stepBody?: string;
+  totalSteps?: number;
+}
+
+/** The item whose run/provision receipts the agent may read for auto-error
+ *  detection. Derived from the open editor route. */
+export interface ReceiptScope {
+  itemId?: string;
+  itemType?: string;
+  workspaceId?: string;
+}
 
 export interface HelpOrchestrateOptions {
   prompt: string;
@@ -91,8 +117,17 @@ export interface HelpOrchestrateOptions {
    *  helpAgentDeployment, then copilotChatDeployment, then env. */
   tenantConfig?: TenantCopilotConfig | null;
   /** Screen-awareness: where the user currently is in the console, so the
-   *  agent can answer "what's on this screen / help me with this" in context. */
-  pageContext?: { path?: string; label?: string; itemType?: string; itemId?: string };
+   *  agent can answer "what's on this screen / help me with this" in context.
+   *  `tutorial` adds per-step awareness; `receiptScope` lets the agent read the
+   *  open item's run/provision receipts for auto-error detection + fixes. */
+  pageContext?: {
+    path?: string;
+    label?: string;
+    itemType?: string;
+    itemId?: string;
+    tutorial?: TutorialContext;
+    receiptScope?: ReceiptScope;
+  };
 }
 
 interface ChatMessage {
@@ -120,12 +155,16 @@ Your job: answer questions about CSA Loom (what it is, how to set it up, how to 
 6. If runDiagnostic returns "not_configured" for something the user is asking about, surface that gap honestly — don't pretend it works.
 7. For "open this page" requests, call openLoomPage with the slug.
 8. For bug reports or feature requests, offer to file via logIssue — confirm title + body with the user before calling.
+9. TUTORIAL STEP AWARENESS: when a tutorial-step context is provided, answer for THAT step's expected outcome first. If the user reports a failure, says "it didn't work", "I got an error", "this is stuck", or a step receipt shows a problem, call readReceipts FIRST (before guessing). Lead with the detected error and the EXACT remediation from the receipt's gate.remediation, then how it maps to the current step.
+10. APPLY A FIX (approval-gated): when the right fix is an edit to the code/query in an OPEN editor (a notebook cell or a query editor), call proposeFix with the deterministic target, the current text (before), and your corrected text (after). This renders a Keep/Undo diff the USER must approve — you do NOT apply it yourself, and you must NOT claim it is applied. For fixes that require an ACTION (re-provision, re-run a pipeline, set an env var, grant a role), use the handoff to /copilot instead — proposeFix is ONLY for in-editor text edits.
 
 Tools at your disposal:
 - searchDocs(query, top_k=5, kind?): RAG over docs/fiab/, docs/, PRPs/active/csa-loom, docs/fiab/adr
 - searchRepo(query, language?, top_k=5): RAG over apps/fiab-console/lib/{azure,editors,components} source summaries
 - openLoomPage(slug): tell the frontend to router.push(slug)
 - runDiagnostic(check): returns live config state. checks = "aoai" | "ai-search" | "cosmos" | "version" | "tenant" | "all"
+- readReceipts(itemId?, itemType?, source?): reads the open item's run/provision receipts for auto-error detection. source = "provisioning" | "audit" | "runs" | "all". provisioning carries the install status + gate.remediation; runs carries failed Azure Data Factory pipeline/activity status + the real error; audit carries the recent action history. itemId/itemType default to the open item.
+- proposeFix(target, before, after, lang?, summary?): propose an approval-gated edit to an OPEN editor. target MUST be "notebook-cell:<cellId>" or "query-editor:<itemId>". Renders a Keep/Undo Monaco diff. Never applied without the user's Keep.
 - logIssue(title, body, labels): files a GitHub issue (asks user to confirm first)
 
 Handoff format (when user asks for an ACT):
@@ -162,6 +201,9 @@ function buildTools(deps: {
   recordCitations: (cs: Citation[]) => void;
   upstreamRepo: { owner: string; name: string };
   githubToken?: string;
+  /** The open item, so readReceipts/proposeFix default to it without the
+   *  model having to restate ids it can't see. */
+  receiptScope?: ReceiptScope;
 }): ToolDef[] {
   return [
     {
@@ -302,6 +344,114 @@ function buildTools(deps: {
           };
         }
         return { result: out };
+      },
+    },
+    {
+      name: 'readReceipts',
+      description: 'Read the open item\'s run/provision receipts to auto-detect why a step failed. source="provisioning" returns the install status + gate.remediation (the exact env var/role/portal step to unblock); source="runs" returns failed Azure Data Factory pipeline + activity runs with the real error; source="audit" returns the recent action history; source="all" returns everything. Call this FIRST when the user reports a failure or asks why a tutorial step did not work.',
+      parameters: {
+        type: 'object',
+        properties: {
+          itemId: { type: 'string', description: 'Item id; defaults to the open item.' },
+          itemType: { type: 'string', description: 'Item type slug; defaults to the open item.' },
+          source: { type: 'string', enum: ['provisioning', 'audit', 'runs', 'all'], description: 'Which receipt source (default all).' },
+        },
+        required: [],
+        additionalProperties: false,
+      },
+      handler: async ({ itemId, itemType, source }) => {
+        const id = String(itemId || deps.receiptScope?.itemId || '').trim();
+        const type = String(itemType || deps.receiptScope?.itemType || '').trim() || undefined;
+        if (!id) {
+          return {
+            result: {
+              ok: false,
+              error: 'No item in context. Open an item editor (or pass itemId) so I can read its receipts.',
+            },
+          };
+        }
+        const receipts = await gatherReceipts({ itemId: id, itemType: type, source: (source as ReceiptSource) || 'all' });
+        // Each receipt the agent reasons over becomes a citation so the answer
+        // cites the exact receipt that detected the error.
+        const citations: Citation[] = [];
+        if (receipts.provisioning?.found) {
+          const p = receipts.provisioning;
+          citations.push({
+            id: `receipt:provisioning:${id}`,
+            path: `cosmos://items/${id}#state.provisioning`,
+            kind: 'receipt',
+            heading: 'Provisioning receipt',
+            preview: `status=${p.status ?? 'unknown'}${p.gate?.reason ? `; ${p.gate.reason}` : ''}${p.error ? `; ${p.error}` : ''}`.slice(0, 200),
+          });
+        }
+        if (receipts.runs && (receipts.runs.failedRuns?.length || receipts.runs.error || receipts.runs.gate)) {
+          const r = receipts.runs;
+          const prev = r.gate
+            ? `not configured: set ${r.gate.missing}`
+            : r.error
+              ? `run query error: ${r.error}`
+              : `${r.failedRuns?.length || 0} failed run(s)${r.failedActivities?.[0]?.message ? `; ${r.failedActivities[0].message}` : ''}`;
+          citations.push({
+            id: `receipt:runs:${id}`,
+            path: `adf://pipelineRuns/${r.pipelineName ?? id}`,
+            kind: 'receipt',
+            heading: 'Pipeline run receipt',
+            preview: prev.slice(0, 200),
+          });
+        }
+        if (receipts.audit && receipts.audit.length > 0) {
+          citations.push({
+            id: `receipt:audit:${id}`,
+            path: `cosmos://audit-log?itemId=${id}`,
+            kind: 'receipt',
+            heading: 'Audit log',
+            preview: receipts.audit.slice(0, 3).map((a) => `${a.action}: ${a.summary ?? ''}`).join(' | ').slice(0, 200),
+          });
+        }
+        if (citations.length) deps.recordCitations(citations);
+        return { result: receipts, citations };
+      },
+    },
+    {
+      name: 'proposeFix',
+      description: 'Propose an approval-gated edit to an OPEN editor surface (a notebook code cell or a query editor). Renders a Keep/Undo Monaco diff the USER must approve — the change is NEVER applied automatically and you must not say it is applied. Use ONLY for in-editor text fixes; for fixes that need an action (re-provision, re-run, set env var) use the handoff to /copilot instead.',
+      parameters: {
+        type: 'object',
+        properties: {
+          target: { type: 'string', description: 'Deterministic editor key: "notebook-cell:<cellId>" or "query-editor:<itemId>".' },
+          before: { type: 'string', description: 'The current text of the cell/query, verbatim.' },
+          after: { type: 'string', description: 'Your corrected text.' },
+          lang: { type: 'string', description: 'Language hint (python, sql, kql, scala, r, ...).' },
+          summary: { type: 'string', description: 'One-line rationale for the fix.' },
+        },
+        required: ['target', 'before', 'after'],
+        additionalProperties: false,
+      },
+      handler: async ({ target, before, after, lang, summary }) => {
+        const t = String(target || '').trim();
+        if (!/^(notebook-cell:|query-editor:).+/.test(t)) {
+          return {
+            result: {
+              ok: false,
+              error: 'target must be "notebook-cell:<cellId>" or "query-editor:<itemId>".',
+            },
+          };
+        }
+        const rationale = summary ? String(summary) : 'Proposed fix — awaiting your Keep/Undo decision.';
+        return {
+          result: {
+            ok: true,
+            message: 'Proposed an edit. Awaiting the user\'s Keep/Undo decision; the change is NOT yet applied.',
+            rationale,
+            [PROPOSED_CHANGE_KEY]: {
+              target: t,
+              before: String(before ?? ''),
+              after: String(after ?? ''),
+              lang: lang ? String(lang) : undefined,
+              summary: rationale,
+            },
+          },
+        };
       },
     },
     {
@@ -500,6 +650,11 @@ export async function* orchestrateHelp(opts: HelpOrchestrateOptions): AsyncItera
       name: process.env.LOOM_FEEDBACK_REPO_NAME || 'csa-inabox',
     },
     githubToken: process.env.LOOM_FEEDBACK_GITHUB_TOKEN,
+    receiptScope:
+      opts.pageContext?.receiptScope ||
+      (opts.pageContext?.itemId
+        ? { itemId: opts.pageContext.itemId, itemType: opts.pageContext.itemType }
+        : undefined),
   });
   const toolDefs = toolsForAoai(tools);
 
@@ -516,6 +671,19 @@ export async function* orchestrateHelp(opts: HelpOrchestrateOptions): AsyncItera
     if (pc.itemType) parts.push(`They are viewing a ${pc.itemType} item${pc.itemId ? ` (id: ${pc.itemId})` : ''}.`);
     parts.push('When their question is about "this", "this screen", "here", or "what I\'m looking at", answer for THIS surface first. You can help with anything in Loom regardless of where they are.');
     messages.splice(1, 0, { role: 'system', content: parts.join(' ') });
+  }
+
+  // Tutorial-step awareness: inject the active step so the agent diagnoses
+  // against THIS step's expected outcome and can read receipts on failure.
+  const tut = pc?.tutorial;
+  if (tut && tut.id) {
+    const total = tut.totalSteps ? `/${tut.totalSteps}` : '';
+    const tParts = [
+      `The user is on step ${tut.stepIndex + 1}${total} of tutorial "${tut.id}"${tut.stepTitle ? `: "${tut.stepTitle}"` : ''}.`,
+    ];
+    if (tut.stepBody) tParts.push(`Step instructions: ${tut.stepBody}`);
+    tParts.push('Answer for THIS step. If the user reports a failure or a receipt shows status "failed"/"remediation", call readReceipts first, then lead with the detected error and the exact remediation, mapped back to this step.');
+    messages.splice(1, 0, { role: 'system', content: tParts.join(' ') });
   }
 
   await persistTurn(sessionId, userId, 'user', prompt);
@@ -596,16 +764,33 @@ export async function* orchestrateHelp(opts: HelpOrchestrateOptions): AsyncItera
 
       try {
         const { result } = await tool.handler(parsedArgs as any);
-        const serialized = JSON.stringify(result);
+        // Peel any approval-gated change off BEFORE serializing — the model
+        // must never see internal plumbing, and the diff is gated behind an
+        // explicit Keep (never applied server-side).
+        const { publicResult, proposed } = extractProposedChange(result);
+        const serialized = JSON.stringify(publicResult);
         const truncated = serialized.length > 16_000 ? serialized.slice(0, 16_000) + '...[truncated]' : serialized;
         yield {
           kind: 'tool_result',
           name: tc.function.name,
           callId: tc.id,
           durationMs: Date.now() - started,
-          result,
+          result: publicResult,
         };
         messages.push({ role: 'tool', tool_call_id: tc.id, name: tc.function.name, content: truncated });
+        // Surface the approval-gated diff as its own step so the widget can open
+        // the Keep/Undo modal. Nothing mutates server-side.
+        if (proposed) {
+          yield {
+            kind: 'proposed_change',
+            target: proposed.target,
+            before: proposed.before,
+            after: proposed.after,
+            lang: proposed.lang,
+            summary: proposed.summary,
+            callId: tc.id,
+          };
+        }
       } catch (e: any) {
         const errMsg = e?.message || String(e);
         yield { kind: 'tool_result', name: tc.function.name, callId: tc.id, durationMs: Date.now() - started, error: errMsg };

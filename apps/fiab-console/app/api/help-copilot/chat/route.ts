@@ -25,7 +25,18 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ ok: false, error: 'unauthenticated' }, { status: 401 });
   }
 
-  let body: { prompt?: string; sessionId?: string; context?: { path?: string; label?: string; itemType?: string; itemId?: string } } = {};
+  let body: {
+    prompt?: string;
+    sessionId?: string;
+    context?: {
+      path?: string;
+      label?: string;
+      itemType?: string;
+      itemId?: string;
+      tutorial?: { id: string; stepIndex: number; stepTitle?: string; stepBody?: string; totalSteps?: number };
+      receiptScope?: { itemId?: string; itemType?: string; workspaceId?: string };
+    };
+  } = {};
   try { body = await req.json(); } catch {}
   const prompt = (body.prompt || '').trim();
   if (!prompt) {
