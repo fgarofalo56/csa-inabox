@@ -160,6 +160,7 @@ var loomContainers = [
   { name: 'embed-codes',       partitionKey: '/tenantId' }
   { name: 'org-visuals',       partitionKey: '/tenantId' }
   { name: 'azure-connections', partitionKey: '/tenantId' }
+  { name: 'env-config',        partitionKey: '/tenantId' }
 ]
 
 resource loomDb 'Microsoft.DocumentDB/databaseAccounts/sqlDatabases@2024-12-01-preview' = {

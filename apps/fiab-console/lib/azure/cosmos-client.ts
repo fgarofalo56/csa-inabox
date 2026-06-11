@@ -149,6 +149,15 @@ let _workspaceSparkConfig: Container | null = null;
 let _embedCodes: Container | null = null;
 // F23 — org-visuals metadata (tenant-wide custom visuals), PK /tenantId.
 let _orgVisuals: Container | null = null;
+// Admin runtime env/config management — one doc per tenant (id = tenantId, PK
+// /tenantId) holding the operator-desired deployment env-var values set from
+// /admin/env-config. The Cosmos doc is the DURABLE source of desired state
+// (survives container restarts); the live values are projected onto the
+// loom-console container app as a new ACA revision via updateContainerAppEnv.
+// Secret-typed keys are NEVER stored here in plaintext — only { set:true } —
+// since the value lives in an ACA secret. Created lazily so a fresh
+// environment needs no extra ARM/Bicep step beyond the account+database.
+let _envConfig: Container | null = null;
 let _ensured = false;
 
 /**
@@ -567,6 +576,9 @@ async function ensure() {
   // needs no extra ARM/Bicep step beyond the account+database.
   _embedCodes = await mk('embed-codes', '/tenantId');
   _orgVisuals = await mk('org-visuals', '/tenantId');
+  // Admin runtime env/config — one doc per tenant holding desired env-var
+  // values (non-secret) + secret-set flags, PK /tenantId.
+  _envConfig = await mk('env-config', '/tenantId');
   _ensured = true;
 }
 
@@ -617,6 +629,8 @@ export async function workspaceSparkConfigContainer(): Promise<Container> { awai
 export async function embedCodesContainer(): Promise<Container> { await ensure(); return _embedCodes!; }
 /** F23 — org-visuals metadata (tenant-wide custom visuals) — PK /tenantId. */
 export async function orgVisualsContainer(): Promise<Container> { await ensure(); return _orgVisuals!; }
+/** Admin runtime env/config — desired deployment env-var state, PK /tenantId. */
+export async function envConfigContainer(): Promise<Container> { await ensure(); return _envConfig!; }
 
 // Foundation admin containers (shared cloud-endpoints resolver task).
 /** Admin Workspace Catalog — one row per Loom-managed workspace, PK /tenantId. */
@@ -768,6 +782,7 @@ const KNOWN_CONTAINER_IDS = [
   'task-flows',
   'workspace-spark-config',
   'embed-codes', 'org-visuals',
+  'env-config',
 ];
 
 /** List all Loom containers with their current throughput shape. */
