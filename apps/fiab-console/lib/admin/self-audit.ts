@@ -58,7 +58,7 @@ const anyHas = (...ks: string[]) => ks.some(has);
 // ── deployment context (used to pre-fill the copy-paste fix scripts) ─────────
 // Resolved from the live env so the PowerShell a user copies already targets
 // THIS deployment — only the missing value the admin owns is left as a <token>.
-const CTX = {
+export const CTX = {
   app: env('LOOM_CONSOLE_APP_NAME') || 'loom-console',
   // The Console container app lives in the ADMIN resource group. Do NOT fall back
   // to LOOM_DLZ_RG here — that produced fix scripts targeting the DLZ RG
@@ -76,7 +76,7 @@ const CTX = {
 };
 
 // Friendly placeholder for the value an admin must supply for a given env var.
-const VALUE_HINT: Record<string, string> = {
+export const VALUE_HINT: Record<string, string> = {
   SESSION_SECRET: '<32+char-random-secret-from-key-vault>',
   LOOM_ENTRA_CLIENT_ID: '<entra-app-client-id>',
   LOOM_ENTRA_TENANT_ID: CTX.tenant,
@@ -132,7 +132,7 @@ function envVarFix(vars: string[]): { portalSteps: string[]; fixScript: string }
 }
 
 // ── env-presence check helper ──────────────────────────────────────────────
-interface EnvSpec {
+export interface EnvSpec {
   id: string;
   category: AuditCategory;
   title: string;
@@ -170,7 +170,7 @@ function evalEnv(spec: EnvSpec): CheckResult {
 }
 
 /** The declarative env-presence checks (the backbone of the audit). */
-const ENV_CHECKS: EnvSpec[] = [
+export const ENV_CHECKS: EnvSpec[] = [
   // ── identity ──
   {
     id: 'session-secret', category: 'identity', title: 'Session signing secret', severity: 'critical',

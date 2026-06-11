@@ -184,6 +184,7 @@ export const CAPABILITY_CATALOG: Capability[] = [
   { id: 'admin.domains',             domain: 'Admin',     workload: 'Tenant Admin',      name: 'Business Domains',     kind: 'admin',     description: '/admin/domains', parentId: 'workload.admin' },
   { id: 'admin.capacity',            domain: 'Admin',     workload: 'Tenant Admin',      name: 'Capacity / Scaling',   kind: 'admin',     description: '/admin/capacity', parentId: 'workload.admin' },
   { id: 'admin.usage',               domain: 'Admin',     workload: 'Tenant Admin',      name: 'Usage Metrics',        kind: 'admin',     description: '/admin/usage', parentId: 'workload.admin' },
+  { id: 'admin.env-config',          domain: 'Admin',     workload: 'Tenant Admin',      name: 'Runtime configuration',kind: 'admin',     description: '/admin/env-config — view/set the console deployment env vars (Cosmos, AOAI, Synapse, ADX, …) from the UI; real ARM revision, no Azure portal.', parentId: 'workload.admin' },
   { id: 'admin.audit-logs',          domain: 'Admin',     workload: 'Tenant Admin',      name: 'Audit Logs',           kind: 'admin',     description: '/admin/audit-logs', parentId: 'workload.admin' },
   { id: 'admin.security',            domain: 'Admin',     workload: 'Tenant Admin',      name: 'Security & Governance',kind: 'admin',     description: '/admin/security', parentId: 'workload.admin' },
   { id: 'admin.updates',             domain: 'Admin',     workload: 'Tenant Admin',      name: 'Updates / Releases',   kind: 'admin',     description: '/admin/updates', parentId: 'workload.admin' },
