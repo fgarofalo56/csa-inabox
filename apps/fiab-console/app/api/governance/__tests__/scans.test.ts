@@ -23,6 +23,7 @@ vi.mock('@/lib/azure/purview-client', async () => {
     listScansForSource: vi.fn(),
     listScanRuns: vi.fn(),
     triggerScanRun: vi.fn(),
+    upsertScan: vi.fn(),
   };
 });
 
@@ -30,7 +31,7 @@ import { GET, POST, DELETE } from '../scans/route';
 import { getSession } from '@/lib/auth/session';
 import {
   listDataSources, registerDataSource, deleteDataSource,
-  listScansForSource, listScanRuns, triggerScanRun,
+  listScansForSource, listScanRuns, triggerScanRun, upsertScan,
   PurviewNotConfiguredError,
 } from '@/lib/azure/purview-client';
 
@@ -118,6 +119,41 @@ describe('POST /api/governance/scans', () => {
   it('400 when neither a run nor a complete source payload is given', async () => {
     (getSession as any).mockReturnValue({ claims: { oid: 'u' } });
     const res = await POST(bodyReq({ name: 'x' }));
+    expect(res.status).toBe(400);
+  });
+
+  it('defines a scan (201) via upsertScan', async () => {
+    (getSession as any).mockReturnValue({ claims: { oid: 'u' } });
+    (upsertScan as any).mockResolvedValue({ id: 'sc1', name: 'nightly', kind: 'AdlsGen2Msi' });
+    const res = await POST(bodyReq({
+      define: true, source: 'lake', scan: 'nightly', kind: 'AdlsGen2Msi',
+      scanRulesetName: 'Loom_AAAA_AdlsGen2', scanRulesetType: 'Custom', collection: 'finance',
+    }));
+    expect(res.status).toBe(201);
+    expect(upsertScan).toHaveBeenCalledWith(expect.objectContaining({
+      sourceName: 'lake', scanName: 'nightly', kind: 'AdlsGen2Msi',
+      scanRulesetName: 'Loom_AAAA_AdlsGen2', scanRulesetType: 'Custom', collectionRef: 'finance',
+    }));
+    expect(triggerScanRun).not.toHaveBeenCalled();
+  });
+
+  it('defines AND runs a scan (202) when define+run are both set', async () => {
+    (getSession as any).mockReturnValue({ claims: { oid: 'u' } });
+    (upsertScan as any).mockResolvedValue({ id: 'sc1', name: 'nightly' });
+    (triggerScanRun as any).mockResolvedValue({ runId: 'run-9' });
+    const res = await POST(bodyReq({
+      define: true, run: true, source: 'lake', scan: 'nightly', kind: 'AdlsGen2Msi', scanRulesetName: 'AdlsGen2',
+    }));
+    expect(res.status).toBe(202);
+    const j = await res.json();
+    expect(j.runId).toBe('run-9');
+    expect(upsertScan).toHaveBeenCalled();
+    expect(triggerScanRun).toHaveBeenCalledWith('lake', 'nightly');
+  });
+
+  it('400 when define is missing kind/scanRulesetName', async () => {
+    (getSession as any).mockReturnValue({ claims: { oid: 'u' } });
+    const res = await POST(bodyReq({ define: true, source: 'lake', scan: 'nightly' }));
     expect(res.status).toBe(400);
   });
 });

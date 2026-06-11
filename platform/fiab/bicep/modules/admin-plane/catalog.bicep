@@ -218,3 +218,18 @@ output domainImagesDfsContainerUrl string = purviewEnabled
 output consolePurviewCollectionAdminGrant string = purviewEnabled && !empty(consolePrincipalId)
   ? 'Post-deploy: ROLE=collection-administrator CONSOLE_UAMI_PRINCIPAL=${consolePrincipalId} PURVIEW_ACCOUNT=${purview.name} bash scripts/csa-loom/grant-purview-datamap-role.sh'
   : ''
+
+// Post-deploy reminder: pushing the Loom classification taxonomy into Purview
+// as REAL custom classification rules + CUSTOM scan rule sets and TRIGGERING
+// scans (the /admin/classifications surface + /api/governance/scans) requires
+// the Console UAMI to hold the "Data Source Administrator" Data Map role on the
+// root collection — register/update data sources, create classification rules,
+// create scan rule sets, define + run scans. Like the grants above this is a
+// data-plane metadata-policy role (NOT ARM RBAC), applied post-deploy by
+// csa-loom-post-deploy-bootstrap.yml via grant-purview-datamap-role.sh
+// (ROLE=data-source-administrator). When LOOM_PURVIEW_ACCOUNT is unset the
+// classifications surface still works (rules saved to Cosmos) and renders an
+// honest gate naming this env var.
+output consolePurviewScanAdminGrant string = purviewEnabled && !empty(consolePrincipalId)
+  ? 'Post-deploy: ROLE=data-source-administrator CONSOLE_UAMI_PRINCIPAL=${consolePrincipalId} PURVIEW_ACCOUNT=${purview.name} bash scripts/csa-loom/grant-purview-datamap-role.sh'
+  : ''
