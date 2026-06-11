@@ -559,7 +559,7 @@ export function McpServersPanel() {
               {servers.map((server) => (
                 <TableRow key={server.serverId}>
                   <TableCell>
-                    <Body2 weight="semibold">{server.name}</Body2>
+                    <Body2 style={{ fontWeight: tokens.fontWeightSemibold }}>{server.name}</Body2>
                     {server.description && <Caption1>{server.description}</Caption1>}
                   </TableCell>
                   <TableCell><Caption1>{server.endpoint.replace(/^https:\/\//, '').slice(0, 40)}</Caption1></TableCell>
