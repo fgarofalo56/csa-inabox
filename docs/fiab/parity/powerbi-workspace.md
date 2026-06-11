@@ -1,5 +1,20 @@
 # powerbi-workspace — parity with the Power BI service (app.powerbi.com)
 
+> **rev — re-audited against Wave-8→11 code (2026-06-10), audit-T31.** Several
+> top gaps are closed on the **Azure-native (no-Power-BI-dependency) path** per
+> `no-fabric-dependency.md`: **PR #1068** in-place paginated-report embed +
+> export (audit-T14); **PR #934** Model-view canvas (relationships + measures,
+> no Power BI); **PR #980** Monaco DAX measure editor + format strings (XMLA/AAS
+> persistence); **PR #984** semantic-model column editor (calc/data-category/
+> format/summarize/sort-by/folder); **PR #969** Direct-Lake-shim wired into the
+> semantic-model editor; **PR #1030** Semantic-Link read for Copilot. These are
+> Loom-native tabular-layer surfaces over the warehouse/lakehouse — they work
+> with `LOOM_DEFAULT_FABRIC_WORKSPACE` unset. **Grade B− → B.** Remaining honest
+> gaps (kept ⚠️, genuinely Power-BI-tenant-bound and disclosed): workspace-ACL
+> Manage-access, endorsement/sensitivity-label apply (no public REST), App
+> publishing/capacity, gateway credential sign-in.
+
+
 **Audited:** 2026-05-31 · **Auditor:** automated brutal-honesty pass (grounded in Microsoft Learn, not memory)
 **rev.2 — corrected against current code (2026-05-31):** item governance shipped — **Manage access** on the real PBI workspace (GroupUsers), **Endorsement** (promote/certify), and **Gateway binding + data-source** management are now BUILT and wired into the SemanticModel + Report editors. Grade raised **C+ → B-**. Sensitivity labels remain honestly OMITTED (no public apply REST).
 **Verdict:** **B- (functional, selectively production-grade; the largest governance gaps now closed; workspace list-page surface + lineage + sensitivity still missing).** Real Power BI / Fabric REST is genuinely wired across the whole content family (no mock arrays), which clears the no-vaporware bar for what is built. Still short of full "parity with the Power BI service workspace": the workspace list-page itself (the canonical Power BI content grid), lineage view, app publishing, subscribe, sensitivity labels, and report/dashboard *authoring* are missing or out-of-scope-by-design. Loom is a set of typed per-item editors plus a navigator tree — not a workspace surface.

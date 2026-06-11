@@ -1,5 +1,16 @@
 # synapse-analytics — parity with Azure Synapse Analytics (Synapse Studio)
 
+> **rev — re-audited against Wave-8→11 code (2026-06-10), audit-T31.** The marquee
+> "notebook absent" gap is addressed by the dedicated `synapse-notebook.md`
+> sub-doc (B−: cells + Livy run + attach-pool). Newer Wave-8→11 work: **PR #1084**
+> wired Synapse **KQL scripts + Spark job definitions** into the workspace tree
+> (audit-T25 — `synapse-workspace-tree.tsx`); **PR #978** datamart migration
+> assistant (→ Synapse Serverless + AAS); **PR #927** DMV query-history drawer.
+> **Grade C → B−.** Remaining honest gaps: the unified Studio shell + Publish/Git,
+> data-flow visual designer, data-hub lake browser, and Monitor-hub drill grids —
+> the Studio-shell unification is the biggest standing item.
+
+
 > **rev.2 (2026-05-31) — re-verified against current code; claims confirmed, no
 > stale-MISSING rows found.** Re-read `synapse-sql-editors.tsx`,
 > `azure-services-editors.tsx` (`SynapseSparkPoolEditor`), the Spark item routes,

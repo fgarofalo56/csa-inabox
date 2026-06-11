@@ -1,5 +1,17 @@
 # ai-foundry — parity with Azure AI Foundry (Microsoft Foundry portal)
 
+> **rev — re-audited against Wave-8→11 code (2026-06-10), audit-T31.** The deep
+> Foundry gaps (fine-tuning submit/monitor/deploy, evaluations run/upload,
+> observability/trace dashboards, playground depth; audit-T19) are closed by
+> **PR #1078** ("AI Foundry fine-tuning, evals run/upload, span-tree tracing +
+> Images/Audio playgrounds"). Verified: `lib/azure/foundry-client.ts` +
+> `lib/azure/foundry-cs-client.ts` (fine-tuning jobs, eval create/run, span-tree
+> tracing) — this flips the 11 ❌ tracked in `foundry-evaluations.md` and lifts
+> 7-of-8 playgrounds off deep-link-only to in-Loom Images/Audio panels. **Grade
+> C+ → B−.** Remaining honest gaps: full observability dashboard breadth, agent
+> knowledge/memory/guardrails attach + publish/versioning, Connections CRUD.
+
+
 **Audit date:** 2026-05-31 · **Auditor:** conservative 1:1 parity pass (no-vaporware.md + ui-parity.md)
 **rev.2 — corrected against current code (2026-05-31):** the flagship **Agents** surface (A4) is now BUILT and wired (real Foundry Agent Service REST, honest 501 gate). Grade raised **C → C+**.
 **Verdict:** **C+** (functional but rough; the headline new-Foundry "Agents" experience is now built end-to-end, but fine-tuning, Templates, Observability dashboards, and most read-only-where-portal-is-CRUD tabs remain).

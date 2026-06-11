@@ -1,5 +1,32 @@
 # event-hubs — parity with Azure Event Hubs (namespace + entity + Data Explorer)
 
+> **rev.3 — re-audited against Wave-8→11 code (2026-06-10), audit-T31.** A full
+> **`EventHubsNamespaceEditor` blade** (`lib/components/eventhubs/eventhubs-namespace-editor.tsx`)
+> shipped in **PR #1075** (audit-T21) and is mounted from the navigator
+> (`eventhubs-tree.tsx:914`, opened by per-hub + per-rule buttons). It adds four
+> portal-parity tabs, each wired to a real ARM route:
+> - **Capture** (per hub) → `PUT /api/eventhubs/capture` → real
+>   `PUT …/eventhubs/{eh}` `captureDescription` (On/Off, Avro, ADLS/Blob
+>   destination + container + naming). **Flips B3 ⚠️→✅.**
+> - **Geo-recovery** → `POST /api/eventhubs/geodr-actions` → real
+>   `PUT/DELETE …/disasterRecoveryConfigs/{alias}` + `…/failover` (create
+>   pairing / break / failover, with confirm dialogs). **Flips A9 actions ⚠️→✅.**
+> - **SAS keys** (namespace + per-hub) → `POST …/authrules/{rule}/keys` (reveal,
+>   `listKeys`) + `…/keys/regenerate` (rotate primary/secondary,
+>   `regenerateKeys`). **Flips A7 view/regenerate ❌/⚠️→✅** — *connection
+>   strings remain an honest ⚠️ gate*: the namespace is provisioned
+>   `disableLocalAuth:true`, so the client returns `primaryConnectionString:
+>   undefined` and the panel shows a "local auth disabled" notice rather than a
+>   copyable string (correct, secure-by-default posture across all four clouds).
+> - **Private endpoints** → `POST /api/eventhubs/private-endpoints`
+>   (approve/reject pending connections). **Flips A13 PE ⚠️→✅.**
+>
+> Still genuinely missing (kept ❌ honestly): namespace **Overview** blade +
+> metrics charts, **Scale/Auto-inflate**, **Encryption/Identity (CMK)**,
+> **IP/VNet rule editing**, **IAM/Tags/Locks/Diagnostics**, namespace
+> create/delete, **Data Explorer View/receive** (still the honest AMQP
+> dependency-gate). **Grade C → B−.** Rows + backend table + verdict updated below.
+
 > **rev.2 — corrected against current code (2026-05-31).** The B6 Data Explorer
 > rows below already reflect PR #548: **Send events** is real (data-plane
 > `POST https://{ns}.servicebus.windows.net/{hub}/messages` with an Entra Bearer
@@ -135,16 +162,16 @@ no function) · 🟡 partial (exists but incomplete/rough) · ❌ MISSING.
 | A5 | Diagnose & solve | ❌ MISSING | — |
 | A6 | Events (Event Grid) | ❌ MISSING | — |
 | A7 | Namespace Shared access policies — **list** | 🟡 partial | `Authorization rules` group lists name + rights badges via real `GET …/authorizationRules`. Read-only. |
-| A7 | …**view keys / connection strings** | ❌ MISSING | `listKeys` not wired; comment says "surfaced behind a copy affordance later" — it is not. No key/connection-string copy anywhere. |
-| A7 | …**create / regenerate / delete** policy | ⚠️ honest-gate | "Not yet wired" tree row names `PUT …/authorizationRules/{rule}` + `regenerateKeys/listKeys`. No function. |
+| A7 | …**view keys / connection strings** | ✅ built (conn-string ⚠️) | rev.3: SAS keys tab → `POST …/authrules/{rule}/keys` (`listKeys`) reveals primary/secondary keys with `CopyButton`. Connection strings are an honest ⚠️ gate — `disableLocalAuth:true` makes ARM return none, panel shows the "local auth disabled" notice. |
+| A7 | …**regenerate** keys | ✅ built | rev.3: "Rotate primary/secondary" → `…/keys/regenerate?keyType=` (`regenerateKeys`), namespace + per-hub scopes. (Create/delete policy still ❌.) |
 | A8 | Scale — throughput units / Auto-inflate | ❌ MISSING | Not even a gate row. No TU slider, no auto-inflate toggle. (Bicep sets TUs + auto-inflate; UI never exposes it.) |
 | A9 | Geo-recovery — **configs list** | 🟡 partial | `Geo-recovery` group lists alias/role/state via real `GET …/disasterRecoveryConfigs`. Read-only. |
-| A9 | …pairing / break / **failover** | ⚠️ honest-gate | "Not yet wired" row names `PUT/DELETE …/disasterRecoveryConfigs/{alias}` + `failover`. No function. |
+| A9 | …pairing / break / **failover** | ✅ built | rev.3: Geo-recovery tab → `POST /api/eventhubs/geodr-actions` → real `PUT/DELETE …/disasterRecoveryConfigs/{alias}` + `…/failover`, with create-pairing form + break/failover confirm dialogs. |
 | A10 | Geo-replication (data) | ❌ MISSING | Not represented. |
 | A11 | Encryption (CMK / double encryption) | ❌ MISSING | — |
 | A12 | Identity (managed identity) | ❌ MISSING | — |
 | A13 | Networking — **firewall summary** | 🟡 partial | `Networking` group shows default action + public access + IP/VNet **counts** via real `GET …/networkRuleSets/default`. Read-only summary only — no rule list, no add/remove, no private-endpoint list/approve. |
-| A13 | …IP rules add/remove, VNet rules, **private endpoints** add/approve/reject | ⚠️ honest-gate (PE only) / ❌ (IP/VNet edit) | Private endpoints = "Not yet wired" row. IP/VNet rule **editing** is not even gated — only the count is shown. |
+| A13 | …IP rules add/remove, VNet rules, **private endpoints** add/approve/reject | ✅ (PE) / ❌ (IP/VNet edit) | rev.3: Private endpoints tab → `POST /api/eventhubs/private-endpoints` approves/rejects pending PE connections (real ARM). IP/VNet rule **editing** still ❌ (only the count is shown). |
 | A14 | Schema groups — list / create / delete | ✅ built | `Schema groups` group; ＋New dialog (type Avro/Json + compatibility) → real `PUT/DELETE …/schemagroups/{sg}`. **Protobuf type and actual schema register/view (data plane) are MISSING.** |
 | A15 | Application groups (resource governance) | ❌ MISSING | — |
 | A16 | Properties (resource JSON / ID copy) | ❌ MISSING | — |
@@ -167,8 +194,8 @@ no function) · 🟡 partial (exists but incomplete/rough) · ❌ MISSING.
 | C1 | **Create event hub** | 🟡 partial | ＋New dialog = name + partition SpinButton (1–32) + retention SpinButton (1–7) → real `PUT …/eventhubs/{eh}`. **No Capture tab** (Azure's create wizard has one); retention capped at 7 (no long-retention / Premium); no cleanup-policy (Delete/Compact). |
 | B8 | Delete event hub | ✅ built | inline trash → real `DELETE …/eventhubs/{eh}`. |
 | B2 | Consumer groups — list / create / delete | ✅ built | nested branch lazy-loaded per hub; ＋New → real `PUT`; trash (hidden for `$Default`) → real `DELETE`. `userMetadata` is accepted by the route but **not exposed in the create dialog**. |
-| B3 | **Capture** configuration | ⚠️ honest-gate | "Not yet wired" row names `PUT …/eventhubs/{eh}` captureDescription. A `capture` badge shows enabled state read-only. No On/Off, no windows, no storage picker, no Avro/Parquet. |
-| B4 | Per-hub Shared access policies | 🟡 partial | List supported by client (`listEventHubAuthRules`) + route (`?eventHub=`), but the **tree never renders per-hub auth rules** — only namespace-level. Create/keys = MISSING. |
+| B3 | **Capture** configuration | ✅ built | rev.3: Capture tab (per hub) → `PUT /api/eventhubs/capture` → real `PUT …/eventhubs/{eh}` `captureDescription`: On/Off Switch, Avro encoding, ADLS Gen2 / Blob destination + container + naming format. Names the Storage Blob Data Contributor role the UAMI needs as an honest note. |
+| B4 | Per-hub Shared access policies | ✅ built (conn-string ⚠️) | rev.3: SAS keys tab has a per-hub segment (`{hub} rules`) listing the hub's auth rules with reveal (`?scope=eventhub&hub=`) + rotate. Connection strings gated by `disableLocalAuth:true` (same honest gate as namespace scope). |
 | B6 | **Data Explorer — Send events** | ✅ built | Per-hub Data Explorer dialog (Data Usage button on each hub leaf) → **Send events** tab: body editor (text/JSON) + custom properties (UserProperties) + partition key + repeat-N, POSTs `op:'send'` to `/api/eventhubs/data-explorer` → real HTTPS data-plane REST `POST https://{ns}.servicebus.windows.net/{hub}/messages` with an **Entra** Bearer token (namespace has `disableLocalAuth:true`, so SAS is not used). Missing Data role → the real 401/403 is shown verbatim. |
 | B6 | **Data Explorer — View events** (partition/position/grid) | ⚠️ honest-gate | Same dialog → **View events** tab: partition + max-events + latest/earliest position controls + Peek button + a results grid (seq#/offset/enqueued-time/expandable body) all render. Peek calls `op:'peek'`; Event Hubs has **no HTTPS REST receive** (receive is AMQP-only via `@azure/event-hubs`, which is not bundled), so it returns a precise warning MessageBar naming the dependency to add (`@azure/event-hubs`) + env var (`LOOM_EVENTHUB_RECEIVE_ENABLED`). Never fabricates events. |
 | B7 | Partition IDs view | ❌ MISSING | `partitionIds` is fetched in the client shape but never displayed. |
@@ -184,11 +211,13 @@ no function) · 🟡 partial (exists but incomplete/rough) · ❌ MISSING.
 | List authorization rules (ns + per-hub) | `/api/eventhubs/authrules` | `GET …/authorizationRules` (+ `?eventHub=`) | ✅ real ARM (read-only; per-hub list unused by UI) |
 | Network rule set summary | `/api/eventhubs/network` | `GET …/networkRuleSets/default` (404→Allow-all) | ✅ real ARM (read-only) |
 | Geo-DR configs | `/api/eventhubs/geodr` | `GET …/disasterRecoveryConfigs` | ✅ real ARM (read-only) |
-| SAS keys / connection strings | — | `POST …/authorizationRules/{rule}/listKeys` / `regenerateKeys` | ❌ not wired |
+| SAS keys (reveal) / connection strings | `/api/eventhubs/authrules/{rule}/keys` (`?scope=namespace\|eventhub`) | `POST …/authorizationRules/{rule}/listKeys` | ✅ real ARM (keys revealed; conn-string ⚠️ gated by `disableLocalAuth:true`) |
+| SAS keys (rotate) | `/api/eventhubs/authrules/{rule}/keys/regenerate?keyType=` | `POST …/authorizationRules/{rule}/regenerateKeys` | ✅ real ARM |
 | Scale / Auto-inflate | — | `PATCH …/namespaces/{ns}` (sku.capacity, isAutoInflateEnabled) | ❌ not wired |
-| Capture config | — | `PUT …/eventhubs/{eh}` captureDescription | ❌ not wired |
-| Geo-DR pairing / failover | — | `PUT/DELETE …/disasterRecoveryConfigs/{alias}` + `…/failover` | ❌ not wired |
-| Networking IP/VNet/PE edit | — | `PUT …/networkRuleSets/default`, `Microsoft.Network/privateEndpoints` | ❌ not wired |
+| Capture config | `/api/eventhubs/capture` | `PUT …/eventhubs/{eh}` captureDescription | ✅ real ARM |
+| Geo-DR pairing / failover | `/api/eventhubs/geodr-actions` | `PUT/DELETE …/disasterRecoveryConfigs/{alias}` + `…/failover` | ✅ real ARM |
+| Networking IP/VNet edit | — | `PUT …/networkRuleSets/default` | ❌ not wired |
+| Private endpoint approve/reject | `/api/eventhubs/private-endpoints` | `PUT …/privateEndpointConnections/{c}` (approve/reject) | ✅ real ARM |
 | Encryption / Identity | — | `PATCH …/namespaces/{ns}` (encryption, identity) | ❌ not wired |
 | Data Explorer **send** | `/api/eventhubs/data-explorer` (op=send) | `POST https://{ns}.servicebus.windows.net/{hub}/messages` (Entra Bearer, single=atom-entry / batch=servicebus-json, PartitionKey via BrokerProperties header) | ✅ real data-plane REST |
 | Data Explorer **view/peek** | `/api/eventhubs/data-explorer` (op=peek) | AMQP receive (`@azure/event-hubs`) — not bundled | ⚠️ honest dependency-gate (501 `receive_unavailable`; full View UI renders) |
@@ -201,7 +230,12 @@ problem is **coverage**, not honesty of what's there.
 
 ## Verdict (conservative)
 
-**Grade: C (rev.2 — up from C−/D+).** What exists is honest and real-backed
+**Grade: B− (rev.3 — up from C).** rev.3 adds the `EventHubsNamespaceEditor`
+blade (PR #1075), which wires the four authoring surfaces that were the doc's
+highest-value gaps — **Capture**, **Geo-DR pairing/break/failover**, **SAS-key
+reveal/rotate** (connection strings honestly gated by `disableLocalAuth:true`),
+and **Private-endpoint approve/reject** — all to real ARM. What exists is honest
+and real-backed
 (ARM CRUD for event hubs / consumer groups / schema groups; read-only lists for
 SAS rules, networking, Geo-DR) **plus a real Data Explorer Send path** (Entra
 data-plane `POST …/messages`, PR #548) with an honest dependency-gate on the

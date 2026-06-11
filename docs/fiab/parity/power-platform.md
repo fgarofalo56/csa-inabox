@@ -1,5 +1,18 @@
 # power-platform — parity with the Power Platform admin center + Power Apps / Power Automate / Power Pages maker studios
 
+> **rev — re-audited against Wave-8→11 code (2026-06-10), audit-T31.** The
+> defining `ui-parity.md` violation on this doc was **deep-link-as-parity** — all
+> maker authoring (canvas / flow / table) was routed out to the real product
+> instead of built in Loom (audit-T28). **PR #1086** ("Power Platform maker
+> authoring in-Loom (canvas/flow/table)") cures the worst of it with in-Loom
+> authoring surfaces over Dataverse / BAP (routed by `LOOM_POWER_PLATFORM_BAP_BASE`,
+> Azure-native default — no Fabric/Power-BI tenant required). **PR #907** added
+> custom attributes / attribute groups admin. **Grade C → B−.** Remaining honest
+> gaps: Managed Environments + groups, the remaining admin-center areas, Power
+> Pages / AI Builder designers, and App Share — several genuinely product-portal
+> features that stay disclosed deep-links.
+
+
 **Source UI:**
 - Power Platform admin center — https://admin.powerplatform.microsoft.com (Learn: https://learn.microsoft.com/power-platform/admin/admin-documentation)
 - Power Apps maker — https://make.powerapps.com (Learn: https://learn.microsoft.com/power-apps/maker/canvas-apps/intro-maker-portal)

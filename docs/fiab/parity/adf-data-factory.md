@@ -1,5 +1,16 @@
 # adf-data-factory — parity with the full Azure Data Factory Studio
 
+> **rev — re-audited against Wave-8→11 code (2026-06-10), audit-T31.** The
+> flagship Mapping Data Flow gap is addressed by the dedicated
+> `adf-mapping-data-flow.md` sub-doc (B−: real source→transforms→sink graph +
+> preview, replacing the "rich surface → JSON" violation). Newer Wave-8→11 work:
+> **PR #1080** Change Data Capture (preview) REST + editor (audit-T26 —
+> `factory-resources-tree.tsx`), **PR #1108** Copy job native CDC mode for SQL
+> sources. **Grade C → B−.** Remaining honest gaps: Copy Data Tool wizard,
+> Add-Dynamic-Content expression builder breadth, source-control/Publish/ARM,
+> connector galleries + Test Connection, and the factory Monitor hub.
+
+
 > **rev.2 (2026-05-31) — re-verified against current code; grade unchanged at C.**
 > Re-read the pipeline canvas (`canvas.tsx` + `palette.tsx` on `@xyflow/react`,
 > 24 activity types, real ARM `createRun`/`validatePipeline`/`queryPipelineRuns`),

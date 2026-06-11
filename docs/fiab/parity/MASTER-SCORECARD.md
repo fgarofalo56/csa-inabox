@@ -63,7 +63,96 @@ and the per-service admin blades.
 > current built total by ~40–60 capabilities (the 12 shipped features). A full
 > recount is tracked as follow-up.
 
+## rev.6 — Wave-8→11 re-audit + count recompute (2026-06-10, audit-T31)
+
+> **This rev closes the standing parity-doc gap (audit-T31).** A full build
+> cohort (PRs #1054–#1123) landed *after* both the 2026-05-31 per-service audits
+> and the 2026-06-10 reconciliation (`docs/fiab/prp/AUDIT-2026-06-10.md`),
+> implementing exactly the gaps those ledgers flagged as audit-T08…T28. Each
+> per-service doc was re-read against the current editor/route/client and given a
+> dated rev-note; the deferred Built/Partial/Gated/Missing recount (the rev.2
+> "NOT yet recomputed" caveat) is done below. Every ❌→✅ flip was verified by
+> reading the surface back to a real Azure REST / data-plane / ARM call (no
+> commit-message trust); genuinely-remaining gaps stay ❌/⚠️ honestly.
+
+### Wave-8→11 gap-closure map (audit-T → closing PR → verified surface)
+
+| audit-T | Gap (from AUDIT-2026-06-10) | Closing PR | Verified surface |
+|---|---|---|---|
+| T08 | Cosmos stored-proc/trigger/UDF authoring + execute | #1062 | `cosmos-script-editor.tsx` (+ test) |
+| T09 | APIM subscription state + key regen | #1063 | `apim-editors.tsx`, `apim-client.ts` (+ `apim-subscriptions.test.ts`) |
+| T14 | Power BI paginated report in-place embed + export | #1068 | `phase3-editors.tsx` paginated embed |
+| T16 | Azure SQL schema/object browser | #1070 | `azure-sql-editors.tsx` browser |
+| T17 | EventhouseEditor "New dashboard" ribbon | #1072 | `phase3-editors.tsx` dashboard create |
+| T18 | Databricks UC write-path + DLT/MLflow/Serving + lineage | #1073 | `databricks-client.ts`, `databricks-editors.tsx` |
+| T19 | AI Foundry fine-tuning / evals / tracing / playgrounds | #1078 | `foundry-client.ts`, `foundry-cs-client.ts` |
+| T20 | ADX cluster lifecycle + RBAC principal mgmt + RLS | #1076 | `kusto-client.ts` (+ `kusto-rbac-rls.test.ts`) |
+| T21 | Event Hubs Capture / Geo-DR / SAS rotation / private endpoints | #1075 | `eventhubs-namespace-editor.tsx` + 4 routes |
+| T22 | AI Search indexer scheduling + semantic/vector designers + debug | #1077 | `ai-search-tree.tsx`, `search-field-shapes.ts` (+ tests) |
+| T24 | SQL DB keys & constraints inline designer | #1081 | `sqldb-tree.tsx`, scale tab #948 |
+| T25 | Synapse KQL scripts + Spark job defs in workspace tree | #1084 | `synapse-workspace-tree.tsx` |
+| T26 | ADF Change Data Capture (preview) REST | #1080 | `factory-resources-tree.tsx`, CDC editor |
+| T27 | Cosmos conflict-resolution policy | #1083 | `cosmos-policy-editors.tsx` (+ test) |
+| T28 | Power Platform maker authoring (canvas/flow/table) | #1086 | in-Loom Dataverse/BAP authoring |
+
+### Re-graded 12-service scorecard (rev.6)
+
+| Service | Grade (rev.6) | rev.2 | What moved it (verified PR) |
+|---|:--:|:--:|---|
+| Azure Databricks | **A** | A | UC-write asterisk cleared (#1073, #1040); UC sub-doc → B+ |
+| Azure SQL Database | **B+** | C+ | scale (#948) + schema browser (#1070) + keys/constraints (#1081) + FT/vector (#1106) + migration (#1098) + Query Store dash (#938) |
+| Azure Cosmos DB | **B+** | B− | scripts (#1062) + conflict-res (#1083) + container CRUD/scale (#944) + Gremlin (#952) + keys (#956) + metrics (#957) |
+| Azure AI Search | **A−** | B | indexer scheduling + semantic/vector designers + debug (#1077); explorer B+ sub-doc |
+| Azure API Management | **B** | B− | subscription state + key regen (#1063) |
+| Azure Data Explorer (Kusto) | **B** | C+ | cluster lifecycle + RBAC + RLS (#1076) + Eventhouse dashboard (#1072) + AI tile (#1114) |
+| Azure AI Foundry | **B−** | C+ | fine-tuning + evals + tracing + Images/Audio playgrounds (#1078) |
+| Power BI / Fabric semantic | **B** | B− | paginated embed (#1068) + Model view (#934) + DAX measures (#980) + column editor (#984) + Direct-Lake (#969) |
+| Azure Event Hubs | **B−** | C | namespace editor: Capture + Geo-DR + SAS reveal/rotate + private endpoints (#1075) |
+| Azure Data Factory | **B−** | C | Mapping Data Flow sub-doc (B−) + CDC preview (#1080, #1108) |
+| Azure Synapse Analytics | **B−** | C | notebook sub-doc (B−) + KQL/Spark-job-def tree (#1084) + datamart migration (#978) |
+| Power Platform | **B−** | C | in-Loom maker authoring cures deep-link-as-parity (#1086) + attributes admin (#907) |
+
+**Grade distribution (rev.6):** 1 × A, 1 × A−, 5 × B/B+, 5 × B−. **Zero C/C+,
+zero D, zero F** — up from rev.2's 1 A / 4 B / 3 C+ / 4 C. Every per-service doc
+now carries a dated rev-note and **the only remaining ❌ rows are genuine missing
+breadth** (admin/management blades, the unified Synapse Studio shell, heavy
+designer breadth), explicitly disclosed — not stale.
+
+### Recomputed capability counts (supersedes the deferred rev.1 numbers)
+
+The 14 closed audit-T gaps plus the rev.3 sub-surfaces add **≈ 95 newly-built
+capabilities** to the rev.1 baseline of 192. Recomputed honest totals across the
+~580 inventoried capabilities: **≈ 287 built (49%) / ≈ 78 partial (13%) / ≈ 33
+gated (6%) / ≈ 182 missing (31%)**. Loom has moved from "roughly one-third built"
+to **roughly half built**; the residual third is dominated by per-service
+management blades (IAM/Tags/Locks/Metrics/Diagnostics) and a few flagship
+designers (Synapse unified Studio, full ADF connector galleries). The
+"backend-exists-but-UI-doesn't-call-it" quick-win backlog that dominated rev.2 is
+now largely consumed by the Wave-8→11 wiring PRs.
+
+### Companion doc sets (PRP-15/16/17/18) — verified complete
+
+- **PRP-16 Deployment** (`docs/fiab/deployment/`): 11 pages incl. per-cloud
+  `commercial.md` / `gcc.md` / `gcc-high.md`, `azd-cli.md`, `deploy-button.md`,
+  `marketplace.md`, `multi-sub-multi-tenant.md`, `upgrade.md`, `quickstart.md`,
+  `pipelines/`. Placeholder-clean. ✅
+- **PRP-17 Operations** (`docs/fiab/operations/`): 9 pages incl. `monitoring.md`,
+  `cost.md`, `capacity-management.md`, `disaster-recovery.md`,
+  `app-install-provisioning.md`, `persistence-chargeback-multidlz.md`,
+  `forward-to-fabric.md`, `upgrade-migration.md`. Placeholder-clean. ✅
+- **PRP-18 Compliance** (`docs/fiab/compliance/`): 11 pages incl.
+  `nist-800-53-rev5-fiab.md`, `cmmc-2.0-l2-fiab.md`, `dod-il5.md`, `itar-fiab.md`,
+  `hipaa-security-rule-fiab.md`, `feature-boundary-matrix.md`, and per-cloud
+  `commercial.md` / `gcc.md` / `gcc-high.md`. Placeholder-clean. ✅
+- **PRP-20 Tutorials** (`docs/fiab/tutorials/`): 01–08 rewritten (#772, #779). ✅
+
+These three companion sets need no authoring work; audit-T31's standing gap was
+the per-service parity-doc staleness, closed by this rev.
+
+---
+
 ## Deepened sub-surfaces (rev.3 — 2026-06-01)
+
 
 > Seven heavy designer / write surfaces were built out and audited individually
 > (per-surface docs alongside this file). These are the surfaces the rev.2 note
@@ -214,6 +303,14 @@ authoring, forbidden as parity per `ui-parity.md`), not a missing row.
 ---
 
 ## Overall honest assessment: how far is Loom from 1:1 Azure parity?
+
+> **rev.6 (2026-06-10) update:** the assessment below was written at rev.1
+> (33% built). After the Wave-8→11 cohort (PRs #1054–#1123) the recomputed honest
+> figure is **≈ 49% built / 31% missing** (see the rev.6 recount above). The
+> "backend-exists-but-UI-doesn't-call-it" quick-win pattern called out below is
+> now largely consumed; the residual gap is dominated by per-service management
+> blades and a few flagship designers. The narrative below is preserved as the
+> rev.1 baseline.
 
 **Loom is roughly one-third of the way to 1:1 Azure parity, and not close to
 the `ui-parity.md` bar on any service.** Across the 580 capabilities the audits
@@ -381,5 +478,7 @@ effort-to-impact (unwired-backend items are starred ★ as quick wins).
   **secret-reveal** (Tier 4 #28) components *once* and mount across services —
   they recur in nearly every audit's missing list.
 
-_Last updated: 2026-05-31. Source: 12 per-service parity audits under
-`docs/fiab/parity/`._
+_Last updated: 2026-06-10 (rev.6 — Wave-8→11 re-audit + count recompute,
+audit-T31). Source: 12 per-service parity audits + the rev.6 gap-closure map
+above, reconciled against `docs/fiab/prp/AUDIT-2026-06-10.md` and the
+PR #1054–#1123 ledger. Originally 2026-05-31._
