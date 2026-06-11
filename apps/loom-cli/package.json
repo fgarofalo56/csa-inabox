@@ -1,0 +1,47 @@
+{
+  "name": "@csa-loom/cli",
+  "version": "0.1.0",
+  "description": "loom — command-line interface for CSA Loom. One-command workspace + item management over the Loom REST API (Azure-native; no Microsoft Fabric tenant required).",
+  "keywords": [
+    "csa-loom",
+    "loom",
+    "fabric",
+    "azure",
+    "cli",
+    "workspace",
+    "data-platform"
+  ],
+  "license": "MIT",
+  "type": "module",
+  "bin": {
+    "loom": "dist/index.js"
+  },
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "files": [
+    "dist",
+    "README.md"
+  ],
+  "engines": {
+    "node": ">=20.0.0"
+  },
+  "publishConfig": {
+    "access": "public"
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "prepublishOnly": "npm run build",
+    "test": "vitest run",
+    "typecheck": "tsc --noEmit -p tsconfig.json"
+  },
+  "devDependencies": {
+    "@types/node": "^20.16.0",
+    "typescript": "^5.6.0",
+    "vitest": "^2.1.0"
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/Limitless-Data-LLC/csa-inabox.git",
+    "directory": "apps/loom-cli"
+  }
+}
