@@ -24,7 +24,7 @@
 import { useCallback, useEffect, useState } from 'react';
 import {
   Field, Input, Dropdown, Option, Button, Spinner, Badge, Divider,
-  Radio, RadioGroup, Caption1, Body1Strong,
+  Radio, RadioGroup, Caption1, Body1Strong, Tooltip,
   MessageBar, MessageBarBody, MessageBarTitle,
   makeStyles, tokens,
 } from '@fluentui/react-components';
@@ -62,12 +62,46 @@ const useStyles = makeStyles({
   meta: { fontSize: '12px', color: tokens.colorNeutralForeground3 },
   mono: { fontFamily: tokens.fontFamilyMonospace, fontSize: '12px' },
   spacer: { flex: 1 },
+  grow: { flex: 1 },
+  loading: {
+    display: 'flex', alignItems: 'center', justifyContent: 'center',
+    minHeight: '120px', padding: '14px', borderRadius: tokens.borderRadiusMedium,
+    border: `1px solid ${tokens.colorNeutralStroke2}`, backgroundColor: tokens.colorNeutralBackground1,
+  },
+  commit: {
+    display: 'inline-flex', alignItems: 'center', gap: '2px',
+    fontFamily: tokens.fontFamilyMonospace, fontSize: '12px',
+  },
 });
 
 async function getJson(url: string, init?: RequestInit) {
   const res = await fetch(url, { cache: 'no-store', ...init });
   const json = await res.json().catch(() => ({}));
   return { res, json };
+}
+
+/** Short commit SHA with a one-click copy affordance (Fabric/portal pattern). */
+function CommitSha({ sha }: { sha: string }) {
+  const styles = useStyles();
+  const [copied, setCopied] = useState(false);
+  const copy = useCallback(() => {
+    void navigator.clipboard?.writeText(sha).then(() => {
+      setCopied(true);
+      setTimeout(() => setCopied(false), 1500);
+    }).catch(() => {});
+  }, [sha]);
+  return (
+    <span className={styles.commit}>
+      <span className={styles.mono}>{sha.slice(0, 8)}</span>
+      <Tooltip content={copied ? 'Copied' : 'Copy full commit SHA'} relationship="label">
+        <Button
+          appearance="subtle" size="small"
+          icon={copied ? <Checkmark16Filled /> : <Copy16Regular />}
+          onClick={copy} aria-label="Copy commit SHA"
+        />
+      </Tooltip>
+    </span>
+  );
 }
 
 export function GitIntegrationPane({ workspaceId, embeddedMode: _embeddedMode }: { workspaceId: string; embeddedMode?: boolean }) {
@@ -88,7 +122,7 @@ export function GitIntegrationPane({ workspaceId, embeddedMode: _embeddedMode }:
 
   useEffect(() => { void load(); }, [load]);
 
-  if (loading) return <Spinner size="tiny" label="Loading Git integration…" />;
+  if (loading) return <div className={styles.loading}><Spinner size="small" label="Loading Git integration…" /></div>;
 
   return (
     <div className={styles.root}>
@@ -171,7 +205,7 @@ function ConnectedView({ workspaceId, binding, onChanged }: { workspaceId: strin
         <Caption1 className={styles.meta}>
           Last sync {new Date(binding.lastSyncAt).toLocaleString()} ·{' '}
           {binding.lastSyncCommitId && (
-            <>commit <span className={styles.mono}>{binding.lastSyncCommitId.slice(0, 8)}</span> · </>)}
+            <>commit <CommitSha sha={binding.lastSyncCommitId} /> · </>)}
           {binding.lastSyncFileCount ?? 0} file(s)
         </Caption1>
       ) : (
@@ -189,7 +223,7 @@ function ConnectedView({ workspaceId, binding, onChanged }: { workspaceId: strin
         {remoteError && <MessageBar intent="warning"><MessageBarBody>{remoteError}</MessageBarBody></MessageBar>}
         {!remoteError && remoteHead && (
           <Caption1 className={styles.meta}>
-            <span className={styles.mono}>{remoteHead.commitId.slice(0, 8)}</span>
+            <CommitSha sha={remoteHead.commitId} />
             {remoteHead.authorName ? ` · ${remoteHead.authorName}` : ''}
             {remoteHead.commitDate ? ` · ${new Date(remoteHead.commitDate).toLocaleString()}` : ''}
           </Caption1>
@@ -381,10 +415,10 @@ function ConnectWizard({ workspaceId, caps, onConnected }: { workspaceId: string
           </Field>
           {authMethod === 'spn' && (
             <div className={styles.row}>
-              <Field label="SPN tenant id" style={{ flex: 1 }}>
+              <Field label="SPN tenant id" className={styles.grow}>
                 <Input value={spnTenantId} onChange={(_, d) => setSpnTenantId(d.value)} placeholder="00000000-0000-…" />
               </Field>
-              <Field label="SPN client id" style={{ flex: 1 }}>
+              <Field label="SPN client id" className={styles.grow}>
                 <Input value={spnClientId} onChange={(_, d) => setSpnClientId(d.value)} placeholder="00000000-0000-…" />
               </Field>
             </div>
@@ -394,7 +428,7 @@ function ConnectWizard({ workspaceId, caps, onConnected }: { workspaceId: string
           </Field>
           <Field label="Organization" required>
             <div className={styles.row}>
-              <Input value={org} onChange={(_, d) => setOrg(d.value)} placeholder="myorg" style={{ flex: 1 }} />
+              <Input value={org} onChange={(_, d) => setOrg(d.value)} placeholder="myorg" className={styles.grow} />
               <Button onClick={loadAdoProjects} disabled={busyAction === 'projects' || !org.trim() || !pat.trim()}>
                 {busyAction === 'projects' ? 'Loading…' : 'Load projects'}
               </Button>
@@ -444,7 +478,7 @@ function ConnectWizard({ workspaceId, caps, onConnected }: { workspaceId: string
               </Field>
               <Field label="Repository" required>
                 <div className={styles.row}>
-                  <Input value={ghRepoInput} onChange={(_, d) => { setGhRepoInput(d.value); setBranches([]); }} placeholder="my-repo" style={{ flex: 1 }} />
+                  <Input value={ghRepoInput} onChange={(_, d) => { setGhRepoInput(d.value); setBranches([]); }} placeholder="my-repo" className={styles.grow} />
                   <Button onClick={() => void loadGhBranches(ghOwner.trim(), ghRepoInput.trim())}
                     disabled={busyAction === 'gh-branches' || !pat.trim() || !ghSubdomain.trim() || !ghOwner.trim() || !ghRepoInput.trim()}>
                     {busyAction === 'gh-branches' ? 'Loading…' : 'Load branches'}
@@ -456,7 +490,7 @@ function ConnectWizard({ workspaceId, caps, onConnected }: { workspaceId: string
             <>
               <Field label="Owner / organization (blank = your repos)">
                 <div className={styles.row}>
-                  <Input value={ghOwner} onChange={(_, d) => setGhOwner(d.value)} placeholder="my-org (optional)" style={{ flex: 1 }} />
+                  <Input value={ghOwner} onChange={(_, d) => setGhOwner(d.value)} placeholder="my-org (optional)" className={styles.grow} />
                   <Button onClick={loadGhRepos} disabled={busyAction === 'gh-repos' || !pat.trim()}>
                     {busyAction === 'gh-repos' ? 'Loading…' : 'Load repos'}
                   </Button>
