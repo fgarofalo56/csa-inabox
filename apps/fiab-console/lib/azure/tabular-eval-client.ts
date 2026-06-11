@@ -33,6 +33,7 @@
  *   client in this directory. Config is env-only (loom-no-freeform-config).
  */
 
+import { fetchWithTimeout } from '@/lib/azure/fetch-with-timeout';
 import {
   ChainedTokenCredential,
   DefaultAzureCredential,
@@ -198,7 +199,7 @@ async function aasToken(): Promise<string> {
 async function xmlaPost(envelope: string, soapAction: 'Discover' | 'Execute'): Promise<string> {
   const url = aasXmlaUrl(aasServer(), aasDatabase());
   const token = await aasToken();
-  const resp = await fetch(url, {
+  const resp = await fetchWithTimeout(url, {
     method: 'POST',
     headers: {
       'content-type': 'text/xml; charset=utf-8',

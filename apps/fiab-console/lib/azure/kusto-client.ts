@@ -19,6 +19,7 @@
  * properties / completion metadata. We surface Table_0 only.
  */
 
+import { fetchWithTimeout } from '@/lib/azure/fetch-with-timeout';
 import { ChainedTokenCredential, DefaultAzureCredential, ManagedIdentityCredential } from '@azure/identity';
 import { itemsContainer, workspacesContainer } from './cosmos-client';
 import { armBase, armScope, kustoClusterUri } from './cloud-endpoints';
@@ -190,7 +191,7 @@ async function getToken(): Promise<string> {
 async function postRest(path: '/v1/rest/query' | '/v1/rest/mgmt', db: string, csl: string): Promise<any> {
   const token = await getToken();
   const url = `${CLUSTER_URI}${path}`;
-  const res = await fetch(url, {
+  const res = await fetchWithTimeout(url, {
     method: 'POST',
     headers: {
       'authorization': `Bearer ${token}`,
@@ -221,7 +222,7 @@ async function postRest(path: '/v1/rest/query' | '/v1/rest/mgmt', db: string, cs
 async function postMgmtDm(db: string, csl: string): Promise<any> {
   const token = await getToken();
   const url = `${DM_URI}/v1/rest/mgmt`;
-  const res = await fetch(url, {
+  const res = await fetchWithTimeout(url, {
     method: 'POST',
     headers: {
       'authorization': `Bearer ${token}`,
@@ -1468,7 +1469,7 @@ export async function createDatabase(
       hotCachePeriod: `P${opts?.hotCacheDays ?? 7}D`,
     },
   };
-  const res = await fetch(url, {
+  const res = await fetchWithTimeout(url, {
     method: 'PUT',
     headers: {
       'authorization': `Bearer ${armToken}`,

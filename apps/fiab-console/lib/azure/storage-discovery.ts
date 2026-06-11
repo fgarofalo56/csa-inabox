@@ -11,6 +11,7 @@
  * Needs Reader (Microsoft.Storage/storageAccounts/read).
  * Docs: https://learn.microsoft.com/rest/api/storagerp/storage-accounts/list
  */
+import { fetchWithTimeout } from '@/lib/azure/fetch-with-timeout';
 import {
   ChainedTokenCredential,
   DefaultAzureCredential,
@@ -52,7 +53,7 @@ export interface StorageAccountSummary {
 async function armGet<T = any>(path: string): Promise<T> {
   const t = await credential.getToken(ARM_SCOPE);
   if (!t?.token) throw new StorageDiscoveryError('Failed to acquire ARM token', 401);
-  const res = await fetch(`${armBase()}${path}`, {
+  const res = await fetchWithTimeout(`${armBase()}${path}`, {
     headers: { authorization: `Bearer ${t.token}`, accept: 'application/json' }, cache: 'no-store',
   });
   const text = await res.text();

@@ -24,6 +24,7 @@
  * workspace. No mock data.
  */
 
+import { clientFetch } from '@/lib/client-fetch';
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
@@ -494,7 +495,7 @@ function CreateWorkspaceDialog({ onCreated }: { onCreated?: () => void }) {
   const capacitiesQ = useQuery({
     queryKey: ['capacities'],
     queryFn: async (): Promise<{ ok: boolean; capacities?: CapacityLite[]; error?: string }> => {
-      const r = await fetch('/api/loom/capacities');
+      const r = await clientFetch('/api/loom/capacities');
       const ct = r.headers.get('content-type') || '';
       return ct.includes('application/json') ? r.json() : { ok: false, error: `HTTP ${r.status}` };
     },
@@ -505,7 +506,7 @@ function CreateWorkspaceDialog({ onCreated }: { onCreated?: () => void }) {
   const domainsQ = useQuery({
     queryKey: ['domains'],
     queryFn: async (): Promise<{ ok: boolean; domains?: DomainLite[]; error?: string }> => {
-      const r = await fetch('/api/admin/domains');
+      const r = await clientFetch('/api/admin/domains');
       const ct = r.headers.get('content-type') || '';
       return ct.includes('application/json') ? r.json() : { ok: false, error: `HTTP ${r.status}` };
     },
@@ -788,7 +789,7 @@ export default function WorkspacesPage() {
     queryKey: ['auth', 'me'],
     queryFn: async () => {
       try {
-        const r = await fetch('/api/auth/me', { credentials: 'include' });
+        const r = await clientFetch('/api/auth/me', { credentials: 'include' });
         if (!r.ok) return {};
         return await r.json();
       } catch {

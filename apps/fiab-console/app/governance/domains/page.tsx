@@ -11,6 +11,7 @@
  * /admin/domains.
  */
 
+import { clientFetch } from '@/lib/client-fetch';
 import { useEffect, useMemo, useState } from 'react';
 import {
   Spinner, Badge, Caption1, Body1, Subtitle2, Button,
@@ -62,7 +63,7 @@ export default function GovernanceDomainsPage() {
 
   const load = () => {
     setLoading(true); setError(null);
-    fetch('/api/admin/domains')
+    clientFetch('/api/admin/domains')
       .then((r) => r.json())
       .then((j) => { if (j.ok) setDomains(j.domains || []); else setError(j.error || 'failed'); })
       .catch((e) => setError(e?.message || String(e)))

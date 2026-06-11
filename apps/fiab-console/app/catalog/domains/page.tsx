@@ -19,6 +19,7 @@
  * the new Purview experience, while the classic catalog below stays fully usable.
  */
 
+import { clientFetch } from '@/lib/client-fetch';
 import { useCallback, useEffect, useState } from 'react';
 import { CatalogShell } from '@/lib/components/catalog/catalog-shell';
 import { PurviewGate, usePurviewStatus } from '@/lib/components/purview-gate';
@@ -97,7 +98,7 @@ export default function CatalogDomainsPage() {
     if (!live) { setData(null); return; }
     setLoading(true); setError(null);
     try {
-      const r = await fetch('/api/catalog/domains');
+      const r = await clientFetch('/api/catalog/domains');
       const j: DomainsResponse = await r.json();
       if (!j.ok) { setError(j.error || `HTTP ${r.status}`); return; }
       setData(j);

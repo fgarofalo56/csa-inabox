@@ -8,6 +8,7 @@
  * caller surfaces the structured `remediation` from GraphPrincipalsError so the
  * UI shows the exact admin step.
  */
+import { fetchWithTimeout } from '@/lib/azure/fetch-with-timeout';
 import { ChainedTokenCredential, DefaultAzureCredential, ManagedIdentityCredential } from '@azure/identity';
 import { graphBase, graphScope } from './cloud-endpoints';
 
@@ -75,7 +76,7 @@ export async function searchEntraPrincipals(q: string, kind: PrincipalKind): Pro
     ? `${base}/groups?$filter=startswith(displayName,'${safe}')&$top=20&$select=id,displayName,description,mail`
     : `${base}/users?$filter=startswith(displayName,'${safe}') or startswith(userPrincipalName,'${safe}')&$top=20&$select=id,displayName,userPrincipalName,mail`;
 
-  const res = await fetch(endpoint, {
+  const res = await fetchWithTimeout(endpoint, {
     headers: { authorization: `Bearer ${token}`, accept: 'application/json' },
     cache: 'no-store',
   });

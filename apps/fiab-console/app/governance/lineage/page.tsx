@@ -11,6 +11,7 @@
  * Purview lineage edges.
  */
 
+import { clientFetch } from '@/lib/client-fetch';
 import { Suspense, useEffect, useMemo, useState } from 'react';
 import { useSearchParams } from 'next/navigation';
 import {
@@ -183,7 +184,7 @@ function LineageInner() {
   const load = async () => {
     setLoading(true); setError(null);
     try {
-      const r = await fetch('/api/governance/lineage');
+      const r = await clientFetch('/api/governance/lineage');
       const j = await r.json();
       if (!j.ok) { setError(j.error || 'failed'); return; }
       setWorkspaces(j.workspaces || []);

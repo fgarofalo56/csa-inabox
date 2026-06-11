@@ -15,6 +15,7 @@
  * by the time these run.
  */
 
+import { fetchWithTimeout } from '@/lib/azure/fetch-with-timeout';
 import { ChainedTokenCredential, DefaultAzureCredential, ManagedIdentityCredential } from '@azure/identity';
 import type { Workspace } from '@/lib/types/workspace';
 import { assignWorkspaceToCapacity, FabricError } from './fabric-client';
@@ -146,7 +147,7 @@ async function tryProvisionBackingRg(ws: Workspace): Promise<Workspace['backingR
     const t = await armCredential.getToken(armScope());
     if (!t?.token) return { status: 'failed', rgName, error: 'Failed to acquire ARM token for resource-group provision.', at };
     const url = `${armBase()}/subscriptions/${sub}/resourceGroups/${encodeURIComponent(rgName)}?api-version=${ARM_RG_API}`;
-    const res = await fetch(url, {
+    const res = await fetchWithTimeout(url, {
       method: 'PUT',
       headers: { authorization: `Bearer ${t.token}`, 'content-type': 'application/json' },
       body: JSON.stringify({

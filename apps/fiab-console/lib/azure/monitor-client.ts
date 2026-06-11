@@ -24,6 +24,7 @@
  * still renders.
  */
 
+import { fetchWithTimeout } from '@/lib/azure/fetch-with-timeout';
 import {
   ChainedTokenCredential,
   DefaultAzureCredential,
@@ -120,7 +121,7 @@ async function token(scope: string): Promise<string> {
 async function armGet(path: string): Promise<any> {
   const tk = await token(ARM_SCOPE);
   const url = path.startsWith('http') ? path : `${ARM}${path}`;
-  const res = await fetch(url, {
+  const res = await fetchWithTimeout(url, {
     headers: { authorization: `Bearer ${tk}`, accept: 'application/json' },
     cache: 'no-store',
   });
@@ -137,7 +138,7 @@ async function armGet(path: string): Promise<any> {
 async function armPut(path: string, body: unknown): Promise<any> {
   const tk = await token(ARM_SCOPE);
   const url = path.startsWith('http') ? path : `${ARM}${path}`;
-  const res = await fetch(url, {
+  const res = await fetchWithTimeout(url, {
     method: 'PUT',
     headers: { authorization: `Bearer ${tk}`, accept: 'application/json', 'content-type': 'application/json' },
     body: JSON.stringify(body),
@@ -156,7 +157,7 @@ async function armPut(path: string, body: unknown): Promise<any> {
 async function armPost(path: string, body: unknown): Promise<{ status: number; json: any; operationLocation?: string }> {
   const tk = await token(ARM_SCOPE);
   const url = path.startsWith('http') ? path : `${ARM}${path}`;
-  const res = await fetch(url, {
+  const res = await fetchWithTimeout(url, {
     method: 'POST',
     headers: { authorization: `Bearer ${tk}`, accept: 'application/json', 'content-type': 'application/json' },
     body: JSON.stringify(body),
@@ -177,7 +178,7 @@ async function armPost(path: string, body: unknown): Promise<{ status: number; j
 async function armPatch(path: string, body: unknown): Promise<any> {
   const tk = await token(ARM_SCOPE);
   const url = path.startsWith('http') ? path : `${ARM}${path}`;
-  const res = await fetch(url, {
+  const res = await fetchWithTimeout(url, {
     method: 'PATCH',
     headers: { authorization: `Bearer ${tk}`, accept: 'application/json', 'content-type': 'application/json' },
     body: JSON.stringify(body),
@@ -196,7 +197,7 @@ async function armPatch(path: string, body: unknown): Promise<any> {
 async function armDelete(path: string): Promise<void> {
   const tk = await token(ARM_SCOPE);
   const url = path.startsWith('http') ? path : `${ARM}${path}`;
-  const res = await fetch(url, {
+  const res = await fetchWithTimeout(url, {
     method: 'DELETE',
     headers: { authorization: `Bearer ${tk}`, accept: 'application/json' },
     cache: 'no-store',
@@ -430,7 +431,7 @@ export async function queryLogs(kql: string, timespan = 'P1D'): Promise<LogQuery
   if (!kql?.trim()) throw new MonitorError('query required', 400);
   const tk = await token(LA_SCOPE);
   const url = `${LA_ENDPOINT}/v1/workspaces/${workspaceId}/query`;
-  const res = await fetch(url, {
+  const res = await fetchWithTimeout(url, {
     method: 'POST',
     headers: {
       authorization: `Bearer ${tk}`,

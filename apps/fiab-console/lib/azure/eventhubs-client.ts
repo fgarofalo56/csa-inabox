@@ -23,6 +23,7 @@
  * via eventhubsConfigGate() and the navigator shows a single honest infra-gate.
  */
 
+import { fetchWithTimeout } from '@/lib/azure/fetch-with-timeout';
 import {
   DefaultAzureCredential,
   ManagedIdentityCredential,
@@ -94,7 +95,7 @@ function nsUrl(cfg: EventHubsConfig): string {
 async function callArm(url: string, init?: RequestInit): Promise<Response> {
   const t = await credential.getToken(ARM_SCOPE);
   if (!t?.token) throw new EventHubsArmError(401, undefined, 'Failed to acquire ARM token');
-  return fetch(url, {
+  return fetchWithTimeout(url, {
     ...init,
     headers: {
       ...(init?.headers || {}),
@@ -944,7 +945,7 @@ export async function listStreamingResourcesViaGraph(
     guard++;
     const body: Record<string, unknown> = { subscriptions, query: kql };
     if (skipToken) body.options = { $skipToken: skipToken };
-    const r = await fetch(`${ARG_URL}?api-version=${ARG_API}`, {
+    const r = await fetchWithTimeout(`${ARG_URL}?api-version=${ARG_API}`, {
       method: 'POST',
       headers: { authorization: `Bearer ${t.token}`, 'content-type': 'application/json' },
       body: JSON.stringify(body),
@@ -1067,7 +1068,7 @@ export async function putSchemaVersion(
   const t = await credential.getToken(EVENTHUBS_DATA_SCOPE);
   if (!t?.token) throw new EventHubsArmError(401, undefined, 'Failed to acquire Event Hubs data-plane token');
   const url = `${ehSchemaRegistryBase()}/$schemagroups/${encodeURIComponent(group)}/schemas/${encodeURIComponent(name)}?api-version=${SR_API}`;
-  const r = await fetch(url, {
+  const r = await fetchWithTimeout(url, {
     method: 'PUT',
     headers: {
       authorization: `Bearer ${t.token}`,

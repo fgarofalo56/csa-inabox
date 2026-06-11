@@ -19,6 +19,7 @@
  *   ADF WebHook activity (callBackUri contract):
  *     https://learn.microsoft.com/azure/data-factory/control-flow-webhook-activity
  */
+import { fetchWithTimeout } from '@/lib/azure/fetch-with-timeout';
 import {
   DefaultAzureCredential,
   ManagedIdentityCredential,
@@ -81,7 +82,7 @@ export function approvalResourceGroup(): string {
 async function armPost(url: string): Promise<{ ok: boolean; status: number; body: unknown }> {
   const tok = await credential.getToken(armScope());
   if (!tok?.token) throw new Error('Failed to acquire ARM token');
-  const r = await fetch(url, {
+  const r = await fetchWithTimeout(url, {
     method: 'POST',
     headers: { authorization: `Bearer ${tok.token}`, 'content-type': 'application/json' },
     body: '{}',
@@ -187,7 +188,7 @@ export async function postApprovalTrigger(
   body: { pipelineName: string; runId: string; approverEmail: string; callBackUri: string },
 ): Promise<{ ok: boolean; status: number; error?: string }> {
   try {
-    const r = await fetch(triggerUrl, {
+    const r = await fetchWithTimeout(triggerUrl, {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify(body),

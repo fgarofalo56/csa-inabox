@@ -43,6 +43,7 @@
  * no-fabric-dependency.md).
  */
 
+import { fetchWithTimeout } from '@/lib/azure/fetch-with-timeout';
 import {
   DefaultAzureCredential,
   ManagedIdentityCredential,
@@ -158,7 +159,7 @@ async function amlFetch(
   const wsPath = amlWorkspaceArmPath(target ?? resolveAmlTarget());
   const extra = query ? '&' + new URLSearchParams(query).toString() : '';
   const url = `${armBase()}${wsPath}${path}?api-version=${ML_API}${extra}`;
-  return fetch(url, {
+  return fetchWithTimeout(url, {
     ...rest,
     headers: {
       ...(rest.headers || {}),
@@ -196,7 +197,7 @@ async function pagedList(path: string, label: string): Promise<any[]> {
     if (Array.isArray(j.value)) out.push(...j.value);
     if (!j.nextLink) break;
     const token = await credential.getToken(armScope());
-    res = await fetch(j.nextLink, { headers: { authorization: `Bearer ${token!.token}` } });
+    res = await fetchWithTimeout(j.nextLink, { headers: { authorization: `Bearer ${token!.token}` } });
     j = await readAmlJson<{ value?: any[]; nextLink?: string }>(res, label);
   }
   return out;
@@ -417,7 +418,7 @@ export async function listJobs(opts: { experimentName?: string; maxResults?: num
     if (Array.isArray(j.value)) for (const r of j.value) out.push(shapeJob(r));
     if (!j.nextLink || out.length >= cap) break;
     const token = await credential.getToken(armScope());
-    res = await fetch(j.nextLink, { headers: { authorization: `Bearer ${token!.token}` } });
+    res = await fetchWithTimeout(j.nextLink, { headers: { authorization: `Bearer ${token!.token}` } });
     j = await readAmlJson<{ value?: any[]; nextLink?: string }>(res, 'listJobs');
   }
   return out.slice(0, cap);

@@ -31,6 +31,7 @@
  * `LOOM_SYNAPSE_WORKSPACE` is unset the BFF gates with an honest 503.
  */
 
+import { fetchWithTimeout } from '@/lib/azure/fetch-with-timeout';
 import {
   DefaultAzureCredential,
   ManagedIdentityCredential,
@@ -90,7 +91,7 @@ export function synapseConfigGate(): { missing: string } | null {
 async function callDev(path: string, init?: RequestInit): Promise<Response> {
   const tok = await credential.getToken(DEV_SCOPE);
   if (!tok?.token) throw new Error('Failed to acquire Synapse dev token');
-  return fetch(`${devBase()}${path}`, {
+  return fetchWithTimeout(`${devBase()}${path}`, {
     ...init,
     headers: {
       ...(init?.headers || {}),
@@ -484,7 +485,7 @@ async function commitArtifactLocal<T>(r: Response, label: string): Promise<T> {
   while (Date.now() < deadline) {
     await new Promise((res) => setTimeout(res, delay));
     delay = Math.min(delay * 1.5, 5000);
-    const op = await fetch(loc, {
+    const op = await fetchWithTimeout(loc, {
       headers: { authorization: `Bearer ${tok.token}`, 'content-type': 'application/json' },
     });
     const text = await op.text();
@@ -697,7 +698,7 @@ export async function runKqlOnPool(poolName: string, databaseName: string, query
   const tok = await credential.getToken(`${clusterUri}/.default`);
   if (!tok?.token) throw new Error(`Failed to acquire token for Kusto pool ${poolName}`);
   const started = Date.now();
-  const res = await fetch(`${clusterUri}/v1/rest/query`, {
+  const res = await fetchWithTimeout(`${clusterUri}/v1/rest/query`, {
     method: 'POST',
     headers: {
       authorization: `Bearer ${tok.token}`,

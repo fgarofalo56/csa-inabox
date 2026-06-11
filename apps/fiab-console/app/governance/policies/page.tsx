@@ -1,5 +1,6 @@
 'use client';
 
+import { clientFetch } from '@/lib/client-fetch';
 import { useCallback, useEffect, useState } from 'react';
 import {
   Spinner, Badge, Caption1, Body1, Input, Button, Dropdown, Option, Switch, Field,
@@ -137,7 +138,7 @@ export default function PoliciesPage() {
     if (q.length < 2) { setAccResults([]); return; }
     setAccSearching(true);
     try {
-      const r = await fetch(`/api/admin/permissions/principals?q=${encodeURIComponent(q)}&type=${accKind}`);
+      const r = await clientFetch(`/api/admin/permissions/principals?q=${encodeURIComponent(q)}&type=${accKind}`);
       const j = await r.json();
       setAccResults(j.ok ? (j.results || []) : []);
     } catch { setAccResults([]); }
@@ -145,17 +146,17 @@ export default function PoliciesPage() {
   }, [accQuery, accKind]);
 
   useEffect(() => {
-    fetch('/api/workspaces').then((r) => r.json()).then((d) => {
+    clientFetch('/api/workspaces').then((r) => r.json()).then((d) => {
       const list = Array.isArray(d) ? d : (d?.workspaces || []);
       setWorkspaces(list.map((x: any) => ({ id: x.id, name: x.name || x.displayName || x.id })));
     }).catch(() => {});
-    fetch('/api/admin/domains').then((r) => r.json()).then((d) => {
+    clientFetch('/api/admin/domains').then((r) => r.json()).then((d) => {
       setDomains((d?.domains || []).map((x: any) => ({ id: x.id, name: x.name || x.id })));
     }).catch(() => {});
-    fetch('/api/items/by-type?types=kql-database').then((r) => r.json()).then((d) => {
+    clientFetch('/api/items/by-type?types=kql-database').then((r) => r.json()).then((d) => {
       setKqlItems((d?.items || []).map((x: any) => ({ id: x.id, name: x.displayName || x.id })));
     }).catch(() => {});
-    fetch('/api/lakehouse/containers').then((r) => r.json()).then((d) => {
+    clientFetch('/api/lakehouse/containers').then((r) => r.json()).then((d) => {
       setContainers((d?.containers || []).map((c: any) => c.name).filter(Boolean));
     }).catch(() => {});
   }, []);
@@ -165,7 +166,7 @@ export default function PoliciesPage() {
     if (!container) { setRstPathItems([]); return; }
     setRstPathLoading(true);
     try {
-      const r = await fetch(`/api/lakehouse/paths?container=${encodeURIComponent(container)}&prefix=${encodeURIComponent(prefix)}`);
+      const r = await clientFetch(`/api/lakehouse/paths?container=${encodeURIComponent(container)}&prefix=${encodeURIComponent(prefix)}`);
       const j = await r.json();
       setRstPathItems(j.ok ? (j.paths || []).map((p: any) => ({ name: p.name, isDirectory: !!p.isDirectory })) : []);
     } catch { setRstPathItems([]); }
@@ -176,7 +177,7 @@ export default function PoliciesPage() {
   const loadRstSchemas = useCallback(async () => {
     setRstSchemaGate(null);
     try {
-      const r = await fetch('/api/governance/dlp/schemas');
+      const r = await clientFetch('/api/governance/dlp/schemas');
       const j = await r.json();
       if (r.status === 503 || j?.code === 'warehouse_not_configured') {
         setRstSchemas([]); setRstSchemaGate(j?.error || 'The Azure-native warehouse is not configured.');
@@ -206,7 +207,7 @@ export default function PoliciesPage() {
   const load = useCallback(async () => {
     setLoading(true); setError(null);
     try {
-      const r = await fetch('/api/governance/policies');
+      const r = await clientFetch('/api/governance/policies');
       const j = await r.json();
       if (!j.ok) { setError(j.error); return; }
       setPolicies(j.policies || []);
@@ -219,9 +220,9 @@ export default function PoliciesPage() {
   const loadDlp = useCallback(async () => {
     setVLoading(true); setVErr(null); setVGate(null);
     try {
-      const m = await fetch('/api/governance/dlp/meta').then((x) => x.json()).catch(() => null);
+      const m = await clientFetch('/api/governance/dlp/meta').then((x) => x.json()).catch(() => null);
       if (m?.ok) setDlpMeta(m);
-      const r = await fetch('/api/governance/dlp/violations?top=100');
+      const r = await clientFetch('/api/governance/dlp/violations?top=100');
       const j = await r.json();
       if (r.status === 503 && j?.code === 'dlp_not_configured') {
         setVGate(j?.hint?.followUp || j?.error || 'DLP is not wired in this deployment.');
@@ -239,7 +240,7 @@ export default function PoliciesPage() {
   async function triggerScan() {
     setScanning(true); setScanMsg(null);
     try {
-      const r = await fetch('/api/governance/dlp/scan', { method: 'POST' });
+      const r = await clientFetch('/api/governance/dlp/scan', { method: 'POST' });
       const j = await r.json();
       if (r.status === 501 || j?.code === 'dlp_scan_trigger_unavailable') {
         setScanMsg({
@@ -265,7 +266,7 @@ export default function PoliciesPage() {
     if (q.length < 2) { setRstResults([]); return; }
     setRstSearching(true);
     try {
-      const r = await fetch(`/api/admin/permissions/principals?q=${encodeURIComponent(q)}&type=${rstKind}`);
+      const r = await clientFetch(`/api/admin/permissions/principals?q=${encodeURIComponent(q)}&type=${rstKind}`);
       const j = await r.json();
       setRstResults(j.ok ? (j.results || []) : []);
     } catch { setRstResults([]); }
@@ -288,7 +289,7 @@ export default function PoliciesPage() {
     }
     setRstBusy(true); setRstMsg(null);
     try {
-      const r = await fetch('/api/governance/dlp/restrict', {
+      const r = await clientFetch('/api/governance/dlp/restrict', {
         method: 'POST', headers: { 'content-type': 'application/json' },
         body: JSON.stringify({
           scopeType: rstScope,
@@ -359,7 +360,7 @@ export default function PoliciesPage() {
     }
     setBusy(true); setActionErr(null);
     try {
-      const r = await fetch('/api/governance/policies', {
+      const r = await clientFetch('/api/governance/policies', {
         method: 'POST', headers: { 'content-type': 'application/json' },
         body: JSON.stringify(body),
       });
@@ -375,7 +376,7 @@ export default function PoliciesPage() {
 
   async function toggle(p: Policy) {
     try {
-      const r = await fetch('/api/governance/policies', {
+      const r = await clientFetch('/api/governance/policies', {
         method: 'PUT', headers: { 'content-type': 'application/json' },
         body: JSON.stringify({ id: p.id, enabled: !p.enabled }),
       });
@@ -388,7 +389,7 @@ export default function PoliciesPage() {
   async function remove(id: string) {
     if (!confirm('Delete this policy?')) return;
     try {
-      const r = await fetch(`/api/governance/policies?id=${encodeURIComponent(id)}`, { method: 'DELETE' });
+      const r = await clientFetch(`/api/governance/policies?id=${encodeURIComponent(id)}`, { method: 'DELETE' });
       const j = await r.json();
       if (j.ok) setPolicies(j.policies);
       else setActionErr(j.error);

@@ -38,6 +38,19 @@ export const DEFAULT_SERVER_FETCH_TIMEOUT_MS: number = (() => {
 })();
 
 /**
+ * Longer ceiling for LLM inference round-trips (AOAI `/chat/completions`,
+ * multi-iteration agent loops). A normal chat completion or an agent turn that
+ * fans out several tool calls can legitimately exceed the 30s metadata budget,
+ * so wrapping those calls at the default would be a functional regression. This
+ * still bounds them — a wedged inference endpoint can't pin a worker forever —
+ * just with a generous 120s budget. Override with `LOOM_LLM_FETCH_TIMEOUT_MS`.
+ */
+export const LLM_FETCH_TIMEOUT_MS: number = (() => {
+  const n = Number(process.env.LOOM_LLM_FETCH_TIMEOUT_MS);
+  return Number.isFinite(n) && n > 0 ? n : 120_000;
+})();
+
+/**
  * Thrown when a request exceeds its timeout budget (as opposed to being
  * aborted by a caller-supplied signal or failing at the network layer).
  * Callers can `instanceof`-check this to surface an honest "backend timed out"

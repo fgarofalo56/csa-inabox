@@ -28,6 +28,7 @@
  * an AsyncIterable so the BFF can SSE-pipe them straight to the UI.
  */
 
+import { fetchWithTimeout, LLM_FETCH_TIMEOUT_MS } from '@/lib/azure/fetch-with-timeout';
 import {
   ChainedTokenCredential,
   DefaultAzureCredential,
@@ -1097,11 +1098,11 @@ async function callAoai(
   // retry once with the default sampling (no temperature). Works by default
   // across both classic chat models and the newer reasoning models.
   const send = async (withTemperature: boolean) =>
-    fetch(url, {
+    fetchWithTimeout(url, {
       method: 'POST',
       headers: { authorization: `Bearer ${token}`, 'content-type': 'application/json' },
       body: JSON.stringify(withTemperature ? { ...base, temperature: 0.2 } : base),
-    });
+    }, LLM_FETCH_TIMEOUT_MS);
 
   let res = await send(true);
   if (res.status === 400) {
@@ -1133,13 +1134,13 @@ async function aoaiCompleteText(
   const url = `${target.endpoint}/openai/deployments/${encodeURIComponent(target.deployment)}/chat/completions?api-version=${target.apiVersion}`;
   const token = await aoaiToken();
   const send = (withTemperature: boolean) =>
-    fetch(url, {
+    fetchWithTimeout(url, {
       method: 'POST',
       headers: { authorization: `Bearer ${token}`, 'content-type': 'application/json' },
       body: JSON.stringify(
         withTemperature ? { messages, temperature: 0.2, max_tokens: 2048 } : { messages, max_tokens: 2048 },
       ),
-    });
+    }, LLM_FETCH_TIMEOUT_MS);
   let res = await send(true);
   if (res.status === 400) {
     const t = await res.text();
@@ -1178,7 +1179,7 @@ export async function aoaiCompleteJson<T = Record<string, unknown>>(
   const url = `${target.endpoint}/openai/deployments/${encodeURIComponent(target.deployment)}/chat/completions?api-version=${target.apiVersion}`;
   const token = await aoaiToken();
   const send = (withTemperature: boolean) =>
-    fetch(url, {
+    fetchWithTimeout(url, {
       method: 'POST',
       headers: { authorization: `Bearer ${token}`, 'content-type': 'application/json' },
       body: JSON.stringify(
@@ -1186,7 +1187,7 @@ export async function aoaiCompleteJson<T = Record<string, unknown>>(
           ? { messages, temperature: 0.1, max_tokens: maxTokens, response_format: { type: 'json_object' } }
           : { messages, max_tokens: maxTokens, response_format: { type: 'json_object' } },
       ),
-    });
+    }, LLM_FETCH_TIMEOUT_MS);
   let res = await send(true);
   if (res.status === 400) {
     const t = await res.text();
@@ -1398,7 +1399,7 @@ export async function emitCopilotUsage(
     if (extra?.sensitivityLabel) properties.sensitivity_label = extra.sensitivityLabel;
     if (extra?.sensitivityLabels?.length) properties.sensitivity_labels = extra.sensitivityLabels.join(',');
     if (extra?.dataSources?.length) properties.data_sources = extra.dataSources.join(',');
-    await fetch(`${ai.endpoint}/v2/track`, {
+    await fetchWithTimeout(`${ai.endpoint}/v2/track`, {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify({
@@ -1452,11 +1453,11 @@ async function* orchestrateViaMaf(
 
   let res: Response;
   try {
-    res = await fetch(url, {
+    res = await fetchWithTimeout(url, {
       method: 'POST',
       headers: { 'content-type': 'application/json', 'x-user-oid': userOid },
       body: JSON.stringify({ prompt, sessionId, maxIterations: opts.maxIterations }),
-    });
+    }, LLM_FETCH_TIMEOUT_MS);
   } catch (e: any) {
     const step: OrchestratorStep = {
       kind: 'error',

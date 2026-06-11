@@ -1,5 +1,6 @@
 'use client';
 
+import { clientFetch } from '@/lib/client-fetch';
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import {
   Spinner, Badge, Caption1, Body1, Input, Textarea, Button,
@@ -45,7 +46,7 @@ export default function SensitivityLabelsPage() {
     setLoading(true);
     setError(null);
     try {
-      const r = await fetch('/api/admin/sensitivity-labels');
+      const r = await clientFetch('/api/admin/sensitivity-labels');
       const j = await r.json();
       if (!j.ok) { setError(j.error || 'failed'); return; }
       setLabels(j.labels || []);
@@ -60,7 +61,7 @@ export default function SensitivityLabelsPage() {
     setCreating(true);
     setActionErr(null);
     try {
-      const r = await fetch('/api/admin/sensitivity-labels', {
+      const r = await clientFetch('/api/admin/sensitivity-labels', {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
         body: JSON.stringify({ name: newName.trim(), color: newColor, protectionNote: newProtectionNote.trim() || undefined }),
@@ -80,7 +81,7 @@ export default function SensitivityLabelsPage() {
     if (!confirm('Delete this sensitivity label?')) return;
     setActionErr(null);
     try {
-      const r = await fetch(`/api/admin/sensitivity-labels?id=${encodeURIComponent(id)}`, { method: 'DELETE' });
+      const r = await clientFetch(`/api/admin/sensitivity-labels?id=${encodeURIComponent(id)}`, { method: 'DELETE' });
       const j = await r.json();
       if (!j.ok) { setActionErr(j.error || `HTTP ${r.status}`); return; }
       setLabels(j.labels || []);

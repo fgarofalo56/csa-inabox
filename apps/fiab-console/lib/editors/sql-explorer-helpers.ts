@@ -11,6 +11,7 @@
  */
 
 import type { ScriptObjectType, ScriptMode } from '@/lib/azure/sql-object-scripting';
+import { clientFetch } from '@/lib/client-fetch';
 
 function bracket(id: string): string {
   return `[${id.replace(/]/g, '')}]`;
@@ -19,7 +20,7 @@ function bracket(id: string): string {
 /** Run a real SELECT COUNT(*) for the object via the item's /query route. */
 export async function sqlRowCount(itemType: string, id: string, schema: string, name: string): Promise<number | null> {
   try {
-    const r = await fetch(`/api/items/${itemType}/${encodeURIComponent(id)}/query`, {
+    const r = await clientFetch(`/api/items/${itemType}/${encodeURIComponent(id)}/query`, {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify({ sql: `SELECT COUNT_BIG(*) AS c FROM ${bracket(schema)}.${bracket(name)};` }),
@@ -49,7 +50,7 @@ export async function loadSqlScript(
     const params = new URLSearchParams({
       schema: opts.schema, name: opts.name, type: opts.type, mode: opts.mode,
     });
-    const r = await fetch(`/api/items/${itemType}/${encodeURIComponent(id)}/script-out?${params.toString()}`);
+    const r = await clientFetch(`/api/items/${itemType}/${encodeURIComponent(id)}/script-out?${params.toString()}`);
     const j = await r.json();
     if (j?.ok && typeof j.script === 'string') return { ok: true, script: j.script };
     return { ok: false, error: j?.error || `HTTP ${r.status}` };

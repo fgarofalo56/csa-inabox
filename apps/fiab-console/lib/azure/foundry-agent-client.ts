@@ -28,6 +28,7 @@
  * route can return a 501 with an actionable hint instead of pretending to
  * deploy. (See .claude/rules/no-vaporware.md.)
  */
+import { fetchWithTimeout } from '@/lib/azure/fetch-with-timeout';
 import {
   DefaultAzureCredential,
   ManagedIdentityCredential,
@@ -121,7 +122,7 @@ async function agentFetch(
   if (!token?.token) throw new Error('Failed to acquire token for Foundry Agent Service');
   const sep = path.includes('?') ? '&' : '?';
   const url = `${endpoint}${path}${sep}api-version=${apiVersion}`;
-  return fetch(url, {
+  return fetchWithTimeout(url, {
     ...init,
     headers: {
       ...(init.headers || {}),

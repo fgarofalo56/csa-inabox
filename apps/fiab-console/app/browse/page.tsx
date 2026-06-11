@@ -22,6 +22,7 @@
  * per-column filters from LoomDataTable.
  */
 
+import { clientFetch } from '@/lib/client-fetch';
 import { PageShell } from '@/lib/components/page-shell';
 import { RecentItems } from '@/lib/components/recent-items';
 import { useEffect, useMemo, useState } from 'react';
@@ -120,13 +121,13 @@ export default function BrowsePage() {
   }, [view]);
 
   useEffect(() => {
-    fetch('/api/user-prefs?key=pinnedItems')
+    clientFetch('/api/user-prefs?key=pinnedItems')
       .then((r) => r.json())
       .then((d) => {
         setPins(Array.isArray(d?.value) ? d.value : []);
       })
       .catch(() => setPins([]));
-    fetch('/api/workspaces')
+    clientFetch('/api/workspaces')
       .then((r) => r.json())
       .then((d) => {
         const list = Array.isArray(d) ? d : d?.workspaces || [];

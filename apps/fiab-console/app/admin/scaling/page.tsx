@@ -1,5 +1,6 @@
 'use client';
 
+import { clientFetch } from '@/lib/client-fetch';
 import { useEffect, useState } from 'react';
 import {
   Body1, Title3, Caption1, MessageBar, MessageBarBody, MessageBarTitle,
@@ -41,7 +42,7 @@ const useStyles = makeStyles({
 interface SkuState { value: string; }
 
 async function jsonPost(url: string, body: unknown): Promise<any> {
-  const r = await fetch(url, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) });
+  const r = await clientFetch(url, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) });
   const j = await r.json().catch(() => ({}));
   if (!r.ok || j?.ok === false) throw new Error(j?.error || `${r.status}`);
   return j;
@@ -52,7 +53,7 @@ async function jsonGet(url: string): Promise<any> {
   const ctrl = new AbortController();
   const timer = setTimeout(() => ctrl.abort(), 12000);
   try {
-    const r = await fetch(url, { signal: ctrl.signal, cache: 'no-store' });
+    const r = await clientFetch(url, { signal: ctrl.signal, cache: 'no-store' });
     return await r.json().catch(() => ({}));
   } catch (e: any) {
     return { ok: false, error: e?.name === 'AbortError' ? `Timed out loading ${url}` : (e?.message || String(e)) };

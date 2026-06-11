@@ -26,6 +26,7 @@
  * full UI still renders.
  */
 
+import { clientFetch } from '@/lib/client-fetch';
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import {
   Tab, TabList, Spinner, Badge, Button, Dropdown, Option, Textarea,
@@ -51,6 +52,19 @@ import { KqlChart, type KqlChartType } from '@/lib/components/monitor/kql-chart'
 import { Section } from '@/lib/components/ui/section';
 import { LoomDataTable, type LoomColumn } from '@/lib/components/ui/loom-data-table';
 import { CopilotUsageInline } from '@/lib/components/admin/copilot-usage';
+
+/**
+ * Longer client ceiling for user-triggered Monitor queries / mutations — KQL log
+ * & metric queries, ARM diagnostics/alert CRUD and Defender remediation — that
+ * can legitimately run past the 6s page-load budget `clientFetch` defaults to.
+ * Initial-load reads (inventory, health, cost, activity) keep the fast 6s fail
+ * so the page never spins forever; only these explicit actions get the longer,
+ * still-bounded budget so a real query isn't aborted at 6s.
+ */
+const MONITOR_ACTION_TIMEOUT_MS = 60_000;
+const actionFetch = (input: string, init?: RequestInit) =>
+  clientFetch(input, init, MONITOR_ACTION_TIMEOUT_MS);
+
 
 // ---- types mirrored from monitor-client ------------------------------------
 
@@ -237,7 +251,7 @@ function OverviewTab({ onUnauth }: { onUnauth: () => void }) {
     setResources(null); setHealth(null); setGate(null); setErr(null);
 
     // 1) Inventory — fast, first paint.
-    fetch('/api/monitor/inventory').then(async (r) => {
+    clientFetch('/api/monitor/inventory').then(async (r) => {
       if (!alive) return;
       if (r.status === 401 || r.status === 403) { onUnauth(); setResources([]); setHealth({}); return; }
       const j = await r.json();
@@ -247,7 +261,7 @@ function OverviewTab({ onUnauth }: { onUnauth: () => void }) {
     }).catch((e) => { if (alive) { setErr(String(e)); setResources([]); setHealth({}); } });
 
     // 2) Resource Health — slow, parallel, best-effort. Never blocks the grid.
-    fetch('/api/monitor/health').then(async (r) => {
+    clientFetch('/api/monitor/health').then(async (r) => {
       if (!alive) return;
       if (r.status === 401 || r.status === 403) { setHealth({}); return; }
       const j = await r.json();
@@ -472,7 +486,7 @@ function MetricsTab({ onUnauth }: { onUnauth: () => void }) {
   // Resources that have a metric catalog entry are pickable.
   useEffect(() => {
     let alive = true;
-    fetch('/api/monitor/inventory').then(async (r) => {
+    clientFetch('/api/monitor/inventory').then(async (r) => {
       if (!alive) return;
       if (r.status === 401 || r.status === 403) { onUnauth(); setResources([]); return; }
       const j = await r.json();
@@ -491,7 +505,7 @@ function MetricsTab({ onUnauth }: { onUnauth: () => void }) {
     if (!selectedRes || catalog.length === 0) return;
     setLoadingMetrics(true); setErr(null); setResults(null);
     try {
-      const r = await fetch('/api/monitor/metrics', {
+      const r = await actionFetch('/api/monitor/metrics', {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
         body: JSON.stringify({
@@ -591,7 +605,7 @@ function LogsTab({ onUnauth }: { onUnauth: () => void }) {
 
   useEffect(() => {
     let alive = true;
-    fetch('/api/monitor/logs').then(async (r) => {
+    clientFetch('/api/monitor/logs').then(async (r) => {
       if (!alive) return;
       if (r.status === 401 || r.status === 403) { onUnauth(); return; }
       const j = await r.json();
@@ -620,7 +634,7 @@ function LogsTab({ onUnauth }: { onUnauth: () => void }) {
   const run = useCallback(async (overrideChart?: KqlChartType | 'table') => {
     setRunning(true); setErr(null); setGate(null); setResult(null);
     try {
-      const r = await fetch('/api/monitor/logs', {
+      const r = await actionFetch('/api/monitor/logs', {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
         body: JSON.stringify({ query, timespan: span }),
@@ -764,7 +778,7 @@ function DiagnosticsTab({ onUnauth }: { onUnauth: () => void }) {
   const load = useCallback(async () => {
     setErr(null); setGate(null);
     try {
-      const r = await fetch('/api/monitor/diagnostics');
+      const r = await clientFetch('/api/monitor/diagnostics');
       if (r.status === 401 || r.status === 403) { onUnauth(); return; }
       const j = await r.json();
       if (j.gate) { setGate(j.gate); setItems([]); return; }
@@ -778,7 +792,7 @@ function DiagnosticsTab({ onUnauth }: { onUnauth: () => void }) {
   const enable = useCallback(async (body: object, key: string) => {
     setBusy(key); setMsg(null); setErr(null);
     try {
-      const r = await fetch('/api/monitor/diagnostics', {
+      const r = await actionFetch('/api/monitor/diagnostics', {
         method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body),
       });
       const j = await r.json();
@@ -884,7 +898,7 @@ function ActivityTab({ onUnauth }: { onUnauth: () => void }) {
   useEffect(() => {
     let alive = true;
     setEvents(null); setGate(null); setErr(null);
-    fetch(`/api/monitor/activity?days=${days}`).then(async (r) => {
+    clientFetch(`/api/monitor/activity?days=${days}`).then(async (r) => {
       if (!alive) return;
       if (r.status === 401 || r.status === 403) { onUnauth(); setEvents([]); return; }
       const j = await r.json();
@@ -1007,7 +1021,7 @@ function MaintenanceTab({ onUnauth }: { onUnauth: () => void }) {
   useEffect(() => {
     let alive = true;
     setJobs(null); setErr(null);
-    fetch('/api/lakehouse/maintenance').then(async (r) => {
+    clientFetch('/api/lakehouse/maintenance').then(async (r) => {
       if (!alive) return;
       if (r.status === 401 || r.status === 403) { onUnauth(); setJobs([]); return; }
       const j = await r.json();
@@ -1103,7 +1117,7 @@ function AlertsTab({ onUnauth }: { onUnauth: () => void }) {
   useEffect(() => {
     let alive = true;
     setRules(null); setGate(null); setErr(null);
-    fetch('/api/monitor/alerts').then(async (r) => {
+    clientFetch('/api/monitor/alerts').then(async (r) => {
       if (!alive) return;
       if (r.status === 401 || r.status === 403) { onUnauth(); setRules([]); return; }
       const j = await r.json();
@@ -1118,7 +1132,7 @@ function AlertsTab({ onUnauth }: { onUnauth: () => void }) {
   useEffect(() => {
     let alive = true;
     setSqRules(null); setSqGate(null); setSqErr(null);
-    fetch('/api/monitor/alerts', {
+    actionFetch('/api/monitor/alerts', {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify({ _action: 'list-scheduled' }),
@@ -1171,7 +1185,7 @@ function AlertsTab({ onUnauth }: { onUnauth: () => void }) {
   const toggleEnabled = useCallback(async (r: ScheduledQueryRule) => {
     setBusyName(r.name);
     try {
-      const resp = await fetch('/api/monitor/alerts', {
+      const resp = await actionFetch('/api/monitor/alerts', {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
         body: JSON.stringify({ _action: 'patch', name: r.name, enabled: !r.enabled }),
@@ -1189,7 +1203,7 @@ function AlertsTab({ onUnauth }: { onUnauth: () => void }) {
   const doDelete = useCallback(async (r: ScheduledQueryRule) => {
     setBusyName(r.name);
     try {
-      const resp = await fetch('/api/monitor/alerts', {
+      const resp = await actionFetch('/api/monitor/alerts', {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
         body: JSON.stringify({ _action: 'delete', name: r.name }),
@@ -1397,7 +1411,7 @@ function CostTab({ onUnauth }: { onUnauth: () => void }) {
   useEffect(() => {
     let alive = true;
     setData(null); setGate(null); setErr(null);
-    fetch(`/api/monitor/cost?timeframe=${encodeURIComponent(timeframe)}`).then(async (r) => {
+    clientFetch(`/api/monitor/cost?timeframe=${encodeURIComponent(timeframe)}`).then(async (r) => {
       if (!alive) return;
       if (r.status === 401 || r.status === 403) { onUnauth(); setData(null); return; }
       // Read text first: a gateway 502/504 returns an HTML error page, not JSON,
@@ -1611,7 +1625,7 @@ function SecurityTab({ onUnauth }: { onUnauth: () => void }) {
   const runLoomFix = useCallback(async (rec: DefenderRec) => {
     setRemBusy(true); setRemResult(null);
     try {
-      const r = await fetch('/api/monitor/defender/remediate', {
+      const r = await actionFetch('/api/monitor/defender/remediate', {
         method: 'POST', headers: { 'content-type': 'application/json' },
         body: JSON.stringify({ policyDefinitionId: rec.policyDefinitionId, resourceId: rec.resourceId, name: rec.name }),
       });
@@ -1626,7 +1640,7 @@ function SecurityTab({ onUnauth }: { onUnauth: () => void }) {
   useEffect(() => {
     let alive = true;
     setData(null); setGate(null); setErr(null);
-    fetch('/api/monitor/defender').then(async (r) => {
+    clientFetch('/api/monitor/defender').then(async (r) => {
       if (!alive) return;
       if (r.status === 401 || r.status === 403) { onUnauth(); setData(null); return; }
       const j = await r.json();

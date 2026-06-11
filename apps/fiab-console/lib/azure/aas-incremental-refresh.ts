@@ -45,6 +45,7 @@
  *   Incremental refresh + real-time data via XMLA:
  *                  https://learn.microsoft.com/power-bi/connect-data/incremental-refresh-xmla
  */
+import { fetchWithTimeout } from '@/lib/azure/fetch-with-timeout';
 import {
   ChainedTokenCredential,
   DefaultAzureCredential,
@@ -151,7 +152,7 @@ function soapDiscover(
 async function xmlaPost(soap: string): Promise<string> {
   const tok = await token();
   const url = `${xmlaBase()}/xmla`;
-  const res = await fetch(url, {
+  const res = await fetchWithTimeout(url, {
     method: 'POST',
     headers: {
       authorization: `Bearer ${tok}`,
@@ -324,7 +325,7 @@ export async function asyncRefresh(body: {
 }): Promise<{ requestId: string; location: string }> {
   const tok = await token();
   const url = `${xmlaBase()}/refreshes`;
-  const res = await fetch(url, {
+  const res = await fetchWithTimeout(url, {
     method: 'POST',
     headers: { authorization: `Bearer ${tok}`, 'content-type': 'application/json' },
     body: JSON.stringify({ type: 'full', commitMode: 'transactional', ...body }),
@@ -351,7 +352,7 @@ export async function listAasRefreshHistory(): Promise<
 > {
   const tok = await token();
   const url = `${xmlaBase()}/refreshes`;
-  const res = await fetch(url, {
+  const res = await fetchWithTimeout(url, {
     headers: { authorization: `Bearer ${tok}`, accept: 'application/json' },
     cache: 'no-store',
   });

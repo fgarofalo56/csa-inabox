@@ -24,6 +24,7 @@
  * Learn: https://learn.microsoft.com/rest/api/virtualnetwork/private-endpoints/list-by-subscription
  *        https://learn.microsoft.com/azure/dns/private-dns-overview
  */
+import { fetchWithTimeout } from '@/lib/azure/fetch-with-timeout';
 import {
   ChainedTokenCredential,
   DefaultAzureCredential,
@@ -98,7 +99,7 @@ async function armToken(): Promise<string> {
 
 async function armGet<T = any>(path: string): Promise<T> {
   const token = await armToken();
-  const res = await fetch(`${armBase()}${path}`, {
+  const res = await fetchWithTimeout(`${armBase()}${path}`, {
     headers: { authorization: `Bearer ${token}`, accept: 'application/json' },
     cache: 'no-store',
   });

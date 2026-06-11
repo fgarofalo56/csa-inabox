@@ -44,6 +44,7 @@
  *   - Kusto database principal roles (Viewer = read-only):
  *     https://learn.microsoft.com/azure/data-explorer/kusto/access-control/role-based-access-control
  */
+import { fetchWithTimeout } from '@/lib/azure/fetch-with-timeout';
 import {
   ChainedTokenCredential,
   DefaultAzureCredential,
@@ -285,7 +286,7 @@ const ARM = armBase();
 
 async function armPut(path: string, body: unknown): Promise<{ ok: boolean; status: number; json: any }> {
   const t = await armCredential.getToken(`${ARM}/.default`);
-  const res = await fetch(path.startsWith('http') ? path : `${ARM}${path}`, {
+  const res = await fetchWithTimeout(path.startsWith('http') ? path : `${ARM}${path}`, {
     method: 'PUT',
     headers: { authorization: `Bearer ${t?.token}`, 'content-type': 'application/json', accept: 'application/json' },
     body: JSON.stringify(body),

@@ -36,6 +36,7 @@
  * via `automlConfigGate()` when env is unset.
  */
 
+import { fetchWithTimeout } from '@/lib/azure/fetch-with-timeout';
 import {
   DefaultAzureCredential,
   ManagedIdentityCredential,
@@ -103,7 +104,7 @@ async function automlFetch(
   const wsPath = amlWorkspaceArmPath(target ?? resolveAmlTarget());
   const extra = query ? '&' + new URLSearchParams(query).toString() : '';
   const url = `${armBase()}${wsPath}${path}?api-version=${ML_API}${extra}`;
-  return fetch(url, {
+  return fetchWithTimeout(url, {
     ...rest,
     headers: {
       ...(rest.headers || {}),
@@ -374,7 +375,7 @@ export async function listAutoMlJobs(opts: { maxResults?: number } = {}): Promis
     }
     if (!j.nextLink || out.length >= cap) break;
     const token = await credential.getToken(armScope());
-    res = await fetch(j.nextLink, { headers: { authorization: `Bearer ${token!.token}` } });
+    res = await fetchWithTimeout(j.nextLink, { headers: { authorization: `Bearer ${token!.token}` } });
     j = await readJson<{ value?: any[]; nextLink?: string }>(res, 'listAutoMlJobs');
   }
   out.sort((a, b) => String(b.createdAt || '').localeCompare(String(a.createdAt || '')));

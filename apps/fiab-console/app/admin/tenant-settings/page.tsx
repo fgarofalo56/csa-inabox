@@ -8,6 +8,7 @@
  * Replaces the AdminGate stub. Save persists; reload confirms persistence.
  */
 
+import { clientFetch } from '@/lib/client-fetch';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   Spinner, Button, Switch, Caption1, Subtitle2, Body1, Input, Badge,
@@ -106,7 +107,7 @@ export default function TenantSettingsPage() {
   const load = useCallback(async () => {
     setLoadError(null);
     try {
-      const r = await fetch('/api/admin/tenant-settings');
+      const r = await clientFetch('/api/admin/tenant-settings');
       if (r.status === 401 || r.status === 403) { setLoadError('Sign-in required'); return; }
       const j = await r.json();
       if (!j.ok) { setLoadError(j.error || `HTTP ${r.status}`); return; }
@@ -124,7 +125,7 @@ export default function TenantSettingsPage() {
       const uniqueIds = [...new Set(allIds.filter(Boolean))];
       if (uniqueIds.length > 0) {
         try {
-          const gr = await fetch(`/api/admin/tenant-settings/groups?ids=${encodeURIComponent(uniqueIds.join(','))}`);
+          const gr = await clientFetch(`/api/admin/tenant-settings/groups?ids=${encodeURIComponent(uniqueIds.join(','))}`);
           const gj = await gr.json();
           if (gj.ok && Array.isArray(gj.groups)) {
             const map: Record<string, string> = {};
@@ -144,7 +145,7 @@ export default function TenantSettingsPage() {
   useEffect(() => {
     (async () => {
       try {
-        const r = await fetch('/api/admin/data-products-backend');
+        const r = await clientFetch('/api/admin/data-products-backend');
         if (!r.ok) return;
         const j = await r.json();
         if (j.ok) setDpBackend({ backend: j.backend, label: j.label, options: j.options || [], details: j.details });
@@ -180,7 +181,7 @@ export default function TenantSettingsPage() {
     if (!settings || saving || !dirtyRef.current) return;
     setSaving(true); setSaveError(null); setStatusMsg('Saving…');
     try {
-      const r = await fetch('/api/admin/tenant-settings', {
+      const r = await clientFetch('/api/admin/tenant-settings', {
         method: 'PUT', headers: { 'content-type': 'application/json' },
         body: JSON.stringify({ settings, scopeConfig, numericParams }),
       });

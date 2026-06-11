@@ -108,6 +108,11 @@ resource caeApps 'Microsoft.App/containerApps@2025-02-02-preview' = [for app in 
               // hung backend can't make a BFF route (and the page) spin forever.
               // Matches the in-code default; raise it for slow sovereign regions.
               { name: 'LOOM_SERVER_FETCH_TIMEOUT_MS', value: '30000' }
+              // Longer ceiling for LLM inference round-trips (AOAI chat
+              // completions, multi-iteration agent loops) so a normal long
+              // generation isn't aborted at the 30s metadata budget — still
+              // bounded so a wedged inference endpoint can't pin a worker.
+              { name: 'LOOM_LLM_FETCH_TIMEOUT_MS', value: '120000' }
             ],
             contains(app, 'env') ? app.env : []
           )

@@ -11,6 +11,7 @@
  * — single source of truth, no extra env var.
  */
 
+import { fetchWithTimeout } from '@/lib/azure/fetch-with-timeout';
 import {
   ChainedTokenCredential,
   DefaultAzureCredential,
@@ -867,7 +868,7 @@ function resolveStorageScope(container: string): string {
 
 async function armCall<T = any>(url: string, init: RequestInit = {}): Promise<T> {
   const token = await armToken();
-  const res = await fetch(url, {
+  const res = await fetchWithTimeout(url, {
     ...init,
     headers: {
       ...(init.headers || {}),

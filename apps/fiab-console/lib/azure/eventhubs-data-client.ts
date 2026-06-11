@@ -48,6 +48,7 @@
  * No mocks. Send hits the real runtime endpoint. Peek tells the truth.
  */
 
+import { fetchWithTimeout } from '@/lib/azure/fetch-with-timeout';
 import {
   DefaultAzureCredential,
   ManagedIdentityCredential,
@@ -228,7 +229,7 @@ export async function sendEvents(
     payload = bodyToString(single.body);
   }
 
-  const res = await fetch(url, { method: 'POST', headers, body: payload });
+  const res = await fetchWithTimeout(url, { method: 'POST', headers, body: payload });
   if (!res.ok) {
     // Surface the real service error (401/403 when the Data role is missing).
     const text = await res.text().catch(() => '');

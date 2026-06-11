@@ -22,6 +22,7 @@
  *   https://learn.microsoft.com/rest/api/eventgrid/controlplane/system-topics
  */
 
+import { fetchWithTimeout } from '@/lib/azure/fetch-with-timeout';
 import { ChainedTokenCredential, DefaultAzureCredential, ManagedIdentityCredential } from '@azure/identity';
 import { armBase, armScope } from './cloud-endpoints';
 import { parseDeltaSource, toAbfss, toHttps, type DeltaSourceRef } from './delta-source-uri';
@@ -58,7 +59,7 @@ async function armToken(): Promise<string> {
 
 async function arm<T = any>(url: string, init: RequestInit = {}): Promise<T> {
   const token = await armToken();
-  const res = await fetch(url, {
+  const res = await fetchWithTimeout(url, {
     ...init,
     headers: {
       ...(init.headers || {}),

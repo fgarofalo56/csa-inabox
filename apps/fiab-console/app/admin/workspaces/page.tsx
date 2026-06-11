@@ -6,6 +6,7 @@
  * with item counts + last activity + capacity assignment.
  */
 
+import { clientFetch } from '@/lib/client-fetch';
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import {
   Spinner, Badge, Caption1, Body1, Button,
@@ -53,7 +54,7 @@ export default function AdminWorkspacesPage() {
   const load = useCallback(async () => {
     setLoading(true); setError(null);
     try {
-      const r = await fetch('/api/admin/workspaces');
+      const r = await clientFetch('/api/admin/workspaces');
       const j = await r.json();
       if (!j.ok) { setError(j.error || 'failed'); return; }
       setWorkspaces(j.workspaces || []);

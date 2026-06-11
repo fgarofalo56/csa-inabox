@@ -30,6 +30,7 @@
  *   - Subscriptions - List:
  *     https://learn.microsoft.com/rest/api/resources/subscriptions/list
  */
+import { fetchWithTimeout } from '@/lib/azure/fetch-with-timeout';
 import {
   ChainedTokenCredential,
   DefaultAzureCredential,
@@ -85,7 +86,7 @@ async function armToken(): Promise<string> {
 async function armGet<T = any>(path: string): Promise<T> {
   const token = await armToken();
   const url = `${armBase()}${path}`;
-  const res = await fetch(url, {
+  const res = await fetchWithTimeout(url, {
     headers: {
       authorization: `Bearer ${token}`,
       accept: 'application/json',

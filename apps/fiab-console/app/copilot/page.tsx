@@ -17,6 +17,7 @@
  *   • Honest infra-gate MessageBar when AOAI isn't reachable (real remediation).
  */
 
+import { clientFetch } from '@/lib/client-fetch';
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import {
   Title1, Title3, Body1, Caption1, Badge, Button, Spinner, Text,
@@ -207,7 +208,7 @@ export default function CopilotPage() {
   const loadStatus = useCallback(async () => {
     setStatusLoading(true);
     try {
-      const r = await fetch('/api/copilot/status');
+      const r = await clientFetch('/api/copilot/status');
       const j = await r.json();
       setStatus(j);
     } catch {
@@ -220,7 +221,7 @@ export default function CopilotPage() {
   const loadSessions = useCallback(async () => {
     setSessionsLoading(true);
     try {
-      const r = await fetch('/api/copilot/sessions');
+      const r = await clientFetch('/api/copilot/sessions');
       const j = await r.json();
       setSessions(j.ok ? (j.sessions ?? []) : []);
     } catch {

@@ -26,6 +26,7 @@
  * No mock arrays, no dead controls.
  */
 
+import { clientFetch } from '@/lib/client-fetch';
 import { useEffect, useMemo, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import {
@@ -209,7 +210,7 @@ async function copyOnelakeForm(
     itemGuid: a.itemGuid,
   });
   try {
-    const r = await fetch(`/api/onelake/paths?${qs.toString()}`);
+    const r = await clientFetch(`/api/onelake/paths?${qs.toString()}`);
     const j = await r.json();
     if (j?.ok && j.paths?.[form]) {
       await navigator.clipboard.writeText(j.paths[form] as string);
@@ -473,7 +474,7 @@ function TablesTab({ itemId }: { itemId: string }) {
     let cancelled = false;
     setTables(null);
     setError(null);
-    fetch(`/api/lakehouse/tables?id=${encodeURIComponent(itemId)}`)
+    clientFetch(`/api/lakehouse/tables?id=${encodeURIComponent(itemId)}`)
       .then((r) => (r.ok ? r.json() : Promise.reject(new Error(`HTTP ${r.status}`))))
       .then((d) => { if (!cancelled) setTables(Array.isArray(d) ? d : d?.tables ?? []); })
       .catch((e) => { if (!cancelled) setError(e?.message ?? 'Failed to load tables'); });
@@ -554,7 +555,7 @@ function ItemDetails({
     setDeleting(true);
     setDeleteError(null);
     try {
-      const res = await fetch(`/api/onelake/${encodeURIComponent(item.id)}`, {
+      const res = await clientFetch(`/api/onelake/${encodeURIComponent(item.id)}`, {
         method: 'DELETE',
         headers: { 'content-type': 'application/json' },
         body: JSON.stringify({ itemType: item.itemType }),
@@ -596,7 +597,7 @@ function ItemDetails({
     setLabelError(null);
     setLabelGate(null);
     try {
-      const r = await fetch(`/api/items/${encodeURIComponent(item.itemType)}/${encodeURIComponent(item.id)}/sensitivity`);
+      const r = await clientFetch(`/api/items/${encodeURIComponent(item.itemType)}/${encodeURIComponent(item.id)}/sensitivity`);
       const j = await r.json();
       if (!j?.ok) {
         if (j?.code === 'purview_not_configured') {
@@ -621,7 +622,7 @@ function ItemDetails({
     setLabelPhase('saving');
     setLabelError(null);
     try {
-      const r = await fetch(`/api/items/${encodeURIComponent(item.itemType)}/${encodeURIComponent(item.id)}/sensitivity`, {
+      const r = await clientFetch(`/api/items/${encodeURIComponent(item.itemType)}/${encodeURIComponent(item.id)}/sensitivity`, {
         method: 'PUT',
         headers: { 'content-type': 'application/json' },
         body: JSON.stringify(opt ? { labelId: opt.id, labelName: opt.displayName } : { labelId: '' }),
@@ -874,7 +875,7 @@ export default function OneLakeCatalogPage() {
   // ── load items + workspaces + identity ──
   useEffect(() => {
     const qs = `types=${encodeURIComponent(ONELAKE_TYPES.join(','))}`;
-    fetch(`/api/items/by-type?${qs}`)
+    clientFetch(`/api/items/by-type?${qs}`)
       .then((r) => {
         if (r.status === 401 || r.status === 403) { setUnauth(true); setItems([]); return null; }
         return r.json();
@@ -882,7 +883,7 @@ export default function OneLakeCatalogPage() {
       .then((d) => { if (d) setItems(Array.isArray(d?.items) ? d.items : []); })
       .catch(() => setItems([]));
 
-    fetch('/api/workspaces?count=true')
+    clientFetch('/api/workspaces?count=true')
       .then((r) => (r.ok ? r.json() : []))
       .then((d) => setWorkspaces(Array.isArray(d) ? d : []))
       .catch(() => setWorkspaces([]));
@@ -890,12 +891,12 @@ export default function OneLakeCatalogPage() {
     // Domains resolve workspace.domain ids → display names for the card badge.
     // Azure-native by default (Cosmos governance-domains); honest-degrades to
     // no domain badge if the backend is gated (e.g. IL5 fabric opt-in 501).
-    fetch('/api/governance/domains')
+    clientFetch('/api/governance/domains')
       .then((r) => (r.ok ? r.json() : { ok: false, domains: [] }))
       .then((d) => setDomains(Array.isArray(d?.domains) ? d.domains : []))
       .catch(() => setDomains([]));
 
-    fetch('/api/me')
+    clientFetch('/api/me')
       .then((r) => (r.ok ? r.json() : null))
       .then((d) => {
         // createdBy on items is upn || email || oid — match that precedence.

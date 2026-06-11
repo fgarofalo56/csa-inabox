@@ -28,6 +28,7 @@
  * .claude/rules/no-vaporware.md.
  */
 
+import { fetchWithTimeout } from '@/lib/azure/fetch-with-timeout';
 import {
   DefaultAzureCredential,
   ManagedIdentityCredential,
@@ -79,7 +80,7 @@ export async function getKeyVaultSecret(secretName: string): Promise<string> {
     throw Object.assign(new Error('Failed to acquire Key Vault AAD token'), { code: 'kv_token' });
   }
   const url = `${base}/secrets/${encodeURIComponent(secretName)}?api-version=${KV_API_VERSION}`;
-  const res = await fetch(url, { headers: { authorization: `Bearer ${token.token}` } });
+  const res = await fetchWithTimeout(url, { headers: { authorization: `Bearer ${token.token}` } });
   if (!res.ok) {
     const text = await res.text();
     throw Object.assign(
@@ -112,7 +113,7 @@ async function dbxToken(): Promise<string> {
 
 async function ucFetch(path: string, init?: RequestInit): Promise<Response> {
   const token = await dbxToken();
-  return fetch(`https://${dbxHost()}${path}`, {
+  return fetchWithTimeout(`https://${dbxHost()}${path}`, {
     ...init,
     headers: {
       ...(init?.headers || {}),

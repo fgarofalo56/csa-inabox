@@ -1,5 +1,6 @@
 'use client';
 
+import { clientFetch } from '@/lib/client-fetch';
 import { useEffect, useState } from 'react';
 import {
   Spinner, Badge, Caption1, Body1, Subtitle2, Button,
@@ -69,7 +70,7 @@ export default function SensitivityPage() {
   const load = async () => {
     setLoading(true); setError(null);
     try {
-      const r = await fetch('/api/governance/sensitivity');
+      const r = await clientFetch('/api/governance/sensitivity');
       const j = await r.json();
       if (!j.ok) { setError(j.error); return; }
       setData(j);

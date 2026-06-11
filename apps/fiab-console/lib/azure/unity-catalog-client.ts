@@ -28,6 +28,7 @@
  * No mocks. No `return []` placeholders. Every export hits api.azuredatabricks
  * or throws `UnityCatalogError` with status + body + endpoint.
  */
+import { fetchWithTimeout } from '@/lib/azure/fetch-with-timeout';
 import {
   ChainedTokenCredential,
   DefaultAzureCredential,
@@ -125,7 +126,7 @@ async function ucFetch<T = any>(
     const qs = new URLSearchParams(init.query).toString();
     if (qs) url += (url.includes('?') ? '&' : '?') + qs;
   }
-  const res = await fetch(url, {
+  const res = await fetchWithTimeout(url, {
     method: init?.method ?? 'GET',
     headers: {
       authorization: `Bearer ${token}`,

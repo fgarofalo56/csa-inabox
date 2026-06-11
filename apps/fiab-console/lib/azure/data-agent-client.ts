@@ -13,6 +13,7 @@
  * language and (b) emit the query it would run (SQL/KQL/DAX) per the attached
  * source. We surface both back to the editor's chat pane.
  */
+import { fetchWithTimeout, LLM_FETCH_TIMEOUT_MS } from '@/lib/azure/fetch-with-timeout';
 import {
   DefaultAzureCredential,
   ManagedIdentityCredential,
@@ -214,11 +215,11 @@ export async function chatGrounded(cfg: DataAgentConfig, history: ChatTurn[], qu
   // One AOAI round-trip with the reasoning-model temperature fallback.
   const runChat = async (messages: Array<{ role: string; content: string }>): Promise<{ content: string; usage: any }> => {
     const base: Record<string, unknown> = { messages, max_tokens: 1200 };
-    const send = async (withTemp: boolean) => fetch(url, {
+    const send = async (withTemp: boolean) => fetchWithTimeout(url, {
       method: 'POST',
       headers: { authorization: `Bearer ${token}`, 'content-type': 'application/json' },
       body: JSON.stringify(withTemp ? { ...base, temperature: 0.2 } : base),
-    });
+    }, LLM_FETCH_TIMEOUT_MS);
     let res = await send(true);
     if (res.status === 400) {
       const t = await res.text();

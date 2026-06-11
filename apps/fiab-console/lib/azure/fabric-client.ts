@@ -237,7 +237,7 @@ export async function updateCapacitySku(
   const tier = isPowerBI ? 'PBIE_Azure' : 'Fabric';
   const url = `${armBase()}${resourceId}?api-version=${apiVersion}`;
   const token = await getArmToken();
-  const res = await fetch(url, {
+  const res = await fetchWithTimeout(url, {
     method: 'PATCH',
     headers: {
       authorization: `Bearer ${token}`,
@@ -391,7 +391,7 @@ function operationUrl(locationOrId: string): string {
 export async function getOperationState(locationOrId: string): Promise<FabricOperationState> {
   const url = operationUrl(locationOrId);
   const token = await getToken();
-  const res = await fetch(url, {
+  const res = await fetchWithTimeout(url, {
     method: 'GET',
     headers: { authorization: `Bearer ${token}`, accept: 'application/json' },
     cache: 'no-store',
@@ -415,7 +415,7 @@ export async function getOperationState(locationOrId: string): Promise<FabricOpe
   if (state.status === 'Succeeded') {
     // Fetch the result payload (best-effort — some operations have no result body).
     try {
-      const rRes = await fetch(`${url.replace(/\/result$/, '')}/result`, {
+      const rRes = await fetchWithTimeout(`${url.replace(/\/result$/, '')}/result`, {
         method: 'GET',
         headers: { authorization: `Bearer ${token}`, accept: 'application/json' },
         cache: 'no-store',

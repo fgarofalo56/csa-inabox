@@ -1,5 +1,6 @@
 'use client';
 
+import { clientFetch } from '@/lib/client-fetch';
 import { useEffect, useState } from 'react';
 import {
   Spinner, Badge, Caption1, Body1, Subtitle2, Button, Input, Dropdown, Option, Field,
@@ -44,7 +45,7 @@ export default function ClassificationsPage() {
   const load = async () => {
     setLoading(true); setError(null);
     try {
-      const r = await fetch('/api/governance/classifications');
+      const r = await clientFetch('/api/governance/classifications');
       const j = await r.json();
       if (!j.ok) { setError(j.error); return; }
       setData(j.classifications);
@@ -53,7 +54,7 @@ export default function ClassificationsPage() {
   };
   const loadTypes = async () => {
     try {
-      const r = await fetch('/api/governance/classification-types');
+      const r = await clientFetch('/api/governance/classification-types');
       const j = await r.json();
       if (j.ok) setTypes(j.types); else setTaxErr(j.error);
     } catch (e: any) { setTaxErr(e?.message || String(e)); }
@@ -62,7 +63,7 @@ export default function ClassificationsPage() {
     if (!newName.trim()) return;
     setTaxBusy(true); setTaxErr(null);
     try {
-      const r = await fetch('/api/governance/classification-types', {
+      const r = await clientFetch('/api/governance/classification-types', {
         method: 'POST', headers: { 'content-type': 'application/json' },
         body: JSON.stringify({ name: newName.trim(), sensitivity: newSens, color: newColor, description: newDesc.trim() || undefined }),
       });
@@ -75,7 +76,7 @@ export default function ClassificationsPage() {
   const removeType = async (id: string) => {
     setTaxBusy(true); setTaxErr(null);
     try {
-      const r = await fetch(`/api/governance/classification-types?id=${encodeURIComponent(id)}`, { method: 'DELETE' });
+      const r = await clientFetch(`/api/governance/classification-types?id=${encodeURIComponent(id)}`, { method: 'DELETE' });
       const j = await r.json();
       if (j.ok) setTypes(j.types); else setTaxErr(j.error);
     } catch (e: any) { setTaxErr(e?.message || String(e)); }

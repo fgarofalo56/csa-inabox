@@ -15,6 +15,7 @@
  * No mocks. Every call hits the real API and surfaces errors verbatim.
  */
 
+import { fetchWithTimeout } from '@/lib/azure/fetch-with-timeout';
 import {
   DefaultAzureCredential,
   ManagedIdentityCredential,
@@ -75,7 +76,7 @@ export function devBase(): string {
 async function callArm(url: string, init?: RequestInit): Promise<Response> {
   const tok = await credential.getToken(ARM_SCOPE);
   if (!tok?.token) throw new Error('Failed to acquire ARM token');
-  return fetch(url, {
+  return fetchWithTimeout(url, {
     ...init,
     headers: {
       ...(init?.headers || {}),
@@ -88,7 +89,7 @@ async function callArm(url: string, init?: RequestInit): Promise<Response> {
 async function callDev(path: string, init?: RequestInit): Promise<Response> {
   const tok = await credential.getToken(DEV_SCOPE);
   if (!tok?.token) throw new Error('Failed to acquire Synapse dev token');
-  return fetch(`${devBase()}${path}`, {
+  return fetchWithTimeout(`${devBase()}${path}`, {
     ...init,
     headers: {
       ...(init?.headers || {}),
@@ -148,7 +149,7 @@ async function commitArtifact<T>(r: Response, label: string): Promise<T> {
   while (Date.now() < deadline) {
     await new Promise((res) => setTimeout(res, delay));
     delay = Math.min(delay * 1.5, 5000);
-    const pr = await fetch(loc, { headers: { authorization: `Bearer ${tok.token}` } });
+    const pr = await fetchWithTimeout(loc, { headers: { authorization: `Bearer ${tok.token}` } });
     if (pr.status === 202) continue; // still running
     const body = await pr.text();
     let parsed: any = {};

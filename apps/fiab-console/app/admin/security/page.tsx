@@ -16,6 +16,7 @@
  *   - Audit                 Filterable + CSV-exportable audit log.
  */
 
+import { clientFetch } from '@/lib/client-fetch';
 import { useCallback, useEffect, useState } from 'react';
 import {
   TabList, Tab, type SelectTabData, type SelectTabEvent,
@@ -144,10 +145,10 @@ function OverviewTab() {
     setLoading(true); setError(null);
     try {
       const [iR, sR, cR, aR] = await Promise.allSettled([
-        fetch('/api/governance/insights').then((r) => r.json()),
-        fetch('/api/governance/sensitivity').then((r) => r.json()),
-        fetch('/api/governance/classifications').then((r) => r.json()),
-        fetch('/api/admin/audit-logs?top=20').then((r) => r.json()),
+        clientFetch('/api/governance/insights').then((r) => r.json()),
+        clientFetch('/api/governance/sensitivity').then((r) => r.json()),
+        clientFetch('/api/governance/classifications').then((r) => r.json()),
+        clientFetch('/api/admin/audit-logs?top=20').then((r) => r.json()),
       ]);
       if (iR.status === 'fulfilled' && iR.value.ok) setInsights(iR.value);
       if (sR.status === 'fulfilled' && sR.value.ok) setSensitivity(sR.value);

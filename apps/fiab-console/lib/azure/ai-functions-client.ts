@@ -17,6 +17,7 @@
  * fallback copied from data-agent-client.ts), and returns the model text plus
  * the deployment + token usage.
  */
+import { fetchWithTimeout, LLM_FETCH_TIMEOUT_MS } from '@/lib/azure/fetch-with-timeout';
 import {
   DefaultAzureCredential,
   ManagedIdentityCredential,
@@ -146,11 +147,11 @@ export async function callAiFn(
 
   // Single round-trip with the reasoning-model temperature fallback copied
   // verbatim from data-agent-client.ts::runChat.
-  const send = async (withTemp: boolean) => fetch(url, {
+  const send = async (withTemp: boolean) => fetchWithTimeout(url, {
     method: 'POST',
     headers: { authorization: `Bearer ${token}`, 'content-type': 'application/json' },
     body: JSON.stringify(withTemp ? { ...base, temperature: 0 } : base),
-  });
+  }, LLM_FETCH_TIMEOUT_MS);
 
   let res = await send(true);
   if (res.status === 400) {

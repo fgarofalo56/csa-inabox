@@ -51,6 +51,7 @@
  *   https://learn.microsoft.com/azure/cosmos-db/how-to-connect-role-based-access-control
  */
 
+import { fetchWithTimeout } from '@/lib/azure/fetch-with-timeout';
 import {
   ChainedTokenCredential,
   DefaultAzureCredential,
@@ -169,7 +170,7 @@ async function dataFetch(path: string, init: RequestInit & { headers?: Record<st
     throw new CosmosDataError(401, null, 'Failed to acquire AAD token for the Cosmos DB data plane');
   }
   const url = `${cosmosDataEndpoint()}${path}`;
-  const res = await fetch(url, {
+  const res = await fetchWithTimeout(url, {
     ...init,
     headers: {
       authorization: buildAadAuthHeader(token.token),

@@ -56,6 +56,7 @@
  *   - 401/403 from the data plane → PurviewError(status) ("UAMI lacks Data Map role").
  *   - DNS/000 → surfaced by probePurview as 'not_configured' with the actionable hint.
  */
+import { fetchWithTimeout } from '@/lib/azure/fetch-with-timeout';
 import { randomUUID } from 'node:crypto';
 import {
   DefaultAzureCredential,
@@ -267,7 +268,7 @@ export async function probePurview(): Promise<PurviewProbeResult> {
       return { configured: true, account, reason: 'upstream_error', message: 'Failed to acquire a Purview data-plane token.' };
     }
     const url = `${purviewBase()}/datamap/api/atlas/v2/types/typedefs/headers?api-version=${DATAMAP_API_VERSION}`;
-    const res = await fetch(url, { headers: { authorization: `Bearer ${token.token}` } });
+    const res = await fetchWithTimeout(url, { headers: { authorization: `Bearer ${token.token}` } });
     if (res.status === 200) {
       return { configured: true, account, reason: 'live' };
     }
@@ -322,7 +323,7 @@ async function purviewFetch(
     : '';
   const url = `${purviewBase()}${path}${sep}api-version=${apiVersion}${query}`;
   const { query: _q, apiVersion: _v, ...rest } = init;
-  return fetch(url, {
+  return fetchWithTimeout(url, {
     ...rest,
     headers: {
       ...(rest.headers || {}),
@@ -1707,7 +1708,7 @@ export async function queryDomainAuditLog(opts: {
       ? { filters: [{ attributeName: 'domainId', attributeValue: opts.domainId }] }
       : {}),
   };
-  const res = await fetch(
+  const res = await fetchWithTimeout(
     `${purviewBase()}/datamap/api/audit/query?api-version=2023-10-01-preview`,
     {
       method: 'POST',
@@ -1797,7 +1798,7 @@ export async function queryAuditLog(opts: PurviewAuditQueryOpts): Promise<Purvie
   if (opts.continuationToken) payload.continuationToken = opts.continuationToken;
 
   const url = `${purviewBase()}/datamap/api/audit/query?api-version=${PURVIEW_AUDIT_API_VERSION}`;
-  const res = await fetch(url, {
+  const res = await fetchWithTimeout(url, {
     method: 'POST',
     headers: {
       authorization: `Bearer ${token.token}`,

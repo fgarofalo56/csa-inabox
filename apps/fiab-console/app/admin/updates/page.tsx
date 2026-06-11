@@ -1,5 +1,6 @@
 'use client';
 
+import { clientFetch } from '@/lib/client-fetch';
 import { useEffect, useMemo, useState } from 'react';
 import { AdminShell } from '@/lib/components/admin-shell';
 import {
@@ -177,7 +178,7 @@ export default function UpdatesPage() {
 
   async function load() {
     setLoading(true);
-    try { setInfo(await fetch('/api/version').then((r) => r.json())); }
+    try { setInfo(await clientFetch('/api/version').then((r) => r.json())); }
     finally { setLoading(false); }
   }
 
