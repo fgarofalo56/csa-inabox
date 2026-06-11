@@ -34,7 +34,7 @@ import {
   MessageBar, MessageBarBody, MessageBarTitle,
   Dialog, DialogTrigger, DialogSurface, DialogBody, DialogTitle, DialogContent, DialogActions,
   Dropdown, Option, Field, Switch, RadioGroup, Radio, Input, ProgressBar,
-  makeStyles, tokens,
+  makeStyles, mergeClasses, tokens,
 } from '@fluentui/react-components';
 import { useJobsStore } from '@/lib/state/jobs-store';
 
@@ -66,16 +66,56 @@ interface ProvisionReport {
 }
 
 const useStyles = makeStyles({
-  body: { display: 'flex', flexDirection: 'column', gap: '12px' },
-  hint: { fontSize: '13px', color: tokens.colorNeutralForeground2 },
+  body: { display: 'flex', flexDirection: 'column', rowGap: tokens.spacingVerticalM },
+  hint: { fontSize: tokens.fontSizeBase200, color: tokens.colorNeutralForeground2 },
   report: {
-    paddingTop: '12px', paddingRight: '12px', paddingBottom: '12px', paddingLeft: '12px',
-    borderRadius: '8px',
+    padding: tokens.spacingVerticalM,
+    borderRadius: tokens.borderRadiusMedium,
     border: `1px solid ${tokens.colorNeutralStroke2}`,
     backgroundColor: tokens.colorNeutralBackground2,
-    marginTop: '4px',
+    marginTop: tokens.spacingVerticalXXS,
     maxHeight: '320px',
     overflowY: 'auto',
+  },
+  // Async install progress block.
+  progress: { display: 'flex', flexDirection: 'column', rowGap: tokens.spacingVerticalXS },
+  progressHint: { color: tokens.colorNeutralForeground3 },
+  // Installed-items result rows.
+  resultRow: {
+    display: 'flex', alignItems: 'center', columnGap: tokens.spacingHorizontalXS,
+    flexWrap: 'wrap', fontSize: tokens.fontSizeBase200, marginTop: tokens.spacingVerticalXXS,
+  },
+  resultErr: { color: tokens.colorPaletteRedForeground1 },
+  // Provisioning-report per-step blocks.
+  step: {
+    fontSize: tokens.fontSizeBase200,
+    marginTop: tokens.spacingVerticalS,
+    paddingTop: tokens.spacingVerticalS,
+  },
+  stepDivider: { borderTop: `1px solid ${tokens.colorNeutralStroke3}` },
+  stepHead: {
+    display: 'flex', alignItems: 'center', columnGap: tokens.spacingHorizontalXS, flexWrap: 'wrap',
+  },
+  resourceId: { display: 'block', fontFamily: 'monospace', color: tokens.colorNeutralForeground3 },
+  gate: {
+    marginTop: tokens.spacingVerticalXS, padding: tokens.spacingVerticalS,
+    backgroundColor: tokens.colorNeutralBackground3, borderRadius: tokens.borderRadiusSmall,
+  },
+  gateTitle: { fontWeight: tokens.fontWeightSemibold },
+  gateBody: { marginTop: tokens.spacingVerticalXS },
+  gateLink: { display: 'inline-block', marginTop: tokens.spacingVerticalXS },
+  gateRetry: { marginTop: tokens.spacingVerticalS },
+  stepErr: {
+    marginTop: tokens.spacingVerticalXS, color: tokens.colorPaletteRedForeground1,
+    fontSize: tokens.fontSizeBase100,
+  },
+  stepLog: { marginTop: tokens.spacingVerticalXS },
+  stepLogSummary: {
+    cursor: 'pointer', fontSize: tokens.fontSizeBase100, color: tokens.colorNeutralForeground3,
+  },
+  stepLogList: {
+    marginTop: tokens.spacingVerticalXS, marginLeft: tokens.spacingHorizontalL,
+    fontSize: tokens.fontSizeBase100, color: tokens.colorNeutralForeground2,
   },
 });
 
@@ -313,7 +353,7 @@ export function InstallAppDialog({
               )}
 
               {installing && (
-                <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }} data-testid="install-progress">
+                <div className={s.progress} data-testid="install-progress">
                   <ProgressBar
                     value={(activeJob?.percentComplete ?? 0) / 100}
                     thickness="large"
@@ -322,7 +362,7 @@ export function InstallAppDialog({
                     {phaseLabel(activeJob?.installPhase)} — {activeJob?.percentComplete ?? 0}%
                     {activeJob?.totalItems ? ` · ${activeJob.totalItems} items` : ''}
                   </Caption1>
-                  <Caption1 style={{ color: tokens.colorNeutralForeground3 }}>
+                  <Caption1 className={s.progressHint}>
                     Long provisions (ADX, Synapse pools, pipelines) run in the
                     background — you can close this dialog and a toast will name
                     the app when it finishes.
@@ -335,18 +375,17 @@ export function InstallAppDialog({
                   <MessageBarTitle>Installed {installResult.length} items</MessageBarTitle>
                   <MessageBarBody>
                     {installResult.map((it, i) => (
-                      <div key={i} style={{ fontSize: 13, marginTop: 4 }}>
+                      <div key={i} className={s.resultRow}>
                         <Badge appearance={it.status === 'created' ? 'filled' : 'outline'}
                           color={it.status === 'created' ? 'success' : it.status === 'existed' ? 'informative' : 'danger'}>
                           {it.status}
                         </Badge>
-                        {' '}
                         {it.id ? (
                           <Link href={`/items/${it.itemType}/${it.id}`}>{it.displayName}</Link>
                         ) : (
                           <span>{it.displayName}</span>
                         )}
-                        {it.error && <span style={{ color: tokens.colorPaletteRedForeground1 }}> — {it.error}</span>}
+                        {it.error && <span className={s.resultErr}> — {it.error}</span>}
                       </div>
                     ))}
                   </MessageBarBody>
@@ -366,32 +405,33 @@ export function InstallAppDialog({
                     </MessageBarTitle>
                     <MessageBarBody>
                       {provisionReport.steps.map((st, i) => (
-                        <div key={i} style={{ fontSize: 13, marginTop: 8, paddingTop: 8, borderTop: i > 0 ? `1px solid ${tokens.colorNeutralStroke3}` : 'none' }}>
-                          <Badge appearance="filled" color={
-                            st.result.status === 'created' || st.result.status === 'exists' ? 'success'
-                            : st.result.status === 'remediation' ? 'warning'
-                            : st.result.status === 'skipped' ? 'subtle'
-                            : 'danger'
-                          }>
-                            {st.result.status}
-                          </Badge>
-                          {' '}
-                          <strong>{st.itemType}</strong> — {st.displayName}
+                        <div key={i} className={mergeClasses(s.step, i > 0 && s.stepDivider)}>
+                          <div className={s.stepHead}>
+                            <Badge appearance="filled" color={
+                              st.result.status === 'created' || st.result.status === 'exists' ? 'success'
+                              : st.result.status === 'remediation' ? 'warning'
+                              : st.result.status === 'skipped' ? 'subtle'
+                              : 'danger'
+                            }>
+                              {st.result.status}
+                            </Badge>
+                            <span><strong>{st.itemType}</strong> — {st.displayName}</span>
+                          </div>
                           {st.result.resourceId && (
-                            <Caption1 style={{ display: 'block', fontFamily: 'monospace', color: tokens.colorNeutralForeground3 }}>
+                            <Caption1 className={s.resourceId}>
                               Azure id: {st.result.resourceId}
                             </Caption1>
                           )}
                           {st.result.gate && (
-                            <div style={{ marginTop: 4, padding: 8, backgroundColor: tokens.colorNeutralBackground3, borderRadius: 4 }}>
-                              <div style={{ fontWeight: 600 }}>Remediation required: {st.result.gate.reason}</div>
-                              <div style={{ marginTop: 4 }}>{st.result.gate.remediation}</div>
+                            <div className={s.gate}>
+                              <div className={s.gateTitle}>Remediation required: {st.result.gate.reason}</div>
+                              <div className={s.gateBody}>{st.result.gate.remediation}</div>
                               {st.result.gate.link && (
-                                <a href={st.result.gate.link} target="_blank" rel="noreferrer" style={{ display: 'inline-block', marginTop: 4 }}>
+                                <a href={st.result.gate.link} target="_blank" rel="noreferrer" className={s.gateLink}>
                                   Open admin step →
                                 </a>
                               )}
-                              <div style={{ marginTop: 8 }}>
+                              <div className={s.gateRetry}>
                                 <Button size="small" onClick={() => retryStep(st)} disabled={retrying === st.cosmosItemId}>
                                   {retrying === st.cosmosItemId ? 'Retrying…' : 'Retry'}
                                 </Button>
@@ -399,16 +439,16 @@ export function InstallAppDialog({
                             </div>
                           )}
                           {st.result.error && !st.result.gate && (
-                            <div style={{ marginTop: 4, color: tokens.colorPaletteRedForeground1, fontSize: 12 }}>
+                            <div className={s.stepErr}>
                               {st.result.error}
                             </div>
                           )}
                           {(st.result.steps?.length || 0) > 0 && (
-                            <details style={{ marginTop: 4 }}>
-                              <summary style={{ cursor: 'pointer', fontSize: 12, color: tokens.colorNeutralForeground3 }}>
+                            <details className={s.stepLog}>
+                              <summary className={s.stepLogSummary}>
                                 Step log ({st.result.steps?.length})
                               </summary>
-                              <ul style={{ marginTop: 4, marginLeft: 16, fontSize: 12, color: tokens.colorNeutralForeground2 }}>
+                              <ul className={s.stepLogList}>
                                 {st.result.steps?.map((line, ix) => <li key={ix}>{line}</li>)}
                               </ul>
                             </details>
