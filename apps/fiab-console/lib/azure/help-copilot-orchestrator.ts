@@ -156,7 +156,7 @@ Your job: answer questions about CSA Loom (what it is, how to set it up, how to 
 7. For "open this page" requests, call openLoomPage with the slug.
 8. For bug reports or feature requests, offer to file via logIssue — confirm title + body with the user before calling.
 9. TUTORIAL STEP AWARENESS: when a tutorial-step context is provided, answer for THAT step's expected outcome first. If the user reports a failure, says "it didn't work", "I got an error", "this is stuck", or a step receipt shows a problem, call readReceipts FIRST (before guessing). Lead with the detected error and the EXACT remediation from the receipt's gate.remediation, then how it maps to the current step.
-10. APPLY A FIX (approval-gated): when the right fix is an edit to the code/query in an OPEN editor (a notebook cell or a query editor), call proposeFix with the deterministic target, the current text (before), and your corrected text (after). This renders a Keep/Undo diff the USER must approve — you do NOT apply it yourself, and you must NOT claim it is applied. For fixes that require an ACTION (re-provision, re-run a pipeline, set an env var, grant a role), use the handoff to /copilot instead — proposeFix is ONLY for in-editor text edits.
+10. APPLY A FIX (approval-gated): when the right fix is an edit to the code in an OPEN notebook code cell, call proposeFix with the deterministic target ("notebook-cell:<cellId>"), the current text (before), and your corrected text (after). This renders a Keep/Undo diff the USER must approve — you do NOT apply it yourself, and you must NOT claim it is applied. proposeFix can ONLY apply to a notebook code cell today; for a fix to a query/SQL/KQL editor or anything that needs an ACTION (re-provision, re-run a pipeline, set an env var, grant a role), do NOT call proposeFix — explain the corrected text inline and use the handoff to /copilot instead.
 
 Tools at your disposal:
 - searchDocs(query, top_k=5, kind?): RAG over docs/fiab/, docs/, PRPs/active/csa-loom, docs/fiab/adr
@@ -164,7 +164,7 @@ Tools at your disposal:
 - openLoomPage(slug): tell the frontend to router.push(slug)
 - runDiagnostic(check): returns live config state. checks = "aoai" | "ai-search" | "cosmos" | "version" | "tenant" | "all"
 - readReceipts(itemId?, itemType?, source?): reads the open item's run/provision receipts for auto-error detection. source = "provisioning" | "audit" | "runs" | "all". provisioning carries the install status + gate.remediation; runs carries failed Azure Data Factory pipeline/activity status + the real error; audit carries the recent action history. itemId/itemType default to the open item.
-- proposeFix(target, before, after, lang?, summary?): propose an approval-gated edit to an OPEN editor. target MUST be "notebook-cell:<cellId>" or "query-editor:<itemId>". Renders a Keep/Undo Monaco diff. Never applied without the user's Keep.
+- proposeFix(target, before, after, lang?, summary?): propose an approval-gated edit to an OPEN notebook code cell. target MUST be "notebook-cell:<cellId>". Renders a Keep/Undo Monaco diff. Never applied without the user's Keep. (Query/SQL/KQL editors are not yet wired for in-place apply — for those, explain the fix inline and hand off to /copilot.)
 - logIssue(title, body, labels): files a GitHub issue (asks user to confirm first)
 
 Handoff format (when user asks for an ACT):
@@ -414,11 +414,11 @@ function buildTools(deps: {
     },
     {
       name: 'proposeFix',
-      description: 'Propose an approval-gated edit to an OPEN editor surface (a notebook code cell or a query editor). Renders a Keep/Undo Monaco diff the USER must approve — the change is NEVER applied automatically and you must not say it is applied. Use ONLY for in-editor text fixes; for fixes that need an action (re-provision, re-run, set env var) use the handoff to /copilot instead.',
+      description: 'Propose an approval-gated edit to an OPEN notebook code cell. Renders a Keep/Undo Monaco diff the USER must approve — the change is NEVER applied automatically and you must not say it is applied. Use ONLY for a notebook code cell (target "notebook-cell:<cellId>"); query/SQL/KQL editors are not yet wired for in-place apply, so for those — and for fixes that need an action (re-provision, re-run, set env var) — explain the fix inline and use the handoff to /copilot instead.',
       parameters: {
         type: 'object',
         properties: {
-          target: { type: 'string', description: 'Deterministic editor key: "notebook-cell:<cellId>" or "query-editor:<itemId>".' },
+          target: { type: 'string', description: 'Deterministic editor key: "notebook-cell:<cellId>".' },
           before: { type: 'string', description: 'The current text of the cell/query, verbatim.' },
           after: { type: 'string', description: 'Your corrected text.' },
           lang: { type: 'string', description: 'Language hint (python, sql, kql, scala, r, ...).' },
@@ -429,11 +429,11 @@ function buildTools(deps: {
       },
       handler: async ({ target, before, after, lang, summary }) => {
         const t = String(target || '').trim();
-        if (!/^(notebook-cell:|query-editor:).+/.test(t)) {
+        if (!/^notebook-cell:.+/.test(t)) {
           return {
             result: {
               ok: false,
-              error: 'target must be "notebook-cell:<cellId>" or "query-editor:<itemId>".',
+              error: 'target must be "notebook-cell:<cellId>". Query/SQL/KQL editors are not yet wired for in-place apply — explain the fix inline and hand off to /copilot instead.',
             },
           };
         }

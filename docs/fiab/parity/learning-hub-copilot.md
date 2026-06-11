@@ -23,7 +23,7 @@ and actions via handoff to the cross-item Copilot at `/copilot`.
 | Auto-detect errors from install/provision state          | ✅ built | `readReceipts(source:'provisioning')` reads Cosmos `state.provisioning` (status / gate.reason / gate.remediation / gate.link / error) |
 | Auto-detect from recent activity/audit history           | ✅ built | `readReceipts(source:'audit')` queries `auditLogContainer()` (same query as the audit route) |
 | Recommend a fix                                          | ✅ built | the agent leads with the receipt's `gate.remediation`; each receipt becomes a `Citation` |
-| Apply an in-editor fix (gated)                           | ✅ built | `proposeFix` tool → `__proposedChange__` sentinel → `proposed_change` step → `CopilotDiff` Keep/Undo → `applyChange(target)` bridge. Targets constrained to `notebook-cell:<id>` / `query-editor:<id>` |
+| Apply an in-editor fix (gated)                           | ✅ built | `proposeFix` tool → `__proposedChange__` sentinel → `proposed_change` step → `CopilotDiff` Keep/Undo → `applyChange(target)` bridge. Target constrained to `notebook-cell:<id>` — the only surface with a registered bridge today (`notebook-editor.tsx`). Query/SQL/KQL editors are not yet wired for in-place apply, so `proposeFix` rejects non-`notebook-cell:` targets and the agent hands those off to `/copilot` instead — no dead control |
 | Apply a fix that needs an ACTION (re-provision / re-run) | ✅ built | existing `handoff` → `/copilot` (the cross-item action orchestrator) — not duplicated here |
 | Cite the source the answer reasoned over                 | ✅ built | docs/repo RAG citations (pre-existing) + receipt citations (new) |
 | Honest config gate when a backend isn't wired            | ⚠️ honest-gate | `runDiagnostic` (AOAI/Search/Cosmos) + `readReceipts` runs-gate naming the exact missing ADF env var |
@@ -34,8 +34,10 @@ Zero ❌. Zero stub banners. Every control calls a real backend or surfaces an h
 
 - The mutation fires **only** on the user's explicit **Keep** in the Monaco diff, **never** automatically
   (mirrors the cross-item Copilot's approval-diff contract; `apply-change.ts`).
-- `proposeFix` targets are deterministic keys only (`notebook-cell:` / `query-editor:`) — no free-form,
-  user-authored mutation paths (`.claude/rules/loom-no-freeform-config.md`).
+- `proposeFix` targets are deterministic keys only (`notebook-cell:<id>`) — no free-form,
+  user-authored mutation paths (`.claude/rules/loom-no-freeform-config.md`). `query-editor:<id>` is a
+  reserved key the generic bridge registry (`apply-change.ts`) can route, but no query editor registers
+  it yet, so `proposeFix` rejects it rather than advertising a control that cannot apply.
 - When the owning editor has closed, `applyChange` returns `false` and the widget says so honestly
   rather than pretending the edit applied (`.claude/rules/no-vaporware.md`).
 

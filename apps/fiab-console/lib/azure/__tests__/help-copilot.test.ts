@@ -323,6 +323,15 @@ describe('proposeFix tool', () => {
     expect((result as any).ok).toBe(false);
     expect((result as any)[PROPOSED_CHANGE_KEY]).toBeUndefined();
   });
+
+  it('rejects query-editor targets (no bridge wired yet — would be a dead control)', async () => {
+    const tools = getTools();
+    const t = tools.find((x) => x.name === 'proposeFix')!;
+    const { result } = await t.handler({ target: 'query-editor:db-42', before: 'SELECT 1', after: 'SELECT 2' });
+    expect((result as any).ok).toBe(false);
+    expect((result as any)[PROPOSED_CHANGE_KEY]).toBeUndefined();
+    expect(String((result as any).error)).toMatch(/notebook-cell/);
+  });
 });
 
 // ---------- Handoff parser tests ----------

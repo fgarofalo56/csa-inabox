@@ -309,13 +309,16 @@ function LearnPane({ type, id, onClose }: { type: string; id?: string; onClose: 
             return (
               <li
                 key={i}
+                aria-current={isActive ? 'step' : undefined}
                 style={{
                   marginBottom: 8,
                   padding: isActive ? 'var(--loom-space-2)' : 0,
                   borderRadius: 'var(--loom-radius-sm)',
                   backgroundColor: isActive ? tokens.colorNeutralBackground2 : 'transparent',
+                  transition: 'background-color 120ms ease, padding 120ms ease',
                 }}
                 onMouseEnter={() => setActiveStep(i)}
+                onFocus={() => setActiveStep(i)}
               >
                 {typeof s === 'string' ? s : (
                   <><b>{s.title}</b>{s.body ? ` — ${s.body}` : ''}</>
