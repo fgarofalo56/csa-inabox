@@ -310,6 +310,12 @@ export default function LearnPage(): React.ReactElement {
               <span className={s.statNum}>{all.length - missing}</span>
               <Text size={200} className={s.statLbl}>Loom guides live</Text>
             </span>
+            {missing > 0 && (
+              <span className={s.stat}>
+                <span className={s.statNum}>{missing}</span>
+                <Text size={200} className={s.statLbl}>guides in backlog</Text>
+              </span>
+            )}
           </div>
         </div>
       </div>

@@ -886,6 +886,16 @@ export function getLearnCatalog(): LearnTopic[] {
   for (const it of FABRIC_ITEM_TYPES) {
     const learn = getLearn(it.slug);
     if (!learn) continue;
+    // PRIMARY resolution: Loom editor doc → MS Learn → Loom docs landing page.
+    // The label must always describe where the link ACTUALLY goes, so a
+    // doc-less item with no MS-Learn URL (falls back to fiab/index) reads
+    // "Loom docs", never a mislabelled "MS Learn".
+    const primaryUrl = learn.docsUrl ?? loomDocUrl('fiab/index');
+    const primaryLabel = learn.hasLoomDoc
+      ? 'Loom guide'
+      : learn.docsUrl
+        ? 'MS Learn'
+        : 'Loom docs';
     topics.push({
       id: `editor:${it.slug}`,
       title: learn.title,
@@ -893,8 +903,8 @@ export function getLearnCatalog(): LearnTopic[] {
       section: 'Editor guides',
       category: it.category,
       visualType: it.slug,
-      primaryUrl: learn.docsUrl ?? loomDocUrl('fiab/index'),
-      primaryLabel: learn.hasLoomDoc ? 'Loom guide' : 'MS Learn',
+      primaryUrl,
+      primaryLabel,
       msLearnUrl: learn.hasLoomDoc ? learn.msLearnUrl : undefined,
       hasLoomDoc: !!learn.hasLoomDoc,
       thumbUrl: loomThumbUrl(it.slug),
