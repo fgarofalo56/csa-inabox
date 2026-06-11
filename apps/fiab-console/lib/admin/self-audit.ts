@@ -101,6 +101,20 @@ export const VALUE_HINT: Record<string, string> = {
   LOOM_ADF_FACTORY: '<data-factory-name>',
   LOOM_PURVIEW_ACCOUNT: '<purview-account-name>',
   LOOM_GRAPH_USERS_ENABLED: 'true',
+  // Usage analytics embed (F21) + Govern embed (F2) — per-cloud report backend.
+  LOOM_USAGE_REPORT_KIND: 'powerbi',
+  LOOM_USAGE_PBI_WORKSPACE_ID: '<power-bi-workspace-guid>',
+  LOOM_USAGE_PBI_REPORT_ID: '<power-bi-report-guid>',
+  LOOM_GRAFANA_USAGE_DASHBOARD_UID: '<managed-grafana-dashboard-uid>',
+  LOOM_GRAFANA_ENDPOINT: 'https://<name>-<hash>.<region>.grafana.azure.com',
+  LOOM_REPORT_KIND: 'powerbi',
+  LOOM_GOVERN_PBI_WORKSPACE_ID: '<power-bi-workspace-guid>',
+  LOOM_GOVERN_PBI_REPORT_ID: '<power-bi-report-guid>',
+  LOOM_GRAFANA_DASHBOARD_UID: '<managed-grafana-dashboard-uid>',
+  // Derived by bicep (org-visuals URL from the storage account; LAW customerId
+  // from the monitoring module). Operators normally never set these by hand.
+  LOOM_ORG_VISUALS_URL: 'https://<adls-account>.blob.<storage-suffix>/org-visuals',
+  LOOM_LOG_ANALYTICS_WORKSPACE_ID: '<log-analytics-workspace-customer-id-guid>',
 };
 
 /** Pick the concrete env vars an admin should set from a missing-list that may
@@ -145,6 +159,20 @@ export interface EnvSpec {
   docs?: string;
   /** When true a miss is a 'warn' (optional feature) instead of 'fail'. */
   warnOnMiss?: boolean;
+  /** The bicep module (+ the param / line that emits it) that wires every var in
+   * this spec on a push-button deploy. Surfaced on /admin/env-config so an unset
+   * var names the exact IaC to provision it. */
+  provisionedBy?: string;
+  /** The exact Azure RBAC role / tenant action required for these vars to
+   * function once set (e.g. "Power BI workspace Member (UAMI)"). Surfaced on the
+   * env-config row next to the var. */
+  role?: string;
+  /** True when bicep AUTO-DERIVES these vars from another resource (e.g. the
+   * org-visuals URL from the storage account, the LAW customerId from the
+   * monitoring module) — so a fresh deploy fills them without operator input. The
+   * env-config surface renders these with a third "derived" status, not a bare
+   * "not set", because the operator normally never sets them by hand. */
+  derived?: boolean;
 }
 
 function evalEnv(spec: EnvSpec): CheckResult {
@@ -176,16 +204,20 @@ export const ENV_CHECKS: EnvSpec[] = [
     id: 'session-secret', category: 'identity', title: 'Session signing secret', severity: 'critical',
     required: ['SESSION_SECRET'],
     remediation: 'Set SESSION_SECRET (resolved in CI from Key Vault by the deploy SP; never on disk). Without it sessions cannot be minted/verified.',
+    provisionedBy: 'modules/admin-plane/main.bicep (param loomSessionSecret → ACA secret; empty → stable per-RG GUID)',
   },
   {
     id: 'entra-app', category: 'identity', title: 'Entra sign-in app', severity: 'critical',
     anyOf: [['LOOM_ENTRA_CLIENT_ID', 'AZURE_CLIENT_ID'], ['LOOM_ENTRA_TENANT_ID', 'AZURE_TENANT_ID']],
     remediation: 'Set LOOM_ENTRA_CLIENT_ID + LOOM_ENTRA_TENANT_ID (the AAD app users sign in with).',
+    provisionedBy: 'modules/admin-plane/main.bicep (params loomMsalClientId / tenantId → apps[] env)',
+    role: 'Entra app registration with redirect URI for the Console (one-time tenant action)',
   },
   {
     id: 'uami', category: 'identity', title: 'Console managed identity (UAMI)', severity: 'critical',
     required: ['LOOM_UAMI_CLIENT_ID'],
     remediation: 'Set LOOM_UAMI_CLIENT_ID to the user-assigned managed identity client id. Every Azure data-plane call authenticates as this identity.',
+    provisionedBy: 'modules/admin-plane/main.bicep (uami-console resource → apps[] env, auto-derived)',
   },
   // ── data-plane (Cosmos = the Loom store; required to run at all) ──
   {
@@ -193,12 +225,15 @@ export const ENV_CHECKS: EnvSpec[] = [
     anyOf: [['LOOM_COSMOS_ENDPOINT', 'COSMOS_ENDPOINT']],
     remediation: 'Set LOOM_COSMOS_ENDPOINT (and LOOM_COSMOS_DATABASE) — Cosmos holds every workspace, item, permission grant, and config. Loom cannot run without it.',
     docs: 'https://learn.microsoft.com/azure/cosmos-db/',
+    provisionedBy: 'modules/landing-zone/main.bicep (cosmos account) → admin-plane forwards loomCosmosAccount → apps[] env',
+    role: 'Cosmos DB Built-in Data Contributor (UAMI, assigned via CLI/ARM)',
   },
   {
     id: 'subscription', category: 'data-plane', title: 'Azure subscription + resource groups', severity: 'critical',
     required: ['LOOM_SUBSCRIPTION_ID'],
     anyOf: [['LOOM_DLZ_RG', 'LOOM_ADMIN_RG']],
     remediation: 'Set LOOM_SUBSCRIPTION_ID and at least one of LOOM_DLZ_RG / LOOM_ADMIN_RG so ARM discovery + scaling can target the deployment.',
+    provisionedBy: 'modules/admin-plane/main.bicep (apps[] env, auto-derived from deployment scope)',
   },
   // ── permissions ──
   {
@@ -206,47 +241,64 @@ export const ENV_CHECKS: EnvSpec[] = [
     anyOf: [['LOOM_TENANT_ADMIN_OID', 'LOOM_TENANT_ADMIN_GROUP_ID']],
     remediation: 'Set LOOM_TENANT_ADMIN_OID to your Entra user OID (or LOOM_TENANT_ADMIN_GROUP_ID to a group you are in) — deploy params loomTenantAdminOid / loomTenantAdminGroupId. Members bypass the feature-permission gate with full Admin; this is how the first admin gets in before any grants exist and fixes the "Access denied (403)" on /admin/permissions.',
     docs: '/admin/permissions',
+    provisionedBy: 'main.bicep (params loomTenantAdminOid / loomTenantAdminGroupId) → admin-plane apps[] env',
   },
   // ── azure services (optional workloads → warn, not fail) ──
   {
     id: 'svc-synapse', category: 'azure-services', title: 'Synapse (warehouse / notebooks / pipelines)', severity: 'recommended',
     required: ['LOOM_SYNAPSE_WORKSPACE'], warnOnMiss: true,
     remediation: 'Set LOOM_SYNAPSE_WORKSPACE (+ LOOM_SYNAPSE_DEDICATED_POOL for warehouse) to enable Synapse-backed warehouse, notebook, and pipeline items.',
+    provisionedBy: 'modules/landing-zone/synapse.bicep → admin-plane forwards loomSynapseWorkspace / loomSynapseDedicatedPool',
+    role: 'Synapse Administrator (UAMI) on the workspace',
   },
   {
     id: 'svc-adx', category: 'azure-services', title: 'Azure Data Explorer (KQL / Real-Time)', severity: 'recommended',
     required: ['LOOM_KUSTO_CLUSTER_URI'], warnOnMiss: true,
     remediation: 'Set LOOM_KUSTO_CLUSTER_URI (+ LOOM_KUSTO_DEFAULT_DB) to enable KQL databases, eventhouses, and Real-Time dashboards.',
+    provisionedBy: 'modules/landing-zone (adxEnabled) → ADX cluster + per-DLZ DB → apps[] env',
+    role: 'AllDatabasesViewer / Database Admin (UAMI) on the ADX cluster',
   },
   {
     id: 'svc-eventhubs', category: 'azure-services', title: 'Event Hubs (eventstream)', severity: 'recommended',
     required: ['LOOM_EVENTHUB_NAMESPACE'], warnOnMiss: true,
     remediation: 'Set LOOM_EVENTHUB_NAMESPACE (+ LOOM_EVENTHUB_RG/SUB) to enable the Azure-native eventstream backend.',
+    provisionedBy: 'modules/landing-zone (Event Hubs namespace) → apps[] env',
+    role: 'Azure Event Hubs Data Owner (UAMI) on the namespace',
   },
   {
     id: 'svc-adls', category: 'azure-services', title: 'ADLS Gen2 (lakehouse / Bronze)', severity: 'recommended',
     anyOf: [['LOOM_ADLS_ACCOUNT', 'LOOM_LANDING_URL', 'LOOM_BRONZE_URL']], warnOnMiss: true,
     remediation: 'Set LOOM_ADLS_ACCOUNT (or the LOOM_{LANDING,BRONZE,SILVER,GOLD}_URL DLZ container URLs) to enable the Azure-native lakehouse + mirror Bronze sink.',
+    provisionedBy: 'modules/landing-zone/storage.bicep → admin-plane forwards loomStorageAccount → apps[] env',
+    role: 'Storage Blob Data Contributor (UAMI) on the DLZ account',
   },
   {
     id: 'svc-aisearch', category: 'azure-services', title: 'Azure AI Search (RAG indexes)', severity: 'optional',
     required: ['LOOM_AI_SEARCH_SERVICE'], warnOnMiss: true,
     remediation: 'Set LOOM_AI_SEARCH_SERVICE to enable AI Search index items + RAG apps.',
+    provisionedBy: 'modules/admin-plane (aiSearchEnabled=true) → AI Search service → apps[] env',
+    role: 'Search Index Data Contributor + Search Service Contributor (UAMI)',
   },
   {
     id: 'svc-aoai', category: 'azure-services', title: 'Azure OpenAI / Foundry (Copilot + agents)', severity: 'recommended',
     anyOf: [['LOOM_AOAI_ENDPOINT', 'LOOM_FOUNDRY_PROJECT_ENDPOINT', 'LOOM_FOUNDRY_ENDPOINT']], warnOnMiss: true,
     remediation: 'Set LOOM_AOAI_ENDPOINT + LOOM_AOAI_DEPLOYMENT (or a Foundry project endpoint) so Copilot, the help agent, and data agents have a model. Deploy a model from the AI Foundry hub if none exists.',
+    provisionedBy: 'modules/admin-plane (agentFoundryEnabled / aiFoundryEnabled) → AIServices account + project → apps[] env',
+    role: 'Cognitive Services OpenAI User (UAMI) on the AOAI/Foundry account',
   },
   {
     id: 'svc-monitor-alerts', category: 'azure-services', title: 'Azure Monitor (Activator alerts)', severity: 'optional',
     required: ['LOOM_LOG_ANALYTICS_RESOURCE_ID'], anyOf: [['LOOM_ALERT_RG', 'LOOM_ADMIN_RG']], warnOnMiss: true,
     remediation: 'Set LOOM_LOG_ANALYTICS_RESOURCE_ID (alert query scope) + LOOM_ALERT_RG so the Azure-native Activator can create scheduled-query alert rules.',
+    provisionedBy: 'modules/admin-plane/main.bicep (monitoring module → apps[] env, auto-derived)',
+    role: 'Monitoring Contributor (UAMI) on the alert resource group',
   },
   {
     id: 'svc-adf', category: 'azure-services', title: 'Azure Data Factory (mirror CDC)', severity: 'optional',
     anyOf: [['LOOM_ADF_FACTORY', 'LOOM_ADF_RG']], warnOnMiss: true,
     remediation: 'Set LOOM_ADF_FACTORY (+ LOOM_ADF_RG / LOOM_ADF_SUBSCRIPTION_ID) to enable the ADF-CDC mirrored-database backend (source SQL → ADLS Bronze).',
+    provisionedBy: 'modules/landing-zone (ADF factory) → apps[] env',
+    role: 'Data Factory Contributor (UAMI) on the factory',
   },
   // ── enrichment ──
   {
@@ -254,11 +306,50 @@ export const ENV_CHECKS: EnvSpec[] = [
     required: ['LOOM_GRAPH_USERS_ENABLED'], warnOnMiss: true,
     remediation: 'Set LOOM_GRAPH_USERS_ENABLED=true and grant the Console UAMI Directory.Read.All in Microsoft Graph to enrich the Users page with display name + department. Without it the page still shows UPN + activity + roles from Cosmos.',
     docs: 'https://learn.microsoft.com/graph/permissions-reference#directoryreadall',
+    provisionedBy: 'modules/admin-plane/main.bicep (apps[] env) + post-deploy Graph grant',
+    role: 'Microsoft Graph Directory.Read.All (application) granted to the Console UAMI',
   },
   {
     id: 'purview', category: 'azure-services', title: 'Microsoft Purview (governance)', severity: 'optional',
     required: ['LOOM_PURVIEW_ACCOUNT'], warnOnMiss: true,
     remediation: 'Set LOOM_PURVIEW_ACCOUNT to link a Purview account. Domains + data-quality work Loom-native (Cosmos) without it; Purview adds the external mirror + scan plane.',
+    provisionedBy: 'main.bicep (param loomPurviewAccount / purviewEnabled) → admin-plane apps[] env',
+    role: 'Data Map "Data Reader" on the Purview root collection (scripts/csa-loom/grant-purview-datamap-role.sh)',
+  },
+  // ── usage / governance analytics embed (per-cloud, opt-in over native charts) ──
+  {
+    id: 'usage-embed', category: 'azure-services', title: 'Usage analytics embed (F21 — /admin/usage)', severity: 'optional',
+    required: ['LOOM_USAGE_REPORT_KIND'],
+    anyOf: [['LOOM_USAGE_PBI_WORKSPACE_ID', 'LOOM_USAGE_PBI_REPORT_ID', 'LOOM_GRAFANA_USAGE_DASHBOARD_UID', 'LOOM_GRAFANA_ENDPOINT']],
+    warnOnMiss: true,
+    remediation: 'Set LOOM_USAGE_REPORT_KIND=powerbi (Commercial/GCC) + LOOM_USAGE_PBI_WORKSPACE_ID + LOOM_USAGE_PBI_REPORT_ID, OR =grafana (GCC-High/IL5) + LOOM_GRAFANA_USAGE_DASHBOARD_UID (endpoint auto-wired from managedGrafanaEnabled). The native Fluent usage charts on /admin/usage always work without this — this only lights up the "Open analytics" embedded report.',
+    docs: 'https://learn.microsoft.com/power-bi/developer/embedded/embedded-analytics-power-bi',
+    provisionedBy: 'main.bicep (params loomUsageReportKind / loomUsagePbiWorkspaceId / loomUsagePbiReportId / loomGrafanaUsageDashboardUid) → modules/admin-plane/main.bicep apps[] env (lines ~2475-2490)',
+    role: 'powerbi: Console UAMI = Power BI workspace Member + "Service principals can use Power BI APIs" tenant setting on. grafana: Grafana Viewer (UAMI) on the Managed Grafana instance.',
+  },
+  {
+    id: 'govern-embed', category: 'azure-services', title: 'Governance analytics embed (F2 — /governance Govern)', severity: 'optional',
+    required: ['LOOM_REPORT_KIND'],
+    anyOf: [['LOOM_GOVERN_PBI_WORKSPACE_ID', 'LOOM_GOVERN_PBI_REPORT_ID', 'LOOM_GRAFANA_DASHBOARD_UID']],
+    warnOnMiss: true,
+    remediation: 'Set LOOM_REPORT_KIND=powerbi (Commercial/GCC) + LOOM_GOVERN_PBI_WORKSPACE_ID + LOOM_GOVERN_PBI_REPORT_ID, OR =grafana (GCC-High/IL5) + LOOM_GRAFANA_DASHBOARD_UID. The native governance surface works without this — it only lights up the "View more" embedded report.',
+    provisionedBy: 'main.bicep (params loomReportKind / loomGovernPbiWorkspaceId / loomGovernPbiReportId / loomGrafanaDashboardUid) → modules/admin-plane/main.bicep apps[] env (lines ~2455-2470)',
+    role: 'powerbi: Console UAMI = Power BI workspace Member + "Service principals can use Power BI APIs" on. grafana: Grafana Viewer (UAMI).',
+  },
+  // ── derived (bicep auto-fills from another resource; operator rarely sets) ──
+  {
+    id: 'org-visuals', category: 'azure-services', title: 'Embed codes / Org visuals (F22/F23)', severity: 'optional',
+    required: ['LOOM_ORG_VISUALS_URL'], warnOnMiss: true, derived: true,
+    remediation: 'Auto-derived from the DLZ storage account (https://<account>.blob.<suffix>/org-visuals) when loomStorageAccount is known — single-sub fills it automatically. Multi-sub: set LOOM_ORG_VISUALS_URL to the org-visuals Blob container URL via scripts/csa-loom/patch-navigator-env.sh.',
+    provisionedBy: 'modules/admin-plane/main.bicep line ~2360 (derived from loomStorageAccount) + landing-zone/org-visuals-rbac.bicep',
+    role: 'Storage Blob Data Contributor (container) + Storage Blob Delegator (account) on the org-visuals container — landing-zone/org-visuals-rbac.bicep',
+  },
+  {
+    id: 'audit-la-workspace', category: 'azure-services', title: 'Audit logs — Log Analytics workspace (/admin/audit-logs)', severity: 'optional',
+    required: ['LOOM_LOG_ANALYTICS_WORKSPACE_ID'], warnOnMiss: true, derived: true,
+    remediation: 'Auto-derived from the monitoring module (the Log Analytics workspace customerId) on a push-button deploy. If unset, /admin/audit-logs still shows Cosmos + Purview audit rows; set LOOM_LOG_ANALYTICS_WORKSPACE_ID (the workspace GUID) to add the Log Analytics source.',
+    provisionedBy: 'modules/admin-plane/main.bicep line ~1780 (derived from monitoring.outputs.lawCustomerId)',
+    role: 'Log Analytics Reader (UAMI) on the workspace',
   },
 ];
 

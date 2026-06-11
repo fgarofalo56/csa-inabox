@@ -49,4 +49,32 @@ describe('admin/env-config registry', () => {
     expect(bicepEnvSnippet).toContain("name: 'LOOM_COSMOS_DATABASE'");
     expect(bicepEnvSnippet).toContain("secretRef: 'session-secret'");
   });
+
+  it('surfaces the usage + govern analytics embed vars as settable (F21/F2)', () => {
+    for (const k of [
+      'LOOM_USAGE_REPORT_KIND', 'LOOM_USAGE_PBI_WORKSPACE_ID', 'LOOM_USAGE_PBI_REPORT_ID',
+      'LOOM_GRAFANA_USAGE_DASHBOARD_UID', 'LOOM_GRAFANA_ENDPOINT',
+      'LOOM_REPORT_KIND', 'LOOM_GOVERN_PBI_WORKSPACE_ID', 'LOOM_GOVERN_PBI_REPORT_ID',
+      'LOOM_GRAFANA_DASHBOARD_UID',
+    ]) {
+      expect(isEditableEnvKey(k)).toBe(true);
+    }
+    // None of these embed config vars are secret-typed.
+    expect(getEditableEnv('LOOM_USAGE_PBI_WORKSPACE_ID')?.secret).toBe(false);
+  });
+
+  it('carries provisionedBy + role so an unset var names its exact bicep module/role', () => {
+    const usage = getEditableEnv('LOOM_USAGE_REPORT_KIND');
+    expect(usage?.provisionedBy).toMatch(/admin-plane\/main\.bicep/);
+    expect(usage?.role).toMatch(/Power BI workspace Member|Grafana/);
+    // Cosmos (a core var) also carries its provisioning hint.
+    expect(getEditableEnv('LOOM_COSMOS_ENDPOINT')?.provisionedBy).toBeTruthy();
+  });
+
+  it('flags bicep-derived vars (org-visuals, LA workspace) with derived=true', () => {
+    expect(getEditableEnv('LOOM_ORG_VISUALS_URL')?.derived).toBe(true);
+    expect(getEditableEnv('LOOM_LOG_ANALYTICS_WORKSPACE_ID')?.derived).toBe(true);
+    // A normal operator-set var is NOT derived.
+    expect(getEditableEnv('LOOM_COSMOS_ENDPOINT')?.derived).toBeUndefined();
+  });
 });

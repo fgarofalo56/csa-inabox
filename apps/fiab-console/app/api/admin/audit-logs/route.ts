@@ -180,7 +180,7 @@ export async function GET(req: NextRequest) {
     } else {
       const err = laRes.reason;
       if (err instanceof MonitorNotConfiguredError) {
-        gates.la = 'Log Analytics unavailable: set LOOM_LOG_ANALYTICS_WORKSPACE_ID in admin-plane/main.bicep apps[] env.';
+        gates.la = 'Log Analytics unavailable: LOOM_LOG_ANALYTICS_WORKSPACE_ID is derived by modules/admin-plane/main.bicep (monitoring.outputs.lawCustomerId) on a push-button deploy — set it there (apps[] env) or via /admin/env-config if unset. Cosmos + Purview audit rows still show without it.';
       } else if (err instanceof MonitorError && (err.status === 401 || err.status === 403)) {
         // Token acquired but the workspace rejected the read — the UAMI lacks
         // a read role on the LA workspace. Bootstrap grants Monitoring

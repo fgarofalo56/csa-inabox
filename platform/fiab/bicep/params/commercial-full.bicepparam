@@ -71,6 +71,23 @@ param openaiEmbeddingsModel = 'text-embedding-3-large'
 // Power BI
 param powerBiSku = 'F64'
 
+// Analytics report embed (F21 Usage "Open analytics" + F2 Govern "View more").
+// Commercial → Power BI. Default the KIND so /admin/usage + Govern surface the
+// embedded-report path out of the box; the BFF honestly gates (503 with the
+// exact follow-up) until the workspace/report ids + Console-UAMI membership +
+// the "Service principals can use Power BI APIs" tenant setting are supplied
+// (post-deploy admin actions — docs/fiab/v3-tenant-bootstrap.md#usage-analytics-embed).
+// The native Fluent usage/governance charts always work without these.
+param loomUsageReportKind     = readEnvironmentVariable('LOOM_USAGE_REPORT_KIND', 'powerbi')
+param loomUsagePbiWorkspaceId = readEnvironmentVariable('LOOM_USAGE_PBI_WORKSPACE_ID', '')
+param loomUsagePbiReportId    = readEnvironmentVariable('LOOM_USAGE_PBI_REPORT_ID', '')
+param loomReportKind          = readEnvironmentVariable('LOOM_REPORT_KIND', 'powerbi')
+param loomGovernPbiWorkspaceId = readEnvironmentVariable('LOOM_GOVERN_PBI_WORKSPACE_ID', '')
+param loomGovernPbiReportId    = readEnvironmentVariable('LOOM_GOVERN_PBI_REPORT_ID', '')
+// Opt-in dedicated Power BI Embedded (A1) capacity for the embed token path.
+// Off by default — the reports can also live on the F64 capacity above.
+param pbiEmbeddedEnabled       = bool(readEnvironmentVariable('LOOM_PBI_EMBEDDED_ENABLED', 'false'))
+
 // Network
 param hubVnetCidr = '10.0.0.0/16'
 
