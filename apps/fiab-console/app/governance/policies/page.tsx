@@ -9,7 +9,7 @@ import {
   Subtitle2, Divider, Tooltip,
   makeStyles, tokens,
 } from '@fluentui/react-components';
-import { Add24Regular, ArrowSync24Regular, Delete20Regular } from '@fluentui/react-icons';
+import { Add24Regular, ArrowSync24Regular, Delete20Regular, Folder20Regular, Document20Regular, ArrowUp16Regular } from '@fluentui/react-icons';
 import { GovernanceShell } from '@/lib/components/governance-shell';
 import { LoomDataTable, type LoomColumn } from '@/lib/components/ui/loom-data-table';
 
@@ -859,9 +859,9 @@ export default function PoliciesPage() {
                       <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
                         <Caption1 style={{ fontFamily: 'Consolas, monospace' }}>{rstRef}/{rstSubPath || ''}</Caption1>
                         {rstSubPath && (
-                          <Button size="small" appearance="subtle"
+                          <Button size="small" appearance="subtle" icon={<ArrowUp16Regular />}
                             onClick={() => { const parent = rstSubPath.split('/').slice(0, -1).join('/'); setRstSubPath(parent); loadRstPaths(rstRef, parent); }}>
-                            ↑ up
+                            Up
                           </Button>
                         )}
                         {rstPathLoading && <Spinner size="tiny" />}
@@ -875,8 +875,9 @@ export default function PoliciesPage() {
                           const selected = rstSubPath === p.name;
                           return (
                             <Button key={p.name} appearance={selected ? 'primary' : 'subtle'} style={{ justifyContent: 'flex-start' }}
+                              icon={p.isDirectory ? <Folder20Regular /> : <Document20Regular />}
                               onClick={() => { setRstSubPath(p.name); if (p.isDirectory) loadRstPaths(rstRef, p.name); }}>
-                              {p.isDirectory ? '📁' : '📄'} {leaf}
+                              {leaf}
                             </Button>
                           );
                         })}
