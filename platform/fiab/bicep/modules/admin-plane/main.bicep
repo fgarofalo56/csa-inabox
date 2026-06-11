@@ -307,6 +307,25 @@ param loomAasModel string = ''
 @description('Scaled self-hosted IR VMSS name (backs the SHIR metrics tile + scale controls). Defaults to the single-sub DLZ name; empty disables the SHIR surface (honest gate).')
 param loomShirVmssName string = 'vmss-loom-shir-default'
 
+@description('Deploy the SHARED admin-zone Purview self-hosted IR VMSS (scale-to-zero). A Purview SHIR cannot be the DLZ ADF SHIR (Microsoft constraint — separate machine), so this is its own VMSS. Honest-gated: only deploys when purviewEnabled AND purviewIrAuthKey AND purviewShirAdminPassword are all set.')
+param purviewShirEnabled bool = true
+
+@description('Purview self-hosted IR node auth key (authKey1) from the Purview scanning data plane (Data Map → Source management → Integration runtimes, or the scanning REST API). Empty = honest gate (the Purview SHIR VMSS is not deployed; the auto-scale-up still no-ops cleanly). Store in Key Vault and pass at deploy.')
+@secure()
+param purviewIrAuthKey string = ''
+
+@description('Local admin password for the Purview SHIR VMSS nodes (from Key Vault). Empty = honest gate (the Purview SHIR VMSS is not deployed).')
+@secure()
+param purviewShirAdminPassword string = ''
+
+@description('Target node count the Purview scan-trigger automation scales the Purview SHIR VMSS TO (created at 0). 1-8.')
+@minValue(1)
+@maxValue(8)
+param purviewShirMaxNodes int = 4
+
+@description('Purview SHIR VMSS name — emitted to the Console as LOOM_PURVIEW_SHIR_VMSS_NAME so the BFF can scale it up before a SHIR-using scan. Must match purview-shir.bicep naming (vmss-loom-pvw-shir-<domain>).')
+param loomPurviewShirVmssName string = 'vmss-loom-pvw-shir-default'
+
 @description('Loom Azure Data Factory resource group. Empty defaults to LOOM_DLZ_RG.')
 param loomAdfRg string = ''
 
@@ -1427,6 +1446,35 @@ module catalog 'catalog.bicep' = {
 }
 
 // =====================================================================
+// 10a. Shared admin-zone Purview Self-Hosted IR (SHIR) VMSS — scale-to-zero.
+//
+// A Purview SHIR MUST be a separate machine from the DLZ ADF SHIR (Microsoft
+// constraint — see purview-shir.bicep header). This pre-deploys ONE shared
+// Purview SHIR VMSS in the admin hub that scans many Purview data sources; the
+// Console scales it 0→N before a SHIR-using scan and the idle-stop workflow
+// scales it back to 0. Honest-gated: only deploys when Purview is enabled AND
+// the operator supplied a Purview IR auth key + a node admin password (both
+// @secure, empty by default). At IL5 (Atlas-on-AKS primary, no Purview) this
+// stays off — purviewEnabled is false there.
+// =====================================================================
+
+module purviewShir 'purview-shir.bicep' = if (purviewShirEnabled && purviewEnabled && !empty(purviewIrAuthKey) && !empty(purviewShirAdminPassword)) {
+  name: 'purview-shir'
+  params: {
+    location: location
+    domainName: 'default'
+    subnetId: '${network.outputs.hubVnetId}/subnets/snet-reserved'
+    adminPassword: purviewShirAdminPassword
+    purviewIrAuthKey: purviewIrAuthKey
+    maxNodes: purviewShirMaxNodes
+    consolePrincipalId: identity.outputs.uamiConsolePrincipalId
+    skipRoleGrants: skipRoleGrants
+    workspaceId: monitoring.outputs.lawId
+    complianceTags: complianceTags
+  }
+}
+
+// =====================================================================
 // 10b. Azure Maps account (geoanalytics backing)
 //
 // Backs the geo-map / geo-pipeline / map editors. Only deploys in
@@ -1756,6 +1804,12 @@ module appDeployments 'app-deployments.bicep' = if (containerPlatform == 'contai
             { name: 'LOOM_HDINSIGHT_LINKED_SERVICE', value: loomHdinsightLinkedService }
             { name: 'NEXT_PUBLIC_LOOM_HDINSIGHT_LINKED_SERVICE', value: loomHdinsightLinkedService }
             { name: 'LOOM_SHIR_VMSS_NAME', value: loomShirVmssName }
+            // Shared admin-zone Purview SHIR VMSS — the BFF scales this 0→N
+            // before a Purview scan that uses the self-hosted IR, and the
+            // idle-stop workflow scales it back to 0. It lives in the admin RG
+            // (LOOM_ADMIN_RG), NOT the DLZ — a Purview SHIR can't share a
+            // machine with the ADF SHIR. Empty disables the surface (honest gate).
+            { name: 'LOOM_PURVIEW_SHIR_VMSS_NAME', value: (purviewShirEnabled && purviewEnabled && !empty(purviewIrAuthKey) && !empty(purviewShirAdminPassword)) ? loomPurviewShirVmssName : '' }
             // Capacity & compute → Scale & manage drawer → AKS node-pool scaling.
             // Only populated on the AKS container platform (GCC-High / IL5); on
             // Commercial / GCC these are empty and the drawer's AKS section

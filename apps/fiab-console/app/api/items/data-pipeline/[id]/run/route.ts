@@ -8,6 +8,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import { getSession } from '@/lib/auth/session';
 import { itemsContainer } from '@/lib/azure/cosmos-client';
 import { runPipeline } from '@/lib/azure/adf-client';
+import { prewarmShirForPipeline } from '@/lib/azure/shir-autoscale';
 import type { WorkspaceItem } from '@/lib/types/workspace';
 
 export const runtime = 'nodejs';
@@ -43,12 +44,14 @@ export async function POST(req: NextRequest, ctx: { params: Promise<{ id: string
         error: 'Pipeline has no ADF backing yet — publish it to ADF before running.',
       }, { status: 409 });
     }
+    const shir = await prewarmShirForPipeline(adfName);
     const runRes = await runPipeline(adfName, body?.parameters || {});
     return NextResponse.json({
       ok: true,
       runId: runRes.runId,
       adfPipelineName: adfName,
       status: 'Queued',
+      ...(shir || {}),
     });
   } catch (e: any) {
     return err(e?.message || String(e), e?.status || 502);

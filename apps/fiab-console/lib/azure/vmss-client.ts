@@ -71,6 +71,22 @@ export function shirVmssConfig(): VmssConfig | null {
   return { subscriptionId, resourceGroup, name };
 }
 
+/**
+ * Resolve the SHARED admin-zone Purview SHIR VMSS config from env. The bicep
+ * wires LOOM_PURVIEW_SHIR_VMSS_NAME and the VMSS lives in the ADMIN RG
+ * (LOOM_ADMIN_RG) — a Purview SHIR cannot share a machine with the DLZ ADF SHIR
+ * (Microsoft constraint), so it is a separate VMSS in a different RG. Returns
+ * null when not configured so callers surface an honest gate instead of
+ * throwing (e.g. Purview not deployed, or no Purview IR auth key supplied).
+ */
+export function purviewShirVmssConfig(): VmssConfig | null {
+  const subscriptionId = process.env.LOOM_SUBSCRIPTION_ID;
+  const resourceGroup = process.env.LOOM_ADMIN_RG;
+  const name = process.env.LOOM_PURVIEW_SHIR_VMSS_NAME;
+  if (!subscriptionId || !resourceGroup || !name) return null;
+  return { subscriptionId, resourceGroup, name };
+}
+
 async function token(): Promise<string> {
   const t = await credential.getToken(ARM_SCOPE);
   if (!t?.token) throw new VmssError('Failed to acquire ARM token', 401);
@@ -136,4 +152,82 @@ export async function scaleVmss(c: VmssConfig, capacity: number): Promise<void> 
     method: 'PATCH',
     body: JSON.stringify({ sku: { capacity } }),
   });
+}
+
+export interface EnsureUpResult {
+  /** True when the VMSS was at 0 and a scale-up was issued by this call. */
+  scaledUp: boolean;
+  /** Target capacity requested (0 when already running / no-op). */
+  capacity: number;
+  /** Running (Succeeded) node count observed at return. */
+  runningNodes: number;
+  /** Set when the scale-up could not be issued/confirmed (fail-open — never blocks the run). */
+  warning?: string;
+}
+
+/**
+ * Ensure the SHIR VMSS has at least one node running before a run that depends
+ * on it (pipeline copy-on-SHIR, or a Purview scan that uses the self-hosted IR).
+ *
+ * Behavior:
+ *   - If current capacity > 0 → no-op (already up); returns scaledUp:false.
+ *   - If current capacity === 0 → scale to `target` (clamped 1..8), then poll
+ *     getVmssStatus until at least one node reports provisioningState
+ *     'Succeeded' OR the timeout elapses. The run can begin as soon as ARM has
+ *     accepted the scale + nodes are coming online; the SHIR registers with the
+ *     IR as each node boots (the CustomScript bootstrap).
+ *
+ * FAIL-OPEN: any error (e.g. the UAMI lacks Virtual Machine Contributor on the
+ * VMSS) is swallowed into `warning` — a scale-up failure must NEVER block the
+ * run. The caller surfaces the warning in the receipt.
+ */
+export async function ensureShirUp(
+  c: VmssConfig,
+  target = 4,
+  opts?: { timeoutMs?: number; pollMs?: number },
+): Promise<EnsureUpResult> {
+  const want = Math.min(8, Math.max(1, Math.trunc(target) || 1));
+  const timeoutMs = opts?.timeoutMs ?? 180_000;
+  const pollMs = opts?.pollMs ?? 5_000;
+  try {
+    const cur = await getVmssStatus(c);
+    const runningNow = cur.nodes.filter((n) => n.provisioningState === 'Succeeded').length;
+    if (cur.capacity > 0) {
+      return { scaledUp: false, capacity: cur.capacity, runningNodes: runningNow };
+    }
+    await scaleVmss(c, want);
+    // Poll until at least one node is up (or timeout). The run does not need to
+    // wait for ALL nodes — one online SHIR node accepts the activity/scan.
+    const deadline = Date.now() + timeoutMs;
+    let running = 0;
+    while (Date.now() < deadline) {
+      await new Promise((r) => setTimeout(r, pollMs));
+      try {
+        const st = await getVmssStatus(c);
+        running = st.nodes.filter((n) => n.provisioningState === 'Succeeded').length;
+        if (running >= 1) break;
+      } catch {
+        // transient — keep polling until the deadline
+      }
+    }
+    return {
+      scaledUp: true,
+      capacity: want,
+      runningNodes: running,
+      ...(running < 1
+        ? { warning: `Scaled ${c.name} to ${want} node(s); no node reported running within ${Math.round(timeoutMs / 1000)}s — the run will start while nodes finish coming online.` }
+        : {}),
+    };
+  } catch (e: any) {
+    const status = e instanceof VmssError ? e.status : 0;
+    const hint = status === 401 || status === 403
+      ? 'The Console UAMI needs Virtual Machine Contributor on the SHIR VMSS.'
+      : '';
+    return {
+      scaledUp: false,
+      capacity: 0,
+      runningNodes: 0,
+      warning: `Could not auto-scale ${c.name} up before the run (${e?.message || String(e)}). ${hint} The run will proceed; start the SHIR manually if it is at 0.`.trim(),
+    };
+  }
 }

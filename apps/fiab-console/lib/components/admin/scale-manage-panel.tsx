@@ -25,7 +25,7 @@ import {
 } from '@fluentui/react-icons';
 
 interface Scalable {
-  kind: 'adx' | 'synapse-pool' | 'shir-vmss';
+  kind: 'adx' | 'synapse-pool' | 'shir-vmss' | 'purview-shir-vmss';
   name: string;
   sku?: string;
   capacity?: number;
@@ -38,6 +38,7 @@ const KIND_META: Record<Scalable['kind'], { label: string; icon: ReactNode; acce
   'adx': { label: 'Azure Data Explorer cluster', icon: <Flash24Regular />, accent: '#1f6feb' },
   'synapse-pool': { label: 'Synapse dedicated SQL pool', icon: <DatabasePerson24Regular />, accent: '#7d6cff' },
   'shir-vmss': { label: 'Self-hosted integration runtime', icon: <Server24Regular />, accent: '#21c08a' },
+  'purview-shir-vmss': { label: 'Purview self-hosted IR (shared)', icon: <Server24Regular />, accent: '#e066b0' },
 };
 
 const useStyles = makeStyles({
@@ -149,15 +150,15 @@ export function ScaleManagePanel() {
                     onClick={() => act(it, { action: 'pause' })}>Pause</Button>
                 </>
               )}
-              {it.kind === 'shir-vmss' && (
+              {(it.kind === 'shir-vmss' || it.kind === 'purview-shir-vmss') && (
                 <>
-                  <Button size="small" appearance="primary" icon={<Play16Regular />} disabled={isBusy || (it.capacity ?? 0) > 0}
+                  <Button size="small" appearance="primary" icon={isBusy ? <Spinner size="tiny" /> : <Play16Regular />} disabled={isBusy || (it.capacity ?? 0) > 0}
                     onClick={() => act(it, { action: 'scale', capacity: 4 })}>Start (4)</Button>
                   <Button size="small" icon={<Pause16Regular />} disabled={isBusy || (it.capacity ?? 0) === 0}
                     onClick={() => act(it, { action: 'scale', capacity: 0 })}>Stop (0)</Button>
                 </>
               )}
-              <Button size="small" appearance="subtle" icon={<ArrowSync16Regular />} onClick={load} disabled={isBusy} title="Refresh" />
+              <Button size="small" appearance="subtle" icon={<ArrowSync16Regular />} onClick={load} disabled={isBusy} title="Refresh state" aria-label={`Refresh ${it.name}`} />
             </div>
 
             {msg && msg.id === id && (
