@@ -75,8 +75,16 @@ const useStyles = makeStyles({
     color: tokens.colorNeutralForeground3,
   },
   purviewEndpoint: {
-    display: 'block', color: tokens.colorNeutralForeground3, marginTop: '4px',
+    display: 'block', color: tokens.colorNeutralForeground3, marginTop: tokens.spacingVerticalXS,
   },
+  mbTop: { marginTop: tokens.spacingVerticalM },
+  mbBottom: { marginBottom: tokens.spacingVerticalM },
+  spinner: { marginTop: tokens.spacingVerticalXXL },
+  errorList: {
+    margin: 0, marginTop: tokens.spacingVerticalXS,
+    paddingLeft: tokens.spacingHorizontalXXL,
+  },
+  okIcon: { color: tokens.colorPaletteGreenForeground1 },
 });
 
 export default function MetastoresPage() {
@@ -196,14 +204,14 @@ export default function MetastoresPage() {
       </Caption1>
 
       {error && (
-        <MessageBar intent="error" style={{ marginBottom: 16 }}>
+        <MessageBar intent="error" className={s.mbBottom}>
           <MessageBarBody><MessageBarTitle>Couldn&apos;t load metastores</MessageBarTitle>{error}</MessageBarBody>
           <MessageBarActions>
             <Button size="small" icon={<ArrowSync24Regular />} onClick={load}>Retry</Button>
           </MessageBarActions>
         </MessageBar>
       )}
-      {loading && !error && <Spinner label="Loading metastores…" style={{ marginTop: 32 }} />}
+      {loading && !error && <Spinner label="Loading metastores…" className={s.spinner} />}
 
       {data && (
         <>
@@ -263,7 +271,7 @@ export default function MetastoresPage() {
             >
               {/* Honest account-admin gate — the page still renders everything else. */}
               {gate && (
-                <MessageBar intent="warning" style={{ marginBottom: 14 }}>
+                <MessageBar intent="warning" className={s.mbBottom}>
                   <MessageBarBody>
                     <MessageBarTitle>{gate.title}</MessageBarTitle>
                     {gate.detail}
@@ -303,10 +311,10 @@ export default function MetastoresPage() {
               {/* Per-workspace (non-admin) errors that aren't the account-admin gate. */}
               {Array.isArray(data.unityWorkspaceErrors) &&
                 data.unityWorkspaceErrors.filter((w: any) => !w.accountAdmin).length > 0 && (
-                <MessageBar intent="warning" style={{ marginTop: 14 }}>
+                <MessageBar intent="warning" className={s.mbTop}>
                   <MessageBarBody>
                     <MessageBarTitle>Some workspaces were unreachable</MessageBarTitle>
-                    <ul style={{ margin: '6px 0 0', paddingLeft: 18 }}>
+                    <ul className={s.errorList}>
                       {data.unityWorkspaceErrors
                         .filter((w: any) => !w.accountAdmin)
                         .map((w: any) => <li key={w.workspace_hostname}><code>{w.workspace_hostname}</code>: {w.message}</li>)}
@@ -325,7 +333,7 @@ export default function MetastoresPage() {
             </Caption1>
 
             {data.discoveryError && (
-              <MessageBar intent="info" style={{ marginBottom: 12 }}>
+              <MessageBar intent="info" className={s.mbBottom}>
                 <MessageBarBody>
                   Couldn&apos;t enumerate workspaces over ARM ({data.discoveryError}). Use manual entry below —
                   grant the Console UAMI <strong>Reader</strong> on the target subscriptions to populate the picker.
@@ -388,7 +396,7 @@ export default function MetastoresPage() {
             </Button>
 
             {probeError && (
-              <MessageBar intent="error" style={{ marginTop: 12 }}>
+              <MessageBar intent="error" className={s.mbTop}>
                 <MessageBarBody><MessageBarTitle>Registration failed</MessageBarTitle>{probeError}</MessageBarBody>
               </MessageBar>
             )}
@@ -396,7 +404,7 @@ export default function MetastoresPage() {
             {probeResult?.ok && (
               <Section bare className={s.probeResultCard}>
                 <div className={s.probeHead}>
-                  <DatabaseLink24Regular style={{ color: tokens.colorPaletteGreenForeground1 }} />
+                  <DatabaseLink24Regular className={s.okIcon} />
                   <Body1><strong>{probeResult.probed}</strong> registered</Body1>
                   <Badge appearance="tint" color="success">
                     {(probeResult.catalogs?.length ?? 0)} catalog{probeResult.catalogs?.length === 1 ? '' : 's'}
@@ -404,7 +412,7 @@ export default function MetastoresPage() {
                 </div>
 
                 {probeResult.accountAdminGate && (
-                  <MessageBar intent="warning" style={{ marginBottom: 10 }}>
+                  <MessageBar intent="warning" className={s.mbBottom}>
                     <MessageBarBody>
                       <MessageBarTitle>{probeResult.accountAdminGate.title}</MessageBarTitle>
                       {probeResult.accountAdminGate.detail}
