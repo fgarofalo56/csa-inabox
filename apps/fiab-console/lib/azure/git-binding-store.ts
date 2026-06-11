@@ -36,6 +36,12 @@ export interface GitBinding {
   // GitHub
   githubOwner?: string;
   githubRepo?: string;
+  /**
+   * GitHub host for an Enterprise Cloud (data-residency) tenant: the `<subdomain>`
+   * of `<subdomain>.ghe.com` (or the full `<subdomain>.ghe.com`). Absent / empty =
+   * github.com. Same GitHub provider — only the REST base host differs.
+   */
+  githubHost?: string;
   // shared
   branch: string;
   folder: string;
@@ -90,6 +96,7 @@ export interface ConnectInput {
   repoName?: string;
   githubOwner?: string;
   githubRepo?: string;
+  githubHost?: string;
   branch: string;
   folder?: string;
   authMethod: GitAuthMethod;
@@ -128,6 +135,7 @@ export async function saveBinding(input: ConnectInput): Promise<GitBindingView> 
     repoName: input.repoName?.trim() || undefined,
     githubOwner: input.githubOwner?.trim() || undefined,
     githubRepo: input.githubRepo?.trim() || undefined,
+    githubHost: input.githubHost?.trim() || undefined,
     branch: (input.branch || 'main').trim(),
     folder: (input.folder || 'loom-workspace').trim(),
     authMethod: input.authMethod,

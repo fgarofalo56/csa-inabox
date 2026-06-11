@@ -22,7 +22,7 @@ import { workspacesContainer } from '@/lib/azure/cosmos-client';
 import { loadBinding, resolveSecret } from '@/lib/azure/git-binding-store';
 import {
   adoListProjects, adoListRepos, adoListBranches,
-  githubListRepos, githubListBranches, githubCloudGate,
+  githubListRepos, githubListBranches, githubCloudGate, githubApiBase,
   GitIntegrationError,
 } from '@/lib/clients/git-integration-client';
 
@@ -88,7 +88,8 @@ export async function GET(req: NextRequest, props: { params: Promise<{ id: strin
       case 'gh-repos': {
         const gate = githubCloudGate();
         if (gate) return fail(gate.message, gate.status, { code: gate.code });
-        return NextResponse.json({ ok: true, repos: await githubListRepos(q.get('owner') || '', pat) });
+        const base = githubApiBase(q.get('host') || '');
+        return NextResponse.json({ ok: true, repos: await githubListRepos(q.get('owner') || '', pat, base) });
       }
       case 'gh-branches': {
         const gate = githubCloudGate();
@@ -96,7 +97,8 @@ export async function GET(req: NextRequest, props: { params: Promise<{ id: strin
         const owner = q.get('owner') || '';
         const repo = q.get('repo') || '';
         if (!owner || !repo) return fail('owner and repo are required', 400);
-        return NextResponse.json({ ok: true, branches: await githubListBranches(owner, repo, pat) });
+        const base = githubApiBase(q.get('host') || '');
+        return NextResponse.json({ ok: true, branches: await githubListBranches(owner, repo, pat, base) });
       }
       default:
         return fail(`unknown action "${action}"`, 400);
