@@ -18,7 +18,7 @@ import {
   Subtitle2, Caption1, Body1, Badge, Button, Input, Spinner,
   Field, MessageBar, MessageBarBody, MessageBarTitle, makeStyles, tokens,
 } from '@fluentui/react-components';
-import { Sparkle20Regular, Add20Regular, Database20Regular } from '@fluentui/react-icons';
+import { Sparkle20Regular, Add20Regular, Database20Regular, Dismiss16Regular } from '@fluentui/react-icons';
 import { safeModelJson } from './model-fetch';
 import type { DaSource, DaSourceType } from './_family-utils';
 
@@ -38,7 +38,7 @@ const useStyles = makeStyles({
   spacer: { flex: 1 },
   preview: { display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalM },
   pairList: { display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalXS },
-  pairRow: { display: 'grid', gridTemplateColumns: '1fr 1fr auto', gap: tokens.spacingHorizontalXS },
+  pairRow: { display: 'grid', gridTemplateColumns: '1fr 1fr auto', gap: tokens.spacingHorizontalXS, alignItems: 'center' },
   addBtn: { alignSelf: 'flex-start' },
   summary: { cursor: 'pointer', fontSize: tokens.fontSizeBase300, color: tokens.colorNeutralForeground2 },
   summarySmall: { cursor: 'pointer', fontSize: tokens.fontSizeBase200, color: tokens.colorNeutralForeground3 },
@@ -214,7 +214,7 @@ export function DataAgentConfigCopilotPanel({ id, sources, ensureSaved, onApply 
                       <div key={i} className={styles.pairRow}>
                         <Input value={ex.question} placeholder="question" onChange={(_, d) => updateExample(src.id, i, { question: d.value })} />
                         <Input value={ex.query} placeholder="SQL / KQL / search" onChange={(_, d) => updateExample(src.id, i, { query: d.value })} />
-                        <Button size="small" appearance="subtle" onClick={() => removeExample(src.id, i)}>×</Button>
+                        <Button size="small" appearance="subtle" icon={<Dismiss16Regular />} aria-label={`Remove example ${i + 1}`} title="Remove this example" onClick={() => removeExample(src.id, i)} />
                       </div>
                     ))}
                     <Button size="small" appearance="outline" icon={<Add20Regular />} onClick={() => addExample(src.id)} className={styles.addBtn}>Example</Button>
