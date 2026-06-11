@@ -9,6 +9,7 @@ import { Delete24Regular, Edit24Regular } from '@fluentui/react-icons';
 import { Section, Toolbar } from '@/lib/components/ui/section';
 import { LoomDataTable, type LoomColumn } from '@/lib/components/ui/loom-data-table';
 import { ApimNamedValueSummary } from '@/lib/azure/apim-client';
+import { apimFetchJson } from './apim-pane-fetch';
 
 export function ApimNamedValuesPane() {
   const [values, setValues] = useState<ApimNamedValueSummary[]>([]);
@@ -17,17 +18,16 @@ export function ApimNamedValuesPane() {
   const [q, setQ] = useState('');
 
   useEffect(() => {
-    fetch('/api/items/apim-named-values')
-      .then((r) => r.json())
+    apimFetchJson('/api/apim/named-values')
       .then((d) => {
         if (d.ok && Array.isArray(d.namedValues)) {
-          setValues(d.namedValues);
+          setValues(d.namedValues as ApimNamedValueSummary[]);
         } else {
-          setError(d.error || 'Failed to load named values');
+          setError((d.error as string) || 'Failed to load named values');
         }
         setLoading(false);
       })
-      .catch((e) => { setError(String(e)); setLoading(false); });
+      .catch((e) => { setError(e instanceof Error ? e.message : String(e)); setLoading(false); });
   }, []);
 
   const visibleValues = useMemo(() => {

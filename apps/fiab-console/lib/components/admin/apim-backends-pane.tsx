@@ -9,6 +9,7 @@ import { Delete24Regular, Edit24Regular } from '@fluentui/react-icons';
 import { Section, Toolbar } from '@/lib/components/ui/section';
 import { LoomDataTable, type LoomColumn } from '@/lib/components/ui/loom-data-table';
 import { ApimBackendSummary } from '@/lib/azure/apim-client';
+import { apimFetchJson } from './apim-pane-fetch';
 
 export function ApimBackendsPane() {
   const [backends, setBackends] = useState<ApimBackendSummary[]>([]);
@@ -17,17 +18,16 @@ export function ApimBackendsPane() {
   const [q, setQ] = useState('');
 
   useEffect(() => {
-    fetch('/api/items/apim-backends')
-      .then((r) => r.json())
+    apimFetchJson('/api/apim/backends')
       .then((d) => {
         if (d.ok && Array.isArray(d.backends)) {
-          setBackends(d.backends);
+          setBackends(d.backends as ApimBackendSummary[]);
         } else {
-          setError(d.error || 'Failed to load backends');
+          setError((d.error as string) || 'Failed to load backends');
         }
         setLoading(false);
       })
-      .catch((e) => { setError(String(e)); setLoading(false); });
+      .catch((e) => { setError(e instanceof Error ? e.message : String(e)); setLoading(false); });
   }, []);
 
   const visibleBackends = useMemo(() => {

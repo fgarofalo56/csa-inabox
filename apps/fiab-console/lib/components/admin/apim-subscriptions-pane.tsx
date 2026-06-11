@@ -9,6 +9,7 @@ import { CheckmarkCircle24Regular, DismissCircle24Regular } from '@fluentui/reac
 import { Section, Toolbar } from '@/lib/components/ui/section';
 import { LoomDataTable, type LoomColumn } from '@/lib/components/ui/loom-data-table';
 import { ApimSubscriptionSummary } from '@/lib/azure/apim-client';
+import { apimFetchJson } from './apim-pane-fetch';
 
 export function ApimSubscriptionsPane() {
   const [subscriptions, setSubscriptions] = useState<ApimSubscriptionSummary[]>([]);
@@ -20,17 +21,16 @@ export function ApimSubscriptionsPane() {
   const [keys, setKeys] = useState<{ primaryKey?: string; secondaryKey?: string } | null>(null);
 
   useEffect(() => {
-    fetch('/api/items/apim-subscriptions')
-      .then((r) => r.json())
+    apimFetchJson('/api/apim/subscriptions')
       .then((d) => {
         if (d.ok && Array.isArray(d.subscriptions)) {
-          setSubscriptions(d.subscriptions);
+          setSubscriptions(d.subscriptions as ApimSubscriptionSummary[]);
         } else {
-          setError(d.error || 'Failed to load subscriptions');
+          setError((d.error as string) || 'Failed to load subscriptions');
         }
         setLoading(false);
       })
-      .catch((e) => { setError(String(e)); setLoading(false); });
+      .catch((e) => { setError(e instanceof Error ? e.message : String(e)); setLoading(false); });
   }, []);
 
   const visibleSubs = useMemo(() => {
@@ -44,49 +44,56 @@ export function ApimSubscriptionsPane() {
 
   async function handleApprove(sub: ApimSubscriptionSummary) {
     try {
-      const res = await fetch(`/api/items/apim-subscriptions/${sub.name}`, {
+      const d = await apimFetchJson(`/api/apim/subscriptions/${encodeURIComponent(sub.name)}`, {
         method: 'PATCH',
+        headers: { 'content-type': 'application/json' },
         body: JSON.stringify({ state: 'active' }),
       });
-      const d = await res.json();
       if (d.ok) {
         setSubscriptions((prev) =>
           prev.map((s) => (s.name === sub.name ? { ...s, state: 'active' } : s))
         );
+      } else {
+        setError((d.error as string) || 'Approve failed');
       }
     } catch (e) {
-      console.error('Approve failed:', e);
+      setError(e instanceof Error ? e.message : String(e));
     }
   }
 
   async function handleRejectOrSuspend(sub: ApimSubscriptionSummary) {
     try {
-      const res = await fetch(`/api/items/apim-subscriptions/${sub.name}`, {
+      const d = await apimFetchJson(`/api/apim/subscriptions/${encodeURIComponent(sub.name)}`, {
         method: 'PATCH',
+        headers: { 'content-type': 'application/json' },
         body: JSON.stringify({ state: 'suspended' }),
       });
-      const d = await res.json();
       if (d.ok) {
         setSubscriptions((prev) =>
           prev.map((s) => (s.name === sub.name ? { ...s, state: 'suspended' } : s))
         );
+      } else {
+        setError((d.error as string) || 'Suspend failed');
       }
     } catch (e) {
-      console.error('Suspend failed:', e);
+      setError(e instanceof Error ? e.message : String(e));
     }
   }
 
   async function handleShowKeys(sub: ApimSubscriptionSummary) {
     setSelectedSub(sub);
     setShowKeysDialog(true);
+    setKeys(null);
     try {
-      const res = await fetch(`/api/items/apim-subscriptions/${sub.name}/keys`);
-      const d = await res.json();
+      const d = await apimFetchJson(`/api/apim/subscriptions/${encodeURIComponent(sub.name)}/keys`);
       if (d.ok) {
-        setKeys({ primaryKey: d.primaryKey, secondaryKey: d.secondaryKey });
+        setKeys({ primaryKey: d.primaryKey as string | undefined, secondaryKey: d.secondaryKey as string | undefined });
+      } else {
+        setKeys({ primaryKey: undefined, secondaryKey: undefined });
       }
     } catch (e) {
       console.error('Load keys failed:', e);
+      setKeys({ primaryKey: undefined, secondaryKey: undefined });
     }
   }
 

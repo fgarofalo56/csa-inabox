@@ -45,6 +45,12 @@ param workspaceId string
 @description('Compliance tags')
 param complianceTags object
 
+@description('Loom Console UAMI principal id. When set (and !skipRoleGrants), the UAMI is granted "API Management Service Contributor" at this APIM scope so the Admin → API Management panes can read the service + scale the SKU + manage APIs/products/subscriptions/named-values/backends/policies via ARM. Folds scripts/csa-loom/grant-apim-rbac.sh into the deployment so APIM is configured by default — no manual post-deploy grant.')
+param consolePrincipalId string = ''
+
+@description('Skip RBAC role assignments (set in environments where the deployer lacks Owner/User Access Administrator; grant out-of-band via scripts/csa-loom/grant-apim-rbac.sh).')
+param skipRoleGrants bool = false
+
 resource apim 'Microsoft.ApiManagement/service@2024-06-01-preview' = {
   name: 'apim-csa-loom-${location}'
   location: location
@@ -150,6 +156,24 @@ resource diag 'Microsoft.Insights/diagnosticSettings@2021-05-01-preview' = {
     metrics: [
       { category: 'AllMetrics', enabled: true }
     ]
+  }
+}
+
+// ---- Console UAMI → API Management Service Contributor at the APIM scope ----
+// Required for the Admin → API Management surface (apim-client.ts): reading the
+// service (GET /api/apim/service), scaling the SKU (PATCH), and managing APIs /
+// products / subscriptions / named values / backends / policies — all real ARM
+// REST on Microsoft.ApiManagement/service. Without this grant the panes surface
+// an honest gate / 403. This replaces the manual scripts/csa-loom/grant-apim-rbac.sh
+// step for the provisioned-APIM path so APIM works by default after deploy.
+// Role: "API Management Service Contributor" (312a565d-c81f-4fd8-895a-4e21e48d571c).
+resource consoleApimContributor 'Microsoft.Authorization/roleAssignments@2022-04-01' = if (!empty(consolePrincipalId) && !skipRoleGrants) {
+  scope: apim
+  name: guid(apim.id, consolePrincipalId, '312a565d-c81f-4fd8-895a-4e21e48d571c')
+  properties: {
+    roleDefinitionId: subscriptionResourceId('Microsoft.Authorization/roleDefinitions', '312a565d-c81f-4fd8-895a-4e21e48d571c')
+    principalId: consolePrincipalId
+    principalType: 'ServicePrincipal'
   }
 }
 
