@@ -119,6 +119,7 @@ export function MirroredDatabaseEditor({ item, id }: Props) {
       sourceType?: string; server?: string; database?: string; connectionId?: string;
       tables?: MirrorTableSpec[]; displayName?: string; includeIcebergTables?: boolean;
       projectId?: string; serviceName?: string; gateway?: string; syncUser?: string;
+      syncMode?: 'snapshot' | 'incremental' | 'continuous';
     } | undefined
   >(undefined);
 
@@ -246,6 +247,7 @@ export function MirroredDatabaseEditor({ item, id }: Props) {
       serviceName: sc.serviceName || '',
       gateway: sc.gateway || '',
       syncUser: sc.syncUser || '',
+      syncMode: sc.syncMode,
       displayName: detail?.mirroredDatabase?.displayName || (mirrors || []).find((m) => m.id === mirrorId)?.displayName || '',
     });
     setWizardOpen(true);

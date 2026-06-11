@@ -59,6 +59,34 @@ const BIGQUERY_SOURCES = new Set(['GoogleBigQuery']);
 /** Sources whose connection needs a self-hosted/on-prem gateway (IR) + sync user. */
 const GATEWAY_SOURCES = new Set(['Oracle']);
 
+/**
+ * Ongoing-replication mode — a fixed allowlist (loom-no-freeform-config) carried
+ * into mirroring.json `source.typeProperties.syncMode` and consumed by the engine.
+ */
+const SYNC_MODE_OPTIONS: { id: 'incremental' | 'snapshot' | 'continuous'; name: string }[] = [
+  { id: 'incremental', name: 'Incremental (changed rows since last sync)' },
+  { id: 'snapshot', name: 'Snapshot (full reload every run)' },
+  { id: 'continuous', name: 'Continuous (ADF CDC / scheduled copy when configured)' },
+];
+
+/**
+ * Per-source plain-English description of HOW ongoing sync works for that source
+ * — so the operator sees the real engine path, not a generic label. Grounds the
+ * sync-mode control in the actual Azure-native backend.
+ */
+const SOURCE_SYNC_NOTE: Record<string, string> = {
+  AzureSqlDatabase: 'SQL Change Tracking drives incremental deltas; set the ADF CDC env vars for continuous Delta CDC.',
+  AzureSqlMI: 'SQL Change Tracking drives incremental deltas; set the ADF CDC env vars for continuous Delta CDC.',
+  SqlServer2025: 'SQL Change Tracking drives incremental deltas; set the ADF CDC env vars for continuous Delta CDC.',
+  MSSQL: 'SQL Change Tracking drives incremental deltas; set the ADF CDC env vars for continuous Delta CDC.',
+  AzurePostgreSql: 'Watermark-incremental on a monotonic column (updated-at timestamp / serial id). Insert/update fidelity; deletes are a disclosed follow-up.',
+  CosmosDb: 'Change-feed `_ts`-watermark incremental — each run reads only documents changed since the last sync.',
+  Snowflake: 'ADF Copy runtime — delete-then-copy full refresh into Bronze Parquet, on a schedule trigger when continuous/incremental.',
+  GoogleBigQuery: 'ADF Copy backend (Google BigQuery V2 connector → Bronze) once the ADF linked services are configured.',
+  Oracle: 'ADF Copy backend through the on-prem data gateway → Bronze once the ADF linked services are configured.',
+  GenericMirror: 'Open mirroring — your producer pushes Parquet to the landing zone; a Spark job merges it into managed Delta.',
+};
+
 const useStyles = makeStyles({
   tableWrap: { overflow: 'auto', maxHeight: 320, border: `1px solid ${tokens.colorNeutralStroke2}`, borderRadius: 4 },
   tableLoading: { display: 'flex', alignItems: 'center', padding: tokens.spacingVerticalM, marginTop: 8 },
@@ -123,6 +151,8 @@ export interface MirrorSourceWizardProps {
     gateway?: string;
     /** Oracle: the source sync user the engine connects as. */
     syncUser?: string;
+    /** Ongoing-replication mode (mirroring.json source.typeProperties.syncMode). */
+    syncMode?: 'snapshot' | 'incremental' | 'continuous';
   };
   onClose: () => void;
   onCreated: (mirrorId: string, displayName: string) => void;
@@ -151,6 +181,9 @@ export function MirrorSourceWizard(props: MirrorSourceWizardProps) {
   // alongside standard tables; the Azure-native path reads the Iceberg metadata
   // from the source and lands the data as Bronze Delta.
   const [includeIceberg, setIncludeIceberg] = useState(false);
+  // Ongoing-replication mode (fixed allowlist). Default incremental — only
+  // changed rows/docs ship after the initial load.
+  const [syncMode, setSyncMode] = useState<'incremental' | 'snapshot' | 'continuous'>('incremental');
   const [connections, setConnections] = useState<ConnectionView[]>([]);
   const [connBuilderOpen, setConnBuilderOpen] = useState(false);
   const [availTables, setAvailTables] = useState<MirrorTableSpec[] | null>(null);
@@ -198,11 +231,13 @@ export function MirrorSourceWizard(props: MirrorSourceWizardProps) {
       setSyncUser(initialSrc.syncUser || '');
       setSelTables(new Set((initialSrc.tables || []).map(tkey)));
       setIncludeIceberg(!!initialSrc.includeIcebergTables);
+      setSyncMode(initialSrc.syncMode === 'snapshot' || initialSrc.syncMode === 'continuous' ? initialSrc.syncMode : 'incremental');
     } else {
       setCreateSrc('AzureSqlDatabase'); setCreateServer(''); setCreateDb(''); setConnId(''); setCreateName('');
       setProjectId(''); setServiceName(''); setGateway(''); setSyncUser('');
       setSelTables(new Set());
       setIncludeIceberg(false);
+      setSyncMode('incremental');
     }
     setAvailTables(null); setTablesMsg(null); setVerify({ status: 'idle' }); setCreateErr(null);
   }, [open, editing, initialSrc, loadConnections]);
@@ -286,6 +321,7 @@ export function MirrorSourceWizard(props: MirrorSourceWizardProps) {
         if (syncUser.trim()) sourceTypeProps.syncUser = syncUser.trim();
       }
       if (wantIceberg) sourceTypeProps.includeIcebergTables = true;
+      sourceTypeProps.syncMode = syncMode;
       const mirroringDef = {
         properties: {
           source: { type: createSrc, typeProperties: sourceTypeProps },
@@ -305,6 +341,7 @@ export function MirrorSourceWizard(props: MirrorSourceWizardProps) {
         connectionId: connId || undefined,
         tables: (availTables || []).filter((t) => selTables.has(tkey(t))),
         includeIcebergTables: wantIceberg,
+        syncMode,
       };
       const r = editing && mirrorId
         ? await fetch(`/api/items/mirrored-database/${encodeURIComponent(mirrorId)}?workspaceId=${encodeURIComponent(workspaceId)}`, {
@@ -322,7 +359,7 @@ export function MirrorSourceWizard(props: MirrorSourceWizardProps) {
         onCreated(newId || '', createName.trim());
       }
     } finally { setCreateBusy(false); }
-  }, [workspaceId, createName, createSrc, effServer, effDb, connId, includeIceberg, editing, mirrorId, availTables, selTables, isBigQuery, isOracle, projectId, serviceName, gateway, syncUser, onCreated, onUpdated]);
+  }, [workspaceId, createName, createSrc, effServer, effDb, connId, includeIceberg, syncMode, editing, mirrorId, availTables, selTables, isBigQuery, isOracle, projectId, serviceName, gateway, syncUser, onCreated, onUpdated]);
 
   return (
     <Dialog open={open} onOpenChange={(_, d) => { if (!d.open) onClose(); }}>
@@ -441,6 +478,17 @@ export function MirrorSourceWizard(props: MirrorSourceWizardProps) {
                 <Caption1 style={{ color: tokens.colorNeutralForeground3 }}>
                   Optional — leave all unchecked to mirror <strong>every</strong> table the engine discovers. Or load + pick a subset.
                 </Caption1>
+                <Field label="Sync mode" style={{ marginTop: 10 }}
+                  hint={SOURCE_SYNC_NOTE[createSrc] || 'How ongoing changes are replicated after the initial load.'}>
+                  <Dropdown
+                    value={SYNC_MODE_OPTIONS.find((o) => o.id === syncMode)?.name || ''}
+                    selectedOptions={[syncMode]}
+                    onOptionSelect={(_, d) => { if (d.optionValue) setSyncMode(d.optionValue as typeof syncMode); }}>
+                    {SYNC_MODE_OPTIONS.map((o) => (
+                      <Option key={o.id} value={o.id} text={o.name}>{o.name}</Option>
+                    ))}
+                  </Dropdown>
+                </Field>
                 {createSrc === 'Snowflake' && (
                   <div className={s.icebergCard}>
                     <span className={s.icebergIcon}><Layer20Regular /></span>
@@ -534,6 +582,7 @@ export function MirrorSourceWizard(props: MirrorSourceWizardProps) {
                     </>
                   )}
                   <span className={s.sumKey}>Tables</span><span>{selTables.size > 0 ? `${selTables.size} selected` : 'all discovered'}</span>
+                  <span className={s.sumKey}>Sync mode</span><span>{SYNC_MODE_OPTIONS.find((o) => o.id === syncMode)?.name || syncMode}</span>
                   {createSrc === 'Snowflake' && (<><span className={s.sumKey}>Iceberg</span><span>{includeIceberg ? 'Iceberg tables included' : 'standard tables only'}</span></>)}
                   <span className={s.sumKey}>Target</span><span>ADLS Bronze Delta</span>
                 </div>

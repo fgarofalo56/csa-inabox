@@ -407,6 +407,19 @@ param loomSessionSecret string = ''
 @allowed(['adf-cdc', 'synapse-link', 'fabric'])
 param loomMirrorBackend string = 'adf-cdc'
 
+@description('Opt-in ADF CDC mirroring — pre-existing ADF linked service for the relational SOURCE (Azure SQL / SQL Server). Empty = built-in CSV snapshot engine (Azure-native, no Fabric).')
+param loomMirrorSourceLinkedService string = ''
+
+@description('Opt-in ADF CDC/Copy mirroring — pre-existing ADF AzureBlobFS linked service pointing at the DLZ ADLS account (Delta/Parquet sink). Empty = built-in snapshot engine.')
+param loomMirrorAdlsLinkedService string = ''
+
+@description('Opt-in ADF Copy mirroring — pre-existing ADF Snowflake linked service (credential in Key Vault). Empty = falls back to loomMirrorSourceLinkedService. Snowflake → ADF Copy → ADLS Bronze Parquet, NO Fabric.')
+param loomMirrorSnowflakeLinkedService string = ''
+
+@description('Refresh cadence for the ADF Copy backend schedule trigger (Snowflake): 15min | 1h | 4h | daily | on-demand. Default 1h.')
+@allowed(['15min', '1h', '4h', 'daily', 'on-demand'])
+param loomMirrorCopyCadence string = '1h'
+
 @description('Default Fabric/Power BI workspace id (LOOM_DEFAULT_FABRIC_WORKSPACE). Leave EMPTY (default) for the Azure-native path — Fabric is strictly opt-in (per no-fabric-dependency.md) and only used when a *-backend env is also set to fabric.')
 param loomDefaultFabricWorkspace string = ''
 
@@ -585,6 +598,10 @@ module adminPlane 'modules/admin-plane/main.bicep' = {
     loomMsalClientSecret: loomMsalClientSecret
     loomSessionSecret: loomSessionSecret
     loomMirrorBackend: loomMirrorBackend
+    loomMirrorSourceLinkedService: loomMirrorSourceLinkedService
+    loomMirrorAdlsLinkedService: loomMirrorAdlsLinkedService
+    loomMirrorSnowflakeLinkedService: loomMirrorSnowflakeLinkedService
+    loomMirrorCopyCadence: loomMirrorCopyCadence
     // No-Fabric mode (default): force the bound workspace empty so nothing
     // hard-depends on a Fabric capacity/workspace (no-fabric-dependency.md). Set
     // fabricEnabled=true ONLY to opt into a bound Fabric workspace.
