@@ -27,6 +27,7 @@
  * there is no mock list.
  */
 
+import { fetchWithTimeout } from '@/lib/azure/fetch-with-timeout';
 import {
   ChainedTokenCredential,
   DefaultAzureCredential,
@@ -192,7 +193,7 @@ async function maybeFabricShare(opts: {
     const t = await fabricCredential().getToken(FABRIC_SCOPE);
     if (!t?.token) return { shared: false, hint: 'Could not acquire a Fabric token for the opt-in /share mirror.' };
     const url = `${FABRIC_BASE}/workspaces/${encodeURIComponent(opts.fabricWorkspaceId)}/items/${encodeURIComponent(opts.fabricItemId)}/users`;
-    const res = await fetch(url, {
+    const res = await fetchWithTimeout(url, {
       method: 'POST',
       headers: { authorization: `Bearer ${t.token}`, 'content-type': 'application/json' },
       body: JSON.stringify({

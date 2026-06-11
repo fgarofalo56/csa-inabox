@@ -22,6 +22,7 @@
  * Azure-native and independently optional.
  */
 
+import { clientFetch } from '@/lib/client-fetch';
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { CatalogShell } from '@/lib/components/catalog/catalog-shell';
 import { PurviewGate, usePurviewStatus } from '@/lib/components/purview-gate';
@@ -123,7 +124,7 @@ export default function CatalogDomainsPage() {
   const loadDomains = useCallback(async () => {
     setLoading(true); setError(null);
     try {
-      const r = await fetch('/api/admin/domains');
+      const r = await clientFetch('/api/admin/domains');
       const j: AdminDomainsResponse = await r.json();
       if (!j.ok) { setError(j.error || `HTTP ${r.status}`); return; }
       setDomains(j.domains || []);

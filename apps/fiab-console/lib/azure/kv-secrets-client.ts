@@ -12,6 +12,7 @@
  * vault; a 403 surfaces verbatim so the UI shows the exact role to grant
  * (no-vaporware.md). No mocks.
  */
+import { fetchWithTimeout } from '@/lib/azure/fetch-with-timeout';
 import { ChainedTokenCredential, DefaultAzureCredential, ManagedIdentityCredential } from '@azure/identity';
 
 const uamiClientId = process.env.LOOM_UAMI_CLIENT_ID || process.env.AZURE_CLIENT_ID;
@@ -66,7 +67,7 @@ export async function putShortcutSecret(name: string, value: string): Promise<{ 
   const base = shortcutVaultUrl();
   if (!base) throw new KeyVaultError('Shortcut Key Vault not configured (LOOM_SHORTCUT_KEYVAULT)', 503);
   const secretName = sanitizeSecretName(name);
-  const res = await fetch(`${base}/secrets/${encodeURIComponent(secretName)}?api-version=${KV_API}`, {
+  const res = await fetchWithTimeout(`${base}/secrets/${encodeURIComponent(secretName)}?api-version=${KV_API}`, {
     method: 'PUT',
     headers: { authorization: `Bearer ${await token()}`, 'content-type': 'application/json' },
     body: JSON.stringify({ value }),
@@ -83,7 +84,7 @@ export async function putShortcutSecret(name: string, value: string): Promise<{ 
 export async function getShortcutSecretValue(name: string): Promise<string> {
   const base = shortcutVaultUrl();
   if (!base) throw new KeyVaultError('Shortcut Key Vault not configured (LOOM_SHORTCUT_KEYVAULT)', 503);
-  const res = await fetch(`${base}/secrets/${encodeURIComponent(name)}?api-version=${KV_API}`, {
+  const res = await fetchWithTimeout(`${base}/secrets/${encodeURIComponent(name)}?api-version=${KV_API}`, {
     headers: { authorization: `Bearer ${await token()}` },
     cache: 'no-store',
   });
@@ -120,7 +121,7 @@ export async function putKeyVaultSecret(name: string, value: string): Promise<{ 
   const base = vaultUrl();
   if (!base) throw new KeyVaultError('Key Vault not configured (LOOM_KEY_VAULT_URI)', 503);
   const secretName = sanitizeSecretName(name);
-  const res = await fetch(`${base}/secrets/${encodeURIComponent(secretName)}?api-version=${KV_API}`, {
+  const res = await fetchWithTimeout(`${base}/secrets/${encodeURIComponent(secretName)}?api-version=${KV_API}`, {
     method: 'PUT',
     headers: { authorization: `Bearer ${await token()}`, 'content-type': 'application/json' },
     body: JSON.stringify({ value }),
@@ -137,7 +138,7 @@ export async function putKeyVaultSecret(name: string, value: string): Promise<{ 
 export async function getKeyVaultSecretValue(name: string): Promise<string> {
   const base = vaultUrl();
   if (!base) throw new KeyVaultError('Key Vault not configured (LOOM_KEY_VAULT_URI)', 503);
-  const res = await fetch(`${base}/secrets/${encodeURIComponent(name)}?api-version=${KV_API}`, {
+  const res = await fetchWithTimeout(`${base}/secrets/${encodeURIComponent(name)}?api-version=${KV_API}`, {
     headers: { authorization: `Bearer ${await token()}` },
     cache: 'no-store',
   });
@@ -206,7 +207,7 @@ export async function listKeyVaultCertificates(): Promise<KeyVaultCertificateRef
   // Follow KV paging (`nextLink`) so vaults with many certs return all of them.
   let guard = 0;
   while (next && guard++ < 50) {
-    const res: Response = await fetch(next, {
+    const res: Response = await fetchWithTimeout(next, {
       headers: { authorization: `Bearer ${await token()}` },
       cache: 'no-store',
     });
@@ -235,7 +236,7 @@ export async function listKeyVaultCertificates(): Promise<KeyVaultCertificateRef
 export async function deleteKeyVaultSecret(name: string): Promise<void> {
   const base = vaultUrl();
   if (!base) return;
-  await fetch(`${base}/secrets/${encodeURIComponent(name)}?api-version=${KV_API}`, {
+  await fetchWithTimeout(`${base}/secrets/${encodeURIComponent(name)}?api-version=${KV_API}`, {
     method: 'DELETE',
     headers: { authorization: `Bearer ${await token()}` },
     cache: 'no-store',

@@ -19,6 +19,7 @@
  * Embedded (Commercial) or Managed Grafana (Gov) via /api/admin/usage/embed.
  */
 
+import { clientFetch } from '@/lib/client-fetch';
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import {
   Spinner, Caption1, Body1, Subtitle2, Button, Badge,
@@ -232,7 +233,7 @@ export default function UsagePage() {
     try {
       const qs = new URLSearchParams({ days: String(d) });
       if (feat) qs.set('feature', feat);
-      const r = await fetch(`/api/admin/usage?${qs.toString()}`);
+      const r = await clientFetch(`/api/admin/usage?${qs.toString()}`);
       const j = await r.json();
       if (!j.ok) { setError(j.error || 'failed'); return; }
       setData(j);
@@ -248,7 +249,7 @@ export default function UsagePage() {
     let cancelled = false;
     (async () => {
       try {
-        const r = await fetch('/api/admin/usage/embed');
+        const r = await clientFetch('/api/admin/usage/embed');
         const j = await r.json();
         if (!cancelled) setEmbed(j);
       } catch { if (!cancelled) setEmbed(null); }

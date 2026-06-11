@@ -36,6 +36,7 @@
  *   https://learn.microsoft.com/rest/api/eventgrid/controlplane/topics
  */
 
+import { fetchWithTimeout } from '@/lib/azure/fetch-with-timeout';
 import {
   ChainedTokenCredential,
   DefaultAzureCredential,
@@ -118,7 +119,7 @@ async function armToken(): Promise<string> {
 
 async function arm<T = any>(url: string, init: RequestInit = {}): Promise<T> {
   const token = await armToken();
-  const res = await fetch(url, {
+  const res = await fetchWithTimeout(url, {
     ...init,
     headers: {
       ...(init.headers || {}),
@@ -379,7 +380,7 @@ export async function publishBusinessEvents(
     headers['authorization'] = `Bearer ${await dataToken()}`;
   }
 
-  const res = await fetch(endpoint, { method: 'POST', headers, body: payload });
+  const res = await fetchWithTimeout(endpoint, { method: 'POST', headers, body: payload });
   if (!res.ok) {
     const text = await res.text().catch(() => '');
     throw new EventGridTopicsError(

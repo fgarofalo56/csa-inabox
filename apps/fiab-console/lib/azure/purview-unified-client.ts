@@ -46,6 +46,7 @@
  * PurviewNotConfiguredError (a subclass shared with purview-client.ts) so the
  * route returns 501/503 + a structured remediation hint.
  */
+import { fetchWithTimeout } from '@/lib/azure/fetch-with-timeout';
 import {
   DefaultAzureCredential,
   ManagedIdentityCredential,
@@ -216,7 +217,7 @@ async function ucFetch(
   const extra = init.query ? '&' + new URLSearchParams(init.query).toString() : '';
   const url = `${base}${path}${sep}api-version=${UC_API_VERSION}${extra}`;
   const { query: _q, ...rest } = init;
-  return fetch(url, {
+  return fetchWithTimeout(url, {
     ...rest,
     cache: 'no-store',
     headers: {

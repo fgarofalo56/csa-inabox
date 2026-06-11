@@ -37,6 +37,7 @@
 import { ChainedTokenCredential, DefaultAzureCredential, ManagedIdentityCredential } from '@azure/identity';
 import { FabricError, fabricHint } from '@/lib/azure/fabric-client';
 import type { Provisioner, ProvisionResult } from './types';
+import { fetchWithTimeout } from '@/lib/azure/fetch-with-timeout';
 
 const FABRIC_BASE = process.env.LOOM_FABRIC_BASE || 'https://api.fabric.microsoft.com/v1';
 const uamiClientId = process.env.LOOM_UAMI_CLIENT_ID;
@@ -211,7 +212,7 @@ async function resolveSemanticModelId(
   reportDisplayName: string,
   content: any,
 ): Promise<{ id?: string; candidates: string[] }> {
-  const res = await fetch(`${FABRIC_BASE}/workspaces/${encodeURIComponent(ws)}/semanticModels`, {
+  const res = await fetchWithTimeout(`${FABRIC_BASE}/workspaces/${encodeURIComponent(ws)}/semanticModels`, {
     headers: { authorization: `Bearer ${tok}` },
     cache: 'no-store',
   });
@@ -315,7 +316,7 @@ export const reportProvisioner: Provisioner = async (input): Promise<ProvisionRe
   steps.push(`Built PBIR definition (${parts.length} parts).`);
 
   // Idempotency: reuse an existing report with the same displayName.
-  const listRes = await fetch(`${FABRIC_BASE}/workspaces/${encodeURIComponent(ws)}/reports`, {
+  const listRes = await fetchWithTimeout(`${FABRIC_BASE}/workspaces/${encodeURIComponent(ws)}/reports`, {
     headers: { authorization: `Bearer ${tok}` },
     cache: 'no-store',
   });
@@ -334,7 +335,7 @@ export const reportProvisioner: Provisioner = async (input): Promise<ProvisionRe
   const match = existing.find((r: any) => (r.displayName || '').toLowerCase() === input.displayName.toLowerCase());
 
   if (match?.id) {
-    const upd = await fetch(`${FABRIC_BASE}/workspaces/${encodeURIComponent(ws)}/reports/${encodeURIComponent(match.id)}/updateDefinition`, {
+    const upd = await fetchWithTimeout(`${FABRIC_BASE}/workspaces/${encodeURIComponent(ws)}/reports/${encodeURIComponent(match.id)}/updateDefinition`, {
       method: 'POST',
       headers: { authorization: `Bearer ${tok}`, 'content-type': 'application/json' },
       body: JSON.stringify({ definition: { parts } }),
@@ -348,7 +349,7 @@ export const reportProvisioner: Provisioner = async (input): Promise<ProvisionRe
     return { status: 'exists', resourceId: match.id, secondaryIds: { fabricWorkspaceId: ws, semanticModelId: resolved.id }, steps };
   }
 
-  const createRes = await fetch(`${FABRIC_BASE}/workspaces/${encodeURIComponent(ws)}/reports`, {
+  const createRes = await fetchWithTimeout(`${FABRIC_BASE}/workspaces/${encodeURIComponent(ws)}/reports`, {
     method: 'POST',
     headers: { authorization: `Bearer ${tok}`, 'content-type': 'application/json' },
     body: JSON.stringify({ displayName: input.displayName, description: `Installed from ${input.appId}`, definition: { parts } }),

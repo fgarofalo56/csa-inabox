@@ -29,6 +29,7 @@
  * vars to set. Routes surface that as a Fluent MessageBar; the editor surface
  * still renders fully.
  */
+import { fetchWithTimeout } from '@/lib/azure/fetch-with-timeout';
 import {
   DefaultAzureCredential,
   ManagedIdentityCredential,
@@ -213,7 +214,7 @@ async function mlflowFetch(
     const qs = sp.toString();
     if (qs) url += `?${qs}`;
   }
-  return fetch(url, {
+  return fetchWithTimeout(url, {
     ...rest,
     headers: {
       ...(rest.headers || {}),

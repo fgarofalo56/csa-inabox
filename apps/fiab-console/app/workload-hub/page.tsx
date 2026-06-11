@@ -33,6 +33,7 @@ import { PageShell } from '@/lib/components/page-shell';
 import { SignInRequired } from '@/lib/components/sign-in-required';
 import { Section, Toolbar } from '@/lib/components/ui/section';
 import { ViewToggle, type LoomView } from '@/lib/components/ui/view-toggle';
+import { clientFetch } from '@/lib/client-fetch';
 import { ItemTile } from '@/lib/components/ui/item-tile';
 import { TileGrid } from '@/lib/components/ui/tile-grid';
 import { LoomDataTable, type LoomColumn } from '@/lib/components/ui/loom-data-table';
@@ -153,7 +154,7 @@ export default function WorkloadHubPage() {
   }, [view]);
 
   useEffect(() => {
-    fetch('/api/workloads-catalog').then(r => {
+    clientFetch('/api/workloads-catalog').then(r => {
       if (r.status === 401 || r.status === 403) { setUnauth(true); setCatalog([]); return null; }
       return r.json();
     }).then(d => {

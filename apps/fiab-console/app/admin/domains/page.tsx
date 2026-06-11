@@ -18,6 +18,7 @@
  * provisioned the domain mirrors to a Purview collection (honest-gated).
  */
 
+import { clientFetch } from '@/lib/client-fetch';
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import {
   Spinner, Badge, Caption1, Body1, Input, Textarea, Button,
@@ -101,7 +102,7 @@ export default function DomainsPage() {
   const load = useCallback(async () => {
     setLoading(true); setError(null);
     try {
-      const r = await fetch('/api/admin/domains');
+      const r = await clientFetch('/api/admin/domains');
       const j = await r.json();
       if (!j.ok) { setError(j.error || 'failed'); return; }
       setDomains(j.domains || []);
@@ -124,7 +125,7 @@ export default function DomainsPage() {
     if (!newId.trim() || !newName.trim()) { setActionErr('id and name required'); return; }
     setCreating(true); setActionErr(null);
     try {
-      const r = await fetch('/api/admin/domains', {
+      const r = await clientFetch('/api/admin/domains', {
         method: 'POST', headers: { 'content-type': 'application/json' },
         body: JSON.stringify({
           id: newId.trim(), name: newName.trim(),
@@ -137,7 +138,7 @@ export default function DomainsPage() {
       if (!j.ok) { setActionErr(j.error || `HTTP ${r.status}`); return; }
       // Persist image selection if one was chosen (POST doesn't take imageKey).
       if (newImageKey && j.domain?.id) {
-        await fetch(`/api/admin/domains?id=${encodeURIComponent(j.domain.id)}`, {
+        await clientFetch(`/api/admin/domains?id=${encodeURIComponent(j.domain.id)}`, {
           method: 'PATCH', headers: { 'content-type': 'application/json' },
           body: JSON.stringify({ imageKey: newImageKey }),
         }).catch(() => {});
@@ -152,7 +153,7 @@ export default function DomainsPage() {
     if (!confirm(`Delete domain "${id}"? Workspaces tagged with this domain will lose the tag.`)) return;
     setActionErr(null);
     try {
-      const r = await fetch(`/api/admin/domains?id=${encodeURIComponent(id)}`, { method: 'DELETE' });
+      const r = await clientFetch(`/api/admin/domains?id=${encodeURIComponent(id)}`, { method: 'DELETE' });
       const j = await r.json();
       if (!j.ok) { setActionErr(j.error || `HTTP ${r.status}`); return; }
       await load();
@@ -477,7 +478,7 @@ function AssignWorkspacesDialog({ domain, onClose, onDone }: {
   const [result, setResult] = useState<string | null>(null);
 
   useEffect(() => {
-    fetch('/api/admin/workspaces')
+    clientFetch('/api/admin/workspaces')
       .then((r) => r.json())
       .then((j) => setWorkspaces(j.ok ? (j.workspaces || []) : []))
       .catch(() => setWorkspaces([]));
@@ -492,7 +493,7 @@ function AssignWorkspacesDialog({ domain, onClose, onDone }: {
   async function assign(allowOverride: boolean) {
     setBusy(true); setErr(null); setResult(null);
     try {
-      const r = await fetch('/api/admin/domains/assign-workspaces', {
+      const r = await clientFetch('/api/admin/domains/assign-workspaces', {
         method: 'POST', headers: { 'content-type': 'application/json' },
         body: JSON.stringify({ domainId: domain.id, workspaceIds: Array.from(selected), allowOverride }),
       });

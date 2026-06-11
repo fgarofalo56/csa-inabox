@@ -34,6 +34,7 @@
  * Per .claude/rules/no-vaporware.md no mock fallback — every error surfaces
  * verbatim with the exact remediation in the wizard MessageBar.
  */
+import { fetchWithTimeout } from '@/lib/azure/fetch-with-timeout';
 import { ChainedTokenCredential, DefaultAzureCredential, ManagedIdentityCredential } from '@azure/identity';
 import { FabricError, fabricHint } from '@/lib/azure/fabric-client';
 import type { Provisioner, ProvisionResult } from './types';
@@ -57,7 +58,7 @@ async function fabricCall(
   body?: unknown,
 ): Promise<{ status: number; body: any; location?: string }> {
   const token = await getToken(FABRIC_SCOPE);
-  const res = await fetch(`${FABRIC_BASE}${path}`, {
+  const res = await fetchWithTimeout(`${FABRIC_BASE}${path}`, {
     method,
     headers: { authorization: `Bearer ${token}`, 'content-type': 'application/json', accept: 'application/json' },
     body: body !== undefined ? JSON.stringify(body) : undefined,

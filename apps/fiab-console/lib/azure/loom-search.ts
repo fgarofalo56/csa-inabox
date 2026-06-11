@@ -19,6 +19,7 @@
  *   touchedAt    DateTimeOffset  sortable
  */
 
+import { fetchWithTimeout } from '@/lib/azure/fetch-with-timeout';
 import { ChainedTokenCredential, ManagedIdentityCredential, DefaultAzureCredential } from '@azure/identity';
 import { FoundryError, NotDeployedError } from './foundry-client';
 
@@ -88,11 +89,11 @@ export async function ensureLoomIndex(): Promise<{ created: boolean; ok: boolean
   try {
     const svc = searchService();
     const tok = await searchToken();
-    const get = await fetch(`https://${svc}.search.windows.net/indexes/${INDEX}?api-version=${SEARCH_API}`, {
+    const get = await fetchWithTimeout(`https://${svc}.search.windows.net/indexes/${INDEX}?api-version=${SEARCH_API}`, {
       headers: { authorization: `Bearer ${tok}` },
     });
     if (get.status === 200) return { created: false, ok: true };
-    const put = await fetch(`https://${svc}.search.windows.net/indexes/${INDEX}?api-version=${SEARCH_API}`, {
+    const put = await fetchWithTimeout(`https://${svc}.search.windows.net/indexes/${INDEX}?api-version=${SEARCH_API}`, {
       method: 'PUT',
       headers: { authorization: `Bearer ${tok}`, 'content-type': 'application/json' },
       body: JSON.stringify({ name: INDEX, ...INDEX_DEFINITION }),
@@ -114,7 +115,7 @@ export async function upsertLoomDoc(doc: LoomDoc): Promise<void> {
   try {
     const svc = searchService();
     const tok = await searchToken();
-    await fetch(`https://${svc}.search.windows.net/indexes/${INDEX}/docs/index?api-version=${SEARCH_API}`, {
+    await fetchWithTimeout(`https://${svc}.search.windows.net/indexes/${INDEX}/docs/index?api-version=${SEARCH_API}`, {
       method: 'POST',
       headers: { authorization: `Bearer ${tok}`, 'content-type': 'application/json' },
       body: JSON.stringify({ value: [{ '@search.action': 'mergeOrUpload', ...doc }] }),
@@ -128,7 +129,7 @@ export async function deleteLoomDoc(id: string): Promise<void> {
   try {
     const svc = searchService();
     const tok = await searchToken();
-    await fetch(`https://${svc}.search.windows.net/indexes/${INDEX}/docs/index?api-version=${SEARCH_API}`, {
+    await fetchWithTimeout(`https://${svc}.search.windows.net/indexes/${INDEX}/docs/index?api-version=${SEARCH_API}`, {
       method: 'POST',
       headers: { authorization: `Bearer ${tok}`, 'content-type': 'application/json' },
       body: JSON.stringify({ value: [{ '@search.action': 'delete', id }] }),
@@ -157,7 +158,7 @@ export async function searchLoomItems(opts: {
     filter: filters.join(' and '),
     select: 'id,kind,itemType,tenantId,workspaceId,displayName,description,url,touchedAt',
   };
-  const res = await fetch(`https://${svc}.search.windows.net/indexes/${INDEX}/docs/search?api-version=${SEARCH_API}`, {
+  const res = await fetchWithTimeout(`https://${svc}.search.windows.net/indexes/${INDEX}/docs/search?api-version=${SEARCH_API}`, {
     method: 'POST',
     headers: { authorization: `Bearer ${tok}`, 'content-type': 'application/json' },
     body: JSON.stringify(body),

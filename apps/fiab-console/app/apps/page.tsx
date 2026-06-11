@@ -22,6 +22,7 @@
  * to the /apps/[id] detail route (workspace picker + install POST live there).
  */
 
+import { clientFetch } from '@/lib/client-fetch';
 import { useEffect, useMemo, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import {
@@ -142,7 +143,7 @@ export default function AppsPage() {
   }, [view]);
 
   useEffect(() => {
-    fetch('/api/apps-catalog').then(r => {
+    clientFetch('/api/apps-catalog').then(r => {
       if (r.status === 401 || r.status === 403) { setUnauth(true); setApps([]); return null; }
       return r.json();
     }).then(d => {

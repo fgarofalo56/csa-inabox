@@ -8,6 +8,7 @@
  * Auth: Authorization header or Key Vault secret reference (resolved at call time).
  */
 
+import { fetchWithTimeout } from '@/lib/azure/fetch-with-timeout';
 import {
   ChainedTokenCredential,
   DefaultAzureCredential,
@@ -48,7 +49,7 @@ export async function resolveAuthHeader(
     if (!vaultUrl) throw new Error('LOOM_KEY_VAULT_URL not set for MCP Key Vault auth');
     try {
       const tok = await kvCredential.getToken(kvScope());
-      const res = await fetch(`${vaultUrl.replace(/\/$/, '')}/secrets/${encodeURIComponent(secretName)}?api-version=7.4`, {
+      const res = await fetchWithTimeout(`${vaultUrl.replace(/\/$/, '')}/secrets/${encodeURIComponent(secretName)}?api-version=7.4`, {
         headers: { authorization: `Bearer ${tok?.token}` },
         cache: 'no-store',
       });
@@ -76,7 +77,7 @@ export async function listMcpTools(
   const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
 
   try {
-    const res = await fetch(`${endpoint.replace(/\/$/, '')}/tools/list`, {
+    const res = await fetchWithTimeout(`${endpoint.replace(/\/$/, '')}/tools/list`, {
       method: 'POST',
       headers: {
         'content-type': 'application/json',
@@ -130,7 +131,7 @@ export async function callMcpTool(
       params: { name: toolName, arguments: args },
     };
 
-    const res = await fetch(`${endpoint.replace(/\/$/, '')}/tools/call`, {
+    const res = await fetchWithTimeout(`${endpoint.replace(/\/$/, '')}/tools/call`, {
       method: 'POST',
       headers: {
         'content-type': 'application/json',

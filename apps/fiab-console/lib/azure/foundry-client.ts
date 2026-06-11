@@ -15,6 +15,7 @@
  *
  * 404 → null. Any other non-2xx throws FoundryError(status, body).
  */
+import { fetchWithTimeout } from '@/lib/azure/fetch-with-timeout';
 import {
   DefaultAzureCredential,
   ManagedIdentityCredential,
@@ -74,7 +75,7 @@ async function foundryFetch(
     : '';
   const url = `${foundryBase()}${path}${sep}api-version=${apiVer}${query}`;
   const { query: _q, apiVersion: _av, ...rest } = init;
-  return fetch(url, {
+  return fetchWithTimeout(url, {
     ...rest,
     headers: {
       ...(rest.headers || {}),
@@ -109,7 +110,7 @@ async function pagedList(path: string, init: Parameters<typeof foundryFetch>[1] 
     if (Array.isArray(j.value)) out.push(...j.value);
     if (!j.nextLink) break;
     const token = await credential.getToken(ARM_SCOPE);
-    res = await fetch(j.nextLink, { headers: { authorization: `Bearer ${token!.token}` } });
+    res = await fetchWithTimeout(j.nextLink, { headers: { authorization: `Bearer ${token!.token}` } });
     j = await readJson<{ value?: any[]; nextLink?: string }>(res);
   }
   return out;
@@ -506,7 +507,7 @@ async function armFetch(
   const query = init.query ? '&' + new URLSearchParams(init.query).toString() : '';
   const url = `${armBase()}${fullPath}${sep}api-version=${init.apiVersion}${query}`;
   const { query: _q, apiVersion: _av, ...rest } = init;
-  return fetch(url, {
+  return fetchWithTimeout(url, {
     ...rest,
     headers: {
       ...(rest.headers || {}),
@@ -527,7 +528,7 @@ async function amlDataPlaneFetch(
   const token = await credential.getToken(ARM_SCOPE);
   if (!token?.token) throw new Error('Failed to acquire ARM token for AML data plane');
   const url = `https://${amlDataPlaneHost(region)}${segment.startsWith('/') ? segment : '/' + segment}`;
-  return fetch(url, {
+  return fetchWithTimeout(url, {
     ...init,
     headers: {
       ...(init.headers || {}),
@@ -883,7 +884,7 @@ export async function moderateText(text: string, categories?: string[]): Promise
   const tok = await contentSafetyToken();
   const body: any = { text };
   if (categories?.length) body.categories = categories;
-  const res = await fetch(`${ep}/contentsafety/text:analyze?api-version=2024-09-01`, {
+  const res = await fetchWithTimeout(`${ep}/contentsafety/text:analyze?api-version=2024-09-01`, {
     method: 'POST',
     headers: { authorization: `Bearer ${tok}`, 'content-type': 'application/json' },
     body: JSON.stringify(body),
@@ -898,7 +899,7 @@ export async function moderateText(text: string, categories?: string[]): Promise
 export async function moderateImage(imageBase64: string): Promise<any> {
   const ep = contentSafetyEndpoint();
   const tok = await contentSafetyToken();
-  const res = await fetch(`${ep}/contentsafety/image:analyze?api-version=2024-09-01`, {
+  const res = await fetchWithTimeout(`${ep}/contentsafety/image:analyze?api-version=2024-09-01`, {
     method: 'POST',
     headers: { authorization: `Bearer ${tok}`, 'content-type': 'application/json' },
     body: JSON.stringify({ image: { content: imageBase64 } }),
@@ -976,7 +977,7 @@ export async function shieldPrompt(userPrompt: string): Promise<ContentSafetyVer
   if (!ep) return { blocked: false, reason: '' };
   let tok: string;
   try { tok = await contentSafetyToken(); } catch { return { blocked: false, reason: '' }; }
-  const res = await fetch(`${ep}/contentsafety/text:shieldPrompt?api-version=2024-09-01`, {
+  const res = await fetchWithTimeout(`${ep}/contentsafety/text:shieldPrompt?api-version=2024-09-01`, {
     method: 'POST',
     headers: { authorization: `Bearer ${tok}`, 'content-type': 'application/json' },
     body: JSON.stringify({ userPrompt: userPrompt.slice(0, 10_000), documents: [] }),
@@ -1006,7 +1007,7 @@ export async function moderateContent(text: string): Promise<ContentSafetyVerdic
   if (!text.trim()) return { blocked: false, reason: '' };
   let tok: string;
   try { tok = await contentSafetyToken(); } catch { return { blocked: false, reason: '' }; }
-  const res = await fetch(`${ep}/contentsafety/text:analyze?api-version=2024-09-01`, {
+  const res = await fetchWithTimeout(`${ep}/contentsafety/text:analyze?api-version=2024-09-01`, {
     method: 'POST',
     headers: { authorization: `Bearer ${tok}`, 'content-type': 'application/json' },
     body: JSON.stringify({
@@ -1205,7 +1206,7 @@ export interface SearchIndexSummary {
 export async function listIndexes(): Promise<SearchIndexSummary[]> {
   const svc = searchService();
   const tok = await searchToken();
-  const res = await fetch(`${searchEndpointBase(svc)}/indexes?api-version=${SEARCH_API}&$select=name,fields`, {
+  const res = await fetchWithTimeout(`${searchEndpointBase(svc)}/indexes?api-version=${SEARCH_API}&$select=name,fields`, {
     headers: { authorization: `Bearer ${tok}` },
   });
   if (!res.ok) {
@@ -1223,7 +1224,7 @@ export async function listIndexes(): Promise<SearchIndexSummary[]> {
 export async function getIndex(name: string): Promise<any | null> {
   const svc = searchService();
   const tok = await searchToken();
-  const res = await fetch(`${searchEndpointBase(svc)}/indexes/${encodeURIComponent(name)}?api-version=${SEARCH_API}`, {
+  const res = await fetchWithTimeout(`${searchEndpointBase(svc)}/indexes/${encodeURIComponent(name)}?api-version=${SEARCH_API}`, {
     headers: { authorization: `Bearer ${tok}` },
   });
   if (res.status === 404) return null;
@@ -1248,7 +1249,7 @@ export async function upsertIndex(name: string, definition: any): Promise<any> {
       return rest;
     });
   }
-  const res = await fetch(`${searchEndpointBase(svc)}/indexes/${encodeURIComponent(name)}?api-version=${SEARCH_API}`, {
+  const res = await fetchWithTimeout(`${searchEndpointBase(svc)}/indexes/${encodeURIComponent(name)}?api-version=${SEARCH_API}`, {
     method: 'PUT',
     headers: { authorization: `Bearer ${tok}`, 'content-type': 'application/json' },
     body: JSON.stringify(cleaned),
@@ -1263,7 +1264,7 @@ export async function upsertIndex(name: string, definition: any): Promise<any> {
 export async function searchIndex(name: string, query: string, top = 25): Promise<any> {
   const svc = searchService();
   const tok = await searchToken();
-  const res = await fetch(`${searchEndpointBase(svc)}/indexes/${encodeURIComponent(name)}/docs/search?api-version=${SEARCH_API}`, {
+  const res = await fetchWithTimeout(`${searchEndpointBase(svc)}/indexes/${encodeURIComponent(name)}/docs/search?api-version=${SEARCH_API}`, {
     method: 'POST',
     headers: { authorization: `Bearer ${tok}`, 'content-type': 'application/json' },
     body: JSON.stringify({ search: query, top }),
@@ -1288,7 +1289,7 @@ export async function uploadDocuments(name: string, docs: any[]): Promise<{ uplo
   const svc = searchService();
   const tok = await searchToken();
   const value = docs.map((d) => ({ '@search.action': 'mergeOrUpload', ...d }));
-  const res = await fetch(`${searchEndpointBase(svc)}/indexes/${encodeURIComponent(name)}/docs/index?api-version=${SEARCH_API}`, {
+  const res = await fetchWithTimeout(`${searchEndpointBase(svc)}/indexes/${encodeURIComponent(name)}/docs/index?api-version=${SEARCH_API}`, {
     method: 'POST',
     headers: { authorization: `Bearer ${tok}`, 'content-type': 'application/json' },
     body: JSON.stringify({ value }),
@@ -1319,7 +1320,7 @@ export async function vectorSearch(name: string, opts: {
   };
   if (opts.text) body.search = opts.text;
   if (opts.select) body.select = opts.select;
-  const res = await fetch(`${searchEndpointBase(svc)}/indexes/${encodeURIComponent(name)}/docs/search?api-version=${SEARCH_API}`, {
+  const res = await fetchWithTimeout(`${searchEndpointBase(svc)}/indexes/${encodeURIComponent(name)}/docs/search?api-version=${SEARCH_API}`, {
     method: 'POST',
     headers: { authorization: `Bearer ${tok}`, 'content-type': 'application/json' },
     body: JSON.stringify(body),
@@ -1812,7 +1813,7 @@ export async function listNotebookSchedules(prefix: string): Promise<AmlSchedule
     if (Array.isArray(j.value)) all.push(...j.value);
     if (!j.nextLink) break;
     const token = await credential.getToken(ARM_SCOPE);
-    res = await fetch(j.nextLink, { headers: { authorization: `Bearer ${token!.token}` } });
+    res = await fetchWithTimeout(j.nextLink, { headers: { authorization: `Bearer ${token!.token}` } });
     j = await readJson<{ value?: any[]; nextLink?: string }>(res);
   }
   return all.map(shapeSchedule).filter((s) => !prefix || (s.name || '').startsWith(prefix));

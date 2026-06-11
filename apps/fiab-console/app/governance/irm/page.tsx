@@ -12,6 +12,7 @@
  * — no freeform query box (loom-no-freeform-config).
  */
 
+import { clientFetch } from '@/lib/client-fetch';
 import { useEffect, useState } from 'react';
 import {
   Spinner, Badge, Caption1, Body1, Subtitle2, Button, Switch, SpinButton,
@@ -119,7 +120,7 @@ export default function IrmPage() {
   const load = async (d = days) => {
     setLoading(true); setError(null);
     try {
-      const r = await fetch(`/api/governance/irm?days=${d}`);
+      const r = await clientFetch(`/api/governance/irm?days=${d}`);
       const j = await r.json();
       if (!j.ok) { setError(j.error); return; }
       setData(j);
@@ -133,7 +134,7 @@ export default function IrmPage() {
     if (!draft) return;
     setSaving(true); setSaveMsg(null);
     try {
-      const r = await fetch('/api/governance/irm', {
+      const r = await clientFetch('/api/governance/irm', {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
         body: JSON.stringify(draft),

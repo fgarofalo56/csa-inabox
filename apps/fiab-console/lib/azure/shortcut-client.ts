@@ -21,6 +21,7 @@
  * (Cosmos reads/writes + a live ADLS HEAD / listPaths). No mock arrays.
  */
 
+import { fetchWithTimeout } from '@/lib/azure/fetch-with-timeout';
 import {
   parseAbfss as parseEngineAbfss,
   resolveAndTestAdls,
@@ -416,7 +417,7 @@ export async function listS3Objects(args: S3BrowseArgs): Promise<BrowseResult> {
   const url = `https://${host}${canonicalUri}?${canonicalQuery}`;
   let res: Response;
   try {
-    res = await fetch(url, { method: 'GET', headers: { ...headers, authorization }, cache: 'no-store' });
+    res = await fetchWithTimeout(url, { method: 'GET', headers: { ...headers, authorization }, cache: 'no-store' });
   } catch (e: any) {
     throw new ShortcutSourceError(`S3 endpoint unreachable: ${e?.message || e}`, 's3_unreachable', 502);
   }
@@ -514,7 +515,7 @@ async function gcsAccessToken(sa: GcsServiceAccount): Promise<string> {
   const jwt = `${signingInput}.${signature}`;
   let res: Response;
   try {
-    res = await fetch(tokenUri, {
+    res = await fetchWithTimeout(tokenUri, {
       method: 'POST',
       headers: { 'content-type': 'application/x-www-form-urlencoded' },
       body: `grant_type=${encodeURIComponent('urn:ietf:params:oauth:grant-type:jwt-bearer')}&assertion=${jwt}`,
@@ -551,7 +552,7 @@ export async function listGcsObjects(args: GcsBrowseArgs): Promise<BrowseResult>
   const url = `https://storage.googleapis.com/storage/v1/b/${encodeURIComponent(bucket)}/o?${qs.toString()}`;
   let res: Response;
   try {
-    res = await fetch(url, { headers: { authorization: `Bearer ${token}` }, cache: 'no-store' });
+    res = await fetchWithTimeout(url, { headers: { authorization: `Bearer ${token}` }, cache: 'no-store' });
   } catch (e: any) {
     throw new ShortcutSourceError(`GCS endpoint unreachable: ${e?.message || e}`, 'gcs_unreachable', 502);
   }

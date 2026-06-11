@@ -24,6 +24,7 @@
  *   - No Fabric AND no resolvable Power BI workspace → bind/set a target.
  *   - 401/403 → UAMI not a Contributor / SP not tenant-authorized; admin fix.
  */
+import { fetchWithTimeout } from '@/lib/azure/fetch-with-timeout';
 import { FabricError, fabricHint } from '@/lib/azure/fabric-client';
 import {
   PowerBiError,
@@ -586,7 +587,7 @@ export const semanticModelProvisioner: Provisioner = async (input): Promise<Prov
   };
 
   const tok = await token();
-  const res = await fetch(`${FABRIC_BASE}/workspaces/${encodeURIComponent(ws)}/semanticModels`, {
+  const res = await fetchWithTimeout(`${FABRIC_BASE}/workspaces/${encodeURIComponent(ws)}/semanticModels`, {
     method: 'POST',
     headers: { authorization: `Bearer ${tok}`, 'content-type': 'application/json' },
     body: JSON.stringify({ displayName: input.displayName, description: `Installed from ${input.appId}`, definition }),

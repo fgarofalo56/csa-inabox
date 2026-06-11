@@ -16,6 +16,7 @@
  * returns a precise honest-gate { gated, hint }.
  */
 
+import { fetchWithTimeout } from '@/lib/azure/fetch-with-timeout';
 import { listPaths } from './adls-client';
 import { serverlessTarget, executeQuery } from './synapse-sql-client';
 import {
@@ -622,7 +623,7 @@ export async function bindExternalSource(args: {
     const sharesUrl = profile.endpoint.replace(/\/+$/, '') + '/shares';
     let testRes: Response;
     try {
-      testRes = await fetch(sharesUrl, { headers: { Authorization: `Bearer ${profile.bearerToken}` } });
+      testRes = await fetchWithTimeout(sharesUrl, { headers: { Authorization: `Bearer ${profile.bearerToken}` } });
     } catch (netErr: any) {
       throw Object.assign(
         new Error(`Delta Sharing endpoint unreachable: ${sharesUrl} — ${netErr?.message || netErr}`),

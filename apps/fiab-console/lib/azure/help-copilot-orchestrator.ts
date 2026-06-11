@@ -16,6 +16,7 @@
  * container `copilot-help-sessions` (PK /userId).
  */
 
+import { fetchWithTimeout, LLM_FETCH_TIMEOUT_MS } from '@/lib/azure/fetch-with-timeout';
 import {
   ChainedTokenCredential,
   DefaultAzureCredential,
@@ -477,7 +478,7 @@ function buildTools(deps: {
           return { result: { ok: true, mode: 'deep-link', url, note: 'LOOM_FEEDBACK_GITHUB_TOKEN not set; returning issue/new URL the user can click.' } };
         }
         try {
-          const r = await fetch(`https://api.github.com/repos/${deps.upstreamRepo.owner}/${deps.upstreamRepo.name}/issues`, {
+          const r = await fetchWithTimeout(`https://api.github.com/repos/${deps.upstreamRepo.owner}/${deps.upstreamRepo.name}/issues`, {
             method: 'POST',
             headers: {
               authorization: `Bearer ${deps.githubToken}`,
@@ -578,11 +579,11 @@ async function callAoai(target: AoaiTarget, messages: ChatMessage[], tools: unkn
   const token = await aoaiToken();
   const base: Record<string, unknown> = { messages, tools, tool_choice: 'auto' };
   const send = async (withTemperature: boolean) =>
-    fetch(url, {
+    fetchWithTimeout(url, {
       method: 'POST',
       headers: { authorization: `Bearer ${token}`, 'content-type': 'application/json' },
       body: JSON.stringify(withTemperature ? { ...base, temperature: 0.2 } : base),
-    });
+    }, LLM_FETCH_TIMEOUT_MS);
   let res = await send(true);
   if (res.status === 400) {
     const t = await res.text();

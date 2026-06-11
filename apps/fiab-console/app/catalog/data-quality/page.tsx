@@ -15,6 +15,7 @@
  * An honest note states that execution defers to the next scan.
  */
 
+import { clientFetch } from '@/lib/client-fetch';
 import { useCallback, useEffect, useState } from 'react';
 import { CatalogShell } from '@/lib/components/catalog/catalog-shell';
 import {
@@ -102,7 +103,7 @@ export default function DataQualityPage() {
     setLoading(true);
     setError(null);
     try {
-      const r = await fetch('/api/admin/data-quality-rules');
+      const r = await clientFetch('/api/admin/data-quality-rules');
       const j: ApiResponse = await r.json();
       if (!j.ok) { setError(j.error || 'Failed to load'); return; }
       setRules(j.rules || []);
@@ -148,7 +149,7 @@ export default function DataQualityPage() {
     if (editingRule) payload.id = editingRule.id;
     try {
       const method = editingRule ? 'PUT' : 'POST';
-      const r = await fetch('/api/admin/data-quality-rules', {
+      const r = await clientFetch('/api/admin/data-quality-rules', {
         method, headers: { 'content-type': 'application/json' }, body: JSON.stringify(payload),
       });
       const j: ApiResponse = await r.json();
@@ -162,7 +163,7 @@ export default function DataQualityPage() {
 
   async function deleteRule(id: string) {
     try {
-      const r = await fetch(`/api/admin/data-quality-rules?id=${encodeURIComponent(id)}`, { method: 'DELETE' });
+      const r = await clientFetch(`/api/admin/data-quality-rules?id=${encodeURIComponent(id)}`, { method: 'DELETE' });
       const j: ApiResponse = await r.json();
       if (j.ok) setRules(j.rules || []);
       else setError(j.error || 'Delete failed');

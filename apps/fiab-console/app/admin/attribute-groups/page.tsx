@@ -17,6 +17,7 @@
  *   - attributes are ordered with ↑/↓ reorder controls
  */
 
+import { clientFetch } from '@/lib/client-fetch';
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import {
   Spinner, Badge, Caption1, Body1, Input, Textarea, Button, Checkbox,
@@ -90,7 +91,7 @@ export default function AttributeGroupsPage() {
     setLoading(true);
     setError(null);
     try {
-      const r = await fetch('/api/attribute-groups');
+      const r = await clientFetch('/api/attribute-groups');
       const j = await r.json();
       if (!j.ok) { setError(j.error || 'failed'); return; }
       setGroups(j.groups || []);
@@ -100,7 +101,7 @@ export default function AttributeGroupsPage() {
 
   const loadDomains = useCallback(async () => {
     try {
-      const r = await fetch('/api/admin/domains');
+      const r = await clientFetch('/api/admin/domains');
       const j = await r.json();
       if (j.ok) setDomains((j.domains || []).map((d: any) => ({ id: d.id, name: d.name })));
     } catch { /* domains are optional; scope can still be "all" */ }
@@ -113,7 +114,7 @@ export default function AttributeGroupsPage() {
   /** Persist the whole attribute-group schema (one per-tenant doc). */
   const persist = useCallback(async (next: AttributeGroup[]): Promise<boolean> => {
     setActionErr(null);
-    const r = await fetch('/api/attribute-groups', {
+    const r = await clientFetch('/api/attribute-groups', {
       method: 'POST', headers: { 'content-type': 'application/json' },
       body: JSON.stringify({ groups: next }),
     });

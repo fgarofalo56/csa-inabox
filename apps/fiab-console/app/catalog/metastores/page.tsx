@@ -1,5 +1,6 @@
 'use client';
 
+import { clientFetch } from '@/lib/client-fetch';
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { CatalogShell } from '@/lib/components/catalog/catalog-shell';
 import {
@@ -130,7 +131,7 @@ export default function MetastoresPage() {
   const load = useCallback(async () => {
     setLoading(true); setError(null);
     try {
-      const r = await fetch('/api/catalog/metastores');
+      const r = await clientFetch('/api/catalog/metastores');
       const j = await r.json();
       if (!j.ok) { setError(j.error || 'failed'); return; }
       setData(j);
@@ -199,7 +200,7 @@ export default function MetastoresPage() {
     setProbeResult(null);
     setProbeError(null);
     try {
-      const r = await fetch('/api/catalog/metastores', {
+      const r = await clientFetch('/api/catalog/metastores', {
         method: 'POST', headers: { 'content-type': 'application/json' },
         body: JSON.stringify({
           source: 'unity-catalog',

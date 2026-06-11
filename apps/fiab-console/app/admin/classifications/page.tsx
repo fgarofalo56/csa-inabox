@@ -1,5 +1,6 @@
 'use client';
 
+import { clientFetch } from '@/lib/client-fetch';
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import {
   Spinner, Badge, Caption1, Body1, Input, Textarea, Button,
@@ -77,7 +78,7 @@ export default function ClassificationsPage() {
     setLoading(true);
     setError(null);
     try {
-      const r = await fetch('/api/admin/classifications');
+      const r = await clientFetch('/api/admin/classifications');
       const j = await r.json();
       if (!j.ok) { setError(j.error || 'failed'); return; }
       setRules(j.rules || []);
@@ -93,7 +94,7 @@ export default function ClassificationsPage() {
     setCreating(true);
     setActionErr(null);
     try {
-      const r = await fetch('/api/admin/classifications', {
+      const r = await clientFetch('/api/admin/classifications', {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
         body: JSON.stringify({
@@ -120,7 +121,7 @@ export default function ClassificationsPage() {
     if (!confirm('Delete this classification rule? It will be removed from Microsoft Purview and will not apply to future scans.')) return;
     setActionErr(null);
     try {
-      const r = await fetch(`/api/admin/classifications?id=${encodeURIComponent(id)}`, { method: 'DELETE' });
+      const r = await clientFetch(`/api/admin/classifications?id=${encodeURIComponent(id)}`, { method: 'DELETE' });
       const j = await r.json();
       if (!j.ok) { setActionErr(j.error || `HTTP ${r.status}`); return; }
       setRules(j.rules || []);
@@ -132,7 +133,7 @@ export default function ClassificationsPage() {
     setSyncing(true);
     setActionErr(null);
     try {
-      const r = await fetch('/api/admin/classifications', {
+      const r = await clientFetch('/api/admin/classifications', {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
         body: JSON.stringify({ syncOnly: true }),
@@ -272,7 +273,7 @@ function RunScanDialog({ open, onClose, account }: { open: boolean; onClose: () 
     setLoadingSrc(true);
     setMsg(null);
     try {
-      const r = await fetch('/api/governance/scans');
+      const r = await clientFetch('/api/governance/scans');
       const j = await r.json();
       if (!j.ok) { setMsg({ intent: 'warning', text: j.error || `HTTP ${r.status}` }); setSources([]); return; }
       setSources(j.sources || []);
@@ -289,7 +290,7 @@ function RunScanDialog({ open, onClose, account }: { open: boolean; onClose: () 
     setLoadingScans(true);
     setScan('');
     try {
-      const r = await fetch(`/api/governance/scans?source=${encodeURIComponent(src)}`);
+      const r = await clientFetch(`/api/governance/scans?source=${encodeURIComponent(src)}`);
       const j = await r.json();
       if (!j.ok) { setMsg({ intent: 'warning', text: j.error || `HTTP ${r.status}` }); setScans([]); return; }
       setScans(j.scans || []);
@@ -302,7 +303,7 @@ function RunScanDialog({ open, onClose, account }: { open: boolean; onClose: () 
     setRunning(true);
     setMsg(null);
     try {
-      const r = await fetch('/api/governance/scans', {
+      const r = await clientFetch('/api/governance/scans', {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
         body: JSON.stringify({ run: true, source, scan }),

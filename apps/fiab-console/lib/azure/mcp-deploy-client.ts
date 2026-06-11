@@ -21,6 +21,7 @@
  * are plain Azure Container Apps (no-fabric-dependency.md).
  */
 
+import { fetchWithTimeout } from '@/lib/azure/fetch-with-timeout';
 import {
   ChainedTokenCredential,
   DefaultAzureCredential,
@@ -138,7 +139,7 @@ async function token(): Promise<string> {
 async function armFetch(method: 'GET' | 'PUT' | 'DELETE', path: string, body?: unknown): Promise<{ status: number; json: any }> {
   const tk = await token();
   const url = path.startsWith('http') ? path : `${ARM}${path}`;
-  const res = await fetch(url, {
+  const res = await fetchWithTimeout(url, {
     method,
     headers: {
       authorization: `Bearer ${tk}`,

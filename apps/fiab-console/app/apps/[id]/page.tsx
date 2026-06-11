@@ -12,6 +12,7 @@
  * report renders inside the dialog (same wizard the /learn use-case card uses).
  */
 
+import { clientFetch } from '@/lib/client-fetch';
 import { useEffect, useState } from 'react';
 import Link from 'next/link';
 import { useParams, useRouter } from 'next/navigation';
@@ -114,7 +115,7 @@ export default function AppDetailPage() {
   const [installOpen, setInstallOpen] = useState(false);
 
   useEffect(() => {
-    fetch('/api/apps-catalog').then(r => r.json()).then(d => {
+    clientFetch('/api/apps-catalog').then(r => r.json()).then(d => {
       const a = (d?.apps ?? []).find((x: AppDoc) => x.id === params.id);
       setApp(a ?? 'notfound');
     }).catch(() => setApp('notfound'));

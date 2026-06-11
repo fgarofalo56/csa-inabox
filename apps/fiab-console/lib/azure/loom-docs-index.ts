@@ -17,6 +17,7 @@
  * backend so subsequent BFF replicas don't re-walk the FS.
  */
 
+import { fetchWithTimeout } from '@/lib/azure/fetch-with-timeout';
 import fs from 'node:fs';
 import path from 'node:path';
 import {
@@ -101,11 +102,11 @@ export async function ensureDocsIndex(): Promise<{ ok: boolean; created: boolean
   if (!svc) return { ok: false, created: false, error: 'LOOM_AI_SEARCH_SERVICE not set' };
   try {
     const tok = await searchToken();
-    const get = await fetch(`https://${svc}.search.windows.net/indexes/${INDEX}?api-version=${SEARCH_API}`, {
+    const get = await fetchWithTimeout(`https://${svc}.search.windows.net/indexes/${INDEX}?api-version=${SEARCH_API}`, {
       headers: { authorization: `Bearer ${tok}` },
     });
     if (get.status === 200) return { ok: true, created: false };
-    const put = await fetch(`https://${svc}.search.windows.net/indexes/${INDEX}?api-version=${SEARCH_API}`, {
+    const put = await fetchWithTimeout(`https://${svc}.search.windows.net/indexes/${INDEX}?api-version=${SEARCH_API}`, {
       method: 'PUT',
       headers: { authorization: `Bearer ${tok}`, 'content-type': 'application/json' },
       body: JSON.stringify({ name: INDEX, ...INDEX_DEFINITION }),
@@ -134,7 +135,7 @@ async function pushChunksToSearch(chunks: DocChunk[]): Promise<{ ok: boolean; up
       const body = {
         value: batch.map((c) => ({ '@search.action': 'mergeOrUpload', ...c })),
       };
-      const r = await fetch(`https://${svc}.search.windows.net/indexes/${INDEX}/docs/index?api-version=${SEARCH_API}`, {
+      const r = await fetchWithTimeout(`https://${svc}.search.windows.net/indexes/${INDEX}/docs/index?api-version=${SEARCH_API}`, {
         method: 'POST',
         headers: { authorization: `Bearer ${tok}`, 'content-type': 'application/json' },
         body: JSON.stringify(body),
@@ -164,7 +165,7 @@ async function searchSearch(query: string, top: number, kind?: DocChunk['kind'])
     select: 'id,kind,path,heading,content,url,touchedAt',
   };
   if (filter) body.filter = filter;
-  const r = await fetch(`https://${svc}.search.windows.net/indexes/${INDEX}/docs/search?api-version=${SEARCH_API}`, {
+  const r = await fetchWithTimeout(`https://${svc}.search.windows.net/indexes/${INDEX}/docs/search?api-version=${SEARCH_API}`, {
     method: 'POST',
     headers: { authorization: `Bearer ${tok}`, 'content-type': 'application/json' },
     body: JSON.stringify(body),

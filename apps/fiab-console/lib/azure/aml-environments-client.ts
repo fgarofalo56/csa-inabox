@@ -28,6 +28,7 @@
  * to set. Routes surface that as a Fluent MessageBar; the editor surface still
  * renders fully (per no-vaporware.md).
  */
+import { fetchWithTimeout } from '@/lib/azure/fetch-with-timeout';
 import {
   DefaultAzureCredential,
   ManagedIdentityCredential,
@@ -131,7 +132,7 @@ async function armFetch(
   const query = init.query ? '&' + new URLSearchParams(init.query).toString() : '';
   const url = `${armBase()}${fullPath}${sep}api-version=${ML_API}${query}`;
   const { query: _q, ...rest } = init;
-  return fetch(url, {
+  return fetchWithTimeout(url, {
     ...rest,
     headers: {
       ...(rest.headers || {}),
@@ -201,7 +202,7 @@ async function pagedList(path: string): Promise<any[]> {
     if (Array.isArray(j.value)) out.push(...j.value);
     if (!j.nextLink) break;
     const token = await credential.getToken(ARM_SCOPE);
-    res = await fetch(j.nextLink, { headers: { authorization: `Bearer ${token!.token}` } });
+    res = await fetchWithTimeout(j.nextLink, { headers: { authorization: `Bearer ${token!.token}` } });
     j = await readJson<{ value?: any[]; nextLink?: string }>(res);
   }
   return out;

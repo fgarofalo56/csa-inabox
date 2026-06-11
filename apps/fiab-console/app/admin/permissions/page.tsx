@@ -15,6 +15,7 @@
  * the required capability / role, the surface renders an honest MessageBar with
  * the exact remediation.
  */
+import { clientFetch } from '@/lib/client-fetch';
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import {
   Spinner, MessageBar, MessageBarBody, MessageBarTitle, Button, Caption1, Body1, Subtitle2, Title2,
@@ -118,8 +119,8 @@ function FeaturePermissionsTab({ styles }: { styles: Styles }) {
     setError(null);
     try {
       const [capRes, grantRes] = await Promise.all([
-        fetch('/api/admin/permissions/capabilities', { cache: 'no-store' }),
-        fetch('/api/admin/permissions/grants', { cache: 'no-store' }),
+        clientFetch('/api/admin/permissions/capabilities', { cache: 'no-store' }),
+        clientFetch('/api/admin/permissions/grants', { cache: 'no-store' }),
       ]);
       if (capRes.status === 401 || capRes.status === 403) {
         const j = await capRes.json().catch(() => ({}));
@@ -252,7 +253,7 @@ function WorkspaceAccessTab({ styles, active }: { styles: Styles; active: boolea
     let cancelled = false;
     (async () => {
       try {
-        const res = await fetch('/api/admin/workspaces', { cache: 'no-store' });
+        const res = await clientFetch('/api/admin/workspaces', { cache: 'no-store' });
         const json = await res.json();
         if (cancelled) return;
         if (!res.ok || !json.ok) { setError(json?.error || `HTTP ${res.status}`); setWorkspaces([]); return; }

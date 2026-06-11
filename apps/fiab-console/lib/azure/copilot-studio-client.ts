@@ -31,6 +31,7 @@
  * error rather than a sanitized 500).
  */
 
+import { fetchWithTimeout } from '@/lib/azure/fetch-with-timeout';
 import {
   ChainedTokenCredential,
   DefaultAzureCredential,
@@ -92,7 +93,7 @@ interface CallOpts {
 
 async function rawCall<T = any>(url: string, opts: CallOpts): Promise<T> {
   const token = await getToken(opts.scope);
-  const res = await fetch(url, {
+  const res = await fetchWithTimeout(url, {
     method: opts.method ?? 'GET',
     headers: {
       authorization: `Bearer ${token}`,
@@ -916,7 +917,7 @@ export async function getDirectLineToken(agentId: string): Promise<DirectLineTok
       424,
     );
   }
-  const res = await fetch(DIRECTLINE_TOKEN_URL, {
+  const res = await fetchWithTimeout(DIRECTLINE_TOKEN_URL, {
     method: 'POST',
     headers: { authorization: `Bearer ${secret}`, 'content-type': 'application/json' },
     cache: 'no-store',

@@ -34,6 +34,7 @@
  *   - Roles & permissions (Data Product Owner / Data Steward):
  *       https://learn.microsoft.com/purview/data-governance-roles-permissions
  */
+import { fetchWithTimeout } from '@/lib/azure/fetch-with-timeout';
 import { ChainedTokenCredential, DefaultAzureCredential, ManagedIdentityCredential } from '@azure/identity';
 import type { Provisioner, ProvisionResult } from './types';
 
@@ -199,7 +200,7 @@ export const dataProductProvisioner: Provisioner = async (input): Promise<Provis
       ...(contacts ? { contacts } : {}),
     };
 
-    const res = await fetch(`${endpoint}/datagovernance/catalog/dataProducts?api-version=${UC_API}`, {
+    const res = await fetchWithTimeout(`${endpoint}/datagovernance/catalog/dataProducts?api-version=${UC_API}`, {
       method: 'POST',
       headers,
       body: JSON.stringify(body),
@@ -237,7 +238,7 @@ export const dataProductProvisioner: Provisioner = async (input): Promise<Provis
         ...(contacts ? { contacts } : {}),
       };
 
-      const res = await fetch(`${endpoint}/datagovernance/catalog/terms?api-version=${UC_API}`, {
+      const res = await fetchWithTimeout(`${endpoint}/datagovernance/catalog/terms?api-version=${UC_API}`, {
         method: 'POST',
         headers,
         body: JSON.stringify(body),

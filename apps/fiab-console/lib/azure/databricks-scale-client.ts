@@ -23,6 +23,7 @@
  *   Spark conf      https://learn.microsoft.com/azure/databricks/spark/conf
  */
 
+import { fetchWithTimeout } from '@/lib/azure/fetch-with-timeout';
 import {
   DefaultAzureCredential,
   ManagedIdentityCredential,
@@ -53,7 +54,7 @@ async function dbxToken(): Promise<string> {
 
 async function dbxFetch(path: string, init?: RequestInit): Promise<Response> {
   const token = await dbxToken();
-  return fetch(`https://${host()}${path}`, {
+  return fetchWithTimeout(`https://${host()}${path}`, {
     ...init,
     headers: {
       ...(init?.headers || {}),

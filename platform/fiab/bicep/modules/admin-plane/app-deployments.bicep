@@ -106,6 +106,16 @@ resource caeApps 'Microsoft.App/containerApps@2025-02-02-preview' = [for app in 
               { name: 'LOOM_AML_INSTANCE', value: amlInstance }
               { name: 'LOOM_AML_WORKSPACE_ID', value: amlWorkspaceId }
               { name: 'LOOM_AML_PORTAL_BASE', value: amlPortalBase }
+              // Server-side per-request HTTP timeout (ms) applied by
+              // lib/azure/fetch-with-timeout to every ARM/Fabric round-trip so a
+              // hung backend can't make a BFF route (and the page) spin forever.
+              // Matches the in-code default; raise it for slow sovereign regions.
+              { name: 'LOOM_SERVER_FETCH_TIMEOUT_MS', value: '30000' }
+              // Longer ceiling for LLM inference round-trips (AOAI chat
+              // completions, multi-iteration agent loops) so a normal long
+              // generation isn't aborted at the 30s metadata budget — still
+              // bounded so a wedged inference endpoint can't pin a worker.
+              { name: 'LOOM_LLM_FETCH_TIMEOUT_MS', value: '120000' }
               // Deployment planner cost estimator → public Azure Retail Prices
               // API. Empty = default prices.azure.com (no auth, Commercial cloud).
               // Read only by the Console app; ignored elsewhere.

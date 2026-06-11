@@ -11,6 +11,7 @@
  * The view choice persists per-page to localStorage.
  */
 
+import { clientFetch } from '@/lib/client-fetch';
 import { useCallback, useEffect, useState } from 'react';
 import {
   Title2, Body1, Caption1, Badge, Button, Spinner, MessageBar, MessageBarBody,
@@ -86,7 +87,7 @@ export default function ConnectionsPage() {
   const load = useCallback(async () => {
     setError(null);
     try {
-      const r = await fetch('/api/connections');
+      const r = await clientFetch('/api/connections');
       const j = await r.json();
       if (!r.ok || j?.ok === false) { setError(j?.error || `HTTP ${r.status}`); setConns([]); return; }
       setConns(j.connections || []);
@@ -98,7 +99,7 @@ export default function ConnectionsPage() {
     if (!confirm(`Delete connection "${name}"? Its Key Vault secret is also removed.`)) return;
     setBusy(true);
     try {
-      await fetch(`/api/connections?id=${encodeURIComponent(id)}`, { method: 'DELETE' });
+      await clientFetch(`/api/connections?id=${encodeURIComponent(id)}`, { method: 'DELETE' });
       await load();
     } finally { setBusy(false); }
   }, [load]);

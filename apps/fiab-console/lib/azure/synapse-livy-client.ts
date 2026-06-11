@@ -30,6 +30,7 @@
  *   https://learn.microsoft.com/azure/synapse-analytics/spark/apache-spark-development-using-notebooks (magic commands)
  */
 
+import { fetchWithTimeout } from '@/lib/azure/fetch-with-timeout';
 import {
   DefaultAzureCredential,
   ManagedIdentityCredential,
@@ -71,7 +72,7 @@ function livyBase(pool: string): string {
 async function callDev(url: string, init?: RequestInit): Promise<Response> {
   const tok = await credential.getToken(DEV_SCOPE);
   if (!tok?.token) throw new Error('Failed to acquire Synapse dev token');
-  return fetch(url, {
+  return fetchWithTimeout(url, {
     ...init,
     headers: {
       ...(init?.headers || {}),

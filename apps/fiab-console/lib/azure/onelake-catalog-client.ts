@@ -21,6 +21,7 @@
  *
  * No mocks. No `return []`. All calls hit api.fabric.microsoft.com.
  */
+import { fetchWithTimeout } from '@/lib/azure/fetch-with-timeout';
 import { ChainedTokenCredential, DefaultAzureCredential, ManagedIdentityCredential } from '@azure/identity';
 
 const FABRIC_BASE = process.env.LOOM_FABRIC_BASE || 'https://api.fabric.microsoft.com/v1';
@@ -76,7 +77,7 @@ async function call<T = any>(base: string, path: string, init?: { method?: strin
     const qs = new URLSearchParams(init.query).toString();
     if (qs) url += (url.includes('?') ? '&' : '?') + qs;
   }
-  const res = await fetch(url, {
+  const res = await fetchWithTimeout(url, {
     method: init?.method || 'GET',
     headers: { authorization: `Bearer ${tok}`, 'content-type': 'application/json', accept: 'application/json' },
     body: init?.body !== undefined ? JSON.stringify(init.body) : undefined,

@@ -16,6 +16,7 @@
  * explicitly bound — never the default.
  */
 
+import { fetchWithTimeout } from '@/lib/azure/fetch-with-timeout';
 import crypto from 'node:crypto';
 import { paginatedReportDefinitionsContainer } from './cosmos-client';
 import type { SessionPayload } from '@/lib/auth/session';
@@ -221,7 +222,7 @@ export async function renderReport(
   const url = new URL('/api/render', base.replace(/\/$/, ''));
   if (key) url.searchParams.set('code', key);
 
-  const res = await fetch(url.toString(), {
+  const res = await fetchWithTimeout(url.toString(), {
     method: 'POST',
     headers: { 'content-type': 'application/json' },
     body: JSON.stringify({ definition: def, format, parameterValues }),

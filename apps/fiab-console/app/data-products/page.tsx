@@ -15,6 +15,7 @@
 
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { useRouter } from 'next/navigation';
+import { clientFetch } from '@/lib/client-fetch';
 import {
   Badge, Button, Caption1, Spinner, Subtitle2, Text,
   MessageBar, MessageBarBody,
@@ -80,7 +81,7 @@ export default function DataProductsPage() {
   const load = useCallback(async () => {
     setLoading(true); setError(undefined);
     try {
-      const r = await fetch('/api/data-products');
+      const r = await clientFetch('/api/data-products');
       const j = await r.json();
       if (j.ok) setRows(j.dataProducts || []);
       else setError(j.error || `HTTP ${r.status}`);

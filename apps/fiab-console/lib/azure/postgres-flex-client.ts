@@ -19,6 +19,7 @@
  * firewall are all live.
  */
 
+import { fetchWithTimeout } from '@/lib/azure/fetch-with-timeout';
 import { ChainedTokenCredential, DefaultAzureCredential, ManagedIdentityCredential } from '@azure/identity';
 import { armBase } from './cloud-endpoints';
 
@@ -57,7 +58,7 @@ async function armToken(): Promise<string> {
 
 async function armRequest<T = any>(path: string, init: RequestInit = {}): Promise<T> {
   const token = await armToken();
-  const res = await fetch(`${arm()}${path}`, {
+  const res = await fetchWithTimeout(`${arm()}${path}`, {
     ...init,
     headers: {
       authorization: `Bearer ${token}`,

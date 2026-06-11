@@ -26,6 +26,7 @@
  *                  DomainsBackendGateError if backend=fabric
  */
 
+import { fetchWithTimeout } from '@/lib/azure/fetch-with-timeout';
 import { governanceDomainsContainer } from './cosmos-client';
 import {
   createBusinessDomain,
@@ -338,7 +339,7 @@ async function fabricAdminFetch(path: string, opts: RequestInit = {}): Promise<R
   // the API returns 400. (MS Learn: "Domains - Create Domain".)
   const base = FABRIC_BASE.replace(/\/+$/, '');
   const url = `${base}/admin${path}?preview=false`;
-  return fetch(url, {
+  return fetchWithTimeout(url, {
     ...opts,
     headers: {
       Authorization: `Bearer ${token.token}`,

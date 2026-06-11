@@ -38,6 +38,7 @@
  * `AasError` (status + body) for the BFF to surface verbatim per no-vaporware.md.
  */
 
+import { fetchWithTimeout } from '@/lib/azure/fetch-with-timeout';
 import {
   ClientSecretCredential,
   ChainedTokenCredential,
@@ -427,7 +428,7 @@ async function postXmla(rb: ResolvedBackend, envelope: string): Promise<string> 
   const token = await getToken(rb);
   let res: Response;
   try {
-    res = await fetch(rb.endpointUrl, {
+    res = await fetchWithTimeout(rb.endpointUrl, {
       method: 'POST',
       headers: {
         authorization: `Bearer ${token}`,

@@ -10,9 +10,11 @@
     "build": "next build",
     "start": "next start",
     "lint": "next lint",
+    "guard:server-fetch": "node scripts/no-bare-server-fetch.mjs",
     "test": "vitest run",
     "test:e2e": "playwright test",
     "test:a11y": "playwright test --grep @a11y",
+    "perf": "node scripts/perf-harness.mjs",
     "uat": "node scripts/uat-launch.mjs"
   },
   "dependencies": {

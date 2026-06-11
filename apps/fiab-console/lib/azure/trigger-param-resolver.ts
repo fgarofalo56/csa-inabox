@@ -20,6 +20,7 @@
  * azconfig.io vs azconfig.azure.us). No mocks — a missing env var or a real KV
  * 403 surfaces verbatim with the right HTTP status (no-vaporware.md).
  */
+import { fetchWithTimeout } from '@/lib/azure/fetch-with-timeout';
 import { ChainedTokenCredential, DefaultAzureCredential, ManagedIdentityCredential } from '@azure/identity';
 import { getAppConfigScope } from './cloud-endpoints';
 
@@ -76,7 +77,7 @@ async function getParamKvSecretValue(vaultUri: string, secretName: string): Prom
   const base = vaultUri.replace(/\/$/, '');
   const name = (secretName || '').trim();
   if (!name) throw new ParamResolveError('Key Vault binding is missing a secret name', 400);
-  const res = await fetch(`${base}/secrets/${encodeURIComponent(name)}?api-version=${KV_API}`, {
+  const res = await fetchWithTimeout(`${base}/secrets/${encodeURIComponent(name)}?api-version=${KV_API}`, {
     headers: { authorization: `Bearer ${await token(kvScope(base))}` },
     cache: 'no-store',
   });
@@ -99,7 +100,7 @@ async function getAppConfigValue(endpoint: string, key: string, label?: string):
   // The App Config REST API treats label as a query param; the "no label"
   // sentinel is %00. A user-supplied label is passed through verbatim.
   const labelQs = label && label.trim() ? `&label=${encodeURIComponent(label.trim())}` : '';
-  const res = await fetch(`${base}/kv/${encodeURIComponent(k)}?api-version=${APPCONFIG_API}${labelQs}`, {
+  const res = await fetchWithTimeout(`${base}/kv/${encodeURIComponent(k)}?api-version=${APPCONFIG_API}${labelQs}`, {
     headers: { authorization: `Bearer ${await token(acScope(base))}` },
     cache: 'no-store',
   });

@@ -21,6 +21,7 @@ import {
   ManagedIdentityCredential,
 } from '@azure/identity';
 import { armBase, armScope } from './cloud-endpoints';
+import { fetchWithTimeout } from './fetch-with-timeout';
 
 const ARM_SCOPE = armScope();
 
@@ -41,7 +42,10 @@ function armUrl(path: string): string {
 async function armFetch(path: string, init?: RequestInit): Promise<Response> {
   const token = await credential.getToken(ARM_SCOPE);
   if (!token?.token) throw new Error('Failed to acquire ARM token');
-  return fetch(armUrl(path), {
+  // Per-request timeout so a hung ARM call can't make the BFF route (and the
+  // page) spin forever. 202 LROs are polled by the caller; each poll round-trip
+  // inherits this same per-request ceiling.
+  return fetchWithTimeout(armUrl(path), {
     ...init,
     headers: {
       ...(init?.headers || {}),

@@ -13,6 +13,7 @@
  *   - hover lifts the card; "Add to workspace" / "Manage" actions land in v3
  */
 
+import { clientFetch } from '@/lib/client-fetch';
 import { useEffect, useMemo, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import {
@@ -136,7 +137,7 @@ export default function WorkloadsPage() {
   const [q, setQ] = useState('');
 
   useEffect(() => {
-    fetch('/api/workloads-catalog').then(r => {
+    clientFetch('/api/workloads-catalog').then(r => {
       if (r.status === 401 || r.status === 403) { setUnauth(true); setItems([]); return null; }
       return r.json();
     }).then(d => {
