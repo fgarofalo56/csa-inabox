@@ -45,6 +45,9 @@ param workspaceId string
 @description('Compliance tags')
 param complianceTags object
 
+@description('Seed a self-contained sample API (mocked 200) + product + active subscription so the API Marketplace Try console and curl samples work end-to-end out of the box. The mock returns 200 at the gateway with no backend dependency — proving the subscription-key flow. BYO-APIM deployments skip this module entirely, so the sample is only seeded on Loom-provisioned APIM.')
+param seedSampleApi bool = true
+
 resource apim 'Microsoft.ApiManagement/service@2024-06-01-preview' = {
   name: 'apim-csa-loom-${location}'
   location: location
@@ -151,6 +154,91 @@ resource diag 'Microsoft.Insights/diagnosticSettings@2021-05-01-preview' = {
       { category: 'AllMetrics', enabled: true }
     ]
   }
+}
+
+// ---------------------------------------------------------------------------
+// Sample API — self-contained, mocked 200. Lets the API Marketplace prove the
+// subscribe → key → Try/curl flow without any backend dependency. The single
+// operation is answered by a mock-response policy at the gateway, so it returns
+// 200 even though the APIM service is internal-VNet with no public backend.
+// ---------------------------------------------------------------------------
+resource sampleApi 'Microsoft.ApiManagement/service/apis@2024-06-01-preview' = if (seedSampleApi) {
+  parent: apim
+  name: 'loom-sample-api'
+  properties: {
+    displayName: 'Loom Sample API'
+    description: 'Self-contained sample API for the API Marketplace. GET /status returns a mocked 200 from the gateway with no backend — use it to validate the subscription-key + Try-console flow end-to-end.'
+    path: 'loom-sample'
+    protocols: [ 'https' ]
+    subscriptionRequired: true
+    serviceUrl: 'https://loom-sample.invalid'   // never called — the operation is mocked
+  }
+}
+
+resource sampleOp 'Microsoft.ApiManagement/service/apis/operations@2024-06-01-preview' = if (seedSampleApi) {
+  parent: sampleApi
+  name: 'get-status'
+  properties: {
+    displayName: 'Get status'
+    method: 'GET'
+    urlTemplate: '/status'
+    responses: [
+      {
+        statusCode: 200
+        description: 'OK'
+        representations: [
+          {
+            contentType: 'application/json'
+            examples: {
+              default: {
+                value: '{"status":"ok","service":"loom-sample-api"}'
+              }
+            }
+          }
+        ]
+      }
+    ]
+  }
+}
+
+resource sampleOpPolicy 'Microsoft.ApiManagement/service/apis/operations/policies@2024-06-01-preview' = if (seedSampleApi) {
+  parent: sampleOp
+  name: 'policy'
+  properties: {
+    format: 'xml'
+    value: '<policies><inbound><base /><mock-response status-code="200" content-type="application/json" /></inbound><backend><base /></backend><outbound><base /></outbound><on-error><base /></on-error></policies>'
+  }
+}
+
+resource sampleProduct 'Microsoft.ApiManagement/service/products@2024-06-01-preview' = if (seedSampleApi) {
+  parent: apim
+  name: 'loom-sample'
+  properties: {
+    displayName: 'Loom Sample'
+    description: 'Sample product for the API Marketplace. Subscriptions are auto-approved and active immediately — use it to try the Loom Sample API.'
+    subscriptionRequired: true
+    approvalRequired: false
+    state: 'published'
+  }
+}
+
+resource sampleProductApiLink 'Microsoft.ApiManagement/service/products/apis@2024-06-01-preview' = if (seedSampleApi) {
+  parent: sampleProduct
+  name: 'loom-sample-api'
+  dependsOn: [ sampleApi ]
+}
+
+// An active subscription scoped to the sample product, so the marketplace shows
+// a working key from the first load (key revealed via listSecrets on demand).
+resource sampleSubscription 'Microsoft.ApiManagement/service/subscriptions@2024-06-01-preview' = if (seedSampleApi) {
+  parent: apim
+  name: 'loom-sample-sub'
+  properties: {
+    displayName: 'Loom Sample subscription'
+    scope: '${apim.id}/products/loom-sample'
+    state: 'active'
+  }
+  dependsOn: [ sampleProductApiLink ]
 }
 
 output apimId string = apim.id
