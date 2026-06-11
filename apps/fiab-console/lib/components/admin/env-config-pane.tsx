@@ -25,6 +25,7 @@ import {
 import {
   Settings24Regular, ArrowSync24Regular, Save24Regular,
   CheckmarkCircle24Filled, Warning24Filled, Eye24Regular, EyeOff24Regular,
+  Copy16Regular, Checkmark16Regular, Edit16Filled, ArrowResetRegular,
 } from '@fluentui/react-icons';
 
 type Category = 'identity' | 'data-plane' | 'azure-services' | 'permissions' | 'security' | 'enrichment';
@@ -156,6 +157,11 @@ export function EnvConfigPane() {
           </div>
           <div style={{ display: 'flex', gap: 8 }}>
             <Button icon={<ArrowSync24Regular />} appearance="outline" onClick={load} disabled={loading}>Re-check</Button>
+            {dirtyKeys.length > 0 && (
+              <Button icon={<ArrowResetRegular />} appearance="subtle" onClick={() => setEdits({})} disabled={saving}>
+                Discard
+              </Button>
+            )}
             <Button icon={<Save24Regular />} appearance="primary" onClick={save}
               disabled={saving || dirtyKeys.length === 0 || !data.acaConfigured}>
               {saving ? 'Applying…' : `Save ${dirtyKeys.length || ''} change${dirtyKeys.length === 1 ? '' : 's'}`}
@@ -179,10 +185,23 @@ export function EnvConfigPane() {
         <MessageBar intent="warning" style={{ marginBottom: 16 }}>
           <MessageBarBody>
             <MessageBarTitle>Configuration drift ({data.drift.length})</MessageBarTitle>
-            {data.drift.map((d) => d.key).join(', ')} — the desired value saved in the Loom store
-            differs from the value the running revision sees. Either a new revision is still rolling
-            out, or a redeploy reverted the change. Fold the change into the loom-console env array in
-            admin-plane/main.bicep to make it permanent.
+            The desired value saved in the Loom store differs from what the running revision sees.
+            Either a new revision is still rolling out, or a redeploy reverted the change. Fold the
+            change into the loom-console env array in admin-plane/main.bicep to make it permanent.
+            <div style={{ marginTop: 8, display: 'grid', gap: 4 }}>
+              {data.drift.map((d) => (
+                <div key={d.key} style={{ display: 'flex', alignItems: 'baseline', gap: 8, flexWrap: 'wrap' }}>
+                  <Body1Strong style={{ fontFamily: 'Consolas, monospace', fontSize: 12 }}>{d.key}</Body1Strong>
+                  <Caption1 style={{ fontFamily: 'Consolas, monospace', color: tokens.colorPaletteGreenForeground1, wordBreak: 'break-all' }}>
+                    desired: {d.desired}
+                  </Caption1>
+                  <Caption1 style={{ color: tokens.colorNeutralForeground3 }}>→</Caption1>
+                  <Caption1 style={{ fontFamily: 'Consolas, monospace', color: tokens.colorNeutralForeground2, wordBreak: 'break-all' }}>
+                    running: {d.current}
+                  </Caption1>
+                </div>
+              ))}
+            </div>
           </MessageBarBody>
         </MessageBar>
       )}
@@ -211,15 +230,19 @@ export function EnvConfigPane() {
           </Body1>
           <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8 }}>
             <Caption1 style={{ color: tokens.colorNeutralForeground2 }}>bicep — loom-console env entries (admin-plane/main.bicep)</Caption1>
-            <Button size="small" appearance="outline" onClick={() => copy('bicep', result.sync.bicepEnvSnippet)}>
-              {copied === 'bicep' ? 'Copied ✓' : 'Copy'}
+            <Button size="small" appearance="outline"
+              icon={copied === 'bicep' ? <Checkmark16Regular /> : <Copy16Regular />}
+              onClick={() => copy('bicep', result.sync.bicepEnvSnippet)}>
+              {copied === 'bicep' ? 'Copied' : 'Copy'}
             </Button>
           </div>
           <pre style={codeBox}>{result.sync.bicepEnvSnippet}</pre>
           <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8, marginTop: 12 }}>
             <Caption1 style={{ color: tokens.colorNeutralForeground2 }}>Az CLI — apply directly (equivalent)</Caption1>
-            <Button size="small" appearance="outline" onClick={() => copy('cli', result.sync.cliScript)}>
-              {copied === 'cli' ? 'Copied ✓' : 'Copy'}
+            <Button size="small" appearance="outline"
+              icon={copied === 'cli' ? <Checkmark16Regular /> : <Copy16Regular />}
+              onClick={() => copy('cli', result.sync.cliScript)}>
+              {copied === 'cli' ? 'Copied' : 'Copy'}
             </Button>
           </div>
           <pre style={codeBox}>{result.sync.cliScript}</pre>
@@ -244,10 +267,17 @@ export function EnvConfigPane() {
             const disabledIl5 = !!e.il5Restricted && isGov;
             const editing = edits[e.key] ?? '';
             const shown = !!reveal[e.key];
+            const modified = editing.trim().length > 0;
             return (
               <div key={e.key}>
                 {i > 0 && <Divider style={{ margin: '12px 0' }} />}
-                <div style={{ display: 'flex', gap: 12, alignItems: 'flex-start', flexWrap: 'wrap' }}>
+                <div style={{
+                  display: 'flex', gap: 12, alignItems: 'flex-start', flexWrap: 'wrap',
+                  ...(modified ? {
+                    margin: '-6px -10px', padding: '6px 10px', borderRadius: tokens.borderRadiusMedium,
+                    backgroundColor: tokens.colorNeutralBackground1Selected,
+                  } : null),
+                }}>
                   <div style={{ flex: 1, minWidth: 220 }}>
                     <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
                       <Body1Strong style={{ fontFamily: 'Consolas, monospace' }}>{e.key}</Body1Strong>
@@ -259,6 +289,7 @@ export function EnvConfigPane() {
                       {cur?.set
                         ? <Badge appearance="tint" size="small" color="success" icon={<CheckmarkCircle24Filled />}>set</Badge>
                         : <Badge appearance="tint" size="small" color="warning" icon={<Warning24Filled />}>not set</Badge>}
+                      {modified && <Badge appearance="filled" size="small" color="brand" icon={<Edit16Filled />}>modified</Badge>}
                       {disabledIl5 && <Badge appearance="tint" size="small" color="danger">restricted in {data.cloud}</Badge>}
                     </div>
                     <Caption1 style={{ display: 'block', color: tokens.colorNeutralForeground2, marginTop: 2 }}>{e.label}</Caption1>
@@ -282,6 +313,11 @@ export function EnvConfigPane() {
                         icon={shown ? <EyeOff24Regular /> : <Eye24Regular />}
                         onClick={() => setReveal((s) => ({ ...s, [e.key]: !s[e.key] }))} />
                     )}
+                    {modified && (
+                      <Button size="small" appearance="subtle" aria-label={`Discard change to ${e.key}`}
+                        icon={<ArrowResetRegular />}
+                        onClick={() => setEdits((s) => { const n = { ...s }; delete n[e.key]; return n; })} />
+                    )}
                   </div>
                 </div>
               </div>
@@ -289,6 +325,19 @@ export function EnvConfigPane() {
           })}
         </div>
       ))}
+
+      {grouped.length === 0 && (
+        <div style={card}>
+          <div style={head}>
+            <Settings24Regular style={{ color: tokens.colorNeutralForeground3 }} />
+            <Subtitle2>No editable runtime variables</Subtitle2>
+          </div>
+          <Body1 style={{ color: tokens.colorNeutralForeground2 }}>
+            The deployment catalog returned no editable environment variables for this console.
+            Use Re-check to reload, or fold configuration changes directly into admin-plane/main.bicep.
+          </Body1>
+        </div>
+      )}
     </div>
   );
 }
