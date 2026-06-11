@@ -564,6 +564,16 @@ module adminPlane 'modules/admin-plane/main.bicep' = {
     loomCosmosGremlinEndpoint: (deploymentMode == 'single-sub' && cosmosGraphVectorEnabled) ? 'wss://${take('cosmos-loom-gremlin-default-${uniqueString(singleDlzRg.id)}', 44)}.${gremlinHostSuffix}:443/' : ''
     loomCosmosGremlinDatabase: (deploymentMode == 'single-sub' && cosmosGraphVectorEnabled) ? 'loom-graph' : ''
     loomCosmosGremlinGraph: (deploymentMode == 'single-sub' && cosmosGraphVectorEnabled) ? 'default' : ''
+    // Bind the console's warehouse/SQL env (LOOM_SYNAPSE_WORKSPACE /
+    // LOOM_SYNAPSE_DEDICATED_POOL) to the DLZ Synapse workspace + dedicated pool
+    // the landing-zone provisions (synapse.bicep: 'syn-loom-${domainName}-${location}'
+    // with domainName='default', dedicatedPoolName='loompool'). Computed
+    // deterministically (NOT via singleDlz.outputs — landing-zone consumes
+    // adminPlane's UAMI, so referencing its outputs here would create a cycle).
+    // This makes the warehouse access-policy grant target the real pool; without
+    // it the binding silently relies on the admin-plane default matching.
+    loomSynapseWorkspace: 'syn-loom-default-${location}'
+    loomSynapseDedicatedPool: 'loompool'
     loomPurviewAccount: loomPurviewAccount
     loomMipEnabled: loomMipEnabled
     loomDlpEnabled: loomDlpEnabled

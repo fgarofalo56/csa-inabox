@@ -52,7 +52,7 @@ Zero ❌, zero stub banners.
 | Load / save policy | `GET`/`PUT /api/data-products/[id]/access-policy` → Cosmos `items` container, `state.accessPolicy` (tenant-scoped via `loadOwnedItem`/`updateOwnedItem`) |
 | Approver / provider search | `GET /api/data-products/[id]/principal-search?q=&kind=` → Microsoft Graph `users`/`groups` `$filter=startswith(...)` via Console UAMI app-only token (`lib/azure/graph-principals.ts`, cloud-aware Commercial / GCC-High / IL5) |
 | Published guard | `state.apimPublished` (set by `publishApimMirror` POST `/api/items/apim-product`) |
-| Grant enforcement (on approval, T14) | `enforceAccessGrant` → `grantContainerRole` (ARM `PUT roleAssignments` at ADLS container scope). Requires the constrained **RBAC Administrator** grant in `platform/fiab/bicep/modules/admin-plane/access-policy-rbac.bicep` |
+| Grant enforcement (on approval, T14) | `enforceAccessGrant` dispatches by scope (`lib/azure/access-policy-client.ts`): **adls-container** → `grantContainerRole` (ARM `PUT roleAssignments`, Storage Blob Data role); **warehouse** → Synapse **Dedicated SQL** `CREATE USER … FROM EXTERNAL PROVIDER` + `EXEC sp_addrolemember` (db_datareader/writer/owner) over real TDS; **kql-database** → ADX `.add database <db> viewers\|users\|admins ('<fqn>')` via the typed `addDatabasePrincipal` helper. Revoke replays the inverse (`sp_droprolemember` / `.drop database`). ADLS needs the constrained **RBAC Administrator** grant in `platform/fiab/bicep/modules/admin-plane/access-policy-rbac.bicep`; warehouse needs the Console UAMI as Synapse AD admin (`landing-zone/synapse.bicep`); KQL needs `AllDatabasesAdmin` (`admin-plane/adx-cluster.bicep`) |
 
 ## Honest infra gates
 
@@ -62,6 +62,24 @@ Zero ❌, zero stub banners.
 - **RBAC-Administrator**: granting container-scoped Storage Blob Data roles at
   approval time needs the `access-policy-rbac.bicep` module (constrained to the
   three Storage Blob Data role GUIDs via an ABAC condition — no escalation).
+- **Warehouse env / paused pool**: warehouse grants need
+  `LOOM_SYNAPSE_WORKSPACE` + `LOOM_SYNAPSE_DEDICATED_POOL` (bound from the DLZ
+  workspace/pool in `main.bicep`). If the Dedicated SQL pool is start-paused
+  (cost control), `enforceAccessGrant` kicks off a resume and returns
+  `status:'pending'` ("pool is paused — re-run once Online"), keeping the
+  access request at the final tier — never a silent success (no-vaporware.md).
+- **ADX env**: KQL-database grants need `LOOM_KUSTO_CLUSTER_URI`; when unset the
+  grant returns `status:'pending'` naming the env var.
+
+## Per-cloud notes (non-ADLS enforcement)
+
+The `sp_addrolemember` T-SQL and the ADX `.add database … ('aaduser=…')`
+control command are **identical across clouds**; only the endpoint host/audience
+differ, resolved by `cloud-endpoints` + per-deploy overrides
+(`LOOM_SYNAPSE_HOST_SUFFIX` / `LOOM_SYNAPSE_SQL_TOKEN_SCOPE` / `LOOM_KUSTO_CLUSTER_URI`).
+Synapse SQL suffix `sql.azuresynapse.net` (Commercial/GCC) vs
+`sql.azuresynapse.usgovcloudapi.net` (GCC-High/IL5); ADX `kusto.windows.net` vs
+`kusto.usgovcloudapi.net`. No boundary-specific branching in the grant code.
 
 ## Per-cloud notes
 
@@ -77,3 +95,4 @@ Zero ❌, zero stub banners.
 - `GET /api/data-products/{id}/principal-search?q=al&kind=user` → live Entra principals with UPN
 - On a published product, `PUT` → HTTP 409 `{ ok:false, code:'published_locked' }`; dialog disabled with MessageBar
 - Unit: `lib/types/__tests__/access-policy.test.ts` (8 passing — normalize + tier ordering)
+- Unit: `lib/azure/__tests__/access-policy-client.test.ts` — warehouse grant emits `sp_addrolemember` (not `ALTER ROLE … ADD MEMBER`, which Synapse Dedicated rejects), paused-pool returns `pending`, KQL routes through `addDatabasePrincipal` with read→viewers / write→users / admin→admins, revoke emits `sp_droprolemember` / `dropDatabasePrincipal`

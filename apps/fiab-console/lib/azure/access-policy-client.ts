@@ -6,7 +6,10 @@
  *
  *   - adls-container → Storage RBAC role assignment (Storage Blob Data *).
  *   - warehouse      → Synapse **Dedicated SQL** Entra DB user + role membership
- *                      (db_datareader / db_datawriter / db_owner).
+ *                      (db_datareader / db_datawriter / db_owner) via
+ *                      `sp_addrolemember` — Dedicated SQL pools do NOT support
+ *                      `ALTER ROLE ... ADD MEMBER` (see Microsoft Learn:
+ *                      database-level-roles / sql-authentication).
  *   - kql-database   → Azure Data Explorer **database role** (.add database
  *                      viewers / users / admins).
  *
@@ -17,7 +20,13 @@
  */
 import { grantContainerRole, revokeContainerRoleAssignment } from './adls-client';
 import { dedicatedTarget, executeQuery as synapseExecute } from './synapse-sql-client';
-import { executeMgmtCommand, defaultDatabase, kustoConfigGate } from './kusto-client';
+import { getPoolState, resumePool } from './synapse-pool-arm';
+import {
+  defaultDatabase,
+  kustoConfigGate,
+  addDatabasePrincipal,
+  dropDatabasePrincipal,
+} from './kusto-client';
 
 export type AccessPermission = 'read' | 'write' | 'admin';
 export type AccessScopeType = 'adls-container' | 'warehouse' | 'kql-database' | 'workspace' | 'item' | 'collection';
@@ -114,12 +123,34 @@ export async function enforceAccessGrant(input: AccessGrantInput): Promise<Acces
       catch {
         return { status: 'pending', detail: 'The Azure-native warehouse is not configured: set LOOM_SYNAPSE_WORKSPACE and LOOM_SYNAPSE_DEDICATED_POOL to enforce warehouse grants.' };
       }
+      // The Dedicated SQL pool may be provisioned start-paused (cost control).
+      // A grant needs an Online pool to connect over TDS; if it's paused, kick
+      // off a resume and return 'pending' so the operator re-runs once it's
+      // Online — never a silent no-op (no-vaporware.md). If the ARM state probe
+      // is unavailable (LOOM_SUBSCRIPTION_ID / LOOM_DLZ_RG unset), fall through
+      // and let the TDS connect surface any real error.
+      try {
+        const { state } = await getPoolState();
+        if (state === 'Paused') {
+          await resumePool().catch(() => { /* best-effort; operator retries below */ });
+          return { status: 'pending', detail: `Dedicated SQL pool ${target.database} is paused — a resume was started. Re-run this grant once the pool is Online (~1-2 min).` };
+        }
+        if (state === 'Pausing' || state === 'Resuming' || state === 'Scaling') {
+          return { status: 'pending', detail: `Dedicated SQL pool ${target.database} is ${state.toLowerCase()} — re-run this grant once it is Online.` };
+        }
+      } catch {
+        /* ARM probe unavailable — proceed and let the TDS attempt report errors */
+      }
       try {
         // Create the Entra DB user if absent, then add it to the fixed role.
+        // Synapse **Dedicated** SQL pools do NOT support `ALTER ROLE ... ADD
+        // MEMBER`; database-role membership is managed with `sp_addrolemember`
+        // (Microsoft Learn: sql-authentication#non-administrator-users and
+        // database-level-roles — "Azure Synapse should use sp_addrolemember").
         const sql =
           `IF NOT EXISTS (SELECT 1 FROM sys.database_principals WHERE name = ${sqlString(name)})\n` +
           `  CREATE USER ${sqlBracket(name)} FROM EXTERNAL PROVIDER;\n` +
-          `ALTER ROLE ${roleName} ADD MEMBER ${sqlBracket(name)};`;
+          `EXEC sp_addrolemember ${sqlString(roleName)}, ${sqlString(name)};`;
         await synapseExecute(target, sql);
         return { status: 'active', roleName, detail: `Granted ${roleName} on ${target.database} to ${name}.` };
       } catch (e: any) {
@@ -140,8 +171,9 @@ export async function enforceAccessGrant(input: AccessGrantInput): Promise<Acces
       const principal = adxPrincipalToken(input);
       if ('gate' in principal) return { status: 'pending', detail: principal.gate };
       try {
-        const cmd = `.add database ["${db.replace(/"/g, '')}"] ${roleName} ('${principal.token}') 'Granted via Loom access policy'`;
-        await executeMgmtCommand(db, cmd);
+        // `.add database ["db"] <role> ('<fqn>')` via the typed helper, which
+        // allow-lists the role (KUSTO_DATABASE_ROLES) and centralizes escaping.
+        await addDatabasePrincipal(db, roleName, principal.token);
         return { status: 'active', roleName, detail: `Granted ${roleName} on ADX database ${db}.` };
       } catch (e: any) {
         return { status: 'error', detail: (e?.message || String(e)).slice(0, 400) };
@@ -176,7 +208,8 @@ export async function revokeStructuredGrant(input: AccessGrantInput): Promise<vo
       if (!name) return;
       const roleName = SQL_ROLE[input.permission];
       const target = dedicatedTarget();
-      await synapseExecute(target, `ALTER ROLE ${roleName} DROP MEMBER ${sqlBracket(name)};`);
+      // Dedicated SQL pools use sp_droprolemember (not ALTER ROLE ... DROP MEMBER).
+      await synapseExecute(target, `EXEC sp_droprolemember ${sqlString(roleName)}, ${sqlString(name)};`);
     } else if (input.scopeType === 'kql-database') {
       if (kustoConfigGate()) return;
       const roleName = ADX_ROLE[input.permission];
@@ -184,7 +217,7 @@ export async function revokeStructuredGrant(input: AccessGrantInput): Promise<vo
       if (!db) return;
       const principal = adxPrincipalToken(input);
       if ('gate' in principal) return;
-      await executeMgmtCommand(db, `.drop database ["${db.replace(/"/g, '')}"] ${roleName} ('${principal.token}')`);
+      await dropDatabasePrincipal(db, roleName, principal.token);
     }
   } catch {
     /* best-effort revoke — never block the policy delete */
