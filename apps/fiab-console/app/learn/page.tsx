@@ -25,7 +25,7 @@ import {
 } from '@fluentui/react-components';
 import {
   BookOpen24Regular, Open16Regular, DocumentBulletList16Regular, ArrowDownload16Regular,
-  NotebookAdd24Regular,
+  NotebookAdd24Regular, Apps16Regular, SearchInfo24Regular,
 } from '@fluentui/react-icons';
 import { PageShell } from '@/lib/components/page-shell';
 import { Section, Toolbar } from '@/lib/components/ui/section';
@@ -128,9 +128,24 @@ const useStyles = makeStyles({
   sectionBlurb: { color: tokens.colorNeutralForeground3, lineHeight: 1.5 },
 
   empty: {
+    display: 'flex',
+    flexDirection: 'column',
+    alignItems: 'center',
+    gap: tokens.spacingVerticalS,
     padding: tokens.spacingVerticalXXL,
     textAlign: 'center',
     color: tokens.colorNeutralForeground3,
+  },
+  emptyIcon: {
+    display: 'inline-flex',
+    alignItems: 'center',
+    justifyContent: 'center',
+    width: '56px',
+    height: '56px',
+    borderRadius: tokens.borderRadiusCircular,
+    backgroundColor: tokens.colorNeutralBackground3,
+    color: tokens.colorNeutralForeground3,
+    marginBottom: tokens.spacingVerticalXS,
   },
 
   // list view
@@ -145,6 +160,10 @@ const useStyles = makeStyles({
     transitionDuration: tokens.durationFaster,
     transitionProperty: 'background-color, border-color',
     ':hover': { backgroundColor: tokens.colorNeutralBackground1Hover, border: `1px solid ${tokens.colorNeutralStroke1}` },
+    ':focus-within': {
+      borderColor: tokens.colorBrandStroke1,
+      boxShadow: `0 0 0 1px ${tokens.colorBrandStroke1}`,
+    },
   },
   listChip: {
     flexShrink: 0,
@@ -169,6 +188,12 @@ const useStyles = makeStyles({
     display: 'inline-flex', alignItems: 'center', gap: '4px',
     color: tokens.colorNeutralForeground3, fontSize: tokens.fontSizeBase200,
     textDecorationLine: 'none', ':hover': { textDecorationLine: 'underline' },
+  },
+  listApp: {
+    display: 'inline-flex', alignItems: 'center', gap: '4px',
+    color: tokens.colorPaletteGreenForeground1, fontWeight: tokens.fontWeightSemibold,
+    fontSize: tokens.fontSizeBase200, textDecorationLine: 'none',
+    ':hover': { textDecorationLine: 'underline' },
   },
   list: { display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalS },
 });
@@ -241,6 +266,12 @@ export default function LearnPage(): React.ReactElement {
   }, [filtered]);
 
   const missing = all.filter((t) => !t.hasLoomDoc).length;
+  const hasFilters = query !== '' || section !== 'all' || category !== 'all';
+  const clearFilters = React.useCallback(() => {
+    setQuery('');
+    setSection('all');
+    setCategory('all');
+  }, []);
 
   // Reset category when section changes and the old category no longer applies.
   React.useEffect(() => {
@@ -355,9 +386,14 @@ export default function LearnPage(): React.ReactElement {
       {filtered.length === 0 && (
         <Section bare>
           <div className={s.empty}>
-            <Text size={400}>No topics match your search.</Text>
-            <br />
-            <Text size={300}>Try a different keyword or clear the filters.</Text>
+            <span className={s.emptyIcon} aria-hidden><SearchInfo24Regular /></span>
+            <Text size={400} weight="semibold">No topics match your search</Text>
+            <Text size={300}>Try a different keyword or clear the filters to see the full library.</Text>
+            {hasFilters && (
+              <Button appearance="secondary" onClick={clearFilters} style={{ marginTop: tokens.spacingVerticalS }}>
+                Clear filters
+              </Button>
+            )}
           </div>
         </Section>
       )}
@@ -425,6 +461,13 @@ export default function LearnPage(): React.ReactElement {
                       >
                         Install live example
                       </Button>
+                    )}
+                    {t.appHref && (
+                      <a className={s.listApp} href={t.appHref}>
+                        <Apps16Regular />
+                        {t.appLabel ?? 'Install app'}
+                      </a>
+                    )}
                     )}
                   </div>
                 </div>

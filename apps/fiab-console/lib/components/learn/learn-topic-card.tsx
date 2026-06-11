@@ -17,7 +17,7 @@ import * as React from 'react';
 import {
   Text, Badge, Button, makeStyles, tokens, mergeClasses,
 } from '@fluentui/react-components';
-import { Open16Regular, BookOpen16Regular, ArrowDownload16Regular } from '@fluentui/react-icons';
+import { Open16Regular, BookOpen16Regular, ArrowDownload16Regular, Apps16Regular } from '@fluentui/react-icons';
 import { itemVisual } from '@/lib/components/ui/item-type-visual';
 import { InstallAppDialog } from '@/lib/components/apps/install-app-dialog';
 import type { LearnTopic } from '@/lib/learn/content';
@@ -125,6 +125,16 @@ const useStyles = makeStyles({
     textDecorationLine: 'none',
     ':hover': { textDecorationLine: 'underline', color: tokens.colorNeutralForeground2 },
   },
+  appLink: {
+    display: 'inline-flex',
+    alignItems: 'center',
+    gap: '4px',
+    fontSize: tokens.fontSizeBase200,
+    fontWeight: tokens.fontWeightSemibold,
+    color: tokens.colorPaletteGreenForeground1,
+    textDecorationLine: 'none',
+    ':hover': { textDecorationLine: 'underline' },
+  },
 });
 
 export function LearnTopicCard({ topic }: { topic: LearnTopic }): React.ReactElement {
@@ -195,6 +205,13 @@ export function LearnTopicCard({ topic }: { topic: LearnTopic }): React.ReactEle
             >
               Install live example
             </Button>
+          )}
+          {topic.appHref && (
+            <a className={s.appLink} href={topic.appHref}>
+              <Apps16Regular />
+              {topic.appLabel ?? 'Install app'}
+            </a>
+          )}
           )}
         </div>
       </div>
