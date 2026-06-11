@@ -51,6 +51,15 @@ const useStyles = makeStyles({
   tabBar: { padding: '8px 16px 0', borderBottom: `1px solid ${tokens.colorNeutralStroke2}` },
   card: { padding: 12, border: `1px solid ${tokens.colorNeutralStroke2}`, borderRadius: 6 },
   cardGrid: { display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(220px, 1fr))', gap: 12 },
+  // Grouped config section — a subtle card so Location / Format / Table
+  // reference read as distinct steps rather than one flat run of inputs.
+  section: {
+    display: 'flex', flexDirection: 'column', gap: 10, padding: 14,
+    border: `1px solid ${tokens.colorNeutralStroke2}`, borderRadius: 8,
+    backgroundColor: tokens.colorNeutralBackground2,
+  },
+  hint: { color: tokens.colorNeutralForeground3 },
+  switchField: { flex: 1, display: 'flex', flexDirection: 'column', justifyContent: 'flex-end', paddingBottom: 2 },
 });
 
 // ============================================================
@@ -922,6 +931,11 @@ export function AdfDatasetEditor({ item, id }: { item: FabricItemType; id: strin
     ]},
   ], [busy, selected, save, createNew, ds]);
 
+  // Container label (File system / Bucket / Container) derives from the
+  // selected linked service's connector — computed once for the section.
+  const selectedLsType = linkedServices.find((l) => l.name === linkedService)?.properties?.type;
+  const containerLabel = containerLabelFor(locationTypeFor(selectedLsType));
+
   return (
     <ItemEditorChrome item={item} id={id} ribbon={ribbon}
       leftPanel={
@@ -967,11 +981,14 @@ export function AdfDatasetEditor({ item, id }: { item: FabricItemType; id: strin
             </div>
           </div>
           {FILE_DS_TYPES.has(type) && (
-            <>
-              <Caption1>Location ({containerLabelFor(locationTypeFor(linkedServices.find((l) => l.name === linkedService)?.properties?.type))} / folder / file — derived from the linked service connector)</Caption1>
+            <div className={s.section}>
+              <Subtitle2>Location</Subtitle2>
+              <Caption1 className={s.hint}>
+                {containerLabel} / folder / file — the {containerLabel.toLowerCase()} field derives from the selected linked service connector.
+              </Caption1>
               <div className={s.row}>
                 <div className={s.field}>
-                  <Caption1>{containerLabelFor(locationTypeFor(linkedServices.find((l) => l.name === linkedService)?.properties?.type))}</Caption1>
+                  <Caption1>{containerLabel}</Caption1>
                   <Input value={container} onChange={(_, d) => setContainer(d.value)} placeholder="raw" />
                 </div>
                 <div className={s.field}>
@@ -990,6 +1007,8 @@ export function AdfDatasetEditor({ item, id }: { item: FabricItemType; id: strin
                     {COMPRESSION_CODECS.map((c) => <Option key={c} value={c}>{c}</Option>)}
                   </Dropdown>
                 </div>
+                <div className={s.field} />
+                <div className={s.field} />
               </div>
               {type === 'DelimitedText' && (
                 <>
@@ -1021,17 +1040,17 @@ export function AdfDatasetEditor({ item, id }: { item: FabricItemType; id: strin
                       <Caption1>Escape character</Caption1>
                       <Input value={escapeChar} onChange={(_, d) => setEscapeChar(d.value)} placeholder={'\\'} />
                     </div>
-                    <div className={s.field} style={{ justifyContent: 'flex-end' }}>
+                    <div className={s.switchField}>
                       <Switch checked={firstRowAsHeader} onChange={(_, d) => setFirstRowAsHeader(!!d.checked)} label="First row as header" />
                     </div>
                   </div>
                 </>
               )}
-            </>
+            </div>
           )}
           {TABLE_DS_TYPES.has(type) && (
-            <>
-              <Caption1>Table reference</Caption1>
+            <div className={s.section}>
+              <Subtitle2>Table reference</Subtitle2>
               <div className={s.row}>
                 <div className={s.field}>
                   <Caption1>Schema</Caption1>
@@ -1042,7 +1061,7 @@ export function AdfDatasetEditor({ item, id }: { item: FabricItemType; id: strin
                   <Input value={tableName} onChange={(_, d) => setTableName(d.value)} placeholder="FactSales" />
                 </div>
               </div>
-            </>
+            </div>
           )}
           <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginTop: 8 }}>
             <Subtitle2>Schema ({ds?.properties.schema?.length || 0} columns)</Subtitle2>
