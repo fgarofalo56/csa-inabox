@@ -536,16 +536,11 @@ export function McpServersPanel() {
     }
   }, []);
 
-  if (loading) {
-    return (
-      <Section title="External MCP Tools">
-        <Spinner label="Loading MCP servers..." />
-      </Section>
-    );
-  }
-
-  const editingServer = servers.find((s) => s.serverId === editingId);
-
+  // NOTE: all hooks must run unconditionally BEFORE any early return.
+  // This useMemo previously sat after the `if (loading) return <Spinner/>`
+  // below, so the hook count went 10 -> 11 on the loading->loaded transition
+  // and React threw minified error #310 ("Rendered more hooks than during the
+  // previous render"). Keep it above every early return.
   const q = filter.trim().toLowerCase();
   const filteredServers = useMemo(
     () =>
@@ -557,6 +552,16 @@ export function McpServersPanel() {
         : servers,
     [servers, q],
   );
+
+  if (loading) {
+    return (
+      <Section title="External MCP Tools">
+        <Spinner label="Loading MCP servers..." />
+      </Section>
+    );
+  }
+
+  const editingServer = servers.find((s) => s.serverId === editingId);
 
   return (
     <Section title="External MCP Tools">
