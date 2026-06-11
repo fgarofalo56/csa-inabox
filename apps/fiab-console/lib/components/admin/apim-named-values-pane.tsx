@@ -2,8 +2,8 @@
 
 import { useEffect, useMemo, useState } from 'react';
 import {
-  makeStyles, tokens, Spinner, MessageBar, MessageBarBody, Button, Badge,
-  Caption1,
+  tokens, Spinner, MessageBar, MessageBarBody, Button, Badge,
+  Caption1, Tooltip,
 } from '@fluentui/react-components';
 import { Delete24Regular, Edit24Regular } from '@fluentui/react-icons';
 import { Section, Toolbar } from '@/lib/components/ui/section';
@@ -89,8 +89,12 @@ export function ApimNamedValuesPane() {
       sortable: false,
       render: (v) => (
         <div style={{ display: 'flex', gap: tokens.spacingHorizontalS }}>
-          <Button size="small" icon={<Edit24Regular />} />
-          <Button size="small" icon={<Delete24Regular />} />
+          <Tooltip content="Edit named value" relationship="label">
+            <Button size="small" icon={<Edit24Regular />} aria-label={`Edit named value ${v.displayName}`} />
+          </Tooltip>
+          <Tooltip content="Delete named value" relationship="label">
+            <Button size="small" icon={<Delete24Regular />} aria-label={`Delete named value ${v.displayName}`} />
+          </Tooltip>
         </div>
       ),
     },

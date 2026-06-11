@@ -2,8 +2,8 @@
 
 import { useEffect, useMemo, useState } from 'react';
 import {
-  makeStyles, tokens, Spinner, MessageBar, MessageBarBody, Button,
-  Caption1,
+  tokens, Spinner, MessageBar, MessageBarBody, Button,
+  Caption1, Tooltip,
 } from '@fluentui/react-components';
 import { Delete24Regular, Edit24Regular } from '@fluentui/react-icons';
 import { Section, Toolbar } from '@/lib/components/ui/section';
@@ -73,8 +73,12 @@ export function ApimBackendsPane() {
       sortable: false,
       render: (b) => (
         <div style={{ display: 'flex', gap: tokens.spacingHorizontalS }}>
-          <Button size="small" icon={<Edit24Regular />} />
-          <Button size="small" icon={<Delete24Regular />} />
+          <Tooltip content="Edit backend" relationship="label">
+            <Button size="small" icon={<Edit24Regular />} aria-label={`Edit backend ${b.title || b.name}`} />
+          </Tooltip>
+          <Tooltip content="Delete backend" relationship="label">
+            <Button size="small" icon={<Delete24Regular />} aria-label={`Delete backend ${b.title || b.name}`} />
+          </Tooltip>
         </div>
       ),
     },
