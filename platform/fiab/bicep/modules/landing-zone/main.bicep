@@ -83,6 +83,12 @@ param databricksUnityCatalogEnabled bool
 #disable-next-line no-unused-params
 param databricksSqlWarehouseEnabled bool
 
+@description('Databricks ACCOUNT id (GUID). When set (with a script UAMI that is a Databricks account admin), Unity Catalog is configured by DEFAULT: the regional metastore is created + assigned to the workspace and a default catalog is created, so Browse > Unity Catalog shows a real configured catalog. Empty = UC enabled later via the post-deploy bootstrap workflow (never a hard deploy blocker).')
+param databricksAccountId string = ''
+
+@description('Resource id of the UAMI the UC-bootstrap deploymentScript runs as (the Console UAMI). MUST be a Databricks account admin (one-time human grant) for the default-on UC enablement to succeed. Empty = the UC-bootstrap module is skipped.')
+param databricksUcScriptUamiId string = ''
+
 @description('Storage requires CMK (IL5)')
 param storageRequireCmk bool
 
@@ -184,6 +190,31 @@ module databricksStorageRbac 'databricks-storage-rbac.bicep' = {
     storageAccountName: storage.outputs.storageAccountName
     accessConnectorPrincipalId: databricks.outputs.accessConnectorPrincipalId
     skipRoleGrants: skipRoleGrants
+  }
+}
+
+// =====================================================================
+// 3b. Unity Catalog configured by DEFAULT
+//     Creates/assigns the regional UC metastore + a default catalog + grants
+//     the Console UAMI account_admin, so Browse > Unity Catalog shows a real
+//     configured catalog after a stock deploy. Only runs where UC is supported
+//     (Commercial + GCC) AND an account id + a script UAMI (Databricks account
+//     admin) are supplied. Otherwise skipped — the workspace still exists and UC
+//     can be enabled later via the post-deploy bootstrap workflow (honest,
+//     non-blocking per no-vaporware.md). Mirror of
+//     scripts/csa-loom/enable-unity-catalog.sh — keep the two in sync.
+// =====================================================================
+
+module databricksUcBootstrap 'databricks-uc-bootstrap.bicep' = if (databricks.outputs.ucSupported && !empty(databricksAccountId) && !empty(databricksUcScriptUamiId) && !empty(consoleUamiAppId)) {
+  name: 'dlz-databricks-uc-bootstrap'
+  params: {
+    location: location
+    databricksAccountId: databricksAccountId
+    workspaceNumericId: databricks.outputs.workspaceNumericId
+    workspaceHost: databricks.outputs.workspaceHost
+    consoleUamiClientId: consoleUamiAppId
+    scriptUamiId: databricksUcScriptUamiId
+    complianceTags: complianceTags
   }
 }
 

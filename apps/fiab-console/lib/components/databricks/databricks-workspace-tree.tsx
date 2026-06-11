@@ -529,7 +529,17 @@ export function DatabricksWorkspaceTree({
           <TreeItem itemType="branch" value="g-catalogs">
             {groupHeader('Unity Catalog', <Database20Regular />, f ? fCatalogs.length : catalogs.length, undefined)}
             <Tree>
-              {fCatalogs.length === 0 && <TreeItem itemType="leaf" value="uc-empty"><TreeItemLayout><Caption1>{f ? 'No matches' : 'No catalogs'}</Caption1></TreeItemLayout></TreeItem>}
+              {fCatalogs.length === 0 && (
+                <TreeItem itemType="leaf" value="uc-empty">
+                  <TreeItemLayout>
+                    <Caption1 className={s.muted}>
+                      {f
+                        ? 'No matches'
+                        : 'No Unity Catalog catalogs. UC is configured by default at deploy (metastore + default catalog); if empty, ensure the deployment set databricksAccountId and the Console UAMI is a Databricks account admin — see docs/fiab/catalog/metastores.md.'}
+                    </Caption1>
+                  </TreeItemLayout>
+                </TreeItem>
+              )}
               {fCatalogs.map((c) => (
                 <TreeItem key={c.name} itemType="leaf" value={`uc-${c.name}`}>
                   <TreeItemLayout iconBefore={<Database20Regular />}>
