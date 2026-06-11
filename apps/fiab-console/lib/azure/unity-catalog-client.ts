@@ -108,6 +108,46 @@ export function listWorkspaceHostnames(): string[] {
   });
 }
 
+/**
+ * Resolve the full federation hostname set: the env-configured hosts UNIONed
+ * with every workspace persisted in the `metastore-registrations` Cosmos
+ * container. This is what makes a registration **survive a Console reload**
+ * without a bicep flip of `LOOM_DATABRICKS_HOSTNAMES` — the operator registers
+ * a workspace, it lands in Cosmos, and every subsequent federation read picks
+ * it up automatically.
+ *
+ * The Cosmos read is best-effort: if Cosmos is unreachable (or the env var that
+ * names it is unset), we silently fall back to the env hosts so a Cosmos outage
+ * degrades gracefully rather than blanking the catalog. Likewise, if neither
+ * env hosts NOR persisted rows exist, the env-only `listWorkspaceHostnames()`
+ * throws the structured NotConfigured gate.
+ */
+export async function resolveWorkspaceHostnames(): Promise<string[]> {
+  const set = new Set<string>();
+  let envError: unknown;
+  try {
+    for (const h of listWorkspaceHostnames()) set.add(h);
+  } catch (e) {
+    // Defer the NotConfigured throw until we know Cosmos has nothing either.
+    envError = e;
+  }
+  try {
+    const { metastoreRegistrationsContainer } = await import('./cosmos-client');
+    const c = await metastoreRegistrationsContainer();
+    const { resources } = await c.items
+      .query<{ workspaceUrl?: string }>('SELECT c.workspaceUrl FROM c')
+      .fetchAll();
+    for (const r of resources) {
+      const h = (r?.workspaceUrl || '').replace(/^https?:\/\//, '').replace(/\/$/, '');
+      if (h) set.add(h);
+    }
+  } catch {
+    // Cosmos unreachable / not configured — env hosts still apply.
+  }
+  if (set.size === 0 && envError) throw envError;
+  return Array.from(set);
+}
+
 async function dbxToken(): Promise<string> {
   const t = await credential.getToken(DBX_SCOPE);
   if (!t?.token) throw new UnityCatalogError('Failed to acquire Databricks AAD token', 401);
@@ -253,7 +293,7 @@ export async function listMetastoresFromWorkspace(host: string): Promise<UCMetas
  *  is returned once; the `workspace_hostname` field reports the first
  *  workspace we observed it from. */
 export async function listAllMetastores(): Promise<UCMetastore[]> {
-  const hosts = listWorkspaceHostnames();
+  const hosts = await resolveWorkspaceHostnames();
   const seen = new Map<string, UCMetastore>();
   for (const host of hosts) {
     try {
@@ -629,7 +669,7 @@ export interface UCSearchHit {
  */
 export async function searchUnity(q: string, limit = 50): Promise<UCSearchHit[]> {
   const ql = q.toLowerCase().trim();
-  const hosts = listWorkspaceHostnames();
+  const hosts = await resolveWorkspaceHostnames();
   const hits: UCSearchHit[] = [];
   for (const host of hosts) {
     let cats: UCCatalog[] = [];

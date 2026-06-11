@@ -1105,6 +1105,96 @@ export async function listScansForSource(sourceName: string): Promise<PurviewSca
   }));
 }
 
+/**
+ * Register an Azure Databricks **Unity Catalog** source on the classic Data Map
+ * scan plane. The portal "Register sources (Azure Databricks Unity Catalog)"
+ * flow takes a Name + Metastore ID + collection; the REST shape is the same
+ * with `kind: 'AzureDatabricksUnityCatalog'`.
+ *
+ *   https://learn.microsoft.com/purview/register-scan-azure-databricks-unity-catalog#register
+ *
+ * The collection defaults to the account root collection so the scanned assets
+ * land somewhere queryable; pass `collectionName` to scope to a sub-collection
+ * (the classic mirror of a governance domain).
+ */
+export async function registerDatabricksUnityCatalogSource(opts: {
+  name: string;
+  metastoreId: string;
+  collectionName?: string;
+}): Promise<PurviewDataSource> {
+  purviewAccount();
+  if (!opts?.name) throw new PurviewError(400, null, 'name is required');
+  if (!opts?.metastoreId) throw new PurviewError(400, null, 'metastoreId is required');
+  const collection = opts.collectionName || (await rootCollectionName());
+  const properties: Record<string, unknown> = { metastoreId: opts.metastoreId };
+  if (collection) properties.collection = { referenceName: collection, type: 'CollectionReference' };
+  return registerDataSource({ name: opts.name, kind: 'AzureDatabricksUnityCatalog', properties });
+}
+
+/**
+ * Honest infra-gate for the Databricks UC **scan** step.
+ *
+ * Per Microsoft Learn (register-scan-azure-databricks-unity-catalog#prerequisites
+ * + unified-catalog-data-quality-azure-databricks-unity-catalog), scanning a
+ * Databricks UC source requires a credential — and "For Azure Databricks …
+ * managed identity isn't available as an authentication option — use an Access
+ * Token stored in Key Vault instead." It also needs a running SQL Warehouse +
+ * its HTTP path and an integration runtime. None of these can be inferred from
+ * the Console UAMI, so the scan-define/trigger step gates honestly when the
+ * operator hasn't supplied the scan config. (Source registration above is fully
+ * automatic; only the scan needs this extra config.)
+ */
+export interface DatabricksScanConfig {
+  /** Workspace URL to scan (https://adb-….azuredatabricks.net). */
+  workspaceUrl: string;
+  /** SQL Warehouse HTTP path, e.g. /sql/1.0/warehouses/abc123. */
+  httpPath: string;
+  /** Name of a Purview credential (Key-Vault-backed Access Token) created in the account. */
+  credentialName: string;
+  /** Integration runtime name (Azure IR / Managed VNet IR / SHIR). Defaults to the managed Azure IR. */
+  integrationRuntimeName?: string;
+  collectionName?: string;
+}
+
+/**
+ * Define + return a Databricks UC scan (does NOT trigger it — call
+ * {@link triggerScanRun} after). Uses Access-Token auth (the only option for
+ * Databricks per Learn). The scan uses the system default scan ruleset for
+ * classification. The scan body carries the Databricks-specific properties
+ * (workspaceUrl + serverHttpPath + credential + connectedVia) so it cannot reuse
+ * the generic ruleset-only {@link upsertScan} — the PUT is issued directly.
+ *   https://learn.microsoft.com/purview/register-scan-azure-databricks-unity-catalog#scan
+ */
+export async function defineDatabricksUnityCatalogScan(
+  sourceName: string,
+  scanName: string,
+  cfg: DatabricksScanConfig,
+): Promise<PurviewScan> {
+  purviewAccount();
+  if (!sourceName) throw new PurviewError(400, null, 'sourceName is required');
+  if (!scanName) throw new PurviewError(400, null, 'scanName is required');
+  if (!cfg?.workspaceUrl) throw new PurviewError(400, null, 'workspaceUrl is required');
+  if (!cfg?.httpPath) throw new PurviewError(400, null, 'httpPath is required');
+  if (!cfg?.credentialName) throw new PurviewError(400, null, 'credentialName is required (Key-Vault Access Token)');
+  const collection = cfg.collectionName || (await rootCollectionName());
+  const properties: Record<string, unknown> = {
+    workspaceUrl: cfg.workspaceUrl.replace(/\/$/, ''),
+    serverHttpPath: cfg.httpPath,
+    credential: { referenceName: cfg.credentialName, credentialType: 'AccessToken' },
+    connectedVia: { referenceName: cfg.integrationRuntimeName || 'AzureAutoResolveIntegrationRuntime' },
+    scanRulesetName: 'AzureDatabricksUnityCatalog',
+    scanRulesetType: 'System',
+    ...(collection ? { collection: { referenceName: collection, type: 'CollectionReference' } } : {}),
+  };
+  const res = await purviewFetch(
+    `/scan/datasources/${encodeURIComponent(sourceName)}/scans/${encodeURIComponent(scanName)}`,
+    { method: 'PUT', apiVersion: SCAN_API_VERSION, body: JSON.stringify({ kind: 'AzureDatabricksUnityCatalogAccessToken', properties }) },
+  );
+  const raw = await readJson<any>(res);
+  if (!raw) throw new PurviewError(500, null, 'Purview returned empty body on defineDatabricksUnityCatalogScan');
+  return { id: raw?.id || raw?.name || scanName, name: raw?.name || scanName, kind: raw?.kind, schedule: raw?.properties?.schedule, raw };
+}
+
 /** PUT /scan/datasources/{name}/scans/{scan}/runs/{runId} — trigger a scan run. */
 export async function triggerScanRun(sourceName: string, scanName: string): Promise<{ runId?: string; raw: unknown }> {
   purviewAccount();

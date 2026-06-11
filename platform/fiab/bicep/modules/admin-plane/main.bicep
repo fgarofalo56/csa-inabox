@@ -544,6 +544,12 @@ param loomPaginatedRenderKeySecretName string = 'loom-paginated-render-key'
 @description('Loom Databricks workspace hostname (e.g. adb-1234567890123456.7.azuredatabricks.net) backing the Databricks navigator (jobs/clusters/notebooks/SQL warehouses + Unity Catalog). The real hostname embeds a non-deterministic workspace id, so it is NOT hard-coded — it is patched onto the Console post-deploy from the DLZ databricks workspaceUrl output (scripts/csa-loom/patch-navigator-env.sh). Empty surfaces the navigator config gate.')
 param loomDatabricksHostname string = ''
 
+@description('OPTIONAL Databricks ACCOUNT GUID (accounts.azuredatabricks.net). Enables the Catalog → Metastores one-click "attach workspace to a UC metastore" action (account-plane PUT /accounts/{id}/workspaces/{wsId}/metastore) + the account metastore picker. The Loom UAMI must be a Databricks account admin (or metastore admin) for assignment to succeed — see scripts/csa-loom/enable-unity-catalog.sh. Empty leaves the attach action gated honestly; registration + catalog listing still work without it.')
+param loomDatabricksAccountId string = ''
+
+@description('OPTIONAL Databricks account control-plane host override for sovereign clouds. Defaults to accounts.azuredatabricks.net (Commercial) when empty.')
+param loomDatabricksAccountHost string = ''
+
 @description('OPTIONAL Azure Analysis Services XMLA endpoint backing the semantic-model Model view XMLA write path (azure-native, no Fabric). Wire from the DLZ aas.bicep xmlaEndpoint output (enableAas=true). Empty by default — the Loom-native Cosmos backend works without it.')
 param loomAasXmlaEndpoint string = ''
 
@@ -2507,6 +2513,16 @@ module appDeployments 'app-deployments.bicep' = if (containerPlatform == 'contai
           // back to the REST lineage-tracking preview. See unified-lineage.ts.
           !empty(loomDatabricksLineageWarehouseId) ? [
             { name: 'LOOM_DATABRICKS_LINEAGE_WAREHOUSE_ID', value: loomDatabricksLineageWarehouseId }
+          ] : [],
+          // Databricks ACCOUNT API — enables Catalog → Metastores one-click UC
+          // metastore attach (account-plane assignment) + the account metastore
+          // picker. Empty leaves the attach action gated honestly; registration
+          // (persisted to Cosmos) + catalog listing still work without it.
+          !empty(loomDatabricksAccountId) ? [
+            { name: 'LOOM_DATABRICKS_ACCOUNT_ID', value: loomDatabricksAccountId }
+          ] : [],
+          !empty(loomDatabricksAccountHost) ? [
+            { name: 'LOOM_DATABRICKS_ACCOUNT_HOST', value: loomDatabricksAccountHost }
           ] : [],
           // Fabric API base is always set — the runtime gates on UAMI authz.
           [
