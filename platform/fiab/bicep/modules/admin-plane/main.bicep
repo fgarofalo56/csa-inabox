@@ -10,6 +10,9 @@ param location string
 @allowed(['Commercial', 'GCC', 'GCC-High', 'IL5'])
 param boundary string
 
+@description('Allow App Insights telemetry ingestion over the public endpoint. Keep true (default) unless an Azure Monitor Private Link Scope is separately provisioned to carry ingestion privately — Disabling it without an AMPLS silently drops all custom events (copilot.usage etc.) and breaks the /admin Copilot usage panel. Forwarded to monitoring.bicep.')
+param monitorPublicIngestionEnabled bool = true
+
 @description('AZURE_CLOUD two-value discriminator. When non-empty, overrides the AZURE_CLOUD env var regardless of boundary. Commercial / GCC deployments pass AzureCloud; GCC-High / IL5 deployments pass AzureUSGovernment. When empty (default), AZURE_CLOUD is derived from boundary (GCC-High|IL5 → AzureUSGovernment; otherwise AzureCloud).')
 @allowed(['', 'AzureCloud', 'AzureUSGovernment'])
 param loomAzureCloud string = ''
@@ -27,6 +30,9 @@ param functionsHostSku string
 
 @description('APIM SKU')
 param apimSku string
+
+@description('Seed a self-contained sample API + product + active subscription in the Loom-provisioned APIM so the API Marketplace Try console + curl samples work out of the box. Ignored for BYO-APIM (existingApimName).')
+param seedSampleApi bool = true
 
 @description('Catalog primary')
 param catalogPrimary string
@@ -52,6 +58,9 @@ param atlasOnAksEnabled bool
 
 @description('Wire LOOM_DATABRICKS_HOSTNAMES into the console for Unity Catalog federation')
 param databricksUnityCatalogEnabled bool = false
+
+@description('Optional Databricks SQL warehouse id used to read Unity Catalog system-table lineage (system.access.table_lineage). Empty = the unified-lineage service falls back to the REST lineage-tracking preview. Requires the Loom UAMI to have USE SCHEMA + SELECT on system.access in the metastore.')
+param loomDatabricksLineageWarehouseId string = ''
 
 @description('Notebook per-cell execution backend (F16). Azure-native default is Synapse Spark Livy. Set to "databricks" to opt into the Databricks Execution Context API, or "aml-ci" to execute against an Azure ML Compute-Instance Jupyter kernel (listNotebookAccessToken → Jupyter contents + kernel WebSocket; reuses LOOM_AML_*/LOOM_FOUNDRY_* + LOOM_SUBSCRIPTION_ID, no new vars). Must NOT be "databricks" at IL5.')
 @allowed(['', 'synapse', 'databricks', 'aml-ci'])
@@ -219,7 +228,14 @@ param appImageTags object = {
   mirroring: 'v0.1'
   directLake: 'v0.1'
   maf: 'v0.1'
+  setupOrchestrator: 'v0.1'
 }
+
+@description('Deploy the browser-driven Setup Orchestrator Container App (loom-setup-orchestrator) so the Setup Wizard\'s Deploy submits the real subscription-scoped ARM deployment (templateLink to main.json). Container Apps only (Commercial / GCC); on AKS boundaries deploy it via the cluster GitOps path. Requires the loom-setup-orchestrator image pushed to ACR + deployAppsEnabled. Off by default — flip on once the image + template are published. The Setup Orchestrator UAMI (the Console UAMI) is granted Contributor per target subscription by main.bicep\'s setup-orchestrator-rbac module.')
+param setupOrchestratorEnabled bool = false
+
+@description('templateLink URI to the compiled main.json the Setup Orchestrator submits (publish via `az bicep build -f platform/fiab/bicep/main.bicep`). Empty = the orchestrator honestly fails the Deploy with the publish remediation rather than faking success.')
+param setupTemplateUri string = ''
 
 @description('Deploy the MAF (Gov AOAI-direct) orchestration-tier Container App (loom-copilot-maf). Only honored in GCC-High / IL5 with containerPlatform==containerApps + deployAppsEnabled. Requires the loom-copilot-maf image pushed to ACR first.')
 param copilotMafEnabled bool = false
@@ -237,6 +253,11 @@ param mcpPersistenceEnabled bool = true
 // Deterministic on the admin RG so the value injected into BOTH the Console and
 // the MAF app matches without a round-trip. Internal-network use only.
 var loomInternalToken = guid(resourceGroup().id, 'loom-maf-internal-token-v1')
+
+// Setup Orchestrator deploys on the Container Apps boundaries (Commercial / GCC)
+// when explicitly enabled + app deploy on (it needs the image in ACR). On AKS
+// boundaries it is deployed via the cluster GitOps path instead.
+var setupOrchestratorActive = setupOrchestratorEnabled && containerPlatform == 'containerApps' && deployAppsEnabled
 
 // MAF tier deploys only in Gov boundaries with Container Apps + app deploy on.
 var copilotMafActive = copilotMafEnabled && (boundary == 'GCC-High' || boundary == 'IL5') && containerPlatform == 'containerApps' && deployAppsEnabled
@@ -535,6 +556,12 @@ param loomPaginatedRenderKeySecretName string = 'loom-paginated-render-key'
 @description('Loom Databricks workspace hostname (e.g. adb-1234567890123456.7.azuredatabricks.net) backing the Databricks navigator (jobs/clusters/notebooks/SQL warehouses + Unity Catalog). The real hostname embeds a non-deterministic workspace id, so it is NOT hard-coded — it is patched onto the Console post-deploy from the DLZ databricks workspaceUrl output (scripts/csa-loom/patch-navigator-env.sh). Empty surfaces the navigator config gate.')
 param loomDatabricksHostname string = ''
 
+@description('OPTIONAL Databricks ACCOUNT GUID (accounts.azuredatabricks.net). Enables the Catalog → Metastores one-click "attach workspace to a UC metastore" action (account-plane PUT /accounts/{id}/workspaces/{wsId}/metastore) + the account metastore picker. The Loom UAMI must be a Databricks account admin (or metastore admin) for assignment to succeed — see scripts/csa-loom/enable-unity-catalog.sh. Empty leaves the attach action gated honestly; registration + catalog listing still work without it.')
+param loomDatabricksAccountId string = ''
+
+@description('OPTIONAL Databricks account control-plane host override for sovereign clouds. Defaults to accounts.azuredatabricks.net (Commercial) when empty.')
+param loomDatabricksAccountHost string = ''
+
 @description('OPTIONAL Azure Analysis Services XMLA endpoint backing the semantic-model Model view XMLA write path (azure-native, no Fabric). Wire from the DLZ aas.bicep xmlaEndpoint output (enableAas=true). Empty by default — the Loom-native Cosmos backend works without it.')
 param loomAasXmlaEndpoint string = ''
 
@@ -737,8 +764,23 @@ param loomPurviewAccount string = ''
 @description('Enable Microsoft Information Protection (sensitivity labels / label policies) calls via Microsoft Graph. Requires the Console UAMI to have InformationProtectionPolicy.Read.All admin-consented. When false, /admin/security Information Protection tab returns 503.')
 param loomMipEnabled bool = false
 
-@description('Enable Purview DLP (policies / rules / alerts / simulate) calls via Microsoft Graph. Requires Console UAMI Policy.Read.All + SecurityAlert.Read.All admin-consented. When false, /admin/security DLP tab returns 503.')
-param loomDlpEnabled bool = false
+@description('Enable sensitivity-label + label-policy CRUD (create/edit/delete) via the SCC PowerShell sidecar. Deploys azure-functions/scc-labels and wires LOOM_MIP_ADMIN_ENABLED / LOOM_SCC_LABELS_ENDPOINT / LOOM_SCC_LABELS_KEY into the Console. The sidecar needs the SCC app (Exchange.ManageAsApp + Compliance Administrator) + auth cert provisioned in post-deploy bootstrap. When false (default), label/policy READS still work but CRUD returns the honest 503 mip_admin_not_configured gate.')
+param loomMipAdminEnabled bool = false
+
+@description('Entra app (client) id for the SCC labels sidecar (Connect-IPPSSession -AppId). Set by bootstrap once the app + cert exist.')
+param sccAppId string = ''
+
+@description('Auth certificate thumbprint for the SCC labels sidecar (loaded via WEBSITE_LOAD_CERTIFICATES).')
+param sccCertThumbprint string = ''
+
+@description('Tenant onmicrosoft.com domain passed to Connect-IPPSSession -Organization (e.g. contoso.onmicrosoft.com).')
+param sccOrganization string = ''
+
+@description('Optional SCC PowerShell ConnectionUri override for sovereign clouds (Gov/GCC-High/DoD). Empty uses the Commercial default.')
+param sccConnectionUri string = ''
+
+@description('Enable Purview DLP (policies / rules / alerts / simulate) calls via Microsoft Graph. Defaults ON: the post-deploy bootstrap grants Console UAMI Policy.Read.All + SecurityAlert.Read.All by default, so LOOM_DLP_ENABLED is injected out of the box and the /admin/security DLP tab is wired (no "not wired in this deployment"). Alerts/violations work in every cloud once admin consent is issued; the preview-gated policy segment + simulate surface honest MessageBars where unavailable; the Restrict-access tab uses Azure-native ADLS/Synapse/ADX revokes with no Graph dependency.')
+param loomDlpEnabled bool = true
 
 // ---------------------------------------------------------------------------
 // Govern → Admin view (F2) "View more" embedded report backend.
@@ -966,6 +1008,7 @@ module monitoring 'monitoring.bicep' = {
     defenderForAIEnabled: defenderForAIEnabled
     complianceTags: complianceTags
     skipRoleGrants: skipRoleGrants
+    publicIngestionEnabled: monitorPublicIngestionEnabled
     // /monitor Logs (KQL) tab — Console UAMI gets Log Analytics Reader on the LAW.
     consolePrincipalId: identity.outputs.uamiConsolePrincipalId
   }
@@ -1349,9 +1392,13 @@ module apim 'apim.bicep' = if (apimEnabled && empty(existingApimName)) {
     appInsightsInstrumentationKey: monitoring.outputs.appInsightsInstrumentationKey
     workspaceId: monitoring.outputs.lawId
     complianceTags: complianceTags
+    // Console UAMI → "API Management Service Contributor" at the APIM scope so
+    // the Admin → API Management panes work by default (no manual RBAC grant).
+    consolePrincipalId: identity.outputs.uamiConsolePrincipalId
+    skipRoleGrants: skipRoleGrants
+    seedSampleApi: seedSampleApi
   }
 }
-
 // =====================================================================
 // 9b. Shared ADX cluster (admin-plane scope). DLZ databases attach here.
 // =====================================================================
@@ -1649,6 +1696,11 @@ module appDeployments 'app-deployments.bicep' = if (containerPlatform == 'contai
             { name: 'NEXT_PUBLIC_LOOM_VERSION', value: loomVersion }
             { name: 'LOOM_SUBSCRIPTION_ID', value: subscription().subscriptionId }
             { name: 'LOOM_ADMIN_RG', value: resourceGroup().name }
+            // Setup Orchestrator URL — the Setup Wizard's Deploy POSTs the captured
+            // config here to run the real multi-sub az deployment sub create. Empty
+            // until the orchestrator Container App is deployed (setupOrchestratorActive);
+            // then the deploy BFF falls back to GitHub dispatch / copy-paste az.
+            { name: 'LOOM_SETUP_ORCHESTRATOR_URL', value: setupOrchestratorActive ? setupOrchestrator!.outputs.url : '' }
             // MCP catalog deploy (admin → Copilot & Agents → Deploy from catalog).
             // The deploy/status/delete BFF routes PUT/GET/DELETE
             // Microsoft.App/containerApps via ARM, binding each server to the MCP
@@ -1979,6 +2031,18 @@ module appDeployments 'app-deployments.bicep' = if (containerPlatform == 'contai
             // (ALTER TABLE … CLUSTER BY). Blank → route auto-selects the first
             // RUNNING SQL Warehouse.
             { name: 'LOOM_DATABRICKS_SQL_WAREHOUSE_ID', value: loomDatabricksSqlWarehouseId }
+            // Governance → Data quality (run/results/monitors) and Master data
+            // management (match/merge → golden records) REUSE the Databricks /
+            // Synapse / Kusto bindings above (LOOM_DATABRICKS_SQL_WAREHOUSE_ID,
+            // LOOM_SYNAPSE_WORKSPACE, LOOM_KUSTO_CLUSTER_URI) — no new env var or
+            // top-level resource is required (constraint-based DQ + self-built
+            // MDM avoid partner SaaS, honoring no-fabric-dependency). The Console
+            // UAMI already holds Storage Blob Data Contributor + the Databricks
+            // access-connector grant (see databricks-storage-rbac, tasks #87/#92).
+            // One-time admin action for MDM golden-record table creation +
+            // Databricks Lakehouse Monitoring: grant the Console UAMI Unity
+            // Catalog USE_CATALOG/USE_SCHEMA + CREATE TABLE/MODIFY (and SELECT)
+            // on the target schema — documented in docs/fiab/v3-tenant-bootstrap.md.
             // Notebook per-cell execution backend (F16). Empty/'synapse' → Azure-
             // native Synapse Spark Livy (default). 'databricks' opts into the
             // Databricks Execution Context API. LOOM_CLOUD_TIER=IL5 makes the BFF
@@ -2330,6 +2394,15 @@ module appDeployments 'app-deployments.bicep' = if (containerPlatform == 'contai
           loomMipEnabled ? [
             { name: 'LOOM_MIP_ENABLED', value: 'true' }
           ] : [],
+          // SCC labels sidecar wiring — enables label/policy CRUD (create/edit/
+          // delete) + policy reads. Endpoint + host key come from the deployed
+          // scc-labels Function (only present when loomMipAdminEnabled). When
+          // unset the Console renders the honest mip_admin_not_configured gate.
+          loomMipAdminEnabled ? [
+            { name: 'LOOM_MIP_ADMIN_ENABLED', value: 'true' }
+            { name: 'LOOM_SCC_LABELS_ENDPOINT', value: sccLabels.outputs.endpoint }
+            { name: 'LOOM_SCC_LABELS_KEY', value: sccLabels.outputs.functionKey }
+          ] : [],
           // Sovereign Graph base for MIP — GCC-High / IL5 use graph.microsoft.us.
           // mip-graph-client reads LOOM_MIP_GRAPH_BASE (defaults to graph.microsoft.com).
           boundary == 'GCC-High' || boundary == 'IL5' ? [
@@ -2466,6 +2539,23 @@ module appDeployments 'app-deployments.bicep' = if (containerPlatform == 'contai
             // until patched post-deploy from the DLZ workspaceUrl, so UC gates
             // honestly rather than calling a phantom host (per no-vaporware.md).
             { name: 'LOOM_DATABRICKS_HOSTNAMES', value: effDatabricksHostname }
+          ] : [],
+          // Unified-lineage system-table warehouse (optional). When set, the
+          // /api/.../lineage routes read system.access.table_lineage for the
+          // entity-aware (notebook/job/pipeline) lineage depth; empty falls
+          // back to the REST lineage-tracking preview. See unified-lineage.ts.
+          !empty(loomDatabricksLineageWarehouseId) ? [
+            { name: 'LOOM_DATABRICKS_LINEAGE_WAREHOUSE_ID', value: loomDatabricksLineageWarehouseId }
+          ] : [],
+          // Databricks ACCOUNT API — enables Catalog → Metastores one-click UC
+          // metastore attach (account-plane assignment) + the account metastore
+          // picker. Empty leaves the attach action gated honestly; registration
+          // (persisted to Cosmos) + catalog listing still work without it.
+          !empty(loomDatabricksAccountId) ? [
+            { name: 'LOOM_DATABRICKS_ACCOUNT_ID', value: loomDatabricksAccountId }
+          ] : [],
+          !empty(loomDatabricksAccountHost) ? [
+            { name: 'LOOM_DATABRICKS_ACCOUNT_HOST', value: loomDatabricksAccountHost }
           ] : [],
           // Fabric API base is always set — the runtime gates on UAMI authz.
           [
@@ -2908,8 +2998,32 @@ module copilotMaf '../copilot/maf.bicep' = if (copilotMafActive) {
   }
 }
 
-// label-propagation timer Function (F15) — sensitivity-label downstream
-// propagation over the Loom Cosmos lineage graph. No-op without a Cosmos
+// Setup Orchestrator Container App (loom-setup-orchestrator) — submits the real
+// subscription-scoped ARM deployment of main.json (templateLink) for the Setup
+// Wizard's Deploy step. Runs AS the Console UAMI (identity.outputs.uamiConsole*),
+// which main.bicep grants Contributor per target subscription via
+// setup-orchestrator-rbac. Internal ingress; the Console reaches it at
+// LOOM_SETUP_ORCHESTRATOR_URL with the shared internal token. Azure-native
+// (Container Apps + ARM) — no Fabric dependency.
+module setupOrchestrator 'setup-orchestrator.bicep' = if (setupOrchestratorActive) {
+  name: 'setup-orchestrator'
+  params: {
+    location: location
+    environmentId: containerPlatformModule.outputs.caeId
+    uamiId: identity.outputs.uamiConsoleId
+    uamiClientId: identity.outputs.uamiConsoleClientId
+    acrLoginServer: registry.outputs.acrLoginServer
+    image: '${registry.outputs.acrLoginServer}/loom-setup-orchestrator:${appImageTags.setupOrchestrator}'
+    targetPort: 8080
+    internalToken: loomInternalToken
+    armEndpoint: boundary == 'GCC-High' || boundary == 'IL5' ? 'https://management.usgovcloudapi.net' : 'https://management.azure.com'
+    setupTemplateUri: setupTemplateUri
+    appInsightsConnectionString: monitoring.outputs.appInsightsConnectionString
+    complianceTags: complianceTags
+  }
+}
+
+
 // account (loomCosmosEndpoint empty). The Function identity is granted Cosmos
 // DB Built-in Data Contributor in post-deploy bootstrap (grant-navigator-rbac.sh).
 module labelPropagation 'label-propagation-function.bicep' = if (labelPropagationEnabled) {
@@ -2960,6 +3074,24 @@ module reportSubscriptions 'report-subscriptions-function.bicep' = if (reportSub
     subscriptionLogicAppName: loomSubscriptionLogicAppName
     subscriptionLogicAppRg: resourceGroup().name
     loomDlzRg: loomDlzRg
+    appInsightsConnectionString: monitoring.outputs.appInsightsConnectionString
+    complianceTags: complianceTags
+  }
+}
+
+// SCC sensitivity-label CRUD sidecar (PowerShell). Performs New-/Set-/Remove-
+// Label and *-LabelPolicy via Security & Compliance PowerShell — the only API
+// that can create/edit/delete labels & policies (Graph has no write surface).
+// Opt-in: requires the SCC app + auth cert provisioned in post-deploy bootstrap.
+// When loomMipAdminEnabled=false the Console renders the honest CRUD gate.
+module sccLabels 'scc-labels-function.bicep' = if (loomMipAdminEnabled) {
+  name: 'scc-labels-function'
+  params: {
+    location: location
+    sccAppId: sccAppId
+    sccCertThumbprint: sccCertThumbprint
+    sccOrganization: sccOrganization
+    sccConnectionUri: sccConnectionUri
     appInsightsConnectionString: monitoring.outputs.appInsightsConnectionString
     complianceTags: complianceTags
   }

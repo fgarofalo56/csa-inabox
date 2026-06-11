@@ -1,38 +1,32 @@
 'use client';
 
 /**
- * /workload-hub — Fabric-parity Workload hub landing page.
+ * /workload-hub — Fabric-parity Workload hub.
  *
- * Two surfaces in one page:
- *   1. "My workloads" — the workloads currently included in this tenant
- *      (loaded from /api/workloads-catalog, filtered to `included` or `CSA`)
- *   2. "More workloads" — optional add-ons + a CTA to the full /workloads
- *      catalog.
+ * The hub is a real create/manage-by-workload navigator backed by the
+ * item-type registry (lib/catalog/workload-hub.ts + fabric-item-types.ts):
  *
- * v3.29 Web 3.0 redesign (docs/fiab/design/ui-web3-guide.md):
- *   The bespoke smushed cards/makeStyles were replaced with the shared
- *   primitives so this page rhymes with /browse and /onelake:
- *     • <Section> + <Toolbar> for spacing + a capped (≤360px) search box
- *     • <ViewToggle> Tile|List per collection
- *     • <ItemTile>/<TileGrid> for the tile view — icon + brand color come
- *       from itemVisual(<representative item-type slug>), so every workload
- *       gets a high-quality Fluent glyph color-coded by its family instead of
- *       a hand-rolled gradient map.
- *     • <LoomDataTable> for the list view — sortable / resizable / per-column
- *       filter, padded cells (Name / Category / Item types).
- *   Each workload's representative type = its first featureSlug (always a real
- *   item-type slug per the catalog seed), so the visual is fully driven by the
- *   shared registry. Data + navigation (open first feature's /new) unchanged.
+ *   • Every workload tile's "N item types you can create" count is derived
+ *     from the REAL catalog — `workloadItemCount(group)` = the number of
+ *     non-deprecated item types in that workload. No hand-authored counts.
+ *   • Clicking a workload does NOT dead-end into one create wizard — it opens
+ *     the workload's landing page (/workload-hub/[key]) listing ITS item types
+ *     as tiles, each of which launches the real /items/[slug]/new create flow
+ *     or an existing-items view.
+ *   • The tile glyph + brand color come from itemVisual(representativeSlug),
+ *     so every workload is color-coded by its family via the shared registry.
  *
- * Future v3.x:
- *   - per-workload landing pages under /workload-hub/<id>
- *   - "Add to workspace" inline action that wires capacity assignment
+ * "My workloads" = core workloads (ship with every tenant) plus any optional
+ * accelerator the tenant has explicitly enabled in its workloads-catalog
+ * (real /api/workloads-catalog overlay). "More workloads" = the remaining
+ * optional CSA accelerators. The model: a *workload* is a category; *item
+ * types* are the things you create/manage inside it.
  */
 
 import { useEffect, useMemo, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import {
-  Spinner, makeStyles, tokens, Badge, Button, Body1, MessageBar, MessageBarBody, Text,
+  Spinner, makeStyles, tokens, Badge, Button, Body1, Text, Tooltip,
 } from '@fluentui/react-components';
 import { ArrowRight20Regular } from '@fluentui/react-icons';
 import { PageShell } from '@/lib/components/page-shell';
@@ -44,15 +38,33 @@ import { ItemTile } from '@/lib/components/ui/item-tile';
 import { TileGrid } from '@/lib/components/ui/tile-grid';
 import { LoomDataTable, type LoomColumn } from '@/lib/components/ui/loom-data-table';
 import { itemVisual } from '@/lib/components/ui/item-type-visual';
+import {
+  workloadGroups,
+  creatableItemTypes,
+  representativeSlug,
+  totalCreatableItemTypes,
+  type WorkloadGroupDef,
+} from '@/lib/catalog/workload-hub';
 
-interface Workload {
+/** Shape of the per-tenant workloads-catalog rows (Cosmos-backed). */
+interface CatalogWorkload {
   id: string; name: string; description?: string;
-  category?: string; included?: boolean;
-  featureSlugs?: string[];
-  /** Optional experience-home route — when set, opening the workload navigates
-   *  here (the experience switcher landing page) instead of the first
-   *  feature's /new wizard. */
-  homeHref?: string;
+  category?: string; included?: boolean; featureSlugs?: string[];
+}
+
+/** View-model row: a registry workload group enriched with tenant inclusion. */
+interface HubWorkload {
+  key: string;
+  name: string;
+  description: string;
+  /** Registry-derived count of creatable item types. */
+  count: number;
+  /** Representative item-type slug → drives the tile glyph + color. */
+  repType: string;
+  /** True when this workload is part of "My workloads". */
+  included: boolean;
+  /** Optional CSA accelerator → shows a CSA badge. */
+  csa: boolean;
 }
 
 const LS_VIEW = 'loom.workload-hub.viewMode.v1';
@@ -104,25 +116,28 @@ const useStyles = makeStyles({
   ctaCard: {
     display: 'flex', alignItems: 'center',
     gap: tokens.spacingHorizontalXL, flexWrap: 'wrap',
+    marginTop: tokens.spacingVerticalL,
   },
   ctaText: { flex: 1, minWidth: '240px' },
+  ctaSub: { color: tokens.colorNeutralForeground2, marginTop: tokens.spacingVerticalXS },
   spinnerWrap: { padding: tokens.spacingVerticalM },
+  // Name-cell list rendering: static layout extracted; chip tint + icon colour
+  // stay inline (data-driven), per item-tile.tsx:194-200.
+  nameCell: { display: 'inline-flex', alignItems: 'center', gap: '10px', minWidth: 0 },
+  nameChip: {
+    display: 'inline-flex', alignItems: 'center', justifyContent: 'center',
+    width: '28px', height: '28px', borderRadius: tokens.borderRadiusMedium, flexShrink: 0,
+  },
+  nameChipIcon: { width: '18px', height: '18px' },
+  muted2: { color: tokens.colorNeutralForeground2 },
+  muted3: { color: tokens.colorNeutralForeground3 },
 });
-
-/**
- * Representative item-type slug for a workload — its first featureSlug, which
- * the catalog seed always sets to a real item-type slug. itemVisual() resolves
- * this to a Fluent icon + brand color, so the tile/list visual is fully driven
- * by the shared registry (no bespoke per-page icon map).
- */
-function workloadType(w: Workload): string {
-  return (w.featureSlugs || [])[0] || 'data-product';
-}
 
 export default function WorkloadHubPage() {
   const s = useStyles();
   const router = useRouter();
-  const [items, setItems] = useState<Workload[] | null>(null);
+  // Tenant catalog overlay (real backend) — null = still loading.
+  const [catalog, setCatalog] = useState<CatalogWorkload[] | null>(null);
   const [unauth, setUnauth] = useState(false);
   const [q, setQ] = useState('');
   const [view, setView] = useState<LoomView>('tile');
@@ -140,122 +155,144 @@ export default function WorkloadHubPage() {
 
   useEffect(() => {
     clientFetch('/api/workloads-catalog').then(r => {
-      if (r.status === 401 || r.status === 403) { setUnauth(true); setItems([]); return null; }
+      if (r.status === 401 || r.status === 403) { setUnauth(true); setCatalog([]); return null; }
       return r.json();
     }).then(d => {
-      if (d) setItems(Array.isArray(d?.workloads) ? d.workloads : []);
-    }).catch(() => setItems([]));
+      if (d) setCatalog(Array.isArray(d?.workloads) ? d.workloads : []);
+    }).catch(() => setCatalog([]));
   }, []);
 
-  const filter = q.trim().toLowerCase();
+  // Registry-derived workloads, enriched with the tenant catalog overlay.
+  const workloads = useMemo<HubWorkload[]>(() => {
+    const cat = catalog ?? [];
+    // Slugs the tenant has explicitly enabled via an *included* catalog row.
+    const enabledSlugs = new Set<string>();
+    const enabledNames = new Set<string>();
+    for (const w of cat) {
+      if (w.included) {
+        enabledNames.add((w.name || '').toLowerCase().trim());
+        for (const f of w.featureSlugs || []) enabledSlugs.add(f);
+      }
+    }
+    const tenantEnabled = (g: WorkloadGroupDef): boolean => {
+      if (enabledNames.has(g.name.toLowerCase().trim())) return true;
+      const slugs = creatableItemTypes(g).map(t => t.slug);
+      return slugs.some(sl => enabledSlugs.has(sl));
+    };
+    return workloadGroups().map((g) => ({
+      key: g.key,
+      name: g.name,
+      description: g.description,
+      count: creatableItemTypes(g).length,
+      repType: representativeSlug(g),
+      // Core workloads are always "mine"; accelerators join when the tenant
+      // catalog explicitly enables them.
+      included: g.tier === 'core' || tenantEnabled(g),
+      csa: g.tier === 'accelerator',
+    }));
+  }, [catalog]);
 
+  const filter = q.trim().toLowerCase();
   const matches = useMemo(
-    () => (w: Workload) =>
+    () => (w: HubWorkload) =>
       !filter ||
       w.name.toLowerCase().includes(filter) ||
-      (w.description ?? '').toLowerCase().includes(filter) ||
-      (w.category ?? '').toLowerCase().includes(filter) ||
-      itemVisual(workloadType(w)).label.toLowerCase().includes(filter),
+      w.description.toLowerCase().includes(filter) ||
+      itemVisual(w.repType).label.toLowerCase().includes(filter),
     [filter],
   );
 
-  const { mine, more } = useMemo(() => {
-    const all = items ?? [];
-    return {
-      mine: all.filter(w => (w.included || w.category === 'CSA') && matches(w)),
-      more: all.filter(w => !w.included && w.category !== 'CSA' && matches(w)),
-    };
-  }, [items, matches]);
+  const { mine, more } = useMemo(() => ({
+    mine: workloads.filter(w => w.included && matches(w)),
+    more: workloads.filter(w => !w.included && matches(w)),
+  }), [workloads, matches]);
 
-  // unfiltered totals for the hero stats / badges
-  const totals = useMemo(() => {
-    const all = items ?? [];
-    return {
-      mine: all.filter(w => w.included || w.category === 'CSA').length,
-      more: all.filter(w => !w.included && w.category !== 'CSA').length,
-    };
-  }, [items]);
+  const totals = useMemo(() => ({
+    mine: workloads.filter(w => w.included).length,
+    more: workloads.filter(w => !w.included).length,
+    itemTypes: totalCreatableItemTypes(),
+  }), [workloads]);
 
-  function openWorkload(w: Workload) {
-    // Experience-home workloads (e.g. Data Science) land on their dedicated
-    // experience page; the rest open the first feature's create wizard.
-    if (w.homeHref) { router.push(w.homeHref); return; }
-    const first = (w.featureSlugs || [])[0];
-    if (first) router.push(`/items/${first}/new`);
+  function openWorkload(w: HubWorkload) {
+    // Expand, don't dead-end: open the workload's landing page listing its
+    // item types — not a single create wizard.
+    router.push(`/workload-hub/${w.key}`);
   }
 
-  function tileGrid(list: Workload[]) {
+  function countLabel(count: number): string {
+    return `${count} ${count === 1 ? 'item type' : 'item types'} you can create`;
+  }
+
+  function tileGrid(list: HubWorkload[]) {
     return (
       <TileGrid minTileWidth={300}>
-        {list.map((w) => {
-          const type = workloadType(w);
-          const count = (w.featureSlugs || []).length;
-          return (
-            <ItemTile
-              key={w.id}
-              type={type}
-              size="lg"
-              title={w.name}
-              subtitle={w.description}
-              meta={`${count} ${count === 1 ? 'item type' : 'item types'}`}
-              badge={
-                w.category === 'CSA'
-                  ? <Badge appearance="tint" color="brand" size="small">CSA</Badge>
-                  : undefined
-              }
-              onClick={() => openWorkload(w)}
-            />
-          );
-        })}
+        {list.map((w) => (
+          <ItemTile
+            key={w.key}
+            type={w.repType}
+            size="lg"
+            title={w.name}
+            subtitle={w.description}
+            meta={
+              <Tooltip
+                content={`${countLabel(w.count)} in the ${w.name} workload`}
+                relationship="description"
+              >
+                <span>{countLabel(w.count)}</span>
+              </Tooltip>
+            }
+            badge={
+              w.csa
+                ? <Badge appearance="tint" color="brand" size="small">CSA</Badge>
+                : undefined
+            }
+            onClick={() => openWorkload(w)}
+          />
+        ))}
       </TileGrid>
     );
   }
 
-  const columns = useMemo<LoomColumn<Workload>[]>(() => [
+  const columns = useMemo<LoomColumn<HubWorkload>[]>(() => [
     {
-      key: 'name', label: 'Workload', sortable: true, filterable: true, width: 280,
+      key: 'name', label: 'Workload', sortable: true, filterable: true, width: 260,
       getValue: (w) => w.name,
       render: (w) => {
-        const v = itemVisual(workloadType(w));
+        const v = itemVisual(w.repType);
         return (
-          <span style={{ display: 'inline-flex', alignItems: 'center', gap: 10, minWidth: 0 }}>
+          <span className={s.nameCell}>
             <span
-              style={{
-                display: 'inline-flex', alignItems: 'center', justifyContent: 'center',
-                width: 28, height: 28, borderRadius: tokens.borderRadiusMedium,
-                backgroundColor: `${v.color}1f`, flexShrink: 0,
-              }}
+              className={s.nameChip}
+              style={{ backgroundColor: `${v.color}1f` }}
               aria-hidden
             >
-              <v.icon style={{ width: 18, height: 18, color: v.color }} />
+              <v.icon className={s.nameChipIcon} style={{ color: v.color }} />
             </span>
             <Text weight="semibold">{w.name}</Text>
-            {w.category === 'CSA' && (
-              <Badge appearance="tint" color="brand" size="small">CSA</Badge>
-            )}
+            {w.csa && <Badge appearance="tint" color="brand" size="small">CSA</Badge>}
           </span>
         );
       },
     },
     {
-      key: 'description', label: 'Description', sortable: true, filterable: true, width: 420,
-      getValue: (w) => w.description ?? '',
+      key: 'description', label: 'Description', sortable: true, filterable: true, width: 460,
+      getValue: (w) => w.description,
       render: (w) => (
-        <Text style={{ color: tokens.colorNeutralForeground2 }}>{w.description || '—'}</Text>
+        <Text className={s.muted2}>{w.description || '—'}</Text>
       ),
     },
     {
-      key: 'items', label: 'Item types', sortable: true, filterable: false, width: 130,
-      getValue: (w) => (w.featureSlugs || []).length,
-      render: (w) => <Text>{(w.featureSlugs || []).length}</Text>,
+      key: 'items', label: 'Item types you can create', sortable: true, filterable: false, width: 180,
+      getValue: (w) => w.count,
+      render: (w) => <Text>{w.count}</Text>,
     },
-  ], []);
+  ], [s]);
 
-  function collection(list: Workload[], total: number, label: string) {
+  function collection(list: HubWorkload[], total: number, label: string) {
     if (view === 'tile') {
       if (list.length === 0) {
         return (
-          <Text style={{ color: tokens.colorNeutralForeground3 }}>
+          <Text className={s.muted3}>
             {total === 0 ? `No ${label} available.` : `No ${label} match "${q}".`}
           </Text>
         );
@@ -266,7 +303,7 @@ export default function WorkloadHubPage() {
       <LoomDataTable
         columns={columns}
         rows={list}
-        getRowId={(w) => w.id}
+        getRowId={(w) => w.key}
         onRowClick={openWorkload}
         ariaLabel={label}
         empty={total === 0 ? `No ${label} available.` : `No ${label} match this filter.`}
@@ -274,33 +311,35 @@ export default function WorkloadHubPage() {
     );
   }
 
-  const loading = items === null;
+  const loading = catalog === null;
 
   return (
     <PageShell
       title="Workload hub"
-      subtitle="Your one-stop view of every workload available in this tenant."
+      subtitle="Pick a workload, then create or manage the item types inside it."
     >
       {unauth && <SignInRequired subject="workloads" />}
 
       {!loading && (
         <div className={s.hero}>
           <div className={s.heroText}>
-            <div className={s.heroTitle}>Build with the workloads that match your problem</div>
+            <div className={s.heroTitle}>Create by workload</div>
             <Body1 className={s.heroBody}>
-              Workloads are bundles of related item types — Data Engineering brings Synapse + ADF + Spark,
-              Real-Time Intelligence brings Eventhouse + KQL + Activator. Open any workload to jump straight
-              into creating an item from it.
+              A <b>workload</b> is a category of related capabilities; the <b>item types</b> inside it are
+              the things you create and manage. Open a workload — Data Engineering, Real-Time Intelligence,
+              Power BI — to see every item type you can create in it, then launch its create wizard or jump
+              to the items you already have. Every item type runs on an Azure-native backend, so nothing
+              here needs a Microsoft Fabric capacity.
             </Body1>
           </div>
           <div className={s.heroStats}>
             <div className={s.heroStat}>
               <div className={s.heroStatVal}>{totals.mine}</div>
-              <div className={s.heroStatLabel}>included in your tenant</div>
+              <div className={s.heroStatLabel}>workloads in your tenant</div>
             </div>
             <div className={s.heroStat}>
-              <div className={s.heroStatVal}>{totals.more}</div>
-              <div className={s.heroStatLabel}>optional add-ons</div>
+              <div className={s.heroStatVal}>{totals.itemTypes}</div>
+              <div className={s.heroStatLabel}>item types you can create</div>
             </div>
           </div>
         </div>
@@ -333,7 +372,7 @@ export default function WorkloadHubPage() {
         </Section>
       )}
 
-      {!loading && (
+      {!loading && totals.more > 0 && (
         <Section title="More workloads">
           {totals.more > 0 ? (
             collection(more, totals.more, 'add-ons')
@@ -344,10 +383,10 @@ export default function WorkloadHubPage() {
               </MessageBarBody>
             </MessageBar>
           )}
-          <div className={s.ctaCard} style={{ marginTop: tokens.spacingVerticalL }}>
+          <div className={s.ctaCard}>
             <div className={s.ctaText}>
               <Text weight="semibold" block>Browse the full workload catalog</Text>
-              <Text size={200} block style={{ color: tokens.colorNeutralForeground2, marginTop: 4 }}>
+              <Text size={200} block className={s.ctaSub}>
                 Compliance, Geoanalytics, Graph + Vector, and other optional accelerators ship with Loom but
                 stay opt-in until you enable them.
               </Text>

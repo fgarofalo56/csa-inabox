@@ -19,6 +19,7 @@ import {
 import { Search24Regular, Save24Regular, ArrowReset24Regular, Open16Regular } from '@fluentui/react-icons';
 import { AdminShell } from '@/lib/components/admin-shell';
 import { Section } from '@/lib/components/ui/section';
+import { useAdminTabStyles } from '@/lib/components/ui/admin-tab-styles';
 import { CopilotAgentsConfig } from '@/lib/components/admin/copilot-agents-config';
 import { ToggleScopePicker } from '@/lib/components/admin/toggle-scope-picker';
 import type { AppliesToConfig } from '@/lib/types/tenant-settings';
@@ -77,10 +78,17 @@ const useStyles = makeStyles({
     marginTop: tokens.spacingVerticalS,
     display: 'flex', flexDirection: 'column', gap: '2px', maxWidth: '260px',
   },
+  filterInput: { width: '100%', maxWidth: '360px', minWidth: '200px' },
+  changeNote: { marginTop: tokens.spacingVerticalXS, fontSize: tokens.fontSizeBase200 },
+  metaLine: { display: 'block', color: tokens.colorNeutralForeground3, marginBottom: tokens.spacingVerticalM },
+  emptyMsg: { color: tokens.colorNeutralForeground3, padding: tokens.spacingVerticalXXL },
+  toggleId: { color: tokens.colorNeutralForeground3, fontFamily: 'Consolas, monospace', fontSize: '11px' },
+  spinWidth: { width: '140px' },
 });
 
 export default function TenantSettingsPage() {
   const s = useStyles();
+  const a = useAdminTabStyles();
   const [groups, setGroups] = useState<ToggleGroup[] | null>(null);
   const [settings, setSettings] = useState<Record<string, boolean> | null>(null);
   const [original, setOriginal] = useState<Record<string, boolean> | null>(null);
@@ -264,7 +272,7 @@ export default function TenantSettingsPage() {
           placeholder="Filter settings by name, key, or description…"
           value={q}
           onChange={(_, d) => setQ(d.value)}
-          style={{ width: '100%', maxWidth: 360, minWidth: 200 }}
+          className={s.filterInput}
         />
         <div className={s.spacer} />
         {dirty && (
@@ -295,7 +303,7 @@ export default function TenantSettingsPage() {
       )}
 
       {saveError && (
-        <MessageBar intent="error" style={{ marginBottom: 12 }}>
+        <MessageBar intent="error" className={a.messageBar}>
           <MessageBarBody>
             <MessageBarTitle>Save failed</MessageBarTitle>
             {saveError}
@@ -304,18 +312,18 @@ export default function TenantSettingsPage() {
       )}
 
       {statusMsg && !saveError && (
-        <MessageBar intent={statusMsg.startsWith('Saved') ? 'success' : 'info'} style={{ marginBottom: 12 }}>
+        <MessageBar intent={statusMsg.startsWith('Saved') ? 'success' : 'info'} className={a.messageBar}>
           <MessageBarBody>
             {statusMsg}
             {changedList.length > 0 && dirty && (
-              <div style={{ marginTop: 4, fontSize: 12 }}>{changedList.join(' · ')}</div>
+              <div className={s.changeNote}>{changedList.join(' · ')}</div>
             )}
           </MessageBarBody>
         </MessageBar>
       )}
 
       {meta.updatedAt && (
-        <Caption1 style={{ display: 'block', color: tokens.colorNeutralForeground3, marginBottom: 12 }}>
+        <Caption1 className={s.metaLine}>
           Last updated: {new Date(meta.updatedAt).toLocaleString()}{meta.updatedBy ? ` · by ${meta.updatedBy}` : ''}
         </Caption1>
       )}
@@ -325,7 +333,7 @@ export default function TenantSettingsPage() {
 
       {/* Data-product store backend indicator (read-only; env-driven routing). */}
       {dpBackend && (
-        <MessageBar intent={dpBackend.backend === 'unified-catalog' ? 'success' : 'info'} style={{ marginBottom: 12 }}>
+        <MessageBar intent={dpBackend.backend === 'unified-catalog' ? 'success' : 'info'} className={a.messageBar}>
           <MessageBarBody>
             <MessageBarTitle>Data product store backend</MessageBarTitle>
             Backend:{' '}
@@ -336,14 +344,14 @@ export default function TenantSettingsPage() {
               </span>
             ))}
             {dpBackend.details?.govFallThrough && (
-              <div style={{ marginTop: 4, fontSize: 12 }}>
+              <div className={s.changeNote}>
                 Purview Unified Catalog was requested but this is a{' '}
                 <code>{dpBackend.details.boundary}</code> deployment — the Unified Catalog
                 data plane is Commercial-only, so data products use Cosmos.
               </div>
             )}
             {dpBackend.details?.unconfiguredGate && (
-              <div style={{ marginTop: 4, fontSize: 12 }}>
+              <div className={s.changeNote}>
                 Purview Unified Catalog is selected but no account is wired — set{' '}
                 <code>LOOM_PURVIEW_UNIFIED_ACCOUNT</code> (or <code>LOOM_PURVIEW_UC_ENDPOINT</code>)
                 and grant the Console UAMI the Catalog Reader + Data Product Owner roles in the
@@ -357,7 +365,7 @@ export default function TenantSettingsPage() {
       {!groups && !loadError && <Spinner label="Loading settings…" />}
 
       {groups && visibleGroups.length === 0 && filter && (
-        <Body1 style={{ color: tokens.colorNeutralForeground3, padding: 24 }}>
+        <Body1 className={s.emptyMsg}>
           No settings match &ldquo;{q}&rdquo;.
         </Body1>
       )}
@@ -375,7 +383,7 @@ export default function TenantSettingsPage() {
                   <Subtitle2>{g.label}</Subtitle2>
                   <Caption1 className={s.groupCount}>{g.toggles.length} setting{g.toggles.length === 1 ? '' : 's'}</Caption1>
                   {groupChangedCount > 0 && (
-                    <Badge appearance="filled" color="warning" size="small" style={{ marginLeft: 8 }}>
+                    <Badge appearance="filled" color="warning" size="small" className={a.badgeGap}>
                       {groupChangedCount} unsaved
                     </Badge>
                   )}
@@ -397,8 +405,8 @@ export default function TenantSettingsPage() {
                         <div className={s.toggleLabel}>
                           <div className={s.toggleName}>
                             {t.label}
-                            {changed && <Badge appearance="outline" color="warning" size="small" style={{ marginLeft: 8 }}>changed</Badge>}
-                            {(scopeChanged || numChanged) && !changed && <Badge appearance="outline" color="warning" size="small" style={{ marginLeft: 8 }}>changed</Badge>}
+                            {changed && <Badge appearance="outline" color="warning" size="small" className={a.badgeGap}>changed</Badge>}
+                            {(scopeChanged || numChanged) && !changed && <Badge appearance="outline" color="warning" size="small" className={a.badgeGap}>changed</Badge>}
                           </div>
                           <div className={s.toggleHelp}>
                             {t.help}
@@ -408,7 +416,7 @@ export default function TenantSettingsPage() {
                               </a>
                             )}
                           </div>
-                          <Caption1 style={{ color: tokens.colorNeutralForeground3, fontFamily: 'Consolas, monospace', fontSize: 11 }}>
+                          <Caption1 className={s.toggleId}>
                             {t.id}
                           </Caption1>
                           {t.scopable && v && (
@@ -434,7 +442,7 @@ export default function TenantSettingsPage() {
                                     const clamped = Math.max(np.min, Math.min(np.max, Math.round(Number(raw))));
                                     setNumericParams((prev) => ({ ...prev, [np.id]: clamped }));
                                   }}
-                                  style={{ width: 140 }}
+                                  className={s.spinWidth}
                                 />
                               </Field>
                             </div>

@@ -300,6 +300,17 @@ export interface ToolDef {
   service: string;
   parameters: Record<string, unknown>; // JSON Schema object
   handler: (args: any, ctx: ToolContext) => Promise<unknown>;
+  /**
+   * Optional one-line "when to use" hint surfaced in the Copilot console
+   * right-rail tool catalog (self-explanatory tools, audit-T121). Falls back to
+   * `description` in the UI when absent — no tool ever renders blank.
+   */
+  whenToUse?: string;
+  /**
+   * True when the tool reads the active editor context (query / schema) — the
+   * console badges these so the user knows the tool grounds on what's open.
+   */
+  readsContext?: boolean;
 }
 
 export class LoomToolRegistry {
@@ -1875,12 +1886,16 @@ export interface SessionSummary {
   createdAt: string;
   updatedAt: string;
   stepCount: number;
+  /** User-supplied session title (rename). Falls back to the prompt in the UI. */
+  title?: string;
+  /** Pinned/favorited — pinned sessions sort to the top of the left rail. */
+  pinned?: boolean;
 }
 
 export async function listSessions(userOid: string, limit = 50): Promise<SessionSummary[]> {
   const c = await copilotSessionsContainer();
   const q = {
-    query: 'SELECT TOP @n c.id, c.sessionId, c.userOid, c.prompt, c.createdAt, c.updatedAt, ARRAY_LENGTH(c.steps) AS stepCount FROM c WHERE c.userOid = @u ORDER BY c.updatedAt DESC',
+    query: 'SELECT TOP @n c.id, c.sessionId, c.userOid, c.prompt, c.title, c.pinned, c.createdAt, c.updatedAt, ARRAY_LENGTH(c.steps) AS stepCount FROM c WHERE c.userOid = @u ORDER BY c.updatedAt DESC',
     parameters: [
       { name: '@n', value: limit },
       { name: '@u', value: userOid },
@@ -1894,4 +1909,28 @@ export async function getSession(sessionId: string): Promise<any | null> {
   const c = await copilotSessionsContainer();
   const r = await c.item(sessionId, sessionId).read<any>().catch(() => ({ resource: null }));
   return r.resource;
+}
+
+/**
+ * Update mutable session metadata (rename / pin) on the Cosmos session doc.
+ * Real read-modify-write against `copilot-sessions` (PK /sessionId) with an
+ * ownership check — never lets one user mutate another's session. Returns the
+ * patched fields the UI cares about. Throws `not_found` / `forbidden` for the
+ * route to map to 404 / 403.
+ */
+export async function updateSessionMeta(
+  sessionId: string,
+  userOid: string,
+  patch: { title?: string; pinned?: boolean },
+): Promise<{ title?: string; pinned?: boolean }> {
+  const c = await copilotSessionsContainer();
+  const existing = await c.item(sessionId, sessionId).read<any>().catch(() => ({ resource: null }));
+  if (!existing.resource) throw new Error('not_found');
+  const doc = existing.resource;
+  if (doc.userOid && doc.userOid !== userOid) throw new Error('forbidden');
+  if (typeof patch.title === 'string') doc.title = patch.title.slice(0, 200);
+  if (typeof patch.pinned === 'boolean') doc.pinned = patch.pinned;
+  doc.updatedAt = new Date().toISOString();
+  await c.item(sessionId, sessionId).replace(doc);
+  return { title: doc.title, pinned: doc.pinned };
 }

@@ -16,11 +16,39 @@
 import { useCallback, useState } from 'react';
 import {
   Subtitle2, Caption1, Body1, Badge, Button, Input, Spinner,
-  Field, MessageBar, MessageBarBody, MessageBarTitle, tokens,
+  Field, MessageBar, MessageBarBody, MessageBarTitle, makeStyles, tokens,
 } from '@fluentui/react-components';
-import { Sparkle20Regular, Add20Regular, Database20Regular } from '@fluentui/react-icons';
+import { Sparkle20Regular, Add20Regular, Database20Regular, Dismiss16Regular } from '@fluentui/react-icons';
 import { safeModelJson } from './model-fetch';
 import type { DaSource, DaSourceType } from './_family-utils';
+
+const useStyles = makeStyles({
+  root: { display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalM },
+  intro: { display: 'block', color: tokens.colorNeutralForeground3, marginTop: tokens.spacingVerticalXS },
+  headIcon: { verticalAlign: 'middle', marginRight: tokens.spacingHorizontalXS },
+  card: {
+    border: `1px solid ${tokens.colorNeutralStroke2}`,
+    borderRadius: tokens.borderRadiusLarge,
+    padding: tokens.spacingHorizontalM,
+    display: 'flex',
+    flexDirection: 'column',
+    gap: tokens.spacingVerticalS,
+  },
+  cardHead: { display: 'flex', alignItems: 'center', gap: tokens.spacingHorizontalS },
+  spacer: { flex: 1 },
+  preview: { display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalM },
+  pairList: { display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalXS },
+  pairRow: { display: 'grid', gridTemplateColumns: '1fr 1fr auto', gap: tokens.spacingHorizontalXS, alignItems: 'center' },
+  addBtn: { alignSelf: 'flex-start' },
+  summary: { cursor: 'pointer', fontSize: tokens.fontSizeBase300, color: tokens.colorNeutralForeground2 },
+  summarySmall: { cursor: 'pointer', fontSize: tokens.fontSizeBase200, color: tokens.colorNeutralForeground3 },
+  descBlock: { marginTop: tokens.spacingVerticalXS },
+  descTable: { marginBottom: tokens.spacingVerticalXS },
+  descCol: { fontSize: tokens.fontSizeBase200, color: tokens.colorNeutralForeground2 },
+  schema: { fontSize: tokens.fontSizeBase100, whiteSpace: 'pre-wrap', color: tokens.colorNeutralForeground3, marginTop: tokens.spacingVerticalXS },
+  hintRow: { marginTop: tokens.spacingVerticalXS },
+  idleText: { fontSize: tokens.fontSizeBase300, color: tokens.colorNeutralForeground3 },
+});
 
 interface Suggestion {
   examples: { question: string; query: string }[];
@@ -52,6 +80,7 @@ export interface DataAgentConfigCopilotPanelProps {
 }
 
 export function DataAgentConfigCopilotPanel({ id, sources, ensureSaved, onApply }: DataAgentConfigCopilotPanelProps) {
+  const styles = useStyles();
   // Per-source UI stage keyed by source id.
   const [stages, setStages] = useState<Record<string, Stage>>({});
   // Editable copy of the previewed examples per source.
@@ -116,7 +145,7 @@ export function DataAgentConfigCopilotPanel({ id, sources, ensureSaved, onApply 
     return (
       <MessageBar intent="info">
         <MessageBarBody>
-          <Sparkle20Regular style={{ verticalAlign: 'middle', marginRight: 6 }} />
+          <Sparkle20Regular className={styles.headIcon} />
           Add at least one source in the <strong>Build</strong> tab before using Config Copilot.
         </MessageBarBody>
       </MessageBar>
@@ -124,10 +153,10 @@ export function DataAgentConfigCopilotPanel({ id, sources, ensureSaved, onApply 
   }
 
   return (
-    <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+    <div className={styles.root}>
       <div>
-        <Subtitle2><Sparkle20Regular style={{ verticalAlign: 'middle', marginRight: 6 }} />Config Copilot</Subtitle2>
-        <Caption1 style={{ display: 'block', color: tokens.colorNeutralForeground3, marginTop: 4 }}>
+        <Subtitle2><Sparkle20Regular className={styles.headIcon} />Config Copilot</Subtitle2>
+        <Caption1 className={styles.intro}>
           Generates example question → query pairs and per-field descriptions from each source&apos;s REAL schema, grounded on
           the live Azure-native backend. Review, then apply — generated examples run against the bound source on the next test-chat turn.
         </Caption1>
@@ -137,12 +166,12 @@ export function DataAgentConfigCopilotPanel({ id, sources, ensureSaved, onApply 
         const stage: Stage = stages[src.id] || { kind: 'idle' };
         const supported = SUPPORTED.includes(src.type);
         return (
-          <div key={src.id} style={{ border: `1px solid ${tokens.colorNeutralStroke2}`, borderRadius: 8, padding: 12, display: 'flex', flexDirection: 'column', gap: 8 }}>
-            <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+          <div key={src.id} className={styles.card}>
+            <div className={styles.cardHead}>
               <Database20Regular />
               <strong>{src.name}</strong>
               <Badge appearance="tint" color="brand">{TYPE_LABEL[src.type] || src.type}</Badge>
-              <div style={{ flex: 1 }} />
+              <div className={styles.spacer} />
               {supported && (
                 <Button appearance="primary" icon={<Sparkle20Regular />} disabled={stage.kind === 'loading'}
                   onClick={() => generate(src)}>
@@ -172,37 +201,37 @@ export function DataAgentConfigCopilotPanel({ id, sources, ensureSaved, onApply 
                 <MessageBarBody>
                   <MessageBarTitle>Generation failed</MessageBarTitle>
                   <div>{stage.message}</div>
-                  {stage.hint && <div style={{ marginTop: 4 }}><em>Hint:</em> {stage.hint}</div>}
+                  {stage.hint && <div className={styles.hintRow}><em>Hint:</em> {stage.hint}</div>}
                 </MessageBarBody>
               </MessageBar>
             )}
 
             {stage.kind === 'preview' && (
-              <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+              <div className={styles.preview}>
                 <Field label="Example question → query pairs (editable)">
-                  <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+                  <div className={styles.pairList}>
                     {(edited[src.id] || []).map((ex, i) => (
-                      <div key={i} style={{ display: 'grid', gridTemplateColumns: '1fr 1fr auto', gap: 6 }}>
+                      <div key={i} className={styles.pairRow}>
                         <Input value={ex.question} placeholder="question" onChange={(_, d) => updateExample(src.id, i, { question: d.value })} />
                         <Input value={ex.query} placeholder="SQL / KQL / search" onChange={(_, d) => updateExample(src.id, i, { query: d.value })} />
-                        <Button size="small" appearance="subtle" onClick={() => removeExample(src.id, i)}>×</Button>
+                        <Button size="small" appearance="subtle" icon={<Dismiss16Regular />} aria-label={`Remove example ${i + 1}`} title="Remove this example" onClick={() => removeExample(src.id, i)} />
                       </div>
                     ))}
-                    <Button size="small" appearance="outline" icon={<Add20Regular />} onClick={() => addExample(src.id)} style={{ alignSelf: 'flex-start' }}>Example</Button>
+                    <Button size="small" appearance="outline" icon={<Add20Regular />} onClick={() => addExample(src.id)} className={styles.addBtn}>Example</Button>
                   </div>
                 </Field>
 
                 {Object.keys(stage.suggestion.descriptions).length > 0 && (
                   <details>
-                    <summary style={{ cursor: 'pointer', fontSize: 13, color: tokens.colorNeutralForeground2 }}>
+                    <summary className={styles.summary}>
                       Field descriptions ({Object.values(stage.suggestion.descriptions).reduce((n, c) => n + Object.keys(c).length, 0)})
                     </summary>
-                    <div style={{ marginTop: 6 }}>
+                    <div className={styles.descBlock}>
                       {Object.entries(stage.suggestion.descriptions).map(([table, cols]) => (
-                        <div key={table} style={{ marginBottom: 6 }}>
-                          <Caption1 style={{ fontWeight: 600 }}>{table}</Caption1>
+                        <div key={table} className={styles.descTable}>
+                          <Caption1 style={{ fontWeight: tokens.fontWeightSemibold }}>{table}</Caption1>
                           {Object.entries(cols).map(([col, desc]) => (
-                            <div key={col} style={{ fontSize: 12, color: tokens.colorNeutralForeground2 }}>
+                            <div key={col} className={styles.descCol}>
                               <strong>{col}</strong>: {desc}
                             </div>
                           ))}
@@ -213,8 +242,8 @@ export function DataAgentConfigCopilotPanel({ id, sources, ensureSaved, onApply 
                 )}
 
                 <details>
-                  <summary style={{ cursor: 'pointer', fontSize: 12, color: tokens.colorNeutralForeground3 }}>Schema used (grounding)</summary>
-                  <pre style={{ fontSize: 11, whiteSpace: 'pre-wrap', color: tokens.colorNeutralForeground3, marginTop: 4 }}>{stage.suggestion.schemaUsed}</pre>
+                  <summary className={styles.summarySmall}>Schema used (grounding)</summary>
+                  <pre className={styles.schema}>{stage.suggestion.schemaUsed}</pre>
                 </details>
 
                 <div>
@@ -226,7 +255,7 @@ export function DataAgentConfigCopilotPanel({ id, sources, ensureSaved, onApply 
             )}
 
             {stage.kind === 'idle' && supported && (
-              <Body1 style={{ fontSize: 13, color: tokens.colorNeutralForeground3 }}>
+              <Body1 className={styles.idleText}>
                 Generate examples + descriptions from this source&apos;s real schema.
               </Body1>
             )}

@@ -1,5 +1,26 @@
 # apim-service — parity with Azure API Management (portal service blade)
 
+> **rev — audit-T124 (2026-06-11): Admin → API Management dashboard fixed.** The
+> dedicated admin dashboard (`app/admin/api-management/page.tsx`, 7 tabs: Service
+> & SKU, APIs, Products, Subscriptions, Named values, Backends, Policies) was
+> crashing on load with **"Unexpected token '<' … is not valid JSON"**: four
+> panes fetched `/api/items/apim-{service,backends,named-values,subscriptions}`
+> routes that never existed, so Next.js returned its HTML 404 page and
+> `r.json()` threw. Fixed by (1) creating the missing **`/api/apim/service`**
+> BFF (GET service + PATCH SKU/capacity via `getApimService`/`updateApimSku`,
+> which already existed in the client but were unexposed), (2) adding
+> **`/api/apim/subscriptions/[sid]`** (PATCH approve/suspend/cancel) +
+> **`/api/apim/subscriptions/[sid]/keys`** (GET reveal), (3) repointing all four
+> broken panes to the real `/api/apim/*` routes, and (4) hardening every pane
+> fetch with a shared `apim-pane-fetch.ts` that reads text-then-parses and
+> surfaces the honest 503 `not_configured` gate (naming the missing env var)
+> instead of crashing. **RBAC is now wired into bicep**: `apim.bicep` grants the
+> Console UAMI "API Management Service Contributor" at the APIM scope
+> (`312a565d-…`), folding `scripts/csa-loom/grant-apim-rbac.sh` into the
+> provisioned-APIM deploy (BYO still uses the script via byo-wizard.sh). So the
+> Subscriptions-pane key reveal + state transitions the verdict calls out as
+> "only in the marketplace surface" now also exist in the admin dashboard.
+
 > **rev — re-audited against Wave-8→11 code (2026-06-10), audit-T31.** This doc's
 > highest-value gap — subscription state transitions + key reveal/regenerate
 > (audit-T09) — is closed by **PR #1063** ("wire APIM subscription state + key

@@ -32,6 +32,7 @@ import { DlpPanel } from '@/lib/components/admin-security/dlp-panel';
 import { AuditPanel } from '@/lib/components/admin-security/audit-panel';
 import { DspmAiPanel } from '@/lib/components/admin-security/dspm-ai-panel';
 import { Section } from '@/lib/components/ui/section';
+import { useAdminTabStyles } from '@/lib/components/ui/admin-tab-styles';
 import { LoomDataTable, type LoomColumn } from '@/lib/components/ui/loom-data-table';
 
 interface Insights {
@@ -134,6 +135,7 @@ export default function SecurityPage() {
 
 function OverviewTab() {
   const s = useStyles();
+  const a = useAdminTabStyles();
   const [insights, setInsights] = useState<Insights | null>(null);
   const [sensitivity, setSensitivity] = useState<Sensitivity | null>(null);
   const [classifications, setClassifications] = useState<Classifications | null>(null);
@@ -180,7 +182,7 @@ function OverviewTab() {
     },
     { key: 'who', label: 'Who', width: 200 },
     { key: 'kind', label: 'Action', width: 160, render: (e) => <Badge appearance="outline" size="small">{e.kind}</Badge> },
-    { key: 'itemId', label: 'Target', width: 220, render: (e) => <code style={{ fontSize: 11 }}>{e.itemId}</code> },
+    { key: 'itemId', label: 'Target', width: 220, render: (e) => <code className={a.codeCell}>{e.itemId}</code> },
   ];
 
   return (
@@ -190,7 +192,7 @@ function OverviewTab() {
       </div>
 
       {error && (
-        <MessageBar intent="error" style={{ marginBottom: 16 }}>
+        <MessageBar intent="error" className={a.messageBar}>
           <MessageBarBody>
             <MessageBarTitle>Could not load security dashboard</MessageBarTitle>
             {error}
@@ -236,7 +238,7 @@ function OverviewTab() {
           )}
 
           <div className={s.twoCol}>
-            <Section title={<span><Shield24Regular style={{ verticalAlign: 'middle', marginRight: 8 }} />Sensitivity label distribution</span>}>
+            <Section title={<span><Shield24Regular className={a.headIcon} />Sensitivity label distribution</span>}>
               {sensitivity && sensitivity.distribution.length > 0 ? (
                 <LoomDataTable
                   columns={labelColumns}
@@ -247,12 +249,12 @@ function OverviewTab() {
                   empty="No labels applied yet."
                 />
               ) : (
-                <Caption1 style={{ color: tokens.colorNeutralForeground3 }}>No labels applied yet.</Caption1>
+                <Caption1 className={a.muted}>No labels applied yet.</Caption1>
               )}
               {sensitivity && (
-                <Caption1 style={{ display: 'block', marginTop: 12, color: tokens.colorNeutralForeground3 }}>
+                <Caption1 className={a.mutedBlock}>
                   {sensitivity.unlabeled} of {sensitivity.total} items are unlabeled.
-                  <a href="/governance/sensitivity" style={{ marginLeft: 8 }}>Open full view</a>
+                  <a href="/governance/sensitivity" className={a.badgeGap}>Open full view</a>
                 </Caption1>
               )}
             </Section>
@@ -265,12 +267,12 @@ function OverviewTab() {
                       <span key={c.name} className={s.chip}>{c.name} <strong>({c.count})</strong></span>
                     ))}
                   </div>
-                  <Caption1 style={{ display: 'block', marginTop: 12, color: tokens.colorNeutralForeground3 }}>
+                  <Caption1 className={a.mutedBlock}>
                     <a href="/governance/classifications">Open full view</a>
                   </Caption1>
                 </>
               ) : (
-                <Caption1 style={{ color: tokens.colorNeutralForeground3 }}>No classifications applied yet.</Caption1>
+                <Caption1 className={a.muted}>No classifications applied yet.</Caption1>
               )}
             </Section>
           </div>
@@ -285,7 +287,7 @@ function OverviewTab() {
                 empty="No recent permission changes."
               />
             ) : (
-              <Caption1 style={{ color: tokens.colorNeutralForeground3 }}>
+              <Caption1 className={a.muted}>
                 No recent share / permission events in the last 30 days. Use the <strong>Audit</strong> tab for full history + CSV export.
               </Caption1>
             )}

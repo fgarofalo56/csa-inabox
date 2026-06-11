@@ -45,6 +45,8 @@ import {
   Gauge24Regular, DocumentBulletList24Regular,
   // APIs / functions
   PlugConnected24Regular, Globe24Regular, Code24Regular, AppsList24Regular,
+  // Catalog / metastores
+  Cloud24Regular, ShieldTask24Regular,
   // AI Foundry
   Cube24Regular, ShieldCheckmark24Regular, BranchRequestRegular,
   Search24Regular, DesktopFlow24Regular,
@@ -259,6 +261,11 @@ const REGISTRY: Record<string, Entry> = {
   'data-product':           { icon: Cube24Regular, family: 'data-product', label: 'Data Product' },
   'data-product-template':  { icon: Cube24Regular, family: 'data-product', label: 'Data Product Template' },
   'data-product-instance':  { icon: Cube24Regular, family: 'data-product', label: 'Data Product Instance' },
+
+  // ── Catalog metastores / accounts ────────────────────────────────
+  'unity-catalog':     { icon: DatabaseLink24Regular,   family: 'databricks', label: 'Unity Catalog' },
+  'onelake-workspace': { icon: Cloud24Regular,          family: 'data-eng',   label: 'OneLake Workspace' },
+  'purview-account':   { icon: ShieldTask24Regular,     family: 'api',        label: 'Purview Account' },
 };
 
 /** Derive a Title Case label from a slug ("kql-database" → "Kql Database"). */

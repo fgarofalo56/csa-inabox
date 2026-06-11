@@ -91,6 +91,27 @@ const useStyles = makeStyles({
   spinnerWrap: {
     padding: tokens.spacingVerticalM,
   },
+  // Workspace name-cell: icon chip + label. Static layout here; the chip's
+  // colour tint stays inline (data-driven), mirroring item-tile.tsx:194-200.
+  nameCell: {
+    display: 'inline-flex',
+    alignItems: 'center',
+    gap: tokens.spacingHorizontalS,
+    minWidth: 0,
+  },
+  nameChip: {
+    display: 'inline-flex',
+    alignItems: 'center',
+    justifyContent: 'center',
+    width: '24px',
+    height: '24px',
+    borderRadius: tokens.borderRadiusMedium,
+    flexShrink: 0,
+  },
+  nameChipIcon: {
+    width: '16px',
+    height: '16px',
+  },
 });
 
 export default function BrowsePage() {
@@ -184,21 +205,13 @@ export default function BrowsePage() {
         render: (w) => {
           const visual = itemVisual('workspace');
           return (
-            <span style={{ display: 'inline-flex', alignItems: 'center', gap: 8, minWidth: 0 }}>
+            <span className={styles.nameCell}>
               <span
-                style={{
-                  display: 'inline-flex',
-                  alignItems: 'center',
-                  justifyContent: 'center',
-                  width: 24,
-                  height: 24,
-                  borderRadius: tokens.borderRadiusMedium,
-                  backgroundColor: `${visual.color}1f`,
-                  flexShrink: 0,
-                }}
+                className={styles.nameChip}
+                style={{ backgroundColor: `${visual.color}1f` }}
                 aria-hidden
               >
-                <visual.icon style={{ width: 16, height: 16, color: visual.color }} />
+                <visual.icon className={styles.nameChipIcon} style={{ color: visual.color }} />
               </span>
               <Text weight="semibold">{w.name}</Text>
             </span>
@@ -226,7 +239,7 @@ export default function BrowsePage() {
         },
       },
     ],
-    [],
+    [styles],
   );
 
   const pinsLoading = pins === null;

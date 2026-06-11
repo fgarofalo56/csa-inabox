@@ -241,3 +241,117 @@ describe('unauthenticated', () => {
     expect(r.status).toBe(401);
   });
 });
+
+// Azure-native compute panel behind Admin → Capacity & compute → "Scale & manage".
+// The route dynamically imports its ARM clients, so each test vi.doMock's the
+// specific client before importing the handler (afterEach resets the registry).
+const validSession = () => ({ getSession: vi.fn(() => ({ claims: { oid: 'oid-test', upn: 'u@t.com' }, exp: Date.now() / 1000 + 3600 })) });
+
+describe('POST /api/admin/scaling/compute', () => {
+  it('rejects an unsupported kind/action', async () => {
+    vi.doMock('@/lib/auth/session', validSession);
+    const { POST } = await import('@/app/api/admin/scaling/compute/route');
+    const r = await POST(makeReq('POST', { kind: 'nope', action: 'scale' }));
+    expect(r.status).toBe(400);
+  });
+
+  it('requires a sku for an ADX scale', async () => {
+    vi.doMock('@/lib/auth/session', validSession);
+    const { POST } = await import('@/app/api/admin/scaling/compute/route');
+    const r = await POST(makeReq('POST', { kind: 'adx', action: 'scale' }));
+    expect(r.status).toBe(400);
+  });
+
+  it('scales ADX to a new SKU via updateKustoClusterSku', async () => {
+    vi.doMock('@/lib/auth/session', validSession);
+    const updateKustoClusterSku = vi.fn(async () => ({ state: 'Updating' }));
+    vi.doMock('@/lib/azure/kusto-arm-client', () => ({ updateKustoClusterSku }));
+    const { POST } = await import('@/app/api/admin/scaling/compute/route');
+    const r = await POST(makeReq('POST', { kind: 'adx', action: 'scale', sku: 'Standard_E4ads_v5' }));
+    expect(r.status).toBe(200);
+    const j = await r.json();
+    expect(j.ok).toBe(true);
+    expect(j.kind).toBe('adx');
+    expect(updateKustoClusterSku).toHaveBeenCalledWith('Standard_E4ads_v5', undefined);
+  });
+
+  it('pauses and resumes the Synapse dedicated pool', async () => {
+    vi.doMock('@/lib/auth/session', validSession);
+    const pausePool = vi.fn(async () => {});
+    const resumePool = vi.fn(async () => {});
+    vi.doMock('@/lib/azure/synapse-pool-arm', () => ({ pausePool, resumePool }));
+    const { POST } = await import('@/app/api/admin/scaling/compute/route');
+    const pr = await POST(makeReq('POST', { kind: 'synapse-pool', action: 'pause' }));
+    expect(pr.status).toBe(200);
+    expect(pausePool).toHaveBeenCalledTimes(1);
+    const rr = await POST(makeReq('POST', { kind: 'synapse-pool', action: 'resume' }));
+    expect(rr.status).toBe(200);
+    expect(resumePool).toHaveBeenCalledTimes(1);
+  });
+
+  it('scales the SHIR VMSS to a node count via scaleVmss', async () => {
+    vi.doMock('@/lib/auth/session', validSession);
+    const scaleVmss = vi.fn(async () => {});
+    vi.doMock('@/lib/azure/vmss-client', () => ({
+      shirVmssConfig: () => ({ subscriptionId: 's', resourceGroup: 'rg', name: 'vmss-shir' }),
+      purviewShirVmssConfig: () => null,
+      scaleVmss,
+    }));
+    const { POST } = await import('@/app/api/admin/scaling/compute/route');
+    const r = await POST(makeReq('POST', { kind: 'shir-vmss', action: 'scale', capacity: 4 }));
+    expect(r.status).toBe(200);
+    expect(scaleVmss).toHaveBeenCalledWith(expect.objectContaining({ name: 'vmss-shir' }), 4);
+  });
+
+  it('returns an honest 400 when the SHIR VMSS is not configured', async () => {
+    vi.doMock('@/lib/auth/session', validSession);
+    vi.doMock('@/lib/azure/vmss-client', () => ({
+      shirVmssConfig: () => null,
+      purviewShirVmssConfig: () => null,
+      scaleVmss: vi.fn(),
+    }));
+    const { POST } = await import('@/app/api/admin/scaling/compute/route');
+    const r = await POST(makeReq('POST', { kind: 'shir-vmss', action: 'scale', capacity: 4 }));
+    expect(r.status).toBe(400);
+  });
+
+  it('returns 401 when unauthenticated', async () => {
+    vi.doMock('@/lib/auth/session', () => ({ getSession: vi.fn(() => null) }));
+    const { POST } = await import('@/app/api/admin/scaling/compute/route');
+    const r = await POST(makeReq('POST', { kind: 'adx', action: 'scale', sku: 'x' }));
+    expect(r.status).toBe(401);
+  });
+});
+
+describe('GET /api/admin/scaling/compute', () => {
+  it('lists the configured Azure-native scalable compute (best-effort probes)', async () => {
+    vi.doMock('@/lib/auth/session', validSession);
+    vi.doMock('@/lib/azure/kusto-arm-client', () => ({
+      getKustoClusterArm: vi.fn(async () => ({ name: 'adx', sku: { name: 'Standard_E4ads_v5', capacity: 2 }, state: 'Running' })),
+    }));
+    vi.doMock('@/lib/azure/synapse-pool-arm', () => ({
+      getPoolState: vi.fn(async () => ({ state: 'Online', sku: 'DW100c', status: 'Online' })),
+    }));
+    vi.doMock('@/lib/azure/vmss-client', () => ({
+      shirVmssConfig: () => null,
+      purviewShirVmssConfig: () => null,
+      getVmssStatus: vi.fn(),
+    }));
+    const { GET } = await import('@/app/api/admin/scaling/compute/route');
+    const r = await GET();
+    expect(r.status).toBe(200);
+    const j = await r.json();
+    expect(j.ok).toBe(true);
+    expect(Array.isArray(j.resources)).toBe(true);
+    const adx = j.resources.find((x: any) => x.kind === 'adx');
+    expect(adx).toBeTruthy();
+    expect(adx.skuOptions.length).toBeGreaterThan(0);
+  });
+
+  it('returns 401 when unauthenticated', async () => {
+    vi.doMock('@/lib/auth/session', () => ({ getSession: vi.fn(() => null) }));
+    const { GET } = await import('@/app/api/admin/scaling/compute/route');
+    const r = await GET();
+    expect(r.status).toBe(401);
+  });
+});

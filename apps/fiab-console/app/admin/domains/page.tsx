@@ -22,7 +22,7 @@ import { clientFetch } from '@/lib/client-fetch';
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import {
   Spinner, Badge, Caption1, Body1, Input, Textarea, Button,
-  MessageBar, MessageBarBody, MessageBarTitle, Checkbox,
+  MessageBar, MessageBarBody, MessageBarTitle, Checkbox, Dropdown, Option,
   Dialog, DialogSurface, DialogBody, DialogTitle, DialogContent, DialogActions,
   Menu, MenuTrigger, MenuPopover, MenuList, MenuItem,
   makeStyles, tokens,
@@ -30,9 +30,11 @@ import {
 import {
   Add24Regular, Delete20Regular, ArrowSync24Regular, Info20Regular,
   MoreHorizontal20Regular, Settings20Regular, BranchFork20Regular, Folder20Regular,
+  ArrowMove20Regular,
 } from '@fluentui/react-icons';
 import { AdminShell } from '@/lib/components/admin-shell';
 import { Section, Toolbar } from '@/lib/components/ui/section';
+import { useAdminTabStyles } from '@/lib/components/ui/admin-tab-styles';
 import { LoomDataTable, type LoomColumn } from '@/lib/components/ui/loom-data-table';
 import { DomainSettingsPane, type DomainRecord } from '@/lib/panes/domain-settings-pane';
 import { DomainImageChip } from '@/lib/components/domain-image-presets';
@@ -52,7 +54,9 @@ type PurviewStatus =
 const useStyles = makeStyles({
   explainer: { display: 'flex', gap: tokens.spacingHorizontalM, alignItems: 'flex-start' },
   nameCell: { display: 'flex', alignItems: 'center', gap: '8px', minWidth: 0 },
-  createGrid: { display: 'flex', flexDirection: 'column', gap: 12 },
+  createGrid: { display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalM },
+  dialogIntro: { marginBottom: tokens.spacingVerticalM },
+  wsName: { flex: 1 },
   wsRow: {
     display: 'flex', alignItems: 'center', gap: '8px', padding: '6px 8px',
     borderBottom: `1px solid ${tokens.colorNeutralStroke3}`,
@@ -65,6 +69,7 @@ const SCOPE_LABEL: Record<string, string> = {
 
 export default function DomainsPage() {
   const s = useStyles();
+  const a = useAdminTabStyles();
   const [domains, setDomains] = useState<Domain[] | null>(null);
   const [purview, setPurview] = useState<PurviewStatus | null>(null);
   const [isTenantAdmin, setIsTenantAdmin] = useState(true);
@@ -88,6 +93,11 @@ export default function DomainsPage() {
 
   // Assign-workspaces dialog.
   const [assignFor, setAssignFor] = useState<Domain | null>(null);
+
+  // Move (reparent) dialog.
+  const [moveFor, setMoveFor] = useState<Domain | null>(null);
+  const [moveParent, setMoveParent] = useState<string>('');
+  const [moving, setMoving] = useState(false);
 
   const load = useCallback(async () => {
     setLoading(true); setError(null);
@@ -155,6 +165,24 @@ export default function DomainsPage() {
     setSelected((prev) => prev && prev.id === updated.id ? { ...prev, ...updated } : prev);
   }, []);
 
+  function openMove(d: Domain) { setMoveFor(d); setMoveParent(d.parentId || ''); setActionErr(null); }
+
+  async function doMove() {
+    if (!moveFor) return;
+    setMoving(true); setActionErr(null);
+    try {
+      const r = await fetch(`/api/admin/domains?id=${encodeURIComponent(moveFor.id)}`, {
+        method: 'PATCH', headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ parentId: moveParent || null }),
+      });
+      const j = await r.json();
+      if (!j.ok) { setActionErr(j.error || `HTTP ${r.status}`); return; }
+      setMoveFor(null);
+      await load();
+    } catch (e: any) { setActionErr(e?.message || String(e)); }
+    finally { setMoving(false); }
+  }
+
   const purviewNames = useMemo(() => new Set(
     purview && purview.configured ? purview.domains.map((d) => (d.name || '').toLowerCase()) : [],
   ), [purview]);
@@ -189,13 +217,13 @@ export default function DomainsPage() {
         </span>
       ),
     },
-    { key: 'id', label: 'ID', width: 130, render: (d) => <code style={{ fontSize: 11 }}>{d.id}</code> },
+    { key: 'id', label: 'ID', width: 130, render: (d) => <code className={a.codeCell}>{d.id}</code> },
     {
       key: 'parent', label: 'Parent', width: 130,
       getValue: (d) => d.parentId ? (nameById[d.parentId] || d.parentId) : 'Root',
       render: (d) => d.parentId
         ? <Caption1>{nameById[d.parentId] || d.parentId}</Caption1>
-        : <Caption1 style={{ color: tokens.colorNeutralForeground3 }}>Root</Caption1>,
+        : <Caption1 className={a.muted}>Root</Caption1>,
     },
     {
       key: 'workspaceCount', label: 'Workspaces', width: 110,
@@ -211,15 +239,15 @@ export default function DomainsPage() {
       key: 'admins', label: 'Admins', width: 200, sortable: false,
       getValue: (d) => (d.admins || []).join(' '),
       render: (d) => d.admins && d.admins.length
-        ? d.admins.map((o) => <Badge key={o} appearance="outline" size="small" style={{ marginRight: 4 }}>{o}</Badge>)
-        : <Caption1 style={{ color: tokens.colorNeutralForeground3 }}>—</Caption1>,
+        ? d.admins.map((o) => <Badge key={o} appearance="outline" size="small" className={a.badgeGapEnd}>{o}</Badge>)
+        : <Caption1 className={a.muted}>—</Caption1>,
     },
     {
       key: 'governance', label: 'Governance', width: 120,
       getValue: (d) => (purviewNames.has((d.name || '').toLowerCase()) ? 'Governed' : 'Loom only'),
       render: (d) => purviewNames.has((d.name || '').toLowerCase())
         ? <Badge appearance="tint" color="brand" size="small">Governed</Badge>
-        : <Caption1 style={{ color: tokens.colorNeutralForeground3 }}>Loom only</Caption1>,
+        : <Caption1 className={a.muted}>Loom only</Caption1>,
     },
     {
       key: 'actions', label: '', width: 60, sortable: false, filterable: false,
@@ -240,6 +268,7 @@ export default function DomainsPage() {
               {!d.parentId && (
                 <MenuItem icon={<BranchFork20Regular />} onClick={() => openCreate(d.id)}>New subdomain</MenuItem>
               )}
+              <MenuItem icon={<ArrowMove20Regular />} disabled={!isTenantAdmin} onClick={() => openMove(d)}>Move…</MenuItem>
               <MenuItem icon={<Delete20Regular />} onClick={() => remove(d.id)}>Delete</MenuItem>
             </MenuList>
           </MenuPopover>
@@ -254,8 +283,8 @@ export default function DomainsPage() {
     <AdminShell sectionTitle="Domains">
       <Section title="What is a domain?">
         <div className={s.explainer}>
-          <Info20Regular style={{ color: tokens.colorBrandForeground1, flexShrink: 0, marginTop: 2 }} />
-          <Body1 style={{ color: tokens.colorNeutralForeground2, lineHeight: 1.5 }}>
+          <Info20Regular className={a.infoIcon} />
+          <Body1 className={a.explainerText}>
             A domain is a governance-scoped, labeled grouping of data products and workspaces —
             Finance, Operations, Mission-Ops. It carries <strong>admins</strong>, contributors, a description,
             an image, and delegated settings, and is the unit Loom uses to organize the tenant&apos;s data estate
@@ -267,7 +296,7 @@ export default function DomainsPage() {
       </Section>
 
       {purview && !purview.configured && (
-        <MessageBar intent="warning" style={{ marginBottom: 16 }}>
+        <MessageBar intent="warning" className={a.messageBar}>
           <MessageBarBody>
             <MessageBarTitle>Purview business-domain mirror not active</MessageBarTitle>
             {purview.hint}
@@ -275,7 +304,7 @@ export default function DomainsPage() {
         </MessageBar>
       )}
       {purview && purview.configured && (
-        <MessageBar intent="success" style={{ marginBottom: 16 }}>
+        <MessageBar intent="success" className={a.messageBar}>
           <MessageBarBody>
             <MessageBarTitle>Purview mirror active</MessageBarTitle>
             {purview.domains.length} mirrored domain{purview.domains.length === 1 ? '' : 's'} in Purview.
@@ -285,7 +314,7 @@ export default function DomainsPage() {
       )}
 
       {error && (
-        <MessageBar intent="error" style={{ marginBottom: 16 }}>
+        <MessageBar intent="error" className={a.messageBar}>
           <MessageBarBody>
             <MessageBarTitle>Could not load domains</MessageBarTitle>
             {error}
@@ -293,7 +322,7 @@ export default function DomainsPage() {
         </MessageBar>
       )}
       {actionErr && (
-        <MessageBar intent="error" style={{ marginBottom: 16 }}>
+        <MessageBar intent="error" className={a.messageBar}>
           <MessageBarBody>{actionErr}</MessageBarBody>
         </MessageBar>
       )}
@@ -330,36 +359,36 @@ export default function DomainsPage() {
             <DialogContent>
               <div className={s.createGrid}>
                 <div>
-                  <Caption1 style={{ display: 'block', marginBottom: 4 }}>ID (lowercase, hyphens)</Caption1>
-                  <Input value={newId} onChange={(_, d) => setNewId(d.value)} placeholder="e.g. finance" style={{ width: '100%' }} />
+                  <Caption1 className={a.fieldLabel}>ID (lowercase, hyphens)</Caption1>
+                  <Input value={newId} onChange={(_, d) => setNewId(d.value)} placeholder="e.g. finance" className={a.fullWidth} />
                 </div>
                 <div>
-                  <Caption1 style={{ display: 'block', marginBottom: 4 }}>Name (required)</Caption1>
-                  <Input value={newName} onChange={(_, d) => setNewName(d.value)} placeholder={createParentId ? 'Subdomain name' : 'Finance'} style={{ width: '100%' }} />
+                  <Caption1 className={a.fieldLabel}>Name (required)</Caption1>
+                  <Input value={newName} onChange={(_, d) => setNewName(d.value)} placeholder={createParentId ? 'Subdomain name' : 'Finance'} className={a.fullWidth} />
                 </div>
                 {!createParentId && (
                   <div>
-                    <Caption1 style={{ display: 'block', marginBottom: 4 }}>Domain admins (optional, comma-separated)</Caption1>
+                    <Caption1 className={a.fieldLabel}>Domain admins (optional, comma-separated)</Caption1>
                     <Input
                       value={newAdmins}
                       onChange={(_, d) => setNewAdmins(d.value)}
                       placeholder="alice@contoso.com, fin-admins@contoso.com"
-                      style={{ width: '100%' }}
+                      className={a.fullWidth}
                     />
                   </div>
                 )}
                 <div>
-                  <Caption1 style={{ display: 'block', marginBottom: 4 }}>Description</Caption1>
-                  <Textarea value={newDesc} onChange={(_, d) => setNewDesc(d.value)} resize="vertical" style={{ width: '100%' }} />
+                  <Caption1 className={a.fieldLabel}>Description</Caption1>
+                  <Textarea value={newDesc} onChange={(_, d) => setNewDesc(d.value)} resize="vertical" className={a.fullWidth} />
                 </div>
                 {!createParentId && (
                   <div>
-                    <Caption1 style={{ display: 'block', marginBottom: 4 }}>Image</Caption1>
+                    <Caption1 className={a.fieldLabel}>Image</Caption1>
                     <DomainImageGallery value={newImageKey} onChange={setNewImageKey} />
                   </div>
                 )}
                 {createParentId && (
-                  <Caption1 style={{ color: tokens.colorNeutralForeground3 }}>
+                  <Caption1 className={a.muted}>
                     Subdomains have general settings only and inherit their parent domain&apos;s admins.
                   </Caption1>
                 )}
@@ -391,6 +420,43 @@ export default function DomainsPage() {
           onDone={() => { setAssignFor(null); load(); }}
         />
       )}
+
+      {/* Move (reparent) dialog */}
+      <Dialog open={!!moveFor} onOpenChange={(_, d) => { if (!d.open) setMoveFor(null); }}>
+        <DialogSurface>
+          <DialogBody>
+            <DialogTitle>Move {moveFor?.name}</DialogTitle>
+            <DialogContent>
+              <div className={s.createGrid}>
+                <div>
+                  <Caption1 style={{ display: 'block', marginBottom: 4 }}>New parent domain</Caption1>
+                  <Dropdown
+                    value={moveParent ? (nameById[moveParent] || moveParent) : 'Root (no parent)'}
+                    selectedOptions={[moveParent]}
+                    onOptionSelect={(_, d) => setMoveParent(d.optionValue || '')}
+                    style={{ width: '100%' }}
+                  >
+                    <Option value="">Root (no parent)</Option>
+                    {(domains || [])
+                      .filter((p) => !p.parentId && p.id !== moveFor?.id)
+                      .map((p) => <Option key={p.id} value={p.id}>{p.name}</Option>)}
+                  </Dropdown>
+                </div>
+                <Caption1 style={{ color: tokens.colorNeutralForeground3 }}>
+                  Domains are at most two levels (domain → subdomain). Moving reparents the mirrored Purview
+                  collection; Unity Catalog has no move operation, so its catalog/schema mapping is unchanged.
+                </Caption1>
+              </div>
+            </DialogContent>
+            <DialogActions>
+              <Button appearance="secondary" onClick={() => setMoveFor(null)}>Cancel</Button>
+              <Button appearance="primary" onClick={doMove} disabled={moving}>
+                {moving ? 'Moving…' : 'Move'}
+              </Button>
+            </DialogActions>
+          </DialogBody>
+        </DialogSurface>
+      </Dialog>
     </AdminShell>
   );
 }
@@ -403,6 +469,7 @@ function AssignWorkspacesDialog({ domain, onClose, onDone }: {
   domain: Domain; onClose: () => void; onDone: () => void;
 }) {
   const s = useStyles();
+  const a = useAdminTabStyles();
   const [workspaces, setWorkspaces] = useState<Workspace[] | null>(null);
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [busy, setBusy] = useState(false);
@@ -446,16 +513,16 @@ function AssignWorkspacesDialog({ domain, onClose, onDone }: {
         <DialogBody>
           <DialogTitle>Assign workspaces to {domain.name}</DialogTitle>
           <DialogContent>
-            <Body1 style={{ marginBottom: 12 }}>
+            <Body1 className={s.dialogIntro}>
               Select workspaces to associate with this domain. All items in an assigned workspace are
               associated with the domain.
             </Body1>
 
-            {err && <MessageBar intent="error" style={{ marginBottom: 12 }}><MessageBarBody>{err}</MessageBarBody></MessageBar>}
-            {result && <MessageBar intent="success" style={{ marginBottom: 12 }}><MessageBarBody>{result}</MessageBarBody></MessageBar>}
+            {err && <MessageBar intent="error" className={a.messageBar}><MessageBarBody>{err}</MessageBarBody></MessageBar>}
+            {result && <MessageBar intent="success" className={a.messageBar}><MessageBarBody>{result}</MessageBarBody></MessageBar>}
 
             {override && (
-              <MessageBar intent="warning" style={{ marginBottom: 12 }}>
+              <MessageBar intent="warning" className={a.messageBar}>
                 <MessageBarBody>
                   <MessageBarTitle>Some workspaces are already assigned to another domain</MessageBarTitle>
                   {override.map((w) => (
@@ -469,13 +536,13 @@ function AssignWorkspacesDialog({ domain, onClose, onDone }: {
             {workspaces === null ? (
               <Spinner size="tiny" label="Loading workspaces…" />
             ) : workspaces.length === 0 ? (
-              <Caption1 style={{ color: tokens.colorNeutralForeground3 }}>No workspaces found.</Caption1>
+              <Caption1 className={a.muted}>No workspaces found.</Caption1>
             ) : (
-              <div style={{ maxHeight: 320, overflowY: 'auto', border: `1px solid ${tokens.colorNeutralStroke2}`, borderRadius: 6 }}>
+              <div className={a.scrollList}>
                 {workspaces.map((w) => (
                   <label key={w.id} className={s.wsRow}>
                     <Checkbox checked={selected.has(w.id)} onChange={() => toggle(w.id)} />
-                    <span style={{ flex: 1 }}>{w.name || w.id}</span>
+                    <span className={s.wsName}>{w.name || w.id}</span>
                     {w.domain && (
                       <Badge appearance="outline" size="small" color={w.domain === domain.id ? 'brand' : 'warning'}>
                         {w.domain === domain.id ? 'this domain' : w.domain}

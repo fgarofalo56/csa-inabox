@@ -26,7 +26,7 @@ import { useEffect, useMemo, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import {
   Spinner, Caption1, Badge, Button, Text, Tooltip,
-  makeStyles, tokens,
+  makeStyles, tokens, mergeClasses,
 } from '@fluentui/react-components';
 import {
   DataTrending20Regular, Shield20Regular, Tag20Regular, Branch20Regular,
@@ -113,7 +113,15 @@ const useStyles = makeStyles({
     overflow: 'hidden',
     marginTop: tokens.spacingVerticalXS,
   },
-  barFill: { height: '100%', borderRadius: tokens.borderRadiusCircular },
+  barFill: { display: 'block', height: '100%', borderRadius: tokens.borderRadiusCircular },
+  // bar accent variants (was inline backgroundColor); width stays inline (data)
+  barFillViolet: { backgroundColor: 'var(--loom-accent-violet)' },
+  barFillBlue: { backgroundColor: 'var(--loom-accent-blue)' },
+  // residual inline-style extractions
+  muted: { color: tokens.colorNeutralForeground3 },
+  chipIcon16: { width: '16px', height: '16px' },
+  chipIcon20: { width: '20px', height: '20px' },
+  spinnerStart: { justifyContent: 'flex-start' },
   navGroup: { marginBottom: tokens.spacingVerticalL },
   groupLabel: {
     display: 'block',
@@ -213,7 +221,8 @@ const SECTIONS: {
     items: [
       { href: '/governance/policies', label: 'Access policies', desc: 'DLP, masking, RLS, retention, access.', icon: Shield20Regular, color: 'var(--loom-accent-orange)' },
       { href: '/governance/access-requests', label: 'Access requests', desc: 'Multi-tier approval inbox → real Azure RBAC grant.', icon: ShieldCheckmark20Regular, color: 'var(--loom-accent-violet)' },
-      { href: '/catalog/data-quality', label: 'Data quality rules', desc: 'Define + manage data-quality checks (Loom-native).', icon: Beaker20Regular, color: 'var(--loom-accent-cyan)' },
+      { href: '/governance/data-quality', label: 'Data quality', desc: 'Author rules, run on your engine, results + Delta/Lakehouse monitors.', icon: Beaker20Regular, color: 'var(--loom-accent-cyan)' },
+      { href: '/governance/mdm', label: 'Master data', desc: 'Golden-record match/merge + reference data (Azure-native).', icon: Box20Regular, color: 'var(--loom-accent-indigo)' },
       { href: '/governance/insights', label: 'Insights & reports', desc: 'Coverage KPIs, data-health reporting.', icon: DataTrending20Regular, color: 'var(--loom-accent-amber)' },
       { href: '/governance/purview', label: 'Microsoft Purview', desc: 'Connection status + embedded portal.', icon: Beaker20Regular, color: 'var(--loom-accent-teal)' },
     ],
@@ -283,7 +292,7 @@ export default function GovernancePage() {
               style={{ backgroundColor: `${v.color}1f` }}
               aria-hidden
             >
-              <Icon style={{ width: 16, height: 16, color: v.color }} />
+              <Icon className={s.chipIcon16} style={{ color: v.color }} />
             </span>
             <Text weight="semibold">{v.label}</Text>
           </span>
@@ -302,7 +311,7 @@ export default function GovernancePage() {
         return (
           <span className={s.pctCell}>
             <span className={s.miniBar}>
-              <span className={s.barFill} style={{ width: `${p}%`, backgroundColor: 'var(--loom-accent-violet)', display: 'block', height: '100%' }} />
+              <span className={mergeClasses(s.barFill, s.barFillViolet)} style={{ width: `${p}%` }} />
             </span>
             <Text size={200}>{p}%</Text>
           </span>
@@ -317,7 +326,7 @@ export default function GovernancePage() {
         return (
           <span className={s.pctCell}>
             <span className={s.miniBar}>
-              <span className={s.barFill} style={{ width: `${p}%`, backgroundColor: 'var(--loom-accent-blue)', display: 'block', height: '100%' }} />
+              <span className={mergeClasses(s.barFill, s.barFillBlue)} style={{ width: `${p}%` }} />
             </span>
             <Text size={200}>{p}%</Text>
           </span>
@@ -344,7 +353,7 @@ export default function GovernancePage() {
         title="Governance posture"
         actions={<Badge appearance="tint" color="informative">live · Cosmos</Badge>}
       >
-        {loading && <Spinner label="Computing posture…" style={{ justifyContent: 'flex-start' }} />}
+        {loading && <Spinner label="Computing posture…" className={s.spinnerStart} />}
         {!loading && (
           <div className={s.statsRow}>
             {STATS.map((stat) => {
@@ -353,7 +362,7 @@ export default function GovernancePage() {
                 <div key={stat.key} className={s.statCard}>
                   <div className={s.statHead}>
                     <span className={s.chip} style={{ backgroundColor: `${stat.color}1f` }} aria-hidden>
-                      <Icon style={{ width: 20, height: 20, color: stat.color }} />
+                      <Icon className={s.chipIcon20} style={{ color: stat.color }} />
                     </span>
                     <Text className={s.statVal}>{statValue(stat.key, stat.pct)}</Text>
                   </div>
@@ -362,7 +371,7 @@ export default function GovernancePage() {
                     <div className={s.bar}>
                       <div
                         className={s.barFill}
-                        style={{ width: `${kpis ? kpis[stat.key] : 0}%`, backgroundColor: stat.color, height: '100%' }}
+                        style={{ width: `${kpis ? kpis[stat.key] : 0}%`, backgroundColor: stat.color }}
                       />
                     </div>
                   )}
@@ -410,7 +419,7 @@ export default function GovernancePage() {
       {topClassified.length > 0 && (
         <Section
           title="Most-classified items"
-          actions={<Caption1 style={{ color: tokens.colorNeutralForeground3 }}>Top items by classification count</Caption1>}
+          actions={<Caption1 className={s.muted}>Top items by classification count</Caption1>}
         >
           <TileGrid>
             {topClassified.map((it) => (
@@ -461,7 +470,7 @@ export default function GovernancePage() {
           searchPlaceholder="Find a governance surface…"
         />
         {nav.length === 0 && (
-          <Caption1 style={{ color: tokens.colorNeutralForeground3 }}>
+          <Caption1 className={s.muted}>
             No governance surface matches &quot;{navQuery}&quot;.
           </Caption1>
         )}
@@ -486,7 +495,7 @@ export default function GovernancePage() {
                     }}
                   >
                     <span className={s.chip} style={{ backgroundColor: `${it.color}1f` }} aria-hidden>
-                      <Icon style={{ width: 20, height: 20, color: it.color }} />
+                      <Icon className={s.chipIcon20} style={{ color: it.color }} />
                     </span>
                     <span className={s.navBody}>
                       <Text className={s.navTitle}>{it.label}</Text>
@@ -503,7 +512,7 @@ export default function GovernancePage() {
       {/* Real tenant activity. */}
       <Section
         title="Recent activity"
-        actions={<Caption1 style={{ color: tokens.colorNeutralForeground3 }}>Every audit, comment, and share across your tenant — from Cosmos.</Caption1>}
+        actions={<Caption1 className={s.muted}>Every audit, comment, and share across your tenant — from Cosmos.</Caption1>}
       >
         <ActivityFeedPane />
       </Section>

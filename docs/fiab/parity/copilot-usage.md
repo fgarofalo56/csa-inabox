@@ -39,8 +39,8 @@ Zero ❌ — every inventory row is built or honest-gated.
 |------------------------|---------|
 | Emit (write path), Console orchestrator | `emitCopilotUsage()` → POST `{IngestionEndpoint}/v2/track` (App Insights track envelope), iKey + endpoint parsed from `APPLICATIONINSIGHTS_CONNECTION_STRING`. Real `prompt_tokens`/`completion_tokens` from the AOAI `usage` field. |
 | Emit (write path), copilot-chat Function | `telemetry.track_event("copilot.usage", …)` via OpenCensus `AzureEventHandler`. Real tokens from streaming `stream_options={"include_usage": True}`. persona=`help-chat`. |
-| Read path (panel + inline) | `queryLogs(kql, P{n}D)` → Log Analytics `POST /v1/workspaces/{id}/query` against `LOOM_LOG_ANALYTICS_WORKSPACE_ID`. Three KQL summaries over `AppEvents | where Name == "copilot.usage"`. |
-| Honest gate | `MonitorNotConfiguredError` → `{ ok:false, gate }` → warning MessageBar. |
+| Read path (panel + inline) | `queryLogs(kql, P{n}D)` → Log Analytics `POST /v1/workspaces/{id}/query` against `LOOM_LOG_ANALYTICS_WORKSPACE_ID`. Three KQL summaries over `union isfuzzy=true (AppEvents \| where Name == "copilot.usage")` — the `isfuzzy` union tolerates a not-yet-materialized `AppEvents` table on a fresh workspace (returns 0 rows → noEvents) instead of a SemanticError/400. |
+| Honest gate | `MonitorNotConfiguredError` → `{ ok:false, gate }` → warning MessageBar. A residual missing-table resolve error is also mapped to `noEvents`; genuine 403/permission errors still surface as `{ ok:false, error }`. |
 
 ## Personas metered
 
@@ -71,6 +71,18 @@ No new resources, env vars, or RBAC. Already wired:
   workspace output (`admin-plane/main.bicep`).
 - Console UAMI already holds Log Analytics Reader on the LAW.
 
+**Write-path fix (deployed by default):** `monitoring.bicep` previously created
+the App Insights component with `publicNetworkAccessForIngestion: 'Disabled'`
+and no Azure Monitor Private Link Scope — so every custom event (`copilot.usage`,
+`chat.request`, the loom-audit feed) POSTed to the public `IngestionEndpoint`
+was silently rejected, `AppEvents` was never created, and the panel could never
+leave the error/no-events state. Ingestion now defaults to **`Enabled`**
+(`param publicIngestionEnabled bool = true`, forwarded from
+`main.bicep`'s `monitorPublicIngestionEnabled`). Query stays `Enabled`. A
+boundary that requires private-only ingestion sets the param false **and** must
+provision an AMPLS + private endpoint out-of-band (documented honest infra gate
+— never Disabled with no AMPLS, which is the silent-drop bug this fixes).
+
 ## Acceptance
 
 1. Real Copilot call → orchestrator yields `final` with `usage` → `copilot.usage`
@@ -83,3 +95,7 @@ No new resources, env vars, or RBAC. Already wired:
 4. With `APPLICATIONINSIGHTS_CONNECTION_STRING` unset: emit no-ops; with
    `LOOM_LOG_ANALYTICS_WORKSPACE_ID` unset: panel renders the honest warning
    MessageBar (no throw, no synthetic zeros).
+5. On a freshly-deployed workspace with no Copilot calls yet: panel renders the
+   friendly "No Copilot calls recorded yet" info bar (NOT the red "Could not
+   load" error) — the `isfuzzy` union returns 0 rows so the noEvents branch
+   fires even before the `AppEvents` table exists.

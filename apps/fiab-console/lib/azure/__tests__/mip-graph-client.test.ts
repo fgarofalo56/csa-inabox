@@ -92,17 +92,17 @@ describe('mip-graph-client', () => {
     fetchMock.mockResolvedValueOnce(make403());
 
     const mod = await import('../mip-graph-client');
-    await expect(mod.listLabelPolicies()).rejects.toBeInstanceOf(mod.MipError);
+    await expect(mod.listSensitivityLabels()).rejects.toBeInstanceOf(mod.MipError);
     try {
-      await mod.listLabelPolicies();
+      await mod.listSensitivityLabels();
     } catch (e: any) {
       expect(e.status).toBe(403);
       expect(e.message).toContain('AppRole not consented');
-      expect(e.endpoint).toBe('/beta/security/informationProtection/policy/labels');
+      expect(e.endpoint).toBe('/beta/security/informationProtection/sensitivityLabels');
     }
   });
 
-  it('posts evaluateApplication with the supplied content + metadata', async () => {
+  it('posts evaluateApplication to the app-only (service-principal) endpoint', async () => {
     process.env.LOOM_MIP_ENABLED = 'true';
     fetchMock.mockResolvedValue(new Response(JSON.stringify({ result: { actions: [] } }), { status: 200 }));
     const mod = await import('../mip-graph-client');
@@ -112,7 +112,9 @@ describe('mip-graph-client', () => {
     });
     expect(fetchMock).toHaveBeenCalledTimes(1);
     const [url, init] = fetchMock.mock.calls[0];
-    expect(url).toContain('/beta/me/informationProtection/policy/labels/evaluateApplication');
+    // Must NOT use the delegated /me/...policy/labels path (which 400s app-only).
+    expect(url).toContain('/beta/security/informationProtection/sensitivityLabels/evaluateApplication');
+    expect(url).not.toContain('/me/');
     expect((init as any).method).toBe('POST');
     const body = JSON.parse((init as any).body);
     expect(body.contentInfo.identifier).toBe('item-1');

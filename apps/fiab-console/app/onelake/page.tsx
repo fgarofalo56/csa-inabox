@@ -444,6 +444,15 @@ const useStyles = makeStyles({
   metaKey: { color: tokens.colorNeutralForeground3, fontWeight: tokens.fontWeightMedium, whiteSpace: 'nowrap' },
   metaVal: { color: tokens.colorNeutralForeground1, overflowWrap: 'anywhere' },
   closeBtn: { flexShrink: 0 },
+  // residual inline-style extractions (static layout; chip tints stay inline)
+  muted: { color: tokens.colorNeutralForeground3 },
+  inlineBadges: { display: 'inline-flex', gap: tokens.spacingHorizontalXS, flexWrap: 'wrap' },
+  labelRow: { display: 'inline-flex', gap: tokens.spacingHorizontalS, alignItems: 'center', flexWrap: 'wrap' },
+  detailsChipIcon: { width: '26px', height: '26px' },
+  nameIconGlyph: { width: '16px', height: '16px' },
+  metaNote: { color: tokens.colorNeutralForeground3, display: 'block', marginTop: tokens.spacingVerticalS },
+  wsEmpty: { padding: '4px 8px', color: tokens.colorNeutralForeground3 },
+  errorBarSpaced: { marginTop: tokens.spacingVerticalM },
   treeWrap: {
     border: `1px solid ${tokens.colorNeutralStroke2}`,
     borderRadius: tokens.borderRadiusMedium,
@@ -649,7 +658,7 @@ function ItemDetails({
           style={{ backgroundColor: `${visual.color}1f`, color: visual.color }}
           aria-hidden
         >
-          <Icon style={{ width: 26, height: 26, color: visual.color }} />
+          <Icon className={styles.detailsChipIcon} style={{ color: visual.color }} />
         </span>
         <span className={styles.detailsTitleWrap}>
           <Title3 className={styles.detailsTitle} title={item.displayName}>
@@ -696,7 +705,7 @@ function ItemDetails({
                 is soft-deleted. You can restore it from the recycle bin until its retention window elapses.
               </Text>
               {deleteError && (
-                <MessageBar intent="error" style={{ marginTop: tokens.spacingVerticalM }}>
+                <MessageBar intent="error" className={styles.errorBarSpaced}>
                   <MessageBarBody>{deleteError}</MessageBarBody>
                 </MessageBar>
               )}
@@ -758,13 +767,13 @@ function ItemDetails({
             <span className={styles.metaVal}>
               {sensitivity
                 ? <Badge appearance="filled" size="small" color={sensitivity === 'Highly Confidential' ? 'danger' : sensitivity === 'Confidential' ? 'warning' : 'subtle'}>{sensitivity}</Badge>
-                : <span style={{ color: tokens.colorNeutralForeground3 }}>—</span>}
+                : <span className={styles.muted}>—</span>}
             </span>
             <span className={styles.metaKey}>Classifications</span>
             <span className={styles.metaVal}>
               {classifications.length
-                ? <span style={{ display: 'inline-flex', gap: 4, flexWrap: 'wrap' }}>{classifications.map((c) => <Badge key={c} appearance="tint" size="small" color="informative">{c}</Badge>)}</span>
-                : <span style={{ color: tokens.colorNeutralForeground3 }}>—</span>}
+                ? <span className={styles.inlineBadges}>{classifications.map((c) => <Badge key={c} appearance="tint" size="small" color="informative">{c}</Badge>)}</span>
+                : <span className={styles.muted}>—</span>}
             </span>
             <span className={styles.metaKey}>Lineage</span>
             <span className={styles.metaVal}>
@@ -787,9 +796,9 @@ function ItemDetails({
                   {labelPhase === 'loading' && <Spinner size="tiny" label="Loading labels…" />}
                   {labelPhase === 'saving' && <Spinner size="tiny" label="Applying…" />}
                   {labelPhase === 'ready' && (
-                    <span style={{ display: 'inline-flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
+                    <span className={styles.labelRow}>
                       {labelOptions.length === 0 ? (
-                        <Caption1 style={{ color: tokens.colorNeutralForeground3 }}>
+                        <Caption1 className={styles.muted}>
                           No MIP labels are registered in the Purview Data Map yet. Enable
                           Information Protection + run a scan, then retry.
                         </Caption1>
@@ -839,7 +848,7 @@ function ItemDetails({
               </MessageBarBody>
             </MessageBar>
           )}
-          <Caption1 style={{ color: tokens.colorNeutralForeground3, display: 'block', marginTop: 8 }}>
+          <Caption1 className={styles.metaNote}>
             Set endorsement, sensitivity &amp; classifications in the item editor or Governance. Microsoft Purview
             enriches these with scan-based classifications &amp; cross-asset lineage when connected.
           </Caption1>
@@ -999,7 +1008,7 @@ export default function OneLakeCatalogPage() {
           return (
             <span className={styles.nameCell}>
               <span className={styles.nameIcon} style={{ backgroundColor: `${v.color}1f`, color: v.color }} aria-hidden>
-                <Icon style={{ width: 16, height: 16, color: v.color }} />
+                <Icon className={styles.nameIconGlyph} style={{ color: v.color }} />
               </span>
               <span className={styles.nameText} title={r.displayName}>{r.displayName}</span>
             </span>
@@ -1182,7 +1191,7 @@ export default function OneLakeCatalogPage() {
                 <span className={styles.railItemText}>All workspaces</span>
               </button>
               {workspaces.length === 0 && (
-                <Caption1 style={{ padding: '4px 8px', color: tokens.colorNeutralForeground3 }}>
+                <Caption1 className={styles.wsEmpty}>
                   No workspaces yet.
                 </Caption1>
               )}

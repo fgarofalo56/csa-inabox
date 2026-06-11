@@ -19,14 +19,11 @@ import { useRouter } from 'next/navigation';
 import {
   Spinner, makeStyles, tokens, Badge, Input, Button, Caption1, Subtitle2, Tooltip,
 } from '@fluentui/react-components';
-import {
-  Database24Regular, DataLine24Regular, Flow24Regular, Bot24Regular,
-  ServerRegular, ChartMultiple24Regular, Earth24Regular,
-  Shield24Regular, Diversity24Regular, Code24Regular, Cloud24Regular,
-  AppGeneric24Regular, Search24Regular, PuzzlePieceRegular,
-} from '@fluentui/react-icons';
+import { Search24Regular } from '@fluentui/react-icons';
 import { PageShell } from '@/lib/components/page-shell';
 import { SignInRequired } from '@/lib/components/sign-in-required';
+import { itemVisual } from '@/lib/components/ui/item-type-visual';
+import { matchWorkloadKey } from '@/lib/catalog/workload-hub';
 
 interface Workload {
   id: string; name: string; description?: string;
@@ -106,22 +103,11 @@ const useStyles = makeStyles({
   },
 });
 
-/** Pick an icon based on workload id / name. */
-function workloadIcon(id: string, name: string): React.ReactNode {
-  const key = (id + ' ' + name).toLowerCase();
-  if (key.includes('warehouse') || key.includes('sql')) return <Database24Regular />;
-  if (key.includes('realtime') || key.includes('rti') || key.includes('stream')) return <DataLine24Regular />;
-  if (key.includes('factory') || key.includes('pipeline') || key.includes('engineering')) return <Flow24Regular />;
-  if (key.includes('copilot') || key.includes('agent')) return <Bot24Regular />;
-  if (key.includes('database')) return <ServerRegular />;
-  if (key.includes('power-bi') || key.includes('powerbi') || key.includes('bi')) return <ChartMultiple24Regular />;
-  if (key.includes('geo') || key.includes('map')) return <Earth24Regular />;
-  if (key.includes('fedramp') || key.includes('compliance') || key.includes('security')) return <Shield24Regular />;
-  if (key.includes('industry')) return <Diversity24Regular />;
-  if (key.includes('graph') || key.includes('vector')) return <PuzzlePieceRegular />;
-  if (key.includes('data-science') || key.includes('ml') || key.includes('ai')) return <Code24Regular />;
-  if (key.includes('platform') || key.includes('power-platform')) return <Cloud24Regular />;
-  return <AppGeneric24Regular />;
+/** Representative item-type slug for a workload — its first featureSlug, which
+ *  the catalog seed always sets to a real item-type slug. itemVisual() resolves
+ *  it to a Fluent icon + brand color from the shared registry. */
+function workloadTypeSlug(w: Workload): string {
+  return (w.featureSlugs || [])[0] || 'data-product';
 }
 
 interface Section { label: string; tone: 'included' | 'csa' | 'optional'; items: Workload[]; }
@@ -173,9 +159,11 @@ export default function WorkloadsPage() {
   const shownCount = visible.length;
 
   function openWorkload(w: Workload) {
-    // First feature in the bundle is the most representative; open its
-    // /new editor as an entry point. Future v3.x: dedicated workload
-    // landing page at /workload-hub/<id>.
+    // Expand into the workload's landing page (its item types) when we can
+    // resolve it to a registry workload group; otherwise fall back to the
+    // first feature's create wizard.
+    const key = matchWorkloadKey(w.name, w.featureSlugs || []);
+    if (key) { router.push(`/workload-hub/${key}`); return; }
     const first = (w.featureSlugs || [])[0];
     if (first) router.push(`/items/${first}/new`);
   }
@@ -239,7 +227,18 @@ export default function WorkloadsPage() {
                   onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); openWorkload(w); } }}
                 >
                   <div className={s.cardHeader}>
-                    <div className={iconClass}>{workloadIcon(w.id, w.name)}</div>
+                    {(() => {
+                      const v = itemVisual(workloadTypeSlug(w));
+                      return (
+                        <div
+                          className={iconClass}
+                          style={{ backgroundColor: `${v.color}1f`, color: v.color }}
+                          aria-hidden
+                        >
+                          <v.icon style={{ width: 24, height: 24, color: v.color }} />
+                        </div>
+                      );
+                    })()}
                     <div className={s.titleCol}>
                       <div className={s.name}>{w.name}</div>
                       <Badge

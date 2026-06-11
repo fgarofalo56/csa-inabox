@@ -55,6 +55,7 @@ import {
   MessageBarTitle,
   Spinner,
   Link,
+  Checkbox,
   mergeClasses,
 } from '@fluentui/react-components';
 import {
@@ -76,6 +77,13 @@ import {
 import type { FluentIcon } from '@fluentui/react-icons';
 import { itemVisual } from '@/lib/components/ui/item-type-visual';
 import { CapacityEquivalencePanel } from '@/lib/components/setup/capacity-equivalence-panel';
+import { SetupDeploymentDiagram, type DiagramSpoke } from '@/lib/components/setup/deployment-diagram';
+import {
+  regionsForBoundary,
+  defaultRegion,
+  type AzureRegion,
+  type RegionBoundary,
+} from '@/lib/azure/azure-regions';
 
 type Boundary = 'Commercial' | 'GCC' | 'GCC-High' | 'IL5';
 type Mode = 'single-sub' | 'multi-sub';
@@ -115,8 +123,12 @@ interface WizardState {
   dlzSubscriptionName?: string;
   /** Multi-sub Route A (wire new) vs Route B (wire existing) */
   multiSubMode?: 'wire-new' | 'wire-existing';
+  /** Multi-sub Route A: the spoke subscription IDs the DLZ(s) deploy into (multi-select). */
+  dlzSubscriptionIds?: string[];
+  /** Multi-sub Route A: id → displayName for the chosen spoke subscriptions. */
+  dlzSubscriptionNames?: Record<string, string>;
   /** Multi-sub Route B: list of existing DLZs discovered in the tenant (loaded async) */
-  existingDlzs?: Array<{ subscriptionId: string; subscriptionName: string; domainName: string; rg: string }>;
+  existingDlzs?: Array<{ subscriptionId: string; subscriptionName: string; domainName: string; region?: string; rg: string }>;
   /** Multi-sub Route B: which existing DLZ(s) to wire into admin plane (checked state) */
   selectedExistingDlzs?: Array<{ subscriptionId: string; domainName: string }>;
   deployProgress?: number;
@@ -132,8 +144,7 @@ interface WizardState {
   runUrl?: string;
 }
 
-const REGIONS_COMMERCIAL = ['eastus2', 'eastus', 'westus2', 'westus3', 'centralus', 'westeurope', 'northeurope'];
-const REGIONS_GOV = ['usgovvirginia', 'usgovtexas', 'usgovarizona'];
+const REGION_BOUNDARY = (b?: Boundary): RegionBoundary => (b ?? 'Commercial') as RegionBoundary;
 
 /** The ordered, user-facing steps shown in the rail (intro/deploying/done are transient). */
 /** Note: 'multi-sub-choice' is inserted dynamically after 'mode' when mode='multi-sub'. */
@@ -452,12 +463,72 @@ export function SetupWizardPane() {
   const [subsLoading, setSubsLoading] = useState(false);
   const [subsError, setSubsError] = useState<string | undefined>();
 
+  // Admin Plane deployment defaults (single-sub auto-uses these — no dropdown).
+  const [config, setConfig] = useState<{ adminSubscriptionId?: string; adminSubscriptionName?: string; location?: string } | null>(null);
+  const [configError, setConfigError] = useState<string | undefined>();
+
+  // Region list — live ARM /locations for the chosen sub, else static fallback.
+  const [regions, setRegions] = useState<AzureRegion[]>([]);
+  const [regionSource, setRegionSource] = useState<'arm' | 'static'>('static');
+  const [regionsLoading, setRegionsLoading] = useState(false);
+
+  // Multi-sub Route B: existing-DLZ discovery (Azure Resource Graph).
+  const [existingLoading, setExistingLoading] = useState(false);
+  const [existingError, setExistingError] = useState<string | undefined>();
+
   const bicepPreview = useMemo(() => renderBicepParam(state), [state]);
 
   const isGov = state.boundary === 'GCC-High' || state.boundary === 'IL5';
-  const regions = isGov ? REGIONS_GOV : REGIONS_COMMERCIAL;
+  const isSingleSub = state.mode === 'single-sub';
+  const isWireExisting = state.mode === 'multi-sub' && state.multiSubMode === 'wire-existing';
+  const isWireNew = state.mode === 'multi-sub' && state.multiSubMode === 'wire-new';
 
   const go = useCallback((step: Step) => setState((s) => ({ ...s, step })), []);
+
+  // Load the admin-plane deployment defaults once (drives single-sub auto-fill).
+  const loadConfig = useCallback(async () => {
+    setConfigError(undefined);
+    try {
+      const res = await fetch('/api/setup/config');
+      const j = await res.json().catch(() => ({}));
+      if (!res.ok || !j.ok) {
+        setConfigError(j.error || `Could not read deployment config (HTTP ${res.status}).`);
+        return;
+      }
+      setConfig({ adminSubscriptionId: j.adminSubscriptionId, adminSubscriptionName: j.adminSubscriptionName, location: j.location });
+    } catch (e) {
+      setConfigError(e instanceof Error ? e.message : String(e));
+    }
+  }, []);
+
+  useEffect(() => {
+    if (config === null && !configError) void loadConfig();
+  }, [config, configError, loadConfig]);
+
+  // Load the region list for the active boundary + chosen subscription. Prefers
+  // the live ARM locations for that sub; falls back to the static per-boundary set.
+  const loadRegions = useCallback(async (boundary?: Boundary, subscriptionId?: string) => {
+    setRegionsLoading(true);
+    try {
+      const qs = new URLSearchParams();
+      if (boundary) qs.set('boundary', boundary);
+      if (subscriptionId) qs.set('subscription', subscriptionId);
+      const res = await fetch(`/api/setup/regions?${qs.toString()}`);
+      const j = await res.json().catch(() => ({}));
+      if (res.ok && j.ok && Array.isArray(j.regions)) {
+        setRegions(j.regions);
+        setRegionSource(j.source === 'arm' ? 'arm' : 'static');
+      } else {
+        setRegions(regionsForBoundary(REGION_BOUNDARY(boundary)));
+        setRegionSource('static');
+      }
+    } catch {
+      setRegions(regionsForBoundary(REGION_BOUNDARY(boundary)));
+      setRegionSource('static');
+    } finally {
+      setRegionsLoading(false);
+    }
+  }, []);
 
   const loadSubscriptions = useCallback(async () => {
     setSubsLoading(true);
@@ -489,12 +560,66 @@ export function SetupWizardPane() {
     }
   }, []);
 
-  // Load subscriptions when the operator first reaches the subscription step.
+  // Discover already-deployed DLZs (multi-sub Route B / wire-existing).
+  const loadExistingDlzs = useCallback(async () => {
+    setExistingLoading(true);
+    setExistingError(undefined);
+    try {
+      const res = await fetch('/api/setup/existing-dlzs');
+      const j = await res.json().catch(() => ({}));
+      if (!res.ok || !j.ok) {
+        setExistingError(j.error || j.hint || `Could not discover existing DLZs (HTTP ${res.status}).`);
+        setState((s) => ({ ...s, existingDlzs: [] }));
+        return;
+      }
+      setState((s) => ({ ...s, existingDlzs: j.dlzs || [] }));
+      if ((j.dlzs || []).length === 0) {
+        setExistingError('No existing CSA Loom Data Landing Zones are visible to the Console identity. Grant it Reader on the subscriptions whose DLZs you want to wire, or use "Deploy a new DLZ".');
+      }
+    } catch (e) {
+      setExistingError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setExistingLoading(false);
+    }
+  }, []);
+
+  // Load subscriptions when the operator reaches the subscription step in a
+  // path that needs a picker (multi-sub wire-new chooses spoke subs).
   useEffect(() => {
-    if (state.step === 'subscription' && subs.length === 0 && !subsLoading && !subsError) {
+    if (state.step === 'subscription' && isWireNew && subs.length === 0 && !subsLoading && !subsError) {
       void loadSubscriptions();
     }
-  }, [state.step, subs.length, subsLoading, subsError, loadSubscriptions]);
+  }, [state.step, isWireNew, subs.length, subsLoading, subsError, loadSubscriptions]);
+
+  // Discover existing DLZs when reaching the subscription step in wire-existing.
+  useEffect(() => {
+    if (state.step === 'subscription' && isWireExisting && state.existingDlzs === undefined && !existingLoading && !existingError) {
+      void loadExistingDlzs();
+    }
+  }, [state.step, isWireExisting, state.existingDlzs, existingLoading, existingError, loadExistingDlzs]);
+
+  // Load regions on entering the subscription step, and refresh whenever the
+  // chosen target subscription changes (so ARM lists that sub's enabled regions).
+  useEffect(() => {
+    if (state.step === 'subscription') {
+      void loadRegions(state.boundary, state.subscriptionId);
+    }
+  }, [state.step, state.boundary, state.subscriptionId, loadRegions]);
+
+  // Single-sub: auto-bind the new DLZ to the Admin Plane subscription (no dropdown)
+  // and default the region to the admin-plane deployment region when available.
+  useEffect(() => {
+    if (state.step !== 'subscription' || state.mode !== 'single-sub' || !config) return;
+    setState((s) => {
+      const next: WizardState = { ...s };
+      if (config.adminSubscriptionId && s.subscriptionId !== config.adminSubscriptionId) {
+        next.subscriptionId = config.adminSubscriptionId;
+        next.subscriptionName = config.adminSubscriptionName;
+      }
+      if (!s.location && config.location) next.location = config.location;
+      return next;
+    });
+  }, [state.step, state.mode, config]);
 
   // Stream the GitHub Actions deploy run status while the wizard is on the
   // "done" step after a workflow-dispatch. Polls every 6s until the run
@@ -540,17 +665,79 @@ export function SetupWizardPane() {
     };
   }, [isStreaming, state.workflowFile, state.dispatchedAt]);
 
+  // Multi-sub Route B: wire already-deployed DLZ(s) into the Admin Plane (RBAC +
+  // env patch — no new deployment). Calls /api/setup/wire-existing.
+  async function wireExisting() {
+    setState((s) => ({ ...s, step: 'deploying', deployProgress: 0, deployStage: 'Wiring existing Data Landing Zone(s)…', deployError: undefined }));
+    try {
+      const selected = (state.selectedExistingDlzs || []);
+      const res = await fetch('/api/setup/wire-existing', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          boundary: state.boundary,
+          subscriptionId: config?.adminSubscriptionId || state.subscriptionId,
+          subscriptionName: config?.adminSubscriptionName || state.subscriptionName,
+          location: state.location,
+          selectedExistingDlzs: selected,
+        }),
+      });
+      const j = await res.json().catch(() => ({}));
+      if (res.status === 403 || j.error === 'forbidden') {
+        const cap = j.capabilityName || j.capability || 'Deploy Landing Zone';
+        const rem = typeof j.remediation === 'string' ? `\n\n${j.remediation}` : '';
+        setState((s) => ({ ...s, deployError: `You don't have permission to wire a Data Landing Zone (requires ${j.requiredRole || 'Admin'} on "${cap}").${rem}` }));
+        return;
+      }
+      if (!res.ok || !j.ok) {
+        const msg = j.remediation?.message || j.error || `HTTP ${res.status}`;
+        const commands = j.remediation?.commands ? '\n\n' + j.remediation.commands.join('\n') : '';
+        setState((s) => ({ ...s, deployError: msg + commands }));
+        return;
+      }
+      setState((s) => ({ ...s, deployStage: j.message || 'Wired', deployProgress: 1, step: 'done' }));
+    } catch (e) {
+      setState((s) => ({ ...s, deployError: e instanceof Error ? e.message : String(e) }));
+    }
+  }
+
   async function deploy() {
-    // The backend validates the captured config and returns 400 if anything is
-    // missing, or 503 with a copy-paste `az deployment sub create` (pre-filled
-    // with the selected subscription + region) when the Setup Orchestrator
-    // isn't deployed. We surface either honestly — no fake progress animation.
+    // Route B (wire existing) takes a different backend — no new provisioning.
+    if (isWireExisting) return wireExisting();
+
+    // The backend tries, in order: (1) POST the config to the deployed Setup
+    // Orchestrator (LOOM_SETUP_ORCHESTRATOR_URL) which runs the multi-sub
+    // `az deployment sub create`; (2) dispatch the GitHub deploy workflow; (3)
+    // return 503 with a copy-paste `az deployment sub create` pre-filled with
+    // the selected subscription(s) + region. We surface each honestly — no fake
+    // progress animation (per no-vaporware.md).
     setState((s) => ({ ...s, step: 'deploying', deployProgress: 0, deployStage: 'Submitting deployment request…', deployError: undefined }));
     try {
+      // Build the deploy payload. Single-sub uses the admin-plane subscription;
+      // multi-sub wire-new threads the admin sub as the hub plus the selected
+      // spoke subscriptions as parallel dlzSubscriptionIds / dlzDomainNames.
+      const adminSubId = config?.adminSubscriptionId || state.subscriptionId;
+      const adminSubName = config?.adminSubscriptionName || state.subscriptionName;
+      const spokeIds = state.dlzSubscriptionIds || [];
+      const payload = {
+        ...state,
+        subscriptionId: isSingleSub ? adminSubId : adminSubId,
+        subscriptionName: isSingleSub ? adminSubName : adminSubName,
+        // Multi-sub: emit parallel arrays the bicep loop consumes. One domain per
+        // spoke (suffixed when >1) keeps the DLZ resource-group names unique.
+        ...(isWireNew && spokeIds.length > 0
+          ? {
+              dlzSubscriptionIds: spokeIds,
+              dlzDomainNames: spokeIds.map((_, i) =>
+                spokeIds.length === 1 ? (state.domainName || '') : `${state.domainName || 'dlz'}-${i + 1}`,
+              ),
+            }
+          : {}),
+      };
       const res = await fetch('/api/setup/deploy', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(state),
+        body: JSON.stringify(payload),
       });
       const ct = res.headers.get('content-type') || '';
       if (!ct.includes('application/json')) {
@@ -559,6 +746,18 @@ export function SetupWizardPane() {
         return;
       }
       const j = await res.json().catch(() => ({}));
+      if (res.status === 202 && j.ok && j.deploymentMode === 'orchestrator') {
+        // The Setup Orchestrator accepted the job and is running the real
+        // multi-sub `az deployment sub create`. Surface the deploymentId.
+        setState((s) => ({
+          ...s,
+          deploymentId: j.deploymentId,
+          deployStage: `Running on the Setup Orchestrator (deployment ${j.deploymentId})`,
+          deployProgress: 0.5,
+          step: 'done',
+        }));
+        return;
+      }
       if (res.status === 202 && j.ok && j.deploymentMode === 'github-workflow-dispatch') {
         setState((s) => ({
           ...s,
@@ -596,16 +795,25 @@ export function SetupWizardPane() {
     }
   }
 
-  // Which rail step is "current" for highlighting (transient steps map to review).
+  // Which rail step is "current" for highlighting (transient steps map to review;
+  // the multi-sub-choice sub-step sits between mode and subscription).
   const activeRailKey: Step =
-    state.step === 'deploying' || state.step === 'done' ? 'review' : state.step;
+    state.step === 'deploying' || state.step === 'done'
+      ? 'review'
+      : state.step === 'multi-sub-choice'
+        ? 'mode'
+        : state.step;
   const activeIndex = STEP_ORDER.indexOf(activeRailKey);
 
   function isStepComplete(step: Step): boolean {
     switch (step) {
       case 'boundary': return !!state.boundary;
-      case 'mode': return !!state.mode;
-      case 'subscription': return !!state.subscriptionId && !!state.location;
+      case 'mode': return !!state.mode && (state.mode === 'single-sub' || !!state.multiSubMode);
+      case 'subscription':
+        if (isWireExisting) return (state.selectedExistingDlzs?.length ?? 0) > 0;
+        if (isWireNew) return (state.dlzSubscriptionIds?.length ?? 0) > 0 && !!state.location;
+        // single-sub: admin sub is auto-selected; region must be chosen.
+        return !!(config?.adminSubscriptionId || state.subscriptionId) && !!state.location;
       case 'domain': return !!state.domainName;
       case 'capacity': return !!state.capacitySku;
       case 'review': return state.step === 'done';
@@ -677,9 +885,11 @@ export function SetupWizardPane() {
             <Title2>Set up a new Data Landing Zone</Title2>
             <Body1>
               This wizard provisions an additional Data Landing Zone on top of your installed Admin
-              Plane. You'll choose the cloud boundary, deployment mode, target subscription and
-              region, a domain name, and capacity sizing — then review the generated Bicep before
-              launching the deployment under JIT Contributor elevation via the Azure MCP server.
+              Plane. You'll choose the cloud boundary, deployment mode, target subscription(s) and
+              region, a domain name, and capacity sizing — then review a visual architecture diagram
+              and the generated Bicep before launching. When the Setup Orchestrator is deployed,
+              Deploy runs the real multi-subscription <code>az deployment sub create</code> for you;
+              otherwise it dispatches the GitHub deploy workflow or hands you the exact command.
             </Body1>
             <MessageBar intent="info">
               <MessageBarBody>
@@ -749,7 +959,7 @@ export function SetupWizardPane() {
                     type="button"
                     aria-pressed={selected}
                     className={mergeClasses(styles.optionCard, selected && styles.optionCardSelected)}
-                    onClick={() => setState((s) => ({ ...s, mode: opt.value }))}
+                    onClick={() => setState((s) => ({ ...s, mode: opt.value, multiSubMode: opt.value === 'multi-sub' ? (s.multiSubMode ?? 'wire-new') : undefined }))}
                   >
                     <span className={styles.optionIconChip} aria-hidden><Icon /></span>
                     <span className={styles.optionBody}>
@@ -763,81 +973,217 @@ export function SetupWizardPane() {
                 );
               })}
             </div>
-            <Footer onBack={() => go('boundary')} nextDisabled={!state.mode} onNext={() => go('subscription')} />
+            <Footer
+              onBack={() => go('boundary')}
+              nextDisabled={!state.mode}
+              onNext={() => go(state.mode === 'multi-sub' ? 'multi-sub-choice' : 'subscription')}
+            />
+          </>
+        )}
+
+        {state.step === 'multi-sub-choice' && (
+          <>
+            <div className={styles.stepHeader}>
+              <Subtitle2>Deploy new, or wire existing?</Subtitle2>
+              <Body1>
+                Multi-subscription mode keeps the Admin Plane in this (hub) subscription and places each
+                Data Landing Zone in its own spoke subscription. Choose whether to deploy a brand-new DLZ
+                or wire DLZs that are already deployed in other subscriptions into this Admin Plane.
+              </Body1>
+            </div>
+            <div className={styles.optionGrid}>
+              {([
+                { value: 'wire-new' as const, title: 'Deploy a new DLZ', desc: 'Provision a new Data Landing Zone in one or more spoke subscriptions you select.', icon: Branch24Regular },
+                { value: 'wire-existing' as const, title: 'Wire existing DLZ(s)', desc: 'Discover already-deployed DLZs and wire them into the Admin Plane (RBAC + env) — no re-deploy.', icon: SquareMultiple24Regular },
+              ]).map((opt) => {
+                const Icon = opt.icon;
+                const selected = state.multiSubMode === opt.value;
+                return (
+                  <button
+                    key={opt.value}
+                    type="button"
+                    aria-pressed={selected}
+                    className={mergeClasses(styles.optionCard, selected && styles.optionCardSelected)}
+                    onClick={() => setState((s) => ({ ...s, multiSubMode: opt.value }))}
+                  >
+                    <span className={styles.optionIconChip} aria-hidden><Icon /></span>
+                    <span className={styles.optionBody}>
+                      <Body1Strong>{opt.title}</Body1Strong>
+                      <Caption1 className={styles.railHint}>{opt.desc}</Caption1>
+                    </span>
+                  </button>
+                );
+              })}
+            </div>
+            <Footer onBack={() => go('mode')} nextDisabled={!state.multiSubMode} onNext={() => go('subscription')} />
           </>
         )}
 
         {state.step === 'subscription' && (
           <>
             <div className={styles.stepHeader}>
-              <Subtitle2>Target subscription &amp; region</Subtitle2>
+              <Subtitle2>
+                {isWireExisting ? 'Select existing Data Landing Zone(s)' : isWireNew ? 'Spoke subscriptions & region' : 'Subscription & region'}
+              </Subtitle2>
               <Body1>
-                Pick the Azure subscription the new Data Landing Zone deploys into — it's threaded into{' '}
-                <code>az deployment sub create --subscription …</code>. Only subscriptions your identity
-                can see are listed.
+                {isSingleSub && 'The new Data Landing Zone lands in the same subscription as the Admin Plane. Pick the deployment region.'}
+                {isWireNew && 'The Admin Plane stays in this (hub) subscription. Choose one or more spoke subscriptions to deploy DLZs into, plus the region.'}
+                {isWireExisting && 'These are the CSA Loom DLZs your identity can see (discovered via Azure Resource Graph). Select the ones to wire into this Admin Plane — no re-deploy.'}
               </Body1>
             </div>
 
-            <div className={styles.fields}>
-              <Field label="Subscription" required>
-                {subsLoading ? (
+            {configError && (
+              <MessageBar intent="warning">
+                <MessageBarBody style={{ whiteSpace: 'pre-wrap' }}>{configError}</MessageBarBody>
+              </MessageBar>
+            )}
+
+            {/* ── single-sub: admin subscription is auto-selected (no dropdown) ── */}
+            {isSingleSub && (
+              <div className={styles.fields}>
+                <Field label="Subscription (Admin Plane)">
+                  <div className={mergeClasses(styles.optionCard, styles.optionCardSelected)} aria-readonly>
+                    <span className={styles.optionIconChip} aria-hidden><Building24Regular /></span>
+                    <span className={styles.optionBody}>
+                      <Body1Strong>{config?.adminSubscriptionName || config?.adminSubscriptionId || 'Admin Plane subscription'}</Body1Strong>
+                      <Caption1 className={styles.railHint}>
+                        {config?.adminSubscriptionId
+                          ? `${config.adminSubscriptionId} — the new DLZ lands here.`
+                          : 'LOOM_SUBSCRIPTION_ID is not set on the console; the deploy will use the deployment subscription.'}
+                      </Caption1>
+                    </span>
+                  </div>
+                </Field>
+                <RegionField
+                  styles={styles}
+                  regions={regions}
+                  regionsLoading={regionsLoading}
+                  regionSource={regionSource}
+                  value={state.location}
+                  isGov={isGov}
+                  onSelect={(v) => setState((s) => ({ ...s, location: v }))}
+                />
+              </div>
+            )}
+
+            {/* ── multi-sub wire-new: multi-select spoke subscriptions ── */}
+            {isWireNew && (
+              <div className={styles.fields}>
+                <Field label="Hub (Admin Plane) subscription">
+                  <Caption1 className={styles.railHint}>
+                    {config?.adminSubscriptionName || config?.adminSubscriptionId || 'Admin Plane subscription'}
+                    {config?.adminSubscriptionId ? ` (${config.adminSubscriptionId})` : ''}
+                  </Caption1>
+                </Field>
+                <Field label="Spoke subscription(s) — DLZ targets" required>
+                  {subsLoading ? (
+                    <div className={styles.inlineLoad}>
+                      <Spinner size="tiny" /> <Caption1>Listing subscriptions from Azure Resource Manager…</Caption1>
+                    </div>
+                  ) : (
+                    <Dropdown
+                      multiselect
+                      placeholder={subs.length ? 'Select one or more spoke subscriptions' : 'No subscriptions available'}
+                      disabled={subs.length === 0}
+                      selectedOptions={state.dlzSubscriptionIds || []}
+                      value={(state.dlzSubscriptionIds || []).map((id) => state.dlzSubscriptionNames?.[id] || id).join(', ')}
+                      onOptionSelect={(_, d) => {
+                        setState((s) => {
+                          const sel = new Set(s.dlzSubscriptionIds || []);
+                          if (sel.has(d.optionValue!)) sel.delete(d.optionValue!); else sel.add(d.optionValue!);
+                          const chosen = subs.find((x) => x.subscriptionId === d.optionValue);
+                          const names = { ...(s.dlzSubscriptionNames || {}) };
+                          if (chosen) names[chosen.subscriptionId] = chosen.displayName;
+                          return { ...s, dlzSubscriptionIds: Array.from(sel), dlzSubscriptionNames: names };
+                        });
+                      }}
+                    >
+                      {subs.map((sub) => (
+                        <Option key={sub.subscriptionId} value={sub.subscriptionId} text={sub.displayName}>
+                          {sub.displayName} — {sub.subscriptionId} ({sub.state})
+                        </Option>
+                      ))}
+                    </Dropdown>
+                  )}
+                </Field>
+                {subsError && !subsLoading && (
+                  <MessageBar intent="warning">
+                    <MessageBarBody style={{ whiteSpace: 'pre-wrap' }}>{subsError}</MessageBarBody>
+                  </MessageBar>
+                )}
+                <RegionField
+                  styles={styles}
+                  regions={regions}
+                  regionsLoading={regionsLoading}
+                  regionSource={regionSource}
+                  value={state.location}
+                  isGov={isGov}
+                  onSelect={(v) => setState((s) => ({ ...s, location: v }))}
+                />
+              </div>
+            )}
+
+            {/* ── multi-sub wire-existing: select discovered DLZs ── */}
+            {isWireExisting && (
+              <div className={styles.fields}>
+                {existingLoading ? (
                   <div className={styles.inlineLoad}>
-                    <Spinner size="tiny" /> <Caption1>Listing subscriptions from Azure Resource Manager…</Caption1>
+                    <Spinner size="tiny" /> <Caption1>Discovering deployed DLZs via Azure Resource Graph…</Caption1>
                   </div>
                 ) : (
-                  <Dropdown
-                    placeholder={subs.length ? 'Select subscription' : 'No subscriptions available'}
-                    disabled={subs.length === 0}
-                    value={state.subscriptionName}
-                    selectedOptions={state.subscriptionId ? [state.subscriptionId] : []}
-                    onOptionSelect={(_, d) => {
-                      const chosen = subs.find((x) => x.subscriptionId === d.optionValue);
-                      setState((s) => ({ ...s, subscriptionId: d.optionValue, subscriptionName: chosen?.displayName }));
-                    }}
-                  >
-                    {subs.map((sub) => (
-                      <Option key={sub.subscriptionId} value={sub.subscriptionId} text={sub.displayName}>
-                        {sub.displayName} — {sub.subscriptionId} ({sub.state})
-                      </Option>
-                    ))}
-                  </Dropdown>
+                  <>
+                    {(state.existingDlzs || []).map((dlz) => {
+                      const checked = (state.selectedExistingDlzs || []).some(
+                        (x) => x.subscriptionId === dlz.subscriptionId && x.domainName === dlz.domainName,
+                      );
+                      return (
+                        <Checkbox
+                          key={dlz.rg}
+                          checked={checked}
+                          onChange={(_, d) => {
+                            setState((s) => {
+                              const cur = s.selectedExistingDlzs || [];
+                              const next = d.checked
+                                ? [...cur, { subscriptionId: dlz.subscriptionId, domainName: dlz.domainName }]
+                                : cur.filter((x) => !(x.subscriptionId === dlz.subscriptionId && x.domainName === dlz.domainName));
+                              // wire-existing reuses the DLZ's own region for RG naming.
+                              return { ...s, selectedExistingDlzs: next, location: s.location || dlz.region };
+                            });
+                          }}
+                          label={`${dlz.domainName} — ${dlz.region || '?'} · ${dlz.subscriptionId}`}
+                        />
+                      );
+                    })}
+                    {existingError && (
+                      <MessageBar intent="warning">
+                        <MessageBarBody style={{ whiteSpace: 'pre-wrap' }}>{existingError}</MessageBarBody>
+                      </MessageBar>
+                    )}
+                  </>
                 )}
-              </Field>
-
-              {subsError && !subsLoading && (
-                <MessageBar intent="warning">
-                  <MessageBarBody style={{ whiteSpace: 'pre-wrap' }}>{subsError}</MessageBarBody>
-                </MessageBar>
-              )}
-
-              <Field
-                label="Region"
-                required
-                hint={isGov ? 'Azure Government regions only for this boundary.' : 'Azure Public regions for this boundary.'}
-              >
-                <Dropdown
-                  placeholder="Select region"
-                  value={state.location}
-                  selectedOptions={state.location ? [state.location] : []}
-                  onOptionSelect={(_, d) => setState((s) => ({ ...s, location: d.optionValue as string }))}
-                >
-                  {regions.map((r) => (
-                    <Option key={r} value={r}>{r}</Option>
-                  ))}
-                </Dropdown>
-              </Field>
-            </div>
+              </div>
+            )}
 
             <Footer
-              onBack={() => go('mode')}
-              nextDisabled={!state.subscriptionId || !state.location}
-              onNext={() => go('domain')}
+              onBack={() => go(state.mode === 'multi-sub' ? 'multi-sub-choice' : 'mode')}
+              nextDisabled={
+                isWireExisting
+                  ? (state.selectedExistingDlzs?.length ?? 0) === 0
+                  : isWireNew
+                    ? (state.dlzSubscriptionIds?.length ?? 0) === 0 || !state.location
+                    : !state.location
+              }
+              onNext={() => go(isWireExisting ? 'review' : 'domain')}
               extra={
                 <Button
                   appearance="subtle"
                   icon={<ArrowClockwise20Regular />}
-                  onClick={() => { setSubs([]); setSubsError(undefined); void loadSubscriptions(); }}
-                  disabled={subsLoading}
+                  onClick={() => {
+                    if (isWireExisting) { setExistingError(undefined); setState((s) => ({ ...s, existingDlzs: undefined })); }
+                    else { setSubs([]); setSubsError(undefined); void loadSubscriptions(); }
+                    void loadRegions(state.boundary, state.subscriptionId);
+                  }}
+                  disabled={subsLoading || existingLoading}
                 >
                   Refresh
                 </Button>
@@ -935,29 +1281,89 @@ export function SetupWizardPane() {
           <>
             <div className={styles.stepHeader}>
               <Subtitle2>Review &amp; deploy</Subtitle2>
-              <Body1>Confirm the configuration below. Deploy requests JIT Contributor elevation on the target subscription via PIM-for-Groups and executes via the self-hosted Azure MCP server.</Body1>
+              <Body1>
+                {isWireExisting
+                  ? 'Review the existing Data Landing Zone(s) being wired into this Admin Plane. Wiring grants the Console identity navigator RBAC and patches its environment — no resources are re-provisioned.'
+                  : 'Confirm the planned deployment below. When the Setup Orchestrator is deployed it runs the real ' +
+                    'az deployment sub create under the orchestrator identity (Contributor on each target subscription); ' +
+                    'otherwise Deploy dispatches the GitHub deploy workflow, or returns the exact command to run.'}
+              </Body1>
             </div>
+
+            {/* Visual architecture diagram of the planned deployment (reuses the
+                T132 React Flow canvas, read-only, built from this wizard's state). */}
+            {(() => {
+              const adminId = config?.adminSubscriptionId || state.subscriptionId;
+              const adminName = config?.adminSubscriptionName || state.subscriptionName;
+              let spokes: DiagramSpoke[] = [];
+              if (isSingleSub) {
+                spokes = [{ domainName: state.domainName || 'default', region: state.location }];
+              } else if (isWireNew) {
+                const ids = state.dlzSubscriptionIds || [];
+                spokes = ids.map((id, i) => ({
+                  subscriptionId: id,
+                  subscriptionName: state.dlzSubscriptionNames?.[id] || id,
+                  domainName: ids.length === 1 ? (state.domainName || 'dlz') : `${state.domainName || 'dlz'}-${i + 1}`,
+                  region: state.location,
+                }));
+              } else if (isWireExisting) {
+                spokes = (state.selectedExistingDlzs || []).map((d) => {
+                  const found = (state.existingDlzs || []).find(
+                    (x) => x.subscriptionId === d.subscriptionId && x.domainName === d.domainName,
+                  );
+                  return { subscriptionId: d.subscriptionId, subscriptionName: found?.subscriptionName, domainName: d.domainName, region: found?.region || state.location };
+                });
+              }
+              return (
+                <div>
+                  <Body1Strong>Planned architecture</Body1Strong>
+                  <div style={{ marginTop: tokens.spacingVerticalS }}>
+                    <SetupDeploymentDiagram
+                      boundary={state.boundary}
+                      mode={state.mode}
+                      adminSubscriptionId={adminId}
+                      adminSubscriptionName={adminName}
+                      region={state.location}
+                      capacitySku={state.capacitySku}
+                      spokes={spokes}
+                    />
+                  </div>
+                </div>
+              );
+            })()}
 
             <div className={styles.summaryGrid}>
               <SummaryCell label="Boundary" value={state.boundary} />
-              <SummaryCell label="Mode" value={state.mode === 'single-sub' ? 'Single-sub' : state.mode === 'multi-sub' ? 'Multi-sub' : undefined} />
-              <SummaryCell label="Subscription" value={state.subscriptionName} sub={state.subscriptionId} />
+              <SummaryCell label="Mode" value={state.mode === 'single-sub' ? 'Single-sub' : isWireExisting ? 'Multi-sub · wire existing' : 'Multi-sub · deploy new'} />
+              <SummaryCell
+                label={isSingleSub ? 'Subscription' : 'Hub subscription'}
+                value={config?.adminSubscriptionName || state.subscriptionName}
+                sub={config?.adminSubscriptionId || state.subscriptionId}
+              />
+              {isWireNew && (
+                <SummaryCell label="Spoke subscriptions" value={`${state.dlzSubscriptionIds?.length ?? 0} selected`} sub={(state.dlzSubscriptionIds || []).join(', ') || undefined} />
+              )}
+              {isWireExisting && (
+                <SummaryCell label="Existing DLZs" value={`${state.selectedExistingDlzs?.length ?? 0} selected`} sub={(state.selectedExistingDlzs || []).map((d) => d.domainName).join(', ') || undefined} />
+              )}
               <SummaryCell label="Region" value={state.location} />
-              <SummaryCell label="Domain" value={state.domainName} />
-              <SummaryCell label="Capacity" value={state.capacitySku} />
+              {!isWireExisting && <SummaryCell label="Domain" value={state.domainName} />}
+              {!isWireExisting && <SummaryCell label="Capacity" value={state.capacitySku} />}
             </div>
 
             <Divider />
 
-            <div>
-              <Body1Strong>Generated Bicep parameters</Body1Strong>
-              <div className={styles.preview}>{bicepPreview}</div>
-            </div>
+            {!isWireExisting && (
+              <div>
+                <Body1Strong>Generated Bicep parameters</Body1Strong>
+                <div className={styles.preview}>{bicepPreview}</div>
+              </div>
+            )}
 
             <Footer
-              onBack={() => go('capacity')}
+              onBack={() => go(isWireExisting ? 'subscription' : 'capacity')}
               onNext={deploy}
-              nextLabel="Deploy"
+              nextLabel={isWireExisting ? 'Wire DLZ(s)' : 'Deploy'}
               nextIcon={<Send24Regular />}
               nextAppearance="primary"
             />
@@ -1109,5 +1515,56 @@ function SummaryCell({ label, value, sub }: { label: string; value?: string; sub
       <Body1Strong>{value ?? '—'}</Body1Strong>
       {sub && <Caption1 className={styles.summaryLabel}>{sub}</Caption1>}
     </div>
+  );
+}
+
+/**
+ * Region picker: a closed dropdown over the supported regions for the active
+ * cloud boundary. Sources from the live ARM `/locations` for the chosen
+ * subscription when available (regionSource==='arm'), else the static
+ * per-boundary fallback. Never a free-text box (loom-no-freeform-config.md).
+ */
+function RegionField(props: {
+  styles: ReturnType<typeof useStyles>;
+  regions: AzureRegion[];
+  regionsLoading: boolean;
+  regionSource: 'arm' | 'static';
+  value?: string;
+  isGov: boolean;
+  onSelect: (v: string) => void;
+}) {
+  const { styles, regions, regionsLoading, regionSource, value, isGov, onSelect } = props;
+  const selected = value ? regions.find((r) => r.name === value) : undefined;
+  return (
+    <Field
+      label="Region"
+      required
+      hint={
+        regionsLoading
+          ? 'Loading regions…'
+          : regionSource === 'arm'
+            ? "Live list of regions enabled for the selected subscription (Azure Resource Manager)."
+            : isGov
+              ? 'Azure Government regions for this boundary.'
+              : 'Azure Public regions for this boundary.'
+      }
+    >
+      {regionsLoading ? (
+        <div className={styles.inlineLoad}><Spinner size="tiny" /> <Caption1>Listing regions…</Caption1></div>
+      ) : (
+        <Dropdown
+          placeholder="Select region"
+          value={selected ? `${selected.display} (${selected.name})` : value}
+          selectedOptions={value ? [value] : []}
+          onOptionSelect={(_, d) => onSelect(d.optionValue as string)}
+        >
+          {regions.map((r) => (
+            <Option key={r.name} value={r.name} text={`${r.display} (${r.name})`}>
+              {r.display} — {r.name}
+            </Option>
+          ))}
+        </Dropdown>
+      )}
+    </Field>
   );
 }

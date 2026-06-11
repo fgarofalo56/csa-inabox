@@ -396,7 +396,7 @@ export function DatabricksWorkspaceTree({
           <TreeItem itemType="branch" value="g-jobs">
             {groupHeader('Jobs', <Flow20Regular />, f ? fJobs.length : jobs.length, onNewJob ? () => onNewJob() : undefined, 'New job (opens editor)')}
             <Tree>
-              {fJobs.length === 0 && <TreeItem itemType="leaf" value="j-empty"><TreeItemLayout><Caption1>{f ? 'No matches' : 'No jobs'}</Caption1></TreeItemLayout></TreeItem>}
+              {fJobs.length === 0 && <TreeItem itemType="leaf" value="j-empty"><TreeItemLayout><Caption1 className={s.muted}>{f ? 'No matches' : 'No jobs'}</Caption1></TreeItemLayout></TreeItem>}
               {fJobs.map((j) => (
                 <TreeItem key={j.job_id} itemType="leaf" value={`j-${j.job_id}`}>
                   <TreeItemLayout iconBefore={<Flow20Regular />}>
@@ -426,7 +426,7 @@ export function DatabricksWorkspaceTree({
           <TreeItem itemType="branch" value="g-notebooks">
             {groupHeader('Notebooks', <Notebook20Regular />, f ? fNotebooks.length : notebooks.length, () => openCreate('notebook'), 'New notebook')}
             <Tree>
-              {fNotebooks.length === 0 && <TreeItem itemType="leaf" value="n-empty"><TreeItemLayout><Caption1>{f ? 'No matches' : `Empty (${nbPath})`}</Caption1></TreeItemLayout></TreeItem>}
+              {fNotebooks.length === 0 && <TreeItem itemType="leaf" value="n-empty"><TreeItemLayout><Caption1 className={s.muted}>{f ? 'No matches' : `Empty (${nbPath})`}</Caption1></TreeItemLayout></TreeItem>}
               {fNotebooks.map((n) => {
                 const isDir = n.object_type === 'DIRECTORY' || n.object_type === 'REPO';
                 return (
@@ -451,7 +451,7 @@ export function DatabricksWorkspaceTree({
           <TreeItem itemType="branch" value="g-clusters">
             {groupHeader('Clusters', <Server20Regular />, f ? fClusters.length : clusters.length, () => openCreate('cluster'), 'New cluster')}
             <Tree>
-              {fClusters.length === 0 && <TreeItem itemType="leaf" value="c-empty"><TreeItemLayout><Caption1>{f ? 'No matches' : 'No clusters'}</Caption1></TreeItemLayout></TreeItem>}
+              {fClusters.length === 0 && <TreeItem itemType="leaf" value="c-empty"><TreeItemLayout><Caption1 className={s.muted}>{f ? 'No matches' : 'No clusters'}</Caption1></TreeItemLayout></TreeItem>}
               {fClusters.map((c) => {
                 const running = c.state === 'RUNNING';
                 return (
@@ -478,7 +478,7 @@ export function DatabricksWorkspaceTree({
           <TreeItem itemType="branch" value="g-warehouses">
             {groupHeader('SQL Warehouses', <Database20Regular />, f ? fWarehouses.length : warehouses.length, () => openCreate('warehouse'), 'New SQL warehouse')}
             <Tree>
-              {fWarehouses.length === 0 && <TreeItem itemType="leaf" value="w-empty"><TreeItemLayout><Caption1>{f ? 'No matches' : 'No SQL warehouses'}</Caption1></TreeItemLayout></TreeItem>}
+              {fWarehouses.length === 0 && <TreeItem itemType="leaf" value="w-empty"><TreeItemLayout><Caption1 className={s.muted}>{f ? 'No matches' : 'No SQL warehouses'}</Caption1></TreeItemLayout></TreeItem>}
               {fWarehouses.map((w) => {
                 const running = w.state === 'RUNNING';
                 return (
@@ -507,7 +507,7 @@ export function DatabricksWorkspaceTree({
           <TreeItem itemType="branch" value="g-repos">
             {groupHeader('Repos', <BranchFork20Regular />, f ? fRepos.length : repos.length, () => openCreate('repo'), 'New Git folder')}
             <Tree>
-              {fRepos.length === 0 && <TreeItem itemType="leaf" value="r-empty"><TreeItemLayout><Caption1>{f ? 'No matches' : 'No Git folders'}</Caption1></TreeItemLayout></TreeItem>}
+              {fRepos.length === 0 && <TreeItem itemType="leaf" value="r-empty"><TreeItemLayout><Caption1 className={s.muted}>{f ? 'No matches' : 'No Git folders'}</Caption1></TreeItemLayout></TreeItem>}
               {fRepos.map((r) => (
                 <TreeItem key={r.id} itemType="leaf" value={`r-${r.id}`}>
                   <TreeItemLayout iconBefore={<BranchFork20Regular />}>
@@ -529,7 +529,17 @@ export function DatabricksWorkspaceTree({
           <TreeItem itemType="branch" value="g-catalogs">
             {groupHeader('Unity Catalog', <Database20Regular />, f ? fCatalogs.length : catalogs.length, undefined)}
             <Tree>
-              {fCatalogs.length === 0 && <TreeItem itemType="leaf" value="uc-empty"><TreeItemLayout><Caption1>{f ? 'No matches' : 'No catalogs'}</Caption1></TreeItemLayout></TreeItem>}
+              {fCatalogs.length === 0 && (
+                <TreeItem itemType="leaf" value="uc-empty">
+                  <TreeItemLayout>
+                    <Caption1 className={s.muted}>
+                      {f
+                        ? 'No matches'
+                        : 'No Unity Catalog catalogs. UC is configured by default at deploy (metastore + default catalog); if empty, ensure the deployment set databricksAccountId and the Console UAMI is a Databricks account admin — see docs/fiab/catalog/metastores.md.'}
+                    </Caption1>
+                  </TreeItemLayout>
+                </TreeItem>
+              )}
               {fCatalogs.map((c) => (
                 <TreeItem key={c.name} itemType="leaf" value={`uc-${c.name}`}>
                   <TreeItemLayout iconBefore={<Database20Regular />}>
@@ -549,7 +559,7 @@ export function DatabricksWorkspaceTree({
           <TreeItem itemType="branch" value="g-dlt">
             {groupHeader('DLT Pipelines', <Pipeline20Regular />, f ? fDlt.length : dltPipelines.length, () => openCreate('dlt'), 'New DLT pipeline')}
             <Tree>
-              {fDlt.length === 0 && <TreeItem itemType="leaf" value="dlt-empty"><TreeItemLayout><Caption1>{f ? 'No matches' : 'No DLT pipelines'}</Caption1></TreeItemLayout></TreeItem>}
+              {fDlt.length === 0 && <TreeItem itemType="leaf" value="dlt-empty"><TreeItemLayout><Caption1 className={s.muted}>{f ? 'No matches' : 'No DLT pipelines'}</Caption1></TreeItemLayout></TreeItem>}
               {fDlt.map((p) => {
                 const running = p.state === 'RUNNING' || p.state === 'DEPLOYING';
                 return (
@@ -583,7 +593,7 @@ export function DatabricksWorkspaceTree({
           <TreeItem itemType="branch" value="g-mlflow-exp">
             {groupHeader('MLflow Experiments', <Beaker20Regular />, f ? fExperiments.length : mlflowExperiments.length, () => openCreate('mlflow-experiment'), 'New MLflow experiment')}
             <Tree>
-              {fExperiments.length === 0 && <TreeItem itemType="leaf" value="exp-empty"><TreeItemLayout><Caption1>{f ? 'No matches' : 'No experiments'}</Caption1></TreeItemLayout></TreeItem>}
+              {fExperiments.length === 0 && <TreeItem itemType="leaf" value="exp-empty"><TreeItemLayout><Caption1 className={s.muted}>{f ? 'No matches' : 'No experiments'}</Caption1></TreeItemLayout></TreeItem>}
               {fExperiments.map((e) => (
                 <TreeItem key={e.experiment_id} itemType="leaf" value={`exp-${e.experiment_id}`}>
                   <TreeItemLayout iconBefore={<Beaker20Regular />}>
@@ -601,7 +611,7 @@ export function DatabricksWorkspaceTree({
           <TreeItem itemType="branch" value="g-mlflow-model">
             {groupHeader('Registered Models', <BrainCircuit20Regular />, f ? fModels.length : registeredModels.length, () => openCreate('mlflow-model'), 'Register a new model')}
             <Tree>
-              {fModels.length === 0 && <TreeItem itemType="leaf" value="model-empty"><TreeItemLayout><Caption1>{f ? 'No matches' : 'No registered models'}</Caption1></TreeItemLayout></TreeItem>}
+              {fModels.length === 0 && <TreeItem itemType="leaf" value="model-empty"><TreeItemLayout><Caption1 className={s.muted}>{f ? 'No matches' : 'No registered models'}</Caption1></TreeItemLayout></TreeItem>}
               {fModels.map((m) => {
                 const latest = m.latest_versions?.[0];
                 return (
@@ -635,7 +645,7 @@ export function DatabricksWorkspaceTree({
                   </Tooltip>
                 </TreeItem>
               )}
-              {!servingNote && fServing.length === 0 && <TreeItem itemType="leaf" value="serving-empty"><TreeItemLayout><Caption1>{f ? 'No matches' : 'No serving endpoints'}</Caption1></TreeItemLayout></TreeItem>}
+              {!servingNote && fServing.length === 0 && <TreeItem itemType="leaf" value="serving-empty"><TreeItemLayout><Caption1 className={s.muted}>{f ? 'No matches' : 'No serving endpoints'}</Caption1></TreeItemLayout></TreeItem>}
               {fServing.map((e) => (
                 <TreeItem key={e.name} itemType="leaf" value={`serving-${e.name}`}>
                   <TreeItemLayout iconBefore={<Rocket20Regular />}>

@@ -1,10 +1,14 @@
 /**
  * POST /api/items/apim-api/[id]/test-call
  *   Executes a real request through the APIM gateway (the in-portal Test
- *   console). Body: { method, urlTemplate, headers?, query?, body? }
- *   The route resolves the API's path + the gateway URL + the all-access
- *   subscription key server-side, then proxies the call so the browser never
- *   sees the key. Returns { ok, status, statusText, headers, body }.
+ *   console). Body: { method, urlTemplate, headers?, query?, body?,
+ *                     subscriptionId?, subscriptionKey? }
+ *   The route resolves the API's path + the gateway URL server-side, then
+ *   attaches an Ocp-Apim-Subscription-Key chosen by precedence:
+ *     subscriptionKey (manual) → subscriptionId (resolved via listSecrets) →
+ *     the all-access "master" subscription (last resort).
+ *   The browser never has to hold a key for the selected-subscription path.
+ *   Returns { ok, status, statusText, headers, body, keySource }.
  */
 import { NextRequest, NextResponse } from 'next/server';
 import { getSession } from '@/lib/auth/session';
@@ -30,6 +34,8 @@ export async function POST(req: NextRequest, ctx: { params: Promise<{ id: string
       headers: (b?.headers && typeof b.headers === 'object') ? b.headers : undefined,
       query: (b?.query && typeof b.query === 'object') ? b.query : undefined,
       body: typeof b?.body === 'string' ? b.body : undefined,
+      subscriptionId: typeof b?.subscriptionId === 'string' && b.subscriptionId.trim() ? b.subscriptionId.trim() : undefined,
+      subscriptionKey: typeof b?.subscriptionKey === 'string' && b.subscriptionKey.trim() ? b.subscriptionKey.trim() : undefined,
     });
     return NextResponse.json({ ok: true, ...result });
   } catch (e: any) {

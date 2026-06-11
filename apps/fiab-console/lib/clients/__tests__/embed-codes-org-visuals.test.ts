@@ -145,6 +145,26 @@ describe('org visuals', () => {
     expect(list.map((x) => x.id)).toContain(v.id);
   });
 
+  it('uploadOrgVisual persists optional description + icon (Fabric parity)', async () => {
+    const body = Buffer.from('PK\x03\x04 fake');
+    const iconDataUri = 'data:image/png;base64,aGVsbG8=';
+    const v = await uploadOrgVisual(TENANT, WHO, 'Bar', 'b.pbiviz', '2.1.0', body, {
+      description: 'A custom bar chart',
+      iconDataUri,
+    });
+    expect(v.description).toBe('A custom bar chart');
+    expect(v.iconDataUri).toBe(iconDataUri);
+    const [stored] = await listOrgVisuals(TENANT);
+    expect(stored.description).toBe('A custom bar chart');
+    expect(stored.iconDataUri).toBe(iconDataUri);
+  });
+
+  it('uploadOrgVisual omits description/icon keys when not provided', async () => {
+    const v = await uploadOrgVisual(TENANT, WHO, 'Bare', 'bare.pbiviz', '1.0.0', Buffer.from('x'));
+    expect(v.description).toBeUndefined();
+    expect(v.iconDataUri).toBeUndefined();
+  });
+
   it('toggleOrgVisual enables tenant-wide', async () => {
     const v = await uploadOrgVisual(TENANT, WHO, 'Bar', 'b.pbiviz', '1.0.0', Buffer.from('x'));
     const on = await toggleOrgVisual(TENANT, v.id, true, WHO);

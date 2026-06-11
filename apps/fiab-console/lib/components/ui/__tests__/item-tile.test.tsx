@@ -62,3 +62,26 @@ describe('ItemTile footer slot', () => {
     expect(screen.getByText('Promoted')).toBeTruthy();
   });
 });
+
+describe('ItemTile selected ring', () => {
+  it('marks the tile pressed when selected + clickable (multi-select surfaces)', () => {
+    renderTile({
+      type: 'workspace',
+      title: 'sales',
+      selected: true,
+      onClick: () => {},
+    });
+    // role=button comes from onClick; aria-pressed reflects `selected`.
+    expect(screen.getByRole('button').getAttribute('aria-pressed')).toBe('true');
+  });
+
+  it('does not set aria-pressed when not selected', () => {
+    renderTile({
+      type: 'workspace',
+      title: 'sales',
+      selected: false,
+      onClick: () => {},
+    });
+    expect(screen.getByRole('button').getAttribute('aria-pressed')).toBeNull();
+  });
+});

@@ -138,3 +138,70 @@ export async function getIoTHubEhEndpoint(
     retentionTimeInDays: typeof events.retentionTimeInDays === 'number' ? events.retentionTimeInDays : undefined,
   };
 }
+
+// ============================================================
+// Built-in Event Hubs endpoint consumer groups
+//
+// An Eventstream IoT Hub source reads the hub's built-in `events` endpoint
+// through a CONSUMER GROUP — exactly like an Event Hub. ARM exposes those as
+//   …/IotHubs/{name}/eventHubEndpoints/events/ConsumerGroups[/{cg}]
+// (the "events" partition is the only built-in routing endpoint). The connect
+// dialog populates its Consumer-group dropdown from this list and "+ Create
+// new…" PUTs a new one. Grounded in Learn:
+//   https://learn.microsoft.com/rest/api/iothub/iot-hub-resource/list-event-hub-consumer-groups
+//   https://learn.microsoft.com/rest/api/iothub/iot-hub-resource/create-event-hub-consumer-group
+// ============================================================
+
+export interface IoTHubConsumerGroup {
+  name: string;
+  hubName: string;
+}
+
+/** List the consumer groups on an IoT Hub's built-in `events` endpoint. */
+export async function listIoTHubConsumerGroups(
+  hubName: string,
+  opts?: { subscriptionId?: string; resourceGroup?: string },
+): Promise<IoTHubConsumerGroup[]> {
+  const name = (hubName || '').trim();
+  if (!name) throw new IoTHubArmError(400, undefined, 'IoT Hub name is required');
+  const scope = resolveScope(opts);
+  const base = `${armBase()}/subscriptions/${scope.subscriptionId}/resourceGroups/${encodeURIComponent(scope.resourceGroup)}/providers/Microsoft.Devices/IotHubs/${encodeURIComponent(name)}/eventHubEndpoints/events/ConsumerGroups?api-version=${IOTHUB_API}`;
+  const out: IoTHubConsumerGroup[] = [];
+  let next: string | undefined = base;
+  let guard = 0;
+  while (next && guard < 20) {
+    guard++;
+    const r: Response = await callArm(next);
+    if (!r.ok) throw new IoTHubArmError(r.status, await r.text(), `listIoTHubConsumerGroups(${name}) failed ${r.status}`);
+    const body: any = await r.json();
+    const rows: any[] = Array.isArray(body?.value) ? body.value : [];
+    for (const row of rows) {
+      // Each entry is either a bare string name or an object with `.name`.
+      const cgName = typeof row === 'string' ? row : (row?.name || row?.properties?.name);
+      if (cgName) out.push({ name: String(cgName), hubName: name });
+    }
+    next = body?.nextLink;
+  }
+  return out;
+}
+
+/**
+ * Create-if-missing a consumer group on the IoT Hub's built-in endpoint. The
+ * default "$Default" group always exists, so it is short-circuited. The PUT is
+ * idempotent, so the connect dialog's "+ Create new…" path is safe to re-run.
+ */
+export async function ensureIoTHubConsumerGroup(
+  hubName: string,
+  name: string,
+  opts?: { subscriptionId?: string; resourceGroup?: string },
+): Promise<IoTHubConsumerGroup> {
+  const hub = (hubName || '').trim();
+  if (!hub) throw new IoTHubArmError(400, undefined, 'IoT Hub name is required');
+  const cg = (name || '').trim();
+  if (!cg || cg === '$Default') return { name: '$Default', hubName: hub };
+  const scope = resolveScope(opts);
+  const url = `${armBase()}/subscriptions/${scope.subscriptionId}/resourceGroups/${encodeURIComponent(scope.resourceGroup)}/providers/Microsoft.Devices/IotHubs/${encodeURIComponent(hub)}/eventHubEndpoints/events/ConsumerGroups/${encodeURIComponent(cg)}?api-version=${IOTHUB_API}`;
+  const r = await callArm(url, { method: 'PUT', body: JSON.stringify({ properties: { name: cg } }) });
+  if (!r.ok) throw new IoTHubArmError(r.status, await r.text(), `ensureIoTHubConsumerGroup(${cg}) failed ${r.status}`);
+  return { name: cg, hubName: hub };
+}
