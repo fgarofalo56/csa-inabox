@@ -101,6 +101,15 @@ export function EnvConfigPane() {
 
   const dirtyKeys = useMemo(() => Object.keys(edits).filter((k) => edits[k]?.trim()), [edits]);
 
+  const coverage = useMemo(() => {
+    if (!data) return { set: 0, total: 0, missingCritical: 0 };
+    const set = data.editable.filter((e) => data.current[e.key]?.set).length;
+    const missingCritical = data.editable.filter(
+      (e) => e.severity === 'critical' && !data.current[e.key]?.set,
+    ).length;
+    return { set, total: data.editable.length, missingCritical };
+  }, [data]);
+
   const save = useCallback(async () => {
     if (dirtyKeys.length === 0) return;
     setSaving(true); setResult(null); setError(null);
@@ -156,6 +165,24 @@ export function EnvConfigPane() {
               inside Loom — no Azure portal. Saving applies a real ARM revision and persists the
               desired value to the Loom store. Cloud boundary: <strong>{data.cloud}</strong>.
             </Body1>
+            <div style={{ display: 'flex', gap: 8, marginTop: 8, flexWrap: 'wrap' }}>
+              <Badge appearance="tint" size="medium"
+                color={coverage.set === coverage.total ? 'success' : 'informative'}
+                icon={<CheckmarkCircle24Filled />}>
+                {coverage.set} of {coverage.total} configured
+              </Badge>
+              {coverage.missingCritical > 0 && (
+                <Badge appearance="tint" size="medium" color="danger" icon={<Warning24Filled />}>
+                  {coverage.missingCritical} critical not set
+                </Badge>
+              )}
+              {data.desired?.updatedAt && (
+                <Badge appearance="outline" size="medium" color="subtle">
+                  last saved {new Date(data.desired.updatedAt).toLocaleString()}
+                  {data.desired.updatedBy ? ` · ${data.desired.updatedBy}` : ''}
+                </Badge>
+              )}
+            </div>
           </div>
           <div style={{ display: 'flex', gap: 8 }}>
             <Button icon={<ArrowSync24Regular />} appearance="outline" onClick={load} disabled={loading}>Re-check</Button>
@@ -323,6 +350,7 @@ export function EnvConfigPane() {
                   <div style={{ display: 'flex', alignItems: 'center', gap: 6, minWidth: 280 }}>
                     <Input
                       style={{ width: 280 }}
+                      aria-label={`Value for ${e.key}`}
                       type={e.secret && !shown ? 'password' : 'text'}
                       placeholder={e.secret ? (cur?.set ? '•••••• (set — enter to replace)' : (e.valueHint || 'enter secret value')) : (cur?.value || e.valueHint || `set ${e.key}`)}
                       value={editing}
