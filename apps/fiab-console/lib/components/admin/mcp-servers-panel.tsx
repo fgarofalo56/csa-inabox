@@ -83,6 +83,27 @@ const useStyles = makeStyles({
   errLine: { marginTop: tokens.spacingVerticalXS, color: tokens.colorPaletteRedForeground1, fontSize: tokens.fontSizeBase200 },
   endpointNote: { fontSize: tokens.fontSizeBase200, color: tokens.colorNeutralForeground3 },
   toolList: { marginTop: tokens.spacingVerticalS, fontSize: tokens.fontSizeBase200 },
+  form: { display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalL },
+  formGrid: {
+    display: 'grid',
+    gridTemplateColumns: 'repeat(auto-fit, minmax(280px, 1fr))',
+    gap: tokens.spacingHorizontalL,
+  },
+  formActions: {
+    display: 'flex',
+    gap: tokens.spacingHorizontalM,
+    alignItems: 'center',
+    flexWrap: 'wrap',
+    marginTop: tokens.spacingVerticalS,
+  },
+  dialogForm: { marginTop: tokens.spacingVerticalL },
+  endpointCell: {
+    display: 'block',
+    maxWidth: '320px',
+    overflow: 'hidden',
+    textOverflow: 'ellipsis',
+    whiteSpace: 'nowrap',
+  },
 });
 
 function McpServerForm({
@@ -143,8 +164,8 @@ function McpServerForm({
   };
 
   return (
-    <>
-      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(280px, 1fr))', gap: tokens.spacingHorizontalL }}>
+    <div className={s.form}>
+      <div className={s.formGrid}>
         <Field label="Name" hint="Display name for this MCP server (e.g., 'Acme Tools').">
           <Input
             value={form.name}
@@ -161,7 +182,7 @@ function McpServerForm({
         </Field>
       </div>
 
-      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(280px, 1fr))', gap: tokens.spacingHorizontalL }}>
+      <div className={s.formGrid}>
         <Field label="Auth method" hint="How to authenticate with the MCP server.">
           <Dropdown
             value={form.authMethod || 'header'}
@@ -226,7 +247,7 @@ function McpServerForm({
         </MessageBar>
       )}
 
-      <div style={{ display: 'flex', gap: tokens.spacingHorizontalM }}>
+      <div className={s.formActions}>
         <Button
           onClick={() => void testConnection()}
           disabled={!form.endpoint || testing || isSaving}
@@ -234,13 +255,13 @@ function McpServerForm({
         >
           {testing ? 'Testing...' : 'Test Connection'}
         </Button>
-        <div style={{ flex: 1 }} />
+        <div className={s.spacer} />
         <Button appearance="secondary" onClick={onCancel} disabled={isSaving}>Cancel</Button>
         <Button appearance="primary" onClick={() => void handleSave()} disabled={!form.name || !form.endpoint || isSaving}>
           {isSaving ? 'Saving...' : 'Save Server'}
         </Button>
       </div>
-    </>
+    </div>
   );
 }
 
@@ -485,6 +506,7 @@ export function McpServersPanel() {
   const [showAdd, setShowAdd] = useState(false);
   const [saving, setSaving] = useState(false);
   const [filter, setFilter] = useState('');
+  const [sort, setSort] = useState<{ column: 'name' | 'endpoint' | 'status'; dir: 'ascending' | 'descending' }>({ column: 'name', dir: 'ascending' });
 
   const load = useCallback(async () => {
     setLoading(true); setLoadError(null);
@@ -552,6 +574,28 @@ export function McpServersPanel() {
         : servers,
     [servers, q],
   );
+
+  // Sort the filtered list by the active column. Like filteredServers above,
+  // this hook MUST stay ABOVE the `if (loading) return` early return so the
+  // hook count is stable across the loading->loaded transition (React #310).
+  const sortedServers = useMemo(() => {
+    const dirMul = sort.dir === 'ascending' ? 1 : -1;
+    const keyFor = (srv: McpServerConfigDoc) =>
+      sort.column === 'name' ? srv.name
+        : sort.column === 'endpoint' ? srv.endpoint
+        : srv.enabled ? 'enabled' : 'disabled';
+    return [...filteredServers].sort((a, b) =>
+      keyFor(a).localeCompare(keyFor(b), undefined, { sensitivity: 'base' }) * dirMul,
+    );
+  }, [filteredServers, sort]);
+
+  const toggleSort = useCallback((column: 'name' | 'endpoint' | 'status') => {
+    setSort((prev) =>
+      prev.column === column
+        ? { column, dir: prev.dir === 'ascending' ? 'descending' : 'ascending' }
+        : { column, dir: 'ascending' },
+    );
+  }, []);
 
   if (loading) {
     return (
@@ -626,15 +670,27 @@ export function McpServersPanel() {
           <Table aria-label="Registered MCP servers">
             <TableHeader>
               <TableRow>
-                <TableHeaderCell>Name</TableHeaderCell>
-                <TableHeaderCell>Endpoint</TableHeaderCell>
-                <TableHeaderCell>Status</TableHeaderCell>
+                <TableHeaderCell
+                  sortable
+                  sortDirection={sort.column === 'name' ? sort.dir : undefined}
+                  onClick={() => toggleSort('name')}
+                >Name</TableHeaderCell>
+                <TableHeaderCell
+                  sortable
+                  sortDirection={sort.column === 'endpoint' ? sort.dir : undefined}
+                  onClick={() => toggleSort('endpoint')}
+                >Endpoint</TableHeaderCell>
+                <TableHeaderCell
+                  sortable
+                  sortDirection={sort.column === 'status' ? sort.dir : undefined}
+                  onClick={() => toggleSort('status')}
+                >Status</TableHeaderCell>
                 <TableHeaderCell>Tools</TableHeaderCell>
                 <TableHeaderCell>Actions</TableHeaderCell>
               </TableRow>
             </TableHeader>
             <TableBody>
-              {filteredServers.map((server) => (
+              {sortedServers.map((server) => (
                 <TableRow key={server.serverId}>
                   <TableCell>
                     <div className={s.nameCell}>
@@ -642,7 +698,11 @@ export function McpServersPanel() {
                       {server.description && <Caption1>{server.description}</Caption1>}
                     </div>
                   </TableCell>
-                  <TableCell><Caption1>{server.endpoint.replace(/^https:\/\//, '').slice(0, 40)}</Caption1></TableCell>
+                  <TableCell>
+                    <Caption1 className={s.endpointCell} title={server.endpoint}>
+                      {server.endpoint.replace(/^https:\/\//, '')}
+                    </Caption1>
+                  </TableCell>
                   <TableCell>
                     {server.enabled ? (
                       <Badge appearance="outline" color="success" size="small">Enabled</Badge>
@@ -699,7 +759,7 @@ export function McpServersPanel() {
         <DialogContent>
           <DialogBody>
             <DialogTitle>{editingId ? 'Edit MCP Server' : 'Add MCP Server'}</DialogTitle>
-            <div style={{ marginTop: tokens.spacingVerticalL }}>
+            <div className={s.dialogForm}>
               <McpServerForm
                 server={editingServer}
                 onSave={(config) => save(editingId ?? undefined, config)}
