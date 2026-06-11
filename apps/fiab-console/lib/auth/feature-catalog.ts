@@ -190,6 +190,7 @@ export const CAPABILITY_CATALOG: Capability[] = [
   { id: 'admin.permissions',         domain: 'Admin',     workload: 'Tenant Admin',      name: 'Feature Permissions',  kind: 'admin',     description: '/admin/permissions — grant capabilities to users/groups.', parentId: 'workload.admin' },
   { id: 'item.share',                domain: 'Admin',     workload: 'Tenant Admin',      name: 'Item sharing & permissions', kind: 'admin', description: 'Grant and revoke item-level permissions (F6) — the Share dialog and /items/[type]/[id]/permissions page. Item owners can always manage their own items; this capability delegates sharing to non-owners.', parentId: 'workload.admin' },
   { id: 'admin.deploy-dlz',          domain: 'Admin',     workload: 'Tenant Admin',      name: 'Deploy Landing Zone',  kind: 'admin',     description: 'Setup wizard — deploy an additional Data Landing Zone (server-side GitHub Actions dispatch / az deployment). Admin-only by default; an existing admin can delegate it by granting this capability at /admin/permissions.', parentId: 'workload.admin' },
+  { id: 'admin.deploy-mcp',          domain: 'Admin',     workload: 'Tenant Admin',      name: 'Deploy MCP Server',    kind: 'admin',     description: 'External MCP Tools — deploy a catalog MCP server as an internal Azure Container App (per-field Key Vault secrets, auto-registered for Copilot). Admin-only by default; an existing admin can delegate it by granting this capability at /admin/permissions.', parentId: 'workload.admin' },
 ];
 
 /** Lookup by id. */

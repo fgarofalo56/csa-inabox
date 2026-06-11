@@ -508,6 +508,35 @@ az role assignment create --assignee-object-id <console-uami-oid> \
 ```
 (Granted live on kv-loom-… 2026-06-06.)
 
+## External MCP Tools — browse-catalog + deploy wizard {#mcp-catalog-deploy}
+
+Admin → Tenant settings → **External MCP Tools** has a **Browse library** of MCP
+servers (`lib/mcp/catalog.ts`). "Deploy" provisions the chosen server as an
+**internal Azure Container App** in the Loom managed environment, writes each
+`secret:true` config field to **Key Vault** (per-field, value never stored in
+Cosmos — only the secret name), wires non-secret fields as env vars, and
+auto-registers the endpoint so the Copilot orchestrator discovers its tools. No
+Microsoft Fabric dependency (Container Apps + Key Vault + Cosmos only).
+
+Wiring (auto on deploy):
+- Console env (`admin-plane/main.bicep`): `LOOM_ACA_ENV_ID` (= CAE resource id),
+  `LOOM_ACA_ENV_DOMAIN` (= CAE default domain), `LOOM_MCP_CATALOG_UAMI_ID`
+  (= `uami-loom-mcp` resource id).
+- RBAC: the **MCP UAMI** is granted **Key Vault Secrets User** (`keyvault.bicep`,
+  `mcpPrincipalId`) so the deployed container resolves its secrets at runtime;
+  the **Console UAMI** is granted **Managed Identity Operator**
+  (`mcp-catalog-rbac.bicep`) so it can assign that identity to the new app. The
+  Console UAMI already holds **Contributor** (`scaling-rbac.bicep`) and **Key
+  Vault Secrets Officer** (`keyvault.bicep`).
+- Permission: `admin.deploy-mcp` (Admin; delegable at `/admin/permissions`).
+- Deploy-from-scratch IaC mirror: `mcp-catalog-app.bicep`.
+
+Per-cloud: Commercial / GCC run on Container Apps (full path). GCC-High / IL5 run
+the plane on **AKS** (no CAE) — `LOOM_ACA_ENV_ID` is empty and the wizard shows an
+honest gate (deploy via the AKS/Helm path instead). For an existing Container
+Apps deployment, the three env vars are set automatically by a redeploy; no extra
+manual grant is needed beyond the bicep-wired roles above.
+
 ## Eventstream MQTT/Kafka mTLS certificates (Key Vault) {#eventstream-mtls-certs}
 
 The Real-Time Hub **Connect source → MQTT** dialog (and the Kafka secure-

@@ -19,11 +19,12 @@ import {
   Button, Dialog, DialogTrigger, DialogContent, DialogBody, DialogTitle,
   Dropdown, Option, Field, Input, Checkbox, Spinner, Badge,
   MessageBar, MessageBarBody, MessageBarTitle,
-  Caption1, Body2, Body1, makeStyles, tokens, Divider,
+  Caption1, Body2, Body1, Text, makeStyles, tokens, Divider,
   Table, TableHeader, TableRow, TableHeaderCell, TableBody, TableCell,
 } from '@fluentui/react-components';
 import { Add20Regular, Edit20Regular, Delete20Regular, ArrowClockwise20Regular, Checkmark20Regular, Sparkle20Regular } from '@fluentui/react-icons';
 import { Section } from '@/lib/components/ui/section';
+import { McpCatalogBrowser } from '@/lib/components/admin/mcp-catalog-wizard';
 import type { McpServerConfig, McpServerConfigDoc } from '@/lib/types/mcp-config';
 
 interface BuiltinStatus {
@@ -541,6 +542,14 @@ export function McpServersPanel() {
 
       <BridgeMcpCard servers={servers} onRegister={(config) => save(undefined, config)} busy={saving} />
 
+      <Divider />
+      <Text weight="semibold">Browse library</Text>
+      <McpCatalogBrowser
+        onDeployed={(server) => setServers((prev) => (prev.some((p) => p.serverId === server.serverId) ? prev : [...prev, server]))}
+      />
+
+      <Divider />
+      <Text weight="semibold">Registered servers</Text>
       {servers.length === 0 ? (
         <Caption1>No MCP servers registered yet.</Caption1>
       ) : (

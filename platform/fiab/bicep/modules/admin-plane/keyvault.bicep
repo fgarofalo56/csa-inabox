@@ -18,6 +18,9 @@ param adminEntraGroupId string
 @description('Console UAMI principalId — granted Key Vault Secrets Officer so Loom Connections can write source-credential secrets. Empty skips the grant.')
 param consolePrincipalId string = ''
 
+@description('MCP UAMI principalId (uami-loom-mcp) — granted Key Vault Secrets User (read) so catalog-deployed MCP server Container Apps can resolve their per-field secrets at runtime. Empty skips the grant.')
+param mcpPrincipalId string = ''
+
 @description('Grant the Console UAMI "Key Vault Crypto Service Encryption User" so it can list keys and act as the storage account encryption identity for Customer-Managed Keys (F14). Off by default.')
 param consolePrincipalNeedsCmkRole bool = false
 
@@ -85,6 +88,23 @@ resource consoleKvSecretsRole 'Microsoft.Authorization/roleAssignments@2022-04-0
     roleDefinitionId: resourceId('Microsoft.Authorization/roleDefinitions', 'b86a8fe4-44ce-4948-aee5-eccb2c155cd7')
     principalId: consolePrincipalId
     principalType: 'ServicePrincipal'
+  }
+}
+
+// MCP UAMI (uami-loom-mcp) gets "Key Vault Secrets User" (read secret values) so
+// catalog-deployed MCP server Container Apps can resolve their per-field secrets
+// (GITHUB_PERSONAL_ACCESS_TOKEN, GRAFANA_API_KEY, …) at runtime via the ACA
+// keyVaultUrl secretRef. Role: 4633458b-17de-408a-b874-0445c86b69e6 — built-in,
+// global GUID (all clouds). The Console UAMI writes those secrets (Secrets
+// Officer above); this identity only reads them.
+resource mcpKvSecretsUserRole 'Microsoft.Authorization/roleAssignments@2022-04-01' = if (!empty(mcpPrincipalId) && !skipRoleGrants) {
+  scope: keyVault
+  name: guid(keyVault.id, mcpPrincipalId, '4633458b-17de-408a-b874-0445c86b69e6')
+  properties: {
+    roleDefinitionId: resourceId('Microsoft.Authorization/roleDefinitions', '4633458b-17de-408a-b874-0445c86b69e6')
+    principalId: mcpPrincipalId
+    principalType: 'ServicePrincipal'
+    description: 'MCP UAMI: read per-field secrets for catalog-deployed MCP server Container Apps.'
   }
 }
 

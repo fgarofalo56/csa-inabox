@@ -24,8 +24,18 @@ function err(error: string, status: number) {
   return NextResponse.json({ ok: false, error }, { status });
 }
 
-/** Whitelist of persistable keys. */
-const KEYS: (keyof McpServerConfig)[] = ['name', 'endpoint', 'authMethod', 'authValue', 'description', 'enabled'];
+/** Whitelist of persistable string/bool keys. */
+const KEYS: (keyof McpServerConfig)[] = ['name', 'endpoint', 'authMethod', 'authValue', 'description', 'enabled', 'catalogId'];
+
+/** Copy a plain Record<string,string> (drops non-string members). */
+function strMap(v: any): Record<string, string> | undefined {
+  if (!v || typeof v !== 'object' || Array.isArray(v)) return undefined;
+  const out: Record<string, string> = {};
+  for (const [k, val] of Object.entries(v)) {
+    if (typeof val === 'string') out[k] = val;
+  }
+  return Object.keys(out).length ? out : undefined;
+}
 
 function sanitize(input: any): McpServerConfig {
   const out: McpServerConfig = {
@@ -47,6 +57,12 @@ function sanitize(input: any): McpServerConfig {
       }
     }
   }
+  // Catalog-deploy metadata (non-secret values + KV secret NAMES only — never
+  // secret values). Passed through verbatim when present.
+  const cv = strMap(input?.configValues);
+  if (cv) out.configValues = cv;
+  const sr = strMap(input?.secretRefs);
+  if (sr) out.secretRefs = sr;
   if (!out.name || !out.endpoint) {
     throw new Error('name and endpoint are required');
   }
@@ -118,6 +134,12 @@ export async function PUT(req: NextRequest) {
     const existing = await getMcpServer(tenantId, serverId);
     if (!existing) return err('not found', 404);
     const config = sanitize(body.config);
+    // Carry forward catalog-deploy metadata when the edit (e.g. the manual form)
+    // doesn't include it — so editing a deployed server never orphans its KV
+    // secret references or catalog linkage.
+    if (config.catalogId === undefined && existing.catalogId) config.catalogId = existing.catalogId;
+    if (config.configValues === undefined && existing.configValues) config.configValues = existing.configValues;
+    if (config.secretRefs === undefined && existing.secretRefs) config.secretRefs = existing.secretRefs;
     const doc = await saveMcpServer(tenantId, serverId, who, config);
     // Audit
     try {
