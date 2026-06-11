@@ -225,6 +225,7 @@ const useStyles = makeStyles({
     overflow: 'hidden',
   },
   chatHead: {
+    flexShrink: 0,
     display: 'flex',
     alignItems: 'center',
     gap: tokens.spacingHorizontalM,
@@ -314,15 +315,21 @@ const useStyles = makeStyles({
 
   // --- composer (pinned) -------------------------------------------------
   composer: {
+    flexShrink: 0,
     display: 'flex',
     alignItems: 'flex-end',
     gap: tokens.spacingHorizontalS,
     padding: tokens.spacingHorizontalL,
+    paddingBottom: tokens.spacingVerticalS,
     borderTop: `1px solid ${tokens.colorNeutralStroke2}`,
     backgroundColor: tokens.colorNeutralBackground1,
+    // Subtle upward elevation so the pinned bar reads as layered above the
+    // scrolling transcript.
+    boxShadow: '0 -2px 8px rgba(0,0,0,0.04)',
   },
   composerInput: { flex: 1, minWidth: 0 },
   composerHint: {
+    flexShrink: 0,
     color: tokens.colorNeutralForeground4,
     paddingLeft: tokens.spacingHorizontalL,
     paddingRight: tokens.spacingHorizontalL,
@@ -632,7 +639,7 @@ export function DataAgentPane() {
 
         {/* Honest infra-gate — full surface still renders. */}
         {gate && (
-          <MessageBar intent="warning" style={{ margin: tokens.spacingHorizontalL, marginBottom: 0 }}>
+          <MessageBar intent="warning" style={{ flexShrink: 0, margin: tokens.spacingHorizontalL, marginBottom: 0 }}>
             <MessageBarBody>
               <MessageBarTitle>Foundry Agent Service not configured</MessageBarTitle>
               {gate.hint || gate.error}
