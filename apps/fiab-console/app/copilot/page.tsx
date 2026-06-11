@@ -185,6 +185,19 @@ const useStyles = makeStyles({
     paddingLeft: tokens.spacingHorizontalL, paddingRight: tokens.spacingHorizontalL,
   },
   consoleTitle: { display: 'inline-flex', alignItems: 'center', gap: tokens.spacingHorizontalS },
+  // ── Residual inline-style extractions ─────────────────────────────────
+  brandIcon: { color: tokens.colorBrandForeground1 },
+  flushTitle: { margin: 0 },
+  // Hero glyph: on the brand gradient, so foreground-on-brand (was '#fff').
+  heroIconGlyph: { width: '38px', height: '38px', color: tokens.colorNeutralForegroundOnBrand },
+  // Outline CTA over the hero gradient — on-brand text (was inline color:'#fff').
+  // The translucent border has no token, so it stays inline (griffel rejects the
+  // borderColor 4-side shorthand anyway).
+  heroOutlineBtn: {
+    color: tokens.colorNeutralForegroundOnBrand,
+  },
+  gatedBar: { marginBottom: tokens.spacingVerticalXXL },
+  remediationNote: { marginTop: tokens.spacingVerticalS },
 });
 
 const EXAMPLES = [
@@ -266,8 +279,8 @@ export default function CopilotPage() {
       <div className={styles.consoleWrap}>
         <div className={styles.consoleBar}>
           <span className={styles.consoleTitle}>
-            <BotSparkle24Filled style={{ color: tokens.colorBrandForeground1 }} />
-            <Title3 style={{ margin: 0 }}>Loom Copilot</Title3>
+            <BotSparkle24Filled className={styles.brandIcon} />
+            <Title3 className={styles.flushTitle}>Loom Copilot</Title3>
           </span>
           <Button appearance="subtle" onClick={() => { setLaunched(false); loadSessions(); }}>
             Back to overview
@@ -286,7 +299,7 @@ export default function CopilotPage() {
         <div className={styles.heroGlow} aria-hidden />
         <div className={styles.heroRow}>
           <span className={styles.heroIcon} aria-hidden>
-            <BotSparkle24Filled style={{ width: 38, height: 38, color: '#fff' }} />
+            <BotSparkle24Filled className={styles.heroIconGlyph} />
           </span>
           <div className={styles.heroText}>
             <Title1 className={styles.heroTitle}>Loom Copilot</Title1>
@@ -328,7 +341,8 @@ export default function CopilotPage() {
               <Button
                 appearance="outline"
                 size="large"
-                style={{ color: '#fff', borderColor: 'rgba(255,255,255,0.4)' }}
+                className={styles.heroOutlineBtn}
+                style={{ borderColor: 'rgba(255,255,255,0.4)' }}
                 icon={<Open16Regular />}
                 as="a"
                 href="/items/cross-item-copilot/default"
@@ -342,7 +356,7 @@ export default function CopilotPage() {
 
       {/* Honest infra-gate when AOAI isn't reachable */}
       {!statusLoading && status && !ready && (
-        <MessageBar intent={status.aoai?.ok ? 'warning' : 'info'} style={{ marginBottom: tokens.spacingVerticalXXL }}>
+        <MessageBar intent={status.aoai?.ok ? 'warning' : 'info'} className={styles.gatedBar}>
           <MessageBarBody>
             <MessageBarTitle>Orchestrator not fully ready</MessageBarTitle>
             {status.aoai?.ok
@@ -350,7 +364,7 @@ export default function CopilotPage() {
               : `Azure OpenAI is not reachable — ${status.aoai?.error || 'unknown error'}. ` +
                 `The ${toolCount} registered tools can still be invoked directly inside the console.`}
             {status.aoai?.remediation && (
-              <div style={{ marginTop: tokens.spacingVerticalS }}>{status.aoai.remediation}</div>
+              <div className={styles.remediationNote}>{status.aoai.remediation}</div>
             )}
           </MessageBarBody>
           <MessageBarActions>

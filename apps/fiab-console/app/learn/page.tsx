@@ -21,7 +21,7 @@
 
 import * as React from 'react';
 import {
-  Text, Badge, Dropdown, Option, Button, makeStyles, tokens, mergeClasses,
+  Text, Badge, Dropdown, Option, Button, makeStyles, tokens,
 } from '@fluentui/react-components';
 import {
   BookOpen24Regular, Open16Regular, DocumentBulletList16Regular, ArrowDownload16Regular,
@@ -126,6 +126,13 @@ const useStyles = makeStyles({
 
   sectionHead: { display: 'flex', flexDirection: 'column', gap: '2px', marginBottom: tokens.spacingVerticalS },
   sectionBlurb: { color: tokens.colorNeutralForeground3, lineHeight: 1.5 },
+  // residual inline-style extractions
+  clearBtn: { marginTop: tokens.spacingVerticalS },
+  groupSection: { marginBottom: tokens.spacingVerticalXXL },
+  rowCenter: { display: 'flex', alignItems: 'center', gap: tokens.spacingHorizontalS },
+  listTitleRow: { display: 'flex', alignItems: 'center', gap: tokens.spacingHorizontalS, minWidth: 0 },
+  listChipIcon: { width: '22px', height: '22px' },
+  footer: { paddingTop: tokens.spacingVerticalL, color: tokens.colorNeutralForeground3 },
 
   empty: {
     display: 'flex',
@@ -161,7 +168,7 @@ const useStyles = makeStyles({
     transitionProperty: 'background-color, border-color',
     ':hover': { backgroundColor: tokens.colorNeutralBackground1Hover, border: `1px solid ${tokens.colorNeutralStroke1}` },
     ':focus-within': {
-      borderColor: tokens.colorBrandStroke1,
+      border: `1px solid ${tokens.colorBrandStroke1}`,
       boxShadow: `0 0 0 1px ${tokens.colorBrandStroke1}`,
     },
   },
@@ -400,7 +407,7 @@ export default function LearnPage(): React.ReactElement {
             <Text size={400} weight="semibold">No topics match your search</Text>
             <Text size={300}>Try a different keyword or clear the filters to see the full library.</Text>
             {hasFilters && (
-              <Button appearance="secondary" onClick={clearFilters} style={{ marginTop: tokens.spacingVerticalS }}>
+              <Button appearance="secondary" onClick={clearFilters} className={s.clearBtn}>
                 Clear filters
               </Button>
             )}
@@ -410,9 +417,9 @@ export default function LearnPage(): React.ReactElement {
 
       {/* Grouped sections (tile view) or a single flat list (list view) */}
       {filtered.length > 0 && view === 'tile' && grouped.map(({ sec, rows }) => (
-        <section key={sec} style={{ marginBottom: tokens.spacingVerticalXXL }}>
+        <section key={sec} className={s.groupSection}>
           <div className={s.sectionHead}>
-            <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+            <div className={s.rowCenter}>
               <Text size={500} weight="semibold">{sec}</Text>
               <Badge appearance="tint" color="brand">{rows.length}</Badge>
             </div>
@@ -437,10 +444,10 @@ export default function LearnPage(): React.ReactElement {
                     style={{ backgroundColor: `${visual.color}1f`, color: visual.color }}
                     aria-hidden
                   >
-                    <Icon style={{ width: 22, height: 22, color: visual.color }} />
+                    <Icon className={s.listChipIcon} style={{ color: visual.color }} />
                   </span>
                   <div className={s.listMain}>
-                    <div style={{ display: 'flex', alignItems: 'center', gap: 8, minWidth: 0 }}>
+                    <div className={s.listTitleRow}>
                       <Text className={s.listTitle} title={t.title}>{t.title}</Text>
                       {t.preview && <Badge size="small" appearance="tint" color="warning">Preview</Badge>}
                       {!t.hasLoomDoc && (
@@ -487,12 +494,11 @@ export default function LearnPage(): React.ReactElement {
       )}
 
       {/* Footer: link to the full docs site */}
-      <div style={{ paddingTop: tokens.spacingVerticalL, color: tokens.colorNeutralForeground3 }}>
+      <div className={s.footer}>
         <Text size={200}>
           Looking for the complete documentation?{' '}
           <a
-            className={mergeClasses(s.listPrimary)}
-            style={{ display: 'inline-flex' }}
+            className={s.listPrimary}
             href={loomDocUrl('fiab/index')}
             target="_blank"
             rel="noreferrer"
