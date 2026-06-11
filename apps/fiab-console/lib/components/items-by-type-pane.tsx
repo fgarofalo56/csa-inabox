@@ -12,9 +12,9 @@
 import { useEffect, useState, useMemo } from 'react';
 import Link from 'next/link';
 import {
-  Spinner, Input, Badge, makeStyles, tokens,
+  Spinner, Input, Badge, Caption1, makeStyles, tokens,
 } from '@fluentui/react-components';
-import { Add20Regular, Search20Regular } from '@fluentui/react-icons';
+import { Search20Regular } from '@fluentui/react-icons';
 import { NewItemDialog } from '@/lib/components/new-item-dialog';
 import { SignInRequired } from '@/lib/components/sign-in-required';
 import { findItemType, type WorkloadCategory } from '@/lib/catalog/fabric-item-types';
@@ -107,6 +107,11 @@ export function ItemsByTypePane({ types, emptyHint, defaultCategoryForNew }: Pro
           contentBefore={<Search20Regular />}
           placeholder="Filter items by name or description…"
           value={q} onChange={(_, d) => setQ(d.value)} />
+        {items !== null && items.length > 0 && (
+          <Caption1 style={{ color: tokens.colorNeutralForeground3 }}>
+            {filter ? `${visible.length} of ${items.length} items` : `${items.length} item${items.length === 1 ? '' : 's'}`}
+          </Caption1>
+        )}
         <NewItemDialog defaultCategory={defaultCategoryForNew as WorkloadCategory | undefined} />
       </div>
       {items === null && <Spinner label="Loading items…" />}
@@ -117,7 +122,7 @@ export function ItemsByTypePane({ types, emptyHint, defaultCategoryForNew }: Pro
           Cosmos and (when the underlying Azure resource is configured) executes against the real service.
         </div>
       )}
-      {items !== null && items.length > 0 && (
+      {items !== null && items.length > 0 && visible.length > 0 && (
         <div className={styles.grid}>
           {visible.map(it => {
             const meta = findItemType(it.itemType);
@@ -137,10 +142,10 @@ export function ItemsByTypePane({ types, emptyHint, defaultCategoryForNew }: Pro
               </Link>
             );
           })}
-          {visible.length === 0 && filter && (
-            <div className={styles.empty}>No items match "{q}".</div>
-          )}
         </div>
+      )}
+      {items !== null && items.length > 0 && visible.length === 0 && filter && (
+        <div className={styles.empty}>No items match &ldquo;{q}&rdquo;.</div>
       )}
     </>
   );
