@@ -8,7 +8,7 @@
  * Pure (no Azure SDK / network), so they run under the node vitest env.
  */
 import { describe, it, expect } from 'vitest';
-import { MCP_CATALOG, getCatalogEntry, validateConfigValues, type McpCatalogEntry } from '../catalog';
+import { MCP_DEPLOY_CATALOG as MCP_CATALOG, getCatalogEntry, validateConfigValues, type McpCatalogEntry } from '../catalog';
 
 describe('MCP_CATALOG integrity', () => {
   it('every entry has a real image, port, mcpPath and at least metadata', () => {

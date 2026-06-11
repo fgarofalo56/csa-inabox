@@ -34,12 +34,35 @@ const useStyles = makeStyles({
     rowGap: tokens.spacingVerticalL,
     marginTop: tokens.spacingVerticalM,
   },
-  card: { display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalS, padding: tokens.spacingHorizontalM },
-  cardDesc: { color: tokens.colorNeutralForeground2, flex: 1 },
+  card: {
+    display: 'flex',
+    flexDirection: 'column',
+    gap: tokens.spacingVerticalS,
+    padding: tokens.spacingHorizontalM,
+    transitionProperty: 'box-shadow, transform',
+    transitionDuration: tokens.durationNormal,
+    transitionTimingFunction: tokens.curveEasyEase,
+    ':hover': {
+      boxShadow: tokens.shadow16,
+      transform: 'translateY(-2px)',
+    },
+  },
+  cardDesc: { color: tokens.colorNeutralForeground2, flex: 1, minHeight: '40px' },
   cardFoot: { display: 'flex', alignItems: 'center', gap: tokens.spacingHorizontalS, marginTop: tokens.spacingVerticalS },
   spacer: { flex: 1 },
-  iconWrap: { color: tokens.colorBrandForeground1 },
+  iconWrap: { color: tokens.colorBrandForeground1, display: 'flex', alignItems: 'center' },
   form: { display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalM, marginTop: tokens.spacingVerticalM },
+  gateDetail: { marginTop: tokens.spacingVerticalXS, fontSize: tokens.fontSizeBase200 },
+  gateCommands: {
+    marginTop: tokens.spacingVerticalS,
+    fontSize: tokens.fontSizeBase100,
+    whiteSpace: 'pre-wrap',
+    backgroundColor: tokens.colorNeutralBackground3,
+    padding: tokens.spacingHorizontalS,
+    borderRadius: tokens.borderRadiusMedium,
+    fontFamily: tokens.fontFamilyMonospace,
+  },
+  previewWrap: { marginTop: tokens.spacingVerticalS },
 });
 
 const CATEGORY_GLYPH: Record<McpCatalogEntry['category'], ReactNode> = {
@@ -113,7 +136,7 @@ function DeployWizard({
           <DialogContent>
             <Body1>{entry.description}</Body1>
             {entry.preview && (
-              <div style={{ marginTop: tokens.spacingVerticalS }}>
+              <div className={s.previewWrap}>
                 <Badge appearance="tint" color="warning">Preview</Badge>
               </div>
             )}
@@ -168,10 +191,10 @@ function DeployWizard({
                   <MessageBarBody>
                     <MessageBarTitle>Infrastructure not wired ({gate.boundary})</MessageBarTitle>
                     {gate.message}
-                    {gate.missing && <div style={{ marginTop: 6, fontSize: 12 }}>Set/grant: <code>{gate.missing}</code></div>}
-                    {gate.deployModule && <div style={{ fontSize: 12 }}>Bicep: <code>{gate.deployModule}</code></div>}
+                    {gate.missing && <div className={s.gateDetail}>Set/grant: <code>{gate.missing}</code></div>}
+                    {gate.deployModule && <div className={s.gateDetail}>Bicep: <code>{gate.deployModule}</code></div>}
                     {gate.commands && gate.commands.length > 0 && (
-                      <pre style={{ marginTop: 8, fontSize: 11, whiteSpace: 'pre-wrap', background: tokens.colorNeutralBackground3, padding: 8, borderRadius: 4 }}>
+                      <pre className={s.gateCommands}>
                         {gate.commands.join('\n')}
                       </pre>
                     )}
