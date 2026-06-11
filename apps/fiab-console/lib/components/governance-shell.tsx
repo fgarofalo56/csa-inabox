@@ -13,7 +13,7 @@ import Link from 'next/link';
 import { usePathname } from 'next/navigation';
 import { ReactNode } from 'react';
 import { PageShell } from '@/lib/components/page-shell';
-import { makeStyles, tokens, Subtitle2, Title3, Badge } from '@fluentui/react-components';
+import { makeStyles, mergeClasses, tokens, Subtitle2, Title3, Badge } from '@fluentui/react-components';
 
 const SECTIONS = [
   { href: '/governance',                  label: 'Overview',           desc: 'Governance posture, coverage scores, recent activity.' },
@@ -31,26 +31,55 @@ const SECTIONS = [
 ];
 
 const useStyles = makeStyles({
-  layout: { display: 'grid', gridTemplateColumns: '280px 1fr', gap: 24, minHeight: '60vh' },
+  layout: {
+    display: 'grid',
+    gridTemplateColumns: '280px minmax(0, 1fr)',
+    gap: tokens.spacingHorizontalXXL,
+    minHeight: '60vh',
+  },
   sidebar: {
-    display: 'flex', flexDirection: 'column', gap: 2,
-    borderRight: `1px solid ${tokens.colorNeutralStroke2}`, paddingRight: 12,
-    position: 'sticky', top: 16, alignSelf: 'start',
-    maxHeight: 'calc(100vh - 32px)', overflowY: 'auto',
+    display: 'flex',
+    flexDirection: 'column',
+    gap: tokens.spacingVerticalXS,
+    borderRight: `1px solid ${tokens.colorNeutralStroke2}`,
+    paddingRight: tokens.spacingHorizontalM,
+    position: 'sticky',
+    top: tokens.spacingVerticalL,
+    alignSelf: 'start',
+    maxHeight: 'calc(100vh - 32px)',
+    overflowY: 'auto',
   },
   item: {
-    display: 'flex', flexDirection: 'column', gap: 2,
-    padding: '10px 12px', borderRadius: 6,
+    display: 'flex',
+    flexDirection: 'column',
+    gap: tokens.spacingVerticalXXS,
+    paddingTop: tokens.spacingVerticalS,
+    paddingBottom: tokens.spacingVerticalS,
+    paddingLeft: tokens.spacingHorizontalM,
+    paddingRight: tokens.spacingHorizontalM,
+    borderRadius: tokens.borderRadiusMedium,
     color: tokens.colorNeutralForeground1,
+    textDecoration: 'none',
     ':hover': { backgroundColor: tokens.colorNeutralBackground2Hover },
   },
   itemActive: {
     backgroundColor: tokens.colorBrandBackground2,
     color: tokens.colorBrandForeground1,
-    fontWeight: 600,
+    fontWeight: tokens.fontWeightSemibold,
   },
-  desc: { fontSize: 12, color: tokens.colorNeutralForeground3, fontWeight: 400 },
+  desc: {
+    fontSize: tokens.fontSizeBase200,
+    lineHeight: tokens.lineHeightBase200,
+    color: tokens.colorNeutralForeground3,
+    fontWeight: tokens.fontWeightRegular,
+  },
   body: { minWidth: 0 },
+  sectionHead: {
+    display: 'flex',
+    alignItems: 'baseline',
+    gap: tokens.spacingHorizontalM,
+    marginBottom: tokens.spacingVerticalL,
+  },
 });
 
 export function GovernanceShell({ sectionTitle, sectionBadge, children }: { sectionTitle?: string; sectionBadge?: string; children: ReactNode }) {
@@ -66,7 +95,7 @@ export function GovernanceShell({ sectionTitle, sectionBadge, children }: { sect
           {SECTIONS.map((sec) => {
             const active = pathname === sec.href || (sec.href !== '/governance' && pathname?.startsWith(sec.href));
             return (
-              <Link key={sec.href} href={sec.href} className={`${s.item} ${active ? s.itemActive : ''}`}>
+              <Link key={sec.href} href={sec.href} className={mergeClasses(s.item, active && s.itemActive)}>
                 <Subtitle2>{sec.label}</Subtitle2>
                 <span className={s.desc}>{sec.desc}</span>
               </Link>
@@ -75,7 +104,7 @@ export function GovernanceShell({ sectionTitle, sectionBadge, children }: { sect
         </nav>
         <div className={s.body}>
           {sectionTitle && (
-            <div style={{ display: 'flex', alignItems: 'baseline', gap: 12, marginBottom: 16 }}>
+            <div className={s.sectionHead}>
               <Title3 as="h2">{sectionTitle}</Title3>
               {sectionBadge && <Badge appearance="outline" color="brand">{sectionBadge}</Badge>}
             </div>
