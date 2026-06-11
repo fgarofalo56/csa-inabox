@@ -34,10 +34,18 @@ export async function GET(req: NextRequest) {
   const days = Math.max(1, Math.min(90, Number(req.nextUrl.searchParams.get('days') || '30') || 30));
   const timespan = `P${days}D`;
 
+  // NOTE: in workspace-based App Insights the AppEvents table is not
+  // materialized in the LAW until the first customEvent of any kind is
+  // ingested. On a fresh deployment a bare `AppEvents | ...` reference returns
+  // a SemanticError (HTTP 400) — which surfaced as the red "could not load"
+  // bar instead of the friendly no-events state. `union isfuzzy=true
+  // (AppEvents | ...)` makes a missing table contribute 0 rows instead of
+  // erroring (same pattern as queryActivityFeed's Synapse union), so the
+  // noEvents branch below fires correctly until real copilot.usage events flow.
+
   // Per-persona rollup (the headline breakdown).
   const kqlByPersona = `
-AppEvents
-| where Name == "copilot.usage"
+union isfuzzy=true (AppEvents | where Name == "copilot.usage")
 | extend pt = toint(Properties.prompt_tokens), ct = toint(Properties.completion_tokens)
 | extend persona = tostring(Properties.persona)
 | summarize prompt_tokens = sum(pt), completion_tokens = sum(ct), total_tokens = sum(pt) + sum(ct), calls = count() by persona
@@ -46,8 +54,7 @@ AppEvents
 
   // Per-model + day for the trend sparkline.
   const kqlByDay = `
-AppEvents
-| where Name == "copilot.usage"
+union isfuzzy=true (AppEvents | where Name == "copilot.usage")
 | extend pt = toint(Properties.prompt_tokens), ct = toint(Properties.completion_tokens)
 | extend persona = tostring(Properties.persona), model = tostring(Properties.model)
 | summarize prompt_tokens = sum(pt), completion_tokens = sum(ct), total_tokens = sum(pt) + sum(ct), calls = count() by day = format_datetime(bin(TimeGenerated, 1d), 'yyyy-MM-dd'), model, persona
@@ -56,8 +63,7 @@ AppEvents
 
   // Top users (hashed — no PII) by call volume.
   const kqlByUser = `
-AppEvents
-| where Name == "copilot.usage"
+union isfuzzy=true (AppEvents | where Name == "copilot.usage")
 | extend pt = toint(Properties.prompt_tokens), ct = toint(Properties.completion_tokens)
 | extend user_hash = tostring(Properties.user_oid_hash)
 | summarize prompt_tokens = sum(pt), completion_tokens = sum(ct), total_tokens = sum(pt) + sum(ct), calls = count() by user_hash
@@ -131,6 +137,17 @@ AppEvents
             'so the orchestrator can emit copilot.usage events. Counts appear after the next real Copilot call.',
         },
       });
+    }
+    // Belt-and-suspenders: a workspace that has never ingested a customEvent
+    // has no AppEvents table yet, so even the isfuzzy union can surface a
+    // resolve error on some LAW engine versions. Treat a missing-table /
+    // semantic resolve failure as the friendly no-events state rather than a
+    // hard error. Genuine permission (403) / throttling errors still bubble up.
+    const msg = (e as Error)?.message || '';
+    const isMissingTable =
+      /Failed to resolve|could not be found|SemanticError|does not refer to any known|Unknown (?:function|table)/i.test(msg);
+    if (isMissingTable) {
+      return NextResponse.json({ ok: true, data: null, noEvents: true });
     }
     return NextResponse.json({ ok: false, error: (e as Error).message }, { status: 500 });
   }

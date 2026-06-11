@@ -10,6 +10,9 @@ param location string
 @allowed(['Commercial', 'GCC', 'GCC-High', 'IL5'])
 param boundary string
 
+@description('Allow App Insights telemetry ingestion over the public endpoint. Keep true (default) unless an Azure Monitor Private Link Scope is separately provisioned to carry ingestion privately — Disabling it without an AMPLS silently drops all custom events (copilot.usage etc.) and breaks the /admin Copilot usage panel. Forwarded to monitoring.bicep.')
+param monitorPublicIngestionEnabled bool = true
+
 @description('AZURE_CLOUD two-value discriminator. When non-empty, overrides the AZURE_CLOUD env var regardless of boundary. Commercial / GCC deployments pass AzureCloud; GCC-High / IL5 deployments pass AzureUSGovernment. When empty (default), AZURE_CLOUD is derived from boundary (GCC-High|IL5 → AzureUSGovernment; otherwise AzureCloud).')
 @allowed(['', 'AzureCloud', 'AzureUSGovernment'])
 param loomAzureCloud string = ''
@@ -966,6 +969,7 @@ module monitoring 'monitoring.bicep' = {
     defenderForAIEnabled: defenderForAIEnabled
     complianceTags: complianceTags
     skipRoleGrants: skipRoleGrants
+    publicIngestionEnabled: monitorPublicIngestionEnabled
     // /monitor Logs (KQL) tab — Console UAMI gets Log Analytics Reader on the LAW.
     consolePrincipalId: identity.outputs.uamiConsolePrincipalId
   }
