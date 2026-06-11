@@ -25,6 +25,7 @@ import {
 import { Add20Regular, Edit20Regular, Delete20Regular, ArrowClockwise20Regular, Checkmark20Regular, Sparkle20Regular, Search20Regular, PlugDisconnected24Regular } from '@fluentui/react-icons';
 import { Section } from '@/lib/components/ui/section';
 import { McpCatalogBrowser } from '@/lib/components/admin/mcp-catalog-wizard';
+import { McpCatalogPanel } from '@/lib/components/admin/mcp-catalog-panel';
 import type { McpServerConfig, McpServerConfigDoc } from '@/lib/types/mcp-config';
 
 interface BuiltinStatus {
@@ -580,6 +581,8 @@ export function McpServersPanel() {
         onDeployed={(server) => setServers((prev) => (prev.some((p) => p.serverId === server.serverId) ? prev : [...prev, server]))}
       />
 
+      <McpCatalogPanel onChanged={() => void load()} />
+
       <Divider />
       <div className={s.sectionHead}>
         <Text weight="semibold">Registered servers</Text>
@@ -600,6 +603,7 @@ export function McpServersPanel() {
           />
         )}
       </div>
+
       {servers.length === 0 ? (
         <div className={s.emptyState}>
           <PlugDisconnected24Regular className={s.emptyIcon} />

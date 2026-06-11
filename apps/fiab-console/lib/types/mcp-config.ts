@@ -40,6 +40,38 @@ export interface McpServerConfig {
    * keyed by configSchema key. Resolved at the container runtime via secretRef.
    */
   secretRefs?: Record<string, string>;
+  /**
+   * Origin of this server. 'external' (default) = an endpoint a tenant admin
+   * registered manually. 'catalog' = a vetted server Loom deployed as an Azure
+   * Container App (see McpDeployment below).
+   */
+  source?: 'external' | 'catalog';
+  /** Deployment metadata — present only when source === 'catalog'. */
+  deployment?: McpDeployment;
+}
+
+/**
+ * Provisioning metadata for a catalog-deployed MCP server (an Azure Container
+ * App). Persisted alongside the connection so the admin UI can show live state
+ * and offer a teardown action.
+ */
+export interface McpDeployment {
+  /** Vetted catalog id the server was deployed from (mcp-catalog.ts). */
+  catalogId: string;
+  /** Azure Container App resource name. */
+  containerAppName: string;
+  /** Resolved container image reference. */
+  image: string;
+  /** Last-observed ARM provisioningState (Succeeded | InProgress | Failed | …). */
+  provisioningState?: string;
+  /** Last-observed runningStatus of the latest revision. */
+  runningStatus?: string;
+  /** Internal ingress FQDN of the deployed app. */
+  fqdn?: string;
+  /** ISO timestamp of the deploy. */
+  deployedAt: string;
+  /** Who triggered the deploy (upn/email/oid). */
+  deployedBy: string;
 }
 
 export interface McpServerConfigDoc extends McpServerConfig {
