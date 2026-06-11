@@ -337,7 +337,7 @@ export function forecastPeriods(sheet: PlanningSheet, scenarioId: string, horizo
 
 export interface GanttBar {
   title: string;
-  status: PlanTask['status'];
+  status: ('todo' | 'doing' | 'done');
   owner: string;
   /** Left offset as a fraction [0,1] of the project window. */
   startPct: number;
@@ -351,7 +351,7 @@ export interface GanttBar {
   overdue: boolean;
 }
 
-interface GanttTask { title: string; owner: string; due: string; status: PlanTask['status']; dependsOn?: string }
+interface GanttTask { title: string; owner: string; due: string; status: ('todo' | 'doing' | 'done'); dependsOn?: string }
 
 /**
  * Lay out plan tasks as a Gantt: each bar runs from its computed start (the

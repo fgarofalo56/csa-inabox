@@ -1513,7 +1513,7 @@ export function GraphModelEditor({ item, id }: { item: FabricItemType; id: strin
     const name = newName.trim();
     if (!/^[A-Za-z_][\w]*$/.test(name)) { setDlgErr('Entity name must start with a letter/underscore (letters, digits, _).'); return; }
     if (arr<{ name: string }>(state.nodes).some((n) => n.name === name)) { setDlgErr(`Entity "${name}" already exists.`); return; }
-    persistIfExisting({ ...state, nodes: [...arr(state.nodes), { name, properties: parseProps(propsText) }] });
+    persistIfExisting({ ...state, nodes: [...arr<GraphDecl>(state.nodes), { name, properties: parseProps(propsText) }] });
     setNodeDlgOpen(false);
   }, [newName, propsText, state, id, setState, save]);
 
@@ -1526,7 +1526,7 @@ export function GraphModelEditor({ item, id }: { item: FabricItemType; id: strin
     // queries can reference the connected node types.
     if (edgeSrc.trim()) props.unshift({ name: 'srcType', type: 'string' });
     if (edgeDst.trim()) props.unshift({ name: 'dstType', type: 'string' });
-    persistIfExisting({ ...state, edges: [...arr(state.edges), { name, properties: props }] });
+    persistIfExisting({ ...state, edges: [...arr<GraphDecl>(state.edges), { name, properties: props }] });
     setEdgeDlgOpen(false);
   }, [newName, propsText, edgeSrc, edgeDst, state, id, setState, save]);
 
@@ -2608,7 +2608,7 @@ function PlanIntelligencePanel({
               value={String(horizon)} selectedOptions={[String(horizon)]} style={{ minWidth: 80 }}
               onOptionSelect={(_, d) => { const h = Number(d.optionValue); if (Number.isFinite(h)) setState((p) => ({ ...p, forecastHorizon: h })); }}
             >
-              {[0, 1, 2, 3, 4, 6].map((h) => <Option key={h} value={String(h)}>{h}</Option>)}
+              {[0, 1, 2, 3, 4, 6].map((h) => <Option key={h} value={String(h)}>{String(h)}</Option>)}
             </Dropdown>
           </Field>
         </div>
