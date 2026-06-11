@@ -5,6 +5,11 @@ import {
   Body1, Title3, Caption1, MessageBar, MessageBarBody, MessageBarTitle,
   Input, makeStyles, tokens,
 } from '@fluentui/react-components';
+import {
+  Grid24Regular, DatabasePerson24Regular, Flash24Regular, Database24Regular,
+  Server24Regular, Search24Regular, Cloud24Regular, BoxMultiple24Regular,
+  BrainCircuit24Regular,
+} from '@fluentui/react-icons';
 import { AdminShell } from '@/lib/components/admin-shell';
 import { SignInRequired } from '@/lib/components/sign-in-required';
 import { ServiceCard } from '@/lib/components/admin-scaling/service-card';
@@ -161,6 +166,7 @@ export default function ScalingPage() {
         {/* Fabric / Power BI capacities */}
         <ServiceCard
           title="Fabric / Power BI Capacity"
+          accent="#f2c811" icon={<Grid24Regular />}
           subtitle="F-SKU (F2 → F2048) for Fabric; P-SKU for Power BI Premium."
           loading={!capacityData}
           gateMessage={capacityData && !capacityData.ok ? {
@@ -220,6 +226,7 @@ export default function ScalingPage() {
         {/* Synapse DWU */}
         <ServiceCard
           title="Synapse Dedicated SQL Pool (DWU)"
+          accent="#7d6cff" icon={<DatabasePerson24Regular />}
           subtitle="DW100c → DW30000c — scale-out via ARM PATCH on sqlPools/{n}."
           loading={!dwuData}
           gateMessage={dwuData && !dwuData.ok ? { title: 'Synapse not configured', body: `${dwuData.error}${dwuData.hint ? ' — ' + dwuData.hint : ''}` } : undefined}
@@ -265,6 +272,7 @@ export default function ScalingPage() {
         {/* ADX cluster */}
         <ServiceCard
           title="Azure Data Explorer (ADX)"
+          accent="#1f6feb" icon={<Flash24Regular />}
           subtitle="vCore tier (Dev / E2 / E4 / E8 / E16 / E64) + capacity."
           loading={!adxData}
           gateMessage={adxData && !adxData.ok ? { title: 'ADX not configured', body: `${adxData.error}${adxData.hint ? ' — ' + adxData.hint : ''}` } : undefined}
@@ -291,6 +299,7 @@ export default function ScalingPage() {
         {/* Databricks SQL Warehouse */}
         <ServiceCard
           title="Databricks SQL Warehouse"
+          accent="#ff3621" icon={<Database24Regular />}
           subtitle="cluster_size (2X-Small → 4X-Large) via /api/2.0/sql/warehouses/{id}/edit."
           loading={!whData}
           gateMessage={whData && !whData.ok ? { title: 'Databricks not configured', body: whData.error } : undefined}
@@ -332,6 +341,7 @@ export default function ScalingPage() {
         {/* Databricks Cluster */}
         <ServiceCard
           title="Databricks Cluster"
+          accent="#ff6f4d" icon={<Server24Regular />}
           subtitle="node_type_id + num_workers via /api/2.0/clusters/edit."
           loading={!clusterData}
           gateMessage={clusterData && !clusterData.ok ? { title: 'Databricks not configured', body: clusterData.error } : undefined}
@@ -394,6 +404,7 @@ export default function ScalingPage() {
         {/* AI Search */}
         <ServiceCard
           title="Azure AI Search"
+          accent="#0078d4" icon={<Search24Regular />}
           subtitle="SKU (S0/S1/S2/S3/S3HD) + replicas + partitions."
           loading={!searchData}
           gateMessage={searchData && !searchData.ok ? { title: 'AI Search not configured', body: `${searchData.error}${searchData.hint ? ' — ' + searchData.hint : ''}` } : undefined}
@@ -437,6 +448,7 @@ export default function ScalingPage() {
         {/* APIM */}
         <ServiceCard
           title="API Management"
+          accent="#22a06b" icon={<Cloud24Regular />}
           subtitle="SKU (Developer / Basic / Standard / Premium / *V2) + capacity."
           loading={!apimData}
           gateMessage={apimData && !apimData.ok ? { title: 'APIM not configured', body: `${apimData.error}${apimData.hint ? ' — ' + apimData.hint : ''}` } : undefined}
@@ -470,6 +482,7 @@ export default function ScalingPage() {
         {/* Cosmos */}
         <ServiceCard
           title="Cosmos DB containers"
+          accent="#3b82f6" icon={<Database24Regular />}
           subtitle="Per-container RU/s (manual) or autoscale max RU/s."
           loading={!cosmosData}
           gateMessage={cosmosData && !cosmosData.ok ? { title: 'Cosmos not configured', body: `${cosmosData.error}${cosmosData.hint ? ' — ' + cosmosData.hint : ''}` } : undefined}
@@ -526,6 +539,7 @@ export default function ScalingPage() {
         {/* Container Apps */}
         <ServiceCard
           title="Container Apps (Loom services)"
+          accent="#7c3aed" icon={<BoxMultiple24Regular />}
           subtitle="workload profile (Consumption / D-/E-series) + replicas."
           loading={!acaData}
           gateMessage={acaData && !acaData.ok ? { title: 'Container Apps not configured', body: `${acaData.error}${acaData.hint ? ' — ' + acaData.hint : ''}` } : undefined}
@@ -641,6 +655,7 @@ export default function ScalingPage() {
         {/* Foundry compute */}
         <ServiceCard
           title="AI Foundry — AML compute"
+          accent="#e066b0" icon={<BrainCircuit24Regular />}
           subtitle="vmSize + min/max nodes for AmlCompute targets."
           loading={!foundryData}
           gateMessage={foundryData && !foundryData.ok ? { title: 'AI Foundry not configured', body: `${foundryData.error}${foundryData.hint ? ' — ' + foundryData.hint : ''}` } : undefined}

@@ -99,3 +99,55 @@ test('scale BFF GET endpoints respond with ok or honest 503', async ({ page }) =
     expect(acceptable, `${url} must return 200 ok or 503 with hint, got ${r.status()}`).toBeTruthy();
   }
 });
+
+// ── Admin → Capacity & compute → "Scale & manage" (ScaleManagePanel) ──────────
+// The Web-3.0 compute panel on /admin/capacity wired to /api/admin/scaling/compute.
+// Each Azure-native compute card (ADX SKU, Synapse pause/resume, SHIR node count)
+// must expose a real control OR — when nothing is provisioned — an honest gate.
+
+test('capacity page renders the Scale & manage panel with controls or an honest gate', async ({ page }) => {
+  const { consoleErrors, networkErrors } = await captureFailures(page, async () => {
+    await page.goto(`${BASE}/admin/capacity`, { waitUntil: 'domcontentloaded' });
+    // The "Scale & manage" Section heading must render.
+    await expect(page.getByText('Scale & manage', { exact: false })).toBeVisible({ timeout: 15_000 });
+
+    // Either compute cards expose a control (Select / Apply SKU / Resume / Set nodes),
+    // or the panel shows the honest "No Azure-native scalable compute" MessageBar.
+    const hasControl = await page.locator(
+      'button:has-text("Apply SKU"), button:has-text("Resume"), button:has-text("Set nodes"), button:has-text("Stop"), [role="combobox"]',
+    ).count() > 0;
+    const hasGate = await page.getByText(/No Azure-native scalable compute|Console UAMI needs Contributor/i).count() > 0;
+    const ok = hasControl || hasGate;
+
+    recordVerdict({
+      surface: 'page:/admin/capacity',
+      feature: 'scale-manage-panel',
+      verdict: ok ? 'B' : 'D',
+      status: ok ? 'pass' : 'vaporware',
+      notes: hasControl ? 'Scale control present' : (hasGate ? 'Honest gate MessageBar present' : 'No control + no gate (vaporware)'),
+    });
+    expect(ok, 'Scale & manage must expose a control OR an honest gate message').toBeTruthy();
+  });
+  recordVerdict({
+    surface: 'page:/admin/capacity',
+    feature: 'overall',
+    verdict: consoleErrors.length || networkErrors.length ? 'C' : 'B',
+    status: consoleErrors.length || networkErrors.length ? 'fail' : 'pass',
+    consoleErrors,
+    networkErrors,
+  });
+});
+
+test('compute scaling BFF GET responds with ok or honest gate', async ({ page }) => {
+  const r = await page.request.get(`${BASE}/api/admin/scaling/compute`);
+  const j = await r.json().catch(() => ({}));
+  const acceptable = r.ok() && (j?.ok === true);
+  recordVerdict({
+    surface: 'api:/admin/scaling/compute',
+    feature: 'GET',
+    verdict: acceptable ? 'B' : 'D',
+    status: acceptable ? 'pass' : 'fail',
+    notes: `HTTP ${r.status()}; ok=${j?.ok}; resources=${Array.isArray(j?.resources) ? j.resources.length : 'n/a'}`,
+  });
+  expect(acceptable, `/api/admin/scaling/compute must return 200 ok:true, got ${r.status()}`).toBeTruthy();
+});
