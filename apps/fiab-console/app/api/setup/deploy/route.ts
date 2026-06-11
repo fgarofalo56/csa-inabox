@@ -38,12 +38,20 @@ interface SetupConfig {
   subscriptionName?: string;
   location?: string;
   vanityDomain?: string;
+  /** Multi-sub: parallel arrays the bicep `[for]` loop consumes. */
+  dlzSubscriptionIds?: string[];
+  dlzDomainNames?: string[];
 }
 
 const GUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 function shouldDispatchWorkflow(): boolean {
   return !!process.env.LOOM_GITHUB_ACTIONS_TOKEN;
+}
+
+/** The deployed Setup Orchestrator base URL, or '' when it isn't wired. */
+function orchestratorUrl(): string {
+  return (process.env.LOOM_SETUP_ORCHESTRATOR_URL || '').trim().replace(/\/+$/, '');
 }
 
 export async function POST(req: NextRequest) {
@@ -94,6 +102,70 @@ export async function POST(req: NextRequest) {
 
   const isGov = body.boundary === 'GCC-High' || body.boundary === 'IL5';
   const region = body.location || (isGov ? 'usgovvirginia' : 'eastus2');
+
+  // Validate multi-sub spoke ids when present (parallel arrays the bicep loop reads).
+  if (Array.isArray(body.dlzSubscriptionIds) && body.dlzSubscriptionIds.length) {
+    const bad = body.dlzSubscriptionIds.filter((id) => !GUID_RE.test(id));
+    if (bad.length) {
+      return NextResponse.json(
+        { ok: false, error: `dlzSubscriptionIds contains invalid GUID(s): ${bad.join(', ')}` },
+        { status: 400 },
+      );
+    }
+  }
+
+  // ── Tier 1: the deployed Setup Orchestrator runs the real deployment ───────
+  // When LOOM_SETUP_ORCHESTRATOR_URL is wired (the orchestrator Container App is
+  // deployed by setup-orchestrator.bicep), POST the captured config to it. The
+  // orchestrator runs `az deployment sub create` under its own identity (granted
+  // Contributor on each target subscription by setup-orchestrator-rbac.bicep) and
+  // returns a deploymentId to poll via /api/setup/deploy-status. Authenticated
+  // with the shared internal token over the CAE-internal ingress (no public hop).
+  const orchUrl = orchestratorUrl();
+  if (orchUrl) {
+    try {
+      const headers: Record<string, string> = { 'content-type': 'application/json' };
+      const internalToken = (process.env.LOOM_INTERNAL_TOKEN || '').trim();
+      if (internalToken) headers.authorization = `Bearer ${internalToken}`;
+      const orchRes = await fetch(`${orchUrl}/deploy`, {
+        method: 'POST',
+        headers,
+        body: JSON.stringify({ ...body, region }),
+      });
+      const oj: any = await orchRes.json().catch(() => ({}));
+      if (orchRes.ok && (oj.deploymentId || oj.id)) {
+        return NextResponse.json(
+          {
+            ok: true,
+            deploymentMode: 'orchestrator',
+            deploymentId: oj.deploymentId || oj.id,
+            statusUrl: `/api/setup/deploy-status?id=${encodeURIComponent(oj.deploymentId || oj.id)}`,
+            message: 'Deployment accepted by the Setup Orchestrator.',
+          },
+          { status: 202 },
+        );
+      }
+      if (orchRes.status === 401 || orchRes.status === 403) {
+        // The signed-in user / orchestrator identity lacks rights — surface honestly.
+        return NextResponse.json(
+          {
+            ok: false,
+            error: 'forbidden',
+            requiredRole: 'Contributor',
+            remediation:
+              (oj.error || oj.message || 'The Setup Orchestrator returned 403.') +
+              ' Grant the orchestrator identity Contributor on each target subscription ' +
+              '(setup-orchestrator-rbac.bicep), or confirm your account has rights to deploy.',
+          },
+          { status: 403 },
+        );
+      }
+      console.error(`[setup/deploy] orchestrator returned ${orchRes.status}; falling back.`);
+    } catch (e) {
+      console.error('[setup/deploy] orchestrator call failed; falling back:', (e as Error).message);
+    }
+  }
+
   // Map the chosen boundary to its real .bicepparam (verified to exist in
   // platform/fiab/bicep/params/). No invented file names.
   const paramFileByBoundary: Record<string, string> = {
@@ -103,8 +175,6 @@ export async function POST(req: NextRequest) {
     IL5: 'platform/fiab/bicep/params/il5.bicepparam',
   };
   if (shouldDispatchWorkflow()) {
-    const isGov = body.boundary === 'GCC-High' || body.boundary === 'IL5';
-    const region = body.location || (isGov ? 'usgovvirginia' : 'eastus2');
     const workflowByBoundary: Record<string, string> = {
       Commercial: 'deploy-fiab-commercial.yml',
       GCC: 'deploy-fiab-gcc.yml',
@@ -162,6 +232,16 @@ export async function POST(req: NextRequest) {
 
   const paramFile = paramFileByBoundary[body.boundary!] || 'platform/fiab/bicep/params/commercial-full.bicepparam';
 
+  // Multi-sub emits parallel arrays; single-sub emits the one domain.
+  const isMulti = body.mode === 'multi-sub' && Array.isArray(body.dlzSubscriptionIds) && body.dlzSubscriptionIds.length > 0;
+  const domainNames = isMulti
+    ? (body.dlzDomainNames && body.dlzDomainNames.length ? body.dlzDomainNames : [body.domainName!])
+    : [body.domainName!];
+  const dlzParamLine = isMulti
+    ? `  -p dlzSubscriptionIds="[${body.dlzSubscriptionIds!.map((s) => `'${s}'`).join(',')}]" ` +
+      `dlzDomainNames="[${domainNames.map((d) => `'${d}'`).join(',')}]" capacitySku=${body.capacitySku}`
+    : `  -p dlzDomainNames="['${body.domainName}']" capacitySku=${body.capacitySku}`;
+
   return NextResponse.json(
     {
       ok: false,
@@ -170,7 +250,7 @@ export async function POST(req: NextRequest) {
         : 'Setup Orchestrator service is not deployed in this environment',
       remediation: {
         message:
-          'The Setup Wizard captured a complete, valid deployment config but the browser-driven Setup Orchestrator is not deployed here yet. Copy the command below — it is pre-filled with your selected subscription, region, and boundary — and run it locally:',
+          'The Setup Wizard captured a complete, valid deployment config but the browser-driven Setup Orchestrator is not deployed here yet (set LOOM_SETUP_ORCHESTRATOR_URL by deploying setup-orchestrator.bicep). Copy the command below — it is pre-filled with your selected subscription(s), region, and boundary — and run it locally:',
         commands: [
           `az login${isGov ? ' --tenant <your-gov-tenant>' : ''}`,
           `az account set --subscription ${body.subscriptionId}`,
@@ -181,7 +261,7 @@ export async function POST(req: NextRequest) {
           `  -f platform/fiab/bicep/main.bicep \\`,
           `  -p ${paramFile} \\`,
           `  -p boundary=${body.boundary} deploymentMode=${body.mode} \\`,
-          `  -p dlzDomainNames="['${body.domainName}']" capacitySku=${body.capacitySku}`,
+          dlzParamLine,
           `bash scripts/csa-loom/post-deploy-bootstrap.sh`,
         ],
         learnMoreUrl: '/learn?topic=setup-wizard',

@@ -80,3 +80,28 @@ maps boundary → param file from this verified set (no invented names).
 - Live minted-session browser walk: not run in the worktree (no provisioned
   Loom + ARM creds here); to be attached on the live environment per
   `no-vaporware.md`.
+
+## Update (audit-t142) — sub defaulting, full regions, visual review, deploy orchestrator
+
+| # | Added capability | Loom coverage | Backend |
+|---|---|---|---|
+| a | **Single-sub auto-uses the Admin Plane subscription** (no dropdown); multi-sub multi-selects spoke subs | ✅ | `GET /api/setup/config` (LOOM_SUBSCRIPTION_ID/LOOM_LOCATION), `GET /api/setup/subscriptions` |
+| b | **Full per-boundary region list**, live ARM `subscriptions/{id}/locations` for the chosen sub with authoritative static fallback (Commercial/GCC=Public, GCC-High/IL5=US Gov, DoD=US DoD) | ✅ | `GET /api/setup/regions`, `lib/azure/azure-regions.ts` |
+| c | **Visual architecture diagram** of the planned deployment (reuses the T132 React Flow canvas), shown alongside the generated Bicep on Review | ✅ | `lib/components/setup/deployment-diagram.tsx` |
+| d | **Deploy-by-default Setup Orchestrator** runs the real multi-sub `az deployment sub create`; honest fallbacks to GitHub dispatch then copy-paste `az` | ✅ (image-in-ACR gate, like every Loom app) | `setup-orchestrator.bicep`, `POST /api/setup/deploy`, `GET /api/setup/deploy-status` |
+| d2 | **Multi-sub deploy auth** — orchestrator identity (Console UAMI) gets Contributor at the hub sub AND each spoke sub | ✅ | `setup-orchestrator-rbac.bicep` (subscription-scoped, looped per `dlzSubscriptionIds`) |
+| e | **Wire existing DLZ(s)** discovered via Azure Resource Graph, wired into the Admin Plane with no re-deploy | ✅ | `GET /api/setup/existing-dlzs`, `POST /api/setup/wire-existing` |
+
+Honest gate: the orchestrator Container App defaults OFF (`setupOrchestratorEnabled`)
+until the `loom-setup-orchestrator` image is in ACR — same gate every Loom app
+carries. On AKS boundaries it deploys via the cluster GitOps path. The deploy BFF
+tier order is orchestrator → GitHub workflow-dispatch → copy-paste `az`, so the
+wizard's Deploy is always functional, never a dead button (no-vaporware.md). The
+review diagram only renders Azure-native services the deployment actually
+provisions; works with `LOOM_DEFAULT_FABRIC_WORKSPACE` unset (no-fabric-dependency.md).
+
+Verification (audit-t142): `tsc --noEmit` clean on every touched file;
+`az bicep build` clean for both new modules; wiring into `main.bicep` adds zero
+new compile errors (the base branch carries a pre-existing `mcpStorage` /
+`mcpPrincipalId` duplicate-declaration breakage, out of scope here).
+
