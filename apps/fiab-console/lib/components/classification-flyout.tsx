@@ -35,13 +35,25 @@ interface TaxonomyEntry { name: string; sensitivity?: string; color?: string; de
 
 const useStyles = makeStyles({
   list: { display: 'flex', flexDirection: 'column', gap: 12 },
+  loading: { display: 'flex', justifyContent: 'center', padding: 'var(--loom-space-4, 16px)' },
+  applied: {
+    display: 'flex', flexDirection: 'column', gap: 6,
+    padding: 'var(--loom-space-3, 12px)',
+    border: `1px solid ${tokens.colorNeutralStroke2}`,
+    borderRadius: 'var(--loom-radius-md, 6px)',
+    backgroundColor: tokens.colorNeutralBackground2,
+  },
+  appliedHead: { display: 'flex', alignItems: 'center', gap: 6 },
   chips: { display: 'flex', flexWrap: 'wrap', gap: 6 },
   swatch: {
     display: 'inline-block', width: 10, height: 10, borderRadius: 3, flexShrink: 0,
     border: `1px solid ${tokens.colorNeutralStroke2}`,
   },
+  optionRow: { display: 'flex', flexDirection: 'column', gap: 2, minWidth: 0 },
+  optionName: { display: 'flex', alignItems: 'center', gap: 8 },
+  optionDesc: { fontSize: 12, color: tokens.colorNeutralForeground3 },
   actions: { display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' },
-  link: { display: 'inline-flex', alignItems: 'center', gap: 4, fontWeight: 600 },
+  link: { display: 'inline-flex', alignItems: 'center', gap: 4, fontWeight: 600, verticalAlign: 'middle' },
 });
 
 export function ClassificationPane({ type, id }: Props) {
@@ -114,7 +126,13 @@ export function ClassificationPane({ type, id }: Props) {
     }
   };
 
-  if (loading) return <Spinner size="tiny" label="Loading classifications…" />;
+  if (loading) {
+    return (
+      <div className={styles.loading}>
+        <Spinner size="tiny" label="Loading classifications…" />
+      </div>
+    );
+  }
 
   const tax = taxonomy || [];
   const colorOf = (name: string) => tax.find((t) => t.name === name)?.color || '#8a8a8a';
@@ -125,8 +143,11 @@ export function ClassificationPane({ type, id }: Props) {
       {ok && <MessageBar intent="success"><MessageBarBody>{ok}</MessageBarBody></MessageBar>}
 
       {current.length > 0 && (
-        <div>
-          <Caption1 block style={{ marginBottom: 4 }}>Applied classifications</Caption1>
+        <div className={styles.applied}>
+          <div className={styles.appliedHead}>
+            <Caption1>Applied classifications</Caption1>
+            <Badge size="small" appearance="tint" color="informative">{current.length}</Badge>
+          </div>
           <div className={styles.chips}>
             {current.map((c) => (
               <Badge key={c} appearance="tint" color="informative">
@@ -152,7 +173,11 @@ export function ClassificationPane({ type, id }: Props) {
       ) : (
         <Field
           label="Classifications"
-          hint="Pick one or more from the tenant label taxonomy (manage in Governance → Classifications)."
+          hint={
+            selected.length > 0
+              ? `${selected.length} selected · pick from the tenant label taxonomy (manage in Governance → Classifications).`
+              : 'Pick one or more from the tenant label taxonomy (manage in Governance → Classifications).'
+          }
         >
           <Dropdown
             multiselect
@@ -162,10 +187,15 @@ export function ClassificationPane({ type, id }: Props) {
             onOptionSelect={(_, d) => setSelected(d.selectedOptions || [])}
           >
             {tax.map((t) => (
-              <Option key={t.name} value={t.name} text={t.name}>
-                <span className={styles.swatch} style={{ backgroundColor: t.color || '#8a8a8a', marginRight: 8 }} aria-hidden />
-                {t.name}
-                {t.sensitivity ? ` · ${t.sensitivity}` : ''}
+              <Option key={t.name} value={t.name} text={t.name} title={t.description || undefined}>
+                <div className={styles.optionRow}>
+                  <span className={styles.optionName}>
+                    <span className={styles.swatch} style={{ backgroundColor: t.color || '#8a8a8a' }} aria-hidden />
+                    {t.name}
+                    {t.sensitivity ? ` · ${t.sensitivity}` : ''}
+                  </span>
+                  {t.description && <span className={styles.optionDesc}>{t.description}</span>}
+                </div>
               </Option>
             ))}
           </Dropdown>
