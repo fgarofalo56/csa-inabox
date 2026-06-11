@@ -108,4 +108,30 @@ describe('computeDspmAiPosture', () => {
     // Protection state is unknown without Graph → false.
     expect(r.agents[0].protected).toBe(false);
   });
+
+  it('scans operations-agent and prompt-flow agents, not only data-agent', async () => {
+    // Real Purview DSPM-for-AI inventories all "apps and agents", not just one
+    // item type. A prompt-flow grounded on a labeled source must surface here;
+    // an operations-agent with no grounded sources surfaces with zero sources.
+    ITEMS_RESOURCES.push(
+      {
+        id: 'pf1', displayName: 'Forecast flow', itemType: 'prompt-flow', workspaceId: 'ws1',
+        state: { sources: [{ id: 'lh1', name: 'Sales LH', type: 'lakehouse' }] },
+      },
+      {
+        id: 'oa1', displayName: 'Ops watcher', itemType: 'operations-agent', workspaceId: 'ws1',
+        state: {},
+      },
+    );
+    const r = await computeDspmAiPosture('tenant');
+    expect(r.summary.agentCount).toBe(3);
+    const ids = r.agents.map((a) => a.agentId).sort();
+    expect(ids).toEqual(['da1', 'oa1', 'pf1']);
+    const pf = r.agents.find((a) => a.agentId === 'pf1')!;
+    expect(pf.itemType).toBe('prompt-flow');
+    expect(pf.maxLabel).toBe('Confidential');
+    const oa = r.agents.find((a) => a.agentId === 'oa1')!;
+    expect(oa.totalSourceCount).toBe(0);
+    expect(oa.sensitiveSourceCount).toBe(0);
+  });
 });

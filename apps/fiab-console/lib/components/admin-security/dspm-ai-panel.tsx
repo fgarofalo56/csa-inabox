@@ -281,7 +281,7 @@ export function DspmAiPanel({ days = 30 }: { days?: number }) {
               rows={resp.agents || []}
               getRowId={(a) => a.agentId}
               ariaLabel="AI agents and the sensitive data they touch"
-              empty="No AI agents found in this tenant yet. Create a data agent and attach data sources; it appears here once saved."
+              empty="No AI agents found in this tenant yet. Create a data agent, operations agent, or prompt flow and attach data sources; it appears here once saved."
             />
           </Section>
         </>
