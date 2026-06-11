@@ -16,11 +16,13 @@ import { useEffect, useState } from 'react';
 import Link from 'next/link';
 import { useParams, useRouter } from 'next/navigation';
 import {
-  Spinner, makeStyles, tokens, Button, Badge,
+  Spinner, makeStyles, tokens, Button, Badge, Text,
   MessageBar, MessageBarBody,
 } from '@fluentui/react-components';
-import { ArrowLeft24Regular, AppGeneric24Regular } from '@fluentui/react-icons';
+import { ArrowLeft24Regular, AppGeneric24Regular, Open16Regular } from '@fluentui/react-icons';
 import { PageShell } from '@/lib/components/page-shell';
+import { Section } from '@/lib/components/ui/section';
+import { itemVisual } from '@/lib/components/ui/item-type-visual';
 import { InstallAppDialog } from '@/lib/components/apps/install-app-dialog';
 
 interface AppItemRef { type: string; template?: string; displayName?: string; }
@@ -31,20 +33,77 @@ interface AppDoc {
 }
 
 const useStyles = makeStyles({
-  meta: { display: 'flex', gap: '8px', alignItems: 'center', marginBottom: '12px' },
-  desc: { fontSize: '14px', lineHeight: 1.6, marginBottom: '20px', color: tokens.colorNeutralForeground2 },
-  items: { display: 'grid', gap: '12px', gridTemplateColumns: 'repeat(auto-fill, minmax(280px, 1fr))' },
+  meta: {
+    display: 'flex',
+    gap: tokens.spacingHorizontalS,
+    alignItems: 'center',
+    flexWrap: 'wrap',
+    marginBottom: tokens.spacingVerticalM,
+  },
+  desc: {
+    lineHeight: 1.6,
+    marginBottom: tokens.spacingVerticalXXL,
+    color: tokens.colorNeutralForeground2,
+    maxWidth: '76ch',
+  },
+  items: {
+    display: 'grid',
+    gap: tokens.spacingHorizontalM,
+    gridTemplateColumns: 'repeat(auto-fill, minmax(260px, 1fr))',
+  },
   itemCard: {
-    paddingTop: '14px', paddingRight: '14px', paddingBottom: '14px', paddingLeft: '14px',
-    borderRadius: '10px',
+    padding: tokens.spacingVerticalM,
+    borderRadius: tokens.borderRadiusLarge,
     border: `1px solid ${tokens.colorNeutralStroke2}`,
     backgroundColor: tokens.colorNeutralBackground1,
-    textDecoration: 'none', color: tokens.colorNeutralForeground1,
-    display: 'flex', flexDirection: 'column', gap: '4px',
-    ':hover': { borderColor: tokens.colorBrandStroke1 },
+    boxShadow: tokens.shadow2,
+    textDecorationLine: 'none',
+    color: tokens.colorNeutralForeground1,
+    display: 'flex',
+    alignItems: 'center',
+    gap: tokens.spacingHorizontalM,
+    minWidth: 0,
+    transitionDuration: tokens.durationNormal,
+    transitionTimingFunction: tokens.curveEasyEase,
+    transitionProperty: 'box-shadow, transform, border-color',
+    ':hover': {
+      boxShadow: tokens.shadow8,
+      transform: 'translateY(-2px)',
+      border: `1px solid ${tokens.colorBrandStroke1}`,
+    },
   },
-  itemType: { fontSize: '13px', fontWeight: 600 },
-  itemTpl: { fontSize: '11px', color: tokens.colorNeutralForeground3 },
+  itemChip: {
+    flexShrink: 0,
+    display: 'inline-flex',
+    alignItems: 'center',
+    justifyContent: 'center',
+    width: '40px',
+    height: '40px',
+    borderRadius: tokens.borderRadiusLarge,
+  },
+  itemMain: { display: 'flex', flexDirection: 'column', gap: '2px', minWidth: 0, flex: 1 },
+  itemType: {
+    fontWeight: tokens.fontWeightSemibold,
+    textTransform: 'capitalize',
+    overflow: 'hidden',
+    textOverflow: 'ellipsis',
+    whiteSpace: 'nowrap',
+  },
+  itemTpl: {
+    color: tokens.colorNeutralForeground3,
+    overflow: 'hidden',
+    textOverflow: 'ellipsis',
+    whiteSpace: 'nowrap',
+  },
+  itemOpen: { flexShrink: 0, color: tokens.colorNeutralForeground4 },
+  empty: {
+    padding: tokens.spacingVerticalXXL,
+    textAlign: 'center',
+    color: tokens.colorNeutralForeground3,
+    borderRadius: tokens.borderRadiusLarge,
+    border: `1px dashed ${tokens.colorNeutralStroke2}`,
+    backgroundColor: tokens.colorNeutralBackground2,
+  },
 });
 
 export default function AppDetailPage() {
@@ -61,14 +120,22 @@ export default function AppDetailPage() {
     }).catch(() => setApp('notfound'));
   }, [params.id]);
 
-  if (app === null) return <Spinner label="Loading…" />;
+  if (app === null) {
+    return (
+      <PageShell title="App">
+        <div style={{ display: 'flex', justifyContent: 'center', padding: tokens.spacingVerticalXXL }}>
+          <Spinner label="Loading app…" />
+        </div>
+      </PageShell>
+    );
+  }
   if (app === 'notfound') {
     return (
       <PageShell title="App not found">
         <MessageBar intent="warning">
           <MessageBarBody>No app with id <code>{params.id}</code> in this tenant.</MessageBarBody>
         </MessageBar>
-        <div style={{ marginTop: 16 }}>
+        <div style={{ marginTop: tokens.spacingVerticalL }}>
           <Button icon={<ArrowLeft24Regular />} onClick={() => router.push('/apps')}>
             Back to Apps
           </Button>
@@ -94,33 +161,52 @@ export default function AppDetailPage() {
         {app.category && <Badge appearance="outline">{app.category}</Badge>}
         {app.publisher && <Badge appearance="outline" color="brand">by {app.publisher}</Badge>}
       </div>
-      {app.description && <div className={styles.desc}>{app.description}</div>}
+      {app.description && <Text as="p" size={300} className={styles.desc}>{app.description}</Text>}
 
-      <h3 style={{ marginBottom: 12 }}>Bundled items ({app.items?.length ?? 0})</h3>
-      {(!app.items || app.items.length === 0) ? (
-        <div style={{ color: tokens.colorNeutralForeground3, fontSize: 13 }}>
-          This app doesn't bundle any items yet.
-        </div>
-      ) : (
-        <div className={styles.items}>
-          {app.items.map((it, i) => (
-            // v2 validator finding: prefetch={false} kills the RSC payload
-            // bursts that the validator caught as "URL auto-rotator" —
-            // Next 14 Link prefetches every visible item card on mount,
-            // which against /items/<type>/new flooded the network panel
-            // and made the page look like it was navigating itself.
-            <Link
-              key={`${it.type}-${i}`}
-              href={`/items/${it.type}/new`}
-              className={styles.itemCard}
-              prefetch={false}
-            >
-              <div className={styles.itemType}>{it.type.replace(/-/g, ' ')}</div>
-              {it.template && <div className={styles.itemTpl}>template: {it.template}</div>}
-            </Link>
-          ))}
-        </div>
-      )}
+      <Section title={`Bundled items (${app.items?.length ?? 0})`} bare>
+        {(!app.items || app.items.length === 0) ? (
+          <div className={styles.empty}>
+            <Text size={300}>This app doesn&apos;t bundle any items yet.</Text>
+          </div>
+        ) : (
+          <div className={styles.items}>
+            {app.items.map((it, i) => {
+              const visual = itemVisual(it.type);
+              const Icon = visual.icon;
+              return (
+                // v2 validator finding: prefetch={false} kills the RSC payload
+                // bursts that the validator caught as "URL auto-rotator" —
+                // Next 14 Link prefetches every visible item card on mount,
+                // which against /items/<type>/new flooded the network panel
+                // and made the page look like it was navigating itself.
+                <Link
+                  key={`${it.type}-${i}`}
+                  href={`/items/${it.type}/new`}
+                  className={styles.itemCard}
+                  prefetch={false}
+                >
+                  <span
+                    className={styles.itemChip}
+                    style={{ backgroundColor: `${visual.color}1f`, color: visual.color }}
+                    aria-hidden
+                  >
+                    <Icon style={{ width: 22, height: 22, color: visual.color }} />
+                  </span>
+                  <span className={styles.itemMain}>
+                    <Text size={300} className={styles.itemType}>
+                      {it.displayName || it.type.replace(/-/g, ' ')}
+                    </Text>
+                    <Text size={200} className={styles.itemTpl}>
+                      {it.template ? `template: ${it.template}` : visual.label}
+                    </Text>
+                  </span>
+                  <Open16Regular className={styles.itemOpen} />
+                </Link>
+              );
+            })}
+          </div>
+        )}
+      </Section>
 
       <InstallAppDialog
         appId={app.id}
