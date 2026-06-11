@@ -28,7 +28,7 @@ The old `/realtime-hub` page was a thin wrapper around `ItemsByTypePane` listing
 | Row action: **Open eventstream / Open KQL database** | ✅ built — menu links to `/items/eventstream/{id}` and `/items/kql-database/{id}` (existing working editors) | navigates to live editor routes |
 | Stream **endpoints** (Event Hub-compatible / custom-endpoint / source connection info) | ✅ built — Endpoints drawer (sources/destinations/streams from the live definition) | `GET /api/realtime-hub/endpoints` → `getEventstreamDefinition` (real Fabric `getDefinition`) |
 | **Get events / Connect data source** wizard | ✅ built — ConnectSourceDialog (category list + connector grid + dynamic connection form) | `POST /api/realtime-hub/connect-source` → `connectEventstreamSource` (real `POST /workspaces/{ws}/eventstreams` with Base64 `eventstream.json`) |
-| **Microsoft sources**: Azure Event Hubs, IoT Hub, Service Bus (preview) | ✅ built — `AzureEventHub` / `AzureIoTHub` / `AzureServiceBus` connectors | eventstream source `type` enum |
+| **Microsoft sources**: Azure Event Hubs, IoT Hub, Service Bus (preview) | ✅ built — `AzureEventHub` / `AzureIoTHub` / `AzureServiceBus` connectors. EH/IoT bind via **cascading dropdowns populated from a real subscription query** (namespace → event hub → consumer group / key name) with inline **"+ Create new…"** — see the dedicated section below | eventstream source `type` enum + `/api/realtime-hub/options` + `/api/realtime-hub/provision` |
 | **Database CDC**: Azure SQL DB / SQL MI / Cosmos DB / PostgreSQL / MySQL CDC | ✅ built — `AzureSQLDBCDC` / `AzureSQLMIDBCDC` / `AzureCosmosDBCDC` / `PostgreSQLCDC` / `MySQLCDC` | eventstream source `type` enum |
 | **External streams**: Apache Kafka, Confluent, Amazon MSK, Kinesis, Google Pub/Sub | ✅ built — `ApacheKafka` / `ConfluentCloud` / `AmazonMSKKafka` / `AmazonKinesis` / `GooglePubSub` | eventstream source `type` enum |
 | **Fabric events**: Workspace item events, Job events, OneLake events | ✅ built — `FabricWorkspaceItemEvents` / `FabricJobEvents` / `FabricOneLakeEvents` connectors + dedicated "Subscribe to Fabric/Azure events" task card | creates a real eventstream with the Fabric-event source `type` |
@@ -46,6 +46,23 @@ The old `/realtime-hub` page was a thin wrapper around `ItemsByTypePane` listing
 | **Visualize data** (create Real-Time dashboard from a KQL table) | ➡️ delegated | Handled by the existing KQL-dashboard editor (`/items/kql-dashboard/new`); not duplicated on the hub. |
 | Per-stream-node **Activate / Deactivate** | ⚠️ disclosed | Not in the public Eventstream REST surface (portal-only toggle) — disclosed honestly per `no-vaporware.md`, consistent with the Eventstream editor. |
 | **Business events** (preview) | ⚠️ tracked | Preview-only Fabric feature; tracked follow-up for the preview pass. |
+
+## Azure-native source binding — dropdowns + create-if-missing (audit-t134)
+
+Mirrors the Fabric Real-Time hub **Azure tab** of "Add source → Azure Event Hubs / IoT Hub" one-for-one, but **Azure-native by default** (no Fabric cloud connection). In Fabric the wizard offers: select **event hub** from a dropdown populated from the chosen namespace, select **consumer group** from a dropdown (or enter a custom one), select the **key name** from a dropdown, and filter Azure resources by **subscription / resource group / region**. Loom builds every one of these against real ARM / Azure Resource Graph — no empty dropdowns, no freeform GUIDs.
+
+| Fabric Azure-tab control | Loom coverage | Backend (real REST) |
+| --- | --- | --- |
+| **Namespace / IoT Hub** picker (Azure tab) | ✅ `resource-select` dropdown enumerated cross-subscription; carries subscription/RG/region filter facets | `GET /api/realtime-hub/options?kind=namespaces[&service=iothub]` → `listStreamingResourcesViaGraph(rtiSubscriptionScope())` (Azure Resource Graph) |
+| **Event hub** dropdown (populated from the namespace) | ✅ `resource-select` depends on namespace; inline **"+ Create new…"** (partitions + retention) | `…?kind=eventhubs` → `listEventHubsIn(scope)`; create → `POST /provision {kind:'eventhub'}` → `ensureEventHub` (idempotent ARM PUT) |
+| **Consumer group** dropdown (or custom) | ✅ `resource-select` depends on event hub; `$Default` always present; inline create | `…?kind=consumerGroups` → `listConsumerGroupsIn`; create → `ensureConsumerGroup` |
+| **Key name** dropdown (SAS policy) | ✅ `resource-select` optional; blank = Entra (UAMI Data Receiver), the secure default | `…?kind=authRules` → `listEventHubAuthRulesIn` |
+| **IoT Hub consumer group** dropdown + custom | ✅ `resource-select` over the hub's built-in `events` endpoint; inline create | `…?kind=iotConsumerGroups` → `listIoTHubConsumerGroups`; create → `ensureIoTHubConsumerGroup` |
+| Filter by subscription / resource group / region | ✅ facets returned with the namespaces list | same `kind=namespaces` payload (`facets`) |
+| Honest infra-gate when no subscription configured | ⚠️ honest-gate — `MessageBar intent="warning"` naming `LOOM_SUBSCRIPTION_ID` + the RBAC bicep module; full form still renders | `GET /options` 503 `code:'not_configured'` (mirrors `GET /api/rti-hub`) |
+| Fabric **cloud connection GUID** field | ➖ removed from the Azure-native default (Fabric-only concept; `dataConnectionId` only applies behind `LOOM_EVENTSTREAM_BACKEND=fabric`) | n/a on default path |
+
+RBAC: discovery dropdowns need subscription-scoped **Reader** (already granted by `admin-plane/rti-hub-rbac.bicep`). Create-if-missing needs **Contributor** on the target namespace — granted on the env-pinned namespace by `landing-zone/eventhubs.bicep`; for create against **arbitrary** discovered namespaces set `grantSubscriptionContributor=true` on `rti-hub-rbac.bicep` (opt-in, off by default for least privilege). ARM 403/throttling errors are surfaced verbatim (status + body) so the dialog shows the real reason.
 
 ## Backend per control
 

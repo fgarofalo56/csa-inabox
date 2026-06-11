@@ -52,6 +52,33 @@ vi.mock('@/app/api/items/_lib/item-crud', () => ({
   loadOwnedItem: vi.fn(),
 }));
 
+// Event Hubs / IoT Hub clients — flat factories (no importActual; like
+// kv-secrets-client these transitively import @azure/identity which isn't
+// resolvable in the isolated test env). The *ArmError classes are redefined
+// here so the options/provision routes' `instanceof` pass-through still works
+// (route + test share the same mocked class).
+vi.mock('@/lib/azure/eventhubs-client', () => ({
+  EventHubsArmError: class EventHubsArmError extends Error {
+    status: number; body: unknown;
+    constructor(status: number, body?: unknown, message?: string) { super(message || `eh ${status}`); this.status = status; this.body = body; }
+  },
+  rtiSubscriptionScope: vi.fn(),
+  listStreamingResourcesViaGraph: vi.fn(),
+  listEventHubsIn: vi.fn(),
+  listConsumerGroupsIn: vi.fn(),
+  listEventHubAuthRulesIn: vi.fn(),
+  ensureEventHub: vi.fn(),
+  ensureConsumerGroup: vi.fn(),
+}));
+vi.mock('@/lib/azure/iothub-client', () => ({
+  IoTHubArmError: class IoTHubArmError extends Error {
+    status: number; body: unknown;
+    constructor(status: number, body?: unknown, message?: string) { super(message || `iot ${status}`); this.status = status; this.body = body; }
+  },
+  listIoTHubConsumerGroups: vi.fn(),
+  ensureIoTHubConsumerGroup: vi.fn(),
+}));
+
 import { getSession } from '@/lib/auth/session';
 import { createOwnedItem, listAllOwnedItems, listOwnedWorkspaces, loadOwnedItem } from '@/app/api/items/_lib/item-crud';
 import {
@@ -62,12 +89,20 @@ import { executeQuery } from '@/lib/azure/kusto-client';
 import {
   putKeyVaultSecret, vaultUrl, listKeyVaultCertificates, certVaultConfigGate, certVaultUrl,
 } from '@/lib/azure/kv-secrets-client';
+import {
+  rtiSubscriptionScope, listStreamingResourcesViaGraph, listEventHubsIn,
+  listConsumerGroupsIn, listEventHubAuthRulesIn, ensureEventHub, ensureConsumerGroup,
+  EventHubsArmError,
+} from '@/lib/azure/eventhubs-client';
+import { listIoTHubConsumerGroups, ensureIoTHubConsumerGroup } from '@/lib/azure/iothub-client';
 
 import { GET as STREAMS } from '../streams/route';
 import { POST as CONNECT } from '../connect-source/route';
 import { POST as PREVIEW } from '../preview/route';
 import { GET as ENDPOINTS } from '../endpoints/route';
 import { GET as CERTS } from '../keyvault-certificates/route';
+import { GET as OPTIONS } from '../options/route';
+import { POST as PROVISION } from '../provision/route';
 
 const AUTH = { claims: { oid: 'tenant-1', upn: 'u@x' } };
 
@@ -76,6 +111,9 @@ function jsonReq(body: any, ct = 'application/json') {
 }
 function urlReq(qs = '') {
   return { nextUrl: new URL(`https://x/api/realtime-hub/endpoints${qs}`) } as any;
+}
+function optReq(qs = '') {
+  return { nextUrl: new URL(`https://x/api/realtime-hub/options${qs}`) } as any;
 }
 
 beforeEach(() => { vi.resetAllMocks(); });
@@ -337,5 +375,160 @@ describe('GET /api/realtime-hub/endpoints', () => {
     (loadOwnedItem as any).mockResolvedValue(null);
     const res = await ENDPOINTS(urlReq('?workspaceId=w&eventstreamId=missing'));
     expect(res.status).toBe(404);
+  });
+});
+
+// ---------------- options (cascading source-binding dropdowns) ----------------
+describe('GET /api/realtime-hub/options', () => {
+  it('401 when unauthenticated', async () => {
+    (getSession as any).mockReturnValue(null);
+    const res = await OPTIONS(optReq('?kind=namespaces'));
+    expect(res.status).toBe(401);
+  });
+
+  it('503 not_configured when no subscription is configured (namespaces)', async () => {
+    (getSession as any).mockReturnValue(AUTH);
+    (rtiSubscriptionScope as any).mockReturnValue([]);
+    const res = await OPTIONS(optReq('?kind=namespaces'));
+    expect(res.status).toBe(503);
+    const j = await res.json();
+    expect(j.code).toBe('not_configured');
+    expect(j.bicep).toContain('rti-hub-rbac.bicep');
+  });
+
+  it('namespaces: returns only Event Hubs namespaces + filter facets', async () => {
+    (getSession as any).mockReturnValue(AUTH);
+    (rtiSubscriptionScope as any).mockReturnValue(['sub-1']);
+    (listStreamingResourcesViaGraph as any).mockResolvedValue([
+      { id: '/ns1', name: 'ns-alpha', resourceKind: 'eventhub-namespace', resourceGroup: 'rg-a', subscriptionId: 'sub-1', location: 'eastus' },
+      { id: '/iot1', name: 'iot-x', resourceKind: 'iothub', resourceGroup: 'rg-b', subscriptionId: 'sub-1', location: 'westus' },
+      { id: '/adx1', name: 'adx', resourceKind: 'adx-cluster', resourceGroup: 'rg-c', subscriptionId: 'sub-1', location: 'eastus' },
+    ]);
+    const res = await OPTIONS(optReq('?kind=namespaces&service=eventhub'));
+    const j = await res.json();
+    expect(j.ok).toBe(true);
+    expect(j.options.map((o: any) => o.name)).toEqual(['ns-alpha']);
+    expect(j.options[0].subscriptionId).toBe('sub-1');
+    expect(j.facets.resourceGroups).toContain('rg-a');
+  });
+
+  it('namespaces: service=iothub returns only IoT hubs', async () => {
+    (getSession as any).mockReturnValue(AUTH);
+    (rtiSubscriptionScope as any).mockReturnValue(['sub-1']);
+    (listStreamingResourcesViaGraph as any).mockResolvedValue([
+      { id: '/ns1', name: 'ns-alpha', resourceKind: 'eventhub-namespace', resourceGroup: 'rg-a', subscriptionId: 'sub-1', location: 'eastus' },
+      { id: '/iot1', name: 'iot-x', resourceKind: 'iothub', resourceGroup: 'rg-b', subscriptionId: 'sub-1', location: 'westus' },
+    ]);
+    const res = await OPTIONS(optReq('?kind=namespaces&service=iothub'));
+    const j = await res.json();
+    expect(j.options.map((o: any) => o.name)).toEqual(['iot-x']);
+  });
+
+  it('eventhubs: 400 when namespace scope is incomplete', async () => {
+    (getSession as any).mockReturnValue(AUTH);
+    const res = await OPTIONS(optReq('?kind=eventhubs&namespace=ns'));
+    expect(res.status).toBe(400);
+  });
+
+  it('eventhubs: lists hubs from the chosen namespace', async () => {
+    (getSession as any).mockReturnValue(AUTH);
+    (listEventHubsIn as any).mockResolvedValue([
+      { name: 'telemetry', partitionCount: 4, messageRetentionInDays: 1 },
+    ]);
+    const res = await OPTIONS(optReq('?kind=eventhubs&subscriptionId=s&resourceGroup=rg&namespace=ns'));
+    const j = await res.json();
+    expect(j.ok).toBe(true);
+    expect(j.options[0].name).toBe('telemetry');
+    const [scope] = (listEventHubsIn as any).mock.calls[0];
+    expect(scope).toEqual({ subscriptionId: 's', resourceGroup: 'rg', namespace: 'ns' });
+  });
+
+  it('consumerGroups: always includes $Default', async () => {
+    (getSession as any).mockReturnValue(AUTH);
+    (listConsumerGroupsIn as any).mockResolvedValue([{ name: 'loom-receiver', eventHub: 'telemetry' }]);
+    const res = await OPTIONS(optReq('?kind=consumerGroups&subscriptionId=s&resourceGroup=rg&namespace=ns&eventHub=telemetry'));
+    const j = await res.json();
+    expect(j.ok).toBe(true);
+    expect(j.options.map((o: any) => o.name)).toEqual(expect.arrayContaining(['$Default', 'loom-receiver']));
+  });
+
+  it('iotConsumerGroups: 400 without hubName', async () => {
+    (getSession as any).mockReturnValue(AUTH);
+    const res = await OPTIONS(optReq('?kind=iotConsumerGroups'));
+    expect(res.status).toBe(400);
+  });
+
+  it('surfaces an ARM error verbatim (status + body)', async () => {
+    (getSession as any).mockReturnValue(AUTH);
+    (listEventHubsIn as any).mockRejectedValue(new EventHubsArmError(403, { error: 'AuthorizationFailed' }, 'forbidden'));
+    const res = await OPTIONS(optReq('?kind=eventhubs&subscriptionId=s&resourceGroup=rg&namespace=ns'));
+    expect(res.status).toBe(403);
+    const j = await res.json();
+    expect(j.body).toEqual({ error: 'AuthorizationFailed' });
+  });
+});
+
+// ---------------- provision (create-if-missing) ----------------
+describe('POST /api/realtime-hub/provision', () => {
+  it('401 when unauthenticated', async () => {
+    (getSession as any).mockReturnValue(null);
+    const res = await PROVISION(jsonReq({ kind: 'eventhub' }));
+    expect(res.status).toBe(401);
+  });
+
+  it('415 when content-type is not JSON', async () => {
+    (getSession as any).mockReturnValue(AUTH);
+    const res = await PROVISION(jsonReq({ kind: 'eventhub' }, 'text/plain'));
+    expect(res.status).toBe(415);
+  });
+
+  it('400 when namespace scope is missing for an event hub', async () => {
+    (getSession as any).mockReturnValue(AUTH);
+    const res = await PROVISION(jsonReq({ kind: 'eventhub', eventHub: 'eh' }));
+    expect(res.status).toBe(400);
+    expect(ensureEventHub).not.toHaveBeenCalled();
+  });
+
+  it('creates an event hub (idempotent) and returns it', async () => {
+    (getSession as any).mockReturnValue(AUTH);
+    (ensureEventHub as any).mockResolvedValue({ name: 'telemetry', partitionCount: 2, messageRetentionInDays: 1 });
+    const res = await PROVISION(jsonReq({
+      kind: 'eventhub', subscriptionId: 's', resourceGroup: 'rg', namespace: 'ns', eventHub: 'telemetry', partitionCount: 2, retentionDays: 1,
+    }));
+    const j = await res.json();
+    expect(j.ok).toBe(true);
+    expect(j.created.name).toBe('telemetry');
+    const [scope, spec] = (ensureEventHub as any).mock.calls[0];
+    expect(scope).toEqual({ subscriptionId: 's', resourceGroup: 'rg', namespace: 'ns' });
+    expect(spec.name).toBe('telemetry');
+  });
+
+  it('creates a consumer group on an event hub', async () => {
+    (getSession as any).mockReturnValue(AUTH);
+    (ensureConsumerGroup as any).mockResolvedValue({ name: 'loom-receiver', eventHub: 'telemetry' });
+    const res = await PROVISION(jsonReq({
+      kind: 'consumerGroup', subscriptionId: 's', resourceGroup: 'rg', namespace: 'ns', eventHub: 'telemetry', consumerGroup: 'loom-receiver',
+    }));
+    const j = await res.json();
+    expect(j.ok).toBe(true);
+    expect(j.created.name).toBe('loom-receiver');
+  });
+
+  it('creates an IoT Hub consumer group', async () => {
+    (getSession as any).mockReturnValue(AUTH);
+    (ensureIoTHubConsumerGroup as any).mockResolvedValue({ name: 'loom-iot', hubName: 'iot-x' });
+    const res = await PROVISION(jsonReq({ kind: 'iotConsumerGroup', hubName: 'iot-x', consumerGroup: 'loom-iot' }));
+    const j = await res.json();
+    expect(j.ok).toBe(true);
+    expect(j.created.name).toBe('loom-iot');
+  });
+
+  it('surfaces an ARM create error verbatim (status + body)', async () => {
+    (getSession as any).mockReturnValue(AUTH);
+    (ensureEventHub as any).mockRejectedValue(new EventHubsArmError(403, { error: 'AuthorizationFailed' }, 'forbidden'));
+    const res = await PROVISION(jsonReq({ kind: 'eventhub', subscriptionId: 's', resourceGroup: 'rg', namespace: 'ns', eventHub: 'eh' }));
+    expect(res.status).toBe(403);
+    const j = await res.json();
+    expect(j.body).toEqual({ error: 'AuthorizationFailed' });
   });
 });
