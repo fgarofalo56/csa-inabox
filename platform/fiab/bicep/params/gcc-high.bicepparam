@@ -122,6 +122,9 @@ param contentSafetyEnabled = true
 param apimEnabled = true
 param aiSearchEnabled = false
 param adxEnabled = true
+// Gremlin (graph editor) + NoSQL vector. Gov suffix gremlin.cosmos.azure.us
+// is selected automatically from boundary='GCC-High'.
+param cosmosGraphVectorEnabled = true
 param vpnGatewayEnabled = true
 param appGatewayEnabled = true
 param frontDoorEnabled = true

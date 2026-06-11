@@ -335,15 +335,26 @@ deliberately left gated.
 
 ### 4.5 Forward the orphaned DLZ outputs (one-line fix per output)
 
-In top-level `main.bicep`, pass `singleDlz.outputs.cosmosGremlinEndpoint`,
-`cosmosVectorEndpoint`, (+ `…Database/Graph/Container`) into the `adminPlane`
-module's `loomCosmosGremlinEndpoint` / `loomCosmosVectorEndpoint` params. Today
-those params exist on both ends but the middle hop is missing, so the graph +
-vector editors gate even though the backing Cosmos graph/vector containers
-deploy. (Bicep ordering note: admin-plane currently deploys before the DLZ; to
-forward DLZ outputs into the console env either (a) split the console env-patch
-into a small post-DLZ module, or (b) keep wiring these two via
-`patch-navigator-env.sh`, which already reads the DLZ Cosmos account.)
+**Status (T95, 2026-06): the Cosmos Gremlin + vector hop is now wired.**
+Top-level `main.bicep` no longer reads the orphaned `singleDlz.outputs.*` (that
+would create a cycle — `adminPlane` deploys before `singleDlz`). Instead it
+computes the deterministic account names inline (`cosmos-loom-gremlin-default-<uniqueString(singleDlzRg.id)>`
+and `cosmos-loom-vec-default-…`) — the same pattern used for `amlWorkspaceName`
+/ `loomCosmosAccount` — and passes `loomCosmosGremlinEndpoint` (+ `…Database`=`loom-graph`,
+`…Graph`=`default`) and `loomCosmosVectorEndpoint` (+ `…Database`=`loom-vectors`,
+`…Container`=`docs-vec`) into the `adminPlane` module, gated on
+`deploymentMode == 'single-sub' && cosmosGraphVectorEnabled`. The sovereign host
+suffix (`gremlin.cosmos.azure.us` / `azure.com`) is derived from `boundary`. The
+DLZ Gremlin private endpoint now also lands in a dedicated
+`privatelink.gremlin.cosmos.azure.*` zone (added to `admin-plane/network.bicep`
++ surfaced as the `cosmosGremlin` key), so the `wss://` host resolves over
+Private Link. The graph + vector editors therefore work on a default
+single-sub deploy with no manual config.
+
+**Multi-sub** still uses `patch-navigator-env.sh` for these two (one Console
+env can't statically reference N DLZ accounts).
+
+Other still-orphaned DLZ outputs follow the same one-hop pattern.
 
 ### 4.6 No-Fabric mode
 

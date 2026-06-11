@@ -118,6 +118,11 @@ param agentFoundryEnabled = true
 param apimEnabled = true
 param aiSearchEnabled = false
 param adxEnabled = true
+// Cosmos Gremlin (graph editor) + NoSQL vector accounts. Default on so the
+// cosmos-gremlin-graph + vector-store editors work on a clean full deploy —
+// the Gremlin capability is fixed at account-creation, so the default NoSQL
+// account can't back the graph editor.
+param cosmosGraphVectorEnabled = true
 param vpnGatewayEnabled = true
 param appGatewayEnabled = true
 // Azure ML workspace — backs the notebook "Azure ML" compute path (Compute

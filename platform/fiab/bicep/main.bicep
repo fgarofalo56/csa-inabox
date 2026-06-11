@@ -174,6 +174,9 @@ param aiSearchEnabled bool = false
 @description('Deploy ADX shared cluster (admin-plane) + per-DLZ ADX databases. Backs the RTI editor family — Eventhouse, KQL Database, KQL Queryset, KQL Dashboard, Eventstream. Default on as of 2026-05-27 (sweep-rti). Set false to skip ~$140/mo Dev SKU cluster.')
 param adxEnabled bool = true
 
+@description('Deploy a Gremlin-capable Cosmos DB account (EnableGremlin) + NoSQL vector account in each DLZ. Backs the cosmos-gremlin-graph (graph editor) and vector-store editors. Default on — the graph editor requires a Gremlin account at create-time (a NoSQL account cannot be converted). Set false to skip ~2 Cosmos accounts/DLZ.')
+param cosmosGraphVectorEnabled bool = true
+
 @description('Deploy the MAF (Microsoft Agent Framework, Gov AOAI-direct) orchestration-tier Container App (loom-copilot-maf). Set true in the GCC-High / IL5 params. The admin-plane gates activation on boundary∈{GCC-High,IL5} + containerPlatform==containerApps + deployAppsEnabled, so it is a safe no-op on the AKS path (the Console copilot-orchestrator then uses its documented Gov AOAI-direct fallback). Requires the loom-copilot-maf image pushed to ACR first.')
 param copilotMafEnabled bool = false
 
@@ -375,6 +378,14 @@ param appImageTags object = {
 
 var adminPlaneRgName = 'rg-csa-loom-admin-${location}'
 
+// T95 — Cosmos data-plane host suffixes, sovereign-cloud-specific. The DLZ
+// cosmos-graph-vector module computes the same suffixes; we mirror them here
+// so the deterministic-name endpoints wired into the Console env (below) match
+// the accounts the module actually deploys. Commercial/GCC → azure.com;
+// GCC-High/IL5 (Azure US Government) → azure.us.
+var gremlinHostSuffix = (boundary == 'GCC-High' || boundary == 'IL5') ? 'gremlin.cosmos.azure.us' : 'gremlin.cosmos.azure.com'
+var cosmosDocSuffix = (boundary == 'GCC-High' || boundary == 'IL5') ? 'azure.us' : 'azure.com'
+
 resource adminPlaneRg 'Microsoft.Resources/resourceGroups@2024-03-01' = {
   name: adminPlaneRgName
   location: location
@@ -448,13 +459,28 @@ module adminPlane 'modules/admin-plane/main.bicep' = {
     loomVanityDomain: loomVanityDomain
     loomStorageAccount: take('saloomdefault${uniqueString(singleDlzRg.id)}', 24)
     loomCosmosAccount: take('cosmos-loom-default-${uniqueString(singleDlzRg.id)}', 44)
-    // Forward the Cosmos data-plane endpoints to the console so the vector-store
-    // and graph editors bind to the deployed account by default (no manual
-    // config). Vector search runs on the NoSQL document endpoint; the Gremlin
-    // editor honest-gates because the default account is NoSQL-only (set this
-    // when a Gremlin-capable Cosmos account is deployed — see full-deployment-and-byo).
-    loomCosmosVectorEndpoint: 'https://${take('cosmos-loom-default-${uniqueString(singleDlzRg.id)}', 44)}.documents.azure.com:443/'
-    loomCosmosGremlinEndpoint: ''
+    // Forward the Cosmos data-plane endpoints to the Console so the vector-store
+    // and graph editors bind to the deployed accounts by default (no manual
+    // config). The DLZ `cosmos-graph-vector` module (cosmosGraphVectorEnabled,
+    // default on) creates a dedicated Gremlin account + a dedicated NoSQL vector
+    // account, named deterministically as `cosmos-loom-gremlin-default-<uniq>`
+    // and `cosmos-loom-vec-default-<uniq>` over the DLZ RG id. We compute those
+    // names inline here rather than reading singleDlz.outputs.* because
+    // `adminPlane` deploys BEFORE `singleDlz` (and singleDlz depends on
+    // adminPlane outputs) — referencing the DLZ output would create a cycle.
+    // This is the same deterministic-name pattern used for amlWorkspaceName /
+    // loomCosmosAccount above. Database/graph names match the module's literals
+    // (loom-graph / default / loom-vectors / docs-vec); they are NOT optional —
+    // the gremlin client defaults to graphdb/graph which the module never
+    // creates, so a bare endpoint would target a non-existent db/graph.
+    // Multi-sub mode can't be wired from a single admin-plane (one Console env,
+    // N DLZs) — operators run scripts/csa-loom/patch-navigator-env.sh there.
+    loomCosmosVectorEndpoint: (deploymentMode == 'single-sub' && cosmosGraphVectorEnabled) ? 'https://${take('cosmos-loom-vec-default-${uniqueString(singleDlzRg.id)}', 44)}.documents.${cosmosDocSuffix}:443/' : ''
+    loomCosmosVectorDatabase: (deploymentMode == 'single-sub' && cosmosGraphVectorEnabled) ? 'loom-vectors' : ''
+    loomCosmosVectorContainer: (deploymentMode == 'single-sub' && cosmosGraphVectorEnabled) ? 'docs-vec' : ''
+    loomCosmosGremlinEndpoint: (deploymentMode == 'single-sub' && cosmosGraphVectorEnabled) ? 'wss://${take('cosmos-loom-gremlin-default-${uniqueString(singleDlzRg.id)}', 44)}.${gremlinHostSuffix}:443/' : ''
+    loomCosmosGremlinDatabase: (deploymentMode == 'single-sub' && cosmosGraphVectorEnabled) ? 'loom-graph' : ''
+    loomCosmosGremlinGraph: (deploymentMode == 'single-sub' && cosmosGraphVectorEnabled) ? 'default' : ''
     loomPurviewAccount: loomPurviewAccount
     loomMipEnabled: loomMipEnabled
     loomDlpEnabled: loomDlpEnabled
@@ -532,6 +558,7 @@ module singleDlz 'modules/landing-zone/main.bicep' = if (deploymentMode == 'sing
     consolePrincipalNeedsCmkBind: consolePrincipalNeedsCmkBind
     shirAdminPassword: shirAdminPassword
     recycleRetentionDays: recycleRetentionDays
+    cosmosGraphVectorEnabled: cosmosGraphVectorEnabled
   }
 }
 
@@ -609,6 +636,7 @@ module dlz 'modules/landing-zone/main.bicep' = [for (subId, i) in dlzSubscriptio
     consolePrincipalNeedsCmkBind: consolePrincipalNeedsCmkBind
     shirAdminPassword: shirAdminPassword
     recycleRetentionDays: recycleRetentionDays
+    cosmosGraphVectorEnabled: cosmosGraphVectorEnabled
   }
 }]
 
