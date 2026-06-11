@@ -19,6 +19,16 @@
 
 ## Scorecard
 
+> **Addendum (2026-06-11, audit-T143) — Governance: Data quality + Master data.**
+> Two new A-grade governance surfaces, Azure-native (no Fabric / partner SaaS):
+> - **Data quality** (`data-quality-run-results.md`): rule run on
+>   Kusto/Databricks/Synapse + run history + Delta enforced constraints +
+>   Databricks Lakehouse Monitoring. Extends the pre-existing rule store.
+> - **Master data** (`master-data-management.md`): self-built match/merge →
+>   golden records with source lineage + reference-data (RDM) on the workspace
+>   Databricks SQL Warehouse. Purview MDM is partner-only; Loom builds the
+>   parity natively. Zero ❌ rows in both parity docs.
+
 > **⚠️ rev.2 (2026-06-01) — grades re-audited UPWARD against current code.**
 > The rev.1 grades below the table's count columns predate a build wave that
 > shipped 12 parity features (Databricks cluster/warehouse edit, SQL navigator,

@@ -25,6 +25,8 @@ const SECTIONS = [
   { href: '/governance/sensitivity',      label: 'Sensitivity labels', desc: 'Define and auto-apply labels; enforce encryption and access policies.' },
   { href: '/governance/scans',            label: 'Scans & sources',    desc: 'Register data sources, schedule scans, monitor scan history.' },
   { href: '/governance/policies',         label: 'Access policies',    desc: 'DLP, masking, RLS/CLS, Purview access policies.' },
+  { href: '/governance/data-quality',     label: 'Data quality',       desc: 'Author rules, run on Kusto/Databricks/Synapse, results + Delta/Lakehouse monitors.' },
+  { href: '/governance/mdm',              label: 'Master data',        desc: 'Golden-record match/merge + reference-data management on Azure-native compute.' },
   { href: '/governance/insights',         label: 'Insights',           desc: 'Compliance reports, ownership coverage, endorsement trends.' },
   { href: '/governance/irm',              label: 'Insider risk',       desc: 'IRM indicators — unusual volume, off-hours access, privileged access over audit logs + Monitor.' },
   { href: '/governance/purview',          label: 'Purview portal',     desc: 'Embedded Microsoft Purview — full Atlas catalog and Unified Catalog.' },

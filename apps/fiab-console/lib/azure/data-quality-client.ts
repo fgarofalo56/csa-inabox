@@ -22,6 +22,17 @@
 
 import { executeQuery, kustoConfigGate, getTableCslSchema, qName, KustoError } from './kusto-client';
 import { tenantSettingsContainer } from './cosmos-client';
+import {
+  executeStatement as dbxExecuteStatement,
+  databricksConfigGate,
+  type DbxQueryParam,
+} from './databricks-client';
+import {
+  executeQuery as synapseExecuteQuery,
+  serverlessTarget,
+  dedicatedTarget,
+  type SynapseTarget,
+} from './synapse-sql-client';
 
 /** Re-export of the ADX (Kusto) config gate under the observability vocabulary. */
 export { kustoConfigGate as adxConfigGate };
@@ -308,4 +319,248 @@ export async function runHealthCharts(database: string, tableName?: string): Pro
   }
 
   return charts;
+}
+
+// ==================================================================
+// Multi-backend rule execution (DQ run + results) — F19 extension.
+//
+// computeDqScore (above) scores the SAME Loom rules against ADX/Kusto. This
+// section adds SQL-engine execution so the operator can RUN the rule set on
+// the workspace's own engine and capture a run-history record:
+//   - 'databricks' → SQL Statement Execution API (Spark SQL dialect)
+//   - 'synapse'    → Synapse Serverless / dedicated SQL pool (T-SQL dialect)
+//   - 'kusto'      → ADX (delegates to scoreRule above)
+// Azure-native default in every case — no Fabric / Power BI dependency. Each
+// backend has an honest config gate so the BFF surfaces a MessageBar (never a
+// fabricated number) when the engine isn't wired.
+// ==================================================================
+
+export type DqRunBackend = 'kusto' | 'databricks' | 'synapse';
+
+export interface DqRunOptions {
+  backend: DqRunBackend;
+  /** Kusto database OR Synapse SQL database (serverless 'master' default). */
+  database?: string;
+  /** Databricks SQL Warehouse id (defaults to LOOM_DATABRICKS_SQL_WAREHOUSE_ID). */
+  warehouseId?: string;
+  /** Three-part-name catalog (Databricks Unity Catalog / Synapse). */
+  catalog?: string;
+  /** Schema namespace. */
+  schema?: string;
+  /** Synapse pool: 'serverless' (default) or 'dedicated'. */
+  synapsePool?: 'serverless' | 'dedicated';
+  /** Restrict to rules whose scope table is in this set (empty = all enabled). */
+  tableNames?: string[];
+}
+
+export interface DqRunResult extends DqScoreResult {
+  backend: DqRunBackend;
+  /** Echoes the resolved target for the receipt (warehouse id / db / pool). */
+  target: string;
+}
+
+/** Honest config gate for a chosen run backend (mirrors the per-client gates). */
+export function dqRunConfigGate(backend: DqRunBackend): { missing: string } | null {
+  if (backend === 'kusto') return kustoConfigGate();
+  if (backend === 'databricks') {
+    const g = databricksConfigGate();
+    if (g) return g;
+    if (!process.env.LOOM_DATABRICKS_SQL_WAREHOUSE_ID) {
+      return { missing: 'LOOM_DATABRICKS_SQL_WAREHOUSE_ID' };
+    }
+    return null;
+  }
+  if (backend === 'synapse') {
+    if (!process.env.LOOM_SYNAPSE_WORKSPACE) return { missing: 'LOOM_SYNAPSE_WORKSPACE' };
+    return null;
+  }
+  return { missing: 'unknown-backend' };
+}
+
+/** Validate + quote a SQL identifier segment (reject anything injectable). */
+function safeIdent(seg: string): string {
+  if (!/^[A-Za-z0-9_ $-]+$/.test(seg)) {
+    throw new Error(`Unsafe SQL identifier: "${seg}"`);
+  }
+  return seg;
+}
+
+/** Backtick-quote a (possibly dotted) Spark SQL name. */
+function quoteSpark(name: string): string {
+  return name.split('.').map((s) => `\`${safeIdent(s)}\``).join('.');
+}
+
+/** Bracket-quote a (possibly dotted) T-SQL name. */
+function quoteTsql(name: string): string {
+  return name.split('.').map((s) => `[${safeIdent(s)}]`).join('.');
+}
+
+/** Build the fully-qualified table reference for a backend, honoring catalog/schema. */
+function fqTable(backend: 'spark' | 'tsql', table: string, catalog?: string, schema?: string): string {
+  const q = backend === 'spark' ? quoteSpark : quoteTsql;
+  // Already three-part? leave it.
+  if (table.includes('.')) return q(table);
+  const parts: string[] = [];
+  if (catalog) parts.push(catalog);
+  if (schema) parts.push(schema);
+  parts.push(table);
+  return q(parts.join('.'));
+}
+
+/** First numeric column out of a SQL single-row result. */
+function firstNumberSql(cols: string[], rows: unknown[][], colName: string): number | null {
+  if (!rows.length) return null;
+  const idx = cols.findIndex((c) => c.toLowerCase() === colName.toLowerCase());
+  const v = rows[0][idx >= 0 ? idx : 0];
+  const n = typeof v === 'number' ? v : Number(v);
+  return Number.isFinite(n) ? n : null;
+}
+
+/**
+ * Score one rule on Databricks SQL (Spark dialect). Regex binds the pattern as a
+ * named parameter (`:pat`) so it is never concatenated into the statement.
+ */
+async function scoreRuleDatabricks(
+  rule: DqRule,
+  warehouseId: string,
+  catalog?: string,
+  schema?: string,
+): Promise<{ percentage: number | null; detail: string }> {
+  const { table, column } = parseScope(rule.scope);
+  if (rule.check !== 'freshness' && !column) {
+    return { percentage: null, detail: `${rule.check} rule needs a column scope (column:<table>.<col>)` };
+  }
+  const T = fqTable('spark', table, catalog, schema);
+  const C = column ? quoteSpark(column.includes('.') ? column.split('.').slice(1).join('.') : column) : '';
+  const params: DbxQueryParam[] = [];
+  let sql = '';
+  switch (rule.check) {
+    case 'not-null':
+      sql = `SELECT (CAST(SUM(CASE WHEN ${C} IS NOT NULL THEN 1 ELSE 0 END) AS DOUBLE) / NULLIF(COUNT(*), 0)) * 100 AS pct FROM ${T}`;
+      break;
+    case 'unique':
+      sql = `SELECT (CAST(COUNT(DISTINCT ${C}) AS DOUBLE) / NULLIF(COUNT(*), 0)) * 100 AS pct FROM ${T}`;
+      break;
+    case 'range':
+      if (typeof rule.min !== 'number' || typeof rule.max !== 'number') {
+        return { percentage: null, detail: 'range rule needs numeric min + max' };
+      }
+      sql = `SELECT (CAST(SUM(CASE WHEN ${C} BETWEEN ${rule.min} AND ${rule.max} THEN 1 ELSE 0 END) AS DOUBLE) / NULLIF(COUNT(*), 0)) * 100 AS pct FROM ${T}`;
+      break;
+    case 'regex':
+      if (!rule.pattern) return { percentage: null, detail: 'regex rule needs a pattern' };
+      params.push({ name: 'pat', value: rule.pattern, type: 'STRING' });
+      sql = `SELECT (CAST(SUM(CASE WHEN CAST(${C} AS STRING) RLIKE :pat THEN 1 ELSE 0 END) AS DOUBLE) / NULLIF(COUNT(*), 0)) * 100 AS pct FROM ${T}`;
+      break;
+    case 'freshness': {
+      if (!column) return { percentage: null, detail: 'freshness rule needs a timestamp column scope' };
+      const days = rule.threshold > 0 ? Math.floor(rule.threshold) : 1;
+      sql = `SELECT CASE WHEN MAX(${C}) >= current_timestamp() - INTERVAL ${days} DAYS THEN 100.0 ELSE 0.0 END AS pct FROM ${T}`;
+      break;
+    }
+    default:
+      return { percentage: null, detail: 'unknown check' };
+  }
+  const r = await dbxExecuteStatement(warehouseId, sql, catalog, schema, params.length ? params : undefined);
+  const pct = firstNumberSql(r.columns, r.rows, 'pct');
+  return { percentage: pct, detail: pct == null ? 'no rows' : `${pct.toFixed(1)}% (Databricks SQL)` };
+}
+
+/**
+ * Score one rule on Synapse SQL (T-SQL dialect). T-SQL has no native regex, so
+ * a regex check returns an honest null + detail (use Databricks or Kusto for
+ * regex). not-null / unique / range / freshness run as ANSI/T-SQL aggregates.
+ */
+async function scoreRuleSynapse(
+  rule: DqRule,
+  target: SynapseTarget,
+  catalog?: string,
+  schema?: string,
+): Promise<{ percentage: number | null; detail: string }> {
+  const { table, column } = parseScope(rule.scope);
+  if (rule.check !== 'freshness' && !column) {
+    return { percentage: null, detail: `${rule.check} rule needs a column scope (column:<table>.<col>)` };
+  }
+  const T = fqTable('tsql', table, catalog, schema);
+  const C = column ? quoteTsql(column.includes('.') ? column.split('.').slice(1).join('.') : column) : '';
+  let sql = '';
+  switch (rule.check) {
+    case 'not-null':
+      sql = `SELECT (CAST(SUM(CASE WHEN ${C} IS NOT NULL THEN 1 ELSE 0 END) AS FLOAT) / NULLIF(COUNT(*), 0)) * 100 AS pct FROM ${T}`;
+      break;
+    case 'unique':
+      sql = `SELECT (CAST(COUNT(DISTINCT ${C}) AS FLOAT) / NULLIF(COUNT(*), 0)) * 100 AS pct FROM ${T}`;
+      break;
+    case 'range':
+      if (typeof rule.min !== 'number' || typeof rule.max !== 'number') {
+        return { percentage: null, detail: 'range rule needs numeric min + max' };
+      }
+      sql = `SELECT (CAST(SUM(CASE WHEN ${C} BETWEEN ${rule.min} AND ${rule.max} THEN 1 ELSE 0 END) AS FLOAT) / NULLIF(COUNT(*), 0)) * 100 AS pct FROM ${T}`;
+      break;
+    case 'regex':
+      return { percentage: null, detail: 'regex unsupported on Synapse T-SQL backend — run on Databricks or Kusto' };
+    case 'freshness': {
+      if (!column) return { percentage: null, detail: 'freshness rule needs a timestamp column scope' };
+      const days = rule.threshold > 0 ? Math.floor(rule.threshold) : 1;
+      sql = `SELECT CASE WHEN MAX(${C}) >= DATEADD(DAY, -${days}, SYSUTCDATETIME()) THEN CAST(100.0 AS FLOAT) ELSE CAST(0.0 AS FLOAT) END AS pct FROM ${T}`;
+      break;
+    }
+    default:
+      return { percentage: null, detail: 'unknown check' };
+  }
+  const r = await synapseExecuteQuery(target, sql);
+  const pct = firstNumberSql(r.columns, r.rows, 'pct');
+  return { percentage: pct, detail: pct == null ? 'no rows' : `${pct.toFixed(1)}% (Synapse SQL)` };
+}
+
+/**
+ * Run the tenant's DQ rule set against a chosen engine and return the per-rule
+ * breakdown + composite score. The result is identical in shape to
+ * {@link computeDqScore} so the Results UI renders one component for every
+ * backend. The caller (BFF) persists this into the `dq-runs:<tenantId>` history.
+ */
+export async function runDqRules(tenantId: string, opts: DqRunOptions): Promise<DqRunResult> {
+  const computedAt = new Date().toISOString();
+  const rules = await loadRules(tenantId);
+  const wanted = new Set((opts.tableNames || []).map((t) => t.toLowerCase()).filter(Boolean));
+  const applicable = rules.filter((r) => {
+    if (!r.enabled) return false;
+    const { table } = parseScope(r.scope);
+    return wanted.size === 0 ? true : wanted.has(table.toLowerCase());
+  });
+
+  let target = '';
+  let scorer: (rule: DqRule) => Promise<{ percentage: number | null; detail: string }>;
+
+  if (opts.backend === 'databricks') {
+    const warehouseId = (opts.warehouseId || process.env.LOOM_DATABRICKS_SQL_WAREHOUSE_ID || '').trim();
+    if (!warehouseId) throw new Error('No Databricks SQL Warehouse — set LOOM_DATABRICKS_SQL_WAREHOUSE_ID or pass warehouseId');
+    target = `databricks:${warehouseId}`;
+    scorer = (rule) => scoreRuleDatabricks(rule, warehouseId, opts.catalog, opts.schema);
+  } else if (opts.backend === 'synapse') {
+    const tgt = opts.synapsePool === 'dedicated' ? dedicatedTarget() : serverlessTarget(opts.database || 'master');
+    target = `synapse:${opts.synapsePool || 'serverless'}:${tgt.database}`;
+    scorer = (rule) => scoreRuleSynapse(rule, tgt, opts.catalog, opts.schema);
+  } else {
+    const db = opts.database || process.env.LOOM_KUSTO_DEFAULT_DB || 'loomdb-default';
+    target = `kusto:${db}`;
+    scorer = (rule) => scoreRule(db, rule);
+  }
+
+  const breakdown: DqRuleResult[] = [];
+  for (const rule of applicable) {
+    try {
+      const { percentage, detail } = await scorer(rule);
+      const passed = percentage != null && percentage >= rule.threshold;
+      breakdown.push({ ruleId: rule.id, name: rule.name, check: rule.check, scope: rule.scope, percentage, passed, detail });
+    } catch (e: any) {
+      const msg = e instanceof KustoError ? e.message : (e?.message || String(e));
+      breakdown.push({ ruleId: rule.id, name: rule.name, check: rule.check, scope: rule.scope, percentage: null, passed: false, detail: `error: ${msg}` });
+    }
+  }
+
+  const scored = breakdown.map((b) => b.percentage).filter((p): p is number => p != null);
+  const score = scored.length ? Math.round((scored.reduce((a, b) => a + b, 0) / scored.length) * 10) / 10 : null;
+  const passingRules = breakdown.filter((b) => b.passed).length;
+  return { score, ruleCount: breakdown.length, passingRules, breakdown, computedAt, backend: opts.backend, target };
 }
