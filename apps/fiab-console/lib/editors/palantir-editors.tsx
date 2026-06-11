@@ -30,6 +30,7 @@ import {
 import {
   Add20Regular, Dismiss16Regular, Link20Regular, Code20Regular,
   Flash20Regular, Rocket20Regular, Play20Regular, Database20Regular,
+  Copy16Regular, Checkmark16Regular,
 } from '@fluentui/react-icons';
 import { ItemEditorChrome } from './item-editor-chrome';
 import { NewItemCreateGate } from './new-item-gate';
@@ -60,14 +61,57 @@ const useStyles = makeStyles({
   },
   spacer: { flex: 1 },
   grid2: { display: 'grid', gridTemplateColumns: '1fr 1fr', gap: tokens.spacingHorizontalM },
+  codeWrap: {
+    display: 'flex', flexDirection: 'column', overflow: 'hidden',
+    borderRadius: tokens.borderRadiusMedium, border: `1px solid ${tokens.colorNeutralStroke2}`,
+  },
+  codeHead: {
+    display: 'flex', alignItems: 'center', justifyContent: 'flex-end',
+    padding: `${tokens.spacingVerticalXS} ${tokens.spacingHorizontalS}`,
+    backgroundColor: tokens.colorNeutralBackground3, borderBottom: `1px solid ${tokens.colorNeutralStroke2}`,
+  },
   code: {
     fontFamily: tokens.fontFamilyMonospace, fontSize: '12px', lineHeight: '18px',
-    whiteSpace: 'pre', overflow: 'auto', maxHeight: '420px',
-    padding: tokens.spacingVerticalM, borderRadius: tokens.borderRadiusMedium,
-    border: `1px solid ${tokens.colorNeutralStroke2}`, backgroundColor: tokens.colorNeutralBackground2,
+    whiteSpace: 'pre', overflow: 'auto', maxHeight: '420px', margin: 0,
+    padding: tokens.spacingVerticalM, backgroundColor: tokens.colorNeutralBackground2,
   },
-  empty: { padding: tokens.spacingVerticalM, color: tokens.colorNeutralForeground3 },
+  tableWrap: { overflowX: 'auto', borderRadius: tokens.borderRadiusMedium, border: `1px solid ${tokens.colorNeutralStroke2}` },
+  empty: {
+    display: 'flex', alignItems: 'center', justifyContent: 'center', gap: tokens.spacingHorizontalS,
+    padding: tokens.spacingVerticalXL, color: tokens.colorNeutralForeground3, textAlign: 'center',
+    borderRadius: tokens.borderRadiusMedium, border: `1px dashed ${tokens.colorNeutralStroke2}`,
+    backgroundColor: tokens.colorNeutralBackground2,
+  },
+  saveStrip: {
+    display: 'flex', alignItems: 'center', gap: tokens.spacingHorizontalM,
+    paddingTop: tokens.spacingVerticalS, borderTop: `1px solid ${tokens.colorNeutralStroke2}`,
+  },
+  mutedCaption: { color: tokens.colorNeutralForeground3 },
+  errorCaption: { color: tokens.colorPaletteRedForeground1 },
 });
+
+/** Code/output viewer with a working copy-to-clipboard control. */
+function CodeBlock({ content, ariaLabel }: { content: string; ariaLabel?: string }) {
+  const s = useStyles();
+  const [copied, setCopied] = useState(false);
+  const copy = useCallback(() => {
+    if (!navigator.clipboard) return;
+    void navigator.clipboard.writeText(content).then(() => {
+      setCopied(true);
+      window.setTimeout(() => setCopied(false), 1500);
+    }).catch(() => { /* clipboard blocked; pre is still selectable */ });
+  }, [content]);
+  return (
+    <div className={s.codeWrap}>
+      <div className={s.codeHead}>
+        <Button size="small" appearance="subtle" icon={copied ? <Checkmark16Regular /> : <Copy16Regular />} onClick={copy} disabled={!content}>
+          {copied ? 'Copied' : 'Copy'}
+        </Button>
+      </div>
+      <pre className={s.code} aria-label={ariaLabel} tabIndex={0}>{content}</pre>
+    </div>
+  );
+}
 
 // ───────────────────────── shared state hook ─────────────────────────
 interface ItemDoc { id: string; displayName: string; state?: Record<string, unknown>; updatedAt?: string }
@@ -138,14 +182,15 @@ function useItemState<T extends Record<string, unknown>>(slug: string, id: strin
 function SaveStrip({ saving, savedAt, error, dirty, onSave }: {
   saving: boolean; savedAt: string | null; error: string | null; dirty: boolean; onSave: () => void;
 }) {
+  const s = useStyles();
   return (
-    <div style={{ display: 'flex', alignItems: 'center', gap: 12, paddingTop: 8, borderTop: `1px solid ${tokens.colorNeutralStroke2}` }}>
+    <div className={s.saveStrip}>
       <Button appearance="primary" onClick={onSave} disabled={saving || !dirty}>
         {saving ? 'Saving…' : !dirty ? 'Saved' : 'Save (Ctrl+S)'}
       </Button>
       {dirty && <Badge appearance="outline" color="warning">unsaved</Badge>}
-      {savedAt && !saving && <Caption1 style={{ color: tokens.colorNeutralForeground3 }}>Saved {new Date(savedAt).toLocaleTimeString()}</Caption1>}
-      {error && <Caption1 style={{ color: tokens.colorPaletteRedForeground1 }}>{error}</Caption1>}
+      {savedAt && !saving && <Caption1 className={s.mutedCaption}>Saved {new Date(savedAt).toLocaleTimeString()}</Caption1>}
+      {error && <Caption1 className={s.errorCaption}>{error}</Caption1>}
     </div>
   );
 }
@@ -330,6 +375,7 @@ export function WorkshopAppEditor({ item, id }: { item: FabricItemType; id: stri
           )}
           {runMsg && <MessageBar intent={runMsg.intent}><MessageBarBody>{runMsg.text}</MessageBarBody></MessageBar>}
           {runResult && (
+            <div className={s.tableWrap}>
             <Table size="small" aria-label={`${runResult.entityType} rows`}>
               <TableHeader><TableRow>{runResult.columns.map((col) => <TableHeaderCell key={col}>{col}</TableHeaderCell>)}</TableRow></TableHeader>
               <TableBody>
@@ -338,6 +384,7 @@ export function WorkshopAppEditor({ item, id }: { item: FabricItemType; id: stri
                 ))}
               </TableBody>
             </Table>
+            </div>
           )}
         </div>
 
@@ -469,7 +516,7 @@ export function OntologySdkEditor({ item, id }: { item: FabricItemType; id: stri
             <TabList selectedValue={tab} onTabSelect={(_, d) => setTab(d.value as 'ts' | 'py' | 'dab')}>
               <Tab value="ts">TypeScript</Tab><Tab value="py">Python</Tab><Tab value="dab">dab-config.json</Tab>
             </TabList>
-            <pre className={s.code}>{tab === 'ts' ? gen.typescript : tab === 'py' ? gen.python : JSON.stringify(gen.dabConfig, null, 2)}</pre>
+            <CodeBlock ariaLabel="Generated SDK source" content={tab === 'ts' ? gen.typescript : tab === 'py' ? gen.python : JSON.stringify(gen.dabConfig, null, 2)} />
           </div>
         )}
       </div>
@@ -573,7 +620,7 @@ export function SlateAppEditor({ item, id }: { item: FabricItemType; id: string 
             <TabList selectedValue={fileTab} onTabSelect={(_, d) => setFileTab(d.value as string)}>
               {files.map((f) => <Tab key={f.name} value={f.name}>{f.name}</Tab>)}
             </TabList>
-            <pre className={s.code}>{files.find((f) => f.name === fileTab)?.content || ''}</pre>
+            <CodeBlock ariaLabel={`${fileTab} source`} content={files.find((f) => f.name === fileTab)?.content || ''} />
           </div>
         )}
 
@@ -708,6 +755,7 @@ export function ReleaseEnvironmentEditor({ item, id }: { item: FabricItemType; i
           </div>
           {promoMsg && <MessageBar intent={promoMsg.intent}><MessageBarBody>{promoMsg.text}</MessageBarBody></MessageBar>}
           {promotions.length > 0 && (
+            <div className={s.tableWrap}>
             <Table size="small" aria-label="Promotions">
               <TableHeader><TableRow><TableHeaderCell>From</TableHeaderCell><TableHeaderCell>To</TableHeaderCell><TableHeaderCell>When</TableHeaderCell><TableHeaderCell>By</TableHeaderCell><TableHeaderCell>Note</TableHeaderCell></TableRow></TableHeader>
               <TableBody>
@@ -720,6 +768,7 @@ export function ReleaseEnvironmentEditor({ item, id }: { item: FabricItemType; i
                 ))}
               </TableBody>
             </Table>
+            </div>
           )}
         </div>
 
@@ -729,6 +778,7 @@ export function ReleaseEnvironmentEditor({ item, id }: { item: FabricItemType; i
           {armGate && <MessageBar intent="warning"><MessageBarBody><MessageBarTitle>Azure not configured</MessageBarTitle>{armGate}</MessageBarBody></MessageBar>}
           {arm && arm.length === 0 && !armGate && <div className={s.empty}><Caption1>No ARM deployments found in the Loom resource groups.</Caption1></div>}
           {arm && arm.length > 0 && (
+            <div className={s.tableWrap}>
             <Table size="small" aria-label="ARM deployments">
               <TableHeader><TableRow><TableHeaderCell>Name</TableHeaderCell><TableHeaderCell>Resource group</TableHeaderCell><TableHeaderCell>State</TableHeaderCell><TableHeaderCell>Timestamp</TableHeaderCell></TableRow></TableHeader>
               <TableBody>
@@ -741,6 +791,7 @@ export function ReleaseEnvironmentEditor({ item, id }: { item: FabricItemType; i
                 ))}
               </TableBody>
             </Table>
+            </div>
           )}
         </div>
 
@@ -849,6 +900,7 @@ export function HealthCheckEditor({ item, id }: { item: FabricItemType; id: stri
         <div className={s.section}>
           <SectionHead icon={<Database20Regular />} title="Active rules" hint="Scheduled-query alert rules backing this health check." />
           {rules.length === 0 ? <div className={s.empty}><Caption1>No rules yet.</Caption1></div> : (
+            <div className={s.tableWrap}>
             <Table size="small" aria-label="Rules">
               <TableHeader><TableRow><TableHeaderCell>Name</TableHeaderCell><TableHeaderCell>Type</TableHeaderCell><TableHeaderCell>Azure rule</TableHeaderCell><TableHeaderCell>Frequency</TableHeaderCell><TableHeaderCell>State</TableHeaderCell></TableRow></TableHeader>
               <TableBody>
@@ -861,6 +913,7 @@ export function HealthCheckEditor({ item, id }: { item: FabricItemType; id: stri
                 ))}
               </TableBody>
             </Table>
+            </div>
           )}
         </div>
       </div>
@@ -991,7 +1044,7 @@ export function AipLogicEditor({ item, id }: { item: FabricItemType; id: string 
           ))}
           <Button appearance="primary" icon={<Play20Regular />} disabled={invokeBusy || steps.length === 0} onClick={invoke}>{invokeBusy ? 'Running…' : 'Invoke function'}</Button>
           {invokeMsg && <MessageBar intent={invokeMsg.intent}><MessageBarBody>{invokeMsg.text}</MessageBarBody></MessageBar>}
-          {invokeOut !== null && <pre className={s.code}>{invokeOut}</pre>}
+          {invokeOut !== null && <CodeBlock ariaLabel="Function output" content={invokeOut} />
         </div>
 
         <SaveStrip saving={saving} savedAt={savedAt} error={error} dirty={dirty} onSave={() => save()} />
