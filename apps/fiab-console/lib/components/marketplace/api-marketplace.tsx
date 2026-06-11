@@ -38,7 +38,7 @@ import {
   ArrowSync20Regular, Play20Regular, Copy20Regular,
   Key20Regular, Add20Regular, Apps20Regular,
   ArrowLeft20Regular, MoreHorizontal20Regular, Delete20Regular, Rename20Regular,
-  Branch20Regular, Open16Regular, Code20Regular,
+  Branch20Regular, Open16Regular, Code20Regular, Key16Regular,
 } from '@fluentui/react-icons';
 import { Section, Toolbar } from '@/lib/components/ui/section';
 import { TileGrid } from '@/lib/components/ui/tile-grid';
@@ -86,6 +86,17 @@ const useStyles = makeStyles({
     border: `1px solid ${tokens.colorNeutralStroke2}`, borderRadius: tokens.borderRadiusMedium,
     backgroundColor: tokens.colorNeutralBackground3, color: tokens.colorNeutralForeground1,
     overflow: 'auto', whiteSpace: 'pre',
+  },
+  codeMeta: {
+    width: '100%', maxHeight: '160px', padding: tokens.spacingVerticalS,
+    fontFamily: 'Consolas, "Cascadia Code", monospace', fontSize: '12px',
+    border: `1px solid ${tokens.colorNeutralStroke2}`, borderRadius: tokens.borderRadiusMedium,
+    backgroundColor: tokens.colorNeutralBackground3, color: tokens.colorNeutralForeground2,
+    overflow: 'auto', whiteSpace: 'pre',
+  },
+  respLabelRow: {
+    display: 'flex', alignItems: 'center', justifyContent: 'space-between',
+    gap: tokens.spacingHorizontalS,
   },
   keysCell: { display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalXS, alignItems: 'flex-start' },
   keyLine: { display: 'flex', gap: tokens.spacingHorizontalXS, alignItems: 'center' },
@@ -915,13 +926,13 @@ export function ApiMarketplace() {
               </Button>
               {tErr && <MessageBar intent="error"><MessageBarBody><MessageBarTitle>Request failed</MessageBarTitle>{tErr}</MessageBarBody></MessageBar>}
               {tResp && (
-                <div style={{ display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalXS }}>
+                <div style={{ display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalXS }} aria-live="polite">
                   <div className={s.metaRow}>
                     <Badge appearance="filled" color={tResp.status < 400 ? 'success' : tResp.status < 500 ? 'warning' : 'danger'}>
                       {tResp.status} {tResp.statusText}
                     </Badge>
                     <Caption1>{tResp.headers['content-type'] || ''}</Caption1>
-                    <Badge appearance="outline">
+                    <Badge appearance="outline" icon={<Key16Regular />}>
                       key: {tResp.keySource === 'subscription' ? 'selected subscription'
                         : tResp.keySource === 'provided' ? 'pasted key'
                         : tResp.keySource === 'master' ? 'all-access (master)'
@@ -933,12 +944,25 @@ export function ApiMarketplace() {
                       401 — no subscription key was attached. Pick a subscription or paste a key above, then resend.
                     </MessageBarBody></MessageBar>
                   )}
-                  <Caption1 style={{ color: tokens.colorNeutralForeground3 }}>Response headers</Caption1>
-                  <div className={s.code} role="region" aria-label="Response headers">
+                  <div className={s.respLabelRow}>
+                    <Caption1 style={{ color: tokens.colorNeutralForeground3 }}>Response headers</Caption1>
+                    <Button size="small" appearance="subtle" icon={<Copy20Regular />}
+                      onClick={() => copy(Object.entries(tResp.headers).map(([k, v]) => `${k}: ${v}`).join('\n'))}>
+                      Copy
+                    </Button>
+                  </div>
+                  <div className={s.codeMeta} role="region" aria-label="Response headers">
                     {Object.entries(tResp.headers).map(([k, v]) => `${k}: ${v}`).join('\n') || '(none)'}
                   </div>
-                  <Caption1 style={{ color: tokens.colorNeutralForeground3 }}>Response body</Caption1>
-                  <div className={s.code}>{tResp.body || '(empty)'}</div>
+                  <div className={s.respLabelRow}>
+                    <Caption1 style={{ color: tokens.colorNeutralForeground3 }}>Response body</Caption1>
+                    {tResp.body && (
+                      <Button size="small" appearance="subtle" icon={<Copy20Regular />} onClick={() => copy(tResp.body)}>
+                        Copy
+                      </Button>
+                    )}
+                  </div>
+                  <div className={s.code} role="region" aria-label="Response body">{tResp.body || '(empty)'}</div>
                 </div>
               )}
             </div>
