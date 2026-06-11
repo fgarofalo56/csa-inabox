@@ -62,6 +62,7 @@ interface ImportResult {
 const useStyles = makeStyles({
   form: { display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalM, minWidth: '420px' },
   nbHint: { color: tokens.colorNeutralForeground3 },
+  intro: { color: tokens.colorNeutralForeground2, lineHeight: 1.5 },
   report: {
     paddingTop: tokens.spacingVerticalM, paddingRight: tokens.spacingVerticalM,
     paddingBottom: tokens.spacingVerticalM, paddingLeft: tokens.spacingVerticalM,
@@ -186,11 +187,11 @@ export function NotebookImportWizard(): React.ReactElement {
                 <Spinner label="Loading workspaces + notebooks…" />
               ) : (
                 <div className={s.form}>
-                  <div className={s.nbHint} style={{ fontSize: 13 }}>
+                  <Caption1 className={s.intro}>
                     Imports a ready-made Spark / Databricks notebook into a workspace.
                     Choose <strong>with sample data</strong> to also seed the matching
                     lakehouse tables into ADLS so the notebook runs against real data.
-                  </div>
+                  </Caption1>
 
                   <Field label="Workspace" required>
                     <Dropdown
