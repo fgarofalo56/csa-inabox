@@ -153,10 +153,14 @@ resource aks 'Microsoft.ContainerService/managedClusters@2025-04-01' = if (conta
 // =====================================================================
 // RBAC — Console UAMI → Azure Kubernetes Service Cluster Admin (AKS path)
 // =====================================================================
-// Required for aks-arm-client.ts scaleAksAgentPool (PUT agentPools/{name}) —
-// the AKS branch of the Admin → Capacity & compute scale drawer. Only created
-// on the GCC-High / IL5 AKS path; Commercial / GCC run Container Apps and the
-// drawer's AKS section honest-gates instead. Role ID is cloud-agnostic.
+// Required for aks-arm-client.ts:
+//   • scaleAksAgentPool (PUT agentPools/{name}) — Admin → Capacity & compute scale drawer.
+//   • updateAksDeploymentEnv (POST managedClusters/runCommand + commandResults/read)
+//     — Admin → Runtime configuration (/admin/env-config) Save on the AKS path.
+// The "Cluster Admin" role includes managedClusters/runCommand/action and
+// commandResults/read, so this single grant backs both. Only created on the
+// GCC-High / IL5 / DoD AKS path; Commercial / GCC run Container Apps and the
+// env-config / scale surfaces honest-gate instead. Role ID is cloud-agnostic.
 resource consoleAksAdmin 'Microsoft.Authorization/roleAssignments@2022-04-01' = if (containerPlatform == 'aks' && !empty(consolePrincipalId) && !skipRoleGrants) {
   scope: aks
   name: guid(aks!.id, consolePrincipalId, '0ab0b1a8-8aac-4efd-b8c2-3ee1fb270be8')

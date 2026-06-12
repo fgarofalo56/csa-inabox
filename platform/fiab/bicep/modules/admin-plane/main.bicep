@@ -1964,6 +1964,11 @@ module appDeployments 'app-deployments.bicep' = if (containerPlatform == 'contai
             // AKS cluster lives) — aks-arm-client.ts reads both + LOOM_SUBSCRIPTION_ID.
             { name: 'LOOM_AKS_CLUSTER_NAME', value: containerPlatform == 'aks' ? containerPlatformModule.outputs.aksName : '' }
             { name: 'LOOM_AKS_RG', value: containerPlatform == 'aks' ? resourceGroup().name : '' }
+            // Runtime configuration (/admin/env-config) Save on the AKS path uses
+            // aks-arm-client.ts:updateAksDeploymentEnv (Run Command → kubectl set
+            // env on the loom-console Deployment). Namespace the Console workload
+            // lives in (app-deployments.bicep manifest omits one → 'default').
+            { name: 'LOOM_AKS_NAMESPACE', value: containerPlatform == 'aks' ? 'default' : '' }
             // Azure-native Activator (lib/azure/activator-monitor.ts) creates
             // Microsoft.Insights/scheduledQueryRules + action groups here. Defaults
             // to THIS admin RG — the same RG where monitoring.bicep grants the

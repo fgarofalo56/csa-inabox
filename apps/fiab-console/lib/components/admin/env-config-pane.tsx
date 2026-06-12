@@ -41,6 +41,10 @@ interface EnvConfigGet {
   editable: EditableEnvVar[];
   current: Record<string, CurrentVal>;
   acaConfigured: boolean; acaError?: string; cosmosError?: string;
+  /** Active container platform of this boundary: 'aca' (Commercial/GCC) or 'aks' (GCC-High/IL5/DoD). */
+  platform?: 'aca' | 'aks';
+  /** Whether the env-write path for the active platform is configured (alias of acaConfigured). */
+  writeConfigured?: boolean; writeError?: string;
   desired: { values: Record<string, string>; secretsSet: string[]; updatedAt?: string; updatedBy?: string } | null;
   drift: Array<{ key: string; desired: string; current: string }>;
   cloud: string; app: string; adminRg: string;
@@ -161,9 +165,13 @@ export function EnvConfigPane() {
           <div style={{ flex: 1, minWidth: 240 }}>
             <Subtitle2>Deployment runtime configuration</Subtitle2>
             <Body1 style={{ display: 'block', color: tokens.colorNeutralForeground2, marginTop: 2 }}>
-              View and set the <strong>{data.app}</strong> container-app environment variables from
-              inside Loom — no Azure portal. Saving applies a real ARM revision and persists the
-              desired value to the Loom store. Cloud boundary: <strong>{data.cloud}</strong>.
+              View and set the <strong>{data.app}</strong> {data.platform === 'aks' ? 'Deployment' : 'container-app'} environment
+              variables from inside Loom — no Azure portal. Saving applies a real{' '}
+              {data.platform === 'aks'
+                ? 'AKS rolling update (kubectl set env via Run Command)'
+                : 'ARM revision'} and persists the desired value to the Loom store.
+              Cloud boundary: <strong>{data.cloud}</strong>
+              {data.platform === 'aks' ? ' · platform: AKS' : ' · platform: Container Apps'}.
             </Body1>
             <div style={{ display: 'flex', gap: 8, marginTop: 8, flexWrap: 'wrap' }}>
               <Badge appearance="tint" size="medium"
@@ -199,12 +207,13 @@ export function EnvConfigPane() {
         </div>
       </div>
 
-      {/* ACA write gate */}
+      {/* Write gate (platform-aware: Container Apps on Commercial/GCC, AKS on GCC-High/IL5/DoD) */}
       {!data.acaConfigured && (
         <MessageBar intent="warning" style={{ marginBottom: 16 }}>
           <MessageBarBody>
             <MessageBarTitle>Write path not configured</MessageBarTitle>
-            {data.acaError} The table below is read-only until the Container Apps management env is set.
+            {data.writeError || data.acaError} The table below is read-only until the{' '}
+            {data.platform === 'aks' ? 'AKS cluster' : 'Container Apps'} management env is set.
           </MessageBarBody>
         </MessageBar>
       )}
