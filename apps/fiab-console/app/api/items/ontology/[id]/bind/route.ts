@@ -9,6 +9,12 @@
  *     entityTypes: string[] }
  *   → { ok, updatedAt, entityBindings[] }
  *
+ * DELETE /api/items/ontology/[id]/bind?sourceItemId=<id>
+ *   (or body { sourceItemId })
+ *   → { ok, updatedAt, entityBindings[] }
+ *   Durably removes a single binding by sourceItemId and reconciles the
+ *   boundLakehouseId / boundWarehouseId convenience pointers.
+ *
  * Wires the OntologyEditor's "Bind to data source" surface (phase4-editors).
  * Cosmos-only — lists the lakehouse/warehouse items that live in the SAME
  * workspace as the ontology, and persists the chosen binding onto the ontology
@@ -126,6 +132,50 @@ export async function POST(req: NextRequest, ctx: { params: Promise<{ id: string
   state.entityBindings = entityBindings;
   if (sourceKind === 'lakehouse') state.boundLakehouseId = sourceItemId;
   else state.boundWarehouseId = sourceItemId;
+
+  const updated = await updateOwnedItem(id, ITEM_TYPE, session.claims.oid, { state });
+  if (!updated) return err('ontology not found', 404, 'not_found');
+  return NextResponse.json({ ok: true, updatedAt: updated.updatedAt, entityBindings });
+}
+
+export async function DELETE(req: NextRequest, ctx: { params: Promise<{ id: string }> }) {
+  const session = getSession();
+  if (!session) return err('unauthenticated', 401, 'unauthenticated');
+  const { id } = await ctx.params;
+  if (!id || id === 'new') return err('save the ontology before unbinding (no id yet)', 400, 'no_id');
+
+  // sourceItemId may arrive as a query param or in the request body.
+  let sourceItemId = (req.nextUrl.searchParams.get('sourceItemId') || '').trim();
+  if (!sourceItemId) {
+    const body = await req.json().catch(() => ({} as any));
+    sourceItemId = String(body?.sourceItemId || '').trim();
+  }
+  if (!sourceItemId) return err('sourceItemId is required', 400, 'missing_source');
+
+  const onto = await loadOwnedItem(id, ITEM_TYPE, session.claims.oid);
+  if (!onto) return err('ontology not found', 404, 'not_found');
+
+  const state = { ...((onto.state || {}) as Record<string, unknown>) };
+  const existing = Array.isArray(state.entityBindings) ? (state.entityBindings as OntologyEntityBinding[]) : [];
+  const removed = existing.find((b) => b.sourceItemId === sourceItemId);
+  const entityBindings = existing.filter((b) => b.sourceItemId !== sourceItemId);
+  state.entityBindings = entityBindings;
+
+  // Reconcile the convenience pointers: if the removed binding was the one
+  // recorded as boundLakehouseId / boundWarehouseId, point them at the most
+  // recent remaining binding of the same kind (or clear them).
+  if (removed) {
+    const lastOfKind = (kind: 'lakehouse' | 'warehouse') =>
+      [...entityBindings].reverse().find((b) => b.sourceKind === kind)?.sourceItemId || null;
+    if (state.boundLakehouseId === sourceItemId) {
+      const next = lastOfKind('lakehouse');
+      if (next) state.boundLakehouseId = next; else delete state.boundLakehouseId;
+    }
+    if (state.boundWarehouseId === sourceItemId) {
+      const next = lastOfKind('warehouse');
+      if (next) state.boundWarehouseId = next; else delete state.boundWarehouseId;
+    }
+  }
 
   const updated = await updateOwnedItem(id, ITEM_TYPE, session.claims.oid, { state });
   if (!updated) return err('ontology not found', 404, 'not_found');
