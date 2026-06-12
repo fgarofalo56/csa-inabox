@@ -35,7 +35,9 @@ import type { FabricItemType } from '@/lib/catalog/fabric-item-types';
 const useStyles = makeStyles({
   intro: {
     color: tokens.colorNeutralForeground2,
-    fontSize: '14px', lineHeight: 1.55, maxWidth: '760px',
+    fontSize: tokens.fontSizeBase300,
+    lineHeight: tokens.lineHeightBase400,
+    maxWidth: '760px',
     marginBottom: tokens.spacingVerticalL,
   },
   empty: { color: tokens.colorNeutralForeground3 },
