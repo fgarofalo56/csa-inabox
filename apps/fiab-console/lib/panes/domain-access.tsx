@@ -47,6 +47,8 @@ const useStyles = makeStyles({
   pickerWrap: { display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalM, minWidth: '360px' },
   nameCell: { display: 'flex', flexDirection: 'column' },
   sub: { color: tokens.colorNeutralForeground3 },
+  banners: { display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalM, marginBottom: tokens.spacingVerticalL },
+  footnote: { marginTop: tokens.spacingVerticalL },
 });
 
 const TIER_BADGE: Record<Exclude<DomainTier, null> | 'none', { label: string; color: 'brand' | 'success' | 'informative' | 'subtle' }> = {
@@ -134,17 +136,21 @@ export function DomainAccessPane() {
         admin / contributor security groups (checked on every request).
       </Body1>
 
-      {error && (
-        <MessageBar intent="warning"><MessageBarBody><MessageBarTitle>Couldn&apos;t complete the request</MessageBarTitle>{error}</MessageBarBody></MessageBar>
-      )}
+      {(error || !isTenantAdmin) && (
+        <div className={styles.banners}>
+          {error && (
+            <MessageBar intent="warning"><MessageBarBody><MessageBarTitle>Couldn&apos;t complete the request</MessageBarTitle>{error}</MessageBarBody></MessageBar>
+          )}
 
-      {!isTenantAdmin && (
-        <MessageBar intent="info">
-          <MessageBarBody>
-            Editing a domain&apos;s admin / contributor groups requires a tenant admin. You can see your
-            tier on each domain below.
-          </MessageBarBody>
-        </MessageBar>
+          {!isTenantAdmin && (
+            <MessageBar intent="info">
+              <MessageBarBody>
+                Editing a domain&apos;s admin / contributor groups requires a tenant admin. You can see your
+                tier on each domain below.
+              </MessageBarBody>
+            </MessageBar>
+          )}
+        </div>
       )}
 
       <Table aria-label="Domain access" size="medium">
@@ -213,7 +219,7 @@ export function DomainAccessPane() {
       </Table>
 
       {provisionEnabled && isTenantAdmin && (
-        <MessageBar intent="success">
+        <MessageBar intent="success" className={styles.footnote}>
           <MessageBarBody>
             Per-domain Entra group provisioning is enabled. New domains can auto-create their
             admin + contributor security groups at create time (Admin → Domains → New, &quot;Provision

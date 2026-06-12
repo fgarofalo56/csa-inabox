@@ -28,8 +28,28 @@ Azure-native RBAC (Cosmos + Entra/Graph + ARM — NO Fabric dependency).
 - Group provisioning: `lib/azure/domain-groups.ts` → Graph `POST /groups`
   (securityEnabled). Honest 503 gate when Group.ReadWrite.All not consented.
 - Enforcement: `assign-workspaces`, `PATCH /api/admin/domains`,
-  `/api/admin/capacity/{cost,utilization,viz-config}` (DLZ panes — tenant/domain
-  admin only), `/api/workspaces/[id]/role-assignments` (owning-domain admin).
+  `/api/admin/capacity/{cost,utilization,viz-config}` (DLZ cost + monitor panes)
+  and `/api/admin/scaling/*` (DLZ **scale** pane — adx, ai-search, aks, apim,
+  capacity, compute, container-apps, cosmos, databricks-cluster,
+  databricks-warehouse, foundry-compute, synapse-dwu — GET+POST+PUT) — all
+  tenant/domain-admin only via the shared `lib/auth/dlz-gate.ts`
+  `denyIfNoDlzAccess` helper; `/api/workspaces/[id]/role-assignments`
+  (owning-domain admin).
+
+### DLZ-pane gate granularity (deliberate)
+
+The DLZ **scale / cost / monitor** panes read & mutate the SHARED data
+landing-zone infrastructure (Fabric/PBI capacity, ADX, AKS, APIM, Cosmos,
+Synapse, Databricks, AML compute, SHIR VMSS) that the whole tenant's domains
+sit on — these are not per-domain *workspace* resources, and there is no
+resource→domain map to scope a SKU resize or a cost query against. The panes
+are therefore gated at **"tenant-admin OR domain-admin of ≥1 domain"**
+granularity (`canAccessDlzPanes`), NOT per-resource per-domain. Per-domain
+authority that DOES have a domain target — rename/admins/move, member
+management, workspace assignment — is enforced per-domain in PATCH
+`/api/admin/domains`, `assign-workspaces`, and `role-assignments`. "Scoped to
+their domain's workspaces" in the role model thus applies to those
+domain-targeted surfaces; the shared-infra DLZ panes are admin-tier-gated.
 - Bicep: `loomDomainGroupProvisioningEnabled` (main.bicep → admin-plane →
   `LOOM_DOMAIN_GROUP_PROVISIONING` env + Group.ReadWrite.All AppRole in
   identity-graph-rbac.bicep). Bootstrap: `grant-identity-graph-approles.sh`.
@@ -38,6 +58,7 @@ Azure-native RBAC (Cosmos + Entra/Graph + ARM — NO Fabric dependency).
 
 - Group provisioning disabled / un-consented → 503 with the exact remediation
   (LOOM_DOMAIN_GROUP_PROVISIONING + Group.ReadWrite.All + admin consent).
-- DLZ panes for non-admins → 403 naming the /admin/permissions Domain access path.
+- DLZ panes for non-admins → 403 naming the /admin/permissions Domain access
+  path (scale `/api/admin/scaling/*`, cost + monitor `/api/admin/capacity/*`).
 - Domains always work via the legacy `admins[]` / `contributors` model when no
   Entra groups are bound — no Fabric dependency, Azure-native default.
