@@ -24,7 +24,7 @@ import {
   ManagedIdentityCredential,
   DefaultAzureCredential,
 } from '@azure/identity';
-import { searchEndpointBase, SEARCH_AAD_SCOPE } from './cloud-endpoints';
+import { searchEndpointBase, searchAadScope } from './cloud-endpoints';
 import { buildSearchBody } from './search-field-shapes';
 import {
   GOVERNANCE_CATALOG_INDEX,
@@ -80,7 +80,7 @@ function service(): string {
 }
 
 async function token(): Promise<string> {
-  const t = await credential.getToken(SEARCH_AAD_SCOPE);
+  const t = await credential.getToken(searchAadScope());
   if (!t?.token) throw new Error('Failed to acquire AAD token for AI Search');
   return t.token;
 }
