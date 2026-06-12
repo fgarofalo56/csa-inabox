@@ -61,7 +61,7 @@ const planText = await agent(
   `READ-ONLY. Read these CSA Loom files in ${REPO}: ${files.join(', ')}. Extract implementable tasks into a single JSON array. ` +
   (auditWave ? `Include ONLY rows/tasks assigned to Wave ${auditWave} (use the Wave column where present, else the "Suggested Build Waves" wave lists). ` : `Extract EVERY implementable task. `) +
   `Each: {"id":"<audit-Tn>","title":"...","goal":"...full intent + acceptance...","files":"likely files","verify":"how to prove it"}. For audit rows use the Goal column as goal + evidence/file hints as files. Output ONLY the JSON array.`,
-  { model: 'fable', agentType: 'Explore', phase: 'Plan', label: 'plan:extract' },
+  { model: 'opus', agentType: 'Explore', phase: 'Plan', label: 'plan:extract' },
 )
 let tasks = []
 try { tasks = JSON.parse(planText.slice(planText.indexOf('['), planText.lastIndexOf(']') + 1)) } catch (e) { log(`parse failed: ${e}`) }
@@ -74,7 +74,7 @@ log(`Wave ${auditWave || '?'}: ${tasks.length} tasks, fanout ${FANOUT}${onlyIds.
 if (!tasks.length) return { tasks: 0, shipped: [] }
 
 phase('Research')
-const plans = await parallel(tasks.map((t) => () => agent(researchPrompt(t), { model: 'fable', agentType: 'Explore', phase: 'Research', label: `research:${t.id}` })))
+const plans = await parallel(tasks.map((t) => () => agent(researchPrompt(t), { model: 'opus', agentType: 'Explore', phase: 'Research', label: `research:${t.id}` })))
 
 phase('Build')
 const shipped = []
@@ -82,11 +82,11 @@ const batches = chunk(tasks.map((t, i) => ({ t, plan: plans[i] })), FANOUT)
 for (let b = 0; b < batches.length; b++) {
   log(`Build batch ${b + 1}/${batches.length} (${batches[b].length} concurrent worktrees)`)
   const res = await parallel(batches[b].map(({ t, plan }) => async () => {
-    const build = await agent(buildPrompt(t, plan || '(research unavailable; decide)'), { model: 'fable', isolation: 'worktree', phase: 'Build', label: `build:${t.id}` })
+    const build = await agent(buildPrompt(t, plan || '(research unavailable; decide)'), { model: 'opus', isolation: 'worktree', phase: 'Build', label: `build:${t.id}` })
     const pr = (String(build).match(/PR\s*[=#:]?\s*(\d+)/i) || [])[1] || ''
     if (!pr) return { id: t.id, ok: false, note: String(build).slice(0, 160) }
-    const review = await agent(reviewPrompt(t, pr), { model: 'fable', phase: 'Polish', label: `review:${t.id}` })
-    const polish = await agent(polishPrompt(t, pr, review), { model: 'fable', isolation: 'worktree', phase: 'Polish', label: `polish:${t.id}` })
+    const review = await agent(reviewPrompt(t, pr), { model: 'opus', phase: 'Polish', label: `review:${t.id}` })
+    const polish = await agent(polishPrompt(t, pr, review), { model: 'opus', isolation: 'worktree', phase: 'Polish', label: `polish:${t.id}` })
     return { id: t.id, ok: true, pr, reviewPass: /^\s*PASS/i.test(review), polished: !/NO-?UI/i.test(String(polish)) }
   }))
   shipped.push(...res.filter(Boolean))

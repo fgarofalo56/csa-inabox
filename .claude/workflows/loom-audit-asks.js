@@ -92,7 +92,7 @@ const gap = await agent(
   `You are the audit synthesizer. Reconcile these five ledgers into ONE grounded gap analysis for CSA Loom. Be skeptical: an ask counts as DELIVERED only if the surfaces/delivered ledgers show a REAL backend implementation (no stub). If it's spec-only or UI-only or stubbed, it's backlog.\n\n` +
   `=== ASKS (atlas+memory) ===\n${asks}\n\n=== SPECS (prp+parity) ===\n${specs}\n\n=== DELIVERED (git+prs) ===\n${delivered}\n\n=== LIVE SURFACES ===\n${surfaces}\n\n=== UI QUALITY ===\n${ui}\n\n` +
   `Produce: (1) summary; (2) backlog[] — every asked-for capability that is missing/partial/stub/ui-only/regressed, each with evidence + concrete goal + a suggested wave (group related items); (3) uiPolish[] — per-surface cleanup with a grade. Also WRITE the full human-readable report to ${REPO}/docs/fiab/prp/AUDIT-2026-06-10.md (a markdown gap matrix: Ask | Source | Delivered? | Evidence | Backlog item) using the Write tool. Return the structured object.`,
-  { model: 'fable', phase: 'Synthesize', label: 'synthesize:gap-matrix', schema: GAP_SCHEMA },
+  { model: 'opus', phase: 'Synthesize', label: 'synthesize:gap-matrix', schema: GAP_SCHEMA },
 )
 log(`Audit: ${gap && gap.backlog ? gap.backlog.length : 0} backlog items, ${gap && gap.uiPolish ? gap.uiPolish.length : 0} UI-polish items`)
 return gap
