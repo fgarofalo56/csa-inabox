@@ -24,11 +24,13 @@ import {
   Button, Badge, Spinner, Caption1, Body1, Subtitle2, Divider,
   Table, TableHeader, TableHeaderCell, TableRow, TableBody, TableCell,
   MessageBar, MessageBarBody, MessageBarTitle, Tooltip,
+  Dropdown, Option,
   makeStyles, shorthands, tokens,
 } from '@fluentui/react-components';
 import {
   Play16Regular, Stop16Regular, Delete16Regular, ArrowSync16Regular,
   DatabaseArrowRight20Regular, DatabaseLink20Regular, ArrowRepeatAll20Regular,
+  Eye16Regular, TableSimple20Regular,
 } from '@fluentui/react-icons';
 
 const ROUTE = '/api/adf/cdc';
@@ -45,6 +47,19 @@ interface CdcDetail {
   sources: CdcConn[];
   targets: CdcConn[];
 }
+
+interface CdcPreviewEntity { name: string; container: string; folderPath: string }
+interface CdcPreview {
+  entity: CdcPreviewEntity;
+  entities: CdcPreviewEntity[];
+  columns: string[];
+  rows: unknown[][];
+  rowCount: number;
+  truncated: boolean;
+  deltaUrl: string;
+}
+
+const PREVIEW_ROW_LIMIT = 100;
 
 const useStyles = makeStyles({
   surface: { maxWidth: '760px', width: '760px' },
@@ -68,6 +83,11 @@ const useStyles = makeStyles({
   spinnerWrap: { ...shorthands.padding('16px') },
   errorBar: { marginBottom: '8px' },
   leadActions: { display: 'flex', gap: '6px', alignItems: 'center', marginRight: 'auto' },
+  previewControls: { display: 'flex', gap: '8px', alignItems: 'flex-end', flexWrap: 'wrap', marginBottom: '8px' },
+  previewField: { display: 'flex', flexDirection: 'column', gap: '2px' },
+  previewScroll: { maxHeight: '320px', overflowY: 'auto', overflowX: 'auto', ...shorthands.border('1px', 'solid', tokens.colorNeutralStroke2), ...shorthands.borderRadius(tokens.borderRadiusMedium) },
+  previewCell: { whiteSpace: 'nowrap', maxWidth: '320px', overflow: 'hidden', textOverflow: 'ellipsis' },
+  previewCaption: { display: 'block', marginTop: '6px', color: tokens.colorNeutralForeground3 },
 });
 
 function statusColor(s: string): 'success' | 'informative' | 'warning' | 'danger' {
@@ -152,6 +172,15 @@ export function AdfCdcEditor({ name, onClose }: AdfCdcEditorProps) {
   const [gate, setGate] = useState<{ missing: string } | null>(null);
   const [changed, setChanged] = useState(false);
 
+  // Change-data preview state — reads the rows the CDC resource landed in its
+  // Delta target via /api/adf/cdc?name=X&preview=1 (real Synapse Serverless
+  // OPENROWSET over the Delta folder). Lazy: only fetched when the operator
+  // clicks "Preview change data".
+  const [preview, setPreview] = useState<CdcPreview | null>(null);
+  const [previewLoading, setPreviewLoading] = useState(false);
+  const [previewError, setPreviewError] = useState<string | null>(null);
+  const [previewEntity, setPreviewEntity] = useState<string>('');
+
   const load = useCallback(async (n: string) => {
     setLoading(true); setError(null);
     try {
@@ -171,6 +200,7 @@ export function AdfCdcEditor({ name, onClose }: AdfCdcEditorProps) {
   // Initial load when opened / name changes.
   useEffect(() => {
     setDetail(null); setError(null); setGate(null); setChanged(false);
+    setPreview(null); setPreviewError(null); setPreviewEntity('');
     if (name) load(name);
   }, [name, load]);
 
@@ -212,6 +242,29 @@ export function AdfCdcEditor({ name, onClose }: AdfCdcEditorProps) {
       setBusy(false);
     }
   }, [name, load, onClose]);
+
+  // Fetch the landed change-data rows for `entity` (defaults to the resource's
+  // first Delta target). Honest: surfaces the BFF error verbatim (e.g. "no
+  // Delta target", or a Synapse Serverless / Storage RBAC gate) — no mock rows.
+  const loadPreview = useCallback(async (entity?: string) => {
+    if (!name) return;
+    setPreviewLoading(true); setPreviewError(null);
+    try {
+      const qs = new URLSearchParams({ name, preview: '1', rows: String(PREVIEW_ROW_LIMIT) });
+      if (entity) qs.set('entity', entity);
+      const res = await fetch(`${ROUTE}?${qs.toString()}`);
+      const body = await readJson(res);
+      if (body?.code === 'not_configured' && body?.missing) { setGate({ missing: body.missing }); setPreviewLoading(false); return; }
+      if (!body.ok || !body.preview) { setPreviewError(body.error || 'failed to read change-data preview'); setPreviewLoading(false); return; }
+      const p = body.preview as CdcPreview;
+      setPreview(p);
+      setPreviewEntity(p.entity?.name || '');
+    } catch (e: any) {
+      setPreviewError(e?.message || String(e));
+    } finally {
+      setPreviewLoading(false);
+    }
+  }, [name]);
 
   const isRunning = (detail?.status || '').toLowerCase() === 'running';
   const transitioning = ['starting', 'stopping'].includes((detail?.status || '').toLowerCase());
@@ -285,6 +338,88 @@ export function AdfCdcEditor({ name, onClose }: AdfCdcEditorProps) {
                 <div className={s.section}>
                   <div className={s.sectionHead}><DatabaseArrowRight20Regular /><Subtitle2>Target (Delta)</Subtitle2></div>
                   <ConnTable rows={detail.targets} emptyLabel="No target connections configured." />
+                </div>
+
+                <Divider />
+
+                <div className={s.section}>
+                  <div className={s.sectionHead}><TableSimple20Regular /><Subtitle2>Change data preview</Subtitle2></div>
+                  <Body1 className={s.intro}>
+                    Read a sample of the rows this CDC resource captured into its Delta target — the same
+                    Data preview ADF Studio shows. Rows are read live from the landed Delta folder via
+                    Synapse Serverless; Start the resource first if it has not run yet.
+                  </Body1>
+
+                  <div className={s.previewControls}>
+                    {preview && preview.entities.length > 1 && (
+                      <div className={s.previewField}>
+                        <span className={s.metaLabel}>Target entity</span>
+                        <Dropdown
+                          size="small"
+                          aria-label="Target entity to preview"
+                          value={previewEntity}
+                          selectedOptions={previewEntity ? [previewEntity] : []}
+                          onOptionSelect={(_, d) => { if (d.optionValue) loadPreview(d.optionValue); }}
+                          disabled={previewLoading}
+                        >
+                          {preview.entities.map((e) => (
+                            <Option key={e.name} value={e.name}>{e.name}</Option>
+                          ))}
+                        </Dropdown>
+                      </div>
+                    )}
+                    <Button
+                      size="small"
+                      appearance="secondary"
+                      icon={previewLoading ? <Spinner size="tiny" /> : <Eye16Regular />}
+                      disabled={previewLoading}
+                      onClick={() => loadPreview(previewEntity || undefined)}
+                    >
+                      {previewLoading ? 'Reading…' : preview ? 'Refresh preview' : 'Preview change data'}
+                    </Button>
+                  </div>
+
+                  {previewError && (
+                    <MessageBar intent="error" className={s.errorBar}>
+                      <MessageBarBody><MessageBarTitle>Preview unavailable</MessageBarTitle>{previewError}</MessageBarBody>
+                    </MessageBar>
+                  )}
+
+                  {preview && !previewError && (
+                    preview.columns.length === 0 ? (
+                      <Caption1 className={s.muted}>
+                        No rows captured yet for {preview.entity.name}. The resource may not have completed
+                        its initial load — refresh after it reports Running.
+                      </Caption1>
+                    ) : (
+                      <>
+                        <div className={s.previewScroll}>
+                          <Table size="small" aria-label={`Change data for ${preview.entity.name}`}>
+                            <TableHeader>
+                              <TableRow>
+                                {preview.columns.map((c) => <TableHeaderCell key={c}>{c}</TableHeaderCell>)}
+                              </TableRow>
+                            </TableHeader>
+                            <TableBody>
+                              {preview.rows.map((row, ri) => (
+                                <TableRow key={ri}>
+                                  {preview.columns.map((c, ci) => (
+                                    <TableCell key={c} className={s.previewCell}>
+                                      {row[ci] === null || row[ci] === undefined ? '' : String(row[ci])}
+                                    </TableCell>
+                                  ))}
+                                </TableRow>
+                              ))}
+                            </TableBody>
+                          </Table>
+                        </div>
+                        <Caption1 className={s.previewCaption}>
+                          Showing {preview.rowCount} row{preview.rowCount === 1 ? '' : 's'} of {preview.entity.name}
+                          {preview.truncated ? ` (first ${PREVIEW_ROW_LIMIT})` : ''} from the landed Delta target.
+                        </Caption1>
+                      </>
+                    )
+                  )}
                 </div>
               </>
             )}

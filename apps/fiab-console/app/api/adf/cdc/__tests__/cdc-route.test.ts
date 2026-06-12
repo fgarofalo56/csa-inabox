@@ -25,6 +25,7 @@ const startAdfCdc = vi.fn(async (..._a: any[]) => {});
 const stopAdfCdc = vi.fn(async (..._a: any[]) => {});
 const deleteAdfCdc = vi.fn(async (..._a: any[]) => {});
 const statusAdfCdc = vi.fn((..._a: any[]) => Promise.resolve('' as string));
+const previewAdfCdcTarget = vi.fn((..._a: any[]) => Promise.resolve({} as any));
 
 vi.mock('@/lib/azure/adf-client', () => ({
   adfCdcConfigGate: () => gateValue,
@@ -35,6 +36,7 @@ vi.mock('@/lib/azure/adf-client', () => ({
   stopAdfCdc: (...a: any[]) => stopAdfCdc(...a),
   deleteAdfCdc: (...a: any[]) => deleteAdfCdc(...a),
   statusAdfCdc: (...a: any[]) => statusAdfCdc(...a),
+  previewAdfCdcTarget: (...a: any[]) => previewAdfCdcTarget(...a),
 }));
 
 import { GET, POST } from '../route';
@@ -64,7 +66,7 @@ function req(url: string, init?: RequestInit) {
 describe('/api/adf/cdc', () => {
   beforeEach(() => {
     gateValue = null;
-    [listAdfCdcs, getAdfCdc, upsertAdfCdc, startAdfCdc, stopAdfCdc, deleteAdfCdc, statusAdfCdc].forEach((m) => m.mockReset?.());
+    [listAdfCdcs, getAdfCdc, upsertAdfCdc, startAdfCdc, stopAdfCdc, deleteAdfCdc, statusAdfCdc, previewAdfCdcTarget].forEach((m) => m.mockReset?.());
     getSessionMock.mockReturnValue({ claims: { oid: 'o' }, exp: Date.now() / 1000 + 3600 });
   });
   afterEach(() => vi.clearAllMocks());
@@ -113,6 +115,47 @@ describe('/api/adf/cdc', () => {
     expect(body.status).toBe('Stopping');
     expect(statusAdfCdc).toHaveBeenCalledWith('cdc1');
     expect(getAdfCdc).not.toHaveBeenCalled();
+  });
+
+  it('GET ?name=X&preview=1 returns landed change-data rows only', async () => {
+    previewAdfCdcTarget.mockResolvedValue({
+      entity: { name: 'dbo.orders', container: 'bronze', folderPath: 'mirrors/w/m/dbo.orders' },
+      entities: [{ name: 'dbo.orders', container: 'bronze', folderPath: 'mirrors/w/m/dbo.orders' }],
+      columns: ['id', 'amount'],
+      rows: [[1, 9.5], [2, 3.0]],
+      rowCount: 2,
+      truncated: false,
+      deltaUrl: 'https://acct.dfs.core.windows.net/bronze/mirrors/w/m/dbo.orders',
+    });
+    const res = await GET(req('/api/adf/cdc?name=cdc1&preview=1&rows=100'));
+    const body = await res.json();
+    expect(body.ok).toBe(true);
+    expect(body.preview.columns).toEqual(['id', 'amount']);
+    expect(body.preview.rows).toHaveLength(2);
+    expect(body.preview.entity.name).toBe('dbo.orders');
+    expect(previewAdfCdcTarget).toHaveBeenCalledWith('cdc1', undefined, 100);
+    // Preview must NOT fall through to the detail / status paths.
+    expect(getAdfCdc).not.toHaveBeenCalled();
+    expect(statusAdfCdc).not.toHaveBeenCalled();
+  });
+
+  it('GET preview passes through the entity selector and clamps rows', async () => {
+    previewAdfCdcTarget.mockResolvedValue({
+      entity: { name: 'sales.customers', container: 'bronze', folderPath: 'p' },
+      entities: [], columns: [], rows: [], rowCount: 0, truncated: false, deltaUrl: 'u',
+    });
+    await GET(req('/api/adf/cdc?name=cdc1&preview=1&entity=sales.customers'));
+    // entity forwarded; rows defaults to 100 when omitted.
+    expect(previewAdfCdcTarget).toHaveBeenCalledWith('cdc1', 'sales.customers', 100);
+  });
+
+  it('GET preview surfaces a 502 when the Delta target read fails', async () => {
+    previewAdfCdcTarget.mockRejectedValue(new Error('Missing env var: LOOM_SYNAPSE_WORKSPACE'));
+    const res = await GET(req('/api/adf/cdc?name=cdc1&preview=1'));
+    expect(res.status).toBe(502);
+    const body = await res.json();
+    expect(body.ok).toBe(false);
+    expect(body.error).toContain('LOOM_SYNAPSE_WORKSPACE');
   });
 
   it('POST action:start dispatches startAdfCdc', async () => {

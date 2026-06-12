@@ -11,7 +11,13 @@
 //   - Private DNS zone group → privatelink.adf.azure.com (commercial)
 //   - RBAC: Loom Console UAMI → "Data Factory Contributor" on the factory
 //     (covers pipelines/datasets/triggers AND adfcdcs/* — list/get/status/
-//      start/stop/delete/put — backing the Change Data Capture (preview) UI)
+//      start/stop/delete/put — backing the Change Data Capture (preview) UI).
+//     CDC change-data preview reads the resource's LANDED Delta target (not a
+//     new ARM verb): the Console UAMI's existing Storage Blob Data Reader on
+//     the DLZ ADLS Bronze container + Synapse Serverless (LOOM_SYNAPSE_WORKSPACE)
+//     OPENROWSET FORMAT='DELTA' supply the rows — no extra factory grant needed.
+//     (The factory MI's Storage Blob Data Contributor below is what WRITES that
+//     Delta target during continuous CDC.)
 //   - Diagnostic settings → standardized Loom LAW
 
 targetScope = 'resourceGroup'

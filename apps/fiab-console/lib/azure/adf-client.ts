@@ -20,6 +20,8 @@ import {
   ChainedTokenCredential,
 } from '@azure/identity';
 import { armBase, armScope, armHost, adfFactoryDeepLinkId } from './cloud-endpoints';
+import { pathToHttpsUrl, KNOWN_CONTAINERS } from './adls-client';
+import { executeQuery, serverlessTarget } from './synapse-sql-client';
 
 const API = '2018-06-01';
 
@@ -1183,6 +1185,137 @@ export async function statusAdfCdc(name: string): Promise<string> {
   } catch {
     return text.replace(/^"|"$/g, '');
   }
+}
+
+// ============================================================
+// CDC change-data PREVIEW — read the rows the CDC resource actually
+// captured. A ChangeDataCapture resource lands its initial load +
+// continuous changes as **Delta** in ADLS Bronze (one Delta folder per
+// target entity, carried in targetConnectionsInfo[].targetEntities[]
+// .dslConnectorProperties as { fileSystem, folderPath, format:'delta' } —
+// see mirror-engine.runMirrorAdfCdc). To preview the real change data we
+// read that landed Delta target via the SAME Synapse Serverless OPENROWSET
+// FORMAT='DELTA' path the Lakehouse file preview uses (no extra SDK, no
+// Parquet/_delta_log parsing in-process). This is the data the resource
+// produced — not a source-side sample — so it is honest "change data".
+//
+// No Fabric dependency: the Delta target is plain ADLS Gen2 and the reader
+// is Synapse Serverless. Works with LOOM_DEFAULT_FABRIC_WORKSPACE unset.
+// Required infra: the env-pinned factory (LOOM_ADF_NAME etc.) to resolve
+// the CDC target folder, plus LOOM_SYNAPSE_WORKSPACE for the Serverless
+// reader (the Synapse Serverless MI needs Storage Blob Data Reader on the
+// Bronze container — granted by the DLZ deploy). Missing config surfaces as
+// an honest gate, never a mock.
+// ============================================================
+
+/** One target entity that can be previewed (a landed Delta folder). */
+export interface AdfCdcTargetEntity {
+  /** `schema.table` display name of the captured entity. */
+  name: string;
+  /** ADLS container (file system) the Delta folder lives in, e.g. 'bronze'. */
+  container: string;
+  /** Container-relative path of the Delta table folder. */
+  folderPath: string;
+}
+
+export interface AdfCdcPreviewResult {
+  /** The entity actually previewed (the resolved Delta folder). */
+  entity: AdfCdcTargetEntity;
+  /** Every previewable target entity, so the editor can offer a picker. */
+  entities: AdfCdcTargetEntity[];
+  /** Column headers, in order. */
+  columns: string[];
+  /** Up to `rowLimit` captured-change rows (parallel to `columns`). */
+  rows: unknown[][];
+  rowCount: number;
+  /** True when the resource returned at least `rowLimit` rows (more exist). */
+  truncated: boolean;
+  /** abfss/https URL of the Delta folder read (receipt / deep-link). */
+  deltaUrl: string;
+}
+
+/** Extract a single DSL connector property value (string) by name. */
+function dslValue(props: MapperDslProperty[] | undefined, name: string): string | undefined {
+  const hit = (props || []).find((p) => p.name === name);
+  return typeof hit?.value === 'string' ? hit.value : undefined;
+}
+
+/**
+ * Flatten a CDC resource's target connections into the previewable Delta
+ * folders. Only Delta-format AzureBlobFS targets carrying both `fileSystem`
+ * and `folderPath` are returned (the shape mirror-engine writes).
+ */
+function cdcTargetEntities(c: AdfCdc): AdfCdcTargetEntity[] {
+  const out: AdfCdcTargetEntity[] = [];
+  for (const t of c.properties?.targetConnectionsInfo || []) {
+    for (const e of t.targetEntities || []) {
+      const container = dslValue(e.dslConnectorProperties, 'fileSystem');
+      const folderPath = dslValue(e.dslConnectorProperties, 'folderPath');
+      const format = (dslValue(e.dslConnectorProperties, 'format') || 'delta').toLowerCase();
+      if (!container || !folderPath || format !== 'delta') continue;
+      out.push({ name: e.name, container, folderPath: folderPath.replace(/^\/+|\/+$/g, '') });
+    }
+  }
+  return out;
+}
+
+function escapeSqlSingleQuotes(s: string): string {
+  return s.replace(/'/g, "''");
+}
+
+/**
+ * Preview the real change data a CDC resource landed in its Delta target.
+ *
+ *  - `name`     CDC (adfcdcs) resource name.
+ *  - `entity`   optional `schema.table` to preview; defaults to the first
+ *               Delta target entity on the resource.
+ *  - `rowLimit` clamped to 1..1000 (ADF Studio's data-preview row cap).
+ *
+ * Returns columns + rows read via Synapse Serverless OPENROWSET FORMAT='DELTA'
+ * over the landed Bronze Delta folder. Throws (caller surfaces a gate / 502)
+ * when the resource has no Delta target, the named entity is unknown, or the
+ * Serverless reader / storage RBAC is not configured.
+ */
+export async function previewAdfCdcTarget(
+  name: string,
+  entity?: string,
+  rowLimit = 100,
+): Promise<AdfCdcPreviewResult> {
+  const limit = Math.min(Math.max(Math.trunc(rowLimit) || 100, 1), 1000);
+  const c = await getAdfCdc(name);
+  const entities = cdcTargetEntities(c);
+  if (entities.length === 0) {
+    throw new Error(
+      `CDC resource "${name}" has no Delta target folder to preview. The resource must define a target entity with fileSystem + folderPath (Delta format) — re-create it via the mirror wizard, or Start it so it lands data.`,
+    );
+  }
+  const target = entity
+    ? entities.find((e) => e.name === entity)
+    : entities[0];
+  if (!target) {
+    throw new Error(`CDC resource "${name}" has no target entity named "${entity}".`);
+  }
+  // Defence-in-depth: the Delta container must be a known DLZ container so the
+  // OPENROWSET URL host/container cannot be steered to an arbitrary account.
+  if (!(KNOWN_CONTAINERS as readonly string[]).includes(target.container)) {
+    throw new Error(`CDC target container "${target.container}" is not a known DLZ container.`);
+  }
+
+  const deltaUrl = pathToHttpsUrl(target.container, target.folderPath);
+  const safeUrl = escapeSqlSingleQuotes(deltaUrl);
+  // limit is an integer 1..1000 (clamped above) — safe to inline.
+  const sqlText = `SELECT TOP ${limit} * FROM OPENROWSET(BULK '${safeUrl}', FORMAT = 'DELTA') AS r;`;
+
+  const result = await executeQuery(serverlessTarget('master'), sqlText);
+  return {
+    entity: target,
+    entities,
+    columns: result.columns,
+    rows: result.rows,
+    rowCount: result.rowCount,
+    truncated: result.rowCount >= limit,
+    deltaUrl,
+  };
 }
 
 // ============================================================
