@@ -3,10 +3,11 @@
 /**
  * ViewToggle — a segmented control for switching collection views.
  *
- * Fluent v9 (9.54) has no SegmentedControl, so this is a tight row of grouped
- * ToggleButtons that read as one segmented control. Used at the top of any
- * collection surface to switch between the ItemTile grid and the LoomDataTable
- * list.
+ * Fluent v9 (9.54) has no SegmentedControl, so this is a row of grouped
+ * ToggleButtons inside a tinted track; the active segment renders as a raised
+ * "pill" (the modern segmented-control affordance) so the current view is
+ * unambiguous. Used at the top of any collection surface to switch between the
+ * ItemTile grid and the LoomDataTable list.
  *
  *   const [view, setView] = useState<LoomView>('tile');
  *   <ViewToggle value={view} onChange={setView} />
@@ -19,7 +20,7 @@
  */
 
 import * as React from 'react';
-import { ToggleButton, makeStyles, tokens } from '@fluentui/react-components';
+import { ToggleButton, makeStyles, mergeClasses, tokens } from '@fluentui/react-components';
 import {
   Grid20Regular, AppsListDetail20Regular, Flowchart20Regular,
 } from '@fluentui/react-icons';
@@ -47,16 +48,34 @@ const useStyles = makeStyles({
     borderRadius: tokens.borderRadiusMedium,
     border: `1px solid ${tokens.colorNeutralStroke2}`,
     overflow: 'hidden',
-    backgroundColor: tokens.colorNeutralBackground1,
+    backgroundColor: tokens.colorNeutralBackground3,
+    padding: '2px',
+    gap: '2px',
   },
   btn: {
     border: 'none',
-    borderRadius: 0,
-    minWidth: '40px',
+    borderRadius: tokens.borderRadiusSmall,
+    minWidth: '64px',
+    backgroundColor: 'transparent',
+    color: tokens.colorNeutralForeground2,
+    fontWeight: tokens.fontWeightRegular,
+    ':hover': {
+      backgroundColor: tokens.colorNeutralBackground3Hover,
+      color: tokens.colorNeutralForeground1,
+    },
   },
-  divider: {
-    width: '1px',
-    backgroundColor: tokens.colorNeutralStroke2,
+  // Selected segment reads as a raised "pill" inside the track — the modern
+  // segmented-control affordance (cf. Fluent/SwiftUI), clearer than the default
+  // subtle ToggleButton checked state.
+  btnChecked: {
+    backgroundColor: tokens.colorNeutralBackground1,
+    color: tokens.colorNeutralForeground1,
+    fontWeight: tokens.fontWeightSemibold,
+    boxShadow: tokens.shadow2,
+    ':hover': {
+      backgroundColor: tokens.colorNeutralBackground1,
+      color: tokens.colorNeutralForeground1,
+    },
   },
 });
 
@@ -67,26 +86,24 @@ export function ViewToggle<V extends LoomGraphView = LoomView>({
   showGraph = false,
 }: ViewToggleProps<V>): React.ReactElement {
   const styles = useStyles();
+  const seg = (checked: boolean) => mergeClasses(styles.btn, checked && styles.btnChecked);
   return (
     <div className={styles.group} role="group" aria-label={ariaLabel}>
       {showGraph && (
-        <>
-          <ToggleButton
-            className={styles.btn}
-            appearance="subtle"
-            checked={value === 'graph'}
-            icon={<Flowchart20Regular />}
-            aria-label="Graph view"
-            aria-pressed={value === 'graph'}
-            onClick={() => onChange('graph' as V)}
-          >
-            Graph
-          </ToggleButton>
-          <div className={styles.divider} aria-hidden />
-        </>
+        <ToggleButton
+          className={seg(value === 'graph')}
+          appearance="subtle"
+          checked={value === 'graph'}
+          icon={<Flowchart20Regular />}
+          aria-label="Graph view"
+          aria-pressed={value === 'graph'}
+          onClick={() => onChange('graph' as V)}
+        >
+          Graph
+        </ToggleButton>
       )}
       <ToggleButton
-        className={styles.btn}
+        className={seg(value === 'tile')}
         appearance="subtle"
         checked={value === 'tile'}
         icon={<Grid20Regular />}
@@ -96,9 +113,8 @@ export function ViewToggle<V extends LoomGraphView = LoomView>({
       >
         Tiles
       </ToggleButton>
-      <div className={styles.divider} aria-hidden />
       <ToggleButton
-        className={styles.btn}
+        className={seg(value === 'list')}
         appearance="subtle"
         checked={value === 'list'}
         icon={<AppsListDetail20Regular />}
