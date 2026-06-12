@@ -789,6 +789,80 @@ export async function showQueryAccelerationPolicy(
 }
 
 /**
+ * The data formats an Azure-Storage external table may carry. Limited to the
+ * four export-capable formats when the table is a continuous-export target —
+ * Microsoft Learn: "When using an external table for export scenario, you're
+ * limited to the following formats: CSV, TSV, JSON, and Parquet."
+ *   https://learn.microsoft.com/kusto/management/external-tables-azure-storage
+ */
+export const KUSTO_EXTERNAL_TABLE_FORMATS = ['csv', 'tsv', 'json', 'parquet'] as const;
+export type KustoExternalTableFormat = typeof KUSTO_EXTERNAL_TABLE_FORMATS[number];
+
+/**
+ * `.create-or-alter external table T (schema) kind=storage dataformat=<f>
+ *   ( h@'<abfssUri>;managed_identity=system' )`.
+ *
+ * Creates an **Azure Storage** external table (the explicit-schema sibling of
+ * {@link createExternalDeltaTable}, which auto-infers from the Delta log). The
+ * schema is a structured `col:type, col:type` CSL string assembled by the UI's
+ * ColumnGridDesigner — never raw KQL — so the loom-no-freeform-config rule is
+ * honored. Storage auth uses the cluster system-assigned MI by default, or a
+ * user-assigned MI object id via `opts.miObjectId`.
+ *
+ * Requires Database User (.create) / Table Admin (.alter) — the Console UAMI
+ * holds AllDatabasesAdmin, which covers both. The cluster's MI needs Storage
+ * Blob Data Reader (read) / Contributor (continuous-export write) on the ADLS
+ * account. No Fabric / OneLake dependency — pure ADX ↔ ADLS Gen2.
+ *
+ * Grounded in Microsoft Learn:
+ *   .create-or-alter external table … kind=storage
+ *     https://learn.microsoft.com/kusto/management/external-tables-azure-storage
+ *   managed-identity storage auth
+ *     https://learn.microsoft.com/azure/data-explorer/external-tables-managed-identities
+ */
+export async function createExternalStorageTable(
+  db: string,
+  name: string,
+  schema: string,
+  abfssUri: string,
+  dataFormat: KustoExternalTableFormat,
+  opts?: { folder?: string; docString?: string; miObjectId?: string },
+): Promise<KustoQueryResult> {
+  if (!name.trim()) throw new KustoError('createExternalStorageTable: name is required', 400);
+  const cslSchema = schema.trim();
+  if (!cslSchema) throw new KustoError('createExternalStorageTable: schema is required', 400);
+  if (!/^([A-Za-z_][A-Za-z0-9_]*\s*:\s*[A-Za-z]+)(\s*,\s*[A-Za-z_][A-Za-z0-9_]*\s*:\s*[A-Za-z]+)*$/.test(cslSchema)) {
+    throw new KustoError('createExternalStorageTable: schema must be a CSL list of col:type pairs', 400);
+  }
+  const uri = abfssUri.trim();
+  if (!uri || !/^abfss:\/\//i.test(uri)) {
+    throw new KustoError('createExternalStorageTable: abfssUri must be an abfss:// URI', 400);
+  }
+  if (!(KUSTO_EXTERNAL_TABLE_FORMATS as readonly string[]).includes(dataFormat)) {
+    throw new KustoError(`createExternalStorageTable: dataFormat must be one of ${KUSTO_EXTERNAL_TABLE_FORMATS.join(', ')}`, 400);
+  }
+  const auth = opts?.miObjectId ? `;managed_identity=${opts.miObjectId}` : ';managed_identity=system';
+  const connStr = `h@'${uri}${auth}'`;
+  const withParts: string[] = [];
+  if (opts?.folder) withParts.push(`folder = "${opts.folder.replace(/"/g, '\\"')}"`);
+  if (opts?.docString) withParts.push(`docstring = "${opts.docString.replace(/"/g, '\\"')}"`);
+  const withClause = withParts.length ? ` with (${withParts.join(', ')})` : '';
+  const command = `.create-or-alter external table ${qName(name)} (${cslSchema})\nkind=storage\ndataformat=${dataFormat}\n(\n  ${connStr}\n)${withClause}`;
+  return executeMgmtCommand(db, command);
+}
+
+/**
+ * `.drop external table T` — removes the external-table *definition* (the
+ * referenced storage data is NOT deleted). Microsoft Learn:
+ *   https://learn.microsoft.com/kusto/management/drop-external-table
+ * Requires Database Admin. `ifexists` makes the drop idempotent.
+ */
+export async function dropExternalTable(db: string, name: string): Promise<KustoQueryResult> {
+  if (!name.trim()) throw new KustoError('dropExternalTable: name is required', 400);
+  return executeMgmtCommand(db, `.drop external table ${qName(name)} ifexists`);
+}
+
+/**
  * `.create-or-alter function NAME() { external_table("T") }` — a stored KQL
  * function that wraps the external Delta table so callers can query the
  * mirrored view with a clean `NAME()` invocation instead of remembering the
