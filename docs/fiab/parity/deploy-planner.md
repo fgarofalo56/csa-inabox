@@ -16,7 +16,7 @@ consumes. It is Azure-native end to end (no Microsoft Fabric dependency — see
 
 | Azure capability | Loom coverage | Backend |
 |---|---|---|
-| Browse a catalog of Azure resource types, grouped/searchable | ✅ Palette: 6 categories, search + filter chips, ~50 service types | `service-catalog.ts` |
+| Browse a catalog of Azure resource types, grouped/searchable | ✅ Palette: 6 categories, search + filter chips, 81 service types | `service-catalog.ts` |
 | Place resources into a scope (subscription / RG) | ✅ Canvas: subscription → domain → service containers (React Flow) | `deploy-plan-nodes.tsx`, `deploy-planner-view.tsx` |
 | Pick a resource SKU / pricing tier | ✅ Per-service config panel — Dropdown bound to the module's `@allowed` set (Redis SKU, App Service plan, Postgres/MySQL version + storage) | `ConfigFieldControl`, `configFor()` |
 | Pick a runtime / version / capacity | ✅ App Service + Functions runtime, Postgres/MySQL version, storage GB (SpinButton bounded by `@minValue/@maxValue`) | `ConfigFieldControl` |
@@ -105,7 +105,7 @@ icon API for icons, on a bounded canvas."*
 
 | Capability | Status | Backend / mechanism |
 |---|---|---|
-| All Azure service types as draggable palette nodes | ✅ | `SERVICE_CATALOG` (78 services across 6 categories) — drag (`application/x-loom-service` MIME) + click + keyboard add |
+| All Azure service types as draggable palette nodes | ✅ | `SERVICE_CATALOG` (81 services across 6 categories: 12 compute · 20 data · 14 ai · 10 integration · 11 governance · 14 networking) — drag (`application/x-loom-service` MIME) + click + keyboard add |
 | Service icons from the Atlas Diag icon API | ✅ | `iconUrl(def.iconSlug ?? def.key)` — canonical kebab-case `iconSlug` per service resolves against `NEXT_PUBLIC_LOOM_ICON_BASE`; was previously keyed on the camelCase `key`, which 404'd |
 | Graceful icon fallback (no broken-image boxes) | ✅ | `ServiceIconChip` 3-tier chain: remote Atlas Diag `<img>` (with `onError` → fallback) → bundled `/azure-icons/*.png` → Fluent glyph |
 | Bounded canvas (doesn't grow the page) | ✅ | `body` grid `height: calc(100vh - 220px)`, palette `overflowY:auto`, `.canvas` `overflow:hidden`, React Flow `fitView` + `minZoom 0.3` / `maxZoom 2` |
@@ -129,9 +129,10 @@ architecture-icon basename. Both render call sites use `iconSlug ?? key`.
 
 ## Catalog breadth (defect B)
 
-The catalog grew from 57 → **78** real Azure service types. New entries are
-tagged `planOnly: true` (real Azure, no one-button bicep toggle yet) so the
-plan stays honest — they never emit a bicep param. Additions span App
+The catalog grew from 57 → **81** real Azure service types (44 with a real
+one-button `bicepFlag` toggle, the rest `core` or `planOnly`). Of these, 25
+are tagged `planOnly: true` (real Azure, no one-button bicep toggle yet) so the
+plan stays honest — they never emit a bicep param. Plan-only additions span App
 Configuration, Container Apps Jobs, HDInsight, Data Share, Cosmos Gremlin,
 Azure Maps, Bot Service, Translator, AI Video Indexer, Azure Relay,
 Notification Hubs, API Center, Application Insights, Managed Grafana, Azure
@@ -164,6 +165,7 @@ DDoS Protection.
 ## Tests
 
 `apps/fiab-console/lib/components/deploy-planner/__tests__/bicepparam.test.ts`
-(16 cases): flag mapping, bicepparam emission, catalog breadth (≥70),
-plan-only honesty, `iconSlug` kebab-case + `iconUrl` round-trip (set/unset
-base), and the bicep drift guard.
+(22 cases): flag mapping, bicepparam emission, catalog breadth (≥70),
+plan-only honesty, per-resource config schema + coercion, `iconSlug`
+kebab-case + `iconUrl` round-trip (set/unset base), and the bicep drift
+guard. All 22 pass (node env).
