@@ -66,28 +66,57 @@ const useStyles = makeStyles({
   titleRow: { display: 'flex', alignItems: 'center', gap: '8px' },
   intro: { display: 'block', color: tokens.colorNeutralForeground3 },
   meta: {
-    display: 'flex', gap: '16px', flexWrap: 'wrap',
+    display: 'flex', gap: '20px', flexWrap: 'wrap',
     marginTop: '12px', marginBottom: '12px',
-    ...shorthands.padding('12px'),
+    ...shorthands.padding('14px', '16px'),
     ...shorthands.borderRadius(tokens.borderRadiusMedium),
+    ...shorthands.border('1px', 'solid', tokens.colorNeutralStroke2),
     backgroundColor: tokens.colorNeutralBackground2,
   },
-  metaItem: { display: 'flex', flexDirection: 'column', gap: '2px', minWidth: '120px' },
-  metaLabel: { color: tokens.colorNeutralForeground3, fontSize: tokens.fontSizeBase200 },
-  metaValue: { fontSize: tokens.fontSizeBase300 },
+  metaItem: { display: 'flex', flexDirection: 'column', gap: '4px', minWidth: '120px' },
+  metaLabel: {
+    color: tokens.colorNeutralForeground3,
+    fontSize: tokens.fontSizeBase200,
+    textTransform: 'uppercase',
+    letterSpacing: '0.04em',
+    fontWeight: tokens.fontWeightSemibold,
+  },
+  metaValue: { fontSize: tokens.fontSizeBase300, fontWeight: tokens.fontWeightMedium },
   desc: { display: 'block', marginBottom: '8px' },
   section: { marginTop: '16px' },
-  sectionHead: { display: 'flex', alignItems: 'center', gap: '6px', marginBottom: '6px' },
-  sortable: { cursor: 'pointer', userSelect: 'none' },
+  sectionHead: { display: 'flex', alignItems: 'center', gap: '6px', marginBottom: '8px', color: tokens.colorNeutralForeground2 },
+  sortable: {
+    cursor: 'pointer', userSelect: 'none',
+    ':focus-visible': {
+      outlineWidth: '2px',
+      outlineStyle: 'solid',
+      outlineColor: tokens.colorStrokeFocus2,
+      outlineOffset: '-2px',
+    },
+  },
   muted: { color: tokens.colorNeutralForeground3 },
   spinnerWrap: { ...shorthands.padding('16px') },
   errorBar: { marginBottom: '8px' },
   leadActions: { display: 'flex', gap: '6px', alignItems: 'center', marginRight: 'auto' },
   previewControls: { display: 'flex', gap: '8px', alignItems: 'flex-end', flexWrap: 'wrap', marginBottom: '8px' },
-  previewField: { display: 'flex', flexDirection: 'column', gap: '2px' },
+  previewField: { display: 'flex', flexDirection: 'column', gap: '4px' },
   previewScroll: { maxHeight: '320px', overflowY: 'auto', overflowX: 'auto', ...shorthands.border('1px', 'solid', tokens.colorNeutralStroke2), ...shorthands.borderRadius(tokens.borderRadiusMedium) },
   previewCell: { whiteSpace: 'nowrap', maxWidth: '320px', overflow: 'hidden', textOverflow: 'ellipsis' },
   previewCaption: { display: 'block', marginTop: '6px', color: tokens.colorNeutralForeground3 },
+  previewLoadingWrap: {
+    display: 'flex', alignItems: 'center', justifyContent: 'center',
+    ...shorthands.padding('24px'),
+    ...shorthands.border('1px', 'dashed', tokens.colorNeutralStroke2),
+    ...shorthands.borderRadius(tokens.borderRadiusMedium),
+    backgroundColor: tokens.colorNeutralBackground2,
+  },
+  previewEmptyWrap: {
+    display: 'flex', flexDirection: 'column', alignItems: 'center', gap: '6px', textAlign: 'center',
+    ...shorthands.padding('20px'),
+    ...shorthands.border('1px', 'dashed', tokens.colorNeutralStroke2),
+    ...shorthands.borderRadius(tokens.borderRadiusMedium),
+    color: tokens.colorNeutralForeground3,
+  },
 });
 
 function statusColor(s: string): 'success' | 'informative' | 'warning' | 'danger' {
@@ -385,12 +414,21 @@ export function AdfCdcEditor({ name, onClose }: AdfCdcEditorProps) {
                     </MessageBar>
                   )}
 
+                  {previewLoading && !preview && !previewError && (
+                    <div className={s.previewLoadingWrap}>
+                      <Spinner size="small" label="Reading change data from the Delta target…" />
+                    </div>
+                  )}
+
                   {preview && !previewError && (
                     preview.columns.length === 0 ? (
-                      <Caption1 className={s.muted}>
-                        No rows captured yet for {preview.entity.name}. The resource may not have completed
-                        its initial load — refresh after it reports Running.
-                      </Caption1>
+                      <div className={s.previewEmptyWrap}>
+                        <TableSimple20Regular />
+                        <Caption1>
+                          No rows captured yet for {preview.entity.name}. The resource may not have completed
+                          its initial load — refresh after it reports Running.
+                        </Caption1>
+                      </div>
                     ) : (
                       <>
                         <div className={s.previewScroll}>
