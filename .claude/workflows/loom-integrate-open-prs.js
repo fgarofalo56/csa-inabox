@@ -57,7 +57,7 @@ if (!prs) {
     `Run: gh pr list --state open --limit 200 --json number,title,headRefName,mergeable,isDraft.\n` +
     `Keep ONLY feature PRs whose title matches feat(csa-loom)/fix(csa-loom)/docs(csa-loom). EXCLUDE dependabot, EXCLUDE the release-please PR (title "chore(main): release csa-inabox …"), EXCLUDE drafts.\n` +
     `Return them ordered: MERGEABLE=="MERGEABLE" first, then the rest, each group ascending by number. Numbers only.`,
-    { model: 'fable', phase: 'Survey', label: 'survey:open-prs', schema: PR_SCHEMA },
+    { model: 'opus', phase: 'Survey', label: 'survey:open-prs', schema: PR_SCHEMA },
   )
   prs = (survey && survey.prs) || []
 }
@@ -86,7 +86,7 @@ const batches = chunk(prs, BATCH)
 const merged = []
 const flagged = []
 for (let i = 0; i < batches.length; i++) {
-  const res = await agent(batchPrompt(batches[i], i, batches.length), { model: 'fable', phase: 'Integrate', label: `batch:${i + 1}/${batches.length}` })
+  const res = await agent(batchPrompt(batches[i], i, batches.length), { model: 'opus', phase: 'Integrate', label: `batch:${i + 1}/${batches.length}` })
   const m = String(res).match(/MERGED=\[([^\]]*)\]/)
   const f = String(res).match(/FLAGGED=\[([^\]]*)\]/)
   if (m && m[1].trim()) merged.push(...m[1].split(/[,\s]+/).filter(Boolean))
@@ -100,7 +100,7 @@ const verify = await agent(
   `Final integration verify. cd ${REPO} && rm -f .git/index.lock && git fetch -q origin && git checkout -q main && git reset -q --hard origin/main.\n` +
   `Run: cd apps/fiab-console && npx tsc --noEmit -p tsconfig.json 2>&1 | grep -E "error TS" | grep -vE "makeStyles|griffel" | head; then npx next build 2>&1 | tail -20.\n` +
   `If anything is red, fix-forward on main with a minimal \`fix(csa-loom): …\` commit (explicit paths, trailer ${COAUTHOR}, push) until BOTH are green. Then report: tsc clean? build clean? head SHA. Reply with a 3-line status.`,
-  { model: 'fable', phase: 'Verify', label: 'verify:final-build' },
+  { model: 'opus', phase: 'Verify', label: 'verify:final-build' },
 )
 log(`Final verify: ${String(verify).slice(0, 200)}`)
 return { prs: prs.length, merged, flagged, verify: String(verify).slice(0, 400) }

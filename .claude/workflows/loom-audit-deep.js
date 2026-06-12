@@ -84,7 +84,7 @@ const out = await agent(
   `Reconcile these deep-dive ledgers into NEW backlog items the first audit (docs/fiab/prp/AUDIT-2026-06-10.md, items audit-T01..T36) MISSED. First READ ${REPO}/docs/fiab/prp/AUDIT-2026-06-10.md so you do NOT duplicate its 36 items. Then from the ledgers below, extract every DISTINCT asked-for capability that is NOT already covered + NOT already shipped (verify shipped by a quick grep of ${REPO}/apps/fiab-console where unsure). Number NEW items audit-T37+. Group into waves 6+ (e.g. wave 6 help/learning, 7 mcp/admin catalog, 8 fabric-build-2026 parity, 9 UI redesign — your call). Each item needs the askSource quote (proof it was requested).\n\n` +
   `=== ATLAS DEEP HISTORY ===\n${atlas}\n\n=== FABRIC BUILD 2026 ===\n${fabric}\n\n=== HELP/LEARNING ===\n${help}\n\n=== MCP/ADMIN ===\n${mcp}\n\n=== UI REDESIGN ===\n${uiR}\n\n` +
   `WRITE the full report to ${REPO}/docs/fiab/prp/AUDIT-2026-06-10-deep.md (markdown: New Item | Area | Ask Source | Status | Goal | Wave) using the Write tool, and return the structured object. Be generous but honest — every item must trace to a real operator ask.`,
-  { model: 'fable', phase: 'Reconcile', label: 'reconcile:new-backlog', schema: SCHEMA },
+  { model: 'opus', phase: 'Reconcile', label: 'reconcile:new-backlog', schema: SCHEMA },
 )
 log(`Deep audit: ${out && out.newBacklog ? out.newBacklog.length : 0} NEW items beyond the first 36`)
 return out
