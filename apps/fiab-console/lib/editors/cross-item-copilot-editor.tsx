@@ -288,7 +288,10 @@ export function CopilotConsoleView({ embedded = false, contextSlug = 'default', 
       const res = await fetch('/api/copilot/orchestrate', {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ prompt: p, sessionId: activeSessionId || undefined, contextSlug }),
+        // forceAgent:'build' — the full console IS the build agent surface the
+        // user navigated to deliberately; the unified router's docs-vs-build
+        // classification applies only to the global launcher window.
+        body: JSON.stringify({ prompt: p, sessionId: activeSessionId || undefined, contextSlug, forceAgent: 'build' }),
       });
 
       if (res.status === 503) {

@@ -77,10 +77,11 @@ export const TOUR_STEPS: TourStep[] = [
   {
     id: 'copilot',
     anchorSelector: '[data-tour="copilot"]',
-    title: 'Ask the Help Copilot',
+    title: 'Ask Loom Copilot',
     body:
-      'Stuck on a concept or a control? The Help Copilot answers questions about CSA ' +
-      'Loom in context. Open it anytime with Ctrl+/.',
+      'One chat for everything: ask a docs/how-to question or tell it to build and ' +
+      'query — Loom Copilot routes each message to the right agent and badges who ' +
+      'answered. Open it anytime with Ctrl+/.',
     position: 'below',
   },
   {

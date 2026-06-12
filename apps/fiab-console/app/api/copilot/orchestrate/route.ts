@@ -1,9 +1,17 @@
 /**
  * POST /api/copilot/orchestrate
  *
- * Body: { prompt: string, sessionId?: string, contextSlug?: string,
- *         contextPayload?: { activeQuery?, schema?, workspaceId?, itemId?, … } }
- * Streams Server-Sent Events of OrchestratorStep until completion.
+ * Body: { prompt, sessionId?, persona?, personaContext?, contextSlug?,
+ *         contextPayload?, helpContext?, forceAgent? }
+ * Streams Server-Sent Events of RoutedStep until completion.
+ *
+ * Single Copilot window: this route runs the unified {@link routeCopilot}
+ * router. For the GLOBAL launcher (default pane, no explicit persona) it
+ * classifies intent with a real AOAI `tool_choice` call and delegates to the
+ * docs agent (orchestrateHelp) or the build agent (orchestrate), emitting one
+ * `agent` attribution step first so the UI can badge who answered. When opened
+ * from an editor pane (`contextSlug`) or with an explicit persona, routing is
+ * skipped and the build orchestrator runs directly.
  *
  * `contextSlug` selects the per-pane persona (warehouse / notebook / lakehouse
  * / …) server-side via the persona registry; `contextPayload` carries the raw
@@ -17,10 +25,15 @@
 import { NextResponse, type NextRequest } from 'next/server';
 import { getSession } from '@/lib/auth/session';
 import {
-  orchestrate,
   resolveAoaiTarget,
   NoAoaiDeploymentError,
 } from '@/lib/azure/copilot-orchestrator';
+import {
+  routeCopilot,
+  decideAutoRoute,
+  type RouteAgent,
+  type RouteCopilotOptions,
+} from '@/lib/azure/copilot-router';
 import { isSafetyConfigured, shieldPrompt, moderateContent } from '@/lib/azure/foundry-client';
 import { VALID_CONTEXT_SLUGS, type PersonaContextPayload } from '@/lib/azure/copilot-personas';
 import { loadTenantCopilotConfig } from '@/lib/azure/copilot-config-store';
@@ -41,6 +54,10 @@ export async function POST(req: NextRequest) {
     personaContext?: Record<string, unknown>;
     contextSlug?: string;
     contextPayload?: Record<string, unknown>;
+    /** Route/tutorial awareness forwarded to the docs agent when routed there. */
+    helpContext?: RouteCopilotOptions['helpContext'];
+    /** Force a specific agent (e.g. the tutorial stepper always wants 'docs'). */
+    forceAgent?: RouteAgent;
   } = {};
   try { body = await req.json(); } catch {}
   const prompt = (body.prompt || '').trim();
@@ -63,6 +80,15 @@ export async function POST(req: NextRequest) {
     body.contextSlug && VALID_CONTEXT_SLUGS.has(body.contextSlug) ? body.contextSlug : 'default';
   const contextPayload: PersonaContextPayload =
     body.contextPayload && typeof body.contextPayload === 'object' ? body.contextPayload : {};
+
+  // forceAgent is only honored for the two known values; anything else falls
+  // through to intent classification.
+  const forceAgent: RouteAgent | undefined =
+    body.forceAgent === 'docs' || body.forceAgent === 'build' ? body.forceAgent : undefined;
+  // Auto-route (classify intent) only for the global launcher: default pane, no
+  // explicit persona, no editor-supplied persona context. Editor panes carry a
+  // build persona the user already chose, so they skip classification.
+  const autoRoute = decideAutoRoute({ persona, contextSlug, personaContext });
 
   // Tenant admin-selected Copilot config (account + chat deployment). Falls
   // back to env / Foundry-hub discovery inside resolveAoaiTarget.
@@ -108,7 +134,11 @@ export async function POST(req: NextRequest) {
       };
       send('session', { sessionId });
       try {
-        for await (const step of orchestrate({ prompt, sessionId, userOid, tenantConfig, persona, personaContext, contextSlug, contextPayload })) {
+        for await (const step of routeCopilot({
+          prompt, sessionId, userOid, tenantConfig, persona, personaContext,
+          contextSlug, contextPayload,
+          autoRoute, forceAgent, helpContext: body.helpContext,
+        })) {
           send('step', step);
           if (step.kind === 'final' || step.kind === 'error') break;
         }

@@ -246,6 +246,7 @@ export function CopilotAgentsConfig() {
                 aoaiEndpoint: next?.endpoint,
                 copilotChatDeployment: undefined,
                 helpAgentDeployment: undefined,
+                routerDeployment: undefined,
                 embeddingDeployment: undefined,
               });
             }}
@@ -276,6 +277,12 @@ export function CopilotAgentsConfig() {
           'Help agent model', config.helpAgentDeployment, chatDeployments,
           (v) => set({ helpAgentDeployment: v }), RECOMMENDED_CHAT_MODELS,
           'Docs-grounded Help Copilot model. Falls back to the Copilot chat model when unset.',
+        )}
+
+        {deploymentDropdown(
+          'Intent router model (optional)', config.routerDeployment, chatDeployments,
+          (v) => set({ routerDeployment: v }), RECOMMENDED_CHAT_MODELS,
+          'One cheap classifier call per unified-Copilot turn picks the docs/help vs build/data agent. Falls back to the Copilot chat model when unset.',
         )}
 
         {deploymentDropdown(
