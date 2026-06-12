@@ -34,6 +34,7 @@ import {
   Eye20Regular, MathFormula20Regular,
   ArrowDownload20Regular,
   Organization20Regular,
+  ArrowUpload20Regular, CloudArrowUp24Regular, Dismiss16Regular,
 } from '@fluentui/react-icons';
 import { ModelViewPanel } from './components/model-view-canvas';
 import { ItemEditorChrome } from './item-editor-chrome';
@@ -113,6 +114,30 @@ const useStyles = makeStyles({
   badgeWrap: { display: 'flex', columnGap: tokens.spacingHorizontalXS, rowGap: tokens.spacingVerticalXS, flexWrap: 'wrap' },
   actionRow: { display: 'flex', columnGap: tokens.spacingHorizontalS },
   hintCaption: { display: 'block', color: tokens.colorNeutralForeground3 },
+  // ---- Fluent-themed file picker (replaces the bare <input type=file>) ----
+  fileDrop: {
+    display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center',
+    rowGap: tokens.spacingVerticalXS, textAlign: 'center', cursor: 'pointer',
+    padding: `${tokens.spacingVerticalL} ${tokens.spacingHorizontalL}`,
+    border: `1px dashed ${tokens.colorNeutralStroke2}`, borderRadius: tokens.borderRadiusMedium,
+    backgroundColor: tokens.colorNeutralBackground2, color: tokens.colorNeutralForeground3,
+    transitionProperty: 'background-color, border-color', transitionDuration: tokens.durationFaster,
+    ':hover': { backgroundColor: tokens.colorNeutralBackground2Hover, borderColor: tokens.colorBrandStroke1, color: tokens.colorNeutralForeground2 },
+    ':focus-visible': { outline: `2px solid ${tokens.colorStrokeFocus2}`, outlineOffset: '1px' },
+  },
+  fileDropActive: { borderColor: tokens.colorBrandStroke1, backgroundColor: tokens.colorNeutralBackground2Hover, color: tokens.colorNeutralForeground2 },
+  fileDropIcon: { color: tokens.colorBrandForeground1 },
+  filePicked: {
+    display: 'flex', alignItems: 'center', columnGap: tokens.spacingHorizontalS,
+    padding: `${tokens.spacingVerticalXS} ${tokens.spacingHorizontalS}`,
+    border: `1px solid ${tokens.colorNeutralStroke2}`, borderRadius: tokens.borderRadiusMedium,
+    backgroundColor: tokens.colorNeutralBackground1,
+  },
+  filePickedName: { flex: 1, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' },
+  visuallyHidden: {
+    position: 'absolute', width: '1px', height: '1px', padding: 0, margin: '-1px',
+    overflow: 'hidden', clip: 'rect(0,0,0,0)', whiteSpace: 'nowrap', border: 0,
+  },
 });
 
 interface QueryResponse {
@@ -475,6 +500,8 @@ function UnityCatalogWriteDialogs(props: UcWriteDialogsProps) {
   const [tblFileFmt, setTblFileFmt] = useState<'csv' | 'json' | 'parquet' | 'orc' | 'avro' | 'text'>('csv');
   const [tblFileHeader, setTblFileHeader] = useState(true);
   const [tblFileMsg, setTblFileMsg] = useState<string | null>(null);
+  const tblFileInputRef = useRef<HTMLInputElement | null>(null);
+  const [tblFileDragOver, setTblFileDragOver] = useState(false);
   useEffect(() => {
     if (createTableOpen) { setTblCatalog(activeCatalog || catalogs[0] || ''); setTblSchema(activeSchema || ''); }
   }, [createTableOpen, activeCatalog, activeSchema, catalogs]);
@@ -509,6 +536,11 @@ function UnityCatalogWriteDialogs(props: UcWriteDialogsProps) {
     const reader = new FileReader();
     reader.onload = () => setTblFileContent(typeof reader.result === 'string' ? reader.result : '');
     reader.readAsText(file);
+  }, []);
+
+  const clearPickedFile = useCallback(() => {
+    setTblFileName(''); setTblFileContent('');
+    if (tblFileInputRef.current) tblFileInputRef.current.value = '';
   }, []);
 
   const createTableFromFile = useCallback(async () => {
@@ -924,13 +956,41 @@ function UnityCatalogWriteDialogs(props: UcWriteDialogsProps) {
                     )}
                     <Field label="Data file" required hint="CSV / JSON / Parquet / ORC / Avro / text. Read in the browser and uploaded to the staging volume.">
                       <input
+                        ref={tblFileInputRef}
                         type="file"
+                        className={s.visuallyHidden}
                         accept=".csv,.json,.parquet,.orc,.avro,.txt,text/csv,application/json"
                         aria-label="Choose a data file"
                         onChange={(e) => onPickFile(e.target.files?.[0] || null)}
                       />
+                      {tblFileName ? (
+                        <div className={s.filePicked}>
+                          <Document20Regular className={s.fileDropIcon} />
+                          <Body1 className={s.filePickedName} title={tblFileName}>{tblFileName}</Body1>
+                          <Caption1>{tblFileContent.length.toLocaleString()} chars</Caption1>
+                          <Button size="small" appearance="subtle" icon={<ArrowUpload20Regular />} onClick={() => tblFileInputRef.current?.click()}>Replace</Button>
+                          <Tooltip content="Remove file" relationship="label">
+                            <Button size="small" appearance="subtle" icon={<Dismiss16Regular />} aria-label="Remove file" onClick={clearPickedFile} />
+                          </Tooltip>
+                        </div>
+                      ) : (
+                        <div
+                          role="button"
+                          tabIndex={0}
+                          aria-label="Choose or drop a data file"
+                          className={tblFileDragOver ? `${s.fileDrop} ${s.fileDropActive}` : s.fileDrop}
+                          onClick={() => tblFileInputRef.current?.click()}
+                          onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); tblFileInputRef.current?.click(); } }}
+                          onDragOver={(e) => { e.preventDefault(); setTblFileDragOver(true); }}
+                          onDragLeave={() => setTblFileDragOver(false)}
+                          onDrop={(e) => { e.preventDefault(); setTblFileDragOver(false); onPickFile(e.dataTransfer.files?.[0] || null); }}
+                        >
+                          <CloudArrowUp24Regular className={s.fileDropIcon} />
+                          <Body1>Drop a file here, or <strong>browse</strong></Body1>
+                          <Caption1>CSV · JSON · Parquet · ORC · Avro · text</Caption1>
+                        </div>
+                      )}
                     </Field>
-                    {tblFileName && <Caption1>Selected: <code>{tblFileName}</code> ({tblFileContent.length.toLocaleString()} chars)</Caption1>}
                     <div className={s.dlgRow}>
                       <Field label="File format" className={s.flex1}>
                         <Dropdown value={tblFileFmt} selectedOptions={[tblFileFmt]} onOptionSelect={(_, d) => d.optionValue && setTblFileFmt(d.optionValue as typeof tblFileFmt)}>
