@@ -62,16 +62,24 @@ Palantir Foundry Health Checks = monitoring views with alerts.
 | Rule list / state | ✅ | `GET .../rule` |
 | Monitor not configured | ⚠️ honest-gate | names `LOOM_LOG_ANALYTICS_RESOURCE_ID` / `LOOM_ALERT_RG` / Monitoring Contributor |
 
-## 6. AIP Logic → `aip-logic` (Spindle)
-Palantir AIP Logic = no-code typed LLM function (typed input → steps → output).
+## 6. AIP Logic / AIP → `aip-logic` (Spindle Studio)
+Palantir AIP Logic = no-code typed LLM function (typed input → steps → output);
+Palantir AIP = agents + logic that run over the ontology. Spindle Studio covers
+both: typed logic functions AND a multi-step tool-calling agent runtime, both
+grounded on the Weave ontology and runnable against real Azure OpenAI / Foundry.
 
 | Capability | Loom coverage | Backend per control |
 | --- | --- | --- |
 | Typed input schema | ✅ | persisted on `state.inputs` (name + type dropdown) |
 | Ordered steps (LLM / extract / branch) | ✅ | persisted on `state.steps` (dropdown — no freeform JSON) |
 | Typed output | ✅ | `state.outputType` + description |
-| Invoke as a function | ✅ | `POST /api/items/aip-logic/[id]/invoke` → `chatGrounded` against live Azure OpenAI |
-| No AOAI deployment | ⚠️ honest-gate | names AOAI env vars / Foundry deploy step |
+| Ground on Weave ontology | ✅ | `GET/POST /api/items/aip-logic/[id]/bind-ontology` → persists `state.boundOntologyId` + entity types + Thread edge `aip-logic-grounded-on` |
+| Invoke as a function (grounded) | ✅ | `POST .../invoke` (`mode:'logic'`) → `chatGrounded` with the ontology's Lakehouse/Warehouse bindings attached as typed sources; queries run read-only on Synapse, answer cites real rows |
+| Invoke as a tool-calling agent | ✅ | `POST .../invoke` (`mode:'agent'`) → `copilot-orchestrator` `orchestrate()` with `buildDefaultRegistry()` (Loom data tools) + ontology context; returns per-step run trace |
+| Publish as Azure AI Foundry agent | ✅ | `POST .../deploy` → `createOrUpdateAgent()` (model = live AOAI deployment, tools = ontology data bindings); persists `state.foundryAgentId` |
+| Run deployed agent + inspect steps | ✅ | `POST .../run-agent` → `runAgentAndInspect()` (thread→message→run→poll→steps) |
+| No AOAI deployment | ⚠️ honest-gate | `.../invoke` + `.../deploy` 503 naming `LOOM_AOAI_ENDPOINT` + `LOOM_AOAI_DEPLOYMENT` |
+| Foundry Agent Service unconfigured / Azure Gov | ⚠️ honest-gate | `.../deploy` + `.../run-agent` 501 naming `LOOM_FOUNDRY_PROJECT_ENDPOINT` + `LOOM_FOUNDRY_PROJECT_ID`; directs to the Azure-native Invoke path (Agent Service is unsupported in Azure Government) |
 
 ## Verification
 - `npx tsc --noEmit` clean for all touched files (`palantir-editors.tsx`,
