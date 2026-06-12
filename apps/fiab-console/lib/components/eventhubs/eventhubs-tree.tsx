@@ -11,20 +11,25 @@
  * Event Hubs blade (Event Hubs / Schema Registry / Shared access policies /
  * Networking / Geo-recovery) into one tree.
  *
- * Every count comes from a real ARM list call; every create/delete hits the
- * real ARM REST through the namespace-level BFF routes:
+ * Every count comes from a real ARM list call; every create/delete/update hits
+ * the real ARM REST through the namespace-level BFF routes:
  *   - Event hubs        → /api/eventhubs/hubs            (list / create / delete)
  *   - Consumer groups   → /api/eventhubs/consumergroups  (per-hub list / create / delete; lazy-loaded per hub)
  *   - Schema groups     → /api/eventhubs/schemagroups    (list / create / delete)
- *   - Authorization rules → /api/eventhubs/authrules     (read-only SAS policies)
+ *   - Authorization rules → /api/eventhubs/authrules     (list SAS policies; reveal/rotate keys)
  *   - Networking        → /api/eventhubs/network         (read-only firewall summary)
- *   - Geo-recovery      → /api/eventhubs/geodr           (read-only Geo-DR configs)
+ *   - Geo-recovery      → /api/eventhubs/geodr           (list Geo-DR configs)
  *
- * Capabilities the Azure portal exposes but we don't yet author (Capture config,
- * Geo-DR pairing, private endpoints, SAS-key authoring/rotation) render as
- * honest ⚠️ gate rows naming the ARM REST that would back them — never a fake
- * list. No mocks. When the namespace is unconfigured the routes 503 and the
- * whole tree shows a single honest infra-gate MessageBar.
+ * Authoring surfaces beyond list/create/delete open the tabbed
+ * EventHubsNamespaceEditor (capture / geodr / sas / privateendpoints), which
+ * drives the full ARM/EH REST surface the Azure portal exposes:
+ *   - Capture config     → /api/eventhubs/capture                          (GET/PUT captureDescription)
+ *   - Geo-DR pair/break/failover → /api/eventhubs/geodr-actions            (POST create | delete | failover)
+ *   - SAS-key reveal/rotate      → /api/eventhubs/authrules/[rule]/keys[/regenerate] (namespace + per-hub scope)
+ *   - Private endpoints  → /api/eventhubs/private-endpoints                (GET list / POST approve | reject)
+ *
+ * No mocks. When the namespace is unconfigured the routes 503 and the whole
+ * tree shows a single honest infra-gate MessageBar.
  */
 
 import { useCallback, useEffect, useMemo, useState } from 'react';
@@ -114,6 +119,15 @@ function peStatusColor(s?: string) {
 function hubStatusColor(s?: string) {
   if (s === 'Active') return 'success' as const;
   if (s === 'Disabled' || s === 'SendDisabled' || s === 'ReceiveDisabled') return 'warning' as const;
+  return 'informative' as const;
+}
+
+// Public network access posture badge color. "Disabled" (private-endpoint-only)
+// is the secure IL5/GCC-High default, so it reads as success; "Enabled" (public
+// reachable) reads as warning to flag the looser posture.
+function publicAccessColor(s?: string) {
+  if (s === 'Disabled' || s === 'SecuredByPerimeter') return 'success' as const;
+  if (s === 'Enabled') return 'warning' as const;
   return 'informative' as const;
 }
 
@@ -666,7 +680,7 @@ export function EventHubsNamespaceTree({ refreshKey = 0, onSelectEventHub }: Eve
                     <TreeItem itemType="branch" value={`cg-grp-${h.name}`}>
                       {groupHeader('Consumer groups', <PeopleTeam20Regular />, cgByHub[h.name]?.length ?? 0, () => openCreate('cg', h.name), 'New consumer group')}
                       <Tree>
-                        {cgLoading[h.name] && <TreeItem itemType="leaf" value={`cg-load-${h.name}`}><TreeItemLayout><Caption1>Loading…</Caption1></TreeItemLayout></TreeItem>}
+                        {cgLoading[h.name] && <TreeItem itemType="leaf" value={`cg-load-${h.name}`}><TreeItemLayout><Spinner size="extra-tiny" label="Loading consumer groups…" labelPosition="after" /></TreeItemLayout></TreeItem>}
                         {!cgLoading[h.name] && (cgByHub[h.name] || []).length === 0 && (
                           <TreeItem itemType="leaf" value={`cg-empty-${h.name}`}><TreeItemLayout><Caption1>No consumer groups</Caption1></TreeItemLayout></TreeItem>
                         )}
@@ -762,13 +776,16 @@ export function EventHubsNamespaceTree({ refreshKey = 0, onSelectEventHub }: Eve
                 <TreeItemLayout iconBefore={<ShieldKeyhole20Regular />}>
                   {network ? (
                     <span className={s.leafRow}>
-                      <span>Public access: {network.publicNetworkAccess || '—'}</span>
+                      <span>Public access</span>
                       <span className={s.leafActions}>
-                        <Badge size="small" appearance="tint">{network.defaultAction || '—'}</Badge>
+                        <Badge size="small" appearance="filled" color={publicAccessColor(network.publicNetworkAccess)}>{network.publicNetworkAccess || '—'}</Badge>
+                        <Tooltip content="Default firewall action when no rule matches" relationship="label">
+                          <Badge size="small" appearance="tint">{network.defaultAction || '—'}</Badge>
+                        </Tooltip>
                         <Caption1>{network.ipRuleCount} IP / {network.vnetRuleCount} VNet</Caption1>
                       </span>
                     </span>
-                  ) : <Caption1>Loading…</Caption1>}
+                  ) : <Spinner size="extra-tiny" label="Loading…" labelPosition="after" />}
                 </TreeItemLayout>
               </TreeItem>
             </Tree>
@@ -808,7 +825,7 @@ export function EventHubsNamespaceTree({ refreshKey = 0, onSelectEventHub }: Eve
               </span>
             </TreeItemLayout>
             <Tree>
-              {peConnections.length === 0 && <TreeItem itemType="leaf" value="pe-empty"><TreeItemLayout><Caption1>No private endpoint connections</Caption1></TreeItemLayout></TreeItem>}
+              {peConnections.filter((c) => match(c.name)).length === 0 && <TreeItem itemType="leaf" value="pe-empty"><TreeItemLayout><Caption1>{f ? 'No matches' : 'No private endpoint connections'}</Caption1></TreeItemLayout></TreeItem>}
               {peConnections.filter((c) => match(c.name)).map((c) => (
                 <TreeItem key={c.name} itemType="leaf" value={`pe-${c.name}`}>
                   <TreeItemLayout iconBefore={<LinkSquare20Regular />}>
