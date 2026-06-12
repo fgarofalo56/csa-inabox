@@ -41,95 +41,19 @@ import {
   type UnityLinkStatus,
 } from '@/lib/azure/unified-domain-mapper';
 import { validateDomainMove, isDomainTenantAdmin } from '@/lib/azure/domain-hierarchy';
+import {
+  type DomainItem,
+  type DomainsDoc,
+  loadOrSeedDomains,
+  parseTopologyPatch,
+  domainChargebackTag,
+} from '@/lib/azure/domain-registry';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
 
-interface DomainContributors {
-  scope: 'AllTenant' | 'AdminsOnly' | 'SpecificUsersAndGroups';
-  users?: string[];
-}
-
-interface DomainDelegatedSettings {
-  defaultSensitivityLabelId?: string;
-  defaultSensitivityLabelName?: string;
-  /** Whether the label id refers to a Loom-native label (vs an M365/MIP label). */
-  defaultSensitivityLabelSource?: 'mip' | 'loom';
-  certificationEnabled?: boolean;
-  certificationUrl?: string;
-  certifiers?: string[];
-}
-
-interface DomainItem {
-  id: string;
-  name: string;
-  description?: string;
-  color?: string;
-  owners?: string[];
-  /** Domain admins (UPNs / group names) — can change domain settings. */
-  admins?: string[];
-  /** Who may assign workspaces to this domain. */
-  contributors?: DomainContributors;
-  /** Users/groups for default-domain auto-assign. */
-  defaultDomainUsers?: string[];
-  /** Tenant-setting overrides delegated to the domain level. */
-  delegatedSettings?: DomainDelegatedSettings;
-  /** Image picker selection: "color::#0078d4" | "icon::finance" | "blob::<name>". */
-  imageKey?: string;
-  /** Parent domain id when this is a subdomain. */
-  parentId?: string;
-  /** Mirror link ids written by the unified mapper. */
-  purviewDomainId?: string;
-  unityCatalogName?: string;
-  unitySchemaName?: string;
-  createdAt: string;
-  createdBy: string;
-  updatedAt?: string;
-  updatedBy?: string;
-}
-
-interface DomainsDoc {
-  id: string;
-  tenantId: string;
-  kind: 'domains';
-  items: DomainItem[];
-  updatedAt: string;
-}
-
-/**
- * Starter domain set seeded into a tenant's domains doc the first time it is
- * created — so the Domains surface is never empty in a fresh environment (the
- * "empty domains" finding). These are REAL, fully-editable Cosmos domains (the
- * user can rename / move / delete them), not hard-coded UI placeholders. Mirrors
- * the canonical Fabric sample domains (Finance / Sales & Marketing / Operations
- * with an HR subdomain) so the hierarchy + move flow has content to act on.
- */
-function starterDomains(who: string): DomainItem[] {
-  const now = new Date().toISOString();
-  const base = (id: string, name: string, description: string, parentId?: string): DomainItem => ({
-    id, name, description, parentId, createdAt: now, createdBy: who,
-  });
-  return [
-    base('finance', 'Finance', 'Financial planning, reporting, and chargeback data products.'),
-    base('sales-marketing', 'Sales & Marketing', 'Pipeline, campaign, and customer-360 data products.'),
-    base('operations', 'Operations', 'Supply-chain, logistics, and operational telemetry.'),
-    base('people', 'People & HR', 'Workforce, recruiting, and people-analytics data products.', 'operations'),
-  ];
-}
-
 async function loadOrSeed(tenantId: string, who: string): Promise<DomainsDoc> {
-  const c = await tenantSettingsContainer();
-  const docId = `domains:${tenantId}`;
-  try {
-    const { resource } = await c.item(docId, tenantId).read<DomainsDoc>();
-    if (resource) return resource;
-  } catch (e: any) { if (e?.code !== 404) throw e; }
-  const seed: DomainsDoc = {
-    id: docId, tenantId, kind: 'domains', items: starterDomains(who),
-    updatedAt: new Date().toISOString(),
-  } as any;
-  await c.items.create(seed);
-  return seed;
+  return loadOrSeedDomains(tenantId, who);
 }
 
 /**
@@ -308,9 +232,21 @@ export async function POST(req: NextRequest) {
       owners: normalizeOwners(body?.owners),
       admins: normalizeOwners(body?.admins),
       parentId,
+      status: 'registered',
+      chargebackTag: domainChargebackTag(id),
       createdAt: new Date().toISOString(),
       createdBy: s.claims.upn || tenantId,
     };
+    // DLZ binding / topology fields are tenant-admin-only (they bind real Azure
+    // subscriptions + Entra groups). A non-tenant-admin creating a domain simply
+    // omits them; the domain is still created in `registered` status.
+    if (isTenantAdmin(s.claims.oid)) {
+      const topo = parseTopologyPatch(body);
+      if ('error' in topo) {
+        return NextResponse.json({ ok: false, error: topo.error }, { status: 400 });
+      }
+      Object.assign(newItem, topo.patch);
+    }
     // Unified write-through to Purview + Unity Catalog (best-effort; neither
     // blocks the Cosmos write — both are independently optional, no Fabric dep).
     const mirror = await mirrorDomainUpsert(
@@ -367,10 +303,18 @@ export async function PATCH(req: NextRequest) {
         { status: 403 },
       );
     }
-    // Fields only a tenant admin may change.
-    if (!tenantAdmin && (body?.name !== undefined || body?.admins !== undefined || body?.parentId !== undefined)) {
+    // Fields only a tenant admin may change. The DLZ-binding/topology fields
+    // (subscriptionIds, dlzRg, location, capacitySku, admin/memberGroupId,
+    // costCenter, chargebackTag, status) bind real Azure subscriptions + Entra
+    // groups, so they are tenant-admin-only alongside name/admins/parentId.
+    const TOPOLOGY_KEYS = [
+      'subscriptionIds', 'dlzRg', 'location', 'capacitySku',
+      'adminGroupId', 'memberGroupId', 'costCenter', 'chargebackTag', 'status',
+    ];
+    const touchesTopology = TOPOLOGY_KEYS.some((k) => body?.[k] !== undefined);
+    if (!tenantAdmin && (body?.name !== undefined || body?.admins !== undefined || body?.parentId !== undefined || touchesTopology)) {
       return NextResponse.json(
-        { ok: false, error: "Domain admins can't rename, change the admin list, or move the domain - that requires a tenant admin." },
+        { ok: false, error: "Domain admins can't rename, change the admin list, move the domain, or change its Data Landing Zone binding - that requires a tenant admin." },
         { status: 403 },
       );
     }
@@ -400,6 +344,18 @@ export async function PATCH(req: NextRequest) {
     if (body?.admins !== undefined) domain.admins = normalizeOwners(body.admins);
     if (body?.owners !== undefined) domain.owners = normalizeOwners(body.owners);
     if (body?.defaultDomainUsers !== undefined) domain.defaultDomainUsers = normalizeOwners(body.defaultDomainUsers);
+    // DLZ binding / topology fields (tenant-admin-only; gated above).
+    if (touchesTopology) {
+      const topo = parseTopologyPatch(body);
+      if ('error' in topo) {
+        return NextResponse.json({ ok: false, error: topo.error }, { status: 400 });
+      }
+      Object.assign(domain, topo.patch);
+      // Keep the chargeback tag canonical when a sub is bound and none was set.
+      if (domain.subscriptionIds && domain.subscriptionIds.length && !domain.chargebackTag) {
+        domain.chargebackTag = domainChargebackTag(domain.id);
+      }
+    }
     if (body?.contributors !== undefined) {
       const scope = body.contributors?.scope;
       const allowed = ['AllTenant', 'AdminsOnly', 'SpecificUsersAndGroups'];

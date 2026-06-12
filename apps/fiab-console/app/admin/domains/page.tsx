@@ -30,7 +30,7 @@ import {
 import {
   Add24Regular, Delete20Regular, ArrowSync24Regular, Info20Regular,
   MoreHorizontal20Regular, Settings20Regular, BranchFork20Regular, Folder20Regular,
-  ArrowMove20Regular,
+  ArrowMove20Regular, Cloud20Regular,
 } from '@fluentui/react-icons';
 import { AdminShell } from '@/lib/components/admin-shell';
 import { Section, Toolbar } from '@/lib/components/ui/section';
@@ -44,6 +44,8 @@ interface Domain extends DomainRecord {
   createdAt: string; createdBy: string; purviewDomainId?: string;
   workspaceCount?: number;
 }
+
+interface SubscriptionOpt { subscriptionId: string; displayName: string; state: string; }
 
 interface Workspace { id: string; name: string; domain?: string; itemCount?: number; }
 
@@ -98,6 +100,9 @@ export default function DomainsPage() {
   const [moveFor, setMoveFor] = useState<Domain | null>(null);
   const [moveParent, setMoveParent] = useState<string>('');
   const [moving, setMoving] = useState(false);
+
+  // Attach-existing-subscription dialog.
+  const [attachFor, setAttachFor] = useState<Domain | null>(null);
 
   const load = useCallback(async () => {
     setLoading(true); setError(null);
@@ -250,6 +255,21 @@ export default function DomainsPage() {
         : <Caption1 className={a.muted}>Loom only</Caption1>,
     },
     {
+      key: 'landingZone', label: 'Landing zone', width: 150,
+      getValue: (d) => d.status || 'registered',
+      render: (d) => {
+        const st = d.status || 'registered';
+        const color = st === 'active' ? 'success' : st === 'error' ? 'danger' : st === 'attaching' ? 'warning' : 'subtle';
+        const subs = d.subscriptionIds?.length || 0;
+        return (
+          <span className={s.nameCell}>
+            <Badge appearance="tint" color={color} size="small">{st}</Badge>
+            {subs > 0 && <Caption1 className={a.muted}>{subs} sub{subs === 1 ? '' : 's'}</Caption1>}
+          </span>
+        );
+      },
+    },
+    {
       key: 'actions', label: '', width: 60, sortable: false, filterable: false,
       render: (d) => (
         <Menu>
@@ -266,6 +286,11 @@ export default function DomainsPage() {
               </MenuItem>
               <MenuItem icon={<Folder20Regular />} onClick={() => setAssignFor(d)}>Assign workspaces</MenuItem>
               {!d.parentId && (
+                <MenuItem icon={<Cloud20Regular />} disabled={!isTenantAdmin} onClick={() => setAttachFor(d)}>
+                  Attach existing subscription
+                </MenuItem>
+              )}
+              {!d.parentId && (
                 <MenuItem icon={<BranchFork20Regular />} onClick={() => openCreate(d.id)}>New subdomain</MenuItem>
               )}
               <MenuItem icon={<ArrowMove20Regular />} disabled={!isTenantAdmin} onClick={() => openMove(d)}>Move…</MenuItem>
@@ -275,7 +300,7 @@ export default function DomainsPage() {
         </Menu>
       ),
     },
-  ], [s, purviewNames, nameById]); // eslint-disable-line react-hooks/exhaustive-deps
+  ], [s, a, purviewNames, nameById, isTenantAdmin]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const parentName = createParentId ? (nameById[createParentId] || createParentId) : null;
 
@@ -418,6 +443,15 @@ export default function DomainsPage() {
           domain={assignFor}
           onClose={() => setAssignFor(null)}
           onDone={() => { setAssignFor(null); load(); }}
+        />
+      )}
+
+      {/* Attach existing subscription dialog */}
+      {attachFor && (
+        <AttachSubscriptionDialog
+          domain={attachFor}
+          onClose={() => setAttachFor(null)}
+          onDone={() => { setAttachFor(null); load(); }}
         />
       )}
 
@@ -564,6 +598,117 @@ function AssignWorkspacesDialog({ domain, onClose, onDone }: {
                 {busy ? 'Assigning…' : `Assign ${selected.size || ''}`.trim()}
               </Button>
             )}
+          </DialogActions>
+        </DialogBody>
+      </DialogSurface>
+    </Dialog>
+  );
+}
+
+// ============================================================
+// Attach-existing-subscription dialog (t158 — register an
+// already-attached DLZ subscription onto the domain)
+// ============================================================
+
+function AttachSubscriptionDialog({ domain, onClose, onDone }: {
+  domain: Domain; onClose: () => void; onDone: () => void;
+}) {
+  const s = useStyles();
+  const a = useAdminTabStyles();
+  const [subs, setSubs] = useState<SubscriptionOpt[] | null>(null);
+  const [gate, setGate] = useState<string | null>(null);
+  const [chosen, setChosen] = useState('');
+  const [dlzRg, setDlzRg] = useState(domain.dlzRg || '');
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState<string | null>(null);
+
+  useEffect(() => {
+    clientFetch('/api/setup/subscriptions')
+      .then((r) => r.json())
+      .then((j) => {
+        if (j?.ok && Array.isArray(j.subscriptions)) setSubs(j.subscriptions);
+        else { setSubs([]); setGate(j?.hint || j?.error || 'Could not list subscriptions.'); }
+      })
+      .catch((e) => { setSubs([]); setGate(String(e?.message || e)); });
+  }, []);
+
+  const chosenName = useMemo(() => subs?.find((x) => x.subscriptionId === chosen)?.displayName, [subs, chosen]);
+
+  async function attach() {
+    if (!chosen) { setErr('Select a subscription to attach.'); return; }
+    setBusy(true); setErr(null);
+    try {
+      // Append to the domain's existing subscription set (server replaces the
+      // array, so send the union). Stamps the DLZ resource group too.
+      const next = Array.from(new Set([...(domain.subscriptionIds || []), chosen]));
+      const r = await clientFetch(`/api/admin/domains?id=${encodeURIComponent(domain.id)}`, {
+        method: 'PATCH', headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({
+          subscriptionIds: next,
+          dlzRg: dlzRg.trim() || undefined,
+          status: 'active',
+        }),
+      });
+      const j = await r.json();
+      if (!j.ok) { setErr(j.error || `HTTP ${r.status}`); return; }
+      onDone();
+    } catch (e: any) { setErr(e?.message || String(e)); }
+    finally { setBusy(false); }
+  }
+
+  return (
+    <Dialog open onOpenChange={(_, d) => { if (!d.open) onClose(); }}>
+      <DialogSurface>
+        <DialogBody>
+          <DialogTitle>Attach existing subscription to {domain.name}</DialogTitle>
+          <DialogContent>
+            <div className={s.createGrid}>
+              <Body1 className={s.dialogIntro}>
+                Bind an already-provisioned Data Landing Zone subscription to this domain. This registers the
+                subscription in the tenant topology; it does not deploy anything (use the Add-landing-zone wizard
+                to deploy a new DLZ).
+              </Body1>
+              {err && <MessageBar intent="error" className={a.messageBar}><MessageBarBody>{err}</MessageBarBody></MessageBar>}
+              {gate && (
+                <MessageBar intent="warning" className={a.messageBar}>
+                  <MessageBarBody>
+                    {gate} Grant the Console UAMI Reader on the target subscriptions to list them.
+                  </MessageBarBody>
+                </MessageBar>
+              )}
+              <div>
+                <Caption1 className={a.fieldLabel}>Subscription</Caption1>
+                <Dropdown
+                  className={a.fullWidth}
+                  disabled={subs === null}
+                  placeholder={subs === null ? 'Loading…' : 'Select a subscription'}
+                  value={chosenName || ''}
+                  selectedOptions={chosen ? [chosen] : []}
+                  onOptionSelect={(_e, d) => setChosen(d.optionValue || '')}
+                >
+                  {(subs || []).map((sub) => (
+                    <Option key={sub.subscriptionId} value={sub.subscriptionId} text={sub.displayName}>
+                      {sub.displayName} ({sub.subscriptionId}){sub.state ? ` · ${sub.state}` : ''}
+                    </Option>
+                  ))}
+                </Dropdown>
+              </div>
+              <div>
+                <Caption1 className={a.fieldLabel}>DLZ resource group (optional)</Caption1>
+                <Input
+                  className={a.fullWidth}
+                  value={dlzRg}
+                  placeholder={`rg-csa-loom-dlz-${domain.id}-<region>`}
+                  onChange={(_e, d) => setDlzRg(d.value)}
+                />
+              </div>
+            </div>
+          </DialogContent>
+          <DialogActions>
+            <Button appearance="secondary" onClick={onClose}>Cancel</Button>
+            <Button appearance="primary" onClick={attach} disabled={busy || !chosen}>
+              {busy ? 'Attaching…' : 'Attach subscription'}
+            </Button>
           </DialogActions>
         </DialogBody>
       </DialogSurface>

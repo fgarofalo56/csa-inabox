@@ -1908,3 +1908,60 @@ GRANT USE SCHEMA, CREATE TABLE, MODIFY, SELECT ON SCHEMA main.mdm TO `<console-u
 Until this grant is in place, the Data quality Monitors tab and MDM merge show an
 honest MessageBar (the constraint/merge call returns the precise UC permission
 error) — no fake success. No Microsoft Fabric or Power BI workspace is involved.
+
+---
+
+## Domain registry ↔ DLZ binding (tenant topology) {#domain-registry-dlz-binding}
+
+The catalog domains registry (`tenant-settings` Cosmos doc `domains:<tenant>`) is
+the **authoritative tenant topology**: each domain may be bound to its Data
+Landing Zone — `subscriptionIds[]`, `dlzRg`, `location`, `capacitySku`,
+`adminGroupId` / `memberGroupId` (Entra groups backing the domain-admin tier),
+`costCenter`, `chargebackTag`, and a `status`
+(`registered` → `attaching` → `active` → `detached` / `error`) (audit-t158).
+NO Microsoft Fabric dependency — the registry is 100% Cosmos + Azure-native; the
+Fabric Admin domain adapter stays hard-gated off on IL5.
+
+### How a domain gets bound
+
+- **Automatic (dlz-attach):** after the Setup Orchestrator's `dlz-attach`
+  deployment succeeds it POSTs the binding to the Console's token-gated internal
+  API `POST /api/internal/topology/register-domain`
+  (`Authorization: Bearer ${LOOM_INTERNAL_TOKEN}` + `x-loom-caller-oid`), which
+  upserts the domain and flips `status` to `active`.
+- **Manual:** a tenant admin uses **/admin/domains → Actions → Attach existing
+  subscription** (binds an already-attached sub) and the domain **Settings →
+  Landing zone** tab (region, capacity, admin/member groups, cost center).
+
+### The `loom-domain` chargeback tag {#loom-domain-tag}
+
+Every DLZ resource is stamped with the tag **`loom-domain` = `loom-domain:<id>`**
+(`DOMAIN_TAG_KEY` in `lib/azure/domain-registry.ts`). This single key is the
+contract three subsystems share:
+
+- **Resource inventory** — `/admin/domains` → Landing zone → Resource inventory
+  runs an Azure Resource Graph query
+  `Resources | where tags['loom-domain'] =~ 'loom-domain:<id>'` to list a
+  domain's resources (`lib/azure/topology-inventory.ts`).
+- **Cost Management** — `cost-client.ts` groups chargeback by the same tag.
+- **dlz-attach bicep** — stamps the tag via `complianceTags` on the DLZ module.
+
+The Console UAMI needs **Reader** on each bound subscription for the ARG
+inventory to return rows; otherwise the surface shows an honest gate naming the
+exact `az role assignment create ... --role Reader --scope /subscriptions/<id>`.
+
+### Workspace → domain binding (required)
+
+Creating a workspace now **requires** a governance domain. Both
+`POST /api/admin/workspaces` and `POST /api/workspaces` reject a missing/unknown
+domain (HTTP 400). The seeded **`default`** domain is the guaranteed fallback for
+legacy / single-domain tenants — the create wizard preselects it. Existing
+domain-less workspaces remain valid (the rule is enforced on create only).
+
+### Bicep sync
+
+- **New env var** `LOOM_CONSOLE_INTERNAL_URL` on the Setup Orchestrator container
+  app (`modules/admin-plane/setup-orchestrator.bicep`, default `http://loom-console`,
+  the CAE-internal console name) — the base URL the `dlz-attach` callback POSTs to.
+- `LOOM_INTERNAL_TOKEN` (already Bicep-wired to both apps) gates the internal
+  register-domain route; the route **fails closed** when it is unset.

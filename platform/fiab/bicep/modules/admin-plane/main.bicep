@@ -3153,6 +3153,7 @@ module setupOrchestrator 'setup-orchestrator.bicep' = if (setupOrchestratorActiv
     internalToken: loomInternalToken
     armEndpoint: boundary == 'GCC-High' || boundary == 'IL5' ? 'https://management.usgovcloudapi.net' : 'https://management.azure.com'
     setupTemplateUri: setupTemplateUri
+    consoleInternalUrl: 'http://loom-console'
     appInsightsConnectionString: monitoring.outputs.appInsightsConnectionString
     complianceTags: complianceTags
   }

@@ -154,12 +154,12 @@ export function WorkspaceCreateWizard({ open, onClose, onCreated, isAdmin }: Pro
       case 'contacts': return true; // optional
       case 'license': return !!licenseMode;
       case 'capacity': return !licenseNeedsCapacity || !!capacity; // capacity required only for Premium-family
-      case 'advanced': return true; // optional
+      case 'advanced': return !!domain; // a governance domain binding is REQUIRED (t158)
       default: return false;
     }
-  }, [name, licenseMode, licenseNeedsCapacity, capacity]);
+  }, [name, licenseMode, licenseNeedsCapacity, capacity, domain]);
 
-  const canCreate = !!name.trim() && (!licenseNeedsCapacity || !!capacity);
+  const canCreate = !!name.trim() && !!domain && (!licenseNeedsCapacity || !!capacity);
 
   const go = (k: StepKey) => setStep(k);
   const next = () => { const i = STEPS.findIndex((s) => s.key === step); if (i < STEPS.length - 1) setStep(STEPS[i + 1].key); };
@@ -554,7 +554,17 @@ function AdvancedStep(props: {
 
   useEffect(() => {
     fetch('/api/admin/domains').then((r) => r.json())
-      .then((j) => { if (j?.ok) setDomains((j.domains || []).map((d: any) => ({ id: d.id, name: d.name }))); else setDomains([]); })
+      .then((j) => {
+        const opts: DomainOpt[] = j?.ok ? (j.domains || []).map((d: any) => ({ id: d.id, name: d.name })) : [];
+        setDomains(opts);
+        // A domain binding is REQUIRED (t158). Preselect a sensible default so a
+        // single-domain / legacy tenant isn't blocked: prefer the seeded
+        // `default` domain, else the only domain when there's exactly one.
+        if (!domain && opts.length) {
+          const fallback = opts.find((d) => d.id === 'default') || (opts.length === 1 ? opts[0] : undefined);
+          if (fallback) onDomain(fallback.id);
+        }
+      })
       .catch(() => setDomains([]));
     fetch('/api/storage/accounts').then((r) => r.json())
       .then((j) => {
@@ -575,18 +585,25 @@ function AdvancedStep(props: {
         <Body1>Optionally place this workspace in a governance domain, bind a specific OneLake storage account, and provision a dedicated Azure resource group.</Body1>
       </div>
       <div className={styles.fields}>
-        <Field label="Governance domain">
+        <Field label="Governance domain" required hint="Every workspace is bound to a governance domain — the unit Loom uses to organize the tenant's data estate and its Data Landing Zone.">
           <Dropdown
-            placeholder={domains === null ? 'Loading…' : (domains.length ? 'Select a domain (optional)' : 'No domains defined')}
+            placeholder={domains === null ? 'Loading…' : (domains.length ? 'Select a domain' : 'No domains defined')}
             disabled={domains === null}
             value={domainName || ''}
             selectedOptions={domain ? [domain] : []}
             onOptionSelect={(_e, d) => onDomain(d.optionValue || '')}
           >
-            <Option value="">None</Option>
             {(domains || []).map((d) => <Option key={d.id} value={d.id} text={d.name}>{d.name}</Option>)}
           </Dropdown>
         </Field>
+        {domains !== null && domains.length === 0 && (
+          <MessageBar intent="warning">
+            <MessageBarBody>
+              <MessageBarTitle>No governance domains exist yet</MessageBarTitle>
+              Create one at Admin → Domains first. A workspace must belong to a domain.
+            </MessageBarBody>
+          </MessageBar>
+        )}
 
         <Field label="OneLake storage account" hint="ADLS Gen2 account backing this workspace's OneLake files. Leave as default to use the deployment DLZ account.">
           {storageGate ? (

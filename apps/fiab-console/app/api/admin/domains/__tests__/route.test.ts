@@ -272,3 +272,123 @@ describe('/api/admin/domains — Cosmos persistence + Purview collection mirror 
     expect(purviewCalls).toHaveLength(0);
   });
 });
+
+// ============================================================
+// t158 — DLZ binding / tenant topology
+// ============================================================
+
+describe('/api/admin/domains — DLZ binding / topology fields (t158)', () => {
+  const ORIG_ENV = { ...process.env };
+  beforeEach(() => {
+    settingsDocs.clear();
+    purviewCalls.length = 0;
+    unityCalls.length = 0;
+    delete process.env.LOOM_TENANT_ADMIN_OID;
+    delete process.env.LOOM_TENANT_ADMIN_GROUP_ID;
+    delete process.env.LOOM_DATABRICKS_HOSTNAME;
+    delete process.env.LOOM_PURVIEW_ACCOUNT;
+  });
+  afterEach(() => { process.env = { ...ORIG_ENV }; vi.restoreAllMocks(); });
+
+  const SUB = '11111111-1111-1111-1111-111111111111';
+  const GRP = '22222222-2222-2222-2222-222222222222';
+
+  it('seeds a `default` domain (the legacy/workspace fallback) on first read', async () => {
+    const { GET } = await import('../route');
+    const res = await GET();
+    const j = await res.json();
+    expect(j.ok).toBe(true);
+    expect(j.domains.some((d: any) => d.id === 'default')).toBe(true);
+    // New domains default to status `registered`.
+    const def = j.domains.find((d: any) => d.id === 'default');
+    expect(def.status).toBe('registered');
+  });
+
+  it('POST create accepts topology fields and stamps the chargeback tag', async () => {
+    const { POST } = await import('../route');
+    const res = await POST(makeReq('POST', '', {
+      id: 'mission', name: 'Mission Ops',
+      subscriptionIds: [SUB], dlzRg: 'rg-csa-loom-dlz-mission-eastus2',
+      location: 'eastus2', capacitySku: 'F8', adminGroupId: GRP, costCenter: 'CC-9',
+    }));
+    const j = await res.json();
+    expect(j.ok).toBe(true);
+    expect(j.domain).toMatchObject({
+      subscriptionIds: [SUB], dlzRg: 'rg-csa-loom-dlz-mission-eastus2',
+      location: 'eastus2', capacitySku: 'F8', adminGroupId: GRP, costCenter: 'CC-9',
+      chargebackTag: 'loom-domain:mission',
+    });
+  });
+
+  it('POST rejects an invalid capacitySku', async () => {
+    const { POST } = await import('../route');
+    const res = await POST(makeReq('POST', '', { id: 'badsku', name: 'Bad', capacitySku: 'F9001' }));
+    expect(res.status).toBe(400);
+  });
+
+  it('PATCH updates the DLZ binding and flips status', async () => {
+    const { POST, PATCH } = await import('../route');
+    await POST(makeReq('POST', '', { id: 'dlzd', name: 'DLZ D' }));
+    const res = await PATCH(makeReq('PATCH', '?id=dlzd', {
+      subscriptionIds: [SUB], status: 'active', location: 'usgovvirginia',
+    }));
+    const j = await res.json();
+    expect(j.ok).toBe(true);
+    expect(j.domain.subscriptionIds).toEqual([SUB]);
+    expect(j.domain.status).toBe('active');
+    const stored = settingsDocs.get('domains:tenant-1').items.find((d: any) => d.id === 'dlzd');
+    expect(stored.location).toBe('usgovvirginia');
+  });
+
+  it('PATCH rejects a bad subscription GUID', async () => {
+    const { POST, PATCH } = await import('../route');
+    await POST(makeReq('POST', '', { id: 'dlze', name: 'DLZ E' }));
+    const res = await PATCH(makeReq('PATCH', '?id=dlze', { subscriptionIds: ['not-a-guid'] }));
+    expect(res.status).toBe(400);
+  });
+});
+
+describe('/api/internal/topology/register-domain — orchestrator callback (t158)', () => {
+  const ORIG_ENV = { ...process.env };
+  const TOKEN = 'super-secret-internal-token';
+  const SUB = '33333333-3333-3333-3333-333333333333';
+  beforeEach(() => {
+    settingsDocs.clear();
+    process.env.LOOM_INTERNAL_TOKEN = TOKEN;
+  });
+  afterEach(() => { process.env = { ...ORIG_ENV }; vi.restoreAllMocks(); });
+
+  function reg(headers: Record<string, string>, body: unknown) {
+    return new NextRequest('https://loom.test/api/internal/topology/register-domain', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', ...headers },
+      body: JSON.stringify(body),
+    });
+  }
+
+  it('rejects a request with no/invalid token (403)', async () => {
+    const { POST } = await import('../../../internal/topology/register-domain/route');
+    const res = await POST(reg({ 'x-loom-caller-oid': 'tenant-9' }, { domainId: 'd1' }));
+    expect(res.status).toBe(403);
+  });
+
+  it('rejects a missing caller-oid (400)', async () => {
+    const { POST } = await import('../../../internal/topology/register-domain/route');
+    const res = await POST(reg({ authorization: `Bearer ${TOKEN}` }, { domainId: 'd1' }));
+    expect(res.status).toBe(400);
+  });
+
+  it('upserts a domain binding into the tenant doc and flips status to active', async () => {
+    const { POST } = await import('../../../internal/topology/register-domain/route');
+    const res = await POST(reg(
+      { authorization: `Bearer ${TOKEN}`, 'x-loom-caller-oid': 'tenant-9' },
+      { domainId: 'mission', name: 'Mission', subscriptionId: SUB, dlzRg: 'rg-x', location: 'eastus2', capacitySku: 'F8' },
+    ));
+    const j = await res.json();
+    expect(j.ok).toBe(true);
+    expect(j.domain).toMatchObject({ id: 'mission', subscriptionIds: [SUB], status: 'active', dlzRg: 'rg-x' });
+    expect(j.domain.chargebackTag).toBe('loom-domain:mission');
+    const stored = settingsDocs.get('domains:tenant-9').items.find((d: any) => d.id === 'mission');
+    expect(stored).toBeTruthy();
+  });
+});
