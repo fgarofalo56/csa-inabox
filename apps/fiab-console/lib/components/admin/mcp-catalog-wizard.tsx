@@ -12,7 +12,7 @@
  * wired (e.g. the AKS sovereign boundary).
  */
 
-import { useCallback, useState, type ReactNode } from 'react';
+import { useCallback, useMemo, useState, type ReactNode } from 'react';
 import {
   Button, Dialog, DialogSurface, DialogBody, DialogTitle, DialogContent, DialogActions,
   Field, Input, Dropdown, Option, Switch, Badge, Spinner,
@@ -23,6 +23,7 @@ import {
 import {
   Rocket20Regular, Code24Regular, Grid24Regular, Box24Regular,
   Archive24Regular, Globe24Regular, Delete20Regular, ArrowClockwise20Regular,
+  Search20Regular, SearchInfo24Regular,
 } from '@fluentui/react-icons';
 import {
   MCP_DEPLOY_CATALOG as MCP_CATALOG, entryEgress, reachesExternalSaas,
@@ -53,6 +54,8 @@ const useStyles = makeStyles({
   },
   cardDesc: { color: tokens.colorNeutralForeground2, flex: 1, minHeight: '40px' },
   cardFoot: { display: 'flex', alignItems: 'center', gap: tokens.spacingHorizontalS, marginTop: tokens.spacingVerticalS },
+  cardBadges: { display: 'flex', alignItems: 'center', gap: tokens.spacingHorizontalXS, flexWrap: 'wrap', marginTop: tokens.spacingVerticalS },
+  cardActions: { display: 'flex', justifyContent: 'flex-end', marginTop: tokens.spacingVerticalS },
   spacer: { flex: 1 },
   iconWrap: { color: tokens.colorBrandForeground1, display: 'flex', alignItems: 'center' },
   form: { display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalM, marginTop: tokens.spacingVerticalM },
@@ -66,9 +69,31 @@ const useStyles = makeStyles({
     borderRadius: tokens.borderRadiusMedium,
     fontFamily: tokens.fontFamilyMonospace,
   },
-  previewWrap: { marginTop: tokens.spacingVerticalS },
+  previewWrap: { marginTop: tokens.spacingVerticalS, display: 'flex', alignItems: 'center', gap: tokens.spacingHorizontalS, flexWrap: 'wrap' },
+  saasBar: { marginTop: tokens.spacingVerticalS },
   deployedWrap: { marginTop: tokens.spacingVerticalL, marginBottom: tokens.spacingVerticalL },
   cellStack: { display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalXXS },
+  browseHead: {
+    display: 'flex',
+    alignItems: 'center',
+    gap: tokens.spacingHorizontalM,
+    flexWrap: 'wrap',
+    marginTop: tokens.spacingVerticalM,
+  },
+  count: { color: tokens.colorNeutralForeground3 },
+  filter: { minWidth: '220px', marginLeft: 'auto' },
+  emptyState: {
+    display: 'flex',
+    flexDirection: 'column',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: tokens.spacingVerticalS,
+    paddingTop: tokens.spacingVerticalXXL,
+    paddingBottom: tokens.spacingVerticalXXL,
+    color: tokens.colorNeutralForeground3,
+    textAlign: 'center',
+  },
+  emptyIcon: { fontSize: '32px', color: tokens.colorNeutralForeground4 },
 });
 
 const CATEGORY_GLYPH: Record<McpCatalogEntry['category'], ReactNode> = {
@@ -83,6 +108,19 @@ function egressBadge(egress: McpEgressProfile) {
   if (egress === 'air-gap-safe') return <Badge appearance="tint" color="success" size="small">Air-gap safe</Badge>;
   if (egress === 'azure-internal') return <Badge appearance="tint" color="brand" size="small">Azure-internal</Badge>;
   return <Badge appearance="tint" color="warning" size="small">External SaaS</Badge>;
+}
+
+const MAINTAINER_LABEL: Record<NonNullable<McpCatalogEntry['maintainer']>, string> = {
+  anthropic: 'Anthropic',
+  microsoft: 'Microsoft',
+  vendor: 'Vendor',
+  community: 'Community',
+};
+
+function maintainerBadge(maintainer?: McpCatalogEntry['maintainer']) {
+  if (!maintainer) return null;
+  const color = maintainer === 'anthropic' || maintainer === 'microsoft' ? 'brand' : 'informative';
+  return <Badge appearance="tint" color={color} size="small">{MAINTAINER_LABEL[maintainer]}</Badge>;
 }
 
 function provBadge(state?: string) {
@@ -157,11 +195,12 @@ function DeployWizard({
             <Body1>{entry.description}</Body1>
             <div className={s.previewWrap}>
               {egressBadge(entryEgress(entry))}
-              {entry.license && <Badge appearance="outline" size="small" style={{ marginLeft: 8 }}>{entry.license}</Badge>}
-              {entry.preview && <Badge appearance="tint" color="warning" style={{ marginLeft: 8 }}>Preview</Badge>}
+              {maintainerBadge(entry.maintainer)}
+              {entry.license && <Badge appearance="outline" size="small">{entry.license}</Badge>}
+              {entry.preview && <Badge appearance="tint" color="warning" size="small">Preview</Badge>}
             </div>
             {reachesExternalSaas(entry) && (
-              <MessageBar intent="warning" style={{ marginTop: 8 }}>
+              <MessageBar intent="warning" className={s.saasBar}>
                 <MessageBarBody>
                   <MessageBarTitle>Reaches an external SaaS API</MessageBarTitle>
                   This server makes outbound calls to {(entry.externalHosts || []).join(', ') || 'an external host'}.
@@ -267,8 +306,28 @@ function DeployedServers({
   const s = useStyles();
   const [statuses, setStatuses] = useState<Record<string, LiveStatus>>({});
   const [busyId, setBusyId] = useState<string | null>(null);
+  const [sort, setSort] = useState<{ column: 'name' | 'app' | 'state'; dir: 'ascending' | 'descending' }>({ column: 'name', dir: 'ascending' });
 
-  const deployed = servers.filter((sv) => sv.source === 'catalog' && sv.deployment?.containerAppName);
+  const deployed = useMemo(
+    () => servers.filter((sv) => sv.source === 'catalog' && sv.deployment?.containerAppName),
+    [servers],
+  );
+  const sortedDeployed = useMemo(() => {
+    const dirMul = sort.dir === 'ascending' ? 1 : -1;
+    const keyFor = (sv: McpServerConfigDoc) =>
+      sort.column === 'name' ? sv.name
+        : sort.column === 'app' ? (sv.deployment?.containerAppName || '')
+        : (statuses[sv.serverId]?.provisioningState || sv.deployment?.provisioningState || '');
+    return [...deployed].sort((a, b) =>
+      keyFor(a).localeCompare(keyFor(b), undefined, { sensitivity: 'base' }) * dirMul,
+    );
+  }, [deployed, sort, statuses]);
+  const toggleSort = (column: 'name' | 'app' | 'state') =>
+    setSort((prev) =>
+      prev.column === column
+        ? { column, dir: prev.dir === 'ascending' ? 'descending' : 'ascending' }
+        : { column, dir: 'ascending' });
+
   if (deployed.length === 0) return null;
 
   const refresh = async (server: McpServerConfigDoc) => {
@@ -299,14 +358,26 @@ function DeployedServers({
       <Table aria-label="Deployed catalog MCP servers" style={{ marginTop: 8 }}>
         <TableHeader>
           <TableRow>
-            <TableHeaderCell>Server</TableHeaderCell>
-            <TableHeaderCell>Container App</TableHeaderCell>
-            <TableHeaderCell>State</TableHeaderCell>
+            <TableHeaderCell
+              sortable
+              sortDirection={sort.column === 'name' ? sort.dir : undefined}
+              onClick={() => toggleSort('name')}
+            >Server</TableHeaderCell>
+            <TableHeaderCell
+              sortable
+              sortDirection={sort.column === 'app' ? sort.dir : undefined}
+              onClick={() => toggleSort('app')}
+            >Container App</TableHeaderCell>
+            <TableHeaderCell
+              sortable
+              sortDirection={sort.column === 'state' ? sort.dir : undefined}
+              onClick={() => toggleSort('state')}
+            >State</TableHeaderCell>
             <TableHeaderCell>Actions</TableHeaderCell>
           </TableRow>
         </TableHeader>
         <TableBody>
-          {deployed.map((server) => {
+          {sortedDeployed.map((server) => {
             const live = statuses[server.serverId];
             const state = live?.provisioningState || server.deployment?.provisioningState;
             const running = live?.runningStatus || server.deployment?.runningStatus;
@@ -351,6 +422,19 @@ export function McpCatalogBrowser({
 }) {
   const s = useStyles();
   const [selected, setSelected] = useState<McpCatalogEntry | null>(null);
+  const [filter, setFilter] = useState('');
+
+  const q = filter.trim().toLowerCase();
+  const filtered = useMemo(
+    () =>
+      q
+        ? MCP_CATALOG.filter((e) =>
+            e.name.toLowerCase().includes(q) ||
+            e.description.toLowerCase().includes(q) ||
+            e.category.toLowerCase().includes(q))
+        : MCP_CATALOG,
+    [q],
+  );
 
   return (
     <div>
@@ -360,8 +444,29 @@ export function McpCatalogBrowser({
         automatically — no further setup.
       </Body1>
       <DeployedServers servers={deployedServers} onChanged={() => onChanged?.()} />
+      <div className={s.browseHead}>
+        <Caption1 className={s.count}>
+          {q ? `${filtered.length} of ${MCP_CATALOG.length}` : `${MCP_CATALOG.length} server${MCP_CATALOG.length === 1 ? '' : 's'} available`}
+        </Caption1>
+        <Input
+          className={s.filter}
+          size="small"
+          value={filter}
+          onChange={(_, d) => setFilter(d.value)}
+          contentBefore={<Search20Regular />}
+          placeholder="Filter library…"
+          aria-label="Filter the MCP server library"
+        />
+      </div>
+      {filtered.length === 0 ? (
+        <div className={s.emptyState}>
+          <SearchInfo24Regular className={s.emptyIcon} />
+          <Text weight="semibold">No servers match “{filter}”</Text>
+          <Button appearance="subtle" size="small" onClick={() => setFilter('')}>Clear filter</Button>
+        </div>
+      ) : (
       <div className={s.grid}>
-        {MCP_CATALOG.map((entry) => (
+        {filtered.map((entry) => (
           <Card key={entry.id} className={s.card}>
             <CardHeader
               image={<span className={s.iconWrap}>{CATEGORY_GLYPH[entry.category]}</span>}
@@ -369,13 +474,15 @@ export function McpCatalogBrowser({
               description={<Caption1>{entry.category}</Caption1>}
             />
             <Text className={s.cardDesc} size={200}>{entry.description}</Text>
-            <div className={s.cardFoot}>
+            <div className={s.cardBadges}>
               {egressBadge(entryEgress(entry))}
+              {maintainerBadge(entry.maintainer)}
               {entry.preview && <Badge appearance="tint" color="warning" size="small">Preview</Badge>}
               {entry.configSchema.some((f) => f.secret) && (
                 <Badge appearance="outline" color="brand" size="small">Key Vault secret</Badge>
               )}
-              <div className={s.spacer} />
+            </div>
+            <div className={s.cardActions}>
               <Button appearance="primary" size="small" icon={<Rocket20Regular />} onClick={() => setSelected(entry)}>
                 Deploy
               </Button>
@@ -383,6 +490,7 @@ export function McpCatalogBrowser({
           </Card>
         ))}
       </div>
+      )}
 
       {selected && (
         <DeployWizard
