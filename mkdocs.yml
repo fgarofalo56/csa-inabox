@@ -1900,6 +1900,7 @@ nav:
               - "07 — Marketplace data product publishing": fiab/tutorials/07-marketplace-data-product.md
               - "08 — Forward-migrate a Lakehouse to Fabric": fiab/tutorials/08-forward-migrate-to-fabric.md
           - "Learn — core surfaces":
+              - "Learning Hub — notebook import wizard": fiab/learn/csa_loom_learning_hub.md
               - "Lakehouse shortcuts": fiab/learn/lakehouse-shortcuts.md
               - "Data pipelines & Mapping Data Flow": fiab/learn/data-pipelines-and-dataflows.md
               - "Notebooks (Spark)": fiab/learn/notebooks-spark.md
