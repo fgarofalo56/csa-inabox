@@ -189,6 +189,7 @@ nav:
   # ============================================================
   - Get Started:
       - Welcome: index.md
+      - Learning Hub (all tutorials & use cases): csa_loom_learning_hub.md
       - Getting Started (30-min tour): GETTING_STARTED.md
       - Quickstart: QUICKSTART.md
       - Developer Pathways: DEVELOPER_PATHWAYS.md

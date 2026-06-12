@@ -48,11 +48,23 @@ function relFromPrimary(url: string): string {
   return url.replace(LOOM_DOCS_BASE, '').replace(/^\/+/, '').replace(/\/+$/, '');
 }
 
-/** True when a MkDocs dir-URL relative path has a backing source page on disk. */
+/**
+ * True when a MkDocs dir-URL relative path has a backing source page on disk.
+ *
+ * MkDocs with `use_directory_urls: true` (this repo's default) resolves a
+ * directory deep link three ways, in priority order: `<rel>.md`, then the
+ * directory index `<rel>/index.md`, then `<rel>/README.md` (MkDocs treats a
+ * folder's README as its index page). The solution-accelerator use cases
+ * deep-link to dirs backed by `README.md` (e.g.
+ * `learn/08-solutions/change-feed-processor`), so the README form must count
+ * as a real published page — otherwise this test reports a false dead link for
+ * pages that resolve fine at runtime.
+ */
 function docExists(rel: string): boolean {
   return (
     fs.existsSync(path.join(DOCS, `${rel}.md`)) ||
-    fs.existsSync(path.join(DOCS, rel, 'index.md'))
+    fs.existsSync(path.join(DOCS, rel, 'index.md')) ||
+    fs.existsSync(path.join(DOCS, rel, 'README.md'))
   );
 }
 
