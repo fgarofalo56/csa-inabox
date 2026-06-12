@@ -69,6 +69,15 @@ param loomNotebookBackend string = ''
 @description('Power Apps canvas web-player base for the in-Loom Play/embed + Studio tabs. Empty = code default https://apps.powerapps.com (Commercial). Sovereign clouds override: GCC/GCC-High = https://apps.gov.powerapps.us; DoD/IL5 = https://apps.appsplatform.us.')
 param powerAppsPlayerBase string = ''
 
+@description('Power Platform BAP admin control-plane base (environments lifecycle). Empty = code default https://api.bap.microsoft.com (Commercial). Sovereign: GCC = https://gov.api.bap.microsoft.com; GCC-High = https://high.api.bap.microsoft.us; DoD = https://api.bap.appsplatform.us.')
+param powerPlatformBapBase string = ''
+
+@description('Power Apps control-plane base (apps/connections/connectors admin). Empty = code default https://api.powerapps.com (Commercial). Sovereign: GCC = https://gov.api.powerapps.us; GCC-High = https://high.api.powerapps.us; DoD = https://api.apps.appsplatform.us.')
+param powerPlatformPowerAppsBase string = ''
+
+@description('Power Automate (Flow) control-plane base (flows admin/run). Empty = code default https://api.flow.microsoft.com (Commercial). Sovereign: GCC = https://gov.api.flow.microsoft.us; GCC-High = https://high.api.flow.microsoft.us; DoD = https://api.flow.appsplatform.us.')
+param powerPlatformFlowBase string = ''
+
 @description('Cloud authorization tier (e.g. "IL5"). When IL5, the notebook editor blocks the Databricks opt-in (Databricks Gov is not IL5-authorized) and falls back to Synapse Livy.')
 param loomCloudTier string = ''
 
@@ -2719,6 +2728,16 @@ module appDeployments 'app-deployments.bicep' = if (containerPlatform == 'contai
             // clouds override: GCC/GCC-H = apps.gov.powerapps.us,
             // DoD = apps.appsplatform.us. Empty = code falls back to commercial.
             { name: 'LOOM_POWERAPPS_PLAYER_BASE', value: powerAppsPlayerBase }
+            // Power Platform control-plane host overrides for sovereign clouds
+            // (powerplatform-client BAP_BASE / POWERAPPS_BASE / FLOW_BASE).
+            // Empty = code defaults to the Commercial hosts. For GCC/GCC-High/DoD
+            // set these so environment lifecycle, apps, flows, and connections
+            // target the *.gov / *.us control planes. Dataverse-scoped authoring
+            // (tables, flow definitions) is per-env (<org>.crm.dynamics.com) and
+            // auto-sovereign — no override needed.
+            { name: 'LOOM_BAP_BASE', value: powerPlatformBapBase }
+            { name: 'LOOM_POWERAPPS_BASE', value: powerPlatformPowerAppsBase }
+            { name: 'LOOM_FLOW_BASE', value: powerPlatformFlowBase }
             // AI Foundry model-hosting account — used by the hub editor's
             // Models / Quota / Keys / Networking / RBAC tabs and the
             // data-agent test chat. Empty when AI Foundry isn't deployed.
