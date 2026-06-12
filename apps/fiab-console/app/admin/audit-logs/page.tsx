@@ -21,6 +21,7 @@ import { ArrowSync24Regular, ArrowDownload24Regular } from '@fluentui/react-icon
 import { AdminShell } from '@/lib/components/admin-shell';
 import { Section, Toolbar } from '@/lib/components/ui/section';
 import { LoomDataTable, type LoomColumn } from '@/lib/components/ui/loom-data-table';
+import { useAdminTabStyles } from '@/lib/components/ui/admin-tab-styles';
 
 type AuditSource = 'cosmos' | 'purview' | 'loganalytics';
 
@@ -116,6 +117,7 @@ function toCsv(rows: AuditRow[]): string {
 
 export default function AuditLogsPage() {
   const s = useStyles();
+  const atab = useAdminTabStyles();
   const [rows, setRows] = useState<AuditRow[] | null>(null);
   const [kinds, setKinds] = useState<string[]>([]);
   const [loading, setLoading] = useState(true);
@@ -222,7 +224,7 @@ export default function AuditLogsPage() {
       </Body1>
 
       {error && (
-        <MessageBar intent="error" style={{ marginBottom: tokens.spacingVerticalL }}>
+        <MessageBar intent="error" className={atab.messageBar}>
           <MessageBarBody>
             <MessageBarTitle>Could not load audit logs</MessageBarTitle>
             {error}
@@ -231,7 +233,7 @@ export default function AuditLogsPage() {
       )}
 
       {gates.purview && (
-        <MessageBar intent="warning" style={{ marginBottom: tokens.spacingVerticalM }}>
+        <MessageBar intent="warning" className={atab.messageBar}>
           <MessageBarBody>
             <MessageBarTitle>Purview audit partial</MessageBarTitle>
             {gates.purview}
@@ -240,7 +242,7 @@ export default function AuditLogsPage() {
       )}
 
       {gates.la && (
-        <MessageBar intent="warning" style={{ marginBottom: tokens.spacingVerticalM }}>
+        <MessageBar intent="warning" className={atab.messageBar}>
           <MessageBarBody>
             <MessageBarTitle>Log Analytics audit partial</MessageBarTitle>
             {gates.la}
@@ -269,7 +271,7 @@ export default function AuditLogsPage() {
                   value={kind || 'All event types'}
                   selectedOptions={kind ? [kind] : ['']}
                   onOptionSelect={(_, d) => setKind(d.optionValue || '')}
-                  style={{ minWidth: 200 }}
+                  className={atab.filterControl}
                 >
                   <Option value="">All event types</Option>
                   {kinds.map((k) => (
@@ -282,7 +284,7 @@ export default function AuditLogsPage() {
                   value={SINCE_OPTIONS.find((o) => o.value === since)?.label || 'All time'}
                   selectedOptions={[since]}
                   onOptionSelect={(_, d) => setSince(d.optionValue ?? '')}
-                  style={{ minWidth: 160 }}
+                  className={atab.filterControl}
                 >
                   {SINCE_OPTIONS.map((o) => (
                     <Option key={o.value || 'all'} value={o.value}>{o.label}</Option>
@@ -295,7 +297,7 @@ export default function AuditLogsPage() {
                   onChange={(_, d) => setUser(d.value)}
                   onKeyDown={(e) => { if (e.key === 'Enter') load(); }}
                   placeholder="user@contoso.com"
-                  style={{ minWidth: 200 }}
+                  className={atab.filterControl}
                 />
               </Field>
               <Field label="Item / Asset ID">
@@ -304,7 +306,7 @@ export default function AuditLogsPage() {
                   onChange={(_, d) => setItemId(d.value)}
                   onKeyDown={(e) => { if (e.key === 'Enter') load(); }}
                   placeholder="guid or item id"
-                  style={{ minWidth: 200 }}
+                  className={atab.filterControl}
                 />
               </Field>
             </div>

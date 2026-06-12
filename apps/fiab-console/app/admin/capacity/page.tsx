@@ -13,6 +13,7 @@ import { Open16Regular, Dismiss24Regular, ArrowClockwise16Regular } from '@fluen
 import { SignInRequired } from '@/lib/components/sign-in-required';
 import { Section, Toolbar } from '@/lib/components/ui/section';
 import { LoomDataTable, type LoomColumn } from '@/lib/components/ui/loom-data-table';
+import { useAdminTabStyles } from '@/lib/components/ui/admin-tab-styles';
 import { itemVisual } from '@/lib/components/ui/item-type-visual';
 import { ScaleManagePanel } from '@/lib/components/admin/scale-manage-panel';
 import { MetricChart } from '@/lib/components/monitor/metric-chart';
@@ -136,6 +137,7 @@ const useStyles = makeStyles({
   portalLink: { display: 'inline-flex', alignItems: 'center', gap: '4px', fontSize: '12px' },
   costCell: { fontVariantNumeric: 'tabular-nums', fontWeight: 600 },
   spark: { display: 'flex', alignItems: 'center', gap: '8px', minWidth: 0 },
+  sparkSvg: { flexShrink: 0 },
   sparkVal: { fontSize: '12px', fontWeight: 600, fontVariantNumeric: 'tabular-nums', whiteSpace: 'nowrap' },
   dim: { color: tokens.colorNeutralForeground3 },
   totalBar: {
@@ -172,6 +174,7 @@ function resourceTypeToSlug(type: string): string {
 const SPARK_W = 110;
 const SPARK_H = 26;
 function MiniSpark({ points }: { points: { value: number | null }[] }) {
+  const styles = useStyles();
   const vals = points.map((p) => (typeof p.value === 'number' ? p.value : null));
   const present = vals.filter((v): v is number => v != null);
   if (present.length === 0) return null;
@@ -184,7 +187,7 @@ function MiniSpark({ points }: { points: { value: number | null }[] }) {
   let d = '';
   vals.forEach((v, i) => { if (v == null) return; const px = x(i); const py = y(v); d += d === '' ? `M ${px} ${py}` : ` L ${px} ${py}`; });
   return (
-    <svg viewBox={`0 0 ${SPARK_W} ${SPARK_H}`} width={SPARK_W} height={SPARK_H} preserveAspectRatio="none" role="img" aria-label="utilization sparkline" style={{ flexShrink: 0 }}>
+    <svg viewBox={`0 0 ${SPARK_W} ${SPARK_H}`} width={SPARK_W} height={SPARK_H} preserveAspectRatio="none" role="img" aria-label="utilization sparkline" className={styles.sparkSvg}>
       {d ? <path d={d} fill="none" stroke={tokens.colorBrandStroke1} strokeWidth={1.5} /> : null}
     </svg>
   );
@@ -409,6 +412,7 @@ function DetailPane({ res, viz, onClose }: { res: AzureRes; viz: VizConfig | nul
 
 export default function CapacityPage() {
   const styles = useStyles();
+  const a = useAdminTabStyles();
   const [data, setData] = useState<Response | null>(null);
   const [unauth, setUnauth] = useState(false);
   const [q, setQ] = useState('');
@@ -471,10 +475,12 @@ export default function CapacityPage() {
         const Icon = v.icon;
         return (
           <span className={styles.resName}>
+            {/* dynamic: resource icon tint derives from itemVisual color */}
             <span className={styles.resIcon} style={{ backgroundColor: `${v.color}1f`, color: v.color }} aria-hidden>
-              <Icon style={{ width: 18, height: 18, color: v.color }} />
+              {/* dynamic: glyph color derives from itemVisual color */}
+              <Icon className={a.iconSm} style={{ color: v.color }} />
             </span>
-            <strong title={r.name} style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{r.name}</strong>
+            <strong title={r.name} className={a.ellipsis}>{r.name}</strong>
           </span>
         );
       },
@@ -510,7 +516,7 @@ export default function CapacityPage() {
         </a>
       ),
     },
-  ], [styles, costTotals, onCost]);
+  ], [styles, a, costTotals, onCost]);
 
   return (
     <AdminShell sectionTitle="Capacity & compute">
@@ -556,7 +562,7 @@ export default function CapacityPage() {
           </Section>
 
           {data.errors && data.errors.length > 0 && (
-            <MessageBar intent="warning" style={{ marginBottom: 16 }}>
+            <MessageBar intent="warning" className={a.messageBar}>
               <MessageBarBody>
                 Partial result — could not list some RGs: {data.errors.join(' · ')}
               </MessageBarBody>
@@ -566,7 +572,7 @@ export default function CapacityPage() {
           <Section
             title="Scale & manage"
             actions={
-              <Caption1 style={{ color: tokens.colorNeutralForeground3 }}>
+              <Caption1 className={a.muted}>
                 Change SKUs, pause / resume, scale — live Azure-native compute
               </Caption1>
             }
@@ -577,7 +583,7 @@ export default function CapacityPage() {
           <Section
             title="Ops Copilot"
             actions={
-              <Caption1 style={{ color: tokens.colorNeutralForeground3 }}>
+              <Caption1 className={a.muted}>
                 Natural language → ARM / config action, with approval diff + RBAC gate
               </Caption1>
             }
@@ -588,7 +594,7 @@ export default function CapacityPage() {
           <Section
             title="Resources"
             actions={
-              <Caption1 style={{ color: tokens.colorNeutralForeground3 }}>
+              <Caption1 className={a.muted}>
                 {visibleResources.length} of {data.totalResources}
               </Caption1>
             }
@@ -602,7 +608,7 @@ export default function CapacityPage() {
                   value={provider || 'All providers'}
                   selectedOptions={[provider]}
                   onOptionSelect={(_, d) => setProvider(d.optionValue ?? '')}
-                  style={{ minWidth: 200 }}
+                  className={a.filterControl}
                 >
                   <Option value="">All providers</Option>
                   {Object.keys(data.byProvider || {}).map((p) => <Option key={p} value={p}>{p}</Option>)}
@@ -620,7 +626,7 @@ export default function CapacityPage() {
             <div className={styles.totalBar}>
               <Text className={styles.statLabel}>Estimated month-to-date cost (loaded rows)</Text>
               <span className={styles.totalVal}>{fmtCurrency(costSum, currencyRef.current)}</span>
-              <Caption1 style={{ color: tokens.colorNeutralForeground3 }}>
+              <Caption1 className={a.muted}>
                 across {costCount} resource{costCount === 1 ? '' : 's'} with Cost Management data
                 {viz?.isGov ? ' · Azure Government — Power BI Embedded unavailable; Managed Grafana used for embeds' : ''}
               </Caption1>

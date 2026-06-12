@@ -25,7 +25,7 @@ import {
   Spinner, Caption1, Body1, Subtitle2, Button, Badge,
   MessageBar, MessageBarBody, MessageBarTitle, MessageBarActions,
   Dropdown, Option, Link as FluentLink,
-  makeStyles, tokens,
+  makeStyles, tokens, mergeClasses,
 } from '@fluentui/react-components';
 import { ArrowSync24Regular, Open16Regular, Dismiss16Regular, Open24Regular } from '@fluentui/react-icons';
 import { AdminShell } from '@/lib/components/admin-shell';
@@ -138,6 +138,7 @@ const useStyles = makeStyles({
     borderRadius: tokens.borderRadiusSmall,
     ':hover': { backgroundColor: tokens.colorNeutralBackground2Hover },
   },
+  barActive: { backgroundColor: tokens.colorNeutralBackground2Selected },
   barLabel: {
     fontSize: '13px',
     minWidth: '150px',
@@ -452,6 +453,7 @@ export default function UsagePage() {
                       <div
                         key={d.day}
                         className={s.sparkBarUsers}
+                        // dynamic: bar height scales with the DAU value
                         style={{ height: `${Math.max(4, (d.dau / maxDau) * 100)}%` }}
                         title={`${d.day}: ${d.dau} active users`}
                       />
@@ -485,17 +487,17 @@ export default function UsagePage() {
                     return (
                       <div
                         key={row.feature}
-                        className={`${s.bar} ${s.barClickable}`}
+                        className={mergeClasses(s.bar, s.barClickable, active ? s.barActive : undefined)}
                         role="button"
                         tabIndex={0}
                         onClick={() => setFeatureFilter(active ? null : row.feature)}
                         onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); setFeatureFilter(active ? null : row.feature); } }}
-                        style={active ? { backgroundColor: tokens.colorNeutralBackground2Selected } : undefined}
                       >
                         <span className={s.barLabel}>
                           {row.feature}{active ? ' ✓' : ''}
                         </span>
                         <div className={s.barTrack}>
+                          {/* dynamic: fill width scales with the event count */}
                           <div className={s.barFill} style={{ width: `${(row.events / maxFeatureEvents) * 100}%` }} />
                         </div>
                         <span className={s.barCount}>{row.events} · {row.users}u</span>
@@ -517,6 +519,7 @@ export default function UsagePage() {
                     <div key={row.type} className={s.bar}>
                       <span className={s.barLabel}>{itemVisual(row.type).label}</span>
                       <div className={s.barTrack}>
+                        {/* dynamic: fill width scales with the item count */}
                         <div className={s.barFill} style={{ width: `${(row.count / maxType) * 100}%` }} />
                       </div>
                       <span className={s.barCount}>{row.count}</span>
@@ -533,6 +536,7 @@ export default function UsagePage() {
                     <div key={row.workspaceId} className={s.bar}>
                       <span className={s.barLabel}>{row.workspaceName}</span>
                       <div className={s.barTrack}>
+                        {/* dynamic: fill width scales with the item count */}
                         <div className={s.barFill} style={{ width: `${(row.count / maxWs) * 100}%` }} />
                       </div>
                       <span className={s.barCount}>{row.count}</span>
@@ -559,6 +563,7 @@ export default function UsagePage() {
                     <div
                       key={d.day}
                       className={s.sparkBar}
+                      // dynamic: bar height scales with the event count
                       style={{ height: `${Math.max(4, (d.count / maxDay) * 100)}%` }}
                       title={`${d.day}: ${d.count} events`}
                     />

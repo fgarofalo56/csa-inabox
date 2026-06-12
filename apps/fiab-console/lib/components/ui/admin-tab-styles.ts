@@ -77,4 +77,30 @@ export const useAdminTabStyles = makeStyles({
     border: `1px solid ${tokens.colorNeutralStroke2}`,
     borderRadius: tokens.borderRadiusMedium,
   },
+  /** Single-line truncation with an ellipsis (name/description cells). */
+  ellipsis: {
+    overflow: 'hidden',
+    textOverflow: 'ellipsis',
+    whiteSpace: 'nowrap',
+  },
+  /** Small fixed-size inline icon (e.g. 18px glyph inside a rounded avatar). */
+  iconSm: { width: '18px', height: '18px' },
+  /** Filter control (Dropdown/SearchBox) with a sensible minimum width. */
+  filterControl: { minWidth: '200px' },
+  /** Dialog footer action row — right-aligned buttons with a gap. */
+  dialogFooter: {
+    display: 'flex',
+    gap: tokens.spacingHorizontalS,
+    justifyContent: 'flex-end',
+  },
+  /** Wide create/edit DialogSurface (e.g. attribute-group builder). */
+  dialogWide: { maxWidth: '720px', width: '92vw' },
+  /** Caption used as a sub-heading inside a dialog (semibold). */
+  captionStrong: { fontWeight: tokens.fontWeightSemibold },
+  /** Muted text forced onto its own line, with no extra spacing. */
+  blockMuted: { display: 'block', color: tokens.colorNeutralForeground3 },
+  /** Brand-colored inline label (e.g. a source tag next to an option). */
+  brandText: { color: tokens.colorBrandForeground1 },
+  /** Tight inline row of icon buttons / chips. */
+  rowGapXS: { display: 'flex', gap: tokens.spacingHorizontalXS },
 });

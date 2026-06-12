@@ -101,7 +101,7 @@ export default function SensitivityLabelsPage() {
   }, [labels, q]);
 
   const columns: LoomColumn<SensitivityLabel>[] = useMemo(() => [
-    { key: 'name', label: 'Label', width: 180, getValue: (l) => l.name, render: (l) => <span className={s.swatchRow}><span className={s.swatch} style={{ backgroundColor: l.color }} /><strong>{l.name}</strong></span> },
+    { key: 'name', label: 'Label', width: 180, getValue: (l) => l.name, render: (l) => <span className={s.swatchRow}>{/* dynamic: swatch fill is the per-label color */}<span className={s.swatch} style={{ backgroundColor: l.color }} /><strong>{l.name}</strong></span> },
     { key: 'color', label: 'Color', width: 100, getValue: (l) => l.color, render: (l) => <code className={a.codeCell}>{l.color}</code> },
     { key: 'protectionNote', label: 'Protection note', width: 240, render: (l) => l.protectionNote ? <Caption1>{l.protectionNote}</Caption1> : <Caption1 className={a.muted}>—</Caption1> },
     { key: 'createdBy', label: 'Created by', width: 160, render: (l) => <Caption1>{l.createdBy}</Caption1> },
@@ -141,7 +141,7 @@ export default function SensitivityLabelsPage() {
             <DialogContent>
               <div className={a.dialogGrid}>
                 <div><Caption1 className={a.fieldLabel}>Label name</Caption1><Input value={newName} onChange={(_, d) => setNewName(d.value)} placeholder='e.g. Confidential' className={a.fullWidth} /></div>
-                <div><Caption1 className={a.fieldLabel}>Color</Caption1><div className={s.colorRow}>{PRESET_COLORS.map((c) => <button key={c} type='button' onClick={() => setNewColor(c)} aria-label={`Pick color ${c}`} className={s.presetSwatch} style={{ backgroundColor: c, border: newColor === c ? `2px solid ${tokens.colorBrandStroke1}` : `1px solid ${tokens.colorNeutralStroke2}` }} />)}</div></div>
+                <div><Caption1 className={a.fieldLabel}>Color</Caption1><div className={s.colorRow}>{PRESET_COLORS.map((c) => <button key={c} type='button' onClick={() => setNewColor(c)} aria-label={`Pick color ${c}`} className={s.presetSwatch} /* dynamic: swatch fill is the preset color; border marks the selection */ style={{ backgroundColor: c, border: newColor === c ? `2px solid ${tokens.colorBrandStroke1}` : `1px solid ${tokens.colorNeutralStroke2}` }} />)}</div></div>
                 <div><Caption1 className={a.fieldLabel}>Protection note (optional)</Caption1><Textarea value={newProtectionNote} onChange={(_, d) => setNewProtectionNote(d.value)} placeholder='e.g. DLP: Do not share outside the org. Encrypt email attachments.' resize='vertical' className={a.fullWidth} /></div>
               </div>
             </DialogContent>

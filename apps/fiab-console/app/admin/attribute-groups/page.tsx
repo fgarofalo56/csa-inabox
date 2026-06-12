@@ -33,6 +33,7 @@ import {
 import { AdminShell } from '@/lib/components/admin-shell';
 import { Section, Toolbar } from '@/lib/components/ui/section';
 import { LoomDataTable, type LoomColumn } from '@/lib/components/ui/loom-data-table';
+import { useAdminTabStyles } from '@/lib/components/ui/admin-tab-styles';
 import {
   type AttributeGroup, type AttributeDef, type AttributeFieldType,
   ATTRIBUTE_FIELD_TYPES, CHOICE_FIELD_TYPES, kebab, validateAttributes,
@@ -55,6 +56,11 @@ const useStyles = makeStyles({
     border: `1px solid ${tokens.colorNeutralStroke2}`, borderRadius: tokens.borderRadiusMedium,
     padding: tokens.spacingVerticalM, backgroundColor: tokens.colorNeutralBackground2,
   },
+  attrHeadRow: {
+    display: 'flex', alignItems: 'center', justifyContent: 'space-between',
+    marginBottom: tokens.spacingVerticalS,
+  },
+  reorderCol: { display: 'flex', flexDirection: 'column' },
 });
 
 function emptyAttr(): AttributeDef {
@@ -63,6 +69,7 @@ function emptyAttr(): AttributeDef {
 
 export default function AttributeGroupsPage() {
   const s = useStyles();
+  const atab = useAdminTabStyles();
   const [groups, setGroups] = useState<AttributeGroup[] | null>(null);
   const [domains, setDomains] = useState<DomainItem[]>([]);
   const [loading, setLoading] = useState(true);
@@ -219,7 +226,7 @@ export default function AttributeGroupsPage() {
 
   const columns: LoomColumn<AttributeGroup>[] = useMemo(() => [
     { key: 'name', label: 'Group', width: 220, getValue: (g) => g.name, render: (g) => (
-      <div><strong>{g.name}</strong>{g.description && <Caption1 style={{ display: 'block', color: tokens.colorNeutralForeground3 }}>{g.description}</Caption1>}</div>
+      <div><strong>{g.name}</strong>{g.description && <Caption1 className={atab.blockMuted}>{g.description}</Caption1>}</div>
     ) },
     { key: 'attributes', label: 'Attributes', width: 90, getValue: (g) => g.attributes.length, render: (g) => <Badge appearance="tint" color="brand" size="small">{g.attributes.length}</Badge> },
     { key: 'domains', label: 'Applies to', width: 280, sortable: false, render: (g) => (
@@ -228,20 +235,20 @@ export default function AttributeGroupsPage() {
         : <span className={s.attrMeta}>{g.domainIds.map((d) => <Badge key={d} appearance="tint" size="small">{domainName(d)}</Badge>)}</span>
     ) },
     { key: 'actions', label: '', width: 150, sortable: false, filterable: false, render: (g) => (
-      <span style={{ display: 'flex', gap: 4 }}>
+      <span className={atab.rowGapXS}>
         <Button size="small" appearance="subtle" icon={<Edit20Regular />} onClick={(e) => { e.stopPropagation(); openEdit(g); }} aria-label={`Edit ${g.name}`}>Edit</Button>
         <Button size="small" appearance="subtle" icon={<Delete20Regular />} onClick={(e) => { e.stopPropagation(); deleteGroup(g); }} aria-label={`Delete ${g.name}`} />
       </span>
     ) },
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  ], [domainName, s.attrMeta]);
+  ], [domainName, s.attrMeta, atab]);
 
   return (
     <AdminShell sectionTitle="Custom attributes">
       <Section title="About custom attributes">
         <div className={s.explainer}>
-          <Info20Regular style={{ color: tokens.colorBrandForeground1, flexShrink: 0, marginTop: '2px' }} />
-          <Body1 style={{ color: tokens.colorNeutralForeground2, lineHeight: 1.5 }}>
+          <Info20Regular className={atab.infoIcon} />
+          <Body1 className={atab.explainerText}>
             Define <strong>attribute groups</strong> that attach extra, governed metadata to the items people create.
             Each attribute has a field type (<strong>Text</strong>, <strong>Single choice</strong>, <strong>Multiple choice</strong>,
             <strong> Date</strong>, <strong>Boolean</strong>, <strong>Integer</strong>, <strong>Double</strong>, or <strong>Rich text</strong>),
@@ -254,15 +261,15 @@ export default function AttributeGroupsPage() {
         </div>
       </Section>
 
-      {error && <MessageBar intent="error" style={{ marginBottom: 16 }}><MessageBarBody><MessageBarTitle>Could not load attribute groups</MessageBarTitle>{error}</MessageBarBody></MessageBar>}
-      {actionErr && <MessageBar intent="error" style={{ marginBottom: 16 }}><MessageBarBody>{actionErr}</MessageBarBody></MessageBar>}
+      {error && <MessageBar intent="error" className={atab.messageBar}><MessageBarBody><MessageBarTitle>Could not load attribute groups</MessageBarTitle>{error}</MessageBarBody></MessageBar>}
+      {actionErr && <MessageBar intent="error" className={atab.messageBar}><MessageBarBody>{actionErr}</MessageBarBody></MessageBar>}
 
       <Section title="Attribute groups" actions={<>
         <Button icon={<ArrowSync24Regular />} onClick={load} disabled={loading}>Refresh</Button>
         <Button appearance="primary" icon={<Add24Regular />} onClick={() => { setNewName(''); setNewDesc(''); setNewDomains([]); setActionErr(null); setCreateOpen(true); }}>Add group</Button>
       </>}>
         <Toolbar search={q} onSearch={setQ} searchPlaceholder="Search by group or attribute name…" actions={
-          <Dropdown placeholder="Filter by domain" value={domainFilter ? domainName(domainFilter) : 'All domains'} selectedOptions={[domainFilter]} onOptionSelect={(_, d) => setDomainFilter(d.optionValue || '')} style={{ minWidth: 180 }}>
+          <Dropdown placeholder="Filter by domain" value={domainFilter ? domainName(domainFilter) : 'All domains'} selectedOptions={[domainFilter]} onOptionSelect={(_, d) => setDomainFilter(d.optionValue || '')} className={atab.filterControl}>
             <Option value="">All domains</Option>
             {domains.map((d) => <Option key={d.id} value={d.id}>{d.name}</Option>)}
           </Dropdown>
@@ -302,7 +309,7 @@ export default function AttributeGroupsPage() {
 
       {/* Edit-group dialog with attribute editor */}
       <Dialog open={!!editGroup} onOpenChange={(_, d) => { if (!d.open) setEditGroup(null); }}>
-        <DialogSurface style={{ maxWidth: 720, width: '92vw' }}>
+        <DialogSurface className={atab.dialogWide}>
           <DialogBody>
             <DialogTitle>Edit attribute group</DialogTitle>
             <DialogContent>
@@ -320,18 +327,18 @@ export default function AttributeGroupsPage() {
                 </Field>
 
                 <div>
-                  <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 8 }}>
-                    <Caption1 style={{ fontWeight: tokens.fontWeightSemibold }}>Attributes ({draftAttrs.length})</Caption1>
+                  <div className={s.attrHeadRow}>
+                    <Caption1 className={atab.captionStrong}>Attributes ({draftAttrs.length})</Caption1>
                     <Button size="small" appearance="secondary" icon={<Add24Regular />} onClick={() => setEditingAttr(emptyAttr())} disabled={!!editingAttr}>Add attribute</Button>
                   </div>
 
                   {draftAttrs.length === 0 && !editingAttr && (
-                    <Body1 style={{ color: tokens.colorNeutralForeground3 }}>No attributes yet. Click &quot;Add attribute&quot; to define one.</Body1>
+                    <Body1 className={atab.muted}>No attributes yet. Click &quot;Add attribute&quot; to define one.</Body1>
                   )}
 
                   {draftAttrs.map((a, i) => (
                     <div key={a.id} className={s.attrRow}>
-                      <div style={{ display: 'flex', flexDirection: 'column' }}>
+                      <div className={s.reorderCol}>
                         <Button size="small" appearance="subtle" icon={<ArrowUp20Regular />} disabled={i === 0} onClick={() => moveAttr(a.id, -1)} aria-label={`Move ${a.name} up`} />
                         <Button size="small" appearance="subtle" icon={<ArrowDown20Regular />} disabled={i === draftAttrs.length - 1} onClick={() => moveAttr(a.id, 1)} aria-label={`Move ${a.name} down`} />
                       </div>
@@ -340,7 +347,7 @@ export default function AttributeGroupsPage() {
                         <span className={s.attrMeta}>
                           <Badge appearance="outline" size="small">{a.fieldType}</Badge>
                           {a.required && <Badge appearance="tint" color="danger" size="small">Required</Badge>}
-                          {CHOICE_FIELD_TYPES.includes(a.fieldType) && a.choices && <Caption1 style={{ color: tokens.colorNeutralForeground3 }}>{a.choices.join(', ')}</Caption1>}
+                          {CHOICE_FIELD_TYPES.includes(a.fieldType) && a.choices && <Caption1 className={atab.muted}>{a.choices.join(', ')}</Caption1>}
                         </span>
                       </div>
                       <Button size="small" appearance="subtle" icon={<Edit20Regular />} onClick={() => setEditingAttr(a)} aria-label={`Edit ${a.name}`} />
@@ -385,6 +392,7 @@ function AttributeEditor({ attr, isNew, onCancel, onSave, styles }: {
   const [required, setRequired] = useState(!!attr.required);
   const [choicesText, setChoicesText] = useState((attr.choices || []).join('\n'));
   const [err, setErr] = useState<string | null>(null);
+  const atab = useAdminTabStyles();
 
   const isChoice = CHOICE_FIELD_TYPES.includes(fieldType);
 
@@ -401,7 +409,7 @@ function AttributeEditor({ attr, isNew, onCancel, onSave, styles }: {
 
   return (
     <div className={styles.attrEditor}>
-      <Caption1 style={{ fontWeight: tokens.fontWeightSemibold }}>{isNew ? 'New attribute' : 'Edit attribute'}</Caption1>
+      <Caption1 className={atab.captionStrong}>{isNew ? 'New attribute' : 'Edit attribute'}</Caption1>
       {err && <MessageBar intent="error"><MessageBarBody>{err}</MessageBarBody></MessageBar>}
       <Field label="Name" required>
         <Input value={name} onChange={(_, d) => setName(d.value)} placeholder="e.g. Data steward" />
@@ -420,7 +428,7 @@ function AttributeEditor({ attr, isNew, onCancel, onSave, styles }: {
         </Field>
       )}
       <Checkbox checked={required} onChange={(_, d) => setRequired(!!d.checked)} label="Required — must have a value before an item can be created" />
-      <div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end' }}>
+      <div className={atab.dialogFooter}>
         <Button size="small" appearance="secondary" onClick={onCancel}>Cancel</Button>
         <Button size="small" appearance="primary" onClick={save}>{isNew ? 'Add' : 'Update'}</Button>
       </div>

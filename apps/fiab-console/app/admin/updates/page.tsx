@@ -150,6 +150,7 @@ function MarkdownNotes({ text }: { text: string }) {
       {blocks.map((b, i) => {
         if (b.kind === 'h') {
           const size = b.level === 1 ? 18 : b.level === 2 ? 16 : 14;
+          // dynamic: heading size + top gap are computed from the markdown heading level / position
           return <div key={i} className={md.heading} style={{ fontSize: size, marginTop: i ? 12 : 0 }}>{renderInline(b.text, i, md.codeSpan)}</div>;
         }
         if (b.kind === 'ul') {

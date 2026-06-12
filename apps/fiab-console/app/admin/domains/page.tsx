@@ -429,12 +429,12 @@ export default function DomainsPage() {
             <DialogContent>
               <div className={s.createGrid}>
                 <div>
-                  <Caption1 style={{ display: 'block', marginBottom: 4 }}>New parent domain</Caption1>
+                  <Caption1 className={a.fieldLabel}>New parent domain</Caption1>
                   <Dropdown
                     value={moveParent ? (nameById[moveParent] || moveParent) : 'Root (no parent)'}
                     selectedOptions={[moveParent]}
                     onOptionSelect={(_, d) => setMoveParent(d.optionValue || '')}
-                    style={{ width: '100%' }}
+                    className={a.fullWidth}
                   >
                     <Option value="">Root (no parent)</Option>
                     {(domains || [])
@@ -442,7 +442,7 @@ export default function DomainsPage() {
                       .map((p) => <Option key={p.id} value={p.id}>{p.name}</Option>)}
                   </Dropdown>
                 </div>
-                <Caption1 style={{ color: tokens.colorNeutralForeground3 }}>
+                <Caption1 className={a.muted}>
                   Domains are at most two levels (domain → subdomain). Moving reparents the mirrored Purview
                   collection; Unity Catalog has no move operation, so its catalog/schema mapping is unchanged.
                 </Caption1>

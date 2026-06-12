@@ -11,12 +11,13 @@ import { useCallback, useEffect, useMemo, useState } from 'react';
 import {
   Spinner, Badge, Caption1, Body1, Button,
   MessageBar, MessageBarBody, MessageBarTitle,
-  makeStyles, tokens,
+  makeStyles, tokens, mergeClasses,
 } from '@fluentui/react-components';
 import { ArrowSync24Regular, Open16Regular, Folder24Regular, Add24Regular, Settings20Regular } from '@fluentui/react-icons';
 import { AdminShell } from '@/lib/components/admin-shell';
 import { Section, Toolbar } from '@/lib/components/ui/section';
 import { LoomDataTable, type LoomColumn } from '@/lib/components/ui/loom-data-table';
+import { useAdminTabStyles } from '@/lib/components/ui/admin-tab-styles';
 import { WorkspaceCreateWizard } from '@/lib/wizards/workspace-create';
 import { WorkspaceSettingsPane } from '@/lib/panes/workspace-settings';
 import { AzureConnectionsPane } from '@/lib/panes/azure-connections';
@@ -43,6 +44,7 @@ const useStyles = makeStyles({
 
 export default function AdminWorkspacesPage() {
   const s = useStyles();
+  const a = useAdminTabStyles();
   const [workspaces, setWorkspaces] = useState<Workspace[] | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -115,11 +117,11 @@ export default function AdminWorkspacesPage() {
       key: 'name', label: 'Name', width: 280, getValue: (w) => w.name,
       render: (w) => (
         <span className={s.nameCell}>
-          <span className={s.icon} aria-hidden><Folder24Regular style={{ width: 18, height: 18 }} /></span>
+          <span className={s.icon} aria-hidden><Folder24Regular className={a.iconSm} /></span>
           <span className={s.nameText}>
-            <strong title={w.name} style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{w.name}</strong>
+            <strong title={w.name} className={a.ellipsis}>{w.name}</strong>
             {w.description && (
-              <Caption1 style={{ color: tokens.colorNeutralForeground3, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+              <Caption1 className={mergeClasses(a.muted, a.ellipsis)}>
                 {w.description}
               </Caption1>
             )}
@@ -184,7 +186,7 @@ export default function AdminWorkspacesPage() {
       </Body1>
 
       {error && (
-        <MessageBar intent="error" style={{ marginBottom: 16 }}>
+        <MessageBar intent="error" className={a.messageBar}>
           <MessageBarBody>
             <MessageBarTitle>Could not load workspaces</MessageBarTitle>
             {error}
@@ -196,7 +198,7 @@ export default function AdminWorkspacesPage() {
         title="Workspaces"
         actions={
           <>
-            <Caption1 style={{ color: tokens.colorNeutralForeground3 }}>
+            <Caption1 className={a.muted}>
               {filtered.length} workspaces · {totalItems} items total
             </Caption1>
             <Button appearance="primary" icon={<Add24Regular />} onClick={() => setWizardOpen(true)}>New workspace</Button>

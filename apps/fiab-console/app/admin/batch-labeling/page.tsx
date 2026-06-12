@@ -21,6 +21,7 @@ import { ArrowSync24Regular, Tag24Regular, Info20Regular, CheckmarkCircle20Regul
 import { AdminShell } from '@/lib/components/admin-shell';
 import { Section, Toolbar } from '@/lib/components/ui/section';
 import { LoomDataTable, type LoomColumn } from '@/lib/components/ui/loom-data-table';
+import { useAdminTabStyles } from '@/lib/components/ui/admin-tab-styles';
 
 interface CatalogItem {
   id: string;
@@ -68,18 +69,22 @@ const useStyles = makeStyles({
   field: { display: 'flex', flexDirection: 'column', gap: '4px', minWidth: '260px' },
   optRow: { display: 'flex', alignItems: 'center', gap: '8px' },
   opts: { display: 'flex', flexDirection: 'column', gap: '8px', marginTop: tokens.spacingVerticalS },
+  labelDropdown: { minWidth: '260px' },
+  pickerDivider: { marginTop: tokens.spacingVerticalM, marginBottom: tokens.spacingVerticalM },
+  selCount: { display: 'block', marginBottom: tokens.spacingVerticalS, color: tokens.colorNeutralForeground2 },
 });
 
-function statusBadge(value: string | undefined): React.ReactNode {
-  if (!value) return <Caption1 style={{ color: tokens.colorNeutralForeground3 }}>—</Caption1>;
+function statusBadge(value: string | undefined, mutedClass: string): React.ReactNode {
+  if (!value) return <Caption1 className={mutedClass}>—</Caption1>;
   if (value === 'Succeeded') return <Badge color="success" appearance="tint">Succeeded</Badge>;
-  if (value === 'Skipped') return <Caption1 style={{ color: tokens.colorNeutralForeground3 }}>Skipped</Caption1>;
+  if (value === 'Skipped') return <Caption1 className={mutedClass}>Skipped</Caption1>;
   // Everything else (Failed/NotFound/InsufficientUsageRights/error text) = red.
   return <Badge color="danger" appearance="tint">{value}</Badge>;
 }
 
 export default function BatchLabelingPage() {
   const s = useStyles();
+  const a = useAdminTabStyles();
   const [data, setData] = useState<LoadData | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -193,31 +198,31 @@ export default function BatchLabelingPage() {
       key: 'sensitivity', label: 'Current label', width: 150,
       render: (row) => row.sensitivity
         ? <Badge appearance="tint" color="brand">{row.sensitivity}</Badge>
-        : <Caption1 style={{ color: tokens.colorNeutralForeground3 }}>—</Caption1>,
+        : <Caption1 className={a.muted}>—</Caption1>,
     },
     {
       key: 'pbi', label: 'PBI linked', width: 100, sortable: false,
       getValue: (row) => (row.pbiArtifactId ? 'Yes' : 'No'),
       render: (row) => row.pbiArtifactId
         ? <Badge appearance="tint" color="informative">Yes</Badge>
-        : <Caption1 style={{ color: tokens.colorNeutralForeground3 }}>—</Caption1>,
+        : <Caption1 className={a.muted}>—</Caption1>,
     },
-  ], [selected, toggle]);
+  ], [selected, toggle, a]);
 
   const resultColumns: LoomColumn<ResultRow>[] = useMemo(() => [
     { key: 'displayName', label: 'Item', width: 240, render: (r) => <strong>{r.displayName}</strong> },
     { key: 'itemType', label: 'Type', width: 150, filterType: 'select', render: (r) => r.itemType ? <Badge appearance="outline">{r.itemType}</Badge> : <Caption1>—</Caption1> },
-    { key: 'cosmosStatus', label: 'Cosmos write', width: 180, getValue: (r) => r.cosmosStatus, render: (r) => statusBadge(r.cosmosStatus) },
-    { key: 'purviewStatus', label: 'Purview asset', width: 180, getValue: (r) => r.purviewStatus || '', render: (r) => statusBadge(r.purviewStatus) },
-    { key: 'pbiStatus', label: 'Power BI write', width: 200, getValue: (r) => r.pbiStatus || '', render: (r) => statusBadge(r.pbiStatus) },
-  ], []);
+    { key: 'cosmosStatus', label: 'Cosmos write', width: 180, getValue: (r) => r.cosmosStatus, render: (r) => statusBadge(r.cosmosStatus, a.muted) },
+    { key: 'purviewStatus', label: 'Purview asset', width: 180, getValue: (r) => r.purviewStatus || '', render: (r) => statusBadge(r.purviewStatus, a.muted) },
+    { key: 'pbiStatus', label: 'Power BI write', width: 200, getValue: (r) => r.pbiStatus || '', render: (r) => statusBadge(r.pbiStatus, a.muted) },
+  ], [a]);
 
   return (
     <AdminShell sectionTitle="Batch labeling">
       <Section title="About batch labeling">
         <div className={s.explainer}>
-          <Info20Regular style={{ color: tokens.colorBrandForeground1, flexShrink: 0, marginTop: '2px' }} />
-          <Body1 style={{ color: tokens.colorNeutralForeground2, lineHeight: 1.5 }}>
+          <Info20Regular className={a.infoIcon} />
+          <Body1 className={a.explainerText}>
             Select multiple catalog items, pick a sensitivity label, and apply it in one action. The Cosmos
             label-assignment is <strong>always written immediately</strong> to each item. When a Microsoft Purview
             account is configured, the label is also stamped as an asset classification on the matching catalog
@@ -229,11 +234,11 @@ export default function BatchLabelingPage() {
         </div>
       </Section>
 
-      {error && <MessageBar intent="error" style={{ marginBottom: '16px' }}><MessageBarBody><MessageBarTitle>Could not load</MessageBarTitle>{error}</MessageBarBody></MessageBar>}
-      {actionErr && <MessageBar intent="error" style={{ marginBottom: '16px' }}><MessageBarBody>{actionErr}</MessageBarBody></MessageBar>}
+      {error && <MessageBar intent="error" className={a.messageBar}><MessageBarBody><MessageBarTitle>Could not load</MessageBarTitle>{error}</MessageBarBody></MessageBar>}
+      {actionErr && <MessageBar intent="error" className={a.messageBar}><MessageBarBody>{actionErr}</MessageBarBody></MessageBar>}
 
       {data && !data.mipConfigured && (
-        <MessageBar intent="warning" style={{ marginBottom: '16px' }}>
+        <MessageBar intent="warning" className={a.messageBar}>
           <MessageBarBody>
             <MessageBarTitle>MIP labels not configured</MessageBarTitle>
             Only Loom-native labels are available. To use real Microsoft Information Protection label GUIDs (required
@@ -243,7 +248,7 @@ export default function BatchLabelingPage() {
         </MessageBar>
       )}
       {data && !data.purviewConfigured && (
-        <MessageBar intent="warning" style={{ marginBottom: '16px' }}>
+        <MessageBar intent="warning" className={a.messageBar}>
           <MessageBarBody>
             <MessageBarTitle>Purview not configured</MessageBarTitle>
             Asset classification in Microsoft Purview is unavailable. Set <code>LOOM_PURVIEW_ACCOUNT</code> on the
@@ -260,7 +265,7 @@ export default function BatchLabelingPage() {
           title={`Results — ${results.length} item${results.length === 1 ? '' : 's'}`}
           actions={<Button appearance="primary" icon={<Tag24Regular />} onClick={reset}>Label more items</Button>}
         >
-          <MessageBar intent="success" style={{ marginBottom: '12px' }}>
+          <MessageBar intent="success" className={a.messageBar}>
             <MessageBarBody>
               <span className={s.optRow}><CheckmarkCircle20Regular /> Applied label. Each column shows the real outcome of that backend write.</span>
             </MessageBarBody>
@@ -292,15 +297,16 @@ export default function BatchLabelingPage() {
                 value={pickedLabel ? `${pickedLabel.name}${pickedLabel.source === 'mip' ? ' (MIP)' : ''}` : ''}
                 selectedOptions={labelKey ? [labelKey] : []}
                 onOptionSelect={(_, d) => setLabelKey(d.optionValue || '')}
-                style={{ minWidth: '260px' }}
+                className={s.labelDropdown}
               >
                 {labelOptions.filter((l) => l.source === 'loom').length > 0 && (
                   <>
                     {labelOptions.filter((l) => l.source === 'loom').map((l) => (
                       <Option key={l.key} value={l.key} text={l.name}>
                         <span className={s.optRow}>
+                          {/* dynamic: label swatch color is per-label data */}
                           {l.color && <span className={s.swatch} style={{ backgroundColor: l.color }} />}
-                          {l.name} <Caption1 style={{ color: tokens.colorNeutralForeground3 }}>Loom</Caption1>
+                          {l.name} <Caption1 className={a.muted}>Loom</Caption1>
                         </span>
                       </Option>
                     ))}
@@ -309,8 +315,9 @@ export default function BatchLabelingPage() {
                 {labelOptions.filter((l) => l.source === 'mip').map((l) => (
                   <Option key={l.key} value={l.key} text={l.name}>
                     <span className={s.optRow}>
+                      {/* dynamic: label swatch color is per-label data */}
                       {l.color && <span className={s.swatch} style={{ backgroundColor: l.color }} />}
-                      {l.name} <Caption1 style={{ color: tokens.colorBrandForeground1 }}>MIP</Caption1>
+                      {l.name} <Caption1 className={a.brandText}>MIP</Caption1>
                     </span>
                   </Option>
                 ))}
@@ -343,17 +350,17 @@ export default function BatchLabelingPage() {
                 />
               )}
               {pickedLabel.source === 'loom' && data?.pbiAdminConfigured && (
-                <Caption1 style={{ color: tokens.colorNeutralForeground3 }}>
+                <Caption1 className={a.muted}>
                   Power BI propagation requires a MIP label (real GUID). Loom-native labels write to Cosmos{data?.purviewConfigured ? ' and Purview' : ''} only.
                 </Caption1>
               )}
             </div>
           )}
 
-          <Divider style={{ margin: `${tokens.spacingVerticalM} 0` }} />
+          <Divider className={s.pickerDivider} />
 
           <Toolbar search={q} onSearch={setQ} searchPlaceholder="Search items by name, type, workspace..." />
-          <Caption1 style={{ display: 'block', marginBottom: '8px', color: tokens.colorNeutralForeground2 }}>
+          <Caption1 className={s.selCount}>
             {selected.size} of {items.length} selected{allSelected && filtered.length ? ' (all shown)' : ''}
           </Caption1>
           <LoomDataTable
