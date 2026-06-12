@@ -23,7 +23,7 @@ import {
   Rocket20Regular, Code24Regular, Grid24Regular, Box24Regular,
   Archive24Regular, Globe24Regular,
 } from '@fluentui/react-icons';
-import { MCP_DEPLOY_CATALOG as MCP_CATALOG, type McpCatalogEntry, type McpDeployConfigField as McpConfigField } from '@/lib/mcp/catalog';
+import { MCP_DEPLOY_CATALOG as MCP_CATALOG, govMetaFor, type McpCatalogEntry, type McpDeployConfigField as McpConfigField } from '@/lib/mcp/catalog';
 import type { McpServerConfigDoc } from '@/lib/types/mcp-config';
 
 const useStyles = makeStyles({
@@ -232,7 +232,9 @@ export function McpCatalogBrowser({ onDeployed }: { onDeployed: (server: McpServ
         automatically — no further setup.
       </Body1>
       <div className={s.grid}>
-        {MCP_CATALOG.map((entry) => (
+        {MCP_CATALOG.map((entry) => {
+          const gov = govMetaFor(entry.id);
+          return (
           <Card key={entry.id} className={s.card}>
             <CardHeader
               image={<span className={s.iconWrap}>{CATEGORY_GLYPH[entry.category]}</span>}
@@ -242,6 +244,11 @@ export function McpCatalogBrowser({ onDeployed }: { onDeployed: (server: McpServ
             <Text className={s.cardDesc} size={200}>{entry.description}</Text>
             <div className={s.cardFoot}>
               {entry.preview && <Badge appearance="tint" color="warning" size="small">Preview</Badge>}
+              {gov?.airGapSafe && <Badge appearance="tint" color="success" size="small">Air-gap safe</Badge>}
+              {gov && !gov.airGapSafe && gov.govSafe && (
+                <Badge appearance="outline" color="success" size="small">Gov-safe</Badge>
+              )}
+              {gov && <Badge appearance="outline" color="informative" size="small">{gov.license}</Badge>}
               {entry.configSchema.some((f) => f.secret) && (
                 <Badge appearance="outline" color="brand" size="small">Key Vault secret</Badge>
               )}
@@ -251,7 +258,8 @@ export function McpCatalogBrowser({ onDeployed }: { onDeployed: (server: McpServ
               </Button>
             </div>
           </Card>
-        ))}
+          );
+        })}
       </div>
 
       {selected && (
