@@ -14,7 +14,7 @@ export default function ActivatorHubPage() {
   return (
     <PageShell
       title="Activator"
-      subtitle="Cross-workspace view of every Activator rule — enable/disable and delete rules that round-trip to Azure Monitor scheduled-query alerts, see the source tables they watch, and review fired/resolved alert instances. Azure-native by default; no Microsoft Fabric required."
+      subtitle="Every Activator rule across your workspaces — enable, disable, and delete rules backed by Azure Monitor scheduled-query alerts. Azure-native by default; no Microsoft Fabric required."
     >
       <ActivatorPane />
     </PageShell>
