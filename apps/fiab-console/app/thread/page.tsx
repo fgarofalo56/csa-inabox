@@ -8,8 +8,9 @@
  * Power BI model, API publish). Real data from GET /api/thread/edges (Cosmos
  * `thread-edges`); an empty graph is an honest empty state, not an error.
  *
- * Three views (Graph | Tiles | List), toggled with a Fluent TabList — the same
- * dual affordance the Microsoft Purview portal lineage tab and Databricks
+ * Three views (Graph | Tiles | List), toggled with the shared Loom ViewToggle
+ * (its `showGraph` segment adds the canvas option) — the same dual affordance
+ * the Microsoft Purview portal lineage tab and Databricks
  * Catalog Explorer use (interactive graph + tabular relationships), plus the
  * Loom ItemTile grid used across collection surfaces:
  *   • Graph — the shared LineageCanvas (@xyflow/react): nodes typed by object,
@@ -33,13 +34,13 @@ import { useRouter } from 'next/navigation';
 import { clientFetch } from '@/lib/client-fetch';
 import {
   Title2, Body1, Caption1, Badge, Card, Spinner, MessageBar, MessageBarBody,
-  MessageBarTitle, Link as FluentLink, TabList, Tab, Button, makeStyles, tokens,
+  MessageBarTitle, Link as FluentLink, Button, makeStyles, tokens,
 } from '@fluentui/react-components';
 import {
-  Branch24Regular, ArrowRight16Regular, Open16Regular,
-  Flowchart20Regular, Table20Regular, Grid20Regular, ZoomFit20Regular,
+  Branch24Regular, ArrowRight16Regular, Open16Regular, ZoomFit20Regular,
 } from '@fluentui/react-icons';
 import { LoomDataTable, type LoomColumn } from '@/lib/components/ui/loom-data-table';
+import { ViewToggle, type LoomGraphView } from '@/lib/components/ui/view-toggle';
 import { ItemTile } from '@/lib/components/ui/item-tile';
 import { TileGrid } from '@/lib/components/ui/tile-grid';
 import {
@@ -55,7 +56,8 @@ interface ThreadEdge {
   action: string; createdAt: string; createdBy?: string;
 }
 
-type ThreadView = 'graph' | 'tile' | 'list';
+// Thread shows the shared tile/list views plus a lineage-only graph canvas.
+type ThreadView = LoomGraphView;
 
 const LS_VIEW = 'loom.thread.viewMode.v1';
 
@@ -268,11 +270,7 @@ export default function ThreadLineagePage() {
 
       {hasRows && (
         <div className={styles.toolbar}>
-          <TabList selectedValue={view} onTabSelect={(_, d) => setView(d.value as ThreadView)}>
-            <Tab value="graph" icon={<Flowchart20Regular />}>Graph</Tab>
-            <Tab value="tile" icon={<Grid20Regular />}>Tiles</Tab>
-            <Tab value="list" icon={<Table20Regular />}>List</Tab>
-          </TabList>
+          <ViewToggle<ThreadView> value={view} onChange={setView} showGraph ariaLabel="Lineage view" />
           {view === 'graph' && hasEdges && (
             <Button size="small" appearance="subtle" icon={<ZoomFit20Regular />} onClick={() => canvasRef.current?.fitToScreen()}>
               Fit to screen
