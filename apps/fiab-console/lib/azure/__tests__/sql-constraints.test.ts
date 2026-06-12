@@ -30,6 +30,7 @@ import {
   addConstraint,
   dropConstraint,
   toggleConstraint,
+  detectSqlBackendKind,
 } from '../sql-objects-client';
 
 const ep = executeParameterized as unknown as ReturnType<typeof vi.fn>;
@@ -177,5 +178,105 @@ describe('toggleConstraint', () => {
     ep.mockResolvedValueOnce([{ schema: 'dbo', tname: 'Orders', cname: 'PK_Orders', ctype: 'PK' }]);
     const r = await toggleConstraint('srv', 'db', 100, 10, false);
     expect(r).toMatchObject({ ok: false, status: 400 });
+  });
+});
+
+describe('detectSqlBackendKind', () => {
+  it('classifies Fabric Warehouse / SQL analytics endpoint FQDNs as warehouse', () => {
+    expect(detectSqlBackendKind('xyz.datawarehouse.fabric.microsoft.com')).toBe('warehouse');
+    expect(detectSqlBackendKind('ABC.DATAWAREHOUSE.FABRIC.MICROSOFT.COM')).toBe('warehouse');
+    expect(detectSqlBackendKind('xyz.datawarehouse.fabric.microsoft.us')).toBe('warehouse');
+  });
+
+  it('classifies Synapse dedicated-pool FQDNs as synapse-dedicated', () => {
+    expect(detectSqlBackendKind('syn-loom.sql.azuresynapse.net')).toBe('synapse-dedicated');
+    expect(detectSqlBackendKind('syn-loom.sql.azuresynapse.usgovcloudapi.net')).toBe('synapse-dedicated');
+  });
+
+  it('classifies Azure SQL / Fabric SQL database FQDNs as sqldb (the default)', () => {
+    expect(detectSqlBackendKind('myserver.database.windows.net')).toBe('sqldb');
+    expect(detectSqlBackendKind('abc.database.fabric.microsoft.com')).toBe('sqldb');
+    expect(detectSqlBackendKind('')).toBe('sqldb');
+  });
+});
+
+describe('addConstraint — Fabric Warehouse (metadata-only) backend', () => {
+  it('forces PRIMARY KEY to NONCLUSTERED NOT ENFORCED', async () => {
+    ep.mockResolvedValueOnce([{ schema: 'dbo', name: 'Orders' }]);          // resolveTable
+    ep.mockResolvedValueOnce([{ columnId: 1, name: 'Id' }]);                // resolveColumns
+    ep.mockResolvedValueOnce([]);                                           // ALTER exec
+    const r = await addConstraint('srv', 'db', 100, {
+      type: 'PK', name: 'PK_Orders', clustered: true,                       // clustered ignored
+      columns: [{ columnId: 1, descending: false }],
+    }, 'warehouse');
+    expect(r).toMatchObject({ ok: true });
+    expect(ep.mock.calls[2][2]).toBe('ALTER TABLE [dbo].[Orders] ADD CONSTRAINT [PK_Orders] PRIMARY KEY NONCLUSTERED ([Id] ASC) NOT ENFORCED;');
+  });
+
+  it('forces UNIQUE to NONCLUSTERED NOT ENFORCED', async () => {
+    ep.mockResolvedValueOnce([{ schema: 'dbo', name: 'Orders' }]);
+    ep.mockResolvedValueOnce([{ columnId: 2, name: 'Code' }]);
+    ep.mockResolvedValueOnce([]);
+    const r = await addConstraint('srv', 'db', 100, {
+      type: 'UQ', name: 'UQ_Orders_Code', clustered: false,
+      columns: [{ columnId: 2, descending: false }],
+    }, 'warehouse');
+    expect(r).toMatchObject({ ok: true });
+    expect(ep.mock.calls[2][2]).toBe('ALTER TABLE [dbo].[Orders] ADD CONSTRAINT [UQ_Orders_Code] UNIQUE NONCLUSTERED ([Code] ASC) NOT ENFORCED;');
+  });
+
+  it('emits FOREIGN KEY as NOT ENFORCED with no WITH (NO)CHECK or ON DELETE/UPDATE', async () => {
+    ep.mockResolvedValueOnce([{ schema: 'dbo', name: 'Orders' }]);          // resolveTable (parent)
+    ep.mockResolvedValueOnce([{ schema: 'dbo', name: 'Customers' }]);       // resolveTable (ref)
+    ep.mockResolvedValueOnce([{ columnId: 5, name: 'CustomerId' }]);        // local columns
+    ep.mockResolvedValueOnce([{ columnId: 1, name: 'Id' }]);                // ref columns
+    ep.mockResolvedValueOnce([]);                                           // ALTER exec
+    const r = await addConstraint('srv', 'db', 100, {
+      type: 'FK', name: 'FK_Orders_Customers', columns: [5], refTableObjectId: 99,
+      refColumns: [1], onDelete: 'CASCADE', onUpdate: 'CASCADE', noCheck: true,
+    }, 'warehouse');
+    expect(r).toMatchObject({ ok: true });
+    expect(ep.mock.calls[4][2]).toBe('ALTER TABLE [dbo].[Orders] ADD CONSTRAINT [FK_Orders_Customers] FOREIGN KEY ([CustomerId]) REFERENCES [dbo].[Customers] ([Id]) NOT ENFORCED;');
+  });
+
+  it('rejects CHECK constraints with an honest 400', async () => {
+    const r = await addConstraint('srv', 'db', 100, {
+      type: 'CK', name: 'CK_Orders_Total', expression: '[Total] > 0', noCheck: false,
+    }, 'warehouse');
+    expect(r).toMatchObject({ ok: false, status: 400 });
+    expect((r as any).error).toMatch(/CHECK constraints are not supported/i);
+    expect(ep).not.toHaveBeenCalled();
+  });
+});
+
+describe('addConstraint — Synapse dedicated SQL pool backend', () => {
+  it('forces PRIMARY KEY to NONCLUSTERED NOT ENFORCED', async () => {
+    ep.mockResolvedValueOnce([{ schema: 'dbo', name: 'Orders' }]);
+    ep.mockResolvedValueOnce([{ columnId: 1, name: 'Id' }]);
+    ep.mockResolvedValueOnce([]);
+    const r = await addConstraint('srv', 'db', 100, {
+      type: 'PK', name: 'PK_Orders', clustered: true,
+      columns: [{ columnId: 1, descending: false }],
+    }, 'synapse-dedicated');
+    expect(r).toMatchObject({ ok: true });
+    expect(ep.mock.calls[2][2]).toBe('ALTER TABLE [dbo].[Orders] ADD CONSTRAINT [PK_Orders] PRIMARY KEY NONCLUSTERED ([Id] ASC) NOT ENFORCED;');
+  });
+
+  it('rejects FOREIGN KEY constraints with an honest 400 before any DB call', async () => {
+    const r = await addConstraint('srv', 'db', 100, {
+      type: 'FK', name: 'FK_Orders_Customers', columns: [5], refTableObjectId: 99,
+      refColumns: [1], onDelete: 'NO_ACTION', onUpdate: 'NO_ACTION', noCheck: false,
+    }, 'synapse-dedicated');
+    expect(r).toMatchObject({ ok: false, status: 400 });
+    expect((r as any).error).toMatch(/FOREIGN KEY constraints are not supported/i);
+    expect(ep).not.toHaveBeenCalled();
+  });
+
+  it('rejects CHECK constraints with an honest 400', async () => {
+    const r = await addConstraint('srv', 'db', 100, {
+      type: 'CK', name: 'CK_X', expression: '1=1', noCheck: false,
+    }, 'synapse-dedicated');
+    expect(r).toMatchObject({ ok: false, status: 400 });
+    expect(ep).not.toHaveBeenCalled();
   });
 });

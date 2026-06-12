@@ -14,6 +14,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import { guardSqlDbRequest, sqlDbError } from '../_shared';
 import {
   listConstraints, addConstraint, dropConstraint, toggleConstraint,
+  detectSqlBackendKind,
   type ConstraintSpec,
 } from '@/lib/azure/sql-objects-client';
 
@@ -27,7 +28,11 @@ export async function GET(req: NextRequest) {
   if (!Number.isInteger(objectId)) return NextResponse.json({ ok: false, error: 'objectId is required' }, { status: 400 });
   try {
     const constraints = await listConstraints(g.ctx.server, g.ctx.database, objectId);
-    return NextResponse.json({ ok: true, objectId, constraints });
+    // Surface the backend dialect so the inline designer can honestly disable
+    // the controls a Fabric Warehouse / Synapse dedicated pool does not accept
+    // (CHECK, CLUSTERED, WITH NOCHECK; FK on dedicated pools).
+    const backendKind = detectSqlBackendKind(g.ctx.server);
+    return NextResponse.json({ ok: true, objectId, constraints, backendKind });
   } catch (e: any) { return sqlDbError(e); }
 }
 
@@ -42,7 +47,10 @@ export async function POST(req: NextRequest) {
   if (!spec || typeof spec !== 'object' || !['PK', 'UQ', 'FK', 'CK'].includes((spec as any).type)) {
     return NextResponse.json({ ok: false, error: 'a valid constraint spec (type PK|UQ|FK|CK) is required' }, { status: 400 });
   }
-  const r = await addConstraint(g.ctx.server, g.ctx.database, tableObjectId, spec);
+  // Pick the DDL dialect from the bound connection: full-engine Azure SQL /
+  // Fabric SQL database vs metadata-only Fabric Warehouse / Synapse pool.
+  const backendKind = detectSqlBackendKind(g.ctx.server);
+  const r = await addConstraint(g.ctx.server, g.ctx.database, tableObjectId, spec, backendKind);
   if (!r.ok) return NextResponse.json({ ok: false, error: r.error }, { status: r.status });
   return NextResponse.json({ ok: true, added: r.added, ddl: r.ddl });
 }
