@@ -99,8 +99,94 @@ export interface OntologyEntityBinding {
   sourceDisplayName: string;
   /** Ontology class names this source materializes as entity instances. */
   entityTypes: string[];
+  /**
+   * Per-entity-type primary-key column name (the column an UPDATE/DELETE keys on).
+   * Optional — when unset, Atelier write actions require the caller to name the
+   * key column explicitly. Keyed by entity type name. Constrains writes to the
+   * ontology-declared shape (no freeform SQL).
+   */
+  keyColumns?: Record<string, string>;
+  /**
+   * Per-entity-type allowed writable column names. When present, an Atelier
+   * create/update is rejected if it references a column not in this list, so
+   * writes stay bound to the ontology's declared schema rather than arbitrary
+   * columns. Keyed by entity type name.
+   */
+  writableColumns?: Record<string, string[]>;
   /** ISO-8601 timestamp the binding was created/updated. */
   boundAt?: string;
+}
+
+/**
+ * A safe SQL identifier — a leading letter/underscore then word chars, ≤128
+ * (T-SQL identifier limit). Returns the identifier when safe, else null.
+ * Shared by the Atelier (Workshop app) write path and the ontology bind path so
+ * table/column names are validated identically before being bracket-quoted into
+ * T-SQL. Values are NEVER validated here — they go through TDS named-parameter
+ * binding (see synapse-sql-client.SynapseQueryParam).
+ */
+export function safeSqlIdent(name: string): string | null {
+  return typeof name === 'string' && /^[A-Za-z_][\w]{0,127}$/.test(name) ? name : null;
+}
+
+/** A column/value pair for an Atelier write, post-validation. */
+export interface AtelierColumnValue {
+  /** Validated (safe) column identifier. */
+  column: string;
+  /** The value to bind (string | null). Bound via TDS, never concatenated. */
+  value: string | null;
+}
+
+/**
+ * Result of building a parameterised T-SQL write statement: the SQL text using
+ * `@p0`/`@k` markers and the parameter list to bind via the Synapse client.
+ * `value` is bound as NVARCHAR(MAX); T-SQL implicitly converts to the column
+ * type, so a single bind type covers string/number/date columns.
+ */
+export interface AtelierSql {
+  sql: string;
+  params: Array<{ name: string; value: string | null }>;
+}
+
+/**
+ * Build a parameterised INSERT for an Atelier "create" action. Columns are
+ * already validated safe identifiers; values are bound (`@p0`, `@p1`, …) — never
+ * spliced into the SQL string. Throws when no columns are supplied.
+ */
+export function buildInsertSql(table: string, cols: AtelierColumnValue[]): AtelierSql {
+  if (!cols.length) throw new Error('create requires at least one column value');
+  const params = cols.map((c, i) => ({ name: `p${i}`, value: c.value }));
+  const colList = cols.map((c) => `[${c.column}]`).join(', ');
+  const valList = cols.map((_, i) => `@p${i}`).join(', ');
+  return { sql: `INSERT INTO [${table}] (${colList}) VALUES (${valList})`, params };
+}
+
+/**
+ * Build a parameterised UPDATE for an Atelier "update" action. Sets each column
+ * to a bound `@p<i>` marker and keys on `[keyColumn] = @k`. Columns and
+ * keyColumn are validated safe identifiers; values are bound. Throws when no
+ * SET columns are supplied.
+ */
+export function buildUpdateSql(
+  table: string,
+  cols: AtelierColumnValue[],
+  keyColumn: string,
+  keyValue: string | null,
+): AtelierSql {
+  if (!cols.length) throw new Error('update requires at least one column value');
+  const params = cols.map((c, i) => ({ name: `p${i}`, value: c.value }));
+  params.push({ name: 'k', value: keyValue });
+  const setList = cols.map((c, i) => `[${c.column}] = @p${i}`).join(', ');
+  return { sql: `UPDATE [${table}] SET ${setList} WHERE [${keyColumn}] = @k`, params };
+}
+
+/**
+ * Build a parameterised DELETE for an Atelier "delete" action, keyed on
+ * `[keyColumn] = @k`. keyColumn is a validated safe identifier; the key value is
+ * bound. A WHERE clause is always emitted (no unbounded DELETE).
+ */
+export function buildDeleteSql(table: string, keyColumn: string, keyValue: string | null): AtelierSql {
+  return { sql: `DELETE FROM [${table}] WHERE [${keyColumn}] = @k`, params: [{ name: 'k', value: keyValue }] };
 }
 
 /**

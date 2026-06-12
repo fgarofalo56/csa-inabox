@@ -30,7 +30,16 @@ The **App builder** tab is a Loom-native low-code surface for assembling a real 
 
 The whole app definition persists on the Cosmos item (`state.spec.app`).
 
-**Standalone, not Atelier.** This visual builder lives in the Rayfin/Fabric-Apps surface itself rather than under Weave/Atelier: the Azure-native build has no separate Atelier item type, and the real Fabric-Apps `--template dataapp` flow is code-first + GitHub Copilot codegen (not a WYSIWYG canvas), so a Loom-hosted visual builder with a real Azure runtime is the honest home. Write-back forms run in the **deployed** app (the Rayfin runtime on the dev machine), not inside Loom — Loom previews their layout and reads live data for the data components.
+**Standalone, not Atelier.** This visual builder lives in the Rayfin/Fabric-Apps surface itself rather than under Weave/Atelier: the **Rayfin** Azure-native build has no separate Atelier item type, and the real Fabric-Apps `--template dataapp` flow is code-first + GitHub Copilot codegen (not a WYSIWYG canvas), so a Loom-hosted visual builder with a real Azure runtime is the honest home. Write-back forms run in the **deployed** app (the Rayfin runtime on the dev machine), not inside Loom — Loom previews their layout and reads live data for the data components.
+
+> **Scope clarification (Atelier vs Rayfin).** The sentence above is scoped to
+> the **Rayfin / Fabric-Apps** parity track. It does **not** mean Loom has no
+> Atelier at all: the **Palantir-Workshop → Atelier** parity track has its own
+> `workshop-app` item type, which **does real CRUD inside Loom** (create / read /
+> update / delete over the ontology's bound Synapse warehouse). See
+> `docs/fiab/parity/workshop-app.md`. The two are different surfaces: Rayfin
+> previews write-back forms that run in a *deployed* app; Atelier (`workshop-app`)
+> executes write-back directly against the Weave-bound warehouse from Loom.
 
 ## Deploy workflow
 

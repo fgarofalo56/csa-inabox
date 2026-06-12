@@ -28,7 +28,48 @@ import {
   parseUdfFunctions,
   normalizeDaSources, guessDaSourceType, daSupportsExampleQueries,
   shapeDaHistory, canSendDaQuestion,
+  safeSqlIdent, buildInsertSql, buildUpdateSql, buildDeleteSql,
 } from '../_family-utils';
+
+// ============================================================
+// Atelier (Workshop app) real-CRUD SQL builders
+// ============================================================
+describe('safeSqlIdent', () => {
+  it('accepts a normal identifier', () => { expect(safeSqlIdent('Order')).toBe('Order'); expect(safeSqlIdent('_x1')).toBe('_x1'); });
+  it('rejects injection / illegal chars', () => {
+    expect(safeSqlIdent('Status; DROP TABLE x')).toBeNull();
+    expect(safeSqlIdent('1col')).toBeNull();
+    expect(safeSqlIdent('a b')).toBeNull();
+    expect(safeSqlIdent('')).toBeNull();
+    expect(safeSqlIdent('a'.repeat(129))).toBeNull();
+  });
+});
+
+describe('buildInsertSql', () => {
+  it('builds a parameterised INSERT binding values, not concatenating', () => {
+    const r = buildInsertSql('Order', [{ column: 'Status', value: 'open' }, { column: 'Amount', value: '99' }]);
+    expect(r.sql).toBe('INSERT INTO [Order] ([Status], [Amount]) VALUES (@p0, @p1)');
+    expect(r.params).toEqual([{ name: 'p0', value: 'open' }, { name: 'p1', value: '99' }]);
+  });
+  it('throws when no columns', () => { expect(() => buildInsertSql('Order', [])).toThrow(); });
+});
+
+describe('buildUpdateSql', () => {
+  it('builds a parameterised UPDATE keyed on @k', () => {
+    const r = buildUpdateSql('Order', [{ column: 'Status', value: 'closed' }], 'Id', '7');
+    expect(r.sql).toBe('UPDATE [Order] SET [Status] = @p0 WHERE [Id] = @k');
+    expect(r.params).toEqual([{ name: 'p0', value: 'closed' }, { name: 'k', value: '7' }]);
+  });
+  it('throws when no SET columns', () => { expect(() => buildUpdateSql('Order', [], 'Id', '7')).toThrow(); });
+});
+
+describe('buildDeleteSql', () => {
+  it('always emits a WHERE clause keyed on @k', () => {
+    const r = buildDeleteSql('Order', 'Id', '7');
+    expect(r.sql).toBe('DELETE FROM [Order] WHERE [Id] = @k');
+    expect(r.params).toEqual([{ name: 'k', value: '7' }]);
+  });
+});
 
 // ============================================================
 // parseUdfFunctions (UserDataFunctionEditor explorer + Test panel)
