@@ -15216,6 +15216,7 @@ function PaginatedReportDesigner({ item, id }: { item: FabricItemType; id: strin
   const [pbiReports, setPbiReports] = useState<ReportLite[] | null>(null);
   const [pbiReportId, setPbiReportId] = useState('');
   const [pbiListErr, setPbiListErr] = useState<string | null>(null);
+  const [pbiListBusy, setPbiListBusy] = useState(false);
   const [embed, setEmbed] = useState<{ token: string; embedUrl: string; reportId: string } | null>(null);
   const [embedErr, setEmbedErr] = useState<string | null>(null);
   const [viewerErr, setViewerErr] = useState<string | null>(null);
@@ -15324,24 +15325,30 @@ function PaginatedReportDesigner({ item, id }: { item: FabricItemType; id: strin
   }, [pbiWorkspaceId, pbiWs.workspaces]);
 
   // List the published Power BI paginated (RDL) reports in the picked workspace.
-  // Real REST via the BFF (GET /api/items/paginated-report?workspaceId=…).
-  useEffect(() => {
+  // Real REST via the BFF (GET /api/items/paginated-report?workspaceId=…). Kept
+  // as a callback so the toolbar "Reload" button can re-run it in place when a
+  // report is published while the preview tab is open.
+  const loadPbiReports = useCallback(async (signal?: { cancelled: boolean }) => {
     if (!powerBiConfigured || !pbiWorkspaceId) { setPbiReports(null); return; }
-    let cancelled = false;
-    (async () => {
-      setPbiListErr(null);
-      try {
-        const r = await fetch(`/api/items/paginated-report?workspaceId=${encodeURIComponent(pbiWorkspaceId)}`);
-        const j = await r.json();
-        if (cancelled) return;
-        if (j.ok) {
-          setPbiReports(j.reports || []);
-          setPbiReportId((prev) => prev || (j.reports?.[0]?.id ?? ''));
-        } else { setPbiReports([]); setPbiListErr(j.error || `HTTP ${r.status}`); }
-      } catch (e: any) { if (!cancelled) { setPbiReports([]); setPbiListErr(e?.message || String(e)); } }
-    })();
-    return () => { cancelled = true; };
+    setPbiListErr(null);
+    setPbiListBusy(true);
+    try {
+      const r = await fetch(`/api/items/paginated-report?workspaceId=${encodeURIComponent(pbiWorkspaceId)}`);
+      const j = await r.json();
+      if (signal?.cancelled) return;
+      if (j.ok) {
+        setPbiReports(j.reports || []);
+        setPbiReportId((prev) => prev || (j.reports?.[0]?.id ?? ''));
+      } else { setPbiReports([]); setPbiListErr(j.error || `HTTP ${r.status}`); }
+    } catch (e: any) { if (!signal?.cancelled) { setPbiReports([]); setPbiListErr(e?.message || String(e)); } }
+    finally { if (!signal?.cancelled) setPbiListBusy(false); }
   }, [powerBiConfigured, pbiWorkspaceId]);
+
+  useEffect(() => {
+    const signal = { cancelled: false };
+    void loadPbiReports(signal);
+    return () => { signal.cancelled = true; };
+  }, [loadPbiReports]);
 
   // Mint a per-report paginated embed token whenever the selected published
   // Power BI report changes. Paginated reports use the MULTI-RESOURCE
@@ -15517,7 +15524,8 @@ function PaginatedReportDesigner({ item, id }: { item: FabricItemType; id: strin
 
       {designView === 'preview' && (
         <div style={{ flex: '1 1 auto', minWidth: 0 }}>
-          <div className={s.toolbar} style={{ marginBottom: 8 }}>
+          <div className={s.toolbar} style={{ marginBottom: 8, alignItems: 'end' }}>
+            <Badge appearance="filled" color="brand" style={{ marginBottom: 6 }}>Power BI live preview</Badge>
             <WorkspacePicker value={pbiWorkspaceId} onChange={(v) => { setPbiWorkspaceId(v); setPbiReportId(''); }} {...pbiWs} />
             <Field label="Published paginated report" style={{ minWidth: 280 }}>
               <Select value={pbiReportId} onChange={(_, d) => setPbiReportId((d as any).value)} disabled={!pbiReports || pbiReports.length === 0}>
@@ -15525,6 +15533,11 @@ function PaginatedReportDesigner({ item, id }: { item: FabricItemType; id: strin
                 {(pbiReports || []).map((r) => <option key={r.id} value={r.id}>{r.name}</option>)}
               </Select>
             </Field>
+            <Button appearance="outline" icon={pbiListBusy ? <Spinner size="tiny" /> : <ArrowSync20Regular />}
+              onClick={() => void loadPbiReports()} disabled={!pbiWorkspaceId || pbiListBusy}
+              title="Re-list the published paginated reports in this Power BI workspace">
+              {pbiListBusy ? 'Reloading…' : 'Reload'}
+            </Button>
           </div>
           {pbiListErr && <MessageBar intent="error" style={{ marginBottom: 8 }}><MessageBarBody><MessageBarTitle>Could not list paginated reports</MessageBarTitle>{pbiListErr}</MessageBarBody></MessageBar>}
           {pbiReports && pbiReports.length === 0 && !pbiListErr && (
