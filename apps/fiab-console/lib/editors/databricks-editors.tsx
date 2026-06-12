@@ -15,6 +15,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   Subtitle2, Body1, Caption1, Badge, Button, Spinner, Dropdown, Option,
+  Combobox,
   Input, Field, Switch, Textarea, Tooltip, Divider,
   Tab, TabList,
   Tree, TreeItem, TreeItemLayout,
@@ -33,6 +34,7 @@ import {
   Eye20Regular, MathFormula20Regular,
   ArrowDownload20Regular,
   Organization20Regular,
+  ArrowUpload20Regular, CloudArrowUp24Regular, Dismiss16Regular,
 } from '@fluentui/react-icons';
 import { ModelViewPanel } from './components/model-view-canvas';
 import { ItemEditorChrome } from './item-editor-chrome';
@@ -112,6 +114,30 @@ const useStyles = makeStyles({
   badgeWrap: { display: 'flex', columnGap: tokens.spacingHorizontalXS, rowGap: tokens.spacingVerticalXS, flexWrap: 'wrap' },
   actionRow: { display: 'flex', columnGap: tokens.spacingHorizontalS },
   hintCaption: { display: 'block', color: tokens.colorNeutralForeground3 },
+  // ---- Fluent-themed file picker (replaces the bare <input type=file>) ----
+  fileDrop: {
+    display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center',
+    rowGap: tokens.spacingVerticalXS, textAlign: 'center', cursor: 'pointer',
+    padding: `${tokens.spacingVerticalL} ${tokens.spacingHorizontalL}`,
+    border: `1px dashed ${tokens.colorNeutralStroke2}`, borderRadius: tokens.borderRadiusMedium,
+    backgroundColor: tokens.colorNeutralBackground2, color: tokens.colorNeutralForeground3,
+    transitionProperty: 'background-color, border-color', transitionDuration: tokens.durationFaster,
+    ':hover': { backgroundColor: tokens.colorNeutralBackground2Hover, borderColor: tokens.colorBrandStroke1, color: tokens.colorNeutralForeground2 },
+    ':focus-visible': { outline: `2px solid ${tokens.colorStrokeFocus2}`, outlineOffset: '1px' },
+  },
+  fileDropActive: { borderColor: tokens.colorBrandStroke1, backgroundColor: tokens.colorNeutralBackground2Hover, color: tokens.colorNeutralForeground2 },
+  fileDropIcon: { color: tokens.colorBrandForeground1 },
+  filePicked: {
+    display: 'flex', alignItems: 'center', columnGap: tokens.spacingHorizontalS,
+    padding: `${tokens.spacingVerticalXS} ${tokens.spacingHorizontalS}`,
+    border: `1px solid ${tokens.colorNeutralStroke2}`, borderRadius: tokens.borderRadiusMedium,
+    backgroundColor: tokens.colorNeutralBackground1,
+  },
+  filePickedName: { flex: 1, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' },
+  visuallyHidden: {
+    position: 'absolute', width: '1px', height: '1px', padding: 0, margin: '-1px',
+    overflow: 'hidden', clip: 'rect(0,0,0,0)', whiteSpace: 'nowrap', border: 0,
+  },
 });
 
 interface QueryResponse {
@@ -287,6 +313,11 @@ const UC_PRIVILEGES: Record<string, string[]> = {
   TABLE: ['ALL PRIVILEGES', 'SELECT', 'MODIFY', 'APPLY TAG', 'MANAGE'],
   VOLUME: ['ALL PRIVILEGES', 'READ VOLUME', 'WRITE VOLUME', 'APPLY TAG', 'MANAGE'],
   FUNCTION: ['ALL PRIVILEGES', 'EXECUTE', 'APPLY TAG', 'MANAGE'],
+  // Storage / metastore securables — the BFF grants route already accepts these
+  // securable_types; expose them with their valid privilege matrices (E8).
+  EXTERNAL_LOCATION: ['ALL PRIVILEGES', 'CREATE EXTERNAL TABLE', 'CREATE EXTERNAL VOLUME', 'READ FILES', 'WRITE FILES', 'CREATE MANAGED STORAGE', 'BROWSE', 'MANAGE'],
+  STORAGE_CREDENTIAL: ['ALL PRIVILEGES', 'CREATE EXTERNAL LOCATION', 'CREATE EXTERNAL TABLE', 'READ FILES', 'WRITE FILES', 'MANAGE'],
+  METASTORE: ['CREATE CATALOG', 'CREATE CONNECTION', 'CREATE EXTERNAL LOCATION', 'CREATE STORAGE CREDENTIAL', 'CREATE CLEAN ROOM', 'CREATE PROVIDER', 'CREATE RECIPIENT', 'CREATE SHARE', 'USE MARKETPLACE ASSETS', 'SET SHARE PERMISSION', 'USE CONNECTION', 'MANAGE ALLOWLIST'],
 };
 
 const UC_COLUMN_TYPES = [
@@ -295,7 +326,8 @@ const UC_COLUMN_TYPES = [
 ];
 
 interface UcGrant { principal: string; privileges: string[] }
-type UcSecurable = 'CATALOG' | 'SCHEMA' | 'TABLE' | 'VOLUME' | 'FUNCTION';
+type UcSecurable = 'CATALOG' | 'SCHEMA' | 'TABLE' | 'VOLUME' | 'FUNCTION'
+  | 'EXTERNAL_LOCATION' | 'STORAGE_CREDENTIAL' | 'METASTORE';
 
 interface UcWriteDialogsProps {
   catalogs: string[];
@@ -303,6 +335,9 @@ interface UcWriteDialogsProps {
   schemas: string[];
   activeSchema: string | null;
   tables: string[];
+  /** SQL Warehouse the editor is bound to — used to run schema inference for
+   *  "Create table from file" (read_files CTAS). */
+  warehouseId: string;
   onChanged: () => void;            // re-list the tree after a mutation
   // controlled open state per dialog
   createCatalogOpen: boolean; setCreateCatalogOpen: (v: boolean) => void;
@@ -357,7 +392,7 @@ function KvTagEditor({ rows, setRows }: { rows: KvRow[]; setRows: (r: KvRow[]) =
 function UnityCatalogWriteDialogs(props: UcWriteDialogsProps) {
   const s = useStyles();
   const {
-    catalogs, activeCatalog, schemas, activeSchema, tables, onChanged,
+    catalogs, activeCatalog, schemas, activeSchema, tables, warehouseId, onChanged,
     createCatalogOpen, setCreateCatalogOpen,
     createSchemaOpen, setCreateSchemaOpen,
     createTableOpen, setCreateTableOpen,
@@ -454,9 +489,85 @@ function UnityCatalogWriteDialogs(props: UcWriteDialogsProps) {
   const [tblCols, setTblCols] = useState<NewColumn[]>([{ name: 'id', type_name: 'BIGINT', nullable: false, comment: '' }]);
   const [tblBusy, setTblBusy] = useState(false);
   const [tblErr, setTblErr] = useState<string | null>(null);
+  // C10 — "Create table from file". Source mode toggles the dialog between the
+  // column designer and an upload→infer flow. File is read client-side, POSTed
+  // as text; the BFF uploads it to a UC volume and runs read_files CTAS.
+  const [tblSource, setTblSource] = useState<'columns' | 'file'>('columns');
+  const [tblVolumes, setTblVolumes] = useState<string[]>([]);
+  const [tblVolume, setTblVolume] = useState('');
+  const [tblFileName, setTblFileName] = useState('');
+  const [tblFileContent, setTblFileContent] = useState('');
+  const [tblFileFmt, setTblFileFmt] = useState<'csv' | 'json' | 'parquet' | 'orc' | 'avro' | 'text'>('csv');
+  const [tblFileHeader, setTblFileHeader] = useState(true);
+  const [tblFileMsg, setTblFileMsg] = useState<string | null>(null);
+  const tblFileInputRef = useRef<HTMLInputElement | null>(null);
+  const [tblFileDragOver, setTblFileDragOver] = useState(false);
   useEffect(() => {
     if (createTableOpen) { setTblCatalog(activeCatalog || catalogs[0] || ''); setTblSchema(activeSchema || ''); }
   }, [createTableOpen, activeCatalog, activeSchema, catalogs]);
+  // Load the schema's volumes (staging targets for the upload) when the From-file
+  // mode is active and a catalog.schema is chosen.
+  useEffect(() => {
+    if (!createTableOpen || tblSource !== 'file' || !tblCatalog || !tblSchema) return;
+    let cancelled = false;
+    (async () => {
+      try {
+        const r = await fetch(`/api/databricks/unity-catalog/tables?catalog=${encodeURIComponent(tblCatalog)}&schema=${encodeURIComponent(tblSchema)}`);
+        const j = await r.json();
+        if (cancelled) return;
+        const vols = (j.volumes || []).map((v: any) => `${tblCatalog}.${tblSchema}.${v.name}`);
+        setTblVolumes(vols);
+        if (vols.length && !tblVolume) setTblVolume(vols[0]);
+      } catch { /* honest empty-state below if none */ }
+    })();
+    return () => { cancelled = true; };
+  }, [createTableOpen, tblSource, tblCatalog, tblSchema, tblVolume]);
+
+  const onPickFile = useCallback((file: File | null) => {
+    if (!file) return;
+    setTblFileName(file.name);
+    const ext = file.name.split('.').pop()?.toLowerCase();
+    if (ext === 'json') setTblFileFmt('json');
+    else if (ext === 'parquet') setTblFileFmt('parquet');
+    else if (ext === 'orc') setTblFileFmt('orc');
+    else if (ext === 'avro') setTblFileFmt('avro');
+    else if (ext === 'txt') setTblFileFmt('text');
+    else setTblFileFmt('csv');
+    const reader = new FileReader();
+    reader.onload = () => setTblFileContent(typeof reader.result === 'string' ? reader.result : '');
+    reader.readAsText(file);
+  }, []);
+
+  const clearPickedFile = useCallback(() => {
+    setTblFileName(''); setTblFileContent('');
+    if (tblFileInputRef.current) tblFileInputRef.current.value = '';
+  }, []);
+
+  const createTableFromFile = useCallback(async () => {
+    if (!tblCatalog || !tblSchema || !tblName.trim()) { setTblErr('Catalog, schema and table name are required.'); return; }
+    if (!tblVolume) { setTblErr('Pick a staging volume (create one first if the schema has none).'); return; }
+    if (!tblFileName || !tblFileContent) { setTblErr('Choose a file to upload.'); return; }
+    if (!warehouseId) { setTblErr('No SQL Warehouse bound — schema inference needs a running warehouse.'); return; }
+    setTblBusy(true); setTblErr(null); setTblFileMsg(null);
+    try {
+      const r = await fetch('/api/databricks/unity-catalog/tables', {
+        method: 'POST', headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({
+          mode: 'from_file',
+          name: tblName.trim(), catalog_name: tblCatalog, schema_name: tblSchema,
+          volume: tblVolume, file_name: tblFileName, content: tblFileContent,
+          format: tblFileFmt, header: tblFileHeader, warehouse_id: warehouseId,
+        }),
+      });
+      const j = await r.json();
+      if (!j.ok) { setTblErr(j.error || `HTTP ${r.status}`); return; }
+      const res = j.result || {};
+      setTblFileMsg(`Created ${res.full_name} — ${res.columns?.length ?? 0} columns${res.row_count != null ? `, ${res.row_count} rows` : ''}.`);
+      setTblName(''); setTblFileName(''); setTblFileContent('');
+      onChanged();
+    } catch (e: any) { setTblErr(e?.message || String(e)); }
+    finally { setTblBusy(false); }
+  }, [tblCatalog, tblSchema, tblName, tblVolume, tblFileName, tblFileContent, tblFileFmt, tblFileHeader, warehouseId, onChanged]);
 
   const addCol = useCallback(() => setTblCols((c) => [...c, { name: '', type_name: 'STRING', nullable: true, comment: '' }]), []);
   const patchCol = useCallback((i: number, p: Partial<NewColumn>) => setTblCols((c) => c.map((col, j) => (j === i ? { ...col, ...p } : col))), []);
@@ -496,6 +607,28 @@ function UnityCatalogWriteDialogs(props: UcWriteDialogsProps) {
   const [grErr, setGrErr] = useState<string | null>(null);
   const [grPrincipal, setGrPrincipal] = useState('');
   const [grPrivs, setGrPrivs] = useState<Set<string>>(new Set());
+  // Principal directory picker (E10) — autocomplete over workspace SCIM
+  // users/groups/service principals. Combobox stays freeform so a principal
+  // not in the directory (or when SCIM is unavailable) can still be typed.
+  const [grPrincOpts, setGrPrincOpts] = useState<Array<{ value: string; label: string }>>([]);
+  const [grPrincBusy, setGrPrincBusy] = useState(false);
+  const [grPrincNote, setGrPrincNote] = useState<string | null>(null);
+  useEffect(() => {
+    const q = grPrincipal.trim();
+    let cancelled = false;
+    const t = setTimeout(async () => {
+      setGrPrincBusy(true); setGrPrincNote(null);
+      try {
+        const r = await fetch(`/api/databricks/unity-catalog/principals?q=${encodeURIComponent(q)}`);
+        const j = await r.json();
+        if (cancelled) return;
+        if (j.ok) setGrPrincOpts((j.principals || []).map((p: any) => ({ value: p.value, label: p.label || p.value })));
+        else { setGrPrincOpts([]); setGrPrincNote(j.error || `HTTP ${r.status}`); }
+      } catch (e: any) { if (!cancelled) { setGrPrincOpts([]); setGrPrincNote(e?.message || String(e)); } }
+      finally { if (!cancelled) setGrPrincBusy(false); }
+    }, 300);
+    return () => { cancelled = true; clearTimeout(t); };
+  }, [grPrincipal]);
   // Ownership transfer — Catalog Explorer "Change owner" maps to a UC PATCH
   // with { owner } on the catalog/schema/table URL. Only CATALOG/SCHEMA/TABLE
   // support a direct owner PATCH; volumes/functions inherit/own differently.
@@ -768,44 +901,136 @@ function UnityCatalogWriteDialogs(props: UcWriteDialogsProps) {
                   </Field>
                   <Field label="Table name" required className={s.flex1}><Input value={tblName} onChange={(_, d) => setTblName(d.value)} placeholder="orders" /></Field>
                 </div>
-                <div className={s.dlgRow}>
-                  <Field label="Type" className={s.flex1}>
-                    <Dropdown value={tblType} selectedOptions={[tblType]} onOptionSelect={(_, d) => d.optionValue && setTblType(d.optionValue as 'MANAGED' | 'EXTERNAL')}>
-                      <Option value="MANAGED" text="MANAGED">MANAGED</Option>
-                      <Option value="EXTERNAL" text="EXTERNAL">EXTERNAL</Option>
-                    </Dropdown>
-                  </Field>
-                  <Field label="Format" className={s.flex1}>
-                    <Dropdown value={tblFormat} selectedOptions={[tblFormat]} onOptionSelect={(_, d) => d.optionValue && setTblFormat(d.optionValue)}>
-                      {['DELTA', 'PARQUET', 'CSV', 'JSON', 'ORC', 'AVRO', 'TEXT'].map((f) => <Option key={f} value={f} text={f}>{f}</Option>)}
-                    </Dropdown>
-                  </Field>
-                  <Field label="Comment" className={s.flex2}><Input value={tblComment} onChange={(_, d) => setTblComment(d.value)} /></Field>
-                </div>
-                {tblType === 'EXTERNAL' && (
-                  <Field label="Storage location" required hint="abfss://… — required for EXTERNAL tables">
-                    <Input value={tblStorage} onChange={(_, d) => setTblStorage(d.value)} placeholder="abfss://container@account.dfs.core.windows.net/path" />
-                  </Field>
+
+                <Field label="Source">
+                  <TabList selectedValue={tblSource} onTabSelect={(_, d) => setTblSource(d.value as 'columns' | 'file')} size="small">
+                    <Tab value="columns">Define columns</Tab>
+                    <Tab value="file">From file (upload &amp; infer)</Tab>
+                  </TabList>
+                </Field>
+
+                {tblSource === 'columns' ? (
+                  <>
+                    <div className={s.dlgRow}>
+                      <Field label="Type" className={s.flex1}>
+                        <Dropdown value={tblType} selectedOptions={[tblType]} onOptionSelect={(_, d) => d.optionValue && setTblType(d.optionValue as 'MANAGED' | 'EXTERNAL')}>
+                          <Option value="MANAGED" text="MANAGED">MANAGED</Option>
+                          <Option value="EXTERNAL" text="EXTERNAL">EXTERNAL</Option>
+                        </Dropdown>
+                      </Field>
+                      <Field label="Format" className={s.flex1}>
+                        <Dropdown value={tblFormat} selectedOptions={[tblFormat]} onOptionSelect={(_, d) => d.optionValue && setTblFormat(d.optionValue)}>
+                          {['DELTA', 'PARQUET', 'CSV', 'JSON', 'ORC', 'AVRO', 'TEXT'].map((f) => <Option key={f} value={f} text={f}>{f}</Option>)}
+                        </Dropdown>
+                      </Field>
+                      <Field label="Comment" className={s.flex2}><Input value={tblComment} onChange={(_, d) => setTblComment(d.value)} /></Field>
+                    </div>
+                    {tblType === 'EXTERNAL' && (
+                      <Field label="Storage location" required hint="abfss://… — required for EXTERNAL tables">
+                        <Input value={tblStorage} onChange={(_, d) => setTblStorage(d.value)} placeholder="abfss://container@account.dfs.core.windows.net/path" />
+                      </Field>
+                    )}
+                    <Divider>Columns</Divider>
+                    {tblCols.map((c, i) => (
+                      <div key={i} className={s.colRow}>
+                        <Input className={s.flex2} value={c.name} onChange={(_, d) => patchCol(i, { name: d.value })} placeholder="column name" aria-label={`Column ${i + 1} name`} />
+                        <Dropdown className={s.flex1} value={c.type_name} selectedOptions={[c.type_name]} onOptionSelect={(_, d) => d.optionValue && patchCol(i, { type_name: d.optionValue })} aria-label={`Column ${i + 1} type`}>
+                          {UC_COLUMN_TYPES.map((t) => <Option key={t} value={t} text={t}>{t}</Option>)}
+                        </Dropdown>
+                        <Switch checked={c.nullable} label="nullable" onChange={(_, d) => patchCol(i, { nullable: !!d.checked })} />
+                        <Input className={s.flex2} value={c.comment} onChange={(_, d) => patchCol(i, { comment: d.value })} placeholder="comment" aria-label={`Column ${i + 1} comment`} />
+                        <Button size="small" appearance="subtle" icon={<Delete20Regular />} aria-label={`Remove column ${i + 1}`} disabled={tblCols.length <= 1} onClick={() => delCol(i)} />
+                      </div>
+                    ))}
+                    <Button size="small" appearance="outline" icon={<Add20Regular />} onClick={addCol}>Add column</Button>
+                    <Caption1>POST <code>/api/2.1/unity-catalog/tables</code> — requires CREATE TABLE + USE SCHEMA + USE CATALOG.</Caption1>
+                  </>
+                ) : (
+                  <>
+                    {tblFileMsg && <MessageBar intent="success"><MessageBarBody>{tblFileMsg}</MessageBarBody></MessageBar>}
+                    {!warehouseId && (
+                      <MessageBar intent="warning"><MessageBarBody>
+                        No SQL Warehouse is bound to this editor. Schema inference runs a
+                        <code> read_files</code> CTAS on a warehouse — start/select one first.
+                      </MessageBarBody></MessageBar>
+                    )}
+                    <Field label="Data file" required hint="CSV / JSON / Parquet / ORC / Avro / text. Read in the browser and uploaded to the staging volume.">
+                      <input
+                        ref={tblFileInputRef}
+                        type="file"
+                        className={s.visuallyHidden}
+                        accept=".csv,.json,.parquet,.orc,.avro,.txt,text/csv,application/json"
+                        aria-label="Choose a data file"
+                        onChange={(e) => onPickFile(e.target.files?.[0] || null)}
+                      />
+                      {tblFileName ? (
+                        <div className={s.filePicked}>
+                          <Document20Regular className={s.fileDropIcon} />
+                          <Body1 className={s.filePickedName} title={tblFileName}>{tblFileName}</Body1>
+                          <Caption1>{tblFileContent.length.toLocaleString()} chars</Caption1>
+                          <Button size="small" appearance="subtle" icon={<ArrowUpload20Regular />} onClick={() => tblFileInputRef.current?.click()}>Replace</Button>
+                          <Tooltip content="Remove file" relationship="label">
+                            <Button size="small" appearance="subtle" icon={<Dismiss16Regular />} aria-label="Remove file" onClick={clearPickedFile} />
+                          </Tooltip>
+                        </div>
+                      ) : (
+                        <div
+                          role="button"
+                          tabIndex={0}
+                          aria-label="Choose or drop a data file"
+                          className={tblFileDragOver ? `${s.fileDrop} ${s.fileDropActive}` : s.fileDrop}
+                          onClick={() => tblFileInputRef.current?.click()}
+                          onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); tblFileInputRef.current?.click(); } }}
+                          onDragOver={(e) => { e.preventDefault(); setTblFileDragOver(true); }}
+                          onDragLeave={() => setTblFileDragOver(false)}
+                          onDrop={(e) => { e.preventDefault(); setTblFileDragOver(false); onPickFile(e.dataTransfer.files?.[0] || null); }}
+                        >
+                          <CloudArrowUp24Regular className={s.fileDropIcon} />
+                          <Body1>Drop a file here, or <strong>browse</strong></Body1>
+                          <Caption1>CSV · JSON · Parquet · ORC · Avro · text</Caption1>
+                        </div>
+                      )}
+                    </Field>
+                    <div className={s.dlgRow}>
+                      <Field label="File format" className={s.flex1}>
+                        <Dropdown value={tblFileFmt} selectedOptions={[tblFileFmt]} onOptionSelect={(_, d) => d.optionValue && setTblFileFmt(d.optionValue as typeof tblFileFmt)}>
+                          {(['csv', 'json', 'parquet', 'orc', 'avro', 'text'] as const).map((f) => <Option key={f} value={f} text={f.toUpperCase()}>{f.toUpperCase()}</Option>)}
+                        </Dropdown>
+                      </Field>
+                      {tblFileFmt === 'csv' && (
+                        <Field label="CSV header row" className={s.flex1}>
+                          <Switch checked={tblFileHeader} label="first row is a header" onChange={(_, d) => setTblFileHeader(!!d.checked)} />
+                        </Field>
+                      )}
+                    </div>
+                    <Field label="Staging volume" required hint="UC volume used to stage the upload before read_files inference">
+                      {tblVolumes.length > 0 ? (
+                        <Dropdown value={tblVolume} selectedOptions={tblVolume ? [tblVolume] : []} onOptionSelect={(_, d) => d.optionValue && setTblVolume(d.optionValue)} placeholder="catalog.schema.volume">
+                          {tblVolumes.map((v) => <Option key={v} value={v} text={v}>{v}</Option>)}
+                        </Dropdown>
+                      ) : (
+                        <MessageBar intent="info"><MessageBarBody>
+                          No volume in <code>{tblCatalog || '?'}.{tblSchema || '?'}</code>. Create a volume
+                          first (the "Create volume" action) — it is the staging area for the upload.
+                        </MessageBarBody></MessageBar>
+                      )}
+                    </Field>
+                    <Caption1>
+                      Uploads to <code>/api/2.0/fs/files</code> then runs
+                      <code> CREATE TABLE … AS SELECT * FROM read_files(…)</code> on the warehouse —
+                      schema is inferred from the file. Requires CREATE TABLE + WRITE VOLUME + USE SCHEMA.
+                    </Caption1>
+                  </>
                 )}
-                <Divider>Columns</Divider>
-                {tblCols.map((c, i) => (
-                  <div key={i} className={s.colRow}>
-                    <Input className={s.flex2} value={c.name} onChange={(_, d) => patchCol(i, { name: d.value })} placeholder="column name" aria-label={`Column ${i + 1} name`} />
-                    <Dropdown className={s.flex1} value={c.type_name} selectedOptions={[c.type_name]} onOptionSelect={(_, d) => d.optionValue && patchCol(i, { type_name: d.optionValue })} aria-label={`Column ${i + 1} type`}>
-                      {UC_COLUMN_TYPES.map((t) => <Option key={t} value={t} text={t}>{t}</Option>)}
-                    </Dropdown>
-                    <Switch checked={c.nullable} label="nullable" onChange={(_, d) => patchCol(i, { nullable: !!d.checked })} />
-                    <Input className={s.flex2} value={c.comment} onChange={(_, d) => patchCol(i, { comment: d.value })} placeholder="comment" aria-label={`Column ${i + 1} comment`} />
-                    <Button size="small" appearance="subtle" icon={<Delete20Regular />} aria-label={`Remove column ${i + 1}`} disabled={tblCols.length <= 1} onClick={() => delCol(i)} />
-                  </div>
-                ))}
-                <Button size="small" appearance="outline" icon={<Add20Regular />} onClick={addCol}>Add column</Button>
-                <Caption1>POST <code>/api/2.1/unity-catalog/tables</code> — requires CREATE TABLE + USE SCHEMA + USE CATALOG.</Caption1>
               </div>
             </DialogContent>
             <DialogActions>
               <Button appearance="secondary" onClick={() => setCreateTableOpen(false)} disabled={tblBusy}>Cancel</Button>
-              <Button appearance="primary" onClick={createTable} disabled={tblBusy || !tblCatalog || !tblSchema || !tblName.trim()}>{tblBusy ? 'Creating…' : 'Create table'}</Button>
+              {tblSource === 'columns' ? (
+                <Button appearance="primary" onClick={createTable} disabled={tblBusy || !tblCatalog || !tblSchema || !tblName.trim()}>{tblBusy ? 'Creating…' : 'Create table'}</Button>
+              ) : (
+                <Button appearance="primary" onClick={createTableFromFile} disabled={tblBusy || !tblCatalog || !tblSchema || !tblName.trim() || !tblVolume || !tblFileContent || !warehouseId}>{tblBusy ? 'Importing…' : 'Create from file'}</Button>
+              )}
             </DialogActions>
           </DialogBody>
         </DialogSurface>
@@ -822,7 +1047,7 @@ function UnityCatalogWriteDialogs(props: UcWriteDialogsProps) {
                 <div className={s.dlgRowEnd}>
                   <Field label="Securable type" style={{ minWidth: 140 }}>
                     <Dropdown value={grSecurable} selectedOptions={[grSecurable]} onOptionSelect={(_, d) => { if (d.optionValue) { setGrSecurable(d.optionValue as UcSecurable); setGrPrivs(new Set()); } }}>
-                      {(['CATALOG', 'SCHEMA', 'TABLE', 'VOLUME', 'FUNCTION'] as UcSecurable[]).map((t) => <Option key={t} value={t} text={t}>{t}</Option>)}
+                      {(['CATALOG', 'SCHEMA', 'TABLE', 'VOLUME', 'FUNCTION', 'EXTERNAL_LOCATION', 'STORAGE_CREDENTIAL', 'METASTORE'] as UcSecurable[]).map((t) => <Option key={t} value={t} text={t}>{t.replace(/_/g, ' ')}</Option>)}
                     </Dropdown>
                   </Field>
                   <Field label="Full name" className={s.flex1} hint="catalog · catalog.schema · catalog.schema.object">
@@ -855,8 +1080,26 @@ function UnityCatalogWriteDialogs(props: UcWriteDialogsProps) {
                 {!grEffective && (
                   <>
                     <Divider>Grant / revoke</Divider>
-                    <Field label="Principal" hint="user email, group name, or service-principal applicationId">
-                      <Input value={grPrincipal} onChange={(_, d) => setGrPrincipal(d.value)} placeholder="data-engineers" />
+                    <Field
+                      label="Principal"
+                      hint="Type to search the workspace directory (users / groups / service principals), or enter any principal directly."
+                      validationState={grPrincNote ? 'warning' : 'none'}
+                      validationMessage={grPrincNote ? `Directory unavailable (${grPrincNote}) — type the principal directly.` : undefined}
+                    >
+                      <Combobox
+                        freeform
+                        value={grPrincipal}
+                        selectedOptions={grPrincipal ? [grPrincipal] : []}
+                        placeholder="data-engineers"
+                        onChange={(e) => setGrPrincipal((e.target as HTMLInputElement).value)}
+                        onOptionSelect={(_, d) => { if (d.optionValue) setGrPrincipal(d.optionValue); }}
+                        expandIcon={grPrincBusy ? <Spinner size="tiny" /> : undefined}
+                      >
+                        {grPrincOpts.map((p) => <Option key={p.value} value={p.value} text={p.value}>{p.label}</Option>)}
+                        {grPrincOpts.length === 0 && !grPrincBusy && (
+                          <Option key="__none" value="" disabled text="">No directory matches — type a principal directly</Option>
+                        )}
+                      </Combobox>
                     </Field>
                     <div className={s.privWrap} role="group" aria-label="Privileges to grant or revoke">
                       {(UC_PRIVILEGES[grSecurable] || []).map((p) => {
@@ -2623,6 +2866,7 @@ export function DatabricksSqlWarehouseEditor({ item, id }: { item: FabricItemTyp
             schemas={schemas}
             activeSchema={activeSchema}
             tables={tables}
+            warehouseId={warehouseId}
             onChanged={ucChanged}
             createVolumeOpen={ucCreateVolumeOpen} setCreateVolumeOpen={setUcCreateVolumeOpen}
             dropOpen={ucDropOpen} setDropOpen={setUcDropOpen}
