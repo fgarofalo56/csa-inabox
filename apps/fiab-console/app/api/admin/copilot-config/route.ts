@@ -32,7 +32,7 @@ function err(error: string, status: number) {
 /** Whitelist of persistable STRING keys — never trust the client to send extras. */
 const KEYS: (keyof TenantCopilotConfig)[] = [
   'foundryAccount', 'foundryAccountRg', 'foundryProjectEndpoint', 'foundryProjectId',
-  'aoaiEndpoint', 'copilotChatDeployment', 'helpAgentDeployment', 'embeddingDeployment',
+  'aoaiEndpoint', 'copilotChatDeployment', 'helpAgentDeployment', 'routerDeployment', 'embeddingDeployment',
   'groundingSearchService', 'groundingSearchIndex', 'fabricCopilotWorkspaceId',
 ];
 

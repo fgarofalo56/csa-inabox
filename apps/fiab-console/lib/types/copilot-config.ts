@@ -42,6 +42,11 @@ export interface TenantCopilotConfig {
   /** Deployment name of the docs-grounded Help agent chat model. Falls back to
    *  copilotChatDeployment, then env. */
   helpAgentDeployment?: string;
+  /** Optional dedicated intent-router (classifier) model for the unified
+   *  Copilot window (lib/azure/copilot-router.ts). One cheap forced-tool_choice
+   *  call per global-launcher turn decides docs vs build. Falls back to
+   *  copilotChatDeployment / env when unset. */
+  routerDeployment?: string;
   /** Deployment name of the embedding model (e.g. "text-embedding-3-large"). */
   embeddingDeployment?: string;
   /** Optional AI Search service name used for RAG grounding. */
