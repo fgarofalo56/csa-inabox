@@ -659,11 +659,12 @@ export async function deleteContainer(db: string, container: string): Promise<vo
 }
 
 // ---------------------------------------------------------------------------
-// Server-side scripts — stored procedures / triggers / UDFs (read-only)
+// Server-side scripts — stored procedures / triggers / UDFs (list)
 //
-// Authoring/executing scripts is a rich JS editor surface (data-plane); the
-// navigator lists them so the tree mirrors the portal's Data Explorer
-// "Scripts" node. Create/edit is an honest "coming" row in the UI.
+// The navigator lists them so the tree mirrors the portal's Data Explorer
+// "Scripts" node. Full create/edit/save/delete authoring (ARM control plane)
+// and stored-procedure execution (data plane) are wired below + in
+// cosmos-data-client.ts; the UI surface is CosmosScriptEditor.
 // ---------------------------------------------------------------------------
 
 export interface StoredProcedureSummary { id: string; name: string }

@@ -19,13 +19,16 @@
  * create/delete hit the real ARM control plane through the navigator BFF:
  *   - Databases  → /api/cosmos/databases   (list / create / delete)
  *   - Containers → /api/cosmos/containers   (list / create / delete, +pk +RU +ttl)
- *   - Scripts    → /api/cosmos/scripts      (read-only sprocs / triggers / UDFs)
+ *   - Scripts    → /api/cosmos/scripts      (sprocs / triggers / UDFs: list +
+ *                                            create / edit / save / delete;
+ *                                            sproc execute → /scripts/execute)
  *   - Account    → /api/cosmos/account      (header chip)
  *
- * Document read/write, throughput-scale write, indexing-policy write, and
- * script authoring run on data-plane / write surfaces some of which aren't
- * wired yet; those open a work-area tab that renders an honest Fluent
- * MessageBar gate (never a dead node, never fake data) per no-vaporware.md.
+ * Script authoring (stored procedures / triggers / UDFs) is fully wired: each
+ * Scripts node opens a CosmosScriptEditor tab that reads/writes the real ARM
+ * control plane and executes sprocs against the data plane. Any surface that
+ * still requires un-provisioned infra renders an honest Fluent MessageBar gate
+ * (never a dead node, never fake data) per no-vaporware.md.
  *
  * When the navigator account is unconfigured the routes 503 and the whole pane
  * shows a single honest infra-gate MessageBar naming the env var + role.
