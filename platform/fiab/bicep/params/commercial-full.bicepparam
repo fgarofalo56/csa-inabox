@@ -211,3 +211,13 @@ param complianceTags = {
   FedRAMP_Level: 'High'
   Data_Classification: 'Standard'
 }
+
+// Chargeback (D4) — per-domain tagging + budgets. Every DLZ resource is stamped
+// with `csa-loom-domain` + this costCenter so Cost Management can roll up +
+// budget per domain. Supply budget contacts to deploy a per-domain Consumption
+// budget at attach time (no contacts = no budget).
+param costCenter = readEnvironmentVariable('LOOM_COST_CENTER', '')
+param domainBudgetAmount = int(readEnvironmentVariable('LOOM_DOMAIN_BUDGET_AMOUNT', '1000'))
+param domainBudgetContactEmails = empty(readEnvironmentVariable('LOOM_DOMAIN_BUDGET_EMAILS', ''))
+  ? []
+  : split(readEnvironmentVariable('LOOM_DOMAIN_BUDGET_EMAILS', ''), ',')

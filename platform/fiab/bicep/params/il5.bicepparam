@@ -167,3 +167,11 @@ param complianceTags = {
   Data_Classification: 'CUI-SP'
   M365_Boundary: 'IL5'
 }
+
+// Chargeback (D4) — per-domain tagging + budgets. Cost Management Query +
+// Consumption budgets are available in Azure Government (management.usgovcloudapi.net).
+param costCenter = readEnvironmentVariable('LOOM_COST_CENTER', '')
+param domainBudgetAmount = int(readEnvironmentVariable('LOOM_DOMAIN_BUDGET_AMOUNT', '1000'))
+param domainBudgetContactEmails = empty(readEnvironmentVariable('LOOM_DOMAIN_BUDGET_EMAILS', ''))
+  ? []
+  : split(readEnvironmentVariable('LOOM_DOMAIN_BUDGET_EMAILS', ''), ',')

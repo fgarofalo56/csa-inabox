@@ -110,3 +110,11 @@ param complianceTags = {
   Data_Classification: 'CUI-low'
   M365_Boundary: 'GCC'
 }
+
+// Chargeback (D4) — per-domain tagging + budgets. GCC bills on Commercial Cost
+// Management endpoints, so the per-domain rollup + budgets work identically.
+param costCenter = readEnvironmentVariable('LOOM_COST_CENTER', '')
+param domainBudgetAmount = int(readEnvironmentVariable('LOOM_DOMAIN_BUDGET_AMOUNT', '1000'))
+param domainBudgetContactEmails = empty(readEnvironmentVariable('LOOM_DOMAIN_BUDGET_EMAILS', ''))
+  ? []
+  : split(readEnvironmentVariable('LOOM_DOMAIN_BUDGET_EMAILS', ''), ',')

@@ -34,6 +34,7 @@ import { useAdminTabStyles } from '@/lib/components/ui/admin-tab-styles';
 import { LoomDataTable, type LoomColumn } from '@/lib/components/ui/loom-data-table';
 import { itemVisual } from '@/lib/components/ui/item-type-visual';
 import { PowerBIEmbedFrame } from '@/lib/components/embed/powerbi-embed';
+import { CostChargebackSection } from '@/lib/components/cost-chargeback-section';
 
 interface Usage {
   days: number;
@@ -424,6 +425,11 @@ export default function UsagePage() {
                 <div className={s.statLabel}>edits ({data.days}d)</div>
               </div>
             </div>
+          </Section>
+
+          {/* Cost & chargeback — per-domain + per-subscription rollup (D4) */}
+          <Section title="Cost & chargeback">
+            <CostChargebackSection />
           </Section>
 
           {/* Active users — Log Analytics DAU */}

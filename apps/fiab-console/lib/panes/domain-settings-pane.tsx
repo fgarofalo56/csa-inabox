@@ -34,6 +34,7 @@ import {
 import { Dismiss24Regular, Checkmark16Regular } from '@fluentui/react-icons';
 import { DomainImageGallery } from '@/lib/components/domain-image-gallery';
 import { DomainImageChip } from '@/lib/components/domain-image-presets';
+import { CostChargebackSection } from '@/lib/components/cost-chargeback-section';
 
 export interface DomainContributors {
   scope: 'AllTenant' | 'AdminsOnly' | 'SpecificUsersAndGroups';
@@ -80,7 +81,7 @@ const useStyles = makeStyles({
   previewRow: { display: 'flex', gap: tokens.spacingHorizontalM, alignItems: 'center' },
 });
 
-type TabKey = 'general' | 'image' | 'admins' | 'contributors' | 'default-domain' | 'delegated';
+type TabKey = 'general' | 'image' | 'admins' | 'contributors' | 'default-domain' | 'delegated' | 'cost';
 
 export function DomainSettingsPane({ domain, isTenantAdmin, onClose, onSaved }: Props) {
   const styles = useStyles();
@@ -112,6 +113,7 @@ export function DomainSettingsPane({ domain, isTenantAdmin, onClose, onSaved }: 
             {!isSubdomain && <Tab value="contributors">Contributors</Tab>}
             {!isSubdomain && <Tab value="default-domain">Default domain</Tab>}
             {!isSubdomain && <Tab value="delegated">Delegated</Tab>}
+            <Tab value="cost">Cost</Tab>
           </TabList>
 
           {tab === 'general' && <GeneralTab domain={domain} isTenantAdmin={isTenantAdmin} onSaved={onSaved} />}
@@ -120,6 +122,12 @@ export function DomainSettingsPane({ domain, isTenantAdmin, onClose, onSaved }: 
           {tab === 'contributors' && !isSubdomain && <ContributorsTab domain={domain} onSaved={onSaved} />}
           {tab === 'default-domain' && !isSubdomain && <DefaultDomainTab domain={domain} onSaved={onSaved} />}
           {tab === 'delegated' && !isSubdomain && <DelegatedTab domain={domain} onSaved={onSaved} />}
+          {tab === 'cost' && (
+            <div className={styles.tabPanel}>
+              <Body1>Chargeback cost for this domain — Cost Management spend grouped by the <code>csa-loom-domain</code> tag, plus this domain&apos;s budget burn.</Body1>
+              <CostChargebackSection domain={domain.id} />
+            </div>
+          )}
         </div>
       </DrawerBody>
     </Drawer>

@@ -195,6 +195,39 @@ param hubVnetCidr string = '10.0.0.0/16'
 @description('Compliance tags applied to every resource')
 param complianceTags object
 
+// =====================================================================
+// D4 — Chargeback (per-domain tagging + budgets)
+// =====================================================================
+
+@description('Chargeback cost center for the single-sub DLZ. Stamped as the `costCenter` tag alongside `csa-loom-domain` on every DLZ resource. Empty = "unassigned".')
+param costCenter string = ''
+
+@description('Per-domain cost centers, parallel to dlzDomainNames (multi-sub). Index i is the costCenter tag for dlzDomainNames[i]. Shorter/empty = "unassigned" for the unmatched domains.')
+param dlzCostCenters array = []
+
+@description('Deploy a per-domain Consumption budget (D4). Only deploys when at least one budget contact email / action-group id is supplied (a notification-less budget is useless).')
+param deployDomainBudgets bool = true
+
+@description('Monthly budget amount (account currency) per domain. 0 = conservative default of 1000.')
+param domainBudgetAmount int = 1000
+
+@description('Budget reset cadence.')
+@allowed(['Monthly', 'Quarterly', 'Annually'])
+param domainBudgetTimeGrain string = 'Monthly'
+
+@description('Budget alert thresholds as percent of the budget. One notification rule per threshold.')
+param domainBudgetThresholds array = [
+  50
+  80
+  100
+]
+
+@description('Email recipients for per-domain budget threshold alerts. Required (with action-group ids) to deploy the budget — supplied at attach time.')
+param domainBudgetContactEmails array = []
+
+@description('Action-group resource ids to notify on per-domain budget thresholds.')
+param domainBudgetContactGroupIds array = []
+
 @description('Skip role-assignment grants — set true when re-provisioning an environment that already has the grants, to avoid RoleAssignmentExists.')
 param skipRoleGrants bool = false
 
@@ -823,6 +856,13 @@ module singleDlz 'modules/landing-zone/main.bicep' = if (deploymentMode == 'sing
     storageRequireCmk: storageRequireCmk
     powerBiSku: powerBiSku
     complianceTags: complianceTags
+    costCenter: costCenter
+    deployDomainBudget: deployDomainBudgets
+    domainBudgetAmount: domainBudgetAmount
+    domainBudgetTimeGrain: domainBudgetTimeGrain
+    domainBudgetThresholds: domainBudgetThresholds
+    domainBudgetContactEmails: domainBudgetContactEmails
+    domainBudgetContactGroupIds: domainBudgetContactGroupIds
     skipRoleGrants: skipRoleGrants
     consolePrincipalNeedsLifecycleWrite: consolePrincipalNeedsLifecycleWrite
     consolePrincipalNeedsCmkBind: consolePrincipalNeedsCmkBind
@@ -904,6 +944,13 @@ module dlz 'modules/landing-zone/main.bicep' = [for (subId, i) in dlzSubscriptio
     storageRequireCmk: storageRequireCmk
     powerBiSku: powerBiSku
     complianceTags: complianceTags
+    costCenter: i < length(dlzCostCenters) ? string(dlzCostCenters[i]) : ''
+    deployDomainBudget: deployDomainBudgets
+    domainBudgetAmount: domainBudgetAmount
+    domainBudgetTimeGrain: domainBudgetTimeGrain
+    domainBudgetThresholds: domainBudgetThresholds
+    domainBudgetContactEmails: domainBudgetContactEmails
+    domainBudgetContactGroupIds: domainBudgetContactGroupIds
     skipRoleGrants: skipRoleGrants
     consolePrincipalNeedsLifecycleWrite: consolePrincipalNeedsLifecycleWrite
     consolePrincipalNeedsCmkBind: consolePrincipalNeedsCmkBind

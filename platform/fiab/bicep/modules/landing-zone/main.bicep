@@ -108,6 +108,21 @@ param spokeVnetCidr string = '10.100.0.0/16'
 @description('Compliance tags')
 param complianceTags object
 
+@description('Chargeback cost center for this domain (D4). Stamped as the `costCenter` tag on every DLZ resource alongside `csa-loom-domain`, so Cost Management can group + budget per domain. Empty = "unassigned".')
+param costCenter string = ''
+
+// D4 — Chargeback tagging. Every DLZ resource is stamped with the domain it
+// belongs to (`csa-loom-domain`) plus a chargeback `costCenter`, merged onto the
+// inherited complianceTags. Resource-level tags (NOT RG tags — those aren't
+// supported by Cost Management) are what the /admin/usage cost rollup groups on
+// via a TagKey grouping, and what budgets.bicep filters on. Tags apply forward
+// only — per-domain cost accrues from the attach (this deploy) onward.
+// Key is `csa-loom-domain` to stay identical to scripts/csa-loom/bootstrap-dlz-rgs.sh.
+var dlzTags = union(complianceTags, {
+  'csa-loom-domain': domainName
+  costCenter: empty(costCenter) ? 'unassigned' : costCenter
+})
+
 @description('Skip role-assignment grants — set true when re-provisioning an environment that already has the grants, to avoid RoleAssignmentExists.')
 param skipRoleGrants bool = false
 
@@ -123,6 +138,45 @@ param consolePrincipalNeedsLifecycleWrite bool = false
 param consolePrincipalNeedsCmkBind bool = false
 
 // =====================================================================
+// D4 — Per-domain budget + cost-alert rules (chargeback)
+//
+// A Consumption budget filtered to this domain's `csa-loom-domain` tag, so
+// each DLZ has its own monthly spend ceiling + threshold alerts. Tag-filtered
+// budgets MUST be subscription-scoped (RG filter is subscription-level only),
+// so budgets.bicep targets subscription() scope. Supplied "at attach time":
+// pass domainBudgetAmount + domainBudgetContactEmails (and/or action-group
+// ids). Honest gate per no-vaporware: a budget with no alert recipients is
+// useless, so the module only deploys when at least one contact is supplied.
+// =====================================================================
+
+@description('Deploy a per-domain Consumption budget (D4 chargeback). Requires at least one contact email or action-group id, else the module is skipped (a notification-less budget is useless).')
+param deployDomainBudget bool = true
+
+@description('Monthly budget amount (account currency) for this domain. 0 = use a conservative default of 1000.')
+param domainBudgetAmount int = 1000
+
+@description('Budget reset cadence. Monthly (default) / Quarterly / Annually.')
+@allowed(['Monthly', 'Quarterly', 'Annually'])
+param domainBudgetTimeGrain string = 'Monthly'
+
+@description('Budget start date (yyyy-MM-01). Empty = first day of the current UTC month at deploy time.')
+param domainBudgetStartDate string = ''
+
+@description('Alert thresholds as percent of the budget (e.g. [50,80,100]). One notification rule is generated per threshold.')
+param domainBudgetThresholds array = [
+  50
+  80
+  100
+]
+
+@description('Email recipients for budget threshold alerts. Required (with contact-group ids) to deploy the budget — supplied at attach time.')
+param domainBudgetContactEmails array = []
+
+@description('Action-group resource ids to notify on budget thresholds (alternative/addition to contact emails).')
+param domainBudgetContactGroupIds array = []
+
+
+// =====================================================================
 // 1. Spoke VNet (peered to Admin Plane hub)
 // =====================================================================
 
@@ -133,7 +187,7 @@ module network 'network.bicep' = {
     domainName: domainName
     spokeVnetCidr: spokeVnetCidr
     adminPlaneHubVnetId: adminPlaneHubVnetId
-    complianceTags: complianceTags
+    complianceTags: dlzTags
   }
 }
 
@@ -153,7 +207,7 @@ module storage 'storage.bicep' = {
     privateDnsZoneBlobId: adminPlanePrivateDnsZoneIds.blob
     privateDnsZoneDfsId: adminPlanePrivateDnsZoneIds.dfs
     workspaceId: adminPlaneLawId
-    complianceTags: complianceTags
+    complianceTags: dlzTags
     recycleRetentionDays: recycleRetentionDays
   }
 }
@@ -173,7 +227,7 @@ module databricks 'databricks.bicep' = {
     boundary: boundary
     storageCmkKeyUri: storageCmkKeyUri
     workspaceId: adminPlaneLawId
-    complianceTags: complianceTags
+    complianceTags: dlzTags
   }
 }
 
@@ -221,7 +275,7 @@ module databricksUcBootstrap 'databricks-uc-bootstrap.bicep' = if (dlzUcSupporte
     workspaceHost: databricks.outputs.workspaceHost
     consoleUamiClientId: consoleUamiAppId
     scriptUamiId: databricksUcScriptUamiId
-    complianceTags: complianceTags
+    complianceTags: dlzTags
   }
 }
 
@@ -239,7 +293,7 @@ module synapse 'synapse.bicep' = {
     consolePrincipalId: consolePrincipalId
     consoleUamiName: consoleUamiName
     workspaceId: adminPlaneLawId
-    complianceTags: complianceTags
+    complianceTags: dlzTags
     skipRoleGrants: skipRoleGrants
     privateEndpointSubnetId: network.outputs.privateEndpointSubnetId
     synapseSqlPrivateDnsZoneId: synapseSqlPrivateDnsZoneId
@@ -263,7 +317,7 @@ module aas 'aas.bicep' = if (deployAas) {
     consolePrincipalId: consolePrincipalId
     consoleUamiAppId: consoleUamiAppId
     skipRoleGrants: skipRoleGrants
-    complianceTags: complianceTags
+    complianceTags: dlzTags
   }
 }
 
@@ -310,7 +364,7 @@ module synapseAutoPause 'synapse-auto-pause.bicep' = {
     domainName: domainName
     synapseWorkspaceName: synapse.outputs.synapseWorkspaceName
     dedicatedPoolName: synapse.outputs.dedicatedPoolName
-    complianceTags: complianceTags
+    complianceTags: dlzTags
     skipRoleGrants: skipRoleGrants
     // Sovereign-cloud ARM host so the auto-pause Logic App targets the correct
     // management plane (Commercial vs Gov), matching LOOM_ARM_ENDPOINT.
@@ -336,7 +390,7 @@ module eventhubs 'eventhubs.bicep' = {
     adfPrincipalId: (adfEnabled && !empty(consolePrincipalId) && !empty(adfPrivateDnsZoneId)) ? adf!.outputs.factoryPrincipalId : ''
     adxClusterPrincipalId: adxClusterPrincipalId
     skipRoleGrants: skipRoleGrants
-    complianceTags: complianceTags
+    complianceTags: dlzTags
   }
 }
 
@@ -352,7 +406,7 @@ module eventgridBusiness 'eventgrid-business.bicep' = {
     eventHubResourceId: '${eventhubs.outputs.namespaceId}/eventhubs/${eventhubs.outputs.telemetryHubName}'
     workspaceId: adminPlaneLawId
     skipRoleGrants: skipRoleGrants
-    complianceTags: complianceTags
+    complianceTags: dlzTags
   }
 }
 
@@ -372,7 +426,7 @@ module adx 'adx.bicep' = if (adxEnabled) {
     adxClusterLocation: location
     adminEntraGroupId: adminEntraGroupId
     activatorPrincipalId: activatorPrincipalId
-    complianceTags: complianceTags
+    complianceTags: dlzTags
   }
 }
 
@@ -390,7 +444,7 @@ module cosmos 'cosmos.bicep' = {
     workspaceId: adminPlaneLawId
     consolePrincipalId: consolePrincipalId
     skipRoleGrants: skipRoleGrants
-    complianceTags: complianceTags
+    complianceTags: dlzTags
   }
 }
 
@@ -415,7 +469,7 @@ module streamAnalytics 'stream-analytics.bicep' = if (enableStreamAnalytics && !
     domainName: domainName
     consolePrincipalId: consolePrincipalId
     workspaceId: adminPlaneLawId
-    complianceTags: complianceTags
+    complianceTags: dlzTags
     skipRoleGrants: skipRoleGrants
     // ASA Lakehouse/Blob output writes to the DLZ ADLS Gen2 account via MSI
     // (Storage Blob Data Contributor granted in the module).
@@ -459,7 +513,7 @@ module aasRlsOls 'aas.bicep' = if (enableAas) {
     location: location
     skuName: aasSkuName
     serverAdminMembers: aasServerAdminMembers
-    complianceTags: complianceTags
+    complianceTags: dlzTags
   }
 }
 
@@ -485,7 +539,7 @@ module adf 'adf.bicep' = if (adfEnabled && !empty(consolePrincipalId) && !empty(
     privateEndpointSubnetId: network.outputs.privateEndpointSubnetId
     adfPrivateDnsZoneId: adfPrivateDnsZoneId
     workspaceId: adminPlaneLawId
-    complianceTags: complianceTags
+    complianceTags: dlzTags
     skipRoleGrants: skipRoleGrants
     // Grant the ADF factory MSI Storage Blob Data Contributor on the DLZ storage
     // account so MSI-auth linked services can read/write ADLS Gen2 (backs the
@@ -523,7 +577,7 @@ module approvalLogicApp '../integration/approval-logicapp.bicep' = if (approvalL
     location: location
     consolePrincipalId: consolePrincipalId
     skipRoleGrants: skipRoleGrants
-    complianceTags: complianceTags
+    complianceTags: dlzTags
   }
 }
 
@@ -559,7 +613,7 @@ module shir 'shir.bicep' = if (selfHostedIrEnabled && adfEnabled && !empty(conso
     consolePrincipalId: consolePrincipalId
     skipRoleGrants: skipRoleGrants
     workspaceId: adminPlaneLawId
-    complianceTags: complianceTags
+    complianceTags: dlzTags
   }
 }
 
@@ -590,7 +644,7 @@ module cosmosGraphVector 'cosmos-graph-vector.bicep' = if (cosmosGraphVectorEnab
     privateDnsZoneCosmosGremlinId: contains(adminPlanePrivateDnsZoneIds, 'cosmosGremlin') ? adminPlanePrivateDnsZoneIds.cosmosGremlin : adminPlanePrivateDnsZoneIds.cosmos
     workspaceId: adminPlaneLawId
     consolePrincipalId: consolePrincipalId
-    complianceTags: complianceTags
+    complianceTags: dlzTags
     skipRoleGrants: skipRoleGrants
   }
 }
@@ -617,7 +671,33 @@ module postgresWeave 'postgres-weave.bicep' = if (weaveOntologyEnabled) {
     domainName: domainName
     consolePrincipalId: consolePrincipalId
     workspaceId: adminPlaneLawId
-    complianceTags: complianceTags
+    complianceTags: dlzTags
+  }
+}
+
+// =====================================================================
+// D4. Per-domain Consumption budget (subscription scope, tag-filtered)
+//
+// Deployed at subscription() scope because a tag-filtered budget can only be
+// created at the subscription level. Filters on the same `csa-loom-domain`
+// tag this orchestrator stamps via dlzTags, so the budget tracks exactly this
+// domain's spend regardless of which RG its resources live in. Only deploys
+// when an alert recipient is supplied (no notification-less budgets).
+// =====================================================================
+
+var domainBudgetHasContacts = !empty(domainBudgetContactEmails) || !empty(domainBudgetContactGroupIds)
+
+module domainBudget 'budgets.bicep' = if (deployDomainBudget && domainBudgetHasContacts) {
+  name: 'dlz-budget-${domainName}'
+  scope: subscription()
+  params: {
+    domainName: domainName
+    amount: domainBudgetAmount <= 0 ? 1000 : domainBudgetAmount
+    timeGrain: domainBudgetTimeGrain
+    startDate: domainBudgetStartDate
+    thresholds: domainBudgetThresholds
+    contactEmails: domainBudgetContactEmails
+    contactGroupIds: domainBudgetContactGroupIds
   }
 }
 
@@ -674,3 +754,10 @@ output adfFactoryPrincipalId string = (adfEnabled && !empty(consolePrincipalId) 
 output aasXmlaEndpoint string = enableAas ? aas!.outputs.xmlaEndpoint : ''
 output aasServerName string = enableAas ? aas!.outputs.serverName : ''
 output aasConnectionString string = enableAas ? aas!.outputs.aasConnectionString : ''
+
+// D4 — Chargeback. The domain tag stamped on every DLZ resource (the key the
+// Cost Management rollup groups on) and the per-domain budget name (empty when
+// no alert contacts were supplied at attach time → no budget deployed).
+output chargebackDomainTag string = domainName
+output chargebackCostCenter string = empty(costCenter) ? 'unassigned' : costCenter
+output domainBudgetName string = (deployDomainBudget && domainBudgetHasContacts) ? domainBudget!.outputs.budgetName : ''

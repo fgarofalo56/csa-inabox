@@ -129,6 +129,13 @@ export interface CostSummary {
   byService: CostBreakdownRow[];
   byResourceGroup: CostBreakdownRow[];
   bySubscription: CostBreakdownRow[];
+  /**
+   * Per-domain rollup (D4 chargeback) — grouped by the `csa-loom-domain` tag the
+   * dlz-attach stamps on every DLZ resource. `key` is the domain name; resources
+   * with no domain tag fold into 'untagged'. Empty until a tagging redeploy has
+   * stamped resources (tags apply forward only — see the UI caveat).
+   */
+  byDomain: CostBreakdownRow[];
   byResource: CostBreakdownRow[];
   byLocation: CostBreakdownRow[];
   daily: { date: string; cost: number }[];
@@ -145,13 +152,14 @@ const sortDesc = (m: Map<string, number>): CostBreakdownRow[] =>
   Array.from(m.entries()).map(([key, cost]) => ({ key: key || 'unknown', cost })).sort((a, b) => b.cost - a.cost);
 
 /** Sum the actual cost for a timeframe in one sub, filtered to Loom RGs. */
-async function periodTotal(sub: string, timeframe: CostTimeframe, loomRgs: Set<string>): Promise<number> {
+async function periodTotal(sub: string, timeframe: CostTimeframe, loomRgs: Set<string>, domainFilter?: unknown): Promise<number> {
   const q = await costQuery(sub, {
     type: 'ActualCost', timeframe,
     dataset: {
       granularity: 'None',
       aggregation: { totalCost: { name: 'Cost', function: 'Sum' } },
       grouping: [{ type: 'Dimension', name: 'ResourceGroupName' }],
+      ...(domainFilter ? { filter: domainFilter } : {}),
     },
   });
   const cols = q?.properties?.columns || [];
@@ -188,7 +196,15 @@ async function listBudgets(sub: string): Promise<CostBudget[]> {
   } catch { return []; }
 }
 
-export interface CostOptions { timeframe?: CostTimeframe; }
+export interface CostOptions {
+  timeframe?: CostTimeframe;
+  /**
+   * Restrict the whole summary to a single domain (D4 drill-down). Injects a
+   * `csa-loom-domain` TagKey filter into every CostManagement query so the
+   * totals / breakdowns / daily series / forecast reflect just that domain.
+   */
+  domain?: string;
+}
 
 /** Build the multi-subscription cost summary for the Loom deployment. */
 export async function getLoomCostSummary(opts: CostOptions = {}): Promise<CostSummary> {
@@ -198,9 +214,18 @@ export async function getLoomCostSummary(opts: CostOptions = {}): Promise<CostSu
   const subs = loomSubscriptions();
   if (subs.length === 0) subs.push(cfg.subscriptionId);
 
+  // D4 — optional single-domain filter. When set, every query is narrowed to
+  // resources tagged `csa-loom-domain=<domain>`. Dropped (undefined) keys are
+  // stripped by JSON.stringify, so unfiltered queries are unchanged.
+  const domain = (opts.domain || '').trim();
+  const domainFilter = domain
+    ? { tags: { name: 'csa-loom-domain', operator: 'In', values: [domain] } }
+    : undefined;
+
   const bySvc = new Map<string, number>();
   const byRg = new Map<string, number>();
   const bySub = new Map<string, number>();
+  const byDomain = new Map<string, number>();
   const byResource = new Map<string, number>();
   const byLocation = new Map<string, number>();
   const dailyMap = new Map<string, number>();
@@ -218,7 +243,7 @@ export async function getLoomCostSummary(opts: CostOptions = {}): Promise<CostSu
     // independent groupings of the same period, so the wall-clock cost is the
     // slowest single query — not the sum — which keeps the aggregate under the
     // gateway timeout (the sequential version reliably 504'd on multi-grouping).
-    const [groupedR, dailyR, resR, locR, prevR, budgetsR] = await Promise.allSettled([
+    const [groupedR, dailyR, resR, locR, prevR, budgetsR, domainR] = await Promise.allSettled([
       // 1) RG × Service (totals, byRg, bySvc, bySub) — the only REQUIRED query.
       costQuery(sub, {
         type: 'ActualCost', timeframe,
@@ -229,6 +254,7 @@ export async function getLoomCostSummary(opts: CostOptions = {}): Promise<CostSu
             { type: 'Dimension', name: 'ResourceGroupName' },
             { type: 'Dimension', name: 'ServiceName' },
           ],
+          ...(domainFilter ? { filter: domainFilter } : {}),
         },
       }),
       // 2) Daily series (run-rate forecast).
@@ -238,6 +264,7 @@ export async function getLoomCostSummary(opts: CostOptions = {}): Promise<CostSu
           granularity: 'Daily',
           aggregation: { totalCost: { name: 'Cost', function: 'Sum' } },
           grouping: [{ type: 'Dimension', name: 'ResourceGroupName' }],
+          ...(domainFilter ? { filter: domainFilter } : {}),
         },
       }),
       // 3) Top resources (best-effort; separate dim).
@@ -250,6 +277,7 @@ export async function getLoomCostSummary(opts: CostOptions = {}): Promise<CostSu
             { type: 'Dimension', name: 'ResourceGroupName' },
             { type: 'Dimension', name: 'ResourceId' },
           ],
+          ...(domainFilter ? { filter: domainFilter } : {}),
         },
       }),
       // 4) By location (best-effort).
@@ -262,12 +290,28 @@ export async function getLoomCostSummary(opts: CostOptions = {}): Promise<CostSu
             { type: 'Dimension', name: 'ResourceGroupName' },
             { type: 'Dimension', name: 'ResourceLocation' },
           ],
+          ...(domainFilter ? { filter: domainFilter } : {}),
         },
       }),
       // 5) Previous period total (for trend).
-      prevTf ? periodTotal(sub, prevTf, loomRgs) : Promise.resolve(null),
+      prevTf ? periodTotal(sub, prevTf, loomRgs, domainFilter) : Promise.resolve(null),
       // 6) Budgets.
       listBudgets(sub),
+      // 7) Per-domain rollup (D4 chargeback) — group by the csa-loom-domain
+      //    TagKey. RG dimension is included so we can keep the loom-RG filter;
+      //    the tag value lands in the 'csa-loom-domain' column (empty = untagged).
+      costQuery(sub, {
+        type: 'ActualCost', timeframe,
+        dataset: {
+          granularity: 'None',
+          aggregation: { totalCost: { name: 'Cost', function: 'Sum' } },
+          grouping: [
+            { type: 'Dimension', name: 'ResourceGroupName' },
+            { type: 'TagKey', name: 'csa-loom-domain' },
+          ],
+          ...(domainFilter ? { filter: domainFilter } : {}),
+        },
+      }),
     ]);
 
     // The grouped query is the gate: if it failed (e.g. no Cost Management
@@ -333,6 +377,23 @@ export async function getLoomCostSummary(opts: CostOptions = {}): Promise<CostSu
     if (budgetsR.status === 'fulfilled') {
       budgets.push(...budgetsR.value);
     }
+
+    // Per-domain rollup. The TagKey grouping returns the tag value in a column
+    // named after the tag key ('csa-loom-domain'); untagged resources come back
+    // with an empty value → folded into 'untagged'.
+    if (domainR.status === 'fulfilled') {
+      const xCols = domainR.value?.properties?.columns || [];
+      const xRows: any[][] = domainR.value?.properties?.rows || [];
+      const xCost = colIndex(xCols, 'Cost');
+      const xRg = colIndex(xCols, 'ResourceGroupName');
+      let xDom = colIndex(xCols, 'csa-loom-domain');
+      if (xDom < 0) xDom = colIndex(xCols, 'TagKey'); // defensive: some API shapes label the column 'TagKey'
+      for (const row of xRows) {
+        if (xRg >= 0 && !inLoom(String(row[xRg] ?? ''), loomRgs)) continue;
+        const dom = xDom >= 0 ? String(row[xDom] ?? '').trim() : '';
+        addTo(byDomain, dom || 'untagged', Number(row[xCost]) || 0);
+      }
+    }
   }));
 
   const daily = Array.from(dailyMap.entries()).sort((a, b) => a[0].localeCompare(b[0])).map(([date, cost]) => ({ date, cost }));
@@ -362,6 +423,7 @@ export async function getLoomCostSummary(opts: CostOptions = {}): Promise<CostSu
     byService: sortDesc(bySvc),
     byResourceGroup: sortDesc(byRg),
     bySubscription: sortDesc(bySub),
+    byDomain: sortDesc(byDomain),
     byResource: sortDesc(byResource).slice(0, 25),
     byLocation: sortDesc(byLocation),
     daily,

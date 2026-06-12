@@ -8,15 +8,29 @@ Every Loom-deployed Azure resource carries:
 - `csa-loom: true`
 - `csa-loom-tier: admin-plane | data-landing-zone | workspace`
 - `csa-loom-boundary: Commercial | GCC | GCC-High | IL5`
-- `csa-loom-domain: <domain-id>` (DLZ + workspaces only)
+- `csa-loom-domain: <domain-id>` (DLZ + workspaces only) — **drives the
+  per-domain chargeback rollup** (D4): the `/admin/usage` Cost & chargeback
+  section and the domain-settings Cost tab query Cost Management grouped by
+  this TagKey, and `budgets.bicep` filters per-domain Consumption budgets on it.
 - `csa-loom-workspace: <workspace-id>` (workspace resources only)
+- `costCenter: <cost-center | unassigned>` (DLZ resources) — chargeback cost
+  center, supplied per domain at attach time (`costCenter` / `dlzCostCenters`
+  params, `LOOM_COST_CENTER` env)
 - `FedRAMP_Level: High` (Gov boundaries)
 - `DISA_IL: IL4 | IL5` (Gov boundaries)
 - `Data_Classification: Standard | CUI | CUI-NSS`
-- Customer-supplied tags from `.bicepparam` (e.g., `CostCenter`, `Owner`)
+- Customer-supplied tags from `.bicepparam` (e.g., `Owner`)
 
-Deployed via `platform/fiab/bicep/modules/shared/tagging.bicep` —
-consistent across every module.
+DLZ resource tags are merged in the DLZ orchestrator
+(`platform/fiab/bicep/modules/landing-zone/main.bicep`, the `dlzTags` var:
+`union(complianceTags, { 'csa-loom-domain': domainName, costCenter })`) and
+passed to every leaf module's `complianceTags` param, so the chargeback tags
+land on each resource — Cost Management ignores resource-group tags for
+grouping, so per-resource stamping is required. The multi-sub bootstrap script
+(`scripts/csa-loom/bootstrap-dlz-rgs.sh`) stamps the same `csa-loom-domain` +
+`costCenter` keys on the DLZ resource group for self-description. **Tags apply
+to usage reported _after_ they're set, not retroactively** — per-domain cost
+accrues from the attach (deploy) onward.
 
 ## 2. Catalog-layer tags
 

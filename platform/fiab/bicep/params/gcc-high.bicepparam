@@ -145,6 +145,12 @@ param dlzDomainNames = [
   // 'mission-ops'
   // 'finance'
 ]
+// Chargeback (D4) — per-domain cost centers, parallel to dlzDomainNames. Index i
+// stamps the costCenter tag for dlzDomainNames[i] (shorter/empty = "unassigned").
+param dlzCostCenters = [
+  // 'CC-MISSION'
+  // 'CC-FINANCE'
+]
 
 // Feature flags — Gov defaults. AI Search OFF (region capacity TBD).
 // Front Door NOT certified for IL5 but is for GCC-H — enabled here.
@@ -173,3 +179,11 @@ param complianceTags = {
   Data_Classification: 'CUI'
   M365_Boundary: 'GCC-High'
 }
+
+// Chargeback (D4) — Cost Management Query + Consumption budgets are available in
+// Azure Government (management.usgovcloudapi.net). Supply budget contacts to
+// deploy a per-domain Consumption budget at attach time (no contacts = no budget).
+param domainBudgetAmount = int(readEnvironmentVariable('LOOM_DOMAIN_BUDGET_AMOUNT', '1000'))
+param domainBudgetContactEmails = empty(readEnvironmentVariable('LOOM_DOMAIN_BUDGET_EMAILS', ''))
+  ? []
+  : split(readEnvironmentVariable('LOOM_DOMAIN_BUDGET_EMAILS', ''), ',')
