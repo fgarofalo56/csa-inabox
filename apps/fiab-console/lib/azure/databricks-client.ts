@@ -1565,6 +1565,112 @@ export async function createUcTable(spec: UcTableCreateSpec): Promise<UcTable> {
   return asJsonOrThrow<UcTable>(res, 'createUcTable');
 }
 
+// ------------------------------------------------------------
+// Create table FROM a file (Catalog Explorer "Create table from file"
+// — upload → infer schema → CREATE TABLE). Real Databricks flow, no mock:
+//   1. PUT the uploaded bytes into a staging path on a UC Volume
+//      (`/Volumes/<cat>/<schema>/<volume>/_loom_uploads/<file>`) via the
+//      Files API (`writeUcVolumesFile`).
+//   2. Run `CREATE TABLE … AS SELECT * FROM read_files('<vol path>', …)` on a
+//      SQL Warehouse via the Statement Execution API. `read_files` (Auto
+//      Loader's batch reader) infers the schema from the file, so the new
+//      managed Delta table lands with inferred columns — exactly what the
+//      portal's "Create table from file" dialog does.
+//   3. Best-effort delete the staging file (the table is materialized Delta;
+//      it no longer needs the raw upload).
+// Learn:
+//   https://learn.microsoft.com/azure/databricks/ingestion/file-upload/
+//   https://learn.microsoft.com/azure/databricks/sql/language-manual/functions/read_files
+// ------------------------------------------------------------
+
+export interface UcTableFromFileSpec {
+  catalog_name: string;
+  schema_name: string;
+  table_name: string;
+  /** UC Volume (catalog.schema.volume) used to stage the upload. */
+  volume: string;
+  /** Original file name, e.g. `orders.csv`. */
+  file_name: string;
+  /** Raw text content of the uploaded file (CSV/JSON/etc). */
+  content: string;
+  /** read_files format — csv | json | parquet | orc | avro | text. */
+  format: 'csv' | 'json' | 'parquet' | 'orc' | 'avro' | 'text';
+  /** Warehouse to run the inference + CREATE TABLE statement on. */
+  warehouse_id: string;
+  /** CSV header row present (default true for csv). */
+  header?: boolean;
+}
+
+export interface UcTableFromFileResult {
+  full_name: string;
+  row_count: number | null;
+  columns: string[];
+  staged_path: string;
+}
+
+export async function createUcTableFromFile(
+  spec: UcTableFromFileSpec,
+): Promise<UcTableFromFileResult> {
+  const volParts = spec.volume.split('.');
+  if (volParts.length !== 3) {
+    throw new Error('createUcTableFromFile: volume must be catalog.schema.volume');
+  }
+  // Identifier hygiene — only allow safe identifier chars in names we splice
+  // into the SQL statement. The file PATH is bound via a `read_files()` string
+  // literal (single-quoted, with quotes escaped), so it cannot break out.
+  const ident = (v: string) => {
+    if (!/^[A-Za-z0-9_]+$/.test(v)) throw new Error(`Invalid identifier: ${v}`);
+    return v;
+  };
+  const cat = ident(spec.catalog_name);
+  const sch = ident(spec.schema_name);
+  const tbl = ident(spec.table_name);
+  const safeFile = spec.file_name.replace(/[^A-Za-z0-9._-]/g, '_');
+  const stagedPath = `/Volumes/${volParts[0]}/${volParts[1]}/${volParts[2]}/_loom_uploads/${Date.now()}_${safeFile}`;
+
+  // 1. Upload the bytes to the volume.
+  await writeUcVolumesFile(stagedPath, spec.content);
+
+  // 2. Build read_files options and run CREATE TABLE AS SELECT.
+  const opts: string[] = [`format => '${spec.format}'`];
+  if (spec.format === 'csv') {
+    opts.push(`header => ${spec.header === false ? 'false' : 'true'}`);
+    opts.push(`inferSchema => true`);
+  }
+  const literalPath = stagedPath.replace(/'/g, "''");
+  const fqtn = `\`${cat}\`.\`${sch}\`.\`${tbl}\``;
+  const createSql =
+    `CREATE TABLE ${fqtn} AS SELECT * FROM read_files('${literalPath}', ${opts.join(', ')})`;
+
+  try {
+    await executeStatement(spec.warehouse_id, createSql, spec.catalog_name, spec.schema_name);
+  } catch (e) {
+    // Clean up the staged file on failure so a retry is not blocked by leftovers.
+    await deleteUcVolumesFile(stagedPath).catch(() => {});
+    throw e;
+  }
+
+  // 3. Read back the materialized table's columns + row count.
+  let columns: string[] = [];
+  let rowCount: number | null = null;
+  try {
+    const detail = await getUcTable(`${cat}.${sch}.${tbl}`);
+    columns = (detail.columns || []).map((c) => c.name);
+  } catch { /* table created but detail read failed — non-fatal */ }
+  try {
+    const cnt = await executeStatement(
+      spec.warehouse_id, `SELECT COUNT(*) AS n FROM ${fqtn}`, spec.catalog_name, spec.schema_name,
+    );
+    const v = cnt.rows?.[0]?.[0];
+    rowCount = v != null ? Number(v) : null;
+  } catch { /* count is best-effort */ }
+
+  // 4. Best-effort cleanup of the staging file (table is now materialized Delta).
+  await deleteUcVolumesFile(stagedPath).catch(() => {});
+
+  return { full_name: `${cat}.${sch}.${tbl}`, row_count: rowCount, columns, staged_path: stagedPath };
+}
+
 /** DELETE /api/2.1/unity-catalog/tables/{full_name}  (catalog.schema.table) */
 export async function deleteUcTable(fullName: string): Promise<void> {
   const path = fullName.split('.').map(encodeURIComponent).join('.');
@@ -2011,6 +2117,84 @@ export async function deleteUcVolume(fullName: string): Promise<void> {
   const path = fullName.split('.').map(encodeURIComponent).join('.');
   const res = await dbxFetch(`/api/2.1/unity-catalog/volumes/${path}`, { method: 'DELETE' });
   await asJsonOrThrow<unknown>(res, 'deleteUcVolume');
+}
+
+// ------------------------------------------------------------
+// Principal directory (Catalog Explorer grant "principal" picker). The
+// Permissions tab autocompletes over the workspace's users / groups / service
+// principals; the same directory is exposed by the workspace SCIM 2.0 API:
+//   GET /api/2.0/preview/scim/v2/Users
+//   GET /api/2.0/preview/scim/v2/Groups
+//   GET /api/2.0/preview/scim/v2/ServicePrincipals
+// Filtered with the SCIM `filter` query (`userName co "q"` etc.) so the picker
+// returns matches as the operator types — no `return []` placeholder.
+// Learn: https://learn.microsoft.com/azure/databricks/admin/users-groups/scim/
+// ------------------------------------------------------------
+
+export interface UcPrincipal {
+  /** Value passed to a UC grant (user email / group displayName / SP applicationId). */
+  value: string;
+  /** Human label for the picker. */
+  label: string;
+  kind: 'USER' | 'GROUP' | 'SERVICE_PRINCIPAL';
+}
+
+/** SCIM `co` (contains) filter, value-escaped so a quote in the query is safe. */
+function scimContains(attr: string, q: string): string {
+  return `${attr} co "${q.replace(/"/g, '\\"')}"`;
+}
+
+export async function listUcPrincipals(query: string): Promise<UcPrincipal[]> {
+  const q = query.trim();
+  const limit = 20;
+  const out: UcPrincipal[] = [];
+
+  const usersFilter = q ? `&filter=${encodeURIComponent(scimContains('userName', q))}` : '';
+  const groupsFilter = q ? `&filter=${encodeURIComponent(scimContains('displayName', q))}` : '';
+  const spsFilter = q ? `&filter=${encodeURIComponent(scimContains('displayName', q))}` : '';
+
+  const [usersRes, groupsRes, spsRes] = await Promise.allSettled([
+    dbxFetch(`/api/2.0/preview/scim/v2/Users?count=${limit}${usersFilter}`),
+    dbxFetch(`/api/2.0/preview/scim/v2/Groups?count=${limit}${groupsFilter}`),
+    dbxFetch(`/api/2.0/preview/scim/v2/ServicePrincipals?count=${limit}${spsFilter}`),
+  ]);
+
+  if (usersRes.status === 'fulfilled' && usersRes.value.ok) {
+    const j = (await usersRes.value.json()) as { Resources?: Array<{ userName?: string; displayName?: string }> };
+    for (const u of j.Resources || []) {
+      if (u.userName) out.push({ value: u.userName, label: u.displayName ? `${u.displayName} (${u.userName})` : u.userName, kind: 'USER' });
+    }
+  }
+  if (groupsRes.status === 'fulfilled' && groupsRes.value.ok) {
+    const j = (await groupsRes.value.json()) as { Resources?: Array<{ displayName?: string }> };
+    for (const g of j.Resources || []) {
+      if (g.displayName) out.push({ value: g.displayName, label: `${g.displayName} (group)`, kind: 'GROUP' });
+    }
+  }
+  if (spsRes.status === 'fulfilled' && spsRes.value.ok) {
+    const j = (await spsRes.value.json()) as { Resources?: Array<{ applicationId?: string; displayName?: string }> };
+    for (const sp of j.Resources || []) {
+      if (sp.applicationId) out.push({ value: sp.applicationId, label: sp.displayName ? `${sp.displayName} (SP)` : `${sp.applicationId} (SP)`, kind: 'SERVICE_PRINCIPAL' });
+    }
+  }
+
+  // If every SCIM call failed (e.g. missing scope), surface that honestly
+  // instead of an empty list masquerading as "no principals".
+  const allFailed =
+    (usersRes.status !== 'fulfilled' || !usersRes.value.ok) &&
+    (groupsRes.status !== 'fulfilled' || !groupsRes.value.ok) &&
+    (spsRes.status !== 'fulfilled' || !spsRes.value.ok);
+  if (allFailed) {
+    const detail =
+      usersRes.status === 'fulfilled'
+        ? `HTTP ${usersRes.value.status}: ${(await usersRes.value.text()).slice(0, 200)}`
+        : (usersRes.reason?.message || String(usersRes.reason));
+    const err: Error & { status?: number } = new Error(`SCIM directory query failed — ${detail}`);
+    if (usersRes.status === 'fulfilled') err.status = usersRes.value.status;
+    throw err;
+  }
+
+  return out.slice(0, 30);
 }
 
 // ============================================================
