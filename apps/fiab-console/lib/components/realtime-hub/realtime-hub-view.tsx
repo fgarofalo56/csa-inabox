@@ -39,7 +39,7 @@ import {
 import {
   Search20Regular, MoreHorizontal20Regular, Eye20Regular,
   PlugConnected20Regular, Flow20Regular, ArrowSync20Regular,
-  Pulse24Regular, Flash24Regular,
+  Pulse24Regular, Flash24Regular, PlugConnected24Regular, Flow24Regular,
 } from '@fluentui/react-icons';
 import { SignInRequired } from '@/lib/components/sign-in-required';
 import { Section } from '@/lib/components/ui/section';
@@ -272,7 +272,7 @@ export function RealTimeHubView() {
         </div>
         <div className={styles.stat}>
           <span className={styles.statChip} style={{ backgroundColor: '#0078d41f', color: 'var(--loom-accent-blue)' }} aria-hidden>
-            <PlugConnected20Regular style={{ width: 24, height: 24 }} />
+            <PlugConnected24Regular />
           </span>
           <div>
             <div className={styles.statNum}>{SOURCE_CONNECTORS.length}</div>
@@ -281,7 +281,7 @@ export function RealTimeHubView() {
         </div>
         <div className={styles.stat}>
           <span className={styles.statChip} style={{ backgroundColor: '#4b1d8f1f', color: 'var(--loom-accent-purple)' }} aria-hidden>
-            <Flow20Regular style={{ width: 24, height: 24 }} />
+            <Flow24Regular />
           </span>
           <div>
             <div className={styles.statNum}>{loading ? '—' : (data?.workspaceCount ?? workspaceOptions.length)}</div>
