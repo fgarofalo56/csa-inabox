@@ -27,7 +27,7 @@ import { LoomDataTable, type LoomColumn } from '@/lib/components/ui/loom-data-ta
 import {
   Spinner, Button, Input, Field, Dropdown, Option, Checkbox, MessageBar, MessageBarBody,
   MessageBarTitle, MessageBarActions, Body1, Caption1, Badge, Divider, Subtitle2,
-  makeStyles, tokens,
+  makeStyles, mergeClasses, tokens,
 } from '@fluentui/react-components';
 import {
   Add24Regular, ArrowSync24Regular,
@@ -82,8 +82,47 @@ const useStyles = makeStyles({
     marginBottom: tokens.spacingVerticalM, flexWrap: 'wrap',
   },
   linkBtn: { marginTop: tokens.spacingVerticalXS, paddingLeft: 0 },
-  footer: { display: 'flex', justifyContent: 'flex-end', marginTop: tokens.spacingVerticalL },
+  footer: {
+    display: 'flex', justifyContent: 'flex-end',
+    marginTop: tokens.spacingVerticalL, paddingTop: tokens.spacingVerticalM,
+    borderTop: `1px solid ${tokens.colorNeutralStroke2}`,
+  },
   mb: { marginBottom: tokens.spacingVerticalM },
+  // spacing helpers — token-driven, replaces scattered inline magic numbers
+  spinner: { marginTop: tokens.spacingVerticalXXL },
+  msgMt: { marginTop: tokens.spacingVerticalM },
+  formHeadTight: { marginTop: 0 },
+  dividerTop: { marginTop: tokens.spacingVerticalL },
+  dividerMid: { marginTop: tokens.spacingVerticalM, marginBottom: tokens.spacingVerticalM },
+  // honest-gate remediation block
+  remediation: {
+    marginTop: tokens.spacingVerticalS,
+    fontSize: tokens.fontSizeBase200,
+    lineHeight: tokens.lineHeightBase300,
+    display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalXXS,
+  },
+  // pre blocks for diagnostic JSON hints
+  hintPre: {
+    marginTop: tokens.spacingVerticalS,
+    marginBottom: 0,
+    padding: tokens.spacingHorizontalS,
+    fontSize: tokens.fontSizeBase200,
+    fontFamily: tokens.fontFamilyMonospace,
+    whiteSpace: 'pre-wrap',
+    wordBreak: 'break-word',
+    backgroundColor: tokens.colorNeutralBackground3,
+    borderRadius: tokens.borderRadiusMedium,
+  },
+  envLine: { marginTop: tokens.spacingVerticalXS, fontSize: tokens.fontSizeBase200 },
+  errorList: { margin: 0, marginTop: tokens.spacingVerticalXS, paddingLeft: tokens.spacingHorizontalXL },
+  captionBlock: { display: 'block', marginTop: tokens.spacingVerticalXS },
+  receiptIcon: { color: tokens.colorPaletteGreenForeground1, flexShrink: 0 },
+  endorseMb: { marginBottom: tokens.spacingVerticalS },
+  emptyCentered: {
+    alignItems: 'center', textAlign: 'center',
+    paddingTop: tokens.spacingVerticalM, paddingBottom: tokens.spacingVerticalM,
+  },
+  purviewEndpoint: { display: 'block', marginTop: tokens.spacingVerticalXXS },
 });
 
 export default function MetastoresPage() {
@@ -249,7 +288,7 @@ export default function MetastoresPage() {
           </MessageBarActions>
         </MessageBar>
       )}
-      {loading && !error && <Spinner label="Loading metastores…" style={{ marginTop: 32 }} />}
+      {loading && !error && <Spinner label="Loading metastores…" className={s.spinner} />}
 
       {data && (
         <>
@@ -328,7 +367,7 @@ export default function MetastoresPage() {
                 <MessageBarBody>
                   <MessageBarTitle>{gate.title}</MessageBarTitle>
                   {gate.detail}
-                  <div style={{ marginTop: 10, fontSize: 12, lineHeight: 1.6 }}>
+                  <div className={s.remediation}>
                     <div><strong>Role:</strong> {gate.remediation.role}</div>
                     <div><strong>Identity:</strong> <code>{gate.remediation.identity}</code></div>
                     <div><strong>Where:</strong> {gate.remediation.where}</div>
@@ -342,7 +381,7 @@ export default function MetastoresPage() {
                 <MessageBarBody>
                   <MessageBarTitle>Unity Catalog not configured</MessageBarTitle>{data.unityError}
                   {data.unityHint && (
-                    <pre style={{ marginTop: 8, fontSize: 11, whiteSpace: 'pre-wrap' }}>
+                    <pre className={s.hintPre}>
                       {JSON.stringify(data.unityHint, null, 2)}
                     </pre>
                   )}
@@ -355,7 +394,7 @@ export default function MetastoresPage() {
                 rows={unity}
                 getRowId={(m) => m.metastore_id}
                 empty={
-                  <div className={s.cellStack} style={{ alignItems: 'center', textAlign: 'center' }}>
+                  <div className={mergeClasses(s.cellStack, s.emptyCentered)}>
                     <Body1>No metastores discovered</Body1>
                     <Caption1 className={s.muted}>
                       Confirm the Loom UAMI is in the UC metastore admin group, or register a workspace below.
@@ -368,10 +407,10 @@ export default function MetastoresPage() {
             {/* Per-workspace (non-admin) errors that aren't the account-admin gate. */}
             {Array.isArray(data.unityWorkspaceErrors) &&
               data.unityWorkspaceErrors.filter((w: any) => !w.accountAdmin).length > 0 && (
-              <MessageBar intent="warning" style={{ marginTop: 14 }}>
+              <MessageBar intent="warning" className={s.msgMt}>
                 <MessageBarBody>
                   <MessageBarTitle>Some workspaces were unreachable</MessageBarTitle>
-                  <ul style={{ margin: '6px 0 0', paddingLeft: 18 }}>
+                  <ul className={s.errorList}>
                     {data.unityWorkspaceErrors
                       .filter((w: any) => !w.accountAdmin)
                       .map((w: any) => <li key={w.workspace_hostname}><code>{w.workspace_hostname}</code>: {w.message}</li>)}
@@ -380,7 +419,7 @@ export default function MetastoresPage() {
               </MessageBar>
             )}
 
-            <Divider style={{ margin: '20px 0 0' }} />
+            <Divider className={s.dividerTop} />
 
             {/* ---------- Register a Databricks workspace ---------- */}
             <div className={s.formHead}>
@@ -457,8 +496,8 @@ export default function MetastoresPage() {
             </Button>
 
             {/* ---------- Attach to a UC metastore ---------- */}
-            <Divider style={{ margin: '16px 0' }} />
-            <div className={s.formHead} style={{ marginTop: 0 }}>
+            <Divider className={s.dividerMid} />
+            <div className={mergeClasses(s.formHead, s.formHeadTight)}>
               <Link24Regular className={s.formHeadIcon} />
               <Subtitle2>Attach to a Unity Catalog metastore (optional)</Subtitle2>
             </div>
@@ -468,7 +507,7 @@ export default function MetastoresPage() {
                   <MessageBarTitle>One-click attach not configured</MessageBarTitle>
                   {data.accountApiHint?.detail || 'Set LOOM_DATABRICKS_ACCOUNT_ID to enable metastore attach.'}
                   {data.accountApiHint?.missingEnvVar && (
-                    <div style={{ marginTop: 6, fontSize: 12 }}>
+                    <div className={s.envLine}>
                       Env var: <code>{data.accountApiHint.missingEnvVar}</code> · Bicep: <code>{data.accountApiHint.bicepModule}</code>
                     </div>
                   )}
@@ -503,8 +542,8 @@ export default function MetastoresPage() {
             )}
 
             {/* ---------- Purview registration + scan ---------- */}
-            <Divider style={{ margin: '16px 0' }} />
-            <div className={s.formHead} style={{ marginTop: 0 }}>
+            <Divider className={s.dividerMid} />
+            <div className={mergeClasses(s.formHead, s.formHeadTight)}>
               <ShieldTask24Regular className={s.formHeadIcon} />
               <Subtitle2>Catalog in Microsoft Purview (optional)</Subtitle2>
             </div>
@@ -521,7 +560,6 @@ export default function MetastoresPage() {
                       checked={runScan}
                       onChange={(_, d) => setRunScan(!!d.checked)}
                       label="Define + run a scan to catalog its metadata"
-                      style={{ marginTop: 4 }}
                     />
                     {runScan && (
                       <div className={s.scanGrid}>
@@ -536,7 +574,7 @@ export default function MetastoresPage() {
                         </Field>
                       </div>
                     )}
-                    <Caption1 className={s.muted} style={{ display: 'block', marginTop: 6 }}>
+                    <Caption1 className={mergeClasses(s.muted, s.captionBlock)}>
                       Databricks scans require an Access Token stored in Key Vault (managed identity is not supported for
                       Databricks) plus a running SQL Warehouse. Without scan config, only the source is registered.
                     </Caption1>
@@ -550,7 +588,7 @@ export default function MetastoresPage() {
             )}
 
             {probeError && (
-              <MessageBar intent="error" style={{ marginTop: 12 }}>
+              <MessageBar intent="error" className={s.msgMt}>
                 <MessageBarBody><MessageBarTitle>Registration failed</MessageBarTitle>{probeError}</MessageBarBody>
               </MessageBar>
             )}
@@ -558,7 +596,7 @@ export default function MetastoresPage() {
             {probeResult?.ok && (
               <div className={s.receipt}>
                 <div className={s.receiptHead}>
-                  <DatabaseLink24Regular style={{ color: tokens.colorPaletteGreenForeground1 }} />
+                  <DatabaseLink24Regular className={s.receiptIcon} />
                   <Body1><strong>{probeResult.probed}</strong> registered &amp; persisted</Body1>
                   <Badge appearance="tint" color="success">
                     {(probeResult.catalogs?.length ?? 0)} catalog{probeResult.catalogs?.length === 1 ? '' : 's'}
@@ -569,7 +607,7 @@ export default function MetastoresPage() {
                 </div>
 
                 {probeResult.accountAdminGate && (
-                  <MessageBar intent="warning" style={{ marginBottom: 10 }}>
+                  <MessageBar intent="warning" className={s.endorseMb}>
                     <MessageBarBody>
                       <MessageBarTitle>{probeResult.accountAdminGate.title}</MessageBarTitle>
                       {probeResult.accountAdminGate.detail}
@@ -579,27 +617,27 @@ export default function MetastoresPage() {
 
                 {/* Per-step honest outcomes */}
                 {probeResult.steps?.attach?.gate && (
-                  <MessageBar intent="info" style={{ marginBottom: 10 }}>
+                  <MessageBar intent="info" className={s.endorseMb}>
                     <MessageBarBody>{probeResult.steps.attach.gate.detail}</MessageBarBody>
                   </MessageBar>
                 )}
                 {probeResult.steps?.attach?.error && (
-                  <MessageBar intent="warning" style={{ marginBottom: 10 }}>
+                  <MessageBar intent="warning" className={s.endorseMb}>
                     <MessageBarBody>Attach: {probeResult.steps.attach.error}</MessageBarBody>
                   </MessageBar>
                 )}
                 {probeResult.steps?.purview?.gate && (
-                  <MessageBar intent="info" style={{ marginBottom: 10 }}>
+                  <MessageBar intent="info" className={s.endorseMb}>
                     <MessageBarBody>{probeResult.steps.purview.gate.detail || probeResult.steps.purview.gate.followUp}</MessageBarBody>
                   </MessageBar>
                 )}
                 {probeResult.steps?.purview?.error && (
-                  <MessageBar intent="warning" style={{ marginBottom: 10 }}>
+                  <MessageBar intent="warning" className={s.endorseMb}>
                     <MessageBarBody>Purview: {probeResult.steps.purview.error}</MessageBarBody>
                   </MessageBar>
                 )}
                 {probeResult.steps?.purview?.scanGate && (
-                  <MessageBar intent="info" style={{ marginBottom: 10 }}>
+                  <MessageBar intent="info" className={s.endorseMb}>
                     <MessageBarBody>
                       <MessageBarTitle>{probeResult.steps.purview.scanGate.title}</MessageBarTitle>
                       {probeResult.steps.purview.scanGate.detail}
@@ -654,7 +692,7 @@ export default function MetastoresPage() {
             {data.purview ? (
               <Body1>
                 Account <code>{data.purview.account}</code>
-                <Caption1 className={s.muted} style={{ display: 'block', marginTop: 4 }}>
+                <Caption1 className={mergeClasses(s.muted, s.purviewEndpoint)}>
                   {data.purview.endpoint}
                 </Caption1>
               </Body1>
