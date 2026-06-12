@@ -96,6 +96,25 @@ jobs:
             --parameters platform/fiab/bicep/params/il5.bicepparam \
             --parameters adminEntraGroupId=${{ secrets.FIAB_GOV_ADMIN_GROUP_ID }}
 
+      - name: Deploy-verification evidence receipt (§7)
+        # Captures the IL5 deploy-verification acceptance receipt as an artifact:
+        # deterministic ARM tests + sovereign-endpoint sweep + the §4 host matrix,
+        # plus a live what-if line (we are already on the Gov sub + bicep here).
+        # Honestly records the live full-stack smoke as BLOCKED by runbook gap #2
+        # until the in-repo AKS workload deployment for the Loom apps lands.
+        # Never fails the job (|| true) — the receipt is evidence, not a gate.
+        run: |
+          bash scripts/csa-loom/gov-verify-evidence.sh \
+            --boundary il5 --live \
+            --out "$RUNNER_TEMP/gov-verify-receipt-il5-${{ github.run_id }}.txt" || true
+
+      - name: Upload IL5 verification receipt
+        uses: actions/upload-artifact@v4
+        with:
+          name: gov-verify-receipt-il5-${{ github.run_id }}
+          path: ${{ runner.temp }}/gov-verify-receipt-il5-${{ github.run_id }}.txt
+          if-no-files-found: warn
+
       - name: Teardown -> redeploy -> smoke (full mode only)
         if: inputs.run_mode == 'full'
         env:

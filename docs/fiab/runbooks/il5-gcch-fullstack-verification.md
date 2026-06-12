@@ -77,6 +77,32 @@ az deployment sub create \
   --parameters adminEntraGroupId=$FIAB_GOV_ADMIN_GROUP_ID
 ```
 
+### Evidence receipt (offline-safe, no Gov sub required)
+
+`scripts/csa-loom/gov-verify-evidence.sh` collects the *verifiable* evidence and
+emits the §7 receipt for a boundary in one shot — runnable on any dev box (it
+does NOT need a Gov subscription):
+
+```bash
+make gov-verify-il5            # -> temp/gov-verify-receipt-il5-<ts>.txt
+make gov-verify-gcch
+make gov-verify-il5 LIVE=1     # additionally drives redeploy-gov.sh --what-if when on a Gov sub
+```
+
+It runs, and records as PASS/FAIL/SKIPPED/BLOCKED in the receipt:
+
+1. the deterministic ARM-emission tests (`test_bicep_modules.py` MAF +
+   `copilotMafEnabled` wiring) — proof the deployed template is correct;
+2. the static sovereign-endpoint sweep (`cloud-matrix.test.ts` +
+   `cloud-endpoints.test.ts`, 4-cloud) plus the read-only §4 host-matrix dump
+   (`loom-endpoint-probe.sh`), asserting every host resolves to a Gov suffix;
+3. the live teardown→redeploy line — **BLOCKED by gap #2** until the in-repo AKS
+   workload deployment for the Loom apps exists; honestly recorded, never faked.
+
+The IL5 deploy workflow (`deploy-fiab-il5.yml`) runs this and uploads the
+receipt as a build artifact (`gov-verify-receipt-il5-<run_id>`) on every
+dispatch, so the acceptance evidence is captured automatically in CI.
+
 ---
 
 ## 4. Sovereign endpoint verification matrix
@@ -171,10 +197,32 @@ They are disclosed here per `no-vaporware.md` rather than papered over.
    [Products available by region](https://azure.microsoft.com/global-infrastructure/services/?products=all&regions=usgov-virginia)
    only if/when the audit-scope table changes.
 
-4. **Pre-existing template syntax error fixed.** `admin-plane/main.bicep` had
-   two stray closing braces after the `aas` module (lines ~1102-1103) that made
-   `main.bicep` fail `az bicep build` entirely — i.e. *no* boundary could
-   deploy. Removed in this change; `main.bicep` now builds clean (0 errors).
+4. **Template build-blockers fixed (recurring class).** `admin-plane/main.bicep`
+   had, at various points, build-blocking errors that made `main.bicep` fail
+   `az bicep build` entirely — i.e. *no* boundary could deploy:
+   - two stray closing braces after the `aas` module (original fix);
+   - a duplicated `mcpPrincipalId` property in the `keyvault` module call
+     (BCP025) and a duplicated `mcpStorage` identifier where a leftover
+     `module mcpStorage 'mcp-storage.bicep'` collided with the inline
+     `resource mcpStorage` storage account + its non-existent `.outputs`
+     (BCP028/BCP053) — the redundant module + duplicate env keys were removed,
+     keeping the fully-wired inline `mcpStorage`/`mcpEnvStorage` path;
+   - `admin-plane/main.bicep` exceeded the **256-parameter** Bicep/ARM limit
+     (262 params → `max-params` Error). Six reserved-for-v3.x **unused**
+     pass-through params (`functionsHostSku`, `capacitySku`, and the four
+     `openai*`) were removed from the admin-plane module (their live consumers
+     — landing-zone/capacity + ai-foundry — still receive them from the parent
+     `main.bicep`); the module is now at exactly 256;
+   - `landing-zone/main.bicep` used a module **output**
+     (`databricks.outputs.ucSupported`) inside an `if`-condition (BCP177 — module
+     outputs are not known at the start of deployment). Replaced with a local
+     `dlzUcSupported` var computed from the `boundary` param (the same
+     `Commercial || GCC` expression `databricks.bicep` uses internally).
+
+   `main.bicep` now builds clean (0 errors) and all
+   `test_bicep_modules.py` tests pass, so every boundary can deploy. The
+   deterministic gate + the `gov-verify-evidence.sh` harness (§3) guard against
+   regressions of this class.
 
 ---
 
