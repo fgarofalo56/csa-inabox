@@ -73,12 +73,24 @@ function required(k: string): string {
 // LOOM_SYNAPSE_SUB wins when set (a reused Synapse workspace in another
 // subscription, emitted by the BYO wizard); falls back to LOOM_SUBSCRIPTION_ID
 // (the deployment sub) when empty so cross-sub reuse hits the right ARM scope.
-function sub(): string { return process.env.LOOM_SYNAPSE_SUB || required('LOOM_SUBSCRIPTION_ID'); }
-function rg():  string { return required('LOOM_DLZ_RG'); }
+//
+// `target` (optional) is the domain-resolved deploy target from
+// `lib/azure/topology.ts → resolveDeployTarget` — when a multi-domain create
+// route supplies it, the Synapse ARM scope follows the OWNING domain's DLZ
+// subscription + resource group instead of the flat env default. Absent (the
+// single-sub default), the env behaviour every existing deployment has today is
+// preserved exactly.
+export interface SynapseArmTarget { subscriptionId?: string; resourceGroup?: string; }
+function sub(t?: SynapseArmTarget): string {
+  return (t?.subscriptionId || '').trim() || process.env.LOOM_SYNAPSE_SUB || required('LOOM_SUBSCRIPTION_ID');
+}
+function rg(t?: SynapseArmTarget): string {
+  return (t?.resourceGroup || '').trim() || required('LOOM_DLZ_RG');
+}
 function ws():  string { return required('LOOM_SYNAPSE_WORKSPACE'); }
 
-function armBase(): string {
-  return `https://${ARM_HOST}/subscriptions/${sub()}/resourceGroups/${rg()}/providers/Microsoft.Synapse/workspaces/${ws()}`;
+function armBase(t?: SynapseArmTarget): string {
+  return `https://${ARM_HOST}/subscriptions/${sub(t)}/resourceGroups/${rg(t)}/providers/Microsoft.Synapse/workspaces/${ws()}`;
 }
 
 export function devBase(): string {
@@ -1015,6 +1027,7 @@ export async function createDedicatedSqlPool(
   sku: string,
   location: string,
   collation = 'SQL_Latin1_General_CP1_CI_AS',
+  target?: SynapseArmTarget,
 ): Promise<{ name: string; sku?: { name?: string; tier?: string }; properties?: any }> {
   if (!name) throw new Error('createDedicatedSqlPool: name is required');
   if (!location) throw new Error('createDedicatedSqlPool: location is required');
@@ -1027,7 +1040,7 @@ export async function createDedicatedSqlPool(
     properties: { createMode: 'Default', collation },
   };
   const r = await callArm(
-    `${armBase()}/sqlPools/${encodeURIComponent(name)}?api-version=${ARM_API}`,
+    `${armBase(target)}/sqlPools/${encodeURIComponent(name)}?api-version=${ARM_API}`,
     { method: 'PUT', body: JSON.stringify(body) },
   );
   return jsonOrThrow(r, `createDedicatedSqlPool(${name},${sku})`);

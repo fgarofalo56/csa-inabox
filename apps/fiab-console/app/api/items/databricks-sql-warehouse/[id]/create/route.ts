@@ -27,6 +27,7 @@ import { getSession } from '@/lib/auth/session';
 import { createWarehouse, databricksConfigGate, type WarehouseCreateSpec } from '@/lib/azure/databricks-client';
 import { createDedicatedSqlPool } from '@/lib/azure/synapse-dev-client';
 import { isGovCloud } from '@/lib/azure/cloud-endpoints';
+import { prepareItemCreate, isDeployTargetGate } from '@/lib/azure/topology';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -38,6 +39,13 @@ export async function POST(req: NextRequest) {
   const body = await req.json().catch(() => ({} as Record<string, unknown>));
   const name = typeof body?.name === 'string' ? body.name.trim() : '';
   if (!name) return NextResponse.json({ ok: false, error: 'name is required' }, { status: 400 });
+
+  // Domain routing: the workspace that owns this item decides which DLZ
+  // subscription + resource group the Synapse dedicated pool lands in.
+  const workspaceId =
+    req.nextUrl.searchParams.get('workspaceId') ||
+    (typeof body?.workspace_id === 'string' ? body.workspace_id : '') ||
+    '';
 
   // --- Gov boundary: Azure-native Synapse Dedicated SQL pool ---------------
   if (isGovCloud()) {
@@ -54,11 +62,24 @@ export async function POST(req: NextRequest) {
         { status: 503 },
       );
     }
+    // Resolve the owning domain's deploy target + preflight UAMI reach. A
+    // cross-sub permission gap is surfaced as an honest, named remediation
+    // (409) instead of an opaque ARM 403 on the pool PUT.
+    const target = await prepareItemCreate(workspaceId, 'databricks-sql-warehouse');
+    if (isDeployTargetGate(target)) {
+      return NextResponse.json(
+        { ok: false, code: 'rbac_gate', error: target.reason, missingGrant: target.missingGrant, fixScript: target.fixScript, redeploy: true },
+        { status: 409 },
+      );
+    }
     const location = process.env.LOOM_LOCATION || process.env.LOOM_ASA_LOCATION || 'eastus';
     try {
-      const pool = await createDedicatedSqlPool(name, govSku, location);
+      const pool = await createDedicatedSqlPool(name, govSku, location, undefined, {
+        subscriptionId: target.subscriptionId,
+        resourceGroup: target.resourceGroup,
+      });
       // Synapse dedicated pools are addressed by name — that IS the warehouse id.
-      return NextResponse.json({ ok: true, id: pool?.name || name, name });
+      return NextResponse.json({ ok: true, id: pool?.name || name, name, deployTier: target.tier, domainId: target.domainId });
     } catch (e: any) {
       return NextResponse.json({ ok: false, error: e?.message || String(e) }, { status: 502 });
     }

@@ -40,13 +40,28 @@ import { fetchMetrics, type MetricResult } from '@/lib/azure/monitor-client';
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
 
-/** Construct the ARM resource id for the shared ADX cluster from env. */
+/**
+ * Construct the ARM resource id for the eventhouse's ADX cluster.
+ *
+ * The Loom ADX cluster is a SINGLE tenant-shared cluster
+ * (`adx-csa-loom-shared` in `rg-csa-loom-admin-*`), NOT a per-domain resource —
+ * so a capacity / throttle read is an admin-plane (DMLZ) operation against that
+ * one cluster, resolved from the Kusto env (`LOOM_KUSTO_SUB ||
+ * LOOM_SUBSCRIPTION_ID` + `LOOM_KUSTO_RG` + `LOOM_KUSTO_CLUSTER_NAME`) — the
+ * SAME source of truth as `lib/azure/kusto-arm-client.ts → readKustoArmConfig`.
+ *
+ * (Domain-DLZ subscription routing — `resolveDeployTarget` — applies to an
+ * eventhouse's DATA backends, e.g. the ADX databases / Event Hub connections /
+ * storage it ingests from, not to the shared control-plane cluster. Overriding
+ * only the subscription here would point at a Microsoft.Kusto/clusters resource
+ * that does not exist in the domain sub and 404, so we do not do it.)
+ */
 function kustoClusterArmId(): { id: string | null; missing: string[] } {
-  const sub = process.env.LOOM_SUBSCRIPTION_ID;
+  const sub = process.env.LOOM_KUSTO_SUB || process.env.LOOM_SUBSCRIPTION_ID || '';
   const rg = process.env.LOOM_KUSTO_RG || 'rg-csa-loom-admin-eastus2';
   const cluster = process.env.LOOM_KUSTO_CLUSTER_NAME || 'adx-csa-loom-shared';
   const missing: string[] = [];
-  if (!sub) missing.push('LOOM_SUBSCRIPTION_ID');
+  if (!sub) missing.push('LOOM_KUSTO_SUB (or LOOM_SUBSCRIPTION_ID)');
   if (!sub) return { id: null, missing };
   return {
     id: `/subscriptions/${sub}/resourceGroups/${rg}/providers/Microsoft.Kusto/clusters/${cluster}`,
@@ -54,7 +69,7 @@ function kustoClusterArmId(): { id: string | null; missing: string[] } {
   };
 }
 
-export async function GET() {
+export async function GET(_req: NextRequest) {
   const session = getSession();
   if (!session) return NextResponse.json({ ok: false, error: 'unauthenticated' }, { status: 401 });
 

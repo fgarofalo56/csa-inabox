@@ -87,6 +87,24 @@ export interface LoomDomain {
   unityCatalogName?: string;
   unityWorkspaceHost?: string;
   unitySchemas?: string[];
+  /**
+   * Domain-aware resource routing (item-create topology). The Azure
+   * subscription(s) this domain's landing zone (DLZ) lives in;
+   * `subscriptionIds[0]` is the PRIMARY sub every domain-scoped item-create
+   * (lakehouse/warehouse/eventhouse/notebook/mirroring/…) targets via
+   * `lib/azure/topology.ts → resolveDeployTarget`. Empty / absent = single-sub
+   * deployment, which falls back to LOOM_SUBSCRIPTION_ID + LOOM_DLZ_RG (no
+   * behaviour change). Structured registry field — NOT a freeform env blob
+   * (loom-no-freeform-config); managed via the domains admin UI / createDomain.
+   */
+  subscriptionIds?: string[];
+  /**
+   * Explicit DLZ resource-group override for this domain. When absent, the
+   * resolver derives `rg-csa-loom-dlz-{name}-{location}` — the SAME contract
+   * string main.bicep + bootstrap-dlz-rgs.sh use. Set only when the operator
+   * provisioned the DLZ RG under a non-standard name.
+   */
+  dlzResourceGroup?: string;
   createdAt: string;
   createdBy: string;
   updatedAt?: string;
@@ -114,6 +132,7 @@ export interface DomainStore {
         LoomDomain,
         | 'name' | 'description' | 'color' | 'imageUrl' | 'imageKey' | 'owners'
         | 'contributors' | 'admins' | 'defaultDomainUsers' | 'delegatedSettings'
+        | 'subscriptionIds' | 'dlzResourceGroup'
       >
     >,
     who: string,

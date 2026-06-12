@@ -66,12 +66,26 @@ export class KustoNotConfiguredError extends Error {
   }
 }
 
+/**
+ * Resolve the ADX cluster ARM coordinates.
+ *
+ * The Loom ADX cluster is a SINGLE tenant-shared cluster
+ * (`adx-csa-loom-shared` in `rg-csa-loom-admin-*`) — it is NOT provisioned
+ * per-domain. `lib/azure/topology.ts` therefore classifies eventhouse / KQL
+ * capacity + scale operations as admin-plane (DMLZ) reads against that shared
+ * cluster, NOT domain-DLZ creates: a domain-subscription override would point
+ * at a Microsoft.Kusto/clusters resource that does not exist in the domain sub
+ * and 404. So this reader has a single source of truth — the Kusto env
+ * (`LOOM_KUSTO_SUB || LOOM_SUBSCRIPTION_ID` + `LOOM_KUSTO_RG || LOOM_DLZ_RG`) —
+ * which is exactly the single-sub behaviour every existing deployment has today.
+ * (Domain routing applies to the eventhouse's DATA backends — the ADX databases,
+ * Event Hub data connections, and storage it ingests from — not to the shared
+ * control-plane cluster itself.)
+ */
 export function readKustoArmConfig(): KustoClusterArmConfig {
   const missing: string[] = [];
-  const subscriptionId =
-    process.env.LOOM_KUSTO_SUB || process.env.LOOM_SUBSCRIPTION_ID || '';
-  const resourceGroup =
-    process.env.LOOM_KUSTO_RG || process.env.LOOM_DLZ_RG || '';
+  const subscriptionId = process.env.LOOM_KUSTO_SUB || process.env.LOOM_SUBSCRIPTION_ID || '';
+  const resourceGroup = process.env.LOOM_KUSTO_RG || process.env.LOOM_DLZ_RG || '';
   const clusterName = process.env.LOOM_KUSTO_CLUSTER_NAME || '';
   if (!subscriptionId) missing.push('LOOM_KUSTO_SUB (or LOOM_SUBSCRIPTION_ID)');
   if (!resourceGroup) missing.push('LOOM_KUSTO_RG (or LOOM_DLZ_RG)');
