@@ -40,6 +40,12 @@ See the full [capture + maintenance process](../CAPTURE-PROCESS.md).
 
 The expected set is parsed from source (no hand-maintained list):
 
-- **Items** — every `reg(...)` entry in `apps/fiab-console/lib/editors/registry.ts` (103).
+- **Items** — every `reg(...)` entry in `apps/fiab-console/lib/editors/registry.ts` (109).
 - **Features** — every page in `NAV_PAGES` (`apps/fiab-console/e2e/_lib/uat.ts`) (17).
-- **Apps** — every curated app from `GET /api/apps-catalog` (resolved at capture time).
+- **Apps** — every curated app from `GET /api/apps-catalog` (resolved at capture
+  time); audited offline against `scripts/csa-loom/fixtures/apps-catalog.json`
+  (generated from `CATALOG_META ∩ listBundleIds()`, 29 apps).
+
+The full expected set is therefore **155** surfaces (109 items + 17 features +
+29 apps). The CI `tutorial-coverage` job reports progress against this set on
+every console PR.

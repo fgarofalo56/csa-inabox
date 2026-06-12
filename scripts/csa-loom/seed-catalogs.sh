@@ -7,6 +7,19 @@
 # Run after `deploy-v2-synapse.sh` (or any time you want to refresh the
 # seed content). Authenticated via `az login` (the running user must have
 # Cosmos DB Built-in Data Contributor on the account).
+#
+# NOTE (source of truth): this script only pre-seeds a SUBSET of the curated
+# apps into Cosmos for convenience. The authoritative app catalog is the
+# registry-derived backstop in app/api/apps-catalog/route.ts, which upserts a
+# tenant catalog doc for EVERY bundle in
+# apps/fiab-console/lib/apps/content-bundles/index.ts (`listBundleIds()`) that
+# has metadata in catalog-meta.ts (`CATALOG_META`) — currently 29 apps — on the
+# first GET /api/apps-catalog, with no dependency on this (network-locked)
+# Cosmos seeding ever running. The visual-tutorial apps-coverage fixture is
+# generated from that same `CATALOG_META ∩ listBundleIds()` set
+# (scripts/csa-loom/gen-apps-catalog-fixture.mjs), so the apps coverage gate and
+# the live catalog never drift. Do not treat the hardcoded JSON below as the
+# complete set.
 
 set -euo pipefail
 export MSYS_NO_PATHCONV=1
