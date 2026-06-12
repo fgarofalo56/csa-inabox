@@ -26,7 +26,7 @@ flow, replacing manual "register a running endpoint" with "deploy + register".
 
 | # | Capability | Status | Notes |
 |---|------------|--------|-------|
-| 1 | Browse library grid (cards, category glyph, Preview badge, Key-Vault badge) | built ✅ | `McpCatalogBrowser` over `MCP_CATALOG` (`lib/mcp/catalog.ts`) |
+| 1 | Browse deployable library (25 vetted servers, category, Egress/Preview/Recommended badges) | built ✅ | `McpCatalogPanel` over `MCP_CATALOG` (`lib/azure/mcp-catalog.ts`, 25 entries) + the card-grid `McpCatalogBrowser` (`lib/mcp/catalog.ts`) |
 | 2 | Per-server typed config wizard (Input / password / Dropdown / Switch — no JSON) | built ✅ | `DeployWizard` renders one Fluent control per `configSchema` field |
 | 3 | Per-field secret → Key Vault; non-secret → Container App env | built ✅ | `secret:true` fields → `putKeyVaultSecret` + ACA `secretRef`; values never in Cosmos |
 | 4 | One-click deploy (real ARM PUT, internal Container App, preconfigured) | built ✅ | `createMcpContainerApp` (ARM `Microsoft.App/containerApps`) |
@@ -46,10 +46,12 @@ renders the full wizard and names the exact remediation.
   - validate: `validateConfigValues(entry, values)` (typed + required)
   - secrets: KV REST `PUT /secrets/<name>?api-version=7.4` via `putKeyVaultSecret`
     (Console UAMI holds **Key Vault Secrets Officer**)
-  - create: ARM `PUT Microsoft.App/containerApps/{name}?api-version=2024-03-01`
-    via `createMcpContainerApp` (Console UAMI **Contributor** + **Managed Identity
-    Operator**; MCP UAMI assigned to the app holds **Key Vault Secrets User** to
-    resolve secretRefs)
+  - create: ARM `PUT Microsoft.App/containerApps/{name}?api-version=2025-02-02-preview`
+    via `createMcpContainerApp` / `deployMcpContainerApp` (Console UAMI
+    **Contributor** + **Managed Identity Operator**; MCP UAMI assigned to the app
+    holds **Key Vault Secrets User** to resolve secretRefs). The Container Apps
+    api-version is pinned consistently across the two runtime clients,
+    `mcp-storage.bicep`, and `mcp-catalog-app.bicep` (bicep+bootstrap sync).
   - register: `saveMcpServer` → Cosmos `mcp-servers`
   - audit: `auditLogContainer`
 - Tool discovery: `copilot-orchestrator` → `buildMcpShim` → `listMcpServers` →
@@ -62,7 +64,23 @@ renders the full wizard and names the exact remediation.
 - GCC-High / IL5 (`containerPlatform == aks`): `caeId` output is `''` →
   `LOOM_ACA_ENV_ID` empty → deploy returns the honest gate (no CAE; use AKS/Helm).
   `mcp-client.resolveAuthHeader` uses `kvSuffix()`/`kvScope()` so per-field secret
-  resolution works against `*.vault.usgovcloudapi.net`.
+  resolution works against `*.vault.usgovcloudapi.net`. `serversForCloud('il5')`
+  (`lib/azure/mcp-catalog.ts`) restricts the deployable list to air-gap-safe +
+  Azure-native servers (Azure MCP, Postgres, Kubernetes, Redis, dbhub) so IL5
+  admins never see ungated SaaS tiles.
+
+## Deployable 25-server library
+
+`lib/azure/mcp-catalog.ts` `MCP_CATALOG` is the curated, vetted set of **exactly
+25** deployable MCP servers (integrity-tested in `__tests__/mcp-catalog.test.ts`).
+Each entry is a real, pullable HTTP/SSE image (`mcp/*` Docker MCP catalog,
+`mcr.microsoft.com/*`, or `ghcr.io/*`), permissively licensed (Apache-2.0 / MIT),
+and carries: category, egress profile, `govSafe`/`airGapSafe`/`defaultRecommended`
+flags, `externalHosts`, optional `secretEnv` (→ Key Vault secretRef), `needsStorage`
+(→ Azure Files mount at `/data`), and a **dedicated `healthPath`** (`/health` or
+`/healthz`) wired as Container Apps liveness/readiness probes — never the MCP
+JSON-RPC endpoint, per Learn. Community-HTTP-transport entries are tagged
+`preview: true`.
 
 ## No-Fabric / No-vaporware
 
