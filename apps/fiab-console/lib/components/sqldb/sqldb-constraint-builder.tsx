@@ -57,6 +57,8 @@ const useStyles = makeStyles({
   dirDropdown: { minWidth: 124 },
   actionsRow: { display: 'flex', gap: tokens.spacingHorizontalM },
   flex1: { flex: 1 },
+  matchOk: { color: tokens.colorPaletteGreenForeground1 },
+  matchWarn: { color: tokens.colorPaletteRedForeground1 },
 });
 
 /** Compact SQL type rendering for the column pickers (e.g. nvarchar(50)). */
@@ -304,7 +306,8 @@ export function SqlConstraintBuilder(props: SqlConstraintBuilderProps) {
                   <div className={s.colList}>
                     {columns.length === 0 && <Caption1 className={s.hint}>No columns on this table.</Caption1>}
                     {columns.map((c) => {
-                      const sel = keyCols.find((k) => k.columnId === c.columnId);
+                      const selIdx = keyCols.findIndex((k) => k.columnId === c.columnId);
+                      const sel = selIdx >= 0 ? keyCols[selIdx] : undefined;
                       // A PK column must be NOT NULL; nullable columns are unselectable on the PK tab.
                       const pkBlocked = tab === 'PK' && c.isNullable;
                       return (
@@ -319,6 +322,7 @@ export function SqlConstraintBuilder(props: SqlConstraintBuilderProps) {
                           <span className={s.colName}>{c.name}</span>
                           <span className={s.colType}>{shortType(c)}</span>
                           {pkBlocked && <Badge size="small" appearance="outline" color="warning">nullable</Badge>}
+                          {sel && <Badge size="small" appearance="tint" color="brand">{selIdx + 1}</Badge>}
                           {sel && (
                             <Dropdown
                               size="small"
@@ -416,6 +420,13 @@ export function SqlConstraintBuilder(props: SqlConstraintBuilderProps) {
                           })}
                         </div>
                       )}
+                    {refColumns !== 'loading' && fkCols.length > 0 && (
+                      <Caption1 className={refCols.length === fkCols.length ? s.matchOk : s.matchWarn}>
+                        {refCols.length === fkCols.length
+                          ? `Matched ${refCols.length} column${refCols.length === 1 ? '' : 's'}.`
+                          : `Select ${fkCols.length} referenced column${fkCols.length === 1 ? '' : 's'} to match (${refCols.length} of ${fkCols.length} selected).`}
+                      </Caption1>
+                    )}
                   </Field>
                 )}
                 {metadataOnly ? (
