@@ -443,6 +443,54 @@ az synapse role assignment create \
   dependsOn: [ sparkPool ]
 }
 
+// Grant the Loom Console UAMI the Synapse data-plane role "Synapse Artifact
+// Publisher" scoped to the WHOLE workspace so it can create / edit / delete
+// workspace artifacts — specifically KQL scripts
+// (Microsoft.Synapse/workspaces/kqlScripts/write,delete) and Spark job
+// definitions (.../sparkJobDefinitions/write,delete), which back the workspace
+// tree's KQL + SJD create/open/delete affordances. This is a Synapse RBAC role
+// (data plane), NOT an ARM IAM role — it must be applied via
+// `az synapse role assignment create`, not Microsoft.Authorization/roleAssignments.
+//
+// Without this grant the artifact CRUD path (synapse-artifacts-client upsert /
+// delete, run from the console UAMI) 403s even though the UI renders — the
+// SQL-AAD-admin assignment (workspaces/administrators) and ARM Contributor do
+// NOT confer Synapse-RBAC artifact publish rights. Synapse Administrator would
+// also work but is broader than needed; Artifact Publisher is the least-privilege
+// role for KQL/SJD authoring (Learn: synapse-workspace-synapse-rbac-roles).
+//
+// Requires synapseRoleAssignmentUamiId to already hold Synapse Administrator
+// (same prerequisite as the role scripts above).
+resource consoleArtifactPublisherRoleScript 'Microsoft.Resources/deploymentScripts@2023-08-01' = if (!empty(consolePrincipalId) && !empty(synapseRoleAssignmentUamiId) && !skipRoleGrants) {
+  name: 'assign-console-artifact-publisher-${domainName}'
+  location: location
+  tags: complianceTags
+  kind: 'AzureCLI'
+  identity: {
+    type: 'UserAssigned'
+    userAssignedIdentities: {
+      '${synapseRoleAssignmentUamiId}': {}
+    }
+  }
+  properties: {
+    azCliVersion: '2.64.0'
+    retentionInterval: 'PT1H'
+    timeout: 'PT15M'
+    arguments: '${synapseWs.name} ${consolePrincipalId}'
+    scriptContent: '''
+WORKSPACE=$1
+PRINCIPAL=$2
+echo "Assigning 'Synapse Artifact Publisher' to SP $PRINCIPAL on $WORKSPACE (workspace scope)..."
+az synapse role assignment create \
+  --workspace-name "$WORKSPACE" \
+  --role "Synapse Artifact Publisher" \
+  --assignee-object-id "$PRINCIPAL" \
+  --assignee-principal-type ServicePrincipal \
+  || echo "  (already assigned or insufficient permissions — verify manually)"
+'''
+  }
+}
+
 // =====================================================================
 // Server-level SQL audit (sends events to LAW)
 // =====================================================================
@@ -612,3 +660,4 @@ output dedicatedPoolId string = deployDedicatedPool ? dedicatedPool.id : ''
 output sparkPoolName string = deploySparkPool ? sparkPool.name : ''
 output sparkPoolId string = deploySparkPool ? sparkPool.id : ''
 output consoleSparkSubmitRoleAssigned bool = !empty(consolePrincipalId) && deploySparkPool && !empty(synapseRoleAssignmentUamiId) && !skipRoleGrants
+output consoleArtifactPublisherRoleAssigned bool = !empty(consolePrincipalId) && !empty(synapseRoleAssignmentUamiId) && !skipRoleGrants
