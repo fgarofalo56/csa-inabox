@@ -1708,12 +1708,15 @@ module aiDefense 'ai-defense.bicep' = {
 
 // MCP catalog Azure Files share + Container Apps env storage are provisioned by
 // the inline `mcpStorage` storage account + `mcpEnvStorage` managedEnvironments/
-// storages resources above (gated on mcpFilesActive). The Container Apps path
-// mounts that share at /data; the AKS boundaries deploy MCP workloads via the
-// GitOps manifest path. (A prior refactor briefly added a parallel
-// `module mcpStorage 'mcp-storage.bicep'` here, which collided with the inline
-// `resource mcpStorage` identifier and its non-existent `.outputs` — removed so
-// main.bicep builds clean and every boundary can deploy.)
+// storages resources above (gated on mcpFilesActive). That inline path is the
+// single source of truth — it carries the persistence toggle
+// (mcpPersistenceEnabled), network ACLs, largeFileSharesState, and is the
+// predecessor `appDeployments` already depends on (dependsOn: [mcpEnvStorage]).
+// The Container Apps path mounts that share at /data; the AKS boundaries deploy
+// MCP workloads via the GitOps manifest path. (A prior refactor briefly added a
+// parallel `module mcpStorage 'mcp-storage.bicep'` here, which collided with the
+// inline `resource mcpStorage` identifier and its non-existent `.outputs` —
+// removed so main.bicep builds clean and every boundary can deploy.)
 
 module appDeployments 'app-deployments.bicep' = if (containerPlatform == 'containerApps' && deployAppsEnabled) {
   name: 'app-deployments'
@@ -1766,10 +1769,10 @@ module appDeployments 'app-deployments.bicep' = if (containerPlatform == 'contai
             { name: 'LOOM_ACR_LOGIN_SERVER', value: registry.outputs.acrLoginServer }
             { name: 'LOOM_MCP_UAMI_ID', value: identity.outputs.uamiMcpId }
             { name: 'LOOM_MCP_UAMI_CLIENT_ID', value: identity.outputs.uamiMcpClientId }
-            // Azure Files env-storage name for catalog MCP servers that mount
-            // /data. Sourced from the inline mcpStorage/mcpEnvStorage path
-            // (LOOM_MCP_STORAGE_NAME is also set below from the same vars).
-            { name: 'LOOM_MCP_FILE_SHARE', value: mcpFilesActive ? mcpShareName : '' }
+            // Azure Files env-storage name (LOOM_MCP_STORAGE_NAME) and share name
+            // (LOOM_MCP_FILES_SHARE) for catalog MCP servers that mount /data are
+            // wired from the inline mcpFilesActive infra further down this same
+            // env[] block (single source of truth) — not duplicated here.
             // Optional ACR mirror prefix for catalog MCP images in air-gapped
             // boundaries (empty → upstream Docker MCP catalog / mcr.microsoft.com).
             { name: 'LOOM_MCP_CATALOG_REGISTRY', value: loomMcpCatalogRegistry }
