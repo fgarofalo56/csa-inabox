@@ -1064,13 +1064,31 @@ export function OntologyEditor({ item, id }: { item: FabricItemType; id: string 
   }, [id, bindSourceKind, bindSourceId, bindEntityTypes, lakehouses, warehouses]);
 
   const removeBinding = useCallback(async (b: OntologyEntityBinding) => {
-    // Re-bind with an empty set is not allowed; instead drop locally + persist
-    // the remaining list via a fresh save of the filtered bindings. The bind
-    // POST replaces by sourceItemId, so we just re-POST every other binding —
-    // simpler: send the remaining list directly through the ontology PATCH path
-    // is not exposed here, so we drop client-side and let the next bind reconcile.
-    setEntityBindings((prev) => prev.filter((x) => x.sourceItemId !== b.sourceItemId));
-  }, []);
+    // Durably remove the binding via the bind route's DELETE handler, which
+    // strips it from state.entityBindings and reconciles the bound* pointers.
+    // Optimistically drop it locally, then reconcile from the server's
+    // authoritative list (or roll back on failure).
+    const prev = entityBindings;
+    setEntityBindings((cur) => cur.filter((x) => x.sourceItemId !== b.sourceItemId));
+    setBindMsg(null);
+    try {
+      const r = await fetch(
+        `/api/items/ontology/${encodeURIComponent(id)}/bind?sourceItemId=${encodeURIComponent(b.sourceItemId)}`,
+        { method: 'DELETE' },
+      );
+      const j = await r.json().catch(() => ({}));
+      if (!j?.ok) {
+        setEntityBindings(prev); // roll back
+        setBindMsg({ intent: 'error', text: j?.error || `HTTP ${r.status}` });
+        return;
+      }
+      setEntityBindings(Array.isArray(j.entityBindings) ? j.entityBindings : []);
+      setBindMsg({ intent: 'success', text: `Removed binding ${b.sourceDisplayName}.` });
+    } catch (e: any) {
+      setEntityBindings(prev); // roll back
+      setBindMsg({ intent: 'error', text: e?.message || String(e) });
+    }
+  }, [id, entityBindings]);
 
   const createTrigger = useCallback(async () => {
     if (!actEntityType) { setActivatorMsg({ intent: 'error', text: 'Pick an entity type.' }); return; }
