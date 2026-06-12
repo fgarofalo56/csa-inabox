@@ -22,7 +22,7 @@ import {
   MessageBar, MessageBarBody, MessageBarTitle,
   makeStyles, tokens, mergeClasses,
 } from '@fluentui/react-components';
-import { ArrowDownload16Regular, ArrowSync16Regular } from '@fluentui/react-icons';
+import { ArrowDownload16Regular, ArrowSync16Regular, ArrowUp12Regular, ArrowDown12Regular } from '@fluentui/react-icons';
 
 export type CostTimeframe = 'MonthToDate' | 'BillingMonthToDate' | 'TheLastMonth' | 'Last7Days' | 'Last30Days';
 
@@ -73,6 +73,10 @@ const useStyles = makeStyles({
     display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalXXS,
   },
   statVal: { fontSize: '24px', fontWeight: tokens.fontWeightSemibold, color: tokens.colorBrandForeground1 },
+  // Cost trend: spend going UP is a caution (red), spend going DOWN is favorable (green).
+  statValUp: { color: tokens.colorPaletteRedForeground1 },
+  statValDown: { color: tokens.colorPaletteGreenForeground1 },
+  trendVal: { display: 'inline-flex', alignItems: 'center', gap: tokens.spacingHorizontalXXS },
   statLabel: { fontSize: '11px', color: tokens.colorNeutralForeground3, textTransform: 'uppercase', letterSpacing: '0.04em' },
   twoCol: { display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(320px, 1fr))', gap: tokens.spacingHorizontalL },
   panel: { display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalS },
@@ -87,6 +91,7 @@ const useStyles = makeStyles({
   muted: { color: tokens.colorNeutralForeground3 },
   budgetRow: { display: 'flex', flexDirection: 'column', gap: '2px', paddingTop: tokens.spacingVerticalXS, paddingBottom: tokens.spacingVerticalXS },
   budgetHead: { display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: tokens.spacingHorizontalS },
+  budgetName: { display: 'inline-flex', alignItems: 'center', gap: tokens.spacingHorizontalXS, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' },
 });
 
 function fmtMoney(n: number, currency: string): string {
@@ -211,7 +216,10 @@ export function CostChargebackSection({ domain }: Props) {
             </div>
             {data.trendPct != null && (
               <div className={s.statCard}>
-                <div className={s.statVal}>{data.trendPct > 0 ? '+' : ''}{data.trendPct}%</div>
+                <div className={mergeClasses(s.statVal, s.trendVal, data.trendPct > 0 ? s.statValUp : data.trendPct < 0 ? s.statValDown : undefined)}>
+                  {data.trendPct > 0 ? <ArrowUp12Regular /> : data.trendPct < 0 ? <ArrowDown12Regular /> : null}
+                  {data.trendPct > 0 ? '+' : ''}{data.trendPct}%
+                </div>
                 <div className={s.statLabel}>vs previous period</div>
               </div>
             )}
@@ -264,18 +272,25 @@ export function CostChargebackSection({ domain }: Props) {
                   : 'No Consumption budgets found. Per-domain budgets deploy via budgets.bicep when budget contacts are supplied at dlz-attach.'}
               </Caption1>
             ) : budgets.map((b) => {
-              const fill = b.percentUsed >= 100 ? s.barFillOver : b.percentUsed >= 80 ? s.barFillWarn : s.barFill;
+              const over = b.percentUsed >= 100;
+              const near = !over && b.percentUsed >= 80;
+              const fill = over ? s.barFillOver : near ? s.barFillWarn : s.barFill;
               return (
                 <div key={`${b.subscription}-${b.name}`} className={s.budgetRow}>
                   <div className={s.budgetHead}>
-                    <span>{b.name} <Badge appearance="outline" size="small">{b.timeGrain}</Badge></span>
+                    <span className={s.budgetName}>
+                      {b.name}
+                      <Badge appearance="outline" size="small">{b.timeGrain}</Badge>
+                      {over && <Badge appearance="tint" color="danger" size="small">Over budget</Badge>}
+                      {near && <Badge appearance="tint" color="warning" size="small">Near limit</Badge>}
+                    </span>
                     <span className={s.barCount}>
                       {fmtMoney(b.currentSpend, data.currency)} / {fmtMoney(b.amount, data.currency)} · {b.percentUsed}%
                     </span>
                   </div>
                   <div className={s.barTrack}>
                     {/* dynamic: fill width scales with budget burn % */}
-                    <div className={mergeClasses(fill)} style={{ width: `${Math.min(100, b.percentUsed)}%` }} />
+                    <div className={fill} style={{ width: `${Math.min(100, b.percentUsed)}%` }} />
                   </div>
                 </div>
               );
