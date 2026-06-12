@@ -24,6 +24,7 @@ import {
   Dialog, DialogTrigger, DialogSurface, DialogBody, DialogTitle, DialogContent, DialogActions,
   Table, TableHeader, TableRow, TableHeaderCell, TableBody, TableCell,
   MessageBar, MessageBarBody, MessageBarTitle,
+  SearchBox,
   makeStyles, tokens,
 } from '@fluentui/react-components';
 import {
@@ -54,6 +55,15 @@ const useStyles = makeStyles({
   metaGrid: { display: 'grid', gridTemplateColumns: 'auto 1fr', gap: '6px 16px', alignItems: 'baseline' },
   metaKey: { color: tokens.colorNeutralForeground3, fontSize: 12 },
   tableWrap: { overflow: 'auto', maxHeight: 480, border: `1px solid ${tokens.colorNeutralStroke2}`, borderRadius: 4 },
+  // Keep the header visible while scrolling long metadata lists (up to 500 rows).
+  stickyHead: {
+    position: 'sticky', top: 0, zIndex: 1,
+    backgroundColor: tokens.colorNeutralBackground1,
+    boxShadow: `inset 0 -1px 0 ${tokens.colorNeutralStroke2}`,
+  },
+  // Filter row above a table — search box + live result count, right-aligned count.
+  filterRow: { display: 'flex', alignItems: 'center', gap: 12, flexWrap: 'wrap' },
+  filterCount: { color: tokens.colorNeutralForeground3, marginLeft: 'auto' },
   cell: { fontSize: 12, whiteSpace: 'nowrap', maxWidth: 360, overflow: 'hidden', textOverflow: 'ellipsis' },
   cellClickable: {
     fontSize: 12, whiteSpace: 'nowrap', maxWidth: 360, overflow: 'hidden', textOverflow: 'ellipsis',
@@ -119,6 +129,35 @@ function ErrorBar({ msg, hint }: { msg: string; hint?: string }) {
 function EmptyText({ children }: { children: React.ReactNode }) {
   const s = useStyles();
   return <div className={s.empty}>{children}</div>;
+}
+
+/**
+ * Quick-filter row over a list table — mirrors the search box every Power
+ * Platform maker list (tables, apps, flows, models) exposes. Filtering is
+ * client-side over the already-fetched rows (no extra backend call); the live
+ * count keeps the operator oriented when a query narrows a long list.
+ */
+function TableFilter({
+  value, onChange, placeholder, shown, total, unit,
+}: {
+  value: string; onChange: (v: string) => void; placeholder: string;
+  shown: number; total: number; unit: string;
+}) {
+  const s = useStyles();
+  return (
+    <div className={s.filterRow}>
+      <SearchBox
+        value={value}
+        onChange={(_, d) => onChange(d.value)}
+        placeholder={placeholder}
+        aria-label={placeholder}
+        style={{ minWidth: 260 }}
+      />
+      <Caption1 className={s.filterCount}>
+        {value.trim() ? `${shown} of ${total} ${unit}` : `${total} ${unit}`}
+      </Caption1>
+    </div>
+  );
 }
 
 interface FetchState<T> { loading: boolean; data: T | null; error?: string; hint?: string; code?: string; }
@@ -743,10 +782,30 @@ export function DataverseTableEditor({ item, id }: { item: FabricItemType; id: s
     [env.selected, selectedTable, tab],
   );
 
+  const [tblFilter, setTblFilter] = useState('');
+  const [colFilter, setColFilter] = useState('');
   const tables = tablesState.data?.tables || [];
   const filtered = useMemo(() => {
     return tables.filter((t) => t.IsCustomEntity || ['account', 'contact', 'systemuser', 'team', 'msdyn_aimodel', 'mspp_website'].includes(t.LogicalName)).slice(0, 500);
   }, [tables]);
+  const tblQuery = tblFilter.trim().toLowerCase();
+  const visibleTables = useMemo(() => {
+    if (!tblQuery) return filtered;
+    return filtered.filter((t) =>
+      t.LogicalName.toLowerCase().includes(tblQuery)
+      || (t.DisplayName?.UserLocalizedLabel?.Label || '').toLowerCase().includes(tblQuery)
+      || (t.EntitySetName || '').toLowerCase().includes(tblQuery));
+  }, [filtered, tblQuery]);
+  const colQuery = colFilter.trim().toLowerCase();
+  const visibleColumns = useMemo(() => {
+    const attrs = schemaState.data?.attributes || [];
+    const capped = attrs.slice(0, 500);
+    if (!colQuery) return capped;
+    return capped.filter((a) =>
+      a.LogicalName.toLowerCase().includes(colQuery)
+      || (a.DisplayName?.UserLocalizedLabel?.Label || '').toLowerCase().includes(colQuery)
+      || (a.AttributeType || '').toLowerCase().includes(colQuery));
+  }, [schemaState.data, colQuery]);
 
   const reloadActive = useCallback(() => {
     reloadTables();
@@ -842,17 +901,27 @@ export function DataverseTableEditor({ item, id }: { item: FabricItemType; id: s
         )}
         {!selectedTable && filtered.length > 0 && (
           <>
-            <Caption1>{filtered.length} table(s) — custom + key system entities</Caption1>
+            <TableFilter
+              value={tblFilter}
+              onChange={setTblFilter}
+              placeholder="Filter tables by name or entity set…"
+              shown={visibleTables.length}
+              total={filtered.length}
+              unit="table(s) — custom + key system entities"
+            />
+            {visibleTables.length === 0
+              ? <EmptyText>No tables match &ldquo;{tblFilter}&rdquo;.</EmptyText>
+              : (
             <div className={s.tableWrap}>
               <Table aria-label="Tables" size="small">
-                <TableHeader><TableRow>
+                <TableHeader className={s.stickyHead}><TableRow>
                   <TableHeaderCell>Logical name</TableHeaderCell>
                   <TableHeaderCell>Display name</TableHeaderCell>
                   <TableHeaderCell>Entity set</TableHeaderCell>
                   <TableHeaderCell>Custom?</TableHeaderCell>
                 </TableRow></TableHeader>
                 <TableBody>
-                  {filtered.map((t) => (
+                  {visibleTables.map((t) => (
                     <TableRow key={t.MetadataId}>
                       <TableCell className={s.cellClickable} onClick={() => { setSelectedTable(t.LogicalName); setTab('columns'); }}>
                         <strong>{t.LogicalName}</strong>
@@ -865,6 +934,7 @@ export function DataverseTableEditor({ item, id }: { item: FabricItemType; id: s
                 </TableBody>
               </Table>
             </div>
+              )}
           </>
         )}
         {selectedTable && (
@@ -897,10 +967,20 @@ export function DataverseTableEditor({ item, id }: { item: FabricItemType; id: s
                 {schemaState.error && <ErrorBar msg={schemaState.error} hint={schemaState.hint} />}
                 {schemaState.data && (
                   <>
-                    <Caption1>{schemaState.data.attributes.length} column(s)</Caption1>
+                    <TableFilter
+                      value={colFilter}
+                      onChange={setColFilter}
+                      placeholder="Filter columns by name or type…"
+                      shown={visibleColumns.length}
+                      total={Math.min(schemaState.data.attributes.length, 500)}
+                      unit="column(s)"
+                    />
+                    {visibleColumns.length === 0
+                      ? <EmptyText>No columns match &ldquo;{colFilter}&rdquo;.</EmptyText>
+                      : (
                     <div className={s.tableWrap}>
                       <Table aria-label="Columns" size="small">
-                        <TableHeader><TableRow>
+                        <TableHeader className={s.stickyHead}><TableRow>
                           <TableHeaderCell>Logical name</TableHeaderCell>
                           <TableHeaderCell>Display name</TableHeaderCell>
                           <TableHeaderCell>Data type</TableHeaderCell>
@@ -908,7 +988,7 @@ export function DataverseTableEditor({ item, id }: { item: FabricItemType; id: s
                           <TableHeaderCell>Custom?</TableHeaderCell>
                         </TableRow></TableHeader>
                         <TableBody>
-                          {schemaState.data.attributes.slice(0, 500).map((a) => (
+                          {visibleColumns.map((a) => (
                             <TableRow key={a.MetadataId}>
                               <TableCell className={s.cell}>
                                 <strong>{a.LogicalName}</strong>
@@ -924,6 +1004,7 @@ export function DataverseTableEditor({ item, id }: { item: FabricItemType; id: s
                         </TableBody>
                       </Table>
                     </div>
+                      )}
                   </>
                 )}
               </>
@@ -938,7 +1019,7 @@ export function DataverseTableEditor({ item, id }: { item: FabricItemType; id: s
                   : (
                     <div className={s.tableWrap}>
                       <Table aria-label="Keys" size="small">
-                        <TableHeader><TableRow>
+                        <TableHeader className={s.stickyHead}><TableRow>
                           <TableHeaderCell>Display name</TableHeaderCell>
                           <TableHeaderCell>Logical name</TableHeaderCell>
                           <TableHeaderCell>Key columns</TableHeaderCell>
@@ -975,7 +1056,7 @@ export function DataverseTableEditor({ item, id }: { item: FabricItemType; id: s
                       <Caption1>{relState.data.relationships.length} relationship(s)</Caption1>
                       <div className={s.tableWrap}>
                         <Table aria-label="Relationships" size="small">
-                          <TableHeader><TableRow>
+                          <TableHeader className={s.stickyHead}><TableRow>
                             <TableHeaderCell>Type</TableHeaderCell>
                             <TableHeaderCell>Schema name</TableHeaderCell>
                             <TableHeaderCell>Referencing</TableHeaderCell>
@@ -1017,7 +1098,7 @@ export function DataverseTableEditor({ item, id }: { item: FabricItemType; id: s
                       <Caption1>{viewState.data.views.length} view(s)</Caption1>
                       <div className={s.tableWrap}>
                         <Table aria-label="Views" size="small">
-                          <TableHeader><TableRow>
+                          <TableHeader className={s.stickyHead}><TableRow>
                             <TableHeaderCell>Name</TableHeaderCell>
                             <TableHeaderCell>Scope</TableHeaderCell>
                             <TableHeaderCell>Default?</TableHeaderCell>
@@ -1053,7 +1134,7 @@ export function DataverseTableEditor({ item, id }: { item: FabricItemType; id: s
                   : (
                     <div className={s.tableWrap}>
                       <Table aria-label="Business rules" size="small">
-                        <TableHeader><TableRow>
+                        <TableHeader className={s.stickyHead}><TableRow>
                           <TableHeaderCell>Name</TableHeaderCell>
                           <TableHeaderCell>State</TableHeaderCell>
                           <TableHeaderCell>Modified</TableHeaderCell>
@@ -1088,7 +1169,7 @@ export function DataverseTableEditor({ item, id }: { item: FabricItemType; id: s
                       <Caption1>{dataState.data.rows.length} row(s) — entity set <code>{dataState.data.entitySet}</code> (top 25)</Caption1>
                       <div className={s.tableWrap}>
                         <Table aria-label="Data grid" size="small">
-                          <TableHeader><TableRow>
+                          <TableHeader className={s.stickyHead}><TableRow>
                             {dataState.data.columns.map((c) => <TableHeaderCell key={c}>{c}</TableHeaderCell>)}
                           </TableRow></TableHeader>
                           <TableBody>
@@ -1308,6 +1389,15 @@ export function PowerAppEditor({ item, id }: { item: FabricItemType; id: string 
     [env.selected],
   );
   const apps = listSt.data?.apps || [];
+  const [appFilter, setAppFilter] = useState('');
+  const appQuery = appFilter.trim().toLowerCase();
+  const visibleApps = useMemo(() => {
+    if (!appQuery) return apps;
+    return apps.filter((a) =>
+      a.displayName.toLowerCase().includes(appQuery)
+      || (a.appType || '').toLowerCase().includes(appQuery)
+      || (a.owner?.displayName || a.owner?.email || '').toLowerCase().includes(appQuery));
+  }, [apps, appQuery]);
 
   // ----- bound app detail -------------------------------------------------
   // When bound, resolve the detail through the item route (it reads state).
@@ -1486,7 +1576,7 @@ export function PowerAppEditor({ item, id }: { item: FabricItemType; id: string 
                       ? (
                         <div className={s.tableWrap}>
                           <Table aria-label="Connectors" size="small">
-                            <TableHeader><TableRow>
+                            <TableHeader className={s.stickyHead}><TableRow>
                               <TableHeaderCell>Connector</TableHeaderCell>
                               <TableHeaderCell>Id</TableHeaderCell>
                               <TableHeaderCell>Data sources</TableHeaderCell>
@@ -1590,10 +1680,21 @@ export function PowerAppEditor({ item, id }: { item: FabricItemType; id: string 
             )}
             {apps.length > 0 && (
               <>
-                <Caption1>{apps.length} app(s) in this environment{isBound ? ' — pick another to re-bind' : ' — pick one to bind'}</Caption1>
+                <Caption1>Apps in this environment{isBound ? ' — pick another to re-bind' : ' — pick one to bind'}</Caption1>
+                <TableFilter
+                  value={appFilter}
+                  onChange={setAppFilter}
+                  placeholder="Filter apps by name, type, or owner…"
+                  shown={visibleApps.length}
+                  total={apps.length}
+                  unit="app(s)"
+                />
+                {visibleApps.length === 0
+                  ? <EmptyText>No apps match &ldquo;{appFilter}&rdquo;.</EmptyText>
+                  : (
                 <div className={s.tableWrap}>
                   <Table aria-label="Power Apps" size="small">
-                    <TableHeader><TableRow>
+                    <TableHeader className={s.stickyHead}><TableRow>
                       <TableHeaderCell>Name</TableHeaderCell>
                       <TableHeaderCell>Type</TableHeaderCell>
                       <TableHeaderCell>Owner</TableHeaderCell>
@@ -1601,7 +1702,7 @@ export function PowerAppEditor({ item, id }: { item: FabricItemType; id: string 
                       <TableHeaderCell>Action</TableHeaderCell>
                     </TableRow></TableHeader>
                     <TableBody>
-                      {apps.map((a) => (
+                      {visibleApps.map((a) => (
                         <TableRow key={a.name}>
                           <TableCell className={s.cellClickable} onClick={() => { setPick({ appId: a.name, appType: a.appType }); setTab('detail'); setEmbedBlocked(false); }}>
                             <strong>{a.displayName}</strong>
@@ -1620,6 +1721,7 @@ export function PowerAppEditor({ item, id }: { item: FabricItemType; id: string 
                     </TableBody>
                   </Table>
                 </div>
+                  )}
               </>
             )}
           </>
@@ -1676,6 +1778,15 @@ export function PowerAutomateFlowEditor({ item, id }: { item: FabricItemType; id
   }, [env.selected, selected, reloadRuns]);
 
   const flows = listSt.data?.flows || [];
+  const [flowFilter, setFlowFilter] = useState('');
+  const flowQuery = flowFilter.trim().toLowerCase();
+  const visibleFlows = useMemo(() => {
+    if (!flowQuery) return flows;
+    return flows.filter((f) =>
+      f.displayName.toLowerCase().includes(flowQuery)
+      || (f.state || '').toLowerCase().includes(flowQuery)
+      || (f.triggerType || '').toLowerCase().includes(flowQuery));
+  }, [flows, flowQuery]);
   const ribbon = baseRibbon(
     reloadList,
     env.selected ? `https://make.powerautomate.com/environments/${encodeURIComponent(env.selected)}/flows` : undefined,
@@ -1740,16 +1851,28 @@ export function PowerAutomateFlowEditor({ item, id }: { item: FabricItemType; id
           <EmptyText>No flows in this environment.</EmptyText>
         )}
         {!selected && flows.length > 0 && (
+          <>
+          <TableFilter
+            value={flowFilter}
+            onChange={setFlowFilter}
+            placeholder="Filter flows by name, state, or trigger…"
+            shown={visibleFlows.length}
+            total={flows.length}
+            unit="flow(s)"
+          />
+          {visibleFlows.length === 0
+            ? <EmptyText>No flows match &ldquo;{flowFilter}&rdquo;.</EmptyText>
+            : (
           <div className={s.tableWrap}>
             <Table aria-label="Flows" size="small">
-              <TableHeader><TableRow>
+              <TableHeader className={s.stickyHead}><TableRow>
                 <TableHeaderCell>Name</TableHeaderCell>
                 <TableHeaderCell>State</TableHeaderCell>
                 <TableHeaderCell>Trigger</TableHeaderCell>
                 <TableHeaderCell>Modified</TableHeaderCell>
               </TableRow></TableHeader>
               <TableBody>
-                {flows.map((f) => (
+                {visibleFlows.map((f) => (
                   <TableRow key={f.name}>
                     <TableCell className={s.cellClickable} onClick={() => setSelected(f.name)}>
                       <strong>{f.displayName}</strong>
@@ -1766,6 +1889,8 @@ export function PowerAutomateFlowEditor({ item, id }: { item: FabricItemType; id
               </TableBody>
             </Table>
           </div>
+            )}
+          </>
         )}
         {selected && (
           <>
@@ -1791,7 +1916,7 @@ export function PowerAutomateFlowEditor({ item, id }: { item: FabricItemType; id
                 {runsSt.data && (
                   <div className={s.tableWrap}>
                     <Table aria-label="Runs" size="small">
-                      <TableHeader><TableRow>
+                      <TableHeader className={s.stickyHead}><TableRow>
                         <TableHeaderCell>Run</TableHeaderCell>
                         <TableHeaderCell>Status</TableHeaderCell>
                         <TableHeaderCell>Started</TableHeaderCell>
@@ -1845,6 +1970,15 @@ export function PowerPageEditor({ item, id }: { item: FabricItemType; id: string
     [env.selected, selected],
   );
   const pages = listSt.data?.pages || [];
+  const [pageFilter, setPageFilter] = useState('');
+  const pageQuery = pageFilter.trim().toLowerCase();
+  const visiblePages = useMemo(() => {
+    if (!pageQuery) return pages;
+    return pages.filter((p) =>
+      p.name.toLowerCase().includes(pageQuery)
+      || (p.primarydomainname || '').toLowerCase().includes(pageQuery)
+      || (p.type || '').toLowerCase().includes(pageQuery));
+  }, [pages, pageQuery]);
   const ribbon = baseRibbon(reloadList, 'https://make.powerpages.microsoft.com');
 
   return (
@@ -1876,9 +2010,21 @@ export function PowerPageEditor({ item, id }: { item: FabricItemType; id: string
           <EmptyText>No Power Pages sites in this environment.</EmptyText>
         )}
         {!selected && pages.length > 0 && (
+          <>
+          <TableFilter
+            value={pageFilter}
+            onChange={setPageFilter}
+            placeholder="Filter sites by name, domain, or type…"
+            shown={visiblePages.length}
+            total={pages.length}
+            unit="site(s)"
+          />
+          {visiblePages.length === 0
+            ? <EmptyText>No sites match &ldquo;{pageFilter}&rdquo;.</EmptyText>
+            : (
           <div className={s.tableWrap}>
             <Table aria-label="Power Pages" size="small">
-              <TableHeader><TableRow>
+              <TableHeader className={s.stickyHead}><TableRow>
                 <TableHeaderCell>Site</TableHeaderCell>
                 <TableHeaderCell>Domain</TableHeaderCell>
                 <TableHeaderCell>Status</TableHeaderCell>
@@ -1886,7 +2032,7 @@ export function PowerPageEditor({ item, id }: { item: FabricItemType; id: string
                 <TableHeaderCell>Modified</TableHeaderCell>
               </TableRow></TableHeader>
               <TableBody>
-                {pages.map((p) => (
+                {visiblePages.map((p) => (
                   <TableRow key={p.websiteid || p.name}>
                     <TableCell className={s.cellClickable} onClick={() => p.websiteid && setSelected(p.websiteid)}>
                       <strong>{p.name}</strong>
@@ -1906,6 +2052,8 @@ export function PowerPageEditor({ item, id }: { item: FabricItemType; id: string
               </TableBody>
             </Table>
           </div>
+            )}
+          </>
         )}
         {selected && (
           <>
@@ -1954,6 +2102,14 @@ export function AiBuilderModelEditor({ item, id }: { item: FabricItemType; id: s
     [env.selected, selected],
   );
   const models = listSt.data?.models || [];
+  const [modelFilter, setModelFilter] = useState('');
+  const modelQuery = modelFilter.trim().toLowerCase();
+  const visibleModels = useMemo(() => {
+    if (!modelQuery) return models;
+    return models.filter((m) =>
+      m.msdyn_name.toLowerCase().includes(modelQuery)
+      || (m.templateName || m.msdyn_typename || '').toLowerCase().includes(modelQuery));
+  }, [models, modelQuery]);
 
   // Train / Publish / Predict action state.
   const [busy, setBusy] = useState<null | 'train' | 'publish' | 'predict'>(null);
@@ -2025,9 +2181,21 @@ export function AiBuilderModelEditor({ item, id }: { item: FabricItemType; id: s
           <EmptyText>No AI Builder models in this environment.</EmptyText>
         )}
         {!selected && models.length > 0 && (
+          <>
+          <TableFilter
+            value={modelFilter}
+            onChange={setModelFilter}
+            placeholder="Filter models by name or type…"
+            shown={visibleModels.length}
+            total={models.length}
+            unit="model(s)"
+          />
+          {visibleModels.length === 0
+            ? <EmptyText>No models match &ldquo;{modelFilter}&rdquo;.</EmptyText>
+            : (
           <div className={s.tableWrap}>
             <Table aria-label="AI Builder models" size="small">
-              <TableHeader><TableRow>
+              <TableHeader className={s.stickyHead}><TableRow>
                 <TableHeaderCell>Name</TableHeaderCell>
                 <TableHeaderCell>Template / Type</TableHeaderCell>
                 <TableHeaderCell>State</TableHeaderCell>
@@ -2035,7 +2203,7 @@ export function AiBuilderModelEditor({ item, id }: { item: FabricItemType; id: s
                 <TableHeaderCell>Modified</TableHeaderCell>
               </TableRow></TableHeader>
               <TableBody>
-                {models.map((m) => (
+                {visibleModels.map((m) => (
                   <TableRow key={m.msdyn_aimodelid}>
                     <TableCell className={s.cellClickable} onClick={() => setSelected(m.msdyn_aimodelid)}>
                       <strong>{m.msdyn_name}</strong>
@@ -2055,6 +2223,8 @@ export function AiBuilderModelEditor({ item, id }: { item: FabricItemType; id: s
               </TableBody>
             </Table>
           </div>
+            )}
+          </>
         )}
         {selected && (
           <>

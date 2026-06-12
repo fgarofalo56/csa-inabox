@@ -41,6 +41,11 @@ const useStyles = makeStyles({
     fontSize: '12px', minHeight: '320px',
   },
   tableWrap: { overflow: 'auto', maxHeight: '240px', border: `1px solid ${tokens.colorNeutralStroke2}`, borderRadius: '4px' },
+  stickyHead: {
+    position: 'sticky', top: 0, zIndex: 1,
+    backgroundColor: tokens.colorNeutralBackground1,
+    boxShadow: `inset 0 -1px 0 ${tokens.colorNeutralStroke2}`,
+  },
   cell: { fontSize: '12px', whiteSpace: 'nowrap', maxWidth: '320px', overflow: 'hidden', textOverflow: 'ellipsis' },
   connRow: { display: 'grid', gridTemplateColumns: '1fr 1fr 1fr auto', gap: '8px', alignItems: 'end' },
 });
@@ -253,10 +258,18 @@ export function PowerAutomateDesignerTab({ envId, flowId, flow }: PowerAutomateD
       <Caption1>
         Map each reference key the definition uses to a connector. Add/remove rows below; they save with the definition.
       </Caption1>
+      {conns.length === 0 && (
+        <MessageBar intent="info">
+          <MessageBarBody>
+            No connection references yet. Add one for each connector your triggers/actions use
+            (e.g. <code>shared_sharepointonline</code>), then save.
+          </MessageBarBody>
+        </MessageBar>
+      )}
       {conns.length > 0 && (
         <div className={s.tableWrap}>
           <Table aria-label="Connection references" size="small">
-            <TableHeader><TableRow>
+            <TableHeader className={s.stickyHead}><TableRow>
               <TableHeaderCell>Reference key</TableHeaderCell>
               <TableHeaderCell>Connection name</TableHeaderCell>
               <TableHeaderCell>Connector id</TableHeaderCell>
