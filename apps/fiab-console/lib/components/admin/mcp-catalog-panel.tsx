@@ -38,10 +38,16 @@ interface CatalogEntry {
   image: string;
   license: string;
   maintainer: string;
+  category: string;
   egress: 'air-gap-safe' | 'azure-internal' | 'external-saas';
   port: number;
   needsStorage: boolean;
   secretEnv?: string;
+  govSafe?: boolean;
+  airGapSafe?: boolean;
+  defaultRecommended?: boolean;
+  externalHosts?: string[];
+  preview?: boolean;
 }
 
 interface DeployStatus {
@@ -204,6 +210,7 @@ export function McpCatalogPanel({
       <Body2 className={s.hint}>
         Stand up a vetted, gov-safe MCP server as an Azure Container App. Servers are chosen from the
         curated allow-list below (no arbitrary images). Air-gap-safe servers make zero external calls.
+        {catalog.length > 0 && ` ${catalog.length} servers available.`}
       </Body2>
 
       {loadError && (
@@ -300,6 +307,7 @@ export function McpCatalogPanel({
             <TableHeader>
               <TableRow>
                 <TableHeaderCell>Server</TableHeaderCell>
+                <TableHeaderCell>Category</TableHeaderCell>
                 <TableHeaderCell>Egress</TableHeaderCell>
                 <TableHeaderCell>License</TableHeaderCell>
                 <TableHeaderCell>Deploy</TableHeaderCell>
@@ -310,10 +318,19 @@ export function McpCatalogPanel({
                 <TableRow key={entry.id}>
                   <TableCell>
                     <div className={s.cellStack}>
-                      <Body1Strong>{entry.name}</Body1Strong>
+                      <Body1Strong>
+                        {entry.name}
+                        {entry.preview && (
+                          <Badge appearance="tint" color="informative" size="small" style={{ marginLeft: 8 }}>Preview</Badge>
+                        )}
+                        {entry.defaultRecommended && (
+                          <Badge appearance="tint" color="brand" size="small" style={{ marginLeft: 6 }}>Recommended</Badge>
+                        )}
+                      </Body1Strong>
                       <Caption1>{entry.description}</Caption1>
                     </div>
                   </TableCell>
+                  <TableCell><Caption1>{entry.category}</Caption1></TableCell>
                   <TableCell>{egressBadge(entry.egress)}</TableCell>
                   <TableCell><Caption1>{entry.license} · {entry.maintainer}</Caption1></TableCell>
                   <TableCell>

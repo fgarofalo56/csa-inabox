@@ -8,9 +8,13 @@
 import { describe, it, expect, afterEach } from 'vitest';
 import {
   MCP_CATALOG,
+  MCP_CATALOG_SIZE,
   getCatalogEntry,
   resolveCatalogImage,
   catalogForUi,
+  serversForCloud,
+  defaultRecommendedServers,
+  airGapSafeServers,
 } from '../mcp-catalog';
 import { mcpContainerAppName } from '../mcp-deploy-client';
 
@@ -20,6 +24,11 @@ afterEach(() => {
 });
 
 describe('MCP_CATALOG', () => {
+  it('is the curated library of exactly 25 deployable servers', () => {
+    expect(MCP_CATALOG.length).toBe(25);
+    expect(MCP_CATALOG_SIZE).toBe(25);
+  });
+
   it('has only permissive licenses (no AGPL/SSPL/commercial)', () => {
     for (const e of MCP_CATALOG) {
       expect(['Apache-2.0', 'MIT', 'BSD-3-Clause']).toContain(e.license);
@@ -32,15 +41,61 @@ describe('MCP_CATALOG', () => {
     for (const id of ids) expect(id).toMatch(/^[a-z][a-z0-9-]*$/);
   });
 
+  it('every entry maps to a real, pullable image (mcp/* | mcr.microsoft.com/* | ghcr.io/*)', () => {
+    for (const e of MCP_CATALOG) {
+      expect(e.image).toMatch(/^(mcp\/|mcr\.microsoft\.com\/|ghcr\.io\/)/);
+    }
+  });
+
+  it('every entry carries a separate health probe path (not the MCP endpoint)', () => {
+    for (const e of MCP_CATALOG) {
+      expect(e.healthPath.startsWith('/')).toBe(true);
+      expect(['/health', '/healthz']).toContain(e.healthPath);
+    }
+  });
+
   it('includes the air-gap-safe Tier-0 reference servers', () => {
     const airgap = MCP_CATALOG.filter((e) => e.egress === 'air-gap-safe').map((e) => e.id);
     expect(airgap).toEqual(expect.arrayContaining(['filesystem', 'git', 'memory', 'time', 'sequentialthinking']));
   });
 
-  it('marks external-SaaS servers with a secret env var', () => {
-    for (const e of MCP_CATALOG.filter((x) => x.egress === 'external-saas')) {
+  it('marks external-SaaS servers that need credentials with a secret env var', () => {
+    // fetch is the only external-saas server that needs no credential (it reaches
+    // arbitrary URLs but takes no API key); everything else SaaS is secret-gated.
+    for (const e of MCP_CATALOG.filter((x) => x.egress === 'external-saas' && x.id !== 'fetch')) {
       expect(e.secretEnv && e.secretEnv.length).toBeTruthy();
     }
+  });
+
+  it('air-gap-safe servers make zero external calls (no externalHosts)', () => {
+    for (const e of MCP_CATALOG.filter((x) => x.airGapSafe)) {
+      expect(e.externalHosts).toHaveLength(0);
+    }
+  });
+});
+
+describe('cloud filters', () => {
+  it('il5 hides ungated external-SaaS tiles (only air-gap + Azure-native)', () => {
+    const ids = serversForCloud('il5').map((e) => e.id);
+    expect(ids).toContain('filesystem');
+    expect(ids).toContain('azure');
+    expect(ids).toContain('postgres');
+    expect(ids).not.toContain('slack');
+    expect(ids).not.toContain('github');
+  });
+
+  it('commercial returns the full catalog', () => {
+    expect(serversForCloud('commercial').length).toBe(MCP_CATALOG.length);
+  });
+
+  it('gcc-high returns only gov-safe servers', () => {
+    expect(serversForCloud('gcc-high').every((e) => e.govSafe)).toBe(true);
+  });
+
+  it('defaultRecommended + airGapSafe selectors return real subsets', () => {
+    expect(defaultRecommendedServers().length).toBeGreaterThan(0);
+    expect(defaultRecommendedServers().every((e) => e.defaultRecommended)).toBe(true);
+    expect(airGapSafeServers().every((e) => e.airGapSafe)).toBe(true);
   });
 });
 
