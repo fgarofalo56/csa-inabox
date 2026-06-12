@@ -51,12 +51,19 @@ function required(k: string): string {
 // subscription / resource group (BYO wizard); fall back to the deployment sub
 // (LOOM_SUBSCRIPTION_ID) and DLZ RG (LOOM_DLZ_RG) when empty so cross-sub reuse
 // targets the correct factory instead of the deployment one.
-function sub(): string { return process.env.LOOM_ADF_SUB || required('LOOM_SUBSCRIPTION_ID'); }
-function rg():  string { return process.env.LOOM_ADF_RG || required('LOOM_DLZ_RG'); }
+//
+// `target` (optional) is the domain-resolved deploy target from
+// `lib/azure/topology.ts → resolveDeployTarget`: when a multi-domain publish
+// route supplies it, the factory ARM scope follows the OWNING domain's DLZ
+// subscription + resource group. Absent → the env default (single-sub
+// behaviour every existing deployment has today).
+export interface AdfArmTarget { subscriptionId?: string; resourceGroup?: string; }
+function sub(t?: AdfArmTarget): string { return (t?.subscriptionId || '').trim() || process.env.LOOM_ADF_SUB || required('LOOM_SUBSCRIPTION_ID'); }
+function rg(t?: AdfArmTarget):  string { return (t?.resourceGroup || '').trim() || process.env.LOOM_ADF_RG || required('LOOM_DLZ_RG'); }
 function adfName(): string { return required('LOOM_ADF_NAME'); }
 
-function base(): string {
-  return `${ARM_BASE}/subscriptions/${sub()}/resourceGroups/${rg()}/providers/Microsoft.DataFactory/factories/${adfName()}`;
+function base(t?: AdfArmTarget): string {
+  return `${ARM_BASE}/subscriptions/${sub(t)}/resourceGroups/${rg(t)}/providers/Microsoft.DataFactory/factories/${adfName()}`;
 }
 
 /**
@@ -171,9 +178,9 @@ export async function getPipelineParameters(
   return pipeline.properties?.parameters ?? {};
 }
 
-export async function upsertPipeline(name: string, spec: AdfPipeline): Promise<AdfPipeline> {
+export async function upsertPipeline(name: string, spec: AdfPipeline, target?: AdfArmTarget): Promise<AdfPipeline> {
   const body = { name: spec.name || name, properties: spec.properties || { activities: [] } };
-  const r = await call(`${base()}/pipelines/${encodeURIComponent(name)}?api-version=${API}`, {
+  const r = await call(`${base(target)}/pipelines/${encodeURIComponent(name)}?api-version=${API}`, {
     method: 'PUT',
     body: JSON.stringify(body),
   });

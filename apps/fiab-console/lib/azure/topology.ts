@@ -391,3 +391,39 @@ export async function assertItemCreateReachable(target: DeployTarget): Promise<D
   // actual create PUT will surface a precise error if something else is wrong).
   return null;
 }
+
+// ---------------------------------------------------------------------------
+// prepareItemCreate — the ONE call every item-create route makes
+// ---------------------------------------------------------------------------
+
+/** Type guard: the resolve result is the honest 403/404 gate (not a target). */
+export function isDeployTargetGate(r: DeployTarget | DeployTargetGate): r is DeployTargetGate {
+  return r.ok === false;
+}
+
+/**
+ * The single entry point an item-create / provision route calls before it
+ * touches ARM: resolve the deploy target for the owning workspace + item type
+ * (`resolveDeployTarget`), then preflight the Console UAMI's reach with a real
+ * ARM resource-group GET (`assertItemCreateReachable`).
+ *
+ *   - Returns a ready-to-create `DeployTarget` when the resolved subscription is
+ *     reachable (the common case — single-sub deployments are always reachable,
+ *     the UAMI lives there).
+ *   - Returns a `DeployTargetGate` (naming the exact missing Contributor grant +
+ *     a copy-paste `az role assignment create` fix) when a cross-sub domain DLZ
+ *     subscription is NOT reachable, so the route can answer with a structured
+ *     remediation (409) instead of letting the create PUT surface an opaque 403.
+ *
+ * Routes branch on `isDeployTargetGate(result)`. This is what wires the honest
+ * gate into the live request path — `assertItemCreateReachable` is never called
+ * speculatively, only here, immediately before a real create.
+ */
+export async function prepareItemCreate(
+  workspaceId: string,
+  itemType: ItemType,
+): Promise<DeployTarget | DeployTargetGate> {
+  const target = await resolveDeployTarget(workspaceId, itemType);
+  const gate = await assertItemCreateReachable(target);
+  return gate ?? target;
+}

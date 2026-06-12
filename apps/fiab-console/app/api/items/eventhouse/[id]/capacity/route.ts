@@ -36,7 +36,6 @@ import {
   KustoError,
 } from '@/lib/azure/kusto-client';
 import { fetchMetrics, type MetricResult } from '@/lib/azure/monitor-client';
-import { resolveDeployTarget } from '@/lib/azure/topology';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -44,26 +43,25 @@ export const dynamic = 'force-dynamic';
 /**
  * Construct the ARM resource id for the eventhouse's ADX cluster.
  *
- * Domain-aware: when the caller passes `?workspaceId=`, the subscription comes
- * from the SINGLE resolver `resolveDeployTarget(workspaceId, 'eventhouse')` —
- * the owning workspace's domain DLZ sub in a multi-sub deployment, or the
- * single-sub default otherwise. Falls back to LOOM_SUBSCRIPTION_ID when no
- * workspace is supplied (preserves the prior behaviour). The resource group +
- * cluster name remain the Kusto-specific env (the shared ADX cluster lives in
- * the resolved sub).
+ * The Loom ADX cluster is a SINGLE tenant-shared cluster
+ * (`adx-csa-loom-shared` in `rg-csa-loom-admin-*`), NOT a per-domain resource —
+ * so a capacity / throttle read is an admin-plane (DMLZ) operation against that
+ * one cluster, resolved from the Kusto env (`LOOM_KUSTO_SUB ||
+ * LOOM_SUBSCRIPTION_ID` + `LOOM_KUSTO_RG` + `LOOM_KUSTO_CLUSTER_NAME`) — the
+ * SAME source of truth as `lib/azure/kusto-arm-client.ts → readKustoArmConfig`.
+ *
+ * (Domain-DLZ subscription routing — `resolveDeployTarget` — applies to an
+ * eventhouse's DATA backends, e.g. the ADX databases / Event Hub connections /
+ * storage it ingests from, not to the shared control-plane cluster. Overriding
+ * only the subscription here would point at a Microsoft.Kusto/clusters resource
+ * that does not exist in the domain sub and 404, so we do not do it.)
  */
-async function kustoClusterArmId(
-  workspaceId: string | null,
-): Promise<{ id: string | null; missing: string[] }> {
-  let sub = process.env.LOOM_SUBSCRIPTION_ID || '';
-  if (workspaceId) {
-    const target = await resolveDeployTarget(workspaceId, 'eventhouse').catch(() => null);
-    if (target?.subscriptionId) sub = target.subscriptionId;
-  }
+function kustoClusterArmId(): { id: string | null; missing: string[] } {
+  const sub = process.env.LOOM_KUSTO_SUB || process.env.LOOM_SUBSCRIPTION_ID || '';
   const rg = process.env.LOOM_KUSTO_RG || 'rg-csa-loom-admin-eastus2';
   const cluster = process.env.LOOM_KUSTO_CLUSTER_NAME || 'adx-csa-loom-shared';
   const missing: string[] = [];
-  if (!sub) missing.push('LOOM_SUBSCRIPTION_ID');
+  if (!sub) missing.push('LOOM_KUSTO_SUB (or LOOM_SUBSCRIPTION_ID)');
   if (!sub) return { id: null, missing };
   return {
     id: `/subscriptions/${sub}/resourceGroups/${rg}/providers/Microsoft.Kusto/clusters/${cluster}`,
@@ -71,11 +69,9 @@ async function kustoClusterArmId(
   };
 }
 
-export async function GET(req: NextRequest) {
+export async function GET(_req: NextRequest) {
   const session = getSession();
   if (!session) return NextResponse.json({ ok: false, error: 'unauthenticated' }, { status: 401 });
-
-  const workspaceId = req.nextUrl.searchParams.get('workspaceId');
 
   // Honest data-plane gate: ADX cluster URI not configured at all.
   const gate = kustoConfigGate();
@@ -97,7 +93,7 @@ export async function GET(req: NextRequest) {
     // gate (sovereign cloud, missing role) must not block the Kusto results.
     let metrics: MetricResult[] | undefined;
     let metricsGate: string | undefined;
-    const arm = await kustoClusterArmId(workspaceId);
+    const arm = kustoClusterArmId();
     if (!arm.id) {
       metricsGate = `Live throttle metrics require ${arm.missing.join(', ')} to construct the ADX cluster resource id. The capacity policy + live slot table below are unaffected.`;
     } else {

@@ -22,6 +22,7 @@ import { getSession } from '@/lib/auth/session';
 import { itemsContainer } from '@/lib/azure/cosmos-client';
 import { upsertPipeline, adfConfigGate, type AdfPipeline } from '@/lib/azure/adf-client';
 import { pipelineDefinitionFromContent } from '@/lib/azure/pipeline-binding';
+import { prepareItemCreate, isDeployTargetGate } from '@/lib/azure/topology';
 import type { WorkspaceItem } from '@/lib/types/workspace';
 
 export const runtime = 'nodejs';
@@ -85,8 +86,27 @@ export async function POST(req: NextRequest, ctx: { params: Promise<{ id: string
     }
 
     const adfName: string = state?.adfPipelineName || safeAdfPipelineName(resource.displayName, resource.id);
+
+    // Domain routing: publish the pipeline into the ADF that lives in the
+    // OWNING workspace's domain DLZ subscription + resource group. A cross-sub
+    // permission gap surfaces as an honest, named remediation (409) instead of
+    // an opaque ARM 403 on the pipeline PUT. Single-sub deployments resolve to
+    // the env default with no behaviour change.
+    const target = await prepareItemCreate(workspaceId, 'data-pipeline');
+    if (isDeployTargetGate(target)) {
+      return err(target.reason, 409, {
+        code: 'rbac_gate',
+        missingGrant: target.missingGrant,
+        fixScript: target.fixScript,
+        redeploy: true,
+      });
+    }
     try {
-      await upsertPipeline(adfName, { name: adfName, properties: definition.properties });
+      await upsertPipeline(
+        adfName,
+        { name: adfName, properties: definition.properties },
+        { subscriptionId: target.subscriptionId, resourceGroup: target.resourceGroup },
+      );
     } catch (e: any) {
       return err(`ADF publish failed: ${e?.message || e}`, 502);
     }
