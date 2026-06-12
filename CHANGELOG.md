@@ -25,6 +25,96 @@ This file is maintained automatically by
 [Conventional Commits](https://www.conventionalcommits.org/). See
 [RELEASE.md](RELEASE.md) for the release process.
 
+## [0.39.0](https://github.com/fgarofalo56/csa-inabox/compare/csa-inabox-v0.38.0...csa-inabox-v0.39.0) (2026-06-12)
+
+
+### Features
+
+* **csa-loom:** /connections icons + cross-sub "add existing" import + KV creds (audit-t153) ([#1243](https://github.com/fgarofalo56/csa-inabox/issues/1243)) ([8737e11](https://github.com/fgarofalo56/csa-inabox/commit/8737e113b3876ea998118d7751e0dd2b036b47f8))
+* **csa-loom:** ADX external-tables authoring + RLS/lifecycle parity reconcile (audit-t20) ([#1258](https://github.com/fgarofalo56/csa-inabox/issues/1258)) ([77bbbe1](https://github.com/fgarofalo56/csa-inabox/commit/77bbbe1c0b7d77e3c57fb20255858b6f66a90952))
+* **csa-loom:** AI Foundry depth — observability dashboard, FT/eval charts, sovereign AOAI scope (audit-t19) ([#1260](https://github.com/fgarofalo56/csa-inabox/issues/1260)) ([f11755d](https://github.com/fgarofalo56/csa-inabox/commit/f11755ddda8ac813f0fd87edcfa6658112cd56c4))
+* **csa-loom:** Atelier real CRUD over Weave-bound warehouse (audit-t51) ([#1285](https://github.com/fgarofalo56/csa-inabox/issues/1285)) ([a009965](https://github.com/fgarofalo56/csa-inabox/commit/a00996557e26751ce86f5c9d47c8397d7c320117))
+* **csa-loom:** Azure SQL server table/schema browser sub-panel (audit-t16) ([#1257](https://github.com/fgarofalo56/csa-inabox/issues/1257)) ([7c9d4ca](https://github.com/fgarofalo56/csa-inabox/commit/7c9d4caa92964b51893077c5845a167faa52519d))
+* **csa-loom:** complete /admin/env-config registry + wire analytics-embed deploy prereqs (audit-t149) ([#1242](https://github.com/fgarofalo56/csa-inabox/issues/1242)) ([4926fca](https://github.com/fgarofalo56/csa-inabox/commit/4926fca1abdcdbeec21e8d2ba2644746ca9a7fc6))
+* **csa-loom:** durable Remove for ontology entity bindings (audit-t12) ([#1253](https://github.com/fgarofalo56/csa-inabox/issues/1253)) ([2f2c385](https://github.com/fgarofalo56/csa-inabox/commit/2f2c385e9e8e786e925e19c64c4a7ce7b122a1a8))
+* **csa-loom:** expand deployable MCP catalog to a curated 25 servers (audit-t34) ([#1275](https://github.com/fgarofalo56/csa-inabox/issues/1275)) ([8a5f4a8](https://github.com/fgarofalo56/csa-inabox/commit/8a5f4a870638a7c6a446eceadf32d8e054ed97d9))
+* **csa-loom:** geo-dataset geometry map render + geo-pipeline run-status grid (audit-t10) ([#1252](https://github.com/fgarofalo56/csa-inabox/issues/1252)) ([a7ed5ad](https://github.com/fgarofalo56/csa-inabox/commit/a7ed5ad6d8a61e63a6f6444e594d244e08e0836e))
+* **csa-loom:** in-product Power Platform maker authoring — flow definition + create table (audit-t28) ([#1269](https://github.com/fgarofalo56/csa-inabox/issues/1269)) ([de9c023](https://github.com/fgarofalo56/csa-inabox/commit/de9c0231ae24c79f1374b5c673203d8c01026dfc))
+* **csa-loom:** Learning Hub Copilot tutorial-id receipt-scope fallback (audit-t41) ([#1277](https://github.com/fgarofalo56/csa-inabox/issues/1277)) ([b057b68](https://github.com/fgarofalo56/csa-inabox/commit/b057b68b652ed0bae88959898f64ef1e37602f55))
+* **csa-loom:** Learning Hub landing page + README-backed use-case link fix (audit-t37) ([#1272](https://github.com/fgarofalo56/csa-inabox/issues/1272)) ([6aa8819](https://github.com/fgarofalo56/csa-inabox/commit/6aa8819117400ad83ef3dc045e5a32f8f635b8bd))
+* **csa-loom:** live Avro compatibility check on event-schema-set edit (audit-T15) ([#1255](https://github.com/fgarofalo56/csa-inabox/issues/1255)) ([830611f](https://github.com/fgarofalo56/csa-inabox/commit/830611f077bf040438fe86ccefcd32e956203165))
+* **csa-loom:** make visual-tutorial apps dimension auditable offline + ready the strict coverage gate (B-9 / audit-t33) ([#1268](https://github.com/fgarofalo56/csa-inabox/issues/1268)) ([532ecc9](https://github.com/fgarofalo56/csa-inabox/commit/532ecc927994c54e7869b8f9b4a1d30f10020819))
+* **csa-loom:** MCP deployable catalog gov-safety bridge (audit-t44) ([#1279](https://github.com/fgarofalo56/csa-inabox/issues/1279)) ([307727d](https://github.com/fgarofalo56/csa-inabox/commit/307727d0acdd56ac96dfff8a098753ccd213a669))
+* **csa-loom:** mount workspace-level Activator pane on /activator-hub + nav (audit-t03) ([#1250](https://github.com/fgarofalo56/csa-inabox/issues/1250)) ([37e3f3f](https://github.com/fgarofalo56/csa-inabox/commit/37e3f3f7f99b95a8c33b5c49025afff185e4fbb7))
+* **csa-loom:** reconcile MCP browse-catalog + deploy wizard to one configSchema/per-field-KV surface (audit-t45) ([#1284](https://github.com/fgarofalo56/csa-inabox/issues/1284)) ([c9957d2](https://github.com/fgarofalo56/csa-inabox/commit/c9957d27dc7882bad99eb0a82ebf6717084b2ad1))
+* **csa-loom:** Spindle Studio — agents + logic over the Weave ontology (audit-t52) ([#1288](https://github.com/fgarofalo56/csa-inabox/issues/1288)) ([bc528a7](https://github.com/fgarofalo56/csa-inabox/commit/bc528a77bfc704e00285aba1746fc32f77aa559e))
+* **csa-loom:** SQL constraint designer — per-backend NOT ENFORCED DDL for Warehouse/Synapse (audit-t24) ([#1265](https://github.com/fgarofalo56/csa-inabox/issues/1265)) ([ac6410e](https://github.com/fgarofalo56/csa-inabox/commit/ac6410e4cbccefa84663c2eabea79b5854ac6a34))
+* **csa-loom:** Tapestry — investigative graph (Gotham-equivalent) over ADX + Azure Maps (audit-t53) ([#1286](https://github.com/fgarofalo56/csa-inabox/issues/1286)) ([f41312e](https://github.com/fgarofalo56/csa-inabox/commit/f41312ef79d8eba67cf3f7952eda62e08981c1f7))
+* **csa-loom:** UC create-table-from-file + principal picker + storage securables (audit-t18) ([#1259](https://github.com/fgarofalo56/csa-inabox/issues/1259)) ([afd2952](https://github.com/fgarofalo56/csa-inabox/commit/afd29525f8d2443fab4683e8195b079d38106ad5))
+* **csa-loom:** unify dual Copilot popups into one chat window with agent routing + attribution (audit-t155) ([#1302](https://github.com/fgarofalo56/csa-inabox/issues/1302)) ([4f1ab3c](https://github.com/fgarofalo56/csa-inabox/commit/4f1ab3c02c5df4b21ee811096728213231fb944b))
+* **csa-loom:** Warp — unified visual + code transform/pipeline builder (audit-t54) ([#1287](https://github.com/fgarofalo56/csa-inabox/issues/1287)) ([6d17de2](https://github.com/fgarofalo56/csa-inabox/commit/6d17de21adc9886cf780d25875bbb86e62a89a5b))
+* **csa-loom:** Weave (Semantic Ontology) Phase 1 — real object/link/action write-back on PostgreSQL + Apache AGE (audit-T50) ([#1289](https://github.com/fgarofalo56/csa-inabox/issues/1289)) ([8dcdd69](https://github.com/fgarofalo56/csa-inabox/commit/8dcdd696846fce520283d036b80003da36961bd4))
+* **csa-loom:** wire ADF CDC change-data preview via real Delta read (audit-t26) ([#1267](https://github.com/fgarofalo56/csa-inabox/issues/1267)) ([769d1a7](https://github.com/fgarofalo56/csa-inabox/commit/769d1a7c003e180482d13d4eda958a88c843ef43))
+* **csa-loom:** wire pbi-paginated in-place embed in the RDL designer (audit-t14) ([#1256](https://github.com/fgarofalo56/csa-inabox/issues/1256)) ([246a5ad](https://github.com/fgarofalo56/csa-inabox/commit/246a5ad6ec5969dacb319ee902a819f3c706e480))
+
+
+### Bug Fixes
+
+* **csa-loom:** /thread adopts shared ViewToggle component (audit-t113) ([#1291](https://github.com/fgarofalo56/csa-inabox/issues/1291)) ([58f4587](https://github.com/fgarofalo56/csa-inabox/commit/58f4587be8ad5e9b69ae21650210e976bf2be9f1))
+* **csa-loom:** close AKS env-write gap for /admin/env-config Save (audit-t49) ([#1283](https://github.com/fgarofalo56/csa-inabox/issues/1283)) ([cce18b9](https://github.com/fgarofalo56/csa-inabox/commit/cce18b97c3ae57b95cec1796914b183cefd8640d))
+* **csa-loom:** close audit-t43 — Learn portal Loom-docs-first link integrity (README index alias) ([#1278](https://github.com/fgarofalo56/csa-inabox/issues/1278)) ([333fb9e](https://github.com/fgarofalo56/csa-inabox/commit/333fb9e5eafa70e8093d6ca56227f9ad615d1360))
+* **csa-loom:** coerce JSON-string args in all workflow scripts ([#1301](https://github.com/fgarofalo56/csa-inabox/issues/1301)) ([b3fbae0](https://github.com/fgarofalo56/csa-inabox/commit/b3fbae0bd621c22610c645a962a9b891a7605e66))
+* **csa-loom:** correct Monitor alert-rule equality operator Equal -&gt; Equals (audit-t23) ([#1262](https://github.com/fgarofalo56/csa-inabox/issues/1262)) ([01152e1](https://github.com/fgarofalo56/csa-inabox/commit/01152e1b3595c656ac431bcf723f39d28d536917))
+* **csa-loom:** Gov-safe AAD audience for vector-store similarity search (audit-t11) ([#1254](https://github.com/fgarofalo56/csa-inabox/issues/1254)) ([d1e8c96](https://github.com/fgarofalo56/csa-inabox/commit/d1e8c96a52acf814dd5e1f815dad36529ff935ea))
+* **csa-loom:** harden federated-search clearance of catalog sidebar rule (audit-t120) ([#1295](https://github.com/fgarofalo56/csa-inabox/issues/1295)) ([c011901](https://github.com/fgarofalo56/csa-inabox/commit/c01190181fe29fdbb878d8b73b55894cff5d1d6c))
+* **csa-loom:** hoist McpServersPanel useMemo above early return (React [#310](https://github.com/fgarofalo56/csa-inabox/issues/310)) ([#1239](https://github.com/fgarofalo56/csa-inabox/issues/1239)) ([3ded0dc](https://github.com/fgarofalo56/csa-inabox/commit/3ded0dc1b47518617060b78898c212e0aa000fd4))
+* **csa-loom:** honest gate for /admin/audit-logs LA credential + RBAC failures (audit-t148) ([#1241](https://github.com/fgarofalo56/csa-inabox/issues/1241)) ([5608106](https://github.com/fgarofalo56/csa-inabox/commit/5608106fd81f22790b46e3b5d77f50b1f52a13b0))
+* **csa-loom:** item-route guard recognizes destructured factory exports ([#1246](https://github.com/fgarofalo56/csa-inabox/issues/1246)) ([89d3b21](https://github.com/fgarofalo56/csa-inabox/commit/89d3b216205842bb5f8e98353a022b8548d234e8))
+* **csa-loom:** loom-unleash-fast refuses to run unscoped (no-args guard) ([#1299](https://github.com/fgarofalo56/csa-inabox/issues/1299)) ([9a0c549](https://github.com/fgarofalo56/csa-inabox/commit/9a0c549a36c969edd7ac48d3dae4454901924643))
+* **csa-loom:** monitor activity feed KQL — derive Submitter from SystemParameters, not nonexistent TriggerName column (audit-t01) ([#1248](https://github.com/fgarofalo56/csa-inabox/issues/1248)) ([4413023](https://github.com/fgarofalo56/csa-inabox/commit/441302372dcb4b85f46d33ddd9509a6aa6d3d083))
+* **csa-loom:** pin data-agent composer dock so Send is always visible (audit-t118) ([#1294](https://github.com/fgarofalo56/csa-inabox/issues/1294)) ([ba55318](https://github.com/fgarofalo56/csa-inabox/commit/ba55318186ff52bf1c99a96d096cbd5829d76989))
+* **csa-loom:** resolve MCP catalog bicep collisions (dup mcpStorage symbol/env, dup keyvault param) (audit-t48) ([#1281](https://github.com/fgarofalo56/csa-inabox/issues/1281)) ([051e17d](https://github.com/fgarofalo56/csa-inabox/commit/051e17d4271031f2b95aee075e42c3c7e120e139))
+* **csa-loom:** restore native 24px stat icons in realtime-hub-view (audit-t114) ([#1290](https://github.com/fgarofalo56/csa-inabox/issues/1290)) ([ce636ba](https://github.com/fgarofalo56/csa-inabox/commit/ce636ba7a3872a45a3ab63a8c48e91b8dcb77771))
+* **csa-loom:** sovereign-cloud parity for Synapse KQL/SJD workspace tree (audit-t25) ([#1264](https://github.com/fgarofalo56/csa-inabox/issues/1264)) ([b4e4057](https://github.com/fgarofalo56/csa-inabox/commit/b4e40579febca48afb0d9adee75930d5cba87d6a))
+* **csa-loom:** unblock IL5/GCC-High deploy (main.bicep build) + add gov deploy-verification evidence harness (audit-t30) ([#1270](https://github.com/fgarofalo56/csa-inabox/issues/1270)) ([f13d73e](https://github.com/fgarofalo56/csa-inabox/commit/f13d73e3f1e9c6137989b8d3c5c9e3046493e59f))
+* **csa-loom:** unbreak next build — 'Node_*/Edge_*' in JSDoc terminated block comments early (audit-t53) ([#1304](https://github.com/fgarofalo56/csa-inabox/issues/1304)) ([ba4437c](https://github.com/fgarofalo56/csa-inabox/commit/ba4437cf3a548b8ce7a5147a5b879ef7ffc55e08))
+* **csa-loom:** wire AI Search debug-session storage by default (keyless MSI) (audit-t22) ([#1263](https://github.com/fgarofalo56/csa-inabox/issues/1263)) ([5b4685b](https://github.com/fgarofalo56/csa-inabox/commit/5b4685b99930611af3564e16720f733107ee5b70))
+
+
+### Code Refactoring
+
+* **csa-loom:** redesign catalog/metastores onto Loom primitives (audit-t112) ([#1292](https://github.com/fgarofalo56/csa-inabox/issues/1292)) ([1b022b7](https://github.com/fgarofalo56/csa-inabox/commit/1b022b787ca3d09dc8d311aeb4cd3280bb347ec2))
+* **csa-loom:** sweep admin-tab inline styles onto useAdminTabStyles tokens (audit-t116) ([#1298](https://github.com/fgarofalo56/csa-inabox/issues/1298)) ([e07aeec](https://github.com/fgarofalo56/csa-inabox/commit/e07aeec8e5f7bd78f7a63f8307f742728b1cadfc))
+
+
+### Documentation
+
+* **csa-loom:** add MCP library index + bicep-layer tests for stdio→HTTP/SSE bridge (audit-t47) ([#1282](https://github.com/fgarofalo56/csa-inabox/issues/1282)) ([73f6961](https://github.com/fgarofalo56/csa-inabox/commit/73f6961775150fa7ca40a20e46c786c1e610159c))
+* **csa-loom:** correct stale Cosmos script-authoring comments (audit-t08) ([#1251](https://github.com/fgarofalo56/csa-inabox/issues/1251)) ([9ff75ae](https://github.com/fgarofalo56/csa-inabox/commit/9ff75ae192581e8df3f3ee4461613ee4057cc5a7))
+* **csa-loom:** correct stale Event Hubs tree header + surface Geo-DR failover alias caveat (audit-t21) ([#1261](https://github.com/fgarofalo56/csa-inabox/issues/1261)) ([467b949](https://github.com/fgarofalo56/csa-inabox/commit/467b9498d46d35a17baa8179ed94878ff5473e0a))
+* **csa-loom:** Learning-Hub notebook import wizard guide + route tests (audit-t39) ([#1274](https://github.com/fgarofalo56/csa-inabox/issues/1274)) ([d381af6](https://github.com/fgarofalo56/csa-inabox/commit/d381af6aaf517796ac209b33062c56488b28b984))
+* **csa-loom:** mark C-86 Self-Modification Pipeline promote as DELIVERED (audit-t36) ([#1271](https://github.com/fgarofalo56/csa-inabox/issues/1271)) ([613cd0d](https://github.com/fgarofalo56/csa-inabox/commit/613cd0ddf619211cae9a53c6dfcc74e8dd49b240))
+* **csa-loom:** MCP deploy-to-Container-Apps + Azure Files source-of-truth + api-version pin (audit-t46) ([#1280](https://github.com/fgarofalo56/csa-inabox/issues/1280)) ([2725c2a](https://github.com/fgarofalo56/csa-inabox/commit/2725c2a41ab15d81fb5aceb9a0c9a434671a1573))
+* **csa-loom:** reconcile deploy-planner parity counts to verified catalog (audit-t119) ([#1297](https://github.com/fgarofalo56/csa-inabox/issues/1297)) ([de1ce8a](https://github.com/fgarofalo56/csa-inabox/commit/de1ce8aff7fdfab6a2505413a10dcd30233c2bfa))
+* **csa-loom:** sync Palantir migration docs to built Loom surfaces (audit-t29) ([#1266](https://github.com/fgarofalo56/csa-inabox/issues/1266)) ([6ee12d6](https://github.com/fgarofalo56/csa-inabox/commit/6ee12d697c4f93066c5d53566ce67ada7086cc6a))
+* **csa-loom:** verify-and-close warehouse pane parity (audit-t04) ([#1247](https://github.com/fgarofalo56/csa-inabox/issues/1247)) ([6f6a37a](https://github.com/fgarofalo56/csa-inabox/commit/6f6a37a79b8f1e6511a67918b1e417377ac81292))
+
+
+### Tests
+
+* **csa-loom:** live e2e for guided onboarding tour + Cosmos data-plane RBAC (audit-t42) ([#1276](https://github.com/fgarofalo56/csa-inabox/issues/1276)) ([f7a3449](https://github.com/fgarofalo56/csa-inabox/commit/f7a3449f2edadf83b9ea092a1d017c9b8510dc75))
+* **csa-loom:** pin Learn "Install live example" wiring + registry invariant (audit-t38) ([#1273](https://github.com/fgarofalo56/csa-inabox/issues/1273)) ([696951d](https://github.com/fgarofalo56/csa-inabox/commit/696951d4a8a970168243699e0a6972f1b2a31b50))
+
+
+### Performance Improvements
+
+* **csa-loom:** TTL-memoize remaining Monitor tab read paths (audit-t117) ([#1296](https://github.com/fgarofalo56/csa-inabox/issues/1296)) ([d91d5df](https://github.com/fgarofalo56/csa-inabox/commit/d91d5df4b8277dae8f46b429ec33917860379589))
+
+
+### Miscellaneous
+
+* **csa-loom:** pin workflow agents to Claude Fable 5 ([#1245](https://github.com/fgarofalo56/csa-inabox/issues/1245)) ([ff30a4e](https://github.com/fgarofalo56/csa-inabox/commit/ff30a4ec6040d5b0708346499f113f5d1847f3a9))
+
 ## [0.38.0](https://github.com/fgarofalo56/csa-inabox/compare/csa-inabox-v0.37.0...csa-inabox-v0.38.0) (2026-06-11)
 
 
