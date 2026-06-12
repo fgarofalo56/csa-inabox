@@ -1499,7 +1499,7 @@ export interface ScheduledQueryRuleInput {
   query: string;
   /** ARM scope(s) — defaults to the LA workspace resource id. */
   scopes?: string[];
-  /** GreaterThan | LessThan | Equal | GreaterThanOrEqual | LessThanOrEqual. */
+  /** GreaterThan | LessThan | Equals | GreaterThanOrEqual | LessThanOrEqual. */
   operator?: string;
   /** Threshold the aggregated query result is compared against. Default 0. */
   threshold?: number;

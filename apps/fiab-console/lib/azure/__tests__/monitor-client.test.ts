@@ -463,6 +463,49 @@ describe('listActionGroups', () => {
   });
 });
 
+describe('upsertScheduledQueryRule', () => {
+  it('PUTs a scheduledQueryRules resource with the real 2023-12-01 criteria shape', async () => {
+    process.env.LOOM_ALERT_RG = 'rg-alerts';
+    process.env.LOOM_LOG_ANALYTICS_RESOURCE_ID =
+      '/subscriptions/sub-1/resourceGroups/rg-admin/providers/Microsoft.OperationalInsights/workspaces/ws1';
+    const calls = captureFetch(() => ({ body: { id: '/subscriptions/sub-1/resourceGroups/rg-alerts/providers/Microsoft.Insights/scheduledQueryRules/my-rule' } }));
+    const { upsertScheduledQueryRule } = await import('../monitor-client');
+    const id = await upsertScheduledQueryRule({
+      name: 'my-rule',
+      query: 'AppExceptions | count',
+      operator: 'Equals',
+      threshold: 5,
+      severity: 2,
+      evaluationFrequency: 'PT15M',
+      windowSize: 'PT30M',
+      actionGroupIds: ['/subscriptions/sub-1/resourceGroups/rg-alerts/providers/Microsoft.Insights/actionGroups/ag1'],
+    });
+    expect(calls[0].init?.method).toBe('PUT');
+    expect(calls[0].url).toContain('/resourceGroups/rg-alerts/providers/Microsoft.Insights/scheduledQueryRules/my-rule?api-version=2023-12-01');
+    const body = JSON.parse(String(calls[0].init?.body));
+    const cond = body.properties.criteria.allOf[0];
+    // Operator must be the exact ARM enum (Equals, NOT Equal) or Azure rejects the PUT.
+    expect(cond.operator).toBe('Equals');
+    expect(cond.timeAggregation).toBe('Count');
+    expect(cond.threshold).toBe(5);
+    expect(cond.failingPeriods).toEqual({ numberOfEvaluationPeriods: 1, minFailingPeriodsToAlert: 1 });
+    expect(body.properties.scopes).toEqual([process.env.LOOM_LOG_ANALYTICS_RESOURCE_ID]);
+    expect(body.properties.actions.actionGroups).toEqual(['/subscriptions/sub-1/resourceGroups/rg-alerts/providers/Microsoft.Insights/actionGroups/ag1']);
+    expect(body.properties.autoMitigate).toBe(true);
+    expect(id).toContain('/scheduledQueryRules/my-rule');
+  });
+
+  it('honest-gates when no query scope is configured', async () => {
+    process.env.LOOM_ALERT_RG = 'rg-alerts';
+    delete process.env.LOOM_LOG_ANALYTICS_RESOURCE_ID;
+    delete process.env.LOOM_LOG_ANALYTICS_WORKSPACE_ID;
+    const { upsertScheduledQueryRule, MonitorNotConfiguredError } = await import('../monitor-client');
+    await expect(
+      upsertScheduledQueryRule({ name: 'r', query: 'X' }),
+    ).rejects.toBeInstanceOf(MonitorNotConfiguredError);
+  });
+});
+
 describe('patchScheduledQueryRule', () => {
   it('PATCHes properties.enabled=false (disable) preserving everything else', async () => {
     process.env.LOOM_ALERT_RG = 'rg-alerts';
