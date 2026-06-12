@@ -18,6 +18,15 @@ on:
         options:
           - whatif-only
           - full
+      topology:
+        description: 'Explicit topology (audit-t156). Overrides deployment_mode. single-sub=dev/demo; tenant=DMLZ console+shared only; dlz-attach=landing zone only (no second console). Empty=derive.'
+        type: choice
+        default: ''
+        options:
+          - ''
+          - single-sub
+          - tenant
+          - dlz-attach
 
 permissions:
   contents: read
@@ -28,6 +37,7 @@ env:
   AZURE_LOCATION: usgovvirginia
   CSA_LOOM_BOUNDARY: GCC-High
   CSA_LOOM_DEPLOYMENT_MODE: single-sub   # CI default; multi-sub via dispatch input
+  CSA_LOOM_TOPOLOGY: ${{ inputs.topology || '' }}
   CSA_LOOM_CAPACITY_SKU: F8
 
 jobs:
@@ -96,7 +106,8 @@ jobs:
             --location $AZURE_LOCATION \
             --template-file platform/fiab/bicep/main.bicep \
             --parameters platform/fiab/bicep/params/gcc-high.bicepparam \
-            --parameters adminEntraGroupId=${{ secrets.FIAB_GOV_ADMIN_GROUP_ID }}
+            --parameters adminEntraGroupId=${{ secrets.FIAB_GOV_ADMIN_GROUP_ID }} \
+            ${CSA_LOOM_TOPOLOGY:+--parameters topology="$CSA_LOOM_TOPOLOGY"}
 
       - name: Deploy-verification evidence receipt (§7)
         # Captures the GCC-High deploy-verification acceptance receipt as an
@@ -124,6 +135,7 @@ jobs:
           azd env set AZURE_LOCATION $AZURE_LOCATION
           azd env set CSA_LOOM_BOUNDARY $CSA_LOOM_BOUNDARY
           azd env set CSA_LOOM_DEPLOYMENT_MODE $CSA_LOOM_DEPLOYMENT_MODE
+          azd env set CSA_LOOM_TOPOLOGY "$CSA_LOOM_TOPOLOGY"
           azd env set CSA_LOOM_CAPACITY_SKU $CSA_LOOM_CAPACITY_SKU
           azd env set CSA_LOOM_ADMIN_GROUP_ID ${{ secrets.FIAB_GOV_ADMIN_GROUP_ID }}
           azd env set CSA_LOOM_OPENAI_LOCATION usgovvirginia
