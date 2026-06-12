@@ -79,9 +79,13 @@ const SOURCE_COLORS: Record<string, 'brand' | 'severe' | 'informative' | 'succes
 };
 
 const useStyles = makeStyles({
-  // left gutter so content never touches the sidebar's vertical rule
+  // left gutter so content never touches the sidebar's vertical rule.
+  // minWidth:0 lets this wrapper shrink below its content's min-content so the
+  // paddingLeft can never combine with a non-shrinking child to overflow the
+  // body track and bleed across the CatalogShell sidebar rule.
   gutter: {
     paddingLeft: tokens.spacingHorizontalL,
+    minWidth: 0,
   },
   searchRow: {
     display: 'flex',
@@ -99,6 +103,13 @@ const useStyles = makeStyles({
   },
   searchHint: {
     color: tokens.colorNeutralForeground3,
+    // Shrink/ellipsize so the hint copy never imposes a word-level min-content
+    // floor on the wrapping searchRow (which would push the card past the rule).
+    flexShrink: 1,
+    minWidth: 0,
+    overflow: 'hidden',
+    textOverflow: 'ellipsis',
+    whiteSpace: 'nowrap',
   },
   chipRow: {
     display: 'flex',
@@ -158,6 +169,9 @@ const useStyles = makeStyles({
   resultCount: {
     marginLeft: 'auto',
     color: tokens.colorNeutralForeground3,
+    // never set a hard floor on the wrapping chipRow
+    flexShrink: 0,
+    whiteSpace: 'nowrap',
   },
   hintBox: {
     fontSize: tokens.fontSizeBase200,
