@@ -419,6 +419,56 @@ override the token audience with `LOOM_POSTGRES_AAD_SCOPE` if needed.
   (`loomPostgresAadUser` param). The in-engine `pgaadauth_create_principal` call
   is a data-plane grant and intentionally cannot be expressed in ARM/bicep.
 
+## Azure SQL server — schema/table browser (Entra-admin data-plane) {#azure-sql-server-schema-browser}
+
+The **Azure SQL server** editor lets you drill from a logical server into any of
+its databases and browse that database's **schemas, tables, columns, indexes,
+constraints, views, stored procedures, functions, and table types** in a live
+object navigator. Each database is read on a **dedicated TDS connection** to
+`<server>.<sql-suffix>` (Azure SQL Database has no cross-database query, so the
+server cannot enumerate every database's objects on one connection — the
+navigator opens a fresh connection per selected database). All reads are real
+`sys.*` catalog queries over the existing Azure SQL TDS path — **no new Azure
+resource, route, or env var**.
+
+For the navigator to return rows (rather than the honest TDS auth error it shows
+otherwise) the **console UAMI must be able to read the target database's
+metadata**. One-time, per logical server:
+
+1. Make the console UAMI the server's **Microsoft Entra admin** — settable
+   inline from the editor's **AAD admin** ribbon button
+   (`Microsoft.Sql/servers/administrators`), via the portal, or:
+
+   ```bash
+   az sql server ad-admin create --resource-group <rg> --server <server> \
+     --display-name '<console-uami-name>' --object-id <console-uami-objectId>
+   ```
+
+   **or**, for least privilege, provision the UAMI as a contained user with
+   read + metadata rights in each database you want to browse (run as the
+   server's Entra admin):
+
+   ```sql
+   CREATE USER [<console-uami-name>] FROM EXTERNAL PROVIDER;
+   ALTER ROLE db_datareader ADD MEMBER [<console-uami-name>];
+   GRANT VIEW DEFINITION TO [<console-uami-name>];
+   ```
+
+Until one of these is in place the navigator renders the real connection/auth
+error verbatim (per `no-vaporware.md`) — ARM inventory (servers, databases,
+firewall, AAD admin) is already live without it.
+
+### Bicep sync
+
+- No new Azure resource or env var. The `Microsoft.Sql/servers/administrators`
+  (Entra admin) assignment and the in-database `db_datareader` + `VIEW
+  DEFINITION` grant are **data-plane** acts that intentionally cannot be
+  expressed in ARM/bicep — `platform/fiab/bicep/modules/admin-plane/sql-rbac.bicep`
+  deliberately grants the UAMI only the control-plane **SQL DB Contributor**
+  role and explicitly NOT data-plane access (see its header comment). The editor
+  exposes the AAD-admin setter so the operator can perform the one-time grant
+  from the UI.
+
 ## Azure SQL — full-text search + SQL 2025 vector indexes {#azure-sql-search-management}
 
 The standalone **Azure SQL database** editor's **Full-text search** and **Vector
