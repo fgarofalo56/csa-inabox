@@ -746,11 +746,21 @@ union isfuzzy=true (SynapseIntegrationPipelineRuns
           Status, Start, End, Submitter="", ErrorCode="", ErrorMessage="")`
     : '';
 
+  // ADFPipelineRun has NO TriggerName column. The submitter (trigger name for
+  // triggered runs, caller UPN for manual runs) lives in the dynamic
+  // SystemParameters JSON blob (per learn.microsoft.com/azure/data-factory/
+  // monitor-data-factory-reference: $.properties.SystemParameters -> dynamic).
+  // Extend the blob, coalescing the trigger name first, then the manual-run
+  // executor UPN. tostring(parse_json(...)) tolerates an empty/missing blob
+  // (yields "") so this never errors on either run type.
   const kql = `
 ADFPipelineRun
 | where TimeGenerated >= ago(${days}d)
+| extend _sp = parse_json(SystemParameters)
 | project TimeGenerated, Name=PipelineName, RunId, ItemType="Pipeline",
-          Status, Start, End, Submitter=TriggerName, ErrorCode, ErrorMessage
+          Status, Start, End,
+          Submitter=tostring(coalesce(_sp.TriggerName, _sp.ExecutorUserPrincipalName, _sp.UserPrincipalName)),
+          ErrorCode, ErrorMessage
 ${synapseUnion}
 | order by TimeGenerated desc
 | take ${limit}
