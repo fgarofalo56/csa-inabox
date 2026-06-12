@@ -24,7 +24,7 @@ import {
 
 /**
  * Operators Azure Monitor scheduled query rules support
- * (GreaterThan | GreaterThanOrEqual | LessThan | LessThanOrEqual | Equal).
+ * (GreaterThan | GreaterThanOrEqual | LessThan | LessThanOrEqual | Equals).
  * NOT_EQUAL is intentionally absent — the ARM schema does not accept it for
  * scheduledQueryRules criteria (see monitor-client.ts upsertScheduledQueryRule).
  */
@@ -33,7 +33,7 @@ export const MONITOR_OPS: { value: string; label: string; sign: string }[] = [
   { value: 'GreaterThanOrEqual', label: 'is above or equal ( ≥ )', sign: '≥' },
   { value: 'LessThan', label: 'is below ( < )', sign: '<' },
   { value: 'LessThanOrEqual', label: 'is below or equal ( ≤ )', sign: '≤' },
-  { value: 'Equal', label: 'is equal ( = )', sign: '=' },
+  { value: 'Equals', label: 'is equal ( = )', sign: '=' },
 ];
 
 /** ISO-8601 evaluation cadences. windowSize reuses the same set (must be ≥ freq). */
