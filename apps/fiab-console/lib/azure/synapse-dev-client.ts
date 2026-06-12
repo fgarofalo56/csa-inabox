@@ -21,17 +21,34 @@ import {
   ManagedIdentityCredential,
   ChainedTokenCredential,
 } from '@azure/identity';
-import { armHost } from './cloud-endpoints';
+import { armHost, detectLoomCloud } from './cloud-endpoints';
 
 // Cloud-aware endpoint hosts. ARM host comes from cloud-endpoints (AZURE_CLOUD /
 // LOOM_ARM_ENDPOINT aware); AZURE_ARM_HOST stays as an explicit per-call override.
-// The Synapse dev host suffix overrides per sovereign cloud via env, e.g.:
-//   AZURE_SYNAPSE_DEV_HOST_SUFFIX=dev.azuresynapse.usgovcloudapi.net
-// The Livy/ARM API versions + paths are identical across clouds — only the host
+//
+// The Synapse Studio dev-plane host is sovereign-cloud aware and AUTO-DERIVED
+// from detectLoomCloud() — identical to synapse-artifacts-client.ts so the Livy
+// Spark-batch submit path (Spark job definition Run) and the artifact CRUD path
+// resolve to the SAME host in every boundary. Commercial / GCC run on
+// `dev.azuresynapse.net`; GCC-High / IL5 / DoD run on the Azure Government host
+// `dev.azuresynapse.usgovcloudapi.net`. Without this split a Gov deployment's
+// Livy submit silently hits the Commercial host and 401s on the wrong token
+// audience. An explicit env override (AZURE_SYNAPSE_DEV_HOST_SUFFIX) still wins
+// for clouds we don't enumerate (e.g. China: `dev.azuresynapse.azure.cn`). The
+// Livy/ARM API versions + paths are identical across clouds — only the host
 // (and therefore the token audience, handled automatically by the credential)
 // changes.
+function synapseDevHostSuffix(): string {
+  const override = process.env.AZURE_SYNAPSE_DEV_HOST_SUFFIX;
+  if (override) return override.replace(/^\.+/, '').replace(/\/+$/, '');
+  const cloud = detectLoomCloud();
+  return cloud === 'GCC-High' || cloud === 'DoD'
+    ? 'dev.azuresynapse.usgovcloudapi.net'
+    : 'dev.azuresynapse.net';
+}
+
 const ARM_HOST = process.env.AZURE_ARM_HOST || armHost();
-const DEV_HOST_SUFFIX = process.env.AZURE_SYNAPSE_DEV_HOST_SUFFIX || 'dev.azuresynapse.net';
+const DEV_HOST_SUFFIX = synapseDevHostSuffix();
 
 const ARM_SCOPE = `https://${ARM_HOST}/.default`;
 const DEV_SCOPE = `https://${DEV_HOST_SUFFIX}/.default`;
@@ -66,8 +83,10 @@ function armBase(): string {
 
 export function devBase(): string {
   // Sovereign-cloud aware. Prefer the explicit LOOM_SYNAPSE_DEV_SUFFIX
-  // (e.g. `azuresynapse.us` for GCC-High / DoD), otherwise use the
-  // AZURE_SYNAPSE_DEV_HOST_SUFFIX host (default `dev.azuresynapse.net`).
+  // (e.g. `azuresynapse.us` for an alternate Gov host shape), otherwise use the
+  // auto-derived DEV_HOST_SUFFIX (sovereign-aware via detectLoomCloud():
+  // `dev.azuresynapse.net` in Commercial/GCC, `dev.azuresynapse.usgovcloudapi.net`
+  // in GCC-High/IL5/DoD — or the AZURE_SYNAPSE_DEV_HOST_SUFFIX override).
   const suffix = process.env.LOOM_SYNAPSE_DEV_SUFFIX;
   if (suffix) return `https://${ws()}.dev.${suffix}`;
   return `https://${ws()}.${DEV_HOST_SUFFIX}`;

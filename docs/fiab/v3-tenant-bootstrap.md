@@ -1584,9 +1584,9 @@ Materialized lake views (`materialized-lake-view` item type) need **no new tenan
 configuration**. They reuse the existing landing-zone backends:
 
 - **Refresh compute** — Synapse Spark batch via `LOOM_SYNAPSE_WORKSPACE` +
-  `LOOM_SYNAPSE_SPARK_POOL` (the Console UAMI must hold the **Synapse
-  Administrator** role to submit Livy batches — already granted for notebooks /
-  Spark job definitions).
+  `LOOM_SYNAPSE_SPARK_POOL` (the Console UAMI must hold **Synapse Compute
+  Operator** on the Spark pool to submit Livy batches — already granted for
+  notebooks / Spark job definitions; see [Synapse workspace tree](#synapse-kql-sjd)).
 - **Delta storage** — the DLZ ADLS Gen2 medallion containers
   (`LOOM_{BRONZE,SILVER,GOLD,LANDING}_URL`), Storage Blob Data Contributor.
 - **Serverless preview** — the `LOOM_SYNAPSE_WORKSPACE` `-ondemand` endpoint.
@@ -1603,6 +1603,47 @@ factory itself is gated by the existing `LOOM_SUBSCRIPTION_ID` / `LOOM_DLZ_RG` /
 `LOOM_ADF_NAME` vars + the Data Factory Contributor role.
 
 No Microsoft Fabric / OneLake tenant is required for any part of this.
+
+---
+
+## Synapse workspace tree — KQL scripts + Spark job definitions {#synapse-kql-sjd}
+
+The Synapse workspace tree's **KQL scripts** and **Spark job definitions (SJD)**
+groups create / edit / run real Synapse workspace artifacts via the data-plane
+(`<workspace>.dev.azuresynapse.*`, artifacts api-version `2020-12-01`). No
+Microsoft Fabric workspace is involved — these are Azure-native Synapse artifacts.
+
+**Env** — `LOOM_SYNAPSE_WORKSPACE` (the Synapse workspace name) gates the whole
+surface; when unset the BFF routes 503 with an honest MessageBar. `LOOM_SYNAPSE_SUB`
+overrides the subscription for a reused/BYO workspace. The data-plane host is
+**sovereign-cloud aware and auto-derived** from `LOOM_CLOUD` / `AZURE_CLOUD`
+(`dev.azuresynapse.net` in Commercial/GCC; `dev.azuresynapse.usgovcloudapi.net`
+in GCC-High/IL5/DoD) by both `synapse-artifacts-client.ts` (artifact CRUD) and
+`synapse-dev-client.ts` (Livy Spark-batch submit), so the KQL CRUD path and the
+SJD Run path resolve to the **same** host in every boundary. Override the host
+explicitly for clouds we don't enumerate (e.g. China) via
+`AZURE_SYNAPSE_DEV_HOST_SUFFIX=dev.azuresynapse.azure.cn` (artifacts client uses
+`LOOM_SYNAPSE_DEV_SUFFIX`). KQL-script **Run** targets a workspace **Kusto pool**
+(`<pool>.<ws>.kusto.azuresynapse.{net|us}`) listed from ARM — no standalone ADX,
+no Fabric Eventhouse.
+
+**Synapse RBAC (data plane)** — granted post-deploy by `landing-zone/synapse.bicep`
+deployment scripts on the **Console UAMI** (`consolePrincipalId`), all via
+`az synapse role assignment create`:
+
+- **Synapse Artifact Publisher** (workspace scope) — `kqlScripts/write,delete`
+  and `sparkJobDefinitions/write,delete`. Backs create / edit / delete in the
+  tree. Resource: `consoleArtifactPublisherRoleScript` (output
+  `consoleArtifactPublisherRoleAssigned`). Least-privilege; Synapse Administrator
+  is a superset that also works.
+- **Synapse Compute Operator** (Spark pool scope) — submit / cancel Spark jobs.
+  Backs the **SJD Run** (Livy batch) path. Resource: `consoleSparkSubmitRoleScript`.
+
+Both scripts require `synapseRoleAssignmentUamiId` (a UAMI pre-holding Synapse
+Administrator) and are skipped when `skipRoleGrants=true`. The SQL-AAD-admin
+assignment (`workspaces/administrators`) and ARM Contributor do **not** confer
+Synapse-RBAC artifact rights — without Artifact Publisher the UI renders but
+create/edit/delete 403s.
 
 ---
 
