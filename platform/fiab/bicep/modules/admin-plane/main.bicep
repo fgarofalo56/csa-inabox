@@ -24,9 +24,11 @@ param containerPlatform string
 @description('Optional registry/host prefix MCP catalog images are mirrored to (e.g. an ACR login server for air-gapped boundaries). Empty pulls from the upstream Docker MCP catalog / mcr.microsoft.com. Read by lib/azure/mcp-catalog.ts resolveCatalogImage().')
 param loomMcpCatalogRegistry string = ''
 
-@description('Functions host SKU. Reserved for v3.x — declared so the orchestrator contract is stable while the Functions host wiring is deferred.')
-#disable-next-line no-unused-params
-param functionsHostSku string
+// functionsHostSku (reserved for v3.x) was removed from this module: it was an
+// unused pass-through and admin-plane/main.bicep had hit the 256-parameter
+// Bicep/ARM limit (max-params Error). The parent main.bicep still declares it
+// for forward-compat; the Functions host wiring will re-introduce it here when
+// that work lands.
 
 @description('APIM SKU')
 param apimSku string
@@ -40,9 +42,10 @@ param catalogPrimary string
 @description('Agent orchestrator')
 param agentOrchestrator string
 
-@description('Capacity SKU. Reserved for v3.x — Fabric/Power BI capacity sizing parameter; wired downstream once landing-zone capacity module lands.')
-#disable-next-line no-unused-params
-param capacitySku string
+// capacitySku (reserved for v3.x) was removed from this module: it was an
+// unused pass-through here (the live consumers are the landing-zone + capacity
+// modules, which still receive it from the parent main.bicep). Removing it from
+// admin-plane keeps the module under the 256-parameter Bicep/ARM limit.
 
 @description('Foundry portal enabled')
 param foundryPortalEnabled bool
@@ -89,21 +92,12 @@ param loomRichDisplay bool = true
 @maxValue(20000)
 param loomDisplaySampleRows int = 5000
 
-@description('OpenAI region for chat. Reserved for v3.x — multi-region OpenAI deployment wiring (per-model regional pinning) is deferred.')
-#disable-next-line no-unused-params
-param openaiLocation string
-
-@description('OpenAI region for embeddings. Reserved for v3.x — see openaiLocation note above.')
-#disable-next-line no-unused-params
-param openaiEmbeddingsLocation string
-
-@description('OpenAI chat model. Reserved for v3.x — explicit deployment-name pinning is handled inside ai-foundry.bicep today.')
-#disable-next-line no-unused-params
-param openaiChatModel string
-
-@description('OpenAI embeddings model. Reserved for v3.x — see openaiChatModel note above.')
-#disable-next-line no-unused-params
-param openaiEmbeddingsModel string
+// openaiLocation / openaiEmbeddingsLocation / openaiChatModel /
+// openaiEmbeddingsModel (all reserved for v3.x) were removed from this module:
+// they were unused pass-throughs here (explicit deployment-name pinning lives
+// in ai-foundry.bicep today, fed from the parent main.bicep). Dropping them
+// keeps admin-plane/main.bicep under the 256-parameter Bicep/ARM limit
+// (max-params Error) so every boundary can deploy.
 
 @description('Key Vault Premium HSM isolated (IL5)')
 param keyVaultHsmIsolated bool
@@ -1099,11 +1093,10 @@ module keyvault 'keyvault.bicep' = {
     hsmIsolated: keyVaultHsmIsolated
     adminEntraGroupId: adminEntraGroupId
     consolePrincipalId: identity.outputs.uamiConsolePrincipalId
-    mcpPrincipalId: identity.outputs.uamiMcpPrincipalId
-    consolePrincipalNeedsCmkRole: consolePrincipalNeedsCmkBind
     // MCP app UAMI gets Key Vault Secrets User (read-only) so catalog-deployed
     // MCP servers can resolve their auth secret via Container Apps secretRef.
     mcpPrincipalId: identity.outputs.uamiMcpPrincipalId
+    consolePrincipalNeedsCmkRole: consolePrincipalNeedsCmkBind
     skipRoleGrants: skipRoleGrants
     privateEndpointSubnetId: network.outputs.privateEndpointsSubnetId
     privateDnsZoneVaultId: network.outputs.privateDnsZoneIds.keyvault
@@ -1713,17 +1706,14 @@ module aiDefense 'ai-defense.bicep' = {
 //                     Mirroring, Direct-Lake Shim, Presidio if Gov)
 // =====================================================================
 
-// MCP catalog Azure Files share + Container Apps env storage. Catalog-deployed
-// MCP servers (filesystem/git/memory) mount this at /data. Container Apps path
-// only — the AKS boundaries deploy MCP workloads via the GitOps manifest path.
-module mcpStorage 'mcp-storage.bicep' = if (containerPlatform == 'containerApps' && deployAppsEnabled) {
-  name: 'mcp-storage'
-  params: {
-    location: location
-    caeName: containerPlatformModule.outputs.caeName
-    complianceTags: complianceTags
-  }
-}
+// MCP catalog Azure Files share + Container Apps env storage are provisioned by
+// the inline `mcpStorage` storage account + `mcpEnvStorage` managedEnvironments/
+// storages resources above (gated on mcpFilesActive). The Container Apps path
+// mounts that share at /data; the AKS boundaries deploy MCP workloads via the
+// GitOps manifest path. (A prior refactor briefly added a parallel
+// `module mcpStorage 'mcp-storage.bicep'` here, which collided with the inline
+// `resource mcpStorage` identifier and its non-existent `.outputs` — removed so
+// main.bicep builds clean and every boundary can deploy.)
 
 module appDeployments 'app-deployments.bicep' = if (containerPlatform == 'containerApps' && deployAppsEnabled) {
   name: 'app-deployments'
@@ -1776,9 +1766,10 @@ module appDeployments 'app-deployments.bicep' = if (containerPlatform == 'contai
             { name: 'LOOM_ACR_LOGIN_SERVER', value: registry.outputs.acrLoginServer }
             { name: 'LOOM_MCP_UAMI_ID', value: identity.outputs.uamiMcpId }
             { name: 'LOOM_MCP_UAMI_CLIENT_ID', value: identity.outputs.uamiMcpClientId }
-            // Azure Files env-storage name for catalog MCP servers that mount /data.
-            { name: 'LOOM_MCP_STORAGE_NAME', value: (containerPlatform == 'containerApps' && deployAppsEnabled) ? mcpStorage!.outputs.envStorageName : '' }
-            { name: 'LOOM_MCP_FILE_SHARE', value: (containerPlatform == 'containerApps' && deployAppsEnabled) ? mcpStorage!.outputs.fileShareName : '' }
+            // Azure Files env-storage name for catalog MCP servers that mount
+            // /data. Sourced from the inline mcpStorage/mcpEnvStorage path
+            // (LOOM_MCP_STORAGE_NAME is also set below from the same vars).
+            { name: 'LOOM_MCP_FILE_SHARE', value: mcpFilesActive ? mcpShareName : '' }
             // Optional ACR mirror prefix for catalog MCP images in air-gapped
             // boundaries (empty → upstream Docker MCP catalog / mcr.microsoft.com).
             { name: 'LOOM_MCP_CATALOG_REGISTRY', value: loomMcpCatalogRegistry }

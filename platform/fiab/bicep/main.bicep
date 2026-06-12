@@ -575,20 +575,20 @@ module adminPlane 'modules/admin-plane/main.bicep' = {
     boundary: boundary
     loomAzureCloud: loomAzureCloud
     containerPlatform: containerPlatform
-    functionsHostSku: functionsHostSku
+    // NOTE: functionsHostSku / capacitySku / openai* are NOT passed to the
+    // admin-plane module. They are reserved-for-v3.x values consumed elsewhere
+    // (capacitySku → landing-zone + capacity modules; openai* → ai-foundry);
+    // the admin-plane module declared them only as unused pass-throughs, which
+    // pushed it over the 256-parameter ARM/Bicep limit (max-params Error). They
+    // are dropped here so admin-plane/main.bicep builds clean.
     apimSku: apimSku
     catalogPrimary: catalogPrimary
     agentOrchestrator: agentOrchestrator
-    capacitySku: capacitySku
     foundryPortalEnabled: foundryPortalEnabled
     defenderForAIEnabled: defenderForAIEnabled
     purviewEnabled: purviewEnabled
     atlasOnAksEnabled: atlasOnAksEnabled
     databricksUnityCatalogEnabled: databricksUnityCatalogEnabled
-    openaiLocation: openaiLocation
-    openaiEmbeddingsLocation: openaiEmbeddingsLocation
-    openaiChatModel: openaiChatModel
-    openaiEmbeddingsModel: openaiEmbeddingsModel
     keyVaultHsmIsolated: keyVaultHsmIsolated
     consolePrincipalNeedsCmkBind: consolePrincipalNeedsCmkBind
     adminEntraGroupId: adminEntraGroupId

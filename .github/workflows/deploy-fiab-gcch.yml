@@ -98,6 +98,24 @@ jobs:
             --parameters platform/fiab/bicep/params/gcc-high.bicepparam \
             --parameters adminEntraGroupId=${{ secrets.FIAB_GOV_ADMIN_GROUP_ID }}
 
+      - name: Deploy-verification evidence receipt (§7)
+        # Captures the GCC-High deploy-verification acceptance receipt as an
+        # artifact: deterministic ARM tests + sovereign-endpoint sweep + the §4
+        # host matrix, plus a live what-if line (already on the Gov sub + bicep).
+        # Live full-stack smoke is honestly BLOCKED by runbook gap #2 (no in-repo
+        # AKS workload deployment for the Loom apps). Never fails the job.
+        run: |
+          bash scripts/csa-loom/gov-verify-evidence.sh \
+            --boundary gcc-high --live \
+            --out "$RUNNER_TEMP/gov-verify-receipt-gcch-${{ github.run_id }}.txt" || true
+
+      - name: Upload GCC-High verification receipt
+        uses: actions/upload-artifact@v4
+        with:
+          name: gov-verify-receipt-gcch-${{ github.run_id }}
+          path: ${{ runner.temp }}/gov-verify-receipt-gcch-${{ github.run_id }}.txt
+          if-no-files-found: warn
+
       - name: Provision (with full Gov dispatch)
         if: github.event_name == 'schedule' || inputs.run_mode == 'full'
         run: |
