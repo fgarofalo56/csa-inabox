@@ -36,6 +36,16 @@ param existingDatabricksWorkspace = readEnvironmentVariable('EXISTING_DATABRICKS
 param existingDatabricksRg       = readEnvironmentVariable('EXISTING_DATABRICKS_RG', '')
 param existingDatabricksSub      = readEnvironmentVariable('EXISTING_DATABRICKS_SUB', '')
 param existingDatabricksHostname = readEnvironmentVariable('EXISTING_DATABRICKS_HOSTNAME', '')
+// Adopt-existing shared services (D6 Setup-Wizard discovery): LAW / Key Vault / gateway.
+param existingLogAnalyticsWorkspace = readEnvironmentVariable('EXISTING_LAW', '')
+param existingLogAnalyticsRg      = readEnvironmentVariable('EXISTING_LAW_RG', '')
+param existingLogAnalyticsSub     = readEnvironmentVariable('EXISTING_LAW_SUB', '')
+param existingKeyVaultName        = readEnvironmentVariable('EXISTING_KEYVAULT', '')
+param existingKeyVaultRg          = readEnvironmentVariable('EXISTING_KEYVAULT_RG', '')
+param existingKeyVaultSub         = readEnvironmentVariable('EXISTING_KEYVAULT_SUB', '')
+param existingGatewayName         = readEnvironmentVariable('EXISTING_GATEWAY', '')
+param existingGatewayRg           = readEnvironmentVariable('EXISTING_GATEWAY_RG', '')
+param existingGatewaySub          = readEnvironmentVariable('EXISTING_GATEWAY_SUB', '')
 param fabricEnabled              = (toLower(readEnvironmentVariable('FABRIC_ENABLED', 'false')) == 'true')
 // <<< BYO-WIZARD END
 

@@ -141,6 +141,9 @@ SERVICES=(
   "adf|Data Factory|Microsoft.DataFactory/factories||existingAdfFactory|existingAdfRg|existingAdfSub|EXISTING_ADF|EXISTING_ADF_RG|EXISTING_ADF_SUB|"
   "eventhubs|Event Hubs|Microsoft.EventHub/namespaces||existingEventHubNamespace|existingEventHubRg|existingEventHubSub|EXISTING_EVENTHUB_NAMESPACE|EXISTING_EVENTHUB_RG|EXISTING_EVENTHUB_SUB|"
   "databricks|Databricks|Microsoft.Databricks/workspaces||existingDatabricksWorkspace|existingDatabricksRg|existingDatabricksSub|EXISTING_DATABRICKS|EXISTING_DATABRICKS_RG|EXISTING_DATABRICKS_SUB|"
+  "law|Log Analytics|Microsoft.OperationalInsights/workspaces||existingLogAnalyticsWorkspace|existingLogAnalyticsRg|existingLogAnalyticsSub|EXISTING_LAW|EXISTING_LAW_RG|EXISTING_LAW_SUB|"
+  "keyvault|Key Vault|Microsoft.KeyVault/vaults||existingKeyVaultName|existingKeyVaultRg|existingKeyVaultSub|EXISTING_KEYVAULT|EXISTING_KEYVAULT_RG|EXISTING_KEYVAULT_SUB|"
+  "gateway|App Gateway / Front Door|Microsoft.Network/applicationGateways||existingGatewayName|existingGatewayRg|existingGatewaySub|EXISTING_GATEWAY|EXISTING_GATEWAY_RG|EXISTING_GATEWAY_SUB|appGatewayEnabled"
 )
 
 # Accumulators

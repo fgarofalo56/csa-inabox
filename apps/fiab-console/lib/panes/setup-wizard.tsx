@@ -76,6 +76,12 @@ import {
 } from '@fluentui/react-icons';
 import type { FluentIcon } from '@fluentui/react-icons';
 import { itemVisual } from '@/lib/components/ui/item-type-visual';
+import {
+  SHARED_SERVICES,
+  type SharedServiceKey,
+  type ServiceCandidate,
+  type ServiceChoice,
+} from '@/lib/setup/shared-services';
 import { CapacityEquivalencePanel } from '@/lib/components/setup/capacity-equivalence-panel';
 import { SetupDeploymentDiagram, type DiagramSpoke } from '@/lib/components/setup/deployment-diagram';
 import {
@@ -94,6 +100,7 @@ type Step =
   | 'mode'
   | 'multi-sub-choice'  // New: only shown when mode='multi-sub' — branch to wire-new vs wire-existing
   | 'subscription'
+  | 'discover'
   | 'domain'
   | 'capacity'
   | 'review'
@@ -116,6 +123,13 @@ interface WizardState {
   location?: string;
   domainName?: string;
   capacitySku?: string;
+  /**
+   * Adopt-existing (D6): per shared-service reuse/new/gate choice. Undefined
+   * until the operator reaches the 'discover' step and discovery loads. A
+   * 'reuse' choice with a candidate flows into bicep as the matching
+   * existing<Svc> param via the deploy payload.
+   */
+  serviceChoices?: Partial<Record<SharedServiceKey, ServiceChoice>>;
   /** Optional vanity console URL (e.g. csa-loom.contoso.ai). Empty = generated Front Door host. */
   vanityDomain?: string;
   /** Multi-sub mode only: the deployment sub in which the DLZ lands (distinct from admin-plane sub) */
@@ -152,6 +166,7 @@ const RAIL_STEPS: { key: Step; label: string; hint: string }[] = [
   { key: 'boundary', label: 'Cloud boundary', hint: 'Where Loom runs' },
   { key: 'mode', label: 'Deployment mode', hint: 'Single or multi-sub' },
   { key: 'subscription', label: 'Subscription & region', hint: 'Deploy target' },
+  { key: 'discover', label: 'Shared services', hint: 'Reuse or deploy new' },
   { key: 'domain', label: 'Domain name', hint: 'Landing-zone name' },
   { key: 'capacity', label: 'Capacity sizing', hint: 'Compute equivalence' },
   { key: 'review', label: 'Review & deploy', hint: 'Confirm and launch' },
@@ -402,6 +417,19 @@ const useStyles = makeStyles({
     border: `1px solid ${tokens.colorNeutralStroke2}`,
     backgroundColor: tokens.colorNeutralBackground2,
   },
+  // adopt-existing (discover) step: one card per shared service
+  svcCard: {
+    display: 'flex',
+    flexDirection: 'column',
+    gap: tokens.spacingVerticalS,
+    padding: tokens.spacingVerticalL,
+    borderRadius: tokens.borderRadiusLarge,
+    border: `1px solid ${tokens.colorNeutralStroke2}`,
+    backgroundColor: tokens.colorNeutralBackground1,
+  },
+  svcCardHead: { display: 'flex', alignItems: 'flex-start', gap: tokens.spacingHorizontalM },
+  svcChecks: { display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalXS },
+  svcCheckRow: { display: 'flex', alignItems: 'flex-start', gap: tokens.spacingHorizontalXS },
   serviceIconChip: {
     width: '24px',
     height: '24px',
@@ -475,6 +503,13 @@ export function SetupWizardPane() {
   // Multi-sub Route B: existing-DLZ discovery (Azure Resource Graph).
   const [existingLoading, setExistingLoading] = useState(false);
   const [existingError, setExistingError] = useState<string | undefined>();
+
+  // Adopt-existing (D6): shared-service discovery candidates (Resource Graph)
+  // and per-service validation in-flight set.
+  const [serviceCandidates, setServiceCandidates] = useState<Partial<Record<SharedServiceKey, ServiceCandidate[]>> | undefined>();
+  const [discoverLoading, setDiscoverLoading] = useState(false);
+  const [discoverError, setDiscoverError] = useState<string | undefined>();
+  const [validating, setValidating] = useState<Partial<Record<SharedServiceKey, boolean>>>({});
 
   const bicepPreview = useMemo(() => renderBicepParam(state), [state]);
 
@@ -583,6 +618,99 @@ export function SetupWizardPane() {
     }
   }, []);
 
+  // Adopt-existing (D6): discover existing shared services across visible subs
+  // via Azure Resource Graph, and seed default per-service choices. The default
+  // is "deploy new" (the full deploy provisions each), except Purview — when a
+  // tenant account exists it is one-per-tenant, so we pin it to reuse.
+  const loadDiscoverServices = useCallback(async () => {
+    setDiscoverLoading(true);
+    setDiscoverError(undefined);
+    try {
+      const res = await fetch('/api/setup/discover-services');
+      const j = await res.json().catch(() => ({}));
+      if (!res.ok || !j.ok) {
+        setDiscoverError(j.error || j.hint || `Could not discover shared services (HTTP ${res.status}).`);
+        setServiceCandidates({});
+        return;
+      }
+      const cands = (j.services || {}) as Partial<Record<SharedServiceKey, ServiceCandidate[]>>;
+      setServiceCandidates(cands);
+      setState((s) => {
+        const choices: Partial<Record<SharedServiceKey, ServiceChoice>> = { ...(s.serviceChoices || {}) };
+        for (const svc of SHARED_SERVICES) {
+          if (choices[svc.key]) continue; // preserve any operator selection
+          const list = cands[svc.key] || [];
+          if (svc.oneePerTenant && list.length > 0) {
+            choices[svc.key] = { mode: 'reuse', candidate: list[0] };
+          } else {
+            choices[svc.key] = { mode: 'new' };
+          }
+        }
+        return { ...s, serviceChoices: choices };
+      });
+    } catch (e) {
+      setDiscoverError(e instanceof Error ? e.message : String(e));
+      setServiceCandidates({});
+    } finally {
+      setDiscoverLoading(false);
+    }
+  }, []);
+
+  // Validate one reuse candidate against the target region + boundary (real
+  // ARM checks). Stores the checks on the service's choice for inline display.
+  const validateService = useCallback(
+    async (key: SharedServiceKey, candidate: ServiceCandidate) => {
+      setValidating((v) => ({ ...v, [key]: true }));
+      try {
+        const res = await fetch('/api/setup/validate-service', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ serviceKey: key, candidate, targetRegion: state.location, boundary: state.boundary }),
+        });
+        const j = await res.json().catch(() => ({}));
+        setState((s) => {
+          const choices = { ...(s.serviceChoices || {}) };
+          const cur = choices[key] || { mode: 'reuse' as const };
+          choices[key] = {
+            ...cur,
+            mode: 'reuse',
+            candidate,
+            checks: j.ok ? j.checks : [{ label: 'Validation', status: 'warn', detail: j.error || `Validation failed (HTTP ${res.status}).` }],
+            worst: j.ok ? j.worst : 'warn',
+          };
+          return { ...s, serviceChoices: choices };
+        });
+      } catch (e) {
+        setState((s) => {
+          const choices = { ...(s.serviceChoices || {}) };
+          const cur = choices[key] || { mode: 'reuse' as const };
+          choices[key] = { ...cur, mode: 'reuse', candidate, checks: [{ label: 'Validation', status: 'warn', detail: e instanceof Error ? e.message : String(e) }], worst: 'warn' };
+          return { ...s, serviceChoices: choices };
+        });
+      } finally {
+        setValidating((v) => ({ ...v, [key]: false }));
+      }
+    },
+    [state.location, state.boundary],
+  );
+
+  // Set a per-service choice from the dropdown selection ("reuse:<idx>" | "new" | "gate").
+  const setServiceChoice = useCallback(
+    (key: SharedServiceKey, value: string) => {
+      const list = serviceCandidates?.[key] || [];
+      if (value === 'new' || value === 'gate') {
+        setState((s) => ({ ...s, serviceChoices: { ...(s.serviceChoices || {}), [key]: { mode: value } } }));
+        return;
+      }
+      const idx = Number(value.replace('reuse:', ''));
+      const candidate = list[idx];
+      if (!candidate) return;
+      setState((s) => ({ ...s, serviceChoices: { ...(s.serviceChoices || {}), [key]: { mode: 'reuse', candidate } } }));
+      void validateService(key, candidate);
+    },
+    [serviceCandidates, validateService],
+  );
+
   // Load subscriptions when the operator reaches the subscription step in a
   // path that needs a picker (multi-sub wire-new chooses spoke subs).
   useEffect(() => {
@@ -605,6 +733,13 @@ export function SetupWizardPane() {
       void loadRegions(state.boundary, state.subscriptionId);
     }
   }, [state.step, state.boundary, state.subscriptionId, loadRegions]);
+
+  // Adopt-existing: discover shared services on entering the 'discover' step.
+  useEffect(() => {
+    if (state.step === 'discover' && serviceCandidates === undefined && !discoverLoading && !discoverError) {
+      void loadDiscoverServices();
+    }
+  }, [state.step, serviceCandidates, discoverLoading, discoverError, loadDiscoverServices]);
 
   // Single-sub: auto-bind the new DLZ to the Admin Plane subscription (no dropdown)
   // and default the region to the admin-plane deployment region when available.
@@ -815,6 +950,7 @@ export function SetupWizardPane() {
         // single-sub: admin sub is auto-selected; region must be chosen.
         return !!(config?.adminSubscriptionId || state.subscriptionId) && !!state.location;
       case 'domain': return !!state.domainName;
+      case 'discover': return !!state.serviceChoices;
       case 'capacity': return !!state.capacitySku;
       case 'review': return state.step === 'done';
       default: return false;
@@ -1173,7 +1309,7 @@ export function SetupWizardPane() {
                     ? (state.dlzSubscriptionIds?.length ?? 0) === 0 || !state.location
                     : !state.location
               }
-              onNext={() => go(isWireExisting ? 'review' : 'domain')}
+              onNext={() => go(isWireExisting ? 'review' : 'discover')}
               extra={
                 <Button
                   appearance="subtle"
@@ -1184,6 +1320,130 @@ export function SetupWizardPane() {
                     void loadRegions(state.boundary, state.subscriptionId);
                   }}
                   disabled={subsLoading || existingLoading}
+                >
+                  Refresh
+                </Button>
+              }
+            />
+          </>
+        )}
+
+        {state.step === 'discover' && (
+          <>
+            <div className={styles.stepHeader}>
+              <Subtitle2>Adopt existing shared services</Subtitle2>
+              <Body1>
+                Loom scanned the subscriptions your identity can see (Azure Resource Graph) for existing
+                instances of each shared service. For each one, choose <b>Reuse</b> an existing resource,
+                <b> Deploy new</b>, or <b>Gate</b> (leave unconfigured). Reuse picks flow into the deployment
+                as <code>existing&lt;Service&gt;</code> parameters and are validated for region, permissions,
+                and SKU/model compatibility — honestly, with no faked checks.
+              </Body1>
+            </div>
+
+            {discoverError && (
+              <MessageBar intent="warning">
+                <MessageBarBody style={{ whiteSpace: 'pre-wrap' }}>{discoverError}</MessageBarBody>
+              </MessageBar>
+            )}
+
+            {discoverLoading ? (
+              <div className={styles.inlineLoad}>
+                <Spinner size="tiny" /> <Caption1>Discovering existing shared services via Azure Resource Graph…</Caption1>
+              </div>
+            ) : (
+              <div className={styles.fields} style={{ maxWidth: 'none' }}>
+                {SHARED_SERVICES.map((svc) => {
+                  const v = itemVisual(svc.visual);
+                  const Icon = v.icon;
+                  const list = serviceCandidates?.[svc.key] || [];
+                  const choice = state.serviceChoices?.[svc.key];
+                  const reusePinned = !!svc.oneePerTenant && list.length > 0;
+                  const selectedValue =
+                    choice?.mode === 'reuse' && choice.candidate
+                      ? `reuse:${list.findIndex((c) => c.id === choice.candidate!.id)}`
+                      : choice?.mode === 'gate'
+                        ? 'gate'
+                        : 'new';
+                  const selText =
+                    choice?.mode === 'reuse' && choice.candidate
+                      ? `Reuse ${choice.candidate.name}`
+                      : choice?.mode === 'gate'
+                        ? 'Gate (leave unconfigured)'
+                        : 'Deploy new';
+                  return (
+                    <div key={svc.key} className={styles.svcCard}>
+                      <div className={styles.svcCardHead}>
+                        <span className={styles.serviceIconChip} style={{ backgroundColor: `${v.color}1f`, color: v.color, width: 32, height: 32 }} aria-hidden>
+                          <Icon />
+                        </span>
+                        <div className={styles.optionBody} style={{ flex: 1 }}>
+                          <span className={styles.optionTitleRow}>
+                            <Body1Strong>{svc.label}</Body1Strong>
+                            <Badge appearance="tint" color="informative" size="small">
+                              {list.length} found
+                            </Badge>
+                            {reusePinned && <Badge appearance="tint" color="warning" size="small">Reuse required</Badge>}
+                          </span>
+                          <Caption1 className={styles.railHint}>{svc.note}</Caption1>
+                        </div>
+                      </div>
+                      <Field label="Choice">
+                        <Dropdown
+                          value={selText}
+                          selectedOptions={[selectedValue]}
+                          onOptionSelect={(_, d) => setServiceChoice(svc.key, d.optionValue as string)}
+                        >
+                          {list.map((c, i) => (
+                            <Option key={c.id} value={`reuse:${i}`} text={`Reuse ${c.name}`}>
+                              Reuse {c.name} — {c.region || '?'} · {c.rg} · {c.subscriptionId}
+                            </Option>
+                          ))}
+                          {!reusePinned && (
+                            <Option value="new" text="Deploy new">
+                              Deploy new (provision with this landing zone)
+                            </Option>
+                          )}
+                          <Option value="gate" text="Gate (leave unconfigured)">
+                            Gate — leave unconfigured (honest MessageBar until set)
+                          </Option>
+                        </Dropdown>
+                      </Field>
+                      {validating[svc.key] && (
+                        <div className={styles.inlineLoad}>
+                          <Spinner size="tiny" /> <Caption1>Validating {svc.label}…</Caption1>
+                        </div>
+                      )}
+                      {choice?.mode === 'reuse' && choice.checks && choice.checks.length > 0 && (
+                        <div className={styles.svcChecks}>
+                          {choice.checks.map((chk, i) => (
+                            <MessageBar
+                              key={i}
+                              intent={chk.status === 'pass' ? 'success' : chk.status === 'fail' ? 'error' : 'warning'}
+                            >
+                              <MessageBarBody>
+                                <MessageBarTitle>{chk.label}</MessageBarTitle>{' '}
+                                {chk.detail}
+                              </MessageBarBody>
+                            </MessageBar>
+                          ))}
+                        </div>
+                      )}
+                    </div>
+                  );
+                })}
+              </div>
+            )}
+
+            <Footer
+              onBack={() => go('subscription')}
+              onNext={() => go('domain')}
+              extra={
+                <Button
+                  appearance="subtle"
+                  icon={<ArrowClockwise20Regular />}
+                  onClick={() => { setDiscoverError(undefined); setServiceCandidates(undefined); }}
+                  disabled={discoverLoading}
                 >
                   Refresh
                 </Button>
@@ -1227,7 +1487,7 @@ export function SetupWizardPane() {
                 />
               </Field>
             </div>
-            <Footer onBack={() => go('subscription')} nextDisabled={!state.domainName} onNext={() => go('capacity')} />
+            <Footer onBack={() => go('discover')} nextDisabled={!state.domainName} onNext={() => go('capacity')} />
           </>
         )}
 
@@ -1350,6 +1610,35 @@ export function SetupWizardPane() {
               {!isWireExisting && <SummaryCell label="Domain" value={state.domainName} />}
               {!isWireExisting && <SummaryCell label="Capacity" value={state.capacitySku} />}
             </div>
+
+            {/* Adopt-existing: shared services the deploy will REUSE vs deploy new. */}
+            {!isWireExisting && state.serviceChoices && (() => {
+              const reused = SHARED_SERVICES
+                .map((svc) => ({ svc, c: state.serviceChoices?.[svc.key] }))
+                .filter((x) => x.c?.mode === 'reuse' && x.c.candidate);
+              const newCount = SHARED_SERVICES.filter((svc) => (state.serviceChoices?.[svc.key]?.mode ?? 'new') === 'new').length;
+              const gateCount = SHARED_SERVICES.filter((svc) => state.serviceChoices?.[svc.key]?.mode === 'gate').length;
+              return (
+                <div>
+                  <Body1Strong>Shared services</Body1Strong>
+                  <Caption1 className={styles.summaryLabel} style={{ display: 'block', marginTop: 2 }}>
+                    {reused.length} reused · {newCount} deploy new · {gateCount} gated
+                  </Caption1>
+                  {reused.length > 0 && (
+                    <div className={styles.summaryGrid} style={{ marginTop: tokens.spacingVerticalS }}>
+                      {reused.map(({ svc, c }) => (
+                        <SummaryCell
+                          key={svc.key}
+                          label={`Reuse · ${svc.label}`}
+                          value={c!.candidate!.name}
+                          sub={`${c!.candidate!.region || '?'} · ${c!.candidate!.rg}${c?.worst ? ` · ${c.worst}` : ''}`}
+                        />
+                      ))}
+                    </div>
+                  )}
+                </div>
+              );
+            })()}
 
             <Divider />
 

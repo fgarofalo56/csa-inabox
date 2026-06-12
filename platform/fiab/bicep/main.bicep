@@ -313,6 +313,29 @@ param existingAdfRg string = ''
 @description('Subscription id of the existing Data Factory (cross-sub reuse).')
 param existingAdfSub string = ''
 
+// ---- Adopt-existing shared services (D6 Setup-Wizard discovery step) ----
+// Log Analytics workspace, Key Vault, and Application Gateway / Front Door —
+// the three shared services the wizard discovers + offers reuse-vs-new for, on
+// top of the BYO family above. Same triple pattern; forwarded into byoExisting.
+@description('Reuse an existing Log Analytics workspace (name) for diagnostics + the LAW→Event Hubs→ADX live feed instead of provisioning one.')
+param existingLogAnalyticsWorkspace string = ''
+@description('Resource group of the existing Log Analytics workspace.')
+param existingLogAnalyticsRg string = ''
+@description('Subscription id of the existing Log Analytics workspace (cross-sub reuse).')
+param existingLogAnalyticsSub string = ''
+@description('Reuse an existing Key Vault (name) for Loom secrets / CMK instead of provisioning one.')
+param existingKeyVaultName string = ''
+@description('Resource group of the existing Key Vault.')
+param existingKeyVaultRg string = ''
+@description('Subscription id of the existing Key Vault (cross-sub reuse).')
+param existingKeyVaultSub string = ''
+@description('Reuse an existing Application Gateway / Front Door (name) for ingress instead of provisioning one.')
+param existingGatewayName string = ''
+@description('Resource group of the existing gateway.')
+param existingGatewayRg string = ''
+@description('Subscription id of the existing gateway (cross-sub reuse).')
+param existingGatewaySub string = ''
+
 @description('Microsoft Fabric mode. DEFAULT false (Azure-native, no Fabric dependency per no-fabric-dependency.md). When false, no Fabric capacity/workspace is bound and loomDefaultFabricWorkspace is forced empty; the Console gates Fabric calls on UAMI authz and stays fully functional on Azure-native backends. Set true ONLY to opt into a bound Fabric workspace.')
 param fabricEnabled bool = false
 
@@ -654,6 +677,16 @@ module adminPlane 'modules/admin-plane/main.bicep' = {
       adfFactory: existingAdfFactory
       adfRg: existingAdfRg
       adfSub: existingAdfSub
+      // Adopt-existing shared services (D6): LAW / Key Vault / gateway reuse.
+      logAnalyticsWorkspace: existingLogAnalyticsWorkspace
+      logAnalyticsRg: existingLogAnalyticsRg
+      logAnalyticsSub: existingLogAnalyticsSub
+      keyVaultName: existingKeyVaultName
+      keyVaultRg: existingKeyVaultRg
+      keyVaultSub: existingKeyVaultSub
+      gatewayName: existingGatewayName
+      gatewayRg: existingGatewayRg
+      gatewaySub: existingGatewaySub
     }
     // Azure ML workspace for the notebook AML path. Name is the deterministic
     // deploy-planner ml-workspace.bicep name (uniqueString over the DLZ RG), so

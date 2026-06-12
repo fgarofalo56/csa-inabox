@@ -1,6 +1,12 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { getSession } from '@/lib/auth/session';
 import { enforceCapability } from '@/lib/auth/feature-gate';
+import {
+  choicesToExistingEnv,
+  choicesToBicepParams,
+  type ServiceChoice,
+  type SharedServiceKey,
+} from '@/lib/setup/shared-services';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -42,6 +48,12 @@ interface SetupConfig {
   /** Multi-sub: parallel arrays the bicep `[for]` loop consumes. */
   dlzSubscriptionIds?: string[];
   dlzDomainNames?: string[];
+  /**
+   * Adopt-existing (D6): per shared-service reuse/new/gate choices. Reuse
+   * picks are translated into EXISTING_* env + existing<Svc> bicep params so
+   * the deployment adopts the chosen resource instead of provisioning a new one.
+   */
+  serviceChoices?: Partial<Record<SharedServiceKey, ServiceChoice>>;
 }
 
 const GUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
@@ -104,6 +116,13 @@ export async function POST(req: NextRequest) {
   const isGov = body.boundary === 'GCC-High' || body.boundary === 'IL5';
   const region = body.location || (isGov ? 'usgovvirginia' : 'eastus2');
 
+  // Adopt-existing (D6): translate reuse choices into the canonical EXISTING_*
+  // env map + existing<Svc> bicep param assignments. These flow to the
+  // orchestrator and into the copy-paste `az deployment sub create`, so a
+  // "reuse" pick in the wizard adopts the existing resource at deploy time.
+  const existingEnv = choicesToExistingEnv(body.serviceChoices);
+  const existingBicepParams = choicesToBicepParams(body.serviceChoices);
+
   // Validate multi-sub spoke ids when present (parallel arrays the bicep loop reads).
   if (Array.isArray(body.dlzSubscriptionIds) && body.dlzSubscriptionIds.length) {
     const bad = body.dlzSubscriptionIds.filter((id) => !GUID_RE.test(id));
@@ -136,7 +155,7 @@ export async function POST(req: NextRequest) {
       const orchRes = await fetch(`${orchUrl}/api/setup/deploy`, {
         method: 'POST',
         headers,
-        body: JSON.stringify({ ...body, region }),
+        body: JSON.stringify({ ...body, region, existingServicesEnv: existingEnv }),
       });
       const oj: any = await orchRes.json().catch(() => ({}));
       // The orchestrator's DeployResponse is snake_case (deployment_id / stream_url).
@@ -246,10 +265,18 @@ export async function POST(req: NextRequest) {
   const domainNames = isMulti
     ? (body.dlzDomainNames && body.dlzDomainNames.length ? body.dlzDomainNames : [body.domainName!])
     : [body.domainName!];
-  const dlzParamLine = isMulti
+  const dlzParamLineBase = isMulti
     ? `  -p dlzSubscriptionIds="[${body.dlzSubscriptionIds!.map((s) => `'${s}'`).join(',')}]" ` +
       `dlzDomainNames="[${domainNames.map((d) => `'${d}'`).join(',')}]" capacitySku=${body.capacitySku}`
     : `  -p dlzDomainNames="['${body.domainName}']" capacitySku=${body.capacitySku}`;
+
+  // Adopt-existing: fold the existing<Svc> reuse params (if any) onto the deploy
+  // command so the manual run adopts the same resources the wizard chose. The
+  // base line gets a `\` continuation and the existing params follow as a `-p` line.
+  const dlzParamLine =
+    existingBicepParams.length > 0
+      ? `${dlzParamLineBase} \\\n  -p ${existingBicepParams.join(' ')}`
+      : dlzParamLineBase;
 
   return NextResponse.json(
     {

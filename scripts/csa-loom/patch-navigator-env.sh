@@ -259,6 +259,28 @@ if [[ -n "$ADF_NAME" ]]; then
 fi
 
 # ---------------------------------------------------------------------------
+# Adopt-existing shared services (D6 Setup-Wizard discovery): reuse an existing
+# Log Analytics workspace / Key Vault / Application Gateway. The console binds
+# LOOM_BYO_LAW_* / LOOM_BYO_KEYVAULT_* / LOOM_BYO_GATEWAY_* to the reused
+# resource; empty (deploy-new/gate) leaves the platform-provisioned binding.
+# ---------------------------------------------------------------------------
+if [[ -n "${EXISTING_LAW:-}" ]]; then
+  add LOOM_BYO_LAW_WORKSPACE "${EXISTING_LAW}"
+  [[ -n "${EXISTING_LAW_RG:-}" ]]  && add LOOM_BYO_LAW_RG  "${EXISTING_LAW_RG}"
+  [[ -n "${EXISTING_LAW_SUB:-}" ]] && add LOOM_BYO_LAW_SUB "${EXISTING_LAW_SUB}"
+fi
+if [[ -n "${EXISTING_KEYVAULT:-}" ]]; then
+  add LOOM_BYO_KEYVAULT "${EXISTING_KEYVAULT}"
+  [[ -n "${EXISTING_KEYVAULT_RG:-}" ]]  && add LOOM_BYO_KEYVAULT_RG  "${EXISTING_KEYVAULT_RG}"
+  [[ -n "${EXISTING_KEYVAULT_SUB:-}" ]] && add LOOM_BYO_KEYVAULT_SUB "${EXISTING_KEYVAULT_SUB}"
+fi
+if [[ -n "${EXISTING_GATEWAY:-}" ]]; then
+  add LOOM_BYO_GATEWAY "${EXISTING_GATEWAY}"
+  [[ -n "${EXISTING_GATEWAY_RG:-}" ]]  && add LOOM_BYO_GATEWAY_RG  "${EXISTING_GATEWAY_RG}"
+  [[ -n "${EXISTING_GATEWAY_SUB:-}" ]] && add LOOM_BYO_GATEWAY_SUB "${EXISTING_GATEWAY_SUB}"
+fi
+
+# ---------------------------------------------------------------------------
 # Azure Maps — geo-map / map editors (static-tile basemap + reverse-geocode).
 # Global, non-regional account; reuse-first, else discover in the admin RG.
 # NOTE: bicep injects the primary key via a KV secretRef; this drift-bridge

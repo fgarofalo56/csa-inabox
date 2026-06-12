@@ -74,6 +74,8 @@ scan "Microsoft.Purview/accounts"                 "Purview"              "EXISTI
 scan "Microsoft.Sql/servers"                      "Azure SQL Server"     "EXISTING_AZURE_SQL"          "EXISTING_AZURE_SQL_RG"      "EXISTING_AZURE_SQL_SUB"
 scan "Microsoft.Storage/storageAccounts"          "Storage (ADLS Gen2)"  "EXISTING_STORAGE"            "EXISTING_STORAGE_RG"        "EXISTING_STORAGE_SUB"
 scan "Microsoft.KeyVault/vaults"                  "Key Vault"            "EXISTING_KEYVAULT"           "EXISTING_KEYVAULT_RG"       "EXISTING_KEYVAULT_SUB"
+scan "Microsoft.OperationalInsights/workspaces"   "Log Analytics"        "EXISTING_LAW"                "EXISTING_LAW_RG"            "EXISTING_LAW_SUB"
+scan "Microsoft.Network/applicationGateways"      "App Gateway / Front Door" "EXISTING_GATEWAY"        "EXISTING_GATEWAY_RG"        "EXISTING_GATEWAY_SUB"
 
 echo "# To REUSE an existing resource: export the matching block above, then run"
 echo "#   bash scripts/csa-loom/patch-navigator-env.sh   (env)"

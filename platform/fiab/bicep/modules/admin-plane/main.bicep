@@ -737,6 +737,18 @@ var byoEventHubSub       = !empty(byoExisting.?eventHubSub ?? '') ? byoExisting.
 // Databricks navigator — reuse hostname > provisioned/patched hostname.
 var existingDatabricksHostname = byoExisting.?databricksHostname ?? ''
 var effDatabricksHostname = !empty(existingDatabricksHostname) ? existingDatabricksHostname : loomDatabricksHostname
+// Adopt-existing shared services (D6): LAW / Key Vault / gateway reuse triples.
+// Name/RG/Sub flow into LOOM_LAW_*/LOOM_BYO_KEYVAULT_*/LOOM_BYO_GATEWAY_* Console
+// env so the navigator binds the reused resource; empty = provision-new / gate.
+var byoLogAnalyticsWorkspace = byoExisting.?logAnalyticsWorkspace ?? ''
+var byoLogAnalyticsRg  = !empty(byoExisting.?logAnalyticsRg ?? '') ? byoExisting.logAnalyticsRg : resourceGroup().name
+var byoLogAnalyticsSub = !empty(byoExisting.?logAnalyticsSub ?? '') ? byoExisting.logAnalyticsSub : subscription().subscriptionId
+var byoKeyVaultName = byoExisting.?keyVaultName ?? ''
+var byoKeyVaultRg   = !empty(byoExisting.?keyVaultRg ?? '') ? byoExisting.keyVaultRg : resourceGroup().name
+var byoKeyVaultSub  = !empty(byoExisting.?keyVaultSub ?? '') ? byoExisting.keyVaultSub : subscription().subscriptionId
+var byoGatewayName = byoExisting.?gatewayName ?? ''
+var byoGatewayRg   = !empty(byoExisting.?gatewayRg ?? '') ? byoExisting.gatewayRg : resourceGroup().name
+var byoGatewaySub  = !empty(byoExisting.?gatewaySub ?? '') ? byoExisting.gatewaySub : subscription().subscriptionId
 // Sovereign-cloud ADX (Kusto) hostname suffix — Commercial/GCC vs GCC-High/IL5.
 // Used only for the BYO (existingAdxClusterName) path; the provisioned cluster
 // uses adxCluster.outputs.clusterUri (ARM-generated, already cloud-correct).
@@ -2163,6 +2175,18 @@ module appDeployments 'app-deployments.bicep' = if (containerPlatform == 'contai
             { name: 'LOOM_KUSTO_CLUSTER_NAME', value: !empty(existingAdxClusterName) ? existingAdxClusterName : (adxEnabled ? adxCluster!.outputs.clusterName : '') }
             { name: 'LOOM_KUSTO_RG',           value: !empty(existingAdxClusterName) ? byoAdxRg : (adxEnabled ? resourceGroup().name : '') }
             { name: 'LOOM_KUSTO_SUB',          value: !empty(existingAdxClusterName) ? byoAdxSub : ((adxEnabled) ? subscription().subscriptionId : '') }
+            // Adopt-existing shared services (D6): reused LAW / Key Vault / gateway.
+            // Empty when the operator chose deploy-new/gate — the navigator then
+            // binds the platform-provisioned resource (or honest-gates).
+            { name: 'LOOM_BYO_LAW_WORKSPACE',  value: byoLogAnalyticsWorkspace }
+            { name: 'LOOM_BYO_LAW_RG',         value: empty(byoLogAnalyticsWorkspace) ? '' : byoLogAnalyticsRg }
+            { name: 'LOOM_BYO_LAW_SUB',        value: empty(byoLogAnalyticsWorkspace) ? '' : byoLogAnalyticsSub }
+            { name: 'LOOM_BYO_KEYVAULT',       value: byoKeyVaultName }
+            { name: 'LOOM_BYO_KEYVAULT_RG',    value: empty(byoKeyVaultName) ? '' : byoKeyVaultRg }
+            { name: 'LOOM_BYO_KEYVAULT_SUB',   value: empty(byoKeyVaultName) ? '' : byoKeyVaultSub }
+            { name: 'LOOM_BYO_GATEWAY',        value: byoGatewayName }
+            { name: 'LOOM_BYO_GATEWAY_RG',     value: empty(byoGatewayName) ? '' : byoGatewayRg }
+            { name: 'LOOM_BYO_GATEWAY_SUB',    value: empty(byoGatewayName) ? '' : byoGatewaySub }
             { name: 'LOOM_KUSTO_LOCATION',     value: (!empty(existingAdxClusterName) || adxEnabled) ? location : '' }
             // Per-DLZ ADX database is named loomdb-<domain>; the single-sub DLZ
             // uses domain "default" → loomdb-default. For a reused cluster the real

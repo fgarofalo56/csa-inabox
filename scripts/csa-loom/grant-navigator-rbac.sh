@@ -45,6 +45,8 @@ STORAGE_BLOB_CONTRIB="ba92f5b4-2d11-453d-a403-e96b0029c9fe" # Storage Blob Data 
 LOGIC_CONTRIB="87a39d53-fc1b-424a-814c-f7e04687dc9e"   # Logic App Contributor
 ADF_CONTRIB="673868aa-7521-48a0-acc6-0f60742d39f5"     # Data Factory Contributor
 APIM_CONTRIB="312a565d-c81f-4fd8-895a-4e21e48d571c"    # API Management Service Contributor
+LAW_READER="73c42c96-874c-492b-b04d-ab87d138a893"      # Log Analytics Reader
+KV_SECRETS_USER="4633458b-17de-408a-b874-0445c86b69e6" # Key Vault Secrets User
 
 grant() { # grant ROLE_GUID SCOPE LABEL
   local role="$1" scope="$2" label="$3"
@@ -85,6 +87,10 @@ byo_grant "$COG_CONTRIB"    "${EXISTING_AOAI:-${EXISTING_AOAI_ACCOUNT:-}}" "${EX
 # subscription (apim-client reads LOOM_APIM_SUB, synapse-* reads LOOM_SYNAPSE_SUB,
 # adf-client reads LOOM_ADF_SUB) — grant the matching management-plane role THERE.
 byo_grant "$APIM_CONTRIB"   "${EXISTING_APIM:-}"    "${EXISTING_APIM_RG:-}"    "${EXISTING_APIM_SUB:-}"    "Microsoft.ApiManagement/service"   "API Management Service Contributor (reused)"
+# Adopt-existing shared services (D6): reused Log Analytics / Key Vault / gateway.
+byo_grant "$LAW_READER"      "${EXISTING_LAW:-}"      "${EXISTING_LAW_RG:-}"      "${EXISTING_LAW_SUB:-}"      "Microsoft.OperationalInsights/workspaces" "Log Analytics Reader (reused)"
+byo_grant "$KV_SECRETS_USER" "${EXISTING_KEYVAULT:-}" "${EXISTING_KEYVAULT_RG:-}" "${EXISTING_KEYVAULT_SUB:-}" "Microsoft.KeyVault/vaults"          "Key Vault Secrets User (reused)"
+byo_grant "$CONTRIBUTOR"     "${EXISTING_GATEWAY:-}"  "${EXISTING_GATEWAY_RG:-}"  "${EXISTING_GATEWAY_SUB:-}"  "Microsoft.Network/applicationGateways" "Contributor on App Gateway (reused)"
 byo_grant "$CONTRIBUTOR"    "${EXISTING_SYNAPSE:-}" "${EXISTING_SYNAPSE_RG:-}" "${EXISTING_SYNAPSE_SUB:-}" "Microsoft.Synapse/workspaces"      "Contributor on Synapse workspace (reused)"
 byo_grant "$ADF_CONTRIB"    "${EXISTING_ADF:-}"     "${EXISTING_ADF_RG:-}"     "${EXISTING_ADF_SUB:-}"     "Microsoft.DataFactory/factories"   "Data Factory Contributor (reused)"
 # Cosmos reused account also needs the data-plane Built-in Data Contributor.

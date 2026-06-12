@@ -38,6 +38,26 @@ Reuse is resolved at three layers, all idempotent:
 bash scripts/csa-loom/discover-services.sh
 ```
 
+### In-console: the Setup Wizard "Shared services" step (D6)
+
+The Setup Wizard (`/setup`) has a dedicated **Shared services** step between
+*Subscription & region* and *Domain name*. On entry it calls
+`GET /api/setup/discover-services`, which runs a **single** Azure Resource Graph
+query over the shared-service ARM types (Purview, Log Analytics, Key Vault,
+AOAI/AI Services, Application Gateway / Front Door, AI Search, APIM, ADX) — one
+query, not N, to respect ARG's 15-query / 5-second throttle. Resource Graph
+honours RBAC, so only resources the Console identity can read are offered (no
+mock data). For each service the operator picks **Reuse** / **Deploy new** /
+**Gate** from a dropdown; a reuse pick is validated by
+`POST /api/setup/validate-service` for region co-location, the Console UAMI's
+read permission (real ARM GET), and SKU/model compatibility (AOAI: a chat +
+embeddings deployment must exist in-region). Purview is detected as
+one-per-tenant and **pinned to reuse** (deploy-new is blocked —
+`EnterpriseTenantAlreadyExists`). The reuse selections flow into the deploy as
+the matching `existing<Svc>` bicep parameters, generalising the
+`loomPurviewAccount`-already-exists pattern. No Fabric type is ever scanned or
+offered (Azure-native only).
+
 ## Generate a BYO bicepparam (the wizard)
 
 `scripts/csa-loom/byo-wizard.sh` is a **bicepparam generator**: it scans every
@@ -93,6 +113,9 @@ runtime env wire.
 | Synapse | `EXISTING_SYNAPSE` (+`_RG` +`_SUB`) | DLZ-provisioned | Synapse Admin (bootstrap) |
 | Databricks | `EXISTING_DATABRICKS` (+`_RG` +`_SUB`) + `EXISTING_DATABRICKS_HOSTNAME` | DLZ-provisioned | SCIM workspace SP (bootstrap) |
 | Data Factory | `EXISTING_ADF` (+`_RG` +`_SUB`) → `LOOM_ADF_NAME`/`_RG`/`_SUB` | DLZ-provisioned | Data Factory Contributor |
+| Log Analytics | `EXISTING_LAW` (+`_RG` +`_SUB`) → `LOOM_BYO_LAW_WORKSPACE`/`_RG`/`_SUB` | DLZ-provisioned | Log Analytics Reader |
+| Key Vault | `EXISTING_KEYVAULT` (+`_RG` +`_SUB`) → `LOOM_BYO_KEYVAULT`/`_RG`/`_SUB` | always-provisioned | Key Vault Secrets User |
+| App Gateway / Front Door | `EXISTING_GATEWAY` (+`_RG` +`_SUB`) → `LOOM_BYO_GATEWAY`/`_RG`/`_SUB` | `appGatewayEnabled` | Contributor on the gateway |
 | Azure SQL | bound per-item in the editor (any server) | — | per-server Entra admin |
 | Microsoft Fabric | `fabricEnabled` (default **false** — Azure-native, no Fabric dependency) | — | n/a (opt-in only) |
 
