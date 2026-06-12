@@ -22,7 +22,7 @@
  * Pure data + helpers — no Azure SDK import — so it is unit-testable and safe to
  * import from both the BFF route and (the type only) the client pane.
  */
-import { ENV_CHECKS, VALUE_HINT, CTX, type AuditCategory, type AuditSeverity } from './self-audit';
+import { ENV_CHECKS, VALUE_HINT, CTX, type AuditCategory, type AuditSeverity, type EnvSpec } from './self-audit';
 
 export interface EditableEnvVar {
   key: string;
@@ -38,6 +38,14 @@ export interface EditableEnvVar {
   required: boolean;
   /** True when the value is constrained / unavailable in IL5 / DoD boundaries. */
   il5Restricted?: boolean;
+  /** The bicep module (+ param) that wires this var on a push-button deploy —
+   * surfaced so an unset var names the exact IaC to provision it. */
+  provisionedBy?: string;
+  /** The exact Azure RBAC role / tenant action the var needs once set. */
+  role?: string;
+  /** True when bicep AUTO-DERIVES this var from another resource (org-visuals
+   * URL, LAW customerId). Rendered as a "derived" status, not a bare "not set". */
+  derived?: boolean;
 }
 
 /** A value is treated as secret when its key matches any of these. */
@@ -61,24 +69,27 @@ const IL5_RESTRICTED = new Set<string>([
 export const EDITABLE_ENV: EditableEnvVar[] = (() => {
   const out: EditableEnvVar[] = [];
   const seen = new Set<string>();
-  const add = (key: string, category: AuditCategory, severity: AuditSeverity, label: string, required: boolean) => {
+  const add = (key: string, spec: EnvSpec, required: boolean) => {
     const k = key.trim();
     if (!k || seen.has(k)) return;
     seen.add(k);
     out.push({
       key: k,
-      category,
-      severity,
-      label,
+      category: spec.category,
+      severity: spec.severity,
+      label: spec.title,
       valueHint: VALUE_HINT[k] || '',
       secret: isSecretKey(k),
       required,
       il5Restricted: IL5_RESTRICTED.has(k) || undefined,
+      provisionedBy: spec.provisionedBy,
+      role: spec.role,
+      derived: spec.derived || undefined,
     });
   };
   for (const spec of ENV_CHECKS) {
-    for (const k of spec.required || []) add(k, spec.category, spec.severity, spec.title, true);
-    for (const group of spec.anyOf || []) for (const k of group) add(k, spec.category, spec.severity, spec.title, false);
+    for (const k of spec.required || []) add(k, spec, true);
+    for (const group of spec.anyOf || []) for (const k of group) add(k, spec, false);
   }
   return out;
 })();
@@ -106,8 +117,8 @@ export interface SyncArtifacts {
    * the recipe self-audit emits). Secrets are shown as `KEY=secretref:<name>`. */
   cliScript: string;
   /** Bicep `env:` array entries to fold into the loom-console app block in
-   * admin-plane/main.bicep so the next `az deployment` does not revert the UI
-   * change (the env array is inline literals, not bicepparams). */
+   * modules/admin-plane/main.bicep so the next `az deployment` does not revert
+   * the UI change (the env array is inline literals, not bicepparams). */
   bicepEnvSnippet: string;
 }
 

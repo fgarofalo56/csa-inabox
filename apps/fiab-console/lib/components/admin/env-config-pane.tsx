@@ -26,14 +26,16 @@ import {
   Settings24Regular, ArrowSync24Regular, Save24Regular,
   CheckmarkCircle24Filled, Warning24Filled, Eye24Regular, EyeOff24Regular,
   Copy16Regular, Checkmark16Regular, Edit16Filled, ArrowResetRegular,
+  Info16Regular, Wrench16Regular,
 } from '@fluentui/react-icons';
 
 type Category = 'identity' | 'data-plane' | 'azure-services' | 'permissions' | 'security' | 'enrichment';
 interface EditableEnvVar {
   key: string; category: Category; severity: 'critical' | 'recommended' | 'optional';
   label: string; valueHint: string; secret: boolean; required: boolean; il5Restricted?: boolean;
+  provisionedBy?: string; role?: string; derived?: boolean;
 }
-interface CurrentVal { set: boolean; value?: string; secret: boolean }
+interface CurrentVal { set: boolean; status?: 'set' | 'derived' | 'unset'; value?: string; secret: boolean }
 interface EnvConfigGet {
   ok: boolean; error?: string;
   editable: EditableEnvVar[];
@@ -99,6 +101,15 @@ export function EnvConfigPane() {
 
   const dirtyKeys = useMemo(() => Object.keys(edits).filter((k) => edits[k]?.trim()), [edits]);
 
+  const coverage = useMemo(() => {
+    if (!data) return { set: 0, total: 0, missingCritical: 0 };
+    const set = data.editable.filter((e) => data.current[e.key]?.set).length;
+    const missingCritical = data.editable.filter(
+      (e) => e.severity === 'critical' && !data.current[e.key]?.set,
+    ).length;
+    return { set, total: data.editable.length, missingCritical };
+  }, [data]);
+
   const save = useCallback(async () => {
     if (dirtyKeys.length === 0) return;
     setSaving(true); setResult(null); setError(null);
@@ -154,6 +165,24 @@ export function EnvConfigPane() {
               inside Loom — no Azure portal. Saving applies a real ARM revision and persists the
               desired value to the Loom store. Cloud boundary: <strong>{data.cloud}</strong>.
             </Body1>
+            <div style={{ display: 'flex', gap: 8, marginTop: 8, flexWrap: 'wrap' }}>
+              <Badge appearance="tint" size="medium"
+                color={coverage.set === coverage.total ? 'success' : 'informative'}
+                icon={<CheckmarkCircle24Filled />}>
+                {coverage.set} of {coverage.total} configured
+              </Badge>
+              {coverage.missingCritical > 0 && (
+                <Badge appearance="tint" size="medium" color="danger" icon={<Warning24Filled />}>
+                  {coverage.missingCritical} critical not set
+                </Badge>
+              )}
+              {data.desired?.updatedAt && (
+                <Badge appearance="outline" size="medium" color="subtle">
+                  last saved {new Date(data.desired.updatedAt).toLocaleString()}
+                  {data.desired.updatedBy ? ` · ${data.desired.updatedBy}` : ''}
+                </Badge>
+              )}
+            </div>
           </div>
           <div style={{ display: 'flex', gap: 8 }}>
             <Button icon={<ArrowSync24Regular />} appearance="outline" onClick={load} disabled={loading}>Re-check</Button>
@@ -187,7 +216,7 @@ export function EnvConfigPane() {
             <MessageBarTitle>Configuration drift ({data.drift.length})</MessageBarTitle>
             The desired value saved in the Loom store differs from what the running revision sees.
             Either a new revision is still rolling out, or a redeploy reverted the change. Fold the
-            change into the loom-console env array in admin-plane/main.bicep to make it permanent.
+            change into the loom-console env array in modules/admin-plane/main.bicep to make it permanent.
             <div style={{ marginTop: 8, display: 'grid', gap: 4 }}>
               {data.drift.map((d) => (
                 <div key={d.key} style={{ display: 'flex', alignItems: 'baseline', gap: 8, flexWrap: 'wrap' }}>
@@ -229,7 +258,7 @@ export function EnvConfigPane() {
             unless you fold it in. Copy these into your IaC / pipeline.
           </Body1>
           <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8 }}>
-            <Caption1 style={{ color: tokens.colorNeutralForeground2 }}>bicep — loom-console env entries (admin-plane/main.bicep)</Caption1>
+            <Caption1 style={{ color: tokens.colorNeutralForeground2 }}>bicep — loom-console env entries (modules/admin-plane/main.bicep)</Caption1>
             <Button size="small" appearance="outline"
               icon={copied === 'bicep' ? <Checkmark16Regular /> : <Copy16Regular />}
               onClick={() => copy('bicep', result.sync.bicepEnvSnippet)}>
@@ -288,7 +317,9 @@ export function EnvConfigPane() {
                       {e.secret && <Badge appearance="tint" size="small" color="brand">secret</Badge>}
                       {cur?.set
                         ? <Badge appearance="tint" size="small" color="success" icon={<CheckmarkCircle24Filled />}>set</Badge>
-                        : <Badge appearance="tint" size="small" color="warning" icon={<Warning24Filled />}>not set</Badge>}
+                        : (e.derived
+                          ? <Badge appearance="tint" size="small" color="informative" icon={<Info16Regular />}>derived</Badge>
+                          : <Badge appearance="tint" size="small" color="warning" icon={<Warning24Filled />}>not set</Badge>)}
                       {modified && <Badge appearance="filled" size="small" color="brand" icon={<Edit16Filled />}>modified</Badge>}
                       {disabledIl5 && <Badge appearance="tint" size="small" color="danger">restricted in {data.cloud}</Badge>}
                     </div>
@@ -298,10 +329,28 @@ export function EnvConfigPane() {
                         current: {cur.value}
                       </Caption1>
                     )}
+                    {/* When unset/derived, name the exact bicep module + role that
+                        provisions this var (the "how to fill it" acceptance row). */}
+                    {!cur?.set && (e.provisionedBy || e.role) && (
+                      <div style={{ marginTop: 4, display: 'grid', gap: 2 }}>
+                        {e.provisionedBy && (
+                          <Caption1 style={{ display: 'flex', alignItems: 'flex-start', gap: 4, color: tokens.colorNeutralForeground3 }}>
+                            <Wrench16Regular style={{ flexShrink: 0, marginTop: 1, color: tokens.colorBrandForeground2 }} />
+                            <span>{e.derived ? 'Derived by' : 'Provisioned by'}: {e.provisionedBy}</span>
+                          </Caption1>
+                        )}
+                        {e.role && (
+                          <Caption1 style={{ display: 'block', color: tokens.colorNeutralForeground3, paddingLeft: 20 }}>
+                            Role / action: {e.role}
+                          </Caption1>
+                        )}
+                      </div>
+                    )}
                   </div>
                   <div style={{ display: 'flex', alignItems: 'center', gap: 6, minWidth: 280 }}>
                     <Input
                       style={{ width: 280 }}
+                      aria-label={`Value for ${e.key}`}
                       type={e.secret && !shown ? 'password' : 'text'}
                       placeholder={e.secret ? (cur?.set ? '•••••• (set — enter to replace)' : (e.valueHint || 'enter secret value')) : (cur?.value || e.valueHint || `set ${e.key}`)}
                       value={editing}

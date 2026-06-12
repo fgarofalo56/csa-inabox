@@ -130,6 +130,36 @@ param openaiEmbeddingsModel string
 @description('Power BI SKU (P-SKU for GCC; F-SKU elsewhere)')
 param powerBiSku string
 
+// ── Analytics report embed (F21 Usage "Open analytics" + F2 Govern "View more") ──
+// Per-cloud, opt-in OVER the always-on native Fluent charts (no-fabric-dependency.md).
+// Forwarded to the admin-plane module so a push-button deploy can default the
+// embed KIND (Commercial/GCC → powerbi, GCC-High/IL5 → grafana). The report /
+// dashboard ids + UAMI workspace membership + the "SP can use Power BI APIs"
+// tenant setting are post-deploy admin actions, so the BFF honestly gates (503)
+// until they are supplied — see docs/fiab/v3-tenant-bootstrap.md#usage-analytics-embed.
+@description('Deploy a Power BI Embedded (A1) capacity for the Govern/Usage embedded reports (Commercial / GCC).')
+param pbiEmbeddedEnabled bool = false
+@description('Deploy Azure Managed Grafana for the Govern/Usage embedded dashboards (GCC-High / IL5).')
+param managedGrafanaEnabled bool = false
+@description('LOOM_USAGE_REPORT_KIND for /admin/usage "Open analytics". "powerbi" (Commercial/GCC), "grafana" (GCC-High/IL5), or empty (native charts only).')
+@allowed([ '', 'powerbi', 'grafana' ])
+param loomUsageReportKind string = ''
+@description('Power BI workspace id holding the usage report (when loomUsageReportKind=powerbi).')
+param loomUsagePbiWorkspaceId string = ''
+@description('Power BI report id to embed in the Usage "Open analytics" panel (when loomUsageReportKind=powerbi).')
+param loomUsagePbiReportId string = ''
+@description('Managed Grafana dashboard UID for the Usage "Open analytics" panel (when loomUsageReportKind=grafana).')
+param loomGrafanaUsageDashboardUid string = ''
+@description('LOOM_REPORT_KIND for the Govern Admin "View more" report. "powerbi", "grafana", or empty.')
+@allowed([ '', 'powerbi', 'grafana' ])
+param loomReportKind string = ''
+@description('Power BI workspace id holding the governance report (when loomReportKind=powerbi).')
+param loomGovernPbiWorkspaceId string = ''
+@description('Power BI report id to embed in the Govern Admin "View more" (when loomReportKind=powerbi).')
+param loomGovernPbiReportId string = ''
+@description('Managed Grafana dashboard UID for the Govern Admin "View more" (when loomReportKind=grafana).')
+param loomGrafanaDashboardUid string = ''
+
 @description('Storage requires CMK (true at IL5)')
 param storageRequireCmk bool = false
 
@@ -707,6 +737,19 @@ module adminPlane 'modules/admin-plane/main.bicep' = {
     // Azure OpenAI endpoint for the SQL editor Copilot (Fix/Explain/NL→T-SQL).
     loomAzureOpenAiEndpoint: loomAzureOpenAiEndpoint
     loomAoaiApiVersion: loomAoaiApiVersion
+    // Analytics report embed (F21 Usage / F2 Govern) — per-cloud, opt-in over the
+    // native charts. The KIND can be defaulted by the param file; the BFF honestly
+    // gates until the report/dashboard ids + UAMI membership are supplied.
+    pbiEmbeddedEnabled: pbiEmbeddedEnabled
+    managedGrafanaEnabled: managedGrafanaEnabled
+    loomUsageReportKind: loomUsageReportKind
+    loomUsagePbiWorkspaceId: loomUsagePbiWorkspaceId
+    loomUsagePbiReportId: loomUsagePbiReportId
+    loomGrafanaUsageDashboardUid: loomGrafanaUsageDashboardUid
+    loomReportKind: loomReportKind
+    loomGovernPbiWorkspaceId: loomGovernPbiWorkspaceId
+    loomGovernPbiReportId: loomGovernPbiReportId
+    loomGrafanaDashboardUid: loomGrafanaDashboardUid
   }
 }
 

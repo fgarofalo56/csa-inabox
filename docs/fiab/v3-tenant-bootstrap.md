@@ -8,6 +8,97 @@ that names the exact step), per `.claude/rules/no-vaporware.md`.
 
 ---
 
+## Runtime env-var reference (`/admin/env-config`) {#env-var-reference}
+
+Every `LOOM_*` / `SESSION_SECRET` runtime var the Console reads is registered in
+`apps/fiab-console/lib/admin/self-audit.ts` (`ENV_CHECKS`) and surfaced, grouped
+and searchable, on **`/admin/env-config`** — the in-app, no-Azure-portal way to
+view and set them (each Save rolls a real ACA revision). The page shows a 3-way
+**status** per var: **set** (present in the running revision), **derived**
+(bicep auto-fills it from another resource on a push-button deploy — the
+operator normally never sets it by hand), or **not set**. For every unset/derived
+var the page names the exact **bicep module + RBAC role** that provisions it.
+
+| Subsystem | Vars | Bicep that wires it | Role / tenant action | Default status (commercial-full) |
+|---|---|---|---|---|
+| Identity & session | `SESSION_SECRET`, `LOOM_ENTRA_CLIENT_ID`, `LOOM_ENTRA_TENANT_ID`, `LOOM_UAMI_CLIENT_ID` | `modules/admin-plane/main.bicep` (params loomSessionSecret / loomMsalClientId; uami-console) | Entra app reg + redirect URI (one-time) | set |
+| Data plane (Loom store) | `LOOM_COSMOS_ENDPOINT`, `LOOM_SUBSCRIPTION_ID`, `LOOM_DLZ_RG` / `LOOM_ADMIN_RG` | `modules/landing-zone/main.bicep` (cosmos) → admin-plane apps[] env | Cosmos DB Built-in Data Contributor (UAMI) | set |
+| Permissions | `LOOM_TENANT_ADMIN_OID` / `LOOM_TENANT_ADMIN_GROUP_ID` | `main.bicep` params loomTenantAdminOid / loomTenantAdminGroupId | — (your Entra OID/group) | set |
+| Azure services | `LOOM_SYNAPSE_WORKSPACE`, `LOOM_KUSTO_CLUSTER_URI`, `LOOM_EVENTHUB_NAMESPACE`, `LOOM_ADLS_ACCOUNT`, `LOOM_AI_SEARCH_SERVICE`, `LOOM_AOAI_ENDPOINT`, `LOOM_LOG_ANALYTICS_RESOURCE_ID`, `LOOM_ADF_FACTORY`, `LOOM_PURVIEW_ACCOUNT` | `modules/landing-zone/*` + `modules/admin-plane/*` per service flag | per-service data-plane role on the UAMI (see each section) | set when its `*Enabled` flag is on |
+| Usage analytics embed (F21) | `LOOM_USAGE_REPORT_KIND`, `LOOM_USAGE_PBI_WORKSPACE_ID`, `LOOM_USAGE_PBI_REPORT_ID`, `LOOM_GRAFANA_USAGE_DASHBOARD_UID`, `LOOM_GRAFANA_ENDPOINT` | `main.bicep` params loomUsageReportKind / loomUsagePbi* / loomGrafanaUsageDashboardUid → `modules/admin-plane/main.bicep` apps[] env | **powerbi:** UAMI = Power BI workspace Member + "SP can use Power BI APIs" tenant setting. **grafana:** Grafana Viewer (UAMI). | KIND = `powerbi` (ids unset → honest gate) — see [§ below](#usage-analytics-embed) |
+| Govern analytics embed (F2) | `LOOM_REPORT_KIND`, `LOOM_GOVERN_PBI_WORKSPACE_ID`, `LOOM_GOVERN_PBI_REPORT_ID`, `LOOM_GRAFANA_DASHBOARD_UID` | `main.bicep` params loomReportKind / loomGovernPbi* / loomGrafanaDashboardUid → admin-plane apps[] env | same as F21 | KIND = `powerbi` (ids unset → honest gate) |
+| Embed codes / Org visuals (F22/F23) | `LOOM_ORG_VISUALS_URL` | **derived** by `modules/admin-plane/main.bicep` from `loomStorageAccount` + `modules/landing-zone/org-visuals-rbac.bicep` | Storage Blob Data Contributor (container) + Storage Blob Delegator (account) | derived (single-sub) |
+| Audit logs (Log Analytics) | `LOOM_LOG_ANALYTICS_WORKSPACE_ID` | **derived** by `modules/admin-plane/main.bicep` from `monitoring.outputs.lawCustomerId` | Log Analytics Reader (UAMI) | derived |
+| Enrichment | `LOOM_GRAPH_USERS_ENABLED` | admin-plane apps[] env + post-deploy Graph grant | Microsoft Graph `Directory.Read.All` (application) | set when graph enrichment opted in |
+
+> **Per cloud:** the embed `*_REPORT_KIND` defaults to `powerbi` for
+> **Commercial / GCC** and **`grafana`** for **GCC-High / IL5** (Power BI is
+> Fabric-family and strictly opt-in per `.claude/rules/no-fabric-dependency.md`;
+> the native Fluent charts always work without any embed backend).
+
+---
+
+## Usage analytics embed (F21) {#usage-analytics-embed}
+
+The **`/admin/usage`** page always renders native Fluent usage charts from Log
+Analytics telemetry. The **"Open analytics"** button additionally embeds a rich
+report — Power BI (Commercial / GCC) or Azure Managed Grafana (GCC-High / IL5).
+The same pattern backs the Governance **"View more"** (F2) embed.
+`commercial-full.bicepparam` defaults `loomUsageReportKind = 'powerbi'` (and
+`loomReportKind = 'powerbi'`) so the embed path is wired by default; the BFF
+(`/api/admin/usage/embed`) honestly returns **503** with the exact follow-up
+until the report id + workspace membership are supplied.
+
+### Commercial / GCC — Power BI Embedded
+
+1. **Publish a usage report** to a Power BI workspace (or reuse the F64 capacity
+   workspace this deploy already has).
+2. **Add the Console UAMI** (`LOOM_UAMI_CLIENT_ID`) as a **Member** of that
+   workspace (App owns data / service-principal embed).
+3. **Enable the tenant setting** "Service principals can use Power BI APIs"
+   (Power BI Admin portal → Tenant settings → Developer settings).
+4. **Set the ids** on the Console app:
+
+```bash
+az containerapp update \
+  --name <loom-console-app> --resource-group <loom-admin-rg> \
+  --set-env-vars \
+    LOOM_USAGE_REPORT_KIND=powerbi \
+    LOOM_USAGE_PBI_WORKSPACE_ID="<workspace-guid>" \
+    LOOM_USAGE_PBI_REPORT_ID="<report-guid>" \
+    LOOM_REPORT_KIND=powerbi \
+    LOOM_GOVERN_PBI_WORKSPACE_ID="<workspace-guid>" \
+    LOOM_GOVERN_PBI_REPORT_ID="<report-guid>"
+```
+
+### GCC-High / IL5 — Azure Managed Grafana
+
+Power BI Embedded is not available; use Azure Managed Grafana (supported in
+Azure Government). In the Gov param file set `managedGrafanaEnabled = true` and
+`loomUsageReportKind = 'grafana'` (+ `loomReportKind = 'grafana'`), then:
+
+1. Create a usage dashboard in the deployed Managed Grafana.
+2. Grant the Console UAMI **Grafana Viewer** on the instance.
+3. Set `LOOM_GRAFANA_USAGE_DASHBOARD_UID` (and `LOOM_GRAFANA_DASHBOARD_UID` for
+   Govern). `LOOM_GRAFANA_ENDPOINT` is auto-wired from the deployed Grafana.
+
+### Bicep sync
+
+- Params + env wiring: `platform/fiab/bicep/main.bicep` (params
+  `loomUsageReportKind` / `loomUsagePbiWorkspaceId` / `loomUsagePbiReportId` /
+  `loomGrafanaUsageDashboardUid` + the Govern equivalents, forwarded to the
+  admin-plane module) → `platform/fiab/bicep/modules/admin-plane/main.bicep`
+  apps[] env (the `loomUsageReportKind == 'powerbi' && !empty(...)` guards keep
+  the env honest until the ids are set).
+- Capacity: `pbiEmbeddedEnabled` (A1) or `managedGrafanaEnabled` in the
+  admin-plane module; `commercial-full.bicepparam` reuses the F64 capacity by
+  default (`pbiEmbeddedEnabled = false`).
+- Workspace membership + the "Service principals can use Power BI APIs" tenant
+  setting are **post-deploy admin actions** (Power BI is Fabric-family) and
+  cannot be expressed in ARM/bicep — hence this runbook.
+
+---
+
 ## Microsoft Purview (Unified Catalog) {#microsoft-purview-unified-catalog}
 
 Loom's **Governance** and **Unified Catalog** surfaces run natively against a

@@ -93,13 +93,17 @@ export async function GET() {
 
   // Current presence/values from the running container's env (this BFF runs in
   // loom-console, so process.env IS the live deployment config). Secret values
-  // are NEVER returned — only their set/unset flag.
-  const current: Record<string, { set: boolean; value?: string; secret: boolean }> = {};
+  // are NEVER returned — only their set/unset flag. `status` is a 3-way honest
+  // signal: 'set' (present), 'derived' (bicep auto-fills it from another
+  // resource on deploy — expected, not an operator action), or 'unset'.
+  const current: Record<string, { set: boolean; status: 'set' | 'derived' | 'unset'; value?: string; secret: boolean }> = {};
   for (const e of EDITABLE_ENV) {
     const raw = (process.env[e.key] || '').trim();
+    const set = raw.length > 0;
+    const status: 'set' | 'derived' | 'unset' = set ? 'set' : (e.derived ? 'derived' : 'unset');
     current[e.key] = e.secret
-      ? { set: raw.length > 0, secret: true }
-      : { set: raw.length > 0, value: raw, secret: false };
+      ? { set, status, secret: true }
+      : { set, status, value: raw, secret: false };
   }
 
   let desired: EnvConfigDoc | null = null;
