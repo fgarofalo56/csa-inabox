@@ -138,7 +138,7 @@ export function EventSchemaSetEditor({ item, id }: Props) {
   // "would this register?" without persisting, so the author sees breaking
   // changes before committing.
   const [checkBusy, setCheckBusy] = useState(false);
-  const [checkResult, setCheckResult] = useState<{ compatible: boolean; violations: string[]; checkedVia: string } | null>(null);
+  const [checkResult, setCheckResult] = useState<{ compatible: boolean; violations: string[]; checkedVia: string; live: boolean } | null>(null);
 
   useEffect(() => {
     fetch('/api/loom/workspaces').then(r => r.json()).then(j => {
@@ -218,22 +218,44 @@ export function EventSchemaSetEditor({ item, id }: Props) {
     finally { setRegBusy(false); }
   }, [workspaceId, setId, regSubject, regSchema, active?.format, loadDetail]);
 
-  const checkCompat = useCallback(async () => {
+  // dryRun=true → live/auto check: forces the in-process validator (never PUTs
+  // into Event Hubs Schema Registry) so debounced feedback on every keystroke
+  // can't rate-limit or pollute the EH SR data plane. dryRun=false → the explicit
+  // "Check compatibility" button, which uses the auto-selected backend (EH SR when
+  // configured), matching what the enforced register path will do.
+  const checkCompat = useCallback(async (dryRun = false) => {
     if (!workspaceId || !setId || !regSubject.trim() || !regSchema.trim()) return;
-    setCheckBusy(true); setCheckResult(null); setRegErr(null);
+    if (!dryRun) { setCheckBusy(true); setRegErr(null); }
+    setCheckResult(null);
     try {
       try { JSON.parse(regSchema); }
-      catch (e: any) { setRegErr(`Schema is not valid JSON: ${e?.message || String(e)}`); return; }
+      catch (e: any) {
+        // On the live path a half-typed schema is expected; stay quiet and let
+        // the author keep typing. The button path reports the parse error.
+        if (!dryRun) setRegErr(`Schema is not valid JSON: ${e?.message || String(e)}`);
+        return;
+      }
       const r = await fetch(`/api/items/event-schema-set/${encodeURIComponent(setId)}/check-compat?workspaceId=${encodeURIComponent(workspaceId)}`, {
         method: 'POST', headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ subject: regSubject.trim(), newSchema: regSchema, format: active?.format || 'AVRO' }),
+        body: JSON.stringify({ subject: regSubject.trim(), newSchema: regSchema, format: active?.format || 'AVRO', dryRunInProcess: dryRun }),
       });
       const j = await r.json();
-      if (!j.ok) { setRegErr(j.error || 'compatibility check failed'); return; }
-      setCheckResult({ compatible: !!j.compatible, violations: j.violations || [], checkedVia: j.checkedVia || 'cosmos-inprocess' });
-    } catch (e: any) { setRegErr(e?.message || String(e)); }
-    finally { setCheckBusy(false); }
+      if (!j.ok) { if (!dryRun) setRegErr(j.error || 'compatibility check failed'); return; }
+      setCheckResult({ compatible: !!j.compatible, violations: j.violations || [], checkedVia: j.checkedVia || 'cosmos-inprocess', live: dryRun });
+    } catch (e: any) { if (!dryRun) setRegErr(e?.message || String(e)); }
+    finally { if (!dryRun) setCheckBusy(false); }
   }, [workspaceId, setId, regSubject, regSchema, active?.format]);
+
+  // Live, debounced compatibility feedback: the check runs automatically on every
+  // schema (or subject) change while the Register dialog is open — satisfying
+  // "compatibility check runs on schema change and reports the result" without a
+  // button press. Debounced 500ms and pinned to the in-process validator so rapid
+  // edits never spam the backend / EH SR.
+  useEffect(() => {
+    if (!regOpen || !workspaceId || !setId || !regSubject.trim() || !regSchema.trim()) return;
+    const t = setTimeout(() => { void checkCompat(true); }, 500);
+    return () => clearTimeout(t);
+  }, [regOpen, workspaceId, setId, regSubject, regSchema, active?.format, checkCompat]);
 
   const updateCompatibility = useCallback(async (compat: SchemaSet['compatibility']) => {
     if (!workspaceId || !setId) return;
@@ -366,7 +388,12 @@ export function EventSchemaSetEditor({ item, id }: Props) {
                                   : `Incompatible with the ${active?.compatibility || 'BACKWARD'} policy`}
                               </MessageBarTitle>
                               {checkResult.compatible ? (
-                                <>Registration will be accepted. Verified via {checkResult.checkedVia === 'eventhubs-sr' ? 'Azure Event Hubs Schema Registry' : 'in-process Avro validator'}.</>
+                                <>
+                                  Registration will be accepted. Verified via {checkResult.checkedVia === 'eventhubs-sr' ? 'Azure Event Hubs Schema Registry' : 'in-process Avro validator'}.
+                                  {checkResult.live && (
+                                    <> Live check — re-checked automatically as you edit. The final compatibility check runs server-side at registration.</>
+                                  )}
+                                </>
                               ) : (
                                 <>
                                   Registration will be blocked. Fix the breaking changes below, then re-check.
@@ -387,7 +414,7 @@ export function EventSchemaSetEditor({ item, id }: Props) {
                         appearance="outline"
                         icon={checkBusy ? <Spinner size="tiny" /> : <BeakerEdit20Regular />}
                         disabled={checkBusy || regBusy || !regSubject.trim() || !regSchema.trim()}
-                        onClick={checkCompat}
+                        onClick={() => checkCompat(false)}
                       >{checkBusy ? 'Checking…' : 'Check compatibility'}</Button>
                       <Button
                         appearance="primary"
