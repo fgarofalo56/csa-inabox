@@ -1,27 +1,42 @@
 'use client';
 
 /**
- * CopilotPane — collapsible right rail wired to the real
- * `/api/copilot/orchestrate` SSE endpoint backed by Foundry-resolved
- * Azure OpenAI. Streams assistant tokens + tool-call steps live; surfaces
- * a Fluent MessageBar with the AOAI-deep-link CTA when the BFF returns
- * 503 (no deployment wired) per the no-vaporware contract.
+ * CopilotPane — THE one Loom Copilot chat window (audit-t155).
  *
+ * Historically the app shell mounted TWO chat surfaces (this right rail + a
+ * floating Help Copilot widget) that both listened to `csaloom:open-copilot`
+ * and Ctrl+/, so the topbar Sparkle opened two popups at once. This pane is
+ * now the SINGLE window behind the single launcher: it owns the only
+ * listeners for open/toggle/context/persona/tutorial-step events and streams
+ * from `/api/copilot/orchestrate`, whose server-side router
+ * (lib/azure/copilot-router.ts) classifies intent per turn — docs/how-to
+ * questions go to the docs/help agent (RAG + citations), build/data/ops
+ * requests go to the cross-item build agent — and emits an `agent` step this
+ * pane renders as an inline ATLAS-style attribution badge (which agent
+ * answered + why). A docs-agent `handoff` becomes an in-window "Do it with
+ * the build agent" re-ask — never a second popup.
+ *
+ * Honest gates preserved: 503 AOAI MessageBar with the Foundry CTA, the
+ * content-safety gate from /api/copilot/status, and content-safety blocks.
  * Per-message thumbs up/down feedback (PATCH /api/copilot/sessions/[id]),
  * "Clear chat" (DELETE /api/copilot/sessions/[id]), and a History drawer
  * (GET /api/copilot/sessions) are all wired to real Cosmos-backed BFF routes.
  */
 
 import { useEffect, useMemo, useRef, useState } from 'react';
+import type { JSX } from 'react';
+import { usePathname } from 'next/navigation';
 import {
   Button, Input, MessageBar, MessageBarBody, MessageBarTitle,
-  makeStyles, tokens, Caption1, Body1, Subtitle2, Spinner,
+  makeStyles, tokens, Caption1, Body1, Subtitle2, Spinner, Badge,
   OverlayDrawer, DrawerHeader, DrawerHeaderTitle, DrawerBody, Tooltip,
 } from '@fluentui/react-components';
 import {
-  Send24Regular, Sparkle24Regular, Dismiss20Regular,
+  Send24Regular, Sparkle24Regular, Sparkle20Regular, Dismiss20Regular,
   ThumbLike20Regular, ThumbDislike20Regular,
-  History20Regular, Delete20Regular,
+  History20Regular, Delete20Regular, BranchCompare16Regular,
+  CheckmarkCircle16Regular, ErrorCircle16Regular, Wrench16Regular,
+  Lightbulb16Regular, DocumentEdit16Regular,
 } from '@fluentui/react-icons';
 import { LoomDataTable, type LoomColumn } from './ui/loom-data-table';
 import { CopilotResult } from '@/lib/components/copilot-result';
@@ -32,6 +47,8 @@ import { getPanePersona } from '@/lib/azure/copilot-personas';
 import { useCopilotContext } from '@/lib/copilot/use-copilot-context';
 import { CopilotDiff, type ProposedChange } from './copilot-diff';
 import { applyChange } from '@/lib/copilot/apply-change';
+import { CitationChips, type Citation } from './help-copilot/citations';
+import { receiptScopeFromTutorialId } from './help-copilot/tutorial-scope';
 
 /**
  * Render a tabular_* tool result ({ columns, rows }) as a real LoomDataTable
@@ -68,11 +85,16 @@ interface CopilotUsage { promptTokens: number; completionTokens: number; totalTo
 
 type Step =
   | { kind: 'thought'; content: string }
-  | { kind: 'tool_call'; name: string; callId: string }
+  | { kind: 'tool_call'; name: string; callId: string; args?: unknown }
   | { kind: 'tool_result'; name: string; callId: string; durationMs: number; result?: unknown; error?: string }
   | { kind: 'final'; content: string; usage?: CopilotUsage; model?: string }
   | { kind: 'error'; error: string; code?: string }
-  | { kind: 'proposed_change'; target: string; before: string; after: string; lang?: string; callId?: string; summary?: string };
+  | { kind: 'proposed_change'; target: string; before: string; after: string; lang?: string; callId?: string; summary?: string }
+  // Unified-router steps: `agent` is the attribution badge (which agent
+  // answered + why); `citation`/`handoff` flow through from the docs agent.
+  | { kind: 'agent'; agentId: string; agentName: string; reason: string }
+  | { kind: 'citation'; citations: Citation[] }
+  | { kind: 'handoff'; reason: string; deepLink: string; suggestedPrompt: string };
 
 interface Msg {
   who: 'you' | 'copilot' | 'system';
@@ -83,6 +105,13 @@ interface Msg {
   model?: string;
   /** Index of this (copilot) message in the thread — the feedback key. */
   msgIndex?: number;
+  /** ATLAS-style attribution: which agent/persona answered this turn + why. */
+  agent?: { agentName: string; reason: string };
+  /** Docs-agent source citations rendered as chips below the answer. */
+  citations?: Citation[];
+  /** Docs-agent "this is an act" handoff → an inline button that re-asks the
+   *  build agent with the suggested prompt (stays in this one window). */
+  handoff?: { reason: string; suggestedPrompt: string };
 }
 
 interface SessionSummary {
@@ -95,13 +124,24 @@ interface SessionSummary {
 }
 
 const SEED: Msg[] = [
-  { who: 'copilot', text: 'Hi! I can help you build pipelines, write KQL or T-SQL, summarize a report, or set up an Activator rule. What are we working on?' },
+  { who: 'copilot', text: 'Hi! Ask me anything — docs and how-to questions route to the Help & docs agent; build, query, and ops requests route to the Build & data agent. Each answer is badged with the agent that handled it. What are we working on?' },
 ];
 
 const EVT_OPEN = 'csaloom:open-copilot';
 const EVT_TOGGLE = 'csaloom:toggle-copilot';
 const EVT_CONTEXT = 'csaloom:copilot-context';
 const EVT_PERSONA = 'csaloom:copilot-persona';
+/** Dispatched by the in-app tutorial stepper (item-side-panel LearnPane) so the
+ *  one Copilot window opens on the docs/help agent scoped to the active step. */
+const EVT_TUTORIAL_STEP = 'csaloom:tutorial-step';
+
+export interface TutorialStepDetail {
+  id: string;
+  stepIndex: number;
+  stepTitle?: string;
+  stepBody?: string;
+  totalSteps?: number;
+}
 
 export function openCopilot() {
   window.dispatchEvent(new Event(EVT_OPEN));
@@ -138,10 +178,42 @@ export function openCopilotWithPersona(detail: CopilotPersonaDetail) {
   window.dispatchEvent(new CustomEvent(EVT_PERSONA, { detail }));
 }
 
+/** Page/route awareness forwarded to the docs agent (so "what's on this
+ *  screen / help me here" answers in context). Mirrors the help widget's
+ *  derivation that this window replaces. */
+interface HelpPageContext {
+  path: string;
+  label: string;
+  itemType?: string;
+  itemId?: string;
+  workspaceId?: string;
+}
+
+function pageContextFromPath(pathname: string | null): HelpPageContext {
+  const path = pathname || '/';
+  const seg = path.split('/').filter(Boolean);
+  const itemsIdx = seg.indexOf('items');
+  let itemType: string | undefined;
+  let itemId: string | undefined;
+  if (itemsIdx >= 0 && seg[itemsIdx + 1]) { itemType = seg[itemsIdx + 1]; itemId = seg[itemsIdx + 2]; }
+  const wsIdx = seg.indexOf('workspaces');
+  const workspaceId = wsIdx >= 0 && seg[wsIdx + 1] && seg[wsIdx + 1] !== 'items' ? seg[wsIdx + 1] : undefined;
+  const LABELS: Record<string, string> = {
+    '': 'Home', browse: 'Browse', workspaces: 'Workspaces', copilot: 'Loom Copilot',
+    governance: 'Governance', monitor: 'Monitor', admin: 'Admin portal', marketplace: 'Apps marketplace',
+  };
+  let label: string;
+  if (itemType) label = `${itemType.replace(/-/g, ' ')} editor`;
+  else if (seg[0] === 'admin' && seg[1]) label = `Admin · ${seg[1].replace(/-/g, ' ')}`;
+  else if (seg[0] === 'governance' && seg[1]) label = `Governance · ${seg[1].replace(/-/g, ' ')}`;
+  else label = LABELS[seg[0] || ''] || (seg[0] ? seg[0].replace(/-/g, ' ') : 'Home');
+  return { path, label, itemType, itemId, workspaceId };
+}
+
 const useStyles = makeStyles({
   panel: {
     position: 'fixed', right: 0, top: 'var(--loom-topbar-height)', bottom: 0,
-    width: 420,
+    width: 'min(420px, 100vw)',
     backgroundColor: tokens.colorNeutralBackground1,
     borderLeft: `1px solid ${tokens.colorNeutralStroke2}`,
     boxShadow: '-8px 0 24px rgba(0,0,0,0.10)',
@@ -149,9 +221,13 @@ const useStyles = makeStyles({
   },
   header: {
     padding: 12, borderBottom: `1px solid ${tokens.colorNeutralStroke2}`,
-    display: 'flex', alignItems: 'center', gap: 8,
+    display: 'flex', alignItems: 'center', gap: 8, minWidth: 0,
     background: 'linear-gradient(90deg, rgba(125,108,255,0.10), transparent)',
   },
+  headerTitle: {
+    overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', minWidth: 0,
+  },
+  headerHint: { color: tokens.colorNeutralForeground3, marginLeft: 'auto', flexShrink: 0 },
   body: { flex: 1, overflowY: 'auto', padding: 12, display: 'flex', flexDirection: 'column', gap: 8 },
   msg: { padding: '10px 14px', borderRadius: 14, maxWidth: '92%' },
   msgCopilot: { backgroundColor: tokens.colorNeutralBackground2, alignSelf: 'flex-start', borderTopLeftRadius: 4 },
@@ -162,11 +238,28 @@ const useStyles = makeStyles({
     color: tokens.colorNeutralForeground3, fontSize: 12,
     paddingLeft: 4, marginTop: 4,
   },
+  stepOk: { color: tokens.colorPaletteGreenForeground1, flexShrink: 0 },
+  stepErr: { color: tokens.colorPaletteRedForeground1, flexShrink: 0 },
+  stepIcon: { color: tokens.colorNeutralForeground3, flexShrink: 0 },
   feedbackRow: { display: 'flex', alignItems: 'center', gap: 4, marginTop: 4 },
+  agentBadgeRow: { marginBottom: 6 },
+  handoffBox: {
+    marginTop: 8, padding: '8px 10px', borderRadius: 10,
+    border: `1px solid ${tokens.colorBrandStroke2}`,
+    backgroundColor: tokens.colorBrandBackground2,
+    display: 'flex', flexDirection: 'column', gap: 6,
+  },
   composer: { padding: 12, borderTop: `1px solid ${tokens.colorNeutralStroke2}`, display: 'flex', gap: 8 },
   historyItem: {
     padding: '10px 8px', borderBottom: `1px solid ${tokens.colorNeutralStroke2}`,
     cursor: 'pointer', borderRadius: 6,
+    transition: 'background-color 120ms ease',
+    ':hover': { backgroundColor: tokens.colorNeutralBackground2 },
+    ':focus-visible': { outline: `2px solid ${tokens.colorBrandStroke1}`, outlineOffset: '-2px' },
+  },
+  historyEmpty: {
+    display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 8,
+    padding: '40px 16px', textAlign: 'center', color: tokens.colorNeutralForeground3,
   },
   chipsBar: { borderTop: `1px solid ${tokens.colorNeutralStroke3}` },
 });
@@ -197,6 +290,9 @@ export function CopilotPane() {
   const paneCtx = useCopilotContext();
   const panePersona = useMemo(() => getPanePersona(paneCtx.slug), [paneCtx.slug]);
   const slugRef = useRef<string>(paneCtx.slug);
+  // Route awareness forwarded to the docs agent when a turn routes to it.
+  const pathname = usePathname();
+  const pageCtx = useMemo(() => pageContextFromPath(pathname), [pathname]);
   const [open, setOpen] = useState(false);
   const [msgs, setMsgs] = useState<Msg[]>(SEED);
   const [draft, setDraft] = useState('');
@@ -216,10 +312,16 @@ export function CopilotPane() {
   const sessionRef = useRef<string | null>(null);
   const msgIndexRef = useRef(0);
   const bodyRef = useRef<HTMLDivElement>(null);
+  const inputRef = useRef<HTMLInputElement>(null);
   // Active persona binding (set by the EVT_PERSONA event from an editor's
   // "Copilot" button). Carried on every orchestrate request while set.
   const personaRef = useRef<string | null>(null);
   const personaContextRef = useRef<Record<string, unknown> | null>(null);
+  // Active tutorial step (set by the item-side-panel LearnPane "help with this
+  // step" button). While set, the next turn is forced to the docs/help agent
+  // and carries this step's context so the answer targets THIS step.
+  const [tutorial, setTutorial] = useState<TutorialStepDetail | null>(null);
+  const tutorialRef = useRef<TutorialStepDetail | null>(null);
 
   useEffect(() => {
     if (!open) return;
@@ -250,16 +352,28 @@ export function CopilotPane() {
     const k = (e: KeyboardEvent) => {
       if ((e.ctrlKey || e.metaKey) && e.key === '/') { e.preventDefault(); t(); }
     };
+    // Tutorial stepper (item-side-panel LearnPane) → bind this step + open the
+    // one window. The next send is forced to the docs/help agent with the step
+    // context attached. (This is the same event the retired Help widget used.)
+    const onStep = (e: Event) => {
+      const detail = (e as CustomEvent<TutorialStepDetail>).detail;
+      if (!detail || !detail.id) return;
+      tutorialRef.current = detail;
+      setTutorial(detail);
+      setOpen(true);
+    };
     window.addEventListener(EVT_OPEN, o);
     window.addEventListener(EVT_TOGGLE, t);
     window.addEventListener(EVT_CONTEXT, onCtx);
     window.addEventListener(EVT_PERSONA, p as EventListener);
+    window.addEventListener(EVT_TUTORIAL_STEP, onStep as EventListener);
     window.addEventListener('keydown', k);
     return () => {
       window.removeEventListener(EVT_OPEN, o);
       window.removeEventListener(EVT_TOGGLE, t);
       window.removeEventListener(EVT_CONTEXT, onCtx);
       window.removeEventListener(EVT_PERSONA, p as EventListener);
+      window.removeEventListener(EVT_TUTORIAL_STEP, onStep as EventListener);
       window.removeEventListener('keydown', k);
     };
   }, []);
@@ -277,8 +391,16 @@ export function CopilotPane() {
   }, [paneCtx.slug, panePersona.greeting, busy]);
 
   useEffect(() => {
-    if (bodyRef.current) bodyRef.current.scrollTop = bodyRef.current.scrollHeight;
+    if (bodyRef.current) {
+      bodyRef.current.scrollTo({ top: bodyRef.current.scrollHeight, behavior: 'smooth' });
+    }
   }, [msgs]);
+
+  // Keep the composer focused: on open, and again when a turn finishes (the
+  // Input is disabled while busy, which drops focus).
+  useEffect(() => {
+    if (open && !busy && !historyOpen) inputRef.current?.focus();
+  }, [open, busy, historyOpen]);
 
   async function sendText(rawText: string) {
     const text = rawText.trim();
@@ -287,6 +409,11 @@ export function CopilotPane() {
     setGateError(null);
     setSafetyBlock(null);
     setBusy(true);
+    // Tutorial binding is one-shot: this turn carries the step context + is
+    // forced to the docs agent, then routing reverts to classification so a
+    // follow-up "now build it" still routes to the build agent.
+    const tut = tutorialRef.current;
+    if (tut) { tutorialRef.current = null; setTutorial(null); }
     setMsgs((m) => [...m, { who: 'you', text }, { who: 'copilot', text: '', steps: [], streaming: true }]);
 
     try {
@@ -300,6 +427,34 @@ export function CopilotPane() {
           personaContext: personaContextRef.current ?? undefined,
           contextSlug: paneCtx.slug,
           contextPayload: paneCtx.payload,
+          // Route/tutorial awareness for the docs agent (when a turn routes to
+          // it). receiptScope lets the docs agent read the open item's receipts.
+          helpContext: {
+            path: pageCtx.path,
+            label: pageCtx.label,
+            itemType: pageCtx.itemType,
+            itemId: pageCtx.itemId,
+            tutorial: tut
+              ? {
+                  id: tut.id,
+                  stepIndex: tut.stepIndex,
+                  stepTitle: tut.stepTitle,
+                  stepBody: tut.stepBody,
+                  totalSteps: tut.totalSteps,
+                }
+              : undefined,
+            // Receipt scope priority: the route-bound open item, else the item
+            // encoded in the active editor tutorial's id (audit-t41). Either way
+            // the docs agent's readReceipts tool resolves to a concrete item for
+            // auto-error detection; absent both, it honestly reports
+            // "No item in context".
+            receiptScope: pageCtx.itemId
+              ? { itemId: pageCtx.itemId, itemType: pageCtx.itemType, workspaceId: pageCtx.workspaceId }
+              : receiptScopeFromTutorialId(tut?.id),
+          },
+          // A bound tutorial step is always a docs/help question; otherwise the
+          // server classifies intent for the global launcher.
+          forceAgent: tut ? 'docs' : undefined,
         }),
       });
 
@@ -364,8 +519,33 @@ export function CopilotPane() {
                   return { ...x, text: step.content, streaming: false, usage: step.usage, model: step.model, msgIndex: idx };
                 }
                 if (step.kind === 'error') return { ...x, text: `Error: ${step.error}`, streaming: false };
+                // Attribution badge: which agent answered this turn + why.
+                if (step.kind === 'agent') {
+                  return { ...x, agent: { agentName: step.agentName, reason: step.reason } };
+                }
+                // Docs-agent source citations — accumulate + dedupe by id.
+                if (step.kind === 'citation') {
+                  const merged = [...(x.citations ?? [])];
+                  for (const c of step.citations) {
+                    if (!merged.find((e) => e.id === c.id)) merged.push(c);
+                  }
+                  return { ...x, citations: merged };
+                }
+                // Docs-agent "this is an act" → inline re-ask button (in-window).
+                if (step.kind === 'handoff') {
+                  return { ...x, handoff: { reason: step.reason, suggestedPrompt: step.suggestedPrompt } };
+                }
                 return { ...x, steps: [...(x.steps ?? []), step] };
               }));
+              // Docs-agent openLoomPage navigation — defer so the user sees the
+              // answer first (parity with the retired Help widget).
+              if (step.kind === 'tool_result' && step.name === 'openLoomPage') {
+                const r = step.result as { ok?: boolean; slug?: string } | undefined;
+                if (r?.ok && r.slug && typeof window !== 'undefined') {
+                  const slug = r.slug;
+                  setTimeout(() => { window.location.href = slug; }, 800);
+                }
+              }
               // A proposed change opens the Keep/Undo diff modal. The editor is
               // NOT mutated here — only on Keep (handled in the modal callbacks).
               if (step.kind === 'proposed_change') {
@@ -421,6 +601,8 @@ export function CopilotPane() {
     setMsgs(SEED);
     setRatings({});
     setGateError(null);
+    tutorialRef.current = null;
+    setTutorial(null);
     msgIndexRef.current = 0;
   }
 
@@ -498,11 +680,29 @@ export function CopilotPane() {
 
   return (
     <>
-      <aside className={s.panel} aria-label="Copilot">
+      <aside
+        className={s.panel}
+        aria-label="Copilot"
+        data-testid="copilot-pane"
+        onKeyDown={(e) => {
+          // Escape closes the pane — unless the history drawer or the Keep/Undo
+          // diff dialog is up (those own their Escape handling).
+          if (e.key === 'Escape' && !historyOpen && !pendingChange) {
+            e.stopPropagation();
+            setOpen(false);
+          }
+        }}
+      >
         <div className={s.header}>
-          <Sparkle24Regular style={{ color: tokens.colorBrandForeground1 }} />
-          <Subtitle2>{panePersona.title}</Subtitle2>
-          <Caption1 style={{ color: tokens.colorNeutralForeground3, marginLeft: 'auto' }}>Ctrl + /</Caption1>
+          <Sparkle24Regular style={{ color: tokens.colorBrandForeground1, flexShrink: 0 }} />
+          <Subtitle2 className={s.headerTitle} title={panePersona.title}>{panePersona.title}</Subtitle2>
+          {tutorial && (
+            <Badge appearance="tint" size="small" color="success" data-testid="copilot-tutorial-badge"
+              title={tutorial.stepTitle ? `Step: ${tutorial.stepTitle}` : tutorial.id}>
+              step {tutorial.stepIndex + 1}{tutorial.totalSteps ? `/${tutorial.totalSteps}` : ''}
+            </Badge>
+          )}
+          <Caption1 className={s.headerHint}>Ctrl + /</Caption1>
           <Tooltip content="Chat history" relationship="label">
             <Button
               appearance="subtle"
@@ -522,7 +722,7 @@ export function CopilotPane() {
           </Tooltip>
           <Button appearance="subtle" icon={<Dismiss20Regular />} onClick={() => setOpen(false)} aria-label="Close Copilot" />
         </div>
-        <div className={s.body} ref={bodyRef}>
+        <div className={s.body} ref={bodyRef} aria-live="polite">
           {gateError && (
             <MessageBar intent="warning">
               <MessageBarBody>
@@ -551,17 +751,35 @@ export function CopilotPane() {
             </MessageBar>
           )}
           {msgs.map((m, i) => (
-            <div key={i} className={`${s.msg} ${m.who === 'copilot' ? s.msgCopilot : m.who === 'you' ? s.msgYou : s.msgSystem}`}>
+            <div key={i} className={`${s.msg} ${m.who === 'copilot' ? s.msgCopilot : m.who === 'you' ? s.msgYou : s.msgSystem}`} data-testid={`copilot-msg-${m.who}`}>
+              {m.agent && (
+                <div className={s.agentBadgeRow}>
+                  <Tooltip content={m.agent.reason} relationship="description">
+                    <Badge appearance="tint" color="brand" size="small"
+                      icon={<BranchCompare16Regular />} data-testid="copilot-agent-badge">
+                      {m.agent.agentName}
+                    </Badge>
+                  </Tooltip>
+                </div>
+              )}
               {m.text && <Body1 style={{ whiteSpace: 'pre-wrap' }}>{m.text}</Body1>}
               {m.steps?.map((step, j) => {
                 if (step.kind === 'tool_call') {
-                  return <div key={j} className={s.stepRow}>↪ calling <strong>{step.name}</strong>…</div>;
+                  return (
+                    <div key={j} className={s.stepRow}>
+                      <Wrench16Regular className={s.stepIcon} aria-hidden />
+                      calling <strong>{step.name}</strong>…
+                    </div>
+                  );
                 }
                 if (step.kind === 'tool_result') {
                   return (
                     <div key={j}>
                       <div className={s.stepRow}>
-                        {step.error ? '⚠' : '✓'} {step.name} <span>({step.durationMs}ms)</span>
+                        {step.error
+                          ? <ErrorCircle16Regular className={s.stepErr} aria-label="Tool failed" />
+                          : <CheckmarkCircle16Regular className={s.stepOk} aria-label="Tool succeeded" />}
+                        {step.name} <span>({step.durationMs}ms)</span>
                         {step.error && <span style={{ color: tokens.colorPaletteRedForeground1 }}> — {step.error}</span>}
                       </div>
                       {!step.error && step.name.startsWith('tabular_') && <TabularResult result={step.result} />}
@@ -572,12 +790,18 @@ export function CopilotPane() {
                   );
                 }
                 if (step.kind === 'thought') {
-                  return <div key={j} className={s.stepRow}>💭 {step.content.slice(0, 120)}</div>;
+                  return (
+                    <div key={j} className={s.stepRow}>
+                      <Lightbulb16Regular className={s.stepIcon} aria-hidden />
+                      {step.content.slice(0, 120)}
+                    </div>
+                  );
                 }
                 if (step.kind === 'proposed_change') {
                   return (
                     <div key={j} className={s.stepRow}>
-                      ⬡ proposed change to <code>{step.target}</code>
+                      <DocumentEdit16Regular className={s.stepIcon} aria-hidden />
+                      proposed change to <code>{step.target}</code>
                       <Button size="small" appearance="subtle" onClick={() => setPendingChange({
                         target: step.target, before: step.before, after: step.after,
                         lang: step.lang, callId: step.callId, summary: step.summary,
@@ -589,6 +813,22 @@ export function CopilotPane() {
               })}
               {m.streaming && !m.text && (
                 <div className={s.stepRow}><Spinner size="extra-tiny" /> Thinking…</div>
+              )}
+              {m.citations && m.citations.length > 0 && <CitationChips citations={m.citations} />}
+              {m.handoff && (
+                <div className={s.handoffBox} role="region" aria-label="Switch to the build agent">
+                  <Caption1 style={{ color: tokens.colorNeutralForeground2 }}>{m.handoff.reason}</Caption1>
+                  <Button
+                    appearance="primary"
+                    size="small"
+                    icon={<Sparkle20Regular />}
+                    onClick={() => void sendText(m.handoff!.suggestedPrompt)}
+                    disabled={busy}
+                    data-testid="copilot-handoff-btn"
+                  >
+                    Do it with the build agent
+                  </Button>
+                </div>
               )}
               {m.who === 'copilot' && !m.streaming && m.usage && (
                 <Caption1 className={s.stepRow} style={{ color: tokens.colorNeutralForeground3 }}>
@@ -634,6 +874,7 @@ export function CopilotPane() {
         )}
         <div className={s.composer}>
           <Input
+            ref={inputRef}
             style={{ flex: 1 }}
             value={draft}
             onChange={(_, d) => setDraft(d.value)}
@@ -641,8 +882,9 @@ export function CopilotPane() {
             placeholder={busy ? 'Working…' : `Ask ${panePersona.title}…`}
             disabled={busy}
             aria-label={`Message ${panePersona.title}`}
+            data-testid="copilot-input"
           />
-          <Button appearance="primary" icon={<Send24Regular />} onClick={send} disabled={busy} aria-label="Send message" />
+          <Button appearance="primary" icon={<Send24Regular />} onClick={send} disabled={busy || !draft.trim()} aria-label="Send message" data-testid="copilot-send" />
         </div>
         <CopilotDiff
           change={pendingChange}
@@ -679,7 +921,14 @@ export function CopilotPane() {
             </MessageBar>
           )}
           {!historyLoading && !historyError && sessions.length === 0 && (
-            <Caption1 style={{ color: tokens.colorNeutralForeground3 }}>No prior sessions.</Caption1>
+            <div className={s.historyEmpty}>
+              <History20Regular style={{ width: 28, height: 28 }} aria-hidden />
+              <Body1>No prior sessions</Body1>
+              <Caption1>
+                Conversations you have with Loom Copilot are saved here so you can
+                pick them back up later.
+              </Caption1>
+            </div>
           )}
           {sessions.map((sess) => (
             <div

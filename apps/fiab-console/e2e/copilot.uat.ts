@@ -305,29 +305,31 @@ test.describe('Cross-item Copilot orchestrator — ask + tool plan', () => {
 });
 
 // ────────────────────────────────────────────────────────────────────────────
-// Persona 12 — Help Copilot widget (AOAI + doc index) — UI + backend
+// Persona 12 — Docs/Help agent (AOAI + doc index), reached via the unified window
 // ────────────────────────────────────────────────────────────────────────────
-test.describe('Help Copilot widget — open + ask', () => {
-  test('chat route reaches a real backend (or honest AOAI gate)', async ({ browser }) => {
+test.describe('Docs/Help agent — backend + unified window', () => {
+  test('help-copilot chat route reaches a real backend (or honest AOAI gate)', async ({ browser }) => {
     const ctx = await browser.newContext(); await signIn(ctx);
     const page = await ctx.newPage();
     const res = await page.request.post(`${BASE}/api/help-copilot/chat`, {
       data: { prompt: 'What is CSA Loom?' },
     });
-    assertPrimaryAction('persona:help-copilot-widget', 'chat', await read(res));
+    assertPrimaryAction('persona:help-copilot', 'chat', await read(res));
     await ctx.close();
   });
 
-  test('widget opens via the Sparkle button', async ({ browser }, testInfo) => {
+  test('the single Copilot window opens via the Sparkle button (no second popup)', async ({ browser }, testInfo) => {
     const ctx = await browser.newContext(); await signIn(ctx);
     const page = await ctx.newPage();
     await page.goto(`${BASE}/`, { waitUntil: 'networkidle' });
-    await page.getByRole('button', { name: /Open Help Copilot/i }).click();
-    await expect(page.getByTestId('help-copilot-widget')).toBeVisible({ timeout: 10_000 });
+    await page.getByRole('button', { name: /Open Loom Copilot/i }).click();
+    // Exactly one window, and the retired floating widget is gone.
+    await expect(page.getByTestId('copilot-pane')).toHaveCount(1);
+    await expect(page.getByTestId('help-copilot-widget')).toHaveCount(0);
     await page.screenshot({
-      path: path.join(testInfo.outputDir, '..', '..', 'artifacts', 'copilot-help-widget-receipt.png'),
+      path: path.join(testInfo.outputDir, '..', '..', 'artifacts', 'copilot-unified-window-receipt.png'),
     }).catch(() => {});
-    recordVerdict({ surface: 'persona:help-copilot-widget', feature: 'open-widget', verdict: 'A', status: 'pass' });
+    recordVerdict({ surface: 'copilot:unified', feature: 'single-window', verdict: 'A', status: 'pass' });
     await ctx.close();
   });
 });

@@ -1,13 +1,30 @@
 # Help Copilot — architecture
 
+> **audit-t155 — unified Copilot window.** The floating Help Copilot widget is
+> retired. The console mounts ONE chat window (`copilot-pane.tsx`) behind ONE
+> launcher; `lib/azure/copilot-router.ts` classifies each global-launcher turn
+> (forced-`tool_choice` AOAI call) and delegates to either THIS docs/help agent
+> (`orchestrateHelp`) or the cross-item build agent (`orchestrate`), emitting an
+> `agent` attribution step the window badges inline. The docs agent below is
+> unchanged — the console UI now reaches it via `POST /api/copilot/orchestrate`
+> (routed), while `POST /api/help-copilot/chat` remains the direct API. Where
+> this page says "Widget", read "the unified Copilot window". See
+> `docs/fiab/parity/copilot-help-widget.md` and ADR 0022 (the docs-site widget
+> stays a separate, deliberate surface).
+
 ## Components
 
-- **Widget UI** — `apps/fiab-console/lib/components/help-copilot/`
-  - `widget.tsx` — floating panel; listens for `csaloom:open-copilot` and
-    `Ctrl + /` to toggle.
-  - `messages.tsx` — turns + tool-call rows + citation chips + handoff CTA.
-  - `citations.tsx` — clickable source chips with hover preview.
-  - `empty-state.tsx` — six baked-in starter prompts.
+- **Unified window UI** — `apps/fiab-console/lib/components/copilot-pane.tsx`
+  - the ONE floating panel; sole listener for `csaloom:open-copilot`,
+    `csaloom:toggle-copilot`, `csaloom:copilot-context`,
+    `csaloom:copilot-persona`, `csaloom:tutorial-step`, and `Ctrl + /`.
+  - renders the docs agent's citation chips via
+    `help-copilot/citations.tsx` (clickable source chips with hover preview),
+    the per-turn agent attribution badge, and the in-window handoff button.
+- **Intent router** — `apps/fiab-console/lib/azure/copilot-router.ts`
+  - `routeCopilot()` — one `agent` step (id, name, why), then the chosen
+    orchestrator's stream verbatim. Editor panes / explicit personas skip
+    classification; a bound tutorial step forces the docs agent.
 - **Backend orchestrator** — `apps/fiab-console/lib/azure/help-copilot-orchestrator.ts`
   - Reuses `resolveAoaiTarget()` from the cross-item orchestrator.
   - Registers 5 tools (see `index.md`).
@@ -66,9 +83,9 @@ The Cosmos fallback runs a deterministic substring rank in-process. It
 scales fine for the current ~10K-chunk corpus; if the corpus grows past
 ~50MB, switch to AI Search.
 
-## Handoff to `/copilot`
+## Handoff to the build agent
 
-When the user asks the Help Copilot to perform an **action** (create a
+When the user asks the docs/help agent to perform an **action** (create a
 workspace, run a pipeline, etc.), the model emits a fenced `handoff`
 block in its final message:
 
@@ -80,8 +97,10 @@ suggestedPrompt: create workspace foo
 \`\`\`
 ```
 
-The widget renders a CTA card with that deep link. Clicking opens the
-full Loom Copilot at `/copilot` with the prompt prefilled.
+The unified window renders an **in-window** "Do it with the build agent"
+button that re-sends `suggestedPrompt` through `/api/copilot/orchestrate`
+(which routes it to the build agent) — no navigation, no second popup. The
+`deepLink` is still honored by API consumers of `/api/help-copilot/chat`.
 
 ## Bicep deltas
 

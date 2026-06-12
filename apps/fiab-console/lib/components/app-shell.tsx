@@ -23,9 +23,8 @@ import {
 import Link from 'next/link';
 import { LeftNav } from './left-nav';
 import { CommandPalette } from './command-palette';
-import { CopilotPane } from './copilot-pane';
+import { CopilotPane, openCopilot } from './copilot-pane';
 import { CopilotIcon } from './icons/copilot-icon';
-import { HelpCopilotWidget, openHelpCopilot } from './help-copilot/widget';
 import { LoomLogo } from './loom-logo';
 import { ThemeToggle } from './theme-toggle';
 import { TopbarSearch } from './topbar-search';
@@ -175,9 +174,9 @@ export function AppShell({ children }: { children: ReactNode }) {
         <SavedStatus />
         <TopbarSearch />
         <div className={styles.actions} role="toolbar" aria-label="Global actions">
-          <Tooltip content="Help Copilot — ask anything about CSA Loom (Ctrl+/)" relationship="label">
+          <Tooltip content="Loom Copilot — ask anything about CSA Loom; it routes your question to the right agent (Ctrl+/)" relationship="label">
             <Button appearance="transparent" className={styles.iconBtn} icon={<CopilotIcon />}
-              onClick={openHelpCopilot} aria-label="Open Help Copilot" data-tour="copilot" />
+              onClick={openCopilot} aria-label="Open Loom Copilot" data-tour="copilot" />
           </Tooltip>
           <NotificationsButton />
           <Tooltip content="Send feedback" relationship="label">
@@ -246,7 +245,6 @@ export function AppShell({ children }: { children: ReactNode }) {
       </main>
       <CommandPalette />
       <CopilotPane />
-      <HelpCopilotWidget />
       <FeedbackWidget />
       <GlobalErrorListeners />
       <GlobalJobToaster />
