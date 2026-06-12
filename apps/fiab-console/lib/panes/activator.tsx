@@ -26,7 +26,6 @@
 
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import {
-  Title2,
   Body1,
   Caption1,
   makeStyles,
@@ -104,10 +103,19 @@ interface ObjectRow {
 
 const useStyles = makeStyles({
   root: { display: 'flex', flexDirection: 'column', gap: '16px' },
-  header: { display: 'flex', alignItems: 'center', gap: '12px', flexWrap: 'wrap' },
+  // Single command bar: workspace picker (left) + status badges + actions (right).
+  // PageShell owns the page <h1>, so the pane does NOT repeat an "Activator" title.
+  commandBar: {
+    display: 'flex',
+    alignItems: 'flex-end',
+    gap: '12px',
+    flexWrap: 'wrap',
+    rowGap: '12px',
+  },
+  badges: { display: 'flex', alignItems: 'center', gap: '8px', flexWrap: 'wrap', paddingBottom: '4px' },
   spacer: { flex: 1 },
   bar: { display: 'flex', alignItems: 'center', gap: '12px', flexWrap: 'wrap' },
-  actions: { display: 'flex', gap: '6px', alignItems: 'center' },
+  actions: { display: 'flex', gap: '6px', alignItems: 'center', paddingBottom: '1px' },
   mono: {
     fontFamily: tokens.fontFamilyMonospace,
     fontSize: tokens.fontSizeBase200,
@@ -386,22 +394,7 @@ export function ActivatorPane() {
 
   return (
     <div className={styles.root}>
-      <div className={styles.header}>
-        <Title2>Activator</Title2>
-        <Badge color="brand">Azure Monitor scheduled-query rules</Badge>
-        {ruleRows.length > 0 && (
-          <Badge appearance="tint" color="success">{activeRules} active / {ruleRows.length} rules</Badge>
-        )}
-        <div className={styles.spacer} />
-        <Button appearance="subtle" icon={<ArrowClockwise24Regular />} onClick={() => loadAll(workspaceId)} disabled={!workspaceId || loading}>
-          Refresh
-        </Button>
-        <Button appearance="primary" icon={<Add24Regular />} onClick={openEditor}>
-          New rule
-        </Button>
-      </div>
-
-      <div className={styles.bar}>
+      <div className={styles.commandBar}>
         <div className={styles.picker}>
           <Caption1>Workspace</Caption1>
           <Select
@@ -412,6 +405,21 @@ export function ActivatorPane() {
             {!workspaceId && <option value="">{wsError ? 'Workspaces unavailable' : 'Select a workspace'}</option>}
             {workspaces.map((w) => (<option key={w.id} value={w.id}>{w.name}</option>))}
           </Select>
+        </div>
+        <div className={styles.badges}>
+          <Badge color="brand">Azure Monitor scheduled-query rules</Badge>
+          {ruleRows.length > 0 && (
+            <Badge appearance="tint" color="success">{activeRules} active / {ruleRows.length} rules</Badge>
+          )}
+        </div>
+        <div className={styles.spacer} />
+        <div className={styles.actions}>
+          <Button appearance="subtle" icon={<ArrowClockwise24Regular />} onClick={() => loadAll(workspaceId)} disabled={!workspaceId || loading}>
+            Refresh
+          </Button>
+          <Button appearance="primary" icon={<Add24Regular />} onClick={openEditor}>
+            New rule
+          </Button>
         </div>
       </div>
 
