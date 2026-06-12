@@ -35,6 +35,144 @@ def _get(req: Any, name: str, default: Any = None) -> Any:
     return getattr(req, name, default)
 
 
+# Adopt-existing (D6): the catalog of reusable shared services, mapping each to
+# its canonical ``EXISTING_*`` env-var triple (what the console forwards as
+# ``existingServicesEnv``) and the matching ``existing<Svc>`` main.bicep
+# parameter names. Kept byte-identical to
+# apps/fiab-console/lib/setup/shared-services.ts so the console wizard, the
+# copy-paste ``az deployment sub create`` command, and this
+# orchestrator-submitted deployment never drift. Tuple shape:
+#   (choice_key, (env_name, env_rg, env_sub), (bicep_name, bicep_rg, bicep_sub))
+_EXISTING_SERVICE_PARAMS: tuple[tuple[str, tuple[str, str, str], tuple[str, str, str]], ...] = (
+    (
+        "purview",
+        ("EXISTING_PURVIEW", "EXISTING_PURVIEW_RG", "EXISTING_PURVIEW_SUB"),
+        ("existingPurviewAccount", "existingPurviewRg", "existingPurviewSub"),
+    ),
+    (
+        "law",
+        ("EXISTING_LAW", "EXISTING_LAW_RG", "EXISTING_LAW_SUB"),
+        ("existingLogAnalyticsWorkspace", "existingLogAnalyticsRg", "existingLogAnalyticsSub"),
+    ),
+    (
+        "keyvault",
+        ("EXISTING_KEYVAULT", "EXISTING_KEYVAULT_RG", "EXISTING_KEYVAULT_SUB"),
+        ("existingKeyVaultName", "existingKeyVaultRg", "existingKeyVaultSub"),
+    ),
+    (
+        "aoai",
+        ("EXISTING_AOAI", "EXISTING_AOAI_RG", "EXISTING_AOAI_SUB"),
+        ("existingFoundryAccountName", "existingFoundryRg", "existingFoundrySub"),
+    ),
+    (
+        "gateway",
+        ("EXISTING_GATEWAY", "EXISTING_GATEWAY_RG", "EXISTING_GATEWAY_SUB"),
+        ("existingGatewayName", "existingGatewayRg", "existingGatewaySub"),
+    ),
+    (
+        "aiSearch",
+        ("EXISTING_AI_SEARCH_SERVICE", "EXISTING_AI_SEARCH_RG", "EXISTING_AI_SEARCH_SUB"),
+        ("existingAiSearchService", "existingAiSearchRg", "existingAiSearchSub"),
+    ),
+    (
+        "apim",
+        ("EXISTING_APIM", "EXISTING_APIM_RG", "EXISTING_APIM_SUB"),
+        ("existingApimName", "existingApimRg", "existingApimSub"),
+    ),
+    (
+        "adx",
+        ("EXISTING_KUSTO_CLUSTER", "EXISTING_KUSTO_RG", "EXISTING_KUSTO_SUB"),
+        ("existingAdxClusterName", "existingAdxClusterRg", "existingAdxClusterSub"),
+    ),
+)
+
+
+def _existing_resource_parameters(req: Any) -> dict[str, dict[str, Any]]:
+    """Translate the wizard's adopt-existing (D6) reuse picks into explicit
+    ARM ``{existing<Svc>: {"value": ...}}`` parameters so an
+    orchestrator-submitted deployment ADOPTS the chosen shared resources
+    instead of provisioning new ones.
+
+    Because the deployment is submitted via a precompiled ``main.json``
+    templateLink, the ``.bicepparam`` ``readEnvironmentVariable('EXISTING_*')``
+    blocks never run on this path — only explicit ARM ``parameters`` entries
+    take effect. This is what makes a "reuse" choice actually flow through; the
+    copy-paste fallback already folds the same values onto ``-p existing*=…``.
+
+    The console forwards two equivalent representations; either is honored:
+      - ``existingServicesEnv`` — the canonical EXISTING_* env map already
+        guarded reuse-only / name-required by ``choicesToExistingEnv()``, and
+      - ``serviceChoices`` — the raw per-service ``{mode, candidate}`` picks.
+
+    Only a reuse pick with a resolved resource NAME emits params (mirrors
+    ``choicesToBicepParams``); ``new`` / ``gate`` choices provision new as
+    before. The matching ``existing<Svc>`` main.bicep params all default to
+    ``''``, so an unselected service is left untouched.
+    """
+    env_map = _get(req, "existing_services_env") or _get(req, "existingServicesEnv") or {}
+    choices = _get(req, "service_choices") or _get(req, "serviceChoices") or {}
+    if not isinstance(env_map, dict):
+        env_map = {}
+    if not isinstance(choices, dict):
+        choices = {}
+
+    out: dict[str, dict[str, Any]] = {}
+    for key, (env_name, env_rg, env_sub), (bp_name, bp_rg, bp_sub) in _EXISTING_SERVICE_PARAMS:
+        name = rg = sub = ""
+        # Prefer the already-guarded EXISTING_* env map the console computed.
+        env_val = str(env_map.get(env_name) or "").strip()
+        if env_val:
+            name = env_val
+            rg = str(env_map.get(env_rg) or "").strip()
+            sub = str(env_map.get(env_sub) or "").strip()
+        else:
+            # Fall back to the raw choice (reuse + candidate.name required).
+            choice = choices.get(key)
+            if isinstance(choice, dict) and choice.get("mode") == "reuse":
+                cand = choice.get("candidate")
+                cand = cand if isinstance(cand, dict) else {}
+                cand_name = str(cand.get("name") or "").strip()
+                if cand_name:
+                    name = cand_name
+                    rg = str(cand.get("rg") or "").strip()
+                    sub = str(cand.get("subscriptionId") or "").strip()
+        if not name:
+            continue
+        out[bp_name] = {"value": name}
+        out[bp_rg] = {"value": rg}
+        out[bp_sub] = {"value": sub}
+    return out
+
+
+def _deploy_parameters(req: Any) -> dict[str, dict[str, Any]]:
+    """ARM-style ``{name: {"value": ...}}`` parameters mirroring the
+    copy-paste ``az deployment sub create -p ...`` the wizard prints —
+    boundary, deploymentMode, capacitySku, the parallel DLZ arrays the
+    main.bicep ``[for]`` loop consumes, and (when the operator chose to reuse
+    shared services in the adopt-existing step) the ``existing<Svc>`` adoption
+    params.
+    """
+    domain = _get(req, "domain_name")
+    dlz_subs = _get(req, "dlz_subscription_ids") or []
+    dlz_domains = _get(req, "dlz_domain_names") or ([domain] if domain else [])
+    params: dict[str, dict[str, Any]] = {
+        "boundary": {"value": _get(req, "boundary")},
+        "deploymentMode": {"value": _get(req, "mode")},
+        "capacitySku": {"value": _get(req, "capacity_sku")},
+        "dlzDomainNames": {"value": dlz_domains},
+    }
+    if dlz_subs:
+        params["dlzSubscriptionIds"] = {"value": dlz_subs}
+    vanity = _get(req, "vanity_domain")
+    if vanity:
+        params["vanityDomain"] = {"value": vanity}
+    # Fold in the adopt-existing reuse picks so the submitted deployment adopts
+    # the chosen Purview/LAW/Key Vault/AOAI/Gateway/AI Search/APIM/ADX instead
+    # of provisioning new ones.
+    params.update(_existing_resource_parameters(req))
+    return params
+
+
 def make_resource_client(subscription_id: str, arm_endpoint: str, authority: str | None):
     """Build a real ARM ``ResourceManagementClient`` under the orchestrator's
     managed identity (``AZURE_CLIENT_ID`` UAMI granted Contributor on each
@@ -57,29 +195,6 @@ def make_resource_client(subscription_id: str, arm_endpoint: str, authority: str
         base_url=base,
         credential_scopes=[f"{base}/.default"],
     )
-
-
-def _deploy_parameters(req: Any) -> dict[str, dict[str, Any]]:
-    """ARM-style ``{name: {"value": ...}}`` parameters mirroring the
-    copy-paste ``az deployment sub create -p ...`` the wizard prints —
-    boundary, deploymentMode, capacitySku and the parallel DLZ arrays the
-    main.bicep ``[for]`` loop consumes.
-    """
-    domain = _get(req, "domain_name")
-    dlz_subs = _get(req, "dlz_subscription_ids") or []
-    dlz_domains = _get(req, "dlz_domain_names") or ([domain] if domain else [])
-    params: dict[str, dict[str, Any]] = {
-        "boundary": {"value": _get(req, "boundary")},
-        "deploymentMode": {"value": _get(req, "mode")},
-        "capacitySku": {"value": _get(req, "capacity_sku")},
-        "dlzDomainNames": {"value": dlz_domains},
-    }
-    if dlz_subs:
-        params["dlzSubscriptionIds"] = {"value": dlz_subs}
-    vanity = _get(req, "vanity_domain")
-    if vanity:
-        params["vanityDomain"] = {"value": vanity}
-    return params
 
 
 async def run_bicep_deploy(

@@ -44,7 +44,7 @@ The Setup Wizard (`/setup`) has a dedicated **Shared services** step between
 *Subscription & region* and *Domain name*. On entry it calls
 `GET /api/setup/discover-services`, which runs a **single** Azure Resource Graph
 query over the shared-service ARM types (Purview, Log Analytics, Key Vault,
-AOAI/AI Services, Application Gateway / Front Door, AI Search, APIM, ADX) — one
+AOAI/AI Services, Application Gateway, AI Search, APIM, ADX) — one
 query, not N, to respect ARG's 15-query / 5-second throttle. Resource Graph
 honours RBAC, so only resources the Console identity can read are offered (no
 mock data). For each service the operator picks **Reuse** / **Deploy new** /
@@ -55,8 +55,13 @@ embeddings deployment must exist in-region). Purview is detected as
 one-per-tenant and **pinned to reuse** (deploy-new is blocked —
 `EnterpriseTenantAlreadyExists`). The reuse selections flow into the deploy as
 the matching `existing<Svc>` bicep parameters, generalising the
-`loomPurviewAccount`-already-exists pattern. No Fabric type is ever scanned or
-offered (Azure-native only).
+`loomPurviewAccount`-already-exists pattern. Both deploy paths honour the
+picks: the copy-paste `az deployment sub create` folds them onto `-p existing*=…`,
+and the automated Setup Orchestrator translates them into explicit ARM
+`parameters` entries (`orchestrator._deploy_parameters`) — required because its
+precompiled `main.json` templateLink bypasses the `.bicepparam`
+`readEnvironmentVariable('EXISTING_*')` blocks, so env forwarding alone would be
+a no-op. No Fabric type is ever scanned or offered (Azure-native only).
 
 ## Generate a BYO bicepparam (the wizard)
 
@@ -115,7 +120,7 @@ runtime env wire.
 | Data Factory | `EXISTING_ADF` (+`_RG` +`_SUB`) → `LOOM_ADF_NAME`/`_RG`/`_SUB` | DLZ-provisioned | Data Factory Contributor |
 | Log Analytics | `EXISTING_LAW` (+`_RG` +`_SUB`) → `LOOM_BYO_LAW_WORKSPACE`/`_RG`/`_SUB` | DLZ-provisioned | Log Analytics Reader |
 | Key Vault | `EXISTING_KEYVAULT` (+`_RG` +`_SUB`) → `LOOM_BYO_KEYVAULT`/`_RG`/`_SUB` | always-provisioned | Key Vault Secrets User |
-| App Gateway / Front Door | `EXISTING_GATEWAY` (+`_RG` +`_SUB`) → `LOOM_BYO_GATEWAY`/`_RG`/`_SUB` | `appGatewayEnabled` | Contributor on the gateway |
+| Application Gateway | `EXISTING_GATEWAY` (+`_RG` +`_SUB`) → `LOOM_BYO_GATEWAY`/`_RG`/`_SUB` | `appGatewayEnabled` | Contributor on the gateway |
 | Azure SQL | bound per-item in the editor (any server) | — | per-server Entra admin |
 | Microsoft Fabric | `fabricEnabled` (default **false** — Azure-native, no Fabric dependency) | — | n/a (opt-in only) |
 

@@ -70,6 +70,17 @@ class DeployRequest(BaseModel):
     dlz_subscription_ids: list[str] | None = Field(default=None, alias="dlzSubscriptionIds")
     dlz_domain_names: list[str] | None = Field(default=None, alias="dlzDomainNames")
     vanity_domain: str | None = Field(default=None, alias="vanityDomain")
+    # Adopt-existing (D6): the console forwards the operator's reuse picks two
+    # equivalent ways — the already-guarded EXISTING_* env map
+    # (``existingServicesEnv``) and the raw per-service ``serviceChoices``.
+    # ``orchestrator._deploy_parameters`` translates either into explicit
+    # ``existing<Svc>`` ARM parameters so the submitted subscription-scoped
+    # deployment ADOPTS the chosen shared resources instead of provisioning new
+    # ones (e.g. reusing the tenant's one Purview account rather than tripping
+    # EnterpriseTenantAlreadyExists). Without these fields the model's
+    # ``extra="ignore"`` would silently drop the reuse choices.
+    existing_services_env: dict[str, str] | None = Field(default=None, alias="existingServicesEnv")
+    service_choices: dict[str, Any] | None = Field(default=None, alias="serviceChoices")
 
 
 class DeployResponse(BaseModel):

@@ -137,12 +137,15 @@ export const SHARED_SERVICES: ServiceDescriptor[] = [
   },
   {
     key: 'gateway',
-    label: 'Application Gateway / Front Door',
+    label: 'Application Gateway',
     visual: 'gateway',
     armType: 'microsoft.network/applicationgateways',
     env: { name: 'EXISTING_GATEWAY', rg: 'EXISTING_GATEWAY_RG', sub: 'EXISTING_GATEWAY_SUB' },
     bicep: { name: 'existingGatewayName', rg: 'existingGatewayRg', sub: 'existingGatewaySub' },
-    note: 'Reuse an existing Application Gateway (or Front Door) for ingress instead of provisioning one.',
+    // Discovery scans microsoft.network/applicationgateways only, and the
+    // existingGateway* bicep params adopt an Application Gateway specifically —
+    // so this card is App Gateway, not Front Door (microsoft.cdn/profiles).
+    note: 'Reuse an existing Application Gateway for ingress instead of provisioning one.',
   },
   {
     key: 'aiSearch',

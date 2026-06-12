@@ -91,6 +91,97 @@ def test_render_bicep_parameters_gcc_uses_container_apps():
     assert params["containerPlatform"] == "containerApps"
 
 
+# ----- adopt-existing (D6) → existing<Svc> ARM params --------------------
+# Regression guard for the orchestrator path silently dropping the operator's
+# reuse choices: _deploy_parameters MUST translate reuse picks into explicit
+# existing<Svc> ARM parameters (the templateLink submit bypasses the
+# bicepparam readEnvironmentVariable blocks, so env forwarding alone is a dead
+# wire — only ARM `parameters` entries take effect).
+
+
+def _reuse_choice(name, rg="rg-shared", sub="00000000-0000-0000-0000-0000000000aa"):
+    return {"mode": "reuse", "candidate": {"name": name, "rg": rg, "subscriptionId": sub}}
+
+
+def test_deploy_parameters_adopts_reuse_choice_from_service_choices():
+    req = {
+        "boundary": "Commercial",
+        "mode": "single-sub",
+        "domain_name": "salesops",
+        "capacity_sku": "F8",
+        "service_choices": {
+            "purview": _reuse_choice("contoso-purview", "rg-gov", "11111111-1111-1111-1111-111111111111"),
+            "law": _reuse_choice("contoso-law"),
+            "keyvault": {"mode": "new"},
+            "aoai": {"mode": "gate"},
+        },
+    }
+    params = orchestrator._deploy_parameters(req)
+    assert params["existingPurviewAccount"] == {"value": "contoso-purview"}
+    assert params["existingPurviewRg"] == {"value": "rg-gov"}
+    assert params["existingPurviewSub"] == {"value": "11111111-1111-1111-1111-111111111111"}
+    assert params["existingLogAnalyticsWorkspace"] == {"value": "contoso-law"}
+    # new / gate choices emit nothing — those services provision new.
+    assert "existingKeyVaultName" not in params
+    assert "existingFoundryAccountName" not in params
+
+
+def test_deploy_parameters_adopts_reuse_choice_from_existing_services_env():
+    req = {
+        "boundary": "Commercial",
+        "mode": "single-sub",
+        "domain_name": "salesops",
+        "capacity_sku": "F8",
+        "existing_services_env": {
+            "EXISTING_APIM": "contoso-apim",
+            "EXISTING_APIM_RG": "rg-apim",
+            "EXISTING_APIM_SUB": "22222222-2222-2222-2222-222222222222",
+            "EXISTING_KUSTO_CLUSTER": "contoso-adx",
+            "EXISTING_KUSTO_RG": "rg-adx",
+            "EXISTING_KUSTO_SUB": "33333333-3333-3333-3333-333333333333",
+        },
+    }
+    params = orchestrator._deploy_parameters(req)
+    assert params["existingApimName"] == {"value": "contoso-apim"}
+    assert params["existingApimRg"] == {"value": "rg-apim"}
+    assert params["existingApimSub"] == {"value": "22222222-2222-2222-2222-222222222222"}
+    assert params["existingAdxClusterName"] == {"value": "contoso-adx"}
+
+
+def test_deploy_parameters_emits_no_existing_params_when_no_reuse():
+    req = {
+        "boundary": "Commercial",
+        "mode": "single-sub",
+        "domain_name": "salesops",
+        "capacity_sku": "F8",
+    }
+    params = orchestrator._deploy_parameters(req)
+    assert not any(k.startswith("existing") for k in params)
+
+
+def test_deploy_request_routes_reuse_choices_into_deploy_parameters():
+    """Console→orchestrator field contract: the camelCase wizard payload
+    (serviceChoices + existingServicesEnv) survives DeployRequest's extra=ignore
+    and yields the existing<Svc> ARM param a reuse pick must produce."""
+    from loom_setup_orchestrator.main import DeployRequest
+
+    req = DeployRequest(
+        boundary="Commercial",
+        mode="single-sub",
+        domainName="salesops",
+        capacitySku="F8",
+        serviceChoices={"keyvault": _reuse_choice("contoso-kv", "rg-kv", "44444444-4444-4444-4444-444444444444")},
+        existingServicesEnv={
+            "EXISTING_AI_SEARCH_SERVICE": "contoso-search",
+            "EXISTING_AI_SEARCH_RG": "rg-search",
+            "EXISTING_AI_SEARCH_SUB": "55555555-5555-5555-5555-555555555555",
+        },
+    )
+    params = orchestrator._deploy_parameters(req)
+    assert params["existingKeyVaultName"] == {"value": "contoso-kv"}
+    assert params["existingAiSearchService"] == {"value": "contoso-search"}
+
+
 # ----- DeploymentStateStore (in-memory) ---------------------------------
 
 

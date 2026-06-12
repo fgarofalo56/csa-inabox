@@ -430,6 +430,15 @@ const useStyles = makeStyles({
   svcCardHead: { display: 'flex', alignItems: 'flex-start', gap: tokens.spacingHorizontalM },
   svcChecks: { display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalXS },
   svcCheckRow: { display: 'flex', alignItems: 'flex-start', gap: tokens.spacingHorizontalXS },
+  // Responsive 2-up grid for the per-service adopt-existing cards — auto-fills
+  // to one column on narrow panes, two+ on wide, instead of one tall stack.
+  svcGrid: {
+    display: 'grid',
+    gridTemplateColumns: 'repeat(auto-fill, minmax(340px, 1fr))',
+    gap: tokens.spacingHorizontalL,
+    rowGap: tokens.spacingVerticalL,
+    alignItems: 'start',
+  },
   serviceIconChip: {
     width: '24px',
     height: '24px',
@@ -1352,7 +1361,7 @@ export function SetupWizardPane() {
                 <Spinner size="tiny" /> <Caption1>Discovering existing shared services via Azure Resource Graph…</Caption1>
               </div>
             ) : (
-              <div className={styles.fields} style={{ maxWidth: 'none' }}>
+              <div className={styles.svcGrid}>
                 {SHARED_SERVICES.map((svc) => {
                   const v = itemVisual(svc.visual);
                   const Icon = v.icon;
