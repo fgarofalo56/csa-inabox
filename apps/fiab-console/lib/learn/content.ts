@@ -799,7 +799,7 @@ export interface LearnTopic {
   appId?: string;
 }
 
-/** The 8 numbered, end-to-end walkthroughs under docs/fiab/tutorials/. */
+/** The 9 numbered, end-to-end walkthroughs under docs/fiab/tutorials/. */
 const NUMBERED_TUTORIALS: ReadonlyArray<{
   id: string; title: string; summary: string; visualType: string;
 }> = [
@@ -827,6 +827,9 @@ const NUMBERED_TUTORIALS: ReadonlyArray<{
   { id: '08-forward-migrate-to-fabric', title: 'Forward-migrate a Lakehouse to Fabric',
     summary: 'Lift a Loom lakehouse into Microsoft Fabric without re-engineering pipelines.',
     visualType: 'lakehouse' },
+  { id: '09-tenant-topology', title: 'Tenant topology — DMLZ hub + N DLZ spokes',
+    summary: 'How a Loom tenant is shaped (one DMLZ + N DLZs + one Console), the first-run vs DLZ-attach flows, and the domain/RBAC model.',
+    visualType: 'plan' },
 ];
 
 /** Loom-engine service guides under docs/fiab/services/. */

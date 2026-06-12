@@ -1,0 +1,48 @@
+%% CSA Loom — tenant topology: one DMLZ hub (Admin Plane) + N DLZ spokes + one Console.
+%% Source of truth: platform/fiab/bicep/main.bicep (adminPlaneRg + singleDlz/dlz[*]).
+%% Rendered in docs/fiab/diagrams/README.md and docs/fiab/architecture.md.
+flowchart TB
+    classDef tenant fill:none,stroke:#5C2D91,stroke-width:2px,stroke-dasharray:6 4,color:#5C2D91
+    classDef admin fill:#107C10,stroke:#fff,color:#fff,stroke-width:2px
+    classDef landing fill:#D83B01,stroke:#fff,color:#fff,stroke-width:2px
+    classDef console fill:#0078D4,stroke:#fff,color:#fff,stroke-width:2px
+
+    subgraph Tenant ["Single Microsoft Entra ID tenant — identical Entra groups across every subscription"]
+        direction TB
+
+        subgraph Admin ["Admin Plane = Data Management Zone (DMLZ) — one subscription (rg-csa-loom-admin-LOCATION)"]
+            direction TB
+            Console["Loom Console (one, serves all DLZs)<br/>Container App (Commercial/GCC) or AKS (GCC-H/IL5)"]:::console
+            MCP["Self-hosted Azure MCP server"]:::admin
+            Hub["Hub VNet + Azure Firewall + Private DNS zones"]:::admin
+            Cat["Shared catalog (catalogPrimary):<br/>Unity Catalog / Purview / Atlas-on-AKS"]:::admin
+            ADX["Shared ADX cluster (one cluster, N databases)"]:::admin
+            Market["API + data-product marketplace"]:::admin
+        end
+
+        subgraph DLZ1 ["DLZ — Domain A (rg-csa-loom-dlz-A-LOCATION)"]
+            direction TB
+            S1["Spoke VNet (peered to Hub)"]:::landing
+            R1["ADLS medallion · Synapse Serverless · ADX DB · Power BI · Cosmos · Weave PG"]:::landing
+        end
+        subgraph DLZ2 ["DLZ — Domain B (rg-csa-loom-dlz-B-LOCATION)"]
+            direction TB
+            S2["Spoke VNet (peered to Hub)"]:::landing
+            R2["...same shape as Domain A..."]:::landing
+        end
+        DLZN["DLZ — Domain N ... (one per dlzDomainNames entry)"]:::landing
+    end
+
+    class Tenant tenant
+
+    Console -->|deploys + manages| DLZ1
+    Console -->|deploys + manages| DLZ2
+    Console -->|deploys + manages| DLZN
+    Hub <-->|VNet peering| S1
+    Hub <-->|VNet peering| S2
+    R1 -->|domain DB attaches to| ADX
+    R2 -->|domain DB attaches to| ADX
+    R1 -.scanned by.-> Cat
+    R2 -.scanned by.-> Cat
+    R1 -->|publish data product| Market
+    R2 -->|publish data product| Market

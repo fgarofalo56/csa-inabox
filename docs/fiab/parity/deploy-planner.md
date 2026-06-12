@@ -22,12 +22,40 @@ consumes. It is Azure-native end to end (no Microsoft Fabric dependency — see
 | Pick a runtime / version / capacity | ✅ App Service + Functions runtime, Postgres/MySQL version, storage GB (SpinButton bounded by `@minValue/@maxValue`) | `ConfigFieldControl` |
 | Region selection | ✅ Per-subscription region (boundary-aware default via `BOUNDARY_DEFAULT_REGION`) | `planToBicepparam` |
 | Sovereign-cloud boundary | ✅ Per-subscription Commercial / GCC / GCC-High / IL5 | `PlanSubscription.boundary` |
+| Deployment mode (topology) | ✅ Per-subscription **single-sub / multi-sub** Dropdown (`@allowed` on `main.bicep`); emitted as `param deploymentMode`. Unset ⇒ derived from domain count (>1 ⇒ multi-sub) | `PlanSubscription.deploymentMode`, `planToBicepparam()` |
 | Express dependencies between resources | ✅ Drag from a service's right handle to another → dependency arrow (React Flow edges) | `onConnect`, `buildEdges` |
 | Validate before deploy ("Review + create") | ✅ **Validate** button — flags dangling dependencies (error), plan-only/empty/cross-subscription warnings | `validatePlan()` |
 | Save the design | ✅ **Save plan** → Cosmos (`deploy-plan:<tenantId>` in tenant-settings) | `app/api/admin/deploy-plan/route.ts` (PUT) |
 | Export deployable template / parameters | ✅ **Export bicepparam** → real `.bicepparam` with feature flags **and** per-resource SKU/tier/runtime params | `planToBicepparam()` |
 | Deploy | ⚠️ Honest gate: the planner does **not** run the deployment. The exported file is applied with `az deployment sub create` or the deploy-fiab workflow (surfaced in the info bar). | — |
 | Cost estimate | ❌ Tracked separately (deploy-planner cost-estimate task) — out of scope here. |
+
+## Deployment mode & DLZ-attach
+
+The planner now emits the **`deploymentMode`** parameter that
+`platform/fiab/bicep/main.bicep` requires (`@allowed(['single-sub','multi-sub'])`,
+no default), so an exported `.bicepparam` is deployable as-is:
+
+- **single-sub** — Admin Plane + exactly one DLZ in the subscription
+  (`rg-csa-loom-dlz-single-<location>`). The default for a one-domain plan.
+- **multi-sub** — Admin Plane here + one DLZ per domain across separate
+  subscriptions. The emitter also writes a commented `dlzSubscriptionIds` TODO
+  (the real sub GUIDs are an operator input, not planner state — so it is an
+  honest TODO, never a fake value).
+
+When `deploymentMode` is unset on a subscription the emitter **derives** it from
+the domain count (more than one domain ⇒ multi-sub, since single-sub supports at
+most one DLZ). The control is a constrained Dropdown bound to the two `@allowed`
+values — no freeform.
+
+The **first-run vs DLZ-attach** distinction is a Setup-Wizard / Console concept
+layered on top of this same template: first-run provisions the Admin Plane + the
+first DLZ; "Add Data Landing Zone" re-runs `main.bicep` with an expanded
+`dlzSubscriptionIds` / `dlzDomainNames` (admin plane already present →
+`setupOrchestratorSpokeRbac` + spoke peering add the new DLZ only). Both flows
+are diagrammed in [`docs/fiab/diagrams/`](../diagrams/README.md) and taught in
+[Tutorial 09 — Tenant topology](../tutorials/09-tenant-topology.md).
+
 
 ## Constrained-config compliance (`loom_no_freeform_config`)
 

@@ -745,6 +745,24 @@ function PlannerInner() {
           <Field label="Region (optional)">
             <Input value={selectedSub.region || ''} placeholder="eastus2 / usgovvirginia" onChange={(_, d) => patchSelectedSub({ region: d.value })} />
           </Field>
+          <Field
+            label="Deployment mode"
+            hint={
+              (selectedSub.deploymentMode || (selectedSub.domains.length > 1 ? 'multi-sub' : 'single-sub')) === 'single-sub'
+                ? 'Admin Plane + 1 DLZ in this subscription. Add a 2nd domain to use multi-sub.'
+                : 'Admin Plane here + one DLZ per domain across separate subs (fill dlzSubscriptionIds before deploy).'
+            }
+          >
+            <Dropdown
+              value={selectedSub.deploymentMode || (selectedSub.domains.length > 1 ? 'multi-sub' : 'single-sub')}
+              selectedOptions={[selectedSub.deploymentMode || (selectedSub.domains.length > 1 ? 'multi-sub' : 'single-sub')]}
+              onOptionSelect={(_, d) => patchSelectedSub({ deploymentMode: d.optionValue as PlanSubscription['deploymentMode'] })}
+              aria-label="Deployment mode"
+            >
+              <Option value="single-sub">single-sub (Admin Plane + 1 DLZ)</Option>
+              <Option value="multi-sub">multi-sub (one DLZ per domain)</Option>
+            </Dropdown>
+          </Field>
         </div>
       )}
 

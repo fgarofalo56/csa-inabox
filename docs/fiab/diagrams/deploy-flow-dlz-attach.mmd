@@ -1,0 +1,26 @@
+%% CSA Loom — DLZ-attach flow (add a Data Landing Zone to an EXISTING Admin Plane).
+%% Source of truth: Console "Add Data Landing Zone" → DlzOnboardingRegistry →
+%% re-invoke main.bicep with an expanded dlzSubscriptionIds / dlzDomainNames; the
+%% admin plane already exists, so this run adds one spoke + its RBAC + peering.
+sequenceDiagram
+    autonumber
+    actor Admin as Loom admin
+    participant UI as Console "Add Data Landing Zone" (Setup Wizard)
+    participant Reg as DlzOnboardingRegistry (Cosmos)
+    participant Orch as Setup Orchestrator (Console UAMI)
+    participant Main as main.bicep (deploymentMode='multi-sub')
+    participant Hub as Existing Admin Plane (DMLZ)
+    participant Spoke as New DLZ spoke (rg-csa-loom-dlz-<name>-LOCATION)
+
+    Admin->>UI: Add Data Landing Zone (pick subscription + domain name)
+    UI->>Reg: register the new DLZ (domain → target subId)
+    Reg-->>Orch: expanded dlzSubscriptionIds[] + dlzDomainNames[]
+    Orch->>Main: re-run az deployment sub create (admin plane already present → no-op there)
+    Main->>Spoke: deploy the new DLZ module only (new RG / sub)
+    Main->>Hub: read adminPlane outputs (hubVnetId, lawId, shared ADX cluster)
+    Spoke->>Hub: peer new spoke VNet to adminPlaneHubVnetId
+    Spoke->>Hub: attach new ADX database to the shared cluster
+    Main->>Spoke: setupOrchestratorSpokeRbac → Console UAMI Contributor on the new spoke sub
+    Main-->>Orch: outputs (new DLZ RG, storage, Synapse)
+    Orch-->>UI: DLZ ready
+    UI-->>Admin: "Domain <name> added — its workspaces can now be created."

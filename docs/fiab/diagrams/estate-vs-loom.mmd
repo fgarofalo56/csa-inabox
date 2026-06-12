@@ -1,0 +1,40 @@
+%% CSA Loom — how the lower-level ESLZ estate pipeline (.github/workflows/deploy.yml)
+%% relates to the Loom platform deploy (platform/fiab/bicep/main.bicep).
+%% deploy.yml VENDS the subscriptions/estate; main.bicep RUNS Loom inside them.
+flowchart TB
+    classDef estate fill:#5D5A58,stroke:#fff,color:#fff,stroke-width:2px
+    classDef loom fill:#0078D4,stroke:#fff,color:#fff,stroke-width:2px
+    classDef sub fill:#107C10,stroke:#fff,color:#fff,stroke-width:2px
+    classDef dlz fill:#D83B01,stroke:#fff,color:#fff,stroke-width:2px
+
+    subgraph Estate ["ESTATE pipeline — .github/workflows/deploy.yml (run rarely, by platform teams)"]
+        direction TB
+        ALZ["deploy-alz → deploy/bicep/landing-zone-alz<br/>Management + Connectivity platform subs"]:::estate
+        DMLZj["deploy-dmlz → deploy/bicep/DMLZ"]:::estate
+        DLZj["deploy-dlz → deploy/bicep/DLZ"]:::estate
+    end
+
+    subgraph Subs ["Azure subscriptions (the vended estate)"]
+        direction TB
+        Mgmt["Management + Connectivity (platform LZ)"]:::sub
+        DMLZsub["DMLZ subscription"]:::sub
+        DLZsub["DLZ subscription(s)"]:::dlz
+    end
+
+    subgraph Loom ["LOOM platform — platform/fiab/bicep/main.bicep (run repeatedly, by Console/azd)"]
+        direction TB
+        AP["module adminPlane → Admin Plane<br/>(Console, MCP, Copilot, shared catalog)"]:::loom
+        LZmod["module landing-zone → per-DLZ data plane"]:::loom
+    end
+
+    ALZ --> Mgmt
+    DMLZj --> DMLZsub
+    DLZj --> DLZsub
+
+    Mgmt -.platform LZ beneath both.-> DMLZsub
+    Mgmt -.platform LZ beneath both.-> DLZsub
+
+    DMLZsub ==>|main.bicep targets this sub| AP
+    DLZsub ==>|dlzSubscriptionIds target these| LZmod
+
+    AP -. "Loom does NOT require deploy.yml; azd can target any existing subs" .-> LZmod

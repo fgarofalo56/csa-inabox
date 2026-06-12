@@ -29,11 +29,25 @@ export interface PlanDomain {
   services: string[]; // service-catalog keys
 }
 
+/** The two real `deploymentMode` values on platform/fiab/bicep/main.bicep. */
+export type DeploymentMode = 'single-sub' | 'multi-sub';
+
 export interface PlanSubscription {
   id: string;
   name: string;
   boundary?: 'Commercial' | 'GCC-High' | 'GCC' | 'IL5';
   region?: string;
+  /**
+   * Topology mode emitted as `param deploymentMode` in the exported bicepparam.
+   * `single-sub` = Admin Plane + exactly 1 DLZ in this subscription;
+   * `multi-sub`  = Admin Plane here + one DLZ per domain across separate subs
+   * (operator supplies `dlzSubscriptionIds`). When unset, the emitter DERIVES
+   * it from the domain count (>1 domain ⇒ multi-sub, since single-sub supports
+   * at most one DLZ) so the exported file is always deployable. Constrained to
+   * the two `@allowed` values main.bicep accepts (no freeform) — see
+   * .claude/rules/loom-no-freeform-config equivalent in service-catalog.ts.
+   */
+  deploymentMode?: DeploymentMode;
   domains: PlanDomain[];
   /**
    * Per-resource configuration, keyed by service-catalog key → field map.

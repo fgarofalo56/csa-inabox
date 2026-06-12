@@ -1,0 +1,132 @@
+{
+  "type": "excalidraw",
+  "version": 2,
+  "source": "https://excalidraw.com",
+  "elements": [
+    {
+      "id": "tenant-box",
+      "type": "rectangle",
+      "x": 40, "y": 40, "width": 920, "height": 540,
+      "angle": 0, "strokeColor": "#5c2d91", "backgroundColor": "transparent",
+      "fillStyle": "solid", "strokeWidth": 2, "strokeStyle": "dashed",
+      "roughness": 0, "opacity": 100, "groupIds": [], "frameId": null,
+      "roundness": { "type": 3 }, "seed": 11111, "version": 1, "versionNonce": 1,
+      "isDeleted": false, "boundElements": [], "updated": 1718200000000, "link": null, "locked": false
+    },
+    {
+      "id": "tenant-label", "type": "text",
+      "x": 56, "y": 50, "width": 640, "height": 22, "angle": 0,
+      "strokeColor": "#5c2d91", "backgroundColor": "transparent", "fillStyle": "solid",
+      "strokeWidth": 1, "strokeStyle": "solid", "roughness": 0, "opacity": 100,
+      "groupIds": [], "frameId": null, "roundness": null, "seed": 11112, "version": 1, "versionNonce": 2,
+      "isDeleted": false, "boundElements": [], "updated": 1718200000000, "link": null, "locked": false,
+      "fontSize": 16, "fontFamily": 3, "text": "Single Microsoft Entra ID tenant — one Console serves every DLZ",
+      "textAlign": "left", "verticalAlign": "top", "containerId": null,
+      "originalText": "Single Microsoft Entra ID tenant — one Console serves every DLZ", "lineHeight": 1.25, "baseline": 16
+    },
+    {
+      "id": "admin-box", "type": "rectangle",
+      "x": 80, "y": 100, "width": 360, "height": 440, "angle": 0,
+      "strokeColor": "#ffffff", "backgroundColor": "#107c10", "fillStyle": "solid",
+      "strokeWidth": 2, "strokeStyle": "solid", "roughness": 0, "opacity": 100,
+      "groupIds": [], "frameId": null, "roundness": { "type": 3 }, "seed": 22221, "version": 1, "versionNonce": 3,
+      "isDeleted": false, "boundElements": [], "updated": 1718200000000, "link": null, "locked": false
+    },
+    {
+      "id": "admin-label", "type": "text",
+      "x": 100, "y": 116, "width": 320, "height": 50, "angle": 0,
+      "strokeColor": "#ffffff", "backgroundColor": "transparent", "fillStyle": "solid",
+      "strokeWidth": 1, "strokeStyle": "solid", "roughness": 0, "opacity": 100,
+      "groupIds": [], "frameId": null, "roundness": null, "seed": 22222, "version": 1, "versionNonce": 4,
+      "isDeleted": false, "boundElements": [], "updated": 1718200000000, "link": null, "locked": false,
+      "fontSize": 16, "fontFamily": 3, "text": "Admin Plane = DMLZ\n(one subscription)",
+      "textAlign": "left", "verticalAlign": "top", "containerId": null,
+      "originalText": "Admin Plane = DMLZ\n(one subscription)", "lineHeight": 1.25, "baseline": 16
+    },
+    {
+      "id": "console", "type": "text",
+      "x": 100, "y": 190, "width": 320, "height": 110, "angle": 0,
+      "strokeColor": "#ffffff", "backgroundColor": "transparent", "fillStyle": "solid",
+      "strokeWidth": 1, "strokeStyle": "solid", "roughness": 0, "opacity": 100,
+      "groupIds": [], "frameId": null, "roundness": null, "seed": 22223, "version": 1, "versionNonce": 5,
+      "isDeleted": false, "boundElements": [], "updated": 1718200000000, "link": null, "locked": false,
+      "fontSize": 14, "fontFamily": 3, "text": "• Loom Console (one)\n• Azure MCP server\n• Hub VNet + Firewall\n• Shared catalog\n• Shared ADX cluster\n• Marketplace",
+      "textAlign": "left", "verticalAlign": "top", "containerId": null,
+      "originalText": "• Loom Console (one)\n• Azure MCP server\n• Hub VNet + Firewall\n• Shared catalog\n• Shared ADX cluster\n• Marketplace", "lineHeight": 1.4, "baseline": 14
+    },
+    {
+      "id": "dlz1-box", "type": "rectangle",
+      "x": 560, "y": 100, "width": 360, "height": 200, "angle": 0,
+      "strokeColor": "#ffffff", "backgroundColor": "#d83b01", "fillStyle": "solid",
+      "strokeWidth": 2, "strokeStyle": "solid", "roughness": 0, "opacity": 100,
+      "groupIds": [], "frameId": null, "roundness": { "type": 3 }, "seed": 33331, "version": 1, "versionNonce": 6,
+      "isDeleted": false, "boundElements": [], "updated": 1718200000000, "link": null, "locked": false
+    },
+    {
+      "id": "dlz1-label", "type": "text",
+      "x": 580, "y": 120, "width": 320, "height": 150, "angle": 0,
+      "strokeColor": "#ffffff", "backgroundColor": "transparent", "fillStyle": "solid",
+      "strokeWidth": 1, "strokeStyle": "solid", "roughness": 0, "opacity": 100,
+      "groupIds": [], "frameId": null, "roundness": null, "seed": 33332, "version": 1, "versionNonce": 7,
+      "isDeleted": false, "boundElements": [], "updated": 1718200000000, "link": null, "locked": false,
+      "fontSize": 14, "fontFamily": 3, "text": "DLZ — Domain A (one sub)\n• Spoke VNet (peered to Hub)\n• ADLS medallion + Synapse\n• ADX database (this domain)\n• Power BI workspace",
+      "textAlign": "left", "verticalAlign": "top", "containerId": null,
+      "originalText": "DLZ — Domain A (one sub)\n• Spoke VNet (peered to Hub)\n• ADLS medallion + Synapse\n• ADX database (this domain)\n• Power BI workspace", "lineHeight": 1.4, "baseline": 14
+    },
+    {
+      "id": "dlz2-box", "type": "rectangle",
+      "x": 560, "y": 340, "width": 360, "height": 200, "angle": 0,
+      "strokeColor": "#ffffff", "backgroundColor": "#d83b01", "fillStyle": "solid",
+      "strokeWidth": 2, "strokeStyle": "solid", "roughness": 0, "opacity": 100,
+      "groupIds": [], "frameId": null, "roundness": { "type": 3 }, "seed": 44441, "version": 1, "versionNonce": 8,
+      "isDeleted": false, "boundElements": [], "updated": 1718200000000, "link": null, "locked": false
+    },
+    {
+      "id": "dlz2-label", "type": "text",
+      "x": 580, "y": 360, "width": 320, "height": 150, "angle": 0,
+      "strokeColor": "#ffffff", "backgroundColor": "transparent", "fillStyle": "solid",
+      "strokeWidth": 1, "strokeStyle": "solid", "roughness": 0, "opacity": 100,
+      "groupIds": [], "frameId": null, "roundness": null, "seed": 44442, "version": 1, "versionNonce": 9,
+      "isDeleted": false, "boundElements": [], "updated": 1718200000000, "link": null, "locked": false,
+      "fontSize": 14, "fontFamily": 3, "text": "DLZ — Domain B … N\n(one per dlzDomainNames entry)\nidentical shape; spoke peers to Hub;\nADX database attaches to the\nshared cluster.",
+      "textAlign": "left", "verticalAlign": "top", "containerId": null,
+      "originalText": "DLZ — Domain B … N\n(one per dlzDomainNames entry)\nidentical shape; spoke peers to Hub;\nADX database attaches to the\nshared cluster.", "lineHeight": 1.4, "baseline": 14
+    },
+    {
+      "id": "arrow1", "type": "arrow",
+      "x": 445, "y": 200, "width": 110, "height": 0, "angle": 0,
+      "strokeColor": "#1971c2", "backgroundColor": "transparent", "fillStyle": "solid",
+      "strokeWidth": 2, "strokeStyle": "solid", "roughness": 0, "opacity": 100,
+      "groupIds": [], "frameId": null, "roundness": { "type": 2 }, "seed": 55551, "version": 1, "versionNonce": 10,
+      "isDeleted": false, "boundElements": [], "updated": 1718200000000, "link": null, "locked": false,
+      "points": [[0, 0], [110, 0]], "lastCommittedPoint": null, "startBinding": null, "endBinding": null,
+      "startArrowhead": null, "endArrowhead": "arrow"
+    },
+    {
+      "id": "arrow2", "type": "arrow",
+      "x": 445, "y": 240, "width": 110, "height": 200, "angle": 0,
+      "strokeColor": "#1971c2", "backgroundColor": "transparent", "fillStyle": "solid",
+      "strokeWidth": 2, "strokeStyle": "solid", "roughness": 0, "opacity": 100,
+      "groupIds": [], "frameId": null, "roundness": { "type": 2 }, "seed": 55552, "version": 1, "versionNonce": 11,
+      "isDeleted": false, "boundElements": [], "updated": 1718200000000, "link": null, "locked": false,
+      "points": [[0, 0], [110, 200]], "lastCommittedPoint": null, "startBinding": null, "endBinding": null,
+      "startArrowhead": null, "endArrowhead": "arrow"
+    },
+    {
+      "id": "arrow-label", "type": "text",
+      "x": 446, "y": 300, "width": 110, "height": 40, "angle": 0,
+      "strokeColor": "#1971c2", "backgroundColor": "transparent", "fillStyle": "solid",
+      "strokeWidth": 1, "strokeStyle": "solid", "roughness": 0, "opacity": 100,
+      "groupIds": [], "frameId": null, "roundness": null, "seed": 55553, "version": 1, "versionNonce": 12,
+      "isDeleted": false, "boundElements": [], "updated": 1718200000000, "link": null, "locked": false,
+      "fontSize": 12, "fontFamily": 3, "text": "deploys +\nmanages",
+      "textAlign": "center", "verticalAlign": "top", "containerId": null,
+      "originalText": "deploys +\nmanages", "lineHeight": 1.25, "baseline": 12
+    }
+  ],
+  "appState": {
+    "gridSize": null,
+    "viewBackgroundColor": "#ffffff"
+  },
+  "files": {}
+}
