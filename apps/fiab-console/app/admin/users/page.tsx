@@ -24,12 +24,13 @@ import {
   Spinner, Badge, Caption1, Body1, Button,
   MessageBar, MessageBarBody, MessageBarTitle,
   Popover, PopoverTrigger, PopoverSurface,
-  makeStyles, tokens,
+  makeStyles, tokens, mergeClasses,
 } from '@fluentui/react-components';
 import { ArrowSync24Regular, Open16Regular, Person24Regular, ChevronDown16Regular } from '@fluentui/react-icons';
 import { AdminShell } from '@/lib/components/admin-shell';
 import { Section, Toolbar } from '@/lib/components/ui/section';
 import { LoomDataTable, type LoomColumn } from '@/lib/components/ui/loom-data-table';
+import { useAdminTabStyles } from '@/lib/components/ui/admin-tab-styles';
 
 interface TenantSubscribedSku {
   skuId: string;
@@ -106,9 +107,11 @@ const useStyles = makeStyles({
     color: tokens.colorNeutralForeground3, fontWeight: tokens.fontWeightSemibold,
   },
   wsRoleCell: { padding: '4px 8px', borderBottom: `1px solid ${tokens.colorNeutralStroke3}` },
+  selfStart: { alignSelf: 'flex-start' },
 });
 
 function RoleExpansion({ user, graphEnabled, styles }: { user: UserRow; graphEnabled: boolean; styles: ReturnType<typeof useStyles> }) {
+  const a = useAdminTabStyles();
   return (
     <Popover positioning="below-start" withArrow>
       <PopoverTrigger disableButtonEnhancement>
@@ -146,11 +149,11 @@ function RoleExpansion({ user, graphEnabled, styles }: { user: UserRow; graphEna
             </tbody>
           </table>
         ) : graphEnabled ? (
-          <Caption1 style={{ color: tokens.colorNeutralForeground3 }}>
+          <Caption1 className={a.muted}>
             No assignments in the workspace-roles store for this user.
           </Caption1>
         ) : (
-          <Caption1 style={{ color: tokens.colorNeutralForeground3 }}>
+          <Caption1 className={a.muted}>
             Enable Microsoft Graph (LOOM_GRAPH_USERS_ENABLED + User.Read.All) to
             resolve this user&apos;s Entra objectId and expand workspace-role assignments.
           </Caption1>
@@ -162,6 +165,7 @@ function RoleExpansion({ user, graphEnabled, styles }: { user: UserRow; graphEna
 
 export default function UsersPage() {
   const s = useStyles();
+  const a = useAdminTabStyles();
   const [users, setUsers] = useState<UserRow[] | null>(null);
   const [subscribedSkus, setSubscribedSkus] = useState<TenantSubscribedSku[]>([]);
   const [m365AdminBase, setM365AdminBase] = useState('https://admin.microsoft.com');
@@ -207,13 +211,13 @@ export default function UsersPage() {
         getValue: (u) => u.displayName || u.upn,
         render: (u) => (
           <span className={s.userCell}>
-            <span className={s.avatar} aria-hidden><Person24Regular style={{ width: 18, height: 18 }} /></span>
+            <span className={s.avatar} aria-hidden><Person24Regular className={a.iconSm} /></span>
             <span className={s.userText}>
-              <strong title={u.displayName || u.upn} style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+              <strong title={u.displayName || u.upn} className={a.ellipsis}>
                 {u.displayName || u.upn}
               </strong>
               {u.displayName && (
-                <Caption1 style={{ color: tokens.colorNeutralForeground3, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                <Caption1 className={mergeClasses(a.muted, a.ellipsis)}>
                   {u.upn}
                 </Caption1>
               )}
@@ -233,7 +237,7 @@ export default function UsersPage() {
           ? <Badge appearance="tint" color="danger" size="small">Disabled</Badge>
           : u.accountEnabled === true
             ? <Badge appearance="tint" color="success" size="small">Active</Badge>
-            : <Caption1 style={{ color: tokens.colorNeutralForeground3 }}>—</Caption1>,
+            : <Caption1 className={a.muted}>—</Caption1>,
       });
     }
 
@@ -243,7 +247,7 @@ export default function UsersPage() {
         getValue: (u) => u.licenses.join(' '),
         render: (u) => u.licenses.length
           ? <span className={s.rolesCell}>{u.licenses.map((l) => <Badge key={l} appearance="filled" color="informative" size="small">{l}</Badge>)}</span>
-          : <Caption1 style={{ color: tokens.colorNeutralForeground3 }}>—</Caption1>,
+          : <Caption1 className={a.muted}>—</Caption1>,
       },
       {
         key: 'roles', label: 'Roles', width: 230, sortable: false,
@@ -252,7 +256,7 @@ export default function UsersPage() {
           <span className={s.rolesCell}>
             {u.roles.length
               ? u.roles.map((r) => <Badge key={r} appearance="outline" size="small">{r}</Badge>)
-              : <Caption1 style={{ color: tokens.colorNeutralForeground3 }}>—</Caption1>}
+              : <Caption1 className={a.muted}>—</Caption1>}
             {u.wsRoles.length > 0 && <RoleExpansion user={u} graphEnabled={graphEnabled} styles={s} />}
           </span>
         ),
@@ -288,7 +292,7 @@ export default function UsersPage() {
       },
     );
     return cols;
-  }, [s, graphEnabled, m365AdminBase]);
+  }, [s, a, graphEnabled, m365AdminBase]);
 
   // License roll-up totals across all tenant SKUs.
   const licenseTotals = useMemo(() => {
@@ -303,18 +307,18 @@ export default function UsersPage() {
         Users with access to this tenant&apos;s workspaces. Derived from Cosmos workspaces + items + workspace-permissions,
         enriched with Microsoft Graph identity, license assignments, and the F5 workspace-roles store.
         {graphEnabled ? (
-          <Badge appearance="outline" color="brand" size="small" style={{ marginLeft: 8 }}>
+          <Badge appearance="outline" color="brand" size="small" className={a.badgeGap}>
             Graph enriched: {enrichedCount}/{(users || []).length}
           </Badge>
         ) : (
-          <Badge appearance="outline" color="informative" size="small" style={{ marginLeft: 8 }}>
+          <Badge appearance="outline" color="informative" size="small" className={a.badgeGap}>
             Graph not enabled
           </Badge>
         )}
       </Body1>
 
       {!graphEnabled && (
-        <MessageBar intent="info" style={{ marginBottom: 16 }}>
+        <MessageBar intent="info" className={a.messageBar}>
           <MessageBarBody>
             <MessageBarTitle>Enable identity + license enrichment</MessageBarTitle>
             Set <code>LOOM_GRAPH_USERS_ENABLED=true</code> and grant the Console UAMI
@@ -327,7 +331,7 @@ export default function UsersPage() {
       )}
 
       {error && (
-        <MessageBar intent="error" style={{ marginBottom: 16 }}>
+        <MessageBar intent="error" className={a.messageBar}>
           <MessageBarBody>
             <MessageBarTitle>Could not load users</MessageBarTitle>
             {error}
@@ -339,7 +343,7 @@ export default function UsersPage() {
         <Section
           title="License inventory"
           actions={
-            <Caption1 style={{ color: tokens.colorNeutralForeground3 }}>
+            <Caption1 className={a.muted}>
               {licenseTotals.consumed} / {licenseTotals.enabled} seats assigned across {subscribedSkus.length} SKUs
             </Caption1>
           }
@@ -354,7 +358,7 @@ export default function UsersPage() {
                   appearance="outline"
                   color={sku.capabilityStatus === 'Enabled' ? 'success' : 'warning'}
                   size="small"
-                  style={{ alignSelf: 'flex-start' }}
+                  className={s.selfStart}
                 >
                   {sku.capabilityStatus}
                 </Badge>
@@ -368,7 +372,7 @@ export default function UsersPage() {
         title="Users"
         actions={
           <>
-            <Caption1 style={{ color: tokens.colorNeutralForeground3 }}>{filtered.length} users</Caption1>
+            <Caption1 className={a.muted}>{filtered.length} users</Caption1>
             <Button icon={<ArrowSync24Regular />} onClick={load} disabled={loading}>Refresh</Button>
           </>
         }

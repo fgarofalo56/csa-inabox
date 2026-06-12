@@ -13,6 +13,7 @@ import { Add24Regular, Delete20Regular, ArrowSync24Regular, Info20Regular, Cloud
 import { AdminShell } from '@/lib/components/admin-shell';
 import { Section, Toolbar } from '@/lib/components/ui/section';
 import { LoomDataTable, type LoomColumn } from '@/lib/components/ui/loom-data-table';
+import { useAdminTabStyles } from '@/lib/components/ui/admin-tab-styles';
 
 interface ClassificationRule {
   id: string;
@@ -45,6 +46,7 @@ const useStyles = makeStyles({
   },
   field: { display: 'flex', flexDirection: 'column', gap: '12px' },
   banner: { marginBottom: tokens.spacingVerticalL },
+  explainerList: { margin: '8px 0 0 0', paddingLeft: '20px' },
 });
 
 const CLASSIFICATION_OPTIONS = ['PII', 'PHI', 'PCI', 'Confidential', 'Internal', 'Public', 'Restricted', 'Other'];
@@ -56,6 +58,7 @@ const MATCH_STRATEGY_OPTIONS = [
 
 export default function ClassificationsPage() {
   const s = useStyles();
+  const a = useAdminTabStyles();
   const [rules, setRules] = useState<ClassificationRule[] | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -156,10 +159,10 @@ export default function ClassificationsPage() {
     { key: 'name', label: 'Rule name', width: 180, getValue: (r) => r.name, render: (r) => <strong>{r.name}</strong> },
     { key: 'classification', label: 'Classification', width: 140, getValue: (r) => r.classification, render: (r) => <Badge appearance='tint' color='brand' size='small'>{r.classification}</Badge> },
     { key: 'matchStrategy', label: 'Match strategy', width: 160, getValue: (r) => r.matchStrategy, render: (r) => <Caption1>{MATCH_STRATEGY_OPTIONS.find((m) => m.value === r.matchStrategy)?.label || r.matchStrategy}</Caption1> },
-    { key: 'matchValue', label: 'Pattern / value', width: 240, getValue: (r) => r.matchValue, render: (r) => <code style={{ fontSize: '11px' }}>{r.matchValue}</code> },
+    { key: 'matchValue', label: 'Pattern / value', width: 240, getValue: (r) => r.matchValue, render: (r) => <code className={a.codeCell}>{r.matchValue}</code> },
     { key: 'createdBy', label: 'Created by', width: 160, render: (r) => <Caption1>{r.createdBy}</Caption1> },
     { key: 'actions', label: '', width: 110, sortable: false, filterable: false, render: (r) => <Button size='small' appearance='subtle' icon={<Delete20Regular />} onClick={(e) => { e.stopPropagation(); remove(r.id); }} aria-label={`Delete rule ${r.name}`}>Delete</Button> },
-  ], []);
+  ], [a]);
 
   const purviewConfigured = purview?.configured ?? false;
 
@@ -167,10 +170,10 @@ export default function ClassificationsPage() {
     <AdminShell sectionTitle='Classifications'>
       <Section title='About classification rules'>
         <div className={s.explainer}>
-          <Info20Regular style={{ color: tokens.colorBrandForeground1, flexShrink: 0, marginTop: '2px' }} />
-          <Body1 style={{ color: tokens.colorNeutralForeground2, lineHeight: 1.5 }}>
+          <Info20Regular className={a.infoIcon} />
+          <Body1 className={a.explainerText}>
             Classification rules detect sensitive-info types and apply classifications (PII, PHI, PCI, Confidential, etc.) to catalog items on scan. Each rule is pushed to Microsoft Purview as a <strong>custom classification rule</strong> and rolled into a <strong>custom scan rule set</strong>, so it actually classifies data when a scan runs. Choose a <strong>match strategy</strong>:
-            <ul style={{ margin: '8px 0 0 0', paddingLeft: '20px' }}>
+            <ul className={s.explainerList}>
               <li><strong>Column name regex:</strong> Match column names (e.g., <code>.*email.*</code>)</li>
               <li><strong>Data regex:</strong> Match data values (e.g., <code>{'\\d{3}-\\d{2}-\\d{4}'}</code> for SSN)</li>
               <li><strong>Dictionary:</strong> Match against a word list (comma-separated)</li>
@@ -234,10 +237,10 @@ export default function ClassificationsPage() {
             <DialogTitle>Add classification rule</DialogTitle>
             <DialogContent>
               <div className={s.field}>
-                <div><Caption1 style={{ display: 'block', marginBottom: '4px' }}>Rule name</Caption1><Input value={newName} onChange={(_, d) => setNewName(d.value)} placeholder='e.g. Email columns' style={{ width: '100%' }} /></div>
-                <div><Caption1 style={{ display: 'block', marginBottom: '4px' }}>Match strategy</Caption1><Dropdown value={MATCH_STRATEGY_OPTIONS.find((m) => m.value === newMatchStrategy)?.label || newMatchStrategy} selectedOptions={[newMatchStrategy]} onOptionSelect={(_, d) => setNewMatchStrategy(d.optionValue || 'column-name-regex')} style={{ width: '100%' }}>{MATCH_STRATEGY_OPTIONS.map((opt) => <Option key={opt.value} value={opt.value}>{opt.label}</Option>)}</Dropdown></div>
-                <div><Caption1 style={{ display: 'block', marginBottom: '4px' }}>Pattern or value{newMatchStrategy === 'column-name-regex' && ' (regex for column names)'}{newMatchStrategy === 'data-regex' && ' (regex for data)'}{newMatchStrategy === 'dictionary' && ' (comma-separated words)'}</Caption1><Textarea value={newMatchValue} onChange={(_, d) => setNewMatchValue(d.value)} placeholder={newMatchStrategy === 'column-name-regex' ? '.*email.*' : newMatchStrategy === 'data-regex' ? '\\d{3}-\\d{2}-\\d{4}' : 'word1, word2, word3'} resize='vertical' style={{ width: '100%' }} /></div>
-                <div><Caption1 style={{ display: 'block', marginBottom: '4px' }}>Classification</Caption1><Dropdown value={newClassification} selectedOptions={[newClassification]} onOptionSelect={(_, d) => setNewClassification(d.optionValue || 'PII')} style={{ width: '100%' }}>{CLASSIFICATION_OPTIONS.map((opt) => <Option key={opt} value={opt}>{opt}</Option>)}</Dropdown></div>
+                <div><Caption1 className={a.fieldLabel}>Rule name</Caption1><Input value={newName} onChange={(_, d) => setNewName(d.value)} placeholder='e.g. Email columns' className={a.fullWidth} /></div>
+                <div><Caption1 className={a.fieldLabel}>Match strategy</Caption1><Dropdown value={MATCH_STRATEGY_OPTIONS.find((m) => m.value === newMatchStrategy)?.label || newMatchStrategy} selectedOptions={[newMatchStrategy]} onOptionSelect={(_, d) => setNewMatchStrategy(d.optionValue || 'column-name-regex')} className={a.fullWidth}>{MATCH_STRATEGY_OPTIONS.map((opt) => <Option key={opt.value} value={opt.value}>{opt.label}</Option>)}</Dropdown></div>
+                <div><Caption1 className={a.fieldLabel}>Pattern or value{newMatchStrategy === 'column-name-regex' && ' (regex for column names)'}{newMatchStrategy === 'data-regex' && ' (regex for data)'}{newMatchStrategy === 'dictionary' && ' (comma-separated words)'}</Caption1><Textarea value={newMatchValue} onChange={(_, d) => setNewMatchValue(d.value)} placeholder={newMatchStrategy === 'column-name-regex' ? '.*email.*' : newMatchStrategy === 'data-regex' ? '\\d{3}-\\d{2}-\\d{4}' : 'word1, word2, word3'} resize='vertical' className={a.fullWidth} /></div>
+                <div><Caption1 className={a.fieldLabel}>Classification</Caption1><Dropdown value={newClassification} selectedOptions={[newClassification]} onOptionSelect={(_, d) => setNewClassification(d.optionValue || 'PII')} className={a.fullWidth}>{CLASSIFICATION_OPTIONS.map((opt) => <Option key={opt} value={opt}>{opt}</Option>)}</Dropdown></div>
               </div>
             </DialogContent>
             <DialogActions>
@@ -260,6 +263,8 @@ export default function ClassificationsPage() {
  * input is a guided Fluent Dropdown.
  */
 function RunScanDialog({ open, onClose, account }: { open: boolean; onClose: () => void; account: string | null }) {
+  const s = useStyles();
+  const a = useAdminTabStyles();
   const [sources, setSources] = useState<ScanSource[] | null>(null);
   const [scans, setScans] = useState<ScanDef[] | null>(null);
   const [source, setSource] = useState('');
@@ -321,32 +326,32 @@ function RunScanDialog({ open, onClose, account }: { open: boolean; onClose: () 
         <DialogBody>
           <DialogTitle>Run a Purview scan</DialogTitle>
           <DialogContent>
-            <div style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
-              <Caption1 style={{ color: tokens.colorNeutralForeground2 }}>
+            <div className={s.field}>
+              <Caption1 className={a.explainerText}>
                 Triggers a real scan run on a registered Microsoft Purview data source{account ? ` (${account})` : ''}. The scan applies the classification rules included in its scan rule set.
               </Caption1>
               <div>
-                <Caption1 style={{ display: 'block', marginBottom: '4px' }}>Data source</Caption1>
+                <Caption1 className={a.fieldLabel}>Data source</Caption1>
                 <Dropdown
                   placeholder={loadingSrc ? 'Loading sources…' : (sources && sources.length === 0 ? 'No registered data sources' : 'Select a data source')}
                   value={source}
                   selectedOptions={source ? [source] : []}
                   onOptionSelect={(_, d) => { const v = d.optionValue || ''; setSource(v); loadScans(v); }}
                   disabled={loadingSrc || !(sources && sources.length)}
-                  style={{ width: '100%' }}
+                  className={a.fullWidth}
                 >
                   {(sources || []).map((src) => <Option key={src.id || src.name} value={src.name}>{src.kind ? `${src.name} (${src.kind})` : src.name}</Option>)}
                 </Dropdown>
               </div>
               <div>
-                <Caption1 style={{ display: 'block', marginBottom: '4px' }}>Scan</Caption1>
+                <Caption1 className={a.fieldLabel}>Scan</Caption1>
                 <Dropdown
                   placeholder={!source ? 'Pick a data source first' : (loadingScans ? 'Loading scans…' : (scans && scans.length === 0 ? 'No scans defined on this source' : 'Select a scan'))}
                   value={scan}
                   selectedOptions={scan ? [scan] : []}
                   onOptionSelect={(_, d) => setScan(d.optionValue || '')}
                   disabled={!source || loadingScans || !(scans && scans.length)}
-                  style={{ width: '100%' }}
+                  className={a.fullWidth}
                 >
                   {(scans || []).map((sc) => <Option key={sc.id || sc.name} value={sc.name}>{sc.name}</Option>)}
                 </Dropdown>

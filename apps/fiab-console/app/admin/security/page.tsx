@@ -215,6 +215,7 @@ function OverviewTab() {
                   <div className={s.statVal}>{insights.kpis.sensitiveCoveragePct}%</div>
                   <div className={s.statLabel}>sensitivity coverage</div>
                   <div className={s.bar}>
+                    {/* dynamic: fill width is the live coverage percentage */}
                     <div className={s.barFill} style={{ width: `${insights.kpis.sensitiveCoveragePct}%` }} />
                   </div>
                 </div>
@@ -222,6 +223,7 @@ function OverviewTab() {
                   <div className={s.statVal}>{insights.kpis.classificationCoveragePct}%</div>
                   <div className={s.statLabel}>classification coverage</div>
                   <div className={s.bar}>
+                    {/* dynamic: fill width is the live coverage percentage */}
                     <div className={s.barFill} style={{ width: `${insights.kpis.classificationCoveragePct}%` }} />
                   </div>
                 </div>
