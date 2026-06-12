@@ -41,19 +41,22 @@ import {
 import {
   Add20Regular, Delete20Regular, Play20Regular, Table20Regular,
   Filter20Regular, ColumnTriple20Regular, GroupList20Regular, BranchFork20Regular,
-  ArrowSortDown20Regular,
+  ArrowSortDown20Regular, TextSortAscending20Regular,
 } from '@fluentui/react-icons';
 import { MonacoTextarea } from '@/lib/components/editor/monaco-textarea';
 import {
   compileGraph,
   VQ_JOIN_KINDS,
   VQ_AGG_FUNCS,
+  VQ_SORT_DIRS,
   type VqGraph,
   type VqNode,
   type VqStepKind,
   type VqJoinKind,
   type VqAggFunc,
   type VqAggSpec,
+  type VqSortKey,
+  type VqSortDir,
   type SqlDialect,
 } from '@/lib/editors/visual-query-compiler';
 
@@ -155,6 +158,7 @@ const STEP_COLOR: Record<VqStepKind, string> = {
   'select-columns': '#7719aa',
   'keep-top-rows': '#7719aa',
   'group-by': '#7719aa',
+  sort: '#7719aa',
   join: '#107c10',
 };
 
@@ -165,6 +169,7 @@ function stepIcon(kind: VqStepKind) {
     case 'select-columns': return <ColumnTriple20Regular />;
     case 'keep-top-rows': return <ArrowSortDown20Regular />;
     case 'group-by': return <GroupList20Regular />;
+    case 'sort': return <TextSortAscending20Regular />;
     case 'join': return <BranchFork20Regular />;
     default: return <Table20Regular />;
   }
@@ -240,6 +245,7 @@ function buildGraph(nodes: Node[], edges: Edge[], outputId?: string): VqGraph {
       topN: d.topN,
       groupBy: d.groupBy,
       aggregates: d.aggregates,
+      sortKeys: d.sortKeys,
       joinKind: d.joinKind,
       leftKey: d.leftKey,
       rightKey: d.rightKey,
@@ -330,6 +336,7 @@ function CanvasInner(props: VisualQueryCanvasProps) {
     if (kind === 'keep-top-rows') defaults.topN = 100;
     if (kind === 'group-by') { defaults.groupBy = []; defaults.aggregates = []; }
     if (kind === 'select-columns') defaults.columns = [];
+    if (kind === 'sort') defaults.sortKeys = [];
     if (kind === 'filter') defaults.whereExpression = '';
     const node: Node = {
       id: nid, type: 'vq',
@@ -503,6 +510,7 @@ function CanvasInner(props: VisualQueryCanvasProps) {
                 <Button size="small" icon={<ColumnTriple20Regular />} onClick={() => addStep('select-columns')} data-vq-action="choose-columns">Choose columns</Button>
                 <Button size="small" icon={<GroupList20Regular />} onClick={() => addStep('group-by')} data-vq-action="group-by">Group by</Button>
                 <Button size="small" icon={<ArrowSortDown20Regular />} onClick={() => addStep('keep-top-rows')} data-vq-action="keep-top">Keep top rows</Button>
+                <Button size="small" icon={<TextSortAscending20Regular />} onClick={() => addStep('sort')} data-vq-action="sort">Sort</Button>
                 <Menu>
                   <MenuTrigger disableButtonEnhancement>
                     <Button size="small" icon={<BranchFork20Regular />} data-vq-action="merge">Merge…</Button>
@@ -649,6 +657,7 @@ const STEP_LABEL: Record<Exclude<VqStepKind, 'source'>, string> = {
   'select-columns': 'Choose columns',
   'keep-top-rows': 'Keep top rows',
   'group-by': 'Group by',
+  sort: 'Sort rows',
   join: 'Merge',
 };
 
@@ -719,6 +728,10 @@ function StepInspector({
 
       {d.kind === 'group-by' && (
         <GroupByForm d={d} availableColumns={availableColumns} onPatch={onPatch} s={s} />
+      )}
+
+      {d.kind === 'sort' && (
+        <SortForm d={d} availableColumns={availableColumns} onPatch={onPatch} s={s} />
       )}
 
       {d.kind === 'join' && (
@@ -794,6 +807,62 @@ function GroupByForm({
         </div>
       ))}
       <Button size="small" appearance="secondary" icon={<Add20Regular />} onClick={addAgg}>Add aggregation</Button>
+    </>
+  );
+}
+
+/**
+ * SortForm — the "Sort rows" (ORDER BY) applied step. Every input is a guided
+ * control (a column picker + an ASC/DESC dropdown per sort key) — no freeform
+ * SQL, per no-freeform-config. Multiple keys compose a multi-column ORDER BY.
+ */
+function SortForm({
+  d, availableColumns, onPatch, s,
+}: {
+  d: VqNodeData;
+  availableColumns: string[];
+  onPatch: (patch: Partial<VqNodeData>) => void;
+  s: ReturnType<typeof useStyles>;
+}) {
+  const keys = d.sortKeys || [];
+  const updateKey = (i: number, patch: Partial<VqSortKey>) =>
+    onPatch({ sortKeys: keys.map((k, j) => (j === i ? { ...k, ...patch } : k)) });
+  const addKey = () =>
+    onPatch({ sortKeys: [...keys, { field: availableColumns[0] || '', dir: 'ASC' as VqSortDir }] });
+  const removeKey = (i: number) => onPatch({ sortKeys: keys.filter((_, j) => j !== i) });
+  return (
+    <>
+      <Label size="small">Sort by</Label>
+      {availableColumns.length === 0 && (
+        <Caption1 style={{ color: tokens.colorNeutralForeground3 }}>
+          No columns resolved yet — select the source table.
+        </Caption1>
+      )}
+      {keys.map((k, i) => (
+        <div key={i} className={s.aggRow}>
+          <Dropdown
+            style={{ minWidth: 0, flex: 1 }}
+            value={k.field}
+            selectedOptions={k.field ? [k.field] : []}
+            placeholder="column"
+            aria-label={`Sort key ${i + 1} column`}
+            onOptionSelect={(_, data) => updateKey(i, { field: data.optionValue || '' })}
+          >
+            {availableColumns.map((c) => <Option key={c} value={c}>{c}</Option>)}
+          </Dropdown>
+          <Dropdown
+            style={{ minWidth: 96 }}
+            value={k.dir}
+            selectedOptions={[k.dir]}
+            aria-label={`Sort key ${i + 1} direction`}
+            onOptionSelect={(_, data) => updateKey(i, { dir: (data.optionValue as VqSortDir) || 'ASC' })}
+          >
+            {VQ_SORT_DIRS.map((dir) => <Option key={dir} value={dir}>{dir}</Option>)}
+          </Dropdown>
+          <Button size="small" appearance="subtle" icon={<Delete20Regular />} onClick={() => removeKey(i)} aria-label={`Remove sort key ${i + 1}`} />
+        </div>
+      ))}
+      <Button size="small" appearance="secondary" icon={<Add20Regular />} onClick={addKey}>Add sort column</Button>
     </>
   );
 }

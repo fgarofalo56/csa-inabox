@@ -48,7 +48,16 @@ export type VqStepKind =
   | 'select-columns'
   | 'keep-top-rows'
   | 'group-by'
+  | 'sort'
   | 'join';
+
+export type VqSortDir = 'ASC' | 'DESC';
+
+export interface VqSortKey {
+  /** Column name — a controlled picker, not freeform SQL. */
+  field: string;
+  dir: VqSortDir;
+}
 
 export interface VqAggSpec {
   func: VqAggFunc;
@@ -80,6 +89,9 @@ export interface VqNode {
   groupBy?: string[];
   aggregates?: VqAggSpec[];
 
+  // sort / order by — controlled column + direction pickers (no freeform SQL)
+  sortKeys?: VqSortKey[];
+
   // join
   joinKind?: VqJoinKind;
   leftKey?: string; // controlled picker — a column name, not freeform SQL
@@ -105,6 +117,8 @@ export const VQ_JOIN_KINDS: VqJoinKind[] = [
 ];
 
 export const VQ_AGG_FUNCS: VqAggFunc[] = ['SUM', 'AVG', 'COUNT', 'MIN', 'MAX', 'COUNT_DISTINCT'];
+
+export const VQ_SORT_DIRS: VqSortDir[] = ['ASC', 'DESC'];
 
 // ============================================================
 // Quoting helpers (dialect-aware)
@@ -188,6 +202,16 @@ function compileNodeBody(
         ? `\nGROUP BY ${groups.map((g) => quoteId(g, dialect)).join(', ')}`
         : '';
       return `SELECT ${select} FROM ${from}${groupClause}`;
+    }
+
+    case 'sort': {
+      const from = inputRef(node.inputs[0]);
+      const keys = (node.sortKeys || []).filter((k) => k && k.field && k.field.trim());
+      if (!keys.length) return `SELECT * FROM ${from}`;
+      const orderBy = keys
+        .map((k) => `${quoteId(k.field, dialect)} ${k.dir === 'DESC' ? 'DESC' : 'ASC'}`)
+        .join(', ');
+      return `SELECT * FROM ${from}\nORDER BY ${orderBy}`;
     }
 
     case 'join': {
