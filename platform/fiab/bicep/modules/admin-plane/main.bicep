@@ -1212,6 +1212,41 @@ resource mcpEnvStorage 'Microsoft.App/managedEnvironments/storages@2024-03-01' =
 // 7. AI Search
 // =====================================================================
 
+// Dedicated storage account for AI Search indexer/skillset debug-session state
+// (container ms-az-cognitive-search-debugsession). Provisioned in the admin RG
+// alongside the search service so the same-region system-MSI → storage
+// connection is valid (per Learn, only a system-assigned MSI works for a
+// same-region search→storage debug connection, via the trusted-service
+// exception). Keyless: the search MSI is granted Storage Blob Data Contributor
+// by ai-search.bicep, and the Console passes a `ResourceId=` connection string
+// (no account key) — consistent with the search service's disableLocalAuth
+// posture. Only deployed when a new AI Search service is provisioned.
+var aiSearchDebugStorageName = take('sasrchdbg${uniqueString(resourceGroup().id)}', 24)
+
+resource aiSearchDebugStorage 'Microsoft.Storage/storageAccounts@2024-01-01' = if (aiSearchEnabled && empty(existingAiSearchService)) {
+  name: aiSearchDebugStorageName
+  location: location
+  tags: complianceTags
+  kind: 'StorageV2'
+  sku: { name: 'Standard_LRS' }
+  properties: {
+    allowBlobPublicAccess: false
+    // Keyless: the search MSI authenticates via Storage Blob Data Contributor;
+    // no shared-key path is used for the debug-session connection.
+    allowSharedKeyAccess: false
+    minimumTlsVersion: 'TLS1_2'
+    supportsHttpsTrafficOnly: true
+    // Trusted-service exception lets the AI Search system MSI reach the account
+    // while keeping it closed to the public internet (same-region debug path).
+    networkAcls: {
+      defaultAction: 'Deny'
+      bypass: 'AzureServices'
+      ipRules: []
+      virtualNetworkRules: []
+    }
+  }
+}
+
 module aiSearch 'ai-search.bicep' = if (aiSearchEnabled && empty(existingAiSearchService)) {
   name: 'ai-search'
   params: {
@@ -1231,6 +1266,12 @@ module aiSearch 'ai-search.bicep' = if (aiSearchEnabled && empty(existingAiSearc
     // Search Index Data Contributor → Console UAMI so the BFF can run the
     // vector-store data-plane ops (index PUT / docs index / docs search).
     consolePrincipalId: identity.outputs.uamiConsolePrincipalId
+    // Grant the search system-MSI Storage Blob Data Contributor on the
+    // debug-session storage account so indexer/skillset debug sessions can
+    // persist their enrichment trace without an account key (keyless,
+    // posture-correct). The Console passes the matching `ResourceId=`
+    // connection string via LOOM_AI_SEARCH_DEBUG_STORAGE_CONN below.
+    debugSessionStorageId: (aiSearchEnabled && empty(existingAiSearchService)) ? aiSearchDebugStorage.id : ''
   }
 }
 
@@ -2138,13 +2179,16 @@ module appDeployments 'app-deployments.bicep' = if (containerPlatform == 'contai
             // RG/sub fall back to LOOM_AI_SEARCH_RG / LOOM_SUBSCRIPTION_ID.
             { name: 'LOOM_AI_SEARCH_SERVICE',  value: !empty(existingAiSearchService) ? existingAiSearchService : (aiSearchEnabled ? aiSearch!.outputs.searchName : '') }
             { name: 'LOOM_AI_SEARCH_SUB',      value: !empty(existingAiSearchService) ? byoAiSearchSub : (aiSearchEnabled ? subscription().subscriptionId : '') }
-            // Optional storage connection string for AI Search indexer debug-session
-            // state (ms-az-cognitive-search-debugsession container). Empty by default;
-            // operators set it (or supply per-session in the UI) to enable debug
-            // sessions. The search MSI also needs Storage Blob Data Contributor on
-            // that account (ai-search.bicep debugSessionStorageId). Read by the
-            // /api/ai-search/debug-sessions BFF route.
-            { name: 'LOOM_AI_SEARCH_DEBUG_STORAGE_CONN', value: '' }
+            // Keyless storage connection string for AI Search indexer debug-session
+            // state (ms-az-cognitive-search-debugsession container). Uses the
+            // `ResourceId=` form so the search system-MSI authenticates via the
+            // Storage Blob Data Contributor grant (ai-search.bicep
+            // debugSessionStorageId) — no account key, matching the search
+            // service's disableLocalAuth posture. Empty when reusing a BYO search
+            // service (existingAiSearchService): the operator then supplies a
+            // per-session connection string in the UI, or sets this env var.
+            // Read by the /api/ai-search/debug-sessions BFF route.
+            { name: 'LOOM_AI_SEARCH_DEBUG_STORAGE_CONN', value: (aiSearchEnabled && empty(existingAiSearchService)) ? 'ResourceId=${aiSearchDebugStorage.id};' : '' }
             // OneLake catalog Explore-tab backend (azure=AI Search/Cosmos default; fabric=opt-in OneLake REST).
             { name: 'LOOM_CATALOG_BACKEND', value: loomCatalogBackend }
             // APIM navigator (apis/products/named-values/backends/subscriptions) + marketplace.
