@@ -138,11 +138,16 @@ export interface DeployableMcpServer {
 }
 
 /**
- * The catalog. 25 entries ranked per temp/mcp-gov-research.md.
+ * The catalog. 25 gov-research entries (temp/mcp-gov-research.md) plus Grafana,
+ * whose upstream image already ships a streamable-HTTP transport.
  *
- * All entries are `transport: 'stdio'` today (no upstream ships a hosted HTTPS
- * endpoint), so each carries `hostVia: 'container-apps'` — consumers must host
- * before registering. See file header.
+ * Almost every entry is `transport: 'stdio'` (no upstream ships a hosted HTTPS
+ * endpoint), so it carries `hostVia: 'container-apps'` — consumers must host
+ * before registering. The exception is Grafana (`transport: 'http'`,
+ * `hostVia: 'already-http'`): it is directly deployable as a Container App and is
+ * the one entry whose id overlaps the operational MCP_DEPLOY_CATALOG below. See
+ * file header. This array is the AUTHORITATIVE gov-safety metadata source — the
+ * operational deploy catalog joins to it by id via `govMetaFor()`.
  */
 export const MCP_CATALOG: readonly DeployableMcpServer[] = [
   // ── Tier 0: Anthropic reference, fully air-gap safe ────────────────────────
@@ -824,6 +829,41 @@ export const MCP_CATALOG: readonly DeployableMcpServer[] = [
     defaultRecommended: false,
     externalHosts: ['*.atlassian.net'],
   },
+  {
+    id: 'grafana',
+    name: 'Grafana',
+    desc: 'Query dashboards, datasources, Prometheus/Loki, and incidents against a self-hosted Grafana over the VNet. Self-contained to your Grafana instance.',
+    category: 'Observability',
+    image: 'mcp/grafana:latest',
+    runtime: 'docker',
+    transport: 'http',
+    hostVia: 'already-http',
+    configSchema: [
+      {
+        key: 'GRAFANA_URL',
+        label: 'Grafana URL',
+        kind: 'env',
+        secret: false,
+        required: true,
+        hint: 'Base URL of your Grafana instance, e.g. https://grafana.example.gov.',
+      },
+      {
+        key: 'GRAFANA_API_KEY',
+        label: 'Grafana service-account token',
+        kind: 'env',
+        secret: true,
+        required: true,
+        hint: 'Service-account token with Viewer (or higher). Stored in Key Vault.',
+      },
+    ],
+    source: 'community',
+    repo: 'grafana/mcp-grafana',
+    govSafe: true,
+    airGapSafe: false,
+    license: 'Apache-2.0',
+    defaultRecommended: false,
+    externalHosts: [],
+  },
 ];
 
 // ── Selectors ────────────────────────────────────────────────────────────────
@@ -1172,5 +1212,64 @@ export function validateConfigValues(
     out[f.key] = v;
   }
   return out;
+}
+
+// ── Bridge: operational catalog ⇄ gov-safety metadata ─────────────────────────
+//
+// MCP_DEPLOY_CATALOG (above) is the OPERATIONAL catalog — the deployable subset
+// with real, pullable HTTP/SSE images that the browse-and-deploy wizard renders
+// and the deploy route provisions. MCP_CATALOG (the DeployableMcpServer array at
+// the top of this file) is the AUTHORITATIVE gov-safety metadata source compiled
+// from temp/mcp-gov-research.md (govSafe / airGapSafe / license / source /
+// defaultRecommended). The two are joined by `id` so a deployable tile can show
+// its real gov-safety posture without duplicating that data here.
+
+/** The gov-safety facet of a catalog server, projected from MCP_CATALOG. */
+export interface McpGovMeta {
+  /** Safe to offer inside a US Gov boundary. */
+  govSafe: boolean;
+  /** Runs with NO external internet calls. */
+  airGapSafe: boolean;
+  /** License bucket (gates the no-AGPL/SSPL gov audit). */
+  license: McpLicense;
+  /** Maintainer tier. */
+  source: McpSource;
+  /** Tier-0 / Tier-1 default recommendation for Loom Gov Phase 1. */
+  defaultRecommended: boolean;
+  /**
+   * External SaaS hosts the server reaches ([] = self-contained). Non-empty ⇒
+   * must be proxied/approved in gcc/gcc-high/il5.
+   */
+  externalHosts: string[];
+}
+
+/**
+ * Gov-safety metadata for a server id, looked up from the authoritative
+ * MCP_CATALOG (research-grounded). Returns undefined when the operational entry
+ * has no research-doc provenance yet — callers must treat "unknown" honestly
+ * (show no gov badge) rather than assume gov-safe (no-vaporware).
+ */
+export function govMetaFor(id: string): McpGovMeta | undefined {
+  const s = MCP_CATALOG.find((e) => e.id === id);
+  if (!s) return undefined;
+  return {
+    govSafe: s.govSafe,
+    airGapSafe: s.airGapSafe,
+    license: s.license,
+    source: s.source,
+    defaultRecommended: s.defaultRecommended,
+    externalHosts: s.externalHosts,
+  };
+}
+
+/**
+ * The operational catalog joined to its gov-safety metadata. Each row is a
+ * deployable entry plus the (optional) gov facet from MCP_CATALOG — what the
+ * browse grid needs to render a tile with an honest Air-gap/Gov-safe/license
+ * posture. `gov` is undefined for any deployable server without research-doc
+ * provenance.
+ */
+export function deployCatalogWithGovMeta(): Array<{ entry: McpCatalogEntry; gov: McpGovMeta | undefined }> {
+  return MCP_DEPLOY_CATALOG.map((entry) => ({ entry, gov: govMetaFor(entry.id) }));
 }
 

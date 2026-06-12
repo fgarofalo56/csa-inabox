@@ -27,6 +27,7 @@ flow, replacing manual "register a running endpoint" with "deploy + register".
 | # | Capability | Status | Notes |
 |---|------------|--------|-------|
 | 1 | Browse deployable library (25 vetted servers, category, Egress/Preview/Recommended badges) | built ✅ | `McpCatalogPanel` over `MCP_CATALOG` (`lib/azure/mcp-catalog.ts`, 25 entries) + the card-grid `McpCatalogBrowser` (`lib/mcp/catalog.ts`) |
+| 1a | Gov-safety badges on each tile (Air-gap safe / Gov-safe / license) | built ✅ | `govMetaFor(id)` joins the deploy tile to the research-grounded `MCP_CATALOG` (`DeployableMcpServer`) gov facet — `govSafe`/`airGapSafe`/`license`/`source`/`defaultRecommended` from `temp/mcp-gov-research.md` (25 servers + Grafana). Undefined ⇒ no badge (honest, never fabricated). |
 | 2 | Per-server typed config wizard (Input / password / Dropdown / Switch — no JSON) | built ✅ | `DeployWizard` renders one Fluent control per `configSchema` field |
 | 3 | Per-field secret → Key Vault; non-secret → Container App env | built ✅ | `secret:true` fields → `putKeyVaultSecret` + ACA `secretRef`; values never in Cosmos |
 | 4 | One-click deploy (real ARM PUT, internal Container App, preconfigured) | built ✅ | `createMcpContainerApp` (ARM `Microsoft.App/containerApps`) |
@@ -40,7 +41,11 @@ renders the full wizard and names the exact remediation.
 
 ## Backend per control
 
-- Browse grid: static `MCP_CATALOG` (curated, real images — no network call).
+- Browse grid: static `MCP_DEPLOY_CATALOG` (curated, real images — no network
+  call) joined to gov metadata via `govMetaFor()` against the authoritative
+  research-grounded `MCP_CATALOG` (`DeployableMcpServer[]`). The gov catalog also
+  exposes `serversForCloud(cloud)`, `defaultRecommendedServers()`, and
+  `airGapSafeServers()` selectors for boundary-aware filtering.
 - Deploy: `POST /api/admin/mcp-servers/deploy`
   - gate: `enforceCapability(session,'admin.deploy-mcp','Admin')`
   - validate: `validateConfigValues(entry, values)` (typed + required)
