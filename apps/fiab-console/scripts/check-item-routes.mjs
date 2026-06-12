@@ -46,8 +46,12 @@ for (const slug of [...slugs].sort()) {
     continue;
   }
   const src = readFileSync(routeFile, 'utf8');
-  const hasGet = /export\s+(async\s+)?function\s+GET\b|export\s+const\s+GET\b/.test(src);
-  const hasPatch = /export\s+(async\s+)?function\s+PATCH\b|export\s+const\s+PATCH\b/.test(src);
+  // Direct exports (`export async function GET` / `export const GET = …`) and
+  // destructured factory exports (`export const { GET, PATCH } = makeItemRoute(…)`)
+  // are both valid Next.js route handlers.
+  const destructured = /export\s+const\s*\{([^}]*)\}/.exec(src)?.[1] ?? '';
+  const hasGet = /export\s+(async\s+)?function\s+GET\b|export\s+const\s+GET\b/.test(src) || /\bGET\b/.test(destructured);
+  const hasPatch = /export\s+(async\s+)?function\s+PATCH\b|export\s+const\s+PATCH\b/.test(src) || /\bPATCH\b/.test(destructured);
   if (!hasGet || !hasPatch) {
     failures.push(`${slug}: route.ts exists but is missing ${[!hasGet && 'GET', !hasPatch && 'PATCH'].filter(Boolean).join(' + ')}`);
   }
