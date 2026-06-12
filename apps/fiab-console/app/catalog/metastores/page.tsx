@@ -1,18 +1,38 @@
 'use client';
 
+/**
+ * Catalog → Metastores & accounts (Loom-parity redesign).
+ *
+ * Presentation-only migration onto the shared Loom primitives — the data
+ * contract from /api/catalog/metastores is unchanged. The page now stacks
+ * Section cards (Section/Toolbar from lib/components/ui/section), summarizes the
+ * catalog back-ends with ItemTile/TileGrid, and renders every tabular surface
+ * with LoomDataTable (which supplies sort + typed per-column filters + sticky
+ * header + empty/loading states), replacing the five hand-rolled Fluent
+ * <Table>s and the bespoke sort/filter machinery.
+ *
+ * Azure-native is the default and never gated on Fabric: Unity Catalog +
+ * Microsoft Purview are the primary Sections; Fabric / OneLake is one optional
+ * read-only Section + tile that gates nothing. Honest account-admin / config
+ * gates are preserved verbatim per no-vaporware.
+ */
+
 import { clientFetch } from '@/lib/client-fetch';
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useState } from 'react';
 import { CatalogShell } from '@/lib/components/catalog/catalog-shell';
+import { Section } from '@/lib/components/ui/section';
+import { TileGrid } from '@/lib/components/ui/tile-grid';
+import { ItemTile } from '@/lib/components/ui/item-tile';
+import { LoomDataTable, type LoomColumn } from '@/lib/components/ui/loom-data-table';
 import {
   Spinner, Button, Input, Field, Dropdown, Option, Checkbox, MessageBar, MessageBarBody,
-  MessageBarTitle, MessageBarActions, Table, TableHeader, TableRow, TableHeaderCell,
-  TableBody, TableCell, Subtitle2, Body1, Caption1, Badge, Divider, SearchBox,
-  makeStyles, tokens,
+  MessageBarTitle, MessageBarActions, Body1, Caption1, Badge, Divider, Subtitle2,
+  makeStyles, mergeClasses, tokens,
 } from '@fluentui/react-components';
 import {
-  Add24Regular, ArrowSync24Regular, Database24Regular,
-  Cloud24Regular, DatabaseLink24Regular, ShieldTask24Regular, Globe24Regular,
-  CheckmarkCircle24Filled, Link24Regular, DatabaseSearch24Regular,
+  Add24Regular, ArrowSync24Regular,
+  DatabaseLink24Regular, ShieldTask24Regular, Globe24Regular,
+  CheckmarkCircle24Filled, Link24Regular,
 } from '@fluentui/react-icons';
 
 interface UnityMeta { metastore_id: string; name: string; region?: string; workspace_hostname: string; }
@@ -31,75 +51,79 @@ interface AccountAdminGate {
   title: string; detail: string;
   remediation: { role: string; identity: string; where: string };
 }
+interface ProbeCatalog { name: string; catalog_type?: string; owner?: string; }
 
 const useStyles = makeStyles({
-  card: {
-    padding: tokens.spacingHorizontalXL,
-    border: `1px solid ${tokens.colorNeutralStroke2}`,
-    borderRadius: tokens.borderRadiusXLarge,
-    backgroundColor: tokens.colorNeutralBackground1,
-    marginBottom: tokens.spacingVerticalXL,
-    boxShadow: tokens.shadow4,
-  },
-  sectionHead: {
-    display: 'flex',
-    alignItems: 'center',
-    gap: tokens.spacingHorizontalS,
-    marginBottom: tokens.spacingVerticalM,
-  },
-  sectionHeadIcon: { color: tokens.colorBrandForeground1, flexShrink: 0 },
-  spacer: { flexGrow: 1 },
-  mutedBlock: { color: tokens.colorNeutralForeground3, marginBottom: tokens.spacingVerticalM },
+  // small form-specific helpers — no primitive covers these.
   muted: { color: tokens.colorNeutralForeground3 },
-  cellStack: { display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalXXS },
-  filterRow: { marginBottom: tokens.spacingVerticalM, maxWidth: '320px' },
-  emptyState: {
-    display: 'flex',
-    flexDirection: 'column',
-    alignItems: 'center',
-    justifyContent: 'center',
-    gap: tokens.spacingVerticalS,
-    padding: `${tokens.spacingVerticalXXL} ${tokens.spacingHorizontalL}`,
-    textAlign: 'center',
-    color: tokens.colorNeutralForeground3,
+  mutedBlock: { color: tokens.colorNeutralForeground3, display: 'block', marginBottom: tokens.spacingVerticalM },
+  cellStack: { display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalXXS, minWidth: 0 },
+  formHead: {
+    display: 'flex', alignItems: 'center', gap: tokens.spacingHorizontalS,
+    marginBottom: tokens.spacingVerticalS, marginTop: tokens.spacingVerticalL,
   },
-  emptyIcon: { color: tokens.colorNeutralForeground4 },
+  formHeadIcon: { color: tokens.colorBrandForeground1, flexShrink: 0 },
   registerGrid: {
-    display: 'grid',
-    gridTemplateColumns: '1fr auto',
-    gap: tokens.spacingHorizontalM,
-    alignItems: 'end',
+    display: 'grid', gridTemplateColumns: '1fr auto',
+    gap: tokens.spacingHorizontalM, alignItems: 'end',
   },
   scanGrid: {
-    display: 'grid',
-    gridTemplateColumns: '1fr 1fr',
-    gap: tokens.spacingHorizontalM,
-    marginTop: tokens.spacingVerticalS,
+    display: 'grid', gridTemplateColumns: '1fr 1fr',
+    gap: tokens.spacingHorizontalM, marginTop: tokens.spacingVerticalS,
   },
   receipt: {
-    marginTop: tokens.spacingVerticalM,
-    padding: tokens.spacingHorizontalL,
+    marginTop: tokens.spacingVerticalM, padding: tokens.spacingHorizontalL,
     border: `1px solid ${tokens.colorNeutralStroke2}`,
     borderRadius: tokens.borderRadiusLarge,
     backgroundColor: tokens.colorNeutralBackground2,
   },
   receiptHead: {
-    display: 'flex',
-    alignItems: 'center',
-    gap: tokens.spacingHorizontalS,
-    marginBottom: tokens.spacingVerticalM,
-    flexWrap: 'wrap',
-  },
-  footer: {
-    display: 'flex',
-    justifyContent: 'flex-end',
-    marginTop: tokens.spacingVerticalL,
+    display: 'flex', alignItems: 'center', gap: tokens.spacingHorizontalS,
+    marginBottom: tokens.spacingVerticalM, flexWrap: 'wrap',
   },
   linkBtn: { marginTop: tokens.spacingVerticalXS, paddingLeft: 0 },
+  footer: {
+    display: 'flex', justifyContent: 'flex-end',
+    marginTop: tokens.spacingVerticalL, paddingTop: tokens.spacingVerticalM,
+    borderTop: `1px solid ${tokens.colorNeutralStroke2}`,
+  },
+  mb: { marginBottom: tokens.spacingVerticalM },
+  // spacing helpers — token-driven, replaces scattered inline magic numbers
+  spinner: { marginTop: tokens.spacingVerticalXXL },
+  msgMt: { marginTop: tokens.spacingVerticalM },
+  formHeadTight: { marginTop: 0 },
+  dividerTop: { marginTop: tokens.spacingVerticalL },
+  dividerMid: { marginTop: tokens.spacingVerticalM, marginBottom: tokens.spacingVerticalM },
+  // honest-gate remediation block
+  remediation: {
+    marginTop: tokens.spacingVerticalS,
+    fontSize: tokens.fontSizeBase200,
+    lineHeight: tokens.lineHeightBase300,
+    display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalXXS,
+  },
+  // pre blocks for diagnostic JSON hints
+  hintPre: {
+    marginTop: tokens.spacingVerticalS,
+    marginBottom: 0,
+    padding: tokens.spacingHorizontalS,
+    fontSize: tokens.fontSizeBase200,
+    fontFamily: tokens.fontFamilyMonospace,
+    whiteSpace: 'pre-wrap',
+    wordBreak: 'break-word',
+    backgroundColor: tokens.colorNeutralBackground3,
+    borderRadius: tokens.borderRadiusMedium,
+  },
+  envLine: { marginTop: tokens.spacingVerticalXS, fontSize: tokens.fontSizeBase200 },
+  errorList: { margin: 0, marginTop: tokens.spacingVerticalXS, paddingLeft: tokens.spacingHorizontalXL },
+  captionBlock: { display: 'block', marginTop: tokens.spacingVerticalXS },
+  receiptIcon: { color: tokens.colorPaletteGreenForeground1, flexShrink: 0 },
+  endorseMb: { marginBottom: tokens.spacingVerticalS },
+  emptyCentered: {
+    alignItems: 'center', textAlign: 'center',
+    paddingTop: tokens.spacingVerticalM, paddingBottom: tokens.spacingVerticalM,
+  },
+  purviewEndpoint: { display: 'block', marginTop: tokens.spacingVerticalXXS },
 });
-
-type SortCol = 'workspace' | 'metastore' | 'purview' | 'registered';
-type SortDir = 'ascending' | 'descending';
 
 export default function MetastoresPage() {
   const s = useStyles();
@@ -114,11 +138,6 @@ export default function MetastoresPage() {
   const [registering, setRegistering] = useState(false);
   const [probeResult, setProbeResult] = useState<any>(null);
   const [probeError, setProbeError] = useState<string | null>(null);
-
-  // Persisted-registrations table: filter + sort.
-  const [regFilter, setRegFilter] = useState('');
-  const [sortCol, setSortCol] = useState<SortCol>('registered');
-  const [sortDir, setSortDir] = useState<SortDir>('descending');
 
   // Attach + Purview options.
   const [selectedMetastore, setSelectedMetastore] = useState<string>('');
@@ -144,54 +163,10 @@ export default function MetastoresPage() {
   const discoverable: DiscoverableWs[] = data?.discoverableWorkspaces ?? [];
   const accountMetastores: AccountMetastore[] = data?.accountMetastores ?? [];
   const registrations: Registration[] = data?.registrations ?? [];
+  const unity: UnityMeta[] = data?.unity ?? [];
+  const onelake: OneLakeWs[] = data?.onelake ?? [];
   const selectedWsObj = discoverable.find((w) => w.workspaceUrl === selectedWs);
-
-  const purviewRank = (r: Registration) => (r.purviewScanned ? 2 : r.purviewRegistered ? 1 : 0);
-
-  const visibleRegistrations = useMemo(() => {
-    const q = regFilter.trim().toLowerCase();
-    const filtered = q
-      ? registrations.filter((r) =>
-          (r.workspaceName || '').toLowerCase().includes(q) ||
-          (r.workspaceUrl || '').toLowerCase().includes(q) ||
-          (r.metastoreId || '').toLowerCase().includes(q))
-      : registrations;
-    const dir = sortDir === 'ascending' ? 1 : -1;
-    return [...filtered].sort((a, b) => {
-      let cmp = 0;
-      switch (sortCol) {
-        case 'workspace':
-          cmp = (a.workspaceName || a.workspaceUrl).localeCompare(b.workspaceName || b.workspaceUrl);
-          break;
-        case 'metastore':
-          cmp = Number(a.ucAttached) - Number(b.ucAttached) ||
-            (a.metastoreId || '').localeCompare(b.metastoreId || '');
-          break;
-        case 'purview':
-          cmp = purviewRank(a) - purviewRank(b);
-          break;
-        case 'registered':
-        default:
-          cmp = (new Date(a.registeredAt).getTime() || 0) - (new Date(b.registeredAt).getTime() || 0);
-          break;
-      }
-      return cmp * dir;
-    });
-  }, [registrations, regFilter, sortCol, sortDir]);
-
-  const onSort = (col: SortCol) => {
-    if (col === sortCol) {
-      setSortDir((d) => (d === 'ascending' ? 'descending' : 'ascending'));
-    } else {
-      setSortCol(col);
-      setSortDir(col === 'registered' ? 'descending' : 'ascending');
-    }
-  };
-  const headerProps = (col: SortCol) => ({
-    sortable: true,
-    sortDirection: sortCol === col ? sortDir : undefined,
-    onClick: () => onSort(col),
-  });
+  const gate: AccountAdminGate | undefined = data?.accountAdminGate;
 
   async function register() {
     const host = manualMode ? manualHost.trim() : selectedWs;
@@ -230,119 +205,169 @@ export default function MetastoresPage() {
     }
   }
 
-  const gate: AccountAdminGate | undefined = data?.accountAdminGate;
+  // ---- Column definitions (sort + typed per-column filters supplied by LoomDataTable) ----
+  const registrationColumns: LoomColumn<Registration>[] = [
+    {
+      key: 'workspace', label: 'Workspace', width: 280, filterType: 'text',
+      getValue: (r) => r.workspaceName || r.workspaceUrl,
+      render: (r) => (
+        <div className={s.cellStack}>
+          <strong>{r.workspaceName || r.workspaceUrl}</strong>
+          <Caption1 className={s.muted}>{r.workspaceUrl}</Caption1>
+        </div>
+      ),
+    },
+    {
+      key: 'metastore', label: 'UC metastore', width: 220, filterType: 'text',
+      getValue: (r) => (r.ucAttached ? `attached ${r.metastoreId || ''}` : 'not attached'),
+      render: (r) => (
+        <div className={s.cellStack}>
+          {r.ucAttached ? (
+            <Badge appearance="tint" color="success" icon={<CheckmarkCircle24Filled />}>Attached</Badge>
+          ) : (
+            <Badge appearance="outline" color="informative">Not attached</Badge>
+          )}
+          {r.metastoreId && <Caption1 className={s.muted}>{r.metastoreId}</Caption1>}
+        </div>
+      ),
+    },
+    {
+      key: 'purview', label: 'Purview', width: 170, filterType: 'select',
+      filterOptions: ['Scanned', 'Source registered', 'Not catalogued'],
+      getValue: (r) => (r.purviewScanned ? 'Scanned' : r.purviewRegistered ? 'Source registered' : 'Not catalogued'),
+      render: (r) => (
+        r.purviewScanned ? <Badge appearance="tint" color="success">Scanned</Badge>
+          : r.purviewRegistered ? <Badge appearance="tint" color="brand">Source registered</Badge>
+          : <Badge appearance="outline" color="informative">—</Badge>
+      ),
+    },
+    {
+      key: 'registered', label: 'Registered', width: 180, filterType: 'date',
+      getValue: (r) => r.registeredAt || '',
+      render: (r) => (
+        <Caption1 className={s.muted}>
+          {r.registeredAt ? new Date(r.registeredAt).toLocaleString() : '—'}
+        </Caption1>
+      ),
+    },
+  ];
+
+  const unityColumns: LoomColumn<UnityMeta>[] = [
+    {
+      key: 'name', label: 'Metastore', width: 300, filterType: 'text',
+      getValue: (m) => m.name,
+      render: (m) => (
+        <div className={s.cellStack}>
+          <strong>{m.name}</strong>
+          <Caption1 className={s.muted}>{m.metastore_id}</Caption1>
+        </div>
+      ),
+    },
+    { key: 'region', label: 'Region', width: 160, getValue: (m) => m.region || '—', render: (m) => m.region || '—' },
+    { key: 'workspace_hostname', label: 'Workspace', filterType: 'text', getValue: (m) => m.workspace_hostname },
+  ];
+
+  const onelakeColumns: LoomColumn<OneLakeWs>[] = [
+    { key: 'displayName', label: 'Workspace', filterType: 'text', getValue: (w) => w.displayName, render: (w) => <strong>{w.displayName}</strong> },
+    { key: 'capacityId', label: 'Capacity', getValue: (w) => w.capacityId || '—', render: (w) => w.capacityId || '—' },
+  ];
+
+  const catalogColumns: LoomColumn<ProbeCatalog>[] = [
+    { key: 'name', label: 'Catalog', filterType: 'text', getValue: (c) => c.name, render: (c) => <strong>{c.name}</strong> },
+    { key: 'catalog_type', label: 'Type', getValue: (c) => c.catalog_type || '—', render: (c) => c.catalog_type || '—' },
+    { key: 'owner', label: 'Owner', getValue: (c) => c.owner || '—', render: (c) => c.owner || '—' },
+  ];
 
   return (
     <CatalogShell sectionTitle="Metastores & accounts">
       {error && (
-        <MessageBar intent="error" style={{ marginBottom: 16 }}>
-          <MessageBarBody><MessageBarTitle>Couldn’t load metastores</MessageBarTitle>{error}</MessageBarBody>
+        <MessageBar intent="error" className={s.mb}>
+          <MessageBarBody><MessageBarTitle>Couldn&apos;t load metastores</MessageBarTitle>{error}</MessageBarBody>
           <MessageBarActions>
             <Button size="small" icon={<ArrowSync24Regular />} onClick={load}>Retry</Button>
           </MessageBarActions>
         </MessageBar>
       )}
-      {loading && !error && <Spinner label="Loading metastores…" style={{ marginTop: 32 }} />}
+      {loading && !error && <Spinner label="Loading metastores…" className={s.spinner} />}
 
       {data && (
         <>
+          {/* ---------- Overview tiles ---------- */}
+          <Section title="Catalog back-ends">
+            <TileGrid>
+              <ItemTile
+                type="unity-catalog"
+                title="Databricks Unity Catalog"
+                subtitle="Portable across Azure / AWS / GCP"
+                meta={`${unity.length} metastore${unity.length === 1 ? '' : 's'} reachable`}
+                badge={
+                  gate
+                    ? <Badge appearance="outline" color="warning">Account admin needed</Badge>
+                    : unity.length > 0
+                      ? <Badge appearance="tint" color="success">Live</Badge>
+                      : <Badge appearance="outline" color="informative">None discovered</Badge>
+                }
+              />
+              <ItemTile
+                type="purview-account"
+                title="Microsoft Purview"
+                subtitle={data.purview ? data.purview.account : 'Azure-native data catalog'}
+                meta={data.purview ? data.purview.endpoint : 'Optional — set LOOM_PURVIEW_ACCOUNT'}
+                badge={
+                  data.purview
+                    ? <Badge appearance="tint" color="brand">Configured</Badge>
+                    : <Badge appearance="outline" color="informative">Not configured</Badge>
+                }
+              />
+              <ItemTile
+                type="onelake-workspace"
+                title="Fabric / OneLake"
+                subtitle="Optional read-only mirror"
+                meta={data.onelakeError ? 'Not available' : `${onelake.length} workspace${onelake.length === 1 ? '' : 's'} visible`}
+                badge={
+                  data.onelakeError
+                    ? <Badge appearance="outline" color="informative">Optional</Badge>
+                    : onelake.length > 0
+                      ? <Badge appearance="tint" color="informative">{onelake.length}</Badge>
+                      : <Badge appearance="outline" color="informative">Optional</Badge>
+                }
+              />
+            </TileGrid>
+          </Section>
+
           {/* ---------- Persisted registrations ---------- */}
           {registrations.length > 0 && (
-            <div className={s.card}>
-              <div className={s.sectionHead}>
-                <Link24Regular className={s.sectionHeadIcon} />
-                <Subtitle2>Registered Databricks workspaces</Subtitle2>
-                <Badge appearance="tint" color="brand">{registrations.length}</Badge>
-              </div>
+            <Section
+              title="Registered Databricks workspaces"
+              actions={<Badge appearance="tint" color="brand">{registrations.length}</Badge>}
+            >
               <Body1 className={s.mutedBlock}>
                 These registrations persist across Console reloads — no bicep redeploy required.
               </Body1>
-              {registrations.length > 4 && (
-                <div className={s.filterRow}>
-                  <SearchBox
-                    placeholder="Filter by workspace or metastore…"
-                    value={regFilter}
-                    onChange={(_, d) => setRegFilter(d.value ?? '')}
-                  />
-                </div>
-              )}
-              <Table aria-label="Persisted registrations" size="medium" sortable>
-                <TableHeader>
-                  <TableRow>
-                    <TableHeaderCell {...headerProps('workspace')}>Workspace</TableHeaderCell>
-                    <TableHeaderCell {...headerProps('metastore')}>UC metastore</TableHeaderCell>
-                    <TableHeaderCell {...headerProps('purview')}>Purview</TableHeaderCell>
-                    <TableHeaderCell {...headerProps('registered')}>Registered</TableHeaderCell>
-                  </TableRow>
-                </TableHeader>
-                <TableBody>
-                  {visibleRegistrations.map((r) => (
-                    <TableRow key={r.id}>
-                      <TableCell>
-                        <div className={s.cellStack}>
-                          <strong>{r.workspaceName || r.workspaceUrl}</strong>
-                          <Caption1 className={s.muted}>{r.workspaceUrl}</Caption1>
-                        </div>
-                      </TableCell>
-                      <TableCell>
-                        {r.ucAttached ? (
-                          <Badge appearance="tint" color="success" icon={<CheckmarkCircle24Filled />}>
-                            Attached
-                          </Badge>
-                        ) : (
-                          <Badge appearance="outline" color="informative">Not attached</Badge>
-                        )}
-                        {r.metastoreId && (
-                          <Caption1 className={s.muted} style={{ display: 'block', marginTop: 2 }}>
-                            {r.metastoreId}
-                          </Caption1>
-                        )}
-                      </TableCell>
-                      <TableCell>
-                        {r.purviewScanned ? (
-                          <Badge appearance="tint" color="success">Scanned</Badge>
-                        ) : r.purviewRegistered ? (
-                          <Badge appearance="tint" color="brand">Source registered</Badge>
-                        ) : (
-                          <Badge appearance="outline" color="informative">—</Badge>
-                        )}
-                      </TableCell>
-                      <TableCell>
-                        <Caption1 className={s.muted}>
-                          {r.registeredAt ? new Date(r.registeredAt).toLocaleString() : '—'}
-                        </Caption1>
-                      </TableCell>
-                    </TableRow>
-                  ))}
-                  {visibleRegistrations.length === 0 && (
-                    <TableRow>
-                      <TableCell colSpan={4}>
-                        <Caption1 className={s.muted}>No registrations match “{regFilter}”.</Caption1>
-                      </TableCell>
-                    </TableRow>
-                  )}
-                </TableBody>
-              </Table>
-            </div>
+              <LoomDataTable<Registration>
+                ariaLabel="Persisted Databricks registrations"
+                columns={registrationColumns}
+                rows={registrations}
+                getRowId={(r) => r.id}
+                empty="No registrations yet — register a workspace below."
+              />
+            </Section>
           )}
 
           {/* ---------- Databricks Unity Catalog ---------- */}
-          <div className={s.card}>
-            <div className={s.sectionHead}>
-              <Database24Regular className={s.sectionHeadIcon} />
-              <Subtitle2>Databricks Unity Catalog</Subtitle2>
-              {data.unity?.length > 0 && (
-                <Badge appearance="tint" color="brand">{data.unity.length} metastore{data.unity.length === 1 ? '' : 's'}</Badge>
-              )}
-            </div>
-
+          <Section
+            title="Databricks Unity Catalog"
+            actions={unity.length > 0
+              ? <Badge appearance="tint" color="brand">{unity.length} metastore{unity.length === 1 ? '' : 's'}</Badge>
+              : undefined}
+          >
             {/* Honest account-admin gate — the page still renders everything else. */}
             {gate && (
-              <MessageBar intent="warning" style={{ marginBottom: 14 }}>
+              <MessageBar intent="warning" className={s.mb}>
                 <MessageBarBody>
                   <MessageBarTitle>{gate.title}</MessageBarTitle>
                   {gate.detail}
-                  <div style={{ marginTop: 10, fontSize: 12, lineHeight: 1.6 }}>
+                  <div className={s.remediation}>
                     <div><strong>Role:</strong> {gate.remediation.role}</div>
                     <div><strong>Identity:</strong> <code>{gate.remediation.identity}</code></div>
                     <div><strong>Where:</strong> {gate.remediation.where}</div>
@@ -356,53 +381,36 @@ export default function MetastoresPage() {
                 <MessageBarBody>
                   <MessageBarTitle>Unity Catalog not configured</MessageBarTitle>{data.unityError}
                   {data.unityHint && (
-                    <pre style={{ marginTop: 8, fontSize: 11, whiteSpace: 'pre-wrap' }}>
+                    <pre className={s.hintPre}>
                       {JSON.stringify(data.unityHint, null, 2)}
                     </pre>
                   )}
                 </MessageBarBody>
               </MessageBar>
-            ) : data.unity?.length === 0 && !gate ? (
-              <div className={s.emptyState}>
-                <DatabaseSearch24Regular fontSize={32} className={s.emptyIcon} />
-                <Body1>No metastores discovered</Body1>
-                <Caption1 className={s.muted}>
-                  Confirm the Loom UAMI is in the UC metastore admin group, or register a workspace below.
-                </Caption1>
-              </div>
-            ) : data.unity?.length > 0 ? (
-              <Table aria-label="Unity metastores" size="medium">
-                <TableHeader>
-                  <TableRow>
-                    <TableHeaderCell>Metastore</TableHeaderCell>
-                    <TableHeaderCell>Region</TableHeaderCell>
-                    <TableHeaderCell>Workspace</TableHeaderCell>
-                  </TableRow>
-                </TableHeader>
-                <TableBody>
-                  {(data.unity as UnityMeta[]).map((m) => (
-                    <TableRow key={m.metastore_id}>
-                      <TableCell>
-                        <div className={s.cellStack}>
-                          <strong>{m.name}</strong>
-                          <Caption1 className={s.muted}>{m.metastore_id}</Caption1>
-                        </div>
-                      </TableCell>
-                      <TableCell>{m.region || '—'}</TableCell>
-                      <TableCell>{m.workspace_hostname}</TableCell>
-                    </TableRow>
-                  ))}
-                </TableBody>
-              </Table>
-            ) : null}
+            ) : (
+              <LoomDataTable<UnityMeta>
+                ariaLabel="Unity Catalog metastores"
+                columns={unityColumns}
+                rows={unity}
+                getRowId={(m) => m.metastore_id}
+                empty={
+                  <div className={mergeClasses(s.cellStack, s.emptyCentered)}>
+                    <Body1>No metastores discovered</Body1>
+                    <Caption1 className={s.muted}>
+                      Confirm the Loom UAMI is in the UC metastore admin group, or register a workspace below.
+                    </Caption1>
+                  </div>
+                }
+              />
+            )}
 
             {/* Per-workspace (non-admin) errors that aren't the account-admin gate. */}
             {Array.isArray(data.unityWorkspaceErrors) &&
               data.unityWorkspaceErrors.filter((w: any) => !w.accountAdmin).length > 0 && (
-              <MessageBar intent="warning" style={{ marginTop: 14 }}>
+              <MessageBar intent="warning" className={s.msgMt}>
                 <MessageBarBody>
                   <MessageBarTitle>Some workspaces were unreachable</MessageBarTitle>
-                  <ul style={{ margin: '6px 0 0', paddingLeft: 18 }}>
+                  <ul className={s.errorList}>
                     {data.unityWorkspaceErrors
                       .filter((w: any) => !w.accountAdmin)
                       .map((w: any) => <li key={w.workspace_hostname}><code>{w.workspace_hostname}</code>: {w.message}</li>)}
@@ -411,11 +419,11 @@ export default function MetastoresPage() {
               </MessageBar>
             )}
 
-            <Divider style={{ margin: '20px 0 16px' }} />
+            <Divider className={s.dividerTop} />
 
             {/* ---------- Register a Databricks workspace ---------- */}
-            <div className={s.sectionHead}>
-              <Add24Regular className={s.sectionHeadIcon} />
+            <div className={s.formHead}>
+              <Add24Regular className={s.formHeadIcon} />
               <Subtitle2>Register a Databricks workspace</Subtitle2>
             </div>
             <Body1 className={s.mutedBlock}>
@@ -425,9 +433,9 @@ export default function MetastoresPage() {
             </Body1>
 
             {data.discoveryError && (
-              <MessageBar intent="info" style={{ marginBottom: 12 }}>
+              <MessageBar intent="info" className={s.mb}>
                 <MessageBarBody>
-                  Couldn’t enumerate workspaces over ARM ({data.discoveryError}). Use manual entry below —
+                  Couldn&apos;t enumerate workspaces over ARM ({data.discoveryError}). Use manual entry below —
                   grant the Console UAMI <strong>Reader</strong> on the target subscriptions to populate the picker.
                 </MessageBarBody>
               </MessageBar>
@@ -488,18 +496,18 @@ export default function MetastoresPage() {
             </Button>
 
             {/* ---------- Attach to a UC metastore ---------- */}
-            <Divider style={{ margin: '16px 0' }} />
-            <div className={s.sectionHead}>
-              <Link24Regular className={s.sectionHeadIcon} />
+            <Divider className={s.dividerMid} />
+            <div className={mergeClasses(s.formHead, s.formHeadTight)}>
+              <Link24Regular className={s.formHeadIcon} />
               <Subtitle2>Attach to a Unity Catalog metastore (optional)</Subtitle2>
             </div>
             {data.accountApiConfigured === false ? (
-              <MessageBar intent="info" style={{ marginBottom: 12 }}>
+              <MessageBar intent="info" className={s.mb}>
                 <MessageBarBody>
                   <MessageBarTitle>One-click attach not configured</MessageBarTitle>
                   {data.accountApiHint?.detail || 'Set LOOM_DATABRICKS_ACCOUNT_ID to enable metastore attach.'}
                   {data.accountApiHint?.missingEnvVar && (
-                    <div style={{ marginTop: 6, fontSize: 12 }}>
+                    <div className={s.envLine}>
                       Env var: <code>{data.accountApiHint.missingEnvVar}</code> · Bicep: <code>{data.accountApiHint.bicepModule}</code>
                     </div>
                   )}
@@ -534,9 +542,9 @@ export default function MetastoresPage() {
             )}
 
             {/* ---------- Purview registration + scan ---------- */}
-            <Divider style={{ margin: '16px 0' }} />
-            <div className={s.sectionHead}>
-              <ShieldTask24Regular className={s.sectionHeadIcon} />
+            <Divider className={s.dividerMid} />
+            <div className={mergeClasses(s.formHead, s.formHeadTight)}>
+              <ShieldTask24Regular className={s.formHeadIcon} />
               <Subtitle2>Catalog in Microsoft Purview (optional)</Subtitle2>
             </div>
             {data.purview ? (
@@ -552,7 +560,6 @@ export default function MetastoresPage() {
                       checked={runScan}
                       onChange={(_, d) => setRunScan(!!d.checked)}
                       label="Define + run a scan to catalog its metadata"
-                      style={{ marginTop: 4 }}
                     />
                     {runScan && (
                       <div className={s.scanGrid}>
@@ -567,7 +574,7 @@ export default function MetastoresPage() {
                         </Field>
                       </div>
                     )}
-                    <Caption1 className={s.muted} style={{ display: 'block', marginTop: 6 }}>
+                    <Caption1 className={mergeClasses(s.muted, s.captionBlock)}>
                       Databricks scans require an Access Token stored in Key Vault (managed identity is not supported for
                       Databricks) plus a running SQL Warehouse. Without scan config, only the source is registered.
                     </Caption1>
@@ -581,7 +588,7 @@ export default function MetastoresPage() {
             )}
 
             {probeError && (
-              <MessageBar intent="error" style={{ marginTop: 12 }}>
+              <MessageBar intent="error" className={s.msgMt}>
                 <MessageBarBody><MessageBarTitle>Registration failed</MessageBarTitle>{probeError}</MessageBarBody>
               </MessageBar>
             )}
@@ -589,7 +596,7 @@ export default function MetastoresPage() {
             {probeResult?.ok && (
               <div className={s.receipt}>
                 <div className={s.receiptHead}>
-                  <DatabaseLink24Regular style={{ color: tokens.colorPaletteGreenForeground1 }} />
+                  <DatabaseLink24Regular className={s.receiptIcon} />
                   <Body1><strong>{probeResult.probed}</strong> registered &amp; persisted</Body1>
                   <Badge appearance="tint" color="success">
                     {(probeResult.catalogs?.length ?? 0)} catalog{probeResult.catalogs?.length === 1 ? '' : 's'}
@@ -600,7 +607,7 @@ export default function MetastoresPage() {
                 </div>
 
                 {probeResult.accountAdminGate && (
-                  <MessageBar intent="warning" style={{ marginBottom: 10 }}>
+                  <MessageBar intent="warning" className={s.endorseMb}>
                     <MessageBarBody>
                       <MessageBarTitle>{probeResult.accountAdminGate.title}</MessageBarTitle>
                       {probeResult.accountAdminGate.detail}
@@ -610,27 +617,27 @@ export default function MetastoresPage() {
 
                 {/* Per-step honest outcomes */}
                 {probeResult.steps?.attach?.gate && (
-                  <MessageBar intent="info" style={{ marginBottom: 10 }}>
+                  <MessageBar intent="info" className={s.endorseMb}>
                     <MessageBarBody>{probeResult.steps.attach.gate.detail}</MessageBarBody>
                   </MessageBar>
                 )}
                 {probeResult.steps?.attach?.error && (
-                  <MessageBar intent="warning" style={{ marginBottom: 10 }}>
+                  <MessageBar intent="warning" className={s.endorseMb}>
                     <MessageBarBody>Attach: {probeResult.steps.attach.error}</MessageBarBody>
                   </MessageBar>
                 )}
                 {probeResult.steps?.purview?.gate && (
-                  <MessageBar intent="info" style={{ marginBottom: 10 }}>
+                  <MessageBar intent="info" className={s.endorseMb}>
                     <MessageBarBody>{probeResult.steps.purview.gate.detail || probeResult.steps.purview.gate.followUp}</MessageBarBody>
                   </MessageBar>
                 )}
                 {probeResult.steps?.purview?.error && (
-                  <MessageBar intent="warning" style={{ marginBottom: 10 }}>
+                  <MessageBar intent="warning" className={s.endorseMb}>
                     <MessageBarBody>Purview: {probeResult.steps.purview.error}</MessageBarBody>
                   </MessageBar>
                 )}
                 {probeResult.steps?.purview?.scanGate && (
-                  <MessageBar intent="info" style={{ marginBottom: 10 }}>
+                  <MessageBar intent="info" className={s.endorseMb}>
                     <MessageBarBody>
                       <MessageBarTitle>{probeResult.steps.purview.scanGate.title}</MessageBarTitle>
                       {probeResult.steps.purview.scanGate.detail}
@@ -639,24 +646,14 @@ export default function MetastoresPage() {
                 )}
 
                 {Array.isArray(probeResult.catalogs) && probeResult.catalogs.length > 0 ? (
-                  <Table aria-label="Catalogs in workspace" size="small">
-                    <TableHeader>
-                      <TableRow>
-                        <TableHeaderCell>Catalog</TableHeaderCell>
-                        <TableHeaderCell>Type</TableHeaderCell>
-                        <TableHeaderCell>Owner</TableHeaderCell>
-                      </TableRow>
-                    </TableHeader>
-                    <TableBody>
-                      {probeResult.catalogs.map((c: any) => (
-                        <TableRow key={c.name}>
-                          <TableCell><strong>{c.name}</strong></TableCell>
-                          <TableCell>{c.catalog_type || '—'}</TableCell>
-                          <TableCell>{c.owner || '—'}</TableCell>
-                        </TableRow>
-                      ))}
-                    </TableBody>
-                  </Table>
+                  <LoomDataTable<ProbeCatalog>
+                    ariaLabel="Catalogs in workspace"
+                    columns={catalogColumns}
+                    rows={probeResult.catalogs as ProbeCatalog[]}
+                    getRowId={(c) => c.name}
+                    noFilters
+                    empty="No catalogs visible to the Console identity in this workspace yet."
+                  />
                 ) : (
                   <Caption1 className={s.muted}>
                     No catalogs visible to the Console identity in this workspace yet.
@@ -664,58 +661,45 @@ export default function MetastoresPage() {
                 )}
               </div>
             )}
-          </div>
+          </Section>
 
-          {/* ---------- Fabric / OneLake ---------- */}
-          <div className={s.card}>
-            <div className={s.sectionHead}>
-              <Cloud24Regular className={s.sectionHeadIcon} />
-              <Subtitle2>Fabric / OneLake</Subtitle2>
-              {Array.isArray(data.onelake) && data.onelake.length > 0 && (
-                <Badge appearance="tint" color="brand">{data.onelake.length} workspace{data.onelake.length === 1 ? '' : 's'}</Badge>
-              )}
-            </div>
+          {/* ---------- Fabric / OneLake (optional, read-only, gates nothing) ---------- */}
+          <Section
+            title="Fabric / OneLake"
+            actions={onelake.length > 0
+              ? <Badge appearance="tint" color="brand">{onelake.length} workspace{onelake.length === 1 ? '' : 's'}</Badge>
+              : undefined}
+          >
+            <Body1 className={s.mutedBlock}>
+              Optional read-only mirror — Loom never requires a Fabric capacity or workspace; Unity Catalog
+              and Purview above are the Azure-native defaults.
+            </Body1>
             {data.onelakeError ? (
               <MessageBar intent="warning"><MessageBarBody>{data.onelakeError}</MessageBarBody></MessageBar>
-            ) : data.onelake?.length === 0 ? (
-              <Body1 className={s.muted}>No OneLake workspaces visible.</Body1>
             ) : (
-              <Table aria-label="OneLake workspaces" size="medium">
-                <TableHeader>
-                  <TableRow>
-                    <TableHeaderCell>Workspace</TableHeaderCell>
-                    <TableHeaderCell>Capacity</TableHeaderCell>
-                  </TableRow>
-                </TableHeader>
-                <TableBody>
-                  {(data.onelake as OneLakeWs[]).map((w) => (
-                    <TableRow key={w.id}>
-                      <TableCell><strong>{w.displayName}</strong></TableCell>
-                      <TableCell>{w.capacityId || '—'}</TableCell>
-                    </TableRow>
-                  ))}
-                </TableBody>
-              </Table>
+              <LoomDataTable<OneLakeWs>
+                ariaLabel="OneLake workspaces"
+                columns={onelakeColumns}
+                rows={onelake}
+                getRowId={(w) => w.id}
+                empty="No OneLake workspaces visible."
+              />
             )}
-          </div>
+          </Section>
 
           {/* ---------- Microsoft Purview ---------- */}
-          <div className={s.card}>
-            <div className={s.sectionHead}>
-              <ShieldTask24Regular className={s.sectionHeadIcon} />
-              <Subtitle2>Microsoft Purview</Subtitle2>
-            </div>
+          <Section title="Microsoft Purview">
             {data.purview ? (
               <Body1>
                 Account <code>{data.purview.account}</code>
-                <Caption1 className={s.muted} style={{ display: 'block', marginTop: 4 }}>
+                <Caption1 className={mergeClasses(s.muted, s.purviewEndpoint)}>
                   {data.purview.endpoint}
                 </Caption1>
               </Body1>
             ) : (
               <MessageBar intent="warning"><MessageBarBody>{data.purviewError}</MessageBarBody></MessageBar>
             )}
-          </div>
+          </Section>
 
           <div className={s.footer}>
             <Button onClick={load} icon={<ArrowSync24Regular />} appearance="secondary">Refresh</Button>
