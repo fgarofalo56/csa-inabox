@@ -32,9 +32,11 @@ import {
   OverlayDrawer, DrawerHeader, DrawerHeaderTitle, DrawerBody, Tooltip,
 } from '@fluentui/react-components';
 import {
-  Send24Regular, Sparkle24Regular, Dismiss20Regular,
+  Send24Regular, Sparkle24Regular, Sparkle20Regular, Dismiss20Regular,
   ThumbLike20Regular, ThumbDislike20Regular,
   History20Regular, Delete20Regular, BranchCompare16Regular,
+  CheckmarkCircle16Regular, ErrorCircle16Regular, Wrench16Regular,
+  Lightbulb16Regular, DocumentEdit16Regular,
 } from '@fluentui/react-icons';
 import { LoomDataTable, type LoomColumn } from './ui/loom-data-table';
 import { CopilotResult } from '@/lib/components/copilot-result';
@@ -211,7 +213,7 @@ function pageContextFromPath(pathname: string | null): HelpPageContext {
 const useStyles = makeStyles({
   panel: {
     position: 'fixed', right: 0, top: 'var(--loom-topbar-height)', bottom: 0,
-    width: 420,
+    width: 'min(420px, 100vw)',
     backgroundColor: tokens.colorNeutralBackground1,
     borderLeft: `1px solid ${tokens.colorNeutralStroke2}`,
     boxShadow: '-8px 0 24px rgba(0,0,0,0.10)',
@@ -219,9 +221,13 @@ const useStyles = makeStyles({
   },
   header: {
     padding: 12, borderBottom: `1px solid ${tokens.colorNeutralStroke2}`,
-    display: 'flex', alignItems: 'center', gap: 8,
+    display: 'flex', alignItems: 'center', gap: 8, minWidth: 0,
     background: 'linear-gradient(90deg, rgba(125,108,255,0.10), transparent)',
   },
+  headerTitle: {
+    overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', minWidth: 0,
+  },
+  headerHint: { color: tokens.colorNeutralForeground3, marginLeft: 'auto', flexShrink: 0 },
   body: { flex: 1, overflowY: 'auto', padding: 12, display: 'flex', flexDirection: 'column', gap: 8 },
   msg: { padding: '10px 14px', borderRadius: 14, maxWidth: '92%' },
   msgCopilot: { backgroundColor: tokens.colorNeutralBackground2, alignSelf: 'flex-start', borderTopLeftRadius: 4 },
@@ -232,6 +238,9 @@ const useStyles = makeStyles({
     color: tokens.colorNeutralForeground3, fontSize: 12,
     paddingLeft: 4, marginTop: 4,
   },
+  stepOk: { color: tokens.colorPaletteGreenForeground1, flexShrink: 0 },
+  stepErr: { color: tokens.colorPaletteRedForeground1, flexShrink: 0 },
+  stepIcon: { color: tokens.colorNeutralForeground3, flexShrink: 0 },
   feedbackRow: { display: 'flex', alignItems: 'center', gap: 4, marginTop: 4 },
   agentBadgeRow: { marginBottom: 6 },
   handoffBox: {
@@ -244,6 +253,13 @@ const useStyles = makeStyles({
   historyItem: {
     padding: '10px 8px', borderBottom: `1px solid ${tokens.colorNeutralStroke2}`,
     cursor: 'pointer', borderRadius: 6,
+    transition: 'background-color 120ms ease',
+    ':hover': { backgroundColor: tokens.colorNeutralBackground2 },
+    ':focus-visible': { outline: `2px solid ${tokens.colorBrandStroke1}`, outlineOffset: '-2px' },
+  },
+  historyEmpty: {
+    display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 8,
+    padding: '40px 16px', textAlign: 'center', color: tokens.colorNeutralForeground3,
   },
   chipsBar: { borderTop: `1px solid ${tokens.colorNeutralStroke3}` },
 });
@@ -296,6 +312,7 @@ export function CopilotPane() {
   const sessionRef = useRef<string | null>(null);
   const msgIndexRef = useRef(0);
   const bodyRef = useRef<HTMLDivElement>(null);
+  const inputRef = useRef<HTMLInputElement>(null);
   // Active persona binding (set by the EVT_PERSONA event from an editor's
   // "Copilot" button). Carried on every orchestrate request while set.
   const personaRef = useRef<string | null>(null);
@@ -374,8 +391,16 @@ export function CopilotPane() {
   }, [paneCtx.slug, panePersona.greeting, busy]);
 
   useEffect(() => {
-    if (bodyRef.current) bodyRef.current.scrollTop = bodyRef.current.scrollHeight;
+    if (bodyRef.current) {
+      bodyRef.current.scrollTo({ top: bodyRef.current.scrollHeight, behavior: 'smooth' });
+    }
   }, [msgs]);
+
+  // Keep the composer focused: on open, and again when a turn finishes (the
+  // Input is disabled while busy, which drops focus).
+  useEffect(() => {
+    if (open && !busy && !historyOpen) inputRef.current?.focus();
+  }, [open, busy, historyOpen]);
 
   async function sendText(rawText: string) {
     const text = rawText.trim();
@@ -655,17 +680,29 @@ export function CopilotPane() {
 
   return (
     <>
-      <aside className={s.panel} aria-label="Copilot" data-testid="copilot-pane">
+      <aside
+        className={s.panel}
+        aria-label="Copilot"
+        data-testid="copilot-pane"
+        onKeyDown={(e) => {
+          // Escape closes the pane — unless the history drawer or the Keep/Undo
+          // diff dialog is up (those own their Escape handling).
+          if (e.key === 'Escape' && !historyOpen && !pendingChange) {
+            e.stopPropagation();
+            setOpen(false);
+          }
+        }}
+      >
         <div className={s.header}>
-          <Sparkle24Regular style={{ color: tokens.colorBrandForeground1 }} />
-          <Subtitle2>{panePersona.title}</Subtitle2>
+          <Sparkle24Regular style={{ color: tokens.colorBrandForeground1, flexShrink: 0 }} />
+          <Subtitle2 className={s.headerTitle} title={panePersona.title}>{panePersona.title}</Subtitle2>
           {tutorial && (
             <Badge appearance="tint" size="small" color="success" data-testid="copilot-tutorial-badge"
               title={tutorial.stepTitle ? `Step: ${tutorial.stepTitle}` : tutorial.id}>
               step {tutorial.stepIndex + 1}{tutorial.totalSteps ? `/${tutorial.totalSteps}` : ''}
             </Badge>
           )}
-          <Caption1 style={{ color: tokens.colorNeutralForeground3, marginLeft: 'auto' }}>Ctrl + /</Caption1>
+          <Caption1 className={s.headerHint}>Ctrl + /</Caption1>
           <Tooltip content="Chat history" relationship="label">
             <Button
               appearance="subtle"
@@ -685,7 +722,7 @@ export function CopilotPane() {
           </Tooltip>
           <Button appearance="subtle" icon={<Dismiss20Regular />} onClick={() => setOpen(false)} aria-label="Close Copilot" />
         </div>
-        <div className={s.body} ref={bodyRef}>
+        <div className={s.body} ref={bodyRef} aria-live="polite">
           {gateError && (
             <MessageBar intent="warning">
               <MessageBarBody>
@@ -717,7 +754,7 @@ export function CopilotPane() {
             <div key={i} className={`${s.msg} ${m.who === 'copilot' ? s.msgCopilot : m.who === 'you' ? s.msgYou : s.msgSystem}`} data-testid={`copilot-msg-${m.who}`}>
               {m.agent && (
                 <div className={s.agentBadgeRow}>
-                  <Tooltip content={m.agent.reason} relationship="label">
+                  <Tooltip content={m.agent.reason} relationship="description">
                     <Badge appearance="tint" color="brand" size="small"
                       icon={<BranchCompare16Regular />} data-testid="copilot-agent-badge">
                       {m.agent.agentName}
@@ -728,13 +765,21 @@ export function CopilotPane() {
               {m.text && <Body1 style={{ whiteSpace: 'pre-wrap' }}>{m.text}</Body1>}
               {m.steps?.map((step, j) => {
                 if (step.kind === 'tool_call') {
-                  return <div key={j} className={s.stepRow}>↪ calling <strong>{step.name}</strong>…</div>;
+                  return (
+                    <div key={j} className={s.stepRow}>
+                      <Wrench16Regular className={s.stepIcon} aria-hidden />
+                      calling <strong>{step.name}</strong>…
+                    </div>
+                  );
                 }
                 if (step.kind === 'tool_result') {
                   return (
                     <div key={j}>
                       <div className={s.stepRow}>
-                        {step.error ? '⚠' : '✓'} {step.name} <span>({step.durationMs}ms)</span>
+                        {step.error
+                          ? <ErrorCircle16Regular className={s.stepErr} aria-label="Tool failed" />
+                          : <CheckmarkCircle16Regular className={s.stepOk} aria-label="Tool succeeded" />}
+                        {step.name} <span>({step.durationMs}ms)</span>
                         {step.error && <span style={{ color: tokens.colorPaletteRedForeground1 }}> — {step.error}</span>}
                       </div>
                       {!step.error && step.name.startsWith('tabular_') && <TabularResult result={step.result} />}
@@ -745,12 +790,18 @@ export function CopilotPane() {
                   );
                 }
                 if (step.kind === 'thought') {
-                  return <div key={j} className={s.stepRow}>💭 {step.content.slice(0, 120)}</div>;
+                  return (
+                    <div key={j} className={s.stepRow}>
+                      <Lightbulb16Regular className={s.stepIcon} aria-hidden />
+                      {step.content.slice(0, 120)}
+                    </div>
+                  );
                 }
                 if (step.kind === 'proposed_change') {
                   return (
                     <div key={j} className={s.stepRow}>
-                      ⬡ proposed change to <code>{step.target}</code>
+                      <DocumentEdit16Regular className={s.stepIcon} aria-hidden />
+                      proposed change to <code>{step.target}</code>
                       <Button size="small" appearance="subtle" onClick={() => setPendingChange({
                         target: step.target, before: step.before, after: step.after,
                         lang: step.lang, callId: step.callId, summary: step.summary,
@@ -770,7 +821,7 @@ export function CopilotPane() {
                   <Button
                     appearance="primary"
                     size="small"
-                    icon={<Sparkle24Regular />}
+                    icon={<Sparkle20Regular />}
                     onClick={() => void sendText(m.handoff!.suggestedPrompt)}
                     disabled={busy}
                     data-testid="copilot-handoff-btn"
@@ -823,6 +874,7 @@ export function CopilotPane() {
         )}
         <div className={s.composer}>
           <Input
+            ref={inputRef}
             style={{ flex: 1 }}
             value={draft}
             onChange={(_, d) => setDraft(d.value)}
@@ -832,7 +884,7 @@ export function CopilotPane() {
             aria-label={`Message ${panePersona.title}`}
             data-testid="copilot-input"
           />
-          <Button appearance="primary" icon={<Send24Regular />} onClick={send} disabled={busy} aria-label="Send message" data-testid="copilot-send" />
+          <Button appearance="primary" icon={<Send24Regular />} onClick={send} disabled={busy || !draft.trim()} aria-label="Send message" data-testid="copilot-send" />
         </div>
         <CopilotDiff
           change={pendingChange}
@@ -869,7 +921,14 @@ export function CopilotPane() {
             </MessageBar>
           )}
           {!historyLoading && !historyError && sessions.length === 0 && (
-            <Caption1 style={{ color: tokens.colorNeutralForeground3 }}>No prior sessions.</Caption1>
+            <div className={s.historyEmpty}>
+              <History20Regular style={{ width: 28, height: 28 }} aria-hidden />
+              <Body1>No prior sessions</Body1>
+              <Caption1>
+                Conversations you have with Loom Copilot are saved here so you can
+                pick them back up later.
+              </Caption1>
+            </div>
           )}
           {sessions.map((sess) => (
             <div
