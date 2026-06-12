@@ -33,8 +33,10 @@ import { memo } from 'react';
 import {
   Button, Badge, Caption1, Label, Field, Input, Dropdown, Option, SpinButton,
   Checkbox, Divider, Spinner, Menu, MenuTrigger, MenuPopover, MenuList, MenuItem,
-  MessageBar, MessageBarBody, MessageBarTitle,
-  Table, TableHeader, TableRow, TableHeaderCell, TableBody, TableCell,
+  MessageBar, MessageBarBody, MessageBarTitle, Tooltip,
+  DataGrid, DataGridHeader, DataGridRow, DataGridHeaderCell, DataGridCell, DataGridBody,
+  createTableColumn, useArrowNavigationGroup,
+  type TableColumnDefinition, type TableColumnSizingOptions,
   Dialog, DialogSurface, DialogBody, DialogTitle, DialogContent, DialogActions,
   makeStyles, shorthands, tokens,
 } from '@fluentui/react-components';
@@ -42,7 +44,11 @@ import {
   Add20Regular, Delete20Regular, Play20Regular, Table20Regular,
   Filter20Regular, ColumnTriple20Regular, GroupList20Regular, BranchFork20Regular,
   ArrowSortDown20Regular, TextSortAscending20Regular,
+  Copy20Regular, ArrowDownload20Regular,
 } from '@fluentui/react-icons';
+import {
+  formatCell as fmtCsvCell, columnIsNumeric, toCsv, rowMatchesFilter,
+} from '@/lib/editors/components/delta-preview-grid-utils';
 import { MonacoTextarea } from '@/lib/components/editor/monaco-textarea';
 import {
   compileGraph,
@@ -106,6 +112,12 @@ interface RunResult {
   state?: string;
 }
 
+/** One result row wrapped with a stable id for the sortable/filterable DataGrid. */
+interface ResultGridRow {
+  __id: number;
+  cells: unknown[];
+}
+
 // ============================================================
 // Styles
 // ============================================================
@@ -141,9 +153,27 @@ const useStyles = makeStyles({
     pointerEvents: 'none', color: tokens.colorNeutralForeground3, zIndex: 1, textAlign: 'center', padding: 24,
   },
   sqlBar: { display: 'flex', gap: tokens.spacingHorizontalM, alignItems: 'center', flexWrap: 'wrap' },
-  resultMeta: { display: 'flex', gap: tokens.spacingHorizontalM, alignItems: 'center', flexWrap: 'wrap' },
-  tableWrap: { overflow: 'auto', maxHeight: 280, border: `1px solid ${tokens.colorNeutralStroke2}`, borderRadius: 4 },
-  cell: { fontFamily: 'Consolas, monospace', fontSize: 12, whiteSpace: 'nowrap' },
+  resultBar: { display: 'flex', gap: tokens.spacingHorizontalS, alignItems: 'center', flexWrap: 'wrap' },
+  resultSpacer: { flex: 1 },
+  filterInput: { maxWidth: 240 },
+  tableWrap: {
+    overflow: 'auto', maxHeight: 320,
+    border: `1px solid ${tokens.colorNeutralStroke2}`,
+    borderRadius: tokens.borderRadiusMedium,
+  },
+  resultLoading: {
+    display: 'flex', alignItems: 'center', justifyContent: 'center',
+    gap: tokens.spacingHorizontalS, minHeight: 120,
+    border: `1px solid ${tokens.colorNeutralStroke2}`,
+    borderRadius: tokens.borderRadiusMedium,
+    backgroundColor: tokens.colorNeutralBackground2,
+    color: tokens.colorNeutralForeground3,
+  },
+  cell: {
+    fontFamily: 'Consolas, "Cascadia Code", monospace', fontSize: 12,
+    whiteSpace: 'nowrap', maxWidth: 360, overflow: 'hidden', textOverflow: 'ellipsis',
+  },
+  nullCell: { color: tokens.colorNeutralForeground4, fontStyle: 'italic' },
   aggRow: { display: 'flex', gap: 4, alignItems: 'center' },
   checkList: { display: 'flex', flexDirection: 'column', gap: 2, maxHeight: 180, overflowY: 'auto', paddingLeft: 2 },
 });
@@ -286,6 +316,8 @@ function CanvasInner(props: VisualQueryCanvasProps) {
 
   const [result, setResult] = useState<RunResult | null>(null);
   const [running, setRunning] = useState(false);
+  const [resultFilter, setResultFilter] = useState('');
+  const resultArrowNav = useArrowNavigationGroup({ axis: 'grid' });
 
   const layoutCounter = useRef(0);
 
@@ -448,7 +480,7 @@ function CanvasInner(props: VisualQueryCanvasProps) {
   // ---- run ----
   const run = useCallback(async () => {
     if (!nodes.length) return;
-    setRunning(true); setResult(null);
+    setRunning(true); setResult(null); setResultFilter('');
     try {
       const r = await fetch(`/api/items/${engine}/${encodeURIComponent(id)}/visual-query`, {
         method: 'POST', headers: { 'content-type': 'application/json' },
@@ -479,6 +511,74 @@ function CanvasInner(props: VisualQueryCanvasProps) {
   }, [addSource]);
 
   const selectedNode = nodes.find((n) => n.id === selectedId) || null;
+
+  // ---- result grid (sortable + client-side filter, parity with the Lakehouse preview grid) ----
+  const resultCols = result?.ok ? (result.columns || []) : [];
+  const resultRows = result?.ok ? (result.rows || []) : [];
+
+  const numericResultCols = useMemo(() => {
+    const set = new Set<number>();
+    resultCols.forEach((_, i) => { if (columnIsNumeric(resultRows, i)) set.add(i); });
+    return set;
+  }, [resultCols, resultRows]);
+
+  const filteredResultRows = useMemo<ResultGridRow[]>(() => {
+    const mapped = resultRows.map((cells, idx) => ({ __id: idx, cells }));
+    const needle = resultFilter.trim().toLowerCase();
+    if (!needle) return mapped;
+    return mapped.filter((r) => rowMatchesFilter(r.cells, needle));
+  }, [resultRows, resultFilter]);
+
+  const resultGridColumns = useMemo<TableColumnDefinition<ResultGridRow>[]>(() =>
+    resultCols.map((colName, colIdx) =>
+      createTableColumn<ResultGridRow>({
+        columnId: `c${colIdx}`,
+        compare: (a, b) => {
+          const av = a.cells[colIdx];
+          const bv = b.cells[colIdx];
+          if (numericResultCols.has(colIdx)) return Number(av) - Number(bv);
+          return fmtCsvCell(av).localeCompare(fmtCsvCell(bv));
+        },
+        renderHeaderCell: () => colName,
+        renderCell: (row) => {
+          const v = row.cells[colIdx];
+          const display = formatCell(v);
+          return (
+            <span className={v === null || v === undefined ? `${s.cell} ${s.nullCell}` : s.cell} title={display}>
+              {display}
+            </span>
+          );
+        },
+      }),
+    ),
+  [resultCols, numericResultCols, s]);
+
+  const resultSizingOptions = useMemo<TableColumnSizingOptions>(() => {
+    const opts: TableColumnSizingOptions = {};
+    resultCols.forEach((_, colIdx) => { opts[`c${colIdx}`] = { minWidth: 80, defaultWidth: 160, idealWidth: 160 }; });
+    return opts;
+  }, [resultCols]);
+
+  const downloadResultsCsv = useCallback(() => {
+    const csv = toCsv(resultCols, filteredResultRows.map((r) => r.cells));
+    const blob = new Blob([csv], { type: 'text/csv;charset=utf-8' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url; a.download = 'visual-query-results.csv';
+    document.body.appendChild(a); a.click(); document.body.removeChild(a);
+    URL.revokeObjectURL(url);
+  }, [resultCols, filteredResultRows]);
+
+  const copyResultsCsv = useCallback(async () => {
+    const csv = toCsv(resultCols, filteredResultRows.map((r) => r.cells));
+    try {
+      await navigator.clipboard.writeText(csv);
+    } catch {
+      const ta = document.createElement('textarea');
+      ta.value = csv; document.body.appendChild(ta); ta.select();
+      try { document.execCommand('copy'); } finally { document.body.removeChild(ta); }
+    }
+  }, [resultCols, filteredResultRows]);
 
   return (
     <div className={s.root}>
@@ -567,8 +667,15 @@ function CanvasInner(props: VisualQueryCanvasProps) {
       </div>
       <MonacoTextarea value={generatedSql} onChange={() => {}} language={dialect} height={150} readOnly ariaLabel="Generated SQL preview" />
 
-      {/* Results */}
-      {result && !result.ok && (
+      {/* Results — loading state while the query executes against the live backend. */}
+      {running && (
+        <div className={s.resultLoading}>
+          <Spinner size="tiny" />
+          <Caption1>Running query against the live backend…</Caption1>
+        </div>
+      )}
+
+      {!running && result && !result.ok && (
         <MessageBar intent="error">
           <MessageBarBody>
             <MessageBarTitle>Query failed</MessageBarTitle>
@@ -576,31 +683,69 @@ function CanvasInner(props: VisualQueryCanvasProps) {
           </MessageBarBody>
         </MessageBar>
       )}
-      {result?.ok && (
+
+      {!running && result?.ok && (
         <>
-          <div className={s.resultMeta}>
-            <Badge appearance="filled" color="success">{result.rowCount ?? result.rows?.length ?? 0} rows</Badge>
-            <Caption1>· {result.executionMs} ms</Caption1>
+          <div className={s.resultBar}>
+            <Badge appearance="filled" color="success">{result.rowCount ?? resultRows.length} rows</Badge>
+            {result.executionMs !== undefined && <Caption1>· {result.executionMs} ms</Caption1>}
             {result.truncated && <Badge appearance="outline" color="warning">truncated at 5,000</Badge>}
+            {resultRows.length > 0 && (
+              <Input
+                className={s.filterInput}
+                size="small"
+                contentBefore={<Filter20Regular />}
+                placeholder="Filter rows…"
+                value={resultFilter}
+                onChange={(_, d) => setResultFilter(d.value)}
+                aria-label="Filter result rows"
+              />
+            )}
+            {resultFilter.trim() && (
+              <Caption1>{filteredResultRows.length.toLocaleString()} of {resultRows.length.toLocaleString()} shown</Caption1>
+            )}
+            <div className={s.resultSpacer} />
+            {resultRows.length > 0 && (
+              <>
+                <Tooltip content="Copy shown rows as CSV" relationship="label">
+                  <Button size="small" appearance="subtle" icon={<Copy20Regular />} onClick={() => void copyResultsCsv()}>Copy CSV</Button>
+                </Tooltip>
+                <Tooltip content="Download shown rows as CSV" relationship="label">
+                  <Button size="small" appearance="subtle" icon={<ArrowDownload20Regular />} onClick={downloadResultsCsv}>Download</Button>
+                </Tooltip>
+              </>
+            )}
           </div>
-          {(result.rows?.length ?? 0) === 0 ? (
-            <Caption1>Query returned no rows.</Caption1>
+          {resultRows.length === 0 ? (
+            <MessageBar intent="info"><MessageBarBody>Query returned no rows.</MessageBarBody></MessageBar>
+          ) : filteredResultRows.length === 0 ? (
+            <MessageBar intent="info"><MessageBarBody>No rows match “{resultFilter.trim()}”.</MessageBarBody></MessageBar>
           ) : (
-            <div className={s.tableWrap}>
-              <Table aria-label="Visual query results" size="small">
-                <TableHeader><TableRow>
-                  {(result.columns || []).map((c) => <TableHeaderCell key={c}>{c}</TableHeaderCell>)}
-                </TableRow></TableHeader>
-                <TableBody>
-                  {(result.rows || []).map((row, i) => (
-                    <TableRow key={i}>
-                      {(result.columns || []).map((_, j) => (
-                        <TableCell key={j} className={s.cell}>{formatCell(row[j])}</TableCell>
-                      ))}
-                    </TableRow>
-                  ))}
-                </TableBody>
-              </Table>
+            <div className={s.tableWrap} {...resultArrowNav} tabIndex={0}>
+              <DataGrid
+                items={filteredResultRows}
+                columns={resultGridColumns}
+                sortable
+                resizableColumns
+                columnSizingOptions={resultSizingOptions}
+                getRowId={(item) => (item as ResultGridRow).__id}
+                focusMode="composite"
+                size="small"
+                aria-label="Visual query results"
+              >
+                <DataGridHeader>
+                  <DataGridRow>
+                    {({ renderHeaderCell }) => <DataGridHeaderCell>{renderHeaderCell()}</DataGridHeaderCell>}
+                  </DataGridRow>
+                </DataGridHeader>
+                <DataGridBody<ResultGridRow>>
+                  {({ item, rowId }) => (
+                    <DataGridRow<ResultGridRow> key={rowId}>
+                      {({ renderCell }) => <DataGridCell>{renderCell(item)}</DataGridCell>}
+                    </DataGridRow>
+                  )}
+                </DataGridBody>
+              </DataGrid>
             </div>
           )}
         </>
