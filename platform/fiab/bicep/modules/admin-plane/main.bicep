@@ -1756,16 +1756,17 @@ module appDeployments 'app-deployments.bicep' = if (containerPlatform == 'contai
             // until the orchestrator Container App is deployed (setupOrchestratorActive);
             // then the deploy BFF falls back to GitHub dispatch / copy-paste az.
             { name: 'LOOM_SETUP_ORCHESTRATOR_URL', value: setupOrchestratorActive ? setupOrchestrator!.outputs.url : '' }
-            // MCP catalog deploy (admin → Copilot & Agents → Deploy from catalog).
-            // The deploy/status/delete BFF routes PUT/GET/DELETE
-            // Microsoft.App/containerApps via ARM, binding each server to the MCP
-            // UAMI and (optionally) mounting the Loom MCP Azure Files share. These
-            // are wired only on the Container Apps boundary; on AKS the deploy
-            // route honest-gates (LOOM_CONTAINER_PLATFORM=aks).
+            // MCP catalog deploy (admin → Copilot & Agents → External MCP Tools →
+            // Browse library). The deploy/status/teardown BFF routes
+            // (app/api/admin/mcp-servers/deploy + .../deployed/{status,teardown})
+            // PUT/GET/DELETE Microsoft.App/containerApps via ARM, binding each
+            // server to the MCP UAMI, writing per-field secrets to Key Vault, and
+            // (optionally) mounting the Loom MCP Azure Files share. The canonical
+            // env vars for the configSchema/per-field-KV path are LOOM_ACA_ENV_ID /
+            // LOOM_ACA_ENV_DOMAIN / LOOM_MCP_CATALOG_UAMI_ID (set below). These are
+            // wired only on the Container Apps boundary; on AKS the deploy route
+            // honest-gates (LOOM_CONTAINER_PLATFORM=aks).
             { name: 'LOOM_CONTAINER_PLATFORM', value: containerPlatform }
-            { name: 'LOOM_CAE_ID', value: containerPlatform == 'containerApps' ? containerPlatformModule.outputs.caeId : '' }
-            { name: 'LOOM_CAE_NAME', value: containerPlatform == 'containerApps' ? containerPlatformModule.outputs.caeName : '' }
-            { name: 'LOOM_CAE_DEFAULT_DOMAIN', value: containerPlatform == 'containerApps' ? containerPlatformModule.outputs.caeDefaultDomain : '' }
             { name: 'LOOM_ACR_LOGIN_SERVER', value: registry.outputs.acrLoginServer }
             { name: 'LOOM_MCP_UAMI_ID', value: identity.outputs.uamiMcpId }
             { name: 'LOOM_MCP_UAMI_CLIENT_ID', value: identity.outputs.uamiMcpClientId }

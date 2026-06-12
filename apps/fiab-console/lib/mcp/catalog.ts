@@ -991,6 +991,18 @@ export interface McpDeployConfigField {
   envVar: string;
 }
 
+/**
+ * Egress profile for the catalog grid badge + the pre-deploy SaaS warning.
+ *  - 'air-gap-safe'  : zero external calls (self-contained).
+ *  - 'azure-internal': talks only to Azure resources over the VNet.
+ *  - 'external-saas' : reaches an external SaaS API → must be proxied/approved
+ *    on gcc/gcc-high/il5 boundaries.
+ */
+export type McpEgressProfile = 'air-gap-safe' | 'azure-internal' | 'external-saas';
+
+/** SPDX-ish license bucket surfaced on the catalog card. */
+export type McpDeployLicense = 'Apache-2.0' | 'MIT' | 'BSD' | 'Proprietary';
+
 /** A deployable MCP server in the catalog. */
 export interface McpCatalogEntry {
   /** Stable id (used as the deploy/catalog key). */
@@ -1003,6 +1015,25 @@ export interface McpCatalogEntry {
   category: 'developer' | 'observability' | 'data' | 'productivity' | 'reference';
   /** Real, pullable container image reference (registry/repo:tag). */
   image: string;
+  /**
+   * Governance metadata (sourced from temp/mcp-gov-research.md). Drives the
+   * catalog grid badges + the per-cloud filter (serversForCloud) + the
+   * pre-deploy external-SaaS warning. All optional with safe defaults so older
+   * entries keep working: license defaults to the upstream's, egress defaults to
+   * 'azure-internal', govSafe/airGapSafe default conservatively.
+   */
+  /** Egress profile → grid badge + SaaS warning. */
+  egress?: McpEgressProfile;
+  /** License bucket shown on the card. */
+  license?: McpDeployLicense;
+  /** Maintainer tier shown on the card (anthropic / microsoft / vendor / community). */
+  maintainer?: 'anthropic' | 'microsoft' | 'vendor' | 'community';
+  /** Safe to offer inside a US-Gov boundary (gcc / gcc-high). */
+  govSafe?: boolean;
+  /** Runs with NO external internet calls (air-gap safe). */
+  airGapSafe?: boolean;
+  /** External SaaS hosts this server reaches (drives the pre-deploy warning). */
+  externalHosts?: string[];
   /** Transport the server speaks. Loom registers an HTTP(S) endpoint. */
   transport: 'http' | 'sse';
   /** Ingress target port the server listens on inside the container. */
@@ -1047,6 +1078,12 @@ export const MCP_DEPLOY_CATALOG: McpCatalogEntry[] = [
     command: ['./github-mcp-server', 'http', '--host', '0.0.0.0', '--port', '8080'],
     healthPath: '/healthz',
     docsUrl: 'https://github.com/github/github-mcp-server',
+    egress: 'external-saas',
+    license: 'MIT',
+    maintainer: 'vendor',
+    govSafe: true,
+    airGapSafe: false,
+    externalHosts: ['github.com (or your GitHub Enterprise host)'],
     configSchema: [
       {
         key: 'pat',
@@ -1097,6 +1134,12 @@ export const MCP_DEPLOY_CATALOG: McpCatalogEntry[] = [
     args: ['--transport', 'streamable-http', '--address', '0.0.0.0:8000'],
     healthPath: '/healthz',
     docsUrl: 'https://github.com/grafana/mcp-grafana',
+    egress: 'azure-internal',
+    license: 'Apache-2.0',
+    maintainer: 'vendor',
+    govSafe: true,
+    airGapSafe: false,
+    externalHosts: ['(your Grafana instance — typically internal/Azure-hosted)'],
     configSchema: [
       {
         key: 'url',
@@ -1131,6 +1174,12 @@ export const MCP_DEPLOY_CATALOG: McpCatalogEntry[] = [
     args: ['--transport', 'sse'],
     preview: true,
     docsUrl: 'https://github.com/modelcontextprotocol/servers/tree/main/src/fetch',
+    egress: 'external-saas',
+    license: 'MIT',
+    maintainer: 'anthropic',
+    govSafe: true,
+    airGapSafe: false,
+    externalHosts: ['(arbitrary outbound URLs — route via an approved gov proxy)'],
     configSchema: [
       {
         key: 'userAgent',
@@ -1163,6 +1212,12 @@ export const MCP_DEPLOY_CATALOG: McpCatalogEntry[] = [
     args: ['--transport', 'sse'],
     preview: true,
     docsUrl: 'https://github.com/modelcontextprotocol/servers/tree/main/src/time',
+    egress: 'air-gap-safe',
+    license: 'MIT',
+    maintainer: 'anthropic',
+    govSafe: true,
+    airGapSafe: true,
+    externalHosts: [],
     configSchema: [
       {
         key: 'localTimezone',
@@ -1212,6 +1267,43 @@ export function validateConfigValues(
     out[f.key] = v;
   }
   return out;
+}
+
+/** Resolved egress profile for an entry (defaults to 'azure-internal'). */
+export function entryEgress(entry: McpCatalogEntry): McpEgressProfile {
+  return entry.egress ?? 'azure-internal';
+}
+
+/** True when deploying this entry should warn about external-SaaS egress. */
+export function reachesExternalSaas(entry: McpCatalogEntry): boolean {
+  return entryEgress(entry) === 'external-saas';
+}
+
+/**
+ * Filter the deploy catalog to the entries allowable in a given cloud boundary.
+ *  - commercial: everything.
+ *  - gcc / gcc-high: gov-safe entries only (SaaS ones still carry the warning).
+ *  - il5: air-gap-safe entries only (no external egress permitted).
+ * Entries with no govSafe/airGapSafe metadata are treated conservatively
+ * (govSafe defaults false → hidden on gov; airGapSafe defaults false → hidden on il5).
+ *
+ * Named distinctly from `serversForCloud` (which filters the legacy
+ * DeployableMcpServer / MCP_CATALOG list) to avoid a duplicate export.
+ */
+export function deployServersForCloud(
+  cloud: 'commercial' | 'gcc' | 'gcc-high' | 'il5',
+): McpCatalogEntry[] {
+  switch (cloud) {
+    case 'commercial':
+      return [...MCP_DEPLOY_CATALOG];
+    case 'gcc':
+    case 'gcc-high':
+      return MCP_DEPLOY_CATALOG.filter((e) => e.govSafe === true);
+    case 'il5':
+      return MCP_DEPLOY_CATALOG.filter((e) => e.airGapSafe === true);
+    default:
+      return [...MCP_DEPLOY_CATALOG];
+  }
 }
 
 // ── Bridge: operational catalog ⇄ gov-safety metadata ─────────────────────────
