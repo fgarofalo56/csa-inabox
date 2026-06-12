@@ -14,6 +14,10 @@ const REPO = '/e/Repos/GitHub/csa-inabox'
 const REPO_WIN = 'E:\\Repos\\GitHub\\csa-inabox'
 const COAUTHOR = 'Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>'
 const HB = `${REPO}/.claude/loom-autopilot.heartbeat`
+// HARNESS QUIRK: some sessions deliver `args` as a JSON-encoded STRING (confirmed
+// by zero-agent probe 2026-06-12) — which made args.* undefined and caused the
+// 115-task unscoped rebuild. Coerce before any use.
+if (typeof args === 'string') { try { args = JSON.parse(args) } catch (e) { log('args parse failed: ' + e) } }
 // HARD GUARD: a scriptPath relaunch once dropped `args` entirely, which made this
 // script fall back to "extract EVERY implementable task" and rebuild the whole
 // 115-item backlog (51 duplicate PRs, session limit burned). Never run unscoped.
