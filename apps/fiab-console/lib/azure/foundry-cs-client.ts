@@ -25,7 +25,7 @@ import {
   ManagedIdentityCredential,
   ChainedTokenCredential,
 } from '@azure/identity';
-import { armBase, armScope } from './cloud-endpoints';
+import { armBase, armScope, cogScope } from './cloud-endpoints';
 
 const ARM_SCOPE = armScope();
 const CS_API = '2024-10-01';
@@ -471,10 +471,12 @@ export interface ChatResult {
 }
 
 const AOAI_DATA_API = process.env.LOOM_AOAI_API_VERSION || '2024-10-21';
-const COG_SCOPE = 'https://cognitiveservices.azure.com/.default';
-
+// Sovereign-cloud aware Cognitive Services / AOAI data-plane audience.
+// Commercial/GCC -> cognitiveservices.azure.com; GCC-High/IL5/DoD ->
+// cognitiveservices.azure.us. Resolved per request (not at module load) so the
+// scope tracks LOOM_CLOUD / AZURE_CLOUD even when set after import.
 async function dataPlaneToken(): Promise<string> {
-  const t = await credential.getToken(COG_SCOPE);
+  const t = await credential.getToken(cogScope());
   if (!t?.token) throw new Error('Failed to acquire Cognitive Services data-plane token');
   return t.token;
 }

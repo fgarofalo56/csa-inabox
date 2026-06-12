@@ -1177,6 +1177,139 @@ export async function queryTraceDetail(traceId: string): Promise<{ spans: AppIns
   return { spans };
 }
 
+// ---- Observability dashboard (Application analytics) ----
+//
+// Microsoft Foundry's Monitoring → "Application analytics" surface aggregates
+// the SAME App Insights resource the tracing surface uses (ws.applicationInsights)
+// into token consumption, latency (p50/p95), exception count, request volume,
+// and per-operation breakdowns. We run a handful of KQL aggregations against the
+// `{appiId}/api/query` endpoint (same auth + ARM path as queryTraceDetail) and
+// shape them for the dashboard. GenAI token usage comes from the OTel
+// semantic-convention customDimensions on `dependencies` spans.
+
+export interface ObservabilitySummary {
+  hours: number;
+  /** Header KPIs. */
+  totals: {
+    requests: number;
+    dependencies: number;
+    failures: number;
+    inputTokens: number;
+    outputTokens: number;
+    p50Ms?: number;
+    p95Ms?: number;
+  };
+  /** Requests + failures bucketed over time (for the volume line chart). */
+  requestsOverTime: { t: string; count: number; failed: number }[];
+  /** Token consumption bucketed over time (input + output). */
+  tokensOverTime: { t: string; input: number; output: number }[];
+  /** Per-operation latency p95 + call count (for the breakdown bar chart). */
+  byOperation: { operation: string; count: number; p95Ms?: number; failed: number }[];
+}
+
+async function appiQuery(appiId: string, query: string): Promise<{ cols: string[]; rows: any[][] }> {
+  const path = `${appiId}/api/query`;
+  const res = await armFetch(path, { apiVersion: '2015-05-01', method: 'POST', body: JSON.stringify({ query }) });
+  if (!res.ok) {
+    const t = await res.text();
+    throw new FoundryError(res.status, t, `App Insights query failed (${res.status}): ${t.slice(0, 240)} | endpoint=${path}`);
+  }
+  const j: any = await res.json();
+  const table = j?.tables?.[0];
+  if (!table) return { cols: [], rows: [] };
+  return { cols: (table.columns || []).map((c: any) => c.name), rows: table.rows || [] };
+}
+
+function toObjects(t: { cols: string[]; rows: any[][] }): Record<string, any>[] {
+  return t.rows.map((r) => {
+    const o: Record<string, any> = {};
+    t.cols.forEach((c, i) => { o[c] = r[i]; });
+    return o;
+  });
+}
+
+export async function queryObservabilitySummary(opts: { hours?: number } = {}): Promise<ObservabilitySummary> {
+  const ws = await getWorkspaceInfo();
+  const appiId = ws?.applicationInsights;
+  if (!appiId) {
+    throw new NotDeployedError('Application Insights',
+      'The Foundry hub has no applicationInsights resource bound. Bind one in the hub workspace properties to populate the Monitoring dashboard.');
+  }
+  const hours = Math.max(1, Math.min(24 * 30, opts.hours || 24));
+  // Bucket size scales with the window so the time-series stays readable.
+  const binMin = hours <= 6 ? 15 : hours <= 24 ? 60 : hours <= 24 * 7 ? 360 : 1440;
+
+  // 1) Header KPIs: request/dependency/failure counts + GenAI token sums + latency percentiles.
+  const totalsQ =
+    `let win = ${hours}h; ` +
+    `let reqs = requests | where timestamp > ago(win); ` +
+    `let deps = dependencies | where timestamp > ago(win); ` +
+    `let tok = deps | extend inT = toint(customDimensions['gen_ai.usage.input_tokens']), ` +
+    `outT = toint(customDimensions['gen_ai.usage.output_tokens']), ` +
+    `inT2 = toint(customDimensions['gen_ai.usage.prompt_tokens']), ` +
+    `outT2 = toint(customDimensions['gen_ai.usage.completion_tokens']); ` +
+    `print ` +
+    `requests = toscalar(reqs | count), ` +
+    `dependencies = toscalar(deps | count), ` +
+    `failures = toscalar(union (reqs | where success == false), (deps | where success == false) | count), ` +
+    `inputTokens = toscalar(tok | summarize sum(coalesce(inT, inT2, 0))), ` +
+    `outputTokens = toscalar(tok | summarize sum(coalesce(outT, outT2, 0))), ` +
+    `p50Ms = toscalar(union reqs, deps | summarize percentile(duration, 50)), ` +
+    `p95Ms = toscalar(union reqs, deps | summarize percentile(duration, 95))`;
+
+  // 2) Requests + failures over time.
+  const reqTimeQ =
+    `requests | where timestamp > ago(${hours}h) ` +
+    `| summarize count=count(), failed=countif(success == false) by bin(timestamp, ${binMin}m) ` +
+    `| order by timestamp asc`;
+
+  // 3) Token consumption over time (dependencies carry GenAI usage dimensions).
+  const tokTimeQ =
+    `dependencies | where timestamp > ago(${hours}h) ` +
+    `| extend inT = toint(coalesce(toint(customDimensions['gen_ai.usage.input_tokens']), toint(customDimensions['gen_ai.usage.prompt_tokens']), 0)), ` +
+    `outT = toint(coalesce(toint(customDimensions['gen_ai.usage.output_tokens']), toint(customDimensions['gen_ai.usage.completion_tokens']), 0)) ` +
+    `| summarize input=sum(inT), output=sum(outT) by bin(timestamp, ${binMin}m) ` +
+    `| order by timestamp asc`;
+
+  // 4) Per-operation latency p95 + counts.
+  const byOpQ =
+    `union (requests | extend op=operation_Name), (dependencies | extend op=name) ` +
+    `| where timestamp > ago(${hours}h) and isnotempty(op) ` +
+    `| summarize count=count(), p95=percentile(duration, 95), failed=countif(success == false) by op ` +
+    `| top 12 by count desc`;
+
+  const [totalsT, reqT, tokT, byOpT] = await Promise.all([
+    appiQuery(appiId, totalsQ),
+    appiQuery(appiId, reqTimeQ),
+    appiQuery(appiId, tokTimeQ),
+    appiQuery(appiId, byOpQ),
+  ]);
+
+  const num = (v: unknown): number => { const n = Number(v); return Number.isFinite(n) ? n : 0; };
+  const numU = (v: unknown): number | undefined => { const n = Number(v); return Number.isFinite(n) ? n : undefined; };
+
+  const totalsRow = toObjects(totalsT)[0] || {};
+  const reqRows = toObjects(reqT);
+  const tokRows = toObjects(tokT);
+  const opRows = toObjects(byOpT);
+
+  return {
+    hours,
+    totals: {
+      requests: num(totalsRow.requests),
+      dependencies: num(totalsRow.dependencies),
+      failures: num(totalsRow.failures),
+      inputTokens: num(totalsRow.inputTokens),
+      outputTokens: num(totalsRow.outputTokens),
+      p50Ms: numU(totalsRow.p50Ms),
+      p95Ms: numU(totalsRow.p95Ms),
+    },
+    requestsOverTime: reqRows.map((r) => ({ t: String(r.timestamp), count: num(r.count), failed: num(r.failed) })),
+    tokensOverTime: tokRows.map((r) => ({ t: String(r.timestamp), input: num(r.input), output: num(r.output) })),
+    byOperation: opRows.map((r) => ({ operation: String(r.op ?? ''), count: num(r.count), p95Ms: numU(r.p95), failed: num(r.failed) })),
+  };
+}
+
 // ---------------- AI Search ----------------
 
 function searchService(): string {
