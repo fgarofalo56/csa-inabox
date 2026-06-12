@@ -410,10 +410,25 @@ export function searchEndpointBase(serviceName: string): string {
 }
 
 /**
- * AAD scope for AI Search data-plane tokens. `https://search.azure.com/.default`
- * is cloud-invariant — the resource audience is byte-identical in Commercial,
- * GCC, GCC-High and IL5 (only the token issuer changes, not the resource). Kept
- * here so the separate literals across the search clients share one source.
+ * AAD scope (resource audience) for AI Search data-plane tokens. The audience
+ * is NOT cloud-invariant: Commercial / GCC use `https://search.azure.com`, but
+ * Azure US Government (GCC-High / IL5 / DoD) uses `https://search.azure.us`.
+ * Acquiring a Commercial-audience token against a Gov search service fails auth
+ * on every data-plane call (k-NN / hybrid search, index ops). Grounded in
+ * Microsoft Learn "Connect your app to Azure AI Search using identities" which
+ * lists `https://search.azure.us` as the Azure Government audience. Centralised
+ * here so every search client shares one cloud-aware source.
+ */
+export function searchAadScope(): string {
+  return isGovCloud()
+    ? 'https://search.azure.us/.default'
+    : 'https://search.azure.com/.default';
+}
+
+/**
+ * @deprecated Cloud-INVARIANT literal — wrong in Azure Government. Use
+ * `searchAadScope()` instead. Retained only so any straggler import resolves;
+ * it returns the Commercial audience and MUST NOT be used on a Gov data path.
  */
 export const SEARCH_AAD_SCOPE = 'https://search.azure.com/.default';
 

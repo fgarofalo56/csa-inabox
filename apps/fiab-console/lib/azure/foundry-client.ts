@@ -21,7 +21,7 @@ import {
   ManagedIdentityCredential,
   ChainedTokenCredential,
 } from '@azure/identity';
-import { armBase, armScope, amlDataPlaneHost, searchEndpointBase, SEARCH_AAD_SCOPE } from './cloud-endpoints';
+import { armBase, armScope, amlDataPlaneHost, searchEndpointBase, searchAadScope } from './cloud-endpoints';
 
 const ARM_SCOPE = armScope();
 const ML_API = '2024-10-01';
@@ -1190,7 +1190,7 @@ function searchService(): string {
 }
 
 async function searchToken(): Promise<string> {
-  const t = await credential.getToken(SEARCH_AAD_SCOPE);
+  const t = await credential.getToken(searchAadScope());
   if (!t?.token) throw new Error('Failed to acquire token for AI Search');
   return t.token;
 }
