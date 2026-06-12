@@ -43,7 +43,6 @@ env:
   CSA_LOOM_DEPLOYMENT_MODE: single-sub   # CI default; multi-sub via dispatch input
   CSA_LOOM_TOPOLOGY: ${{ inputs.topology || '' }}
   CSA_LOOM_CAPACITY_SKU: F8
-  CSA_LOOM_TOPOLOGY: ${{ inputs.topology || 'tenant' }}
   CSA_LOOM_TARGET_SUBSCRIPTION: ${{ inputs.target_subscription }}
 
 jobs:
@@ -105,11 +104,33 @@ jobs:
       - name: Setup Bicep
         run: az bicep install
 
+      # audit-t157: same "second Console is impossible" invariant as Commercial,
+      # enforced at the CI layer. topology=tenant is rejected when an Admin Plane
+      # (hub) RG already exists in the target sub; dlz-attach must name a NEW
+      # subscription via target_subscription.
+      - name: Topology guard
+        id: topology_guard
+        run: |
+          set -e
+          TOPOLOGY="${CSA_LOOM_TOPOLOGY:-tenant}"
+          echo "topology=$TOPOLOGY"
+          if [ "$TOPOLOGY" = "dlz-attach" ]; then
+            if [ -z "$CSA_LOOM_TARGET_SUBSCRIPTION" ]; then
+              echo "::error::dlz-attach requires target_subscription (the new DLZ subscription)."; exit 1
+            fi
+          else
+            EXISTING=$(az graph query -q "ResourceContainers | where type == 'microsoft.resources/subscriptions/resourcegroups' | where name startswith 'rg-csa-loom-admin-' | project name" --query "data | length(@)" -o tsv 2>/dev/null || echo "0")
+            if [ "${EXISTING:-0}" != "0" ]; then
+              echo "::error::A CSA Loom hub already exists (found $EXISTING rg-csa-loom-admin-* RG). A second Console cannot be deployed — use topology=dlz-attach with target_subscription."; exit 1
+            fi
+          fi
+
       - name: Bicep what-if
         run: |
           az deployment sub what-if \
             --name csa-loom-gcch-ci-${{ github.run_id }} \
             --location $AZURE_LOCATION \
+            ${CSA_LOOM_TARGET_SUBSCRIPTION:+--subscription "$CSA_LOOM_TARGET_SUBSCRIPTION"} \
             --template-file platform/fiab/bicep/main.bicep \
             --parameters platform/fiab/bicep/params/gcc-high.bicepparam \
             --parameters adminEntraGroupId=${{ secrets.FIAB_GOV_ADMIN_GROUP_ID }} \
@@ -137,17 +158,35 @@ jobs:
       - name: Provision (with full Gov dispatch)
         if: github.event_name == 'schedule' || inputs.run_mode == 'full'
         run: |
-          azd env new csa-loom-gcch-ci-${{ github.run_id }} --no-prompt
-          azd env set AZURE_CLOUD $AZURE_CLOUD
-          azd env set AZURE_LOCATION $AZURE_LOCATION
-          azd env set CSA_LOOM_BOUNDARY $CSA_LOOM_BOUNDARY
-          azd env set CSA_LOOM_DEPLOYMENT_MODE $CSA_LOOM_DEPLOYMENT_MODE
-          azd env set CSA_LOOM_TOPOLOGY "$CSA_LOOM_TOPOLOGY"
-          azd env set CSA_LOOM_CAPACITY_SKU $CSA_LOOM_CAPACITY_SKU
-          azd env set CSA_LOOM_ADMIN_GROUP_ID ${{ secrets.FIAB_GOV_ADMIN_GROUP_ID }}
-          azd env set CSA_LOOM_OPENAI_LOCATION usgovvirginia
-          azd env set CSA_LOOM_EMBEDDINGS_LOCATION usgovarizona
-          azd provision --no-prompt
+          set -e
+          if [ "$CSA_LOOM_TOPOLOGY" = "dlz-attach" ]; then
+            # dlz-attach: provision the DLZ directly INTO the new target sub,
+            # mirroring Commercial. azd would deploy into the logged-in (hub) sub,
+            # so the DLZ RG/module (single-arg resourceGroup()) would land in the
+            # wrong subscription. az deployment sub create scoped to the target sub
+            # makes subscription() resolve to it, per main.bicep's dlz-attach scope.
+            az deployment sub create \
+              --name csa-loom-gcch-ci-${{ github.run_id }} \
+              --location "$AZURE_LOCATION" \
+              --subscription "$CSA_LOOM_TARGET_SUBSCRIPTION" \
+              --template-file "$GITHUB_WORKSPACE/platform/fiab/bicep/main.bicep" \
+              --parameters "$GITHUB_WORKSPACE/platform/fiab/bicep/params/gcc-high.bicepparam" \
+              --parameters adminEntraGroupId=${{ secrets.FIAB_GOV_ADMIN_GROUP_ID }} \
+              --parameters topology="$CSA_LOOM_TOPOLOGY" \
+              --parameters targetSubscriptionId="$CSA_LOOM_TARGET_SUBSCRIPTION"
+          else
+            azd env new csa-loom-gcch-ci-${{ github.run_id }} --no-prompt
+            azd env set AZURE_CLOUD $AZURE_CLOUD
+            azd env set AZURE_LOCATION $AZURE_LOCATION
+            azd env set CSA_LOOM_BOUNDARY $CSA_LOOM_BOUNDARY
+            azd env set CSA_LOOM_DEPLOYMENT_MODE $CSA_LOOM_DEPLOYMENT_MODE
+            azd env set CSA_LOOM_TOPOLOGY $CSA_LOOM_TOPOLOGY
+            azd env set CSA_LOOM_CAPACITY_SKU $CSA_LOOM_CAPACITY_SKU
+            azd env set CSA_LOOM_ADMIN_GROUP_ID ${{ secrets.FIAB_GOV_ADMIN_GROUP_ID }}
+            azd env set CSA_LOOM_OPENAI_LOCATION usgovvirginia
+            azd env set CSA_LOOM_EMBEDDINGS_LOCATION usgovarizona
+            azd provision --no-prompt
+          fi
         working-directory: platform/fiab/azd
 
       - name: Smoke test (Gov-specific)

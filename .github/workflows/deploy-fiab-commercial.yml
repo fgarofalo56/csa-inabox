@@ -82,7 +82,6 @@ env:
   CSA_LOOM_TOPOLOGY: ${{ inputs.topology || '' }}
   CSA_LOOM_CAPACITY_SKU: ${{ inputs.capacity_sku || 'F8' }}
   # Wizard-provided overrides consumed by the deploy step's -p flags.
-  CSA_LOOM_TOPOLOGY: ${{ inputs.topology || 'tenant' }}
   CSA_LOOM_TARGET_SUBSCRIPTION: ${{ inputs.target_subscription }}
   CSA_LOOM_SUBSCRIPTION_OVERRIDE: ${{ inputs.subscription }}
   CSA_LOOM_DLZ_DOMAIN_NAMES: ${{ inputs.dlz_domain_name }}

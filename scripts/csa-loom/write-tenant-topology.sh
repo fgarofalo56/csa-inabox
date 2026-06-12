@@ -67,7 +67,7 @@ doc = {
     "id": "tenant-topology",
     "tenantId": os.environ["TENANT_ID"],
     "hubSubscriptionId": out("hubSubscriptionId"),
-    "location": out("adminPlaneRgName").split("-")[-1] or out("location"),
+    "location": out("location") or out("adminPlaneRgName").split("-")[-1],
     "boundary": out("boundary"),
     "hubVnetId": out("adminPlaneHubVnetId") or out("hubVnetId"),
     "hubLawId": out("hubLawId"),

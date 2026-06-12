@@ -146,9 +146,14 @@ const useStyles = makeStyles({
   cell: { display: 'flex', flexDirection: 'column', gap: '2px' },
   label: { color: tokens.colorNeutralForeground3 },
   toggleRow: { display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalXS },
+  toggleDesc: { marginLeft: '44px', marginTop: '-6px' },
   footer: { display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: tokens.spacingHorizontalS, paddingTop: tokens.spacingVerticalM },
   inlineLoad: { display: 'flex', alignItems: 'center', gap: tokens.spacingHorizontalS },
   doneCenter: { display: 'flex', flexDirection: 'column', alignItems: 'center', gap: tokens.spacingVerticalM, textAlign: 'center', padding: tokens.spacingVerticalL },
+  hubCardBody: { display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalS, minWidth: 0 },
+  preWrap: { whiteSpace: 'pre-wrap' },
+  preWrapTop: { whiteSpace: 'pre-wrap', marginTop: tokens.spacingVerticalXS },
+  successIcon: { color: tokens.colorPaletteGreenForeground1 },
 });
 
 export function AddLandingZoneWizardPane() {
@@ -341,7 +346,7 @@ export function AddLandingZoneWizardPane() {
           <MessageBar intent="error">
             <MessageBarBody>
               <MessageBarTitle>Could not read the hub topology</MessageBarTitle>
-              <div style={{ whiteSpace: 'pre-wrap' }}>{hubError}</div>
+              <div className={styles.preWrap}>{hubError}</div>
             </MessageBarBody>
           </MessageBar>
           <div className={styles.footer}>
@@ -382,7 +387,7 @@ export function AddLandingZoneWizardPane() {
       <div className={styles.root}>
         <div className={styles.panel}>
           <div className={styles.doneCenter}>
-            <CheckmarkCircle48Filled style={{ color: tokens.colorPaletteGreenForeground1 }} aria-hidden />
+            <CheckmarkCircle48Filled className={styles.successIcon} aria-hidden />
             <Title2>Attach submitted</Title2>
             <Body1>
               "{domainName}" is being attached to the hub.
@@ -438,7 +443,7 @@ export function AddLandingZoneWizardPane() {
                   <MessageBarTitle>
                     {/az role assignment/.test(deployError) ? 'Grant the orchestrator Contributor on the new subscription' : 'Attach error'}
                   </MessageBarTitle>
-                  <div style={{ whiteSpace: 'pre-wrap', marginTop: tokens.spacingVerticalXS }}>{deployError}</div>
+                  <div className={styles.preWrapTop}>{deployError}</div>
                 </MessageBarBody>
               </MessageBar>
               <div className={styles.footer}>
@@ -468,7 +473,7 @@ export function AddLandingZoneWizardPane() {
         {/* Read-only hub coordinates (from the tenant-topology doc). */}
         <div className={styles.hubCard}>
           <span className={styles.iconChip} aria-hidden><Building24Regular /></span>
-          <div style={{ display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalS, minWidth: 0 }}>
+          <div className={styles.hubCardBody}>
             <Body1Strong>Attaching to the existing hub</Body1Strong>
             <div className={styles.hubGrid}>
               <div className={styles.cell}>
@@ -517,7 +522,7 @@ export function AddLandingZoneWizardPane() {
           </Field>
           {subsError && !subsLoading && (
             <MessageBar intent="warning">
-              <MessageBarBody style={{ whiteSpace: 'pre-wrap' }}>{subsError}</MessageBarBody>
+              <MessageBarBody className={styles.preWrap}>{subsError}</MessageBarBody>
             </MessageBar>
           )}
 
@@ -577,7 +582,7 @@ export function AddLandingZoneWizardPane() {
                 onChange={(_, d) => setToggles((s) => ({ ...s, [t.key]: !!d.checked }))}
                 label={t.label}
               />
-              <Caption1 className={styles.label} style={{ marginLeft: '44px', marginTop: '-6px' }}>{t.desc}</Caption1>
+              <Caption1 className={mergeClasses(styles.label, styles.toggleDesc)}>{t.desc}</Caption1>
             </div>
           ))}
         </div>

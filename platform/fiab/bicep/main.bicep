@@ -216,7 +216,7 @@ param dlzDomainNames array = []
 // orchestrator fills from the Cosmos `tenant-topology` doc written at
 // tenant-deploy time.
 // =====================================================================
-@description('dlz-attach: subscription the NEW Data Landing Zone is provisioned into. The orchestrator identity must hold Contributor here.')
+@description('dlz-attach: subscription the NEW Data Landing Zone is provisioned into. The orchestrator identity must hold Contributor here. NOTE: this is NOT the scoping control — the deployment MUST be submitted AT this subscription scope (az deployment sub create --subscription <id> / orchestrator subscription_id), because the dlz-attach RG + module use single-arg resourceGroup() and bind to the deployment subscription. This param is echoed back (dlzAttachTargetSubscriptionId) so the bootstrap/attach contract is self-describing; it does not relocate the deployment by itself.')
 param targetSubscriptionId string = ''
 
 @description('dlz-attach: domain name of the single DLZ being attached (rg-csa-loom-dlz-<attachDomainName>-<location>).')
@@ -1684,6 +1684,11 @@ output topology string = topology
 // operator free-type Azure resource ids.
 // =====================================================================
 output hubSubscriptionId string = subscription().subscriptionId
+// Deployment coordinates the dlz-attach flow needs verbatim — emitted for every
+// topology so write-tenant-topology.sh reads them directly instead of
+// string-splitting adminPlaneRgName (which silently yielded '' for boundary).
+output boundary string = boundary
+output location string = location
 output hubLawId string = topology == 'tenant' ? adminPlane!.outputs.lawId : ''
 output hubAppInsightsConnectionString string = topology == 'tenant' ? adminPlane!.outputs.appInsightsConnectionString : ''
 output hubPrivateDnsZoneIds object = topology == 'tenant' ? adminPlane!.outputs.privateDnsZoneIds : {}
