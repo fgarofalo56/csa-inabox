@@ -463,3 +463,64 @@ def test_deploy_request_accepts_all_valid_boundaries():
             capacity_sku="F2",
         )
         assert req.boundary == boundary
+
+
+# ----- dlz-attach topology (audit-t157) ---------------------------------
+
+
+def test_deploy_parameters_tenant_emits_topology():
+    from loom_setup_orchestrator.orchestrator import _deploy_parameters
+
+    params = _deploy_parameters(
+        {"boundary": "Commercial", "mode": "single-sub", "domain_name": "sales", "capacity_sku": "F8"}
+    )
+    assert params["topology"]["value"] == "tenant"
+    assert params["deploymentMode"]["value"] == "single-sub"
+
+
+def test_attach_parameters_shape():
+    from loom_setup_orchestrator.orchestrator import _deploy_parameters
+
+    params = _deploy_parameters(
+        {
+            "topology": "dlz-attach",
+            "boundary": "Commercial",
+            "domain_name": "finance",
+            "capacity_sku": "F32",
+            "target_subscription_id": "11111111-1111-1111-1111-111111111111",
+            "hubVnetId": "/subscriptions/h/resourceGroups/rg/providers/Microsoft.Network/virtualNetworks/hub",
+            "hubConsolePrincipalId": "principal-oid",
+            "adx_enabled": False,
+        }
+    )
+    assert params["topology"]["value"] == "dlz-attach"
+    assert params["targetSubscriptionId"]["value"] == "11111111-1111-1111-1111-111111111111"
+    assert params["attachDomainName"]["value"] == "finance"
+    # multi-sub sizing but empty spoke arrays (no second console / no [for] loop)
+    assert params["deploymentMode"]["value"] == "multi-sub"
+    assert "dlzSubscriptionIds" not in params
+    assert params["adxEnabled"]["value"] is False
+    assert params["hubVnetId"]["value"].endswith("/hub")
+    assert params["hubConsolePrincipalId"]["value"] == "principal-oid"
+
+
+def test_role_assignment_remediation_commercial():
+    from loom_setup_orchestrator.orchestrator import role_assignment_remediation
+
+    cmd = role_assignment_remediation(
+        principal_id="oid-123", subscription_id="sub-abc", is_gov=False
+    )
+    assert "az role assignment create" in cmd
+    assert "--assignee-object-id oid-123" in cmd
+    assert "--assignee-principal-type ServicePrincipal" in cmd
+    assert "--role Contributor" in cmd
+    assert "/subscriptions/sub-abc" in cmd
+    assert "az cloud set" not in cmd  # commercial → no gov prefix
+
+
+def test_role_assignment_remediation_gov_prefixes_cloud_set():
+    from loom_setup_orchestrator.orchestrator import role_assignment_remediation
+
+    cmd = role_assignment_remediation(principal_id=None, subscription_id="sub-gov", is_gov=True)
+    assert cmd.splitlines()[0] == "az cloud set --name AzureUSGovernment"
+    assert "<orchestrator-principal-object-id>" in cmd  # honest placeholder when unknown

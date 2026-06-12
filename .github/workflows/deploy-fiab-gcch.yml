@@ -27,6 +27,10 @@ on:
           - single-sub
           - tenant
           - dlz-attach
+      target_subscription:
+        description: 'dlz-attach: the NEW subscription the DLZ is provisioned into.'
+        type: string
+        required: false
 
 permissions:
   contents: read
@@ -39,6 +43,8 @@ env:
   CSA_LOOM_DEPLOYMENT_MODE: single-sub   # CI default; multi-sub via dispatch input
   CSA_LOOM_TOPOLOGY: ${{ inputs.topology || '' }}
   CSA_LOOM_CAPACITY_SKU: F8
+  CSA_LOOM_TOPOLOGY: ${{ inputs.topology || 'tenant' }}
+  CSA_LOOM_TARGET_SUBSCRIPTION: ${{ inputs.target_subscription }}
 
 jobs:
   precheck:
@@ -107,7 +113,8 @@ jobs:
             --template-file platform/fiab/bicep/main.bicep \
             --parameters platform/fiab/bicep/params/gcc-high.bicepparam \
             --parameters adminEntraGroupId=${{ secrets.FIAB_GOV_ADMIN_GROUP_ID }} \
-            ${CSA_LOOM_TOPOLOGY:+--parameters topology="$CSA_LOOM_TOPOLOGY"}
+            ${CSA_LOOM_TOPOLOGY:+--parameters topology="$CSA_LOOM_TOPOLOGY"} \
+            ${CSA_LOOM_TARGET_SUBSCRIPTION:+--parameters targetSubscriptionId="$CSA_LOOM_TARGET_SUBSCRIPTION"}
 
       - name: Deploy-verification evidence receipt (§7)
         # Captures the GCC-High deploy-verification acceptance receipt as an

@@ -8,6 +8,8 @@ param environment = 'AzureCloud'
 param location = 'eastus2'
 param boundary = 'Commercial'
 param deploymentMode = 'single-sub'
+// audit-t157: tenant = first-run install (deploys the hub + DLZ). Add-landing-zone uses dlz-attach via the orchestrator, never this param file.
+param topology = 'tenant'
 
 // Compute
 param containerPlatform = 'containerApps'

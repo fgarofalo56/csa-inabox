@@ -21,6 +21,17 @@ on:
         options:
           - whatif-only
           - full
+      topology:
+        description: 'tenant = first-run install (deploys the hub + DLZ). dlz-attach = add ONE DLZ to an existing hub (no Console).'
+        type: choice
+        default: tenant
+        options:
+          - tenant
+          - dlz-attach
+      target_subscription:
+        description: 'dlz-attach: the NEW subscription the DLZ is provisioned into.'
+        type: string
+        required: false
 
 permissions:
   contents: read
@@ -30,6 +41,8 @@ env:
   AZURE_CLOUD: AzureUSGovernment
   AZURE_LOCATION: usgovvirginia
   CSA_LOOM_BOUNDARY: IL5
+  CSA_LOOM_TOPOLOGY: ${{ inputs.topology || 'tenant' }}
+  CSA_LOOM_TARGET_SUBSCRIPTION: ${{ inputs.target_subscription }}
 
 jobs:
   precheck:
@@ -94,7 +107,9 @@ jobs:
             --location $AZURE_LOCATION \
             --template-file platform/fiab/bicep/main.bicep \
             --parameters platform/fiab/bicep/params/il5.bicepparam \
-            --parameters adminEntraGroupId=${{ secrets.FIAB_GOV_ADMIN_GROUP_ID }}
+            --parameters adminEntraGroupId=${{ secrets.FIAB_GOV_ADMIN_GROUP_ID }} \
+            --parameters topology="$CSA_LOOM_TOPOLOGY" \
+            ${CSA_LOOM_TARGET_SUBSCRIPTION:+--parameters targetSubscriptionId="$CSA_LOOM_TARGET_SUBSCRIPTION"}
 
       - name: Deploy-verification evidence receipt (§7)
         # Captures the IL5 deploy-verification acceptance receipt as an artifact:

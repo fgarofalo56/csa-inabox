@@ -1965,3 +1965,67 @@ domain-less workspaces remain valid (the rule is enforced on create only).
   the CAE-internal console name) — the base URL the `dlz-attach` callback POSTs to.
 - `LOOM_INTERNAL_TOKEN` (already Bicep-wired to both apps) gates the internal
   register-domain route; the route **fails closed** when it is unset.
+
+---
+
+## Tenant topology + "Add landing zone" (dlz-attach) — audit-t157
+
+CSA Loom installs in one of two **topologies**:
+
+- **`tenant`** — the first-run install. `main.bicep` deploys the Admin Plane
+  (Console/hub) **plus** the single-sub or multi-sub DLZ(s). This is the ONLY
+  topology that deploys a Console. It is reachable only from the first-run
+  Setup Wizard (`/setup`); once a hub exists `/setup` redirects to
+  `/admin/add-landing-zone` and the server-side deploy route rejects
+  `topology=tenant`, so a **second Console can never be stamped from the UI**.
+  The bicep enforces the same — the `adminPlane` module is gated on
+  `topology == 'tenant'`.
+- **`dlz-attach`** — add ONE Data Landing Zone in a **new subscription** to the
+  already-deployed hub. No Console is deployed. The DLZ reads the hub's
+  coordinates from the Cosmos `tenant-topology` doc (below). Driven by the
+  `/admin → Add landing zone` wizard, the Setup Orchestrator, or the
+  `deploy-fiab-*.yml` workflows (`topology=dlz-attach` + `target_subscription`).
+
+### Post-deploy step: write the tenant-topology doc
+
+After a `topology=tenant` deploy, run **`scripts/csa-loom/write-tenant-topology.sh`**
+to persist the hub coordinates so later attaches never free-type Azure ids:
+
+```bash
+scripts/csa-loom/write-tenant-topology.sh \
+  --deployment-name "$DEPLOY_NAME" \
+  --subscription "<hub-sub-id>" \
+  --cosmos-endpoint "https://<cosmos-acct>.documents.azure.com:443/" \
+  --tenant-id "$AZURE_TENANT_ID"
+```
+
+It reads the `main.bicep` outputs (`hubVnetId`, `hubLawId`, `hubPrivateDnsZoneIds`,
+`hubAdxClusterRgName`, `hubConsolePrincipalId`, …) and upserts them into the
+`loom` DB **`tenant-topology`** container (`id='tenant-topology'`, PK `/tenantId`,
+partitioned by the Entra tenant id). The container is declared in
+`platform/fiab/bicep/modules/landing-zone/cosmos.bicep` **and** created lazily by
+`apps/fiab-console/lib/azure/cosmos-client.ts` `ensure()` (the createIfNotExists
+hotfix fallback). The deploy identity needs **Cosmos DB Built-in Data Contributor**
+on the account; the script fails honestly if a value or a Python dependency
+(`azure-cosmos`, `azure-identity`) is missing — it never writes a partial doc.
+
+### dlz-attach RBAC gate (honest)
+
+The Setup Orchestrator identity must hold **Contributor on the NEW subscription**
+to attach a DLZ there. The orchestrator checks this for real
+(`AuthorizationManagementClient.role_assignments.list_for_scope`) before
+submitting and, when missing, fails with the exact, gov-aware remediation
+(`LOOM_ORCHESTRATOR_PRINCIPAL_ID` is its UAMI object id):
+
+```bash
+# Gov boundaries only:
+az cloud set --name AzureUSGovernment
+az role assignment create \
+  --assignee-object-id <orchestrator-principal-object-id> \
+  --assignee-principal-type ServicePrincipal \
+  --role Contributor \
+  --scope /subscriptions/<targetSubscriptionId>
+```
+
+All coordinates are Azure-native resource ids — attach works with
+`LOOM_DEFAULT_FABRIC_WORKSPACE` unset (no Fabric dependency).
