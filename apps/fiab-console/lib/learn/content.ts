@@ -691,13 +691,25 @@ export type LearnSection =
  * scenarios (docs/fiab/use-cases/), solution accelerators (docs/learn/08-solutions/),
  * and industry blueprints (docs/industries/).
  */
-const USE_CASES: ReadonlyArray<{
+/** One authored real-world use case (CSA-in-a-Box scenario built on Loom). */
+export interface UseCase {
   id: string; title: string; summary: string; category: string; visualType: string;
   /** Per-use-case relative MkDocs doc path → the card's own walkthrough deep link. */
   docPath: string;
   /** Matching one-click content-bundle app id (installable example), when one exists. */
   appId?: string;
-}> = [
+}
+
+/**
+ * Exported so the install-wiring invariant test (use-case-install-wiring.test.ts)
+ * can assert that EVERY authored `appId` resolves in BOTH the content-bundle
+ * REGISTRY (`getBundle`) and `CATALOG_META`. Without that guard, a future
+ * use case that names an `appId` whose bundle was never registered would
+ * SILENTLY drop the "Install live example" button (the `appInstallable` gate in
+ * getLearnCatalog evaluates false) instead of failing CI — exactly the
+ * no-vaporware regression we want caught loudly.
+ */
+export const USE_CASES: ReadonlyArray<UseCase> = [
   // ── Commercial + federal-agency scenarios (docs/use-cases/) ───────────────
   { id: 'doj-antitrust', title: 'DOJ Antitrust Analytics', summary: 'Antitrust compliance + investigation analytics — step-by-step domain build on Loom.', category: 'Government', visualType: 'warehouse', docPath: 'use-cases/doj-antitrust-deep-dive' },
   { id: 'gov-data-analytics', title: 'Government Data Analytics', summary: 'General government analytics platform on Azure-native Loom services.', category: 'Government', visualType: 'lakehouse', docPath: 'use-cases/government-data-analytics' },
