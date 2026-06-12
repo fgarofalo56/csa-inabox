@@ -43,9 +43,21 @@ import { GeoJsonMap } from '@/lib/components/graph/geojson-map';
 import { KustoResultsGrid } from '@/lib/components/adx/kusto-results-grid';
 
 const useStyles = makeStyles({
-  pad: { padding: 16, display: 'flex', flexDirection: 'column', gap: 12 },
-  treePad: { padding: 12, display: 'flex', flexDirection: 'column', gap: 12 },
-  field: { display: 'flex', flexDirection: 'column', gap: 4 },
+  pad: {
+    padding: tokens.spacingVerticalL,
+    display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalM,
+    minHeight: 0, flex: 1, overflowY: 'auto',
+  },
+  treePad: { padding: tokens.spacingVerticalM, display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalM },
+  treeHeader: { display: 'flex', alignItems: 'center', gap: tokens.spacingHorizontalSNudge },
+  hint: { color: tokens.colorNeutralForeground3 },
+  field: { display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalXS },
+  tabStrip: {
+    paddingInline: tokens.spacingHorizontalL,
+    paddingBlockStart: tokens.spacingVerticalS,
+    ...shorthands.borderBottom('1px', 'solid', tokens.colorNeutralStroke2),
+    backgroundColor: tokens.colorNeutralBackground1,
+  },
   filterBar: {
     display: 'flex', gap: tokens.spacingHorizontalM, alignItems: 'flex-end', flexWrap: 'wrap',
     ...shorthands.padding(tokens.spacingVerticalS, tokens.spacingHorizontalM),
@@ -55,6 +67,9 @@ const useStyles = makeStyles({
   },
   grow: { flex: 1, minWidth: 160 },
   narrow: { width: 120 },
+  graphWrap: { display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalXS },
+  graphCaption: { color: tokens.colorNeutralForeground3 },
+  resultHeader: { display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: tokens.spacingHorizontalM, flexWrap: 'wrap' },
 });
 
 type TabKey = 'link' | 'geo' | 'timeline';
@@ -218,7 +233,7 @@ export function TapestryEditor({ item, id }: { item: FabricItemType; id: string 
       ribbon={ribbon}
       leftPanel={
         <div className={s.treePad}>
-          <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+          <div className={s.treeHeader}>
             <DatabaseStack20Regular />
             <Subtitle2>Investigation</Subtitle2>
           </div>
@@ -233,14 +248,14 @@ export function TapestryEditor({ item, id }: { item: FabricItemType; id: string 
           <Field label="Seed / focus node id (shared)" hint="Set by clicking a node, or type one. Used by shortest-path / neighbors and carried across panes.">
             <Input value={seedId} onChange={(_: unknown, d: any) => setSeedId(d.value)} placeholder="p-alice" />
           </Field>
-          <Caption1 style={{ color: tokens.colorNeutralForeground3 }}>
+          <Caption1 className={s.hint}>
             Tip: run admin <strong>Load sample data</strong> (kind=investigation) once to seed Node_*/Edge_* tables.
           </Caption1>
         </div>
       }
       main={
         <>
-          <div style={{ padding: '8px 16px 0', borderBottom: `1px solid ${tokens.colorNeutralStroke2}` }}>
+          <div className={s.tabStrip}>
             <TabList selectedValue={tab} onTabSelect={(_: unknown, d: any) => setTab(d.value)}>
               <Tab value="link">Link analysis</Tab>
               <Tab value="geo">Geo</Tab>
@@ -287,7 +302,7 @@ export function TapestryEditor({ item, id }: { item: FabricItemType; id: string 
                 {linkLoading && <Spinner size="small" label="Running link analysis…" labelPosition="after" />}
                 <GateBar result={linkResult} what="Link analysis" />
                 {linkGraph && (
-                  <div onClickCapture={(e) => {
+                  <div className={s.graphWrap} onClickCapture={(e) => {
                     // Capture a node click (force-directed graph nodes carry aria-label "Node <x>").
                     const t = (e.target as HTMLElement)?.closest('[aria-label^="Node "]');
                     const lbl = t?.getAttribute('aria-label');
@@ -297,7 +312,7 @@ export function TapestryEditor({ item, id }: { item: FabricItemType; id: string 
                       if (match) setSeedId(match.id);
                     }
                   }}>
-                    <Caption1 style={{ marginBottom: 4 }}>
+                    <Caption1 className={s.graphCaption}>
                       Force-directed graph ({linkGraph.nodes.length} nodes, {linkGraph.edges.length} edges) · click a node to set the shared seed
                     </Caption1>
                     <ForceDirectedGraph nodes={linkGraph.nodes} edges={linkGraph.edges} />
@@ -331,7 +346,12 @@ export function TapestryEditor({ item, id }: { item: FabricItemType; id: string 
                 <GateBar result={geoResult} what="Geo analysis" />
                 {geoFc && (
                   <>
-                    <Subtitle2>Entity map ({geoResult?.count ?? 0} located node{geoResult?.count === 1 ? '' : 's'})</Subtitle2>
+                    <div className={s.resultHeader}>
+                      <Subtitle2>Entity map</Subtitle2>
+                      <Badge appearance="tint" color="brand">
+                        {geoResult?.count ?? 0} located node{geoResult?.count === 1 ? '' : 's'}
+                      </Badge>
+                    </div>
                     <GeoJsonMap geojson={geoFc} rasterUrl={null} />
                   </>
                 )}
@@ -369,7 +389,12 @@ export function TapestryEditor({ item, id }: { item: FabricItemType; id: string 
                 <GateBar result={timelineResult} what="Timeline analysis" />
                 {timelineResult?.ok && (
                   <>
-                    <Label>Events per {WINDOW_LABELS[twindow].toLowerCase()} bucket, by relationship</Label>
+                    <div className={s.resultHeader}>
+                      <Label>Events per {WINDOW_LABELS[twindow].toLowerCase()} bucket, by relationship</Label>
+                      {typeof timelineResult.rowCount === 'number' && (
+                        <Badge appearance="tint" color="brand">{timelineResult.rowCount} bucket{timelineResult.rowCount === 1 ? '' : 's'}</Badge>
+                      )}
+                    </div>
                     <KustoResultsGrid
                       columns={timelineResult.columns || []}
                       columnTypes={timelineResult.columnTypes}
