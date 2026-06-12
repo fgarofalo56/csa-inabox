@@ -15200,6 +15200,26 @@ function PaginatedReportDesigner({ item, id }: { item: FabricItemType; id: strin
   const [exportErr, setExportErr] = useState<string | null>(null);
   const [exportHint, setExportHint] = useState<NotConfiguredHint | undefined>(undefined);
 
+  // ── Power BI in-place embed (OPT-IN) ─────────────────────────────────────
+  // The Azure-native designer + export above are the DEFAULT and work with no
+  // Power BI / Fabric (no-fabric-dependency.md). When the Console identity is
+  // registered in Power BI and added to a workspace, an additional "Live
+  // preview (Power BI)" tab embeds a published paginated (RDL) report in place
+  // via IPaginatedReportLoadConfiguration — the same renderer + multi-resource
+  // embed-token route the report editor uses. The operator picks the Power BI
+  // workspace + published paginated report to view; the RDL parameter form
+  // seeds the report parameters (rp:) the viewer exposes.
+  const pbiWs = usePowerBiWorkspaces();
+  const powerBiConfigured = !!(pbiWs.workspaces && pbiWs.workspaces.length > 0 && !pbiWs.error);
+  const [designView, setDesignView] = useState<'designer' | 'preview'>('designer');
+  const [pbiWorkspaceId, setPbiWorkspaceId] = useState('');
+  const [pbiReports, setPbiReports] = useState<ReportLite[] | null>(null);
+  const [pbiReportId, setPbiReportId] = useState('');
+  const [pbiListErr, setPbiListErr] = useState<string | null>(null);
+  const [embed, setEmbed] = useState<{ token: string; embedUrl: string; reportId: string } | null>(null);
+  const [embedErr, setEmbedErr] = useState<string | null>(null);
+  const [viewerErr, setViewerErr] = useState<string | null>(null);
+
   // Dialogs
   const [dsDialog, setDsDialog] = useState<{ open: boolean; editing?: RdlDataSource }>(() => ({ open: false }));
   const [dsetDialog, setDsetDialog] = useState<{ open: boolean; editing?: RdlDataset }>(() => ({ open: false }));
@@ -15296,6 +15316,81 @@ function PaginatedReportDesigner({ item, id }: { item: FabricItemType; id: strin
     } catch (e: any) { setExportErr(e?.message || String(e)); }
     finally { setExportBusy(null); }
   }, [def, workspaceId, id]);
+
+  // Default the Power BI workspace to the first one the Console can see, so the
+  // preview tab loads its paginated-report list without a manual pick.
+  useEffect(() => {
+    if (!pbiWorkspaceId && pbiWs.workspaces && pbiWs.workspaces.length > 0) setPbiWorkspaceId(pbiWs.workspaces[0].id);
+  }, [pbiWorkspaceId, pbiWs.workspaces]);
+
+  // List the published Power BI paginated (RDL) reports in the picked workspace.
+  // Real REST via the BFF (GET /api/items/paginated-report?workspaceId=…).
+  useEffect(() => {
+    if (!powerBiConfigured || !pbiWorkspaceId) { setPbiReports(null); return; }
+    let cancelled = false;
+    (async () => {
+      setPbiListErr(null);
+      try {
+        const r = await fetch(`/api/items/paginated-report?workspaceId=${encodeURIComponent(pbiWorkspaceId)}`);
+        const j = await r.json();
+        if (cancelled) return;
+        if (j.ok) {
+          setPbiReports(j.reports || []);
+          setPbiReportId((prev) => prev || (j.reports?.[0]?.id ?? ''));
+        } else { setPbiReports([]); setPbiListErr(j.error || `HTTP ${r.status}`); }
+      } catch (e: any) { if (!cancelled) { setPbiReports([]); setPbiListErr(e?.message || String(e)); } }
+    })();
+    return () => { cancelled = true; };
+  }, [powerBiConfigured, pbiWorkspaceId]);
+
+  // Mint a per-report paginated embed token whenever the selected published
+  // Power BI report changes. Paginated reports use the MULTI-RESOURCE
+  // GenerateToken (reports[] + referenced semantic-model datasets[]) — the same
+  // dedicated BFF route the report editor uses (no separate pbi-paginated SDK).
+  useEffect(() => {
+    if (!powerBiConfigured || designView !== 'preview' || !pbiWorkspaceId || !pbiReportId) { setEmbed(null); return; }
+    let cancelled = false;
+    (async () => {
+      setEmbedErr(null); setViewerErr(null);
+      try {
+        const sel = pbiReports?.find((r) => r.id === pbiReportId);
+        const r = await fetch(`/api/items/report/${encodeURIComponent(pbiReportId)}/paginated-embed-token`, {
+          method: 'POST',
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify({ workspaceId: pbiWorkspaceId, datasetIds: sel?.datasetId ? [sel.datasetId] : [] }),
+        });
+        const j = await r.json();
+        if (cancelled) return;
+        if (j.ok && j.token && j.embedUrl) setEmbed({ token: j.token, embedUrl: j.embedUrl, reportId: j.reportId });
+        else { setEmbedErr(j.error || `HTTP ${r.status}`); setEmbed(null); }
+      } catch (e: any) { if (!cancelled) { setEmbedErr(e?.message || String(e)); setEmbed(null); } }
+    })();
+    return () => { cancelled = true; };
+  }, [powerBiConfigured, designView, pbiWorkspaceId, pbiReportId, pbiReports]);
+
+  // Structured `rp:` parameter values seeded into the embed from the RDL
+  // parameter form — NOT a free-form JSON blob (loom-no-freeform-config.md).
+  // Only parameters that carry a default value are sent; the viewer's parameter
+  // bar lets the user change them in place. (Multi-value is unsupported when
+  // embedding paginated reports, so each parameter contributes a single value.)
+  const paramValues = useMemo<Array<{ name: string; value: string }>>(
+    () => (def?.parameters || [])
+      .filter((p) => p.defaultValue != null && p.defaultValue !== '')
+      .map((p) => ({ name: p.name, value: String(p.defaultValue) })),
+    [def?.parameters],
+  );
+
+  // The `error` event is the ONLY load signal paginated embeds emit (Microsoft
+  // documents that `loaded`/`rendered` do not fire for paginated reports), so we
+  // wire just that to surface a render failure in the viewer banner.
+  const onEmbedded = useCallback((e: any) => {
+    try {
+      e?.on?.('error', (ev: any) => {
+        const msg = ev?.detail?.message || ev?.detail?.detailedMessage;
+        if (msg) setViewerErr(String(msg));
+      });
+    } catch { /* event wiring best-effort */ }
+  }, []);
 
   if (isNew) {
     return (
@@ -15400,7 +15495,7 @@ function PaginatedReportDesigner({ item, id }: { item: FabricItemType; id: strin
       {exportErr && (
         <NotConfiguredBar surface="Paginated report export" hint={exportHint} rawError={exportErr} />
       )}
-      {!renderDeployed && (
+      {!renderDeployed && designView === 'designer' && (
         <MessageBar intent="warning"><MessageBarBody>
           <MessageBarTitle>Export renderer not wired in this deployment</MessageBarTitle>
           Authoring works fully. To enable PDF / Excel / Word export, deploy{' '}
@@ -15409,7 +15504,81 @@ function PaginatedReportDesigner({ item, id }: { item: FabricItemType; id: strin
         </MessageBarBody></MessageBar>
       )}
 
-      {def && (
+      {/* Designer (Azure-native DEFAULT) vs. opt-in Power BI live preview. The
+          preview tab is disabled-with-reason until Power BI is configured, so
+          there is never a dead control (no-vaporware.md). */}
+      <TabList selectedValue={designView} onTabSelect={(_, d) => setDesignView(d.value as 'designer' | 'preview')} style={{ marginBottom: 8 }}>
+        <Tab value="designer" icon={<Table20Regular />}>Designer</Tab>
+        <Tab value="preview" icon={<Eye20Regular />} disabled={!powerBiConfigured}
+          title={powerBiConfigured ? 'Embed a published Power BI paginated report in place' : 'Power BI embed is opt-in; the Console identity is not registered in any Power BI workspace'}>
+          Live preview (Power BI)
+        </Tab>
+      </TabList>
+
+      {designView === 'preview' && (
+        <div style={{ flex: '1 1 auto', minWidth: 0 }}>
+          <div className={s.toolbar} style={{ marginBottom: 8 }}>
+            <WorkspacePicker value={pbiWorkspaceId} onChange={(v) => { setPbiWorkspaceId(v); setPbiReportId(''); }} {...pbiWs} />
+            <Field label="Published paginated report" style={{ minWidth: 280 }}>
+              <Select value={pbiReportId} onChange={(_, d) => setPbiReportId((d as any).value)} disabled={!pbiReports || pbiReports.length === 0}>
+                {!pbiReportId && <option value="">{pbiReports == null ? 'Loading…' : 'Select a paginated report'}</option>}
+                {(pbiReports || []).map((r) => <option key={r.id} value={r.id}>{r.name}</option>)}
+              </Select>
+            </Field>
+          </div>
+          {pbiListErr && <MessageBar intent="error" style={{ marginBottom: 8 }}><MessageBarBody><MessageBarTitle>Could not list paginated reports</MessageBarTitle>{pbiListErr}</MessageBarBody></MessageBar>}
+          {pbiReports && pbiReports.length === 0 && !pbiListErr && (
+            <MessageBar intent="warning" style={{ marginBottom: 8 }}>
+              <MessageBarBody>
+                <MessageBarTitle>No published paginated reports</MessageBarTitle>
+                This Power BI workspace has no paginated (RDL) reports to embed. Publish one to Power BI (or pick a different
+                workspace). The Loom-native <strong>Designer</strong> + <strong>Export</strong> path needs no Power BI.
+              </MessageBarBody>
+            </MessageBar>
+          )}
+          {viewerErr && <MessageBar intent="error" style={{ marginBottom: 8 }}><MessageBarBody>{viewerErr}</MessageBarBody></MessageBar>}
+          {pbiReportId && (
+            embed ? (
+              <>
+                <MessageBar intent="info" style={{ marginBottom: 8 }}>
+                  <MessageBarBody>
+                    <MessageBarTitle>Paginated report — in-place embed</MessageBarTitle>
+                    Rendered live via the Power BI paginated viewer (IPaginatedReportLoadConfiguration).
+                    Use the parameter bar to filter; drill-through links inside the report navigate in place.
+                    Use the <strong>Export</strong> ribbon (PDF / Excel / Word) for a downloadable copy.
+                  </MessageBarBody>
+                </MessageBar>
+                <PowerBIEmbedFrame
+                  embedType="report"
+                  embedVariant="paginated"
+                  id={embed.reportId}
+                  embedUrl={embed.embedUrl}
+                  accessToken={embed.token}
+                  height={680}
+                  parameterValues={paramValues}
+                  onEmbedded={onEmbedded}
+                />
+              </>
+            ) : embedErr ? (
+              <MessageBar intent="error">
+                <MessageBarBody>
+                  <MessageBarTitle>Could not mint paginated embed token</MessageBarTitle>
+                  {embedErr}. The Console UAMI must be a workspace <strong>Member</strong> (not Contributor/Viewer)
+                  and the tenant setting <strong>&ldquo;Service principals can use Fabric APIs&rdquo;</strong> must be enabled
+                  with the UAMI&rsquo;s security group. In GCC-High / DoD set{' '}
+                  <code>LOOM_POWERBI_BASE=https://api.powerbigov.us/v1.0/myorg</code>.
+                </MessageBarBody>
+              </MessageBar>
+            ) : (
+              <div style={{ display: 'flex', justifyContent: 'center', padding: '48px 0' }}>
+                <Spinner size="medium" label="Loading paginated report embed…" labelPosition="below" />
+              </div>
+            )
+          )}
+        </div>
+      )}
+
+      {designView === 'designer' && def && (
         <>
           {/* Report + page setup */}
           <div className={s.card}>
@@ -15451,7 +15620,7 @@ function PaginatedReportDesigner({ item, id }: { item: FabricItemType; id: strin
           )}
         </>
       )}
-      {!def && !loadErr && <Spinner label="Loading report…" />}
+      {designView === 'designer' && !def && !loadErr && <Spinner label="Loading report…" />}
     </div>
   );
 
