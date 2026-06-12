@@ -1027,15 +1027,17 @@ export const FABRIC_ITEM_TYPES: readonly FabricItemType[] = [
       ],
       "docsUrl": "https://learn.microsoft.com/azure/azure-monitor/alerts/alerts-types#log-alerts"
     } },
-  { slug: 'aip-logic', displayName: 'AIP Logic function', restType: 'AipLogic', category: 'Fabric IQ', preview: true,
-    description: 'No-code typed LLM function — typed input → ordered LLM / tool steps → typed output, callable as an endpoint.',
+  { slug: 'aip-logic', displayName: 'Spindle (AIP Logic & agents)', restType: 'AipLogic', category: 'Fabric IQ', preview: true,
+    description: 'Spindle Studio — author typed AI logic AND tool-calling agents over the Weave ontology: typed input → ordered steps → typed output, grounded on the ontology, runnable on Azure OpenAI / Foundry.',
     learnContent: {
-      "overview": "Palantir AIP Logic builds no-code, typed LLM-backed functions (typed input → ordered LLM/extract/branch steps → typed output). The CSA Loom equivalent (Spindle) authors the typed input schema and ordered steps with dropdowns (no freeform JSON), then exposes a callable function endpoint that runs against the live Azure OpenAI deployment the Foundry hub resolves. Azure-native default — no Fabric required; an honest gate names the AOAI env var when no model is deployed.",
+      "overview": "Palantir AIP Logic builds no-code typed LLM functions; Palantir AIP runs agents + logic over the ontology. The CSA Loom equivalent — Spindle Studio — covers both. Author the typed input schema and ordered steps with dropdowns (no freeform JSON), bind a Weave ontology so the function grounds on its entity types and Lakehouse/Warehouse data bindings, then invoke it as typed logic (one grounded turn) or as a multi-step tool-calling agent. The agent runtime reuses the production copilot orchestrator with the full Loom data-tool registry; the logic runtime writes real T-SQL/Spark-SQL that runs read-only on Synapse and cites real rows. You can also publish the logic as a real Azure AI Foundry Agent Service agent and inspect its run steps. Azure-native default — no Fabric required; honest gates name the AOAI env var (no model deployed) and the Foundry env vars (Agent Service unconfigured, e.g. in Azure Government).",
       "steps": [
         { "title": "Define typed inputs", "body": "Add named input parameters with types (string / number / boolean) using the field builder." },
+        { "title": "Ground on the Weave", "body": "Bind a Weave ontology so Spindle runs against its entity types and Lakehouse/Warehouse data bindings (real Synapse queries)." },
         { "title": "Add ordered steps", "body": "Add LLM-prompt, extract, or branch steps from a dropdown — no freeform JSON." },
         { "title": "Define the output", "body": "Set the typed output shape the function returns." },
-        { "title": "Invoke", "body": "Run the function with sample inputs; it executes against the live Azure OpenAI deployment, or shows the AOAI remediation gate." }
+        { "title": "Invoke (logic or agent)", "body": "Toggle Logic (single grounded turn) or Agent (multi-step tool-calling). Both run against the live Azure OpenAI deployment; the agent returns a per-step run trace, or an honest remediation gate." },
+        { "title": "Publish as a Foundry agent", "body": "Deploy the logic to Azure AI Foundry Agent Service, then run + inspect its steps — or use the Azure-native Invoke path where Agent Service is unsupported (Azure Gov)." }
       ],
       "docsUrl": "https://learn.microsoft.com/azure/ai-services/openai/overview"
     } },
