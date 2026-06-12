@@ -107,6 +107,7 @@ curl -XPOST localhost:8080/servers/time/tools/list \
 
 ## Related
 
+- MCP library index: `docs/fiab/mcp/csa_loom_mcp_library.md`
 - Analog: `../fiab-mcp-config` (self-hosted Azure MCP server)
 - Console contract: `apps/fiab-console/lib/types/mcp-config.ts`,
   `apps/fiab-console/lib/azure/mcp-client.ts`
