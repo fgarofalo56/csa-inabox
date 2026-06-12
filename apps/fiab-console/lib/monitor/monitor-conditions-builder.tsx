@@ -68,13 +68,49 @@ export function freqMinutes(v?: string): number {
 }
 
 const useStyles = makeStyles({
-  fieldRow: { display: 'flex', gap: '12px', flexWrap: 'wrap' },
-  fieldCol: { display: 'flex', flexDirection: 'column', gap: '6px', minWidth: '210px', flex: 1 },
-  hint: { color: tokens.colorNeutralForeground3 },
-  summary: { display: 'inline-flex', alignItems: 'center', gap: '8px', flexWrap: 'wrap' },
+  fieldRow: {
+    display: 'flex',
+    gap: tokens.spacingHorizontalM,
+    flexWrap: 'wrap',
+    alignItems: 'flex-start',
+  },
+  fieldCol: {
+    display: 'flex',
+    flexDirection: 'column',
+    gap: tokens.spacingVerticalXS,
+    minWidth: '210px',
+    flex: 1,
+  },
+  hintCol: {
+    display: 'flex',
+    flexDirection: 'column',
+    justifyContent: 'center',
+    gap: tokens.spacingVerticalXS,
+    minWidth: '210px',
+    flex: 1,
+    paddingTop: tokens.spacingVerticalXXS,
+  },
+  hint: {
+    color: tokens.colorNeutralForeground3,
+    lineHeight: tokens.lineHeightBase200,
+  },
+  summary: {
+    display: 'inline-flex',
+    alignItems: 'center',
+    gap: tokens.spacingHorizontalS,
+    flexWrap: 'wrap',
+  },
   pill: {
-    fontVariantNumeric: 'tabular-nums',
+    display: 'inline-flex',
+    alignItems: 'center',
+    columnGap: tokens.spacingHorizontalXXS,
+    paddingInline: tokens.spacingHorizontalS,
+    paddingBlock: tokens.spacingVerticalXXS,
+    borderRadius: tokens.borderRadiusMedium,
+    backgroundColor: tokens.colorNeutralBackground3,
     color: tokens.colorNeutralForeground2,
+    fontVariantNumeric: 'tabular-nums',
+    whiteSpace: 'nowrap',
   },
 });
 
@@ -105,10 +141,12 @@ export function MonitorConditionsBuilder(props: MonitorConditionsBuilderProps) {
   if (mode === 'display') {
     return (
       <span className={s.summary}>
-        <Caption1 className={s.pill}>
+        <Caption1 className={s.pill} title={`Fires when the KQL row count ${opLabel(operator)} ${threshold}`}>
           row count {opSign(operator)} {threshold}
         </Caption1>
-        <Caption1 className={s.pill}>· {freqLabel(evaluationFrequency)}</Caption1>
+        <Caption1 className={s.pill} title="Evaluation frequency">
+          {freqLabel(evaluationFrequency)}
+        </Caption1>
         <Badge appearance="outline" color={severity <= 1 ? 'danger' : severity === 2 ? 'warning' : 'informative'}>
           Sev {severity}
         </Badge>
@@ -143,7 +181,7 @@ export function MonitorConditionsBuilder(props: MonitorConditionsBuilderProps) {
             />
           </Field>
         </div>
-        <div className={s.fieldCol}>
+        <div className={s.hintCol}>
           <Caption1 className={s.hint}>
             Azure Monitor evaluates the row count of the KQL result against this threshold.
             The rule fires when the count {opSign(operator)} {threshold}.
