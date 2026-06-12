@@ -251,9 +251,10 @@ export function StatTile({ label, value, sub }: { label: string; value: string; 
       style={{
         padding: '10px 14px',
         border: `1px solid ${tokens.colorNeutralStroke2}`,
-        borderRadius: 6,
+        borderRadius: tokens.borderRadiusLarge,
         minWidth: 130,
         background: tokens.colorNeutralBackground1,
+        boxShadow: tokens.shadow2,
       }}
     >
       <div style={{ fontSize: 11, color: tokens.colorNeutralForeground3 }}>{label}</div>

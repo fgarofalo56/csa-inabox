@@ -53,6 +53,42 @@ const useStyles = makeStyles({
   empty: { padding: 16, color: tokens.colorNeutralForeground3, fontStyle: 'italic' },
   toolbar: { display: 'flex', gap: 12, alignItems: 'center', flexWrap: 'wrap' },
   secret: { fontFamily: 'monospace', fontSize: 12, wordBreak: 'break-all' },
+  // Stat tiles laid out as an even responsive grid (no ragged flex-wrap rows).
+  statRow: {
+    display: 'grid',
+    gridTemplateColumns: 'repeat(auto-fill, minmax(140px, 1fr))',
+    gap: 12,
+  },
+  // Charts laid out two-up on wide screens, single-column when narrow.
+  chartGrid: {
+    display: 'grid',
+    gridTemplateColumns: 'repeat(auto-fit, minmax(360px, 1fr))',
+    gap: 16,
+  },
+  // A framed "card" around a chart + its heading/caption so the dashboard reads
+  // as discrete panels rather than loose SVGs floating on the background.
+  chartCard: {
+    display: 'flex',
+    flexDirection: 'column',
+    gap: 4,
+    padding: 12,
+    border: `1px solid ${tokens.colorNeutralStroke2}`,
+    borderRadius: tokens.borderRadiusLarge,
+    backgroundColor: tokens.colorNeutralBackground1,
+    boxShadow: tokens.shadow2,
+  },
+  chartTitle: { fontWeight: 600 },
+  chartCaption: { color: tokens.colorNeutralForeground3 },
+  detailCard: {
+    display: 'flex',
+    flexDirection: 'column',
+    gap: 8,
+    padding: 12,
+    marginTop: 8,
+    border: `1px solid ${tokens.colorNeutralStroke2}`,
+    borderRadius: tokens.borderRadiusLarge,
+    backgroundColor: tokens.colorNeutralBackground1,
+  },
 });
 
 type LoadState<T> = { loading: boolean; data: T | null; error?: string; hint?: string; notDeployed?: boolean };
@@ -1014,13 +1050,14 @@ interface EvalOutputItem { id: string; status?: string; model?: string; datasour
  * details" view that was previously runs-only.
  */
 function EvalDetailCard({ evalItem }: { evalItem: EvalSummary }) {
+  const s = useStyles();
   const dsc = evalItem.dataSourceConfig as any;
   const criteria = Array.isArray(evalItem.testingCriteria) ? (evalItem.testingCriteria as any[]) : [];
   // Pull item-schema field names from the custom data-source schema when present.
   const itemSchema = dsc?.item_schema?.properties || dsc?.item_schema || dsc?.schema?.properties;
   const fields: string[] = itemSchema && typeof itemSchema === 'object' ? Object.keys(itemSchema) : [];
   return (
-    <div style={{ display: 'flex', flexDirection: 'column', gap: 8, padding: 12, marginTop: 8, border: `1px solid ${tokens.colorNeutralStroke2}`, borderRadius: 6 }}>
+    <div className={s.detailCard}>
       <Body1 style={{ fontWeight: 600 }}>Evaluation details</Body1>
       <div style={{ display: 'grid', gridTemplateColumns: 'auto 1fr', gap: '4px 16px', alignItems: 'baseline' }}>
         <Caption1>ID</Caption1><Caption1 style={{ fontFamily: 'monospace' }}>{evalItem.id}</Caption1>
@@ -1211,15 +1248,15 @@ function EvaluationsPanel({ active, nonce, acct }: { active: boolean; nonce: num
               value2: r.resultCounts?.failed ?? Math.max(0, (r.resultCounts?.total ?? 0) - (r.resultCounts?.passed ?? 0)),
             }));
             return (
-              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(360px, 1fr))', gap: 16, marginTop: 12 }}>
-                <div>
-                  <Body1 style={{ fontWeight: 600 }}>Pass-rate trend</Body1>
-                  <Caption1>Pass rate across this evaluation’s graded runs (oldest → newest).</Caption1>
+              <div className={s.chartGrid} style={{ marginTop: 12 }}>
+                <div className={s.chartCard}>
+                  <Body1 className={s.chartTitle}>Pass-rate trend</Body1>
+                  <Caption1 className={s.chartCaption}>Pass rate across this evaluation’s graded runs (oldest → newest).</Caption1>
                   <LineChart series={trend} xLabel="run #" yLabel="%" yFormat={(v) => `${Math.round(v)}%`} width={420} height={200} />
                 </div>
-                <div>
-                  <Body1 style={{ fontWeight: 600 }}>Compare runs (passed vs failed)</Body1>
-                  <Caption1>Side-by-side passed (green) / failed (red) counts per run.</Caption1>
+                <div className={s.chartCard}>
+                  <Body1 className={s.chartTitle}>Compare runs (passed vs failed)</Body1>
+                  <Caption1 className={s.chartCaption}>Side-by-side passed (green) / failed (red) counts per run.</Caption1>
                   <BarChart bars={compareBars} width={420} />
                 </div>
               </div>
@@ -1286,8 +1323,25 @@ function MonitoringPanel({ active, nonce }: { active: boolean; nonce: number }) 
   const [hours, setHours] = useState('24');
   // useLazyFetch keys off the resolved URL, so changing hours re-fetches.
   const [st, reload] = useLazyFetch<{ ok: boolean; summary: ObsSummary }>(`/api/foundry/observability?hours=${hours}`, active, nonce);
-  if (!active) return null;
   const sum = st.data?.summary;
+
+  // Sortable Operations table (defaults to slowest-first by p95, like the chart).
+  // NOTE: hooks must run before the early `!active` return — keep them here.
+  type OpCol = 'operation' | 'count' | 'p95Ms' | 'failed';
+  const [opSort, setOpSort] = useState<{ col: OpCol; dir: 'ascending' | 'descending' }>({ col: 'p95Ms', dir: 'descending' });
+  const toggleOpSort = (col: OpCol) =>
+    setOpSort((prev) => (prev.col === col ? { col, dir: prev.dir === 'ascending' ? 'descending' : 'ascending' } : { col, dir: col === 'operation' ? 'ascending' : 'descending' }));
+  const sortedOps = useMemo(() => {
+    const list = sum ? [...sum.byOperation] : [];
+    const { col, dir } = opSort;
+    const sign = dir === 'ascending' ? 1 : -1;
+    return list.sort((a, b) => {
+      if (col === 'operation') return sign * (a.operation || '').localeCompare(b.operation || '');
+      return sign * (((a[col] as number) ?? 0) - ((b[col] as number) ?? 0));
+    });
+  }, [sum, opSort]);
+
+  if (!active) return null;
 
   const reqSeries: LineSeries[] = sum ? [
     { label: 'Requests', color: tokens.colorBrandForeground1, points: sum.requestsOverTime.map((r) => ({ x: new Date(r.t).getTime(), y: r.count })) },
@@ -1319,7 +1373,7 @@ function MonitoringPanel({ active, nonce }: { active: boolean; nonce: number }) 
         <EmptyText>No telemetry available.</EmptyText>
       ) : (
         <>
-          <div style={{ display: 'flex', gap: 12, flexWrap: 'wrap' }}>
+          <div className={s.statRow}>
             <StatTile label="Requests" value={fmtNum(sum.totals.requests)} />
             <StatTile label="Dependency calls" value={fmtNum(sum.totals.dependencies)} />
             <StatTile label="Failures" value={fmtNum(sum.totals.failures)} sub={sum.totals.requests + sum.totals.dependencies > 0 ? `${((sum.totals.failures / (sum.totals.requests + sum.totals.dependencies)) * 100).toFixed(1)}% error rate` : undefined} />
@@ -1328,29 +1382,47 @@ function MonitoringPanel({ active, nonce }: { active: boolean; nonce: number }) 
             <StatTile label="Latency p50" value={sum.totals.p50Ms !== undefined ? `${Math.round(sum.totals.p50Ms)} ms` : '—'} />
             <StatTile label="Latency p95" value={sum.totals.p95Ms !== undefined ? `${Math.round(sum.totals.p95Ms)} ms` : '—'} />
           </div>
-          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(420px, 1fr))', gap: 16, marginTop: 8 }}>
-            <div>
-              <Body1 style={{ fontWeight: 600 }}>Request volume</Body1>
-              <Caption1>Requests vs failures over time.</Caption1>
+          <div className={s.chartGrid} style={{ marginTop: 8 }}>
+            <div className={s.chartCard}>
+              <Body1 className={s.chartTitle}>Request volume</Body1>
+              <Caption1 className={s.chartCaption}>Requests vs failures over time.</Caption1>
               <LineChart series={reqSeries} xIsTime xLabel="time" yLabel="count" yFormat={(v) => fmtNum(Math.round(v))} width={480} height={220} emptyText="No requests in this window." />
             </div>
-            <div>
-              <Body1 style={{ fontWeight: 600 }}>Token consumption</Body1>
-              <Caption1>GenAI input/output tokens over time (OpenTelemetry usage spans).</Caption1>
+            <div className={s.chartCard}>
+              <Body1 className={s.chartTitle}>Token consumption</Body1>
+              <Caption1 className={s.chartCaption}>GenAI input/output tokens over time (OpenTelemetry usage spans).</Caption1>
               <LineChart series={tokSeries} xIsTime xLabel="time" yLabel="tokens" yFormat={(v) => fmtNum(Math.round(v))} width={480} height={220} emptyText="No token usage telemetry in this window." />
             </div>
           </div>
-          <Body1 style={{ fontWeight: 600, marginTop: 8 }}>Latency by operation (p95)</Body1>
-          <Caption1>Slowest operations by 95th-percentile duration (top 12 by call count).</Caption1>
-          <BarChart bars={opBars} width={620} valueFormat={(v) => `${v} ms`} emptyText="No operations recorded in this window." />
-          <div className={s.tableWrap} style={{ maxHeight: 260, marginTop: 8 }}>
-            <Table size="small" aria-label="Operations">
+          <div className={s.chartCard} style={{ marginTop: 8 }}>
+            <Body1 className={s.chartTitle}>Latency by operation (p95)</Body1>
+            <Caption1 className={s.chartCaption}>Slowest operations by 95th-percentile duration (top 12 by call count).</Caption1>
+            <BarChart bars={opBars} width={620} valueFormat={(v) => `${v} ms`} emptyText="No operations recorded in this window." />
+          </div>
+          <Subtitle2 style={{ marginTop: 8 }}>Operations ({sum.byOperation.length})</Subtitle2>
+          <Caption1 className={s.chartCaption}>Click a column header to sort.</Caption1>
+          <div className={s.tableWrap} style={{ maxHeight: 260 }}>
+            <Table size="small" aria-label="Operations" sortable>
               <TableHeader><TableRow>
-                <TableHeaderCell>Operation</TableHeaderCell><TableHeaderCell>Calls</TableHeaderCell>
-                <TableHeaderCell>p95 (ms)</TableHeaderCell><TableHeaderCell>Failures</TableHeaderCell>
+                <TableHeaderCell
+                  sortDirection={opSort.col === 'operation' ? opSort.dir : undefined}
+                  onClick={() => toggleOpSort('operation')}
+                >Operation</TableHeaderCell>
+                <TableHeaderCell
+                  sortDirection={opSort.col === 'count' ? opSort.dir : undefined}
+                  onClick={() => toggleOpSort('count')}
+                >Calls</TableHeaderCell>
+                <TableHeaderCell
+                  sortDirection={opSort.col === 'p95Ms' ? opSort.dir : undefined}
+                  onClick={() => toggleOpSort('p95Ms')}
+                >p95 (ms)</TableHeaderCell>
+                <TableHeaderCell
+                  sortDirection={opSort.col === 'failed' ? opSort.dir : undefined}
+                  onClick={() => toggleOpSort('failed')}
+                >Failures</TableHeaderCell>
               </TableRow></TableHeader>
               <TableBody>
-                {sum.byOperation.map((o, i) => (
+                {sortedOps.map((o, i) => (
                   <TableRow key={i}>
                     <TableCell className={s.cell}>{o.operation || '—'}</TableCell>
                     <TableCell className={s.cell}>{o.count}</TableCell>
@@ -1597,7 +1669,9 @@ function FineTuningPanel({ active, nonce, acct }: { active: boolean; nonce: numb
                 if (valid.length) lossSeries.push({ label: 'Validation loss', color: tokens.colorPaletteRedForeground1, points: valid });
                 if (!lossSeries.length) return null;
                 return (
-                  <div style={{ marginBottom: 12 }}>
+                  <div className={s.chartCard} style={{ marginBottom: 12 }}>
+                    <Body1 className={s.chartTitle}>Loss curve</Body1>
+                    <Caption1 className={s.chartCaption}>Training and validation loss over training steps.</Caption1>
                     <LineChart series={lossSeries} xLabel="step" yLabel="loss" width={620} height={240} emptyText="No loss metrics emitted yet." />
                   </div>
                 );
