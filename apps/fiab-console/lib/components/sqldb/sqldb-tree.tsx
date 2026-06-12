@@ -173,6 +173,11 @@ export function SqlDbTree({ workspaceId, itemId, server, database, onOpenQuery, 
   const [cols, setCols] = useState<Record<number, SqlColumnRow[] | 'loading' | { error: string }>>({});
   const [indexes, setIndexes] = useState<Record<number, SqlIndexRow[] | 'loading' | { error: string }>>({});
   const [constraints, setConstraints] = useState<Record<number, SqlConstraintRowT[] | 'loading' | { error: string }>>({});
+  // TDS backend dialect of the bound connection, learned from the constraints
+  // GET response: 'sqldb' (Azure SQL / Fabric SQL DB — full engine), 'warehouse'
+  // (Fabric Warehouse / SQL analytics endpoint), or 'synapse-dedicated'. The
+  // inline designer disables the controls a metadata-only backend rejects.
+  const [backendKind, setBackendKind] = useState<'sqldb' | 'warehouse' | 'synapse-dedicated'>('sqldb');
 
   // Constraint-designer dialog (opened from a table's Keys & constraints node).
   const [constraintBuilder, setConstraintBuilder] = useState<
@@ -278,7 +283,12 @@ export function SqlDbTree({ workspaceId, itemId, server, database, onOpenQuery, 
     setConstraints((cs) => ({ ...cs, [objectId]: 'loading' }));
     try {
       const body = await fetch(`/api/sqldb/constraints?${q}&objectId=${objectId}`).then(readJson);
-      if (body.ok) setConstraints((cs) => ({ ...cs, [objectId]: body.constraints || [] }));
+      if (body.ok) {
+        setConstraints((cs) => ({ ...cs, [objectId]: body.constraints || [] }));
+        if (body.backendKind === 'sqldb' || body.backendKind === 'warehouse' || body.backendKind === 'synapse-dedicated') {
+          setBackendKind(body.backendKind);
+        }
+      }
       else setConstraints((cs) => ({ ...cs, [objectId]: { error: body.error || 'failed to load constraints' } }));
     } catch (e: any) {
       setConstraints((cs) => ({ ...cs, [objectId]: { error: e?.message || String(e) } }));
@@ -888,6 +898,7 @@ export function SqlDbTree({ workspaceId, itemId, server, database, onOpenQuery, 
           columns={Array.isArray(cols[constraintBuilder.tableObjectId]) ? (cols[constraintBuilder.tableObjectId] as SqlColumnRow[]) : []}
           existingConstraints={Array.isArray(constraints[constraintBuilder.tableObjectId]) ? (constraints[constraintBuilder.tableObjectId] as SqlConstraintRowT[]) : []}
           hasClusteredIndex={Array.isArray(indexes[constraintBuilder.tableObjectId]) && (indexes[constraintBuilder.tableObjectId] as SqlIndexRow[]).some((i) => i.typeDesc.toUpperCase() === 'CLUSTERED')}
+          backendKind={backendKind}
           q={q}
         />
       )}

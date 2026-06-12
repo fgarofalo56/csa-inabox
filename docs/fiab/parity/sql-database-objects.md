@@ -150,19 +150,34 @@ length-clamped to ≤4000 chars. Drop/enable/disable resolve the constraint from
 
 ### Per-cloud behavior (keys & constraints)
 
-| Constraint | Azure SQL Database (default) | Fabric SQL database | Fabric Warehouse / Synapse dedicated |
-|---|---|---|---|
-| PRIMARY KEY | Fully enforced; CLUSTERED or NONCLUSTERED | Same (same TDS engine) | `NONCLUSTERED NOT ENFORCED` only — separate item type, not this editor |
-| UNIQUE | Fully enforced; NONCLUSTERED | Same | `NONCLUSTERED NOT ENFORCED` only |
-| FOREIGN KEY | Fully enforced; `WITH NOCHECK`; ON DELETE/UPDATE CASCADE/SET NULL/SET DEFAULT | Same | `NOT ENFORCED` only |
-| CHECK | Fully enforced; `WITH NOCHECK` | Same | Not supported |
+The designer auto-detects the bound connection's TDS backend from its server
+FQDN (`detectSqlBackendKind()` in `sql-objects-client.ts`) and emits the correct
+DDL dialect, so the **same** inline designer is safe against every connection
+type:
 
-Loom's target is Azure SQL Database **and** Fabric SQL database, which share the
-same TDS engine and enforce all four types identically — so the designer emits
-standard **enforced** DDL with **no Fabric workspace dependency** (works with
-`LOOM_DEFAULT_FABRIC_WORKSPACE` unset). Fabric Warehouse / Synapse dedicated
-pools (which require `NOT ENFORCED`) are separate item types with their own
-editors and are out of scope for this surface.
+| Constraint | Azure SQL Database / Fabric SQL database (`sqldb`, default) | Fabric Warehouse / SQL analytics endpoint (`warehouse`) | Synapse dedicated SQL pool (`synapse-dedicated`) |
+|---|---|---|---|
+| PRIMARY KEY | Fully enforced; CLUSTERED or NONCLUSTERED | `NONCLUSTERED NOT ENFORCED` (forced) | `NONCLUSTERED NOT ENFORCED` (forced) |
+| UNIQUE | Fully enforced; NONCLUSTERED | `NONCLUSTERED NOT ENFORCED` (forced) | `NONCLUSTERED NOT ENFORCED` (forced) |
+| FOREIGN KEY | Fully enforced; `WITH NOCHECK`; ON DELETE/UPDATE CASCADE/SET NULL/SET DEFAULT | `NOT ENFORCED` (no actions, no `WITH (NO)CHECK`) | **Not supported** (honest 400) |
+| CHECK | Fully enforced; `WITH NOCHECK` | **Not supported** (honest 400) | **Not supported** (honest 400) |
+
+Backend detection: `*.datawarehouse.fabric.microsoft.com/.us` → `warehouse`;
+`*.sql.azuresynapse.net/.usgovcloudapi.net` → `synapse-dedicated`; everything
+else (Azure SQL `*.database.windows.net`, Fabric SQL DB
+`*.database.fabric.microsoft.com`) → `sqldb`.
+
+Loom's **default** target is Azure SQL Database **and** Fabric SQL database,
+which share the same TDS engine and enforce all four types identically — so the
+designer emits standard **enforced** DDL with **no Fabric workspace dependency**
+(works with `LOOM_DEFAULT_FABRIC_WORKSPACE` unset). On a metadata-only backend
+the builder honestly disables the controls that backend rejects (the CHECK tab,
+the CLUSTERED checkbox, `WITH NOCHECK`, ON DELETE/UPDATE, and the FK tab on a
+dedicated pool) and surfaces an info MessageBar explaining the `NOT ENFORCED`
+semantics; the server-side `addConstraint()` is the authority and rejects
+unsupported types with a 400 regardless of the client. Grounded in
+`learn.microsoft.com/fabric/data-warehouse/table-constraints` and
+`learn.microsoft.com/azure/synapse-analytics/sql-data-warehouse/sql-data-warehouse-table-constraints`.
 
 ## Files
 
