@@ -37,6 +37,7 @@ import {
   DialogTitle,
   DialogContent,
   DialogActions,
+  Spinner,
   makeStyles,
   tokens,
   mergeClasses,
@@ -179,6 +180,10 @@ const useStyles = makeStyles({
     marginTop: tokens.spacingVerticalXS,
     fontFamily: tokens.fontFamilyMonospace,
     whiteSpace: 'pre-wrap',
+  },
+  // spacing for per-source remediation MessageBars (griffel class, not inline)
+  sourceBar: {
+    marginTop: tokens.spacingVerticalM,
   },
   // Name cell: color icon chip + name + qualified-name caption
   nameCell: {
@@ -434,7 +439,12 @@ export function FederatedSearch() {
             onKeyDown={(e) => { if (e.key === 'Enter') load(); }}
             data-testid="catalog-search-input"
           />
-          <Button icon={<ArrowSync24Regular />} appearance="primary" onClick={load} disabled={loading}>
+          <Button
+            icon={loading ? <Spinner size="tiny" /> : <ArrowSync24Regular />}
+            appearance="primary"
+            onClick={load}
+            disabled={loading}
+          >
             {loading ? 'Searching…' : 'Search'}
           </Button>
           <Caption1 className={s.searchHint}>
@@ -493,7 +503,7 @@ export function FederatedSearch() {
 
         {/* Per-source NotConfigured hints — real remediation payload */}
         {failedSources.map(([src, stat]) => (
-          <MessageBar key={src} intent="warning" style={{ marginTop: tokens.spacingVerticalM }}>
+          <MessageBar key={src} intent="warning" className={s.sourceBar}>
             <MessageBarBody>
               <MessageBarTitle>{SOURCE_LABEL[src as SourceKey] ?? src} not contributing</MessageBarTitle>
               <Text>{stat.error}</Text>
