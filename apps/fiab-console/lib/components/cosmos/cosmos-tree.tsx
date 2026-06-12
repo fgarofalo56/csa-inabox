@@ -19,13 +19,16 @@
  * create/delete hit the real ARM control plane through the navigator BFF:
  *   - Databases  → /api/cosmos/databases   (list / create / delete)
  *   - Containers → /api/cosmos/containers   (list / create / delete, +pk +RU +ttl)
- *   - Scripts    → /api/cosmos/scripts      (read-only sprocs / triggers / UDFs)
+ *   - Scripts    → /api/cosmos/scripts      (sprocs / triggers / UDFs: list +
+ *                                            create / edit / save / delete;
+ *                                            sproc execute → /scripts/execute)
  *   - Account    → /api/cosmos/account      (header chip)
  *
- * Document read/write, throughput-scale write, indexing-policy write, and
- * script authoring run on data-plane / write surfaces some of which aren't
- * wired yet; those open a work-area tab that renders an honest Fluent
- * MessageBar gate (never a dead node, never fake data) per no-vaporware.md.
+ * Script authoring (stored procedures / triggers / UDFs) is fully wired: each
+ * Scripts node opens a CosmosScriptEditor tab that reads/writes the real ARM
+ * control plane and executes sprocs against the data plane. Any surface that
+ * still requires un-provisioned infra renders an honest Fluent MessageBar gate
+ * (never a dead node, never fake data) per no-vaporware.md.
  *
  * When the navigator account is unconfigured the routes 503 and the whole pane
  * shows a single honest infra-gate MessageBar naming the env var + role.
@@ -50,18 +53,62 @@ import {
 } from '@fluentui/react-icons';
 
 const useStyles = makeStyles({
-  root: { display: 'flex', flexDirection: 'column', gap: 6, padding: 6, height: '100%', minWidth: 240 },
+  root: {
+    display: 'flex',
+    flexDirection: 'column',
+    gap: tokens.spacingVerticalXS,
+    padding: tokens.spacingHorizontalXS,
+    height: '100%',
+    minWidth: '240px',
+    backgroundColor: tokens.colorNeutralBackground1,
+  },
   // Studio command row: ＋New… split button + Refresh + collapse caret.
-  cmdRow: { display: 'flex', alignItems: 'center', gap: 4, padding: '2px 2px 0' },
-  newBtn: { minWidth: 92 },
+  cmdRow: {
+    display: 'flex',
+    alignItems: 'center',
+    gap: tokens.spacingHorizontalXXS,
+    padding: `${tokens.spacingVerticalXXS} ${tokens.spacingHorizontalXXS} 0`,
+  },
+  newBtn: { minWidth: '96px' },
   spacer: { flex: 1 },
-  searchRow: { display: 'flex', alignItems: 'center', gap: 4 },
-  rowLayout: { display: 'flex', alignItems: 'center', gap: 6, width: '100%' },
-  rowActions: { marginLeft: 'auto', display: 'flex', alignItems: 'center', gap: 2 },
-  acctChip: { display: 'flex', flexWrap: 'wrap', gap: 4, alignItems: 'center', padding: '0 2px' },
+  searchRow: { display: 'flex', alignItems: 'center', gap: tokens.spacingHorizontalXXS },
+  searchField: { flex: 1 },
+  rowLayout: { display: 'flex', alignItems: 'center', gap: tokens.spacingHorizontalXS, width: '100%', minWidth: 0 },
+  rowName: { overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' },
+  rowActions: {
+    marginLeft: 'auto',
+    display: 'flex',
+    alignItems: 'center',
+    gap: tokens.spacingHorizontalXXS,
+    flexShrink: 0,
+  },
+  // Account header chip: brand-tinted, sticky to the top of the pane.
+  acctChip: {
+    display: 'flex',
+    flexWrap: 'wrap',
+    gap: tokens.spacingHorizontalXS,
+    alignItems: 'center',
+    padding: `${tokens.spacingVerticalXXS} ${tokens.spacingHorizontalXS}`,
+    borderRadius: tokens.borderRadiusMedium,
+    backgroundColor: tokens.colorNeutralBackground2,
+  },
+  acctName: { fontWeight: tokens.fontWeightSemibold },
   mutedRow: { color: tokens.colorNeutralForeground3 },
-  homeRow: { cursor: 'pointer' },
-  leafBtn: { cursor: 'pointer', textAlign: 'left', width: '100%' },
+  homeRow: { cursor: 'pointer', justifyContent: 'flex-start' },
+  leafBtn: {
+    cursor: 'pointer',
+    textAlign: 'left',
+    width: '100%',
+    overflow: 'hidden',
+    textOverflow: 'ellipsis',
+    whiteSpace: 'nowrap',
+  },
+  treeScroll: { overflowY: 'auto', overflowX: 'hidden', flex: 1 },
+  statePad: { padding: tokens.spacingVerticalS },
+  hintField: { color: tokens.colorNeutralForeground3 },
+  dialogField: { marginTop: tokens.spacingVerticalS },
+  dialogFieldFirst: { marginBottom: tokens.spacingVerticalS },
+  dialogError: { marginTop: tokens.spacingVerticalM },
 });
 
 const DB_ROUTE = '/api/cosmos/databases';
@@ -349,7 +396,7 @@ export function CosmosTree({ refreshKey = 0, onOpen }: CosmosTreeProps) {
   if (gate) {
     return (
       <div className={s.root}>
-        <div className={s.acctChip}><span style={{ fontWeight: tokens.fontWeightSemibold }}>Data Explorer</span></div>
+        <div className={s.acctChip}><span className={s.acctName}>Data Explorer</span></div>
         <MessageBar intent="warning">
           <MessageBarBody>
             <MessageBarTitle>Cosmos DB account not configured</MessageBarTitle>
@@ -416,7 +463,7 @@ export function CosmosTree({ refreshKey = 0, onOpen }: CosmosTreeProps) {
 
       {/* "Search databases only" + sort toggle, like the studio. */}
       <div className={s.searchRow}>
-        <Field style={{ flex: 1 }}>
+        <Field className={s.searchField}>
           <Input
             size="small"
             contentBefore={<Search20Regular />}
@@ -434,7 +481,7 @@ export function CosmosTree({ refreshKey = 0, onOpen }: CosmosTreeProps) {
         </Tooltip>
       </div>
 
-      {loading && <div style={{ padding: 8 }}><Spinner size="tiny" label="Loading Cosmos account…" /></div>}
+      {loading && <div className={s.statePad}><Spinner size="tiny" label="Loading Cosmos account…" /></div>}
       {error && (
         <MessageBar intent="error"><MessageBarBody><MessageBarTitle>Cosmos error</MessageBarTitle>{error}</MessageBarBody></MessageBar>
       )}
@@ -443,13 +490,12 @@ export function CosmosTree({ refreshKey = 0, onOpen }: CosmosTreeProps) {
       <Button
         appearance="subtle" size="small" className={s.homeRow}
         icon={<Home16Regular />}
-        style={{ justifyContent: 'flex-start' }}
         onClick={() => onOpen?.({ action: 'home' })}
       >
         Home
       </Button>
 
-      <div style={{ overflow: 'auto', flex: 1 }}>
+      <div className={s.treeScroll}>
         <Tree
           aria-label="Cosmos DB Data Explorer"
           openItems={Array.from(openItems)}
@@ -457,7 +503,7 @@ export function CosmosTree({ refreshKey = 0, onOpen }: CosmosTreeProps) {
         >
           {fDatabases.length === 0 && (
             <TreeItem itemType="leaf" value="db-empty">
-              <TreeItemLayout><Caption1>{f ? 'No matches' : 'No databases'}</Caption1></TreeItemLayout>
+              <TreeItemLayout><Caption1 className={s.mutedRow}>{f ? 'No matching databases' : 'No databases yet — use ＋ New… to create one'}</Caption1></TreeItemLayout>
             </TreeItem>
           )}
           {fDatabases.map((db) => {
@@ -467,7 +513,7 @@ export function CosmosTree({ refreshKey = 0, onOpen }: CosmosTreeProps) {
               <TreeItem key={db.name} itemType="branch" value={`db-${db.name}`}>
                 <TreeItemLayout iconBefore={<Database20Regular />}>
                   <span className={s.rowLayout}>
-                    <span>{db.name}</span>
+                    <span className={s.rowName} title={db.name}>{db.name}</span>
                     <span className={s.rowActions} onClick={(e) => e.stopPropagation()}>
                       {tp && <Badge size="small" appearance="tint">{tp}</Badge>}
                       <Tooltip content="New container" relationship="label">
@@ -482,12 +528,12 @@ export function CosmosTree({ refreshKey = 0, onOpen }: CosmosTreeProps) {
                 <Tree>
                   {!containers && (
                     <TreeItem itemType="leaf" value={`c-loading-${db.name}`}>
-                      <TreeItemLayout><Caption1>Expand the database to load containers…</Caption1></TreeItemLayout>
+                      <TreeItemLayout><Caption1 className={s.mutedRow}>Expand the database to load containers…</Caption1></TreeItemLayout>
                     </TreeItem>
                   )}
                   {containers && containers.length === 0 && (
                     <TreeItem itemType="leaf" value={`c-empty-${db.name}`}>
-                      <TreeItemLayout><Caption1>No containers</Caption1></TreeItemLayout>
+                      <TreeItemLayout><Caption1 className={s.mutedRow}>No containers</Caption1></TreeItemLayout>
                     </TreeItem>
                   )}
                   {(containers || []).filter((c) => match(c.name)).map((c) => {
@@ -502,7 +548,7 @@ export function CosmosTree({ refreshKey = 0, onOpen }: CosmosTreeProps) {
                       <TreeItem key={c.name} itemType="branch" value={`cont-${db.name}|${c.name}`}>
                         <TreeItemLayout iconBefore={<Table20Regular />}>
                           <span className={s.rowLayout}>
-                            <span>{c.name}</span>
+                            <span className={s.rowName} title={c.name}>{c.name}</span>
                             <span className={s.rowActions} onClick={(e) => e.stopPropagation()}>
                               {c.partitionKey && <Caption1>{c.partitionKey}</Caption1>}
                               {ctp && <Badge size="small" appearance="tint">{ctp}</Badge>}
@@ -548,7 +594,7 @@ export function CosmosTree({ refreshKey = 0, onOpen }: CosmosTreeProps) {
                             <Tree>
                               {scripts?.storedProcedures.length === 0 && (
                                 <TreeItem itemType="leaf" value={`sp-empty-${db.name}|${c.name}`}>
-                                  <TreeItemLayout><Caption1>No stored procedures</Caption1></TreeItemLayout>
+                                  <TreeItemLayout><Caption1 className={s.mutedRow}>No stored procedures</Caption1></TreeItemLayout>
                                 </TreeItem>
                               )}
                               {scripts?.storedProcedures.map((sp) => (
@@ -568,7 +614,7 @@ export function CosmosTree({ refreshKey = 0, onOpen }: CosmosTreeProps) {
                             <Tree>
                               {scripts?.userDefinedFunctions.length === 0 && (
                                 <TreeItem itemType="leaf" value={`udf-empty-${db.name}|${c.name}`}>
-                                  <TreeItemLayout><Caption1>No user defined functions</Caption1></TreeItemLayout>
+                                  <TreeItemLayout><Caption1 className={s.mutedRow}>No user defined functions</Caption1></TreeItemLayout>
                                 </TreeItem>
                               )}
                               {scripts?.userDefinedFunctions.map((u) => (
@@ -588,7 +634,7 @@ export function CosmosTree({ refreshKey = 0, onOpen }: CosmosTreeProps) {
                             <Tree>
                               {scripts?.triggers.length === 0 && (
                                 <TreeItem itemType="leaf" value={`tg-empty-${db.name}|${c.name}`}>
-                                  <TreeItemLayout><Caption1>No triggers</Caption1></TreeItemLayout>
+                                  <TreeItemLayout><Caption1 className={s.mutedRow}>No triggers</Caption1></TreeItemLayout>
                                 </TreeItem>
                               )}
                               {scripts?.triggers.map((tg) => (
@@ -608,7 +654,7 @@ export function CosmosTree({ refreshKey = 0, onOpen }: CosmosTreeProps) {
                           </TreeItem>
                           {!scripts && (
                             <TreeItem itemType="leaf" value={`sc-loading-${db.name}|${c.name}`}>
-                              <TreeItemLayout><Caption1>Expand the container to load scripts…</Caption1></TreeItemLayout>
+                              <TreeItemLayout><Caption1 className={s.mutedRow}>Expand the container to load scripts…</Caption1></TreeItemLayout>
                             </TreeItem>
                           )}
                         </Tree>
@@ -629,7 +675,7 @@ export function CosmosTree({ refreshKey = 0, onOpen }: CosmosTreeProps) {
             <DialogTitle>New {createKind === 'container' ? 'container' : 'database'}</DialogTitle>
             <DialogContent>
               {createKind === 'container' && (
-                <Field label="Database" required style={{ marginBottom: 8 }}>
+                <Field label="Database" required className={s.dialogFieldFirst}>
                   <Dropdown
                     value={createDb}
                     selectedOptions={createDb ? [createDb] : []}
@@ -646,15 +692,15 @@ export function CosmosTree({ refreshKey = 0, onOpen }: CosmosTreeProps) {
               </Field>
 
               {createKind === 'container' && (
-                <Field label="Partition key" required style={{ marginTop: 8 }}>
+                <Field label="Partition key" required className={s.dialogField}>
                   <Input value={createPk} onChange={(_, d) => setCreatePk(d.value)} placeholder="/id" />
-                  <Caption1 style={{ color: tokens.colorNeutralForeground3 }}>
+                  <Caption1 className={s.hintField}>
                     A leading slash is added if omitted. Cosmos NoSQL containers require a partition key.
                   </Caption1>
                 </Field>
               )}
 
-              <Field label="Throughput" style={{ marginTop: 8 }}>
+              <Field label="Throughput" className={s.dialogField}>
                 <Dropdown
                   value={tpMode === 'none' ? (createKind === 'container' ? 'Shared (use database RU/s)' : 'None (serverless / per-container)') : tpMode === 'manual' ? 'Manual' : 'Autoscale'}
                   selectedOptions={[tpMode]}
@@ -668,15 +714,15 @@ export function CosmosTree({ refreshKey = 0, onOpen }: CosmosTreeProps) {
                 </Dropdown>
               </Field>
               {tpMode !== 'none' && (
-                <Field label={tpMode === 'autoscale' ? 'Max RU/s' : 'RU/s'} style={{ marginTop: 8 }}>
+                <Field label={tpMode === 'autoscale' ? 'Max RU/s' : 'RU/s'} className={s.dialogField}>
                   <Input type="number" value={tpValue} onChange={(_, d) => setTpValue(d.value)} />
-                  <Caption1 style={{ color: tokens.colorNeutralForeground3 }}>
+                  <Caption1 className={s.hintField}>
                     {tpMode === 'autoscale' ? 'Autoscale minimum is 1000 max RU/s (scales 10%–100%).' : 'Manual minimum is 400 RU/s.'}
                   </Caption1>
                 </Field>
               )}
 
-              {createError && <MessageBar intent="error" style={{ marginTop: 12 }}><MessageBarBody><MessageBarTitle>Create failed</MessageBarTitle>{createError}</MessageBarBody></MessageBar>}
+              {createError && <MessageBar intent="error" className={s.dialogError}><MessageBarBody><MessageBarTitle>Create failed</MessageBarTitle>{createError}</MessageBarBody></MessageBar>}
             </DialogContent>
             <DialogActions>
               <Button appearance="secondary" onClick={() => setCreateKind(null)} disabled={busy}>Cancel</Button>
