@@ -9,6 +9,7 @@
  */
 import { NextRequest, NextResponse } from 'next/server';
 import { getSession } from '@/lib/auth/session';
+import { denyIfNoDlzAccess } from '@/lib/auth/dlz-gate';
 import { getApimService, updateApimSku, ApimError } from '@/lib/azure/apim-client';
 
 export const runtime = 'nodejs';
@@ -23,6 +24,8 @@ const VALID_SKUS = new Set([
 export async function GET(_req: NextRequest) {
   const s = getSession();
   if (!s) return NextResponse.json({ ok: false, error: 'unauthenticated' }, { status: 401 });
+  const denied = await denyIfNoDlzAccess(s, 'scaling');
+  if (denied) return denied;
   if (!process.env.LOOM_APIM_NAME) {
     return NextResponse.json({
       ok: false, error: 'APIM service not configured',
@@ -41,6 +44,8 @@ export async function GET(_req: NextRequest) {
 export async function POST(req: NextRequest) {
   const s = getSession();
   if (!s) return NextResponse.json({ ok: false, error: 'unauthenticated' }, { status: 401 });
+  const denied = await denyIfNoDlzAccess(s, 'scaling');
+  if (denied) return denied;
   const body = await req.json().catch(() => ({})) as { sku?: string; capacity?: number };
   if (!body?.sku) return NextResponse.json({ ok: false, error: 'sku required' }, { status: 400 });
   if (!VALID_SKUS.has(body.sku)) {

@@ -18,6 +18,8 @@
 import { NextResponse } from 'next/server';
 import { getSession } from '@/lib/auth/session';
 import { isGovCloud, getPbiGovHost } from '@/lib/azure/cloud-endpoints';
+import { canAccessDlzPanes } from '@/lib/auth/domain-role';
+import { loadTenantDomains } from '@/lib/auth/load-domains';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -25,6 +27,15 @@ export const dynamic = 'force-dynamic';
 export async function GET() {
   const s = getSession();
   if (!s) return NextResponse.json({ ok: false, error: 'unauthenticated' }, { status: 401 });
+
+  // D2: DLZ visualization config is tenant-admin or domain-admin only.
+  const domains = await loadTenantDomains(s.claims.oid);
+  if (!(await canAccessDlzPanes(s, domains))) {
+    return NextResponse.json(
+      { ok: false, error: 'forbidden', reason: 'The Data Landing Zone panes are available to tenant admins and domain admins only.' },
+      { status: 403 },
+    );
+  }
 
   const grafanaEndpoint = (process.env.LOOM_GRAFANA_ENDPOINT || '').trim();
   const grafanaUid = (process.env.LOOM_GRAFANA_DASHBOARD_UID || '').trim();

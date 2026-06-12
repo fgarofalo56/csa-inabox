@@ -306,7 +306,8 @@ function compareSort(a: Workspace, b: Workspace, mode: SortMode): number {
 // ---------------------------------------------------------------------------
 
 interface CapacityLite { id: string; displayName: string; sku: string; state?: string }
-interface DomainLite { id: string; name: string; description?: string }
+type DomainTier = 'tenant-admin' | 'domain-admin' | 'domain-contributor' | null;
+interface DomainLite { id: string; name: string; description?: string; callerTier?: DomainTier }
 
 function CreateWorkspaceDialog({ onCreated }: { onCreated?: () => void }) {
   const styles = useStyles();
@@ -345,7 +346,15 @@ function CreateWorkspaceDialog({ onCreated }: { onCreated?: () => void }) {
     staleTime: 60_000,
   });
   const capacities = capacitiesQ.data?.capacities || [];
-  const domains = domainsQ.data?.domains || [];
+  // D2: only offer domains the caller administers (tenant-admin / domain-admin /
+  // domain-contributor). A user can only place a new workspace in a domain they
+  // have a tier on — tenant admins see all. callerTier comes from GET
+  // /api/admin/domains. When the field is absent (older API), fall back to
+  // showing all returned domains rather than hiding them.
+  const allDomains = domainsQ.data?.domains || [];
+  const domains = allDomains.some((d) => d.callerTier !== undefined)
+    ? allDomains.filter((d) => d.callerTier != null)
+    : allDomains;
   const capacityFallback = capacitiesQ.isError || (capacitiesQ.data?.ok === false);
   const domainFallback = domainsQ.isError || (domainsQ.data?.ok === false);
 

@@ -9,6 +9,7 @@
  */
 import { NextRequest, NextResponse } from 'next/server';
 import { getSession } from '@/lib/auth/session';
+import { denyIfNoDlzAccess } from '@/lib/auth/dlz-gate';
 import {
   listContainerApps, updateContainerAppScale, AcaNotConfiguredError,
 } from '@/lib/azure/container-apps-arm-client';
@@ -23,6 +24,8 @@ const VALID_PROFILES = new Set([
 export async function GET(_req: NextRequest) {
   const s = getSession();
   if (!s) return NextResponse.json({ ok: false, error: 'unauthenticated' }, { status: 401 });
+  const denied = await denyIfNoDlzAccess(s, 'scaling');
+  if (denied) return denied;
   try {
     const apps = await listContainerApps();
     return NextResponse.json({ ok: true, apps });
@@ -40,6 +43,8 @@ export async function GET(_req: NextRequest) {
 export async function POST(req: NextRequest) {
   const s = getSession();
   if (!s) return NextResponse.json({ ok: false, error: 'unauthenticated' }, { status: 401 });
+  const denied = await denyIfNoDlzAccess(s, 'scaling');
+  if (denied) return denied;
   const body = await req.json().catch(() => ({})) as {
     name?: string;
     workloadProfileName?: string;

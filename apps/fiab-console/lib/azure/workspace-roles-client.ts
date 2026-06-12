@@ -471,6 +471,25 @@ export async function resolveEffectiveRole(
   return pickHighestRole(inherited);
 }
 
+/**
+ * True when `userId` is a transitive (nested-aware) member of `groupId`,
+ * acquiring its own Graph token. This is the standalone entry point used by the
+ * domain-tier resolver (lib/auth/domain-role.ts) when the cached `groups` claim
+ * is empty/truncated (the Entra >200-group overage case) and we must confirm
+ * domain admin/contributor group membership against Graph directly. Returns
+ * false (never throws) when Graph is unavailable so callers fail closed.
+ */
+export async function userIsTransitiveGroupMember(userId: string, groupId: string): Promise<boolean> {
+  if (!userId || !groupId) return false;
+  let token: string;
+  try {
+    token = await graphToken();
+  } catch {
+    return false;
+  }
+  return graphUserInGroup(token, groupId, userId);
+}
+
 /** True when `userId` is a transitive member of `groupId` (handles nested groups). */
 async function graphUserInGroup(token: string, groupId: string, userId: string): Promise<boolean> {
   // Microsoft Graph: members/{id} existence check across the transitive closure.

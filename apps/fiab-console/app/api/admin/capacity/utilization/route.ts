@@ -30,6 +30,8 @@ import { getSession } from '@/lib/auth/session';
 import {
   fetchMetrics, metricsForType, MonitorNotConfiguredError, MonitorError,
 } from '@/lib/azure/monitor-client';
+import { canAccessDlzPanes } from '@/lib/auth/domain-role';
+import { loadTenantDomains } from '@/lib/auth/load-domains';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -37,6 +39,20 @@ export const dynamic = 'force-dynamic';
 export async function POST(req: NextRequest) {
   const s = getSession();
   if (!s) return NextResponse.json({ ok: false, error: 'unauthenticated' }, { status: 401 });
+
+  // D2: the DLZ monitor pane is tenant-admin or domain-admin only.
+  const domains = await loadTenantDomains(s.claims.oid);
+  if (!(await canAccessDlzPanes(s, domains))) {
+    return NextResponse.json(
+      {
+        ok: false,
+        error: 'forbidden',
+        reason:
+          'The Data Landing Zone monitoring pane is available to tenant admins and domain admins only. A tenant admin can grant you a domain admin Entra group at /admin/permissions (Domain access).',
+      },
+      { status: 403 },
+    );
+  }
 
   let body: any;
   try { body = await req.json(); } catch { body = {}; }

@@ -9,6 +9,7 @@
  */
 import { NextRequest, NextResponse } from 'next/server';
 import { getSession } from '@/lib/auth/session';
+import { denyIfNoDlzAccess } from '@/lib/auth/dlz-gate';
 import {
   listClusters, listNodeTypes, editCluster, getCluster,
 } from '@/lib/azure/databricks-client';
@@ -19,6 +20,8 @@ export const dynamic = 'force-dynamic';
 export async function GET(_req: NextRequest) {
   const s = getSession();
   if (!s) return NextResponse.json({ ok: false, error: 'unauthenticated' }, { status: 401 });
+  const denied = await denyIfNoDlzAccess(s, 'scaling');
+  if (denied) return denied;
   if (!process.env.LOOM_DATABRICKS_HOSTNAME) {
     return NextResponse.json({ ok: false, error: 'Databricks not configured' }, { status: 503 });
   }
@@ -42,6 +45,8 @@ export async function GET(_req: NextRequest) {
 export async function POST(req: NextRequest) {
   const s = getSession();
   if (!s) return NextResponse.json({ ok: false, error: 'unauthenticated' }, { status: 401 });
+  const denied = await denyIfNoDlzAccess(s, 'scaling');
+  if (denied) return denied;
   const body = await req.json().catch(() => ({})) as {
     cluster_id?: string;
     node_type_id?: string;

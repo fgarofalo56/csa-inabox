@@ -43,6 +43,18 @@ declare -a ROLES=(
   "Application.Read.All:9a5d68dd-52b0-4cc2-bd40-abcf44ac3a30"
 )
 
+# Group.ReadWrite.All (62a82d76-...) — kept IN SYNC with the bicep
+# identity-graph-rbac module, which ORs this AppRole into requiredAppRoles when
+# workspaceM365LinkEnabled OR domainGroupProvisioningEnabled. Grant it here when
+# either feature is being turned on:
+#   • LOOM_WORKSPACE_M365_LINK=true       -> create an M365 group for a workspace
+#   • LOOM_DOMAIN_GROUP_PROVISIONING=true -> create per-domain admin/contributor
+#                                            security groups (D2 RBAC tiers)
+if [[ "${LOOM_DOMAIN_GROUP_PROVISIONING:-false}" == "true" || "${LOOM_WORKSPACE_M365_LINK:-false}" == "true" ]]; then
+  echo "Group.ReadWrite.All requested (LOOM_DOMAIN_GROUP_PROVISIONING / LOOM_WORKSPACE_M365_LINK) — adding to grant set."
+  ROLES+=("Group.ReadWrite.All:62a82d76-70ea-41e2-9197-370581804d09")
+fi
+
 TOKEN=$(az account get-access-token --resource https://graph.microsoft.com --query accessToken -o tsv)
 
 for ROLE in "${ROLES[@]}"; do
@@ -82,5 +94,13 @@ Then set on the Console Container App:
 
 (or set loomIdentityPickerEnabled=true in the bicepparam and redeploy
 admin-plane).
+
+For the D2 domain-admin / domain-contributor RBAC tiers, also re-run this
+script with LOOM_DOMAIN_GROUP_PROVISIONING=true (adds Group.ReadWrite.All),
+have a Tenant Admin grant consent, then set on the Console Container App:
+
+    LOOM_DOMAIN_GROUP_PROVISIONING=true
+
+(or loomDomainGroupProvisioningEnabled=true in the bicepparam + redeploy).
 
 EOF

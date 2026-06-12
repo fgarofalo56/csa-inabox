@@ -38,6 +38,9 @@ param skipRoleGrants bool = false
 @description('When true, also document the Group.ReadWrite.All AppRole required for the workspace settings "Teams and SharePoint" tab to CREATE a Microsoft 365 group for a workspace (set LOOM_WORKSPACE_M365_LINK=true on the console). Read-only group search needs only Group.Read.All; group creation needs this additional consent, so it is opt-in to avoid a surprise consent prompt on existing deployments.')
 param workspaceM365LinkEnabled bool = false
 
+@description('When true, document the Group.ReadWrite.All (create groups) + Group.Read.All (membership check) AppRoles the Console UAMI needs to provision the per-domain admin/contributor Entra SECURITY groups behind the D2 domain-admin / domain-contributor RBAC tiers (set LOOM_DOMAIN_GROUP_PROVISIONING=true on the console). Same Group.ReadWrite.All AppRole the workspace M365 link uses. Opt-in to avoid a surprise consent prompt on existing deployments.')
+param domainGroupProvisioningEnabled bool = false
+
 @description('When true, document the Microsoft Graph Sites.Read.All + Files.Read.All AppRoles the Console UAMI needs for OneLake shortcuts to SharePoint document libraries / OneDrive folders (set LOOM_SHAREPOINT_SHORTCUTS_ENABLED=true on the console). Granted out-of-band by scripts/csa-loom/grant-shortcut-graph-approles.sh + admin consent.')
 param sharepointShortcutsEnabled bool = false
 
@@ -54,16 +57,19 @@ var consentPortal = boundary == 'GCC-High' || boundary == 'IL5'
   ? 'https://portal.azure.us'
   : 'https://portal.azure.com'
 
-// Group.ReadWrite.All — required ONLY when the workspace ↔ M365-group "create a
-// new group" affordance is enabled. Append it conditionally so the documented
-// grant set matches what's actually consented.
+// Group.ReadWrite.All — required when EITHER the workspace ↔ M365-group "create a
+// new group" affordance OR per-domain Entra group provisioning is enabled. Append
+// it conditionally so the documented grant set matches what's actually consented.
 var baseAppRoles = [
   { name: 'User.Read.All',        appRoleId: 'df021288-bdef-4463-88db-98f22de89214', reason: 'Search users by displayName or UPN.' }
-  { name: 'Group.Read.All',       appRoleId: '5b567255-7703-4780-807c-7be8301ae99b', reason: 'Search groups and expand transitiveMembers; link an existing M365 group to a workspace.' }
+  { name: 'Group.Read.All',       appRoleId: '5b567255-7703-4780-807c-7be8301ae99b', reason: 'Search groups and expand transitiveMembers; link an existing M365 group to a workspace; check domain admin/contributor group membership.' }
   { name: 'Application.Read.All', appRoleId: '9a5d68dd-52b0-4cc2-bd40-abcf44ac3a30', reason: 'Search service principals / managed identities.' }
 ]
-var m365WriteAppRole = [
-  { name: 'Group.ReadWrite.All', appRoleId: '62a82d76-70ea-41e2-9197-370581804d09', reason: 'Create a Microsoft 365 group for a workspace (settings → Teams and SharePoint).' }
+var groupReadAppRole = [
+  { name: 'Group.Read.All', appRoleId: '5b567255-7703-4780-807c-7be8301ae99b', reason: 'Search groups + check domain admin/contributor group membership (D2 cached-claim Graph fallback).' }
+]
+var groupWriteAppRole = [
+  { name: 'Group.ReadWrite.All', appRoleId: '62a82d76-70ea-41e2-9197-370581804d09', reason: 'Create a Microsoft 365 group for a workspace (settings → Teams and SharePoint) AND create per-domain admin/contributor security groups for the D2 domain RBAC tiers.' }
 ]
 // Sites.Read.All + Files.Read.All — required ONLY when SharePoint/OneDrive
 // OneLake shortcuts are enabled. Lets the Console UAMI enumerate SharePoint
@@ -73,8 +79,13 @@ var sharepointAppRoles = [
   { name: 'Files.Read.All', appRoleId: '01d4889c-1287-42c6-ac1f-5d1e02578ef6', reason: 'List + read OneDrive / SharePoint drive items a shortcut points at.' }
 ]
 
-var identityRoles = identityPickerEnabled ? (workspaceM365LinkEnabled ? concat(baseAppRoles, m365WriteAppRole) : baseAppRoles) : []
-output requiredAppRoles array = sharepointShortcutsEnabled ? concat(identityRoles, sharepointAppRoles) : identityRoles
+var needsGroupWrite = workspaceM365LinkEnabled || domainGroupProvisioningEnabled
+var identityRoles = identityPickerEnabled ? (needsGroupWrite ? concat(baseAppRoles, groupWriteAppRole) : baseAppRoles) : []
+// When the identity picker is OFF but domain provisioning is ON, still document
+// the Group.Read.All + Group.ReadWrite.All the provisioning + tier checks need.
+var domainOnlyRoles = (!identityPickerEnabled && domainGroupProvisioningEnabled) ? concat(groupReadAppRole, groupWriteAppRole) : []
+var identityPlusDomainRoles = concat(identityRoles, domainOnlyRoles)
+output requiredAppRoles array = sharepointShortcutsEnabled ? concat(identityPlusDomainRoles, sharepointAppRoles) : identityPlusDomainRoles
 
 output graphBase string = graphBase
 output graphScope string = '${graphBase}/.default'

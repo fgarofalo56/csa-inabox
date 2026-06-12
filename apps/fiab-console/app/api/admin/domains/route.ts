@@ -40,7 +40,7 @@ import {
   type UnifiedMirrorResult,
   type UnityLinkStatus,
 } from '@/lib/azure/unified-domain-mapper';
-import { validateDomainMove, isDomainTenantAdmin } from '@/lib/azure/domain-hierarchy';
+import { validateDomainMove } from '@/lib/azure/domain-hierarchy';
 import {
   type DomainItem,
   type DomainsDoc,
@@ -48,6 +48,17 @@ import {
   parseTopologyPatch,
   domainChargebackTag,
 } from '@/lib/azure/domain-registry';
+import {
+  resolveDomainTier,
+  isTenantAdminTier,
+  type DomainTier,
+  type DomainTierDomain,
+} from '@/lib/auth/domain-role';
+import {
+  provisionDomainGroups,
+  domainGroupProvisioningEnabled,
+  DomainGroupError,
+} from '@/lib/azure/domain-groups';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -112,19 +123,6 @@ async function workspaceCounts(tenantId: string): Promise<Record<string, number>
   }
 }
 
-/**
- * Is the caller a Fabric/tenant-level admin (vs a domain-scoped admin)?
- * Tenant admins may change a domain's name and admin list; domain admins
- * may not (mirrors Fabric's role rules). Delegates to the shared
- * isDomainTenantAdmin so this route and PATCH /api/governance/domains
- * enforce the identical rule. When neither LOOM_TENANT_ADMIN_OID nor
- * LOOM_TENANT_ADMIN_GROUP_ID is configured, the whole console is already
- * admin-gated, so every authenticated session is treated as a tenant admin.
- */
-function isTenantAdmin(oid: string): boolean {
-  return isDomainTenantAdmin(oid);
-}
-
 /** Is a given Loom domain mirrored into the Unity Catalog metastore? */
 function unityLinkedFor(d: DomainItem, unity: UnityLinkStatus): boolean {
   if (!unity.configured) return false;
@@ -154,15 +152,25 @@ export async function GET() {
     const purviewNames = new Set(
       purview.configured ? purview.domains.map((d) => (d.name || '').toLowerCase()) : [],
     );
-    const domains = doc.items.map((d) => ({
+    // D2 tier per domain for the calling session: tenant-admin / domain-admin /
+    // domain-contributor / null. Drives the tier badge on /admin/permissions and
+    // the domain-picker filtering on /workspaces. The Graph fallback inside
+    // resolveDomainTier only fires for the >200-group claim-overage case, so for
+    // the common (claim-present) caller this is a pure in-memory pass.
+    const tiers = await Promise.all(
+      doc.items.map((d) => resolveDomainTier(s, d as DomainTierDomain)),
+    );
+    const domains = doc.items.map((d, i) => ({
       ...d,
       workspaceCount: counts[d.id] || 0,
       purviewLinked: purviewNames.has((d.name || '').toLowerCase()),
       unityLinked: unityLinkedFor(d, unity),
+      callerTier: tiers[i] as DomainTier,
     }));
     return NextResponse.json({
       ok: true, domains, updatedAt: doc.updatedAt, purview, unity,
-      isTenantAdmin: isTenantAdmin(s.claims.oid),
+      isTenantAdmin: isTenantAdminTier(s),
+      domainGroupProvisioning: domainGroupProvisioningEnabled(),
       imageStorageConfigured: !!process.env.LOOM_DOMAIN_IMAGE_STORAGE,
     });
   } catch (e: any) {
@@ -231,6 +239,8 @@ export async function POST(req: NextRequest) {
       color: body?.color || undefined,
       owners: normalizeOwners(body?.owners),
       admins: normalizeOwners(body?.admins),
+      adminGroupId: typeof body?.adminGroupId === 'string' && body.adminGroupId.trim() ? body.adminGroupId.trim() : undefined,
+      memberGroupId: typeof body?.memberGroupId === 'string' && body.memberGroupId.trim() ? body.memberGroupId.trim() : undefined,
       parentId,
       status: 'registered',
       chargebackTag: domainChargebackTag(id),
@@ -240,12 +250,42 @@ export async function POST(req: NextRequest) {
     // DLZ binding / topology fields are tenant-admin-only (they bind real Azure
     // subscriptions + Entra groups). A non-tenant-admin creating a domain simply
     // omits them; the domain is still created in `registered` status.
-    if (isTenantAdmin(s.claims.oid)) {
+    if (isTenantAdminTier(s)) {
       const topo = parseTopologyPatch(body);
       if ('error' in topo) {
         return NextResponse.json({ ok: false, error: topo.error }, { status: 400 });
       }
       Object.assign(newItem, topo.patch);
+    }
+
+    // Optional: auto-provision the per-domain Entra security-group pair (admins +
+    // contributors) when the caller asks AND the deployment has the Graph
+    // Group.ReadWrite.All grant (LOOM_DOMAIN_GROUP_PROVISIONING=true). Honest gate:
+    // a missing grant returns 503 with the exact remediation rather than a silent
+    // skip — but only when the caller explicitly requested provisioning. Tenant
+    // admins only (domains-tier changes are tenant-admin-only, Fabric parity).
+    let groupProvisioning: { ok: boolean; detail?: string } | undefined;
+    if (body?.provisionGroups === true) {
+      if (!isTenantAdminTier(s)) {
+        return NextResponse.json(
+          { ok: false, error: 'Only a tenant admin may provision domain Entra groups.' },
+          { status: 403 },
+        );
+      }
+      try {
+        const pair = await provisionDomainGroups({ domainId: id, domainName: name, ownerObjectId: s.claims.oid });
+        newItem.adminGroupId = pair.adminGroupId;
+        newItem.memberGroupId = pair.contributorGroupId;
+        groupProvisioning = { ok: true, detail: 'Provisioned admin + contributor Entra security groups.' };
+      } catch (e: any) {
+        if (e instanceof DomainGroupError) {
+          // Honest gate: surface remediation but STILL create the domain (it works
+          // without backing groups via the legacy admins[]/contributors model).
+          groupProvisioning = { ok: false, detail: e.remediation || e.message };
+        } else {
+          groupProvisioning = { ok: false, detail: e?.message || String(e) };
+        }
+      }
     }
     // Unified write-through to Purview + Unity Catalog (best-effort; neither
     // blocks the Cosmos write — both are independently optional, no Fabric dep).
@@ -256,7 +296,7 @@ export async function POST(req: NextRequest) {
     doc.items.push(newItem);
     doc.updatedAt = new Date().toISOString();
     await c.item(docId, tenantId).replace(doc);
-    return NextResponse.json({ ok: true, domain: newItem, domains: doc.items, mirror });
+    return NextResponse.json({ ok: true, domain: newItem, domains: doc.items, mirror, groupProvisioning });
   } catch (e: any) {
     return NextResponse.json({ ok: false, error: e?.message || String(e) }, { status: 500 });
   }
@@ -294,9 +334,13 @@ export async function PATCH(req: NextRequest) {
     if (idx < 0) return NextResponse.json({ ok: false, error: 'not found' }, { status: 404 });
     const domain = doc.items[idx];
 
-    const upn = (s.claims.upn || '').toLowerCase();
-    const tenantAdmin = isTenantAdmin(s.claims.oid);
-    const domainAdmin = (domain.admins || []).some((a) => a.toLowerCase() === upn);
+    const tenantAdmin = isTenantAdminTier(s);
+    // D2 tier resolution (Entra group + legacy UPN list, cached on the session
+    // claim with a Graph fallback for group-overage). Replaces the prior
+    // UPN-only `domain.admins[]` match so domain admins identified by their
+    // Entra `adminGroupId` are recognized too.
+    const tier = await resolveDomainTier(s, domain as DomainTierDomain);
+    const domainAdmin = tier === 'domain-admin';
     if (!tenantAdmin && !domainAdmin) {
       return NextResponse.json(
         { ok: false, error: 'Only a tenant admin or an admin of this domain may change its settings.' },
@@ -344,7 +388,9 @@ export async function PATCH(req: NextRequest) {
     if (body?.admins !== undefined) domain.admins = normalizeOwners(body.admins);
     if (body?.owners !== undefined) domain.owners = normalizeOwners(body.owners);
     if (body?.defaultDomainUsers !== undefined) domain.defaultDomainUsers = normalizeOwners(body.defaultDomainUsers);
-    // DLZ binding / topology fields (tenant-admin-only; gated above).
+    // DLZ binding / topology fields (tenant-admin-only; gated above). The Entra
+    // admin/member group bindings (adminGroupId/memberGroupId) flow through
+    // parseTopologyPatch alongside the DLZ subscription/region/SKU fields.
     if (touchesTopology) {
       const topo = parseTopologyPatch(body);
       if ('error' in topo) {

@@ -865,6 +865,9 @@ param loomIdentityPickerEnabled bool = false
 @description('Enable workspace ↔ Microsoft 365 group linking (workspace settings → "Teams and SharePoint" tab). When true, sets LOOM_WORKSPACE_M365_LINK=true on the Console and documents the additional Group.ReadWrite.All Graph AppRole the Console UAMI needs to CREATE a group for a workspace. Linking an EXISTING group needs only Group.Read.All (already covered by the identity picker grant). Default false so existing deployments do not get a surprise consent prompt.')
 param loomWorkspaceM365LinkEnabled bool = false
 
+@description('Enable per-domain Entra security-group provisioning for the D2 domain-admin / domain-contributor RBAC tiers. When true, sets LOOM_DOMAIN_GROUP_PROVISIONING=true on the Console and ORs the Group.ReadWrite.All Graph AppRole into the identity-graph-rbac documented set (the same AppRole workspace M365 linking uses). The Console then auto-creates loom-domain-<id>-admins + loom-domain-<id>-contributors security groups at domain-create time and binds them on /admin/permissions (Domain access). Default false — domains still work via the legacy admins[]/contributors model; when false POST /api/admin/domains?provisionGroups returns 503 with the exact remediation.')
+param loomDomainGroupProvisioningEnabled bool = false
+
 @description('Enable OneLake-shortcut sources to SharePoint document libraries and OneDrive folders via Microsoft Graph (lakehouse editor → New shortcut → SharePoint / OneDrive). When true, sets LOOM_SHAREPOINT_SHORTCUTS_ENABLED=true on the Console and documents the Graph Sites.Read.All + Files.Read.All AppRoles the Console UAMI needs (scripts/csa-loom/grant-shortcut-graph-approles.sh + admin consent). Azure-native parity with Fabric OneLake OneDrive/SharePoint shortcuts; NO Fabric dependency. When false, the SharePoint source renders but the browse/create return 503 with the exact remediation (no mock data).')
 param loomSharepointShortcutsEnabled bool = false
 
@@ -2607,6 +2610,16 @@ module appDeployments 'app-deployments.bicep' = if (containerPlatform == 'contai
           loomWorkspaceM365LinkEnabled ? [
             { name: 'LOOM_WORKSPACE_M365_LINK', value: 'true' }
           ] : [],
+          // Per-domain Entra security-group provisioning for the D2 domain-admin /
+          // domain-contributor RBAC tiers. When enabled the Console can CREATE the
+          // loom-domain-<id>-admins / -contributors security groups at domain-create
+          // time (needs the Group.ReadWrite.All Graph grant documented by
+          // identity-graph-rbac.bicep — same AppRole as M365 linking). When false the
+          // provisionGroups path gates honestly (503) and the legacy admins[]/
+          // contributors model still applies.
+          loomDomainGroupProvisioningEnabled ? [
+            { name: 'LOOM_DOMAIN_GROUP_PROVISIONING', value: 'true' }
+          ] : [],
           // OneLake shortcuts → SharePoint document libraries / OneDrive folders
           // via Microsoft Graph (lakehouse editor → New shortcut → SharePoint /
           // OneDrive). Needs the Console UAMI's Sites.Read.All + Files.Read.All
@@ -3439,13 +3452,14 @@ module iotHubRbac 'iothub-rbac.bicep' = if (!empty(loomIotHubResourceId) && !ski
 // out-of-band by grant-identity-graph-approles.sh (ARM can't grant Graph
 // AppRoles); this module surfaces the required grants + sovereign Graph
 // endpoint as deterministic outputs for the post-deploy bootstrap.
-module identityGraphRbac 'identity-graph-rbac.bicep' = if (loomIdentityPickerEnabled || loomSharepointShortcutsEnabled) {
+module identityGraphRbac 'identity-graph-rbac.bicep' = if (loomIdentityPickerEnabled || loomSharepointShortcutsEnabled || loomDomainGroupProvisioningEnabled) {
   name: 'console-identity-graph-rbac'
   params: {
     consolePrincipalId: identity.outputs.uamiConsolePrincipalId
     boundary: boundary
     skipRoleGrants: skipRoleGrants
     workspaceM365LinkEnabled: loomWorkspaceM365LinkEnabled
+    domainGroupProvisioningEnabled: loomDomainGroupProvisioningEnabled
     sharepointShortcutsEnabled: loomSharepointShortcutsEnabled
     identityPickerEnabled: loomIdentityPickerEnabled
   }

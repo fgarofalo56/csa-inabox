@@ -8,6 +8,7 @@
  */
 import { NextRequest, NextResponse } from 'next/server';
 import { getSession } from '@/lib/auth/session';
+import { denyIfNoDlzAccess } from '@/lib/auth/dlz-gate';
 import { listContainerThroughput, updateContainerThroughput } from '@/lib/azure/cosmos-client';
 
 export const runtime = 'nodejs';
@@ -16,6 +17,8 @@ export const dynamic = 'force-dynamic';
 export async function GET(_req: NextRequest) {
   const s = getSession();
   if (!s) return NextResponse.json({ ok: false, error: 'unauthenticated' }, { status: 401 });
+  const denied = await denyIfNoDlzAccess(s, 'scaling');
+  if (denied) return denied;
   if (!process.env.LOOM_COSMOS_ENDPOINT) {
     return NextResponse.json({
       ok: false, error: 'Cosmos not configured',
@@ -33,6 +36,8 @@ export async function GET(_req: NextRequest) {
 export async function POST(req: NextRequest) {
   const s = getSession();
   if (!s) return NextResponse.json({ ok: false, error: 'unauthenticated' }, { status: 401 });
+  const denied = await denyIfNoDlzAccess(s, 'scaling');
+  if (denied) return denied;
   const body = await req.json().catch(() => ({})) as { container?: string; ru?: number; maxRu?: number };
   if (!body?.container) return NextResponse.json({ ok: false, error: 'container required' }, { status: 400 });
   if (!body?.ru && !body?.maxRu) return NextResponse.json({ ok: false, error: 'ru (manual) or maxRu (autoscale) required' }, { status: 400 });

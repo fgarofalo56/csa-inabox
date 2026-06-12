@@ -22,17 +22,18 @@ import {
   TabList, Tab, Dropdown, Option, Field,
   makeStyles, tokens,
 } from '@fluentui/react-components';
-import { AddRegular, ShieldKeyhole24Regular, PeopleTeam24Regular, ShieldTask24Regular } from '@fluentui/react-icons';
+import { AddRegular, ShieldKeyhole24Regular, PeopleTeam24Regular, ShieldTask24Regular, Organization24Regular } from '@fluentui/react-icons';
 import { AdminShell } from '@/lib/components/admin-shell';
 import { CapabilityTree } from '@/lib/components/feature-rbac/capability-tree';
 import { GrantRow } from '@/lib/components/feature-rbac/grant-row';
 import { GrantDialog } from '@/lib/components/feature-rbac/grant-dialog';
 import { Section } from '@/lib/components/ui/section';
 import { WorkspaceAccessPane } from '@/lib/panes/workspace-access';
+import { DomainAccessPane } from '@/lib/panes/domain-access';
 import type { Capability } from '@/lib/auth/feature-catalog';
 import type { FeatureGrant } from '@/lib/auth/feature-gate';
 
-type PermTab = 'features' | 'workspace-access';
+type PermTab = 'features' | 'workspace-access' | 'domain-access';
 
 const useStyles = makeStyles({
   intro: { color: tokens.colorNeutralForeground3, marginBottom: tokens.spacingVerticalL },
@@ -87,6 +88,7 @@ export default function PermissionsPage() {
       >
         <Tab value="features" icon={<ShieldTask24Regular />}>Feature permissions</Tab>
         <Tab value="workspace-access" icon={<PeopleTeam24Regular />}>Workspace access</Tab>
+        <Tab value="domain-access" icon={<Organization24Regular />}>Domain access</Tab>
       </TabList>
 
       {/* Keep both mounted to preserve each tab's loaded state; hide the inactive one. */}
@@ -95,6 +97,9 @@ export default function PermissionsPage() {
       </div>
       <div className={tab === 'workspace-access' ? undefined : styles.hidden}>
         <WorkspaceAccessTab styles={styles} active={tab === 'workspace-access'} />
+      </div>
+      <div className={tab === 'domain-access' ? undefined : styles.hidden}>
+        <DomainAccessPane />
       </div>
     </AdminShell>
   );
