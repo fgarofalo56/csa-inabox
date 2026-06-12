@@ -926,6 +926,24 @@ module dlzAccessPolicyRbac 'modules/admin-plane/access-policy-rbac.bicep' = [for
   }
 }]
 
+// Multi-sub: per-DLZ item-create Contributor grant (audit-t159 domain-aware
+// resource routing). The Console UAMI lives in the admin sub; this grants it
+// Contributor on each domain DLZ resource group (in the DLZ's own subscription)
+// so domain-scoped item-create ARM PUTs — lakehouse/warehouse/eventhouse/
+// notebook/mirroring — succeed instead of 403'ing cross-sub. Mirrors the RG-name
+// contract `rg-csa-loom-dlz-{domain}-{location}` used by the dlz / dlzAccessPolicyRbac
+// loops above + scripts/csa-loom/bootstrap-dlz-rgs.sh; resolved at runtime by
+// apps/fiab-console/lib/azure/topology.ts → resolveDeployTarget.
+@batchSize(1)
+module dlzItemCreateRbac 'modules/admin-plane/dlz-attach-itemcreate-rbac.bicep' = [for (subId, i) in dlzSubscriptionIds: if (deploymentMode == 'multi-sub') {
+  name: 'dlz-${i}-itemcreate-rbac'
+  scope: resourceGroup(subId, 'rg-csa-loom-dlz-${dlzDomainNames[i]}-${location}')
+  params: {
+    consolePrincipalId: adminPlane.outputs.uamiConsolePrincipalId
+    skipRoleGrants: skipRoleGrants
+  }
+}]
+
 
 // real, self-contained Azure resource into the DLZ RG when its flag is on.
 // consolePrincipalId wires the Loom Console UAMI so the matching navigator

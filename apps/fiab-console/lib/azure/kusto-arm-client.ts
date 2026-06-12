@@ -66,11 +66,26 @@ export class KustoNotConfiguredError extends Error {
   }
 }
 
-export function readKustoArmConfig(): KustoClusterArmConfig {
+/**
+ * Resolve the ADX cluster ARM coordinates.
+ *
+ * Domain-aware: callers in a multi-sub deployment pass `override` (from the
+ * single resolver `lib/azure/topology.ts → resolveDeployTarget`) so the cluster
+ * is targeted in the owning workspace's domain DLZ subscription / resource
+ * group. When `override` is absent the flat env default is used —
+ * `LOOM_KUSTO_SUB || LOOM_SUBSCRIPTION_ID` + `LOOM_KUSTO_RG || LOOM_DLZ_RG` —
+ * which is exactly the single-sub behaviour every existing deployment has today.
+ */
+export function readKustoArmConfig(override?: {
+  subscriptionId?: string;
+  resourceGroup?: string;
+}): KustoClusterArmConfig {
   const missing: string[] = [];
   const subscriptionId =
+    (override?.subscriptionId || '').trim() ||
     process.env.LOOM_KUSTO_SUB || process.env.LOOM_SUBSCRIPTION_ID || '';
   const resourceGroup =
+    (override?.resourceGroup || '').trim() ||
     process.env.LOOM_KUSTO_RG || process.env.LOOM_DLZ_RG || '';
   const clusterName = process.env.LOOM_KUSTO_CLUSTER_NAME || '';
   if (!subscriptionId) missing.push('LOOM_KUSTO_SUB (or LOOM_SUBSCRIPTION_ID)');

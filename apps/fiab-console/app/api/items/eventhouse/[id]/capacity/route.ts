@@ -36,13 +36,30 @@ import {
   KustoError,
 } from '@/lib/azure/kusto-client';
 import { fetchMetrics, type MetricResult } from '@/lib/azure/monitor-client';
+import { resolveDeployTarget } from '@/lib/azure/topology';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
 
-/** Construct the ARM resource id for the shared ADX cluster from env. */
-function kustoClusterArmId(): { id: string | null; missing: string[] } {
-  const sub = process.env.LOOM_SUBSCRIPTION_ID;
+/**
+ * Construct the ARM resource id for the eventhouse's ADX cluster.
+ *
+ * Domain-aware: when the caller passes `?workspaceId=`, the subscription comes
+ * from the SINGLE resolver `resolveDeployTarget(workspaceId, 'eventhouse')` —
+ * the owning workspace's domain DLZ sub in a multi-sub deployment, or the
+ * single-sub default otherwise. Falls back to LOOM_SUBSCRIPTION_ID when no
+ * workspace is supplied (preserves the prior behaviour). The resource group +
+ * cluster name remain the Kusto-specific env (the shared ADX cluster lives in
+ * the resolved sub).
+ */
+async function kustoClusterArmId(
+  workspaceId: string | null,
+): Promise<{ id: string | null; missing: string[] }> {
+  let sub = process.env.LOOM_SUBSCRIPTION_ID || '';
+  if (workspaceId) {
+    const target = await resolveDeployTarget(workspaceId, 'eventhouse').catch(() => null);
+    if (target?.subscriptionId) sub = target.subscriptionId;
+  }
   const rg = process.env.LOOM_KUSTO_RG || 'rg-csa-loom-admin-eastus2';
   const cluster = process.env.LOOM_KUSTO_CLUSTER_NAME || 'adx-csa-loom-shared';
   const missing: string[] = [];
@@ -54,9 +71,11 @@ function kustoClusterArmId(): { id: string | null; missing: string[] } {
   };
 }
 
-export async function GET() {
+export async function GET(req: NextRequest) {
   const session = getSession();
   if (!session) return NextResponse.json({ ok: false, error: 'unauthenticated' }, { status: 401 });
+
+  const workspaceId = req.nextUrl.searchParams.get('workspaceId');
 
   // Honest data-plane gate: ADX cluster URI not configured at all.
   const gate = kustoConfigGate();
@@ -78,7 +97,7 @@ export async function GET() {
     // gate (sovereign cloud, missing role) must not block the Kusto results.
     let metrics: MetricResult[] | undefined;
     let metricsGate: string | undefined;
-    const arm = kustoClusterArmId();
+    const arm = await kustoClusterArmId(workspaceId);
     if (!arm.id) {
       metricsGate = `Live throttle metrics require ${arm.missing.join(', ')} to construct the ADX cluster resource id. The capacity policy + live slot table below are unaffected.`;
     } else {

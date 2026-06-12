@@ -46,19 +46,26 @@ export async function PATCH(
       await writeDomainAudit(tenantId, who, 'update', { domainId, move: { parentDomainId: newParentId } });
       return NextResponse.json({ ok: true, domain: moved, moved: true });
     }
-    const domain = await getDomainsStore().updateDomain(
-      tenantId,
-      domainId,
-      {
-        name: body.name,
-        description: body.description,
-        color: body.color,
-        imageUrl: body.imageUrl,
-        owners: Array.isArray(body.owners) ? body.owners : undefined,
-        contributors: Array.isArray(body.contributors) ? body.contributors : undefined,
-      },
-      who,
-    );
+    const patch: Parameters<ReturnType<typeof getDomainsStore>['updateDomain']>[2] = {
+      name: body.name,
+      description: body.description,
+      color: body.color,
+      imageUrl: body.imageUrl,
+      owners: Array.isArray(body.owners) ? body.owners : undefined,
+      contributors: Array.isArray(body.contributors) ? body.contributors : undefined,
+    };
+    // Domain-aware routing registry (item-create topology) — only touch these
+    // when the request actually carries them, so an unrelated rename/recolor
+    // PATCH never wipes a domain's subscriptionIds and breaks resource routing.
+    if (Array.isArray(body.subscriptionIds)) {
+      patch.subscriptionIds = body.subscriptionIds
+        .map((x: unknown) => String(x).trim())
+        .filter((x: string) => x.length > 0);
+    }
+    if (typeof body.dlzResourceGroup === 'string') {
+      patch.dlzResourceGroup = body.dlzResourceGroup.trim() || undefined;
+    }
+    const domain = await getDomainsStore().updateDomain(tenantId, domainId, patch, who);
     await writeDomainAudit(tenantId, who, 'update', { domainId, patch: body });
     return NextResponse.json({ ok: true, domain });
   } catch (e: any) {

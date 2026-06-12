@@ -45,6 +45,15 @@ export async function POST(req: NextRequest) {
   const name = (body?.name || '').toString().trim();
   if (!id || !name)
     return NextResponse.json({ ok: false, error: 'id and name are required' }, { status: 400 });
+  // Domain-aware routing registry (item-create topology). subscriptionIds[0] is
+  // the primary DLZ sub; sanitize to trimmed, non-empty GUIDs/strings.
+  const subscriptionIds = Array.isArray(body.subscriptionIds)
+    ? body.subscriptionIds.map((x: unknown) => String(x).trim()).filter((x: string) => x.length > 0)
+    : undefined;
+  const dlzResourceGroup =
+    typeof body.dlzResourceGroup === 'string' && body.dlzResourceGroup.trim()
+      ? body.dlzResourceGroup.trim()
+      : undefined;
   try {
     const domain = await getDomainsStore().createDomain(
       tenantId,
@@ -57,6 +66,8 @@ export async function POST(req: NextRequest) {
         owners: Array.isArray(body.owners) ? body.owners : undefined,
         contributors: Array.isArray(body.contributors) ? body.contributors : undefined,
         parentDomainId: body.parentDomainId,
+        subscriptionIds,
+        dlzResourceGroup,
       },
       who,
     );
