@@ -51,14 +51,17 @@ function relFromPrimary(url: string): string {
 /**
  * True when a MkDocs dir-URL relative path has a backing source page on disk.
  *
- * MkDocs with `use_directory_urls: true` (this repo's default) resolves a
- * directory deep link three ways, in priority order: `<rel>.md`, then the
- * directory index `<rel>/index.md`, then `<rel>/README.md` (MkDocs treats a
- * folder's README as its index page). The solution-accelerator use cases
- * deep-link to dirs backed by `README.md` (e.g.
- * `learn/08-solutions/change-feed-processor`), so the README form must count
- * as a real published page — otherwise this test reports a false dead link for
- * pages that resolve fine at runtime.
+ * MkDocs with `use_directory_urls: true` (this repo's default) serves a
+ * directory URL (`…/foo/`) from any of three sources, in MkDocs' own
+ * resolution order:
+ *   • `foo.md`                — the page file itself, or
+ *   • `foo/index.md`          — the canonical section index, or
+ *   • `foo/README.md`         — MkDocs core treats README.md as an index alias
+ *                               (used by 198 nav entries across this site, e.g.
+ *                               every learn/08-solutions/<accelerator>/ page).
+ * Omitting the README.md alias would flag real, published pages as dead links
+ * for pages that resolve fine at runtime (e.g.
+ * `learn/08-solutions/change-feed-processor`).
  */
 function docExists(rel: string): boolean {
   return (
