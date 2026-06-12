@@ -130,7 +130,7 @@ export function DspmAiPanel({ days = 30 }: { days?: number }) {
       render: (a) => (
         <div>
           <strong>{a.agentName}</strong>
-          <Caption1 block style={{ color: tokens.colorNeutralForeground3 }}>{a.itemType}</Caption1>
+          <Caption1 block className={s.muted}>{a.itemType}</Caption1>
         </div>
       ),
     },
@@ -138,7 +138,7 @@ export function DspmAiPanel({ days = 30 }: { days?: number }) {
       key: 'sources', label: 'Data sources touched', width: 320, getValue: (a) => a.totalSourceCount,
       render: (a) => (
         a.sources.length === 0
-          ? <Caption1 style={{ color: tokens.colorNeutralForeground3 }}>No sources attached</Caption1>
+          ? <Caption1 className={s.muted}>No sources attached</Caption1>
           : (
             <div className={s.sourceChips}>
               {a.sources.map((src, i) => (
@@ -156,12 +156,12 @@ export function DspmAiPanel({ days = 30 }: { days?: number }) {
       key: 'maxLabel', label: 'Max sensitivity', width: 170, getValue: (a) => a.maxLabel || '',
       render: (a) => a.maxLabel
         ? <Badge appearance="filled" color={labelColor(a.maxLabel)} size="small">{a.maxLabel}</Badge>
-        : <Caption1 style={{ color: tokens.colorNeutralForeground3 }}>None</Caption1>,
+        : <Caption1 className={s.muted}>None</Caption1>,
     },
     {
       key: 'protected', label: 'Protection', width: 130, getValue: (a) => (a.protected ? 1 : 0),
       render: (a) => a.sensitiveSourceCount === 0
-        ? <Caption1 style={{ color: tokens.colorNeutralForeground3 }}>—</Caption1>
+        ? <Caption1 className={s.muted}>—</Caption1>
         : a.protected
           ? <Badge appearance="tint" color="success" icon={<ShieldLockFilled />} size="small">Protected</Badge>
           : <Badge appearance="tint" color="warning" icon={<ShieldProhibitedFilled />} size="small">Unprotected</Badge>,
@@ -169,14 +169,14 @@ export function DspmAiPanel({ days = 30 }: { days?: number }) {
     {
       key: 'usageCalls', label: 'Calls', width: 100, getValue: (a) => a.usageCalls,
       render: (a) => resp?.summary?.usageGated
-        ? <Caption1 style={{ color: tokens.colorNeutralForeground3 }}>—</Caption1>
+        ? <Caption1 className={s.muted}>—</Caption1>
         : <strong>{a.usageCalls.toLocaleString()}</strong>,
     },
     {
       key: 'lastUsedAt', label: 'Last used', width: 180, getValue: (a) => (a.lastUsedAt ? Date.parse(a.lastUsedAt) : 0),
       render: (a) => a.lastUsedAt
         ? <Caption1>{new Date(a.lastUsedAt).toLocaleString()}</Caption1>
-        : <Caption1 style={{ color: tokens.colorNeutralForeground3 }}>{resp?.summary?.usageGated ? '—' : 'Never'}</Caption1>,
+        : <Caption1 className={s.muted}>{resp?.summary?.usageGated ? '—' : 'Never'}</Caption1>,
     },
   ];
 
@@ -281,7 +281,7 @@ export function DspmAiPanel({ days = 30 }: { days?: number }) {
               rows={resp.agents || []}
               getRowId={(a) => a.agentId}
               ariaLabel="AI agents and the sensitive data they touch"
-              empty="No AI agents found in this tenant yet. Create a data agent and attach data sources; it appears here once saved."
+              empty="No AI agents found in this tenant yet. Create a data agent, operations agent, or prompt flow and attach data sources; it appears here once saved."
             />
           </Section>
         </>

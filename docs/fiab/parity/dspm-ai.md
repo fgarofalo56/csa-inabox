@@ -36,7 +36,7 @@ Graph Information Protection + Azure Monitor only).
 
 | # | Capability | Status | How |
 |---|-----------|--------|-----|
-| 1 | AI agent inventory | ✅ built | `computeDspmAiPosture()` queries Cosmos `items` for `itemType = 'data-agent'` across the tenant's workspaces (extensible `AGENT_ITEM_TYPES` set). |
+| 1 | AI agent inventory | ✅ built | `computeDspmAiPosture()` queries Cosmos `items` for the AI-agent item types (`data-agent`, `operations-agent`, `prompt-flow`) across the tenant's workspaces — matching Purview's "Apps and agents" breadth rather than a single type. The set is extensible via `LOOM_DSPM_AI_AGENT_ITEM_TYPES` (comma-separated, additive to the defaults). |
 | 2 | Sensitive data accessed (labels) | ✅ built | Each agent's typed `state.sources[]` is resolved to its bound item's `state.sensitivityLabel` (Cosmos join by id then displayName). Per-agent `labelDistribution`, `sensitiveSourceCount`, and `maxLabel` (highest-ranked). |
 | 3 | Protection state | ✅ built (⚠ honest-gate on MIP) | `maxLabel` is checked against Microsoft Graph Information Protection (`listSensitivityLabels().hasProtection`). When `LOOM_MIP_ENABLED` is unset → `gates.mip` info bar; ranking falls back to a deterministic static order and protection shows unknown. |
 | 4 | Usage recency / volume per agent | ✅ built (⚠ honest-gate on Monitor) | KQL `AppEvents | where Name=="copilot.usage" | summarize calls=count(), lastUsed=max(TimeGenerated) by agent_id` over Log Analytics. The data-agent chat path now stamps `copilot.usage` with `agent_id` / `agent_name` / `sensitivity_label` / `data_sources`. Unset LAW → `gates.usage`, usage columns blank, label report still renders. |
@@ -83,13 +83,17 @@ Contributor grant; `LOOM_LOG_ANALYTICS_WORKSPACE_ID` + Log Analytics Reader
 (admin-plane/monitoring.bicep); `APPLICATIONINSIGHTS_CONNECTION_STRING`
 (admin-plane/app-deployments.bicep); `LOOM_MIP_ENABLED` + the Graph IP app roles;
 and `LOOM_TENANT_ADMIN_OID` / `LOOM_TENANT_ADMIN_GROUP_ID` for the admin gate.
+`LOOM_DSPM_AI_AGENT_ITEM_TYPES` is an **optional** comma-separated override that
+*adds* item types to the built-in agent set (`data-agent`, `operations-agent`,
+`prompt-flow`); the report works without it, so no bicep wiring is required.
 
 ## Verification
 
 - `npx tsc --noEmit` — clean on all touched files.
 - Unit tests: `lib/azure/__tests__/dspm-ai-client.test.ts` (source→label join,
-  max-label ranking, protection state, usage join, MIP/Monitor honest gates) and
-  the extended `copilot-usage-emit.test.ts` (new agent_id/sensitivity_label
+  max-label ranking, protection state, usage join, MIP/Monitor honest gates,
+  and the widened agent inventory covering `operations-agent` + `prompt-flow`)
+  and the extended `copilot-usage-emit.test.ts` (new agent_id/sensitivity_label
   dimension; base schema preserved).
 - Live E2E: hit `GET /api/admin/dspm-ai` with a minted admin session →
   `{ ok:true, agents, summary, gates }`; with `LOOM_LOG_ANALYTICS_WORKSPACE_ID`

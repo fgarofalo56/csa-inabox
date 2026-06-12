@@ -290,8 +290,28 @@ export function assertCosmosConfigured(): void {
   }
 }
 
-/** Item types that carry grounded data sources + count as AI agents/Copilots. */
-const AGENT_ITEM_TYPES = new Set(['data-agent']);
+/**
+ * Loom item types that are AI agents / Copilots grounding on data sources —
+ * the equivalent of the "Apps and agents" inventory in Microsoft Purview
+ * DSPM for AI. Each grounds on data via `state.sources` (resolved to the
+ * bound item's sensitivity label below):
+ *   - data-agent       — conversational Q&A grounded on warehouse/lakehouse/semantic models
+ *   - operations-agent — monitors items/workspaces/streams + recommends actions (preview)
+ *   - prompt-flow      — LLM/tool graph that can ground on data sources
+ * Scoping to only `data-agent` previously made the report show "no AI agents"
+ * for tenants that had prompt-flows / operations-agents — an under-count vs.
+ * the report's own "every agent in the estate" promise. Override the set with
+ * a comma-separated LOOM_DSPM_AI_AGENT_ITEM_TYPES if the estate models agents
+ * under additional item types.
+ */
+const DEFAULT_AGENT_ITEM_TYPES = ['data-agent', 'operations-agent', 'prompt-flow'];
+const AGENT_ITEM_TYPES = new Set(
+  (process.env.LOOM_DSPM_AI_AGENT_ITEM_TYPES || '')
+    .split(',')
+    .map((s) => s.trim())
+    .filter(Boolean)
+    .concat(DEFAULT_AGENT_ITEM_TYPES),
+);
 
 /**
  * Compute the DSPM-for-AI posture for one tenant: every AI agent, the
