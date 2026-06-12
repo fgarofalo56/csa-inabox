@@ -122,6 +122,15 @@ function hubStatusColor(s?: string) {
   return 'informative' as const;
 }
 
+// Public network access posture badge color. "Disabled" (private-endpoint-only)
+// is the secure IL5/GCC-High default, so it reads as success; "Enabled" (public
+// reachable) reads as warning to flag the looser posture.
+function publicAccessColor(s?: string) {
+  if (s === 'Disabled' || s === 'SecuredByPerimeter') return 'success' as const;
+  if (s === 'Enabled') return 'warning' as const;
+  return 'informative' as const;
+}
+
 // ===================================================================
 // Data Explorer dialog — Send events + View (peek) events for one hub.
 // Mirrors the Azure portal per-event-hub "Data Explorer" tool. Send hits the
@@ -671,7 +680,7 @@ export function EventHubsNamespaceTree({ refreshKey = 0, onSelectEventHub }: Eve
                     <TreeItem itemType="branch" value={`cg-grp-${h.name}`}>
                       {groupHeader('Consumer groups', <PeopleTeam20Regular />, cgByHub[h.name]?.length ?? 0, () => openCreate('cg', h.name), 'New consumer group')}
                       <Tree>
-                        {cgLoading[h.name] && <TreeItem itemType="leaf" value={`cg-load-${h.name}`}><TreeItemLayout><Caption1>Loading…</Caption1></TreeItemLayout></TreeItem>}
+                        {cgLoading[h.name] && <TreeItem itemType="leaf" value={`cg-load-${h.name}`}><TreeItemLayout><Spinner size="extra-tiny" label="Loading consumer groups…" labelPosition="after" /></TreeItemLayout></TreeItem>}
                         {!cgLoading[h.name] && (cgByHub[h.name] || []).length === 0 && (
                           <TreeItem itemType="leaf" value={`cg-empty-${h.name}`}><TreeItemLayout><Caption1>No consumer groups</Caption1></TreeItemLayout></TreeItem>
                         )}
@@ -767,13 +776,16 @@ export function EventHubsNamespaceTree({ refreshKey = 0, onSelectEventHub }: Eve
                 <TreeItemLayout iconBefore={<ShieldKeyhole20Regular />}>
                   {network ? (
                     <span className={s.leafRow}>
-                      <span>Public access: {network.publicNetworkAccess || '—'}</span>
+                      <span>Public access</span>
                       <span className={s.leafActions}>
-                        <Badge size="small" appearance="tint">{network.defaultAction || '—'}</Badge>
+                        <Badge size="small" appearance="filled" color={publicAccessColor(network.publicNetworkAccess)}>{network.publicNetworkAccess || '—'}</Badge>
+                        <Tooltip content="Default firewall action when no rule matches" relationship="label">
+                          <Badge size="small" appearance="tint">{network.defaultAction || '—'}</Badge>
+                        </Tooltip>
                         <Caption1>{network.ipRuleCount} IP / {network.vnetRuleCount} VNet</Caption1>
                       </span>
                     </span>
-                  ) : <Caption1>Loading…</Caption1>}
+                  ) : <Spinner size="extra-tiny" label="Loading…" labelPosition="after" />}
                 </TreeItemLayout>
               </TreeItem>
             </Tree>
@@ -813,7 +825,7 @@ export function EventHubsNamespaceTree({ refreshKey = 0, onSelectEventHub }: Eve
               </span>
             </TreeItemLayout>
             <Tree>
-              {peConnections.length === 0 && <TreeItem itemType="leaf" value="pe-empty"><TreeItemLayout><Caption1>No private endpoint connections</Caption1></TreeItemLayout></TreeItem>}
+              {peConnections.filter((c) => match(c.name)).length === 0 && <TreeItem itemType="leaf" value="pe-empty"><TreeItemLayout><Caption1>{f ? 'No matches' : 'No private endpoint connections'}</Caption1></TreeItemLayout></TreeItem>}
               {peConnections.filter((c) => match(c.name)).map((c) => (
                 <TreeItem key={c.name} itemType="leaf" value={`pe-${c.name}`}>
                   <TreeItemLayout iconBefore={<LinkSquare20Regular />}>

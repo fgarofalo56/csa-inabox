@@ -114,7 +114,6 @@ export interface EventHubsNamespaceEditorProps {
 }
 
 export function EventHubsNamespaceEditor({ open, hub, initialTab = 'capture', onClose, onSaved }: EventHubsNamespaceEditorProps) {
-  const s = useStyles();
   const [tab, setTab] = useState<EditorTab>(initialTab);
 
   useEffect(() => { if (open) setTab(hub ? initialTab : (initialTab === 'capture' ? 'geodr' : initialTab)); }, [open, initialTab, hub]);
@@ -377,6 +376,7 @@ function GeoDrTab({ onSaved }: { onSaved?: () => void }) {
                 <TableRow>
                   <TableHeaderCell>Alias</TableHeaderCell>
                   <TableHeaderCell>Role</TableHeaderCell>
+                  <TableHeaderCell>Partner namespace</TableHeaderCell>
                   <TableHeaderCell>State</TableHeaderCell>
                   <TableHeaderCell>Actions</TableHeaderCell>
                 </TableRow>
@@ -386,6 +386,7 @@ function GeoDrTab({ onSaved }: { onSaved?: () => void }) {
                   <TableRow key={g.name}>
                     <TableCell>{g.name}</TableCell>
                     <TableCell>{g.role ? <Badge size="small" appearance="tint">{g.role}</Badge> : '—'}</TableCell>
+                    <TableCell>{g.partnerNamespace ? <Tooltip content={g.partnerNamespace} relationship="label"><span className={s.keyVal}>{g.partnerNamespace.split('/').pop()}</span></Tooltip> : <Caption1 className={s.hint}>—</Caption1>}</TableCell>
                     <TableCell><Caption1>{g.provisioningState || '—'}</Caption1></TableCell>
                     <TableCell>
                       <span className={s.actionsCell}>
