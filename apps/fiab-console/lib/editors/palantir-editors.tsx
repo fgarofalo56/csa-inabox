@@ -89,6 +89,8 @@ const useStyles = makeStyles({
   },
   mutedCaption: { color: tokens.colorNeutralForeground3 },
   errorCaption: { color: tokens.colorPaletteRedForeground1 },
+  dialogForm: { display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalM, minWidth: '420px' },
+  dialogScroll: { maxHeight: '52vh', overflowY: 'auto', paddingRight: tokens.spacingHorizontalXS },
 });
 
 /** Code/output viewer with a working copy-to-clipboard control. */
@@ -258,7 +260,7 @@ function useOntologyBinding(slug: string, id: string) {
 }
 
 // ───────────────────────── Workshop app (Atelier) ─────────────────────────
-interface WorkshopAction { id: string; label: string; kind: 'create' | 'update'; entity: string }
+interface WorkshopAction { id: string; label: string; kind: 'create' | 'update' | 'delete'; entity: string }
 interface WorkshopState {
   boundOntologyId?: string; boundOntologyName?: string;
   objectViews?: string[]; actions?: WorkshopAction[]; [k: string]: unknown;
@@ -270,7 +272,7 @@ export function WorkshopAppEditor({ item, id }: { item: FabricItemType; id: stri
   const onto = useOntologyBinding('workshop-app', id);
   const [pickOnto, setPickOnto] = useState('');
   const [actLabel, setActLabel] = useState('');
-  const [actKind, setActKind] = useState<'create' | 'update'>('create');
+  const [actKind, setActKind] = useState<'create' | 'update' | 'delete'>('create');
   const [actEntity, setActEntity] = useState('');
 
   const classes = onto.surface?.classes || [];
@@ -439,16 +441,20 @@ export function WorkshopAppEditor({ item, id }: { item: FabricItemType; id: stri
           )}
           {runMsg && <MessageBar intent={runMsg.intent}><MessageBarBody>{runMsg.text}</MessageBarBody></MessageBar>}
           {runResult && (
-            <div className={s.tableWrap}>
-            <Table size="small" aria-label={`${runResult.entityType} rows`}>
-              <TableHeader><TableRow>{runResult.columns.map((col) => <TableHeaderCell key={col}>{col}</TableHeaderCell>)}</TableRow></TableHeader>
-              <TableBody>
-                {runResult.rows.slice(0, 50).map((row, ri) => (
-                  <TableRow key={ri}>{(Array.isArray(row) ? row : []).map((cell, ci) => <TableCell key={ci}>{cell === null || cell === undefined ? '' : String(cell)}</TableCell>)}</TableRow>
-                ))}
-              </TableBody>
-            </Table>
-            </div>
+            runResult.rows.length === 0 ? (
+              <div className={s.empty}><Caption1>No rows in <strong>{runResult.entityType}</strong> yet — use a create action to add one.</Caption1></div>
+            ) : (
+              <div className={s.tableWrap}>
+              <Table size="small" aria-label={`${runResult.entityType} rows`}>
+                <TableHeader><TableRow>{runResult.columns.map((col) => <TableHeaderCell key={col}>{col}</TableHeaderCell>)}</TableRow></TableHeader>
+                <TableBody>
+                  {runResult.rows.slice(0, 50).map((row, ri) => (
+                    <TableRow key={ri}>{(Array.isArray(row) ? row : []).map((cell, ci) => <TableCell key={ci}>{cell === null || cell === undefined ? '' : String(cell)}</TableCell>)}</TableRow>
+                  ))}
+                </TableBody>
+              </Table>
+              </div>
+            )
           )}
         </div>
 
@@ -456,8 +462,8 @@ export function WorkshopAppEditor({ item, id }: { item: FabricItemType; id: stri
           <SectionHead icon={<Flash20Regular />} title="Write-back actions" hint="Define create / update actions over the bound object types." />
           <div className={s.addBar}>
             <Field label="Action label"><Input value={actLabel} onChange={(_, d) => setActLabel(d.value)} placeholder="e.g. Approve order" /></Field>
-            <Field label="Kind"><Dropdown value={actKind} selectedOptions={[actKind]} onOptionSelect={(_, d) => setActKind((d.optionValue as 'create' | 'update') || 'create')}>
-              <Option value="create">create</Option><Option value="update">update</Option>
+            <Field label="Kind"><Dropdown value={actKind} selectedOptions={[actKind]} onOptionSelect={(_, d) => setActKind((d.optionValue as 'create' | 'update' | 'delete') || 'create')}>
+              <Option value="create">create</Option><Option value="update">update</Option><Option value="delete">delete</Option>
             </Dropdown></Field>
             <Field label="Object type" style={{ minWidth: 200 }}>
               <Dropdown value={actEntity} selectedOptions={actEntity ? [actEntity] : []} onOptionSelect={(_, d) => setActEntity(d.optionValue || '')} placeholder={classes.length ? 'Select object' : 'Bind an ontology first'}>
@@ -468,7 +474,7 @@ export function WorkshopAppEditor({ item, id }: { item: FabricItemType; id: stri
           </div>
           {actions.length === 0 ? <div className={s.empty}><Caption1>No actions yet.</Caption1></div> : actions.map((a) => (
             <div key={a.id} className={s.row}>
-              <Badge appearance="tint" color={a.kind === 'create' ? 'success' : 'brand'}>{a.kind}</Badge>
+              <Badge appearance="tint" color={a.kind === 'create' ? 'success' : a.kind === 'delete' ? 'danger' : 'brand'}>{a.kind}</Badge>
               <Body1><strong>{a.label}</strong></Body1>
               <Caption1 className={s.hint}>→ {a.entity}</Caption1>
               <span className={s.spacer} />
@@ -487,10 +493,12 @@ export function WorkshopAppEditor({ item, id }: { item: FabricItemType; id: stri
             <DialogBody>
               <DialogTitle>{openAction ? `${openAction.label} — ${openAction.kind} ${openAction.entity}` : 'Run action'}</DialogTitle>
               <DialogContent>
-                <div style={{ display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalM }}>
+                <div className={s.dialogForm}>
                   {colsBusy && <Spinner size="tiny" label="Loading columns…" labelPosition="after" />}
                   {openAction?.kind === 'delete' && (
-                    <Caption1>Delete a row from <strong>{openAction.entity}</strong> by its key column and value.</Caption1>
+                    <MessageBar intent="warning"><MessageBarBody>
+                      Deletes a row from <strong>{openAction.entity}</strong> by its key column and value. This writes to the bound warehouse and cannot be undone.
+                    </MessageBarBody></MessageBar>
                   )}
                   {(openAction?.kind === 'update' || openAction?.kind === 'delete') && (
                     <>
@@ -504,19 +512,27 @@ export function WorkshopAppEditor({ item, id }: { item: FabricItemType; id: stri
                   )}
                   {(openAction?.kind === 'create' || openAction?.kind === 'update') && (
                     formColumns.length === 0 && !colsBusy ? (
-                      <Caption1>No columns discovered for {openAction?.entity}. The table may be empty or not yet bound; ensure a Warehouse table is mapped to this entity type on the ontology.</Caption1>
-                    ) : formColumns.map((col) => (
-                      <Field key={col} label={col}>
-                        <Input value={formValues[col] ?? ''} onChange={(_, d) => setFormValues((p) => ({ ...p, [col]: d.value }))} placeholder={`${col} value`} />
-                      </Field>
-                    ))
+                      <MessageBar intent="info"><MessageBarBody>
+                        No columns discovered for {openAction?.entity}. The table may be empty or not yet bound; ensure a Warehouse table is mapped to this entity type on the ontology.
+                      </MessageBarBody></MessageBar>
+                    ) : (
+                      <div className={s.dialogScroll}>
+                        <div className={s.dialogForm}>
+                          {formColumns.map((col) => (
+                            <Field key={col} label={col}>
+                              <Input value={formValues[col] ?? ''} onChange={(_, d) => setFormValues((p) => ({ ...p, [col]: d.value }))} placeholder={`${col} value`} />
+                            </Field>
+                          ))}
+                        </div>
+                      </div>
+                    )
                   )}
                   {writeMsg && openAction && <MessageBar intent={writeMsg.intent}><MessageBarBody>{writeMsg.text}</MessageBarBody></MessageBar>}
                 </div>
               </DialogContent>
               <DialogActions>
                 <Button appearance="secondary" onClick={() => { setOpenAction(null); setWriteMsg(null); }}>Cancel</Button>
-                <Button appearance="primary" disabled={writeBusy || colsBusy} onClick={submitWrite}>{writeBusy ? 'Running…' : `Run ${openAction?.kind ?? ''}`}</Button>
+                <Button appearance="primary" disabled={writeBusy || colsBusy} icon={writeBusy ? <Spinner size="tiny" /> : undefined} onClick={submitWrite}>{writeBusy ? 'Running…' : `Run ${openAction?.kind ?? ''}`}</Button>
               </DialogActions>
             </DialogBody>
           </DialogSurface>
