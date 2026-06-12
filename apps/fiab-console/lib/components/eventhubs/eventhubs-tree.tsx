@@ -11,20 +11,25 @@
  * Event Hubs blade (Event Hubs / Schema Registry / Shared access policies /
  * Networking / Geo-recovery) into one tree.
  *
- * Every count comes from a real ARM list call; every create/delete hits the
- * real ARM REST through the namespace-level BFF routes:
+ * Every count comes from a real ARM list call; every create/delete/update hits
+ * the real ARM REST through the namespace-level BFF routes:
  *   - Event hubs        → /api/eventhubs/hubs            (list / create / delete)
  *   - Consumer groups   → /api/eventhubs/consumergroups  (per-hub list / create / delete; lazy-loaded per hub)
  *   - Schema groups     → /api/eventhubs/schemagroups    (list / create / delete)
- *   - Authorization rules → /api/eventhubs/authrules     (read-only SAS policies)
+ *   - Authorization rules → /api/eventhubs/authrules     (list SAS policies; reveal/rotate keys)
  *   - Networking        → /api/eventhubs/network         (read-only firewall summary)
- *   - Geo-recovery      → /api/eventhubs/geodr           (read-only Geo-DR configs)
+ *   - Geo-recovery      → /api/eventhubs/geodr           (list Geo-DR configs)
  *
- * Capabilities the Azure portal exposes but we don't yet author (Capture config,
- * Geo-DR pairing, private endpoints, SAS-key authoring/rotation) render as
- * honest ⚠️ gate rows naming the ARM REST that would back them — never a fake
- * list. No mocks. When the namespace is unconfigured the routes 503 and the
- * whole tree shows a single honest infra-gate MessageBar.
+ * Authoring surfaces beyond list/create/delete open the tabbed
+ * EventHubsNamespaceEditor (capture / geodr / sas / privateendpoints), which
+ * drives the full ARM/EH REST surface the Azure portal exposes:
+ *   - Capture config     → /api/eventhubs/capture                          (GET/PUT captureDescription)
+ *   - Geo-DR pair/break/failover → /api/eventhubs/geodr-actions            (POST create | delete | failover)
+ *   - SAS-key reveal/rotate      → /api/eventhubs/authrules/[rule]/keys[/regenerate] (namespace + per-hub scope)
+ *   - Private endpoints  → /api/eventhubs/private-endpoints                (GET list / POST approve | reject)
+ *
+ * No mocks. When the namespace is unconfigured the routes 503 and the whole
+ * tree shows a single honest infra-gate MessageBar.
  */
 
 import { useCallback, useEffect, useMemo, useState } from 'react';

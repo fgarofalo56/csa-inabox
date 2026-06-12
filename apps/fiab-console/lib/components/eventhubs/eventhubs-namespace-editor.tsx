@@ -419,6 +419,7 @@ function GeoDrTab({ onSaved }: { onSaved?: () => void }) {
                   <MessageBarBody>
                     <MessageBarTitle>One-way, non-reversible</MessageBarTitle>
                     Failover promotes the secondary namespace to primary and removes the original primary from the pairing for alias <strong>{confirm?.alias}</strong>. Event data is not replicated — only metadata. Re-pair after failover to restore Geo-DR protection.
+                    {' '}Per Azure Event Hubs guidance, the failover REST call must target the <strong>secondary</strong> namespace's alias. This console targets the env-pinned <code>LOOM_EVENTHUB_NAMESPACE</code> — if that points at the primary, run the failover from the console bound to the secondary namespace.
                   </MessageBarBody>
                 </MessageBar>
               ) : (
