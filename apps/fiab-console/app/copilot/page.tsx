@@ -191,11 +191,16 @@ const useStyles = makeStyles({
   flushTitle: { margin: 0 },
   // Hero glyph: on the brand gradient, so foreground-on-brand (was '#fff').
   heroIconGlyph: { width: '38px', height: '38px', color: tokens.colorNeutralForegroundOnBrand },
-  // Outline CTA over the hero gradient — on-brand text (was inline color:'#fff').
-  // The translucent border has no token, so it stays inline (griffel rejects the
-  // borderColor 4-side shorthand anyway).
+  // Outline CTA over the always-dark hero gradient — on-brand text (was inline
+  // color:'#fff'). The translucent border is a literal white-alpha to match the
+  // hero's fixed gradient (a theme token would flip in light mode). griffel
+  // rejects the `borderColor` shorthand, so the four longhand sides are set.
   heroOutlineBtn: {
     color: tokens.colorNeutralForegroundOnBrand,
+    borderTopColor: 'rgba(255,255,255,0.4)',
+    borderRightColor: 'rgba(255,255,255,0.4)',
+    borderBottomColor: 'rgba(255,255,255,0.4)',
+    borderLeftColor: 'rgba(255,255,255,0.4)',
   },
   gatedBar: { marginBottom: tokens.spacingVerticalXXL },
   remediationNote: { marginTop: tokens.spacingVerticalS },
@@ -330,7 +335,6 @@ export default function CopilotPage() {
                 appearance="outline"
                 size="large"
                 className={styles.heroOutlineBtn}
-                style={{ borderColor: 'rgba(255,255,255,0.4)' }}
                 icon={<Open16Regular />}
                 as="a"
                 href="/items/cross-item-copilot/default"

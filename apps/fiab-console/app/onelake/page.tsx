@@ -225,6 +225,7 @@ async function copyOnelakeForm(
 function tileFooter(
   it: OwnedItem,
   resolvedDomainName: string | undefined,
+  styles: ReturnType<typeof useStyles>,
 ): React.ReactNode | undefined {
   // Endorsement: prefer the flattened top-level field, fall back to the
   // legacy state.certified flag (older items predate state.endorsement).
@@ -233,7 +234,7 @@ function tileFooter(
   if (!hasContent) return undefined;
 
   return (
-    <span style={{ display: 'inline-flex', alignItems: 'center', gap: 4, flexWrap: 'wrap' }}>
+    <span className={styles.tileFooterRow}>
       {endorse && (
         <Tooltip
           content={
@@ -447,6 +448,7 @@ const useStyles = makeStyles({
   // residual inline-style extractions (static layout; chip tints stay inline)
   muted: { color: tokens.colorNeutralForeground3 },
   inlineBadges: { display: 'inline-flex', gap: tokens.spacingHorizontalXS, flexWrap: 'wrap' },
+  tileFooterRow: { display: 'inline-flex', alignItems: 'center', gap: tokens.spacingHorizontalXS, flexWrap: 'wrap' },
   labelRow: { display: 'inline-flex', gap: tokens.spacingHorizontalS, alignItems: 'center', flexWrap: 'wrap' },
   detailsChipIcon: { width: '26px', height: '26px' },
   nameIconGlyph: { width: '16px', height: '16px' },
@@ -1252,6 +1254,7 @@ export default function OneLakeCatalogPage() {
                         footer={tileFooter(
                           it,
                           it.workspaceDomain ? domainMap.get(it.workspaceDomain) : undefined,
+                          styles,
                         )}
                         onClick={() => setSelected(it)}
                       />

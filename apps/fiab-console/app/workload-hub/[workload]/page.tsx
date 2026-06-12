@@ -35,10 +35,13 @@ import type { FabricItemType } from '@/lib/catalog/fabric-item-types';
 const useStyles = makeStyles({
   intro: {
     color: tokens.colorNeutralForeground2,
-    fontSize: '14px', lineHeight: 1.55, maxWidth: '760px',
+    fontSize: tokens.fontSizeBase300,
+    lineHeight: tokens.lineHeightBase400,
+    maxWidth: '760px',
     marginBottom: tokens.spacingVerticalL,
   },
   empty: { color: tokens.colorNeutralForeground3 },
+  badgeRow: { display: 'inline-flex', gap: tokens.spacingHorizontalXS },
 });
 
 interface Props {
@@ -108,7 +111,7 @@ export default function WorkloadLandingPage(props: Props) {
                 subtitle={t.description}
                 meta={`Create a ${t.displayName.toLowerCase()}`}
                 badge={
-                  <span style={{ display: 'inline-flex', gap: 4 }}>
+                  <span className={s.badgeRow}>
                     {t.preview && <Badge appearance="outline" color="warning" size="small">Preview</Badge>}
                     {t.noRestApi && <Badge appearance="outline" color="informative" size="small">UI only</Badge>}
                   </span>
