@@ -135,17 +135,9 @@ function GeoSaveBar({ saving, dirty, savedAt, error, onSave }: {
 }
 
 const useStyles = makeStyles({
-  pad: { padding: 16, display: 'flex', flexDirection: 'column', gap: 12 },
-  toolbar: { display: 'flex', gap: 12, alignItems: 'center', flexWrap: 'wrap' },
-  editor: {
-    width: '100%', minHeight: 180,
-    fontFamily: 'Consolas, monospace', fontSize: 13, padding: 12,
-    border: `1px solid ${tokens.colorNeutralStroke2}`, borderRadius: 4,
-    backgroundColor: tokens.colorNeutralBackground3, color: tokens.colorNeutralForeground1,
-    resize: 'vertical',
-  },
-  treePad: { padding: 12, display: 'flex', flexDirection: 'column', gap: 8 },
-  field: { display: 'flex', flexDirection: 'column', gap: 4 },
+  pad: { padding: '16px', display: 'flex', flexDirection: 'column', gap: '12px' },
+  treePad: { padding: '12px', display: 'flex', flexDirection: 'column', gap: '8px' },
+  field: { display: 'flex', flexDirection: 'column', gap: '4px' },
   codeBlock: {
     fontFamily: 'Consolas, monospace', fontSize: '12px', lineHeight: '18px',
     margin: '0', padding: '12px', borderRadius: tokens.borderRadiusMedium,
@@ -162,6 +154,37 @@ const useStyles = makeStyles({
   schemaRow: {
     display: 'flex', flexDirection: 'column', gap: '2px',
     borderBottom: `1px solid ${tokens.colorNeutralStroke3}`, paddingBottom: '6px', paddingTop: '2px',
+  },
+  // Bounding-box side-rail readout under the schema panel.
+  bboxRail: {
+    marginTop: '8px', paddingTop: '8px',
+    borderTop: `1px solid ${tokens.colorNeutralStroke3}`,
+    display: 'flex', flexDirection: 'column', gap: '2px',
+  },
+  bboxValue: {
+    display: 'block', color: tokens.colorNeutralForeground3,
+    fontFamily: 'Consolas, monospace', fontSize: '11px', wordBreak: 'break-all',
+  },
+  // Last-run header row (title + run badges + timestamp).
+  runHeader: { display: 'flex', alignItems: 'center', gap: '8px', flexWrap: 'wrap' },
+  // Modern Fluent-toned parameter grid for the ADF run receipt.
+  runTable: {
+    borderCollapse: 'collapse', width: '100%', fontSize: '12px', marginTop: '4px',
+    tableLayout: 'fixed',
+  },
+  runTh: {
+    textAlign: 'left', padding: '6px 8px', fontWeight: 600,
+    color: tokens.colorNeutralForeground2,
+    borderBottom: `1px solid ${tokens.colorNeutralStroke2}`,
+  },
+  runTd: {
+    padding: '6px 8px', verticalAlign: 'top',
+    borderBottom: `1px solid ${tokens.colorNeutralStroke3}`,
+  },
+  runMono: {
+    padding: '6px 8px', verticalAlign: 'top',
+    borderBottom: `1px solid ${tokens.colorNeutralStroke3}`,
+    fontFamily: 'Consolas, monospace', wordBreak: 'break-all',
   },
 });
 
@@ -485,11 +508,9 @@ function GeoDatasetEditorBody({ item, id }: { item: FabricItemType; id: string }
             <>
               <GeoSchemaPanel columns={inspectResult.columns} rows={inspectResult.rows || []} geomColumn={state.geomColumn} />
               {inspectedBbox && (
-                <div style={{ marginTop: 8, paddingTop: 8, borderTop: `1px solid ${tokens.colorNeutralStroke3}` }}>
+                <div className={s.bboxRail}>
                   <Caption1 style={{ fontWeight: 600 }}>Bounding box (SRID {state.srid || '—'})</Caption1>
-                  <Caption1 style={{ display: 'block', color: tokens.colorNeutralForeground3, fontFamily: 'Consolas, monospace', fontSize: '11px' }}>
-                    {bboxLabel(inspectedBbox)}
-                  </Caption1>
+                  <Caption1 className={s.bboxValue}>{bboxLabel(inspectedBbox)}</Caption1>
                 </div>
               )}
             </>
@@ -1012,18 +1033,18 @@ function GeoPipelineEditorBody({ item, id }: { item: FabricItemType; id: string 
           )}
           {lastRun && (
             <div className={s.enrichGroup}>
-              <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
+              <div className={s.runHeader}>
                 <Subtitle2>Last run</Subtitle2>
                 <Badge appearance="tint" color="brand" size="small">{lastRun.pipelineName}</Badge>
                 {lastRun.runId && <Badge appearance="outline" size="small">runId {lastRun.runId}</Badge>}
-                <Caption1 style={{ color: tokens.colorNeutralForeground3 }}>{new Date(lastRun.at).toLocaleTimeString()}</Caption1>
+                <Caption1 style={{ color: tokens.colorNeutralForeground3, marginLeft: 'auto' }}>{new Date(lastRun.at).toLocaleTimeString()}</Caption1>
               </div>
-              <table style={{ borderCollapse: 'collapse', width: '100%', fontSize: 12, marginTop: 4 }}>
+              <table className={s.runTable}>
                 <thead>
-                  <tr style={{ textAlign: 'left', borderBottom: `1px solid ${tokens.colorNeutralStroke2}` }}>
-                    <th style={{ padding: '4px 8px' }}>Parameter</th>
-                    <th style={{ padding: '4px 8px' }}>Value</th>
-                    <th style={{ padding: '4px 8px' }}>Status</th>
+                  <tr>
+                    <th className={s.runTh} style={{ width: '38%' }}>Parameter</th>
+                    <th className={s.runTh} style={{ width: '30%' }}>Value</th>
+                    <th className={s.runTh} style={{ width: '32%' }}>Status</th>
                   </tr>
                 </thead>
                 <tbody>
@@ -1033,10 +1054,10 @@ function GeoPipelineEditorBody({ item, id }: { item: FabricItemType; id: string 
                       : k === 'reverseGeocode' ? String(state.reverseGeocode && !!mapsKey)
                       : String(state.bufferMeters);
                     return (
-                      <tr key={k} style={{ borderBottom: `1px solid ${tokens.colorNeutralStroke3}` }}>
-                        <td style={{ padding: '4px 8px', fontFamily: 'Consolas, monospace' }}>{k}</td>
-                        <td style={{ padding: '4px 8px', fontFamily: 'Consolas, monospace' }}>{passed ? String(lastRun.parameters[k] ?? value) : value}</td>
-                        <td style={{ padding: '4px 8px' }}>
+                      <tr key={k}>
+                        <td className={s.runMono}>{k}</td>
+                        <td className={s.runMono}>{passed ? String(lastRun.parameters[k] ?? value) : value}</td>
+                        <td className={s.runTd}>
                           <Badge appearance="tint" size="small" color={passed ? 'success' : 'warning'}>
                             {passed ? 'passed to ADF' : 'not declared'}
                           </Badge>
