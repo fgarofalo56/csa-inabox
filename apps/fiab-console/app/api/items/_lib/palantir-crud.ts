@@ -16,6 +16,7 @@ import {
   loadOwnedItem, updateOwnedItem, deleteOwnedItem, createOwnedItem, listOwnedItems, jerr,
 } from './item-crud';
 import { parseOntologyHierarchy, type OntologyEntityBinding, type OntologyClass } from '@/lib/editors/_family-utils';
+import { normalizeActionTypes, type WeaveActionType } from '@/lib/azure/weave-ontology-store';
 
 /** Summary of a saved ontology, for the bind-ontology dropdowns. */
 export interface OntologySummary {
@@ -51,6 +52,8 @@ export interface OntologySurface {
   classes: OntologyClass[];
   links: Array<{ from: string; to: string; kind: string }>;
   bindings: OntologyEntityBinding[];
+  /** Declared write-back action types (Weave Phase 1) — create/update/delete over object types. */
+  actionTypes: WeaveActionType[];
 }
 export async function loadOntologySurface(ontologyId: string, tenantId: string): Promise<OntologySurface | null> {
   const onto = await loadOwnedItem(ontologyId, 'ontology', tenantId);
@@ -61,7 +64,10 @@ export async function loadOntologySurface(ontologyId: string, tenantId: string):
     .filter((c) => c.parent)
     .map((c) => ({ from: c.name, to: c.parent as string, kind: 'IS_A' }));
   const bindings = Array.isArray(state.entityBindings) ? (state.entityBindings as OntologyEntityBinding[]) : [];
-  return { id: onto.id, displayName: onto.displayName, workspaceId: onto.workspaceId, classes, links, bindings };
+  // Weave Phase 1: surface declared action types alongside object/link types so
+  // the OSDK / Workshop callers can introspect the full ontology surface.
+  const actionTypes = normalizeActionTypes(state.actionTypes);
+  return { id: onto.id, displayName: onto.displayName, workspaceId: onto.workspaceId, classes, links, bindings, actionTypes };
 }
 
 /** GET /api/items/<type> → { ok, items[] }  ·  POST → create (201). */

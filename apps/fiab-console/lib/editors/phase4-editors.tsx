@@ -37,7 +37,7 @@ import {
   Settings20Regular, Money20Regular, BranchFork20Regular,
   Table20Regular, ChartMultiple20Regular,
   ArrowDownload16Regular, ArrowSortUp16Regular, ArrowSortDown16Regular,
-  Save16Regular, DataTrending20Regular,
+  Save16Regular, DataTrending20Regular, Play20Regular,
 } from '@fluentui/react-icons';
 import { ItemEditorChrome } from './item-editor-chrome';
 import { NewItemBrowseGate } from './new-item-gate';
@@ -958,7 +958,20 @@ interface OntoState {
   /** Backing Cosmos activator item id, created lazily on first trigger. */
   activatorId?: string;
   activatorWorkspaceId?: string;
+  /**
+   * Weave (Semantic Ontology) Phase 1 — declared write-back action types. Each
+   * runs create/update/delete cypher over the bound PG + Apache AGE graph store.
+   */
+  actionTypes?: WeaveActionTypeDecl[];
   [k: string]: unknown;
+}
+
+/** A declared Weave action type (mirror of lib/azure/weave-ontology-store WeaveActionType). */
+interface WeaveActionTypeDecl {
+  name: string;
+  objectType: string;
+  kind: 'create' | 'update' | 'delete';
+  params?: string[];
 }
 
 // `parseOntologyHierarchy` is imported from `_family-utils` (vitest coverage
@@ -976,6 +989,297 @@ function OntologyHierarchyViz({ classes }: { classes: { name: string; parent?: s
   }, [classes]);
   if (g.nodes.length === 0) return <Caption1 style={{ color: tokens.colorNeutralForeground3 }}>Add a class to see the hierarchy graph.</Caption1>;
   return <ForceDirectedGraph nodes={g.nodes} edges={g.edges} width={320} height={260} />;
+}
+
+/**
+ * Weave (Semantic Ontology) Phase 1 — object instance write-back + write-back
+ * action types over the bound PG + Apache AGE graph store.
+ *
+ *   • Objects: list instances of a declared object type, create a new instance
+ *     (POST /api/items/ontology/[id]/objects → real AGE vertex).
+ *   • Write-back actions: declare create/update/delete action types (persisted on
+ *     state.actionTypes), then RUN them (POST /api/items/ontology/[id]/run-action
+ *     → real AGE transaction). This is the Palantir-class write-back surface.
+ *
+ * All controls call the real BFF; when the AGE backend env (LOOM_WEAVE_PG_FQDN)
+ * is unset the routes return a 503 with a gate that this panel surfaces in a
+ * Fluent MessageBar (intent="warning") naming the env var + bicep module — per
+ * no-vaporware.md (honest gate, full UI still renders). Azure-native; no Fabric.
+ */
+function WeaveInstancePanel({
+  id,
+  classes,
+  actionTypes,
+  onActionTypesChange,
+}: {
+  id: string;
+  classes: { name: string }[];
+  actionTypes: WeaveActionTypeDecl[];
+  onActionTypesChange: (next: WeaveActionTypeDecl[]) => void;
+}) {
+  const s = useStyles();
+  const classNames = useMemo(() => classes.map((c) => c.name), [classes]);
+
+  // ── Objects (instances) ──
+  const [objType, setObjType] = useState('');
+  const [objects, setObjects] = useState<Array<{ id: string; objectType: string; properties: Record<string, unknown> }>>([]);
+  const [objLoading, setObjLoading] = useState(false);
+  const [objMsg, setObjMsg] = useState<{ intent: 'success' | 'error' | 'warning'; text: string } | null>(null);
+  const [newProps, setNewProps] = useState('{}');
+  const [creating, setCreating] = useState(false);
+
+  useEffect(() => { if (!objType && classNames.length) setObjType(classNames[0]); }, [classNames, objType]);
+
+  const loadObjects = useCallback(async (t: string) => {
+    if (!id || id === 'new' || !t) return;
+    setObjLoading(true); setObjMsg(null);
+    try {
+      const r = await fetch(`/api/items/ontology/${encodeURIComponent(id)}/objects?objectType=${encodeURIComponent(t)}&top=100`);
+      const j = await r.json().catch(() => ({}));
+      if (!j?.ok) {
+        const gate = j?.gate ? ` ${j.gate.remediation || j.gate.reason || ''}` : '';
+        setObjMsg({ intent: r.status === 503 ? 'warning' : 'error', text: `${j?.error || `HTTP ${r.status}`}${gate}` });
+        setObjects([]);
+        return;
+      }
+      setObjects(Array.isArray(j.objects) ? j.objects : []);
+    } catch (e: any) {
+      setObjMsg({ intent: 'error', text: e?.message || String(e) });
+    } finally { setObjLoading(false); }
+  }, [id]);
+
+  useEffect(() => { if (objType) void loadObjects(objType); }, [objType, loadObjects]);
+
+  const createObject = useCallback(async () => {
+    if (!objType) { setObjMsg({ intent: 'error', text: 'Pick an object type.' }); return; }
+    let properties: Record<string, unknown> = {};
+    if (newProps.trim()) {
+      try { properties = JSON.parse(newProps); } catch { setObjMsg({ intent: 'error', text: 'Properties must be valid JSON (an object of scalar values).' }); return; }
+      if (typeof properties !== 'object' || Array.isArray(properties)) { setObjMsg({ intent: 'error', text: 'Properties must be a JSON object.' }); return; }
+    }
+    setCreating(true); setObjMsg(null);
+    try {
+      const r = await fetch(`/api/items/ontology/${encodeURIComponent(id)}/objects`, {
+        method: 'POST', headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ objectType: objType, properties }),
+      });
+      const j = await r.json().catch(() => ({}));
+      if (!j?.ok) {
+        const gate = j?.gate ? ` ${j.gate.remediation || j.gate.reason || ''}` : '';
+        setObjMsg({ intent: r.status === 503 ? 'warning' : 'error', text: `${j?.error || `HTTP ${r.status}`}${gate}` });
+        return;
+      }
+      setObjMsg({ intent: 'success', text: `Created ${objType} instance (AGE vertex id ${j.object?.id}).` });
+      setNewProps('{}');
+      await loadObjects(objType);
+    } catch (e: any) {
+      setObjMsg({ intent: 'error', text: e?.message || String(e) });
+    } finally { setCreating(false); }
+  }, [id, objType, newProps, loadObjects]);
+
+  // ── Write-back action types ──
+  const [actDlgOpen, setActDlgOpen] = useState(false);
+  const [actName, setActName] = useState('');
+  const [actObjType, setActObjType] = useState('');
+  const [actKind, setActKind] = useState<'create' | 'update' | 'delete'>('create');
+  const [actDlgErr, setActDlgErr] = useState<string | null>(null);
+  const [runMsg, setRunMsg] = useState<{ intent: 'success' | 'error' | 'warning'; text: string } | null>(null);
+  const [runningAction, setRunningAction] = useState<string | null>(null);
+  const [runParams, setRunParams] = useState<Record<string, string>>({});
+
+  const openActDlg = useCallback(() => {
+    setActName(''); setActObjType(classNames[0] || ''); setActKind('create'); setActDlgErr(null); setActDlgOpen(true);
+  }, [classNames]);
+
+  const addActionType = useCallback(() => {
+    const name = actName.trim();
+    if (!/^[A-Za-z_][\w]*$/.test(name)) { setActDlgErr('Action name must start with a letter/underscore (letters, digits, _).'); return; }
+    if (actionTypes.some((a) => a.name === name)) { setActDlgErr(`Action "${name}" already exists.`); return; }
+    if (!actObjType) { setActDlgErr('Pick an object type.'); return; }
+    onActionTypesChange([...actionTypes, { name, objectType: actObjType, kind: actKind }]);
+    setActDlgOpen(false);
+  }, [actName, actObjType, actKind, actionTypes, onActionTypesChange]);
+
+  const removeActionType = useCallback((name: string) => {
+    onActionTypesChange(actionTypes.filter((a) => a.name !== name));
+  }, [actionTypes, onActionTypesChange]);
+
+  const runAction = useCallback(async (action: WeaveActionTypeDecl) => {
+    setRunningAction(action.name); setRunMsg(null);
+    const params: Record<string, unknown> = {};
+    if (action.kind === 'update' || action.kind === 'delete') {
+      const idVal = (runParams[`${action.name}.id`] || '').trim();
+      if (!idVal) { setRunMsg({ intent: 'error', text: `"${action.name}" needs the target object id.` }); setRunningAction(null); return; }
+      params.id = idVal;
+    }
+    if (action.kind === 'create' || action.kind === 'update') {
+      const raw = (runParams[`${action.name}.props`] || '').trim();
+      if (raw) {
+        try { Object.assign(params, JSON.parse(raw)); } catch { setRunMsg({ intent: 'error', text: 'Properties must be valid JSON.' }); setRunningAction(null); return; }
+      }
+    }
+    try {
+      const r = await fetch(`/api/items/ontology/${encodeURIComponent(id)}/run-action`, {
+        method: 'POST', headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ action: action.name, params }),
+      });
+      const j = await r.json().catch(() => ({}));
+      if (!j?.ok) {
+        const gate = j?.gate ? ` ${j.gate.remediation || j.gate.reason || ''}` : '';
+        setRunMsg({ intent: r.status === 503 ? 'warning' : 'error', text: `${j?.error || `HTTP ${r.status}`}${gate}` });
+        return;
+      }
+      const detail = j.kind === 'delete' ? `deleted ${j.deleted ?? 0}` : `vertex id ${j.object?.id}`;
+      setRunMsg({ intent: 'success', text: `Action "${action.name}" (${j.kind}) ran on ${j.objectType} — ${detail}.` });
+      if (objType === action.objectType) await loadObjects(objType);
+    } catch (e: any) {
+      setRunMsg({ intent: 'error', text: e?.message || String(e) });
+    } finally { setRunningAction(null); }
+  }, [id, runParams, objType, loadObjects]);
+
+  if (id === 'new') {
+    return (
+      <div className={s.ontoSection}>
+        <Subtitle2>Objects & write-back actions</Subtitle2>
+        <MessageBar intent="info"><MessageBarBody>Save the ontology to enable object instances + write-back actions over the graph store.</MessageBarBody></MessageBar>
+      </div>
+    );
+  }
+
+  const objColumns = objects.length ? Object.keys(objects[0].properties || {}) : [];
+
+  return (
+    <div className={s.ontoBindGrid}>
+      {/* ── Object instances ── */}
+      <div className={s.ontoSection}>
+        <div className={s.ontoSectionHead}>
+          <span className={s.ontoSectionIcon}><Database20Regular /></span>
+          <div>
+            <Subtitle2>Objects <Badge appearance="tint" color="warning">Preview</Badge></Subtitle2>
+            <Caption1 as="p" block className={s.ontoSectionHint}>
+              Object instances of a declared type, persisted as Apache AGE vertices on the bound PostgreSQL graph store. Real write-back — Azure-native, no Fabric.
+            </Caption1>
+          </div>
+        </div>
+        {classNames.length === 0 ? (
+          <MessageBar intent="info"><MessageBarBody>Add an entity (object type) first.</MessageBarBody></MessageBar>
+        ) : (
+          <>
+            <Field label="Object type">
+              <Dropdown value={objType} selectedOptions={objType ? [objType] : []} onOptionSelect={(_, d) => setObjType(d.optionValue || '')} placeholder="Select an object type">
+                {classNames.map((c) => <Option key={c} value={c}>{c}</Option>)}
+              </Dropdown>
+            </Field>
+            <Field label="New instance properties (JSON object of scalars)" hint='e.g. {"name": "Acme", "tier": 1}'>
+              <Textarea value={newProps} onChange={(_, d) => setNewProps(d.value)} resize="vertical" />
+            </Field>
+            <Button appearance="primary" icon={creating ? <Spinner size="tiny" /> : <Add20Regular />} onClick={createObject} disabled={creating || !objType} className={s.ontoStartBtn}>
+              {creating ? 'Creating…' : `Create ${objType || 'object'}`}
+            </Button>
+            {objMsg && <MessageBar intent={objMsg.intent}><MessageBarBody>{objMsg.text}</MessageBarBody></MessageBar>}
+            {objLoading ? (
+              <div className={s.ontoLoading}><Spinner size="tiny" /><Caption1>Loading instances…</Caption1></div>
+            ) : objects.length === 0 ? (
+              <div className={s.ontoEmpty}><Caption1>No {objType} instances yet.</Caption1></div>
+            ) : (
+              <Table size="small" aria-label={`${objType} instances`}>
+                <TableHeader>
+                  <TableRow>
+                    <TableHeaderCell>id</TableHeaderCell>
+                    {objColumns.map((c) => <TableHeaderCell key={c}>{c}</TableHeaderCell>)}
+                  </TableRow>
+                </TableHeader>
+                <TableBody>
+                  {objects.map((o) => (
+                    <TableRow key={o.id}>
+                      <TableCell>{o.id}</TableCell>
+                      {objColumns.map((c) => <TableCell key={c}>{String(o.properties?.[c] ?? '')}</TableCell>)}
+                    </TableRow>
+                  ))}
+                </TableBody>
+              </Table>
+            )}
+          </>
+        )}
+      </div>
+
+      {/* ── Write-back actions ── */}
+      <div className={s.ontoSection}>
+        <div className={s.ontoSectionHead}>
+          <span className={s.ontoSectionIcon}><Flash20Regular /></span>
+          <div>
+            <Subtitle2>Write-back actions <Badge appearance="tint" color="warning">Preview</Badge></Subtitle2>
+            <Caption1 as="p" block className={s.ontoSectionHint}>
+              Declare create / update / delete actions over the object types, then run them. Each runs a real AGE transaction against the graph store (Palantir-class write-back).
+            </Caption1>
+          </div>
+        </div>
+        <Button appearance="primary" icon={<Add20Regular />} onClick={openActDlg} disabled={classNames.length === 0} className={s.ontoStartBtn}>
+          Declare action type
+        </Button>
+        {actionTypes.length === 0 ? (
+          <div className={s.ontoEmpty}><Caption1>No actions declared. Use <strong>Declare action type</strong> to add a create / update / delete action.</Caption1></div>
+        ) : (
+          actionTypes.map((a) => (
+            <div key={a.name} className={s.ontoSection} style={{ gap: 8 }}>
+              <div className={s.ontoBindRow}>
+                <Badge appearance="tint" color={a.kind === 'create' ? 'success' : a.kind === 'delete' ? 'danger' : 'brand'}>{a.kind}</Badge>
+                <Body1><strong>{a.name}</strong></Body1>
+                <Caption1 className={s.ontoSectionHint}>→ {a.objectType}</Caption1>
+                <span style={{ flex: 1 }} />
+                <Button size="small" appearance="subtle" icon={<Dismiss16Regular />} aria-label={`Remove action ${a.name}`} onClick={() => removeActionType(a.name)}>Remove</Button>
+              </div>
+              {(a.kind === 'update' || a.kind === 'delete') && (
+                <Field label="Target object id (AGE vertex id)">
+                  <Input value={runParams[`${a.name}.id`] || ''} onChange={(_, d) => setRunParams((p) => ({ ...p, [`${a.name}.id`]: d.value }))} placeholder="844424930131969" />
+                </Field>
+              )}
+              {(a.kind === 'create' || a.kind === 'update') && (
+                <Field label="Properties (JSON object of scalars)">
+                  <Textarea value={runParams[`${a.name}.props`] || ''} onChange={(_, d) => setRunParams((p) => ({ ...p, [`${a.name}.props`]: d.value }))} placeholder='{"name": "Acme"}' resize="vertical" />
+                </Field>
+              )}
+              <Button appearance="secondary" icon={runningAction === a.name ? <Spinner size="tiny" /> : <Play20Regular />} onClick={() => runAction(a)} disabled={runningAction === a.name} className={s.ontoStartBtn}>
+                {runningAction === a.name ? 'Running…' : `Run ${a.name}`}
+              </Button>
+            </div>
+          ))
+        )}
+        {runMsg && <MessageBar intent={runMsg.intent}><MessageBarBody>{runMsg.text}</MessageBarBody></MessageBar>}
+      </div>
+
+      {/* Declare action type dialog */}
+      <Dialog open={actDlgOpen} onOpenChange={(_, d) => setActDlgOpen(d.open)}>
+        <DialogSurface>
+          <DialogBody>
+            <DialogTitle>Declare write-back action type</DialogTitle>
+            <DialogContent>
+              <Field label="Action name" required>
+                <Input value={actName} onChange={(_, d) => setActName(d.value)} placeholder="createCustomer" />
+              </Field>
+              <Field label="Object type" required>
+                <Dropdown value={actObjType} selectedOptions={actObjType ? [actObjType] : []} onOptionSelect={(_, d) => setActObjType(d.optionValue || '')} placeholder="Select an object type">
+                  {classNames.map((c) => <Option key={c} value={c}>{c}</Option>)}
+                </Dropdown>
+              </Field>
+              <Field label="Kind" required>
+                <Dropdown value={actKind} selectedOptions={[actKind]} onOptionSelect={(_, d) => setActKind((d.optionValue as 'create' | 'update' | 'delete') || 'create')}>
+                  <Option value="create">create</Option>
+                  <Option value="update">update</Option>
+                  <Option value="delete">delete</Option>
+                </Dropdown>
+              </Field>
+              {actDlgErr && <MessageBar intent="error"><MessageBarBody>{actDlgErr}</MessageBarBody></MessageBar>}
+            </DialogContent>
+            <DialogActions>
+              <Button appearance="secondary" onClick={() => setActDlgOpen(false)}>Cancel</Button>
+              <Button appearance="primary" onClick={addActionType}>Declare action</Button>
+            </DialogActions>
+          </DialogBody>
+        </DialogSurface>
+      </Dialog>
+    </div>
+  );
 }
 
 export function OntologyEditor({ item, id }: { item: FabricItemType; id: string }) {
@@ -1332,6 +1636,14 @@ export function OntologyEditor({ item, id }: { item: FabricItemType; id: string 
             )}
           </div>
         </div>
+
+        {/* ── Weave Phase 1: object instances + write-back actions (PG + AGE) ── */}
+        <WeaveInstancePanel
+          id={id}
+          classes={classes}
+          actionTypes={Array.isArray(state.actionTypes) ? state.actionTypes : []}
+          onActionTypesChange={(next) => persistOnto({ ...state, actionTypes: next })}
+        />
 
         <SaveBar saving={saving} savedAt={savedAt} error={error} dirty={dirty} onSave={() => save()} />
 
