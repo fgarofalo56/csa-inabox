@@ -13,16 +13,29 @@ on:
   workflow_dispatch:
     inputs:
       loom_url:
-        description: 'Console URL to probe (default = Front Door)'
+        description: 'Console URL to probe (default = old single-sub Front Door)'
         type: string
         default: https://loom-console-fvbbctd4eehqbkcs.b02.azurefd.net
+      sub:
+        description: 'Subscription holding the admin plane / loom-console (default = old single-sub). For the migrated estate use the DMLZ sub e093f4fd-5047-4ee4-968d-a56942c665f3.'
+        type: string
+        default: 363ef5d1-0e77-4594-a530-f51af23dbf8c
+      admin_rg:
+        description: 'Admin-plane RG holding loom-console + Key Vault (default = old single-sub).'
+        type: string
+        default: rg-csa-loom-admin-eastus2
 
 permissions:
   contents: read
 
+# SUB / ADMIN_RG are parameterized (audit-t162) so this workflow validates EITHER
+# the old single-sub deployment OR the migrated multi-sub estate (console+shared
+# in the DMLZ sub). The defaults preserve the original single-sub targets; the
+# topology-migration runbook (docs/fiab/topology-migration.md §3) dispatches with
+# sub=<DMLZ> + admin_rg=<new RG> to probe the NEW console.
 env:
-  SUB: 363ef5d1-0e77-4594-a530-f51af23dbf8c
-  ADMIN_RG: rg-csa-loom-admin-eastus2
+  SUB: ${{ inputs.sub }}
+  ADMIN_RG: ${{ inputs.admin_rg }}
 
 jobs:
   validate:

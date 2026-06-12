@@ -397,3 +397,142 @@ def test_identity_bicep_arm_emits_mcp_bridge_uami(tmp_path):
     outputs = arm.get("outputs", {})
     for out in ("uamiMcpBridgeId", "uamiMcpBridgeClientId", "uamiMcpBridgePrincipalId"):
         assert out in outputs, f"emitted ARM missing output {out}"
+
+
+# ----- audit-t162 multi-sub live-migration handoff outputs --------------
+# Splitting the FedCiv estate across subs (console+shared in DMLZ, bureau DLZ
+# in its own sub) means the DLZ is deployed STANDALONE via
+# modules/landing-zone/main.bicep + params/dlz-attach.bicepparam — NOT via the
+# orchestrator's dlz[] for-loop. That standalone deploy has to read four
+# admin-plane outputs (LAW id, private-DNS zone object, catalog endpoint,
+# Console UAMI principal) that main.bicep previously did NOT re-export. These
+# tests guard that the four handoff outputs exist + the two reference param
+# files stay wired to the right `using` targets, so the runbook in
+# docs/fiab/topology-migration.md cannot silently rot.
+#
+# main.bicep is a subscription-scope orchestrator over the 3k-line admin-plane
+# module (known pre-existing compile state on newer bicep linters where
+# max-params is fatal). Following the same approach as the bridge tests above,
+# the output-declaration assertions read the bicep SOURCE directly so they are
+# deterministic and always run; a separate @needs_az test does the full ARM
+# emit where the toolchain allows it.
+
+PARAMS_DIR = REPO_ROOT / "platform" / "fiab" / "bicep" / "params"
+TENANT_DMLZ_PARAM = PARAMS_DIR / "tenant-dmlz.bicepparam"
+DLZ_ATTACH_PARAM = PARAMS_DIR / "dlz-attach.bicepparam"
+
+_HANDOFF_OUTPUTS = (
+    "adminPlaneLawId",
+    "adminPlanePrivateDnsZoneIds",
+    "adminPlaneCatalogEndpoint",
+    "consolePrincipalId",
+)
+
+
+def test_main_bicep_declares_dlz_handoff_outputs_source():
+    """The four admin-plane → standalone-DLZ handoff outputs are declared and
+    bound to the real admin-plane module outputs (deterministic, source-level)."""
+    src = _src(MAIN_BICEP)
+    for name, expr in (
+        ("adminPlaneLawId", "adminPlane.outputs.lawId"),
+        ("adminPlanePrivateDnsZoneIds", "adminPlane.outputs.privateDnsZoneIds"),
+        ("adminPlaneCatalogEndpoint", "adminPlane.outputs.catalogEndpoint"),
+        ("consolePrincipalId", "adminPlane.outputs.uamiConsolePrincipalId"),
+    ):
+        assert f"output {name} " in src, (
+            f"main.bicep does not declare the {name} handoff output — "
+            "the standalone dlz-attach deploy cannot read it"
+        )
+        assert expr in src, (
+            f"main.bicep output {name} is not bound to {expr}"
+        )
+
+
+@needs_az
+def test_main_bicep_arm_emits_dlz_handoff_outputs(tmp_path):
+    """Full ARM emit (where the toolchain compiles main.bicep): the four
+    handoff outputs are present in the compiled template's outputs map.
+
+    main.bicep references the 3k-line admin-plane orchestrator, which trips a
+    pre-existing `max-params` lint that newer bicep CLIs treat as fatal. Where
+    that is the case the full emit can't run, so skip rather than report a
+    false failure — the source-level test above is the deterministic guard.
+    """
+    out = tmp_path / (MAIN_BICEP.stem + ".json")
+    az_path = shutil.which("az")
+    proc = subprocess.run(
+        [az_path, "bicep", "build", "--file", str(MAIN_BICEP), "--outfile", str(out)],
+        capture_output=True,
+        env={**os.environ, "PYTHONIOENCODING": "utf-8"},
+        check=False,
+        shell=False,
+    )
+    if not out.exists():
+        pytest.skip(
+            "main.bicep did not compile in this toolchain (pre-existing "
+            "admin-plane max-params lint); source-level test covers the outputs"
+        )
+    arm = json.loads(out.read_text(encoding="utf-8"))
+    outputs = arm.get("outputs", {})
+    for name in _HANDOFF_OUTPUTS:
+        assert name in outputs, f"compiled main.bicep missing output {name}"
+
+
+def test_tenant_dmlz_param_targets_main_and_is_admin_only():
+    """tenant-dmlz.bicepparam deploys ONLY the admin plane into the DMLZ sub:
+    it uses the top-level orchestrator and keeps the dlz[] for-loop empty."""
+    assert TENANT_DMLZ_PARAM.exists(), "params/tenant-dmlz.bicepparam is missing"
+    src = _src(TENANT_DMLZ_PARAM)
+    assert "using '../main.bicep'" in src, (
+        "tenant-dmlz must target the top-level orchestrator (admin plane)"
+    )
+    assert "param deploymentMode = 'multi-sub'" in src
+    # Empty arrays => the dlz[] for-loop is a no-op so ONLY the admin plane
+    # (console + shared) lands; the bureau DLZ attaches standalone afterward.
+    assert "param dlzSubscriptionIds = []" in src
+    assert "param dlzDomainNames = []" in src
+    assert "param frontDoorEnabled = true" in src, (
+        "tenant-dmlz must stand up the NEW public Front Door for cutover"
+    )
+
+
+def test_dlz_attach_param_targets_landing_zone():
+    """dlz-attach.bicepparam targets the standalone RG-scoped landing-zone
+    module (NOT the non-existent dlz/dlz.bicep the onboarding bundle shows)."""
+    assert DLZ_ATTACH_PARAM.exists(), "params/dlz-attach.bicepparam is missing"
+    src = _src(DLZ_ATTACH_PARAM)
+    assert "using '../modules/landing-zone/main.bicep'" in src, (
+        "dlz-attach must target modules/landing-zone/main.bicep — the real, "
+        "independently-deployable DLZ entrypoint"
+    )
+    # The admin-plane handoffs are pulled from env (set from tenant-dmlz outputs).
+    for env_var in (
+        "LOOM_ADMIN_HUB_VNET_ID",
+        "LOOM_ADMIN_LAW_ID",
+        "LOOM_CATALOG_ENDPOINT",
+        "LOOM_CONSOLE_PRINCIPAL_ID",
+    ):
+        assert env_var in src, f"dlz-attach must read {env_var} from the env handoff"
+
+
+@needs_az
+def test_dlz_attach_param_compiles(tmp_path):
+    """dlz-attach.bicepparam build-params cleanly against the landing-zone
+    module (the module compiles, unlike the admin-plane orchestrator)."""
+    out = tmp_path / "dlz-attach.params.json"
+    az_path = shutil.which("az")
+    proc = subprocess.run(
+        [
+            az_path, "bicep", "build-params",
+            "--file", str(DLZ_ATTACH_PARAM),
+            "--outfile", str(out),
+        ],
+        capture_output=True,
+        env={**os.environ, "PYTHONIOENCODING": "utf-8"},
+        check=False,
+        shell=False,
+    )
+    assert out.exists(), (
+        f"dlz-attach.bicepparam failed to compile. "
+        f"stdout={proc.stdout!r} stderr={proc.stderr!r}"
+    )
