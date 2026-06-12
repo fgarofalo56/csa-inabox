@@ -117,6 +117,15 @@ const useStyles = makeStyles({
     padding: '6px 8px', borderTop: `1px solid ${tokens.colorNeutralStroke3}`, fontSize: tokens.fontSizeBase200,
     alignItems: 'center', wordBreak: 'break-word',
   },
+  // Shared layout primitives (tokenized; replaces residual inline styles).
+  flexGrow: { flex: 1 },
+  tagWrap: { flexWrap: 'wrap' },
+  tagWrapSpaced: { flexWrap: 'wrap', marginBottom: tokens.spacingVerticalS },
+  tagSpaced: { marginBottom: tokens.spacingVerticalXS },
+  sectionHead: { display: 'flex', alignItems: 'center', gap: tokens.spacingHorizontalS },
+  sectionHeadSpaced: { display: 'flex', alignItems: 'center', gap: tokens.spacingHorizontalS, marginTop: tokens.spacingVerticalM },
+  labelSwatch: { display: 'inline-flex', alignItems: 'center', gap: tokens.spacingHorizontalS },
+  swatch: { width: '12px', height: '12px', borderRadius: tokens.borderRadiusSmall, display: 'inline-block' },
 });
 
 type TabKey = 'general' | 'image' | 'admins' | 'contributors' | 'default-domain' | 'delegated' | 'topology';
@@ -218,7 +227,7 @@ function TagListEditor({ label, values, onChange, placeholder, disabled }: {
       {values.length > 0 && (
         <TagGroup
           onDismiss={(_e, d) => onChange(values.filter((v) => v !== d.value))}
-          style={{ flexWrap: 'wrap', marginBottom: 8 }}
+          className={styles.tagWrapSpaced}
           aria-label={label}
         >
           {values.map((v) => (
@@ -228,7 +237,7 @@ function TagListEditor({ label, values, onChange, placeholder, disabled }: {
       )}
       <div className={styles.tagAdd}>
         <Input
-          style={{ flex: 1 }}
+          className={styles.flexGrow}
           value={draft}
           disabled={disabled}
           placeholder={placeholder || 'name@contoso.com or a group name'}
@@ -579,8 +588,8 @@ function DelegatedTab({ domain, onSaved }: { domain: DomainRecord; onSaved: (d: 
                   <Option value="">(None)</Option>
                   {labelOptions.map((l) => (
                     <Option key={l.id} value={l.id} text={l.name}>
-                      <span style={{ display: 'inline-flex', alignItems: 'center', gap: 8 }}>
-                        {l.color && <span style={{ width: 12, height: 12, borderRadius: 3, backgroundColor: l.color, display: 'inline-block' }} />}
+                      <span className={styles.labelSwatch}>
+                        {l.color && <span className={styles.swatch} style={{ backgroundColor: l.color }} />}
                         {l.name}
                       </span>
                     </Option>
@@ -678,7 +687,7 @@ function GroupPicker({ label, value, onChange, disabled }: {
   return (
     <Field label={label}>
       {value ? (
-        <TagGroup onDismiss={() => { onChange(''); setChosenName(''); }} style={{ marginBottom: 6 }} aria-label={label}>
+        <TagGroup onDismiss={() => { onChange(''); setChosenName(''); }} className={styles.tagSpaced} aria-label={label}>
           <Tag value={value} dismissible dismissIcon={{ 'aria-label': 'Remove group' }}>
             {chosenName || value}
           </Tag>
@@ -785,7 +794,7 @@ function TopologyTab({ domain, isTenantAdmin, onSaved }: {
 
   return (
     <div className={styles.tabPanel}>
-      <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+      <div className={styles.sectionHead}>
         <Subtitle2>Data Landing Zone binding</Subtitle2>
         <Badge appearance="tint" color={DOMAIN_STATUS_COLOR[status] || 'subtle'}>{status}</Badge>
       </div>
@@ -797,7 +806,7 @@ function TopologyTab({ domain, isTenantAdmin, onSaved }: {
 
       <Field label="Attached subscription(s)">
         {subs.length ? (
-          <TagGroup aria-label="Attached subscriptions" style={{ flexWrap: 'wrap' }}>
+          <TagGroup aria-label="Attached subscriptions" className={styles.tagWrap}>
             {subs.map((sub) => <Tag key={sub} value={sub}>{sub}</Tag>)}
           </TagGroup>
         ) : (
@@ -862,7 +871,7 @@ function TopologyTab({ domain, isTenantAdmin, onSaved }: {
       )}
 
       {/* Resource inventory (ARG by tag) */}
-      <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginTop: 12 }}>
+      <div className={styles.sectionHeadSpaced}>
         <Subtitle2>Resource inventory</Subtitle2>
         <Button size="small" onClick={loadInventory} disabled={invLoading}>Refresh</Button>
       </div>

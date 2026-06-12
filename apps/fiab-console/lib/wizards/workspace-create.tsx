@@ -93,6 +93,10 @@ const useStyles = makeStyles({
   panel: { display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalL, minWidth: 0 },
   stepHeader: { display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalXS },
   fields: { display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalM, maxWidth: '560px' },
+  fieldsWide: { maxWidth: '620px' },
+  tagWrap: { flexWrap: 'wrap' },
+  flexGrow: { flex: 1 },
+  optionStack: { display: 'flex', flexDirection: 'column' },
   optionCard: {
     display: 'flex', alignItems: 'flex-start', gap: tokens.spacingHorizontalM,
     padding: tokens.spacingVerticalM, borderRadius: tokens.borderRadiusLarge,
@@ -265,7 +269,7 @@ export function WorkspaceCreateWizard({ open, onClose, onCreated, isAdmin }: Pro
                       <Subtitle2>License mode</Subtitle2>
                       <Body1>How is this workspace licensed? The Azure-native default needs no Power BI / Fabric license.</Body1>
                     </div>
-                    <div className={styles.fields} style={{ maxWidth: 620 }}>
+                    <div className={mergeClasses(styles.fields, styles.fieldsWide)}>
                       {LICENSE_OPTIONS.filter((o) => !(o.govHidden && gov)).map((o) => {
                         const selected = licenseMode === o.value;
                         return (
@@ -410,7 +414,7 @@ function ContactsStep({ contacts, onChange }: { contacts: string[]; onChange: (v
       <div className={styles.fields}>
         {contacts.length > 0 && (
           <Field label="Assigned contacts">
-            <TagGroup onDismiss={(_e, d) => onChange(contacts.filter((c) => c !== d.value))} style={{ flexWrap: 'wrap' }}>
+            <TagGroup onDismiss={(_e, d) => onChange(contacts.filter((c) => c !== d.value))} className={styles.tagWrap}>
               {contacts.map((c) => (
                 <Tag key={c} value={c} dismissible dismissIcon={{ 'aria-label': `Remove ${c}` }}>{c}</Tag>
               ))}
@@ -419,7 +423,7 @@ function ContactsStep({ contacts, onChange }: { contacts: string[]; onChange: (v
         )}
         <Field label="Search people">
           <div className={styles.pickerRow}>
-            <Input style={{ flex: 1 }} value={q} onChange={(_e, d) => setQ(d.value)} contentBefore={<Search16Regular />} placeholder="Start typing a name…" />
+            <Input className={styles.flexGrow} value={q} onChange={(_e, d) => setQ(d.value)} contentBefore={<Search16Regular />} placeholder="Start typing a name…" />
             {q.trim() && (
               <Button icon={<Add16Regular />} onClick={() => add(q)} title="Add the typed value as a contact">Add typed</Button>
             )}
@@ -439,7 +443,7 @@ function ContactsStep({ contacts, onChange }: { contacts: string[]; onChange: (v
             <Listbox>
               {results.map((p) => (
                 <Option key={p.id} value={p.id} text={p.displayName} onClick={() => add(p.upn || p.mail || p.displayName)}>
-                  <span style={{ display: 'flex', flexDirection: 'column' }}>
+                  <span className={styles.optionStack}>
                     <span>{p.displayName}</span>
                     {(p.upn || p.mail) && <Caption1 className={styles.railHint}>{p.upn || p.mail}</Caption1>}
                   </span>

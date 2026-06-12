@@ -18,6 +18,7 @@ from datetime import datetime, timezone
 from typing import Any
 
 from .deployment_state import DeploymentStateStore
+from .topology_client import register_domain_binding
 
 logger = logging.getLogger(__name__)
 
@@ -199,6 +200,35 @@ async def run_bicep_deploy(
             current_stage="Done",
             completed_at=datetime.now(timezone.utc).isoformat(),
         )
+
+        # audit-t158: now that the DLZ deployment has actually succeeded,
+        # register each deployed domain in the Console's authoritative tenant
+        # topology registry (orchestrator → console internal API). This is the
+        # "dlz-attach registers the domain automatically" path: it makes the
+        # binding show up under /admin/domains with status=active bound to its
+        # subscription, RG, region, capacity and Entra groups — no manual step.
+        # Best-effort: register_domain_binding swallows all errors and a missing
+        # LOOM_CONSOLE_INTERNAL_URL skips silently, so it NEVER fails the deploy.
+        domain = _get(req, "domain_name")
+        dlz_domains = _get(req, "dlz_domain_names") or ([domain] if domain else [])
+        dlz_subs = _get(req, "dlz_subscription_ids") or []
+        for idx, dom in enumerate(dlz_domains):
+            if not dom:
+                continue
+            sub_for_domain = (dlz_subs[idx] if idx < len(dlz_subs) else None) or subscription_id
+            await register_domain_binding(
+                caller_oid=caller_oid,
+                domain_id=dom,
+                name=_get(req, "vanity_domain") or dom,
+                subscription_id=sub_for_domain,
+                subscription_ids=dlz_subs or None,
+                dlz_rg=_get(req, "dlz_rg"),
+                location=region,
+                capacity_sku=_get(req, "capacity_sku"),
+                admin_group_id=_get(req, "admin_group_id"),
+                member_group_id=_get(req, "member_group_id"),
+                cost_center=_get(req, "cost_center"),
+            )
     except Exception as exc:  # noqa: BLE001
         logger.exception("Deployment %s failed", deployment_id)
         await state_store.update(
