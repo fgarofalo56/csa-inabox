@@ -29,6 +29,7 @@
  * MessageBar infra-gate is shown AND the full UI still renders.
  */
 
+import * as React from 'react';
 import { useEffect, useMemo, useState } from 'react';
 import Link from 'next/link';
 import {
@@ -40,6 +41,7 @@ import {
   Search20Regular, MoreHorizontal20Regular, Eye20Regular,
   PlugConnected20Regular, Flow20Regular, ArrowSync20Regular,
   Pulse24Regular, Flash24Regular, PlugConnected24Regular, Flow24Regular,
+  DataTrending32Regular,
 } from '@fluentui/react-icons';
 import { SignInRequired } from '@/lib/components/sign-in-required';
 import { Section } from '@/lib/components/ui/section';
@@ -68,7 +70,7 @@ const LS_REALTIME_STREAMS_VIEW = 'loom.realtime-hub.streams.viewMode.v1';
 
 const useStyles = makeStyles({
   stats: {
-    display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(160px, 1fr))',
+    display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))',
     gap: tokens.spacingHorizontalM, marginBottom: tokens.spacingVerticalL,
   },
   stat: {
@@ -76,14 +78,31 @@ const useStyles = makeStyles({
     padding: tokens.spacingVerticalM, borderRadius: tokens.borderRadiusXLarge,
     border: `1px solid ${tokens.colorNeutralStroke2}`,
     backgroundColor: tokens.colorNeutralBackground1, boxShadow: tokens.shadow2,
+    transitionProperty: 'box-shadow, transform',
+    transitionDuration: tokens.durationNormal,
+    transitionTimingFunction: tokens.curveEasyEase,
+    ':hover': {
+      boxShadow: tokens.shadow8,
+      transform: 'translateY(-1px)',
+    },
   },
   statChip: {
     flexShrink: 0, width: '40px', height: '40px',
     display: 'inline-flex', alignItems: 'center', justifyContent: 'center',
     borderRadius: tokens.borderRadiusLarge,
   },
-  statNum: { fontSize: '22px', fontWeight: tokens.fontWeightBold, lineHeight: 1.1 },
-  statLabel: { color: tokens.colorNeutralForeground3, fontSize: '12px' },
+  statBody: { display: 'flex', flexDirection: 'column', minWidth: 0 },
+  statNum: {
+    fontSize: tokens.fontSizeHero700, fontWeight: tokens.fontWeightBold,
+    lineHeight: tokens.lineHeightHero700,
+    color: tokens.colorNeutralForeground1,
+  },
+  statLabel: {
+    color: tokens.colorNeutralForeground3, fontSize: tokens.fontSizeBase200,
+    fontWeight: tokens.fontWeightRegular,
+    overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
+  },
+  msgBar: { marginBottom: tokens.spacingVerticalL },
   toolbar: {
     display: 'flex', gap: tokens.spacingHorizontalM, alignItems: 'center',
     marginBottom: tokens.spacingVerticalM, flexWrap: 'wrap',
@@ -96,7 +115,57 @@ const useStyles = makeStyles({
     borderRadius: tokens.borderRadiusMedium,
   },
   dataName: { overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', fontWeight: tokens.fontWeightSemibold },
+  loadingWrap: {
+    display: 'flex', alignItems: 'center', justifyContent: 'center',
+    padding: tokens.spacingVerticalXXXL,
+  },
+  emptyState: {
+    display: 'flex', flexDirection: 'column', alignItems: 'center', gap: tokens.spacingVerticalS,
+    padding: tokens.spacingVerticalXXL,
+    borderRadius: tokens.borderRadiusXLarge,
+    border: `1px dashed ${tokens.colorNeutralStroke2}`,
+    backgroundColor: tokens.colorNeutralBackground2,
+    color: tokens.colorNeutralForeground2,
+    fontSize: tokens.fontSizeBase300,
+    textAlign: 'center', lineHeight: tokens.lineHeightBase300,
+  },
+  emptyIcon: {
+    color: tokens.colorNeutralForeground3,
+    marginBottom: tokens.spacingVerticalXS,
+  },
 });
+
+type Styles = ReturnType<typeof useStyles>;
+
+/** A single summary KPI card — colour-coded chip + count + label. */
+function Stat({
+  styles, icon, color, value, label, loading, chipBg,
+}: {
+  styles: Styles;
+  icon: React.ReactNode;
+  color: string;
+  value: number;
+  label: string;
+  loading: boolean;
+  /** Optional explicit chip background (else derived from color at 12% alpha). */
+  chipBg?: string;
+}) {
+  return (
+    <div className={styles.stat} role="group" aria-label={`${loading ? 'Loading' : value} ${label}`}>
+      <span
+        className={styles.statChip}
+        style={{ backgroundColor: chipBg ?? `${color}1f`, color }}
+        aria-hidden
+      >
+        {icon}
+      </span>
+      <div className={styles.statBody}>
+        <div className={styles.statNum}>{loading ? '—' : value.toLocaleString()}</div>
+        <div className={styles.statLabel} title={label}>{label}</div>
+      </div>
+    </div>
+  );
+}
 
 export function RealTimeHubView() {
   const styles = useStyles();
@@ -252,46 +321,28 @@ export function RealTimeHubView() {
 
       {/* Summary stats */}
       <div className={styles.stats}>
-        <div className={styles.stat}>
-          <span className={styles.statChip} style={{ backgroundColor: `${itemVisual('eventstream').color}1f`, color: itemVisual('eventstream').color }} aria-hidden>
-            <Pulse24Regular />
-          </span>
-          <div>
-            <div className={styles.statNum}>{loading ? '—' : streamCount}</div>
-            <div className={styles.statLabel}>Eventstreams</div>
-          </div>
-        </div>
-        <div className={styles.stat}>
-          <span className={styles.statChip} style={{ backgroundColor: `${itemVisual('kql-database').color}1f`, color: itemVisual('kql-database').color }} aria-hidden>
-            <Flash24Regular />
-          </span>
-          <div>
-            <div className={styles.statNum}>{loading ? '—' : tableCount}</div>
-            <div className={styles.statLabel}>KQL tables</div>
-          </div>
-        </div>
-        <div className={styles.stat}>
-          <span className={styles.statChip} style={{ backgroundColor: '#0078d41f', color: 'var(--loom-accent-blue)' }} aria-hidden>
-            <PlugConnected24Regular />
-          </span>
-          <div>
-            <div className={styles.statNum}>{SOURCE_CONNECTORS.length}</div>
-            <div className={styles.statLabel}>Source connectors</div>
-          </div>
-        </div>
-        <div className={styles.stat}>
-          <span className={styles.statChip} style={{ backgroundColor: '#4b1d8f1f', color: 'var(--loom-accent-purple)' }} aria-hidden>
-            <Flow24Regular />
-          </span>
-          <div>
-            <div className={styles.statNum}>{loading ? '—' : (data?.workspaceCount ?? workspaceOptions.length)}</div>
-            <div className={styles.statLabel}>Workspaces</div>
-          </div>
-        </div>
+        <Stat
+          styles={styles} icon={<Pulse24Regular />} loading={loading}
+          color={itemVisual('eventstream').color} value={streamCount} label="Eventstreams"
+        />
+        <Stat
+          styles={styles} icon={<Flash24Regular />} loading={loading}
+          color={itemVisual('kql-database').color} value={tableCount} label="KQL tables"
+        />
+        <Stat
+          styles={styles} icon={<PlugConnected24Regular />} loading={false}
+          color="var(--loom-accent-blue)" chipBg="#0078d41f"
+          value={SOURCE_CONNECTORS.length} label="Source connectors"
+        />
+        <Stat
+          styles={styles} icon={<Flow24Regular />} loading={loading}
+          color="var(--loom-accent-purple)" chipBg="#4b1d8f1f"
+          value={data?.workspaceCount ?? workspaceOptions.length} label="Workspaces"
+        />
       </div>
 
       {loadErr && (
-        <MessageBar intent="warning" style={{ marginBottom: 16 }}>
+        <MessageBar intent="warning" className={styles.msgBar}>
           <MessageBarBody>
             <MessageBarTitle>Real-Time hub is not fully connected to Fabric</MessageBarTitle>
             {loadErr.error}
@@ -305,7 +356,7 @@ export function RealTimeHubView() {
       )}
 
       {(data?.warnings && data.warnings.length > 0) && (
-        <MessageBar intent="info" style={{ marginBottom: 16 }}>
+        <MessageBar intent="info" className={styles.msgBar}>
           <MessageBarBody>
             Some workspaces could not be enumerated: {data.warnings.slice(0, 3).map((w) => w.workspace).join(', ')}
             {data.warnings.length > 3 ? ` (+${data.warnings.length - 3} more)` : ''}.
@@ -354,24 +405,24 @@ export function RealTimeHubView() {
         </div>
 
         {loading ? (
-          <Spinner label="Loading data streams…" />
+          <div className={styles.loadingWrap}>
+            <Spinner label="Loading data streams…" />
+          </div>
         ) : streams.length === 0 ? (
-          <div style={{
-            padding: 28, borderRadius: 12, border: `1px dashed ${tokens.colorNeutralStroke2}`,
-            backgroundColor: tokens.colorNeutralBackground2, color: tokens.colorNeutralForeground2,
-            fontSize: 14, textAlign: 'center', lineHeight: 1.6,
-          }}>
-            No data streams visible yet.<br />
-            Use <b>Connect a source</b> above to connect a Microsoft source and create your first eventstream — it is
-            created as a real CSA Loom Eventstream item and will then appear here.
+          <div className={styles.emptyState} role="status">
+            <DataTrending32Regular className={styles.emptyIcon} aria-hidden />
+            <span>
+              No data streams visible yet.<br />
+              Use <b>Connect a source</b> above to connect a Microsoft source and create your first eventstream — it is
+              created as a real CSA Loom Eventstream item and will then appear here.
+            </span>
           </div>
         ) : view === 'tile' ? (
           filtered.length === 0 ? (
-            <div style={{
-              padding: 28, borderRadius: 12, border: `1px dashed ${tokens.colorNeutralStroke2}`,
-              backgroundColor: tokens.colorNeutralBackground2, color: tokens.colorNeutralForeground2,
-              fontSize: 14, textAlign: 'center', lineHeight: 1.6,
-            }}>No streams match the current search.</div>
+            <div className={styles.emptyState} role="status">
+              <Search20Regular className={styles.emptyIcon} aria-hidden />
+              <span>No streams match the current search.</span>
+            </div>
           ) : (
             <TileGrid minTileWidth={280}>
               {filtered.map((s) => (
