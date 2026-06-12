@@ -39,6 +39,7 @@ const useStyles = makeStyles({
     marginBottom: tokens.spacingVerticalL,
   },
   empty: { color: tokens.colorNeutralForeground3 },
+  badgeRow: { display: 'inline-flex', gap: tokens.spacingHorizontalXS },
 });
 
 interface Props {
@@ -108,7 +109,7 @@ export default function WorkloadLandingPage(props: Props) {
                 subtitle={t.description}
                 meta={`Create a ${t.displayName.toLowerCase()}`}
                 badge={
-                  <span style={{ display: 'inline-flex', gap: 4 }}>
+                  <span className={s.badgeRow}>
                     {t.preview && <Badge appearance="outline" color="warning" size="small">Preview</Badge>}
                     {t.noRestApi && <Badge appearance="outline" color="informative" size="small">UI only</Badge>}
                   </span>
