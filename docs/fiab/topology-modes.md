@@ -20,13 +20,57 @@ honored and maps onto the new modes for back-compat.
 legacy admin-plane + multi-sub DLZ fan-out (unchanged).
 
 Derived gating booleans in `main.bicep`:
-- `deployAdminPlane = effectiveTopology != 'dlz-attach'` — gates the admin-plane
-  RG + module **and** every admin-plane-only consumer (the 21 `dp*`
-  deploy-planner modules, monitoring/cost reader RBAC, RTI-hub RBAC, setup
-  orchestrator hub RBAC, AOAI-spark RBAC).
+- `deployAdminPlane = effectiveTopology != 'dlz-attach'` — gates **only** the
+  admin-plane RG (`adminPlaneRg`), the admin-plane module (`adminPlane`), and
+  the admin-plane outputs (`consoleUrl`, `mcpServerUrl`, the Front Door / vanity
+  URL outputs, etc.). It also *selects* where the `hub` var reads its
+  coordinates — `adminPlane.outputs.*` when the admin plane is deployed in this
+  run, `hubCoordinates` in `dlz-attach` — but it does **not** gate the
+  subscription-scoped console-RBAC modules (see "Subscription-scoped RBAC runs
+  in every topology" below).
 - `deployLandingZones = effectiveTopology != 'tenant'`.
 - `useSingleDlz` / `useMultiDlz` pick the in-sub `singleDlz` module vs the
   cross-sub `dlz[for]` fan-out over `dlzSubscriptionIds` / `dlzDomainNames`.
+  `useSingleDlz` is what gates the 21 `dp*` deploy-planner modules, the
+  single-sub AOAI-spark RBAC (`singleDlzAoaiSparkRbac`), and the single-sub
+  access-policy RBAC; `useMultiDlz` gates the cross-sub DLZ fan-out, its
+  access-policy RBAC, and the setup-orchestrator **spoke** RBAC. None of these
+  are gated by `deployAdminPlane`.
+
+### Subscription-scoped RBAC runs in **every** topology (including `dlz-attach`)
+
+Four subscription-scoped console-RBAC modules are **not** gated by any topology
+boolean. They deploy on every run and self-gate only on a **non-empty principal
+id** (each module no-ops internally when its principal arrives `''`):
+
+| Module | Role granted (subscription scope) | Principal source |
+|--------|-----------------------------------|------------------|
+| `consoleMonitoringReaderRbac` | Monitoring Reader | `hub.consolePrincipalId` |
+| `consoleCostReaderRbac` | Cost Management Reader | `hub.consolePrincipalId` |
+| `rtiHubRbac` | Reader (Azure Resource Graph cross-RG discovery) | `dpConsolePrincipalId` |
+| `setupOrchestratorHubRbac` | Contributor (only when `setupOrchestratorEnabled`) | console UAMI |
+
+This is **intentional and correct**. In `dlz-attach` the principal is the
+**existing** central console UAMI (supplied via `hubCoordinates.consolePrincipalId`),
+and the one console must gain Reader/Cost/Monitoring **at the attached spoke
+subscription** so it can discover and observe resources across every domain sub
+— exactly what the `rti-hub-rbac` module header documents. So a `dlz-attach` run
+**does** create subscription-scoped grants on the target/spoke sub:
+
+- **Monitoring Reader** — `/monitor` (metrics / activity / health / alerts) and
+  the Activator run-history grid read live observability in the spoke sub.
+- **Cost Management Reader** — `/admin/capacity` cost column (F5) and the
+  `/monitor` Cost tab read live spend in the spoke sub.
+- **Reader** — Azure Resource Graph returns the spoke sub's Event Hub
+  namespaces / IoT Hubs / ADX clusters in the `/rti-hub` catalog.
+- **Contributor** — only when `setupOrchestratorEnabled`: lets the orchestrator
+  `az deployment sub create` into the spoke sub.
+
+These grants reuse the existing console principal and do **not** require the
+admin plane to be (re)deployed. Do **not** add a `deployAdminPlane` guard to
+them — that would break cross-sub console visibility for attached domains. The
+only thing `deployAdminPlane` truly skips in `dlz-attach` is the admin-plane RG,
+the admin-plane module, and the admin-plane outputs.
 
 ## Hub coordinates for `dlz-attach`
 
@@ -46,6 +90,19 @@ These come from the cross-subscription `existing`/output flow per
 [Bicep deploy-to-subscription scopes](https://learn.microsoft.com/azure/azure-resource-manager/bicep/deploy-to-subscription#deployment-scopes).
 The orchestrator (audit-t157) stores them in the Cosmos `tenant-topology` doc at
 tenant-deploy time and passes them back as params on each attach.
+
+**Fail-fast (the "REQUIRED" contract is enforced).** Because the admin plane is
+skipped in `dlz-attach`, an absent `hubCoordinates` would otherwise let every
+`hub.*` field silently resolve to `''` and pass empty hub wiring into the
+landing-zone + cross-sub RBAC modules. To prevent that, `main.bicep` refuses to
+proceed: when `effectiveTopology == 'dlz-attach'` and any of the minimum hub
+keys (`hubVnetId`, `lawId`, `consolePrincipalId`) are empty, the `hub` var's
+`dlz-attach` branch dereferences a property that does not exist, which ARM
+rejects at **validate / what-if / deploy** time. The error names the env vars
+the operator must supply — `LOOM_HUB_VNET_ID`, `LOOM_HUB_LAW_ID`,
+`LOOM_HUB_CONSOLE_PRINCIPAL_ID` (and the rest of `topologyManifest.hub`) from
+the tenant (DMLZ) deploy outputs. The guard is consumed only by that branch, so
+it never fires in `single-sub` / `tenant` / legacy modes.
 
 ## `topologyManifest` output
 
