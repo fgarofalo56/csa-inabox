@@ -1,7 +1,11 @@
 /**
  * Key Vault secrets client — write/read/delete over the KV REST API (no
  * @azure/keyvault-secrets dependency), using the same UAMI→DefaultAzureCredential
- * chain every Loom Azure client uses. Scope: https://vault.azure.net/.default.
+ * chain every Loom Azure client uses. The data-plane host suffix and AAD scope
+ * are sovereign-cloud aware via cloud-endpoints (`kvSuffix()` / `kvScope()` /
+ * `kvUrlFromName()`) — Commercial/GCC `vault.azure.net`, GCC-High/IL5/DoD
+ * `vault.usgovcloudapi.net`. Hard-coding the Commercial host silently fails KV
+ * auth in Gov, so every literal goes through those helpers.
  *
  * Backs Loom **Connections**: when a user supplies a password / connection
  * string / account key / SPN secret for a data source (mirroring, ADF/Synapse
@@ -14,6 +18,7 @@
  */
 import { fetchWithTimeout } from '@/lib/azure/fetch-with-timeout';
 import { ChainedTokenCredential, DefaultAzureCredential, ManagedIdentityCredential } from '@azure/identity';
+import { kvScope, kvUrlFromName } from '@/lib/azure/cloud-endpoints';
 
 const uamiClientId = process.env.LOOM_UAMI_CLIENT_ID || process.env.AZURE_CLIENT_ID;
 const credential = uamiClientId
@@ -32,7 +37,7 @@ export function vaultUrl(): string | null {
   const uri = process.env.LOOM_KEY_VAULT_URI || process.env.LOOM_KEY_VAULT_URL;
   if (uri) return uri.replace(/\/$/, '');
   const name = process.env.LOOM_KEY_VAULT_NAME;
-  if (name) return `https://${name}.vault.azure.net`;
+  if (name) return kvUrlFromName(name);
   return null;
 }
 
@@ -45,7 +50,7 @@ export function vaultUrl(): string | null {
  */
 export function shortcutVaultUrl(): string | null {
   const ov = (process.env.LOOM_SHORTCUT_KEYVAULT || '').trim();
-  if (ov) return /^https?:\/\//i.test(ov) ? ov.replace(/\/$/, '') : `https://${ov}.vault.azure.net`;
+  if (ov) return /^https?:\/\//i.test(ov) ? ov.replace(/\/$/, '') : kvUrlFromName(ov);
   return vaultUrl();
 }
 
@@ -106,7 +111,7 @@ export function kvSecretsConfigGate(): { missing: string; detail: string } | nul
 }
 
 async function token(): Promise<string> {
-  const t = await credential.getToken('https://vault.azure.net/.default');
+  const t = await credential.getToken(kvScope());
   if (!t?.token) throw new KeyVaultError('Failed to acquire a Key Vault token', 401);
   return t.token;
 }
@@ -176,7 +181,7 @@ export interface KeyVaultCertificateRef {
  */
 export function certVaultUrl(): string | null {
   const ov = (process.env.LOOM_EVENTSTREAM_CERT_VAULT || '').trim();
-  if (ov) return /^https?:\/\//i.test(ov) ? ov.replace(/\/$/, '') : `https://${ov}.vault.azure.net`;
+  if (ov) return /^https?:\/\//i.test(ov) ? ov.replace(/\/$/, '') : kvUrlFromName(ov);
   return vaultUrl();
 }
 

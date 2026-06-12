@@ -19,7 +19,8 @@ import type { SessionPayload } from '@/lib/auth/session';
 
 export type ConnectionType =
   | 'azure-sql' | 'synapse-dedicated' | 'synapse-serverless' | 'databricks-sql'
-  | 'postgres' | 'storage-adls' | 'cosmos' | 'generic-sql';
+  | 'postgres' | 'storage-adls' | 'cosmos' | 'generic-sql'
+  | 'event-hub' | 'service-bus' | 'key-vault';
 
 export type AuthMethod =
   | 'entra-mi'          // the Console managed identity (no secret)
@@ -42,6 +43,18 @@ export interface LoomConnection {
   spnClientId?: string;
   /** KV secret name holding the password / connection string / key / SPN secret. */
   secretRef?: string;
+  /**
+   * Non-secret provenance for connections imported via "Add existing" (Azure
+   * Resource Graph cross-subscription discovery with the caller's RBAC/ABAC).
+   * These pin the connection to the exact Azure resource the user already had
+   * access to — never a secret, so they live on the Cosmos doc and the view.
+   */
+  armResourceId?: string;
+  subscriptionId?: string;
+  resourceGroup?: string;
+  location?: string;
+  /** 'existing' = imported from an Azure resource the user can reach; 'manual' = hand-entered. */
+  origin?: 'manual' | 'existing';
   description?: string;
   createdBy?: string;
   createdAt: string;
@@ -66,6 +79,12 @@ export interface CreateConnectionInput {
   spnTenantId?: string;
   spnClientId?: string;
   description?: string;
+  /** Non-secret Azure provenance for "Add existing" imports (ARG-discovered). */
+  armResourceId?: string;
+  subscriptionId?: string;
+  resourceGroup?: string;
+  location?: string;
+  origin?: 'manual' | 'existing';
   /** The secret value (password / connection string / key / SPN secret) — written to KV, never stored. */
   secret?: string;
 }
@@ -111,6 +130,11 @@ export async function createConnection(session: SessionPayload, input: CreateCon
     spnTenantId: input.spnTenantId?.trim() || undefined,
     spnClientId: input.spnClientId?.trim() || undefined,
     description: input.description?.trim() || undefined,
+    armResourceId: input.armResourceId?.trim() || undefined,
+    subscriptionId: input.subscriptionId?.trim() || undefined,
+    resourceGroup: input.resourceGroup?.trim() || undefined,
+    location: input.location?.trim() || undefined,
+    origin: input.origin || (input.armResourceId ? 'existing' : 'manual'),
     secretRef,
     createdBy: session.claims.upn || session.claims.email || tenantId,
     createdAt: now,

@@ -52,6 +52,14 @@ describe('ConnectionsPage view toggle', () => {
     expect(screen.queryByRole('button', { name: 'List view' })).toBeNull();
   });
 
+  it('always offers both "New connection" and "Add existing" entry points', async () => {
+    installFetchMock({ '/api/connections': () => ({ ok: true, connections: [] }) });
+    mount();
+    await waitFor(() => expect(screen.getByText(/No connections yet/i)).toBeInTheDocument());
+    expect(screen.getByRole('button', { name: /New connection/i })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /Add existing/i })).toBeInTheDocument();
+  });
+
   it('swaps tiles for the LoomDataTable and persists the choice on toggle', async () => {
     installFetchMock({ '/api/connections': () => ({ ok: true, connections: CONNS }) });
     mount();
