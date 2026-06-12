@@ -15,11 +15,12 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import { usePathname } from 'next/navigation';
 import {
   Button, Input, makeStyles, tokens,
-  Caption1, Subtitle2, Badge,
+  Caption1, Subtitle2, Badge, Divider, Tooltip,
 } from '@fluentui/react-components';
 import {
   Send24Regular, Sparkle24Regular, Dismiss20Regular,
-  ArrowReset20Regular, Open20Regular,
+  ArrowReset20Regular, Open20Regular, Dismiss12Regular,
+  BookQuestionMark16Regular,
 } from '@fluentui/react-icons';
 import { HelpEmptyState } from './empty-state';
 import {
@@ -29,6 +30,7 @@ import {
 import type { Citation } from './citations';
 import { CopilotDiff, type ProposedChange } from '../copilot-diff';
 import { applyChange } from '@/lib/copilot/apply-change';
+import { receiptScopeFromTutorialId } from './tutorial-scope';
 
 const EVT_OPEN = 'csaloom:open-copilot';
 const EVT_TOGGLE = 'csaloom:toggle-copilot';
@@ -68,7 +70,26 @@ const useStyles = makeStyles({
     display: 'flex', alignItems: 'center', gap: 8,
     background: 'linear-gradient(90deg, rgba(125,108,255,0.16), rgba(89,165,255,0.08))',
   },
-  title: { display: 'flex', alignItems: 'center', gap: 8, flex: 1 },
+  title: { display: 'flex', alignItems: 'center', gap: 8, flex: 1, minWidth: 0 },
+  titleText: {
+    overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
+  },
+  headerActions: { display: 'flex', alignItems: 'center', gap: 2, flexShrink: 0 },
+  headerDivider: { flexShrink: 0, height: 20 },
+  // Tutorial context strip — shows the active step the next ask attaches to,
+  // and lets the user clear it without resetting the whole conversation.
+  tutorialStrip: {
+    display: 'flex', alignItems: 'center', gap: 8,
+    padding: '6px 12px',
+    borderBottom: `1px solid ${tokens.colorNeutralStroke2}`,
+    backgroundColor: tokens.colorPaletteGreenBackground1,
+    color: tokens.colorNeutralForeground2,
+  },
+  tutorialIcon: { color: tokens.colorPaletteGreenForeground1, flexShrink: 0 },
+  tutorialLabel: {
+    flex: 1, minWidth: 0,
+    overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
+  },
   body: {
     flex: 1, overflowY: 'auto', padding: 12,
     display: 'flex', flexDirection: 'column', gap: 8,
@@ -76,7 +97,7 @@ const useStyles = makeStyles({
   composer: {
     padding: 10,
     borderTop: `1px solid ${tokens.colorNeutralStroke2}`,
-    display: 'flex', gap: 6,
+    display: 'flex', gap: 6, alignItems: 'flex-end',
     backgroundColor: tokens.colorNeutralBackground1,
   },
   hintRow: {
@@ -242,9 +263,13 @@ export function HelpCopilotWidget() {
           context: {
             ...pageCtx,
             tutorial: tutorial ?? undefined,
+            // Receipt scope priority: the route-bound open item, else the item
+            // encoded in the active editor tutorial's id. Either way the agent's
+            // readReceipts tool resolves to a concrete item for auto-error
+            // detection; absent both, it honestly reports "No item in context".
             receiptScope: pageCtx.itemId
               ? { itemId: pageCtx.itemId, itemType: pageCtx.itemType, workspaceId: pageCtx.workspaceId }
-              : undefined,
+              : receiptScopeFromTutorialId(tutorial?.id),
           },
         }),
       });
@@ -345,26 +370,48 @@ export function HelpCopilotWidget() {
     <aside className={s.panel} aria-label="CSA Loom Help Copilot" role="dialog" data-testid="help-copilot-widget">
       <div className={s.header}>
         <div className={s.title}>
-          <Sparkle24Regular style={{ color: tokens.colorBrandForeground1 }} />
-          <Subtitle2>Loom Copilot</Subtitle2>
-          <Badge appearance="tint" size="small" color="brand" title={`Aware you're on: ${pageCtx.label} (${pageCtx.path})`}>
+          <Sparkle24Regular style={{ color: tokens.colorBrandForeground1, flexShrink: 0 }} />
+          <Subtitle2 className={s.titleText}>Loom Copilot</Subtitle2>
+          <Badge appearance="tint" size="small" color="brand"
+            title={`Aware you're on: ${pageCtx.label} (${pageCtx.path})`}>
             on: {pageCtx.label}
           </Badge>
-          {tutorial && (
-            <Badge appearance="tint" size="small" color="success" data-testid="help-tutorial-badge"
-              title={tutorial.stepTitle ? `Step: ${tutorial.stepTitle}` : tutorial.id}>
-              step {tutorial.stepIndex + 1}{tutorial.totalSteps ? `/${tutorial.totalSteps}` : ''}
-            </Badge>
-          )}
         </div>
-        <Button appearance="subtle" size="small" icon={<ArrowReset20Regular />}
-          onClick={reset} aria-label="New conversation" disabled={busy} title="New conversation" />
-        <Button appearance="subtle" size="small" icon={<Open20Regular />}
-          as="a" href="/copilot" target="_self" aria-label="Open full Loom Copilot"
-          title="Open full Loom Copilot (cross-item orchestrator)" />
-        <Button appearance="subtle" size="small" icon={<Dismiss20Regular />}
-          onClick={() => setOpen(false)} aria-label="Close Help Copilot" />
+        <div className={s.headerActions}>
+          <Tooltip content="New conversation" relationship="label" withArrow>
+            <Button appearance="subtle" size="small" icon={<ArrowReset20Regular />}
+              onClick={reset} aria-label="New conversation" disabled={busy} />
+          </Tooltip>
+          <Tooltip content="Open full Loom Copilot (cross-item orchestrator)" relationship="label" withArrow>
+            <Button appearance="subtle" size="small" icon={<Open20Regular />}
+              as="a" href="/copilot" target="_self" aria-label="Open full Loom Copilot" />
+          </Tooltip>
+          <Divider vertical className={s.headerDivider} />
+          <Tooltip content="Close" relationship="label" withArrow>
+            <Button appearance="subtle" size="small" icon={<Dismiss20Regular />}
+              onClick={() => setOpen(false)} aria-label="Close Help Copilot" />
+          </Tooltip>
+        </div>
       </div>
+
+      {tutorial && (
+        <div className={s.tutorialStrip} data-testid="help-tutorial-strip">
+          <BookQuestionMark16Regular className={s.tutorialIcon} />
+          <Caption1 className={s.tutorialLabel}
+            title={tutorial.stepTitle ? `Step: ${tutorial.stepTitle}` : tutorial.id}>
+            Helping with step {tutorial.stepIndex + 1}{tutorial.totalSteps ? ` of ${tutorial.totalSteps}` : ''}
+            {tutorial.stepTitle ? ` — ${tutorial.stepTitle}` : ''}
+          </Caption1>
+          <Badge appearance="tint" size="small" color="success" data-testid="help-tutorial-badge">
+            step {tutorial.stepIndex + 1}{tutorial.totalSteps ? `/${tutorial.totalSteps}` : ''}
+          </Badge>
+          <Tooltip content="Stop using this tutorial step as context" relationship="label" withArrow>
+            <Button appearance="subtle" size="small" icon={<Dismiss12Regular />}
+              onClick={() => setTutorial(null)} aria-label="Clear tutorial step context"
+              data-testid="help-tutorial-clear" />
+          </Tooltip>
+        </div>
+      )}
 
       <div className={s.body} ref={bodyRef}>
         {gateError && <AoaiGateBar message={gateError} />}

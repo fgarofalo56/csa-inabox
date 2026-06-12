@@ -19,6 +19,7 @@ and actions via handoff to the cross-item Copilot at `/copilot`.
 | Copilot is aware of the screen / object you're on        | ✅ built (pre-existing `pageContext`) | injected system message in `orchestrateHelp` |
 | Copilot is aware of the **tutorial step** you're on      | ✅ built | `pageContext.tutorial` → 3rd system message; `csaloom:tutorial-step` CustomEvent from the LearnPane stepper |
 | Step-by-step guided walkthrough with a "help" affordance | ✅ built | `LearnPane` stepper (`item-side-panel.tsx`) — per-step "Help with this step" button, content sourced from `lib/learn/content.ts` (no free-form authoring) |
+| Tutorial step resolves the item to diagnose even off-route | ✅ built | `receiptScopeFromTutorialId('editor:<type>#<id>')` (`tutorial-scope.ts`) — when the route hasn't put the item id in the path, the widget derives `receiptScope` from the active editor tutorial's id so `readReceipts` still targets the right item |
 | Auto-detect errors from run history                      | ✅ built | `readReceipts` tool → `gatherReceipts(source:'runs')` → ADF `listPipelineRuns`/`listActivityRuns` (Azure-native); honest gate via `adfConfigGate()` |
 | Auto-detect errors from install/provision state          | ✅ built | `readReceipts(source:'provisioning')` reads Cosmos `state.provisioning` (status / gate.reason / gate.remediation / gate.link / error) |
 | Auto-detect from recent activity/audit history           | ✅ built | `readReceipts(source:'audit')` queries `auditLogContainer()` (same query as the audit route) |
@@ -62,3 +63,6 @@ The help agent's model deployment resolves through the existing `tenantConfig.he
   32/32 green: receipt shaping over provisioning/audit/ADF runs (incl. honest gate + error surfacing),
   the `readReceipts` tool (remediation gate + run citation + no-scope error), and the `proposeFix` tool
   (sentinel round-trip + deterministic-target rejection).
+- `npx vitest run lib/components/help-copilot/__tests__/tutorial-scope.test.ts` — covers
+  `receiptScopeFromTutorialId`: parses `editor:<type>#<id>` (incl. guid item ids), returns undefined for
+  an unsaved `#new` item, non-editor tutorial ids, and empty input, and trims surrounding whitespace.
