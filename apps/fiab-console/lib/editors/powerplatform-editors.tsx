@@ -34,7 +34,7 @@ import {
 import { ItemEditorChrome } from './item-editor-chrome';
 import { PowerPlatformTree } from '@/lib/components/powerplatform/powerplatform-tree';
 import { PowerAppsStudioTab } from '@/lib/power-platform/power-apps-editor';
-import { PowerAutomateDesignerTab } from '@/lib/power-platform/power-automate-editor';
+import { PowerAutomateDesignerTab, NewFlowAuthor } from '@/lib/power-platform/power-automate-editor';
 import { getItem, type WorkspaceItem } from '@/lib/api/workspaces';
 import type { FabricItemType } from '@/lib/catalog/fabric-item-types';
 import type { RibbonTab } from '@/lib/components/ribbon';
@@ -669,6 +669,55 @@ export function DataverseTableEditor({ item, id }: { item: FabricItemType; id: s
     setColDesc(''); setColMaxLen('100'); setColPrecision('2'); setColMsg(null);
   };
 
+  // ----- New table dialog (real Dataverse Web API POST EntityDefinitions) -----
+  const [tblOpen, setTblOpen] = useState(false);
+  const [tblBusy, setTblBusy] = useState(false);
+  const [tblMsg, setTblMsg] = useState<{ kind: 'success' | 'error'; text: string } | null>(null);
+  const [tblSchema, setTblSchema] = useState('');
+  const [tblDisplay, setTblDisplay] = useState('');
+  const [tblPlural, setTblPlural] = useState('');
+  const [tblPrimary, setTblPrimary] = useState('Name');
+  const [tblOwnership, setTblOwnership] = useState<'UserOwned' | 'OrganizationOwned'>('UserOwned');
+  const [tblType, setTblType] = useState<'Standard' | 'Elastic'>('Standard');
+  const [tblNotes, setTblNotes] = useState(false);
+  const [tblActivities, setTblActivities] = useState(false);
+  const resetTbl = () => {
+    setTblSchema(''); setTblDisplay(''); setTblPlural(''); setTblPrimary('Name');
+    setTblOwnership('UserOwned'); setTblType('Standard'); setTblNotes(false);
+    setTblActivities(false); setTblMsg(null);
+  };
+
+  const createTable = useCallback(async () => {
+    if (!env.selected) return;
+    if (!tblSchema.trim() || !tblDisplay.trim() || !tblPlural.trim()) {
+      setTblMsg({ kind: 'error', text: 'Schema name, display name, and plural name are required.' });
+      return;
+    }
+    setTblBusy(true); setTblMsg(null);
+    try {
+      const r = await fetch(`/api/powerplatform/tables?envId=${encodeURIComponent(env.selected)}`, {
+        method: 'POST', headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({
+          schemaName: tblSchema.trim(),
+          displayName: tblDisplay.trim(),
+          displayCollectionName: tblPlural.trim(),
+          primaryNameDisplayName: tblPrimary.trim() || undefined,
+          ownershipType: tblOwnership,
+          tableType: tblType,
+          hasNotes: tblNotes,
+          hasActivities: tblActivities,
+        }),
+      });
+      const { json: j } = await readJsonSafe(r);
+      if (!j?.ok) { setTblMsg({ kind: 'error', text: `Create failed: ${j?.error || r.status}${j?.hint ? ` — ${j.hint}` : ''}` }); return; }
+      setTblMsg({ kind: 'success', text: `Table "${tblDisplay.trim()}" created.` });
+      setTblOpen(false); resetTbl();
+      reloadTables();
+    } catch (e: any) {
+      setTblMsg({ kind: 'error', text: `Create failed: ${e?.message || String(e)}` });
+    } finally { setTblBusy(false); }
+  }, [env.selected, tblSchema, tblDisplay, tblPlural, tblPrimary, tblOwnership, tblType, tblNotes, tblActivities, reloadTables]);
+
   const [schemaState, reloadSchema] = useApi<{ ok: boolean; table: DvTable; attributes: DvAttr[] }>(
     env.selected && selectedTable ? `/api/items/dataverse-table/${tableEnc}${envQ}` : null,
     [env.selected, selectedTable],
@@ -754,18 +803,24 @@ export function DataverseTableEditor({ item, id }: { item: FabricItemType; id: s
         {id === 'new' && (
           <MessageBar intent="warning">
             <MessageBarBody>
-              <MessageBarTitle>Pick a table to inspect and author</MessageBarTitle>
-              This designer reads + inspects every facet of an existing table — columns, keys, relationships,
-              views, business rules, and live data — against the Dataverse Web API, and lets you
-              <strong> add columns</strong> directly (Columns tab &rarr; New column) which write back through the
-              Web API. Creating a brand-new custom table (publisher prefix, ownership type) is still done in
-              <code> make.powerapps.com</code> or via solution import. Pick a table below.
+              <MessageBarTitle>Create or pick a table to inspect and author</MessageBarTitle>
+              Use <strong>New table</strong> to create a brand-new custom table in-product (publisher prefix,
+              ownership type, primary column) — a real Dataverse Web API write. This designer also reads + inspects
+              every facet of an existing table — columns, keys, relationships, views, business rules, and live data —
+              and lets you <strong>add columns</strong> directly (Columns tab &rarr; New column). Pick a table below
+              or create one.
             </MessageBarBody>
           </MessageBar>
         )}
         <div className={s.toolbar}>
           <EnvPicker envs={env.envs} selected={env.selected} setSelected={env.setSelected} />
           <Button appearance="secondary" onClick={reloadActive}>Reload</Button>
+          {env.selected && !selectedTable && (
+            <Button appearance="primary" icon={<Add20Regular />} onClick={() => { resetTbl(); setTblOpen(true); }}>New table</Button>
+          )}
+          {tblMsg && !selectedTable && (
+            <Caption1 style={{ color: tblMsg.kind === 'error' ? tokens.colorStatusDangerForeground1 : tokens.colorStatusSuccessForeground1 }}>{tblMsg.text}</Caption1>
+          )}
           {selectedTable && <Caption1>Table: <strong>{selectedTable}</strong></Caption1>}
           {selectedTable && env.selected && (
             <Button
@@ -1055,6 +1110,73 @@ export function DataverseTableEditor({ item, id }: { item: FabricItemType; id: s
             )}
           </>
         )}
+
+        {/* ----- New table dialog (real Dataverse Web API POST EntityDefinitions) ----- */}
+        <Dialog open={tblOpen} onOpenChange={(_, d) => setTblOpen(d.open)}>
+          <DialogSurface>
+            <DialogBody>
+              <DialogTitle>New table</DialogTitle>
+              <DialogContent>
+                <div className={s.dialogForm}>
+                  <Field label="Display name" required>
+                    <Input value={tblDisplay} onChange={(_, d) => setTblDisplay(d.value)} placeholder="Invoice" />
+                  </Field>
+                  <Field label="Plural display name" required>
+                    <Input value={tblPlural} onChange={(_, d) => setTblPlural(d.value)} placeholder="Invoices" />
+                  </Field>
+                  <Field
+                    label="Schema name" required
+                    hint="Must include your publisher prefix, e.g. new_Invoice"
+                  >
+                    <Input value={tblSchema} onChange={(_, d) => setTblSchema(d.value)} placeholder="new_Invoice" />
+                  </Field>
+                  <Field label="Primary column display name">
+                    <Input value={tblPrimary} onChange={(_, d) => setTblPrimary(d.value)} placeholder="Name" />
+                  </Field>
+                  <div className={s.row2}>
+                    <Field label="Ownership">
+                      <Dropdown
+                        value={tblOwnership === 'UserOwned' ? 'User or team' : 'Organization'}
+                        selectedOptions={[tblOwnership]}
+                        onOptionSelect={(_, d) => d.optionValue && setTblOwnership(d.optionValue as 'UserOwned' | 'OrganizationOwned')}
+                      >
+                        <Option value="UserOwned" text="User or team">User or team</Option>
+                        <Option value="OrganizationOwned" text="Organization">Organization</Option>
+                      </Dropdown>
+                    </Field>
+                    <Field label="Table type">
+                      <Dropdown
+                        value={tblType}
+                        selectedOptions={[tblType]}
+                        onOptionSelect={(_, d) => d.optionValue && setTblType(d.optionValue as 'Standard' | 'Elastic')}
+                      >
+                        <Option value="Standard" text="Standard">Standard</Option>
+                        <Option value="Elastic" text="Elastic">Elastic</Option>
+                      </Dropdown>
+                    </Field>
+                  </div>
+                  <Switch checked={tblNotes} onChange={(_, d) => setTblNotes(d.checked)} label="Enable attachments (Notes)" />
+                  <Switch checked={tblActivities} onChange={(_, d) => setTblActivities(d.checked)} label="Enable activities" />
+                  <Caption1>
+                    Creates the table via the Dataverse Web API (<code>POST EntityDefinitions</code>). The Dataverse
+                    service principal must hold a customizing role (System Administrator / System Customizer) on this
+                    environment.
+                  </Caption1>
+                </div>
+              </DialogContent>
+              <DialogActions>
+                <DialogTrigger disableButtonEnhancement><Button appearance="secondary" disabled={tblBusy}>Cancel</Button></DialogTrigger>
+                <Button
+                  appearance="primary"
+                  disabled={tblBusy || !tblSchema.trim() || !tblDisplay.trim() || !tblPlural.trim()}
+                  onClick={() => { void createTable(); }}
+                >
+                  {tblBusy ? 'Creating…' : 'Create table'}
+                </Button>
+              </DialogActions>
+            </DialogBody>
+          </DialogSurface>
+        </Dialog>
 
         {/* ----- New column dialog (real Dataverse Web API POST /Attributes) ----- */}
         <Dialog open={colOpen} onOpenChange={(_, d) => setColOpen(d.open)}>
@@ -1524,6 +1646,7 @@ export function PowerAutomateFlowEditor({ item, id }: { item: FabricItemType; id
   );
   const [selected, setSelected] = useState<string | null>(id !== 'new' ? id : null);
   const [flowTab, setFlowTab] = useState<'designer' | 'runs'>('designer');
+  const [newFlowOpen, setNewFlowOpen] = useState(false);
   const [detailSt] = useApi<{ ok: boolean; flow: Flow }>(
     env.selected && selected ? `/api/items/power-automate-flow/${encodeURIComponent(selected)}${envQ}` : null,
     [env.selected, selected],
@@ -1564,23 +1687,50 @@ export function PowerAutomateFlowEditor({ item, id }: { item: FabricItemType; id
         {id === 'new' && (
           <MessageBar intent="warning">
             <MessageBarBody>
-              <MessageBarTitle>Pick a flow to author or run</MessageBarTitle>
-              This editor lists deployed cloud flows in the selected environment, triggers manual runs, and
-              reviews run history. Select a flow to open its <strong>Designer</strong> tab — the Power Automate
-              flow designer requires a delegated user token (it can&apos;t be embedded server-side), so the
-              Designer tab opens it in a new tab while keeping flow metadata and runs in Loom. Pick a flow below.
+              <MessageBarTitle>Create, author, or run a cloud flow</MessageBarTitle>
+              Use <strong>New flow</strong> to create a modern cloud flow in-product (real Dataverse
+              <code> workflow</code> write), then author its Logic Apps definition and connection references on the
+              <strong> Designer</strong> tab and turn it on — all without leaving Loom. The visual drag-drop canvas
+              needs a delegated user token and opens in a new tab. Triggering runs and run history are on the
+              <strong> Runs</strong> view. Pick a flow below or create one.
             </MessageBarBody>
           </MessageBar>
         )}
         <div className={s.toolbar}>
           <EnvPicker envs={env.envs} selected={env.selected} setSelected={env.setSelected} />
           <Button appearance="secondary" onClick={reloadList}>Reload</Button>
+          {env.selected && !selected && (
+            <Button appearance="primary" icon={<Add20Regular />} onClick={() => setNewFlowOpen(true)}>New flow</Button>
+          )}
           {selected && (
             <Button appearance="primary" disabled={runBusy} onClick={triggerRun}>
               {runBusy ? 'Running…' : 'Run flow'}
             </Button>
           )}
         </div>
+
+        {/* ----- New flow (in-product create — real Dataverse workflow row) ----- */}
+        <Dialog open={newFlowOpen} onOpenChange={(_, d) => setNewFlowOpen(d.open)}>
+          <DialogSurface>
+            <DialogBody>
+              <DialogTitle>New cloud flow</DialogTitle>
+              <DialogContent>
+                <NewFlowAuthor
+                  envId={env.selected}
+                  onCreated={(workflowId) => {
+                    setNewFlowOpen(false);
+                    reloadList();
+                    setSelected(workflowId);
+                    setFlowTab('designer');
+                  }}
+                />
+              </DialogContent>
+              <DialogActions>
+                <DialogTrigger disableButtonEnhancement><Button appearance="secondary">Close</Button></DialogTrigger>
+              </DialogActions>
+            </DialogBody>
+          </DialogSurface>
+        </Dialog>
         {runMsg && <MessageBar intent={runMsg.startsWith('Run failed') ? 'error' : 'success'}><MessageBarBody>{runMsg}</MessageBarBody></MessageBar>}
         {env.error && <ErrorBar msg={env.error} hint={env.hint} />}
         {!env.selected && !env.loading && <EmptyText>Select an environment to list its flows.</EmptyText>}
@@ -1702,11 +1852,16 @@ export function PowerPageEditor({ item, id }: { item: FabricItemType; id: string
       <div className={s.pad}>
         <MessageBar intent="warning">
           <MessageBarBody>
-            <MessageBarTitle>Power Pages cannot be authored inside Loom</MessageBarTitle>
-            Pages, templates, web roles, and content snippets edit in the proprietary Power Pages design
-            studio. This editor is a read-only registry view that lists deployed sites in the selected
-            environment with their primary domain and status. Click a site URL to open the live page; click
-            the site row for metadata. To edit, open Maker Studio at <code>make.powerpages.microsoft.com</code>.
+            <MessageBarTitle>Power Pages design + lifecycle run outside Loom&apos;s identity</MessageBarTitle>
+            Pages, templates, web roles, and content snippets edit in the proprietary Power Pages design studio
+            (no public design API). Site <strong>lifecycle</strong> (provision / delete / restart, WAF, allowed-IPs,
+            security scan) is exposed only through the Power Pages admin API
+            (<code>api.powerplatform.com/powerpages</code>), which <strong>requires username/password (delegated)
+            authentication and does not support the service-principal flow Loom uses</strong> — so those operations
+            can&apos;t run under Loom&apos;s UAMI identity and must be performed in the Power Platform admin centre or
+            with a user credential. This editor is a real read-only registry of deployed sites (Dataverse
+            <code> mspp_website</code>): click a URL to open the live page; click a row for metadata. To author or
+            manage lifecycle, open <code>make.powerpages.microsoft.com</code>.
           </MessageBarBody>
         </MessageBar>
         <div className={s.toolbar}>

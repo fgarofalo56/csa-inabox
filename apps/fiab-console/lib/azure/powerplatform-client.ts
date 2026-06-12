@@ -100,6 +100,24 @@ export function dataverseConfigGate(): { missing: string } | null {
   return { missing: 'LOOM_DATAVERSE_CLIENT_SECRET' };
 }
 
+/**
+ * Power Pages admin API gate — ALWAYS "not configured" for Loom's identity.
+ *
+ * The Power Pages admin REST API (api.powerplatform.com/powerpages) — provision
+ * / delete / restart website, WAF, allowed-IPs, scan — does NOT support the
+ * service-principal (client-credentials) flow; it only accepts username/password
+ * (delegated) auth (Microsoft Learn: power-pages/admin/admin-api,
+ * programmability-authentication-v2). Loom authenticates with a UAMI service
+ * principal, so it cannot mint a valid token for that API. This is an honest,
+ * documented platform limitation (NOT a removed banner). Site METADATA edits via
+ * the Dataverse mspp_* tables remain possible under the Dataverse SP.
+ */
+export function powerPagesAdminConfigGate(): { reason: string } {
+  return {
+    reason: 'The Power Pages admin API (api.powerplatform.com/powerpages) requires username/password (delegated) authentication and does not support the service-principal flow Loom uses. Site provisioning, restart, WAF, and allowed-IP management must be performed in the Power Platform admin centre or with a user credential.',
+  };
+}
+
 export class PowerPlatformError extends Error {
   status: number;
   body?: unknown;
@@ -927,6 +945,139 @@ export async function addColumn(
   return { ok: true, metadataId, entityId };
 }
 
+// ------------------------------------------------------------
+// Dataverse table authoring — create a NEW custom table (real Web API write).
+//
+// Grounded in Microsoft Learn (create-update-entity-definitions-using-web-api):
+//   POST <org>/api/data/v9.2/EntityDefinitions
+//   body = an EntityMetadata document:
+//     SchemaName            "<prefix>_<Name>"  (publisher prefix required)
+//     DisplayName           Label
+//     DisplayCollectionName Label (plural)
+//     Description           Label (optional)
+//     OwnershipType         "UserOwned" | "OrganizationOwned"
+//     HasNotes              bool   (Notes/attachments)
+//     HasActivities         bool   (Activities)
+//     IsActivity            false
+//     (optional) TableType:"Elastic" via the same doc (Dataverse elastic table)
+//     Attributes            [ one StringAttributeMetadata with IsPrimaryName:true ]
+//   The platform returns 204 No Content with the new entity URI in the
+//   OData-EntityId response header.
+//
+// Uses the dedicated Dataverse SP (LOOM_DATAVERSE_CLIENT_ID) — the SP must be a
+// Dataverse Application User with a role that grants prvCreateEntity (System
+// Administrator / System Customizer). No new Azure resource; no Fabric path.
+// ------------------------------------------------------------
+
+export interface CreateTableSpec {
+  /** Schema name including the publisher prefix, e.g. "new_Invoice". */
+  schemaName: string;
+  /** Singular display name, e.g. "Invoice". */
+  displayName: string;
+  /** Plural display name, e.g. "Invoices". */
+  displayCollectionName: string;
+  description?: string;
+  /** UserOwned (default) | OrganizationOwned. */
+  ownershipType?: 'UserOwned' | 'OrganizationOwned';
+  /** Primary-name column display name (default "Name"). */
+  primaryNameDisplayName?: string;
+  /** Primary-name column schema name (default "<prefix>_Name" derived from table prefix). */
+  primaryNameSchemaName?: string;
+  /** Primary-name column max length (default 100). */
+  primaryNameMaxLength?: number;
+  /** Enable Notes (attachments). Default false. */
+  hasNotes?: boolean;
+  /** Enable Activities. Default false. */
+  hasActivities?: boolean;
+  /** Standard | Elastic (default Standard). Elastic = NoSQL-style Dataverse table. */
+  tableType?: 'Standard' | 'Elastic';
+  /** Base language LCID for labels (default 1033 / en-US). */
+  languageCode?: number;
+}
+
+/** Validate a Dataverse schema name carries a publisher prefix (e.g. new_Invoice). */
+function assertPrefixedSchema(schemaName: string, what: string) {
+  if (!/^[a-z][a-z0-9]*_[A-Za-z0-9]+$/.test(schemaName)) {
+    throw new PowerPlatformError(
+      `${what} schema name "${schemaName}" must include a publisher prefix, e.g. "new_Invoice".`,
+      400, null, undefined,
+      'Use your environment publisher prefix followed by an underscore and the name (e.g. new_Invoice, contoso_Order).',
+    );
+  }
+}
+
+/** Build the EntityMetadata document for a new custom table. */
+export function buildEntityMetadata(spec: CreateTableSpec): Record<string, any> {
+  const lcid = spec.languageCode ?? 1033;
+  const prefix = spec.schemaName.split('_')[0];
+  const primaryName = spec.primaryNameSchemaName || `${prefix}_Name`;
+  const body: Record<string, any> = {
+    '@odata.type': 'Microsoft.Dynamics.CRM.EntityMetadata',
+    SchemaName: spec.schemaName,
+    DisplayName: label(spec.displayName, lcid),
+    DisplayCollectionName: label(spec.displayCollectionName, lcid),
+    OwnershipType: spec.ownershipType || 'UserOwned',
+    HasNotes: !!spec.hasNotes,
+    HasActivities: !!spec.hasActivities,
+    IsActivity: false,
+    Attributes: [
+      {
+        '@odata.type': 'Microsoft.Dynamics.CRM.StringAttributeMetadata',
+        SchemaName: primaryName,
+        DisplayName: label(spec.primaryNameDisplayName || 'Name', lcid),
+        RequiredLevel: requiredLevelProp('None'),
+        MaxLength: spec.primaryNameMaxLength ?? 100,
+        FormatName: { Value: 'Text' },
+        IsPrimaryName: true,
+      },
+    ],
+  };
+  if (spec.description) body.Description = label(spec.description, lcid);
+  if (spec.tableType === 'Elastic') body.TableType = 'Elastic';
+  return body;
+}
+
+/**
+ * Create a new custom Dataverse table. POSTs the EntityMetadata document to
+ * EntityDefinitions; returns the new entity URI from the OData-EntityId
+ * response header (204 No Content).
+ */
+export async function createTable(
+  envId: string, spec: CreateTableSpec,
+): Promise<{ ok: true; metadataId?: string; entityId?: string }> {
+  assertPrefixedSchema(spec.schemaName, 'Table');
+  const primaryName = spec.primaryNameSchemaName;
+  if (primaryName) assertPrefixedSchema(primaryName, 'Primary-name column');
+  const { url, scope } = await dataverseBase(envId);
+  const body = buildEntityMetadata(spec);
+  const endpoint = `${url}/api/data/v9.2/EntityDefinitions`;
+  const token = await getToken(scope);
+  const res = await fetchWithTimeout(endpoint, {
+    method: 'POST',
+    headers: {
+      'authorization': `Bearer ${token}`,
+      'content-type': 'application/json',
+      'accept': 'application/json',
+      'OData-MaxVersion': '4.0', 'OData-Version': '4.0',
+    },
+    body: JSON.stringify(body),
+    cache: 'no-store',
+  });
+  if (!res.ok) {
+    const text = await res.text().catch(() => '');
+    let json: any = null; try { json = text ? JSON.parse(text) : null; } catch { /* text */ }
+    const msg = (json?.error?.message || json?.message || text || `POST ${endpoint} failed`).toString();
+    let hint: string | undefined;
+    if (res.status === 401 || res.status === 403) {
+      hint = 'The Dataverse SP (LOOM_DATAVERSE_CLIENT_ID) must be a Dataverse Application User with the System Administrator or System Customizer role on this environment to create tables.';
+    }
+    throw new PowerPlatformError(msg, res.status, json || text, endpoint, hint);
+  }
+  const entityId = res.headers.get('odata-entityid') || res.headers.get('OData-EntityId') || undefined;
+  const metadataId = entityId?.match(/EntityDefinitions\(([^)]+)\)/)?.[1];
+  return { ok: true, metadataId, entityId };
+}
+
 /** Top-N data rows for a table (real business data via the entity set). */
 export async function getTableData(
   envId: string,
@@ -1125,6 +1276,263 @@ export async function listFlowRuns(envId: string, name: string, top = 50): Promi
     errorCode: r.properties?.error?.code,
     errorMessage: r.properties?.error?.message,
   }));
+}
+
+// ------------------------------------------------------------
+// Cloud flow authoring — real Dataverse Web API writes (workflow rows).
+//
+// Grounded in Microsoft Learn (power-automate/manage-flows-with-code):
+//   A modern cloud flow is a Dataverse `workflow` row:
+//     category      5   (Modern Flow)
+//     type          1   (Definition)
+//     primaryentity "none"
+//     statecode     0=Draft / 1=Activated     statuscode 1=Draft / 2=Activated
+//     clientdata    string-encoded JSON: { schemaVersion, properties:{
+//                     definition: <Logic Apps workflow definition>,
+//                     connectionReferences: { ... } } }
+//   Create : POST  <org>/api/data/v9.2/workflows  (returns 204 + OData-EntityId)
+//   Update : PATCH <org>/api/data/v9.2/workflows({id})  { clientdata, name? }
+//   State  : PATCH <org>/api/data/v9.2/workflows({id})  { statecode, statuscode }
+//
+// Uses the dedicated Dataverse SP (LOOM_DATAVERSE_CLIENT_ID), which must be a
+// Dataverse Application User with a customizing role. Azure-native; no Fabric.
+//
+// This is genuine in-product authoring of the flow DEFINITION (the same JSON the
+// drag-drop designer compiles to). The visual designer itself can't be embedded
+// (needs a delegated JWT), so it stays an honest "open visual designer" gate —
+// but the structured definition + connection references are authored in Loom.
+// ------------------------------------------------------------
+
+export interface FlowConnectionReference {
+  /** connectionName / logical name, e.g. "shared_sharepointonline". */
+  connectionName?: string;
+  /** Connector id path, e.g. "/providers/Microsoft.PowerApps/apis/shared_sharepointonline". */
+  id?: string;
+  /** Connection source — Embedded / Invoker / NotSpecified. */
+  source?: string;
+}
+
+export interface FlowDefinition {
+  /** Logic Apps workflow definition ($schema, triggers, actions, ...). */
+  definition: Record<string, any>;
+  /** Map of reference key → connection reference. */
+  connectionReferences?: Record<string, FlowConnectionReference>;
+}
+
+export interface FlowAuthoringDoc {
+  workflowid: string;
+  name: string;
+  category?: number;
+  statecode?: number;
+  statuscode?: number;
+  primaryentity?: string;
+  /** Parsed clientdata (definition + connectionReferences). Null when unparseable. */
+  clientdata?: FlowDefinition | null;
+  /** Raw clientdata string (for diagnostics). */
+  clientdataRaw?: string;
+  modifiedon?: string;
+}
+
+/** A minimal valid modern-flow clientdata skeleton for a brand-new flow. */
+export function emptyFlowDefinition(): FlowDefinition {
+  return {
+    definition: {
+      $schema: 'https://schema.management.azure.com/providers/Microsoft.Logic/schemas/2016-06-01/workflowdefinition.json#',
+      contentVersion: '1.0.0.0',
+      parameters: {
+        $connections: { defaultValue: {}, type: 'Object' },
+        $authentication: { defaultValue: {}, type: 'SecureObject' },
+      },
+      triggers: {
+        manual: {
+          type: 'Request',
+          kind: 'Button',
+          inputs: { schema: {} },
+        },
+      },
+      actions: {},
+    },
+    connectionReferences: {},
+  };
+}
+
+/**
+ * Validate a flow definition is a well-formed Logic Apps workflow definition with
+ * the structured shape Power Automate expects (NOT a free blob — loom-no-freeform-config).
+ * Throws PowerPlatformError(400) with a precise message on any structural problem.
+ */
+export function validateFlowDefinition(input: unknown): FlowDefinition {
+  if (!input || typeof input !== 'object') {
+    throw new PowerPlatformError('Flow definition must be a JSON object.', 400);
+  }
+  const doc = input as Record<string, any>;
+  const def = doc.definition;
+  if (!def || typeof def !== 'object') {
+    throw new PowerPlatformError('Flow definition must contain a `definition` object (the Logic Apps workflow definition).', 400);
+  }
+  if (typeof def.$schema !== 'string' || !def.$schema.includes('workflowdefinition.json')) {
+    throw new PowerPlatformError('`definition.$schema` must be the Logic Apps workflowdefinition.json schema URL.', 400);
+  }
+  if (!def.triggers || typeof def.triggers !== 'object' || Object.keys(def.triggers).length === 0) {
+    throw new PowerPlatformError('`definition.triggers` must define at least one trigger.', 400);
+  }
+  if (def.actions !== undefined && (typeof def.actions !== 'object' || def.actions === null)) {
+    throw new PowerPlatformError('`definition.actions` must be an object when present.', 400);
+  }
+  const refs = doc.connectionReferences;
+  if (refs !== undefined && (typeof refs !== 'object' || refs === null || Array.isArray(refs))) {
+    throw new PowerPlatformError('`connectionReferences` must be an object map when present.', 400);
+  }
+  return { definition: def, connectionReferences: refs || {} };
+}
+
+function parseClientData(clientdata?: string | null): { parsed: FlowDefinition | null; raw?: string } {
+  if (!clientdata) return { parsed: null };
+  try {
+    const obj = JSON.parse(clientdata);
+    // Power Automate stores { schemaVersion, properties: { definition, connectionReferences } }
+    const props = obj?.properties || obj;
+    const definition = props?.definition;
+    const connectionReferences = props?.connectionReferences;
+    if (definition) return { parsed: { definition, connectionReferences: connectionReferences || {} }, raw: clientdata };
+    return { parsed: null, raw: clientdata };
+  } catch {
+    return { parsed: null, raw: clientdata };
+  }
+}
+
+/** Wrap a FlowDefinition back into the clientdata string Power Automate stores. */
+function encodeClientData(def: FlowDefinition): string {
+  return JSON.stringify({
+    schemaVersion: '1.0.0.0',
+    properties: {
+      connectionReferences: def.connectionReferences || {},
+      definition: def.definition,
+    },
+  });
+}
+
+/** Read a modern cloud flow's authoring document (clientdata definition) from Dataverse. */
+export async function getFlowDefinition(envId: string, workflowId: string): Promise<FlowAuthoringDoc> {
+  const { url, scope } = await dataverseBase(envId);
+  const w = await call<any>(
+    `${url}/api/data/v9.2/workflows(${encodeURIComponent(workflowId)})`,
+    scope,
+    { query: { '$select': 'workflowid,name,category,type,statecode,statuscode,primaryentity,clientdata,modifiedon' } },
+  );
+  const { parsed, raw } = parseClientData(w.clientdata);
+  return {
+    workflowid: w.workflowid,
+    name: w.name,
+    category: w.category,
+    statecode: w.statecode,
+    statuscode: w.statuscode,
+    primaryentity: w.primaryentity,
+    clientdata: parsed,
+    clientdataRaw: raw,
+    modifiedon: w.modifiedon,
+  };
+}
+
+/**
+ * Create a new modern cloud flow (Dataverse workflow row). The flow is created
+ * in Draft (statecode 0) so the operator can review before turning it on.
+ * Returns the new workflow id from the OData-EntityId header.
+ */
+export async function createFlow(
+  envId: string, spec: { name: string; definition: FlowDefinition },
+): Promise<{ ok: true; workflowId?: string; entityId?: string }> {
+  const def = validateFlowDefinition(spec.definition);
+  if (!spec.name || !spec.name.trim()) {
+    throw new PowerPlatformError('Flow name is required.', 400);
+  }
+  const { url, scope } = await dataverseBase(envId);
+  const endpoint = `${url}/api/data/v9.2/workflows`;
+  const body = {
+    name: spec.name.trim(),
+    category: 5,          // Modern Flow
+    type: 1,              // Definition
+    primaryentity: 'none',
+    description: '',
+    statecode: 0,         // Draft
+    statuscode: 1,        // Draft
+    clientdata: encodeClientData(def),
+  };
+  const token = await getToken(scope);
+  const res = await fetchWithTimeout(endpoint, {
+    method: 'POST',
+    headers: {
+      'authorization': `Bearer ${token}`,
+      'content-type': 'application/json',
+      'accept': 'application/json',
+      'OData-MaxVersion': '4.0', 'OData-Version': '4.0',
+    },
+    body: JSON.stringify(body),
+    cache: 'no-store',
+  });
+  if (!res.ok) {
+    const text = await res.text().catch(() => '');
+    let json: any = null; try { json = text ? JSON.parse(text) : null; } catch { /* text */ }
+    const msg = (json?.error?.message || json?.message || text || `POST ${endpoint} failed`).toString();
+    let hint: string | undefined;
+    if (res.status === 401 || res.status === 403) {
+      hint = 'The Dataverse SP (LOOM_DATAVERSE_CLIENT_ID) must be a Dataverse Application User with the System Administrator or System Customizer role on this environment to create flows.';
+    }
+    throw new PowerPlatformError(msg, res.status, json || text, endpoint, hint);
+  }
+  const entityId = res.headers.get('odata-entityid') || res.headers.get('OData-EntityId') || undefined;
+  const workflowId = entityId?.match(/workflows\(([^)]+)\)/)?.[1];
+  return { ok: true, workflowId, entityId };
+}
+
+/**
+ * Update a modern cloud flow's definition (clientdata) and/or name via PATCH.
+ * Validates the definition structurally before writing.
+ */
+export async function updateFlowDefinition(
+  envId: string, workflowId: string, patch: { definition?: FlowDefinition; name?: string },
+): Promise<{ ok: true }> {
+  const { url, scope } = await dataverseBase(envId);
+  const body: Record<string, any> = {};
+  if (patch.definition) body.clientdata = encodeClientData(validateFlowDefinition(patch.definition));
+  if (patch.name !== undefined) {
+    if (!patch.name.trim()) throw new PowerPlatformError('Flow name cannot be empty.', 400);
+    body.name = patch.name.trim();
+  }
+  if (Object.keys(body).length === 0) {
+    throw new PowerPlatformError('Nothing to update — provide a definition and/or name.', 400);
+  }
+  await call<any>(
+    `${url}/api/data/v9.2/workflows(${encodeURIComponent(workflowId)})`,
+    scope,
+    {
+      method: 'PATCH',
+      body,
+      headers: { 'OData-MaxVersion': '4.0', 'OData-Version': '4.0' },
+    },
+  );
+  return { ok: true };
+}
+
+/**
+ * Turn a modern cloud flow on/off via Dataverse statecode (alternative to the
+ * Flow admin start/stop endpoints). on → statecode 1 / statuscode 2 (Activated);
+ * off → statecode 0 / statuscode 1 (Draft).
+ */
+export async function setFlowStateViaDataverse(
+  envId: string, workflowId: string, on: boolean,
+): Promise<{ ok: true }> {
+  const { url, scope } = await dataverseBase(envId);
+  await call<any>(
+    `${url}/api/data/v9.2/workflows(${encodeURIComponent(workflowId)})`,
+    scope,
+    {
+      method: 'PATCH',
+      body: on ? { statecode: 1, statuscode: 2 } : { statecode: 0, statuscode: 1 },
+      headers: { 'OData-MaxVersion': '4.0', 'OData-Version': '4.0' },
+    },
+  );
+  return { ok: true };
 }
 
 // ============================================================
