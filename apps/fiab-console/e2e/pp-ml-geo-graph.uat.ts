@@ -63,6 +63,7 @@ const FAMILY: FamilyMember[] = [
   { type: 'cypher-graph',              family: 'graph', markers: ['Cypher', 'KQL'] },
   { type: 'gql-graph',                 family: 'graph', markers: ['GQL', 'Backend'] },
   { type: 'vector-store',              family: 'graph', markers: ['Backend', 'Dimensions'] },
+  { type: 'tapestry',                  family: 'graph', markers: ['Link', 'Geo', 'Timeline'] },
 
   // Data products (2) + cross-item (1)
   { type: 'data-product-template',     family: 'data-product', markers: ['template'] },

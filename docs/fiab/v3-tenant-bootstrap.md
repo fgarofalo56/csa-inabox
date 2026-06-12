@@ -576,6 +576,57 @@ and confirm it lists; open a table's RLS shield, enable a predicate, and run
 `.show table <T> policy row_level_security` — the policy returns
 `IsEnabled = true` with your query.
 
+## Tapestry — investigative graph (link / geo / timeline) {#tapestry-investigative-graph}
+
+**Tapestry** is the Azure-native, Gotham-class investigation surface (item type
+`tapestry`). It composes three coordinated analysis panes over the **same
+materialized `Node_*` / `Edge_*` ADX tables** the graph editors already query —
+**no second engine and no Microsoft Fabric dependency** (works with
+`LOOM_DEFAULT_FABRIC_WORKSPACE` unset):
+
+- **Link** — `POST /api/items/tapestry/[id]/link` runs KQL `make-graph` +
+  `graph-match` / `graph-shortest-paths` / `graph-mark-components`; results render
+  in the force-directed canvas.
+- **Geo** — `POST /api/items/tapestry/[id]/geo` projects node `lat`/`lon`
+  properties into a GeoJSON FeatureCollection rendered by the keyless
+  `GeoJsonMap`. A **live Azure Maps raster basemap** layers behind it when
+  `NEXT_PUBLIC_LOOM_AZURE_MAPS_KEY` is set (Commercial / GCC only — the geo panel
+  still renders vector-only in GCC-High / IL5).
+- **Timeline** — `POST /api/items/tapestry/[id]/timeline` runs
+  `summarize count() by bin(<ts>, <window>), edgeLabel` over `Edge_*`.
+
+**Env (no new variables — all already wired in `admin-plane/main.bicep`):**
+`LOOM_KUSTO_CLUSTER_URI` + `LOOM_KUSTO_DEFAULT_DB` (the ADX cluster from
+`admin-plane/adx-cluster.bicep`) drive link + geo + timeline;
+`NEXT_PUBLIC_LOOM_AZURE_MAPS_KEY` (secret `loom-azure-maps-key` from
+`admin-plane/azure-maps.bicep`) is the optional live-basemap upgrade. The Console
+UAMI's **AllDatabasesAdmin** grant on the cluster (see
+[ADX lifecycle](#adx-lifecycle-rbac-rls)) covers the data-plane reads.
+
+**Seed real data (one-time, makes the acceptance pass):**
+
+```bash
+# Mint a session cookie, then:
+curl -X POST "$BASE/api/admin/load-sample-data?kind=investigation" -b "$COOKIE"
+# → materializes Node_Person/Node_Org/Node_Location/Node_Event +
+#   Edge_Knows/Edge_MemberOf/Edge_LocatedAt/Edge_Attended in loomdb-default.
+```
+
+**Verify:** open a `tapestry` item → **Link** tab → Run link (Pattern match) and
+confirm the graph renders; **Geo** tab → Plot located entities (6+ points);
+**Timeline** tab → Run timeline (Daily) and confirm per-bucket counts by
+relationship. With ADX unset, every pane returns an honest **503** MessageBar
+naming `LOOM_KUSTO_CLUSTER_URI` — never a Fabric gate.
+
+### Bicep sync
+
+No new Azure resources or env vars — Tapestry reuses the shared ADX cluster
+(`admin-plane/adx-cluster.bicep`) and the existing Azure Maps account
+(`admin-plane/azure-maps.bicep`). The three BFF routes consume
+`LOOM_KUSTO_CLUSTER_URI` / `LOOM_KUSTO_DEFAULT_DB` /
+`NEXT_PUBLIC_LOOM_AZURE_MAPS_KEY`, all already present in the loom-console
+container env in `admin-plane/main.bicep`.
+
 ## Cost Management + Diagnostics (Console UAMI subscription grants)
 Two subscription-scoped grants the admin console needs (the RG-scoped admin-plane
 bicep can't express them):
