@@ -24,6 +24,10 @@ const WAVES = {
   4: ['docs/fiab/prp/governance-security.md', 'docs/fiab/prp/data-marketplace.md'],
   5: ['docs/fiab/prp/onelake.md', 'docs/fiab/prp/data-warehouse.md', 'docs/fiab/prp/power-bi.md', 'docs/fiab/prp/databases.md', 'docs/fiab/prp/copilot-ai.md', 'docs/fiab/prp/platform.md'],
 }
+// HARNESS QUIRK: some sessions deliver `args` as a JSON-encoded STRING (confirmed
+// by zero-agent probe 2026-06-12) — which made args.* undefined and caused the
+// 115-task unscoped rebuild. Coerce before any use.
+if (typeof args === 'string') { try { args = JSON.parse(args) } catch (e) { log('args parse failed: ' + e) } }
 const auditWave = (args && args.auditWave) || 0
 const files = (args && Array.isArray(args.files) && args.files.length) ? args.files : WAVES[(args && args.wave) || 1]
 const maxTasks = (args && args.maxTasks) || 0

@@ -921,11 +921,50 @@ async function scriptTableCreate(server: string, database: string, objectId: num
 //
 // Per the no-fabric-dependency rule, this is fully Azure-native: Azure SQL
 // Database and Fabric SQL database share the same TDS engine and enforce all
-// four constraint types identically. (Fabric Warehouse / Synapse dedicated
-// pools require NOT ENFORCED and are a different item type, not in scope.)
+// four constraint types identically.
+//
+// Fabric Warehouse / SQL analytics endpoint and Synapse dedicated SQL pools run
+// a different TDS engine that only accepts metadata-only constraints. Per
+// learn.microsoft.com/fabric/data-warehouse/table-constraints and
+// learn.microsoft.com/azure/synapse-analytics/sql-data-warehouse/sql-data-warehouse-table-constraints:
+//   - PRIMARY KEY  : only with NONCLUSTERED + NOT ENFORCED
+//   - UNIQUE       : only with NONCLUSTERED + NOT ENFORCED
+//   - FOREIGN KEY  : Fabric Warehouse only, and only with NOT ENFORCED;
+//                    Synapse dedicated pools do NOT support FK at all
+//   - CHECK        : not supported on either
+// {@link detectSqlBackendKind} classifies the bound connection from its server
+// FQDN, and {@link addConstraint} emits the correct DDL variant per backend so
+// the same inline designer is safe against every connection type.
 // ============================================================
 
 export type SqlConstraintType = 'PK' | 'UQ' | 'FK' | 'CK';
+
+/**
+ * Which TDS backend the bound connection targets.
+ *   - `sqldb`     : Azure SQL Database / Fabric SQL database — full engine,
+ *                   all four constraint types ENFORCED (the Azure-native default).
+ *   - `warehouse` : Fabric Warehouse / SQL analytics endpoint — metadata-only
+ *                   constraints (NONCLUSTERED NOT ENFORCED, FK NOT ENFORCED, no CHECK).
+ *   - `synapse-dedicated` : Synapse dedicated SQL pool — like `warehouse` but
+ *                   FOREIGN KEY is not supported at all.
+ */
+export type SqlBackendKind = 'sqldb' | 'warehouse' | 'synapse-dedicated';
+
+/**
+ * Classify the TDS backend from the connection's server FQDN. Fabric Warehouse
+ * / SQL analytics endpoints resolve under `*.datawarehouse.fabric.microsoft.com`
+ * (and sovereign `*.datawarehouse.fabric.microsoft.us`); Synapse dedicated SQL
+ * pools resolve under `*.sql.azuresynapse.net` / `*.sql.azuresynapse.usgovcloudapi.net`
+ * — mirroring the suffix logic in synapse-sql-client. Everything else (Azure
+ * SQL `*.database.windows.net`, Fabric SQL database `*.database.fabric.microsoft.com`)
+ * is a full-engine `sqldb` connection, the Azure-native default.
+ */
+export function detectSqlBackendKind(server: string): SqlBackendKind {
+  const s = (server || '').trim().toLowerCase();
+  if (s.includes('.datawarehouse.fabric.microsoft.')) return 'warehouse';
+  if (s.includes('.sql.azuresynapse.')) return 'synapse-dedicated';
+  return 'sqldb';
+}
 
 /** Referential action emitted into ON DELETE / ON UPDATE. */
 export type SqlReferentialAction = 'NO_ACTION' | 'CASCADE' | 'SET_NULL' | 'SET_DEFAULT';
@@ -1136,16 +1175,34 @@ async function resolveColumns(
  * All identifiers are catalog-resolved + bracket-quoted; the constraint name is
  * validated; the only verbatim free-text is a CHECK expression (placed only in
  * the `CHECK(…)` clause). Returns the emitted DDL as a receipt on success.
+ *
+ * `backendKind` selects the DDL dialect:
+ *   - `sqldb` (default) : full engine, ENFORCED constraints — Azure SQL Database
+ *                         / Fabric SQL database.
+ *   - `warehouse`       : Fabric Warehouse / SQL analytics endpoint — PK/UQ
+ *                         forced to `NONCLUSTERED NOT ENFORCED`, FK appended
+ *                         `NOT ENFORCED`, CHECK rejected (unsupported).
+ *   - `synapse-dedicated`: as `warehouse` but FOREIGN KEY is rejected too.
  */
 export async function addConstraint(
   server: string,
   database: string,
   tableObjectId: number,
   spec: ConstraintSpec,
+  backendKind: SqlBackendKind = 'sqldb',
 ): Promise<{ ok: true; added: string; ddl: string } | { ok: false; error: string; status: number }> {
   if (!Number.isInteger(tableObjectId)) return { ok: false, error: 'tableObjectId must be an integer', status: 400 };
   const nameErr = validConstraintName(spec?.name);
   if (nameErr) return { ok: false, error: nameErr, status: 400 };
+  const metadataOnly = backendKind === 'warehouse' || backendKind === 'synapse-dedicated';
+  // Reject backend-unsupported constraint types up front (before any DB call) so
+  // the caller gets an honest 400, not a downstream TDS error.
+  if (metadataOnly && spec?.type === 'CK') {
+    return { ok: false, error: 'CHECK constraints are not supported on Fabric Warehouse / Synapse dedicated SQL pool', status: 400 };
+  }
+  if (backendKind === 'synapse-dedicated' && spec?.type === 'FK') {
+    return { ok: false, error: 'FOREIGN KEY constraints are not supported on a Synapse dedicated SQL pool', status: 400 };
+  }
   try {
     const tbl = await resolveTable(server, database, tableObjectId);
     if (!tbl) return { ok: false, error: `table not found for object_id ${tableObjectId}`, status: 404 };
@@ -1161,10 +1218,17 @@ export async function addConstraint(
       const names = await resolveColumns(server, database, tableObjectId, ids);
       if (!names) return { ok: false, error: 'one or more key columns do not belong to this table', status: 400 };
       const cols = spec.columns.map((c, i) => `${names[i]} ${c.descending ? 'DESC' : 'ASC'}`).join(', ');
-      const clustered = spec.clustered ? 'CLUSTERED' : 'NONCLUSTERED';
       const kw = spec.type === 'PK' ? 'PRIMARY KEY' : 'UNIQUE';
-      ddl = `ALTER TABLE ${fq} ADD CONSTRAINT ${cn} ${kw} ${clustered} (${cols});`;
+      if (metadataOnly) {
+        // Fabric Warehouse / Synapse dedicated pool: PK/UNIQUE are accepted only
+        // as NONCLUSTERED NOT ENFORCED metadata constraints.
+        ddl = `ALTER TABLE ${fq} ADD CONSTRAINT ${cn} ${kw} NONCLUSTERED (${cols}) NOT ENFORCED;`;
+      } else {
+        const clustered = spec.clustered ? 'CLUSTERED' : 'NONCLUSTERED';
+        ddl = `ALTER TABLE ${fq} ADD CONSTRAINT ${cn} ${kw} ${clustered} (${cols});`;
+      }
     } else if (spec.type === 'FK') {
+      // (synapse-dedicated FK already rejected up front.)
       if (!Array.isArray(spec.columns) || spec.columns.length === 0) {
         return { ok: false, error: 'at least one foreign-key column is required', status: 400 };
       }
@@ -1181,11 +1245,19 @@ export async function addConstraint(
       const refFq = `${bracket(refTbl.schema)}.${bracket(refTbl.name)}`;
       const onDelete = REF_ACTION_SQL[spec.onDelete] ?? 'NO ACTION';
       const onUpdate = REF_ACTION_SQL[spec.onUpdate] ?? 'NO ACTION';
-      const withCheck = spec.noCheck ? 'WITH NOCHECK ' : 'WITH CHECK ';
-      ddl = `ALTER TABLE ${fq} ${withCheck}ADD CONSTRAINT ${cn} `
-        + `FOREIGN KEY (${localNames.join(', ')}) REFERENCES ${refFq} (${refNames.join(', ')}) `
-        + `ON DELETE ${onDelete} ON UPDATE ${onUpdate};`;
+      if (metadataOnly) {
+        // Fabric Warehouse: FK accepted only as NOT ENFORCED (no WITH (NO)CHECK,
+        // no ON DELETE/UPDATE actions — the engine ignores them).
+        ddl = `ALTER TABLE ${fq} ADD CONSTRAINT ${cn} `
+          + `FOREIGN KEY (${localNames.join(', ')}) REFERENCES ${refFq} (${refNames.join(', ')}) NOT ENFORCED;`;
+      } else {
+        const withCheck = spec.noCheck ? 'WITH NOCHECK ' : 'WITH CHECK ';
+        ddl = `ALTER TABLE ${fq} ${withCheck}ADD CONSTRAINT ${cn} `
+          + `FOREIGN KEY (${localNames.join(', ')}) REFERENCES ${refFq} (${refNames.join(', ')}) `
+          + `ON DELETE ${onDelete} ON UPDATE ${onUpdate};`;
+      }
     } else if (spec.type === 'CK') {
+      // (metadata-only CHECK already rejected up front.)
       const expr = (spec.expression || '').trim();
       if (!expr) return { ok: false, error: 'a CHECK expression is required', status: 400 };
       if (expr.length > 4000) return { ok: false, error: 'CHECK expression must be ≤4000 characters', status: 400 };

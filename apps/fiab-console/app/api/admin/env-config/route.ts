@@ -29,6 +29,12 @@ import {
   readAcaConfig,
   AcaNotConfiguredError,
 } from '@/lib/azure/container-apps-arm-client';
+import {
+  updateAksDeploymentEnv,
+  readAksConfig,
+  AksNotConfiguredError,
+  AksError,
+} from '@/lib/azure/aks-arm-client';
 import { detectLoomCloud } from '@/lib/azure/cloud-endpoints';
 import {
   EDITABLE_ENV,
@@ -64,6 +70,20 @@ function appName(): string {
   return process.env.LOOM_CONSOLE_APP_NAME || 'loom-console';
 }
 
+/**
+ * True when this boundary runs the Console on AKS (GCC-High / IL5 / DoD) rather
+ * than Container Apps. On AKS the env-write path is `updateAksDeploymentEnv`
+ * (Run Command → kubectl set env) instead of the ACA ARM PATCH. Mirrors the
+ * container-apps-arm-client platform check so Save never hits a non-existent
+ * container app on a sovereign boundary.
+ */
+function isAksPlatform(): boolean {
+  return (
+    (process.env.LOOM_CONTAINER_PLATFORM || '').toLowerCase() === 'aks' ||
+    !!process.env.LOOM_AKS_CLUSTER_NAME
+  );
+}
+
 async function loadDoc(tenantId: string): Promise<EnvConfigDoc | null> {
   const c = await envConfigContainer();
   try {
@@ -81,15 +101,32 @@ export async function GET() {
   if (gate) return gate;
   const tenantId = session!.claims.oid;
 
-  // ACA write availability (catch the honest infra gate).
-  let acaConfigured = true;
-  let acaError: string | undefined;
-  try { readAcaConfig(); } catch (e: any) {
-    acaConfigured = false;
-    acaError = e instanceof AcaNotConfiguredError
-      ? `Container Apps write path not configured. Missing: ${e.missing.join(', ')}. Set them in admin-plane/main.bicep apps[] env, then redeploy.`
-      : (e?.message || String(e));
+  // Write availability — depends on the container platform of THIS boundary.
+  // Commercial / GCC run Container Apps (ARM PATCH). GCC-High / IL5 / DoD run
+  // AKS (Run Command → kubectl set env). We report the active platform + an
+  // honest gate naming the exact env it needs, so the pane never offers a Save
+  // that would fail against a non-existent resource (no-vaporware).
+  const platform: 'aca' | 'aks' = isAksPlatform() ? 'aks' : 'aca';
+  let writeConfigured = true;
+  let writeError: string | undefined;
+  if (platform === 'aks') {
+    try { readAksConfig(); } catch (e: any) {
+      writeConfigured = false;
+      writeError = e instanceof AksNotConfiguredError
+        ? `AKS write path not configured. Missing: ${e.missing.join(', ')}. Set them on loom-console (container-platform.bicep wires the AKS path), then redeploy.`
+        : (e?.message || String(e));
+    }
+  } else {
+    try { readAcaConfig(); } catch (e: any) {
+      writeConfigured = false;
+      writeError = e instanceof AcaNotConfiguredError
+        ? `Container Apps write path not configured. Missing: ${e.missing.join(', ')}. Set them in admin-plane/main.bicep apps[] env, then redeploy.`
+        : (e?.message || String(e));
+    }
   }
+  // Back-compat fields (the pane historically read acaConfigured/acaError).
+  const acaConfigured = writeConfigured;
+  const acaError = writeError;
 
   // Current presence/values from the running container's env (this BFF runs in
   // loom-console, so process.env IS the live deployment config). Secret values
@@ -128,6 +165,9 @@ export async function GET() {
     current,
     acaConfigured,
     acaError,
+    platform,
+    writeConfigured,
+    writeError,
     cosmosError,
     desired: desired
       ? {
@@ -185,17 +225,37 @@ export async function PUT(req: NextRequest) {
     return NextResponse.json({ ok: true, changedCount: 0, rejected, message: 'No changes to apply.' });
   }
 
-  // Apply as a new ACA revision (real ARM PATCH).
+  // Apply the change against the active container platform. Commercial / GCC
+  // run Container Apps (ARM PATCH → new revision). GCC-High / IL5 / DoD run the
+  // Console on AKS, where there is NO container app to PATCH — apply via AKS Run
+  // Command (kubectl set env → rolling update) instead. Branching here is what
+  // keeps Save honest on sovereign boundaries rather than 404-ing against a
+  // non-existent Microsoft.App/containerApps/loom-console.
+  const onAks = isAksPlatform();
   let revision = 'Updating';
   try {
-    const res = await updateContainerAppEnv(appName(), plainChanges, { secrets: secretChanges });
-    revision = res.provisioningState;
+    if (onAks) {
+      const res = await updateAksDeploymentEnv(plainChanges, { secrets: secretChanges });
+      revision = res.provisioningState;
+    } else {
+      const res = await updateContainerAppEnv(appName(), plainChanges, { secrets: secretChanges });
+      revision = res.provisioningState;
+    }
   } catch (e: any) {
     if (e instanceof AcaNotConfiguredError) {
       return NextResponse.json({
         ok: false,
         error: `Container Apps write path not configured: ${e.message}. Set LOOM_SUBSCRIPTION_ID + LOOM_ACA_RG (or LOOM_ADMIN_RG) on loom-console, then redeploy.`,
       }, { status: 503 });
+    }
+    if (e instanceof AksNotConfiguredError) {
+      return NextResponse.json({
+        ok: false,
+        error: `AKS write path not configured: ${e.message}. Set LOOM_SUBSCRIPTION_ID + LOOM_AKS_CLUSTER_NAME + LOOM_AKS_RG (or LOOM_ADMIN_RG) on loom-console, then redeploy.`,
+      }, { status: 503 });
+    }
+    if (e instanceof AksError) {
+      return NextResponse.json({ ok: false, error: e.message, body: e.body }, { status: e.status || 502 });
     }
     return NextResponse.json({ ok: false, error: e?.message || String(e), body: e?.body }, { status: e?.status || 502 });
   }
@@ -229,6 +289,7 @@ export async function PUT(req: NextRequest) {
       await audit.items.create({
         id: mkId(), itemId: `env-config:${tenantId}`, tenantId, who, at: now,
         kind: 'env-config.set', key: e.key, to: e.to,
+        platform: onAks ? 'aks' : 'aca',
       }).catch(() => {});
     }
   } catch { /* audit failures are non-blocking */ }
@@ -242,10 +303,12 @@ export async function PUT(req: NextRequest) {
     secretsChanged: Object.keys(secretChanges),
     rejected,
     revision,
+    platform: onAks ? 'aks' : 'aca',
     updatedAt: now,
-    // Drift is now expected until the new revision is live AND bicep is updated.
-    driftWarning:
-      'A new container-app revision is rolling out (~1–2 min). This UI change is durable in the Loom store, but the next `az deployment` of admin-plane/main.bicep will REVERT it unless you fold the change into the loom-console env array — use the bicep snippet below.',
+    // Drift is now expected until the rollout lands AND IaC is updated.
+    driftWarning: onAks
+      ? 'A new pod rollout is in progress on the AKS Console Deployment (kubectl rolling update). This UI change is durable in the Loom store, but the next GitOps sync / `az deployment` of admin-plane/app-deployments.bicep will REVERT it unless you fold the change into the loom-console Deployment manifest env — use the snippet below.'
+      : 'A new container-app revision is rolling out (~1–2 min). This UI change is durable in the Loom store, but the next `az deployment` of admin-plane/main.bicep will REVERT it unless you fold the change into the loom-console env array — use the bicep snippet below.',
     sync: { cliScript, bicepEnvSnippet },
   });
 }

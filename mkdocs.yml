@@ -189,6 +189,7 @@ nav:
   # ============================================================
   - Get Started:
       - Welcome: index.md
+      - Learning Hub (all tutorials & use cases): csa_loom_learning_hub.md
       - Getting Started (30-min tour): GETTING_STARTED.md
       - Quickstart: QUICKSTART.md
       - Developer Pathways: DEVELOPER_PATHWAYS.md
@@ -1900,6 +1901,7 @@ nav:
               - "07 — Marketplace data product publishing": fiab/tutorials/07-marketplace-data-product.md
               - "08 — Forward-migrate a Lakehouse to Fabric": fiab/tutorials/08-forward-migrate-to-fabric.md
           - "Learn — core surfaces":
+              - "Learning Hub — notebook import wizard": fiab/learn/csa_loom_learning_hub.md
               - "Lakehouse shortcuts": fiab/learn/lakehouse-shortcuts.md
               - "Data pipelines & Mapping Data Flow": fiab/learn/data-pipelines-and-dataflows.md
               - "Notebooks (Spark)": fiab/learn/notebooks-spark.md

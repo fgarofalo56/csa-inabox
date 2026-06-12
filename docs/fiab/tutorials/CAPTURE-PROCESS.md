@@ -12,9 +12,11 @@ dimensions** in one pass (gate with `LOOM_TUTORIAL_DIMENSIONS`):
 
 | Dimension  | Source of truth                                   | Slug          | What it does |
 |------------|---------------------------------------------------|---------------|--------------|
-| `items`    | `lib/editors/registry.ts` (103 `reg(...)` entries) | `item-<type>` | creates a demo workspace + item, opens the editor |
-| `apps`     | `GET /api/apps-catalog` (curated compound apps)    | `app-<id>`    | installs the app into a demo workspace, opens it |
+| `items`    | `lib/editors/registry.ts` (109 `reg(...)` entries) | `item-<type>` | creates a demo workspace + item, opens the editor |
+| `apps`     | `GET /api/apps-catalog` (29 curated compound apps) | `app-<id>`    | installs the app into a demo workspace, opens it |
 | `features` | `NAV_PAGES` in `e2e/_lib/uat.ts` (17 nav pages)    | `feature-<page>` | navigates to the page |
+
+The full expected set is **155** surfaces (109 + 29 + 17).
 
 For each surface it then:
 1. **Closes the "Learn about this item" Drawer** (`[aria-label="Close"]`) so the
@@ -64,17 +66,39 @@ nav never needs a hand-maintained 120-entry list. Review `git diff`, then commit
 ## Coverage audit
 
 `scripts/csa-loom/check-tutorial-coverage.mjs` compares what's published against
-the expected set parsed from source (`registry.ts` items + `NAV_PAGES` features;
-apps via `--apps-catalog <json>`):
+the expected set parsed from source (`registry.ts` items + `NAV_PAGES` features),
+with the **apps** dimension audited offline against the checked-in fixture
+`scripts/csa-loom/fixtures/apps-catalog.json`:
 
 ```bash
-node scripts/csa-loom/check-tutorial-coverage.mjs            # report
-node scripts/csa-loom/check-tutorial-coverage.mjs --strict   # exit 1 if any missing
+# Report all three dimensions (items + features + apps):
+node scripts/csa-loom/check-tutorial-coverage.mjs \
+  --apps-catalog scripts/csa-loom/fixtures/apps-catalog.json
+
+# Same, but exit 1 if any of the 155 surfaces is missing a published tutorial:
+node scripts/csa-loom/check-tutorial-coverage.mjs --strict \
+  --apps-catalog scripts/csa-loom/fixtures/apps-catalog.json
 ```
+
+The apps fixture is generated from source — never hand-edited — and kept in
+sync by a generator that CI verifies on every console PR:
+
+```bash
+node scripts/csa-loom/gen-apps-catalog-fixture.mjs          # regenerate after adding/removing an app
+node scripts/csa-loom/gen-apps-catalog-fixture.mjs --check  # CI: fail if drifted from CATALOG_META
+```
+
+The CI `tutorial-coverage` job runs the fixture-freshness check (**blocking**)
+plus the coverage report (non-blocking). To turn coverage into a permanently
+enforced gate the moment the first reviewed captures are committed, add
+`--strict` to that job's coverage step (one-line change) — see
+`.github/workflows/fiab-console-ci.yml`.
 
 ## Maintenance
 
 When a feature is added or a UI changes, re-run the capture for the affected
 slug(s) and re-publish — tutorials and docs stay current. Treat this as part of
-"done" for any UI change. Run the coverage audit (`--strict`) to confirm no
-surface lost its tutorial.
+"done" for any UI change. When a curated **app** is added or removed, also run
+`gen-apps-catalog-fixture.mjs` and commit the regenerated fixture (CI's
+`--check` enforces this). Run the coverage audit (`--strict --apps-catalog …`)
+to confirm no surface lost its tutorial.

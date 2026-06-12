@@ -46,7 +46,7 @@ Legend: built ✅ · partial ⚠️ · honest-gate ⚠️ · MISSING ❌
 | A4 | Reload | ✅ built | Reload button |
 | A5 | Honest gate when account isn't Foundry / Evals-preview | ✅ built | `GateBar` (notDeployed) + 404 preview hint |
 | A6 | Delete an evaluation | ✅ built | "Delete" row action → `DELETE …?evalId=` `deleteEval` |
-| A7 | Open eval detail (data schema / criteria view) | ❌ MISSING | runs-only drill |
+| A7 | Open eval detail (data schema / criteria view) | ✅ built | `EvalDetailCard` (data-source type + item-schema fields + per-grader criteria) shown when an eval is selected, from the eval's `dataSourceConfig`/`testingCriteria` |
 
 ### B. Create evaluation
 
@@ -72,19 +72,27 @@ Legend: built ✅ · partial ⚠️ · honest-gate ⚠️ · MISSING ❌
 | C5 | **Upload a JSONL dataset** for a run | ✅ built | file picker → `POST /api/foundry/evaluations/files` `uploadEvalsFile` (purpose=evals) |
 | C6 | Per-row results table (input/output/grade/passed) | ✅ built | "Results" drill → `GET …&items=1` `getEvalRunOutputItems`; per-criterion pass/fail/score badges |
 | C7 | Cancel / delete a run | ✅ built | "Delete" run action → `DELETE …?evalId=&runId=` `deleteEvalRun` |
-| C8 | Metric charts / pass-rate trend across runs | ❌ MISSING | counts only, no charts |
-| C9 | Compare runs side-by-side | ❌ MISSING | not surfaced |
+| C8 | Metric charts / pass-rate trend across runs | ✅ built | pass-rate trend `LineChart` across graded runs (oldest→newest), from each run's `resultCounts.passed/total` |
+| C9 | Compare runs side-by-side | ✅ built | per-run passed/failed `BarChart` (green/red stacked) beside the trend chart |
 
 ---
 
 ## Coverage tally
 
-- **built ✅: 21**
+- **built ✅: 24**
 - **partial ⚠️: 2** (B7 risk-&-safety evaluator presets; B8 custom item-schema editor)
 - **honest-gate ⚠️: 1** (the Evals-preview / notDeployed account gate)
-- **MISSING ❌: 3** (C8 metric charts, C9 compare-runs, A7 eval-detail schema view)
+- **MISSING ❌: 0**
 
-## Honest grade: **B+**
+## Honest grade: **A−**
+
+> 2026-06-11 (audit-t19 follow-up): the last 3 ❌ closed — A7 eval-detail card
+> (data-source schema + per-grader criteria), C8 pass-rate trend `LineChart`
+> across graded runs, and C9 per-run passed/failed compare `BarChart`. Charts are
+> a dependency-free SVG component (`lib/components/foundry/foundry-charts.tsx`)
+> driven by the real `resultCounts` / `dataSourceConfig` already on the API
+> response — no new backend. Zero ❌ remain; held at A− pending a live side-by-side
+> `pnpm uat` against an Evals-preview-enabled account (the only A requirement).
 
 > 2026-06-10 (audit-t19): C4/C5/C6/C7 + A6 + B5/B6 shipped — start-a-run with
 > JSONL upload, per-row output items, delete eval/run, a multi-criterion grader

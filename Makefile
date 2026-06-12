@@ -148,6 +148,12 @@ redeploy-gov-il5: ## IL5 full-stack teardown->redeploy (Gov sub). What-if: make 
 redeploy-gov-gcch: ## GCC-High full-stack teardown->redeploy (Gov sub). What-if: make redeploy-gov-gcch WHATIF=1
 	bash scripts/csa-loom/redeploy-gov.sh --boundary gcc-high $(if $(WHATIF),--what-if) $(if $(YES),--yes)
 
+gov-verify-il5: ## IL5 deploy-verification evidence -> §7 receipt (offline-safe). LIVE=1 adds a Gov what-if.
+	bash scripts/csa-loom/gov-verify-evidence.sh --boundary il5 $(if $(LIVE),--live) $(if $(OUT),--out $(OUT))
+
+gov-verify-gcch: ## GCC-High deploy-verification evidence -> §7 receipt (offline-safe). LIVE=1 adds a Gov what-if.
+	bash scripts/csa-loom/gov-verify-evidence.sh --boundary gcc-high $(if $(LIVE),--live) $(if $(OUT),--out $(OUT))
+
 teardown-example: ## Tear down a single vertical example: make teardown-example VERTICAL=usda
 	@if [ -z "$(VERTICAL)" ]; then echo "Usage: make teardown-example VERTICAL=<name>"; exit 1; fi
 	@if [ ! -f "examples/$(VERTICAL)/deploy/teardown.sh" ]; then \

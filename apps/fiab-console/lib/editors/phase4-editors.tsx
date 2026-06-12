@@ -222,6 +222,12 @@ const useStyles = makeStyles({
     padding: tokens.spacingVerticalS, borderRadius: tokens.borderRadiusLarge,
     border: `1px solid ${tokens.colorNeutralStroke2}`, borderLeftWidth: '4px', borderLeftColor: tokens.colorBrandStroke1,
     backgroundColor: tokens.colorNeutralBackground1,
+    transitionProperty: 'background-color, box-shadow', transitionDuration: tokens.durationFaster,
+    ':hover': { backgroundColor: tokens.colorNeutralBackground1Hover, boxShadow: tokens.shadow2 },
+  },
+  ontoSourceGrid: {
+    display: 'grid', gridTemplateColumns: '1fr 320px', gap: tokens.spacingHorizontalL,
+    '@media (max-width: 900px)': { gridTemplateColumns: '1fr' },
   },
   ontoBindRowSpacer: { flex: 1 },
   ontoEmpty: {
@@ -1064,13 +1070,31 @@ export function OntologyEditor({ item, id }: { item: FabricItemType; id: string 
   }, [id, bindSourceKind, bindSourceId, bindEntityTypes, lakehouses, warehouses]);
 
   const removeBinding = useCallback(async (b: OntologyEntityBinding) => {
-    // Re-bind with an empty set is not allowed; instead drop locally + persist
-    // the remaining list via a fresh save of the filtered bindings. The bind
-    // POST replaces by sourceItemId, so we just re-POST every other binding —
-    // simpler: send the remaining list directly through the ontology PATCH path
-    // is not exposed here, so we drop client-side and let the next bind reconcile.
-    setEntityBindings((prev) => prev.filter((x) => x.sourceItemId !== b.sourceItemId));
-  }, []);
+    // Durably remove the binding via the bind route's DELETE handler, which
+    // strips it from state.entityBindings and reconciles the bound* pointers.
+    // Optimistically drop it locally, then reconcile from the server's
+    // authoritative list (or roll back on failure).
+    const prev = entityBindings;
+    setEntityBindings((cur) => cur.filter((x) => x.sourceItemId !== b.sourceItemId));
+    setBindMsg(null);
+    try {
+      const r = await fetch(
+        `/api/items/ontology/${encodeURIComponent(id)}/bind?sourceItemId=${encodeURIComponent(b.sourceItemId)}`,
+        { method: 'DELETE' },
+      );
+      const j = await r.json().catch(() => ({}));
+      if (!j?.ok) {
+        setEntityBindings(prev); // roll back
+        setBindMsg({ intent: 'error', text: j?.error || `HTTP ${r.status}` });
+        return;
+      }
+      setEntityBindings(Array.isArray(j.entityBindings) ? j.entityBindings : []);
+      setBindMsg({ intent: 'success', text: `Removed binding ${b.sourceDisplayName}.` });
+    } catch (e: any) {
+      setEntityBindings(prev); // roll back
+      setBindMsg({ intent: 'error', text: e?.message || String(e) });
+    }
+  }, [id, entityBindings]);
 
   const createTrigger = useCallback(async () => {
     if (!actEntityType) { setActivatorMsg({ intent: 'error', text: 'Pick an entity type.' }); return; }
@@ -1228,7 +1252,7 @@ export function OntologyEditor({ item, id }: { item: FabricItemType; id: string 
             <strong>Materialize as graph-model</strong> converts the parsed class hierarchy into a graph-model item (one node type per class, IS_A edge type for parent relationships) that can then be ADX-materialized to real KQL tables. Use <strong>Bind to data source</strong> (Home ribbon) to map Lakehouse / Warehouse tables onto entity types, then create <strong>Activator triggers</strong> below that fire on entity changes (real Azure Monitor alert rules — no Microsoft Fabric required).
           </MessageBarBody>
         </MessageBar>
-        <div style={{ display: 'grid', gridTemplateColumns: '1fr 320px', gap: 16 }}>
+        <div className={s.ontoSourceGrid}>
           <div>
             <Subtitle2>Source ({classes.length} classes)</Subtitle2>
             {/* v3.28 Phase 4.5: functional setState — materializeToGraphModel
@@ -1266,7 +1290,7 @@ export function OntologyEditor({ item, id }: { item: FabricItemType; id: string 
             <div className={s.ontoSectionHead}>
               <span className={s.ontoSectionIcon}><Link20Regular /></span>
               <div>
-                <Subtitle2>Data bindings</Subtitle2>
+                <Subtitle2>Data bindings{entityBindings.length > 0 ? <Badge appearance="tint" color="informative" style={{ marginLeft: tokens.spacingHorizontalS }}>{entityBindings.length}</Badge> : null}</Subtitle2>
                 <Caption1 as="p" block className={s.ontoSectionHint}>
                   Map Lakehouse / Warehouse tables onto ontology entity types. Rows of the bound source become instances of the entity. Azure-native (no Fabric).
                 </Caption1>

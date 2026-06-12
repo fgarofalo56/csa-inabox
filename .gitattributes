@@ -5,3 +5,10 @@
 # Requires nbstripout: pip install nbstripout
 *.ipynb filter=nbstripout
 *.ipynb diff=ipynb
+
+# Pin LF for the generated apps-catalog fixture + its generator so the
+# fixture-freshness check (gen-apps-catalog-fixture.mjs --check) is byte-stable
+# across platforms — the generator always writes LF, so the committed file must
+# stay LF or the --check drift gate would falsely fail on a CRLF checkout.
+scripts/csa-loom/fixtures/apps-catalog.json text eol=lf
+scripts/csa-loom/gen-apps-catalog-fixture.mjs text eol=lf

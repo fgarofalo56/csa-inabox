@@ -419,6 +419,56 @@ override the token audience with `LOOM_POSTGRES_AAD_SCOPE` if needed.
   (`loomPostgresAadUser` param). The in-engine `pgaadauth_create_principal` call
   is a data-plane grant and intentionally cannot be expressed in ARM/bicep.
 
+## Azure SQL server — schema/table browser (Entra-admin data-plane) {#azure-sql-server-schema-browser}
+
+The **Azure SQL server** editor lets you drill from a logical server into any of
+its databases and browse that database's **schemas, tables, columns, indexes,
+constraints, views, stored procedures, functions, and table types** in a live
+object navigator. Each database is read on a **dedicated TDS connection** to
+`<server>.<sql-suffix>` (Azure SQL Database has no cross-database query, so the
+server cannot enumerate every database's objects on one connection — the
+navigator opens a fresh connection per selected database). All reads are real
+`sys.*` catalog queries over the existing Azure SQL TDS path — **no new Azure
+resource, route, or env var**.
+
+For the navigator to return rows (rather than the honest TDS auth error it shows
+otherwise) the **console UAMI must be able to read the target database's
+metadata**. One-time, per logical server:
+
+1. Make the console UAMI the server's **Microsoft Entra admin** — settable
+   inline from the editor's **AAD admin** ribbon button
+   (`Microsoft.Sql/servers/administrators`), via the portal, or:
+
+   ```bash
+   az sql server ad-admin create --resource-group <rg> --server <server> \
+     --display-name '<console-uami-name>' --object-id <console-uami-objectId>
+   ```
+
+   **or**, for least privilege, provision the UAMI as a contained user with
+   read + metadata rights in each database you want to browse (run as the
+   server's Entra admin):
+
+   ```sql
+   CREATE USER [<console-uami-name>] FROM EXTERNAL PROVIDER;
+   ALTER ROLE db_datareader ADD MEMBER [<console-uami-name>];
+   GRANT VIEW DEFINITION TO [<console-uami-name>];
+   ```
+
+Until one of these is in place the navigator renders the real connection/auth
+error verbatim (per `no-vaporware.md`) — ARM inventory (servers, databases,
+firewall, AAD admin) is already live without it.
+
+### Bicep sync
+
+- No new Azure resource or env var. The `Microsoft.Sql/servers/administrators`
+  (Entra admin) assignment and the in-database `db_datareader` + `VIEW
+  DEFINITION` grant are **data-plane** acts that intentionally cannot be
+  expressed in ARM/bicep — `platform/fiab/bicep/modules/admin-plane/sql-rbac.bicep`
+  deliberately grants the UAMI only the control-plane **SQL DB Contributor**
+  role and explicitly NOT data-plane access (see its header comment). The editor
+  exposes the AAD-admin setter so the operator can perform the one-time grant
+  from the UI.
+
 ## Azure SQL — full-text search + SQL 2025 vector indexes {#azure-sql-search-management}
 
 The standalone **Azure SQL database** editor's **Full-text search** and **Vector
@@ -1584,9 +1634,9 @@ Materialized lake views (`materialized-lake-view` item type) need **no new tenan
 configuration**. They reuse the existing landing-zone backends:
 
 - **Refresh compute** — Synapse Spark batch via `LOOM_SYNAPSE_WORKSPACE` +
-  `LOOM_SYNAPSE_SPARK_POOL` (the Console UAMI must hold the **Synapse
-  Administrator** role to submit Livy batches — already granted for notebooks /
-  Spark job definitions).
+  `LOOM_SYNAPSE_SPARK_POOL` (the Console UAMI must hold **Synapse Compute
+  Operator** on the Spark pool to submit Livy batches — already granted for
+  notebooks / Spark job definitions; see [Synapse workspace tree](#synapse-kql-sjd)).
 - **Delta storage** — the DLZ ADLS Gen2 medallion containers
   (`LOOM_{BRONZE,SILVER,GOLD,LANDING}_URL`), Storage Blob Data Contributor.
 - **Serverless preview** — the `LOOM_SYNAPSE_WORKSPACE` `-ondemand` endpoint.
@@ -1603,6 +1653,47 @@ factory itself is gated by the existing `LOOM_SUBSCRIPTION_ID` / `LOOM_DLZ_RG` /
 `LOOM_ADF_NAME` vars + the Data Factory Contributor role.
 
 No Microsoft Fabric / OneLake tenant is required for any part of this.
+
+---
+
+## Synapse workspace tree — KQL scripts + Spark job definitions {#synapse-kql-sjd}
+
+The Synapse workspace tree's **KQL scripts** and **Spark job definitions (SJD)**
+groups create / edit / run real Synapse workspace artifacts via the data-plane
+(`<workspace>.dev.azuresynapse.*`, artifacts api-version `2020-12-01`). No
+Microsoft Fabric workspace is involved — these are Azure-native Synapse artifacts.
+
+**Env** — `LOOM_SYNAPSE_WORKSPACE` (the Synapse workspace name) gates the whole
+surface; when unset the BFF routes 503 with an honest MessageBar. `LOOM_SYNAPSE_SUB`
+overrides the subscription for a reused/BYO workspace. The data-plane host is
+**sovereign-cloud aware and auto-derived** from `LOOM_CLOUD` / `AZURE_CLOUD`
+(`dev.azuresynapse.net` in Commercial/GCC; `dev.azuresynapse.usgovcloudapi.net`
+in GCC-High/IL5/DoD) by both `synapse-artifacts-client.ts` (artifact CRUD) and
+`synapse-dev-client.ts` (Livy Spark-batch submit), so the KQL CRUD path and the
+SJD Run path resolve to the **same** host in every boundary. Override the host
+explicitly for clouds we don't enumerate (e.g. China) via
+`AZURE_SYNAPSE_DEV_HOST_SUFFIX=dev.azuresynapse.azure.cn` (artifacts client uses
+`LOOM_SYNAPSE_DEV_SUFFIX`). KQL-script **Run** targets a workspace **Kusto pool**
+(`<pool>.<ws>.kusto.azuresynapse.{net|us}`) listed from ARM — no standalone ADX,
+no Fabric Eventhouse.
+
+**Synapse RBAC (data plane)** — granted post-deploy by `landing-zone/synapse.bicep`
+deployment scripts on the **Console UAMI** (`consolePrincipalId`), all via
+`az synapse role assignment create`:
+
+- **Synapse Artifact Publisher** (workspace scope) — `kqlScripts/write,delete`
+  and `sparkJobDefinitions/write,delete`. Backs create / edit / delete in the
+  tree. Resource: `consoleArtifactPublisherRoleScript` (output
+  `consoleArtifactPublisherRoleAssigned`). Least-privilege; Synapse Administrator
+  is a superset that also works.
+- **Synapse Compute Operator** (Spark pool scope) — submit / cancel Spark jobs.
+  Backs the **SJD Run** (Livy batch) path. Resource: `consoleSparkSubmitRoleScript`.
+
+Both scripts require `synapseRoleAssignmentUamiId` (a UAMI pre-holding Synapse
+Administrator) and are skipped when `skipRoleGrants=true`. The SQL-AAD-admin
+assignment (`workspaces/administrators`) and ARM Contributor do **not** confer
+Synapse-RBAC artifact rights — without Artifact Publisher the UI renders but
+create/edit/delete 403s.
 
 ---
 

@@ -1,6 +1,7 @@
 /**
  * POST /api/items/event-schema-set/[id]/check-compat?workspaceId=...
- *   body: { subject: string, newSchema: string, format?: 'AVRO'|'JSON'|'PROTOBUF' }
+ *   body: { subject: string, newSchema: string, format?: 'AVRO'|'JSON'|'PROTOBUF',
+ *           dryRunInProcess?: boolean }
  *
  * Pre-publish compatibility check for a proposed schema version. Does NOT
  * persist anything — it answers "would registering this version under {subject}
@@ -19,6 +20,13 @@
  *     (schema-compat-validator.ts) against the latest version stored in Cosmos.
  *     Always available, no extra infra, works with LOOM_DEFAULT_FABRIC_WORKSPACE
  *     unset.
+ *
+ * `dryRunInProcess:true` forces the in-process validator even when EH SR is
+ * configured. The editor sets this for the debounced live check that fires on
+ * every schema edit, so live feedback never spams the EH SR data-plane PUT
+ * (which would be rate-limited / would create speculative schema versions). The
+ * explicit "Check compatibility" button and the enforced register path still use
+ * the auto-selected backend so EH SR remains the authority before a version lands.
  *
  * Returns { ok:true, compatible, violations, checkedVia } or { ok:false, error }.
  */
@@ -63,6 +71,7 @@ export async function POST(req: NextRequest, ctx: { params: Promise<{ id: string
   const subject = String(body?.subject || '').trim();
   const newSchema = String(body?.newSchema ?? body?.schema ?? '').trim();
   const format = (String(body?.format || 'AVRO').toUpperCase() as SchemaFormat);
+  const dryRunInProcess = body?.dryRunInProcess === true;
   if (!subject) return err('subject required', 400);
   if (!newSchema) return err('newSchema required', 400);
 
@@ -85,8 +94,10 @@ export async function POST(req: NextRequest, ctx: { params: Promise<{ id: string
     }
 
     // Opt-in path: delegate to Event Hubs Schema Registry server-side enforcement.
+    // Skipped when the caller asks for a non-persisting in-process dry-run (the
+    // editor's live, debounced check) so live feedback never PUTs into EH SR.
     const srGate = schemaRegistryConfigGate();
-    if (!srGate) {
+    if (!srGate && !dryRunInProcess) {
       const group = process.env.LOOM_EH_SCHEMA_GROUP as string;
       try {
         await putSchemaVersion(group, subject, newSchema, srFormat(format));

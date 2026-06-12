@@ -24,9 +24,11 @@ param containerPlatform string
 @description('Optional registry/host prefix MCP catalog images are mirrored to (e.g. an ACR login server for air-gapped boundaries). Empty pulls from the upstream Docker MCP catalog / mcr.microsoft.com. Read by lib/azure/mcp-catalog.ts resolveCatalogImage().')
 param loomMcpCatalogRegistry string = ''
 
-@description('Functions host SKU. Reserved for v3.x — declared so the orchestrator contract is stable while the Functions host wiring is deferred.')
-#disable-next-line no-unused-params
-param functionsHostSku string
+// functionsHostSku (reserved for v3.x) was removed from this module: it was an
+// unused pass-through and admin-plane/main.bicep had hit the 256-parameter
+// Bicep/ARM limit (max-params Error). The parent main.bicep still declares it
+// for forward-compat; the Functions host wiring will re-introduce it here when
+// that work lands.
 
 @description('APIM SKU')
 param apimSku string
@@ -40,9 +42,10 @@ param catalogPrimary string
 @description('Agent orchestrator')
 param agentOrchestrator string
 
-@description('Capacity SKU. Reserved for v3.x — Fabric/Power BI capacity sizing parameter; wired downstream once landing-zone capacity module lands.')
-#disable-next-line no-unused-params
-param capacitySku string
+// capacitySku (reserved for v3.x) was removed from this module: it was an
+// unused pass-through here (the live consumers are the landing-zone + capacity
+// modules, which still receive it from the parent main.bicep). Removing it from
+// admin-plane keeps the module under the 256-parameter Bicep/ARM limit.
 
 @description('Foundry portal enabled')
 param foundryPortalEnabled bool
@@ -69,6 +72,15 @@ param loomNotebookBackend string = ''
 @description('Power Apps canvas web-player base for the in-Loom Play/embed + Studio tabs. Empty = code default https://apps.powerapps.com (Commercial). Sovereign clouds override: GCC/GCC-High = https://apps.gov.powerapps.us; DoD/IL5 = https://apps.appsplatform.us.')
 param powerAppsPlayerBase string = ''
 
+@description('Power Platform BAP admin control-plane base (environments lifecycle). Empty = code default https://api.bap.microsoft.com (Commercial). Sovereign: GCC = https://gov.api.bap.microsoft.com; GCC-High = https://high.api.bap.microsoft.us; DoD = https://api.bap.appsplatform.us.')
+param powerPlatformBapBase string = ''
+
+@description('Power Apps control-plane base (apps/connections/connectors admin). Empty = code default https://api.powerapps.com (Commercial). Sovereign: GCC = https://gov.api.powerapps.us; GCC-High = https://high.api.powerapps.us; DoD = https://api.apps.appsplatform.us.')
+param powerPlatformPowerAppsBase string = ''
+
+@description('Power Automate (Flow) control-plane base (flows admin/run). Empty = code default https://api.flow.microsoft.com (Commercial). Sovereign: GCC = https://gov.api.flow.microsoft.us; GCC-High = https://high.api.flow.microsoft.us; DoD = https://api.flow.appsplatform.us.')
+param powerPlatformFlowBase string = ''
+
 @description('Cloud authorization tier (e.g. "IL5"). When IL5, the notebook editor blocks the Databricks opt-in (Databricks Gov is not IL5-authorized) and falls back to Synapse Livy.')
 param loomCloudTier string = ''
 
@@ -80,21 +92,12 @@ param loomRichDisplay bool = true
 @maxValue(20000)
 param loomDisplaySampleRows int = 5000
 
-@description('OpenAI region for chat. Reserved for v3.x — multi-region OpenAI deployment wiring (per-model regional pinning) is deferred.')
-#disable-next-line no-unused-params
-param openaiLocation string
-
-@description('OpenAI region for embeddings. Reserved for v3.x — see openaiLocation note above.')
-#disable-next-line no-unused-params
-param openaiEmbeddingsLocation string
-
-@description('OpenAI chat model. Reserved for v3.x — explicit deployment-name pinning is handled inside ai-foundry.bicep today.')
-#disable-next-line no-unused-params
-param openaiChatModel string
-
-@description('OpenAI embeddings model. Reserved for v3.x — see openaiChatModel note above.')
-#disable-next-line no-unused-params
-param openaiEmbeddingsModel string
+// openaiLocation / openaiEmbeddingsLocation / openaiChatModel /
+// openaiEmbeddingsModel (all reserved for v3.x) were removed from this module:
+// they were unused pass-throughs here (explicit deployment-name pinning lives
+// in ai-foundry.bicep today, fed from the parent main.bicep). Dropping them
+// keeps admin-plane/main.bicep under the 256-parameter Bicep/ARM limit
+// (max-params Error) so every boundary can deploy.
 
 @description('Key Vault Premium HSM isolated (IL5)')
 param keyVaultHsmIsolated bool
@@ -1090,11 +1093,10 @@ module keyvault 'keyvault.bicep' = {
     hsmIsolated: keyVaultHsmIsolated
     adminEntraGroupId: adminEntraGroupId
     consolePrincipalId: identity.outputs.uamiConsolePrincipalId
-    mcpPrincipalId: identity.outputs.uamiMcpPrincipalId
-    consolePrincipalNeedsCmkRole: consolePrincipalNeedsCmkBind
     // MCP app UAMI gets Key Vault Secrets User (read-only) so catalog-deployed
     // MCP servers can resolve their auth secret via Container Apps secretRef.
     mcpPrincipalId: identity.outputs.uamiMcpPrincipalId
+    consolePrincipalNeedsCmkRole: consolePrincipalNeedsCmkBind
     skipRoleGrants: skipRoleGrants
     privateEndpointSubnetId: network.outputs.privateEndpointsSubnetId
     privateDnsZoneVaultId: network.outputs.privateDnsZoneIds.keyvault
@@ -1212,6 +1214,41 @@ resource mcpEnvStorage 'Microsoft.App/managedEnvironments/storages@2024-03-01' =
 // 7. AI Search
 // =====================================================================
 
+// Dedicated storage account for AI Search indexer/skillset debug-session state
+// (container ms-az-cognitive-search-debugsession). Provisioned in the admin RG
+// alongside the search service so the same-region system-MSI → storage
+// connection is valid (per Learn, only a system-assigned MSI works for a
+// same-region search→storage debug connection, via the trusted-service
+// exception). Keyless: the search MSI is granted Storage Blob Data Contributor
+// by ai-search.bicep, and the Console passes a `ResourceId=` connection string
+// (no account key) — consistent with the search service's disableLocalAuth
+// posture. Only deployed when a new AI Search service is provisioned.
+var aiSearchDebugStorageName = take('sasrchdbg${uniqueString(resourceGroup().id)}', 24)
+
+resource aiSearchDebugStorage 'Microsoft.Storage/storageAccounts@2024-01-01' = if (aiSearchEnabled && empty(existingAiSearchService)) {
+  name: aiSearchDebugStorageName
+  location: location
+  tags: complianceTags
+  kind: 'StorageV2'
+  sku: { name: 'Standard_LRS' }
+  properties: {
+    allowBlobPublicAccess: false
+    // Keyless: the search MSI authenticates via Storage Blob Data Contributor;
+    // no shared-key path is used for the debug-session connection.
+    allowSharedKeyAccess: false
+    minimumTlsVersion: 'TLS1_2'
+    supportsHttpsTrafficOnly: true
+    // Trusted-service exception lets the AI Search system MSI reach the account
+    // while keeping it closed to the public internet (same-region debug path).
+    networkAcls: {
+      defaultAction: 'Deny'
+      bypass: 'AzureServices'
+      ipRules: []
+      virtualNetworkRules: []
+    }
+  }
+}
+
 module aiSearch 'ai-search.bicep' = if (aiSearchEnabled && empty(existingAiSearchService)) {
   name: 'ai-search'
   params: {
@@ -1231,6 +1268,12 @@ module aiSearch 'ai-search.bicep' = if (aiSearchEnabled && empty(existingAiSearc
     // Search Index Data Contributor → Console UAMI so the BFF can run the
     // vector-store data-plane ops (index PUT / docs index / docs search).
     consolePrincipalId: identity.outputs.uamiConsolePrincipalId
+    // Grant the search system-MSI Storage Blob Data Contributor on the
+    // debug-session storage account so indexer/skillset debug sessions can
+    // persist their enrichment trace without an account key (keyless,
+    // posture-correct). The Console passes the matching `ResourceId=`
+    // connection string via LOOM_AI_SEARCH_DEBUG_STORAGE_CONN below.
+    debugSessionStorageId: (aiSearchEnabled && empty(existingAiSearchService)) ? aiSearchDebugStorage.id : ''
   }
 }
 
@@ -1663,17 +1706,17 @@ module aiDefense 'ai-defense.bicep' = {
 //                     Mirroring, Direct-Lake Shim, Presidio if Gov)
 // =====================================================================
 
-// MCP catalog Azure Files share + Container Apps env storage. Catalog-deployed
-// MCP servers (filesystem/git/memory) mount this at /data. Container Apps path
-// only — the AKS boundaries deploy MCP workloads via the GitOps manifest path.
-module mcpStorage 'mcp-storage.bicep' = if (containerPlatform == 'containerApps' && deployAppsEnabled) {
-  name: 'mcp-storage'
-  params: {
-    location: location
-    caeName: containerPlatformModule.outputs.caeName
-    complianceTags: complianceTags
-  }
-}
+// MCP catalog Azure Files share + Container Apps env storage are provisioned by
+// the inline `mcpStorage` storage account + `mcpEnvStorage` managedEnvironments/
+// storages resources above (gated on mcpFilesActive). That inline path is the
+// single source of truth — it carries the persistence toggle
+// (mcpPersistenceEnabled), network ACLs, largeFileSharesState, and is the
+// predecessor `appDeployments` already depends on (dependsOn: [mcpEnvStorage]).
+// The Container Apps path mounts that share at /data; the AKS boundaries deploy
+// MCP workloads via the GitOps manifest path. (A prior refactor briefly added a
+// parallel `module mcpStorage 'mcp-storage.bicep'` here, which collided with the
+// inline `resource mcpStorage` identifier and its non-existent `.outputs` —
+// removed so main.bicep builds clean and every boundary can deploy.)
 
 module appDeployments 'app-deployments.bicep' = if (containerPlatform == 'containerApps' && deployAppsEnabled) {
   name: 'app-deployments'
@@ -1727,9 +1770,10 @@ module appDeployments 'app-deployments.bicep' = if (containerPlatform == 'contai
             { name: 'LOOM_ACR_LOGIN_SERVER', value: registry.outputs.acrLoginServer }
             { name: 'LOOM_MCP_UAMI_ID', value: identity.outputs.uamiMcpId }
             { name: 'LOOM_MCP_UAMI_CLIENT_ID', value: identity.outputs.uamiMcpClientId }
-            // Azure Files env-storage name for catalog MCP servers that mount /data.
-            { name: 'LOOM_MCP_STORAGE_NAME', value: (containerPlatform == 'containerApps' && deployAppsEnabled) ? mcpStorage!.outputs.envStorageName : '' }
-            { name: 'LOOM_MCP_FILE_SHARE', value: (containerPlatform == 'containerApps' && deployAppsEnabled) ? mcpStorage!.outputs.fileShareName : '' }
+            // Azure Files env-storage name (LOOM_MCP_STORAGE_NAME) and share name
+            // (LOOM_MCP_FILES_SHARE) for catalog MCP servers that mount /data are
+            // wired from the inline mcpFilesActive infra further down this same
+            // env[] block (single source of truth) — not duplicated here.
             // Optional ACR mirror prefix for catalog MCP images in air-gapped
             // boundaries (empty → upstream Docker MCP catalog / mcr.microsoft.com).
             { name: 'LOOM_MCP_CATALOG_REGISTRY', value: loomMcpCatalogRegistry }
@@ -1965,6 +2009,11 @@ module appDeployments 'app-deployments.bicep' = if (containerPlatform == 'contai
             // AKS cluster lives) — aks-arm-client.ts reads both + LOOM_SUBSCRIPTION_ID.
             { name: 'LOOM_AKS_CLUSTER_NAME', value: containerPlatform == 'aks' ? containerPlatformModule.outputs.aksName : '' }
             { name: 'LOOM_AKS_RG', value: containerPlatform == 'aks' ? resourceGroup().name : '' }
+            // Runtime configuration (/admin/env-config) Save on the AKS path uses
+            // aks-arm-client.ts:updateAksDeploymentEnv (Run Command → kubectl set
+            // env on the loom-console Deployment). Namespace the Console workload
+            // lives in (app-deployments.bicep manifest omits one → 'default').
+            { name: 'LOOM_AKS_NAMESPACE', value: containerPlatform == 'aks' ? 'default' : '' }
             // Azure-native Activator (lib/azure/activator-monitor.ts) creates
             // Microsoft.Insights/scheduledQueryRules + action groups here. Defaults
             // to THIS admin RG — the same RG where monitoring.bicep grants the
@@ -2139,13 +2188,16 @@ module appDeployments 'app-deployments.bicep' = if (containerPlatform == 'contai
             // RG/sub fall back to LOOM_AI_SEARCH_RG / LOOM_SUBSCRIPTION_ID.
             { name: 'LOOM_AI_SEARCH_SERVICE',  value: !empty(existingAiSearchService) ? existingAiSearchService : (aiSearchEnabled ? aiSearch!.outputs.searchName : '') }
             { name: 'LOOM_AI_SEARCH_SUB',      value: !empty(existingAiSearchService) ? byoAiSearchSub : (aiSearchEnabled ? subscription().subscriptionId : '') }
-            // Optional storage connection string for AI Search indexer debug-session
-            // state (ms-az-cognitive-search-debugsession container). Empty by default;
-            // operators set it (or supply per-session in the UI) to enable debug
-            // sessions. The search MSI also needs Storage Blob Data Contributor on
-            // that account (ai-search.bicep debugSessionStorageId). Read by the
-            // /api/ai-search/debug-sessions BFF route.
-            { name: 'LOOM_AI_SEARCH_DEBUG_STORAGE_CONN', value: '' }
+            // Keyless storage connection string for AI Search indexer debug-session
+            // state (ms-az-cognitive-search-debugsession container). Uses the
+            // `ResourceId=` form so the search system-MSI authenticates via the
+            // Storage Blob Data Contributor grant (ai-search.bicep
+            // debugSessionStorageId) — no account key, matching the search
+            // service's disableLocalAuth posture. Empty when reusing a BYO search
+            // service (existingAiSearchService): the operator then supplies a
+            // per-session connection string in the UI, or sets this env var.
+            // Read by the /api/ai-search/debug-sessions BFF route.
+            { name: 'LOOM_AI_SEARCH_DEBUG_STORAGE_CONN', value: (aiSearchEnabled && empty(existingAiSearchService)) ? 'ResourceId=${aiSearchDebugStorage.id};' : '' }
             // OneLake catalog Explore-tab backend (azure=AI Search/Cosmos default; fabric=opt-in OneLake REST).
             { name: 'LOOM_CATALOG_BACKEND', value: loomCatalogBackend }
             // APIM navigator (apis/products/named-values/backends/subscriptions) + marketplace.
@@ -2676,6 +2728,16 @@ module appDeployments 'app-deployments.bicep' = if (containerPlatform == 'contai
             // clouds override: GCC/GCC-H = apps.gov.powerapps.us,
             // DoD = apps.appsplatform.us. Empty = code falls back to commercial.
             { name: 'LOOM_POWERAPPS_PLAYER_BASE', value: powerAppsPlayerBase }
+            // Power Platform control-plane host overrides for sovereign clouds
+            // (powerplatform-client BAP_BASE / POWERAPPS_BASE / FLOW_BASE).
+            // Empty = code defaults to the Commercial hosts. For GCC/GCC-High/DoD
+            // set these so environment lifecycle, apps, flows, and connections
+            // target the *.gov / *.us control planes. Dataverse-scoped authoring
+            // (tables, flow definitions) is per-env (<org>.crm.dynamics.com) and
+            // auto-sovereign — no override needed.
+            { name: 'LOOM_BAP_BASE', value: powerPlatformBapBase }
+            { name: 'LOOM_POWERAPPS_BASE', value: powerPlatformPowerAppsBase }
+            { name: 'LOOM_FLOW_BASE', value: powerPlatformFlowBase }
             // AI Foundry model-hosting account — used by the hub editor's
             // Models / Quota / Keys / Networking / RBAC tabs and the
             // data-agent test chat. Empty when AI Foundry isn't deployed.

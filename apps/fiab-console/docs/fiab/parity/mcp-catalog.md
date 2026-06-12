@@ -51,6 +51,8 @@ permissive licenses only) and `docs/adr/0026-ms-learn-mcp-as-external-grounding.
 | 9 | Teardown (Container App + KV secrets in `secretRefs` + Cosmos doc) | built ✅ | `DELETE /api/admin/mcp-servers/deployed/teardown` → `deleteMcpContainerApp` + `deleteKeyVaultSecret` + `deleteMcpServer` |
 | 10 | Persisted as an MCP connection (Cosmos `mcp-servers`) | built ✅ | `saveMcpServer` (source: `catalog`, `deployment{}` metadata, `secretRefs` = names only — secret values NEVER in Cosmos) |
 | 11 | Per-cloud catalog narrowing (commercial / gcc / gcc-high / il5) | built ✅ | `deployServersForCloud` (`lib/mcp/catalog.ts`) for server-side filtering |
+| 12 | Gov-safety badges on each tile (Air-gap safe / Gov-safe / license) | built ✅ | `govMetaFor(id)` joins the deploy tile to the research-grounded `MCP_CATALOG` (`DeployableMcpServer`) gov facet — `govSafe`/`airGapSafe`/`license`/`source`/`defaultRecommended` from `temp/mcp-gov-research.md` (25 servers + Grafana). Undefined ⇒ no badge (honest, never fabricated). |
+| 13 | Edit / disable / delete a deployed server | built ✅ | existing `McpServersPanel` table; PUT carries forward `catalogId`/`secretRefs` |
 
 Honest gates (no fabricated success — `no-vaporware.md`):
 - Container Apps platform not wired → `503 { ok:false, gate }` naming the missing
@@ -78,6 +80,27 @@ No Microsoft Fabric / Power BI dependency — these are plain OCI images on Azur
 Container Apps + Key Vault + Cosmos (`no-fabric-dependency.md`); the surface works
 with `LOOM_DEFAULT_FABRIC_WORKSPACE` unset.
 
+- Browse grid: static `MCP_DEPLOY_CATALOG` (curated, real images — no network
+  call) joined to gov metadata via `govMetaFor()` against the authoritative
+  research-grounded `MCP_CATALOG` (`DeployableMcpServer[]`). The gov catalog also
+  exposes `serversForCloud(cloud)`, `defaultRecommendedServers()`, and
+  `airGapSafeServers()` selectors for boundary-aware filtering.
+- Deploy: `POST /api/admin/mcp-servers/deploy`
+  - gate: `enforceCapability(session,'admin.deploy-mcp','Admin')`
+  - validate: `validateConfigValues(entry, values)` (typed + required)
+  - secrets: KV REST `PUT /secrets/<name>?api-version=7.4` via `putKeyVaultSecret`
+    (Console UAMI holds **Key Vault Secrets Officer**)
+  - create: ARM `PUT Microsoft.App/containerApps/{name}?api-version=2025-02-02-preview`
+    via `createMcpContainerApp` / `deployMcpContainerApp` (Console UAMI
+    **Contributor** + **Managed Identity Operator**; MCP UAMI assigned to the app
+    holds **Key Vault Secrets User** to resolve secretRefs). The Container Apps
+    api-version is pinned consistently across the two runtime clients,
+    `mcp-storage.bicep`, and `mcp-catalog-app.bicep` (bicep+bootstrap sync).
+  - register: `saveMcpServer` → Cosmos `mcp-servers`
+  - audit: `auditLogContainer`
+- Tool discovery: `copilot-orchestrator` → `buildMcpShim` → `listMcpServers` →
+  `listMcpTools` (`<endpoint>/tools/list`) per server.
+
 ## Bicep + env sync
 
 - `keyvault.bicep` — MCP UAMI granted **Key Vault Secrets User**
@@ -95,6 +118,28 @@ with `LOOM_DEFAULT_FABRIC_WORKSPACE` unset.
   `identity.outputs.uamiMcpId`), plus the shared `LOOM_CONTAINER_PLATFORM`,
   `LOOM_MCP_UAMI_ID`, `LOOM_MCP_UAMI_CLIENT_ID`, `LOOM_ACR_LOGIN_SERVER`,
   `LOOM_MCP_STORAGE_NAME`, `LOOM_MCP_FILE_SHARE`, and `LOOM_LOCATION`.
+- Commercial / GCC (`containerPlatform == containerApps`): full path. `LOOM_ACA_ENV_ID`
+  / `LOOM_ACA_ENV_DOMAIN` populated from `containerPlatformModule.outputs`.
+- GCC-High / IL5 (`containerPlatform == aks`): `caeId` output is `''` →
+  `LOOM_ACA_ENV_ID` empty → deploy returns the honest gate (no CAE; use AKS/Helm).
+  `mcp-client.resolveAuthHeader` uses `kvSuffix()`/`kvScope()` so per-field secret
+  resolution works against `*.vault.usgovcloudapi.net`. `serversForCloud('il5')`
+  (`lib/azure/mcp-catalog.ts`) restricts the deployable list to air-gap-safe +
+  Azure-native servers (Azure MCP, Postgres, Kubernetes, Redis, dbhub) so IL5
+  admins never see ungated SaaS tiles.
+
+## Deployable 25-server library
+
+`lib/azure/mcp-catalog.ts` `MCP_CATALOG` is the curated, vetted set of **exactly
+25** deployable MCP servers (integrity-tested in `__tests__/mcp-catalog.test.ts`).
+Each entry is a real, pullable HTTP/SSE image (`mcp/*` Docker MCP catalog,
+`mcr.microsoft.com/*`, or `ghcr.io/*`), permissively licensed (Apache-2.0 / MIT),
+and carries: category, egress profile, `govSafe`/`airGapSafe`/`defaultRecommended`
+flags, `externalHosts`, optional `secretEnv` (→ Key Vault secretRef), `needsStorage`
+(→ Azure Files mount at `/data`), and a **dedicated `healthPath`** (`/health` or
+`/healthz`) wired as Container Apps liveness/readiness probes — never the MCP
+JSON-RPC endpoint, per Learn. Community-HTTP-transport entries are tagged
+`preview: true`.
 
 The retired single-secret path's env vars (`LOOM_CAE_ID`, `LOOM_CAE_NAME`,
 `LOOM_CAE_DEFAULT_DOMAIN`, `LOOM_MCP_CATALOG_REGISTRY`) were pruned from

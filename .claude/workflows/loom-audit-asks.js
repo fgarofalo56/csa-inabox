@@ -7,6 +7,11 @@ export const meta = {
   ],
 }
 
+// HARNESS QUIRK: some sessions deliver `args` as a JSON-encoded STRING (confirmed
+// by zero-agent probe 2026-06-12) — which made args.* undefined and caused the
+// 115-task unscoped rebuild. Coerce before any use.
+if (typeof args === 'string') { try { args = JSON.parse(args) } catch (e) { log('args parse failed: ' + e) } }
+
 // USE: Workflow({ name:'loom-audit-asks' })  — read-only except the final audit doc write.
 const REPO = '/e/Repos/GitHub/csa-inabox'
 

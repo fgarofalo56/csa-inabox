@@ -12,6 +12,7 @@
  *   GET    /api/adf/cdc                         → { ok, cdcs: [{name, status, mode, sourceCount, targetCount}] }
  *   GET    /api/adf/cdc?name=NAME               → { ok, cdc: {name, status, mode, recurrence, sources[], targets[]} }
  *   GET    /api/adf/cdc?name=NAME&status=1      → { ok, status: string }   (live status poll)
+ *   GET    /api/adf/cdc?name=NAME&preview=1[&entity=schema.table][&rows=N] → { ok, preview: {entity, entities[], columns[], rows[][], rowCount, truncated, deltaUrl} }
  *   POST   /api/adf/cdc   body { name, action:'start'|'stop'|'delete' }    → lifecycle
  *   POST   /api/adf/cdc   body { name, spec: AdfCdcSpec }                  → upsert
  *   DELETE /api/adf/cdc?name=NAME              → delete
@@ -24,7 +25,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import { getSession } from '@/lib/auth/session';
 import {
   adfCdcConfigGate, listAdfCdcs, getAdfCdc, upsertAdfCdc,
-  startAdfCdc, stopAdfCdc, deleteAdfCdc, statusAdfCdc,
+  startAdfCdc, stopAdfCdc, deleteAdfCdc, statusAdfCdc, previewAdfCdcTarget,
   type AdfCdc, type AdfCdcSpec,
 } from '@/lib/azure/adf-client';
 
@@ -86,6 +87,7 @@ export async function GET(req: NextRequest) {
 
   const name = req.nextUrl.searchParams.get('name')?.trim();
   const wantStatus = req.nextUrl.searchParams.get('status');
+  const wantPreview = req.nextUrl.searchParams.get('preview');
 
   try {
     if (name) {
@@ -94,6 +96,18 @@ export async function GET(req: NextRequest) {
       if (wantStatus) {
         const status = await statusAdfCdc(name);
         return NextResponse.json({ ok: true, status });
+      }
+      // Change-data preview — read the rows the CDC resource landed in its
+      // Delta target via Synapse Serverless OPENROWSET FORMAT='DELTA'.
+      if (wantPreview) {
+        const entity = req.nextUrl.searchParams.get('entity')?.trim() || undefined;
+        if (entity && entity.length > 260) {
+          return NextResponse.json({ ok: false, error: 'invalid entity' }, { status: 400 });
+        }
+        const rowsParam = Number(req.nextUrl.searchParams.get('rows'));
+        const rowLimit = Number.isFinite(rowsParam) && rowsParam > 0 ? rowsParam : 100;
+        const preview = await previewAdfCdcTarget(name, entity, rowLimit);
+        return NextResponse.json({ ok: true, preview });
       }
       const c = await getAdfCdc(name);
       return NextResponse.json({ ok: true, cdc: detail(c) });

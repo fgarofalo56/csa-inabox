@@ -27,14 +27,14 @@ https://learn.microsoft.com/fabric/real-time-intelligence/digital-twin-builder/c
 | 5 | ✅ built | description carried through the DSL + dialog |
 | 6 | ✅ built | Materialize → creates a graph-model item (node per class, IS_A edge) which then ADX-materializes |
 | 7 | ✅ built | SaveBar + Ctrl+S → Cosmos item state |
-| 8 | ✅ built | "Bind to data source" dialog (Lakehouse/Warehouse picker + multi-select entity types); bindings persist on `state.entityBindings[]` and render as removable badges |
+| 8 | ✅ built | "Bind to data source" dialog (Lakehouse/Warehouse picker + multi-select entity types); bindings persist on `state.entityBindings[]` and render as badges with a **durable Remove** (DELETE strips the binding + reconciles `boundLakehouseId`/`boundWarehouseId`) |
 | 9 | ✅ built | "Activator triggers" panel → creates a real Azure Monitor scheduledQueryRule that fires on INSERT/UPDATE/DELETE of a bound entity type (no Fabric required) |
 
 ## Backend per control
 - Save / Add → PATCH `/api/items/ontology/[id]` (Cosmos), eager-save for existing items.
 - Materialize → `POST /api/items/graph-model` creating a derived graph-model; that item's `/materialize` pushes real ADX tables.
 - Parsing + viz: client-side `parseOntologyHierarchy` (vitest-covered).
-- Entity binding → `GET/POST /api/items/ontology/[id]/bind` (Cosmos): lists Lakehouse/Warehouse items in the ontology's workspace (workspaceId resolved server-side) and persists the binding onto `state.entityBindings[]`. Azure-native; no `api.fabric` host.
+- Entity binding → `GET/POST/DELETE /api/items/ontology/[id]/bind` (Cosmos): lists Lakehouse/Warehouse items in the ontology's workspace (workspaceId resolved server-side) and persists the binding onto `state.entityBindings[]`. DELETE removes one binding by `sourceItemId` and reconciles the `boundLakehouseId`/`boundWarehouseId` pointers so removal is durable across reload. Azure-native; no `api.fabric` host.
 - Activator triggers → `GET/POST /api/items/ontology/[id]/activator`: lazily creates a backing Cosmos `activator` item, then a real `Microsoft.Insights/scheduledQueryRule` via `createMonitorActivatorRule` over the Log Analytics workspace. The KQL (`buildEntityChangeQuery`, vitest-covered) targets `LOOM_ACTIVATOR_DEFAULT_TABLE` (default `AppEvents_CL`) and fires on entity write operations. Honest Azure infra-gate (set `LOOM_LOG_ANALYTICS_RESOURCE_ID` / `LOOM_ALERT_RG`, grant Monitoring Contributor) when Monitor is unconfigured — never a Fabric gate.
 
 ## Per-cloud matrix

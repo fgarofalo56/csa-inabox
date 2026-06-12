@@ -22,7 +22,7 @@ import { getSession } from '@/lib/auth/session';
 import {
   databricksConfigGate,
   listUcTables, listUcVolumes, listUcFunctions,
-  getUcTable, createUcTable, deleteUcTable, patchUcTable,
+  getUcTable, createUcTable, createUcTableFromFile, deleteUcTable, patchUcTable,
   type UcColumnSpec,
 } from '@/lib/azure/databricks-client';
 
@@ -83,6 +83,45 @@ export async function POST(req: NextRequest) {
   const name = String(body?.name || '').trim();
   const catalog_name = String(body?.catalog_name || '').trim();
   const schema_name = String(body?.schema_name || '').trim();
+
+  // ---- Create table FROM a file (Catalog Explorer "Create table from file") ----
+  // Upload the file to a UC Volume, then CREATE TABLE … AS read_files(…) with
+  // schema inference on a SQL Warehouse. Real Databricks REST — no mock.
+  if (body?.mode === 'from_file') {
+    const volume = String(body?.volume || '').trim();
+    const file_name = String(body?.file_name || '').trim();
+    const content = typeof body?.content === 'string' ? body.content : '';
+    const format = String(body?.format || 'csv').toLowerCase();
+    const warehouse_id = String(body?.warehouse_id || '').trim();
+    const allowedFmt = ['csv', 'json', 'parquet', 'orc', 'avro', 'text'];
+    if (!name || !catalog_name || !schema_name) {
+      return NextResponse.json({ ok: false, error: 'name, catalog_name and schema_name are required' }, { status: 400 });
+    }
+    if (!volume || volume.split('.').length !== 3) {
+      return NextResponse.json({ ok: false, error: 'volume (catalog.schema.volume) is required to stage the upload' }, { status: 400 });
+    }
+    if (!file_name || !content) {
+      return NextResponse.json({ ok: false, error: 'file_name and content are required' }, { status: 400 });
+    }
+    if (!warehouse_id) {
+      return NextResponse.json({ ok: false, error: 'warehouse_id is required to infer schema and create the table' }, { status: 400 });
+    }
+    if (!allowedFmt.includes(format)) {
+      return NextResponse.json({ ok: false, error: `format must be one of ${allowedFmt.join(', ')}` }, { status: 400 });
+    }
+    try {
+      const result = await createUcTableFromFile({
+        catalog_name, schema_name, table_name: name, volume, file_name, content,
+        format: format as 'csv' | 'json' | 'parquet' | 'orc' | 'avro' | 'text',
+        warehouse_id,
+        header: body?.header !== false,
+      });
+      return NextResponse.json({ ok: true, result });
+    } catch (e: any) {
+      return NextResponse.json({ ok: false, error: e?.message || String(e) }, { status: e?.status || 502 });
+    }
+  }
+
   const rawCols = Array.isArray(body?.columns) ? body.columns : [];
   if (!name || !catalog_name || !schema_name) {
     return NextResponse.json({ ok: false, error: 'name, catalog_name and schema_name are required' }, { status: 400 });

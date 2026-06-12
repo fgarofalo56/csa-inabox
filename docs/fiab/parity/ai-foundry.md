@@ -6,10 +6,13 @@
 > **PR #1078** ("AI Foundry fine-tuning, evals run/upload, span-tree tracing +
 > Images/Audio playgrounds"). Verified: `lib/azure/foundry-client.ts` +
 > `lib/azure/foundry-cs-client.ts` (fine-tuning jobs, eval create/run, span-tree
-> tracing) — this flips the 11 ❌ tracked in `foundry-evaluations.md` and lifts
-> 7-of-8 playgrounds off deep-link-only to in-Loom Images/Audio panels. **Grade
-> C+ → B−.** Remaining honest gaps: full observability dashboard breadth, agent
-> knowledge/memory/guardrails attach + publish/versioning, Connections CRUD.
+> tracing) — this flips the ❌ rows tracked in `foundry-evaluations.md` (now zero) and lifts the
+> Chat/Images/Audio playgrounds off deep-link-only to in-Loom panels. **Grade
+> C+ → B−.** audit-t19 follow-up (2026-06-11) adds the **A6 Observability /
+> Monitoring dashboard** (App-Insights KQL aggregations), fine-tuning loss-curve
+> + eval pass-rate/compare charts, and a sovereign-aware AOAI data-plane token
+> scope. Remaining honest gaps: agent knowledge/memory/guardrails attach +
+> publish/versioning, Connections CRUD, Templates gallery, 5 deep-link playgrounds.
 
 
 **Audit date:** 2026-05-31 · **Auditor:** conservative 1:1 parity pass (no-vaporware.md + ui-parity.md)
@@ -61,7 +64,7 @@ Legend: built ✅ = full 1:1 + real backend · partial ⚠️ = exists but incom
 | A3 | **Playgrounds — Images / Audio / Speech / Video / Language / Translator / Assistants** (7 more) | partial ⚠️ **Images** + **Audio** now run in-Loom (`ImagesPlaygroundPanel` / `AudioPlaygroundPanel`, real AOAI data-plane, honest gate when no model of that modality is deployed); Speech (TTS) is an honest deep-link (needs in-browser audio playback); Video/Language/Translator/Assistants remain deep-links | Images `POST /api/foundry/images` → AOAI `images/generations`; Audio `POST /api/foundry/audio` → AOAI `audio/transcriptions` |
 | A4 | **Agents** (build agent: model + instructions + tools + knowledge + memory + guardrails; Chat/YAML/Code tabs; threads; preview; publish; AgentOps traces/evals) — **the headline of new Foundry** | built ✅ (rev.2) — `FoundryAgentsPanel` (`lib/components/foundry/foundry-agents.tsx`): builder (list + create/edit/delete; name, model-deployment picker, instructions, tools multi-select = code_interpreter/file_search/function) + playground (pick agent → ask → run with thread/run/**steps** inspector + answer). Wired as the hub **Agents** tab + navigator g-agents leaf. ⚠️ partial vs full portal: no knowledge/memory/guardrails attach, no YAML/Code tabs, no publish/versioning, no AgentOps eval dashboards — but the core build+test loop is real. | `GET/POST /api/foundry/agents` → `listAgents`/`createOrUpdateAgent` (Agent Service `{project}/agents` POST/PATCH/GET REST); `DELETE /api/foundry/agents/{name}`; `POST /api/foundry/agents/run` → `runAgentAndInspect` (threads→messages→runs→steps REST). Honest 501 gate on `LOOM_FOUNDRY_PROJECT_ENDPOINT` (the live state). |
 | A5 | **Templates** gallery (`/resource/build/templates` — code/solution starter templates) | MISSING ❌ | none |
-| A6 | **Monitoring / Observability — Application analytics** dashboard (token consumption, latency, exceptions, response quality via App Insights workbooks) | MISSING ❌ (only a raw trace table exists, see C-Tracing) | none |
+| A6 | **Monitoring / Observability — Application analytics** dashboard (token consumption, latency, exceptions, response quality via App Insights workbooks) | built ✅ (audit-t19 follow-up) — **Monitoring** tab (`MonitoringPanel`): KPI tiles (requests, dependency calls, failures + error-rate, input/output tokens, latency p50/p95) + request-volume + token-consumption time-series line charts + per-operation p95 latency bar chart + table, over a selectable 6h/24h/7d/30d window. Charts are dependency-free SVG (`foundry-charts.tsx`). | `GET /api/foundry/observability` → `queryObservabilitySummary` (KQL aggregations against the hub's bound `ws.applicationInsights` — same resource as Tracing). Honest 503 when no App Insights is bound. |
 | A7 | **Project Overview** (endpoints & keys card, project details, getting-started steps) | partial ⚠️ Hub Overview tab shows workspace metadata; ProjectEditor shows project detail; no consolidated endpoints/keys/getting-started card per Foundry project | `GET /api/foundry/workspace`, `GET /api/items/ai-foundry-project/{id}` |
 | A8 | **Data + indexes** (datasets + vector indexes for the project) | partial ⚠️ Datasets tab (read-only list) + full AI Search index editor (schema/search/indexers) | `GET /api/foundry/datastores`, `/api/items/ai-search-index/*` |
 | A9 | **Management center** (all resources, connected resources, quota, users) | partial ⚠️ split across Quota, RBAC, Connections, Networking, Keys tabs — functional but not the unified management-center layout | `/api/foundry/{quota,rbac,connections,networking,keys}` |
@@ -116,14 +119,24 @@ Legend: built ✅ = full 1:1 + real backend · partial ⚠️ = exists but incom
 
 ---
 
-## Summary counts (by inventory row, 44 graded) — rev.2
+## Summary counts (by inventory row, 44 graded) — rev.3
 
-- **built ✅**: 20 (audit-t19: + C4 Fine-tuning, + C7 Tracing span-tree; A3 Images/Audio now in-Loom)
+- **built ✅**: 21 (audit-t19: + C4 Fine-tuning, + C7 Tracing span-tree; A3 Images/Audio now in-Loom; **audit-t19 follow-up: + A6 Observability/Monitoring dashboard**)
 - **partial ⚠️**: 17 (A3 now partial — Images/Audio built, 5 modalities deep-link)
 - **gated ⚠️**: 2
-- **MISSING ❌**: 5 (A5 Templates, A6 Observability dashboard, A10 portal chrome, B8 carousel, + remaining playground modalities under A3)
+- **MISSING ❌**: 4 (A5 Templates, A10 portal chrome, B8 carousel, + remaining playground modalities under A3) — A6 Observability dashboard is now built
 
 ## The honest verdict — **B-** (functional; flagship Agents, Fine-tuning, Tracing span-tree, Images/Audio playgrounds now built)
+
+> 2026-06-11 (audit-t19 follow-up): Verdict §2/§3/§6 below were STALE and
+> contradicted the inventory table (which already showed C4 Fine-tuning ✅, C7
+> Tracing span-tree ✅). Reconciled here per no-vaporware.md. Net new this pass:
+> A6 **Observability/Monitoring dashboard** built (KPI tiles + token/request
+> time-series + per-operation p95 charts over the bound App Insights, via
+> `/api/foundry/observability`); fine-tuning gained loss-curve charts; evaluation
+> pass-rate-trend + run-compare charts + eval-detail card (see
+> `foundry-evaluations.md`, now zero ❌); and the AOAI data-plane token scope is
+> now sovereign-aware (`cogScope()` — `cognitiveservices.azure.us` in Gov).
 
 > 2026-06-10 (audit-t19): Fine-tuning (C4) shipped end-to-end (upload→job→loss
 > events→cancel) with the Cognitive Services OpenAI Contributor grant added to
@@ -147,20 +160,26 @@ Why it is NOT A/B overall, per ui-parity.md ("feature completeness must match"):
    `LOOM_FOUNDRY_PROJECT_ENDPOINT`. Still short of *full* portal parity (no
    knowledge/memory/guardrails attach, no YAML/Code tabs, no publish/versioning,
    no AgentOps eval dashboards) — so the broader agent experience remains partial.
-2. **Fine-tuning is missing** (C4) — no submit/monitor/deploy.
-3. **Templates gallery, Monitoring/Observability dashboards, Announcements** are
-   missing (A5/A6/B8).
-4. **7 of 8 playgrounds are deep-link gates** (A3), not in-Loom surfaces.
+2. **Fine-tuning is built** (C4) — submit (base model + JSONL train/validation +
+   hyperparams), monitor (jobs table + per-step training/validation-loss events
+   **and a loss-curve chart**), cancel; deploy reuses the model-deployments flow.
+3. **Templates gallery + Announcements** remain missing (A5/B8). **Observability
+   is now built** (A6 — Monitoring dashboard).
+4. **3 of 8 playgrounds are in-Loom** (Chat/Images/Audio); the remaining 5
+   (Speech/Video/Language/Translator/Assistants) are honest deep-link gates (A3).
 5. **Many tabs are read-only where the portal is full-CRUD**: Connections (no
    create/edit/delete), RBAC (no add/remove), Keys (no regenerate), Online
    endpoints / Computes (no lifecycle ops), Model deployment edit-capacity.
-6. **Tracing is a flat table, not the span/trace-detail explorer**; **Content
-   safety is ad-hoc moderation, not RAI-policy CRUD + per-deployment attach.**
+6. **Tracing now has a span/trace-detail explorer** (C7 — per-trace span tree),
+   not just a flat table; **Content safety is still ad-hoc moderation, not
+   RAI-policy CRUD + per-deployment attach.**
 
-The mix (17 built / 17 partial / 3 gated / 7 missing) is **C+**: a real, working
-core — now including the flagship Agents build+test loop — with broad but shallow
-coverage. A grade requires zero ❌ and zero stub rows; this has 7 ❌ remaining and
-several read-only-where-portal-is-CRUD tabs.
+The mix (21 built / 17 partial / 2 gated / 4 missing) is **B−**: a real, working
+core — flagship Agents build+test loop, fine-tuning, Observability dashboard,
+span-tree tracing, in-Loom Chat/Images/Audio playgrounds — with broad coverage
+and a shrinking long tail. A grade requires zero ❌ and zero stub rows; this has
+4 ❌ remaining (Templates, portal chrome, announcements carousel, 5 deep-link
+playground modalities) and several read-only-where-portal-is-CRUD tabs.
 
 ## Highest-value gaps to build first
 
@@ -169,13 +188,14 @@ several read-only-where-portal-is-CRUD tabs.
    + threads/runs/steps playground, real `/api/foundry/agents/*` REST, honest gate.
    Remaining agent depth (knowledge/memory/guardrails attach, YAML/Code tabs,
    publish/versioning, AgentOps eval dashboards) is the next agent increment.
-2. **Fine-tuning** (C4) — submit job (base model + data + hyperparams), loss/accuracy
-   charts, deploy fine-tuned model (CS fine-tuning / AML jobs REST).
+2. ~~**Fine-tuning** (C4)~~ — **DONE** (submit/monitor + loss-curve chart/cancel;
+   deploy via model-deployments). ~~**Observability dashboard** (A6) +
+   trace-detail span explorer (C7)~~ — **DONE** (Monitoring dashboard + span tree).
 3. **Connections CRUD** (C3) — create/edit/delete AOAI/AI-Search/Blob connections
    (the portal's Management-center → Connections), since flows/agents depend on them.
 4. **Guardrails / RAI-policy authoring** (C8) — create/edit content-filter policies
    and attach per deployment, not just ad-hoc moderation.
-5. **Observability dashboard** (A6) + **trace-detail span explorer** (C7).
-6. **Lifecycle ops on read-only tabs** — RBAC add/remove, Keys regenerate, deployment
+5. **Lifecycle ops on read-only tabs** — RBAC add/remove, Keys regenerate, deployment
    edit-capacity, compute start/stop/scale, online-endpoint test.
-7. **Templates gallery** (A5) and remaining playgrounds (Images/Audio/Speech) (A3).
+6. **Templates gallery** (A5) and the remaining 5 deep-link playgrounds
+   (Speech/Video/Language/Translator/Assistants) (A3).

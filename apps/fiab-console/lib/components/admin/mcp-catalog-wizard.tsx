@@ -16,28 +16,60 @@ import { useCallback, useMemo, useState, type ReactNode } from 'react';
 import {
   Button, Dialog, DialogSurface, DialogBody, DialogTitle, DialogContent, DialogActions,
   Field, Input, Dropdown, Option, Switch, Badge, Spinner,
-  MessageBar, MessageBarBody, MessageBarTitle,
-  Card, CardHeader, Caption1, Body1, Text, makeStyles, tokens,
+  MessageBar, MessageBarBody, MessageBarTitle, SearchBox, Link,
+  Card, CardHeader, Caption1, Body1, Text, makeStyles, mergeClasses, tokens,
   Table, TableHeader, TableRow, TableHeaderCell, TableBody, TableCell,
 } from '@fluentui/react-components';
 import {
   Rocket20Regular, Code24Regular, Grid24Regular, Box24Regular,
   Archive24Regular, Globe24Regular, Delete20Regular, ArrowClockwise20Regular,
-  Search20Regular, SearchInfo24Regular,
+  Open16Regular, SearchInfo24Regular,
 } from '@fluentui/react-icons';
 import {
-  MCP_DEPLOY_CATALOG as MCP_CATALOG, entryEgress, reachesExternalSaas,
+  MCP_DEPLOY_CATALOG as MCP_CATALOG, entryEgress, reachesExternalSaas, govMetaFor,
   type McpCatalogEntry, type McpDeployConfigField as McpConfigField, type McpEgressProfile,
 } from '@/lib/mcp/catalog';
 import type { McpServerConfigDoc } from '@/lib/types/mcp-config';
 
 const useStyles = makeStyles({
+  toolbar: {
+    display: 'flex',
+    flexWrap: 'wrap',
+    alignItems: 'center',
+    gap: tokens.spacingHorizontalM,
+    marginTop: tokens.spacingVerticalM,
+  },
+  search: { minWidth: '260px', flex: '0 1 320px' },
+  chips: { display: 'flex', flexWrap: 'wrap', gap: tokens.spacingHorizontalXS, flex: 1 },
+  chip: {
+    display: 'inline-flex',
+    alignItems: 'center',
+    gap: tokens.spacingHorizontalXXS,
+    padding: `${tokens.spacingVerticalXXS} ${tokens.spacingHorizontalS}`,
+    borderRadius: tokens.borderRadiusCircular,
+    border: `${tokens.strokeWidthThin} solid ${tokens.colorNeutralStroke1}`,
+    backgroundColor: tokens.colorNeutralBackground1,
+    color: tokens.colorNeutralForeground2,
+    fontSize: tokens.fontSizeBase200,
+    cursor: 'pointer',
+    userSelect: 'none',
+    transitionProperty: 'background-color, color, border-color',
+    transitionDuration: tokens.durationFaster,
+    ':hover': { backgroundColor: tokens.colorNeutralBackground1Hover },
+  },
+  chipActive: {
+    backgroundColor: tokens.colorBrandBackground2,
+    borderColor: tokens.colorBrandStroke1,
+    color: tokens.colorBrandForeground2,
+    fontWeight: tokens.fontWeightSemibold,
+  },
+  count: { color: tokens.colorNeutralForeground3, marginTop: tokens.spacingVerticalS },
   grid: {
     display: 'grid',
     gridTemplateColumns: 'repeat(auto-fill, minmax(280px, 1fr))',
     gap: tokens.spacingHorizontalL,
     rowGap: tokens.spacingVerticalL,
-    marginTop: tokens.spacingVerticalM,
+    marginTop: tokens.spacingVerticalS,
   },
   card: {
     display: 'flex',
@@ -53,11 +85,39 @@ const useStyles = makeStyles({
     },
   },
   cardDesc: { color: tokens.colorNeutralForeground2, flex: 1, minHeight: '40px' },
-  cardFoot: { display: 'flex', alignItems: 'center', gap: tokens.spacingHorizontalS, marginTop: tokens.spacingVerticalS },
-  cardBadges: { display: 'flex', alignItems: 'center', gap: tokens.spacingHorizontalXS, flexWrap: 'wrap', marginTop: tokens.spacingVerticalS },
-  cardActions: { display: 'flex', justifyContent: 'flex-end', marginTop: tokens.spacingVerticalS },
+  rowActions: { display: 'flex', alignItems: 'center', gap: tokens.spacingHorizontalS },
+  cardMeta: {
+    display: 'flex',
+    flexWrap: 'wrap',
+    alignItems: 'center',
+    gap: tokens.spacingHorizontalXS,
+    minHeight: '20px',
+  },
+  cardFoot: {
+    display: 'flex',
+    alignItems: 'center',
+    gap: tokens.spacingHorizontalS,
+    marginTop: tokens.spacingVerticalS,
+    paddingTop: tokens.spacingVerticalS,
+    borderTop: `${tokens.strokeWidthThin} solid ${tokens.colorNeutralStroke2}`,
+  },
+  docsLink: { display: 'inline-flex', alignItems: 'center', gap: tokens.spacingHorizontalXXS, fontSize: tokens.fontSizeBase200 },
   spacer: { flex: 1 },
   iconWrap: { color: tokens.colorBrandForeground1, display: 'flex', alignItems: 'center' },
+  empty: {
+    display: 'flex',
+    flexDirection: 'column',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: tokens.spacingVerticalS,
+    padding: tokens.spacingVerticalXXXL,
+    marginTop: tokens.spacingVerticalM,
+    border: `${tokens.strokeWidthThin} dashed ${tokens.colorNeutralStroke2}`,
+    borderRadius: tokens.borderRadiusXLarge,
+    color: tokens.colorNeutralForeground3,
+    textAlign: 'center',
+  },
+  emptyIcon: { color: tokens.colorNeutralForeground4 },
   form: { display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalM, marginTop: tokens.spacingVerticalM },
   gateDetail: { marginTop: tokens.spacingVerticalXS, fontSize: tokens.fontSizeBase200 },
   gateCommands: {
@@ -73,30 +133,11 @@ const useStyles = makeStyles({
   saasBar: { marginTop: tokens.spacingVerticalS },
   deployedWrap: { marginTop: tokens.spacingVerticalL, marginBottom: tokens.spacingVerticalL },
   cellStack: { display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalXXS },
-  browseHead: {
-    display: 'flex',
-    alignItems: 'center',
-    gap: tokens.spacingHorizontalM,
-    flexWrap: 'wrap',
-    marginTop: tokens.spacingVerticalM,
-  },
-  count: { color: tokens.colorNeutralForeground3 },
-  filter: { minWidth: '220px', marginLeft: 'auto' },
-  emptyState: {
-    display: 'flex',
-    flexDirection: 'column',
-    alignItems: 'center',
-    justifyContent: 'center',
-    gap: tokens.spacingVerticalS,
-    paddingTop: tokens.spacingVerticalXXL,
-    paddingBottom: tokens.spacingVerticalXXL,
-    color: tokens.colorNeutralForeground3,
-    textAlign: 'center',
-  },
-  emptyIcon: { fontSize: '32px', color: tokens.colorNeutralForeground4 },
 });
 
-const CATEGORY_GLYPH: Record<McpCatalogEntry['category'], ReactNode> = {
+type McpCategory = McpCatalogEntry['category'];
+
+const CATEGORY_GLYPH: Record<McpCategory, ReactNode> = {
   developer: <Code24Regular />,
   observability: <Grid24Regular />,
   data: <Box24Regular />,
@@ -130,6 +171,14 @@ function provBadge(state?: string) {
   if (!state) return <Badge appearance="outline" color="subtle" size="small">—</Badge>;
   return <Badge appearance="outline" color="warning" size="small">{state}</Badge>;
 }
+
+const CATEGORY_LABEL: Record<McpCategory, string> = {
+  developer: 'Developer',
+  observability: 'Observability',
+  data: 'Data',
+  productivity: 'Productivity',
+  reference: 'Reference',
+};
 
 interface DeployGate {
   message: string;
@@ -395,7 +444,7 @@ function DeployedServers({
                   {running && <div><Caption1>{running}</Caption1></div>}
                 </TableCell>
                 <TableCell>
-                  <div className={s.cardFoot}>
+                  <div className={s.rowActions}>
                     <Button icon={<ArrowClockwise20Regular />} size="small" disabled={busyId === server.serverId} onClick={() => void refresh(server)}>Status</Button>
                     <Button icon={<Delete20Regular />} size="small" disabled={busyId === server.serverId} onClick={() => void teardown(server)}>Delete</Button>
                   </div>
@@ -422,19 +471,31 @@ export function McpCatalogBrowser({
 }) {
   const s = useStyles();
   const [selected, setSelected] = useState<McpCatalogEntry | null>(null);
-  const [filter, setFilter] = useState('');
+  const [query, setQuery] = useState('');
+  const [category, setCategory] = useState<McpCategory | null>(null);
 
-  const q = filter.trim().toLowerCase();
-  const filtered = useMemo(
-    () =>
-      q
-        ? MCP_CATALOG.filter((e) =>
-            e.name.toLowerCase().includes(q) ||
-            e.description.toLowerCase().includes(q) ||
-            e.category.toLowerCase().includes(q))
-        : MCP_CATALOG,
-    [q],
-  );
+  // Categories actually present in the curated catalog (no empty filter chips).
+  const categories = useMemo<McpCategory[]>(() => {
+    const order: McpCategory[] = ['developer', 'observability', 'data', 'productivity', 'reference'];
+    const present = new Set(MCP_CATALOG.map((e) => e.category));
+    return order.filter((c) => present.has(c));
+  }, []);
+
+  const filtered = useMemo(() => {
+    const q = query.trim().toLowerCase();
+    return MCP_CATALOG.filter((e) => {
+      if (category && e.category !== category) return false;
+      if (!q) return true;
+      return (
+        e.name.toLowerCase().includes(q) ||
+        e.description.toLowerCase().includes(q) ||
+        e.category.toLowerCase().includes(q)
+      );
+    });
+  }, [query, category]);
+
+  const resetFilters = useCallback(() => { setQuery(''); setCategory(null); }, []);
+  const hasFilters = query.trim() !== '' || category !== null;
 
   return (
     <div>
@@ -444,52 +505,95 @@ export function McpCatalogBrowser({
         automatically — no further setup.
       </Body1>
       <DeployedServers servers={deployedServers} onChanged={() => onChanged?.()} />
-      <div className={s.browseHead}>
-        <Caption1 className={s.count}>
-          {q ? `${filtered.length} of ${MCP_CATALOG.length}` : `${MCP_CATALOG.length} server${MCP_CATALOG.length === 1 ? '' : 's'} available`}
-        </Caption1>
-        <Input
-          className={s.filter}
-          size="small"
-          value={filter}
-          onChange={(_, d) => setFilter(d.value)}
-          contentBefore={<Search20Regular />}
-          placeholder="Filter library…"
-          aria-label="Filter the MCP server library"
+
+      <div className={s.toolbar}>
+        <SearchBox
+          className={s.search}
+          placeholder="Search servers…"
+          value={query}
+          aria-label="Search MCP catalog"
+          onChange={(_, d) => setQuery(d.value)}
         />
+        <div className={s.chips} role="group" aria-label="Filter by category">
+          {categories.map((c) => {
+            const active = category === c;
+            return (
+              <span
+                key={c}
+                role="button"
+                tabIndex={0}
+                aria-pressed={active}
+                className={mergeClasses(s.chip, active && s.chipActive)}
+                onClick={() => setCategory(active ? null : c)}
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); setCategory(active ? null : c); }
+                }}
+              >
+                {CATEGORY_LABEL[c]}
+              </span>
+            );
+          })}
+        </div>
       </div>
+
+      <Caption1 className={s.count} aria-live="polite">
+        {filtered.length} {filtered.length === 1 ? 'server' : 'servers'}
+        {hasFilters ? ` of ${MCP_CATALOG.length}` : ''}
+      </Caption1>
+
       {filtered.length === 0 ? (
-        <div className={s.emptyState}>
-          <SearchInfo24Regular className={s.emptyIcon} />
-          <Text weight="semibold">No servers match “{filter}”</Text>
-          <Button appearance="subtle" size="small" onClick={() => setFilter('')}>Clear filter</Button>
+        <div className={s.empty}>
+          <SearchInfo24Regular className={s.emptyIcon} fontSize={32} />
+          <Body1>No servers match your search.</Body1>
+          <Caption1>Try a different keyword or clear the filters.</Caption1>
+          <Button appearance="secondary" size="small" onClick={resetFilters}>Clear filters</Button>
         </div>
       ) : (
-      <div className={s.grid}>
-        {filtered.map((entry) => (
-          <Card key={entry.id} className={s.card}>
-            <CardHeader
-              image={<span className={s.iconWrap}>{CATEGORY_GLYPH[entry.category]}</span>}
-              header={<Text weight="semibold">{entry.name}</Text>}
-              description={<Caption1>{entry.category}</Caption1>}
-            />
-            <Text className={s.cardDesc} size={200}>{entry.description}</Text>
-            <div className={s.cardBadges}>
-              {egressBadge(entryEgress(entry))}
-              {maintainerBadge(entry.maintainer)}
-              {entry.preview && <Badge appearance="tint" color="warning" size="small">Preview</Badge>}
-              {entry.configSchema.some((f) => f.secret) && (
-                <Badge appearance="outline" color="brand" size="small">Key Vault secret</Badge>
-              )}
-            </div>
-            <div className={s.cardActions}>
-              <Button appearance="primary" size="small" icon={<Rocket20Regular />} onClick={() => setSelected(entry)}>
-                Deploy
-              </Button>
-            </div>
-          </Card>
-        ))}
-      </div>
+        <div className={s.grid}>
+          {filtered.map((entry) => {
+            const gov = govMetaFor(entry.id);
+            return (
+            <Card key={entry.id} className={s.card}>
+              <CardHeader
+                image={<span className={s.iconWrap}>{CATEGORY_GLYPH[entry.category]}</span>}
+                header={<Text weight="semibold">{entry.name}</Text>}
+                description={<Caption1>{CATEGORY_LABEL[entry.category]}</Caption1>}
+              />
+              <Text className={s.cardDesc} size={200}>{entry.description}</Text>
+              <div className={s.cardMeta}>
+                {egressBadge(entryEgress(entry))}
+                {maintainerBadge(entry.maintainer)}
+                {entry.preview && <Badge appearance="tint" color="warning" size="small">Preview</Badge>}
+                {gov && !gov.airGapSafe && gov.govSafe && (
+                  <Badge appearance="outline" color="success" size="small">Gov-safe</Badge>
+                )}
+                {gov && <Badge appearance="outline" color="informative" size="small">{gov.license}</Badge>}
+                {entry.configSchema.some((f) => f.secret) && (
+                  <Badge appearance="outline" color="brand" size="small">Key Vault secret</Badge>
+                )}
+                <Badge appearance="ghost" color="informative" size="small">{entry.transport.toUpperCase()}</Badge>
+              </div>
+              <div className={s.cardFoot}>
+                {entry.docsUrl && (
+                  <Link
+                    className={s.docsLink}
+                    href={entry.docsUrl}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    onClick={(e) => e.stopPropagation()}
+                  >
+                    View source <Open16Regular />
+                  </Link>
+                )}
+                <div className={s.spacer} />
+                <Button appearance="primary" size="small" icon={<Rocket20Regular />} onClick={() => setSelected(entry)}>
+                  Deploy
+                </Button>
+              </div>
+            </Card>
+            );
+          })}
+        </div>
       )}
 
       {selected && (

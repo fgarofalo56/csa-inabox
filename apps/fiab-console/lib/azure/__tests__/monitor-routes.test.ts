@@ -194,6 +194,22 @@ describe('GET /api/monitor/activities', () => {
     expect(sent.query).toContain('SynapseIntegrationPipelineRuns');
   });
 
+  it('derives Submitter from the SystemParameters blob, never a bare TriggerName column', async () => {
+    // ADFPipelineRun has NO TriggerName column (only SystemParameters, a
+    // dynamic JSON blob). A bare `Submitter=TriggerName` projection 500s on a
+    // real Dedicated workspace with "Failed to resolve column 'TriggerName'".
+    // The column-name mock in laBody() can't catch that, so assert the KQL the
+    // client actually sends references SystemParameters and not a bare column.
+    const fetchMock = stubFetch(() => ({ body: laBody() }));
+    const { GET } = await import('@/app/api/monitor/activities/route');
+    await GET(req('GET', 'https://loom.test/api/monitor/activities'));
+    const laCall = fetchMock.mock.calls.find((c) => String(c[0]).includes('/query'));
+    const sent = JSON.parse(String((laCall![1] as RequestInit).body));
+    expect(sent.query).toContain('parse_json(SystemParameters)');
+    // No bare TriggerName column reference on the ADFPipelineRun projection.
+    expect(sent.query).not.toMatch(/Submitter\s*=\s*TriggerName\b/);
+  });
+
   it('omits the Synapse union when synapse=0', async () => {
     const fetchMock = stubFetch(() => ({ body: laBody() }));
     const { GET } = await import('@/app/api/monitor/activities/route');

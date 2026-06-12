@@ -57,6 +57,8 @@ const useStyles = makeStyles({
   dirDropdown: { minWidth: 124 },
   actionsRow: { display: 'flex', gap: tokens.spacingHorizontalM },
   flex1: { flex: 1 },
+  matchOk: { color: tokens.colorPaletteGreenForeground1 },
+  matchWarn: { color: tokens.colorPaletteRedForeground1 },
 });
 
 /** Compact SQL type rendering for the column pickers (e.g. nvarchar(50)). */
@@ -108,6 +110,15 @@ export interface SqlConstraintBuilderProps {
   existingConstraints: SqlConstraintRow[];
   /** Whether the table already has a clustered index (PK/UQ clustered gating). */
   hasClusteredIndex: boolean;
+  /**
+   * TDS backend dialect of the bound connection. `sqldb` (default) is the full
+   * engine (Azure SQL Database / Fabric SQL database — all four types ENFORCED).
+   * `warehouse` (Fabric Warehouse / SQL analytics endpoint) and
+   * `synapse-dedicated` (Synapse dedicated SQL pool) only accept metadata-only
+   * constraints: PK/UNIQUE are forced NONCLUSTERED NOT ENFORCED, CHECK is
+   * unsupported, and FOREIGN KEY is unsupported on a dedicated pool.
+   */
+  backendKind?: 'sqldb' | 'warehouse' | 'synapse-dedicated';
   /** URL param string shared with the parent's BFF routes. */
   q: string;
 }
@@ -122,9 +133,18 @@ const REF_ACTIONS: Array<{ key: RefAction; label: string }> = [
 export function SqlConstraintBuilder(props: SqlConstraintBuilderProps) {
   const {
     open, onClose, onCreated, tableObjectId, tableFullName, tableName,
-    columns, existingConstraints, hasClusteredIndex, q,
+    columns, existingConstraints, hasClusteredIndex, backendKind = 'sqldb', q,
   } = props;
   const s = useStyles();
+
+  // Fabric Warehouse / Synapse dedicated pool only accept metadata-only
+  // constraints (NONCLUSTERED NOT ENFORCED), no CHECK, no WITH (NO)CHECK; a
+  // dedicated pool additionally rejects FOREIGN KEY entirely.
+  const metadataOnly = backendKind === 'warehouse' || backendKind === 'synapse-dedicated';
+  const fkUnsupported = backendKind === 'synapse-dedicated';
+  const backendLabel = backendKind === 'warehouse'
+    ? 'Fabric Warehouse / SQL analytics endpoint'
+    : backendKind === 'synapse-dedicated' ? 'Synapse dedicated SQL pool' : '';
 
   const [tab, setTab] = useState<Tab4>('PK');
   const [busy, setBusy] = useState(false);
@@ -163,7 +183,8 @@ export function SqlConstraintBuilder(props: SqlConstraintBuilderProps) {
     if (!open) return;
     setTab(pkExists ? 'UQ' : 'PK');
     setError(null); setBusy(false);
-    setKeyCols([]); setClustered(!hasClusteredIndex);
+    // On a metadata-only backend a clustered PK/UQ is impossible — keep it off.
+    setKeyCols([]); setClustered(!metadataOnly && !hasClusteredIndex);
     setPkName(`PK_${tableName}`);
     setUqName(`UQ_${tableName}`);
     setFkCols([]); setRefTableId(null); setRefCols([]);
@@ -171,7 +192,7 @@ export function SqlConstraintBuilder(props: SqlConstraintBuilderProps) {
     setFkName(`FK_${tableName}`);
     setTables(null); setRefColumns(null);
     setCkName(`CK_${tableName}`); setCkExpr(''); setCkNoCheck(false);
-  }, [open, tableName, hasClusteredIndex, pkExists]);
+  }, [open, tableName, hasClusteredIndex, pkExists, metadataOnly]);
 
   // Lazy-load the table list once the FK tab is shown.
   useEffect(() => {
@@ -253,9 +274,22 @@ export function SqlConstraintBuilder(props: SqlConstraintBuilderProps) {
             <TabList selectedValue={tab} onTabSelect={(_, d) => { setError(null); setTab(d.value as Tab4); }} size="small">
               <Tab value="PK" icon={<KeyMultiple20Regular />} disabled={pkExists}>Primary key</Tab>
               <Tab value="UQ">Unique</Tab>
-              <Tab value="FK" icon={<Link20Regular />}>Foreign key</Tab>
-              <Tab value="CK" icon={<Checkmark20Regular />}>Check</Tab>
+              <Tab value="FK" icon={<Link20Regular />} disabled={fkUnsupported}>Foreign key</Tab>
+              <Tab value="CK" icon={<Checkmark20Regular />} disabled={metadataOnly}>Check</Tab>
             </TabList>
+
+            {metadataOnly && (
+              <MessageBar intent="info">
+                <MessageBarBody>
+                  <MessageBarTitle>{backendLabel}</MessageBarTitle>
+                  Keys are created as <strong>NONCLUSTERED&nbsp;NOT&nbsp;ENFORCED</strong> metadata constraints — the engine
+                  uses them for query optimization but does not enforce uniqueness or referential integrity.
+                  {fkUnsupported
+                    ? ' CHECK and FOREIGN KEY constraints are not supported here.'
+                    : ' CHECK constraints are not supported here.'}
+                </MessageBarBody>
+              </MessageBar>
+            )}
 
             {error && <MessageBar intent="error"><MessageBarBody><MessageBarTitle>Could not add constraint</MessageBarTitle>{error}</MessageBarBody></MessageBar>}
 
@@ -272,7 +306,8 @@ export function SqlConstraintBuilder(props: SqlConstraintBuilderProps) {
                   <div className={s.colList}>
                     {columns.length === 0 && <Caption1 className={s.hint}>No columns on this table.</Caption1>}
                     {columns.map((c) => {
-                      const sel = keyCols.find((k) => k.columnId === c.columnId);
+                      const selIdx = keyCols.findIndex((k) => k.columnId === c.columnId);
+                      const sel = selIdx >= 0 ? keyCols[selIdx] : undefined;
                       // A PK column must be NOT NULL; nullable columns are unselectable on the PK tab.
                       const pkBlocked = tab === 'PK' && c.isNullable;
                       return (
@@ -287,6 +322,7 @@ export function SqlConstraintBuilder(props: SqlConstraintBuilderProps) {
                           <span className={s.colName}>{c.name}</span>
                           <span className={s.colType}>{shortType(c)}</span>
                           {pkBlocked && <Badge size="small" appearance="outline" color="warning">nullable</Badge>}
+                          {sel && <Badge size="small" appearance="tint" color="brand">{selIdx + 1}</Badge>}
                           {sel && (
                             <Dropdown
                               size="small"
@@ -305,12 +341,18 @@ export function SqlConstraintBuilder(props: SqlConstraintBuilderProps) {
                     })}
                   </div>
                 </Field>
-                <Checkbox
-                  checked={clustered}
-                  disabled={hasClusteredIndex}
-                  onChange={(_, d) => setClustered(!!d.checked)}
-                  label={hasClusteredIndex ? 'Clustered (a clustered index already exists — this will be NONCLUSTERED)' : 'Clustered index'}
-                />
+                {metadataOnly ? (
+                  <Caption1 className={s.hint}>
+                    NONCLUSTERED NOT ENFORCED (required on {backendLabel}).
+                  </Caption1>
+                ) : (
+                  <Checkbox
+                    checked={clustered}
+                    disabled={hasClusteredIndex}
+                    onChange={(_, d) => setClustered(!!d.checked)}
+                    label={hasClusteredIndex ? 'Clustered (a clustered index already exists — this will be NONCLUSTERED)' : 'Clustered index'}
+                  />
+                )}
               </div>
             )}
 
@@ -378,22 +420,37 @@ export function SqlConstraintBuilder(props: SqlConstraintBuilderProps) {
                           })}
                         </div>
                       )}
+                    {refColumns !== 'loading' && fkCols.length > 0 && (
+                      <Caption1 className={refCols.length === fkCols.length ? s.matchOk : s.matchWarn}>
+                        {refCols.length === fkCols.length
+                          ? `Matched ${refCols.length} column${refCols.length === 1 ? '' : 's'}.`
+                          : `Select ${fkCols.length} referenced column${fkCols.length === 1 ? '' : 's'} to match (${refCols.length} of ${fkCols.length} selected).`}
+                      </Caption1>
+                    )}
                   </Field>
                 )}
-                <div className={s.actionsRow}>
-                  <Field label="On delete" className={s.flex1}>
-                    <Dropdown value={REF_ACTIONS.find((a) => a.key === onDelete)?.label} selectedOptions={[onDelete]} onOptionSelect={(_, d) => setOnDelete(d.optionValue as RefAction)}>
-                      {REF_ACTIONS.map((a) => <Option key={a.key} value={a.key}>{a.label}</Option>)}
-                    </Dropdown>
-                  </Field>
-                  <Field label="On update" className={s.flex1}>
-                    <Dropdown value={REF_ACTIONS.find((a) => a.key === onUpdate)?.label} selectedOptions={[onUpdate]} onOptionSelect={(_, d) => setOnUpdate(d.optionValue as RefAction)}>
-                      {REF_ACTIONS.map((a) => <Option key={a.key} value={a.key}>{a.label}</Option>)}
-                    </Dropdown>
-                  </Field>
-                </div>
-                <Checkbox checked={fkNoCheck} onChange={(_, d) => setFkNoCheck(!!d.checked)} label="Skip validation of existing data (WITH NOCHECK)" />
-                {fkNoCheck && <MessageBar intent="warning"><MessageBarBody>Existing rows will not be validated; the constraint is created as <strong>not trusted</strong> (the optimizer ignores it until you re-validate).</MessageBarBody></MessageBar>}
+                {metadataOnly ? (
+                  <Caption1 className={s.hint}>
+                    NOT ENFORCED (required on {backendLabel}); ON DELETE/UPDATE actions do not apply.
+                  </Caption1>
+                ) : (
+                  <>
+                    <div className={s.actionsRow}>
+                      <Field label="On delete" className={s.flex1}>
+                        <Dropdown value={REF_ACTIONS.find((a) => a.key === onDelete)?.label} selectedOptions={[onDelete]} onOptionSelect={(_, d) => setOnDelete(d.optionValue as RefAction)}>
+                          {REF_ACTIONS.map((a) => <Option key={a.key} value={a.key}>{a.label}</Option>)}
+                        </Dropdown>
+                      </Field>
+                      <Field label="On update" className={s.flex1}>
+                        <Dropdown value={REF_ACTIONS.find((a) => a.key === onUpdate)?.label} selectedOptions={[onUpdate]} onOptionSelect={(_, d) => setOnUpdate(d.optionValue as RefAction)}>
+                          {REF_ACTIONS.map((a) => <Option key={a.key} value={a.key}>{a.label}</Option>)}
+                        </Dropdown>
+                      </Field>
+                    </div>
+                    <Checkbox checked={fkNoCheck} onChange={(_, d) => setFkNoCheck(!!d.checked)} label="Skip validation of existing data (WITH NOCHECK)" />
+                    {fkNoCheck && <MessageBar intent="warning"><MessageBarBody>Existing rows will not be validated; the constraint is created as <strong>not trusted</strong> (the optimizer ignores it until you re-validate).</MessageBarBody></MessageBar>}
+                  </>
+                )}
               </div>
             )}
 

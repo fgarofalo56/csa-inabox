@@ -61,6 +61,15 @@ policy. A read-only pre-check is also exposed at
 `POST /api/items/event-schema-set/{id}/check-compat` (returns
 `{ compatible, violations, checkedVia }` without persisting).
 
+The Register-version dialog runs this pre-check **live**: a debounced (500ms)
+call fires automatically on every schema or subject edit and reports the result
+in a MessageBar — the author sees breaking changes as they type, with no button
+press. The live call passes `dryRunInProcess:true`, which forces the in-process
+validator even when EH SR is configured, so rapid edits never PUT speculative
+versions into the Event Hubs data plane. The explicit **Check compatibility**
+button and the enforced register path still use the auto-selected backend (EH SR
+when configured), so EH SR remains the authority before a version is persisted.
+
 EH SR only evolution-checks **Avro**; JSON Schema and Protobuf sets use
 `NONE` semantics (always compatible), matching the real service.
 

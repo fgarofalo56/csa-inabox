@@ -205,7 +205,14 @@ module databricksStorageRbac 'databricks-storage-rbac.bicep' = {
 //     scripts/csa-loom/enable-unity-catalog.sh — keep the two in sync.
 // =====================================================================
 
-module databricksUcBootstrap 'databricks-uc-bootstrap.bicep' = if (databricks.outputs.ucSupported && !empty(databricksAccountId) && !empty(databricksUcScriptUamiId) && !empty(consoleUamiAppId)) {
+// Unity Catalog is supported only on Commercial + GCC (mirrors the
+// `ucSupported` var in databricks.bicep). Compute it locally from the boundary
+// param so the module `if`-condition is resolvable at the START of deployment —
+// reading databricks.outputs.ucSupported here triggers BCP177 (module outputs
+// are not known up-front) and fails `az bicep build` for every boundary.
+var dlzUcSupported = boundary == 'Commercial' || boundary == 'GCC'
+
+module databricksUcBootstrap 'databricks-uc-bootstrap.bicep' = if (dlzUcSupported && !empty(databricksAccountId) && !empty(databricksUcScriptUamiId) && !empty(consoleUamiAppId)) {
   name: 'dlz-databricks-uc-bootstrap'
   params: {
     location: location

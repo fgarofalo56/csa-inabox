@@ -7,6 +7,7 @@ import {
   getArmHost,
   getCosmosSuffix,
   getSearchSuffix,
+  searchAadScope,
   getGraphHost,
   getGraphScope,
   getSqlSuffix,
@@ -108,6 +109,12 @@ const TABLE: Record<string, Record<(typeof CLOUDS)[number], string>> = {
     GCC: 'search.windows.net',
     'GCC-High': 'search.azure.us',
     DoD: 'search.azure.us',
+  },
+  searchAadScope: {
+    Commercial: 'https://search.azure.com/.default',
+    GCC: 'https://search.azure.com/.default',
+    'GCC-High': 'https://search.azure.us/.default',
+    DoD: 'https://search.azure.us/.default',
   },
   getGraphHost: {
     Commercial: 'https://graph.microsoft.com',
@@ -242,6 +249,7 @@ const FNS: Record<string, () => string> = {
   getArmEndpoint,
   getCosmosSuffix,
   getSearchSuffix,
+  searchAadScope,
   getGraphHost,
   getGraphScope,
   getSqlSuffix,

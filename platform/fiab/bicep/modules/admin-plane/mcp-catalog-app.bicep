@@ -32,6 +32,9 @@ param image string
 @description('Internal ingress target port the server listens on.')
 param targetPort int
 
+@description('Health probe path (separate from the MCP endpoint, e.g. /health or /healthz).')
+param healthPath string = '/health'
+
 @description('Optional entrypoint override (argv[0]).')
 param command array = []
 
@@ -50,7 +53,9 @@ param secretEnvVars array = []
 @description('Compliance tags.')
 param complianceTags object = {}
 
-resource app 'Microsoft.App/containerApps@2024-03-01' = {
+// Pinned to the same Container Apps api-version the runtime deploy client uses
+// (lib/azure/mcp-deploy-client.ts) and mcp-storage.bicep — bicep+bootstrap sync.
+resource app 'Microsoft.App/containerApps@2025-02-02-preview' = {
   name: name
   location: location
   tags: complianceTags
@@ -89,6 +94,32 @@ resource app 'Microsoft.App/containerApps@2024-03-01' = {
             cpu: json('0.5')
             memory: '1Gi'
           }
+          // Probe the dedicated health path, never the MCP JSON-RPC endpoint
+          // (learn.microsoft.com/azure/container-apps/mcp-overview).
+          probes: [
+            {
+              type: 'Liveness'
+              httpGet: {
+                path: healthPath
+                port: targetPort
+                scheme: 'HTTP'
+              }
+              initialDelaySeconds: 10
+              periodSeconds: 30
+              failureThreshold: 3
+            }
+            {
+              type: 'Readiness'
+              httpGet: {
+                path: healthPath
+                port: targetPort
+                scheme: 'HTTP'
+              }
+              initialDelaySeconds: 5
+              periodSeconds: 15
+              failureThreshold: 6
+            }
+          ]
         }
       ]
       scale: {
