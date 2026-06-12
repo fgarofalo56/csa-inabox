@@ -26,6 +26,10 @@ export const meta = {
 
 const REPO = '/e/Repos/GitHub/csa-inabox'
 const COAUTHOR = 'Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>'
+// HARNESS QUIRK: some sessions deliver `args` as a JSON-encoded STRING (confirmed
+// by zero-agent probe 2026-06-12) — which made args.* undefined and caused the
+// 115-task unscoped rebuild. Coerce before any use.
+if (typeof args === 'string') { try { args = JSON.parse(args) } catch (e) { log('args parse failed: ' + e) } }
 const BATCH = (args && Number(args.batch)) || 8
 const BUILD_MODE = (args && args.build) || 'batch' // 'batch' | 'final' | 'each'
 
