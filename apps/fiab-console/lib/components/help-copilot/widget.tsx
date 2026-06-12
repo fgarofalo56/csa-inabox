@@ -29,6 +29,7 @@ import {
 import type { Citation } from './citations';
 import { CopilotDiff, type ProposedChange } from '../copilot-diff';
 import { applyChange } from '@/lib/copilot/apply-change';
+import { receiptScopeFromTutorialId } from './tutorial-scope';
 
 const EVT_OPEN = 'csaloom:open-copilot';
 const EVT_TOGGLE = 'csaloom:toggle-copilot';
@@ -242,9 +243,13 @@ export function HelpCopilotWidget() {
           context: {
             ...pageCtx,
             tutorial: tutorial ?? undefined,
+            // Receipt scope priority: the route-bound open item, else the item
+            // encoded in the active editor tutorial's id. Either way the agent's
+            // readReceipts tool resolves to a concrete item for auto-error
+            // detection; absent both, it honestly reports "No item in context".
             receiptScope: pageCtx.itemId
               ? { itemId: pageCtx.itemId, itemType: pageCtx.itemType, workspaceId: pageCtx.workspaceId }
-              : undefined,
+              : receiptScopeFromTutorialId(tutorial?.id),
           },
         }),
       });
