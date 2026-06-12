@@ -22,7 +22,7 @@ import {
   MessageBar, MessageBarBody, MessageBarTitle,
   Dialog, DialogSurface, DialogTitle, DialogBody, DialogContent, DialogActions,
   Field, Dropdown, Option, Tooltip,
-  TabList, Tab, makeStyles, tokens,
+  TabList, Tab, makeStyles, mergeClasses, tokens,
 } from '@fluentui/react-components';
 import {
   Database20Regular, Server20Regular, Play20Regular, Add20Regular,
@@ -139,6 +139,38 @@ const useStyles = makeStyles({
     backgroundColor: tokens.colorNeutralBackground1,
     overflow: 'hidden',
   },
+  // Databases master table — clickable rows that drive the schema browser.
+  dbTableToolbar: {
+    display: 'flex',
+    alignItems: 'center',
+    gap: tokens.spacingHorizontalS,
+    flexWrap: 'wrap',
+  },
+  dbSearch: { minWidth: 220, maxWidth: 320 },
+  dbCount: { marginLeft: 'auto', color: tokens.colorNeutralForeground3 },
+  sortHeader: {
+    cursor: 'pointer',
+    userSelect: 'none',
+    ':hover': { color: tokens.colorNeutralForeground1 },
+  },
+  dbRow: {
+    cursor: 'pointer',
+    ':hover': { backgroundColor: tokens.colorNeutralBackground1Hover },
+  },
+  dbRowSelected: {
+    backgroundColor: tokens.colorNeutralBackground1Selected,
+    ':hover': { backgroundColor: tokens.colorNeutralBackground1Selected },
+  },
+  dbEmpty: {
+    display: 'flex',
+    flexDirection: 'column',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: tokens.spacingVerticalXS,
+    padding: tokens.spacingVerticalXXL,
+    color: tokens.colorNeutralForeground3,
+    textAlign: 'center',
+  },
 });
 
 interface QueryResponse {
@@ -250,6 +282,9 @@ export function AzureSqlServerEditor({ item, id }: { item: FabricItemType; id: s
   // cross-database query, so each db is browsed on its own connection).
   const [selectedDb, setSelectedDb] = useState<string | null>(null);
   const [browserRefreshKey, setBrowserRefreshKey] = useState(0);
+  // Databases master-table filter + sort (client-side over the ARM list).
+  const [dbFilter, setDbFilter] = useState('');
+  const [dbSort, setDbSort] = useState<{ col: 'name' | 'status' | 'sku'; dir: 'asc' | 'desc' }>({ col: 'name', dir: 'asc' });
 
   // Firewall dialog
   const [fwOpen, setFwOpen] = useState(false);
@@ -378,6 +413,33 @@ export function AzureSqlServerEditor({ item, id }: { item: FabricItemType; id: s
     } catch (e: any) { setError(e?.message || String(e)); }
   }, [id]);
 
+  // Client-side filter + sort over the ARM database list.
+  const visibleDatabases = useMemo(() => {
+    const q = dbFilter.trim().toLowerCase();
+    const filtered = q
+      ? databases.filter((d) =>
+          d.name.toLowerCase().includes(q) ||
+          (d.status || '').toLowerCase().includes(q) ||
+          (d.sku?.name || '').toLowerCase().includes(q))
+      : databases;
+    const val = (d: typeof databases[number]) =>
+      dbSort.col === 'name' ? d.name : dbSort.col === 'status' ? (d.status || '') : (d.sku?.name || '');
+    const sorted = [...filtered].sort((a, b) =>
+      val(a).localeCompare(val(b), undefined, { sensitivity: 'base', numeric: true }));
+    return dbSort.dir === 'desc' ? sorted.reverse() : sorted;
+  }, [databases, dbFilter, dbSort]);
+
+  const toggleSort = useCallback((col: 'name' | 'status' | 'sku') => {
+    setDbSort((prev) => prev.col === col
+      ? { col, dir: prev.dir === 'asc' ? 'desc' : 'asc' }
+      : { col, dir: 'asc' });
+  }, []);
+
+  const openDb = useCallback((name: string) => {
+    setSelectedDb(name);
+    setBrowserRefreshKey((k) => k + 1);
+  }, []);
+
   const ribbon: RibbonTab[] = useMemo(() => [
     { id: 'home', label: 'Home', groups: [
       { label: 'Databases', actions: [
@@ -411,9 +473,14 @@ export function AzureSqlServerEditor({ item, id }: { item: FabricItemType; id: s
                         {sv.name}
                       </TreeItemLayout>
                       <Tree>
-                        {isSelected && databases.length === 0 && (
+                        {isSelected && !loading && databases.length === 0 && (
                           <TreeItem itemType="leaf" value={`${sv.id}::nodb`}>
-                            <TreeItemLayout><Caption1>No databases (or not loaded yet)</Caption1></TreeItemLayout>
+                            <TreeItemLayout><Caption1>No databases on this server</Caption1></TreeItemLayout>
+                          </TreeItem>
+                        )}
+                        {isSelected && loading && (
+                          <TreeItem itemType="leaf" value={`${sv.id}::loading`}>
+                            <TreeItemLayout><Spinner size="tiny" label="Loading databases…" labelPosition="after" /></TreeItemLayout>
                           </TreeItem>
                         )}
                         {isSelected && databases.map((d) => (
@@ -421,7 +488,8 @@ export function AzureSqlServerEditor({ item, id }: { item: FabricItemType; id: s
                             key={`${sv.id}::${d.name}`}
                             itemType="leaf"
                             value={`${sv.id}::${d.name}`}
-                            onClick={() => { setSelectedDb(d.name); setBrowserRefreshKey((k) => k + 1); }}
+                            aria-selected={d.name === selectedDb}
+                            onClick={() => openDb(d.name)}
                           >
                             <TreeItemLayout iconBefore={<Database20Regular />}>{d.name}</TreeItemLayout>
                           </TreeItem>
@@ -521,29 +589,88 @@ export function AzureSqlServerEditor({ item, id }: { item: FabricItemType; id: s
               </Body1>
               <Body1>AAD admin login: <code>{selected.administratorLogin || '— set via Microsoft.Sql/servers/administrators —'}</code></Body1>
 
-              <Subtitle2 style={{ marginTop: 12 }}>Databases ({databases.length})</Subtitle2>
-              <div className={s.tableWrap}>
-                <Table aria-label="Databases" size="small">
-                  <TableHeader><TableRow>
-                    <TableHeaderCell>Name</TableHeaderCell>
-                    <TableHeaderCell>Status</TableHeaderCell>
-                    <TableHeaderCell>SKU</TableHeaderCell>
-                  </TableRow></TableHeader>
-                  <TableBody>
-                    {databases.map((d) => (
-                      <TableRow
-                        key={d.name}
-                        onClick={() => { setSelectedDb(d.name); setBrowserRefreshKey((k) => k + 1); }}
-                        style={{ cursor: 'pointer', background: d.name === selectedDb ? tokens.colorNeutralBackground1Selected : undefined }}
-                      >
-                        <TableCell><strong>{d.name}</strong></TableCell>
-                        <TableCell>{d.status || '—'}</TableCell>
-                        <TableCell>{d.sku?.name || '—'}</TableCell>
-                      </TableRow>
-                    ))}
-                  </TableBody>
-                </Table>
+              <div className={s.dbTableToolbar} style={{ marginTop: 12 }}>
+                <Subtitle2>Databases</Subtitle2>
+                <Input
+                  size="small"
+                  className={s.dbSearch}
+                  placeholder="Filter databases…"
+                  value={dbFilter}
+                  onChange={(_, d) => setDbFilter(d.value)}
+                  contentBefore={<DocumentSearch20Regular />}
+                  contentAfter={dbFilter
+                    ? <Button size="small" appearance="transparent" icon={<Dismiss20Regular />} aria-label="Clear filter" onClick={() => setDbFilter('')} />
+                    : undefined}
+                  aria-label="Filter databases"
+                />
+                <Caption1 className={s.dbCount}>
+                  {dbFilter ? `${visibleDatabases.length} of ${databases.length}` : `${databases.length}`} database{databases.length === 1 ? '' : 's'}
+                </Caption1>
               </div>
+              {loading ? (
+                <div className={s.tableWrap}>
+                  <Spinner size="small" label="Loading databases…" labelPosition="after" style={{ padding: 24 }} />
+                </div>
+              ) : databases.length === 0 ? (
+                <div className={s.tableWrap}>
+                  <div className={s.dbEmpty}>
+                    <Database20Regular />
+                    <Body1>No databases on <strong>{selected.name}</strong></Body1>
+                    <Caption1>Create one with <code>az sql db create</code> or in the portal, then Refresh.</Caption1>
+                  </div>
+                </div>
+              ) : visibleDatabases.length === 0 ? (
+                <div className={s.tableWrap}>
+                  <div className={s.dbEmpty}>
+                    <DocumentSearch20Regular />
+                    <Body1>No databases match <strong>“{dbFilter}”</strong></Body1>
+                    <Button size="small" appearance="subtle" onClick={() => setDbFilter('')}>Clear filter</Button>
+                  </div>
+                </div>
+              ) : (
+                <div className={s.tableWrap}>
+                  <Table aria-label="Databases" size="small" sortable>
+                    <TableHeader><TableRow>
+                      <TableHeaderCell
+                        className={s.sortHeader}
+                        sortDirection={dbSort.col === 'name' ? (dbSort.dir === 'asc' ? 'ascending' : 'descending') : undefined}
+                        onClick={() => toggleSort('name')}
+                      >Name</TableHeaderCell>
+                      <TableHeaderCell
+                        className={s.sortHeader}
+                        sortDirection={dbSort.col === 'status' ? (dbSort.dir === 'asc' ? 'ascending' : 'descending') : undefined}
+                        onClick={() => toggleSort('status')}
+                      >Status</TableHeaderCell>
+                      <TableHeaderCell
+                        className={s.sortHeader}
+                        sortDirection={dbSort.col === 'sku' ? (dbSort.dir === 'asc' ? 'ascending' : 'descending') : undefined}
+                        onClick={() => toggleSort('sku')}
+                      >SKU</TableHeaderCell>
+                    </TableRow></TableHeader>
+                    <TableBody>
+                      {visibleDatabases.map((d) => {
+                        const isSel = d.name === selectedDb;
+                        return (
+                          <TableRow
+                            key={d.name}
+                            role="button"
+                            tabIndex={0}
+                            aria-selected={isSel}
+                            aria-label={`Browse schema of ${d.name}`}
+                            className={mergeClasses(s.dbRow, isSel && s.dbRowSelected)}
+                            onClick={() => openDb(d.name)}
+                            onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); openDb(d.name); } }}
+                          >
+                            <TableCell><strong>{d.name}</strong></TableCell>
+                            <TableCell>{d.status || '—'}</TableCell>
+                            <TableCell>{d.sku?.name || '—'}</TableCell>
+                          </TableRow>
+                        );
+                      })}
+                    </TableBody>
+                  </Table>
+                </div>
+              )}
               <Caption1 className={s.schemaHint}>
                 Select a database (here or in the left tree) to browse its schemas, tables, views,
                 stored procedures, and functions over live TDS (<code>sys.*</code>) — opened on a
