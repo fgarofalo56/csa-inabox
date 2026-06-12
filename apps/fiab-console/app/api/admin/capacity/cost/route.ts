@@ -17,6 +17,8 @@ import { NextRequest, NextResponse } from 'next/server';
 import { getSession } from '@/lib/auth/session';
 import { getResourceMonthlyCost } from '@/lib/clients/cost-client';
 import { MonitorError } from '@/lib/azure/monitor-client';
+import { canAccessDlzPanes } from '@/lib/auth/domain-role';
+import { loadTenantDomains } from '@/lib/auth/load-domains';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -26,6 +28,21 @@ export const maxDuration = 60;
 export async function GET(req: NextRequest) {
   const s = getSession();
   if (!s) return NextResponse.json({ ok: false, error: 'unauthenticated' }, { status: 401 });
+
+  // D2: the DLZ cost pane is tenant-admin (global) or domain-admin (their domain's
+  // workspaces) only — domain contributors and unprivileged users can't read it.
+  const domains = await loadTenantDomains(s.claims.oid);
+  if (!(await canAccessDlzPanes(s, domains))) {
+    return NextResponse.json(
+      {
+        ok: false,
+        error: 'forbidden',
+        reason:
+          'The Data Landing Zone cost pane is available to tenant admins and domain admins only. A tenant admin can grant you a domain admin Entra group at /admin/permissions (Domain access).',
+      },
+      { status: 403 },
+    );
+  }
 
   const resourceId = (req.nextUrl.searchParams.get('resourceId') || '').trim();
   if (!resourceId) return NextResponse.json({ ok: false, error: 'resourceId required' }, { status: 400 });

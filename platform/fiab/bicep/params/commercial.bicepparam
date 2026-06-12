@@ -100,6 +100,7 @@ param loomMipEnabled = false
 // honest-gate where the Graph DLP preview isn't enabled.
 param loomDlpEnabled = true
 param loomIdentityPickerEnabled = false
+param loomDomainGroupProvisioningEnabled = false
 param storageRequireCmk = false
 param keyVaultHsmIsolated = false
 

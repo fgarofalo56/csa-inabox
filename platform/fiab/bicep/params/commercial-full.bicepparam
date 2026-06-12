@@ -54,6 +54,7 @@ param loomMipEnabled = bool(readEnvironmentVariable('LOOM_MIP_ENABLED', 'false')
 // DLP tab is wired out of the box. Override with LOOM_DLP_ENABLED=false to gate it.
 param loomDlpEnabled = bool(readEnvironmentVariable('LOOM_DLP_ENABLED', 'true'))
 param loomIdentityPickerEnabled = bool(readEnvironmentVariable('LOOM_IDENTITY_PICKER_ENABLED', 'false'))
+param loomDomainGroupProvisioningEnabled = bool(readEnvironmentVariable('LOOM_DOMAIN_GROUP_PROVISIONING', 'false'))
 // Headless CI Bearer-token path on the deployment-pipeline routes (Azure DevOps /
 // GitHub Actions task — Fabric fabric-devops-pipelines parity). Off by default;
 // set LOOM_PIPELINE_CI_ENABLED=true to let the CSA Loom DevOps task drive deploys.

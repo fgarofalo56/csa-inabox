@@ -23,6 +23,8 @@ import { NextRequest, NextResponse } from 'next/server';
 import { getSession } from '@/lib/auth/session';
 import { resolveWorkspaceRole } from '@/lib/auth/workspace-role';
 import { isTenantAdmin } from '@/lib/auth/feature-gate';
+import { resolveDomainTier, isAtLeastDomainAdmin } from '@/lib/auth/domain-role';
+import { loadTenantDomains } from '@/lib/auth/load-domains';
 import {
   listWorkspaceRoles,
   addWorkspaceRole,
@@ -36,6 +38,30 @@ export const dynamic = 'force-dynamic';
 
 const PRINCIPAL_TYPES: PrincipalType[] = ['User', 'Group', 'ServicePrincipal'];
 
+/**
+ * D2: a DOMAIN ADMIN of the domain that owns this workspace may manage its
+ * members (full control of their domain's workspaces), in addition to the
+ * workspace owner / workspace Admin / tenant admin. Returns false (never throws)
+ * when the workspace has no domain or the domains doc is unreachable.
+ */
+async function callerIsOwningDomainAdmin(
+  session: ReturnType<typeof getSession>,
+  workspace: any,
+): Promise<boolean> {
+  if (!session) return false;
+  const domainId = (workspace?.domain || '').toString().trim();
+  if (!domainId) return false;
+  try {
+    const domains = await loadTenantDomains(session.claims.oid);
+    const domain = domains.find((d) => d.id === domainId);
+    if (!domain) return false;
+    const tier = await resolveDomainTier(session, domain);
+    return isAtLeastDomainAdmin(tier);
+  } catch {
+    return false;
+  }
+}
+
 export async function GET(_req: NextRequest, props: { params: Promise<{ id: string }> }) {
   const { id } = await props.params;
   const s = getSession();
@@ -43,10 +69,11 @@ export async function GET(_req: NextRequest, props: { params: Promise<{ id: stri
   try {
     const { workspace, role } = await resolveWorkspaceRole(id, s.claims.oid, s.claims.upn || s.claims.email);
     if (!workspace) return NextResponse.json({ ok: false, error: 'workspace not found' }, { status: 404 });
-    // Tenant admins (admin-plane "Workspace access") may read any workspace's roster
-    // even when they hold no per-workspace role.
+    // Tenant admins (admin-plane "Workspace access") and DOMAIN ADMINS of the
+    // owning domain may read any workspace's roster even with no per-workspace role.
     const tenantAdmin = isTenantAdmin(s);
-    if (!role && !tenantAdmin) return NextResponse.json({ ok: false, error: 'no access to this workspace' }, { status: 403 });
+    const owningDomainAdmin = !role && !tenantAdmin ? await callerIsOwningDomainAdmin(s, workspace) : false;
+    if (!role && !tenantAdmin && !owningDomainAdmin) return NextResponse.json({ ok: false, error: 'no access to this workspace' }, { status: 403 });
 
     const roleAssignments = await listWorkspaceRoles(id);
     const gate = await checkRbacAdminCapability();
@@ -55,7 +82,7 @@ export async function GET(_req: NextRequest, props: { params: Promise<{ id: stri
       roleAssignments,
       rbacAdminGate: gate.ok ? undefined : gate.detail,
       fabricMode: process.env.LOOM_WORKSPACE_ROLES_FABRIC === '1' ? 'fabric+azure' : 'azure-native',
-      callerRole: tenantAdmin ? 'admin' : role,
+      callerRole: tenantAdmin || owningDomainAdmin ? 'admin' : role,
     });
   } catch (e: any) {
     return NextResponse.json({ ok: false, error: e?.message || String(e) }, { status: 500 });
@@ -69,9 +96,9 @@ export async function POST(req: NextRequest, props: { params: Promise<{ id: stri
   try {
     const { workspace, role } = await resolveWorkspaceRole(id, s.claims.oid, s.claims.upn || s.claims.email);
     if (!workspace) return NextResponse.json({ ok: false, error: 'workspace not found' }, { status: 404 });
-    if (role !== 'admin' && !isTenantAdmin(s)) {
+    if (role !== 'admin' && !isTenantAdmin(s) && !(await callerIsOwningDomainAdmin(s, workspace))) {
       return NextResponse.json(
-        { ok: false, error: 'Only the workspace owner, an Admin, or a tenant admin can add members.', role },
+        { ok: false, error: 'Only the workspace owner, an Admin, a domain admin of the owning domain, or a tenant admin can add members.', role },
         { status: 403 },
       );
     }
