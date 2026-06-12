@@ -1,16 +1,17 @@
 'use client';
 
 /**
- * ConnectSourceDialog — Fabric Real-Time Hub "Get events" / "Connect data
- * source" wizard. Three panes, one-for-one with Fabric:
+ * ConnectSourceDialog — Real-Time hub "Get events" / "Connect data source"
+ * wizard. One-for-one with the Fabric Real-Time hub UI, but Azure-native by
+ * default (no Fabric, per .claude/rules/no-fabric-dependency.md). Three panes:
  *   1. Pick a connector (category list + connector grid).
- *   2. Name the eventstream + target Fabric workspace + fill source-specific
- *      connection fields.
- *   3. POST /api/realtime-hub/connect-source → creates a REAL Fabric
- *      Eventstream item carrying the chosen source.
+ *   2. Name the eventstream + target Loom workspace + fill source-specific
+ *      connection fields (cascading Azure resource selects, KV cert picker).
+ *   3. POST /api/realtime-hub/connect-source → creates a REAL Loom eventstream
+ *      item (Azure Event Hubs backed) carrying the chosen source.
  *
  * No dead buttons: Connect actually calls the BFF; the result (created id
- * or 202 accepted, or a verbatim FabricError) is shown inline.
+ * or 202 accepted, or a verbatim backend error) is shown inline.
  */
 
 import { useEffect, useMemo, useState } from 'react';
@@ -100,7 +101,7 @@ const useStyles = makeStyles({
 });
 
 interface Props {
-  /** Fabric workspaces the UAMI can see — [{id, name}]. */
+  /** Loom workspaces the UAMI can see — [{id, name}]. */
   workspaces: Array<{ id: string; name: string }>;
   /** Pre-selected workspace id (optional). */
   defaultWorkspaceId?: string;

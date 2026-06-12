@@ -115,6 +115,9 @@ const useStyles = makeStyles({
     marginBottom: tokens.spacingVerticalXS,
   },
   emptyText: { maxWidth: '440px' },
+  bar: { marginBottom: tokens.spacingVerticalL },
+  barInline: { marginBottom: tokens.spacingVerticalM },
+  catalogHint: { display: 'block', marginBottom: tokens.spacingVerticalM, color: tokens.colorNeutralForeground3 },
 });
 
 /** Resolve the catalog connector that matches a row's source type. */
@@ -370,7 +373,7 @@ export function RtiHubView() {
           intent="info" (by-design out-of-scope) is deliberately distinct from
           the intent="warning" config infra-gate below. See
           docs/fiab/parity/rti-hub.md + docs/migrations/palantir-foundry. */}
-      <MessageBar intent="info" style={{ marginBottom: 16 }}>
+      <MessageBar intent="info" className={styles.bar}>
         <MessageBarBody>
           <MessageBarTitle>Real-time scope</MessageBarTitle>
           Loom&apos;s real-time path is an Azure-native <b>analytics</b> pipeline —
@@ -426,7 +429,7 @@ export function RtiHubView() {
 
       {/* Honest infra-gate: no subscription configured for Resource Graph */}
       {gate && (
-        <MessageBar intent="warning" style={{ marginBottom: 16 }}>
+        <MessageBar intent="warning" className={styles.bar}>
           <MessageBarBody>
             <MessageBarTitle>Cross-subscription discovery is not configured</MessageBarTitle>
             {gate.error}
@@ -437,13 +440,13 @@ export function RtiHubView() {
       )}
 
       {loadErr && (
-        <MessageBar intent="error" style={{ marginBottom: 16 }}>
+        <MessageBar intent="error" className={styles.bar}>
           <MessageBarBody>{loadErr}</MessageBarBody>
         </MessageBar>
       )}
 
       {data?.warnings && data.warnings.length > 0 && (
-        <MessageBar intent="info" style={{ marginBottom: 16 }}>
+        <MessageBar intent="info" className={styles.bar}>
           <MessageBarBody>
             Partial results — some sources could not be enumerated:{' '}
             {data.warnings.map((w) => `${w.source} (${w.error})`).join('; ')}.
@@ -455,7 +458,7 @@ export function RtiHubView() {
         title="Unified stream catalog"
         actions={<Button appearance="subtle" icon={<ArrowSync20Regular />} onClick={load}>Refresh</Button>}
       >
-        <Caption1 style={{ display: 'block', marginBottom: 12, color: tokens.colorNeutralForeground3 }}>
+        <Caption1 className={styles.catalogHint}>
           Every streaming source across your subscriptions — Event Hubs, IoT Hub, ADX, and Loom eventstreams —
           discovered live via Azure Resource Graph. Click <b>Subscribe</b> on any source to create a real Loom
           eventstream pre-filled with that source. Already-deployed Loom items also offer <b>Preview / test</b>,{' '}
@@ -481,13 +484,13 @@ export function RtiHubView() {
         </div>
 
         {fabricGated && data?.fabricGateReason && tab === 'azureEvents' && (
-          <MessageBar intent="info" style={{ marginBottom: 12 }}>
+          <MessageBar intent="info" className={styles.barInline}>
             <MessageBarBody>{data.fabricGateReason}</MessageBarBody>
           </MessageBar>
         )}
 
         {tab === 'dataStreams' && !loading && rows.length > 0 && (
-          <MessageBar intent="info" style={{ marginBottom: 12 }}>
+          <MessageBar intent="info" className={styles.barInline}>
             <MessageBarBody>
               Rows tagged <b>Eventstream</b>, <b>KQL database</b>, or <b>Eventhouse</b> are deployed Loom items you can{' '}
               preview, test, query, and open. Rows tagged <b>Event Hub</b>, <b>EH namespace</b>, <b>IoT Hub</b>, or{' '}
@@ -508,7 +511,9 @@ export function RtiHubView() {
             <span className={styles.emptyText}>
               {tab === 'dataStreams'
                 ? 'No streams discovered in scope yet. Provision an Event Hubs namespace, IoT Hub, or ADX cluster — or create a Loom eventstream — and it will appear here.'
-                : 'No connectors in this tab.'}
+                : tab === 'azureEvents'
+                ? 'No Azure event connectors are available in this deployment yet. Azure Event Grid sources (Blob Storage events) surface here once configured.'
+                : 'No Fabric event categories are available. These appear only when the Fabric backend is opted in (LOOM_EVENTSTREAM_BACKEND=fabric).'}
             </span>
           </div>
         ) : (
