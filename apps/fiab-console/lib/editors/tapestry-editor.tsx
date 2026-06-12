@@ -3,7 +3,7 @@
 /**
  * Tapestry — investigative graph workspace (the Azure-native Gotham-equivalent).
  *
- * Three coordinated analysis panes over the SAME materialized Node_*/Edge_* ADX
+ * Three coordinated analysis panes over the SAME materialized Node_* / Edge_* ADX
  * tables (no second engine, NO Microsoft Fabric — per no-fabric-dependency.md):
  *
  *   - Link     → force-directed graph from /api/items/tapestry/[id]/link

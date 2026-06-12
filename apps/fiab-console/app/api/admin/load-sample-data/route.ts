@@ -10,7 +10,7 @@
  *   ?kind=graph          → creates `SampleSocialGraph` (Source, Target, EdgeType)
  *                          ready for `make-graph Source --> Target with_node_id=Id`
  *                          + Cypher-style `graph-match` patterns.
- *   ?kind=investigation  → materializes the Node_*/Edge_* tables Tapestry's
+ *   ?kind=investigation  → materializes the Node_* / Edge_* tables Tapestry's
  *                          link/geo/timeline panes discover: Node_Person,
  *                          Node_Org, Node_Location, Node_Event (with name + lat/lon
  *                          on located nodes) and Edge_Knows, Edge_MemberOf,
