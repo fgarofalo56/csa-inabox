@@ -6,7 +6,7 @@
  *
  * Tapestry link-analysis — the investigative graph pane. Azure-native: runs KQL
  * make-graph + graph-match / graph-shortest-paths / graph-mark-components over
- * the materialized Node_*/Edge_* ADX tables (the same tables the gql-graph
+ * the materialized Node_* / Edge_* ADX tables (the same tables the gql-graph
  * editor discovers). NO Microsoft Fabric dependency — ADX is the default and
  * only backend (per no-fabric-dependency.md). Returns rows shaped with
  * Source/Target columns so the client's extractGraph() renders the
