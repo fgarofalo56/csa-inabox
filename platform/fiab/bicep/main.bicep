@@ -24,9 +24,32 @@ param boundary string
 @allowed(['', 'AzureCloud', 'AzureUSGovernment'])
 param loomAzureCloud string = ''
 
-@description('Deployment mode')
+@description('Deployment mode (LEGACY — kept for back-compat). single-sub / multi-sub map onto the explicit `topology` param below when `topology` is empty. Prefer setting `topology` directly.')
 @allowed(['single-sub', 'multi-sub'])
 param deploymentMode string
+
+// ── audit-t156 — explicit topology modes + optional admin plane ──────────────
+// Replaces the implicit "admin plane is always deployed" behavior with three
+// explicit, named topologies. `deploymentMode` is still honored (mapped below)
+// so existing param files / pipelines keep working unchanged.
+//
+//   single-sub  — dev/demo: admin plane + ONE in-sub DLZ (the current default,
+//                 byte-identical to pre-t156 behavior).
+//   tenant      — the DMLZ deployment: admin plane + ALL tenant-shared services
+//                 ONLY. NO landing-zone resources (domains attach later via
+//                 dlz-attach). This is the "one Loom frontend per tenant" deploy.
+//   dlz-attach  — a domain landing zone ONLY, into the target sub(s). The admin
+//                 plane is SKIPPED; the console / Front Door / Cosmos are NEVER
+//                 deployed. Hub coordinates (hub VNet, LAW, App Insights, private
+//                 DNS, Console/Activator UAMI principals, catalog endpoint) are
+//                 supplied via `hubCoordinates` — the tenant deployment's
+//                 `topologyManifest` output, surfaced by the orchestrator (t157).
+@description('Explicit deployment topology. Empty (default) = derived from deploymentMode for back-compat (single-sub -> single-sub; multi-sub -> legacy admin-plane + multi-sub DLZ fan-out).')
+@allowed(['', 'single-sub', 'tenant', 'dlz-attach'])
+param topology string = ''
+
+@description('dlz-attach ONLY: hub coordinates from the tenant (DMLZ) deployment topologyManifest output. REQUIRED when topology=dlz-attach (the admin plane is skipped, so the DLZ + cross-sub RBAC modules read the hub wiring from here instead of adminPlane.outputs). Shape: { adminPlaneRgName, hubVnetId, lawId, appInsightsConnectionString, privateDnsZoneIds, adxClusterPrincipalId, consolePrincipalId, consoleUamiName, consoleUamiAppId, consoleUamiResourceId, activatorPrincipalId, catalogEndpoint, aiServicesAccountName }. Ignored in single-sub / tenant / legacy modes (those read adminPlane.outputs).')
+param hubCoordinates object = {}
 
 @description('Container platform — Container Apps (Commercial/GCC) or AKS (GCC-H/IL5)')
 @allowed(['containerApps', 'aks'])
@@ -550,7 +573,26 @@ param appImageTags object = {
 // Resource group for Admin Plane
 // =====================================================================
 
-var adminPlaneRgName = 'rg-csa-loom-admin-${location}'
+// audit-t156 — topology resolution. Map the legacy deploymentMode onto the
+// explicit topology when `topology` is unset, then derive the gating booleans
+// every module below keys off. single-sub stays byte-identical to pre-t156.
+//   effectiveTopology  single-sub | tenant | dlz-attach | multi-sub (legacy)
+var effectiveTopology = empty(topology) ? deploymentMode : topology
+// The admin plane (console + hub + ALL tenant-shared services) deploys in every
+// topology EXCEPT dlz-attach, where it must already exist (coordinates arrive
+// via hubCoordinates).
+var deployAdminPlane = effectiveTopology != 'dlz-attach'
+// Landing zones deploy in every topology EXCEPT tenant (DMLZ-only).
+var deployLandingZones = effectiveTopology != 'tenant'
+// single-sub uses the in-sub singleDlz module; legacy multi-sub + dlz-attach use
+// the cross-sub dlz[for] fan-out over dlzSubscriptionIds.
+var useSingleDlz = deployLandingZones && effectiveTopology == 'single-sub'
+var useMultiDlz = deployLandingZones && effectiveTopology != 'single-sub'
+
+// audit-t156 — the admin-plane RG name. dlz-attach may point at the EXISTING
+// tenant admin-plane RG (from hubCoordinates.adminPlaneRgName) so cross-RG
+// references resolve; otherwise it's the computed per-region name.
+var adminPlaneRgName = (!deployAdminPlane && !empty(string(hubCoordinates.?adminPlaneRgName ?? ''))) ? string(hubCoordinates.adminPlaneRgName) : 'rg-csa-loom-admin-${location}'
 
 // T95 — Cosmos data-plane host suffixes, sovereign-cloud-specific. The DLZ
 // cosmos-graph-vector module computes the same suffixes; we mirror them here
@@ -565,7 +607,7 @@ var cosmosDocSuffix = (boundary == 'GCC-High' || boundary == 'IL5') ? 'azure.us'
 // Commercial/GCC → postgres.database.azure.com; GCC-High/IL5 → .usgovcloudapi.net.
 var pgHostSuffix = (boundary == 'GCC-High' || boundary == 'IL5') ? 'postgres.database.usgovcloudapi.net' : 'postgres.database.azure.com'
 
-resource adminPlaneRg 'Microsoft.Resources/resourceGroups@2024-03-01' = {
+resource adminPlaneRg 'Microsoft.Resources/resourceGroups@2024-03-01' = if (deployAdminPlane) {
   name: adminPlaneRgName
   location: location
   tags: complianceTags
@@ -575,7 +617,7 @@ resource adminPlaneRg 'Microsoft.Resources/resourceGroups@2024-03-01' = {
 // Admin Plane deployment (Hub VNet + Console + MCP + Copilot + ...)
 // =====================================================================
 
-module adminPlane 'modules/admin-plane/main.bicep' = {
+module adminPlane 'modules/admin-plane/main.bicep' = if (deployAdminPlane) {
   name: 'admin-plane'
   scope: adminPlaneRg
   params: {
@@ -660,8 +702,8 @@ module adminPlane 'modules/admin-plane/main.bicep' = {
     // we wire it WITHOUT referencing dpMlWorkspace.outputs (that module depends
     // on adminPlane's UAMI principal — referencing its output here would create
     // a cycle). Empty when the module isn't enabled → AML toggle honest-gates.
-    amlWorkspaceName: (deploymentMode == 'single-sub' && mlWorkspaceEnabled) ? take('aml-loom-${uniqueString(singleDlzRg.id)}', 33) : ''
-    amlWorkspaceRg: (deploymentMode == 'single-sub' && mlWorkspaceEnabled) ? singleDlzRg.name : ''
+    amlWorkspaceName: (useSingleDlz && mlWorkspaceEnabled) ? take('aml-loom-${uniqueString(singleDlzRg.id)}', 33) : ''
+    amlWorkspaceRg: (useSingleDlz && mlWorkspaceEnabled) ? singleDlzRg.name : ''
     vpnGatewayEnabled: vpnGatewayEnabled
     appGatewayEnabled: appGatewayEnabled
     frontDoorEnabled: frontDoorEnabled
@@ -677,7 +719,7 @@ module adminPlane 'modules/admin-plane/main.bicep' = {
     // those panes honest-gate; operators wire multi-sub DLZ accounts post-deploy
     // via scripts/csa-loom/patch-navigator-env.sh (same pattern as the Cosmos
     // endpoints below).
-    loomStorageAccount: deploymentMode == 'single-sub' ? take('saloomdefault${uniqueString(singleDlzRg.id)}', 24) : ''
+    loomStorageAccount: useSingleDlz ? take('saloomdefault${uniqueString(singleDlzRg.id)}', 24) : ''
     loomCosmosAccount: take('cosmos-loom-default-${uniqueString(singleDlzRg.id)}', 44)
     // Forward the Cosmos data-plane endpoints to the Console so the vector-store
     // and graph editors bind to the deployed accounts by default (no manual
@@ -695,12 +737,12 @@ module adminPlane 'modules/admin-plane/main.bicep' = {
     // creates, so a bare endpoint would target a non-existent db/graph.
     // Multi-sub mode can't be wired from a single admin-plane (one Console env,
     // N DLZs) — operators run scripts/csa-loom/patch-navigator-env.sh there.
-    loomCosmosVectorEndpoint: (deploymentMode == 'single-sub' && cosmosGraphVectorEnabled) ? 'https://${take('cosmos-loom-vec-default-${uniqueString(singleDlzRg.id)}', 44)}.documents.${cosmosDocSuffix}:443/' : ''
-    loomCosmosVectorDatabase: (deploymentMode == 'single-sub' && cosmosGraphVectorEnabled) ? 'loom-vectors' : ''
-    loomCosmosVectorContainer: (deploymentMode == 'single-sub' && cosmosGraphVectorEnabled) ? 'docs-vec' : ''
-    loomCosmosGremlinEndpoint: (deploymentMode == 'single-sub' && cosmosGraphVectorEnabled) ? 'wss://${take('cosmos-loom-gremlin-default-${uniqueString(singleDlzRg.id)}', 44)}.${gremlinHostSuffix}:443/' : ''
-    loomCosmosGremlinDatabase: (deploymentMode == 'single-sub' && cosmosGraphVectorEnabled) ? 'loom-graph' : ''
-    loomCosmosGremlinGraph: (deploymentMode == 'single-sub' && cosmosGraphVectorEnabled) ? 'default' : ''
+    loomCosmosVectorEndpoint: (useSingleDlz && cosmosGraphVectorEnabled) ? 'https://${take('cosmos-loom-vec-default-${uniqueString(singleDlzRg.id)}', 44)}.documents.${cosmosDocSuffix}:443/' : ''
+    loomCosmosVectorDatabase: (useSingleDlz && cosmosGraphVectorEnabled) ? 'loom-vectors' : ''
+    loomCosmosVectorContainer: (useSingleDlz && cosmosGraphVectorEnabled) ? 'docs-vec' : ''
+    loomCosmosGremlinEndpoint: (useSingleDlz && cosmosGraphVectorEnabled) ? 'wss://${take('cosmos-loom-gremlin-default-${uniqueString(singleDlzRg.id)}', 44)}.${gremlinHostSuffix}:443/' : ''
+    loomCosmosGremlinDatabase: (useSingleDlz && cosmosGraphVectorEnabled) ? 'loom-graph' : ''
+    loomCosmosGremlinGraph: (useSingleDlz && cosmosGraphVectorEnabled) ? 'default' : ''
     // Weave (Semantic Ontology) graph store — the DLZ postgres-weave module
     // (weaveOntologyEnabled, default on) provisions a PG flexible server named
     // deterministically as psql-loom-weave-default-<uniq> (max 63) over the DLZ
@@ -711,9 +753,9 @@ module adminPlane 'modules/admin-plane/main.bicep' = {
     // graph name (loom_ontology) matches the post-deploy bootstrap create_graph.
     // Multi-sub can't be wired from a single admin-plane — operators run
     // scripts/csa-loom/patch-navigator-env.sh (same as the Cosmos endpoints).
-    loomWeavePgFqdn: (deploymentMode == 'single-sub' && weaveOntologyEnabled) ? '${take('psql-loom-weave-default-${uniqueString(singleDlzRg.id)}', 63)}.${pgHostSuffix}' : ''
-    loomWeavePgDatabase: (deploymentMode == 'single-sub' && weaveOntologyEnabled) ? 'loom-weave' : ''
-    loomWeaveGraph: (deploymentMode == 'single-sub' && weaveOntologyEnabled) ? 'loom_ontology' : ''
+    loomWeavePgFqdn: (useSingleDlz && weaveOntologyEnabled) ? '${take('psql-loom-weave-default-${uniqueString(singleDlzRg.id)}', 63)}.${pgHostSuffix}' : ''
+    loomWeavePgDatabase: (useSingleDlz && weaveOntologyEnabled) ? 'loom-weave' : ''
+    loomWeaveGraph: (useSingleDlz && weaveOntologyEnabled) ? 'loom_ontology' : ''
     // Bind the console's warehouse/SQL env (LOOM_SYNAPSE_WORKSPACE /
     // LOOM_SYNAPSE_DEDICATED_POOL) to the DLZ Synapse workspace + dedicated pool
     // the landing-zone provisions (synapse.bicep: 'syn-loom-${domainName}-${location}'
@@ -774,11 +816,84 @@ module adminPlane 'modules/admin-plane/main.bicep' = {
   }
 }
 
+// audit-t156 — hub coordinates the DLZ + cross-sub RBAC modules consume. When
+// the admin plane is deployed in THIS deployment (single-sub / tenant / legacy
+// multi-sub) they come from adminPlane.outputs (guarded by deployAdminPlane via
+// the ?: operator so the reference is never evaluated in dlz-attach, per the ARM
+// `if` short-circuit). In dlz-attach the admin plane is skipped and the values
+// arrive as the `hubCoordinates` object (the tenant deployment's topologyManifest
+// output, surfaced by the orchestrator). Routing every DLZ/RBAC consumer through
+// `hub.*` instead of adminPlane.outputs.* is what makes dlz-attach deploy with
+// ZERO console/Front Door/Cosmos resources.
+//
+// audit-t156 fail-fast — `topology=dlz-attach` makes `hubCoordinates` REQUIRED.
+// The admin plane is skipped, so there is no `adminPlane.outputs.*` to read and
+// every hub field would otherwise silently resolve to '' — empty hubVnetId /
+// lawId / principal ids passed into the landing-zone + cross-sub RBAC modules.
+// We refuse to proceed: when any of the minimum hub keys are empty we
+// dereference a property that does not exist, which ARM rejects at validate /
+// what-if / deploy time. The property name IS the operator-facing message —
+// supply the LOOM_HUB_* env vars (topologyManifest.hub keys) from the tenant
+// (DMLZ) deploy. Consumed ONLY by the else-branch of `var hub` below, so the
+// `deployAdminPlane ? :` short-circuit never evaluates it in single-sub /
+// tenant / legacy modes — it fires only in dlz-attach.
+var dlzAttachHubVnetId = (empty(string(hubCoordinates.?hubVnetId ?? '')) || empty(string(hubCoordinates.?lawId ?? '')) || empty(string(hubCoordinates.?consolePrincipalId ?? '')))
+  ? string(any(json('{}')).topology_dlz_attach_REQUIRES_hubCoordinates__set_LOOM_HUB_VNET_ID_LOOM_HUB_LAW_ID_LOOM_HUB_CONSOLE_PRINCIPAL_ID_and_the_rest_of_topologyManifest_hub_from_the_tenant_DMLZ_deploy)
+  : string(hubCoordinates.hubVnetId)
+var hub = deployAdminPlane ? {
+  hubVnetId: adminPlane!.outputs.hubVnetId
+  lawId: adminPlane!.outputs.lawId
+  appInsightsConnectionString: adminPlane!.outputs.appInsightsConnectionString
+  privateDnsZoneIds: adminPlane!.outputs.privateDnsZoneIds
+  adxClusterPrincipalId: adminPlane!.outputs.adxClusterPrincipalId
+  consolePrincipalId: adminPlane!.outputs.uamiConsolePrincipalId
+  consoleUamiName: adminPlane!.outputs.uamiConsoleName
+  consoleUamiAppId: adminPlane!.outputs.uamiConsoleClientId
+  consoleUamiResourceId: adminPlane!.outputs.uamiConsoleId
+  activatorPrincipalId: adminPlane!.outputs.uamiActivatorPrincipalId
+  catalogEndpoint: adminPlane!.outputs.catalogEndpoint
+  aiServicesAccountName: adminPlane!.outputs.aiServicesAccountName
+} : {
+  hubVnetId: dlzAttachHubVnetId
+  lawId: string(hubCoordinates.?lawId ?? '')
+  appInsightsConnectionString: string(hubCoordinates.?appInsightsConnectionString ?? '')
+  privateDnsZoneIds: (hubCoordinates.?privateDnsZoneIds ?? {})
+  adxClusterPrincipalId: string(hubCoordinates.?adxClusterPrincipalId ?? '')
+  consolePrincipalId: string(hubCoordinates.?consolePrincipalId ?? '')
+  consoleUamiName: string(hubCoordinates.?consoleUamiName ?? '')
+  consoleUamiAppId: string(hubCoordinates.?consoleUamiAppId ?? '')
+  consoleUamiResourceId: string(hubCoordinates.?consoleUamiResourceId ?? '')
+  activatorPrincipalId: string(hubCoordinates.?activatorPrincipalId ?? '')
+  catalogEndpoint: string(hubCoordinates.?catalogEndpoint ?? '')
+  aiServicesAccountName: string(hubCoordinates.?aiServicesAccountName ?? '')
+}
+
+// Private DNS zone object the DLZ modules dereference (.synapseSql / .adf).
+// Defaults to {} in dlz-attach when not supplied so the safe-deref below holds.
+var hubPrivateDnsZoneIds = hub.privateDnsZoneIds
+
+// audit-t156 — DLZ inventory for the topologyManifest output. for-expressions
+// must be the direct value of a var (BCP138), so the multi-sub fan-out list is
+// built here and combined with the single-sub case via a plain ternary.
+var topologyManifestDlzsMulti = [for (subId, i) in dlzSubscriptionIds: {
+  domainName: dlzDomainNames[i]
+  subscriptionId: subId
+  resourceGroup: 'rg-csa-loom-dlz-${dlzDomainNames[i]}-${location}'
+}]
+var topologyManifestDlzsSingle = [
+  {
+    domainName: 'default'
+    subscriptionId: adminPlaneSubId
+    resourceGroup: 'rg-csa-loom-dlz-single-${location}'
+  }
+]
+var topologyManifestDlzs = useSingleDlz ? topologyManifestDlzsSingle : (deployLandingZones ? topologyManifestDlzsMulti : [])
+
 // =====================================================================
 // Data Landing Zone resource groups (created here so DLZ modules can target them)
 // =====================================================================
 
-resource singleDlzRg 'Microsoft.Resources/resourceGroups@2024-03-01' = if (deploymentMode == 'single-sub') {
+resource singleDlzRg 'Microsoft.Resources/resourceGroups@2024-03-01' = if (useSingleDlz) {
   name: 'rg-csa-loom-dlz-single-${location}'
   location: location
   tags: complianceTags
@@ -792,7 +907,7 @@ resource singleDlzRg 'Microsoft.Resources/resourceGroups@2024-03-01' = if (deplo
 // =====================================================================
 
 // Single-sub: 1 DLZ in same sub
-module singleDlz 'modules/landing-zone/main.bicep' = if (deploymentMode == 'single-sub') {
+module singleDlz 'modules/landing-zone/main.bicep' = if (useSingleDlz) {
   name: 'dlz-single'
   scope: singleDlzRg
   params: {
@@ -801,25 +916,25 @@ module singleDlz 'modules/landing-zone/main.bicep' = if (deploymentMode == 'sing
     domainName: 'default'
     containerPlatform: containerPlatform
     capacitySku: capacitySku
-    adminPlaneHubVnetId: adminPlane.outputs.hubVnetId
-    adminPlaneLawId: adminPlane.outputs.lawId
-    adminPlaneAppInsightsConnectionString: adminPlane.outputs.appInsightsConnectionString
-    adminPlanePrivateDnsZoneIds: adminPlane.outputs.privateDnsZoneIds
+    adminPlaneHubVnetId: hub.hubVnetId
+    adminPlaneLawId: hub.lawId
+    adminPlaneAppInsightsConnectionString: hub.appInsightsConnectionString
+    adminPlanePrivateDnsZoneIds: hubPrivateDnsZoneIds
     adminPlaneAdxClusterRgName: adminPlaneRgName
     adxEnabled: adxEnabled
-    adxClusterPrincipalId: adminPlane.outputs.adxClusterPrincipalId
+    adxClusterPrincipalId: hub.adxClusterPrincipalId
     adminEntraGroupId: adminEntraGroupId
-    activatorPrincipalId: adminPlane.outputs.uamiActivatorPrincipalId
-    consolePrincipalId: adminPlane.outputs.uamiConsolePrincipalId
-    consoleUamiName: adminPlane.outputs.uamiConsoleName
-    consoleUamiAppId: adminPlane.outputs.uamiConsoleClientId
-    synapseSqlPrivateDnsZoneId: adminPlane.outputs.privateDnsZoneIds.synapseSql
-    adfPrivateDnsZoneId: adminPlane.outputs.privateDnsZoneIds.adf
-    catalogEndpoint: adminPlane.outputs.catalogEndpoint
+    activatorPrincipalId: hub.activatorPrincipalId
+    consolePrincipalId: hub.consolePrincipalId
+    consoleUamiName: hub.consoleUamiName
+    consoleUamiAppId: hub.consoleUamiAppId
+    synapseSqlPrivateDnsZoneId: string(hubPrivateDnsZoneIds.?synapseSql ?? '')
+    adfPrivateDnsZoneId: string(hubPrivateDnsZoneIds.?adf ?? '')
+    catalogEndpoint: hub.catalogEndpoint
     databricksUnityCatalogEnabled: databricksUnityCatalogEnabled
     databricksSqlWarehouseEnabled: databricksSqlWarehouseEnabled
     databricksAccountId: databricksAccountId
-    databricksUcScriptUamiId: adminPlane.outputs.uamiConsoleId
+    databricksUcScriptUamiId: hub.consoleUamiResourceId
     storageRequireCmk: storageRequireCmk
     powerBiSku: powerBiSku
     complianceTags: complianceTags
@@ -837,11 +952,11 @@ module singleDlz 'modules/landing-zone/main.bicep' = if (deploymentMode == 'sing
 // Storage Blob Data roles on the lake account when an access request is
 // approved. Constrained RBAC-Administrator (data-plane roles only) — see the
 // module header. Scoped to the DLZ RG where the storage account lives.
-module singleDlzAccessPolicyRbac 'modules/admin-plane/access-policy-rbac.bicep' = if (deploymentMode == 'single-sub') {
+module singleDlzAccessPolicyRbac 'modules/admin-plane/access-policy-rbac.bicep' = if (useSingleDlz) {
   name: 'dlz-single-access-policy-rbac'
   scope: singleDlzRg
   params: {
-    consolePrincipalId: adminPlane.outputs.uamiConsolePrincipalId
+    consolePrincipalId: hub.consolePrincipalId
     storageAccountName: singleDlz!.outputs.storageAccountName
     skipRoleGrants: skipRoleGrants
   }
@@ -856,11 +971,11 @@ module singleDlzAccessPolicyRbac 'modules/admin-plane/access-policy-rbac.bicep' 
 // identities from the DLZ outputs. The module no-ops (its role assignments are
 // guarded on !empty(aiServicesAccountName)) when admin-plane used an existing
 // external AOAI account — the operator grants the role manually then.
-module singleDlzAoaiSparkRbac 'modules/admin-plane/aoai-spark-rbac.bicep' = if (deploymentMode == 'single-sub') {
+module singleDlzAoaiSparkRbac 'modules/admin-plane/aoai-spark-rbac.bicep' = if (useSingleDlz) {
   name: 'dlz-single-aoai-spark-rbac'
-  scope: adminPlaneRg
+  scope: resourceGroup(adminPlaneRgName)
   params: {
-    aiServicesAccountName: adminPlane.outputs.aiServicesAccountName
+    aiServicesAccountName: hub.aiServicesAccountName
     synapseWorkspacePrincipalId: singleDlz!.outputs.synapseManagedIdentityPrincipalId
     databricksAccessConnectorPrincipalId: singleDlz!.outputs.databricksAccessConnectorPrincipalId
     skipRoleGrants: skipRoleGrants
@@ -873,7 +988,7 @@ module singleDlzAoaiSparkRbac 'modules/admin-plane/aoai-spark-rbac.bicep' = if (
 // target subs before this deployment runs (typically via a bootstrap
 // PowerShell or az CLI script — see scripts/csa-loom/bootstrap-dlz-rgs.sh).
 @batchSize(1)
-module dlz 'modules/landing-zone/main.bicep' = [for (subId, i) in dlzSubscriptionIds: if (deploymentMode == 'multi-sub') {
+module dlz 'modules/landing-zone/main.bicep' = [for (subId, i) in dlzSubscriptionIds: if (useMultiDlz) {
   name: 'dlz-${i}'
   scope: resourceGroup(subId, 'rg-csa-loom-dlz-${dlzDomainNames[i]}-${location}')
   params: {
@@ -882,25 +997,25 @@ module dlz 'modules/landing-zone/main.bicep' = [for (subId, i) in dlzSubscriptio
     domainName: dlzDomainNames[i]
     containerPlatform: containerPlatform
     capacitySku: capacitySku
-    adminPlaneHubVnetId: adminPlane.outputs.hubVnetId
-    adminPlaneLawId: adminPlane.outputs.lawId
-    adminPlaneAppInsightsConnectionString: adminPlane.outputs.appInsightsConnectionString
-    adminPlanePrivateDnsZoneIds: adminPlane.outputs.privateDnsZoneIds
+    adminPlaneHubVnetId: hub.hubVnetId
+    adminPlaneLawId: hub.lawId
+    adminPlaneAppInsightsConnectionString: hub.appInsightsConnectionString
+    adminPlanePrivateDnsZoneIds: hubPrivateDnsZoneIds
     adminPlaneAdxClusterRgName: adminPlaneRgName
     adxEnabled: adxEnabled
-    adxClusterPrincipalId: adminPlane.outputs.adxClusterPrincipalId
+    adxClusterPrincipalId: hub.adxClusterPrincipalId
     adminEntraGroupId: adminEntraGroupId
-    activatorPrincipalId: adminPlane.outputs.uamiActivatorPrincipalId
-    consolePrincipalId: adminPlane.outputs.uamiConsolePrincipalId
-    consoleUamiName: adminPlane.outputs.uamiConsoleName
-    consoleUamiAppId: adminPlane.outputs.uamiConsoleClientId
-    synapseSqlPrivateDnsZoneId: adminPlane.outputs.privateDnsZoneIds.synapseSql
-    adfPrivateDnsZoneId: adminPlane.outputs.privateDnsZoneIds.adf
-    catalogEndpoint: adminPlane.outputs.catalogEndpoint
+    activatorPrincipalId: hub.activatorPrincipalId
+    consolePrincipalId: hub.consolePrincipalId
+    consoleUamiName: hub.consoleUamiName
+    consoleUamiAppId: hub.consoleUamiAppId
+    synapseSqlPrivateDnsZoneId: string(hubPrivateDnsZoneIds.?synapseSql ?? '')
+    adfPrivateDnsZoneId: string(hubPrivateDnsZoneIds.?adf ?? '')
+    catalogEndpoint: hub.catalogEndpoint
     databricksUnityCatalogEnabled: databricksUnityCatalogEnabled
     databricksSqlWarehouseEnabled: databricksSqlWarehouseEnabled
     databricksAccountId: databricksAccountId
-    databricksUcScriptUamiId: adminPlane.outputs.uamiConsoleId
+    databricksUcScriptUamiId: hub.consoleUamiResourceId
     storageRequireCmk: storageRequireCmk
     powerBiSku: powerBiSku
     complianceTags: complianceTags
@@ -916,11 +1031,11 @@ module dlz 'modules/landing-zone/main.bicep' = [for (subId, i) in dlzSubscriptio
 
 // Multi-sub: per-DLZ access-policy RBAC-Admin grant (F8 / T14), one per DLZ.
 @batchSize(1)
-module dlzAccessPolicyRbac 'modules/admin-plane/access-policy-rbac.bicep' = [for (subId, i) in dlzSubscriptionIds: if (deploymentMode == 'multi-sub') {
+module dlzAccessPolicyRbac 'modules/admin-plane/access-policy-rbac.bicep' = [for (subId, i) in dlzSubscriptionIds: if (useMultiDlz) {
   name: 'dlz-${i}-access-policy-rbac'
   scope: resourceGroup(subId, 'rg-csa-loom-dlz-${dlzDomainNames[i]}-${location}')
   params: {
-    consolePrincipalId: adminPlane.outputs.uamiConsolePrincipalId
+    consolePrincipalId: hub.consolePrincipalId
     storageAccountName: dlz[i]!.outputs.storageAccountName
     skipRoleGrants: skipRoleGrants
   }
@@ -932,9 +1047,9 @@ module dlzAccessPolicyRbac 'modules/admin-plane/access-policy-rbac.bicep' = [for
 // /editor can drive the resource over Entra-only data/control planes.
 // =====================================================================
 
-var dpConsolePrincipalId = adminPlane.outputs.uamiConsolePrincipalId
+var dpConsolePrincipalId = hub.consolePrincipalId
 
-module dpPostgres 'modules/deploy-planner/postgres.bicep' = if (deploymentMode == 'single-sub' && postgresEnabled) {
+module dpPostgres 'modules/deploy-planner/postgres.bicep' = if (useSingleDlz && postgresEnabled) {
   name: 'dp-postgres'
   scope: singleDlzRg
   params: {
@@ -942,12 +1057,12 @@ module dpPostgres 'modules/deploy-planner/postgres.bicep' = if (deploymentMode =
     postgresVersion: postgresVersion
     storageSizeGB: postgresStorageSizeGB
     entraAdminObjectId: dpConsolePrincipalId
-    entraAdminName: adminPlane.outputs.uamiConsoleName
+    entraAdminName: hub.consoleUamiName
     complianceTags: complianceTags
   }
 }
 
-module dpMysql 'modules/deploy-planner/mysql.bicep' = if (deploymentMode == 'single-sub' && mysqlEnabled) {
+module dpMysql 'modules/deploy-planner/mysql.bicep' = if (useSingleDlz && mysqlEnabled) {
   name: 'dp-mysql'
   scope: singleDlzRg
   params: {
@@ -955,12 +1070,12 @@ module dpMysql 'modules/deploy-planner/mysql.bicep' = if (deploymentMode == 'sin
     mysqlVersion: mysqlVersion
     storageSizeGB: mysqlStorageSizeGB
     entraAdminObjectId: dpConsolePrincipalId
-    entraAdminName: adminPlane.outputs.uamiConsoleName
+    entraAdminName: hub.consoleUamiName
     complianceTags: complianceTags
   }
 }
 
-module dpRedis 'modules/deploy-planner/redis.bicep' = if (deploymentMode == 'single-sub' && redisEnabled) {
+module dpRedis 'modules/deploy-planner/redis.bicep' = if (useSingleDlz && redisEnabled) {
   name: 'dp-redis'
   scope: singleDlzRg
   params: {
@@ -973,7 +1088,7 @@ module dpRedis 'modules/deploy-planner/redis.bicep' = if (deploymentMode == 'sin
   }
 }
 
-module dpEventGrid 'modules/deploy-planner/event-grid.bicep' = if (deploymentMode == 'single-sub' && eventGridEnabled) {
+module dpEventGrid 'modules/deploy-planner/event-grid.bicep' = if (useSingleDlz && eventGridEnabled) {
   name: 'dp-eventgrid'
   scope: singleDlzRg
   params: {
@@ -984,7 +1099,7 @@ module dpEventGrid 'modules/deploy-planner/event-grid.bicep' = if (deploymentMod
   }
 }
 
-module dpServiceBus 'modules/deploy-planner/service-bus.bicep' = if (deploymentMode == 'single-sub' && serviceBusEnabled) {
+module dpServiceBus 'modules/deploy-planner/service-bus.bicep' = if (useSingleDlz && serviceBusEnabled) {
   name: 'dp-servicebus'
   scope: singleDlzRg
   params: {
@@ -995,7 +1110,7 @@ module dpServiceBus 'modules/deploy-planner/service-bus.bicep' = if (deploymentM
   }
 }
 
-module dpSignalr 'modules/deploy-planner/signalr.bicep' = if (deploymentMode == 'single-sub' && signalrEnabled) {
+module dpSignalr 'modules/deploy-planner/signalr.bicep' = if (useSingleDlz && signalrEnabled) {
   name: 'dp-signalr'
   scope: singleDlzRg
   params: {
@@ -1006,7 +1121,7 @@ module dpSignalr 'modules/deploy-planner/signalr.bicep' = if (deploymentMode == 
   }
 }
 
-module dpStorageQueues 'modules/deploy-planner/storage-queues.bicep' = if (deploymentMode == 'single-sub' && storageQueuesEnabled) {
+module dpStorageQueues 'modules/deploy-planner/storage-queues.bicep' = if (useSingleDlz && storageQueuesEnabled) {
   name: 'dp-storagequeues'
   scope: singleDlzRg
   params: {
@@ -1017,7 +1132,7 @@ module dpStorageQueues 'modules/deploy-planner/storage-queues.bicep' = if (deplo
   }
 }
 
-module dpAiServices 'modules/deploy-planner/cognitive-account.bicep' = if (deploymentMode == 'single-sub' && aiServicesEnabled) {
+module dpAiServices 'modules/deploy-planner/cognitive-account.bicep' = if (useSingleDlz && aiServicesEnabled) {
   name: 'dp-aiservices'
   scope: singleDlzRg
   params: {
@@ -1030,7 +1145,7 @@ module dpAiServices 'modules/deploy-planner/cognitive-account.bicep' = if (deplo
   }
 }
 
-module dpDocIntel 'modules/deploy-planner/cognitive-account.bicep' = if (deploymentMode == 'single-sub' && documentIntelligenceEnabled) {
+module dpDocIntel 'modules/deploy-planner/cognitive-account.bicep' = if (useSingleDlz && documentIntelligenceEnabled) {
   name: 'dp-docintel'
   scope: singleDlzRg
   params: {
@@ -1043,7 +1158,7 @@ module dpDocIntel 'modules/deploy-planner/cognitive-account.bicep' = if (deploym
   }
 }
 
-module dpContentSafety 'modules/deploy-planner/cognitive-account.bicep' = if (deploymentMode == 'single-sub' && contentSafetyEnabled) {
+module dpContentSafety 'modules/deploy-planner/cognitive-account.bicep' = if (useSingleDlz && contentSafetyEnabled) {
   name: 'dp-contentsafety'
   scope: singleDlzRg
   params: {
@@ -1056,7 +1171,7 @@ module dpContentSafety 'modules/deploy-planner/cognitive-account.bicep' = if (de
   }
 }
 
-module dpAppService 'modules/deploy-planner/app-service.bicep' = if (deploymentMode == 'single-sub' && appServiceEnabled) {
+module dpAppService 'modules/deploy-planner/app-service.bicep' = if (useSingleDlz && appServiceEnabled) {
   name: 'dp-appservice'
   scope: singleDlzRg
   params: {
@@ -1069,7 +1184,7 @@ module dpAppService 'modules/deploy-planner/app-service.bicep' = if (deploymentM
   }
 }
 
-module dpFunctions 'modules/deploy-planner/functions.bicep' = if (deploymentMode == 'single-sub' && functionsEnabled) {
+module dpFunctions 'modules/deploy-planner/functions.bicep' = if (useSingleDlz && functionsEnabled) {
   name: 'dp-functions'
   scope: singleDlzRg
   params: {
@@ -1082,7 +1197,7 @@ module dpFunctions 'modules/deploy-planner/functions.bicep' = if (deploymentMode
   }
 }
 
-module dpContainerInstances 'modules/deploy-planner/container-instances.bicep' = if (deploymentMode == 'single-sub' && containerInstancesEnabled) {
+module dpContainerInstances 'modules/deploy-planner/container-instances.bicep' = if (useSingleDlz && containerInstancesEnabled) {
   name: 'dp-aci'
   scope: singleDlzRg
   params: {
@@ -1093,7 +1208,7 @@ module dpContainerInstances 'modules/deploy-planner/container-instances.bicep' =
   }
 }
 
-module dpStreamAnalytics 'modules/deploy-planner/stream-analytics.bicep' = if (deploymentMode == 'single-sub' && streamAnalyticsEnabled) {
+module dpStreamAnalytics 'modules/deploy-planner/stream-analytics.bicep' = if (useSingleDlz && streamAnalyticsEnabled) {
   name: 'dp-streamanalytics'
   scope: singleDlzRg
   params: {
@@ -1104,7 +1219,7 @@ module dpStreamAnalytics 'modules/deploy-planner/stream-analytics.bicep' = if (d
   }
 }
 
-module dpDataFactory 'modules/deploy-planner/data-factory.bicep' = if (deploymentMode == 'single-sub' && dataFactoryEnabled) {
+module dpDataFactory 'modules/deploy-planner/data-factory.bicep' = if (useSingleDlz && dataFactoryEnabled) {
   name: 'dp-datafactory'
   scope: singleDlzRg
   params: {
@@ -1115,7 +1230,7 @@ module dpDataFactory 'modules/deploy-planner/data-factory.bicep' = if (deploymen
   }
 }
 
-module dpVm 'modules/deploy-planner/virtual-machine.bicep' = if (deploymentMode == 'single-sub' && vmEnabled) {
+module dpVm 'modules/deploy-planner/virtual-machine.bicep' = if (useSingleDlz && vmEnabled) {
   name: 'dp-vm'
   scope: singleDlzRg
   params: {
@@ -1127,7 +1242,7 @@ module dpVm 'modules/deploy-planner/virtual-machine.bicep' = if (deploymentMode 
   }
 }
 
-module dpBatch 'modules/deploy-planner/batch.bicep' = if (deploymentMode == 'single-sub' && batchEnabled) {
+module dpBatch 'modules/deploy-planner/batch.bicep' = if (useSingleDlz && batchEnabled) {
   name: 'dp-batch'
   scope: singleDlzRg
   params: {
@@ -1138,7 +1253,7 @@ module dpBatch 'modules/deploy-planner/batch.bicep' = if (deploymentMode == 'sin
   }
 }
 
-module dpLogicApps 'modules/deploy-planner/logic-app.bicep' = if (deploymentMode == 'single-sub' && logicAppsEnabled) {
+module dpLogicApps 'modules/deploy-planner/logic-app.bicep' = if (useSingleDlz && logicAppsEnabled) {
   name: 'dp-logicapps'
   scope: singleDlzRg
   params: {
@@ -1149,7 +1264,7 @@ module dpLogicApps 'modules/deploy-planner/logic-app.bicep' = if (deploymentMode
   }
 }
 
-module dpStaticWebApps 'modules/deploy-planner/static-web-app.bicep' = if (deploymentMode == 'single-sub' && staticWebAppsEnabled) {
+module dpStaticWebApps 'modules/deploy-planner/static-web-app.bicep' = if (useSingleDlz && staticWebAppsEnabled) {
   name: 'dp-staticwebapps'
   scope: singleDlzRg
   params: {
@@ -1160,7 +1275,7 @@ module dpStaticWebApps 'modules/deploy-planner/static-web-app.bicep' = if (deplo
   }
 }
 
-module dpCdn 'modules/deploy-planner/cdn.bicep' = if (deploymentMode == 'single-sub' && cdnEnabled) {
+module dpCdn 'modules/deploy-planner/cdn.bicep' = if (useSingleDlz && cdnEnabled) {
   name: 'dp-cdn'
   scope: singleDlzRg
   params: {
@@ -1171,7 +1286,7 @@ module dpCdn 'modules/deploy-planner/cdn.bicep' = if (deploymentMode == 'single-
   }
 }
 
-module dpLoadBalancer 'modules/deploy-planner/load-balancer.bicep' = if (deploymentMode == 'single-sub' && loadBalancerEnabled) {
+module dpLoadBalancer 'modules/deploy-planner/load-balancer.bicep' = if (useSingleDlz && loadBalancerEnabled) {
   name: 'dp-loadbalancer'
   scope: singleDlzRg
   params: {
@@ -1182,7 +1297,7 @@ module dpLoadBalancer 'modules/deploy-planner/load-balancer.bicep' = if (deploym
   }
 }
 
-module dpFirewall 'modules/deploy-planner/firewall.bicep' = if (deploymentMode == 'single-sub' && firewallEnabled) {
+module dpFirewall 'modules/deploy-planner/firewall.bicep' = if (useSingleDlz && firewallEnabled) {
   name: 'dp-firewall'
   scope: singleDlzRg
   params: {
@@ -1193,7 +1308,7 @@ module dpFirewall 'modules/deploy-planner/firewall.bicep' = if (deploymentMode =
   }
 }
 
-module dpVision 'modules/deploy-planner/cognitive-account.bicep' = if (deploymentMode == 'single-sub' && visionServicesEnabled) {
+module dpVision 'modules/deploy-planner/cognitive-account.bicep' = if (useSingleDlz && visionServicesEnabled) {
   name: 'dp-vision'
   scope: singleDlzRg
   params: {
@@ -1206,7 +1321,7 @@ module dpVision 'modules/deploy-planner/cognitive-account.bicep' = if (deploymen
   }
 }
 
-module dpSpeech 'modules/deploy-planner/cognitive-account.bicep' = if (deploymentMode == 'single-sub' && speechServicesEnabled) {
+module dpSpeech 'modules/deploy-planner/cognitive-account.bicep' = if (useSingleDlz && speechServicesEnabled) {
   name: 'dp-speech'
   scope: singleDlzRg
   params: {
@@ -1219,7 +1334,7 @@ module dpSpeech 'modules/deploy-planner/cognitive-account.bicep' = if (deploymen
   }
 }
 
-module dpLanguage 'modules/deploy-planner/cognitive-account.bicep' = if (deploymentMode == 'single-sub' && languageServicesEnabled) {
+module dpLanguage 'modules/deploy-planner/cognitive-account.bicep' = if (useSingleDlz && languageServicesEnabled) {
   name: 'dp-language'
   scope: singleDlzRg
   params: {
@@ -1232,7 +1347,7 @@ module dpLanguage 'modules/deploy-planner/cognitive-account.bicep' = if (deploym
   }
 }
 
-module dpMlWorkspace 'modules/deploy-planner/ml-workspace.bicep' = if (deploymentMode == 'single-sub' && mlWorkspaceEnabled) {
+module dpMlWorkspace 'modules/deploy-planner/ml-workspace.bicep' = if (useSingleDlz && mlWorkspaceEnabled) {
   name: 'dp-mlworkspace'
   scope: singleDlzRg
   params: {
@@ -1245,12 +1360,12 @@ module dpMlWorkspace 'modules/deploy-planner/ml-workspace.bicep' = if (deploymen
 
 // Subscription-scoped deploy-planner toggles. Defender pricings + Azure Policy
 // assignments are subscription resources, so these modules deploy at sub scope.
-module dpDefenderCloud 'modules/deploy-planner/defender-cloud.bicep' = if (deploymentMode == 'single-sub' && defenderCloudEnabled) {
+module dpDefenderCloud 'modules/deploy-planner/defender-cloud.bicep' = if (useSingleDlz && defenderCloudEnabled) {
   name: 'dp-defendercloud'
   scope: subscription()
 }
 
-module dpPolicy 'modules/deploy-planner/policy-assignment.bicep' = if (deploymentMode == 'single-sub' && policyEnabled) {
+module dpPolicy 'modules/deploy-planner/policy-assignment.bicep' = if (useSingleDlz && policyEnabled) {
   name: 'dp-policy'
   scope: subscription()
 }
@@ -1262,7 +1377,7 @@ module consoleMonitoringReaderRbac 'modules/admin-plane/monitoring-reader-rbac.b
   name: 'console-monitoring-reader'
   scope: subscription()
   params: {
-    consolePrincipalId: adminPlane.outputs.uamiConsolePrincipalId
+    consolePrincipalId: hub.consolePrincipalId
     skipRoleGrants: skipRoleGrants
   }
 }
@@ -1274,7 +1389,7 @@ module consoleCostReaderRbac 'modules/admin-plane/cost-management-reader-rbac.bi
   name: 'console-cost-management-reader'
   scope: subscription()
   params: {
-    consolePrincipalId: adminPlane.outputs.uamiConsolePrincipalId
+    consolePrincipalId: hub.consolePrincipalId
     skipRoleGrants: skipRoleGrants
   }
 }
@@ -1322,7 +1437,7 @@ module setupOrchestratorHubRbac 'modules/admin-plane/setup-orchestrator-rbac.bic
   }
 }
 
-module setupOrchestratorSpokeRbac 'modules/admin-plane/setup-orchestrator-rbac.bicep' = [for (subId, i) in dlzSubscriptionIds: if (deploymentMode == 'multi-sub' && setupOrchestratorEnabled) {
+module setupOrchestratorSpokeRbac 'modules/admin-plane/setup-orchestrator-rbac.bicep' = [for (subId, i) in dlzSubscriptionIds: if (useMultiDlz && setupOrchestratorEnabled) {
   name: 'setup-orchestrator-spoke-rbac-${i}'
   scope: subscription(subId)
   params: {
@@ -1331,26 +1446,65 @@ module setupOrchestratorSpokeRbac 'modules/admin-plane/setup-orchestrator-rbac.b
   }
 }]
 
-output dlzSynapseWorkspaceName string = deploymentMode == 'single-sub' ? singleDlz.outputs.synapseWorkspaceName : ''
-output dlzSynapseDedicatedPoolName string = deploymentMode == 'single-sub' ? singleDlz.outputs.synapseDedicatedPoolName : ''
-output dlzResourceGroupName string = deploymentMode == 'single-sub' ? singleDlz.outputs.dlzResourceGroupName : ''
-output dlzStorageAccountName string = deploymentMode == 'single-sub' ? singleDlz.outputs.storageAccountName : ''
+output dlzSynapseWorkspaceName string = useSingleDlz ? singleDlz!.outputs.synapseWorkspaceName : ''
+output dlzSynapseDedicatedPoolName string = useSingleDlz ? singleDlz!.outputs.synapseDedicatedPoolName : ''
+output dlzResourceGroupName string = useSingleDlz ? singleDlz!.outputs.dlzResourceGroupName : ''
+output dlzStorageAccountName string = useSingleDlz ? singleDlz!.outputs.storageAccountName : ''
 
 // =====================================================================
 // Outputs
 // =====================================================================
+// audit-t156 — admin-plane outputs are empty in dlz-attach (the admin plane is
+// not deployed there). Guarded by deployAdminPlane via ?: so adminPlane.outputs
+// is never referenced when the module is skipped.
 
-output consoleUrl string = adminPlane.outputs.consoleUrl
-output mcpServerUrl string = adminPlane.outputs.mcpServerUrl
-output adminPlaneHubVnetId string = adminPlane.outputs.hubVnetId
+output consoleUrl string = deployAdminPlane ? adminPlane!.outputs.consoleUrl : string(hubCoordinates.?consoleUrl ?? '')
+output mcpServerUrl string = deployAdminPlane ? adminPlane!.outputs.mcpServerUrl : ''
+output adminPlaneHubVnetId string = hub.hubVnetId
 output adminPlaneRgName string = adminPlaneRgName
 
-// Access-pattern outputs (empty unless their flag is on)
-output vpnGatewayPublicIp string = adminPlane.outputs.vpnGatewayPublicIp
-output appGatewayPublicFqdn string = adminPlane.outputs.appGatewayPublicFqdn
-output frontDoorPublicUrl string = adminPlane.outputs.frontDoorPublicUrl
+// Access-pattern outputs (empty unless their flag is on / admin plane deployed)
+output vpnGatewayPublicIp string = deployAdminPlane ? adminPlane!.outputs.vpnGatewayPublicIp : ''
+output appGatewayPublicFqdn string = deployAdminPlane ? adminPlane!.outputs.appGatewayPublicFqdn : ''
+output frontDoorPublicUrl string = deployAdminPlane ? adminPlane!.outputs.frontDoorPublicUrl : ''
 // Vanity URL + the DNS records the admin must add to activate it.
-output vanityPublicUrl string = adminPlane.outputs.vanityPublicUrl
-output vanityCnameTarget string = adminPlane.outputs.vanityCnameTarget
-output vanityDnsTxtName string = adminPlane.outputs.vanityDnsTxtName
-output vanityValidationToken string = adminPlane.outputs.vanityValidationToken
+output vanityPublicUrl string = deployAdminPlane ? adminPlane!.outputs.vanityPublicUrl : ''
+output vanityCnameTarget string = deployAdminPlane ? adminPlane!.outputs.vanityCnameTarget : ''
+output vanityDnsTxtName string = deployAdminPlane ? adminPlane!.outputs.vanityDnsTxtName : ''
+output vanityValidationToken string = deployAdminPlane ? adminPlane!.outputs.vanityValidationToken : ''
+
+// =====================================================================
+// audit-t156 — topologyManifest: what was deployed where, for the console to
+// ingest (the orchestrator stores this in the Cosmos `tenant-topology` doc at
+// tenant-deploy time; dlz-attach reads the hub coordinates back from it). It is
+// a faithful record of the topology decision + the hub wiring + the DLZ(s) this
+// deployment stood up — never aspirational (per no-vaporware.md).
+// =====================================================================
+output topologyManifest object = {
+  topology: effectiveTopology
+  deploymentMode: deploymentMode
+  boundary: boundary
+  location: location
+  adminPlaneDeployed: deployAdminPlane
+  adminPlaneSubId: adminPlaneSubId
+  adminPlaneRgName: adminPlaneRgName
+  landingZonesDeployed: deployLandingZones
+  // Hub coordinates downstream dlz-attach deployments must echo back as params.
+  hub: {
+    hubVnetId: hub.hubVnetId
+    lawId: hub.lawId
+    appInsightsConnectionString: deployAdminPlane ? adminPlane!.outputs.appInsightsConnectionString : hub.appInsightsConnectionString
+    privateDnsZoneIds: hubPrivateDnsZoneIds
+    adxClusterPrincipalId: hub.adxClusterPrincipalId
+    consolePrincipalId: hub.consolePrincipalId
+    consoleUamiName: hub.consoleUamiName
+    consoleUamiAppId: hub.consoleUamiAppId
+    consoleUamiResourceId: hub.consoleUamiResourceId
+    activatorPrincipalId: hub.activatorPrincipalId
+    catalogEndpoint: hub.catalogEndpoint
+    aiServicesAccountName: hub.aiServicesAccountName
+  }
+  consoleUrl: deployAdminPlane ? adminPlane!.outputs.consoleUrl : string(hubCoordinates.?consoleUrl ?? '')
+  // Domain landing zones this deployment provisioned.
+  dlzs: topologyManifestDlzs
+}

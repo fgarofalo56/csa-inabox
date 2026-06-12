@@ -33,6 +33,14 @@ export const dynamic = 'force-dynamic';
 interface SetupConfig {
   boundary?: string;
   mode?: string;
+  /**
+   * Explicit deployment topology (audit-t156): 'single-sub' | 'tenant' |
+   * 'dlz-attach'. Overrides `mode` in main.bicep. When set, it is threaded into
+   * the workflow dispatch + the copy-paste `az deployment sub create` command so
+   * the deploy provisions exactly that topology (e.g. dlz-attach = landing zone
+   * only, no second console). Empty = bicep derives it from `mode` (back-compat).
+   */
+  topology?: string;
   domainName?: string;
   capacitySku?: string;
   subscriptionId?: string;
@@ -43,6 +51,8 @@ interface SetupConfig {
   dlzSubscriptionIds?: string[];
   dlzDomainNames?: string[];
 }
+
+const ALLOWED_TOPOLOGIES = new Set(['single-sub', 'tenant', 'dlz-attach']);
 
 const GUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
@@ -113,6 +123,18 @@ export async function POST(req: NextRequest) {
         { status: 400 },
       );
     }
+  }
+
+  // audit-t156 — topology is an enum (loom-no-freeform-config); reject anything
+  // else so the deploy can never submit a freeform topology string to bicep.
+  if (body.topology && !ALLOWED_TOPOLOGIES.has(body.topology)) {
+    return NextResponse.json(
+      {
+        ok: false,
+        error: `Invalid topology "${body.topology}". Must be one of: ${[...ALLOWED_TOPOLOGIES].join(', ')}.`,
+      },
+      { status: 400 },
+    );
   }
 
   // ── Tier 1: the deployed Setup Orchestrator runs the real deployment ───────
@@ -203,6 +225,9 @@ export async function POST(req: NextRequest) {
     if ((body.boundary === 'GCC-High' || body.boundary === 'IL5') && body.mode === 'multi-sub') {
       dispatchInputs.deployment_mode = 'multi-sub';
     }
+    // audit-t156 — forward the explicit topology so the workflow deploys exactly
+    // that mode (the deploy-fiab-*.yml `topology` input threads it into bicep).
+    if (body.topology) dispatchInputs.topology = body.topology;
     try {
       const repoOwner = process.env.LOOM_GITHUB_REPO_OWNER || 'fgarofalo56';
       const repoName = process.env.LOOM_GITHUB_REPO_NAME || 'csa-inabox';
@@ -269,7 +294,7 @@ export async function POST(req: NextRequest) {
           `  -l ${region} \\`,
           `  -f platform/fiab/bicep/main.bicep \\`,
           `  -p ${paramFile} \\`,
-          `  -p boundary=${body.boundary} deploymentMode=${body.mode} \\`,
+          `  -p boundary=${body.boundary} deploymentMode=${body.mode}${body.topology ? ` topology=${body.topology}` : ''} \\`,
           dlzParamLine,
           `bash scripts/csa-loom/post-deploy-bootstrap.sh`,
         ],
