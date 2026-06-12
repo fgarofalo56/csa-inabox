@@ -41,6 +41,7 @@ import { ModelCatalogPanel, ChatPlaygroundPanel, PlaygroundsLandingPanel, Images
 import { AzureResourcePicker } from '@/lib/components/azure/azure-resource-picker';
 import { FoundryAccountTree } from '@/lib/components/foundry/foundry-tree';
 import { FoundryAgentsPanel } from '@/lib/components/foundry/foundry-agents';
+import { LineChart, BarChart, StatTile, type LineSeries, type Bar } from '@/lib/components/foundry/foundry-charts';
 
 const useStyles = makeStyles({
   pad: { padding: 16, display: 'flex', flexDirection: 'column', gap: 12, minHeight: 0, flex: 1 },
@@ -52,6 +53,42 @@ const useStyles = makeStyles({
   empty: { padding: 16, color: tokens.colorNeutralForeground3, fontStyle: 'italic' },
   toolbar: { display: 'flex', gap: 12, alignItems: 'center', flexWrap: 'wrap' },
   secret: { fontFamily: 'monospace', fontSize: 12, wordBreak: 'break-all' },
+  // Stat tiles laid out as an even responsive grid (no ragged flex-wrap rows).
+  statRow: {
+    display: 'grid',
+    gridTemplateColumns: 'repeat(auto-fill, minmax(140px, 1fr))',
+    gap: 12,
+  },
+  // Charts laid out two-up on wide screens, single-column when narrow.
+  chartGrid: {
+    display: 'grid',
+    gridTemplateColumns: 'repeat(auto-fit, minmax(360px, 1fr))',
+    gap: 16,
+  },
+  // A framed "card" around a chart + its heading/caption so the dashboard reads
+  // as discrete panels rather than loose SVGs floating on the background.
+  chartCard: {
+    display: 'flex',
+    flexDirection: 'column',
+    gap: 4,
+    padding: 12,
+    border: `1px solid ${tokens.colorNeutralStroke2}`,
+    borderRadius: tokens.borderRadiusLarge,
+    backgroundColor: tokens.colorNeutralBackground1,
+    boxShadow: tokens.shadow2,
+  },
+  chartTitle: { fontWeight: 600 },
+  chartCaption: { color: tokens.colorNeutralForeground3 },
+  detailCard: {
+    display: 'flex',
+    flexDirection: 'column',
+    gap: 8,
+    padding: 12,
+    marginTop: 8,
+    border: `1px solid ${tokens.colorNeutralStroke2}`,
+    borderRadius: tokens.borderRadiusLarge,
+    backgroundColor: tokens.colorNeutralBackground1,
+  },
 });
 
 type LoadState<T> = { loading: boolean; data: T | null; error?: string; hint?: string; notDeployed?: boolean };
@@ -776,7 +813,7 @@ function JobsPanel({ active, nonce }: { active: boolean; nonce: number }) {
 
 // ---- Evaluations: list evals → select → list runs; create-eval dialog ----
 
-interface EvalSummary { id: string; name?: string; createdAt?: number; testingCriteria?: unknown; metadata?: Record<string, string> }
+interface EvalSummary { id: string; name?: string; createdAt?: number; dataSourceConfig?: unknown; testingCriteria?: unknown; metadata?: Record<string, string> }
 interface EvalRunSummary { id: string; name?: string; status?: string; model?: string; createdAt?: number; resultCounts?: { passed?: number; failed?: number; errored?: number; total?: number }; reportUrl?: string }
 
 function fmtEpoch(s?: number): string {
@@ -1005,6 +1042,51 @@ function StartRunDialog({ open, onClose, onStarted, evalItem, acct }: {
 
 interface EvalOutputItem { id: string; status?: string; model?: string; datasourceItemIndex?: number; results: { name?: string; passed?: boolean; score?: number }[]; sampleOutput?: string }
 
+/**
+ * A7 — eval detail card. Renders the data-source schema (item fields the eval
+ * grades against) and the testing criteria (graders) carried on the selected
+ * eval. Real data from the AOAI Evals list (mapEval → dataSourceConfig /
+ * testingCriteria); no extra fetch. Surfaces the Foundry portal's "evaluation
+ * details" view that was previously runs-only.
+ */
+function EvalDetailCard({ evalItem }: { evalItem: EvalSummary }) {
+  const s = useStyles();
+  const dsc = evalItem.dataSourceConfig as any;
+  const criteria = Array.isArray(evalItem.testingCriteria) ? (evalItem.testingCriteria as any[]) : [];
+  // Pull item-schema field names from the custom data-source schema when present.
+  const itemSchema = dsc?.item_schema?.properties || dsc?.item_schema || dsc?.schema?.properties;
+  const fields: string[] = itemSchema && typeof itemSchema === 'object' ? Object.keys(itemSchema) : [];
+  return (
+    <div className={s.detailCard}>
+      <Body1 style={{ fontWeight: 600 }}>Evaluation details</Body1>
+      <div style={{ display: 'grid', gridTemplateColumns: 'auto 1fr', gap: '4px 16px', alignItems: 'baseline' }}>
+        <Caption1>ID</Caption1><Caption1 style={{ fontFamily: 'monospace' }}>{evalItem.id}</Caption1>
+        <Caption1>Data-source type</Caption1><Caption1>{dsc?.type || 'custom'}</Caption1>
+        <Caption1>Item schema fields</Caption1>
+        <div style={{ display: 'flex', gap: 4, flexWrap: 'wrap' }}>
+          {fields.length ? fields.map((f) => <Badge key={f} appearance="outline">{f}</Badge>) : <Caption1>—</Caption1>}
+        </div>
+      </div>
+      <Caption1 style={{ fontWeight: 600, marginTop: 4 }}>Testing criteria ({criteria.length})</Caption1>
+      {criteria.length === 0 ? <Caption1>No graders defined.</Caption1> : (
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+          {criteria.map((c, i) => (
+            <div key={i} style={{ display: 'flex', gap: 6, alignItems: 'center', flexWrap: 'wrap' }}>
+              <Badge appearance="tint" color="brand">{c?.type || 'grader'}</Badge>
+              <Caption1>{c?.name || `criterion ${i + 1}`}</Caption1>
+              {c?.model && <Caption1 style={{ color: tokens.colorNeutralForeground3 }}>· model: {c.model}</Caption1>}
+              {typeof c?.pass_threshold === 'number' && <Caption1 style={{ color: tokens.colorNeutralForeground3 }}>· threshold: {c.pass_threshold}</Caption1>}
+              {Array.isArray(c?.evaluation_metrics) && c.evaluation_metrics.length > 0 && (
+                <Caption1 style={{ color: tokens.colorNeutralForeground3 }}>· {c.evaluation_metrics.join(', ')}</Caption1>
+              )}
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
 function EvaluationsPanel({ active, nonce, acct }: { active: boolean; nonce: number; acct: FoundryAccount | null }) {
   const s = useStyles();
   const [st, reload] = useLazyFetch<{ ok: boolean; account?: any; evals: EvalSummary[] }>(`/api/foundry/evaluations`, active, nonce, acct);
@@ -1109,6 +1191,8 @@ function EvaluationsPanel({ active, nonce, acct }: { active: boolean; nonce: num
 
       {selected && (
         <>
+          {/* A7 — eval detail: the data-source schema + testing criteria the eval grades on. */}
+          <EvalDetailCard evalItem={selected} />
           <div className={s.toolbar} style={{ marginTop: 12 }}>
             <Subtitle2>Runs · {selected.name || selected.id}</Subtitle2>
             <Button size="small" appearance="primary" onClick={() => setRunOpen(true)}>+ Start a run</Button>
@@ -1147,6 +1231,37 @@ function EvaluationsPanel({ active, nonce, acct }: { active: boolean; nonce: num
               </Table>
             </div>
           )}
+          {/* C8 + C9 — pass-rate trend across runs + per-run passed/failed compare. */}
+          {!runs.loading && !runs.error && runs.list.length > 0 && (() => {
+            // Only completed runs with a known total contribute a pass-rate point.
+            const graded = runs.list.filter((r) => (r.resultCounts?.total ?? 0) > 0);
+            if (!graded.length) return null;
+            // Trend: oldest→newest by createdAt; x = run index, y = pass-rate %.
+            const ordered = [...graded].sort((a, b) => (a.createdAt ?? 0) - (b.createdAt ?? 0));
+            const trend: LineSeries[] = [{
+              label: 'Pass rate %', color: tokens.colorPaletteGreenForeground1,
+              points: ordered.map((r, i) => ({ x: i + 1, y: Math.round(((r.resultCounts!.passed ?? 0) / (r.resultCounts!.total || 1)) * 100) })),
+            }];
+            const compareBars: Bar[] = ordered.map((r) => ({
+              label: r.name || r.id,
+              value: r.resultCounts?.passed ?? 0,
+              value2: r.resultCounts?.failed ?? Math.max(0, (r.resultCounts?.total ?? 0) - (r.resultCounts?.passed ?? 0)),
+            }));
+            return (
+              <div className={s.chartGrid} style={{ marginTop: 12 }}>
+                <div className={s.chartCard}>
+                  <Body1 className={s.chartTitle}>Pass-rate trend</Body1>
+                  <Caption1 className={s.chartCaption}>Pass rate across this evaluation’s graded runs (oldest → newest).</Caption1>
+                  <LineChart series={trend} xLabel="run #" yLabel="%" yFormat={(v) => `${Math.round(v)}%`} width={420} height={200} />
+                </div>
+                <div className={s.chartCard}>
+                  <Body1 className={s.chartTitle}>Compare runs (passed vs failed)</Body1>
+                  <Caption1 className={s.chartCaption}>Side-by-side passed (green) / failed (red) counts per run.</Caption1>
+                  <BarChart bars={compareBars} width={420} />
+                </div>
+              </div>
+            );
+          })()}
         </>
       )}
 
@@ -1181,6 +1296,143 @@ function EvaluationsPanel({ active, nonce, acct }: { active: boolean; nonce: num
               </Table>
             </div>
           )}
+        </>
+      )}
+    </div>
+  );
+}
+
+// ---- Monitoring / Observability — Application analytics dashboard (A6) ----
+//
+// Foundry portal's Monitoring → "Application analytics": token consumption,
+// request volume + failures, latency p50/p95, and a per-operation latency
+// breakdown — all aggregated from the hub's bound Application Insights resource
+// (the same one the tracing span-tree uses). KQL runs server-side in
+// /api/foundry/observability; honest 503 gate when no App Insights is bound.
+
+interface ObsSummary {
+  hours: number;
+  totals: { requests: number; dependencies: number; failures: number; inputTokens: number; outputTokens: number; p50Ms?: number; p95Ms?: number };
+  requestsOverTime: { t: string; count: number; failed: number }[];
+  tokensOverTime: { t: string; input: number; output: number }[];
+  byOperation: { operation: string; count: number; p95Ms?: number; failed: number }[];
+}
+
+function MonitoringPanel({ active, nonce }: { active: boolean; nonce: number }) {
+  const s = useStyles();
+  const [hours, setHours] = useState('24');
+  // useLazyFetch keys off the resolved URL, so changing hours re-fetches.
+  const [st, reload] = useLazyFetch<{ ok: boolean; summary: ObsSummary }>(`/api/foundry/observability?hours=${hours}`, active, nonce);
+  const sum = st.data?.summary;
+
+  // Sortable Operations table (defaults to slowest-first by p95, like the chart).
+  // NOTE: hooks must run before the early `!active` return — keep them here.
+  type OpCol = 'operation' | 'count' | 'p95Ms' | 'failed';
+  const [opSort, setOpSort] = useState<{ col: OpCol; dir: 'ascending' | 'descending' }>({ col: 'p95Ms', dir: 'descending' });
+  const toggleOpSort = (col: OpCol) =>
+    setOpSort((prev) => (prev.col === col ? { col, dir: prev.dir === 'ascending' ? 'descending' : 'ascending' } : { col, dir: col === 'operation' ? 'ascending' : 'descending' }));
+  const sortedOps = useMemo(() => {
+    const list = sum ? [...sum.byOperation] : [];
+    const { col, dir } = opSort;
+    const sign = dir === 'ascending' ? 1 : -1;
+    return list.sort((a, b) => {
+      if (col === 'operation') return sign * (a.operation || '').localeCompare(b.operation || '');
+      return sign * (((a[col] as number) ?? 0) - ((b[col] as number) ?? 0));
+    });
+  }, [sum, opSort]);
+
+  if (!active) return null;
+
+  const reqSeries: LineSeries[] = sum ? [
+    { label: 'Requests', color: tokens.colorBrandForeground1, points: sum.requestsOverTime.map((r) => ({ x: new Date(r.t).getTime(), y: r.count })) },
+    { label: 'Failures', color: tokens.colorPaletteRedForeground1, points: sum.requestsOverTime.map((r) => ({ x: new Date(r.t).getTime(), y: r.failed })) },
+  ] : [];
+  const tokSeries: LineSeries[] = sum ? [
+    { label: 'Input tokens', color: tokens.colorPalettePurpleForeground2, points: sum.tokensOverTime.map((r) => ({ x: new Date(r.t).getTime(), y: r.input })) },
+    { label: 'Output tokens', color: tokens.colorPaletteGreenForeground1, points: sum.tokensOverTime.map((r) => ({ x: new Date(r.t).getTime(), y: r.output })) },
+  ] : [];
+  const opBars: Bar[] = sum ? sum.byOperation.map((o) => ({ label: o.operation, value: Math.round(o.p95Ms || 0) })) : [];
+  const fmtNum = (n: number) => n >= 1000 ? `${(n / 1000).toFixed(1)}k` : String(n);
+
+  return (
+    <div className={s.pad}>
+      <div className={s.toolbar}>
+        <Subtitle2>Monitoring · Application analytics</Subtitle2>
+        <Field label="Window" orientation="horizontal">
+          <Dropdown value={`${hours}h`} selectedOptions={[hours]} onOptionSelect={(_, d) => d.optionValue && setHours(d.optionValue)} style={{ minWidth: 110 }}>
+            <Option value="6">Last 6 hours</Option>
+            <Option value="24">Last 24 hours</Option>
+            <Option value="168">Last 7 days</Option>
+            <Option value="720">Last 30 days</Option>
+          </Dropdown>
+        </Field>
+        <Button onClick={reload}>Reload</Button>
+      </div>
+      <Caption1>Token consumption, request volume, latency and exceptions from the Foundry hub’s bound Application Insights resource. Same resource as Tracing — aggregated over the selected window.</Caption1>
+      {st.loading ? <Spinner size="small" /> : st.error ? <GateBar msg={st.error} hint={st.hint} notDeployed={st.notDeployed} /> : !sum ? (
+        <EmptyText>No telemetry available.</EmptyText>
+      ) : (
+        <>
+          <div className={s.statRow}>
+            <StatTile label="Requests" value={fmtNum(sum.totals.requests)} />
+            <StatTile label="Dependency calls" value={fmtNum(sum.totals.dependencies)} />
+            <StatTile label="Failures" value={fmtNum(sum.totals.failures)} sub={sum.totals.requests + sum.totals.dependencies > 0 ? `${((sum.totals.failures / (sum.totals.requests + sum.totals.dependencies)) * 100).toFixed(1)}% error rate` : undefined} />
+            <StatTile label="Input tokens" value={fmtNum(sum.totals.inputTokens)} />
+            <StatTile label="Output tokens" value={fmtNum(sum.totals.outputTokens)} />
+            <StatTile label="Latency p50" value={sum.totals.p50Ms !== undefined ? `${Math.round(sum.totals.p50Ms)} ms` : '—'} />
+            <StatTile label="Latency p95" value={sum.totals.p95Ms !== undefined ? `${Math.round(sum.totals.p95Ms)} ms` : '—'} />
+          </div>
+          <div className={s.chartGrid} style={{ marginTop: 8 }}>
+            <div className={s.chartCard}>
+              <Body1 className={s.chartTitle}>Request volume</Body1>
+              <Caption1 className={s.chartCaption}>Requests vs failures over time.</Caption1>
+              <LineChart series={reqSeries} xIsTime xLabel="time" yLabel="count" yFormat={(v) => fmtNum(Math.round(v))} width={480} height={220} emptyText="No requests in this window." />
+            </div>
+            <div className={s.chartCard}>
+              <Body1 className={s.chartTitle}>Token consumption</Body1>
+              <Caption1 className={s.chartCaption}>GenAI input/output tokens over time (OpenTelemetry usage spans).</Caption1>
+              <LineChart series={tokSeries} xIsTime xLabel="time" yLabel="tokens" yFormat={(v) => fmtNum(Math.round(v))} width={480} height={220} emptyText="No token usage telemetry in this window." />
+            </div>
+          </div>
+          <div className={s.chartCard} style={{ marginTop: 8 }}>
+            <Body1 className={s.chartTitle}>Latency by operation (p95)</Body1>
+            <Caption1 className={s.chartCaption}>Slowest operations by 95th-percentile duration (top 12 by call count).</Caption1>
+            <BarChart bars={opBars} width={620} valueFormat={(v) => `${v} ms`} emptyText="No operations recorded in this window." />
+          </div>
+          <Subtitle2 style={{ marginTop: 8 }}>Operations ({sum.byOperation.length})</Subtitle2>
+          <Caption1 className={s.chartCaption}>Click a column header to sort.</Caption1>
+          <div className={s.tableWrap} style={{ maxHeight: 260 }}>
+            <Table size="small" aria-label="Operations" sortable>
+              <TableHeader><TableRow>
+                <TableHeaderCell
+                  sortDirection={opSort.col === 'operation' ? opSort.dir : undefined}
+                  onClick={() => toggleOpSort('operation')}
+                >Operation</TableHeaderCell>
+                <TableHeaderCell
+                  sortDirection={opSort.col === 'count' ? opSort.dir : undefined}
+                  onClick={() => toggleOpSort('count')}
+                >Calls</TableHeaderCell>
+                <TableHeaderCell
+                  sortDirection={opSort.col === 'p95Ms' ? opSort.dir : undefined}
+                  onClick={() => toggleOpSort('p95Ms')}
+                >p95 (ms)</TableHeaderCell>
+                <TableHeaderCell
+                  sortDirection={opSort.col === 'failed' ? opSort.dir : undefined}
+                  onClick={() => toggleOpSort('failed')}
+                >Failures</TableHeaderCell>
+              </TableRow></TableHeader>
+              <TableBody>
+                {sortedOps.map((o, i) => (
+                  <TableRow key={i}>
+                    <TableCell className={s.cell}>{o.operation || '—'}</TableCell>
+                    <TableCell className={s.cell}>{o.count}</TableCell>
+                    <TableCell className={s.cell}>{o.p95Ms !== undefined ? Math.round(o.p95Ms) : '—'}</TableCell>
+                    <TableCell className={s.cell}>{o.failed}</TableCell>
+                  </TableRow>
+                ))}
+              </TableBody>
+            </Table>
+          </div>
         </>
       )}
     </div>
@@ -1397,12 +1649,35 @@ function FineTuningPanel({ active, nonce, acct }: { active: boolean; nonce: numb
 
       {selectedJob && (
         <>
-          <Subtitle2 style={{ marginTop: 12 }}>Training events · {selectedJob.id}</Subtitle2>
+          <Subtitle2 style={{ marginTop: 12 }}>Training metrics · {selectedJob.id}</Subtitle2>
           {selectedJob.error?.message ? <GateBar msg={selectedJob.error.message} /> : null}
           {events.loading ? <Spinner size="small" /> : events.error ? <GateBar msg={events.error} /> : events.list.length === 0 ? (
             <EmptyText>No training events yet. Loss metrics appear here as the job trains.</EmptyText>
           ) : (
-            <div className={s.tableWrap}>
+            <>
+              {/* Loss curve over training steps (Azure portal "metrics" tab parity). */}
+              {(() => {
+                const train: { x: number; y: number }[] = [];
+                const valid: { x: number; y: number }[] = [];
+                for (const ev of events.list) {
+                  if (ev.step === undefined) continue;
+                  if (typeof ev.trainingLoss === 'number') train.push({ x: ev.step, y: ev.trainingLoss });
+                  if (typeof ev.validationLoss === 'number') valid.push({ x: ev.step, y: ev.validationLoss });
+                }
+                const lossSeries: LineSeries[] = [];
+                if (train.length) lossSeries.push({ label: 'Training loss', color: tokens.colorBrandForeground1, points: train });
+                if (valid.length) lossSeries.push({ label: 'Validation loss', color: tokens.colorPaletteRedForeground1, points: valid });
+                if (!lossSeries.length) return null;
+                return (
+                  <div className={s.chartCard} style={{ marginBottom: 12 }}>
+                    <Body1 className={s.chartTitle}>Loss curve</Body1>
+                    <Caption1 className={s.chartCaption}>Training and validation loss over training steps.</Caption1>
+                    <LineChart series={lossSeries} xLabel="step" yLabel="loss" width={620} height={240} emptyText="No loss metrics emitted yet." />
+                  </div>
+                );
+              })()}
+              <Body1 style={{ fontWeight: 600 }}>Training events</Body1>
+              <div className={s.tableWrap}>
               <Table size="small" aria-label="Fine-tuning events">
                 <TableHeader><TableRow>
                   <TableHeaderCell>Time</TableHeaderCell><TableHeaderCell>Level</TableHeaderCell>
@@ -1422,7 +1697,8 @@ function FineTuningPanel({ active, nonce, acct }: { active: boolean; nonce: numb
                   ))}
                 </TableBody>
               </Table>
-            </div>
+              </div>
+            </>
           )}
         </>
       )}
@@ -1600,6 +1876,7 @@ export function FoundryHubEditor({ item, id }: { item: FabricItemType; id: strin
             <Tab value="models">Models + endpoints</Tab>
             <Tab value="fine-tuning">Fine-tuning</Tab>
             <Tab value="evaluations">Evaluations</Tab>
+            <Tab value="monitoring">Monitoring</Tab>
             <Tab value="quota">Quota + usage</Tab>
             <Tab value="networking">Networking</Tab>
             <Tab value="identity">Identity / RBAC</Tab>
@@ -1621,6 +1898,7 @@ export function FoundryHubEditor({ item, id }: { item: FabricItemType; id: strin
         <ModelsPanel active={tab === 'models'} nonce={nonce} acct={acct} />
         <FineTuningPanel active={tab === 'fine-tuning'} nonce={nonce} acct={acct} />
         <EvaluationsPanel active={tab === 'evaluations'} nonce={nonce} acct={acct} />
+        <MonitoringPanel active={tab === 'monitoring'} nonce={nonce} />
         <QuotaPanel active={tab === 'quota'} nonce={nonce} acct={acct} />
         <NetworkingPanel active={tab === 'networking'} nonce={nonce} acct={acct} />
         <IdentityPanel active={tab === 'identity'} nonce={nonce} acct={acct} />

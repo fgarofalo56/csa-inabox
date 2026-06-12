@@ -103,7 +103,7 @@ var databases = [
 // remain the idempotent fallback for hotfix deploys that skip bicep. The rest
 // only require the Console UAMI to hold the Cosmos DB Built-in Data Contributor
 // role at account scope (data-plane, not ARM RBAC — bootstrapped by
-// scripts/csa-loom/grant-cosmos-rbac.sh). Other lazily-created containers
+// scripts/csa-loom/grant-navigator-rbac.sh). Other lazily-created containers
 // (PK /tenantId unless noted):
 //   tenant-settings, feature-permissions, marketplace-listings, mcp-servers,
 //   thread-edges, connections, maintenance-jobs,

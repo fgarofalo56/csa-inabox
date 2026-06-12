@@ -25,6 +25,7 @@ import {
   BeakerEdit24Regular,
   Send24Regular,
   Flow24Regular,
+  Alert24Regular,
 } from '@fluentui/react-icons';
 import { CopilotIcon } from './icons/copilot-icon';
 
@@ -42,6 +43,7 @@ const navItems = [
   { href: '/governance', icon: ShieldCheckmark24Regular, label: 'Governance' },
   { href: '/monitor', icon: ChartMultiple24Regular, label: 'Monitor' },
   { href: '/realtime-hub', icon: Flash24Regular, label: 'Real-Time hub' },
+  { href: '/activator-hub', icon: Alert24Regular, label: 'Activator' },
   { href: '/business-events', icon: Send24Regular, label: 'Business events' },
   { href: '/rti-hub', icon: DataUsage24Regular, label: 'RTI catalog' },
   { href: '/data-agent', icon: Bot24Regular, label: 'Data agents' },

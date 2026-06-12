@@ -8,7 +8,21 @@
  * Pure (no Azure SDK / network), so they run under the node vitest env.
  */
 import { describe, it, expect } from 'vitest';
-import { MCP_DEPLOY_CATALOG as MCP_CATALOG, getCatalogEntry, validateConfigValues, type McpCatalogEntry } from '../catalog';
+import {
+  MCP_DEPLOY_CATALOG as MCP_CATALOG,
+  getCatalogEntry,
+  validateConfigValues,
+  entryEgress,
+  reachesExternalSaas,
+  deployServersForCloud,
+  MCP_CATALOG as MCP_GOV_CATALOG,
+  govMetaFor,
+  deployCatalogWithGovMeta,
+  defaultRecommendedServers,
+  airGapSafeServers,
+  serversForCloud,
+  type McpCatalogEntry,
+} from '../catalog';
 
 describe('MCP_CATALOG integrity', () => {
   it('every entry has a real image, port, mcpPath and at least metadata', () => {
@@ -46,6 +60,39 @@ describe('MCP_CATALOG integrity', () => {
   it('getCatalogEntry resolves known ids and rejects unknown', () => {
     expect(getCatalogEntry(MCP_CATALOG[0].id)?.id).toBe(MCP_CATALOG[0].id);
     expect(getCatalogEntry('does-not-exist')).toBeUndefined();
+  });
+
+  it('every entry carries gov metadata (egress, license, govSafe, airGapSafe)', () => {
+    for (const e of MCP_CATALOG) {
+      expect(['air-gap-safe', 'azure-internal', 'external-saas']).toContain(entryEgress(e));
+      expect(typeof e.govSafe).toBe('boolean');
+      expect(typeof e.airGapSafe).toBe('boolean');
+      // external-SaaS entries must declare the hosts they reach (drives the warning).
+      if (entryEgress(e) === 'external-saas') expect((e.externalHosts || []).length).toBeGreaterThan(0);
+      // air-gap-safe entries reach nothing external.
+      if (entryEgress(e) === 'air-gap-safe') expect((e.externalHosts || []).length).toBe(0);
+    }
+  });
+});
+
+describe('gov metadata helpers', () => {
+  it('reachesExternalSaas is true only for external-saas entries', () => {
+    for (const e of MCP_CATALOG) {
+      expect(reachesExternalSaas(e)).toBe(entryEgress(e) === 'external-saas');
+    }
+  });
+
+  it('deployServersForCloud narrows by boundary', () => {
+    const commercial = deployServersForCloud('commercial');
+    const gcc = deployServersForCloud('gcc');
+    const il5 = deployServersForCloud('il5');
+    expect(commercial.length).toBe(MCP_CATALOG.length);
+    // gcc is a subset of commercial, all govSafe.
+    expect(gcc.length).toBeLessThanOrEqual(commercial.length);
+    expect(gcc.every((e) => e.govSafe === true)).toBe(true);
+    // il5 only air-gap-safe servers (zero external egress).
+    expect(il5.every((e) => e.airGapSafe === true)).toBe(true);
+    expect(il5.every((e) => entryEgress(e) === 'air-gap-safe')).toBe(true);
   });
 });
 
@@ -88,5 +135,69 @@ describe('validateConfigValues', () => {
     expect(out.mode).toBe('b');
     expect(out.flag).toBe('true');
     expect(out.count).toBe('5');
+  });
+});
+
+describe('MCP_CATALOG (gov-safety metadata source)', () => {
+  it('has unique ids and a complete gov-safety facet on every entry', () => {
+    expect(MCP_GOV_CATALOG.length).toBeGreaterThanOrEqual(25);
+    const ids = MCP_GOV_CATALOG.map((s) => s.id);
+    expect(new Set(ids).size).toBe(ids.length);
+    const licenses = new Set(['Apache-2.0', 'MIT', 'BSD', 'Proprietary']);
+    for (const s of MCP_GOV_CATALOG) {
+      expect(s.id).toMatch(/^[a-z0-9-]+$/);
+      expect(typeof s.govSafe).toBe('boolean');
+      expect(typeof s.airGapSafe).toBe('boolean');
+      expect(licenses.has(s.license)).toBe(true);
+      expect(Array.isArray(s.externalHosts)).toBe(true);
+      expect(Array.isArray(s.configSchema)).toBe(true);
+      // No AGPL/SSPL in the gov catalog (license bucket enforces it by type).
+      // Air-gap-safe servers must declare zero external hosts.
+      if (s.airGapSafe) expect(s.externalHosts.length).toBe(0);
+    }
+  });
+
+  it('the gov default-recommended set is non-empty and gov-safe + air-gap-safe leaning', () => {
+    const def = defaultRecommendedServers();
+    expect(def.length).toBeGreaterThan(0);
+    for (const s of def) expect(s.govSafe).toBe(true);
+    expect(airGapSafeServers().length).toBeGreaterThan(0);
+  });
+
+  it('serversForCloud narrows for the il5 boundary', () => {
+    const all = serversForCloud('commercial');
+    const il5 = serversForCloud('il5');
+    expect(all.length).toBe(MCP_GOV_CATALOG.length);
+    expect(il5.length).toBeLessThanOrEqual(all.length);
+    // Every il5-permitted server is air-gap-safe or an Azure-native data plane.
+    for (const s of il5) {
+      expect(s.airGapSafe || ['azure', 'postgres', 'kubernetes'].includes(s.id)).toBe(true);
+    }
+  });
+});
+
+describe('govMetaFor bridge (operational ⇄ gov metadata)', () => {
+  it('resolves gov metadata for an operational id present in the gov catalog', () => {
+    const m = govMetaFor('github');
+    expect(m).toBeDefined();
+    expect(typeof m!.govSafe).toBe('boolean');
+    expect(m!.license).toBeTruthy();
+  });
+
+  it('returns undefined for an id with no research-doc provenance', () => {
+    expect(govMetaFor('does-not-exist')).toBeUndefined();
+  });
+
+  it('joins every operational entry to its (optional) gov facet by id', () => {
+    const joined = deployCatalogWithGovMeta();
+    expect(joined.length).toBe(MCP_CATALOG.length);
+    for (const row of joined) {
+      expect(row.entry.id).toMatch(/^[a-z0-9-]+$/);
+      // gov is either a full facet or honestly undefined (never a fabricated default).
+      if (row.gov) expect(typeof row.gov.govSafe).toBe('boolean');
+    }
+    // The operational deploy ids that exist in the gov catalog must resolve.
+    const grafana = joined.find((r) => r.entry.id === 'grafana');
+    expect(grafana?.gov?.govSafe).toBe(true);
   });
 });

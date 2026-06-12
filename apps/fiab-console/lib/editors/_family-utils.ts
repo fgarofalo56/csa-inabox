@@ -99,8 +99,94 @@ export interface OntologyEntityBinding {
   sourceDisplayName: string;
   /** Ontology class names this source materializes as entity instances. */
   entityTypes: string[];
+  /**
+   * Per-entity-type primary-key column name (the column an UPDATE/DELETE keys on).
+   * Optional — when unset, Atelier write actions require the caller to name the
+   * key column explicitly. Keyed by entity type name. Constrains writes to the
+   * ontology-declared shape (no freeform SQL).
+   */
+  keyColumns?: Record<string, string>;
+  /**
+   * Per-entity-type allowed writable column names. When present, an Atelier
+   * create/update is rejected if it references a column not in this list, so
+   * writes stay bound to the ontology's declared schema rather than arbitrary
+   * columns. Keyed by entity type name.
+   */
+  writableColumns?: Record<string, string[]>;
   /** ISO-8601 timestamp the binding was created/updated. */
   boundAt?: string;
+}
+
+/**
+ * A safe SQL identifier — a leading letter/underscore then word chars, ≤128
+ * (T-SQL identifier limit). Returns the identifier when safe, else null.
+ * Shared by the Atelier (Workshop app) write path and the ontology bind path so
+ * table/column names are validated identically before being bracket-quoted into
+ * T-SQL. Values are NEVER validated here — they go through TDS named-parameter
+ * binding (see synapse-sql-client.SynapseQueryParam).
+ */
+export function safeSqlIdent(name: string): string | null {
+  return typeof name === 'string' && /^[A-Za-z_][\w]{0,127}$/.test(name) ? name : null;
+}
+
+/** A column/value pair for an Atelier write, post-validation. */
+export interface AtelierColumnValue {
+  /** Validated (safe) column identifier. */
+  column: string;
+  /** The value to bind (string | null). Bound via TDS, never concatenated. */
+  value: string | null;
+}
+
+/**
+ * Result of building a parameterised T-SQL write statement: the SQL text using
+ * `@p0`/`@k` markers and the parameter list to bind via the Synapse client.
+ * `value` is bound as NVARCHAR(MAX); T-SQL implicitly converts to the column
+ * type, so a single bind type covers string/number/date columns.
+ */
+export interface AtelierSql {
+  sql: string;
+  params: Array<{ name: string; value: string | null }>;
+}
+
+/**
+ * Build a parameterised INSERT for an Atelier "create" action. Columns are
+ * already validated safe identifiers; values are bound (`@p0`, `@p1`, …) — never
+ * spliced into the SQL string. Throws when no columns are supplied.
+ */
+export function buildInsertSql(table: string, cols: AtelierColumnValue[]): AtelierSql {
+  if (!cols.length) throw new Error('create requires at least one column value');
+  const params = cols.map((c, i) => ({ name: `p${i}`, value: c.value }));
+  const colList = cols.map((c) => `[${c.column}]`).join(', ');
+  const valList = cols.map((_, i) => `@p${i}`).join(', ');
+  return { sql: `INSERT INTO [${table}] (${colList}) VALUES (${valList})`, params };
+}
+
+/**
+ * Build a parameterised UPDATE for an Atelier "update" action. Sets each column
+ * to a bound `@p<i>` marker and keys on `[keyColumn] = @k`. Columns and
+ * keyColumn are validated safe identifiers; values are bound. Throws when no
+ * SET columns are supplied.
+ */
+export function buildUpdateSql(
+  table: string,
+  cols: AtelierColumnValue[],
+  keyColumn: string,
+  keyValue: string | null,
+): AtelierSql {
+  if (!cols.length) throw new Error('update requires at least one column value');
+  const params = cols.map((c, i) => ({ name: `p${i}`, value: c.value }));
+  params.push({ name: 'k', value: keyValue });
+  const setList = cols.map((c, i) => `[${c.column}] = @p${i}`).join(', ');
+  return { sql: `UPDATE [${table}] SET ${setList} WHERE [${keyColumn}] = @k`, params };
+}
+
+/**
+ * Build a parameterised DELETE for an Atelier "delete" action, keyed on
+ * `[keyColumn] = @k`. keyColumn is a validated safe identifier; the key value is
+ * bound. A WHERE clause is always emitted (no unbounded DELETE).
+ */
+export function buildDeleteSql(table: string, keyColumn: string, keyValue: string | null): AtelierSql {
+  return { sql: `DELETE FROM [${table}] WHERE [${keyColumn}] = @k`, params: [{ name: 'k', value: keyValue }] };
 }
 
 /**
@@ -280,6 +366,145 @@ export function bboxToZoom(bbox: BBox | null): number {
   if (!bbox) return 8;
   const span = Math.max(bbox.maxLon - bbox.minLon, bbox.maxLat - bbox.minLat);
   return Math.max(1, Math.min(18, Math.round(11 - Math.log2(Math.max(span, 0.0001)))));
+}
+
+/** Format a bbox as a compact "[minLon, minLat] -> [maxLon, maxLat]" label. */
+export function bboxLabel(bbox: BBox | null): string | null {
+  if (!bbox) return null;
+  const f = (n: number) => n.toFixed(4);
+  return `[${f(bbox.minLon)}, ${f(bbox.minLat)}] → [${f(bbox.maxLon)}, ${f(bbox.maxLat)}]`;
+}
+
+// ============================================================
+// Geo-dataset inspector — turn OPENROWSET probe rows into GeoJSON
+// (geo-editors.tsx GeoDatasetEditor map render)
+// ============================================================
+
+/**
+ * Parse a single Well-Known-Text geometry literal into a GeoJSON geometry.
+ * Handles POINT / LINESTRING / POLYGON (and their MULTI* variants). Returns
+ * null for anything it can't parse (e.g. WKB hex blobs, which Synapse returns
+ * for varbinary geometry columns and which can't be decoded client-side).
+ *
+ * Pure + side-effect-free so vitest can exercise it without a DOM. The grammar
+ * is deliberately tolerant: it strips the type keyword, then recursively reads
+ * the parenthesised coordinate groups. Z/M ordinates beyond lon/lat are dropped
+ * (GeoJSON is 2-D for our SVG renderer).
+ */
+export function parseWktGeometry(wkt: string): { type: string; coordinates: unknown } | null {
+  if (typeof wkt !== 'string') return null;
+  const s = wkt.trim();
+  const m = s.match(/^(POINT|LINESTRING|POLYGON|MULTIPOINT|MULTILINESTRING|MULTIPOLYGON)\s*(Z|M|ZM)?\s*\((.*)\)\s*$/i);
+  if (!m) return null;
+  const type = m[1].toUpperCase();
+  const body = m[3];
+
+  // Read a flat list of "lon lat" pairs from a coordinate string.
+  const readPairs = (str: string): number[][] => {
+    const pairs: number[][] = [];
+    for (const tok of str.split(',')) {
+      const nums = tok.trim().split(/\s+/).map(Number);
+      if (nums.length >= 2 && Number.isFinite(nums[0]) && Number.isFinite(nums[1])) {
+        pairs.push([nums[0], nums[1]]);
+      }
+    }
+    return pairs;
+  };
+  // Split a body into top-level parenthesised groups (handles nesting).
+  const splitGroups = (str: string): string[] => {
+    const groups: string[] = [];
+    let depth = 0, start = -1;
+    for (let i = 0; i < str.length; i++) {
+      const ch = str[i];
+      if (ch === '(') { if (depth === 0) start = i + 1; depth++; }
+      else if (ch === ')') { depth--; if (depth === 0 && start >= 0) { groups.push(str.slice(start, i)); start = -1; } }
+    }
+    return groups;
+  };
+
+  switch (type) {
+    case 'POINT': {
+      const p = readPairs(body)[0];
+      return p ? { type: 'Point', coordinates: p } : null;
+    }
+    case 'LINESTRING':
+      return { type: 'LineString', coordinates: readPairs(body) };
+    case 'MULTIPOINT': {
+      // MULTIPOINT can be "(1 2, 3 4)" or "((1 2),(3 4))".
+      const groups = splitGroups(body);
+      const coords = groups.length ? groups.map((g) => readPairs(g)[0]).filter(Boolean) : readPairs(body);
+      return { type: 'MultiPoint', coordinates: coords };
+    }
+    case 'POLYGON':
+      return { type: 'Polygon', coordinates: splitGroups(body).map(readPairs) };
+    case 'MULTILINESTRING':
+      return { type: 'MultiLineString', coordinates: splitGroups(body).map(readPairs) };
+    case 'MULTIPOLYGON':
+      return { type: 'MultiPolygon', coordinates: splitGroups(body).map((poly) => splitGroups(poly).map(readPairs)) };
+    default:
+      return null;
+  }
+}
+
+/** GeoJSON FeatureCollection shape used by the SVG renderer. */
+export interface GeoFeatureCollection { type: 'FeatureCollection'; features: any[] }
+
+/**
+ * Turn the geometry inspector's probe result ({ columns, rows }) into a GeoJSON
+ * FeatureCollection so the dataset editor can render the actual geometry on the
+ * shared map — not just a schema panel + raw JSON dump.
+ *
+ * Resolution order per row, using the declared geometry column first:
+ *   1. The geometry cell is a GeoJSON object/array literal → use it directly.
+ *   2. The geometry cell is a WKT literal (POINT(...)/POLYGON(...)) → parse it.
+ *   3. Fallback: lon/lat (or longitude/latitude, x/y) columns → Point feature.
+ *
+ * WKB hex blobs (varbinary geometry) can't be decoded client-side, so those
+ * rows are skipped (the schema panel still badges them "WKB"). Bounded to the
+ * first `max` rows. Pure + unit-tested.
+ */
+export function geoFeaturesFromInspectRows(
+  columns: string[],
+  rows: unknown[][],
+  geomColumn: string,
+  max = 2000,
+): GeoFeatureCollection {
+  const fc: GeoFeatureCollection = { type: 'FeatureCollection', features: [] };
+  if (!Array.isArray(columns) || !Array.isArray(rows)) return fc;
+  const lc = columns.map((c) => String(c).toLowerCase());
+  const geomI = lc.indexOf(String(geomColumn || '').toLowerCase());
+  const lonI = lc.findIndex((c) => ['lon', 'lng', 'longitude', 'x'].includes(c));
+  const latI = lc.findIndex((c) => ['lat', 'latitude', 'y'].includes(c));
+
+  for (const row of rows.slice(0, max)) {
+    if (!Array.isArray(row)) continue;
+    const props: Record<string, unknown> = {};
+    columns.forEach((c, i) => { if (i !== geomI && i !== lonI && i !== latI) props[c] = row[i]; });
+
+    let geometry: { type: string; coordinates: unknown } | null = null;
+    const cell = geomI >= 0 ? row[geomI] : undefined;
+
+    // 1. GeoJSON literal cell (object, or a string that parses to one).
+    if (cell && typeof cell === 'object' && (cell as any).type && (cell as any).coordinates) {
+      geometry = cell as any;
+    } else if (typeof cell === 'string') {
+      const t = cell.trim();
+      if (t.startsWith('{')) {
+        try { const j = JSON.parse(t); if (j?.type && j?.coordinates) geometry = j; } catch { /* not GeoJSON */ }
+      }
+      // 2. WKT literal.
+      if (!geometry) geometry = parseWktGeometry(t);
+    }
+
+    // 3. lon/lat column fallback.
+    if (!geometry && lonI >= 0 && latI >= 0) {
+      const lon = Number(row[lonI]); const lat = Number(row[latI]);
+      if (Number.isFinite(lon) && Number.isFinite(lat)) geometry = { type: 'Point', coordinates: [lon, lat] };
+    }
+
+    if (geometry) fc.features.push({ type: 'Feature', properties: props, geometry });
+  }
+  return fc;
 }
 
 // ============================================================

@@ -109,15 +109,24 @@ jobs:
         run: pnpm build
 
   tutorial-coverage:
-    # Audits visual-tutorial coverage (items + features parsed from source;
-    # apps audited when a catalog JSON is supplied). Pure node, no install.
+    # Audits visual-tutorial coverage across ALL THREE dimensions (B-9):
+    #   items + features are parsed from source; apps are audited against the
+    #   checked-in fixture scripts/csa-loom/fixtures/apps-catalog.json (generated
+    #   from CATALOG_META ∩ listBundleIds(), the exact set the live
+    #   /api/apps-catalog surfaces). Pure node, no install.
     #
-    # REPORT-ONLY for now: reviewed screenshots are published by an operator
-    # behind the Azure-imagery privacy gate, so the published set legitimately
-    # lags the source. Once the first reviewed captures are committed under
-    # docs/fiab/tutorials/items/, flip this to a required, blocking gate by
-    # adding `--strict` (and `--apps-catalog <exported-catalog.json>`) so the
-    # 0/N coverage drift can never silently merge again.
+    # The fixture is BLOCKING-verified for freshness (the drift check below) so a
+    # new curated app can never silently escape the apps coverage audit.
+    #
+    # The coverage REPORT itself is non-blocking *until reviewed screenshots are
+    # published*: captures are produced by an operator running the
+    # csa-loom-tutorial-capture workflow against the live console and reviewing
+    # them behind the Azure-imagery privacy gate (publish-tutorials.mjs), so the
+    # published set legitimately lags source until that credentialed run lands.
+    # The instant the first reviewed captures are committed under
+    # docs/fiab/tutorials/items/, make this a hard gate by adding `--strict` to
+    # the coverage step below — that single edit permanently enforces
+    # "every item/app/feature has a screenshot set".
     name: visual-tutorial coverage (report)
     runs-on: ubuntu-latest
     timeout-minutes: 5
@@ -127,6 +136,11 @@ jobs:
         uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         with:
           node-version: '20'
-      - name: Report tutorial coverage
-        # Non-blocking until reviewed captures land — see comment above to enable --strict.
-        run: node scripts/csa-loom/check-tutorial-coverage.mjs
+      - name: Verify apps-catalog fixture is in sync with source (blocking)
+        # FAILS the build if a new app was added to CATALOG_META/index.ts without
+        # regenerating the fixture, so the apps dimension stays auditable + honest.
+        run: node scripts/csa-loom/gen-apps-catalog-fixture.mjs --check
+      - name: Report tutorial coverage (items + features + apps)
+        # Non-blocking until reviewed captures land — add `--strict` here to enable
+        # the blocking gate in the same change that commits the published captures.
+        run: node scripts/csa-loom/check-tutorial-coverage.mjs --apps-catalog scripts/csa-loom/fixtures/apps-catalog.json

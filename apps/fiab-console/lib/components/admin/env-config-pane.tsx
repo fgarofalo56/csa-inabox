@@ -21,12 +21,14 @@ import { useCallback, useEffect, useMemo, useState } from 'react';
 import {
   Spinner, MessageBar, MessageBarBody, MessageBarTitle, Button, Badge,
   Subtitle2, Body1, Body1Strong, Caption1, Divider, Input, tokens,
+  SearchBox, ProgressBar, ToggleButton,
 } from '@fluentui/react-components';
 import {
   Settings24Regular, ArrowSync24Regular, Save24Regular,
   CheckmarkCircle24Filled, Warning24Filled, Eye24Regular, EyeOff24Regular,
   Copy16Regular, Checkmark16Regular, Edit16Filled, ArrowResetRegular,
-  Info16Regular, Wrench16Regular,
+  Info16Regular, Wrench16Regular, ServerRegular, CloudRegular,
+  FilterDismiss16Regular,
 } from '@fluentui/react-icons';
 
 type Category = 'identity' | 'data-plane' | 'azure-services' | 'permissions' | 'security' | 'enrichment';
@@ -41,6 +43,10 @@ interface EnvConfigGet {
   editable: EditableEnvVar[];
   current: Record<string, CurrentVal>;
   acaConfigured: boolean; acaError?: string; cosmosError?: string;
+  /** Active container platform of this boundary: 'aca' (Commercial/GCC) or 'aks' (GCC-High/IL5/DoD). */
+  platform?: 'aca' | 'aks';
+  /** Whether the env-write path for the active platform is configured (alias of acaConfigured). */
+  writeConfigured?: boolean; writeError?: string;
   desired: { values: Record<string, string>; secretsSet: string[]; updatedAt?: string; updatedBy?: string } | null;
   drift: Array<{ key: string; desired: string; current: string }>;
   cloud: string; app: string; adminRg: string;
@@ -78,6 +84,9 @@ export function EnvConfigPane() {
   const [saving, setSaving] = useState(false);
   const [result, setResult] = useState<any>(null);
   const [copied, setCopied] = useState<string | null>(null);
+  const [filter, setFilter] = useState('');
+  const [unsetOnly, setUnsetOnly] = useState(false);
+  const [criticalOnly, setCriticalOnly] = useState(false);
 
   const load = useCallback(async () => {
     setLoading(true); setError(null); setForbidden(null);
@@ -148,9 +157,19 @@ export function EnvConfigPane() {
   if (!data) return null;
 
   const isGov = data.cloud === 'GCC-High' || data.cloud === 'DoD';
+  const q = filter.trim().toLowerCase();
+  const filtersActive = q.length > 0 || unsetOnly || criticalOnly;
+  const matches = (e: EditableEnvVar) => {
+    if (criticalOnly && e.severity !== 'critical') return false;
+    if (unsetOnly && data.current[e.key]?.set) return false;
+    if (q && !(e.key.toLowerCase().includes(q) || e.label.toLowerCase().includes(q))) return false;
+    return true;
+  };
   const grouped = CATEGORY_ORDER
-    .map((cat) => ({ cat, items: data.editable.filter((e) => e.category === cat) }))
+    .map((cat) => ({ cat, items: data.editable.filter((e) => e.category === cat && matches(e)) }))
     .filter((g) => g.items.length > 0);
+  const shownCount = grouped.reduce((n, g) => n + g.items.length, 0);
+  const coveragePct = coverage.total > 0 ? coverage.set / coverage.total : 0;
 
   return (
     <div>
@@ -161,11 +180,15 @@ export function EnvConfigPane() {
           <div style={{ flex: 1, minWidth: 240 }}>
             <Subtitle2>Deployment runtime configuration</Subtitle2>
             <Body1 style={{ display: 'block', color: tokens.colorNeutralForeground2, marginTop: 2 }}>
-              View and set the <strong>{data.app}</strong> container-app environment variables from
-              inside Loom — no Azure portal. Saving applies a real ARM revision and persists the
-              desired value to the Loom store. Cloud boundary: <strong>{data.cloud}</strong>.
+              View and set the <strong>{data.app}</strong> {data.platform === 'aks' ? 'Deployment' : 'container-app'} environment
+              variables from inside Loom — no Azure portal. Saving applies a real{' '}
+              {data.platform === 'aks'
+                ? 'AKS rolling update (kubectl set env via Run Command)'
+                : 'ARM revision'} and persists the desired value to the Loom store.
+              Cloud boundary: <strong>{data.cloud}</strong>
+              {data.platform === 'aks' ? ' · platform: AKS' : ' · platform: Container Apps'}.
             </Body1>
-            <div style={{ display: 'flex', gap: 8, marginTop: 8, flexWrap: 'wrap' }}>
+            <div style={{ display: 'flex', gap: 8, marginTop: 10, flexWrap: 'wrap', alignItems: 'center' }}>
               <Badge appearance="tint" size="medium"
                 color={coverage.set === coverage.total ? 'success' : 'informative'}
                 icon={<CheckmarkCircle24Filled />}>
@@ -176,12 +199,27 @@ export function EnvConfigPane() {
                   {coverage.missingCritical} critical not set
                 </Badge>
               )}
+              <Badge appearance="outline" size="medium" color="brand"
+                icon={data.platform === 'aks' ? <ServerRegular /> : <CloudRegular />}>
+                {data.platform === 'aks' ? 'AKS' : 'Container Apps'} · {data.cloud}
+              </Badge>
               {data.desired?.updatedAt && (
                 <Badge appearance="outline" size="medium" color="subtle">
                   last saved {new Date(data.desired.updatedAt).toLocaleString()}
                   {data.desired.updatedBy ? ` · ${data.desired.updatedBy}` : ''}
                 </Badge>
               )}
+            </div>
+            {/* Coverage progress — at-a-glance completeness of the editable catalog. */}
+            <div style={{ marginTop: 12, maxWidth: 420 }}>
+              <ProgressBar
+                value={coveragePct} thickness="large"
+                color={coverage.missingCritical > 0 ? 'warning' : coverage.set === coverage.total ? 'success' : 'brand'}
+                aria-label={`${coverage.set} of ${coverage.total} runtime variables configured`}
+              />
+              <Caption1 style={{ display: 'block', color: tokens.colorNeutralForeground3, marginTop: 4 }}>
+                {Math.round(coveragePct * 100)}% of editable runtime variables have a value
+              </Caption1>
             </div>
           </div>
           <div style={{ display: 'flex', gap: 8 }}>
@@ -199,12 +237,13 @@ export function EnvConfigPane() {
         </div>
       </div>
 
-      {/* ACA write gate */}
+      {/* Write gate (platform-aware: Container Apps on Commercial/GCC, AKS on GCC-High/IL5/DoD) */}
       {!data.acaConfigured && (
         <MessageBar intent="warning" style={{ marginBottom: 16 }}>
           <MessageBarBody>
             <MessageBarTitle>Write path not configured</MessageBarTitle>
-            {data.acaError} The table below is read-only until the Container Apps management env is set.
+            {data.writeError || data.acaError} The table below is read-only until the{' '}
+            {data.platform === 'aks' ? 'AKS cluster' : 'Container Apps'} management env is set.
           </MessageBarBody>
         </MessageBar>
       )}
@@ -281,6 +320,44 @@ export function EnvConfigPane() {
         <MessageBar intent="error" style={{ marginBottom: 16 }}>
           <MessageBarBody><MessageBarTitle>Error</MessageBarTitle> {error}</MessageBarBody>
         </MessageBar>
+      )}
+
+      {/* Filter toolbar — search + quick scopes over the editable catalog. */}
+      {data.editable.length > 0 && (
+        <div style={{
+          display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap',
+          marginBottom: 16, padding: '12px 16px',
+          border: `1px solid ${tokens.colorNeutralStroke2}`,
+          borderRadius: tokens.borderRadiusXLarge, backgroundColor: tokens.colorNeutralBackground1,
+          boxShadow: tokens.shadow2,
+        }}>
+          <SearchBox
+            style={{ minWidth: 240, flex: 1, maxWidth: 360 }}
+            placeholder="Filter by key or description…"
+            value={filter}
+            onChange={(_e, d) => setFilter(d.value)}
+            aria-label="Filter runtime variables"
+          />
+          <ToggleButton size="small" appearance="subtle" checked={unsetOnly}
+            icon={<Warning24Filled />} onClick={() => setUnsetOnly((v) => !v)}>
+            Unset only
+          </ToggleButton>
+          <ToggleButton size="small" appearance="subtle" checked={criticalOnly}
+            icon={<CheckmarkCircle24Filled />} onClick={() => setCriticalOnly((v) => !v)}>
+            Critical only
+          </ToggleButton>
+          {filtersActive && (
+            <>
+              <Caption1 style={{ color: tokens.colorNeutralForeground3 }}>
+                {shownCount} of {data.editable.length} shown
+              </Caption1>
+              <Button size="small" appearance="transparent" icon={<FilterDismiss16Regular />}
+                onClick={() => { setFilter(''); setUnsetOnly(false); setCriticalOnly(false); }}>
+                Clear
+              </Button>
+            </>
+          )}
+        </div>
       )}
 
       {/* Grouped editable table */}
@@ -375,7 +452,24 @@ export function EnvConfigPane() {
         </div>
       ))}
 
-      {grouped.length === 0 && (
+      {grouped.length === 0 && filtersActive && (
+        <div style={card}>
+          <div style={head}>
+            <Settings24Regular style={{ color: tokens.colorNeutralForeground3 }} />
+            <Subtitle2>No variables match the current filter</Subtitle2>
+          </div>
+          <Body1 style={{ display: 'block', color: tokens.colorNeutralForeground2, marginBottom: 12 }}>
+            None of the {data.editable.length} editable runtime variables match your search
+            {unsetOnly ? ' · unset only' : ''}{criticalOnly ? ' · critical only' : ''}.
+          </Body1>
+          <Button appearance="outline" icon={<FilterDismiss16Regular />}
+            onClick={() => { setFilter(''); setUnsetOnly(false); setCriticalOnly(false); }}>
+            Clear filters
+          </Button>
+        </div>
+      )}
+
+      {grouped.length === 0 && !filtersActive && (
         <div style={card}>
           <div style={head}>
             <Settings24Regular style={{ color: tokens.colorNeutralForeground3 }} />

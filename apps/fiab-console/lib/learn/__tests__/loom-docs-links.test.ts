@@ -48,11 +48,26 @@ function relFromPrimary(url: string): string {
   return url.replace(LOOM_DOCS_BASE, '').replace(/^\/+/, '').replace(/\/+$/, '');
 }
 
-/** True when a MkDocs dir-URL relative path has a backing source page on disk. */
+/**
+ * True when a MkDocs dir-URL relative path has a backing source page on disk.
+ *
+ * MkDocs with `use_directory_urls: true` (this repo's default) serves a
+ * directory URL (`…/foo/`) from any of three sources, in MkDocs' own
+ * resolution order:
+ *   • `foo.md`                — the page file itself, or
+ *   • `foo/index.md`          — the canonical section index, or
+ *   • `foo/README.md`         — MkDocs core treats README.md as an index alias
+ *                               (used by 198 nav entries across this site, e.g.
+ *                               every learn/08-solutions/<accelerator>/ page).
+ * Omitting the README.md alias would flag real, published pages as dead links
+ * for pages that resolve fine at runtime (e.g.
+ * `learn/08-solutions/change-feed-processor`).
+ */
 function docExists(rel: string): boolean {
   return (
     fs.existsSync(path.join(DOCS, `${rel}.md`)) ||
-    fs.existsSync(path.join(DOCS, rel, 'index.md'))
+    fs.existsSync(path.join(DOCS, rel, 'index.md')) ||
+    fs.existsSync(path.join(DOCS, rel, 'README.md'))
   );
 }
 

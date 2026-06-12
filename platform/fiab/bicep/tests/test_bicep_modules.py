@@ -266,3 +266,134 @@ def test_main_bicep_threads_copilot_maf_enabled(tmp_path):
         "the gov params cannot enable the MAF tier"
     )
     assert arm["parameters"]["copilotMafEnabled"]["type"] == "bool"
+
+
+# ----- audit-T47 MCP stdio→HTTP/SSE bridge IaC wiring -------------------
+# The bridge app (apps/fiab-mcp-bridge) is fully wired in admin-plane bicep,
+# but until now nothing at the IaC layer asserted it. These tests close that
+# bicep+bootstrap-sync gap: the loom-mcp-bridge Container App entry, its image
+# tag, its UAMI + outputs, the mcpBridgeUrl output, the Console env injection,
+# and the per-boundary AZURE_CLOUD / AZURE_AUTHORITY_HOST.
+#
+# admin-plane/main.bicep is a 3k-line orchestrator with a known pre-existing
+# compile state; rather than depend on a full `az bicep build` of it, the
+# wiring assertions read the bicep *source* directly (deterministic, always
+# runs). identity.bicep compiles cleanly, so its UAMI + outputs are also
+# verified through the real ARM-emit pipeline.
+
+ADMIN_PLANE = BICEP_MODULES / "admin-plane"
+ADMIN_MAIN_BICEP = ADMIN_PLANE / "main.bicep"
+IDENTITY_BICEP = ADMIN_PLANE / "identity.bicep"
+AZURE_YAML = REPO_ROOT / "platform" / "fiab" / "azd" / "azure.yaml"
+
+
+def _src(path: Path) -> str:
+    return path.read_text(encoding="utf-8")
+
+
+def test_admin_main_declares_mcp_bridge_app_entry():
+    """The loom-mcp-bridge Container App entry exists with internal ingress
+    on 8080, the bridge health path, and the mcp tier."""
+    src = _src(ADMIN_MAIN_BICEP)
+    assert "name: 'loom-mcp-bridge'" in src, "no loom-mcp-bridge app entry"
+    assert "image: 'loom-mcp-bridge:${appImageTags.mcpBridge}'" in src, (
+        "loom-mcp-bridge app does not use the appImageTags.mcpBridge tag"
+    )
+    assert "uamiId: identity.outputs.uamiMcpBridgeId" in src, (
+        "loom-mcp-bridge app not bound to the uamiMcpBridge identity"
+    )
+    # Internal-only ingress on the documented bridge port + health path.
+    assert "ingressPort: 8080" in src
+    assert "healthPath: '/.well-known/health'" in src, (
+        "bridge health path /.well-known/health not wired"
+    )
+    # The bridge must never be public ingress.
+    bridge_block = src[src.index("name: 'loom-mcp-bridge'") :]
+    bridge_block = bridge_block[: bridge_block.index("name: 'loom-setup-orchestrator'")]
+    assert "external: false" in bridge_block, (
+        "loom-mcp-bridge ingress must be internal (external: false)"
+    )
+    assert "tier: 'mcp'" in bridge_block
+
+
+def test_admin_main_image_tag_default_for_mcp_bridge():
+    """appImageTags carries an mcpBridge tag default so the app can deploy."""
+    src = _src(ADMIN_MAIN_BICEP)
+    assert "mcpBridge:" in src, "appImageTags has no mcpBridge tag"
+
+
+def test_admin_main_bridge_per_boundary_cloud_env():
+    """The bridge child env is steered per boundary: Gov boundaries get the
+    sovereign AZURE_CLOUD + .us authority host; everything else commercial."""
+    src = _src(ADMIN_MAIN_BICEP)
+    bridge_block = src[src.index("name: 'loom-mcp-bridge'") :]
+    bridge_block = bridge_block[: bridge_block.index("name: 'loom-setup-orchestrator'")]
+    assert "LOOM_MCP_BRIDGE_CONFIG" in bridge_block, (
+        "bridge missing LOOM_MCP_BRIDGE_CONFIG env"
+    )
+    assert "LOOM_MCP_BRIDGE_PORT" in bridge_block
+    # Boundary-conditional sovereign-cloud wiring.
+    assert "AzureUSGovernment" in bridge_block and "AzureCloud" in bridge_block, (
+        "bridge AZURE_CLOUD is not boundary-conditional"
+    )
+    assert "login.microsoftonline.us" in bridge_block, (
+        "bridge AZURE_AUTHORITY_HOST does not target the Gov authority for "
+        "GCC-High/IL5"
+    )
+    assert "GCC-High" in bridge_block and "IL5" in bridge_block, (
+        "bridge boundary condition does not key off GCC-High/IL5"
+    )
+
+
+def test_admin_main_injects_bridge_url_into_console():
+    """The Console app gets LOOM_MCP_BRIDGE_URL so the External-MCP panel can
+    offer the bridged servers for one-click registration."""
+    src = _src(ADMIN_MAIN_BICEP)
+    assert "LOOM_MCP_BRIDGE_URL" in src, (
+        "Console env never receives LOOM_MCP_BRIDGE_URL"
+    )
+    assert "http://loom-mcp-bridge:8080" in src, (
+        "Console LOOM_MCP_BRIDGE_URL does not point at the internal bridge"
+    )
+
+
+def test_admin_main_emits_mcp_bridge_url_output():
+    """admin-plane/main.bicep exposes the bridge URL as an output."""
+    src = _src(ADMIN_MAIN_BICEP)
+    assert "output mcpBridgeUrl string" in src, (
+        "admin-plane/main.bicep does not declare the mcpBridgeUrl output"
+    )
+
+
+def test_identity_bicep_declares_mcp_bridge_uami_source():
+    """identity.bicep declares the bridge UAMI + its three outputs."""
+    src = _src(IDENTITY_BICEP)
+    assert "resource uamiMcpBridge 'Microsoft.ManagedIdentity" in src, (
+        "uamiMcpBridge identity resource missing from identity.bicep"
+    )
+    assert "name: 'uami-loom-mcp-bridge-${location}'" in src
+    for out in ("uamiMcpBridgeId", "uamiMcpBridgeClientId", "uamiMcpBridgePrincipalId"):
+        assert f"output {out} string" in src, f"identity.bicep missing output {out}"
+
+
+def test_azure_yaml_declares_mcp_bridge_service():
+    """azd service maps mcp-bridge to apps/fiab-mcp-bridge as a containerapp."""
+    src = _src(AZURE_YAML)
+    assert "mcp-bridge:" in src, "azure.yaml has no mcp-bridge service"
+    assert "fiab-mcp-bridge" in src, (
+        "mcp-bridge azd service does not point at apps/fiab-mcp-bridge"
+    )
+
+
+@needs_az
+def test_identity_bicep_arm_emits_mcp_bridge_uami(tmp_path):
+    """End-to-end ARM emit: identity.bicep compiles and the bridge UAMI +
+    its three outputs are present in the emitted template."""
+    arm = _build_bicep(IDENTITY_BICEP, tmp_path)
+    blob = json.dumps(arm)
+    assert "uami-loom-mcp-bridge-" in blob, (
+        "emitted ARM has no uami-loom-mcp-bridge identity"
+    )
+    outputs = arm.get("outputs", {})
+    for out in ("uamiMcpBridgeId", "uamiMcpBridgeClientId", "uamiMcpBridgePrincipalId"):
+        assert out in outputs, f"emitted ARM missing output {out}"

@@ -289,6 +289,25 @@ export async function deployMcpContainerApp(opts: {
             image,
             env,
             resources: { cpu: 0.5, memory: '1Gi' },
+            // Health probes hit the server's dedicated health path — never the
+            // MCP JSON-RPC endpoint (which isn't a valid health probe per
+            // learn.microsoft.com/azure/container-apps/mcp-overview).
+            probes: [
+              {
+                type: 'Liveness',
+                httpGet: { path: entry.healthPath || '/health', port: entry.port, scheme: 'HTTP' },
+                initialDelaySeconds: 10,
+                periodSeconds: 30,
+                failureThreshold: 3,
+              },
+              {
+                type: 'Readiness',
+                httpGet: { path: entry.healthPath || '/health', port: entry.port, scheme: 'HTTP' },
+                initialDelaySeconds: 5,
+                periodSeconds: 15,
+                failureThreshold: 6,
+              },
+            ],
             ...(volumeMounts.length ? { volumeMounts } : {}),
           },
         ],

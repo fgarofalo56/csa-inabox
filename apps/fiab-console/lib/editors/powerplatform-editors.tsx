@@ -24,6 +24,7 @@ import {
   Dialog, DialogTrigger, DialogSurface, DialogBody, DialogTitle, DialogContent, DialogActions,
   Table, TableHeader, TableRow, TableHeaderCell, TableBody, TableCell,
   MessageBar, MessageBarBody, MessageBarTitle,
+  SearchBox,
   makeStyles, tokens,
 } from '@fluentui/react-components';
 import {
@@ -34,7 +35,7 @@ import {
 import { ItemEditorChrome } from './item-editor-chrome';
 import { PowerPlatformTree } from '@/lib/components/powerplatform/powerplatform-tree';
 import { PowerAppsStudioTab } from '@/lib/power-platform/power-apps-editor';
-import { PowerAutomateDesignerTab } from '@/lib/power-platform/power-automate-editor';
+import { PowerAutomateDesignerTab, NewFlowAuthor } from '@/lib/power-platform/power-automate-editor';
 import { getItem, type WorkspaceItem } from '@/lib/api/workspaces';
 import type { FabricItemType } from '@/lib/catalog/fabric-item-types';
 import type { RibbonTab } from '@/lib/components/ribbon';
@@ -54,6 +55,15 @@ const useStyles = makeStyles({
   metaGrid: { display: 'grid', gridTemplateColumns: 'auto 1fr', gap: '6px 16px', alignItems: 'baseline' },
   metaKey: { color: tokens.colorNeutralForeground3, fontSize: 12 },
   tableWrap: { overflow: 'auto', maxHeight: 480, border: `1px solid ${tokens.colorNeutralStroke2}`, borderRadius: 4 },
+  // Keep the header visible while scrolling long metadata lists (up to 500 rows).
+  stickyHead: {
+    position: 'sticky', top: 0, zIndex: 1,
+    backgroundColor: tokens.colorNeutralBackground1,
+    boxShadow: `inset 0 -1px 0 ${tokens.colorNeutralStroke2}`,
+  },
+  // Filter row above a table — search box + live result count, right-aligned count.
+  filterRow: { display: 'flex', alignItems: 'center', gap: 12, flexWrap: 'wrap' },
+  filterCount: { color: tokens.colorNeutralForeground3, marginLeft: 'auto' },
   cell: { fontSize: 12, whiteSpace: 'nowrap', maxWidth: 360, overflow: 'hidden', textOverflow: 'ellipsis' },
   cellClickable: {
     fontSize: 12, whiteSpace: 'nowrap', maxWidth: 360, overflow: 'hidden', textOverflow: 'ellipsis',
@@ -119,6 +129,35 @@ function ErrorBar({ msg, hint }: { msg: string; hint?: string }) {
 function EmptyText({ children }: { children: React.ReactNode }) {
   const s = useStyles();
   return <div className={s.empty}>{children}</div>;
+}
+
+/**
+ * Quick-filter row over a list table — mirrors the search box every Power
+ * Platform maker list (tables, apps, flows, models) exposes. Filtering is
+ * client-side over the already-fetched rows (no extra backend call); the live
+ * count keeps the operator oriented when a query narrows a long list.
+ */
+function TableFilter({
+  value, onChange, placeholder, shown, total, unit,
+}: {
+  value: string; onChange: (v: string) => void; placeholder: string;
+  shown: number; total: number; unit: string;
+}) {
+  const s = useStyles();
+  return (
+    <div className={s.filterRow}>
+      <SearchBox
+        value={value}
+        onChange={(_, d) => onChange(d.value)}
+        placeholder={placeholder}
+        aria-label={placeholder}
+        style={{ minWidth: 260 }}
+      />
+      <Caption1 className={s.filterCount}>
+        {value.trim() ? `${shown} of ${total} ${unit}` : `${total} ${unit}`}
+      </Caption1>
+    </div>
+  );
 }
 
 interface FetchState<T> { loading: boolean; data: T | null; error?: string; hint?: string; code?: string; }
@@ -669,6 +708,55 @@ export function DataverseTableEditor({ item, id }: { item: FabricItemType; id: s
     setColDesc(''); setColMaxLen('100'); setColPrecision('2'); setColMsg(null);
   };
 
+  // ----- New table dialog (real Dataverse Web API POST EntityDefinitions) -----
+  const [tblOpen, setTblOpen] = useState(false);
+  const [tblBusy, setTblBusy] = useState(false);
+  const [tblMsg, setTblMsg] = useState<{ kind: 'success' | 'error'; text: string } | null>(null);
+  const [tblSchema, setTblSchema] = useState('');
+  const [tblDisplay, setTblDisplay] = useState('');
+  const [tblPlural, setTblPlural] = useState('');
+  const [tblPrimary, setTblPrimary] = useState('Name');
+  const [tblOwnership, setTblOwnership] = useState<'UserOwned' | 'OrganizationOwned'>('UserOwned');
+  const [tblType, setTblType] = useState<'Standard' | 'Elastic'>('Standard');
+  const [tblNotes, setTblNotes] = useState(false);
+  const [tblActivities, setTblActivities] = useState(false);
+  const resetTbl = () => {
+    setTblSchema(''); setTblDisplay(''); setTblPlural(''); setTblPrimary('Name');
+    setTblOwnership('UserOwned'); setTblType('Standard'); setTblNotes(false);
+    setTblActivities(false); setTblMsg(null);
+  };
+
+  const createTable = useCallback(async () => {
+    if (!env.selected) return;
+    if (!tblSchema.trim() || !tblDisplay.trim() || !tblPlural.trim()) {
+      setTblMsg({ kind: 'error', text: 'Schema name, display name, and plural name are required.' });
+      return;
+    }
+    setTblBusy(true); setTblMsg(null);
+    try {
+      const r = await fetch(`/api/powerplatform/tables?envId=${encodeURIComponent(env.selected)}`, {
+        method: 'POST', headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({
+          schemaName: tblSchema.trim(),
+          displayName: tblDisplay.trim(),
+          displayCollectionName: tblPlural.trim(),
+          primaryNameDisplayName: tblPrimary.trim() || undefined,
+          ownershipType: tblOwnership,
+          tableType: tblType,
+          hasNotes: tblNotes,
+          hasActivities: tblActivities,
+        }),
+      });
+      const { json: j } = await readJsonSafe(r);
+      if (!j?.ok) { setTblMsg({ kind: 'error', text: `Create failed: ${j?.error || r.status}${j?.hint ? ` — ${j.hint}` : ''}` }); return; }
+      setTblMsg({ kind: 'success', text: `Table "${tblDisplay.trim()}" created.` });
+      setTblOpen(false); resetTbl();
+      reloadTables();
+    } catch (e: any) {
+      setTblMsg({ kind: 'error', text: `Create failed: ${e?.message || String(e)}` });
+    } finally { setTblBusy(false); }
+  }, [env.selected, tblSchema, tblDisplay, tblPlural, tblPrimary, tblOwnership, tblType, tblNotes, tblActivities, reloadTables]);
+
   const [schemaState, reloadSchema] = useApi<{ ok: boolean; table: DvTable; attributes: DvAttr[] }>(
     env.selected && selectedTable ? `/api/items/dataverse-table/${tableEnc}${envQ}` : null,
     [env.selected, selectedTable],
@@ -694,10 +782,30 @@ export function DataverseTableEditor({ item, id }: { item: FabricItemType; id: s
     [env.selected, selectedTable, tab],
   );
 
+  const [tblFilter, setTblFilter] = useState('');
+  const [colFilter, setColFilter] = useState('');
   const tables = tablesState.data?.tables || [];
   const filtered = useMemo(() => {
     return tables.filter((t) => t.IsCustomEntity || ['account', 'contact', 'systemuser', 'team', 'msdyn_aimodel', 'mspp_website'].includes(t.LogicalName)).slice(0, 500);
   }, [tables]);
+  const tblQuery = tblFilter.trim().toLowerCase();
+  const visibleTables = useMemo(() => {
+    if (!tblQuery) return filtered;
+    return filtered.filter((t) =>
+      t.LogicalName.toLowerCase().includes(tblQuery)
+      || (t.DisplayName?.UserLocalizedLabel?.Label || '').toLowerCase().includes(tblQuery)
+      || (t.EntitySetName || '').toLowerCase().includes(tblQuery));
+  }, [filtered, tblQuery]);
+  const colQuery = colFilter.trim().toLowerCase();
+  const visibleColumns = useMemo(() => {
+    const attrs = schemaState.data?.attributes || [];
+    const capped = attrs.slice(0, 500);
+    if (!colQuery) return capped;
+    return capped.filter((a) =>
+      a.LogicalName.toLowerCase().includes(colQuery)
+      || (a.DisplayName?.UserLocalizedLabel?.Label || '').toLowerCase().includes(colQuery)
+      || (a.AttributeType || '').toLowerCase().includes(colQuery));
+  }, [schemaState.data, colQuery]);
 
   const reloadActive = useCallback(() => {
     reloadTables();
@@ -754,18 +862,24 @@ export function DataverseTableEditor({ item, id }: { item: FabricItemType; id: s
         {id === 'new' && (
           <MessageBar intent="warning">
             <MessageBarBody>
-              <MessageBarTitle>Pick a table to inspect and author</MessageBarTitle>
-              This designer reads + inspects every facet of an existing table — columns, keys, relationships,
-              views, business rules, and live data — against the Dataverse Web API, and lets you
-              <strong> add columns</strong> directly (Columns tab &rarr; New column) which write back through the
-              Web API. Creating a brand-new custom table (publisher prefix, ownership type) is still done in
-              <code> make.powerapps.com</code> or via solution import. Pick a table below.
+              <MessageBarTitle>Create or pick a table to inspect and author</MessageBarTitle>
+              Use <strong>New table</strong> to create a brand-new custom table in-product (publisher prefix,
+              ownership type, primary column) — a real Dataverse Web API write. This designer also reads + inspects
+              every facet of an existing table — columns, keys, relationships, views, business rules, and live data —
+              and lets you <strong>add columns</strong> directly (Columns tab &rarr; New column). Pick a table below
+              or create one.
             </MessageBarBody>
           </MessageBar>
         )}
         <div className={s.toolbar}>
           <EnvPicker envs={env.envs} selected={env.selected} setSelected={env.setSelected} />
           <Button appearance="secondary" onClick={reloadActive}>Reload</Button>
+          {env.selected && !selectedTable && (
+            <Button appearance="primary" icon={<Add20Regular />} onClick={() => { resetTbl(); setTblOpen(true); }}>New table</Button>
+          )}
+          {tblMsg && !selectedTable && (
+            <Caption1 style={{ color: tblMsg.kind === 'error' ? tokens.colorStatusDangerForeground1 : tokens.colorStatusSuccessForeground1 }}>{tblMsg.text}</Caption1>
+          )}
           {selectedTable && <Caption1>Table: <strong>{selectedTable}</strong></Caption1>}
           {selectedTable && env.selected && (
             <Button
@@ -787,17 +901,27 @@ export function DataverseTableEditor({ item, id }: { item: FabricItemType; id: s
         )}
         {!selectedTable && filtered.length > 0 && (
           <>
-            <Caption1>{filtered.length} table(s) — custom + key system entities</Caption1>
+            <TableFilter
+              value={tblFilter}
+              onChange={setTblFilter}
+              placeholder="Filter tables by name or entity set…"
+              shown={visibleTables.length}
+              total={filtered.length}
+              unit="table(s) — custom + key system entities"
+            />
+            {visibleTables.length === 0
+              ? <EmptyText>No tables match &ldquo;{tblFilter}&rdquo;.</EmptyText>
+              : (
             <div className={s.tableWrap}>
               <Table aria-label="Tables" size="small">
-                <TableHeader><TableRow>
+                <TableHeader className={s.stickyHead}><TableRow>
                   <TableHeaderCell>Logical name</TableHeaderCell>
                   <TableHeaderCell>Display name</TableHeaderCell>
                   <TableHeaderCell>Entity set</TableHeaderCell>
                   <TableHeaderCell>Custom?</TableHeaderCell>
                 </TableRow></TableHeader>
                 <TableBody>
-                  {filtered.map((t) => (
+                  {visibleTables.map((t) => (
                     <TableRow key={t.MetadataId}>
                       <TableCell className={s.cellClickable} onClick={() => { setSelectedTable(t.LogicalName); setTab('columns'); }}>
                         <strong>{t.LogicalName}</strong>
@@ -810,6 +934,7 @@ export function DataverseTableEditor({ item, id }: { item: FabricItemType; id: s
                 </TableBody>
               </Table>
             </div>
+              )}
           </>
         )}
         {selectedTable && (
@@ -842,10 +967,20 @@ export function DataverseTableEditor({ item, id }: { item: FabricItemType; id: s
                 {schemaState.error && <ErrorBar msg={schemaState.error} hint={schemaState.hint} />}
                 {schemaState.data && (
                   <>
-                    <Caption1>{schemaState.data.attributes.length} column(s)</Caption1>
+                    <TableFilter
+                      value={colFilter}
+                      onChange={setColFilter}
+                      placeholder="Filter columns by name or type…"
+                      shown={visibleColumns.length}
+                      total={Math.min(schemaState.data.attributes.length, 500)}
+                      unit="column(s)"
+                    />
+                    {visibleColumns.length === 0
+                      ? <EmptyText>No columns match &ldquo;{colFilter}&rdquo;.</EmptyText>
+                      : (
                     <div className={s.tableWrap}>
                       <Table aria-label="Columns" size="small">
-                        <TableHeader><TableRow>
+                        <TableHeader className={s.stickyHead}><TableRow>
                           <TableHeaderCell>Logical name</TableHeaderCell>
                           <TableHeaderCell>Display name</TableHeaderCell>
                           <TableHeaderCell>Data type</TableHeaderCell>
@@ -853,7 +988,7 @@ export function DataverseTableEditor({ item, id }: { item: FabricItemType; id: s
                           <TableHeaderCell>Custom?</TableHeaderCell>
                         </TableRow></TableHeader>
                         <TableBody>
-                          {schemaState.data.attributes.slice(0, 500).map((a) => (
+                          {visibleColumns.map((a) => (
                             <TableRow key={a.MetadataId}>
                               <TableCell className={s.cell}>
                                 <strong>{a.LogicalName}</strong>
@@ -869,6 +1004,7 @@ export function DataverseTableEditor({ item, id }: { item: FabricItemType; id: s
                         </TableBody>
                       </Table>
                     </div>
+                      )}
                   </>
                 )}
               </>
@@ -883,7 +1019,7 @@ export function DataverseTableEditor({ item, id }: { item: FabricItemType; id: s
                   : (
                     <div className={s.tableWrap}>
                       <Table aria-label="Keys" size="small">
-                        <TableHeader><TableRow>
+                        <TableHeader className={s.stickyHead}><TableRow>
                           <TableHeaderCell>Display name</TableHeaderCell>
                           <TableHeaderCell>Logical name</TableHeaderCell>
                           <TableHeaderCell>Key columns</TableHeaderCell>
@@ -920,7 +1056,7 @@ export function DataverseTableEditor({ item, id }: { item: FabricItemType; id: s
                       <Caption1>{relState.data.relationships.length} relationship(s)</Caption1>
                       <div className={s.tableWrap}>
                         <Table aria-label="Relationships" size="small">
-                          <TableHeader><TableRow>
+                          <TableHeader className={s.stickyHead}><TableRow>
                             <TableHeaderCell>Type</TableHeaderCell>
                             <TableHeaderCell>Schema name</TableHeaderCell>
                             <TableHeaderCell>Referencing</TableHeaderCell>
@@ -962,7 +1098,7 @@ export function DataverseTableEditor({ item, id }: { item: FabricItemType; id: s
                       <Caption1>{viewState.data.views.length} view(s)</Caption1>
                       <div className={s.tableWrap}>
                         <Table aria-label="Views" size="small">
-                          <TableHeader><TableRow>
+                          <TableHeader className={s.stickyHead}><TableRow>
                             <TableHeaderCell>Name</TableHeaderCell>
                             <TableHeaderCell>Scope</TableHeaderCell>
                             <TableHeaderCell>Default?</TableHeaderCell>
@@ -998,7 +1134,7 @@ export function DataverseTableEditor({ item, id }: { item: FabricItemType; id: s
                   : (
                     <div className={s.tableWrap}>
                       <Table aria-label="Business rules" size="small">
-                        <TableHeader><TableRow>
+                        <TableHeader className={s.stickyHead}><TableRow>
                           <TableHeaderCell>Name</TableHeaderCell>
                           <TableHeaderCell>State</TableHeaderCell>
                           <TableHeaderCell>Modified</TableHeaderCell>
@@ -1033,7 +1169,7 @@ export function DataverseTableEditor({ item, id }: { item: FabricItemType; id: s
                       <Caption1>{dataState.data.rows.length} row(s) — entity set <code>{dataState.data.entitySet}</code> (top 25)</Caption1>
                       <div className={s.tableWrap}>
                         <Table aria-label="Data grid" size="small">
-                          <TableHeader><TableRow>
+                          <TableHeader className={s.stickyHead}><TableRow>
                             {dataState.data.columns.map((c) => <TableHeaderCell key={c}>{c}</TableHeaderCell>)}
                           </TableRow></TableHeader>
                           <TableBody>
@@ -1055,6 +1191,73 @@ export function DataverseTableEditor({ item, id }: { item: FabricItemType; id: s
             )}
           </>
         )}
+
+        {/* ----- New table dialog (real Dataverse Web API POST EntityDefinitions) ----- */}
+        <Dialog open={tblOpen} onOpenChange={(_, d) => setTblOpen(d.open)}>
+          <DialogSurface>
+            <DialogBody>
+              <DialogTitle>New table</DialogTitle>
+              <DialogContent>
+                <div className={s.dialogForm}>
+                  <Field label="Display name" required>
+                    <Input value={tblDisplay} onChange={(_, d) => setTblDisplay(d.value)} placeholder="Invoice" />
+                  </Field>
+                  <Field label="Plural display name" required>
+                    <Input value={tblPlural} onChange={(_, d) => setTblPlural(d.value)} placeholder="Invoices" />
+                  </Field>
+                  <Field
+                    label="Schema name" required
+                    hint="Must include your publisher prefix, e.g. new_Invoice"
+                  >
+                    <Input value={tblSchema} onChange={(_, d) => setTblSchema(d.value)} placeholder="new_Invoice" />
+                  </Field>
+                  <Field label="Primary column display name">
+                    <Input value={tblPrimary} onChange={(_, d) => setTblPrimary(d.value)} placeholder="Name" />
+                  </Field>
+                  <div className={s.row2}>
+                    <Field label="Ownership">
+                      <Dropdown
+                        value={tblOwnership === 'UserOwned' ? 'User or team' : 'Organization'}
+                        selectedOptions={[tblOwnership]}
+                        onOptionSelect={(_, d) => d.optionValue && setTblOwnership(d.optionValue as 'UserOwned' | 'OrganizationOwned')}
+                      >
+                        <Option value="UserOwned" text="User or team">User or team</Option>
+                        <Option value="OrganizationOwned" text="Organization">Organization</Option>
+                      </Dropdown>
+                    </Field>
+                    <Field label="Table type">
+                      <Dropdown
+                        value={tblType}
+                        selectedOptions={[tblType]}
+                        onOptionSelect={(_, d) => d.optionValue && setTblType(d.optionValue as 'Standard' | 'Elastic')}
+                      >
+                        <Option value="Standard" text="Standard">Standard</Option>
+                        <Option value="Elastic" text="Elastic">Elastic</Option>
+                      </Dropdown>
+                    </Field>
+                  </div>
+                  <Switch checked={tblNotes} onChange={(_, d) => setTblNotes(d.checked)} label="Enable attachments (Notes)" />
+                  <Switch checked={tblActivities} onChange={(_, d) => setTblActivities(d.checked)} label="Enable activities" />
+                  <Caption1>
+                    Creates the table via the Dataverse Web API (<code>POST EntityDefinitions</code>). The Dataverse
+                    service principal must hold a customizing role (System Administrator / System Customizer) on this
+                    environment.
+                  </Caption1>
+                </div>
+              </DialogContent>
+              <DialogActions>
+                <DialogTrigger disableButtonEnhancement><Button appearance="secondary" disabled={tblBusy}>Cancel</Button></DialogTrigger>
+                <Button
+                  appearance="primary"
+                  disabled={tblBusy || !tblSchema.trim() || !tblDisplay.trim() || !tblPlural.trim()}
+                  onClick={() => { void createTable(); }}
+                >
+                  {tblBusy ? 'Creating…' : 'Create table'}
+                </Button>
+              </DialogActions>
+            </DialogBody>
+          </DialogSurface>
+        </Dialog>
 
         {/* ----- New column dialog (real Dataverse Web API POST /Attributes) ----- */}
         <Dialog open={colOpen} onOpenChange={(_, d) => setColOpen(d.open)}>
@@ -1186,6 +1389,15 @@ export function PowerAppEditor({ item, id }: { item: FabricItemType; id: string 
     [env.selected],
   );
   const apps = listSt.data?.apps || [];
+  const [appFilter, setAppFilter] = useState('');
+  const appQuery = appFilter.trim().toLowerCase();
+  const visibleApps = useMemo(() => {
+    if (!appQuery) return apps;
+    return apps.filter((a) =>
+      a.displayName.toLowerCase().includes(appQuery)
+      || (a.appType || '').toLowerCase().includes(appQuery)
+      || (a.owner?.displayName || a.owner?.email || '').toLowerCase().includes(appQuery));
+  }, [apps, appQuery]);
 
   // ----- bound app detail -------------------------------------------------
   // When bound, resolve the detail through the item route (it reads state).
@@ -1364,7 +1576,7 @@ export function PowerAppEditor({ item, id }: { item: FabricItemType; id: string 
                       ? (
                         <div className={s.tableWrap}>
                           <Table aria-label="Connectors" size="small">
-                            <TableHeader><TableRow>
+                            <TableHeader className={s.stickyHead}><TableRow>
                               <TableHeaderCell>Connector</TableHeaderCell>
                               <TableHeaderCell>Id</TableHeaderCell>
                               <TableHeaderCell>Data sources</TableHeaderCell>
@@ -1468,10 +1680,21 @@ export function PowerAppEditor({ item, id }: { item: FabricItemType; id: string 
             )}
             {apps.length > 0 && (
               <>
-                <Caption1>{apps.length} app(s) in this environment{isBound ? ' — pick another to re-bind' : ' — pick one to bind'}</Caption1>
+                <Caption1>Apps in this environment{isBound ? ' — pick another to re-bind' : ' — pick one to bind'}</Caption1>
+                <TableFilter
+                  value={appFilter}
+                  onChange={setAppFilter}
+                  placeholder="Filter apps by name, type, or owner…"
+                  shown={visibleApps.length}
+                  total={apps.length}
+                  unit="app(s)"
+                />
+                {visibleApps.length === 0
+                  ? <EmptyText>No apps match &ldquo;{appFilter}&rdquo;.</EmptyText>
+                  : (
                 <div className={s.tableWrap}>
                   <Table aria-label="Power Apps" size="small">
-                    <TableHeader><TableRow>
+                    <TableHeader className={s.stickyHead}><TableRow>
                       <TableHeaderCell>Name</TableHeaderCell>
                       <TableHeaderCell>Type</TableHeaderCell>
                       <TableHeaderCell>Owner</TableHeaderCell>
@@ -1479,7 +1702,7 @@ export function PowerAppEditor({ item, id }: { item: FabricItemType; id: string 
                       <TableHeaderCell>Action</TableHeaderCell>
                     </TableRow></TableHeader>
                     <TableBody>
-                      {apps.map((a) => (
+                      {visibleApps.map((a) => (
                         <TableRow key={a.name}>
                           <TableCell className={s.cellClickable} onClick={() => { setPick({ appId: a.name, appType: a.appType }); setTab('detail'); setEmbedBlocked(false); }}>
                             <strong>{a.displayName}</strong>
@@ -1498,6 +1721,7 @@ export function PowerAppEditor({ item, id }: { item: FabricItemType; id: string 
                     </TableBody>
                   </Table>
                 </div>
+                  )}
               </>
             )}
           </>
@@ -1524,6 +1748,7 @@ export function PowerAutomateFlowEditor({ item, id }: { item: FabricItemType; id
   );
   const [selected, setSelected] = useState<string | null>(id !== 'new' ? id : null);
   const [flowTab, setFlowTab] = useState<'designer' | 'runs'>('designer');
+  const [newFlowOpen, setNewFlowOpen] = useState(false);
   const [detailSt] = useApi<{ ok: boolean; flow: Flow }>(
     env.selected && selected ? `/api/items/power-automate-flow/${encodeURIComponent(selected)}${envQ}` : null,
     [env.selected, selected],
@@ -1553,6 +1778,15 @@ export function PowerAutomateFlowEditor({ item, id }: { item: FabricItemType; id
   }, [env.selected, selected, reloadRuns]);
 
   const flows = listSt.data?.flows || [];
+  const [flowFilter, setFlowFilter] = useState('');
+  const flowQuery = flowFilter.trim().toLowerCase();
+  const visibleFlows = useMemo(() => {
+    if (!flowQuery) return flows;
+    return flows.filter((f) =>
+      f.displayName.toLowerCase().includes(flowQuery)
+      || (f.state || '').toLowerCase().includes(flowQuery)
+      || (f.triggerType || '').toLowerCase().includes(flowQuery));
+  }, [flows, flowQuery]);
   const ribbon = baseRibbon(
     reloadList,
     env.selected ? `https://make.powerautomate.com/environments/${encodeURIComponent(env.selected)}/flows` : undefined,
@@ -1564,23 +1798,50 @@ export function PowerAutomateFlowEditor({ item, id }: { item: FabricItemType; id
         {id === 'new' && (
           <MessageBar intent="warning">
             <MessageBarBody>
-              <MessageBarTitle>Pick a flow to author or run</MessageBarTitle>
-              This editor lists deployed cloud flows in the selected environment, triggers manual runs, and
-              reviews run history. Select a flow to open its <strong>Designer</strong> tab — the Power Automate
-              flow designer requires a delegated user token (it can&apos;t be embedded server-side), so the
-              Designer tab opens it in a new tab while keeping flow metadata and runs in Loom. Pick a flow below.
+              <MessageBarTitle>Create, author, or run a cloud flow</MessageBarTitle>
+              Use <strong>New flow</strong> to create a modern cloud flow in-product (real Dataverse
+              <code> workflow</code> write), then author its Logic Apps definition and connection references on the
+              <strong> Designer</strong> tab and turn it on — all without leaving Loom. The visual drag-drop canvas
+              needs a delegated user token and opens in a new tab. Triggering runs and run history are on the
+              <strong> Runs</strong> view. Pick a flow below or create one.
             </MessageBarBody>
           </MessageBar>
         )}
         <div className={s.toolbar}>
           <EnvPicker envs={env.envs} selected={env.selected} setSelected={env.setSelected} />
           <Button appearance="secondary" onClick={reloadList}>Reload</Button>
+          {env.selected && !selected && (
+            <Button appearance="primary" icon={<Add20Regular />} onClick={() => setNewFlowOpen(true)}>New flow</Button>
+          )}
           {selected && (
             <Button appearance="primary" disabled={runBusy} onClick={triggerRun}>
               {runBusy ? 'Running…' : 'Run flow'}
             </Button>
           )}
         </div>
+
+        {/* ----- New flow (in-product create — real Dataverse workflow row) ----- */}
+        <Dialog open={newFlowOpen} onOpenChange={(_, d) => setNewFlowOpen(d.open)}>
+          <DialogSurface>
+            <DialogBody>
+              <DialogTitle>New cloud flow</DialogTitle>
+              <DialogContent>
+                <NewFlowAuthor
+                  envId={env.selected}
+                  onCreated={(workflowId) => {
+                    setNewFlowOpen(false);
+                    reloadList();
+                    setSelected(workflowId);
+                    setFlowTab('designer');
+                  }}
+                />
+              </DialogContent>
+              <DialogActions>
+                <DialogTrigger disableButtonEnhancement><Button appearance="secondary">Close</Button></DialogTrigger>
+              </DialogActions>
+            </DialogBody>
+          </DialogSurface>
+        </Dialog>
         {runMsg && <MessageBar intent={runMsg.startsWith('Run failed') ? 'error' : 'success'}><MessageBarBody>{runMsg}</MessageBarBody></MessageBar>}
         {env.error && <ErrorBar msg={env.error} hint={env.hint} />}
         {!env.selected && !env.loading && <EmptyText>Select an environment to list its flows.</EmptyText>}
@@ -1590,16 +1851,28 @@ export function PowerAutomateFlowEditor({ item, id }: { item: FabricItemType; id
           <EmptyText>No flows in this environment.</EmptyText>
         )}
         {!selected && flows.length > 0 && (
+          <>
+          <TableFilter
+            value={flowFilter}
+            onChange={setFlowFilter}
+            placeholder="Filter flows by name, state, or trigger…"
+            shown={visibleFlows.length}
+            total={flows.length}
+            unit="flow(s)"
+          />
+          {visibleFlows.length === 0
+            ? <EmptyText>No flows match &ldquo;{flowFilter}&rdquo;.</EmptyText>
+            : (
           <div className={s.tableWrap}>
             <Table aria-label="Flows" size="small">
-              <TableHeader><TableRow>
+              <TableHeader className={s.stickyHead}><TableRow>
                 <TableHeaderCell>Name</TableHeaderCell>
                 <TableHeaderCell>State</TableHeaderCell>
                 <TableHeaderCell>Trigger</TableHeaderCell>
                 <TableHeaderCell>Modified</TableHeaderCell>
               </TableRow></TableHeader>
               <TableBody>
-                {flows.map((f) => (
+                {visibleFlows.map((f) => (
                   <TableRow key={f.name}>
                     <TableCell className={s.cellClickable} onClick={() => setSelected(f.name)}>
                       <strong>{f.displayName}</strong>
@@ -1616,6 +1889,8 @@ export function PowerAutomateFlowEditor({ item, id }: { item: FabricItemType; id
               </TableBody>
             </Table>
           </div>
+            )}
+          </>
         )}
         {selected && (
           <>
@@ -1641,7 +1916,7 @@ export function PowerAutomateFlowEditor({ item, id }: { item: FabricItemType; id
                 {runsSt.data && (
                   <div className={s.tableWrap}>
                     <Table aria-label="Runs" size="small">
-                      <TableHeader><TableRow>
+                      <TableHeader className={s.stickyHead}><TableRow>
                         <TableHeaderCell>Run</TableHeaderCell>
                         <TableHeaderCell>Status</TableHeaderCell>
                         <TableHeaderCell>Started</TableHeaderCell>
@@ -1695,6 +1970,15 @@ export function PowerPageEditor({ item, id }: { item: FabricItemType; id: string
     [env.selected, selected],
   );
   const pages = listSt.data?.pages || [];
+  const [pageFilter, setPageFilter] = useState('');
+  const pageQuery = pageFilter.trim().toLowerCase();
+  const visiblePages = useMemo(() => {
+    if (!pageQuery) return pages;
+    return pages.filter((p) =>
+      p.name.toLowerCase().includes(pageQuery)
+      || (p.primarydomainname || '').toLowerCase().includes(pageQuery)
+      || (p.type || '').toLowerCase().includes(pageQuery));
+  }, [pages, pageQuery]);
   const ribbon = baseRibbon(reloadList, 'https://make.powerpages.microsoft.com');
 
   return (
@@ -1702,11 +1986,16 @@ export function PowerPageEditor({ item, id }: { item: FabricItemType; id: string
       <div className={s.pad}>
         <MessageBar intent="warning">
           <MessageBarBody>
-            <MessageBarTitle>Power Pages cannot be authored inside Loom</MessageBarTitle>
-            Pages, templates, web roles, and content snippets edit in the proprietary Power Pages design
-            studio. This editor is a read-only registry view that lists deployed sites in the selected
-            environment with their primary domain and status. Click a site URL to open the live page; click
-            the site row for metadata. To edit, open Maker Studio at <code>make.powerpages.microsoft.com</code>.
+            <MessageBarTitle>Power Pages design + lifecycle run outside Loom&apos;s identity</MessageBarTitle>
+            Pages, templates, web roles, and content snippets edit in the proprietary Power Pages design studio
+            (no public design API). Site <strong>lifecycle</strong> (provision / delete / restart, WAF, allowed-IPs,
+            security scan) is exposed only through the Power Pages admin API
+            (<code>api.powerplatform.com/powerpages</code>), which <strong>requires username/password (delegated)
+            authentication and does not support the service-principal flow Loom uses</strong> — so those operations
+            can&apos;t run under Loom&apos;s UAMI identity and must be performed in the Power Platform admin centre or
+            with a user credential. This editor is a real read-only registry of deployed sites (Dataverse
+            <code> mspp_website</code>): click a URL to open the live page; click a row for metadata. To author or
+            manage lifecycle, open <code>make.powerpages.microsoft.com</code>.
           </MessageBarBody>
         </MessageBar>
         <div className={s.toolbar}>
@@ -1721,9 +2010,21 @@ export function PowerPageEditor({ item, id }: { item: FabricItemType; id: string
           <EmptyText>No Power Pages sites in this environment.</EmptyText>
         )}
         {!selected && pages.length > 0 && (
+          <>
+          <TableFilter
+            value={pageFilter}
+            onChange={setPageFilter}
+            placeholder="Filter sites by name, domain, or type…"
+            shown={visiblePages.length}
+            total={pages.length}
+            unit="site(s)"
+          />
+          {visiblePages.length === 0
+            ? <EmptyText>No sites match &ldquo;{pageFilter}&rdquo;.</EmptyText>
+            : (
           <div className={s.tableWrap}>
             <Table aria-label="Power Pages" size="small">
-              <TableHeader><TableRow>
+              <TableHeader className={s.stickyHead}><TableRow>
                 <TableHeaderCell>Site</TableHeaderCell>
                 <TableHeaderCell>Domain</TableHeaderCell>
                 <TableHeaderCell>Status</TableHeaderCell>
@@ -1731,7 +2032,7 @@ export function PowerPageEditor({ item, id }: { item: FabricItemType; id: string
                 <TableHeaderCell>Modified</TableHeaderCell>
               </TableRow></TableHeader>
               <TableBody>
-                {pages.map((p) => (
+                {visiblePages.map((p) => (
                   <TableRow key={p.websiteid || p.name}>
                     <TableCell className={s.cellClickable} onClick={() => p.websiteid && setSelected(p.websiteid)}>
                       <strong>{p.name}</strong>
@@ -1751,6 +2052,8 @@ export function PowerPageEditor({ item, id }: { item: FabricItemType; id: string
               </TableBody>
             </Table>
           </div>
+            )}
+          </>
         )}
         {selected && (
           <>
@@ -1799,6 +2102,14 @@ export function AiBuilderModelEditor({ item, id }: { item: FabricItemType; id: s
     [env.selected, selected],
   );
   const models = listSt.data?.models || [];
+  const [modelFilter, setModelFilter] = useState('');
+  const modelQuery = modelFilter.trim().toLowerCase();
+  const visibleModels = useMemo(() => {
+    if (!modelQuery) return models;
+    return models.filter((m) =>
+      m.msdyn_name.toLowerCase().includes(modelQuery)
+      || (m.templateName || m.msdyn_typename || '').toLowerCase().includes(modelQuery));
+  }, [models, modelQuery]);
 
   // Train / Publish / Predict action state.
   const [busy, setBusy] = useState<null | 'train' | 'publish' | 'predict'>(null);
@@ -1870,9 +2181,21 @@ export function AiBuilderModelEditor({ item, id }: { item: FabricItemType; id: s
           <EmptyText>No AI Builder models in this environment.</EmptyText>
         )}
         {!selected && models.length > 0 && (
+          <>
+          <TableFilter
+            value={modelFilter}
+            onChange={setModelFilter}
+            placeholder="Filter models by name or type…"
+            shown={visibleModels.length}
+            total={models.length}
+            unit="model(s)"
+          />
+          {visibleModels.length === 0
+            ? <EmptyText>No models match &ldquo;{modelFilter}&rdquo;.</EmptyText>
+            : (
           <div className={s.tableWrap}>
             <Table aria-label="AI Builder models" size="small">
-              <TableHeader><TableRow>
+              <TableHeader className={s.stickyHead}><TableRow>
                 <TableHeaderCell>Name</TableHeaderCell>
                 <TableHeaderCell>Template / Type</TableHeaderCell>
                 <TableHeaderCell>State</TableHeaderCell>
@@ -1880,7 +2203,7 @@ export function AiBuilderModelEditor({ item, id }: { item: FabricItemType; id: s
                 <TableHeaderCell>Modified</TableHeaderCell>
               </TableRow></TableHeader>
               <TableBody>
-                {models.map((m) => (
+                {visibleModels.map((m) => (
                   <TableRow key={m.msdyn_aimodelid}>
                     <TableCell className={s.cellClickable} onClick={() => setSelected(m.msdyn_aimodelid)}>
                       <strong>{m.msdyn_name}</strong>
@@ -1900,6 +2223,8 @@ export function AiBuilderModelEditor({ item, id }: { item: FabricItemType; id: s
               </TableBody>
             </Table>
           </div>
+            )}
+          </>
         )}
         {selected && (
           <>

@@ -56,7 +56,7 @@ content per tab — no dead/empty tabs remain.
 | Fabric required | No | No (no Fabric in Gov anyway) |
 
 Env vars are already stamped onto the console Container App by
-`platform/fiab/bicep/admin-plane/main.bicep` (`LOOM_SYNAPSE_WORKSPACE`,
+`platform/fiab/bicep/modules/admin-plane/main.bicep` (`LOOM_SYNAPSE_WORKSPACE`,
 `LOOM_SYNAPSE_DEDICATED_POOL`, `LOOM_SYNAPSE_SQL_TOKEN_SCOPE`,
 `LOOM_SYNAPSE_HOST_SUFFIX`, `LOOM_WAREHOUSE_BACKEND`). No new Bicep or env vars
 were required for this surface.

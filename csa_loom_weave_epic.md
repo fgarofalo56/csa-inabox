@@ -1,4 +1,61 @@
-# CSA Loom — Warp (Weave Epic): visual + code transform / pipeline builder
+# CSA Loom — Weave Epic
+
+The **Weave** is the CSA Loom thread that delivers Azure-native, sovereign-ready
+equivalents of best-in-class proprietary analytics platforms. Each weave thread
+achieves **1:1 usable feature parity** using Azure + OSS backends — **never** by
+requiring Microsoft Fabric, Power BI, or a proprietary license
+(`.claude/rules/no-fabric-dependency.md`, `ui-parity.md`, `no-vaporware.md`).
+
+## Threads
+
+### Tapestry — investigative graph (Palantir Gotham equivalent)
+
+**Status: shipped (audit-t53).**
+
+Tapestry is an investigative link-analysis + geospatial + timeline workspace —
+the Azure-native answer to Gotham-class investigation. It composes three
+coordinated panes over the **same materialized `Node_*` / `Edge_*` ADX tables**
+the graph editors already query (one engine, no duplication):
+
+| Pane | Engine | Route |
+|---|---|---|
+| **Link** | ADX `make-graph` + `graph-match` / `graph-shortest-paths` / `graph-mark-components` | `POST /api/items/tapestry/[id]/link` |
+| **Geo** | ADX node lat/lon → GeoJSON FeatureCollection → `GeoJsonMap` (+ optional live Azure Maps raster) | `POST /api/items/tapestry/[id]/geo` |
+| **Timeline** | ADX `summarize count() by bin(ts, window), edgeLabel` over `Edge_*` | `POST /api/items/tapestry/[id]/timeline` |
+
+**Cross-filter:** clicking a node in the Link canvas sets a shared seed id the
+Geo + Timeline panes inherit.
+
+**Acceptance:** run link / geo / timeline analysis over real data. Met via
+`POST /api/admin/load-sample-data?kind=investigation`, which materializes a real
+investigation (people, orgs, locations, events with timestamps + coordinates;
+Knows/MemberOf/LocatedAt/Attended edges). With ADX unconfigured, every pane
+returns an honest **503** naming `LOOM_KUSTO_CLUSTER_URI` — never a Fabric gate.
+
+**Azure-native + sovereign:**
+- Link + timeline (ADX graph operators) are GA in **every** Azure cloud; the
+  cluster URI is sovereign-aware.
+- Geo renders keyless everywhere; the live Azure Maps raster basemap is an
+  Azure-side upgrade in Commercial / GCC (Maps is unavailable in GCC-High / IL5,
+  where the vector overlay still renders — no regression).
+- **No Microsoft Fabric dependency.** Fabric Graph remains opt-in elsewhere and
+  is never on Tapestry's path.
+
+**Key files:**
+- Editor: `apps/fiab-console/lib/editors/tapestry-editor.tsx`
+- BFF routes: `apps/fiab-console/app/api/items/tapestry/[id]/{link,geo,timeline}/route.ts`
+- Shared KQL builders: `apps/fiab-console/lib/azure/tapestry-graph.ts`
+- Sample data: `apps/fiab-console/app/api/admin/load-sample-data/route.ts` (`kind=investigation`)
+- Viz (reused): `lib/components/graph/force-directed-graph.tsx`, `lib/components/graph/geojson-map.tsx`, `lib/components/adx/kusto-results-grid.tsx`
+- Catalog: `apps/fiab-console/lib/catalog/fabric-item-types.ts` (`slug: 'tapestry'`)
+- Registry: `apps/fiab-console/lib/editors/registry.ts`
+- UAT: `apps/fiab-console/e2e/pp-ml-geo-graph.uat.ts` (`{ type: 'tapestry', family: 'graph' }`)
+- Parity doc: `docs/fiab/parity/tapestry.md`
+- Bootstrap: `docs/fiab/v3-tenant-bootstrap.md` (#tapestry-investigative-graph)
+
+### Warp — unified visual + code transform / pipeline builder (audit-t54)
+
+**Status: shipped (audit-t54).**
 
 **Warp** is CSA Loom's unified, branded **transform and pipeline builder** — the
 "Pipeline Builder + Code Repos" experience that lets a user build a data
@@ -12,7 +69,7 @@ already wired front-to-back (UI → BFF route → real Azure backend) and is
 **Azure-native by default** (works with `LOOM_DEFAULT_FABRIC_WORKSPACE` unset —
 no Microsoft Fabric capacity required, per `.claude/rules/no-fabric-dependency.md`).
 
-## Acceptance criterion (and how Warp meets it)
+#### Acceptance criterion (and how Warp meets it)
 
 > Build a transform visually **or** in code that emits and runs real Spark/SQL.
 
@@ -23,9 +80,9 @@ no Microsoft Fabric capacity required, per `.claude/rules/no-fabric-dependency.m
 
 Both paths are LIVE today — Warp brands them as one experience.
 
-## The three pillars (real symbols)
+#### The three pillars (real symbols)
 
-### Pillar 1 — Visual transform → SQL (Power Query / Fabric Visual Query parity)
+##### Pillar 1 — Visual transform → SQL (Power Query / Fabric Visual Query parity)
 - `apps/fiab-console/lib/editors/visual-query-compiler.ts` — pure, side-effect-free
   `compileGraph(graph: VqGraph, dialect: SqlDialect): string`.
   `SqlDialect = 'tsql' | 'sparksql'`. Step kinds:
@@ -45,7 +102,7 @@ Both paths are LIVE today — Warp brands them as one experience.
   `databricks-sql-warehouse` → `executeStatement(...)`. Returns
   `{ ok, generatedSql, columns, rows, rowCount, executionMs }`.
 
-### Pillar 2 — Code Repos-equiv (dbt project = real code → real SQL on Spark)
+##### Pillar 2 — Code Repos-equiv (dbt project = real code → real SQL on Spark)
 - Model: `apps/fiab-console/lib/dbt/dbt-project-model.ts` — `DbtProjectGraph`,
   `DbtModel`, `DbtSource`, `DbtTarget`, `DbtAdapter = 'databricks'|'synapse'|'fabric'`,
   `MedallionLayer = 'bronze'|'silver'|'gold'`. `emptyProjectGraph()` defaults
@@ -64,7 +121,7 @@ Both paths are LIVE today — Warp brands them as one experience.
   paths (A: visual + Databricks default; B: visual + Synapse/Fabric runner;
   C: legacy BYO Git repo via `git_source`).
 
-### Pillar 3 — Pipeline Builder + Spark job
+##### Pillar 3 — Pipeline Builder + Spark job
 - Pipeline editors: `lib/editors/pipeline-editor.tsx`, `pipeline-editor-core.tsx`,
   `data-pipeline-editor.tsx`; ADF binding `lib/azure/pipeline-binding.ts`.
 - Spark emit: `lib/editors/spark-job-definition-editor.tsx`,
@@ -73,7 +130,7 @@ Both paths are LIVE today — Warp brands them as one experience.
   ADF WranglingDataFlow running on ADF Spark; Azure-native default, Fabric opt-in
   via `LOOM_DATAFLOW_BACKEND=fabric`).
 
-## The Warp surface (this epic)
+#### The Warp surface (this epic)
 
 - **Hub page:** `app/experience/warp/home/page.tsx` (mounted in the left nav at
   `/experience/warp/home`, mirroring the Data Science experience).
@@ -97,7 +154,7 @@ The Warp surface **does not fork the engines** — its "build & run" affordances
 route to the existing `/visual-query` and `/dbt-job/[id]/run` routes, keeping the
 canvas / DAG the single source of truth.
 
-## Gap-close in this epic (parity)
+#### Gap-close in this epic (parity)
 
 The dbt-job parity matrix (`docs/fiab/parity/dbt-job.md`) is already **zero ❌**.
 The remaining genuine Visual-Query parity gap was the Power Query **"Sort rows"
@@ -111,7 +168,7 @@ The remaining genuine Visual-Query parity gap was the Power Query **"Sort rows"
 - Tests: golden tests for multi-key ORDER BY in both dialects and the empty-keys
   pass-through (`lib/editors/__tests__/visual-query-compiler.test.ts`).
 
-## Per-cloud reality (no-fabric-dependency)
+#### Per-cloud reality (no-fabric-dependency)
 
 | Cloud | Visual transform → SQL | dbt (Code Repos) |
 |-------|------------------------|------------------|
@@ -119,7 +176,7 @@ The remaining genuine Visual-Query parity gap was the Power Query **"Sort rows"
 | **Synapse / Fabric adapters** | same Synapse / Databricks targets | `loom-dbt-runner` Container App (gated by `LOOM_DBT_RUNNER_URL`); Fabric opt-in only |
 | **GCC-High / IL5** | Synapse / Databricks targets | Databricks path works without the runner; the runner is `containerApps`-only, gated by `dbtRunnerActive` |
 
-## Bicep + bootstrap sync
+#### Bicep + bootstrap sync
 
 **Warp introduces no new Azure runtime** — it reuses the existing Databricks /
 Synapse bindings and the `loom-dbt-runner` Container App. No new bicep param,
@@ -139,7 +196,7 @@ itself. The existing, already-synced wiring it depends on:
 param → module → `LOOM_*_URL` Console env in `admin-plane/main.bicep` mirroring
 the dbt-runner pattern, plus the `scripts/csa-loom/` bootstrap equivalent.
 
-## Verification
+#### Verification
 
 - `cd apps/fiab-console && npx tsc --noEmit -p tsconfig.json` — Warp files clean.
 - `lib/editors/__tests__/visual-query-compiler.test.ts` — golden tests incl. the
@@ -149,10 +206,17 @@ the dbt-runner pattern, plus the `scripts/csa-loom/` bootstrap equivalent.
   a dbt project → it generates real files and runs via `/dbt-job/[id]/run`
   (Databricks default), both with `LOOM_DEFAULT_FABRIC_WORKSPACE` unset.
 
-## Design rules honored
+#### Design rules honored
 
 `.claude/rules/no-fabric-dependency.md` (Azure-native default, Fabric opt-in
 only), `.claude/rules/no-vaporware.md` (real backends, no dead controls, honest
 infra-gates), `.claude/rules/ui-parity.md` (guided controls; the Visual Query +
 dbt-job parity docs back each pillar), and the inline `loom-no-freeform-config`
 allow-list (only the Filter WHERE box + per-dbt-model SQL bodies are freeform).
+
+## Future weave threads
+
+Additional Gotham/Foundry/Palantir-class and proprietary-analytics equivalents
+are tracked under the Palantir-class migration surfaces already in the catalog
+(`workshop-app`, `slate-app`, `ontology-sdk`, `release-environment`,
+`health-check`, `aip-logic`) and grow this epic as they land.

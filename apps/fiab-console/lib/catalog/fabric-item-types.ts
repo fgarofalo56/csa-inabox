@@ -2510,6 +2510,30 @@ export const FABRIC_ITEM_TYPES: readonly FabricItemType[] = [
       ],
       "docsUrl": "https://learn.microsoft.com/azure/cosmos-db/vector-database"
     } },
+  { slug: 'tapestry',                    displayName: 'Tapestry (investigative graph)', restType: 'Tapestry',           category: 'Azure Graph + Vector', preview: true,
+    description: 'Investigative link-analysis + geospatial + timeline workspace over the ADX graph (make-graph / graph-match) and Azure Maps. The Azure-native equivalent of a Gotham-class investigation surface — no Microsoft Fabric required.',
+    learnContent: {
+      "overview": "Tapestry is an investigative analysis workspace that composes three coordinated views over the SAME materialized Node_*/Edge_* ADX tables the graph editors already query: a Link panel (force-directed graph from KQL make-graph + graph-match / graph-shortest-paths / graph-mark-components), a Geo panel (GeoJSON FeatureCollection projected from node lat/lon props, rendered with the keyless SVG GeoJsonMap and an optional live Azure Maps raster basemap when a key is configured), and a Timeline panel (KQL summarize count() by bin(timestamp, window) over Edge_* events). It is 100% Azure-native — the link + timeline engine is ADX (sovereign across every cloud) and the geo panel renders without any subscription. No Fabric capacity or workspace is required.",
+      "steps": [
+        {
+          "title": "Seed an investigative dataset",
+          "body": "Run admin Load sample data (kind=investigation) once to materialize Node_Person/Node_Org/Node_Location/Node_Event and Edge_Knows/Edge_LocatedAt/Edge_Attended into the default ADX database — people/orgs/events with timestamps and lat/lon."
+        },
+        {
+          "title": "Run link analysis",
+          "body": "On the Link tab, pick an analysis (pattern match, shortest path, or connected components) and a hop depth; the editor builds the make-graph prelude over Node_*/Edge_* and runs graph-match — results render in the force-directed canvas. Click a node to cross-filter the Geo + Timeline panes."
+        },
+        {
+          "title": "Map the entities",
+          "body": "The Geo tab projects every located node into a GeoJSON FeatureCollection and renders it; set NEXT_PUBLIC_LOOM_AZURE_MAPS_KEY to layer a live Azure Maps basemap behind the vector overlay (the panel renders regardless)."
+        },
+        {
+          "title": "Analyze the timeline",
+          "body": "The Timeline tab bins Edge_* events by a chosen window (hour/day/week) and edge label; results render as a time-series grid so you can see how the relationships evolve over time."
+        }
+      ],
+      "docsUrl": "https://learn.microsoft.com/azure/data-explorer/kusto/query/graph-semantics-overview"
+    } },
 
   // --- v3 — Push-button data-products library (CSA-curated templates + instances) ---
   { slug: 'data-marketplace',            displayName: 'Data marketplace',            restType: 'DataMarketplace',           category: 'CSA Data Products',

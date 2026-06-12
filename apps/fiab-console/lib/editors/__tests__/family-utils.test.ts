@@ -23,11 +23,53 @@ import {
   matchClassesToTables,
   buildEntityChangeQuery,
   aiStateLabel, aiStatusLabel,
-  computeGeoBbox, bboxToZoom,
+  computeGeoBbox, bboxToZoom, bboxLabel,
+  parseWktGeometry, geoFeaturesFromInspectRows,
   parseUdfFunctions,
   normalizeDaSources, guessDaSourceType, daSupportsExampleQueries,
   shapeDaHistory, canSendDaQuestion,
+  safeSqlIdent, buildInsertSql, buildUpdateSql, buildDeleteSql,
 } from '../_family-utils';
+
+// ============================================================
+// Atelier (Workshop app) real-CRUD SQL builders
+// ============================================================
+describe('safeSqlIdent', () => {
+  it('accepts a normal identifier', () => { expect(safeSqlIdent('Order')).toBe('Order'); expect(safeSqlIdent('_x1')).toBe('_x1'); });
+  it('rejects injection / illegal chars', () => {
+    expect(safeSqlIdent('Status; DROP TABLE x')).toBeNull();
+    expect(safeSqlIdent('1col')).toBeNull();
+    expect(safeSqlIdent('a b')).toBeNull();
+    expect(safeSqlIdent('')).toBeNull();
+    expect(safeSqlIdent('a'.repeat(129))).toBeNull();
+  });
+});
+
+describe('buildInsertSql', () => {
+  it('builds a parameterised INSERT binding values, not concatenating', () => {
+    const r = buildInsertSql('Order', [{ column: 'Status', value: 'open' }, { column: 'Amount', value: '99' }]);
+    expect(r.sql).toBe('INSERT INTO [Order] ([Status], [Amount]) VALUES (@p0, @p1)');
+    expect(r.params).toEqual([{ name: 'p0', value: 'open' }, { name: 'p1', value: '99' }]);
+  });
+  it('throws when no columns', () => { expect(() => buildInsertSql('Order', [])).toThrow(); });
+});
+
+describe('buildUpdateSql', () => {
+  it('builds a parameterised UPDATE keyed on @k', () => {
+    const r = buildUpdateSql('Order', [{ column: 'Status', value: 'closed' }], 'Id', '7');
+    expect(r.sql).toBe('UPDATE [Order] SET [Status] = @p0 WHERE [Id] = @k');
+    expect(r.params).toEqual([{ name: 'p0', value: 'closed' }, { name: 'k', value: '7' }]);
+  });
+  it('throws when no SET columns', () => { expect(() => buildUpdateSql('Order', [], 'Id', '7')).toThrow(); });
+});
+
+describe('buildDeleteSql', () => {
+  it('always emits a WHERE clause keyed on @k', () => {
+    const r = buildDeleteSql('Order', 'Id', '7');
+    expect(r.sql).toBe('DELETE FROM [Order] WHERE [Id] = @k');
+    expect(r.params).toEqual([{ name: 'k', value: '7' }]);
+  });
+});
 
 // ============================================================
 // parseUdfFunctions (UserDataFunctionEditor explorer + Test panel)
@@ -345,6 +387,117 @@ describe('bboxToZoom', () => {
   it('never exceeds 18 or falls below 1', () => {
     expect(bboxToZoom({ minLon: 0, maxLon: 1e-12, minLat: 0, maxLat: 1e-12 })).toBeLessThanOrEqual(18);
     expect(bboxToZoom({ minLon: -180, maxLon: 180, minLat: -90, maxLat: 90 })).toBeGreaterThanOrEqual(1);
+  });
+});
+
+describe('bboxLabel', () => {
+  it('returns null for a null bbox', () => {
+    expect(bboxLabel(null)).toBeNull();
+  });
+  it('formats a bbox to 4 decimals with an arrow', () => {
+    expect(bboxLabel({ minLon: -77.0369, maxLon: -77.0, minLat: 38.9072, maxLat: 38.95 }))
+      .toBe('[-77.0369, 38.9072] → [-77.0000, 38.9500]');
+  });
+});
+
+// ============================================================
+// parseWktGeometry / geoFeaturesFromInspectRows
+// [GeoDatasetEditor geometry inspector → map render]
+// ============================================================
+
+describe('parseWktGeometry', () => {
+  it('parses a POINT', () => {
+    expect(parseWktGeometry('POINT (-77.0369 38.9072)'))
+      .toEqual({ type: 'Point', coordinates: [-77.0369, 38.9072] });
+  });
+  it('parses a POINT with Z ordinate (dropping Z)', () => {
+    expect(parseWktGeometry('POINT Z (1 2 3)'))
+      .toEqual({ type: 'Point', coordinates: [1, 2] });
+  });
+  it('parses a LINESTRING', () => {
+    expect(parseWktGeometry('LINESTRING (0 0, 1 1, 2 2)'))
+      .toEqual({ type: 'LineString', coordinates: [[0, 0], [1, 1], [2, 2]] });
+  });
+  it('parses a POLYGON with one ring', () => {
+    expect(parseWktGeometry('POLYGON ((0 0, 1 0, 1 1, 0 1, 0 0))'))
+      .toEqual({ type: 'Polygon', coordinates: [[[0, 0], [1, 0], [1, 1], [0, 1], [0, 0]]] });
+  });
+  it('parses a POLYGON with a hole (two rings)', () => {
+    const g = parseWktGeometry('POLYGON ((0 0, 4 0, 4 4, 0 4, 0 0), (1 1, 2 1, 2 2, 1 2, 1 1))');
+    expect(g?.type).toBe('Polygon');
+    expect((g?.coordinates as number[][][]).length).toBe(2);
+  });
+  it('parses a MULTIPOINT in both bracketed and bare forms', () => {
+    expect(parseWktGeometry('MULTIPOINT ((1 2), (3 4))'))
+      .toEqual({ type: 'MultiPoint', coordinates: [[1, 2], [3, 4]] });
+    expect(parseWktGeometry('MULTIPOINT (1 2, 3 4)'))
+      .toEqual({ type: 'MultiPoint', coordinates: [[1, 2], [3, 4]] });
+  });
+  it('parses a MULTIPOLYGON', () => {
+    const g = parseWktGeometry('MULTIPOLYGON (((0 0, 1 0, 1 1, 0 0)), ((2 2, 3 2, 3 3, 2 2)))');
+    expect(g?.type).toBe('MultiPolygon');
+    expect((g?.coordinates as number[][][][]).length).toBe(2);
+  });
+  it('returns null for WKB hex and non-WKT junk', () => {
+    expect(parseWktGeometry('0x01010000001234ABCD')).toBeNull();
+    expect(parseWktGeometry('not geometry')).toBeNull();
+    expect(parseWktGeometry('' as any)).toBeNull();
+    expect(parseWktGeometry(null as any)).toBeNull();
+  });
+});
+
+describe('geoFeaturesFromInspectRows', () => {
+  it('builds Point features from a WKT geometry column', () => {
+    const fc = geoFeaturesFromInspectRows(
+      ['id', 'geom'],
+      [[1, 'POINT (-77 38)'], [2, 'POINT (-76 39)']],
+      'geom',
+    );
+    expect(fc.features).toHaveLength(2);
+    expect(fc.features[0].geometry).toEqual({ type: 'Point', coordinates: [-77, 38] });
+    expect(fc.features[0].properties).toEqual({ id: 1 });
+  });
+  it('uses a GeoJSON literal cell directly (object or string)', () => {
+    const fc = geoFeaturesFromInspectRows(
+      ['geometry'],
+      [
+        [{ type: 'Point', coordinates: [1, 2] }],
+        ['{"type":"LineString","coordinates":[[0,0],[1,1]]}'],
+      ],
+      'geometry',
+    );
+    expect(fc.features).toHaveLength(2);
+    expect(fc.features[0].geometry.type).toBe('Point');
+    expect(fc.features[1].geometry.type).toBe('LineString');
+  });
+  it('falls back to lon/lat columns when no geometry column is present', () => {
+    const fc = geoFeaturesFromInspectRows(
+      ['name', 'longitude', 'latitude'],
+      [['a', -77.04, 38.91]],
+      'geometry',
+    );
+    expect(fc.features).toHaveLength(1);
+    expect(fc.features[0].geometry).toEqual({ type: 'Point', coordinates: [-77.04, 38.91] });
+    expect(fc.features[0].properties).toEqual({ name: 'a' });
+  });
+  it('skips WKB hex blobs (can\'t decode client-side) and keeps a valid FeatureCollection', () => {
+    const fc = geoFeaturesFromInspectRows(
+      ['id', 'geom'],
+      [[1, '0x0101000000ABCD1234'], [2, 'POINT (1 1)']],
+      'geom',
+    );
+    expect(fc.type).toBe('FeatureCollection');
+    expect(fc.features).toHaveLength(1);
+    expect(fc.features[0].geometry).toEqual({ type: 'Point', coordinates: [1, 1] });
+  });
+  it('tolerates empty / malformed input', () => {
+    expect(geoFeaturesFromInspectRows([], [], 'g')).toEqual({ type: 'FeatureCollection', features: [] });
+    expect(geoFeaturesFromInspectRows(['g'], null as any, 'g').features).toEqual([]);
+  });
+  it('bounds output to the max row count', () => {
+    const rows = Array.from({ length: 5 }, (_, i) => [i, `POINT (${i} ${i})`]);
+    const fc = geoFeaturesFromInspectRows(['id', 'geom'], rows, 'geom', 3);
+    expect(fc.features).toHaveLength(3);
   });
 });
 

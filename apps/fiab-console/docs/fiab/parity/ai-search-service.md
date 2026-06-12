@@ -43,7 +43,8 @@ profiles, Debug sessions, Search explorer) + the per-index Schema designer.
 | **Aliases** — list / create / delete | ✅ built | `/api/ai-search/aliases` → `list/create/deleteAlias()` |
 | **Debug sessions** — list / create / delete + last status | ✅ built (`Debug sessions` tree group) | `/api/ai-search/debug-sessions` → `list/create/deleteDebugSession()` → ARM `…/debugSessions/{name}` |
 | Debug session — visual skill-graph enrichment trace | ⚠️ honest deep-link | "Open in portal" — the node-graph trace renderer is portal-proprietary UI over the stored session state; Loom links to `…/debugSessions/{name}` |
-| Debug session storage / private-link prerequisites | ⚠️ honest gate | UI MessageBar names the storage connection string + Storage Blob Data Contributor + shared-private-link requirement; bicep grants the MSI role when `debugSessionStorageId` is set |
+| Debug session storage (keyless, MSI) | ✅ built (default deploy) | New-service deploys provision a dedicated debug-session storage account in the admin RG, grant the search system-MSI Storage Blob Data Contributor (`ai-search.bicep` `debugSessionStorageId`), and wire `LOOM_AI_SEARCH_DEBUG_STORAGE_CONN` to a keyless `ResourceId=` connection string. BYO-search deploys leave it empty and the UI accepts a per-session connection string. |
+| Debug session — private-link prerequisites (PE-locked) | ⚠️ honest note | BFF response + create-dialog Caption name the same-region trusted-service exception, `executionEnvironment:"private"` on the indexer, and shared-private-link requirement |
 | **Import data / Import and vectorize data wizard** | ⚠️ honest "coming" row | the individual pieces (datasource + skillset + index + indexer) are each creatable via ＋New; the single coordinated wizard is not yet built |
 | Scale (SKU tier immutable; replicas/partitions) | ✅ built (admin scaling page) | `PATCH Microsoft.Search/searchServices/{name}` via `updateSearchService()` |
 

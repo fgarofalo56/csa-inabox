@@ -167,6 +167,11 @@ export const EDITOR_REGISTRY: Record<string, EditorComponent> = {
   'gql-graph':                   reg(() => import('./graph-editors'),          'GqlGraphEditor'),
   'vector-store':                reg(() => import('./graph-editors'),          'VectorStoreEditor'),
 
+  // audit-t53 — Tapestry: investigative link-analysis + geospatial + timeline
+  // workspace over ADX make-graph/graph-match + Azure Maps (Gotham-equivalent).
+  // Azure-native default — no Fabric required.
+  'tapestry':                    reg(() => import('./tapestry-editor'),        'TapestryEditor'),
+
   // v3 — Push-button data-products library (CSA-curated templates + instances)
   'data-product-template':       reg(() => import('./data-product-editors'),   'DataProductTemplateEditor'),
   'data-product-instance':       reg(() => import('./data-product-editors'),   'DataProductInstanceEditor'),

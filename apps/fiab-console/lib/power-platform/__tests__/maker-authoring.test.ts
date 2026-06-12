@@ -13,7 +13,11 @@
 import { describe, it, expect } from 'vitest';
 import { canvasStudioHref, makerAppsHref } from '../power-apps-editor';
 import { flowDesignerHref } from '../power-automate-editor';
-import { buildAttributeMetadata, type AddColumnSpec } from '@/lib/azure/powerplatform-client';
+import {
+  buildAttributeMetadata, buildEntityMetadata, emptyFlowDefinition,
+  validateFlowDefinition, PowerPlatformError,
+  type AddColumnSpec, type CreateTableSpec,
+} from '@/lib/azure/powerplatform-client';
 
 describe('maker authoring URL builders', () => {
   it('canvasStudioHref encodes env + app id', () => {
@@ -78,5 +82,89 @@ describe('buildAttributeMetadata', () => {
     });
     expect(m.RequiredLevel.Value).toBe('ApplicationRequired');
     expect(m.Description.LocalizedLabels[0].Label).toBe('hi');
+  });
+});
+
+describe('buildEntityMetadata (create table)', () => {
+  const base = (): CreateTableSpec => ({
+    schemaName: 'new_Invoice', displayName: 'Invoice', displayCollectionName: 'Invoices',
+  });
+
+  it('emits EntityMetadata with display + plural labels and ownership', () => {
+    const m = buildEntityMetadata(base());
+    expect(m['@odata.type']).toBe('Microsoft.Dynamics.CRM.EntityMetadata');
+    expect(m.SchemaName).toBe('new_Invoice');
+    expect(m.DisplayName.LocalizedLabels[0].Label).toBe('Invoice');
+    expect(m.DisplayCollectionName.LocalizedLabels[0].Label).toBe('Invoices');
+    expect(m.OwnershipType).toBe('UserOwned');
+    expect(m.HasNotes).toBe(false);
+    expect(m.HasActivities).toBe(false);
+    expect(m.IsActivity).toBe(false);
+  });
+
+  it('includes exactly one primary-name StringAttributeMetadata (IsPrimaryName)', () => {
+    const m = buildEntityMetadata(base());
+    expect(Array.isArray(m.Attributes)).toBe(true);
+    expect(m.Attributes).toHaveLength(1);
+    const pk = m.Attributes[0];
+    expect(pk['@odata.type']).toBe('Microsoft.Dynamics.CRM.StringAttributeMetadata');
+    expect(pk.IsPrimaryName).toBe(true);
+    expect(pk.SchemaName).toBe('new_Name'); // derived from table prefix
+    expect(pk.FormatName).toEqual({ Value: 'Text' });
+  });
+
+  it('honors Elastic table type, Notes, Activities, and custom primary column', () => {
+    const m = buildEntityMetadata({
+      ...base(), tableType: 'Elastic', hasNotes: true, hasActivities: true,
+      primaryNameDisplayName: 'Title', primaryNameSchemaName: 'new_Title',
+    });
+    expect(m.TableType).toBe('Elastic');
+    expect(m.HasNotes).toBe(true);
+    expect(m.HasActivities).toBe(true);
+    expect(m.Attributes[0].SchemaName).toBe('new_Title');
+    expect(m.Attributes[0].DisplayName.LocalizedLabels[0].Label).toBe('Title');
+  });
+});
+
+describe('validateFlowDefinition + emptyFlowDefinition', () => {
+  it('emptyFlowDefinition is a valid manual-trigger skeleton', () => {
+    const def = emptyFlowDefinition();
+    expect(() => validateFlowDefinition(def)).not.toThrow();
+    expect(def.definition.triggers.manual.type).toBe('Request');
+    expect(def.definition.$schema).toContain('workflowdefinition.json');
+  });
+
+  it('rejects a non-object', () => {
+    expect(() => validateFlowDefinition('blob' as unknown)).toThrow(PowerPlatformError);
+  });
+
+  it('rejects a missing definition object', () => {
+    expect(() => validateFlowDefinition({})).toThrow(/must contain a `definition`/);
+  });
+
+  it('rejects a wrong $schema', () => {
+    expect(() => validateFlowDefinition({ definition: { $schema: 'http://nope', triggers: { t: {} } } }))
+      .toThrow(/workflowdefinition\.json/);
+  });
+
+  it('rejects empty triggers', () => {
+    expect(() => validateFlowDefinition({
+      definition: { $schema: 'x/workflowdefinition.json#', triggers: {} },
+    })).toThrow(/at least one trigger/);
+  });
+
+  it('rejects connectionReferences that are not an object map', () => {
+    expect(() => validateFlowDefinition({
+      definition: { $schema: 'x/workflowdefinition.json#', triggers: { t: {} } },
+      connectionReferences: [],
+    })).toThrow(/connectionReferences/);
+  });
+
+  it('accepts a valid definition + connection references', () => {
+    const out = validateFlowDefinition({
+      definition: { $schema: 'x/workflowdefinition.json#', triggers: { manual: { type: 'Request' } }, actions: {} },
+      connectionReferences: { ref1: { connectionName: 'shared_x' } },
+    });
+    expect(out.connectionReferences?.ref1.connectionName).toBe('shared_x');
   });
 });

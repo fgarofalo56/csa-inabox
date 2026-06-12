@@ -12,6 +12,16 @@
 //     It does NOT grant the database data-plane: TDS queries continue to use the
 //     Microsoft Entra admin / db_owner path unchanged.
 //
+// Data-plane reads (the Query tab AND the Azure SQL server editor's schema/table
+// object browser, which issues sys.* catalog reads over TDS) deliberately do NOT
+// ride this control-plane role. They require the console UAMI to be the server's
+// Microsoft Entra admin (Microsoft.Sql/servers/administrators) — settable from
+// the editor's "AAD admin" ribbon button — or a contained user with
+// db_datareader + VIEW DEFINITION. That grant is a data-plane act that cannot be
+// expressed in ARM/bicep; see docs/fiab/v3-tenant-bootstrap.md
+// (#azure-sql-server-schema-browser). The navigator shows the real TDS auth
+// error honestly until it is in place (no-vaporware.md).
+//
 // Without this grant, every scale PATCH returns 403 and the editor renders an
 // honest MessageBar naming this exact role (per no-vaporware.md).
 //

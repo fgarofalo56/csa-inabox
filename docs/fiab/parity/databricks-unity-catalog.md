@@ -26,7 +26,8 @@
   (create catalog / schema / table dialogs + "Manage grants" dialog), mounted in
   `DatabricksSqlWarehouseEditor` (ribbon actions + toolbar buttons open the dialogs;
   the SQL-editor UC tree is the browse surface).
-- BFF: `apps/fiab-console/app/api/databricks/unity-catalog/{catalogs,schemas,tables,grants}/route.ts`
+- BFF: `apps/fiab-console/app/api/databricks/unity-catalog/{catalogs,schemas,tables,grants,volumes,lineage,principals}/route.ts`
+  (the `tables` route's `POST` accepts `mode:from_file` for C10; `principals` is the E10 SCIM picker)
 - Client (real, AAD-token, no mocks): `apps/fiab-console/lib/azure/databricks-client.ts`
   — `listUcCatalogs/createUcCatalog/deleteUcCatalog/patchUcCatalog`, `listUcSchemas/createUcSchema/deleteUcSchema/patchUcSchema`,
   `listUcTables/listUcVolumes/listUcFunctions/getUcTable/createUcTable/deleteUcTable/patchUcTable`,
@@ -87,7 +88,7 @@ Legend: built ✅ (full 1:1 + real backend) · partial ⚠️ · honest-gate ⚠
 | C7 | Table comment | ✅ built | Comment field → `comment` |
 | C8 | Drop table | ✅ built | `DELETE /tables?full_name=` `deleteUcTable` |
 | C9 | View table detail (columns) on select | ✅ built | `GET /tables?full_name=` `getUcTable` |
-| C10 | Create table **from a file / volume** (upload → preview → infer schema) | ❌ MISSING | column designer only; no file-upload/inference dialog |
+| C10 | Create table **from a file / volume** (upload → infer schema) | ✅ built | Create-table dialog "From file" tab: browser reads the file → POST `tables` `mode:from_file` → `createUcTableFromFile` uploads to a UC volume (`PUT /api/2.0/fs/files`) then `CREATE TABLE … AS SELECT * FROM read_files(…)` on the warehouse (schema inferred) |
 | C11 | Partition columns / clustering / table properties (`TBLPROPERTIES`) | ❌ MISSING | not surfaced |
 | C12 | Column tags / masks / column-level comments-as-tags | ❌ MISSING | plain comment only |
 
@@ -97,7 +98,7 @@ Legend: built ✅ (full 1:1 + real backend) · partial ⚠️ · honest-gate ⚠
 |---|---|---|---|
 | D1 | List volumes in a schema | ✅ built | `GET /tables` returns `volumes` (`listUcVolumes`, best-effort) |
 | D2 | List functions in a schema | ✅ built | `GET /tables` returns `functions` (`listUcFunctions`, best-effort) |
-| D3 | **Create** volume (managed/external) | ❌ MISSING | list-only |
+| D3 | **Create** volume (managed/external) | ✅ built | create-volume dialog → `POST /api/2.1/unity-catalog/volumes` `createUcVolume` (MANAGED/EXTERNAL; storage_location for EXTERNAL) |
 | D4 | Browse / upload files in a volume | ❌ MISSING | not surfaced |
 | D5 | Create / view function definition | ❌ MISSING | list-only |
 
@@ -112,15 +113,15 @@ Legend: built ✅ (full 1:1 + real backend) · partial ⚠️ · honest-gate ⚠
 | E5 | Revoke privileges from a principal | ✅ built | "Revoke selected" → `PATCH /grants` `remove` |
 | E6 | Principal = user email / group / SP applicationId | ✅ built | free-text principal field (matches UC REST) |
 | E7 | Per-securable privilege matrix (only valid privileges offered) | ✅ built | `UC_PRIVILEGES[securable]` chip set |
-| E8 | EXTERNAL_LOCATION / STORAGE_CREDENTIAL / METASTORE securables | ⚠️ partial | BFF accepts them; dialog picker exposes only the 5 data securables |
+| E8 | EXTERNAL_LOCATION / STORAGE_CREDENTIAL / METASTORE securables | ✅ built | grants securable dropdown now offers all 8 types with per-securable privilege matrices (`UC_PRIVILEGES`); BFF `/grants` accepts them → `GET/PATCH /api/2.1/unity-catalog/permissions/{type}/{full_name}` |
 | E9 | **Change owner** of a securable | ✅ built | grants dialog "Change owner" section (CATALOG/SCHEMA/TABLE) → `PATCH /{catalogs,schemas,tables}` `patchUc{Catalog,Schema,Table}` with `{ owner }` (UC `ALTER … SET OWNER`) |
-| E10 | Principal **picker** (browse account users/groups) | ❌ MISSING | free-text only (no directory autocomplete) |
+| E10 | Principal **picker** (browse account users/groups) | ✅ built | grants "Principal" is a freeform `Combobox` autocompleting over `GET /api/databricks/unity-catalog/principals?q=` → `listUcPrincipals` → SCIM `GET /api/2.0/preview/scim/v2/{Users,Groups,ServicePrincipals}`; freeform fallback + honest warning when SCIM is unavailable |
 
 ### F. Governance surfaces NOT in scope of this write build
 
 | # | Catalog Explorer capability | Loom | Where / backend |
 |---|---|---|---|
-| F1 | Data **lineage** graph (upstream/downstream) | ❌ MISSING | no lineage UI |
+| F1 | Data **lineage** graph (upstream/downstream) | ✅ built | `UcLineagePanel` (lineage tab + per-table button) → `GET /api/databricks/unity-catalog/lineage` → `getTableLineage` (`/api/2.0/lineage-tracking/table-lineage`) + `getTableLineageSystemTables` (`system.access.{table,column}_lineage`) |
 | F2 | Sample data / column profile / table history | ❌ MISSING | not surfaced |
 | F3 | Tags & comments browser across securables | ❌ MISSING | comment-on-create only |
 | F4 | External locations / storage credentials / connections CRUD | ❌ MISSING | not surfaced |
@@ -132,12 +133,15 @@ Legend: built ✅ (full 1:1 + real backend) · partial ⚠️ · honest-gate ⚠
 
 ## Coverage tally
 
-- **built ✅: 29** (was 24; this wave added A5 catalog type, A7 catalog tags, A8/E9 ownership transfer, B6 schema tags/owner)
-- **partial ⚠️: 1**
+- **built ✅: 37** (was 29; the **audit-t18 final wave** added C10 create-table-from-file,
+  E10 principal directory picker, E8 storage/metastore securables, and reconciled
+  two rows that were already shipped but mis-graded — F1 lineage graph and D3
+  volume create)
+- **partial ⚠️: 0** (E8 promoted to built)
 - **honest-gate ⚠️: 0** (the only gate is the workspace-level `not_configured` 503)
-- **MISSING ❌: 12** (was 17)
+- **MISSING ❌: 11** (was 12 → 17 baseline): A6, C11, C12, D4, D5, F2, F3, F4, F5, F6, F7
 
-## Honest grade: **B**
+## Honest grade: **B+**
 
 The create-catalog / create-schema / create-table-with-column-designer /
 grant-revoke surface is genuinely **production-grade** and a real 1:1 with the
@@ -148,30 +152,46 @@ correct per-securable privilege matrix and an effective-permissions toggle, and 
 403s surface verbatim. **No vaporware.** This flips the `databricks-workspace.md`
 `F4–F5` rows (UC create + GRANT/REVOKE) from ❌ to ✅.
 
-This wave (audit-t18) closed the cheapest governance-completeness gaps:
-**ownership transfer** (E9/A8/B6-owner) via real `PATCH
-/api/2.1/unity-catalog/{catalogs,schemas,tables}/{full_name}` with `{ owner }`,
-**catalog type** (A5: Standard / Foreign / Delta-Sharing with the right
-conditional fields), and **key-value tags** (A7/B6) on create-catalog and
-create-schema. All on real UC 2.1 REST; UC 403s surface verbatim.
+The **audit-t18 final wave** closed the top three highest-value gaps from the
+prior "build next" list and reconciled two rows that were already shipped:
 
-Held to **B** (not A) by `ui-parity.md`'s "feature completeness must match"
-applied to the whole Catalog Explorer write surface: still no
-**create-table-from-file** (the portal's most-used table-create path), no
-**volume/function create**, no **lineage / sample-data / history**, no **external
-locations / storage credentials / connections / Delta-Sharing CRUD**, no
-**workspace-binding** management, no **column-level tags** (C12), and the grant
-principal is free-text rather than a directory picker.
+- **Create-table-from-file (C10)** — the portal's most-used table-create path.
+  The Create-table dialog gains a "From file" tab: the browser reads the file,
+  POSTs it to the `tables` route with `mode:from_file`, and `createUcTableFromFile`
+  uploads it to a UC volume (`PUT /api/2.0/fs/files`) then runs
+  `CREATE TABLE … AS SELECT * FROM read_files(…)` on the bound warehouse so the
+  schema is **inferred** — exactly the portal flow. Honest warning when no
+  warehouse is bound or the schema has no staging volume.
+- **Principal directory picker (E10)** — the grant "Principal" field is now a
+  freeform `Combobox` autocompleting over workspace SCIM
+  (`/api/databricks/unity-catalog/principals` → `listUcPrincipals` →
+  `/api/2.0/preview/scim/v2/{Users,Groups,ServicePrincipals}`). Freeform fallback
+  + an honest warning when SCIM is unavailable, so a principal can always be typed.
+- **Storage / metastore securables (E8 → built)** — the grants securable picker
+  now offers EXTERNAL_LOCATION / STORAGE_CREDENTIAL / METASTORE with their correct
+  privilege matrices (the BFF already accepted them).
+- **Reconcile (no-vaporware honesty):** F1 lineage graph and D3 volume create were
+  already shipped in earlier audit-t18 commits but were still graded ❌ — flipped
+  to ✅ against the code.
+
+Held to **B+** (not A) by `ui-parity.md`'s "feature completeness must match"
+applied to the whole Catalog Explorer write surface: still no **column-level
+tags / masks** (C12), no **partition/clustering/TBLPROPERTIES** (C11), no
+**volume file browser** (D4) or **function create** (D5), no **sample-data /
+profile / history** (F2), no cross-securable **tag/comment browser** (F3), no
+**external locations / storage credentials / connections / Delta-Sharing CRUD**
+(F4–F5), no **workspace-binding** management (A6/F6), and no **Lakehouse
+Monitoring** (F7).
 
 ## Highest-value gaps to build next
 
-1. **Create-table-from-file/volume** (C10) — the portal's primary table-create flow.
-2. **Volume create + file browser** (D3–D4).
-3. **Lineage graph** (F1) — the defining Catalog Explorer differentiator.
-4. **Column-level tags** (C12) + a cross-securable tag/comment browser (F3).
-5. **External locations / storage credentials / connections / Delta Sharing CRUD** (F4–F5).
+1. **External locations / storage credentials / connections / Delta Sharing CRUD** (F4–F5).
+2. **Volume file browser** (D4) + **function create/view** (D5).
+3. **Column-level tags / masks** (C12) + a cross-securable tag/comment browser (F3).
+4. **Sample data / column profile / table history** (F2).
+5. **Partition / clustering / TBLPROPERTIES** (C11) on create-table.
 6. **Workspace-catalog bindings** (A6/F6) — multi-workspace metastore only.
-7. **Principal directory picker** (E10) — autocomplete over account users/groups/SPs.
+7. **Lakehouse Monitoring** (F7).
 
 ## Backend per control
 
@@ -186,6 +206,10 @@ principal is free-text rather than a directory picker.
 | List tables/volumes/functions | `GET …/tables?catalog=&schema=` | `listUcTables`/`listUcVolumes`/`listUcFunctions` | `GET /api/2.1/unity-catalog/{tables,volumes,functions}` |
 | Get table detail | `GET …/tables?full_name=` | `getUcTable` | `GET /api/2.1/unity-catalog/tables/{full_name}` |
 | Create table | `POST …/tables` | `createUcTable` | `POST /api/2.1/unity-catalog/tables` |
+| Create table from file (C10) | `POST …/tables` (`mode:from_file`) | `createUcTableFromFile` | `PUT /api/2.0/fs/files/{vol path}` + `POST /api/2.0/sql/statements` (read_files CTAS) |
+| Create volume (D3) | `POST …/volumes` | `createUcVolume` | `POST /api/2.1/unity-catalog/volumes` |
+| Principal directory picker (E10) | `GET …/principals?q=` | `listUcPrincipals` | `GET /api/2.0/preview/scim/v2/{Users,Groups,ServicePrincipals}` |
+| Lineage graph (F1) | `GET …/lineage` | `getTableLineage` / `getTableLineageSystemTables` | `POST /api/2.0/lineage-tracking/table-lineage` + `system.access.{table,column}_lineage` |
 | Drop table | `DELETE …/tables?full_name=` | `deleteUcTable` | `DELETE /api/2.1/unity-catalog/tables/{full_name}` |
 | View grants | `GET …/grants?securable_type=&full_name=` | `getUcPermissions` | `GET /api/2.1/unity-catalog/permissions/{type}/{full_name}` |
 | View effective grants | `GET …/grants?…&effective=true` | `getUcEffectivePermissions` | `GET /api/2.1/unity-catalog/effective-permissions/{type}/{full_name}` |
@@ -230,6 +254,14 @@ principal is free-text rather than a directory picker.
   `CREATE SCHEMA`, `CREATE TABLE`, object ownership / `MANAGE`); SCIM-bootstrapped per
   `platform/fiab/bicep/modules/landing-zone/databricks*.bicep`. A 403 renders the
   verbatim UC error.
+- **C10 create-table-from-file** needs `WRITE VOLUME` on the staging volume plus a
+  running SQL Warehouse (the same warehouse the editor already binds) to run the
+  `read_files` CTAS — both are UC-runtime privileges / existing resources, no new
+  Azure resource or app-env entry. **E10 principal picker** needs workspace **SCIM
+  read** (the console UAMI is already a workspace member via the UC bootstrap); a
+  SCIM 403 surfaces an honest "directory unavailable — type the principal directly"
+  warning and the freeform Combobox still works. No new env var, role, or Cosmos
+  container is introduced by this wave.
 - **Ownership transfer (E9)** uses the same UC privilege model as grants —
   current-owner / metastore-admin / `MANAGE` on the object. No new Azure resource,
   role assignment, or app-env entry; it is a UC-runtime privilege, surfaced

@@ -40,7 +40,12 @@ const useStyles = makeStyles({
   treePad: { padding: 8 },
   tabs: { borderBottom: `1px solid ${tokens.colorNeutralStroke2}`, padding: '8px 8px 0' },
   tableWrap: { overflow: 'auto', maxHeight: 320, border: `1px solid ${tokens.colorNeutralStroke2}`, borderRadius: tokens.borderRadiusMedium },
+  selectedRow: {
+    backgroundColor: tokens.colorNeutralBackground1Selected,
+    boxShadow: `inset 3px 0 0 0 ${tokens.colorBrandStroke1}`,
+  },
   cell: { fontFamily: tokens.fontFamilyMonospace, fontSize: tokens.fontSizeBase200, whiteSpace: 'nowrap' },
+  liveHint: { display: 'flex', alignItems: 'center', gap: 6, color: tokens.colorNeutralForeground3 },
   field: { display: 'flex', flexDirection: 'column', gap: 4, minWidth: 240 },
   mono: { fontFamily: tokens.fontFamilyMonospace, fontSize: tokens.fontSizeBase200 },
   section: { display: 'flex', flexDirection: 'column', gap: 8 },
@@ -117,6 +122,9 @@ export function EventSchemaSetEditor({ item, id }: Props) {
   const [active, setActive] = useState<SchemaSet | null>(null);
   const [activeSubject, setActiveSubject] = useState<string | null>(null);
   const [tab, setTab] = useState<string>('subjects');
+  // Subjects-table sort (client-side; the subject list is small and already loaded).
+  const [sortCol, setSortCol] = useState<'name' | 'format' | 'versions' | 'latest'>('name');
+  const [sortDir, setSortDir] = useState<'asc' | 'desc'>('asc');
   const [actionMsg, setActionMsg] = useState<string | null>(null);
   const [actionErr, setActionErr] = useState<string | null>(null);
 
@@ -138,7 +146,10 @@ export function EventSchemaSetEditor({ item, id }: Props) {
   // "would this register?" without persisting, so the author sees breaking
   // changes before committing.
   const [checkBusy, setCheckBusy] = useState(false);
-  const [checkResult, setCheckResult] = useState<{ compatible: boolean; violations: string[]; checkedVia: string } | null>(null);
+  // Tracks the debounced live (dry-run) check separately from the explicit button
+  // so we can show a subtle "Checking…" hint without disabling the form.
+  const [liveBusy, setLiveBusy] = useState(false);
+  const [checkResult, setCheckResult] = useState<{ compatible: boolean; violations: string[]; checkedVia: string; live: boolean } | null>(null);
 
   useEffect(() => {
     fetch('/api/loom/workspaces').then(r => r.json()).then(j => {
@@ -218,22 +229,44 @@ export function EventSchemaSetEditor({ item, id }: Props) {
     finally { setRegBusy(false); }
   }, [workspaceId, setId, regSubject, regSchema, active?.format, loadDetail]);
 
-  const checkCompat = useCallback(async () => {
+  // dryRun=true → live/auto check: forces the in-process validator (never PUTs
+  // into Event Hubs Schema Registry) so debounced feedback on every keystroke
+  // can't rate-limit or pollute the EH SR data plane. dryRun=false → the explicit
+  // "Check compatibility" button, which uses the auto-selected backend (EH SR when
+  // configured), matching what the enforced register path will do.
+  const checkCompat = useCallback(async (dryRun = false) => {
     if (!workspaceId || !setId || !regSubject.trim() || !regSchema.trim()) return;
-    setCheckBusy(true); setCheckResult(null); setRegErr(null);
+    if (!dryRun) { setCheckBusy(true); setRegErr(null); } else { setLiveBusy(true); }
+    setCheckResult(null);
     try {
       try { JSON.parse(regSchema); }
-      catch (e: any) { setRegErr(`Schema is not valid JSON: ${e?.message || String(e)}`); return; }
+      catch (e: any) {
+        // On the live path a half-typed schema is expected; stay quiet and let
+        // the author keep typing. The button path reports the parse error.
+        if (!dryRun) setRegErr(`Schema is not valid JSON: ${e?.message || String(e)}`);
+        return;
+      }
       const r = await fetch(`/api/items/event-schema-set/${encodeURIComponent(setId)}/check-compat?workspaceId=${encodeURIComponent(workspaceId)}`, {
         method: 'POST', headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ subject: regSubject.trim(), newSchema: regSchema, format: active?.format || 'AVRO' }),
+        body: JSON.stringify({ subject: regSubject.trim(), newSchema: regSchema, format: active?.format || 'AVRO', dryRunInProcess: dryRun }),
       });
       const j = await r.json();
-      if (!j.ok) { setRegErr(j.error || 'compatibility check failed'); return; }
-      setCheckResult({ compatible: !!j.compatible, violations: j.violations || [], checkedVia: j.checkedVia || 'cosmos-inprocess' });
-    } catch (e: any) { setRegErr(e?.message || String(e)); }
-    finally { setCheckBusy(false); }
+      if (!j.ok) { if (!dryRun) setRegErr(j.error || 'compatibility check failed'); return; }
+      setCheckResult({ compatible: !!j.compatible, violations: j.violations || [], checkedVia: j.checkedVia || 'cosmos-inprocess', live: dryRun });
+    } catch (e: any) { if (!dryRun) setRegErr(e?.message || String(e)); }
+    finally { if (!dryRun) setCheckBusy(false); else setLiveBusy(false); }
   }, [workspaceId, setId, regSubject, regSchema, active?.format]);
+
+  // Live, debounced compatibility feedback: the check runs automatically on every
+  // schema (or subject) change while the Register dialog is open — satisfying
+  // "compatibility check runs on schema change and reports the result" without a
+  // button press. Debounced 500ms and pinned to the in-process validator so rapid
+  // edits never spam the backend / EH SR.
+  useEffect(() => {
+    if (!regOpen || !workspaceId || !setId || !regSubject.trim() || !regSchema.trim()) return;
+    const t = setTimeout(() => { void checkCompat(true); }, 500);
+    return () => clearTimeout(t);
+  }, [regOpen, workspaceId, setId, regSubject, regSchema, active?.format, checkCompat]);
 
   const updateCompatibility = useCallback(async (compat: SchemaSet['compatibility']) => {
     if (!workspaceId || !setId) return;
@@ -251,6 +284,24 @@ export function EventSchemaSetEditor({ item, id }: Props) {
 
   const subjects = active?.subjects || [];
   const subject = subjects.find(x => x.name === activeSubject) || null;
+
+  const toggleSort = useCallback((col: 'name' | 'format' | 'versions' | 'latest') => {
+    setSortDir(prev => (sortCol === col ? (prev === 'asc' ? 'desc' : 'asc') : 'asc'));
+    setSortCol(col);
+  }, [sortCol]);
+
+  const sortedSubjects = useMemo(() => {
+    const dir = sortDir === 'asc' ? 1 : -1;
+    const latestAt = (sub: SchemaSubject) => sub.versions.at(-1)?.createdAt || '';
+    return [...subjects].sort((a, b) => {
+      switch (sortCol) {
+        case 'format': return a.format.localeCompare(b.format) * dir || a.name.localeCompare(b.name);
+        case 'versions': return (a.versions.length - b.versions.length) * dir || a.name.localeCompare(b.name);
+        case 'latest': return latestAt(a).localeCompare(latestAt(b)) * dir || a.name.localeCompare(b.name);
+        default: return a.name.localeCompare(b.name) * dir;
+      }
+    });
+  }, [subjects, sortCol, sortDir]);
 
   const ribbon: RibbonTab[] = useMemo(() => [
     { id: 'home', label: 'Home', groups: [
@@ -357,6 +408,12 @@ export function EventSchemaSetEditor({ item, id }: Props) {
                         >
                           <Textarea value={regSchema} onChange={(_, d) => { setRegSchema(d.value); setCheckResult(null); }} rows={12} className={s.mono} />
                         </Field>
+                        {liveBusy && !checkResult && (
+                          <div className={s.liveHint}>
+                            <Spinner size="tiny" />
+                            <Caption1>Checking compatibility as you edit…</Caption1>
+                          </div>
+                        )}
                         {checkResult && (
                           <MessageBar intent={checkResult.compatible ? 'success' : 'error'}>
                             <MessageBarBody>
@@ -366,7 +423,12 @@ export function EventSchemaSetEditor({ item, id }: Props) {
                                   : `Incompatible with the ${active?.compatibility || 'BACKWARD'} policy`}
                               </MessageBarTitle>
                               {checkResult.compatible ? (
-                                <>Registration will be accepted. Verified via {checkResult.checkedVia === 'eventhubs-sr' ? 'Azure Event Hubs Schema Registry' : 'in-process Avro validator'}.</>
+                                <>
+                                  Registration will be accepted. Verified via {checkResult.checkedVia === 'eventhubs-sr' ? 'Azure Event Hubs Schema Registry' : 'in-process Avro validator'}.
+                                  {checkResult.live && (
+                                    <> Live check — re-checked automatically as you edit. The final compatibility check runs server-side at registration.</>
+                                  )}
+                                </>
                               ) : (
                                 <>
                                   Registration will be blocked. Fix the breaking changes below, then re-check.
@@ -387,7 +449,7 @@ export function EventSchemaSetEditor({ item, id }: Props) {
                         appearance="outline"
                         icon={checkBusy ? <Spinner size="tiny" /> : <BeakerEdit20Regular />}
                         disabled={checkBusy || regBusy || !regSubject.trim() || !regSchema.trim()}
-                        onClick={checkCompat}
+                        onClick={() => checkCompat(false)}
                       >{checkBusy ? 'Checking…' : 'Check compatibility'}</Button>
                       <Button
                         appearance="primary"
@@ -415,22 +477,46 @@ export function EventSchemaSetEditor({ item, id }: Props) {
                 )}
                 {active && subjects.length > 0 && (
                   <div className={s.tableWrap}>
-                    <Table aria-label="Subjects" size="small">
+                    <Table aria-label="Subjects" size="small" sortable>
                       <TableHeader><TableRow>
-                        <TableHeaderCell>Subject</TableHeaderCell>
-                        <TableHeaderCell>Format</TableHeaderCell>
-                        <TableHeaderCell>Versions</TableHeaderCell>
-                        <TableHeaderCell>Latest registered</TableHeaderCell>
+                        <TableHeaderCell
+                          sortDirection={sortCol === 'name' ? (sortDir === 'asc' ? 'ascending' : 'descending') : undefined}
+                          onClick={() => toggleSort('name')}
+                        >Subject</TableHeaderCell>
+                        <TableHeaderCell
+                          sortDirection={sortCol === 'format' ? (sortDir === 'asc' ? 'ascending' : 'descending') : undefined}
+                          onClick={() => toggleSort('format')}
+                        >Format</TableHeaderCell>
+                        <TableHeaderCell
+                          sortDirection={sortCol === 'versions' ? (sortDir === 'asc' ? 'ascending' : 'descending') : undefined}
+                          onClick={() => toggleSort('versions')}
+                        >Versions</TableHeaderCell>
+                        <TableHeaderCell
+                          sortDirection={sortCol === 'latest' ? (sortDir === 'asc' ? 'ascending' : 'descending') : undefined}
+                          onClick={() => toggleSort('latest')}
+                        >Latest registered</TableHeaderCell>
                       </TableRow></TableHeader>
                       <TableBody>
-                        {subjects.map(sub => (
-                          <TableRow key={sub.name} onClick={() => setActiveSubject(sub.name)} style={{ cursor: 'pointer' }}>
-                            <TableCell className={s.cell}>{activeSubject === sub.name ? <strong>{sub.name}</strong> : sub.name}</TableCell>
-                            <TableCell>{sub.format}</TableCell>
-                            <TableCell className={s.cell}>{sub.versions.length}</TableCell>
-                            <TableCell className={s.cell}>{sub.versions.at(-1)?.createdAt?.replace('T', ' ').replace(/\..*/, '') || '—'}</TableCell>
-                          </TableRow>
-                        ))}
+                        {sortedSubjects.map(sub => {
+                          const selected = activeSubject === sub.name;
+                          return (
+                            <TableRow
+                              key={sub.name}
+                              tabIndex={0}
+                              role="button"
+                              aria-pressed={selected}
+                              onClick={() => setActiveSubject(sub.name)}
+                              onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); setActiveSubject(sub.name); } }}
+                              className={selected ? s.selectedRow : undefined}
+                              style={{ cursor: 'pointer' }}
+                            >
+                              <TableCell className={s.cell}>{selected ? <strong>{sub.name}</strong> : sub.name}</TableCell>
+                              <TableCell><Badge appearance="outline" color="informative">{sub.format}</Badge></TableCell>
+                              <TableCell className={s.cell}>{sub.versions.length}</TableCell>
+                              <TableCell className={s.cell}>{sub.versions.at(-1)?.createdAt?.replace('T', ' ').replace(/\..*/, '') || '—'}</TableCell>
+                            </TableRow>
+                          );
+                        })}
                       </TableBody>
                     </Table>
                   </div>
@@ -453,8 +539,22 @@ export function EventSchemaSetEditor({ item, id }: Props) {
                         {subjects.map(sub => <Option key={sub.name} value={sub.name}>{sub.name}</Option>)}
                       </Dropdown>
                     </div>
-                    {!subject && <Caption1>Pick a subject above.</Caption1>}
-                    {subject && subject.versions.length === 0 && <Caption1>No versions yet.</Caption1>}
+                    {!subject && subjects.length > 0 && <Caption1>Pick a subject above.</Caption1>}
+                    {subjects.length === 0 && (
+                      <MessageBar intent="info">
+                        <MessageBarBody>
+                          No subjects in this set yet. Click <strong>Register version</strong> to add the first schema.
+                        </MessageBarBody>
+                      </MessageBar>
+                    )}
+                    {subject && subject.versions.length === 0 && (
+                      <MessageBar intent="info">
+                        <MessageBarBody>
+                          No versions registered for <strong>{subject.name}</strong> yet.
+                          {' '}<Button size="small" appearance="transparent" icon={<Add20Regular />} disabled={!setId} onClick={() => { setRegSubject(subject.name); setRegOpen(true); }}>Register a version</Button>
+                        </MessageBarBody>
+                      </MessageBar>
+                    )}
                     {subject && subject.versions.length > 0 && (
                       <div className={s.section}>
                         {subject.versions.slice().reverse().map((v, idx) => (
