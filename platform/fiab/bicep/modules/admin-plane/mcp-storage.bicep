@@ -69,11 +69,17 @@ resource share 'Microsoft.Storage/storageAccounts/fileServices/shares@2024-01-01
 }
 
 // Existing Container Apps environment — the storages child hangs off it.
-resource cae 'Microsoft.App/managedEnvironments@2025-02-02-preview' existing = {
+// Pinned to the GA api-version (2024-03-01) so the managedEnvironments/storages
+// resource is mounted with the SAME contract in all three places that touch it:
+// admin-plane/main.bicep (mcpEnvStorage), this module, and the runtime ARM
+// client (lib/azure/container-apps-arm-client.ts ACA_API). The azureFile
+// storages shape is identical across versions — this is a consistency pin per
+// the bicep+bootstrap-sync intent, not a behavioral change.
+resource cae 'Microsoft.App/managedEnvironments@2024-03-01' existing = {
   name: caeName
 }
 
-resource envStorage 'Microsoft.App/managedEnvironments/storages@2025-02-02-preview' = {
+resource envStorage 'Microsoft.App/managedEnvironments/storages@2024-03-01' = {
   parent: cae
   name: envStorageName
   properties: {
