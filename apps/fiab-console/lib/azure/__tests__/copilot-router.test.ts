@@ -18,8 +18,8 @@ vi.mock('@azure/identity', () => ({
 
 // Heavy orchestrators — stubbed; routeCopilot only needs them to be callable
 // async generators on the chosen branch. The classifier path uses resolveAoaiTarget.
-const orchestrateMock = vi.fn(async function* () { yield { kind: 'final', content: 'build-answer' }; });
-const orchestrateHelpMock = vi.fn(async function* () { yield { kind: 'final', content: 'docs-answer' }; });
+const orchestrateMock = vi.fn(async function* (..._a: unknown[]) { yield { kind: 'final', content: 'build-answer' }; });
+const orchestrateHelpMock = vi.fn(async function* (..._a: unknown[]) { yield { kind: 'final', content: 'docs-answer' }; });
 vi.mock('@/lib/azure/copilot-orchestrator', () => ({
   orchestrate: (...a: unknown[]) => orchestrateMock(...a),
   resolveAoaiTarget: vi.fn(async () => ({ endpoint: 'https://aoai.example', deployment: 'gpt', apiVersion: '2024-10-21' })),
