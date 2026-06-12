@@ -405,9 +405,9 @@ const useStyles = makeStyles({
     flexDirection: 'column',
     borderTop: `1px solid ${tokens.colorNeutralStroke2}`,
     backgroundColor: tokens.colorNeutralBackground1,
-    // Subtle upward elevation so the pinned dock reads as layered above the
-    // scrolling transcript.
-    boxShadow: '0 -2px 8px rgba(0,0,0,0.04)',
+    // Subtle upward elevation (Fluent shadow token) so the pinned dock reads as
+    // a layered surface floating above the scrolling transcript.
+    boxShadow: tokens.shadow8,
   },
   composer: {
     display: 'flex',
