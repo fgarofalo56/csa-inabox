@@ -32,7 +32,7 @@ import { NewItemCreateGate } from './new-item-gate';
 import type { FabricItemType } from '@/lib/catalog/fabric-item-types';
 import { MonacoTextarea } from '@/lib/components/editor/monaco-textarea';
 import type { RibbonTab } from '@/lib/components/ribbon';
-import { splitAdlsPath, joinAdlsPath, computeGeoBbox, bboxToZoom } from './_family-utils';
+import { splitAdlsPath, joinAdlsPath, computeGeoBbox, bboxToZoom, bboxLabel, geoFeaturesFromInspectRows } from './_family-utils';
 import { GeoJsonMap } from '@/lib/components/graph/geojson-map';
 
 /**
@@ -135,17 +135,9 @@ function GeoSaveBar({ saving, dirty, savedAt, error, onSave }: {
 }
 
 const useStyles = makeStyles({
-  pad: { padding: 16, display: 'flex', flexDirection: 'column', gap: 12 },
-  toolbar: { display: 'flex', gap: 12, alignItems: 'center', flexWrap: 'wrap' },
-  editor: {
-    width: '100%', minHeight: 180,
-    fontFamily: 'Consolas, monospace', fontSize: 13, padding: 12,
-    border: `1px solid ${tokens.colorNeutralStroke2}`, borderRadius: 4,
-    backgroundColor: tokens.colorNeutralBackground3, color: tokens.colorNeutralForeground1,
-    resize: 'vertical',
-  },
-  treePad: { padding: 12, display: 'flex', flexDirection: 'column', gap: 8 },
-  field: { display: 'flex', flexDirection: 'column', gap: 4 },
+  pad: { padding: '16px', display: 'flex', flexDirection: 'column', gap: '12px' },
+  treePad: { padding: '12px', display: 'flex', flexDirection: 'column', gap: '8px' },
+  field: { display: 'flex', flexDirection: 'column', gap: '4px' },
   codeBlock: {
     fontFamily: 'Consolas, monospace', fontSize: '12px', lineHeight: '18px',
     margin: '0', padding: '12px', borderRadius: tokens.borderRadiusMedium,
@@ -162,6 +154,37 @@ const useStyles = makeStyles({
   schemaRow: {
     display: 'flex', flexDirection: 'column', gap: '2px',
     borderBottom: `1px solid ${tokens.colorNeutralStroke3}`, paddingBottom: '6px', paddingTop: '2px',
+  },
+  // Bounding-box side-rail readout under the schema panel.
+  bboxRail: {
+    marginTop: '8px', paddingTop: '8px',
+    borderTop: `1px solid ${tokens.colorNeutralStroke3}`,
+    display: 'flex', flexDirection: 'column', gap: '2px',
+  },
+  bboxValue: {
+    display: 'block', color: tokens.colorNeutralForeground3,
+    fontFamily: 'Consolas, monospace', fontSize: '11px', wordBreak: 'break-all',
+  },
+  // Last-run header row (title + run badges + timestamp).
+  runHeader: { display: 'flex', alignItems: 'center', gap: '8px', flexWrap: 'wrap' },
+  // Modern Fluent-toned parameter grid for the ADF run receipt.
+  runTable: {
+    borderCollapse: 'collapse', width: '100%', fontSize: '12px', marginTop: '4px',
+    tableLayout: 'fixed',
+  },
+  runTh: {
+    textAlign: 'left', padding: '6px 8px', fontWeight: 600,
+    color: tokens.colorNeutralForeground2,
+    borderBottom: `1px solid ${tokens.colorNeutralStroke2}`,
+  },
+  runTd: {
+    padding: '6px 8px', verticalAlign: 'top',
+    borderBottom: `1px solid ${tokens.colorNeutralStroke3}`,
+  },
+  runMono: {
+    padding: '6px 8px', verticalAlign: 'top',
+    borderBottom: `1px solid ${tokens.colorNeutralStroke3}`,
+    fontFamily: 'Consolas, monospace', wordBreak: 'break-all',
   },
 });
 
@@ -454,6 +477,19 @@ function GeoDatasetEditorBody({ item, id }: { item: FabricItemType; id: string }
     finally { setInspecting(false); }
   }, [state.adlsPath, state.format, id]);
 
+  // Render the actual inspected geometry on the shared SVG map. Parse the probe
+  // rows' geometry column (GeoJSON literal / WKT) or lon-lat columns into a
+  // FeatureCollection, then derive a bbox for the side-rail. WKB hex blobs can't
+  // be decoded client-side, so those rows fall through (the schema panel still
+  // badges them "WKB"). This makes the inspector render real geometry, not just
+  // a schema panel + JSON dump.
+  const inspectedGeo = useMemo(() => {
+    if (!inspectResult?.ok || !Array.isArray(inspectResult.columns)) return null;
+    const fc = geoFeaturesFromInspectRows(inspectResult.columns, inspectResult.rows || [], state.geomColumn);
+    return fc.features.length > 0 ? fc : null;
+  }, [inspectResult, state.geomColumn]);
+  const inspectedBbox = useMemo(() => (inspectedGeo ? computeGeoBbox(inspectedGeo) : null), [inspectedGeo]);
+
   const ribbon: RibbonTab[] = useMemo(() => [
     { id: 'home', label: 'Home', groups: [
       { label: 'Dataset', actions: [
@@ -469,7 +505,15 @@ function GeoDatasetEditorBody({ item, id }: { item: FabricItemType; id: string }
       leftPanel={
         <div className={s.treePad}>
           {inspectResult?.ok && Array.isArray(inspectResult.columns) && inspectResult.columns.length > 0 ? (
-            <GeoSchemaPanel columns={inspectResult.columns} rows={inspectResult.rows || []} geomColumn={state.geomColumn} />
+            <>
+              <GeoSchemaPanel columns={inspectResult.columns} rows={inspectResult.rows || []} geomColumn={state.geomColumn} />
+              {inspectedBbox && (
+                <div className={s.bboxRail}>
+                  <Caption1 style={{ fontWeight: 600 }}>Bounding box (SRID {state.srid || '—'})</Caption1>
+                  <Caption1 className={s.bboxValue}>{bboxLabel(inspectedBbox)}</Caption1>
+                </div>
+              )}
+            </>
           ) : (
             <Caption1>
               Geometry inspector — click <strong>Inspect</strong> to probe the dataset&rsquo;s first row via
@@ -591,6 +635,21 @@ function GeoDatasetEditorBody({ item, id }: { item: FabricItemType; id: string }
                     <Subtitle2>Inferred schema</Subtitle2>
                     <GeoSchemaPanel columns={inspectResult.columns} rows={inspectResult.rows || []} geomColumn={state.geomColumn} />
                   </>
+                )}
+                {inspectedGeo ? (
+                  <>
+                    <Subtitle2>Geometry render ({inspectedGeo.features.length} feature{inspectedGeo.features.length === 1 ? '' : 's'})</Subtitle2>
+                    <GeoJsonMap geojson={inspectedGeo} />
+                  </>
+                ) : (
+                  <MessageBar intent="info">
+                    <MessageBarBody>
+                      No plottable geometry in the probed row. The <code>{state.geomColumn || 'geometry'}</code> column
+                      is likely <strong>WKB</strong> (varbinary), which can&rsquo;t be decoded in the browser — store the
+                      geometry as <strong>WKT</strong> or <strong>GeoJSON</strong> (or add <code>lon</code>/<code>lat</code>
+                      columns) to render it on the map. The schema panel still badges the column&rsquo;s encoding.
+                    </MessageBarBody>
+                  </MessageBar>
                 )}
                 <Caption1>Probe query:</Caption1>
                 <pre className={s.codeBlock}>{inspectResult.sql}</pre>
@@ -827,6 +886,12 @@ function GeoPipelineEditorBody({ item, id }: { item: FabricItemType; id: string 
   const mapsKey = process.env.NEXT_PUBLIC_LOOM_AZURE_MAPS_KEY;
   const [triggering, setTriggering] = useState(false);
   const [triggerMsg, setTriggerMsg] = useState<{ intent: 'success' | 'error' | 'warning'; text: string } | null>(null);
+  // Last successful run receipt — drives the enrichment run-status grid so the
+  // editor shows which flags actually mapped to ADF parameters (and which the
+  // target pipeline didn't declare), plus the createRun runId.
+  const [lastRun, setLastRun] = useState<{
+    runId: string; pipelineName: string; parametersUsed: string[]; parametersSkipped: string[]; parameters: Record<string, unknown>; at: string;
+  } | null>(null);
   const triggerRun = useCallback(async () => {
     if (!state.adfPipelineName) { setTriggerMsg({ intent: 'error', text: 'Pick a target ADF pipeline first.' }); return; }
     setTriggering(true); setTriggerMsg(null);
@@ -842,6 +907,12 @@ function GeoPipelineEditorBody({ item, id }: { item: FabricItemType; id: string 
       if (j?.ok) {
         const used = Array.isArray(j.parametersUsed) ? j.parametersUsed : [];
         const skipped = Array.isArray(j.parametersSkipped) ? j.parametersSkipped : [];
+        setLastRun({
+          runId: j.runId || '', pipelineName: j.pipelineName || state.adfPipelineName,
+          parametersUsed: used, parametersSkipped: skipped,
+          parameters: (j.parameters && typeof j.parameters === 'object') ? j.parameters : {},
+          at: new Date().toISOString(),
+        });
         setTriggerMsg({
           intent: 'success',
           text: `Triggered run ${j.runId || ''} on "${j.pipelineName}".` +
@@ -959,6 +1030,50 @@ function GeoPipelineEditorBody({ item, id }: { item: FabricItemType; id: string 
             <MessageBar intent={triggerMsg.intent}>
               <MessageBarBody>{triggerMsg.text}</MessageBarBody>
             </MessageBar>
+          )}
+          {lastRun && (
+            <div className={s.enrichGroup}>
+              <div className={s.runHeader}>
+                <Subtitle2>Last run</Subtitle2>
+                <Badge appearance="tint" color="brand" size="small">{lastRun.pipelineName}</Badge>
+                {lastRun.runId && <Badge appearance="outline" size="small">runId {lastRun.runId}</Badge>}
+                <Caption1 style={{ color: tokens.colorNeutralForeground3, marginLeft: 'auto' }}>{new Date(lastRun.at).toLocaleTimeString()}</Caption1>
+              </div>
+              <table className={s.runTable}>
+                <thead>
+                  <tr>
+                    <th className={s.runTh} style={{ width: '38%' }}>Parameter</th>
+                    <th className={s.runTh} style={{ width: '30%' }}>Value</th>
+                    <th className={s.runTh} style={{ width: '32%' }}>Status</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {(['enrichH3', 'reverseGeocode', 'bufferMeters'] as const).map((k) => {
+                    const passed = lastRun.parametersUsed.includes(k);
+                    const value = k === 'enrichH3' ? String(state.enrichH3)
+                      : k === 'reverseGeocode' ? String(state.reverseGeocode && !!mapsKey)
+                      : String(state.bufferMeters);
+                    return (
+                      <tr key={k}>
+                        <td className={s.runMono}>{k}</td>
+                        <td className={s.runMono}>{passed ? String(lastRun.parameters[k] ?? value) : value}</td>
+                        <td className={s.runTd}>
+                          <Badge appearance="tint" size="small" color={passed ? 'success' : 'warning'}>
+                            {passed ? 'passed to ADF' : 'not declared'}
+                          </Badge>
+                        </td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+              {lastRun.parametersSkipped.length > 0 && (
+                <Caption1 style={{ color: tokens.colorNeutralForeground3 }}>
+                  Skipped parameters are not declared on <code>{lastRun.pipelineName}</code> — add them to the pipeline
+                  (or use the <code>loom-geo-enrich</code> starter) so the flags map.
+                </Caption1>
+              )}
+            </div>
           )}
           <GeoSaveBar saving={saving} dirty={dirty} savedAt={savedAt} error={error} onSave={save} />
         </div>

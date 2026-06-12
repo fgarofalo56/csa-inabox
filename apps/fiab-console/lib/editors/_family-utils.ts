@@ -282,6 +282,145 @@ export function bboxToZoom(bbox: BBox | null): number {
   return Math.max(1, Math.min(18, Math.round(11 - Math.log2(Math.max(span, 0.0001)))));
 }
 
+/** Format a bbox as a compact "[minLon, minLat] -> [maxLon, maxLat]" label. */
+export function bboxLabel(bbox: BBox | null): string | null {
+  if (!bbox) return null;
+  const f = (n: number) => n.toFixed(4);
+  return `[${f(bbox.minLon)}, ${f(bbox.minLat)}] → [${f(bbox.maxLon)}, ${f(bbox.maxLat)}]`;
+}
+
+// ============================================================
+// Geo-dataset inspector — turn OPENROWSET probe rows into GeoJSON
+// (geo-editors.tsx GeoDatasetEditor map render)
+// ============================================================
+
+/**
+ * Parse a single Well-Known-Text geometry literal into a GeoJSON geometry.
+ * Handles POINT / LINESTRING / POLYGON (and their MULTI* variants). Returns
+ * null for anything it can't parse (e.g. WKB hex blobs, which Synapse returns
+ * for varbinary geometry columns and which can't be decoded client-side).
+ *
+ * Pure + side-effect-free so vitest can exercise it without a DOM. The grammar
+ * is deliberately tolerant: it strips the type keyword, then recursively reads
+ * the parenthesised coordinate groups. Z/M ordinates beyond lon/lat are dropped
+ * (GeoJSON is 2-D for our SVG renderer).
+ */
+export function parseWktGeometry(wkt: string): { type: string; coordinates: unknown } | null {
+  if (typeof wkt !== 'string') return null;
+  const s = wkt.trim();
+  const m = s.match(/^(POINT|LINESTRING|POLYGON|MULTIPOINT|MULTILINESTRING|MULTIPOLYGON)\s*(Z|M|ZM)?\s*\((.*)\)\s*$/i);
+  if (!m) return null;
+  const type = m[1].toUpperCase();
+  const body = m[3];
+
+  // Read a flat list of "lon lat" pairs from a coordinate string.
+  const readPairs = (str: string): number[][] => {
+    const pairs: number[][] = [];
+    for (const tok of str.split(',')) {
+      const nums = tok.trim().split(/\s+/).map(Number);
+      if (nums.length >= 2 && Number.isFinite(nums[0]) && Number.isFinite(nums[1])) {
+        pairs.push([nums[0], nums[1]]);
+      }
+    }
+    return pairs;
+  };
+  // Split a body into top-level parenthesised groups (handles nesting).
+  const splitGroups = (str: string): string[] => {
+    const groups: string[] = [];
+    let depth = 0, start = -1;
+    for (let i = 0; i < str.length; i++) {
+      const ch = str[i];
+      if (ch === '(') { if (depth === 0) start = i + 1; depth++; }
+      else if (ch === ')') { depth--; if (depth === 0 && start >= 0) { groups.push(str.slice(start, i)); start = -1; } }
+    }
+    return groups;
+  };
+
+  switch (type) {
+    case 'POINT': {
+      const p = readPairs(body)[0];
+      return p ? { type: 'Point', coordinates: p } : null;
+    }
+    case 'LINESTRING':
+      return { type: 'LineString', coordinates: readPairs(body) };
+    case 'MULTIPOINT': {
+      // MULTIPOINT can be "(1 2, 3 4)" or "((1 2),(3 4))".
+      const groups = splitGroups(body);
+      const coords = groups.length ? groups.map((g) => readPairs(g)[0]).filter(Boolean) : readPairs(body);
+      return { type: 'MultiPoint', coordinates: coords };
+    }
+    case 'POLYGON':
+      return { type: 'Polygon', coordinates: splitGroups(body).map(readPairs) };
+    case 'MULTILINESTRING':
+      return { type: 'MultiLineString', coordinates: splitGroups(body).map(readPairs) };
+    case 'MULTIPOLYGON':
+      return { type: 'MultiPolygon', coordinates: splitGroups(body).map((poly) => splitGroups(poly).map(readPairs)) };
+    default:
+      return null;
+  }
+}
+
+/** GeoJSON FeatureCollection shape used by the SVG renderer. */
+export interface GeoFeatureCollection { type: 'FeatureCollection'; features: any[] }
+
+/**
+ * Turn the geometry inspector's probe result ({ columns, rows }) into a GeoJSON
+ * FeatureCollection so the dataset editor can render the actual geometry on the
+ * shared map — not just a schema panel + raw JSON dump.
+ *
+ * Resolution order per row, using the declared geometry column first:
+ *   1. The geometry cell is a GeoJSON object/array literal → use it directly.
+ *   2. The geometry cell is a WKT literal (POINT(...)/POLYGON(...)) → parse it.
+ *   3. Fallback: lon/lat (or longitude/latitude, x/y) columns → Point feature.
+ *
+ * WKB hex blobs (varbinary geometry) can't be decoded client-side, so those
+ * rows are skipped (the schema panel still badges them "WKB"). Bounded to the
+ * first `max` rows. Pure + unit-tested.
+ */
+export function geoFeaturesFromInspectRows(
+  columns: string[],
+  rows: unknown[][],
+  geomColumn: string,
+  max = 2000,
+): GeoFeatureCollection {
+  const fc: GeoFeatureCollection = { type: 'FeatureCollection', features: [] };
+  if (!Array.isArray(columns) || !Array.isArray(rows)) return fc;
+  const lc = columns.map((c) => String(c).toLowerCase());
+  const geomI = lc.indexOf(String(geomColumn || '').toLowerCase());
+  const lonI = lc.findIndex((c) => ['lon', 'lng', 'longitude', 'x'].includes(c));
+  const latI = lc.findIndex((c) => ['lat', 'latitude', 'y'].includes(c));
+
+  for (const row of rows.slice(0, max)) {
+    if (!Array.isArray(row)) continue;
+    const props: Record<string, unknown> = {};
+    columns.forEach((c, i) => { if (i !== geomI && i !== lonI && i !== latI) props[c] = row[i]; });
+
+    let geometry: { type: string; coordinates: unknown } | null = null;
+    const cell = geomI >= 0 ? row[geomI] : undefined;
+
+    // 1. GeoJSON literal cell (object, or a string that parses to one).
+    if (cell && typeof cell === 'object' && (cell as any).type && (cell as any).coordinates) {
+      geometry = cell as any;
+    } else if (typeof cell === 'string') {
+      const t = cell.trim();
+      if (t.startsWith('{')) {
+        try { const j = JSON.parse(t); if (j?.type && j?.coordinates) geometry = j; } catch { /* not GeoJSON */ }
+      }
+      // 2. WKT literal.
+      if (!geometry) geometry = parseWktGeometry(t);
+    }
+
+    // 3. lon/lat column fallback.
+    if (!geometry && lonI >= 0 && latI >= 0) {
+      const lon = Number(row[lonI]); const lat = Number(row[latI]);
+      if (Number.isFinite(lon) && Number.isFinite(lat)) geometry = { type: 'Point', coordinates: [lon, lat] };
+    }
+
+    if (geometry) fc.features.push({ type: 'Feature', properties: props, geometry });
+  }
+  return fc;
+}
+
 // ============================================================
 // Data Agent source normalization (phase4-editors.tsx — DataAgentEditor)
 // ============================================================
