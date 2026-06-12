@@ -161,6 +161,58 @@ describe('Monitor TTL cache', () => {
     await expect(listResources()).rejects.toBeTruthy();
     await expect(listResources()).resolves.toEqual([]); // failure was evicted
   });
+
+  it('memoizes listActivityLog so a tab revisit does not re-crawl ARM, clearMonitorCache refetches', async () => {
+    const calls = captureFetch(() => ({ body: { value: [] } }));
+    const { listActivityLog, clearMonitorCache } = await import('../monitor-client');
+    await listActivityLog({ days: 7 });
+    const afterFirst = calls.length;
+    expect(afterFirst).toBeGreaterThan(0);
+    await listActivityLog({ days: 7 }); // same window key → served from memo
+    expect(calls.length).toBe(afterFirst);
+    clearMonitorCache();
+    await listActivityLog({ days: 7 });
+    expect(calls.length).toBeGreaterThan(afterFirst);
+  });
+
+  it('memoizes listAlertRules so a repeat call does not re-list metricAlerts', async () => {
+    const calls = captureFetch(() => ({ body: { value: [] } }));
+    const { listAlertRules } = await import('../monitor-client');
+    await listAlertRules();
+    const afterFirst = calls.length;
+    expect(afterFirst).toBe(1);
+    await listAlertRules();
+    expect(calls.length).toBe(afterFirst); // served from the in-process memo
+  });
+
+  it('memoizes getDiagnosticsCoverage (N per-resource probes run once), enableDiagnostics busts it', async () => {
+    process.env.LOOM_LOG_ANALYTICS_RESOURCE_ID =
+      '/subscriptions/sub-1/resourceGroups/rg-admin/providers/Microsoft.OperationalInsights/workspaces/loom-law';
+    const calls = captureFetch((url, init) => {
+      if (url.includes('/resourceGroups/rg-admin/resources')) {
+        return { body: { value: [{ id: '/subscriptions/sub-1/resourceGroups/rg-admin/providers/Microsoft.App/containerApps/aca1', name: 'aca1', type: 'Microsoft.App/containerApps', location: 'eastus2' }] } };
+      }
+      if (url.includes('/resourceGroups/rg-aca/resources')) return { body: { value: [] } };
+      if (url.includes('/diagnosticSettings')) {
+        if (init?.method === 'PUT') return { body: { name: 'loom-diagnostics' } };
+        return { body: { value: [] } };
+      }
+      return { body: {} };
+    });
+    const { getDiagnosticsCoverage, enableDiagnostics, clearMonitorCache } = await import('../monitor-client');
+    await getDiagnosticsCoverage();
+    const diagAfterFirst = calls.filter((c) => c.url.includes('/diagnosticSettings')).length;
+    expect(diagAfterFirst).toBeGreaterThan(0);
+    await getDiagnosticsCoverage(); // served from memo — no new diagnosticSettings GETs
+    expect(calls.filter((c) => c.url.includes('/diagnosticSettings') && c.init?.method !== 'PUT').length).toBe(diagAfterFirst);
+    // A mutation must bust the coverage cache so the next read reflects it.
+    await enableDiagnostics('/subscriptions/sub-1/resourceGroups/rg-admin/providers/Microsoft.App/containerApps/aca1');
+    const beforeRefetch = calls.filter((c) => c.url.includes('/diagnosticSettings') && c.init?.method !== 'PUT').length;
+    await getDiagnosticsCoverage();
+    expect(calls.filter((c) => c.url.includes('/diagnosticSettings') && c.init?.method !== 'PUT').length).toBeGreaterThan(beforeRefetch);
+    clearMonitorCache();
+    delete process.env.LOOM_LOG_ANALYTICS_RESOURCE_ID;
+  });
 });
 
 describe('fetchMetrics', () => {

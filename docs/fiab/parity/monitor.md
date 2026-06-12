@@ -108,12 +108,31 @@ The deliberate two-stage Overview split (fast `/api/monitor/inventory` first
 paint, slow `/api/monitor/health` in parallel and non-blocking) is preserved —
 it is NOT regressed into a single blocking aggregate.
 
+4. **TTL memo extended to the remaining tab-gated read paths** (`monitor-client.ts`):
+   the three heaviest first-activation reads outside the Overview critical path
+   are now memoized with the same `cached()` mechanism — `listActivityLog()`
+   (paginated management-eventtypes crawl across every Loom RG;
+   `LOOM_MONITOR_ACTIVITY_LOG_TTL_MS`, 45 s), `listAlertRules()` (whole-sub
+   `metricAlerts` list; `LOOM_MONITOR_ALERTS_TTL_MS`, 45 s), and
+   `getDiagnosticsCoverage()` (the single heaviest read — ONE
+   `diagnosticSettings` GET **per resource** in the estate, N ARM round-trips;
+   `LOOM_MONITOR_DIAG_TTL_MS`, 60 s). A revisit / Refresh inside the window is
+   served from memory; failures are still evicted (never cached); and
+   `enableDiagnostics()` calls `clearMonitorCache()` so a freshly-enabled diag
+   setting shows on the next read. Same Azure-native paths (ARM only) — works
+   with `LOOM_DEFAULT_FABRIC_WORKSPACE` unset, no new RBAC, no new required env.
+
 ### Verification (audit-t117)
 
-- `lib/azure/__tests__/monitor-client.test.ts` — 31/31 green, including the ARG
+- `lib/azure/__tests__/monitor-client.test.ts` — 34/34 green, including the ARG
   fast path, the crawl fallback on empty/error, the TTL memo (repeat call does
-  not re-hit ARM; `clearMonitorCache()` forces a refetch), and failure
-  non-caching.
-- `npx tsc --noEmit` — touched files clean (monitor-client.ts, monitor-hub.tsx).
-- No new env var is required to run (the three `*_TTL_MS` vars are optional
-  tuning overrides with sane defaults); no new RBAC.
+  not re-hit ARM; `clearMonitorCache()` forces a refetch), failure non-caching,
+  and the three newly-memoized paths (`listActivityLog`, `listAlertRules`,
+  `getDiagnosticsCoverage` — the last asserting N per-resource probes run once
+  and that `enableDiagnostics()` busts the coverage cache).
+- `npx tsc --noEmit` — touched files clean (monitor-client.ts, monitor-pane.tsx).
+- No new env var is required to run (the `*_TTL_MS` vars are optional tuning
+  overrides with sane in-code defaults); no new RBAC.
+- Pre-existing unrelated failure: `monitor-routes.test.ts` "POST /api/monitor/logs
+  resolves a preset to KQL" fails identically on clean `origin/main` (signIns
+  preset / `queryLogs` path, untouched here) — part of the known backlog.
