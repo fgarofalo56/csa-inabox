@@ -232,6 +232,28 @@ const useStyles = makeStyles({
   },
   ontoLoading: { display: 'flex', alignItems: 'center', gap: tokens.spacingHorizontalS, color: tokens.colorNeutralForeground3 },
   ontoStartBtn: { alignSelf: 'flex-start' },
+  /* Weave (Semantic Ontology) Phase 1 — object instances + write-back actions */
+  ontoActionCard: {
+    display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalS,
+    padding: tokens.spacingVerticalM, borderRadius: tokens.borderRadiusLarge,
+    border: `1px solid ${tokens.colorNeutralStroke2}`, borderLeftWidth: '4px', borderLeftColor: tokens.colorBrandStroke1,
+    backgroundColor: tokens.colorNeutralBackground1,
+  },
+  ontoActionHead: { display: 'flex', alignItems: 'center', gap: tokens.spacingHorizontalS, flexWrap: 'wrap' },
+  ontoTableWrap: {
+    overflowX: 'auto', borderRadius: tokens.borderRadiusMedium,
+    border: `1px solid ${tokens.colorNeutralStroke2}`,
+  },
+  ontoTableMeta: {
+    display: 'flex', alignItems: 'center', justifyContent: 'space-between',
+    color: tokens.colorNeutralForeground3,
+  },
+  ontoCellId: { fontFamily: tokens.fontFamilyMonospace, color: tokens.colorNeutralForeground2 },
+  ontoSortHeader: {
+    display: 'inline-flex', alignItems: 'center', gap: tokens.spacingHorizontalXXS,
+    cursor: 'pointer', userSelect: 'none', background: 'none', border: 'none',
+    padding: 0, font: 'inherit', color: 'inherit',
+  },
 
   /* ---- Plan PowerTable / Intelligence / InfoBridge (audit-T64 finish) ---- */
   planSection: {
@@ -1027,6 +1049,7 @@ function WeaveInstancePanel({
   const [objMsg, setObjMsg] = useState<{ intent: 'success' | 'error' | 'warning'; text: string } | null>(null);
   const [newProps, setNewProps] = useState('{}');
   const [creating, setCreating] = useState(false);
+  const [sort, setSort] = useState<{ col: string; dir: 'asc' | 'desc' }>({ col: 'id', dir: 'asc' });
 
   useEffect(() => { if (!objType && classNames.length) setObjType(classNames[0]); }, [classNames, objType]);
 
@@ -1137,6 +1160,27 @@ function WeaveInstancePanel({
     } finally { setRunningAction(null); }
   }, [id, runParams, objType, loadObjects]);
 
+  const toggleSort = useCallback((col: string) => {
+    setSort((prev) => (prev.col === col ? { col, dir: prev.dir === 'asc' ? 'desc' : 'asc' } : { col, dir: 'asc' }));
+  }, []);
+
+  const objColumns = objects.length ? Object.keys(objects[0].properties || {}) : [];
+
+  const sortedObjects = useMemo(() => {
+    const get = (o: { id: string; properties: Record<string, unknown> }) =>
+      sort.col === 'id' ? o.id : o.properties?.[sort.col];
+    const arr = [...objects].sort((a, b) => {
+      const av = get(a); const bv = get(b);
+      const an = typeof av === 'number' ? av : Number(av);
+      const bn = typeof bv === 'number' ? bv : Number(bv);
+      let cmp: number;
+      if (!Number.isNaN(an) && !Number.isNaN(bn) && av !== '' && bv !== '') cmp = an - bn;
+      else cmp = String(av ?? '').localeCompare(String(bv ?? ''));
+      return sort.dir === 'asc' ? cmp : -cmp;
+    });
+    return arr;
+  }, [objects, sort]);
+
   if (id === 'new') {
     return (
       <div className={s.ontoSection}>
@@ -1146,7 +1190,8 @@ function WeaveInstancePanel({
     );
   }
 
-  const objColumns = objects.length ? Object.keys(objects[0].properties || {}) : [];
+  const SortIcon = ({ col }: { col: string }) =>
+    sort.col !== col ? null : sort.dir === 'asc' ? <ArrowSortUp16Regular /> : <ArrowSortDown16Regular />;
 
   return (
     <div className={s.ontoBindGrid}>
@@ -1180,24 +1225,38 @@ function WeaveInstancePanel({
             {objLoading ? (
               <div className={s.ontoLoading}><Spinner size="tiny" /><Caption1>Loading instances…</Caption1></div>
             ) : objects.length === 0 ? (
-              <div className={s.ontoEmpty}><Caption1>No {objType} instances yet.</Caption1></div>
+              <div className={s.ontoEmpty}><Caption1>No {objType} instances yet. Create one above to materialize an AGE vertex.</Caption1></div>
             ) : (
-              <Table size="small" aria-label={`${objType} instances`}>
-                <TableHeader>
-                  <TableRow>
-                    <TableHeaderCell>id</TableHeaderCell>
-                    {objColumns.map((c) => <TableHeaderCell key={c}>{c}</TableHeaderCell>)}
-                  </TableRow>
-                </TableHeader>
-                <TableBody>
-                  {objects.map((o) => (
-                    <TableRow key={o.id}>
-                      <TableCell>{o.id}</TableCell>
-                      {objColumns.map((c) => <TableCell key={c}>{String(o.properties?.[c] ?? '')}</TableCell>)}
-                    </TableRow>
-                  ))}
-                </TableBody>
-              </Table>
+              <>
+                <div className={s.ontoTableMeta}>
+                  <Caption1>{objects.length} {objects.length === 1 ? 'instance' : 'instances'}</Caption1>
+                  <Button size="small" appearance="subtle" icon={<ArrowSync16Regular />} onClick={() => void loadObjects(objType)} disabled={objLoading}>Refresh</Button>
+                </div>
+                <div className={s.ontoTableWrap}>
+                  <Table size="small" aria-label={`${objType} instances`} sortable>
+                    <TableHeader>
+                      <TableRow>
+                        <TableHeaderCell aria-sort={sort.col === 'id' ? (sort.dir === 'asc' ? 'ascending' : 'descending') : 'none'}>
+                          <button type="button" className={s.ontoSortHeader} onClick={() => toggleSort('id')}>id<SortIcon col="id" /></button>
+                        </TableHeaderCell>
+                        {objColumns.map((c) => (
+                          <TableHeaderCell key={c} aria-sort={sort.col === c ? (sort.dir === 'asc' ? 'ascending' : 'descending') : 'none'}>
+                            <button type="button" className={s.ontoSortHeader} onClick={() => toggleSort(c)}>{c}<SortIcon col={c} /></button>
+                          </TableHeaderCell>
+                        ))}
+                      </TableRow>
+                    </TableHeader>
+                    <TableBody>
+                      {sortedObjects.map((o) => (
+                        <TableRow key={o.id}>
+                          <TableCell><span className={s.ontoCellId}>{o.id}</span></TableCell>
+                          {objColumns.map((c) => <TableCell key={c}>{String(o.properties?.[c] ?? '')}</TableCell>)}
+                        </TableRow>
+                      ))}
+                    </TableBody>
+                  </Table>
+                </div>
+              </>
             )}
           </>
         )}
@@ -1221,12 +1280,12 @@ function WeaveInstancePanel({
           <div className={s.ontoEmpty}><Caption1>No actions declared. Use <strong>Declare action type</strong> to add a create / update / delete action.</Caption1></div>
         ) : (
           actionTypes.map((a) => (
-            <div key={a.name} className={s.ontoSection} style={{ gap: 8 }}>
-              <div className={s.ontoBindRow}>
+            <div key={a.name} className={s.ontoActionCard}>
+              <div className={s.ontoActionHead}>
                 <Badge appearance="tint" color={a.kind === 'create' ? 'success' : a.kind === 'delete' ? 'danger' : 'brand'}>{a.kind}</Badge>
                 <Body1><strong>{a.name}</strong></Body1>
                 <Caption1 className={s.ontoSectionHint}>→ {a.objectType}</Caption1>
-                <span style={{ flex: 1 }} />
+                <span className={s.ontoBindRowSpacer} />
                 <Button size="small" appearance="subtle" icon={<Dismiss16Regular />} aria-label={`Remove action ${a.name}`} onClick={() => removeActionType(a.name)}>Remove</Button>
               </div>
               {(a.kind === 'update' || a.kind === 'delete') && (
