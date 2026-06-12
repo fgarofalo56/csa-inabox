@@ -321,8 +321,8 @@ param loomSynapseSqlSuffix string = ''
 @description('Resource group of the AML workspace for MLflow experiment tracking (ml-experiment "Runs & metrics" tab, mlflow-client.ts). Empty → falls back to LOOM_FOUNDRY_RG. Set explicitly when pointing at a dedicated AML workspace; requires the Console UAMI AzureML Data Scientist on that workspace.')
 param loomAmlRg string = ''
 
-@description('Entra principal name the console identity is registered under in PostgreSQL (pgaadauth_create_principal). Empty = the PG Query tab shows an honest setup gate.')
-param loomPostgresAadUser string = ''
+@description('Entra principal name the console identity is registered under in PostgreSQL (pgaadauth_create_principal). Defaults to the Console UAMI name (loom-console) — the name the post-deploy bootstrap registers as a PG principal for Weave + the relational-store editors. Override only if the UAMI is named differently.')
+param loomPostgresAadUser string = 'loom-console'
 
 @description('Loom Azure Data Factory name (for env-var wiring on loom-console — backs the ADF Pipeline/Dataset/Trigger editors).')
 param loomAdfName string = 'adf-loom-default-${location}'
@@ -768,6 +768,16 @@ param loomCosmosVectorEndpoint string = ''
 param loomCosmosVectorDatabase string = ''
 @description('Cosmos NoSQL vector container (default: docs-vec)')
 param loomCosmosVectorContainer string = ''
+// Weave (Semantic Ontology) graph store — the DLZ postgres-weave module emits a
+// PG flexible-server FQDN (Apache AGE enabled) when weaveOntologyEnabled=true.
+// Pass them through so the Console BFF (lib/azure/weave-ontology-store.ts) binds
+// to the deployed server for object/link/action instance write-back.
+@description('Weave ontology PostgreSQL + Apache AGE server FQDN (e.g. psql-loom-weave-default-xyz.postgres.database.azure.com). When empty, the Ontology editor Objects / Write-back actions surfaces show the honest-gate MessageBar naming LOOM_WEAVE_PG_FQDN + postgres-weave.bicep.')
+param loomWeavePgFqdn string = ''
+@description('Weave ontology PostgreSQL database holding the AGE graph (default: loom-weave).')
+param loomWeavePgDatabase string = ''
+@description('Weave AGE graph name created by the post-deploy bootstrap (default: loom_ontology).')
+param loomWeaveGraph string = ''
 @description('Azure Maps account name (e.g. maps-csa-loom-xyz). When empty, the geo-map / map editors fall back to OSM and surface the honest-gate MessageBar.')
 param loomAzureMapsAccount string = ''
 @description('Azure Maps primary key secret name in Key Vault (default: loom-azure-maps-primary-key). The Console reads this via secretRef.')
@@ -1885,6 +1895,18 @@ module appDeployments 'app-deployments.bicep' = if (containerPlatform == 'contai
             // in synapse-sql-client.ts; gov clouds set azuresynapse.us here.
             { name: 'LOOM_SYNAPSE_SQL_SUFFIX', value: loomSynapseSqlSuffix }
             { name: 'LOOM_POSTGRES_AAD_USER', value: loomPostgresAadUser }
+            // PostgreSQL Entra-auth cloud portability (read by postgres-flex-client.ts).
+            // Commercial / GCC use the Commercial OSS RDBMS scope + .azure.com host;
+            // GCC-High / IL5 (Azure US Government) use the US-Gov scope + .usgovcloudapi.net.
+            { name: 'LOOM_POSTGRES_AAD_SCOPE', value: boundary == 'GCC-High' || boundary == 'IL5' ? 'https://ossrdbms-aad.database.usgovcloudapi.net/.default' : 'https://ossrdbms-aad.database.azure.com/.default' }
+            { name: 'LOOM_POSTGRES_HOST_SUFFIX', value: boundary == 'GCC-High' || boundary == 'IL5' ? 'postgres.database.usgovcloudapi.net' : 'postgres.database.azure.com' }
+            // Weave (Semantic Ontology) graph store — object/link/action instance
+            // write-back over Apache AGE (lib/azure/weave-ontology-store.ts). When
+            // LOOM_WEAVE_PG_FQDN is empty the Ontology editor's Objects / Write-back
+            // actions surfaces show the honest-gate MessageBar (no Fabric required).
+            { name: 'LOOM_WEAVE_PG_FQDN', value: loomWeavePgFqdn }
+            { name: 'LOOM_WEAVE_PG_DATABASE', value: loomWeavePgDatabase }
+            { name: 'LOOM_WEAVE_GRAPH', value: loomWeaveGraph }
             { name: 'LOOM_KEY_VAULT_URI', value: keyvault.outputs.keyVaultUri }
             // F14 Customer-Managed Keys — the ARM resource id of the admin-plane
             // Key Vault (scopes the KV Crypto role check) and the Console UAMI

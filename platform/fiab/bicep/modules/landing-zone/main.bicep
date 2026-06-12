@@ -596,6 +596,32 @@ module cosmosGraphVector 'cosmos-graph-vector.bicep' = if (cosmosGraphVectorEnab
 }
 
 // =====================================================================
+// 11. Weave (Semantic Ontology) graph store — PostgreSQL + Apache AGE
+//
+// Backs the Weave object/link/action *instance* write-back (the ontology
+// editor's Objects / Write-back actions surfaces → lib/azure/
+// weave-ontology-store.ts → ag_catalog cypher). Default-on: Palantir-class
+// ontology write-back REQUIRES a graph store, so it ships by default (mirrors
+// cosmosGraphVectorEnabled). The post-deploy bootstrap then runs
+// CREATE EXTENSION AGE + create_graph + pgaadauth_create_principal.
+// =====================================================================
+
+@description('Provision the Weave ontology PostgreSQL + Apache AGE graph store to back object/link/action instance write-back. Default on — Palantir-class ontology write-back requires the graph store.')
+param weaveOntologyEnabled bool = true
+
+module postgresWeave 'postgres-weave.bicep' = if (weaveOntologyEnabled) {
+  name: 'dlz-postgres-weave'
+  params: {
+    location: location
+    boundary: boundary
+    domainName: domainName
+    consolePrincipalId: consolePrincipalId
+    workspaceId: adminPlaneLawId
+    complianceTags: complianceTags
+  }
+}
+
+// =====================================================================
 // Outputs
 // =====================================================================
 
@@ -629,6 +655,12 @@ output cosmosGremlinGraph string = cosmosGraphVectorEnabled ? cosmosGraphVector!
 output cosmosVectorEndpoint string = cosmosGraphVectorEnabled ? cosmosGraphVector!.outputs.vectorEndpoint : ''
 output cosmosVectorDatabase string = cosmosGraphVectorEnabled ? cosmosGraphVector!.outputs.vectorDatabase : ''
 output cosmosVectorContainer string = cosmosGraphVectorEnabled ? cosmosGraphVector!.outputs.vectorDefaultContainer : ''
+
+// Weave (Semantic Ontology) graph store outputs — wired to the Console env
+// (LOOM_WEAVE_PG_FQDN / LOOM_WEAVE_PG_DATABASE) by the admin-plane.
+output weavePgServerName string = weaveOntologyEnabled ? postgresWeave!.outputs.weavePgServerName : ''
+output weavePgFqdn string = weaveOntologyEnabled ? postgresWeave!.outputs.weavePgFqdn : ''
+output weavePgDatabase string = weaveOntologyEnabled ? postgresWeave!.outputs.weavePgDatabase : ''
 
 // CSA Loom no-cuts-sweep — ADF wiring outputs
 output adfFactoryId string = (adfEnabled && !empty(consolePrincipalId) && !empty(adfPrivateDnsZoneId)) ? adf!.outputs.factoryId : ''

@@ -24,6 +24,10 @@ env:
   APIM_NAME: apim-csa-loom-eastus2
   CONSOLE_UAMI_PRINCIPAL: e61f3eb3-c646-4183-8198-4c4a34cd9a01
   CONSOLE_UAMI_CLIENT: c6272de5-3c4e-4b72-8b57-71b2e950209b
+  # Weave (Semantic Ontology) graph store — the Console UAMI's Entra principal
+  # NAME registered in PostgreSQL (must match LOOM_POSTGRES_AAD_USER on the
+  # Console, default loom-console). The PG server name is resolved at runtime.
+  CONSOLE_UAMI_NAME: loom-console
   # MSAL Web App SP — used as Dataverse Application User (UAMIs can't be one)
   LOOM_MSAL_CLIENT_ID: 9844c28c-3b3a-4949-8d63-9eefa3b50a9d
 
@@ -653,10 +657,48 @@ jobs:
             echo "  SharePoint shortcut AppRole grant step reported a non-zero status (likely already granted)."
 
 
+      - name: Bootstrap Weave ontology PostgreSQL + Apache AGE (graph + extension + UAMI principal)
+        if: always()
+        continue-on-error: true
+        run: |
+          # Weave (Semantic Ontology) Phase 1 — data-plane setup for the PG + AGE
+          # graph store that backs object/link/action instance write-back. Bicep
+          # (modules/landing-zone/postgres-weave.bicep) provisions the server +
+          # shared_preload_libraries=AGE + azure.extensions=AGE; this step runs the
+          # one-time CREATE EXTENSION AGE + create_graph + pgaadauth_create_principal
+          # that cannot be done in bicep. Idempotent — re-runs cleanly.
+          set -uo pipefail
+          WEAVE_PG_SERVER=$(az postgres flexible-server list -g "$DLZ_RG" \
+            --query "[?starts_with(name,'psql-loom-weave')].name | [0]" -o tsv 2>/dev/null)
+          if [ -z "$WEAVE_PG_SERVER" ]; then
+            echo "::notice::No psql-loom-weave-* server in $DLZ_RG — deploy with weaveOntologyEnabled=true to create it, then re-run this job."
+            exit 0
+          fi
+          echo "Weave PG server: $WEAVE_PG_SERVER"
+          # The deploy SP must be a PG Entra admin to run pgaadauth_create_principal.
+          # bicep set the Console UAMI as admin; add the deploy SP as a co-admin so
+          # this job can bootstrap. (Idempotent — PUT returns 200 on re-run.)
+          DEPLOY_OID=$(az ad signed-in-user show --query id -o tsv 2>/dev/null \
+            || az account show --query user.name -o tsv 2>/dev/null)
+          DEPLOY_SP_OID=$(az ad sp show --id "$(az account show --query user.name -o tsv)" --query id -o tsv 2>/dev/null || echo "")
+          if [ -n "$DEPLOY_SP_OID" ]; then
+            az postgres flexible-server ad-admin create -g "$DLZ_RG" -s "$WEAVE_PG_SERVER" \
+              --object-id "$DEPLOY_SP_OID" --display-name "loom-deploy-sp" --type ServicePrincipal \
+              -o none 2>/dev/null || echo "  (deploy SP may already be a PG admin — continuing)"
+            sleep 20
+            export PG_ADMIN_USER="loom-deploy-sp"
+          fi
+          chmod +x scripts/csa-loom/bootstrap-weave-pg.sh
+          SUB="$SUB" DLZ_RG="$DLZ_RG" WEAVE_PG_SERVER="$WEAVE_PG_SERVER" \
+            CONSOLE_UAMI_NAME="$CONSOLE_UAMI_NAME" \
+            bash scripts/csa-loom/bootstrap-weave-pg.sh \
+            || echo "::warning::Weave PG bootstrap incomplete — ensure the deploy SP is a PG Entra admin on $WEAVE_PG_SERVER, then re-run."
+
       - name: Summary
         if: always()
         run: |
           echo "==== Bootstrap complete ===="
+          echo "Weave ontology: PG + Apache AGE graph 'loom_ontology' created; Console UAMI registered as PG principal (object/link/action instance write-back)"
           echo "Synapse: UAMI granted Synapse Administrator + SQL Administrator + SQL-level sysadmin"
           echo "Databricks: UAMI registered as SP via SCIM (workspace-access + databricks-sql-access + allow-cluster-create + allow-instance-pool-create)"
           echo "APIM: Service Contributor granted (if APIM provisioned)"

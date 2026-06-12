@@ -225,6 +225,9 @@ param adxEnabled bool = true
 @description('Deploy a Gremlin-capable Cosmos DB account (EnableGremlin) + NoSQL vector account in each DLZ. Backs the cosmos-gremlin-graph (graph editor) and vector-store editors. Default on — the graph editor requires a Gremlin account at create-time (a NoSQL account cannot be converted). Set false to skip ~2 Cosmos accounts/DLZ.')
 param cosmosGraphVectorEnabled bool = true
 
+@description('Deploy the Weave (Semantic Ontology) PostgreSQL + Apache AGE graph store in each DLZ. Backs Palantir-class ontology object/link/action instance write-back (the Ontology editor Objects / Write-back actions surfaces). Default on — Palantir-class ontology write-back requires the graph store. Set false to skip ~1 Burstable PG flexible server/DLZ.')
+param weaveOntologyEnabled bool = true
+
 @description('Deploy the MAF (Microsoft Agent Framework, Gov AOAI-direct) orchestration-tier Container App (loom-copilot-maf). Set true in the GCC-High / IL5 params. The admin-plane gates activation on boundary∈{GCC-High,IL5} + containerPlatform==containerApps + deployAppsEnabled, so it is a safe no-op on the AKS path (the Console copilot-orchestrator then uses its documented Gov AOAI-direct fallback). Requires the loom-copilot-maf image pushed to ACR first.')
 param copilotMafEnabled bool = false
 
@@ -556,6 +559,11 @@ var adminPlaneRgName = 'rg-csa-loom-admin-${location}'
 // GCC-High/IL5 (Azure US Government) → azure.us.
 var gremlinHostSuffix = (boundary == 'GCC-High' || boundary == 'IL5') ? 'gremlin.cosmos.azure.us' : 'gremlin.cosmos.azure.com'
 var cosmosDocSuffix = (boundary == 'GCC-High' || boundary == 'IL5') ? 'azure.us' : 'azure.com'
+// Weave (Semantic Ontology) PG flexible-server data-plane host suffix, mirrored
+// from postgres-weave.bicep so the deterministic-name FQDN wired into the Console
+// env (LOOM_WEAVE_PG_FQDN, below) matches the server the DLZ module deploys.
+// Commercial/GCC → postgres.database.azure.com; GCC-High/IL5 → .usgovcloudapi.net.
+var pgHostSuffix = (boundary == 'GCC-High' || boundary == 'IL5') ? 'postgres.database.usgovcloudapi.net' : 'postgres.database.azure.com'
 
 resource adminPlaneRg 'Microsoft.Resources/resourceGroups@2024-03-01' = {
   name: adminPlaneRgName
@@ -693,6 +701,19 @@ module adminPlane 'modules/admin-plane/main.bicep' = {
     loomCosmosGremlinEndpoint: (deploymentMode == 'single-sub' && cosmosGraphVectorEnabled) ? 'wss://${take('cosmos-loom-gremlin-default-${uniqueString(singleDlzRg.id)}', 44)}.${gremlinHostSuffix}:443/' : ''
     loomCosmosGremlinDatabase: (deploymentMode == 'single-sub' && cosmosGraphVectorEnabled) ? 'loom-graph' : ''
     loomCosmosGremlinGraph: (deploymentMode == 'single-sub' && cosmosGraphVectorEnabled) ? 'default' : ''
+    // Weave (Semantic Ontology) graph store — the DLZ postgres-weave module
+    // (weaveOntologyEnabled, default on) provisions a PG flexible server named
+    // deterministically as psql-loom-weave-default-<uniq> (max 63) over the DLZ
+    // RG id, with a starter db loom-weave + the Apache AGE extension. We compute
+    // the FQDN inline (NOT via singleDlz.outputs — landing-zone consumes
+    // adminPlane's UAMI, so referencing its outputs here would create a cycle),
+    // the same deterministic-name pattern as the Cosmos endpoints above. The
+    // graph name (loom_ontology) matches the post-deploy bootstrap create_graph.
+    // Multi-sub can't be wired from a single admin-plane — operators run
+    // scripts/csa-loom/patch-navigator-env.sh (same as the Cosmos endpoints).
+    loomWeavePgFqdn: (deploymentMode == 'single-sub' && weaveOntologyEnabled) ? '${take('psql-loom-weave-default-${uniqueString(singleDlzRg.id)}', 63)}.${pgHostSuffix}' : ''
+    loomWeavePgDatabase: (deploymentMode == 'single-sub' && weaveOntologyEnabled) ? 'loom-weave' : ''
+    loomWeaveGraph: (deploymentMode == 'single-sub' && weaveOntologyEnabled) ? 'loom_ontology' : ''
     // Bind the console's warehouse/SQL env (LOOM_SYNAPSE_WORKSPACE /
     // LOOM_SYNAPSE_DEDICATED_POOL) to the DLZ Synapse workspace + dedicated pool
     // the landing-zone provisions (synapse.bicep: 'syn-loom-${domainName}-${location}'
@@ -808,6 +829,7 @@ module singleDlz 'modules/landing-zone/main.bicep' = if (deploymentMode == 'sing
     shirAdminPassword: shirAdminPassword
     recycleRetentionDays: recycleRetentionDays
     cosmosGraphVectorEnabled: cosmosGraphVectorEnabled
+    weaveOntologyEnabled: weaveOntologyEnabled
   }
 }
 
@@ -888,6 +910,7 @@ module dlz 'modules/landing-zone/main.bicep' = [for (subId, i) in dlzSubscriptio
     shirAdminPassword: shirAdminPassword
     recycleRetentionDays: recycleRetentionDays
     cosmosGraphVectorEnabled: cosmosGraphVectorEnabled
+    weaveOntologyEnabled: weaveOntologyEnabled
   }
 }]
 
