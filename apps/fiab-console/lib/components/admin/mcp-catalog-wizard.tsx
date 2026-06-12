@@ -18,12 +18,16 @@ import {
   Field, Input, Dropdown, Option, Switch, Badge, Spinner,
   MessageBar, MessageBarBody, MessageBarTitle,
   Card, CardHeader, Caption1, Body1, Text, makeStyles, tokens,
+  Table, TableHeader, TableRow, TableHeaderCell, TableBody, TableCell,
 } from '@fluentui/react-components';
 import {
   Rocket20Regular, Code24Regular, Grid24Regular, Box24Regular,
-  Archive24Regular, Globe24Regular,
+  Archive24Regular, Globe24Regular, Delete20Regular, ArrowClockwise20Regular,
 } from '@fluentui/react-icons';
-import { MCP_DEPLOY_CATALOG as MCP_CATALOG, type McpCatalogEntry, type McpDeployConfigField as McpConfigField } from '@/lib/mcp/catalog';
+import {
+  MCP_DEPLOY_CATALOG as MCP_CATALOG, entryEgress, reachesExternalSaas,
+  type McpCatalogEntry, type McpDeployConfigField as McpConfigField, type McpEgressProfile,
+} from '@/lib/mcp/catalog';
 import type { McpServerConfigDoc } from '@/lib/types/mcp-config';
 
 const useStyles = makeStyles({
@@ -63,6 +67,8 @@ const useStyles = makeStyles({
     fontFamily: tokens.fontFamilyMonospace,
   },
   previewWrap: { marginTop: tokens.spacingVerticalS },
+  deployedWrap: { marginTop: tokens.spacingVerticalL, marginBottom: tokens.spacingVerticalL },
+  cellStack: { display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalXXS },
 });
 
 const CATEGORY_GLYPH: Record<McpCatalogEntry['category'], ReactNode> = {
@@ -72,6 +78,20 @@ const CATEGORY_GLYPH: Record<McpCatalogEntry['category'], ReactNode> = {
   productivity: <Archive24Regular />,
   reference: <Globe24Regular />,
 };
+
+function egressBadge(egress: McpEgressProfile) {
+  if (egress === 'air-gap-safe') return <Badge appearance="tint" color="success" size="small">Air-gap safe</Badge>;
+  if (egress === 'azure-internal') return <Badge appearance="tint" color="brand" size="small">Azure-internal</Badge>;
+  return <Badge appearance="tint" color="warning" size="small">External SaaS</Badge>;
+}
+
+function provBadge(state?: string) {
+  const v = (state || '').toLowerCase();
+  if (v === 'succeeded') return <Badge appearance="outline" color="success" size="small">Succeeded</Badge>;
+  if (v === 'failed' || v === 'canceled') return <Badge appearance="outline" color="danger" size="small">{state}</Badge>;
+  if (!state) return <Badge appearance="outline" color="subtle" size="small">—</Badge>;
+  return <Badge appearance="outline" color="warning" size="small">{state}</Badge>;
+}
 
 interface DeployGate {
   message: string;
@@ -135,10 +155,20 @@ function DeployWizard({
           <DialogTitle>Deploy {entry.name}</DialogTitle>
           <DialogContent>
             <Body1>{entry.description}</Body1>
-            {entry.preview && (
-              <div className={s.previewWrap}>
-                <Badge appearance="tint" color="warning">Preview</Badge>
-              </div>
+            <div className={s.previewWrap}>
+              {egressBadge(entryEgress(entry))}
+              {entry.license && <Badge appearance="outline" size="small" style={{ marginLeft: 8 }}>{entry.license}</Badge>}
+              {entry.preview && <Badge appearance="tint" color="warning" style={{ marginLeft: 8 }}>Preview</Badge>}
+            </div>
+            {reachesExternalSaas(entry) && (
+              <MessageBar intent="warning" style={{ marginTop: 8 }}>
+                <MessageBarBody>
+                  <MessageBarTitle>Reaches an external SaaS API</MessageBarTitle>
+                  This server makes outbound calls to {(entry.externalHosts || []).join(', ') || 'an external host'}.
+                  On a US-Gov boundary (GCC / GCC-High / IL5) ensure an approved egress path or proxy is in place
+                  before deploying.
+                </MessageBarBody>
+              </MessageBar>
             )}
             <div className={s.form}>
               <Field label="Display name" hint="Shown in the External MCP Tools list and in Copilot.">
@@ -220,7 +250,105 @@ function DeployWizard({
   );
 }
 
-export function McpCatalogBrowser({ onDeployed }: { onDeployed: (server: McpServerConfigDoc) => void }) {
+interface LiveStatus {
+  provisioningState: string;
+  runningStatus?: string;
+  fqdn?: string;
+}
+
+/** Live status + teardown table for catalog-deployed servers (source==='catalog'). */
+function DeployedServers({
+  servers,
+  onChanged,
+}: {
+  servers: McpServerConfigDoc[];
+  onChanged: () => void;
+}) {
+  const s = useStyles();
+  const [statuses, setStatuses] = useState<Record<string, LiveStatus>>({});
+  const [busyId, setBusyId] = useState<string | null>(null);
+
+  const deployed = servers.filter((sv) => sv.source === 'catalog' && sv.deployment?.containerAppName);
+  if (deployed.length === 0) return null;
+
+  const refresh = async (server: McpServerConfigDoc) => {
+    setBusyId(server.serverId);
+    try {
+      const r = await fetch(`/api/admin/mcp-servers/deployed/status?id=${encodeURIComponent(server.serverId)}`);
+      const j = await r.json();
+      if (j.ok && j.status) setStatuses((p) => ({ ...p, [server.serverId]: j.status }));
+    } catch { /* surfaced via the stored snapshot below */ } finally { setBusyId(null); }
+  };
+
+  const teardown = async (server: McpServerConfigDoc) => {
+    if (!confirm(`Delete the deployed MCP server "${server.name}"? This removes the Azure Container App and its Key Vault secrets.`)) return;
+    setBusyId(server.serverId);
+    try {
+      const r = await fetch(`/api/admin/mcp-servers/deployed/teardown?id=${encodeURIComponent(server.serverId)}`, { method: 'DELETE' });
+      const j = await r.json();
+      if (!j.ok) { alert(`Delete failed: ${j.error || `HTTP ${r.status}`}`); return; }
+      onChanged();
+    } catch (e: any) {
+      alert(`Delete failed: ${e?.message || e}`);
+    } finally { setBusyId(null); }
+  };
+
+  return (
+    <div className={s.deployedWrap}>
+      <Text weight="semibold">Deployed from library</Text>
+      <Table aria-label="Deployed catalog MCP servers" style={{ marginTop: 8 }}>
+        <TableHeader>
+          <TableRow>
+            <TableHeaderCell>Server</TableHeaderCell>
+            <TableHeaderCell>Container App</TableHeaderCell>
+            <TableHeaderCell>State</TableHeaderCell>
+            <TableHeaderCell>Actions</TableHeaderCell>
+          </TableRow>
+        </TableHeader>
+        <TableBody>
+          {deployed.map((server) => {
+            const live = statuses[server.serverId];
+            const state = live?.provisioningState || server.deployment?.provisioningState;
+            const running = live?.runningStatus || server.deployment?.runningStatus;
+            return (
+              <TableRow key={server.serverId}>
+                <TableCell>
+                  <div className={s.cellStack}>
+                    <Text weight="semibold">{server.name}</Text>
+                    <Caption1>{server.deployment?.image}</Caption1>
+                  </div>
+                </TableCell>
+                <TableCell><Caption1>{server.deployment?.containerAppName}</Caption1></TableCell>
+                <TableCell>
+                  {provBadge(state)}
+                  {running && <div><Caption1>{running}</Caption1></div>}
+                </TableCell>
+                <TableCell>
+                  <div className={s.cardFoot}>
+                    <Button icon={<ArrowClockwise20Regular />} size="small" disabled={busyId === server.serverId} onClick={() => void refresh(server)}>Status</Button>
+                    <Button icon={<Delete20Regular />} size="small" disabled={busyId === server.serverId} onClick={() => void teardown(server)}>Delete</Button>
+                  </div>
+                </TableCell>
+              </TableRow>
+            );
+          })}
+        </TableBody>
+      </Table>
+    </div>
+  );
+}
+
+export function McpCatalogBrowser({
+  onDeployed,
+  deployedServers = [],
+  onChanged,
+}: {
+  onDeployed: (server: McpServerConfigDoc) => void;
+  /** Catalog-deployed servers (source==='catalog') for the live status/teardown table. */
+  deployedServers?: McpServerConfigDoc[];
+  /** Called after a teardown so the parent reloads its server list. */
+  onChanged?: () => void;
+}) {
   const s = useStyles();
   const [selected, setSelected] = useState<McpCatalogEntry | null>(null);
 
@@ -231,6 +359,7 @@ export function McpCatalogBrowser({ onDeployed }: { onDeployed: (server: McpServ
         Azure Container App, stores credentials per-field in Key Vault, and registers it for Copilot
         automatically — no further setup.
       </Body1>
+      <DeployedServers servers={deployedServers} onChanged={() => onChanged?.()} />
       <div className={s.grid}>
         {MCP_CATALOG.map((entry) => (
           <Card key={entry.id} className={s.card}>
@@ -241,6 +370,7 @@ export function McpCatalogBrowser({ onDeployed }: { onDeployed: (server: McpServ
             />
             <Text className={s.cardDesc} size={200}>{entry.description}</Text>
             <div className={s.cardFoot}>
+              {egressBadge(entryEgress(entry))}
               {entry.preview && <Badge appearance="tint" color="warning" size="small">Preview</Badge>}
               {entry.configSchema.some((f) => f.secret) && (
                 <Badge appearance="outline" color="brand" size="small">Key Vault secret</Badge>

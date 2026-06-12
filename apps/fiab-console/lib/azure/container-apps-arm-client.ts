@@ -705,6 +705,53 @@ export async function createMcpContainerApp(opts: CreateMcpContainerAppOpts): Pr
   return shape(await r.json());
 }
 
+/** Live status of a catalog-deployed MCP Container App (status/teardown UI). */
+export interface McpContainerAppStatus {
+  name: string;
+  /** ARM provisioningState (Succeeded | InProgress | Failed | Canceled | …). */
+  provisioningState: string;
+  /** runningStatus of the latest revision (Running | Processing | Stopped | …). */
+  runningStatus?: string;
+  /** Internal ingress FQDN, if ingress is configured. */
+  fqdn?: string;
+}
+
+const MCP_APP_NAME_RE = /^[a-z][a-z0-9-]{0,31}$/;
+
+/**
+ * GET the live status of a deployed MCP container app (real ARM GET). Returns a
+ * shaped status with provisioningState / runningStatus / fqdn. A 404 surfaces an
+ * AcaArmError(404) so the route can report "already gone".
+ */
+export async function getMcpContainerAppStatus(name: string): Promise<McpContainerAppStatus> {
+  if (!MCP_APP_NAME_RE.test(name)) throw new AcaArmError(400, undefined, `Invalid container-app name '${name}'.`);
+  const cfg = readAcaConfig();
+  const r = await callArm(`${appUrl(cfg, name)}?api-version=${ACA_API}`);
+  if (!r.ok) throw new AcaArmError(r.status, await r.text(), `getMcpContainerAppStatus(${name}) failed ${r.status}`);
+  const raw: any = await r.json();
+  const props = raw?.properties || {};
+  return {
+    name: raw?.name || name,
+    provisioningState: props?.provisioningState || 'Unknown',
+    runningStatus: props?.runningStatus,
+    fqdn: props?.configuration?.ingress?.fqdn,
+  };
+}
+
+/**
+ * DELETE a deployed MCP container app (real ARM DELETE). Idempotent — a 404 is
+ * treated as success (already torn down). Throws AcaArmError verbatim otherwise.
+ */
+export async function deleteMcpContainerApp(name: string): Promise<void> {
+  if (!MCP_APP_NAME_RE.test(name)) throw new AcaArmError(400, undefined, `Invalid container-app name '${name}'.`);
+  const cfg = readAcaConfig();
+  const r = await callArm(`${appUrl(cfg, name)}?api-version=${ACA_API}`, { method: 'DELETE' });
+  if (r.status === 404) return;
+  if (!r.ok && r.status !== 200 && r.status !== 202 && r.status !== 204) {
+    throw new AcaArmError(r.status, await r.text(), `deleteMcpContainerApp(${name}) failed ${r.status}`);
+  }
+}
+
 // ---------------------------------------------------------------------------
 // MCP Azure Files persistence config (env-wired by admin-plane/main.bicep)
 // ---------------------------------------------------------------------------

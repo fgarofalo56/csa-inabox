@@ -258,6 +258,7 @@ async function deployCatalogServer(
 
     // ── Register the endpoint so the orchestrator auto-discovers its tools ──
     const endpoint = `https://${appName}.${envDomain}${entry.mcpPath}`;
+    const deployedAt = new Date().toISOString();
     const doc = await saveMcpServer(tenantId, undefined, who, {
       name: body.name?.trim() || entry.name,
       endpoint,
@@ -267,6 +268,19 @@ async function deployCatalogServer(
       catalogId: entry.id,
       configValues,
       secretRefs,
+      // Mark the connection as catalog-sourced + record the deployment so the
+      // External MCP Tools panel can show live status and offer a teardown that
+      // also deletes the Container App + KV secrets named in secretRefs.
+      source: 'catalog',
+      deployment: {
+        catalogId: entry.id,
+        containerAppName: appName,
+        image: entry.image,
+        provisioningState: app.provisioningState || 'Provisioning',
+        fqdn: `${appName}.${envDomain}`,
+        deployedAt,
+        deployedBy: who,
+      },
     });
 
     try {

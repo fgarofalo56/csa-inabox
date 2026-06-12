@@ -23,7 +23,7 @@ import { FluentProvider, webLightTheme } from '@fluentui/react-components';
 import { McpServersPanel } from '../mcp-servers-panel';
 
 // Route the component's mount-time fetches by URL. McpServersPanel itself plus
-// its always-rendered children (BuiltinMcpCard, BridgeMcpCard, McpCatalogPanel)
+// its always-rendered children (BuiltinMcpCard, BridgeMcpCard, McpCatalogBrowser)
 // each fetch on mount; this stub answers every one with a structured
 // {ok:...} body so the subtree settles deterministically.
 function routeFetch(serversBody: any) {
@@ -34,8 +34,8 @@ function routeFetch(serversBody: any) {
       body = { ok: false }; // BuiltinMcpCard renders null when not configured
     } else if (url.includes('/api/admin/mcp-servers/bridge')) {
       body = { ok: false }; // BridgeMcpCard renders null when not configured
-    } else if (url.includes('/api/admin/mcp-catalog')) {
-      body = { ok: true, catalog: [], deployed: [] };
+    } else if (url.includes('/api/admin/mcp-servers/deployed/status')) {
+      body = { ok: true, status: { provisioningState: 'Succeeded' } };
     } else if (url.includes('/api/admin/mcp-servers')) {
       body = serversBody; // the panel's own server list
     }

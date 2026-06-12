@@ -8,7 +8,10 @@
  * Pure (no Azure SDK / network), so they run under the node vitest env.
  */
 import { describe, it, expect } from 'vitest';
-import { MCP_DEPLOY_CATALOG as MCP_CATALOG, getCatalogEntry, validateConfigValues, type McpCatalogEntry } from '../catalog';
+import {
+  MCP_DEPLOY_CATALOG as MCP_CATALOG, getCatalogEntry, validateConfigValues,
+  entryEgress, reachesExternalSaas, deployServersForCloud, type McpCatalogEntry,
+} from '../catalog';
 
 describe('MCP_CATALOG integrity', () => {
   it('every entry has a real image, port, mcpPath and at least metadata', () => {
@@ -46,6 +49,39 @@ describe('MCP_CATALOG integrity', () => {
   it('getCatalogEntry resolves known ids and rejects unknown', () => {
     expect(getCatalogEntry(MCP_CATALOG[0].id)?.id).toBe(MCP_CATALOG[0].id);
     expect(getCatalogEntry('does-not-exist')).toBeUndefined();
+  });
+
+  it('every entry carries gov metadata (egress, license, govSafe, airGapSafe)', () => {
+    for (const e of MCP_CATALOG) {
+      expect(['air-gap-safe', 'azure-internal', 'external-saas']).toContain(entryEgress(e));
+      expect(typeof e.govSafe).toBe('boolean');
+      expect(typeof e.airGapSafe).toBe('boolean');
+      // external-SaaS entries must declare the hosts they reach (drives the warning).
+      if (entryEgress(e) === 'external-saas') expect((e.externalHosts || []).length).toBeGreaterThan(0);
+      // air-gap-safe entries reach nothing external.
+      if (entryEgress(e) === 'air-gap-safe') expect((e.externalHosts || []).length).toBe(0);
+    }
+  });
+});
+
+describe('gov metadata helpers', () => {
+  it('reachesExternalSaas is true only for external-saas entries', () => {
+    for (const e of MCP_CATALOG) {
+      expect(reachesExternalSaas(e)).toBe(entryEgress(e) === 'external-saas');
+    }
+  });
+
+  it('deployServersForCloud narrows by boundary', () => {
+    const commercial = deployServersForCloud('commercial');
+    const gcc = deployServersForCloud('gcc');
+    const il5 = deployServersForCloud('il5');
+    expect(commercial.length).toBe(MCP_CATALOG.length);
+    // gcc is a subset of commercial, all govSafe.
+    expect(gcc.length).toBeLessThanOrEqual(commercial.length);
+    expect(gcc.every((e) => e.govSafe === true)).toBe(true);
+    // il5 only air-gap-safe servers (zero external egress).
+    expect(il5.every((e) => e.airGapSafe === true)).toBe(true);
+    expect(il5.every((e) => entryEgress(e) === 'air-gap-safe')).toBe(true);
   });
 });
 
