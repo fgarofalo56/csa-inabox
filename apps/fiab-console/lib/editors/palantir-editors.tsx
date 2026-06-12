@@ -61,6 +61,17 @@ const useStyles = makeStyles({
   },
   spacer: { flex: 1 },
   grid2: { display: 'grid', gridTemplateColumns: '1fr 1fr', gap: tokens.spacingHorizontalM },
+  modeBar: {
+    display: 'flex', alignItems: 'center', gap: tokens.spacingHorizontalM, flexWrap: 'wrap',
+    padding: `${tokens.spacingVerticalS} ${tokens.spacingHorizontalM}`,
+    borderRadius: tokens.borderRadiusLarge, backgroundColor: tokens.colorNeutralBackground2,
+    border: `1px solid ${tokens.colorNeutralStroke2}`,
+  },
+  trace: {
+    display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalXS,
+    padding: tokens.spacingVerticalM, borderRadius: tokens.borderRadiusMedium,
+    backgroundColor: tokens.colorNeutralBackground2, border: `1px solid ${tokens.colorNeutralStroke2}`,
+  },
   codeWrap: {
     display: 'flex', flexDirection: 'column', overflow: 'hidden',
     borderRadius: tokens.borderRadiusMedium, border: `1px solid ${tokens.colorNeutralStroke2}`,
@@ -930,7 +941,6 @@ interface AipState {
   foundryAgentId?: string; foundryModel?: string; lastDeployedAt?: string;
   [k: string]: unknown;
 }
-interface OntoSummary { id: string; displayName: string; classCount?: number }
 interface RunStepLite { kind?: string; type?: string; name?: string; callId?: string; content?: string; error?: string; result?: unknown; status?: string }
 
 export function AipLogicEditor({ item, id }: { item: FabricItemType; id: string }) {
@@ -949,11 +959,9 @@ export function AipLogicEditor({ item, id }: { item: FabricItemType; id: string 
   const [runSteps, setRunSteps] = useState<RunStepLite[]>([]);
   const [sourcesUsed, setSourcesUsed] = useState<string[]>([]);
 
-  // Ontology binding (Spindle grounds on the Weave).
-  const [ontos, setOntos] = useState<OntoSummary[]>([]);
-  const [ontoLoaded, setOntoLoaded] = useState(false);
-  const [bindBusy, setBindBusy] = useState(false);
-  const [bindMsg, setBindMsg] = useState<{ intent: 'success' | 'error' | 'warning'; text: string } | null>(null);
+  // Ontology binding (Spindle grounds on the Weave) — shared hook for parity with
+  // Workshop / SDK editors. Avoids divergent local grounding logic.
+  const onto = useOntologyBinding('aip-logic', id);
 
   // Deploy / run-as-Foundry-agent.
   const [deployBusy, setDeployBusy] = useState(false);
@@ -962,19 +970,20 @@ export function AipLogicEditor({ item, id }: { item: FabricItemType; id: string 
   const inputs = Array.isArray(state.inputs) ? state.inputs : [];
   const steps = Array.isArray(state.steps) ? state.steps : [];
 
+  // Mirror the hook's bound surface into persisted item state so Invoke / Deploy
+  // can read boundOntologyId + ontologyEntityTypes from the saved doc.
   useEffect(() => {
-    if (id === 'new') { setOntoLoaded(true); return; }
-    let cancelled = false;
-    (async () => {
-      try {
-        const r = await fetch(`/api/items/aip-logic/${encodeURIComponent(id)}/bind-ontology`);
-        const j = await r.json().catch(() => ({}));
-        if (!cancelled && j?.ok) setOntos(Array.isArray(j.ontologies) ? j.ontologies : []);
-      } catch { /* honest empty list — UI shows the create-ontology hint */ }
-      finally { if (!cancelled) setOntoLoaded(true); }
-    })();
-    return () => { cancelled = true; };
-  }, [id]);
+    if (!onto.surface) return;
+    setState((p) => {
+      const entityTypes = onto.surface!.classes.map((c) => c.name);
+      if (p.boundOntologyId === onto.surface!.id
+        && p.boundOntologyName === onto.surface!.displayName
+        && Array.isArray(p.ontologyEntityTypes)
+        && p.ontologyEntityTypes.length === entityTypes.length
+        && p.ontologyEntityTypes.every((t, i) => t === entityTypes[i])) return p;
+      return { ...p, boundOntologyId: onto.surface!.id, boundOntologyName: onto.surface!.displayName, ontologyEntityTypes: entityTypes };
+    });
+  }, [onto.surface, setState]);
 
   const addInput = useCallback(() => {
     const nm = inName.trim(); if (!/^[A-Za-z_][\w]*$/.test(nm)) return;
@@ -989,28 +998,6 @@ export function AipLogicEditor({ item, id }: { item: FabricItemType; id: string 
     setStepName(''); setStepPrompt('');
   }, [stepKind, stepName, stepPrompt, setState]);
   const removeStep = useCallback((sid: string) => setState((p) => ({ ...p, steps: (Array.isArray(p.steps) ? p.steps : []).filter((x) => x.id !== sid) })), [setState]);
-
-  const bindOntology = useCallback(async (ontologyId: string) => {
-    setBindBusy(true); setBindMsg(null);
-    try {
-      const r = await fetch(`/api/items/aip-logic/${encodeURIComponent(id)}/bind-ontology`, {
-        method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ ontologyId }),
-      });
-      const j = await r.json().catch(() => ({}));
-      if (!j?.ok) { setBindMsg({ intent: 'error', text: j?.error || `HTTP ${r.status}` }); return; }
-      const surface = j.surface as { id?: string; displayName?: string; classes?: Array<{ name: string }> } | null;
-      setState((p) => ({
-        ...p,
-        boundOntologyId: surface?.id || (ontologyId || undefined),
-        boundOntologyName: surface?.displayName,
-        ontologyEntityTypes: (surface?.classes || []).map((c) => c.name),
-      }));
-      setBindMsg(ontologyId
-        ? { intent: 'success', text: `Grounded on "${surface?.displayName}" — ${(surface?.classes || []).length} entity type(s).` }
-        : { intent: 'warning', text: 'Ontology grounding cleared.' });
-    } catch (e: any) { setBindMsg({ intent: 'error', text: e?.message || String(e) }); }
-    finally { setBindBusy(false); }
-  }, [id, setState]);
 
   const invoke = useCallback(async () => {
     setInvokeBusy(true); setInvokeMsg(null); setInvokeOut(null); setRunSteps([]); setSourcesUsed([]);
@@ -1102,27 +1089,27 @@ export function AipLogicEditor({ item, id }: { item: FabricItemType; id: string 
 
         <div className={s.section}>
           <SectionHead icon={<Link20Regular />} title="Ontology grounding" hint="Bind a Weave ontology — Spindle runs against its entity types and Lakehouse/Warehouse data bindings." />
-          {!ontoLoaded ? <div className={s.empty}><Spinner size="tiny" /></div> : ontos.length === 0 ? (
+          {!onto.loaded ? <div className={s.empty}><Spinner size="tiny" /></div> : onto.ontologies.length === 0 ? (
             <MessageBar intent="warning"><MessageBarBody>No ontologies found. Create an Ontology item first, then bind it here to ground this function on the Weave.</MessageBarBody></MessageBar>
           ) : (
             <div className={s.addBar}>
               <Field label="Bound ontology" style={{ minWidth: 280 }}>
                 <Dropdown
-                  value={state.boundOntologyName || (state.boundOntologyId ? '(bound)' : 'None — runs ungrounded')}
-                  selectedOptions={[String(state.boundOntologyId || '')]}
-                  disabled={bindBusy}
-                  onOptionSelect={(_, d) => bindOntology(String(d.optionValue || ''))}>
+                  value={state.boundOntologyName || (onto.boundOntologyId ? '(bound)' : 'None — runs ungrounded')}
+                  selectedOptions={[String(onto.boundOntologyId || state.boundOntologyId || '')]}
+                  disabled={onto.busy}
+                  onOptionSelect={(_, d) => onto.bind(String(d.optionValue || ''))}>
                   <Option value="">None — runs ungrounded</Option>
-                  {ontos.map((o) => <Option key={o.id} value={o.id}>{o.displayName}{typeof o.classCount === 'number' ? ` (${o.classCount} types)` : ''}</Option>)}
+                  {onto.ontologies.map((o) => <Option key={o.id} value={o.id}>{o.displayName}{typeof o.classCount === 'number' ? ` (${o.classCount} types)` : ''}</Option>)}
                 </Dropdown>
               </Field>
-              {bindBusy && <Spinner size="tiny" />}
+              {onto.busy && <Spinner size="tiny" />}
             </div>
           )}
           {Array.isArray(state.ontologyEntityTypes) && state.ontologyEntityTypes.length > 0 && (
             <div className={s.row}><Caption1 className={s.hint}>Entity types:</Caption1>{state.ontologyEntityTypes.slice(0, 12).map((t) => <Badge key={t} appearance="tint">{t}</Badge>)}</div>
           )}
-          {bindMsg && <MessageBar intent={bindMsg.intent}><MessageBarBody>{bindMsg.text}</MessageBarBody></MessageBar>}
+          {onto.msg && <MessageBar intent={onto.msg.intent}><MessageBarBody>{onto.msg.text}</MessageBarBody></MessageBar>}
         </div>
 
         <div className={s.grid2}>
@@ -1166,10 +1153,10 @@ export function AipLogicEditor({ item, id }: { item: FabricItemType; id: string 
 
         <div className={s.section}>
           <SectionHead icon={<Play20Regular />} title="Invoke" hint="Run against the live Azure OpenAI deployment — as typed logic or as a tool-calling agent over the bound ontology." />
-          <div className={s.row}>
+          <div className={s.modeBar}>
             <Switch checked={agentMode} onChange={(_, d) => setAgentMode(!!d.checked)} label={agentMode ? 'Agent mode (multi-step, tool-calling)' : 'Logic mode (single grounded turn)'} />
             <span className={s.spacer} />
-            <Badge appearance="tint" icon={agentMode ? <BrainCircuit20Regular /> : <Flash20Regular />}>{agentMode ? 'Agent' : 'Logic'}</Badge>
+            <Badge appearance="tint" color={agentMode ? 'brand' : 'informative'} icon={agentMode ? <BrainCircuit20Regular /> : <Flash20Regular />}>{agentMode ? 'Agent' : 'Logic'}</Badge>
           </div>
           {inputs.length === 0 ? <Caption1 className={s.hint}>Add typed inputs to provide values.</Caption1> : inputs.map((i) => (
             <Field key={i.id} label={`${i.name} (${i.type})`}><Input value={invokeVals[i.name] || ''} onChange={(_, d) => setInvokeVals((p) => ({ ...p, [i.name]: d.value }))} /></Field>
@@ -1182,21 +1169,23 @@ export function AipLogicEditor({ item, id }: { item: FabricItemType; id: string 
             <>
               <Divider />
               <Caption1 className={s.hint}>Run trace ({runSteps.length} step{runSteps.length === 1 ? '' : 's'})</Caption1>
-              {runSteps.map((st, n) => {
-                const label = st.kind || st.type || st.name || 'step';
-                const detail = st.kind === 'tool_call' ? st.name
-                  : st.kind === 'tool_result' ? `${st.name}${st.error ? ` — error: ${st.error}` : ''}`
-                  : st.kind === 'final' ? 'final answer'
-                  : st.kind === 'error' ? (st.error || 'error')
-                  : st.content || st.name || JSON.stringify(st.result ?? '').slice(0, 120);
-                return (
-                  <div key={st.callId || `${label}-${n}`} className={s.row}>
-                    <Badge appearance="filled" color={st.kind === 'error' || st.error ? 'danger' : st.kind === 'final' ? 'success' : 'brand'}>{n + 1}</Badge>
-                    <Badge appearance="tint">{label}</Badge>
-                    <Caption1 className={s.hint}>{String(detail || '').slice(0, 160)}</Caption1>
-                  </div>
-                );
-              })}
+              <div className={s.trace} role="list" aria-label="Agent run trace">
+                {runSteps.map((st, n) => {
+                  const label = st.kind || st.type || st.name || 'step';
+                  const detail = st.kind === 'tool_call' ? st.name
+                    : st.kind === 'tool_result' ? `${st.name}${st.error ? ` — error: ${st.error}` : ''}`
+                    : st.kind === 'final' ? 'final answer'
+                    : st.kind === 'error' ? (st.error || 'error')
+                    : st.content || st.name || JSON.stringify(st.result ?? '').slice(0, 120);
+                  return (
+                    <div key={st.callId || `${label}-${n}`} className={s.row} role="listitem">
+                      <Badge appearance="filled" color={st.kind === 'error' || st.error ? 'danger' : st.kind === 'final' ? 'success' : 'brand'}>{n + 1}</Badge>
+                      <Badge appearance="tint">{label}</Badge>
+                      <Caption1 className={s.hint}>{String(detail || '').slice(0, 160)}</Caption1>
+                    </div>
+                  );
+                })}
+              </div>
             </>
           )}
         </div>
