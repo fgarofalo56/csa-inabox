@@ -14,6 +14,13 @@ const REPO = '/e/Repos/GitHub/csa-inabox'
 const REPO_WIN = 'E:\\Repos\\GitHub\\csa-inabox'
 const COAUTHOR = 'Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>'
 const HB = `${REPO}/.claude/loom-autopilot.heartbeat`
+// HARD GUARD: a scriptPath relaunch once dropped `args` entirely, which made this
+// script fall back to "extract EVERY implementable task" and rebuild the whole
+// 115-item backlog (51 duplicate PRs, session limit burned). Never run unscoped.
+if (!args || (!args.auditWave && !(args.taskIds && args.taskIds.length))) {
+  log('FATAL: no args / no auditWave / no taskIds — refusing to run unscoped. Pass {auditWave:N} or {taskIds:[...]}.')
+  return { error: 'unscoped-run-refused', tasks: 0, shipped: [] }
+}
 const auditWave = (args && args.auditWave) || 0
 const files = (args && Array.isArray(args.files) && args.files.length) ? args.files : ['docs/fiab/prp/AUDIT-2026-06-10.md', 'docs/fiab/prp/AUDIT-2026-06-10-deep.md']
 const maxTasks = (args && args.maxTasks) || 0
