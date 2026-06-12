@@ -3,6 +3,7 @@ import { getSession } from '@/lib/auth/session';
 import { workspacesContainer, itemsContainer } from '@/lib/azure/cosmos-client';
 import { upsertLoomDoc, docForWorkspace } from '@/lib/azure/loom-search';
 import { applyWorkspaceBindings } from '@/lib/azure/workspace-bindings';
+import { domainExists } from '@/lib/azure/domain-registry';
 import type { Workspace } from '@/lib/types/workspace';
 
 export const runtime = 'nodejs';
@@ -63,6 +64,15 @@ export async function POST(req: NextRequest) {
   const { name, description, capacity, domain } = body || {};
   if (!name || typeof name !== 'string') return err('name is required', 400, 'missing_name');
 
+  // A workspace MUST be bound to a governance domain (t158). The domain must
+  // exist in this tenant's registry; the `default` starter domain is the
+  // guaranteed fallback (seeded on first read).
+  const domainId = typeof domain === 'string' ? domain.trim() : '';
+  if (!domainId) return err('domain is required — pick the governance domain this workspace belongs to', 400, 'domain_required');
+  if (!(await domainExists(session.claims.oid, domainId))) {
+    return err(`Unknown domain '${domainId}' — it is not registered in this tenant.`, 400, 'unknown_domain');
+  }
+
   const now = new Date().toISOString();
   const ws: Workspace = {
     id: crypto.randomUUID(),
@@ -70,7 +80,7 @@ export async function POST(req: NextRequest) {
     name: name.trim(),
     description: description?.trim() || undefined,
     capacity: capacity?.trim() || undefined,
-    domain: domain?.trim() || undefined,
+    domain: domainId,
     createdBy: session.claims.upn || session.claims.email || session.claims.oid,
     createdAt: now,
     updatedAt: now,

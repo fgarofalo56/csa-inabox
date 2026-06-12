@@ -19,6 +19,7 @@ import { listAllWorkspacesAdmin } from '@/lib/clients/workspaces-client';
 import { workspacesContainer } from '@/lib/azure/cosmos-client';
 import { upsertLoomDoc, docForWorkspace } from '@/lib/azure/loom-search';
 import { applyWorkspaceBindings } from '@/lib/azure/workspace-bindings';
+import { domainExists } from '@/lib/azure/domain-registry';
 import type { Workspace, WorkspaceLicenseMode } from '@/lib/types/workspace';
 
 export const runtime = 'nodejs';
@@ -62,6 +63,24 @@ export async function POST(req: NextRequest) {
   const name = typeof body?.name === 'string' ? body.name.trim() : '';
   if (!name) return NextResponse.json({ ok: false, error: 'name is required' }, { status: 400 });
 
+  // A workspace MUST be bound to a governance domain (t158 — domains are the
+  // authoritative tenant topology). The domain must exist in this tenant's
+  // registry; the `default` starter domain is the guaranteed fallback for
+  // legacy / single-domain tenants (loadOrSeedDomains seeds it on first read).
+  const domain = typeof body?.domain === 'string' ? body.domain.trim() : '';
+  if (!domain) {
+    return NextResponse.json(
+      { ok: false, error: 'domain is required — pick the governance domain this workspace belongs to', code: 'domain_required' },
+      { status: 400 },
+    );
+  }
+  if (!(await domainExists(s.claims.oid, domain))) {
+    return NextResponse.json(
+      { ok: false, error: `Unknown domain '${domain}' — it is not registered in this tenant.`, code: 'unknown_domain' },
+      { status: 400 },
+    );
+  }
+
   const licenseMode: WorkspaceLicenseMode =
     VALID_LICENSE_MODES.includes(body?.licenseMode) ? body.licenseMode : 'Org';
   const contacts = Array.isArray(body?.contacts)
@@ -76,7 +95,7 @@ export async function POST(req: NextRequest) {
     name,
     description: typeof body?.description === 'string' && body.description.trim() ? body.description.trim() : undefined,
     capacity: typeof body?.capacity === 'string' && body.capacity.trim() ? body.capacity.trim() : undefined,
-    domain: typeof body?.domain === 'string' && body.domain.trim() ? body.domain.trim() : undefined,
+    domain,
     storageAccountId: typeof body?.storageAccountId === 'string' && body.storageAccountId.trim() ? body.storageAccountId.trim() : undefined,
     licenseMode,
     contacts: contacts && contacts.length ? contacts : undefined,

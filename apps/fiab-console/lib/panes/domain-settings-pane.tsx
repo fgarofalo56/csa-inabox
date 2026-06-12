@@ -34,6 +34,14 @@ import {
 import { Dismiss24Regular, Checkmark16Regular } from '@fluentui/react-icons';
 import { DomainImageGallery } from '@/lib/components/domain-image-gallery';
 import { DomainImageChip } from '@/lib/components/domain-image-presets';
+import { isGovCloud } from '@/lib/azure/cloud-endpoints';
+import { AZURE_PUBLIC_REGIONS, AZURE_USGOV_REGIONS, type AzureRegion } from '@/lib/azure/azure-regions';
+
+/** Capacity F-SKU set — kept in sync with domain-registry.VALID_CAPACITY_SKUS (server). */
+const CAPACITY_SKUS = ['F2', 'F4', 'F8', 'F32', 'F64', 'F128', 'F512'] as const;
+const DOMAIN_STATUS_COLOR: Record<string, 'brand' | 'success' | 'warning' | 'danger' | 'subtle'> = {
+  registered: 'subtle', attaching: 'warning', active: 'success', detached: 'subtle', error: 'danger',
+};
 
 export interface DomainContributors {
   scope: 'AllTenant' | 'AdminsOnly' | 'SpecificUsersAndGroups';
@@ -60,6 +68,16 @@ export interface DomainRecord {
   imageKey?: string;
   parentId?: string;
   workspaceCount?: number;
+  // DLZ binding / tenant topology (t158).
+  subscriptionIds?: string[];
+  dlzRg?: string;
+  location?: string;
+  capacitySku?: string;
+  adminGroupId?: string;
+  memberGroupId?: string;
+  costCenter?: string;
+  chargebackTag?: string;
+  status?: 'registered' | 'attaching' | 'active' | 'detached' | 'error';
 }
 
 interface Props {
@@ -78,9 +96,39 @@ const useStyles = makeStyles({
   note: { color: tokens.colorNeutralForeground3, fontSize: '12px', lineHeight: 1.5 },
   tagAdd: { display: 'flex', gap: tokens.spacingHorizontalS, alignItems: 'flex-end' },
   previewRow: { display: 'flex', gap: tokens.spacingHorizontalM, alignItems: 'center' },
+  scrollResults: {
+    maxHeight: '180px', overflowY: 'auto', border: `1px solid ${tokens.colorNeutralStroke2}`,
+    borderRadius: tokens.borderRadiusMedium, marginTop: tokens.spacingVerticalXS,
+  },
+  resultRow: {
+    display: 'flex', flexDirection: 'column', gap: '2px', width: '100%', textAlign: 'left',
+    padding: '6px 8px', border: 'none', background: 'none', cursor: 'pointer',
+    borderBottom: `1px solid ${tokens.colorNeutralStroke3}`,
+    ':hover': { backgroundColor: tokens.colorNeutralBackground1Hover },
+  },
+  invTable: { display: 'flex', flexDirection: 'column', border: `1px solid ${tokens.colorNeutralStroke2}`, borderRadius: tokens.borderRadiusMedium, overflow: 'hidden' },
+  invHead: {
+    display: 'grid', gridTemplateColumns: '1.4fr 1.6fr 1.2fr 0.8fr', gap: tokens.spacingHorizontalS,
+    padding: '6px 8px', fontWeight: tokens.fontWeightSemibold, backgroundColor: tokens.colorNeutralBackground2,
+    fontSize: tokens.fontSizeBase200,
+  },
+  invRow: {
+    display: 'grid', gridTemplateColumns: '1.4fr 1.6fr 1.2fr 0.8fr', gap: tokens.spacingHorizontalS,
+    padding: '6px 8px', borderTop: `1px solid ${tokens.colorNeutralStroke3}`, fontSize: tokens.fontSizeBase200,
+    alignItems: 'center', wordBreak: 'break-word',
+  },
+  // Shared layout primitives (tokenized; replaces residual inline styles).
+  flexGrow: { flex: 1 },
+  tagWrap: { flexWrap: 'wrap' },
+  tagWrapSpaced: { flexWrap: 'wrap', marginBottom: tokens.spacingVerticalS },
+  tagSpaced: { marginBottom: tokens.spacingVerticalXS },
+  sectionHead: { display: 'flex', alignItems: 'center', gap: tokens.spacingHorizontalS },
+  sectionHeadSpaced: { display: 'flex', alignItems: 'center', gap: tokens.spacingHorizontalS, marginTop: tokens.spacingVerticalM },
+  labelSwatch: { display: 'inline-flex', alignItems: 'center', gap: tokens.spacingHorizontalS },
+  swatch: { width: '12px', height: '12px', borderRadius: tokens.borderRadiusSmall, display: 'inline-block' },
 });
 
-type TabKey = 'general' | 'image' | 'admins' | 'contributors' | 'default-domain' | 'delegated';
+type TabKey = 'general' | 'image' | 'admins' | 'contributors' | 'default-domain' | 'delegated' | 'topology';
 
 export function DomainSettingsPane({ domain, isTenantAdmin, onClose, onSaved }: Props) {
   const styles = useStyles();
@@ -112,6 +160,7 @@ export function DomainSettingsPane({ domain, isTenantAdmin, onClose, onSaved }: 
             {!isSubdomain && <Tab value="contributors">Contributors</Tab>}
             {!isSubdomain && <Tab value="default-domain">Default domain</Tab>}
             {!isSubdomain && <Tab value="delegated">Delegated</Tab>}
+            {!isSubdomain && <Tab value="topology">Landing zone</Tab>}
           </TabList>
 
           {tab === 'general' && <GeneralTab domain={domain} isTenantAdmin={isTenantAdmin} onSaved={onSaved} />}
@@ -120,6 +169,7 @@ export function DomainSettingsPane({ domain, isTenantAdmin, onClose, onSaved }: 
           {tab === 'contributors' && !isSubdomain && <ContributorsTab domain={domain} onSaved={onSaved} />}
           {tab === 'default-domain' && !isSubdomain && <DefaultDomainTab domain={domain} onSaved={onSaved} />}
           {tab === 'delegated' && !isSubdomain && <DelegatedTab domain={domain} onSaved={onSaved} />}
+          {tab === 'topology' && !isSubdomain && <TopologyTab domain={domain} isTenantAdmin={isTenantAdmin} onSaved={onSaved} />}
         </div>
       </DrawerBody>
     </Drawer>
@@ -177,7 +227,7 @@ function TagListEditor({ label, values, onChange, placeholder, disabled }: {
       {values.length > 0 && (
         <TagGroup
           onDismiss={(_e, d) => onChange(values.filter((v) => v !== d.value))}
-          style={{ flexWrap: 'wrap', marginBottom: 8 }}
+          className={styles.tagWrapSpaced}
           aria-label={label}
         >
           {values.map((v) => (
@@ -187,7 +237,7 @@ function TagListEditor({ label, values, onChange, placeholder, disabled }: {
       )}
       <div className={styles.tagAdd}>
         <Input
-          style={{ flex: 1 }}
+          className={styles.flexGrow}
           value={draft}
           disabled={disabled}
           placeholder={placeholder || 'name@contoso.com or a group name'}
@@ -522,7 +572,7 @@ function DelegatedTab({ domain, onSaved }: { domain: DomainRecord; onSaved: (d: 
                   value={labelSource === 'mip' ? 'Microsoft Purview (MIP)' : 'Loom-native labels'}
                   onOptionSelect={(_e, d) => { setLabelSource(d.optionValue as 'mip' | 'loom'); setLabelId(''); }}
                 >
-                  <Option value="mip" disabled={mip.status !== 'ok'}>Microsoft Purview (MIP){mip.status !== 'ok' ? ' — not configured' : ''}</Option>
+                  <Option value="mip" disabled={mip.status !== 'ok'}>{`Microsoft Purview (MIP)${mip.status !== 'ok' ? ' — not configured' : ''}`}</Option>
                   <Option value="loom">Loom-native labels</Option>
                 </Dropdown>
               </Field>
@@ -538,8 +588,8 @@ function DelegatedTab({ domain, onSaved }: { domain: DomainRecord; onSaved: (d: 
                   <Option value="">(None)</Option>
                   {labelOptions.map((l) => (
                     <Option key={l.id} value={l.id} text={l.name}>
-                      <span style={{ display: 'inline-flex', alignItems: 'center', gap: 8 }}>
-                        {l.color && <span style={{ width: 12, height: 12, borderRadius: 3, backgroundColor: l.color, display: 'inline-block' }} />}
+                      <span className={styles.labelSwatch}>
+                        {l.color && <span className={styles.swatch} style={{ backgroundColor: l.color }} />}
                         {l.name}
                       </span>
                     </Option>
@@ -595,6 +645,259 @@ function DelegatedTab({ domain, onSaved }: { domain: DomainRecord; onSaved: (d: 
 
       {ds.defaultSensitivityLabelName && (
         <Badge appearance="tint" color="brand">Default label: {ds.defaultSensitivityLabelName}</Badge>
+      )}
+    </div>
+  );
+}
+
+// ============================================================
+// Single Entra security-group picker (debounced Graph search)
+// ============================================================
+
+function GroupPicker({ label, value, onChange, disabled }: {
+  label: string; value: string; onChange: (id: string) => void; disabled?: boolean;
+}) {
+  const styles = useStyles();
+  const [q, setQ] = useState('');
+  const [results, setResults] = useState<Array<{ id: string; displayName: string; mail?: string }>>([]);
+  const [searching, setSearching] = useState(false);
+  const [gate, setGate] = useState<string | null>(null);
+  const [chosenName, setChosenName] = useState<string>('');
+
+  useEffect(() => {
+    const term = q.trim();
+    if (term.length < 2) { setResults([]); setGate(null); return; }
+    const t = setTimeout(async () => {
+      setSearching(true); setGate(null);
+      try {
+        const r = await fetch(`/api/admin/permissions/principals?q=${encodeURIComponent(term)}&kind=group`);
+        const j = await r.json();
+        if (r.status === 503 || j?.ok === false) {
+          setGate(j?.remediation || j?.error || 'Microsoft Graph group search is not configured.');
+          setResults([]);
+        } else {
+          setResults((j.results || []).map((p: any) => ({ id: p.id, displayName: p.displayName, mail: p.mail })));
+        }
+      } catch (e: any) { setGate(e?.message || String(e)); }
+      finally { setSearching(false); }
+    }, 300);
+    return () => clearTimeout(t);
+  }, [q]);
+
+  return (
+    <Field label={label}>
+      {value ? (
+        <TagGroup onDismiss={() => { onChange(''); setChosenName(''); }} className={styles.tagSpaced} aria-label={label}>
+          <Tag value={value} dismissible dismissIcon={{ 'aria-label': 'Remove group' }}>
+            {chosenName || value}
+          </Tag>
+        </TagGroup>
+      ) : (
+        <Input
+          value={q}
+          disabled={disabled}
+          placeholder="Search Entra security groups…"
+          onChange={(_e, d) => setQ(d.value)}
+        />
+      )}
+      {searching && <Spinner size="tiny" label="Searching Entra…" />}
+      {gate && (
+        <MessageBar intent="warning">
+          <MessageBarBody>{gate}</MessageBarBody>
+        </MessageBar>
+      )}
+      {!value && results.length > 0 && (
+        <div className={styles.scrollResults}>
+          {results.map((g) => (
+            <button
+              key={g.id}
+              type="button"
+              className={styles.resultRow}
+              onClick={() => { onChange(g.id); setChosenName(g.displayName); setQ(''); setResults([]); }}
+            >
+              <span>{g.displayName}</span>
+              {g.mail && <Caption1 className={styles.note}>{g.mail}</Caption1>}
+            </button>
+          ))}
+        </div>
+      )}
+    </Field>
+  );
+}
+
+// ============================================================
+// Landing zone (DLZ binding) tab — t158 tenant topology
+// ============================================================
+
+interface InventoryResource {
+  name: string; type: string; resourceGroup: string; location: string; subscriptionId: string;
+}
+
+function TopologyTab({ domain, isTenantAdmin, onSaved }: {
+  domain: DomainRecord; isTenantAdmin: boolean; onSaved: (d: DomainRecord) => void;
+}) {
+  const styles = useStyles();
+  const regions: AzureRegion[] = isGovCloud() ? AZURE_USGOV_REGIONS : AZURE_PUBLIC_REGIONS;
+
+  const [location, setLocation] = useState(domain.location || '');
+  const [capacitySku, setCapacitySku] = useState(domain.capacitySku || '');
+  const [adminGroupId, setAdminGroupId] = useState(domain.adminGroupId || '');
+  const [memberGroupId, setMemberGroupId] = useState(domain.memberGroupId || '');
+  const [costCenter, setCostCenter] = useState(domain.costCenter || '');
+  const [status, setStatus] = useState(domain.status || 'registered');
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState<string | null>(null);
+
+  // Inventory.
+  const [inv, setInv] = useState<InventoryResource[] | null>(null);
+  const [invLoading, setInvLoading] = useState(false);
+  const [invGate, setInvGate] = useState<string | null>(null);
+  const [invBound, setInvBound] = useState(true);
+
+  useEffect(() => {
+    setLocation(domain.location || ''); setCapacitySku(domain.capacitySku || '');
+    setAdminGroupId(domain.adminGroupId || ''); setMemberGroupId(domain.memberGroupId || '');
+    setCostCenter(domain.costCenter || ''); setStatus(domain.status || 'registered');
+  }, [domain.id]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  const loadInventory = useCallback(async () => {
+    setInvLoading(true); setInvGate(null);
+    try {
+      const r = await fetch(`/api/admin/domains/${encodeURIComponent(domain.id)}/inventory`);
+      const j = await r.json();
+      if (!j.ok) { setInvGate(j.remediation || j.hint || j.error || `HTTP ${r.status}`); setInv([]); return; }
+      setInvBound(j.bound !== false);
+      setInv(j.resources || []);
+      if (j.bound === false && j.hint) setInvGate(j.hint);
+    } catch (e: any) { setInvGate(e?.message || String(e)); setInv([]); }
+    finally { setInvLoading(false); }
+  }, [domain.id]);
+
+  useEffect(() => { loadInventory(); }, [loadInventory]);
+
+  const apply = async () => {
+    setBusy(true); setErr(null);
+    try {
+      onSaved(await patchDomain(domain.id, {
+        location: location || null,
+        capacitySku: capacitySku || null,
+        adminGroupId: adminGroupId || null,
+        memberGroupId: memberGroupId || null,
+        costCenter: costCenter || null,
+        status,
+      }));
+    } catch (e: any) { setErr(e?.message || String(e)); }
+    finally { setBusy(false); }
+  };
+
+  const subs = domain.subscriptionIds || [];
+
+  return (
+    <div className={styles.tabPanel}>
+      <div className={styles.sectionHead}>
+        <Subtitle2>Data Landing Zone binding</Subtitle2>
+        <Badge appearance="tint" color={DOMAIN_STATUS_COLOR[status] || 'subtle'}>{status}</Badge>
+      </div>
+      <Caption1 className={styles.note}>
+        Binds this domain to its Data Landing Zone — the subscription(s), resource group, region, and capacity it
+        was deployed at, plus the Entra groups that back its admin / member tiers and the chargeback cost center.
+        dlz-attach fills these automatically; a tenant admin can also set them here.
+      </Caption1>
+
+      <Field label="Attached subscription(s)">
+        {subs.length ? (
+          <TagGroup aria-label="Attached subscriptions" className={styles.tagWrap}>
+            {subs.map((sub) => <Tag key={sub} value={sub}>{sub}</Tag>)}
+          </TagGroup>
+        ) : (
+          <Caption1 className={styles.note}>None attached. Use “Attach existing subscription” on the domain’s row.</Caption1>
+        )}
+      </Field>
+
+      <Field label="Resource group">
+        <Input value={domain.dlzRg || ''} disabled placeholder="Set by dlz-attach / attach flow" />
+      </Field>
+
+      <Field label="Region">
+        <Dropdown
+          disabled={!isTenantAdmin}
+          value={location ? (regions.find((r) => r.name === location)?.display || location) : ''}
+          selectedOptions={location ? [location] : []}
+          onOptionSelect={(_e, d) => setLocation(d.optionValue || '')}
+          placeholder="Select a region"
+        >
+          {regions.map((r) => <Option key={r.name} value={r.name} text={r.display}>{r.display} ({r.name})</Option>)}
+        </Dropdown>
+      </Field>
+
+      <Field label="Capacity sizing">
+        <Dropdown
+          disabled={!isTenantAdmin}
+          value={capacitySku}
+          selectedOptions={capacitySku ? [capacitySku] : []}
+          onOptionSelect={(_e, d) => setCapacitySku(d.optionValue || '')}
+          placeholder="Select a capacity F-SKU"
+        >
+          {CAPACITY_SKUS.map((sku) => <Option key={sku} value={sku} text={sku}>{sku}</Option>)}
+        </Dropdown>
+      </Field>
+
+      <GroupPicker label="Domain admins group (Entra)" value={adminGroupId} onChange={setAdminGroupId} disabled={!isTenantAdmin} />
+      <GroupPicker label="Domain members group (Entra)" value={memberGroupId} onChange={setMemberGroupId} disabled={!isTenantAdmin} />
+
+      <Field label="Chargeback cost center">
+        <Input value={costCenter} disabled={!isTenantAdmin} placeholder="e.g. CC-1042" onChange={(_e, d) => setCostCenter(d.value)} />
+      </Field>
+
+      <Field label="Status">
+        <Dropdown
+          disabled={!isTenantAdmin}
+          value={status}
+          selectedOptions={[status]}
+          onOptionSelect={(_e, d) => setStatus((d.optionValue as DomainRecord['status']) || 'registered')}
+        >
+          {(['registered', 'attaching', 'active', 'detached', 'error'] as const).map((st) =>
+            <Option key={st} value={st} text={st}>{st}</Option>)}
+        </Dropdown>
+      </Field>
+
+      {domain.chargebackTag && (
+        <Caption1 className={styles.note}>Chargeback tag: <code>{domain.chargebackTag}</code></Caption1>
+      )}
+
+      {isTenantAdmin && <ApplyButton busy={busy} error={err} onApply={apply} />}
+      {!isTenantAdmin && (
+        <Caption1 className={styles.note}>Only a tenant admin can change the Data Landing Zone binding.</Caption1>
+      )}
+
+      {/* Resource inventory (ARG by tag) */}
+      <div className={styles.sectionHeadSpaced}>
+        <Subtitle2>Resource inventory</Subtitle2>
+        <Button size="small" onClick={loadInventory} disabled={invLoading}>Refresh</Button>
+      </div>
+      {invLoading && <Spinner size="tiny" label="Querying Azure Resource Graph…" />}
+      {invGate && (
+        <MessageBar intent={invBound ? 'warning' : 'info'}>
+          <MessageBarBody>{invGate}</MessageBarBody>
+        </MessageBar>
+      )}
+      {inv && inv.length > 0 && (
+        <div className={styles.invTable}>
+          <div className={styles.invHead}>
+            <span>Name</span><span>Type</span><span>Resource group</span><span>Location</span>
+          </div>
+          {inv.map((r) => (
+            <div key={`${r.subscriptionId}/${r.resourceGroup}/${r.name}`} className={styles.invRow}>
+              <span>{r.name}</span>
+              <span><Caption1 className={styles.note}>{r.type}</Caption1></span>
+              <span>{r.resourceGroup}</span>
+              <span>{r.location}</span>
+            </div>
+          ))}
+        </div>
+      )}
+      {inv && inv.length === 0 && !invGate && (
+        <Caption1 className={styles.note}>No tagged resources found for this domain.</Caption1>
       )}
     </div>
   );

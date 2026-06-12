@@ -263,9 +263,101 @@ async def test_run_bicep_deploy_fails_honestly_without_template_uri(monkeypatch)
     assert "LOOM_SETUP_TEMPLATE_URI" in state["error"]
 
 
+# ----- dlz-attach → console topology registration (audit-t158) ----------
+
+
+@pytest.mark.asyncio
+async def test_deploy_success_registers_domain_binding(monkeypatch):
+    """On ARM Succeeded the orchestrator calls register_domain_binding with the
+    request's domain / subscription / region / capacity — the automatic
+    dlz-attach → Console topology-registry path."""
+    store = DeploymentStateStore()
+    await store.create(deployment_id="d-7", request=_deploy_req(), caller_oid="oid-7")
+
+    monkeypatch.setenv("LOOM_SETUP_TEMPLATE_URI", "https://loomtpl.blob.core.windows.net/main.json")
+    monkeypatch.setattr(orchestrator, "make_resource_client", lambda *a, **k: _FakeResourceClient("Succeeded"))
+
+    calls: list[dict] = []
+
+    async def _fake_register(**kwargs):
+        calls.append(kwargs)
+        return {"ok": True, "domain": {"domainId": kwargs.get("domain_id")}}
+
+    monkeypatch.setattr(orchestrator, "register_domain_binding", _fake_register)
+
+    await run_bicep_deploy(store, "d-7", _deploy_req(), "oid-7")
+
+    state = await store.get("d-7")
+    assert state["status"] == "succeeded"
+    assert len(calls) == 1
+    call = calls[0]
+    assert call["caller_oid"] == "oid-7"
+    assert call["domain_id"] == "happy"
+    assert call["subscription_id"] == "00000000-0000-0000-0000-000000000001"
+    assert call["location"] == "eastus2"
+    assert call["capacity_sku"] == "F2"
+
+
+@pytest.mark.asyncio
+async def test_deploy_failure_does_not_register_domain_binding(monkeypatch):
+    """A non-succeeded deploy must NOT register a binding — no false topology rows."""
+    store = DeploymentStateStore()
+    await store.create(deployment_id="d-8", request=_deploy_req(), caller_oid="oid-8")
+
+    monkeypatch.setenv("LOOM_SETUP_TEMPLATE_URI", "https://loomtpl.blob.core.windows.net/main.json")
+    monkeypatch.setattr(orchestrator, "make_resource_client", lambda *a, **k: _FakeResourceClient("Failed"))
+
+    calls: list[dict] = []
+
+    async def _fake_register(**kwargs):
+        calls.append(kwargs)
+
+    monkeypatch.setattr(orchestrator, "register_domain_binding", _fake_register)
+
+    await run_bicep_deploy(store, "d-8", _deploy_req(), "oid-8")
+
+    assert (await store.get("d-8"))["status"] == "failed"
+    assert calls == []
+
+
+@pytest.mark.asyncio
+async def test_deploy_success_registers_each_dlz_domain(monkeypatch):
+    """Multi-sub deploy with parallel DLZ arrays registers one binding per
+    domain, pairing each domain with its own subscription id."""
+    store = DeploymentStateStore()
+    req = {
+        "boundary": "Commercial",
+        "mode": "multi-sub",
+        "domain_name": "primary",
+        "capacity_sku": "F8",
+        "subscription_id": "00000000-0000-0000-0000-000000000001",
+        "region": "eastus2",
+        "dlz_domain_names": ["finance", "salesops"],
+        "dlz_subscription_ids": [
+            "00000000-0000-0000-0000-0000000000aa",
+            "00000000-0000-0000-0000-0000000000bb",
+        ],
+    }
+    await store.create(deployment_id="d-9", request=req, caller_oid="oid-9")
+
+    monkeypatch.setenv("LOOM_SETUP_TEMPLATE_URI", "https://loomtpl.blob.core.windows.net/main.json")
+    monkeypatch.setattr(orchestrator, "make_resource_client", lambda *a, **k: _FakeResourceClient("Succeeded"))
+
+    calls: list[dict] = []
+
+    async def _fake_register(**kwargs):
+        calls.append(kwargs)
+
+    monkeypatch.setattr(orchestrator, "register_domain_binding", _fake_register)
+
+    await run_bicep_deploy(store, "d-9", req, "oid-9")
+
+    assert [c["domain_id"] for c in calls] == ["finance", "salesops"]
+    assert calls[0]["subscription_id"] == "00000000-0000-0000-0000-0000000000aa"
+    assert calls[1]["subscription_id"] == "00000000-0000-0000-0000-0000000000bb"
+
+
 # ----- Orchestrator backends dispatch -----------------------------------
-
-
 @pytest.mark.asyncio
 async def test_foundry_orchestrator_dispatches_to_deploy_driver(monkeypatch):
     store = DeploymentStateStore()

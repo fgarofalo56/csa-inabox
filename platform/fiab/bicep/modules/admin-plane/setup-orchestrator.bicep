@@ -56,6 +56,9 @@ param armEndpoint string
 @description('templateLink URI to the compiled main.json the orchestrator submits (publish via `az bicep build -f platform/fiab/bicep/main.bicep`). Empty = orchestrator honestly fails the deploy with the publish remediation rather than faking success.')
 param setupTemplateUri string = ''
 
+@description('CAE-internal base URL of the loom-console app (e.g. http://loom-console). After a dlz-attach deployment the orchestrator POSTs the new domain binding to {consoleInternalUrl}/api/internal/topology/register-domain so /admin/domains shows it bound + active (audit-t158). Empty = the topology callback is skipped (best-effort).')
+param consoleInternalUrl string = 'http://loom-console'
+
 @description('Application Insights connection string for telemetry. Empty disables.')
 param appInsightsConnectionString string = ''
 
@@ -107,6 +110,7 @@ resource app 'Microsoft.App/containerApps@2024-03-01' = {
               { name: 'PORT', value: string(targetPort) }
             ],
             empty(setupTemplateUri) ? [] : [ { name: 'LOOM_SETUP_TEMPLATE_URI', value: setupTemplateUri } ],
+            empty(consoleInternalUrl) ? [] : [ { name: 'LOOM_CONSOLE_INTERNAL_URL', value: consoleInternalUrl } ],
             hasToken ? [ { name: 'LOOM_INTERNAL_TOKEN', secretRef: 'internal-token' } ] : [],
             empty(appInsightsConnectionString) ? [] : [
               { name: 'APPLICATIONINSIGHTS_CONNECTION_STRING', value: appInsightsConnectionString }
