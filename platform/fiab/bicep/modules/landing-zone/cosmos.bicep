@@ -276,6 +276,23 @@ resource cosmosNavRole 'Microsoft.Authorization/roleAssignments@2022-04-01' = if
   }
 }
 
+// Console UAMI → Cosmos DB Built-in Data Contributor (data-plane RBAC) on the
+// DLZ account. ARM "DocumentDB Account Contributor" above is a CONTROL-plane
+// role only — with disableLocalAuth=true the data plane is AAD-RBAC-only, and
+// item read/upsert/query (the BFF's app/api/* Cosmos calls — e.g. user-prefs,
+// workspaces, items, notifications, tabs-state) all 403 without this SQL role.
+// Mirrors the gremlin/vector data-plane grant in cosmos-graph-vector.bicep.
+// Built-in Data Contributor definition id is the well-known 00000000-…-000002.
+resource cosmosDataRole 'Microsoft.DocumentDB/databaseAccounts/sqlRoleAssignments@2024-12-01-preview' = if (!empty(consolePrincipalId) && !skipRoleGrants) {
+  parent: account
+  name: guid(account.id, consolePrincipalId, '00000000-0000-0000-0000-000000000002')
+  properties: {
+    roleDefinitionId: '${account.id}/sqlRoleDefinitions/00000000-0000-0000-0000-000000000002'
+    principalId: consolePrincipalId
+    scope: account.id
+  }
+}
+
 output accountId string = account.id
 output accountName string = account.name
 output endpoint string = account.properties.documentEndpoint
