@@ -80,18 +80,15 @@ resource purviewAdminRole 'Microsoft.Authorization/roleAssignments@2022-04-01' =
 // Apache Atlas on AKS — IL5 only
 // =====================================================================
 
-resource atlasNamespace 'Microsoft.ContainerService/managedClusters/namespaces@2025-04-01' = if (atlasOnAksEnabled && !empty(aksClusterId)) {
-  // Note: AKS namespace as a top-level ARM resource is preview-only.
-  // Production uses Flux/GitOps to apply k8s manifests; this Bicep
-  // resource at minimum creates the namespace + RBAC so the GitOps
-  // workflow has a target.
-  name: '${split(aksClusterId, '/')[8]}/atlas-csa-loom'
-  properties: {
-    metadata: {
-      labels: {
-        'csa-loom': 'catalog-primary'
-      }
-    }
+// Atlas namespace is a child of the admin AKS cluster, which lives in the
+// console RG. Since this catalog module is now scoped to rg-csa-loom-shared-data
+// (D7), the namespace child is split into a sub-module scoped back to the AKS
+// cluster's RG (parsed from aksClusterId) so it deploys alongside its parent.
+module atlasNamespace 'catalog-atlas-namespace.bicep' = if (atlasOnAksEnabled && !empty(aksClusterId)) {
+  name: 'catalog-atlas-namespace'
+  scope: resourceGroup(split(aksClusterId, '/')[4])
+  params: {
+    aksClusterName: split(aksClusterId, '/')[8]
   }
 }
 

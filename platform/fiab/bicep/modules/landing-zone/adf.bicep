@@ -52,6 +52,9 @@ param storageAccountId string = ''
 @description('DLZ ADLS Gen2 storage account NAME (same RG). Alternative to storageAccountId — also grants the ADF system-assigned MI Storage Blob Data Contributor so Dataflow Gen2 (WranglingDataFlow) can write Parquet/CSV sinks to ADLS. Empty = skip (Azure SQL sinks still work).')
 param adlsAccountName string = ''
 
+@description('Resource group of the DLZ ADLS Gen2 account (D7 split-DLZ topology: storage lives in the -storage tier RG while ADF lives in -compute). Defaults to this RG for the legacy single-DLZ-RG layout.')
+param storageResourceGroup string = resourceGroup().name
+
 @description('Deploy the "loom-geo-enrich" starter pipeline with enrichH3 (Bool), reverseGeocode (Bool), and bufferMeters (Int) parameters pre-declared. The GeoPipeline editor posts these flags to createRun as ADF pipeline parameters. When false, the editor still works but the target pipeline must declare those parameter names itself. Default true.')
 param deployGeoEnrichPipeline bool = true
 
@@ -187,17 +190,17 @@ resource consoleAdfContributor 'Microsoft.Authorization/roleAssignments@2022-04-
 // One grant covers both; scoped to the storage account in this RG.
 // =====================================================================
 
-resource storageForAdfRbac 'Microsoft.Storage/storageAccounts@2023-05-01' existing = if (!empty(sblobAccountName)) {
-  name: empty(sblobAccountName) ? 'placeholder' : sblobAccountName
-}
-
-resource adfStorageBlobContributor 'Microsoft.Authorization/roleAssignments@2022-04-01' = if (!skipRoleGrants && !empty(sblobAccountName)) {
-  scope: storageForAdfRbac
-  name: guid(adf.id, sblobAccountName, 'ba92f5b4-2d11-453d-a403-e96b0029c9fe')
-  properties: {
+// Cross-RG (D7): the role assignment is deployed via a module scoped to the
+// storage account's RG (`storageResourceGroup`), which may differ from this
+// factory's RG in the split-DLZ topology. Defaults to this RG (legacy layout).
+module adfStorageBlobRbac 'storage-blob-contributor-rbac.bicep' = if (!skipRoleGrants && !empty(sblobAccountName)) {
+  name: 'adf-storage-blob-rbac-${domainName}'
+  scope: resourceGroup(storageResourceGroup)
+  params: {
+    storageAccountName: sblobAccountName
     principalId: adf.identity.principalId
-    principalType: 'ServicePrincipal'
-    roleDefinitionId: subscriptionResourceId('Microsoft.Authorization/roleDefinitions', 'ba92f5b4-2d11-453d-a403-e96b0029c9fe')
+    assignmentSeed: adf.id
+    skipRoleGrants: skipRoleGrants
   }
 }
 

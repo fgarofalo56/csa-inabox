@@ -550,7 +550,26 @@ param appImageTags object = {
 // Resource group for Admin Plane
 // =====================================================================
 
-var adminPlaneRgName = 'rg-csa-loom-admin-${location}'
+// =====================================================================
+// CSA Loom functional resource-group layout (D7 — audit-t165)
+//
+// No admin mega-RG: the platform control plane is split by function into
+// dedicated RGs. The admin-plane module deploys each sub-module into its
+// matching RG (modules/admin-plane/main.bicep re-derives these SAME names from
+// `location` so they line up WITHOUT threading 6 extra params past that
+// module's 256-param ceiling — KEEP THE CONVENTION IN SYNC). CAF naming:
+// rg-csa-loom-<function>-<region>. Per Azure Government naming guidance,
+// regulatory markers (IL5 / CUI / etc.) live ONLY in tags, never in RG names.
+// =====================================================================
+var rgConsole       = 'rg-csa-loom-console-${location}'
+var rgNetwork       = 'rg-csa-loom-network-${location}'
+var rgSharedData    = 'rg-csa-loom-shared-data-${location}'
+var rgGovernance    = 'rg-csa-loom-governance-${location}'
+var rgObservability = 'rg-csa-loom-observability-${location}'
+var rgAi            = 'rg-csa-loom-ai-${location}'
+
+// Back-compat alias: the "admin plane" RG is now the console RG.
+var adminPlaneRgName = rgConsole
 
 // T95 — Cosmos data-plane host suffixes, sovereign-cloud-specific. The DLZ
 // cosmos-graph-vector module computes the same suffixes; we mirror them here
@@ -565,10 +584,44 @@ var cosmosDocSuffix = (boundary == 'GCC-High' || boundary == 'IL5') ? 'azure.us'
 // Commercial/GCC → postgres.database.azure.com; GCC-High/IL5 → .usgovcloudapi.net.
 var pgHostSuffix = (boundary == 'GCC-High' || boundary == 'IL5') ? 'postgres.database.usgovcloudapi.net' : 'postgres.database.azure.com'
 
-resource adminPlaneRg 'Microsoft.Resources/resourceGroups@2024-03-01' = {
-  name: adminPlaneRgName
+// Each platform RG inherits the per-boundary compliance taxonomy (complianceTags)
+// and adds a `csa-loom-function` tag so every RG is discoverable by function
+// (mirrors the csa-loom-tier / csa-loom-domain tags that bootstrap-dlz-rgs.sh
+// stamps on the DLZ RGs).
+resource consoleRg 'Microsoft.Resources/resourceGroups@2024-03-01' = {
+  name: rgConsole
   location: location
-  tags: complianceTags
+  tags: union(complianceTags, { 'csa-loom-function': 'console' })
+}
+
+resource networkRg 'Microsoft.Resources/resourceGroups@2024-03-01' = {
+  name: rgNetwork
+  location: location
+  tags: union(complianceTags, { 'csa-loom-function': 'network' })
+}
+
+resource sharedDataRg 'Microsoft.Resources/resourceGroups@2024-03-01' = {
+  name: rgSharedData
+  location: location
+  tags: union(complianceTags, { 'csa-loom-function': 'shared-data' })
+}
+
+resource governanceRg 'Microsoft.Resources/resourceGroups@2024-03-01' = {
+  name: rgGovernance
+  location: location
+  tags: union(complianceTags, { 'csa-loom-function': 'governance' })
+}
+
+resource observabilityRg 'Microsoft.Resources/resourceGroups@2024-03-01' = {
+  name: rgObservability
+  location: location
+  tags: union(complianceTags, { 'csa-loom-function': 'observability' })
+}
+
+resource aiRg 'Microsoft.Resources/resourceGroups@2024-03-01' = {
+  name: rgAi
+  location: location
+  tags: union(complianceTags, { 'csa-loom-function': 'ai' })
 }
 
 // =====================================================================
@@ -577,7 +630,19 @@ resource adminPlaneRg 'Microsoft.Resources/resourceGroups@2024-03-01' = {
 
 module adminPlane 'modules/admin-plane/main.bicep' = {
   name: 'admin-plane'
-  scope: adminPlaneRg
+  scope: consoleRg
+  // D7: the admin-plane module's own scope is the console RG, but its sub-modules
+  // deploy cross-RG into network / shared-data / governance / observability / ai
+  // via `scope: resourceGroup(...)`. Those RGs are referenced by name (not symbol)
+  // inside the module, so declare an explicit dependency to guarantee they exist
+  // before the deployment runs.
+  dependsOn: [
+    networkRg
+    sharedDataRg
+    governanceRg
+    observabilityRg
+    aiRg
+  ]
   params: {
     location: location
     boundary: boundary
@@ -660,25 +725,26 @@ module adminPlane 'modules/admin-plane/main.bicep' = {
     // we wire it WITHOUT referencing dpMlWorkspace.outputs (that module depends
     // on adminPlane's UAMI principal — referencing its output here would create
     // a cycle). Empty when the module isn't enabled → AML toggle honest-gates.
-    amlWorkspaceName: (deploymentMode == 'single-sub' && mlWorkspaceEnabled) ? take('aml-loom-${uniqueString(singleDlzRg.id)}', 33) : ''
-    amlWorkspaceRg: (deploymentMode == 'single-sub' && mlWorkspaceEnabled) ? singleDlzRg.name : ''
+    amlWorkspaceName: (deploymentMode == 'single-sub' && mlWorkspaceEnabled) ? take('aml-loom-${uniqueString(singleDlzComputeRg.id)}', 33) : ''
+    amlWorkspaceRg: (deploymentMode == 'single-sub' && mlWorkspaceEnabled) ? singleDlzComputeRg.name : ''
     vpnGatewayEnabled: vpnGatewayEnabled
     appGatewayEnabled: appGatewayEnabled
     frontDoorEnabled: frontDoorEnabled
     loomVanityDomain: loomVanityDomain
-    // Single-sub: the DLZ ADLS account name is deterministic over singleDlzRg
-    // (matches landing-zone/storage.bicep's saName) so the Console binds to the
+    // Single-sub: the DLZ ADLS account name is deterministic over the -storage
+    // tier RG (D7: storage.bicep now deploys there, and its saName keys off
+    // resourceGroup().id == singleDlzStorageRg.id) so the Console binds to the
     // real account — LOOM_ADLS_ACCOUNT / LOOM_*_URL / LOOM_ORG_VISUALS_URL all
     // resolve and the org-visuals RBAC grant targets it. MUST be empty in
-    // multi-sub: singleDlzRg is NOT deployed there, so deriving from its .id
-    // would yield a phantom `saloomdefault…` account — emitting env vars that
+    // multi-sub: singleDlzStorageRg is NOT deployed there, so deriving from its
+    // .id would yield a phantom `saloomdefault…` account — emitting env vars that
     // point at a non-existent account (Embed codes / Org visuals SAS minting
     // would 500 instead of showing the honest config gate). Empty here makes
     // those panes honest-gate; operators wire multi-sub DLZ accounts post-deploy
     // via scripts/csa-loom/patch-navigator-env.sh (same pattern as the Cosmos
     // endpoints below).
-    loomStorageAccount: deploymentMode == 'single-sub' ? take('saloomdefault${uniqueString(singleDlzRg.id)}', 24) : ''
-    loomCosmosAccount: take('cosmos-loom-default-${uniqueString(singleDlzRg.id)}', 44)
+    loomStorageAccount: deploymentMode == 'single-sub' ? take('saloomdefault${uniqueString(singleDlzStorageRg.id)}', 24) : ''
+    loomCosmosAccount: take('cosmos-loom-default-${uniqueString(singleDlzStorageRg.id)}', 44)
     // Forward the Cosmos data-plane endpoints to the Console so the vector-store
     // and graph editors bind to the deployed accounts by default (no manual
     // config). The DLZ `cosmos-graph-vector` module (cosmosGraphVectorEnabled,
@@ -695,10 +761,10 @@ module adminPlane 'modules/admin-plane/main.bicep' = {
     // creates, so a bare endpoint would target a non-existent db/graph.
     // Multi-sub mode can't be wired from a single admin-plane (one Console env,
     // N DLZs) — operators run scripts/csa-loom/patch-navigator-env.sh there.
-    loomCosmosVectorEndpoint: (deploymentMode == 'single-sub' && cosmosGraphVectorEnabled) ? 'https://${take('cosmos-loom-vec-default-${uniqueString(singleDlzRg.id)}', 44)}.documents.${cosmosDocSuffix}:443/' : ''
+    loomCosmosVectorEndpoint: (deploymentMode == 'single-sub' && cosmosGraphVectorEnabled) ? 'https://${take('cosmos-loom-vec-default-${uniqueString(singleDlzStorageRg.id)}', 44)}.documents.${cosmosDocSuffix}:443/' : ''
     loomCosmosVectorDatabase: (deploymentMode == 'single-sub' && cosmosGraphVectorEnabled) ? 'loom-vectors' : ''
     loomCosmosVectorContainer: (deploymentMode == 'single-sub' && cosmosGraphVectorEnabled) ? 'docs-vec' : ''
-    loomCosmosGremlinEndpoint: (deploymentMode == 'single-sub' && cosmosGraphVectorEnabled) ? 'wss://${take('cosmos-loom-gremlin-default-${uniqueString(singleDlzRg.id)}', 44)}.${gremlinHostSuffix}:443/' : ''
+    loomCosmosGremlinEndpoint: (deploymentMode == 'single-sub' && cosmosGraphVectorEnabled) ? 'wss://${take('cosmos-loom-gremlin-default-${uniqueString(singleDlzStorageRg.id)}', 44)}.${gremlinHostSuffix}:443/' : ''
     loomCosmosGremlinDatabase: (deploymentMode == 'single-sub' && cosmosGraphVectorEnabled) ? 'loom-graph' : ''
     loomCosmosGremlinGraph: (deploymentMode == 'single-sub' && cosmosGraphVectorEnabled) ? 'default' : ''
     // Weave (Semantic Ontology) graph store — the DLZ postgres-weave module
@@ -711,7 +777,7 @@ module adminPlane 'modules/admin-plane/main.bicep' = {
     // graph name (loom_ontology) matches the post-deploy bootstrap create_graph.
     // Multi-sub can't be wired from a single admin-plane — operators run
     // scripts/csa-loom/patch-navigator-env.sh (same as the Cosmos endpoints).
-    loomWeavePgFqdn: (deploymentMode == 'single-sub' && weaveOntologyEnabled) ? '${take('psql-loom-weave-default-${uniqueString(singleDlzRg.id)}', 63)}.${pgHostSuffix}' : ''
+    loomWeavePgFqdn: (deploymentMode == 'single-sub' && weaveOntologyEnabled) ? '${take('psql-loom-weave-default-${uniqueString(singleDlzStorageRg.id)}', 63)}.${pgHostSuffix}' : ''
     loomWeavePgDatabase: (deploymentMode == 'single-sub' && weaveOntologyEnabled) ? 'loom-weave' : ''
     loomWeaveGraph: (deploymentMode == 'single-sub' && weaveOntologyEnabled) ? 'loom_ontology' : ''
     // Bind the console's warehouse/SQL env (LOOM_SYNAPSE_WORKSPACE /
@@ -775,13 +841,43 @@ module adminPlane 'modules/admin-plane/main.bicep' = {
 }
 
 // =====================================================================
-// Data Landing Zone resource groups (created here so DLZ modules can target them)
+// Data Landing Zone resource groups (D7 — audit-t165)
+//
+// Per-DLZ functional split (no DLZ mega-RG): the single-sub DLZ is created here
+// as four tier RGs; the landing-zone module is invoked at the -core RG and
+// deploys the compute / storage / streaming tiers cross-RG. The deterministic
+// resource names the Console env binds to (storage / Cosmos / Weave PG) are
+// keyed off the -storage RG id so they match the accounts the module actually
+// deploys. CAF names mirror modules/landing-zone/main.bicep + bootstrap-dlz-rgs.sh
+// (domain 'default' for the single-sub DLZ).
 // =====================================================================
+var dlzCoreRgName      = 'rg-csa-loom-dlz-default-core-${location}'
+var dlzComputeRgName   = 'rg-csa-loom-dlz-default-compute-${location}'
+var dlzStorageRgName   = 'rg-csa-loom-dlz-default-storage-${location}'
+var dlzStreamingRgName = 'rg-csa-loom-dlz-default-streaming-${location}'
 
-resource singleDlzRg 'Microsoft.Resources/resourceGroups@2024-03-01' = if (deploymentMode == 'single-sub') {
-  name: 'rg-csa-loom-dlz-single-${location}'
+resource singleDlzCoreRg 'Microsoft.Resources/resourceGroups@2024-03-01' = if (deploymentMode == 'single-sub') {
+  name: dlzCoreRgName
   location: location
-  tags: complianceTags
+  tags: union(complianceTags, { 'csa-loom-tier': 'dlz', 'csa-loom-domain': 'default', 'csa-loom-function': 'dlz-core' })
+}
+
+resource singleDlzComputeRg 'Microsoft.Resources/resourceGroups@2024-03-01' = if (deploymentMode == 'single-sub') {
+  name: dlzComputeRgName
+  location: location
+  tags: union(complianceTags, { 'csa-loom-tier': 'dlz', 'csa-loom-domain': 'default', 'csa-loom-function': 'dlz-compute' })
+}
+
+resource singleDlzStorageRg 'Microsoft.Resources/resourceGroups@2024-03-01' = if (deploymentMode == 'single-sub') {
+  name: dlzStorageRgName
+  location: location
+  tags: union(complianceTags, { 'csa-loom-tier': 'dlz', 'csa-loom-domain': 'default', 'csa-loom-function': 'dlz-storage' })
+}
+
+resource singleDlzStreamingRg 'Microsoft.Resources/resourceGroups@2024-03-01' = if (deploymentMode == 'single-sub') {
+  name: dlzStreamingRgName
+  location: location
+  tags: union(complianceTags, { 'csa-loom-tier': 'dlz', 'csa-loom-domain': 'default', 'csa-loom-function': 'dlz-streaming' })
 }
 
 // =====================================================================
@@ -794,7 +890,15 @@ resource singleDlzRg 'Microsoft.Resources/resourceGroups@2024-03-01' = if (deplo
 // Single-sub: 1 DLZ in same sub
 module singleDlz 'modules/landing-zone/main.bicep' = if (deploymentMode == 'single-sub') {
   name: 'dlz-single'
-  scope: singleDlzRg
+  scope: singleDlzCoreRg
+  // D7: the landing-zone module's own scope is the -core RG; it deploys the
+  // compute / storage / streaming tiers cross-RG (referenced by name), so
+  // declare an explicit dependency to guarantee those RGs exist first.
+  dependsOn: [
+    singleDlzComputeRg
+    singleDlzStorageRg
+    singleDlzStreamingRg
+  ]
   params: {
     location: location
     boundary: boundary
@@ -805,7 +909,7 @@ module singleDlz 'modules/landing-zone/main.bicep' = if (deploymentMode == 'sing
     adminPlaneLawId: adminPlane.outputs.lawId
     adminPlaneAppInsightsConnectionString: adminPlane.outputs.appInsightsConnectionString
     adminPlanePrivateDnsZoneIds: adminPlane.outputs.privateDnsZoneIds
-    adminPlaneAdxClusterRgName: adminPlaneRgName
+    adminPlaneAdxClusterRgName: rgObservability
     adxEnabled: adxEnabled
     adxClusterPrincipalId: adminPlane.outputs.adxClusterPrincipalId
     adminEntraGroupId: adminEntraGroupId
@@ -839,7 +943,7 @@ module singleDlz 'modules/landing-zone/main.bicep' = if (deploymentMode == 'sing
 // module header. Scoped to the DLZ RG where the storage account lives.
 module singleDlzAccessPolicyRbac 'modules/admin-plane/access-policy-rbac.bicep' = if (deploymentMode == 'single-sub') {
   name: 'dlz-single-access-policy-rbac'
-  scope: singleDlzRg
+  scope: singleDlzStorageRg // D7: grants on the lakehouse account — runs in the -storage tier RG
   params: {
     consolePrincipalId: adminPlane.outputs.uamiConsolePrincipalId
     storageAccountName: singleDlz!.outputs.storageAccountName
@@ -858,7 +962,7 @@ module singleDlzAccessPolicyRbac 'modules/admin-plane/access-policy-rbac.bicep' 
 // external AOAI account — the operator grants the role manually then.
 module singleDlzAoaiSparkRbac 'modules/admin-plane/aoai-spark-rbac.bicep' = if (deploymentMode == 'single-sub') {
   name: 'dlz-single-aoai-spark-rbac'
-  scope: adminPlaneRg
+  scope: aiRg // D7: AOAI account moved to the AI RG, so this grant runs there
   params: {
     aiServicesAccountName: adminPlane.outputs.aiServicesAccountName
     synapseWorkspacePrincipalId: singleDlz!.outputs.synapseManagedIdentityPrincipalId
@@ -875,7 +979,7 @@ module singleDlzAoaiSparkRbac 'modules/admin-plane/aoai-spark-rbac.bicep' = if (
 @batchSize(1)
 module dlz 'modules/landing-zone/main.bicep' = [for (subId, i) in dlzSubscriptionIds: if (deploymentMode == 'multi-sub') {
   name: 'dlz-${i}'
-  scope: resourceGroup(subId, 'rg-csa-loom-dlz-${dlzDomainNames[i]}-${location}')
+  scope: resourceGroup(subId, 'rg-csa-loom-dlz-${dlzDomainNames[i]}-core-${location}') // D7: -core tier RG; the module deploys compute/storage/streaming cross-RG (bootstrap-dlz-rgs.sh creates all four)
   params: {
     location: location
     boundary: boundary
@@ -886,7 +990,7 @@ module dlz 'modules/landing-zone/main.bicep' = [for (subId, i) in dlzSubscriptio
     adminPlaneLawId: adminPlane.outputs.lawId
     adminPlaneAppInsightsConnectionString: adminPlane.outputs.appInsightsConnectionString
     adminPlanePrivateDnsZoneIds: adminPlane.outputs.privateDnsZoneIds
-    adminPlaneAdxClusterRgName: adminPlaneRgName
+    adminPlaneAdxClusterRgName: rgObservability
     adxEnabled: adxEnabled
     adxClusterPrincipalId: adminPlane.outputs.adxClusterPrincipalId
     adminEntraGroupId: adminEntraGroupId
@@ -918,7 +1022,7 @@ module dlz 'modules/landing-zone/main.bicep' = [for (subId, i) in dlzSubscriptio
 @batchSize(1)
 module dlzAccessPolicyRbac 'modules/admin-plane/access-policy-rbac.bicep' = [for (subId, i) in dlzSubscriptionIds: if (deploymentMode == 'multi-sub') {
   name: 'dlz-${i}-access-policy-rbac'
-  scope: resourceGroup(subId, 'rg-csa-loom-dlz-${dlzDomainNames[i]}-${location}')
+  scope: resourceGroup(subId, 'rg-csa-loom-dlz-${dlzDomainNames[i]}-storage-${location}') // D7: grants on the lakehouse account — -storage tier RG
   params: {
     consolePrincipalId: adminPlane.outputs.uamiConsolePrincipalId
     storageAccountName: dlz[i]!.outputs.storageAccountName
@@ -936,7 +1040,7 @@ var dpConsolePrincipalId = adminPlane.outputs.uamiConsolePrincipalId
 
 module dpPostgres 'modules/deploy-planner/postgres.bicep' = if (deploymentMode == 'single-sub' && postgresEnabled) {
   name: 'dp-postgres'
-  scope: singleDlzRg
+  scope: singleDlzStorageRg
   params: {
     location: location
     postgresVersion: postgresVersion
@@ -949,7 +1053,7 @@ module dpPostgres 'modules/deploy-planner/postgres.bicep' = if (deploymentMode =
 
 module dpMysql 'modules/deploy-planner/mysql.bicep' = if (deploymentMode == 'single-sub' && mysqlEnabled) {
   name: 'dp-mysql'
-  scope: singleDlzRg
+  scope: singleDlzStorageRg
   params: {
     location: location
     mysqlVersion: mysqlVersion
@@ -962,7 +1066,7 @@ module dpMysql 'modules/deploy-planner/mysql.bicep' = if (deploymentMode == 'sin
 
 module dpRedis 'modules/deploy-planner/redis.bicep' = if (deploymentMode == 'single-sub' && redisEnabled) {
   name: 'dp-redis'
-  scope: singleDlzRg
+  scope: singleDlzStorageRg
   params: {
     location: location
     skuName: redisSkuName
@@ -975,7 +1079,7 @@ module dpRedis 'modules/deploy-planner/redis.bicep' = if (deploymentMode == 'sin
 
 module dpEventGrid 'modules/deploy-planner/event-grid.bicep' = if (deploymentMode == 'single-sub' && eventGridEnabled) {
   name: 'dp-eventgrid'
-  scope: singleDlzRg
+  scope: singleDlzStreamingRg
   params: {
     location: location
     consolePrincipalId: dpConsolePrincipalId
@@ -986,7 +1090,7 @@ module dpEventGrid 'modules/deploy-planner/event-grid.bicep' = if (deploymentMod
 
 module dpServiceBus 'modules/deploy-planner/service-bus.bicep' = if (deploymentMode == 'single-sub' && serviceBusEnabled) {
   name: 'dp-servicebus'
-  scope: singleDlzRg
+  scope: singleDlzStreamingRg
   params: {
     location: location
     consolePrincipalId: dpConsolePrincipalId
@@ -997,7 +1101,7 @@ module dpServiceBus 'modules/deploy-planner/service-bus.bicep' = if (deploymentM
 
 module dpSignalr 'modules/deploy-planner/signalr.bicep' = if (deploymentMode == 'single-sub' && signalrEnabled) {
   name: 'dp-signalr'
-  scope: singleDlzRg
+  scope: singleDlzStreamingRg
   params: {
     location: location
     consolePrincipalId: dpConsolePrincipalId
@@ -1008,7 +1112,7 @@ module dpSignalr 'modules/deploy-planner/signalr.bicep' = if (deploymentMode == 
 
 module dpStorageQueues 'modules/deploy-planner/storage-queues.bicep' = if (deploymentMode == 'single-sub' && storageQueuesEnabled) {
   name: 'dp-storagequeues'
-  scope: singleDlzRg
+  scope: singleDlzStorageRg
   params: {
     location: location
     consolePrincipalId: dpConsolePrincipalId
@@ -1019,7 +1123,7 @@ module dpStorageQueues 'modules/deploy-planner/storage-queues.bicep' = if (deplo
 
 module dpAiServices 'modules/deploy-planner/cognitive-account.bicep' = if (deploymentMode == 'single-sub' && aiServicesEnabled) {
   name: 'dp-aiservices'
-  scope: singleDlzRg
+  scope: singleDlzComputeRg
   params: {
     location: location
     kind: 'CognitiveServices'
@@ -1032,7 +1136,7 @@ module dpAiServices 'modules/deploy-planner/cognitive-account.bicep' = if (deplo
 
 module dpDocIntel 'modules/deploy-planner/cognitive-account.bicep' = if (deploymentMode == 'single-sub' && documentIntelligenceEnabled) {
   name: 'dp-docintel'
-  scope: singleDlzRg
+  scope: singleDlzComputeRg
   params: {
     location: location
     kind: 'FormRecognizer'
@@ -1045,7 +1149,7 @@ module dpDocIntel 'modules/deploy-planner/cognitive-account.bicep' = if (deploym
 
 module dpContentSafety 'modules/deploy-planner/cognitive-account.bicep' = if (deploymentMode == 'single-sub' && contentSafetyEnabled) {
   name: 'dp-contentsafety'
-  scope: singleDlzRg
+  scope: singleDlzComputeRg
   params: {
     location: location
     kind: 'ContentSafety'
@@ -1058,7 +1162,7 @@ module dpContentSafety 'modules/deploy-planner/cognitive-account.bicep' = if (de
 
 module dpAppService 'modules/deploy-planner/app-service.bicep' = if (deploymentMode == 'single-sub' && appServiceEnabled) {
   name: 'dp-appservice'
-  scope: singleDlzRg
+  scope: singleDlzComputeRg
   params: {
     location: location
     planSku: appServicePlanSku
@@ -1071,7 +1175,7 @@ module dpAppService 'modules/deploy-planner/app-service.bicep' = if (deploymentM
 
 module dpFunctions 'modules/deploy-planner/functions.bicep' = if (deploymentMode == 'single-sub' && functionsEnabled) {
   name: 'dp-functions'
-  scope: singleDlzRg
+  scope: singleDlzComputeRg
   params: {
     location: location
     functionsWorkerRuntime: functionsWorkerRuntime
@@ -1084,7 +1188,7 @@ module dpFunctions 'modules/deploy-planner/functions.bicep' = if (deploymentMode
 
 module dpContainerInstances 'modules/deploy-planner/container-instances.bicep' = if (deploymentMode == 'single-sub' && containerInstancesEnabled) {
   name: 'dp-aci'
-  scope: singleDlzRg
+  scope: singleDlzComputeRg
   params: {
     location: location
     consolePrincipalId: dpConsolePrincipalId
@@ -1095,7 +1199,7 @@ module dpContainerInstances 'modules/deploy-planner/container-instances.bicep' =
 
 module dpStreamAnalytics 'modules/deploy-planner/stream-analytics.bicep' = if (deploymentMode == 'single-sub' && streamAnalyticsEnabled) {
   name: 'dp-streamanalytics'
-  scope: singleDlzRg
+  scope: singleDlzStreamingRg
   params: {
     location: location
     consolePrincipalId: dpConsolePrincipalId
@@ -1106,7 +1210,7 @@ module dpStreamAnalytics 'modules/deploy-planner/stream-analytics.bicep' = if (d
 
 module dpDataFactory 'modules/deploy-planner/data-factory.bicep' = if (deploymentMode == 'single-sub' && dataFactoryEnabled) {
   name: 'dp-datafactory'
-  scope: singleDlzRg
+  scope: singleDlzComputeRg
   params: {
     location: location
     consolePrincipalId: dpConsolePrincipalId
@@ -1117,7 +1221,7 @@ module dpDataFactory 'modules/deploy-planner/data-factory.bicep' = if (deploymen
 
 module dpVm 'modules/deploy-planner/virtual-machine.bicep' = if (deploymentMode == 'single-sub' && vmEnabled) {
   name: 'dp-vm'
-  scope: singleDlzRg
+  scope: singleDlzComputeRg
   params: {
     location: location
     adminSshPublicKey: vmAdminSshPublicKey
@@ -1129,7 +1233,7 @@ module dpVm 'modules/deploy-planner/virtual-machine.bicep' = if (deploymentMode 
 
 module dpBatch 'modules/deploy-planner/batch.bicep' = if (deploymentMode == 'single-sub' && batchEnabled) {
   name: 'dp-batch'
-  scope: singleDlzRg
+  scope: singleDlzComputeRg
   params: {
     location: location
     consolePrincipalId: dpConsolePrincipalId
@@ -1140,7 +1244,7 @@ module dpBatch 'modules/deploy-planner/batch.bicep' = if (deploymentMode == 'sin
 
 module dpLogicApps 'modules/deploy-planner/logic-app.bicep' = if (deploymentMode == 'single-sub' && logicAppsEnabled) {
   name: 'dp-logicapps'
-  scope: singleDlzRg
+  scope: singleDlzComputeRg
   params: {
     location: location
     consolePrincipalId: dpConsolePrincipalId
@@ -1151,7 +1255,7 @@ module dpLogicApps 'modules/deploy-planner/logic-app.bicep' = if (deploymentMode
 
 module dpStaticWebApps 'modules/deploy-planner/static-web-app.bicep' = if (deploymentMode == 'single-sub' && staticWebAppsEnabled) {
   name: 'dp-staticwebapps'
-  scope: singleDlzRg
+  scope: singleDlzComputeRg
   params: {
     location: location
     consolePrincipalId: dpConsolePrincipalId
@@ -1162,7 +1266,7 @@ module dpStaticWebApps 'modules/deploy-planner/static-web-app.bicep' = if (deplo
 
 module dpCdn 'modules/deploy-planner/cdn.bicep' = if (deploymentMode == 'single-sub' && cdnEnabled) {
   name: 'dp-cdn'
-  scope: singleDlzRg
+  scope: singleDlzCoreRg
   params: {
     location: location
     consolePrincipalId: dpConsolePrincipalId
@@ -1173,7 +1277,7 @@ module dpCdn 'modules/deploy-planner/cdn.bicep' = if (deploymentMode == 'single-
 
 module dpLoadBalancer 'modules/deploy-planner/load-balancer.bicep' = if (deploymentMode == 'single-sub' && loadBalancerEnabled) {
   name: 'dp-loadbalancer'
-  scope: singleDlzRg
+  scope: singleDlzCoreRg
   params: {
     location: location
     consolePrincipalId: dpConsolePrincipalId
@@ -1184,7 +1288,7 @@ module dpLoadBalancer 'modules/deploy-planner/load-balancer.bicep' = if (deploym
 
 module dpFirewall 'modules/deploy-planner/firewall.bicep' = if (deploymentMode == 'single-sub' && firewallEnabled) {
   name: 'dp-firewall'
-  scope: singleDlzRg
+  scope: singleDlzCoreRg
   params: {
     location: location
     consolePrincipalId: dpConsolePrincipalId
@@ -1195,7 +1299,7 @@ module dpFirewall 'modules/deploy-planner/firewall.bicep' = if (deploymentMode =
 
 module dpVision 'modules/deploy-planner/cognitive-account.bicep' = if (deploymentMode == 'single-sub' && visionServicesEnabled) {
   name: 'dp-vision'
-  scope: singleDlzRg
+  scope: singleDlzComputeRg
   params: {
     location: location
     kind: 'ComputerVision'
@@ -1208,7 +1312,7 @@ module dpVision 'modules/deploy-planner/cognitive-account.bicep' = if (deploymen
 
 module dpSpeech 'modules/deploy-planner/cognitive-account.bicep' = if (deploymentMode == 'single-sub' && speechServicesEnabled) {
   name: 'dp-speech'
-  scope: singleDlzRg
+  scope: singleDlzComputeRg
   params: {
     location: location
     kind: 'SpeechServices'
@@ -1221,7 +1325,7 @@ module dpSpeech 'modules/deploy-planner/cognitive-account.bicep' = if (deploymen
 
 module dpLanguage 'modules/deploy-planner/cognitive-account.bicep' = if (deploymentMode == 'single-sub' && languageServicesEnabled) {
   name: 'dp-language'
-  scope: singleDlzRg
+  scope: singleDlzComputeRg
   params: {
     location: location
     kind: 'TextAnalytics'
@@ -1234,7 +1338,7 @@ module dpLanguage 'modules/deploy-planner/cognitive-account.bicep' = if (deploym
 
 module dpMlWorkspace 'modules/deploy-planner/ml-workspace.bicep' = if (deploymentMode == 'single-sub' && mlWorkspaceEnabled) {
   name: 'dp-mlworkspace'
-  scope: singleDlzRg
+  scope: singleDlzComputeRg
   params: {
     location: location
     consolePrincipalId: dpConsolePrincipalId

@@ -123,6 +123,22 @@ param consolePrincipalNeedsLifecycleWrite bool = false
 param consolePrincipalNeedsCmkBind bool = false
 
 // =====================================================================
+// CSA Loom per-DLZ functional RG layout (D7 — audit-t165). This DLZ orchestrator
+// is invoked at the -core tier RG; it deploys the compute / storage / streaming
+// tiers cross-RG via `scope: resourceGroup(...)`. Names follow the CAF
+// convention rg-csa-loom-dlz-<domain>-<tier>-<region>. main.bicep CREATES these
+// RGs (single-sub) and scripts/csa-loom/bootstrap-dlz-rgs.sh CREATES them
+// (multi-sub) — KEEP ALL THREE IN SYNC.
+//   core      — this module's own RG: spoke VNet + cross-tier anchors
+//   compute   — Databricks / Synapse / ADF / SHIR / AAS / approval Logic App
+//   storage   — ADLS Gen2 lakehouse / Cosmos / Cosmos graph+vector / Weave PG
+//   streaming — Event Hubs / Event Grid / ADX DB / Stream Analytics
+// =====================================================================
+var dlzComputeRg   = 'rg-csa-loom-dlz-${domainName}-compute-${location}'
+var dlzStorageRg   = 'rg-csa-loom-dlz-${domainName}-storage-${location}'
+var dlzStreamingRg = 'rg-csa-loom-dlz-${domainName}-streaming-${location}'
+
+// =====================================================================
 // 1. Spoke VNet (peered to Admin Plane hub)
 // =====================================================================
 
@@ -143,6 +159,7 @@ module network 'network.bicep' = {
 
 module storage 'storage.bicep' = {
   name: 'dlz-storage'
+  scope: resourceGroup(dlzStorageRg) // D7: ADLS Gen2 lakehouse in the -storage tier
   params: {
     location: location
     domainName: domainName
@@ -164,6 +181,7 @@ module storage 'storage.bicep' = {
 
 module databricks 'databricks.bicep' = {
   name: 'dlz-databricks'
+  scope: resourceGroup(dlzComputeRg) // D7: Databricks workspace in the -compute tier
   params: {
     location: location
     domainName: domainName
@@ -186,6 +204,7 @@ module databricks 'databricks.bicep' = {
 
 module databricksStorageRbac 'databricks-storage-rbac.bicep' = {
   name: 'dlz-databricks-storage-rbac'
+  scope: resourceGroup(dlzStorageRg) // D7: grants on the lakehouse account — co-located with -storage
   params: {
     storageAccountName: storage.outputs.storageAccountName
     accessConnectorPrincipalId: databricks.outputs.accessConnectorPrincipalId
@@ -214,6 +233,7 @@ var dlzUcSupported = boundary == 'Commercial' || boundary == 'GCC'
 
 module databricksUcBootstrap 'databricks-uc-bootstrap.bicep' = if (dlzUcSupported && !empty(databricksAccountId) && !empty(databricksUcScriptUamiId) && !empty(consoleUamiAppId)) {
   name: 'dlz-databricks-uc-bootstrap'
+  scope: resourceGroup(dlzComputeRg) // D7: UC bootstrap script runs with the Databricks workspace (-compute)
   params: {
     location: location
     databricksAccountId: databricksAccountId
@@ -231,10 +251,14 @@ module databricksUcBootstrap 'databricks-uc-bootstrap.bicep' = if (dlzUcSupporte
 
 module synapse 'synapse.bicep' = {
   name: 'dlz-synapse'
+  scope: resourceGroup(dlzComputeRg) // D7: Synapse workspace in the -compute tier
   params: {
     location: location
     domainName: domainName
     defaultStorageAccountName: storage.outputs.storageAccountName
+    // D7: lakehouse account lives in the -storage tier RG, so the workspace-MSI
+    // Storage Blob role grant (synapse-storage-rbac) must target that RG.
+    defaultStorageResourceGroup: dlzStorageRg
     adminEntraGroupId: adminEntraGroupId
     consolePrincipalId: consolePrincipalId
     consoleUamiName: consoleUamiName
@@ -256,6 +280,7 @@ module synapse 'synapse.bicep' = {
 
 module aas 'aas.bicep' = if (deployAas) {
   name: 'dlz-aas'
+  scope: resourceGroup(dlzComputeRg) // D7: datamart-migration AAS server in the -compute tier
   params: {
     location: location
     domainName: domainName
@@ -275,6 +300,7 @@ module aas 'aas.bicep' = if (deployAas) {
 
 module storageRbacAdmin 'storage-rbac-admin.bicep' = {
   name: 'dlz-storage-rbac-admin'
+  scope: resourceGroup(dlzStorageRg) // D7: constrained RBAC-Admin grant on the lakehouse account (-storage)
   params: {
     storageAccountName: storage.outputs.storageAccountName
     consolePrincipalId: consolePrincipalId
@@ -291,6 +317,7 @@ module storageRbacAdmin 'storage-rbac-admin.bicep' = {
 
 module storageLifecycleRbac 'storage-lifecycle-rbac.bicep' = {
   name: 'dlz-storage-lifecycle-rbac'
+  scope: resourceGroup(dlzStorageRg) // D7: lifecycle/CMK Storage Account Contributor on the lakehouse (-storage)
   params: {
     storageAccountName: storage.outputs.storageAccountName
     consolePrincipalId: consolePrincipalId
@@ -305,6 +332,7 @@ module storageLifecycleRbac 'storage-lifecycle-rbac.bicep' = {
 // =====================================================================
 module synapseAutoPause 'synapse-auto-pause.bicep' = {
   name: 'dlz-synapse-autopause'
+  scope: resourceGroup(dlzComputeRg) // D7: resolves the Synapse workspace by name — co-located in -compute
   params: {
     location: location
     domainName: domainName
@@ -324,6 +352,7 @@ module synapseAutoPause 'synapse-auto-pause.bicep' = {
 
 module eventhubs 'eventhubs.bicep' = {
   name: 'dlz-eventhubs'
+  scope: resourceGroup(dlzStreamingRg) // D7: Event Hubs namespace in the -streaming tier
   params: {
     location: location
     domainName: domainName
@@ -346,6 +375,7 @@ module eventhubs 'eventhubs.bicep' = {
 // the Real-Time hub. Console UAMI granted EventGrid Data Sender + Contributor.
 module eventgridBusiness 'eventgrid-business.bicep' = {
   name: 'dlz-eventgrid-business'
+  scope: resourceGroup(dlzStreamingRg) // D7: business-events Event Grid topic in the -streaming tier
   params: {
     location: location
     consolePrincipalId: consolePrincipalId
@@ -365,6 +395,7 @@ param adxEnabled bool = false
 
 module adx 'adx.bicep' = if (adxEnabled) {
   name: 'dlz-adx-db'
+  scope: resourceGroup(dlzStreamingRg) // D7: ADX KQL DB in the -streaming tier (the DB child targets the shared cluster's RG internally)
   params: {
     domainName: domainName
     adxClusterName: adminPlaneAdxClusterName
@@ -382,6 +413,7 @@ module adx 'adx.bicep' = if (adxEnabled) {
 
 module cosmos 'cosmos.bicep' = {
   name: 'dlz-cosmos'
+  scope: resourceGroup(dlzStorageRg) // D7: app-state Cosmos account in the -storage tier
   params: {
     location: location
     domainName: domainName
@@ -410,6 +442,7 @@ param enableStreamAnalytics bool = true
 
 module streamAnalytics 'stream-analytics.bicep' = if (enableStreamAnalytics && !empty(consolePrincipalId)) {
   name: 'dlz-stream-analytics'
+  scope: resourceGroup(dlzStreamingRg) // D7: Stream Analytics job in the -streaming tier
   params: {
     location: location
     domainName: domainName
@@ -420,6 +453,9 @@ module streamAnalytics 'stream-analytics.bicep' = if (enableStreamAnalytics && !
     // ASA Lakehouse/Blob output writes to the DLZ ADLS Gen2 account via MSI
     // (Storage Blob Data Contributor granted in the module).
     adlsAccountName: storage.outputs.storageAccountName
+    // D7: lakehouse account lives in the -storage tier RG, so the MSI grant
+    // targets that RG via a cross-RG sub-module.
+    adlsResourceGroup: dlzStorageRg
     // ADX cluster backing KQL Database outputs (ingestor grant is a Kusto
     // control-plane step surfaced via module output for the bootstrap).
     adxClusterName: adminPlaneAdxClusterName
@@ -454,6 +490,7 @@ param aasServerAdminMembers array = []
 
 module aasRlsOls 'aas.bicep' = if (enableAas) {
   name: 'dlz-aas-rls-ols'
+  scope: resourceGroup(dlzComputeRg) // D7: semantic-engine AAS server in the -compute tier
   params: {
     name: toLower(take('aas${domainName}${uniqueString(resourceGroup().id)}', 63))
     location: location
@@ -478,6 +515,7 @@ param deployGeoEnrichPipeline bool = true
 
 module adf 'adf.bicep' = if (adfEnabled && !empty(consolePrincipalId) && !empty(adfPrivateDnsZoneId)) {
   name: 'dlz-adf'
+  scope: resourceGroup(dlzComputeRg) // D7: Azure Data Factory in the -compute tier
   params: {
     location: location
     domainName: domainName
@@ -492,6 +530,9 @@ module adf 'adf.bicep' = if (adfEnabled && !empty(consolePrincipalId) && !empty(
     // "Practice with sample data" copy pipeline) and Dataflow Gen2 Parquet/CSV sinks.
     storageAccountId: storage.outputs.storageAccountId
     adlsAccountName: storage.outputs.storageAccountName
+    // D7: lakehouse account lives in the -storage tier RG, so the MSI grant
+    // targets that RG via a cross-RG sub-module.
+    storageResourceGroup: dlzStorageRg
     deployGeoEnrichPipeline: deployGeoEnrichPipeline
   }
 }
@@ -519,6 +560,7 @@ param approvalLogicAppEnabled bool = true
 
 module approvalLogicApp '../integration/approval-logicapp.bicep' = if (approvalLogicAppEnabled) {
   name: 'dlz-approval-logicapp'
+  scope: resourceGroup(dlzComputeRg) // D7: pipeline approval Logic App in the -compute tier
   params: {
     location: location
     consolePrincipalId: consolePrincipalId
@@ -549,6 +591,7 @@ param shirMaxNodes int = 4
 
 module shir 'shir.bicep' = if (selfHostedIrEnabled && adfEnabled && !empty(consolePrincipalId) && !empty(adfPrivateDnsZoneId) && !empty(shirAdminPassword)) {
   name: 'dlz-shir'
+  scope: resourceGroup(dlzComputeRg) // D7: SHIR VMSS registers on the DLZ ADF — co-located in -compute
   params: {
     location: location
     domainName: domainName
@@ -576,6 +619,7 @@ param cosmosGraphVectorEnabled bool = true
 
 module cosmosGraphVector 'cosmos-graph-vector.bicep' = if (cosmosGraphVectorEnabled) {
   name: 'dlz-cosmos-graph-vector'
+  scope: resourceGroup(dlzStorageRg) // D7: Cosmos Gremlin + vector accounts in the -storage tier
   params: {
     location: location
     boundary: boundary
@@ -611,6 +655,7 @@ param weaveOntologyEnabled bool = true
 
 module postgresWeave 'postgres-weave.bicep' = if (weaveOntologyEnabled) {
   name: 'dlz-postgres-weave'
+  scope: resourceGroup(dlzStorageRg) // D7: Weave ontology PostgreSQL store in the -storage tier
   params: {
     location: location
     boundary: boundary

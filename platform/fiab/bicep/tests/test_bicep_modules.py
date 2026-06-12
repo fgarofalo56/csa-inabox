@@ -397,3 +397,130 @@ def test_identity_bicep_arm_emits_mcp_bridge_uami(tmp_path):
     outputs = arm.get("outputs", {})
     for out in ("uamiMcpBridgeId", "uamiMcpBridgeClientId", "uamiMcpBridgePrincipalId"):
         assert out in outputs, f"emitted ARM missing output {out}"
+
+
+# ----- D7 (audit-t165): functional RG layout + CAF naming/tagging ----------
+# No admin mega-RG: the platform plane is split into six function RGs and each
+# DLZ is split into four tier RGs, all with CAF names + a csa-loom-function tag
+# merged onto the inherited compliance taxonomy. main.bicep references the
+# admin-plane orchestrator, which has a known pre-existing max-params compile
+# state, so these assertions read the bicep *source* directly (the same
+# deterministic approach the MCP-bridge tests above use for admin-plane).
+
+BOOTSTRAP_DLZ_RGS = (
+    REPO_ROOT / "scripts" / "csa-loom" / "bootstrap-dlz-rgs.sh"
+)
+
+# (function label, expected var name in main.bicep)
+_PLATFORM_RGS = [
+    ("console", "rgConsole"),
+    ("network", "rgNetwork"),
+    ("shared-data", "rgSharedData"),
+    ("governance", "rgGovernance"),
+    ("observability", "rgObservability"),
+    ("ai", "rgAi"),
+]
+
+
+def test_main_bicep_declares_six_function_rgs_with_caf_names():
+    """The mega admin RG is replaced by six function RGs with CAF names."""
+    src = _src(MAIN_BICEP)
+    for fn, var in _PLATFORM_RGS:
+        assert f"var {var}" in src, f"main.bicep missing naming var {var}"
+        assert f"'rg-csa-loom-{fn}-${{location}}'" in src, (
+            f"main.bicep missing CAF name for the {fn} RG"
+        )
+    # The old admin mega-RG name must be gone.
+    assert "'rg-csa-loom-admin-${location}'" not in src, (
+        "admin mega-RG name still present — D7 split incomplete"
+    )
+    # Six platform RG resources are declared.
+    for var in ("consoleRg", "networkRg", "sharedDataRg", "governanceRg",
+                "observabilityRg", "aiRg"):
+        assert f"resource {var} 'Microsoft.Resources/resourceGroups" in src, (
+            f"main.bicep does not declare the {var} resource"
+        )
+
+
+def test_main_bicep_tags_every_function_rg():
+    """Every platform RG carries the compliance taxonomy + a function tag."""
+    src = _src(MAIN_BICEP)
+    for fn in ("console", "network", "shared-data", "governance",
+               "observability", "ai"):
+        assert (
+            f"union(complianceTags, {{ 'csa-loom-function': '{fn}' }})" in src
+        ), f"{fn} RG is not tagged with union(complianceTags, function)"
+
+
+def test_main_bicep_splits_dlz_into_four_tiers():
+    """Single-sub DLZ is split into core/compute/storage/streaming RGs, and the
+    old DLZ mega-RG name is gone."""
+    src = _src(MAIN_BICEP)
+    for tier in ("core", "compute", "storage", "streaming"):
+        assert f"'rg-csa-loom-dlz-default-{tier}-${{location}}'" in src, (
+            f"main.bicep missing the DLZ -{tier} tier RG"
+        )
+        assert f"'csa-loom-function': 'dlz-{tier}'" in src, (
+            f"DLZ -{tier} RG missing its function tag"
+        )
+    assert "'rg-csa-loom-dlz-single-${location}'" not in src, (
+        "DLZ mega-RG (dlz-single) still present — 4-way split incomplete"
+    )
+    # Deterministic Console-bound names key off the -storage tier RG so the
+    # Console binds to the real accounts the landing-zone module deploys.
+    assert "uniqueString(singleDlzStorageRg.id)" in src, (
+        "DLZ storage/Cosmos/Weave names are not keyed off the -storage RG"
+    )
+
+
+def test_main_bicep_admin_plane_scoped_to_console_rg():
+    """The admin-plane orchestrator deploys into the console RG and depends on
+    the other five function RGs (its sub-modules deploy cross-RG by name)."""
+    src = _src(MAIN_BICEP)
+    assert "scope: consoleRg" in src, "admin-plane not scoped to consoleRg"
+    block = src[src.index("module adminPlane 'modules/admin-plane/main.bicep'"):]
+    block = block[: block.index("params: {")]
+    for rg in ("networkRg", "sharedDataRg", "governanceRg", "observabilityRg", "aiRg"):
+        assert rg in block, f"adminPlane dependsOn is missing {rg}"
+
+
+def test_admin_plane_rescopes_function_modules():
+    """admin-plane re-derives the function RG names and re-scopes its
+    sub-modules into them (network/observability/ai/governance/shared-data)."""
+    src = _src(ADMIN_MAIN_BICEP)
+    for var, name in (
+        ("rgNetwork", "rg-csa-loom-network-${location}"),
+        ("rgObservability", "rg-csa-loom-observability-${location}"),
+        ("rgAi", "rg-csa-loom-ai-${location}"),
+        ("rgGovernance", "rg-csa-loom-governance-${location}"),
+        ("rgSharedData", "rg-csa-loom-shared-data-${location}"),
+    ):
+        assert f"var {var}" in src and f"'{name}'" in src, (
+            f"admin-plane missing function RG var/name {var}"
+        )
+    # Representative re-scopes (network → network RG, LAW → observability,
+    # AI Foundry → ai, Purview SHIR → governance, catalog → shared-data).
+    assert "scope: resourceGroup(rgNetwork)" in src
+    assert "scope: resourceGroup(rgObservability)" in src
+    assert "scope: resourceGroup(rgAi)" in src
+    assert "scope: resourceGroup(rgGovernance)" in src
+    assert "scope: resourceGroup(rgSharedData)" in src
+    # The networking + kusto Console env vars follow the moved resources.
+    assert "{ name: 'LOOM_NETWORKING_RG', value: rgNetwork }" in src
+    assert "adxEnabled ? rgObservability : ''" in src
+
+
+def test_bootstrap_dlz_rgs_creates_four_tiers_per_domain():
+    """The multi-sub bootstrap creates all four DLZ tier RGs per domain with
+    the function tag (bicep+bootstrap sync)."""
+    src = _src(BOOTSTRAP_DLZ_RGS)
+    assert "for TIER in core compute storage streaming" in src, (
+        "bootstrap does not loop the four DLZ tiers"
+    )
+    assert 'rg-csa-loom-dlz-${DOMAIN}-${TIER}-${LOCATION}' in src, (
+        "bootstrap RG name does not include the tier segment"
+    )
+    assert "csa-loom-function=dlz-${TIER}" in src, (
+        "bootstrap does not stamp the per-tier function tag"
+    )
+

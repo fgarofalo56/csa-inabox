@@ -59,6 +59,9 @@ param complianceTags object
 @description('Optional: ADLS Gen2 storage account in THIS resource group that ASA Blob/lakehouse outputs write to. When set, the ASA job managed identity is granted Storage Blob Data Contributor on it (MSI auth, no account keys).')
 param adlsAccountName string = ''
 
+@description('Resource group of the DLZ ADLS Gen2 account (D7 split-DLZ topology: storage lives in the -storage tier RG while Stream Analytics lives in -streaming). Defaults to this RG for the legacy single-DLZ-RG layout.')
+param adlsResourceGroup string = resourceGroup().name
+
 @description('Optional: ADX (Azure Data Explorer) cluster name backing KQL Database outputs. Used only for documentation/output — ADX ingestor grants are a Kusto control-plane operation, not ARM RBAC (see comment below).')
 param adxClusterName string = ''
 
@@ -123,17 +126,17 @@ resource consoleAsaContributor 'Microsoft.Authorization/roleAssignments@2022-04-
 // Built-in role: ba92f5b4-2d11-453d-a403-e96b0029c9fe
 // =====================================================================
 
-resource adlsAccount 'Microsoft.Storage/storageAccounts@2023-01-01' existing = if (!empty(adlsAccountName)) {
-  name: adlsAccountName
-}
-
-resource asaBlobDataContributor 'Microsoft.Authorization/roleAssignments@2022-04-01' = if (!skipRoleGrants && !empty(adlsAccountName)) {
-  scope: adlsAccount
-  name: guid(adlsAccount.id, asaJob.id, 'ba92f5b4-2d11-453d-a403-e96b0029c9fe')
-  properties: {
+// Cross-RG (D7): the grant is deployed via a module scoped to the storage
+// account's RG (`adlsResourceGroup`), which may differ from this job's RG in the
+// split-DLZ topology. Defaults to this RG (legacy single-DLZ-RG layout).
+module asaStorageBlobRbac 'storage-blob-contributor-rbac.bicep' = if (!skipRoleGrants && !empty(adlsAccountName)) {
+  name: 'asa-storage-blob-rbac-${domainName}'
+  scope: resourceGroup(adlsResourceGroup)
+  params: {
+    storageAccountName: adlsAccountName
     principalId: asaJob.identity.principalId
-    principalType: 'ServicePrincipal'
-    roleDefinitionId: subscriptionResourceId('Microsoft.Authorization/roleDefinitions', 'ba92f5b4-2d11-453d-a403-e96b0029c9fe')
+    assignmentSeed: asaJob.id
+    skipRoleGrants: skipRoleGrants
   }
 }
 

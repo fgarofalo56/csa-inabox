@@ -695,11 +695,40 @@ param amlWorkspaceName string = ''
 @description('Resource group of the Azure ML workspace. Empty defaults to this admin RG.')
 param amlWorkspaceRg string = ''
 
+// =====================================================================
+// CSA Loom functional RG layout (D7 — audit-t165). The platform control plane
+// is split by function into dedicated RGs (no admin mega-RG). main.bicep
+// CREATES these RGs (with CAF names + compliance/function tags); this module
+// deploys each sub-module into its matching RG via `scope: resourceGroup(...)`.
+// The names follow a deterministic CAF convention computed from `location` so
+// they match main.bicep WITHOUT threading 6 extra params (this module is at the
+// 256-param ARM/Bicep ceiling). KEEP THIS CONVENTION IN SYNC with main.bicep's
+// rg* vars and scripts/csa-loom/bootstrap-dlz-rgs.sh.
+//   console       — this module's own RG (App / MCP / Copilot / identity / KV /
+//                   ACR / APIM / Front Door / App Gateway / Grafana / PBI)
+//   network       — hub VNet + private DNS zones + VPN gateway
+//   shared-data   — catalog control surfaces (Purview / UC / Atlas) + Cosmos
+//   governance    — shared admin-zone Purview Self-Hosted IR (SHIR)
+//   observability — LAW + App Insights + Sentinel/AI-defense + ADX cluster +
+//                   workspace-monitor KQL DB
+//   ai            — AI Search / AI Foundry / Agent Foundry / Content Safety /
+//                   Analysis Services / Azure Maps
+// =====================================================================
+var rgConsole       = resourceGroup().name
+var rgNetwork       = 'rg-csa-loom-network-${location}'
+var rgSharedData    = 'rg-csa-loom-shared-data-${location}'
+var rgGovernance    = 'rg-csa-loom-governance-${location}'
+var rgObservability = 'rg-csa-loom-observability-${location}'
+var rgAi            = 'rg-csa-loom-ai-${location}'
+
 // Effective "reuse-or-new" identities used for Console env wiring below.
-var byoAiSearchRg = !empty(existingAiSearchRg) ? existingAiSearchRg : resourceGroup().name
-var byoApimRg     = !empty(existingApimRg) ? existingApimRg : resourceGroup().name
-var byoAdxRg      = !empty(existingAdxClusterRg) ? existingAdxClusterRg : resourceGroup().name
-var byoFoundryRg  = !empty(existingFoundryRg) ? existingFoundryRg : resourceGroup().name
+// The "new" fallbacks point at the function RG where the matching module now
+// deploys (D7): AI Search / Foundry → rg-csa-loom-ai; ADX cluster →
+// rg-csa-loom-observability; APIM + container platform stay in the console RG.
+var byoAiSearchRg = !empty(existingAiSearchRg) ? existingAiSearchRg : rgAi
+var byoApimRg     = !empty(existingApimRg) ? existingApimRg : rgConsole
+var byoAdxRg      = !empty(existingAdxClusterRg) ? existingAdxClusterRg : rgObservability
+var byoFoundryRg  = !empty(existingFoundryRg) ? existingFoundryRg : rgAi
 // Cross-sub (…Sub) resolution — empty falls back to the deployment subscription.
 var byoAiSearchSub = !empty(byoExisting.?aiSearchSub ?? '') ? byoExisting.aiSearchSub : subscription().subscriptionId
 var byoApimSub     = !empty(byoExisting.?apimSub ?? '') ? byoExisting.apimSub : subscription().subscriptionId
@@ -1028,6 +1057,7 @@ param loomMlflowTrackingUri string = ''
 
 module monitoring 'monitoring.bicep' = {
   name: 'monitoring'
+  scope: resourceGroup(rgObservability) // D7: LAW + App Insights in the observability RG
   params: {
     location: location
     defenderForAIEnabled: defenderForAIEnabled
@@ -1045,6 +1075,7 @@ module monitoring 'monitoring.bicep' = {
 
 module network 'network.bicep' = {
   name: 'network'
+  scope: resourceGroup(rgNetwork) // D7: hub VNet + private DNS zones in the network RG
   params: {
     location: location
     hubVnetCidr: hubVnetCidr
@@ -1070,6 +1101,7 @@ var deployAas = loomSemanticBackend == 'analysis-services' && empty(loomAasServe
 
 module analysisServices 'analysis-services.bicep' = if (deployAas) {
   name: 'analysis-services'
+  scope: resourceGroup(rgAi) // D7: Analysis Services (semantic backend) in the AI RG
   params: {
     location: location
     consolePrincipalId: identity.outputs.uamiConsolePrincipalId
@@ -1261,6 +1293,7 @@ resource aiSearchDebugStorage 'Microsoft.Storage/storageAccounts@2024-01-01' = i
 
 module aiSearch 'ai-search.bicep' = if (aiSearchEnabled && empty(existingAiSearchService)) {
   name: 'ai-search'
+  scope: resourceGroup(rgAi) // D7: AI Search in the AI RG (debug storage referenced by id, cross-RG safe)
   params: {
     location: location
     privateEndpointSubnetId: network.outputs.privateEndpointsSubnetId
@@ -1315,6 +1348,7 @@ resource foundryHubStorage 'Microsoft.Storage/storageAccounts@2024-01-01' = if (
 
 module aiFoundry 'ai-foundry.bicep' = if (aiFoundryEnabled && empty(existingFoundryAccountName)) {
   name: 'ai-foundry'
+  scope: resourceGroup(rgAi) // D7: AI Foundry hub + AOAI account in the AI RG (hub storage/KV/ACR/AI by id)
   params: {
     location: location
     boundary: boundary
@@ -1347,6 +1381,7 @@ module aiFoundry 'ai-foundry.bicep' = if (aiFoundryEnabled && empty(existingFoun
 
 module contentSafety '../deploy-planner/cognitive-account.bicep' = if (contentSafetyEnabled) {
   name: 'content-safety'
+  scope: resourceGroup(rgAi) // D7: Content Safety account in the AI RG
   params: {
     location: location
     kind: 'ContentSafety'
@@ -1367,6 +1402,7 @@ module contentSafety '../deploy-planner/cognitive-account.bicep' = if (contentSa
 
 module aas 'analysis-services.bicep' = if (aasEnabled) {
   name: 'aas'
+  scope: resourceGroup(rgAi) // D7: Analysis Services server in the AI RG
   params: {
     location: location
     serverName: 'aasloom${uniqueString(resourceGroup().id)}'
@@ -1389,6 +1425,7 @@ module aas 'analysis-services.bicep' = if (aasEnabled) {
 
 module agentFoundry '../ai/foundry-project.bicep' = if (agentFoundryEnabled) {
   name: 'agent-foundry'
+  scope: resourceGroup(rgAi) // D7: Agent Foundry project in the AI RG
   params: {
     location: location
     // Sovereign / private-only boundaries keep the account off the public net.
@@ -1470,6 +1507,7 @@ module apim 'apim.bicep' = if (apimEnabled && empty(existingApimName)) {
 
 module adxCluster 'adx-cluster.bicep' = if (adxEnabled && empty(existingAdxClusterName)) {
   name: 'adx-cluster'
+  scope: resourceGroup(rgObservability) // D7: shared ADX cluster co-located with LAW + workspace-monitor
   params: {
     location: location
     skuName: adxSkuName
@@ -1500,6 +1538,7 @@ module adxCluster 'adx-cluster.bicep' = if (adxEnabled && empty(existingAdxClust
 // =====================================================================
 module aasServer 'aas-server.bicep' = if (aasEnabled && empty(existingAasServerName)) {
   name: 'aas-server'
+  scope: resourceGroup(rgAi) // D7: Analysis Services server (XMLA) in the AI RG
   params: {
     location: location
     skuName: aasSkuName
@@ -1565,6 +1604,7 @@ module azureConnectionsRbac 'azure-connections-rbac.bicep' = if (!skipRoleGrants
 // query-log-export target). Scoped to the admin RG where the LAW is deployed.
 module azureConnectionsLawRbac 'azure-connections-rbac.bicep' = if (!skipRoleGrants) {
   name: 'console-azure-connections-law-rbac'
+  scope: resourceGroup(rgObservability) // D7: resolves the LAW by name — must run in the observability RG
   params: {
     consolePrincipalId: identity.outputs.uamiConsolePrincipalId
     storageAccountName: ''
@@ -1594,6 +1634,7 @@ module orgVisualsRbac '../landing-zone/org-visuals-rbac.bicep' = if (!skipRoleGr
 // Console UAMI gets Admin (provisioner seeds tables); admin group gets Viewer.
 module workspaceMonitor 'workspace-monitor.bicep' = if (workspaceMonitorEnabled && adxEnabled && empty(existingAdxClusterName)) {
   name: 'workspace-monitor'
+  scope: resourceGroup(rgObservability) // D7: KQL DB is a child of the ADX cluster + reads the LAW (both in observability)
   params: {
     location: location
     adxClusterName: adxCluster!.outputs.clusterName
@@ -1612,6 +1653,7 @@ module workspaceMonitor 'workspace-monitor.bicep' = if (workspaceMonitorEnabled 
 
 module catalog 'catalog.bicep' = {
   name: 'catalog'
+  scope: resourceGroup(rgSharedData) // D7: catalog control surfaces (Purview/UC/Atlas) + Cosmos in shared-data
   params: {
     location: location
     boundary: boundary
@@ -1642,6 +1684,7 @@ module catalog 'catalog.bicep' = {
 
 module purviewShir 'purview-shir.bicep' = if (purviewShirEnabled && purviewEnabled && !empty(purviewIrAuthKey) && !empty(purviewShirAdminPassword)) {
   name: 'purview-shir'
+  scope: resourceGroup(rgGovernance) // D7: shared Purview SHIR VMSS in the governance RG
   params: {
     location: location
     domainName: 'default'
@@ -1670,6 +1713,7 @@ param azureMapsEnabled bool = true
 
 module azureMaps 'azure-maps.bicep' = if (azureMapsEnabled && (boundary == 'Commercial' || boundary == 'GCC')) {
   name: 'azure-maps'
+  scope: resourceGroup(rgAi) // D7: Azure Maps account in the AI RG (KV referenced by id)
   params: {
     location: location
     boundary: boundary
@@ -1698,6 +1742,7 @@ var effectiveMapsAccount = (azureMapsEnabled && (boundary == 'Commercial' || bou
 
 module aiDefense 'ai-defense.bicep' = {
   name: 'ai-defense'
+  scope: resourceGroup(rgObservability) // D7: Sentinel/AI-defense rules are children of the LAW
   params: {
     location: location
     defenderForAIEnabled: defenderForAIEnabled
@@ -1790,10 +1835,11 @@ module appDeployments 'app-deployments.bicep' = if (containerPlatform == 'contai
             // F15 Advanced networking — the workspace networking pane writes NSG
             // security rules (IP firewall + trusted instances) + private
             // endpoints (inbound protection + outbound rules) over ARM on the hub
-            // VNet's RG. LOOM_NETWORKING_RG aliases LOOM_ADMIN_RG (the hub VNet
-            // lives in the admin RG). The UAMI is granted Network Contributor on
-            // this RG by network.bicep. Azure-native — no Microsoft Fabric.
-            { name: 'LOOM_NETWORKING_RG', value: resourceGroup().name }
+            // VNet's RG. D7: the hub VNet now lives in the dedicated network RG
+            // (rg-csa-loom-network-<region>), so LOOM_NETWORKING_RG points there.
+            // The UAMI is granted Network Contributor on this RG by network.bicep.
+            // Azure-native — no Microsoft Fabric.
+            { name: 'LOOM_NETWORKING_RG', value: rgNetwork }
             { name: 'LOOM_HUB_VNET_NAME', value: network.outputs.hubVnetName }
             { name: 'LOOM_PE_SUBNET_ID', value: network.outputs.privateEndpointsSubnetId }
             { name: 'LOOM_NSG_NAME', value: network.outputs.nsgPrivateEndpointsName }
@@ -2041,7 +2087,7 @@ module appDeployments 'app-deployments.bicep' = if (containerPlatform == 'contai
             // to THIS admin RG — the same RG where monitoring.bicep grants the
             // Console UAMI "Monitoring Contributor" (749f88ad…). Override to land
             // alerts elsewhere AND grant the role on that RG.
-            { name: 'LOOM_ALERT_RG', value: !empty(loomAlertRg) ? loomAlertRg : resourceGroup().name }
+            { name: 'LOOM_ALERT_RG', value: !empty(loomAlertRg) ? loomAlertRg : rgObservability }
             // Region stamped into the scheduledQueryRule + actionGroup ARM bodies.
             // Defaults to the deployment location so Gov (usgov*) deployments do
             // NOT fall back to the Commercial 'eastus' default in monitor-client.ts.
@@ -2161,7 +2207,7 @@ module appDeployments 'app-deployments.bicep' = if (containerPlatform == 'contai
             // the cluster URI when this is unset.
             { name: 'LOOM_KUSTO_DM_URI',       value: !empty(existingAdxClusterName) ? 'https://ingest-${existingAdxClusterName}.${location}.${kustoSuffix}' : (adxEnabled ? adxCluster!.outputs.clusterDataIngestionUri : '') }
             { name: 'LOOM_KUSTO_CLUSTER_NAME', value: !empty(existingAdxClusterName) ? existingAdxClusterName : (adxEnabled ? adxCluster!.outputs.clusterName : '') }
-            { name: 'LOOM_KUSTO_RG',           value: !empty(existingAdxClusterName) ? byoAdxRg : (adxEnabled ? resourceGroup().name : '') }
+            { name: 'LOOM_KUSTO_RG',           value: !empty(existingAdxClusterName) ? byoAdxRg : (adxEnabled ? rgObservability : '') }
             { name: 'LOOM_KUSTO_SUB',          value: !empty(existingAdxClusterName) ? byoAdxSub : ((adxEnabled) ? subscription().subscriptionId : '') }
             { name: 'LOOM_KUSTO_LOCATION',     value: (!empty(existingAdxClusterName) || adxEnabled) ? location : '' }
             // Per-DLZ ADX database is named loomdb-<domain>; the single-sub DLZ
@@ -3240,6 +3286,7 @@ module sccLabels 'scc-labels-function.bicep' = if (loomMipAdminEnabled) {
 // =====================================================================
 module vpnGateway 'vpn-gateway.bicep' = if (vpnGatewayEnabled) {
   name: 'vpn-gateway'
+  scope: resourceGroup(rgNetwork) // D7: VPN gateway sits in the network RG with the hub VNet
   params: {
     location: location
     gatewaySubnetId: network.outputs.gatewaySubnetId

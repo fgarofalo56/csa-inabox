@@ -36,14 +36,21 @@ fi
 for i in "${!SUBS[@]}"; do
   SUB="${SUBS[$i]}"
   DOMAIN="${DOMAINS[$i]}"
-  RG="rg-csa-loom-dlz-${DOMAIN}-${LOCATION}"
-  echo "📦 Bootstrapping RG ${RG} in sub ${SUB}..."
   az account set --subscription "${SUB}"
-  az group create \
-    --name "${RG}" \
-    --location "${LOCATION}" \
-    --tags "csa-loom-tier=dlz" "csa-loom-domain=${DOMAIN}" \
-    --only-show-errors
+  # D7 (audit-t165): no DLZ mega-RG — each domain is split into four functional
+  # tier RGs. landing-zone/main.bicep deploys cross-RG into these from its -core
+  # scope, so all four must exist before the deployment runs. KEEP THE TIER LIST
+  # + NAMING CONVENTION IN SYNC with main.bicep (dlz*RgName vars) and
+  # modules/landing-zone/main.bicep (dlz*Rg vars).
+  for TIER in core compute storage streaming; do
+    RG="rg-csa-loom-dlz-${DOMAIN}-${TIER}-${LOCATION}"
+    echo "📦 Bootstrapping RG ${RG} in sub ${SUB}..."
+    az group create \
+      --name "${RG}" \
+      --location "${LOCATION}" \
+      --tags "csa-loom-tier=dlz" "csa-loom-domain=${DOMAIN}" "csa-loom-function=dlz-${TIER}" \
+      --only-show-errors
+  done
 done
 
-echo "✅ All ${#SUBS[@]} DLZ resource groups bootstrapped"
+echo "✅ All $(( ${#SUBS[@]} * 4 )) DLZ resource groups bootstrapped (${#SUBS[@]} domains × 4 tiers)"
