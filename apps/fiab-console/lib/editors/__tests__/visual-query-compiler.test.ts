@@ -178,6 +178,39 @@ describe('compileGraph', () => {
     expect(sql).toContain('SELECT `city`, `amount` FROM q1_s1');
   });
 
+  it('compiles source → sort to an ORDER BY (multi-key, dialect-aware)', () => {
+    const g: VqGraph = {
+      nodes: [
+        source('s1', 'dbo', 'fact_sale'),
+        {
+          id: 'o1',
+          kind: 'sort',
+          inputs: ['s1'],
+          sortKeys: [
+            { field: 'sale_date', dir: 'DESC' },
+            { field: 'amount', dir: 'ASC' },
+          ],
+        },
+      ],
+    };
+    const tsql = compileGraph(g, 'tsql');
+    expect(tsql).toContain('ORDER BY [sale_date] DESC, [amount] ASC');
+    const spark = compileGraph(g, 'sparksql');
+    expect(spark).toContain('ORDER BY `sale_date` DESC, `amount` ASC');
+  });
+
+  it('sort with no keys is a pass-through SELECT * (no dangling ORDER BY)', () => {
+    const g: VqGraph = {
+      nodes: [
+        source('s1', 'dbo', 'fact_sale'),
+        { id: 'o1', kind: 'sort', inputs: ['s1'], sortKeys: [] },
+      ],
+    };
+    const sql = compileGraph(g, 'tsql');
+    expect(sql).not.toContain('ORDER BY');
+    expect(sql).toMatch(/SELECT \* FROM q2_o1\s*$/m);
+  });
+
   it('prunes dead branches not feeding the output', () => {
     const g: VqGraph = {
       nodes: [

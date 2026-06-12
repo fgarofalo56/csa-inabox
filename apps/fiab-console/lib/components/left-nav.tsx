@@ -24,6 +24,7 @@ import {
   DataUsage24Regular,
   BeakerEdit24Regular,
   Send24Regular,
+  Flow24Regular,
   Alert24Regular,
 } from '@fluentui/react-icons';
 import { CopilotIcon } from './icons/copilot-icon';
@@ -47,6 +48,7 @@ const navItems = [
   { href: '/rti-hub', icon: DataUsage24Regular, label: 'RTI catalog' },
   { href: '/data-agent', icon: Bot24Regular, label: 'Data agents' },
   { href: '/experience/data-science/home', icon: BeakerEdit24Regular, label: 'Data Science' },
+  { href: '/experience/warp/home', icon: Flow24Regular, label: 'Warp' },
   { href: '/copilot', icon: CopilotIcon, label: 'Copilot' },
   { href: '/workload-hub', icon: PuzzlePieceRegular, label: 'Workload hub' },
   { href: '/connections', icon: PlugConnected24Regular, label: 'Connections' },
