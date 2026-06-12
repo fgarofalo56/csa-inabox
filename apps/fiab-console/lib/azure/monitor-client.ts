@@ -54,6 +54,15 @@ const RESOURCE_GRAPH_API = '2022-10-01';
 const INVENTORY_TTL_MS = Number(process.env.LOOM_MONITOR_INVENTORY_TTL_MS) || 60_000;
 const HEALTH_TTL_MS = Number(process.env.LOOM_MONITOR_HEALTH_TTL_MS) || 45_000;
 const ACTIVITY_TTL_MS = Number(process.env.LOOM_MONITOR_ACTIVITY_TTL_MS) || 45_000;
+// The remaining tab-gated read paths (fired on first tab activation, not on the
+// Overview critical first-paint path). These are heavy ARM crawls — the Activity
+// Log paginates across every Loom RG, Diagnostics issues ONE diagnosticSettings
+// GET per resource in the estate (N round-trips), and Alerts lists the whole
+// subscription — so memoizing them keeps a tab revisit / Refresh inside the
+// window off Azure. Same `cached()` mechanism + env-override pattern as above.
+const ACTIVITY_LOG_TTL_MS = Number(process.env.LOOM_MONITOR_ACTIVITY_LOG_TTL_MS) || 45_000;
+const ALERTS_TTL_MS = Number(process.env.LOOM_MONITOR_ALERTS_TTL_MS) || 45_000;
+const DIAG_TTL_MS = Number(process.env.LOOM_MONITOR_DIAG_TTL_MS) || 60_000;
 
 const uamiClientId = process.env.LOOM_UAMI_CLIENT_ID || process.env.AZURE_CLIENT_ID;
 const credential = uamiClientId
@@ -860,6 +869,21 @@ export async function listActivityLog(opts?: { days?: number; maxPerRg?: number 
   const cfg = readMonitorConfig();
   const days = Math.min(90, Math.max(1, opts?.days ?? 7));
   const maxPerRg = Math.min(1000, Math.max(1, opts?.maxPerRg ?? 200));
+  // TTL-memoized (keyed by sub + RGs + window/limit): the Activity-log tab
+  // paginates the management eventtypes across every Loom RG, so a tab revisit /
+  // Refresh inside the window is served from memory instead of re-crawling ARM.
+  return cached(
+    `activitylog:${cfg.subscriptionId}:${cfg.resourceGroups.join(',')}:${days}:${maxPerRg}`,
+    ACTIVITY_LOG_TTL_MS,
+    () => _listActivityLog(cfg, days, maxPerRg),
+  );
+}
+
+async function _listActivityLog(
+  cfg: MonitorConfig,
+  days: number,
+  maxPerRg: number,
+): Promise<ActivityLogEvent[]> {
   const startTime = new Date(Date.now() - days * 86400_000).toISOString();
   const endTime = new Date().toISOString();
   const select = [
@@ -922,6 +946,17 @@ export interface AlertRule {
 /** List metric alert rules in the subscription (Loom RGs included). */
 export async function listAlertRules(): Promise<AlertRule[]> {
   const cfg = readMonitorConfig();
+  // TTL-memoized: the Alerts tab lists the whole subscription's metricAlerts on
+  // first activation; alert-rule definitions change rarely, so serve a revisit /
+  // Refresh inside the window from memory. CRUD paths call clearMonitorCache().
+  return cached(
+    `alerts:${cfg.subscriptionId}:${cfg.resourceGroups.join(',')}`,
+    ALERTS_TTL_MS,
+    () => _listAlertRules(cfg),
+  );
+}
+
+async function _listAlertRules(cfg: MonitorConfig): Promise<AlertRule[]> {
   const j = await armGet(
     `/subscriptions/${cfg.subscriptionId}/providers/Microsoft.Insights/metricAlerts?api-version=${METRIC_ALERTS_API}`,
   );
@@ -1244,6 +1279,15 @@ function sameLaw(workspaceId: string | undefined, loomLaw: string): boolean {
 export async function getDiagnosticsCoverage(): Promise<DiagCoverage[]> {
   const loomLaw = logAnalyticsResourceId();
   if (!loomLaw) throw new MonitorNotConfiguredError(['LOOM_LOG_ANALYTICS_RESOURCE_ID']);
+  // TTL-memoized: this is the heaviest tab read — ONE diagnosticSettings GET per
+  // resource in the whole estate (N ARM round-trips). Coverage shifts only when
+  // a diag setting is enabled/disabled (enableDiagnostics() clears the cache), so
+  // a Diagnostics-tab revisit / Refresh inside the window is served from memory.
+  // Keyed by the LAW resource id (its scope determines the coverage answer).
+  return cached(`diag:${loomLaw}`, DIAG_TTL_MS, () => _getDiagnosticsCoverage(loomLaw));
+}
+
+async function _getDiagnosticsCoverage(loomLaw: string): Promise<DiagCoverage[]> {
   const resources = await listResources();
 
   const probes = resources.map(async (r): Promise<DiagCoverage> => {
@@ -1294,6 +1338,9 @@ export async function enableDiagnostics(resourceId: string): Promise<{ settingNa
   for (const a of attempts) {
     try {
       await armPut(path, { properties: a.props });
+      // Coverage just changed for this resource — drop the memoized snapshot so
+      // the Diagnostics tab reflects the new setting on its next read.
+      clearMonitorCache();
       return { settingName: DIAG_SETTING_NAME, mode: a.mode };
     } catch (e) { lastErr = e; }
   }
