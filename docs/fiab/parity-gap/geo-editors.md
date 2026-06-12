@@ -19,6 +19,24 @@
 >
 > Both editors move **D → C**. Remaining gaps (Monaco query overlay, result grid,
 > bbox display) are unchanged.
+>
+> **Update 2026-06-11 (audit-t10, follow-up):** Two of those remaining MAJOR gaps
+> are now closed, moving both editors **C → B**:
+> - **geo-dataset — geometry now RENDERS on a map.** The Inspect probe rows are
+>   parsed into a GeoJSON FeatureCollection (`geoFeaturesFromInspectRows`: WKT
+>   `POINT`/`LINESTRING`/`POLYGON` + Multi\* via `parseWktGeometry`, GeoJSON literal
+>   cells, or `lon`/`lat` column fallback) and drawn on the shared `GeoJsonMap`
+>   SVG renderer. WKB hex blobs are honestly skipped (still badged "WKB" in the
+>   schema panel) with a MessageBar explaining how to render them. The
+>   **bounding-box side-rail** (`bboxLabel` + `computeGeoBbox`, with the SRID) was
+>   added — closing the "Bounding box display" MAJOR row.
+> - **geo-pipeline — enrichment run-status grid.** After Trigger run, a grid shows
+>   each flag (`enrichH3`/`reverseGeocode`/`bufferMeters`), its value, and whether
+>   it `passed to ADF` or was `not declared` by the target pipeline, plus the
+>   `createRun` runId — closing the "Enrichment result preview" MAJOR row (was
+>   runId-receipt-only).
+>
+> All three new helpers are pure + unit-tested in `__tests__/family-utils.test.ts`.
 
 > Editors: `geo-map` / `geo-dataset` / `geo-query` / `geo-pipeline` / `map` (separate)
 > Sources:
@@ -59,12 +77,14 @@ So the two editors with similar names diverge: `geo-map` is config-only, `map` a
 | **Inspector** ("probe first row via OPENROWSET") | Run preview | ✅ Inspect button + real OPENROWSET probe → schema panel (column names + geometry-encoding badge) | **resolved** (was BLOCKER) |
 | Save | Top button | ✅ wired (GeoSaveBar + ribbon Save + Ctrl+S → PATCH cosmos-items) | **resolved** |
 | Geometry CRS picker | Combo (4326 / 3857 / others) | ✅ SRID/EPSG `<select>` (4326 / 3857 / 2263 / custom) | **resolved** (was MAJOR) |
-| Bounding box display | Side rail | absent | MAJOR |
-| Sample row preview | Grid | ✅ first-row `<pre>` + schema panel | partial |
+| Bounding box display | Side rail | ✅ side-rail bbox (`bboxLabel` + `computeGeoBbox`, with SRID) | **resolved 2026-06-11** (was MAJOR) |
+| Geometry map render | Map preview | ✅ inspected rows → GeoJSON (WKT/GeoJSON/lon-lat) on shared `GeoJsonMap` SVG | **resolved 2026-06-11** |
+| Sample row preview | Grid | ✅ first-row `<pre>` + schema panel + geometry map | present |
 
-**Grade**: **C** — inspector wired to real Synapse Serverless OPENROWSET with a
-geometry-encoding schema panel; SRID picker added; Save round-trips to Cosmos.
-Remaining: bbox side-rail + a result grid for B/A.
+**Grade**: **B** — inspector wired to real Synapse Serverless OPENROWSET with a
+geometry-encoding schema panel; SRID picker; Save round-trips to Cosmos; the
+inspected geometry now renders on the shared SVG map with a bbox side-rail
+(WKB blobs honestly skipped). Remaining for A: typed result grid + WKB decode.
 
 ## 3. `geo-query`
 
@@ -92,12 +112,14 @@ Remaining: bbox side-rail + a result grid for B/A.
 | Save / Trigger run buttons | Top | ✅ both wired (ribbon Save → PATCH; Trigger run → run route) | **resolved** (was BROKEN) |
 | Pipeline-run trigger | Wired to ADF | ✅ POST `/api/items/geo-pipeline/[id]/run` → real ADF `createRun` with enrichH3/reverseGeocode/bufferMeters as pipeline parameters | **resolved** (was D-present) |
 | Reverse-geocode (Azure Maps) gate | n/a | ✅ checkbox disabled + honest MessageBar when `NEXT_PUBLIC_LOOM_AZURE_MAPS_KEY` unset (GCC-High / IL5) | present |
-| Enrichment result preview | Grid | absent (runId receipt only) | MAJOR |
+| Enrichment result preview | Grid | ✅ run-status grid: per-flag value + `passed to ADF` / `not declared` + runId | **resolved 2026-06-11** (was MAJOR) |
 | Cost estimator (Azure Maps reverse-geocode rate) | Tile | absent | MINOR |
 
-**Grade**: **C** — flags map to real ADF pipeline parameters on a real
-createRun; Save + Trigger both wired; honest Azure-Maps gate. Remaining: a
-run-status / enrichment-result grid for B/A.
+**Grade**: **B** — flags map to real ADF pipeline parameters on a real
+createRun; Save + Trigger both wired; honest Azure-Maps gate; a run-status grid
+shows which flags actually mapped to the pipeline's declared parameters plus the
+runId. Remaining for A: live run-status polling (Succeeded/Failed) via the ADF
+monitoring REST.
 
 ## 5. `map` (phase4-editors)
 
@@ -121,7 +143,7 @@ This is the one that actually renders.
 | Editor | Grade | Reason |
 |---|---|---|
 | geo-map | **D** | 3 inputs, no map canvas, dead Save/Preview ribbon buttons, MessageBar-only honesty *(note: later waves added GeoJsonMap render + SaveBar — re-audit)* |
-| geo-dataset | **C** | Inspector wired to real Synapse Serverless OPENROWSET + geometry-encoding schema panel; SRID picker; Save round-trips to Cosmos *(updated 2026-06-10)* |
+| geo-dataset | **B** | Inspector renders geometry on the shared SVG map (WKT/GeoJSON/lon-lat) + bbox side-rail; real OPENROWSET schema panel; SRID picker; Cosmos round-trip *(updated 2026-06-11)* |
 | geo-query | **D** | `<textarea>` not Monaco (BLOCKER), JSON dump output, no map overlay *(note: later waves added Monaco + result map — re-audit)* |
-| geo-pipeline | **C** | Enrichment flags map to real ADF createRun pipeline parameters; Save + Trigger wired; honest Azure-Maps gate *(updated 2026-06-10)* |
+| geo-pipeline | **B** | Enrichment flags map to real ADF createRun pipeline parameters; run-status grid (passed/not-declared + runId); Save + Trigger wired; honest Azure-Maps gate *(updated 2026-06-11)* |
 | map | **C** | Static tile preview wired (real REST), Cosmos persist works, but `<textarea>` for GeoJSON, no vector overlay |
