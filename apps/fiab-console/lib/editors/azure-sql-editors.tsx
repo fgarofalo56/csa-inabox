@@ -244,6 +244,13 @@ export function AzureSqlServerEditor({ item, id }: { item: FabricItemType; id: s
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
 
+  // Server → database → schema/table browser sub-panel. Selecting a database
+  // node mounts the live `SqlDbTree` object navigator (real sys.* over TDS),
+  // opening a separate connection to that database (Azure SQL DB has no
+  // cross-database query, so each db is browsed on its own connection).
+  const [selectedDb, setSelectedDb] = useState<string | null>(null);
+  const [browserRefreshKey, setBrowserRefreshKey] = useState(0);
+
   // Firewall dialog
   const [fwOpen, setFwOpen] = useState(false);
   const [fwRules, setFwRules] = useState<FirewallRule[]>([]);
@@ -362,6 +369,7 @@ export function AzureSqlServerEditor({ item, id }: { item: FabricItemType; id: s
   const pickServer = useCallback(async (sv: ServerInfo) => {
     setSelected(sv);
     setDatabases([]);
+    setSelectedDb(null);
     try {
       const r = await fetch(`/api/items/azure-sql-server/${id}/databases?server=${encodeURIComponent(sv.name)}`);
       const j = await r.json();
@@ -392,14 +400,84 @@ export function AzureSqlServerEditor({ item, id }: { item: FabricItemType; id: s
               <TreeItemLayout iconBefore={<Server20Regular />}>Servers ({servers.length})</TreeItemLayout>
               <Tree>
                 {loading && <TreeItem itemType="leaf" value="loading"><TreeItemLayout>Loading…</TreeItemLayout></TreeItem>}
-                {servers.map((sv) => (
-                  <TreeItem key={sv.id} itemType="leaf" value={sv.id} onClick={() => pickServer(sv)}>
-                    <TreeItemLayout iconBefore={<Server20Regular />}>{sv.name}</TreeItemLayout>
-                  </TreeItem>
-                ))}
+                {servers.map((sv) => {
+                  const isSelected = selected?.id === sv.id;
+                  return (
+                    <TreeItem key={sv.id} itemType="branch" value={sv.id} open={isSelected ? true : undefined}>
+                      <TreeItemLayout
+                        iconBefore={<Server20Regular />}
+                        onClick={() => pickServer(sv)}
+                      >
+                        {sv.name}
+                      </TreeItemLayout>
+                      <Tree>
+                        {isSelected && databases.length === 0 && (
+                          <TreeItem itemType="leaf" value={`${sv.id}::nodb`}>
+                            <TreeItemLayout><Caption1>No databases (or not loaded yet)</Caption1></TreeItemLayout>
+                          </TreeItem>
+                        )}
+                        {isSelected && databases.map((d) => (
+                          <TreeItem
+                            key={`${sv.id}::${d.name}`}
+                            itemType="leaf"
+                            value={`${sv.id}::${d.name}`}
+                            onClick={() => { setSelectedDb(d.name); setBrowserRefreshKey((k) => k + 1); }}
+                          >
+                            <TreeItemLayout iconBefore={<Database20Regular />}>{d.name}</TreeItemLayout>
+                          </TreeItem>
+                        ))}
+                        {!isSelected && (
+                          <TreeItem itemType="leaf" value={`${sv.id}::hint`}>
+                            <TreeItemLayout><Caption1>Select to list databases</Caption1></TreeItemLayout>
+                          </TreeItem>
+                        )}
+                      </Tree>
+                    </TreeItem>
+                  );
+                })}
               </Tree>
             </TreeItem>
           </Tree>
+          {/* Server → database → schema/table browser sub-panel. Mounts the live
+              SqlDbTree object navigator against the selected database's FQDN,
+              opening a dedicated TDS connection (Azure SQL DB has no cross-db
+              query). The navigator surfaces the real connection/auth error
+              honestly (per no-vaporware.md) if the console UAMI is not the
+              server's Microsoft Entra admin. */}
+          {selected && selectedDb && (
+            <>
+              <div className={s.schemaBrowserHeader}>
+                <Caption1 className={s.schemaBrowserTitle}>{selected.name} / {selectedDb}</Caption1>
+                <Tooltip content="Reload objects from sys.* catalog" relationship="label">
+                  <Button
+                    size="small"
+                    appearance="subtle"
+                    icon={<ArrowSync20Regular />}
+                    onClick={() => setBrowserRefreshKey((k) => k + 1)}
+                    aria-label="Refresh schema browser"
+                  />
+                </Tooltip>
+                <Tooltip content="Close schema browser" relationship="label">
+                  <Button
+                    size="small"
+                    appearance="subtle"
+                    icon={<Dismiss20Regular />}
+                    onClick={() => setSelectedDb(null)}
+                    aria-label="Close schema browser"
+                  />
+                </Tooltip>
+              </div>
+              <div className={s.schemaBrowserBox}>
+                <SqlDbTree
+                  workspaceId=""
+                  itemId="new"
+                  server={selected.fqdn}
+                  database={selectedDb}
+                  refreshKey={browserRefreshKey}
+                />
+              </div>
+            </>
+          )}
         </div>
       }
       main={
@@ -453,7 +531,11 @@ export function AzureSqlServerEditor({ item, id }: { item: FabricItemType; id: s
                   </TableRow></TableHeader>
                   <TableBody>
                     {databases.map((d) => (
-                      <TableRow key={d.name}>
+                      <TableRow
+                        key={d.name}
+                        onClick={() => { setSelectedDb(d.name); setBrowserRefreshKey((k) => k + 1); }}
+                        style={{ cursor: 'pointer', background: d.name === selectedDb ? tokens.colorNeutralBackground1Selected : undefined }}
+                      >
                         <TableCell><strong>{d.name}</strong></TableCell>
                         <TableCell>{d.status || '—'}</TableCell>
                         <TableCell>{d.sku?.name || '—'}</TableCell>
@@ -462,6 +544,13 @@ export function AzureSqlServerEditor({ item, id }: { item: FabricItemType; id: s
                   </TableBody>
                 </Table>
               </div>
+              <Caption1 className={s.schemaHint}>
+                Select a database (here or in the left tree) to browse its schemas, tables, views,
+                stored procedures, and functions over live TDS (<code>sys.*</code>) — opened on a
+                dedicated connection to that database. The console UAMI must be the server's
+                Microsoft Entra admin (or have <code>db_datareader</code> + <code>VIEW DEFINITION</code>);
+                the navigator surfaces the real connection error otherwise.
+              </Caption1>
               <Caption1>
                 Use the <strong>Firewall</strong> and <strong>AAD admin</strong> ribbon buttons above to
                 manage <code>Microsoft.Sql/servers/firewallRules</code> and
