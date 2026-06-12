@@ -1,6 +1,6 @@
 export const meta = {
   name: 'loom-unleash-fast',
-  description: 'FAST CSA Loom wave builder. Parallel research (all tasks at once), then build the wave in ISOLATED git worktrees ~N at a time (no shared-tree collisions), tsc-only per task (NO per-task next build — the integration phase runs ONE batched next build), then per-task review + frontend Polish. ~3-4x faster than the serial loom-unleash. ALL agents pinned to model opus (session-model inheritance broke once: claude-fable-5[1m] is rejected by the subagent endpoint).',
+  description: 'FAST CSA Loom wave builder. Parallel research (all tasks at once), then build the wave in ISOLATED git worktrees ~N at a time (no shared-tree collisions), tsc-only per task (NO per-task next build — the integration phase runs ONE batched next build), then per-task review + frontend Polish. ~3-4x faster than the serial loom-unleash. ALL agents pinned to model fable (Claude Fable 5; the bare alias works — only the [1m] 1M-context variant was rejected by the subagent endpoint).',
   phases: [
     { title: 'Plan', detail: 'extract the wave/audit tasks' },
     { title: 'Research', detail: 'parallel: ground every task at once (read-only)' },
@@ -12,7 +12,7 @@ export const meta = {
 // USE: Workflow({ scriptPath:'...loom-unleash-fast.js', args:{ files:['docs/fiab/prp/AUDIT-2026-06-10.md','docs/fiab/prp/AUDIT-2026-06-10-deep.md'], auditWave:4, fanout:5, exclude:['audit-T34'] } })
 const REPO = '/e/Repos/GitHub/csa-inabox'
 const REPO_WIN = 'E:\\Repos\\GitHub\\csa-inabox'
-const COAUTHOR = 'Co-Authored-By: Claude Opus 4.8 <noreply@anthropic.com>'
+const COAUTHOR = 'Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>'
 const HB = `${REPO}/.claude/loom-autopilot.heartbeat`
 const auditWave = (args && args.auditWave) || 0
 const files = (args && Array.isArray(args.files) && args.files.length) ? args.files : ['docs/fiab/prp/AUDIT-2026-06-10.md', 'docs/fiab/prp/AUDIT-2026-06-10-deep.md']
@@ -50,7 +50,7 @@ const planText = await agent(
   `READ-ONLY. Read these CSA Loom files in ${REPO}: ${files.join(', ')}. Extract implementable tasks into a single JSON array. ` +
   (auditWave ? `Include ONLY rows/tasks assigned to Wave ${auditWave} (use the Wave column where present, else the "Suggested Build Waves" wave lists). ` : `Extract EVERY implementable task. `) +
   `Each: {"id":"<audit-Tn>","title":"...","goal":"...full intent + acceptance...","files":"likely files","verify":"how to prove it"}. For audit rows use the Goal column as goal + evidence/file hints as files. Output ONLY the JSON array.`,
-  { model: 'opus', agentType: 'Explore', phase: 'Plan', label: 'plan:extract' },
+  { model: 'fable', agentType: 'Explore', phase: 'Plan', label: 'plan:extract' },
 )
 let tasks = []
 try { tasks = JSON.parse(planText.slice(planText.indexOf('['), planText.lastIndexOf(']') + 1)) } catch (e) { log(`parse failed: ${e}`) }
@@ -63,7 +63,7 @@ log(`Wave ${auditWave || '?'}: ${tasks.length} tasks, fanout ${FANOUT}${onlyIds.
 if (!tasks.length) return { tasks: 0, shipped: [] }
 
 phase('Research')
-const plans = await parallel(tasks.map((t) => () => agent(researchPrompt(t), { model: 'opus', agentType: 'Explore', phase: 'Research', label: `research:${t.id}` })))
+const plans = await parallel(tasks.map((t) => () => agent(researchPrompt(t), { model: 'fable', agentType: 'Explore', phase: 'Research', label: `research:${t.id}` })))
 
 phase('Build')
 const shipped = []
@@ -71,11 +71,11 @@ const batches = chunk(tasks.map((t, i) => ({ t, plan: plans[i] })), FANOUT)
 for (let b = 0; b < batches.length; b++) {
   log(`Build batch ${b + 1}/${batches.length} (${batches[b].length} concurrent worktrees)`)
   const res = await parallel(batches[b].map(({ t, plan }) => async () => {
-    const build = await agent(buildPrompt(t, plan || '(research unavailable; decide)'), { model: 'opus', isolation: 'worktree', phase: 'Build', label: `build:${t.id}` })
+    const build = await agent(buildPrompt(t, plan || '(research unavailable; decide)'), { model: 'fable', isolation: 'worktree', phase: 'Build', label: `build:${t.id}` })
     const pr = (String(build).match(/PR\s*[=#:]?\s*(\d+)/i) || [])[1] || ''
     if (!pr) return { id: t.id, ok: false, note: String(build).slice(0, 160) }
-    const review = await agent(reviewPrompt(t, pr), { model: 'opus', phase: 'Polish', label: `review:${t.id}` })
-    const polish = await agent(polishPrompt(t, pr, review), { model: 'opus', isolation: 'worktree', phase: 'Polish', label: `polish:${t.id}` })
+    const review = await agent(reviewPrompt(t, pr), { model: 'fable', phase: 'Polish', label: `review:${t.id}` })
+    const polish = await agent(polishPrompt(t, pr, review), { model: 'fable', isolation: 'worktree', phase: 'Polish', label: `polish:${t.id}` })
     return { id: t.id, ok: true, pr, reviewPass: /^\s*PASS/i.test(review), polished: !/NO-?UI/i.test(String(polish)) }
   }))
   shipped.push(...res.filter(Boolean))
