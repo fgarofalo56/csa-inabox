@@ -189,7 +189,7 @@ resource consoleLaReader 'Microsoft.Authorization/roleAssignments@2022-04-01' = 
   }
 }
 
-// Monitoring Contributor — 749f88d5-2a44-4a85-9b67-9c0e8e1fe5e3
+// Monitoring Contributor — 749f88d5-cbae-40b8-bcfc-e573ddc772fa
 // Lets the Console UAMI PUT/PATCH/DELETE Microsoft.Insights/scheduledQueryRules
 // + action groups in this RG (all map to .../scheduledQueryRules/write|delete).
 // This single grant backs BOTH Azure-native query-alert surfaces (per
@@ -205,9 +205,9 @@ resource consoleLaReader 'Microsoft.Authorization/roleAssignments@2022-04-01' = 
 // LOOM_ALERT_RG defaults to this admin RG (see main.bicep) so the grant scope
 // matches where alert rules are created. No Microsoft Fabric required.
 resource consoleMonitorContrib 'Microsoft.Authorization/roleAssignments@2022-04-01' = if (!empty(consolePrincipalId) && !skipRoleGrants) {
-  name: guid(resourceGroup().id, consolePrincipalId, '749f88d5-2a44-4a85-9b67-9c0e8e1fe5e3')
+  name: guid(resourceGroup().id, consolePrincipalId, '749f88d5-cbae-40b8-bcfc-e573ddc772fa')
   properties: {
-    roleDefinitionId: subscriptionResourceId('Microsoft.Authorization/roleDefinitions', '749f88d5-2a44-4a85-9b67-9c0e8e1fe5e3')
+    roleDefinitionId: subscriptionResourceId('Microsoft.Authorization/roleDefinitions', '749f88d5-cbae-40b8-bcfc-e573ddc772fa')
     principalId: consolePrincipalId
     principalType: 'ServicePrincipal'
   }
