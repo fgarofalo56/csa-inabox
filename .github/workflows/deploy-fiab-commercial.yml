@@ -143,6 +143,44 @@ jobs:
             echo "deploy_sub=${CSA_LOOM_SUBSCRIPTION_OVERRIDE}" >> "$GITHUB_OUTPUT"
           fi
 
+      - name: Register resource providers + features (deploy sub)
+        run: |
+          # Best-effort: register the resource providers + the BYO-public-IP
+          # feature the admin-plane/DLZ bicep needs, on the actual deploy sub.
+          # A fresh subscription often has these unregistered, which surfaces as
+          # SubscriptionNotRegisteredForFeature / preflight RP errors mid-deploy
+          # (found on the DMLZ-hub clean rebuild). Never fails the run — the
+          # provision step still surfaces anything genuinely missing.
+          set +e
+          DEPLOY_SUB="${{ steps.topology_guard.outputs.deploy_sub }}"
+          [ -n "$DEPLOY_SUB" ] && az account set --subscription "$DEPLOY_SUB"
+          echo "Registering providers on sub $(az account show --query id -o tsv)…"
+          for ns in Microsoft.Network Microsoft.Web Microsoft.Kusto Microsoft.Databricks \
+                    Microsoft.Synapse Microsoft.EventHub Microsoft.DocumentDB \
+                    Microsoft.CognitiveServices Microsoft.App Microsoft.Cdn \
+                    Microsoft.Storage Microsoft.KeyVault Microsoft.Insights \
+                    Microsoft.OperationalInsights Microsoft.Purview \
+                    Microsoft.MachineLearningServices Microsoft.ContainerService \
+                    Microsoft.Dashboard Microsoft.ManagedIdentity Microsoft.Sql; do
+            az provider register --namespace "$ns" >/dev/null 2>&1 &
+          done
+          wait
+          # AllowBringYourOwnPublicIpAddress is a feature flag — register it, wait
+          # for Registered, then re-register Microsoft.Network so it takes effect.
+          STATE=$(az feature show --namespace Microsoft.Network --name AllowBringYourOwnPublicIpAddress --query properties.state -o tsv 2>/dev/null)
+          if [ "$STATE" != "Registered" ]; then
+            az feature register --namespace Microsoft.Network --name AllowBringYourOwnPublicIpAddress >/dev/null 2>&1
+            for i in $(seq 1 30); do
+              STATE=$(az feature show --namespace Microsoft.Network --name AllowBringYourOwnPublicIpAddress --query properties.state -o tsv 2>/dev/null)
+              echo "[$i] AllowBringYourOwnPublicIpAddress: $STATE"
+              [ "$STATE" = "Registered" ] && break
+              sleep 20
+            done
+            az provider register --namespace Microsoft.Network >/dev/null 2>&1
+          fi
+          echo "Provider/feature registration complete (best-effort)."
+          exit 0
+
       - name: Bicep what-if (preview)
         id: whatif
         run: |
