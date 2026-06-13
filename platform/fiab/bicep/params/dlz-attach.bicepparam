@@ -1,118 +1,111 @@
-// CSA Loom — DLZ-ATTACH reference parameters  [audit-t156 / t157 / t162]
+// CSA Loom — FedCiv estate: bureau DATA LANDING ZONE → DLZ subscription
+// =====================================================================
+// audit-t162 — multi-sub live migration, phase 2 of 2.
 //
-// topology = 'dlz-attach' deploys ONLY a domain landing zone (Databricks /
-// Synapse / ADX / storage / Event Hubs / SHIR, per D5) into the target
-// subscription(s). The admin plane is SKIPPED — there is NO second console,
-// Front Door, or Cosmos. The new DLZ wires into the EXISTING tenant hub via the
-// `hubCoordinates` object below, which the operator/orchestrator fills from the
-// tenant (DMLZ) deployment's `topologyManifest.hub` output (t157 automates this).
+// Deploys ONE Data Landing Zone (spoke VNet + ADLS lakehouse + Synapse + ADX
+// DB + Cosmos + Event Hubs + ADF) into a spoke subscription, peered back to
+// the DMLZ admin-plane hub deployed by params/tenant-dmlz.bicepparam.
 //
-// Reference estate (OPERATOR DECISION D1): the first bureau DLZ lands in sub
-// 363ef5d1-0e77-4594-a530-f51af23dbf8c; a 2nd demo domain can land in
-// ca2b3e6b-f892-4c57-b9d8-b64e5799f9ea (Main sub). The hub lives in the DMLZ
-// sub e093f4fd-5047-4ee4-968d-a56942c665f3 (params/tenant-dmlz.bicepparam).
+// This SAME file deploys both the bureau DLZ AND the optional 2nd demo domain:
+// override domainName + --subscription per invocation.
+//   • bureau DLZ → DLZ sub  363ef5d1-0e77-4594-a530-f51af23dbf8c  domainName=bureau
+//   • 2nd demo   → Main sub ca2b3e6b-f892-4c57-b9d8-b64e5799f9ea  domainName=demo2
 //
-// Deploy AGAINST the DLZ target subscription:
-//   az deployment sub create --subscription <DLZ-sub> -l eastus2 \
-//     -f platform/fiab/bicep/main.bicep -p platform/fiab/bicep/params/dlz-attach.bicepparam
-// (the per-DLZ RG is pre-created by scripts/csa-loom/bootstrap-dlz-rgs.sh).
+// Deploy (RG-scoped — a sub-scoped admin-plane deploy CANNOT create RGs in
+// other subs, so pre-create the RG first):
+//   bash scripts/csa-loom/bootstrap-dlz-rgs.sh eastus2 \
+//     "363ef5d1-0e77-4594-a530-f51af23dbf8c,ca2b3e6b-f892-4c57-b9d8-b64e5799f9ea" \
+//     "bureau,demo2"
+//   az deployment group create \
+//     --subscription 363ef5d1-0e77-4594-a530-f51af23dbf8c \
+//     -g rg-csa-loom-dlz-bureau-eastus2 \
+//     -f platform/fiab/bicep/modules/landing-zone/main.bicep \
+//     -p platform/fiab/bicep/params/dlz-attach.bicepparam \
+//     -p domainName=bureau
+//
+// The four admin-plane handoffs (hub VNet, LAW, catalog endpoint, Console UAMI
+// principal) come from the tenant-dmlz deploy outputs — capture them with:
+//   az deployment sub show -n <tenant-deploy> \
+//     --subscription e093f4fd-5047-4ee4-968d-a56942c665f3 \
+//     --query properties.outputs
+// then export the LOOM_* env vars below. See docs/fiab/topology-migration.md.
 
-using '../main.bicep'
+using '../modules/landing-zone/main.bicep'
 
-// ── audit-t156 topology ──────────────────────────────────────────────────────
-param topology = 'dlz-attach'
-// Legacy field — dlz-attach reuses the multi-sub DLZ fan-out worker.
-param deploymentMode = 'multi-sub'
-
-// The domain landing zone(s) to stand up (parallel arrays the bicep [for] reads).
-param dlzSubscriptionIds = [
-  readEnvironmentVariable('LOOM_DLZ_SUB', '363ef5d1-0e77-4594-a530-f51af23dbf8c')
-]
-param dlzDomainNames = [
-  readEnvironmentVariable('LOOM_DLZ_DOMAIN', 'usda-mrp')
-]
-// Where the EXISTING hub lives (DMLZ sub) — cross-sub references resolve here.
-param adminPlaneSubId = readEnvironmentVariable('LOOM_DMLZ_SUB', 'e093f4fd-5047-4ee4-968d-a56942c665f3')
-
-// ── Hub coordinates from the tenant deployment's topologyManifest.hub output ──
-// REQUIRED in dlz-attach (the admin plane is skipped). The orchestrator reads
-// these from the Cosmos `tenant-topology` doc; for a manual run, export the env
-// vars below from the tenant deployment outputs:
-//   az deployment sub show -n <tenant-deploy> --query properties.outputs.topologyManifest.value.hub
-param hubCoordinates = {
-  adminPlaneRgName: readEnvironmentVariable('LOOM_HUB_ADMIN_RG', 'rg-csa-loom-admin-eastus2')
-  hubVnetId: readEnvironmentVariable('LOOM_HUB_VNET_ID', '')
-  lawId: readEnvironmentVariable('LOOM_HUB_LAW_ID', '')
-  appInsightsConnectionString: readEnvironmentVariable('LOOM_HUB_APPINSIGHTS_CONN', '')
-  privateDnsZoneIds: {
-    synapseSql: readEnvironmentVariable('LOOM_HUB_PDNS_SYNAPSE_SQL', '')
-    adf: readEnvironmentVariable('LOOM_HUB_PDNS_ADF', '')
-  }
-  adxClusterPrincipalId: readEnvironmentVariable('LOOM_HUB_ADX_PRINCIPAL_ID', '')
-  consolePrincipalId: readEnvironmentVariable('LOOM_HUB_CONSOLE_PRINCIPAL_ID', '')
-  consoleUamiName: readEnvironmentVariable('LOOM_HUB_CONSOLE_UAMI_NAME', '')
-  consoleUamiAppId: readEnvironmentVariable('LOOM_HUB_CONSOLE_UAMI_APPID', '')
-  consoleUamiResourceId: readEnvironmentVariable('LOOM_HUB_CONSOLE_UAMI_ID', '')
-  activatorPrincipalId: readEnvironmentVariable('LOOM_HUB_ACTIVATOR_PRINCIPAL_ID', '')
-  catalogEndpoint: readEnvironmentVariable('LOOM_HUB_CATALOG_ENDPOINT', '')
-  aiServicesAccountName: readEnvironmentVariable('LOOM_HUB_AOAI_ACCOUNT', '')
-  consoleUrl: readEnvironmentVariable('LOOM_HUB_CONSOLE_URL', '')
-}
-
-param environment = 'AzureCloud'
-param location = 'eastus2'
+// --- Identity / placement ---
+param location = readEnvironmentVariable('LOOM_LOCATION', 'eastus2')
 param boundary = 'Commercial'
+// domainName is supplied per-invocation (-p domainName=bureau | demo2); the env
+// default lets a single-domain run work without the -p override.
+param domainName = readEnvironmentVariable('LOOM_DLZ_DOMAIN', 'bureau')
 
-// Compute (must match the tenant deployment's boundary dispatch)
+// --- Orchestration contract (reserved-for-v3.x params on landing-zone; set to
+//     match the admin plane so the contract is explicit, per no-vaporware) ---
 param containerPlatform = 'containerApps'
-param functionsHostSku = 'FlexConsumption'
-param apimSku = 'PremiumV2'
-
-// Catalog binds to the shared DMLZ catalog (the DLZ does not stand up its own).
-param catalogPrimary = 'unity-catalog-managed'
-param agentOrchestrator = 'foundry-agent-service'
-param foundryPortalEnabled = true
-
-// Per-domain capacity sizing (chargeback unit — D4).
-param capacitySku = readEnvironmentVariable('LOOM_DLZ_CAPACITY_SKU', 'F8')
-
-// Databricks feature flags (per-domain DLZ compute)
+param capacitySku = 'F8'
+param powerBiSku = 'F64'
 param databricksUnityCatalogEnabled = true
 param databricksSqlWarehouseEnabled = true
-param databricksAccountId = ''
+param catalogEndpoint = readEnvironmentVariable('LOOM_CATALOG_ENDPOINT', '')
 
-// Security — shared governance stays in the DMLZ; the DLZ inherits tenant policy.
-param defenderForAIEnabled = false
-param contentSafetyEnabled = false
-param purviewEnabled = false
+// --- Admin-plane handoffs (from tenant-dmlz deploy outputs) ---
+// adminPlaneHubVnetId: the DMLZ hub VNet the spoke peers to. In the FedCiv
+// estate the connectivity hub may live in the ALZ sub
+// (a60a2fdd-c133-4845-9beb-31f470bf3ef5) — supply that hub's resource id here
+// and the spoke peers under the ALZ platform topology. network.bicep consumes
+// it as the spoke-peering remote VNet id.
+param adminPlaneHubVnetId = readEnvironmentVariable('LOOM_ADMIN_HUB_VNET_ID', '')
+param adminPlaneLawId = readEnvironmentVariable('LOOM_ADMIN_LAW_ID', '')
+param adminPlaneAdxClusterRgName = readEnvironmentVariable('LOOM_ADMIN_ADX_RG', 'rg-csa-loom-admin-eastus2')
+param adminPlaneAdxClusterName = readEnvironmentVariable('LOOM_ADMIN_ADX_CLUSTER', 'adx-csa-loom-shared')
+param adxClusterPrincipalId = readEnvironmentVariable('LOOM_ADMIN_ADX_PRINCIPAL_ID', '')
+
+// Console UAMI handoffs — stamps the Console identity as Synapse SQL admin +
+// Cosmos data-plane contributor so the BFF can query the spoke via
+// DefaultAzureCredential. Empty values skip the grants (re-provision safe).
+param consolePrincipalId = readEnvironmentVariable('LOOM_CONSOLE_PRINCIPAL_ID', '')
+param consoleUamiName = readEnvironmentVariable('LOOM_CONSOLE_UAMI_NAME', '')
+param consoleUamiAppId = readEnvironmentVariable('LOOM_CONSOLE_UAMI_APP_ID', '')
+param activatorPrincipalId = readEnvironmentVariable('LOOM_ACTIVATOR_PRINCIPAL_ID', '')
+
+// Private DNS zones (from admin-plane network outputs object). Each PE in the
+// spoke registers into the corresponding zone hosted in/under the DMLZ/ALZ hub.
+// Supplied as individual resource ids so the .bicepparam can rebuild the object
+// (readEnvironmentVariable returns strings). The Synapse-SQL + ADF zones are
+// passed separately because the landing-zone module takes them as scalars.
+param adminPlanePrivateDnsZoneIds = {
+  blob: readEnvironmentVariable('LOOM_DNS_ZONE_BLOB', '')
+  dfs: readEnvironmentVariable('LOOM_DNS_ZONE_DFS', '')
+  cosmos: readEnvironmentVariable('LOOM_DNS_ZONE_COSMOS', '')
+  cosmosGremlin: readEnvironmentVariable('LOOM_DNS_ZONE_COSMOS_GREMLIN', readEnvironmentVariable('LOOM_DNS_ZONE_COSMOS', ''))
+  servicebus: readEnvironmentVariable('LOOM_DNS_ZONE_SERVICEBUS', '')
+}
+param synapseSqlPrivateDnsZoneId = readEnvironmentVariable('LOOM_DNS_ZONE_SYNAPSE_SQL', '')
+param adfPrivateDnsZoneId = readEnvironmentVariable('LOOM_DNS_ZONE_ADF', '')
+
+// --- Spoke network ---
+// Each DLZ needs a unique, non-overlapping CIDR (the DMLZ hub is 10.0.0.0/16).
+// bureau → 10.100.0.0/16 (module default); 2nd demo → 10.101.0.0/16. Override
+// per-invocation with -p spokeVnetCidr= or LOOM_DLZ_SPOKE_CIDR.
+param spokeVnetCidr = readEnvironmentVariable('LOOM_DLZ_SPOKE_CIDR', '10.100.0.0/16')
+
+// --- Domain steward group ---
+param adminEntraGroupId = readEnvironmentVariable('LOOM_ADMIN_ENTRA_GROUP_ID', '')
+
+// --- Compliance / security ---
 param storageRequireCmk = false
-param keyVaultHsmIsolated = false
+param deployAas = bool(readEnvironmentVariable('LOOM_DLZ_DEPLOY_AAS', 'true'))
 
-// OpenAI (the DLZ Spark identities call the shared DMLZ AOAI — no new account)
-param openaiLocation = 'eastus2'
-param openaiEmbeddingsLocation = 'eastus2'
-param openaiChatModel = 'gpt-4o'
-param openaiEmbeddingsModel = 'text-embedding-3-large'
+// Re-provision safety: set true when re-running against an env that already has
+// the role grants, to avoid RoleAssignmentExists.
+param skipRoleGrants = bool(readEnvironmentVariable('LOOM_SKIP_ROLE_GRANTS', 'false'))
 
-// Power BI
-param powerBiSku = 'F64'
-
-param skipRoleGrants = readEnvironmentVariable('LOOM_SKIP_ROLE_GRANTS', 'false') == 'true'
-param hubVnetCidr = '10.1.0.0/16'
-
-// Identity (tenant FiaB Admins group governs the whole estate)
-param adminEntraGroupId = readEnvironmentVariable('FIAB_ADMIN_GROUP_ID', '<replace-with-FiaB-Admins-group-guid>')
-
-// Orchestrator deploys this attach under its identity (Contributor on the DLZ sub).
-param setupOrchestratorEnabled = readEnvironmentVariable('LOOM_SETUP_ORCHESTRATOR_ENABLED', 'false') == 'true'
-
-// Per-domain chargeback tags (D4) — loom-domain stamps every DLZ resource.
+// --- Tags ---
 param complianceTags = {
-  Environment: 'Commercial'
+  Environment: 'FedCiv'
   CSA_Loom: 'true'
-  Loom_Topology: 'dlz-attach'
-  'loom-domain': readEnvironmentVariable('LOOM_DLZ_DOMAIN', 'usda-mrp')
-  costCenter: readEnvironmentVariable('LOOM_DLZ_COST_CENTER', 'unset')
   FedRAMP_Level: 'High'
-  Data_Classification: 'Standard'
+  Data_Classification: 'CUI'
+  Loom_Tier: 'dlz'
+  Loom_Estate: 'fedciv'
 }
