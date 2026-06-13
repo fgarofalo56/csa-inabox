@@ -56,7 +56,7 @@ param synapseSqlPrivateDnsZoneId string = ''
 @description('Admin Plane spoke private DNS zone ID for privatelink.adf.azure.com (Commercial). Required for the ADF PE to register DNS.')
 param adfPrivateDnsZoneId string = ''
 
-@description('Admin Plane ADX cluster name (for ADX database creation). Default derives the same per-subscription unique name the admin-plane adx-cluster.bicep uses, so a single-sub / tenant DLZ (same subscription as the hub) attaches to the right cluster with no threading. Cross-sub callers (dlz-attach, multi-sub fan-out) MUST pass the hub''s real deployed cluster name explicitly — the per-sub default would resolve to the wrong cluster in a different subscription.')
+@description('Admin Plane ADX cluster name (for ADX database creation). Default derives the same per-subscription unique name the admin-plane adx-cluster.bicep uses, so a single-sub / tenant DLZ (same subscription as the hub) attaches to the right cluster with no threading. Cross-sub callers (dlz-attach, multi-sub fan-out) MUST pass the real deployed cluster name of the hub explicitly — the per-sub default would resolve to the wrong cluster in a different subscription.')
 param adminPlaneAdxClusterName string = 'adx-csa-loom-${take(uniqueString(subscription().id), 6)}'
 
 @description('Admin Plane ADX cluster RG')
