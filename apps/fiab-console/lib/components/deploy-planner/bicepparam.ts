@@ -57,7 +57,21 @@ export function planToBicepparam(sub: PlanSubscription): string {
   lines.push('');
   lines.push(`param boundary = '${boundary}'`);
   lines.push(`param location = '${region}'`);
+  // deploymentMode is a REQUIRED, no-default param on main.bicep
+  // (@allowed(['single-sub','multi-sub'])). Emit it so the exported file is
+  // actually deployable. Use the explicit choice when set, else derive it from
+  // the domain count — single-sub supports at most one DLZ, so any plan with >1
+  // domain must be multi-sub.
+  const mode = sub.deploymentMode || (domainNames.length > 1 ? 'multi-sub' : 'single-sub');
+  lines.push(`param deploymentMode = '${mode}'`);
   lines.push(`param dlzDomainNames = [${domainNames.map((n) => `'${n}'`).join(', ')}]`);
+  if (mode === 'multi-sub') {
+    // dlzSubscriptionIds holds the real Azure sub GUIDs (parallel to
+    // dlzDomainNames) — they are NOT known to the planner, so the operator
+    // fills them in before deploying. Emit a TODO rather than a fake value.
+    lines.push(`// TODO: supply one Azure subscription id per domain (parallel to dlzDomainNames):`);
+    lines.push(`// param dlzSubscriptionIds = [${domainNames.map(() => `'<sub-guid>'`).join(', ')}]`);
+  }
   lines.push('');
   for (const flag of uniqueFlags) {
     lines.push(`param ${flag} = ${onFlags[flag] ? 'true' : 'false'}`);

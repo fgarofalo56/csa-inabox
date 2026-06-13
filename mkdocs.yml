@@ -1402,6 +1402,7 @@ nav:
       # ------------------------------------------------------------
       - Architecture & Decisions:
           - Reference Architecture: fiab/architecture.md
+          - "Architecture Diagrams (topology, deploy flows, RBAC, data flow)": fiab/diagrams/README.md
           - Portal Architecture (where admins + users go): fiab/portal-architecture.md
           - Console Access Patterns: fiab/access-patterns.md
           - ADRs:
@@ -1900,6 +1901,7 @@ nav:
               - "06 — Mirroring from Cosmos DB to Lakehouse": fiab/tutorials/06-mirroring-cosmos.md
               - "07 — Marketplace data product publishing": fiab/tutorials/07-marketplace-data-product.md
               - "08 — Forward-migrate a Lakehouse to Fabric": fiab/tutorials/08-forward-migrate-to-fabric.md
+              - "09 — Tenant topology (DMLZ + N DLZ + one Console)": fiab/tutorials/09-tenant-topology.md
           - "Learn — core surfaces":
               - "Learning Hub — notebook import wizard": fiab/learn/csa_loom_learning_hub.md
               - "Lakehouse shortcuts": fiab/learn/lakehouse-shortcuts.md

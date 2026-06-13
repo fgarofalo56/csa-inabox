@@ -1,0 +1,26 @@
+%% CSA Loom — first-run deploy flow (initial provision of Admin Plane + first DLZ).
+%% Source of truth: platform/fiab/bicep/main.bicep — adminPlaneRg + module adminPlane,
+%% then singleDlzRg/singleDlz (single-sub) OR dlz[*] over dlzSubscriptionIds (multi-sub).
+sequenceDiagram
+    autonumber
+    actor Op as Operator (CIO / platform team)
+    participant Boot as azd up / Deploy-to-Azure button
+    participant Main as main.bicep (targetScope=subscription)
+    participant AP as module adminPlane → rg-csa-loom-admin-LOCATION
+    participant DLZ as module singleDlz / dlz[*]
+    participant RBAC as setupOrchestrator*Rbac
+
+    Op->>Boot: git clone + azd up  (or click the README button)
+    Boot->>Main: az deployment sub create -p <boundary>.bicepparam<br/>param deploymentMode = 'single-sub' | 'multi-sub'
+    Main->>AP: deploy Admin Plane (Hub VNet, Console, MCP, Copilot,<br/>shared catalog, shared ADX cluster)
+    AP-->>Main: outputs (hubVnetId, lawId, consolePrincipalId, adxClusterPrincipalId)
+    alt deploymentMode == 'single-sub'
+        Main->>DLZ: deploy 1 DLZ (domainName='default') into rg-csa-loom-dlz-single-LOCATION
+    else deploymentMode == 'multi-sub'
+        loop for each (subId, name) in dlzSubscriptionIds / dlzDomainNames
+            Main->>DLZ: deploy DLZ into subId / rg-csa-loom-dlz-<name>-LOCATION<br/>(spoke VNet peers to adminPlaneHubVnetId; ADX DB attaches to shared cluster)
+        end
+    end
+    Main->>RBAC: grant Console UAMI Contributor on hub sub (+ each spoke sub if setupOrchestratorEnabled)
+    Main-->>Boot: outputs (consoleUrl, mcpServerUrl, adminPlaneHubVnetId)
+    Boot-->>Op: "Your CSA Loom Admin Plane + first DLZ are deployed."

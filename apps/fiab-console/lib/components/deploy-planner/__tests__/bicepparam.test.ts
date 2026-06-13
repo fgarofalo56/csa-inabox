@@ -64,6 +64,39 @@ describe('planToBicepparam', () => {
   });
 });
 
+describe('planToBicepparam — deploymentMode (topology)', () => {
+  it('derives multi-sub from a >1-domain plan when mode is unset', () => {
+    const out = planToBicepparam({
+      id: 'sub-1', name: 'P', boundary: 'Commercial',
+      domains: [
+        { domainId: 'a', name: 'A', services: [] },
+        { domainId: 'b', name: 'B', services: [] },
+      ],
+    });
+    expect(out).toContain("param deploymentMode = 'multi-sub'");
+    // honest TODO for the operator-supplied sub GUIDs (never a fake value)
+    expect(out).toContain('param dlzSubscriptionIds');
+  });
+
+  it('derives single-sub from a one-domain plan when mode is unset', () => {
+    const out = planToBicepparam({
+      id: 'sub-1', name: 'P', boundary: 'Commercial',
+      domains: [{ domainId: 'a', name: 'A', services: [] }],
+    });
+    expect(out).toContain("param deploymentMode = 'single-sub'");
+    expect(out).not.toContain('dlzSubscriptionIds');
+  });
+
+  it('honours an explicit deploymentMode override', () => {
+    const out = planToBicepparam({
+      id: 'sub-1', name: 'P', boundary: 'Commercial',
+      deploymentMode: 'multi-sub',
+      domains: [{ domainId: 'a', name: 'A', services: [] }],
+    });
+    expect(out).toContain("param deploymentMode = 'multi-sub'");
+  });
+});
+
 describe('catalog coverage + honesty', () => {
   it('covers a broad set of Azure service types across all six categories', () => {
     expect(SERVICE_COUNT).toBeGreaterThanOrEqual(40);

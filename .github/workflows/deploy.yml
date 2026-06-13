@@ -1,6 +1,20 @@
 # ==============================================================================
 # CSA-in-a-Box: Infrastructure Deployment
 # Deploys to Azure across 4 subscriptions (Management, Connectivity, DMLZ, DLZ)
+#
+# RELATIONSHIP TO CSA LOOM (read this before assuming this is the Loom deploy):
+# This is the LOWER-LEVEL ESTATE pipeline (ESLZ Cloud-Scale Analytics). It VENDS
+# the foundation — management groups + the Management/Connectivity platform subs
+# + the raw DMLZ/DLZ subscription scaffolding (deploy/bicep/{landing-zone-alz,
+# DMLZ,DLZ}). It does NOT deploy the CSA Loom platform.
+#
+# The Loom platform (Admin Plane Console/MCP/Copilot + per-DLZ landing zones) is
+# deployed SEPARATELY by platform/fiab/bicep/main.bicep, which runs INTO the
+# subscriptions this pipeline vends (its multi-sub dlzSubscriptionIds are the DLZ
+# subs created here). Loom does NOT require this pipeline — azd / the
+# Deploy-to-Azure button can target any existing subs. The two compose for full
+# federal estates. Full explanation + diagram:
+#   docs/fiab/architecture.md#relationship-to-the-alz-estate-pipeline
 # ==============================================================================
 
 name: Deploy Infrastructure

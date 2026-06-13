@@ -125,6 +125,7 @@ function sanitize(subs: unknown): PlanSubscription[] {
     name: String(raw?.name || `Subscription ${i + 1}`).slice(0, 120),
     boundary: ['Commercial', 'GCC-High', 'GCC', 'IL5'].includes(raw?.boundary) ? raw.boundary : 'Commercial',
     region: raw?.region ? String(raw.region).slice(0, 40) : undefined,
+    deploymentMode: ['single-sub', 'multi-sub'].includes(raw?.deploymentMode) ? raw.deploymentMode : undefined,
     domains: Array.isArray(raw?.domains) ? raw.domains.slice(0, 100).map((d: any) => ({
       domainId: String(d?.domainId || '').slice(0, 80),
       name: String(d?.name || d?.domainId || '').slice(0, 120),

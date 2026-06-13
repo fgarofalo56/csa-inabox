@@ -225,9 +225,13 @@ const useStyles = makeStyles({
     padding: tokens.spacingVerticalM,
   },
   subEditor: {
+    // Top-align so a hinted field (e.g. Deployment mode) keeps its control on
+    // the same baseline as the un-hinted inputs — its hint extends downward
+    // instead of shoving the control up out of the row.
     display: 'flex', gap: tokens.spacingHorizontalM,
-    alignItems: 'flex-end', flexWrap: 'wrap',
+    alignItems: 'flex-start', flexWrap: 'wrap',
   },
+  subField: { minWidth: '220px' },
   svcConfig: {
     display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalS,
   },
@@ -730,10 +734,10 @@ function PlannerInner() {
       {/* selected-subscription inline editor */}
       {selectedSub && (
         <div className={`${s.card} ${s.subEditor}`}>
-          <Field label="Subscription name">
+          <Field className={s.subField} label="Subscription name">
             <Input value={selectedSub.name} onChange={(_, d) => patchSelectedSub({ name: d.value })} />
           </Field>
-          <Field label="Boundary">
+          <Field className={s.subField} label="Boundary">
             <Dropdown value={selectedSub.boundary || 'Commercial'} selectedOptions={[selectedSub.boundary || 'Commercial']}
               onOptionSelect={(_, d) => patchSelectedSub({ boundary: d.optionValue as PlanSubscription['boundary'] })}>
               <Option value="Commercial">Commercial</Option>
@@ -742,8 +746,27 @@ function PlannerInner() {
               <Option value="IL5">IL5</Option>
             </Dropdown>
           </Field>
-          <Field label="Region (optional)">
+          <Field className={s.subField} label="Region (optional)">
             <Input value={selectedSub.region || ''} placeholder="eastus2 / usgovvirginia" onChange={(_, d) => patchSelectedSub({ region: d.value })} />
+          </Field>
+          <Field
+            className={s.subField}
+            label="Deployment mode"
+            hint={
+              (selectedSub.deploymentMode || (selectedSub.domains.length > 1 ? 'multi-sub' : 'single-sub')) === 'single-sub'
+                ? 'Admin Plane + 1 DLZ in this subscription. Add a 2nd domain to use multi-sub.'
+                : 'Admin Plane here + one DLZ per domain across separate subs (fill dlzSubscriptionIds before deploy).'
+            }
+          >
+            <Dropdown
+              value={selectedSub.deploymentMode || (selectedSub.domains.length > 1 ? 'multi-sub' : 'single-sub')}
+              selectedOptions={[selectedSub.deploymentMode || (selectedSub.domains.length > 1 ? 'multi-sub' : 'single-sub')]}
+              onOptionSelect={(_, d) => patchSelectedSub({ deploymentMode: d.optionValue as PlanSubscription['deploymentMode'] })}
+              aria-label="Deployment mode"
+            >
+              <Option value="single-sub">single-sub (Admin Plane + 1 DLZ)</Option>
+              <Option value="multi-sub">multi-sub (one DLZ per domain)</Option>
+            </Dropdown>
           </Field>
         </div>
       )}

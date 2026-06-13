@@ -1,0 +1,45 @@
+%% CSA Loom — domain / RBAC model. Human Entra groups (one set, tenant-wide) map to
+%% per-engine roles; each PlanDomain becomes a DLZ resource group whose workspace
+%% items run as a per-workspace user-assigned managed identity (UAMI).
+%% Source of truth: docs/fiab/architecture.md "Identity flow" + landing-zone module.
+flowchart LR
+    classDef grp fill:#5C2D91,stroke:#fff,color:#fff,stroke-width:2px
+    classDef role fill:#107C10,stroke:#fff,color:#fff,stroke-width:2px
+    classDef rg fill:#D83B01,stroke:#fff,color:#fff,stroke-width:2px
+    classDef id fill:#0078D4,stroke:#fff,color:#fff,stroke-width:2px
+
+    subgraph Entra ["Microsoft Entra ID (single tenant) — Console-managed groups"]
+        direction TB
+        GAdmin["Loom Admin group<br/>(adminEntraGroupId)"]:::grp
+        GWs["Workspace member groups"]:::grp
+        GStew["Data Steward group"]:::grp
+    end
+
+    subgraph Roles ["Per-engine authorization (boundary-dispatched)"]
+        direction TB
+        UC["Unity Catalog roles (Commercial)"]:::role
+        Syn["Synapse SQL roles (Gov)"]:::role
+        Hive["Hive metastore grants (Gov interim)"]:::role
+        Blob["Storage Blob Data roles (container-scoped)"]:::role
+    end
+
+    subgraph Domain ["PlanDomain → DLZ"]
+        direction TB
+        RG["Resource group<br/>rg-csa-loom-dlz-DOMAIN-LOCATION"]:::rg
+        WS["Loom workspaces (data products)"]:::rg
+        UAMI["Workspace UAMI (per workspace)"]:::id
+    end
+
+    GAdmin -->|maps to| UC
+    GAdmin -->|maps to| Syn
+    GWs -->|maps to| UC
+    GWs -->|maps to| Hive
+    GStew -->|catalog curation| UC
+    GStew -->|catalog curation| Syn
+
+    RG --> WS
+    WS --> UAMI
+    UAMI -->|authenticates to OneLake / Synapse / Power BI| Blob
+    UC -.governs.-> WS
+    Syn -.governs.-> WS
+    Hive -.governs.-> WS

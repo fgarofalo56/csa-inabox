@@ -111,6 +111,16 @@ flowchart TB
     Cat -.scans.-> PowerBI1
 ```
 
+!!! tip "Diagram source files"
+    Every topology / deployment / data-flow diagram on this page has a
+    committed, diff-friendly Mermaid source under
+    [`docs/fiab/diagrams/`](diagrams/README.md) (plus a hand-drawn
+    `topology.excalidraw` hero). The same set is taught step-by-step in
+    [Tutorial 09 — Tenant topology](tutorials/09-tenant-topology.md). The
+    topology shape (one DMLZ hub + N DLZ spokes + one Console) is identical
+    across every cloud boundary — only the per-node service substitution
+    changes (see the [per-boundary dispatch matrix](#per-boundary-dispatch-matrix)).
+
 ## Tenancy model
 
 ### Subscription = Data Landing Zone
@@ -145,6 +155,88 @@ The Setup Wizard exposes two modes:
 - Spoke VNets in each DLZ peer to Admin Plane hub VNet
 - Single Entra tenant; identical Entra groups across subscriptions
 - DLZs added any time via Console "Add Data Landing Zone" action
+
+These two modes are the `deploymentMode` parameter on
+`platform/fiab/bicep/main.bicep` (`@allowed(['single-sub','multi-sub'])`):
+single-sub deploys `singleDlz` into `rg-csa-loom-dlz-single-<location>`;
+multi-sub fans `dlz[*]` out across `dlzSubscriptionIds` (one per
+`dlzDomainNames` entry). The in-app [Deployment planner](parity/deploy-planner.md)
+emits `deploymentMode` into the exported `.bicepparam` so the plan and the real
+`az deployment sub create` stay in sync.
+
+## Deployment flows
+
+There are two distinct flows over the same template. Both diagrams below have
+committed sources under [`docs/fiab/diagrams/`](diagrams/README.md).
+
+### First-run (initial provision)
+
+`azd up` or the Deploy-to-Azure button runs `main.bicep` once: it always
+deploys the Admin Plane (`module adminPlane` → `rg-csa-loom-admin-<location>`),
+then the first DLZ (`singleDlz` in single-sub, or the initial `dlz[*]` in
+multi-sub). The Admin Plane's shared catalog + shared ADX cluster come up here;
+each DLZ then attaches its own ADX database to that single cluster.
+
+```mermaid
+sequenceDiagram
+    autonumber
+    actor Op as Operator (CIO / platform team)
+    participant Boot as azd up / Deploy-to-Azure button
+    participant Main as main.bicep (targetScope=subscription)
+    participant AP as module adminPlane → rg-csa-loom-admin-LOCATION
+    participant DLZ as module singleDlz / dlz[*]
+    participant RBAC as setupOrchestrator*Rbac
+
+    Op->>Boot: git clone + azd up  (or click the README button)
+    Boot->>Main: az deployment sub create -p <boundary>.bicepparam<br/>param deploymentMode = 'single-sub' | 'multi-sub'
+    Main->>AP: deploy Admin Plane (Hub VNet, Console, MCP, Copilot,<br/>shared catalog, shared ADX cluster)
+    AP-->>Main: outputs (hubVnetId, lawId, consolePrincipalId, adxClusterPrincipalId)
+    alt deploymentMode == 'single-sub'
+        Main->>DLZ: deploy 1 DLZ (domainName='default') into rg-csa-loom-dlz-single-LOCATION
+    else deploymentMode == 'multi-sub'
+        loop for each (subId, name) in dlzSubscriptionIds / dlzDomainNames
+            Main->>DLZ: deploy DLZ into subId / rg-csa-loom-dlz-<name>-LOCATION<br/>(spoke peers to adminPlaneHubVnetId; ADX DB attaches to shared cluster)
+        end
+    end
+    Main->>RBAC: grant Console UAMI Contributor on hub sub (+ each spoke sub if setupOrchestratorEnabled)
+    Main-->>Boot: outputs (consoleUrl, mcpServerUrl, adminPlaneHubVnetId)
+    Boot-->>Op: "Your CSA Loom Admin Plane + first DLZ are deployed."
+```
+
+### DLZ-attach (add a domain to an existing Admin Plane)
+
+The Console's **"Add Data Landing Zone"** action (Setup Wizard →
+`DlzOnboardingRegistry`) re-invokes `main.bicep` with an expanded
+`dlzSubscriptionIds` / `dlzDomainNames`. The Admin Plane already exists, so this
+run only adds the new spoke: it peers the new spoke VNet to the existing
+`adminPlaneHubVnetId`, attaches the new ADX database to the shared cluster, and
+grants the spoke's RBAC via `setupOrchestratorSpokeRbac` (Console UAMI →
+Contributor on the new spoke subscription, gated on `setupOrchestratorEnabled`).
+
+```mermaid
+sequenceDiagram
+    autonumber
+    actor Admin as Loom admin
+    participant UI as Console "Add Data Landing Zone" (Setup Wizard)
+    participant Reg as DlzOnboardingRegistry (Cosmos)
+    participant Orch as Setup Orchestrator (Console UAMI)
+    participant Main as main.bicep (deploymentMode='multi-sub')
+    participant Hub as Existing Admin Plane (DMLZ)
+    participant Spoke as New DLZ spoke (rg-csa-loom-dlz-<name>-LOCATION)
+
+    Admin->>UI: Add Data Landing Zone (pick subscription + domain name)
+    UI->>Reg: register the new DLZ (domain → target subId)
+    Reg-->>Orch: expanded dlzSubscriptionIds[] + dlzDomainNames[]
+    Orch->>Main: re-run az deployment sub create (admin plane already present → no-op there)
+    Main->>Spoke: deploy the new DLZ module only (new RG / sub)
+    Main->>Hub: read adminPlane outputs (hubVnetId, lawId, shared ADX cluster)
+    Spoke->>Hub: peer new spoke VNet to adminPlaneHubVnetId
+    Spoke->>Hub: attach new ADX database to the shared cluster
+    Main->>Spoke: setupOrchestratorSpokeRbac → Console UAMI Contributor on the new spoke sub
+    Main-->>Orch: outputs (new DLZ RG, storage, Synapse)
+    Orch-->>UI: DLZ ready
+    UI-->>Admin: "Domain <name> added — its workspaces can now be created."
+```
 
 ## Per-boundary dispatch matrix
 
@@ -375,6 +467,32 @@ On-prem connectivity via ExpressRoute or VPN landing in hub.
 - ❌ Delete Key Vault (deny assignment)
 - ❌ Modify Workspace Outbound Access Protection rules without going
   through Setup Wizard's approval flow
+
+## Relationship to the ALZ estate pipeline
+
+CSA Loom has **two** Bicep deployment layers, and they are deliberately
+separate. Knowing which one you are looking at prevents a lot of confusion.
+
+| | Estate pipeline | Loom platform |
+|---|---|---|
+| Entry point | [`.github/workflows/deploy.yml`](https://github.com/fgarofalo56/csa-inabox/blob/main/.github/workflows/deploy.yml) | `platform/fiab/bicep/main.bicep` |
+| Templates | `deploy/bicep/{landing-zone-alz,DMLZ,DLZ}/main.bicep` | `modules/{admin-plane,landing-zone,shared}` |
+| What it provisions | The **foundation estate** (ESLZ Cloud-Scale Analytics): management groups, the Management + Connectivity platform subscriptions, and the raw DMLZ / DLZ subscription scaffolding | The **Loom platform** itself: Admin Plane (Console / MCP / Copilot / shared catalog) + one `landing-zone` per DLZ, deployed *into* those subscriptions |
+| Who runs it, how often | Platform / cloud team, rarely (subscription vending + governance) | Console / `azd`, repeatedly (every time a domain is added) |
+| Scope | `az deployment sub create` across 4 subs (Management, Connectivity, DMLZ, DLZ) | `targetScope = 'subscription'`, `deploymentMode` = single-sub / multi-sub |
+
+Mapping to Microsoft CAF: the estate pipeline's **Management + Connectivity**
+subscriptions are the **platform / Azure Landing Zone** beneath everything; its
+**DMLZ** is where the Loom **Admin Plane** lands; its **DLZ** subscriptions are
+the targets for Loom's per-domain `landing-zone` modules
+(`dlzSubscriptionIds` in multi-sub mode).
+
+**The boundary is clean:** `deploy.yml` decides *where* subscriptions and
+networks come from; `main.bicep` decides *what runs inside them*. The two
+**compose** for a full federal estate, but Loom does **not** require
+`deploy.yml` — `azd` or the Deploy-to-Azure button can target any existing
+subscriptions (e.g. ones created by a separate subscription-vending process).
+See the [estate-vs-loom diagram](diagrams/README.md#estate-pipeline-deployyml-vs-the-loom-platform-mainbicep).
 
 ## Where to read next
 

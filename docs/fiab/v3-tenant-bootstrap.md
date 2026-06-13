@@ -8,6 +8,40 @@ that names the exact step), per `.claude/rules/no-vaporware.md`.
 
 ---
 
+## Deployment topology — `deploymentMode` & DLZ-attach {#deployment-topology}
+
+`platform/fiab/bicep/main.bicep` requires a **`deploymentMode`** parameter
+(`@allowed(['single-sub','multi-sub'])`, **no default** — it is a hard input):
+
+- **`single-sub`** — Admin Plane + exactly one DLZ in the deployment
+  subscription (`rg-csa-loom-dlz-single-<location>`). For trials / POCs.
+  Several Console env vars (`LOOM_ADLS_ACCOUNT`, the Cosmos/Weave/Synapse
+  endpoints) are **derived** in single-sub because the one DLZ's resource names
+  are deterministic over `singleDlzRg.id`.
+- **`multi-sub`** — Admin Plane in the deployment sub; one DLZ per domain across
+  separate subscriptions. The operator must supply **`dlzSubscriptionIds`**
+  (parallel to `dlzDomainNames`) and pre-create the per-DLZ resource groups
+  (`scripts/csa-loom/bootstrap-dlz-rgs.sh`). In multi-sub the per-DLZ navigator
+  env (storage / Cosmos / Synapse) can't be wired from the single Admin Plane —
+  patch it post-deploy with `scripts/csa-loom/patch-navigator-env.sh`.
+
+The in-app [Deployment planner](parity/deploy-planner.md) emits `deploymentMode`
+into the exported `.bicepparam` (derived from the domain count when unset), so a
+planner export is deployable as-is. The committed param files set it explicitly.
+
+**DLZ-attach** (adding a domain after first-run) does not redeploy the Admin
+Plane: the Console **"Add Data Landing Zone"** action registers the new domain
+in the `DlzOnboardingRegistry`, then re-runs `main.bicep` with an expanded
+`dlzSubscriptionIds` / `dlzDomainNames`. The new spoke peers to the existing
+`adminPlaneHubVnetId`, attaches its ADX database to the shared cluster, and the
+`setupOrchestratorSpokeRbac` grant (gated on `setupOrchestratorEnabled`) gives
+the Console UAMI Contributor on the new spoke subscription. Diagrams +
+walkthrough: [`docs/fiab/diagrams/`](diagrams/README.md) ·
+[Tutorial 09](tutorials/09-tenant-topology.md) ·
+[Reference architecture](architecture.md#deployment-flows).
+
+---
+
 ## Runtime env-var reference (`/admin/env-config`) {#env-var-reference}
 
 Every `LOOM_*` / `SESSION_SECRET` runtime var the Console reads is registered in

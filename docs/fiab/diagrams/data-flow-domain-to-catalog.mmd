@@ -1,0 +1,39 @@
+%% CSA Loom — data flow: a domain item lands in its DLZ resources, then surfaces
+%% through the SHARED admin-plane catalog + ADX cluster + marketplace.
+%% Grounds: landing-zone module "each DLZ attaches its own database to this single
+%% [admin-plane] ADX cluster"; catalogPrimary is shared in the Admin Plane.
+%% Azure-native default (no Fabric): Fabric capacity is plan-only / opt-in.
+flowchart LR
+    classDef item fill:#5C2D91,stroke:#fff,color:#fff,stroke-width:2px
+    classDef dlz fill:#D83B01,stroke:#fff,color:#fff,stroke-width:2px
+    classDef shared fill:#107C10,stroke:#fff,color:#fff,stroke-width:2px
+    classDef opt fill:#5D5A58,stroke:#fff,color:#fff,stroke-width:2px,stroke-dasharray:5 4
+
+    Item["Domain item<br/>(lakehouse / warehouse / semantic model / pipeline)"]:::item
+
+    subgraph DLZ ["Per-DLZ resources (in the domain's subscription)"]
+        direction TB
+        ADLS["ADLS Gen2 medallion<br/>Bronze → Silver → Gold"]:::dlz
+        Syn["Synapse Serverless SQL<br/>(external tables over Gold)"]:::dlz
+        ADXdb["ADX database (this domain)"]:::dlz
+        PBI["Power BI Premium workspace"]:::dlz
+    end
+
+    subgraph Admin ["Shared Admin Plane (DMLZ) — one of each, for all DLZs"]
+        direction TB
+        ADXc["Shared ADX cluster<br/>(hosts every DLZ's database)"]:::shared
+        Cat["Shared catalog (catalogPrimary)<br/>Unity Catalog / Purview / Atlas-on-AKS"]:::shared
+        Market["Data-product + API marketplace"]:::shared
+    end
+
+    Fabric["Microsoft Fabric capacity (OPTIONAL, plan-only)<br/>only when fabricEnabled + LOOM_DEFAULT_FABRIC_WORKSPACE set"]:::opt
+
+    Item -->|writes Delta| ADLS
+    ADLS --> Syn
+    ADLS --> PBI
+    ADXdb -->|attaches to| ADXc
+    Syn -.cataloged by.-> Cat
+    ADLS -.cataloged by.-> Cat
+    PBI -.cataloged by.-> Cat
+    Cat -->|publish endorsed product| Market
+    Market -.optional forward-migrate.-> Fabric
