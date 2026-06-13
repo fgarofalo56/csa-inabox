@@ -206,6 +206,64 @@ param dlzSubscriptionIds array = []
 @description('DLZ domain names (parallel to dlzSubscriptionIds)')
 param dlzDomainNames array = []
 
+// =====================================================================
+// dlz-attach coordinates (audit-t157)
+//
+// 'dlz-attach' (see the `topology` param above) attaches ONE new Data Landing
+// Zone in `targetSubscriptionId` to an ALREADY-deployed hub. The Admin Plane
+// module is NOT deployed (it is impossible to stamp a second Console) — the DLZ
+// reads the existing hub's coordinates from the hub* parameters below, which the
+// orchestrator fills from the Cosmos `tenant-topology` doc written at
+// tenant-deploy time.
+// =====================================================================
+@description('dlz-attach: subscription the NEW Data Landing Zone is provisioned into. The orchestrator identity must hold Contributor here. NOTE: this is NOT the scoping control — the deployment MUST be submitted AT this subscription scope (az deployment sub create --subscription <id> / orchestrator subscription_id), because the dlz-attach RG + module use single-arg resourceGroup() and bind to the deployment subscription. This param is echoed back (dlzAttachTargetSubscriptionId) so the bootstrap/attach contract is self-describing; it does not relocate the deployment by itself.')
+param targetSubscriptionId string = ''
+
+@description('dlz-attach: domain name of the single DLZ being attached (rg-csa-loom-dlz-<attachDomainName>-<location>).')
+param attachDomainName string = ''
+
+// ── Hub coordinates (dlz-attach only) — sourced from the Cosmos tenant-topology
+// doc the tenant deploy wrote. For topology=='tenant' these are read from the
+// adminPlane module outputs and these params are ignored.
+@description('dlz-attach: existing hub VNet resource id (for peering / DNS link).')
+param hubVnetId string = ''
+
+@description('dlz-attach: existing hub Log Analytics workspace resource id.')
+param hubLawId string = ''
+
+@description('dlz-attach: existing hub App Insights connection string.')
+param hubAppInsightsConnectionString string = ''
+
+@description('dlz-attach: existing hub private DNS zone id map (synapseSql, adf, …).')
+param hubPrivateDnsZoneIdsAttach object = {}
+
+@description('dlz-attach: resource-group name of the existing hub shared ADX cluster.')
+param hubAdxClusterRgName string = ''
+
+@description('dlz-attach: principal id of the existing hub shared ADX cluster identity.')
+param hubAdxClusterPrincipalId string = ''
+
+@description('dlz-attach: existing hub catalog (Purview/OneLake) endpoint.')
+param hubCatalogEndpoint string = ''
+
+@description('dlz-attach: existing hub AI Services / AOAI account name (for notebook AI RBAC).')
+param hubAiServicesAccountName string = ''
+
+@description('dlz-attach: existing hub Console UAMI principal id.')
+param hubConsolePrincipalId string = ''
+
+@description('dlz-attach: existing hub Console UAMI name.')
+param hubConsoleUamiName string = ''
+
+@description('dlz-attach: existing hub Console UAMI client (app) id.')
+param hubConsoleUamiAppId string = ''
+
+@description('dlz-attach: existing hub Console UAMI resource id (used as the UC bootstrap script identity).')
+param hubConsoleUamiId string = ''
+
+@description('dlz-attach: existing hub Activator UAMI principal id.')
+param hubActivatorPrincipalId string = ''
+
 @description('Admin Entra group object ID for FiaB Admins')
 param adminEntraGroupId string
 
@@ -1063,6 +1121,85 @@ module dlzItemCreateRbac 'modules/admin-plane/dlz-attach-itemcreate-rbac.bicep' 
   }
 }]
 
+// =====================================================================
+// DLZ-ATTACH topology (audit-t157)
+//
+// Add ONE new Data Landing Zone to an ALREADY-deployed hub. This deployment is
+// submitted by the Setup Orchestrator AT the target subscription scope, so
+// subscription() resolves to targetSubscriptionId and the DLZ RG is created
+// locally. The Admin Plane is NOT deployed (topology gate) — the DLZ wires into
+// the existing hub via the hub* coordinate params the orchestrator fills from
+// the Cosmos `tenant-topology` doc. No second Console is ever stamped.
+//
+// The orchestrator identity must already hold Contributor on this subscription
+// to submit this deployment — the orchestrator surfaces the exact
+// `az role assignment create` command when the grant is missing (its RBAC
+// honest gate), so there is no chicken-and-egg in-template grant here.
+// =====================================================================
+resource dlzAttachRg 'Microsoft.Resources/resourceGroups@2024-03-01' = if (topology == 'dlz-attach') {
+  name: 'rg-csa-loom-dlz-${attachDomainName}-${location}'
+  location: location
+  tags: complianceTags
+}
+
+module dlzAttach 'modules/landing-zone/main.bicep' = if (topology == 'dlz-attach') {
+  name: 'dlz-attach-${attachDomainName}'
+  scope: resourceGroup('rg-csa-loom-dlz-${attachDomainName}-${location}')
+  dependsOn: [
+    dlzAttachRg
+  ]
+  params: {
+    location: location
+    boundary: boundary
+    domainName: attachDomainName
+    containerPlatform: containerPlatform
+    capacitySku: capacitySku
+    adminPlaneHubVnetId: hubVnetId
+    adminPlaneLawId: hubLawId
+    adminPlaneAppInsightsConnectionString: hubAppInsightsConnectionString
+    adminPlanePrivateDnsZoneIds: hubPrivateDnsZoneIdsAttach
+    adminPlaneAdxClusterRgName: hubAdxClusterRgName
+    adxEnabled: adxEnabled
+    adxClusterPrincipalId: hubAdxClusterPrincipalId
+    adminEntraGroupId: adminEntraGroupId
+    activatorPrincipalId: hubActivatorPrincipalId
+    consolePrincipalId: hubConsolePrincipalId
+    consoleUamiName: hubConsoleUamiName
+    consoleUamiAppId: hubConsoleUamiAppId
+    synapseSqlPrivateDnsZoneId: hubPrivateDnsZoneIdsAttach.?synapseSql ?? ''
+    adfPrivateDnsZoneId: hubPrivateDnsZoneIdsAttach.?adf ?? ''
+    catalogEndpoint: hubCatalogEndpoint
+    databricksUnityCatalogEnabled: databricksUnityCatalogEnabled
+    databricksSqlWarehouseEnabled: databricksSqlWarehouseEnabled
+    databricksAccountId: databricksAccountId
+    databricksUcScriptUamiId: hubConsoleUamiId
+    storageRequireCmk: storageRequireCmk
+    powerBiSku: powerBiSku
+    complianceTags: complianceTags
+    skipRoleGrants: skipRoleGrants
+    consolePrincipalNeedsLifecycleWrite: consolePrincipalNeedsLifecycleWrite
+    consolePrincipalNeedsCmkBind: consolePrincipalNeedsCmkBind
+    shirAdminPassword: shirAdminPassword
+    recycleRetentionDays: recycleRetentionDays
+    cosmosGraphVectorEnabled: cosmosGraphVectorEnabled
+    weaveOntologyEnabled: weaveOntologyEnabled
+  }
+}
+
+// dlz-attach: grant the existing hub Console UAMI the constrained
+// RBAC-Administrator (data-plane role assignments only) on the attached DLZ's
+// storage account, so access-request approvals can grant container-scoped
+// Storage Blob Data roles — same as the single-sub / multi-sub paths.
+module dlzAttachAccessPolicyRbac 'modules/admin-plane/access-policy-rbac.bicep' = if (topology == 'dlz-attach') {
+  name: 'dlz-attach-access-policy-rbac'
+  scope: resourceGroup('rg-csa-loom-dlz-${attachDomainName}-${location}')
+  params: {
+    consolePrincipalId: hubConsolePrincipalId
+    storageAccountName: dlzAttach!.outputs.storageAccountName
+    skipRoleGrants: skipRoleGrants
+  }
+}
+
 
 // real, self-contained Azure resource into the DLZ RG when its flag is on.
 // consolePrincipalId wires the Loom Console UAMI so the matching navigator
@@ -1475,6 +1612,9 @@ output dlzStorageAccountName string = useSingleDlz ? singleDlz!.outputs.storageA
 
 // =====================================================================
 // Outputs
+//
+// All hub outputs are topology-guarded: under dlz-attach the Admin Plane module
+// is not deployed, so they resolve to '' (the hub already exists elsewhere).
 // =====================================================================
 // audit-t156 — admin-plane outputs are empty in dlz-attach (the admin plane is
 // not deployed there). Guarded by deployAdminPlane via ?: so adminPlane.outputs
@@ -1530,3 +1670,41 @@ output topologyManifest object = {
   // Domain landing zones this deployment provisioned.
   dlzs: topologyManifestDlzs
 }
+
+output topology string = topology
+
+// =====================================================================
+// Tenant-topology coordinates (audit-t157)
+//
+// Emitted only for topology=='tenant'. The post-deploy bootstrap
+// (scripts/csa-loom/write-tenant-topology.sh, invoked by
+// post-deploy-bootstrap.sh) upserts these into the Cosmos `loom` DB
+// `tenant-topology` doc, so a later `dlz-attach` deployment / the Setup Wizard
+// "Add landing zone" flow can read the hub coordinates instead of having an
+// operator free-type Azure resource ids.
+// =====================================================================
+output hubSubscriptionId string = subscription().subscriptionId
+// Deployment coordinates the dlz-attach flow needs verbatim — emitted for every
+// topology so write-tenant-topology.sh reads them directly instead of
+// string-splitting adminPlaneRgName (which silently yielded '' for boundary).
+output boundary string = boundary
+output location string = location
+output hubLawId string = topology == 'tenant' ? adminPlane!.outputs.lawId : ''
+output hubAppInsightsConnectionString string = topology == 'tenant' ? adminPlane!.outputs.appInsightsConnectionString : ''
+output hubPrivateDnsZoneIds object = topology == 'tenant' ? adminPlane!.outputs.privateDnsZoneIds : {}
+output hubAdxClusterRgName string = topology == 'tenant' ? adminPlaneRgName : ''
+output hubAdxClusterPrincipalId string = topology == 'tenant' ? adminPlane!.outputs.adxClusterPrincipalId : ''
+output hubCatalogEndpoint string = topology == 'tenant' ? adminPlane!.outputs.catalogEndpoint : ''
+output hubAiServicesAccountName string = topology == 'tenant' ? adminPlane!.outputs.aiServicesAccountName : ''
+output hubConsolePrincipalId string = topology == 'tenant' ? adminPlane!.outputs.uamiConsolePrincipalId : ''
+output hubConsoleUamiName string = topology == 'tenant' ? adminPlane!.outputs.uamiConsoleName : ''
+output hubConsoleUamiAppId string = topology == 'tenant' ? adminPlane!.outputs.uamiConsoleClientId : ''
+output hubConsoleUamiId string = topology == 'tenant' ? adminPlane!.outputs.uamiConsoleId : ''
+output hubActivatorPrincipalId string = topology == 'tenant' ? adminPlane!.outputs.uamiActivatorPrincipalId : ''
+
+// dlz-attach echo-back: the target sub + the hub AOAI account the post-attach
+// notebook-AI (F16) RBAC grant must target on the hub side (a follow-up
+// hub-scoped grant the orchestrator records). Emitting them keeps the attach
+// contract self-describing for the bootstrap step.
+output dlzAttachTargetSubscriptionId string = topology == 'dlz-attach' ? targetSubscriptionId : ''
+output dlzAttachHubAiServicesAccountName string = topology == 'dlz-attach' ? hubAiServicesAccountName : ''

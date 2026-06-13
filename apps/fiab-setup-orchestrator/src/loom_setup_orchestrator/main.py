@@ -58,11 +58,17 @@ class DeployRequest(BaseModel):
 
     boundary: Literal["Commercial", "GCC", "GCC-High", "IL5"]
     mode: Literal["single-sub", "multi-sub"]
+    # Topology (audit-t157). 'tenant' = first-run install (deploys the hub + a
+    # DLZ); reachable ONLY from the first-run Setup Wizard. 'dlz-attach' = add ONE
+    # DLZ to an already-deployed hub; the /admin "Add landing zone" wizard and CI
+    # only ever send this value — a second Console can never be stamped from the
+    # UI. Defaults to 'tenant' for backward compat with existing callers.
+    topology: Literal["tenant", "dlz-attach"] = "tenant"
     domain_name: str = Field(min_length=1, max_length=64, pattern=r"^[a-z0-9-]+$", alias="domainName")
     capacity_sku: Literal["F2", "F4", "F8", "F32", "F64", "F128", "F512"] = Field(alias="capacitySku")
     # The hub/admin subscription the subscription-scoped deployment targets.
     subscription_id: str | None = Field(default=None, alias="subscriptionId")
-    target_subscription_id: str | None = None
+    target_subscription_id: str | None = Field(default=None, alias="targetSubscriptionId")
     # Region the `az deployment sub create` lands in (wizard sends both).
     region: str | None = None
     location: str | None = None
@@ -70,6 +76,14 @@ class DeployRequest(BaseModel):
     dlz_subscription_ids: list[str] | None = Field(default=None, alias="dlzSubscriptionIds")
     dlz_domain_names: list[str] | None = Field(default=None, alias="dlzDomainNames")
     vanity_domain: str | None = Field(default=None, alias="vanityDomain")
+    # dlz-attach: named capacity / feature toggles forwarded to main.bicep. Named
+    # Literals/bools only — NEVER a free-form dict (loom-no-freeform-config). Each
+    # default matches the main.bicep default so an unset toggle is a no-op.
+    adx_enabled: bool = Field(default=True, alias="adxEnabled")
+    cosmos_graph_vector_enabled: bool = Field(default=True, alias="cosmosGraphVectorEnabled")
+    weave_ontology_enabled: bool = Field(default=True, alias="weaveOntologyEnabled")
+    databricks_unity_catalog_enabled: bool = Field(default=False, alias="databricksUnityCatalogEnabled")
+    databricks_sql_warehouse_enabled: bool = Field(default=False, alias="databricksSqlWarehouseEnabled")
 
 
 class DeployResponse(BaseModel):

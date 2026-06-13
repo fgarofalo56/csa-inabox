@@ -60,6 +60,8 @@ param location = 'usgovvirginia'
 param boundary = 'GCC-High'
 param loomAzureCloud = 'AzureUSGovernment'   // Console AZURE_CLOUD discriminator (GCC-High runs on AzureUSGovernment endpoints)
 param deploymentMode = 'multi-sub'   // most federal customers use multi-sub
+// audit-t157: tenant = first-run install (deploys the hub + DLZ). Add-landing-zone uses dlz-attach via the orchestrator, never this param file.
+param topology = 'tenant'
 
 // Compute (Gov differences)
 param containerPlatform = 'aks'           // Container Apps not at IL4+

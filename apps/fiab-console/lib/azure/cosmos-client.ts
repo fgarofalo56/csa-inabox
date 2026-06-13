@@ -166,6 +166,14 @@ let _envConfig: Container | null = null;
 // reload WITHOUT a bicep flip of LOOM_DATABRICKS_HOSTNAMES. Created lazily so a
 // fresh environment needs no extra ARM/Bicep step beyond the account+database.
 let _metastoreRegistrations: Container | null = null;
+// Tenant topology (audit-t157). One doc per tenant (id='tenant-topology') with
+// the deployed hub's coordinates (VNet/LAW/DNS/ADX/Cosmos + Console UAMI ids),
+// written by the tenant deploy's post-bootstrap. Read by the Setup Wizard "Add
+// landing zone" flow + the orchestrator dlz-attach path so hub coordinates are
+// never free-typed. PK /tenantId. Created lazily (createIfNotExists) here AND
+// ARM-provisioned in cosmos.bicep's loomContainers — the createIfNotExists is
+// the idempotent fallback for hotfix deploys that predate the bicep change.
+let _tenantTopology: Container | null = null;
 let _ensured = false;
 
 /**
@@ -673,6 +681,8 @@ async function ensure() {
   // list hits a single physical partition. Survives Console reloads without a
   // bicep flip of LOOM_DATABRICKS_HOSTNAMES.
   _metastoreRegistrations = await mk('metastore-registrations', '/tenantId');
+  // Tenant topology — hub coordinates for the dlz-attach flow (audit-t157).
+  _tenantTopology = await mk('tenant-topology', '/tenantId');
   _ensured = true;
 }
 
@@ -728,6 +738,8 @@ export async function orgVisualsContainer(): Promise<Container> { await ensure()
 export async function envConfigContainer(): Promise<Container> { await ensure(); return _envConfig!; }
 /** Catalog → Metastores: persistent Databricks workspace registrations, PK /tenantId. */
 export async function metastoreRegistrationsContainer(): Promise<Container> { await ensure(); return _metastoreRegistrations!; }
+/** Tenant topology (audit-t157) — hub coordinates doc (id='tenant-topology', PK /tenantId). */
+export async function tenantTopologyContainer(): Promise<Container> { await ensure(); return _tenantTopology!; }
 
 // Foundation admin containers (shared cloud-endpoints resolver task).
 /** Admin Workspace Catalog — one row per Loom-managed workspace, PK /tenantId. */

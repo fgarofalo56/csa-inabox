@@ -165,6 +165,12 @@ var loomContainers = [
   // cosmos-client.ts so every install-dialog poll is a single-partition
   // point-read. createIfNotExists in ensure() remains the hotfix fallback.
   { name: 'app-install-jobs',  partitionKey: '/tenantId' }
+  // Tenant topology (audit-t157). One doc per tenant (id='tenant-topology')
+  // holding the deployed hub's coordinates (VNet/LAW/DNS/ADX/Cosmos + Console
+  // UAMI ids) written by the tenant deploy's post-bootstrap. The Setup Wizard
+  // "Add landing zone" flow + the orchestrator's dlz-attach path read it so hub
+  // coordinates are never free-typed. PK /tenantId → single-partition read.
+  { name: 'tenant-topology',   partitionKey: '/tenantId' }
 ]
 
 resource loomDb 'Microsoft.DocumentDB/databaseAccounts/sqlDatabases@2024-12-01-preview' = {

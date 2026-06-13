@@ -20,6 +20,17 @@ on:
         type: boolean
         default: false
       # Setup Wizard browser-driven deploy passes these (app/api/setup/deploy → workflow_dispatch).
+      topology:
+        description: 'tenant = first-run install (deploys the hub + DLZ). dlz-attach = add ONE DLZ to an existing hub (no Console is deployed). A second Console can never be stamped — the guard step rejects topology=tenant when a hub already exists in the target sub.'
+        type: choice
+        default: tenant
+        options:
+          - tenant
+          - dlz-attach
+      target_subscription:
+        description: 'dlz-attach: the NEW subscription the DLZ is provisioned into. The deploy identity needs Contributor here.'
+        type: string
+        required: false
       subscription:
         description: 'Target Azure subscription ID (from the Setup Wizard).'
         type: string
@@ -71,6 +82,7 @@ env:
   CSA_LOOM_TOPOLOGY: ${{ inputs.topology || '' }}
   CSA_LOOM_CAPACITY_SKU: ${{ inputs.capacity_sku || 'F8' }}
   # Wizard-provided overrides consumed by the deploy step's -p flags.
+  CSA_LOOM_TARGET_SUBSCRIPTION: ${{ inputs.target_subscription }}
   CSA_LOOM_SUBSCRIPTION_OVERRIDE: ${{ inputs.subscription }}
   CSA_LOOM_DLZ_DOMAIN_NAMES: ${{ inputs.dlz_domain_name }}
   CSA_LOOM_VANITY_DOMAIN: ${{ inputs.vanity_domain }}
@@ -101,6 +113,30 @@ jobs:
       - name: Setup Bicep
         run: az bicep install
 
+      # audit-t157: enforce the same "second Console is impossible" invariant as
+      # the UI/orchestrator at the CI layer. A topology=tenant run that targets a
+      # subscription already holding an Admin Plane RG is rejected; a dlz-attach
+      # run must target a NEW subscription via target_subscription.
+      - name: Topology guard
+        id: topology_guard
+        run: |
+          set -e
+          TOPOLOGY="${CSA_LOOM_TOPOLOGY:-tenant}"
+          echo "topology=$TOPOLOGY"
+          if [ "$TOPOLOGY" = "dlz-attach" ]; then
+            if [ -z "$CSA_LOOM_TARGET_SUBSCRIPTION" ]; then
+              echo "::error::dlz-attach requires target_subscription (the new DLZ subscription)."; exit 1
+            fi
+            echo "deploy_sub=$CSA_LOOM_TARGET_SUBSCRIPTION" >> "$GITHUB_OUTPUT"
+          else
+            # topology=tenant: refuse if an Admin Plane (hub) RG already exists.
+            EXISTING=$(az graph query -q "ResourceContainers | where type == 'microsoft.resources/subscriptions/resourcegroups' | where name startswith 'rg-csa-loom-admin-' | project name" --query "data | length(@)" -o tsv 2>/dev/null || echo "0")
+            if [ "${EXISTING:-0}" != "0" ]; then
+              echo "::error::A CSA Loom hub already exists (found $EXISTING rg-csa-loom-admin-* RG). A second Console cannot be deployed — use topology=dlz-attach with target_subscription."; exit 1
+            fi
+            echo "deploy_sub=${CSA_LOOM_SUBSCRIPTION_OVERRIDE}" >> "$GITHUB_OUTPUT"
+          fi
+
       - name: Bicep what-if (preview)
         id: whatif
         run: |
@@ -111,7 +147,8 @@ jobs:
             --parameters platform/fiab/bicep/params/commercial.bicepparam \
             --parameters adminEntraGroupId=${{ secrets.FIAB_ADMIN_GROUP_ID }} \
             --parameters loomVanityDomain="$CSA_LOOM_VANITY_DOMAIN" \
-            ${CSA_LOOM_TOPOLOGY:+--parameters topology="$CSA_LOOM_TOPOLOGY"}
+            ${CSA_LOOM_TOPOLOGY:+--parameters topology="$CSA_LOOM_TOPOLOGY"} \
+            ${CSA_LOOM_TARGET_SUBSCRIPTION:+--parameters targetSubscriptionId="$CSA_LOOM_TARGET_SUBSCRIPTION" attachDomainName="$CSA_LOOM_DLZ_DOMAIN_NAMES"}
 
       - name: Provision (idempotent)
         id: provision
@@ -123,14 +160,18 @@ jobs:
           # would also need pre-built container images for the service
           # deploy phase, which we don't have in CI yet (PRP-16 builds
           # them). Infra-only validates the entire Bicep stack end-to-end.
+          # dlz-attach targets the NEW subscription (target_subscription).
+          DEPLOY_SUB="${{ steps.topology_guard.outputs.deploy_sub }}"
           az deployment sub create \
             --name "$DEPLOY_NAME" \
             --location "$AZURE_LOCATION" \
+            ${DEPLOY_SUB:+--subscription "$DEPLOY_SUB"} \
             --template-file platform/fiab/bicep/main.bicep \
             --parameters platform/fiab/bicep/params/commercial.bicepparam \
             --parameters adminEntraGroupId=${{ secrets.FIAB_ADMIN_GROUP_ID }} \
             --parameters loomVanityDomain="$CSA_LOOM_VANITY_DOMAIN" \
-            ${CSA_LOOM_TOPOLOGY:+--parameters topology="$CSA_LOOM_TOPOLOGY"}
+            ${CSA_LOOM_TOPOLOGY:+--parameters topology="$CSA_LOOM_TOPOLOGY"} \
+            ${CSA_LOOM_TARGET_SUBSCRIPTION:+--parameters targetSubscriptionId="$CSA_LOOM_TARGET_SUBSCRIPTION" attachDomainName="$CSA_LOOM_DLZ_DOMAIN_NAMES"}
           CONSOLE_URL=$(az deployment sub show --name "$DEPLOY_NAME" --query "properties.outputs.consoleUrl.value" -o tsv 2>/dev/null || echo "")
           echo "console_url=$CONSOLE_URL" >> "$GITHUB_OUTPUT"
           echo "deploy_name=$DEPLOY_NAME" >> "$GITHUB_OUTPUT"

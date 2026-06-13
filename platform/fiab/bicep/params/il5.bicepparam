@@ -57,6 +57,8 @@ param location = 'usgovvirginia'
 param boundary = 'IL5'
 param loomAzureCloud = 'AzureUSGovernment'   // Console AZURE_CLOUD discriminator (IL5 runs on AzureUSGovernment endpoints)
 param deploymentMode = 'multi-sub'
+// audit-t157: tenant = first-run install (deploys the hub + DLZ). Add-landing-zone uses dlz-attach via the orchestrator, never this param file.
+param topology = 'tenant'
 
 // Compute (IL5 differences)
 param containerPlatform = 'aks'
