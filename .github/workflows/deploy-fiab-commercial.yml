@@ -21,10 +21,12 @@ on:
         default: false
       # Setup Wizard browser-driven deploy passes these (app/api/setup/deploy → workflow_dispatch).
       topology:
-        description: 'tenant = first-run install (deploys the hub + DLZ). dlz-attach = add ONE DLZ to an existing hub (no Console is deployed). A second Console can never be stamped — the guard step rejects topology=tenant when a hub already exists in the target sub.'
+        description: 'Explicit topology (audit-t156). Overrides deployment_mode. tenant = first-run hub install (DMLZ console + shared only). dlz-attach = add ONE DLZ to an existing hub (no Console is stamped). single-sub = dev/demo all-in-one. Empty = derive from deployment_mode. A second Console can never be stamped — the guard rejects topology=tenant when a hub already exists in the target sub.'
         type: choice
         default: tenant
         options:
+          - ''
+          - single-sub
           - tenant
           - dlz-attach
       target_subscription:
@@ -46,15 +48,6 @@ on:
         options:
           - single-sub
           - multi-sub
-      topology:
-        description: 'Explicit topology (audit-t156). Overrides deployment_mode. single-sub=dev/demo; tenant=DMLZ console+shared only; dlz-attach=landing zone only (no second console). Empty=derive from deployment_mode.'
-        type: choice
-        default: ''
-        options:
-          - ''
-          - single-sub
-          - tenant
-          - dlz-attach
       dlz_domain_name:
         description: 'Data Landing Zone domain name(s), comma-separated.'
         type: string
