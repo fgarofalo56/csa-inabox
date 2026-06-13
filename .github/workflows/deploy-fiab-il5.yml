@@ -115,9 +115,15 @@ jobs:
               echo "::error::dlz-attach requires target_subscription (the new DLZ subscription)."; exit 1
             fi
           else
-            EXISTING=$(az graph query -q "ResourceContainers | where type == 'microsoft.resources/subscriptions/resourcegroups' | where name startswith 'rg-csa-loom-admin-' | project name" --query "data | length(@)" -o tsv 2>/dev/null || echo "0")
+            # Scope the hub check to the ACTIVE (deploy) subscription, not the
+            # whole tenant, so a deliberate migration to a new hub sub is not
+            # blocked by an old hub still running elsewhere as a UAT ring
+            # (audit-t156 D3/Q10). Still blocks an accidental double-stamp into
+            # the same sub.
+            SCOPE_SUB=$(az account show --query id -o tsv)
+            EXISTING=$(az graph query ${SCOPE_SUB:+--subscriptions "$SCOPE_SUB"} -q "ResourceContainers | where type == 'microsoft.resources/subscriptions/resourcegroups' | where name startswith 'rg-csa-loom-admin-' | project name" --query "data | length(@)" -o tsv 2>/dev/null || echo "0")
             if [ "${EXISTING:-0}" != "0" ]; then
-              echo "::error::A CSA Loom hub already exists (found $EXISTING rg-csa-loom-admin-* RG). A second Console cannot be deployed — use topology=dlz-attach with target_subscription."; exit 1
+              echo "::error::A CSA Loom hub already exists in the target subscription (found $EXISTING rg-csa-loom-admin-* RG). A second Console cannot be stamped into the same sub — use topology=dlz-attach with target_subscription."; exit 1
             fi
           fi
 

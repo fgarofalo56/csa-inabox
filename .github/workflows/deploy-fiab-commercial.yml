@@ -129,10 +129,18 @@ jobs:
             fi
             echo "deploy_sub=$CSA_LOOM_TARGET_SUBSCRIPTION" >> "$GITHUB_OUTPUT"
           else
-            # topology=tenant: refuse if an Admin Plane (hub) RG already exists.
-            EXISTING=$(az graph query -q "ResourceContainers | where type == 'microsoft.resources/subscriptions/resourcegroups' | where name startswith 'rg-csa-loom-admin-' | project name" --query "data | length(@)" -o tsv 2>/dev/null || echo "0")
+            # topology=tenant: refuse if an Admin Plane (hub) RG already exists
+            # IN THE TARGET SUBSCRIPTION. The guard is scoped to the deploy sub
+            # (not tenant-wide) so a deliberate migration to a new hub sub is not
+            # blocked by an old hub still running elsewhere as a UAT/staging ring
+            # (audit-t156 D3/Q10). The "one Console per tenant" end-state is then
+            # reached operationally by tearing the old hub down after cutover.
+            # This still prevents the common footgun: re-running a tenant deploy
+            # against a sub that already holds a hub (an accidental double-stamp).
+            SCOPE_SUB="${CSA_LOOM_SUBSCRIPTION_OVERRIDE}"
+            EXISTING=$(az graph query ${SCOPE_SUB:+--subscriptions "$SCOPE_SUB"} -q "ResourceContainers | where type == 'microsoft.resources/subscriptions/resourcegroups' | where name startswith 'rg-csa-loom-admin-' | project name" --query "data | length(@)" -o tsv 2>/dev/null || echo "0")
             if [ "${EXISTING:-0}" != "0" ]; then
-              echo "::error::A CSA Loom hub already exists (found $EXISTING rg-csa-loom-admin-* RG). A second Console cannot be deployed — use topology=dlz-attach with target_subscription."; exit 1
+              echo "::error::A CSA Loom hub already exists in the target subscription (found $EXISTING rg-csa-loom-admin-* RG). A second Console cannot be stamped into the same sub — use topology=dlz-attach with target_subscription to add a DLZ, or target a fresh subscription."; exit 1
             fi
             echo "deploy_sub=${CSA_LOOM_SUBSCRIPTION_OVERRIDE}" >> "$GITHUB_OUTPUT"
           fi
