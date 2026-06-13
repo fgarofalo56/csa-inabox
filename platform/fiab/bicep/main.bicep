@@ -597,6 +597,12 @@ param loomSessionSecret string = ''
 @allowed(['adf-cdc', 'synapse-link', 'fabric'])
 param loomMirrorBackend string = 'adf-cdc'
 
+@description('Existing Azure Maps account name to bind for the Geo editors (LOOM_AZURE_MAPS_ACCOUNT). Empty deploys a fresh Gen2 account on Commercial/GCC (azureMapsEnabled), or leaves Geo in its honest-gate state on GCC-High/IL5. Passed through to the admin-plane module.')
+param loomAzureMapsAccount string = ''
+
+@description('Deploy a fresh Azure Maps Gen2 account for the Geo editors (Commercial/GCC only — the admin-plane module also gates on boundary). Set false on GCC-High/IL5 where Azure Maps is unavailable. Passed through to the admin-plane module.')
+param azureMapsEnabled bool = true
+
 @description('Opt-in ADF CDC mirroring — pre-existing ADF linked service for the relational SOURCE (Azure SQL / SQL Server). Empty = built-in CSV snapshot engine (Azure-native, no Fabric).')
 param loomMirrorSourceLinkedService string = ''
 
@@ -844,6 +850,8 @@ module adminPlane 'modules/admin-plane/main.bicep' = if (deployAdminPlane) {
     loomMsalClientSecret: loomMsalClientSecret
     loomSessionSecret: loomSessionSecret
     loomMirrorBackend: loomMirrorBackend
+    loomAzureMapsAccount: loomAzureMapsAccount
+    azureMapsEnabled: azureMapsEnabled
     loomMirrorSourceLinkedService: loomMirrorSourceLinkedService
     loomMirrorAdlsLinkedService: loomMirrorAdlsLinkedService
     loomMirrorSnowflakeLinkedService: loomMirrorSnowflakeLinkedService
