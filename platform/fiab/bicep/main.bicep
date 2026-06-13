@@ -896,20 +896,20 @@ module adminPlane 'modules/admin-plane/main.bicep' = if (deployAdminPlane) {
 // `hub.*` instead of adminPlane.outputs.* is what makes dlz-attach deploy with
 // ZERO console/Front Door/Cosmos resources.
 //
-// audit-t156 fail-fast — `topology=dlz-attach` makes `hubCoordinates` REQUIRED.
-// The admin plane is skipped, so there is no `adminPlane.outputs.*` to read and
-// every hub field would otherwise silently resolve to '' — empty hubVnetId /
-// lawId / principal ids passed into the landing-zone + cross-sub RBAC modules.
-// We refuse to proceed: when any of the minimum hub keys are empty we
-// dereference a property that does not exist, which ARM rejects at validate /
-// what-if / deploy time. The property name IS the operator-facing message —
-// supply the LOOM_HUB_* env vars (topologyManifest.hub keys) from the tenant
-// (DMLZ) deploy. Consumed ONLY by the else-branch of `var hub` below, so the
-// `deployAdminPlane ? :` short-circuit never evaluates it in single-sub /
-// tenant / legacy modes — it fires only in dlz-attach.
-var dlzAttachHubVnetId = (empty(string(hubCoordinates.?hubVnetId ?? '')) || empty(string(hubCoordinates.?lawId ?? '')) || empty(string(hubCoordinates.?consolePrincipalId ?? '')))
-  ? string(any(json('{}')).topology_dlz_attach_REQUIRES_hubCoordinates__set_LOOM_HUB_VNET_ID_LOOM_HUB_LAW_ID_LOOM_HUB_CONSOLE_PRINCIPAL_ID_and_the_rest_of_topologyManifest_hub_from_the_tenant_DMLZ_deploy)
-  : string(hubCoordinates.hubVnetId)
+// audit-t156 — `topology=dlz-attach` makes `hubCoordinates` REQUIRED (the admin
+// plane is skipped, so there is no `adminPlane.outputs.*` to read; every hub
+// field is sourced from the tenant DMLZ deploy's topologyManifest.hub, passed in
+// as `hubCoordinates`). This resolves to the supplied hub VNet id, or '' when
+// absent. In single-sub / tenant / legacy modes deployAdminPlane is true and the
+// `var hub` ternary below reads adminPlane outputs instead, so this value is
+// unused there. NOTE: an earlier revision tried to "fail loudly" here by
+// dereferencing a non-existent property whose name was the operator message —
+// ARM evaluates every `var` eagerly at validate/what-if time, so that broke
+// ALL topologies (incl. tenant), not just an under-specified dlz-attach. The
+// precondition is now enforced upstream in the setup orchestrator (which
+// assembles hubCoordinates); a dlz-attach run with empty hub coordinates fails
+// honestly at the first landing-zone resource that needs hub.hubVnetId.
+var dlzAttachHubVnetId = string(hubCoordinates.?hubVnetId ?? '')
 var hub = deployAdminPlane ? {
   hubVnetId: adminPlane!.outputs.hubVnetId
   lawId: adminPlane!.outputs.lawId
