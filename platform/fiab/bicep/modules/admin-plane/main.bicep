@@ -923,32 +923,29 @@ param loomBronzeContainer string = 'bronze'
 @allowed(['synapse', 'adf', 'fabric'])
 param loomPipelineBackend string = 'synapse'
 
-@description('Event ingestion backend selector. Default: eventhubs (Azure Event Hubs). Alternatives: fabric.')
-@allowed(['eventhubs', 'fabric'])
-param loomEventBackend string = 'eventhubs'
 
-@description('Activator rule backend selector. Default: azure-monitor (Azure Monitor). Alternatives: fabric.')
-@allowed(['azure-monitor', 'fabric'])
-param loomActivatorBackend string = 'azure-monitor'
 
-@description('Default Log Analytics custom-log table the Azure-native Activator targets for entity-change triggers (e.g. ontology entity-change rules). Empty uses the code default AppEvents_CL.')
-param loomActivatorDefaultTable string = 'AppEvents_CL'
 
-@description('Dashboard backend selector. Default: adx (Azure Data Explorer/Kusto). Alternatives: fabric.')
-@allowed(['adx', 'fabric'])
-param loomDashboardBackend string = 'adx'
 
 @description('Data mirroring backend selector. Default: adf-cdc (Azure Data Factory Change Data Capture). Alternatives: synapse-link, fabric.')
 @allowed(['adf-cdc', 'synapse-link', 'fabric'])
 param loomMirrorBackend string = 'adf-cdc'
 
-@description('Lakehouse storage backend selector. Default: adls (Azure Data Lake Storage Gen2). Alternatives: fabric.')
-@allowed(['adls', 'fabric'])
-param loomLakehouseBackend string = 'adls'
+@description('Azure-native backend selectors for Fabric-flavored items, bundled into one object to stay under the ARM 256-parameter template limit. Each key defaults to the Azure-native path; set a value to "fabric"/"powerbi" to opt into the Fabric/Power BI alternative for that item (per no-fabric-dependency rule).')
+param loomBackends object = {
+  event: 'eventhubs'
+  activator: 'azure-monitor'
+  activatorTable: 'AppEvents_CL'
+  dashboard: 'adx'
+  lakehouse: 'adls'
+  catalog: 'azure'
+  bi: ''
+  domains: 'cosmos'
+  dataflow: 'adf'
+  dataproducts: ''
+}
 
-@description('OneLake catalog Explore-tab backend selector (LOOM_CATALOG_BACKEND). Default: azure (AI Search loom-governance-items index, falling back to Cosmos when AI Search is not deployed — no Fabric/OneLake REST on the default path). Alternative: fabric (opt-in OneLake REST; additionally gated by sovereign-cloud reachability).')
-@allowed(['azure', 'fabric'])
-param loomCatalogBackend string = 'azure'
+
 
 // NOTE: loomSemanticBackend is declared once earlier in this file (the
 // allow-list there is the union of all opt-in backends). loomAasServer /
@@ -987,18 +984,12 @@ param aasSpnClientId string = ''
 @allowed(['D1', 'B1', 'B2', 'S0', 'S1', 'S2', 'S4', 'S8', 'S9'])
 param aasSku string = 'D1'
 
-@description('BI backend selector for the Report editor. Empty (default) = Loom-native renderer that queries the bound Azure Analysis Services model with DAX (no Power BI / Fabric workspace required). Set to powerbi to opt into the Power BI embed (requires the Console UAMI registered in a Power BI workspace).')
-@allowed(['', 'powerbi'])
-param loomBiBackend string = ''
 
 
 
-@description('Purview Unified Catalog account name (or per-tenant -api host) backing the F22 data-product adapter. When set alongside loomDataproductsBackend="unified-catalog" on the Commercial boundary, the Console routes data-product CRUD through the Unified Catalog REST API (https://api.purview-service.microsoft.com) instead of Cosmos. Leave empty on GCC / GCC-High / IL5 — the factory ignores it and uses Cosmos regardless. Independent of loomPurviewAccount (the classic Data Map account).')
+@description('Purview Unified Catalog account name (or per-tenant -api host) backing the F22 data-product adapter. When set alongside loomBackends.dataproducts="unified-catalog" on the Commercial boundary, the Console routes data-product CRUD through the Unified Catalog REST API (https://api.purview-service.microsoft.com) instead of Cosmos. Leave empty on GCC / GCC-High / IL5 — the factory ignores it and uses Cosmos regardless. Independent of loomPurviewAccount (the classic Data Map account).')
 param loomPurviewUnifiedAccount string = ''
 
-@description('Governance Domains (F4) backend selector. cosmos (default) uses the Cosmos governance-domains container + best-effort Purview classic-collection mirror — works with NO Fabric workspace. fabric is opt-in (Commercial/GCC only; the BFF rejects it at IL5) and drives Fabric Admin /v1/admin/domains.')
-@allowed(['cosmos', 'fabric'])
-param loomDomainsBackend string = 'cosmos'
 
 // ---------------------------------------------------------------------
 // Copy Job watermark control table (F14 — Fabric Copy job parity)
@@ -1013,13 +1004,7 @@ param loomCopyJobControlSqlDb string = 'loom-control'
 @description('Deploy the copy-job control table + stored procedure (and grant the ADF factory + console UAMI) via a deployment script. Requires loomCopyJobControlSqlServer set and the console UAMI configured as an Entra admin on that SQL server.')
 param copyJobControlEnabled bool = false
 
-@description('Dataflow Gen2 (Power Query) backend selector. Default: adf (Azure-native WranglingDataFlow on ADF Spark — no Fabric). fabric is opt-in and additionally requires LOOM_DEFAULT_FABRIC_WORKSPACE.')
-@allowed(['adf', 'fabric'])
-param loomDataflowBackend string = 'adf'
 
-@description('Data-products store backend. Default empty → Cosmos (Azure-native DEFAULT; data products catalog in the Loom Cosmos `dataproducts` container, NO Microsoft Fabric / Purview-unified-catalog dependency). Set to "unified-catalog" to opt into the Purview Unified Catalog path, which throws an honest gate on a classic Data Map account.')
-@allowed(['', 'cosmos', 'unified-catalog'])
-param loomDataproductsBackend string = ''
 
 @description('Explicit Azure ML MLflow tracking URI for the ML Experiment editor. REQUIRED in IL5 / GCC-High (the commercial *.api.azureml.ms host is wrong there and no public alternate hostname is documented). Get it via `az ml workspace show --query mlflow_tracking_uri -o tsv`. Empty in Commercial / GCC, where the editor auto-constructs the URI from LOOM_AML_WORKSPACE/LOOM_FOUNDRY_NAME + region + subscription.')
 param loomMlflowTrackingUri string = ''
@@ -2224,7 +2209,7 @@ module appDeployments 'app-deployments.bicep' = if (containerPlatform == 'contai
             // Read by the /api/ai-search/debug-sessions BFF route.
             { name: 'LOOM_AI_SEARCH_DEBUG_STORAGE_CONN', value: (aiSearchEnabled && empty(existingAiSearchService)) ? 'ResourceId=${aiSearchDebugStorage.id};' : '' }
             // OneLake catalog Explore-tab backend (azure=AI Search/Cosmos default; fabric=opt-in OneLake REST).
-            { name: 'LOOM_CATALOG_BACKEND', value: loomCatalogBackend }
+            { name: 'LOOM_CATALOG_BACKEND', value: loomBackends.catalog }
             // APIM navigator (apis/products/named-values/backends/subscriptions) + marketplace.
             { name: 'LOOM_APIM_NAME',          value: !empty(existingApimName) ? existingApimName : (apimEnabled ? apim!.outputs.apimName : '') }
             { name: 'LOOM_APIM_RG',            value: !empty(existingApimName) ? byoApimRg : (apimEnabled ? resourceGroup().name : '') }
@@ -2303,12 +2288,12 @@ module appDeployments 'app-deployments.bicep' = if (containerPlatform == 'contai
             // ----------------------------------------------------------------
             { name: 'LOOM_BRONZE_CONTAINER', value: loomBronzeContainer }
             { name: 'LOOM_PIPELINE_BACKEND', value: loomPipelineBackend }
-            { name: 'LOOM_EVENT_BACKEND', value: loomEventBackend }
-            { name: 'LOOM_ACTIVATOR_BACKEND', value: loomActivatorBackend }
-            { name: 'LOOM_ACTIVATOR_DEFAULT_TABLE', value: loomActivatorDefaultTable }
-            { name: 'LOOM_DASHBOARD_BACKEND', value: loomDashboardBackend }
+            { name: 'LOOM_EVENT_BACKEND', value: loomBackends.event }
+            { name: 'LOOM_ACTIVATOR_BACKEND', value: loomBackends.activator }
+            { name: 'LOOM_ACTIVATOR_DEFAULT_TABLE', value: loomBackends.activatorTable }
+            { name: 'LOOM_DASHBOARD_BACKEND', value: loomBackends.dashboard }
             { name: 'LOOM_MIRROR_BACKEND', value: loomMirrorBackend }
-            { name: 'LOOM_LAKEHOUSE_BACKEND', value: loomLakehouseBackend }
+            { name: 'LOOM_LAKEHOUSE_BACKEND', value: loomBackends.lakehouse }
             { name: 'LOOM_SEMANTIC_BACKEND', value: loomSemanticBackend }
             // Azure Analysis Services DAX backend (dashboard Q&A / pinned-DAX
             // tiles + DirectQuery source binder for semantic-model) — Azure-native,
@@ -2324,13 +2309,13 @@ module appDeployments 'app-deployments.bicep' = if (containerPlatform == 'contai
             // reads these). Empty string = unconfigured → aas-client surfaces an
             // honest infra-gate and DAX validation still works on every backend.
             { name: 'LOOM_AAS_DATABASE', value: loomAasDatabase }
-            { name: 'LOOM_DATAFLOW_BACKEND', value: loomDataflowBackend }
+            { name: 'LOOM_DATAFLOW_BACKEND', value: loomBackends.dataflow }
             // Report editor BI backend. Empty (default) → Loom-native renderer
             // that queries the bound AAS model with DAX (no Power BI / Fabric).
             // 'powerbi' opts into the Power BI embed. NEXT_PUBLIC_ mirror lets
             // the client editor branch without a round-trip. (no-fabric-dependency.md)
-            { name: 'LOOM_BI_BACKEND', value: loomBiBackend }
-            { name: 'NEXT_PUBLIC_LOOM_BI_BACKEND', value: loomBiBackend }
+            { name: 'LOOM_BI_BACKEND', value: loomBackends.bi }
+            { name: 'NEXT_PUBLIC_LOOM_BI_BACKEND', value: loomBackends.bi }
             { name: 'LOOM_AAS_SERVER', value: loomAasServer }
             { name: 'LOOM_AAS_DATABASE', value: loomAasDatabase }
             // Data-products store backend (Wave 4 — Data Marketplace / F22).
@@ -2342,12 +2327,12 @@ module appDeployments 'app-deployments.bicep' = if (containerPlatform == 'contai
             // app-deployments.bicep so the factory's Gov fall-through needs no
             // extra var here). When opted in WITHOUT loomPurviewUnifiedAccount
             // the factory renders an honest gate instead of fabricated data.
-            { name: 'LOOM_DATAPRODUCTS_BACKEND', value: loomDataproductsBackend }
+            { name: 'LOOM_DATAPRODUCTS_BACKEND', value: loomBackends.dataproducts }
             // F4 Governance Domains — Cosmos CRUD + Purview mirror (default) or
             // opt-in Fabric Admin. LOOM_DOMAIN_IMAGES_URL points at the F4 domain
             // gallery blob endpoint emitted by catalog.bicep ('' when Purview/
             // catalog storage is not deployed — the editor shows an honest gate).
-            { name: 'LOOM_DOMAINS_BACKEND', value: loomDomainsBackend }
+            { name: 'LOOM_DOMAINS_BACKEND', value: loomBackends.domains }
             { name: 'LOOM_DOMAIN_IMAGES_URL', value: catalog.outputs.domainImagesEndpoint }
           ],
           // F22 — Purview Unified Catalog account for the data-product adapter.
