@@ -19,6 +19,10 @@ on:
         description: 'Keep resources up after smoke test (full mode only). USE WITH CAUTION — incurs ongoing spend until manually torn down.'
         type: boolean
         default: false
+      allow_existing_hub:
+        description: 'topology=tenant only: bypass the "hub already exists in target sub" guard to idempotently reconcile/retry a partially-deployed hub (e.g. after a mid-deploy failure). Does NOT stamp a second Console — the incremental deploy reconciles the existing admin RG. Leave false for first-run installs.'
+        type: boolean
+        default: false
       # Setup Wizard browser-driven deploy passes these (app/api/setup/deploy → workflow_dispatch).
       topology:
         description: 'Explicit topology (audit-t156). Overrides deployment_mode. tenant = first-run hub install (DMLZ console + shared only). dlz-attach = add ONE DLZ to an existing hub (no Console is stamped). single-sub = dev/demo all-in-one. Empty = derive from deployment_mode. A second Console can never be stamped — the guard rejects topology=tenant when a hub already exists in the target sub.'
@@ -132,9 +136,10 @@ jobs:
             # against a sub that already holds a hub (an accidental double-stamp).
             SCOPE_SUB="${CSA_LOOM_SUBSCRIPTION_OVERRIDE}"
             EXISTING=$(az graph query ${SCOPE_SUB:+--subscriptions "$SCOPE_SUB"} -q "ResourceContainers | where type == 'microsoft.resources/subscriptions/resourcegroups' | where name startswith 'rg-csa-loom-admin-' | project name" --query "data | length(@)" -o tsv 2>/dev/null || echo "0")
-            if [ "${EXISTING:-0}" != "0" ]; then
-              echo "::error::A CSA Loom hub already exists in the target subscription (found $EXISTING rg-csa-loom-admin-* RG). A second Console cannot be stamped into the same sub — use topology=dlz-attach with target_subscription to add a DLZ, or target a fresh subscription."; exit 1
+            if [ "${EXISTING:-0}" != "0" ] && [ "${{ inputs.allow_existing_hub }}" != "true" ]; then
+              echo "::error::A CSA Loom hub already exists in the target subscription (found $EXISTING rg-csa-loom-admin-* RG). A second Console cannot be stamped into the same sub — use topology=dlz-attach with target_subscription to add a DLZ, or target a fresh subscription. To idempotently reconcile/retry a partially-deployed hub in this sub, re-run with allow_existing_hub=true."; exit 1
             fi
+            if [ "${EXISTING:-0}" != "0" ]; then echo "::warning::Reconciling existing hub in target sub (allow_existing_hub=true) — incremental deploy, no second Console."; fi
             echo "deploy_sub=${CSA_LOOM_SUBSCRIPTION_OVERRIDE}" >> "$GITHUB_OUTPUT"
           fi
 
