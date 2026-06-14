@@ -102,16 +102,16 @@ resource transformation 'Microsoft.StreamAnalytics/streamingjobs/transformations
 // =====================================================================
 // RBAC — Loom Console UAMI → Stream Analytics Contributor on the RG
 // (so the BFF can list, get, save transformations, start, stop)
-// Built-in role: 65cb152a-1b39-4f9d-aafa-1f49f88b1f5b
+// Built-in role: 6e0c8711-85a0-4490-8365-8ec13c4560b4
 // =====================================================================
 
 resource consoleAsaContributor 'Microsoft.Authorization/roleAssignments@2022-04-01' = if (!skipRoleGrants) {
   scope: resourceGroup()
-  name: guid(resourceGroup().id, consolePrincipalId, '65cb152a-1b39-4f9d-aafa-1f49f88b1f5b')
+  name: guid(resourceGroup().id, consolePrincipalId, '6e0c8711-85a0-4490-8365-8ec13c4560b4')
   properties: {
     principalId: consolePrincipalId
     principalType: 'ServicePrincipal'
-    roleDefinitionId: subscriptionResourceId('Microsoft.Authorization/roleDefinitions', '65cb152a-1b39-4f9d-aafa-1f49f88b1f5b')
+    roleDefinitionId: subscriptionResourceId('Microsoft.Authorization/roleDefinitions', '6e0c8711-85a0-4490-8365-8ec13c4560b4')
   }
 }
 

@@ -23,6 +23,14 @@ on:
         description: 'topology=tenant only: bypass the "hub already exists in target sub" guard to idempotently reconcile/retry a partially-deployed hub (e.g. after a mid-deploy failure). Does NOT stamp a second Console — the incremental deploy reconciles the existing admin RG. Leave false for first-run installs.'
         type: boolean
         default: false
+      purview_enabled:
+        description: 'Deploy the shared Purview governance account. Set false when the target region lacks Purview (e.g. centralus) — the Loom catalog falls back to its Azure-native backend (AI Search / Cosmos) per no-fabric-dependency; add Purview cross-region later.'
+        type: boolean
+        default: true
+      azure_maps_enabled:
+        description: 'Deploy the Azure Maps account for the Geo editors. Set false when the target region lacks Azure Maps (e.g. centralus) — the Geo editors honest-gate; add Maps cross-region later.'
+        type: boolean
+        default: true
       # Setup Wizard browser-driven deploy passes these (app/api/setup/deploy → workflow_dispatch).
       topology:
         description: 'Explicit topology (audit-t156). Overrides deployment_mode. tenant = first-run hub install (DMLZ console + shared only). dlz-attach = add ONE DLZ to an existing hub (no Console is stamped). single-sub = dev/demo all-in-one. Empty = derive from deployment_mode. A second Console can never be stamped — the guard rejects topology=tenant when a hub already exists in the target sub.'
@@ -190,6 +198,7 @@ jobs:
             --template-file platform/fiab/bicep/main.bicep \
             --parameters platform/fiab/bicep/params/commercial.bicepparam \
             --parameters location="$AZURE_LOCATION" \
+            --parameters purviewEnabled=${{ inputs.purview_enabled }} azureMapsEnabled=${{ inputs.azure_maps_enabled }} \
             --parameters adminEntraGroupId=${{ secrets.FIAB_ADMIN_GROUP_ID }} \
             --parameters loomVanityDomain="$CSA_LOOM_VANITY_DOMAIN" \
             ${CSA_LOOM_TOPOLOGY:+--parameters topology="$CSA_LOOM_TOPOLOGY"} \
@@ -214,6 +223,7 @@ jobs:
             --template-file platform/fiab/bicep/main.bicep \
             --parameters platform/fiab/bicep/params/commercial.bicepparam \
             --parameters location="$AZURE_LOCATION" \
+            --parameters purviewEnabled=${{ inputs.purview_enabled }} azureMapsEnabled=${{ inputs.azure_maps_enabled }} \
             --parameters adminEntraGroupId=${{ secrets.FIAB_ADMIN_GROUP_ID }} \
             --parameters loomVanityDomain="$CSA_LOOM_VANITY_DOMAIN" \
             ${CSA_LOOM_TOPOLOGY:+--parameters topology="$CSA_LOOM_TOPOLOGY"} \
