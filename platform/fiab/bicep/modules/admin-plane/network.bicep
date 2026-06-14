@@ -31,6 +31,9 @@ param consolePrincipalId string = ''
 @description('Skip role grants on re-deploy to avoid RoleAssignmentExists (409).')
 param skipRoleGrants bool = false
 
+@description('Deploy the Azure Firewall + its policy + public IP for hub egress filtering. Nothing else in the template consumes the firewall (no forced-tunnel UDRs), so it is safe to disable. Default true. Set false to skip — useful when the firewall-policy re-PUT trips FirewallPolicyUpdateFailed on idempotent reconcile passes, or to reduce cost; the egress appliance can be added back later.')
+param firewallEnabled bool = true
+
 
 // =====================================================================
 // Subnet calculations
@@ -241,7 +244,7 @@ resource bastion 'Microsoft.Network/bastionHosts@2024-05-01' = {
 
 var firewallSku = boundary == 'IL5' || boundary == 'GCC-High' ? 'Premium' : 'Standard'
 
-resource firewallPolicy 'Microsoft.Network/firewallPolicies@2024-05-01' = {
+resource firewallPolicy 'Microsoft.Network/firewallPolicies@2024-05-01' = if (firewallEnabled) {
   name: 'fwpol-csa-loom-${location}'
   location: location
   tags: complianceTags
@@ -251,7 +254,7 @@ resource firewallPolicy 'Microsoft.Network/firewallPolicies@2024-05-01' = {
   }
 }
 
-resource firewallPip 'Microsoft.Network/publicIPAddresses@2024-05-01' = {
+resource firewallPip 'Microsoft.Network/publicIPAddresses@2024-05-01' = if (firewallEnabled) {
   name: 'pip-fw-csa-loom-${location}'
   location: location
   tags: complianceTags
@@ -262,7 +265,7 @@ resource firewallPip 'Microsoft.Network/publicIPAddresses@2024-05-01' = {
   }
 }
 
-resource firewall 'Microsoft.Network/azureFirewalls@2024-05-01' = {
+resource firewall 'Microsoft.Network/azureFirewalls@2024-05-01' = if (firewallEnabled) {
   name: 'fw-csa-loom-${location}'
   location: location
   tags: complianceTags
@@ -407,7 +410,7 @@ resource diagBastion 'Microsoft.Insights/diagnosticSettings@2021-05-01-preview' 
 
 output hubVnetId string = hubVnet.id
 output hubVnetName string = hubVnet.name
-output firewallPrivateIp string = firewall.properties.ipConfigurations[0].properties.privateIPAddress
+output firewallPrivateIp string = firewallEnabled ? firewall!.properties.ipConfigurations[0].properties.privateIPAddress : ''
 output bastionId string = bastion.id
 output containerPlatformSubnetId string = '${hubVnet.id}/subnets/snet-container-platform'
 output functionsSubnetId string = '${hubVnet.id}/subnets/snet-functions'

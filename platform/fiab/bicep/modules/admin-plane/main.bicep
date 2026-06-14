@@ -1044,6 +1044,7 @@ module network 'network.bicep' = {
     // Advanced-networking pane can write NSG rules + create private endpoints.
     consolePrincipalId: identity.outputs.uamiConsolePrincipalId
     skipRoleGrants: skipRoleGrants
+    firewallEnabled: firewallEnabled
   }
 }
 
@@ -1655,6 +1656,8 @@ module purviewShir 'purview-shir.bicep' = if (purviewShirEnabled && purviewEnabl
 
 @description('Provision an Azure Maps account to back the geo-map / geo-pipeline / map editors. Only honored in Commercial / GCC; skipped in GCC-High / IL5.')
 param azureMapsEnabled bool = true
+@description('Deploy the hub Azure Firewall (egress filtering). Default true; passthrough to network module.')
+param firewallEnabled bool = true
 
 module azureMaps 'azure-maps.bicep' = if (azureMapsEnabled && (boundary == 'Commercial' || boundary == 'GCC')) {
   name: 'azure-maps'

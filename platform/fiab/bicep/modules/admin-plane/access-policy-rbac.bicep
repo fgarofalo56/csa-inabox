@@ -42,7 +42,7 @@ resource sa 'Microsoft.Storage/storageAccounts@2023-05-01' existing = {
   name: storageAccountName
 }
 
-// Role Based Access Control Administrator — f58310d9-460d-4a3a-8ad5-3a9e8e27a52d
+// Role Based Access Control Administrator — f58310d9-a9f6-439a-9e8d-f62e7b41a168
 // ABAC condition: writes/deletes of role assignments are permitted ONLY when the
 // assigned role is one of the three Storage Blob Data roles. Any other role
 // (Owner, Contributor, RBAC-Admin, …) is denied — preventing privilege
@@ -51,7 +51,7 @@ resource consoleRbacAdmin 'Microsoft.Authorization/roleAssignments@2022-04-01' =
   name: guid(sa.id, consolePrincipalId, 'access-policy-rbac-admin')
   scope: sa
   properties: {
-    roleDefinitionId: subscriptionResourceId('Microsoft.Authorization/roleDefinitions', 'f58310d9-460d-4a3a-8ad5-3a9e8e27a52d')
+    roleDefinitionId: subscriptionResourceId('Microsoft.Authorization/roleDefinitions', 'f58310d9-a9f6-439a-9e8d-f62e7b41a168')
     principalId: consolePrincipalId
     principalType: 'ServicePrincipal'
     conditionVersion: '2.0'
