@@ -35,6 +35,10 @@ on:
         description: 'Deploy the hub Azure Firewall (egress filtering). Set false to skip — nothing else consumes it, and it avoids the FirewallPolicyUpdateFailed re-PUT error on idempotent reconcile passes. Add it back once the rest of the stack is stable.'
         type: boolean
         default: true
+      deploy_apps_enabled:
+        description: 'Create the Container Apps (loom-console + siblings) pointing at images in ACR. Requires images already built/pushed (run full-app-deploy build first). Off by default = infra-only.'
+        type: boolean
+        default: false
       # Setup Wizard browser-driven deploy passes these (app/api/setup/deploy → workflow_dispatch).
       topology:
         description: 'Explicit topology (audit-t156). Overrides deployment_mode. tenant = first-run hub install (DMLZ console + shared only). dlz-attach = add ONE DLZ to an existing hub (no Console is stamped). single-sub = dev/demo all-in-one. Empty = derive from deployment_mode. A second Console can never be stamped — the guard rejects topology=tenant when a hub already exists in the target sub.'
@@ -202,7 +206,7 @@ jobs:
             --template-file platform/fiab/bicep/main.bicep \
             --parameters platform/fiab/bicep/params/commercial.bicepparam \
             --parameters location="$AZURE_LOCATION" \
-            --parameters purviewEnabled=${{ inputs.purview_enabled }} azureMapsEnabled=${{ inputs.azure_maps_enabled }} hubFirewallEnabled=${{ inputs.firewall_enabled }} \
+            --parameters purviewEnabled=${{ inputs.purview_enabled }} azureMapsEnabled=${{ inputs.azure_maps_enabled }} hubFirewallEnabled=${{ inputs.firewall_enabled }} deployAppsEnabled=${{ inputs.deploy_apps_enabled }} \
             --parameters adminEntraGroupId=${{ secrets.FIAB_ADMIN_GROUP_ID }} \
             --parameters loomVanityDomain="$CSA_LOOM_VANITY_DOMAIN" \
             ${CSA_LOOM_TOPOLOGY:+--parameters topology="$CSA_LOOM_TOPOLOGY"} \
@@ -227,7 +231,7 @@ jobs:
             --template-file platform/fiab/bicep/main.bicep \
             --parameters platform/fiab/bicep/params/commercial.bicepparam \
             --parameters location="$AZURE_LOCATION" \
-            --parameters purviewEnabled=${{ inputs.purview_enabled }} azureMapsEnabled=${{ inputs.azure_maps_enabled }} hubFirewallEnabled=${{ inputs.firewall_enabled }} \
+            --parameters purviewEnabled=${{ inputs.purview_enabled }} azureMapsEnabled=${{ inputs.azure_maps_enabled }} hubFirewallEnabled=${{ inputs.firewall_enabled }} deployAppsEnabled=${{ inputs.deploy_apps_enabled }} \
             --parameters adminEntraGroupId=${{ secrets.FIAB_ADMIN_GROUP_ID }} \
             --parameters loomVanityDomain="$CSA_LOOM_VANITY_DOMAIN" \
             ${CSA_LOOM_TOPOLOGY:+--parameters topology="$CSA_LOOM_TOPOLOGY"} \

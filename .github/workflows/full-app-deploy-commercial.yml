@@ -28,13 +28,21 @@ on:
         description: 'Re-run deploy with deployAppsEnabled=true after build'
         type: boolean
         default: true
+      region:
+        description: 'Azure region of the target Admin Plane (e.g. eastus2, centralus).'
+        type: string
+        default: eastus2
+      subscription:
+        description: 'Target subscription id (defaults to AZURE_SUBSCRIPTION_ID secret).'
+        type: string
+        required: false
 
 permissions:
   contents: read
   issues: write
 
 env:
-  AZURE_LOCATION: eastus2
+  AZURE_LOCATION: ${{ inputs.region || 'eastus2' }}
 
 jobs:
   resolve:
@@ -54,7 +62,7 @@ jobs:
               "clientId": "${{ secrets.AZURE_CLIENT_ID }}",
               "clientSecret": "${{ secrets.AZURE_CLIENT_SECRET }}",
               "tenantId": "${{ secrets.AZURE_TENANT_ID }}",
-              "subscriptionId": "${{ secrets.AZURE_SUBSCRIPTION_ID }}"
+              "subscriptionId": "${{ inputs.subscription || secrets.AZURE_SUBSCRIPTION_ID }}"
             }
       - id: acr
         run: |
@@ -84,7 +92,7 @@ jobs:
               "clientId": "${{ secrets.AZURE_CLIENT_ID }}",
               "clientSecret": "${{ secrets.AZURE_CLIENT_SECRET }}",
               "tenantId": "${{ secrets.AZURE_TENANT_ID }}",
-              "subscriptionId": "${{ secrets.AZURE_SUBSCRIPTION_ID }}"
+              "subscriptionId": "${{ inputs.subscription || secrets.AZURE_SUBSCRIPTION_ID }}"
             }
       - name: Enable ACR public access + admin user + disable quarantine/trust
         run: |
@@ -175,7 +183,7 @@ jobs:
               "clientId": "${{ secrets.AZURE_CLIENT_ID }}",
               "clientSecret": "${{ secrets.AZURE_CLIENT_SECRET }}",
               "tenantId": "${{ secrets.AZURE_TENANT_ID }}",
-              "subscriptionId": "${{ secrets.AZURE_SUBSCRIPTION_ID }}"
+              "subscriptionId": "${{ inputs.subscription || secrets.AZURE_SUBSCRIPTION_ID }}"
             }
       # Build + push via ACR Tasks (`az acr build`) — the image is built and
       # pushed SERVER-SIDE inside Azure by ACR, which is a trusted Azure service
@@ -220,7 +228,7 @@ jobs:
               "clientId": "${{ secrets.AZURE_CLIENT_ID }}",
               "clientSecret": "${{ secrets.AZURE_CLIENT_SECRET }}",
               "tenantId": "${{ secrets.AZURE_TENANT_ID }}",
-              "subscriptionId": "${{ secrets.AZURE_SUBSCRIPTION_ID }}"
+              "subscriptionId": "${{ inputs.subscription || secrets.AZURE_SUBSCRIPTION_ID }}"
             }
       - name: Disable ACR public access + admin user
         run: |
@@ -244,7 +252,7 @@ jobs:
               "clientId": "${{ secrets.AZURE_CLIENT_ID }}",
               "clientSecret": "${{ secrets.AZURE_CLIENT_SECRET }}",
               "tenantId": "${{ secrets.AZURE_TENANT_ID }}",
-              "subscriptionId": "${{ secrets.AZURE_SUBSCRIPTION_ID }}"
+              "subscriptionId": "${{ inputs.subscription || secrets.AZURE_SUBSCRIPTION_ID }}"
             }
       # Roll each Container App directly to the freshly-built image. This
       # deliberately does NOT run `az deployment sub create` (full main.bicep):
