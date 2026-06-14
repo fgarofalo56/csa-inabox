@@ -25,6 +25,46 @@ This file is maintained automatically by
 [Conventional Commits](https://www.conventionalcommits.org/). See
 [RELEASE.md](RELEASE.md) for the release process.
 
+## [0.40.0](https://github.com/fgarofalo56/csa-inabox/compare/csa-inabox-v0.39.0...csa-inabox-v0.40.0) (2026-06-14)
+
+
+### Features
+
+* **csa-loom:** dlz-attach topology — orchestrator + wizard + bicep + CI (audit-t157) ([#1312](https://github.com/fgarofalo56/csa-inabox/issues/1312)) ([cd4576f](https://github.com/fgarofalo56/csa-inabox/commit/cd4576f1f30ffe2d64ed730ef9067b2b56120795))
+* **csa-loom:** domain registry as authoritative tenant topology + required workspace binding (audit-t158) ([#1311](https://github.com/fgarofalo56/csa-inabox/issues/1311)) ([c1ba963](https://github.com/fgarofalo56/csa-inabox/commit/c1ba963a7787eb7c56dd15e08ac3d694eb5b4168))
+* **csa-loom:** domain-aware resource routing for item-creates (audit-t159) ([#1308](https://github.com/fgarofalo56/csa-inabox/issues/1308)) ([3ccc7eb](https://github.com/fgarofalo56/csa-inabox/commit/3ccc7eb92b2942bd2f1175cc092ada37a7471f1b))
+* **csa-loom:** FedCiv multi-sub live migration — tenant-dmlz + dlz-attach params, runbook, orphan sweep (audit-t162) ([#1326](https://github.com/fgarofalo56/csa-inabox/issues/1326)) ([4595d54](https://github.com/fgarofalo56/csa-inabox/commit/4595d54011a2851f22e5a163831f22a1d57b9ffa))
+* **csa-loom:** tenant-admin vs domain-admin vs domain-contributor RBAC tiers (D2) (audit-t160) ([#1310](https://github.com/fgarofalo56/csa-inabox/issues/1310)) ([fcc9e8d](https://github.com/fgarofalo56/csa-inabox/commit/fcc9e8d9ccfa0d88f41bb15486304666dc55b359))
+* **fiab-bicep:** explicit topology modes + optional admin plane (audit-t156) ([#1309](https://github.com/fgarofalo56/csa-inabox/issues/1309)) ([3903c04](https://github.com/fgarofalo56/csa-inabox/commit/3903c045779af4f94dacccf7a7bd088434e26976))
+* **fiab-deploy:** allow_existing_hub bypass for idempotent hub reconcile/retry ([#1340](https://github.com/fgarofalo56/csa-inabox/issues/1340)) ([8548462](https://github.com/fgarofalo56/csa-inabox/commit/8548462f28823e79b28ee953bfb9c37536ec56fd))
+* **fiab-deploy:** front_door_enabled toggle for public + vanity domain ([#1351](https://github.com/fgarofalo56/csa-inabox/issues/1351)) ([97e82d0](https://github.com/fgarofalo56/csa-inabox/commit/97e82d0eabb3cda82d3625dfbf6187ff5d7eabd9))
+* **fiab-deploy:** hubFirewallEnabled toggle (Azure Firewall blocks reconcile passes) ([#1347](https://github.com/fgarofalo56/csa-inabox/issues/1347)) ([29c3642](https://github.com/fgarofalo56/csa-inabox/commit/29c364255a54435addc269359649e89934fc509e))
+* **fiab-deploy:** parametrize full-app-deploy for region/sub + deployAppsEnabled toggle ([#1349](https://github.com/fgarofalo56/csa-inabox/issues/1349)) ([6d25812](https://github.com/fgarofalo56/csa-inabox/commit/6d258126ef62e4465bc303dc1c42a7d09cc7c95c))
+* **fiab-deploy:** per-sub-unique ADX name + auto-register RPs/features (DMLZ rebuild) ([#1342](https://github.com/fgarofalo56/csa-inabox/issues/1342)) ([886a5a3](https://github.com/fgarofalo56/csa-inabox/commit/886a5a3af4540c60529973ae655685d90503227e))
+
+
+### Bug Fixes
+
+* **fiab-bicep:** bundle Loom backend selectors to clear ARM 256-param limit (audit-t166) ([#1334](https://github.com/fgarofalo56/csa-inabox/issues/1334)) ([8fa907f](https://github.com/fgarofalo56/csa-inabox/commit/8fa907f7eedc683bf28f694bc744e868d9741072))
+* **fiab-bicep:** correct bogus Monitoring Contributor role GUID (deploy blocker) ([#1339](https://github.com/fgarofalo56/csa-inabox/issues/1339)) ([1f381dc](https://github.com/fgarofalo56/csa-inabox/commit/1f381dc951e2a4de3df24196601686c22852d5c1))
+* **fiab-bicep:** declare azure-maps params in root template (BCP259 deploy blocker) ([#1337](https://github.com/fgarofalo56/csa-inabox/issues/1337)) ([97d8986](https://github.com/fgarofalo56/csa-inabox/commit/97d898642e2bad735fc8a02a810b0d28da995b32))
+* **fiab-bicep:** escape apostrophe in adminPlaneAdxClusterName description (BCP071) ([#1343](https://github.com/fgarofalo56/csa-inabox/issues/1343)) ([a4dca25](https://github.com/fgarofalo56/csa-inabox/commit/a4dca254c5c7e5e62321d59450b714b56e70b0e0))
+* **fiab-bicep:** remove eager fail-var that broke what-if for all topologies (audit-t156) ([#1338](https://github.com/fgarofalo56/csa-inabox/issues/1338)) ([1362829](https://github.com/fgarofalo56/csa-inabox/commit/13628292a2f74575604abc2e1a3ffed77a2e5482))
+* **fiab-bicep:** skip ADX DLZ-scoped grants in tenant mode (ResourceGroupNotFound) ([#1348](https://github.com/fgarofalo56/csa-inabox/issues/1348)) ([450c100](https://github.com/fgarofalo56/csa-inabox/commit/450c1001f891a80881ebbeb949ab7cdb964be395))
+* **fiab-bicep:** suffix AFD endpoint name with uniqueString (global hostname collision) ([#1352](https://github.com/fgarofalo56/csa-inabox/issues/1352)) ([8cb995e](https://github.com/fgarofalo56/csa-inabox/commit/8cb995e3e41b7e542f94a2621347e4441e0a5b54))
+* **fiab-bicep:** use real Monitoring Contributor GUID 749f88d5-cbae (deploy blocker) ([#1341](https://github.com/fgarofalo56/csa-inabox/issues/1341)) ([870c992](https://github.com/fgarofalo56/csa-inabox/commit/870c99248d4112a4710bda260852d496e92b8bef))
+* **fiab-deploy:** add mcpBridge image tag + build target + skip_role_grants ([#1350](https://github.com/fgarofalo56/csa-inabox/issues/1350)) ([7b5fde2](https://github.com/fgarofalo56/csa-inabox/commit/7b5fde2904589111d49d17521c94eb82ce56c684))
+* **fiab-deploy:** correct 3 hallucinated role GUIDs + purview/maps toggles for region split ([#1345](https://github.com/fgarofalo56/csa-inabox/issues/1345)) ([ac2b913](https://github.com/fgarofalo56/csa-inabox/commit/ac2b9139e6da6b399388ba2d845c52aec0141246))
+* **fiab-deploy:** pass region input to bicep location param (centralus capacity) ([#1344](https://github.com/fgarofalo56/csa-inabox/issues/1344)) ([f28dbbc](https://github.com/fgarofalo56/csa-inabox/commit/f28dbbca345a0b847028dea196fe54375f55672e))
+* **fiab-deploy:** remove duplicate topology input that broke workflow_dispatch ([#1336](https://github.com/fgarofalo56/csa-inabox/issues/1336)) ([b8e87c0](https://github.com/fgarofalo56/csa-inabox/commit/b8e87c014a5d284e8bb6ff731a9f30bb421ab2ba))
+* **fiab-deploy:** scope hub-exists guard to target sub, not tenant-wide (audit-t156) ([#1335](https://github.com/fgarofalo56/csa-inabox/issues/1335)) ([e5a532f](https://github.com/fgarofalo56/csa-inabox/commit/e5a532f4462f6114e6bdf0f1a572b7e3716b1960))
+
+
+### Documentation
+
+* **csa-loom:** tenant topology + deploy-flow diagrams, planner deploymentMode, topology tutorial (audit-t163) ([#1327](https://github.com/fgarofalo56/csa-inabox/issues/1327)) ([693b7c4](https://github.com/fgarofalo56/csa-inabox/commit/693b7c4aa84dd6fbbeafbe67c7a9555c2ca05440))
+* **csa-loom:** Wave-13b spec — ARM-256 param unblock + topology enhancements ([#1333](https://github.com/fgarofalo56/csa-inabox/issues/1333)) ([5ed9269](https://github.com/fgarofalo56/csa-inabox/commit/5ed9269de61bee38463f91233653800d1f862899))
+
 ## [0.39.0](https://github.com/fgarofalo56/csa-inabox/compare/csa-inabox-v0.38.0...csa-inabox-v0.39.0) (2026-06-12)
 
 
