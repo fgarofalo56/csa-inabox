@@ -790,6 +790,12 @@ module adminPlane 'modules/admin-plane/main.bicep' = if (deployAdminPlane) {
     // via scripts/csa-loom/patch-navigator-env.sh (same pattern as the Cosmos
     // endpoints below).
     loomStorageAccount: useSingleDlz ? take('saloomdefault${uniqueString(singleDlzRg.id)}', 24) : ''
+    // Tenant/multi-sub: no LOCAL DLZ exists yet (DLZs attach later), so the ADX
+    // cluster's DLZ-scoped Event Hub / storage grants must NOT fire — they would
+    // target the non-existent rg-csa-loom-dlz-single-<loc> RG (ResourceGroupNotFound).
+    // Empty in non-single-sub so the grants skip; the DLZ applies them on attach.
+    loomEventHubNamespace: useSingleDlz ? 'evhns-loom-default-${location}' : ''
+    loomDlzRg: useSingleDlz ? singleDlzRg.name : adminPlaneRgName
     loomCosmosAccount: take('cosmos-loom-default-${uniqueString(singleDlzRg.id)}', 44)
     // Forward the Cosmos data-plane endpoints to the Console so the vector-store
     // and graph editors bind to the deployed accounts by default (no manual
