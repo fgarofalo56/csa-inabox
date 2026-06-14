@@ -210,12 +210,12 @@ resource consoleMonitoringContributor 'Microsoft.Authorization/roleAssignments@2
 // which require the Console UAMI's AllDatabasesAdmin grant below
 // (adxConsoleAdmin) — NOT an Azure roleAssignment. Row-Level Security
 // (.alter table policy row_level_security) likewise rides AllDatabasesAdmin.
-// Role ID 833127c3-3d62-4978-9c27-c0a5e418f64f is cloud-agnostic.
+// Role ID b24988ac-6180-42a0-ab88-20f7382dd24c is cloud-agnostic.
 resource consoleKustoContributor 'Microsoft.Authorization/roleAssignments@2022-04-01' = if (!empty(consolePrincipalId) && !skipRoleGrants) {
   scope: adxCluster
-  name: guid(adxCluster.id, consolePrincipalId, '833127c3-3d62-4978-9c27-c0a5e418f64f')
+  name: guid(adxCluster.id, consolePrincipalId, 'b24988ac-6180-42a0-ab88-20f7382dd24c')
   properties: {
-    roleDefinitionId: subscriptionResourceId('Microsoft.Authorization/roleDefinitions', '833127c3-3d62-4978-9c27-c0a5e418f64f')
+    roleDefinitionId: subscriptionResourceId('Microsoft.Authorization/roleDefinitions', 'b24988ac-6180-42a0-ab88-20f7382dd24c')
     principalId: consolePrincipalId
     principalType: 'ServicePrincipal'
   }

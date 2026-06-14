@@ -57,12 +57,12 @@ resource transformation 'Microsoft.StreamAnalytics/streamingjobs/transformations
 }
 
 // Stream Analytics Contributor — list / start / stop / edit transformations
-// (role 65cb152a-1b39-4f9d-aafa-1f49f88b1f5b).
+// (role 6e0c8711-85a0-4490-8365-8ec13c4560b4).
 resource asaContributor 'Microsoft.Authorization/roleAssignments@2022-04-01' = if (!empty(consolePrincipalId) && !skipRoleGrants) {
   scope: resourceGroup()
-  name: guid(resourceGroup().id, consolePrincipalId, '65cb152a-1b39-4f9d-aafa-1f49f88b1f5b')
+  name: guid(resourceGroup().id, consolePrincipalId, '6e0c8711-85a0-4490-8365-8ec13c4560b4')
   properties: {
-    roleDefinitionId: subscriptionResourceId('Microsoft.Authorization/roleDefinitions', '65cb152a-1b39-4f9d-aafa-1f49f88b1f5b')
+    roleDefinitionId: subscriptionResourceId('Microsoft.Authorization/roleDefinitions', '6e0c8711-85a0-4490-8365-8ec13c4560b4')
     principalId: consolePrincipalId
     principalType: 'ServicePrincipal'
   }
