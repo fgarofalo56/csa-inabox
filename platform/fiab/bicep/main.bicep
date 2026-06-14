@@ -603,6 +603,9 @@ param loomAzureMapsAccount string = ''
 @description('Deploy a fresh Azure Maps Gen2 account for the Geo editors (Commercial/GCC only — the admin-plane module also gates on boundary). Set false on GCC-High/IL5 where Azure Maps is unavailable. Passed through to the admin-plane module.')
 param azureMapsEnabled bool = true
 
+@description('Deploy the hub Azure Firewall (admin-plane egress filtering). Default true. Distinct from firewallEnabled (deploy-planner). Set false to skip — nothing consumes the hub firewall; avoids FirewallPolicyUpdateFailed on reconcile.')
+param hubFirewallEnabled bool = true
+
 @description('Opt-in ADF CDC mirroring — pre-existing ADF linked service for the relational SOURCE (Azure SQL / SQL Server). Empty = built-in CSV snapshot engine (Azure-native, no Fabric).')
 param loomMirrorSourceLinkedService string = ''
 
@@ -852,6 +855,7 @@ module adminPlane 'modules/admin-plane/main.bicep' = if (deployAdminPlane) {
     loomMirrorBackend: loomMirrorBackend
     loomAzureMapsAccount: loomAzureMapsAccount
     azureMapsEnabled: azureMapsEnabled
+    firewallEnabled: hubFirewallEnabled
     loomMirrorSourceLinkedService: loomMirrorSourceLinkedService
     loomMirrorAdlsLinkedService: loomMirrorAdlsLinkedService
     loomMirrorSnowflakeLinkedService: loomMirrorSnowflakeLinkedService
