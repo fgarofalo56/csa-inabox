@@ -114,9 +114,17 @@ resource fdProfile 'Microsoft.Cdn/profiles@2024-02-01' = {
   sku: { name: 'Premium_AzureFrontDoor' }
 }
 
+// AFD Standard/Premium derives the endpoint's public hostname deterministically
+// from the endpoint NAME (loom-console-<hash>.z01.azurefd.net). A bare
+// 'loom-console' therefore collides globally with any OTHER hub's endpoint of the
+// same name ("That resource name isn't available." — hit live on the centralus
+// clean-rebuild while the old eastus2 hub's 'loom-console' endpoint was still up).
+// Suffixing with uniqueString(rg.id) makes the name unique per admin-plane RG so a
+// new hub can stand up alongside an old one during a migration. Cosmetic only —
+// end users reach the console via the vanity custom domain, not this host.
 resource fdEndpoint 'Microsoft.Cdn/profiles/afdEndpoints@2024-02-01' = {
   parent: fdProfile
-  name: 'loom-console'
+  name: 'loom-console-${uniqueString(resourceGroup().id)}'
   location: 'global'
   tags: complianceTags
   properties: {

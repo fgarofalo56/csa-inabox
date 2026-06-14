@@ -34,6 +34,9 @@ regexes = [
     '''8ebe5a00-799e-43f5-a45b-b3b502350a71''',  # Search Index Data Reader
     '''1407120a-92aa-4202-b7e9-c0e197c71c8f''',  # Search Index Data Contributor
     '''5bd9cd88-fe45-4216-938b-f97437e15450''',  # DocumentDB Account Contributor (Cosmos keys)
+    '''312a565d-c81f-4fd8-895a-4e21e48d571c''',  # API Management Service Contributor
+    '''87a39d53-fc1b-424a-814c-f7e04687dc9e''',  # Logic App Contributor
+    '''673868aa-7521-48a0-acc6-0f60742d39f5''',  # Data Factory Contributor
 
     # Fake/example values (tests, parity docs, code defaults) that trip the
     # generic-api-key entropy heuristic but are NON-secret identifiers:
