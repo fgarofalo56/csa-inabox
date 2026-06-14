@@ -165,6 +165,8 @@ jobs:
             ctx: ./apps/fiab-setup-orchestrator
           - app: loom-mcp
             ctx: ./apps/fiab-mcp-config
+          - app: loom-mcp-bridge
+            ctx: ./apps/fiab-mcp-bridge
           - app: loom-activator
             ctx: ./apps/fiab-activator-engine
           - app: loom-mirroring

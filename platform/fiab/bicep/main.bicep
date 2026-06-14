@@ -633,6 +633,7 @@ param loomVersion string = 'v0.1'
 param appImageTags object = {
   console: 'v0.1'
   mcp: 'v0.1'
+  mcpBridge: 'v0.1'
   orchestrator: 'v0.1'
   activator: 'v0.1'
   mirroring: 'v0.1'
