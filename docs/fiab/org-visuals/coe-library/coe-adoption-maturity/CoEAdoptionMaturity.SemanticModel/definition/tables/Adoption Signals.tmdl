@@ -1,0 +1,75 @@
+table 'Adoption Signals'
+	lineageTag: 110b1ea5-e0f5-e2ae-5467-00a5a574cc60
+
+	measure 'Active Users' = SUM('Adoption Signals'[MonthlyActiveUsers])
+		formatString: #,##0
+		lineageTag: c4eb0e07-c22b-5d77-9c13-c1163f087c20
+
+	measure 'Workloads Onboarded' = SUM('Adoption Signals'[WorkloadsOnboarded])
+		formatString: #,##0
+		lineageTag: 652bb183-8bfb-4f75-834b-759a7002a232
+
+	column 'Service'
+		dataType: string
+		lineageTag: 65770a30-0ffc-5e56-07f7-8274032cc317
+		summarizeBy: none
+		sourceColumn: Service
+
+		annotation SummarizationSetBy = Automatic
+
+	column 'Month'
+		dataType: dateTime
+		formatString: General Date
+		lineageTag: 596c29e4-ac13-544a-502c-da087b0a9751
+		summarizeBy: none
+		sourceColumn: Month
+
+		annotation SummarizationSetBy = Automatic
+
+	column 'MonthlyActiveUsers'
+		dataType: int64
+		lineageTag: 91064d11-df66-0640-219e-5a31ef8f6405
+		summarizeBy: sum
+		sourceColumn: MonthlyActiveUsers
+
+		annotation SummarizationSetBy = Automatic
+
+	column 'WorkloadsOnboarded'
+		dataType: int64
+		lineageTag: 36e9338e-cfab-86a3-23da-868b43e09055
+		summarizeBy: sum
+		sourceColumn: WorkloadsOnboarded
+
+		annotation SummarizationSetBy = Automatic
+
+	partition 'Adoption Signals' = m
+		mode: import
+		source =
+				let
+					// SAMPLE DATA — replace the "Source" step below with the live Azure query.
+					// === Live source (uncomment + remove the sample step) ===
+					// let
+					//     // Azure Monitor / Log Analytics query API (AAD/OAuth via the data-source credential).
+					//     Q = [query="AppEvents | summarize MonthlyActiveUsers=dcount(UserId), WorkloadsOnboarded=dcount(WorkloadId) by Service=AppRoleName, Month=startofmonth(TimeGenerated)"],
+					//     Url = "https://api.loganalytics.io/v1/workspaces/" & LogAnalyticsWorkspaceId & "/query",
+					//     Resp = Json.Document(Web.Contents(Url, [Headers=[#"Content-Type"="application/json"], Content=Json.FromValue(Q)])),
+					//     T = Resp[tables]{0},
+					//     Rows = Table.FromRows(T[rows], List.Transform(T[columns], each [name]))
+					// in
+					//     Rows
+					// === end live source ===
+					Source = #table(
+						type table [#"Service"=type text, #"Month"=type datetime, #"MonthlyActiveUsers"=Int64.Type, #"WorkloadsOnboarded"=Int64.Type],
+						{
+							{"Azure", #datetime(2026,1,1,0,0,0), 420, 12},
+							{"Azure", #datetime(2026,2,1,0,0,0), 510, 18},
+							{"Azure", #datetime(2026,3,1,0,0,0), 640, 25},
+							{"Loom", #datetime(2026,1,1,0,0,0), 80, 4},
+							{"Loom", #datetime(2026,2,1,0,0,0), 140, 9},
+							{"Loom", #datetime(2026,3,1,0,0,0), 220, 15}
+						}
+					)
+				in
+					Source
+
+	annotation PBI_ResultType = Table

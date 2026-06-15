@@ -1,0 +1,81 @@
+{
+  "$schema": "https://developer.microsoft.com/json-schemas/fabric/item/report/definition/visualContainer/1.4.0/schema.json",
+  "name": "176dacf9940c36c5623ece84eba2545f",
+  "position": {
+    "x": 12,
+    "y": 430,
+    "z": 6,
+    "width": 1256,
+    "height": 270,
+    "tabOrder": 6
+  },
+  "visual": {
+    "visualType": "tableEx",
+    "query": {
+      "queryState": {
+        "Values": {
+          "projections": [
+            {
+              "field": {
+                "Column": {
+                  "Expression": {
+                    "SourceRef": {
+                      "Entity": "Policy Compliance"
+                    }
+                  },
+                  "Property": "PolicyInitiative"
+                }
+              },
+              "queryRef": "Policy Compliance.PolicyInitiative"
+            },
+            {
+              "field": {
+                "Column": {
+                  "Expression": {
+                    "SourceRef": {
+                      "Entity": "Policy Compliance"
+                    }
+                  },
+                  "Property": "ComplianceState"
+                }
+              },
+              "queryRef": "Policy Compliance.ComplianceState"
+            },
+            {
+              "field": {
+                "Measure": {
+                  "Expression": {
+                    "SourceRef": {
+                      "Entity": "Policy Compliance"
+                    }
+                  },
+                  "Property": "Resources Evaluated"
+                }
+              },
+              "queryRef": "Policy Compliance.Resources Evaluated"
+            }
+          ]
+        }
+      },
+      "sortDefinition": {
+        "isDefaultSort": true
+      }
+    },
+    "objects": {
+      "title": [
+        {
+          "properties": {
+            "text": {
+              "expr": {
+                "Literal": {
+                  "Value": "'Policy compliance detail'"
+                }
+              }
+            }
+          }
+        }
+      ]
+    },
+    "drillFilterOtherVisuals": true
+  }
+}

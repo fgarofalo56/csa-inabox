@@ -1,0 +1,94 @@
+{
+  "$schema": "https://developer.microsoft.com/json-schemas/fabric/item/report/definition/visualContainer/1.4.0/schema.json",
+  "name": "0e15f34a67eef592982cf4c49348f60f",
+  "position": {
+    "x": 12,
+    "y": 430,
+    "z": 6,
+    "width": 1256,
+    "height": 270,
+    "tabOrder": 6
+  },
+  "visual": {
+    "visualType": "tableEx",
+    "query": {
+      "queryState": {
+        "Values": {
+          "projections": [
+            {
+              "field": {
+                "Column": {
+                  "Expression": {
+                    "SourceRef": {
+                      "Entity": "Incidents"
+                    }
+                  },
+                  "Property": "Severity"
+                }
+              },
+              "queryRef": "Incidents.Severity"
+            },
+            {
+              "field": {
+                "Column": {
+                  "Expression": {
+                    "SourceRef": {
+                      "Entity": "Incidents"
+                    }
+                  },
+                  "Property": "ServiceName"
+                }
+              },
+              "queryRef": "Incidents.ServiceName"
+            },
+            {
+              "field": {
+                "Measure": {
+                  "Expression": {
+                    "SourceRef": {
+                      "Entity": "Incidents"
+                    }
+                  },
+                  "Property": "Incidents"
+                }
+              },
+              "queryRef": "Incidents.Incidents"
+            },
+            {
+              "field": {
+                "Measure": {
+                  "Expression": {
+                    "SourceRef": {
+                      "Entity": "Incidents"
+                    }
+                  },
+                  "Property": "Avg MTTR (min)"
+                }
+              },
+              "queryRef": "Incidents.Avg MTTR (min)"
+            }
+          ]
+        }
+      },
+      "sortDefinition": {
+        "isDefaultSort": true
+      }
+    },
+    "objects": {
+      "title": [
+        {
+          "properties": {
+            "text": {
+              "expr": {
+                "Literal": {
+                  "Value": "'Incident detail'"
+                }
+              }
+            }
+          }
+        }
+      ]
+    },
+    "drillFilterOtherVisuals": true
+  }
+}

@@ -1,0 +1,72 @@
+{
+  "$schema": "https://developer.microsoft.com/json-schemas/fabric/item/report/definition/visualContainer/1.4.0/schema.json",
+  "name": "3b38a0b6b774b7276f1a416fdeb82247",
+  "position": {
+    "x": 12,
+    "y": 150,
+    "z": 4,
+    "width": 620,
+    "height": 260,
+    "tabOrder": 4
+  },
+  "visual": {
+    "visualType": "clusteredColumnChart",
+    "query": {
+      "queryState": {
+        "Category": {
+          "projections": [
+            {
+              "field": {
+                "Column": {
+                  "Expression": {
+                    "SourceRef": {
+                      "Entity": "Maturity Assessment"
+                    }
+                  },
+                  "Property": "Pillar"
+                }
+              },
+              "queryRef": "Maturity Assessment.Pillar"
+            }
+          ]
+        },
+        "Y": {
+          "projections": [
+            {
+              "field": {
+                "Measure": {
+                  "Expression": {
+                    "SourceRef": {
+                      "Entity": "Maturity Assessment"
+                    }
+                  },
+                  "Property": "Avg Maturity"
+                }
+              },
+              "queryRef": "Maturity Assessment.Avg Maturity"
+            }
+          ]
+        }
+      },
+      "sortDefinition": {
+        "isDefaultSort": true
+      }
+    },
+    "objects": {
+      "title": [
+        {
+          "properties": {
+            "text": {
+              "expr": {
+                "Literal": {
+                  "Value": "'Maturity by pillar'"
+                }
+              }
+            }
+          }
+        }
+      ]
+    },
+    "drillFilterOtherVisuals": true
+  }
+}

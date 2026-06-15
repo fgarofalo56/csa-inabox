@@ -1,0 +1,11 @@
+{
+  "$schema": "https://developer.microsoft.com/json-schemas/fabric/gitIntegration/platformProperties/2.0.0/schema.json",
+  "metadata": {
+    "type": "SemanticModel",
+    "displayName": "ResourceInventorySprawl"
+  },
+  "config": {
+    "version": "2.0",
+    "logicalId": "ae5b76ca-8221-56e2-83d9-21a7bf41859f"
+  }
+}

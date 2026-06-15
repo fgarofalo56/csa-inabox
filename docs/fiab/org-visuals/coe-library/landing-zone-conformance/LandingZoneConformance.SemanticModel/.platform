@@ -1,0 +1,11 @@
+{
+  "$schema": "https://developer.microsoft.com/json-schemas/fabric/gitIntegration/platformProperties/2.0.0/schema.json",
+  "metadata": {
+    "type": "SemanticModel",
+    "displayName": "LandingZoneConformance"
+  },
+  "config": {
+    "version": "2.0",
+    "logicalId": "7abdd046-515e-175b-3435-f8ee433ba24c"
+  }
+}

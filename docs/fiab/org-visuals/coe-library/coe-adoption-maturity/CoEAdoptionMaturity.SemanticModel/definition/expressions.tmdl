@@ -1,0 +1,36 @@
+/// Microsoft Entra tenant (directory) ID.
+expression TenantId = "00000000-0000-0000-0000-000000000000" meta [IsParameterQuery=true, Type="Text", IsParameterQueryRequired=true]
+	lineageTag: 3c250690-b022-c3e6-5239-ef06311571a7
+	queryGroup: 'Parameters'
+
+	annotation PBI_ResultType = Text
+
+/// Azure subscription ID to scope estate queries to.
+expression SubscriptionId = "00000000-0000-0000-0000-000000000000" meta [IsParameterQuery=true, Type="Text", IsParameterQueryRequired=true]
+	lineageTag: 4daa36a9-62d1-fbf4-041f-34974558fbff
+	queryGroup: 'Parameters'
+
+	annotation PBI_ResultType = Text
+
+/// Cost Management scope (subscription, RG, billing account or MG).
+expression BillingScope = "/subscriptions/00000000-0000-0000-0000-000000000000" meta [IsParameterQuery=true, Type="Text", IsParameterQueryRequired=true]
+	lineageTag: 9fe4ac38-8120-3fec-a9b4-a2c4f124c4a2
+	queryGroup: 'Parameters'
+
+	annotation PBI_ResultType = Text
+
+/// Log Analytics workspace (customer) ID for operational/security logs.
+expression LogAnalyticsWorkspaceId = "00000000-0000-0000-0000-000000000000" meta [IsParameterQuery=true, Type="Text", IsParameterQueryRequired=true]
+	lineageTag: a05219b3-e880-3a58-276f-ed7300776544
+	queryGroup: 'Parameters'
+
+	annotation PBI_ResultType = Text
+
+/// ARM endpoint. Gov: https://management.usgovcloudapi.net.
+expression ManagementApiBase = "https://management.azure.com" meta [IsParameterQuery=true, Type="Text", IsParameterQueryRequired=true]
+	lineageTag: 033facc1-93bc-af39-5411-58bdf9c9bf27
+	queryGroup: 'Parameters'
+
+	annotation PBI_ResultType = Text
+
+queryGroup Parameters

@@ -22,6 +22,7 @@ import {
 import { Section, Toolbar } from '@/lib/components/ui/section';
 import { LoomDataTable, type LoomColumn } from '@/lib/components/ui/loom-data-table';
 import { NotConfiguredBar, type NotConfiguredHint } from '@/lib/components/admin-security/not-configured-bar';
+import { CoeLibraryPane } from '@/lib/coe-library/coe-library-pane';
 
 interface OrgVisual {
   id: string;
@@ -218,6 +219,8 @@ export function OrgVisualsPane() {
 
   return (
     <>
+      <CoeLibraryPane />
+
       <Section title="About organizational visuals">
         <div className={s.explainer}>
           <Info20Regular style={{ color: tokens.colorBrandForeground1, flexShrink: 0, marginTop: 2 }} />

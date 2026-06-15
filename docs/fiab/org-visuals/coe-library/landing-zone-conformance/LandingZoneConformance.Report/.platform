@@ -1,0 +1,11 @@
+{
+  "$schema": "https://developer.microsoft.com/json-schemas/fabric/gitIntegration/platformProperties/2.0.0/schema.json",
+  "metadata": {
+    "type": "Report",
+    "displayName": "LandingZoneConformance"
+  },
+  "config": {
+    "version": "2.0",
+    "logicalId": "893e4906-a118-1c84-9d12-fb74435706e2"
+  }
+}

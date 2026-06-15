@@ -1,0 +1,68 @@
+table 'Secure Score'
+	lineageTag: 8ebb8b62-d8ec-e297-6363-b248569b56fd
+
+	/// Defender for Cloud secure score (securityresources via ARG).
+	measure 'Secure Score %' = AVERAGE('Secure Score'[Percentage])
+		formatString: 0.0%
+		lineageTag: 6cfadbd4-9f6a-1e56-b247-5d192c95eb47
+
+	column 'SubscriptionName'
+		dataType: string
+		lineageTag: a8251330-aefe-ffbb-2984-39c5d040bd88
+		summarizeBy: none
+		sourceColumn: SubscriptionName
+
+		annotation SummarizationSetBy = Automatic
+
+	column 'CurrentScore'
+		dataType: double
+		lineageTag: a0b96bdd-1c1e-401e-7cff-d8f9973cfb24
+		summarizeBy: average
+		sourceColumn: CurrentScore
+
+		annotation SummarizationSetBy = Automatic
+
+	column 'MaxScore'
+		dataType: double
+		lineageTag: 0c9c6a93-99a8-dc89-82a1-3ba36c5305b7
+		summarizeBy: average
+		sourceColumn: MaxScore
+
+		annotation SummarizationSetBy = Automatic
+
+	column 'Percentage'
+		dataType: double
+		lineageTag: 21ef8353-c4cd-f95b-3e84-ead09f309c68
+		summarizeBy: average
+		sourceColumn: Percentage
+
+		annotation SummarizationSetBy = Automatic
+
+	partition 'Secure Score' = m
+		mode: import
+		source =
+				let
+					// SAMPLE DATA — replace the "Source" step below with the live Azure query.
+					// === Live source (uncomment + remove the sample step) ===
+					// let
+					//     // Azure Resource Graph via ARM REST (AAD/OAuth via the data-source credential).
+					//     Body = "{""subscriptions"":[""" & SubscriptionId & """],""query"":""securityresources | where type == 'microsoft.security/securescores' | extend pct = toreal(properties.score.percentage) | project subscriptionId, pct""}",
+					//     Resp = Web.Contents(ManagementApiBase & "/providers/Microsoft.ResourceGraph/resources?api-version=2022-10-01",
+					//         [Headers=[#"Content-Type"="application/json"], Content=Text.ToBinary(Body)]),
+					//     Json = Json.Document(Resp),
+					//     Rows = Table.FromRecords(Json[data])
+					// in
+					//     Rows
+					// === end live source ===
+					Source = #table(
+						type table [#"SubscriptionName"=type text, #"CurrentScore"=type number, #"MaxScore"=type number, #"Percentage"=type number],
+						{
+							{"prod-platform", 38, 58, 0.655},
+							{"prod-data", 41, 58, 0.707},
+							{"nonprod-dev", 29, 58, 0.5}
+						}
+					)
+				in
+					Source
+
+	annotation PBI_ResultType = Table

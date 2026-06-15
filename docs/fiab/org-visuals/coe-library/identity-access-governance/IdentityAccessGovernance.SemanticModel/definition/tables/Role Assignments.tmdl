@@ -1,0 +1,87 @@
+table 'Role Assignments'
+	lineageTag: 2ae1a97e-0f7c-0460-408d-af181ba29bed
+
+	/// Azure RBAC assignments (ARG authorizationresources / Graph).
+	measure 'Assignments' = SUM('Role Assignments'[AssignmentCount])
+		formatString: #,##0
+		lineageTag: ae951654-1ce3-0efb-fb93-06bf5f3513ff
+
+	measure 'Privileged Assignments' = CALCULATE([Assignments], 'Role Assignments'[IsPrivileged] = TRUE())
+		formatString: #,##0
+		lineageTag: 244ad856-9686-1490-d005-ffec3dc16d59
+
+	measure 'Privileged %' = DIVIDE([Privileged Assignments], [Assignments])
+		formatString: 0.0%
+		lineageTag: f1b51956-d702-184b-322f-169c06add3fc
+
+	column 'RoleName'
+		dataType: string
+		lineageTag: 4847a238-d651-66bb-6918-52baab23851d
+		summarizeBy: none
+		sourceColumn: RoleName
+
+		annotation SummarizationSetBy = Automatic
+
+	column 'Scope'
+		dataType: string
+		lineageTag: 1caba3af-acf4-3fe3-1335-17efb0549f62
+		summarizeBy: none
+		sourceColumn: Scope
+
+		annotation SummarizationSetBy = Automatic
+
+	column 'PrincipalType'
+		dataType: string
+		lineageTag: 3a89cb3d-bad6-6978-158f-443daad04cc2
+		summarizeBy: none
+		sourceColumn: PrincipalType
+
+		annotation SummarizationSetBy = Automatic
+
+	column 'IsPrivileged'
+		dataType: boolean
+		lineageTag: a93c911a-2c81-cb00-cb7a-e5ca6e19c4bc
+		summarizeBy: none
+		sourceColumn: IsPrivileged
+
+		annotation SummarizationSetBy = Automatic
+
+	column 'AssignmentCount'
+		dataType: int64
+		lineageTag: aea0b2a7-6026-238f-a679-1aa2b301014c
+		summarizeBy: sum
+		sourceColumn: AssignmentCount
+
+		annotation SummarizationSetBy = Automatic
+
+	partition 'Role Assignments' = m
+		mode: import
+		source =
+				let
+					// SAMPLE DATA — replace the "Source" step below with the live Azure query.
+					// === Live source (uncomment + remove the sample step) ===
+					// let
+					//     // Azure Resource Graph via ARM REST (AAD/OAuth via the data-source credential).
+					//     Body = "{""subscriptions"":[""" & SubscriptionId & """],""query"":""authorizationresources | where type == 'microsoft.authorization/roleassignments' | summarize AssignmentCount=count() by RoleName=tostring(properties.roleDefinitionId), Scope=tostring(properties.scope), PrincipalType=tostring(properties.principalType)""}",
+					//     Resp = Web.Contents(ManagementApiBase & "/providers/Microsoft.ResourceGraph/resources?api-version=2022-10-01",
+					//         [Headers=[#"Content-Type"="application/json"], Content=Text.ToBinary(Body)]),
+					//     Json = Json.Document(Resp),
+					//     Rows = Table.FromRecords(Json[data])
+					// in
+					//     Rows
+					// === end live source ===
+					Source = #table(
+						type table [#"RoleName"=type text, #"Scope"=type text, #"PrincipalType"=type text, #"IsPrivileged"=type logical, #"AssignmentCount"=Int64.Type],
+						{
+							{"Owner", "subscription", "User", true, 28},
+							{"Contributor", "subscription", "Group", false, 64},
+							{"User Access Administrator", "subscription", "User", true, 11},
+							{"Reader", "subscription", "Group", false, 152},
+							{"Contributor", "resourceGroup", "ServicePrincipal", false, 96},
+							{"Owner", "managementGroup", "Group", true, 6}
+						}
+					)
+				in
+					Source
+
+	annotation PBI_ResultType = Table

@@ -1,0 +1,11 @@
+{
+  "$schema": "https://developer.microsoft.com/json-schemas/fabric/gitIntegration/platformProperties/2.0.0/schema.json",
+  "metadata": {
+    "type": "SemanticModel",
+    "displayName": "DataEstateGovernance"
+  },
+  "config": {
+    "version": "2.0",
+    "logicalId": "8b08b7c1-6a8f-5c2b-e7d5-6bd92626d670"
+  }
+}

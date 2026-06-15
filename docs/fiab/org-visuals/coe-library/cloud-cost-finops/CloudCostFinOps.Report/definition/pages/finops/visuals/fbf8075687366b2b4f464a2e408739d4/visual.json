@@ -1,0 +1,107 @@
+{
+  "$schema": "https://developer.microsoft.com/json-schemas/fabric/item/report/definition/visualContainer/1.4.0/schema.json",
+  "name": "fbf8075687366b2b4f464a2e408739d4",
+  "position": {
+    "x": 12,
+    "y": 430,
+    "z": 6,
+    "width": 1256,
+    "height": 270,
+    "tabOrder": 6
+  },
+  "visual": {
+    "visualType": "tableEx",
+    "query": {
+      "queryState": {
+        "Values": {
+          "projections": [
+            {
+              "field": {
+                "Column": {
+                  "Expression": {
+                    "SourceRef": {
+                      "Entity": "Cost"
+                    }
+                  },
+                  "Property": "SubscriptionName"
+                }
+              },
+              "queryRef": "Cost.SubscriptionName"
+            },
+            {
+              "field": {
+                "Column": {
+                  "Expression": {
+                    "SourceRef": {
+                      "Entity": "Cost"
+                    }
+                  },
+                  "Property": "ResourceGroup"
+                }
+              },
+              "queryRef": "Cost.ResourceGroup"
+            },
+            {
+              "field": {
+                "Column": {
+                  "Expression": {
+                    "SourceRef": {
+                      "Entity": "Cost"
+                    }
+                  },
+                  "Property": "ServiceName"
+                }
+              },
+              "queryRef": "Cost.ServiceName"
+            },
+            {
+              "field": {
+                "Column": {
+                  "Expression": {
+                    "SourceRef": {
+                      "Entity": "Cost"
+                    }
+                  },
+                  "Property": "CostCenterTag"
+                }
+              },
+              "queryRef": "Cost.CostCenterTag"
+            },
+            {
+              "field": {
+                "Measure": {
+                  "Expression": {
+                    "SourceRef": {
+                      "Entity": "Cost"
+                    }
+                  },
+                  "Property": "Total Cost"
+                }
+              },
+              "queryRef": "Cost.Total Cost"
+            }
+          ]
+        }
+      },
+      "sortDefinition": {
+        "isDefaultSort": true
+      }
+    },
+    "objects": {
+      "title": [
+        {
+          "properties": {
+            "text": {
+              "expr": {
+                "Literal": {
+                  "Value": "'Cost detail (by RG / tag)'"
+                }
+              }
+            }
+          }
+        }
+      ]
+    },
+    "drillFilterOtherVisuals": true
+  }
+}

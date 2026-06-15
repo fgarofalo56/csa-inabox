@@ -1,0 +1,74 @@
+table 'PIM'
+	lineageTag: ca713d3b-9fd1-f657-6699-fcaf6c1ff2ab
+
+	measure 'Eligible' = SUM('PIM'[EligibleCount])
+		formatString: #,##0
+		lineageTag: 407dd66a-bfe1-cb1e-4178-7656da48adb1
+
+	measure 'Active (standing)' = SUM('PIM'[ActiveCount])
+		formatString: #,##0
+		lineageTag: a62d9ad0-beb5-195b-440d-4dd5dd8e8abe
+
+	/// Share of privileged access that is just-in-time vs standing.
+	measure 'JIT Coverage %' = DIVIDE([Eligible], [Eligible] + [Active (standing)])
+		formatString: 0.0%
+		lineageTag: fc7898c0-48f2-5254-0fd8-2e221205dd5e
+
+	column 'RoleName'
+		dataType: string
+		lineageTag: 25c553b0-a546-63da-bebd-ae0a9abc9207
+		summarizeBy: none
+		sourceColumn: RoleName
+
+		annotation SummarizationSetBy = Automatic
+
+	column 'EligibleCount'
+		dataType: int64
+		lineageTag: 60b7048f-abe6-a8d4-dacb-f1ded40ea928
+		summarizeBy: sum
+		sourceColumn: EligibleCount
+
+		annotation SummarizationSetBy = Automatic
+
+	column 'ActiveCount'
+		dataType: int64
+		lineageTag: 29b42ccb-6c6a-1713-7996-c9219e80cfcb
+		summarizeBy: sum
+		sourceColumn: ActiveCount
+
+		annotation SummarizationSetBy = Automatic
+
+	column 'MfaEnforced'
+		dataType: boolean
+		lineageTag: 47e51f75-ed5a-5e11-61d3-5e07e9abb7d5
+		summarizeBy: none
+		sourceColumn: MfaEnforced
+
+		annotation SummarizationSetBy = Automatic
+
+	partition 'PIM' = m
+		mode: import
+		source =
+				let
+					// SAMPLE DATA — replace the "Source" step below with the live Azure query.
+					// === Live source (uncomment + remove the sample step) ===
+					// let
+					//     // Microsoft Graph (AAD/OAuth; scope Directory.Read.All / RoleManagement.Read.Directory).
+					//     Resp = Json.Document(Web.Contents("https://graph.microsoft.com/v1.0/roleManagement/directory/roleEligibilityScheduleInstances?$expand=roleDefinition,principal")),
+					//     Rows = Table.FromRecords(Resp[value])
+					// in
+					//     Rows
+					// === end live source ===
+					Source = #table(
+						type table [#"RoleName"=type text, #"EligibleCount"=Int64.Type, #"ActiveCount"=Int64.Type, #"MfaEnforced"=type logical],
+						{
+							{"Global Administrator", 8, 2, true},
+							{"Privileged Role Administrator", 5, 1, true},
+							{"Security Administrator", 6, 3, true},
+							{"Subscription Owner", 14, 9, false}
+						}
+					)
+				in
+					Source
+
+	annotation PBI_ResultType = Table

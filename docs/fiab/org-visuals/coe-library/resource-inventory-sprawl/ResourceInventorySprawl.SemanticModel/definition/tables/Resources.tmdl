@@ -1,0 +1,103 @@
+table 'Resources'
+	lineageTag: ae5d02b2-6869-f26e-f6b7-776a04b12cd0
+
+	/// Resource count from Azure Resource Graph.
+	measure 'Total Resources' = SUM('Resources'[ResourceCount])
+		formatString: #,##0
+		lineageTag: ecb445be-1642-cc9e-c96e-2c51358b1bc7
+
+	measure 'Untagged Resources' = CALCULATE([Total Resources], 'Resources'[HasOwnerTag] = FALSE())
+		formatString: #,##0
+		lineageTag: 83fc1a13-ebf5-b1ff-6808-d8c5230147f3
+
+	measure 'Untagged %' = DIVIDE([Untagged Resources], [Total Resources])
+		formatString: 0.0%
+		lineageTag: 73c8db07-5e0f-9188-a871-906bfab00256
+
+	measure 'Resource Types' = DISTINCTCOUNT('Resources'[ResourceType])
+		formatString: #,##0
+		lineageTag: 714574ec-23ae-6f8a-ec05-2f4e9ebbebff
+
+	measure 'Regions' = DISTINCTCOUNT('Resources'[Location])
+		formatString: #,##0
+		lineageTag: 21f71238-0091-2b9f-818c-f37df5ed74f1
+
+	column 'ResourceType'
+		dataType: string
+		lineageTag: a51ada7a-e6e4-e5e7-6834-6ab96cecd8a5
+		summarizeBy: none
+		sourceColumn: ResourceType
+
+		annotation SummarizationSetBy = Automatic
+
+	column 'Location'
+		dataType: string
+		lineageTag: 7227e0cf-b7ae-8de0-4acc-cb497fe0de3f
+		summarizeBy: none
+		sourceColumn: Location
+
+		annotation SummarizationSetBy = Automatic
+
+	column 'SubscriptionName'
+		dataType: string
+		lineageTag: 71a7c135-0e4a-c5e8-ca19-515198c50f8d
+		summarizeBy: none
+		sourceColumn: SubscriptionName
+
+		annotation SummarizationSetBy = Automatic
+
+	column 'Environment'
+		dataType: string
+		lineageTag: d27a1d87-8f07-e3cb-39f6-b5965b04f252
+		summarizeBy: none
+		sourceColumn: Environment
+
+		annotation SummarizationSetBy = Automatic
+
+	column 'HasOwnerTag'
+		dataType: boolean
+		lineageTag: ee94bad3-96ce-352f-c70c-de2081fa794e
+		summarizeBy: none
+		sourceColumn: HasOwnerTag
+
+		annotation SummarizationSetBy = Automatic
+
+	column 'ResourceCount'
+		dataType: int64
+		lineageTag: 99389a15-9499-a3a6-d126-b1c3148b723b
+		summarizeBy: sum
+		sourceColumn: ResourceCount
+
+		annotation SummarizationSetBy = Automatic
+
+	partition 'Resources' = m
+		mode: import
+		source =
+				let
+					// SAMPLE DATA — replace the "Source" step below with the live Azure query.
+					// === Live source (uncomment + remove the sample step) ===
+					// let
+					//     // Azure Resource Graph via ARM REST (AAD/OAuth via the data-source credential).
+					//     Body = "{""subscriptions"":[""" & SubscriptionId & """],""query"":""Resources | extend hasOwner = isnotempty(tags['owner']) | summarize ResourceCount=count() by ResourceType=type, Location=location, Environment=tostring(tags['environment']), hasOwner""}",
+					//     Resp = Web.Contents(ManagementApiBase & "/providers/Microsoft.ResourceGraph/resources?api-version=2022-10-01",
+					//         [Headers=[#"Content-Type"="application/json"], Content=Text.ToBinary(Body)]),
+					//     Json = Json.Document(Resp),
+					//     Rows = Table.FromRecords(Json[data])
+					// in
+					//     Rows
+					// === end live source ===
+					Source = #table(
+						type table [#"ResourceType"=type text, #"Location"=type text, #"SubscriptionName"=type text, #"Environment"=type text, #"HasOwnerTag"=type logical, #"ResourceCount"=Int64.Type],
+						{
+							{"microsoft.compute/virtualmachines", "eastus", "prod-platform", "prod", true, 142},
+							{"microsoft.storage/storageaccounts", "eastus", "prod-data", "prod", true, 88},
+							{"microsoft.compute/disks", "eastus2", "nonprod-dev", "dev", false, 230},
+							{"microsoft.network/networkinterfaces", "westus2", "prod-platform", "prod", false, 156},
+							{"microsoft.web/sites", "eastus", "nonprod-dev", "dev", false, 64},
+							{"microsoft.keyvault/vaults", "eastus", "prod-data", "prod", true, 22}
+						}
+					)
+				in
+					Source
+
+	annotation PBI_ResultType = Table

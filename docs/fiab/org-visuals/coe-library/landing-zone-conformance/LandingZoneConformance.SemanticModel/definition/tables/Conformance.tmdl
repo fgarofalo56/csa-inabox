@@ -1,0 +1,81 @@
+table 'Conformance'
+	lineageTag: f2106dd3-4dab-dff4-28d5-cfd2a070dc10
+
+	/// ALZ design-area controls evaluated via policy compliance (ARG).
+	measure 'Controls' = COUNTROWS('Conformance')
+		formatString: #,##0
+		lineageTag: a23ed384-b91f-bca4-2997-e3fe0caba4ab
+
+	measure 'Conformant' = CALCULATE([Controls], 'Conformance'[Status] = "Conformant")
+		formatString: #,##0
+		lineageTag: e4975b7d-8396-5955-59f5-1c1ed1c97c75
+
+	measure 'Conformance %' = DIVIDE([Conformant], [Controls])
+		formatString: 0.0%
+		lineageTag: a8446007-2762-f63d-7bb1-b2960749d00b
+
+	column 'DesignArea'
+		dataType: string
+		lineageTag: 1effe7ea-cdb7-8151-0c08-6d1a7b2f2b49
+		summarizeBy: none
+		sourceColumn: DesignArea
+
+		annotation SummarizationSetBy = Automatic
+
+	column 'Control'
+		dataType: string
+		lineageTag: e6884b3c-24b6-277b-adb7-4fe010d3e4fb
+		summarizeBy: none
+		sourceColumn: Control
+
+		annotation SummarizationSetBy = Automatic
+
+	column 'Status'
+		dataType: string
+		lineageTag: 89ebb80e-45f9-13a6-d54b-c6cb41412c7f
+		summarizeBy: none
+		sourceColumn: Status
+
+		annotation SummarizationSetBy = Automatic
+
+	column 'SubscriptionName'
+		dataType: string
+		lineageTag: ca4cf24c-c5e3-6226-8876-db5e899a169c
+		summarizeBy: none
+		sourceColumn: SubscriptionName
+
+		annotation SummarizationSetBy = Automatic
+
+	partition 'Conformance' = m
+		mode: import
+		source =
+				let
+					// SAMPLE DATA — replace the "Source" step below with the live Azure query.
+					// === Live source (uncomment + remove the sample step) ===
+					// let
+					//     // Azure Resource Graph via ARM REST (AAD/OAuth via the data-source credential).
+					//     Body = "{""subscriptions"":[""" & SubscriptionId & """],""query"":""policyresources | where type == 'microsoft.policyinsights/policystates' | summarize by DesignArea=tostring(properties.policyDefinitionGroupNames[0]), Control=tostring(properties.policyDefinitionName), Status=tostring(properties.complianceState), subscriptionId""}",
+					//     Resp = Web.Contents(ManagementApiBase & "/providers/Microsoft.ResourceGraph/resources?api-version=2022-10-01",
+					//         [Headers=[#"Content-Type"="application/json"], Content=Text.ToBinary(Body)]),
+					//     Json = Json.Document(Resp),
+					//     Rows = Table.FromRecords(Json[data])
+					// in
+					//     Rows
+					// === end live source ===
+					Source = #table(
+						type table [#"DesignArea"=type text, #"Control"=type text, #"Status"=type text, #"SubscriptionName"=type text],
+						{
+							{"Identity & Access", "PIM enabled for privileged roles", "Conformant", "mgmt"},
+							{"Network topology", "Hub-spoke with Azure Firewall", "Conformant", "connectivity"},
+							{"Network topology", "No public IPs on workloads", "Non-conformant", "prod-platform"},
+							{"Security", "Defender plans enabled", "Conformant", "prod-data"},
+							{"Governance", "Required tags enforced", "Non-conformant", "nonprod-dev"},
+							{"Management", "Diagnostic settings to LA", "Conformant", "prod-platform"},
+							{"Resource organization", "Management group hierarchy", "Conformant", "mgmt"},
+							{"Governance", "Policy assignment at MG scope", "Non-conformant", "nonprod-dev"}
+						}
+					)
+				in
+					Source
+
+	annotation PBI_ResultType = Table

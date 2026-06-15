@@ -1,0 +1,79 @@
+table 'Availability'
+	lineageTag: c51af93b-792a-bb77-7c28-9257dc502a5b
+
+	/// Composite availability from Log Analytics Heartbeat / health probes.
+	measure 'Avg Uptime' = AVERAGE('Availability'[UptimePct])
+		formatString: 0.00%
+		lineageTag: 2cf73785-a9a0-f840-84bb-8ca074a508ca
+
+	measure 'SLA Target' = AVERAGE('Availability'[SlaTarget])
+		formatString: 0.00%
+		lineageTag: bc70eff7-3230-c5d6-1abc-6117d8e413ae
+
+	measure 'SLA Met' = IF([Avg Uptime] >= [SLA Target], "Met", "Breached")
+		lineageTag: f7d63970-8377-9575-bffc-8d261a0fc308
+
+	column 'ServiceName'
+		dataType: string
+		lineageTag: 656e2df5-51e5-9086-290e-efa4630ce010
+		summarizeBy: none
+		sourceColumn: ServiceName
+
+		annotation SummarizationSetBy = Automatic
+
+	column 'Day'
+		dataType: dateTime
+		formatString: General Date
+		lineageTag: bfd3c9a0-dfbc-f0fb-c91d-20fb5e32f5b5
+		summarizeBy: none
+		sourceColumn: Day
+
+		annotation SummarizationSetBy = Automatic
+
+	column 'UptimePct'
+		dataType: double
+		lineageTag: a1ad2958-6724-9b43-bbc7-2e7ee2b929bd
+		summarizeBy: average
+		sourceColumn: UptimePct
+
+		annotation SummarizationSetBy = Automatic
+
+	column 'SlaTarget'
+		dataType: double
+		lineageTag: 54db039b-fb98-427e-cb03-af3d859a557c
+		summarizeBy: average
+		sourceColumn: SlaTarget
+
+		annotation SummarizationSetBy = Automatic
+
+	partition 'Availability' = m
+		mode: import
+		source =
+				let
+					// SAMPLE DATA — replace the "Source" step below with the live Azure query.
+					// === Live source (uncomment + remove the sample step) ===
+					// let
+					//     // Azure Monitor / Log Analytics query API (AAD/OAuth via the data-source credential).
+					//     Q = [query="Heartbeat | summarize Total=count() by Computer, bin(TimeGenerated,1d) | extend UptimePct = 1.0"],
+					//     Url = "https://api.loganalytics.io/v1/workspaces/" & LogAnalyticsWorkspaceId & "/query",
+					//     Resp = Json.Document(Web.Contents(Url, [Headers=[#"Content-Type"="application/json"], Content=Json.FromValue(Q)])),
+					//     T = Resp[tables]{0},
+					//     Rows = Table.FromRows(T[rows], List.Transform(T[columns], each [name]))
+					// in
+					//     Rows
+					// === end live source ===
+					Source = #table(
+						type table [#"ServiceName"=type text, #"Day"=type datetime, #"UptimePct"=type number, #"SlaTarget"=type number],
+						{
+							{"API Gateway", #datetime(2026,3,10,0,0,0), 0.9995, 0.999},
+							{"API Gateway", #datetime(2026,3,11,0,0,0), 0.9988, 0.999},
+							{"AKS prod", #datetime(2026,3,10,0,0,0), 0.9999, 0.995},
+							{"AKS prod", #datetime(2026,3,11,0,0,0), 0.9997, 0.995},
+							{"SQL prod", #datetime(2026,3,10,0,0,0), 0.9991, 0.999},
+							{"SQL prod", #datetime(2026,3,11,0,0,0), 0.9999, 0.999}
+						}
+					)
+				in
+					Source
+
+	annotation PBI_ResultType = Table

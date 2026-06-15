@@ -150,6 +150,9 @@ let _workspaceSparkConfig: Container | null = null;
 let _embedCodes: Container | null = null;
 // F23 — org-visuals metadata (tenant-wide custom visuals), PK /tenantId.
 let _orgVisuals: Container | null = null;
+// CoE template library — per-tenant clones of the default CoE Power BI report
+// templates ("Use this template"). One row per cloned template, PK /tenantId.
+let _coeTemplates: Container | null = null;
 // Admin runtime env/config management — one doc per tenant (id = tenantId, PK
 // /tenantId) holding the operator-desired deployment env-var values set from
 // /admin/env-config. The Cosmos doc is the DURABLE source of desired state
@@ -673,6 +676,10 @@ async function ensure() {
   // needs no extra ARM/Bicep step beyond the account+database.
   _embedCodes = await mk('embed-codes', '/tenantId');
   _orgVisuals = await mk('org-visuals', '/tenantId');
+  // CoE template library — per-tenant clones of the default CoE Power BI report
+  // templates. Created lazily (no extra ARM/Bicep step beyond account+database;
+  // the Console UAMI already holds Cosmos DB Built-in Data Contributor).
+  _coeTemplates = await mk('coe-templates', '/tenantId');
   // Admin runtime env/config — one doc per tenant holding desired env-var
   // values (non-secret) + secret-set flags, PK /tenantId.
   _envConfig = await mk('env-config', '/tenantId');
@@ -734,6 +741,8 @@ export async function workspaceSparkConfigContainer(): Promise<Container> { awai
 export async function embedCodesContainer(): Promise<Container> { await ensure(); return _embedCodes!; }
 /** F23 — org-visuals metadata (tenant-wide custom visuals) — PK /tenantId. */
 export async function orgVisualsContainer(): Promise<Container> { await ensure(); return _orgVisuals!; }
+/** CoE template library — per-tenant clones of default CoE report templates, PK /tenantId. */
+export async function coeTemplatesContainer(): Promise<Container> { await ensure(); return _coeTemplates!; }
 /** Admin runtime env/config — desired deployment env-var state, PK /tenantId. */
 export async function envConfigContainer(): Promise<Container> { await ensure(); return _envConfig!; }
 /** Catalog → Metastores: persistent Databricks workspace registrations, PK /tenantId. */
@@ -891,6 +900,7 @@ const KNOWN_CONTAINER_IDS = [
   'task-flows',
   'workspace-spark-config',
   'embed-codes', 'org-visuals',
+  'coe-templates',
   'env-config',
   'metastore-registrations',
 ];

@@ -1,0 +1,14 @@
+{
+  "$schema": "https://developer.microsoft.com/json-schemas/fabric/item/pbip/projectProperties/1.0.0/schema.json",
+  "version": "1.0",
+  "artifacts": [
+    {
+      "report": {
+        "path": "CoEAdoptionMaturity.Report"
+      }
+    }
+  ],
+  "settings": {
+    "enableAutoRecovery": true
+  }
+}
