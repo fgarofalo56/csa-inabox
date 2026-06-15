@@ -31,6 +31,7 @@ import {
   type EngineGate,
 } from './shortcut-engines';
 import { getMetadata, getAccountName, listPaths, type PathEntry } from './adls-client';
+import { getDfsSuffix } from './cloud-endpoints';
 import { createHash, createHmac, createSign } from 'crypto';
 import {
   listShortcuts,
@@ -674,4 +675,164 @@ export async function listDataverseEntities(args: DataverseBrowseArgs): Promise<
   const result = await browseAdls({ account, container, prefix, maxResults: args.maxResults });
   // Re-base entry names relative to the export root so the tree reads as tables.
   return result;
+}
+
+// ---------------------------------------------------------------------------
+// ADLS Gen2 over a SAS token / storage-key SAS — the EXTERNAL account path the
+// Console UAMI cannot (or should not) reach. Azure-native parity with Fabric
+// OneLake's "ADLS Gen2 + connection (SAS/key)" external shortcut, NO Fabric
+// dependency.
+//
+// This is the fix for the "failed to fetch" defect: the wizard's
+// "External (URI + SAS/key)" mode used to fall through to the UAMI listPaths
+// path, which IGNORED the SAS entirely. We now do a REAL signed HTTPS list:
+//
+//   GET https://<acct>.dfs.core.windows.net/<filesystem>?resource=filesystem
+//       &recursive=false&maxResults=<n>[&directory=<path>]&<SAS>
+//
+// (the ADLS Gen2 DFS "List Path" data-plane API — exactly the call the operator
+// proved returns HTTP 200 with the SAS). The `abfss://…` scheme is NEVER passed
+// to fetch(); we always convert to the https DFS endpoint first and append the
+// SAS query string EXACTLY ONCE.
+//
+// Sovereign clouds: the DFS suffix comes from getDfsSuffix() (commercial vs Gov).
+// Per .claude/rules/no-vaporware.md — a real REST call, no mock arrays.
+// Docs: https://learn.microsoft.com/rest/api/storageservices/datalakestoragegen2/path/list
+// ---------------------------------------------------------------------------
+
+export interface AdlsSasBrowseArgs {
+  /** Bare storage account NAME (e.g. 'contosolake') — NOT a host. */
+  account: string;
+  /** Filesystem / container name. */
+  container: string;
+  /** Directory path inside the filesystem ('' = root). */
+  path?: string;
+  /** Account or service SAS — with or without a leading '?'. Never logged/echoed. */
+  sasToken: string;
+  maxResults?: number;
+}
+
+/**
+ * Strip any leading '?' from a SAS and append it to a URL exactly once, using
+ * '&' when the URL already carries a query string (it always does here) and '?'
+ * otherwise. Guarantees we never emit a double-'?' or a bare-'?' SAS.
+ */
+export function appendSasToken(url: string, sasToken: string): string {
+  const sas = (sasToken || '').trim().replace(/^\?+/, '');
+  if (!sas) return url;
+  return url.includes('?') ? `${url}&${sas}` : `${url}?${sas}`;
+}
+
+/**
+ * Build the canonical HTTPS DFS "List Path" URL for a SAS-authenticated ADLS
+ * Gen2 filesystem. Pure (no I/O) so the URL construction is unit-testable: it
+ * MUST be `https://…` (never `abfss://`) with the SAS appended once.
+ */
+export function buildAdlsSasListUrl(
+  account: string,
+  container: string,
+  directory: string,
+  sasToken: string,
+  maxResults = 200,
+): string {
+  const acct = (account || '').trim().replace(/^https?:\/\//, '').split('.')[0];
+  const fs = encodeURIComponent((container || '').trim());
+  const qs = new URLSearchParams({
+    resource: 'filesystem',
+    recursive: 'false',
+    maxResults: String(Math.min(Math.max(maxResults, 1), 5000)),
+  });
+  const dir = (directory || '').replace(/^\/+|\/+$/g, '');
+  if (dir) qs.set('directory', dir);
+  const url = `https://${acct}.${getDfsSuffix()}/${fs}?${qs.toString()}`;
+  return appendSasToken(url, sasToken);
+}
+
+/**
+ * List one level of an EXTERNAL ADLS Gen2 filesystem using a SAS token — a real
+ * signed HTTPS data-plane call. Powers the SAS reachability probe at create/test
+ * time and the wizard's external browse tree. Throws a typed ShortcutSourceError
+ * the BFF maps to an honest hint (expired SAS, wrong scope, missing list perm).
+ */
+export async function listAdlsWithSas(args: AdlsSasBrowseArgs): Promise<BrowseResult> {
+  const account = (args.account || '').trim();
+  const container = (args.container || '').trim();
+  if (!account) throw new ShortcutSourceError('ADLS storage account is required', 'adls_bad_target', 400);
+  if (!container) throw new ShortcutSourceError('ADLS container/filesystem is required', 'adls_bad_target', 400);
+  const sas = (args.sasToken || '').trim();
+  if (!sas) {
+    throw new ShortcutSourceError(
+      'A SAS token (or storage-key SAS) is required for a SAS-authenticated ADLS Gen2 shortcut.',
+      'adls_sas_missing', 400);
+  }
+  const prefix = (args.path || '').replace(/^\/+|\/+$/g, '');
+  const maxResults = Math.min(Math.max(args.maxResults ?? 200, 1), 5000);
+  const url = buildAdlsSasListUrl(account, container, prefix, sas, maxResults);
+
+  let res: Response;
+  try {
+    res = await fetchWithTimeout(url, { method: 'GET', cache: 'no-store' });
+  } catch (e: any) {
+    throw new ShortcutSourceError(`ADLS endpoint unreachable: ${e?.message || e}`, 'adls_unreachable', 502);
+  }
+  const text = await res.text().catch(() => '');
+  if (res.status === 403) {
+    throw new ShortcutSourceError(
+      `The SAS was rejected (HTTP 403). It is expired, lacks List/Read permission, or is scoped to a ` +
+      `different container. Re-issue a SAS with at least read+list ('rl') on '${container}'.`,
+      'adls_sas_auth_failure', 403);
+  }
+  if (res.status === 404) {
+    throw new ShortcutSourceError(
+      `ADLS filesystem '${container}' was not found on account '${account.split('.')[0]}' (HTTP 404).`,
+      'adls_container_not_found', 404);
+  }
+  if ((res.status === 400 || res.status === 401) && /AuthenticationFailed|Signature|InvalidQueryParameterValue/i.test(text)) {
+    throw new ShortcutSourceError(
+      `ADLS rejected the SAS signature (HTTP ${res.status}). Check the SAS is a valid account/service SAS ` +
+      `for '${account.split('.')[0]}' and was not truncated.`,
+      'adls_sas_auth_failure', res.status);
+  }
+  if (!res.ok) {
+    throw new ShortcutSourceError(`ADLS list failed (HTTP ${res.status}): ${text.slice(0, 200)}`, 'adls_list_failed', res.status || 502);
+  }
+
+  let j: any = {};
+  try { j = JSON.parse(text); } catch { /* empty filesystem may return no body */ }
+  const entries: RemoteEntry[] = [];
+  for (const p of (j?.paths as any[] | undefined) || []) {
+    const full = String(p?.name ?? '');
+    if (!full) continue;
+    const rel = prefix && full.startsWith(prefix + '/') ? full.slice(prefix.length + 1) : full;
+    const isDir = String(p?.isDirectory ?? 'false').toLowerCase() === 'true';
+    entries.push({
+      name: rel,
+      path: full,
+      isDirectory: isDir,
+      size: isDir ? undefined : Number(p?.contentLength ?? 0),
+      lastModified: p?.lastModified,
+      etag: p?.etag,
+    });
+  }
+  entries.sort((a, b) => (a.isDirectory === b.isDirectory ? a.name.localeCompare(b.name) : a.isDirectory ? -1 : 1));
+  return { entries, prefix, truncated: entries.length >= maxResults };
+}
+
+/**
+ * Reachability probe for a SAS-authenticated external ADLS Gen2 target. Resolves
+ * the abfss/https target to account + filesystem + path, runs a real one-row
+ * SAS list, and returns the normalised `abfss://…` read address. Throws a typed
+ * ShortcutSourceError on any failure. NEVER passes `abfss://` to fetch().
+ */
+export async function probeAdlsSas(targetUri: string, sasToken: string): Promise<{ abfssUri: string }> {
+  const parts = parseAbfss(targetUri); // tolerant: accepts .dfs / .blob host, bare account
+  await listAdlsWithSas({
+    account: parts.account,
+    container: parts.container,
+    path: parts.path,
+    sasToken,
+    maxResults: 1,
+  });
+  const clean = parts.path.replace(/^\/+|\/+$/g, '');
+  return { abfssUri: `abfss://${parts.container}@${parts.account}.${getDfsSuffix()}/${clean}` };
 }

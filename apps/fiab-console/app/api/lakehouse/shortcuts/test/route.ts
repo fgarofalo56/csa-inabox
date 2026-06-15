@@ -16,6 +16,7 @@ import { getAccountName } from '@/lib/azure/adls-client';
 import { getShortcut, updateShortcutStatus } from '@/lib/azure/lakehouse-shortcuts';
 import { resolveAndTestAdls, testEngineObject, refreshDeltaSharingCredential } from '@/lib/azure/shortcut-engines';
 import { getKeyVaultSecret } from '@/lib/azure/shortcut-credentials';
+import { parseAbfss as parseExternalAbfss, listAdlsWithSas, ShortcutSourceError } from '@/lib/azure/shortcut-client';
 import { headDriveItem, parseSharepointUri, graphDriveConfigGate } from '@/lib/azure/graph-drive-client';
 
 export const runtime = 'nodejs';
@@ -142,6 +143,31 @@ export async function POST(req: NextRequest) {
       const msg = sanitize(e);
       const updated = await updateShortcutStatus(lakehouseId, id, 'error', msg);
       return NextResponse.json({ ok: false, error: msg, code: e?.code || 'graph_drive_error', data: updated }, { status: e?.status || 502 });
+    }
+  }
+
+  // SAS-authenticated external ADLS Gen2: re-probe with the SAS (the UAMI cannot
+  // reach the account). A Tables shortcut additionally proves its Synapse view.
+  if (
+    sc.targetType === 'adls' &&
+    sc.credentialRef?.keyVaultSecret &&
+    (sc.credentialRef.kind === 'sas' || sc.credentialRef.kind === 'accountKey')
+  ) {
+    try {
+      const sas = (await getKeyVaultSecret(sc.credentialRef.keyVaultSecret)).trim();
+      if (!sas) throw Object.assign(new Error(`Key Vault secret '${sc.credentialRef.keyVaultSecret}' is empty — re-save the SAS.`), { code: 'kv_secret_empty' });
+      const parts = parseExternalAbfss(sc.abfssUri || sc.targetUri);
+      await listAdlsWithSas({ account: parts.account, container: parts.container, path: parts.path, sasToken: sas, maxResults: 1 });
+      if (sc.kind === 'tables' && sc.engine && sc.engine !== 'none' && sc.engineObject) {
+        await testEngineObject(sc.engine, sc.engineObject);
+      }
+      const updated = await updateShortcutStatus(lakehouseId, id, 'active', undefined);
+      return NextResponse.json({ ok: true, data: updated });
+    } catch (e: any) {
+      const msg = sanitize(e);
+      const code = e instanceof ShortcutSourceError ? e.code : e?.code || 'adls_sas_error';
+      const updated = await updateShortcutStatus(lakehouseId, id, 'error', msg);
+      return NextResponse.json({ ok: false, error: msg, code, data: updated }, { status: (e instanceof ShortcutSourceError ? e.status : 502) || 502 });
     }
   }
 

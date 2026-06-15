@@ -18,6 +18,7 @@
 
 import { fetchWithTimeout } from '@/lib/azure/fetch-with-timeout';
 import { listPaths } from './adls-client';
+import { getDfsSuffix } from './cloud-endpoints';
 import { serverlessTarget, executeQuery } from './synapse-sql-client';
 import {
   listWarehouses,
@@ -183,6 +184,21 @@ export async function createTablesShortcut(args: {
     deltaSharing?: ExternalBinding['deltaSharing'];
     /** SharePoint/OneDrive drive coordinates (Graph data plane — Files-only). */
     sharepoint?: ExternalBinding['sharepoint'];
+    /**
+     * SAS-authenticated EXTERNAL ADLS Gen2 binding. When present, a Tables
+     * shortcut registers a Synapse Serverless external table over a database
+     * scoped credential built from the SAS (the UAMI cannot reach the account).
+     */
+    adlsSas?: {
+      /** Raw SAS (with or without a leading '?'). Used to mint a DSC; never persisted. */
+      sas: string;
+      /** Bare account name. */
+      account: string;
+      /** Filesystem / container. */
+      container: string;
+      /** Object key (path) inside the filesystem for the OPENROWSET BULK arg. */
+      path: string;
+    };
     /** Lakehouse id — needed to derive the Delta Sharing credential file path. */
     lakehouseId?: string;
   };
@@ -258,6 +274,51 @@ export async function createTablesShortcut(args: {
       `CREATE TABLE IF NOT EXISTS ${cat}.${sch}.${tbl} USING deltaSharing LOCATION '${loc}';`;
     await executeStatement(wh.id, ddl);
     return { engine: 'databricks', engineObject: obj };
+  }
+
+  // --- SAS-authenticated external ADLS Gen2 Tables: Synapse DSC + external view. ---
+  // The Console UAMI cannot read the account, so a Tables shortcut binds through
+  // a Synapse Serverless DATABASE SCOPED CREDENTIAL built from the SAS (IDENTITY
+  // = 'SHARED ACCESS SIGNATURE'), an EXTERNAL DATA SOURCE at the filesystem root,
+  // and an OPENROWSET view. This is the documented Azure-native pattern for
+  // querying a SAS-protected lake from Synapse Serverless (no Fabric, no UAMI
+  // grant). Files shortcuts work without any engine.
+  // Learn: https://learn.microsoft.com/azure/synapse-analytics/sql/develop-storage-files-storage-access-control?tabs=shared-access-signature
+  if (args.external?.adlsSas) {
+    const engine = pickTablesEngine();
+    if (engine !== 'synapse') {
+      return {
+        gated: true,
+        code: 'adls_sas_needs_synapse',
+        hint:
+          'A Tables shortcut over a SAS-authenticated EXTERNAL ADLS Gen2 account binds through a Synapse ' +
+          'Serverless database-scoped credential (the Console UAMI cannot read the account). Set ' +
+          'LOOM_SYNAPSE_WORKSPACE to enable it. A Files shortcut works today with the SAS and no engine; ' +
+          'for a Databricks-backed Tables shortcut, use the in-tenant (AAD) account path instead.',
+      };
+    }
+    const { sas, account, container, path } = args.external.adlsSas;
+    const fmt = FORMAT_SQL[args.format || 'delta'] || 'DELTA';
+    const obj = synapseObject(args.name);
+    const cred = `loom_adls_sas_${args.name.replace(/[^a-z0-9_]+/gi, '_')}`.toLowerCase();
+    const dsName = `${cred}_ds`;
+    // SECRET must NOT carry a leading '?'; escape single quotes for the T-SQL literal.
+    const sasSecret = sas.trim().replace(/^\?+/, '').replace(/'/g, "''");
+    const location = `https://${account.split('.')[0]}.${getDfsSuffix()}/${container}`;
+    const key = (path || '').replace(/^\/+/, '').replace(/'/g, "''");
+    const csvOpts = fmt === 'CSV' ? `, PARSER_VERSION = ''2.0'', HEADER_ROW = TRUE` : '';
+    const ddl =
+      `IF NOT EXISTS (SELECT 1 FROM sys.symmetric_keys WHERE name = '##MS_DatabaseMasterKey##') CREATE MASTER KEY;\n` +
+      `IF EXISTS (SELECT 1 FROM sys.external_data_sources WHERE name = '${dsName}') DROP EXTERNAL DATA SOURCE ${dsName};\n` +
+      `IF EXISTS (SELECT 1 FROM sys.database_scoped_credentials WHERE name = '${cred}') DROP DATABASE SCOPED CREDENTIAL ${cred};\n` +
+      `CREATE DATABASE SCOPED CREDENTIAL ${cred} WITH IDENTITY = 'SHARED ACCESS SIGNATURE', SECRET = '${sasSecret}';\n` +
+      `CREATE EXTERNAL DATA SOURCE ${dsName} WITH (LOCATION = '${location}', CREDENTIAL = ${cred});\n` +
+      `IF SCHEMA_ID('shortcuts') IS NULL EXEC('CREATE SCHEMA shortcuts');\n` +
+      `IF OBJECT_ID('${obj}','V') IS NOT NULL DROP VIEW ${obj};\n` +
+      `EXEC('CREATE VIEW ${obj} AS SELECT * FROM OPENROWSET(BULK ''${key}'', ` +
+      `DATA_SOURCE = ''${dsName}'', FORMAT = ''${fmt}''${csvOpts}) AS r');`;
+    await executeQuery(serverlessTarget('master'), ddl);
+    return { engine: 'synapse', engineObject: obj };
   }
 
   const engine = pickTablesEngine();

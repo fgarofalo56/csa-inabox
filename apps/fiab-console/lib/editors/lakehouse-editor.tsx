@@ -599,6 +599,12 @@ export function LakehouseEditor({ item, id }: Props) {
   const [scInternalContainer, setScInternalContainer] = useState('');
   const [scInternalPath, setScInternalPath] = useState('');
   const [scKvSecret, setScKvSecret] = useState('');
+  // External ADLS Gen2 (URI + SAS) — let the operator paste a SAS and stash it to
+  // Key Vault inline (only the returned secret NAME is kept). Mirrors the
+  // credentialed-source ExternalCredsForm stash, but for the typed-URI external mode.
+  const [scExtSas, setScExtSas] = useState('');
+  const [scExtSasBusy, setScExtSasBusy] = useState(false);
+  const [scExtSasErr, setScExtSasErr] = useState<string | null>(null);
   // External-source (S3/GCS/ADLS/Dataverse) structured creds + browse selection.
   // The credential value is written to Key Vault by the BFF; only the secret
   // NAME (extCreds.secretName) is ever held here or persisted on the row.
@@ -763,7 +769,30 @@ export function LakehouseEditor({ item, id }: Props) {
     setScFormat('delta'); setScSubmitError(null); setScTargetSchema('dbo');
     setExtCreds({ region: 'us-east-1' });
     setScSpSelection(null);
+    setScExtSas(''); setScExtSasBusy(false); setScExtSasErr(null);
   }, []);
+
+  // Stash a pasted SAS into Key Vault for the external ADLS (URI + SAS) mode and
+  // keep only the returned secret NAME. Real backend (credentials BFF) — the SAS
+  // value never lands in Cosmos or the shortcut row.
+  const stashExternalSas = useCallback(async () => {
+    if (!scExtSas.trim() || !shortcutLakehouseId) return;
+    setScExtSasBusy(true); setScExtSasErr(null);
+    try {
+      const r = await fetch('/api/lakehouse/shortcuts/credentials', {
+        method: 'POST', headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ lakehouseId: shortcutLakehouseId, name: scName.trim() || 'ext-adls', sourceType: 'adls', secretValue: scExtSas.trim() }),
+      });
+      const j = await r.json().catch(() => ({}));
+      if (!j?.ok) throw new Error(j?.error || j?.hint || `HTTP ${r.status}`);
+      setScExtSas('');
+      setScKvSecret(j.data?.secretName || '');
+    } catch (e: any) {
+      setScExtSasErr(e?.message || String(e));
+    } finally {
+      setScExtSasBusy(false);
+    }
+  }, [scExtSas, shortcutLakehouseId, scName]);
 
   const openShortcutWizard = useCallback((presetKind?: ShortcutKind, presetParent?: string) => {
     resetWizard(presetKind, presetParent);
@@ -3677,7 +3706,11 @@ export function LakehouseEditor({ item, id }: Props) {
                                   placeholder={storageAcctsLoading ? 'Loading…' : 'Select a storage account'}
                                   onOptionSelect={(_, d) => setScAcctHost(d.optionValue || '')}>
                                   {storageAccts.map((a) => {
-                                    const host = a.dfsHost || a.blobHost || '';
+                                    // Always bind via the .dfs endpoint (ADLS Gen2 multi-protocol):
+                                    // a blob-only account's .blob host → .dfs so the abfss URI the
+                                    // backend builds parses + lists on the UAMI. Sovereign-correct
+                                    // (commercial + Gov share the blob↔dfs swap).
+                                    const host = a.dfsHost || (a.blobHost ? a.blobHost.replace(/\.blob\./i, '.dfs.') : '');
                                     return <Option key={a.name} value={host} text={a.name}>{a.name}{a.isHns ? ' (ADLS Gen2)' : ' (Blob)'}{a.resourceGroup ? ` · ${a.resourceGroup}` : ''}</Option>;
                                   })}
                                 </Dropdown>
@@ -3710,13 +3743,29 @@ export function LakehouseEditor({ item, id }: Props) {
                           ) : (
                             <>
                               <Field label="Target URI" required
-                                hint="abfss://<container>@<account>.dfs.core.windows.net/<path>">
+                                hint="abfss://<container>@<account>.dfs.core.windows.net/<path> — an external account the Console UAMI cannot read (authenticated by the SAS below)">
                                 <Input value={scTargetUri} onChange={(_, d) => setScTargetUri(d.value)}
                                   placeholder="abfss://data@acct.dfs.core.windows.net/partner/exports" />
                               </Field>
-                              <Field label="Key Vault secret (SAS token or storage key)" hint="admin-plane Key Vault secret name holding the external account's SAS/key">
+                              <Field label="SAS token" hint="Paste the account/service SAS (read+list). Saved to Key Vault — never stored on the shortcut row or echoed.">
+                                <Input type="password" value={scExtSas} onChange={(_, d) => setScExtSas(d.value)}
+                                  placeholder="?sv=2024-…&ss=b&srt=co&sp=rl&sig=…"
+                                  contentAfter={
+                                    <Button size="small" appearance="primary" disabled={!scExtSas.trim() || scExtSasBusy}
+                                      icon={scExtSasBusy ? <Spinner size="tiny" /> : undefined} onClick={stashExternalSas}>
+                                      {scExtSasBusy ? 'Saving…' : 'Save to Key Vault'}
+                                    </Button>
+                                  } />
+                              </Field>
+                              {scExtSasErr && <MessageBar intent="error"><MessageBarBody>{scExtSasErr}</MessageBarBody></MessageBar>}
+                              <Field label="Key Vault secret name" required hint="admin-plane Key Vault secret holding the external account's SAS/key. Auto-filled after Save, or type the name of an existing secret.">
                                 <Input value={scKvSecret} onChange={(_, d) => setScKvSecret(d.value)} placeholder="shortcut-ext-adls-sas" />
                               </Field>
+                              {scKvSecret && (
+                                <Caption1 style={{ color: tokens.colorPaletteGreenForeground1 }}>
+                                  Using Key Vault secret <code>{scKvSecret}</code> — the SAS is read server-side at create/test time.
+                                </Caption1>
+                              )}
                             </>
                           )}
                         </>
