@@ -518,6 +518,67 @@ jobs:
             echo "No data-lake storage in $DLZ_RG — skipping"
           fi
 
+      - name: Wire org-visuals (F22/F23) — Storage Blob Delegator grant + LOOM_ORG_VISUALS_URL env on console
+        # Deploy-readiness: in tenant / dlz-attach topology the admin plane is NOT
+        # redeployed, so admin-plane/main.bicep leaves loomStorageAccount empty and
+        # neither the org-visuals env (LOOM_ORG_VISUALS_URL + medallion/CSV URLs)
+        # nor the Storage Blob Delegator grant lands → Embed codes (F22) + Org
+        # visuals (F23) 503 not-configured. The account-wide Storage Blob Data
+        # Contributor grant above already covers the org-visuals CONTAINER writes;
+        # the only extra grant needed is Storage Blob Delegator (account scope) so
+        # getUserDelegationKey() can mint the read-only embed SAS. This step adds
+        # that grant and wires the storage env vars onto the live console app —
+        # mirroring scripts/csa-loom/patch-navigator-env.sh's storage block. The
+        # single-sub path already gets all of this from bicep; this is the
+        # tenant/dlz-attach bridge. Idempotent. Skips cleanly if no DLZ HNS account.
+        # Honors loomBackends.orgVisuals=disabled via the LOOM_ORG_VISUALS_DISABLED
+        # repo var (set it to '1' to keep the panes honestly gated after a deploy).
+        if: always()
+        continue-on-error: true
+        run: |
+          set -uo pipefail
+          if [ "${LOOM_ORG_VISUALS_DISABLED:-0}" = "1" ]; then
+            echo "::notice::LOOM_ORG_VISUALS_DISABLED=1 — leaving Embed codes / Org visuals honestly gated (opt-out)."
+            exit 0
+          fi
+          # Discover the DLZ HNS (Data Lake) account — reuse-first via repo var.
+          SA_ACCT="${EXISTING_LOOM_STORAGE_ACCOUNT:-}"
+          if [ -z "$SA_ACCT" ]; then
+            SA_ACCT=$(az storage account list -g "$DLZ_RG" \
+              --query "[?starts_with(name,'saloom') && isHnsEnabled].name | [0]" -o tsv 2>/dev/null)
+            [ -z "$SA_ACCT" ] && SA_ACCT=$(az storage account list -g "$DLZ_RG" \
+              --query "[?isHnsEnabled].name | [0]" -o tsv 2>/dev/null)
+          fi
+          if [ -z "$SA_ACCT" ]; then
+            echo "::notice::No HNS (Data Lake) account in $DLZ_RG — Embed codes / Org visuals stay honestly gated."
+            exit 0
+          fi
+          echo "DLZ ADLS account: $SA_ACCT"
+          SA_ID=$(az storage account show -n "$SA_ACCT" -g "$DLZ_RG" --query id -o tsv)
+          # Storage Blob Delegator (account scope) — getUserDelegationKey for embed SAS.
+          az role assignment create \
+            --assignee-object-id "$CONSOLE_UAMI_PRINCIPAL" \
+            --assignee-principal-type ServicePrincipal \
+            --role "Storage Blob Delegator" \
+            --scope "$SA_ID" \
+            -o table 2>&1 | grep -v "already exists" || echo "Storage Blob Delegator already assigned"
+          # Wire the storage env on the live console app (single merged revision).
+          SA_BLOB=$(az storage account show -n "$SA_ACCT" -g "$DLZ_RG" --query "primaryEndpoints.blob" -o tsv)
+          SA_DFS=$(az storage account show -n "$SA_ACCT" -g "$DLZ_RG"  --query "primaryEndpoints.dfs"  -o tsv)
+          SA_BLOB="${SA_BLOB%/}"; SA_DFS="${SA_DFS%/}"
+          CONSOLE_APP="${LOOM_CONSOLE_APP:-loom-console}"
+          az containerapp update -g "$ADMIN_RG" -n "$CONSOLE_APP" --set-env-vars \
+            "LOOM_ADLS_ACCOUNT=$SA_ACCT" \
+            "LOOM_ORG_VISUALS_URL=$SA_BLOB/org-visuals" \
+            "LOOM_BRONZE_URL=$SA_DFS/bronze" \
+            "LOOM_SILVER_URL=$SA_DFS/silver" \
+            "LOOM_GOLD_URL=$SA_DFS/gold" \
+            "LOOM_LANDING_URL=$SA_DFS/landing" \
+            "LOOM_CSV_IMPORTS_URL=$SA_DFS/csv-imports" \
+            -o none 2>&1 | tail -2 \
+            && echo "Wired LOOM_ORG_VISUALS_URL + medallion URLs on $CONSOLE_APP" \
+            || echo "::warning::Could not update $CONSOLE_APP env — run scripts/csa-loom/patch-navigator-env.sh manually."
+
       - name: Grant Console UAMI Cognitive Services User on Content Safety (unblocks /items/content-safety)
         run: |
           CS=$(az cognitiveservices account list -g $ADMIN_RG --query "[?kind=='ContentSafety'].id" -o tsv | head -1)

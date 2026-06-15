@@ -315,6 +315,9 @@ param cosmosGraphVectorEnabled bool = true
 @description('Deploy the Weave (Semantic Ontology) PostgreSQL + Apache AGE graph store in each DLZ. Backs Palantir-class ontology object/link/action instance write-back (the Ontology editor Objects / Write-back actions surfaces). Default on — Palantir-class ontology write-back requires the graph store. Set false to skip ~1 Burstable PG flexible server/DLZ.')
 param weaveOntologyEnabled bool = true
 
+@description('Wire the org-visuals Blob container backing Embed codes (F22) + Organizational visuals (F23): the Console UAMI data-plane grants (Storage Blob Data Contributor on the container + Storage Blob Delegator at account scope for getUserDelegationKey) and the LOOM_ORG_VISUALS_URL env var. Default on (opt-out) — the org-visuals container itself is always created by landing-zone/storage.bicep (it is part of the foundational medallion account); this flag governs only the grant + env wiring. Set false to leave Embed codes / Org visuals honestly config-gated (no SAS minting). No Fabric/Power BI dependency.')
+param loomOrgVisualsEnabled bool = true
+
 @description('Deploy the MAF (Microsoft Agent Framework, Gov AOAI-direct) orchestration-tier Container App (loom-copilot-maf). Set true in the GCC-High / IL5 params. The admin-plane gates activation on boundary∈{GCC-High,IL5} + containerPlatform==containerApps + deployAppsEnabled, so it is a safe no-op on the AKS path (the Console copilot-orchestrator then uses its documented Gov AOAI-direct fallback). Requires the loom-copilot-maf image pushed to ACR first.')
 param copilotMafEnabled bool = false
 
@@ -932,6 +935,26 @@ module adminPlane 'modules/admin-plane/main.bicep' = if (deployAdminPlane) {
     loomGovernPbiWorkspaceId: loomGovernPbiWorkspaceId
     loomGovernPbiReportId: loomGovernPbiReportId
     loomGrafanaDashboardUid: loomGrafanaDashboardUid
+    // Azure-native backend selectors (no-fabric-dependency) + the org-visuals
+    // opt-out, bundled into ONE object so the admin-plane module stays under the
+    // ARM 256-parameter limit (admin-plane cannot take another scalar param).
+    // Mirrors admin-plane/main.bicep's loomBackends default key-for-key; the
+    // orgVisuals key is driven by the operator-facing loomOrgVisualsEnabled flag
+    // (default true → 'enabled'; false → the Embed codes / Org visuals panes
+    // honest-gate while the medallion lake stays wired).
+    loomBackends: {
+      event: 'eventhubs'
+      activator: 'azure-monitor'
+      activatorTable: 'AppEvents_CL'
+      dashboard: 'adx'
+      lakehouse: 'adls'
+      catalog: 'azure'
+      bi: ''
+      domains: 'cosmos'
+      dataflow: 'adf'
+      dataproducts: ''
+      orgVisuals: loomOrgVisualsEnabled ? 'enabled' : 'disabled'
+    }
   }
 }
 
@@ -1283,6 +1306,29 @@ module dlzAttachAccessPolicyRbac 'modules/admin-plane/access-policy-rbac.bicep' 
   params: {
     consolePrincipalId: effHubConsolePrincipalId
     storageAccountName: dlzAttach!.outputs.storageAccountName
+    skipRoleGrants: skipRoleGrants
+  }
+}
+
+// dlz-attach: grant the existing hub Console UAMI the org-visuals data-plane
+// grants on the NEWLY-ATTACHED DLZ's storage account — Storage Blob Data
+// Contributor (org-visuals container scope: upload/read/delete embed-code +
+// custom-visual bundles) + Storage Blob Delegator (account scope:
+// getUserDelegationKey for the read-only embed SAS). In single-sub the admin
+// plane's orgVisualsRbac module already does this against the local DLZ account;
+// in dlz-attach the admin plane is NOT redeployed, so without this the attached
+// account's org-visuals container has no grant and Embed codes / Org visuals
+// 500 on SAS minting. The matching env (LOOM_ORG_VISUALS_URL) is wired post-
+// attach by the bootstrap (cross-deployment-timing constraint — admin-plane
+// already deployed; mirror of the Cosmos/Weave endpoint pattern). Gated on the
+// same loomOrgVisualsEnabled opt-out. The org-visuals container is created by
+// the attached DLZ's storage.bicep.
+module dlzAttachOrgVisualsRbac 'modules/landing-zone/org-visuals-rbac.bicep' = if (topology == 'dlz-attach' && loomOrgVisualsEnabled && !skipRoleGrants) {
+  name: 'dlz-attach-org-visuals-rbac'
+  scope: resourceGroup('rg-csa-loom-dlz-${attachDomainName}-${location}')
+  params: {
+    storageAccountName: dlzAttach!.outputs.storageAccountName
+    consolePrincipalId: effHubConsolePrincipalId
     skipRoleGrants: skipRoleGrants
   }
 }

@@ -162,6 +162,11 @@ param setupTemplateUri = readEnvironmentVariable('LOOM_SETUP_TEMPLATE_URI', '')
 // the Gremlin capability is fixed at account-creation, so the default NoSQL
 // account can't back the graph editor.
 param cosmosGraphVectorEnabled = true
+// Org-visuals (Embed codes F22 + Organizational visuals F23) — ON by default
+// (opt-out). Wires the Console UAMI org-visuals container grant + Storage Blob
+// Delegator + LOOM_ORG_VISUALS_URL. Set false to honest-gate those panes; the
+// medallion lake is unaffected. Azure Blob only — no Fabric/Power BI dependency.
+param loomOrgVisualsEnabled = true
 param vpnGatewayEnabled = true
 param appGatewayEnabled = true
 // Azure ML workspace — backs the notebook "Azure ML" compute path (Compute

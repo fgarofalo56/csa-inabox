@@ -118,6 +118,20 @@ interface WizardState {
   capacitySku?: string;
   /** Optional vanity console URL (e.g. csa-loom.contoso.ai). Empty = generated Front Door host. */
   vanityDomain?: string;
+  /**
+   * Org-visuals (Embed codes F22 + Organizational visuals F23) opt-out. Default
+   * on — the deploy provisions the org-visuals container grant + wires
+   * LOOM_ORG_VISUALS_URL. undefined/true → enabled; false → those panes
+   * honest-gate (the medallion lake is unaffected). Threaded to main.bicep's
+   * loomOrgVisualsEnabled via the deploy payload.
+   */
+  loomOrgVisualsEnabled?: boolean;
+  /**
+   * Storage scan "use-existing" choice: a pre-existing HNS (Data Lake) account
+   * to reuse instead of provisioning a new one (the post-deploy bootstrap wires
+   * the medallion + org-visuals env from it). Empty = provision new.
+   */
+  existingLoomStorageAccount?: string;
   /** Multi-sub mode only: the deployment sub in which the DLZ lands (distinct from admin-plane sub) */
   dlzSubscriptionId?: string;
   dlzSubscriptionName?: string;
@@ -260,6 +274,11 @@ function renderBicepParam(s: WizardState): string {
     `param containerPlatform = '${isGov ? 'aks' : 'containerApps'}'`,
     `param capacitySku       = '${s.capacitySku ?? ''}'`,
     ...dlzLines,
+    ...(s.loomOrgVisualsEnabled === false
+      ? [`param loomOrgVisualsEnabled = false  // Embed codes / Org visuals honest-gated`]
+      : s.existingLoomStorageAccount
+        ? [`// Reuse existing Data Lake: ${s.existingLoomStorageAccount} (org-visuals env wired post-deploy)`]
+        : []),
     `// ... boundary-defaulted parameters omitted for brevity`,
     ``,
     `// Deploy target (passed to: az deployment sub create):`,
@@ -475,6 +494,36 @@ export function SetupWizardPane() {
   // Multi-sub Route B: existing-DLZ discovery (Azure Resource Graph).
   const [existingLoading, setExistingLoading] = useState(false);
   const [existingError, setExistingError] = useState<string | undefined>();
+
+  // Storage / org-visuals scan-and-choose (deploy-readiness). Discovers existing
+  // HNS (Data Lake) accounts via /api/setup/existing-storage so the operator can
+  // use-existing / provision-new / disable org-visuals. Recommendation =
+  // provision-new (Loom needs its exact medallion + org-visuals container layout).
+  const [storageScan, setStorageScan] = useState<
+    Array<{ name: string; rg: string; location: string; subscriptionId: string; isLoomNamed: boolean }>
+  >([]);
+  const [storageScanLoading, setStorageScanLoading] = useState(false);
+  const [storageScanError, setStorageScanError] = useState<string | undefined>();
+  const [storageScanned, setStorageScanned] = useState(false);
+  const scanStorage = useCallback(async () => {
+    setStorageScanLoading(true);
+    setStorageScanError(undefined);
+    try {
+      const res = await fetch('/api/setup/existing-storage');
+      const j = await res.json().catch(() => ({}));
+      if (!res.ok || !j.ok) {
+        setStorageScanError(j.error || `Storage scan failed (HTTP ${res.status}).`);
+        setStorageScan([]);
+      } else {
+        setStorageScan(Array.isArray(j.accounts) ? j.accounts : []);
+      }
+    } catch (e) {
+      setStorageScanError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setStorageScanLoading(false);
+      setStorageScanned(true);
+    }
+  }, []);
 
   const bicepPreview = useMemo(() => renderBicepParam(state), [state]);
 
@@ -1352,6 +1401,100 @@ export function SetupWizardPane() {
             </div>
 
             <Divider />
+
+            {!isWireExisting && (() => {
+              // Storage / OneLake / org-visuals scan-and-choose. The medallion
+              // lake is always provisioned (foundational); this card governs the
+              // org-visuals container grant + LOOM_ORG_VISUALS_URL (Embed codes
+              // F22 + Org visuals F23) and lets the operator reuse an existing
+              // HNS lake. Recommendation = provision-new.
+              const storageChoice: 'new' | 'existing' | 'disable' =
+                state.loomOrgVisualsEnabled === false
+                  ? 'disable'
+                  : state.existingLoomStorageAccount
+                    ? 'existing'
+                    : 'new';
+              return (
+                <div style={{ marginBottom: tokens.spacingVerticalM }}>
+                  <Body1Strong>Storage &amp; organizational visuals</Body1Strong>
+                  <div style={{ marginTop: tokens.spacingVerticalXS, marginBottom: tokens.spacingVerticalS }}>
+                    <Caption1>
+                      The medallion data lake (bronze/silver/gold) is always provisioned. Choose how to handle the
+                      org-visuals container that backs Embed codes &amp; Organizational visuals. Recommended: provision new.
+                    </Caption1>
+                  </div>
+                  <div style={{ display: 'flex', gap: tokens.spacingHorizontalS, flexWrap: 'wrap', marginBottom: tokens.spacingVerticalS }}>
+                    <Button
+                      size="small"
+                      appearance={storageChoice === 'new' ? 'primary' : 'secondary'}
+                      onClick={() => setState((s) => ({ ...s, loomOrgVisualsEnabled: undefined, existingLoomStorageAccount: undefined }))}
+                    >
+                      Provision new (recommended)
+                    </Button>
+                    <Button
+                      size="small"
+                      appearance={storageChoice === 'existing' ? 'primary' : 'secondary'}
+                      onClick={() => {
+                        if (!storageScanned) void scanStorage();
+                        setState((s) => ({ ...s, loomOrgVisualsEnabled: undefined }));
+                      }}
+                    >
+                      Use existing
+                    </Button>
+                    <Button
+                      size="small"
+                      appearance={storageChoice === 'disable' ? 'primary' : 'secondary'}
+                      onClick={() => setState((s) => ({ ...s, loomOrgVisualsEnabled: false, existingLoomStorageAccount: undefined }))}
+                    >
+                      Disable org-visuals
+                    </Button>
+                  </div>
+                  {storageChoice === 'existing' && (
+                    <div style={{ marginBottom: tokens.spacingVerticalS }}>
+                      {storageScanLoading && (
+                        <div className={styles.inlineLoad}><Spinner size="tiny" /><Caption1>Scanning subscriptions for Data Lake accounts…</Caption1></div>
+                      )}
+                      {storageScanError && (
+                        <MessageBar intent="error"><MessageBarBody>{storageScanError}</MessageBarBody></MessageBar>
+                      )}
+                      {!storageScanLoading && !storageScanError && storageScanned && storageScan.length === 0 && (
+                        <MessageBar intent="warning">
+                          <MessageBarBody>
+                            No HNS (Data Lake) accounts are visible to the Console identity — provision new instead, or grant
+                            it Reader on the subscription holding your lake and rescan.
+                          </MessageBarBody>
+                        </MessageBar>
+                      )}
+                      {storageScan.length > 0 && (
+                        <Dropdown
+                          size="small"
+                          placeholder="Select an existing Data Lake account"
+                          selectedOptions={state.existingLoomStorageAccount ? [state.existingLoomStorageAccount] : []}
+                          value={state.existingLoomStorageAccount || ''}
+                          onOptionSelect={(_e, d) =>
+                            setState((s) => ({ ...s, existingLoomStorageAccount: d.optionValue, loomOrgVisualsEnabled: undefined }))
+                          }
+                        >
+                          {storageScan.map((a) => (
+                            <Option key={`${a.subscriptionId}/${a.name}`} value={a.name} text={a.name}>
+                              {a.name}{a.isLoomNamed ? '  (Loom lake)' : ''} — {a.rg} · {a.location}
+                            </Option>
+                          ))}
+                        </Dropdown>
+                      )}
+                    </div>
+                  )}
+                  {storageChoice === 'disable' && (
+                    <MessageBar intent="warning">
+                      <MessageBarBody>
+                        Embed codes &amp; Organizational visuals will show their config gate (no SAS minting). The medallion
+                        lake and all other surfaces are unaffected. You can enable it later by redeploying with org-visuals on.
+                      </MessageBarBody>
+                    </MessageBar>
+                  )}
+                </div>
+              );
+            })()}
 
             {!isWireExisting && (
               <div>

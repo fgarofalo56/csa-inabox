@@ -181,6 +181,10 @@ param apimEnabled = true
 param aiSearchEnabled = false
 param adxEnabled = true
 param cosmosGraphVectorEnabled = true
+// Org-visuals (Embed codes F22 + Organizational visuals F23) — ON by default
+// (opt-out). In tenant/dlz-attach the LOOM_ORG_VISUALS_URL env + Storage Blob
+// Delegator grant are wired post-attach by csa-loom-post-deploy-bootstrap.yml.
+param loomOrgVisualsEnabled = true
 param vpnGatewayEnabled = true
 param appGatewayEnabled = true
 param mlWorkspaceEnabled = true
