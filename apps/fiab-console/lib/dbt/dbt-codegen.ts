@@ -75,9 +75,14 @@ export function generateDbtProjectYml(g: DbtProjectGraph): string {
 
 /**
  * profiles.yml generated from the target. Auth is always identity-based
- * (Entra / managed identity) — no secrets are ever written into the file.
- *   - databricks: token via env DBT_DATABRICKS_TOKEN (the runner injects the
- *     workspace OAuth token); on the Databricks dbt_task auth is implicit.
+ * (Entra / managed identity) — no static secrets are ever written into the file.
+ *   - databricks: the documented Databricks "dbt task custom profile" form —
+ *     `method: http` + static `host`/`http_path` + `token: env_var('DBT_ACCESS_TOKEN')`.
+ *     Databricks AUTO-INJECTS `DBT_ACCESS_TOKEN` for the Run-As principal of every
+ *     dbt task (Learn: /azure/databricks/jobs/dbt + .../how-to/use-dbt-in-workflows
+ *     "Advanced — run dbt with a custom profile"), so the profile resolves on the
+ *     dbt-CLI compute with no Loom-side secret plumbing. host/http_path are baked
+ *     literals (host defaulted from LOOM_DATABRICKS_HOSTNAME by the run BFF).
  *   - synapse:    authentication=CLI (the runner's managed identity / az login).
  *   - fabric:     authentication=CLI against the Fabric SQL endpoint (opt-in).
  */
@@ -91,10 +96,16 @@ export function generateProfilesYml(g: DbtProjectGraph): string {
   out.push(`  outputs:`);
   out.push(`    prod:`);
   if (t.adapter === 'databricks') {
+    // Custom-profile form recommended by Databricks for dbt tasks: the token is
+    // the run-scoped DBT_ACCESS_TOKEN that Databricks injects automatically;
+    // host + http_path are static literals (no extra env vars to plumb). When a
+    // literal isn't known yet (pure preview), fall back to an env_var() marker so
+    // the file stays valid YAML — the run BFF bakes the real host before push.
     out.push(`      type: databricks`);
-    out.push(`      host: "{{ env_var('DBT_DATABRICKS_HOST') }}"`);
+    out.push(`      method: http`);
+    out.push(`      host: ${yamlScalar(t.databricksHost || "{{ env_var('DBT_DATABRICKS_HOST') }}")}`);
     out.push(`      http_path: ${yamlScalar(t.databricksHttpPath || "{{ env_var('DBT_DATABRICKS_HTTP_PATH') }}")}`);
-    out.push(`      token: "{{ env_var('DBT_DATABRICKS_TOKEN') }}"`);
+    out.push(`      token: "{{ env_var('DBT_ACCESS_TOKEN') }}"`);
     out.push(`      catalog: ${yamlScalar(t.catalog || 'main')}`);
     out.push(`      schema: ${yamlScalar(schema)}`);
     out.push(`      threads: ${threads}`);

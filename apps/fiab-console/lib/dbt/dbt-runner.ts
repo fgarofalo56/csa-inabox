@@ -67,9 +67,22 @@ export async function pushProjectToDatabricks(
 }
 
 /**
+ * The dbt-databricks adapter library pinned on the dbt task. Databricks
+ * recommends pinning the dbt task to a specific adapter version (>= 1.6.0) so
+ * dev and prod runs use the same dbt-databricks; without a pin the dependent
+ * library defaults to `dbt-databricks>=1.0.0,<2.0.0`, which can drift.
+ * `catalog` on a warehouse-targeted task additionally requires >= 1.1.1.
+ * Learn: https://learn.microsoft.com/azure/databricks/jobs/dbt
+ */
+export const DBT_DATABRICKS_LIBRARY = 'dbt-databricks>=1.6.0,<2.0.0';
+
+/**
  * Build a Databricks Job spec running the generated project from the workspace
  * folder (no external git repo). `source: WORKSPACE` + `project_directory` is
- * the documented alternative to `git_source`.
+ * the documented alternative to `git_source`. The generated `profiles.yml`
+ * authenticates with the run-scoped `DBT_ACCESS_TOKEN` Databricks injects for
+ * the task's Run-As principal, so no secret is plumbed through the job. The
+ * dbt-databricks adapter is pinned (see DBT_DATABRICKS_LIBRARY) for parity.
  */
 export function buildWorkspaceDbtJobSpec(
   itemId: string,
@@ -88,6 +101,7 @@ export function buildWorkspaceDbtJobSpec(
           commands,
           source: 'WORKSPACE',
         },
+        libraries: [{ pypi: { package: DBT_DATABRICKS_LIBRARY } }],
       },
     ],
     max_concurrent_runs: 1,

@@ -104,7 +104,20 @@ export async function POST(req: NextRequest, ctx: { params: Promise<{ id: string
         if (!spec.clusterId) {
           return jerr('Select a Databricks cluster to run the project against.', 400);
         }
-        const { projectDir, written } = await pushProjectToDatabricks(id, files);
+        // Bake the real workspace host into the generated profiles.yml so it is a
+        // static literal on the pushed project (the dbt task authenticates with
+        // the Databricks-injected DBT_ACCESS_TOKEN; only host/http_path are
+        // baked). Default the host from the console's LOOM_DATABRICKS_HOSTNAME
+        // when the builder left it blank.
+        const hostFqdn = (spec.project.target.databricksHost
+          || process.env.LOOM_DATABRICKS_HOSTNAME || '')
+          .replace(/^https?:\/\//, '').replace(/\/$/, '');
+        const dbxProject: DbtProjectGraph = {
+          ...spec.project,
+          target: { ...spec.project.target, databricksHost: hostFqdn || undefined },
+        };
+        const dbxFiles = generateProject(dbxProject);
+        const { projectDir, written } = await pushProjectToDatabricks(id, dbxFiles);
         const { jobId, runId } = await runDbtOnDatabricks({
           itemId: id, projectDir, clusterId: spec.clusterId, commands,
           existingJobId: spec.databricksJobId,

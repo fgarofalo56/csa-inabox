@@ -558,11 +558,11 @@ function TargetInspector({ value, onChange }: { value: DbtTarget; onChange: (p: 
           <Field label="Unity Catalog" hint="profiles.yml catalog (default main)">
             <Input value={value.catalog || ''} placeholder="main" onChange={(_, d) => onChange({ catalog: d.value })} />
           </Field>
-          <Field label="HTTP path (optional)" hint="SQL warehouse http_path; blank → env DBT_DATABRICKS_HTTP_PATH">
+          <Field label="HTTP path" hint="SQL warehouse or all-purpose compute HTTP path; blank → env DBT_DATABRICKS_HTTP_PATH">
             <Input value={value.databricksHttpPath || ''} placeholder="/sql/1.0/warehouses/abc123"
               onChange={(_, d) => onChange({ databricksHttpPath: d.value })} />
           </Field>
-          <Text size={200}>Runs as a Databricks Job dbt_task — no extra infra. The generated project is pushed to a Loom workspace folder.</Text>
+          <Text size={200}>Runs as a Databricks Job dbt_task — no extra infra. The generated project is pushed to a Loom workspace folder; the workspace host is filled from the deployment and dbt authenticates with the run-scoped <code>DBT_ACCESS_TOKEN</code> Databricks injects automatically (no token to manage).</Text>
         </>
       )}
       {value.adapter === 'synapse' && (

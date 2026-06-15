@@ -21,6 +21,7 @@ vi.mock('@/lib/azure/databricks-client', () => ({
 
 import {
   buildWorkspaceDbtJobSpec, dbtWorkspaceDir, dbtRunnerConfigGate, pushProjectToDatabricks,
+  DBT_DATABRICKS_LIBRARY,
 } from '../dbt-runner';
 
 describe('dbt-runner', () => {
@@ -34,6 +35,13 @@ describe('dbt-runner', () => {
     expect(task.dbt_task.commands).toEqual(['dbt deps', 'dbt build']);
     expect(task.existing_cluster_id).toBe('clu-1');
     expect(spec.name).toBe('loom-dbt-item-1');
+  });
+
+  it('buildWorkspaceDbtJobSpec pins dbt-databricks >= 1.6.0 for dev/prod parity', () => {
+    const spec = buildWorkspaceDbtJobSpec('item-1', '/Workspace/Shared/loom-dbt/item-1', 'clu-1', ['dbt build']);
+    const task: any = (spec.tasks as any[])[0];
+    expect(task.libraries).toEqual([{ pypi: { package: DBT_DATABRICKS_LIBRARY } }]);
+    expect(DBT_DATABRICKS_LIBRARY).toContain('dbt-databricks>=1.6.0');
   });
 
   it('dbtRunnerConfigGate reports the missing env var when unset', () => {

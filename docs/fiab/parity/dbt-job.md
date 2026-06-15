@@ -54,7 +54,7 @@ Zero ❌. The only conditional state is an honest infra-gate (below).
 |---------|---------|
 | Builder graph save | `PUT /api/items/dbt-job/[id]` → Cosmos `state.project` |
 | Generate files | `GET /api/items/dbt-job/[id]/generate` → `dbt-codegen.generateProject` (pure, real files) |
-| Run (Databricks target) | `POST /run` → push project to Databricks workspace folder (`/api/2.0/workspace/import`) → Databricks Job `dbt_task` (`source: WORKSPACE`) → `jobs/run-now` |
+| Run (Databricks target) | `POST /run` → push project to Databricks workspace folder (`/api/2.0/workspace/import`) → Databricks Job `dbt_task` (`source: WORKSPACE`, `dbt-databricks>=1.6.0` pinned) → `jobs/run-now`. The generated `profiles.yml` authenticates with the run-scoped `DBT_ACCESS_TOKEN` Databricks injects for the task Run-As principal; `host` is baked from `LOOM_DATABRICKS_HOSTNAME` and `http_path` from the target. |
 | Run (Synapse / Fabric target) | `POST /run` → `loom-dbt-runner` Container App `/run` (dbt-core + dbt-synapse/dbt-fabric + ODBC 18, managed identity) |
 | Runs list | `GET /runs` → Databricks `jobs/runs/list` |
 | BYO repo run | `POST /run` → Databricks Job `dbt_task` (`source: GIT` + `git_source`) |
@@ -63,7 +63,7 @@ Zero ❌. The only conditional state is an honest infra-gate (below).
 
 | Target | Native dbt runtime? | Loom execution | Default? |
 |--------|---------------------|----------------|----------|
-| **Databricks** | Yes (Databricks Job dbt_task) | Push generated project to workspace → dbt_task `source=WORKSPACE`. No extra infra. | ✅ default |
+| **Databricks** | Yes (Databricks Job dbt_task) | Push generated project to workspace → dbt_task `source=WORKSPACE`. The profile uses the run-injected `DBT_ACCESS_TOKEN` (no Loom secret), with static `host`/`http_path`; `dbt-databricks` pinned ≥ 1.6.0. No extra infra. | ✅ default |
 | **Synapse dedicated SQL pool** | **No** native dbt task | `loom-dbt-runner` Container App (dbt-synapse + ODBC 18, MSI). Honest gate (`LOOM_DBT_RUNNER_URL`) when not deployed. | Azure-native |
 | **Fabric Warehouse** | n/a | Same `loom-dbt-runner` app via dbt-fabric adapter | opt-in only |
 
@@ -87,7 +87,7 @@ not a Fabric dependency. The Databricks target works with no extra infra.
 
 ## Verification
 
-- `lib/dbt/__tests__/dbt-codegen.test.ts` — 10 golden/behavioral tests (per-adapter profiles, materializations, tests, dangling refs, file set).
-- `lib/dbt/__tests__/dbt-runner.test.ts` — 4 tests (workspace job spec, config gate, dir-creation order, file import).
+- `lib/dbt/__tests__/dbt-codegen.test.ts` — golden/behavioral tests incl. the Databricks `DBT_ACCESS_TOKEN` custom-profile form + baked-host resolution, per-adapter profiles, materializations, tests, dangling refs, file set.
+- `lib/dbt/__tests__/dbt-runner.test.ts` — workspace job spec (incl. pinned `dbt-databricks` library), config gate, dir-creation order, file import.
 - `lib/editors/__tests__/dbt-job.test.tsx` — editor chrome + ribbon actions.
 - `tests/e2e/dbt-job.spec.ts` — editor route renders, primary action present.
