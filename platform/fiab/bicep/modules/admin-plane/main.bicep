@@ -342,6 +342,17 @@ param loomAasModel string = ''
 @description('Scaled self-hosted IR VMSS name (backs the SHIR metrics tile + scale controls). Defaults to the single-sub DLZ name; empty disables the SHIR surface (honest gate).')
 param loomShirVmssName string = 'vmss-loom-shir-default'
 
+// Data-engineering backend opt-out MIRRORS (default all ON). Carried on the
+// existing `byoExisting` object param (keeps admin-plane under Bicep's 256-param
+// ceiling — no new param) under the de* keys. When an operator disables a DLZ
+// backend the console env var is blanked here too, so the editor shows its honest
+// Fluent gate instead of 502-ing against a workspace/factory/VMSS that was never
+// provisioned. main.bicep sets these from the same loom<Svc>Enabled booleans.
+var deSynapseEnabled = byoExisting.?deSynapse ?? true
+var deDatabricksEnabled = byoExisting.?deDatabricks ?? true
+var deAdfEnabled = byoExisting.?deAdf ?? true
+var deShirEnabled = byoExisting.?deShir ?? true
+
 @description('Deploy the SHARED admin-zone Purview self-hosted IR VMSS (scale-to-zero). A Purview SHIR cannot be the DLZ ADF SHIR (Microsoft constraint — separate machine), so this is its own VMSS. Honest-gated: only deploys when purviewEnabled AND purviewIrAuthKey AND purviewShirAdminPassword are all set.')
 param purviewShirEnabled bool = true
 
@@ -722,7 +733,7 @@ var existingPurviewAccount = byoExisting.?purviewAccount ?? ''
 var effPurviewAccount = !empty(existingPurviewAccount) ? existingPurviewAccount : loomPurviewAccount
 // Synapse navigator — reuse > provisioned DLZ workspace.
 var existingSynapseWorkspace = byoExisting.?synapseWorkspace ?? ''
-var effSynapseWorkspace = !empty(existingSynapseWorkspace) ? existingSynapseWorkspace : loomSynapseWorkspace
+var effSynapseWorkspace = !empty(existingSynapseWorkspace) ? existingSynapseWorkspace : (deSynapseEnabled ? loomSynapseWorkspace : '')
 var byoSynapseRg        = !empty(byoExisting.?synapseRg ?? '') ? byoExisting.synapseRg : loomDlzRg
 var byoSynapseSub       = !empty(byoExisting.?synapseSub ?? '') ? byoExisting.synapseSub : subscription().subscriptionId
 // Cosmos control-plane navigator — reuse > provisioned DLZ account.
@@ -734,7 +745,7 @@ var byoCosmosSub     = !empty(byoExisting.?cosmosSub ?? '') ? byoExisting.cosmos
 // into LOOM_ADF_NAME/RG/SUB, which adf-client reads (sub/rg fall back to the
 // deployment sub + DLZ RG when empty).
 var existingAdfFactory = byoExisting.?adfFactory ?? ''
-var effAdfName = !empty(existingAdfFactory) ? existingAdfFactory : loomAdfName
+var effAdfName = !empty(existingAdfFactory) ? existingAdfFactory : (deAdfEnabled ? loomAdfName : '')
 var effAdfRg   = !empty(byoExisting.?adfRg ?? '') ? byoExisting.adfRg : (!empty(loomAdfRg) ? loomAdfRg : loomDlzRg)
 var byoAdfSub  = !empty(byoExisting.?adfSub ?? '') ? byoExisting.adfSub : subscription().subscriptionId
 // Event Hubs navigator — reuse > provisioned DLZ namespace.
@@ -744,7 +755,7 @@ var effEventHubRg        = !empty(byoExisting.?eventHubRg ?? '') ? byoExisting.e
 var byoEventHubSub       = !empty(byoExisting.?eventHubSub ?? '') ? byoExisting.eventHubSub : (!empty(loomEventHubSub) ? loomEventHubSub : subscription().subscriptionId)
 // Databricks navigator — reuse hostname > provisioned/patched hostname.
 var existingDatabricksHostname = byoExisting.?databricksHostname ?? ''
-var effDatabricksHostname = !empty(existingDatabricksHostname) ? existingDatabricksHostname : loomDatabricksHostname
+var effDatabricksHostname = !empty(existingDatabricksHostname) ? existingDatabricksHostname : (deDatabricksEnabled ? loomDatabricksHostname : '')
 // Sovereign-cloud ADX (Kusto) hostname suffix — Commercial/GCC vs GCC-High/IL5.
 // Used only for the BYO (existingAdxClusterName) path; the provisioned cluster
 // uses adxCluster.outputs.clusterUri (ARM-generated, already cloud-correct).
@@ -916,9 +927,9 @@ param loomDefaultFabricWorkspace string = ''
 @allowed(['', 'fabric'])
 param loomCopilotBackend string = ''
 
-@description('Phase-2 warehouse provisioner backend. synapse-dedicated (default) runs DDL against the dedicated Synapse pool via TDS+AAD; fabric-warehouse is on the v3.5 roadmap.')
-@allowed(['synapse-dedicated', 'fabric-warehouse'])
-param loomWarehouseBackend string = 'synapse-dedicated'
+// Phase-2 warehouse provisioner backend folded into loomBackends.warehouse
+// (kept as a var to stay under the ARM 256-param ceiling — data-eng sweep).
+var loomWarehouseBackend = loomBackends.?warehouse ?? 'synapse-dedicated'
 
 @description('Opt-in only: Fabric workspace id that backs the warehouse when loomWarehouseBackend=fabric-warehouse. Required to surface GPU-accelerated query execution; leave empty for the Azure-native Synapse default (result-set caching acceleration).')
 param loomWarehouseFabricWorkspace string = ''
@@ -930,9 +941,9 @@ param loomWarehouseFabricWorkspace string = ''
 @description('Azure Data Lake Storage Gen2 bronze container name. Default: bronze.')
 param loomBronzeContainer string = 'bronze'
 
-@description('Pipeline orchestrator backend selector. Default: synapse. Alternatives: adf, fabric.')
-@allowed(['synapse', 'adf', 'fabric'])
-param loomPipelineBackend string = 'synapse'
+// Pipeline orchestrator backend selector folded into loomBackends.pipeline
+// (kept as a var to stay under the ARM 256-param ceiling — data-eng sweep).
+var loomPipelineBackend = loomBackends.?pipeline ?? 'synapse'
 
 
 
@@ -954,6 +965,11 @@ param loomBackends object = {
   domains: 'cosmos'
   dataflow: 'adf'
   dataproducts: ''
+  // Folded out of standalone params (data-eng deploy-readiness sweep) to stay
+  // under the ARM 256-parameter ceiling; consumed via same-named vars above so
+  // every downstream LOOM_WAREHOUSE_BACKEND / LOOM_PIPELINE_BACKEND env is unchanged.
+  warehouse: 'synapse-dedicated'
+  pipeline: 'synapse'
 }
 
 
@@ -2040,7 +2056,7 @@ module appDeployments 'app-deployments.bicep' = if (containerPlatform == 'contai
             // the four activities honest-gated (MessageBar names this var).
             { name: 'LOOM_HDINSIGHT_LINKED_SERVICE', value: loomHdinsightLinkedService }
             { name: 'NEXT_PUBLIC_LOOM_HDINSIGHT_LINKED_SERVICE', value: loomHdinsightLinkedService }
-            { name: 'LOOM_SHIR_VMSS_NAME', value: loomShirVmssName }
+            { name: 'LOOM_SHIR_VMSS_NAME', value: deShirEnabled ? loomShirVmssName : '' }
             // Shared admin-zone Purview SHIR VMSS — the BFF scales this 0→N
             // before a Purview scan that uses the self-hosted IR, and the
             // idle-stop workflow scales it back to 0. It lives in the admin RG

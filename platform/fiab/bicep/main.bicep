@@ -309,6 +309,23 @@ param aiSearchEnabled bool = false
 @description('Deploy ADX shared cluster (admin-plane) + per-DLZ ADX databases. Backs the RTI editor family — Eventhouse, KQL Database, KQL Queryset, KQL Dashboard, Eventstream. Default on as of 2026-05-27 (sweep-rti). Set false to skip ~$140/mo Dev SKU cluster.')
 param adxEnabled bool = true
 
+// =====================================================================
+// Data-engineering backend opt-out flags (default ON — provision new).
+// Forwarded to BOTH the admin-plane (env-blank mirror) and every DLZ
+// (provision gate) so a stock deploy is "everything on, opt-out".
+// =====================================================================
+@description('Provision the per-DLZ Synapse workspace (Serverless + dedicated + Spark loompool). Default ON. false skips Synapse + blanks LOOM_SYNAPSE_WORKSPACE so the editor honest-gates.')
+param loomSynapseEnabled bool = true
+
+@description('Provision the per-DLZ Databricks workspace (+ Access Connector + Unity Catalog when supported). Default ON. false skips Databricks + blanks LOOM_DATABRICKS_HOSTNAME.')
+param loomDatabricksEnabled bool = true
+
+@description('Provision the per-DLZ Azure Data Factory. Default ON. false skips ADF + blanks LOOM_ADF_NAME.')
+param loomDataFactoryEnabled bool = true
+
+@description('Provision the per-DLZ scaled self-hosted IR (VMSS scale-to-0). Default ON — a strong admin password is auto-generated into the deployment (see effShirAdminPassword) so SHIR provisions without manual input. false skips the SHIR VMSS + blanks LOOM_SHIR_VMSS_NAME.')
+param loomSelfHostedIrEnabled bool = true
+
 @description('Deploy a Gremlin-capable Cosmos DB account (EnableGremlin) + NoSQL vector account in each DLZ. Backs the cosmos-gremlin-graph (graph editor) and vector-store editors. Default on — the graph editor requires a Gremlin account at create-time (a NoSQL account cannot be converted). Set false to skip ~2 Cosmos accounts/DLZ.')
 param cosmosGraphVectorEnabled bool = true
 
@@ -637,9 +654,19 @@ param loomMirrorCopyCadence string = '1h'
 @description('Default Fabric/Power BI workspace id (LOOM_DEFAULT_FABRIC_WORKSPACE). Leave EMPTY (default) for the Azure-native path — Fabric is strictly opt-in (per no-fabric-dependency.md) and only used when a *-backend env is also set to fabric.')
 param loomDefaultFabricWorkspace string = ''
 
-@description('Local admin password for the scaled self-hosted IR (SHIR) VMSS nodes in each DLZ. Empty → the SHIR is NOT deployed (honest gate); supply a Key-Vault-backed secret to enable the 4-node scale-to-0 self-hosted IR. No password is ever embedded/generated in the template.')
+@description('Local admin password for the scaled self-hosted IR (SHIR) VMSS nodes in each DLZ. Empty → a strong password is auto-generated into the deployment (effShirAdminPassword) so the SHIR provisions by default per deploy-readiness; supply a Key-Vault-backed secret to override. The VMSS stays at capacity 0 (scale-to-0) so the credential is never used interactively — nothing needs to RDP.')
 @secure()
 param shirAdminPassword string = ''
+
+// Auto-generate a complexity-satisfying SHIR admin password when none is
+// supplied, so loomSelfHostedIrEnabled=true provisions the VMSS on a stock
+// deploy (a VMSS requires a local credential). Derived deterministically from
+// resource ids — uniqueString returns 13 lowercase alphanumerics; toUpper +
+// the literal suffix add upper/lower/digit/symbol classes for Windows policy.
+// The VMSS is private + scale-to-0, so this is never an interactive login.
+var effShirAdminPassword = !empty(shirAdminPassword)
+  ? shirAdminPassword
+  : '${toUpper(substring(uniqueString(subscription().subscriptionId, 'loom-shir'), 0, 9))}${substring(uniqueString(deployment().name, 'loom-shir-lower'), 0, 9)}!7xQ'
 
 @description('Loom version label shown in the UI + on /api/version.')
 param loomVersion string = 'v0.1'
@@ -799,6 +826,13 @@ module adminPlane 'modules/admin-plane/main.bicep' = if (deployAdminPlane) {
       adfFactory: existingAdfFactory
       adfRg: existingAdfRg
       adfSub: existingAdfSub
+      // Data-engineering opt-out mirrors (default true) — admin-plane blanks the
+      // matching LOOM_* env var when a DLZ backend is disabled, so the editor
+      // honest-gates instead of 502-ing. Carried here to stay under the 256-param ceiling.
+      deSynapse: loomSynapseEnabled
+      deDatabricks: loomDatabricksEnabled
+      deAdf: loomDataFactoryEnabled
+      deShir: loomSelfHostedIrEnabled
     }
     // Azure ML workspace for the notebook AML path. Name is the deterministic
     // deploy-planner ml-workspace.bicep name (uniqueString over the DLZ RG), so
@@ -1062,6 +1096,10 @@ module singleDlz 'modules/landing-zone/main.bicep' = if (useSingleDlz) {
     adminPlanePrivateDnsZoneIds: hubPrivateDnsZoneIds
     adminPlaneAdxClusterRgName: adminPlaneRgName
     adxEnabled: adxEnabled
+    loomSynapseEnabled: loomSynapseEnabled
+    loomDatabricksEnabled: loomDatabricksEnabled
+    loomDataFactoryEnabled: loomDataFactoryEnabled
+    loomSelfHostedIrEnabled: loomSelfHostedIrEnabled
     adxClusterPrincipalId: hub.adxClusterPrincipalId
     adminEntraGroupId: adminEntraGroupId
     activatorPrincipalId: hub.activatorPrincipalId
@@ -1081,7 +1119,7 @@ module singleDlz 'modules/landing-zone/main.bicep' = if (useSingleDlz) {
     skipRoleGrants: skipRoleGrants
     consolePrincipalNeedsLifecycleWrite: consolePrincipalNeedsLifecycleWrite
     consolePrincipalNeedsCmkBind: consolePrincipalNeedsCmkBind
-    shirAdminPassword: shirAdminPassword
+    shirAdminPassword: effShirAdminPassword
     recycleRetentionDays: recycleRetentionDays
     cosmosGraphVectorEnabled: cosmosGraphVectorEnabled
     weaveOntologyEnabled: weaveOntologyEnabled
@@ -1143,6 +1181,10 @@ module dlz 'modules/landing-zone/main.bicep' = [for (subId, i) in dlzSubscriptio
     adminPlanePrivateDnsZoneIds: hubPrivateDnsZoneIds
     adminPlaneAdxClusterRgName: adminPlaneRgName
     adxEnabled: adxEnabled
+    loomSynapseEnabled: loomSynapseEnabled
+    loomDatabricksEnabled: loomDatabricksEnabled
+    loomDataFactoryEnabled: loomDataFactoryEnabled
+    loomSelfHostedIrEnabled: loomSelfHostedIrEnabled
     adxClusterPrincipalId: hub.adxClusterPrincipalId
     adminEntraGroupId: adminEntraGroupId
     activatorPrincipalId: hub.activatorPrincipalId
@@ -1162,7 +1204,7 @@ module dlz 'modules/landing-zone/main.bicep' = [for (subId, i) in dlzSubscriptio
     skipRoleGrants: skipRoleGrants
     consolePrincipalNeedsLifecycleWrite: consolePrincipalNeedsLifecycleWrite
     consolePrincipalNeedsCmkBind: consolePrincipalNeedsCmkBind
-    shirAdminPassword: shirAdminPassword
+    shirAdminPassword: effShirAdminPassword
     recycleRetentionDays: recycleRetentionDays
     cosmosGraphVectorEnabled: cosmosGraphVectorEnabled
     weaveOntologyEnabled: weaveOntologyEnabled
@@ -1247,6 +1289,10 @@ module dlzAttach 'modules/landing-zone/main.bicep' = if (topology == 'dlz-attach
     // needed. So the deploy-time ADX DB is skipped here; every other DLZ backend
     // (ADLS, Synapse, Databricks, Event Hubs, Cosmos) is in-sub and deploys normally.
     adxEnabled: false
+    loomSynapseEnabled: loomSynapseEnabled
+    loomDatabricksEnabled: loomDatabricksEnabled
+    loomDataFactoryEnabled: loomDataFactoryEnabled
+    loomSelfHostedIrEnabled: loomSelfHostedIrEnabled
     adxClusterPrincipalId: effHubAdxClusterPrincipalId
     adminEntraGroupId: adminEntraGroupId
     activatorPrincipalId: effHubActivatorPrincipalId
@@ -1266,7 +1312,7 @@ module dlzAttach 'modules/landing-zone/main.bicep' = if (topology == 'dlz-attach
     skipRoleGrants: skipRoleGrants
     consolePrincipalNeedsLifecycleWrite: consolePrincipalNeedsLifecycleWrite
     consolePrincipalNeedsCmkBind: consolePrincipalNeedsCmkBind
-    shirAdminPassword: shirAdminPassword
+    shirAdminPassword: effShirAdminPassword
     recycleRetentionDays: recycleRetentionDays
     cosmosGraphVectorEnabled: cosmosGraphVectorEnabled
     weaveOntologyEnabled: weaveOntologyEnabled
