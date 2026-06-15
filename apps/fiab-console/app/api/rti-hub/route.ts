@@ -276,6 +276,18 @@ export async function GET() {
   // custom topic an operator publishes governed business signals to becomes a
   // subscribable Azure event source here. Real ARM enumeration; best-effort so
   // an Event-Grid config gate never blocks the rest of the catalog.
+  //
+  // Subscribe path: an Event Grid custom topic has no first-class Fabric
+  // Eventstream source `type` of its own (the documented Azure-events sources
+  // are storage-account events). The honest, no-vaporware mapping is the
+  // `CustomEndpoint` source — the connect flow provisions a dedicated ingest
+  // Event Hub that the topic's Event Grid subscription delivers CloudEvents to
+  // (Event Grid → Event Hub handler). The original topic name + input schema
+  // are carried in `properties` so the eventstream editor / activator can wire
+  // the Event Grid subscription. This keeps `sourceType` inside
+  // RTH_SOURCE_TYPES so `isRthSourceType()` passes and the Connect button is
+  // live — it was dead while sourceType was the unsupported
+  // 'AzureEventGridCustomTopic' (no connector, connect-source 400).
   try {
     const egGate = eventgridTopicsConfigGate();
     if (!egGate) {
@@ -287,11 +299,15 @@ export async function GET() {
           kind: 'azure-event',
           source: 'Business events · Event Grid',
           location: t.location,
-          description: `Governed business-event topic (${t.inputSchema || 'CloudEvents v1.0'}). Subscribe to react to published business signals.`,
+          description: `Governed business-event topic (${t.inputSchema || 'CloudEvents v1.0'}). Subscribe to ingest published business signals through a dedicated Event Hub.`,
           subscribePreFill: {
-            sourceType: 'AzureEventGridCustomTopic',
+            sourceType: 'CustomEndpoint',
             sourceName: t.name,
-            properties: { topic: t.name, inputSchema: t.inputSchema || 'CloudEventSchemaV1_0' },
+            properties: {
+              eventGridTopic: t.name,
+              inputSchema: t.inputSchema || 'CloudEventSchemaV1_0',
+              eventHubName: `eg-${t.name}`.toLowerCase().replace(/[^a-z0-9._-]+/g, '-').slice(0, 50),
+            },
           },
         });
       }

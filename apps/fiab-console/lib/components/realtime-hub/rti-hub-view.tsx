@@ -152,7 +152,7 @@ export function RtiHubView() {
   const [connectName, setConnectName] = useState<string | null>(null);
 
   // Stream actions: preview (KQL), endpoints (eventstream), peek/send test events.
-  const [previewTarget, setPreviewTarget] = useState<{ title: string; db?: string; table?: string } | null>(null);
+  const [previewTarget, setPreviewTarget] = useState<{ title: string; db?: string; table?: string; clusterUri?: string } | null>(null);
   const [endpointsTarget, setEndpointsTarget] = useState<{ name: string; workspaceId: string; id: string } | null>(null);
   const [eventTestTarget, setEventTestTarget] = useState<{ title: string; target: EventTestTarget } | null>(null);
 
@@ -319,6 +319,17 @@ export function RtiHubView() {
                   <MenuItem icon={<Eye20Regular />}
                     onClick={() => setPreviewTarget({ title: r.name, db: r.name, table: '' })}>
                     Preview data
+                  </MenuItem>
+                )}
+                {a.previewClusterData && (
+                  <MenuItem icon={<Eye20Regular />}
+                    onClick={() => setPreviewTarget({
+                      title: r.name,
+                      db: '',
+                      table: '',
+                      clusterUri: String((r.subscribePreFill.properties as any)?.adxClusterUri || ''),
+                    })}>
+                    Preview table on this cluster
                   </MenuItem>
                 )}
                 {a.endpoints && r.workspaceId && (
@@ -496,6 +507,17 @@ export function RtiHubView() {
           </MessageBar>
         )}
 
+        {tab === 'azureEvents' && !loading && (
+          <MessageBar intent="info" style={{ marginBottom: 12 }}>
+            <MessageBarBody>
+              Azure event categories you can <b>Subscribe</b> to — each creates a Loom eventstream whose
+              Azure-native ingest endpoint (Event Hub) receives the events. <b>Blob Storage events</b> bind an
+              Event Grid system topic; <b>business-event topics</b> deliver governed CloudEvents through a dedicated
+              Event Hub.
+            </MessageBarBody>
+          </MessageBar>
+        )}
+
         {loading ? (
           <div className={styles.loading}>
             <Spinner label="Discovering streams across subscriptions…" />
@@ -534,13 +556,14 @@ export function RtiHubView() {
         initialDisplayName={connectName}
       />
 
-      {/* Preview data (KQL / Eventhouse rows) */}
+      {/* Preview data (KQL / Eventhouse rows + discovered ADX clusters) */}
       <StreamPreviewDrawer
         open={!!previewTarget}
         onClose={() => setPreviewTarget(null)}
         title={previewTarget?.title || ''}
         defaultDb={previewTarget?.db}
         defaultTable={previewTarget?.table}
+        clusterUri={previewTarget?.clusterUri}
       />
 
       {/* Endpoints (Loom eventstream rows) */}

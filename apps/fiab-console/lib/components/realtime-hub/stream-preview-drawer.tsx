@@ -66,9 +66,13 @@ export interface StreamPreviewDrawerProps {
   defaultDb?: string;
   /** Default table to pre-fill (e.g. a KQL table whose name == the item). */
   defaultTable?: string;
+  /** Optional ADX cluster URI to preview a *discovered* cluster (RTI hub ADX
+   *  rows) instead of the env-configured default. Forwarded to the preview
+   *  route, which validates it server-side. */
+  clusterUri?: string;
 }
 
-export function StreamPreviewDrawer({ open, onClose, title, defaultDb, defaultTable }: StreamPreviewDrawerProps) {
+export function StreamPreviewDrawer({ open, onClose, title, defaultDb, defaultTable, clusterUri }: StreamPreviewDrawerProps) {
   const styles = useStyles();
   const [db, setDb] = useState(defaultDb || '');
   const [table, setTable] = useState(defaultTable || '');
@@ -92,7 +96,7 @@ export function StreamPreviewDrawer({ open, onClose, title, defaultDb, defaultTa
     try {
       const res = await fetch('/api/realtime-hub/preview', {
         method: 'POST', headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ database: db.trim() || undefined, table: table.trim(), limit: 50 }),
+        body: JSON.stringify({ database: db.trim() || undefined, table: table.trim(), limit: 50, clusterUri: clusterUri || undefined }),
       });
       const j = await res.json().catch(() => ({}));
       if (!res.ok || !j.ok) { setErr(j.error || `Preview failed (HTTP ${res.status}).`); return; }

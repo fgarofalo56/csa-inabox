@@ -25,6 +25,10 @@ export interface RtiRowActions {
   peekSendEvents: boolean;
   /** KQL / Eventhouse: preview recent rows from the backing table. */
   previewData: boolean;
+  /** ADX cluster (discovered): preview a table against THAT cluster. The
+   *  preview drawer carries the row's clusterUri override so the query targets
+   *  the discovered cluster, not the env-pinned default. */
+  previewClusterData: boolean;
   /** Loom eventstream: show source/destination endpoints from the definition. */
   endpoints: boolean;
   /** Loom item: deep-link to the live editor (query / manage). */
@@ -49,6 +53,7 @@ export function streamRowActions(kind: string): RtiRowActions {
     previewTestEvents: k === 'eventstream',
     peekSendEvents: k === 'eventhub-entity',
     previewData: isKqlOrEventhouse,
+    previewClusterData: k === 'adx-cluster',
     endpoints: k === 'eventstream',
     openEditor: LOOM_ITEM_KINDS.has(k),
     // Subscribe + activator are universal across every discovered/owned source.

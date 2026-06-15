@@ -181,16 +181,43 @@ export function laConfigGate(): { missing: string } | null {
   return null;
 }
 
-async function getToken(): Promise<string> {
-  const scope = `${CLUSTER_URI}/.default`;
+/**
+ * Normalise + validate a caller-supplied ADX cluster URI override. Only a
+ * bare `https://<host>` Kusto/Trident engine host is accepted — never a path,
+ * query, or non-https scheme — so a preview against a *discovered* ADX cluster
+ * (RTI hub catalog) targets that cluster, not the env-pinned default. Returns
+ * the trimmed `https://host` origin, or `null` when the input is absent/invalid
+ * (callers fall back to the configured CLUSTER_URI).
+ */
+export function normalizeClusterUri(raw: string | undefined | null): string | null {
+  const s = (raw || '').trim();
+  if (!s) return null;
+  let u: URL;
+  try { u = new URL(s); } catch { return null; }
+  if (u.protocol !== 'https:') return null;
+  // ADX engine hosts: <name>.<region>.kusto.windows.net / kusto.<sovereign>,
+  // the Trident/Fabric Eventhouse query host, or the Azure Monitor ADX proxy.
+  if (!/\.(kusto\.|kustomfa\.|playfab\.|monitor\.azure\.)/i.test(u.host) &&
+      !/\.kusto\.(windows\.net|usgovcloudapi\.net|chinacloudapi\.cn|core\.windows\.net)$/i.test(u.host) &&
+      !/\.z\d+\.kusto\.fabric\.microsoft\.com$/i.test(u.host) &&
+      !/\.kusto\.azuresynapse\./i.test(u.host)) {
+    // Accept any *.kusto.* host defensively (covers regional + sovereign forms).
+    if (!/\bkusto\b/i.test(u.host) && !/\badx\.monitor\./i.test(u.host)) return null;
+  }
+  return `${u.protocol}//${u.host}`;
+}
+
+async function getToken(clusterUri?: string): Promise<string> {
+  const scope = `${clusterUri || CLUSTER_URI}/.default`;
   const t = await credential.getToken(scope);
   if (!t?.token) throw new KustoError('Failed to acquire AAD token for Kusto', 401);
   return t.token;
 }
 
-async function postRest(path: '/v1/rest/query' | '/v1/rest/mgmt', db: string, csl: string): Promise<any> {
-  const token = await getToken();
-  const url = `${CLUSTER_URI}${path}`;
+async function postRest(path: '/v1/rest/query' | '/v1/rest/mgmt', db: string, csl: string, clusterUri?: string): Promise<any> {
+  const base = clusterUri || CLUSTER_URI;
+  const token = await getToken(base);
+  const url = `${base}${path}`;
   const res = await fetchWithTimeout(url, {
     method: 'POST',
     headers: {
@@ -286,10 +313,14 @@ function parseVisualization(tables: any[]): KustoVisualization | undefined {
   return undefined;
 }
 
-/** Execute a KQL query. Returns the primary results table (Table_0). */
-export async function executeQuery(database: string, kql: string): Promise<KustoQueryResult> {
+/** Execute a KQL query. Returns the primary results table (Table_0).
+ *  Pass `opts.clusterUri` to target a *different* ADX cluster than the
+ *  env-configured default (e.g. previewing a cluster discovered in the RTI
+ *  hub catalog) — it is used verbatim for both the request URL and the AAD
+ *  token scope; validate it with {@link normalizeClusterUri} first. */
+export async function executeQuery(database: string, kql: string, opts?: { clusterUri?: string }): Promise<KustoQueryResult> {
   const started = Date.now();
-  const json = await postRest('/v1/rest/query', database || DEFAULT_DB, kql);
+  const json = await postRest('/v1/rest/query', database || DEFAULT_DB, kql, opts?.clusterUri);
   const tables = json?.Tables || [];
   const primary = tables.find((t: any) => t?.TableName === 'Table_0') || tables[0];
   const visualization = parseVisualization(tables);

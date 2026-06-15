@@ -341,10 +341,27 @@ export function RealTimeHubView() {
         />
       </div>
 
+      {/* Honest scope disclosure — mirrors /rti-hub's analytics-vs-OLTP
+          MessageBar so both real-time surfaces are explicit that Loom's
+          real-time path is an Azure-native ANALYTICS pipeline, and that this
+          surface is the deployed-streams catalog (vs /rti-hub's raw-source
+          discovery). Rendered unconditionally (by-design, not an infra-gate).
+          See docs/fiab/parity/real-time-hub.md. */}
+      <MessageBar intent="info" className={styles.msgBar}>
+        <MessageBarBody>
+          <MessageBarTitle>Real-time scope</MessageBarTitle>
+          This is the <b>deployed streams</b> view — your Loom eventstreams plus the connector gallery to add new
+          sources. To discover the raw Azure sources (Event Hubs, IoT Hub, ADX) across every subscription, use the{' '}
+          <FluentLink href="/rti-hub">RTI catalog</FluentLink>. Loom&apos;s real-time path is an Azure-native{' '}
+          <b>analytics</b> pipeline (Event Hubs → Stream Analytics / ADX), typically sub-second to low-second — not a
+          sub-100&nbsp;ms transactional object store.
+        </MessageBarBody>
+      </MessageBar>
+
       {loadErr && (
-        <MessageBar intent="warning" className={styles.msgBar}>
+        <MessageBar intent="error" className={styles.msgBar}>
           <MessageBarBody>
-            <MessageBarTitle>Real-Time hub is not fully connected to Fabric</MessageBarTitle>
+            <MessageBarTitle>Not authorized for Fabric</MessageBarTitle>
             {loadErr.error}
             {loadErr.hint ? <><br />{loadErr.hint}</> : null}
             <br />
