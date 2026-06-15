@@ -533,6 +533,57 @@ jobs:
             echo "No Content Safety in $ADMIN_RG — skipping"
           fi
 
+      - name: Verify AOAI account + gpt-4o deployment, self-heal Console UAMI grants (unblocks Copilot / data-agent / AI functions)
+        run: |
+          # Deploy-readiness safety-net (PRP gap #6). The dedicated AOAI account
+          # aifndry-loom-<region> + its chat/embedding deployments are provisioned
+          # by bicep (agentFoundryEnabled defaults true). This step VERIFIES the
+          # account + a gpt-4o-class chat deployment exist and RE-GRANTS the three
+          # Console UAMI inference roles (idempotent) so a partial deploy (account
+          # created but a role grant raced/failed) self-heals — Copilot,
+          # data-agents and AI functions then work on first login. If the account
+          # is missing entirely, it prints the exact remediation (re-run the
+          # deploy with agentFoundryEnabled=true) rather than silently passing.
+          AOAI=$(az cognitiveservices account list -g $ADMIN_RG \
+            --query "[?kind=='AIServices' && starts_with(name,'aifndry-loom')].name" -o tsv | head -1)
+          if [ -z "$AOAI" ]; then
+            AOAI=$(az cognitiveservices account list -g $ADMIN_RG \
+              --query "[?kind=='AIServices' || kind=='OpenAI'].name" -o tsv | head -1)
+          fi
+          if [ -z "$AOAI" ]; then
+            echo "::warning::No AOAI (AIServices) account in $ADMIN_RG. Copilot / data-agent / AI-functions will honest-gate. Re-run the deploy with agentFoundryEnabled=true (default) to provision aifndry-loom-<region> + gpt-4o + embeddings."
+          else
+            AOAI_ID=$(az cognitiveservices account show -n "$AOAI" -g $ADMIN_RG --query id -o tsv)
+            echo "AOAI account: $AOAI"
+            CHAT=$(az cognitiveservices account deployment list -n "$AOAI" -g $ADMIN_RG \
+              --query "[?contains(to_string(properties.model.name) || '','gpt-4')].name | [0]" -o tsv 2>/dev/null || true)
+            if [ -z "$CHAT" ]; then
+              echo "::warning::AOAI account $AOAI has no gpt-4o-class chat deployment. Re-run the deploy (agentFoundryEnabled=true deploys 'chat' = gpt-4o) or deploy a gpt-4o model to it."
+            else
+              echo "AOAI chat deployment present: $CHAT"
+            fi
+            # Re-grant the three Console UAMI inference roles (idempotent).
+            for ROLE in "Azure AI Developer" "Cognitive Services User" "Cognitive Services OpenAI User"; do
+              az role assignment create \
+                --assignee-object-id $CONSOLE_UAMI_PRINCIPAL \
+                --assignee-principal-type ServicePrincipal \
+                --role "$ROLE" \
+                --scope "$AOAI_ID" \
+                -o none 2>&1 | grep -v "already exists" || echo "  $ROLE: already assigned"
+            done
+            # Self-heal the Spark MSI grants (Synapse workspace MSI + Databricks
+            # Access Connector) so notebook ai.* functions can call AOAI.
+            SYN_MI=$(az synapse workspace list --query "[?contains(name,'syn') || contains(name,'loom')].identity.principalId | [0]" -o tsv 2>/dev/null || true)
+            if [ -n "$SYN_MI" ] && [ "$SYN_MI" != "None" ]; then
+              az role assignment create \
+                --assignee-object-id "$SYN_MI" \
+                --assignee-principal-type ServicePrincipal \
+                --role "Cognitive Services OpenAI User" \
+                --scope "$AOAI_ID" \
+                -o none 2>&1 | grep -v "already exists" || echo "  Synapse MSI OpenAI User: already assigned"
+            fi
+          fi
+
       - name: Register Console UAMI as Power Platform Management App (unblocks PP + Copilot Studio editors)
         run: |
           # PP admin API for SP access requires the SP to be registered as a

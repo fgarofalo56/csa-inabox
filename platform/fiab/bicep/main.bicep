@@ -291,8 +291,8 @@ param deployAppsEnabled bool = false
 @description('Deploy AI Foundry Hub. Requires storage-account strategy; default off.')
 param aiFoundryEnabled bool = false
 
-@description('Deploy the dedicated AI Foundry Agent Service account (aifndry-loom-<location>) with the loom-agents project + chat/embedding model deployments. Backs LOOM_FOUNDRY_PROJECT_ENDPOINT + LOOM_AOAI_* so AI Functions, Copilot, and data-agent test-chat work out of the box. Independent of aiFoundryEnabled.')
-param agentFoundryEnabled bool = false
+@description('Deploy the dedicated AI Foundry Agent Service account (aifndry-loom-<location>) with the loom-agents project + chat/embedding model deployments. Backs LOOM_FOUNDRY_PROJECT_ENDPOINT + LOOM_AOAI_* so AI Functions, Copilot, and data-agent test-chat work out of the box. ON BY DEFAULT (opt-out) — set false to skip the AOAI account (the Copilot/data-agent/AI-functions surfaces then honest-gate). Independent of aiFoundryEnabled.')
+param agentFoundryEnabled bool = true
 
 @description('Inline-completion (ghost text) AOAI deployment name for notebook/SQL code cells (LOOM_AOAI_COMPLETION_DEPLOYMENT). Empty = ghost text uses the chat deployment (LOOM_AOAI_DEPLOYMENT). Set to a dedicated gpt-4o-mini slot for lower latency without consuming chat quota. Leave empty in GCC-High / IL5 regions where the model is unavailable.')
 param loomAoaiCompletionDeployment string = ''
@@ -361,6 +361,10 @@ param existingApimSub string = ''
 param existingAdxClusterSub string = ''
 @description('Subscription id of the existing Foundry/AOAI account (cross-sub reuse).')
 param existingFoundrySub string = ''
+@description('Chat deployment name on the REUSED existing AOAI account (from scan EXISTING_AOAI_CHAT_DEPLOYMENT). Wires LOOM_AOAI_DEPLOYMENT/_CHAT_DEPLOYMENT so Copilot / data-agent / AI-functions work against the existing account. Empty = the existing path stays honest-gated on the model.')
+param existingFoundryChatDeployment string = ''
+@description('Embedding deployment name on the REUSED existing AOAI account (from scan EXISTING_AOAI_EMBED_DEPLOYMENT). Wires LOOM_AOAI_EMBED_DEPLOYMENT.')
+param existingFoundryEmbedDeployment string = ''
 @description('Reuse an existing Microsoft Purview account (short name). Overrides loomPurviewAccount.')
 param existingPurviewAccount string = ''
 @description('Resource group of the existing Purview account.')
@@ -780,6 +784,10 @@ module adminPlane 'modules/admin-plane/main.bicep' = if (deployAdminPlane) {
       apimSub: existingApimSub
       adxClusterSub: existingAdxClusterSub
       foundrySub: existingFoundrySub
+      // Deployment names on a REUSED existing AOAI account (Gap A) so the
+      // Console env wires the full AOAI surface, not just the account name.
+      foundryChatDeployment: existingFoundryChatDeployment
+      foundryEmbedDeployment: existingFoundryEmbedDeployment
       purviewAccount: existingPurviewAccount
       purviewRg: existingPurviewRg
       purviewSub: existingPurviewSub
