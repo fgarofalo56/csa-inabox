@@ -59,11 +59,32 @@ async function loadOrSeed(tenantId: string, _who: string): Promise<Classificatio
   } catch (e: any) {
     if (e?.code !== 404) throw e;
   }
+  // Deploy-readiness (#229): a brand-new tenant inherits the GLOBAL default
+  // classification taxonomy seeded at deploy time by
+  // scripts/csa-loom/seed-governance.sh, so the surface is POPULATED on first
+  // login instead of empty (mirrors app/api/apps-catalog copy-defaults). Cloned
+  // ONLY at doc-creation (this 404 path), so a user who later deletes rules is
+  // not re-seeded. Best-effort: an absent GLOBAL doc falls back to [].
+  let seededRules: ClassificationRule[] = [];
+  try {
+    const { resource: global } = await c
+      .item('classifications:GLOBAL', 'GLOBAL')
+      .read<ClassificationsDoc>();
+    if (global?.rules?.length) {
+      seededRules = global.rules.map((r) => ({
+        ...r,
+        createdAt: new Date().toISOString(),
+        createdBy: 'csa-loom-default',
+      }));
+    }
+  } catch (e: any) {
+    if (e?.code !== 404) throw e;
+  }
   const seed: ClassificationsDoc = {
     id: docId,
     tenantId,
     kind: 'classifications',
-    rules: [],
+    rules: seededRules,
     updatedAt: new Date().toISOString(),
   } as any;
   await c.items.create(seed);

@@ -93,6 +93,9 @@ param defenderForAIEnabled bool
 @description('Purview Data Map availability (false at IL5)')
 param purviewEnabled bool
 
+@description('Cross-region Purview location (#229). Empty = hub location. Set to a known-Purview region (e.g. eastus2) when the hub region lacks Purview capacity (e.g. centralus). Threaded to admin-plane → catalog.bicep so the account + LOOM_PURVIEW_ACCOUNT name + private endpoints all agree.')
+param purviewLocation string = ''
+
 @description('Purview account name (short, NOT full URL) to wire into the Loom Console. When empty, /admin/security Purview tab returns 503 with a structured remediation hint. Set this to an EXISTING Purview account name in the tenant — only one Enterprise-tier Purview is allowed per tenant, so most deployments REUSE the tenant-level account rather than provisioning a second one (which fails with `EnterpriseTenantAlreadyExists`).')
 param loomPurviewAccount string = ''
 
@@ -845,6 +848,9 @@ module adminPlane 'modules/admin-plane/main.bicep' = if (deployAdminPlane) {
       purviewAccount: existingPurviewAccount
       purviewRg: existingPurviewRg
       purviewSub: existingPurviewSub
+      // #229 cross-region Purview location (empty = hub location). Carried on the
+      // BYO object to stay under admin-plane's 256-param ceiling.
+      purviewLocation: purviewLocation
       synapseWorkspace: existingSynapseWorkspace
       synapseRg: existingSynapseRg
       synapseSub: existingSynapseSub

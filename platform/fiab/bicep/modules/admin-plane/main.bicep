@@ -780,6 +780,10 @@ var byoFoundryEmbedDeployment = string(byoExisting.?foundryEmbedDeployment ?? ''
 // (the account name alone resolves it). Those vars were dropped to avoid a dead wire.
 var existingPurviewAccount = byoExisting.?purviewAccount ?? ''
 var effPurviewAccount = !empty(existingPurviewAccount) ? existingPurviewAccount : loomPurviewAccount
+// Cross-region Purview location (#229). Threaded via byoExisting (not a new
+// scalar param — admin-plane/main.bicep is at the 256-param linter cap). Empty =
+// hub location. catalog.bicep provisions the account + name in this region.
+var effPurviewLocation = byoExisting.?purviewLocation ?? ''
 // Synapse navigator — reuse > provisioned DLZ workspace.
 var existingSynapseWorkspace = byoExisting.?synapseWorkspace ?? ''
 var effSynapseWorkspace = !empty(existingSynapseWorkspace) ? existingSynapseWorkspace : (deSynapseEnabled ? loomSynapseWorkspace : '')
@@ -1777,11 +1781,16 @@ module catalog 'catalog.bicep' = {
     boundary: boundary
     catalogPrimary: catalogPrimary
     purviewEnabled: purviewEnabled
+    purviewLocation: effPurviewLocation
     atlasOnAksEnabled: atlasOnAksEnabled
     adminEntraGroupId: adminEntraGroupId
     consolePrincipalId: identity.outputs.uamiConsolePrincipalId
     skipRoleGrants: skipRoleGrants
     privateEndpointSubnetId: network.outputs.privateEndpointsSubnetId
+    // #229 — Purview private-endpoint DNS zones so the PE-locked account is
+    // reachable from the hub VNet by default (account + portal hosts).
+    privateDnsZonePurviewId: network.outputs.privateDnsZoneIds.purview
+    privateDnsZonePurviewStudioId: network.outputs.privateDnsZoneIds.purviewStudio
     aksClusterId: containerPlatform == 'aks' ? containerPlatformModule.outputs.aksId : ''
     complianceTags: complianceTags
   }
@@ -2659,13 +2668,16 @@ module appDeployments 'app-deployments.bicep' = if (containerPlatform == 'contai
           // LOOM_PURVIEW_ACCOUNT precedence:
           //   1. Explicit `loomPurviewAccount` param (used by both
           //      /catalog federation and /admin/security Purview tab)
-          //   2. purview-csa-loom-<location> when `purviewEnabled = true`
-          //      and no explicit account name was supplied
+          //   2. catalog.outputs.purviewAccountName (purview-csa-loom-<purviewLocation
+          //      ?? location>) when `purviewEnabled = true` and no explicit
+          //      account name was supplied. Using the catalog output (not a
+          //      re-derived '${location}' literal) keeps the env in lock-step
+          //      with the REAL account name when purviewLocation is cross-region.
           // ----------------------------------------------------------------
           !empty(effPurviewAccount) ? [
             { name: 'LOOM_PURVIEW_ACCOUNT', value: effPurviewAccount }
           ] : (purviewEnabled ? [
-            { name: 'LOOM_PURVIEW_ACCOUNT', value: 'purview-csa-loom-${location}' }
+            { name: 'LOOM_PURVIEW_ACCOUNT', value: catalog.outputs.purviewAccountName }
           ] : []),
           // Purview Unified Catalog data-plane endpoint + API version — used by
           // the data-product creation wizard (/api/data-products,

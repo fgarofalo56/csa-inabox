@@ -21,6 +21,9 @@ param catalogPrimary string
 @description('Purview Data Map availability')
 param purviewEnabled bool
 
+@description('Cross-region Purview location (#229). When the hub region lacks Purview capacity (e.g. centralus), set this to a known-Purview region (e.g. eastus2) so the account + its name are provisioned there. Empty = use the hub `location`. The classic Data Map data plane is reached by account host, so cross-region needs no extra VNet wiring beyond the private endpoint below (the PE lives in the hub subnet against the cross-region account).')
+param purviewLocation string = ''
+
 @description('Atlas on AKS deployment')
 param atlasOnAksEnabled bool
 
@@ -33,9 +36,14 @@ param consolePrincipalId string = ''
 @description('Skip role-assignment grants — set true when re-provisioning an environment that already has the grants, to avoid RoleAssignmentExists.')
 param skipRoleGrants bool = false
 
-@description('Private endpoint subnet ID. Reserved for v3.x — Purview private endpoint wiring is deferred; today catalog uses managed endpoints.')
-#disable-next-line no-unused-params
+@description('Private endpoint subnet ID (hub snet-private-endpoints). Backs the Purview account + portal private endpoints below so the PE-locked Data Map (publicNetworkAccess=Disabled) is reachable from the hub VNet. Empty = skip PE wiring (account stays PE-locked and unreachable — only valid where the account is reused/public).')
 param privateEndpointSubnetId string
+
+@description('Private DNS zone resource id for privatelink.purview.azure.<tld> (account host). From network.outputs.privateDnsZoneIds.purview. Empty = skip the account private endpoint.')
+param privateDnsZonePurviewId string = ''
+
+@description('Private DNS zone resource id for privatelink.purviewstudio.azure.<tld> (portal/Studio host). From network.outputs.privateDnsZoneIds.purviewStudio. Empty = skip the portal private endpoint.')
+param privateDnsZonePurviewStudioId string = ''
 
 @description('AKS cluster ID (required if atlasOnAksEnabled)')
 param aksClusterId string = ''
@@ -47,9 +55,16 @@ param complianceTags object
 // Microsoft Purview Data Map
 // =====================================================================
 
+// Cross-region resolution (#229): default to the hub region; override when the
+// hub region lacks Purview capacity. Used for the account location AND its name
+// so LOOM_PURVIEW_ACCOUNT (derived from the same pattern in admin-plane/main.bicep)
+// matches the real account host.
+var effPurviewLocation = empty(purviewLocation) ? location : purviewLocation
+var purviewAccountName = 'purview-csa-loom-${effPurviewLocation}'
+
 resource purview 'Microsoft.Purview/accounts@2024-04-01-preview' = if (purviewEnabled) {
-  name: 'purview-csa-loom-${location}'
-  location: location
+  name: purviewAccountName
+  location: effPurviewLocation
   tags: complianceTags
   identity: { type: 'SystemAssigned' }
   sku: {
@@ -57,9 +72,91 @@ resource purview 'Microsoft.Purview/accounts@2024-04-01-preview' = if (purviewEn
     capacity: 4
   }
   properties: {
-    managedResourceGroupName: 'rg-mng-purview-csa-loom-${location}'
+    managedResourceGroupName: 'rg-mng-purview-csa-loom-${effPurviewLocation}'
     publicNetworkAccess: 'Disabled'
     managedEventHubState: 'Enabled'
+  }
+}
+
+// =====================================================================
+// Purview private endpoints (#229 — the reachability fix).
+//
+// The account above is publicNetworkAccess='Disabled', so its data plane
+// ({account}.purview.azure.{tld}/{catalog,scan,policystore}) and Studio host
+// ({account}.purviewstudio.azure.{tld}) are unreachable from the hub-VNet
+// Console UNLESS private endpoints resolve them. Classic Data Map needs TWO
+// groupIds:
+//   • account → catalog/scan/policystore data plane (the host the Console probes
+//     in /api/governance/purview/status + the data-plane role grant targets)
+//   • portal  → the purviewstudio web host (browser access to Studio)
+// Each PE joins its private DNS zone group so the A-record overrides the public
+// CNAME. PEs live in the hub snet-private-endpoints subnet; the account may be
+// cross-region (purviewLocation) — PEs are region-agnostic against the account.
+// Gated on the subnet + zone ids being present so a reuse/public deployment
+// (empty zone ids) cleanly skips PE creation. This removes the bootstrap
+// "flip publicNetworkAccess→Enabled for the grant window" hack — the data plane
+// is reachable over Private Link by default.
+// =====================================================================
+
+resource purviewAccountPe 'Microsoft.Network/privateEndpoints@2024-05-01' = if (purviewEnabled && !empty(privateEndpointSubnetId) && !empty(privateDnsZonePurviewId)) {
+  name: 'pe-${purviewAccountName}-account'
+  location: location
+  tags: complianceTags
+  properties: {
+    subnet: { id: privateEndpointSubnetId }
+    privateLinkServiceConnections: [
+      {
+        name: 'plsc-purview-account'
+        properties: {
+          privateLinkServiceId: purview.id
+          groupIds: [ 'account' ]
+        }
+      }
+    ]
+  }
+}
+
+resource purviewAccountPeDns 'Microsoft.Network/privateEndpoints/privateDnsZoneGroups@2024-05-01' = if (purviewEnabled && !empty(privateEndpointSubnetId) && !empty(privateDnsZonePurviewId)) {
+  parent: purviewAccountPe
+  name: 'default'
+  properties: {
+    privateDnsZoneConfigs: [
+      {
+        name: 'purview-account'
+        properties: { privateDnsZoneId: privateDnsZonePurviewId }
+      }
+    ]
+  }
+}
+
+resource purviewPortalPe 'Microsoft.Network/privateEndpoints@2024-05-01' = if (purviewEnabled && !empty(privateEndpointSubnetId) && !empty(privateDnsZonePurviewStudioId)) {
+  name: 'pe-${purviewAccountName}-portal'
+  location: location
+  tags: complianceTags
+  properties: {
+    subnet: { id: privateEndpointSubnetId }
+    privateLinkServiceConnections: [
+      {
+        name: 'plsc-purview-portal'
+        properties: {
+          privateLinkServiceId: purview.id
+          groupIds: [ 'portal' ]
+        }
+      }
+    ]
+  }
+}
+
+resource purviewPortalPeDns 'Microsoft.Network/privateEndpoints/privateDnsZoneGroups@2024-05-01' = if (purviewEnabled && !empty(privateEndpointSubnetId) && !empty(privateDnsZonePurviewStudioId)) {
+  parent: purviewPortalPe
+  name: 'default'
+  properties: {
+    privateDnsZoneConfigs: [
+      {
+        name: 'purview-portal'
+        properties: { privateDnsZoneId: privateDnsZonePurviewStudioId }
+      }
+    ]
   }
 }
 

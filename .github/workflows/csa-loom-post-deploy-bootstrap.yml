@@ -112,16 +112,29 @@ jobs:
         env:
           # De-hardcoded so a non-eastus2 / non-Commercial deploy grants the right
           # account on the right host. Override via repo var LOOM_PURVIEW_ACCOUNT
-          # (the bicep output catalog.purviewAccountName, e.g. purview-csa-loom-<region>);
-          # falls back to the live Commercial default. PURVIEW_CLOUD drives the
-          # Data Map host TLD (.us in US Gov) inside the grant script — it mirrors
-          # purviewBase()'s isGovCloud() switch so the grant targets the SAME host
-          # the Console probes. The token audience stays https://purview.azure.net
-          # in all clouds.
-          PURVIEW_ACCOUNT: ${{ vars.LOOM_PURVIEW_ACCOUNT || 'purview-csa-loom-eastus2' }}
+          # (the bicep output catalog.purviewAccountName, e.g. purview-csa-loom-<region>).
+          # When the var is UNSET we DISCOVER the provisioned account in the admin RG
+          # below rather than falling back to a hardcoded eastus2 name that would not
+          # exist in a different-region deploy (which left the grant failing after a
+          # "successful" deploy). PURVIEW_CLOUD drives the Data Map host TLD (.us in
+          # US Gov); the token audience stays https://purview.azure.net in all clouds.
+          PURVIEW_ACCOUNT: ${{ vars.LOOM_PURVIEW_ACCOUNT || '' }}
           PURVIEW_CLOUD: ${{ vars.LOOM_CLOUD || vars.AZURE_CLOUD || 'AzureCloud' }}
         run: |
           set -uo pipefail
+          # When LOOM_PURVIEW_ACCOUNT is not pinned, discover the account this deploy
+          # provisioned (catalog.bicep names it purview-csa-loom-<region>). Prefer the
+          # admin RG, then any account in the subscription. Skip the grants cleanly
+          # when none exists (Purview opted out / reused account in another sub).
+          if [ -z "${PURVIEW_ACCOUNT:-}" ]; then
+            PURVIEW_ACCOUNT="$(az purview account list -g "$ADMIN_RG" --query "[?starts_with(name,'purview-csa-loom')].name | [0]" -o tsv 2>/dev/null || true)"
+            [ -z "$PURVIEW_ACCOUNT" ] && PURVIEW_ACCOUNT="$(az resource list --resource-type Microsoft.Purview/accounts --query "[?starts_with(name,'purview-csa-loom')].name | [0]" -o tsv 2>/dev/null || true)"
+          fi
+          if [ -z "${PURVIEW_ACCOUNT:-}" ]; then
+            echo "No CSA Loom Purview account found (purviewEnabled=false or reused cross-sub) — skipping Data Map grants."
+            exit 0
+          fi
+          echo "Targeting Purview account: $PURVIEW_ACCOUNT"
           # Classic Purview Data Map permissions are data-plane (collection
           # metadata policy), not ARM RBAC — so they can't be set in bicep. The
           # deploy SP created the Purview account, so it is the root Collection
@@ -179,6 +192,35 @@ jobs:
               bash scripts/csa-loom/grant-purview-datamap-role.sh \
               || echo "::warning::Purview '$ROLE' grant failed — the deploy SP may not be Collection Admin on $PURVIEW_ACCOUNT (add it once in the Purview portal, then re-run)."
           done
+
+      - name: Seed default governance taxonomy (classifications / labels / domains)
+        env:
+          # Deploy-readiness (#229): make /governance + /admin/security POPULATED
+          # on first login instead of empty. Seeds GLOBAL Cosmos defaults that the
+          # console BFF copies into each tenant on first access. Azure-native; the
+          # optional Purview push only fires when LOOM_PURVIEW_ACCOUNT is set.
+          LOOM_PURVIEW_ACCOUNT: ${{ vars.LOOM_PURVIEW_ACCOUNT || '' }}
+        run: |
+          set -uo pipefail
+          # The governance docs live in the CONSOLE Cosmos `loom` DB (tenant-settings
+          # + governance-domains containers). In tenant mode the console Cosmos is in
+          # the ADMIN RG; discover it there first, then fall back to the DLZ RG.
+          COSMOS_ACCT="$(az cosmosdb list -g "$ADMIN_RG" --query "[?starts_with(name,'cosmos-loom')].name | [0]" -o tsv 2>/dev/null || true)"
+          COSMOS_RG="$ADMIN_RG"
+          if [ -z "$COSMOS_ACCT" ]; then
+            COSMOS_ACCT="$(az cosmosdb list -g "$DLZ_RG" --query "[?starts_with(name,'cosmos-loom')].name | [0]" -o tsv 2>/dev/null || true)"
+            COSMOS_RG="$DLZ_RG"
+          fi
+          if [ -z "$COSMOS_ACCT" ]; then
+            echo "::warning::Could not resolve a cosmos-loom* account in $ADMIN_RG or $DLZ_RG — skipping governance seed."
+            exit 0
+          fi
+          echo "== seeding governance taxonomy into $COSMOS_ACCT (rg=$COSMOS_RG, db=loom) =="
+          chmod +x scripts/csa-loom/seed-governance.sh
+          LOOM_SUBSCRIPTION_ID="$SUB" LOOM_COSMOS_ACCOUNT="$COSMOS_ACCT" LOOM_COSMOS_RG="$COSMOS_RG" \
+            LOOM_COSMOS_DATABASE="loom" LOOM_PURVIEW_ACCOUNT="$LOOM_PURVIEW_ACCOUNT" \
+            bash scripts/csa-loom/seed-governance.sh \
+            || echo "::warning::governance seed failed (Cosmos Data Contributor RBAC on $COSMOS_ACCT for the deploy SP?) — surfaces start empty until re-run."
 
       - name: Grant Console UAMI subscription RBAC (Monitor / Cost / Security)
         run: |

@@ -44,11 +44,30 @@ async function loadOrSeed(tenantId: string, _who: string): Promise<SensitivityLa
   } catch (e: any) {
     if (e?.code !== 404) throw e;
   }
+  // Deploy-readiness (#229): inherit the GLOBAL default label set seeded by
+  // scripts/csa-loom/seed-governance.sh so the surface is POPULATED on first
+  // login. Cloned only at doc-creation (this 404 path); never re-seeds after a
+  // user edits/deletes labels. Absent GLOBAL doc → falls back to [].
+  let seededLabels: SensitivityLabel[] = [];
+  try {
+    const { resource: global } = await c
+      .item('sensitivity-labels:GLOBAL', 'GLOBAL')
+      .read<SensitivityLabelsDoc>();
+    if (global?.labels?.length) {
+      seededLabels = global.labels.map((l) => ({
+        ...l,
+        createdAt: new Date().toISOString(),
+        createdBy: 'csa-loom-default',
+      }));
+    }
+  } catch (e: any) {
+    if (e?.code !== 404) throw e;
+  }
   const seed: SensitivityLabelsDoc = {
     id: docId,
     tenantId,
     kind: 'sensitivity-labels',
-    labels: [],
+    labels: seededLabels,
     updatedAt: new Date().toISOString(),
   } as any;
   await c.items.create(seed);

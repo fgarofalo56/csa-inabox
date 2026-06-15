@@ -95,6 +95,8 @@ param defenderForAIEnabled = true
 // Azure endpoints, so Content Safety is available; wires LOOM_CONTENT_SAFETY_ENDPOINT.
 param contentSafetyEnabled = true
 param purviewEnabled = true
+// #229 cross-region Purview safety valve (empty = hub location).
+param purviewLocation = readEnvironmentVariable('LOOM_PURVIEW_LOCATION', '')
 param storageRequireCmk = false
 param keyVaultHsmIsolated = false
 
