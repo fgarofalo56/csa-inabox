@@ -288,6 +288,18 @@ const useStyles = makeStyles({
   costFootnote: { color: tokens.colorNeutralForeground3, fontStyle: 'italic' },
   costUnest: { display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalXXS },
   costUnestList: { marginTop: tokens.spacingVerticalXS, marginBottom: 0, paddingLeft: tokens.spacingHorizontalXXL },
+  exportBody: {
+    display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalM,
+    paddingTop: tokens.spacingVerticalS,
+  },
+  exportHint: {
+    display: 'block', margin: 0, color: tokens.colorNeutralForeground3,
+    lineHeight: tokens.lineHeightBase300,
+  },
+  exportArea: {
+    fontFamily: tokens.fontFamilyMonospace, fontSize: tokens.fontSizeBase200,
+    lineHeight: tokens.lineHeightBase200, minHeight: '340px',
+  },
 });
 
 const MIME = 'application/x-loom-service';
@@ -849,19 +861,19 @@ function PlannerInner() {
         <DialogSurface style={{ maxWidth: 820, width: '92vw' }}>
           <DialogBody>
             <DialogTitle>Export — {exportSub?.name}</DialogTitle>
-            <DialogContent>
+            <DialogContent className={s.exportBody}>
               <TabList selectedValue={exportFmt} onTabSelect={(_, d) => setExportFmt(d.value as 'bicepparam' | 'bicep')}>
                 <Tab value="bicepparam">.bicepparam (deploys main.bicep)</Tab>
                 <Tab value="bicep">.bicep (standalone template)</Tab>
               </TabList>
               {exportFmt === 'bicepparam' ? (
-                <Body1 style={{ display: 'block', margin: '8px 0', color: tokens.colorNeutralForeground3 }}>
+                <Body1 className={s.exportHint}>
                   The primary path: a parameter file for the maintained orchestrator. Save as{' '}
                   <code>platform/fiab/bicep/params/{(exportSub?.name || 'plan').toLowerCase().replace(/[^a-z0-9]+/g, '-')}.bicepparam</code> and run{' '}
                   <code>az deployment sub create -f platform/fiab/bicep/main.bicep -p &lt;file&gt;.bicepparam</code>.
                 </Body1>
               ) : (
-                <Body1 style={{ display: 'block', margin: '8px 0', color: tokens.colorNeutralForeground3 }}>
+                <Body1 className={s.exportHint}>
                   A self-contained subscription-scoped template generated from the graph: every selected service with a
                   one-button module becomes a real <code>module</code>, and your dependency arrows become module{' '}
                   <code>dependsOn</code>. Save as{' '}
@@ -875,7 +887,7 @@ function PlannerInner() {
                 <Textarea
                   value={exportFmt === 'bicepparam' ? planToBicepparam(exportSub) : planToBicep(exportSub)}
                   readOnly
-                  textarea={{ style: { fontFamily: 'monospace', fontSize: 12, minHeight: 340 } }}
+                  textarea={{ className: s.exportArea }}
                 />
               )}
             </DialogContent>
