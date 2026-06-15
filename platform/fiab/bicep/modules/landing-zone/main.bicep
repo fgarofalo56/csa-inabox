@@ -123,6 +123,27 @@ param consolePrincipalNeedsLifecycleWrite bool = false
 param consolePrincipalNeedsCmkBind bool = false
 
 // =====================================================================
+// Data-engineering backend opt-out flags (default ON — provision new).
+// Each gates a full Azure-native backend so a stock deploy is "everything on,
+// opt-out" per docs/fiab/prp/deploy-readiness-100pct.md. Set false to skip the
+// provision (the matching console editor then honest-gates per no-vaporware.md;
+// the admin-plane blanks the corresponding LOOM_* env var so the gate is clean
+// instead of a 502 against a missing resource).
+// =====================================================================
+
+@description('Provision the DLZ Synapse workspace (Serverless + dedicated loompool + Spark loompool). Default ON. false skips Synapse entirely (admin-plane blanks LOOM_SYNAPSE_WORKSPACE/_DEDICATED_POOL/LOOM_SPARK_POOL).')
+param loomSynapseEnabled bool = true
+
+@description('Provision the DLZ Databricks workspace (+ Access Connector + Unity Catalog when supported). Default ON. false skips Databricks (admin-plane blanks LOOM_DATABRICKS_HOSTNAME so every Databricks editor honest-gates).')
+param loomDatabricksEnabled bool = true
+
+@description('Provision the DLZ Azure Data Factory. Alias/companion of adfEnabled — both must be true to deploy. Default ON. false skips ADF (admin-plane blanks LOOM_ADF_NAME).')
+param loomDataFactoryEnabled bool = true
+
+@description('Provision the scaled self-hosted IR (VMSS scale-to-0) on the DLZ Data Factory. Alias/companion of selfHostedIrEnabled. Default ON. false skips the SHIR VMSS (admin-plane blanks LOOM_SHIR_VMSS_NAME).')
+param loomSelfHostedIrEnabled bool = true
+
+// =====================================================================
 // 1. Spoke VNet (peered to Admin Plane hub)
 // =====================================================================
 
@@ -162,7 +183,7 @@ module storage 'storage.bicep' = {
 // 3. Databricks workspace
 // =====================================================================
 
-module databricks 'databricks.bicep' = {
+module databricks 'databricks.bicep' = if (loomDatabricksEnabled) {
   name: 'dlz-databricks'
   params: {
     location: location
@@ -184,11 +205,11 @@ module databricks 'databricks.bicep' = {
 //     principalId is empty on GCC-High / IL5 (UC unsupported) → grant no-ops.
 // =====================================================================
 
-module databricksStorageRbac 'databricks-storage-rbac.bicep' = {
+module databricksStorageRbac 'databricks-storage-rbac.bicep' = if (loomDatabricksEnabled) {
   name: 'dlz-databricks-storage-rbac'
   params: {
     storageAccountName: storage.outputs.storageAccountName
-    accessConnectorPrincipalId: databricks.outputs.accessConnectorPrincipalId
+    accessConnectorPrincipalId: databricks!.outputs.accessConnectorPrincipalId
     skipRoleGrants: skipRoleGrants
   }
 }
@@ -212,7 +233,7 @@ module databricksStorageRbac 'databricks-storage-rbac.bicep' = {
 // are not known up-front) and fails `az bicep build` for every boundary.
 var dlzUcSupported = boundary == 'Commercial' || boundary == 'GCC'
 
-module databricksUcBootstrap 'databricks-uc-bootstrap.bicep' = if (dlzUcSupported && !empty(databricksAccountId) && !empty(databricksUcScriptUamiId) && !empty(consoleUamiAppId)) {
+module databricksUcBootstrap 'databricks-uc-bootstrap.bicep' = if (loomDatabricksEnabled && dlzUcSupported && !empty(databricksAccountId) && !empty(databricksUcScriptUamiId) && !empty(consoleUamiAppId)) {
   name: 'dlz-databricks-uc-bootstrap'
   params: {
     location: location
@@ -222,8 +243,8 @@ module databricksUcBootstrap 'databricks-uc-bootstrap.bicep' = if (dlzUcSupporte
     // dlzUcSupported already restricts this module to Commercial/GCC, so the .us
     // branch is defensive.
     accountHost: (boundary == 'GCC-High' || boundary == 'IL5') ? 'accounts.azuredatabricks.us' : 'accounts.azuredatabricks.net'
-    workspaceNumericId: databricks.outputs.workspaceNumericId
-    workspaceHost: databricks.outputs.workspaceHost
+    workspaceNumericId: databricks!.outputs.workspaceNumericId
+    workspaceHost: databricks!.outputs.workspaceHost
     consoleUamiClientId: consoleUamiAppId
     scriptUamiId: databricksUcScriptUamiId
     complianceTags: complianceTags
@@ -234,7 +255,7 @@ module databricksUcBootstrap 'databricks-uc-bootstrap.bicep' = if (dlzUcSupporte
 // 4. Synapse workspace (Serverless SQL pool)
 // =====================================================================
 
-module synapse 'synapse.bicep' = {
+module synapse 'synapse.bicep' = if (loomSynapseEnabled) {
   name: 'dlz-synapse'
   params: {
     location: location
@@ -248,7 +269,17 @@ module synapse 'synapse.bicep' = {
     skipRoleGrants: skipRoleGrants
     privateEndpointSubnetId: network.outputs.privateEndpointSubnetId
     synapseSqlPrivateDnsZoneId: synapseSqlPrivateDnsZoneId
+    synapseDevPrivateDnsZoneId: string(adminPlanePrivateDnsZoneIds.?synapseDev ?? '')
     adxClusterPrincipalId: adxClusterPrincipalId
+    // Console UAMI resource id (same one the UC bootstrap runs as). Wiring it
+    // lets synapse.bicep apply the Synapse data-plane RBAC grants (Artifact
+    // Publisher for KQL/SJD authoring + Compute Operator for notebook Livy
+    // run-cell) at DEPLOY time instead of only via the post-deploy GHA. The
+    // grant scripts are failure-tolerant (|| echo) so they no-op safely until
+    // the UAMI holds Synapse Administrator (granted by the GHA mirror); a
+    // re-deploy after that applies them directly. Empty = scripts skip (today's
+    // behaviour) so this is strictly non-breaking.
+    synapseRoleAssignmentUamiId: databricksUcScriptUamiId
   }
 }
 
@@ -308,13 +339,13 @@ module storageLifecycleRbac 'storage-lifecycle-rbac.bicep' = {
 // =====================================================================
 // 4b. Synapse Dedicated SQL pool auto-pause (Logic App)
 // =====================================================================
-module synapseAutoPause 'synapse-auto-pause.bicep' = {
+module synapseAutoPause 'synapse-auto-pause.bicep' = if (loomSynapseEnabled) {
   name: 'dlz-synapse-autopause'
   params: {
     location: location
     domainName: domainName
-    synapseWorkspaceName: synapse.outputs.synapseWorkspaceName
-    dedicatedPoolName: synapse.outputs.dedicatedPoolName
+    synapseWorkspaceName: synapse!.outputs.synapseWorkspaceName
+    dedicatedPoolName: synapse!.outputs.dedicatedPoolName
     complianceTags: complianceTags
     skipRoleGrants: skipRoleGrants
     // Sovereign-cloud ARM host so the auto-pause Logic App targets the correct
@@ -356,7 +387,7 @@ module eventhubs 'eventhubs.bicep' = if (provisionEventHub) {
     consolePrincipalId: consolePrincipalId
     // ADF factory MI gets Azure Event Hubs Data Sender so Eventstream "CDC"
     // source pipelines can write change events to namespace Event Hubs.
-    adfPrincipalId: (adfEnabled && !empty(consolePrincipalId) && !empty(adfPrivateDnsZoneId)) ? adf!.outputs.factoryPrincipalId : ''
+    adfPrincipalId: adfOn ? adf!.outputs.factoryPrincipalId : ''
     adxClusterPrincipalId: adxClusterPrincipalId
     skipRoleGrants: skipRoleGrants
     complianceTags: complianceTags
@@ -502,7 +533,14 @@ param adfEnabled bool = true
 @description('Deploy the "loom-geo-enrich" starter pipeline (enrichH3/reverseGeocode/bufferMeters parameters) in the DLZ factory so the GeoPipeline editor has a ready target. Default true.')
 param deployGeoEnrichPipeline bool = true
 
-module adf 'adf.bicep' = if (adfEnabled && !empty(consolePrincipalId) && !empty(adfPrivateDnsZoneId)) {
+// ADF deploys whenever both flags are on and a console principal exists. It is
+// DECOUPLED from the private-DNS-zone presence: a missing privatelink.adf.azure.com
+// zone no longer silently skips the whole factory (which left LOOM_ADF_NAME
+// pointing at a non-existent resource → 502). adf.bicep skips only the PE DNS
+// group when the zone id is empty; the factory + RBAC still provision.
+var adfOn = adfEnabled && loomDataFactoryEnabled && !empty(consolePrincipalId)
+
+module adf 'adf.bicep' = if (adfOn) {
   name: 'dlz-adf'
   params: {
     location: location
@@ -573,12 +611,18 @@ param shirAdminPassword string = ''
 @description('Target SHIR node count (the cluster scales 0↔this on demand).')
 param shirMaxNodes int = 4
 
-module shir 'shir.bicep' = if (selfHostedIrEnabled && adfEnabled && !empty(consolePrincipalId) && !empty(adfPrivateDnsZoneId) && !empty(shirAdminPassword)) {
+// SHIR rides on ADF + the new loomSelfHostedIrEnabled flag + a KV-supplied admin
+// password (a VMSS needs a local credential). main.bicep generates the password
+// into Key Vault and forwards it so SHIR provisions by default; the VMSS stays at
+// capacity 0 (scale-to-0, no idle cost) until a pipeline run scales it up.
+var shirOn = selfHostedIrEnabled && loomSelfHostedIrEnabled && adfOn && !empty(shirAdminPassword)
+
+module shir 'shir.bicep' = if (shirOn) {
   name: 'dlz-shir'
   params: {
     location: location
     domainName: domainName
-    dataFactoryName: adf.outputs.factoryName
+    dataFactoryName: adf!.outputs.factoryName
     subnetId: network.outputs.workloadsSubnetId
     adminPassword: shirAdminPassword
     maxNodes: shirMaxNodes
@@ -652,16 +696,20 @@ module postgresWeave 'postgres-weave.bicep' = if (weaveOntologyEnabled) {
 // =====================================================================
 
 output spokeVnetId string = network.outputs.spokeVnetId
-output databricksWorkspaceUrl string = databricks.outputs.workspaceUrl
-output databricksWorkspaceId string = databricks.outputs.workspaceId
-output synapseEndpoint string = synapse.outputs.synapseServerlessSqlEndpoint
-output synapseSqlEndpoint string = synapse.outputs.synapseSqlEndpoint
-output synapseWorkspaceName string = synapse.outputs.synapseWorkspaceName
-output synapseDedicatedPoolName string = synapse.outputs.dedicatedPoolName
+output databricksWorkspaceUrl string = loomDatabricksEnabled ? databricks!.outputs.workspaceUrl : ''
+output databricksWorkspaceId string = loomDatabricksEnabled ? databricks!.outputs.workspaceId : ''
+// Databricks API host (adb-<numeric>.<n>.azuredatabricks.net) — the admin-plane
+// patches this into LOOM_DATABRICKS_HOSTNAME post-DLZ so the Databricks editors
+// stop honest-gating. Empty when Databricks is disabled.
+output databricksWorkspaceHost string = loomDatabricksEnabled ? databricks!.outputs.workspaceHost : ''
+output synapseEndpoint string = loomSynapseEnabled ? synapse!.outputs.synapseServerlessSqlEndpoint : ''
+output synapseSqlEndpoint string = loomSynapseEnabled ? synapse!.outputs.synapseSqlEndpoint : ''
+output synapseWorkspaceName string = loomSynapseEnabled ? synapse!.outputs.synapseWorkspaceName : ''
+output synapseDedicatedPoolName string = loomSynapseEnabled ? synapse!.outputs.dedicatedPoolName : ''
 // Spark identities for the notebook AI-functions grant (orchestrator wires
 // these into admin-plane/aoai-spark-rbac.bicep so PySpark cells can call AOAI).
-output synapseManagedIdentityPrincipalId string = synapse.outputs.synapseManagedIdentityPrincipalId
-output databricksAccessConnectorPrincipalId string = databricks.outputs.accessConnectorPrincipalId
+output synapseManagedIdentityPrincipalId string = loomSynapseEnabled ? synapse!.outputs.synapseManagedIdentityPrincipalId : ''
+output databricksAccessConnectorPrincipalId string = loomDatabricksEnabled ? databricks!.outputs.accessConnectorPrincipalId : ''
 output storageAccountName string = storage.outputs.storageAccountName
 output dlzResourceGroupName string = resourceGroup().name
 output adxDatabaseUrl string = adxEnabled ? adx!.outputs.databaseUri : ''
@@ -689,10 +737,10 @@ output weavePgFqdn string = weaveOntologyEnabled ? postgresWeave!.outputs.weaveP
 output weavePgDatabase string = weaveOntologyEnabled ? postgresWeave!.outputs.weavePgDatabase : ''
 
 // CSA Loom no-cuts-sweep — ADF wiring outputs
-output adfFactoryId string = (adfEnabled && !empty(consolePrincipalId) && !empty(adfPrivateDnsZoneId)) ? adf!.outputs.factoryId : ''
-output adfFactoryName string = (adfEnabled && !empty(consolePrincipalId) && !empty(adfPrivateDnsZoneId)) ? adf!.outputs.factoryName : ''
+output adfFactoryId string = adfOn ? adf!.outputs.factoryId : ''
+output adfFactoryName string = adfOn ? adf!.outputs.factoryName : ''
 output approvalLogicAppName string = approvalLogicAppEnabled ? approvalLogicApp!.outputs.workflowName : ''
-output adfFactoryPrincipalId string = (adfEnabled && !empty(consolePrincipalId) && !empty(adfPrivateDnsZoneId)) ? adf!.outputs.factoryPrincipalId : ''
+output adfFactoryPrincipalId string = adfOn ? adf!.outputs.factoryPrincipalId : ''
 // CSA Loom semantic-model AAS (opt-in) — empty when enableAas is false. One
 // server backs both the Model view XMLA write path and the Power Query ingest
 // refresh. xmlaEndpoint → LOOM_AAS_XMLA_ENDPOINT; aasConnectionString →
