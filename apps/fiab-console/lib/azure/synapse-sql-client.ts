@@ -12,6 +12,7 @@
  */
 
 import { DefaultAzureCredential, ManagedIdentityCredential, ChainedTokenCredential } from '@azure/identity';
+import { AcaManagedIdentityCredential } from '@/lib/azure/aca-managed-identity';
 import sql from 'mssql';
 import { getSqlSuffix, synapseSqlSuffix } from './cloud-endpoints';
 
@@ -28,7 +29,7 @@ function sqlScope(): string {
 // runtime). Fall back to the default chain for local dev (az CLI).
 const uamiClientId = process.env.LOOM_UAMI_CLIENT_ID || process.env.AZURE_CLIENT_ID;
 const credential: ChainedTokenCredential | DefaultAzureCredential = uamiClientId
-  ? new ChainedTokenCredential(new ManagedIdentityCredential({ clientId: uamiClientId }), new DefaultAzureCredential())
+  ? new ChainedTokenCredential(new AcaManagedIdentityCredential(), new ManagedIdentityCredential({ clientId: uamiClientId }), new DefaultAzureCredential())
   : new DefaultAzureCredential();
 
 let pools: Map<string, sql.ConnectionPool> = new Map();

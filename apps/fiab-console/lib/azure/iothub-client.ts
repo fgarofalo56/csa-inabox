@@ -31,6 +31,7 @@ import {
   ManagedIdentityCredential,
   ChainedTokenCredential,
 } from '@azure/identity';
+import { AcaManagedIdentityCredential } from '@/lib/azure/aca-managed-identity';
 // ARM endpoint is sovereign-cloud aware — canonical resolver, not a local copy
 // (keeps the management host literal solely in cloud-endpoints.ts).
 import { armBase } from './cloud-endpoints';
@@ -41,6 +42,7 @@ const IOTHUB_API = '2023-06-30';
 const uamiClientId = process.env.LOOM_UAMI_CLIENT_ID || process.env.AZURE_CLIENT_ID;
 const credential: ChainedTokenCredential | DefaultAzureCredential = uamiClientId
   ? new ChainedTokenCredential(
+      new AcaManagedIdentityCredential(),
       new ManagedIdentityCredential({ clientId: uamiClientId }),
       new DefaultAzureCredential(),
     )

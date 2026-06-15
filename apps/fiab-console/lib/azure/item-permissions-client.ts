@@ -34,6 +34,7 @@ import {
   ManagedIdentityCredential,
   type TokenCredential,
 } from '@azure/identity';
+import { AcaManagedIdentityCredential } from '@/lib/azure/aca-managed-identity';
 import { itemPermissionsContainer } from './cosmos-client';
 import {
   getAcl,
@@ -166,7 +167,7 @@ function fabricCredential(): TokenCredential {
   if (_fabricCred) return _fabricCred;
   const uami = process.env.LOOM_UAMI_CLIENT_ID || process.env.AZURE_CLIENT_ID;
   _fabricCred = uami
-    ? new ChainedTokenCredential(new ManagedIdentityCredential({ clientId: uami }), new DefaultAzureCredential())
+    ? new ChainedTokenCredential(new AcaManagedIdentityCredential(), new ManagedIdentityCredential({ clientId: uami }), new DefaultAzureCredential())
     : new DefaultAzureCredential();
   return _fabricCred;
 }

@@ -23,6 +23,7 @@
  */
 
 import type { Container } from '@azure/cosmos';
+import { AcaManagedIdentityCredential } from '@/lib/azure/aca-managed-identity';
 
 /** Per-table refresh policy — mirrors C# `RefreshPolicyKind`. */
 export type ShimRefreshPolicy = 'Partition' | 'Full' | 'DirectQueryFallback' | 'Composite';
@@ -84,7 +85,7 @@ async function credential() {
   const chain: any[] = [];
   if (clientId) chain.push(new ManagedIdentityCredential({ clientId }));
   chain.push(new DefaultAzureCredential());
-  return new ChainedTokenCredential(...chain);
+  return new ChainedTokenCredential(new AcaManagedIdentityCredential(), ...chain);
 }
 
 async function client(): Promise<any> {

@@ -36,6 +36,7 @@ import {
   DefaultAzureCredential,
   ManagedIdentityCredential,
 } from '@azure/identity';
+import { AcaManagedIdentityCredential } from '@/lib/azure/aca-managed-identity';
 import { randomUUID } from 'node:crypto';
 import { armBase, armScope } from '@/lib/azure/cloud-endpoints';
 import { networkingConfigContainer } from '@/lib/azure/cosmos-client';
@@ -50,6 +51,7 @@ const PE_API = '2024-03-01';
 const uamiClientId = process.env.LOOM_UAMI_CLIENT_ID || process.env.AZURE_CLIENT_ID;
 const credential: ChainedTokenCredential | DefaultAzureCredential = uamiClientId
   ? new ChainedTokenCredential(
+      new AcaManagedIdentityCredential(),
       new ManagedIdentityCredential({ clientId: uamiClientId }),
       new DefaultAzureCredential(),
     )

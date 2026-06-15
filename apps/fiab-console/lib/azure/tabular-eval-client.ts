@@ -39,6 +39,7 @@ import {
   DefaultAzureCredential,
   ManagedIdentityCredential,
 } from '@azure/identity';
+import { AcaManagedIdentityCredential } from '@/lib/azure/aca-managed-identity';
 import { aasScope, aasXmlaUrl } from './cloud-endpoints';
 import { listOwnedItems } from '@/app/api/items/_lib/item-crud';
 import { executeQuery, serverlessTarget } from './synapse-sql-client';
@@ -85,6 +86,7 @@ export type {
 const uamiClientId = process.env.LOOM_UAMI_CLIENT_ID || process.env.AZURE_CLIENT_ID;
 const credential = uamiClientId
   ? new ChainedTokenCredential(
+      new AcaManagedIdentityCredential(),
       new ManagedIdentityCredential({ clientId: uamiClientId }),
       new DefaultAzureCredential(),
     )

@@ -25,6 +25,7 @@ import {
   DefaultAzureCredential,
   ManagedIdentityCredential,
 } from '@azure/identity';
+import { AcaManagedIdentityCredential } from '@/lib/azure/aca-managed-identity';
 import type { Container } from '@azure/cosmos';
 
 import { copilotSessionsContainer } from './cosmos-client';
@@ -56,6 +57,7 @@ export interface DocHit extends DocChunk {
 // ---------- Credentials / config ----------
 
 const credential = new ChainedTokenCredential(
+  new AcaManagedIdentityCredential(),
   ...((process.env.LOOM_UAMI_CLIENT_ID || process.env.AZURE_CLIENT_ID)
     ? [new ManagedIdentityCredential({ clientId: process.env.LOOM_UAMI_CLIENT_ID || process.env.AZURE_CLIENT_ID })]
     : []),

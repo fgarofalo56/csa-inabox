@@ -41,6 +41,7 @@
  *   https://jupyter-client.readthedocs.io/en/latest/messaging.html  (protocol v5.3)
  */
 import crypto from 'node:crypto';
+import { AcaManagedIdentityCredential } from '@/lib/azure/aca-managed-identity';
 import type { TokenCredential } from '@azure/core-auth';
 import { armBase, armScope } from '../azure/cloud-endpoints';
 import type { NormalizedOutput } from '../azure/synapse-livy-client';
@@ -59,6 +60,7 @@ async function getCredential(): Promise<TokenCredential> {
   const uamiClientId = process.env.LOOM_UAMI_CLIENT_ID || process.env.AZURE_CLIENT_ID;
   _credential = uamiClientId
     ? new ChainedTokenCredential(
+        new AcaManagedIdentityCredential(),
         new ManagedIdentityCredential({ clientId: uamiClientId }),
         new DefaultAzureCredential(),
       )

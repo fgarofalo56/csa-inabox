@@ -44,6 +44,7 @@ import {
   ManagedIdentityCredential,
   type TokenCredential,
 } from '@azure/identity';
+import { AcaManagedIdentityCredential } from '@/lib/azure/aca-managed-identity';
 import { armBase, armScope, stripArmBase, getLogAnalyticsHost, dfsUrl } from '@/lib/azure/cloud-endpoints';
 import { getServiceClientFor } from '@/lib/azure/adls-client';
 import { listStorageAccounts, type StorageAccountSummary } from '@/lib/azure/storage-discovery';
@@ -77,6 +78,7 @@ const LAW_API = '2023-09-01';
 // connections / Log Analytics probes.
 const uamiClientId = process.env.LOOM_UAMI_CLIENT_ID || process.env.AZURE_CLIENT_ID;
 const credential: TokenCredential = new ChainedTokenCredential(
+  new AcaManagedIdentityCredential(),
   new ManagedIdentityCredential(uamiClientId ? { clientId: uamiClientId } : {}),
   new DefaultAzureCredential(),
 );

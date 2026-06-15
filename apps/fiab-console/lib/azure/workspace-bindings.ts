@@ -17,6 +17,7 @@
 
 import { fetchWithTimeout } from '@/lib/azure/fetch-with-timeout';
 import { ChainedTokenCredential, DefaultAzureCredential, ManagedIdentityCredential } from '@azure/identity';
+import { AcaManagedIdentityCredential } from '@/lib/azure/aca-managed-identity';
 import type { Workspace } from '@/lib/types/workspace';
 import { assignWorkspaceToCapacity, FabricError } from './fabric-client';
 import { registerAtlasEntity, PurviewError, PurviewNotConfiguredError } from './purview-client';
@@ -123,7 +124,7 @@ export async function applyWorkspaceBindings(ws: Workspace, opts: BindingOptions
 const ARM_RG_API = '2021-04-01';
 const armCredUami = process.env.LOOM_UAMI_CLIENT_ID || process.env.AZURE_CLIENT_ID;
 const armCredential = armCredUami
-  ? new ChainedTokenCredential(new ManagedIdentityCredential({ clientId: armCredUami }), new DefaultAzureCredential())
+  ? new ChainedTokenCredential(new AcaManagedIdentityCredential(), new ManagedIdentityCredential({ clientId: armCredUami }), new DefaultAzureCredential())
   : new DefaultAzureCredential();
 
 /** Build the backing RG name from the configurable prefix + a short workspace id. */

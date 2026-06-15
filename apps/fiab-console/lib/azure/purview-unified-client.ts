@@ -52,6 +52,7 @@ import {
   ManagedIdentityCredential,
   ChainedTokenCredential,
 } from '@azure/identity';
+import { AcaManagedIdentityCredential } from '@/lib/azure/aca-managed-identity';
 import { PurviewError, PurviewNotConfiguredError, type PurviewNotConfiguredHint } from './purview-client';
 
 /** Purview data-plane audience (same for classic Data Map AND Unified Catalog). */
@@ -66,6 +67,7 @@ const UC_WELL_KNOWN_HOST = 'https://api.purview-service.microsoft.com';
 const uamiClientId = process.env.LOOM_UAMI_CLIENT_ID || process.env.AZURE_CLIENT_ID;
 const credential: ChainedTokenCredential | DefaultAzureCredential = uamiClientId
   ? new ChainedTokenCredential(
+      new AcaManagedIdentityCredential(),
       new ManagedIdentityCredential({ clientId: uamiClientId }),
       new DefaultAzureCredential(),
     )

@@ -44,6 +44,7 @@ import {
   DefaultAzureCredential,
   ManagedIdentityCredential,
 } from '@azure/identity';
+import { AcaManagedIdentityCredential } from '@/lib/azure/aca-managed-identity';
 
 // ---------------------------------------------------------------------------
 // Shared types
@@ -367,7 +368,7 @@ function fabricCredential() {
   const chain: (ManagedIdentityCredential | DefaultAzureCredential)[] = [];
   if (clientId) chain.push(new ManagedIdentityCredential({ clientId }));
   chain.push(new DefaultAzureCredential());
-  return new ChainedTokenCredential(...chain);
+  return new ChainedTokenCredential(new AcaManagedIdentityCredential(), ...chain);
 }
 
 async function fabricAdminFetch(path: string, opts: RequestInit = {}): Promise<Response> {
