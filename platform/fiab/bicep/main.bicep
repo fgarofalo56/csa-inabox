@@ -117,6 +117,9 @@ param sccConnectionUri string = ''
 @description('Enable Purview DLP reads via Microsoft Graph for the Console (DLP policies + rules + alerts + simulate). Defaults ON — the post-deploy bootstrap grants Console UAMI Policy.Read.All + SecurityAlert.Read.All by default, so the /admin/security DLP tab is wired out of the box. DLP alerts + violations (security/alerts_v2, GA in every cloud) light up as soon as admin consent is issued; the policy-list segment (informationProtection/dataLossPreventionPolicies, /beta) and simulate are preview-gated and surface a precise honest MessageBar where unavailable. The Azure-native restrict-access enforcement (Restrict tab → ADLS/Synapse/ADX revokes) needs no Graph at all.')
 param loomDlpEnabled bool = true
 
+@description('Enable DLP policy CRUD (create/edit/delete DLP compliance policies + rules) via the SCC PowerShell sidecar. Microsoft Graph has no DLP write API, so authoring runs through Get/New/Set/Remove-DlpCompliancePolicy via Security & Compliance PowerShell (Exchange.ManageAsApp + Compliance Administrator — the same app + cert as label CRUD). Defaults off — DLP READS/alerts/violations + the Azure-native Restrict-access tab keep working; only create/edit/delete is gated until bootstrap provisions the SCC app + auth cert, after which operators re-deploy with this true.')
+param loomDlpAdminEnabled bool = false
+
 @description('Enable the Power BI Admin InformationProtection.setLabels API for /admin/batch-labeling Power BI propagation. Requires loomMipEnabled=true plus the Console UAMI to be a Fabric Administrator (a one-time M365/Entra admin action, not an ARM role). Defaults off; batch labeling still writes Cosmos + Purview when false.')
 param loomPowerBiAdminLabels bool = false
 
@@ -851,6 +854,7 @@ module adminPlane 'modules/admin-plane/main.bicep' = if (deployAdminPlane) {
     sccOrganization: sccOrganization
     sccConnectionUri: sccConnectionUri
     loomDlpEnabled: loomDlpEnabled
+    loomDlpAdminEnabled: loomDlpAdminEnabled
     loomPowerBiAdminLabels: loomPowerBiAdminLabels
     loomPowerbiXmlaEndpoint: loomPowerbiXmlaEndpoint
     loomIdentityPickerEnabled: loomIdentityPickerEnabled

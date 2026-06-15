@@ -26,6 +26,7 @@ import {
 } from '@fluentui/react-components';
 import { ArrowSync24Regular, ShieldProhibited24Regular } from '@fluentui/react-icons';
 import { NotConfiguredBar, type NotConfiguredHint } from './not-configured-bar';
+import { DlpManagePolicies } from './dlp-manage-policies';
 import { IdentityPicker, type IdentityHit } from '../ui/identity-picker';
 
 const useStyles = makeStyles({
@@ -135,8 +136,13 @@ function PoliciesSection() {
 
   return (
     <div className={s.section}>
+      {/* Real DLP policy CRUD (Security & Compliance PowerShell sidecar). Honest-
+          gated when LOOM_DLP_ADMIN_ENABLED is unset; the read-only Graph list
+          below still works. */}
+      <DlpManagePolicies />
+
       <div className={s.toolbar}>
-        <Subtitle2 style={{ marginRight: 'auto' }}>DLP policies <Badge appearance="tint" color="warning">Preview</Badge></Subtitle2>
+        <Subtitle2 style={{ marginRight: 'auto' }}>DLP policies (Graph read) <Badge appearance="tint" color="warning">Preview</Badge></Subtitle2>
         <Button icon={<ArrowSync24Regular />} onClick={load} disabled={state.loading}>Refresh</Button>
       </div>
       {state.loading && <Spinner label="Loading DLP policies…" />}

@@ -106,6 +106,10 @@ param loomMipEnabled = false
 // violations + Azure-native restrict-access). The policy segment + simulate
 // honest-gate where the Graph DLP preview isn't enabled.
 param loomDlpEnabled = true
+// DLP policy CRUD via the SCC PowerShell sidecar. Opt-in (off by default) — the
+// SCC app + auth cert must be provisioned in post-deploy bootstrap first. DLP
+// reads/alerts/violations + Azure-native Restrict-access work without it.
+param loomDlpAdminEnabled = false
 param loomIdentityPickerEnabled = false
 param loomDomainGroupProvisioningEnabled = false
 param storageRequireCmk = false
