@@ -15,6 +15,10 @@ import {
   pricingCalculatorUrl, breakdownToCsv, breakdownToJson, serviceDetailsUrl,
 } from '../pricing-calculator-link';
 import { metersForServices, serviceByKey } from '../service-catalog';
+import {
+  normalizeCurrency, isSupportedCurrency, normalizeRegion, regionLabel,
+  RETAIL_CURRENCIES, COMMERCIAL_REGIONS, DEFAULT_CURRENCY,
+} from '../cost-options';
 import type { PlanSubscription } from '../types';
 
 describe('normalizeToMonthly', () => {
@@ -111,9 +115,46 @@ describe('summarizePlan', () => {
   });
 
   it('carries the gov disclaimer flag through', () => {
-    const sum = summarizePlan(priceMap, {}, sub, { currency: 'USD', region: 'usgovvirginia', boundary: 'GCC-High', govDisclaimer: true });
+    const sum = summarizePlan(priceMap, {}, sub, { currency: 'USD', region: 'usgovvirginia', priceRegion: 'eastus2', boundary: 'GCC-High', govDisclaimer: true });
     expect(sum.govDisclaimer).toBe(true);
     expect(sum.region).toBe('usgovvirginia');
+    expect(sum.priceRegion).toBe('eastus2'); // Commercial reference region disclosed
+  });
+
+  it('defaults priceRegion to the reported region when none is supplied', () => {
+    const sum = summarizePlan(priceMap, {}, sub, { currency: 'USD', region: 'westeurope', boundary: 'Commercial', govDisclaimer: false });
+    expect(sum.priceRegion).toBe('westeurope');
+  });
+});
+
+describe('cost-options (currency + region pickers)', () => {
+  it('normalizeCurrency upper-cases + validates, else falls back to USD', () => {
+    expect(normalizeCurrency('eur')).toBe('EUR');
+    expect(normalizeCurrency('GBP')).toBe('GBP');
+    expect(normalizeCurrency('xyz')).toBe(DEFAULT_CURRENCY);
+    expect(normalizeCurrency('')).toBe('USD');
+    expect(normalizeCurrency(null)).toBe('USD');
+  });
+  it('isSupportedCurrency is exact/case-sensitive against the API set', () => {
+    expect(isSupportedCurrency('USD')).toBe(true);
+    expect(isSupportedCurrency('EUR')).toBe(true);
+    expect(isSupportedCurrency('eur')).toBe(false);
+    expect(isSupportedCurrency('ZZZ')).toBe(false);
+    expect(isSupportedCurrency(undefined)).toBe(false);
+  });
+  it('normalizeRegion lower-cases + strips non-alnum (armRegionName safe)', () => {
+    expect(normalizeRegion('East US 2')).toBe('eastus2');
+    expect(normalizeRegion('west-europe')).toBe('westeurope');
+    expect(normalizeRegion(null)).toBe('');
+  });
+  it('regionLabel maps known names + falls back to the raw name', () => {
+    expect(regionLabel('eastus2')).toBe('East US 2');
+    expect(regionLabel('madeupregion')).toBe('madeupregion');
+  });
+  it('catalog lists are non-empty and USD/eastus2 are present', () => {
+    expect(RETAIL_CURRENCIES.some((c) => c.code === 'USD')).toBe(true);
+    expect(COMMERCIAL_REGIONS.some((r) => r.name === 'eastus2')).toBe(true);
+    expect(DEFAULT_CURRENCY).toBe('USD');
   });
 });
 
