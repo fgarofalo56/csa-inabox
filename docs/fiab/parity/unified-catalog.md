@@ -43,6 +43,22 @@ and OneLake browse/search tabs do **not** need Purview and work today.
 - OneLake / Fabric legs → `onelake-catalog-client.ts` / `fabric-client.ts`.
 - Connection state → `probePurview()` via `/api/governance/purview/status`.
 
+### Unified-Catalog REST host (data-product CRUD, opt-in)
+
+The data-product adapter (`purview-unified-store.ts` →
+`purview-unified-client.ts`) speaks the **NEW** Unified Catalog data plane
+(`/datagovernance/catalog/dataProducts`, api-version `2026-03-20-preview`),
+which is served from the well-known **global** host
+`https://api.purview-service.microsoft.com` (or a per-tenant
+`https://{tenantId}-api.purview-service.microsoft.com`) — **NOT** the classic
+`{account}.purview.azure.com` Data Map host (that host 404s on `/datagovernance`).
+`admin-plane/main.bicep` therefore wires `LOOM_PURVIEW_UC_ENDPOINT` to
+`https://api.purview-service.microsoft.com` on the **Commercial boundary only**
+(previously it incorrectly hardcoded the classic host, which won over
+`LOOM_PURVIEW_UNIFIED_ACCOUNT` and broke the opt-in backend). Token scope stays
+`https://purview.azure.net/.default`. GCC / GCC-High / IL5 do not wire it — the
+factory forces the Cosmos backend there.
+
 ## Grade
 
 **A** for the BUILT (Unity/OneLake/permissions/metastores/lineage) surfaces.

@@ -34,6 +34,36 @@ connection status legitimately reflects "Purview not bound in this cloud" with
 the exact one-time fix — this is the *allowed* config state per `no-vaporware.md`,
 not a stub. The page never renders empty or with a fake iframe. No MISSING rows.
 
+## Authorization — granted by default (the 403 fix)
+
+Classic Data Map permissions are **data-plane** (root-collection metadata
+policy), **not Azure RBAC**, so they cannot be set in bicep
+([Learn: data-governance roles](https://learn.microsoft.com/purview/data-governance-roles-permissions)).
+The Console UAMI is therefore authorized **by default** in
+`csa-loom-post-deploy-bootstrap.yml` → step *Grant Console UAMI Purview Data Map
+roles*, which loops `grant-purview-datamap-role.sh` over **data-reader,
+data-curator, data-source-administrator, collection-administrator** on the root
+collection (the deploy SP created the account, so it is the root Collection
+Admin and can grant these). Two things make this work on every deploy, not just
+the live eastus2 estate:
+
+- **Right identity / account, per deploy.** `CONSOLE_UAMI_PRINCIPAL` and
+  `PURVIEW_ACCOUNT` are sourced from repo vars
+  (`LOOM_CONSOLE_UAMI_PRINCIPAL` ← bicep `identity.outputs.uamiConsolePrincipalId`,
+  `LOOM_PURVIEW_ACCOUNT` ← bicep `catalog.outputs.purviewAccountName`) with the
+  live Commercial defaults as fallback. `PURVIEW_CLOUD` drives the Data Map host
+  TLD (`.us` in US Gov), mirroring `purviewBase()`'s `isGovCloud()` switch.
+- **Reachability.** `catalog.bicep` deploys Purview with
+  `publicNetworkAccess: 'Disabled'`, so the data plane is unreachable from the
+  public GHA runner and the grant would silently fail (leaving a permanent 403
+  after a "successful" deploy). The grant step now temporarily flips
+  `publicNetworkAccess=Enabled` for the grant window and **restores `Disabled`
+  via a trap** (mirrors the Synapse/Databricks steps).
+
+When `LOOM_PURVIEW_ACCOUNT` is unset the pane renders the honest `PurviewGate`
+(no fabricated data) — `probePurview()` returns `role_missing` on 401/403 and
+`not_configured` when unbound.
+
 ## Grade
 
 **A** — a real probe-driven connection surface: honest reason-coded gate when

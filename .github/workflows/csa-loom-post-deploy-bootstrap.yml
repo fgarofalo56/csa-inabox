@@ -22,8 +22,16 @@ env:
   DBX_WS: adb-loom-default-eastus2
   DBX_HOST: adb-7405613013893759.19.azuredatabricks.net
   APIM_NAME: apim-csa-loom-eastus2
-  CONSOLE_UAMI_PRINCIPAL: e61f3eb3-c646-4183-8198-4c4a34cd9a01
-  CONSOLE_UAMI_CLIENT: c6272de5-3c4e-4b72-8b57-71b2e950209b
+  # Console UAMI principal (object) id + client (app) id. De-hardcoded so a
+  # non-eastus2 / non-Commercial / different-tenant deploy grants the RIGHT
+  # identity. Source these from the bicep deploy outputs
+  # identity.outputs.uamiConsolePrincipalId / uamiConsoleClientId and surface
+  # them as repo vars LOOM_CONSOLE_UAMI_PRINCIPAL / LOOM_CONSOLE_UAMI_CLIENT;
+  # both fall back to the live Commercial defaults so the existing estate keeps
+  # working with no var set. Every grant step below references these, so setting
+  # the var once re-targets the whole bootstrap (incl. the Purview Data Map grant).
+  CONSOLE_UAMI_PRINCIPAL: ${{ vars.LOOM_CONSOLE_UAMI_PRINCIPAL || 'e61f3eb3-c646-4183-8198-4c4a34cd9a01' }}
+  CONSOLE_UAMI_CLIENT: ${{ vars.LOOM_CONSOLE_UAMI_CLIENT || 'c6272de5-3c4e-4b72-8b57-71b2e950209b' }}
   # Weave (Semantic Ontology) graph store — the Console UAMI's Entra principal
   # NAME registered in PostgreSQL (must match LOOM_POSTGRES_AAD_USER on the
   # Console, default loom-console). The PG server name is resolved at runtime.
@@ -75,6 +83,46 @@ jobs:
           # data-reader is included for the F5 lakehouse MIP-label-on-download
           # lookup (reading the sensitivity label scanned onto an ADLS path).
           # Idempotent.
+          #
+          # REACHABILITY: catalog.bicep deploys the Purview account with
+          # publicNetworkAccess='Disabled', so the data plane
+          # ({account}.purview.azure.{tld}/policystore/metadataPolicies) is NOT
+          # reachable from this public ubuntu-latest runner — the grant PUT (and
+          # the metadata-policy GET it depends on) would silently fail and the
+          # `|| echo ::warning::` would swallow it, leaving the UAMI unauthorized
+          # and the pane stuck on a permanent 403 AFTER a "successful" deploy.
+          # We therefore temporarily flip publicNetworkAccess=Enabled for the
+          # grant window (mirrors the Synapse/Databricks steps below) and RESTORE
+          # it via a trap so it returns to Disabled even if the grant fails.
+          PURVIEW_API_VERSION="2024-04-01-preview"
+          PURVIEW_ID="$(az resource list --resource-type Microsoft.Purview/accounts \
+            --query "[?name=='$PURVIEW_ACCOUNT'].id | [0]" -o tsv 2>/dev/null)"
+          if [ -z "$PURVIEW_ID" ]; then
+            PURVIEW_ID="$(az purview account show -n "$PURVIEW_ACCOUNT" -g "$ADMIN_RG" --query id -o tsv 2>/dev/null || true)"
+          fi
+          ORIG_PNA=""
+          restore_purview_pna() {
+            if [ -n "$PURVIEW_ID" ] && [ "${ORIG_PNA:-Enabled}" != "Enabled" ]; then
+              echo "-> restoring Purview publicNetworkAccess=Disabled"
+              az resource update --ids "$PURVIEW_ID" --api-version "$PURVIEW_API_VERSION" \
+                --set properties.publicNetworkAccess=Disabled --query "properties.publicNetworkAccess" -o tsv || true
+            fi
+          }
+          trap restore_purview_pna EXIT
+          if [ -n "$PURVIEW_ID" ]; then
+            ORIG_PNA="$(az resource show --ids "$PURVIEW_ID" --api-version "$PURVIEW_API_VERSION" \
+              --query "properties.publicNetworkAccess" -o tsv 2>/dev/null || echo Enabled)"
+            echo "Purview account $PURVIEW_ACCOUNT publicNetworkAccess=$ORIG_PNA"
+            if [ "$ORIG_PNA" != "Enabled" ]; then
+              echo "-> temporarily enabling Purview public access for the grant window"
+              az resource update --ids "$PURVIEW_ID" --api-version "$PURVIEW_API_VERSION" \
+                --set properties.publicNetworkAccess=Enabled --query "properties.publicNetworkAccess" -o tsv || \
+                echo "::warning::Could not enable Purview public access — grant may be unreachable from the runner."
+              sleep 30
+            fi
+          else
+            echo "::warning::Could not resolve a Microsoft.Purview/accounts id for '$PURVIEW_ACCOUNT' — proceeding (account may be public, in a different RG, or absent)."
+          fi
           chmod +x scripts/csa-loom/grant-purview-datamap-role.sh
           for ROLE in data-reader data-curator data-source-administrator collection-administrator; do
             echo "== granting Console UAMI '$ROLE' on $PURVIEW_ACCOUNT root collection (cloud=$PURVIEW_CLOUD) =="
