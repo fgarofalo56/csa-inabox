@@ -9,6 +9,7 @@ import { Delete24Regular, Edit24Regular } from '@fluentui/react-icons';
 import { Section, Toolbar } from '@/lib/components/ui/section';
 import { LoomDataTable, type LoomColumn } from '@/lib/components/ui/loom-data-table';
 import { ApimApiSummary } from '@/lib/azure/apim-client';
+import { apimFetchJson } from './apim-pane-fetch';
 
 const useStyles = makeStyles({
   protocolBadge: { marginRight: tokens.spacingHorizontalS },
@@ -22,17 +23,19 @@ export function ApimApisPane() {
   const [q, setQ] = useState('');
 
   useEffect(() => {
-    fetch('/api/items/apim-api')
-      .then((r) => r.json())
+    // apimFetchJson reads the body as text first and surfaces a non-JSON body
+    // (HTML 404/500 page) or an honest 503 config-gate as a readable error
+    // instead of crashing the pane with "Unexpected token '<'".
+    apimFetchJson('/api/items/apim-api')
       .then((d) => {
         if (d.ok && Array.isArray(d.apis)) {
-          setApis(d.apis);
+          setApis(d.apis as ApimApiSummary[]);
         } else {
           setError(d.error || 'Failed to load APIs');
         }
         setLoading(false);
       })
-      .catch((e) => { setError(String(e)); setLoading(false); });
+      .catch((e) => { setError(e instanceof Error ? e.message : String(e)); setLoading(false); });
   }, []);
 
   const visibleApis = useMemo(() => {
@@ -88,8 +91,20 @@ export function ApimApisPane() {
       sortable: false,
       render: (a) => (
         <div style={{ display: 'flex', gap: tokens.spacingHorizontalS }}>
-          <Button size="small" icon={<Edit24Regular />} onClick={() => window.location.href = `#`} />
-          <Button size="small" icon={<Delete24Regular />} onClick={() => {}} />
+          <Button
+            size="small"
+            appearance="subtle"
+            icon={<Edit24Regular />}
+            aria-label={`Edit ${a.displayName}`}
+            title={`Edit ${a.displayName}`}
+          />
+          <Button
+            size="small"
+            appearance="subtle"
+            icon={<Delete24Regular />}
+            aria-label={`Delete ${a.displayName}`}
+            title={`Delete ${a.displayName}`}
+          />
         </div>
       ),
     },

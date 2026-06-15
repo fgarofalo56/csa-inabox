@@ -6,6 +6,7 @@ import {
   Caption1,
 } from '@fluentui/react-components';
 import { Section } from '@/lib/components/ui/section';
+import { apimFetchJson } from './apim-pane-fetch';
 
 const useStyles = makeStyles({
   container: { display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalL },
@@ -23,35 +24,35 @@ export function ApimPoliciesPane() {
   useEffect(() => {
     setLoading(true);
     setError(null);
-    fetch(`/api/items/apim-policy?scope=${scope}`)
-      .then((r) => r.json())
+    // apimFetchJson surfaces a non-JSON body / honest 503 gate as a readable
+    // error instead of crashing the pane with "Unexpected token '<'".
+    apimFetchJson(`/api/items/apim-policy?scope=${scope}`)
       .then((d) => {
         if (d.ok) {
-          setPolicyText(d.value || '');
+          setPolicyText((d.value as string) || '');
         } else {
           setError(d.error || 'Failed to load policy');
         }
         setLoading(false);
       })
-      .catch((e) => { setError(String(e)); setLoading(false); });
+      .catch((e) => { setError(e instanceof Error ? e.message : String(e)); setLoading(false); });
   }, [scope]);
 
   async function handleSave() {
     setSaving(true);
     setError(null);
     try {
-      const res = await fetch('/api/items/apim-policy', {
+      const d = await apimFetchJson('/api/items/apim-policy', {
         method: 'PUT',
         body: JSON.stringify({ scope, value: policyText }),
       });
-      const d = await res.json();
       if (d.ok) {
-        setPolicyText(d.value || policyText);
+        setPolicyText((d.value as string) || policyText);
       } else {
         setError(d.error || 'Save failed');
       }
     } catch (e) {
-      setError(String(e));
+      setError(e instanceof Error ? e.message : String(e));
     } finally {
       setSaving(false);
     }
@@ -95,6 +96,8 @@ export function ApimPoliciesPane() {
         <textarea
           value={policyText}
           onChange={(e) => setPolicyText(e.currentTarget.value)}
+          aria-label="Policy XML"
+          spellCheck={false}
           style={{
             fontFamily: 'monospace',
             fontSize: '13px',

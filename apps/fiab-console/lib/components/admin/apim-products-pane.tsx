@@ -2,13 +2,14 @@
 
 import { useEffect, useMemo, useState } from 'react';
 import {
-  makeStyles, tokens, Spinner, MessageBar, MessageBarBody, Button, Badge,
+  tokens, Spinner, MessageBar, MessageBarBody, Button, Badge,
   Caption1,
 } from '@fluentui/react-components';
 import { Delete24Regular, Edit24Regular } from '@fluentui/react-icons';
 import { Section, Toolbar } from '@/lib/components/ui/section';
 import { LoomDataTable, type LoomColumn } from '@/lib/components/ui/loom-data-table';
 import { ApimProductSummary } from '@/lib/azure/apim-client';
+import { apimFetchJson } from './apim-pane-fetch';
 
 export function ApimProductsPane() {
   const [products, setProducts] = useState<ApimProductSummary[]>([]);
@@ -17,17 +18,18 @@ export function ApimProductsPane() {
   const [q, setQ] = useState('');
 
   useEffect(() => {
-    fetch('/api/items/apim-product')
-      .then((r) => r.json())
+    // apimFetchJson surfaces a non-JSON body / honest 503 gate as a readable
+    // error instead of crashing the pane with "Unexpected token '<'".
+    apimFetchJson('/api/items/apim-product')
       .then((d) => {
         if (d.ok && Array.isArray(d.products)) {
-          setProducts(d.products);
+          setProducts(d.products as ApimProductSummary[]);
         } else {
           setError(d.error || 'Failed to load products');
         }
         setLoading(false);
       })
-      .catch((e) => { setError(String(e)); setLoading(false); });
+      .catch((e) => { setError(e instanceof Error ? e.message : String(e)); setLoading(false); });
   }, []);
 
   const visibleProducts = useMemo(() => {
@@ -47,7 +49,7 @@ export function ApimProductsPane() {
       render: (p) => (
         <div>
           <strong>{p.displayName}</strong>
-          {p.description && <Caption1 style={{ display: 'block', marginTop: '4px' }}>{p.description}</Caption1>}
+          {p.description && <Caption1 style={{ display: 'block', marginTop: '4px', color: tokens.colorNeutralForeground3 }}>{p.description}</Caption1>}
         </div>
       ),
     },
@@ -88,8 +90,20 @@ export function ApimProductsPane() {
       sortable: false,
       render: (p) => (
         <div style={{ display: 'flex', gap: tokens.spacingHorizontalS }}>
-          <Button size="small" icon={<Edit24Regular />} />
-          <Button size="small" icon={<Delete24Regular />} />
+          <Button
+            size="small"
+            appearance="subtle"
+            icon={<Edit24Regular />}
+            aria-label={`Edit ${p.displayName}`}
+            title={`Edit ${p.displayName}`}
+          />
+          <Button
+            size="small"
+            appearance="subtle"
+            icon={<Delete24Regular />}
+            aria-label={`Delete ${p.displayName}`}
+            title={`Delete ${p.displayName}`}
+          />
         </div>
       ),
     },
