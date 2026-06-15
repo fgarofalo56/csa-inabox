@@ -27,6 +27,7 @@ import {
 import { Save24Regular, ArrowClockwise20Regular, Sparkle20Regular } from '@fluentui/react-icons';
 import { Section } from '@/lib/components/ui/section';
 import { McpServersPanel } from '@/lib/components/admin/mcp-servers-panel';
+import { IqMcpPanel } from '@/lib/components/admin/iq-mcp-panel';
 import {
   RECOMMENDED_CHAT_MODELS, RECOMMENDED_EMBED_MODELS, looksLikeEmbedding,
   type TenantCopilotConfig,
@@ -395,6 +396,7 @@ export function CopilotAgentsConfig() {
       </div>
     </Section>
     <McpServersPanel />
+    <IqMcpPanel />
     </>
   );
 }
