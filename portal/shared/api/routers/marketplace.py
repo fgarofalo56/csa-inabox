@@ -254,6 +254,7 @@ async def update_product(
     "/products/{product_id}",
     status_code=status.HTTP_204_NO_CONTENT,
     response_class=Response,
+    response_model=None,
     summary="Delete a data product",
 )
 async def delete_product(
