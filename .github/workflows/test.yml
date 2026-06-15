@@ -90,6 +90,14 @@ jobs:
           for req in $(find . -name "requirements.txt" -not -path "*/dbt-env/*" -not -path "*/.venv/*"); do
             pip install -r "$req" || true
           done
+          # mypy >= 1.16 added a hard dependency on pathspec and imports
+          # `pathspec.patterns.gitignore`, which only exists in pathspec >= 0.12.
+          # The per-domain requirements loop above can pull an older transitive
+          # pathspec, breaking `mypy` at import time ("No module named
+          # 'pathspec.patterns.gitignore'"). Force the modern version LAST so the
+          # mypy step always finds the expected module layout. See
+          # https://github.com/python/mypy/issues/19275.
+          pip install -U 'pathspec>=0.12.1'
 
       - name: Lint with ruff
         if: steps.relevant.outputs.run == 'true'
