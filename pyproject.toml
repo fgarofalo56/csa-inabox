@@ -14,6 +14,10 @@ dev = [
     "pytest-cov>=4.0.0,<8.0.0",
     "pytest-asyncio>=0.23.0,<2.0.0",
     "mypy>=1.0.0,<3.0.0",
+    # mypy >= 1.16 hard-depends on pathspec and imports
+    # `pathspec.patterns.gitignore` (added in pathspec 0.12). Pin the modern
+    # floor so a stale transitive pathspec can't break `mypy` at import time.
+    "pathspec>=0.12.1,<1.0.0",
     "bandit>=1.7.5,<2.0.0",
     "pre-commit>=3.5.0,<5.0.0",
     # structlog is a governance runtime dep but tests for the shared

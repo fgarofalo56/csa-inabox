@@ -31,6 +31,8 @@
  *   LOOM_SCC_LABELS_KEY      — Function host key (sent as x-functions-key).
  */
 
+import { fetchWithTimeout } from '@/lib/azure/fetch-with-timeout';
+
 // ============================================================
 // Errors
 // ============================================================
@@ -212,7 +214,7 @@ async function callSidecar<T>(cmd: SccCommand): Promise<T> {
   const url = `${endpoint}/api/labels`;
   let res: Response;
   try {
-    res = await fetch(url, {
+    res = await fetchWithTimeout(url, {
       method: 'POST',
       headers: {
         'content-type': 'application/json',

@@ -26,7 +26,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from fastapi import APIRouter, Depends, HTTPException, Query, status
+from fastapi import APIRouter, Depends, HTTPException, Query, Response, status
 
 from ..dependencies import get_access_requests_store, get_products_store, get_quality_store
 from ..models.marketplace import (
@@ -253,6 +253,8 @@ async def update_product(
 @router.delete(
     "/products/{product_id}",
     status_code=status.HTTP_204_NO_CONTENT,
+    response_class=Response,
+    response_model=None,
     summary="Delete a data product",
 )
 async def delete_product(

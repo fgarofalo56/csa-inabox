@@ -352,8 +352,10 @@ def test_admin_main_injects_bridge_url_into_console():
     assert "LOOM_MCP_BRIDGE_URL" in src, (
         "Console env never receives LOOM_MCP_BRIDGE_URL"
     )
-    assert "http://loom-mcp-bridge:8080" in src, (
-        "Console LOOM_MCP_BRIDGE_URL does not point at the internal bridge"
+    assert "http://loom-mcp-bridge'" in src or "http://loom-mcp-bridge\"" in src, (
+        "Console LOOM_MCP_BRIDGE_URL does not point at the internal bridge "
+        "(must be the ACA ingress host with NO :8080 — internal HTTP ingress "
+        "listens on port 80 and forwards to the container targetPort)"
     )
 
 
