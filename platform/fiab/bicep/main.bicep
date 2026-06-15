@@ -1178,7 +1178,16 @@ module dlzAttach 'modules/landing-zone/main.bicep' = if (topology == 'dlz-attach
     adminPlaneAppInsightsConnectionString: hubAppInsightsConnectionString
     adminPlanePrivateDnsZoneIds: hubPrivateDnsZoneIdsAttach
     adminPlaneAdxClusterRgName: hubAdxClusterRgName
-    adxEnabled: adxEnabled
+    // dlz-attach: the hub's shared ADX cluster lives in the DMLZ subscription while
+    // this DLZ deploys from the DLZ subscription. ARM cannot create the per-domain
+    // database via a cross-SUBSCRIPTION nested deployment (the RG-scoped DB
+    // deployment can't carry the required `location`, and Bicep won't emit/allow one
+    // for a cross-sub RG module). Per adx-cluster.bicep, the per-domain ADX database
+    // (and follower attach) is created at RUNTIME via the Console's KQL-database /
+    // follower API against the shared cluster — no deploy-time bicep resource is
+    // needed. So the deploy-time ADX DB is skipped here; every other DLZ backend
+    // (ADLS, Synapse, Databricks, Event Hubs, Cosmos) is in-sub and deploys normally.
+    adxEnabled: false
     adxClusterPrincipalId: hubAdxClusterPrincipalId
     adminEntraGroupId: adminEntraGroupId
     activatorPrincipalId: hubActivatorPrincipalId
