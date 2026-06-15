@@ -1133,25 +1133,47 @@ export async function registerDatabricksUnityCatalogSource(opts: {
 }
 
 /**
- * Honest infra-gate for the Databricks UC **scan** step.
+ * Scan-config for a Databricks UC scan.
  *
- * Per Microsoft Learn (register-scan-azure-databricks-unity-catalog#prerequisites
- * + unified-catalog-data-quality-azure-databricks-unity-catalog), scanning a
- * Databricks UC source requires a credential — and "For Azure Databricks …
- * managed identity isn't available as an authentication option — use an Access
- * Token stored in Key Vault instead." It also needs a running SQL Warehouse +
- * its HTTP path and an integration runtime. None of these can be inferred from
- * the Console UAMI, so the scan-define/trigger step gates honestly when the
- * operator hasn't supplied the scan config. (Source registration above is fully
- * automatic; only the scan needs this extra config.)
+ * Per Microsoft Learn (register-scan-azure-databricks-unity-catalog#authentication-for-a-scan)
+ * a Databricks Unity Catalog scan supports THREE auth methods — listed in this
+ * order: **system-assigned managed identity**, **personal access token** (PAT,
+ * stored in Key Vault), and **service principal**. (NOTE: this differs from the
+ * older Hive-metastore Databricks connector and from this code's previous
+ * comment, which claimed MI "isn't available" — that is no longer accurate for
+ * the Unity Catalog connector.)
+ *
+ * Loom defaults to the **managed-identity** path (MI-first, per .claude/rules):
+ * the Purview account's system-assigned MI (catalog.bicep gives the account
+ * `identity:{type:'SystemAssigned'}`) is registered as a Databricks service
+ * principal — using Purview's Application ID — and granted UC SELECT/USE
+ * privileges. That path needs **no Key Vault and no PAT** — only a running SQL
+ * Warehouse + its HTTP path. The 'access-token' path remains available for
+ * operators who prefer a Key-Vault-backed PAT credential.
+ *
+ * Regardless of auth method the scan also needs a running SQL Warehouse and its
+ * HTTP path; these can't be inferred from the Console UAMI, so the
+ * scan-define/trigger step gates honestly when the operator hasn't supplied the
+ * HTTP path. (Source registration is fully automatic; only the scan needs this.)
+ *
+ * LINEAGE: table/column lineage extraction requires the **system.access** schema
+ * to be enabled in the Unity Catalog metastore (lineage lives in UC system
+ * tables). Without it the source still scans and catalogs assets, but lineage is
+ * empty. See register-scan-azure-databricks-unity-catalog#prerequisites (step 6).
  */
 export interface DatabricksScanConfig {
   /** Workspace URL to scan (https://adb-….azuredatabricks.net). */
   workspaceUrl: string;
   /** SQL Warehouse HTTP path, e.g. /sql/1.0/warehouses/abc123. */
   httpPath: string;
-  /** Name of a Purview credential (Key-Vault-backed Access Token) created in the account. */
-  credentialName: string;
+  /**
+   * Scan auth method. Defaults to 'managed-identity' (MI-first, no Key Vault)
+   * unless a `credentialName` is supplied, in which case 'access-token' is used.
+   */
+  auth?: 'managed-identity' | 'access-token';
+  /** Required ONLY for auth==='access-token': name of a Purview credential
+   *  (Key-Vault-backed Access Token) created in the account. */
+  credentialName?: string;
   /** Integration runtime name (Azure IR / Managed VNet IR / SHIR). Defaults to the managed Azure IR. */
   integrationRuntimeName?: string;
   collectionName?: string;
@@ -1159,11 +1181,23 @@ export interface DatabricksScanConfig {
 
 /**
  * Define + return a Databricks UC scan (does NOT trigger it — call
- * {@link triggerScanRun} after). Uses Access-Token auth (the only option for
- * Databricks per Learn). The scan uses the system default scan ruleset for
- * classification. The scan body carries the Databricks-specific properties
- * (workspaceUrl + serverHttpPath + credential + connectedVia) so it cannot reuse
- * the generic ruleset-only {@link upsertScan} — the PUT is issued directly.
+ * {@link triggerScanRun} after). The scan body carries the Databricks-specific
+ * properties (workspaceUrl + serverHttpPath + connectedVia [+ credential for the
+ * access-token path]) so it cannot reuse the generic ruleset-only
+ * {@link upsertScan} — the PUT is issued directly. The scan uses the system
+ * default Databricks UC scan ruleset for classification.
+ *
+ * The scan `kind` encodes the auth method (the convention every Purview scan
+ * connector uses — e.g. `AdlsGen2Msi`):
+ *   - managed-identity → `AzureDatabricksUnityCatalogMsi` (no credential block;
+ *     uses the Purview account's system-assigned MI)
+ *   - access-token     → `AzureDatabricksUnityCatalogAccessToken` (+ credential)
+ *
+ * NOTE (portal-derived): the exact `kind` strings + property casing
+ * (`serverHttpPath`) are derived from the Purview portal's scan-create network
+ * call, not the public scanningdataplane REST reference — confirm against a live
+ * classic account when smoke-testing. `triggerScanRun` / `registerDataSource`
+ * are reference-confirmed.
  *   https://learn.microsoft.com/purview/register-scan-azure-databricks-unity-catalog#scan
  */
 export async function defineDatabricksUnityCatalogScan(
@@ -1175,21 +1209,32 @@ export async function defineDatabricksUnityCatalogScan(
   if (!sourceName) throw new PurviewError(400, null, 'sourceName is required');
   if (!scanName) throw new PurviewError(400, null, 'scanName is required');
   if (!cfg?.workspaceUrl) throw new PurviewError(400, null, 'workspaceUrl is required');
-  if (!cfg?.httpPath) throw new PurviewError(400, null, 'httpPath is required');
-  if (!cfg?.credentialName) throw new PurviewError(400, null, 'credentialName is required (Key-Vault Access Token)');
+  if (!cfg?.httpPath) throw new PurviewError(400, null, 'httpPath is required (SQL Warehouse HTTP path)');
+  // MI-first: default to managed-identity unless a credential name is supplied.
+  const auth: 'managed-identity' | 'access-token' =
+    cfg.auth || (cfg.credentialName ? 'access-token' : 'managed-identity');
+  if (auth === 'access-token' && !cfg.credentialName) {
+    throw new PurviewError(400, null, "credentialName is required for auth='access-token' (Key-Vault Access Token)");
+  }
   const collection = cfg.collectionName || (await rootCollectionName());
   const properties: Record<string, unknown> = {
     workspaceUrl: cfg.workspaceUrl.replace(/\/$/, ''),
     serverHttpPath: cfg.httpPath,
-    credential: { referenceName: cfg.credentialName, credentialType: 'AccessToken' },
     connectedVia: { referenceName: cfg.integrationRuntimeName || 'AzureAutoResolveIntegrationRuntime' },
     scanRulesetName: 'AzureDatabricksUnityCatalog',
     scanRulesetType: 'System',
+    ...(auth === 'access-token'
+      ? { credential: { referenceName: cfg.credentialName, credentialType: 'AccessToken' } }
+      : {}),
     ...(collection ? { collection: { referenceName: collection, type: 'CollectionReference' } } : {}),
   };
+  const kind =
+    auth === 'access-token'
+      ? 'AzureDatabricksUnityCatalogAccessToken'
+      : 'AzureDatabricksUnityCatalogMsi';
   const res = await purviewFetch(
     `/scan/datasources/${encodeURIComponent(sourceName)}/scans/${encodeURIComponent(scanName)}`,
-    { method: 'PUT', apiVersion: SCAN_API_VERSION, body: JSON.stringify({ kind: 'AzureDatabricksUnityCatalogAccessToken', properties }) },
+    { method: 'PUT', apiVersion: SCAN_API_VERSION, body: JSON.stringify({ kind, properties }) },
   );
   const raw = await readJson<any>(res);
   if (!raw) throw new PurviewError(500, null, 'Purview returned empty body on defineDatabricksUnityCatalogScan');

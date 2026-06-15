@@ -66,7 +66,7 @@ OneLake, Purview) anchors to each Section.
 | 3 | **Assign / re-assign** a workspace to a UC metastore | account console → metastore → Workspaces → Assign |
 | 4 | List a workspace's UC catalogs | workspace → Catalog Explorer |
 | 5 | Register an *Azure Databricks Unity Catalog* source (Name + Metastore ID + collection) | Purview Data Map → Register |
-| 6 | Define a scan (Access-Token credential + SQL Warehouse HTTP path + IR + scan ruleset) | Purview Data Map → source → New scan |
+| 6 | Define a scan (auth: managed identity / Access Token / service principal + SQL Warehouse HTTP path + IR + scan ruleset) | Purview Data Map → source → New scan |
 | 7 | Trigger / run the scan to catalog metadata | Purview scan → Save and run |
 | 8 | See scan-run status / history | Purview source → scans → runs |
 
@@ -74,16 +74,20 @@ OneLake, Purview) anchors to each Section.
 |---|------------|--------|---------------------|
 | 1 | List account metastores | ✅ | `unity-catalog-account-client.listAccountMetastores()` → `GET accounts.azuredatabricks.net/api/2.0/accounts/{id}/metastores` |
 | 2 | Current workspace assignment | ✅ | `getWorkspaceMetastoreAssignment(wsId)` → `GET …/workspaces/{wsId}/metastore` (404 ⇒ unassigned) |
-| 3 | Attach / re-attach metastore | ✅ | `assignMetastore(wsId, metastoreId, defaultCatalog)` → `PUT …/workspaces/{wsId}/metastore` (idempotent) |
+| 3 | Attach / re-attach metastore | ✅ | `assignMetastore(wsId, metastoreId, defaultCatalog)` → `PUT …/workspaces/{wsId}/metastore` (idempotent). `default_catalog_name` is deprecated by Databricks (use the Default Namespace API) but still sent for back-compat. |
 | 4 | List workspace catalogs | ✅ | `unity-catalog-client.listCatalogs(host)` → workspace UC REST 2.1 |
 | 5 | Register Databricks UC source | ✅ | `purview-client.registerDatabricksUnityCatalogSource()` → `PUT /scan/datasources/{ds}` kind `AzureDatabricksUnityCatalog`, props `{ metastoreId, collection }` |
-| 6 | Define scan | ⚠️ honest-gate | `defineDatabricksUnityCatalogScan()` → `PUT /scan/datasources/{ds}/scans/{scan}` kind `AzureDatabricksUnityCatalogAccessToken`. Gates when no Key-Vault Access-Token credential + SQL Warehouse HTTP path is supplied (MI is **not** a Databricks scan auth option per Learn). |
-| 7 | Trigger scan run | ✅ (when scan config supplied) | `triggerScanRun(ds, scan)` → `PUT …/runs/{runId}` |
+| 6 | Define scan | ✅ (MI-first) / ⚠️ honest-gate (no HTTP path) | `defineDatabricksUnityCatalogScan()` → `PUT /scan/datasources/{ds}/scans/{scan}`. **MI-first DEFAULT** kind `AzureDatabricksUnityCatalogMsi` (no Key Vault — uses the Purview account's system-assigned MI); alternative kind `AzureDatabricksUnityCatalogAccessToken` when a Key-Vault PAT credential is supplied. Per current Learn, MI / PAT / service-principal are all supported auth methods (the prior "MI not supported" claim was outdated). Gates only when no SQL Warehouse HTTP path is provided. |
+| 7 | Trigger scan run | ✅ (when HTTP path supplied) | `triggerScanRun(ds, scan)` → `PUT …/runs/{runId}` |
 | 8 | Scan-run status | ✅ | `listScanRuns(ds, scan)` (existing) |
 | — | **Persist the registration** (survives reload, no bicep flip) | ✅ | `cosmos-client.metastoreRegistrationsContainer()` — one doc per workspaceUrl, PK `/tenantId`. Unioned into federation by `resolveWorkspaceHostnames()`. |
 
-Zero ❌. The only non-functional state is the honest scan-credential gate (#6), which
-still renders the full UI and names the exact inputs required.
+Zero ❌. The default scan path (MI-first) needs **no Key Vault** — only a running SQL
+Warehouse + its HTTP path, plus a one-time Databricks-admin step (register the Purview
+MI as a Databricks service principal + grant UC SELECT/USE) automated/documented by
+`scripts/csa-loom/setup-purview-databricks-scan.sh`. The only non-functional state is the
+honest gate when no SQL Warehouse HTTP path is supplied. Table/column lineage additionally
+requires the `system.access` schema enabled in Unity Catalog (per Learn prerequisites).
 
 ## Persistence — how it survives a reload
 
@@ -110,6 +114,17 @@ open.
 - `LOOM_PURVIEW_ACCOUNT` — already wired (catalog.bicep). The UAMI needs Data Source
   Administrator + Data Reader on the root collection (classic Data Map metadata policy,
   granted by `scripts/csa-loom/grant-purview-datamap-role.sh`).
+- **Databricks UC scan (MI-first, default)** — the Purview account's system-assigned MI
+  (catalog.bicep gives the account `identity:{type:'SystemAssigned'}`) is used as the scan
+  credential. One-time Databricks-admin setup (register that MI as a Databricks service
+  principal + grant UC SELECT/USE; optionally enable `system.access` for lineage) is
+  automated/documented by `scripts/csa-loom/setup-purview-databricks-scan.sh`. **No Key
+  Vault required.**
+- **Databricks UC scan (PAT alternative, opt-in)** — set
+  `databricksScanKeyVaultEnabled=true` in `catalog.bicep` to provision a Key Vault for the
+  Databricks PAT secret; the module grants the Purview account MI **Key Vault Secrets User**
+  (`4633458b-…`) on it. `MODE=pat KEYVAULT=<name> scripts/csa-loom/setup-purview-databricks-scan.sh`
+  registers the Purview Key Vault connection and prints the credential-creation steps.
 - Cosmos `metastore-registrations` container is created lazily (createIfNotExists) — no
   extra ARM step beyond the account+database.
 
