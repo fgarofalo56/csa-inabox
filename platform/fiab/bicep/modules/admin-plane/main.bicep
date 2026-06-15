@@ -556,6 +556,9 @@ param loomCosmosAccount string = ''
 @description('Loom Cosmos DB account resource group for the control-plane navigator (databases/containers/sprocs). Empty defaults to LOOM_DLZ_RG, where the single-sub DLZ Cosmos account lives.')
 param loomCosmosAccountRg string = ''
 
+@description('Deploy the Console\'s own `loom` Cosmos account IN THE HUB. Required in tenant/dlz-attach topologies where no local DLZ exists to host it (the DLZ landing-zone cosmos.bicep is skipped) — without it the Console points at a non-existent account and all item/config CRUD fails. main.bicep sets this true when NOT useSingleDlz and no BYO Cosmos is supplied. The account name is loomCosmosAccount (same value the Console env binds to), so no env change is needed.')
+param deployConsoleCosmos bool = false
+
 @description('Base URL of the posture-refresh Azure Function (deployed from azure-functions/posture-refresh/deploy/main.bicep). Backs the Govern tab data-owner view on-open refresh. Empty surfaces an honest MessageBar gate; the owner view still computes posture live from Cosmos.')
 param loomPostureFunctionUrl string = ''
 
@@ -1100,6 +1103,27 @@ module keyvault 'keyvault.bicep' = {
     privateEndpointSubnetId: network.outputs.privateEndpointsSubnetId
     privateDnsZoneVaultId: network.outputs.privateDnsZoneIds.keyvault
     workspaceId: monitoring.outputs.lawId
+    complianceTags: complianceTags
+  }
+}
+
+// Console's own `loom` Cosmos — HUB-scoped. Only deployed in tenant/dlz-attach
+// topologies (deployConsoleCosmos), where no local DLZ exists to host the
+// database the Console BFF reads/writes. Without this the Console renders but
+// every item/config CRUD fails against a non-existent account (found on the
+// centralus tenant clean-rebuild). Named loomCosmosAccount so the Console env
+// (LOOM_COSMOS_ACCOUNT/ENDPOINT) binds to it with no change. Same posture as the
+// DLZ cosmos.bicep: PE + disableLocalAuth + UAMI control/data-plane grants.
+module consoleCosmos 'loom-console-cosmos.bicep' = if (deployConsoleCosmos && !empty(loomCosmosAccount)) {
+  name: 'loom-console-cosmos'
+  params: {
+    location: location
+    accountName: loomCosmosAccount
+    privateEndpointSubnetId: network.outputs.privateEndpointsSubnetId
+    privateDnsZoneCosmosId: network.outputs.privateDnsZoneIds.cosmos
+    workspaceId: monitoring.outputs.lawId
+    consolePrincipalId: identity.outputs.uamiConsolePrincipalId
+    skipRoleGrants: skipRoleGrants
     complianceTags: complianceTags
   }
 }
