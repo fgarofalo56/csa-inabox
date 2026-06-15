@@ -67,13 +67,34 @@ const LAW_API = '2023-09-01';
 // matching every other Loom ARM client.
 // ---------------------------------------------------------------------------
 
+// MI-FIRST (per #218/#222 hardening): ManagedIdentityCredential is ALWAYS the
+// first link in the chain on the container path — even when LOOM_UAMI_CLIENT_ID
+// / AZURE_CLIENT_ID is unset (it then targets the system-assigned identity).
+// A bare DefaultAzureCredential is NEVER used here, because on a Container App
+// its inner chain can collapse to dev-only credentials (Environment / AzureCLI /
+// VSCode / PowerShell / azd) and skip Managed Identity entirely — which is the
+// "ChainedTokenCredential authentication failed" the operator hit on the
+// connections / Log Analytics probes.
 const uamiClientId = process.env.LOOM_UAMI_CLIENT_ID || process.env.AZURE_CLIENT_ID;
-const credential: TokenCredential = uamiClientId
-  ? new ChainedTokenCredential(
-      new ManagedIdentityCredential({ clientId: uamiClientId }),
-      new DefaultAzureCredential(),
-    )
-  : new DefaultAzureCredential();
+const credential: TokenCredential = new ChainedTokenCredential(
+  new ManagedIdentityCredential(uamiClientId ? { clientId: uamiClientId } : {}),
+  new DefaultAzureCredential(),
+);
+
+/**
+ * True when an error is an azure-identity token-acquisition failure (the
+ * ChainedTokenCredential / Aggregate / CredentialUnavailable family). Used to
+ * replace the raw dev-credential chain dump with an actionable UAMI message.
+ */
+function isCredentialError(e: any): boolean {
+  const blob = `${e?.name || ''} ${e?.message || String(e || '')}`;
+  return /ChainedTokenCredential|AggregateAuthenticationError|CredentialUnavailable|ManagedIdentityCredential|DefaultAzureCredential|authentication failed|failed to (?:get|retrieve|acquire).*token/i.test(blob);
+}
+
+/** Operator-actionable message for a managed-identity token failure on <resource>. */
+function credentialErrorMessage(resource: string): string {
+  return `The Console managed identity could not get a token for ${resource} — confirm the Console User-Assigned Managed Identity is assigned to this Container App and LOOM_UAMI_CLIENT_ID is set (wired by platform/fiab/bicep/modules/admin-plane/main.bicep), then click Retry.`;
+}
 
 export type AzureConnectionKind = 'adls-gen2' | 'log-analytics';
 export type AzureConnectionStatus = 'connected' | 'role-missing' | 'probe-failed';
@@ -144,8 +165,13 @@ export class AzureConnectionError extends Error {
 // ---------------------------------------------------------------------------
 
 async function armToken(): Promise<string> {
-  const t = await credential.getToken(ARM_SCOPE);
-  if (!t?.token) throw new AzureConnectionError('Failed to acquire ARM token', 401);
+  let t;
+  try {
+    t = await credential.getToken(ARM_SCOPE);
+  } catch (e: any) {
+    throw new AzureConnectionError(credentialErrorMessage('Azure Resource Manager'), 401);
+  }
+  if (!t?.token) throw new AzureConnectionError(credentialErrorMessage('Azure Resource Manager'), 401);
   return t.token;
 }
 
@@ -320,8 +346,13 @@ async function probeAdlsStaging(accountName: string, container: string): Promise
 
 /** Run a trivial KQL `print` against the LAW data plane to confirm reachability. */
 async function probeLawQuery(customerId: string): Promise<void> {
-  const t = await credential.getToken(`${getLogAnalyticsHost()}/.default`);
-  if (!t?.token) throw new AzureConnectionError('Failed to acquire Log Analytics token', 401);
+  let t;
+  try {
+    t = await credential.getToken(`${getLogAnalyticsHost()}/.default`);
+  } catch (e: any) {
+    throw new AzureConnectionError(credentialErrorMessage('the Log Analytics query data plane'), 401);
+  }
+  if (!t?.token) throw new AzureConnectionError(credentialErrorMessage('the Log Analytics query data plane'), 401);
   const url = `${getLogAnalyticsHost()}/v1/workspaces/${customerId}/query`;
   const res = await fetch(url, {
     method: 'POST',
@@ -444,6 +475,9 @@ export async function connectAdls(
   try {
     await probeAdlsStaging(acct.name, container);
   } catch (e: any) {
+    if (isCredentialError(e)) {
+      return upsert({ ...base, status: 'probe-failed', statusDetail: credentialErrorMessage(`the staging storage account "${acct.name}"`) });
+    }
     const status = typeof e?.statusCode === 'number' ? e.statusCode : (typeof e?.status === 'number' ? e.status : 0);
     if (status === 403) {
       return upsert({

@@ -29,6 +29,7 @@ export async function GET() {
       location: a.location,
       kind: a.kind,
       resourceGroup: a.rg,
+      subscriptionId: a.subscriptionId,
     }));
     // Best-effort: surface which account is the env-var/discovery default so
     // the picker can preselect it. Never fail the list if this resolves badly.

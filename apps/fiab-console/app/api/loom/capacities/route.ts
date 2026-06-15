@@ -15,6 +15,8 @@ import {
   listFabricCapacities,
   FabricError,
   fabricHint,
+  fabricCapacityBackendEnabled,
+  FABRIC_CAPACITY_OPT_IN_NOTE,
 } from '@/lib/azure/fabric-client';
 
 export const runtime = 'nodejs';
@@ -25,9 +27,15 @@ export async function GET() {
   if (!session) {
     return NextResponse.json({ ok: false, error: 'unauthenticated' }, { status: 401 });
   }
+  // Azure-native DEFAULT (no-fabric-dependency.md): never call Fabric unless the
+  // capacity backend is explicitly opted in. The workspace-create Capacity step
+  // is optional, so an empty list keeps the Azure-native path silent.
+  if (!fabricCapacityBackendEnabled()) {
+    return NextResponse.json({ ok: true, capacities: [], fabricOptIn: false, note: FABRIC_CAPACITY_OPT_IN_NOTE });
+  }
   try {
     const capacities = await listFabricCapacities();
-    return NextResponse.json({ ok: true, capacities });
+    return NextResponse.json({ ok: true, capacities, fabricOptIn: true });
   } catch (e: any) {
     const status = e instanceof FabricError ? e.status : 502;
     return NextResponse.json(
