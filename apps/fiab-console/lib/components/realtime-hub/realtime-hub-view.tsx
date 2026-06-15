@@ -359,6 +359,9 @@ export function RealTimeHubView() {
       </MessageBar>
 
       {loadErr && (
+        <MessageBar intent="error" className={styles.msgBar}>
+          <MessageBarBody>
+            <MessageBarTitle>Not authorized for Fabric</MessageBarTitle>
             {loadErr.error}
             {loadErr.hint ? <><br />{loadErr.hint}</> : null}
             <br />
