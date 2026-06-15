@@ -16,7 +16,7 @@ import {
 import {
   upsertGovernanceItem, deleteGovernanceItem, docForGovernanceItem, isCatalogDataType,
 } from '@/lib/azure/governance-catalog-index';
-import { autoOnboardToPurview } from '@/lib/azure/purview-autoonboard';
+import { autoOnboardToPurview, offboardFromPurview } from '@/lib/azure/purview-autoonboard';
 import { reconcileThreadEdgesOnDelete, restoreThreadEdgesForItem } from '@/lib/thread/thread-edges';
 import { labelRank } from '@/lib/governance/label-propagation';
 import type { Workspace, WorkspaceItem } from '@/lib/types/workspace';
@@ -379,6 +379,10 @@ export async function deleteOwnedItem(
   // Auto-reconcile lineage — hard-remove every Thread edge touching this item so
   // the Weave lineage graph never shows stale edges (best-effort; no-throw).
   void reconcileThreadEdgesOnDelete(tenantId, current.id, { mode: 'remove' });
+  // Symmetric Purview offboard — soft-delete (status→DELETED, retained) the
+  // item's Atlas entity so the external catalog graph reconciles too (best-
+  // effort; no-throw; no-op when LOOM_PURVIEW_ACCOUNT is unset).
+  void offboardFromPurview(current, tenantId);
   return true;
 }
 
@@ -530,5 +534,8 @@ export async function purgeRecycledItem(itemId: string, tenantId: string): Promi
   void deleteGovernanceItem(current.id);
   // Auto-reconcile lineage — hard-remove the item's edges on permanent purge.
   void reconcileThreadEdgesOnDelete(tenantId, current.id, { mode: 'remove' });
+  // Symmetric Purview offboard — soft-delete the item's Atlas entity so the
+  // external catalog reconciles on permanent purge (best-effort; no-throw).
+  void offboardFromPurview(current, tenantId);
   return true;
 }
