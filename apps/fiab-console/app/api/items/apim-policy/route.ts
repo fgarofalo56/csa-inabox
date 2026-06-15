@@ -22,6 +22,8 @@ function gate() {
   if (g) {
     return NextResponse.json({
       ok: false,
+      code: 'not_configured',
+      missing: g.missing,
       error: `API Management is not configured in this deployment (missing ${g.missing}).`,
       gate: { reason: `Set ${g.missing} on the Console.`, remediation: 'Set LOOM_APIM_NAME + LOOM_APIM_RG + LOOM_SUBSCRIPTION_ID and grant the Console UAMI API Management Service Contributor.' },
     }, { status: 503 });

@@ -22,7 +22,10 @@ export interface ApimGate {
 
 export function apimGate(): ApimGate {
   const apimName = process.env.LOOM_APIM_NAME;
-  const subscriptionId = process.env.LOOM_SUBSCRIPTION_ID;
+  // Mirror apimConfigGate (apim-client.ts): a BYO cross-sub APIM may set only
+  // LOOM_APIM_SUB. Honor it so the page doesn't falsely show "not configured"
+  // while the /api/items/apim-* + /api/apim/* routes work against that sub.
+  const subscriptionId = process.env.LOOM_SUBSCRIPTION_ID || process.env.LOOM_APIM_SUB;
   const resourceGroup = process.env.LOOM_APIM_RG || 'rg-csa-loom-admin-eastus2';
   if (!apimName || !subscriptionId) {
     const missing = [

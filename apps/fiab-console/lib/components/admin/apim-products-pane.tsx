@@ -9,6 +9,7 @@ import { Delete24Regular, Edit24Regular } from '@fluentui/react-icons';
 import { Section, Toolbar } from '@/lib/components/ui/section';
 import { LoomDataTable, type LoomColumn } from '@/lib/components/ui/loom-data-table';
 import { ApimProductSummary } from '@/lib/azure/apim-client';
+import { apimFetchJson } from './apim-pane-fetch';
 
 export function ApimProductsPane() {
   const [products, setProducts] = useState<ApimProductSummary[]>([]);
@@ -17,17 +18,18 @@ export function ApimProductsPane() {
   const [q, setQ] = useState('');
 
   useEffect(() => {
-    fetch('/api/items/apim-product')
-      .then((r) => r.json())
+    // apimFetchJson surfaces a non-JSON body / honest 503 gate as a readable
+    // error instead of crashing the pane with "Unexpected token '<'".
+    apimFetchJson('/api/items/apim-product')
       .then((d) => {
         if (d.ok && Array.isArray(d.products)) {
-          setProducts(d.products);
+          setProducts(d.products as ApimProductSummary[]);
         } else {
           setError(d.error || 'Failed to load products');
         }
         setLoading(false);
       })
-      .catch((e) => { setError(String(e)); setLoading(false); });
+      .catch((e) => { setError(e instanceof Error ? e.message : String(e)); setLoading(false); });
   }, []);
 
   const visibleProducts = useMemo(() => {
