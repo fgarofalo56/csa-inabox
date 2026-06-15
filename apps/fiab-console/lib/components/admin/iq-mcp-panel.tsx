@@ -84,8 +84,15 @@ const useStyles = makeStyles({
     margin: 0,
   },
   toolName: { fontFamily: tokens.fontFamilyMonospace, fontWeight: tokens.fontWeightSemibold },
+  toolCol: { width: '34%', whiteSpace: 'nowrap' },
   authRow: { display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalXXS, marginTop: tokens.spacingVerticalXS },
   label: { fontWeight: tokens.fontWeightSemibold },
+  emptyState: {
+    display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center',
+    gap: tokens.spacingVerticalS, paddingTop: tokens.spacingVerticalXXL, paddingBottom: tokens.spacingVerticalXXL,
+    color: tokens.colorNeutralForeground3, textAlign: 'center',
+  },
+  emptyIcon: { fontSize: '32px', color: tokens.colorNeutralForeground4 },
 });
 
 export function IqMcpPanel() {
@@ -252,17 +259,32 @@ export function IqMcpPanel() {
             <Table size="small" aria-label="Published IQ MCP tools">
               <TableHeader>
                 <TableRow>
-                  <TableHeaderCell>Tool</TableHeaderCell>
+                  <TableHeaderCell className={s.toolCol}>Tool</TableHeaderCell>
                   <TableHeaderCell>Description</TableHeaderCell>
                 </TableRow>
               </TableHeader>
               <TableBody>
-                {doc.tools.map((t) => (
-                  <TableRow key={t.name}>
-                    <TableCell><span className={s.toolName}>{t.name}</span></TableCell>
-                    <TableCell>{t.description}</TableCell>
+                {doc.tools.length === 0 ? (
+                  <TableRow>
+                    <TableCell colSpan={2}>
+                      <div className={s.emptyState}>
+                        <PlugConnected24Regular className={s.emptyIcon} />
+                        <Text weight="semibold">No tools published yet</Text>
+                        <Caption1 className={s.hint}>
+                          The IQ surface is reachable but currently exposes no tools. Tools appear here
+                          once an ontology, semantic model, or live-signal source is registered for this tenant.
+                        </Caption1>
+                      </div>
+                    </TableCell>
                   </TableRow>
-                ))}
+                ) : (
+                  doc.tools.map((t) => (
+                    <TableRow key={t.name}>
+                      <TableCell className={s.toolCol}><span className={s.toolName}>{t.name}</span></TableCell>
+                      <TableCell>{t.description}</TableCell>
+                    </TableRow>
+                  ))
+                )}
               </TableBody>
             </Table>
           </div>
