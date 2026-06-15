@@ -953,6 +953,27 @@ var hub = deployAdminPlane ? {
 // Defaults to {} in dlz-attach when not supplied so the safe-deref below holds.
 var hubPrivateDnsZoneIds = hub.privateDnsZoneIds
 
+// dlz-attach hub coordinates — effective values. The orchestrator (Setup Wizard
+// deploy API) passes the individual hub* params (read from the Cosmos
+// tenant-topology doc); a direct bicep invocation can instead pass the whole
+// `hubCoordinates` object (the tenant deploy's topologyManifest.hub). Each value
+// prefers the explicit individual param and falls back to the hubCoordinates-
+// resolved `hub` var, so BOTH input styles work. Without this, a hubCoordinates-
+// only dlz-attach left adminPlaneHubVnetId empty → VNet peering failed with
+// LinkedInvalidPropertyId (empty remoteVirtualNetwork.id).
+var effHubVnetId = !empty(hubVnetId) ? hubVnetId : hub.hubVnetId
+var effHubLawId = !empty(hubLawId) ? hubLawId : hub.lawId
+var effHubAppInsightsConnectionString = !empty(hubAppInsightsConnectionString) ? hubAppInsightsConnectionString : hub.appInsightsConnectionString
+var effHubPrivateDnsZoneIds = !empty(hubPrivateDnsZoneIdsAttach) ? hubPrivateDnsZoneIdsAttach : hub.privateDnsZoneIds
+var effHubAdxClusterRgName = !empty(hubAdxClusterRgName) ? hubAdxClusterRgName : adminPlaneRgName
+var effHubAdxClusterPrincipalId = !empty(hubAdxClusterPrincipalId) ? hubAdxClusterPrincipalId : hub.adxClusterPrincipalId
+var effHubActivatorPrincipalId = !empty(hubActivatorPrincipalId) ? hubActivatorPrincipalId : hub.activatorPrincipalId
+var effHubConsolePrincipalId = !empty(hubConsolePrincipalId) ? hubConsolePrincipalId : hub.consolePrincipalId
+var effHubConsoleUamiName = !empty(hubConsoleUamiName) ? hubConsoleUamiName : hub.consoleUamiName
+var effHubConsoleUamiAppId = !empty(hubConsoleUamiAppId) ? hubConsoleUamiAppId : hub.consoleUamiAppId
+var effHubConsoleUamiId = !empty(hubConsoleUamiId) ? hubConsoleUamiId : hub.consoleUamiResourceId
+var effHubCatalogEndpoint = !empty(hubCatalogEndpoint) ? hubCatalogEndpoint : hub.catalogEndpoint
+
 // audit-t156 — DLZ inventory for the topologyManifest output. for-expressions
 // must be the direct value of a var (BCP138), so the multi-sub fan-out list is
 // built here and combined with the single-sub case via a plain ternary.
@@ -1173,11 +1194,11 @@ module dlzAttach 'modules/landing-zone/main.bicep' = if (topology == 'dlz-attach
     domainName: attachDomainName
     containerPlatform: containerPlatform
     capacitySku: capacitySku
-    adminPlaneHubVnetId: hubVnetId
-    adminPlaneLawId: hubLawId
-    adminPlaneAppInsightsConnectionString: hubAppInsightsConnectionString
-    adminPlanePrivateDnsZoneIds: hubPrivateDnsZoneIdsAttach
-    adminPlaneAdxClusterRgName: hubAdxClusterRgName
+    adminPlaneHubVnetId: effHubVnetId
+    adminPlaneLawId: effHubLawId
+    adminPlaneAppInsightsConnectionString: effHubAppInsightsConnectionString
+    adminPlanePrivateDnsZoneIds: effHubPrivateDnsZoneIds
+    adminPlaneAdxClusterRgName: effHubAdxClusterRgName
     // dlz-attach: the hub's shared ADX cluster lives in the DMLZ subscription while
     // this DLZ deploys from the DLZ subscription. ARM cannot create the per-domain
     // database via a cross-SUBSCRIPTION nested deployment (the RG-scoped DB
@@ -1188,19 +1209,19 @@ module dlzAttach 'modules/landing-zone/main.bicep' = if (topology == 'dlz-attach
     // needed. So the deploy-time ADX DB is skipped here; every other DLZ backend
     // (ADLS, Synapse, Databricks, Event Hubs, Cosmos) is in-sub and deploys normally.
     adxEnabled: false
-    adxClusterPrincipalId: hubAdxClusterPrincipalId
+    adxClusterPrincipalId: effHubAdxClusterPrincipalId
     adminEntraGroupId: adminEntraGroupId
-    activatorPrincipalId: hubActivatorPrincipalId
-    consolePrincipalId: hubConsolePrincipalId
-    consoleUamiName: hubConsoleUamiName
-    consoleUamiAppId: hubConsoleUamiAppId
-    synapseSqlPrivateDnsZoneId: hubPrivateDnsZoneIdsAttach.?synapseSql ?? ''
-    adfPrivateDnsZoneId: hubPrivateDnsZoneIdsAttach.?adf ?? ''
-    catalogEndpoint: hubCatalogEndpoint
+    activatorPrincipalId: effHubActivatorPrincipalId
+    consolePrincipalId: effHubConsolePrincipalId
+    consoleUamiName: effHubConsoleUamiName
+    consoleUamiAppId: effHubConsoleUamiAppId
+    synapseSqlPrivateDnsZoneId: effHubPrivateDnsZoneIds.?synapseSql ?? ''
+    adfPrivateDnsZoneId: effHubPrivateDnsZoneIds.?adf ?? ''
+    catalogEndpoint: effHubCatalogEndpoint
     databricksUnityCatalogEnabled: databricksUnityCatalogEnabled
     databricksSqlWarehouseEnabled: databricksSqlWarehouseEnabled
     databricksAccountId: databricksAccountId
-    databricksUcScriptUamiId: hubConsoleUamiId
+    databricksUcScriptUamiId: effHubConsoleUamiId
     storageRequireCmk: storageRequireCmk
     powerBiSku: powerBiSku
     complianceTags: complianceTags
@@ -1222,7 +1243,7 @@ module dlzAttachAccessPolicyRbac 'modules/admin-plane/access-policy-rbac.bicep' 
   name: 'dlz-attach-access-policy-rbac'
   scope: resourceGroup('rg-csa-loom-dlz-${attachDomainName}-${location}')
   params: {
-    consolePrincipalId: hubConsolePrincipalId
+    consolePrincipalId: effHubConsolePrincipalId
     storageAccountName: dlzAttach!.outputs.storageAccountName
     skipRoleGrants: skipRoleGrants
   }
