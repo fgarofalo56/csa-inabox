@@ -10,8 +10,16 @@ param location string
 @allowed(['Commercial', 'GCC', 'GCC-High', 'IL5'])
 param boundary string
 
-@description('Allow App Insights telemetry ingestion over the public endpoint. Keep true (default) unless an Azure Monitor Private Link Scope is separately provisioned to carry ingestion privately — Disabling it without an AMPLS silently drops all custom events (copilot.usage etc.) and breaks the /admin Copilot usage panel. Forwarded to monitoring.bicep.')
-param monitorPublicIngestionEnabled bool = true
+// Allow App Insights telemetry ingestion over the public endpoint. Keep true
+// unless an Azure Monitor Private Link Scope is separately provisioned to carry
+// ingestion privately — disabling it without an AMPLS silently drops all custom
+// events (copilot.usage etc.) and breaks the /admin Copilot usage panel.
+// Forwarded to monitoring.bicep. Declared as a `var` (not a `param`) to keep
+// admin-plane/main.bicep under the hard ARM 256-parameter cap — it was
+// default-only (never set in any *.bicepparam), so this is behavior-preserving.
+// A boundary that provisions an AMPLS should set publicIngestionEnabled=false in
+// monitoring.bicep directly.
+var monitorPublicIngestionEnabled = true
 
 @description('AZURE_CLOUD two-value discriminator. When non-empty, overrides the AZURE_CLOUD env var regardless of boundary. Commercial / GCC deployments pass AzureCloud; GCC-High / IL5 deployments pass AzureUSGovernment. When empty (default), AZURE_CLOUD is derived from boundary (GCC-High|IL5 → AzureUSGovernment; otherwise AzureCloud).')
 @allowed(['', 'AzureCloud', 'AzureUSGovernment'])
@@ -260,6 +268,28 @@ param loomPipelineCiEnabled bool = false
 @description('Provision an Azure Files share + managedEnvironments/storages registration so the loom-mcp Container App can persist deployable MCP-server state across revisions. Container Apps only (Commercial / GCC); on AKS boundaries the MCP workload uses an Azure Files PersistentVolumeClaim instead. The Console "Mount persistence" admin control re-mounts the share imperatively.')
 param mcpPersistenceEnabled bool = true
 
+// ── Console runtime (probes, resources, telemetry) — deploy-readiness ─────────
+// Codifies the live #1382 crash-loop fix so a FRESH deploy is healthy on first
+// boot. Implemented as `var` rather than `param` because admin-plane/main.bicep
+// is at the hard ARM 256-parameter cap (a real deploy blocker on origin/main);
+// the probe/CPU/memory right-sizing is threaded via the app-deployments module
+// DEFAULTS (probeTimeoutSeconds=5, consoleCpu=1.0, consoleMemory=2Gi — operator-
+// overridable there for slow sovereign regions). Telemetry is ON by default; the
+// crash itself is eliminated by hardening apps/fiab-console/lib/telemetry/
+// app-insights.ts (live-metrics off + uncaughtException guard + env gate). A
+// per-deploy opt-out param returns once the program-level param-object
+// consolidation frees admin-plane budget.
+//
+// loomConsoleTelemetryEnabled (var, default true): drives the console app's
+// telemetryEnabled field (withholds APPLICATIONINSIGHTS_CONNECTION_STRING when
+// false) + the LOOM_CONSOLE_TELEMETRY_ENABLED env (instrumentation.ts reads it
+// BEFORE importing @azure/monitor-opentelemetry — the historical SIGSEGV path).
+// The Log Analytics workspace + App Insights account are ALWAYS provisioned
+// (monitoring.bicep) and the Console UAMI keeps its Reader/Contributor grants,
+// so /monitor KQL + the Copilot-usage panel (which read the workspace, not the
+// SDK) keep working either way.
+var loomConsoleTelemetryEnabled = true
+
 // Shared internal trust token for the MAF → Console tool-dispatch callback.
 // Deterministic on the admin RG so the value injected into BOTH the Console and
 // the MAF app matches without a round-trip. Internal-network use only.
@@ -436,8 +466,15 @@ param loomGitPatKvPrefix string = 'loom-git-pat'
 @description('F4: Azure App Configuration endpoint for schedule-time pipeline parameter overrides. Empty disables the App Config source. Set to an App Configuration endpoint and grant the Console identity "App Configuration Data Reader" to enable.')
 param loomParamAppConfigEndpoint string = ''
 
-@description('Public base URL of the Console (e.g. https://csa-loom.contoso.ai). Used as the callback target baked into the "Refresh materialized lake view" ADF pipeline so a scheduled ADF run can reach the MLV refresh endpoint behind Front Door. Empty = the refresh route derives the origin from the request (works for editor-driven refreshes); set this to the vanity / Front Door URL to enable ADF-scheduled MLV refreshes.')
-param loomConsoleBaseUrl string = ''
+// Public base URL of the Console (e.g. https://csa-loom.contoso.ai). Used as the
+// callback target baked into the "Refresh materialized lake view" ADF pipeline so
+// a scheduled ADF run can reach the MLV refresh endpoint behind Front Door. Empty
+// = the refresh route derives the origin from the request (works for editor-driven
+// refreshes). Declared as a `var` (not a `param`) to keep admin-plane/main.bicep
+// under the hard ARM 256-parameter cap — it was default-only (never set in any
+// *.bicepparam). A boundary needing ADF-scheduled MLV refreshes against a fixed
+// vanity/Front Door URL can set this value here.
+var loomConsoleBaseUrl = ''
 
 @description('Loom HDInsight cluster linked-service name (backs the four ADF HDInsight pipeline activities — Hive/Spark/MapReduce/Streaming). Empty leaves the editor honest-gated until an Azure HDInsight linked service is registered in the factory.')
 param loomHdinsightLinkedService string = ''
@@ -1778,6 +1815,12 @@ module appDeployments 'app-deployments.bicep' = if (containerPlatform == 'contai
         tier: 'console'
         minReplicas: 2
         maxReplicas: 6
+        // Console-runtime telemetry opt-out (loomConsoleTelemetryEnabled, default
+        // true). When false the App Insights connection string is withheld from
+        // this app AND LOOM_CONSOLE_TELEMETRY_ENABLED below is '' — the OTel SDK
+        // (the historical SIGSEGV path) never loads. The workspace/account still
+        // exist for the read-only /monitor + Copilot-usage panes.
+        telemetryEnabled: loomConsoleTelemetryEnabled
         env: concat(
           [
             { name: 'LOOM_VERSION', value: loomVersion }
@@ -1856,6 +1899,12 @@ module appDeployments 'app-deployments.bicep' = if (containerPlatform == 'contai
             // "Log Analytics Reader" on this workspace + "Monitoring Reader"
             // on the sub for metrics/activity/health/alerts.
             { name: 'LOOM_LOG_ANALYTICS_WORKSPACE_ID', value: monitoring.outputs.lawCustomerId }
+            // Console-runtime OTel gate (deploy-readiness). instrumentation.ts
+            // reads this BEFORE importing @azure/monitor-opentelemetry — when
+            // empty the SDK is never loaded (no SIGSEGV), when 'true' it inits
+            // with live-metrics disabled. Mirrors loomConsoleTelemetryEnabled;
+            // also withholds APPLICATIONINSIGHTS_CONNECTION_STRING when false.
+            { name: 'LOOM_CONSOLE_TELEMETRY_ENABLED', value: loomConsoleTelemetryEnabled ? 'true' : '' }
             { name: 'LOOM_LOG_ANALYTICS_RESOURCE_ID', value: monitoring.outputs.lawId }
             // audit-T29 — release-environment (Apollo/Shuttle parity). Optional
             // Azure Deployment Environments project; empty = honest infra-gate in

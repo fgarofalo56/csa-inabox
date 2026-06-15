@@ -750,6 +750,21 @@ jobs:
             bash scripts/csa-loom/bootstrap-weave-pg.sh \
             || echo "::warning::Weave PG bootstrap incomplete — ensure the deploy SP is a PG Entra admin on $WEAVE_PG_SERVER, then re-run."
 
+      - name: Verify console runtime (probes / resources / telemetry)
+        if: always()
+        continue-on-error: true
+        run: |
+          # Deploy-readiness guard for the "Console runtime" domain (#1382):
+          # asserts loom-console came up Healthy, right-sized (>=1cpu/2Gi), with
+          # relaxed probe timeouts (>=5s) and consistent telemetry wiring
+          # (conn-string present iff LOOM_CONSOLE_TELEMETRY_ENABLED=true).
+          # Non-fatal (continue-on-error) so it reports drift without blocking the
+          # rest of bootstrap; flip to a hard gate once stable across boundaries.
+          chmod +x scripts/csa-loom/verify-console-runtime.sh
+          ADMIN_RG="$ADMIN_RG" CONSOLE_APP="${CONSOLE_UAMI_NAME:-loom-console}" \
+            bash scripts/csa-loom/verify-console-runtime.sh \
+            || echo "::warning::console-runtime verification reported drift — see log (probes/resources/telemetry)."
+
       - name: Summary
         if: always()
         run: |

@@ -55,6 +55,26 @@ param apps array
 @description('Compliance tags')
 param complianceTags object
 
+// ── Container probe + resource right-sizing (codifies the live #1382 fix) ─────
+// A fresh Next.js cold start under load can take several seconds to answer
+// /api/health. ACA `timeoutSeconds` DEFAULTS TO 1 — too aggressive for the
+// Console — so a slow boot fails the Liveness probe, Envoy returns
+// "connection refused", and the revision crash-loops. These params relax the
+// probe budget and add a Startup grace window (ACA only auto-injects default
+// probes when NONE are defined; this module defines Liveness+Readiness, so a
+// Startup probe must be added explicitly for slow-boot apps).
+@description('Per-probe response timeout (seconds) for the Liveness/Readiness/Startup HTTP probes. ACA defaults this to 1s, which crash-loops a slow Next.js cold start; 5s is the WAF-aligned default. Raise for slow sovereign regions.')
+param probeTimeoutSeconds int = 5
+
+@description('Liveness-probe initial delay (seconds) — the boot grace before the Liveness probe first fires. Paired with the Startup probe so a slow first boot is never killed prematurely.')
+param livenessInitialDelaySeconds int = 10
+
+@description('Console-tier CPU cores. The Console (Next.js SSR + OTel) OOMs at the 0.5cpu/1Gi service default; 1.0cpu/2Gi is the WAF-aligned right-size. ACA Consumption requires a valid cpu:memory pair (1.0 → 2Gi).')
+param consoleCpu string = '1.0'
+
+@description('Console-tier memory. Must form a valid ACA Consumption pair with consoleCpu (1.0cpu → 2Gi).')
+param consoleMemory string = '2Gi'
+
 @batchSize(1)
 resource caeApps 'Microsoft.App/containerApps@2025-02-02-preview' = [for app in apps: if (containerPlatform == 'containerApps') {
   name: app.name
@@ -93,7 +113,17 @@ resource caeApps 'Microsoft.App/containerApps@2025-02-02-preview' = [for app in 
           image: '${acrLoginServer}/${app.image}'
           env: concat(
             [
-              { name: 'APPLICATIONINSIGHTS_CONNECTION_STRING', value: appInsightsConnectionString }
+              // Telemetry destination. Honors an optional per-app `telemetryEnabled`
+              // field (default true) so an app can be deployed with the OTel SDK
+              // dark — used by the Console opt-out (loomConsoleTelemetryEnabled):
+              // when false the connection string is withheld AND
+              // LOOM_CONSOLE_TELEMETRY_ENABLED is '' so instrumentation.ts never
+              // imports @azure/monitor-opentelemetry (the historical SIGSEGV path).
+              // The Log Analytics workspace + App Insights account still exist and
+              // the Console UAMI keeps its Reader/Contributor grants, so /monitor
+              // KQL + the Copilot-usage panel (which read the LAW, not the SDK)
+              // keep working regardless.
+              { name: 'APPLICATIONINSIGHTS_CONNECTION_STRING', value: (contains(app, 'telemetryEnabled') && !app.telemetryEnabled) ? '' : appInsightsConnectionString }
               { name: 'CSA_LOOM_BOUNDARY', value: boundary }
               { name: 'AZURE_CLIENT_ID', value: app.uamiClientId }
               { name: 'KEYVAULT_URI', value: keyVaultUri }
@@ -123,10 +153,15 @@ resource caeApps 'Microsoft.App/containerApps@2025-02-02-preview' = [for app in 
             ],
             contains(app, 'env') ? app.env : []
           )
-          resources: contains(app, 'resources') ? app.resources : {
-            cpu: json('0.5')
-            memory: '1Gi'
-          }
+          // Tier-aware sizing. The Console (tier=='console') runs Next.js SSR +
+          // the OpenTelemetry SDK and OOMs at the 0.5cpu/1Gi service default —
+          // give it consoleCpu/consoleMemory (1.0/2Gi). Every other app keeps
+          // the lean default. An explicit per-app `resources` always wins.
+          resources: contains(app, 'resources')
+            ? app.resources
+            : ((contains(app, 'tier') && app.tier == 'console')
+                ? { cpu: json(consoleCpu), memory: consoleMemory }
+                : { cpu: json('0.5'), memory: '1Gi' })
           probes: [
             {
               type: 'Liveness'
@@ -136,6 +171,10 @@ resource caeApps 'Microsoft.App/containerApps@2025-02-02-preview' = [for app in 
               }
               periodSeconds: 30
               failureThreshold: 3
+              // Boot grace + a 5s answer budget so a slow cold start isn't
+              // killed before it can serve /api/health (live #1382 fix).
+              initialDelaySeconds: livenessInitialDelaySeconds
+              timeoutSeconds: probeTimeoutSeconds
             }
             {
               type: 'Readiness'
@@ -146,6 +185,23 @@ resource caeApps 'Microsoft.App/containerApps@2025-02-02-preview' = [for app in 
               periodSeconds: 10
               failureThreshold: 3
               initialDelaySeconds: 5
+              timeoutSeconds: probeTimeoutSeconds
+            }
+            {
+              // Startup probe — ACA does NOT auto-inject default probes once any
+              // probe is defined, so a slow Next.js boot needs an explicit
+              // startup grace window (up to failureThreshold*periodSeconds = 60s)
+              // before Liveness/Readiness engage. Without it the Console
+              // crash-loops on cold start under load (#1382).
+              type: 'Startup'
+              httpGet: {
+                path: contains(app, 'healthPath') ? app.healthPath : '/health'
+                port: contains(app, 'ingressPort') ? app.ingressPort : 8080
+              }
+              periodSeconds: 2
+              failureThreshold: 30
+              initialDelaySeconds: 0
+              timeoutSeconds: probeTimeoutSeconds
             }
           ]
           // Optional Azure Files volume mounts. Each entry:
