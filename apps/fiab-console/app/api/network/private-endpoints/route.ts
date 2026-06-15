@@ -15,7 +15,7 @@ import { NextResponse } from 'next/server';
 import { getSession } from '@/lib/auth/session';
 import {
   listPrivateEndpoints, listPrivateDnsZones, listVirtualNetworks, listNetworkSecurityGroups,
-  buildHostsBlock,
+  buildHostsBlock, bindLoomServices,
   NetworkDiscoveryError, type PrivateDnsZoneInfo, type VNetInfo, type NsgInfo,
 } from '@/lib/azure/network-discovery';
 
@@ -38,6 +38,11 @@ export async function GET() {
     try { dnsZones = await listPrivateDnsZones(); } catch { /* keep PE-derived hosts */ }
     try { vnets = await listVirtualNetworks(); } catch { /* topology degrades gracefully */ }
     try { nsgs = await listNetworkSecurityGroups(); } catch { /* topology omits NSG nodes */ }
+
+    // Join each PE to the Loom logical service / owning domain it fronts, via
+    // Azure Resource Graph (Reader-only). Best-effort: stamps connectedResourceType
+    // + loomDomain on each endpoint; an unreadable ARG leaves the base labels.
+    await bindLoomServices(endpoints);
 
     const hostsBlock = buildHostsBlock(endpoints, dnsZones);
     // Union of zone names from PE records + the discovered private DNS zones.
