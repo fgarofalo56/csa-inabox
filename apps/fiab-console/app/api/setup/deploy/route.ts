@@ -6,6 +6,11 @@ import {
   HUB_COORDINATE_KEYS,
   type TenantTopology,
 } from '@/lib/setup/tenant-topology';
+import {
+  serviceChoicesToParams,
+  bicepParamsToCliTokens,
+  type ServiceChoices,
+} from '@/lib/setup/service-choices-to-params';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -66,6 +71,15 @@ interface SetupConfig {
   /** Multi-sub: parallel arrays the bicep `[for]` loop consumes. */
   dlzSubscriptionIds?: string[];
   dlzDomainNames?: string[];
+  /**
+   * Scan-and-choose: the operator's per-service pick (use-existing / new /
+   * disable) from the wizard's "Services" step. Translated into
+   * `loom<Svc>Enabled` + `existing<Svc>*` bicep overrides (forwarded to the
+   * orchestrator + copy-paste command) and the canonical EXISTING_* env triples
+   * for post-deploy RBAC + env wiring (grant-navigator-rbac / patch-navigator-env).
+   * Azure-native services only (no-fabric-dependency).
+   */
+  serviceChoices?: ServiceChoices;
 }
 
 const ALLOWED_TOPOLOGIES = new Set(['single-sub', 'tenant', 'dlz-attach']);
@@ -102,7 +116,7 @@ export async function POST(req: NextRequest) {
   // deployed every deploy MUST be 'dlz-attach' — it is impossible to stamp a
   // second Console from the UI or the API. The bicep enforces the same at the
   // template layer (the adminPlane module is gated on topology=='tenant').
-  const topology: 'tenant' | 'dlz-attach' = body.topology ?? 'tenant';
+  const topology: 'tenant' | 'dlz-attach' = (body.topology as 'tenant' | 'dlz-attach' | undefined) ?? 'tenant';
   if (topology !== 'tenant' && topology !== 'dlz-attach') {
     return NextResponse.json(
       { ok: false, error: `Unknown topology '${body.topology}'. Must be 'tenant' or 'dlz-attach'.` },
@@ -242,6 +256,18 @@ export async function POST(req: NextRequest) {
   }
   const topologyPayload = { topology, ...(topology === 'dlz-attach' ? { targetSubscriptionId: body.targetSubscriptionId, ...hubCoords } : {}) };
 
+  // ── Scan-and-choose → deploy-time wiring ─────────────────────────────────
+  // Translate the wizard's per-service picks into (1) bicep `-p` overrides
+  // (loom<Svc>Enabled + existing<Svc>*) the orchestrator/copy-paste deploy
+  // applies, and (2) the canonical EXISTING_* env triples the post-deploy
+  // RBAC + env scripts consume for use-existing reuse. Pure translation over
+  // the shared SETUP_SCAN_SERVICES catalog — only main.bicep-declared params
+  // are ever emitted (loom-no-freeform-config). Empty when the wizard sent no
+  // serviceChoices (the deploy still works on the boundary defaults).
+  const { bicepParams: serviceBicepParams, existingEnv: serviceExistingEnv } =
+    serviceChoicesToParams(body.serviceChoices);
+  const serviceParamTokens = bicepParamsToCliTokens(serviceBicepParams);
+
   // ── Tier 1: the deployed Setup Orchestrator runs the real deployment ───────
   // When LOOM_SETUP_ORCHESTRATOR_URL is wired (the orchestrator Container App is
   // deployed by setup-orchestrator.bicep), POST the captured config to it. The
@@ -263,7 +289,15 @@ export async function POST(req: NextRequest) {
       const orchRes = await fetch(`${orchUrl}/api/setup/deploy`, {
         method: 'POST',
         headers,
-        body: JSON.stringify({ ...body, ...topologyPayload, region }),
+        body: JSON.stringify({
+          ...body,
+          ...topologyPayload,
+          region,
+          // Scan-and-choose overrides for the orchestrator's az deployment +
+          // its post-deploy RBAC/env wiring of any reused services.
+          serviceParamOverrides: serviceBicepParams,
+          serviceExistingEnv,
+        }),
       });
       const oj: any = await orchRes.json().catch(() => ({}));
       // The orchestrator's DeployResponse is snake_case (deployment_id / stream_url).
@@ -430,14 +464,28 @@ export async function POST(req: NextRequest) {
           `az login${isGov ? ' --tenant <your-gov-tenant>' : ''}`,
           `az account set --subscription ${body.subscriptionId}`,
           ...(isGov ? ['az cloud set --name AzureUSGovernment'] : []),
+          // Scan-and-choose: export the EXISTING_* triples for any reused
+          // services FIRST — the boundary .bicepparam's readEnvironmentVariable()
+          // picks them up at deploy time, and the post-deploy RBAC/env scripts
+          // consume the same vars.
+          ...Object.entries(serviceExistingEnv)
+            .filter(([, v]) => !!v)
+            .map(([k, v]) => `export ${k}='${v}'`),
           `az deployment sub create \\`,
           `  --subscription ${body.subscriptionId} \\`,
           `  -l ${region} \\`,
           `  -f platform/fiab/bicep/main.bicep \\`,
           `  -p ${paramFile} \\`,
           `  -p topology=tenant boundary=${body.boundary} deploymentMode=${body.mode} \\`,
+          // Scan-and-choose: loom<Svc>Enabled + existing<Svc>* overrides for the
+          // operator's per-service picks (provision-new / use-existing / disable).
+          ...(serviceParamTokens.length ? [`  -p ${serviceParamTokens.join(' ')} \\`] : []),
           dlzParamLine,
           `bash scripts/csa-loom/post-deploy-bootstrap.sh`,
+          // Grant Console UAMI RBAC + patch its env for any reused services.
+          ...(Object.keys(serviceExistingEnv).some((k) => !!serviceExistingEnv[k])
+            ? ['bash scripts/csa-loom/grant-navigator-rbac.sh', 'bash scripts/csa-loom/patch-navigator-env.sh']
+            : []),
         ];
 
   return NextResponse.json(

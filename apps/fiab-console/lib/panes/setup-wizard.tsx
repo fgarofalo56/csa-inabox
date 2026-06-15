@@ -84,6 +84,8 @@ import {
   type AzureRegion,
   type RegionBoundary,
 } from '@/lib/azure/azure-regions';
+import { type ScanServiceResult, type ServiceMode } from '@/lib/setup/scan-services';
+import { type ServiceChoices, type ServiceChoice } from '@/lib/setup/service-choices-to-params';
 
 type Boundary = 'Commercial' | 'GCC' | 'GCC-High' | 'IL5';
 type Mode = 'single-sub' | 'multi-sub';
@@ -96,6 +98,7 @@ type Step =
   | 'subscription'
   | 'domain'
   | 'capacity'
+  | 'services'
   | 'review'
   | 'deploying'
   | 'done';
@@ -131,6 +134,16 @@ interface WizardState {
   existingDlzs?: Array<{ subscriptionId: string; subscriptionName: string; domainName: string; region?: string; rg: string }>;
   /** Multi-sub Route B: which existing DLZ(s) to wire into admin plane (checked state) */
   selectedExistingDlzs?: Array<{ subscriptionId: string; domainName: string }>;
+  /**
+   * Scan-and-choose: the cross-subscription service scan loaded from
+   * /api/setup/scan-services (undefined = not loaded yet, [] = scanned, none found).
+   */
+  serviceScan?: ScanServiceResult[];
+  /**
+   * Scan-and-choose: the operator's per-service pick. Initialised from each
+   * service's recommendation; threaded into the deploy POST as serviceChoices.
+   */
+  serviceChoices?: ServiceChoices;
   deployProgress?: number;
   deployStage?: string;
   deployError?: string;
@@ -154,6 +167,7 @@ const RAIL_STEPS: { key: Step; label: string; hint: string }[] = [
   { key: 'subscription', label: 'Subscription & region', hint: 'Deploy target' },
   { key: 'domain', label: 'Domain name', hint: 'Landing-zone name' },
   { key: 'capacity', label: 'Capacity sizing', hint: 'Compute equivalence' },
+  { key: 'services', label: 'Services', hint: 'Scan & choose backends' },
   { key: 'review', label: 'Review & deploy', hint: 'Confirm and launch' },
 ];
 
@@ -393,6 +407,29 @@ const useStyles = makeStyles({
   optionTitleRow: { display: 'flex', alignItems: 'center', gap: tokens.spacingHorizontalS, flexWrap: 'wrap' },
   // service equivalence chips (capacity step)
   serviceRow: { display: 'flex', gap: tokens.spacingHorizontalS, flexWrap: 'wrap', marginTop: tokens.spacingVerticalS },
+  serviceChoiceList: { display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalM, marginTop: tokens.spacingVerticalS },
+  serviceChoiceCard: {
+    display: 'flex',
+    flexDirection: 'column',
+    gap: tokens.spacingVerticalS,
+    padding: tokens.spacingVerticalM,
+    borderRadius: tokens.borderRadiusLarge,
+    border: `1px solid ${tokens.colorNeutralStroke2}`,
+    backgroundColor: tokens.colorNeutralBackground1,
+  },
+  serviceChoiceHead: {
+    display: 'flex',
+    alignItems: 'baseline',
+    justifyContent: 'space-between',
+    gap: tokens.spacingHorizontalS,
+    flexWrap: 'wrap',
+  },
+  serviceChoiceModes: {
+    display: 'flex',
+    alignItems: 'center',
+    gap: tokens.spacingHorizontalS,
+    flexWrap: 'wrap',
+  },
   serviceChip: {
     display: 'flex',
     alignItems: 'center',
@@ -475,6 +512,10 @@ export function SetupWizardPane() {
   // Multi-sub Route B: existing-DLZ discovery (Azure Resource Graph).
   const [existingLoading, setExistingLoading] = useState(false);
   const [existingError, setExistingError] = useState<string | undefined>();
+
+  // Scan-and-choose: cross-subscription service scan (Azure Resource Graph).
+  const [scanLoading, setScanLoading] = useState(false);
+  const [scanError, setScanError] = useState<string | undefined>();
 
   const bicepPreview = useMemo(() => renderBicepParam(state), [state]);
 
@@ -590,13 +631,58 @@ export function SetupWizardPane() {
       void loadSubscriptions();
     }
   }, [state.step, isWireNew, subs.length, subsLoading, subsError, loadSubscriptions]);
-
   // Discover existing DLZs when reaching the subscription step in wire-existing.
   useEffect(() => {
     if (state.step === 'subscription' && isWireExisting && state.existingDlzs === undefined && !existingLoading && !existingError) {
       void loadExistingDlzs();
     }
   }, [state.step, isWireExisting, state.existingDlzs, existingLoading, existingError, loadExistingDlzs]);
+
+  // Scan-and-choose: discover existing Azure backends across every visible
+  // subscription (Resource Graph), then seed each service's choice from its
+  // recommendation (everything-on opt-out). Real scan only — no mocks.
+  const loadServiceScan = useCallback(async (deploySub?: string) => {
+    setScanLoading(true);
+    setScanError(undefined);
+    try {
+      const qs = deploySub ? `?deploySub=${encodeURIComponent(deploySub)}` : '';
+      const res = await fetch(`/api/setup/scan-services${qs}`);
+      const j = await res.json().catch(() => ({}));
+      if (!res.ok || !j.ok) {
+        setScanError(j.error || j.hint || `Could not scan subscriptions for existing services (HTTP ${res.status}).`);
+        setState((s) => ({ ...s, serviceScan: [] }));
+        return;
+      }
+      const services = (j.services || []) as ScanServiceResult[];
+      // Seed choices from each service's recommendation (use-existing → first
+      // recommended candidate; new/disable → mode only). The operator overrides
+      // any of these on the step before deploying.
+      const choices: ServiceChoices = {};
+      for (const svc of services) {
+        const c = svc.recommendedCandidate;
+        choices[svc.key] =
+          svc.recommendation === 'use-existing' && c
+            ? { mode: 'use-existing', name: c.name, rg: c.rg, sub: c.sub }
+            : { mode: svc.recommendation };
+      }
+      setState((s) => ({ ...s, serviceScan: services, serviceChoices: choices }));
+    } catch (e) {
+      setScanError(e instanceof Error ? e.message : String(e));
+      setState((s) => ({ ...s, serviceScan: [] }));
+    } finally {
+      setScanLoading(false);
+    }
+  }, []);
+
+  // Run the service scan once when the operator reaches the Services step (only
+  // the provisioning flows — wire-existing skips it). deploySub biases the
+  // recommendation toward a same-sub candidate.
+  useEffect(() => {
+    if (state.step === 'services' && state.serviceScan === undefined && !scanLoading && !scanError) {
+      const deploySub = config?.adminSubscriptionId || state.subscriptionId;
+      void loadServiceScan(deploySub);
+    }
+  }, [state.step, state.serviceScan, scanLoading, scanError, config, state.subscriptionId, loadServiceScan]);
 
   // Load regions on entering the subscription step, and refresh whenever the
   // chosen target subscription changes (so ARM lists that sub's enabled regions).
@@ -719,8 +805,11 @@ export function SetupWizardPane() {
       const adminSubId = config?.adminSubscriptionId || state.subscriptionId;
       const adminSubName = config?.adminSubscriptionName || state.subscriptionName;
       const spokeIds = state.dlzSubscriptionIds || [];
+      // Drop the (potentially large) raw scan from the wire — only the chosen
+      // serviceChoices are needed by /api/setup/deploy.
+      const { serviceScan: _scan, ...stateForWire } = state;
       const payload = {
-        ...state,
+        ...stateForWire,
         subscriptionId: isSingleSub ? adminSubId : adminSubId,
         subscriptionName: isSingleSub ? adminSubName : adminSubName,
         // Multi-sub: emit parallel arrays the bicep loop consumes. One domain per
@@ -816,6 +905,10 @@ export function SetupWizardPane() {
         return !!(config?.adminSubscriptionId || state.subscriptionId) && !!state.location;
       case 'domain': return !!state.domainName;
       case 'capacity': return !!state.capacitySku;
+      case 'services':
+        // Complete once the scan resolved (choices seeded from recommendations)
+        // or the operator made any pick. Never blocks deploy (opt-out defaults).
+        return !!state.serviceChoices && Object.keys(state.serviceChoices).length > 0;
       case 'review': return state.step === 'done';
       default: return false;
     }
@@ -1273,8 +1366,27 @@ export function SetupWizardPane() {
             {/* Guided F-SKU → Azure-native compute equivalence (CU / Spark vCores /
                 Databricks / ADX / Synapse SQL + relative cost), grounded in Learn. */}
             <CapacityEquivalencePanel sku={state.capacitySku} />
-            <Footer onBack={() => go('domain')} nextDisabled={!state.capacitySku} onNext={() => go('review')} />
+            <Footer onBack={() => go('domain')} nextDisabled={!state.capacitySku} onNext={() => go('services')} />
           </>
+        )}
+
+        {state.step === 'services' && (
+          <ServicesStep
+            styles={styles}
+            scan={state.serviceScan}
+            choices={state.serviceChoices}
+            loading={scanLoading}
+            error={scanError}
+            onRescan={() => {
+              setScanError(undefined);
+              setState((s) => ({ ...s, serviceScan: undefined, serviceChoices: undefined }));
+            }}
+            onChange={(key, choice) =>
+              setState((s) => ({ ...s, serviceChoices: { ...(s.serviceChoices || {}), [key]: choice } }))
+            }
+            onBack={() => go('capacity')}
+            onNext={() => go('review')}
+          />
         )}
 
         {state.step === 'review' && (
@@ -1349,6 +1461,13 @@ export function SetupWizardPane() {
               <SummaryCell label="Region" value={state.location} />
               {!isWireExisting && <SummaryCell label="Domain" value={state.domainName} />}
               {!isWireExisting && <SummaryCell label="Capacity" value={state.capacitySku} />}
+              {!isWireExisting && state.serviceChoices && Object.keys(state.serviceChoices).length > 0 && (
+                <SummaryCell
+                  label="Services"
+                  value={summariseServiceChoices(state.serviceChoices)}
+                  sub={serviceChoiceDetail(state.serviceChoices)}
+                />
+              )}
             </div>
 
             <Divider />
@@ -1361,7 +1480,7 @@ export function SetupWizardPane() {
             )}
 
             <Footer
-              onBack={() => go(isWireExisting ? 'subscription' : 'capacity')}
+              onBack={() => go(isWireExisting ? 'subscription' : 'services')}
               onNext={deploy}
               nextLabel={isWireExisting ? 'Wire DLZ(s)' : 'Deploy'}
               nextIcon={<Send24Regular />}
@@ -1515,6 +1634,175 @@ function SummaryCell({ label, value, sub }: { label: string; value?: string; sub
       <Body1Strong>{value ?? '—'}</Body1Strong>
       {sub && <Caption1 className={styles.summaryLabel}>{sub}</Caption1>}
     </div>
+  );
+}
+
+/** Human label for a service-choice mode. */
+function modeLabel(m: ServiceMode): string {
+  return m === 'use-existing' ? 'Use existing' : m === 'new' ? 'Provision new' : 'Disable';
+}
+
+/** Review summary: "9 new · 2 reuse". */
+function summariseServiceChoices(choices: ServiceChoices): string {
+  const vals = Object.values(choices);
+  const n = vals.filter((c) => c.mode === 'new').length;
+  const e = vals.filter((c) => c.mode === 'use-existing').length;
+  const d = vals.filter((c) => c.mode === 'disable').length;
+  const parts: string[] = [];
+  if (n) parts.push(`${n} new`);
+  if (e) parts.push(`${e} reuse`);
+  if (d) parts.push(`${d} disabled`);
+  return parts.join(' · ') || '—';
+}
+
+/** Review summary detail line: the reused resources, if any. */
+function serviceChoiceDetail(choices: ServiceChoices): string | undefined {
+  const reused = Object.entries(choices)
+    .filter(([, c]) => c.mode === 'use-existing' && c.name)
+    .map(([k, c]) => `${k}:${c.name}`);
+  return reused.length ? `reuse ${reused.join(', ')}` : undefined;
+}
+
+/**
+ * The scan-and-choose "Services" step. Renders one card per discovered Azure
+ * backend with a 3-way choice (use existing / provision new / disable) plus a
+ * candidate dropdown when reusing. Choices are seeded from each service's
+ * recommendation (everything-on opt-out). Real scan only (no-vaporware) — when
+ * the scan is degraded, an honest MessageBar shows and the operator can still
+ * continue (services default to provision-new).
+ */
+function ServicesStep(props: {
+  styles: ReturnType<typeof useStyles>;
+  scan?: ScanServiceResult[];
+  choices?: ServiceChoices;
+  loading: boolean;
+  error?: string;
+  onRescan: () => void;
+  onChange: (key: string, choice: ServiceChoice) => void;
+  onBack: () => void;
+  onNext: () => void;
+}) {
+  const { styles, scan, choices, loading, error, onRescan, onChange, onBack, onNext } = props;
+  return (
+    <>
+      <div className={styles.stepHeader}>
+        <Subtitle2>Scan &amp; choose Azure backends</Subtitle2>
+        <Body1>
+          Loom scanned every subscription your identity can see for the Azure-native backends it
+          wires. For each, <b>use an existing</b> resource, <b>provision a new one</b>, or{' '}
+          <b>disable</b> it. Defaults are everything-on (★ recommended) — change only what you don't
+          want. Every backend is Azure-native; nothing here needs Microsoft Fabric.
+        </Body1>
+      </div>
+
+      {loading && (
+        <div className={styles.inlineLoad}>
+          <Spinner size="tiny" />
+          <Body1>Scanning subscriptions…</Body1>
+        </div>
+      )}
+
+      {error && (
+        <MessageBar intent="warning">
+          <MessageBarBody>
+            <MessageBarTitle>Scan incomplete</MessageBarTitle>
+            <div style={{ whiteSpace: 'pre-wrap', marginTop: tokens.spacingVerticalXS }}>
+              {error} Services below default to provisioning new — you can still continue.
+            </div>
+          </MessageBarBody>
+        </MessageBar>
+      )}
+
+      {!loading && scan && scan.length > 0 && (
+        <div className={styles.serviceChoiceList}>
+          {scan.map((svc) => {
+            const choice: ServiceChoice = choices?.[svc.key] || { mode: svc.recommendation };
+            const modes: ServiceMode[] = ['use-existing', 'new', 'disable'];
+            return (
+              <div key={svc.key} className={styles.serviceChoiceCard}>
+                <div className={styles.serviceChoiceHead}>
+                  <Body1Strong>{svc.label}</Body1Strong>
+                  <Caption1 className={styles.summaryLabel}>
+                    {svc.candidates.length > 0
+                      ? `${svc.candidates.length} existing found`
+                      : 'none found in your subscriptions'}
+                  </Caption1>
+                </div>
+                <div className={styles.serviceChoiceModes}>
+                  {modes.map((m) => {
+                    if (m === 'use-existing' && svc.candidates.length === 0) return null;
+                    if (m === 'disable' && !svc.canDisable) return null;
+                    const active = choice.mode === m;
+                    const isRec = svc.recommendation === m;
+                    return (
+                      <Button
+                        key={m}
+                        size="small"
+                        appearance={active ? 'primary' : 'secondary'}
+                        onClick={() => {
+                          if (m === 'use-existing') {
+                            const c = svc.recommendedCandidate || svc.candidates[0];
+                            onChange(svc.key, { mode: 'use-existing', name: c?.name, rg: c?.rg, sub: c?.sub });
+                          } else {
+                            onChange(svc.key, { mode: m });
+                          }
+                        }}
+                      >
+                        {modeLabel(m)}
+                        {isRec ? ' ★' : ''}
+                      </Button>
+                    );
+                  })}
+                  <Badge appearance="tint" color="brand" size="small">
+                    Recommended: {modeLabel(svc.recommendation)}
+                  </Badge>
+                </div>
+                {choice.mode === 'use-existing' && svc.candidates.length > 0 && (
+                  <Field label="Existing resource">
+                    <Dropdown
+                      value={choice.name || ''}
+                      selectedOptions={choice.name ? [`${choice.sub}/${choice.rg}/${choice.name}`] : []}
+                      onOptionSelect={(_, d) => {
+                        const cand = svc.candidates.find(
+                          (c) => `${c.sub}/${c.rg}/${c.name}` === d.optionValue,
+                        );
+                        if (cand)
+                          onChange(svc.key, { mode: 'use-existing', name: cand.name, rg: cand.rg, sub: cand.sub });
+                      }}
+                    >
+                      {svc.candidates.map((c) => (
+                        <Option key={`${c.sub}/${c.rg}/${c.name}`} value={`${c.sub}/${c.rg}/${c.name}`} text={c.name}>
+                          {c.name} — rg={c.rg} · sub {c.sub.slice(0, 8)}…{c.region ? ` · ${c.region}` : ''}
+                        </Option>
+                      ))}
+                    </Dropdown>
+                  </Field>
+                )}
+              </div>
+            );
+          })}
+        </div>
+      )}
+
+      {!loading && scan && scan.length === 0 && !error && (
+        <MessageBar intent="info">
+          <MessageBarBody>
+            No scannable services were returned. Every backend will be provisioned new by default.
+          </MessageBarBody>
+        </MessageBar>
+      )}
+
+      <Footer
+        onBack={onBack}
+        onNext={onNext}
+        nextLabel="Next"
+        extra={
+          <Button appearance="subtle" icon={<ArrowClockwise20Regular />} onClick={onRescan} disabled={loading}>
+            Re-scan
+          </Button>
+        }
+      />
+    </>
   );
 }
 
