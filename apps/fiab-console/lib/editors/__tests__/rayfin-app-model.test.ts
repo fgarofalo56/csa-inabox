@@ -3,6 +3,7 @@ import {
   buildBindingDax, buildComponentDax, gbKey, gbParse,
   generateAppConfig, validateAppDefinition, scaffoldAppDefinition,
   emptyPage, emptyComponent, isDataComponent,
+  buildTemplatePage, scaffoldFromTemplate, appendTemplatePage, WIZARD_TEMPLATES,
   type RayfinAppDefinition, type RayfinComponent,
 } from '../rayfin-app-model';
 
@@ -153,5 +154,62 @@ describe('validateAppDefinition', () => {
   it('a fully-specified single-page app has no errors', () => {
     const def = scaffoldAppDefinition('M', 'Sales', gbKey('Date', 'Year'));
     expect(validateAppDefinition(def).some((i) => i.level === 'error')).toBe(false);
+  });
+});
+
+describe('wizard templates', () => {
+  it('exposes the four catalog templates', () => {
+    expect(WIZARD_TEMPLATES.map((t) => t.id)).toEqual(['overview', 'kpi-dashboard', 'detail-drill', 'entity-form']);
+  });
+
+  it('kpi-dashboard builds one metric tile per measure', () => {
+    const page = buildTemplatePage({ template: 'kpi-dashboard', model: 'M', measures: ['Revenue', 'Cost', 'Margin'] });
+    expect(page.components).toHaveLength(3);
+    expect(page.components.every((c) => c.kind === 'metric')).toBe(true);
+    expect(page.components.map((c) => c.title)).toEqual(['Revenue', 'Cost', 'Margin']);
+    // each metric binds exactly its own measure, single row
+    expect(page.components[0].binding).toEqual({ measures: ['Revenue'], groupBy: [], topN: 1 });
+  });
+
+  it('detail-drill builds a chart over a detail table', () => {
+    const page = buildTemplatePage({ template: 'detail-drill', model: 'M', measure: 'Sales', groupBy: gbKey('Geo', 'Region') });
+    expect(page.components.map((c) => c.kind)).toEqual(['chart', 'table']);
+    expect(page.components[0].title).toBe('Sales by Region');
+    expect(page.components[1].binding?.groupBy).toEqual([gbKey('Geo', 'Region')]);
+  });
+
+  it('entity-form builds a heading + a form bound to the entity', () => {
+    const page = buildTemplatePage({ template: 'entity-form', model: 'M', entity: 'Order' });
+    expect(page.components.map((c) => c.kind)).toEqual(['text', 'form']);
+    const form = page.components.find((c) => c.kind === 'form');
+    expect(form?.entity).toBe('Order');
+    expect(page.name).toBe('Order form');
+  });
+
+  it('overview template delegates to the canonical scaffold', () => {
+    const page = buildTemplatePage({ template: 'overview', model: 'M', measure: 'Sales', groupBy: gbKey('Date', 'Year') });
+    expect(page.name).toBe('Overview');
+    expect(page.components.map((c) => c.kind)).toEqual(['metric', 'table', 'chart']);
+  });
+
+  it('scaffoldFromTemplate wraps a single page into an app definition', () => {
+    const def = scaffoldFromTemplate({ template: 'kpi-dashboard', model: 'SalesModel', measures: ['A'] });
+    expect(def.model).toBe('SalesModel');
+    expect(def.pages).toHaveLength(1);
+  });
+
+  it('appendTemplatePage adds to an existing app and never mutates it', () => {
+    const first = scaffoldFromTemplate({ template: 'kpi-dashboard', model: 'M', measures: ['A'] });
+    const next = appendTemplatePage(first, { template: 'entity-form', model: 'M', entity: 'Order' });
+    expect(next.pages).toHaveLength(2);
+    expect(first.pages).toHaveLength(1); // immutability
+    // appended pages keep unique ids → a multi-page app still validates clean
+    expect(validateAppDefinition(next).some((i) => i.level === 'error')).toBe(false);
+  });
+
+  it('appendTemplatePage creates the app when none exists', () => {
+    const def = appendTemplatePage(undefined, { template: 'overview', model: 'M', measure: 'Sales', groupBy: gbKey('Date', 'Year') });
+    expect(def.model).toBe('M');
+    expect(def.pages).toHaveLength(1);
   });
 });

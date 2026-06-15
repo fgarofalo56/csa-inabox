@@ -15,12 +15,19 @@
  *      Power BI dependency, per no-fabric-dependency.md). Loom runs this app
  *      definition for real via /api/items/rayfin-app/<id>/render (live AAS DAX).
  *
- * Decision (audit-T145): the visual builder lives **standalone in the Rayfin /
- * Fabric-Apps surface**, not under Weave/Atelier. There is no `workshop-app`
- * (Atelier) item type on the Azure-native build, and the real Fabric-Apps
- * `--template dataapp` flow is itself a code-first + Copilot codegen flow — so a
- * Loom-hosted visual builder with a real Azure runtime is the honest home. See
- * docs/fiab/parity/rayfin-app.md for the full rationale.
+ * Decision (audit-T145 / audit-T84): the visual builder lives **standalone in
+ * the Rayfin / Fabric-Apps surface**, NOT under Weave/Atelier. Rayfin mirrors
+ * the real Fabric-Apps `--template dataapp` flow — itself a code-first + Copilot
+ * codegen flow with no WYSIWYG Fabric canvas — so a Loom-hosted visual builder
+ * with a real Azure runtime is the honest home. The two app-building tracks are
+ * **distinct and aligned, not forked** (see docs/fiab/parity/rayfin-app.md):
+ *   • Rayfin (`rayfin-app`, this surface) — read-oriented apps over a semantic
+ *     model; write-back forms run in the *deployed* Rayfin app (AAS is read-only).
+ *   • Atelier (`workshop-app`) — the Palantir-Workshop-equivalent that does
+ *     **real in-Loom CRUD** over the ontology's bound Synapse warehouse
+ *     (app/api/items/workshop-app/[id]/run-action). For write-back inside Loom,
+ *     use Atelier; a future Atelier surface should reuse the helpers here rather
+ *     than fork them.
  */
 
 // ---------------------------------------------------------------------------
@@ -324,6 +331,114 @@ export function scaffoldAppDefinition(model: string, firstMeasure?: string, firs
     page.components.push(chart);
   }
   return { model, pages: [page] };
+}
+
+// ---------------------------------------------------------------------------
+// Wizard templates (audit-T145) — the low-code builder ships several page
+// wizards, not just the Overview scaffold. Each template builds ONE page that
+// the editor appends to the current app definition (so an operator can stack a
+// KPI dashboard, a drill page, and an entity form into a multi-page app).
+// ---------------------------------------------------------------------------
+
+export type WizardTemplateId = 'overview' | 'kpi-dashboard' | 'detail-drill' | 'entity-form';
+
+export interface WizardTemplate {
+  id: WizardTemplateId;
+  name: string;
+  description: string;
+  /** Which inputs this template collects from the operator. */
+  needs: { measure?: boolean; measures?: boolean; groupBy?: boolean; entity?: boolean };
+}
+
+export const WIZARD_TEMPLATES: readonly WizardTemplate[] = [
+  { id: 'overview', name: 'Overview page', description: 'A metric, a details table, and a chart from one measure + category.', needs: { measure: true, groupBy: true } },
+  { id: 'kpi-dashboard', name: 'KPI dashboard', description: 'One metric tile per selected measure — an at-a-glance scorecard.', needs: { measures: true } },
+  { id: 'detail-drill', name: 'Detail + drill', description: 'A category chart over a detail table for drill-down analysis.', needs: { measure: true, groupBy: true } },
+  { id: 'entity-form', name: 'Entity form', description: 'A heading + a create/edit form bound to one of your entities.', needs: { entity: true } },
+];
+
+/** Inputs a wizard collects; only the fields a template `needs` are read. */
+export interface WizardInput {
+  template: WizardTemplateId;
+  model: string;
+  /** Single measure (overview / detail-drill). */
+  measure?: string;
+  /** Multiple measures (kpi-dashboard). */
+  measures?: string[];
+  /** Category group-by key "table|column" (overview / detail-drill). */
+  groupBy?: string;
+  /** Entity name (entity-form). */
+  entity?: string;
+  /** Optional explicit page name. */
+  pageName?: string;
+}
+
+/**
+ * Build a single page from a wizard template. Pure + deterministic so the editor
+ * can append it and the unit tests can assert its shape. Every data component is
+ * a typed `RayfinComponent` with a real binding — no freeform JSON
+ * (loom-no-freeform-config).
+ */
+export function buildTemplatePage(input: WizardInput): RayfinPage {
+  switch (input.template) {
+    case 'kpi-dashboard': {
+      const page = emptyPage(input.pageName || 'KPI dashboard');
+      const measures = (input.measures && input.measures.length ? input.measures : (input.measure ? [input.measure] : []));
+      page.components = measures.map((m) => {
+        const c = emptyComponent('metric');
+        c.title = m;
+        c.binding = { measures: [m], groupBy: [], topN: 1 };
+        return c;
+      });
+      return page;
+    }
+    case 'detail-drill': {
+      const page = emptyPage(input.pageName || 'Details');
+      const measures = input.measure ? [input.measure] : [];
+      const groupBy = input.groupBy ? [input.groupBy] : [];
+      const chart = emptyComponent('chart');
+      chart.title = input.measure && input.groupBy ? `${input.measure} by ${gbParse(input.groupBy).column}` : 'Chart';
+      chart.binding = { measures, groupBy, topN: 20 };
+      const table = emptyComponent('table');
+      table.title = 'Detail rows';
+      table.binding = { measures, groupBy, topN: 100 };
+      page.components = [chart, table];
+      return page;
+    }
+    case 'entity-form': {
+      const page = emptyPage(input.pageName || (input.entity ? `${input.entity} form` : 'Form'));
+      const heading = emptyComponent('text');
+      heading.title = 'Heading';
+      heading.text = input.entity ? `Create or edit a ${input.entity} record.` : 'Describe this form…';
+      const form = emptyComponent('form', input.entity || '');
+      form.title = input.entity ? `${input.entity} form` : 'Form';
+      page.components = [heading, form];
+      return page;
+    }
+    case 'overview':
+    default:
+      // Reuse the canonical Overview scaffold's first page.
+      return scaffoldAppDefinition(input.model, input.measure, input.groupBy).pages[0];
+  }
+}
+
+/** Build a brand-new single-page app definition from a wizard template. */
+export function scaffoldFromTemplate(input: WizardInput): RayfinAppDefinition {
+  return { model: input.model, pages: [buildTemplatePage(input)] };
+}
+
+/**
+ * Append a template page to an existing app definition (or create the app when
+ * none exists). The model is taken from the bound model so every data component
+ * resolves against the same semantic model.
+ */
+export function appendTemplatePage(
+  existing: RayfinAppDefinition | undefined,
+  input: WizardInput,
+): RayfinAppDefinition {
+  const page = buildTemplatePage(input);
+  const pages = existing && Array.isArray(existing.pages) ? existing.pages : [];
+  return { model: input.model, pages: [...pages, page] };
 }
 
 export interface AppDefIssue { level: 'error' | 'warn'; message: string }

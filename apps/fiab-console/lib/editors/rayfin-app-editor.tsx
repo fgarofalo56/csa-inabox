@@ -14,15 +14,18 @@
  *     read view, and emit a typed model-bound connector.
  *  3. App builder (audit-T145) — a Loom-native LOW-CODE VISUAL BUILDER: pages →
  *     components (table / metric / chart / form / text) → data bindings to the
- *     bound model. A create WIZARD scaffolds a starter app; "Run app preview"
- *     executes every component's read view live over XMLA (real runtime via
+ *     bound model. Several WIZARD templates (Overview / KPI dashboard / Detail +
+ *     drill / Entity form) scaffold pages; "Run app preview" executes every
+ *     component's read view live over XMLA (real runtime via
  *     /api/items/rayfin-app/<id>/render); Loom emits a typed rayfin/app.config.ts.
  *
- * Decision (audit-T145): the visual builder lives **standalone in this
- * Rayfin/Fabric-Apps surface**, not under Weave/Atelier — the Azure-native build
- * has no separate Atelier item type, and the real Fabric-Apps app-building flow
- * is itself code-first + Copilot codegen, so a Loom-hosted visual builder with a
- * real Azure runtime is the honest home. See docs/fiab/parity/rayfin-app.md.
+ * Decision (audit-T145 / audit-T84): the visual builder lives **standalone in
+ * this Rayfin/Fabric-Apps surface**, not under Weave/Atelier. Rayfin and Atelier
+ * are two distinct, aligned tracks: Rayfin (`rayfin-app`) is the Fabric-Apps
+ * `--template dataapp` equivalent (read-oriented; write-back forms run in the
+ * deployed app), while Atelier (`workshop-app`) is the Palantir-Workshop
+ * equivalent that does real in-Loom CRUD over the ontology's Synapse warehouse.
+ * For write-back inside Loom use Atelier. See docs/fiab/parity/rayfin-app.md.
  *
  * Everything renders with an honest Fluent MessageBar when AAS is unset — never
  * an empty picker (no-vaporware.md).
@@ -48,12 +51,13 @@ import {
 } from '@fluentui/react-icons';
 import { MonacoTextarea } from '@/lib/components/editor/monaco-textarea';
 import {
-  DEFAULT_SPEC, DEFAULT_BINDING, COMPONENT_KINDS,
+  DEFAULT_SPEC, DEFAULT_BINDING, COMPONENT_KINDS, WIZARD_TEMPLATES,
   gbParse, gbKey, buildBindingDax, buildComponentDax,
   generateModel, generateConnector, generateCommands, generateAppConfig,
-  emptyPage, emptyComponent, scaffoldAppDefinition, validateAppDefinition, isDataComponent,
+  emptyPage, emptyComponent, buildTemplatePage, validateAppDefinition, isDataComponent,
   type FieldType, type RayfinEntity, type ModelBinding, type RayfinSpec,
   type RayfinAppDefinition, type RayfinPage, type RayfinComponent, type ComponentKind,
+  type WizardTemplateId, type WizardInput,
 } from './rayfin-app-model';
 
 // --- model-binding API shapes (from /model-objects, /preview) ---
@@ -193,8 +197,11 @@ export function RayfinAppEditor({ id }: { item?: unknown; id: string }) {
   const [rendering, setRendering] = useState(false);
   const [renderErr, setRenderErr] = useState<string | null>(null);
   const [wizardOpen, setWizardOpen] = useState(false);
+  const [wizTemplate, setWizTemplate] = useState<WizardTemplateId>('overview');
   const [wizMeasure, setWizMeasure] = useState('');
   const [wizGroupBy, setWizGroupBy] = useState('');
+  const [wizMeasures, setWizMeasures] = useState<string[]>([]);
+  const [wizEntity, setWizEntity] = useState('');
 
   const binding = spec.binding ?? DEFAULT_BINDING;
   const appPages: RayfinPage[] = spec.app?.pages ?? [];
@@ -338,16 +345,42 @@ export function RayfinAppEditor({ id }: { item?: unknown; id: string }) {
   const toggleGroupBy = (key: string) =>
     patchBinding({ groupBy: binding.groupBy.includes(key) ? binding.groupBy.filter((g) => g !== key) : [...binding.groupBy, key] });
 
-  const scaffold = useCallback((measure: string, groupByKey: string) => {
-    const def = scaffoldAppDefinition(binding.model, measure || undefined, groupByKey || undefined);
-    setSpec((prev) => ({ ...prev, app: def }));
-    setActivePageId(def.pages[0]?.id || null);
+  const openWizard = useCallback(() => {
+    setWizTemplate('overview'); setWizMeasure(''); setWizGroupBy(''); setWizMeasures([]);
+    setWizEntity(spec.entities[0]?.name || '');
+    setWizardOpen(true);
+  }, [spec.entities]);
+
+  const runWizard = useCallback(() => {
+    const input: WizardInput = {
+      template: wizTemplate,
+      model: binding.model,
+      measure: wizMeasure || undefined,
+      measures: wizMeasures.length ? wizMeasures : undefined,
+      groupBy: wizGroupBy || undefined,
+      entity: wizEntity || undefined,
+    };
+    const page = buildTemplatePage(input);
+    setSpec((prev) => ({
+      ...prev,
+      app: { model: prev.binding?.model || '', pages: [...(prev.app?.pages ?? []), page] },
+    }));
+    setActivePageId(page.id);
     setWizardOpen(false);
-  }, [binding.model]);
+  }, [wizTemplate, binding.model, wizMeasure, wizMeasures, wizGroupBy, wizEntity]);
 
   if (loading) return <div className={s.root}><Spinner label="Loading Rayfin app…" /></div>;
 
   const activePage = appPages.find((p) => p.id === activePageId) || null;
+
+  // Wizard readiness — which inputs the chosen template requires.
+  const wizTpl = WIZARD_TEMPLATES.find((t) => t.id === wizTemplate) ?? WIZARD_TEMPLATES[0];
+  const entitiesEmpty = spec.entities.length === 0;
+  const wizNeedsObjects = !!(wizTpl.needs.measure || wizTpl.needs.measures || wizTpl.needs.groupBy);
+  const wizInputValid = wizTpl.needs.entity ? !!wizEntity
+    : wizTpl.needs.measures ? wizMeasures.length > 0
+    : !!wizMeasure;
+  const wizardReady = !!binding.model && wizInputValid && (!wizNeedsObjects || !!objects);
 
   return (
     <div className={s.root}>
@@ -566,7 +599,7 @@ export function RayfinAppEditor({ id }: { item?: unknown; id: string }) {
                     <TableBody>
                       {preview.rows.length === 0 ? (
                         <TableRow>
-                          <TableCell><Caption1>The bound model returned no rows for this selection.</Caption1></TableCell>
+                          <TableCell colSpan={preview.columns.length || 1}><Caption1>The bound model returned no rows for this selection.</Caption1></TableCell>
                         </TableRow>
                       ) : preview.rows.slice(0, 200).map((r, ri) => (
                         <TableRow key={ri}>{r.map((v, ci) => <TableCell key={ci}>{fmtCell(v)}</TableCell>)}</TableRow>
@@ -611,47 +644,93 @@ export function RayfinAppEditor({ id }: { item?: unknown; id: string }) {
           rendering={rendering}
           renderErr={renderErr}
           runAppPreview={runAppPreview}
-          openWizard={() => { setWizMeasure(''); setWizGroupBy(''); setWizardOpen(true); }}
+          openWizard={openWizard}
         />
       )}
 
-      {/* Create-app wizard */}
+      {/* Add-page wizard (template-driven) */}
       <Dialog open={wizardOpen} onOpenChange={(_, d) => setWizardOpen(d.open)}>
         <DialogSurface>
           <DialogBody>
-            <DialogTitle>Scaffold an app from your model</DialogTitle>
+            <DialogTitle>Add a page from a template</DialogTitle>
             <DialogContent>
               <div className={s.wizForm}>
-                {!binding.model ? (
-                  <MessageBar intent="warning"><MessageBarBody>
-                    <MessageBarTitle>No model bound</MessageBarTitle>
-                    Bind a semantic model in the Model binding tab first — the wizard scaffolds pages from its measures and columns.
-                  </MessageBarBody></MessageBar>
-                ) : !objects ? (
-                  <Spinner size="tiny" label="Introspecting model…" />
-                ) : (
-                  <>
-                    <Body1>Pick a measure and a category to scaffold an Overview page with a metric, a details table, and a chart.</Body1>
-                    <Field label="Metric (measure)">
-                      <Dropdown placeholder="Select a measure" value={wizMeasure} selectedOptions={wizMeasure ? [wizMeasure] : []}
-                        onOptionSelect={(_, d) => setWizMeasure(d.optionValue || '')}>
-                        {objects.measures.map((m) => <Option key={m.name} value={m.name}>{m.name}</Option>)}
-                      </Dropdown>
-                    </Field>
-                    <Field label="Category (group by)">
-                      <Dropdown placeholder="Select a column" value={wizGroupBy ? gbParse(wizGroupBy).column : ''} selectedOptions={wizGroupBy ? [wizGroupBy] : []}
-                        onOptionSelect={(_, d) => setWizGroupBy(d.optionValue || '')}>
-                        {objects.columns.map((c) => { const k = gbKey(c.table, c.name); return <Option key={k} value={k}>{`${c.table}[${c.name}]`}</Option>; })}
-                      </Dropdown>
-                    </Field>
-                  </>
-                )}
+                {(() => {
+                  const tpl = wizTpl;
+                  const needsObjects = wizNeedsObjects;
+                  return (
+                    <>
+                      <Field label="Page template">
+                        <Dropdown value={tpl.name} selectedOptions={[wizTemplate]}
+                          onOptionSelect={(_, d) => setWizTemplate((d.optionValue as WizardTemplateId) || 'overview')}>
+                          {WIZARD_TEMPLATES.map((t) => <Option key={t.id} value={t.id} text={t.name}>{t.name}</Option>)}
+                        </Dropdown>
+                      </Field>
+                      <Caption1>{tpl.description}</Caption1>
+
+                      {!binding.model ? (
+                        <MessageBar intent="warning"><MessageBarBody>
+                          <MessageBarTitle>No model bound</MessageBarTitle>
+                          Bind a semantic model in the Model binding tab first — page templates scaffold components from its measures and columns.
+                        </MessageBarBody></MessageBar>
+                      ) : needsObjects && !objects ? (
+                        <Spinner size="tiny" label="Introspecting model…" />
+                      ) : (
+                        <>
+                          {tpl.needs.measure ? (
+                            <Field label="Metric (measure)">
+                              <Dropdown placeholder="Select a measure" value={wizMeasure} selectedOptions={wizMeasure ? [wizMeasure] : []}
+                                onOptionSelect={(_, d) => setWizMeasure(d.optionValue || '')}>
+                                {(objects?.measures ?? []).map((m) => <Option key={m.name} value={m.name}>{m.name}</Option>)}
+                              </Dropdown>
+                            </Field>
+                          ) : null}
+
+                          {tpl.needs.measures ? (
+                            <Field label={`Measures (${wizMeasures.length} selected) — one metric tile each`}>
+                              {(objects?.measures ?? []).length === 0 ? <Caption1>No measures on this model.</Caption1> : (
+                                <div className={s.pickList}>
+                                  {(objects?.measures ?? []).map((m) => (
+                                    <Checkbox key={m.name} label={m.name} checked={wizMeasures.includes(m.name)}
+                                      onChange={() => setWizMeasures((prev) => prev.includes(m.name) ? prev.filter((x) => x !== m.name) : [...prev, m.name])} />
+                                  ))}
+                                </div>
+                              )}
+                            </Field>
+                          ) : null}
+
+                          {tpl.needs.groupBy ? (
+                            <Field label={wizTemplate === 'overview' ? 'Category (group by)' : 'Category (drill axis)'}>
+                              <Dropdown placeholder="Select a column" value={wizGroupBy ? gbParse(wizGroupBy).column : ''} selectedOptions={wizGroupBy ? [wizGroupBy] : []}
+                                onOptionSelect={(_, d) => setWizGroupBy(d.optionValue || '')}>
+                                {(objects?.columns ?? []).map((c) => { const k = gbKey(c.table, c.name); return <Option key={k} value={k}>{`${c.table}[${c.name}]`}</Option>; })}
+                              </Dropdown>
+                            </Field>
+                          ) : null}
+
+                          {tpl.needs.entity ? (
+                            <Field label="Entity">
+                              {entitiesEmpty ? (
+                                <MessageBar intent="info"><MessageBarBody>Define an entity in the Backend definition tab first.</MessageBarBody></MessageBar>
+                              ) : (
+                                <Dropdown placeholder="Select an entity" value={wizEntity} selectedOptions={wizEntity ? [wizEntity] : []}
+                                  onOptionSelect={(_, d) => setWizEntity(d.optionValue || '')}>
+                                  {spec.entities.map((e) => <Option key={e.name} value={e.name}>{e.name}</Option>)}
+                                </Dropdown>
+                              )}
+                            </Field>
+                          ) : null}
+                        </>
+                      )}
+                    </>
+                  );
+                })()}
               </div>
             </DialogContent>
             <DialogActions>
               <DialogTrigger disableButtonEnhancement><Button appearance="secondary">Cancel</Button></DialogTrigger>
-              <Button appearance="primary" icon={<Wand20Regular />} disabled={!binding.model || !objects}
-                onClick={() => scaffold(wizMeasure, wizGroupBy)}>Scaffold app</Button>
+              <Button appearance="primary" icon={<Wand20Regular />} disabled={!wizardReady}
+                onClick={runWizard}>Add page</Button>
             </DialogActions>
           </DialogBody>
         </DialogSurface>
@@ -760,7 +839,7 @@ function AppBuilder(props: AppBuilderProps) {
         </div>
 
         <Divider />
-        <Button appearance="outline" icon={<Wand20Regular />} onClick={openWizard}>Scaffold from model…</Button>
+        <Button appearance="outline" icon={<Wand20Regular />} onClick={openWizard}>Add page from template…</Button>
       </div>
 
       {/* Canvas + runtime + codegen */}
@@ -825,7 +904,8 @@ function MetricView({ s, rendered }: { s: ReturnType<typeof useStyles>; rendered
   // First numeric value in the row, else first cell.
   let value: unknown = row.find((v) => typeof v === 'number');
   if (value === undefined) value = row[0];
-  return <div className={s.metricValue}>{fmtCell(value)}</div>;
+  const display = fmtCell(value);
+  return <div className={s.metricValue}>{display === '' ? '—' : display}</div>;
 }
 
 function ChartView({ s, rendered }: { s: ReturnType<typeof useStyles>; rendered: RenderedComponent }) {
@@ -862,7 +942,7 @@ function TableView({ s, rendered }: { s: ReturnType<typeof useStyles>; rendered:
         <TableHeader><TableRow>{cols.map((c) => <TableHeaderCell key={c}>{c}</TableHeaderCell>)}</TableRow></TableHeader>
         <TableBody>
           {rows.length === 0 ? (
-            <TableRow><TableCell><Caption1>No rows.</Caption1></TableCell></TableRow>
+            <TableRow><TableCell colSpan={cols.length || 1}><Caption1>No rows.</Caption1></TableCell></TableRow>
           ) : rows.slice(0, 100).map((r, ri) => (
             <TableRow key={ri}>{r.map((v, ci) => <TableCell key={ci}>{fmtCell(v)}</TableCell>)}</TableRow>
           ))}
