@@ -41,18 +41,34 @@ Azure REST/data-plane — no mock data.
 
 Zero ❌, zero stub banners.
 
-## Visual app builder (audit-T145)
+## Visual app builder (audit-T145 / audit-T84)
 
 **Decision — standalone, in the Rayfin/Fabric-Apps surface (not Weave/Atelier).**
 The task asked whether the low-code visual builder should live under Weave/Atelier
-(audit-T51) or standalone. On the Azure-native build there is **no separate
-Atelier (`workshop-app`) item type**, and the real Fabric-Apps app-building flow
+(audit-T51) or standalone. The real Fabric-Apps app-building flow
 (`npm create @microsoft/rayfin --template dataapp`) is itself a **code-first +
 GitHub Copilot codegen** flow — there is no WYSIWYG Fabric canvas to mirror. So a
 Loom-hosted visual builder with a **real Azure runtime** is the honest home, and
-it lives standalone inside this Rayfin editor's **App builder** tab. (If an
-Atelier surface is later added, it should reuse `rayfin-app-model.ts` +
-`rayfin-model-binding.ts` rather than fork them.)
+it lives standalone inside this Rayfin editor's **App builder** tab.
+
+**Rayfin and Atelier are two distinct, aligned tracks — not forked** (see
+`docs/fiab/parity/workshop-app.md`):
+
+- **Rayfin (`rayfin-app`, this surface)** — the Fabric-Apps `--template dataapp`
+  equivalent. Read-oriented apps over an **Azure Analysis Services** semantic
+  model; a `form` component's write-back runs in the *deployed* Rayfin app (AAS
+  is a read-only analytical engine).
+- **Atelier (`workshop-app`)** — the Palantir-Workshop equivalent that does
+  **real in-Loom CRUD** over the ontology's bound **Synapse** warehouse
+  (`app/api/items/workshop-app/[id]/run-action`, parameterised
+  INSERT/UPDATE/DELETE). For write-back *inside Loom*, use Atelier.
+
+The `workshop-app` Atelier item type **does** exist on the Azure-native build;
+the two surfaces share the design intent that a future Atelier visual layer
+should reuse `rayfin-app-model.ts` + `rayfin-model-binding.ts` rather than fork
+them. (An earlier revision of this doc and the editor comments said "no separate
+Atelier item type" — that was scoped to the Rayfin read track and is corrected
+here.)
 
 The builder is a genuine low-code surface — pages → components → data bindings —
 with a real backend: the **app definition** persists on the Cosmos item
@@ -70,14 +86,20 @@ live preview proves each binding against the real Azure Analysis Services model.
 | Per-component live preview                                 | ✅ built | POST `/api/items/rayfin-app/preview` → `executeDax()` real XMLA |
 | **Run app preview (runtime)** — render every component live | ✅ built | POST `/api/items/rayfin-app/[id]/render` → per-component `buildReadViewDax()` + `previewReadView()` real XMLA |
 | Metric / chart / table render of live rows                 | ✅ built | runtime rows → Fluent metric card / CSS bar chart / data grid |
-| Form component bound to a Rayfin entity                    | ✅ built | entity dropdown; write-back runs in the **deployed** app (honest — no fake POST in Loom) |
-| Scaffold wizard (model → measure + category → starter app) | ✅ built | `scaffoldAppDefinition()` builds an Overview page (metric + table + chart) |
+| Form component bound to a Rayfin entity                    | ✅ built | entity dropdown; write-back runs in the **deployed** app (honest — no fake POST in Loom); for in-Loom CRUD use Atelier (`workshop-app`) |
+| **Page wizards** (Overview / KPI dashboard / Detail+drill / Entity form) | ✅ built | `WIZARD_TEMPLATES` + `buildTemplatePage()` append a typed page to `state.spec.app` |
 | `rayfin/app.config.ts` codegen                             | ✅ built | `generateAppConfig()` emits typed pages → components → DAX |
 | App definition validation                                  | ✅ built | `validateAppDefinition()` (duplicate ids, unbound model, empty chart) |
 | AAS not configured                                         | ⚠️ honest gate | render route returns `{ ok:false, gate }` 503; builder shows MessageBar naming `LOOM_AAS_SERVER_NAME` |
 
-Tests: `lib/editors/__tests__/rayfin-app-model.test.ts` (21 cases — DAX, codegen,
-scaffold, validation). Zero ❌, zero stub banners.
+Tests: `lib/editors/__tests__/rayfin-app-model.test.ts` (29 cases — DAX, codegen,
+scaffold, validation, wizard templates). Zero ❌, zero stub banners.
+
+> **audit-T84 (Semantic-model-bound Fabric App builder) — done.** Build 2026 #28
+> ("full web apps backed by semantic models") is satisfied by the Model binding
+> tab + the App builder runtime: real AAS model binding, introspection, DAX read
+> views, a live multi-component runtime, and page wizards — all on the
+> Azure-native default with `LOOM_DEFAULT_FABRIC_WORKSPACE` unset.
 
 ## No-Fabric-dependency
 

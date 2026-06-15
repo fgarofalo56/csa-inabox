@@ -24,13 +24,13 @@ The **Model binding** tab binds the app to a real semantic model so it renders l
 The **App builder** tab is a Loom-native low-code surface for assembling a real app over the bound model:
 
 - **Pages** you add / rename / delete, each holding **components** chosen from a palette — **Table**, **Metric**, **Chart**, **Form**, **Text**.
-- **Data components** (table/metric/chart) bind to the model's measures + group-by; a **Scaffold wizard** turns a chosen measure + category into a starter Overview page.
+- **Data components** (table/metric/chart) bind to the model's measures + group-by; **page-template wizards** (Overview, KPI dashboard, Detail + drill, Entity form) turn a chosen measure / measures / category / entity into a typed page appended to the app.
 - **Run app preview** is a real **runtime**: it POSTs the app definition to `/api/items/rayfin-app/<id>/render`, which executes every component's read view live over XMLA and renders the rows as a metric card, CSS bar chart, or data grid — the actual data the deployed app would show.
 - Loom emits a typed **`rayfin/app.config.ts`** (pages → components → DAX) the deployed Rayfin app's UI layer consumes.
 
 The whole app definition persists on the Cosmos item (`state.spec.app`).
 
-**Standalone, not Atelier.** This visual builder lives in the Rayfin/Fabric-Apps surface itself rather than under Weave/Atelier: the **Rayfin** Azure-native build has no separate Atelier item type, and the real Fabric-Apps `--template dataapp` flow is code-first + GitHub Copilot codegen (not a WYSIWYG canvas), so a Loom-hosted visual builder with a real Azure runtime is the honest home. Write-back forms run in the **deployed** app (the Rayfin runtime on the dev machine), not inside Loom — Loom previews their layout and reads live data for the data components.
+**Standalone, not Atelier.** This visual builder lives in the Rayfin/Fabric-Apps surface itself rather than under Weave/Atelier: the real Fabric-Apps `--template dataapp` flow is code-first + GitHub Copilot codegen (not a WYSIWYG canvas), so a Loom-hosted visual builder with a real Azure runtime is the honest home for the **Rayfin** read track. Write-back forms run in the **deployed** app (the Rayfin runtime on the dev machine), not inside Loom — Loom previews their layout and reads live data for the data components. For write-back *inside Loom*, use the **Atelier (`workshop-app`)** track (see below), which exists as its own item type.
 
 > **Scope clarification (Atelier vs Rayfin).** The sentence above is scoped to
 > the **Rayfin / Fabric-Apps** parity track. It does **not** mean Loom has no
