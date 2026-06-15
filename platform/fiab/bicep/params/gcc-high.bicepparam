@@ -157,6 +157,7 @@ param aiFoundryEnabled = true
 // Microsoft Learn region matrix. Wires LOOM_CONTENT_SAFETY_ENDPOINT.
 param contentSafetyEnabled = true
 param apimEnabled = true
+param hubFirewallEnabled = true
 param aiSearchEnabled = false
 param adxEnabled = true
 // Setup Orchestrator — enabled so the Console UAMI is granted Contributor on the

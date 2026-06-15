@@ -133,6 +133,7 @@ discover() {
 SERVICES=(
   "aisearch|AI Search|Microsoft.Search/searchServices||existingAiSearchService|existingAiSearchRg|existingAiSearchSub|EXISTING_AI_SEARCH_SERVICE|EXISTING_AI_SEARCH_RG|EXISTING_AI_SEARCH_SUB|aiSearchEnabled"
   "apim|API Management|Microsoft.ApiManagement/service||existingApimName|existingApimRg|existingApimSub|EXISTING_APIM|EXISTING_APIM_RG|EXISTING_APIM_SUB|apimEnabled"
+  "maps|Azure Maps|Microsoft.Maps/accounts||loomAzureMapsAccount|||EXISTING_AZURE_MAPS_ACCOUNT|EXISTING_AZURE_MAPS_RG|EXISTING_AZURE_MAPS_SUB|loomMapsEnabled"
   "adx|ADX / Kusto|Microsoft.Kusto/clusters||existingAdxClusterName|existingAdxClusterRg|existingAdxClusterSub|EXISTING_KUSTO_CLUSTER|EXISTING_KUSTO_RG|EXISTING_KUSTO_SUB|adxEnabled"
   "foundry|AI Foundry / AOAI|Microsoft.CognitiveServices/accounts|kind =~ 'AIServices'|existingFoundryAccountName|existingFoundryRg|existingFoundrySub|EXISTING_AOAI|EXISTING_AOAI_RG|EXISTING_AOAI_SUB|aiFoundryEnabled"
   "purview|Microsoft Purview|Microsoft.Purview/accounts||existingPurviewAccount|existingPurviewRg|existingPurviewSub|EXISTING_PURVIEW|EXISTING_PURVIEW_RG|EXISTING_PURVIEW_SUB|purviewEnabled"
@@ -214,10 +215,12 @@ for row in "${SERVICES[@]}"; do
     [[ -z "${HOST[$key]}" ]] && echo "  (could not resolve workspaceUrl for $n — set EXISTING_DATABRICKS_HOSTNAME manually)"
   fi
 
-  # Build the literal bicepparam lines for this service.
-  BLOCK_LINES+=("param $nameP = '${n}'")
-  BLOCK_LINES+=("param $rgP = '${r}'")
-  BLOCK_LINES+=("param $subP = '${s}'")
+  # Build the literal bicepparam lines for this service. Some services bind only
+  # a NAME param (e.g. Azure Maps → loomAzureMapsAccount; no rg/sub param exists
+  # in main.bicep) — skip empty param names so we never emit an undeclared param.
+  [[ -n "$nameP" ]] && BLOCK_LINES+=("param $nameP = '${n}'")
+  [[ -n "$rgP"   ]] && BLOCK_LINES+=("param $rgP = '${r}'")
+  [[ -n "$subP"  ]] && BLOCK_LINES+=("param $subP = '${s}'")
 
   # Build the env-file lines (canonical EXISTING_* triples — names match the
   # bicepparam readEnvironmentVariable + the post-deploy scripts).

@@ -1,5 +1,17 @@
 // CSA Loom — Admin Plane Key Vault Premium
 // IL5: HSM-isolated (managed HSM); otherwise Premium with RBAC.
+//
+// FOUNDATIONAL — ALWAYS PROVISIONED (no opt-out flag, no BYO reuse).
+// This vault is a hard dependency of the admin plane: it stores the MSAL
+// confidential-client secret, the stable SESSION_SECRET, the Azure Maps
+// subscription key, and the Loom Connections data-source credential store
+// (LOOM_KEY_VAULT_URI, consumed by kv-secrets-client.ts). Because so much of
+// the console signs in / encrypts sessions / resolves secrets against it, the
+// deploy-readiness scan-and-choose surfaces Key Vault as "new (recommended)"
+// with the disable + reuse choices intentionally NOT offered — it is never a
+// `not_configured` gate on a fresh deploy. (Per .claude/rules/no-vaporware.md
+// the scan only offers choices it can fully wire; cross-sub BYO-vault reuse
+// would leave the secret-write child resources unwireable, so it is omitted.)
 
 targetScope = 'resourceGroup'
 

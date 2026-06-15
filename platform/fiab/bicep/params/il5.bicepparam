@@ -151,6 +151,7 @@ param aiFoundryEnabled = false
 // (prompts pass unfiltered, never a silent claim of filtering).
 param contentSafetyEnabled = false
 param apimEnabled = true
+param hubFirewallEnabled = true
 param aiSearchEnabled = false
 param adxEnabled = true
 // Setup Orchestrator — enabled so the Console UAMI is granted Contributor on the

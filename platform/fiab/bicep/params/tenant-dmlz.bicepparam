@@ -178,6 +178,7 @@ param aiFoundryEnabled = true
 param contentSafetyEnabled = true
 param agentFoundryEnabled = true
 param apimEnabled = true
+param hubFirewallEnabled = true
 param aiSearchEnabled = false
 param adxEnabled = true
 param cosmosGraphVectorEnabled = true

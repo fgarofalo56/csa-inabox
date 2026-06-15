@@ -77,6 +77,7 @@ import {
 import type { FluentIcon } from '@fluentui/react-icons';
 import { itemVisual } from '@/lib/components/ui/item-type-visual';
 import { CapacityEquivalencePanel } from '@/lib/components/setup/capacity-equivalence-panel';
+import { ServiceScanPanel } from '@/lib/components/setup/service-scan-panel';
 import { SetupDeploymentDiagram, type DiagramSpoke } from '@/lib/components/setup/deployment-diagram';
 import {
   regionsForBoundary,
@@ -1358,6 +1359,13 @@ export function SetupWizardPane() {
                 <Body1Strong>Generated Bicep parameters</Body1Strong>
                 <div className={styles.preview}>{bicepPreview}</div>
               </div>
+            )}
+
+            {!isWireExisting && (
+              <>
+                <Divider />
+                <ServiceScanPanel boundary={state.boundary || 'Commercial'} />
+              </>
             )}
 
             <Footer
