@@ -2,10 +2,14 @@
  * domains-client — pluggable DomainStore adapters for Governance Domains (F4).
  *
  * DEFAULT (LOOM_DOMAINS_BACKEND=cosmos or unset):
- *   cosmosDomainStore — Cosmos `governance-domains` CRUD + best-effort
- *   Purview classic collection mirror (PUT /collections/{colName}). NO Fabric
- *   dependency: every operation completes against Cosmos even when no Purview
- *   account and no Fabric workspace are configured.
+ *   cosmosDomainStore — Cosmos `governance-domains` CRUD + best-effort UNIFIED
+ *   dual write-through (lib/azure/unified-domain-mapper): a Loom domain mirrors
+ *   to BOTH a Purview classic COLLECTION (PUT /collections/{name}) AND a
+ *   Databricks Unity Catalog CATALOG (root) / SCHEMA (subdomain). Each mirror is
+ *   independently optional — NO Fabric dependency: every operation completes
+ *   against Cosmos even when no Purview account, no Databricks workspace, and no
+ *   Fabric workspace are configured. This matches /api/admin/domains, which uses
+ *   the same mapper (previously this store mirrored Purview only).
  *
  * OPT-IN (LOOM_DOMAINS_BACKEND=fabric):
  *   fabricAdminDomainStore — Fabric Admin REST v1:
@@ -29,12 +33,11 @@
 import { fetchWithTimeout } from '@/lib/azure/fetch-with-timeout';
 import { governanceDomainsContainer } from './cosmos-client';
 import {
-  createBusinessDomain,
-  updateBusinessDomain,
-  deleteBusinessDomain,
-  domainCollectionName,
-  isPurviewConfigured,
-} from './purview-client';
+  mirrorDomainUpsert,
+  mirrorDomainMove,
+  mirrorDomainDelete,
+  type UnifiedMirrorResult,
+} from './unified-domain-mapper';
 import { validateDomainMove } from './domain-hierarchy';
 import {
   ChainedTokenCredential,
@@ -174,6 +177,32 @@ export class DomainsBackendGateError extends Error {
 // Cosmos adapter (DEFAULT)
 // ---------------------------------------------------------------------------
 
+/**
+ * Persist the unified mapper's per-cloud result onto a LoomDomain. Records the
+ * Purview classic-collection referenceName (`purviewCollectionId`) and the Unity
+ * Catalog catalog/schema coordinates (`unityCatalogName` / `unitySchemas`) so the
+ * governance store's already-declared UC fields are actually populated — closing
+ * the gap where this store mirrored Purview only despite the type promising a UC
+ * mirror. Best-effort: an inactive (skipped) or failed mirror leaves the existing
+ * ids untouched, so Cosmos stays authoritative and neither back-end can block the
+ * write (no Fabric/Purview hard dependency).
+ */
+function applyMirror(doc: LoomDomain, mirror: UnifiedMirrorResult): void {
+  if (mirror.purview.ok && !mirror.purview.skipped && mirror.purview.purviewId) {
+    doc.purviewCollectionId = mirror.purview.purviewId;
+  }
+  if (mirror.unity.ok && !mirror.unity.skipped) {
+    if (mirror.unity.catalog) doc.unityCatalogName = mirror.unity.catalog;
+    // A subdomain maps to a UC SCHEMA under the parent's catalog; record the
+    // schema name (deduped). A root domain maps to a catalog and has no schema.
+    if (mirror.unity.schema) {
+      const schemas = new Set(doc.unitySchemas || []);
+      schemas.add(mirror.unity.schema);
+      doc.unitySchemas = Array.from(schemas);
+    }
+  }
+}
+
 export const cosmosDomainStore: DomainStore = {
   async listDomains(tenantId) {
     const c = await governanceDomainsContainer();
@@ -197,21 +226,17 @@ export const cosmosDomainStore: DomainStore = {
       updatedAt: now,
       updatedBy: who,
     };
-    // Best-effort Purview classic-collection mirror. Never blocks the Cosmos
-    // write — when Purview is unconfigured or the UAMI lacks Collection Admin,
-    // the domain still persists (no Fabric/Purview hard dependency).
-    if (isPurviewConfigured()) {
-      try {
-        const mirrored = await createBusinessDomain({
-          id: doc.id,
-          name: doc.name,
-          description: doc.description,
-        });
-        doc.purviewCollectionId = mirrored.id;
-      } catch {
-        /* Non-fatal — Purview mirror is best-effort. */
-      }
-    }
+    // Unified best-effort dual write-through: a Purview classic COLLECTION AND a
+    // Databricks Unity Catalog CATALOG (root) / SCHEMA (subdomain), mirrored in
+    // parallel. Never blocks the Cosmos write — when both back-ends are
+    // unconfigured the domain still persists (no Fabric/Purview hard dependency).
+    // This is the reconciliation: the governance store now writes through to BOTH
+    // governance back-ends, matching /api/admin/domains, instead of Purview only.
+    const mirror = await mirrorDomainUpsert(
+      { id: doc.id, name: doc.name, description: doc.description, parentId: doc.parentDomainId },
+      'create',
+    );
+    applyMirror(doc, mirror);
     await c.items.create(doc);
     return doc;
   },
@@ -230,17 +255,14 @@ export const cosmosDomainStore: DomainStore = {
       updatedAt: new Date().toISOString(),
       updatedBy: who,
     };
-    // Best-effort Purview collection update (PUT is idempotent create-or-update).
-    if (isPurviewConfigured() && updated.purviewCollectionId) {
-      try {
-        await updateBusinessDomain(updated.purviewCollectionId, {
-          name: updated.name,
-          description: updated.description,
-        });
-      } catch {
-        /* Non-fatal. */
-      }
-    }
+    // Re-assert name/description on BOTH back-ends (idempotent Purview collection
+    // PUT + UC catalog/schema PATCH comment). The UC identifier is keyed off the
+    // immutable domain id, so a rename never drifts the catalog/schema name.
+    const mirror = await mirrorDomainUpsert(
+      { id: updated.id, name: updated.name, description: updated.description, parentId: updated.parentDomainId },
+      'update',
+    );
+    applyMirror(updated, mirror);
     await c.item(id, tenantId).replace(updated);
     return updated;
   },
@@ -253,13 +275,15 @@ export const cosmosDomainStore: DomainStore = {
       err.status = 404;
       throw err;
     }
-    if (resource.purviewCollectionId && isPurviewConfigured()) {
-      try {
-        await deleteBusinessDomain(resource.purviewCollectionId);
-      } catch {
-        /* Non-fatal — Purview may have been deprovisioned. */
-      }
-    }
+    // Best-effort cleanup on BOTH back-ends (Purview collection DELETE + UC
+    // catalog/schema DELETE). Never throws — a back-end may be deprovisioned, and
+    // the Cosmos delete must still proceed (Cosmos is authoritative).
+    await mirrorDomainDelete({
+      id: resource.id,
+      name: resource.name,
+      description: resource.description,
+      parentId: resource.parentDomainId,
+    });
     await c.item(id, tenantId).delete();
   },
 
@@ -293,20 +317,16 @@ export const cosmosDomainStore: DomainStore = {
       updatedAt: new Date().toISOString(),
       updatedBy: who,
     };
-    // Best-effort Purview collection reparent (idempotent PUT re-asserts the new
-    // parentCollection). Never blocks the Cosmos write — Purview is optional and
-    // there is NO Fabric dependency on this path.
-    if (isPurviewConfigured() && moved.purviewCollectionId) {
-      try {
-        await updateBusinessDomain(moved.purviewCollectionId, {
-          name: moved.name,
-          description: moved.description,
-          parentId: newParentId ? domainCollectionName(newParentId) : undefined,
-        });
-      } catch {
-        /* Non-fatal. */
-      }
-    }
+    // Mirror the reparent. Purview reparents the classic collection (idempotent
+    // PUT re-asserting parentCollection); Unity Catalog has NO move (a catalog is
+    // top-level; a schema cannot change its parent catalog) — the mapper reports
+    // that honestly via moveSupported:false rather than faking it. Never blocks
+    // the Cosmos write — both mirrors are optional, no Fabric dependency.
+    const mirror = await mirrorDomainMove(
+      { id: moved.id, name: moved.name, description: moved.description, parentId: undefined },
+      newParentId,
+    );
+    applyMirror(moved, mirror);
     await c.item(id, tenantId).replace(moved);
     return moved;
   },
