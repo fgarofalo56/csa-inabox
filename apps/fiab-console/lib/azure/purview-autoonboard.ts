@@ -14,8 +14,17 @@
  * classification/tagging is a deeper follow-up; this establishes the asset +
  * ownership so it surfaces immediately.
  */
-import { registerAtlasEntity, ensureClassificationDefs } from './purview-client';
+import { registerAtlasEntity, ensureClassificationDefs, deleteAtlasEntityByQualifiedName } from './purview-client';
 import type { WorkspaceItem } from '@/lib/types/workspace';
+
+/**
+ * Stable `loom://` qualifiedName for an item's Purview Atlas entity. The same
+ * value is used on onboard (create) and offboard (delete) so the two operate
+ * on exactly one entity (Atlas dedupes on qualifiedName).
+ */
+function itemQualifiedName(item: WorkspaceItem, tenantId: string): string {
+  return `loom://${tenantId}/${item.workspaceId}/${item.itemType}/${item.id}`;
+}
 
 export async function autoOnboardToPurview(item: WorkspaceItem, tenantId: string): Promise<void> {
   if (!process.env.LOOM_PURVIEW_ACCOUNT) return; // not configured → silent no-op
@@ -38,7 +47,7 @@ export async function autoOnboardToPurview(item: WorkspaceItem, tenantId: string
     }
     await registerAtlasEntity({
       typeName: 'DataSet',
-      qualifiedName: `loom://${tenantId}/${item.workspaceId}/${item.itemType}/${item.id}`,
+      qualifiedName: itemQualifiedName(item, tenantId),
       displayName: item.displayName,
       owner: item.createdBy,
       comment: `Loom ${item.itemType}${item.description ? ` — ${item.description}` : ''}`,
@@ -46,5 +55,28 @@ export async function autoOnboardToPurview(item: WorkspaceItem, tenantId: string
     });
   } catch {
     /* best-effort auto-onboard — never block or fail item creation */
+  }
+}
+
+/**
+ * Symmetric offboard hook — when a Loom item is deleted (hard-delete or
+ * recycle-bin purge), best-effort soft-delete its Purview Atlas entity so the
+ * external catalog graph reconciles in lock-step with Loom's own Weave edges
+ * (`reconcileThreadEdgesOnDelete`). Mirror of `autoOnboardToPurview`:
+ *
+ *   • Cheap no-op when `LOOM_PURVIEW_ACCOUNT` is unset (no network).
+ *   • Called as `void offboardFromPurview(...)` — a missing account, a 403, or
+ *     a "not found" never blocks or fails the delete.
+ *   • Uses the same stable `loom://` qualifiedName so exactly the entity that
+ *     was onboarded is the one retired. Atlas flips status → DELETED and
+ *     RETAINS the entity (not a purge), preserving lineage history — the
+ *     faithful 1:1 of the portal "Delete asset" action.
+ */
+export async function offboardFromPurview(item: WorkspaceItem, tenantId: string): Promise<void> {
+  if (!process.env.LOOM_PURVIEW_ACCOUNT) return; // not configured → silent no-op
+  try {
+    await deleteAtlasEntityByQualifiedName('DataSet', itemQualifiedName(item, tenantId));
+  } catch {
+    /* best-effort offboard — never block or fail item deletion */
   }
 }

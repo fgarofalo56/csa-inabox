@@ -14,6 +14,7 @@ const h = vi.hoisted(() => ({
   deleteGovernanceItem: vi.fn(),
   reconcileThreadEdgesOnDelete: vi.fn(),
   restoreThreadEdgesForItem: vi.fn(),
+  offboardFromPurview: vi.fn(),
 }));
 
 // ── Cosmos mock: items.query().fetchAll(), item(id,pk).replace()/.delete(),
@@ -43,7 +44,7 @@ vi.mock('@/lib/azure/governance-catalog-index', () => ({
   upsertGovernanceItem: vi.fn(), deleteGovernanceItem: h.deleteGovernanceItem,
   docForGovernanceItem: vi.fn(() => ({})), isCatalogDataType: vi.fn(() => false),
 }));
-vi.mock('@/lib/azure/purview-autoonboard', () => ({ autoOnboardToPurview: vi.fn() }));
+vi.mock('@/lib/azure/purview-autoonboard', () => ({ autoOnboardToPurview: vi.fn(), offboardFromPurview: h.offboardFromPurview }));
 
 // ── ADLS soft-delete / restore — the dynamic imports inside item-crud. ──────
 vi.mock('@/lib/azure/adls-client', () => ({
@@ -159,6 +160,11 @@ describe('purgeRecycledItem', () => {
     expect(h.deleteGovernanceItem).toHaveBeenCalledWith('item-1');
     // Lineage auto-reconcile: hard-remove the item's edges on purge.
     expect(h.reconcileThreadEdgesOnDelete).toHaveBeenCalledWith(TENANT, 'item-1', { mode: 'remove' });
+    // Symmetric Purview offboard: soft-delete the item's Atlas entity on purge.
+    expect(h.offboardFromPurview).toHaveBeenCalledWith(
+      expect.objectContaining({ id: 'item-1' }),
+      TENANT,
+    );
   });
 
   it('returns false when the item is not in the recycle bin', async () => {

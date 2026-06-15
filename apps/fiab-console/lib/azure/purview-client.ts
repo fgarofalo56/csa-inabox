@@ -735,6 +735,37 @@ export async function registerAtlasEntity(p: RegisterAtlasEntityPayload): Promis
 }
 
 /**
+ * Soft-delete an Atlas entity by its unique `qualifiedName`. Mirrors the
+ * portal "Delete" on a catalog asset and the Atlas incremental-scan rule:
+ *
+ *   DELETE /datamap/api/atlas/v2/entity/uniqueAttribute/type/{typeName}
+ *          ?attr:qualifiedName={qualifiedName}
+ *
+ * Atlas does NOT purge the entity — it flips its `status` to `DELETED` and
+ * retains it (so lineage history is preserved), exactly the semantic Loom
+ * wants when a source item is deleted. Returns `true` when an entity was
+ * deleted, `false` when none matched the qualifiedName (404) — both are
+ * non-error outcomes so callers can fire-and-forget.
+ *
+ * Docs: https://learn.microsoft.com/purview/data-gov-api-atlas-2-2
+ */
+export async function deleteAtlasEntityByQualifiedName(
+  typeName: string,
+  qualifiedName: string,
+): Promise<boolean> {
+  purviewAccount();
+  if (!typeName) throw new PurviewError(400, null, 'typeName is required');
+  if (!qualifiedName) throw new PurviewError(400, null, 'qualifiedName is required');
+  const res = await purviewFetch(
+    `/datamap/api/atlas/v2/entity/uniqueAttribute/type/${encodeURIComponent(typeName)}`,
+    { method: 'DELETE', query: { 'attr:qualifiedName': qualifiedName } },
+  );
+  if (res.status === 404) return false;
+  await readJson<unknown>(res);
+  return true;
+}
+
+/**
  * Ensure the given classification names exist as Atlas classification typedefs
  * so they can be attached to entities. Idempotent: lists existing type headers
  * and only POSTs the missing ones (POST /datamap/api/atlas/v2/types/typedefs

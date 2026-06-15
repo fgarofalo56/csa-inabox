@@ -269,4 +269,30 @@ describe('purview-client (classic Data Map)', () => {
     await expect(mod.listDataProducts()).rejects.not.toBeInstanceOf(mod.PurviewUnifiedCatalogGateError);
     expect(fetchMock).not.toHaveBeenCalled();
   });
+
+  it('deleteAtlasEntityByQualifiedName soft-deletes via DELETE on the uniqueAttribute endpoint', async () => {
+    fetchMock.mockResolvedValue(new Response(JSON.stringify({ mutatedEntities: { DELETE: [{ guid: 'g1' }] } }), { status: 200 }));
+    const mod = await import('../purview-client');
+    const ok = await mod.deleteAtlasEntityByQualifiedName('DataSet', 'loom://t/ws/lakehouse/i1');
+    expect(ok).toBe(true);
+    const [url, init] = fetchMock.mock.calls[0];
+    expect(init.method).toBe('DELETE');
+    expect(url).toContain('/datamap/api/atlas/v2/entity/uniqueAttribute/type/DataSet');
+    // qualifiedName carried as attr query param (URL-encoded).
+    expect(decodeURIComponent(url)).toContain('attr:qualifiedName=loom://t/ws/lakehouse/i1');
+  });
+
+  it('deleteAtlasEntityByQualifiedName returns false when no entity matches (404)', async () => {
+    fetchMock.mockResolvedValue(new Response('', { status: 404 }));
+    const mod = await import('../purview-client');
+    const ok = await mod.deleteAtlasEntityByQualifiedName('DataSet', 'loom://t/ws/lakehouse/missing');
+    expect(ok).toBe(false);
+  });
+
+  it('deleteAtlasEntityByQualifiedName throws PurviewNotConfiguredError when account is unset', async () => {
+    delete process.env.LOOM_PURVIEW_ACCOUNT;
+    const mod = await import('../purview-client');
+    await expect(mod.deleteAtlasEntityByQualifiedName('DataSet', 'loom://x')).rejects.toBeInstanceOf(mod.PurviewNotConfiguredError);
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
 });
