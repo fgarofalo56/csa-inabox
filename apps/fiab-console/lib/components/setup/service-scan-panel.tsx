@@ -45,7 +45,7 @@ interface ServiceChoice {
   allowExisting: boolean;
   allowDisable: boolean;
   existing: ExistingResource[];
-  recommendation: 'existing' | 'new' | 'disable';
+  recommendation: 'existing' | 'use-existing' | 'new' | 'disable';
   recommendationReason: string;
 }
 interface ScanResponse {
@@ -82,10 +82,15 @@ const useStyles = makeStyles({
 function recBadge(rec: ServiceChoice['recommendation']): { color: 'success' | 'brand' | 'warning'; text: string } {
   switch (rec) {
     case 'new': return { color: 'brand', text: 'Recommend: provision new' };
-    case 'existing': return { color: 'success', text: 'Recommend: reuse existing' };
+    case 'existing':
+    case 'use-existing': return { color: 'success', text: 'Recommend: reuse existing' };
     case 'disable': return { color: 'warning', text: 'Recommend: leave disabled' };
+    default: return { color: 'brand', text: 'Recommend: provision new' };
   }
 }
+
+/** This panel is the networking/API domain surface — scope it to those services. */
+const DOMAIN_KEYS: ReadonlyArray<ServiceChoice['key']> = ['apim', 'maps', 'keyvault', 'firewall'];
 
 export function ServiceScanPanel({ boundary }: { boundary: string }) {
   const styles = useStyles();
@@ -143,7 +148,7 @@ export function ServiceScanPanel({ boundary }: { boundary: string }) {
             Scanned {data.subscriptionsScanned ?? 0} subscription(s). Default posture is everything ON (opt-out) —
             reuse an existing instance below to skip provisioning, or disable what you don&apos;t want.
           </Caption1>
-          {(data.services ?? []).map((svc) => {
+          {(data.services ?? []).filter((svc) => DOMAIN_KEYS.includes(svc.key)).map((svc) => {
             const badge = recBadge(svc.recommendation);
             return (
               <div key={svc.key} className={styles.card}>
