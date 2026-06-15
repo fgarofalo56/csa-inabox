@@ -47,6 +47,9 @@ import {
   pricingCalculatorUrl, serviceDetailsUrl, breakdownToCsv, breakdownToJson, downloadText,
 } from './pricing-calculator-link';
 import type { CostSummary } from './cost-estimate';
+import {
+  RETAIL_CURRENCIES, COMMERCIAL_REGIONS, DEFAULT_CURRENCY, regionLabel,
+} from './cost-options';
 import type { PlanSubscription, ConfigValue } from './types';
 
 const nodeTypes: NodeTypes = { subscription: SubscriptionNode, domain: DomainNode, service: ServiceNode };
@@ -317,6 +320,10 @@ function PlannerInner() {
   const [costSummary, setCostSummary] = useState<CostSummary | null>(null);
   const [costBusy, setCostBusy] = useState(false);
   const [costErr, setCostErr] = useState<string | null>(null);
+  // Cost-report pickers: currency + Commercial pricing region (Retail Prices API
+  // overrides). Empty region = derive from the plan boundary on the server.
+  const [costCurrency, setCostCurrency] = useState<string>(DEFAULT_CURRENCY);
+  const [costRegion, setCostRegion] = useState<string>('');
   const rectsRef = useRef<DomainRect[]>([]);
 
   // ---- load ----
@@ -519,19 +526,21 @@ function PlannerInner() {
   }, [subs]);
 
   // ---- estimate cost (public Azure Retail Prices API) ----
-  const estimateCost = useCallback(async (sub: PlanSubscription) => {
+  const estimateCost = useCallback(async (sub: PlanSubscription, opts?: { currencyCode?: string; region?: string }) => {
+    const currencyCode = opts?.currencyCode ?? costCurrency;
+    const region = opts?.region ?? costRegion;
     setCostSub(sub); setCostOpen(true); setCostBusy(true); setCostErr(null); setCostSummary(null);
     try {
       const r = await fetch('/api/admin/deploy-plan/cost-estimate', {
         method: 'POST', headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ subscription: sub }),
+        body: JSON.stringify({ subscription: sub, currencyCode, region: region || undefined }),
       });
       const j = await r.json();
       if (!j.ok) throw new Error(j.error || 'cost estimate failed');
       setCostSummary(j.summary as CostSummary);
     } catch (e: any) { setCostErr(e?.message || String(e)); }
     finally { setCostBusy(false); }
-  }, []);
+  }, [costCurrency, costRegion]);
 
   const q = query.trim().toLowerCase();
   const matches = (def: ServiceDef) =>
@@ -869,6 +878,41 @@ function PlannerInner() {
           <DialogBody>
             <DialogTitle>Estimated monthly cost — {costSub?.name}</DialogTitle>
             <DialogContent className={s.costScroll}>
+              <div style={{ display: 'flex', gap: tokens.spacingHorizontalL, flexWrap: 'wrap', marginBottom: tokens.spacingVerticalM }}>
+                <Field label="Currency" hint="Azure Retail Prices API currency">
+                  <Dropdown
+                    aria-label="Estimate currency"
+                    value={RETAIL_CURRENCIES.find((c) => c.code === costCurrency)?.label || costCurrency}
+                    selectedOptions={[costCurrency]}
+                    onOptionSelect={(_, d) => {
+                      const code = String(d.optionValue || DEFAULT_CURRENCY);
+                      setCostCurrency(code);
+                      if (costSub) estimateCost(costSub, { currencyCode: code, region: costRegion });
+                    }}
+                  >
+                    {RETAIL_CURRENCIES.map((c) => (
+                      <Option key={c.code} value={c.code} text={c.label}>{c.label}</Option>
+                    ))}
+                  </Dropdown>
+                </Field>
+                <Field label="Pricing region" hint="Commercial armRegionName priced against">
+                  <Dropdown
+                    aria-label="Pricing region"
+                    value={costRegion ? regionLabel(costRegion) : 'Boundary default'}
+                    selectedOptions={[costRegion]}
+                    onOptionSelect={(_, d) => {
+                      const name = String(d.optionValue || '');
+                      setCostRegion(name);
+                      if (costSub) estimateCost(costSub, { currencyCode: costCurrency, region: name });
+                    }}
+                  >
+                    <Option value="" text="Boundary default">Boundary default</Option>
+                    {COMMERCIAL_REGIONS.map((r) => (
+                      <Option key={r.name} value={r.name} text={r.label}>{r.label}</Option>
+                    ))}
+                  </Dropdown>
+                </Field>
+              </div>
               {costBusy && <Spinner label="Pricing the plan against the Azure Retail Prices API…" />}
               {costErr && (
                 <MessageBar intent="error"><MessageBarBody>
@@ -890,7 +934,8 @@ function PlannerInner() {
                     <MessageBar intent="warning"><MessageBarBody>
                       <MessageBarTitle>Azure Government pricing differs</MessageBarTitle>
                       The Retail Prices API has no public Azure Government endpoint, so these figures are{' '}
-                      <strong>Commercial list prices for reference only</strong>. Use the Azure Government pricing
+                      <strong>Commercial list prices for reference only</strong> (priced against{' '}
+                      <code>{costSummary.priceRegion || costSummary.region}</code>). Use the Azure Government pricing
                       pages or your EA price sheet for authoritative Gov ({costSummary.boundary}) cost.
                     </MessageBarBody></MessageBar>
                   )}

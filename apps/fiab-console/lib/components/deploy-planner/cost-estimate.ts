@@ -170,7 +170,15 @@ export interface CostDomainGroup {
 
 export interface CostSummary {
   currency: string;
+  /** The region REPORTED to the user (what bicep would deploy into). */
   region: string;
+  /**
+   * The Commercial `armRegionName` actually QUERIED for prices. Equals `region`
+   * for Commercial boundaries; for Gov boundaries it is the Commercial
+   * reference region the figures came from (disclosed in the report). Optional
+   * for backward-compat with callers that predate the region picker.
+   */
+  priceRegion?: string;
   boundary: string;
   /** True when the boundary is a Gov cloud → figures are Commercial reference only. */
   govDisclaimer: boolean;
@@ -198,7 +206,7 @@ export function summarizePlan(
   priceMap: Record<string, PriceResult>,
   detailUrls: Record<string, string | undefined>,
   sub: PlanSubscription,
-  ctx: { currency: string; region: string; boundary: string; govDisclaimer: boolean },
+  ctx: { currency: string; region: string; priceRegion?: string; boundary: string; govDisclaimer: boolean },
 ): CostSummary {
   const byDomain: CostDomainGroup[] = [];
   const unestimatedMap = new Map<string, { key: string; label: string; reason: string }>();
@@ -235,6 +243,7 @@ export function summarizePlan(
   return {
     currency: ctx.currency,
     region: ctx.region,
+    priceRegion: ctx.priceRegion || ctx.region,
     boundary: ctx.boundary,
     govDisclaimer: ctx.govDisclaimer,
     source,

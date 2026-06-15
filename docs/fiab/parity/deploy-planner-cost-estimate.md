@@ -32,9 +32,9 @@ export + deep-link to the calculator.
 |---|---|---|
 | Per-resource monthly estimate from the planned graph | built ✅ | `POST /api/admin/deploy-plan/cost-estimate` → `prices.azure.com/api/retail/prices` (real, no auth) per `service-catalog.retail` meter |
 | Per-domain subtotal + grand total | built ✅ | pure `summarizePlan()` over the priced rows |
-| Region-correct pricing | built ✅ | region from `subscription.region` / `BOUNDARY_DEFAULT_REGION`; `armRegionName` filter |
+| Region-correct pricing | built ✅ | region from the **report's region picker** (`cost-options.COMMERCIAL_REGIONS`), else `subscription.region` / `BOUNDARY_DEFAULT_REGION`; `armRegionName` filter |
 | List price + unit-of-measure shown per row, monthly-normalized | built ✅ | `normalizeToMonthly()` (Hour×730, /Month passthrough, /Day×30) |
-| Currency | built ✅ | from `currencyCode` (USD) |
+| Currency | built ✅ | **report currency picker** (`cost-options.RETAIL_CURRENCIES`) → `currencyCode='XXX'` query param; default USD |
 | Export the breakdown (CSV + JSON download) | built ✅ | `breakdownToCsv/Json` + `downloadText` (client Blob) |
 | Open Azure Pricing Calculator (deep-link) | built ✅ (honest) | `pricingCalculatorUrl()` — opens the tool; does NOT auto-fill (no public pre-populate API) |
 | Per-service pricing-details link per row | built ✅ | `ServiceDef.pricingDetailsUrl` |
@@ -52,7 +52,7 @@ disclaimer (an inherent Azure limitation, not a Loom gap) and the explicit
 |---|---|---|
 | Commercial | Live (`prices.azure.com`, region = planned region) | Live per-resource estimate |
 | GCC | Runs on Commercial Azure | Live, priced as Commercial |
-| GCC-High / IL5 (DoD) | **No public Gov retail-prices endpoint** | Directional: priced against `eastus2` Commercial reference + `govDisclaimer` warning MessageBar ("Gov pricing differs — use the Gov pricing pages / EA price sheet") |
+| GCC-High / IL5 (DoD) | **No public Gov retail-prices endpoint** | Directional: priced against a Commercial reference region (user-selectable in the region picker; default `eastus2`) + `govDisclaimer` warning MessageBar naming the exact `priceRegion` used ("Gov pricing differs — use the Gov pricing pages / EA price sheet") |
 | China (21Vianet) | Separate endpoint (`prices.azure.cn`, CSV model) | Not wired (out of scope); falls through to the Gov-style honest disclaimer if a China boundary is added |
 
 ## Representative meters (validated live against `prices.azure.com`, eastus2, 2026-06)
@@ -86,8 +86,9 @@ empty default → `prices.azure.com`).
 
 ## Verification
 
-- `lib/components/deploy-planner/__tests__/cost-estimate.test.ts` — 21 vitest cases
-  (normalize, pickMeterRow, summarizePlan totals + unestimated reasons, CSV/JSON,
-  deep-link, plan-only never priced). GREEN.
+- `lib/components/deploy-planner/__tests__/cost-estimate.test.ts` — vitest cases
+  (normalize, pickMeterRow, summarizePlan totals + unestimated reasons + `priceRegion`
+  threading, CSV/JSON, deep-link, plan-only never priced, **currency/region option
+  validators** in `cost-options`). GREEN.
 - Live E2E receipt: every representative meter resolves a real row + sensible
   monthly figure against `prices.azure.com` (see PR body).

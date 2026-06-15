@@ -3,9 +3,14 @@
  * subscription, computed from the PUBLIC Azure Retail Prices API
  * (https://prices.azure.com/api/retail/prices — no auth, Commercial cloud).
  *
- * POST /api/admin/deploy-plan/cost-estimate  body: { subscription: PlanSubscription }
+ * POST /api/admin/deploy-plan/cost-estimate
+ *   body: { subscription: PlanSubscription, currencyCode?: string, region?: string }
  *   → { ok:true, summary: CostSummary }  (per-domain rows + grand total + the
  *      services that could not be priced, with an honest reason each)
+ *
+ * `currencyCode` / `region` are optional overrides from the report's pickers,
+ * validated against the shared cost-options catalog (only API-supported values
+ * reach the public endpoint). When omitted they derive from the plan boundary.
  *
  * Honesty (per .claude/rules/no-vaporware.md):
  *   - Real public REST call; one representative meter per service from the
@@ -27,6 +32,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import { getSession } from '@/lib/auth/session';
 import { metersForServices } from '@/lib/components/deploy-planner/service-catalog';
 import { BOUNDARY_DEFAULT_REGION } from '@/lib/components/deploy-planner/bicepparam';
+import { normalizeCurrency, normalizeRegion, DEFAULT_CURRENCY } from '@/lib/components/deploy-planner/cost-options';
 import {
   pickMeterRow, priceResultFromRow, summarizePlan,
   FALLBACK_MONTHLY_USD,
@@ -48,18 +54,23 @@ const odata = (v: string) => v.replace(/'/g, "''");
 
 /**
  * Fetch the (paged) retail-price items for one meter's serviceName, scoped to
- * the region + Consumption price type. Throws on network/HTTP failure so the
- * caller can decide between "this service unpriced" and "API down → fallback".
+ * the region + Consumption price type, in the requested currency. Throws on
+ * network/HTTP failure so the caller can decide between "this service unpriced"
+ * and "API down → fallback".
  */
-async function fetchMeterItems(serviceName: string, region: string, armSkuName?: string): Promise<RetailPriceItem[]> {
+async function fetchMeterItems(serviceName: string, region: string, currencyCode: string, armSkuName?: string): Promise<RetailPriceItem[]> {
   const filterParts = [
     `armRegionName eq '${odata(region)}'`,
     `priceType eq 'Consumption'`,
     `serviceName eq '${odata(serviceName)}'`,
   ];
   if (armSkuName) filterParts.push(`armSkuName eq '${odata(armSkuName)}'`);
+  // currencyCode is a top-level query param (NOT part of $filter), quoted per
+  // the Retail Prices API contract: ...?currencyCode='EUR'&$filter=...
+  const currencyParam = currencyCode && currencyCode !== DEFAULT_CURRENCY
+    ? `&currencyCode='${odata(currencyCode)}'` : '';
   let url: string | null =
-    `${PRICES_BASE}/api/retail/prices?api-version=${API_VERSION}&$filter=${encodeURIComponent(filterParts.join(' and '))}`;
+    `${PRICES_BASE}/api/retail/prices?api-version=${API_VERSION}${currencyParam}&$filter=${encodeURIComponent(filterParts.join(' and '))}`;
   const items: RetailPriceItem[] = [];
   for (let page = 0; page < MAX_PAGES && url; page += 1) {
     let res: Response | null = null;
@@ -102,11 +113,22 @@ export async function POST(req: NextRequest) {
   const sub = sanitizeSubscription(body?.subscription);
   const boundary = sub.boundary || 'Commercial';
   const govDisclaimer = boundary === 'GCC-High' || boundary === 'IL5';
-  // The planned region (what bicep would deploy into) is what we REPORT.
-  const reportRegion = sub.region || BOUNDARY_DEFAULT_REGION[boundary] || 'eastus2';
+
+  // Optional user overrides from the cost-report pickers (validated against the
+  // shared catalog so only API-supported values reach the public endpoint).
+  const reqCurrency = normalizeCurrency(body?.currencyCode);
+  const overrideRegion = normalizeRegion(body?.region);
+
+  // The region REPORTED to the user (what bicep would deploy into). For a Gov
+  // boundary this stays the Gov deploy region; for Commercial the picker, then
+  // the plan's own region, then the boundary default win in that order.
+  const reportRegion = govDisclaimer
+    ? (sub.region || BOUNDARY_DEFAULT_REGION[boundary] || 'usgovvirginia')
+    : (overrideRegion || sub.region || BOUNDARY_DEFAULT_REGION[boundary] || 'eastus2');
   // The Retail Prices API only knows Commercial regions, so Gov boundaries are
-  // priced against a Commercial reference region (disclosed via govDisclaimer).
-  const queryRegion = govDisclaimer ? 'eastus2' : reportRegion;
+  // priced against a Commercial REFERENCE region (the picker lets the user
+  // choose which one; default eastus2). Disclosed via govDisclaimer + priceRegion.
+  const queryRegion = govDisclaimer ? (overrideRegion || 'eastus2') : reportRegion;
 
   // Distinct planned services across all domains that carry a representative meter.
   const allKeys = new Set<string>();
@@ -115,12 +137,15 @@ export async function POST(req: NextRequest) {
 
   const priceMap: Record<string, PriceResult> = {};
   const detailUrls: Record<string, string | undefined> = {};
-  let currency = 'USD';
+  // Default the report currency to what the user asked for; live retail-api rows
+  // echo the API's currencyCode (same value), and fallback rows are honestly
+  // labelled USD list price below.
+  let currency = reqCurrency;
 
   await Promise.all(meters.map(async (m) => {
     detailUrls[m.key] = m.pricingDetailsUrl;
     try {
-      const items = await fetchMeterItems(m.meter.serviceName, queryRegion, m.meter.armSkuName);
+      const items = await fetchMeterItems(m.meter.serviceName, queryRegion, reqCurrency, m.meter.armSkuName);
       const row = pickMeterRow(items, m.meter);
       if (row) {
         const pr = priceResultFromRow(row, m.meter);
@@ -130,11 +155,14 @@ export async function POST(req: NextRequest) {
       // No qualifying row → leave unpriced; summarizePlan reports it honestly.
     } catch {
       // Per-meter failure: fall back to the labelled list price if we have one.
+      // The offline list is USD-only, so disclose that when a non-USD currency
+      // was requested rather than silently mis-labelling the figure.
       const fb = FALLBACK_MONTHLY_USD[m.key];
       if (fb) {
+        const usdNote = reqCurrency !== 'USD' ? ' (USD list price)' : '';
         priceMap[m.key] = {
           monthly: fb.monthly, unitPrice: fb.monthly, unit: '1/Month', qty: 1,
-          sku: fb.sku, assumed: `${m.meter.unitNote} — live API unreachable, showing cached Azure list price.`,
+          sku: fb.sku, assumed: `${m.meter.unitNote} — live API unreachable, showing cached Azure list price${usdNote}.`,
           currency: 'USD', source: 'fallback-list-price',
         };
       }
@@ -142,7 +170,7 @@ export async function POST(req: NextRequest) {
   }));
 
   const summary = summarizePlan(priceMap, detailUrls, sub, {
-    currency, region: reportRegion, boundary, govDisclaimer,
+    currency, region: reportRegion, priceRegion: queryRegion, boundary, govDisclaimer,
   });
 
   return NextResponse.json({ ok: true, summary });
