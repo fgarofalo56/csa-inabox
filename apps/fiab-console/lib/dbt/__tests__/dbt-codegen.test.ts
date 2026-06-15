@@ -48,12 +48,30 @@ describe('dbt-codegen', () => {
     expect(y).toContain('gold:');
   });
 
-  it('generates a Databricks profiles.yml with type databricks + catalog + identity token', () => {
+  it('generates a Databricks profiles.yml with the run-injected DBT_ACCESS_TOKEN (no Loom secret plumbing)', () => {
     const y = generateProfilesYml(fixture('databricks'));
     expect(y).toContain('type: databricks');
+    expect(y).toContain('method: http');
     expect(y).toContain('catalog: main');
-    expect(y).toContain("env_var('DBT_DATABRICKS_TOKEN')");
+    // Databricks injects DBT_ACCESS_TOKEN for the dbt task's Run-As principal —
+    // that is the ONLY env var the generated profile depends on at runtime.
+    expect(y).toContain("env_var('DBT_ACCESS_TOKEN')");
+    // The old, never-injected token env var must be gone (it would fail on the cluster).
+    expect(y).not.toContain("env_var('DBT_DATABRICKS_TOKEN')");
     expect(y).not.toContain('type: synapse');
+  });
+
+  it('bakes a literal host into the Databricks profile when databricksHost is set (run BFF default)', () => {
+    const g = fixture('databricks');
+    g.target.databricksHost = 'adb-123.4.azuredatabricks.net';
+    g.target.databricksHttpPath = '/sql/1.0/warehouses/abc123';
+    const y = generateProfilesYml(g);
+    // host + http_path are static literals; only the token is an env_var marker,
+    // so the profile resolves on the dbt-CLI compute with just the injected token.
+    expect(y).toContain('host: adb-123.4.azuredatabricks.net');
+    expect(y).toContain('http_path: /sql/1.0/warehouses/abc123');
+    const envVars = (y.match(/env_var\('([^']+)'\)/g) || []).sort();
+    expect(envVars).toEqual(["env_var('DBT_ACCESS_TOKEN')"]);
   });
 
   it('generates a Synapse profiles.yml with ODBC 18 + authentication CLI (no secrets)', () => {

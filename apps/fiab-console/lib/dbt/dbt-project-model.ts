@@ -73,7 +73,14 @@ export interface DbtModel {
 /** The connection target a generated profiles.yml points at. */
 export interface DbtTarget {
   adapter: DbtAdapter;
-  /** Databricks: SQL warehouse http_path OR cluster used by the dbt task. */
+  /**
+   * Databricks: workspace FQDN baked into the generated profiles.yml `host`
+   * (e.g. adb-123.4.azuredatabricks.net). Left blank in the visual builder —
+   * the run BFF defaults it from the console's `LOOM_DATABRICKS_HOSTNAME` so
+   * the pushed profile carries a literal host the dbt CLI compute can reach.
+   */
+  databricksHost?: string;
+  /** Databricks: SQL warehouse http_path OR all-purpose-compute ODBC path used by the dbt task. */
   databricksHttpPath?: string;
   /** Databricks workspace catalog (Unity Catalog) — defaults to 'main'. */
   catalog?: string;
