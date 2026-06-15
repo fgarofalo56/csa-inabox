@@ -222,8 +222,17 @@ Monitoring** (F7).
 
 ## Bicep / env sync
 
-- Env var consumed: **`LOOM_DATABRICKS_HOSTNAME`** (shared with the rest of the
-  Databricks surface — no new app-env entry).
+- Env vars consumed: **`LOOM_DATABRICKS_HOSTNAME`** (workspace UC REST surface,
+  shared with the rest of the Databricks navigator) and **`LOOM_DATABRICKS_ACCOUNT_ID`**
+  (+ optional **`LOOM_DATABRICKS_ACCOUNT_HOST`**) for the **account-plane** UC
+  metastore list/attach (`unity-catalog-account-client.ts`). The account id is now
+  forwarded to the Console by default: `main.bicep`'s `module adminPlane` passes
+  `loomDatabricksAccountId: databricksAccountId` and a sovereign-aware
+  `loomDatabricksAccountHost` (Commercial/GCC → `accounts.azuredatabricks.net`;
+  Azure US Gov → `accounts.azuredatabricks.us`), which `admin-plane/main.bicep`
+  emits onto the Console container env (`!empty`-gated). With the account id set,
+  `isAccountApiConfigured()` returns true so **Browse > Unity Catalog lists the
+  account metastores + offers one-click attach by default** (no manual env patch).
 - **Unity Catalog is configured by DEFAULT (2026-06).** The deploy now creates +
   assigns the regional UC metastore, creates a default catalog, and grants the
   Console UAMI `account_admin`, so **Browse > Unity Catalog shows a real
@@ -233,22 +242,33 @@ Monitoring** (F7).
   - **Bicep (`az deployment ... -p commercial.bicepparam`):**
     `platform/fiab/bicep/modules/landing-zone/databricks-uc-bootstrap.bicep` runs a
     `deploymentScripts@2023-08-01` (AzureCLI) as the Console UAMI. Wired in
-    `landing-zone/main.bicep` (section 3b) `if (ucSupported && !empty(databricksAccountId)
+    `landing-zone/main.bicep` (section 3b) `if (dlzUcSupported && !empty(databricksAccountId)
     && !empty(databricksUcScriptUamiId) && !empty(consoleUamiAppId))`. Inputs:
-    `databricksAccountId` (typed param, surfaced in `params/{commercial,commercial-full,gcc}.bicepparam`),
-    `workspaceNumericId` / `workspaceHost` (new `databricks.bicep` outputs), and
+    `databricksAccountId` (env-sourced param `readEnvironmentVariable('LOOM_DATABRICKS_ACCOUNT_ID','')`
+    in `params/{commercial,commercial-full,gcc,tenant-dmlz}.bicepparam`),
+    `accountHost` (sovereign-aware, defaults to the Commercial host),
+    `workspaceNumericId` / `workspaceHost` (`databricks.bicep` outputs), and
     `adminPlane.outputs.uamiConsoleId` as the script identity.
   - **Post-deploy workflow (repair / re-run):**
     `.github/workflows/csa-loom-post-deploy-bootstrap.yml` step *"Enable Unity
     Catalog (metastore + default catalog + UAMI account-admin)"* runs the same
     script with `--workspace-host "$DBX_HOST"` (public access is temporarily
-    enabled in that job) so the default catalog is created + pinned.
+    enabled in that job) so the default catalog is created + pinned. An optional
+    repo var `DATABRICKS_ACCOUNT_HOST` overrides the account host for sovereign clouds.
   - **One-time human requirement (honest gate per `no-vaporware.md`):** the script
     identity (Console UAMI for the bicep path, deploy SP for the workflow path) must
     be a **Databricks account admin** — granted once via the account console. When
     absent, the script logs a warning and the deploy continues (UC enablement is
     never a hard blocker); the Browse UC group shows an actionable empty-state.
-  - **Boundary matrix:** Commercial + GCC enable UC by default (`ucSupported`).
+  - **Default-catalog reachability (honest, by design):** the bicep
+    `deploymentScript` runs from public Azure while the workspace is
+    `publicNetworkAccess: Disabled`, so its workspace-host `POST …/catalogs` is
+    best-effort and degrades gracefully — it leaves the account default in place
+    when unreachable. Accounts created after 2023-11-09 auto-create a workspace
+    catalog and set it as the default on assignment, so Browse still shows a
+    catalog; the named default is pinned via the GHA workflow (which toggles public
+    access) or a later in-VNet run.
+  - **Boundary matrix:** Commercial + GCC enable UC by default (`dlzUcSupported`).
     GCC-High / IL5 use the Hive metastore — the UC-bootstrap module is skipped.
 - Roles: console UAMI needs metastore/securable privileges (`CREATE CATALOG`,
   `CREATE SCHEMA`, `CREATE TABLE`, object ownership / `MANAGE`); SCIM-bootstrapped per

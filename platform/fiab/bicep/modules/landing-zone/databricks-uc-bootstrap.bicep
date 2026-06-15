@@ -43,6 +43,9 @@ param location string = resourceGroup().location
 @description('Databricks ACCOUNT id (GUID). Empty = orchestrator skips this module (UC enabled later via the post-deploy workflow).')
 param databricksAccountId string
 
+@description('Databricks ACCOUNT control-plane host (no scheme). Defaults to the Commercial host; pass accounts.azuredatabricks.us for Azure US Government. UC is only deployed on Commercial/GCC, so the default covers both.')
+param accountHost string = 'accounts.azuredatabricks.net'
+
 @description('Numeric Databricks workspace id (workspace.properties.workspaceId) — what the account API assigns the metastore to.')
 param workspaceNumericId string
 
@@ -81,6 +84,7 @@ resource ucBootstrap 'Microsoft.Resources/deploymentScripts@2023-08-01' = {
     cleanupPreference: 'OnSuccess'
     environmentVariables: [
       { name: 'DATABRICKS_ACCOUNT_ID', value: databricksAccountId }
+      { name: 'ACCOUNT_HOST_BARE', value: accountHost }
       { name: 'REGION', value: location }
       { name: 'WORKSPACE_ID', value: workspaceNumericId }
       { name: 'WORKSPACE_HOST', value: workspaceHost }
@@ -92,7 +96,7 @@ resource ucBootstrap 'Microsoft.Resources/deploymentScripts@2023-08-01' = {
     // two in sync — the script is the canonical CLI used by the GHA bootstrap.
     scriptContent: '''
       set -uo pipefail
-      ACCOUNT_HOST="https://accounts.azuredatabricks.net"
+      ACCOUNT_HOST="https://${ACCOUNT_HOST_BARE:-accounts.azuredatabricks.net}"
       METASTORE_NAME="loom-${REGION}"
       out() { echo "{\"status\":\"$1\",\"detail\":\"$2\"}" > "$AZ_SCRIPTS_OUTPUT_PATH"; }
 

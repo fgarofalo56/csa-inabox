@@ -28,6 +28,7 @@
 #     --uami-app-id  c6272de5-3c4e-4b72-8b57-71b2e950209b \
 #     [--workspace-host adb-7405613013893759.19.azuredatabricks.net] \
 #     [--default-catalog main] \
+#     [--account-host accounts.azuredatabricks.net] \
 #     [--metastore-name loom-eastus2] [--storage-root abfss://uc@acct.dfs.core.windows.net/]
 #
 # DEFAULT-ON CATALOG (2026-06 — "Unity Catalog configured by default"):
@@ -48,7 +49,7 @@
 # → top-right user menu → the GUID after "Account ID", or the ?account_id= URL.
 set -euo pipefail
 
-ACCOUNT_HOST="https://accounts.azuredatabricks.net"
+ACCOUNT_HOST="${DATABRICKS_ACCOUNT_HOST:-accounts.azuredatabricks.net}"
 DBX_RESOURCE="2ff814a6-3304-4ab8-85cb-cd0e6f879c1d"   # Azure Databricks AAD app
 REGION="" WORKSPACE_ID="" UAMI_APP_ID="" METASTORE_NAME="" STORAGE_ROOT=""
 WORKSPACE_HOST="" DEFAULT_CATALOG="main"
@@ -62,9 +63,10 @@ while [[ $# -gt 0 ]]; do
     --uami-app-id)     UAMI_APP_ID="$2"; shift 2 ;;
     --workspace-host)  WORKSPACE_HOST="$2"; shift 2 ;;
     --default-catalog) DEFAULT_CATALOG="$2"; shift 2 ;;
+    --account-host)    ACCOUNT_HOST="$2"; shift 2 ;;
     --metastore-name)  METASTORE_NAME="$2"; shift 2 ;;
     --storage-root)    STORAGE_ROOT="$2"; shift 2 ;;
-    -h|--help) sed -n '2,46p' "$0"; exit 0 ;;
+    -h|--help) sed -n '2,49p' "$0"; exit 0 ;;
     *) echo "Unknown arg: $1" >&2; exit 1 ;;
   esac
 done
@@ -72,6 +74,11 @@ done
 [[ -z "$ACCOUNT_ID" ]] && { echo "ERROR: set DATABRICKS_ACCOUNT_ID or pass --account-id" >&2; exit 1; }
 [[ -z "$REGION" || -z "$WORKSPACE_ID" ]] && { echo "ERROR: --region and --workspace-id are required" >&2; exit 1; }
 METASTORE_NAME="${METASTORE_NAME:-loom-${REGION}}"
+# Normalize the account host: accept a bare host or a full URL, always emit a
+# scheme-prefixed base. Defaults to the Commercial host; pass --account-host
+# accounts.azuredatabricks.us (or set DATABRICKS_ACCOUNT_HOST) for Azure US Gov.
+ACCOUNT_HOST="${ACCOUNT_HOST#https://}"; ACCOUNT_HOST="${ACCOUNT_HOST#http://}"; ACCOUNT_HOST="${ACCOUNT_HOST%/}"
+ACCOUNT_HOST="https://${ACCOUNT_HOST}"
 # Normalize the workspace host (strip scheme / trailing slash) if supplied.
 WORKSPACE_HOST="${WORKSPACE_HOST#https://}"; WORKSPACE_HOST="${WORKSPACE_HOST#http://}"; WORKSPACE_HOST="${WORKSPACE_HOST%/}"
 

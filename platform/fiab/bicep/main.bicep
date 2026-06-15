@@ -677,6 +677,15 @@ var cosmosDocSuffix = (boundary == 'GCC-High' || boundary == 'IL5') ? 'azure.us'
 // env (LOOM_WEAVE_PG_FQDN, below) matches the server the DLZ module deploys.
 // Commercial/GCC → postgres.database.azure.com; GCC-High/IL5 → .usgovcloudapi.net.
 var pgHostSuffix = (boundary == 'GCC-High' || boundary == 'IL5') ? 'postgres.database.usgovcloudapi.net' : 'postgres.database.azure.com'
+// Databricks ACCOUNT control-plane host (accounts.azuredatabricks.*), forwarded
+// to the Console as LOOM_DATABRICKS_ACCOUNT_HOST so the Catalog → Metastores UC
+// account API (list/assign) and the bootstrap deploymentScript both target the
+// correct sovereign endpoint. Commercial + GCC run in Azure public cloud
+// (accounts.azuredatabricks.net); Azure US Government (GCC-High/IL5) uses the
+// .us host. UC itself is only enabled on Commercial/GCC (landing-zone
+// dlzUcSupported), so the .us branch is defensive — the env is harmless when
+// no account id is set.
+var databricksAccountHost = (boundary == 'GCC-High' || boundary == 'IL5') ? 'accounts.azuredatabricks.us' : 'accounts.azuredatabricks.net'
 
 resource adminPlaneRg 'Microsoft.Resources/resourceGroups@2024-03-01' = if (deployAdminPlane) {
   name: adminPlaneRgName
@@ -710,6 +719,14 @@ module adminPlane 'modules/admin-plane/main.bicep' = if (deployAdminPlane) {
     purviewEnabled: purviewEnabled
     atlasOnAksEnabled: atlasOnAksEnabled
     databricksUnityCatalogEnabled: databricksUnityCatalogEnabled
+    // Databricks ACCOUNT API → Console. Forwarding the account GUID makes the
+    // Catalog → Metastores "Unity Catalog" Section a REAL configured UC by
+    // default: isAccountApiConfigured() returns true, so Browse can list the
+    // account metastores + one-click attach (no manual env patch). Empty leaves
+    // the account-admin attach honestly gated — registration/listing still work.
+    // The host follows the sovereign cloud (Commercial/GCC → .net; US Gov → .us).
+    loomDatabricksAccountId: databricksAccountId
+    loomDatabricksAccountHost: empty(databricksAccountId) ? '' : databricksAccountHost
     keyVaultHsmIsolated: keyVaultHsmIsolated
     consolePrincipalNeedsCmkBind: consolePrincipalNeedsCmkBind
     adminEntraGroupId: adminEntraGroupId

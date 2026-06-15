@@ -41,9 +41,14 @@ As of 2026-06 the deploy configures Unity Catalog **by default** so that
 `Browse > Unity Catalog` shows a real configured metastore/catalog with no manual
 clicking. Two prerequisites, both one-time:
 
-1. **Set the Databricks account id.** In `params/{commercial,commercial-full,gcc}.bicepparam`
-   set `param databricksAccountId = '<account-guid>'` (account console → ⊙ menu →
-   *Account ID*).
+1. **Set the Databricks account id.** Export `LOOM_DATABRICKS_ACCOUNT_ID=<account-guid>`
+   before the deploy (account console → ⊙ menu → *Account ID*). All UC-supported
+   param files (`params/{commercial,commercial-full,gcc,tenant-dmlz}.bicepparam`)
+   read it via `readEnvironmentVariable('LOOM_DATABRICKS_ACCOUNT_ID','')`, so no
+   param-file edit is needed. The same id is forwarded to the Console container
+   env (`main.bicep` → `adminPlane` → `LOOM_DATABRICKS_ACCOUNT_ID`) so Browse can
+   list account metastores + offer one-click attach by default. For Azure US
+   Government, also set repo var / env `DATABRICKS_ACCOUNT_HOST=accounts.azuredatabricks.us`.
 2. **Make the Console UAMI a Databricks account admin** (one-time human step — see
    *Alternative — Account Admin* below; use the UAMI's **Application ID**,
    `LOOM_UAMI_CLIENT_ID`).

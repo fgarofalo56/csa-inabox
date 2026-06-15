@@ -217,6 +217,11 @@ module databricksUcBootstrap 'databricks-uc-bootstrap.bicep' = if (dlzUcSupporte
   params: {
     location: location
     databricksAccountId: databricksAccountId
+    // Sovereign-aware account control-plane host. Commercial/GCC run in Azure
+    // public cloud (accounts.azuredatabricks.net); Azure US Government uses .us.
+    // dlzUcSupported already restricts this module to Commercial/GCC, so the .us
+    // branch is defensive.
+    accountHost: (boundary == 'GCC-High' || boundary == 'IL5') ? 'accounts.azuredatabricks.us' : 'accounts.azuredatabricks.net'
     workspaceNumericId: databricks.outputs.workspaceNumericId
     workspaceHost: databricks.outputs.workspaceHost
     consoleUamiClientId: consoleUamiAppId
