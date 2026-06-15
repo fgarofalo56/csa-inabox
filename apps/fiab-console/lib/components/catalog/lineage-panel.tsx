@@ -9,8 +9,27 @@ import { LineageCanvas, type LineageCanvasHandle, type CanvasLineageNode, type C
 
 const useStyles = makeStyles({
   wrap: { display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalM, height: '100%' },
-  toolbar: { display: 'flex', gap: tokens.spacingHorizontalM, alignItems: 'center', flexWrap: 'wrap' },
+  toolbar: {
+    display: 'flex', gap: tokens.spacingHorizontalM, alignItems: 'center', flexWrap: 'wrap',
+    paddingBottom: tokens.spacingVerticalS, borderBottom: `1px solid ${tokens.colorNeutralStroke2}`,
+  },
+  toolbarSpacer: { flex: 1 },
   sourceRow: { display: 'flex', gap: tokens.spacingHorizontalXS, alignItems: 'center', flexWrap: 'wrap' },
+  hintPre: {
+    marginTop: tokens.spacingVerticalS,
+    marginBottom: 0,
+    padding: tokens.spacingVerticalS,
+    fontFamily: tokens.fontFamilyMonospace,
+    fontSize: tokens.fontSizeBase200,
+    lineHeight: tokens.lineHeightBase200,
+    color: tokens.colorNeutralForeground2,
+    backgroundColor: tokens.colorNeutralBackground3,
+    borderRadius: tokens.borderRadiusMedium,
+    whiteSpace: 'pre-wrap',
+    wordBreak: 'break-word',
+    overflowX: 'auto',
+    maxHeight: '200px',
+  },
 });
 
 interface LineagePanelProps { source: 'purview'|'unity-catalog'|'onelake'; id: string; host?: string; workspaceId?: string; itemId?: string; }
@@ -88,28 +107,31 @@ export function LineagePanel({ source, id, host, workspaceId, itemId }: LineageP
           />
         )}
         {merge && sources.length > 0 && (
-          <div className={s.sourceRow}>
-            {sources.map((src) => (
-              <Badge
-                key={src.source}
-                appearance={src.ok ? 'tint' : 'outline'}
-                color={src.ok ? 'success' : 'warning'}
-                size="small"
-              >
-                {SOURCE_LABEL[src.source] || src.source}{src.ok ? ` · ${src.nodeCount ?? 0}` : ' · gated'}
-              </Badge>
-            ))}
-          </div>
+          <>
+            <div className={s.toolbarSpacer} />
+            <div className={s.sourceRow}>
+              {sources.map((src) => (
+                <Badge
+                  key={src.source}
+                  appearance={src.ok ? 'tint' : 'outline'}
+                  color={src.ok ? 'success' : 'warning'}
+                  size="small"
+                >
+                  {SOURCE_LABEL[src.source] || src.source}{src.ok ? ` · ${src.nodeCount ?? 0}` : ' · gated'}
+                </Badge>
+              ))}
+            </div>
+          </>
         )}
       </div>
       {loading && <Spinner label="Loading lineage" />}
-      {error && <MessageBar intent="warning"><MessageBarBody><strong>Lineage unavailable:</strong> {error}{hint && <pre style={{ marginTop: 8, fontSize: 11, whiteSpace: 'pre-wrap' }}>{JSON.stringify(hint, null, 2)}</pre>}</MessageBarBody></MessageBar>}
+      {error && <MessageBar intent="warning"><MessageBarBody><strong>Lineage unavailable:</strong> {error}{hint && <pre className={s.hintPre}>{JSON.stringify(hint, null, 2)}</pre>}</MessageBarBody></MessageBar>}
       {!loading && !error && gatedSources.map((src) => (
         <MessageBar key={src.source} intent="warning">
           <MessageBarBody>
             <MessageBarTitle>{SOURCE_LABEL[src.source] || src.source} lineage not merged</MessageBarTitle>
             {src.gate}
-            {!!src.hint && <pre style={{ marginTop: 8, fontSize: 11, whiteSpace: 'pre-wrap' }}>{JSON.stringify(src.hint, null, 2)}</pre>}
+            {!!src.hint && <pre className={s.hintPre}>{JSON.stringify(src.hint, null, 2)}</pre>}
           </MessageBarBody>
         </MessageBar>
       ))}
