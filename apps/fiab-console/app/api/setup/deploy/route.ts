@@ -63,6 +63,19 @@ interface SetupConfig {
   weaveOntologyEnabled?: boolean;
   databricksUnityCatalogEnabled?: boolean;
   databricksSqlWarehouseEnabled?: boolean;
+  /**
+   * Console metadata Cosmos (the serverless `loom` DB the BFF reads/writes).
+   * Opt-out flag, default true → provision-new serverless. When the scan-and-
+   * choose UI selects "use existing", set false (or leave true) + the
+   * existingCosmos* coordinates so the hub provision is skipped and the Console
+   * binds to the reused account. Disabling without an existing account is invalid
+   * (the Console cannot run without a metadata store) — the wizard only offers
+   * disable alongside an existing-account selection.
+   */
+  loomConsoleCosmosEnabled?: boolean;
+  existingCosmosAccount?: string;
+  existingCosmosRg?: string;
+  existingCosmosSub?: string;
   /** Multi-sub: parallel arrays the bicep `[for]` loop consumes. */
   dlzSubscriptionIds?: string[];
   dlzDomainNames?: string[];
@@ -102,7 +115,9 @@ export async function POST(req: NextRequest) {
   // deployed every deploy MUST be 'dlz-attach' — it is impossible to stamp a
   // second Console from the UI or the API. The bicep enforces the same at the
   // template layer (the adminPlane module is gated on topology=='tenant').
-  const topology: 'tenant' | 'dlz-attach' = body.topology ?? 'tenant';
+  // Cast through the captured string; the runtime guard below rejects anything
+  // outside the two-value union, so the narrow type is sound after the check.
+  const topology = (body.topology ?? 'tenant') as 'tenant' | 'dlz-attach';
   if (topology !== 'tenant' && topology !== 'dlz-attach') {
     return NextResponse.json(
       { ok: false, error: `Unknown topology '${body.topology}'. Must be 'tenant' or 'dlz-attach'.` },
@@ -225,6 +240,29 @@ export async function POST(req: NextRequest) {
         ok: false,
         error: `Invalid topology "${body.topology}". Must be one of: ${[...ALLOWED_TOPOLOGIES].join(', ')}.`,
       },
+      { status: 400 },
+    );
+  }
+
+  // Console metadata Cosmos guard — disabling the hub provision is ONLY honest
+  // when reusing an existing account (the Console requires a metadata store; with
+  // the provision off and no reuse, LOOM_COSMOS_ENDPOINT points at nothing and
+  // all item/config CRUD fails). The wizard never offers bare disable, but defend
+  // the API too (no-vaporware).
+  if (body.loomConsoleCosmosEnabled === false && !body.existingCosmosAccount) {
+    return NextResponse.json(
+      {
+        ok: false,
+        error:
+          'Cannot disable the Console metadata Cosmos without reusing an existing account. ' +
+          'The Console requires a metadata store. Choose "provision new (serverless)" or supply existingCosmosAccount.',
+      },
+      { status: 400 },
+    );
+  }
+  if (body.existingCosmosSub && !GUID_RE.test(body.existingCosmosSub)) {
+    return NextResponse.json(
+      { ok: false, error: `existingCosmosSub is not a valid GUID: ${body.existingCosmosSub}` },
       { status: 400 },
     );
   }
@@ -395,6 +433,23 @@ export async function POST(req: NextRequest) {
       `dlzDomainNames="[${domainNames.map((d) => `'${d}'`).join(',')}]" capacitySku=${body.capacitySku}`
     : `  -p dlzDomainNames="['${body.domainName}']" capacitySku=${body.capacitySku}`;
 
+  // Console metadata Cosmos scan-and-choose → named bicep params (no free-form).
+  // Default (provision-new serverless) emits nothing — main.bicep's
+  // loomConsoleCosmosEnabled defaults true. Reuse/disable emit the existing*
+  // coordinates so the hub provision auto-skips and the Console binds to it.
+  const consoleCosmosParam = (() => {
+    if (body.existingCosmosAccount) {
+      const parts = [
+        `loomConsoleCosmosEnabled=${body.loomConsoleCosmosEnabled === false ? 'false' : 'true'}`,
+        `existingCosmosAccount=${body.existingCosmosAccount}`,
+      ];
+      if (body.existingCosmosRg) parts.push(`existingCosmosRg=${body.existingCosmosRg}`);
+      if (body.existingCosmosSub) parts.push(`existingCosmosSub=${body.existingCosmosSub}`);
+      return `  -p ${parts.join(' ')} \\`;
+    }
+    return '';
+  })();
+
   // dlz-attach: the manual command threads topology + the hub coordinates the
   // tenant-topology doc recorded (so no Azure id is free-typed). The orchestrator
   // path is strongly preferred — it fills the hub* params automatically.
@@ -436,6 +491,7 @@ export async function POST(req: NextRequest) {
           `  -f platform/fiab/bicep/main.bicep \\`,
           `  -p ${paramFile} \\`,
           `  -p topology=tenant boundary=${body.boundary} deploymentMode=${body.mode} \\`,
+          ...(consoleCosmosParam ? [consoleCosmosParam] : []),
           dlzParamLine,
           `bash scripts/csa-loom/post-deploy-bootstrap.sh`,
         ];

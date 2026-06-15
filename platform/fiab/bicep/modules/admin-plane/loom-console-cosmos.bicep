@@ -56,6 +56,16 @@ resource account 'Microsoft.DocumentDB/databaseAccounts@2024-12-01-preview' = {
   identity: { type: 'SystemAssigned' }
   properties: {
     databaseAccountOfferType: 'Standard'
+    // SERVERLESS — the Console BFF lazily createIfNotExists()'s well over 25
+    // containers (9 pre-created below + tenant-settings, connections, copilot-*,
+    // saved-queries, …). A shared-throughput (provisioned/autoscale) database
+    // caps at 25 containers, which produced live "collection count exceeded 25"
+    // 500s on workspaces/domains (PRP gap #5). Serverless removes the cap and the
+    // per-DB/per-container throughput requirement; consumption-billed. Set via the
+    // top-level capacityMode property (NOT the legacy 'EnableServerless' capability —
+    // never set both). Serverless requires a single write region, no zone
+    // redundancy, no automatic failover — all already satisfied above.
+    capacityMode: 'Serverless'
     consistencyPolicy: { defaultConsistencyLevel: defaultConsistency }
     locations: [
       { locationName: location, failoverPriority: 0, isZoneRedundant: false }
@@ -96,7 +106,9 @@ resource loomDb 'Microsoft.DocumentDB/databaseAccounts/sqlDatabases@2024-12-01-p
   name: loomDatabase
   properties: {
     resource: { id: loomDatabase }
-    options: { autoscaleSettings: { maxThroughput: 4000 } }
+    // NO throughput options: a serverless account forbids provisioned/autoscale
+    // throughput on its databases and containers (deploy fails otherwise).
+    // Capacity is account-level (capacityMode: 'Serverless'), consumption-billed.
   }
 }
 

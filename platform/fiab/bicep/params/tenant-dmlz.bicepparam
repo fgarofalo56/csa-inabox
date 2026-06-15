@@ -181,6 +181,11 @@ param apimEnabled = true
 param aiSearchEnabled = false
 param adxEnabled = true
 param cosmosGraphVectorEnabled = true
+// Console's own serverless metadata Cosmos (the `loom` DB the BFF reads/writes).
+// On by default; the hub module fires for this tenant topology (no local DLZ to
+// host it). Serverless removes the 25-container shared-throughput cap that broke
+// workspaces/domains live. Auto-skips if a BYO existingCosmosAccount is supplied.
+param loomConsoleCosmosEnabled = true
 param vpnGatewayEnabled = true
 param appGatewayEnabled = true
 param mlWorkspaceEnabled = true
