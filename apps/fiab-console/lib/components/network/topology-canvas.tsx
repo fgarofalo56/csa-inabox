@@ -36,7 +36,7 @@ import {
 } from '@fluentui/react-components';
 import { Dismiss24Regular } from '@fluentui/react-icons';
 import type {
-  PrivateEndpointInfo, VNetInfo, SubnetInfo, NsgInfo, NsgRule,
+  PrivateEndpointInfo, VNetInfo, SubnetInfo, NsgInfo, NsgRule, PrivateDnsZoneInfo,
 } from '@/lib/azure/network-discovery';
 
 /**
@@ -76,6 +76,10 @@ interface TopologyData {
   vnets: VNetInfo[];
   nsgs?: NsgInfo[];
   zones: string[];
+  /** Private DNS zones + their authoritative A-records. When present, the zone
+   * drawer prefers these records (some zones carry A-records whose IP the PE's
+   * customDnsConfigs never echoes), unioning them with PE-derived records. */
+  dnsZones?: PrivateDnsZoneInfo[];
 }
 
 interface TopologyCanvasProps {
@@ -91,7 +95,8 @@ const useStyles = makeStyles({
     minHeight: '520px',
     backgroundColor: tokens.colorNeutralBackground1,
     border: `1px solid ${tokens.colorNeutralStroke2}`,
-    borderRadius: '4px',
+    borderRadius: tokens.borderRadiusLarge,
+    overflow: 'hidden',
   },
   detailRow: { marginBottom: '10px' },
   mono: { fontFamily: 'Consolas, monospace', fontSize: '12px' },
@@ -325,7 +330,7 @@ function buildTopology(data: TopologyData): { nodes: Node[]; edges: Edge[] } {
       data: {
         detail: { kind: 'nsg', nsg } as NodeDetail,
         label: (
-          <div style={{ lineHeight: 1.3 }}>
+          <div style={{ lineHeight: 1.3 }} title={nsg.name}>
             <div>🛡️</div>
             <div style={{ fontSize: '9px', fontWeight: 600 }}>
               {nsg.name.length > 16 ? `${nsg.name.slice(0, 14)}…` : nsg.name}
@@ -396,13 +401,34 @@ function buildTopology(data: TopologyData): { nodes: Node[]; edges: Edge[] } {
       data: {
         detail: { kind: 'pe', pe } as NodeDetail,
         label: (
-          <div style={{ lineHeight: 1.3 }}>
+          <div style={{ lineHeight: 1.3 }} title={serviceLabel}>
             <div>{color.icon}</div>
             <div style={{ fontSize: '8px', fontWeight: 600 }}>
               {serviceLabel.length > 12
                 ? `${serviceLabel.slice(0, 10)}...`
                 : serviceLabel}
             </div>
+            {pe.loomDomain && (
+              <div
+                title={pe.loomDomain}
+                style={{
+                  marginTop: '2px',
+                  fontSize: '8px',
+                  fontWeight: 600,
+                  backgroundColor: tokens.colorBrandBackground2,
+                  color: tokens.colorBrandForeground1,
+                  padding: '1px 3px',
+                  borderRadius: '3px',
+                  display: 'inline-block',
+                  maxWidth: '80px',
+                  overflow: 'hidden',
+                  textOverflow: 'ellipsis',
+                  whiteSpace: 'nowrap',
+                }}
+              >
+                {pe.loomDomain}
+              </div>
+            )}
           </div>
         ),
       },
@@ -429,14 +455,29 @@ function buildTopology(data: TopologyData): { nodes: Node[]; edges: Edge[] } {
   let zoneX = 0;
   const zoneY = peY + 110;
 
+  // Authoritative A-records per zone (some zones hold records whose IP the PE's
+  // customDnsConfigs never echoes). Keyed by zone name for union with PE records.
+  const zoneRecordsByZone = new Map<string, { fqdn: string; ips: string[] }[]>();
+  for (const z of data.dnsZones || []) {
+    zoneRecordsByZone.set(z.name, (z.records || []).map((r) => ({ fqdn: r.fqdn, ips: r.ips })));
+  }
+
   for (const zone of data.zones.slice(0, 12)) {
     const zoneId = `zone-${zone}`;
-    const fqdns: { fqdn: string; ips: string[] }[] = [];
+    // Union the authoritative zone A-records with the PE-derived records,
+    // de-duplicating on FQDN (zone record wins — it is the source of truth).
+    const byFqdn = new Map<string, { fqdn: string; ips: string[] }>();
+    for (const r of zoneRecordsByZone.get(zone) || []) {
+      if (r.fqdn) byFqdn.set(r.fqdn, { fqdn: r.fqdn, ips: r.ips });
+    }
     for (const pe of data.endpoints) {
       for (const d of pe.dns) {
-        if (d.zone === zone) fqdns.push({ fqdn: d.fqdn, ips: d.ips });
+        if (d.zone === zone && d.fqdn && !byFqdn.has(d.fqdn)) {
+          byFqdn.set(d.fqdn, { fqdn: d.fqdn, ips: d.ips });
+        }
       }
     }
+    const fqdns: { fqdn: string; ips: string[] }[] = [...byFqdn.values()];
     nodes.push({
       id: zoneId,
       type: 'default',
@@ -588,6 +629,14 @@ function DetailBody({ detail }: { detail: NodeDetail }): React.ReactElement {
       <div>
         <div className={styles.detailRow}><Body1Strong>Connected resource</Body1Strong><br />
           {pe.connectedResourceName || '—'}</div>
+        {pe.connectedResourceType && (
+          <div className={styles.detailRow}><Body1Strong>Resource type</Body1Strong><br />
+            <span className={styles.mono}>{pe.connectedResourceType}</span></div>
+        )}
+        <div className={styles.detailRow}><Body1Strong>Loom domain</Body1Strong><br />
+          {pe.loomDomain
+            ? <Badge appearance="tint" color="brand">{pe.loomDomain}</Badge>
+            : <Caption1 style={{ color: tokens.colorNeutralForeground3 }}>Shared / admin plane (untagged)</Caption1>}</div>
         <div className={styles.detailRow}><Body1Strong>Sub-resource</Body1Strong><br />
           {pe.groupIds.join(', ') || '—'}</div>
         <div className={styles.detailRow}><Body1Strong>Subnet</Body1Strong><br />

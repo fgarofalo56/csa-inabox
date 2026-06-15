@@ -46,7 +46,8 @@ DNS via ARM. There is **no dependency on real Microsoft Fabric** — it works wi
 | VNet topology view | ✅ Built | `listVirtualNetworks()` → `NetworkTopologyCanvas` |
 | **Network security groups + rule grid** | ✅ Built | `listNetworkSecurityGroups()` → NSG inventory table + topology NSG nodes; clicking a node opens the full inbound/outbound rule grid (priority/direction/access/protocol/source→dest:port) |
 | **Visual topology — real connectivity edges** | ✅ Built | `NetworkTopologyCanvas.buildTopology()` keys PE→subnet edges on the PE's real `properties.subnet.id` and subnet→NSG edges on `subnet.networkSecurityGroup.id` (no more VNet[0] decorative edges) |
-| **Clickable node detail (read-only)** | ✅ Built | `onNodeClick` → Fluent `OverlayDrawer` rendering each node's real ARM detail (VNet CIDRs+subnets, subnet prefix/delegations/NSG, NSG rule grid, PE FQDN→IP→zone, DNS-zone records) |
+| **PE → Loom service / owning domain binding** | ✅ Built | `bindLoomServices()` joins each PE's `connectedResourceId` to its backing resource's ARM type + `loom-domain` chargeback tag via **Azure Resource Graph** (`POST …/Microsoft.ResourceGraph/resources`); the PE node carries a domain badge, the inventory table a "Loom domain" column, and the detail drawer shows resource type + domain. Best-effort (Reader-only) — unbound/untagged endpoints keep their base label |
+| **Clickable node detail (read-only)** | ✅ Built | `onNodeClick` → Fluent `OverlayDrawer` rendering each node's real ARM detail (VNet CIDRs+subnets, subnet prefix/delegations/NSG, NSG rule grid, PE FQDN→IP→zone + resource type + Loom domain, DNS-zone records) |
 | Copy/paste hosts-file block | ✅ Built | `buildHostsBlock(endpoints, dnsZones)` → UI copy button |
 | Enterprise DNS guidance (conditional forwarders / DNS Private Resolver / VNet-links / VPN) | ✅ Built | Static guidance rendered in `NetworkPane` |
 | Hub VNet + 9 subnets (Firewall, Bastion, Container-platform, Functions, APIM, Private-Endpoints, Reserved, GatewaySubnet, AppGW) | ✅ Built | `network.bicep` subnet layout |
@@ -96,7 +97,16 @@ default** as the supported equivalent.
 - **Topology** — `NetworkTopologyCanvas` renders VNets → subnets → NSGs →
   endpoints → DNS zones. Edges reflect **real** connectivity: PE→subnet keyed on
   `PrivateEndpointInfo.subnetId`, subnet→NSG keyed on `SubnetInfo.nsgId` /
-  `NsgInfo.subnetIds`. Every node is clickable (`onNodeClick`) and opens an
+  `NsgInfo.subnetIds`. Each PE is enriched with the **Loom service it fronts** —
+  `bindLoomServices()` runs the documented ARG `Resources` query to resolve the
+  backing resource's ARM type + `loom-domain` tag (`DOMAIN_TAG_KEY`), the same
+  Azure-native join Network Watcher Topology uses, on the Reader the PE scan
+  already requires. The pure shapers `shapeLoomBinding` / `applyLoomBindings`
+  are unit-tested (`lib/azure/__tests__/network-discovery-binding.test.ts`).
+  The zone drawer prefers the **authoritative private-DNS-zone A-records**
+  (`PrivateDnsZoneInfo.records`, threaded through `TopologyData.dnsZones`),
+  unioned with PE-derived records, so zones whose IP the PE never echoes still
+  render their FQDN→IP. Every node is clickable (`onNodeClick`) and opens an
   `OverlayDrawer` with that resource's live ARM detail — read-only, no mutation.
 - **Gate** — when the UAMI lacks Reader on the network scope,
   `NetworkDiscoveryError` returns 200 with an honest MessageBar (not a 500).
@@ -128,6 +138,12 @@ reads go through `cloud-endpoints.armBase()` — cloud-correct by construction.
   already covered by Reader, and the `nsg-<subnet>` resources are already
   deployed by `network.bicep` (`nsgSubnets` + `subnetNsgAttach`), so no new
   Azure resource, env var, or grant is introduced by the topology enhancement.
+- The PE→Loom-domain binding uses **Azure Resource Graph** (`Microsoft.ResourceGraph/resources`),
+  which is covered by the same subscription **Reader** — no new role, env var, or
+  Azure resource. The `loom-domain` tag it reads is stamped by `dlz-attach` on
+  every DLZ resource (`DOMAIN_TAG_KEY`), so the binding lights up automatically
+  for domain-scoped resources and stays blank (untagged) for shared/admin-plane
+  ones, matching `topology-inventory.ts`'s chargeback convention.
 
 ## Verification
 

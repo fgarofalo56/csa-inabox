@@ -34,7 +34,8 @@ import { NetworkTopologyCanvas } from './topology-canvas';
 interface DnsRecord { fqdn: string; ips: string[]; zone: string; }
 interface PrivateEndpoint {
   id: string; name: string; resourceGroup?: string; location?: string;
-  connectedResourceName?: string; groupIds: string[]; state?: string; dns: DnsRecord[];
+  connectedResourceName?: string; connectedResourceType?: string; loomDomain?: string;
+  groupIds: string[]; state?: string; dns: DnsRecord[];
   subnetId?: string; subnetName?: string;
 }
 interface VNetLite {
@@ -297,6 +298,7 @@ export function NetworkPane() {
               <TableHeader>
                 <TableRow>
                   <TableHeaderCell>Service</TableHeaderCell>
+                  <TableHeaderCell>Loom domain</TableHeaderCell>
                   <TableHeaderCell>Sub-resource</TableHeaderCell>
                   <TableHeaderCell>FQDN</TableHeaderCell>
                   <TableHeaderCell>Private IP</TableHeaderCell>
@@ -309,6 +311,7 @@ export function NetworkPane() {
                   (pe.dns.length ? pe.dns : [{ fqdn: '(no DNS config)', ips: [], zone: '' }]).map((rec, i) => (
                     <TableRow key={`${pe.id}-${i}`}>
                       <TableCell>{i === 0 ? (pe.connectedResourceName || pe.name) : ''}</TableCell>
+                      <TableCell>{i === 0 ? (pe.loomDomain ? <Badge appearance="tint" color="brand">{pe.loomDomain}</Badge> : <span style={{ color: tokens.colorNeutralForeground3 }}>—</span>) : ''}</TableCell>
                       <TableCell>{i === 0 ? pe.groupIds.join(', ') : ''}</TableCell>
                       <TableCell style={{ fontFamily: 'Consolas, monospace', fontSize: 12 }}>{rec.fqdn}</TableCell>
                       <TableCell style={{ fontFamily: 'Consolas, monospace', fontSize: 12 }}>{rec.ips.join(', ') || '—'}</TableCell>
@@ -415,9 +418,10 @@ export function NetworkPane() {
             <Subtitle2>CSA Loom network topology</Subtitle2>
           </div>
           <Body1 style={{ display: 'block', marginBottom: 10, color: tokens.colorNeutralForeground3 }}>
-            vNets → subnets → NSGs → private endpoints → the Azure service each fronts. Select any node for its live ARM detail.
+            vNets → subnets → NSGs → private endpoints → the Azure service each fronts, tagged with the owning
+            Loom domain (resolved via Azure Resource Graph). Select any node for its live ARM detail.
           </Body1>
-          <NetworkTopologyCanvas data={{ endpoints: (data.endpoints || []) as any, vnets: (data.vnets || []) as any, nsgs: (data.nsgs || []) as any, zones: data.zones || [] }} />
+          <NetworkTopologyCanvas data={{ endpoints: (data.endpoints || []) as any, vnets: (data.vnets || []) as any, nsgs: (data.nsgs || []) as any, zones: data.zones || [], dnsZones: (data.dnsZones || []) as any }} />
         </div>
       )}
 

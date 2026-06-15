@@ -34,6 +34,7 @@ import {
   armBase, armScope, stripArmBase, detectLoomCloud, cloudBoundaryLabel,
   type LoomCloud,
 } from './cloud-endpoints';
+import { DOMAIN_TAG_KEY } from './domain-registry';
 
 const ARM_SCOPE = armScope();
 const SUBSCRIPTIONS_API = '2022-12-01';
@@ -79,6 +80,14 @@ export interface PrivateEndpointInfo {
   connectedResourceId?: string;
   /** Friendly name of the connected resource (last id segment). */
   connectedResourceName?: string;
+  /** ARM resource type of the connected backing service, resolved via Azure
+   * Resource Graph (e.g. `Microsoft.Synapse/workspaces`). Lets the topology label
+   * each PE with the Loom logical service it fronts, not just the raw name. */
+  connectedResourceType?: string;
+  /** Loom domain id the backing service is tagged with (the `loom-domain`
+   * chargeback tag dlz-attach stamps), resolved via Azure Resource Graph.
+   * undefined for shared/admin-plane resources or when ARG is unreadable. */
+  loomDomain?: string;
   /** Sub-resource group(s), e.g. ['sqlServer'] / ['blob'] / ['Dev']. */
   groupIds: string[];
   /** Provisioning + connection state. */
@@ -235,6 +244,143 @@ export async function listPrivateEndpoints(): Promise<PrivateEndpointInfo[]> {
   all.forEach((pe) => { delete pe._nicId; });
   all.sort((a, b) => (a.connectedResourceName || a.name).localeCompare(b.connectedResourceName || b.name));
   return all;
+}
+
+// ── Loom-service binding: PE → backing resource's loom-domain + type (ARG) ──
+//
+// A private endpoint only knows the ARM id of the resource it fronts. To answer
+// "which Loom logical service / owning domain does this endpoint belong to?" we
+// join each PE's connectedResourceId to that resource's ARM type + `loom-domain`
+// chargeback tag (the same tag dlz-attach stamps, DOMAIN_TAG_KEY). Azure Resource
+// Graph is the documented Azure-native way to resolve these relationships — it is
+// exactly how Network Watcher Topology itself draws the graph — and needs only the
+// Reader the PE scan already requires. Best-effort: a missing ARG read leaves the
+// PE labelled by its raw name, never blanks the topology (no-vaporware honest gate
+// is the route's job; here we degrade silently).
+//
+//   POST {arm}/providers/Microsoft.ResourceGraph/resources?api-version=2022-10-01
+//   { query: "Resources | where id in~ (...) | project id, type, tags" }
+//
+// Learn: https://learn.microsoft.com/azure/governance/resource-graph/overview
+//        https://learn.microsoft.com/azure/network-watcher/network-insights-topology
+const RESOURCE_GRAPH_API = '2022-10-01';
+
+/** Loom-service binding for a single PE's backing resource (ARG join result). */
+export interface LoomServiceBinding {
+  /** Lowercased ARM id of the backing resource — the join key against the PE. */
+  resourceId: string;
+  /** ARM resource type, e.g. `Microsoft.Synapse/workspaces`. */
+  resourceType?: string;
+  /** `loom-domain` tag value (the domain id), or undefined when untagged. */
+  loomDomain?: string;
+}
+
+/**
+ * PURE: shape one ARG `Resources` row → a {@link LoomServiceBinding}. The
+ * `loom-domain` tag value may be stamped as either `loom-domain:<id>` or the
+ * bare `<id>` (both forms exist in the wild — see topology-inventory's filter),
+ * so normalise to the bare domain id. Unit-testable like `shapeNsg`.
+ */
+export function shapeLoomBinding(row: any): LoomServiceBinding {
+  const resourceId = String(row?.id || '').toLowerCase();
+  const tags: Record<string, unknown> =
+    row?.tags && typeof row.tags === 'object' ? row.tags : {};
+  const rawTag = tags[DOMAIN_TAG_KEY];
+  let loomDomain: string | undefined;
+  if (typeof rawTag === 'string' && rawTag.trim()) {
+    const v = rawTag.trim();
+    loomDomain = v.includes(':') ? v.split(':').pop() || undefined : v;
+  }
+  return {
+    resourceId,
+    resourceType: typeof row?.type === 'string' ? row.type : undefined,
+    loomDomain: loomDomain || undefined,
+  };
+}
+
+/**
+ * PURE: stamp each endpoint's `connectedResourceType` + `loomDomain` from the ARG
+ * bindings, joining case-insensitively on the backing resource's ARM id. Mutates
+ * the endpoints in place; endpoints with no matching binding are left untouched.
+ */
+export function applyLoomBindings(
+  endpoints: PrivateEndpointInfo[],
+  bindings: LoomServiceBinding[],
+): void {
+  const byId = new Map<string, LoomServiceBinding>();
+  for (const b of bindings) if (b.resourceId) byId.set(b.resourceId, b);
+  for (const pe of endpoints) {
+    const key = (pe.connectedResourceId || '').toLowerCase();
+    if (!key) continue;
+    const b = byId.get(key);
+    if (!b) continue;
+    if (b.resourceType) pe.connectedResourceType = b.resourceType;
+    if (b.loomDomain) pe.loomDomain = b.loomDomain;
+  }
+}
+
+/** ARG query for the backing resources' type + loom-domain tag. Throws
+ * {@link NetworkDiscoveryError} on a non-OK ARG response (caller swallows). */
+async function queryResourceBindings(resourceIds: string[]): Promise<LoomServiceBinding[]> {
+  const idList = resourceIds
+    .map((id) => `'${id.replace(/'/g, "''")}'`)
+    .join(', ');
+  const query = [
+    'Resources',
+    `| where id in~ (${idList})`,
+    '| project id, type, tags',
+  ].join('\n');
+
+  const out: LoomServiceBinding[] = [];
+  let skipToken: string | undefined;
+  let guard = 0;
+  do {
+    guard += 1;
+    const options: Record<string, unknown> = { resultFormat: 'objectArray', $top: 1000 };
+    if (skipToken) options.$skipToken = skipToken;
+    const token = await armToken();
+    const res = await fetchWithTimeout(
+      `${armBase()}/providers/Microsoft.ResourceGraph/resources?api-version=${RESOURCE_GRAPH_API}`,
+      {
+        method: 'POST',
+        headers: {
+          authorization: `Bearer ${token}`,
+          accept: 'application/json',
+          'content-type': 'application/json',
+        },
+        body: JSON.stringify({ query, options }),
+        cache: 'no-store',
+      },
+    );
+    const text = await res.text();
+    let json: any = null;
+    try { json = text ? JSON.parse(text) : null; } catch { json = null; }
+    if (!res.ok) {
+      const msg = json?.error?.message || json?.message || `ARG query failed ${res.status}`;
+      throw new NetworkDiscoveryError(msg, res.status, json);
+    }
+    const data: any[] = Array.isArray(json?.data) ? json.data : [];
+    for (const row of data) out.push(shapeLoomBinding(row));
+    skipToken = (json?.$skipToken as string) || undefined;
+  } while (skipToken && guard < 20);
+  return out;
+}
+
+/**
+ * Enrich the endpoints with the Loom service/domain each fronts, via Azure
+ * Resource Graph (Reader-only). Best-effort: any ARG failure (no read, no RP)
+ * leaves the endpoints with their base labels — never throws, never blanks the
+ * topology. Mutates the endpoints in place.
+ */
+export async function bindLoomServices(endpoints: PrivateEndpointInfo[]): Promise<void> {
+  const ids = Array.from(new Set(
+    endpoints.map((e) => e.connectedResourceId).filter((x): x is string => Boolean(x)),
+  ));
+  if (!ids.length) return;
+  try {
+    const bindings = await queryResourceBindings(ids);
+    applyLoomBindings(endpoints, bindings);
+  } catch { /* ARG unreadable — keep base PE labels, topology still renders */ }
 }
 
 // ── Private DNS zones + A-records (authoritative FQDN→IP for the hosts file) ──
