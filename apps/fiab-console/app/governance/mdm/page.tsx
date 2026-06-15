@@ -62,8 +62,11 @@ export default function GovernanceMdmPage() {
   const s = useStyles();
   const [tab, setTab] = useState<'models' | 'refdata' | 'match' | 'golden' | 'runs'>('models');
   const [models, setModels] = useState<MdmModel[]>([]);
+  const [modelsLoading, setModelsLoading] = useState(true);
   const loadModels = useCallback(async () => {
-    try { const r = await fetch('/api/mdm/models'); const j = await r.json(); if (j.ok) setModels(j.models || []); } catch { /* */ }
+    setModelsLoading(true);
+    try { const r = await fetch('/api/mdm/models'); const j = await r.json(); if (j.ok) setModels(j.models || []); }
+    catch { /* */ } finally { setModelsLoading(false); }
   }, []);
   useEffect(() => { loadModels(); }, [loadModels]);
 
@@ -80,7 +83,7 @@ export default function GovernanceMdmPage() {
         <Tab value="golden">Golden records</Tab>
         <Tab value="runs">Runs</Tab>
       </TabList>
-      {tab === 'models' && <ModelsTab models={models} reload={loadModels} />}
+      {tab === 'models' && <ModelsTab models={models} loading={modelsLoading} reload={loadModels} />}
       {tab === 'refdata' && <RefDataTab />}
       {tab === 'match' && <MatchTab models={models} />}
       {tab === 'golden' && <GoldenTab models={models} />}
@@ -90,7 +93,7 @@ export default function GovernanceMdmPage() {
 }
 
 // ----------------------------- Models -----------------------------
-function ModelsTab({ models, reload }: { models: MdmModel[]; reload: () => void }) {
+function ModelsTab({ models, loading, reload }: { models: MdmModel[]; loading: boolean; reload: () => void }) {
   const s = useStyles();
   const [open, setOpen] = useState(false);
   const [editing, setEditing] = useState<MdmModel | null>(null);
@@ -139,7 +142,7 @@ function ModelsTab({ models, reload }: { models: MdmModel[]; reload: () => void 
         <Button icon={<ArrowSync24Regular />} onClick={reload}>Refresh</Button>
         <Button appearance="primary" icon={<Add24Regular />} onClick={openNew}>New model</Button>
       </span>}>
-      <LoomDataTable<MdmModel> columns={cols} rows={models} getRowId={(x) => x.id} empty="No MDM models yet. Create one to define match + survivorship for an entity." />
+      <LoomDataTable<MdmModel> columns={cols} rows={models} getRowId={(x) => x.id} loading={loading} empty="No MDM models yet. Create one to define match + survivorship for an entity." />
 
       <Dialog open={open} onOpenChange={(_, d) => { if (!d.open) setOpen(false); }}>
         <DialogSurface style={{ maxWidth: 640 }}>
