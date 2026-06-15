@@ -35,6 +35,7 @@ Foundry agent tool registration, Microsoft Agent 365 connectors.
 | Session auth for Console users / self-test | ✅ built | MSAL cookie → tenant `oid`. |
 | External path off by default | ✅ built | `LOOM_IQ_MCP_ENABLED` gates the token path; session path always on. |
 | GET discovery document | ✅ built | Unauthenticated; no tenant data. |
+| Console admin discovery card | ✅ built | `lib/components/admin/iq-mcp-panel.tsx` in /admin/tenant-settings → Copilot & Agents: live endpoint URL (copy), live `tools/list` catalog, external-access state, auth modes, paste-ready registration snippet, honest gate when `LOOM_IQ_MCP_ENABLED` is off. Read-only (no freeform config). |
 | Bicep sync (param + env var + secret) | ✅ built | `loomIqMcpEnabled` in `admin-plane/main.bicep`. |
 | Docs + tutorial | ✅ built | `docs/fiab/v3-tenant-bootstrap.md#fabric-iq-mcp`. |
 | Vitest coverage | ✅ built | `lib/azure/__tests__/iq-mcp-tools.test.ts` (11 tests). |
