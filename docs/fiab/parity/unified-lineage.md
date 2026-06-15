@@ -73,13 +73,17 @@ and works with `LOOM_DEFAULT_FABRIC_WORKSPACE` unset.
 | Weave mesh on the graph canvas (table ↔ graph toggle) | ✅ built | `app/thread/page.tsx` |
 | Upstream/downstream layered layout, focus-chain, click-to-open | ✅ built (pre-existing) | `LineageCanvas` |
 | Honest per-source gate (UC system tables / Purview / Atlas-on-AKS) | ⚠️ honest-gate | `sources[]` + Fluent MessageBar; `grant-databricks-system-tables-role.sh` |
-| Column-level lineage (`system.access.column_lineage`) | ❌ follow-up | not yet surfaced (canvas already supports `columns`) |
+| Column-level lineage (`system.access.column_lineage`) | ✅ built | `getColumnLineageSystemTables` → table nodes badged with lineage columns; `?columns=true` draws column→column edges (Lineage tab "Column-level lineage" toggle) |
+| Cross-source identity resolution (UC full_name ⇄ Atlas guid ⇄ storage path) | ✅ built | `asset-identity.ts` `resolveAssetIdentities` (called by `getUnifiedLineage`) — overlays a second source even when the caller holds only one key |
+| Path-referenced external tables bridge to the Purview/ADLS node | ✅ built | UC system tables `source_path`/`target_path` → `path:` identity collapses onto Atlas ADLS node |
+| Forward-compat with deprecated UC `entity_*` columns | ✅ built | `getTableLineageSystemTables` COALESCEs `entity_metadata` struct → legacy `entity_type`/`entity_id` (2025-05-11 deprecation) with column-set fallback |
 
 ## Backend per control
 
 | Control | Calls |
 |---|---|
 | Lineage tab "Unified" toggle ON | `GET /api/catalog/lineage/item?merge=true` → `getUnifiedLineage` |
+| Lineage tab "Column-level lineage" toggle ON (UC) | `GET /api/catalog/lineage/item?columns=true` → `getColumnLineageSystemTables` (badges columns + column edges) |
 | Item lineage drawer (auto) | `GET /api/items/[type]/[id]/lineage` → `getUnifiedLineage` (cloud-dispatched primary + overlays) |
 | Per-source gate badge | `sources[]` from the unified result |
 | Node "Open item" | `openHref` → `/items/{type}/{id}` (internal) or `toLink` (external) |
@@ -98,7 +102,13 @@ and works with `LOOM_DEFAULT_FABRIC_WORKSPACE` unset.
 ## Tests
 
 `lib/azure/__tests__/unified-lineage.test.ts` — `normalizeIdentity` across all
-formats; `mergeGraphs` collapse + multiSource + edge rewrite + self-loop drop;
+formats; `mergeGraphs` collapse + multiSource + edge rewrite + self-loop drop +
+**path-bridge collapse** (UC external table ⇄ Purview ADLS node);
 `getUnifiedLineage` 3-source fan-out, per-source gate degradation, system-table
-entity path, Weave subgraph BFS. Route contract in
-`app/api/items/[type]/[id]/lineage/__tests__/route.test.ts`.
+entity path, Weave subgraph BFS, **column-lineage fan-out** (table-node column
+badges + column→column edges), and **column-lineage best-effort degradation**
+(table graph survives a `column_lineage` gate).
+`lib/azure/__tests__/asset-identity.test.ts` — `storagePathIdentity` mapping;
+`resolveAssetIdentities` UC full_name→guid+path discovery, guid→full_name
+discovery, Purview-unconfigured skip, and best-effort no-throw degradation.
+Route contract in `app/api/items/[type]/[id]/lineage/__tests__/route.test.ts`.

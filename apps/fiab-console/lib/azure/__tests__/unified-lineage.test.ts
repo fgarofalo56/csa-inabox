@@ -41,6 +41,7 @@ const mocks = vi.hoisted(() => ({
   isPurviewConfigured: vi.fn(() => true),
   getTableLineage: vi.fn(),
   getTableLineageSystemTables: vi.fn(),
+  getColumnLineageSystemTables: vi.fn(),
   lineageWarehouseId: vi.fn(() => null as string | null),
   listWorkspaceHostnames: vi.fn(() => ['adb-test.azuredatabricks.net']),
   listThreadEdges: vi.fn(async () => []),
@@ -55,6 +56,7 @@ vi.mock('@/lib/azure/purview-client', () => ({
 vi.mock('@/lib/azure/unity-catalog-client', () => ({
   getTableLineage: mocks.getTableLineage,
   getTableLineageSystemTables: mocks.getTableLineageSystemTables,
+  getColumnLineageSystemTables: mocks.getColumnLineageSystemTables,
   lineageWarehouseId: mocks.lineageWarehouseId,
   listWorkspaceHostnames: mocks.listWorkspaceHostnames,
   UnityCatalogNotConfiguredError: H.UnityCatalogNotConfiguredError,
@@ -75,10 +77,27 @@ vi.mock('./purview-client', () => ({
 vi.mock('./unity-catalog-client', () => ({
   getTableLineage: mocks.getTableLineage,
   getTableLineageSystemTables: mocks.getTableLineageSystemTables,
+  getColumnLineageSystemTables: mocks.getColumnLineageSystemTables,
   lineageWarehouseId: mocks.lineageWarehouseId,
   listWorkspaceHostnames: mocks.listWorkspaceHostnames,
   UnityCatalogNotConfiguredError: H.UnityCatalogNotConfiguredError,
   UnityCatalogError: H.UnityCatalogError,
+}));
+
+// asset-identity.ts resolution probes Purview/Databricks via dynamic import; in
+// the unit tests it must be a no-op (returns the inputs) so the merge behaviour
+// under test is deterministic. Mock both spellings the SUT might resolve.
+// NB: factory bodies are hoisted above module-scope consts, so the path helper
+// is inlined here rather than referenced from an outer binding.
+vi.mock('@/lib/azure/asset-identity', () => ({
+  resolveAssetIdentities: vi.fn(async (i: any) => ({ ucFullName: i.ucFullName, purviewGuid: i.purviewGuid })),
+  storagePathIdentity: (p?: string): string | undefined =>
+    p && /^(abfss?|wasbs?|adl|s3a?|gs):\/\//i.test(p) ? `path:${p.toLowerCase()}` : undefined,
+}));
+vi.mock('./asset-identity', () => ({
+  resolveAssetIdentities: vi.fn(async (i: any) => ({ ucFullName: i.ucFullName, purviewGuid: i.purviewGuid })),
+  storagePathIdentity: (p?: string): string | undefined =>
+    p && /^(abfss?|wasbs?|adl|s3a?|gs):\/\//i.test(p) ? `path:${p.toLowerCase()}` : undefined,
 }));
 
 import {
@@ -96,6 +115,7 @@ beforeEach(() => {
   mocks.lineageWarehouseId.mockReturnValue(null);
   mocks.listWorkspaceHostnames.mockReturnValue(['adb-test.azuredatabricks.net']);
   mocks.listThreadEdges.mockResolvedValue([]);
+  mocks.getColumnLineageSystemTables.mockResolvedValue({ edges: [], columnsByTable: {} });
 });
 
 describe('normalizeIdentity', () => {
@@ -164,6 +184,26 @@ describe('mergeGraphs', () => {
     expect(edges).toHaveLength(1);
     expect(edges[0].from).toBe('main.bronze.raw');
     expect(edges[0].to).toBe(merged?.id);
+  });
+
+  it('bridges a UC external table to the Purview ADLS node via a shared path identity', () => {
+    const graphs: any = [
+      {
+        source: 'unity-catalog',
+        nodes: [{ node: { id: 'abfss://c@a.dfs.core.windows.net/bronze', label: 'bronze', type: 'path', source: 'unity-catalog' }, identities: ['path:abfss://c@a.dfs.core.windows.net/bronze'] }],
+        edges: [],
+      },
+      {
+        source: 'purview',
+        nodes: [{ node: { id: 'G9', label: 'bronze', type: 'azure_datalake_gen2_path', source: 'purview' }, identities: ['guid:g9', 'path:abfss://c@a.dfs.core.windows.net/bronze'] }],
+        edges: [],
+      },
+    ];
+    const { nodes } = mergeGraphs(graphs);
+    // The UC path node and the Purview ADLS node collapse into one.
+    expect(nodes).toHaveLength(1);
+    expect(nodes[0].multiSource).toEqual(['purview', 'unity-catalog']);
+    expect(nodes[0].identity).toBe('path:abfss://c@a.dfs.core.windows.net/bronze');
   });
 
   it('drops self-loops created by the collapse', () => {
@@ -266,5 +306,48 @@ describe('getUnifiedLineage', () => {
     expect(mocks.getTableLineage).not.toHaveBeenCalled();
     // A notebook entity node is present (the producing process).
     expect(res.nodes.some((n) => n.type === 'notebook')).toBe(true);
+  });
+
+  it('badges table nodes with columns and draws column edges when columnLineage is set', async () => {
+    mocks.isPurviewConfigured.mockReturnValue(false);
+    mocks.lineageWarehouseId.mockReturnValue('wh-1');
+    mocks.getTableLineageSystemTables.mockResolvedValue({
+      edges: [{ source: 'main.bronze.raw', target: 'main.bronze.customers' }],
+      entities: [],
+    });
+    mocks.getColumnLineageSystemTables.mockResolvedValue({
+      edges: [
+        { sourceTable: 'main.bronze.raw', sourceColumn: 'id', targetTable: 'main.bronze.customers', targetColumn: 'customer_id' },
+      ],
+      columnsByTable: {
+        'main.bronze.raw': ['id'],
+        'main.bronze.customers': ['customer_id'],
+      },
+    });
+    const res = await getUnifiedLineage({ session, ucFullName: 'main.bronze.customers', columnLineage: true });
+    expect(mocks.getColumnLineageSystemTables).toHaveBeenCalled();
+    // Focus table node badged with its lineage columns.
+    const focus = res.nodes.find((n) => n.id === 'main.bronze.customers');
+    expect(focus?.columns).toContain('customer_id');
+    // Column-grain nodes + edge added.
+    expect(res.nodes.some((n) => n.type === 'column')).toBe(true);
+    expect(res.edges.some((e) => e.type === 'column')).toBe(true);
+  });
+
+  it('still draws the table graph when column lineage is gated (columns best-effort)', async () => {
+    mocks.isPurviewConfigured.mockReturnValue(false);
+    mocks.lineageWarehouseId.mockReturnValue('wh-1');
+    mocks.getTableLineageSystemTables.mockResolvedValue({
+      edges: [{ source: 'main.bronze.raw', target: 'main.bronze.customers' }],
+      entities: [],
+    });
+    mocks.getColumnLineageSystemTables.mockRejectedValue(
+      new H.UnityCatalogError('system.access.column_lineage not granted', 403, undefined, 'system.access.column_lineage'),
+    );
+    const res = await getUnifiedLineage({ session, ucFullName: 'main.bronze.customers', columnLineage: true });
+    // UC source still ok; table edge present; no column nodes fabricated.
+    expect(res.sources.find((s) => s.source === 'unity-catalog')?.ok).toBe(true);
+    expect(res.nodes.some((n) => n.id === 'main.bronze.raw')).toBe(true);
+    expect(res.nodes.some((n) => n.type === 'column')).toBe(false);
   });
 });

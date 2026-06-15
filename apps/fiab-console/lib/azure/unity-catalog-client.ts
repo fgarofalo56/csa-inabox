@@ -493,9 +493,18 @@ export async function revokePrivilegesSQL(
 // ============================================================
 
 export interface UCLineageEdge {
-  source: string;          // full_name of source table
-  target: string;          // full_name of target table
+  source: string;          // full_name of source table (or abfss path when path-referenced)
+  target: string;          // full_name of target table (or abfss path when path-referenced)
   workspace_hostname?: string;
+  /** Endpoint securable type from system tables: TABLE | VIEW | MATERIALIZED_VIEW
+   *  | STREAMING_TABLE | PATH. Lets the graph type view / path nodes correctly. */
+  sourceType?: string;
+  targetType?: string;
+  /** abfss/wasbs storage path when the endpoint is path-referenced rather than a
+   *  named UC table (Databricks records `*_path` and a null `*_full_name`). This
+   *  is what bridges an external table to the Purview/ADLS node in the merge. */
+  sourcePath?: string;
+  targetPath?: string;
 }
 
 /**
@@ -542,7 +551,7 @@ export function lineageWarehouseId(): string | null {
 }
 
 /** A producing process behind a table-lineage edge (the `entity_*` columns of
- *  `system.access.table_lineage`). */
+ *  `system.access.table_lineage`, or the newer `entity_metadata` struct). */
 export interface UCSystemLineageEntity {
   /** NOTEBOOK | JOB | PIPELINE | DASHBOARD_V3 | DBSQL_QUERY | … */
   entityType: string;
@@ -586,49 +595,115 @@ export async function getTableLineageSystemTables(
   fullName: string,
   warehouseId: string,
 ): Promise<UCSystemLineage> {
-  const sql = `SELECT source_table_full_name, target_table_full_name, entity_type, entity_id
-    FROM system.access.table_lineage
-    WHERE source_table_full_name = :fn OR target_table_full_name = :fn
-    LIMIT 1000`;
-  let result: QueryResult;
-  try {
-    result = await executeStatement(warehouseId, sql, undefined, undefined, [
-      { name: 'fn', value: fullName, type: 'STRING' },
-    ]);
-  } catch (e: any) {
-    const msg = String(e?.message || e);
-    if (/TABLE_OR_VIEW_NOT_FOUND|system\.access|PERMISSION_DENIED|does not exist|cannot be found|UNRESOLVED|INSUFFICIENT_PERMISSIONS/i.test(msg)) {
-      throw new UnityCatalogError(
-        `Unity Catalog system-table lineage is unavailable: ${msg}. Enable the ` +
-          `system.access schema in the Unity Catalog metastore and grant the Loom ` +
-          `UAMI USE SCHEMA + SELECT on system.access (see ` +
-          `scripts/csa-loom/grant-databricks-system-tables-role.sh).`,
-        typeof e?.status === 'number' ? e.status : 403,
-        e?.body,
-        'system.access.table_lineage',
-      );
+  // Column sets are tried widest-first. The `*_path` / `*_type` columns and the
+  // `entity_metadata` struct are part of the documented schema but were added
+  // over time (entity_type/entity_id/entity_run_id were DEPRECATED in favour of
+  // entity_metadata on 2025-05-11). To stay forward- AND backward-compatible we
+  // attempt the full projection, then degrade past any column that an older (or
+  // newer) metastore does not expose, before finally falling back to the
+  // original minimal projection.
+  const COLSETS = [
+    // Full: rich endpoints + struct + legacy entity columns.
+    `source_table_full_name, source_path, source_type, target_table_full_name, target_path, target_type, entity_type, entity_id, entity_metadata`,
+    // No struct (older metastore without entity_metadata).
+    `source_table_full_name, source_path, source_type, target_table_full_name, target_path, target_type, entity_type, entity_id`,
+    // Minimal (original projection — names guaranteed when system.access is live).
+    `source_table_full_name, target_table_full_name, entity_type, entity_id`,
+  ];
+  const COL_ERR =
+    /UNRESOLVED_COLUMN|cannot be resolved|no such struct field|source_path|target_path|source_type|target_type|entity_metadata|FIELD_NOT_FOUND/i;
+  const GATE_ERR =
+    /TABLE_OR_VIEW_NOT_FOUND|system\.access|PERMISSION_DENIED|does not exist|cannot be found|UNRESOLVED|INSUFFICIENT_PERMISSIONS/i;
+
+  let result: QueryResult | null = null;
+  for (let i = 0; i < COLSETS.length; i++) {
+    const sql = `SELECT ${COLSETS[i]}
+      FROM system.access.table_lineage
+      WHERE source_table_full_name = :fn OR target_table_full_name = :fn
+      LIMIT 1000`;
+    try {
+      result = await executeStatement(warehouseId, sql, undefined, undefined, [
+        { name: 'fn', value: fullName, type: 'STRING' },
+      ]);
+      break;
+    } catch (e: any) {
+      const msg = String(e?.message || e);
+      // A missing optional column → retry the next, narrower projection.
+      if (COL_ERR.test(msg) && i < COLSETS.length - 1) continue;
+      if (GATE_ERR.test(msg)) {
+        throw new UnityCatalogError(
+          `Unity Catalog system-table lineage is unavailable: ${msg}. Enable the ` +
+            `system.access schema in the Unity Catalog metastore and grant the Loom ` +
+            `UAMI USE SCHEMA + SELECT on system.access (see ` +
+            `scripts/csa-loom/grant-databricks-system-tables-role.sh).`,
+          typeof e?.status === 'number' ? e.status : 403,
+          e?.body,
+          'system.access.table_lineage',
+        );
+      }
+      throw e;
     }
-    throw e;
   }
-  const idx = (name: string) => result.columns.indexOf(name);
+  if (!result) return { edges: [], entities: [] };
+
+  const idx = (name: string) => result!.columns.indexOf(name);
   const iSrc = idx('source_table_full_name');
+  const iSrcPath = idx('source_path');
+  const iSrcType = idx('source_type');
   const iTgt = idx('target_table_full_name');
+  const iTgtPath = idx('target_path');
+  const iTgtType = idx('target_type');
   const iEt = idx('entity_type');
   const iEid = idx('entity_id');
+  const iMeta = idx('entity_metadata');
+
   const edges: UCLineageEdge[] = [];
   const entities: UCSystemLineageEntity[] = [];
   const seenEdge = new Set<string>();
   const seenEnt = new Set<string>();
+
+  // An endpoint may be a named UC table (full_name) OR a bare storage path
+  // (full_name null, *_path set). We key the node on the full_name when present,
+  // else the path, so a path-referenced external table still joins the Purview
+  // ADLS node via normalizeIdentity's `path:` rule.
+  const endpoint = (full: string | null, path: string | null): string | null =>
+    (full && full.trim()) || (path && path.trim()) || null;
+
   for (const row of result.rows) {
-    const src = iSrc >= 0 ? (row[iSrc] as string | null) : null;
-    const tgt = iTgt >= 0 ? (row[iTgt] as string | null) : null;
-    const et = iEt >= 0 ? (row[iEt] as string | null) : null;
-    const eid = iEid >= 0 ? (row[iEid] as string | null) : null;
+    const srcFull = iSrc >= 0 ? (row[iSrc] as string | null) : null;
+    const srcPath = iSrcPath >= 0 ? (row[iSrcPath] as string | null) : null;
+    const srcType = iSrcType >= 0 ? (row[iSrcType] as string | null) : null;
+    const tgtFull = iTgt >= 0 ? (row[iTgt] as string | null) : null;
+    const tgtPath = iTgtPath >= 0 ? (row[iTgtPath] as string | null) : null;
+    const tgtType = iTgtType >= 0 ? (row[iTgtType] as string | null) : null;
+
+    const src = endpoint(srcFull, srcPath);
+    const tgt = endpoint(tgtFull, tgtPath);
     if (src && tgt) {
       const k = `${src}->${tgt}`;
       if (!seenEdge.has(k)) {
         seenEdge.add(k);
-        edges.push({ source: src, target: tgt, workspace_hostname: host });
+        edges.push({
+          source: src,
+          target: tgt,
+          workspace_hostname: host,
+          ...(srcType ? { sourceType: srcType } : {}),
+          ...(tgtType ? { targetType: tgtType } : {}),
+          ...(!srcFull && srcPath ? { sourcePath: srcPath } : {}),
+          ...(!tgtFull && tgtPath ? { targetPath: tgtPath } : {}),
+        });
+      }
+    }
+
+    // Producing entity: prefer the newer entity_metadata struct, fall back to
+    // the deprecated entity_type/entity_id columns.
+    let et = iEt >= 0 ? (row[iEt] as string | null) : null;
+    let eid = iEid >= 0 ? (row[iEid] as string | null) : null;
+    if (iMeta >= 0) {
+      const meta = parseStructValue(row[iMeta]);
+      if (meta) {
+        et = (meta.entity_type as string) || et;
+        eid = (meta.entity_id as string) || (meta.record_id as string) || eid;
       }
     }
     if (et && eid) {
@@ -640,6 +715,123 @@ export async function getTableLineageSystemTables(
     }
   }
   return { edges, entities };
+}
+
+/** Parse a struct column value returned by the SQL Statement Execution API.
+ *  Struct values arrive as JSON-encoded strings in `data_array`; some drivers
+ *  return them already-parsed. Returns null when absent or unparseable. */
+function parseStructValue(v: unknown): Record<string, any> | null {
+  if (v == null) return null;
+  if (typeof v === 'object') return v as Record<string, any>;
+  if (typeof v === 'string') {
+    try { return JSON.parse(v); } catch { return null; }
+  }
+  return null;
+}
+
+// ============================================================
+// Column-level lineage (system.access.column_lineage)
+// ============================================================
+
+/** A column→column lineage edge from `system.access.column_lineage`. */
+export interface UCColumnLineageEdge {
+  sourceTable: string;
+  sourceColumn: string;
+  targetTable: string;
+  targetColumn: string;
+  workspace_hostname?: string;
+}
+
+export interface UCColumnLineage {
+  /** Column→column edges (focus table's 1-hop neighbourhood). */
+  edges: UCColumnLineageEdge[];
+  /** table full_name (lowercased) → set of column names that participate in
+   *  lineage. Used to badge the table node with its lineage columns. */
+  columnsByTable: Record<string, string[]>;
+}
+
+/**
+ * Column-level lineage for a focus table from the Databricks **system tables**
+ * (`system.access.column_lineage`) — the durable backing for Databricks Catalog
+ * Explorer's column-level lineage view. Returns the focus table's 1-hop column
+ * neighbourhood (rows where the focus is the source OR target table), optionally
+ * filtered to a single `column`.
+ *
+ *   https://learn.microsoft.com/azure/databricks/admin/system-tables/lineage
+ *
+ * Same honest-gate contract as {@link getTableLineageSystemTables}: a missing
+ * `system.access` schema (or a UAMI lacking SELECT) throws a typed
+ * {@link UnityCatalogError} naming the remediation rather than returning empty.
+ */
+export async function getColumnLineageSystemTables(
+  host: string,
+  fullName: string,
+  warehouseId: string,
+  column?: string,
+): Promise<UCColumnLineage> {
+  const params: Array<{ name: string; value: string; type: 'STRING' }> = [
+    { name: 'fn', value: fullName, type: 'STRING' },
+  ];
+  let where = `source_table_full_name = :fn OR target_table_full_name = :fn`;
+  if (column) {
+    where = `(${where}) AND (source_column_name = :col OR target_column_name = :col)`;
+    params.push({ name: 'col', value: column, type: 'STRING' });
+  }
+  const sql = `SELECT source_table_full_name, source_column_name, target_table_full_name, target_column_name
+    FROM system.access.column_lineage
+    WHERE ${where}
+    LIMIT 1000`;
+  let result: QueryResult;
+  try {
+    result = await executeStatement(warehouseId, sql, undefined, undefined, params);
+  } catch (e: any) {
+    const msg = String(e?.message || e);
+    if (/TABLE_OR_VIEW_NOT_FOUND|system\.access|PERMISSION_DENIED|does not exist|cannot be found|UNRESOLVED|INSUFFICIENT_PERMISSIONS/i.test(msg)) {
+      throw new UnityCatalogError(
+        `Unity Catalog system-table column lineage is unavailable: ${msg}. Enable ` +
+          `the system.access schema in the Unity Catalog metastore and grant the ` +
+          `Loom UAMI USE SCHEMA + SELECT on system.access (see ` +
+          `scripts/csa-loom/grant-databricks-system-tables-role.sh).`,
+        typeof e?.status === 'number' ? e.status : 403,
+        e?.body,
+        'system.access.column_lineage',
+      );
+    }
+    throw e;
+  }
+  const idx = (name: string) => result.columns.indexOf(name);
+  const iST = idx('source_table_full_name');
+  const iSC = idx('source_column_name');
+  const iTT = idx('target_table_full_name');
+  const iTC = idx('target_column_name');
+  const edges: UCColumnLineageEdge[] = [];
+  const colsByTable = new Map<string, Set<string>>();
+  const addCol = (table: string | null, col: string | null) => {
+    if (!table || !col) return;
+    const key = table.toLowerCase();
+    const set = colsByTable.get(key) || new Set<string>();
+    set.add(col);
+    colsByTable.set(key, set);
+  };
+  const seen = new Set<string>();
+  for (const row of result.rows) {
+    const st = iST >= 0 ? (row[iST] as string | null) : null;
+    const sc = iSC >= 0 ? (row[iSC] as string | null) : null;
+    const tt = iTT >= 0 ? (row[iTT] as string | null) : null;
+    const tc = iTC >= 0 ? (row[iTC] as string | null) : null;
+    addCol(st, sc);
+    addCol(tt, tc);
+    if (st && sc && tt && tc) {
+      const k = `${st}.${sc}->${tt}.${tc}`;
+      if (!seen.has(k)) {
+        seen.add(k);
+        edges.push({ sourceTable: st, sourceColumn: sc, targetTable: tt, targetColumn: tc, workspace_hostname: host });
+      }
+    }
+  }
+  const columnsByTable: Record<string, string[]> = {};
+  for (const [t, set] of colsByTable) columnsByTable[t] = [...set];
+  return { edges, columnsByTable };
 }
 
 // ============================================================

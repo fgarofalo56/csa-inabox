@@ -35,6 +35,7 @@ export async function GET(req: NextRequest) {
   const host = req.nextUrl.searchParams.get('host') || '';
   const workspaceId = req.nextUrl.searchParams.get('workspaceId') || '';
   const merge = req.nextUrl.searchParams.get('merge') === 'true';
+  const columnLineage = req.nextUrl.searchParams.get('columns') === 'true';
   const itemId = req.nextUrl.searchParams.get('itemId') || undefined;
   if (!source || !id) return NextResponse.json({ ok: false, error: 'source and id required' }, { status: 400 });
 
@@ -48,6 +49,7 @@ export async function GET(req: NextRequest) {
         ucFullName: source === 'unity-catalog' ? id : undefined,
         ucHost: source === 'unity-catalog' ? (host || undefined) : undefined,
         itemId,
+        columnLineage,
       });
       return NextResponse.json({ source, merged: true, ...result });
     } catch (e: any) {

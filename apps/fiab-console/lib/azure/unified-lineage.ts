@@ -51,11 +51,13 @@ import {
 import {
   getTableLineage,
   getTableLineageSystemTables,
+  getColumnLineageSystemTables,
   lineageWarehouseId,
   listWorkspaceHostnames,
   UnityCatalogNotConfiguredError,
   UnityCatalogError,
 } from './unity-catalog-client';
+import { resolveAssetIdentities, storagePathIdentity } from './asset-identity';
 import { listThreadEdges, type ThreadEdge } from '@/lib/thread/thread-edges';
 import type { SessionPayload } from '@/lib/auth/session';
 import type {
@@ -147,6 +149,17 @@ export interface UnifiedLineageInput {
   depth?: number;
   /** Max hops to walk the Weave thread-edge graph from the focus item. */
   weaveDepth?: number;
+  /**
+   * Surface Databricks **column-level** lineage (`system.access.column_lineage`)
+   * for the Unity Catalog source. When set, each table node is badged with the
+   * columns that participate in lineage, and column→column edges are added
+   * between synthetic `col:<table>::<column>` nodes so the graph reads at the
+   * column grain (matching Databricks Catalog Explorer's column-level view).
+   * Requires `LOOM_DATABRICKS_LINEAGE_WAREHOUSE_ID` (same warehouse as table
+   * lineage — no new env var). Defaults to off so the table-grain graph stays
+   * the default; the Lineage tab toggles it via `?columns=true`.
+   */
+  columnLineage?: boolean;
   /**
    * Inject an alternate Atlas-family lineage fetcher (e.g. Apache Atlas-on-AKS
    * for IL5 / DoD) used in place of Purview's getLineageSubgraph for the
@@ -350,22 +363,47 @@ async function purviewGraph(
   return { source: 'purview', nodes, edges };
 }
 
+/** Map a UC system-table `*_type` (TABLE | VIEW | MATERIALIZED_VIEW |
+ *  STREAMING_TABLE | PATH) to a canvas node type. */
+function ucEndpointType(t?: string): string | undefined {
+  if (!t) return undefined;
+  const u = t.toUpperCase();
+  if (u.includes('MATERIALIZED')) return 'materialized-view';
+  if (u.includes('VIEW')) return 'view';
+  if (u.includes('STREAMING')) return 'streaming-table';
+  if (u === 'PATH') return 'path';
+  if (u === 'TABLE') return 'table';
+  return t.toLowerCase();
+}
+
 /** Unity Catalog subgraph (system tables, with REST preview fallback). */
 async function unityGraph(
   host: string,
   fullName: string,
   focusIds: string[],
+  columnLineage = false,
 ): Promise<SourceGraph> {
   const nodes = new Map<string, IdentifiedNode>();
   const edges: CanvasLineageEdge[] = [];
-  const ensureTable = (fn: string) => {
-    if (!nodes.has(fn)) {
-      const isFocus = fn.toLowerCase() === fullName.toLowerCase();
-      nodes.set(fn, {
-        node: { id: fn, label: shortName(fn), type: 'table', source: 'unity-catalog', focus: isFocus },
-        identities: isFocus ? [ucIdentity(fn), ...focusIds] : [ucIdentity(fn)],
-      });
+  // An endpoint id may be a UC full_name OR a bare storage path. normalizeIdentity
+  // routes each to the right join key (uc:/path:) so a path-referenced external
+  // table collapses onto the Purview ADLS node.
+  const ensureEndpoint = (rawId: string, typeHint?: string) => {
+    if (!rawId) return;
+    const existing = nodes.get(rawId);
+    const ident = normalizeIdentity(rawId);
+    const isPath = ident.startsWith('path:');
+    const type = ucEndpointType(typeHint) || (isPath ? 'path' : 'table');
+    if (existing) {
+      // Upgrade a generic 'table' type if a row later tells us it's a view/path.
+      if (typeHint && existing.node.type === 'table' && type !== 'table') existing.node.type = type;
+      return;
     }
+    const isFocus = rawId.toLowerCase() === fullName.toLowerCase();
+    nodes.set(rawId, {
+      node: { id: rawId, label: shortName(rawId), type, source: 'unity-catalog', focus: isFocus },
+      identities: isFocus ? [ucIdentity(fullName), ident, ...focusIds] : [ident],
+    });
   };
 
   const warehouseId = lineageWarehouseId();
@@ -374,8 +412,8 @@ async function unityGraph(
     // (notebook/job/pipeline/dashboard), which gives the deeper chain.
     const sys = await getTableLineageSystemTables(host, fullName, warehouseId);
     for (const e of sys.edges) {
-      ensureTable(e.source);
-      ensureTable(e.target);
+      ensureEndpoint(e.source, e.sourceType);
+      ensureEndpoint(e.target, e.targetType);
       edges.push({ from: e.source, to: e.target });
     }
     for (const ent of sys.entities) {
@@ -392,19 +430,55 @@ async function unityGraph(
         });
       }
       // The entity produced `target` (read `source`): source → entity → target.
-      if (ent.source) { ensureTable(ent.source); edges.push({ from: ent.source, to: entId, type: 'produces' }); }
-      if (ent.target) { ensureTable(ent.target); edges.push({ from: entId, to: ent.target, type: 'produces' }); }
+      if (ent.source) { ensureEndpoint(ent.source); edges.push({ from: ent.source, to: entId, type: 'produces' }); }
+      if (ent.target) { ensureEndpoint(ent.target); edges.push({ from: entId, to: ent.target, type: 'produces' }); }
+    }
+
+    // Column-level lineage — badge each table node with its lineage columns and
+    // (when requested) draw column→column edges at the column grain. Best-effort:
+    // a column-lineage gate must NOT blank the table graph we already built.
+    try {
+      const col = await getColumnLineageSystemTables(host, fullName, warehouseId);
+      for (const [table, cols] of Object.entries(col.columnsByTable)) {
+        for (const [id, n] of nodes) {
+          if (id.toLowerCase() === table) {
+            const merged = new Set([...(n.node.columns || []), ...cols]);
+            n.node.columns = [...merged];
+          }
+        }
+      }
+      if (columnLineage) {
+        const colNode = (table: string, column: string) => {
+          const id = `col:${table}::${column}`;
+          if (!nodes.has(id)) {
+            ensureEndpoint(table);
+            nodes.set(id, {
+              node: { id, label: column, type: 'column', source: 'unity-catalog' },
+              identities: [`col:${table.toLowerCase()}::${column.toLowerCase()}`],
+            });
+          }
+          return id;
+        };
+        for (const ce of col.edges) {
+          const from = colNode(ce.sourceTable, ce.sourceColumn);
+          const to = colNode(ce.targetTable, ce.targetColumn);
+          edges.push({ from, to, type: 'column' });
+        }
+      }
+    } catch {
+      // Column lineage unavailable (system.access.column_lineage gate) — the
+      // table-grain graph stands on its own; no fabricated columns.
     }
   } else {
     // REST preview fallback — table↔table only.
     const ucEdges = await getTableLineage(host, fullName);
     for (const e of ucEdges) {
-      ensureTable(e.source);
-      ensureTable(e.target);
+      ensureEndpoint(e.source, e.sourceType);
+      ensureEndpoint(e.target, e.targetType);
       edges.push({ from: e.source, to: e.target });
     }
   }
-  ensureTable(fullName); // focus always present, even with zero edges
+  ensureEndpoint(fullName); // focus always present, even with zero edges
   return { source: 'unity-catalog', nodes: [...nodes.values()], edges };
 }
 
@@ -505,12 +579,30 @@ export async function getUnifiedLineage(input: UnifiedLineageInput): Promise<Uni
   const depth = Math.max(1, Math.min(10, input.depth ?? 3));
   const weaveDepth = Math.max(1, Math.min(6, input.weaveDepth ?? 3));
 
+  // Cross-source identity RESOLUTION (asset-identity.ts): when the caller only
+  // holds ONE source's key, discover the others (UC full_name ⇄ Atlas guid ⇄
+  // storage path) so the merge overlays every source instead of degrading to
+  // single-source. Best-effort — never throws; returns the inputs on failure.
+  let ucHostForResolve = input.ucHost;
+  if (!ucHostForResolve && input.ucFullName) {
+    try { ucHostForResolve = listWorkspaceHostnames()[0]; } catch { /* UC unset — Purview-only focus */ }
+  }
+  const resolved = await resolveAssetIdentities({
+    ucFullName: input.ucFullName,
+    ucHost: ucHostForResolve,
+    purviewGuid: input.purviewGuid,
+  });
+  const ucFullName = resolved.ucFullName;
+  const purviewGuid = resolved.purviewGuid;
+
   // The focus carries every identity it is known by, so the focus node from
   // each source collapses into one — stitching the subgraphs at the center.
   const focusIds: string[] = [];
   if (input.itemId) focusIds.push(`item:${input.itemId.toLowerCase()}`);
-  if (input.ucFullName) focusIds.push(ucIdentity(input.ucFullName));
-  if (input.purviewGuid) focusIds.push(`guid:${input.purviewGuid.toLowerCase()}`);
+  if (ucFullName) focusIds.push(ucIdentity(ucFullName));
+  if (purviewGuid) focusIds.push(`guid:${purviewGuid.toLowerCase()}`);
+  const pathIdentity = storagePathIdentity(resolved.storagePath);
+  if (pathIdentity) focusIds.push(pathIdentity);
 
   const sources: UnifiedSourceStatus[] = [];
   const graphs: SourceGraph[] = [];
@@ -518,16 +610,16 @@ export async function getUnifiedLineage(input: UnifiedLineageInput): Promise<Uni
   const tasks: Promise<void>[] = [];
 
   // --- Purview / Atlas ---
-  if (input.purviewGuid && (input.atlasFetcher || isPurviewConfigured())) {
+  if (purviewGuid && (input.atlasFetcher || isPurviewConfigured())) {
     tasks.push(
-      purviewGraph(input.purviewGuid, depth, focusIds, input.atlasFetcher)
+      purviewGraph(purviewGuid, depth, focusIds, input.atlasFetcher)
         .then((g) => {
           graphs.push(g);
           sources.push({ source: 'purview', ok: true, nodeCount: g.nodes.length });
         })
         .catch((e) => { sources.push(purviewStatus(e)); }),
     );
-  } else if (input.purviewGuid && !isPurviewConfigured()) {
+  } else if (purviewGuid && !isPurviewConfigured()) {
     sources.push({
       source: 'purview',
       ok: false,
@@ -538,12 +630,12 @@ export async function getUnifiedLineage(input: UnifiedLineageInput): Promise<Uni
   }
 
   // --- Unity Catalog ---
-  if (input.ucFullName) {
+  if (ucFullName) {
     tasks.push(
       (async () => {
         const hosts = listWorkspaceHostnames(); // throws UnityCatalogNotConfiguredError when unset
         const host = input.ucHost || hosts[0];
-        return unityGraph(host, input.ucFullName!, focusIds);
+        return unityGraph(host, ucFullName!, focusIds, input.columnLineage);
       })()
         .then((g) => {
           graphs.push(g);
