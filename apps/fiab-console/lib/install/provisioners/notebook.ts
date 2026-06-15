@@ -229,8 +229,18 @@ async function provisionAzureNative(
 ): Promise<ProvisionResult | null> {
   const cellCount = (input.content as any)?.cells?.length || 0;
 
-  // 1) Synapse dev-plane notebook artifact.
-  if (!synapseConfigGate()) {
+  // Explicit Databricks opt-in. The Azure-native DEFAULT precedence is Synapse
+  // Spark (Hive) first, then Databricks — so a Loom with BOTH configured runs
+  // notebooks on Synapse. When the operator explicitly selects Databricks
+  // (LOOM_NOTEBOOK_BACKEND=databricks) AND Databricks is configured, prefer it
+  // so the engine that runs the notebook matches the dialect the sample content
+  // bundles emit for Databricks (Unity Catalog SQL). Without this, UC SQL would
+  // land on Synapse Spark and fail to parse (the realtime-analytics CATALOG bug).
+  const preferDatabricks = process.env.LOOM_NOTEBOOK_BACKEND === 'databricks' && !databricksConfigGate();
+
+  // 1) Synapse dev-plane notebook artifact (skipped when Databricks is the
+  //    explicitly selected engine).
+  if (!preferDatabricks && !synapseConfigGate()) {
     const ws = process.env.LOOM_SYNAPSE_WORKSPACE!;
     steps.push(`No Fabric workspace bound — importing into Synapse workspace '${ws}'.`);
     // Synapse artifact names disallow spaces and several punctuation chars;
