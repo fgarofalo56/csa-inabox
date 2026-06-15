@@ -830,6 +830,11 @@ module adminPlane 'modules/admin-plane/main.bicep' = if (deployAdminPlane) {
     loomEventHubNamespace: useSingleDlz ? 'evhns-loom-default-${location}' : ''
     loomDlzRg: useSingleDlz ? singleDlzRg.name : adminPlaneRgName
     loomCosmosAccount: take('cosmos-loom-default-${uniqueString(singleDlzRg.id)}', 44)
+    // Tenant/dlz-attach: no local DLZ hosts the Console's `loom` Cosmos, so the
+    // admin plane provisions it in the hub (else the Console points at a missing
+    // account and all item/config CRUD fails). useSingleDlz already deploys it
+    // via the DLZ cosmos.bicep; BYO Cosmos overrides both.
+    deployConsoleCosmos: !useSingleDlz && empty(existingCosmosAccount)
     // Forward the Cosmos data-plane endpoints to the Console so the vector-store
     // and graph editors bind to the deployed accounts by default (no manual
     // config). The DLZ `cosmos-graph-vector` module (cosmosGraphVectorEnabled,
