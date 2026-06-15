@@ -67,15 +67,21 @@ export interface SourceField {
  */
 export interface ResourceSelectSource {
   /** Which list the options endpoint should return. */
-  optionsKind: 'namespaces' | 'eventhubs' | 'consumerGroups' | 'authRules' | 'iotConsumerGroups';
+  optionsKind: 'namespaces' | 'eventhubs' | 'consumerGroups' | 'authRules' | 'iotConsumerGroups' | 'connections';
   /** For optionsKind:'namespaces' — Event Hubs namespaces vs IoT hubs. */
   service?: 'eventhub' | 'iothub';
+  /**
+   * For optionsKind:'connections' — restrict the Loom connection picker to a
+   * single connection `type` (e.g. 'service-bus', 'azure-sql', 'cosmos'). Unset
+   * shows every connection the caller owns.
+   */
+  connectionType?: string;
   /** Prop keys that must be set before the list can load (cascading parents). */
   dependsOn?: string[];
   /** Show an inline "+ Create new…" affordance that really provisions + selects. */
   creatable?: boolean;
   /** Provision kind posted to /api/realtime-hub/provision for the create path. */
-  createKind?: 'eventhub' | 'consumerGroup' | 'iotConsumerGroup';
+  createKind?: 'eventhub' | 'consumerGroup' | 'iotConsumerGroup' | 'namespace';
   /**
    * When true, selecting an option also captures its subscriptionId +
    * resourceGroup into props (used by the namespace / IoT-hub picker so the
@@ -117,8 +123,8 @@ export const SOURCE_CONNECTORS: SourceConnector[] = [
     fields: [
       {
         key: 'namespace', label: 'Event Hubs namespace', required: true, kind: 'resource-select',
-        help: 'Namespaces discovered across your subscription(s) via Azure Resource Graph.',
-        source: { optionsKind: 'namespaces', service: 'eventhub', captureScope: true },
+        help: 'Namespaces discovered across your subscription(s) via Azure Resource Graph. None yet? Create one inline.',
+        source: { optionsKind: 'namespaces', service: 'eventhub', captureScope: true, creatable: true, createKind: 'namespace' },
       },
       {
         key: 'eventHubName', label: 'Event hub', required: true, kind: 'resource-select',
@@ -165,8 +171,12 @@ export const SOURCE_CONNECTORS: SourceConnector[] = [
     description: 'Reliable enterprise messaging — queues and topics.',
     preview: true,
     fields: [
-      { key: 'entityName', label: 'Queue / topic name', required: true },
-      { key: 'dataConnectionId', label: 'Connection id' },
+      { key: 'entityName', label: 'Queue / topic name', required: true, placeholder: 'orders-queue' },
+      {
+        key: 'dataConnectionId', label: 'Connection', kind: 'resource-select',
+        help: 'A Loom connection to the Service Bus namespace. None? Add one under Connections.',
+        source: { optionsKind: 'connections', connectionType: 'service-bus' },
+      },
     ],
   },
   // ---- Database CDC -----------------------------------------------------
@@ -178,7 +188,11 @@ export const SOURCE_CONNECTORS: SourceConnector[] = [
     description: 'Capture and stream database changes in real time.',
     fields: [
       { key: 'tableName', label: 'Table', required: true, placeholder: 'dbo.Orders' },
-      { key: 'dataConnectionId', label: 'Connection id' },
+      {
+        key: 'dataConnectionId', label: 'Connection', kind: 'resource-select',
+        help: 'A Loom connection to the source database. None? Add one under Connections.',
+        source: { optionsKind: 'connections', connectionType: 'azure-sql' },
+      },
     ],
   },
   {
@@ -189,7 +203,11 @@ export const SOURCE_CONNECTORS: SourceConnector[] = [
     description: 'Stream changes from SQL Managed Instances.',
     fields: [
       { key: 'tableName', label: 'Table', required: true },
-      { key: 'dataConnectionId', label: 'Connection id' },
+      {
+        key: 'dataConnectionId', label: 'Connection', kind: 'resource-select',
+        help: 'A Loom connection to the managed instance. None? Add one under Connections.',
+        source: { optionsKind: 'connections', connectionType: 'azure-sql' },
+      },
     ],
   },
   {
@@ -200,7 +218,11 @@ export const SOURCE_CONNECTORS: SourceConnector[] = [
     description: 'Stream the change feed from a Cosmos DB container.',
     fields: [
       { key: 'containerName', label: 'Container', required: true },
-      { key: 'dataConnectionId', label: 'Connection id' },
+      {
+        key: 'dataConnectionId', label: 'Connection', kind: 'resource-select',
+        help: 'A Loom connection to the Cosmos account. None? Add one under Connections.',
+        source: { optionsKind: 'connections', connectionType: 'cosmos' },
+      },
     ],
   },
   {
@@ -211,7 +233,11 @@ export const SOURCE_CONNECTORS: SourceConnector[] = [
     description: 'Stream changes from PostgreSQL databases.',
     fields: [
       { key: 'tableName', label: 'Table', required: true },
-      { key: 'dataConnectionId', label: 'Connection id' },
+      {
+        key: 'dataConnectionId', label: 'Connection', kind: 'resource-select',
+        help: 'A Loom connection to the PostgreSQL server. None? Add one under Connections.',
+        source: { optionsKind: 'connections', connectionType: 'postgres' },
+      },
     ],
   },
   {
@@ -222,7 +248,11 @@ export const SOURCE_CONNECTORS: SourceConnector[] = [
     description: 'Stream changes from MySQL databases.',
     fields: [
       { key: 'tableName', label: 'Table', required: true },
-      { key: 'dataConnectionId', label: 'Connection id' },
+      {
+        key: 'dataConnectionId', label: 'Connection', kind: 'resource-select',
+        help: 'A Loom connection to the MySQL server. None? Add one under Connections.',
+        source: { optionsKind: 'connections' },
+      },
     ],
   },
   // ---- External streams -------------------------------------------------
@@ -236,7 +266,11 @@ export const SOURCE_CONNECTORS: SourceConnector[] = [
     fields: [
       { key: 'bootstrapServers', label: 'Bootstrap servers', required: true, placeholder: 'broker:9092' },
       { key: 'topic', label: 'Topic', required: true },
-      { key: 'dataConnectionId', label: 'Connection id' },
+      {
+        key: 'dataConnectionId', label: 'Connection', kind: 'resource-select',
+        help: 'A Loom connection holding the broker/stream credentials. None? Add one under Connections.',
+        source: { optionsKind: 'connections' },
+      },
     ],
   },
   {
@@ -247,7 +281,11 @@ export const SOURCE_CONNECTORS: SourceConnector[] = [
     description: 'Ingest from Confluent Cloud Kafka.',
     fields: [
       { key: 'topic', label: 'Topic', required: true },
-      { key: 'dataConnectionId', label: 'Connection id' },
+      {
+        key: 'dataConnectionId', label: 'Connection', kind: 'resource-select',
+        help: 'A Loom connection holding the broker/stream credentials. None? Add one under Connections.',
+        source: { optionsKind: 'connections' },
+      },
     ],
   },
   {
@@ -259,7 +297,11 @@ export const SOURCE_CONNECTORS: SourceConnector[] = [
     fields: [
       { key: 'bootstrapServers', label: 'Bootstrap servers', required: true },
       { key: 'topic', label: 'Topic', required: true },
-      { key: 'dataConnectionId', label: 'Connection id' },
+      {
+        key: 'dataConnectionId', label: 'Connection', kind: 'resource-select',
+        help: 'A Loom connection holding the broker/stream credentials. None? Add one under Connections.',
+        source: { optionsKind: 'connections' },
+      },
     ],
   },
   {
@@ -270,7 +312,11 @@ export const SOURCE_CONNECTORS: SourceConnector[] = [
     description: 'Ingest from an Amazon Kinesis data stream.',
     fields: [
       { key: 'streamName', label: 'Stream name', required: true },
-      { key: 'dataConnectionId', label: 'Connection id' },
+      {
+        key: 'dataConnectionId', label: 'Connection', kind: 'resource-select',
+        help: 'A Loom connection holding the broker/stream credentials. None? Add one under Connections.',
+        source: { optionsKind: 'connections' },
+      },
     ],
   },
   {
@@ -281,7 +327,11 @@ export const SOURCE_CONNECTORS: SourceConnector[] = [
     description: 'Ingest from a Google Cloud Pub/Sub subscription.',
     fields: [
       { key: 'subscriptionId', label: 'Subscription id', required: true },
-      { key: 'dataConnectionId', label: 'Connection id' },
+      {
+        key: 'dataConnectionId', label: 'Connection', kind: 'resource-select',
+        help: 'A Loom connection holding the broker/stream credentials. None? Add one under Connections.',
+        source: { optionsKind: 'connections' },
+      },
     ],
   },
   {
@@ -353,7 +403,33 @@ export const SOURCE_CONNECTORS: SourceConnector[] = [
     sourceType: 'AzureBlobStorageEvents',
     description: 'React to blob created / replaced / deleted events.',
     fields: [
-      { key: 'dataConnectionId', label: 'Connection id', help: 'Connection to the storage account (System Topic).' },
+      {
+        key: 'dataConnectionId', label: 'Connection', kind: 'resource-select',
+        help: 'A Loom connection to the storage account (System Topic). None? Add one under Connections.',
+        source: { optionsKind: 'connections', connectionType: 'storage-adls' },
+      },
+    ],
+  },
+  {
+    id: 'azure-eventgrid-topic',
+    name: 'Azure Event Grid custom topic',
+    category: 'Azure events',
+    sourceType: 'AzureEventGridCustomTopic',
+    description: 'Subscribe to a governed business-event Event Grid custom topic.',
+    fields: [
+      {
+        key: 'topic', label: 'Event Grid topic', required: true, placeholder: 'orders-events',
+        help: 'The custom-topic name a publisher emits governed business signals to.',
+      },
+      {
+        key: 'inputSchema', label: 'Input schema', kind: 'select', defaultValue: 'CloudEventSchemaV1_0',
+        help: 'The event envelope schema the topic publishes in.',
+        options: [
+          { value: 'CloudEventSchemaV1_0', label: 'CloudEvents v1.0' },
+          { value: 'EventGridSchema', label: 'Event Grid schema' },
+          { value: 'CustomInputSchema', label: 'Custom input schema' },
+        ],
+      },
     ],
   },
   // ---- Fabric events (cont.) -------------------------------------------
@@ -426,6 +502,7 @@ const SOURCE_ICONS: Partial<Record<RthSourceType, FluentIcon>> = {
   PostgreSQLCDC:                   Database20Regular,
   MySQLCDC:                        Database20Regular,
   AzureBlobStorageEvents:          Storage20Regular,
+  AzureEventGridCustomTopic:       CloudArrowUp20Regular,
   AmazonKinesis:                   Stream20Regular,
   AmazonMSKKafka:                  Branch20Regular,
   ApacheKafka:                     Branch20Regular,

@@ -25,7 +25,7 @@ param consolePrincipalId string
 @description('When true, skip the role grant (e.g. re-deploy where RBAC already exists or the deployer lacks User Access Administrator).')
 param skipRoleGrants bool = false
 
-@description('When true, additionally grant the Console UAMI Contributor at this subscription scope so the Real-Time Hub "Connect a source" dialog can CREATE-IF-MISSING event hubs / consumer groups in ANY discovered namespace (not just the env-pinned one). Reader (always granted) only lights up the discovery dropdowns; create needs Contributor. Default false — create-if-missing then works against the env-pinned namespace, which already has a namespace-scoped Contributor grant via landing-zone/eventhubs.bicep.')
+@description('When true, additionally grant the Console UAMI Contributor at this subscription scope so the Real-Time Hub "Connect a source" dialog can CREATE-IF-MISSING Event Hubs namespaces / event hubs / consumer groups in ANY discovered (or new) subscription + resource group (not just the env-pinned one). Reader (always granted) only lights up the discovery dropdowns; create needs Contributor. Creating a brand-new namespace requires this subscription/RG-scoped Contributor (the env-pinned namespace grant cannot cover a namespace that does not exist yet). Default false — create-if-missing of event hubs/consumer groups then works against the env-pinned namespace, which already has a namespace-scoped Contributor grant via landing-zone/eventhubs.bicep.')
 param grantSubscriptionContributor bool = false
 
 // Reader - acdd72a7-3385-48ef-bd42-f606fba81ae7
@@ -40,11 +40,12 @@ resource rtiHubArgReader 'Microsoft.Authorization/roleAssignments@2022-04-01' = 
 
 // Contributor (subscription scope, OPT-IN) - b24988ac-6180-42a0-ab88-20f7382dd24c
 // Powers the connect dialog's "+ Create new…" affordance (POST /api/realtime-hub/provision)
-// against arbitrary discovered Event Hubs / IoT Hub namespaces cross-subscription.
-// Off by default (least privilege): the env-pinned namespace already has a
-// namespace-scoped Contributor grant, so create-if-missing works there without
-// this broad grant. Flip on only when operators need to create resources in
-// namespaces outside the Loom landing-zone RG.
+// against arbitrary discovered (or net-new) Event Hubs NAMESPACES / event hubs /
+// consumer groups cross-subscription. Off by default (least privilege): the
+// env-pinned namespace already has a namespace-scoped Contributor grant, so
+// create-if-missing of hubs/consumer groups works there without this broad grant.
+// Flip on only when operators need to create a NEW namespace, or create resources
+// in namespaces outside the Loom landing-zone RG.
 resource rtiHubCreateContributor 'Microsoft.Authorization/roleAssignments@2022-04-01' = if (!empty(consolePrincipalId) && !skipRoleGrants && grantSubscriptionContributor) {
   name: guid(subscription().id, consolePrincipalId, 'rti-hub-create-contributor')
   properties: {
