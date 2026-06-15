@@ -68,6 +68,14 @@ export interface MirrorOutcome {
   /** Human-readable note (e.g. the UC catalog/schema touched, or why skipped). */
   detail?: string;
   error?: string;
+  /**
+   * The Purview classic-collection referenceName this domain maps to. Surfaced
+   * (structurally, not only in `detail`) so a caller that persists a link id —
+   * the governance `cosmosDomainStore.purviewCollectionId` — can record it
+   * without re-deriving the slug. Set on a successful create/update; absent when
+   * the Purview mirror is skipped.
+   */
+  purviewId?: string;
 }
 
 export interface UnityMirrorOutcome extends MirrorOutcome {
@@ -123,12 +131,13 @@ async function purviewUpsert(spec: UnifiedDomainSpec, op: 'create' | 'update'): 
       const m = await createBusinessDomain({
         id: spec.id, name: spec.name, description: spec.description, parentId: parentCol,
       });
-      return { ok: true, detail: `Mirrored to Purview collection '${m.id}'.` };
+      return { ok: true, purviewId: m.id, detail: `Mirrored to Purview collection '${m.id}'.` };
     }
     await updateBusinessDomain(spec.id, {
       name: spec.name, description: spec.description, parentId: parentCol,
     });
-    return { ok: true, detail: `Updated Purview collection '${domainCollectionName(spec.id)}'.` };
+    const colName = domainCollectionName(spec.id);
+    return { ok: true, purviewId: colName, detail: `Updated Purview collection '${colName}'.` };
   } catch (e: any) {
     return { ok: false, error: e?.message || String(e) };
   }

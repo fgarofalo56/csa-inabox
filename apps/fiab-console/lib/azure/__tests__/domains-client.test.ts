@@ -66,6 +66,7 @@ const fakeWorkspacesContainer = {
 };
 
 const purviewCalls: any[] = [];
+const unityCalls: any[] = [];
 
 vi.mock('../cosmos-client', () => ({
   governanceDomainsContainer: async () => fakeDomainsContainer,
@@ -89,6 +90,38 @@ vi.mock('../purview-client', () => ({
   },
 }));
 
+// domains-client now mirrors through lib/azure/unified-domain-mapper, which also
+// writes to Databricks Unity Catalog. Mock the UC client so the dual write-through
+// is observable WITHOUT a real Databricks workspace (no network, no Fabric dep).
+vi.mock('../databricks-client', () => ({
+  databricksConfigGate: () =>
+    process.env.LOOM_DATABRICKS_HOSTNAME ? null : { missing: 'LOOM_DATABRICKS_HOSTNAME' },
+  createUcCatalog: async (spec: any) => {
+    unityCalls.push(['createCatalog', spec]);
+    return { name: spec.name };
+  },
+  createUcSchema: async (spec: any) => {
+    unityCalls.push(['createSchema', spec]);
+    return { name: spec.name };
+  },
+  patchUcCatalog: async (name: string, patch: any) => {
+    unityCalls.push(['patchCatalog', name, patch]);
+    return { name };
+  },
+  patchUcSchema: async (fullName: string, patch: any) => {
+    unityCalls.push(['patchSchema', fullName, patch]);
+    return { name: fullName };
+  },
+  deleteUcCatalog: async (name: string) => {
+    unityCalls.push(['deleteCatalog', name]);
+  },
+  deleteUcSchema: async (fullName: string) => {
+    unityCalls.push(['deleteSchema', fullName]);
+  },
+  listUcCatalogs: async () => [],
+  listUcSchemas: async () => [],
+}));
+
 describe('domains-client — DomainStore adapters (F4)', () => {
   const ORIG_ENV = { ...process.env };
   let fetchMock: any;
@@ -97,10 +130,12 @@ describe('domains-client — DomainStore adapters (F4)', () => {
     domainDocs.clear();
     workspaceDocs.clear();
     purviewCalls.length = 0;
+    unityCalls.length = 0;
     delete process.env.LOOM_DOMAINS_BACKEND;
     delete process.env.LOOM_CLOUD_TIER;
     delete process.env.LOOM_DEFAULT_FABRIC_WORKSPACE;
     process.env.LOOM_PURVIEW_ACCOUNT = 'purview-test';
+    process.env.LOOM_DATABRICKS_HOSTNAME = 'adb-1.azuredatabricks.net';
     // Any Fabric API call on the default path is a rule violation — make fetch
     // throw so the test fails loudly if the Cosmos path ever reaches the network.
     fetchMock = vi.fn(() => {
@@ -161,6 +196,104 @@ describe('domains-client — DomainStore adapters (F4)', () => {
     // Purview mirror was exercised for all three operations…
     expect(purviewCalls.map((c) => c[0])).toEqual(['create', 'update', 'delete']);
     // …and the Cosmos default path NEVER hit the network (no Fabric dependency).
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it('cosmosDomainStore mirrors a ROOT domain to a UC catalog + persists unityCatalogName', async () => {
+    const mod = await import('../domains-client');
+    const created = await mod.cosmosDomainStore.createDomain(
+      'tenant-1',
+      { id: 'finance', name: 'Finance', description: 'Money' },
+      'alice@contoso.com',
+    );
+    // Root domain → UC CATALOG (catalog name derived from the immutable id).
+    const cat = unityCalls.find((c) => c[0] === 'createCatalog');
+    expect(cat).toBeTruthy();
+    expect(cat![1].name).toBe('finance');
+    expect(created.unityCatalogName).toBe('finance');
+    expect(created.unitySchemas).toBeUndefined();
+    // Purview collection id captured structurally from the mapper.
+    expect(created.purviewCollectionId).toBe('col-finance');
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it('cosmosDomainStore mirrors a SUBDOMAIN to a UC schema under the parent catalog', async () => {
+    const mod = await import('../domains-client');
+    const store = mod.cosmosDomainStore;
+    await store.createDomain('tenant-1', { id: 'operations', name: 'Operations' }, 'alice@contoso.com');
+    const sub = await store.createDomain(
+      'tenant-1',
+      { id: 'people', name: 'People', parentDomainId: 'operations' },
+      'alice@contoso.com',
+    );
+    const schemaCall = unityCalls.find((c) => c[0] === 'createSchema');
+    expect(schemaCall).toBeTruthy();
+    expect(schemaCall![1]).toMatchObject({ name: 'people', catalog_name: 'operations' });
+    // Subdomain records its parent's catalog + its own schema (deduped list).
+    expect(sub.unityCatalogName).toBe('operations');
+    expect(sub.unitySchemas).toEqual(['people']);
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it('cosmosDomainStore.deleteDomain drops the UC catalog mirror too (dual cleanup)', async () => {
+    const mod = await import('../domains-client');
+    const store = mod.cosmosDomainStore;
+    await store.createDomain('tenant-1', { id: 'finance', name: 'Finance' }, 'alice@contoso.com');
+    unityCalls.length = 0;
+    await store.deleteDomain('tenant-1', 'finance');
+    expect(unityCalls.find((c) => c[0] === 'deleteCatalog')![1]).toBe('finance');
+    // Purview collection mirror was also dropped.
+    expect(purviewCalls.find((c) => c[0] === 'delete')).toBeTruthy();
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it('cosmosDomainStore mirrors UC even when Purview is unset (independent back-ends)', async () => {
+    delete process.env.LOOM_PURVIEW_ACCOUNT;
+    const mod = await import('../domains-client');
+    const created = await mod.cosmosDomainStore.createDomain(
+      'tenant-1',
+      { id: 'ops', name: 'Operations' },
+      'alice@contoso.com',
+    );
+    // Purview skipped (no account) but UC still mirrors — neither blocks the other.
+    expect(created.purviewCollectionId).toBeUndefined();
+    expect(purviewCalls).toHaveLength(0);
+    expect(created.unityCatalogName).toBe('ops');
+    expect(unityCalls.find((c) => c[0] === 'createCatalog')).toBeTruthy();
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it('cosmosDomainStore skips BOTH mirrors when neither back-end is configured', async () => {
+    delete process.env.LOOM_PURVIEW_ACCOUNT;
+    delete process.env.LOOM_DATABRICKS_HOSTNAME;
+    const mod = await import('../domains-client');
+    const created = await mod.cosmosDomainStore.createDomain(
+      'tenant-1',
+      { id: 'plain', name: 'Plain' },
+      'alice@contoso.com',
+    );
+    expect(created.purviewCollectionId).toBeUndefined();
+    expect(created.unityCatalogName).toBeUndefined();
+    expect(purviewCalls).toHaveLength(0);
+    expect(unityCalls).toHaveLength(0);
+    // Cosmos remains authoritative — the domain still persisted.
+    expect(domainDocs.get('plain')).toBeTruthy();
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it('cosmosDomainStore.moveDomain mirrors Purview reparent but NOT a UC move (UC has no reparent)', async () => {
+    const mod = await import('../domains-client');
+    const store = mod.cosmosDomainStore;
+    await store.createDomain('tenant-1', { id: 'finance', name: 'Finance' }, 'alice@contoso.com');
+    await store.createDomain('tenant-1', { id: 'sub', name: 'Sub' }, 'alice@contoso.com');
+    unityCalls.length = 0;
+    await store.moveDomain('tenant-1', 'sub', 'finance', 'bob@contoso.com');
+    // Purview collection reparented to the new parent slug…
+    const upd = purviewCalls.find((c) => c[0] === 'update');
+    expect(upd![2].parentId).toBe('finance');
+    // …but UC performed NO create/patch/delete on a move (honest: catalog/schema
+    // namespace is fixed — the mapper reports moveSupported:false, no faked call).
+    expect(unityCalls).toHaveLength(0);
     expect(fetchMock).not.toHaveBeenCalled();
   });
 
