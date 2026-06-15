@@ -126,6 +126,12 @@ param hubVnetCidr = '10.0.0.0/16'
 // Identity
 param adminEntraGroupId = readEnvironmentVariable('LOOM_ADMIN_ENTRA_GROUP_ID', '')
 
+// Day-1 service posture (deploy-readiness: everything ON by default / opt-out).
+// GCC supports APIM + Azure Maps + the hub Azure Firewall; default true in
+// main.bicep — set explicitly so the posture is visible (bicep+bootstrap sync).
+param apimEnabled = true
+param hubFirewallEnabled = true
+
 // Multi-sub
 param dlzSubscriptionIds = []
 param dlzDomainNames = []

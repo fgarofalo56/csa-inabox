@@ -303,8 +303,11 @@ param loomAoaiCompletionDeployment string = ''
 @description('Resource group of the AML workspace for MLflow experiment tracking (ml-experiment "Runs & metrics" tab). Empty → falls back to LOOM_FOUNDRY_RG.')
 param loomAmlRg string = ''
 
-@description('Deploy APIM. Premium V2 takes 30+ min; default off for fast iteration.')
-param apimEnabled bool = false
+@description('Deploy APIM (Premium) to back the API Marketplace. ON by default (opt-out) so a fresh deploy can publish/Try APIs on first login — ~30 min Premium provisioning. Set loomApimEnabled=false to skip.')
+param loomApimEnabled bool = true
+
+@description('DEPRECATED alias for loomApimEnabled, retained so existing .bicepparam files keep working. Now defaults true (was false). Set either flag false to opt out of APIM.')
+param apimEnabled bool = true
 
 @description('Deploy AI Search. Default off — capacity in eastus2 is intermittent.')
 param aiSearchEnabled bool = false
@@ -666,10 +669,16 @@ param loomMirrorBackend string = 'adf-cdc'
 @description('Existing Azure Maps account name to bind for the Geo editors (LOOM_AZURE_MAPS_ACCOUNT). Empty deploys a fresh Gen2 account on Commercial/GCC (azureMapsEnabled), or leaves Geo in its honest-gate state on GCC-High/IL5. Passed through to the admin-plane module.')
 param loomAzureMapsAccount string = ''
 
-@description('Deploy a fresh Azure Maps Gen2 account for the Geo editors (Commercial/GCC only — the admin-plane module also gates on boundary). Set false on GCC-High/IL5 where Azure Maps is unavailable. Passed through to the admin-plane module.')
+@description('Deploy a fresh Azure Maps Gen2 account for the Geo editors. ON by default (opt-out) on Commercial/GCC — the admin-plane module also boundary-gates. Set loomMapsEnabled=false (or on GCC-High/IL5 where Azure Maps is unavailable) to skip; Geo then falls back to its honest-gate or a bound loomAzureMapsAccount. Passed through to the admin-plane module.')
+param loomMapsEnabled bool = true
+
+@description('DEPRECATED alias for loomMapsEnabled, retained so existing .bicepparam files keep working (GCC-High / IL5 set it false). Set either flag false to skip Azure Maps. Passed through to the admin-plane module.')
 param azureMapsEnabled bool = true
 
-@description('Deploy the hub Azure Firewall (admin-plane egress filtering). Default true. Distinct from firewallEnabled (deploy-planner). Set false to skip — nothing consumes the hub firewall; avoids FirewallPolicyUpdateFailed on reconcile.')
+@description('Deploy the hub Azure Firewall (admin-plane egress filtering). ON by default (opt-out). Distinct from firewallEnabled (deploy-planner). Set loomFirewallEnabled=false to skip — nothing consumes the hub firewall; disabling avoids FirewallPolicyUpdateFailed on reconcile.')
+param loomFirewallEnabled bool = true
+
+@description('DEPRECATED alias for loomFirewallEnabled, retained so existing .bicepparam files keep working. Set either flag false to skip the hub firewall.')
 param hubFirewallEnabled bool = true
 
 @description('Opt-in ADF CDC mirroring — pre-existing ADF linked service for the relational SOURCE (Azure SQL / SQL Server). Empty = built-in CSV snapshot engine (Azure-native, no Fabric).')
@@ -818,7 +827,7 @@ module adminPlane 'modules/admin-plane/main.bicep' = if (deployAdminPlane) {
     agentFoundryEnabled: agentFoundryEnabled
     loomAoaiCompletionDeployment: loomAoaiCompletionDeployment
     loomAmlRg: loomAmlRg
-    apimEnabled: apimEnabled
+    apimEnabled: (loomApimEnabled && apimEnabled)
     aiSearchEnabled: aiSearchEnabled
     adxEnabled: adxEnabled
     copilotMafEnabled: copilotMafEnabled
@@ -987,8 +996,8 @@ module adminPlane 'modules/admin-plane/main.bicep' = if (deployAdminPlane) {
     loomMsalAppReg: loomMsalAppReg
     loomMirrorBackend: loomMirrorBackend
     loomAzureMapsAccount: loomAzureMapsAccount
-    azureMapsEnabled: azureMapsEnabled
-    firewallEnabled: hubFirewallEnabled
+    azureMapsEnabled: (loomMapsEnabled && azureMapsEnabled)
+    firewallEnabled: (loomFirewallEnabled && hubFirewallEnabled)
     loomMirrorSourceLinkedService: loomMirrorSourceLinkedService
     loomMirrorAdlsLinkedService: loomMirrorAdlsLinkedService
     loomMirrorSnowflakeLinkedService: loomMirrorSnowflakeLinkedService

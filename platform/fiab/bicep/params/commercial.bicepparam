@@ -161,6 +161,13 @@ param adminEntraGroupId = readEnvironmentVariable('LOOM_ADMIN_ENTRA_GROUP_ID', '
 param loomTenantAdminGroupId = readEnvironmentVariable('LOOM_TENANT_ADMIN_GROUP_ID', adminEntraGroupId)
 param loomTenantAdminOid = readEnvironmentVariable('LOOM_TENANT_ADMIN_OID', '')
 
+// Day-1 service posture (deploy-readiness: everything ON by default / opt-out).
+// APIM backs the API Marketplace; the hub Azure Firewall hardens egress. Both
+// default true in main.bicep now — set explicitly here so the posture is visible
+// in the param file (bicep+bootstrap sync). Flip to false to opt out.
+param apimEnabled = true
+param hubFirewallEnabled = true
+
 // Multi-sub mode (empty for single-sub)
 param dlzSubscriptionIds = []
 param dlzDomainNames = []

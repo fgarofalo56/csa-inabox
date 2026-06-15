@@ -156,6 +156,7 @@ param contentSafetyEnabled = true
 // return real completions on a clean deploy instead of the 501 not_configured gate.
 param agentFoundryEnabled = true
 param apimEnabled = true
+param hubFirewallEnabled = true
 param aiSearchEnabled = false
 param adxEnabled = true
 // RTI (Real-Time Intelligence) backends — Event Hubs + Stream Analytics. ON by

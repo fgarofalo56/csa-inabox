@@ -168,6 +168,7 @@ param aiFoundryEnabled = true
 // Microsoft Learn region matrix. Wires LOOM_CONTENT_SAFETY_ENDPOINT.
 param contentSafetyEnabled = true
 param apimEnabled = true
+param hubFirewallEnabled = true
 param aiSearchEnabled = false
 param adxEnabled = true
 // RTI backends — Event Hubs + Stream Analytics ON by default (opt-out). Entra-

@@ -162,6 +162,7 @@ param aiFoundryEnabled = false
 // (prompts pass unfiltered, never a silent claim of filtering).
 param contentSafetyEnabled = false
 param apimEnabled = true
+param hubFirewallEnabled = true
 param aiSearchEnabled = false
 param adxEnabled = true
 // RTI backends — Event Hubs + Stream Analytics ON by default (opt-out). Entra-
