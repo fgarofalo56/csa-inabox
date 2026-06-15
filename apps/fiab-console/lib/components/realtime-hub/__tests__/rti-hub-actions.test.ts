@@ -24,6 +24,7 @@ describe('streamRowActions', () => {
     for (const kind of ['kql-database', 'eventhouse']) {
       const a = streamRowActions(kind);
       expect(a.previewData).toBe(true);
+      expect(a.previewClusterData).toBe(false);
       expect(a.openEditor).toBe(true);
       expect(a.previewTestEvents).toBe(false);
       expect(a.peekSendEvents).toBe(false);
@@ -39,14 +40,27 @@ describe('streamRowActions', () => {
     expect(a.previewTestEvents).toBe(false);
   });
 
-  it('namespace / IoT Hub / ADX cluster rows: subscribe + activator only (no inline preview)', () => {
-    for (const kind of ['eventhub-namespace', 'iothub', 'adx-cluster']) {
+  it('ADX cluster rows: cluster-scoped preview (clusterUri override) + subscribe + activator', () => {
+    const a = streamRowActions('adx-cluster');
+    expect(a.previewClusterData).toBe(true);
+    expect(a.subscribe).toBe(true);
+    expect(a.createActivator).toBe(true);
+    // Not a Loom-item preview/editor (it is a discovered Azure resource).
+    expect(a.previewData).toBe(false);
+    expect(a.openEditor).toBe(false);
+    expect(a.previewTestEvents).toBe(false);
+    expect(a.peekSendEvents).toBe(false);
+  });
+
+  it('namespace / IoT Hub rows: subscribe + activator only (no inline preview)', () => {
+    for (const kind of ['eventhub-namespace', 'iothub']) {
       const a = streamRowActions(kind);
       expect(a.subscribe).toBe(true);
       expect(a.createActivator).toBe(true);
       expect(a.previewTestEvents).toBe(false);
       expect(a.peekSendEvents).toBe(false);
       expect(a.previewData).toBe(false);
+      expect(a.previewClusterData).toBe(false);
       expect(a.endpoints).toBe(false);
       expect(a.openEditor).toBe(false);
     }

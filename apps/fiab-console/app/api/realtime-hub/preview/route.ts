@@ -10,9 +10,12 @@
  *
  * Body:
  *   {
- *     database: string,   // KQL database name (Eventhouse DB)
- *     table: string,      // KQL table to preview
- *     limit?: number      // default 50, max 200
+ *     database: string,     // KQL database name (Eventhouse DB)
+ *     table: string,        // KQL table to preview
+ *     limit?: number,       // default 50, max 200
+ *     clusterUri?: string   // optional: a *discovered* ADX cluster to preview
+ *                           //   (RTI hub catalog); validated to a bare https
+ *                           //   Kusto host. Defaults to the configured cluster.
  *   }
  *
  * The KQL is built server-side as `["table"] | take N` (identifier-quoted)
@@ -22,7 +25,7 @@
 
 import { NextRequest, NextResponse } from 'next/server';
 import { getSession } from '@/lib/auth/session';
-import { executeQuery, defaultDatabase, KustoError } from '@/lib/azure/kusto-client';
+import { executeQuery, defaultDatabase, normalizeClusterUri, KustoError } from '@/lib/azure/kusto-client';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -58,15 +61,29 @@ export async function POST(req: NextRequest) {
   if (!Number.isFinite(limit) || limit <= 0) limit = DEFAULT_LIMIT;
   if (limit > MAX_LIMIT) limit = MAX_LIMIT;
 
+  // Optional: target a *discovered* ADX cluster (RTI hub catalog ADX rows)
+  // instead of the env-configured default. Validated to a bare https Kusto
+  // host so we never query a phantom / non-ADX endpoint. Invalid overrides are
+  // rejected up front rather than silently falling back to the wrong cluster.
+  let clusterUri: string | undefined;
+  if (body.clusterUri != null && String(body.clusterUri).trim()) {
+    const norm = normalizeClusterUri(String(body.clusterUri));
+    if (!norm) {
+      return NextResponse.json({ ok: false, error: 'clusterUri must be a valid https Azure Data Explorer cluster URI.' }, { status: 400 });
+    }
+    clusterUri = norm;
+  }
+
   const kql = `${kqlIdent(table)} | take ${limit}`;
 
   try {
-    const result = await executeQuery(database, kql);
+    const result = await executeQuery(database, kql, clusterUri ? { clusterUri } : undefined);
     return NextResponse.json({
       ok: true,
       database,
       table,
       kql,
+      clusterUri: clusterUri ?? null,
       columns: result.columns,
       columnTypes: result.columnTypes,
       rows: result.rows,

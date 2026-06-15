@@ -83,6 +83,74 @@ function gate(missing: string, hint: string) {
   return NextResponse.json({ ok: false, code: 'not_configured', missing, hint }, { status: 503 });
 }
 
+/**
+ * Read the saved source node at `nodeIdx` from a persisted eventstream state.
+ * Mirrors the resolution used by the events/peek route: `state.sources[idx]`
+ * (canvas topology) falling back to the singular `state.source` (a freshly
+ * subscribed single-source stream created by /api/realtime-hub/connect-source).
+ */
+function readSavedSourceNode(state: any, nodeIdx: number): { name?: string; type?: string; properties?: Record<string, unknown> } | null {
+  const sources: any[] = Array.isArray(state?.sources)
+    ? state.sources
+    : (state?.source ? [state.source] : []);
+  const node = (nodeIdx >= 0 ? sources[nodeIdx] : sources[0]);
+  return node && typeof node === 'object' ? node : null;
+}
+
+/**
+ * Map a saved Eventstream source node (its Fabric source `type` enum +
+ * connection `properties`) to the source-route `{ kind, config }` that
+ * provisions / resolves its REAL Azure ingest endpoint — no extra operator
+ * input required. Used by the in-place "Provision ingest endpoint" affordance
+ * (the catalog → Subscribe → Test loop) so a newly-subscribed stream can be
+ * made testable without re-opening the canvas.
+ *
+ * Source types whose ingest endpoint genuinely needs more config than a
+ * subscribe pre-fill carries (CDC needs DB host/database/table; Blob Storage
+ * events flow through an Event Grid system topic bound in the editor) return an
+ * honest `{ gate }` message instead of a half-provisioned endpoint
+ * (no-vaporware.md). Every branch stays Azure-native (no-fabric-dependency.md).
+ */
+function deriveProvisionFromSaved(
+  node: { name?: string; type?: string; properties?: Record<string, unknown> },
+): { kind: SourceKind; config: SourceConfig } | { gate: string } {
+  const type = String(node?.type || '').trim();
+  const props = (node?.properties && typeof node.properties === 'object') ? node.properties : {};
+  const name = String(node?.name || '').trim();
+  const s = (v: unknown) => (typeof v === 'string' ? v : v == null ? undefined : String(v));
+  switch (type) {
+    case 'AzureEventHub':
+      return { kind: 'eventhub', config: {
+        name, eventHubName: s(props.eventHubName) || name,
+        namespace: s(props.namespace), consumerGroup: s(props.consumerGroupName),
+      } };
+    case 'AzureIoTHub':
+      return { kind: 'iothub', config: {
+        name, iotHub: s(props.iotHubName) || name,
+        iotHubSubscriptionId: s(props.subscriptionId), iotHubResourceGroup: s(props.resourceGroup),
+      } };
+    case 'CustomEndpoint':
+      // A dedicated ingest Event Hub (custom-app). Covers Loom-item chaining
+      // and Event Grid custom-topic ingest (eventHubName pre-filled by the
+      // RTI hub catalog).
+      return { kind: 'custom-app', config: {
+        name, eventHubName: s(props.eventHubName) || safeName(name, '') || `custom-${name}`,
+      } };
+    case 'SampleData':
+      return { kind: 'sample', config: { name } };
+    case 'AzureSQLDBCDC':
+    case 'AzureSQLMIDBCDC':
+    case 'PostgreSQLCDC':
+    case 'MySQLCDC':
+    case 'AzureCosmosDBCDC':
+      return { gate: 'This change-data-capture source needs its database connection (server host, database, table) set in the eventstream editor before an ingest endpoint can be provisioned.' };
+    case 'AzureBlobStorageEvents':
+      return { gate: 'Blob Storage events flow through an Event Grid system topic bound in the eventstream editor — there is no standalone ingest endpoint to provision here. Open the editor to connect the storage account.' };
+    default:
+      return { gate: `Source type "${type || 'unknown'}" must be configured in the eventstream editor before it can receive test events.` };
+  }
+}
+
 /** Lowercase, hyphenated, hub-name-safe slug (Event Hub entity names: a-z0-9-._). */
 function safeName(raw: string, fallback: string): string {
   const s = (raw || '').toLowerCase().replace(/[^a-z0-9._-]+/g, '-').replace(/^-+|-+$/g, '');
@@ -145,14 +213,32 @@ export async function POST(req: NextRequest, ctx: { params: Promise<{ id: string
   if (!session) return NextResponse.json({ ok: false, error: 'unauthenticated' }, { status: 401 });
 
   const body = await req.json().catch(() => ({} as any));
-  const kind: SourceKind = (body?.kind || body?.config?.kind || 'eventhub') as SourceKind;
-  const cfg: SourceConfig = (body?.config && typeof body.config === 'object') ? body.config : {};
+  let kind: SourceKind = (body?.kind || body?.config?.kind || 'eventhub') as SourceKind;
+  let cfg: SourceConfig = (body?.config && typeof body.config === 'object') ? body.config : {};
   const nodeIdx: number = Number.isInteger(body?.nodeIdx) ? body.nodeIdx : -1;
+  // `fromSaved`: provision the saved source node in place (the catalog →
+  // Subscribe → Test loop). We derive {kind, config} from the persisted
+  // topology so the client doesn't have to re-supply connection details.
+  const fromSaved: boolean = body?.fromSaved === true;
 
   try {
     const id = (await ctx.params).id;
     const item = await loadKustoItem(id, 'eventstream', session.claims.oid);
     if (!item) return NextResponse.json({ ok: false, error: 'not found' }, { status: 404 });
+
+    if (fromSaved) {
+      const node = readSavedSourceNode(item.state, nodeIdx);
+      if (!node) return NextResponse.json({ ok: false, error: 'source node not found on the saved topology' }, { status: 404 });
+      const derived = deriveProvisionFromSaved(node);
+      if ('gate' in derived) {
+        return NextResponse.json(
+          { ok: false, code: 'needs_editor', error: derived.gate, link: `/items/eventstream/${id}` },
+          { status: 422 },
+        );
+      }
+      kind = derived.kind;
+      cfg = { ...derived.config };
+    }
 
     let endpoint: ProvisionedEndpoint;
     let hint: string | undefined;

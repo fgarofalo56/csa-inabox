@@ -42,16 +42,40 @@ vi.mock('@/app/api/items/_lib/item-crud', () => ({
   listOwnedWorkspaces: vi.fn(),
 }));
 
+vi.mock('@/lib/azure/eventgrid-topics-client', () => ({
+  eventgridTopicsConfigGate: vi.fn(),
+  listEventGridTopics: vi.fn(),
+}));
+
 import { getSession } from '@/lib/auth/session';
 import {
   listStreamingResourcesViaGraph, rtiSubscriptionScope, listEventHubs,
   eventhubsConfigGate, readEventHubsConfig,
 } from '@/lib/azure/eventhubs-client';
 import { listAllOwnedItems, listOwnedWorkspaces } from '@/app/api/items/_lib/item-crud';
+import { eventgridTopicsConfigGate, listEventGridTopics } from '@/lib/azure/eventgrid-topics-client';
 
 import { GET } from '../route';
 
 const AUTH = { claims: { oid: 'tenant-1', upn: 'u@x' } };
+
+// Mirror of RTH_SOURCE_TYPES (lib/azure/fabric-client.ts). Inlined so the test
+// doesn't import fabric-client (which transitively pulls @azure/identity, absent
+// in CI's isolated store). Every subscribePreFill.sourceType the route emits
+// MUST be in this set, or the Connect button is dead (no connector + a 400 from
+// connect-source). This pins the GAP-1 regression: a business-event topic used
+// to emit the unsupported 'AzureEventGridCustomTopic'.
+const RTH_SOURCE_TYPES = new Set([
+  'AzureEventHub', 'AzureIoTHub', 'AzureServiceBus', 'AzureSQLDBCDC', 'AzureSQLMIDBCDC',
+  'AzureCosmosDBCDC', 'PostgreSQLCDC', 'MySQLCDC', 'AzureBlobStorageEvents', 'AmazonKinesis',
+  'AmazonMSKKafka', 'ApacheKafka', 'ConfluentCloud', 'GooglePubSub', 'Mqtt', 'SampleData',
+  'CustomEndpoint', 'FabricWorkspaceItemEvents', 'FabricJobEvents', 'FabricOneLakeEvents',
+  'FabricCapacityUtilizationEvents',
+]);
+
+function allRows(j: any): any[] {
+  return [...j.tabs.dataStreams, ...j.tabs.azureEvents, ...j.tabs.fabricEvents];
+}
 
 beforeEach(() => {
   vi.resetAllMocks();
@@ -61,6 +85,9 @@ beforeEach(() => {
   (listStreamingResourcesViaGraph as any).mockResolvedValue([]);
   (listAllOwnedItems as any).mockResolvedValue([]);
   (listOwnedWorkspaces as any).mockResolvedValue([]);
+  // Business-event topics gated off by default (no env) → no topic rows.
+  (eventgridTopicsConfigGate as any).mockReturnValue({ missing: 'LOOM_EVENTGRID_TOPICS_RG' });
+  (listEventGridTopics as any).mockResolvedValue([]);
 });
 
 describe('GET /api/rti-hub', () => {
@@ -162,5 +189,50 @@ describe('GET /api/rti-hub', () => {
     expect(j.warnings.find((w: any) => w.source === 'resource-graph')).toBeTruthy();
     // Loom items still present despite the graph failure.
     expect(j.tabs.dataStreams.find((r: any) => r.name === 'Telemetry ES')).toBeTruthy();
+  });
+
+  it('every emitted subscribePreFill.sourceType is a valid RTH source type (connectable)', async () => {
+    (getSession as any).mockReturnValue(AUTH);
+    (eventhubsConfigGate as any).mockReturnValue(null);
+    (readEventHubsConfig as any).mockReturnValue({ subscriptionId: 'sub-1', resourceGroup: 'rg', namespace: 'loom-ns' });
+    (listEventHubs as any).mockResolvedValue([{ name: 'telemetry', partitionCount: 4, messageRetentionInDays: 1 }]);
+    (listAllOwnedItems as any).mockResolvedValue([
+      { id: 'es1', itemType: 'eventstream', displayName: 'Telemetry ES', workspaceId: 'ws-1' },
+      { id: 'kql1', itemType: 'kql-database', displayName: 'Signals KQL', workspaceId: 'ws-1' },
+    ]);
+    (listOwnedWorkspaces as any).mockResolvedValue([{ id: 'ws-1', name: 'WS One' }]);
+    (listStreamingResourcesViaGraph as any).mockResolvedValue([
+      { id: '/subscriptions/sub-1/rg/iot1', name: 'iot1', resourceKind: 'iothub', location: 'eastus', resourceGroup: 'rg', subscriptionId: 'sub-1' },
+      { id: '/subscriptions/sub-1/rg/adx1', name: 'adx1', resourceKind: 'adx-cluster', location: 'eastus', resourceGroup: 'rg', subscriptionId: 'sub-1', properties: { uri: 'https://adx1.eastus.kusto.windows.net' } },
+    ]);
+    // Business-event topics enabled → exercises the CustomEndpoint mapping.
+    (eventgridTopicsConfigGate as any).mockReturnValue(null);
+    (listEventGridTopics as any).mockResolvedValue([
+      { name: 'orders-events', location: 'eastus', inputSchema: 'CloudEventSchemaV1_0' },
+    ]);
+    const res = await GET();
+    const j = await res.json();
+    expect(j.ok).toBe(true);
+    const rows = allRows(j);
+    expect(rows.length).toBeGreaterThan(0);
+    for (const r of rows) {
+      expect(RTH_SOURCE_TYPES.has(r.subscribePreFill.sourceType)).toBe(true);
+    }
+  });
+
+  it('business-event topics map to a connectable CustomEndpoint source (GAP-1 regression)', async () => {
+    (getSession as any).mockReturnValue(AUTH);
+    (eventgridTopicsConfigGate as any).mockReturnValue(null);
+    (listEventGridTopics as any).mockResolvedValue([
+      { name: 'Orders Topic', location: 'eastus', inputSchema: 'CloudEventSchemaV1_0' },
+    ]);
+    const res = await GET();
+    const j = await res.json();
+    const topic = j.tabs.azureEvents.find((r: any) => r.name === 'Orders Topic');
+    expect(topic).toBeTruthy();
+    expect(topic.subscribePreFill.sourceType).toBe('CustomEndpoint');
+    // Carries the original topic name + a hub-name-safe ingest target.
+    expect(topic.subscribePreFill.properties.eventGridTopic).toBe('Orders Topic');
+    expect(topic.subscribePreFill.properties.eventHubName).toMatch(/^[a-z0-9._-]+$/);
   });
 });

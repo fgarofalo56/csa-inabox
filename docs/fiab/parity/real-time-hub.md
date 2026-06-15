@@ -17,6 +17,8 @@ There is **no separate "Real-Time hub REST API"** — the Fabric hub is composed
 
 `/realtime-hub` (this surface) is the **deployed-streams catalog** — your eventstreams + KQL tables with Preview / Endpoints / Open, plus the Connect-source gallery. `/rti-hub` is the **discover-and-connect catalog** — every Event Hub / IoT Hub / ADX cluster across all subscriptions (Azure Resource Graph) you can Subscribe into a Loom eventstream. The two are cross-linked in both directions (a caption link in each), and share one implementation of the Preview + Endpoints drawers (`lib/components/realtime-hub/stream-preview-drawer.tsx`, `stream-endpoints-drawer.tsx`) so they never diverge.
 
+Both surfaces carry a persistent `intent="info"` **"Real-time scope"** MessageBar (rendered unconditionally, by design — not an infra-gate) that states the two-surface split and that Loom's real-time path is an Azure-native **analytics** pipeline (Event Hubs → Stream Analytics / ADX, sub-second to low-second), **not** a sub-100 ms transactional object store. This keeps both honest per `no-vaporware.md`; see the matching disclosure in `docs/fiab/parity/rti-hub.md`.
+
 ## The problem this fixes
 
 The old `/realtime-hub` page was a thin wrapper around `ItemsByTypePane` listing Cosmos items by type (`eventstream`, `eventhouse`, `kql-database`, …). It did **not** call any Fabric Real-Time hub surface: no tenant-wide data-stream discovery, no Get-events / Connect-source flow, no Microsoft/Fabric/Azure source connectors, no preview, no endpoints. Operator verdict: "doesn't really work at all… looks more like vaporware." This rebuild wires the page to real Fabric + Kusto REST.
@@ -49,7 +51,7 @@ The old `/realtime-hub` page was a thin wrapper around `ItemsByTypePane` listing
 | Per-row **Item owner / Endorsement / Sensitivity** columns | ⚠️ tracked | Fabric item list payload doesn't include owner/endorsement; needs the admin `scanResult` / endorsement APIs. Tracked — not faked. |
 | **Visualize data** (create Real-Time dashboard from a KQL table) | ➡️ delegated | Handled by the existing KQL-dashboard editor (`/items/kql-dashboard/new`); not duplicated on the hub. |
 | Per-stream-node **Activate / Deactivate** | ⚠️ disclosed | Not in the public Eventstream REST surface (portal-only toggle) — disclosed honestly per `no-vaporware.md`, consistent with the Eventstream editor. |
-| **Business events** (preview) | ⚠️ tracked | Preview-only Fabric feature; tracked follow-up for the preview pass. |
+| **Business events** (preview) | ✅ connectable via `/rti-hub` | Governed Event Grid business-event topics are discovered on the RTI catalog's **Azure events** tab and Subscribe as a `CustomEndpoint` eventstream (dedicated ingest Event Hub receives the topic's CloudEvents). No longer a faked/empty connector. |
 
 ## Azure-native source binding — dropdowns + create-if-missing (audit-t134)
 

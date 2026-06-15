@@ -23,11 +23,11 @@
 import { useState } from 'react';
 import {
   Drawer, DrawerHeader, DrawerHeaderTitle, DrawerBody,
-  Button, Input, Field, Caption1, Body1, Badge, Spinner,
-  MessageBar, MessageBarBody, MessageBarTitle,
+  Button, Input, Field, Caption1, Body1, Badge, Spinner, Link,
+  MessageBar, MessageBarBody, MessageBarTitle, MessageBarActions,
   makeStyles, tokens,
 } from '@fluentui/react-components';
-import { Dismiss20Regular, Eye20Regular, Send20Regular } from '@fluentui/react-icons';
+import { Dismiss20Regular, Eye20Regular, Send20Regular, PlugConnected20Regular } from '@fluentui/react-icons';
 
 const useStyles = makeStyles({
   section: { marginBottom: tokens.spacingVerticalM },
@@ -63,12 +63,17 @@ export function EventTestDrawer({ open, onClose, title, target }: EventTestDrawe
   const [gate, setGate] = useState<{ title: string; detail: string } | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [sent, setSent] = useState<string | null>(null);
+  // 409 from a not-yet-provisioned eventstream → offer in-place provisioning.
+  const [needsProvision, setNeedsProvision] = useState<{ detail: string; canProvision: boolean; link?: string } | null>(null);
+  const [provisionBusy, setProvisionBusy] = useState(false);
+  const [provisioned, setProvisioned] = useState<string | null>(null);
 
   // Reset transient state when the drawer opens onto a new target.
   const [seededFor, setSeededFor] = useState<string | null>(null);
   if (open && seededFor !== title) {
     setSeededFor(title);
     setEvents(null); setGate(null); setError(null); setSent(null);
+    setNeedsProvision(null); setProvisioned(null);
   }
   if (!open && seededFor !== null) setSeededFor(null);
 
@@ -93,9 +98,47 @@ export function EventTestDrawer({ open, onClose, title, target }: EventTestDrawe
     });
   }
 
+  /** A 409 from the events route means the source has no provisioned ingest
+   *  endpoint yet. For an eventstream target we can provision it in place
+   *  (state.sources[nodeIdx] → real Azure Event Hub) — never for a bare
+   *  Event Hub entity (which always exists). Returns true when handled. */
+  function handle409(status: number, j: any): boolean {
+    if (status !== 409 || !target || target.kind !== 'eventstream') return false;
+    setNeedsProvision({
+      detail: j?.error || 'This source has no provisioned ingest endpoint yet.',
+      canProvision: true,
+    });
+    return true;
+  }
+
+  async function provision() {
+    if (!target || target.kind !== 'eventstream') return;
+    setProvisionBusy(true); setError(null); setProvisioned(null);
+    try {
+      const res = await fetch(`/api/items/eventstream/${encodeURIComponent(target.id)}/source`, {
+        method: 'POST', headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ nodeIdx: target.nodeIdx ?? 0, fromSaved: true }),
+      });
+      const j = await res.json().catch(() => ({}));
+      if (res.status === 422 && j?.code === 'needs_editor') {
+        setNeedsProvision({ detail: j.error || 'This source must be configured in the eventstream editor first.', canProvision: false, link: j.link });
+        return;
+      }
+      if (res.status === 503 && j?.code === 'not_configured') {
+        setError(`${j.error || 'Azure infrastructure is not configured.'}${j.hint ? ` ${j.hint}` : ''}`);
+        return;
+      }
+      if (!res.ok || !j.ok) { setError(j.error || `Provisioning failed (HTTP ${res.status}).`); return; }
+      setNeedsProvision(null);
+      const ep = j.endpoint?.entityPath ? ` Ingest endpoint: ${j.endpoint.entityPath}.` : '';
+      setProvisioned(`Ingest endpoint provisioned.${ep}${j.hint ? ` ${j.hint}` : ''} You can now send a test event, then peek.`);
+    } catch (e: any) { setError(e?.message || String(e)); }
+    finally { setProvisionBusy(false); }
+  }
+
   async function peek() {
     if (!target) return;
-    setPeekBusy(true); setEvents(null); setGate(null); setError(null);
+    setPeekBusy(true); setEvents(null); setGate(null); setError(null); setNeedsProvision(null);
     try {
       const res = await fetch(peekUrl());
       const j = await res.json().catch(() => ({}));
@@ -106,6 +149,7 @@ export function EventTestDrawer({ open, onClose, title, target }: EventTestDrawe
         });
         return;
       }
+      if (handle409(res.status, j)) return;
       if (!res.ok || !j.ok) { setError(j.error || `Peek failed (HTTP ${res.status}).`); return; }
       setEvents(Array.isArray(j.events) ? j.events : []);
     } catch (e: any) { setError(e?.message || String(e)); }
@@ -114,10 +158,11 @@ export function EventTestDrawer({ open, onClose, title, target }: EventTestDrawe
 
   async function send() {
     if (!target || !message.trim()) return;
-    setSendBusy(true); setError(null); setSent(null);
+    setSendBusy(true); setError(null); setSent(null); setNeedsProvision(null);
     try {
       const res = await sendFetch();
       const j = await res.json().catch(() => ({}));
+      if (handle409(res.status, j)) return;
       if (!res.ok || !j.ok) { setError(j.error || `Send failed (HTTP ${res.status}).`); return; }
       setSent(`Sent ${j.sent ?? 1} test event${(j.sent ?? 1) === 1 ? '' : 's'} (HTTP ${j.status ?? 201}).`);
     } catch (e: any) { setError(e?.message || String(e)); }
@@ -156,6 +201,29 @@ export function EventTestDrawer({ open, onClose, title, target }: EventTestDrawe
         </div>
 
         {sent && <MessageBar intent="success" className={styles.section}><MessageBarBody>{sent}</MessageBarBody></MessageBar>}
+        {provisioned && <MessageBar intent="success" className={styles.section}><MessageBarBody>{provisioned}</MessageBarBody></MessageBar>}
+        {needsProvision && (
+          <MessageBar intent="warning" className={styles.section}>
+            <MessageBarBody>
+              <MessageBarTitle>Not provisioned yet</MessageBarTitle>
+              {needsProvision.canProvision
+                ? 'A newly subscribed eventstream must be provisioned before it can receive test events. Provision the ingest endpoint now, then send a test event.'
+                : needsProvision.detail}
+              {!needsProvision.canProvision && needsProvision.link && (
+                <> <Link href={needsProvision.link}>Open the eventstream editor</Link></>
+              )}
+            </MessageBarBody>
+            {needsProvision.canProvision && (
+              <MessageBarActions>
+                <Button appearance="primary" size="small"
+                  icon={provisionBusy ? <Spinner size="tiny" /> : <PlugConnected20Regular />}
+                  disabled={provisionBusy} onClick={provision}>
+                  {provisionBusy ? 'Provisioning…' : 'Provision ingest endpoint'}
+                </Button>
+              </MessageBarActions>
+            )}
+          </MessageBar>
+        )}
         {gate && (
           <MessageBar intent="warning" className={styles.section}>
             <MessageBarBody>
