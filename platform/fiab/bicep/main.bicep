@@ -312,6 +312,9 @@ param adxEnabled bool = true
 @description('Deploy a Gremlin-capable Cosmos DB account (EnableGremlin) + NoSQL vector account in each DLZ. Backs the cosmos-gremlin-graph (graph editor) and vector-store editors. Default on — the graph editor requires a Gremlin account at create-time (a NoSQL account cannot be converted). Set false to skip ~2 Cosmos accounts/DLZ.')
 param cosmosGraphVectorEnabled bool = true
 
+@description('Provision the Console\'s own SERVERLESS metadata Cosmos (the `loom` database the BFF reads/writes: items, workspaces, configs, copilot sessions, tenant-topology, …) in the hub for tenant/dlz-attach topologies. Default true (opt-out). Serverless removes the 25-container shared-throughput cap that broke workspaces/domains live. Disable ONLY when reusing an existing account via existingCosmosAccount — otherwise the Console env still points at LOOM_COSMOS_ENDPOINT and all item/config CRUD fails. Single-sub hosts this `loom` DB via the DLZ landing-zone cosmos.bicep instead, so this flag is a no-op there.')
+param loomConsoleCosmosEnabled bool = true
+
 @description('Deploy the Weave (Semantic Ontology) PostgreSQL + Apache AGE graph store in each DLZ. Backs Palantir-class ontology object/link/action instance write-back (the Ontology editor Objects / Write-back actions surfaces). Default on — Palantir-class ontology write-back requires the graph store. Set false to skip ~1 Burstable PG flexible server/DLZ.')
 param weaveOntologyEnabled bool = true
 
@@ -833,8 +836,10 @@ module adminPlane 'modules/admin-plane/main.bicep' = if (deployAdminPlane) {
     // Tenant/dlz-attach: no local DLZ hosts the Console's `loom` Cosmos, so the
     // admin plane provisions it in the hub (else the Console points at a missing
     // account and all item/config CRUD fails). useSingleDlz already deploys it
-    // via the DLZ cosmos.bicep; BYO Cosmos overrides both.
-    deployConsoleCosmos: !useSingleDlz && empty(existingCosmosAccount)
+    // via the DLZ cosmos.bicep; BYO Cosmos overrides both. loomConsoleCosmosEnabled
+    // (default true) is the opt-out flag — disabling it is only valid alongside a
+    // BYO existingCosmosAccount (the empty() guard already enforces that).
+    deployConsoleCosmos: loomConsoleCosmosEnabled && !useSingleDlz && empty(existingCosmosAccount)
     // Forward the Cosmos data-plane endpoints to the Console so the vector-store
     // and graph editors bind to the deployed accounts by default (no manual
     // config). The DLZ `cosmos-graph-vector` module (cosmosGraphVectorEnabled,
