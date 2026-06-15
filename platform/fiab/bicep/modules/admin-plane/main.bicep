@@ -2462,19 +2462,30 @@ module appDeployments 'app-deployments.bicep' = if (containerPlatform == 'contai
           // Purview Unified Catalog data-plane endpoint + API version — used by
           // the data-product creation wizard (/api/data-products,
           // /api/governance-domains) to register data products + list business
-          // domains. STRICTLY OPT-IN: empty when no Purview account is bound, in
-          // which case the wizard saves the draft to Loom's Cosmos store and
-          // shows an honest "not registered in Purview" hint (no gate; the item
-          // is 100% functional Azure-native per no-fabric-dependency.md). The UC
-          // API is Commercial-only today; GCC/GCC-High/IL5 fall back to the
-          // Cosmos governance-domain list automatically.
-          !empty(effPurviewAccount) ? [
-            { name: 'LOOM_PURVIEW_UC_ENDPOINT', value: 'https://${effPurviewAccount}.purview.azure.com' }
+          // domains. STRICTLY OPT-IN + Commercial-only.
+          //
+          // CRITICAL host fix: the Unified Catalog REST surface
+          // (/datagovernance/catalog/dataProducts) is served from the well-known
+          // GLOBAL host https://api.purview-service.microsoft.com — NOT
+          // {account}.purview.azure.com. That latter host is the CLASSIC Data Map
+          // endpoint (Atlas v2 / scan / collections); hitting /datagovernance on
+          // it 404s/HTTP-000s. Previously this var was hardcoded to the classic
+          // host, which (being the explicit-wins endpoint in resolveUnifiedEndpoint())
+          // overrode LOOM_PURVIEW_UNIFIED_ACCOUNT and broke the opt-in
+          // unified-catalog backend. Token scope stays https://purview.azure.net.
+          //
+          // Off-Commercial (GCC / GCC-High / IL5) we DO NOT wire this at all —
+          // the data-product factory ignores Unified Catalog there and uses Cosmos
+          // (resolveDataProductBackend() forces 'cosmos' when boundary != Commercial),
+          // so the wizard saves the draft to Loom's Cosmos store and shows an honest
+          // "not registered in Purview" hint (no gate; 100% functional Azure-native
+          // per no-fabric-dependency.md). For a per-tenant UC host, set
+          // loomPurviewUnifiedAccount to the {tenantId}-api.purview-service.microsoft.com
+          // value, which wins over this global default.
+          (purviewEnabled && boundary == 'Commercial') ? [
+            { name: 'LOOM_PURVIEW_UC_ENDPOINT', value: 'https://api.purview-service.microsoft.com' }
             { name: 'LOOM_PURVIEW_UC_API_VERSION', value: '2026-03-20-preview' }
-          ] : (purviewEnabled ? [
-            { name: 'LOOM_PURVIEW_UC_ENDPOINT', value: 'https://purview-csa-loom-${location}.purview.azure.com' }
-            { name: 'LOOM_PURVIEW_UC_API_VERSION', value: '2026-03-20-preview' }
-          ] : []),
+          ] : [],
           // Apache Atlas-on-AKS lineage endpoint (DoD / IL5 boundary). Read by
           // /api/items/[type]/[id]/lineage when detectLoomCloud() === 'DoD'.
           // STRICTLY the Azure-native lineage backend for sovereign clouds — no
