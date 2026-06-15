@@ -2973,7 +2973,7 @@ module appDeployments 'app-deployments.bicep' = if (containerPlatform == 'contai
           // bridged npx/uvx servers for one-click registration. Empty when the
           // apps tier is off → the panel shows the honest gate.
           deployAppsEnabled ? [
-            { name: 'LOOM_MCP_BRIDGE_URL', value: 'http://loom-mcp-bridge:8080' }
+            { name: 'LOOM_MCP_BRIDGE_URL', value: 'http://loom-mcp-bridge' }
           ] : []
         )
         secrets: concat(
