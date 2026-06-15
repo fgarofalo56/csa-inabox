@@ -14,7 +14,7 @@
 //
 // Least-privilege design:
 //   - Role: "Role Based Access Control Administrator"
-//       (f58310d9-7bc6-4b1c-aba1-92e7d7b23c8f) — narrower than Owner /
+//       (f58310d9-a9f6-439a-9e8d-f62e7b41a168) — narrower than Owner /
 //       User Access Administrator; built for delegated, constrained grants.
 //   - ABAC condition (v2.0): the UAMI may write a roleAssignment ONLY when the
 //       assigned RoleDefinitionId is one of the three Storage Blob Data roles,

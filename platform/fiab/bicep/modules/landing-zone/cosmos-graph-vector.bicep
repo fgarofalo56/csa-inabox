@@ -160,7 +160,12 @@ resource vectorAccount 'Microsoft.DocumentDB/databaseAccounts@2024-12-01-preview
     databaseAccountOfferType: 'Standard'
     consistencyPolicy: { defaultConsistencyLevel: 'Session' }
     locations: [{ locationName: location, failoverPriority: 0, isZoneRedundant: false }]
-    capabilities: []
+    // EnableNoSQLVectorSearch is REQUIRED before a container can declare a
+    // vectorEmbeddingPolicy (defaultVectorContainer below). Without it the
+    // container create fails: "A Container Vector Policy has been provided, but
+    // the capability has not been enabled on your account" (hit on the first
+    // real dlz-attach provision).
+    capabilities: [{ name: 'EnableNoSQLVectorSearch' }]
     publicNetworkAccess: 'Disabled'
     disableLocalAuth: true
     minimalTlsVersion: 'Tls12'
