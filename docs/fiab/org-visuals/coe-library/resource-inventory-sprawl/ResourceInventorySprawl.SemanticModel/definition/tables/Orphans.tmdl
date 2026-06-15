@@ -1,0 +1,64 @@
+table 'Orphans'
+	lineageTag: 4dd1364d-9c3d-32fa-b9e5-a5bdb7ee414a
+
+	measure 'Orphaned Resources' = SUM('Orphans'[Count])
+		formatString: #,##0
+		lineageTag: 022d6145-706d-5c24-8672-88ec27f59191
+
+	measure 'Est. Monthly Waste' = SUM('Orphans'[EstMonthlyWaste])
+		formatString: \$#,##0
+		lineageTag: 91bcc342-5568-7d6a-60b6-1444efbc9799
+
+	column 'OrphanType'
+		dataType: string
+		lineageTag: c01639f4-6e02-4c48-0391-6fa85d495edc
+		summarizeBy: none
+		sourceColumn: OrphanType
+
+		annotation SummarizationSetBy = Automatic
+
+	column 'Count'
+		dataType: int64
+		lineageTag: cc06069d-1bc6-073b-75ea-9a172417cbb6
+		summarizeBy: sum
+		sourceColumn: Count
+
+		annotation SummarizationSetBy = Automatic
+
+	column 'EstMonthlyWaste'
+		dataType: double
+		lineageTag: 7faef9b0-a233-1678-b106-a86b404ab179
+		summarizeBy: sum
+		sourceColumn: EstMonthlyWaste
+
+		annotation SummarizationSetBy = Automatic
+
+	partition 'Orphans' = m
+		mode: import
+		source =
+				let
+					// SAMPLE DATA — replace the "Source" step below with the live Azure query.
+					// === Live source (uncomment + remove the sample step) ===
+					// let
+					//     // Azure Resource Graph via ARM REST (AAD/OAuth via the data-source credential).
+					//     Body = "{""subscriptions"":[""" & SubscriptionId & """],""query"":""Resources | where type == 'microsoft.compute/disks' and isnull(properties.managedBy) | summarize Count=count()""}",
+					//     Resp = Web.Contents(ManagementApiBase & "/providers/Microsoft.ResourceGraph/resources?api-version=2022-10-01",
+					//         [Headers=[#"Content-Type"="application/json"], Content=Text.ToBinary(Body)]),
+					//     Json = Json.Document(Resp),
+					//     Rows = Table.FromRecords(Json[data])
+					// in
+					//     Rows
+					// === end live source ===
+					Source = #table(
+						type table [#"OrphanType"=type text, #"Count"=Int64.Type, #"EstMonthlyWaste"=type number],
+						{
+							{"Unattached disks", 64, 1280},
+							{"Unassociated public IPs", 31, 112},
+							{"Stale NICs", 47, 0},
+							{"Empty resource groups", 18, 0}
+						}
+					)
+				in
+					Source
+
+	annotation PBI_ResultType = Table

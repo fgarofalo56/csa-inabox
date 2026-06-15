@@ -1,0 +1,17 @@
+{
+  "$schema": "https://developer.microsoft.com/json-schemas/fabric/item/report/definition/report/2.0.0/schema.json",
+  "themeCollection": {
+    "baseTheme": {
+      "name": "CY24SU10"
+    }
+  },
+  "settings": {
+    "useStylableVisualContainerHeader": true
+  },
+  "annotations": [
+    {
+      "name": "CoeLibrary",
+      "value": "identity-access-governance"
+    }
+  ]
+}

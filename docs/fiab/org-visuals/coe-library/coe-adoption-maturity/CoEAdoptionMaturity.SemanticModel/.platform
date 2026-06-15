@@ -1,0 +1,11 @@
+{
+  "$schema": "https://developer.microsoft.com/json-schemas/fabric/gitIntegration/platformProperties/2.0.0/schema.json",
+  "metadata": {
+    "type": "SemanticModel",
+    "displayName": "CoEAdoptionMaturity"
+  },
+  "config": {
+    "version": "2.0",
+    "logicalId": "2015dd78-7570-16de-11fa-b036404c94d9"
+  }
+}

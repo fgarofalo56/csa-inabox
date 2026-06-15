@@ -1,0 +1,48 @@
+table 'Budget'
+	lineageTag: aad2a090-31d7-d35b-7152-cf4bb20e4699
+
+	measure 'Budget' = SUM('Budget'[MonthlyBudget])
+		formatString: \$#,##0
+		lineageTag: bd047d2f-25b7-a625-fc46-1a90084c5ac7
+
+	measure 'Budget Variance' = [Budget] - SUM('Cost'[PreTaxCost])
+		formatString: \$#,##0
+		lineageTag: 8aca1640-bda4-270d-b890-2f9d33b2bf9e
+
+	column 'SubscriptionName'
+		dataType: string
+		lineageTag: a9d3633a-5480-07ed-b8ac-00331e020df2
+		summarizeBy: none
+		sourceColumn: SubscriptionName
+
+		annotation SummarizationSetBy = Automatic
+
+	column 'MonthlyBudget'
+		dataType: double
+		lineageTag: 5971c1b9-0649-2ca3-7a5b-9a6ae673573b
+		summarizeBy: sum
+		sourceColumn: MonthlyBudget
+
+		annotation SummarizationSetBy = Automatic
+
+	partition 'Budget' = m
+		mode: import
+		source =
+				let
+					// SAMPLE DATA — replace the "Source" step below with the live Azure query.
+					// === Live source (uncomment + remove the sample step) ===
+					// // Azure Consumption budgets via ARM REST:
+					// // Web.Contents(ManagementApiBase & "/subscriptions/" & SubscriptionId & "/providers/Microsoft.Consumption/budgets?api-version=2023-11-01")
+					// === end live source ===
+					Source = #table(
+						type table [#"SubscriptionName"=type text, #"MonthlyBudget"=type number],
+						{
+							{"prod-platform", 25000},
+							{"prod-data", 12000},
+							{"nonprod-dev", 5000}
+						}
+					)
+				in
+					Source
+
+	annotation PBI_ResultType = Table

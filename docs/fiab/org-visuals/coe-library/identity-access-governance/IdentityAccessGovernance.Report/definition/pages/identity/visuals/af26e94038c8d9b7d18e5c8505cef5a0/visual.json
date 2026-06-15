@@ -1,0 +1,72 @@
+{
+  "$schema": "https://developer.microsoft.com/json-schemas/fabric/item/report/definition/visualContainer/1.4.0/schema.json",
+  "name": "af26e94038c8d9b7d18e5c8505cef5a0",
+  "position": {
+    "x": 648,
+    "y": 150,
+    "z": 5,
+    "width": 620,
+    "height": 260,
+    "tabOrder": 5
+  },
+  "visual": {
+    "visualType": "donutChart",
+    "query": {
+      "queryState": {
+        "Category": {
+          "projections": [
+            {
+              "field": {
+                "Column": {
+                  "Expression": {
+                    "SourceRef": {
+                      "Entity": "Role Assignments"
+                    }
+                  },
+                  "Property": "PrincipalType"
+                }
+              },
+              "queryRef": "Role Assignments.PrincipalType"
+            }
+          ]
+        },
+        "Y": {
+          "projections": [
+            {
+              "field": {
+                "Measure": {
+                  "Expression": {
+                    "SourceRef": {
+                      "Entity": "Role Assignments"
+                    }
+                  },
+                  "Property": "Assignments"
+                }
+              },
+              "queryRef": "Role Assignments.Assignments"
+            }
+          ]
+        }
+      },
+      "sortDefinition": {
+        "isDefaultSort": true
+      }
+    },
+    "objects": {
+      "title": [
+        {
+          "properties": {
+            "text": {
+              "expr": {
+                "Literal": {
+                  "Value": "'Assignments by principal type'"
+                }
+              }
+            }
+          }
+        }
+      ]
+    },
+    "drillFilterOtherVisuals": true
+  }
+}

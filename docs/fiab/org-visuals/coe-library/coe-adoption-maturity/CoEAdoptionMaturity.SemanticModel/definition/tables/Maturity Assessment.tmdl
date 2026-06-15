@@ -1,0 +1,96 @@
+table 'Maturity Assessment'
+	lineageTag: 77968aaf-d937-74f5-d67b-b08d6416a71c
+
+	/// Mean current maturity (1–5) across assessed capabilities.
+	measure 'Avg Maturity' = AVERAGE('Maturity Assessment'[CurrentLevel])
+		formatString: 0.0
+		lineageTag: 0eded2b8-3af7-9804-853e-57c672c78d3e
+
+	measure 'Target Gap' = AVERAGE('Maturity Assessment'[TargetLevel]) - AVERAGE('Maturity Assessment'[CurrentLevel])
+		formatString: 0.0
+		lineageTag: 308941be-399f-e2f2-6718-a24852e32484
+
+	measure 'Adoption %' = DIVIDE(SUM('Maturity Assessment'[CurrentLevel]), SUM('Maturity Assessment'[TargetLevel]))
+		formatString: 0.0%
+		lineageTag: 7da863b0-2ae2-7638-e779-5700c1e6c932
+
+	measure 'Capabilities Assessed' = COUNTROWS('Maturity Assessment')
+		formatString: #,##0
+		lineageTag: cc4fd812-2757-dc6c-efe7-1ab7e14b0890
+
+	column 'Pillar'
+		dataType: string
+		lineageTag: 457e6f82-4603-ae5d-d002-6c6fce082e80
+		summarizeBy: none
+		sourceColumn: Pillar
+
+		annotation SummarizationSetBy = Automatic
+
+	column 'Capability'
+		dataType: string
+		lineageTag: 40f0d848-9ca9-da8a-02d3-dec3fe75141d
+		summarizeBy: none
+		sourceColumn: Capability
+
+		annotation SummarizationSetBy = Automatic
+
+	column 'CurrentLevel'
+		dataType: int64
+		lineageTag: 344c6b1a-a3d5-3fff-4792-514146330a13
+		summarizeBy: average
+		sourceColumn: CurrentLevel
+
+		annotation SummarizationSetBy = Automatic
+
+	column 'TargetLevel'
+		dataType: int64
+		lineageTag: 13108fb5-30d0-be88-69ff-4d8c7dcadee7
+		summarizeBy: average
+		sourceColumn: TargetLevel
+
+		annotation SummarizationSetBy = Automatic
+
+	column 'Owner'
+		dataType: string
+		lineageTag: 4217f0af-389c-ea1a-9fbf-21d8f216f658
+		summarizeBy: none
+		sourceColumn: Owner
+
+		annotation SummarizationSetBy = Automatic
+
+	column 'AssessedDate'
+		dataType: dateTime
+		formatString: General Date
+		lineageTag: 48f8184c-79ba-ec2b-82f9-1263cb2e5d49
+		summarizeBy: none
+		sourceColumn: AssessedDate
+
+		annotation SummarizationSetBy = Automatic
+
+	partition 'Maturity Assessment' = m
+		mode: import
+		source =
+				let
+					// SAMPLE DATA — replace the "Source" step below with the live Azure query.
+					// === Live source (uncomment + remove the sample step) ===
+					// // CoE-maintained scorecard. Common sources: a SharePoint list, Dataverse table,
+					// // or a Loom governance Cosmos container. Example (SharePoint):
+					// // Source = SharePoint.Tables("https://contoso.sharepoint.com/sites/CoE"){[Title="Maturity"]}[Items]
+					// === end live source ===
+					Source = #table(
+						type table [#"Pillar"=type text, #"Capability"=type text, #"CurrentLevel"=Int64.Type, #"TargetLevel"=Int64.Type, #"Owner"=type text, #"AssessedDate"=type datetime],
+						{
+							{"Strategy & Governance", "Cloud operating model", 3, 5, "CoE Lead", #datetime(2026,3,1,0,0,0)},
+							{"Strategy & Governance", "Policy as code", 2, 4, "Governance", #datetime(2026,3,1,0,0,0)},
+							{"Security", "Zero Trust identity", 3, 5, "Security", #datetime(2026,3,1,0,0,0)},
+							{"Security", "Workload protection", 2, 4, "Security", #datetime(2026,3,1,0,0,0)},
+							{"FinOps", "Cost allocation & tagging", 2, 5, "FinOps", #datetime(2026,3,1,0,0,0)},
+							{"Platform", "Landing zone conformance", 4, 5, "Platform", #datetime(2026,3,1,0,0,0)},
+							{"Data", "Data governance & lineage", 2, 4, "Data", #datetime(2026,3,1,0,0,0)},
+							{"Operations", "Observability & SLO", 3, 5, "SRE", #datetime(2026,3,1,0,0,0)}
+						}
+					)
+				in
+					Source
+
+	annotation PBI_ResultType = Table

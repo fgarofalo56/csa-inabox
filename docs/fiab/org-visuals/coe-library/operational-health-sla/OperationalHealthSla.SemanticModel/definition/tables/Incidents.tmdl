@@ -1,0 +1,76 @@
+table 'Incidents'
+	lineageTag: f4e3337d-d7ef-1140-7741-e83678526479
+
+	measure 'Incidents' = SUM('Incidents'[IncidentCount])
+		formatString: #,##0
+		lineageTag: fd4bbc51-f4a9-e3d6-5a6c-6a99bed29e5c
+
+	measure 'Avg MTTR (min)' = AVERAGE('Incidents'[MttrMinutes])
+		formatString: #,##0
+		lineageTag: 4f8a9470-ebd1-a034-801b-5d7f17a633eb
+
+	measure 'Sev1/2 Incidents' = CALCULATE([Incidents], 'Incidents'[Severity] IN {"Sev1","Sev2"})
+		formatString: #,##0
+		lineageTag: 36cf81ae-3af3-2427-7c14-9dd9c1b5ce02
+
+	column 'Severity'
+		dataType: string
+		lineageTag: 39af94d7-672e-ade4-d567-eabda5f99616
+		summarizeBy: none
+		sourceColumn: Severity
+
+		annotation SummarizationSetBy = Automatic
+
+	column 'ServiceName'
+		dataType: string
+		lineageTag: 02ce4578-bda3-57d9-e17f-6440e306fd9c
+		summarizeBy: none
+		sourceColumn: ServiceName
+
+		annotation SummarizationSetBy = Automatic
+
+	column 'IncidentCount'
+		dataType: int64
+		lineageTag: 3da50af1-7208-2673-4542-731b5b916d8e
+		summarizeBy: sum
+		sourceColumn: IncidentCount
+
+		annotation SummarizationSetBy = Automatic
+
+	column 'MttrMinutes'
+		dataType: double
+		lineageTag: 779f752c-cd38-323f-1de2-c987a8d51d62
+		summarizeBy: average
+		sourceColumn: MttrMinutes
+
+		annotation SummarizationSetBy = Automatic
+
+	partition 'Incidents' = m
+		mode: import
+		source =
+				let
+					// SAMPLE DATA — replace the "Source" step below with the live Azure query.
+					// === Live source (uncomment + remove the sample step) ===
+					// let
+					//     // Azure Monitor / Log Analytics query API (AAD/OAuth via the data-source credential).
+					//     Q = [query="Alert | where AlertSeverity in ('Sev0','Sev1','Sev2') | summarize IncidentCount=count() by Severity=AlertSeverity, ServiceName=ResourceProvider"],
+					//     Url = "https://api.loganalytics.io/v1/workspaces/" & LogAnalyticsWorkspaceId & "/query",
+					//     Resp = Json.Document(Web.Contents(Url, [Headers=[#"Content-Type"="application/json"], Content=Json.FromValue(Q)])),
+					//     T = Resp[tables]{0},
+					//     Rows = Table.FromRows(T[rows], List.Transform(T[columns], each [name]))
+					// in
+					//     Rows
+					// === end live source ===
+					Source = #table(
+						type table [#"Severity"=type text, #"ServiceName"=type text, #"IncidentCount"=Int64.Type, #"MttrMinutes"=type number],
+						{
+							{"Sev1", "API Gateway", 1, 95},
+							{"Sev2", "SQL prod", 3, 140},
+							{"Sev3", "AKS prod", 7, 210},
+							{"Sev2", "Storage", 2, 75}
+						}
+					)
+				in
+					Source
+
+	annotation PBI_ResultType = Table

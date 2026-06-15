@@ -1,0 +1,65 @@
+table 'Lineage'
+	lineageTag: 1b0ca7f6-c4f7-6f36-ef8e-39afc4ca3f92
+
+	measure 'Pipelines' = COUNTROWS('Lineage')
+		formatString: #,##0
+		lineageTag: c4d7fee9-2113-9a3b-081d-bba18e548f0e
+
+	measure 'Lineage Coverage %' = DIVIDE(CALCULATE([Pipelines], 'Lineage'[HasLineage] = TRUE()), [Pipelines])
+		formatString: 0.0%
+		lineageTag: 23acefef-d409-7f3b-bdaf-7e9ad465be13
+
+	column 'Pipeline'
+		dataType: string
+		lineageTag: 733e7e5d-e094-34b3-8f37-ecbd3b80d8b0
+		summarizeBy: none
+		sourceColumn: Pipeline
+
+		annotation SummarizationSetBy = Automatic
+
+	column 'SourceCount'
+		dataType: int64
+		lineageTag: 15bd462c-a775-cf76-13a7-1054703af075
+		summarizeBy: sum
+		sourceColumn: SourceCount
+
+		annotation SummarizationSetBy = Automatic
+
+	column 'SinkCount'
+		dataType: int64
+		lineageTag: 2e833edf-ea6d-ccfb-2b76-648c38b31ee7
+		summarizeBy: sum
+		sourceColumn: SinkCount
+
+		annotation SummarizationSetBy = Automatic
+
+	column 'HasLineage'
+		dataType: boolean
+		lineageTag: b634054e-c435-c857-8b17-f0f5d168bac5
+		summarizeBy: none
+		sourceColumn: HasLineage
+
+		annotation SummarizationSetBy = Automatic
+
+	partition 'Lineage' = m
+		mode: import
+		source =
+				let
+					// SAMPLE DATA — replace the "Source" step below with the live Azure query.
+					// === Live source (uncomment + remove the sample step) ===
+					// // Purview lineage via Atlas lineage API per asset GUID:
+					// // Web.Contents("https://YOUR-PURVIEW-ACCOUNT.purview.azure.com/catalog/api/atlas/v2/lineage/" & guid)
+					// === end live source ===
+					Source = #table(
+						type table [#"Pipeline"=type text, #"SourceCount"=Int64.Type, #"SinkCount"=Int64.Type, #"HasLineage"=type logical],
+						{
+							{"bronze-ingest", 12, 12, true},
+							{"silver-transform", 12, 8, true},
+							{"gold-serve", 8, 5, false},
+							{"ml-feature", 5, 3, false}
+						}
+					)
+				in
+					Source
+
+	annotation PBI_ResultType = Table

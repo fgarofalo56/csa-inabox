@@ -1,0 +1,73 @@
+table 'Subscriptions'
+	lineageTag: 550b8afe-0486-2557-2396-d7728eed5e5d
+
+	measure 'Subscription Conformance' = AVERAGE('Subscriptions'[ConformancePct])
+		formatString: 0.0%
+		lineageTag: 523c8bf1-854e-dba0-1514-4d300a578525
+
+	measure 'Subscription Count' = COUNTROWS('Subscriptions')
+		formatString: #,##0
+		lineageTag: a18a8588-bba2-0136-b820-532f28d881c6
+
+	column 'SubscriptionName'
+		dataType: string
+		lineageTag: 0794b99c-f9cd-1fb7-056f-ba0b1db09206
+		summarizeBy: none
+		sourceColumn: SubscriptionName
+
+		annotation SummarizationSetBy = Automatic
+
+	column 'ManagementGroup'
+		dataType: string
+		lineageTag: 40b84101-f60c-bdf2-0ad0-6e653264a882
+		summarizeBy: none
+		sourceColumn: ManagementGroup
+
+		annotation SummarizationSetBy = Automatic
+
+	column 'Environment'
+		dataType: string
+		lineageTag: fc29df5f-2499-88c3-6ba2-5c0fcc4a1271
+		summarizeBy: none
+		sourceColumn: Environment
+
+		annotation SummarizationSetBy = Automatic
+
+	column 'ConformancePct'
+		dataType: double
+		lineageTag: 414b895e-c25c-f748-0a7b-69af5d7a1c98
+		summarizeBy: average
+		sourceColumn: ConformancePct
+
+		annotation SummarizationSetBy = Automatic
+
+	partition 'Subscriptions' = m
+		mode: import
+		source =
+				let
+					// SAMPLE DATA — replace the "Source" step below with the live Azure query.
+					// === Live source (uncomment + remove the sample step) ===
+					// let
+					//     // Azure Resource Graph via ARM REST (AAD/OAuth via the data-source credential).
+					//     Body = "{""subscriptions"":[""" & SubscriptionId & """],""query"":""ResourceContainers | where type == 'microsoft.resources/subscriptions' | project SubscriptionName=name, ManagementGroup=tostring(properties.managementGroupAncestorsChain[0].displayName)""}",
+					//     Resp = Web.Contents(ManagementApiBase & "/providers/Microsoft.ResourceGraph/resources?api-version=2022-10-01",
+					//         [Headers=[#"Content-Type"="application/json"], Content=Text.ToBinary(Body)]),
+					//     Json = Json.Document(Resp),
+					//     Rows = Table.FromRecords(Json[data])
+					// in
+					//     Rows
+					// === end live source ===
+					Source = #table(
+						type table [#"SubscriptionName"=type text, #"ManagementGroup"=type text, #"Environment"=type text, #"ConformancePct"=type number],
+						{
+							{"mgmt", "Platform", "platform", 0.95},
+							{"connectivity", "Platform", "platform", 0.92},
+							{"prod-platform", "Landing Zones", "prod", 0.81},
+							{"prod-data", "Landing Zones", "prod", 0.88},
+							{"nonprod-dev", "Sandbox", "dev", 0.64}
+						}
+					)
+				in
+					Source
+
+	annotation PBI_ResultType = Table

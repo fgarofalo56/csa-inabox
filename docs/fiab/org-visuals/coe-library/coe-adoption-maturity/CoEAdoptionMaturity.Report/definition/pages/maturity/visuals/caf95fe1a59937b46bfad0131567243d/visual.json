@@ -1,0 +1,107 @@
+{
+  "$schema": "https://developer.microsoft.com/json-schemas/fabric/item/report/definition/visualContainer/1.4.0/schema.json",
+  "name": "caf95fe1a59937b46bfad0131567243d",
+  "position": {
+    "x": 12,
+    "y": 430,
+    "z": 6,
+    "width": 1256,
+    "height": 270,
+    "tabOrder": 6
+  },
+  "visual": {
+    "visualType": "tableEx",
+    "query": {
+      "queryState": {
+        "Values": {
+          "projections": [
+            {
+              "field": {
+                "Column": {
+                  "Expression": {
+                    "SourceRef": {
+                      "Entity": "Maturity Assessment"
+                    }
+                  },
+                  "Property": "Pillar"
+                }
+              },
+              "queryRef": "Maturity Assessment.Pillar"
+            },
+            {
+              "field": {
+                "Column": {
+                  "Expression": {
+                    "SourceRef": {
+                      "Entity": "Maturity Assessment"
+                    }
+                  },
+                  "Property": "Capability"
+                }
+              },
+              "queryRef": "Maturity Assessment.Capability"
+            },
+            {
+              "field": {
+                "Column": {
+                  "Expression": {
+                    "SourceRef": {
+                      "Entity": "Maturity Assessment"
+                    }
+                  },
+                  "Property": "CurrentLevel"
+                }
+              },
+              "queryRef": "Maturity Assessment.CurrentLevel"
+            },
+            {
+              "field": {
+                "Column": {
+                  "Expression": {
+                    "SourceRef": {
+                      "Entity": "Maturity Assessment"
+                    }
+                  },
+                  "Property": "TargetLevel"
+                }
+              },
+              "queryRef": "Maturity Assessment.TargetLevel"
+            },
+            {
+              "field": {
+                "Column": {
+                  "Expression": {
+                    "SourceRef": {
+                      "Entity": "Maturity Assessment"
+                    }
+                  },
+                  "Property": "Owner"
+                }
+              },
+              "queryRef": "Maturity Assessment.Owner"
+            }
+          ]
+        }
+      },
+      "sortDefinition": {
+        "isDefaultSort": true
+      }
+    },
+    "objects": {
+      "title": [
+        {
+          "properties": {
+            "text": {
+              "expr": {
+                "Literal": {
+                  "Value": "'Capability detail'"
+                }
+              }
+            }
+          }
+        }
+      ]
+    },
+    "drillFilterOtherVisuals": true
+  }
+}

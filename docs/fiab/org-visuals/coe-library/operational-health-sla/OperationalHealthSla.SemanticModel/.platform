@@ -1,0 +1,11 @@
+{
+  "$schema": "https://developer.microsoft.com/json-schemas/fabric/gitIntegration/platformProperties/2.0.0/schema.json",
+  "metadata": {
+    "type": "SemanticModel",
+    "displayName": "OperationalHealthSla"
+  },
+  "config": {
+    "version": "2.0",
+    "logicalId": "fcaead36-06fb-e436-3f6b-4e2add2d32b3"
+  }
+}

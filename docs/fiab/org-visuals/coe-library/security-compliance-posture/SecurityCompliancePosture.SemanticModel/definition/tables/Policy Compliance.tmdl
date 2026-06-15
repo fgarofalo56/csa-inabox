@@ -1,0 +1,70 @@
+table 'Policy Compliance'
+	lineageTag: ffa23ab6-09dd-d7a3-8f08-a8d2aa5cdd8d
+
+	measure 'Resources Evaluated' = SUM('Policy Compliance'[ResourceCount])
+		formatString: #,##0
+		lineageTag: 20043ce5-b209-917f-b9d7-0b0eaacee115
+
+	measure 'Compliant Resources' = CALCULATE([Resources Evaluated], 'Policy Compliance'[ComplianceState] = "Compliant")
+		formatString: #,##0
+		lineageTag: 5faa989e-2188-b7ea-561d-71fb62a26077
+
+	measure 'Compliance %' = DIVIDE([Compliant Resources], [Resources Evaluated])
+		formatString: 0.0%
+		lineageTag: 7f1b2a3a-4047-f173-ada9-3e8008ac671d
+
+	column 'PolicyInitiative'
+		dataType: string
+		lineageTag: 67b2f36f-df4d-bd70-670c-cd37a2881026
+		summarizeBy: none
+		sourceColumn: PolicyInitiative
+
+		annotation SummarizationSetBy = Automatic
+
+	column 'ComplianceState'
+		dataType: string
+		lineageTag: 33375fbd-c0b4-dd82-1e80-0614972f6151
+		summarizeBy: none
+		sourceColumn: ComplianceState
+
+		annotation SummarizationSetBy = Automatic
+
+	column 'ResourceCount'
+		dataType: int64
+		lineageTag: 4999ada0-beda-41a9-cc70-6a626a3236e9
+		summarizeBy: sum
+		sourceColumn: ResourceCount
+
+		annotation SummarizationSetBy = Automatic
+
+	partition 'Policy Compliance' = m
+		mode: import
+		source =
+				let
+					// SAMPLE DATA — replace the "Source" step below with the live Azure query.
+					// === Live source (uncomment + remove the sample step) ===
+					// let
+					//     // Azure Resource Graph via ARM REST (AAD/OAuth via the data-source credential).
+					//     Body = "{""subscriptions"":[""" & SubscriptionId & """],""query"":""policyresources | where type == 'microsoft.policyinsights/policystates' | summarize ResourceCount=count() by PolicyInitiative=tostring(properties.policySetDefinitionName), ComplianceState=tostring(properties.complianceState)""}",
+					//     Resp = Web.Contents(ManagementApiBase & "/providers/Microsoft.ResourceGraph/resources?api-version=2022-10-01",
+					//         [Headers=[#"Content-Type"="application/json"], Content=Text.ToBinary(Body)]),
+					//     Json = Json.Document(Resp),
+					//     Rows = Table.FromRecords(Json[data])
+					// in
+					//     Rows
+					// === end live source ===
+					Source = #table(
+						type table [#"PolicyInitiative"=type text, #"ComplianceState"=type text, #"ResourceCount"=Int64.Type],
+						{
+							{"Microsoft cloud security benchmark", "Compliant", 1820},
+							{"Microsoft cloud security benchmark", "NonCompliant", 340},
+							{"NIST SP 800-53 Rev. 5", "Compliant", 1500},
+							{"NIST SP 800-53 Rev. 5", "NonCompliant", 660},
+							{"CIS Microsoft Azure Foundations", "Compliant", 1700},
+							{"CIS Microsoft Azure Foundations", "NonCompliant", 460}
+						}
+					)
+				in
+					Source
+
+	annotation PBI_ResultType = Table

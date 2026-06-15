@@ -1,0 +1,98 @@
+table 'Cost'
+	lineageTag: a763a9b9-da3e-5746-d81f-89d51b93da50
+
+	/// Amortized pre-tax cost from Azure Cost Management.
+	measure 'Total Cost' = SUM('Cost'[PreTaxCost])
+		formatString: \$#,##0
+		lineageTag: d5b2f9b0-3179-694c-46bf-bbb934937880
+
+	measure 'Untagged Cost' = CALCULATE([Total Cost], 'Cost'[CostCenterTag] = "(untagged)")
+		formatString: \$#,##0
+		lineageTag: 8277d63b-9ab3-4f3e-3c31-a23338b4f414
+
+	measure 'Untagged %' = DIVIDE([Untagged Cost], [Total Cost])
+		formatString: 0.0%
+		lineageTag: aa2a090f-cd6c-4d65-1bb7-fcb1be7e4679
+
+	measure 'Subscriptions' = DISTINCTCOUNT('Cost'[SubscriptionName])
+		formatString: #,##0
+		lineageTag: 7c0227aa-6be0-902f-23ef-c429cf452159
+
+	column 'UsageDate'
+		dataType: dateTime
+		formatString: General Date
+		lineageTag: 0e14d69a-3466-7614-0583-5d24725d8d7d
+		summarizeBy: none
+		sourceColumn: UsageDate
+
+		annotation SummarizationSetBy = Automatic
+
+	column 'SubscriptionName'
+		dataType: string
+		lineageTag: 3e53a30b-9c15-30c0-b597-1d2f5efac898
+		summarizeBy: none
+		sourceColumn: SubscriptionName
+
+		annotation SummarizationSetBy = Automatic
+
+	column 'ResourceGroup'
+		dataType: string
+		lineageTag: 1099ca8f-adcf-ff94-3d61-a7837194469b
+		summarizeBy: none
+		sourceColumn: ResourceGroup
+
+		annotation SummarizationSetBy = Automatic
+
+	column 'ServiceName'
+		dataType: string
+		lineageTag: e25be074-fd93-3794-c12a-7f397dc2ae63
+		summarizeBy: none
+		sourceColumn: ServiceName
+
+		annotation SummarizationSetBy = Automatic
+
+	column 'CostCenterTag'
+		dataType: string
+		lineageTag: 16ad4df8-2585-c59a-d5b8-250f5d6f79f0
+		summarizeBy: none
+		sourceColumn: CostCenterTag
+
+		annotation SummarizationSetBy = Automatic
+
+	column 'PreTaxCost'
+		dataType: double
+		lineageTag: f0feb9a4-dd32-6f23-8b67-3c51852f5db1
+		summarizeBy: sum
+		sourceColumn: PreTaxCost
+
+		annotation SummarizationSetBy = Automatic
+
+	partition 'Cost' = m
+		mode: import
+		source =
+				let
+					// SAMPLE DATA — replace the "Source" step below with the live Azure query.
+					// === Live source (uncomment + remove the sample step) ===
+					// let
+					//     // Azure Cost Management connector — amortized cost at the BillingScope.
+					//     Source = AzureCostManagement.Tables(BillingScope, null, #date(2024,1,1), null),
+					//     Data = Source{[Key="amortizedcost/v1.0"]}[Data],
+					//     Typed = Table.TransformColumnTypes(Data, {{"PreTaxCost", type number}, {"UsageDate", type date}})
+					// in
+					//     Typed
+					// === end live source ===
+					Source = #table(
+						type table [#"UsageDate"=type datetime, #"SubscriptionName"=type text, #"ResourceGroup"=type text, #"ServiceName"=type text, #"CostCenterTag"=type text, #"PreTaxCost"=type number],
+						{
+							{#datetime(2026,3,1,0,0,0), "prod-platform", "rg-aks", "Azure Kubernetes Service", "CC-1001", 12450.32},
+							{#datetime(2026,3,1,0,0,0), "prod-platform", "rg-data", "Azure Synapse Analytics", "CC-1002", 8830.1},
+							{#datetime(2026,3,1,0,0,0), "prod-data", "rg-storage", "Storage", "(untagged)", 4210.77},
+							{#datetime(2026,3,1,0,0,0), "nonprod-dev", "rg-sandbox", "Virtual Machines", "(untagged)", 6120.44},
+							{#datetime(2026,3,1,0,0,0), "prod-data", "rg-adx", "Azure Data Explorer", "CC-1002", 5340},
+							{#datetime(2026,3,1,0,0,0), "prod-platform", "rg-net", "Virtual Network", "CC-1001", 1980.25}
+						}
+					)
+				in
+					Source
+
+	annotation PBI_ResultType = Table

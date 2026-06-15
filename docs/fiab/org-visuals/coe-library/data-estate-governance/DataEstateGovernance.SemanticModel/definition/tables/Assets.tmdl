@@ -1,0 +1,90 @@
+table 'Assets'
+	lineageTag: 4315e77e-9daa-700f-a7d9-6825f8357e87
+
+	/// Assets in the Microsoft Purview unified catalog.
+	measure 'Cataloged Assets' = SUM('Assets'[AssetCount])
+		formatString: #,##0
+		lineageTag: d5d62380-9879-a056-1a2f-cbfad018ee23
+
+	measure 'Classified Assets' = CALCULATE([Cataloged Assets], 'Assets'[Classified] = TRUE())
+		formatString: #,##0
+		lineageTag: bb2fe474-cf9f-8e43-e7fc-8e8f38961759
+
+	measure 'Classification Coverage %' = DIVIDE([Classified Assets], [Cataloged Assets])
+		formatString: 0.0%
+		lineageTag: c6f1bcc2-9a92-a687-6713-24353ed9d128
+
+	measure 'Ownership Coverage %' = DIVIDE(CALCULATE([Cataloged Assets], 'Assets'[HasOwner] = TRUE()), [Cataloged Assets])
+		formatString: 0.0%
+		lineageTag: 1a061014-961c-ad9e-55bb-e8b9aa1b6f0c
+
+	column 'AssetType'
+		dataType: string
+		lineageTag: 8b813726-2272-9469-c1b9-5ed78a8c45dc
+		summarizeBy: none
+		sourceColumn: AssetType
+
+		annotation SummarizationSetBy = Automatic
+
+	column 'Collection'
+		dataType: string
+		lineageTag: 2f50fed9-a9f0-34c0-09a0-7d9c8bbca0c0
+		summarizeBy: none
+		sourceColumn: Collection
+
+		annotation SummarizationSetBy = Automatic
+
+	column 'Classified'
+		dataType: boolean
+		lineageTag: a359aa39-96a0-63a1-191d-703497d43ff5
+		summarizeBy: none
+		sourceColumn: Classified
+
+		annotation SummarizationSetBy = Automatic
+
+	column 'HasOwner'
+		dataType: boolean
+		lineageTag: 04835654-bee2-9446-487b-1579dd0b94f5
+		summarizeBy: none
+		sourceColumn: HasOwner
+
+		annotation SummarizationSetBy = Automatic
+
+	column 'AssetCount'
+		dataType: int64
+		lineageTag: 5ef14612-6e82-8806-03a6-adce9fb234f4
+		summarizeBy: sum
+		sourceColumn: AssetCount
+
+		annotation SummarizationSetBy = Automatic
+
+	partition 'Assets' = m
+		mode: import
+		source =
+				let
+					// SAMPLE DATA — replace the "Source" step below with the live Azure query.
+					// === Live source (uncomment + remove the sample step) ===
+					// let
+					//     // Microsoft Purview catalog (Atlas) search API. Set PurviewAccount; AAD/OAuth.
+					//     Body = "{""keywords"":""*"",""limit"":1000}",
+					//     Resp = Web.Contents("https://" & "YOUR-PURVIEW-ACCOUNT" & ".purview.azure.com/catalog/api/search/query?api-version=2022-08-01-preview",
+					//         [Headers=[#"Content-Type"="application/json"], Content=Text.ToBinary(Body)]),
+					//     Json = Json.Document(Resp),
+					//     Rows = Table.FromRecords(Json[value])
+					// in
+					//     Rows
+					// === end live source ===
+					Source = #table(
+						type table [#"AssetType"=type text, #"Collection"=type text, #"Classified"=type logical, #"HasOwner"=type logical, #"AssetCount"=Int64.Type],
+						{
+							{"Azure SQL table", "Finance", true, true, 1240},
+							{"ADLS Gen2 path", "Data Platform", false, true, 3120},
+							{"Synapse table", "Analytics", true, false, 860},
+							{"Power BI dataset", "BI", false, false, 410},
+							{"Cosmos container", "Apps", true, true, 290}
+						}
+					)
+				in
+					Source
+
+	annotation PBI_ResultType = Table
