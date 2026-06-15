@@ -120,6 +120,76 @@ async function armList<T = any>(url: string): Promise<T[]> {
 }
 
 // ============================================================
+// Namespace create-if-missing (PUT Microsoft.EventHub/namespaces/{ns})
+//
+// Backs the Real-Time Hub connect dialog's TOP-LEVEL "+ Create new namespace…"
+// path: when a subscription has zero Event Hubs namespaces, the operator can
+// stand one up inline (real ARM PUT) and immediately bind a source against it.
+// Namespace create is a long-running ARM op; the PUT returns 200/201 once the
+// resource is accepted and we shape the result. Secure defaults:
+// disableLocalAuth (Entra-only) + TLS 1.2 minimum.
+//
+// Requires the Console UAMI to hold Contributor at the target RESOURCE GROUP
+// (or subscription) scope — granted by admin-plane/rti-hub-rbac.bicep when
+// grantSubscriptionContributor=true. ARM errors (e.g. 403 AuthorizationFailed)
+// surface verbatim so the dialog shows the real reason.
+//
+// Docs: https://learn.microsoft.com/rest/api/eventhub/namespaces/create-or-update
+// ============================================================
+export type NamespaceSku = 'Basic' | 'Standard' | 'Premium';
+
+export interface CreateNamespaceSpec {
+  /** Pricing tier. Standard is the default (Kafka-capable, Entra auth). */
+  sku?: NamespaceSku;
+  /** Azure region, e.g. "eastus". Required — ARM has no default. */
+  location: string;
+}
+
+export interface NamespaceEntity {
+  name: string;
+  location?: string;
+  sku?: string;
+  provisioningState?: string;
+}
+
+function shapeNamespace(raw: any): NamespaceEntity {
+  return {
+    name: raw?.name,
+    location: raw?.location,
+    sku: raw?.sku?.name,
+    provisioningState: raw?.properties?.provisioningState,
+  };
+}
+
+/**
+ * Create-if-missing an Event Hubs namespace in an arbitrary subscription + RG.
+ * Returns the existing namespace when it already exists (idempotent), otherwise
+ * PUTs it with secure defaults. `cfg.namespace` is the namespace name to create.
+ */
+export async function ensureNamespace(cfg: EventHubsConfig, spec: CreateNamespaceSpec): Promise<NamespaceEntity> {
+  const location = (spec.location || '').trim();
+  if (!location) throw new EventHubsArmError(400, undefined, 'location is required to create a namespace');
+  const probe = await callArm(`${nsUrl(cfg)}?api-version=${EH_API}`);
+  if (probe.ok) return shapeNamespace(await probe.json());
+  if (probe.status !== 404) {
+    throw new EventHubsArmError(probe.status, await probe.text(), `ensureNamespace probe failed ${probe.status}`);
+  }
+  const tier: NamespaceSku = spec.sku || 'Standard';
+  const body = {
+    location,
+    sku: { name: tier, tier },
+    properties: {
+      // Secure defaults — Entra-only auth + modern TLS (matches eventhubs.bicep).
+      disableLocalAuth: true,
+      minimumTlsVersion: '1.2',
+    },
+  };
+  const r = await callArm(`${nsUrl(cfg)}?api-version=${EH_API}`, { method: 'PUT', body: JSON.stringify(body) });
+  if (!r.ok) throw new EventHubsArmError(r.status, await r.text(), `ensureNamespace failed ${r.status}`);
+  return shapeNamespace(await r.json());
+}
+
+// ============================================================
 // Event hubs (entities)
 // ============================================================
 export interface EventHubEntity {

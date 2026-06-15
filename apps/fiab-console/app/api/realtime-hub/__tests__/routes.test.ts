@@ -69,6 +69,7 @@ vi.mock('@/lib/azure/eventhubs-client', () => ({
   listEventHubAuthRulesIn: vi.fn(),
   ensureEventHub: vi.fn(),
   ensureConsumerGroup: vi.fn(),
+  ensureNamespace: vi.fn(),
 }));
 vi.mock('@/lib/azure/iothub-client', () => ({
   IoTHubArmError: class IoTHubArmError extends Error {
@@ -77,6 +78,10 @@ vi.mock('@/lib/azure/iothub-client', () => ({
   },
   listIoTHubConsumerGroups: vi.fn(),
   ensureIoTHubConsumerGroup: vi.fn(),
+}));
+// Loom connections store — backs the dataConnectionId picker (options kind=connections).
+vi.mock('@/lib/azure/connections-store', () => ({
+  listConnections: vi.fn(),
 }));
 
 import { getSession } from '@/lib/auth/session';
@@ -91,10 +96,11 @@ import {
 } from '@/lib/azure/kv-secrets-client';
 import {
   rtiSubscriptionScope, listStreamingResourcesViaGraph, listEventHubsIn,
-  listConsumerGroupsIn, listEventHubAuthRulesIn, ensureEventHub, ensureConsumerGroup,
+  listConsumerGroupsIn, listEventHubAuthRulesIn, ensureEventHub, ensureConsumerGroup, ensureNamespace,
   EventHubsArmError,
 } from '@/lib/azure/eventhubs-client';
 import { listIoTHubConsumerGroups, ensureIoTHubConsumerGroup } from '@/lib/azure/iothub-client';
+import { listConnections } from '@/lib/azure/connections-store';
 
 import { GET as STREAMS } from '../streams/route';
 import { POST as CONNECT } from '../connect-source/route';
@@ -200,6 +206,22 @@ describe('POST /api/realtime-hub/connect-source', () => {
     expect(res.status).toBe(404);
     const j = await res.json();
     expect(j.error).toContain('workspace not found');
+  });
+
+  it('accepts AzureEventGridCustomTopic (business-events topic) as a source type', async () => {
+    (getSession as any).mockReturnValue(AUTH);
+    (createOwnedItem as any).mockResolvedValue({ ok: true, item: { id: 'es-eg' } });
+    const res = await CONNECT(jsonReq({
+      workspaceId: 'ws-1', displayName: 'Orders signals', sourceType: 'AzureEventGridCustomTopic',
+      properties: { topic: 'orders-events', inputSchema: 'CloudEventSchemaV1_0' },
+    }));
+    const j = await res.json();
+    expect(res.status).toBe(200);
+    expect(j.ok).toBe(true);
+    expect(j.sourceType).toBe('AzureEventGridCustomTopic');
+    const [, , body] = (createOwnedItem as any).mock.calls[0];
+    expect(body.state.source.type).toBe('AzureEventGridCustomTopic');
+    expect(body.state.source.properties.topic).toBe('orders-events');
   });
 });
 
@@ -458,6 +480,19 @@ describe('GET /api/realtime-hub/options', () => {
     expect(res.status).toBe(400);
   });
 
+  it('connections: lists Loom connections, optionally filtered by type', async () => {
+    (getSession as any).mockReturnValue(AUTH);
+    (listConnections as any).mockResolvedValue([
+      { id: 'c1', name: 'orders-sb', type: 'service-bus' },
+      { id: 'c2', name: 'sales-sql', type: 'azure-sql' },
+    ]);
+    const res = await OPTIONS(optReq('?kind=connections&type=service-bus'));
+    const j = await res.json();
+    expect(j.ok).toBe(true);
+    // Only the matching type, bound by id with the name as the label.
+    expect(j.options).toEqual([{ id: 'c1', name: 'orders-sb', description: 'service-bus' }]);
+  });
+
   it('surfaces an ARM error verbatim (status + body)', async () => {
     (getSession as any).mockReturnValue(AUTH);
     (listEventHubsIn as any).mockRejectedValue(new EventHubsArmError(403, { error: 'AuthorizationFailed' }, 'forbidden'));
@@ -487,6 +522,27 @@ describe('POST /api/realtime-hub/provision', () => {
     const res = await PROVISION(jsonReq({ kind: 'eventhub', eventHub: 'eh' }));
     expect(res.status).toBe(400);
     expect(ensureEventHub).not.toHaveBeenCalled();
+  });
+
+  it('400 when location is missing for a namespace create', async () => {
+    (getSession as any).mockReturnValue(AUTH);
+    const res = await PROVISION(jsonReq({ kind: 'namespace', subscriptionId: 's', resourceGroup: 'rg', namespace: 'ns' }));
+    expect(res.status).toBe(400);
+    expect(ensureNamespace).not.toHaveBeenCalled();
+  });
+
+  it('creates an Event Hubs namespace (idempotent) and returns it', async () => {
+    (getSession as any).mockReturnValue(AUTH);
+    (ensureNamespace as any).mockResolvedValue({ name: 'loom-ns', location: 'eastus', sku: 'Standard' });
+    const res = await PROVISION(jsonReq({
+      kind: 'namespace', subscriptionId: 's', resourceGroup: 'rg', namespace: 'loom-ns', location: 'eastus', sku: 'Standard',
+    }));
+    const j = await res.json();
+    expect(j.ok).toBe(true);
+    expect(j.created.name).toBe('loom-ns');
+    const [scope, spec] = (ensureNamespace as any).mock.calls[0];
+    expect(scope).toEqual({ subscriptionId: 's', resourceGroup: 'rg', namespace: 'loom-ns' });
+    expect(spec).toEqual({ location: 'eastus', sku: 'Standard' });
   });
 
   it('creates an event hub (idempotent) and returns it', async () => {

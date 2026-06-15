@@ -31,6 +31,7 @@ import {
   type EventHubsConfig,
 } from '@/lib/azure/eventhubs-client';
 import { listIoTHubConsumerGroups, IoTHubArmError } from '@/lib/azure/iothub-client';
+import { listConnections } from '@/lib/azure/connections-store';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -93,9 +94,11 @@ export async function GET(req: NextRequest) {
         }))
         .sort((a, b) => a.name.localeCompare(b.name));
       // Filter facets so the dialog can offer subscription / RG / region filters
-      // exactly like the Fabric Azure tab.
+      // exactly like the Fabric Azure tab. `subscriptions` always carries the
+      // configured discovery scope (even when zero namespaces exist yet) so the
+      // inline "Create new namespace" panel can offer a subscription picker.
       const facets = {
-        subscriptions: Array.from(new Set(options.map((o) => o.subscriptionId))).sort(),
+        subscriptions: Array.from(new Set([...subs, ...options.map((o) => o.subscriptionId)])).sort(),
         resourceGroups: Array.from(new Set(options.map((o) => o.resourceGroup))).sort(),
         locations: Array.from(new Set(options.map((o) => o.location).filter(Boolean))).sort(),
       };
@@ -152,7 +155,21 @@ export async function GET(req: NextRequest) {
       return NextResponse.json({ ok: true, kind, options });
     }
 
-    return NextResponse.json({ ok: false, error: `Unknown kind "${kind}".`, hint: 'kind ∈ namespaces | eventhubs | consumerGroups | authRules | iotConsumerGroups' }, { status: 400 });
+    // ---- Loom connections (Key Vault-backed data-source connections) ----
+    // Powers the `dataConnectionId` picker on CDC / Service Bus / Kafka / Blob
+    // sources so credentials are reused from /connections instead of being
+    // re-typed as free text (no-vaporware + loom-no-freeform-config).
+    if (kind === 'connections') {
+      const wantType = (p.get('type') || '').trim();
+      const conns = await listConnections(session);
+      const options = conns
+        .filter((c) => (wantType ? c.type === wantType : true))
+        .map((c) => ({ id: c.id, name: c.name, description: c.type }))
+        .sort((a, b) => a.name.localeCompare(b.name));
+      return NextResponse.json({ ok: true, kind, options });
+    }
+
+    return NextResponse.json({ ok: false, error: `Unknown kind "${kind}".`, hint: 'kind ∈ namespaces | eventhubs | consumerGroups | authRules | iotConsumerGroups | connections' }, { status: 400 });
   } catch (e) {
     return passThrough(e);
   }

@@ -209,10 +209,13 @@ export function ConnectSourceDialog({
   }, [open, hasCertFields]);
 
   // ---- Cascading resource-select state (Event Hubs / IoT Hub dropdowns) ----
-  interface ResourceOption { name: string; description?: string; subscriptionId?: string; resourceGroup?: string; location?: string }
+  interface ResourceOption { id?: string; name: string; description?: string; subscriptionId?: string; resourceGroup?: string; location?: string }
   const [optCache, setOptCache] = useState<Record<string, ResourceOption[]>>({});
   const [optLoading, setOptLoading] = useState<Record<string, boolean>>({});
   const [optError, setOptError] = useState<Record<string, string | null>>({});
+  // Filter facets returned alongside the namespaces list (configured subscription
+  // scope + regions) — drives the inline "Create new namespace" picker.
+  const [optFacets, setOptFacets] = useState<Record<string, { subscriptions?: string[]; resourceGroups?: string[]; locations?: string[] }>>({});
   // Global honest infra-gate when no subscription is configured for discovery.
   const [optGate, setOptGate] = useState<{ hint: string; bicep?: string } | null>(null);
   // Inline create-if-missing state, keyed by field.
@@ -220,6 +223,11 @@ export function ConnectSourceDialog({
   const [createName, setCreateName] = useState('');
   const [createPartitions, setCreatePartitions] = useState('2');
   const [createRetention, setCreateRetention] = useState('1');
+  // Namespace-create inputs (top-level "+ Create new namespace…").
+  const [createSubscription, setCreateSubscription] = useState('');
+  const [createResourceGroup, setCreateResourceGroup] = useState('');
+  const [createLocation, setCreateLocation] = useState('');
+  const [createSku, setCreateSku] = useState('Standard');
   const [createBusy, setCreateBusy] = useState(false);
   const [createErr, setCreateErr] = useState<string | null>(null);
 
@@ -230,6 +238,7 @@ export function ConnectSourceDialog({
     const q = new URLSearchParams();
     q.set('kind', src.optionsKind);
     if (src.optionsKind === 'namespaces') q.set('service', src.service || 'eventhub');
+    if (src.optionsKind === 'connections' && src.connectionType) q.set('type', src.connectionType);
     if (props.subscriptionId) q.set('subscriptionId', props.subscriptionId);
     if (props.resourceGroup) q.set('resourceGroup', props.resourceGroup);
     if (props.namespace) q.set('namespace', props.namespace);
@@ -258,6 +267,7 @@ export function ConnectSourceDialog({
       }
       setOptGate(null);
       setOptCache((c) => ({ ...c, [f.key]: Array.isArray(j.options) ? j.options : [] }));
+      if (j.facets && typeof j.facets === 'object') setOptFacets((m) => ({ ...m, [f.key]: j.facets }));
     } catch (e: any) {
       setOptError((er) => ({ ...er, [f.key]: e?.message || String(e) }));
     } finally {
@@ -313,6 +323,13 @@ export function ConnectSourceDialog({
 
   function openCreate(f: SourceField) {
     setCreateField(f.key); setCreateName(''); setCreatePartitions('2'); setCreateRetention('1'); setCreateErr(null);
+    // Seed the namespace-create panel from the discovery facets (configured
+    // subscription scope + any region already seen) so the picker is pre-filled.
+    const facets = optFacets[f.key] || {};
+    setCreateSubscription((facets.subscriptions || [])[0] || props.subscriptionId || '');
+    setCreateResourceGroup('');
+    setCreateLocation((facets.locations || [])[0] || '');
+    setCreateSku('Standard');
   }
 
   async function runCreate(f: SourceField) {
@@ -323,6 +340,7 @@ export function ConnectSourceDialog({
     setCreateBusy(true); setCreateErr(null);
     try {
       const body: Record<string, unknown> = { kind: src.createKind };
+      let createdOption: ResourceOption | undefined;
       if (src.createKind === 'eventhub') {
         Object.assign(body, {
           subscriptionId: props.subscriptionId, resourceGroup: props.resourceGroup, namespace: props.namespace,
@@ -338,6 +356,19 @@ export function ConnectSourceDialog({
           hubName: props.iotHubName, consumerGroup: name,
           subscriptionId: props.subscriptionId, resourceGroup: props.resourceGroup,
         });
+      } else if (src.createKind === 'namespace') {
+        const sub = createSubscription.trim();
+        const rg = createResourceGroup.trim();
+        const loc = createLocation.trim();
+        if (!sub) { setCreateErr('Subscription is required.'); setCreateBusy(false); return; }
+        if (!rg) { setCreateErr('Resource group is required.'); setCreateBusy(false); return; }
+        if (!loc) { setCreateErr('Location (Azure region) is required, e.g. eastus.'); setCreateBusy(false); return; }
+        Object.assign(body, {
+          subscriptionId: sub, resourceGroup: rg, namespace: name, location: loc, sku: createSku || 'Standard',
+        });
+        // Carry the new namespace's scope so captureScope wires the dependent
+        // event-hub / consumer-group dropdowns immediately after selection.
+        createdOption = { name, subscriptionId: sub, resourceGroup: rg, location: loc };
       }
       const res = await fetch('/api/realtime-hub/provision', {
         method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body),
@@ -348,7 +379,7 @@ export function ConnectSourceDialog({
       // Refresh the list so the new resource appears, then select it.
       setOptCache((c) => { const n = { ...c }; delete n[f.key]; return n; });
       setOptError((e) => ({ ...e, [f.key]: null }));
-      selectResource(f, created);
+      selectResource(f, created, createdOption);
       setCreateField(null);
       await loadOptions(f);
     } catch (e: any) {
@@ -369,8 +400,9 @@ export function ConnectSourceDialog({
     setError(null); setErrorHint(null); setSuccess(null); setBusy(false);
     setCreatedLink(null);
     setCerts([]); setCertVaultUri(null); setCertGate(null); setCertError(null); setCertsLoading(false);
-    setOptCache({}); setOptLoading({}); setOptError({}); setOptGate(null);
+    setOptCache({}); setOptLoading({}); setOptError({}); setOptGate(null); setOptFacets({});
     setCreateField(null); setCreateName(''); setCreateErr(null); setCreateBusy(false);
+    setCreateSubscription(''); setCreateResourceGroup(''); setCreateLocation(''); setCreateSku('Standard');
   }
 
   function pick(c: SourceConnector, preProps?: Record<string, string>, preName?: string) {
@@ -393,7 +425,7 @@ export function ConnectSourceDialog({
       }
     }
     setProps(allowed);
-    setOptCache({}); setOptLoading({}); setOptError({}); setOptGate(null);
+    setOptCache({}); setOptLoading({}); setOptError({}); setOptGate(null); setOptFacets({});
     setCreateField(null);
     setError(null); setErrorHint(null); setSuccess(null); setCreatedLink(null);
   }
@@ -612,6 +644,11 @@ export function ConnectSourceDialog({
                       const deps = src.dependsOn || [];
                       const depsOk = deps.every((k) => (props[k] || '').trim());
                       const cur = props[f.key] || '';
+                      // Options may bind an id distinct from their display name
+                      // (e.g. Loom connections: value=id, label=name). Resolve the
+                      // label for the collapsed Dropdown from the current value.
+                      const curOpt = opts.find((o) => (o.id ?? o.name) === cur);
+                      const curLabel = curOpt?.name ?? cur;
                       const isCreating = createField === f.key;
                       const parentLabel = deps.length
                         ? (picked!.fields.find((x) => x.key === deps[deps.length - 1])?.label?.toLowerCase() || 'parent')
@@ -632,15 +669,17 @@ export function ConnectSourceDialog({
                                 disabled={!!optGate || !depsOk || loading}
                                 placeholder={placeholder}
                                 selectedOptions={cur ? [cur] : []}
-                                value={cur}
+                                value={curLabel}
                                 onOptionSelect={(_, d) => {
                                   if (d.optionValue === CREATE_SENTINEL) { openCreate(f); return; }
-                                  const opt = opts.find((o) => o.name === d.optionValue);
+                                  const opt = opts.find((o) => (o.id ?? o.name) === d.optionValue);
                                   selectResource(f, d.optionValue || '', opt);
                                 }}
                               >
-                                {opts.map((o) => (
-                                  <Option key={o.name} value={o.name} text={o.name}>
+                                {opts.map((o) => {
+                                  const optVal = o.id ?? o.name;
+                                  return (
+                                  <Option key={optVal} value={optVal} text={o.name}>
                                     <span className={styles.certOption}>
                                       <span className={styles.certOptionName}>{o.name}</span>
                                       {o.description && (
@@ -648,7 +687,8 @@ export function ConnectSourceDialog({
                                       )}
                                     </span>
                                   </Option>
-                                ))}
+                                  );
+                                })}
                                 {src.creatable && depsOk && (
                                   <Option key={CREATE_SENTINEL} value={CREATE_SENTINEL} text="Create new…">
                                     <span className={styles.certOption}>
@@ -675,7 +715,7 @@ export function ConnectSourceDialog({
                               </div>
                               <Field label="Name" required>
                                 <Input value={createName} onChange={(_, d) => setCreateName(d.value)}
-                                  placeholder={src.createKind === 'eventhub' ? 'telemetry' : 'loom-receiver'} />
+                                  placeholder={src.createKind === 'eventhub' ? 'telemetry' : src.createKind === 'namespace' ? 'loom-eventhubs-ns' : 'loom-receiver'} />
                               </Field>
                               {src.createKind === 'eventhub' && (
                                 <div className={styles.createTwoCol}>
@@ -686,6 +726,43 @@ export function ConnectSourceDialog({
                                     <Input type="number" value={createRetention} onChange={(_, d) => setCreateRetention(d.value)} />
                                   </Field>
                                 </div>
+                              )}
+                              {src.createKind === 'namespace' && (
+                                <>
+                                  <Field label="Subscription" required hint="Where the new namespace is created (Reader-discovered scope).">
+                                    {(optFacets[f.key]?.subscriptions || []).length > 0 ? (
+                                      <Dropdown
+                                        aria-label="Subscription"
+                                        placeholder="Select a subscription…"
+                                        selectedOptions={createSubscription ? [createSubscription] : []}
+                                        value={createSubscription}
+                                        onOptionSelect={(_, d) => setCreateSubscription(d.optionValue || '')}
+                                      >
+                                        {(optFacets[f.key]?.subscriptions || []).map((s) => <Option key={s} value={s}>{s}</Option>)}
+                                      </Dropdown>
+                                    ) : (
+                                      <Input value={createSubscription} onChange={(_, d) => setCreateSubscription(d.value)} placeholder="00000000-0000-0000-0000-000000000000" />
+                                    )}
+                                  </Field>
+                                  <div className={styles.createTwoCol}>
+                                    <Field label="Resource group" required>
+                                      <Input value={createResourceGroup} onChange={(_, d) => setCreateResourceGroup(d.value)} placeholder="rg-loom-streaming" />
+                                    </Field>
+                                    <Field label="Location" required hint="Azure region">
+                                      <Input value={createLocation} onChange={(_, d) => setCreateLocation(d.value)} placeholder="eastus" />
+                                    </Field>
+                                  </div>
+                                  <Field label="Pricing tier" hint="Standard supports Kafka + Entra auth.">
+                                    <Dropdown
+                                      aria-label="Pricing tier"
+                                      selectedOptions={[createSku]}
+                                      value={createSku}
+                                      onOptionSelect={(_, d) => setCreateSku(d.optionValue || 'Standard')}
+                                    >
+                                      {['Basic', 'Standard', 'Premium'].map((s) => <Option key={s} value={s}>{s}</Option>)}
+                                    </Dropdown>
+                                  </Field>
+                                </>
                               )}
                               {createErr && (
                                 <MessageBar intent="error"><MessageBarBody>{createErr}</MessageBarBody></MessageBar>

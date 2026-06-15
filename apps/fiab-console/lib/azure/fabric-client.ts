@@ -721,6 +721,7 @@ export const RTH_SOURCE_TYPES = [
   'PostgreSQLCDC',
   'MySQLCDC',
   'AzureBlobStorageEvents',
+  'AzureEventGridCustomTopic',
   'AmazonKinesis',
   'AmazonMSKKafka',
   'ApacheKafka',

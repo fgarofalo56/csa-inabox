@@ -26,6 +26,7 @@ import { getSession } from '@/lib/auth/session';
 import {
   ensureEventHub,
   ensureConsumerGroup,
+  ensureNamespace,
   EventHubsArmError,
   type EventHubsConfig,
 } from '@/lib/azure/eventhubs-client';
@@ -68,6 +69,17 @@ export async function POST(req: NextRequest) {
   const kind = String(body.kind || '').trim();
 
   try {
+    if (kind === 'namespace') {
+      const scope = readScope(body);
+      if (!scope) return NextResponse.json({ ok: false, error: 'subscriptionId, resourceGroup and namespace are required.' }, { status: 400 });
+      const location = String(body.location || '').trim();
+      if (!location) return NextResponse.json({ ok: false, error: 'location (Azure region) is required.', hint: 'e.g. eastus' }, { status: 400 });
+      const skuRaw = String(body.sku || 'Standard').trim();
+      const sku = (['Basic', 'Standard', 'Premium'] as const).includes(skuRaw as any) ? (skuRaw as 'Basic' | 'Standard' | 'Premium') : 'Standard';
+      const ns = await ensureNamespace(scope, { location, sku });
+      return NextResponse.json({ ok: true, kind, created: { name: ns.name, location: ns.location, sku: ns.sku } });
+    }
+
     if (kind === 'eventhub') {
       const scope = readScope(body);
       if (!scope) return NextResponse.json({ ok: false, error: 'subscriptionId, resourceGroup and namespace are required.' }, { status: 400 });
@@ -101,7 +113,7 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ ok: true, kind, created: { name: cg.name } });
     }
 
-    return NextResponse.json({ ok: false, error: `Unknown kind "${kind}".`, hint: 'kind ∈ eventhub | consumerGroup | iotConsumerGroup' }, { status: 400 });
+    return NextResponse.json({ ok: false, error: `Unknown kind "${kind}".`, hint: 'kind ∈ namespace | eventhub | consumerGroup | iotConsumerGroup' }, { status: 400 });
   } catch (e) {
     return passThrough(e);
   }
