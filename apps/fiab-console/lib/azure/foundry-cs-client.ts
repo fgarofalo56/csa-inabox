@@ -112,6 +112,8 @@ export interface CsAccount {
   name: string;
   rg: string;
   location: string;
+  /** Subscription the account lives in (parsed from its ARM id). */
+  subscriptionId?: string;
   kind?: string;
   sku?: string;
   endpoint?: string;
@@ -129,17 +131,19 @@ let _accountCache: CsAccount | null = null;
  * env-var default / discovery result. `{ name, rg? }` — rg defaults to the
  * Foundry RG (LOOM_FOUNDRY_RG) when omitted.
  */
-export interface AccountSelector { name: string; rg?: string }
+export interface AccountSelector { name: string; rg?: string; sub?: string }
 
 function shapeAccount(raw: any): CsAccount {
   const p = raw?.properties || {};
   const idParts = String(raw?.id || '').split('/');
   const rgIdx = idParts.findIndex((x) => x.toLowerCase() === 'resourcegroups');
+  const subIdx = idParts.findIndex((x) => x.toLowerCase() === 'subscriptions');
   return {
     id: raw?.id,
     name: raw?.name,
     rg: rgIdx >= 0 ? idParts[rgIdx + 1] : rg(),
     location: raw?.location,
+    subscriptionId: subIdx >= 0 ? idParts[subIdx + 1] : undefined,
     kind: raw?.kind,
     sku: raw?.sku?.name,
     endpoint: p.endpoint || p.endpoints?.['Azure AI Model Inference']?.endpoint,
@@ -151,25 +155,71 @@ function shapeAccount(raw: any): CsAccount {
 }
 
 /**
- * List ALL Microsoft.CognitiveServices accounts in the subscription that can
- * host model deployments / AOAI (kind in {AIServices, OpenAI, CognitiveServices}).
- * Drives the AI Foundry account picker so every Foundry surface can target a
- * user-selected account instead of the single env-var default.
+ * Resolve the set of subscriptions to scan for model-hosting accounts: every
+ * subscription the caller's identity can read via ARM (`GET /subscriptions`),
+ * unioned with the configured primaries (LOOM_AOAI_SUB / LOOM_FOUNDRY_SUB /
+ * LOOM_SUBSCRIPTION_ID) and LOOM_EXTRA_SUBSCRIPTIONS. De-duplicated, never
+ * throws — so the Foundry account picker can enumerate accounts across all
+ * accessible subscriptions even when no env default is configured yet.
+ */
+async function accessibleSubscriptions(): Promise<string[]> {
+  const configured = [
+    process.env.LOOM_AOAI_SUB,
+    process.env.LOOM_FOUNDRY_SUB,
+    process.env.LOOM_SUBSCRIPTION_ID,
+    ...(process.env.LOOM_EXTRA_SUBSCRIPTIONS || '').split(',').map((s) => s.trim()),
+  ].filter((s): s is string => !!s && s.trim().length > 0).map((s) => s.trim());
+
+  let discovered: string[] = [];
+  try {
+    const res = await armFetch('/subscriptions', { apiVersion: '2022-12-01' });
+    const j = await readJson<{ value?: Array<{ subscriptionId?: string; state?: string }> }>(res);
+    discovered = (j?.value || [])
+      .filter((s) => !s.state || String(s.state).toLowerCase() === 'enabled')
+      .map((s) => s.subscriptionId)
+      .filter((s): s is string => !!s);
+  } catch {
+    /* identity can't enumerate subscriptions — fall back to configured set */
+  }
+  return Array.from(new Set([...configured, ...discovered]));
+}
+
+/**
+ * List EVERY Microsoft.CognitiveServices account (kind in {AIServices, OpenAI})
+ * the caller's identity can read via ARM, **across all accessible
+ * subscriptions** (see accessibleSubscriptions). Drives the AI Foundry / Default
+ * Foundry account picker so an admin can pick a default even before any env var
+ * is configured.
  *
  * ARM: GET /subscriptions/{sub}/providers/Microsoft.CognitiveServices/accounts
- *      (Operation Accounts_List). Grounded in Microsoft Learn.
+ *      (Operation Accounts_List). Per-subscription failures (no Reader, throttle)
+ *      are tolerated so one inaccessible subscription never blanks the picker.
+ *      Never throws — returns the aggregated, de-duplicated, name-sorted list.
  */
 export async function listAccounts(): Promise<CsAccount[]> {
-  const res = await armFetch(
-    `/subscriptions/${sub()}/providers/Microsoft.CognitiveServices/accounts`,
+  const subs = await accessibleSubscriptions();
+  const HOSTING = new Set(['aiservices', 'openai']);
+  const seen = new Set<string>();
+  const out: CsAccount[] = [];
+  await Promise.all(
+    subs.map(async (s) => {
+      try {
+        const res = await armFetch(`/subscriptions/${s}/providers/Microsoft.CognitiveServices/accounts`);
+        const j = await readJson<{ value?: any[] }>(res);
+        for (const raw of j?.value || []) {
+          const a = shapeAccount(raw);
+          if (!HOSTING.has(String(a.kind || '').toLowerCase())) continue;
+          const key = String(a.id || `${s}/${a.rg}/${a.name}`).toLowerCase();
+          if (seen.has(key)) continue;
+          seen.add(key);
+          out.push(a);
+        }
+      } catch {
+        /* tolerate per-subscription auth / throttle failures; aggregate the rest */
+      }
+    }),
   );
-  const j = await readJson<{ value?: any[] }>(res);
-  const all = (j?.value || []).map(shapeAccount);
-  // Surface only model-hosting kinds; keep stable, predictable order.
-  const HOSTING = new Set(['aiservices', 'openai', 'cognitiveservices']);
-  return all
-    .filter((a) => HOSTING.has(String(a.kind || '').toLowerCase()))
-    .sort((a, b) => (a.name || '').localeCompare(b.name || ''));
+  return out.sort((a, b) => (a.name || '').localeCompare(b.name || ''));
 }
 
 /**
@@ -187,8 +237,9 @@ export async function listAccounts(): Promise<CsAccount[]> {
 export async function resolveAccount(force = false, selector?: AccountSelector): Promise<CsAccount> {
   if (selector?.name) {
     const accountRg = selector.rg || rg();
+    const accountSub = selector.sub || sub();
     const res = await armFetch(
-      `/subscriptions/${sub()}/resourceGroups/${encodeURIComponent(accountRg)}/providers/Microsoft.CognitiveServices/accounts/${encodeURIComponent(selector.name)}`,
+      `/subscriptions/${accountSub}/resourceGroups/${encodeURIComponent(accountRg)}/providers/Microsoft.CognitiveServices/accounts/${encodeURIComponent(selector.name)}`,
     );
     const j = await readJson<any>(res);
     if (!j) {
@@ -240,7 +291,9 @@ export async function resolveAccount(force = false, selector?: AccountSelector):
 }
 
 function accountPath(acct: CsAccount): string {
-  return `/subscriptions/${sub()}/resourceGroups/${acct.rg}/providers/Microsoft.CognitiveServices/accounts/${encodeURIComponent(acct.name)}`;
+  // Use the account's own subscription (cross-sub picks resolve correctly);
+  // fall back to the env default for env/discovery-resolved accounts.
+  return `/subscriptions/${acct.subscriptionId || sub()}/resourceGroups/${acct.rg}/providers/Microsoft.CognitiveServices/accounts/${encodeURIComponent(acct.name)}`;
 }
 
 // ---------------- Model deployments ----------------

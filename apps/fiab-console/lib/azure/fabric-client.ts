@@ -65,6 +65,27 @@ export function fabricHint(status: number): string | undefined {
   return undefined;
 }
 
+/**
+ * Fabric / Power BI **capacities** are a Fabric-family concept with NO
+ * Azure-native equivalent — Loom workspaces run on Azure-native compute
+ * (ADLS+Delta, Synapse, ADX) by default and require no capacity binding.
+ *
+ * Per .claude/rules/no-fabric-dependency.md the DEFAULT path must NEVER call
+ * api.fabric.microsoft.com nor surface an "enable Service principals can use
+ * Fabric APIs" remediation. Capacity enumeration is therefore strictly opt-in:
+ * the operator sets LOOM_CAPACITY_BACKEND=fabric (alias: LOOM_SCALING_BACKEND=
+ * fabric) and grants the Console UAMI Capacity access. When unset, the capacity
+ * routes return an empty list silently and the Azure-native default stands.
+ */
+export function fabricCapacityBackendEnabled(): boolean {
+  const v = (process.env.LOOM_CAPACITY_BACKEND || process.env.LOOM_SCALING_BACKEND || '').toLowerCase();
+  return v === 'fabric';
+}
+
+/** Honest, Azure-native note returned by the capacity routes on the default path. */
+export const FABRIC_CAPACITY_OPT_IN_NOTE =
+  'Fabric / Power BI capacities are an opt-in backend. Loom workspaces run on Azure-native compute (ADLS Gen2 + Delta, Synapse, Azure Data Explorer) by default — no capacity binding is required. To enumerate real capacities, set LOOM_CAPACITY_BACKEND=fabric and grant the Console UAMI Capacity access.';
+
 async function getToken(): Promise<string> {
   const t = await credential.getToken(FABRIC_SCOPE);
   if (!t?.token) throw new FabricError('Failed to acquire AAD token for Fabric', 401, undefined, undefined, fabricHint(401));

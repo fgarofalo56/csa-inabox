@@ -24,12 +24,13 @@ const SUBSCRIPTIONS_API = '2022-12-01';
 const STORAGE_API = '2023-05-01';
 
 const uamiClientId = process.env.LOOM_UAMI_CLIENT_ID || process.env.AZURE_CLIENT_ID;
-const credential: ChainedTokenCredential | DefaultAzureCredential = uamiClientId
-  ? new ChainedTokenCredential(
-      new ManagedIdentityCredential({ clientId: uamiClientId }),
-      new DefaultAzureCredential(),
-    )
-  : new DefaultAzureCredential();
+// MI-FIRST: ManagedIdentityCredential always first (system-assigned when no
+// clientId); never a bare DefaultAzureCredential, which can skip Managed
+// Identity on a Container App and surface a dev-only credential chain failure.
+const credential: ChainedTokenCredential = new ChainedTokenCredential(
+  new ManagedIdentityCredential(uamiClientId ? { clientId: uamiClientId } : {}),
+  new DefaultAzureCredential(),
+);
 
 export class StorageDiscoveryError extends Error {
   status: number;

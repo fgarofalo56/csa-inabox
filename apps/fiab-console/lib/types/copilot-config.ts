@@ -28,6 +28,9 @@ export interface TenantCopilotConfig {
   foundryAccount?: string;
   /** Resource group of the account above (defaults to LOOM_FOUNDRY_RG when unset). */
   foundryAccountRg?: string;
+  /** Subscription of the account above (defaults to the env subscription when
+   *  unset). Persisted so a cross-subscription account pick resolves correctly. */
+  foundryAccountSub?: string;
   /** Foundry project ENDPOINT for the Agent Service (shaped
    *  https://<acct>.services.ai.azure.com/api/projects/<project>). Optional —
    *  only needed when the tenant also wants a default for workspace data agents. */

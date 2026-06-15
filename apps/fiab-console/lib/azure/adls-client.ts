@@ -33,12 +33,13 @@ import {
 import { getBlobSuffix } from './cloud-endpoints';
 
 const uamiClientId = process.env.LOOM_UAMI_CLIENT_ID || process.env.AZURE_CLIENT_ID;
-const credential: TokenCredential = uamiClientId
-  ? new ChainedTokenCredential(
-      new ManagedIdentityCredential({ clientId: uamiClientId }),
-      new DefaultAzureCredential(),
-    )
-  : new DefaultAzureCredential();
+// MI-FIRST: ManagedIdentityCredential is always the first link (system-assigned
+// when no clientId), never a bare DefaultAzureCredential on the container path —
+// a bare DAC can collapse to dev-only credentials and skip Managed Identity.
+const credential: TokenCredential = new ChainedTokenCredential(
+  new ManagedIdentityCredential(uamiClientId ? { clientId: uamiClientId } : {}),
+  new DefaultAzureCredential(),
+);
 
 export const KNOWN_CONTAINERS = ['bronze', 'silver', 'gold', 'landing', 'csv-imports'] as const;
 export type KnownContainer = (typeof KNOWN_CONTAINERS)[number];
@@ -820,12 +821,11 @@ import {
 import { armBase, armScope, dfsUrl } from './cloud-endpoints';
 
 const ARM_SCOPE = armScope();
-const armCred: _TokenCredential = uamiClientId
-  ? new _ChainedCredential(
-      new _MICredential({ clientId: uamiClientId }),
-      new _DefaultCredential(),
-    )
-  : new _DefaultCredential();
+// MI-FIRST (see top-of-file credential): never a bare DefaultAzureCredential.
+const armCred: _TokenCredential = new _ChainedCredential(
+  new _MICredential(uamiClientId ? { clientId: uamiClientId } : {}),
+  new _DefaultCredential(),
+);
 
 async function armToken(): Promise<string> {
   const t = await armCred.getToken(ARM_SCOPE);

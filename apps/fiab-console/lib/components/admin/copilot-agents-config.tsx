@@ -33,7 +33,7 @@ import {
   type TenantCopilotConfig,
 } from '@/lib/types/copilot-config';
 
-interface AccountRow { name: string; rg: string; location?: string; kind?: string; endpoint?: string }
+interface AccountRow { name: string; rg: string; sub?: string; location?: string; kind?: string; endpoint?: string }
 interface DeploymentRow { name: string; modelName?: string; modelVersion?: string; provisioningState?: string }
 interface IndexRow { name: string }
 
@@ -100,12 +100,17 @@ export function CopilotAgentsConfig() {
     () => accounts.find((a) => a.name === account)?.rg || config.foundryAccountRg,
     [accounts, account, config.foundryAccountRg],
   );
+  const accountSub = useMemo(
+    () => accounts.find((a) => a.name === account)?.sub || config.foundryAccountSub,
+    [accounts, account, config.foundryAccountSub],
+  );
   useEffect(() => {
     if (!account) { setDeployments([]); return; }
     let cancelled = false;
     setLoadingDeployments(true); setDeploymentsError(null);
     const params = new URLSearchParams({ account });
     if (accountRg) params.set('rg', accountRg);
+    if (accountSub) params.set('sub', accountSub);
     fetch(`/api/foundry/model-deployments?${params.toString()}`)
       .then(async (r) => {
         const j = await r.json().catch(() => ({}));
@@ -117,13 +122,13 @@ export function CopilotAgentsConfig() {
         }
         setDeployments(Array.isArray(j.deployments) ? j.deployments : []);
         // Persist the resolved AOAI endpoint so the chat backend needs no ARM call.
-        if (j.account?.endpoint) set({ aoaiEndpoint: j.account.endpoint, foundryAccountRg: accountRg });
+        if (j.account?.endpoint) set({ aoaiEndpoint: j.account.endpoint, foundryAccountRg: accountRg, foundryAccountSub: accountSub });
       })
       .catch((e) => { if (!cancelled) { setDeployments([]); setDeploymentsError(String(e)); } })
       .finally(() => { if (!cancelled) setLoadingDeployments(false); });
     return () => { cancelled = true; };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [account, accountRg]);
+  }, [account, accountRg, accountSub]);
 
   // Load AI Search indexes when a grounding service is named.
   const groundingService = config.groundingSearchService;
@@ -244,6 +249,7 @@ export function CopilotAgentsConfig() {
               set({
                 foundryAccount: d.optionValue,
                 foundryAccountRg: next?.rg,
+                foundryAccountSub: next?.sub,
                 aoaiEndpoint: next?.endpoint,
                 copilotChatDeployment: undefined,
                 helpAgentDeployment: undefined,
@@ -253,7 +259,7 @@ export function CopilotAgentsConfig() {
             }}
           >
             {accounts.map((a) => (
-              <Option key={a.name} value={a.name} text={a.name}>
+              <Option key={`${a.sub ?? ''}/${a.rg}/${a.name}`} value={a.name} text={a.name}>
                 {a.name}{a.location ? ` · ${a.location}` : ''}{a.kind ? ` · ${a.kind}` : ''}
               </Option>
             ))}

@@ -31,7 +31,7 @@ function err(error: string, status: number) {
 
 /** Whitelist of persistable STRING keys — never trust the client to send extras. */
 const KEYS: (keyof TenantCopilotConfig)[] = [
-  'foundryAccount', 'foundryAccountRg', 'foundryProjectEndpoint', 'foundryProjectId',
+  'foundryAccount', 'foundryAccountRg', 'foundryAccountSub', 'foundryProjectEndpoint', 'foundryProjectId',
   'aoaiEndpoint', 'copilotChatDeployment', 'helpAgentDeployment', 'routerDeployment', 'embeddingDeployment',
   'groundingSearchService', 'groundingSearchIndex', 'fabricCopilotWorkspaceId',
 ];
@@ -58,12 +58,12 @@ export async function GET() {
   try {
     const config = (await loadTenantCopilotConfig(tenantId)) || {};
     // Best-effort live account list so the picker renders immediately.
-    let accounts: Array<{ name: string; rg: string; location?: string; kind?: string; endpoint?: string }> = [];
+    let accounts: Array<{ name: string; rg: string; sub?: string; location?: string; kind?: string; endpoint?: string }> = [];
     let defaultAccount: string | undefined;
     let accountsError: { error: string; hint?: string } | undefined;
     try {
       accounts = (await listAccounts()).map((a) => ({
-        name: a.name, rg: a.rg, location: a.location, kind: a.kind, endpoint: a.endpoint,
+        name: a.name, rg: a.rg, sub: a.subscriptionId, location: a.location, kind: a.kind, endpoint: a.endpoint,
       }));
       try { defaultAccount = (await resolveAccount()).name; } catch { /* no default */ }
     } catch (e: any) {
