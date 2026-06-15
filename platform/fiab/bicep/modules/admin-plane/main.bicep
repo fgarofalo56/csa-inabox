@@ -807,6 +807,9 @@ param sccConnectionUri string = ''
 @description('Enable Purview DLP (policies / rules / alerts / simulate) calls via Microsoft Graph. Defaults ON: the post-deploy bootstrap grants Console UAMI Policy.Read.All + SecurityAlert.Read.All by default, so LOOM_DLP_ENABLED is injected out of the box and the /admin/security DLP tab is wired (no "not wired in this deployment"). Alerts/violations work in every cloud once admin consent is issued; the preview-gated policy segment + simulate surface honest MessageBars where unavailable; the Restrict-access tab uses Azure-native ADLS/Synapse/ADX revokes with no Graph dependency.')
 param loomDlpEnabled bool = true
 
+@description('Enable DLP policy CRUD (create/edit/delete DLP compliance policies + rules) via the SCC PowerShell sidecar — Microsoft Graph has NO DLP write API, so authoring runs through Get/New/Set/Remove-DlpCompliancePolicy. Reuses the same scc-labels Function app + app identity (Exchange.ManageAsApp + Compliance Administrator) as label CRUD; setting this true also deploys that sidecar if loomMipAdminEnabled is false. Defaults off — DLP READS, alerts, violations + Azure-native Restrict-access keep working; only CRUD is gated until the SCC app + auth cert are provisioned in post-deploy bootstrap.')
+param loomDlpAdminEnabled bool = false
+
 // ---------------------------------------------------------------------------
 // Govern → Admin view (F2) "View more" embedded report backend.
 //   - Power BI Embedded (A1)  : Commercial / GCC "View more" backend.
@@ -2517,6 +2520,19 @@ module appDeployments 'app-deployments.bicep' = if (containerPlatform == 'contai
           loomDlpEnabled ? [
             { name: 'LOOM_DLP_ENABLED', value: 'true' }
           ] : [],
+          // DLP policy CRUD via the SCC PowerShell sidecar (Graph has no DLP
+          // write API). Reuses the same scc-labels Function app endpoint+key as
+          // label CRUD; when loomMipAdminEnabled already wired them, only the
+          // LOOM_DLP_ADMIN_ENABLED flag is added to avoid duplicate env keys.
+          // When unset the Console renders the honest dlp_admin_not_configured
+          // gate while DLP reads / alerts / Restrict-access keep working.
+          loomDlpAdminEnabled ? concat(
+            [ { name: 'LOOM_DLP_ADMIN_ENABLED', value: 'true' } ],
+            loomMipAdminEnabled ? [] : [
+              { name: 'LOOM_SCC_LABELS_ENDPOINT', value: sccLabels.outputs.endpoint }
+              { name: 'LOOM_SCC_LABELS_KEY', value: sccLabels.outputs.functionKey }
+            ]
+          ) : [],
           // Govern → Admin view (F2) "View more" embedded report env. The
           // embed BFF gates honestly when LOOM_REPORT_KIND is empty; when set,
           // the matching report/dashboard env vars must also be present.
@@ -3217,12 +3233,15 @@ module reportSubscriptions 'report-subscriptions-function.bicep' = if (reportSub
   }
 }
 
-// SCC sensitivity-label CRUD sidecar (PowerShell). Performs New-/Set-/Remove-
-// Label and *-LabelPolicy via Security & Compliance PowerShell — the only API
-// that can create/edit/delete labels & policies (Graph has no write surface).
+// SCC sensitivity-label + DLP CRUD sidecar (PowerShell). Performs New-/Set-/
+// Remove-Label and *-LabelPolicy AND Get/New/Set/Remove-DlpCompliancePolicy
+// via Security & Compliance PowerShell — the only API that can create/edit/
+// delete labels, label policies, and DLP policies (Graph has no write surface).
 // Opt-in: requires the SCC app + auth cert provisioned in post-deploy bootstrap.
-// When loomMipAdminEnabled=false the Console renders the honest CRUD gate.
-module sccLabels 'scc-labels-function.bicep' = if (loomMipAdminEnabled) {
+// Deploys when EITHER label CRUD (loomMipAdminEnabled) OR DLP CRUD
+// (loomDlpAdminEnabled) is requested. When both are false the Console renders
+// the honest CRUD gates.
+module sccLabels 'scc-labels-function.bicep' = if (loomMipAdminEnabled || loomDlpAdminEnabled) {
   name: 'scc-labels-function'
   params: {
     location: location

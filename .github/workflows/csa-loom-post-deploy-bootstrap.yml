@@ -568,35 +568,39 @@ jobs:
             echo "    Without consent, /admin/security MIP+DLP tabs render the NotConfigured MessageBar."
           fi
 
-      - name: Provision SCC labels sidecar (label & policy CRUD)
+      - name: Provision SCC labels + DLP sidecar (label, label-policy & DLP CRUD)
         if: always()
         continue-on-error: true
         run: |
           # Sets up the Security & Compliance PowerShell sidecar that backs
-          # sensitivity-label + label-policy CRUD (create/edit/delete) on
-          # /admin/security. Microsoft Graph has no write surface for labels or
-          # policies, so CRUD runs through SCC PowerShell (New-/Set-/Remove-Label
-          # and *-LabelPolicy) via the azure-functions/scc-labels Function app,
-          # authenticated with a certificate-based app (Exchange.ManageAsApp +
-          # Compliance Administrator).
+          # sensitivity-label + label-policy CRUD AND DLP compliance-policy CRUD
+          # (create/edit/delete) on /admin/security. Microsoft Graph has no write
+          # surface for labels, label policies, OR DLP policies, so all of these
+          # run through SCC PowerShell (New-/Set-/Remove-Label, *-LabelPolicy, and
+          # Get/New/Set/Remove-DlpCompliancePolicy + *-DlpComplianceRule) via the
+          # azure-functions/scc-labels Function app (labels/ + dlp/ functions),
+          # authenticated with the SAME certificate-based app (Exchange.ManageAsApp
+          # + Compliance Administrator — those rights cover both label and DLP
+          # cmdlets, so no extra grant is needed for DLP CRUD).
           #
           # This step performs the automatable parts (app registration, the
           # Exchange.ManageAsApp grant, the Compliance Administrator role
           # assignment, and — when the Function app exists — publishing the
-          # code). The auth certificate upload + Tenant Admin consent + the
-          # re-deploy with loomMipAdminEnabled=true remain one-time manual
-          # actions, printed at the end of the script. Until then label/policy
-          # READS work and CRUD returns the honest 'mip_admin_not_configured'
-          # gate (no vaporware).
+          # code, which now includes the dlp/ function). The auth certificate
+          # upload + Tenant Admin consent + the re-deploy with
+          # loomMipAdminEnabled=true and/or loomDlpAdminEnabled=true remain
+          # one-time manual actions, printed at the end of the script. Until
+          # then label/DLP-policy READS work and CRUD returns the honest
+          # 'mip_admin_not_configured' / 'dlp_admin_not_configured' gate (no vaporware).
           set +e
           SCC_FUNCTION_APP=$(az functionapp list -g "$ADMIN_RG" --query "[?starts_with(name,'func-scclbl-')].name | [0]" -o tsv 2>/dev/null)
           if [ -n "$SCC_FUNCTION_APP" ]; then
-            echo "Found SCC labels Function app: $SCC_FUNCTION_APP — provisioning + publishing code."
+            echo "Found SCC labels Function app: $SCC_FUNCTION_APP — provisioning + publishing code (labels + dlp functions)."
             SCC_FUNCTION_APP="$SCC_FUNCTION_APP" SCC_FUNCTION_RG="$ADMIN_RG" \
               bash scripts/csa-loom/provision-scc-labels-sidecar.sh || true
           else
             echo "No func-scclbl-* Function app found in $ADMIN_RG."
-            echo "Deploy with loomMipAdminEnabled=true to create it, then re-run this job."
+            echo "Deploy with loomMipAdminEnabled=true (label CRUD) and/or loomDlpAdminEnabled=true (DLP CRUD) to create it, then re-run this job."
             echo "Running the app/role provisioning portion now so the SCC app exists ahead of the next deploy:"
             bash scripts/csa-loom/provision-scc-labels-sidecar.sh || true
           fi

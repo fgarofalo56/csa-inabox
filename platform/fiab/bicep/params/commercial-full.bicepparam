@@ -55,6 +55,10 @@ param loomMipEnabled = bool(readEnvironmentVariable('LOOM_MIP_ENABLED', 'false')
 // DLP defaults ON: the bootstrap grants the DLP AppRoles by default, so the
 // DLP tab is wired out of the box. Override with LOOM_DLP_ENABLED=false to gate it.
 param loomDlpEnabled = bool(readEnvironmentVariable('LOOM_DLP_ENABLED', 'true'))
+// DLP policy CRUD via the SCC PowerShell sidecar — opt-in (Graph has no DLP
+// write API). Off until the SCC app + cert are bootstrapped; reads/alerts/
+// restrict-access work regardless.
+param loomDlpAdminEnabled = bool(readEnvironmentVariable('LOOM_DLP_ADMIN_ENABLED', 'false'))
 param loomIdentityPickerEnabled = bool(readEnvironmentVariable('LOOM_IDENTITY_PICKER_ENABLED', 'false'))
 param loomDomainGroupProvisioningEnabled = bool(readEnvironmentVariable('LOOM_DOMAIN_GROUP_PROVISIONING', 'false'))
 // Headless CI Bearer-token path on the deployment-pipeline routes (Azure DevOps /

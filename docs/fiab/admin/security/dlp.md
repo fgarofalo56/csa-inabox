@@ -30,6 +30,23 @@ DLP-via-Graph is split between v1.0 (alerts) and /beta (policies, rules, simulat
 
 - `GET /v1.0/security/alerts_v2` filtered to `detectionSource = 'microsoftDataLossPrevention'`, top 50, default 30-day window. Violations shape per-item evidence (item path/type, policy, user, action) best-effort. GA in every cloud.
 
+### Manage policies (DLP policy CRUD — Security & Compliance PowerShell)
+
+Microsoft Graph has **no create/edit/delete API for DLP policies** — the `/beta informationProtection/dataLossPreventionPolicies` segment is read-only. The only Microsoft-supported authoring surface is **Security & Compliance PowerShell** (`Get/New/Set/Remove-DlpCompliancePolicy` + `*-DlpComplianceRule`). Loom drives these through the **same PowerShell sidecar** that backs sensitivity-label CRUD (`azure-functions/scc-labels`, new `dlp/` function), authenticated with the same certificate-based app (`Exchange.ManageAsApp` + Compliance Administrator).
+
+The **Policies** sub-tab adds a guided "Manage DLP policies" surface (no raw JSON, per `loom-no-freeform-config`):
+
+| Control | Backend |
+|---|---|
+| New / Edit policy | `New-/Set-DlpCompliancePolicy` (name, mode, comment, workload scope: Exchange/SharePoint/OneDrive/Teams → `All`) |
+| Rule (in the wizard) | `New-/Set-DlpComplianceRule` — sensitive info types (multi-select of Microsoft built-in SITs) + action (Block access / Generate alert) |
+| Delete policy | `Remove-DlpCompliancePolicy` |
+| List | `Get-DlpCompliancePolicy` (+ `Get-DlpComplianceRule` per policy) |
+
+CRUD is **opt-in**: it requires `LOOM_DLP_ADMIN_ENABLED=true` plus the deployed sidecar (`LOOM_SCC_LABELS_ENDPOINT` / `LOOM_SCC_LABELS_KEY`). When unset, the surface renders the honest `dlp_admin_not_configured` MessageBar (naming the env var / `Exchange.ManageAsApp` + Compliance Administrator roles / bootstrap step) while the **read-only Graph policy list, alerts, violations, and Restrict-access all keep working**. Backed by `app/api/admin/security/dlp/manage/route.ts` (GET/POST/PATCH/DELETE) → `lib/azure/scc-dlp-client.ts`.
+
+Bicep: `loomDlpAdminEnabled` (default `false`) deploys/shares the `scc-labels` Function app and wires `LOOM_DLP_ADMIN_ENABLED`. The post-deploy bootstrap step "Provision SCC labels + DLP sidecar" registers the SCC app + grants, publishes the `labels/` + `dlp/` code, and prints the one-time cert-upload + Tenant-Admin-consent actions.
+
 ### Restrict access (Azure-native, no Fabric)
 
 The Azure-native equivalent of Purview DLP's "Restrict access" action. Pick a **scope type**, the target resource, and a **principal** (Entra people-picker), then revoke that principal's real data-plane access:
@@ -62,8 +79,9 @@ In US Government / DoD clouds the policy segment is unavailable; the panel hones
 
 ## Source files
 
-- Panel: `apps/fiab-console/lib/components/admin-security/dlp-panel.tsx`
-- Client: `apps/fiab-console/lib/azure/dlp-graph-client.ts`
-- Routes: `apps/fiab-console/app/api/admin/security/dlp/{policies,alerts,violations,simulate}/route.ts`
+- Panel: `apps/fiab-console/lib/components/admin-security/dlp-panel.tsx` + `dlp-manage-policies.tsx`
+- Client: `apps/fiab-console/lib/azure/dlp-graph-client.ts` (reads) + `scc-dlp-client.ts` (CRUD sidecar)
+- Routes: `apps/fiab-console/app/api/admin/security/dlp/{policies,alerts,violations,simulate,manage}/route.ts`
+- DLP CRUD sidecar (PowerShell): `azure-functions/scc-labels/dlp/run.ps1`
 - Azure-native enforcement: `apps/fiab-console/app/api/governance/dlp/restrict/route.ts`
-- Vitest: `apps/fiab-console/lib/azure/__tests__/dlp-graph-client.test.ts`
+- Vitest: `apps/fiab-console/lib/azure/__tests__/dlp-graph-client.test.ts` + `scc-dlp-client.test.ts`
