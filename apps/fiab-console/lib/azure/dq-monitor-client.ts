@@ -48,6 +48,7 @@ import {
 } from '@azure/identity';
 import { executeStatement } from './databricks-client';
 import type { DqRule } from './data-quality-client';
+import { fetchWithTimeout } from '@/lib/azure/fetch-with-timeout';
 
 const DBX_SCOPE = '2ff814a6-3304-4ab8-85cb-cd0e6f879c1d/.default';
 
@@ -73,7 +74,7 @@ async function dbxToken(): Promise<string> {
 
 async function dbxFetch(path: string, init?: RequestInit): Promise<Response> {
   const token = await dbxToken();
-  return fetch(`https://${host()}${path}`, {
+  return fetchWithTimeout(`https://${host()}${path}`, {
     ...init,
     headers: {
       ...(init?.headers || {}),

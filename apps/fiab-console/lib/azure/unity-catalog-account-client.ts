@@ -42,6 +42,7 @@ import {
   DefaultAzureCredential,
   ManagedIdentityCredential,
 } from '@azure/identity';
+import { fetchWithTimeout } from '@/lib/azure/fetch-with-timeout';
 
 const DBX_SCOPE = '2ff814a6-3304-4ab8-85cb-cd0e6f879c1d/.default';
 
@@ -144,7 +145,7 @@ async function acctFetch<T = any>(
 ): Promise<T> {
   const token = await dbxToken();
   const url = `https://${accountHost()}/api/2.0/accounts/${accountId()}${path}`;
-  const res = await fetch(url, {
+  const res = await fetchWithTimeout(url, {
     method: init?.method ?? 'GET',
     headers: {
       authorization: `Bearer ${token}`,
