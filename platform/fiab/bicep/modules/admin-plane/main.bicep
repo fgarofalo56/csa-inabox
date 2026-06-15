@@ -70,6 +70,10 @@ param loomDatabricksLineageWarehouseId string = ''
 @allowed(['', 'synapse', 'databricks', 'aml-ci'])
 param loomNotebookBackend string = ''
 
+@description('DQ data-profiling monitor REST surface (governance/data-quality Monitors tab). Empty or "data-quality" uses the GA /api/data-quality/v1/monitors API (keyed by table UUID — default). "legacy" forces the deprecated quality_monitors surface for sovereign regions where the GA API is not yet enabled. No new resource/role.')
+@allowed(['', 'data-quality', 'legacy'])
+param loomDbxDqMonitorApi string = ''
+
 @description('Power Apps canvas web-player base for the in-Loom Play/embed + Studio tabs. Empty = code default https://apps.powerapps.com (Commercial). Sovereign clouds override: GCC/GCC-High = https://apps.gov.powerapps.us; DoD/IL5 = https://apps.appsplatform.us.')
 param powerAppsPlayerBase string = ''
 
@@ -2137,6 +2141,13 @@ module appDeployments 'app-deployments.bicep' = if (containerPlatform == 'contai
             // Databricks Lakehouse Monitoring: grant the Console UAMI Unity
             // Catalog USE_CATALOG/USE_SCHEMA + CREATE TABLE/MODIFY (and SELECT)
             // on the target schema — documented in docs/fiab/v3-tenant-bootstrap.md.
+            // DQ data-profiling monitor REST surface. Empty/'data-quality' → the
+            // GA `/api/data-quality/v1/monitors` API (keyed by table UUID — the
+            // default). 'legacy' forces the DEPRECATED `quality_monitors`
+            // (`/api/2.1/unity-catalog/tables/{name}/monitor`) surface for any
+            // sovereign region where the GA API is not yet enabled. No new
+            // resource/role — the same Console UAMI UC grant above applies.
+            { name: 'LOOM_DBX_DQ_MONITOR_API', value: loomDbxDqMonitorApi }
             // Notebook per-cell execution backend (F16). Empty/'synapse' → Azure-
             // native Synapse Spark Livy (default). 'databricks' opts into the
             // Databricks Execution Context API. LOOM_CLOUD_TIER=IL5 makes the BFF

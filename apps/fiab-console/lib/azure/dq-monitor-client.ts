@@ -13,11 +13,27 @@
  *      Grounded in Microsoft Learn — "Constraints on Azure Databricks":
  *      https://learn.microsoft.com/azure/databricks/tables/constraints
  *
- *   2. Databricks Lakehouse Monitoring (Unity Catalog quality monitors). A
+ *   2. Databricks data quality monitoring / data profiling (Unity Catalog). A
  *      snapshot/time-series profile that produces UC metric tables + a dashboard
- *      and can be refreshed on demand. GA REST surface
- *      (`/api/2.1/unity-catalog/tables/{name}/monitor`), grounded in:
- *      https://learn.microsoft.com/azure/databricks/data-governance/unity-catalog/data-quality-monitoring/
+ *      and can be refreshed on demand.
+ *
+ *      Default REST surface is the GA `data-quality` API, keyed by the table's
+ *      UUID (`object_id` = `table_id`):
+ *        POST   /api/data-quality/v1/monitors
+ *        GET    /api/data-quality/v1/monitors/table/{table_id}
+ *        DELETE /api/data-quality/v1/monitors/table/{table_id}
+ *        POST   /api/data-quality/v1/monitors/table/{table_id}/refreshes
+ *        GET    /api/data-quality/v1/monitors/table/{table_id}/refreshes
+ *      Grounded in Microsoft Learn — "Create a data profile using the API"
+ *      (databricks-sdk >= 0.68.0, `w.data_quality.create_monitor(...)`):
+ *      https://learn.microsoft.com/azure/databricks/data-governance/unity-catalog/data-quality-monitoring/data-profiling/create-monitor-api
+ *      and the REST reference https://docs.databricks.com/api/azure/workspace/dataquality
+ *
+ *      The earlier `quality_monitors` surface
+ *      (`/api/2.1/unity-catalog/tables/{name}/monitor`) is DEPRECATED — Learn now
+ *      says "Use the `data-quality` commands instead." It is retained here as an
+ *      operator-selectable fallback (`LOOM_DBX_DQ_MONITOR_API=legacy`) for
+ *      sovereign regions where the GA surface may not yet be enabled.
  *
  * Both run through the workspace's own Databricks SQL Warehouse / REST — no
  * Fabric, no Power BI. Honest config gate {@link dqMonitorConfigGate} surfaces
@@ -235,18 +251,23 @@ export async function dropDeltaConstraint(
 }
 
 // ---------------------------------------------------------------------------
-// Lakehouse Monitoring (Unity Catalog quality monitors)
+// Data quality monitoring / data profiling (Unity Catalog)
 // ---------------------------------------------------------------------------
 
 export type MonitorProfileType = 'snapshot' | 'time_series';
+export type MonitorApiMode = 'data-quality' | 'legacy';
 
 export interface LakehouseMonitor {
   tableName: string;
+  /** UC table UUID (object_id) — present on the GA path. */
+  tableId?: string;
   status?: string;
   profileMetricsTableName?: string;
   driftMetricsTableName?: string;
   dashboardId?: string;
   monitorVersion?: string;
+  /** Which REST surface answered ('data-quality' GA or 'legacy'). */
+  api?: MonitorApiMode;
   raw?: unknown;
 }
 
@@ -258,29 +279,162 @@ export interface MonitorRefresh {
   trigger?: string;
 }
 
-function monitorPath(fullName: string, sub = ''): string {
-  // GA quality-monitors REST surface keyed by the three-part table name.
+/**
+ * Default to the GA `data-quality` API. Operators can force the deprecated
+ * `quality_monitors` surface per-cloud (e.g. a sovereign region where GA isn't
+ * yet enabled) with `LOOM_DBX_DQ_MONITOR_API=legacy`.
+ */
+export function monitorApiMode(): MonitorApiMode {
+  return process.env.LOOM_DBX_DQ_MONITOR_API === 'legacy' ? 'legacy' : 'data-quality';
+}
+
+const GA_BASE = '/api/data-quality/v1/monitors';
+
+/** Looks like a UC object UUID (8-4-4-4-12 hex). */
+function isUuid(v: string): boolean {
+  return /^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$/.test(v);
+}
+
+/**
+ * Map a human granularity (what the UI sends, e.g. "1 day") onto the GA
+ * `AGGREGATION_GRANULARITY_*` enum. Passes through values already in enum form.
+ */
+export function granularityToEnum(g: string): string {
+  const v = String(g || '').trim();
+  if (/^AGGREGATION_GRANULARITY_/i.test(v)) return v.toUpperCase();
+  const key = v.toLowerCase().replace(/\s+/g, ' ');
+  const map: Record<string, string> = {
+    '5 minutes': 'AGGREGATION_GRANULARITY_5_MINUTES',
+    '30 minutes': 'AGGREGATION_GRANULARITY_30_MINUTES',
+    '1 hour': 'AGGREGATION_GRANULARITY_1_HOUR',
+    '1 day': 'AGGREGATION_GRANULARITY_1_DAY',
+    '1 week': 'AGGREGATION_GRANULARITY_1_WEEK',
+    '2 weeks': 'AGGREGATION_GRANULARITY_2_WEEKS',
+    '3 weeks': 'AGGREGATION_GRANULARITY_3_WEEKS',
+    '4 weeks': 'AGGREGATION_GRANULARITY_4_WEEKS',
+    '1 month': 'AGGREGATION_GRANULARITY_1_MONTH',
+    '1 year': 'AGGREGATION_GRANULARITY_1_YEAR',
+  };
+  return map[key] || 'AGGREGATION_GRANULARITY_1_DAY';
+}
+
+/**
+ * Build the GA `create_monitor` request body. Pure (no network) so it is unit
+ * testable. `objectId` is the table UUID; `outputSchemaId` is the destination
+ * schema UUID.
+ */
+export function buildGaMonitorBody(args: {
+  objectId: string;
+  outputSchemaId: string;
+  assetsDir: string;
+  profileType: MonitorProfileType;
+  timestampCol?: string;
+  granularities?: string[];
+}): Record<string, unknown> {
+  const profiling: Record<string, unknown> = {
+    output_schema_id: args.outputSchemaId,
+    assets_dir: args.assetsDir,
+  };
+  if (args.profileType === 'time_series') {
+    profiling.time_series = {
+      timestamp_column: args.timestampCol,
+      granularities: (args.granularities?.length ? args.granularities : ['1 day']).map(granularityToEnum),
+    };
+  } else {
+    profiling.snapshot = {};
+  }
+  return {
+    object_type: 'table',
+    object_id: args.objectId,
+    data_profiling_config: profiling,
+  };
+}
+
+// --- Unity Catalog object-id resolution (GA path keys on UUIDs) -------------
+
+/** Resolve a UC table's UUID (`table_id`) from its three-part name. */
+export async function getTableId(fullName: string): Promise<string> {
+  const res = await dbxFetch(`/api/2.1/unity-catalog/tables/${encodeURIComponent(fullName)}`);
+  if (!res.ok) throw new Error(`resolve table_id ${res.status}: ${await res.text()}`);
+  const j: any = await res.json();
+  const id = j?.table_id;
+  if (!id) throw new Error(`table ${fullName} has no table_id`);
+  return String(id);
+}
+
+/** Resolve a UC schema's UUID (`schema_id`) from its `catalog.schema` name. */
+export async function getSchemaId(fullSchemaName: string): Promise<string> {
+  if (isUuid(fullSchemaName)) return fullSchemaName;
+  const res = await dbxFetch(`/api/2.1/unity-catalog/schemas/${encodeURIComponent(fullSchemaName)}`);
+  if (!res.ok) throw new Error(`resolve schema_id ${res.status}: ${await res.text()}`);
+  const j: any = await res.json();
+  const id = j?.schema_id;
+  if (!id) throw new Error(`schema ${fullSchemaName} has no schema_id`);
+  return String(id);
+}
+
+// --- legacy (deprecated quality_monitors) path ------------------------------
+
+function legacyMonitorPath(fullName: string, sub = ''): string {
   return `/api/2.1/unity-catalog/tables/${encodeURIComponent(fullName)}/monitor${sub}`;
 }
 
-function mapMonitor(fullName: string, j: any): LakehouseMonitor {
+function mapLegacyMonitor(fullName: string, j: any): LakehouseMonitor {
   return {
     tableName: fullName,
     status: j?.status,
     profileMetricsTableName: j?.profile_metrics_table_name,
     driftMetricsTableName: j?.drift_metrics_table_name,
     dashboardId: j?.dashboard_id,
-    monitorVersion: j?.monitor_version ? String(j.monitor_version) : undefined,
+    monitorVersion: j?.monitor_version != null ? String(j.monitor_version) : undefined,
+    api: 'legacy',
     raw: j,
+  };
+}
+
+function mapGaMonitor(fullName: string, tableId: string, j: any): LakehouseMonitor {
+  // GA nests profile fields under data_profiling_config; tolerate flat too.
+  const cfg = j?.data_profiling_config || j?.profiling_config || j || {};
+  return {
+    tableName: fullName,
+    tableId,
+    status: j?.status || j?.monitor_status || cfg?.status,
+    profileMetricsTableName: cfg?.profile_metrics_table_name || j?.profile_metrics_table_name,
+    driftMetricsTableName: cfg?.drift_metrics_table_name || j?.drift_metrics_table_name,
+    dashboardId: cfg?.dashboard_id || j?.dashboard_id,
+    monitorVersion: (cfg?.monitor_version ?? j?.monitor_version) != null
+      ? String(cfg?.monitor_version ?? j?.monitor_version) : undefined,
+    api: 'data-quality',
+    raw: j,
+  };
+}
+
+function mapRefresh(r: any): MonitorRefresh {
+  // GA states look like MONITOR_REFRESH_STATE_PENDING; trim the prefix for the UI.
+  const rawState = String(r?.state || r?.refresh_state || 'UNKNOWN');
+  const state = rawState.replace(/^MONITOR_REFRESH_STATE_/, '');
+  return {
+    refreshId: String(r?.refresh_id ?? r?.refreshId ?? ''),
+    state: state || 'UNKNOWN',
+    startTimeMs: r?.start_time_ms ?? r?.start_time,
+    endTimeMs: r?.end_time_ms ?? r?.end_time,
+    trigger: r?.trigger || r?.trigger_type,
   };
 }
 
 /** Read the monitor on a UC table (null when no monitor / not found). */
 export async function getMonitor(fullName: string): Promise<LakehouseMonitor | null> {
-  const res = await dbxFetch(monitorPath(fullName));
+  if (monitorApiMode() === 'legacy') {
+    const res = await dbxFetch(legacyMonitorPath(fullName));
+    if (res.status === 404) return null;
+    if (!res.ok) throw new Error(`getMonitor ${res.status}: ${await res.text()}`);
+    return mapLegacyMonitor(fullName, await res.json());
+  }
+  const tableId = await getTableId(fullName);
+  const res = await dbxFetch(`${GA_BASE}/table/${encodeURIComponent(tableId)}`);
   if (res.status === 404) return null;
   if (!res.ok) throw new Error(`getMonitor ${res.status}: ${await res.text()}`);
-  return mapMonitor(fullName, await res.json());
+  return mapGaMonitor(fullName, tableId, await res.json());
 }
 
 /**
@@ -298,58 +452,88 @@ export async function createMonitor(args: {
   granularities?: string[];
   warehouseId?: string;
 }): Promise<LakehouseMonitor> {
-  const body: Record<string, unknown> = {
-    assets_dir: args.assetsDir,
-    output_schema_name: args.outputSchema,
-  };
-  if (args.warehouseId || process.env.LOOM_DATABRICKS_SQL_WAREHOUSE_ID) {
-    body.warehouse_id = args.warehouseId || process.env.LOOM_DATABRICKS_SQL_WAREHOUSE_ID;
-  }
-  if (args.profileType === 'time_series') {
-    body.time_series = {
-      timestamp_col: args.timestampCol,
-      granularities: args.granularities?.length ? args.granularities : ['1 day'],
+  if (monitorApiMode() === 'legacy') {
+    const body: Record<string, unknown> = {
+      assets_dir: args.assetsDir,
+      output_schema_name: args.outputSchema,
     };
-  } else {
-    body.snapshot = {};
+    if (args.warehouseId || process.env.LOOM_DATABRICKS_SQL_WAREHOUSE_ID) {
+      body.warehouse_id = args.warehouseId || process.env.LOOM_DATABRICKS_SQL_WAREHOUSE_ID;
+    }
+    if (args.profileType === 'time_series') {
+      body.time_series = {
+        timestamp_col: args.timestampCol,
+        granularities: args.granularities?.length ? args.granularities : ['1 day'],
+      };
+    } else {
+      body.snapshot = {};
+    }
+    const res = await dbxFetch(legacyMonitorPath(args.fullName), { method: 'POST', body: JSON.stringify(body) });
+    if (!res.ok) throw new Error(`createMonitor ${res.status}: ${await res.text()}`);
+    return mapLegacyMonitor(args.fullName, await res.json());
   }
-  const res = await dbxFetch(monitorPath(args.fullName), { method: 'POST', body: JSON.stringify(body) });
+
+  // GA path: resolve the table UUID and the output-schema UUID.
+  const tableId = await getTableId(args.fullName);
+  // The output schema may be a UUID, a catalog.schema name, or a bare schema —
+  // in the bare case, qualify it with the monitored table's catalog.
+  let outputSchema = args.outputSchema.trim();
+  if (!isUuid(outputSchema) && !outputSchema.includes('.')) {
+    const catalog = args.fullName.split('.')[0];
+    if (catalog) outputSchema = `${catalog}.${outputSchema}`;
+  }
+  const outputSchemaId = await getSchemaId(outputSchema);
+  const body = buildGaMonitorBody({
+    objectId: tableId,
+    outputSchemaId,
+    assetsDir: args.assetsDir,
+    profileType: args.profileType,
+    timestampCol: args.timestampCol,
+    granularities: args.granularities,
+  });
+  const res = await dbxFetch(GA_BASE, { method: 'POST', body: JSON.stringify(body) });
   if (!res.ok) throw new Error(`createMonitor ${res.status}: ${await res.text()}`);
-  return mapMonitor(args.fullName, await res.json());
+  return mapGaMonitor(args.fullName, tableId, await res.json());
 }
 
 /** Delete the monitor on a UC table. */
 export async function deleteMonitor(fullName: string): Promise<void> {
-  const res = await dbxFetch(monitorPath(fullName), { method: 'DELETE' });
+  if (monitorApiMode() === 'legacy') {
+    const res = await dbxFetch(legacyMonitorPath(fullName), { method: 'DELETE' });
+    if (!res.ok && res.status !== 404) throw new Error(`deleteMonitor ${res.status}: ${await res.text()}`);
+    return;
+  }
+  const tableId = await getTableId(fullName);
+  const res = await dbxFetch(`${GA_BASE}/table/${encodeURIComponent(tableId)}`, { method: 'DELETE' });
   if (!res.ok && res.status !== 404) throw new Error(`deleteMonitor ${res.status}: ${await res.text()}`);
 }
 
 /** Trigger a metric refresh; returns the refresh id + state. */
 export async function refreshMonitor(fullName: string): Promise<MonitorRefresh> {
-  const res = await dbxFetch(monitorPath(fullName, '/refreshes'), { method: 'POST' });
+  if (monitorApiMode() === 'legacy') {
+    const res = await dbxFetch(legacyMonitorPath(fullName, '/refreshes'), { method: 'POST' });
+    if (!res.ok) throw new Error(`refreshMonitor ${res.status}: ${await res.text()}`);
+    const j: any = await res.json();
+    return { ...mapRefresh(j), state: j?.state || 'PENDING' };
+  }
+  const tableId = await getTableId(fullName);
+  const res = await dbxFetch(`${GA_BASE}/table/${encodeURIComponent(tableId)}/refreshes`, {
+    method: 'POST',
+    body: JSON.stringify({ object_type: 'table', object_id: tableId }),
+  });
   if (!res.ok) throw new Error(`refreshMonitor ${res.status}: ${await res.text()}`);
-  const j: any = await res.json();
-  return {
-    refreshId: String(j?.refresh_id ?? ''),
-    state: j?.state || 'PENDING',
-    startTimeMs: j?.start_time_ms,
-    endTimeMs: j?.end_time_ms,
-    trigger: j?.trigger,
-  };
+  return mapRefresh(await res.json());
 }
 
 /** List refresh history for a monitor (most recent first, as returned). */
 export async function listRefreshes(fullName: string): Promise<MonitorRefresh[]> {
-  const res = await dbxFetch(monitorPath(fullName, '/refreshes'));
+  const path = monitorApiMode() === 'legacy'
+    ? legacyMonitorPath(fullName, '/refreshes')
+    : `${GA_BASE}/table/${encodeURIComponent(await getTableId(fullName))}/refreshes`;
+  const res = await dbxFetch(path);
   if (res.status === 404) return [];
   if (!res.ok) throw new Error(`listRefreshes ${res.status}: ${await res.text()}`);
   const j: any = await res.json();
   const arr = Array.isArray(j?.refreshes) ? j.refreshes : [];
-  return arr.map((r: any) => ({
-    refreshId: String(r?.refresh_id ?? ''),
-    state: r?.state || 'UNKNOWN',
-    startTimeMs: r?.start_time_ms,
-    endTimeMs: r?.end_time_ms,
-    trigger: r?.trigger,
-  }));
+  return arr.map(mapRefresh);
 }

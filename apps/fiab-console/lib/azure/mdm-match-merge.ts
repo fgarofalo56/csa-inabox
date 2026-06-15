@@ -180,6 +180,69 @@ export async function runMatch(model: MdmModel, minScore = 80, warehouseId?: str
   return { sql, candidates };
 }
 
+// ---------------------------------------------------------------------------
+// Steward-approved crosswalk (manual match overrides)
+// ---------------------------------------------------------------------------
+
+/**
+ * A steward-approved duplicate pair. Approving a fuzzy candidate is an explicit
+ * stewardship action that forces the two records into the SAME golden cluster
+ * even when they don't share every exact-match attribute. Pairs are persisted
+ * per model (mdm-crosswalk:<tenantId>) and unioned into the merge below.
+ */
+export interface CrosswalkPair {
+  idA: string;
+  idB: string;
+  approvedBy?: string;
+  approvedAt?: string;
+}
+
+/**
+ * Union-find over approved pairs → a stable cluster id (the smallest member id)
+ * for every record that appears in any approved pair. Records not in any pair
+ * are absent (they cluster deterministically by exact attributes instead).
+ */
+export function clusterCrosswalk(pairs: CrosswalkPair[]): Map<string, string> {
+  const parent = new Map<string, string>();
+  const find = (x: string): string => {
+    let r = x;
+    while (parent.get(r) !== undefined && parent.get(r) !== r) r = parent.get(r)!;
+    // path-compress
+    let c = x;
+    while (parent.get(c) !== undefined && parent.get(c) !== r) { const n = parent.get(c)!; parent.set(c, r); c = n; }
+    return r;
+  };
+  const union = (a: string, b: string) => {
+    if (parent.get(a) === undefined) parent.set(a, a);
+    if (parent.get(b) === undefined) parent.set(b, b);
+    const ra = find(a), rb = find(b);
+    if (ra === rb) return;
+    // keep the lexicographically smaller id as the representative (stable)
+    if (ra < rb) parent.set(rb, ra); else parent.set(ra, rb);
+  };
+  for (const p of pairs) {
+    const a = String(p.idA), b = String(p.idB);
+    if (!a || !b) continue;
+    union(a, b);
+  }
+  const out = new Map<string, string>();
+  for (const k of parent.keys()) out.set(k, find(k));
+  return out;
+}
+
+/**
+ * Build the inline `VALUES (record_id, cluster_gid)` crosswalk relation that the
+ * golden merge LEFT JOINs to override `_gid`. Returns null when there are no
+ * approved pairs. `cluster_gid` is prefixed `cw:` so it never collides with an
+ * md5 deterministic cluster id.
+ */
+export function buildCrosswalkValues(pairs: CrosswalkPair[]): string | null {
+  const clusters = clusterCrosswalk(pairs);
+  if (!clusters.size) return null;
+  const rows = [...clusters.entries()].map(([id, rep]) => `(${sqlStr(id)}, ${sqlStr(`cw:${rep}`)})`);
+  return `(SELECT * FROM VALUES ${rows.join(', ')} AS _cw(_cw_record_id, _cw_gid))`;
+}
+
 /** Per-column survivorship select expression, windowed over the golden cluster. */
 function survivorshipExpr(model: MdmModel, rule: SurvivorshipRule): string {
   const C = `s.${q(rule.column)}`;
@@ -217,8 +280,12 @@ function sourcePriorityOrder(model: MdmModel): string {
  * cluster); `_gid` is its md5. Each survivorship column is resolved by its
  * strategy via a window over the cluster, and source lineage is captured as
  * `source_systems` (array) + `source_record_count`.
+ *
+ * When `crosswalk` holds steward-approved pairs, those records are forced into a
+ * shared cluster (`_gid` overridden via a LEFT JOIN to an inline VALUES relation)
+ * so manually-confirmed fuzzy duplicates survive into one golden record.
  */
-export function buildGoldenRecordSql(model: MdmModel): string {
+export function buildGoldenRecordSql(model: MdmModel, crosswalk: CrosswalkPair[] = []): string {
   const T = fq(model.sourceTable, model.catalog, model.schema);
   const G = fq(model.goldenTable, model.catalog, model.schema);
   const exactAttrs = model.matchAttributes.filter((m) => m.matchType === 'exact');
@@ -239,11 +306,22 @@ export function buildGoldenRecordSql(model: MdmModel): string {
     ? `collect_set(s.${q(model.sourceSystemColumn)}) OVER (PARTITION BY s._gid) AS source_systems`
     : `array() AS source_systems`;
 
-  return `CREATE OR REPLACE TABLE ${G} AS
-WITH src AS (
+  // Steward-approved crosswalk: override _gid for manually-confirmed pairs.
+  const cwValues = buildCrosswalkValues(crosswalk);
+  const rid = `CAST(t.${q(model.recordIdColumn)} AS STRING)`;
+  const srcCte = cwValues
+    ? `src AS (
+  SELECT t.*, COALESCE(_cw._cw_gid, md5(${clusterKey})) AS _gid, (${completeness}) AS _completeness
+  FROM ${T} t
+  LEFT JOIN ${cwValues} ON ${rid} = _cw._cw_record_id
+)`
+    : `src AS (
   SELECT *, md5(${clusterKey}) AS _gid, (${completeness}) AS _completeness
   FROM ${T}
-),
+)`;
+
+  return `CREATE OR REPLACE TABLE ${G} AS
+WITH ${srcCte},
 golden AS (
   SELECT
     s._gid AS golden_id,
@@ -264,9 +342,9 @@ export interface MdmMergeResult {
 }
 
 /** Execute the survivorship merge → write golden records to the Delta table. */
-export async function runMerge(model: MdmModel, warehouseId?: string): Promise<MdmMergeResult> {
+export async function runMerge(model: MdmModel, warehouseId?: string, crosswalk: CrosswalkPair[] = []): Promise<MdmMergeResult> {
   const wh = warehouse(warehouseId);
-  const sql = buildGoldenRecordSql(model);
+  const sql = buildGoldenRecordSql(model, crosswalk);
   await executeStatement(wh, sql, model.catalog, model.schema);
   const G = fq(model.goldenTable, model.catalog, model.schema);
   const T = fq(model.sourceTable, model.catalog, model.schema);

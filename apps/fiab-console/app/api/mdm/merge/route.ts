@@ -9,7 +9,7 @@
  */
 import { NextRequest, NextResponse } from 'next/server';
 import { getSession } from '@/lib/auth/session';
-import { getModel, appendMdmRun, type MdmRunRecord } from '@/lib/azure/mdm-store';
+import { getModel, appendMdmRun, listCrosswalk, type MdmRunRecord } from '@/lib/azure/mdm-store';
 import { runMerge, mdmConfigGate } from '@/lib/azure/mdm-match-merge';
 
 export const runtime = 'nodejs';
@@ -34,14 +34,16 @@ export async function POST(req: NextRequest) {
   if (!model) return NextResponse.json({ ok: false, error: 'model not found' }, { status: 404 });
 
   try {
-    const result = await runMerge(model);
+    const crosswalk = await listCrosswalk(tenantId, model.id);
+    const result = await runMerge(model, undefined, crosswalk);
+    const cwNote = crosswalk.length ? ` (incl. ${crosswalk.length} steward-approved pair${crosswalk.length === 1 ? '' : 's'})` : '';
     const rec: MdmRunRecord = {
       id: `mdm-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
       modelId: model.id, modelName: model.name, kind: 'merge',
       ranAt: new Date().toISOString(), ranBy: s.claims.upn || tenantId,
       count: result.goldenRecordCount, sourceRecordCount: result.sourceRecordCount,
       goldenTable: result.goldenTable,
-      detail: `${result.goldenRecordCount ?? '?'} golden records from ${result.sourceRecordCount ?? '?'} source rows`,
+      detail: `${result.goldenRecordCount ?? '?'} golden records from ${result.sourceRecordCount ?? '?'} source rows${cwNote}`,
     };
     await appendMdmRun(tenantId, rec);
     return NextResponse.json({ ok: true, result, run: rec });

@@ -21,7 +21,8 @@ Warehouse (Spark SQL). No Fabric, no Power BI, no partner SaaS. Works with
 | Survivorship rules (most-recent/most-complete/source-priority/max/min) | ✅ Models dialog | strict enums |
 | Reference-data / code-list management (RDM) | ✅ Reference data tab (versioned) | Cosmos `mdm-refdata:<tenantId>` (`/api/mdm/reference-data`) |
 | Run matching → candidate duplicate pairs | ✅ Match tab — scored pairs | `/api/mdm/match` → `runMatch` (Spark `levenshtein`/`soundex`) |
-| Survivorship merge → golden records | ✅ Golden records tab — Run merge | `/api/mdm/merge` → `runMerge` (CREATE OR REPLACE TABLE) |
+| Steward approval of a candidate pair (crosswalk) | ✅ Match tab — Approve merge / Revoke per pair | `/api/mdm/match/approve` → Cosmos `mdm-crosswalk:<tenantId>` |
+| Survivorship merge → golden records | ✅ Golden records tab — Run merge | `/api/mdm/merge` → `runMerge` (CREATE OR REPLACE TABLE, unions approved pairs) |
 | Golden record with source lineage | ✅ `source_systems` + `source_record_count` columns | window aggregates over the deterministic cluster |
 | Browse / steward golden records | ✅ Golden records tab (dynamic grid) | `/api/mdm/golden-records` (real SELECT) |
 | Run history (match + merge) | ✅ Runs tab | Cosmos `mdm-runs:<tenantId>` |
@@ -37,10 +38,17 @@ Zero ❌ — every inventory row is built ✅ or an honest-gate ⚠️.
 - **Probabilistic matching** surfaces fuzzy candidate pairs for steward review
   (Match tab) — approving a pair is an explicit stewardship action, never a
   silent automatic merge.
+- **Steward crosswalk write-back**: approving a fuzzy pair persists it to
+  `mdm-crosswalk:<tenantId>`. On the next merge, `runMerge` reads the crosswalk,
+  union-finds approved pairs into stable clusters (`clusterCrosswalk`), and the
+  golden SQL LEFT JOINs an inline `VALUES (record_id, cluster_gid)` relation to
+  override `_gid` (`COALESCE(_cw._cw_gid, md5(<clusterKey>))`) — so manually
+  confirmed duplicates that don't share every exact attribute still survive into
+  one golden record. Revoking a pair removes it from the next merge.
 - **Survivorship** resolves each column by its strategy with Spark window
   functions (`FIRST_VALUE … IGNORE NULLS`, `MAX`/`MIN`) over the cluster.
 - All identifiers are validated + backtick-quoted; the fuzzy pattern / string
-  literals are escaped — no SQL injection surface.
+  literals (incl. crosswalk record ids) are escaped — no SQL injection surface.
 
 ## Per-cloud matrix
 
