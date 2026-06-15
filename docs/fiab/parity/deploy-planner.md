@@ -26,9 +26,10 @@ consumes. It is Azure-native end to end (no Microsoft Fabric dependency — see
 | Express dependencies between resources | ✅ Drag from a service's right handle to another → dependency arrow (React Flow edges) | `onConnect`, `buildEdges` |
 | Validate before deploy ("Review + create") | ✅ **Validate** button — flags dangling dependencies (error), plan-only/empty/cross-subscription warnings | `validatePlan()` |
 | Save the design | ✅ **Save plan** → Cosmos (`deploy-plan:<tenantId>` in tenant-settings) | `app/api/admin/deploy-plan/route.ts` (PUT) |
-| Export deployable template / parameters | ✅ **Export bicepparam** → real `.bicepparam` with feature flags **and** per-resource SKU/tier/runtime params | `planToBicepparam()` |
+| Export deployable **parameters** | ✅ **Export bicep → .bicepparam** tab → real `.bicepparam` with feature flags **and** per-resource SKU/tier/runtime params, drives the maintained `main.bicep` | `planToBicepparam()` |
+| Export deployable **template** | ✅ **Export bicep → .bicep** tab → standalone `targetScope='subscription'` template: every module-backed selected service becomes a real `module`, **dependency arrows become module `dependsOn`**, per-resource config threaded | `planToBicep()` |
 | Deploy | ⚠️ Honest gate: the planner does **not** run the deployment. The exported file is applied with `az deployment sub create` or the deploy-fiab workflow (surfaced in the info bar). | — |
-| Cost estimate | ❌ Tracked separately (deploy-planner cost-estimate task) — out of scope here. |
+| Cost estimate | ✅ **Estimate cost** prices the selected subscription against the public Azure Retail Prices API (representative SKU) | `cost-estimate.ts`, `/api/admin/deploy-plan/cost-estimate` |
 
 ## Deployment mode & DLZ-attach
 
@@ -84,20 +85,56 @@ them to the deploy-planner module:
 | Functions | worker runtime, version | `functionsWorkerRuntime`, `functionsLinuxFxVersion` → `functions.bicep` |
 | PostgreSQL Flexible | version, storage GB | `postgresVersion`, `postgresStorageSizeGB` → `postgres.bicep` |
 | MySQL Flexible | version, storage GB | `mysqlVersion`, `mysqlStorageSizeGB` → `mysql.bicep` |
+| Service Bus | namespace SKU | `serviceBusSkuName` → `service-bus.bicep skuName` (Basic excluded — module provisions a starter topic) |
+| Azure Firewall | tier | `firewallTier` → `firewall.bicep firewallTier` (Standard / Premium) |
+| Stream Analytics | streaming units | `streamAnalyticsStreamingUnits` → `stream-analytics.bicep startingStreamingUnits` |
 
 Interdependent knobs (Redis family/capacity, which must match the SKU) are
 **derived in main.bicep** from the chosen SKU so every exported combination
 compiles and deploys — the planner never emits an invalid pairing. Core
 (`bicepFlag:null`) and plan-only services expose **no** config knobs (a knob
-there would be a fake — see `no-vaporware.md`). The
-`bicep-sync` vitest (`__tests__/plan-validation.test.ts`) fails if any config
-field's `bicepParam` is missing from `main.bicep` or not forwarded to its module.
+there would be a fake — see `no-vaporware.md`). The `bicepparam.test.ts`
+drift guards fail if any config field's `bicepParam` is missing from
+`main.bicep`.
+
+## Standalone `.bicep` template export (edges → `dependsOn`)
+
+Alongside the primary `.bicepparam`, **Export bicep → .bicep** emits a
+self-contained, subscription-scoped template straight from the graph
+(`planToBicep()`):
+
+- Every SELECTED service that has a self-contained deploy-planner module
+  (`platform/fiab/bicep/modules/deploy-planner/<svc>.bicep`) becomes a real
+  `module` reference inside a generated resource group, with its per-resource
+  config threaded into the module's params (verified 1:1 with how `main.bicep`
+  invokes each `dp*` module — cognitive-account's `kind`/`nameFragment`
+  included).
+- The canvas **dependency arrows become real module `dependsOn`**, so the
+  visual ordering is enforced at deploy time (an arrow A→B emits
+  `module svc_A { … dependsOn: [ svc_B ] }`). Edges that touch a
+  non-module-backed service are dropped (no dangling `dependsOn`).
+- Services WITHOUT a self-contained module (AI Search, API Management, AI
+  Foundry, … which deploy via `main.bicep`'s DLZ orchestrator) are listed as
+  honest comments, never faked as modules.
+- Honest gate: the standalone template provisions resources only — each
+  module's `consolePrincipalId` defaults to `''`, so the Loom Console UAMI role
+  grants are skipped (disclosed in the generated header); run `main.bicep` (or
+  grant separately) to wire the Console. Deploy with
+  `az deployment sub create -l <region> -f <file>.architecture.bicep` after
+  saving the file next to `main.bicep`.
+
+The emitter is `az bicep build`-clean — verified against a representative plan
+covering every module file, the cognitive-account `kind`/`nameFragment`, the
+subscription-scoped Defender/Policy modules, and `dependsOn` edges
+(planToBicep.test.ts asserts every mapped module file exists on disk).
 
 ## Per-cloud (no-fabric-dependency)
 
 All configurable resources are ARM-native (`Microsoft.Cache/redis`,
-`Microsoft.Web/*`, `Microsoft.DBforPostgreSQL/*`, `Microsoft.DBforMySQL/*`) —
-available in Commercial and Gov. Region defaults follow the subscription
+`Microsoft.Web/*`, `Microsoft.DBforPostgreSQL/*`, `Microsoft.DBforMySQL/*`,
+`Microsoft.ServiceBus/namespaces`, `Microsoft.Network/azureFirewalls`,
+`Microsoft.StreamAnalytics/streamingjobs`) — available in Commercial and Gov.
+Region defaults follow the subscription
 boundary (`Commercial=eastus2`, `GCC/GCC-High=usgovvirginia`, `IL5=usgovarizona`).
 `fabricCapacity` and Power BI stay plan-only (no emitted bicep) so the default
 path never requires a Fabric/Power BI tenant.
@@ -105,13 +142,19 @@ path never requires a Fabric/Power BI tenant.
 ## Verification
 
 - `pnpm vitest run lib/components/deploy-planner` — catalog/coercion, emitter
-  config emission, edge pruning, plan validation, and the bicep-sync guard.
-- Manual: select a Redis/App Service/Postgres node → set SKU/version → **Export
-  bicepparam** → confirm the `param <name> = <value>` lines appear; connect two
-  nodes → arrow renders + persists through Save; **Validate** flags a dangling
-  edge after deleting a connected service.
+  config emission, edge pruning, plan validation, the bicep-sync guard, and the
+  standalone-`.bicep` module-map integrity + `dependsOn` emission
+  (`planToBicep.test.ts`).
+- Manual: select a Redis/App Service/Postgres/Service Bus/Firewall/Stream
+  Analytics node → set SKU/tier/version → **Export bicep** → on the
+  `.bicepparam` tab confirm the `param <name> = <value>` lines appear, on the
+  `.bicep` tab confirm the `module svc_<key>` + `dependsOn` lines appear;
+  connect two nodes → arrow renders + persists through Save; **Validate** flags a
+  dangling edge after deleting a connected service.
 - `az bicep build -f platform/fiab/bicep/main.bicep` compiles with the new
-  params (defaults preserve `params/commercial-full.bicepparam`).
+  `serviceBusSkuName` / `firewallTier` / `streamAnalyticsStreamingUnits` params
+  (defaults preserve `params/commercial-full.bicepparam`); a representative
+  `planToBicep()` output also compiles `az bicep build`-clean.
 
 ---
 

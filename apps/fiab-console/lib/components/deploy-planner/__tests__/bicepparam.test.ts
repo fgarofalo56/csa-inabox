@@ -284,4 +284,33 @@ describe('bicep drift guard (no-vaporware)', () => {
     const missing = flags.filter((f) => !new RegExp(`param\\s+${f}\\s+bool`).test(mainBicep));
     expect(missing).toEqual([]);
   });
+
+  it('every per-resource config bicepParam is a real param in main.bicep (no SKU drift)', () => {
+    // Each configurable knob must map to a top-level main.bicep param so the
+    // exported bicepparam actually applies the chosen SKU/tier (no-vaporware).
+    const params = SERVICE_CATALOG
+      .flatMap((s) => s.config || [])
+      .map((f) => f.bicepParam);
+    expect(params.length).toBeGreaterThanOrEqual(8);
+    const missing = [...new Set(params)].filter(
+      (p) => !new RegExp(`param\\s+${p}\\s+(string|int)`).test(mainBicep),
+    );
+    expect(missing).toEqual([]);
+  });
+
+  it('newly-configurable services (serviceBus/firewall/streamAnalytics) emit their config param', () => {
+    const sub: PlanSubscription = {
+      id: 'sub-1', name: 'Cfg', boundary: 'Commercial',
+      domains: [{ domainId: 'd', name: 'D', services: ['serviceBus', 'firewall', 'streamAnalytics'] }],
+      serviceConfigs: {
+        serviceBus: { skuName: 'Premium' },
+        firewall: { tier: 'Premium' },
+        streamAnalytics: { streamingUnits: 12 },
+      },
+    };
+    const out = planToBicepparam(sub);
+    expect(out).toContain("param serviceBusSkuName = 'Premium'");
+    expect(out).toContain("param firewallTier = 'Premium'");
+    expect(out).toContain('param streamAnalyticsStreamingUnits = 12'); // int, bare
+  });
 });

@@ -26,7 +26,7 @@ import {
   Dialog, DialogSurface, DialogBody, DialogTitle, DialogContent, DialogActions,
   MessageBar, MessageBarBody, MessageBarTitle, Spinner, Textarea, SpinButton,
   Table, TableHeader, TableRow, TableHeaderCell, TableBody, TableCell, TableCellLayout,
-  Divider, Link,
+  Divider, Link, TabList, Tab,
   makeStyles, tokens,
 } from '@fluentui/react-components';
 import {
@@ -42,6 +42,7 @@ import {
 } from './service-catalog';
 import { iconUrl } from '../ui/item-type-visual';
 import { planToBicepparam } from './bicepparam';
+import { planToBicep } from './planToBicep';
 import { validatePlan, parseServiceNodeId, type PlanIssue } from './plan-validation';
 import {
   pricingCalculatorUrl, serviceDetailsUrl, breakdownToCsv, breakdownToJson, downloadText,
@@ -312,6 +313,7 @@ function PlannerInner() {
     });
   }, []);
   const [exportSub, setExportSub] = useState<PlanSubscription | null>(null);
+  const [exportFmt, setExportFmt] = useState<'bicepparam' | 'bicep'>('bicepparam');
   const [costOpen, setCostOpen] = useState(false);
   const [costSub, setCostSub] = useState<PlanSubscription | null>(null);
   const [costSummary, setCostSummary] = useState<CostSummary | null>(null);
@@ -557,9 +559,10 @@ function PlannerInner() {
           are real Azure but not auto-provisioned by main.bicep yet, so they are not written as bicep params).
           Drop services into domains, <strong>select a service to configure its SKU / tier / runtime</strong>, and
           drag from a service&apos;s right edge to another to record a dependency. Save persists to Cosmos. To
-          deploy, use <strong>Export bicepparam</strong> on a subscription, then run
-          {' '}<code>az deployment sub create -f platform/fiab/bicep/main.bicep -p &lt;file&gt;.bicepparam</code>
-          {' '}or trigger the deploy-fiab workflow. <strong>Estimate cost</strong> prices the selected
+          deploy, use <strong>Export bicep</strong> on a subscription — choose <code>.bicepparam</code> (drives the
+          maintained main.bicep) or a standalone <code>.bicep</code> template (your dependency arrows become module{' '}
+          <code>dependsOn</code>) — then run
+          {' '}<code>az deployment sub create</code>{' '}or trigger the deploy-fiab workflow. <strong>Estimate cost</strong> prices the selected
           subscription against the public Azure Retail Prices API (best-effort list price). Domains come from{' '}
           <a href="/admin/domains">Admin → Domains</a>.
         </MessageBarBody>
@@ -582,8 +585,8 @@ function PlannerInner() {
         <Button icon={<Money20Regular />} disabled={!selectedSub} onClick={() => selectedSub && estimateCost(selectedSub)}>
           Estimate cost
         </Button>
-        <Button icon={<ArrowDownload20Regular />} disabled={!selectedSub} onClick={() => selectedSub && setExportSub(selectedSub)}>
-          Export bicepparam
+        <Button icon={<ArrowDownload20Regular />} disabled={!selectedSub} onClick={() => { if (selectedSub) { setExportFmt('bicepparam'); setExportSub(selectedSub); } }}>
+          Export bicep
         </Button>
         <Button appearance="primary" icon={<Save20Regular />} disabled={!dirty || busy} onClick={save}>
           {busy ? 'Saving…' : dirty ? 'Save plan' : 'Saved'}
@@ -843,20 +846,52 @@ function PlannerInner() {
 
       {/* bicepparam export dialog */}
       <Dialog open={!!exportSub} onOpenChange={(_, d) => { if (!d.open) setExportSub(null); }}>
-        <DialogSurface style={{ maxWidth: 760, width: '90vw' }}>
+        <DialogSurface style={{ maxWidth: 820, width: '92vw' }}>
           <DialogBody>
-            <DialogTitle>bicepparam — {exportSub?.name}</DialogTitle>
+            <DialogTitle>Export — {exportSub?.name}</DialogTitle>
             <DialogContent>
-              <Body1 style={{ display: 'block', marginBottom: 8, color: tokens.colorNeutralForeground3 }}>
-                Save as <code>platform/fiab/bicep/params/{(exportSub?.name || 'plan').toLowerCase().replace(/[^a-z0-9]+/g, '-')}.bicepparam</code> and run
-                {' '}<code>az deployment sub create</code> against it.
-              </Body1>
+              <TabList selectedValue={exportFmt} onTabSelect={(_, d) => setExportFmt(d.value as 'bicepparam' | 'bicep')}>
+                <Tab value="bicepparam">.bicepparam (deploys main.bicep)</Tab>
+                <Tab value="bicep">.bicep (standalone template)</Tab>
+              </TabList>
+              {exportFmt === 'bicepparam' ? (
+                <Body1 style={{ display: 'block', margin: '8px 0', color: tokens.colorNeutralForeground3 }}>
+                  The primary path: a parameter file for the maintained orchestrator. Save as{' '}
+                  <code>platform/fiab/bicep/params/{(exportSub?.name || 'plan').toLowerCase().replace(/[^a-z0-9]+/g, '-')}.bicepparam</code> and run{' '}
+                  <code>az deployment sub create -f platform/fiab/bicep/main.bicep -p &lt;file&gt;.bicepparam</code>.
+                </Body1>
+              ) : (
+                <Body1 style={{ display: 'block', margin: '8px 0', color: tokens.colorNeutralForeground3 }}>
+                  A self-contained subscription-scoped template generated from the graph: every selected service with a
+                  one-button module becomes a real <code>module</code>, and your dependency arrows become module{' '}
+                  <code>dependsOn</code>. Save as{' '}
+                  <code>platform/fiab/bicep/{(exportSub?.name || 'plan').toLowerCase().replace(/[^a-z0-9]+/g, '-')}.architecture.bicep</code>{' '}
+                  (next to main.bicep so the module paths resolve) and run{' '}
+                  <code>az deployment sub create -l &lt;region&gt; -f &lt;file&gt;.architecture.bicep</code>. Role grants are
+                  skipped here — see the header in the generated file.
+                </Body1>
+              )}
               {exportSub && (
-                <Textarea value={planToBicepparam(exportSub)} readOnly textarea={{ style: { fontFamily: 'monospace', fontSize: 12, minHeight: 320 } }} />
+                <Textarea
+                  value={exportFmt === 'bicepparam' ? planToBicepparam(exportSub) : planToBicep(exportSub)}
+                  readOnly
+                  textarea={{ style: { fontFamily: 'monospace', fontSize: 12, minHeight: 340 } }}
+                />
               )}
             </DialogContent>
             <DialogActions>
-              <Button onClick={() => { if (exportSub) navigator.clipboard?.writeText(planToBicepparam(exportSub)); }}>Copy</Button>
+              <Button onClick={() => {
+                if (!exportSub) return;
+                const text = exportFmt === 'bicepparam' ? planToBicepparam(exportSub) : planToBicep(exportSub);
+                navigator.clipboard?.writeText(text);
+              }}>Copy</Button>
+              <Button icon={<ArrowDownload20Regular />} onClick={() => {
+                if (!exportSub) return;
+                const sl = (exportSub.name || 'plan').toLowerCase().replace(/[^a-z0-9]+/g, '-');
+                const text = exportFmt === 'bicepparam' ? planToBicepparam(exportSub) : planToBicep(exportSub);
+                const file = exportFmt === 'bicepparam' ? `${sl}.bicepparam` : `${sl}.architecture.bicep`;
+                downloadText(file, text);
+              }}>Download</Button>
               <Button appearance="primary" onClick={() => setExportSub(null)}>Close</Button>
             </DialogActions>
           </DialogBody>
