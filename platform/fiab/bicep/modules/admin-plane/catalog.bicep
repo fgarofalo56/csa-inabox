@@ -77,9 +77,64 @@ resource purviewAdminRole 'Microsoft.Authorization/roleAssignments@2022-04-01' =
 }
 
 // =====================================================================
-// Apache Atlas on AKS — IL5 only
+// Databricks UC scan credential Key Vault (OPT-IN — PAT alternative)
+//
+// The DEFAULT Databricks Unity Catalog scan path is MI-first: the Purview
+// account's system-assigned managed identity (above) is registered as a
+// Databricks service principal and granted UC SELECT/USE privileges — that path
+// needs NO Key Vault. This Key Vault exists only for operators who prefer the
+// Access-Token (PAT) auth method, where a Databricks personal access token is
+// stored as a Key Vault secret and surfaced to Purview as an Access-Token
+// credential. Per Microsoft Learn the Purview account MSI must be granted access
+// to read the Key Vault secret:
+//   https://learn.microsoft.com/purview/data-map-data-scan-credentials#grant-microsoft-purview-access-to-your-azure-key-vault
+//
+// Provisioned EMPTY (no secret in bicep — secrets never live in templates). The
+// operator/bootstrap adds the PAT secret and creates the Purview Key Vault
+// connection + credential post-deploy via
+// scripts/csa-loom/setup-purview-databricks-scan.sh (PAT mode).
 // =====================================================================
 
+@description('Opt-in: provision a Key Vault for the Databricks UC scan Access-Token (PAT) credential. Leave false to use the MI-first scan path (no Key Vault).')
+param databricksScanKeyVaultEnabled bool = false
+
+@description('Key Vault name for the Databricks UC scan PAT secret (PAT mode only). 3-24 chars, globally unique.')
+@minLength(3)
+@maxLength(24)
+param databricksScanKeyVaultName string = take('kvloomdbx${uniqueString(resourceGroup().id)}', 24)
+
+resource dbxScanKeyVault 'Microsoft.KeyVault/vaults@2023-07-01' = if (purviewEnabled && databricksScanKeyVaultEnabled) {
+  name: databricksScanKeyVaultName
+  location: location
+  tags: complianceTags
+  properties: {
+    sku: { family: 'A', name: 'standard' }
+    tenantId: subscription().tenantId
+    enableRbacAuthorization: true
+    enableSoftDelete: true
+    softDeleteRetentionInDays: 7
+    publicNetworkAccess: 'Disabled'
+    networkAcls: { defaultAction: 'Deny', bypass: 'AzureServices' }
+  }
+}
+
+// Grant the Purview account's system-assigned MI "Key Vault Secrets User" so it
+// can read the Databricks PAT secret when the Access-Token credential resolves.
+resource dbxScanKvSecretsUser 'Microsoft.Authorization/roleAssignments@2022-04-01' = if (purviewEnabled && databricksScanKeyVaultEnabled && !skipRoleGrants) {
+  scope: dbxScanKeyVault
+  name: guid(dbxScanKeyVault.id, purview.id, '4633458b-17de-408a-b874-0445c86b69e6')
+  properties: {
+    roleDefinitionId: subscriptionResourceId(
+      'Microsoft.Authorization/roleDefinitions',
+      '4633458b-17de-408a-b874-0445c86b69e6') // Key Vault Secrets User
+    principalId: purviewEnabled ? purview.identity.principalId : ''
+    principalType: 'ServicePrincipal'
+  }
+}
+
+// =====================================================================
+// Apache Atlas on AKS — IL5 only
+// =====================================================================
 resource atlasNamespace 'Microsoft.ContainerService/managedClusters/namespaces@2025-04-01' = if (atlasOnAksEnabled && !empty(aksClusterId)) {
   // Note: AKS namespace as a top-level ARM resource is preview-only.
   // Production uses Flux/GitOps to apply k8s manifests; this Bicep
@@ -232,4 +287,21 @@ output consolePurviewCollectionAdminGrant string = purviewEnabled && !empty(cons
 // honest gate naming this env var.
 output consolePurviewScanAdminGrant string = purviewEnabled && !empty(consolePrincipalId)
   ? 'Post-deploy: ROLE=data-source-administrator CONSOLE_UAMI_PRINCIPAL=${consolePrincipalId} PURVIEW_ACCOUNT=${purview.name} bash scripts/csa-loom/grant-purview-datamap-role.sh'
+  : ''
+
+// Databricks UC scan credential Key Vault (PAT-mode alternative). '' when the
+// MI-first default path is used (databricksScanKeyVaultEnabled=false).
+output dbxScanKeyVaultName string = purviewEnabled && databricksScanKeyVaultEnabled ? dbxScanKeyVault.name : ''
+output dbxScanKeyVaultUri string = purviewEnabled && databricksScanKeyVaultEnabled ? dbxScanKeyVault.properties.vaultUri : ''
+
+// Post-deploy reminder: enabling the Databricks UC SCAN (catalog metadata) on
+// the catalog-metastores surface. The DEFAULT path is MI-first — register the
+// Purview account's system-assigned managed identity as a Databricks service
+// principal and grant it UC SELECT/USE privileges; no Key Vault is needed. The
+// PAT alternative stores a Databricks personal access token in the Key Vault
+// above and creates a Purview Key Vault connection + Access-Token credential.
+// Both are data-plane operations (NOT ARM), so they run post-deploy via the
+// bootstrap script. Lineage additionally needs system.access enabled in UC.
+output consolePurviewDatabricksScanSetup string = purviewEnabled
+  ? 'Post-deploy (MI-first): PURVIEW_ACCOUNT=${purview.name} PURVIEW_APP_ID=${purview.identity.principalId} bash scripts/csa-loom/setup-purview-databricks-scan.sh  # PAT mode: add MODE=pat KEYVAULT=${databricksScanKeyVaultEnabled ? dbxScanKeyVault.name : '<kv>'}'
   : ''

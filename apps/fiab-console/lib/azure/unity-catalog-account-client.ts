@@ -235,6 +235,13 @@ export async function getWorkspaceMetastoreAssignment(
  *
  * Mirrors the REST body used by scripts/csa-loom/enable-unity-catalog.sh:
  *   {metastore_id, default_catalog_name}
+ *
+ * NOTE: `default_catalog_name` on the assignment is **deprecated** by Databricks
+ * — "Use 'Default Namespace API' to configure the default catalog." We still send
+ * it for back-compat (it remains accepted and is harmless on the idempotent PUT);
+ * setting the workspace default catalog precisely is a follow-up call to the
+ * Default Namespace API (PATCH /workspaces/{wsId}/settings/types/default_namespace_ws).
+ *   https://learn.microsoft.com/azure/databricks/dev-tools/cli/reference/account-metastore-assignments-commands
  */
 export async function assignMetastore(
   workspaceId: string | number,

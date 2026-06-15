@@ -143,6 +143,7 @@ export default function MetastoresPage() {
   const [selectedMetastore, setSelectedMetastore] = useState<string>('');
   const [registerPurview, setRegisterPurview] = useState(false);
   const [runScan, setRunScan] = useState(false);
+  const [scanAuth, setScanAuth] = useState<'managed-identity' | 'access-token'>('managed-identity');
   const [scanHttpPath, setScanHttpPath] = useState('');
   const [scanCredential, setScanCredential] = useState('');
   const [scanIR, setScanIR] = useState('');
@@ -187,8 +188,9 @@ export default function MetastoresPage() {
           registerPurview,
           runScan,
           scan: runScan ? {
+            auth: scanAuth,
             httpPath: scanHttpPath.trim() || undefined,
-            credentialName: scanCredential.trim() || undefined,
+            credentialName: scanAuth === 'access-token' ? (scanCredential.trim() || undefined) : undefined,
             integrationRuntimeName: scanIR.trim() || undefined,
           } : undefined,
         }),
@@ -563,20 +565,45 @@ export default function MetastoresPage() {
                     />
                     {runScan && (
                       <div className={s.scanGrid}>
+                        <Field label="Scan credential" hint="Managed identity is recommended (no Key Vault)">
+                          <Dropdown
+                            value={scanAuth === 'access-token' ? 'Access token (Key Vault PAT)' : 'Managed identity (recommended)'}
+                            selectedOptions={[scanAuth]}
+                            onOptionSelect={(_, d) => setScanAuth((d.optionValue as 'managed-identity' | 'access-token') || 'managed-identity')}
+                          >
+                            <Option value="managed-identity" text="Managed identity (recommended)">
+                              <div className={s.cellStack}>
+                                <strong>Managed identity (recommended)</strong>
+                                <Caption1 className={s.muted}>Uses the Purview account&apos;s system identity — no Key Vault</Caption1>
+                              </div>
+                            </Option>
+                            <Option value="access-token" text="Access token (Key Vault PAT)">
+                              <div className={s.cellStack}>
+                                <strong>Access token (Key Vault PAT)</strong>
+                                <Caption1 className={s.muted}>Databricks PAT stored as a Key-Vault-backed Purview credential</Caption1>
+                              </div>
+                            </Option>
+                          </Dropdown>
+                        </Field>
                         <Field label="SQL Warehouse HTTP path" hint="/sql/1.0/warehouses/…">
                           <Input value={scanHttpPath} onChange={(_, d) => setScanHttpPath(d.value)} placeholder="/sql/1.0/warehouses/abc123" />
                         </Field>
-                        <Field label="Purview credential (Key Vault Access Token)" hint="Name of the PAT credential in Purview">
-                          <Input value={scanCredential} onChange={(_, d) => setScanCredential(d.value)} placeholder="dbx-pat-credential" />
-                        </Field>
+                        {scanAuth === 'access-token' && (
+                          <Field required label="Purview credential (Key Vault Access Token)" hint="Name of the PAT credential in Purview">
+                            <Input value={scanCredential} onChange={(_, d) => setScanCredential(d.value)} placeholder="dbx-pat-credential" />
+                          </Field>
+                        )}
                         <Field label="Integration runtime (optional)" hint="Defaults to the managed Azure IR">
                           <Input value={scanIR} onChange={(_, d) => setScanIR(d.value)} placeholder="AzureAutoResolveIntegrationRuntime" />
                         </Field>
                       </div>
                     )}
                     <Caption1 className={mergeClasses(s.muted, s.captionBlock)}>
-                      Databricks scans require an Access Token stored in Key Vault (managed identity is not supported for
-                      Databricks) plus a running SQL Warehouse. Without scan config, only the source is registered.
+                      Databricks UC scans authenticate with the Purview account&apos;s system-assigned managed identity
+                      (default — register it as a Databricks service principal with UC SELECT/USE privileges via
+                      <code> scripts/csa-loom/setup-purview-databricks-scan.sh</code>) or a Key-Vault Access Token (PAT),
+                      plus a running SQL Warehouse. Table/column lineage additionally needs the <code>system.access</code>
+                      schema enabled in Unity Catalog. Without scan config, only the source is registered.
                     </Caption1>
                   </>
                 )}

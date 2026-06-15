@@ -23,8 +23,11 @@
  *        the UC metastore (account-plane PUT). 403 → honest account-admin gate.
  *     4. If registerPurview + LOOM_PURVIEW_ACCOUNT set → register the workspace
  *        as a Purview "Azure Databricks Unity Catalog" source; optionally define
- *        + trigger a scan (gated honestly when no scan credential/IR supplied —
- *        Databricks scans need a PAT-in-Key-Vault credential, MI is unsupported).
+ *        + trigger a scan. The scan is MI-first: the Purview account's
+ *        system-assigned managed identity is used by default (no Key Vault),
+ *        with a Key-Vault Access-Token (PAT) credential as an alternative. The
+ *        scan gates honestly only when no SQL Warehouse HTTP path is supplied
+ *        (or, for the access-token path, no credential name).
  *   Each external step is best-effort: a failure in one folds an honest gate into
  *   the response rather than failing the whole call (the Cosmos persist already
  *   succeeded). No mocks, no placeholders — real Azure REST or honest gate.
@@ -222,7 +225,7 @@ export async function POST(req: NextRequest) {
   const registerPurview: boolean = !!body.registerPurview;
   const runScan: boolean = !!body.runScan;
   const purviewCollection: string | undefined = body.purviewCollection;
-  const scanCfg = body.scan as { httpPath?: string; credentialName?: string; integrationRuntimeName?: string } | undefined;
+  const scanCfg = body.scan as { httpPath?: string; credentialName?: string; integrationRuntimeName?: string; auth?: 'managed-identity' | 'access-token' } | undefined;
 
   // ---- Step 1: probe the workspace's UC catalogs (no account-admin needed) ----
   // A catalogs 401/403 means the workspace is unreachable for this identity —
@@ -369,34 +372,46 @@ export async function POST(req: NextRequest) {
         registration.purviewRegistered = true;
         const purviewStep: Record<string, unknown> = { ok: true, source: ds };
 
-        // Scan define + trigger — only when the operator supplied the scan
-        // config (HTTP path + Key-Vault Access-Token credential). Otherwise an
-        // honest gate (MI is unsupported for Databricks scans).
+        // Scan define + trigger — MI-first. The Databricks UC scan supports a
+        // system-assigned managed identity (DEFAULT — no Key Vault), an Access
+        // Token stored in Key Vault, or a service principal (per Learn). We pick
+        // managed-identity unless the operator supplied a Key-Vault credential
+        // name. Either way a running SQL Warehouse + its HTTP path is required;
+        // the step gates honestly when the HTTP path is missing.
         if (runScan) {
-          if (!scanCfg?.httpPath || !scanCfg?.credentialName) {
+          const scanAuth: 'managed-identity' | 'access-token' =
+            scanCfg?.auth || (scanCfg?.credentialName ? 'access-token' : 'managed-identity');
+          const missingHttpPath = !scanCfg?.httpPath;
+          const missingCredential = scanAuth === 'access-token' && !scanCfg?.credentialName;
+          if (missingHttpPath || missingCredential) {
             purviewStep.scanGate = {
-              title: 'Scan needs a Databricks credential + SQL Warehouse HTTP path',
+              title: 'Scan needs a SQL Warehouse HTTP path' + (missingCredential ? ' + a Key Vault credential' : ''),
               detail:
-                'Microsoft Purview scans of Azure Databricks Unity Catalog require an Access Token stored in Key Vault ' +
-                '(managed identity is NOT supported for Databricks) plus a running SQL Warehouse and its HTTP path. ' +
-                'Provide a Purview credential name + HTTP path to define and run the scan.',
-              docs: 'https://learn.microsoft.com/purview/register-scan-azure-databricks-unity-catalog#scan',
+                'Microsoft Purview scans of Azure Databricks Unity Catalog need a running SQL Warehouse and its HTTP path. ' +
+                'For auth, the Purview account’s system-assigned managed identity is used by default (no Key Vault) — ' +
+                'register that managed identity as a Databricks service principal (using the Purview Application ID) and grant ' +
+                'it UC SELECT/USE privileges (scripts/csa-loom/setup-purview-databricks-scan.sh). ' +
+                'Alternatively, supply a Purview credential name backed by a Key Vault Access Token (PAT). ' +
+                'Table/column lineage additionally requires the system.access schema enabled in Unity Catalog.',
+              authMethod: scanAuth,
+              docs: 'https://learn.microsoft.com/purview/register-scan-azure-databricks-unity-catalog#authentication-for-a-scan',
             };
           } else {
             const scanName = `${sourceName}-scan`;
             try {
               const scan = await defineDatabricksUnityCatalogScan(sourceName, scanName, {
                 workspaceUrl: `https://${host}`,
-                httpPath: scanCfg.httpPath,
-                credentialName: scanCfg.credentialName,
-                integrationRuntimeName: scanCfg.integrationRuntimeName,
+                httpPath: scanCfg!.httpPath!,
+                auth: scanAuth,
+                credentialName: scanCfg?.credentialName,
+                integrationRuntimeName: scanCfg?.integrationRuntimeName,
                 collectionName: purviewCollection,
               });
               registration.purviewScanName = scanName;
               const run = await triggerScanRun(sourceName, scanName);
               registration.lastScanRunId = run.runId;
               registration.purviewScanned = true;
-              purviewStep.scan = { ok: true, scan, runId: run.runId };
+              purviewStep.scan = { ok: true, scan, runId: run.runId, authMethod: scanAuth };
             } catch (e: any) {
               purviewStep.scan = { ok: false, error: e?.message || String(e) };
             }
