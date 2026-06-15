@@ -72,9 +72,11 @@ param databricksSqlWarehouseEnabled = true
 // Set to your Databricks ACCOUNT id (GUID) to configure Unity Catalog by default
 // (regional metastore + default catalog + Console-UAMI account_admin), so Browse >
 // Unity Catalog shows a real configured catalog. Requires a one-time step making
-// the Console UAMI a Databricks account admin — docs/fiab/catalog/metastores.md.
-// Empty = UC enabled later via the post-deploy bootstrap workflow.
-param databricksAccountId = ''
+// The Console UAMI a Databricks account admin — docs/fiab/catalog/metastores.md.
+// Sourced from the LOOM_DATABRICKS_ACCOUNT_ID env var so a stock `azd up` with it
+// set configures UC with no param-file edit. Unset = UC enabled later via the
+// post-deploy bootstrap workflow (never a hard deploy blocker).
+param databricksAccountId = readEnvironmentVariable('LOOM_DATABRICKS_ACCOUNT_ID', '')
 
 // Security
 param defenderForAIEnabled = true

@@ -74,7 +74,9 @@ param databricksSqlWarehouseEnabled = true
 // Databricks ACCOUNT id (GUID) — configures Unity Catalog by default. GCC uses the
 // same accounts.azuredatabricks.net account plane. Requires the Console UAMI to be
 // a Databricks account admin (one-time) — docs/fiab/catalog/metastores.md.
-param databricksAccountId = ''
+// Sourced from LOOM_DATABRICKS_ACCOUNT_ID so a stock deploy with it set configures
+// UC with no param-file edit. Unset = UC enabled later via the bootstrap workflow.
+param databricksAccountId = readEnvironmentVariable('LOOM_DATABRICKS_ACCOUNT_ID', '')
 
 // Security
 param defenderForAIEnabled = true

@@ -322,6 +322,10 @@ jobs:
         # enablement is never a hard deploy blocker.
         env:
           DATABRICKS_ACCOUNT_ID: ${{ vars.DATABRICKS_ACCOUNT_ID || secrets.DATABRICKS_ACCOUNT_ID }}
+          # OPTIONAL sovereign override. Leave unset for Commercial/GCC (defaults to
+          # accounts.azuredatabricks.net); set to accounts.azuredatabricks.us for
+          # Azure US Government. enable-unity-catalog.sh reads this as its host default.
+          DATABRICKS_ACCOUNT_HOST: ${{ vars.DATABRICKS_ACCOUNT_HOST }}
         run: |
           if [ -z "$DATABRICKS_ACCOUNT_ID" ]; then
             echo "::notice::DATABRICKS_ACCOUNT_ID not set — skipping UC auto-enable."
