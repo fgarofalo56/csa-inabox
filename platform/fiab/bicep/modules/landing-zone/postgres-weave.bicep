@@ -112,6 +112,10 @@ resource pgAdmin 'Microsoft.DBforPostgreSQL/flexibleServers/administrators@2024-
 // AGE prerequisite #1: load the AGE library at server start. Setting
 // shared_preload_libraries triggers an automatic restart — the post-deploy
 // bootstrap polls getServer until state == 'Ready' before CREATE EXTENSION.
+// dependsOn pgAdmin: the Entra-admin write is an AAD control-plane op that fails
+// if the server is mid-restart/updating (AadAuthOperationCannotBePerformedWhenServer
+// IsNotAccessible, hit on the dlz-attach provision). Setting the admin BEFORE this
+// restart-triggering config guarantees the server is Ready when the admin is set.
 resource cfgPreload 'Microsoft.DBforPostgreSQL/flexibleServers/configurations@2024-08-01' = {
   parent: pg
   name: 'shared_preload_libraries'
@@ -119,6 +123,9 @@ resource cfgPreload 'Microsoft.DBforPostgreSQL/flexibleServers/configurations@20
     value: 'AGE'
     source: 'user-override'
   }
+  dependsOn: [
+    pgAdmin
+  ]
 }
 
 // AGE prerequisite #2: allowlist the AGE extension so CREATE EXTENSION succeeds.
