@@ -25,6 +25,46 @@ This file is maintained automatically by
 [Conventional Commits](https://www.conventionalcommits.org/). See
 [RELEASE.md](RELEASE.md) for the release process.
 
+## [0.41.0](https://github.com/fgarofalo56/csa-inabox/compare/csa-inabox-v0.40.0...csa-inabox-v0.41.0) (2026-06-15)
+
+
+### Features
+
+* **catalog-metastores:** MI-first Databricks UC scan (no Key Vault) + opt-in PAT KV bicep ([#1375](https://github.com/fgarofalo56/csa-inabox/issues/1375)) ([e195447](https://github.com/fgarofalo56/csa-inabox/commit/e1954477ccbd0f32833da02e56462f0ca9428329))
+* **deploy-planner:** currency + pricing-region pickers for cost estimate ([#1368](https://github.com/fgarofalo56/csa-inabox/issues/1368)) ([fb7845f](https://github.com/fgarofalo56/csa-inabox/commit/fb7845f42f1c78b7d10e2065df77c7e5d2cb1cc3))
+* **fiab-bicep:** deploy Setup Orchestrator by default + drop duplicate stub (audit-t142) ([#1378](https://github.com/fgarofalo56/csa-inabox/issues/1378)) ([e31c367](https://github.com/fgarofalo56/csa-inabox/commit/e31c367481e8e843878515a1d3f164a8efb920a5))
+* **fiab-console:** admin discovery card for Fabric IQ MCP surface (audit-T86 finish) ([#1379](https://github.com/fgarofalo56/csa-inabox/issues/1379)) ([3ff96a0](https://github.com/fgarofalo56/csa-inabox/commit/3ff96a04548f2c03add5a731614374d5071ef8b0))
+* **fiab-console:** real DLP policy CRUD via SCC PowerShell sidecar (audit-T127) ([#1365](https://github.com/fgarofalo56/csa-inabox/issues/1365)) ([e65c1d7](https://github.com/fgarofalo56/csa-inabox/commit/e65c1d7f53fc5ce21750d28ed9c4b2dca5ab8e4e))
+* **fiab-deploy-planner:** standalone .bicep export (edges→dependsOn) + 3 more config knobs ([#1369](https://github.com/fgarofalo56/csa-inabox/issues/1369)) ([68cf374](https://github.com/fgarofalo56/csa-inabox/commit/68cf374d2951edba0813a643060f7b5e031e392f))
+* **fiab-governance:** GA data-quality monitor API + MDM steward crosswalk ([#1377](https://github.com/fgarofalo56/csa-inabox/issues/1377)) ([042c54d](https://github.com/fgarofalo56/csa-inabox/commit/042c54dcfe3fdb5a583e3cfcd222e629b6f2b10f))
+* **fiab-lineage:** close unified-lineage gaps — column lineage, identity resolution, path bridge (audit-t138) ([#1372](https://github.com/fgarofalo56/csa-inabox/issues/1372)) ([f7f6101](https://github.com/fgarofalo56/csa-inabox/commit/f7f6101a27a22f2c534688ee22df69fc4b7f32a3))
+* **fiab-lineage:** propagate item delete to Purview Atlas entity (offboard) ([#1370](https://github.com/fgarofalo56/csa-inabox/issues/1370)) ([a3c8c77](https://github.com/fgarofalo56/csa-inabox/commit/a3c8c77db9f901535f029e923bd695f165f0d085))
+* **fiab-network:** bind private endpoints to Loom service/domain in topology (ARG) + zone A-records ([#1367](https://github.com/fgarofalo56/csa-inabox/issues/1367)) ([1deb04b](https://github.com/fgarofalo56/csa-inabox/commit/1deb04b113b905a87c837c5ef72cbf7d82415c61))
+* **fiab-rayfin:** page-template wizards + align Rayfin/Atelier decision (audit-T145/T84) ([#1381](https://github.com/fgarofalo56/csa-inabox/issues/1381)) ([f098bba](https://github.com/fgarofalo56/csa-inabox/commit/f098bba47b39411bb4565296f7874f1620d5aa51))
+* **fiab-rti-hub:** namespace create-if-missing + connection pickers + fix Event Grid source binding ([#1371](https://github.com/fgarofalo56/csa-inabox/issues/1371)) ([27a8274](https://github.com/fgarofalo56/csa-inabox/commit/27a82742a7088b58351e53917aaee547b150f9b6))
+
+
+### Bug Fixes
+
+* **fiab-bicep:** actually correct the RBAC Admin GUID var (not just the comment) ([#1358](https://github.com/fgarofalo56/csa-inabox/issues/1358)) ([64e5b16](https://github.com/fgarofalo56/csa-inabox/commit/64e5b164301562c1ef4559171d0d713cd7228872))
+* **fiab-bicep:** correct RBAC Admin GUID + enable Cosmos vector capability (dlz) ([#1357](https://github.com/fgarofalo56/csa-inabox/issues/1357)) ([bca75e6](https://github.com/fgarofalo56/csa-inabox/commit/bca75e6a741319b4295d9febd0ae179e55d49c8d))
+* **fiab-bicep:** forward Databricks account id to Console so UC is configured by default ([#1374](https://github.com/fgarofalo56/csa-inabox/issues/1374)) ([0881fc7](https://github.com/fgarofalo56/csa-inabox/commit/0881fc79cb36f829773b4d465b73baf796ec95f3))
+* **fiab-bicep:** resolve dlz-attach hub coords from hubCoordinates (peering empty vnet) ([#1356](https://github.com/fgarofalo56/csa-inabox/issues/1356)) ([1cd919a](https://github.com/fgarofalo56/csa-inabox/commit/1cd919a7d0b5c66e8e1199348bdea2b7dfbfc252))
+* **fiab-bicep:** set PG Entra admin before restart-triggering config (dlz weave) ([#1359](https://github.com/fgarofalo56/csa-inabox/issues/1359)) ([937815d](https://github.com/fgarofalo56/csa-inabox/commit/937815de5d29efc5fc78bdb3e70acb4fd7764d39))
+* **fiab-bicep:** skip deploy-time ADX DB in dlz-attach (cross-sub nested deploy) ([#1354](https://github.com/fgarofalo56/csa-inabox/issues/1354)) ([56038db](https://github.com/fgarofalo56/csa-inabox/commit/56038db74cc8d52c34ab83eac2d2f5225cb4a102))
+* **fiab-bicep:** vector container needs dedicated (not shared) throughput ([#1360](https://github.com/fgarofalo56/csa-inabox/issues/1360)) ([9db9432](https://github.com/fgarofalo56/csa-inabox/commit/9db9432a2ec82d3c37c2a5ded58d51e360400b4d))
+* **fiab-console:** harden APIM admin panes against "Unexpected token '&lt;'" crash ([#1362](https://github.com/fgarofalo56/csa-inabox/issues/1362)) ([801f384](https://github.com/fgarofalo56/csa-inabox/commit/801f384fdd2029b60b744a83bd95cccb0dc19462))
+* **fiab-dbt:** resolve Databricks dbt profile at runtime via injected DBT_ACCESS_TOKEN ([#1380](https://github.com/fgarofalo56/csa-inabox/issues/1380)) ([623ff9b](https://github.com/fgarofalo56/csa-inabox/commit/623ff9b11ca2d9d7df45998ddbb2bbade09a051f))
+* **fiab-domains:** governance domains store dual-writes to Purview AND Unity Catalog ([#1376](https://github.com/fgarofalo56/csa-inabox/issues/1376)) ([1504589](https://github.com/fgarofalo56/csa-inabox/commit/15045895b24705efc69aa8866fa24724538242d8))
+* **fiab-mip:** render evaluate recommendation as label chip + honest Graph-write doc ([#1363](https://github.com/fgarofalo56/csa-inabox/issues/1363)) ([43e9039](https://github.com/fgarofalo56/csa-inabox/commit/43e9039ab621c23b42719a62a6cb827419684209))
+* **fiab-rti-hub:** make RTI catalog streams usable/testable end-to-end ([#1373](https://github.com/fgarofalo56/csa-inabox/issues/1373)) ([8c4d3d5](https://github.com/fgarofalo56/csa-inabox/commit/8c4d3d5c150c53a0adc57524fa6c657b3ae17342))
+* **fiab:** authorize Console UAMI on Purview by default + correct UC endpoint host ([#1364](https://github.com/fgarofalo56/csa-inabox/issues/1364)) ([b670226](https://github.com/fgarofalo56/csa-inabox/commit/b670226c75eea463f6fa9a632baad5c3b66b79c9))
+
+
+### Tests
+
+* **fiab-console:** repin embed-codes bicep-wiring gate to useSingleDlz (audit-T128) ([#1361](https://github.com/fgarofalo56/csa-inabox/issues/1361)) ([eb1d0e7](https://github.com/fgarofalo56/csa-inabox/commit/eb1d0e7fb83e5ee5970fcfd621e5eee13c2be6c3))
+
 ## [0.40.0](https://github.com/fgarofalo56/csa-inabox/compare/csa-inabox-v0.39.0...csa-inabox-v0.40.0) (2026-06-14)
 
 
