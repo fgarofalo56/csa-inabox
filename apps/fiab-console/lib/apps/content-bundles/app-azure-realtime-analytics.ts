@@ -36,6 +36,58 @@
 import type { AppBundle } from './types';
 
 // ════════════════════════════════════════════════════════════════════════
+//  BACKEND-AWARE SQL DIALECT
+//  Per .claude/rules/no-fabric-dependency.md, Synapse Spark (Hive metastore +
+//  ADLS Delta) is the Azure-native DEFAULT compute for notebooks/lakehouse;
+//  Azure Databricks is opt-in. The Hive metastore has NO catalog concept and
+//  NO in-engine GRANT — so Unity Catalog DDL (`CREATE CATALOG`, `USE CATALOG`,
+//  3-level `catalog.schema.table` names, `GRANT … ON CATALOG/SCHEMA`) parses
+//  ONLY on Databricks. Emitting it on Synapse Spark throws
+//  `[PARSE_SYNTAX_ERROR] … at or near 'CATALOG'` (the live bug this fixes).
+//
+//  We therefore detect the engine the notebook provisioner (notebook.ts) will
+//  actually route to and emit the matching dialect:
+//    • Databricks  → Unity Catalog: catalog `realtime_analytics`, 3-level names.
+//    • Synapse/Hive (DEFAULT) → medallion DATABASES `realtime_{bronze,silver,
+//      gold}`, 2-level names, external Delta tables on the mounted ADLS path,
+//      and Azure-RBAC/Access-Policy grants instead of UC GRANT.
+//
+//  Detection MIRRORS notebook.ts precedence exactly so the dialect can never
+//  mismatch the engine: Synapse is tried first when LOOM_SYNAPSE_WORKSPACE is
+//  set, so Databricks (UC) applies only when it is explicitly selected
+//  (LOOM_NOTEBOOK_BACKEND=databricks) or it is the sole configured engine
+//  (LOOM_DATABRICKS_HOSTNAME set and no Synapse). On the client (where LOOM_*
+//  env is absent) this safely defaults to the Hive dialect — the executable
+//  content that matters is built server-side at install time.
+function sampleNotebookUsesUnityCatalog(): boolean {
+  const env = (typeof process !== 'undefined' && process.env) || ({} as Record<string, string | undefined>);
+  const forced = (env.LOOM_NOTEBOOK_BACKEND || '').toLowerCase();
+  if (forced === 'databricks') return true;
+  if (forced === 'synapse' || forced === 'fabric') return false;
+  // Auto: Databricks only when it is configured AND Synapse is not (Synapse
+  // wins when both are set, matching provisionAzureNative()).
+  return !!env.LOOM_DATABRICKS_HOSTNAME && !env.LOOM_SYNAPSE_WORKSPACE;
+}
+
+const RTA_UC = sampleNotebookUsesUnityCatalog();
+
+/**
+ * Rewrite UC-style 3-level medallion references
+ * (`realtime_analytics.<layer>.<table>`) to the Hive 2-level form
+ * (`realtime_<layer>.<table>`) for the Synapse Spark default. No-op on
+ * Databricks. Only the catalog-qualified medallion names are touched; 2-level
+ * shorthand in prose and unrelated identifiers are left intact.
+ */
+function rta(sql: string): string {
+  return RTA_UC ? sql : sql.replace(/realtime_analytics\.(bronze|silver|gold)\./g, 'realtime_$1.');
+}
+
+/** Apply the medallion dialect rewrite to every notebook cell's `source`. */
+function rtaCells<T extends { source?: string | string[] }>(cells: T[]): T[] {
+  return cells.map((c) => (typeof c.source === 'string' ? { ...c, source: rta(c.source) } : c));
+}
+
+// ════════════════════════════════════════════════════════════════════════
 //  NOTEBOOK CELLS — 01 Unity Catalog + ADLS Bootstrap
 //  (databricks-setup.md: catalog/schemas, cluster, ADLS Gen2 mount)
 // ════════════════════════════════════════════════════════════════════════
@@ -44,52 +96,102 @@ const NB_BOOTSTRAP_CELLS = [
   {
     id: 'boot-md-intro',
     type: 'markdown' as const,
-    source:
-      '# 01 — Unity Catalog + ADLS Bootstrap\n\n' +
-      'Creates the **`realtime_analytics`** Unity Catalog with the medallion ' +
-      '`bronze` / `silver` / `gold` schemas and mounts the ADLS Gen2 data ' +
-      'container the streaming + batch jobs read and write.\n\n' +
-      '| Layer | Schema | Purpose |\n' +
-      '| --- | --- | --- |\n' +
-      '| Bronze | `realtime_analytics.bronze` | Raw ingested events (schema evolution, 90d hot / 2y cold) |\n' +
-      '| Silver | `realtime_analytics.silver` | Validated + enriched events (enforced schema) |\n' +
-      '| Gold | `realtime_analytics.gold` | Business-ready aggregates (star schema, Direct Lake) |\n\n' +
-      'Mirrors `implementation/databricks-setup.md`.',
+    source: RTA_UC
+      ? '# 01 — Unity Catalog + ADLS Bootstrap\n\n' +
+        'Creates the **`realtime_analytics`** Unity Catalog with the medallion ' +
+        '`bronze` / `silver` / `gold` schemas and mounts the ADLS Gen2 data ' +
+        'container the streaming + batch jobs read and write.\n\n' +
+        '| Layer | Schema | Purpose |\n' +
+        '| --- | --- | --- |\n' +
+        '| Bronze | `realtime_analytics.bronze` | Raw ingested events (schema evolution, 90d hot / 2y cold) |\n' +
+        '| Silver | `realtime_analytics.silver` | Validated + enriched events (enforced schema) |\n' +
+        '| Gold | `realtime_analytics.gold` | Business-ready aggregates (star schema, Direct Lake) |\n\n' +
+        'Mirrors `implementation/databricks-setup.md` (Databricks compute).'
+      : '# 01 — Medallion Schemas + ADLS Bootstrap\n\n' +
+        'Creates the medallion **databases** `realtime_bronze` / `realtime_silver` ' +
+        '/ `realtime_gold` in the **Synapse Spark Hive metastore** (the Azure-native ' +
+        'default — no Unity Catalog) and mounts the ADLS Gen2 data container the ' +
+        'streaming + batch jobs read and write. Each medallion layer is a Spark ' +
+        'database (the 2-level `database.table` namespace Hive supports); tables are ' +
+        'external Delta tables stored on the mounted ADLS path.\n\n' +
+        '| Layer | Database | Purpose |\n' +
+        '| --- | --- | --- |\n' +
+        '| Bronze | `realtime_bronze` | Raw ingested events (schema evolution, 90d hot / 2y cold) |\n' +
+        '| Silver | `realtime_silver` | Validated + enriched events (enforced schema) |\n' +
+        '| Gold | `realtime_gold` | Business-ready aggregates (star schema) |\n\n' +
+        'Mirrors `implementation/databricks-setup.md`, adapted to the Synapse Spark ' +
+        'default. (Set `LOOM_NOTEBOOK_BACKEND=databricks` to use Unity Catalog instead.)',
   },
   {
     id: 'boot-code-catalog',
     type: 'code' as const,
     lang: 'sparksql' as const,
-    source:
-      '-- Create the catalog + medallion schemas (Unity Catalog).\n' +
-      'CREATE CATALOG IF NOT EXISTS realtime_analytics;\n' +
-      'USE CATALOG realtime_analytics;\n\n' +
-      'CREATE SCHEMA IF NOT EXISTS realtime_analytics.bronze;\n' +
-      'CREATE SCHEMA IF NOT EXISTS realtime_analytics.silver;\n' +
-      'CREATE SCHEMA IF NOT EXISTS realtime_analytics.gold;\n\n' +
-      '-- Least-privilege grants from the doc.\n' +
-      'GRANT USE CATALOG ON CATALOG realtime_analytics TO `data-engineers`;\n' +
-      'GRANT ALL PRIVILEGES ON SCHEMA realtime_analytics.bronze TO `data-engineers`;\n' +
-      'GRANT USE SCHEMA, SELECT ON SCHEMA realtime_analytics.gold TO `analysts`;',
+    source: RTA_UC
+      ? // Databricks / Unity Catalog: catalog + schemas + UC grants.
+        '-- Create the catalog + medallion schemas (Unity Catalog, Databricks compute).\n' +
+        'CREATE CATALOG IF NOT EXISTS realtime_analytics;\n' +
+        'USE CATALOG realtime_analytics;\n\n' +
+        'CREATE SCHEMA IF NOT EXISTS realtime_analytics.bronze;\n' +
+        'CREATE SCHEMA IF NOT EXISTS realtime_analytics.silver;\n' +
+        'CREATE SCHEMA IF NOT EXISTS realtime_analytics.gold;\n\n' +
+        '-- Least-privilege grants from the doc (Unity Catalog).\n' +
+        'GRANT USE CATALOG ON CATALOG realtime_analytics TO `data-engineers`;\n' +
+        'GRANT ALL PRIVILEGES ON SCHEMA realtime_analytics.bronze TO `data-engineers`;\n' +
+        'GRANT USE SCHEMA, SELECT ON SCHEMA realtime_analytics.gold TO `analysts`;'
+      : // Synapse Spark / Hive metastore (Azure-native DEFAULT): the Hive
+        // metastore has no catalog concept, so each medallion layer is a Spark
+        // DATABASE (CREATE SCHEMA is the Spark-SQL synonym for CREATE DATABASE).
+        // Both forms accept IF NOT EXISTS on Synapse Spark.
+        '-- Create the medallion databases (Synapse Spark / Hive metastore — no\n' +
+        '-- Unity Catalog; a database is the top-level namespace).\n' +
+        'CREATE DATABASE IF NOT EXISTS realtime_bronze;\n' +
+        'CREATE DATABASE IF NOT EXISTS realtime_silver;\n' +
+        'CREATE DATABASE IF NOT EXISTS realtime_gold;\n\n' +
+        '-- Least-privilege access is enforced OUTSIDE the engine on Synapse Spark:\n' +
+        '-- the Hive metastore has no `GRANT … ON CATALOG/SCHEMA`. Grant the\n' +
+        '-- `data-engineers` and `analysts` groups Storage Blob Data Reader /\n' +
+        '-- Contributor on the ADLS Gen2 medallion containers via Azure RBAC, or use\n' +
+        "-- Loom's Access Policy editor (lib/panes/uc-security-panel + the access-\n" +
+        '-- policy wizard). On the Databricks backend these become Unity Catalog\n' +
+        '-- GRANT statements automatically.',
   },
   {
     id: 'boot-code-bronze-ddl',
     type: 'code' as const,
     lang: 'sparksql' as const,
-    source:
-      '-- Bronze raw-events table (README "Quick Start" + data-quality schema).\n' +
-      'CREATE TABLE IF NOT EXISTS realtime_analytics.bronze.events (\n' +
-      '  event_id          STRING,\n' +
-      '  event_timestamp   TIMESTAMP,\n' +
-      '  event_type        STRING,\n' +
-      '  user_id           STRING,\n' +
-      '  amount            DECIMAL(10,2),\n' +
-      '  currency          STRING,\n' +
-      '  product_id        STRING,\n' +
-      '  metadata          MAP<STRING, STRING>,\n' +
-      '  _ingested_at      TIMESTAMP\n' +
-      ') USING DELTA\n' +
-      "TBLPROPERTIES ('delta.enableChangeDataFeed' = 'true');",
+    source: RTA_UC
+      ? // Databricks / Unity Catalog: managed Delta table under the catalog.
+        '-- Bronze raw-events table (README "Quick Start" + data-quality schema).\n' +
+        'CREATE TABLE IF NOT EXISTS realtime_analytics.bronze.events (\n' +
+        '  event_id          STRING,\n' +
+        '  event_timestamp   TIMESTAMP,\n' +
+        '  event_type        STRING,\n' +
+        '  user_id           STRING,\n' +
+        '  amount            DECIMAL(10,2),\n' +
+        '  currency          STRING,\n' +
+        '  product_id        STRING,\n' +
+        '  metadata          MAP<STRING, STRING>,\n' +
+        '  _ingested_at      TIMESTAMP\n' +
+        ') USING DELTA\n' +
+        "TBLPROPERTIES ('delta.enableChangeDataFeed' = 'true');"
+      : // Synapse Spark / Hive: external Delta table on the mounted ADLS path
+        // (the same /mnt/data container the next cell mounts), 2-level name.
+        '-- Bronze raw-events table (README "Quick Start" + data-quality schema).\n' +
+        '-- External Delta table on the mounted ADLS Gen2 path so the data persists\n' +
+        '-- in the lake independent of the Hive metastore entry.\n' +
+        'CREATE TABLE IF NOT EXISTS realtime_bronze.events (\n' +
+        '  event_id          STRING,\n' +
+        '  event_timestamp   TIMESTAMP,\n' +
+        '  event_type        STRING,\n' +
+        '  user_id           STRING,\n' +
+        '  amount            DECIMAL(10,2),\n' +
+        '  currency          STRING,\n' +
+        '  product_id        STRING,\n' +
+        '  metadata          MAP<STRING, STRING>,\n' +
+        '  _ingested_at      TIMESTAMP\n' +
+        ') USING DELTA\n' +
+        "LOCATION '/mnt/data/bronze/events'\n" +
+        "TBLPROPERTIES ('delta.enableChangeDataFeed' = 'true');",
   },
   {
     id: 'boot-code-mount',
@@ -516,7 +618,7 @@ const TILE_ERROR_PIE =
 
 const bundle: AppBundle = {
   appId: 'app-azure-realtime-analytics',
-  intro:
+  intro: rta(
     '## Azure Real-Time Analytics — Kafka/Event Hubs → Databricks → Delta → Power BI\n\n' +
     'The full enterprise real-time analytics reference architecture, ' +
     'materialized as a Loom workspace (target SLA: **1.2M events/sec, ' +
@@ -539,7 +641,7 @@ const bundle: AppBundle = {
     'The lakehouse, four notebooks, warehouse, KQL ops database, batch ' +
     'pipeline, semantic model, and Activator rule are all provisioned + ' +
     'seeded against live Azure/Fabric backends at install time (or surface a ' +
-    'precise remediation gate naming the env var / role to set).',
+    'precise remediation gate naming the env var / role to set).'),
   sourceDocs: [
     'docs/learn/08-solutions/azure-realtime-analytics/README.md',
     'docs/learn/08-solutions/azure-realtime-analytics/architecture/components.md',
@@ -577,7 +679,7 @@ const bundle: AppBundle = {
         deltaTables: [
           {
             name: 'bronze_events',
-            ddl:
+            ddl: rta(
               'CREATE TABLE realtime_analytics.bronze.events (\n' +
               '  event_id          STRING,\n' +
               '  event_timestamp   TIMESTAMP,\n' +
@@ -588,7 +690,7 @@ const bundle: AppBundle = {
               '  product_id        STRING,\n' +
               '  metadata          MAP<STRING,STRING>,\n' +
               '  _ingested_at      TIMESTAMP\n' +
-              ") USING DELTA TBLPROPERTIES ('delta.enableChangeDataFeed' = 'true')",
+              ") USING DELTA TBLPROPERTIES ('delta.enableChangeDataFeed' = 'true')"),
             sampleRows: [
               ['evt-100001', '2026-05-31T14:00:01Z', 'view',     'user-0001', null,    'USD', 'prod-A1', null, '2026-05-31T14:00:02Z'],
               ['evt-100002', '2026-05-31T14:00:03Z', 'click',    'user-0001', null,    'USD', 'prod-A1', null, '2026-05-31T14:00:04Z'],
@@ -604,7 +706,7 @@ const bundle: AppBundle = {
           },
           {
             name: 'silver_validated_events',
-            ddl:
+            ddl: rta(
               'CREATE TABLE realtime_analytics.silver.validated_events (\n' +
               '  event_id                STRING,\n' +
               '  event_timestamp         TIMESTAMP,\n' +
@@ -614,7 +716,7 @@ const bundle: AppBundle = {
               '  currency                STRING,\n' +
               '  product_id              STRING,\n' +
               '  quality_check_timestamp TIMESTAMP\n' +
-              ') USING DELTA',
+              ') USING DELTA'),
             sampleRows: [
               ['evt-100001', '2026-05-31T14:00:01Z', 'view',     'user-0001', null,   'USD', 'prod-A1', '2026-05-31T14:00:05Z'],
               ['evt-100003', '2026-05-31T14:00:09Z', 'purchase', 'user-0001', 42.50,  'USD', 'prod-A1', '2026-05-31T14:00:11Z'],
@@ -624,14 +726,14 @@ const bundle: AppBundle = {
           },
           {
             name: 'gold_customer_daily_metrics',
-            ddl:
+            ddl: rta(
               'CREATE TABLE realtime_analytics.gold.customer_daily_metrics (\n' +
               '  user_id          STRING,\n' +
               '  metric_date      DATE,\n' +
               '  event_count      BIGINT,\n' +
               '  total_revenue    DECIMAL(18,2),\n' +
               '  unique_products  BIGINT\n' +
-              ') USING DELTA PARTITIONED BY (metric_date)',
+              ') USING DELTA PARTITIONED BY (metric_date)'),
             sampleRows: [
               ['user-0001', '2026-05-31', 3, 42.50,  1],
               ['user-0002', '2026-05-31', 2, 220.00, 1],
@@ -640,13 +742,13 @@ const bundle: AppBundle = {
           },
           {
             name: 'gold_dim_product',
-            ddl:
+            ddl: rta(
               'CREATE TABLE realtime_analytics.gold.dim_product (\n' +
               '  product_id    STRING,\n' +
               '  product_name  STRING,\n' +
               '  category      STRING,\n' +
               '  list_price    DECIMAL(10,2)\n' +
-              ') USING DELTA',
+              ') USING DELTA'),
             sampleRows: [
               ['prod-A1', 'Wireless Earbuds',   'electronics', 42.50],
               ['prod-B2', 'Standing Desk',      'home',        220.00],
@@ -671,11 +773,15 @@ const bundle: AppBundle = {
     // ─── Notebook 01: Unity Catalog + ADLS Bootstrap ──────────────────────
     {
       itemType: 'notebook',
-      displayName: '01 — Unity Catalog + ADLS Bootstrap',
-      description:
-        'Creates the realtime_analytics catalog with bronze/silver/gold ' +
-        'schemas, the bronze.events Delta table, and mounts the ADLS Gen2 ' +
-        'data container. (databricks-setup.md.)',
+      displayName: RTA_UC ? '01 — Unity Catalog + ADLS Bootstrap' : '01 — Medallion Schemas + ADLS Bootstrap',
+      description: RTA_UC
+        ? 'Creates the realtime_analytics Unity Catalog with bronze/silver/gold ' +
+          'schemas, the bronze.events Delta table, and mounts the ADLS Gen2 ' +
+          'data container. (databricks-setup.md.)'
+        : 'Creates the realtime_bronze/silver/gold medallion databases in the ' +
+          'Synapse Spark Hive metastore, the bronze events external Delta table, ' +
+          'and mounts the ADLS Gen2 data container. (databricks-setup.md, ' +
+          'Azure-native default.)',
       learnDoc: 'azure-realtime-analytics',
       content: { kind: 'notebook', defaultLang: 'pyspark', cells: NB_BOOTSTRAP_CELLS },
     },
@@ -690,7 +796,7 @@ const bundle: AppBundle = {
         'and quarantines the rest with a 30 s micro-batch + checkpoint. ' +
         '(stream-processing.md + data-quality.md.)',
       learnDoc: 'azure-realtime-analytics',
-      content: { kind: 'notebook', defaultLang: 'pyspark', cells: NB_STREAM_CELLS },
+      content: { kind: 'notebook', defaultLang: 'pyspark', cells: rtaCells(NB_STREAM_CELLS) },
     },
 
     // ─── Notebook 03: Batch Gold Aggregation + Optimize ───────────────────
@@ -702,7 +808,7 @@ const bundle: AppBundle = {
         'customer_daily_metrics star fact, followed by OPTIMIZE ZORDER + ' +
         'VACUUM + ANALYZE. (batch-processing.md.)',
       learnDoc: 'azure-realtime-analytics',
-      content: { kind: 'notebook', defaultLang: 'pyspark', cells: NB_BATCH_CELLS },
+      content: { kind: 'notebook', defaultLang: 'pyspark', cells: rtaCells(NB_BATCH_CELLS) },
     },
 
     // ─── Notebook 04: Azure OpenAI NL->SQL + Insights ─────────────────────
@@ -714,7 +820,7 @@ const bundle: AppBundle = {
         'layer for natural-language→SQL, automated insight generation, and ' +
         'anomaly explanation. (azure-openai.md.)',
       learnDoc: 'azure-realtime-analytics',
-      content: { kind: 'notebook', defaultLang: 'pyspark', cells: NB_OPENAI_CELLS },
+      content: { kind: 'notebook', defaultLang: 'pyspark', cells: rtaCells(NB_OPENAI_CELLS) },
     },
 
     // ─── Warehouse: data-quality + streaming metrics (seeded) ─────────────
@@ -982,7 +1088,7 @@ const bundle: AppBundle = {
             config: {
               notebookPath: '/Shared/RealTimeAnalytics/04_optimize_gold',
               baseParameters: {
-                target_table: 'realtime_analytics.gold.customer_daily_metrics',
+                target_table: rta('realtime_analytics.gold.customer_daily_metrics'),
                 zorder_by: 'metric_date,user_id',
                 vacuum_retain_hours: '168',
               },
