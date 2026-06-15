@@ -997,7 +997,7 @@ param loomPipelineBackend string = 'synapse'
 @allowed(['adf-cdc', 'synapse-link', 'fabric'])
 param loomMirrorBackend string = 'adf-cdc'
 
-@description('Azure-native backend selectors for Fabric-flavored items, bundled into one object to stay under the ARM 256-parameter template limit. Each key defaults to the Azure-native path; set a value to "fabric"/"powerbi" to opt into the Fabric/Power BI alternative for that item (per no-fabric-dependency rule).')
+@description('Azure-native backend selectors for Fabric-flavored items, bundled into one object to stay under the ARM 256-parameter template limit. Each key defaults to the Azure-native path; set a value to "fabric"/"powerbi" to opt into the Fabric/Power BI alternative for that item (per no-fabric-dependency rule). The orgVisuals key is an opt-out toggle (default "enabled") for the Embed codes (F22) + Organizational visuals (F23) container grant + LOOM_ORG_VISUALS_URL env — set "disabled" to honest-gate those panes while keeping the medallion lake wired.')
 param loomBackends object = {
   event: 'eventhubs'
   activator: 'azure-monitor'
@@ -1009,6 +1009,7 @@ param loomBackends object = {
   domains: 'cosmos'
   dataflow: 'adf'
   dataproducts: ''
+  orgVisuals: 'enabled'
 }
 
 
@@ -1702,7 +1703,7 @@ module azureConnectionsLawRbac 'azure-connections-rbac.bicep' = if (!skipRoleGra
 // for the embed-code SAS). Scoped to the DLZ RG (the lake account usually lives
 // outside the admin RG). Skipped (honest gate in the panes) when loomStorageAccount
 // is unset. No Fabric/Power BI dependency.
-module orgVisualsRbac '../landing-zone/org-visuals-rbac.bicep' = if (!skipRoleGrants && !empty(loomStorageAccount)) {
+module orgVisualsRbac '../landing-zone/org-visuals-rbac.bicep' = if (!skipRoleGrants && !empty(loomStorageAccount) && (loomBackends.?orgVisuals ?? 'enabled') != 'disabled') {
   name: 'org-visuals-rbac'
   scope: resourceGroup(loomDlzRg)
   params: {
@@ -2580,10 +2581,10 @@ module appDeployments 'app-deployments.bicep' = if (containerPlatform == 'contai
             // endpoint (block-blob + SAS), unlike the .dfs lake URLs above. The
             // container is created in landing-zone/storage.bicep; the Console
             // UAMI is granted Storage Blob Data Contributor (container) + Storage
-            // Blob Delegator (account) by org-visuals-rbac.bicep. Only emitted
-            // when an ADLS account is configured; otherwise the panes show their
-            // honest gate. No Fabric/Power BI dependency.
-            { name: 'LOOM_ORG_VISUALS_URL', value: 'https://${loomStorageAccount}.blob.${environment().suffixes.storage}/org-visuals' }
+            // Blob Delegator (account) by org-visuals-rbac.bicep. Emitted in the
+            // separately-gated array below (loomOrgVisualsEnabled opt-out) so a
+            // deploy can disable Embed codes / Org visuals while keeping the
+            // medallion lake URLs. No Fabric/Power BI dependency.
             // LOOM_RECYCLE_RETENTION_DAYS — OneLake Recycle bin restore window.
             // Mirrors the storage account's blob soft-delete deleteRetentionPolicy
             // (landing-zone/storage.bicep recycleRetentionDays) so the recycle-bin
@@ -2597,6 +2598,17 @@ module appDeployments 'app-deployments.bicep' = if (containerPlatform == 'contai
             // otherwise. Requires the ADF factory MSI to hold Storage Blob Data
             // Contributor (granted in landing-zone/adf.bicep).
             { name: 'LOOM_SAMPLE_ADLS', value: loomStorageAccount }
+          ] : [],
+          // LOOM_ORG_VISUALS_URL backs Embed codes (F22) + Organizational
+          // visuals (F23). Gated independently of the medallion lake URLs by
+          // loomOrgVisualsEnabled (opt-out, default true): a deploy can disable
+          // the embed-code SAS surface while keeping the lakehouse wired. Uses
+          // the .blob endpoint (block-blob + SAS) over the org-visuals container
+          // created in landing-zone/storage.bicep; the Console UAMI is granted
+          // Storage Blob Data Contributor (container) + Storage Blob Delegator
+          // (account) by org-visuals-rbac.bicep. Unset → the panes honest-gate.
+          (!empty(loomStorageAccount) && (loomBackends.?orgVisuals ?? 'enabled') != 'disabled') ? [
+            { name: 'LOOM_ORG_VISUALS_URL', value: 'https://${loomStorageAccount}.blob.${environment().suffixes.storage}/org-visuals' }
           ] : [],
           // ----------------------------------------------------------------
           // Unified Catalog federation + admin-security env wiring.

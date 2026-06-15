@@ -76,6 +76,20 @@ interface SetupConfig {
   existingCosmosAccount?: string;
   existingCosmosRg?: string;
   existingCosmosSub?: string;
+  /**
+   * Org-visuals (Embed codes F22 + Organizational visuals F23) opt-out. Default
+   * true → the org-visuals container grant + LOOM_ORG_VISUALS_URL env are wired.
+   * false → those panes honest-gate (medallion lake unaffected). Threaded into
+   * main.bicep's loomOrgVisualsEnabled param.
+   */
+  loomOrgVisualsEnabled?: boolean;
+  /**
+   * Storage scan "use-existing" choice: a pre-existing HNS (Data Lake) account
+   * the deploy should reuse instead of provisioning a new one. The post-deploy
+   * bootstrap / patch-navigator-env.sh wire LOOM_ORG_VISUALS_URL + medallion URLs
+   * from it (EXISTING_LOOM_STORAGE_ACCOUNT). Empty = provision new.
+   */
+  existingLoomStorageAccount?: string;
   /** Multi-sub: parallel arrays the bicep `[for]` loop consumes. */
   dlzSubscriptionIds?: string[];
   dlzDomainNames?: string[];
@@ -459,6 +473,11 @@ export async function POST(req: NextRequest) {
           (k) => `  -p ${k}='${String((hubTopology as any)[k])}' \\`,
         )
       : [];
+  // Org-visuals opt-out — only emit the param when explicitly disabled (default
+  // true in bicep, so the happy path stays clean). The medallion lake is always
+  // provisioned; this only governs the Embed codes / Org visuals grant + env.
+  const orgVisualsParamLines =
+    body.loomOrgVisualsEnabled === false ? ['  -p loomOrgVisualsEnabled=false \\'] : [];
   const commands =
     topology === 'dlz-attach'
       ? [
@@ -478,6 +497,7 @@ export async function POST(req: NextRequest) {
           `  -p ${paramFile} \\`,
           `  -p topology=dlz-attach targetSubscriptionId=${body.targetSubscriptionId} attachDomainName=${body.domainName} \\`,
           `  -p boundary=${body.boundary} capacitySku=${body.capacitySku} \\`,
+          ...orgVisualsParamLines,
           ...hubParamLines,
           `  # hubPrivateDnsZoneIds is an object — pass it from the tenant-topology doc`,
         ]
@@ -492,6 +512,7 @@ export async function POST(req: NextRequest) {
           `  -p ${paramFile} \\`,
           `  -p topology=tenant boundary=${body.boundary} deploymentMode=${body.mode} \\`,
           ...(consoleCosmosParam ? [consoleCosmosParam] : []),
+          ...orgVisualsParamLines,
           dlzParamLine,
           `bash scripts/csa-loom/post-deploy-bootstrap.sh`,
         ];
