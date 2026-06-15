@@ -181,7 +181,9 @@ resource vectorDb 'Microsoft.DocumentDB/databaseAccounts/sqlDatabases@2024-12-01
   name: 'loom-vectors'
   properties: {
     resource: { id: 'loom-vectors' }
-    options: { autoscaleSettings: { maxThroughput: 4000 } }
+    // NO database-level (shared) throughput: vector indexing is "not supported for
+    // shared throughput offer" (hit on the dlz-attach provision). Throughput is set
+    // per-container (dedicated) on docs-vec below instead.
   }
 }
 
@@ -212,6 +214,9 @@ resource defaultVectorContainer 'Microsoft.DocumentDB/databaseAccounts/sqlDataba
         }]
       }
     }
+    // Dedicated (container-level) throughput — required because the database has
+    // no shared throughput and vector indexing needs a dedicated offer.
+    options: { autoscaleSettings: { maxThroughput: 4000 } }
   }
 }
 
