@@ -17,15 +17,21 @@
  *   POST https://graph.microsoft.com/beta/security/informationProtection/sensitivityLabels/evaluateApplication
  *
  * NOTE on label POLICIES and label CRUD: Microsoft Graph exposes NO app-only
- * (UAMI) surface to read tenant label policies, nor any surface to
- * create/edit/delete sensitivity-label definitions or policies. The previous
- * implementation called `GET /beta/security/informationProtection/policy/labels`
- * — that path does NOT exist app-only and returned HTTP 400. Label/policy
- * management lives only in Security & Compliance PowerShell (New-Label /
- * Set-Label / Remove-Label, New-LabelPolicy / Set-LabelPolicy /
- * Remove-LabelPolicy). Those flows are handled by the SCC PowerShell sidecar —
- * see `scc-labels-client.ts`. This client now owns only the Graph-backed READ
- * of label definitions plus the evaluate (recommendation) call.
+ * (UAMI) surface to read or manage tenant label *policies* at all, and only a
+ * thin, low-fidelity create surface for label *definitions* — under the
+ * separate `/beta/security/dataSecurityAndGovernance/sensitivityLabels`
+ * navigation property (New-MgBetaSecurityDataSecurityAndGovernanceSensitivityLabel).
+ * That Graph create path cannot publish a label policy, cannot scope a label
+ * to workloads, and does not expose the full color/encryption/marking fidelity
+ * the admin surface needs, so Loom does NOT use it. The previous implementation
+ * called `GET /beta/security/informationProtection/policy/labels` — that path
+ * does NOT exist app-only and returned HTTP 400. Full label + policy lifecycle
+ * lives in Security & Compliance PowerShell (New-Label / Set-Label /
+ * Remove-Label, New-LabelPolicy / Set-LabelPolicy / Remove-LabelPolicy). Those
+ * flows are handled by the SCC PowerShell sidecar — see `scc-labels-client.ts`.
+ * This client owns only the Graph-backed READ of label definitions (under
+ * `informationProtection/sensitivityLabels`) plus the evaluate (recommendation)
+ * call.
  *
  * App permissions (admin-consent required, granted in post-deploy bootstrap):
  *   - InformationProtectionPolicy.Read.All  (19da66cb-0fb0-4390-b071-ebc76a349482)

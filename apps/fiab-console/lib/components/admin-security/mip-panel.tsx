@@ -33,17 +33,19 @@ import {
 } from '@fluentui/react-components';
 import {
   ArrowSync24Regular, Add24Regular, Edit20Regular, Delete20Regular, Tag24Regular,
+  Search16Regular,
 } from '@fluentui/react-icons';
 import { NotConfiguredBar, type NotConfiguredHint } from './not-configured-bar';
 
 const useStyles = makeStyles({
   subTabs: { marginBottom: 12 },
   section: {
-    padding: 12, borderRadius: 8,
+    padding: 16, borderRadius: 8,
     border: `1px solid ${tokens.colorNeutralStroke2}`,
     backgroundColor: tokens.colorNeutralBackground1,
   },
-  toolbar: { display: 'flex', gap: 8, marginBottom: 8, alignItems: 'center' },
+  toolbar: { display: 'flex', gap: 8, marginBottom: 12, alignItems: 'center', flexWrap: 'wrap' },
+  filterInput: { minWidth: 200 },
   fieldStack: { display: 'flex', flexDirection: 'column', gap: 10, maxWidth: 720 },
   rowActions: { display: 'flex', gap: 4 },
   labelChecklist: {
@@ -55,6 +57,10 @@ const useStyles = makeStyles({
     display: 'inline-block', width: '12px', height: '12px', borderRadius: '2px',
     marginRight: '6px', verticalAlign: 'middle', backgroundColor: '#888',
   },
+  swatchLg: {
+    display: 'inline-block', width: '14px', height: '14px', borderRadius: '3px',
+    marginRight: '6px', verticalAlign: 'middle', backgroundColor: '#888',
+  },
   scopeBlock: {
     display: 'flex', flexDirection: 'column', gap: 8,
     border: `1px solid ${tokens.colorNeutralStroke2}`, borderRadius: 6,
@@ -62,6 +68,46 @@ const useStyles = makeStyles({
   },
   scopeGrid: { display: 'flex', flexDirection: 'column', gap: 8 },
   scopeTags: { display: 'flex', flexWrap: 'wrap', gap: 4 },
+  // shared layout helpers (replace scattered inline styles for theme consistency)
+  spread: { marginRight: 'auto' },
+  mbSpace: { marginBottom: 8 },
+  gateWrap: { marginBottom: 8 },
+  muted: { color: tokens.colorNeutralForeground3 },
+  labelDesc: { color: tokens.colorNeutralForeground3, marginTop: 2 },
+  cellMuted: { color: tokens.colorNeutralForeground3 },
+  badgeSpace: { marginRight: 4 },
+  emptyHint: { color: tokens.colorNeutralForeground3 },
+  notPublished: { color: tokens.colorPaletteRedForeground1 },
+  consentHint: { marginTop: 6 },
+  // Apply-label tab
+  applyTitle: { marginBottom: 4 },
+  applyIntro: { color: tokens.colorNeutralForeground3, marginBottom: 12 },
+  currentLabel: { marginLeft: 10, color: tokens.colorNeutralForeground3 },
+  evalDivider: {
+    marginTop: 18, borderTop: `1px solid ${tokens.colorNeutralStroke2}`, paddingTop: 16,
+  },
+  evalHelp: { color: tokens.colorNeutralForeground3, marginBottom: 8 },
+  evalErr: { marginTop: 10 },
+  recCard: {
+    marginTop: 10, padding: 12, borderRadius: 6,
+    border: `1px solid ${tokens.colorNeutralStroke2}`,
+    backgroundColor: tokens.colorNeutralBackground2,
+  },
+  recLabel: { color: tokens.colorNeutralForeground3, marginBottom: 6 },
+  recRow: { display: 'flex', alignItems: 'center', flexWrap: 'wrap', gap: 8 },
+  recMarkings: { marginTop: 8 },
+  recMarkingsLabel: { color: tokens.colorNeutralForeground3, marginBottom: 4 },
+  recMarkingTags: { display: 'flex', flexWrap: 'wrap', gap: 4 },
+  rawDetails: { marginTop: 8 },
+  rawSummary: { cursor: 'pointer', fontSize: '11px', color: tokens.colorNeutralForeground3 },
+  rawPre: {
+    marginTop: 6, fontSize: '11px', backgroundColor: tokens.colorNeutralBackground1,
+    padding: 8, borderRadius: 4, overflow: 'auto', maxHeight: 240,
+  },
+  rawPreBare: {
+    marginTop: 10, fontSize: '11px', backgroundColor: tokens.colorNeutralBackground2,
+    padding: 8, borderRadius: 4, overflow: 'auto', maxHeight: 240,
+  },
 });
 
 const LABEL_COLORS = [
@@ -171,6 +217,17 @@ function LabelsSection({ state, onRefresh }: { state: ApiState<LabelsPayload>; o
   const [busy, setBusy] = useState(false);
   const [opError, setOpError] = useState<string | null>(null);
   const [opOk, setOpOk] = useState<string | null>(null);
+  const [filter, setFilter] = useState('');
+
+  const allLabels = state.data?.labels || [];
+  const visibleLabels = useMemo(() => {
+    const q = filter.trim().toLowerCase();
+    if (!q) return allLabels;
+    return allLabels.filter((l) =>
+      [l.displayName, l.name, l.tooltip, l.description, l.parentId]
+        .some((v) => (v || '').toLowerCase().includes(q)),
+    );
+  }, [allLabels, filter]);
 
   const doDelete = async () => {
     if (!confirmDelete) return;
@@ -187,7 +244,18 @@ function LabelsSection({ state, onRefresh }: { state: ApiState<LabelsPayload>; o
   return (
     <div className={s.section}>
       <div className={s.toolbar}>
-        <Subtitle2 style={{ marginRight: 'auto' }}>Tenant sensitivity labels</Subtitle2>
+        <Subtitle2 className={s.spread}>Tenant sensitivity labels</Subtitle2>
+        {allLabels.length > 0 && (
+          <Input
+            className={s.filterInput}
+            size="small"
+            value={filter}
+            placeholder="Filter labels…"
+            contentBefore={<Search16Regular />}
+            onChange={(_: unknown, d: any) => setFilter(d.value)}
+            aria-label="Filter sensitivity labels"
+          />
+        )}
         <Button icon={<Add24Regular />} appearance="primary" onClick={() => { setOpError(null); setOpOk(null); setDialog({ kind: 'create' }); }}>
           New label
         </Button>
@@ -195,13 +263,13 @@ function LabelsSection({ state, onRefresh }: { state: ApiState<LabelsPayload>; o
       </div>
 
       {adminGate && (
-        <div style={{ marginBottom: 8 }}>
+        <div className={s.gateWrap}>
           <NotConfiguredBar surface="Sensitivity-label management (create / edit / delete)" hint={adminGate}
             portalLink={ADMIN_PORTAL} portalLabel="Open Information Protection (Microsoft Purview)" />
         </div>
       )}
-      {opOk && <MessageBar intent="success" style={{ marginBottom: 8 }}><MessageBarBody>{opOk}</MessageBarBody></MessageBar>}
-      {opError && <MessageBar intent="error" style={{ marginBottom: 8 }}><MessageBarBody>{opError}</MessageBarBody></MessageBar>}
+      {opOk && <MessageBar intent="success" className={s.mbSpace}><MessageBarBody>{opOk}</MessageBarBody></MessageBar>}
+      {opError && <MessageBar intent="error" className={s.mbSpace}><MessageBarBody>{opError}</MessageBarBody></MessageBar>}
 
       {state.loading && <Spinner label="Loading labels from Microsoft Graph…" />}
       {state.notConfigured && (
@@ -214,19 +282,24 @@ function LabelsSection({ state, onRefresh }: { state: ApiState<LabelsPayload>; o
             <MessageBarTitle>Could not load labels (HTTP {state.errorStatus})</MessageBarTitle>
             {state.error}
             {state.errorStatus === 403 && (
-              <Caption1 block style={{ marginTop: 6 }}>
+              <Caption1 block className={s.consentHint}>
                 403 from Microsoft Graph typically means the <code>InformationProtectionPolicy.Read.All</code> AppRole has not been admin-consented for the Console UAMI. Run the post-deploy bootstrap job <code>Grant MIP+DLP Graph AppRoles</code> then have a Tenant Administrator click <em>Grant admin consent</em>.
               </Caption1>
             )}
           </MessageBarBody>
         </MessageBar>
       )}
-      {state.data?.ok && (state.data.labels || []).length === 0 && !state.notConfigured && (
-        <Caption1 block style={{ color: tokens.colorNeutralForeground3 }}>
+      {state.data?.ok && allLabels.length === 0 && !state.notConfigured && (
+        <Caption1 block className={s.emptyHint}>
           No sensitivity labels found in this tenant. Use <strong>New label</strong> to create one.
         </Caption1>
       )}
-      {state.data?.ok && (state.data.labels || []).length > 0 && (
+      {state.data?.ok && allLabels.length > 0 && visibleLabels.length === 0 && (
+        <Caption1 block className={s.emptyHint}>
+          No labels match &ldquo;{filter}&rdquo;.
+        </Caption1>
+      )}
+      {state.data?.ok && visibleLabels.length > 0 && (
         <Table size="small" aria-label="Sensitivity labels">
           <TableHeader>
             <TableRow>
@@ -239,13 +312,13 @@ function LabelsSection({ state, onRefresh }: { state: ApiState<LabelsPayload>; o
             </TableRow>
           </TableHeader>
           <TableBody>
-            {state.data.labels!.map((l) => (
+            {visibleLabels.map((l) => (
               <TableRow key={l.id}>
                 <TableCell>
                   <span className={s.swatch} style={{ backgroundColor: l.color || '#888' }} />
                   <strong>{l.displayName || l.name}</strong>
                   {(l.tooltip || l.description) && (
-                    <Caption1 block style={{ color: tokens.colorNeutralForeground3 }}>{(l.tooltip || l.description || '').slice(0, 90)}</Caption1>
+                    <Caption1 block className={s.labelDesc}>{(l.tooltip || l.description || '').slice(0, 90)}</Caption1>
                   )}
                 </TableCell>
                 <TableCell>{l.sensitivity ?? '—'}</TableCell>
@@ -451,6 +524,7 @@ function PoliciesSection({ labelsState }: { labelsState: ApiState<LabelsPayload>
   const [busy, setBusy] = useState(false);
   const [opError, setOpError] = useState<string | null>(null);
   const [opOk, setOpOk] = useState<string | null>(null);
+  const [filter, setFilter] = useState('');
 
   const load = useCallback(async () => {
     setState({ loading: true, data: null });
@@ -463,6 +537,17 @@ function PoliciesSection({ labelsState }: { labelsState: ApiState<LabelsPayload>
     if (!id) return undefined;
     return labelsState.data?.labels?.find((l) => l.id === id)?.displayName;
   };
+
+  const allPolicies = state.data?.policies || [];
+  const visiblePolicies = useMemo(() => {
+    const q = filter.trim().toLowerCase();
+    if (!q) return allPolicies;
+    return allPolicies.filter((p) =>
+      [p.displayName, p.name, p.description].some((v) => (v || '').toLowerCase().includes(q)) ||
+      (p.labels || []).some((id) => (lookupLabel(id) || id).toLowerCase().includes(q)),
+    );
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [allPolicies, filter, labelsState.data]);
 
   const doDelete = async () => {
     if (!confirmDelete) return;
@@ -478,15 +563,26 @@ function PoliciesSection({ labelsState }: { labelsState: ApiState<LabelsPayload>
   return (
     <div className={s.section}>
       <div className={s.toolbar}>
-        <Subtitle2 style={{ marginRight: 'auto' }}>Label policies</Subtitle2>
+        <Subtitle2 className={s.spread}>Label policies</Subtitle2>
+        {allPolicies.length > 0 && (
+          <Input
+            className={s.filterInput}
+            size="small"
+            value={filter}
+            placeholder="Filter policies…"
+            contentBefore={<Search16Regular />}
+            onChange={(_: unknown, d: any) => setFilter(d.value)}
+            aria-label="Filter label policies"
+          />
+        )}
         <Button icon={<Add24Regular />} appearance="primary"
           disabled={!!state.notConfigured}
           onClick={() => { setOpError(null); setOpOk(null); setDialog({ kind: 'create' }); }}>New policy</Button>
         <Button icon={<ArrowSync24Regular />} onClick={load} disabled={state.loading}>Refresh</Button>
       </div>
 
-      {opOk && <MessageBar intent="success" style={{ marginBottom: 8 }}><MessageBarBody>{opOk}</MessageBarBody></MessageBar>}
-      {opError && <MessageBar intent="error" style={{ marginBottom: 8 }}><MessageBarBody>{opError}</MessageBarBody></MessageBar>}
+      {opOk && <MessageBar intent="success" className={s.mbSpace}><MessageBarBody>{opOk}</MessageBarBody></MessageBar>}
+      {opError && <MessageBar intent="error" className={s.mbSpace}><MessageBarBody>{opError}</MessageBarBody></MessageBar>}
 
       {state.loading && <Spinner label="Loading label policies…" />}
       {state.notConfigured && (
@@ -498,10 +594,13 @@ function PoliciesSection({ labelsState }: { labelsState: ApiState<LabelsPayload>
           <MessageBarBody><MessageBarTitle>Failed (HTTP {state.errorStatus})</MessageBarTitle>{state.error}</MessageBarBody>
         </MessageBar>
       )}
-      {state.data?.ok && (state.data.policies || []).length === 0 && !state.notConfigured && (
-        <Caption1 block style={{ color: tokens.colorNeutralForeground3 }}>No label policies configured. Use <strong>New policy</strong> to publish labels to users.</Caption1>
+      {state.data?.ok && allPolicies.length === 0 && !state.notConfigured && (
+        <Caption1 block className={s.emptyHint}>No label policies configured. Use <strong>New policy</strong> to publish labels to users.</Caption1>
       )}
-      {state.data?.ok && (state.data.policies || []).length > 0 && (
+      {state.data?.ok && allPolicies.length > 0 && visiblePolicies.length === 0 && (
+        <Caption1 block className={s.emptyHint}>No policies match &ldquo;{filter}&rdquo;.</Caption1>
+      )}
+      {state.data?.ok && visiblePolicies.length > 0 && (
         <Table size="small" aria-label="Label policies">
           <TableHeader>
             <TableRow>
@@ -514,15 +613,15 @@ function PoliciesSection({ labelsState }: { labelsState: ApiState<LabelsPayload>
             </TableRow>
           </TableHeader>
           <TableBody>
-            {state.data.policies!.map((p) => {
+            {visiblePolicies.map((p) => {
               const chips = policyScopeChips(p);
               return (
               <TableRow key={p.id}>
                 <TableCell><strong>{p.displayName || p.name}</strong></TableCell>
-                <TableCell>{(p.labels || []).map((id) => <Badge key={id} appearance="outline" style={{ marginRight: 4 }}>{lookupLabel(id) || id}</Badge>)}</TableCell>
+                <TableCell>{(p.labels || []).map((id) => <Badge key={id} appearance="outline" className={s.badgeSpace}>{lookupLabel(id) || id}</Badge>)}</TableCell>
                 <TableCell>
                   {chips.length === 0
-                    ? <Caption1 style={{ color: tokens.colorPaletteRedForeground1 }}>Not published</Caption1>
+                    ? <Caption1 className={s.notPublished}>Not published</Caption1>
                     : <div className={s.scopeTags}>{chips.map((c) => <Badge key={c} appearance="tint" color={c === 'All locations' ? 'brand' : 'informative'}>{c}</Badge>)}</div>}
                 </TableCell>
                 <TableCell>{p.isMandatory ? <Badge color="warning">yes</Badge> : <Badge color="subtle">no</Badge>}</TableCell>
@@ -753,6 +852,94 @@ interface ItemRow {
   currentLabelId?: string | null; currentLabelName?: string | null;
 }
 
+/**
+ * Recommendation extracted from a Graph `evaluateApplication` response so the
+ * Apply panel can render a real label chip + the marking/protection actions
+ * MIP would apply — instead of dumping raw JSON.
+ */
+interface EvalRecommendation {
+  labelId?: string;        // recommended label GUID (lowercased)
+  labelName?: string;      // canonical display name (live taxonomy first, else MSIP metadata)
+  color?: string;          // hex from the live taxonomy, if matched
+  markings: string[];      // human-readable content-marking actions (header/footer/watermark)
+  encrypted: boolean;      // protection (template / ad-hoc / do-not-forward) requested
+}
+
+/**
+ * Parse a Graph `evaluateApplication` informationProtectionAction collection
+ * into a UI-friendly recommendation. The recommended label id is carried two
+ * ways depending on the action returned:
+ *   - `applyLabelAction` / `recommendLabelAction` expose a `sensitivityLabel`
+ *     (or legacy `label`) relationship with an `id`.
+ *   - `metadataAction.metadataToAdd` embeds it as `MSIP_Label_<guid>_Enabled` /
+ *     `MSIP_Label_<guid>_Name` key/value pairs.
+ * We also collect the content-marking + protection actions for display.
+ * Returns null when nothing label-shaped is present (caller falls back to the
+ * raw JSON so we never hide an unexpected payload — no-vaporware honesty).
+ */
+function parseEvaluation(raw: unknown, labels: LabelRow[]): EvalRecommendation | null {
+  if (!raw || typeof raw !== 'object') return null;
+  const value = (raw as { value?: unknown }).value;
+  const actions: unknown[] | null = Array.isArray(value)
+    ? value
+    : Array.isArray(raw) ? (raw as unknown[]) : null;
+  if (!actions) return null;
+
+  let labelId: string | undefined;
+  let labelName: string | undefined;
+  const markings: string[] = [];
+  let encrypted = false;
+  const labelKeyRe = /^MSIP_Label_([0-9a-fA-F-]{36})_(\w+)$/;
+
+  for (const entry of actions) {
+    if (!entry || typeof entry !== 'object') continue;
+    const action = entry as Record<string, any>;
+    const odata = String(action['@odata.type'] || '');
+
+    const direct = action.sensitivityLabel ?? action.label;
+    if (direct && typeof direct === 'object' && typeof direct.id === 'string') {
+      labelId = labelId || direct.id.toLowerCase();
+      labelName = labelName || direct.displayName || direct.name;
+    }
+
+    const toAdd = action.metadataToAdd;
+    if (Array.isArray(toAdd)) {
+      for (const kv of toAdd) {
+        const m = labelKeyRe.exec(String(kv?.name || ''));
+        if (!m) continue;
+        const field = m[2].toLowerCase();
+        if (field === 'enabled' && String(kv?.value).toLowerCase() === 'true') {
+          labelId = labelId || m[1].toLowerCase();
+        }
+        if (field === 'name') labelName = labelName || String(kv?.value || '');
+      }
+    }
+
+    if (odata.includes('addContentHeaderAction')) markings.push(`Header: ${action.text ?? ''}`.trim());
+    else if (odata.includes('addContentFooterAction')) markings.push(`Footer: ${action.text ?? ''}`.trim());
+    else if (odata.includes('addWatermarkAction')) markings.push(`Watermark: ${action.text ?? ''}`.trim());
+    else if (
+      odata.includes('protectByTemplateAction') ||
+      odata.includes('protectAdhocAction') ||
+      odata.includes('protectByDoNotForwardAction') ||
+      odata.includes('protectDoNotForwardAction')
+    ) {
+      encrypted = true;
+    }
+  }
+
+  if (!labelId && !labelName && markings.length === 0 && !encrypted) return null;
+
+  const match = labelId ? labels.find((l) => l.id?.toLowerCase() === labelId) : undefined;
+  return {
+    labelId,
+    labelName: match?.displayName || match?.name || labelName,
+    color: match?.color,
+    markings,
+    encrypted: encrypted || !!match?.hasProtection,
+  };
+}
+
 function ApplyLabelSection({ labelsState }: { labelsState: ApiState<LabelsPayload> }) {
   const s = useStyles();
   const [items, setItems] = useState<ApiState<{ ok: boolean; items?: ItemRow[] }>>(emptyState());
@@ -778,6 +965,19 @@ function ApplyLabelSection({ labelsState }: { labelsState: ApiState<LabelsPayloa
   const appliableLabels = useMemo(
     () => (labelsState.data?.labels || []).filter((l) => l.isActive !== false && l.isAppliable !== false),
     [labelsState.data],
+  );
+
+  // Map the raw evaluateApplication response → recommended label chip + actions.
+  const recommendation = useMemo(
+    () => (evalResult !== null ? parseEvaluation(evalResult, labelsState.data?.labels || []) : null),
+    [evalResult, labelsState.data],
+  );
+  // The matching appliable label (original-case id) so "Use this label" can preselect it.
+  const recLabel = useMemo(
+    () => (recommendation?.labelId
+      ? appliableLabels.find((l) => l.id?.toLowerCase() === recommendation.labelId)
+      : undefined),
+    [recommendation, appliableLabels],
   );
 
   const apply = async () => {
@@ -809,8 +1009,8 @@ function ApplyLabelSection({ labelsState }: { labelsState: ApiState<LabelsPayloa
 
   return (
     <div className={s.section}>
-      <Subtitle2 block style={{ marginBottom: 4 }}><Tag24Regular style={{ verticalAlign: 'middle', marginRight: 6 }} />Apply a sensitivity label to a Loom item</Subtitle2>
-      <Caption1 block style={{ color: tokens.colorNeutralForeground3, marginBottom: 12 }}>
+      <Subtitle2 block className={s.applyTitle}><Tag24Regular style={{ verticalAlign: 'middle', marginRight: 6 }} />Apply a sensitivity label to a Loom item</Subtitle2>
+      <Caption1 block className={s.applyIntro}>
         Pick an item, choose a label from the live taxonomy, and apply it. The label is validated against the tenant taxonomy + label policy, written to the item, and (when the item has a Purview asset) stamped on the catalog entry.
       </Caption1>
 
@@ -863,7 +1063,7 @@ function ApplyLabelSection({ labelsState }: { labelsState: ApiState<LabelsPayloa
             {applying ? 'Applying…' : 'Apply label'}
           </Button>
           {selItem?.currentLabelName && (
-            <Caption1 style={{ marginLeft: 10, color: tokens.colorNeutralForeground3 }}>
+            <Caption1 className={s.currentLabel}>
               Current: {selItem.currentLabelName}
             </Caption1>
           )}
@@ -872,9 +1072,9 @@ function ApplyLabelSection({ labelsState }: { labelsState: ApiState<LabelsPayloa
         {applyErr && <MessageBar intent="error"><MessageBarBody><MessageBarTitle>Could not apply label</MessageBarTitle>{applyErr}</MessageBarBody></MessageBar>}
       </div>
 
-      <div style={{ marginTop: 18, borderTop: `1px solid ${tokens.colorNeutralStroke2}`, paddingTop: 12 }}>
-        <Subtitle2 block style={{ marginBottom: 4 }}>Optional — get a label recommendation</Subtitle2>
-        <Caption1 block style={{ color: tokens.colorNeutralForeground3, marginBottom: 8 }}>
+      <div className={s.evalDivider}>
+        <Subtitle2 block className={s.applyTitle}>Optional — get a label recommendation</Subtitle2>
+        <Caption1 block className={s.evalHelp}>
           Sends sample content to Microsoft Graph (<code>sensitivityLabels/evaluateApplication</code>) and returns MIP&apos;s recommended label. Loom only relays — the MIP rule engine decides.
         </Caption1>
         <div className={s.fieldStack}>
@@ -888,11 +1088,52 @@ function ApplyLabelSection({ labelsState }: { labelsState: ApiState<LabelsPayloa
             </Button>
           </div>
         </div>
-        {evalErr && <MessageBar intent="error" style={{ marginTop: 10 }}><MessageBarBody>{evalErr}</MessageBarBody></MessageBar>}
+        {evalErr && <MessageBar intent="error" className={s.evalErr}><MessageBarBody>{evalErr}</MessageBarBody></MessageBar>}
         {evalResult !== null && (
-          <pre style={{ marginTop: 10, fontSize: 11, backgroundColor: tokens.colorNeutralBackground2, padding: 8, borderRadius: 4, overflow: 'auto', maxHeight: 240 }}>
-            {JSON.stringify(evalResult, null, 2)}
-          </pre>
+          recommendation ? (
+            <div className={s.recCard}>
+              <Caption1 block className={s.recLabel}>MIP recommends:</Caption1>
+              <div className={s.recRow}>
+                {recommendation.labelName ? (
+                  <Badge appearance="filled" color="brand" size="large">
+                    <span className={s.swatchLg} style={{ backgroundColor: recommendation.color || '#888' }} />
+                    {recommendation.labelName}
+                  </Badge>
+                ) : (
+                  <Caption1>No specific label recommended for this content.</Caption1>
+                )}
+                {recommendation.encrypted && <Badge appearance="tint" color="warning">encryption</Badge>}
+                {recLabel && (
+                  <Button
+                    size="small"
+                    appearance="secondary"
+                    disabled={selLabel === recLabel.id}
+                    onClick={() => setSelLabel(recLabel.id)}
+                  >
+                    {selLabel === recLabel.id ? 'Selected above' : 'Use this label'}
+                  </Button>
+                )}
+              </div>
+              {recommendation.markings.length > 0 && (
+                <div className={s.recMarkings}>
+                  <Caption1 block className={s.recMarkingsLabel}>Content markings MIP would apply:</Caption1>
+                  <div className={s.recMarkingTags}>
+                    {recommendation.markings.map((m, i) => <Badge key={`${m}-${i}`} appearance="outline">{m}</Badge>)}
+                  </div>
+                </div>
+              )}
+              <details className={s.rawDetails}>
+                <summary className={s.rawSummary}>Raw Graph response</summary>
+                <pre className={s.rawPre}>
+                  {JSON.stringify(evalResult, null, 2)}
+                </pre>
+              </details>
+            </div>
+          ) : (
+            <pre className={s.rawPreBare}>
+              {JSON.stringify(evalResult, null, 2)}
+            </pre>
+          )
         )}
       </div>
     </div>
