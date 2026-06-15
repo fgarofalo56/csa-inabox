@@ -78,6 +78,7 @@ import type { FluentIcon } from '@fluentui/react-icons';
 import { itemVisual } from '@/lib/components/ui/item-type-visual';
 import { CapacityEquivalencePanel } from '@/lib/components/setup/capacity-equivalence-panel';
 import { SetupDeploymentDiagram, type DiagramSpoke } from '@/lib/components/setup/deployment-diagram';
+import { SetupServiceChoices, type ServiceChoiceMap } from '@/lib/panes/setup-service-choices';
 import {
   regionsForBoundary,
   defaultRegion,
@@ -96,6 +97,7 @@ type Step =
   | 'subscription'
   | 'domain'
   | 'capacity'
+  | 'services'
   | 'review'
   | 'deploying'
   | 'done';
@@ -142,6 +144,13 @@ interface WizardState {
   runStatus?: 'pending' | 'queued' | 'in_progress' | 'completed' | 'not_found';
   runConclusion?: string | null;
   runUrl?: string;
+  /**
+   * Pre-deploy scan-and-choose decisions (the in-console twin of
+   * scripts/csa-loom/scan-and-deploy.sh). Keyed by service ('aisearch', …);
+   * threaded into the deploy POST as `serviceChoices` so the deploy provisions
+   * new / reuses an existing instance / disables per the operator's choice.
+   */
+  serviceChoices?: ServiceChoiceMap;
 }
 
 const REGION_BOUNDARY = (b?: Boundary): RegionBoundary => (b ?? 'Commercial') as RegionBoundary;
@@ -154,6 +163,7 @@ const RAIL_STEPS: { key: Step; label: string; hint: string }[] = [
   { key: 'subscription', label: 'Subscription & region', hint: 'Deploy target' },
   { key: 'domain', label: 'Domain name', hint: 'Landing-zone name' },
   { key: 'capacity', label: 'Capacity sizing', hint: 'Compute equivalence' },
+  { key: 'services', label: 'Scan & choose', hint: 'Reuse / new / disable' },
   { key: 'review', label: 'Review & deploy', hint: 'Confirm and launch' },
 ];
 
@@ -816,6 +826,9 @@ export function SetupWizardPane() {
         return !!(config?.adminSubscriptionId || state.subscriptionId) && !!state.location;
       case 'domain': return !!state.domainName;
       case 'capacity': return !!state.capacitySku;
+      // Scan & choose is optional (recommended defaults are pre-seeded), so the
+      // step is "complete" once the operator has progressed past capacity.
+      case 'services': return !!state.capacitySku;
       case 'review': return state.step === 'done';
       default: return false;
     }
@@ -1273,7 +1286,26 @@ export function SetupWizardPane() {
             {/* Guided F-SKU → Azure-native compute equivalence (CU / Spark vCores /
                 Databricks / ADX / Synapse SQL + relative cost), grounded in Learn. */}
             <CapacityEquivalencePanel sku={state.capacitySku} />
-            <Footer onBack={() => go('domain')} nextDisabled={!state.capacitySku} onNext={() => go('review')} />
+            <Footer onBack={() => go('domain')} nextDisabled={!state.capacitySku} onNext={() => go('services')} />
+          </>
+        )}
+
+        {state.step === 'services' && (
+          <>
+            <div className={styles.stepHeader}>
+              <Subtitle2>Scan &amp; choose backends</Subtitle2>
+              <Body1>
+                Loom scans every subscription you can see and recommends, per service, whether to reuse an
+                existing instance or provision a new one. The default is everything-ON — keep the
+                recommendations or adjust any service. This is the same scan the CLI{' '}
+                <code>scripts/csa-loom/scan-and-deploy.sh</code> runs.
+              </Body1>
+            </div>
+            <SetupServiceChoices
+              value={state.serviceChoices ?? {}}
+              onChange={(next) => setState((s) => ({ ...s, serviceChoices: next }))}
+            />
+            <Footer onBack={() => go('capacity')} onNext={() => go('review')} />
           </>
         )}
 
@@ -1361,7 +1393,7 @@ export function SetupWizardPane() {
             )}
 
             <Footer
-              onBack={() => go(isWireExisting ? 'subscription' : 'capacity')}
+              onBack={() => go(isWireExisting ? 'subscription' : 'services')}
               onNext={deploy}
               nextLabel={isWireExisting ? 'Wire DLZ(s)' : 'Deploy'}
               nextIcon={<Send24Regular />}

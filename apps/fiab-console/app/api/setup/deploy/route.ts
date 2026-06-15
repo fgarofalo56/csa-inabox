@@ -66,6 +66,63 @@ interface SetupConfig {
   /** Multi-sub: parallel arrays the bicep `[for]` loop consumes. */
   dlzSubscriptionIds?: string[];
   dlzDomainNames?: string[];
+  /**
+   * Pre-deploy scan-and-choose decisions from the Setup Wizard's "Scan & choose"
+   * step (the in-console twin of scripts/csa-loom/scan-and-deploy.sh). Keyed by
+   * service key ('aisearch', 'purview', …). For 'use-existing' the chosen
+   * instance is threaded as `existing<Svc>*` bicep params; 'new'/'disable' set
+   * the `loom<Svc>Enabled` flag. Only services with a known bicep param mapping
+   * (SERVICE_PARAM_MAP) emit `-p` lines — others are reused via the post-deploy
+   * EXISTING_* env contract (grant-navigator-rbac.sh / patch-navigator-env.sh).
+   */
+  serviceChoices?: Record<string, { mode: 'new' | 'use-existing' | 'disable'; existing?: { name: string; rg: string; sub: string } }>;
+}
+
+/**
+ * Maps a scan-and-choose service key → its main.bicep params. `existing` is the
+ * [name, rg, sub] param-name triple (null when main.bicep has no existing*
+ * surface — those services are reused post-deploy via EXISTING_* env only).
+ * `flag` is the `loom<Svc>Enabled`-style toggle (null for DLZ-provisioned
+ * services with no provisioning toggle). Mirrors the CLI SERVICES table.
+ */
+const SERVICE_PARAM_MAP: Record<string, { existing: [string, string, string] | null; flag: string | null }> = {
+  aisearch: { existing: ['existingAiSearchService', 'existingAiSearchRg', 'existingAiSearchSub'], flag: 'aiSearchEnabled' },
+  apim: { existing: ['existingApimName', 'existingApimRg', 'existingApimSub'], flag: 'apimEnabled' },
+  adx: { existing: ['existingAdxClusterName', 'existingAdxClusterRg', 'existingAdxClusterSub'], flag: 'adxEnabled' },
+  foundry: { existing: ['existingFoundryAccountName', 'existingFoundryRg', 'existingFoundrySub'], flag: 'aiFoundryEnabled' },
+  purview: { existing: ['existingPurviewAccount', 'existingPurviewRg', 'existingPurviewSub'], flag: 'purviewEnabled' },
+  maps: { existing: null, flag: 'azureMapsEnabled' },
+  synapse: { existing: ['existingSynapseWorkspace', 'existingSynapseRg', 'existingSynapseSub'], flag: null },
+  cosmos: { existing: ['existingCosmosAccount', 'existingCosmosRg', 'existingCosmosSub'], flag: null },
+  adf: { existing: ['existingAdfFactory', 'existingAdfRg', 'existingAdfSub'], flag: null },
+  eventhubs: { existing: ['existingEventHubNamespace', 'existingEventHubRg', 'existingEventHubSub'], flag: null },
+  databricks: { existing: ['existingDatabricksWorkspace', 'existingDatabricksRg', 'existingDatabricksSub'], flag: null },
+  postgres: { existing: null, flag: 'postgresEnabled' },
+  storage: { existing: null, flag: null },
+  keyvault: { existing: null, flag: null },
+};
+
+/** Build the extra `-p` bicep param assignments for the chosen service wiring. */
+function serviceChoiceParamLines(choices: SetupConfig['serviceChoices']): string[] {
+  if (!choices) return [];
+  const lines: string[] = [];
+  for (const [svc, choice] of Object.entries(choices)) {
+    const map = SERVICE_PARAM_MAP[svc];
+    if (!map) continue;
+    if (choice.mode === 'use-existing' && choice.existing && map.existing) {
+      const [nameP, rgP, subP] = map.existing;
+      lines.push(
+        `  -p ${nameP}='${choice.existing.name}' ${rgP}='${choice.existing.rg}' ${subP}='${choice.existing.sub}' \\`,
+      );
+      if (map.flag) lines.push(`  -p ${map.flag}=true \\`);
+    } else if (choice.mode === 'disable' && map.flag) {
+      lines.push(`  -p ${map.flag}=false \\`);
+    } else if (choice.mode === 'new' && map.flag) {
+      // Everything-ON default: explicitly enable so the deploy provisions it.
+      lines.push(`  -p ${map.flag}=true \\`);
+    }
+  }
+  return lines;
 }
 
 const ALLOWED_TOPOLOGIES = new Set(['single-sub', 'tenant', 'dlz-attach']);
@@ -436,6 +493,7 @@ export async function POST(req: NextRequest) {
           `  -f platform/fiab/bicep/main.bicep \\`,
           `  -p ${paramFile} \\`,
           `  -p topology=tenant boundary=${body.boundary} deploymentMode=${body.mode} \\`,
+          ...serviceChoiceParamLines(body.serviceChoices),
           dlzParamLine,
           `bash scripts/csa-loom/post-deploy-bootstrap.sh`,
         ];
