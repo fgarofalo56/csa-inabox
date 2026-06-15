@@ -105,7 +105,7 @@ param loomAzureMapsAccount = readEnvironmentVariable('EXISTING_AZURE_MAPS_ACCOUN
 param hubVnetCidr = '10.0.0.0/16'
 
 // Identity
-param adminEntraGroupId = '<replace-with-GCC-tenant-FiaB-Admins-group-guid>'
+param adminEntraGroupId = readEnvironmentVariable('LOOM_ADMIN_ENTRA_GROUP_ID', '')
 
 // Multi-sub
 param dlzSubscriptionIds = []

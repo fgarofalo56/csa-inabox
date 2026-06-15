@@ -936,6 +936,15 @@ param loomMsalClientSecret string = ''
 @secure()
 param loomSessionSecret string = ''
 
+@description('Entra app-registration (MSAL) provisioning config — passed as ONE object to stay under the 256-param ARM limit (this module is already near it). Fields: enabled (bool, default true — provision the app reg + client secret + stable SESSION_SECRET in Key Vault by default, opt-out; OFF runs the Console unauth / BYO via loomMsalClientId); scriptIdentityId (UAMI with Graph app-admin + KV Secrets Officer for the in-bicep deploymentScript — empty → the post-deploy bootstrap workflow provisions the app reg, the default push-button path); scriptIdentityClientId; scriptSubnetId (VNet-inject the script to reach the PE-locked KV); consoleHosts (comma-separated redirect-URI hosts, no scheme — localhost is always added; the bootstrap adds the runtime FQDN).')
+param loomMsalAppReg object = {
+  enabled: true
+  scriptIdentityId: ''
+  scriptIdentityClientId: ''
+  scriptSubnetId: ''
+  consoleHosts: ''
+}
+
 // =====================================================================
 // Phase 2 — RBAC tenant-admin bootstrap + install-time provisioning targets
 // =====================================================================
@@ -945,6 +954,15 @@ param loomTenantAdminGroupId string = ''
 
 @description('Entra user oid that bypasses the Loom Feature Permissions gate. Used in single-user bootstrap scenarios. Members of loomTenantAdminGroupId are recommended for production.')
 param loomTenantAdminOid string = ''
+
+// Bootstrap admin is never blank: when no explicit OID and no real admin group
+// is supplied, fall back to the deploying principal (deployer().objectId) so the
+// push-button deploy always has a working admin who can grant others access from
+// the empty state (PRP deploy-readiness gap #4). A non-empty group id (even the
+// placeholder) does not suppress this — the deployer-as-admin fallback is
+// harmless and guarantees first-login admin access.
+var hasRealAdminGroup = !empty(loomTenantAdminGroupId) && !startsWith(loomTenantAdminGroupId, '<')
+var effectiveTenantAdminOid = !empty(loomTenantAdminOid) ? loomTenantAdminOid : (hasRealAdminGroup ? '' : deployer().objectId)
 
 @description('Default Fabric/Power BI workspace id the Phase-2 install engine uses when a Loom workspace has no bound Fabric group yet. Optional — the wizard prompts when missing.')
 param loomDefaultFabricWorkspace string = ''
@@ -1151,6 +1169,53 @@ module keyvault 'keyvault.bicep' = {
     complianceTags: complianceTags
   }
 }
+
+// =====================================================================
+// 4b. Entra app registration (MSAL) — provisioned by default (opt-out).
+// Day-one deploy-readiness (GH #1383): a fresh deploy gets a REAL app
+// registration + client secret + stable SESSION_SECRET in Key Vault, with the
+// redirect URIs reconciled to the console host — so interactive login works on
+// first sign-in instead of returning a 500 (no credential) or AADSTS redirect
+// mismatch. The app registration is a Graph object, so it runs as a
+// deploymentScript when a Graph-app-admin script identity is supplied; the
+// default push-button path provisions it via the post-deploy bootstrap workflow
+// (scripts/csa-loom/bootstrap-msal-app-reg.sh — the SAME logic). The effective
+// client id below feeds the Console env + secretRefs.
+// =====================================================================
+module entraAppReg 'entra-app-registration.bicep' = if (loomMsalAppRegEnabled && !empty(loomMsalAppRegScriptIdentityId)) {
+  name: 'entra-app-registration'
+  params: {
+    location: location
+    appDisplayName: 'CSA Loom Console (${resourceGroup().name})'
+    consoleHosts: loomMsalAppRegConsoleHosts
+    existingClientId: loomMsalClientId
+    scriptIdentityId: loomMsalAppRegScriptIdentityId
+    scriptSubnetId: loomMsalAppRegScriptSubnetId
+    keyVaultName: keyvault.outputs.keyVaultName
+    complianceTags: complianceTags
+  }
+}
+
+// Entra app-registration config (read from the single object param — see
+// loomMsalAppReg). Defaults keep the FLAG ON and the in-bicep script OFF (empty
+// identity → the post-deploy bootstrap is the provisioner).
+var loomMsalAppRegEnabled = bool(loomMsalAppReg.?enabled ?? true)
+var loomMsalAppRegScriptIdentityId = string(loomMsalAppReg.?scriptIdentityId ?? '')
+var loomMsalAppRegScriptSubnetId = string(loomMsalAppReg.?scriptSubnetId ?? '')
+var loomMsalAppRegConsoleHosts = string(loomMsalAppReg.?consoleHosts ?? '')
+
+// Effective MSAL client id: an explicit loomMsalClientId (BYO existing app)
+// wins; otherwise the app-registration the entra-app-registration script
+// provisioned. Empty here (default push-button) means the post-deploy bootstrap
+// sets LOOM_MSAL_CLIENT_ID on the Console after the app registration is created.
+var msalAppRegProvisioned = loomMsalAppRegEnabled && !empty(loomMsalAppRegScriptIdentityId)
+var effectiveMsalClientId = !empty(loomMsalClientId) ? loomMsalClientId : (msalAppRegProvisioned ? entraAppReg!.outputs.appId : '')
+// The client secret + SESSION_SECRET are KV-backed (read via keyVaultUrl
+// secretRef) when the script provisioned them into Key Vault; otherwise inline
+// (explicit param value / stable per-RG GUID) so day-one bicep-only deploys
+// still mint sessions.
+var msalSecretKvBacked = msalAppRegProvisioned && empty(loomMsalClientSecret)
+var sessionSecretKvBacked = msalAppRegProvisioned && empty(loomSessionSecret)
 
 // Console's own `loom` Cosmos — HUB-scoped. Only deployed in tenant/dlz-attach
 // topologies (deployConsoleCosmos), where no local DLZ exists to host the
@@ -2370,7 +2435,14 @@ module appDeployments 'app-deployments.bicep' = if (containerPlatform == 'contai
             { name: 'NEXT_PUBLIC_LOOM_KUSTO_CLUSTER', value: !empty(existingAdxClusterName) ? existingAdxClusterName : (adxEnabled ? adxCluster!.outputs.clusterName : '') }
             // Phase 2 — RBAC tenant-admin bootstrap + install-time provisioning targets
             { name: 'LOOM_TENANT_ADMIN_GROUP_ID', value: loomTenantAdminGroupId }
-            { name: 'LOOM_TENANT_ADMIN_OID', value: loomTenantAdminOid }
+            // Bootstrap tenant admin (PRP deploy-readiness gap #4: all /admin
+            // pages 403 when no admin principal is wired). When neither an
+            // explicit OID nor a real admin group is supplied, DEFAULT to the
+            // principal running the deployment (deployer().objectId) so the
+            // push-button path is NEVER blank — whoever deploys can sign in and
+            // configure access out of the empty state. An explicit
+            // loomTenantAdminOid always wins.
+            { name: 'LOOM_TENANT_ADMIN_OID', value: effectiveTenantAdminOid }
             { name: 'LOOM_DEFAULT_FABRIC_WORKSPACE', value: loomDefaultFabricWorkspace }
             { name: 'LOOM_WAREHOUSE_BACKEND', value: loomWarehouseBackend }
             { name: 'LOOM_WAREHOUSE_FABRIC_WORKSPACE', value: loomWarehouseFabricWorkspace }
@@ -2805,9 +2877,16 @@ module appDeployments 'app-deployments.bicep' = if (containerPlatform == 'contai
             // boundaries where Fabric is not authorized for production workloads,
             // and even GCC should stay Azure-native by default. Unset → Azure-native only.
             { name: 'LOOM_WORKSPACE_ROLES_FABRIC', value: (loomWorkspaceRolesFabricEnabled && boundary == 'Commercial') ? '1' : '' }
+            // SESSION_SECRET is ALWAYS set (not gated on MSAL) so the Console can
+            // mint/verify session cookies even on the default push-button deploy
+            // before LOOM_MSAL_CLIENT_ID is wired (PRP deploy-readiness gap #3 —
+            // "signed-out after Entra login" was caused by SESSION_SECRET being
+            // gated behind a non-empty loomMsalClientId). The session-secret ACA
+            // secret is likewise always present (see secrets concat below).
+            { name: 'SESSION_SECRET', secretRef: 'session-secret' }
           ],
-          !empty(loomMsalClientId) ? [
-            { name: 'LOOM_MSAL_CLIENT_ID', value: loomMsalClientId }
+          !empty(effectiveMsalClientId) ? [
+            { name: 'LOOM_MSAL_CLIENT_ID', value: effectiveMsalClientId }
             { name: 'LOOM_MSAL_CLIENT_SECRET', secretRef: 'loom-msal-client-secret' }
             // NOTE: do NOT map this secret to AZURE_CLIENT_SECRET — the Console
             // authenticates to Azure with its MANAGED IDENTITY (AZURE_CLIENT_ID /
@@ -2816,7 +2895,7 @@ module appDeployments 'app-deployments.bicep' = if (containerPlatform == 'contai
             // login with the UAMI client id → AADSTS7000232 (MSI can't use a
             // secret), which breaks Cost/Monitor/Defender calls. MSAL + Dataverse
             // read LOOM_MSAL_CLIENT_SECRET / LOOM_DATAVERSE_CLIENT_SECRET instead.
-            { name: 'SESSION_SECRET', secretRef: 'session-secret' }
+            // (SESSION_SECRET is now set unconditionally in the base env above.)
             { name: 'LOOM_UAMI_CLIENT_ID', value: identity.outputs.uamiConsoleClientId }
             // Console UAMI principal (object) id — used by the F16 Azure
             // Connections role check (azure-connections-client) to verify the
@@ -2849,7 +2928,7 @@ module appDeployments 'app-deployments.bicep' = if (containerPlatform == 'contai
             // SP credentials. The SP must be registered as a Dataverse
             // Application User with System Administrator role on every
             // env Loom should read. See docs/fiab/dataverse-app-user.md.
-            { name: 'LOOM_DATAVERSE_CLIENT_ID', value: loomMsalClientId }
+            { name: 'LOOM_DATAVERSE_CLIENT_ID', value: effectiveMsalClientId }
             { name: 'LOOM_DATAVERSE_CLIENT_SECRET', secretRef: 'loom-msal-client-secret' }
             { name: 'LOOM_DATAVERSE_TENANT_ID', value: tenant().tenantId }
             // Power Platform environment for the data-agent "Publish to Microsoft
@@ -3026,9 +3105,23 @@ module appDeployments 'app-deployments.bicep' = if (containerPlatform == 'contai
           ] : []
         )
         secrets: concat(
-          !empty(loomMsalClientId) ? [
-            { name: 'loom-msal-client-secret', value: loomMsalClientSecret }
-            { name: 'session-secret', value: empty(loomSessionSecret) ? guid(resourceGroup().id, 'loom-session-secret-v1') : loomSessionSecret }
+          [
+            // SESSION_SECRET is ALWAYS present (the env references it
+            // unconditionally — PRP deploy-readiness gap #3). KV-backed when the
+            // entra-app-registration script wrote a stable secret to Key Vault;
+            // otherwise the inline stable per-RG GUID (or explicit param value)
+            // so sign-ins survive redeploys even on a bicep-only day-one deploy.
+            sessionSecretKvBacked
+              ? { name: 'session-secret', keyVaultUrl: '${keyvault.outputs.keyVaultUri}secrets/session-secret', identity: identity.outputs.uamiConsoleId }
+              : { name: 'session-secret', value: empty(loomSessionSecret) ? guid(resourceGroup().id, 'loom-session-secret-v1') : loomSessionSecret }
+          ],
+          !empty(effectiveMsalClientId) ? [
+            // MSAL client secret — KV-backed when the entra-app-registration
+            // script provisioned + stored it (the PRP "secret in Key Vault"
+            // intent); otherwise the explicit param value (BYO existing app).
+            msalSecretKvBacked
+              ? { name: 'loom-msal-client-secret', keyVaultUrl: '${keyvault.outputs.keyVaultUri}secrets/loom-msal-client-secret', identity: identity.outputs.uamiConsoleId }
+              : { name: 'loom-msal-client-secret', value: loomMsalClientSecret }
           ] : [],
           !empty(effectiveMapsAccount) ? [
             // Read from KV at deploy time. The azure-maps module wrote the

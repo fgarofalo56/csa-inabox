@@ -3,7 +3,51 @@
 Date: 2026-05-24
 Owner: csa-loom rebuild
 
-## Context
+## UPDATE 2026-06-15 — now AUTOMATED by default (GH #1383)
+
+The manual `az ad app create` + `az containerapp secret set` steps below are no
+longer the primary path. The push-button deploy now PROVISIONS the Entra app
+registration by default (`loomMsalAppReg.enabled = true`, opt-out):
+
+- **Bicep**: `platform/fiab/bicep/modules/admin-plane/entra-app-registration.bicep`
+  runs an `azCLI` deploymentScript that creates/reconciles the app registration,
+  reconciles its redirect URIs to the console host(s), enables public-client
+  (device-code CLI) flows, ensures the delegated Graph `User.Read` scope, resets
+  the client secret, and writes the secret + a stable `SESSION_SECRET` to Key
+  Vault. It runs when a script identity with Graph app-admin is supplied
+  (`loomMsalAppReg.scriptIdentityId`); otherwise the bootstrap below is the home.
+- **Bootstrap workflow**: `.github/workflows/csa-loom-post-deploy-bootstrap.yml`
+  → step "Provision MSAL app registration" runs the SAME logic via
+  `scripts/csa-loom/bootstrap-msal-app-reg.sh` (so bicep + bootstrap never
+  drift), then wires `LOOM_MSAL_CLIENT_ID` + the KV-backed secretRefs onto the
+  Console Container App. This is the default push-button path.
+- **`SESSION_SECRET`** is now set on the Console UNCONDITIONALLY (no longer gated
+  behind a non-empty `loomMsalClientId`), and is KV-backed when the script
+  provisioned it — so sign-ins survive redeploys (PRP deploy-readiness gap #3).
+- **Bootstrap admin** is never blank: `loomTenantAdminOid` defaults to the
+  deploying principal (`deployer().objectId`) when no oid/group is supplied, so
+  `/admin/*` is reachable on first login (gap #4). Set the `tenant_admin_oid`
+  deploy input (or `FIAB_ADMIN_GROUP_ID`) to name a human / group admin.
+- **No hardcoded shared app id**: the `9844c28c-...` default was removed from
+  `commercial-full.bicepparam` and the bootstrap workflow.
+- **Honest gate**: `app/auth/sign-in/route.ts` now 503s on missing
+  `LOOM_MSAL_CLIENT_ID` / `LOOM_MSAL_CLIENT_SECRET` / `AZURE_TENANT_ID` (not on
+  the UAMI's `AZURE_CLIENT_ID`), so a missing credential is honest, not a 500.
+
+**Still requires** a human Global/Application Administrator to grant admin
+consent for the app's Graph permissions in Entra ID (the deploy SP can create
+the app + reset the secret when it holds the Application Administrator directory
+role, but tenant-wide consent is a one-time admin click). The
+`scan-and-deploy.sh` CLI + the Setup Wizard "Identity & Admin" step
+(`/api/setup/identity`) offer the same existing/new/disable choice with the
+signed-in user recommended as bootstrap admin.
+
+The original manual handoff (still valid as the BYO / Gov-sovereign fallback)
+follows.
+
+---
+
+## Context (original, manual fallback)
 
 The Loom Console BFF already has the MSAL plumbing (`lib/auth/msal.ts`,
 `lib/auth/session.ts`, `app/auth/sign-in/route.ts`,

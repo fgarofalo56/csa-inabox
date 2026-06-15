@@ -122,8 +122,13 @@ param appImageTags = {
   directLake: readEnvironmentVariable('LOOM_DIRECTLAKE_TAG', 'v0.7')
 }
 
-// MSAL — passed from env vars (don't commit secrets to disk)
-param loomMsalClientId = readEnvironmentVariable('LOOM_MSAL_CLIENT_ID', '9844c28c-3b3a-4949-8d63-9eefa3b50a9d')
+// MSAL — the app registration + client secret are now PROVISIONED by default
+// (loomMsalAppReg.enabled=true → entra-app-registration.bicep / the post-deploy
+// bootstrap, GH #1383). Pass LOOM_MSAL_CLIENT_ID only to BYO an existing app
+// registration; empty lets the deploy provision a fresh one (no hardcoded
+// shared app id — each deployment gets its own, with redirect URIs reconciled
+// to its own console host).
+param loomMsalClientId = readEnvironmentVariable('LOOM_MSAL_CLIENT_ID', '')
 param loomMsalClientSecret = readEnvironmentVariable('LOOM_MSAL_CLIENT_SECRET', '')
 // Stable session secret — pass via env to preserve sign-ins; empty → admin-plane
 // derives a stable per-RG GUID (newGuid() is invalid in a .bicepparam, BCP065).

@@ -121,7 +121,7 @@ param azureMapsEnabled = false
 param hubVnetCidr = '10.0.0.0/16'
 
 // Identity (Gov tenant)
-param adminEntraGroupId = '<replace-with-GCC-High-tenant-FiaB-Admins-group-guid>'
+param adminEntraGroupId = readEnvironmentVariable('LOOM_ADMIN_ENTRA_GROUP_ID', '')
 
 // Loom version + image tags
 param loomVersion = readEnvironmentVariable('LOOM_VERSION', 'v3.0')

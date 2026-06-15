@@ -36,8 +36,16 @@ env:
   # NAME registered in PostgreSQL (must match LOOM_POSTGRES_AAD_USER on the
   # Console, default loom-console). The PG server name is resolved at runtime.
   CONSOLE_UAMI_NAME: loom-console
-  # MSAL Web App SP — used as Dataverse Application User (UAMIs can't be one)
-  LOOM_MSAL_CLIENT_ID: 9844c28c-3b3a-4949-8d63-9eefa3b50a9d
+  # MSAL Web App client (app) id. NO hardcoded shared app reg — the
+  # "Provision MSAL app registration" step below creates/reconciles a
+  # per-deployment app registration (redirect URIs reconciled to the console
+  # host, secret + SESSION_SECRET written to Key Vault) and exports
+  # LOOM_MSAL_CLIENT_ID for the Dataverse AppUser step. Set the repo var to BYO
+  # an existing app registration instead.
+  LOOM_MSAL_CLIENT_ID: ${{ vars.LOOM_MSAL_CLIENT_ID || '' }}
+  # Console host(s) (no scheme) whose https://<host>/auth/callback redirect URIs
+  # are reconciled onto the app registration. Defaults to the vanity domain.
+  CSA_LOOM_CONSOLE_HOSTS: ${{ vars.CSA_LOOM_VANITY_DOMAIN || '' }}
 
 jobs:
   bootstrap:
@@ -59,6 +67,46 @@ jobs:
           set -e
           az account show --query "{user:user.name, sub:id}" -o table
           echo "Acting as Synapse initial admin (b9c3cc65-522e-49c9-ad02-914676aa5a6b)"
+
+      - name: Provision MSAL app registration (sign-in app + redirect URIs + secret in KV)
+        # Day-one deploy-readiness (GH #1383): create/reconcile the per-deployment
+        # Entra app registration, write the client secret + a stable SESSION_SECRET
+        # to Key Vault, and wire LOOM_MSAL_CLIENT_ID + secretRefs onto the Console
+        # Container App — so interactive login works on first sign-in. Idempotent;
+        # safe to re-run. Best-effort (|| true) so a Graph-consent gap doesn't fail
+        # the whole bootstrap. Requires the deploy SP to hold the Graph Application
+        # Administrator directory role + KV Secrets Officer.
+        run: |
+          set -uo pipefail
+          # Resolve the Loom Key Vault in the admin RG (kv-loom-*).
+          KV_NAME=$(az keyvault list -g "$ADMIN_RG" --query "[?starts_with(name,'kv-loom')].name | [0]" -o tsv 2>/dev/null || true)
+          if [ -z "${KV_NAME:-}" ]; then
+            KV_NAME=$(az keyvault list -g "$ADMIN_RG" --query "[0].name" -o tsv 2>/dev/null || true)
+          fi
+          if [ -z "${KV_NAME:-}" ]; then
+            echo "::warning::No Key Vault found in $ADMIN_RG — skipping MSAL app-reg provisioning"
+            exit 0
+          fi
+          # Resolve the Console Container App's runtime FQDN to add to redirect URIs.
+          CONSOLE_FQDN=$(az containerapp show -n loom-console -g "$ADMIN_RG" --query "properties.configuration.ingress.fqdn" -o tsv 2>/dev/null || true)
+          HOSTS="${CSA_LOOM_CONSOLE_HOSTS:-}"
+          if [ -n "${CONSOLE_FQDN:-}" ]; then
+            HOSTS="${HOSTS:+$HOSTS,}$CONSOLE_FQDN"
+          fi
+          UAMI_ID=$(az identity list -g "$ADMIN_RG" --query "[?contains(name,'console')].id | [0]" -o tsv 2>/dev/null || true)
+          chmod +x scripts/csa-loom/bootstrap-msal-app-reg.sh
+          OUT=$(KEYVAULT_NAME="$KV_NAME" \
+            CONSOLE_HOSTS="$HOSTS" \
+            EXISTING_CLIENT_ID="${LOOM_MSAL_CLIENT_ID:-}" \
+            CONSOLE_APP_NAME=loom-console CONSOLE_RG="$ADMIN_RG" \
+            UAMI_RESOURCE_ID="${UAMI_ID:-}" \
+            bash scripts/csa-loom/bootstrap-msal-app-reg.sh 2>&1) || echo "::warning::MSAL app-reg provisioning incomplete (Graph admin consent may be required)"
+          echo "$OUT"
+          # Export the resolved app id for the Dataverse AppUser step below.
+          APP_ID=$(echo "$OUT" | sed -n 's/^LOOM_MSAL_CLIENT_ID=//p' | tail -1)
+          if [ -n "${APP_ID:-}" ]; then
+            echo "LOOM_MSAL_CLIENT_ID=$APP_ID" >> "$GITHUB_ENV"
+          fi
 
       - name: Grant Console UAMI Purview Data Map roles (data-plane)
         env:
