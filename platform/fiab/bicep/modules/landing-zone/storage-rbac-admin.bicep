@@ -39,7 +39,7 @@ param consolePrincipalId string = ''
 param skipRoleGrants bool = false
 
 // Role Based Access Control Administrator (built-in, global GUID, all clouds).
-var rbacAdminRoleId = 'f58310d9-7bc6-4b1c-aba1-92e7d7b23c8f'
+var rbacAdminRoleId = 'f58310d9-a9f6-439a-9e8d-f62e7b41a168'
 
 // Storage Blob Data Reader / Contributor / Owner (built-in, global GUIDs).
 var blobDataReaderGuid = '2a2b9908-6ea1-4ae2-8e65-a410df84e7d1'
