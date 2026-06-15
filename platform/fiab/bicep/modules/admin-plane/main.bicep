@@ -39,7 +39,8 @@ param seedSampleApi bool = true
 @description('Catalog primary')
 param catalogPrimary string
 
-@description('Agent orchestrator')
+@description('Agent orchestrator — part of the module param contract (set per boundary in the .bicepparam files: foundry-agent-service vs maf). Retained as a pass-through after the legacy in-array orchestrator stub was removed; the MAF tier is now driven by copilotMafEnabled and the Setup Orchestrator by its dedicated module, so this value is currently informational at this layer.')
+#disable-next-line no-unused-params
 param agentOrchestrator string
 
 // capacitySku (reserved for v3.x) was removed from this module: it was an
@@ -234,8 +235,8 @@ param appImageTags object = {
   setupOrchestrator: 'v0.1'
 }
 
-@description('Deploy the browser-driven Setup Orchestrator Container App (loom-setup-orchestrator) so the Setup Wizard\'s Deploy submits the real subscription-scoped ARM deployment (templateLink to main.json). Container Apps only (Commercial / GCC); on AKS boundaries deploy it via the cluster GitOps path. Requires the loom-setup-orchestrator image pushed to ACR + deployAppsEnabled. Off by default — flip on once the image + template are published. The Setup Orchestrator UAMI (the Console UAMI) is granted Contributor per target subscription by main.bicep\'s setup-orchestrator-rbac module.')
-param setupOrchestratorEnabled bool = false
+@description('Deploy the browser-driven Setup Orchestrator Container App (loom-setup-orchestrator) so the Setup Wizard\'s Deploy submits the real subscription-scoped ARM deployment (templateLink to main.json). On by default — the activation gate `setupOrchestratorActive` additionally requires containerPlatform==containerApps + deployAppsEnabled, so it is a safe no-op on AKS boundaries (GCC-High / IL5), which deploy the orchestrator via the cluster GitOps path instead. The loom-setup-orchestrator image is built by the standard release matrix; if setupTemplateUri is unset the orchestrator honestly fails the Deploy with the publish remediation rather than faking success. Set false to skip the Container App + its cross-sub Contributor grants. The Setup Orchestrator UAMI (the Console UAMI) is granted Contributor per target subscription by main.bicep\'s setup-orchestrator-rbac module.')
+param setupOrchestratorEnabled bool = true
 
 @description('templateLink URI to the compiled main.json the Setup Orchestrator submits (publish via `az bicep build -f platform/fiab/bicep/main.bicep`). Empty = the orchestrator honestly fails the Deploy with the publish remediation rather than faking success.')
 param setupTemplateUri string = ''
@@ -2994,22 +2995,13 @@ module appDeployments 'app-deployments.bicep' = if (containerPlatform == 'contai
           { name: 'LOOM_MCP_BRIDGE_PORT', value: '8080' }
         ]
       }
-      {
-        name: 'loom-setup-orchestrator'
-        image: 'loom-setup-orchestrator:${appImageTags.orchestrator}'
-        uamiId: identity.outputs.uamiOrchestratorId
-        uamiClientId: identity.outputs.uamiOrchestratorClientId
-        ingressPort: 8000
-        external: false
-        healthPath: '/health'
-        tier: 'orchestrator'
-        minReplicas: 1
-        maxReplicas: 3
-        env: [
-          { name: 'AGENT_ORCHESTRATOR', value: agentOrchestrator }
-          { name: 'MCP_ENDPOINT', value: 'http://loom-mcp:8080' }
-        ]
-      }
+      // NOTE: loom-setup-orchestrator is NOT in this generic appDeployments
+      // array. It is deployed by the dedicated `setupOrchestrator` module below
+      // (setup-orchestrator.bicep), gated on `setupOrchestratorActive`, running
+      // AS the Console UAMI with the real Setup env (LOOM_ARM_ENDPOINT /
+      // LOOM_SETUP_TEMPLATE_URI / internal token) and port 8080. A duplicate
+      // entry here (a legacy agent-orchestrator stub) would collide on the
+      // container-app name once the orchestrator deploys by default — removed.
       {
         name: 'loom-activator'
         image: 'loom-activator:${appImageTags.activator}'

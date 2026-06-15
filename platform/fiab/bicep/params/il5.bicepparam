@@ -153,6 +153,12 @@ param contentSafetyEnabled = false
 param apimEnabled = true
 param aiSearchEnabled = false
 param adxEnabled = true
+// Setup Orchestrator — enabled so the Console UAMI is granted Contributor on the
+// target sub(s) for cross-sub deploy. The Setup Orchestrator *Container App* is a
+// no-op here (containerPlatform=='aks' fails the setupOrchestratorActive gate); on
+// AKS the orchestrator runs via the cluster GitOps path as the same Console UAMI.
+param setupOrchestratorEnabled = bool(readEnvironmentVariable('LOOM_SETUP_ORCHESTRATOR_ENABLED', 'true'))
+param setupTemplateUri = readEnvironmentVariable('LOOM_SETUP_TEMPLATE_URI', '')
 // Gremlin (graph editor) + NoSQL vector. Gov suffix gremlin.cosmos.azure.us
 // is selected automatically from boundary='IL5'.
 param cosmosGraphVectorEnabled = true

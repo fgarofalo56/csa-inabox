@@ -144,6 +144,13 @@ param agentFoundryEnabled = true
 param apimEnabled = true
 param aiSearchEnabled = false
 param adxEnabled = true
+// Setup Orchestrator — on by default so the Setup Wizard's Deploy submits the
+// real subscription-scoped ARM deployment and the Console UAMI is granted
+// Contributor on the target sub(s). Set LOOM_SETUP_TEMPLATE_URI to the published
+// main.json templateLink; empty = the orchestrator honestly fails Deploy with the
+// publish remediation rather than faking success.
+param setupOrchestratorEnabled = bool(readEnvironmentVariable('LOOM_SETUP_ORCHESTRATOR_ENABLED', 'true'))
+param setupTemplateUri = readEnvironmentVariable('LOOM_SETUP_TEMPLATE_URI', '')
 // Cosmos Gremlin (graph editor) + NoSQL vector accounts. Default on so the
 // cosmos-gremlin-graph + vector-store editors work on a clean full deploy —
 // the Gremlin capability is fixed at account-creation, so the default NoSQL
