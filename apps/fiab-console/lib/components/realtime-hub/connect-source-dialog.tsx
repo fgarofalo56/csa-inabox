@@ -630,7 +630,8 @@ export function ConnectSourceDialog({
                                 })}
                               </Dropdown>
                             </div>
-                            <Button appearance="subtle" icon={<ArrowClockwise16Regular />}
+                            <Button appearance="subtle"
+                              icon={certsLoading ? <Spinner size="tiny" /> : <ArrowClockwise16Regular />}
                               aria-label="Refresh certificates" onClick={loadCerts}
                               disabled={certsLoading || !!certGate} />
                           </div>
@@ -699,7 +700,8 @@ export function ConnectSourceDialog({
                                 )}
                               </Dropdown>
                             </div>
-                            <Button appearance="subtle" icon={<ArrowClockwise16Regular />}
+                            <Button appearance="subtle"
+                              icon={loading ? <Spinner size="tiny" /> : <ArrowClockwise16Regular />}
                               aria-label={`Refresh ${f.label}`}
                               disabled={!!optGate || !depsOk || loading}
                               onClick={() => {
