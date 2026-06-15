@@ -37,6 +37,7 @@ import {
   ManagedIdentityCredential,
   ChainedTokenCredential,
 } from '@azure/identity';
+import { AcaManagedIdentityCredential } from '@/lib/azure/aca-managed-identity';
 import { detectLoomCloud } from './cloud-endpoints';
 
 // The Synapse Studio data-plane host + token scope are sovereign-cloud aware.
@@ -61,6 +62,7 @@ const DEV_API = '2020-12-01';
 const uamiClientId = process.env.LOOM_UAMI_CLIENT_ID || process.env.AZURE_CLIENT_ID;
 const credential: ChainedTokenCredential | DefaultAzureCredential = uamiClientId
   ? new ChainedTokenCredential(
+      new AcaManagedIdentityCredential(),
       new ManagedIdentityCredential({ clientId: uamiClientId }),
       new DefaultAzureCredential(),
     )

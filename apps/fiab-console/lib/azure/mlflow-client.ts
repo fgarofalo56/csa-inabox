@@ -35,6 +35,7 @@ import {
   ManagedIdentityCredential,
   ChainedTokenCredential,
 } from '@azure/identity';
+import { AcaManagedIdentityCredential } from '@/lib/azure/aca-managed-identity';
 import { armScope, amlDataPlaneHost } from './cloud-endpoints';
 
 const ARM_SCOPE = armScope();
@@ -42,6 +43,7 @@ const ARM_SCOPE = armScope();
 const uamiClientId = process.env.LOOM_UAMI_CLIENT_ID || process.env.AZURE_CLIENT_ID;
 const credential: ChainedTokenCredential | DefaultAzureCredential = uamiClientId
   ? new ChainedTokenCredential(
+      new AcaManagedIdentityCredential(),
       new ManagedIdentityCredential({ clientId: uamiClientId }),
       new DefaultAzureCredential(),
     )

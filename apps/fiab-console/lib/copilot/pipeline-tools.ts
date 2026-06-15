@@ -18,6 +18,7 @@ import {
   DefaultAzureCredential,
   ManagedIdentityCredential,
 } from '@azure/identity';
+import { AcaManagedIdentityCredential } from '@/lib/azure/aca-managed-identity';
 import { cogScope } from '../azure/cloud-endpoints';
 import type { AoaiTarget } from '../azure/copilot-orchestrator';
 import type { PipelineSpec } from '../components/pipeline/types';
@@ -30,6 +31,7 @@ export type PipelineBackend = 'adf' | 'synapse';
 const uamiClientId = process.env.LOOM_UAMI_CLIENT_ID || process.env.AZURE_CLIENT_ID;
 const credential = uamiClientId
   ? new ChainedTokenCredential(
+      new AcaManagedIdentityCredential(),
       new ManagedIdentityCredential({ clientId: uamiClientId }),
       new DefaultAzureCredential(),
     )

@@ -51,6 +51,7 @@ import {
   DefaultAzureCredential,
   ManagedIdentityCredential,
 } from '@azure/identity';
+import { AcaManagedIdentityCredential } from '@/lib/azure/aca-managed-identity';
 import { armBase, armScope, getAasSuffix, aasScope } from './cloud-endpoints';
 import { AasError } from './aas-client';
 
@@ -61,6 +62,7 @@ const ARM_API = '2017-08-01';
 const uamiClientId = process.env.LOOM_UAMI_CLIENT_ID || process.env.AZURE_CLIENT_ID;
 const credential: ChainedTokenCredential | DefaultAzureCredential = uamiClientId
   ? new ChainedTokenCredential(
+      new AcaManagedIdentityCredential(),
       new ManagedIdentityCredential({ clientId: uamiClientId }),
       new DefaultAzureCredential(),
     )

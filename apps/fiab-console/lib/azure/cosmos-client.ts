@@ -13,6 +13,7 @@
 
 import { CosmosClient, type Container, type Database } from '@azure/cosmos';
 import { ChainedTokenCredential, DefaultAzureCredential, ManagedIdentityCredential } from '@azure/identity';
+import { AcaManagedIdentityCredential } from '@/lib/azure/aca-managed-identity';
 
 let _client: CosmosClient | null = null;
 let _db: Database | null = null;
@@ -390,7 +391,7 @@ function credential() {
   const chain: any[] = [];
   if (clientId) chain.push(new ManagedIdentityCredential({ clientId }));
   chain.push(new DefaultAzureCredential());
-  return new ChainedTokenCredential(...chain);
+  return new ChainedTokenCredential(new AcaManagedIdentityCredential(), ...chain);
 }
 
 function client(): CosmosClient {

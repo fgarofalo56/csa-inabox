@@ -23,6 +23,7 @@
  */
 
 import type { Container } from '@azure/cosmos';
+import { AcaManagedIdentityCredential } from '@/lib/azure/aca-managed-identity';
 
 /** Supported field primitive types for a governed event schema. */
 export type BusinessFieldType = 'string' | 'number' | 'boolean' | 'datetime' | 'json';
@@ -94,7 +95,7 @@ async function credential() {
   const chain: any[] = [];
   if (clientId) chain.push(new ManagedIdentityCredential({ clientId }));
   chain.push(new DefaultAzureCredential());
-  return new ChainedTokenCredential(...chain);
+  return new ChainedTokenCredential(new AcaManagedIdentityCredential(), ...chain);
 }
 
 async function client(): Promise<any> {

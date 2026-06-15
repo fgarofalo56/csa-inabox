@@ -30,6 +30,7 @@ import {
   DefaultAzureCredential,
   ManagedIdentityCredential,
 } from '@azure/identity';
+import { AcaManagedIdentityCredential } from '@/lib/azure/aca-managed-identity';
 import { armBase, armScope } from './cloud-endpoints';
 
 // Sovereign-cloud ARM host + scope (Commercial / GCC-High / IL5).
@@ -67,6 +68,7 @@ const DIAG_TTL_MS = Number(process.env.LOOM_MONITOR_DIAG_TTL_MS) || 60_000;
 const uamiClientId = process.env.LOOM_UAMI_CLIENT_ID || process.env.AZURE_CLIENT_ID;
 const credential = uamiClientId
   ? new ChainedTokenCredential(
+      new AcaManagedIdentityCredential(),
       new ManagedIdentityCredential({ clientId: uamiClientId }),
       new DefaultAzureCredential(),
     )

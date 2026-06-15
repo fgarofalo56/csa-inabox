@@ -35,6 +35,7 @@ import {
   DefaultAzureCredential,
   ManagedIdentityCredential,
 } from '@azure/identity';
+import { AcaManagedIdentityCredential } from '@/lib/azure/aca-managed-identity';
 import crypto from 'node:crypto';
 import { armBase, armScope, graphBase, graphScope } from './cloud-endpoints';
 import { workspaceRolesContainer } from './cosmos-client';
@@ -112,7 +113,7 @@ export interface RemoveRoleResult {
 
 const uamiClientId = process.env.LOOM_UAMI_CLIENT_ID || process.env.AZURE_CLIENT_ID;
 const credential = uamiClientId
-  ? new ChainedTokenCredential(new ManagedIdentityCredential({ clientId: uamiClientId }), new DefaultAzureCredential())
+  ? new ChainedTokenCredential(new AcaManagedIdentityCredential(), new ManagedIdentityCredential({ clientId: uamiClientId }), new DefaultAzureCredential())
   : new DefaultAzureCredential();
 
 async function armToken(): Promise<string> {

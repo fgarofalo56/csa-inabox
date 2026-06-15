@@ -19,6 +19,7 @@ import {
   ManagedIdentityCredential,
   ChainedTokenCredential,
 } from '@azure/identity';
+import { AcaManagedIdentityCredential } from '@/lib/azure/aca-managed-identity';
 import { armBase, armScope, armHost, adfFactoryDeepLinkId } from './cloud-endpoints';
 import { pathToHttpsUrl, KNOWN_CONTAINERS } from './adls-client';
 import { executeQuery, serverlessTarget } from './synapse-sql-client';
@@ -36,6 +37,7 @@ const ARM_HOST = armHost();
 const uamiClientId = process.env.LOOM_UAMI_CLIENT_ID || process.env.AZURE_CLIENT_ID;
 const credential: ChainedTokenCredential | DefaultAzureCredential = uamiClientId
   ? new ChainedTokenCredential(
+      new AcaManagedIdentityCredential(),
       new ManagedIdentityCredential({ clientId: uamiClientId }),
       new DefaultAzureCredential(),
     )

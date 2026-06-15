@@ -46,6 +46,7 @@ import {
   ManagedIdentityCredential,
   type TokenCredential,
 } from '@azure/identity';
+import { AcaManagedIdentityCredential } from '@/lib/azure/aca-managed-identity';
 import { aasSuffix, pbiXmlaScope, detectLoomCloud } from './cloud-endpoints';
 // AasError is shared with aas-client.ts so that `e instanceof AasError` in the
 // BFF route holds regardless of which module threw.
@@ -251,6 +252,7 @@ function credentialFor(backend: Backend): TokenCredential {
     const uamiClientId = process.env.LOOM_UAMI_CLIENT_ID || process.env.AZURE_CLIENT_ID;
     _cred = uamiClientId
       ? new ChainedTokenCredential(
+          new AcaManagedIdentityCredential(),
           new ManagedIdentityCredential({ clientId: uamiClientId }),
           new DefaultAzureCredential(),
         )

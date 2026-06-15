@@ -50,6 +50,7 @@ import {
   DefaultAzureCredential,
   ManagedIdentityCredential,
 } from '@azure/identity';
+import { AcaManagedIdentityCredential } from '@/lib/azure/aca-managed-identity';
 import {
   createDatabase,
   executeMgmtCommand,
@@ -277,7 +278,7 @@ async function seedTable(dbName: string, t: TableDef, steps: string[]): Promise<
 const armCredential = (() => {
   const uamiClientId = process.env.LOOM_UAMI_CLIENT_ID || process.env.AZURE_CLIENT_ID;
   return uamiClientId
-    ? new ChainedTokenCredential(new ManagedIdentityCredential({ clientId: uamiClientId }), new DefaultAzureCredential())
+    ? new ChainedTokenCredential(new AcaManagedIdentityCredential(), new ManagedIdentityCredential({ clientId: uamiClientId }), new DefaultAzureCredential())
     : new DefaultAzureCredential();
 })();
 

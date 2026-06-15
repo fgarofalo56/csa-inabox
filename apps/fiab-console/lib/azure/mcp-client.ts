@@ -14,6 +14,7 @@ import {
   DefaultAzureCredential,
   ManagedIdentityCredential,
 } from '@azure/identity';
+import { AcaManagedIdentityCredential } from '@/lib/azure/aca-managed-identity';
 import { kvScope, kvSuffix } from './cloud-endpoints';
 import type { McpToolsListResponse, McpToolsCallRequest, McpToolsCallResponse } from '../types/mcp-config';
 
@@ -23,7 +24,7 @@ import type { McpToolsListResponse, McpToolsCallRequest, McpToolsCallResponse } 
 // *.vault.usgovcloudapi.net + the matching scope) via cloud-endpoints helpers.
 const uamiClientId = process.env.LOOM_UAMI_CLIENT_ID || process.env.AZURE_CLIENT_ID;
 const kvCredential = uamiClientId
-  ? new ChainedTokenCredential(new ManagedIdentityCredential({ clientId: uamiClientId }), new DefaultAzureCredential())
+  ? new ChainedTokenCredential(new AcaManagedIdentityCredential(), new ManagedIdentityCredential({ clientId: uamiClientId }), new DefaultAzureCredential())
   : new DefaultAzureCredential();
 
 /**

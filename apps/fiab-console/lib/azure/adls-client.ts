@@ -18,6 +18,7 @@ import {
   ManagedIdentityCredential,
   type TokenCredential,
 } from '@azure/identity';
+import { AcaManagedIdentityCredential } from '@/lib/azure/aca-managed-identity';
 import {
   DataLakeServiceClient,
   type DataLakeFileSystemClient,
@@ -37,6 +38,7 @@ const uamiClientId = process.env.LOOM_UAMI_CLIENT_ID || process.env.AZURE_CLIENT
 // when no clientId), never a bare DefaultAzureCredential on the container path —
 // a bare DAC can collapse to dev-only credentials and skip Managed Identity.
 const credential: TokenCredential = new ChainedTokenCredential(
+  new AcaManagedIdentityCredential(),
   new ManagedIdentityCredential(uamiClientId ? { clientId: uamiClientId } : {}),
   new DefaultAzureCredential(),
 );

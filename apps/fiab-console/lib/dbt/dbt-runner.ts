@@ -26,6 +26,7 @@ import {
   type JobSpec,
 } from '@/lib/azure/databricks-client';
 import { DefaultAzureCredential, ManagedIdentityCredential, ChainedTokenCredential } from '@azure/identity';
+import { AcaManagedIdentityCredential } from '@/lib/azure/aca-managed-identity';
 import type { GeneratedFile } from './dbt-codegen';
 
 /** Root workspace folder Loom writes generated dbt projects into. */
@@ -166,6 +167,7 @@ export function dbtRunnerConfigGate(): { missing: string } | null {
 const runnerCred: ChainedTokenCredential | DefaultAzureCredential =
   (process.env.LOOM_UAMI_CLIENT_ID || process.env.AZURE_CLIENT_ID)
     ? new ChainedTokenCredential(
+        new AcaManagedIdentityCredential(),
         new ManagedIdentityCredential({ clientId: process.env.LOOM_UAMI_CLIENT_ID || process.env.AZURE_CLIENT_ID! }),
         new DefaultAzureCredential(),
       )

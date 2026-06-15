@@ -31,6 +31,7 @@ import {
   DefaultAzureCredential,
   ManagedIdentityCredential,
 } from '@azure/identity';
+import { AcaManagedIdentityCredential } from '@/lib/azure/aca-managed-identity';
 
 import { cogScope } from '@/lib/azure/cloud-endpoints';
 import { executeQuery, dedicatedTarget } from '@/lib/azure/synapse-sql-client';
@@ -48,6 +49,7 @@ import type { LoomToolRegistry, ToolContext, AoaiTarget } from '@/lib/azure/copi
 const uamiClientId = process.env.LOOM_UAMI_CLIENT_ID || process.env.AZURE_CLIENT_ID;
 const credential = uamiClientId
   ? new ChainedTokenCredential(
+      new AcaManagedIdentityCredential(),
       new ManagedIdentityCredential({ clientId: uamiClientId }),
       new DefaultAzureCredential(),
     )

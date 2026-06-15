@@ -36,6 +36,7 @@
  */
 import { fetchWithTimeout } from '@/lib/azure/fetch-with-timeout';
 import { ChainedTokenCredential, DefaultAzureCredential, ManagedIdentityCredential } from '@azure/identity';
+import { AcaManagedIdentityCredential } from '@/lib/azure/aca-managed-identity';
 import type { Provisioner, ProvisionResult } from './types';
 
 // Latest Unified Catalog data-plane API version (public preview).
@@ -43,7 +44,7 @@ const UC_API = process.env.LOOM_PURVIEW_UC_API_VERSION || '2026-03-20-preview';
 
 const uamiClientId = process.env.LOOM_UAMI_CLIENT_ID;
 const credential = uamiClientId
-  ? new ChainedTokenCredential(new ManagedIdentityCredential({ clientId: uamiClientId }), new DefaultAzureCredential())
+  ? new ChainedTokenCredential(new AcaManagedIdentityCredential(), new ManagedIdentityCredential({ clientId: uamiClientId }), new DefaultAzureCredential())
   : new DefaultAzureCredential();
 
 async function token(): Promise<string> {

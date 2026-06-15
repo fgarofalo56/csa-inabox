@@ -17,6 +17,7 @@ import {
   DefaultAzureCredential,
   ManagedIdentityCredential,
 } from '@azure/identity';
+import { AcaManagedIdentityCredential } from '@/lib/azure/aca-managed-identity';
 import { armBase, armScope, stripArmBase } from './cloud-endpoints';
 
 const ARM_SCOPE = armScope();
@@ -28,6 +29,7 @@ const uamiClientId = process.env.LOOM_UAMI_CLIENT_ID || process.env.AZURE_CLIENT
 // clientId); never a bare DefaultAzureCredential, which can skip Managed
 // Identity on a Container App and surface a dev-only credential chain failure.
 const credential: ChainedTokenCredential = new ChainedTokenCredential(
+  new AcaManagedIdentityCredential(),
   new ManagedIdentityCredential(uamiClientId ? { clientId: uamiClientId } : {}),
   new DefaultAzureCredential(),
 );

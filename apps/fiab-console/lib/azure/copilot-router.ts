@@ -34,6 +34,7 @@ import {
   DefaultAzureCredential,
   ManagedIdentityCredential,
 } from '@azure/identity';
+import { AcaManagedIdentityCredential } from '@/lib/azure/aca-managed-identity';
 
 import { fetchWithTimeout, LLM_FETCH_TIMEOUT_MS } from './fetch-with-timeout';
 import { cogScope } from './cloud-endpoints';
@@ -141,6 +142,7 @@ export function buildAgentIdentity(opts: { persona?: string | null; contextSlug?
 const uamiClientId = process.env.LOOM_UAMI_CLIENT_ID || process.env.AZURE_CLIENT_ID;
 const credential = uamiClientId
   ? new ChainedTokenCredential(
+      new AcaManagedIdentityCredential(),
       new ManagedIdentityCredential({ clientId: uamiClientId }),
       new DefaultAzureCredential(),
     )

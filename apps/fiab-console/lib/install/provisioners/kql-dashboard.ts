@@ -36,6 +36,7 @@
  */
 import { fetchWithTimeout } from '@/lib/azure/fetch-with-timeout';
 import { ChainedTokenCredential, DefaultAzureCredential, ManagedIdentityCredential } from '@azure/identity';
+import { AcaManagedIdentityCredential } from '@/lib/azure/aca-managed-identity';
 import { FabricError, fabricHint } from '@/lib/azure/fabric-client';
 import type { Provisioner, ProvisionResult } from './types';
 
@@ -43,7 +44,7 @@ const FABRIC_BASE = process.env.LOOM_FABRIC_BASE || 'https://api.fabric.microsof
 const FABRIC_SCOPE = 'https://api.fabric.microsoft.com/.default';
 const uamiClientId = process.env.LOOM_UAMI_CLIENT_ID;
 const credential = uamiClientId
-  ? new ChainedTokenCredential(new ManagedIdentityCredential({ clientId: uamiClientId }), new DefaultAzureCredential())
+  ? new ChainedTokenCredential(new AcaManagedIdentityCredential(), new ManagedIdentityCredential({ clientId: uamiClientId }), new DefaultAzureCredential())
   : new DefaultAzureCredential();
 
 async function getToken(scope: string): Promise<string> {

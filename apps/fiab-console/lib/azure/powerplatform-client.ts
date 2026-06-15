@@ -27,6 +27,7 @@ import {
   ChainedTokenCredential, DefaultAzureCredential, ManagedIdentityCredential,
   ClientSecretCredential, type TokenCredential,
 } from '@azure/identity';
+import { AcaManagedIdentityCredential } from '@/lib/azure/aca-managed-identity';
 
 const BAP_BASE = process.env.LOOM_BAP_BASE || 'https://api.bap.microsoft.com';
 const POWERAPPS_BASE = process.env.LOOM_POWERAPPS_BASE || 'https://api.powerapps.com';
@@ -39,7 +40,7 @@ const FLOW_SCOPE = 'https://service.flow.microsoft.com/.default';
 // UAMI credential — used for BAP / PowerApps / Flow control-plane calls.
 const uamiClientId = process.env.LOOM_UAMI_CLIENT_ID || process.env.AZURE_CLIENT_ID;
 const uamiCredential: TokenCredential = uamiClientId
-  ? new ChainedTokenCredential(new ManagedIdentityCredential({ clientId: uamiClientId }), new DefaultAzureCredential())
+  ? new ChainedTokenCredential(new AcaManagedIdentityCredential(), new ManagedIdentityCredential({ clientId: uamiClientId }), new DefaultAzureCredential())
   : new DefaultAzureCredential();
 
 // Dataverse credential — UAMIs aren't valid Dataverse Application Users

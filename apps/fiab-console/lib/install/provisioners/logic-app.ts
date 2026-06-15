@@ -33,6 +33,7 @@ import {
   ManagedIdentityCredential,
   ChainedTokenCredential,
 } from '@azure/identity';
+import { AcaManagedIdentityCredential } from '@/lib/azure/aca-managed-identity';
 import type { Provisioner, ProvisionResult } from './types';
 import { triggerAndPollWorkflowRun } from './_seed-logic-app';
 import { armBase, armScope, LOGIC_APP_WORKFLOW_SCHEMA } from '../../azure/cloud-endpoints';
@@ -46,6 +47,7 @@ export const LOGIC_API = '2016-06-01';
 const uamiClientId = process.env.LOOM_UAMI_CLIENT_ID;
 const credential: ChainedTokenCredential | DefaultAzureCredential = uamiClientId
   ? new ChainedTokenCredential(
+      new AcaManagedIdentityCredential(),
       new ManagedIdentityCredential({ clientId: uamiClientId }),
       new DefaultAzureCredential(),
     )

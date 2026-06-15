@@ -25,6 +25,7 @@ import {
   DefaultAzureCredential,
   ManagedIdentityCredential,
 } from '@azure/identity';
+import { AcaManagedIdentityCredential } from '@/lib/azure/aca-managed-identity';
 import crypto from 'node:crypto';
 import { cogScope } from '../azure/cloud-endpoints';
 import type { AoaiTarget } from '../azure/copilot-orchestrator';
@@ -111,6 +112,7 @@ export const OPS_TOOL_SCHEMAS: unknown[] = [
 const uamiClientId = process.env.LOOM_UAMI_CLIENT_ID || process.env.AZURE_CLIENT_ID;
 const credential: ChainedTokenCredential | DefaultAzureCredential = uamiClientId
   ? new ChainedTokenCredential(
+      new AcaManagedIdentityCredential(),
       new ManagedIdentityCredential({ clientId: uamiClientId }),
       new DefaultAzureCredential(),
     )

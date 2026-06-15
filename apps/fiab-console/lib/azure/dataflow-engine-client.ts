@@ -18,6 +18,7 @@
  */
 
 import { fetchWithTimeout } from '@/lib/azure/fetch-with-timeout';
+import { AcaManagedIdentityCredential } from '@/lib/azure/aca-managed-identity';
 import { cogScope } from './cloud-endpoints';
 import type { AoaiTarget } from './copilot-orchestrator';
 import { DATAFLOW_COPILOT_PERSONA } from './copilot-personas-dataflow';
@@ -116,6 +117,7 @@ async function getCredential() {
   const { ChainedTokenCredential, DefaultAzureCredential, ManagedIdentityCredential } = await import('@azure/identity');
   _credential = uamiClientId
     ? new ChainedTokenCredential(
+        new AcaManagedIdentityCredential(),
         new ManagedIdentityCredential({ clientId: uamiClientId }),
         new DefaultAzureCredential(),
       )
