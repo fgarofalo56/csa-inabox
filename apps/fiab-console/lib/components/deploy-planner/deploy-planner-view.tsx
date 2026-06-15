@@ -261,6 +261,18 @@ const useStyles = makeStyles({
     paddingRight: tokens.spacingHorizontalXS,
   },
   costBody: { display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalM },
+  // Currency + pricing-region pickers — a distinct controls bar above the report.
+  costPickers: {
+    display: 'flex', flexWrap: 'wrap', alignItems: 'flex-end',
+    gap: tokens.spacingHorizontalL, rowGap: tokens.spacingVerticalS,
+    marginBottom: tokens.spacingVerticalM,
+    paddingTop: tokens.spacingVerticalS, paddingBottom: tokens.spacingVerticalS,
+    paddingLeft: tokens.spacingHorizontalM, paddingRight: tokens.spacingHorizontalM,
+    borderRadius: tokens.borderRadiusMedium,
+    border: `1px solid ${tokens.colorNeutralStroke2}`,
+    backgroundColor: tokens.colorNeutralBackground2,
+  },
+  costPickerField: { minWidth: '200px', flex: '1 1 200px' },
   costDomain: {
     display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalXS,
     paddingTop: tokens.spacingVerticalS, paddingBottom: tokens.spacingVerticalS,
@@ -878,12 +890,13 @@ function PlannerInner() {
           <DialogBody>
             <DialogTitle>Estimated monthly cost — {costSub?.name}</DialogTitle>
             <DialogContent className={s.costScroll}>
-              <div style={{ display: 'flex', gap: tokens.spacingHorizontalL, flexWrap: 'wrap', marginBottom: tokens.spacingVerticalM }}>
-                <Field label="Currency" hint="Azure Retail Prices API currency">
+              <div className={s.costPickers}>
+                <Field className={s.costPickerField} label="Currency" hint="Azure Retail Prices API currency">
                   <Dropdown
                     aria-label="Estimate currency"
                     value={RETAIL_CURRENCIES.find((c) => c.code === costCurrency)?.label || costCurrency}
                     selectedOptions={[costCurrency]}
+                    disabled={costBusy}
                     onOptionSelect={(_, d) => {
                       const code = String(d.optionValue || DEFAULT_CURRENCY);
                       setCostCurrency(code);
@@ -895,11 +908,12 @@ function PlannerInner() {
                     ))}
                   </Dropdown>
                 </Field>
-                <Field label="Pricing region" hint="Commercial armRegionName priced against">
+                <Field className={s.costPickerField} label="Pricing region" hint="Commercial armRegionName priced against">
                   <Dropdown
                     aria-label="Pricing region"
                     value={costRegion ? regionLabel(costRegion) : 'Boundary default'}
                     selectedOptions={[costRegion]}
+                    disabled={costBusy}
                     onOptionSelect={(_, d) => {
                       const name = String(d.optionValue || '');
                       setCostRegion(name);
