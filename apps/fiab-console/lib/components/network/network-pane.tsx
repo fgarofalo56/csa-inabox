@@ -30,6 +30,7 @@ import {
   Info16Filled, Dismiss16Filled,
 } from '@fluentui/react-icons';
 import { NetworkTopologyCanvas } from './topology-canvas';
+import { FullNetworkTopologyCanvas } from './full-topology-canvas';
 
 interface DnsRecord { fqdn: string; ips: string[]; zone: string; }
 interface PrivateEndpoint {
@@ -271,6 +272,26 @@ export function NetworkPane() {
           local fix, or wire the enterprise DNS below for everyone.
         </MessageBarBody>
       </MessageBar>
+
+      {/* 0 · Full network topology — live Azure Resource Graph visual of the
+          ENTIRE network estate (vNets, subnets, peering, PEs, NSGs, firewalls,
+          Bastion, Container Apps envs, App Gateways, LBs, private DNS zones).
+          Fetches its own data + renders its own honest gate, so it shows the
+          full graph even when the private-endpoint inventory below is empty. */}
+      <div style={card}>
+        <div style={head}>
+          <Globe24Regular />
+          <Subtitle2>CSA Loom network topology</Subtitle2>
+          <Badge appearance="tint" color="brand" style={{ marginLeft: 'auto' }}>Azure Resource Graph</Badge>
+        </div>
+        <Body1 style={{ display: 'block', marginBottom: 12, color: tokens.colorNeutralForeground3 }}>
+          A live resource-graph map of the whole network estate across the readable subscription(s):
+          virtual networks &rarr; subnets &rarr; the private endpoints, NSGs, Azure Firewalls, Bastion hosts,
+          Container Apps environments, application gateways and load balancers attached to each — plus
+          vNet&harr;vNet peering and the private DNS zones. Select any node for its live ARM detail.
+        </Body1>
+        <FullNetworkTopologyCanvas />
+      </div>
 
       {loading && <Spinner label="Discovering private endpoints…" />}
 
