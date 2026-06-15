@@ -94,6 +94,8 @@ param purviewEnabled = true
 // no-vaporware-compliant fallback). Pull the short account name from
 // `az purview account list`.
 param loomPurviewAccount = readEnvironmentVariable('LOOM_PURVIEW_ACCOUNT', '')
+// #229 cross-region Purview safety valve (empty = hub location).
+param purviewLocation = readEnvironmentVariable('LOOM_PURVIEW_LOCATION', '')
 // Azure Maps — leave EXISTING_AZURE_MAPS_ACCOUNT unset to DEPLOY a fresh Gen2
 // account (azure-maps.bicep, default for Commercial/GCC). Set it to bring your
 // own existing account; the module is skipped and the env binds to your name.

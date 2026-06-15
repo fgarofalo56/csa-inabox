@@ -324,6 +324,18 @@ var dnsZones = [
   // the DLZ falls back to the documents zone and the cosmos-gremlin-graph
   // editor fails at runtime. Gov: gremlin.cosmos.azure.us.
   'privatelink.gremlin.cosmos.azure.${boundary == 'GCC-High' || boundary == 'IL5' ? 'us' : 'com'}'
+  // Governance deploy-readiness (#229) — Microsoft Purview classic Data Map.
+  // catalog.bicep deploys the account with publicNetworkAccess='Disabled', so
+  // the Console (in the hub VNet) can only reach the data plane
+  // ({account}.purview.azure.{tld}/{catalog,scan,policystore}) and Studio
+  // ({account}.purviewstudio.azure.{tld}) through PRIVATE ENDPOINTS that resolve
+  // on these two zones. Without them the account is unreachable even when
+  // provisioned, so /api/governance/purview/status returns a network-error
+  // not_configured AFTER a "successful" deploy (the live-centralus symptom).
+  // Index 21 = account host, 22 = portal/Studio host (see privateDnsZoneIds).
+  // Gov: .purview.azure.us / .purviewstudio.azure.us.
+  'privatelink.purview.azure.${boundary == 'GCC-High' || boundary == 'IL5' ? 'us' : 'com'}'
+  'privatelink.purviewstudio.azure.${boundary == 'GCC-High' || boundary == 'IL5' ? 'us' : 'com'}'
 ]
 
 resource privateDnsZones 'Microsoft.Network/privateDnsZones@2024-06-01' = [for zone in dnsZones: {
@@ -454,4 +466,12 @@ output privateDnsZoneIds object = {
   // group. Without this key it falls back to the NoSQL documents zone and the
   // graph editor's wss:// host never resolves over Private Link.
   cosmosGremlin: privateDnsZones[20].id
+  // Governance deploy-readiness (#229) — Microsoft Purview Data Map private
+  // endpoint zones. `purview` (index 21) backs the account-host PE (groupId
+  // 'account': catalog/scan/policystore data plane the Console probes); studio
+  // (index 22) backs the portal PE (groupId 'portal': purviewstudio web host).
+  // catalog.bicep consumes both so a PE-locked Purview account is reachable from
+  // the hub VNet by default.
+  purview: privateDnsZones[21].id
+  purviewStudio: privateDnsZones[22].id
 }

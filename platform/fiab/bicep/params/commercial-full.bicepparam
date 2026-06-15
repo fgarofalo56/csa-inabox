@@ -40,16 +40,19 @@ param databricksAccountId = readEnvironmentVariable('LOOM_DATABRICKS_ACCOUNT_ID'
 param defenderForAIEnabled = true
 // Unified Catalog + Enterprise Purview reuse:
 //   The /catalog surface federates Purview + UC + OneLake and the
-//   /admin/security Purview tab calls REAL endpoints. Because this
-//   tenant already has an Enterprise Purview (dmlz-dev-purview-eastus),
-//   we DO NOT deploy a second one (would fail with
-//   'EnterpriseTenantAlreadyExists'). Instead we wire the existing
-//   account into the console via LOOM_PURVIEW_ACCOUNT.
-//   If your tenant does NOT already have an Enterprise Purview, set
-//   purviewEnabled = true and clear loomPurviewAccount.
-param purviewEnabled = false
-// Override via env: LOOM_PURVIEW_ACCOUNT=<short-account-name>
-param loomPurviewAccount = readEnvironmentVariable('LOOM_PURVIEW_ACCOUNT', 'dmlz-dev-purview-eastus')
+//   /admin/security Purview tab calls REAL endpoints.
+//   Governance deploy-readiness (#229): Purview is now ON BY DEFAULT (opt-out).
+//   A clean commercial-full deploy provisions + wires + PE-protects a NEW classic
+//   Data Map account so /governance works on first login with no manual step.
+//   Opt OUT with LOOM_PURVIEW_ENABLED=false. REUSE an existing account instead by
+//   setting LOOM_PURVIEW_ACCOUNT to its short name (reuse takes precedence over
+//   provisioning). LOOM_PURVIEW_LOCATION pins the account to a known-Purview
+//   region when the hub region lacks capacity (empty = hub location).
+param purviewEnabled = bool(readEnvironmentVariable('LOOM_PURVIEW_ENABLED', 'true'))
+// Empty default = use the freshly provisioned account. Set LOOM_PURVIEW_ACCOUNT
+// to a short account name to REUSE an existing Purview instead.
+param loomPurviewAccount = readEnvironmentVariable('LOOM_PURVIEW_ACCOUNT', '')
+param purviewLocation = readEnvironmentVariable('LOOM_PURVIEW_LOCATION', '')
 // Information Protection + DLP — opt in after the post-deploy bootstrap
 // workflow grants the Graph AppRoles AND admin consent is issued.
 // Set LOOM_MIP_ENABLED / LOOM_DLP_ENABLED env vars to flip these on.
