@@ -37,6 +37,11 @@ export function LineagePanel({ source, id, host, workspaceId, itemId }: LineageP
   // the merge toggle is only meaningful for the Azure-native Purview / UC paths.
   const mergeable = source === 'purview' || source === 'unity-catalog';
   const [merge, setMerge] = useState(mergeable);
+  // Column-level lineage (system.access.column_lineage) is a Unity Catalog
+  // capability — matches Databricks Catalog Explorer's "See column-level
+  // lineage" toggle. Off by default so the table-grain graph stays primary.
+  const columnsAvailable = source === 'unity-catalog';
+  const [columns, setColumns] = useState(false);
 
   const loadLineage = (isRefresh?: boolean) => {
     if (!isRefresh) setLoading(true);
@@ -47,6 +52,7 @@ export function LineagePanel({ source, id, host, workspaceId, itemId }: LineageP
     if (workspaceId) params.set('workspaceId', workspaceId);
     if (itemId) params.set('itemId', itemId);
     if (merge && mergeable) params.set('merge', 'true');
+    if (columns && columnsAvailable) params.set('columns', 'true');
     fetch(`/api/catalog/lineage/item?${params.toString()}`)
       .then(r => r.json())
       .then(j => {
@@ -59,7 +65,7 @@ export function LineagePanel({ source, id, host, workspaceId, itemId }: LineageP
       .finally(() => setLoading(false));
   };
 
-  useEffect(() => { loadLineage(); /* eslint-disable-next-line react-hooks/exhaustive-deps */ }, [source, id, host, workspaceId, itemId, merge]);
+  useEffect(() => { loadLineage(); /* eslint-disable-next-line react-hooks/exhaustive-deps */ }, [source, id, host, workspaceId, itemId, merge, columns]);
 
   const gatedSources = sources.filter((x) => !x.ok);
 
@@ -72,6 +78,13 @@ export function LineagePanel({ source, id, host, workspaceId, itemId }: LineageP
             checked={merge}
             onChange={(_, d) => setMerge(!!d.checked)}
             label="Unified (Purview + Unity Catalog + Weave)"
+          />
+        )}
+        {columnsAvailable && (
+          <Switch
+            checked={columns}
+            onChange={(_, d) => setColumns(!!d.checked)}
+            label="Column-level lineage"
           />
         )}
         {merge && sources.length > 0 && (

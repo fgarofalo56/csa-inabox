@@ -254,6 +254,7 @@ export async function GET(
   );
   const hostOverride = req.nextUrl.searchParams.get('host') || '';
   const keyOverride = req.nextUrl.searchParams.get('key') || '';
+  const columnLineage = req.nextUrl.searchParams.get('columns') === 'true';
   const cloud: LoomCloud = detectLoomCloud();
 
   // Best-effort item lookup: powers display name, lineage-key resolution from
@@ -304,6 +305,7 @@ export async function GET(
       ucHost: hostOverride || undefined,
       purviewGuid,
       atlasFetcher,
+      columnLineage,
     });
     return NextResponse.json({ ...result, backend, cloud });
   } catch (e: any) {
