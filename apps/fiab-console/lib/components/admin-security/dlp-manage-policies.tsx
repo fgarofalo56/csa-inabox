@@ -38,6 +38,8 @@ const useStyles = makeStyles({
   fieldStack: { display: 'flex', flexDirection: 'column', gap: 12, minWidth: 460 },
   row: { display: 'flex', gap: 16, flexWrap: 'wrap' },
   checks: { display: 'flex', flexDirection: 'column', gap: 4 },
+  workloadCell: { display: 'flex', gap: 4, flexWrap: 'wrap' },
+  rowActions: { display: 'flex', gap: 4, justifyContent: 'flex-end' },
 });
 
 // Policy enforcement modes (New/Set-DlpCompliancePolicy -Mode).
@@ -111,6 +113,7 @@ export function DlpManagePolicies() {
   const s = useStyles();
   const [state, setState] = useState<ManageState>({ loading: true, policies: null });
   const [form, setForm] = useState<FormState>(blankForm());
+  const [pendingDelete, setPendingDelete] = useState<PolicyView | null>(null);
 
   const load = useCallback(async () => {
     setState({ loading: true, policies: null });
@@ -189,8 +192,7 @@ export function DlpManagePolicies() {
   const remove = async (p: PolicyView) => {
     const id = p.id || p.name;
     if (!id) return;
-    // eslint-disable-next-line no-alert
-    if (typeof window !== 'undefined' && !window.confirm(`Delete DLP policy "${p.name}"? This removes the policy and its rules.`)) return;
+    setPendingDelete(null);
     setState((st) => ({ ...st, loading: true }));
     try {
       await fetch(`/api/admin/security/dlp/manage?id=${encodeURIComponent(id)}`, { method: 'DELETE' });
@@ -253,12 +255,20 @@ export function DlpManagePolicies() {
                 <TableRow key={p.id || p.name}>
                   <TableCell><strong>{p.name}</strong>{p.comment ? <Caption1 block style={{ color: tokens.colorNeutralForeground3 }}>{p.comment}</Caption1> : null}</TableCell>
                   <TableCell><Badge appearance="outline">{p.mode || '—'}</Badge></TableCell>
-                  <TableCell>{(p.locations || []).map((l) => <Badge key={l} appearance="outline" style={{ marginRight: 4 }}>{l}</Badge>) || '—'}</TableCell>
+                  <TableCell>
+                    {(p.locations || []).length ? (
+                      <div className={s.workloadCell}>
+                        {p.locations!.map((l) => <Badge key={l} appearance="outline">{l}</Badge>)}
+                      </div>
+                    ) : '—'}
+                  </TableCell>
                   <TableCell>{p.ruleCount ?? (p.rules || []).length}</TableCell>
                   <TableCell><Caption1>{sits.slice(0, 3).join(', ')}{sits.length > 3 ? ` +${sits.length - 3}` : ''}</Caption1></TableCell>
                   <TableCell>
-                    <Button size="small" icon={<EditRegular />} onClick={() => openEdit(p)} aria-label={`Edit ${p.name}`} />
-                    <Button size="small" icon={<DeleteRegular />} onClick={() => remove(p)} aria-label={`Delete ${p.name}`} />
+                    <div className={s.rowActions}>
+                      <Button size="small" appearance="subtle" icon={<EditRegular />} onClick={() => openEdit(p)} aria-label={`Edit ${p.name}`} />
+                      <Button size="small" appearance="subtle" icon={<DeleteRegular />} onClick={() => setPendingDelete(p)} aria-label={`Delete ${p.name}`} />
+                    </div>
                   </TableCell>
                 </TableRow>
               );
@@ -331,6 +341,23 @@ export function DlpManagePolicies() {
               <Button appearance="primary" onClick={submit} disabled={!canSubmit}>
                 {form.submitting ? (form.editingId ? 'Saving…' : 'Creating…') : (form.editingId ? 'Save policy' : 'Create policy')}
               </Button>
+            </DialogActions>
+          </DialogBody>
+        </DialogSurface>
+      </Dialog>
+
+      <Dialog open={!!pendingDelete} onOpenChange={(_, d) => { if (!d.open) setPendingDelete(null); }}>
+        <DialogSurface>
+          <DialogBody>
+            <DialogTitle>Delete DLP policy</DialogTitle>
+            <DialogContent>
+              Delete <strong>{pendingDelete?.name}</strong>? This removes the policy and all of its rules from
+              Security &amp; Compliance. This action cannot be undone.
+            </DialogContent>
+            <DialogActions>
+              <Button appearance="secondary" onClick={() => setPendingDelete(null)}>Cancel</Button>
+              <Button appearance="primary" icon={<DeleteRegular />}
+                onClick={() => pendingDelete && remove(pendingDelete)}>Delete policy</Button>
             </DialogActions>
           </DialogBody>
         </DialogSurface>
