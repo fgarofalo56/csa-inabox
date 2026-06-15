@@ -753,6 +753,94 @@ interface ItemRow {
   currentLabelId?: string | null; currentLabelName?: string | null;
 }
 
+/**
+ * Recommendation extracted from a Graph `evaluateApplication` response so the
+ * Apply panel can render a real label chip + the marking/protection actions
+ * MIP would apply — instead of dumping raw JSON.
+ */
+interface EvalRecommendation {
+  labelId?: string;        // recommended label GUID (lowercased)
+  labelName?: string;      // canonical display name (live taxonomy first, else MSIP metadata)
+  color?: string;          // hex from the live taxonomy, if matched
+  markings: string[];      // human-readable content-marking actions (header/footer/watermark)
+  encrypted: boolean;      // protection (template / ad-hoc / do-not-forward) requested
+}
+
+/**
+ * Parse a Graph `evaluateApplication` informationProtectionAction collection
+ * into a UI-friendly recommendation. The recommended label id is carried two
+ * ways depending on the action returned:
+ *   - `applyLabelAction` / `recommendLabelAction` expose a `sensitivityLabel`
+ *     (or legacy `label`) relationship with an `id`.
+ *   - `metadataAction.metadataToAdd` embeds it as `MSIP_Label_<guid>_Enabled` /
+ *     `MSIP_Label_<guid>_Name` key/value pairs.
+ * We also collect the content-marking + protection actions for display.
+ * Returns null when nothing label-shaped is present (caller falls back to the
+ * raw JSON so we never hide an unexpected payload — no-vaporware honesty).
+ */
+function parseEvaluation(raw: unknown, labels: LabelRow[]): EvalRecommendation | null {
+  if (!raw || typeof raw !== 'object') return null;
+  const value = (raw as { value?: unknown }).value;
+  const actions: unknown[] | null = Array.isArray(value)
+    ? value
+    : Array.isArray(raw) ? (raw as unknown[]) : null;
+  if (!actions) return null;
+
+  let labelId: string | undefined;
+  let labelName: string | undefined;
+  const markings: string[] = [];
+  let encrypted = false;
+  const labelKeyRe = /^MSIP_Label_([0-9a-fA-F-]{36})_(\w+)$/;
+
+  for (const entry of actions) {
+    if (!entry || typeof entry !== 'object') continue;
+    const action = entry as Record<string, any>;
+    const odata = String(action['@odata.type'] || '');
+
+    const direct = action.sensitivityLabel ?? action.label;
+    if (direct && typeof direct === 'object' && typeof direct.id === 'string') {
+      labelId = labelId || direct.id.toLowerCase();
+      labelName = labelName || direct.displayName || direct.name;
+    }
+
+    const toAdd = action.metadataToAdd;
+    if (Array.isArray(toAdd)) {
+      for (const kv of toAdd) {
+        const m = labelKeyRe.exec(String(kv?.name || ''));
+        if (!m) continue;
+        const field = m[2].toLowerCase();
+        if (field === 'enabled' && String(kv?.value).toLowerCase() === 'true') {
+          labelId = labelId || m[1].toLowerCase();
+        }
+        if (field === 'name') labelName = labelName || String(kv?.value || '');
+      }
+    }
+
+    if (odata.includes('addContentHeaderAction')) markings.push(`Header: ${action.text ?? ''}`.trim());
+    else if (odata.includes('addContentFooterAction')) markings.push(`Footer: ${action.text ?? ''}`.trim());
+    else if (odata.includes('addWatermarkAction')) markings.push(`Watermark: ${action.text ?? ''}`.trim());
+    else if (
+      odata.includes('protectByTemplateAction') ||
+      odata.includes('protectAdhocAction') ||
+      odata.includes('protectByDoNotForwardAction') ||
+      odata.includes('protectDoNotForwardAction')
+    ) {
+      encrypted = true;
+    }
+  }
+
+  if (!labelId && !labelName && markings.length === 0 && !encrypted) return null;
+
+  const match = labelId ? labels.find((l) => l.id?.toLowerCase() === labelId) : undefined;
+  return {
+    labelId,
+    labelName: match?.displayName || match?.name || labelName,
+    color: match?.color,
+    markings,
+    encrypted: encrypted || !!match?.hasProtection,
+  };
+}
+
 function ApplyLabelSection({ labelsState }: { labelsState: ApiState<LabelsPayload> }) {
   const s = useStyles();
   const [items, setItems] = useState<ApiState<{ ok: boolean; items?: ItemRow[] }>>(emptyState());
@@ -778,6 +866,19 @@ function ApplyLabelSection({ labelsState }: { labelsState: ApiState<LabelsPayloa
   const appliableLabels = useMemo(
     () => (labelsState.data?.labels || []).filter((l) => l.isActive !== false && l.isAppliable !== false),
     [labelsState.data],
+  );
+
+  // Map the raw evaluateApplication response → recommended label chip + actions.
+  const recommendation = useMemo(
+    () => (evalResult !== null ? parseEvaluation(evalResult, labelsState.data?.labels || []) : null),
+    [evalResult, labelsState.data],
+  );
+  // The matching appliable label (original-case id) so "Use this label" can preselect it.
+  const recLabel = useMemo(
+    () => (recommendation?.labelId
+      ? appliableLabels.find((l) => l.id?.toLowerCase() === recommendation.labelId)
+      : undefined),
+    [recommendation, appliableLabels],
   );
 
   const apply = async () => {
@@ -890,9 +991,50 @@ function ApplyLabelSection({ labelsState }: { labelsState: ApiState<LabelsPayloa
         </div>
         {evalErr && <MessageBar intent="error" style={{ marginTop: 10 }}><MessageBarBody>{evalErr}</MessageBarBody></MessageBar>}
         {evalResult !== null && (
-          <pre style={{ marginTop: 10, fontSize: 11, backgroundColor: tokens.colorNeutralBackground2, padding: 8, borderRadius: 4, overflow: 'auto', maxHeight: 240 }}>
-            {JSON.stringify(evalResult, null, 2)}
-          </pre>
+          recommendation ? (
+            <div style={{ marginTop: 10, padding: 10, borderRadius: 6, border: `1px solid ${tokens.colorNeutralStroke2}`, backgroundColor: tokens.colorNeutralBackground2 }}>
+              <Caption1 block style={{ color: tokens.colorNeutralForeground3, marginBottom: 6 }}>MIP recommends:</Caption1>
+              <div style={{ display: 'flex', alignItems: 'center', flexWrap: 'wrap', gap: 8 }}>
+                {recommendation.labelName ? (
+                  <Badge appearance="filled" color="brand" size="large">
+                    <span className={s.swatch} style={{ backgroundColor: recommendation.color || '#888' }} />
+                    {recommendation.labelName}
+                  </Badge>
+                ) : (
+                  <Caption1>No specific label recommended for this content.</Caption1>
+                )}
+                {recommendation.encrypted && <Badge appearance="tint" color="warning">encryption</Badge>}
+                {recLabel && (
+                  <Button
+                    size="small"
+                    appearance="secondary"
+                    disabled={selLabel === recLabel.id}
+                    onClick={() => setSelLabel(recLabel.id)}
+                  >
+                    {selLabel === recLabel.id ? 'Selected above' : 'Use this label'}
+                  </Button>
+                )}
+              </div>
+              {recommendation.markings.length > 0 && (
+                <div style={{ marginTop: 8 }}>
+                  <Caption1 block style={{ color: tokens.colorNeutralForeground3, marginBottom: 4 }}>Content markings MIP would apply:</Caption1>
+                  <div style={{ display: 'flex', flexWrap: 'wrap', gap: 4 }}>
+                    {recommendation.markings.map((m, i) => <Badge key={`${m}-${i}`} appearance="outline">{m}</Badge>)}
+                  </div>
+                </div>
+              )}
+              <details style={{ marginTop: 8 }}>
+                <summary style={{ cursor: 'pointer', fontSize: 11, color: tokens.colorNeutralForeground3 }}>Raw Graph response</summary>
+                <pre style={{ marginTop: 6, fontSize: 11, backgroundColor: tokens.colorNeutralBackground1, padding: 8, borderRadius: 4, overflow: 'auto', maxHeight: 240 }}>
+                  {JSON.stringify(evalResult, null, 2)}
+                </pre>
+              </details>
+            </div>
+          ) : (
+            <pre style={{ marginTop: 10, fontSize: 11, backgroundColor: tokens.colorNeutralBackground2, padding: 8, borderRadius: 4, overflow: 'auto', maxHeight: 240 }}>
+              {JSON.stringify(evalResult, null, 2)}
+            </pre>
+          )
         )}
       </div>
     </div>

@@ -15,9 +15,13 @@ Grounded in Microsoft Learn:
 
 Microsoft Graph exposes **read** of sensitivity-label *definitions* app-only
 (`InformationProtectionPolicy.Read.All`) and the `evaluateApplication`
-recommendation, but **no write API** for label definitions or policies, and **no
-app-only read for label policies**. Label/policy CRUD lives ONLY in Security &
-Compliance PowerShell. So Loom splits the surface:
+recommendation. Graph has **no app-only read for label policies at all**, and
+only a thin, low-fidelity label-definition create surface under the separate
+`/beta/security/dataSecurityAndGovernance/sensitivityLabels` navigation property
+— which cannot publish a policy, cannot scope a label to workloads, and lacks
+full color/encryption/marking fidelity, so Loom does **not** use it. Full
+label + policy CRUD lives in Security & Compliance PowerShell. So Loom splits
+the surface:
 
 - **READ (label definitions) + evaluate** → Microsoft Graph beta via the Console
   UAMI (`mip-graph-client.ts`). Works whenever `LOOM_MIP_ENABLED=true`.
@@ -42,7 +46,7 @@ exist app-only. Policy reads now go through `Get-LabelPolicy`.
 | Edit label policy (labels, scope, mandatory, default) | ✅ Edit policy wizard (scope prefilled from live policy; edits diff to add/remove) | `PATCH /api/admin/security/mip/policies/[id]` → `Set-LabelPolicy` `Add*/Remove*Location` + `Add/RemoveLabels` (sidecar diffs against `Get-LabelPolicy`) |
 | Delete label policy | ✅ Delete (confirm dialog) | `DELETE /api/admin/security/mip/policies/[id]` → `Remove-LabelPolicy` |
 | Apply a label to content | ✅ Apply label wizard (pick item → pick label → apply) | `PUT /api/items/[type]/[id]/sensitivity-label` (validates taxonomy + policy, writes Cosmos + Purview Atlas) |
-| Auto-label recommendation | ✅ "Get recommendation" in Apply tab | `POST /api/admin/security/mip/evaluate` → `sensitivityLabels/evaluateApplication` |
+| Auto-label recommendation | ✅ "Get recommendation" in Apply tab — renders the recommended label as a themed chip (swatch + name mapped to the live taxonomy) plus the content-marking / encryption actions MIP would apply, with a "Use this label" shortcut and a collapsible raw-response view | `POST /api/admin/security/mip/evaluate` → `sensitivityLabels/evaluateApplication` |
 | Encryption / RMS template detail editor | ⚠️ encryption ON/OFF toggle only (full RMS template config is a Purview-portal deep surface) | `New-/Set-Label -EncryptionEnabled` |
 | Adaptive scopes + location exceptions (`*LocationException`, `ExchangeAdaptiveScopes`) | ⚠️ static locations only (All / explicit identities); adaptive scopes + exception lists are a Purview-portal deep surface, not yet built | `New-/Set-LabelPolicy` exception params (available, not wired) |
 
