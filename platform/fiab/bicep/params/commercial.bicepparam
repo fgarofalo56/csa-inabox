@@ -48,6 +48,11 @@ param topology = 'tenant'
 
 // Compute
 param containerPlatform = 'containerApps'
+// Setup Orchestrator — on by default (Container Apps boundary). The Console UAMI
+// gets Contributor on the target sub so the Setup Wizard's Deploy runs the real
+// subscription-scoped ARM deployment. LOOM_SETUP_TEMPLATE_URI = published main.json.
+param setupOrchestratorEnabled = bool(readEnvironmentVariable('LOOM_SETUP_ORCHESTRATOR_ENABLED', 'true'))
+param setupTemplateUri = readEnvironmentVariable('LOOM_SETUP_TEMPLATE_URI', '')
 param functionsHostSku = 'FlexConsumption'
 param apimSku = 'PremiumV2'
 

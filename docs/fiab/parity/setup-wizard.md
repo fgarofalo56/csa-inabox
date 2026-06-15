@@ -88,7 +88,7 @@ maps boundary → param file from this verified set (no invented names).
 | a | **Single-sub auto-uses the Admin Plane subscription** (no dropdown); multi-sub multi-selects spoke subs | ✅ | `GET /api/setup/config` (LOOM_SUBSCRIPTION_ID/LOOM_LOCATION), `GET /api/setup/subscriptions` |
 | b | **Full per-boundary region list**, live ARM `subscriptions/{id}/locations` for the chosen sub with authoritative static fallback (Commercial/GCC=Public, GCC-High/IL5=US Gov, DoD=US DoD) | ✅ | `GET /api/setup/regions`, `lib/azure/azure-regions.ts` |
 | c | **Visual architecture diagram** of the planned deployment (reuses the T132 React Flow canvas), shown alongside the generated Bicep on Review | ✅ | `lib/components/setup/deployment-diagram.tsx` |
-| d | **Setup Orchestrator** submits the real subscription-scoped ARM deployment (single- AND multi-sub) under its managed identity; honest fallbacks to GitHub dispatch then copy-paste `az` | ✅ orchestrator path is real (ARM SDK `begin_create_or_update_at_subscription_scope`); ⚠️ opt-in (image+template gate, off by default) | `orchestrator.py` `run_bicep_deploy`, `setup-orchestrator.bicep`, `POST /api/setup/deploy`, `GET /api/setup/deploy-status` |
+| d | **Setup Orchestrator** submits the real subscription-scoped ARM deployment (single- AND multi-sub) under its managed identity; honest fallbacks to GitHub dispatch then copy-paste `az` | ✅ orchestrator path is real (ARM SDK `begin_create_or_update_at_subscription_scope`) and now **deployed by default** on Container Apps boundaries (`setupOrchestratorActive` gate); `setupTemplateUri` empty ⇒ honest publish-remediation, never fake success | `orchestrator.py` `run_bicep_deploy`, `setup-orchestrator.bicep`, `POST /api/setup/deploy`, `GET /api/setup/deploy-status` |
 | d2 | **Multi-sub deploy auth** — orchestrator identity (Console UAMI) gets Contributor at the hub sub AND each spoke sub | ✅ | `setup-orchestrator-rbac.bicep` (subscription-scoped, looped per `dlzSubscriptionIds`) |
 | e | **Wire existing DLZ(s)** discovered via Azure Resource Graph, wired into the Admin Plane with no re-deploy | ✅ | `GET /api/setup/existing-dlzs`, `POST /api/setup/wire-existing` |
 
@@ -105,16 +105,32 @@ terminal state, or a missing template URI, fails honestly (no fake progress, per
 no-vaporware.md). The wizard polls real status via `GET /api/setup/deploy-status`
 → orchestrator `GET /api/setup/{id}`.
 
-**Scope note — NOT deploy-by-default yet.** The orchestrator Container App
-defaults OFF (`setupOrchestratorEnabled=false`) and `LOOM_SETUP_TEMPLATE_URI`
-defaults empty — the standard Loom image-in-ACR gate plus a published-template
-gate. Until the `loom-setup-orchestrator` image is in ACR and the `main.json`
-templateLink is published, the deploy BFF uses the GitHub workflow-dispatch tier
-(when `LOOM_GITHUB_ACTIONS_TOKEN` is set) or the copy-paste `az deployment sub
-create` tier — so the wizard's Deploy is always functional, never a dead button.
-Flip `setupOrchestratorEnabled=true` + set `setupTemplateUri` once both artifacts
-ship to make the orchestrator the default path. On AKS boundaries the orchestrator
-deploys via the cluster GitOps path. The review diagram only renders Azure-native
+**Deploy-by-default (audit-t142 follow-up).** The orchestrator Container App now
+defaults **ON** — `setupOrchestratorEnabled=true` in both `platform/fiab/bicep/main.bicep`
+and `modules/admin-plane/main.bicep`, and the boundary `.bicepparam` files that target the full hub template
+(`commercial-full`, `commercial`, `gcc`, `gcc-high`, `il5`, `tenant-dmlz`) set
+it from `LOOM_SETUP_ORCHESTRATOR_ENABLED` (default `'true'`). `dlz-attach.bicepparam`
+targets the landing-zone-only template (no admin plane), so it does not carry the
+orchestrator params.
+The admin-plane activation gate `setupOrchestratorActive = setupOrchestratorEnabled
+&& containerPlatform == 'containerApps' && deployAppsEnabled` keeps it a safe no-op
+on the AKS boundaries (GCC-High / IL5), which deploy the orchestrator via the
+cluster GitOps path as the same Console UAMI; their param still enables it so the
+subscription-scoped Contributor grant (`setup-orchestrator-rbac.bicep`) is made
+for that GitOps orchestrator. When the orchestrator is deployed, the console gets
+`LOOM_SETUP_ORCHESTRATOR_URL` from `setupOrchestrator.outputs.url`, so the deploy
+BFF takes the tier-1 orchestrator path. `LOOM_SETUP_TEMPLATE_URI` still defaults
+empty — if the published `main.json` templateLink is not yet set, the orchestrator
+fails the Deploy honestly with the publish remediation (no fake progress, per
+no-vaporware.md) rather than the wizard being broken; the GitHub workflow-dispatch
+and copy-paste `az deployment sub create` tiers remain as honest fallbacks.
+
+A duplicate `loom-setup-orchestrator` Container App entry (a legacy agent-orchestrator
+stub keyed on `appImageTags.orchestrator`, port 8000) was removed from the generic
+`appDeployments` array in `modules/admin-plane/main.bicep`. It collided on the
+container-app **name** with the real `setupOrchestrator` module (Console UAMI, port
+8080, real Setup env) once the orchestrator deploys by default — the dedicated
+module is now the single deployer. The review diagram only renders Azure-native
 services the deployment actually provisions; works with
 `LOOM_DEFAULT_FABRIC_WORKSPACE` unset (no-fabric-dependency.md).
 
