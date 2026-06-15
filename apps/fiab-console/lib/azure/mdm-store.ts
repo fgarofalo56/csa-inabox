@@ -11,6 +11,7 @@ import { tenantSettingsContainer } from '@/lib/azure/cosmos-client';
 import {
   SURVIVORSHIP_STRATEGIES, MATCH_TYPES,
   type MdmModel, type MatchAttribute, type SurvivorshipRule, type SurvivorshipStrategy, type MatchType,
+  type CrosswalkPair,
 } from '@/lib/azure/mdm-match-merge';
 
 // --------------------------- Models ---------------------------
@@ -210,4 +211,64 @@ export async function appendMdmRun(tenantId: string, rec: MdmRunRecord): Promise
   doc.updatedAt = new Date().toISOString();
   await c.items.upsert<MdmRunsDoc>(doc);
   return doc.items;
+}
+
+// ----------------------- Steward crosswalk -----------------------
+// Per-model steward-approved duplicate pairs. Approving a fuzzy candidate is an
+// explicit stewardship action; approved pairs are unioned into the merge so
+// manually-confirmed duplicates survive into one golden record.
+interface CrosswalkDoc { id: string; tenantId: string; kind: 'mdm-crosswalk'; byModel: Record<string, CrosswalkPair[]>; updatedAt: string }
+function crosswalkId(t: string) { return `mdm-crosswalk:${t}`; }
+const MAX_CROSSWALK_PAIRS = 5000;
+const pairKey = (a: string, b: string) => [String(a), String(b)].sort().join('|');
+
+async function readCrosswalkDoc(tenantId: string): Promise<CrosswalkDoc> {
+  const c = await tenantSettingsContainer();
+  const id = crosswalkId(tenantId);
+  try {
+    const { resource } = await c.item(id, tenantId).read<CrosswalkDoc>();
+    return resource || { id, tenantId, kind: 'mdm-crosswalk', byModel: {}, updatedAt: '' };
+  } catch (e: any) { if (e?.code !== 404) throw e; return { id, tenantId, kind: 'mdm-crosswalk', byModel: {}, updatedAt: '' }; }
+}
+
+/** List steward-approved crosswalk pairs for a model. */
+export async function listCrosswalk(tenantId: string, modelId: string): Promise<CrosswalkPair[]> {
+  const doc = await readCrosswalkDoc(tenantId);
+  return doc.byModel[modelId] || [];
+}
+
+/** Approve (upsert) one or more steward pairs for a model; de-duped by id pair. */
+export async function approveCrosswalkPairs(
+  tenantId: string, modelId: string, pairs: { idA: string; idB: string }[], approvedBy: string,
+): Promise<CrosswalkPair[]> {
+  const c = await tenantSettingsContainer();
+  const doc = await readCrosswalkDoc(tenantId);
+  const existing = doc.byModel[modelId] || [];
+  const seen = new Set(existing.map((p) => pairKey(p.idA, p.idB)));
+  const now = new Date().toISOString();
+  const added: CrosswalkPair[] = [];
+  for (const p of pairs) {
+    const a = String(p?.idA || '').trim(), b = String(p?.idB || '').trim();
+    if (!a || !b || a === b) continue;
+    const k = pairKey(a, b);
+    if (seen.has(k)) continue;
+    seen.add(k);
+    added.push({ idA: a, idB: b, approvedBy, approvedAt: now });
+  }
+  const next = [...existing, ...added].slice(-MAX_CROSSWALK_PAIRS);
+  doc.byModel[modelId] = next;
+  doc.updatedAt = now;
+  await c.items.upsert<CrosswalkDoc>(doc);
+  return next;
+}
+
+/** Revoke a previously-approved pair for a model. */
+export async function removeCrosswalkPair(tenantId: string, modelId: string, idA: string, idB: string): Promise<CrosswalkPair[]> {
+  const c = await tenantSettingsContainer();
+  const doc = await readCrosswalkDoc(tenantId);
+  const k = pairKey(idA, idB);
+  doc.byModel[modelId] = (doc.byModel[modelId] || []).filter((p) => pairKey(p.idA, p.idB) !== k);
+  doc.updatedAt = new Date().toISOString();
+  await c.items.upsert<CrosswalkDoc>(doc);
+  return doc.byModel[modelId];
 }

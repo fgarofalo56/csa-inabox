@@ -24,7 +24,7 @@ import {
   MessageBar, MessageBarBody, MessageBarTitle,
   makeStyles, tokens,
 } from '@fluentui/react-components';
-import { Add24Regular, ArrowSync24Regular, Delete20Regular, Edit20Regular, Play20Regular } from '@fluentui/react-icons';
+import { Add24Regular, ArrowSync24Regular, Delete20Regular, Edit20Regular, Play20Regular, CheckmarkCircle20Regular } from '@fluentui/react-icons';
 import { GovernanceShell } from '@/lib/components/governance-shell';
 import { Section } from '@/lib/components/ui/section';
 import { LoomDataTable, type LoomColumn } from '@/lib/components/ui/loom-data-table';
@@ -293,14 +293,27 @@ function RefDataTab() {
 }
 
 // ----------------------------- Match -----------------------------
+const pairKey = (a: string, b: string) => [a, b].sort().join('|');
+
 function MatchTab({ models }: { models: MdmModel[] }) {
   const s = useStyles();
   const [modelId, setModelId] = useState('');
   const [minScore, setMinScore] = useState('80');
   const [busy, setBusy] = useState(false);
   const [candidates, setCandidates] = useState<MatchCandidate[] | null>(null);
+  const [approved, setApproved] = useState<Set<string>>(new Set());
   const [gate, setGate] = useState<{ missing: string; error: string } | null>(null);
   const [error, setError] = useState<string | null>(null);
+
+  const loadApproved = useCallback(async (id: string) => {
+    if (!id) { setApproved(new Set()); return; }
+    try {
+      const r = await fetch(`/api/mdm/match/approve?modelId=${encodeURIComponent(id)}`);
+      const j = await r.json();
+      if (j.ok) setApproved(new Set((j.pairs || []).map((p: any) => pairKey(String(p.idA), String(p.idB)))));
+    } catch { /* */ }
+  }, []);
+  useEffect(() => { loadApproved(modelId); }, [modelId, loadApproved]);
 
   async function run() {
     setBusy(true); setError(null); setGate(null); setCandidates(null);
@@ -313,11 +326,38 @@ function MatchTab({ models }: { models: MdmModel[] }) {
     } catch (e: any) { setError(e?.message || String(e)); } finally { setBusy(false); }
   }
 
+  async function approve(c: MatchCandidate) {
+    const key = pairKey(c.idA, c.idB);
+    setApproved((prev) => new Set(prev).add(key)); // optimistic
+    try {
+      const r = await fetch('/api/mdm/match/approve', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ modelId, pairs: [{ idA: c.idA, idB: c.idB }] }) });
+      const j = await r.json();
+      if (!j.ok) { setError(j.error || 'Approve failed'); setApproved((prev) => { const n = new Set(prev); n.delete(key); return n; }); }
+    } catch (e: any) { setError(e?.message || String(e)); setApproved((prev) => { const n = new Set(prev); n.delete(key); return n; }); }
+  }
+  async function revoke(c: MatchCandidate) {
+    const key = pairKey(c.idA, c.idB);
+    setApproved((prev) => { const n = new Set(prev); n.delete(key); return n; }); // optimistic
+    try {
+      await fetch(`/api/mdm/match/approve?modelId=${encodeURIComponent(modelId)}&idA=${encodeURIComponent(c.idA)}&idB=${encodeURIComponent(c.idB)}`, { method: 'DELETE' });
+    } catch (e: any) { setError(e?.message || String(e)); }
+  }
+
   const cols: LoomColumn<MatchCandidate>[] = [
     { key: 'a', label: 'Record A', sortable: true, filterable: true, getValue: (c) => c.idA, render: (c) => <Caption1>{c.idA}{c.sourceA ? ` (${c.sourceA})` : ''}</Caption1> },
     { key: 'b', label: 'Record B', sortable: true, filterable: true, getValue: (c) => c.idB, render: (c) => <Caption1>{c.idB}{c.sourceB ? ` (${c.sourceB})` : ''}</Caption1> },
     { key: 'score', label: 'Match score', sortable: true, width: 200, getValue: (c) => c.score, render: (c) => (
       <span className={s.pctCell}><span className={s.bar}><span className={s.barFill} style={{ width: `${c.score}%`, backgroundColor: c.score >= 95 ? 'var(--loom-accent-green)' : 'var(--loom-accent-amber)' }} /></span><Text size={200}>{c.score.toFixed(1)}%</Text></span>) },
+    { key: 'steward', label: 'Stewardship', width: 150, getValue: (c) => (approved.has(pairKey(c.idA, c.idB)) ? 1 : 0), render: (c) => {
+      const isApproved = approved.has(pairKey(c.idA, c.idB));
+      return (
+        <span onClick={(e) => e.stopPropagation()} style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+          {isApproved
+            ? <><Badge appearance="filled" color="success" size="small">Approved</Badge><Button size="small" appearance="transparent" onClick={() => revoke(c)} aria-label="Revoke approval">Revoke</Button></>
+            : <Button size="small" icon={<CheckmarkCircle20Regular />} onClick={() => approve(c)}>Approve merge</Button>}
+        </span>
+      );
+    } },
   ];
 
   return (
@@ -332,7 +372,12 @@ function MatchTab({ models }: { models: MdmModel[] }) {
       </div>
       {gate && <MessageBar intent="warning" style={{ marginBottom: 12 }}><MessageBarBody><MessageBarTitle>Databricks not configured</MessageBarTitle>{gate.error} Set <code>{gate.missing}</code> on the Console (admin-plane bicep).</MessageBarBody></MessageBar>}
       {error && <MessageBar intent="error" style={{ marginBottom: 12 }}><MessageBarBody>{error}</MessageBarBody></MessageBar>}
-      {candidates && <LoomDataTable<MatchCandidate> columns={cols} rows={candidates} getRowId={(c) => `${c.idA}|${c.idB}`} empty="No candidate pairs at or above the threshold." />}
+      {candidates && <>
+        <MessageBar intent="info" style={{ marginBottom: 12 }}><MessageBarBody>
+          Approving a pair is an explicit stewardship action — approved pairs are unioned into the golden cluster on the next merge, so fuzzy duplicates that don’t share every exact attribute still survive into one golden record. {approved.size} pair(s) approved for this model.
+        </MessageBarBody></MessageBar>
+        <LoomDataTable<MatchCandidate> columns={cols} rows={candidates} getRowId={(c) => `${c.idA}|${c.idB}`} empty="No candidate pairs at or above the threshold." />
+      </>}
     </Section>
   );
 }

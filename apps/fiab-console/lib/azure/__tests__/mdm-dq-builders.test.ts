@@ -5,8 +5,13 @@
  * a live Databricks SQL Warehouse in the deployed env — no mocks here).
  */
 import { describe, it, expect } from 'vitest';
-import { buildMatchSql, buildGoldenRecordSql, type MdmModel } from '../mdm-match-merge';
-import { compileDeltaConstraintDdl } from '../dq-monitor-client';
+import {
+  buildMatchSql, buildGoldenRecordSql, clusterCrosswalk, buildCrosswalkValues,
+  type MdmModel, type CrosswalkPair,
+} from '../mdm-match-merge';
+import {
+  compileDeltaConstraintDdl, granularityToEnum, buildGaMonitorBody, monitorApiMode,
+} from '../dq-monitor-client';
 import { normalizeModel, normalizeRefSet } from '../mdm-store';
 import type { DqRule } from '../data-quality-client';
 
@@ -105,5 +110,63 @@ describe('normalizeRefSet', () => {
     expect(errors).toHaveLength(0);
     expect(set?.version).toBe(3);
     expect(set?.entries).toHaveLength(1);
+  });
+});
+
+describe('GA data-quality monitor builders', () => {
+  it('defaults to the GA data-quality API mode', () => {
+    delete process.env.LOOM_DBX_DQ_MONITOR_API;
+    expect(monitorApiMode()).toBe('data-quality');
+    process.env.LOOM_DBX_DQ_MONITOR_API = 'legacy';
+    expect(monitorApiMode()).toBe('legacy');
+    delete process.env.LOOM_DBX_DQ_MONITOR_API;
+  });
+  it('maps human granularities onto AGGREGATION_GRANULARITY_* enums', () => {
+    expect(granularityToEnum('1 day')).toBe('AGGREGATION_GRANULARITY_1_DAY');
+    expect(granularityToEnum('30 minutes')).toBe('AGGREGATION_GRANULARITY_30_MINUTES');
+    expect(granularityToEnum('AGGREGATION_GRANULARITY_1_HOUR')).toBe('AGGREGATION_GRANULARITY_1_HOUR'); // passthrough
+    expect(granularityToEnum('garbage')).toBe('AGGREGATION_GRANULARITY_1_DAY'); // safe default
+  });
+  it('builds a snapshot create_monitor body keyed by table UUID', () => {
+    const body = buildGaMonitorBody({ objectId: 'tbl-uuid', outputSchemaId: 'sch-uuid', assetsDir: '/Workspace/x', profileType: 'snapshot' });
+    expect(body.object_type).toBe('table');
+    expect(body.object_id).toBe('tbl-uuid');
+    const cfg = body.data_profiling_config as any;
+    expect(cfg.output_schema_id).toBe('sch-uuid');
+    expect(cfg.snapshot).toEqual({});
+    expect(cfg.time_series).toBeUndefined();
+  });
+  it('builds a time_series body with enum granularities', () => {
+    const body = buildGaMonitorBody({ objectId: 't', outputSchemaId: 's', assetsDir: '/a', profileType: 'time_series', timestampCol: 'ts', granularities: ['1 day'] });
+    const cfg = body.data_profiling_config as any;
+    expect(cfg.time_series.timestamp_column).toBe('ts');
+    expect(cfg.time_series.granularities).toEqual(['AGGREGATION_GRANULARITY_1_DAY']);
+  });
+});
+
+describe('MDM steward crosswalk', () => {
+  it('union-finds approved pairs into a stable cluster (smallest id wins)', () => {
+    const pairs: CrosswalkPair[] = [{ idA: 'b', idB: 'c' }, { idA: 'a', idB: 'b' }];
+    const clusters = clusterCrosswalk(pairs);
+    expect(clusters.get('a')).toBe('a');
+    expect(clusters.get('b')).toBe('a');
+    expect(clusters.get('c')).toBe('a');
+  });
+  it('emits a VALUES crosswalk relation, or null when empty', () => {
+    expect(buildCrosswalkValues([])).toBeNull();
+    const v = buildCrosswalkValues([{ idA: 'r1', idB: 'r2' }]);
+    expect(v).toContain('VALUES');
+    expect(v).toContain('_cw(_cw_record_id, _cw_gid)');
+    expect(v).toContain("'cw:r1'"); // representative cluster id, prefixed
+  });
+  it('unions approved pairs into the golden merge via a LEFT JOIN override', () => {
+    const sql = buildGoldenRecordSql(model, [{ idA: 'r1', idB: 'r2' }]);
+    expect(sql).toContain('LEFT JOIN');
+    expect(sql).toContain('COALESCE(_cw._cw_gid, md5(');
+  });
+  it('falls back to the deterministic md5 cluster with no approved pairs', () => {
+    const sql = buildGoldenRecordSql(model, []);
+    expect(sql).not.toContain('LEFT JOIN');
+    expect(sql).toContain('md5(');
   });
 });
