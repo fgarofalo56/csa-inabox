@@ -589,7 +589,7 @@ export default function MetastoresPage() {
                           <Input value={scanHttpPath} onChange={(_, d) => setScanHttpPath(d.value)} placeholder="/sql/1.0/warehouses/abc123" />
                         </Field>
                         {scanAuth === 'access-token' && (
-                          <Field label="Purview credential (Key Vault Access Token)" hint="Name of the PAT credential in Purview">
+                          <Field required label="Purview credential (Key Vault Access Token)" hint="Name of the PAT credential in Purview">
                             <Input value={scanCredential} onChange={(_, d) => setScanCredential(d.value)} placeholder="dbx-pat-credential" />
                           </Field>
                         )}
