@@ -2,7 +2,7 @@
 
 import { useEffect, useMemo, useState } from 'react';
 import {
-  makeStyles, tokens, Spinner, MessageBar, MessageBarBody, Button, Badge,
+  tokens, Spinner, MessageBar, MessageBarBody, Button, Badge,
   Caption1,
 } from '@fluentui/react-components';
 import { Delete24Regular, Edit24Regular } from '@fluentui/react-icons';
@@ -49,7 +49,7 @@ export function ApimProductsPane() {
       render: (p) => (
         <div>
           <strong>{p.displayName}</strong>
-          {p.description && <Caption1 style={{ display: 'block', marginTop: '4px' }}>{p.description}</Caption1>}
+          {p.description && <Caption1 style={{ display: 'block', marginTop: '4px', color: tokens.colorNeutralForeground3 }}>{p.description}</Caption1>}
         </div>
       ),
     },
@@ -90,8 +90,20 @@ export function ApimProductsPane() {
       sortable: false,
       render: (p) => (
         <div style={{ display: 'flex', gap: tokens.spacingHorizontalS }}>
-          <Button size="small" icon={<Edit24Regular />} />
-          <Button size="small" icon={<Delete24Regular />} />
+          <Button
+            size="small"
+            appearance="subtle"
+            icon={<Edit24Regular />}
+            aria-label={`Edit ${p.displayName}`}
+            title={`Edit ${p.displayName}`}
+          />
+          <Button
+            size="small"
+            appearance="subtle"
+            icon={<Delete24Regular />}
+            aria-label={`Delete ${p.displayName}`}
+            title={`Delete ${p.displayName}`}
+          />
         </div>
       ),
     },

@@ -91,8 +91,20 @@ export function ApimApisPane() {
       sortable: false,
       render: (a) => (
         <div style={{ display: 'flex', gap: tokens.spacingHorizontalS }}>
-          <Button size="small" icon={<Edit24Regular />} onClick={() => window.location.href = `#`} />
-          <Button size="small" icon={<Delete24Regular />} onClick={() => {}} />
+          <Button
+            size="small"
+            appearance="subtle"
+            icon={<Edit24Regular />}
+            aria-label={`Edit ${a.displayName}`}
+            title={`Edit ${a.displayName}`}
+          />
+          <Button
+            size="small"
+            appearance="subtle"
+            icon={<Delete24Regular />}
+            aria-label={`Delete ${a.displayName}`}
+            title={`Delete ${a.displayName}`}
+          />
         </div>
       ),
     },

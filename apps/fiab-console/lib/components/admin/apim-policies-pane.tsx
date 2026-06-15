@@ -96,6 +96,8 @@ export function ApimPoliciesPane() {
         <textarea
           value={policyText}
           onChange={(e) => setPolicyText(e.currentTarget.value)}
+          aria-label="Policy XML"
+          spellCheck={false}
           style={{
             fontFamily: 'monospace',
             fontSize: '13px',
