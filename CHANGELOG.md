@@ -25,6 +25,13 @@ This file is maintained automatically by
 [Conventional Commits](https://www.conventionalcommits.org/). See
 [RELEASE.md](RELEASE.md) for the release process.
 
+## [0.41.1](https://github.com/fgarofalo56/csa-inabox/compare/csa-inabox-v0.41.0...csa-inabox-v0.41.1) (2026-06-15)
+
+
+### Documentation
+
+* **fiab:** deploy-readiness PRP — push-button, 100% working, scan-and-choose ([#1385](https://github.com/fgarofalo56/csa-inabox/issues/1385)) ([e3f9c9f](https://github.com/fgarofalo56/csa-inabox/commit/e3f9c9f5734e53685a42d91d2450f0372d728ebf))
+
 ## [0.41.0](https://github.com/fgarofalo56/csa-inabox/compare/csa-inabox-v0.40.0...csa-inabox-v0.41.0) (2026-06-15)
 
 
