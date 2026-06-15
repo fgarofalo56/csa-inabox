@@ -12,8 +12,15 @@
  * mode singleDlzRg is NOT deployed, so that yielded a phantom `saloomdefault…`
  * account name — LOOM_ORG_VISUALS_URL was emitted (so the pane skipped its
  * honest gate) but pointed at a storage account that does not exist, making
- * SAS minting 500 at runtime. The account MUST be gated on
- * `deploymentMode == 'single-sub'` so multi-sub honest-gates instead.
+ * SAS minting 500 at runtime. The account MUST be gated on single-sub so
+ * multi-sub honest-gates instead.
+ *
+ * Topology refactor (audit-t156, task #225): the single-sub gate is now
+ * expressed via the resolved `useSingleDlz` var
+ * (`deployLandingZones && effectiveTopology == 'single-sub'`) rather than the
+ * literal `deploymentMode == 'single-sub'`. Both forms are semantically
+ * single-sub-only and keep the phantom-account fix intact, so this guard
+ * accepts either spelling.
  */
 import { describe, it, expect } from 'vitest';
 import { readFileSync } from 'node:fs';
@@ -39,9 +46,12 @@ describe('embed-codes / org-visuals bicep wiring', () => {
     expect(topMain).not.toMatch(
       /loomStorageAccount:\s*take\('saloomdefault\$\{uniqueString\(singleDlzRg\.id\)\}/,
     );
-    // The fixed form: ternary gated on deploymentMode, empty in multi-sub.
+    // The fixed form: the account name is gated on a single-sub-only condition,
+    // empty ('') in multi-sub. Accept either the resolved `useSingleDlz` var
+    // (current, post audit-t156) or the original `deploymentMode == 'single-sub'`
+    // literal — both are semantically single-sub-only.
     expect(topMain).toMatch(
-      /loomStorageAccount:\s*deploymentMode == 'single-sub'\s*\?\s*take\('saloomdefault\$\{uniqueString\(singleDlzRg\.id\)\}', 24\)\s*:\s*''/,
+      /loomStorageAccount:\s*(?:useSingleDlz|deploymentMode == 'single-sub')\s*\?\s*take\('saloomdefault\$\{uniqueString\(singleDlzRg\.id\)\}', 24\)\s*:\s*''/,
     );
   });
 
