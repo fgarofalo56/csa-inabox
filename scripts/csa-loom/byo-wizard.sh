@@ -139,7 +139,8 @@ SERVICES=(
   "synapse|Synapse|Microsoft.Synapse/workspaces||existingSynapseWorkspace|existingSynapseRg|existingSynapseSub|EXISTING_SYNAPSE|EXISTING_SYNAPSE_RG|EXISTING_SYNAPSE_SUB|"
   "cosmos|Cosmos DB|Microsoft.DocumentDB/databaseAccounts||existingCosmosAccount|existingCosmosRg|existingCosmosSub|EXISTING_COSMOS_ACCOUNT|EXISTING_COSMOS_ACCOUNT_RG|EXISTING_COSMOS_ACCOUNT_SUB|"
   "adf|Data Factory|Microsoft.DataFactory/factories||existingAdfFactory|existingAdfRg|existingAdfSub|EXISTING_ADF|EXISTING_ADF_RG|EXISTING_ADF_SUB|"
-  "eventhubs|Event Hubs|Microsoft.EventHub/namespaces||existingEventHubNamespace|existingEventHubRg|existingEventHubSub|EXISTING_EVENTHUB_NAMESPACE|EXISTING_EVENTHUB_RG|EXISTING_EVENTHUB_SUB|"
+  "eventhubs|Event Hubs|Microsoft.EventHub/namespaces||existingEventHubNamespace|existingEventHubRg|existingEventHubSub|EXISTING_EVENTHUB_NAMESPACE|EXISTING_EVENTHUB_RG|EXISTING_EVENTHUB_SUB|loomEventHubEnabled"
+  "streamanalytics|Stream Analytics|Microsoft.StreamAnalytics/streamingjobs||existingAsaJob|existingAsaRg|existingAsaSub|EXISTING_ASA_JOB|EXISTING_ASA_RG|EXISTING_ASA_SUB|loomStreamAnalyticsEnabled"
   "databricks|Databricks|Microsoft.Databricks/workspaces||existingDatabricksWorkspace|existingDatabricksRg|existingDatabricksSub|EXISTING_DATABRICKS|EXISTING_DATABRICKS_RG|EXISTING_DATABRICKS_SUB|"
 )
 

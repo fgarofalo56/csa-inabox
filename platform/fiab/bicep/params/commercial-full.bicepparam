@@ -150,6 +150,13 @@ param agentFoundryEnabled = true
 param apimEnabled = true
 param aiSearchEnabled = false
 param adxEnabled = true
+// RTI (Real-Time Intelligence) backends — Event Hubs + Stream Analytics. ON by
+// default (opt-out); set the env var to 'false' to skip the cost. Event Hubs
+// backs the Eventstream sources + Data Explorer receive; Stream Analytics backs
+// the stream-analytics-job editor + the Eventstream transform node. To REUSE an
+// existing Event Hubs namespace / ASA job, set the EXISTING_* vars in the BYO block.
+param loomEventHubEnabled = bool(readEnvironmentVariable('LOOM_EVENTHUB_ENABLED', 'true'))
+param loomStreamAnalyticsEnabled = bool(readEnvironmentVariable('LOOM_STREAM_ANALYTICS_ENABLED', 'true'))
 // Setup Orchestrator — on by default so the Setup Wizard's Deploy submits the
 // real subscription-scoped ARM deployment and the Console UAMI is granted
 // Contributor on the target sub(s). Set LOOM_SETUP_TEMPLATE_URI to the published
@@ -211,6 +218,9 @@ param existingCosmosSub          = readEnvironmentVariable('EXISTING_COSMOS_ACCO
 param existingEventHubNamespace  = readEnvironmentVariable('EXISTING_EVENTHUB_NAMESPACE', '')
 param existingEventHubRg         = readEnvironmentVariable('EXISTING_EVENTHUB_RG', '')
 param existingEventHubSub        = readEnvironmentVariable('EXISTING_EVENTHUB_SUB', '')
+param existingAsaJob             = readEnvironmentVariable('EXISTING_ASA_JOB', '')
+param existingAsaRg              = readEnvironmentVariable('EXISTING_ASA_RG', '')
+param existingAsaSub             = readEnvironmentVariable('EXISTING_ASA_SUB', '')
 param existingDatabricksWorkspace = readEnvironmentVariable('EXISTING_DATABRICKS', '')
 param existingDatabricksRg       = readEnvironmentVariable('EXISTING_DATABRICKS_RG', '')
 param existingDatabricksSub      = readEnvironmentVariable('EXISTING_DATABRICKS_SUB', '')

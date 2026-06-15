@@ -63,6 +63,18 @@ interface SetupConfig {
   weaveOntologyEnabled?: boolean;
   databricksUnityCatalogEnabled?: boolean;
   databricksSqlWarehouseEnabled?: boolean;
+  /**
+   * Real-Time Intelligence (RTI) scan-and-choose. Each backend is ON by default
+   * (opt-out) — set the *Enabled flag false to skip it, or set the matching
+   * existing* name to REUSE a discovered resource instead of provisioning new.
+   * Forwarded to main.bicep as named params (no free-form) so the wizard and the
+   * CLI (byo-wizard.sh) write identical wiring.
+   */
+  loomEventHubEnabled?: boolean;
+  existingEventHubNamespace?: string;
+  loomStreamAnalyticsEnabled?: boolean;
+  existingAsaJob?: string;
+  existingAdxClusterName?: string;
   /** Multi-sub: parallel arrays the bicep `[for]` loop consumes. */
   dlzSubscriptionIds?: string[];
   dlzDomainNames?: string[];
@@ -395,6 +407,19 @@ export async function POST(req: NextRequest) {
       `dlzDomainNames="[${domainNames.map((d) => `'${d}'`).join(',')}]" capacitySku=${body.capacitySku}`
     : `  -p dlzDomainNames="['${body.domainName}']" capacitySku=${body.capacitySku}`;
 
+  // RTI (Real-Time Intelligence) named overrides — only emitted when the user
+  // deviated from the all-on default (disabled a backend, or chose to reuse an
+  // existing one), so the default command stays clean. Maps each choice to the
+  // SAME main.bicep param the CLI (byo-wizard.sh) writes (no free-form).
+  const rtiParts: string[] = [];
+  if (body.adxEnabled === false) rtiParts.push('adxEnabled=false');
+  if (body.existingAdxClusterName) rtiParts.push(`existingAdxClusterName='${body.existingAdxClusterName}'`);
+  if (body.loomEventHubEnabled === false) rtiParts.push('loomEventHubEnabled=false');
+  if (body.existingEventHubNamespace) rtiParts.push(`existingEventHubNamespace='${body.existingEventHubNamespace}'`);
+  if (body.loomStreamAnalyticsEnabled === false) rtiParts.push('loomStreamAnalyticsEnabled=false');
+  if (body.existingAsaJob) rtiParts.push(`existingAsaJob='${body.existingAsaJob}'`);
+  const rtiParamLine = rtiParts.length ? `  -p ${rtiParts.join(' ')} \\` : '';
+
   // dlz-attach: the manual command threads topology + the hub coordinates the
   // tenant-topology doc recorded (so no Azure id is free-typed). The orchestrator
   // path is strongly preferred — it fills the hub* params automatically.
@@ -423,6 +448,7 @@ export async function POST(req: NextRequest) {
           `  -p ${paramFile} \\`,
           `  -p topology=dlz-attach targetSubscriptionId=${body.targetSubscriptionId} attachDomainName=${body.domainName} \\`,
           `  -p boundary=${body.boundary} capacitySku=${body.capacitySku} \\`,
+          ...(rtiParamLine ? [rtiParamLine] : []),
           ...hubParamLines,
           `  # hubPrivateDnsZoneIds is an object — pass it from the tenant-topology doc`,
         ]
@@ -436,6 +462,7 @@ export async function POST(req: NextRequest) {
           `  -f platform/fiab/bicep/main.bicep \\`,
           `  -p ${paramFile} \\`,
           `  -p topology=tenant boundary=${body.boundary} deploymentMode=${body.mode} \\`,
+          ...(rtiParamLine ? [rtiParamLine] : []),
           dlzParamLine,
           `bash scripts/csa-loom/post-deploy-bootstrap.sh`,
         ];

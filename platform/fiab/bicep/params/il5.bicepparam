@@ -45,6 +45,9 @@ param existingCosmosSub          = readEnvironmentVariable('EXISTING_COSMOS_ACCO
 param existingEventHubNamespace  = readEnvironmentVariable('EXISTING_EVENTHUB_NAMESPACE', '')
 param existingEventHubRg         = readEnvironmentVariable('EXISTING_EVENTHUB_RG', '')
 param existingEventHubSub        = readEnvironmentVariable('EXISTING_EVENTHUB_SUB', '')
+param existingAsaJob             = readEnvironmentVariable('EXISTING_ASA_JOB', '')
+param existingAsaRg              = readEnvironmentVariable('EXISTING_ASA_RG', '')
+param existingAsaSub             = readEnvironmentVariable('EXISTING_ASA_SUB', '')
 param existingDatabricksWorkspace = readEnvironmentVariable('EXISTING_DATABRICKS', '')
 param existingDatabricksRg       = readEnvironmentVariable('EXISTING_DATABRICKS_RG', '')
 param existingDatabricksSub      = readEnvironmentVariable('EXISTING_DATABRICKS_SUB', '')
@@ -153,8 +156,11 @@ param contentSafetyEnabled = false
 param apimEnabled = true
 param aiSearchEnabled = false
 param adxEnabled = true
-// Setup Orchestrator — enabled so the Console UAMI is granted Contributor on the
-// target sub(s) for cross-sub deploy. The Setup Orchestrator *Container App* is a
+// RTI backends — Event Hubs + Stream Analytics ON by default (opt-out). Entra-
+// only auth (the only IL5-allowed posture). Set the env var to 'false' to skip,
+// or reuse an existing namespace/job via the EXISTING_* vars above.
+param loomEventHubEnabled = bool(readEnvironmentVariable('LOOM_EVENTHUB_ENABLED', 'true'))
+param loomStreamAnalyticsEnabled = bool(readEnvironmentVariable('LOOM_STREAM_ANALYTICS_ENABLED', 'true'))
 // no-op here (containerPlatform=='aks' fails the setupOrchestratorActive gate); on
 // AKS the orchestrator runs via the cluster GitOps path as the same Console UAMI.
 param setupOrchestratorEnabled = bool(readEnvironmentVariable('LOOM_SETUP_ORCHESTRATOR_ENABLED', 'true'))
