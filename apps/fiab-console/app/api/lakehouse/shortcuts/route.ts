@@ -33,6 +33,8 @@ import {
   type EngineGate,
   type ExternalBinding,
 } from '@/lib/azure/shortcut-engines';
+import { parseAbfss as parseExternalAbfss, listAdlsWithSas, ShortcutSourceError } from '@/lib/azure/shortcut-client';
+import { getKeyVaultSecret } from '@/lib/azure/shortcut-credentials';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -127,8 +129,67 @@ export async function POST(req: NextRequest) {
   // bindExternalSource(). For ADLS/internal this is the abfss reachability test.
   let abfssUri: string;
   let binding: ExternalBinding | undefined;
+  // SAS-authenticated external ADLS Gen2: carries the resolved SAS + parsed
+  // coordinates through to the Tables engine binding (Synapse DSC).
+  let adlsSasBinding: { sas: string; account: string; container: string; path: string } | undefined;
 
-  if (isExternal) {
+  // A SAS-authenticated external ADLS Gen2 target is `targetType:'adls'` WITH a
+  // SAS/account-key credentialRef. The Console UAMI cannot read the account, so
+  // we authenticate with the SAS (resolved from Key Vault) instead of the UAMI.
+  const isSasAdls =
+    targetType === 'adls' &&
+    !!credentialRef?.keyVaultSecret &&
+    (credentialRef.kind === 'sas' || credentialRef.kind === 'accountKey');
+
+  if (isSasAdls) {
+    // --- External ADLS Gen2 + SAS: resolve the SAS, run a REAL signed list. ---
+    let sas: string;
+    try {
+      sas = (await getKeyVaultSecret(credentialRef!.keyVaultSecret!)).trim();
+    } catch (e: any) {
+      return NextResponse.json(
+        {
+          ok: false,
+          code: 'kv_secret_unreadable',
+          error:
+            `Could not read the SAS from Key Vault secret '${credentialRef!.keyVaultSecret}': ${sanitize(e)}. ` +
+            `Confirm the secret exists and the Console UAMI has "Key Vault Secrets User" on the vault.`,
+        },
+        { status: 502 },
+      );
+    }
+    if (!sas) {
+      return NextResponse.json(
+        { ok: false, code: 'kv_secret_empty', error: `Key Vault secret '${credentialRef!.keyVaultSecret}' is empty — re-save the SAS.` },
+        { status: 502 },
+      );
+    }
+    let parts: { account: string; container: string; path: string };
+    try {
+      parts = parseExternalAbfss(targetUri);
+    } catch (e: any) {
+      return NextResponse.json({ ok: false, code: 'bad_target', error: sanitize(e) }, { status: 400 });
+    }
+    try {
+      // One-row signed probe — converts abfss → https + appends the SAS once.
+      await listAdlsWithSas({ account: parts.account, container: parts.container, path: parts.path, sasToken: sas, maxResults: 1 });
+    } catch (e: any) {
+      const status = e instanceof ShortcutSourceError ? e.status : 502;
+      const code = e instanceof ShortcutSourceError ? e.code : 'adls_sas_error';
+      const msg = sanitize(e);
+      // Persist as error so the operator sees the precise reason + can Retry/Delete.
+      const errRow = await createShortcut({
+        lakehouseId, tenantId, name, kind, parentPath, targetType, targetUri,
+        credentialRef, engine: 'none', format,
+        status: 'error', statusDetail: msg, createdBy,
+      });
+      return NextResponse.json({ ok: false, code, error: msg, hint: msg, data: errRow }, { status: status || 502 });
+    }
+    // Normalise to the abfss read address (blob host → dfs host; keep the user's
+    // sovereign suffix). Spark / Synapse read via the .dfs endpoint.
+    abfssUri = targetUri.replace(/^abfss:\/\//i, 'abfss://').replace(/\.blob\.core\./i, '.dfs.core.');
+    adlsSasBinding = { sas, account: parts.account, container: parts.container, path: parts.path };
+  } else if (isExternal) {
     // --- S3 / GCS / Dataverse: resolve KV secret + create the real binding. ---
     try {
       const result = await bindExternalSource({
@@ -201,10 +262,14 @@ export async function POST(req: NextRequest) {
         objectKey?: string;
         deltaSharing?: ExternalBinding['deltaSharing'];
         sharepoint?: ExternalBinding['sharepoint'];
+        adlsSas?: { sas: string; account: string; container: string; path: string };
         lakehouseId?: string;
       }
     | undefined;
-  if (binding && targetType === 'sharepoint') {
+  if (adlsSasBinding) {
+    // SAS-authenticated external ADLS Gen2 — Tables bind via a Synapse DSC.
+    externalForTable = { objectUri: abfssUri, adlsSas: adlsSasBinding };
+  } else if (binding && targetType === 'sharepoint') {
     // Files-only — createTablesShortcut honest-gates on external.sharepoint.
     externalForTable = { objectUri: binding.readUri, sharepoint: binding.sharepoint };
   } else if (binding && (targetType === 's3' || targetType === 'gcs')) {
