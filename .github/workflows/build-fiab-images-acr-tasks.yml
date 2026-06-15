@@ -23,6 +23,10 @@ on:
         description: 'Comma-separated app list, or "all"'
         type: string
         default: all
+      location:
+        description: 'Hub region (the admin RG suffix). Default centralus.'
+        type: string
+        default: centralus
   push:
     branches: [main]
     paths:
@@ -43,7 +47,7 @@ concurrency:
   group: build-fiab-images-acr-tasks
   cancel-in-progress: false
 env:
-  AZURE_LOCATION: eastus2
+  AZURE_LOCATION: ${{ github.event.inputs.location || 'centralus' }}
 
 jobs:
   resolve:
