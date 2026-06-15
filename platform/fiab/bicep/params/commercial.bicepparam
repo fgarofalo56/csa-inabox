@@ -20,6 +20,8 @@ param existingAdxClusterSub      = readEnvironmentVariable('EXISTING_KUSTO_SUB',
 param existingFoundryAccountName = readEnvironmentVariable('EXISTING_AOAI', '')
 param existingFoundryRg          = readEnvironmentVariable('EXISTING_AOAI_RG', '')
 param existingFoundrySub         = readEnvironmentVariable('EXISTING_AOAI_SUB', '')
+param existingFoundryChatDeployment  = readEnvironmentVariable('EXISTING_AOAI_CHAT_DEPLOYMENT', '')
+param existingFoundryEmbedDeployment = readEnvironmentVariable('EXISTING_AOAI_EMBED_DEPLOYMENT', '')
 param existingPurviewAccount     = readEnvironmentVariable('EXISTING_PURVIEW', '')
 param existingPurviewRg          = readEnvironmentVariable('EXISTING_PURVIEW_RG', '')
 param existingPurviewSub         = readEnvironmentVariable('EXISTING_PURVIEW_SUB', '')
@@ -121,6 +123,10 @@ param keyVaultHsmIsolated = false
 param openaiLocation = 'eastus2'
 param openaiEmbeddingsLocation = 'eastus2'
 param openaiChatModel = 'gpt-4o'
+// Deploy-readiness (opt-out): provision the dedicated AOAI account (aifndry-loom-<location>)
+// + gpt-4o chat + embedding deployments so Copilot / data-agents / AI-functions
+// work on first login. Set false to skip (those surfaces then honest-gate).
+param agentFoundryEnabled = true
 param openaiEmbeddingsModel = 'text-embedding-3-large'
 
 // Power BI

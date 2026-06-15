@@ -60,6 +60,51 @@ scan() { # scan "<arm type>" "<label>" "<name var>" "<rg var>" "<sub var>"
   echo
 }
 
+# Deployment-aware AOAI scan (deploy-readiness): list AIServices/OpenAI accounts
+# AND their model deployments, recommend reuse when a gpt-4o-class chat + an
+# embeddings deployment already exist (avoids duplicate model cost), else
+# recommend provision-new. Emits the EXISTING_AOAI* triple + the chat/embed
+# deployment-name vars the bicepparam readEnvironmentVariable() block consumes.
+scan_aoai() {
+  echo "## Azure OpenAI / AI Foundry (AIServices) — model deployments"
+  local found=0
+  # Resource Graph (or per-sub fallback) for AIServices/OpenAI accounts.
+  local rows
+  if [[ "$HAVE_GRAPH" == "1" ]]; then
+    rows="$(q graph query -q "Resources | where type =~ 'Microsoft.CognitiveServices/accounts' | where kind in~ ('AIServices','OpenAI') | project name, resourceGroup, subscriptionId" --first 50 --query "data[].[name,resourceGroup,subscriptionId]" -o tsv 2>/dev/null || true)"
+  else
+    rows=""
+    for s in $SUBS; do
+      while IFS=$'\t' read -r name rg kind; do
+        [[ -z "$name" ]] && continue
+        [[ "$kind" == "AIServices" || "$kind" == "OpenAI" ]] && rows+="${name}	${rg}	${s}"$'\n'
+      done < <(q resource list --subscription "$s" --resource-type "Microsoft.CognitiveServices/accounts" --query "[].{n:name,r:resourceGroup,k:kind}" -o tsv 2>/dev/null || true)
+    done
+  fi
+  while IFS=$'\t' read -r name rg sub; do
+    [[ -z "$name" ]] && continue
+    found=1
+    local dargs=(cognitiveservices account deployment list -n "$name" -g "$rg")
+    [[ -n "$sub" ]] && dargs+=(--subscription "$sub")
+    local deploys chat embed
+    deploys="$(q "${dargs[@]}" --query "[].{name:name,model:properties.model.name}" -o tsv 2>/dev/null || true)"
+    chat="$(awk -F'\t' 'tolower($2) ~ /gpt-4o|gpt-4\.1|gpt-4|gpt-35|gpt-3.5/ {print $1; exit}' <<<"$deploys")"
+    embed="$(awk -F'\t' 'tolower($2) ~ /embedding/ {print $1; exit}' <<<"$deploys")"
+    echo "  • $name   (rg=$rg sub=$sub)   chat='${chat:-none}' embed='${embed:-none}'"
+    if [[ -n "$chat" && -n "$embed" ]]; then
+      echo "    # RECOMMEND: reuse (gpt-4o-class chat + embeddings already present)"
+    else
+      echo "    # RECOMMEND: provision-new (no complete gpt-4o-class chat+embed pair)"
+    fi
+    echo "    export EXISTING_AOAI=$name EXISTING_AOAI_RG=$rg EXISTING_AOAI_SUB=$sub"
+    echo "    export EXISTING_AOAI_CHAT_DEPLOYMENT='${chat}' EXISTING_AOAI_EMBED_DEPLOYMENT='${embed}'"
+  done <<<"$rows"
+  if [[ "$found" == "0" ]]; then
+    echo "  (none found — Loom provisions a NEW aifndry-loom-<region> account + gpt-4o + embeddings by default)"
+  fi
+  echo
+}
+
 scan "Microsoft.Search/searchServices"            "AI Search"            "EXISTING_AI_SEARCH_SERVICE"  "EXISTING_AI_SEARCH_RG"      "EXISTING_AI_SEARCH_SUB"
 scan "Microsoft.ApiManagement/service"            "API Management"       "EXISTING_APIM"               "EXISTING_APIM_RG"           "EXISTING_APIM_SUB"
 scan "Microsoft.DocumentDB/databaseAccounts"      "Cosmos DB"            "EXISTING_COSMOS_ACCOUNT"     "EXISTING_COSMOS_ACCOUNT_RG" "EXISTING_COSMOS_ACCOUNT_SUB"
@@ -71,6 +116,7 @@ scan "Microsoft.Devices/IotHubs"                  "IoT Hub"              "EXISTI
 scan "Microsoft.Synapse/workspaces"               "Synapse"              "EXISTING_SYNAPSE"            "EXISTING_SYNAPSE_RG"        "EXISTING_SYNAPSE_SUB"
 scan "Microsoft.DataFactory/factories"            "Data Factory"         "EXISTING_ADF"                "EXISTING_ADF_RG"            "EXISTING_ADF_SUB"
 scan "Microsoft.CognitiveServices/accounts"       "Cognitive/AI Services" "EXISTING_AOAI"              "EXISTING_AOAI_RG"           "EXISTING_AOAI_SUB"
+scan_aoai
 scan "Microsoft.MachineLearningServices/workspaces" "AI Foundry / ML hub" "EXISTING_FOUNDRY"           "EXISTING_FOUNDRY_RG"        "EXISTING_FOUNDRY_SUB"
 scan "Microsoft.Purview/accounts"                 "Purview"              "EXISTING_PURVIEW"            "EXISTING_PURVIEW_RG"        "EXISTING_PURVIEW_SUB"
 scan "Microsoft.Sql/servers"                      "Azure SQL Server"     "EXISTING_AZURE_SQL"          "EXISTING_AZURE_SQL_RG"      "EXISTING_AZURE_SQL_SUB"

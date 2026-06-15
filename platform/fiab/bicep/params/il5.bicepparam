@@ -33,6 +33,8 @@ param existingAdxClusterSub      = readEnvironmentVariable('EXISTING_KUSTO_SUB',
 param existingFoundryAccountName = readEnvironmentVariable('EXISTING_AOAI', '')
 param existingFoundryRg          = readEnvironmentVariable('EXISTING_AOAI_RG', '')
 param existingFoundrySub         = readEnvironmentVariable('EXISTING_AOAI_SUB', '')
+param existingFoundryChatDeployment  = readEnvironmentVariable('EXISTING_AOAI_CHAT_DEPLOYMENT', '')
+param existingFoundryEmbedDeployment = readEnvironmentVariable('EXISTING_AOAI_EMBED_DEPLOYMENT', '')
 param existingPurviewAccount     = readEnvironmentVariable('EXISTING_PURVIEW', '')
 param existingPurviewRg          = readEnvironmentVariable('EXISTING_PURVIEW_RG', '')
 param existingPurviewSub         = readEnvironmentVariable('EXISTING_PURVIEW_SUB', '')
@@ -107,6 +109,12 @@ param keyVaultHsmIsolated = true          // IL5 mandated
 param openaiLocation = 'usgovvirginia'
 param openaiEmbeddingsLocation = 'usgovarizona'
 param openaiChatModel = 'gpt-4o'
+// Deploy-readiness (opt-out): provision the dedicated AOAI account + gpt-4o chat
+// + embedding deployments so Copilot / data-agents / AI-functions work on first
+// login. Set false to skip (those surfaces then honest-gate). In Gov boundaries
+// the model/version may be pinned via foundry-project.bicep params if a region
+// lacks gpt-4o GlobalStandard.
+param agentFoundryEnabled = true
 param openaiEmbeddingsModel = 'text-embedding-3-large'
 
 // Power BI

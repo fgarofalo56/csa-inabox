@@ -134,7 +134,7 @@ SERVICES=(
   "aisearch|AI Search|Microsoft.Search/searchServices||existingAiSearchService|existingAiSearchRg|existingAiSearchSub|EXISTING_AI_SEARCH_SERVICE|EXISTING_AI_SEARCH_RG|EXISTING_AI_SEARCH_SUB|aiSearchEnabled"
   "apim|API Management|Microsoft.ApiManagement/service||existingApimName|existingApimRg|existingApimSub|EXISTING_APIM|EXISTING_APIM_RG|EXISTING_APIM_SUB|apimEnabled"
   "adx|ADX / Kusto|Microsoft.Kusto/clusters||existingAdxClusterName|existingAdxClusterRg|existingAdxClusterSub|EXISTING_KUSTO_CLUSTER|EXISTING_KUSTO_RG|EXISTING_KUSTO_SUB|adxEnabled"
-  "foundry|AI Foundry / AOAI|Microsoft.CognitiveServices/accounts|kind =~ 'AIServices'|existingFoundryAccountName|existingFoundryRg|existingFoundrySub|EXISTING_AOAI|EXISTING_AOAI_RG|EXISTING_AOAI_SUB|aiFoundryEnabled"
+  "foundry|AI Foundry / AOAI|Microsoft.CognitiveServices/accounts|kind =~ 'AIServices'|existingFoundryAccountName|existingFoundryRg|existingFoundrySub|EXISTING_AOAI|EXISTING_AOAI_RG|EXISTING_AOAI_SUB|agentFoundryEnabled"
   "purview|Microsoft Purview|Microsoft.Purview/accounts||existingPurviewAccount|existingPurviewRg|existingPurviewSub|EXISTING_PURVIEW|EXISTING_PURVIEW_RG|EXISTING_PURVIEW_SUB|purviewEnabled"
   "synapse|Synapse|Microsoft.Synapse/workspaces||existingSynapseWorkspace|existingSynapseRg|existingSynapseSub|EXISTING_SYNAPSE|EXISTING_SYNAPSE_RG|EXISTING_SYNAPSE_SUB|"
   "cosmos|Cosmos DB|Microsoft.DocumentDB/databaseAccounts||existingCosmosAccount|existingCosmosRg|existingCosmosSub|EXISTING_COSMOS_ACCOUNT|EXISTING_COSMOS_ACCOUNT_RG|EXISTING_COSMOS_ACCOUNT_SUB|"
@@ -147,6 +147,8 @@ SERVICES=(
 # Accumulators
 declare -A NAME RG SUB HOST
 declare -a BLOCK_LINES ENV_LINES SUMMARY
+# AOAI/Foundry reused-account deployment names (resolved in the loop below).
+FOUNDRY_CHAT=""; FOUNDRY_EMBED=""; FOUNDRY_CHOICE="new"
 
 upper() { echo "$1" | tr '[:lower:]' '[:upper:]'; }
 
@@ -169,9 +171,14 @@ for row in "${SERVICES[@]}"; do
     choice="${!envKey:-}"
     if [[ -z "$choice" ]]; then
       # No explicit BYO_<KEY>: do NOT silently reuse a discovered resource.
-      # DLZ services (no enabled-flag) provision new with the platform; the four
-      # flagged admin-plane services default to an honest gate until chosen.
-      if [[ -z "$flag" ]]; then choice="new"; else choice="gate"; fi
+      # DLZ services (no enabled-flag) provision new with the platform; the
+      # flagged admin-plane services default to an honest gate until chosen —
+      # EXCEPT AOAI/Foundry, which is deploy-readiness opt-out (everything-ON):
+      # a fresh deploy must have a working gpt-4o model on first login, so the
+      # default is provision-NEW (set BYO_FOUNDRY=gate to opt out).
+      if [[ -z "$flag" ]]; then choice="new"
+      elif [[ "$key" == "foundry" ]]; then choice="new"
+      else choice="gate"; fi
     fi
   else
     if [[ ${#cands[@]} -gt 0 ]]; then
@@ -214,6 +221,30 @@ for row in "${SERVICES[@]}"; do
     HOST[$key]="$(resolve_databricks_host "$n" "$r" "$s")"
     [[ -z "${HOST[$key]}" ]] && echo "  (could not resolve workspaceUrl for $n — set EXISTING_DATABRICKS_HOSTNAME manually)"
   fi
+  # AOAI/Foundry — when REUSING an existing account, discover its gpt-4o-class
+  # chat deployment + an embeddings deployment so the Console env wires the full
+  # AOAI surface (LOOM_AOAI_DEPLOYMENT/_CHAT_DEPLOYMENT/_EMBED_DEPLOYMENT), not
+  # just the account name. Recommend reuse when both already exist (avoids
+  # duplicate model cost); otherwise the operator should provision-new.
+  if [[ "$key" == "foundry" && -n "$n" ]]; then
+    dargs=(cognitiveservices account deployment list -n "$n" -g "$r")
+    [[ -n "$s" ]] && dargs+=(--subscription "$s")
+    deploys="$(q "${dargs[@]}" --query "[].{name:name,model:properties.model.name}" -o tsv 2>/dev/null || true)"
+    # chat: prefer a gpt-4o / gpt-4.1 / gpt-4 deployment; embed: a *embedding* model.
+    FOUNDRY_CHAT="$(awk -F'\t' 'tolower($2) ~ /gpt-4o|gpt-4\.1|gpt-4|gpt-35|gpt-3.5/ {print $1; exit}' <<<"$deploys")"
+    FOUNDRY_EMBED="$(awk -F'\t' 'tolower($2) ~ /embedding/ {print $1; exit}' <<<"$deploys")"
+    if [[ -n "$FOUNDRY_CHAT" && -n "$FOUNDRY_EMBED" ]]; then
+      echo "  ✓ reuse recommended: found chat='$FOUNDRY_CHAT' + embed='$FOUNDRY_EMBED' on $n"
+    elif [[ -n "$FOUNDRY_CHAT" ]]; then
+      echo "  ~ chat='$FOUNDRY_CHAT' found but no embeddings deployment — add one, or provision-new."
+    else
+      echo "  ! no gpt-4o-class chat deployment on $n — recommend provision-NEW (BYO_FOUNDRY=new) instead of reuse."
+    fi
+  fi
+  # Track the AOAI/Foundry choice so the emitted bicepparam sets the opt-out
+  # flag explicitly (new/reuse → agentFoundryEnabled stays the bicepparam default
+  # true; gate → false so a fresh deploy honestly skips AOAI).
+  [[ "$key" == "foundry" ]] && FOUNDRY_CHOICE="$choice"
 
   # Build the literal bicepparam lines for this service.
   BLOCK_LINES+=("param $nameP = '${n}'")
@@ -240,6 +271,21 @@ done
 DBX_HOST="${HOST[databricks]:-}"
 BLOCK_LINES+=("param existingDatabricksHostname = '${DBX_HOST}'")
 ENV_LINES+=("export EXISTING_DATABRICKS_HOSTNAME='${DBX_HOST}'")
+
+# AOAI/Foundry reused-account deployment names (empty when provisioning new —
+# the dedicated agentFoundry account then deploys gpt-4o + embeddings itself).
+BLOCK_LINES+=("param existingFoundryChatDeployment = '${FOUNDRY_CHAT}'")
+BLOCK_LINES+=("param existingFoundryEmbedDeployment = '${FOUNDRY_EMBED}'")
+ENV_LINES+=("export EXISTING_AOAI_CHAT_DEPLOYMENT='${FOUNDRY_CHAT}'")
+ENV_LINES+=("export EXISTING_AOAI_EMBED_DEPLOYMENT='${FOUNDRY_EMBED}'")
+# AOAI/Foundry is ON BY DEFAULT (agentFoundryEnabled defaults true in main.bicep
+# AND is set true in each boundary bicepparam). The flag lives OUTSIDE the BYO
+# block, so we do NOT inject it here (that would duplicate the param). If the
+# operator gated AOAI (BYO_FOUNDRY=gate), the summary flags it — set
+# `agentFoundryEnabled = false` in the bicepparam to honestly skip the account.
+if [[ "$FOUNDRY_CHOICE" == "gate" ]]; then
+  SUMMARY+=("  ! AOAI gated: set 'param agentFoundryEnabled = false' in the boundary bicepparam to skip the AOAI account (Copilot/data-agent/AI-functions then honest-gate).")
+fi
 
 # Fabric mode (no-fabric-dependency.md: default false; gov hard-false).
 FABRIC_VAL="false"

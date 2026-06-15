@@ -144,8 +144,8 @@ param aiFoundryEnabled bool = false
 @description('Deploy Azure AI Content Safety (Microsoft.CognitiveServices/accounts kind=ContentSafety, S0) in the admin-plane RG and wire LOOM_CONTENT_SAFETY_ENDPOINT so every copilot persona routes prompts + completions through Prompt Shields + harm moderation. Available in Commercial, GCC (Commercial Azure endpoints), and GCC-High (USGovArizona / USGovVirginia). Set false at DoD (US DoD Central/East) — those regions do not offer Content Safety; the Console then surfaces an honest "not configured" warning MessageBar instead of silently passing.')
 param contentSafetyEnabled bool = false
 
-@description('Deploy the dedicated AI Foundry Agent Service account (aifndry-loom-<location>) with the loom-agents project + chat/embedding model deployments. Backs LOOM_FOUNDRY_PROJECT_ENDPOINT / LOOM_AOAI_* for the Agent Service. Independent of aiFoundryEnabled.')
-param agentFoundryEnabled bool = false
+@description('Deploy the dedicated AI Foundry Agent Service account (aifndry-loom-<location>) with the loom-agents project + chat/embedding model deployments. Backs LOOM_FOUNDRY_PROJECT_ENDPOINT / LOOM_AOAI_* for the Agent Service. ON BY DEFAULT (opt-out). Independent of aiFoundryEnabled.')
+param agentFoundryEnabled bool = true
 
 @description('Inline-completion (ghost text) AOAI deployment name for notebook/SQL code cells (LOOM_AOAI_COMPLETION_DEPLOYMENT). Empty = ghost text uses the chat deployment (LOOM_AOAI_DEPLOYMENT). Set to a dedicated gpt-4o-mini slot for lower latency without consuming chat quota. Leave empty in GCC-High / IL5 regions where the model is unavailable — the Console route falls back to the chat deployment.')
 param loomAoaiCompletionDeployment string = ''
@@ -761,6 +761,18 @@ var byoAiSearchSub = !empty(byoExisting.?aiSearchSub ?? '') ? byoExisting.aiSear
 var byoApimSub     = !empty(byoExisting.?apimSub ?? '') ? byoExisting.apimSub : subscription().subscriptionId
 var byoAdxSub      = !empty(byoExisting.?adxClusterSub ?? '') ? byoExisting.adxClusterSub : subscription().subscriptionId
 var byoFoundrySub  = !empty(byoExisting.?foundrySub ?? '') ? byoExisting.foundrySub : subscription().subscriptionId
+// Gap A — when the operator REUSES an existing AOAI / AIServices account
+// (existingFoundryAccountName, from scan EXISTING_AOAI), derive the inference
+// endpoint + the chat/embed deployment names so the Console env wires the full
+// AOAI surface (not just LOOM_AOAI_ACCOUNT). The deployment names come from the
+// scan via the byoExisting object (foundryChatDeployment / foundryEmbedDeployment
+// keys, emitted by discover-services.sh / byo-wizard.sh) — no new top-level
+// param (admin-plane is at the 256-param ceiling). Endpoint suffix is sovereign-
+// correct (openai.azure.us in Gov, else openai.azure.com), matching the module
+// output expression so the existing path is wired identically to the new path.
+var byoFoundryEndpoint = !empty(existingFoundryAccountName) ? 'https://${existingFoundryAccountName}.${environment().suffixes.storage != 'core.windows.net' ? 'openai.azure.us' : 'openai.azure.com'}/' : ''
+var byoFoundryChatDeployment = string(byoExisting.?foundryChatDeployment ?? '')
+var byoFoundryEmbedDeployment = string(byoExisting.?foundryEmbedDeployment ?? '')
 // Purview — existingPurviewAccount overrides loomPurviewAccount (reuse > param).
 // The Purview catalog data-plane is reached by account host (`{account}.purview.azure.com`)
 // + a UAMI data-plane role assigned in the Purview portal — it is subscription-
@@ -1541,6 +1553,14 @@ module agentFoundry '../ai/foundry-project.bicep' = if (agentFoundryEnabled) {
     skipRoleGrants: skipRoleGrants
     workspaceId: monitoring.outputs.lawId
     complianceTags: complianceTags
+    // Private endpoint (Gap C) — only when the account is private-only
+    // (non-Commercial). Bind the hub PE subnet + the privatelink.openai /
+    // privatelink.cognitiveservices zones so AAD + key auth resolve inside the
+    // VNet. Commercial keeps public access on and passes no subnet (day-one
+    // works without VNet plumbing).
+    privateEndpointSubnetId: boundary == 'Commercial' ? '' : network.outputs.privateEndpointsSubnetId
+    privateDnsZoneOpenAiId: boundary == 'Commercial' ? '' : network.outputs.privateDnsZoneIds.openai
+    privateDnsZoneCognitiveServicesId: boundary == 'Commercial' ? '' : network.outputs.privateDnsZoneIds.cognitiveservices
     // Optional dedicated ghost-text deployment. Empty => no extra deployment;
     // the Console route falls back to the chat deployment for inline completion.
     completionDeploymentName: loomAoaiCompletionDeployment
@@ -3048,13 +3068,13 @@ module appDeployments 'app-deployments.bicep' = if (containerPlatform == 'contai
             // Foundry hub (so the AI Functions Gov/AOAI path works on a hub-only
             // deploy — the deployment is then discovered from the hub connections
             // by resolveAoaiTarget()).
-            { name: 'LOOM_AOAI_ENDPOINT',          value: agentFoundryEnabled ? agentFoundry!.outputs.aoaiEndpoint : ((aiFoundryEnabled && empty(existingFoundryAccountName)) ? aiFoundry!.outputs.aoaiInferenceEndpoint : '') }
-            { name: 'LOOM_AOAI_CHAT_DEPLOYMENT',   value: agentFoundryEnabled ? agentFoundry!.outputs.chatDeployment : '' }
+            { name: 'LOOM_AOAI_ENDPOINT',          value: agentFoundryEnabled ? agentFoundry!.outputs.aoaiEndpoint : (!empty(existingFoundryAccountName) ? byoFoundryEndpoint : ((aiFoundryEnabled && empty(existingFoundryAccountName)) ? aiFoundry!.outputs.aoaiInferenceEndpoint : '')) }
+            { name: 'LOOM_AOAI_CHAT_DEPLOYMENT',   value: agentFoundryEnabled ? agentFoundry!.outputs.chatDeployment : byoFoundryChatDeployment }
             // The copilot/data-agent orchestrators read LOOM_AOAI_DEPLOYMENT (not
             // the _CHAT_ variant) to resolve the model — keep both in sync so the
             // Copilot/data-agent chat works out of the box (the "no AOAI model"
             // gap was exactly this name mismatch on the live deploy).
-            { name: 'LOOM_AOAI_DEPLOYMENT',        value: agentFoundryEnabled ? agentFoundry!.outputs.chatDeployment : '' }
+            { name: 'LOOM_AOAI_DEPLOYMENT',        value: agentFoundryEnabled ? agentFoundry!.outputs.chatDeployment : byoFoundryChatDeployment }
             // AOAI Chat Completions API version. resolveAoaiTarget() reads
             // process.env.LOOM_AOAI_API_VERSION (default 2024-10-21). Exposing it
             // here lets operators advance the version (e.g. for o-series reasoning
@@ -3073,7 +3093,7 @@ module appDeployments 'app-deployments.bicep' = if (containerPlatform == 'contai
             // built-in so no new parameter is needed. Read by the NL2KQL + Notebook
             // assist routes (process.env.LOOM_AOAI_AUDIENCE) to mint the bearer.
             { name: 'LOOM_AOAI_AUDIENCE',          value: environment().suffixes.storage != 'core.windows.net' ? 'https://cognitiveservices.azure.us' : 'https://cognitiveservices.azure.com' }
-            { name: 'LOOM_AOAI_EMBED_DEPLOYMENT',  value: agentFoundryEnabled ? agentFoundry!.outputs.embedDeployment : '' }
+            { name: 'LOOM_AOAI_EMBED_DEPLOYMENT',  value: agentFoundryEnabled ? agentFoundry!.outputs.embedDeployment : byoFoundryEmbedDeployment }
             // Inline code completion (ghost text) deployment. Explicit
             // loomAoaiCompletionDeployment wins; otherwise the Foundry module's
             // output (empty unless a dedicated slot was deployed). When empty the
@@ -3084,7 +3104,7 @@ module appDeployments 'app-deployments.bicep' = if (containerPlatform == 'contai
             // Agent Service AOAI endpoint. When both are empty the copilot route
             // returns an honest 503 gate naming this var + the Cognitive Services
             // OpenAI User role. LOOM_AOAI_DEPLOYMENT (above) supplies the model.
-            { name: 'LOOM_AZURE_OPENAI_ENDPOINT',  value: !empty(loomAzureOpenAiEndpoint) ? loomAzureOpenAiEndpoint : (agentFoundryEnabled ? agentFoundry!.outputs.aoaiEndpoint : '') }
+            { name: 'LOOM_AZURE_OPENAI_ENDPOINT',  value: !empty(loomAzureOpenAiEndpoint) ? loomAzureOpenAiEndpoint : (agentFoundryEnabled ? agentFoundry!.outputs.aoaiEndpoint : byoFoundryEndpoint) }
             { name: 'LOOM_DAB_PREVIEW_URL',        value: (dabRuntimeEnabled && !empty(dabSqlServerFqdn)) ? dabRuntime!.outputs.dabPreviewUrl : '' }
           ] : [
             { name: 'LOOM_UAMI_CLIENT_ID', value: identity.outputs.uamiConsoleClientId }
@@ -3758,7 +3778,19 @@ output uamiDirectLakeId string = identity.outputs.uamiDirectLakeId
 // inference. Only emitted when THIS deployment created the account (Foundry hub
 // path) so the orchestrator can grant the Spark identities the OpenAI User role
 // in this RG; empty for the existing/external-account path (operator grants it).
-output aiServicesAccountName string = (aiFoundryEnabled && empty(existingFoundryAccountName)) ? aiFoundry!.outputs.aiServicesAccountName : ''
+// Gap B — feed the AOAI account name to aoai-spark-rbac.bicep so the DLZ Spark
+// identities (Synapse MSI + Databricks Access Connector) get Cognitive Services
+// OpenAI User on the REAL account. Precedence: dedicated agentFoundry account
+// (the day-one default) > shared Foundry hub > reused existing account IN THE
+// ADMIN RG. A cross-sub / external BYO account is left empty here (the RBAC
+// module's `existing` ref is scoped to the admin RG, so it can't grant on an
+// out-of-RG account — the operator grants that one manually, matching the
+// module's documented note). Empty when AOAI is fully disabled → module no-ops.
+output aiServicesAccountName string = agentFoundryEnabled
+  ? agentFoundry!.outputs.accountNameOut
+  : ((aiFoundryEnabled && empty(existingFoundryAccountName))
+      ? aiFoundry!.outputs.aiServicesAccountName
+      : ((!empty(existingFoundryAccountName) && (empty(existingFoundryRg) || existingFoundryRg == resourceGroup().name)) ? existingFoundryAccountName : ''))
 
 // Pass-through for DLZs
 output privateDnsZoneIds object = network.outputs.privateDnsZoneIds
