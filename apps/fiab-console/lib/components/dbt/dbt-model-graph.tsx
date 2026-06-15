@@ -41,6 +41,7 @@ const LAYER_COLOR: Record<MedallionLayer, string> = {
   silver: '#64748b',
   gold: '#b45309',
 };
+const SOURCE_COLOR = '#0ea5e9';
 
 const useStyles = makeStyles({
   designer: {
@@ -80,6 +81,7 @@ const useStyles = makeStyles({
   },
   node: {
     minWidth: '160px',
+    maxWidth: '220px',
     ...shorthands.padding('8px', '10px'),
     ...shorthands.borderRadius(tokens.borderRadiusMedium),
     backgroundColor: tokens.colorNeutralBackground1,
@@ -88,7 +90,9 @@ const useStyles = makeStyles({
   },
   nodeSelected: { ...shorthands.border('2px', 'solid', tokens.colorBrandStroke1) },
   nodeTitle: { display: 'flex', alignItems: 'center', gap: '6px', fontWeight: 600, fontSize: tokens.fontSizeBase300 },
-  nodeSub: { fontSize: tokens.fontSizeBase200, color: tokens.colorNeutralForeground3, fontFamily: tokens.fontFamilyMonospace },
+  nodeLabel: { overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', minWidth: 0 },
+  nodeIcon: { flexShrink: 0 },
+  nodeSub: { fontSize: tokens.fontSizeBase200, color: tokens.colorNeutralForeground3, fontFamily: tokens.fontFamilyMonospace, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' },
   testRow: { display: 'flex', gap: '4px', alignItems: 'center' },
   inspectorForm: { display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalS },
   twoCol: { display: 'flex', gap: tokens.spacingHorizontalS },
@@ -124,10 +128,10 @@ function SourceFlowNode({ data, selected }: NodeProps) {
   const s = useStyles();
   const d = data as unknown as DbtNodeData;
   return (
-    <div className={`${s.node} ${selected ? s.nodeSelected : ''}`} style={{ borderColor: selected ? undefined : '#0ea5e9' }}>
+    <div className={`${s.node} ${selected ? s.nodeSelected : ''}`} style={{ borderColor: selected ? undefined : SOURCE_COLOR }}>
       <Handle type="source" position={Position.Right} />
-      <div className={s.nodeTitle}><DatabaseRegular /> {d.label}</div>
-      {d.subtitle && <div className={s.nodeSub}>{d.subtitle}</div>}
+      <div className={s.nodeTitle}><DatabaseRegular className={s.nodeIcon} /> <span className={s.nodeLabel} title={d.label}>{d.label}</span></div>
+      {d.subtitle && <div className={s.nodeSub} title={d.subtitle}>{d.subtitle}</div>}
       <Badge size="extra-small" appearance="tint" color="informative">source</Badge>
     </div>
   );
@@ -141,8 +145,8 @@ function ModelFlowNode({ data, selected }: NodeProps) {
     <div className={`${s.node} ${selected ? s.nodeSelected : ''}`} style={{ borderColor: selected ? undefined : color }}>
       <Handle type="target" position={Position.Left} />
       <Handle type="source" position={Position.Right} />
-      <div className={s.nodeTitle}><TableRegular /> {d.label}</div>
-      {d.subtitle && <div className={s.nodeSub}>{d.subtitle}</div>}
+      <div className={s.nodeTitle}><TableRegular className={s.nodeIcon} /> <span className={s.nodeLabel} title={d.label}>{d.label}</span></div>
+      {d.subtitle && <div className={s.nodeSub} title={d.subtitle}>{d.subtitle}</div>}
       <div style={{ display: 'flex', gap: 4 }}>
         <Badge size="extra-small" appearance="filled" style={{ backgroundColor: color }}>{d.layer}</Badge>
       </div>
@@ -363,7 +367,17 @@ function CanvasInner({ sources, models, selected, onSelect, onAddSource, onAddMo
       >
         <Background variant={BackgroundVariant.Dots} gap={20} size={1} color={tokens.colorNeutralStroke2} />
         <Controls showInteractive={false} />
-        <MiniMap pannable zoomable style={{ backgroundColor: tokens.colorNeutralBackground1 }} />
+        <MiniMap
+          pannable
+          zoomable
+          nodeColor={(n) => {
+            const d = n.data as unknown as DbtNodeData;
+            if (d?.kind === 'source') return SOURCE_COLOR;
+            return d?.layer ? LAYER_COLOR[d.layer] : tokens.colorNeutralStroke2;
+          }}
+          nodeStrokeWidth={2}
+          style={{ backgroundColor: tokens.colorNeutralBackground1 }}
+        />
         <Panel position="top-left">
           <div className={s.palette} role="toolbar" aria-label="dbt node palette">
             <Button size="small" icon={<Add20Regular />} onClick={onAddSource} data-palette-item="source">Source</Button>
