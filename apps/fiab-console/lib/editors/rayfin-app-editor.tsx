@@ -599,7 +599,7 @@ export function RayfinAppEditor({ id }: { item?: unknown; id: string }) {
                     <TableBody>
                       {preview.rows.length === 0 ? (
                         <TableRow>
-                          <TableCell><Caption1>The bound model returned no rows for this selection.</Caption1></TableCell>
+                          <TableCell colSpan={preview.columns.length || 1}><Caption1>The bound model returned no rows for this selection.</Caption1></TableCell>
                         </TableRow>
                       ) : preview.rows.slice(0, 200).map((r, ri) => (
                         <TableRow key={ri}>{r.map((v, ci) => <TableCell key={ci}>{fmtCell(v)}</TableCell>)}</TableRow>
@@ -904,7 +904,8 @@ function MetricView({ s, rendered }: { s: ReturnType<typeof useStyles>; rendered
   // First numeric value in the row, else first cell.
   let value: unknown = row.find((v) => typeof v === 'number');
   if (value === undefined) value = row[0];
-  return <div className={s.metricValue}>{fmtCell(value)}</div>;
+  const display = fmtCell(value);
+  return <div className={s.metricValue}>{display === '' ? '—' : display}</div>;
 }
 
 function ChartView({ s, rendered }: { s: ReturnType<typeof useStyles>; rendered: RenderedComponent }) {
@@ -941,7 +942,7 @@ function TableView({ s, rendered }: { s: ReturnType<typeof useStyles>; rendered:
         <TableHeader><TableRow>{cols.map((c) => <TableHeaderCell key={c}>{c}</TableHeaderCell>)}</TableRow></TableHeader>
         <TableBody>
           {rows.length === 0 ? (
-            <TableRow><TableCell><Caption1>No rows.</Caption1></TableCell></TableRow>
+            <TableRow><TableCell colSpan={cols.length || 1}><Caption1>No rows.</Caption1></TableCell></TableRow>
           ) : rows.slice(0, 100).map((r, ri) => (
             <TableRow key={ri}>{r.map((v, ci) => <TableCell key={ci}>{fmtCell(v)}</TableCell>)}</TableRow>
           ))}
