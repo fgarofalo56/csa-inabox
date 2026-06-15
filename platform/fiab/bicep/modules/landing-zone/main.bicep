@@ -325,9 +325,27 @@ module synapseAutoPause 'synapse-auto-pause.bicep' = {
 
 // =====================================================================
 // 5. Event Hubs namespace (Kafka surface for Mirroring CDC)
+//
+//    Provisioned by DEFAULT (opt-out). Backs the Eventstream editor's Event
+//    Hubs navigator, the Data Explorer "receive" path (loom-telemetry /
+//    loom-receiver), Mirroring CDC transport, and the event-schema-set
+//    server-side Avro enforcement. Set loomEventHubEnabled=false to skip the
+//    ~namespace cost, OR set existingEventHubNamespaceName to REUSE an existing
+//    namespace instead of provisioning a new one in this DLZ — in both cases
+//    the module is skipped and the Console binds LOOM_EVENTHUB_NAMESPACE to the
+//    existing name (or honest-gates when fully disabled), per no-vaporware.md.
 // =====================================================================
 
-module eventhubs 'eventhubs.bicep' = {
+@description('Provision a NEW Event Hubs namespace in this DLZ. Default true (opt-out). Set false to skip it, OR set existingEventHubNamespaceName to reuse an existing namespace instead of provisioning a new one. When skipped, the Eventstream / Data Explorer navigators honest-gate (or bind to the reused namespace) per no-vaporware.md.')
+param loomEventHubEnabled bool = true
+
+@description('Reuse an existing Event Hubs namespace (name) instead of provisioning a new one in this DLZ. When set, the new namespace is skipped; the Console env binds to this name. Empty + loomEventHubEnabled=true provisions new (the default).')
+param existingEventHubNamespaceName string = ''
+
+// Provision a new namespace only when enabled AND not reusing an existing one.
+var provisionEventHub = loomEventHubEnabled && empty(existingEventHubNamespaceName)
+
+module eventhubs 'eventhubs.bicep' = if (provisionEventHub) {
   name: 'dlz-eventhubs'
   params: {
     location: location
@@ -354,7 +372,10 @@ module eventgridBusiness 'eventgrid-business.bicep' = {
   params: {
     location: location
     consolePrincipalId: consolePrincipalId
-    eventHubResourceId: '${eventhubs.outputs.namespaceId}/eventhubs/${eventhubs.outputs.telemetryHubName}'
+    // Fan out to the telemetry Event Hub only when a namespace is provisioned in
+    // this DLZ; empty when EH is disabled/reused (eventgrid-business.bicep then
+    // skips the fan-out subscription and publishes to EH directly at runtime).
+    eventHubResourceId: provisionEventHub ? '${eventhubs!.outputs.namespaceId}/eventhubs/${eventhubs!.outputs.telemetryHubName}' : ''
     workspaceId: adminPlaneLawId
     skipRoleGrants: skipRoleGrants
     complianceTags: complianceTags
@@ -649,7 +670,7 @@ output bronzeContainerUrl string = storage.outputs.bronzeContainerUrl
 output silverContainerUrl string = storage.outputs.silverContainerUrl
 output goldContainerUrl string = storage.outputs.goldContainerUrl
 output landingContainerUrl string = storage.outputs.landingContainerUrl
-output eventHubsNamespaceFqdn string = eventhubs.outputs.namespaceFqdn
+output eventHubsNamespaceFqdn string = provisionEventHub ? eventhubs!.outputs.namespaceFqdn : ''
 output cosmosEndpoint string = cosmos.outputs.endpoint
 output storageEventGridTopicId string = storage.outputs.eventGridTopicId
 

@@ -66,6 +66,8 @@ scan "Microsoft.DocumentDB/databaseAccounts"      "Cosmos DB"            "EXISTI
 scan "Microsoft.EventHub/namespaces"              "Event Hubs"           "EXISTING_EVENTHUB_NAMESPACE" "EXISTING_EVENTHUB_RG"       "EXISTING_EVENTHUB_SUB"
 scan "Microsoft.Databricks/workspaces"            "Databricks"           "EXISTING_DATABRICKS"         "EXISTING_DATABRICKS_RG"     "EXISTING_DATABRICKS_SUB"
 scan "Microsoft.Kusto/clusters"                   "ADX / Kusto"          "EXISTING_KUSTO_CLUSTER"      "EXISTING_KUSTO_RG"          "EXISTING_KUSTO_SUB"
+scan "Microsoft.StreamAnalytics/streamingjobs"    "Stream Analytics"     "EXISTING_ASA_JOB"           "EXISTING_ASA_RG"            "EXISTING_ASA_SUB"
+scan "Microsoft.Devices/IotHubs"                  "IoT Hub"              "EXISTING_IOT_HUB"           "EXISTING_IOT_RG"            "EXISTING_IOT_SUB"
 scan "Microsoft.Synapse/workspaces"               "Synapse"              "EXISTING_SYNAPSE"            "EXISTING_SYNAPSE_RG"        "EXISTING_SYNAPSE_SUB"
 scan "Microsoft.DataFactory/factories"            "Data Factory"         "EXISTING_ADF"                "EXISTING_ADF_RG"            "EXISTING_ADF_SUB"
 scan "Microsoft.CognitiveServices/accounts"       "Cognitive/AI Services" "EXISTING_AOAI"              "EXISTING_AOAI_RG"           "EXISTING_AOAI_SUB"

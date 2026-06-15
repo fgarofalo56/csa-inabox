@@ -309,6 +309,12 @@ param aiSearchEnabled bool = false
 @description('Deploy ADX shared cluster (admin-plane) + per-DLZ ADX databases. Backs the RTI editor family — Eventhouse, KQL Database, KQL Queryset, KQL Dashboard, Eventstream. Default on as of 2026-05-27 (sweep-rti). Set false to skip ~$140/mo Dev SKU cluster.')
 param adxEnabled bool = true
 
+@description('Provision a NEW Event Hubs namespace in each DLZ (Real-Time Intelligence: Eventstream sources, Data Explorer receive, Mirroring CDC transport, event-schema-set Avro enforcement). Default true (opt-out). Set false to skip the ~namespace cost — the Eventstream / Data Explorer navigators then honest-gate. To REUSE an existing namespace instead of provisioning, set existingEventHubNamespace (the new namespace is skipped and the Console binds to the existing one). Entra-only auth, private-endpoint + servicebus DNS by default.')
+param loomEventHubEnabled bool = true
+
+@description('Provision the per-DLZ Azure Stream Analytics starter job (backs the stream-analytics-job editor + the Eventstream transform node). Default true (opt-out). Set false to skip the streaming-units cost — the editor then surfaces an honest infra-gate naming LOOM_ASA_RG. Distinct from streamAnalyticsEnabled (the deploy-planner tile), which provisions a separate planner job.')
+param loomStreamAnalyticsEnabled bool = true
+
 @description('Deploy a Gremlin-capable Cosmos DB account (EnableGremlin) + NoSQL vector account in each DLZ. Backs the cosmos-gremlin-graph (graph editor) and vector-store editors. Default on — the graph editor requires a Gremlin account at create-time (a NoSQL account cannot be converted). Set false to skip ~2 Cosmos accounts/DLZ.')
 param cosmosGraphVectorEnabled bool = true
 
@@ -391,6 +397,12 @@ param existingEventHubNamespace string = ''
 param existingEventHubRg string = ''
 @description('Subscription id of the existing Event Hubs namespace (cross-sub reuse).')
 param existingEventHubSub string = ''
+@description('Reuse an existing Azure Stream Analytics job (name) for the stream-analytics-job / Eventstream transform editors instead of provisioning the per-DLZ starter job. When set, loomStreamAnalyticsEnabled is forced off for the new starter job and the Console binds LOOM_ASA_RG/SUB + the job name to this existing job.')
+param existingAsaJob string = ''
+@description('Resource group of the existing Stream Analytics job.')
+param existingAsaRg string = ''
+@description('Subscription id of the existing Stream Analytics job (cross-sub reuse).')
+param existingAsaSub string = ''
 @description('Reuse an existing Databricks workspace (name) — informational for RBAC.')
 param existingDatabricksWorkspace string = ''
 @description('Resource group of the existing Databricks workspace.')
@@ -842,8 +854,18 @@ module adminPlane 'modules/admin-plane/main.bicep' = if (deployAdminPlane) {
     // cluster's DLZ-scoped Event Hub / storage grants must NOT fire — they would
     // target the non-existent rg-csa-loom-dlz-single-<loc> RG (ResourceGroupNotFound).
     // Empty in non-single-sub so the grants skip; the DLZ applies them on attach.
-    loomEventHubNamespace: useSingleDlz ? 'evhns-loom-default-${location}' : ''
+    loomEventHubNamespace: (useSingleDlz && loomEventHubEnabled) ? 'evhns-loom-default-${location}' : ''
     loomDlzRg: useSingleDlz ? singleDlzRg.name : adminPlaneRgName
+    // Stream Analytics navigator binding. Single-sub: the starter job + its
+    // Stream-Analytics-Contributor grant live in the DLZ RG, so LOOM_ASA_RG must
+    // point there for the stream-analytics-job editor + the Eventstream transform
+    // node to work first-try (G1: previously empty → 501). When reusing an
+    // existing job, bind to its RG/SUB/name instead; empty when ASA is disabled or
+    // for tenant/multi-sub (the console can't bind one DLZ's job — patched post-
+    // deploy via patch-navigator-env.sh).
+    loomAsaRg: !empty(existingAsaJob) ? existingAsaRg : ((useSingleDlz && loomStreamAnalyticsEnabled) ? singleDlzRg.name : '')
+    loomAsaSub: !empty(existingAsaJob) ? existingAsaSub : ''
+    loomAsaJobName: !empty(existingAsaJob) ? existingAsaJob : 'asa-loom-default-${location}'
     loomCosmosAccount: take('cosmos-loom-default-${uniqueString(singleDlzRg.id)}', 44)
     // Tenant/dlz-attach: no local DLZ hosts the Console's `loom` Cosmos, so the
     // admin plane provisions it in the hub (else the Console points at a missing
@@ -1123,6 +1145,13 @@ module singleDlz 'modules/landing-zone/main.bicep' = if (useSingleDlz) {
     recycleRetentionDays: recycleRetentionDays
     cosmosGraphVectorEnabled: cosmosGraphVectorEnabled
     weaveOntologyEnabled: weaveOntologyEnabled
+    // RTI (Real-Time Intelligence) opt-out flags + existing-namespace reuse.
+    // Single-sub: the Eventstream/Data Explorer navigators bind to this DLZ's
+    // namespace, so reuse-an-existing skips provisioning here AND the admin-plane
+    // env points at the reused namespace (existingEventHubNamespace below).
+    loomEventHubEnabled: loomEventHubEnabled
+    existingEventHubNamespaceName: existingEventHubNamespace
+    enableStreamAnalytics: loomStreamAnalyticsEnabled && empty(existingAsaJob)
   }
 }
 
@@ -1204,6 +1233,11 @@ module dlz 'modules/landing-zone/main.bicep' = [for (subId, i) in dlzSubscriptio
     recycleRetentionDays: recycleRetentionDays
     cosmosGraphVectorEnabled: cosmosGraphVectorEnabled
     weaveOntologyEnabled: weaveOntologyEnabled
+    // RTI opt-out flags. Multi-sub: each DLZ provisions its OWN Event Hubs
+    // namespace + Stream Analytics job (existingEventHubNamespace is the hub-
+    // navigator binding, not a per-DLZ skip), so only the enable flags forward.
+    loomEventHubEnabled: loomEventHubEnabled
+    enableStreamAnalytics: loomStreamAnalyticsEnabled
   }
 }]
 
@@ -1308,6 +1342,11 @@ module dlzAttach 'modules/landing-zone/main.bicep' = if (topology == 'dlz-attach
     recycleRetentionDays: recycleRetentionDays
     cosmosGraphVectorEnabled: cosmosGraphVectorEnabled
     weaveOntologyEnabled: weaveOntologyEnabled
+    // RTI opt-out flags. dlz-attach: the attached DLZ provisions its own Event
+    // Hubs namespace + Stream Analytics starter job (ADX DB is created at runtime
+    // — see adxEnabled:false above), so only the enable flags forward.
+    loomEventHubEnabled: loomEventHubEnabled
+    enableStreamAnalytics: loomStreamAnalyticsEnabled
   }
 }
 
@@ -1725,6 +1764,28 @@ module rtiHubRbac 'modules/admin-plane/rti-hub-rbac.bicep' = {
   params: {
     consolePrincipalId: dpConsolePrincipalId
     skipRoleGrants: skipRoleGrants
+  }
+}
+
+// =====================================================================
+// Stream Analytics Query Tester — Console UAMI at SUBSCRIPTION scope.
+//
+// Authorizes the subscription/location-scoped CompileQuery / TestQuery /
+// SampleInput actions the Eventstream transform builder + stream-analytics-job
+// editor call to validate + test SAQL (deploy-readiness G2). The RG-scoped
+// Stream Analytics Contributor grant (landing-zone/stream-analytics.bicep) does
+// NOT cover these — they live above any RG. Granted by default so Compile/Run
+// work on first login; skipped when ASA is opted out or skipRoleGrants is set.
+// Subscription-scoped own module (dpConsolePrincipalId is a module OUTPUT →
+// BCP177) — same pattern as rtiHubRbac above.
+// =====================================================================
+module asaQueryTesterRbac 'modules/admin-plane/asa-query-tester-rbac.bicep' = {
+  name: 'asa-query-tester-rbac'
+  scope: subscription()
+  params: {
+    consolePrincipalId: dpConsolePrincipalId
+    skipRoleGrants: skipRoleGrants
+    loomStreamAnalyticsEnabled: loomStreamAnalyticsEnabled
   }
 }
 

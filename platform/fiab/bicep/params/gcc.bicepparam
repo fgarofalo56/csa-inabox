@@ -34,12 +34,21 @@ param existingCosmosSub          = readEnvironmentVariable('EXISTING_COSMOS_ACCO
 param existingEventHubNamespace  = readEnvironmentVariable('EXISTING_EVENTHUB_NAMESPACE', '')
 param existingEventHubRg         = readEnvironmentVariable('EXISTING_EVENTHUB_RG', '')
 param existingEventHubSub        = readEnvironmentVariable('EXISTING_EVENTHUB_SUB', '')
+param existingAsaJob             = readEnvironmentVariable('EXISTING_ASA_JOB', '')
+param existingAsaRg              = readEnvironmentVariable('EXISTING_ASA_RG', '')
+param existingAsaSub             = readEnvironmentVariable('EXISTING_ASA_SUB', '')
 param existingDatabricksWorkspace = readEnvironmentVariable('EXISTING_DATABRICKS', '')
 param existingDatabricksRg       = readEnvironmentVariable('EXISTING_DATABRICKS_RG', '')
 param existingDatabricksSub      = readEnvironmentVariable('EXISTING_DATABRICKS_SUB', '')
 param existingDatabricksHostname = readEnvironmentVariable('EXISTING_DATABRICKS_HOSTNAME', '')
 param fabricEnabled              = false
 // <<< BYO-WIZARD END
+
+// RTI (Real-Time Intelligence) backends — Event Hubs + Stream Analytics ON by
+// default (opt-out). Set the env var to 'false' to skip the cost, or reuse an
+// existing namespace/job via the EXISTING_* vars above.
+param loomEventHubEnabled = bool(readEnvironmentVariable('LOOM_EVENTHUB_ENABLED', 'true'))
+param loomStreamAnalyticsEnabled = bool(readEnvironmentVariable('LOOM_STREAM_ANALYTICS_ENABLED', 'true'))
 
 param environment = 'AzureCloud'
 param location = 'eastus'
