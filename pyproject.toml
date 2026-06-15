@@ -18,7 +18,7 @@ dev = [
     "pre-commit>=3.5.0,<5.0.0",
     # structlog is a governance runtime dep but tests for the shared
     # logging helper need it available in the dev env too.
-    "structlog>=24.1.0,<26.0.0",
+    "structlog>=24.1.0,<27.0.0",
     # Type stubs for third-party libraries that lack inline types — kept
     # here (and not under governance extras) so mypy always sees them
     # during a `pip install -e ".[dev]"` workflow.
@@ -52,7 +52,7 @@ governance = [
     "azure-monitor-ingestion>=1.0.0,<2.0.0",
     # Structured JSON logging with trace/correlation context — see
     # csa_platform/governance/common/logging.py and docs/LOG_SCHEMA.md.
-    "structlog>=24.1.0,<26.0.0",
+    "structlog>=24.1.0,<27.0.0",
     # CSA-0112 — Azure AI Content Safety client used by
     # csa_platform.common.content_safety.  Imported lazily so the rest of
     # the platform stays importable without this dep; listed here so
@@ -76,7 +76,7 @@ functions = [
     "azure-mgmt-storage>=21.0.0,<26.0.0",
     "azure-mgmt-cosmosdb>=9.0.0,<10.0.0",
     "azure-mgmt-sql>=3.0.0,<4.0.0",
-    "structlog>=24.1.0,<26.0.0",
+    "structlog>=24.1.0,<27.0.0",
     # AI Enrichment function deps
     "azure-ai-textanalytics>=5.3.0,<6.0.0",
     "azure-ai-formrecognizer>=3.3.0,<4.0.0",
@@ -85,7 +85,7 @@ functions = [
     "azure-cosmos>=4.5.0,<5.0.0",
 ]
 platform = [
-    "structlog>=24.1.0,<26.0.0",
+    "structlog>=24.1.0,<27.0.0",
     "tenacity>=8.2.0,<10.0.0",
     "openai>=1.0.0,<3.0.0",
     "azure-identity>=1.17.0,<2.0.0",
@@ -189,7 +189,7 @@ copilot-evals = [
     # full ``copilot`` extra.
     "pydantic>=2.7.0,<3.0.0",
     "pydantic-settings>=2.3.0,<3.0.0",
-    "structlog>=24.1.0,<26.0.0",
+    "structlog>=24.1.0,<27.0.0",
     "PyYAML>=6.0,<7.0",
     "jsonschema>=4.22,<5.0",
     # OTel telemetry module degrades to no-op without these but the
@@ -216,7 +216,7 @@ copilot = [
     "pydantic>=2.7.0,<3.0.0",
     "pydantic-settings>=2.3.0,<3.0.0",
     # Structured logging (aligns with csa_platform.common.logging).
-    "structlog>=24.1.0,<26.0.0",
+    "structlog>=24.1.0,<27.0.0",
     # Azure OpenAI + AI Search — reused via csa_platform.ai_integration.rag.
     "openai>=1.0.0,<3.0.0",
     "azure-identity>=1.17.0,<2.0.0",
@@ -257,7 +257,7 @@ streaming = [
     "pydantic>=2.7.0,<3.0.0",
     "pydantic-settings>=2.3.0,<3.0.0",
     "PyYAML>=6.0,<7.0",
-    "structlog>=24.1.0,<26.0.0",
+    "structlog>=24.1.0,<27.0.0",
     # Azure async SDKs.  azure-eventhub drives the EventHubSource,
     # IoTHubSource, and KafkaSource adapters (the last via the Event
     # Hubs Kafka-compatible endpoint).  azure-storage-blob powers the
