@@ -95,7 +95,8 @@ const useStyles = makeStyles({
     minHeight: '520px',
     backgroundColor: tokens.colorNeutralBackground1,
     border: `1px solid ${tokens.colorNeutralStroke2}`,
-    borderRadius: '4px',
+    borderRadius: tokens.borderRadiusLarge,
+    overflow: 'hidden',
   },
   detailRow: { marginBottom: '10px' },
   mono: { fontFamily: 'Consolas, monospace', fontSize: '12px' },
@@ -329,7 +330,7 @@ function buildTopology(data: TopologyData): { nodes: Node[]; edges: Edge[] } {
       data: {
         detail: { kind: 'nsg', nsg } as NodeDetail,
         label: (
-          <div style={{ lineHeight: 1.3 }}>
+          <div style={{ lineHeight: 1.3 }} title={nsg.name}>
             <div>🛡️</div>
             <div style={{ fontSize: '9px', fontWeight: 600 }}>
               {nsg.name.length > 16 ? `${nsg.name.slice(0, 14)}…` : nsg.name}
@@ -400,7 +401,7 @@ function buildTopology(data: TopologyData): { nodes: Node[]; edges: Edge[] } {
       data: {
         detail: { kind: 'pe', pe } as NodeDetail,
         label: (
-          <div style={{ lineHeight: 1.3 }}>
+          <div style={{ lineHeight: 1.3 }} title={serviceLabel}>
             <div>{color.icon}</div>
             <div style={{ fontSize: '8px', fontWeight: 600 }}>
               {serviceLabel.length > 12
@@ -409,9 +410,10 @@ function buildTopology(data: TopologyData): { nodes: Node[]; edges: Edge[] } {
             </div>
             {pe.loomDomain && (
               <div
+                title={pe.loomDomain}
                 style={{
                   marginTop: '2px',
-                  fontSize: '7px',
+                  fontSize: '8px',
                   fontWeight: 600,
                   backgroundColor: tokens.colorBrandBackground2,
                   color: tokens.colorBrandForeground1,
