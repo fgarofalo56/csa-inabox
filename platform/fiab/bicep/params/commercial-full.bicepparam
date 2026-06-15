@@ -40,16 +40,19 @@ param databricksAccountId = readEnvironmentVariable('LOOM_DATABRICKS_ACCOUNT_ID'
 param defenderForAIEnabled = true
 // Unified Catalog + Enterprise Purview reuse:
 //   The /catalog surface federates Purview + UC + OneLake and the
-//   /admin/security Purview tab calls REAL endpoints. Because this
-//   tenant already has an Enterprise Purview (dmlz-dev-purview-eastus),
-//   we DO NOT deploy a second one (would fail with
-//   'EnterpriseTenantAlreadyExists'). Instead we wire the existing
-//   account into the console via LOOM_PURVIEW_ACCOUNT.
-//   If your tenant does NOT already have an Enterprise Purview, set
-//   purviewEnabled = true and clear loomPurviewAccount.
-param purviewEnabled = false
-// Override via env: LOOM_PURVIEW_ACCOUNT=<short-account-name>
-param loomPurviewAccount = readEnvironmentVariable('LOOM_PURVIEW_ACCOUNT', 'dmlz-dev-purview-eastus')
+//   /admin/security Purview tab calls REAL endpoints.
+//   Governance deploy-readiness (#229): Purview is now ON BY DEFAULT (opt-out).
+//   A clean commercial-full deploy provisions + wires + PE-protects a NEW classic
+//   Data Map account so /governance works on first login with no manual step.
+//   Opt OUT with LOOM_PURVIEW_ENABLED=false. REUSE an existing account instead by
+//   setting LOOM_PURVIEW_ACCOUNT to its short name (reuse takes precedence over
+//   provisioning). LOOM_PURVIEW_LOCATION pins the account to a known-Purview
+//   region when the hub region lacks capacity (empty = hub location).
+param purviewEnabled = bool(readEnvironmentVariable('LOOM_PURVIEW_ENABLED', 'true'))
+// Empty default = use the freshly provisioned account. Set LOOM_PURVIEW_ACCOUNT
+// to a short account name to REUSE an existing Purview instead.
+param loomPurviewAccount = readEnvironmentVariable('LOOM_PURVIEW_ACCOUNT', '')
+param purviewLocation = readEnvironmentVariable('LOOM_PURVIEW_LOCATION', '')
 // Information Protection + DLP — opt in after the post-deploy bootstrap
 // workflow grants the Graph AppRoles AND admin consent is issued.
 // Set LOOM_MIP_ENABLED / LOOM_DLP_ENABLED env vars to flip these on.
@@ -122,8 +125,13 @@ param appImageTags = {
   directLake: readEnvironmentVariable('LOOM_DIRECTLAKE_TAG', 'v0.7')
 }
 
-// MSAL — passed from env vars (don't commit secrets to disk)
-param loomMsalClientId = readEnvironmentVariable('LOOM_MSAL_CLIENT_ID', '9844c28c-3b3a-4949-8d63-9eefa3b50a9d')
+// MSAL — the app registration + client secret are now PROVISIONED by default
+// (loomMsalAppReg.enabled=true → entra-app-registration.bicep / the post-deploy
+// bootstrap, GH #1383). Pass LOOM_MSAL_CLIENT_ID only to BYO an existing app
+// registration; empty lets the deploy provision a fresh one (no hardcoded
+// shared app id — each deployment gets its own, with redirect URIs reconciled
+// to its own console host).
+param loomMsalClientId = readEnvironmentVariable('LOOM_MSAL_CLIENT_ID', '')
 param loomMsalClientSecret = readEnvironmentVariable('LOOM_MSAL_CLIENT_SECRET', '')
 // Stable session secret — pass via env to preserve sign-ins; empty → admin-plane
 // derives a stable per-RG GUID (newGuid() is invalid in a .bicepparam, BCP065).
@@ -148,8 +156,16 @@ param contentSafetyEnabled = true
 // return real completions on a clean deploy instead of the 501 not_configured gate.
 param agentFoundryEnabled = true
 param apimEnabled = true
+param hubFirewallEnabled = true
 param aiSearchEnabled = false
 param adxEnabled = true
+// RTI (Real-Time Intelligence) backends — Event Hubs + Stream Analytics. ON by
+// default (opt-out); set the env var to 'false' to skip the cost. Event Hubs
+// backs the Eventstream sources + Data Explorer receive; Stream Analytics backs
+// the stream-analytics-job editor + the Eventstream transform node. To REUSE an
+// existing Event Hubs namespace / ASA job, set the EXISTING_* vars in the BYO block.
+param loomEventHubEnabled = bool(readEnvironmentVariable('LOOM_EVENTHUB_ENABLED', 'true'))
+param loomStreamAnalyticsEnabled = bool(readEnvironmentVariable('LOOM_STREAM_ANALYTICS_ENABLED', 'true'))
 // Setup Orchestrator — on by default so the Setup Wizard's Deploy submits the
 // real subscription-scoped ARM deployment and the Console UAMI is granted
 // Contributor on the target sub(s). Set LOOM_SETUP_TEMPLATE_URI to the published
@@ -162,6 +178,11 @@ param setupTemplateUri = readEnvironmentVariable('LOOM_SETUP_TEMPLATE_URI', '')
 // the Gremlin capability is fixed at account-creation, so the default NoSQL
 // account can't back the graph editor.
 param cosmosGraphVectorEnabled = true
+// Org-visuals (Embed codes F22 + Organizational visuals F23) — ON by default
+// (opt-out). Wires the Console UAMI org-visuals container grant + Storage Blob
+// Delegator + LOOM_ORG_VISUALS_URL. Set false to honest-gate those panes; the
+// medallion lake is unaffected. Azure Blob only — no Fabric/Power BI dependency.
+param loomOrgVisualsEnabled = true
 param vpnGatewayEnabled = true
 param appGatewayEnabled = true
 // Azure ML workspace — backs the notebook "Azure ML" compute path (Compute
@@ -199,6 +220,8 @@ param existingAdxClusterSub      = readEnvironmentVariable('EXISTING_KUSTO_SUB',
 param existingFoundryAccountName = readEnvironmentVariable('EXISTING_AOAI', '')
 param existingFoundryRg          = readEnvironmentVariable('EXISTING_AOAI_RG', '')
 param existingFoundrySub         = readEnvironmentVariable('EXISTING_AOAI_SUB', '')
+param existingFoundryChatDeployment  = readEnvironmentVariable('EXISTING_AOAI_CHAT_DEPLOYMENT', '')
+param existingFoundryEmbedDeployment = readEnvironmentVariable('EXISTING_AOAI_EMBED_DEPLOYMENT', '')
 param existingPurviewAccount     = readEnvironmentVariable('EXISTING_PURVIEW', '')
 param existingPurviewRg          = readEnvironmentVariable('EXISTING_PURVIEW_RG', '')
 param existingPurviewSub         = readEnvironmentVariable('EXISTING_PURVIEW_SUB', '')
@@ -211,6 +234,9 @@ param existingCosmosSub          = readEnvironmentVariable('EXISTING_COSMOS_ACCO
 param existingEventHubNamespace  = readEnvironmentVariable('EXISTING_EVENTHUB_NAMESPACE', '')
 param existingEventHubRg         = readEnvironmentVariable('EXISTING_EVENTHUB_RG', '')
 param existingEventHubSub        = readEnvironmentVariable('EXISTING_EVENTHUB_SUB', '')
+param existingAsaJob             = readEnvironmentVariable('EXISTING_ASA_JOB', '')
+param existingAsaRg              = readEnvironmentVariable('EXISTING_ASA_RG', '')
+param existingAsaSub             = readEnvironmentVariable('EXISTING_ASA_SUB', '')
 param existingDatabricksWorkspace = readEnvironmentVariable('EXISTING_DATABRICKS', '')
 param existingDatabricksRg       = readEnvironmentVariable('EXISTING_DATABRICKS_RG', '')
 param existingDatabricksSub      = readEnvironmentVariable('EXISTING_DATABRICKS_SUB', '')
@@ -227,3 +253,13 @@ param complianceTags = {
   FedRAMP_Level: 'High'
   Data_Classification: 'Standard'
 }
+
+// =====================================================================
+// Data-engineering backends — ON by default (opt-out). Set any to false to
+// skip that provision; the console editor then honest-gates (LOOM_* env blanked)
+// instead of 502-ing. See docs/fiab/prp/deploy-readiness-100pct.md.
+// =====================================================================
+param loomSynapseEnabled = true
+param loomDatabricksEnabled = true
+param loomDataFactoryEnabled = true
+param loomSelfHostedIrEnabled = true

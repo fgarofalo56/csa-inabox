@@ -70,3 +70,27 @@ onto the metadata doc (and are omitted when not supplied); toggle flips
 tenant-wide; delete removes the blob + metadata. With `LOOM_ORG_VISUALS_URL` unset
 the route returns a 503 + hint and the pane renders `NotConfiguredBar`. No
 `LOOM_DEFAULT_FABRIC_WORKSPACE` required.
+
+## Deploy wiring (deploy-readiness — ON by default, opt-out)
+
+The `org-visuals` Blob container is always created by
+`platform/fiab/bicep/modules/landing-zone/storage.bicep` (it is one of the
+foundational medallion-account containers). The **grant + env** are governed by
+the `loomOrgVisualsEnabled` flag (`main.bicep`, default `true`), threaded to the
+admin plane as `loomBackends.orgVisuals` (`'enabled'` → wired; `'disabled'` →
+honest-gate) so the admin-plane module stays under the ARM 256-parameter limit.
+
+| Topology | Container grant | `LOOM_ORG_VISUALS_URL` env | Wired by |
+|---|---|---|---|
+| single-sub | Storage Blob Data Contributor (container) + Storage Blob Delegator (account) | ✅ at deploy time | `admin-plane/main.bicep` → `org-visuals-rbac.bicep` + env block |
+| tenant / dlz-attach | container grant via `dlzAttachOrgVisualsRbac` (`main.bicep`) at deploy; Storage Blob Delegator + env wired post-attach | ✅ post-attach | `.github/workflows/csa-loom-post-deploy-bootstrap.yml` "Wire org-visuals" step (mirrors `scripts/csa-loom/patch-navigator-env.sh`) |
+| disabled (`loomOrgVisualsEnabled=false`) | skipped | omitted → `NotConfiguredBar` | — |
+
+**Scan-and-choose** (deploy-readiness): both the CLI
+(`scripts/csa-loom/scan/storage.sh` — use-existing / provision-new / disable,
+recommendation **provision-new**) and the Setup Wizard (`/setup` review step →
+`/api/setup/existing-storage` discovery) offer the same three-way choice. The
+medallion lake is always provisioned; only the org-visuals grant + env is
+optional. Storage Blob Delegator role = `db58b8e5-c6ad-4a2a-8342-4190687cbf4a`
+(validated against `az role definition list`).
+

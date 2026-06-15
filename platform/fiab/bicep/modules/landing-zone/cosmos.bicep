@@ -38,8 +38,9 @@ param complianceTags object
 @allowed(['Strong', 'BoundedStaleness', 'Session', 'ConsistentPrefix', 'Eventual'])
 param defaultConsistency string = 'Session'
 
-@description('Zone-redundant write region. Off by default — zonal Cosmos capacity is constrained in eastus2 (per first deploy validation).')
-param zoneRedundant bool = false
+// NOTE: a former `zoneRedundant` param was removed — this account runs in
+// Serverless capacity mode, which mandates a single (non-zone-redundant) write
+// region, so the option no longer applies. No caller passed it.
 
 var accountName = take('cosmos-loom-${domainName}-${uniqueString(resourceGroup().id)}', 44)
 
@@ -51,9 +52,21 @@ resource account 'Microsoft.DocumentDB/databaseAccounts@2024-12-01-preview' = {
   identity: { type: 'SystemAssigned' }
   properties: {
     databaseAccountOfferType: 'Standard'
+    // SERVERLESS — this account hosts the Console's `loom` database, whose
+    // container count exceeds 25 (9 ARM-provisioned admin containers below +
+    // the BFF's lazily-created tenant-settings / connections / copilot-* /
+    // saved-queries / … via cosmos-client.ts ensure()). A shared-throughput
+    // (provisioned/autoscale) database caps at 25 containers, which produced
+    // live "collection count exceeded 25" 500s on workspaces/domains (PRP gap
+    // #5). Serverless removes the cap and the per-DB/per-container throughput
+    // requirement; consumption-billed and well-suited to these metadata/state
+    // stores. Set via the top-level capacityMode property (NOT the legacy
+    // 'EnableServerless' capability — never set both). Serverless requires a
+    // single write region, no zone redundancy, no automatic failover.
+    capacityMode: 'Serverless'
     consistencyPolicy: { defaultConsistencyLevel: defaultConsistency }
     locations: [
-      { locationName: location, failoverPriority: 0, isZoneRedundant: zoneRedundant }
+      { locationName: location, failoverPriority: 0, isZoneRedundant: false }
     ]
     enableAutomaticFailover: false
     publicNetworkAccess: 'Disabled'
@@ -141,7 +154,8 @@ resource dbs 'Microsoft.DocumentDB/databaseAccounts/sqlDatabases@2024-12-01-prev
   name: db.name
   properties: {
     resource: { id: db.name }
-    options: { autoscaleSettings: { maxThroughput: 4000 } }
+    // NO throughput options — the account is Serverless (capacityMode above),
+    // which forbids provisioned/autoscale throughput on its databases/containers.
   }
 }]
 
@@ -178,7 +192,9 @@ resource loomDb 'Microsoft.DocumentDB/databaseAccounts/sqlDatabases@2024-12-01-p
   name: loomDatabase
   properties: {
     resource: { id: loomDatabase }
-    options: { autoscaleSettings: { maxThroughput: 4000 } }
+    // NO throughput options — Serverless account (capacityMode above) forbids
+    // provisioned/autoscale throughput, and serverless removes the 25-container
+    // shared-throughput cap that broke the Console's >25-container `loom` DB.
   }
 }
 

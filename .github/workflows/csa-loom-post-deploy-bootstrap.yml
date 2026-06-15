@@ -36,8 +36,16 @@ env:
   # NAME registered in PostgreSQL (must match LOOM_POSTGRES_AAD_USER on the
   # Console, default loom-console). The PG server name is resolved at runtime.
   CONSOLE_UAMI_NAME: loom-console
-  # MSAL Web App SP — used as Dataverse Application User (UAMIs can't be one)
-  LOOM_MSAL_CLIENT_ID: 9844c28c-3b3a-4949-8d63-9eefa3b50a9d
+  # MSAL Web App client (app) id. NO hardcoded shared app reg — the
+  # "Provision MSAL app registration" step below creates/reconciles a
+  # per-deployment app registration (redirect URIs reconciled to the console
+  # host, secret + SESSION_SECRET written to Key Vault) and exports
+  # LOOM_MSAL_CLIENT_ID for the Dataverse AppUser step. Set the repo var to BYO
+  # an existing app registration instead.
+  LOOM_MSAL_CLIENT_ID: ${{ vars.LOOM_MSAL_CLIENT_ID || '' }}
+  # Console host(s) (no scheme) whose https://<host>/auth/callback redirect URIs
+  # are reconciled onto the app registration. Defaults to the vanity domain.
+  CSA_LOOM_CONSOLE_HOSTS: ${{ vars.CSA_LOOM_VANITY_DOMAIN || '' }}
 
 jobs:
   bootstrap:
@@ -60,20 +68,73 @@ jobs:
           az account show --query "{user:user.name, sub:id}" -o table
           echo "Acting as Synapse initial admin (b9c3cc65-522e-49c9-ad02-914676aa5a6b)"
 
+      - name: Provision MSAL app registration (sign-in app + redirect URIs + secret in KV)
+        # Day-one deploy-readiness (GH #1383): create/reconcile the per-deployment
+        # Entra app registration, write the client secret + a stable SESSION_SECRET
+        # to Key Vault, and wire LOOM_MSAL_CLIENT_ID + secretRefs onto the Console
+        # Container App — so interactive login works on first sign-in. Idempotent;
+        # safe to re-run. Best-effort (|| true) so a Graph-consent gap doesn't fail
+        # the whole bootstrap. Requires the deploy SP to hold the Graph Application
+        # Administrator directory role + KV Secrets Officer.
+        run: |
+          set -uo pipefail
+          # Resolve the Loom Key Vault in the admin RG (kv-loom-*).
+          KV_NAME=$(az keyvault list -g "$ADMIN_RG" --query "[?starts_with(name,'kv-loom')].name | [0]" -o tsv 2>/dev/null || true)
+          if [ -z "${KV_NAME:-}" ]; then
+            KV_NAME=$(az keyvault list -g "$ADMIN_RG" --query "[0].name" -o tsv 2>/dev/null || true)
+          fi
+          if [ -z "${KV_NAME:-}" ]; then
+            echo "::warning::No Key Vault found in $ADMIN_RG — skipping MSAL app-reg provisioning"
+            exit 0
+          fi
+          # Resolve the Console Container App's runtime FQDN to add to redirect URIs.
+          CONSOLE_FQDN=$(az containerapp show -n loom-console -g "$ADMIN_RG" --query "properties.configuration.ingress.fqdn" -o tsv 2>/dev/null || true)
+          HOSTS="${CSA_LOOM_CONSOLE_HOSTS:-}"
+          if [ -n "${CONSOLE_FQDN:-}" ]; then
+            HOSTS="${HOSTS:+$HOSTS,}$CONSOLE_FQDN"
+          fi
+          UAMI_ID=$(az identity list -g "$ADMIN_RG" --query "[?contains(name,'console')].id | [0]" -o tsv 2>/dev/null || true)
+          chmod +x scripts/csa-loom/bootstrap-msal-app-reg.sh
+          OUT=$(KEYVAULT_NAME="$KV_NAME" \
+            CONSOLE_HOSTS="$HOSTS" \
+            EXISTING_CLIENT_ID="${LOOM_MSAL_CLIENT_ID:-}" \
+            CONSOLE_APP_NAME=loom-console CONSOLE_RG="$ADMIN_RG" \
+            UAMI_RESOURCE_ID="${UAMI_ID:-}" \
+            bash scripts/csa-loom/bootstrap-msal-app-reg.sh 2>&1) || echo "::warning::MSAL app-reg provisioning incomplete (Graph admin consent may be required)"
+          echo "$OUT"
+          # Export the resolved app id for the Dataverse AppUser step below.
+          APP_ID=$(echo "$OUT" | sed -n 's/^LOOM_MSAL_CLIENT_ID=//p' | tail -1)
+          if [ -n "${APP_ID:-}" ]; then
+            echo "LOOM_MSAL_CLIENT_ID=$APP_ID" >> "$GITHUB_ENV"
+          fi
+
       - name: Grant Console UAMI Purview Data Map roles (data-plane)
         env:
           # De-hardcoded so a non-eastus2 / non-Commercial deploy grants the right
           # account on the right host. Override via repo var LOOM_PURVIEW_ACCOUNT
-          # (the bicep output catalog.purviewAccountName, e.g. purview-csa-loom-<region>);
-          # falls back to the live Commercial default. PURVIEW_CLOUD drives the
-          # Data Map host TLD (.us in US Gov) inside the grant script — it mirrors
-          # purviewBase()'s isGovCloud() switch so the grant targets the SAME host
-          # the Console probes. The token audience stays https://purview.azure.net
-          # in all clouds.
-          PURVIEW_ACCOUNT: ${{ vars.LOOM_PURVIEW_ACCOUNT || 'purview-csa-loom-eastus2' }}
+          # (the bicep output catalog.purviewAccountName, e.g. purview-csa-loom-<region>).
+          # When the var is UNSET we DISCOVER the provisioned account in the admin RG
+          # below rather than falling back to a hardcoded eastus2 name that would not
+          # exist in a different-region deploy (which left the grant failing after a
+          # "successful" deploy). PURVIEW_CLOUD drives the Data Map host TLD (.us in
+          # US Gov); the token audience stays https://purview.azure.net in all clouds.
+          PURVIEW_ACCOUNT: ${{ vars.LOOM_PURVIEW_ACCOUNT || '' }}
           PURVIEW_CLOUD: ${{ vars.LOOM_CLOUD || vars.AZURE_CLOUD || 'AzureCloud' }}
         run: |
           set -uo pipefail
+          # When LOOM_PURVIEW_ACCOUNT is not pinned, discover the account this deploy
+          # provisioned (catalog.bicep names it purview-csa-loom-<region>). Prefer the
+          # admin RG, then any account in the subscription. Skip the grants cleanly
+          # when none exists (Purview opted out / reused account in another sub).
+          if [ -z "${PURVIEW_ACCOUNT:-}" ]; then
+            PURVIEW_ACCOUNT="$(az purview account list -g "$ADMIN_RG" --query "[?starts_with(name,'purview-csa-loom')].name | [0]" -o tsv 2>/dev/null || true)"
+            [ -z "$PURVIEW_ACCOUNT" ] && PURVIEW_ACCOUNT="$(az resource list --resource-type Microsoft.Purview/accounts --query "[?starts_with(name,'purview-csa-loom')].name | [0]" -o tsv 2>/dev/null || true)"
+          fi
+          if [ -z "${PURVIEW_ACCOUNT:-}" ]; then
+            echo "No CSA Loom Purview account found (purviewEnabled=false or reused cross-sub) — skipping Data Map grants."
+            exit 0
+          fi
+          echo "Targeting Purview account: $PURVIEW_ACCOUNT"
           # Classic Purview Data Map permissions are data-plane (collection
           # metadata policy), not ARM RBAC — so they can't be set in bicep. The
           # deploy SP created the Purview account, so it is the root Collection
@@ -131,6 +192,35 @@ jobs:
               bash scripts/csa-loom/grant-purview-datamap-role.sh \
               || echo "::warning::Purview '$ROLE' grant failed — the deploy SP may not be Collection Admin on $PURVIEW_ACCOUNT (add it once in the Purview portal, then re-run)."
           done
+
+      - name: Seed default governance taxonomy (classifications / labels / domains)
+        env:
+          # Deploy-readiness (#229): make /governance + /admin/security POPULATED
+          # on first login instead of empty. Seeds GLOBAL Cosmos defaults that the
+          # console BFF copies into each tenant on first access. Azure-native; the
+          # optional Purview push only fires when LOOM_PURVIEW_ACCOUNT is set.
+          LOOM_PURVIEW_ACCOUNT: ${{ vars.LOOM_PURVIEW_ACCOUNT || '' }}
+        run: |
+          set -uo pipefail
+          # The governance docs live in the CONSOLE Cosmos `loom` DB (tenant-settings
+          # + governance-domains containers). In tenant mode the console Cosmos is in
+          # the ADMIN RG; discover it there first, then fall back to the DLZ RG.
+          COSMOS_ACCT="$(az cosmosdb list -g "$ADMIN_RG" --query "[?starts_with(name,'cosmos-loom')].name | [0]" -o tsv 2>/dev/null || true)"
+          COSMOS_RG="$ADMIN_RG"
+          if [ -z "$COSMOS_ACCT" ]; then
+            COSMOS_ACCT="$(az cosmosdb list -g "$DLZ_RG" --query "[?starts_with(name,'cosmos-loom')].name | [0]" -o tsv 2>/dev/null || true)"
+            COSMOS_RG="$DLZ_RG"
+          fi
+          if [ -z "$COSMOS_ACCT" ]; then
+            echo "::warning::Could not resolve a cosmos-loom* account in $ADMIN_RG or $DLZ_RG — skipping governance seed."
+            exit 0
+          fi
+          echo "== seeding governance taxonomy into $COSMOS_ACCT (rg=$COSMOS_RG, db=loom) =="
+          chmod +x scripts/csa-loom/seed-governance.sh
+          LOOM_SUBSCRIPTION_ID="$SUB" LOOM_COSMOS_ACCOUNT="$COSMOS_ACCT" LOOM_COSMOS_RG="$COSMOS_RG" \
+            LOOM_COSMOS_DATABASE="loom" LOOM_PURVIEW_ACCOUNT="$LOOM_PURVIEW_ACCOUNT" \
+            bash scripts/csa-loom/seed-governance.sh \
+            || echo "::warning::governance seed failed (Cosmos Data Contributor RBAC on $COSMOS_ACCT for the deploy SP?) — surfaces start empty until re-run."
 
       - name: Grant Console UAMI subscription RBAC (Monitor / Cost / Security)
         run: |
@@ -518,6 +608,67 @@ jobs:
             echo "No data-lake storage in $DLZ_RG — skipping"
           fi
 
+      - name: Wire org-visuals (F22/F23) — Storage Blob Delegator grant + LOOM_ORG_VISUALS_URL env on console
+        # Deploy-readiness: in tenant / dlz-attach topology the admin plane is NOT
+        # redeployed, so admin-plane/main.bicep leaves loomStorageAccount empty and
+        # neither the org-visuals env (LOOM_ORG_VISUALS_URL + medallion/CSV URLs)
+        # nor the Storage Blob Delegator grant lands → Embed codes (F22) + Org
+        # visuals (F23) 503 not-configured. The account-wide Storage Blob Data
+        # Contributor grant above already covers the org-visuals CONTAINER writes;
+        # the only extra grant needed is Storage Blob Delegator (account scope) so
+        # getUserDelegationKey() can mint the read-only embed SAS. This step adds
+        # that grant and wires the storage env vars onto the live console app —
+        # mirroring scripts/csa-loom/patch-navigator-env.sh's storage block. The
+        # single-sub path already gets all of this from bicep; this is the
+        # tenant/dlz-attach bridge. Idempotent. Skips cleanly if no DLZ HNS account.
+        # Honors loomBackends.orgVisuals=disabled via the LOOM_ORG_VISUALS_DISABLED
+        # repo var (set it to '1' to keep the panes honestly gated after a deploy).
+        if: always()
+        continue-on-error: true
+        run: |
+          set -uo pipefail
+          if [ "${LOOM_ORG_VISUALS_DISABLED:-0}" = "1" ]; then
+            echo "::notice::LOOM_ORG_VISUALS_DISABLED=1 — leaving Embed codes / Org visuals honestly gated (opt-out)."
+            exit 0
+          fi
+          # Discover the DLZ HNS (Data Lake) account — reuse-first via repo var.
+          SA_ACCT="${EXISTING_LOOM_STORAGE_ACCOUNT:-}"
+          if [ -z "$SA_ACCT" ]; then
+            SA_ACCT=$(az storage account list -g "$DLZ_RG" \
+              --query "[?starts_with(name,'saloom') && isHnsEnabled].name | [0]" -o tsv 2>/dev/null)
+            [ -z "$SA_ACCT" ] && SA_ACCT=$(az storage account list -g "$DLZ_RG" \
+              --query "[?isHnsEnabled].name | [0]" -o tsv 2>/dev/null)
+          fi
+          if [ -z "$SA_ACCT" ]; then
+            echo "::notice::No HNS (Data Lake) account in $DLZ_RG — Embed codes / Org visuals stay honestly gated."
+            exit 0
+          fi
+          echo "DLZ ADLS account: $SA_ACCT"
+          SA_ID=$(az storage account show -n "$SA_ACCT" -g "$DLZ_RG" --query id -o tsv)
+          # Storage Blob Delegator (account scope) — getUserDelegationKey for embed SAS.
+          az role assignment create \
+            --assignee-object-id "$CONSOLE_UAMI_PRINCIPAL" \
+            --assignee-principal-type ServicePrincipal \
+            --role "Storage Blob Delegator" \
+            --scope "$SA_ID" \
+            -o table 2>&1 | grep -v "already exists" || echo "Storage Blob Delegator already assigned"
+          # Wire the storage env on the live console app (single merged revision).
+          SA_BLOB=$(az storage account show -n "$SA_ACCT" -g "$DLZ_RG" --query "primaryEndpoints.blob" -o tsv)
+          SA_DFS=$(az storage account show -n "$SA_ACCT" -g "$DLZ_RG"  --query "primaryEndpoints.dfs"  -o tsv)
+          SA_BLOB="${SA_BLOB%/}"; SA_DFS="${SA_DFS%/}"
+          CONSOLE_APP="${LOOM_CONSOLE_APP:-loom-console}"
+          az containerapp update -g "$ADMIN_RG" -n "$CONSOLE_APP" --set-env-vars \
+            "LOOM_ADLS_ACCOUNT=$SA_ACCT" \
+            "LOOM_ORG_VISUALS_URL=$SA_BLOB/org-visuals" \
+            "LOOM_BRONZE_URL=$SA_DFS/bronze" \
+            "LOOM_SILVER_URL=$SA_DFS/silver" \
+            "LOOM_GOLD_URL=$SA_DFS/gold" \
+            "LOOM_LANDING_URL=$SA_DFS/landing" \
+            "LOOM_CSV_IMPORTS_URL=$SA_DFS/csv-imports" \
+            -o none 2>&1 | tail -2 \
+            && echo "Wired LOOM_ORG_VISUALS_URL + medallion URLs on $CONSOLE_APP" \
+            || echo "::warning::Could not update $CONSOLE_APP env — run scripts/csa-loom/patch-navigator-env.sh manually."
+
       - name: Grant Console UAMI Cognitive Services User on Content Safety (unblocks /items/content-safety)
         run: |
           CS=$(az cognitiveservices account list -g $ADMIN_RG --query "[?kind=='ContentSafety'].id" -o tsv | head -1)
@@ -531,6 +682,57 @@ jobs:
               -o table 2>&1 | grep -v "already exists" || echo "Already assigned"
           else
             echo "No Content Safety in $ADMIN_RG — skipping"
+          fi
+
+      - name: Verify AOAI account + gpt-4o deployment, self-heal Console UAMI grants (unblocks Copilot / data-agent / AI functions)
+        run: |
+          # Deploy-readiness safety-net (PRP gap #6). The dedicated AOAI account
+          # aifndry-loom-<region> + its chat/embedding deployments are provisioned
+          # by bicep (agentFoundryEnabled defaults true). This step VERIFIES the
+          # account + a gpt-4o-class chat deployment exist and RE-GRANTS the three
+          # Console UAMI inference roles (idempotent) so a partial deploy (account
+          # created but a role grant raced/failed) self-heals — Copilot,
+          # data-agents and AI functions then work on first login. If the account
+          # is missing entirely, it prints the exact remediation (re-run the
+          # deploy with agentFoundryEnabled=true) rather than silently passing.
+          AOAI=$(az cognitiveservices account list -g $ADMIN_RG \
+            --query "[?kind=='AIServices' && starts_with(name,'aifndry-loom')].name" -o tsv | head -1)
+          if [ -z "$AOAI" ]; then
+            AOAI=$(az cognitiveservices account list -g $ADMIN_RG \
+              --query "[?kind=='AIServices' || kind=='OpenAI'].name" -o tsv | head -1)
+          fi
+          if [ -z "$AOAI" ]; then
+            echo "::warning::No AOAI (AIServices) account in $ADMIN_RG. Copilot / data-agent / AI-functions will honest-gate. Re-run the deploy with agentFoundryEnabled=true (default) to provision aifndry-loom-<region> + gpt-4o + embeddings."
+          else
+            AOAI_ID=$(az cognitiveservices account show -n "$AOAI" -g $ADMIN_RG --query id -o tsv)
+            echo "AOAI account: $AOAI"
+            CHAT=$(az cognitiveservices account deployment list -n "$AOAI" -g $ADMIN_RG \
+              --query "[?contains(to_string(properties.model.name) || '','gpt-4')].name | [0]" -o tsv 2>/dev/null || true)
+            if [ -z "$CHAT" ]; then
+              echo "::warning::AOAI account $AOAI has no gpt-4o-class chat deployment. Re-run the deploy (agentFoundryEnabled=true deploys 'chat' = gpt-4o) or deploy a gpt-4o model to it."
+            else
+              echo "AOAI chat deployment present: $CHAT"
+            fi
+            # Re-grant the three Console UAMI inference roles (idempotent).
+            for ROLE in "Azure AI Developer" "Cognitive Services User" "Cognitive Services OpenAI User"; do
+              az role assignment create \
+                --assignee-object-id $CONSOLE_UAMI_PRINCIPAL \
+                --assignee-principal-type ServicePrincipal \
+                --role "$ROLE" \
+                --scope "$AOAI_ID" \
+                -o none 2>&1 | grep -v "already exists" || echo "  $ROLE: already assigned"
+            done
+            # Self-heal the Spark MSI grants (Synapse workspace MSI + Databricks
+            # Access Connector) so notebook ai.* functions can call AOAI.
+            SYN_MI=$(az synapse workspace list --query "[?contains(name,'syn') || contains(name,'loom')].identity.principalId | [0]" -o tsv 2>/dev/null || true)
+            if [ -n "$SYN_MI" ] && [ "$SYN_MI" != "None" ]; then
+              az role assignment create \
+                --assignee-object-id "$SYN_MI" \
+                --assignee-principal-type ServicePrincipal \
+                --role "Cognitive Services OpenAI User" \
+                --scope "$AOAI_ID" \
+                -o none 2>&1 | grep -v "already exists" || echo "  Synapse MSI OpenAI User: already assigned"
+            fi
           fi
 
       - name: Register Console UAMI as Power Platform Management App (unblocks PP + Copilot Studio editors)
@@ -749,6 +951,21 @@ jobs:
             CONSOLE_UAMI_NAME="$CONSOLE_UAMI_NAME" \
             bash scripts/csa-loom/bootstrap-weave-pg.sh \
             || echo "::warning::Weave PG bootstrap incomplete — ensure the deploy SP is a PG Entra admin on $WEAVE_PG_SERVER, then re-run."
+
+      - name: Verify console runtime (probes / resources / telemetry)
+        if: always()
+        continue-on-error: true
+        run: |
+          # Deploy-readiness guard for the "Console runtime" domain (#1382):
+          # asserts loom-console came up Healthy, right-sized (>=1cpu/2Gi), with
+          # relaxed probe timeouts (>=5s) and consistent telemetry wiring
+          # (conn-string present iff LOOM_CONSOLE_TELEMETRY_ENABLED=true).
+          # Non-fatal (continue-on-error) so it reports drift without blocking the
+          # rest of bootstrap; flip to a hard gate once stable across boundaries.
+          chmod +x scripts/csa-loom/verify-console-runtime.sh
+          ADMIN_RG="$ADMIN_RG" CONSOLE_APP="${CONSOLE_UAMI_NAME:-loom-console}" \
+            bash scripts/csa-loom/verify-console-runtime.sh \
+            || echo "::warning::console-runtime verification reported drift — see log (probes/resources/telemetry)."
 
       - name: Summary
         if: always()

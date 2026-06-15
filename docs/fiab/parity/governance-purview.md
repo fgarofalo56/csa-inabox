@@ -69,3 +69,49 @@ When `LOOM_PURVIEW_ACCOUNT` is unset the pane renders the honest `PurviewGate`
 **A** — a real probe-driven connection surface: honest reason-coded gate when
 unbound, live hero + native-surface launchpad + portal deep-link when bound. No
 fake "embedded Purview" placeholder.
+
+## Deploy-readiness (#229 — push-button, populated day-one)
+
+Prior to this change a *clean* tenant-mode hub left governance broken/empty on
+first login: Purview was off by default on the tenant/dlz-attach path, and even
+when provisioned the account was PE-locked with **no private endpoint**, so the
+hub-VNet Console could not reach it (`/api/governance/purview/status` returned a
+network-error `not_configured` after a "successful" deploy). The three fixes:
+
+1. **Purview ON by default (opt-out).** `purviewEnabled` now defaults `true` on
+   the Commercial paths (`commercial-full`, `commercial`, `gcc`, `tenant-dmlz`)
+   via `bool(readEnvironmentVariable('LOOM_PURVIEW_ENABLED','true'))`. Opt out
+   with `LOOM_PURVIEW_ENABLED=false`; **reuse** an existing account with
+   `LOOM_PURVIEW_ACCOUNT=<short-name>` (reuse > provision). `gcc-high`/`il5`
+   stay `false` (accreditation reality — reuse the tenant account / Atlas).
+2. **Private endpoint + DNS (the reachability fix).** `catalog.bicep` now
+   provisions **account** (groupId `account`) and **portal** (groupId `portal`)
+   private endpoints joined to the new `privatelink.purview.azure.<tld>` and
+   `privatelink.purviewstudio.azure.<tld>` zones (added to `network.bicep`,
+   linked to the hub VNet). The PE-locked data plane is reachable over Private
+   Link by default — no more bootstrap "flip PNA→Enabled" dependency for the
+   Console probe.
+3. **Cross-region provisioning.** New `purviewLocation` (carried on the
+   `byoExisting` object to stay under admin-plane's 256-param cap; env
+   `LOOM_PURVIEW_LOCATION`) pins the account to a known-Purview region when the
+   hub region lacks capacity. `LOOM_PURVIEW_ACCOUNT` is derived from
+   `catalog.outputs.purviewAccountName` so the env always matches the real host.
+
+**Populated taxonomy day-one.** `scripts/csa-loom/seed-governance.sh` (run by
+`csa-loom-post-deploy-bootstrap.yml` after seed-catalogs) seeds curated GLOBAL
+defaults — classifications (PII/PHI/PCI-DSS/Confidential/Public/CUI/ITAR),
+sensitivity labels (Public→Restricted), and domains (Finance/HR/Operations/
+Customer/Compliance) — into the Console `loom` Cosmos. The classifications,
+sensitivity-labels, and governance/domains BFF routes copy these GLOBAL defaults
+into each tenant on first access (`copyGlobalDefaults*`, doc-absent / one-time
+marker — never re-seeds after a user edits), so the surfaces render populated
+instead of empty. Cosmos is authoritative (Azure-native default); the Purview
+push stays best-effort + opt-in (`no-fabric-dependency.md`, `no-vaporware.md`).
+
+**Scan-and-choose.** `scripts/csa-loom/scan-and-deploy.sh` (CLI) scans every
+subscription for existing Purview accounts, emits a recommendation (reuse the
+single existing account, else provision new — classic Data Map accounts can
+coexist), delegates per-service choice + param emission to `byo-wizard.sh`, and
+runs the deploy. `GET /api/setup/scan-purview` is the Setup Wizard's
+governance-specific discovery + recommendation route (the wizard's per-service
+choice UI surfaces `purviewEnabled` / `existingPurviewAccount`).

@@ -63,9 +63,105 @@ interface SetupConfig {
   weaveOntologyEnabled?: boolean;
   databricksUnityCatalogEnabled?: boolean;
   databricksSqlWarehouseEnabled?: boolean;
+  /**
+   * Console metadata Cosmos (the serverless `loom` DB the BFF reads/writes).
+   * Opt-out flag, default true → provision-new serverless. When the scan-and-
+   * choose UI selects "use existing", set false (or leave true) + the
+   * existingCosmos* coordinates so the hub provision is skipped and the Console
+   * binds to the reused account. Disabling without an existing account is invalid
+   * (the Console cannot run without a metadata store) — the wizard only offers
+   * disable alongside an existing-account selection.
+   */
+  loomConsoleCosmosEnabled?: boolean;
+  existingCosmosAccount?: string;
+  existingCosmosRg?: string;
+  existingCosmosSub?: string;
+  /**
+   * Org-visuals (Embed codes F22 + Organizational visuals F23) opt-out. Default
+   * true → the org-visuals container grant + LOOM_ORG_VISUALS_URL env are wired.
+   * false → those panes honest-gate (medallion lake unaffected). Threaded into
+   * main.bicep's loomOrgVisualsEnabled param.
+   */
+  loomOrgVisualsEnabled?: boolean;
+  /**
+   * Storage scan "use-existing" choice: a pre-existing HNS (Data Lake) account
+   * the deploy should reuse instead of provisioning a new one. The post-deploy
+   * bootstrap / patch-navigator-env.sh wire LOOM_ORG_VISUALS_URL + medallion URLs
+   * from it (EXISTING_LOOM_STORAGE_ACCOUNT). Empty = provision new.
+   */
+  existingLoomStorageAccount?: string;
+  /**
+   * Real-Time Intelligence (RTI) scan-and-choose. Each backend is ON by default
+   * (opt-out) — set the *Enabled flag false to skip it, or set the matching
+   * existing* name to REUSE a discovered resource instead of provisioning new.
+   * Forwarded to main.bicep as named params (no free-form) so the wizard and the
+   * CLI (byo-wizard.sh) write identical wiring.
+   */
+  loomEventHubEnabled?: boolean;
+  existingEventHubNamespace?: string;
+  loomStreamAnalyticsEnabled?: boolean;
+  existingAsaJob?: string;
+  existingAdxClusterName?: string;
   /** Multi-sub: parallel arrays the bicep `[for]` loop consumes. */
   dlzSubscriptionIds?: string[];
   dlzDomainNames?: string[];
+  /**
+   * Pre-deploy scan-and-choose decisions from the Setup Wizard's "Scan & choose"
+   * step (the in-console twin of scripts/csa-loom/scan-and-deploy.sh). Keyed by
+   * service key ('aisearch', 'purview', …). For 'use-existing' the chosen
+   * instance is threaded as `existing<Svc>*` bicep params; 'new'/'disable' set
+   * the `loom<Svc>Enabled` flag. Only services with a known bicep param mapping
+   * (SERVICE_PARAM_MAP) emit `-p` lines — others are reused via the post-deploy
+   * EXISTING_* env contract (grant-navigator-rbac.sh / patch-navigator-env.sh).
+   */
+  serviceChoices?: Record<string, { mode: 'new' | 'use-existing' | 'disable'; existing?: { name: string; rg: string; sub: string } }>;
+}
+
+/**
+ * Maps a scan-and-choose service key → its main.bicep params. `existing` is the
+ * [name, rg, sub] param-name triple (null when main.bicep has no existing*
+ * surface — those services are reused post-deploy via EXISTING_* env only).
+ * `flag` is the `loom<Svc>Enabled`-style toggle (null for DLZ-provisioned
+ * services with no provisioning toggle). Mirrors the CLI SERVICES table.
+ */
+const SERVICE_PARAM_MAP: Record<string, { existing: [string, string, string] | null; flag: string | null }> = {
+  aisearch: { existing: ['existingAiSearchService', 'existingAiSearchRg', 'existingAiSearchSub'], flag: 'aiSearchEnabled' },
+  apim: { existing: ['existingApimName', 'existingApimRg', 'existingApimSub'], flag: 'apimEnabled' },
+  adx: { existing: ['existingAdxClusterName', 'existingAdxClusterRg', 'existingAdxClusterSub'], flag: 'adxEnabled' },
+  foundry: { existing: ['existingFoundryAccountName', 'existingFoundryRg', 'existingFoundrySub'], flag: 'aiFoundryEnabled' },
+  purview: { existing: ['existingPurviewAccount', 'existingPurviewRg', 'existingPurviewSub'], flag: 'purviewEnabled' },
+  maps: { existing: null, flag: 'azureMapsEnabled' },
+  synapse: { existing: ['existingSynapseWorkspace', 'existingSynapseRg', 'existingSynapseSub'], flag: null },
+  cosmos: { existing: ['existingCosmosAccount', 'existingCosmosRg', 'existingCosmosSub'], flag: null },
+  adf: { existing: ['existingAdfFactory', 'existingAdfRg', 'existingAdfSub'], flag: null },
+  eventhubs: { existing: ['existingEventHubNamespace', 'existingEventHubRg', 'existingEventHubSub'], flag: null },
+  databricks: { existing: ['existingDatabricksWorkspace', 'existingDatabricksRg', 'existingDatabricksSub'], flag: null },
+  postgres: { existing: null, flag: 'postgresEnabled' },
+  storage: { existing: null, flag: null },
+  keyvault: { existing: null, flag: null },
+};
+
+/** Build the extra `-p` bicep param assignments for the chosen service wiring. */
+function serviceChoiceParamLines(choices: SetupConfig['serviceChoices']): string[] {
+  if (!choices) return [];
+  const lines: string[] = [];
+  for (const [svc, choice] of Object.entries(choices)) {
+    const map = SERVICE_PARAM_MAP[svc];
+    if (!map) continue;
+    if (choice.mode === 'use-existing' && choice.existing && map.existing) {
+      const [nameP, rgP, subP] = map.existing;
+      lines.push(
+        `  -p ${nameP}='${choice.existing.name}' ${rgP}='${choice.existing.rg}' ${subP}='${choice.existing.sub}' \\`,
+      );
+      if (map.flag) lines.push(`  -p ${map.flag}=true \\`);
+    } else if (choice.mode === 'disable' && map.flag) {
+      lines.push(`  -p ${map.flag}=false \\`);
+    } else if (choice.mode === 'new' && map.flag) {
+      // Everything-ON default: explicitly enable so the deploy provisions it.
+      lines.push(`  -p ${map.flag}=true \\`);
+    }
+  }
+  return lines;
 }
 
 const ALLOWED_TOPOLOGIES = new Set(['single-sub', 'tenant', 'dlz-attach']);
@@ -102,7 +198,9 @@ export async function POST(req: NextRequest) {
   // deployed every deploy MUST be 'dlz-attach' — it is impossible to stamp a
   // second Console from the UI or the API. The bicep enforces the same at the
   // template layer (the adminPlane module is gated on topology=='tenant').
-  const topology: 'tenant' | 'dlz-attach' = body.topology ?? 'tenant';
+  // Cast through the captured string; the runtime guard below rejects anything
+  // outside the two-value union, so the narrow type is sound after the check.
+  const topology = (body.topology ?? 'tenant') as 'tenant' | 'dlz-attach';
   if (topology !== 'tenant' && topology !== 'dlz-attach') {
     return NextResponse.json(
       { ok: false, error: `Unknown topology '${body.topology}'. Must be 'tenant' or 'dlz-attach'.` },
@@ -225,6 +323,29 @@ export async function POST(req: NextRequest) {
         ok: false,
         error: `Invalid topology "${body.topology}". Must be one of: ${[...ALLOWED_TOPOLOGIES].join(', ')}.`,
       },
+      { status: 400 },
+    );
+  }
+
+  // Console metadata Cosmos guard — disabling the hub provision is ONLY honest
+  // when reusing an existing account (the Console requires a metadata store; with
+  // the provision off and no reuse, LOOM_COSMOS_ENDPOINT points at nothing and
+  // all item/config CRUD fails). The wizard never offers bare disable, but defend
+  // the API too (no-vaporware).
+  if (body.loomConsoleCosmosEnabled === false && !body.existingCosmosAccount) {
+    return NextResponse.json(
+      {
+        ok: false,
+        error:
+          'Cannot disable the Console metadata Cosmos without reusing an existing account. ' +
+          'The Console requires a metadata store. Choose "provision new (serverless)" or supply existingCosmosAccount.',
+      },
+      { status: 400 },
+    );
+  }
+  if (body.existingCosmosSub && !GUID_RE.test(body.existingCosmosSub)) {
+    return NextResponse.json(
+      { ok: false, error: `existingCosmosSub is not a valid GUID: ${body.existingCosmosSub}` },
       { status: 400 },
     );
   }
@@ -395,6 +516,35 @@ export async function POST(req: NextRequest) {
       `dlzDomainNames="[${domainNames.map((d) => `'${d}'`).join(',')}]" capacitySku=${body.capacitySku}`
     : `  -p dlzDomainNames="['${body.domainName}']" capacitySku=${body.capacitySku}`;
 
+  // Console metadata Cosmos scan-and-choose → named bicep params (no free-form).
+  // Default (provision-new serverless) emits nothing — main.bicep's
+  // loomConsoleCosmosEnabled defaults true. Reuse/disable emit the existing*
+  // coordinates so the hub provision auto-skips and the Console binds to it.
+  const consoleCosmosParam = (() => {
+    if (body.existingCosmosAccount) {
+      const parts = [
+        `loomConsoleCosmosEnabled=${body.loomConsoleCosmosEnabled === false ? 'false' : 'true'}`,
+        `existingCosmosAccount=${body.existingCosmosAccount}`,
+      ];
+      if (body.existingCosmosRg) parts.push(`existingCosmosRg=${body.existingCosmosRg}`);
+      if (body.existingCosmosSub) parts.push(`existingCosmosSub=${body.existingCosmosSub}`);
+      return `  -p ${parts.join(' ')} \\`;
+    }
+    return '';
+  })();
+  // RTI (Real-Time Intelligence) named overrides — only emitted when the user
+  // deviated from the all-on default (disabled a backend, or chose to reuse an
+  // existing one), so the default command stays clean. Maps each choice to the
+  // SAME main.bicep param the CLI (byo-wizard.sh) writes (no free-form).
+  const rtiParts: string[] = [];
+  if (body.adxEnabled === false) rtiParts.push('adxEnabled=false');
+  if (body.existingAdxClusterName) rtiParts.push(`existingAdxClusterName='${body.existingAdxClusterName}'`);
+  if (body.loomEventHubEnabled === false) rtiParts.push('loomEventHubEnabled=false');
+  if (body.existingEventHubNamespace) rtiParts.push(`existingEventHubNamespace='${body.existingEventHubNamespace}'`);
+  if (body.loomStreamAnalyticsEnabled === false) rtiParts.push('loomStreamAnalyticsEnabled=false');
+  if (body.existingAsaJob) rtiParts.push(`existingAsaJob='${body.existingAsaJob}'`);
+  const rtiParamLine = rtiParts.length ? `  -p ${rtiParts.join(' ')} \\` : '';
+
   // dlz-attach: the manual command threads topology + the hub coordinates the
   // tenant-topology doc recorded (so no Azure id is free-typed). The orchestrator
   // path is strongly preferred — it fills the hub* params automatically.
@@ -404,6 +554,11 @@ export async function POST(req: NextRequest) {
           (k) => `  -p ${k}='${String((hubTopology as any)[k])}' \\`,
         )
       : [];
+  // Org-visuals opt-out — only emit the param when explicitly disabled (default
+  // true in bicep, so the happy path stays clean). The medallion lake is always
+  // provisioned; this only governs the Embed codes / Org visuals grant + env.
+  const orgVisualsParamLines =
+    body.loomOrgVisualsEnabled === false ? ['  -p loomOrgVisualsEnabled=false \\'] : [];
   const commands =
     topology === 'dlz-attach'
       ? [
@@ -423,6 +578,8 @@ export async function POST(req: NextRequest) {
           `  -p ${paramFile} \\`,
           `  -p topology=dlz-attach targetSubscriptionId=${body.targetSubscriptionId} attachDomainName=${body.domainName} \\`,
           `  -p boundary=${body.boundary} capacitySku=${body.capacitySku} \\`,
+          ...orgVisualsParamLines,
+          ...(rtiParamLine ? [rtiParamLine] : []),
           ...hubParamLines,
           `  # hubPrivateDnsZoneIds is an object — pass it from the tenant-topology doc`,
         ]
@@ -436,6 +593,10 @@ export async function POST(req: NextRequest) {
           `  -f platform/fiab/bicep/main.bicep \\`,
           `  -p ${paramFile} \\`,
           `  -p topology=tenant boundary=${body.boundary} deploymentMode=${body.mode} \\`,
+          ...(consoleCosmosParam ? [consoleCosmosParam] : []),
+          ...orgVisualsParamLines,
+          ...(rtiParamLine ? [rtiParamLine] : []),
+          ...serviceChoiceParamLines(body.serviceChoices),
           dlzParamLine,
           `bash scripts/csa-loom/post-deploy-bootstrap.sh`,
         ];

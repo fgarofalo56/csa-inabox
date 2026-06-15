@@ -1,10 +1,24 @@
 /**
- * MSAL sign-in initiator. When AZURE_CLIENT_ID is configured the
- * confidential client builds an OAuth code URL and 302s the browser
- * to AAD. Until then we return 503 with a clear message so the
- * unblock action is obvious in the network tab.
+ * MSAL sign-in initiator. When a real Entra app-registration credential is
+ * configured (LOOM_MSAL_CLIENT_ID + LOOM_MSAL_CLIENT_SECRET + AZURE_TENANT_ID)
+ * the confidential client builds an OAuth code URL and 302s the browser to AAD.
+ * Until then we return 503 with a clear message so the unblock action is obvious
+ * in the network tab.
  *
- * Wire-up steps live in docs/fiab/MSAL-handoff.md.
+ * IMPORTANT — the honest gate keys on the MSAL app-registration vars, NOT on
+ * AZURE_CLIENT_ID. AZURE_CLIENT_ID is always set to the Console UAMI client id
+ * in a deploy (used by DefaultAzureCredential for data-plane calls); that
+ * identity is a managed identity and CANNOT perform an interactive user login.
+ * If the gate keyed on AZURE_CLIENT_ID it would pass even with no real app
+ * registration, and getMsalClient() would fall back to the UAMI with no secret
+ * → an opaque login 500 (PRP deploy-readiness gap #2). Keying on
+ * LOOM_MSAL_CLIENT_ID + a non-empty LOOM_MSAL_CLIENT_SECRET surfaces the honest
+ * 503 with the wire-up remediation instead.
+ *
+ * Wire-up steps live in docs/fiab/MSAL-handoff.md. The push-button deploy now
+ * provisions the app registration + secret automatically — see
+ * platform/fiab/bicep/modules/admin-plane/entra-app-registration.bicep and
+ * scripts/csa-loom/bootstrap-msal-app-reg.sh.
  */
 
 import { NextRequest, NextResponse } from 'next/server';
@@ -45,11 +59,28 @@ function redirectUri(req: NextRequest): string {
 }
 
 export async function GET(req: NextRequest) {
-  if (!process.env.AZURE_CLIENT_ID || !process.env.AZURE_TENANT_ID) {
+  // Honest gate (PRP deploy-readiness gap #2): require the MSAL app-registration
+  // credential the confidential client actually uses for user login. Do NOT key
+  // on AZURE_CLIENT_ID — that is the Console UAMI (a managed identity) which
+  // cannot perform an interactive sign-in and has no usable client secret.
+  const msalClientId = (process.env.LOOM_MSAL_CLIENT_ID || '').trim();
+  const msalSecret = (process.env.LOOM_MSAL_CLIENT_SECRET || '').trim();
+  const tenantId = (process.env.AZURE_TENANT_ID || process.env.LOOM_MSAL_TENANT_ID || '').trim();
+  if (!msalClientId || !msalSecret || !tenantId) {
     return NextResponse.json(
       {
         status: 'msal-not-configured',
-        unblock: 'See docs/fiab/MSAL-handoff.md for the az ad app create steps.',
+        missing: [
+          msalClientId ? null : 'LOOM_MSAL_CLIENT_ID',
+          msalSecret ? null : 'LOOM_MSAL_CLIENT_SECRET',
+          tenantId ? null : 'AZURE_TENANT_ID',
+        ].filter(Boolean),
+        unblock:
+          'The push-button deploy provisions the Entra app registration + client ' +
+          'secret automatically (loomMsalAppRegEnabled, default on). Re-run the ' +
+          'post-deploy bootstrap (csa-loom-post-deploy-bootstrap.yml → "Provision ' +
+          'MSAL app registration"), or follow docs/fiab/MSAL-handoff.md for the ' +
+          'az ad app create / credential reset + Key Vault steps.',
       },
       { status: 503 },
     );

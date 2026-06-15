@@ -73,12 +73,16 @@ param databricksAccountId = readEnvironmentVariable('LOOM_DATABRICKS_ACCOUNT_ID'
 
 // Security
 param defenderForAIEnabled = true
-// Reuse an existing Enterprise Purview if the FedCiv tenant already has one
-// (a second Enterprise account fails with EnterpriseTenantAlreadyExists). Set
-// LOOM_PURVIEW_ACCOUNT to the existing short name, or set purviewEnabled=true
-// (via env) + clear the account if the tenant has none.
-param purviewEnabled = bool(readEnvironmentVariable('LOOM_PURVIEW_ENABLED', 'false'))
+// Governance deploy-readiness (#229): Purview Data Map is ON BY DEFAULT (opt-out).
+// A fresh tenant-mode hub now provisions + wires + PE-protects the classic Data
+// Map account so /governance + /admin/security work on first login. Opt OUT with
+// LOOM_PURVIEW_ENABLED=false, or REUSE an existing account by setting
+// LOOM_PURVIEW_ACCOUNT to its short name (reuse takes precedence over provision).
+// LOOM_PURVIEW_LOCATION lets you pin the account to a known-Purview region when
+// the hub region lacks capacity (empty = hub location).
+param purviewEnabled = bool(readEnvironmentVariable('LOOM_PURVIEW_ENABLED', 'true'))
 param loomPurviewAccount = readEnvironmentVariable('LOOM_PURVIEW_ACCOUNT', '')
+param purviewLocation = readEnvironmentVariable('LOOM_PURVIEW_LOCATION', '')
 param loomMipEnabled = bool(readEnvironmentVariable('LOOM_MIP_ENABLED', 'false'))
 param loomDlpEnabled = bool(readEnvironmentVariable('LOOM_DLP_ENABLED', 'true'))
 param loomDlpAdminEnabled = bool(readEnvironmentVariable('LOOM_DLP_ADMIN_ENABLED', 'false'))
@@ -152,6 +156,8 @@ param existingAdxClusterSub      = readEnvironmentVariable('EXISTING_KUSTO_SUB',
 param existingFoundryAccountName = readEnvironmentVariable('EXISTING_AOAI', '')
 param existingFoundryRg          = readEnvironmentVariable('EXISTING_AOAI_RG', '')
 param existingFoundrySub         = readEnvironmentVariable('EXISTING_AOAI_SUB', '')
+param existingFoundryChatDeployment  = readEnvironmentVariable('EXISTING_AOAI_CHAT_DEPLOYMENT', '')
+param existingFoundryEmbedDeployment = readEnvironmentVariable('EXISTING_AOAI_EMBED_DEPLOYMENT', '')
 param existingPurviewAccount     = readEnvironmentVariable('EXISTING_PURVIEW', '')
 param existingPurviewRg          = readEnvironmentVariable('EXISTING_PURVIEW_RG', '')
 param existingPurviewSub         = readEnvironmentVariable('EXISTING_PURVIEW_SUB', '')
@@ -178,9 +184,19 @@ param aiFoundryEnabled = true
 param contentSafetyEnabled = true
 param agentFoundryEnabled = true
 param apimEnabled = true
+param hubFirewallEnabled = true
 param aiSearchEnabled = false
 param adxEnabled = true
 param cosmosGraphVectorEnabled = true
+// Console's own serverless metadata Cosmos (the `loom` DB the BFF reads/writes).
+// On by default; the hub module fires for this tenant topology (no local DLZ to
+// host it). Serverless removes the 25-container shared-throughput cap that broke
+// workspaces/domains live. Auto-skips if a BYO existingCosmosAccount is supplied.
+param loomConsoleCosmosEnabled = true
+// Org-visuals (Embed codes F22 + Organizational visuals F23) — ON by default
+// (opt-out). In tenant/dlz-attach the LOOM_ORG_VISUALS_URL env + Storage Blob
+// Delegator grant are wired post-attach by csa-loom-post-deploy-bootstrap.yml.
+param loomOrgVisualsEnabled = true
 param vpnGatewayEnabled = true
 param appGatewayEnabled = true
 param mlWorkspaceEnabled = true
@@ -200,3 +216,13 @@ param complianceTags = {
   Loom_Tier: 'admin-plane'
   Loom_Estate: 'fedciv-dmlz'
 }
+
+// =====================================================================
+// Data-engineering backends — ON by default (opt-out). Set any to false to
+// skip that provision; the console editor then honest-gates (LOOM_* env blanked)
+// instead of 502-ing. See docs/fiab/prp/deploy-readiness-100pct.md.
+// =====================================================================
+param loomSynapseEnabled = true
+param loomDatabricksEnabled = true
+param loomDataFactoryEnabled = true
+param loomSelfHostedIrEnabled = true

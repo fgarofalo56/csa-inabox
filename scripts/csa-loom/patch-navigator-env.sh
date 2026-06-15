@@ -183,6 +183,24 @@ add LOOM_EVENTHUB_NAMESPACE "$EH_NS"
 [[ -n "$EH_NS" ]] && add LOOM_EVENTHUB_SUB "${EXISTING_EVENTHUB_SUB:-}"
 
 # ---------------------------------------------------------------------------
+# Stream Analytics — the DLZ starter job's resource group (stream-analytics-job
+# editor + Eventstream transform node). The job + its Stream-Analytics-Contributor
+# grant live in the DLZ RG (modules/landing-zone/stream-analytics.bicep), so the
+# console binds LOOM_ASA_RG there. Reuse an existing job via EXISTING_ASA_*.
+# Without LOOM_ASA_RG the editor honest-gates (501) even though the job exists.
+# ---------------------------------------------------------------------------
+ASA_JOB="${EXISTING_ASA_JOB:-}"
+ASA_RG="${EXISTING_ASA_RG:-$DLZ_RG}"
+if [[ -z "$ASA_JOB" ]]; then
+  ASA_JOB="$(q stream-analytics job list -g "$ASA_RG" --query "[0].name" -o tsv)"
+fi
+if [[ -n "$ASA_JOB" ]]; then
+  add LOOM_ASA_RG "$ASA_RG"
+  add NEXT_PUBLIC_LOOM_ASA_JOB_NAME "$ASA_JOB"
+  [[ -n "${EXISTING_ASA_SUB:-}" ]] && add LOOM_ASA_SUB "$EXISTING_ASA_SUB"
+fi
+
+# ---------------------------------------------------------------------------
 # AI Foundry — AOAI model-hosting account + Foundry project (Copilot backend +
 # data-agent Publish). Only when Foundry is actually deployed.
 # ---------------------------------------------------------------------------

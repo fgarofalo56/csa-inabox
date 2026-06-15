@@ -37,8 +37,8 @@ param skipRoleGrants bool = false
 @description('Spoke private-endpoint subnet ID (snet-private-endpoints).')
 param privateEndpointSubnetId string
 
-@description('Private DNS zone resource ID for privatelink.adf.azure.com (commercial) — must be linked to hub + spoke VNets.')
-param adfPrivateDnsZoneId string
+@description('Private DNS zone resource ID for privatelink.adf.azure.com (commercial) — must be linked to hub + spoke VNets. Empty = the PE registers but its DNS zone group is skipped (the factory still provisions; DNS resolves once the zone is added). Decoupled so a missing zone no longer silently skips the whole factory.')
+param adfPrivateDnsZoneId string = ''
 
 @description('Log Analytics workspace ID for diagnostic settings.')
 param workspaceId string
@@ -148,7 +148,7 @@ resource peAdf 'Microsoft.Network/privateEndpoints@2024-03-01' = {
   }
 }
 
-resource peAdfDnsGroup 'Microsoft.Network/privateEndpoints/privateDnsZoneGroups@2024-03-01' = {
+resource peAdfDnsGroup 'Microsoft.Network/privateEndpoints/privateDnsZoneGroups@2024-03-01' = if (!empty(adfPrivateDnsZoneId)) {
   parent: peAdf
   name: 'default'
   properties: {

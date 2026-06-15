@@ -39,17 +39,32 @@ param publicNetworkAccess bool = true
 @description('Disable local (key-based) auth. Keep false so the BFF can read keys for AOAI clients; set true to force AAD-only.')
 param disableLocalAuth bool = false
 
+// --- Private endpoint (Gap C) ----------------------------------------------
+// When publicNetworkAccess is false (sovereign / private-only boundaries) the
+// account is reached over a private endpoint. Pass the hub PE subnet + the
+// privatelink.openai / privatelink.cognitiveservices zone ids so the A-record
+// resolves inside the hub VNet. Empty subnet => no PE (Commercial default keeps
+// public access on, so day-one still works without VNet plumbing).
+@description('Private-endpoint subnet resource id (network.outputs.privateEndpointsSubnetId). Empty = no private endpoint (public-access boundaries).')
+param privateEndpointSubnetId string = ''
+
+@description('privatelink.openai.azure.<suffix> private DNS zone id (network.outputs.privateDnsZoneIds.openai). Empty skips that zone group.')
+param privateDnsZoneOpenAiId string = ''
+
+@description('privatelink.cognitiveservices.azure.<suffix> private DNS zone id (network.outputs.privateDnsZoneIds.cognitiveservices). Empty skips that zone group.')
+param privateDnsZoneCognitiveServicesId string = ''
+
 // --- Chat model deployment -------------------------------------------------
 @description('Chat deployment name (LOOM_AOAI_CHAT_DEPLOYMENT).')
 param chatDeploymentName string = 'chat'
 
-@description('Chat model name.')
-param chatModelName string = 'gpt-4.1-mini'
+@description('Chat model name. Default gpt-4o — the gpt-4o-class model the Copilot / data-agent / AI-functions honest gates ask for ("Deploy a gpt-4o-class model first"). Override per boundary (e.g. a Gov-available slot) via the bicepparam openaiChatModel.')
+param chatModelName string = 'gpt-4o'
 
-@description('Chat model version.')
-param chatModelVersion string = '2025-04-14'
+@description('Chat model version. 2024-11-20 is the current GlobalStandard gpt-4o GA version (Commercial + Azure Government). Override per boundary if the region pins a different GA version.')
+param chatModelVersion string = '2024-11-20'
 
-@description('Chat deployment SKU (GlobalStandard for gpt-4.1-mini).')
+@description('Chat deployment SKU (GlobalStandard for gpt-4o).')
 param chatModelSkuName string = 'GlobalStandard'
 
 @description('Chat deployment capacity (thousands of TPM).')
@@ -292,6 +307,47 @@ resource diag 'Microsoft.Insights/diagnosticSettings@2021-05-01-preview' = if (!
     metrics: [
       { category: 'AllMetrics', enabled: true }
     ]
+  }
+}
+
+// =====================================================================
+// Private endpoint (Gap C) — only when a PE subnet is supplied (sovereign /
+// private-only boundaries). groupId 'account' is the cross-service AIServices
+// group; the zone group binds BOTH privatelink.openai (AOAI inference) and
+// privatelink.cognitiveservices (token/keys) so AAD + key auth both resolve
+// privately. Commercial keeps publicNetworkAccess=true and passes no subnet,
+// so this resource is skipped and day-one works without VNet plumbing.
+// =====================================================================
+resource accountPe 'Microsoft.Network/privateEndpoints@2023-11-01' = if (!empty(privateEndpointSubnetId)) {
+  name: 'pe-${accountName}'
+  location: location
+  tags: complianceTags
+  properties: {
+    subnet: { id: privateEndpointSubnetId }
+    privateLinkServiceConnections: [
+      {
+        name: 'plsc-${accountName}'
+        properties: {
+          privateLinkServiceId: account.id
+          groupIds: [ 'account' ]
+        }
+      }
+    ]
+  }
+}
+
+resource accountPeDns 'Microsoft.Network/privateEndpoints/privateDnsZoneGroups@2023-11-01' = if (!empty(privateEndpointSubnetId) && (!empty(privateDnsZoneOpenAiId) || !empty(privateDnsZoneCognitiveServicesId))) {
+  parent: accountPe
+  name: 'default'
+  properties: {
+    privateDnsZoneConfigs: concat(
+      empty(privateDnsZoneOpenAiId) ? [] : [
+        { name: 'openai', properties: { privateDnsZoneId: privateDnsZoneOpenAiId } }
+      ],
+      empty(privateDnsZoneCognitiveServicesId) ? [] : [
+        { name: 'cognitiveservices', properties: { privateDnsZoneId: privateDnsZoneCognitiveServicesId } }
+      ]
+    )
   }
 }
 

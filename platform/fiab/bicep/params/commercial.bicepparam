@@ -20,6 +20,8 @@ param existingAdxClusterSub      = readEnvironmentVariable('EXISTING_KUSTO_SUB',
 param existingFoundryAccountName = readEnvironmentVariable('EXISTING_AOAI', '')
 param existingFoundryRg          = readEnvironmentVariable('EXISTING_AOAI_RG', '')
 param existingFoundrySub         = readEnvironmentVariable('EXISTING_AOAI_SUB', '')
+param existingFoundryChatDeployment  = readEnvironmentVariable('EXISTING_AOAI_CHAT_DEPLOYMENT', '')
+param existingFoundryEmbedDeployment = readEnvironmentVariable('EXISTING_AOAI_EMBED_DEPLOYMENT', '')
 param existingPurviewAccount     = readEnvironmentVariable('EXISTING_PURVIEW', '')
 param existingPurviewRg          = readEnvironmentVariable('EXISTING_PURVIEW_RG', '')
 param existingPurviewSub         = readEnvironmentVariable('EXISTING_PURVIEW_SUB', '')
@@ -94,6 +96,8 @@ param purviewEnabled = true
 // no-vaporware-compliant fallback). Pull the short account name from
 // `az purview account list`.
 param loomPurviewAccount = readEnvironmentVariable('LOOM_PURVIEW_ACCOUNT', '')
+// #229 cross-region Purview safety valve (empty = hub location).
+param purviewLocation = readEnvironmentVariable('LOOM_PURVIEW_LOCATION', '')
 // Azure Maps — leave EXISTING_AZURE_MAPS_ACCOUNT unset to DEPLOY a fresh Gen2
 // account (azure-maps.bicep, default for Commercial/GCC). Set it to bring your
 // own existing account; the module is skipped and the env binds to your name.
@@ -121,6 +125,10 @@ param keyVaultHsmIsolated = false
 param openaiLocation = 'eastus2'
 param openaiEmbeddingsLocation = 'eastus2'
 param openaiChatModel = 'gpt-4o'
+// Deploy-readiness (opt-out): provision the dedicated AOAI account (aifndry-loom-<location>)
+// + gpt-4o chat + embedding deployments so Copilot / data-agents / AI-functions
+// work on first login. Set false to skip (those surfaces then honest-gate).
+param agentFoundryEnabled = true
 param openaiEmbeddingsModel = 'text-embedding-3-large'
 
 // Power BI
@@ -135,8 +143,12 @@ param skipRoleGrants = readEnvironmentVariable('LOOM_SKIP_ROLE_GRANTS', 'false')
 // Network
 param hubVnetCidr = '10.0.0.0/16'
 
-// Identity
-param adminEntraGroupId = '<replace-with-FiaB-Admins-group-guid>'
+// Identity. Empty (not a placeholder GUID) so a blank is DETECTABLE as blank:
+// when no admin group / oid is supplied, admin-plane falls back to the deploying
+// principal (deployer().objectId) as the bootstrap admin so the push-button path
+// is never locked out of /admin/* (GH #1383). Set LOOM_ADMIN_ENTRA_GROUP_ID to
+// your FiaB Admins security-group OID for a production multi-admin bootstrap.
+param adminEntraGroupId = readEnvironmentVariable('LOOM_ADMIN_ENTRA_GROUP_ID', '')
 
 // Feature-Permissions bootstrap admin — who can open /admin/* (Feature
 // Permissions, Domains, Security, …) BEFORE any grants exist. Without one of
@@ -149,6 +161,13 @@ param adminEntraGroupId = '<replace-with-FiaB-Admins-group-guid>'
 param loomTenantAdminGroupId = readEnvironmentVariable('LOOM_TENANT_ADMIN_GROUP_ID', adminEntraGroupId)
 param loomTenantAdminOid = readEnvironmentVariable('LOOM_TENANT_ADMIN_OID', '')
 
+// Day-1 service posture (deploy-readiness: everything ON by default / opt-out).
+// APIM backs the API Marketplace; the hub Azure Firewall hardens egress. Both
+// default true in main.bicep now — set explicitly here so the posture is visible
+// in the param file (bicep+bootstrap sync). Flip to false to opt out.
+param apimEnabled = true
+param hubFirewallEnabled = true
+
 // Multi-sub mode (empty for single-sub)
 param dlzSubscriptionIds = []
 param dlzDomainNames = []
@@ -160,3 +179,13 @@ param complianceTags = {
   FedRAMP_Level: 'High'
   Data_Classification: 'Standard'
 }
+
+// =====================================================================
+// Data-engineering backends — ON by default (opt-out). Set any to false to
+// skip that provision; the console editor then honest-gates (LOOM_* env blanked)
+// instead of 502-ing. See docs/fiab/prp/deploy-readiness-100pct.md.
+// =====================================================================
+param loomSynapseEnabled = true
+param loomDatabricksEnabled = true
+param loomDataFactoryEnabled = true
+param loomSelfHostedIrEnabled = true

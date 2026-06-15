@@ -22,6 +22,8 @@ param existingAdxClusterSub      = readEnvironmentVariable('EXISTING_KUSTO_SUB',
 param existingFoundryAccountName = readEnvironmentVariable('EXISTING_AOAI', '')
 param existingFoundryRg          = readEnvironmentVariable('EXISTING_AOAI_RG', '')
 param existingFoundrySub         = readEnvironmentVariable('EXISTING_AOAI_SUB', '')
+param existingFoundryChatDeployment  = readEnvironmentVariable('EXISTING_AOAI_CHAT_DEPLOYMENT', '')
+param existingFoundryEmbedDeployment = readEnvironmentVariable('EXISTING_AOAI_EMBED_DEPLOYMENT', '')
 param existingPurviewAccount     = readEnvironmentVariable('EXISTING_PURVIEW', '')
 param existingPurviewRg          = readEnvironmentVariable('EXISTING_PURVIEW_RG', '')
 param existingPurviewSub         = readEnvironmentVariable('EXISTING_PURVIEW_SUB', '')
@@ -34,12 +36,21 @@ param existingCosmosSub          = readEnvironmentVariable('EXISTING_COSMOS_ACCO
 param existingEventHubNamespace  = readEnvironmentVariable('EXISTING_EVENTHUB_NAMESPACE', '')
 param existingEventHubRg         = readEnvironmentVariable('EXISTING_EVENTHUB_RG', '')
 param existingEventHubSub        = readEnvironmentVariable('EXISTING_EVENTHUB_SUB', '')
+param existingAsaJob             = readEnvironmentVariable('EXISTING_ASA_JOB', '')
+param existingAsaRg              = readEnvironmentVariable('EXISTING_ASA_RG', '')
+param existingAsaSub             = readEnvironmentVariable('EXISTING_ASA_SUB', '')
 param existingDatabricksWorkspace = readEnvironmentVariable('EXISTING_DATABRICKS', '')
 param existingDatabricksRg       = readEnvironmentVariable('EXISTING_DATABRICKS_RG', '')
 param existingDatabricksSub      = readEnvironmentVariable('EXISTING_DATABRICKS_SUB', '')
 param existingDatabricksHostname = readEnvironmentVariable('EXISTING_DATABRICKS_HOSTNAME', '')
 param fabricEnabled              = false
 // <<< BYO-WIZARD END
+
+// RTI (Real-Time Intelligence) backends — Event Hubs + Stream Analytics ON by
+// default (opt-out). Set the env var to 'false' to skip the cost, or reuse an
+// existing namespace/job via the EXISTING_* vars above.
+param loomEventHubEnabled = bool(readEnvironmentVariable('LOOM_EVENTHUB_ENABLED', 'true'))
+param loomStreamAnalyticsEnabled = bool(readEnvironmentVariable('LOOM_STREAM_ANALYTICS_ENABLED', 'true'))
 
 param environment = 'AzureCloud'
 param location = 'eastus'
@@ -84,6 +95,8 @@ param defenderForAIEnabled = true
 // Azure endpoints, so Content Safety is available; wires LOOM_CONTENT_SAFETY_ENDPOINT.
 param contentSafetyEnabled = true
 param purviewEnabled = true
+// #229 cross-region Purview safety valve (empty = hub location).
+param purviewLocation = readEnvironmentVariable('LOOM_PURVIEW_LOCATION', '')
 param storageRequireCmk = false
 param keyVaultHsmIsolated = false
 
@@ -91,6 +104,12 @@ param keyVaultHsmIsolated = false
 param openaiLocation = 'eastus'
 param openaiEmbeddingsLocation = 'eastus'
 param openaiChatModel = 'gpt-4o'
+// Deploy-readiness (opt-out): provision the dedicated AOAI account + gpt-4o chat
+// + embedding deployments so Copilot / data-agents / AI-functions work on first
+// login. Set false to skip (those surfaces then honest-gate). In Gov boundaries
+// the model/version may be pinned via foundry-project.bicep params if a region
+// lacks gpt-4o GlobalStandard.
+param agentFoundryEnabled = true
 param openaiEmbeddingsModel = 'text-embedding-3-large'
 
 // Power BI — GCC limitation
@@ -105,7 +124,13 @@ param loomAzureMapsAccount = readEnvironmentVariable('EXISTING_AZURE_MAPS_ACCOUN
 param hubVnetCidr = '10.0.0.0/16'
 
 // Identity
-param adminEntraGroupId = '<replace-with-GCC-tenant-FiaB-Admins-group-guid>'
+param adminEntraGroupId = readEnvironmentVariable('LOOM_ADMIN_ENTRA_GROUP_ID', '')
+
+// Day-1 service posture (deploy-readiness: everything ON by default / opt-out).
+// GCC supports APIM + Azure Maps + the hub Azure Firewall; default true in
+// main.bicep — set explicitly so the posture is visible (bicep+bootstrap sync).
+param apimEnabled = true
+param hubFirewallEnabled = true
 
 // Multi-sub
 param dlzSubscriptionIds = []
@@ -119,3 +144,13 @@ param complianceTags = {
   Data_Classification: 'CUI-low'
   M365_Boundary: 'GCC'
 }
+
+// =====================================================================
+// Data-engineering backends — ON by default (opt-out). Set any to false to
+// skip that provision; the console editor then honest-gates (LOOM_* env blanked)
+// instead of 502-ing. See docs/fiab/prp/deploy-readiness-100pct.md.
+// =====================================================================
+param loomSynapseEnabled = true
+param loomDatabricksEnabled = true
+param loomDataFactoryEnabled = true
+param loomSelfHostedIrEnabled = true

@@ -10,8 +10,16 @@ param location string
 @allowed(['Commercial', 'GCC', 'GCC-High', 'IL5'])
 param boundary string
 
-@description('Allow App Insights telemetry ingestion over the public endpoint. Keep true (default) unless an Azure Monitor Private Link Scope is separately provisioned to carry ingestion privately — Disabling it without an AMPLS silently drops all custom events (copilot.usage etc.) and breaks the /admin Copilot usage panel. Forwarded to monitoring.bicep.')
-param monitorPublicIngestionEnabled bool = true
+// Allow App Insights telemetry ingestion over the public endpoint. Keep true
+// unless an Azure Monitor Private Link Scope is separately provisioned to carry
+// ingestion privately — disabling it without an AMPLS silently drops all custom
+// events (copilot.usage etc.) and breaks the /admin Copilot usage panel.
+// Forwarded to monitoring.bicep. Declared as a `var` (not a `param`) to keep
+// admin-plane/main.bicep under the hard ARM 256-parameter cap — it was
+// default-only (never set in any *.bicepparam), so this is behavior-preserving.
+// A boundary that provisions an AMPLS should set publicIngestionEnabled=false in
+// monitoring.bicep directly.
+var monitorPublicIngestionEnabled = true
 
 @description('AZURE_CLOUD two-value discriminator. When non-empty, overrides the AZURE_CLOUD env var regardless of boundary. Commercial / GCC deployments pass AzureCloud; GCC-High / IL5 deployments pass AzureUSGovernment. When empty (default), AZURE_CLOUD is derived from boundary (GCC-High|IL5 → AzureUSGovernment; otherwise AzureCloud).')
 @allowed(['', 'AzureCloud', 'AzureUSGovernment'])
@@ -136,8 +144,8 @@ param aiFoundryEnabled bool = false
 @description('Deploy Azure AI Content Safety (Microsoft.CognitiveServices/accounts kind=ContentSafety, S0) in the admin-plane RG and wire LOOM_CONTENT_SAFETY_ENDPOINT so every copilot persona routes prompts + completions through Prompt Shields + harm moderation. Available in Commercial, GCC (Commercial Azure endpoints), and GCC-High (USGovArizona / USGovVirginia). Set false at DoD (US DoD Central/East) — those regions do not offer Content Safety; the Console then surfaces an honest "not configured" warning MessageBar instead of silently passing.')
 param contentSafetyEnabled bool = false
 
-@description('Deploy the dedicated AI Foundry Agent Service account (aifndry-loom-<location>) with the loom-agents project + chat/embedding model deployments. Backs LOOM_FOUNDRY_PROJECT_ENDPOINT / LOOM_AOAI_* for the Agent Service. Independent of aiFoundryEnabled.')
-param agentFoundryEnabled bool = false
+@description('Deploy the dedicated AI Foundry Agent Service account (aifndry-loom-<location>) with the loom-agents project + chat/embedding model deployments. Backs LOOM_FOUNDRY_PROJECT_ENDPOINT / LOOM_AOAI_* for the Agent Service. ON BY DEFAULT (opt-out). Independent of aiFoundryEnabled.')
+param agentFoundryEnabled bool = true
 
 @description('Inline-completion (ghost text) AOAI deployment name for notebook/SQL code cells (LOOM_AOAI_COMPLETION_DEPLOYMENT). Empty = ghost text uses the chat deployment (LOOM_AOAI_DEPLOYMENT). Set to a dedicated gpt-4o-mini slot for lower latency without consuming chat quota. Leave empty in GCC-High / IL5 regions where the model is unavailable — the Console route falls back to the chat deployment.')
 param loomAoaiCompletionDeployment string = ''
@@ -260,6 +268,28 @@ param loomPipelineCiEnabled bool = false
 @description('Provision an Azure Files share + managedEnvironments/storages registration so the loom-mcp Container App can persist deployable MCP-server state across revisions. Container Apps only (Commercial / GCC); on AKS boundaries the MCP workload uses an Azure Files PersistentVolumeClaim instead. The Console "Mount persistence" admin control re-mounts the share imperatively.')
 param mcpPersistenceEnabled bool = true
 
+// ── Console runtime (probes, resources, telemetry) — deploy-readiness ─────────
+// Codifies the live #1382 crash-loop fix so a FRESH deploy is healthy on first
+// boot. Implemented as `var` rather than `param` because admin-plane/main.bicep
+// is at the hard ARM 256-parameter cap (a real deploy blocker on origin/main);
+// the probe/CPU/memory right-sizing is threaded via the app-deployments module
+// DEFAULTS (probeTimeoutSeconds=5, consoleCpu=1.0, consoleMemory=2Gi — operator-
+// overridable there for slow sovereign regions). Telemetry is ON by default; the
+// crash itself is eliminated by hardening apps/fiab-console/lib/telemetry/
+// app-insights.ts (live-metrics off + uncaughtException guard + env gate). A
+// per-deploy opt-out param returns once the program-level param-object
+// consolidation frees admin-plane budget.
+//
+// loomConsoleTelemetryEnabled (var, default true): drives the console app's
+// telemetryEnabled field (withholds APPLICATIONINSIGHTS_CONNECTION_STRING when
+// false) + the LOOM_CONSOLE_TELEMETRY_ENABLED env (instrumentation.ts reads it
+// BEFORE importing @azure/monitor-opentelemetry — the historical SIGSEGV path).
+// The Log Analytics workspace + App Insights account are ALWAYS provisioned
+// (monitoring.bicep) and the Console UAMI keeps its Reader/Contributor grants,
+// so /monitor KQL + the Copilot-usage panel (which read the workspace, not the
+// SDK) keep working either way.
+var loomConsoleTelemetryEnabled = true
+
 // Shared internal trust token for the MAF → Console tool-dispatch callback.
 // Deterministic on the admin RG so the value injected into BOTH the Console and
 // the MAF app matches without a round-trip. Internal-network use only.
@@ -341,6 +371,17 @@ param loomAasModel string = ''
 
 @description('Scaled self-hosted IR VMSS name (backs the SHIR metrics tile + scale controls). Defaults to the single-sub DLZ name; empty disables the SHIR surface (honest gate).')
 param loomShirVmssName string = 'vmss-loom-shir-default'
+
+// Data-engineering backend opt-out MIRRORS (default all ON). Carried on the
+// existing `byoExisting` object param (keeps admin-plane under Bicep's 256-param
+// ceiling — no new param) under the de* keys. When an operator disables a DLZ
+// backend the console env var is blanked here too, so the editor shows its honest
+// Fluent gate instead of 502-ing against a workspace/factory/VMSS that was never
+// provisioned. main.bicep sets these from the same loom<Svc>Enabled booleans.
+var deSynapseEnabled = byoExisting.?deSynapse ?? true
+var deDatabricksEnabled = byoExisting.?deDatabricks ?? true
+var deAdfEnabled = byoExisting.?deAdf ?? true
+var deShirEnabled = byoExisting.?deShir ?? true
 
 @description('Deploy the SHARED admin-zone Purview self-hosted IR VMSS (scale-to-zero). A Purview SHIR cannot be the DLZ ADF SHIR (Microsoft constraint — separate machine), so this is its own VMSS. Honest-gated: only deploys when purviewEnabled AND purviewIrAuthKey AND purviewShirAdminPassword are all set.')
 param purviewShirEnabled bool = true
@@ -436,8 +477,15 @@ param loomGitPatKvPrefix string = 'loom-git-pat'
 @description('F4: Azure App Configuration endpoint for schedule-time pipeline parameter overrides. Empty disables the App Config source. Set to an App Configuration endpoint and grant the Console identity "App Configuration Data Reader" to enable.')
 param loomParamAppConfigEndpoint string = ''
 
-@description('Public base URL of the Console (e.g. https://csa-loom.contoso.ai). Used as the callback target baked into the "Refresh materialized lake view" ADF pipeline so a scheduled ADF run can reach the MLV refresh endpoint behind Front Door. Empty = the refresh route derives the origin from the request (works for editor-driven refreshes); set this to the vanity / Front Door URL to enable ADF-scheduled MLV refreshes.')
-param loomConsoleBaseUrl string = ''
+// Public base URL of the Console (e.g. https://csa-loom.contoso.ai). Used as the
+// callback target baked into the "Refresh materialized lake view" ADF pipeline so
+// a scheduled ADF run can reach the MLV refresh endpoint behind Front Door. Empty
+// = the refresh route derives the origin from the request (works for editor-driven
+// refreshes). Declared as a `var` (not a `param`) to keep admin-plane/main.bicep
+// under the hard ARM 256-parameter cap — it was default-only (never set in any
+// *.bicepparam). A boundary needing ADF-scheduled MLV refreshes against a fixed
+// vanity/Front Door URL can set this value here.
+var loomConsoleBaseUrl = ''
 
 @description('Loom HDInsight cluster linked-service name (backs the four ADF HDInsight pipeline activities — Hive/Spark/MapReduce/Streaming). Empty leaves the editor honest-gated until an Azure HDInsight linked service is registered in the factory.')
 param loomHdinsightLinkedService string = ''
@@ -713,6 +761,18 @@ var byoAiSearchSub = !empty(byoExisting.?aiSearchSub ?? '') ? byoExisting.aiSear
 var byoApimSub     = !empty(byoExisting.?apimSub ?? '') ? byoExisting.apimSub : subscription().subscriptionId
 var byoAdxSub      = !empty(byoExisting.?adxClusterSub ?? '') ? byoExisting.adxClusterSub : subscription().subscriptionId
 var byoFoundrySub  = !empty(byoExisting.?foundrySub ?? '') ? byoExisting.foundrySub : subscription().subscriptionId
+// Gap A — when the operator REUSES an existing AOAI / AIServices account
+// (existingFoundryAccountName, from scan EXISTING_AOAI), derive the inference
+// endpoint + the chat/embed deployment names so the Console env wires the full
+// AOAI surface (not just LOOM_AOAI_ACCOUNT). The deployment names come from the
+// scan via the byoExisting object (foundryChatDeployment / foundryEmbedDeployment
+// keys, emitted by discover-services.sh / byo-wizard.sh) — no new top-level
+// param (admin-plane is at the 256-param ceiling). Endpoint suffix is sovereign-
+// correct (openai.azure.us in Gov, else openai.azure.com), matching the module
+// output expression so the existing path is wired identically to the new path.
+var byoFoundryEndpoint = !empty(existingFoundryAccountName) ? 'https://${existingFoundryAccountName}.${environment().suffixes.storage != 'core.windows.net' ? 'openai.azure.us' : 'openai.azure.com'}/' : ''
+var byoFoundryChatDeployment = string(byoExisting.?foundryChatDeployment ?? '')
+var byoFoundryEmbedDeployment = string(byoExisting.?foundryEmbedDeployment ?? '')
 // Purview — existingPurviewAccount overrides loomPurviewAccount (reuse > param).
 // The Purview catalog data-plane is reached by account host (`{account}.purview.azure.com`)
 // + a UAMI data-plane role assigned in the Purview portal — it is subscription-
@@ -720,9 +780,13 @@ var byoFoundrySub  = !empty(byoExisting.?foundrySub ?? '') ? byoExisting.foundry
 // (the account name alone resolves it). Those vars were dropped to avoid a dead wire.
 var existingPurviewAccount = byoExisting.?purviewAccount ?? ''
 var effPurviewAccount = !empty(existingPurviewAccount) ? existingPurviewAccount : loomPurviewAccount
+// Cross-region Purview location (#229). Threaded via byoExisting (not a new
+// scalar param — admin-plane/main.bicep is at the 256-param linter cap). Empty =
+// hub location. catalog.bicep provisions the account + name in this region.
+var effPurviewLocation = byoExisting.?purviewLocation ?? ''
 // Synapse navigator — reuse > provisioned DLZ workspace.
 var existingSynapseWorkspace = byoExisting.?synapseWorkspace ?? ''
-var effSynapseWorkspace = !empty(existingSynapseWorkspace) ? existingSynapseWorkspace : loomSynapseWorkspace
+var effSynapseWorkspace = !empty(existingSynapseWorkspace) ? existingSynapseWorkspace : (deSynapseEnabled ? loomSynapseWorkspace : '')
 var byoSynapseRg        = !empty(byoExisting.?synapseRg ?? '') ? byoExisting.synapseRg : loomDlzRg
 var byoSynapseSub       = !empty(byoExisting.?synapseSub ?? '') ? byoExisting.synapseSub : subscription().subscriptionId
 // Cosmos control-plane navigator — reuse > provisioned DLZ account.
@@ -734,7 +798,7 @@ var byoCosmosSub     = !empty(byoExisting.?cosmosSub ?? '') ? byoExisting.cosmos
 // into LOOM_ADF_NAME/RG/SUB, which adf-client reads (sub/rg fall back to the
 // deployment sub + DLZ RG when empty).
 var existingAdfFactory = byoExisting.?adfFactory ?? ''
-var effAdfName = !empty(existingAdfFactory) ? existingAdfFactory : loomAdfName
+var effAdfName = !empty(existingAdfFactory) ? existingAdfFactory : (deAdfEnabled ? loomAdfName : '')
 var effAdfRg   = !empty(byoExisting.?adfRg ?? '') ? byoExisting.adfRg : (!empty(loomAdfRg) ? loomAdfRg : loomDlzRg)
 var byoAdfSub  = !empty(byoExisting.?adfSub ?? '') ? byoExisting.adfSub : subscription().subscriptionId
 // Event Hubs navigator — reuse > provisioned DLZ namespace.
@@ -744,7 +808,7 @@ var effEventHubRg        = !empty(byoExisting.?eventHubRg ?? '') ? byoExisting.e
 var byoEventHubSub       = !empty(byoExisting.?eventHubSub ?? '') ? byoExisting.eventHubSub : (!empty(loomEventHubSub) ? loomEventHubSub : subscription().subscriptionId)
 // Databricks navigator — reuse hostname > provisioned/patched hostname.
 var existingDatabricksHostname = byoExisting.?databricksHostname ?? ''
-var effDatabricksHostname = !empty(existingDatabricksHostname) ? existingDatabricksHostname : loomDatabricksHostname
+var effDatabricksHostname = !empty(existingDatabricksHostname) ? existingDatabricksHostname : (deDatabricksEnabled ? loomDatabricksHostname : '')
 // Sovereign-cloud ADX (Kusto) hostname suffix — Commercial/GCC vs GCC-High/IL5.
 // Used only for the BYO (existingAdxClusterName) path; the provisioned cluster
 // uses adxCluster.outputs.clusterUri (ARM-generated, already cloud-correct).
@@ -899,6 +963,15 @@ param loomMsalClientSecret string = ''
 @secure()
 param loomSessionSecret string = ''
 
+@description('Entra app-registration (MSAL) provisioning config — passed as ONE object to stay under the 256-param ARM limit (this module is already near it). Fields: enabled (bool, default true — provision the app reg + client secret + stable SESSION_SECRET in Key Vault by default, opt-out; OFF runs the Console unauth / BYO via loomMsalClientId); scriptIdentityId (UAMI with Graph app-admin + KV Secrets Officer for the in-bicep deploymentScript — empty → the post-deploy bootstrap workflow provisions the app reg, the default push-button path); scriptIdentityClientId; scriptSubnetId (VNet-inject the script to reach the PE-locked KV); consoleHosts (comma-separated redirect-URI hosts, no scheme — localhost is always added; the bootstrap adds the runtime FQDN).')
+param loomMsalAppReg object = {
+  enabled: true
+  scriptIdentityId: ''
+  scriptIdentityClientId: ''
+  scriptSubnetId: ''
+  consoleHosts: ''
+}
+
 // =====================================================================
 // Phase 2 — RBAC tenant-admin bootstrap + install-time provisioning targets
 // =====================================================================
@@ -909,6 +982,15 @@ param loomTenantAdminGroupId string = ''
 @description('Entra user oid that bypasses the Loom Feature Permissions gate. Used in single-user bootstrap scenarios. Members of loomTenantAdminGroupId are recommended for production.')
 param loomTenantAdminOid string = ''
 
+// Bootstrap admin is never blank: when no explicit OID and no real admin group
+// is supplied, fall back to the deploying principal (deployer().objectId) so the
+// push-button deploy always has a working admin who can grant others access from
+// the empty state (PRP deploy-readiness gap #4). A non-empty group id (even the
+// placeholder) does not suppress this — the deployer-as-admin fallback is
+// harmless and guarantees first-login admin access.
+var hasRealAdminGroup = !empty(loomTenantAdminGroupId) && !startsWith(loomTenantAdminGroupId, '<')
+var effectiveTenantAdminOid = !empty(loomTenantAdminOid) ? loomTenantAdminOid : (hasRealAdminGroup ? '' : deployer().objectId)
+
 @description('Default Fabric/Power BI workspace id the Phase-2 install engine uses when a Loom workspace has no bound Fabric group yet. Optional — the wizard prompts when missing.')
 param loomDefaultFabricWorkspace string = ''
 
@@ -916,9 +998,9 @@ param loomDefaultFabricWorkspace string = ''
 @allowed(['', 'fabric'])
 param loomCopilotBackend string = ''
 
-@description('Phase-2 warehouse provisioner backend. synapse-dedicated (default) runs DDL against the dedicated Synapse pool via TDS+AAD; fabric-warehouse is on the v3.5 roadmap.')
-@allowed(['synapse-dedicated', 'fabric-warehouse'])
-param loomWarehouseBackend string = 'synapse-dedicated'
+// Phase-2 warehouse provisioner backend folded into loomBackends.warehouse
+// (kept as a var to stay under the ARM 256-param ceiling — data-eng sweep).
+var loomWarehouseBackend = loomBackends.?warehouse ?? 'synapse-dedicated'
 
 @description('Opt-in only: Fabric workspace id that backs the warehouse when loomWarehouseBackend=fabric-warehouse. Required to surface GPU-accelerated query execution; leave empty for the Azure-native Synapse default (result-set caching acceleration).')
 param loomWarehouseFabricWorkspace string = ''
@@ -930,9 +1012,9 @@ param loomWarehouseFabricWorkspace string = ''
 @description('Azure Data Lake Storage Gen2 bronze container name. Default: bronze.')
 param loomBronzeContainer string = 'bronze'
 
-@description('Pipeline orchestrator backend selector. Default: synapse. Alternatives: adf, fabric.')
-@allowed(['synapse', 'adf', 'fabric'])
-param loomPipelineBackend string = 'synapse'
+// Pipeline orchestrator backend selector folded into loomBackends.pipeline
+// (kept as a var to stay under the ARM 256-param ceiling — data-eng sweep).
+var loomPipelineBackend = loomBackends.?pipeline ?? 'synapse'
 
 
 
@@ -942,7 +1024,7 @@ param loomPipelineBackend string = 'synapse'
 @allowed(['adf-cdc', 'synapse-link', 'fabric'])
 param loomMirrorBackend string = 'adf-cdc'
 
-@description('Azure-native backend selectors for Fabric-flavored items, bundled into one object to stay under the ARM 256-parameter template limit. Each key defaults to the Azure-native path; set a value to "fabric"/"powerbi" to opt into the Fabric/Power BI alternative for that item (per no-fabric-dependency rule).')
+@description('Azure-native backend selectors for Fabric-flavored items, bundled into one object to stay under the ARM 256-parameter template limit. Each key defaults to the Azure-native path; set a value to "fabric"/"powerbi" to opt into the Fabric/Power BI alternative for that item (per no-fabric-dependency rule). The orgVisuals key is an opt-out toggle (default "enabled") for the Embed codes (F22) + Organizational visuals (F23) container grant + LOOM_ORG_VISUALS_URL env — set "disabled" to honest-gate those panes while keeping the medallion lake wired.')
 param loomBackends object = {
   event: 'eventhubs'
   activator: 'azure-monitor'
@@ -954,6 +1036,12 @@ param loomBackends object = {
   domains: 'cosmos'
   dataflow: 'adf'
   dataproducts: ''
+  orgVisuals: 'enabled'
+  // Folded out of standalone params (data-eng deploy-readiness sweep) to stay
+  // under the ARM 256-parameter ceiling; consumed via same-named vars above so
+  // every downstream LOOM_WAREHOUSE_BACKEND / LOOM_PIPELINE_BACKEND env is unchanged.
+  warehouse: 'synapse-dedicated'
+  pipeline: 'synapse'
 }
 
 
@@ -1114,6 +1202,53 @@ module keyvault 'keyvault.bicep' = {
     complianceTags: complianceTags
   }
 }
+
+// =====================================================================
+// 4b. Entra app registration (MSAL) — provisioned by default (opt-out).
+// Day-one deploy-readiness (GH #1383): a fresh deploy gets a REAL app
+// registration + client secret + stable SESSION_SECRET in Key Vault, with the
+// redirect URIs reconciled to the console host — so interactive login works on
+// first sign-in instead of returning a 500 (no credential) or AADSTS redirect
+// mismatch. The app registration is a Graph object, so it runs as a
+// deploymentScript when a Graph-app-admin script identity is supplied; the
+// default push-button path provisions it via the post-deploy bootstrap workflow
+// (scripts/csa-loom/bootstrap-msal-app-reg.sh — the SAME logic). The effective
+// client id below feeds the Console env + secretRefs.
+// =====================================================================
+module entraAppReg 'entra-app-registration.bicep' = if (loomMsalAppRegEnabled && !empty(loomMsalAppRegScriptIdentityId)) {
+  name: 'entra-app-registration'
+  params: {
+    location: location
+    appDisplayName: 'CSA Loom Console (${resourceGroup().name})'
+    consoleHosts: loomMsalAppRegConsoleHosts
+    existingClientId: loomMsalClientId
+    scriptIdentityId: loomMsalAppRegScriptIdentityId
+    scriptSubnetId: loomMsalAppRegScriptSubnetId
+    keyVaultName: keyvault.outputs.keyVaultName
+    complianceTags: complianceTags
+  }
+}
+
+// Entra app-registration config (read from the single object param — see
+// loomMsalAppReg). Defaults keep the FLAG ON and the in-bicep script OFF (empty
+// identity → the post-deploy bootstrap is the provisioner).
+var loomMsalAppRegEnabled = bool(loomMsalAppReg.?enabled ?? true)
+var loomMsalAppRegScriptIdentityId = string(loomMsalAppReg.?scriptIdentityId ?? '')
+var loomMsalAppRegScriptSubnetId = string(loomMsalAppReg.?scriptSubnetId ?? '')
+var loomMsalAppRegConsoleHosts = string(loomMsalAppReg.?consoleHosts ?? '')
+
+// Effective MSAL client id: an explicit loomMsalClientId (BYO existing app)
+// wins; otherwise the app-registration the entra-app-registration script
+// provisioned. Empty here (default push-button) means the post-deploy bootstrap
+// sets LOOM_MSAL_CLIENT_ID on the Console after the app registration is created.
+var msalAppRegProvisioned = loomMsalAppRegEnabled && !empty(loomMsalAppRegScriptIdentityId)
+var effectiveMsalClientId = !empty(loomMsalClientId) ? loomMsalClientId : (msalAppRegProvisioned ? entraAppReg!.outputs.appId : '')
+// The client secret + SESSION_SECRET are KV-backed (read via keyVaultUrl
+// secretRef) when the script provisioned them into Key Vault; otherwise inline
+// (explicit param value / stable per-RG GUID) so day-one bicep-only deploys
+// still mint sessions.
+var msalSecretKvBacked = msalAppRegProvisioned && empty(loomMsalClientSecret)
+var sessionSecretKvBacked = msalAppRegProvisioned && empty(loomSessionSecret)
 
 // Console's own `loom` Cosmos — HUB-scoped. Only deployed in tenant/dlz-attach
 // topologies (deployConsoleCosmos), where no local DLZ exists to host the
@@ -1422,6 +1557,14 @@ module agentFoundry '../ai/foundry-project.bicep' = if (agentFoundryEnabled) {
     skipRoleGrants: skipRoleGrants
     workspaceId: monitoring.outputs.lawId
     complianceTags: complianceTags
+    // Private endpoint (Gap C) — only when the account is private-only
+    // (non-Commercial). Bind the hub PE subnet + the privatelink.openai /
+    // privatelink.cognitiveservices zones so AAD + key auth resolve inside the
+    // VNet. Commercial keeps public access on and passes no subnet (day-one
+    // works without VNet plumbing).
+    privateEndpointSubnetId: boundary == 'Commercial' ? '' : network.outputs.privateEndpointsSubnetId
+    privateDnsZoneOpenAiId: boundary == 'Commercial' ? '' : network.outputs.privateDnsZoneIds.openai
+    privateDnsZoneCognitiveServicesId: boundary == 'Commercial' ? '' : network.outputs.privateDnsZoneIds.cognitiveservices
     // Optional dedicated ghost-text deployment. Empty => no extra deployment;
     // the Console route falls back to the chat deployment for inline completion.
     completionDeploymentName: loomAoaiCompletionDeployment
@@ -1600,7 +1743,7 @@ module azureConnectionsLawRbac 'azure-connections-rbac.bicep' = if (!skipRoleGra
 // for the embed-code SAS). Scoped to the DLZ RG (the lake account usually lives
 // outside the admin RG). Skipped (honest gate in the panes) when loomStorageAccount
 // is unset. No Fabric/Power BI dependency.
-module orgVisualsRbac '../landing-zone/org-visuals-rbac.bicep' = if (!skipRoleGrants && !empty(loomStorageAccount)) {
+module orgVisualsRbac '../landing-zone/org-visuals-rbac.bicep' = if (!skipRoleGrants && !empty(loomStorageAccount) && (loomBackends.?orgVisuals ?? 'enabled') != 'disabled') {
   name: 'org-visuals-rbac'
   scope: resourceGroup(loomDlzRg)
   params: {
@@ -1638,11 +1781,16 @@ module catalog 'catalog.bicep' = {
     boundary: boundary
     catalogPrimary: catalogPrimary
     purviewEnabled: purviewEnabled
+    purviewLocation: effPurviewLocation
     atlasOnAksEnabled: atlasOnAksEnabled
     adminEntraGroupId: adminEntraGroupId
     consolePrincipalId: identity.outputs.uamiConsolePrincipalId
     skipRoleGrants: skipRoleGrants
     privateEndpointSubnetId: network.outputs.privateEndpointsSubnetId
+    // #229 — Purview private-endpoint DNS zones so the PE-locked account is
+    // reachable from the hub VNet by default (account + portal hosts).
+    privateDnsZonePurviewId: network.outputs.privateDnsZoneIds.purview
+    privateDnsZonePurviewStudioId: network.outputs.privateDnsZoneIds.purviewStudio
     aksClusterId: containerPlatform == 'aks' ? containerPlatformModule.outputs.aksId : ''
     complianceTags: complianceTags
   }
@@ -1778,6 +1926,12 @@ module appDeployments 'app-deployments.bicep' = if (containerPlatform == 'contai
         tier: 'console'
         minReplicas: 2
         maxReplicas: 6
+        // Console-runtime telemetry opt-out (loomConsoleTelemetryEnabled, default
+        // true). When false the App Insights connection string is withheld from
+        // this app AND LOOM_CONSOLE_TELEMETRY_ENABLED below is '' — the OTel SDK
+        // (the historical SIGSEGV path) never loads. The workspace/account still
+        // exist for the read-only /monitor + Copilot-usage panes.
+        telemetryEnabled: loomConsoleTelemetryEnabled
         env: concat(
           [
             { name: 'LOOM_VERSION', value: loomVersion }
@@ -1856,6 +2010,12 @@ module appDeployments 'app-deployments.bicep' = if (containerPlatform == 'contai
             // "Log Analytics Reader" on this workspace + "Monitoring Reader"
             // on the sub for metrics/activity/health/alerts.
             { name: 'LOOM_LOG_ANALYTICS_WORKSPACE_ID', value: monitoring.outputs.lawCustomerId }
+            // Console-runtime OTel gate (deploy-readiness). instrumentation.ts
+            // reads this BEFORE importing @azure/monitor-opentelemetry — when
+            // empty the SDK is never loaded (no SIGSEGV), when 'true' it inits
+            // with live-metrics disabled. Mirrors loomConsoleTelemetryEnabled;
+            // also withholds APPLICATIONINSIGHTS_CONNECTION_STRING when false.
+            { name: 'LOOM_CONSOLE_TELEMETRY_ENABLED', value: loomConsoleTelemetryEnabled ? 'true' : '' }
             { name: 'LOOM_LOG_ANALYTICS_RESOURCE_ID', value: monitoring.outputs.lawId }
             // audit-T29 — release-environment (Apollo/Shuttle parity). Optional
             // Azure Deployment Environments project; empty = honest infra-gate in
@@ -2040,7 +2200,7 @@ module appDeployments 'app-deployments.bicep' = if (containerPlatform == 'contai
             // the four activities honest-gated (MessageBar names this var).
             { name: 'LOOM_HDINSIGHT_LINKED_SERVICE', value: loomHdinsightLinkedService }
             { name: 'NEXT_PUBLIC_LOOM_HDINSIGHT_LINKED_SERVICE', value: loomHdinsightLinkedService }
-            { name: 'LOOM_SHIR_VMSS_NAME', value: loomShirVmssName }
+            { name: 'LOOM_SHIR_VMSS_NAME', value: deShirEnabled ? loomShirVmssName : '' }
             // Shared admin-zone Purview SHIR VMSS — the BFF scales this 0→N
             // before a Purview scan that uses the self-hosted IR, and the
             // idle-stop workflow scales it back to 0. It lives in the admin RG
@@ -2321,7 +2481,14 @@ module appDeployments 'app-deployments.bicep' = if (containerPlatform == 'contai
             { name: 'NEXT_PUBLIC_LOOM_KUSTO_CLUSTER', value: !empty(existingAdxClusterName) ? existingAdxClusterName : (adxEnabled ? adxCluster!.outputs.clusterName : '') }
             // Phase 2 — RBAC tenant-admin bootstrap + install-time provisioning targets
             { name: 'LOOM_TENANT_ADMIN_GROUP_ID', value: loomTenantAdminGroupId }
-            { name: 'LOOM_TENANT_ADMIN_OID', value: loomTenantAdminOid }
+            // Bootstrap tenant admin (PRP deploy-readiness gap #4: all /admin
+            // pages 403 when no admin principal is wired). When neither an
+            // explicit OID nor a real admin group is supplied, DEFAULT to the
+            // principal running the deployment (deployer().objectId) so the
+            // push-button path is NEVER blank — whoever deploys can sign in and
+            // configure access out of the empty state. An explicit
+            // loomTenantAdminOid always wins.
+            { name: 'LOOM_TENANT_ADMIN_OID', value: effectiveTenantAdminOid }
             { name: 'LOOM_DEFAULT_FABRIC_WORKSPACE', value: loomDefaultFabricWorkspace }
             { name: 'LOOM_WAREHOUSE_BACKEND', value: loomWarehouseBackend }
             { name: 'LOOM_WAREHOUSE_FABRIC_WORKSPACE', value: loomWarehouseFabricWorkspace }
@@ -2459,10 +2626,10 @@ module appDeployments 'app-deployments.bicep' = if (containerPlatform == 'contai
             // endpoint (block-blob + SAS), unlike the .dfs lake URLs above. The
             // container is created in landing-zone/storage.bicep; the Console
             // UAMI is granted Storage Blob Data Contributor (container) + Storage
-            // Blob Delegator (account) by org-visuals-rbac.bicep. Only emitted
-            // when an ADLS account is configured; otherwise the panes show their
-            // honest gate. No Fabric/Power BI dependency.
-            { name: 'LOOM_ORG_VISUALS_URL', value: 'https://${loomStorageAccount}.blob.${environment().suffixes.storage}/org-visuals' }
+            // Blob Delegator (account) by org-visuals-rbac.bicep. Emitted in the
+            // separately-gated array below (loomOrgVisualsEnabled opt-out) so a
+            // deploy can disable Embed codes / Org visuals while keeping the
+            // medallion lake URLs. No Fabric/Power BI dependency.
             // LOOM_RECYCLE_RETENTION_DAYS — OneLake Recycle bin restore window.
             // Mirrors the storage account's blob soft-delete deleteRetentionPolicy
             // (landing-zone/storage.bicep recycleRetentionDays) so the recycle-bin
@@ -2477,6 +2644,17 @@ module appDeployments 'app-deployments.bicep' = if (containerPlatform == 'contai
             // Contributor (granted in landing-zone/adf.bicep).
             { name: 'LOOM_SAMPLE_ADLS', value: loomStorageAccount }
           ] : [],
+          // LOOM_ORG_VISUALS_URL backs Embed codes (F22) + Organizational
+          // visuals (F23). Gated independently of the medallion lake URLs by
+          // loomOrgVisualsEnabled (opt-out, default true): a deploy can disable
+          // the embed-code SAS surface while keeping the lakehouse wired. Uses
+          // the .blob endpoint (block-blob + SAS) over the org-visuals container
+          // created in landing-zone/storage.bicep; the Console UAMI is granted
+          // Storage Blob Data Contributor (container) + Storage Blob Delegator
+          // (account) by org-visuals-rbac.bicep. Unset → the panes honest-gate.
+          (!empty(loomStorageAccount) && (loomBackends.?orgVisuals ?? 'enabled') != 'disabled') ? [
+            { name: 'LOOM_ORG_VISUALS_URL', value: 'https://${loomStorageAccount}.blob.${environment().suffixes.storage}/org-visuals' }
+          ] : [],
           // ----------------------------------------------------------------
           // Unified Catalog federation + admin-security env wiring.
           //
@@ -2490,13 +2668,16 @@ module appDeployments 'app-deployments.bicep' = if (containerPlatform == 'contai
           // LOOM_PURVIEW_ACCOUNT precedence:
           //   1. Explicit `loomPurviewAccount` param (used by both
           //      /catalog federation and /admin/security Purview tab)
-          //   2. purview-csa-loom-<location> when `purviewEnabled = true`
-          //      and no explicit account name was supplied
+          //   2. catalog.outputs.purviewAccountName (purview-csa-loom-<purviewLocation
+          //      ?? location>) when `purviewEnabled = true` and no explicit
+          //      account name was supplied. Using the catalog output (not a
+          //      re-derived '${location}' literal) keeps the env in lock-step
+          //      with the REAL account name when purviewLocation is cross-region.
           // ----------------------------------------------------------------
           !empty(effPurviewAccount) ? [
             { name: 'LOOM_PURVIEW_ACCOUNT', value: effPurviewAccount }
           ] : (purviewEnabled ? [
-            { name: 'LOOM_PURVIEW_ACCOUNT', value: 'purview-csa-loom-${location}' }
+            { name: 'LOOM_PURVIEW_ACCOUNT', value: catalog.outputs.purviewAccountName }
           ] : []),
           // Purview Unified Catalog data-plane endpoint + API version — used by
           // the data-product creation wizard (/api/data-products,
@@ -2756,9 +2937,16 @@ module appDeployments 'app-deployments.bicep' = if (containerPlatform == 'contai
             // boundaries where Fabric is not authorized for production workloads,
             // and even GCC should stay Azure-native by default. Unset → Azure-native only.
             { name: 'LOOM_WORKSPACE_ROLES_FABRIC', value: (loomWorkspaceRolesFabricEnabled && boundary == 'Commercial') ? '1' : '' }
+            // SESSION_SECRET is ALWAYS set (not gated on MSAL) so the Console can
+            // mint/verify session cookies even on the default push-button deploy
+            // before LOOM_MSAL_CLIENT_ID is wired (PRP deploy-readiness gap #3 —
+            // "signed-out after Entra login" was caused by SESSION_SECRET being
+            // gated behind a non-empty loomMsalClientId). The session-secret ACA
+            // secret is likewise always present (see secrets concat below).
+            { name: 'SESSION_SECRET', secretRef: 'session-secret' }
           ],
-          !empty(loomMsalClientId) ? [
-            { name: 'LOOM_MSAL_CLIENT_ID', value: loomMsalClientId }
+          !empty(effectiveMsalClientId) ? [
+            { name: 'LOOM_MSAL_CLIENT_ID', value: effectiveMsalClientId }
             { name: 'LOOM_MSAL_CLIENT_SECRET', secretRef: 'loom-msal-client-secret' }
             // NOTE: do NOT map this secret to AZURE_CLIENT_SECRET — the Console
             // authenticates to Azure with its MANAGED IDENTITY (AZURE_CLIENT_ID /
@@ -2767,7 +2955,7 @@ module appDeployments 'app-deployments.bicep' = if (containerPlatform == 'contai
             // login with the UAMI client id → AADSTS7000232 (MSI can't use a
             // secret), which breaks Cost/Monitor/Defender calls. MSAL + Dataverse
             // read LOOM_MSAL_CLIENT_SECRET / LOOM_DATAVERSE_CLIENT_SECRET instead.
-            { name: 'SESSION_SECRET', secretRef: 'session-secret' }
+            // (SESSION_SECRET is now set unconditionally in the base env above.)
             { name: 'LOOM_UAMI_CLIENT_ID', value: identity.outputs.uamiConsoleClientId }
             // Console UAMI principal (object) id — used by the F16 Azure
             // Connections role check (azure-connections-client) to verify the
@@ -2800,7 +2988,7 @@ module appDeployments 'app-deployments.bicep' = if (containerPlatform == 'contai
             // SP credentials. The SP must be registered as a Dataverse
             // Application User with System Administrator role on every
             // env Loom should read. See docs/fiab/dataverse-app-user.md.
-            { name: 'LOOM_DATAVERSE_CLIENT_ID', value: loomMsalClientId }
+            { name: 'LOOM_DATAVERSE_CLIENT_ID', value: effectiveMsalClientId }
             { name: 'LOOM_DATAVERSE_CLIENT_SECRET', secretRef: 'loom-msal-client-secret' }
             { name: 'LOOM_DATAVERSE_TENANT_ID', value: tenant().tenantId }
             // Power Platform environment for the data-agent "Publish to Microsoft
@@ -2892,13 +3080,13 @@ module appDeployments 'app-deployments.bicep' = if (containerPlatform == 'contai
             // Foundry hub (so the AI Functions Gov/AOAI path works on a hub-only
             // deploy — the deployment is then discovered from the hub connections
             // by resolveAoaiTarget()).
-            { name: 'LOOM_AOAI_ENDPOINT',          value: agentFoundryEnabled ? agentFoundry!.outputs.aoaiEndpoint : ((aiFoundryEnabled && empty(existingFoundryAccountName)) ? aiFoundry!.outputs.aoaiInferenceEndpoint : '') }
-            { name: 'LOOM_AOAI_CHAT_DEPLOYMENT',   value: agentFoundryEnabled ? agentFoundry!.outputs.chatDeployment : '' }
+            { name: 'LOOM_AOAI_ENDPOINT',          value: agentFoundryEnabled ? agentFoundry!.outputs.aoaiEndpoint : (!empty(existingFoundryAccountName) ? byoFoundryEndpoint : ((aiFoundryEnabled && empty(existingFoundryAccountName)) ? aiFoundry!.outputs.aoaiInferenceEndpoint : '')) }
+            { name: 'LOOM_AOAI_CHAT_DEPLOYMENT',   value: agentFoundryEnabled ? agentFoundry!.outputs.chatDeployment : byoFoundryChatDeployment }
             // The copilot/data-agent orchestrators read LOOM_AOAI_DEPLOYMENT (not
             // the _CHAT_ variant) to resolve the model — keep both in sync so the
             // Copilot/data-agent chat works out of the box (the "no AOAI model"
             // gap was exactly this name mismatch on the live deploy).
-            { name: 'LOOM_AOAI_DEPLOYMENT',        value: agentFoundryEnabled ? agentFoundry!.outputs.chatDeployment : '' }
+            { name: 'LOOM_AOAI_DEPLOYMENT',        value: agentFoundryEnabled ? agentFoundry!.outputs.chatDeployment : byoFoundryChatDeployment }
             // AOAI Chat Completions API version. resolveAoaiTarget() reads
             // process.env.LOOM_AOAI_API_VERSION (default 2024-10-21). Exposing it
             // here lets operators advance the version (e.g. for o-series reasoning
@@ -2917,7 +3105,7 @@ module appDeployments 'app-deployments.bicep' = if (containerPlatform == 'contai
             // built-in so no new parameter is needed. Read by the NL2KQL + Notebook
             // assist routes (process.env.LOOM_AOAI_AUDIENCE) to mint the bearer.
             { name: 'LOOM_AOAI_AUDIENCE',          value: environment().suffixes.storage != 'core.windows.net' ? 'https://cognitiveservices.azure.us' : 'https://cognitiveservices.azure.com' }
-            { name: 'LOOM_AOAI_EMBED_DEPLOYMENT',  value: agentFoundryEnabled ? agentFoundry!.outputs.embedDeployment : '' }
+            { name: 'LOOM_AOAI_EMBED_DEPLOYMENT',  value: agentFoundryEnabled ? agentFoundry!.outputs.embedDeployment : byoFoundryEmbedDeployment }
             // Inline code completion (ghost text) deployment. Explicit
             // loomAoaiCompletionDeployment wins; otherwise the Foundry module's
             // output (empty unless a dedicated slot was deployed). When empty the
@@ -2928,7 +3116,7 @@ module appDeployments 'app-deployments.bicep' = if (containerPlatform == 'contai
             // Agent Service AOAI endpoint. When both are empty the copilot route
             // returns an honest 503 gate naming this var + the Cognitive Services
             // OpenAI User role. LOOM_AOAI_DEPLOYMENT (above) supplies the model.
-            { name: 'LOOM_AZURE_OPENAI_ENDPOINT',  value: !empty(loomAzureOpenAiEndpoint) ? loomAzureOpenAiEndpoint : (agentFoundryEnabled ? agentFoundry!.outputs.aoaiEndpoint : '') }
+            { name: 'LOOM_AZURE_OPENAI_ENDPOINT',  value: !empty(loomAzureOpenAiEndpoint) ? loomAzureOpenAiEndpoint : (agentFoundryEnabled ? agentFoundry!.outputs.aoaiEndpoint : byoFoundryEndpoint) }
             { name: 'LOOM_DAB_PREVIEW_URL',        value: (dabRuntimeEnabled && !empty(dabSqlServerFqdn)) ? dabRuntime!.outputs.dabPreviewUrl : '' }
           ] : [
             { name: 'LOOM_UAMI_CLIENT_ID', value: identity.outputs.uamiConsoleClientId }
@@ -2977,9 +3165,23 @@ module appDeployments 'app-deployments.bicep' = if (containerPlatform == 'contai
           ] : []
         )
         secrets: concat(
-          !empty(loomMsalClientId) ? [
-            { name: 'loom-msal-client-secret', value: loomMsalClientSecret }
-            { name: 'session-secret', value: empty(loomSessionSecret) ? guid(resourceGroup().id, 'loom-session-secret-v1') : loomSessionSecret }
+          [
+            // SESSION_SECRET is ALWAYS present (the env references it
+            // unconditionally — PRP deploy-readiness gap #3). KV-backed when the
+            // entra-app-registration script wrote a stable secret to Key Vault;
+            // otherwise the inline stable per-RG GUID (or explicit param value)
+            // so sign-ins survive redeploys even on a bicep-only day-one deploy.
+            sessionSecretKvBacked
+              ? { name: 'session-secret', keyVaultUrl: '${keyvault.outputs.keyVaultUri}secrets/session-secret', identity: identity.outputs.uamiConsoleId }
+              : { name: 'session-secret', value: empty(loomSessionSecret) ? guid(resourceGroup().id, 'loom-session-secret-v1') : loomSessionSecret }
+          ],
+          !empty(effectiveMsalClientId) ? [
+            // MSAL client secret — KV-backed when the entra-app-registration
+            // script provisioned + stored it (the PRP "secret in Key Vault"
+            // intent); otherwise the explicit param value (BYO existing app).
+            msalSecretKvBacked
+              ? { name: 'loom-msal-client-secret', keyVaultUrl: '${keyvault.outputs.keyVaultUri}secrets/loom-msal-client-secret', identity: identity.outputs.uamiConsoleId }
+              : { name: 'loom-msal-client-secret', value: loomMsalClientSecret }
           ] : [],
           !empty(effectiveMapsAccount) ? [
             // Read from KV at deploy time. The azure-maps module wrote the
@@ -3588,7 +3790,19 @@ output uamiDirectLakeId string = identity.outputs.uamiDirectLakeId
 // inference. Only emitted when THIS deployment created the account (Foundry hub
 // path) so the orchestrator can grant the Spark identities the OpenAI User role
 // in this RG; empty for the existing/external-account path (operator grants it).
-output aiServicesAccountName string = (aiFoundryEnabled && empty(existingFoundryAccountName)) ? aiFoundry!.outputs.aiServicesAccountName : ''
+// Gap B — feed the AOAI account name to aoai-spark-rbac.bicep so the DLZ Spark
+// identities (Synapse MSI + Databricks Access Connector) get Cognitive Services
+// OpenAI User on the REAL account. Precedence: dedicated agentFoundry account
+// (the day-one default) > shared Foundry hub > reused existing account IN THE
+// ADMIN RG. A cross-sub / external BYO account is left empty here (the RBAC
+// module's `existing` ref is scoped to the admin RG, so it can't grant on an
+// out-of-RG account — the operator grants that one manually, matching the
+// module's documented note). Empty when AOAI is fully disabled → module no-ops.
+output aiServicesAccountName string = agentFoundryEnabled
+  ? agentFoundry!.outputs.accountNameOut
+  : ((aiFoundryEnabled && empty(existingFoundryAccountName))
+      ? aiFoundry!.outputs.aiServicesAccountName
+      : ((!empty(existingFoundryAccountName) && (empty(existingFoundryRg) || existingFoundryRg == resourceGroup().name)) ? existingFoundryAccountName : ''))
 
 // Pass-through for DLZs
 output privateDnsZoneIds object = network.outputs.privateDnsZoneIds

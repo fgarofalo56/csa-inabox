@@ -93,6 +93,9 @@ param defenderForAIEnabled bool
 @description('Purview Data Map availability (false at IL5)')
 param purviewEnabled bool
 
+@description('Cross-region Purview location (#229). Empty = hub location. Set to a known-Purview region (e.g. eastus2) when the hub region lacks Purview capacity (e.g. centralus). Threaded to admin-plane → catalog.bicep so the account + LOOM_PURVIEW_ACCOUNT name + private endpoints all agree.')
+param purviewLocation string = ''
+
 @description('Purview account name (short, NOT full URL) to wire into the Loom Console. When empty, /admin/security Purview tab returns 503 with a structured remediation hint. Set this to an EXISTING Purview account name in the tenant — only one Enterprise-tier Purview is allowed per tenant, so most deployments REUSE the tenant-level account rather than provisioning a second one (which fails with `EnterpriseTenantAlreadyExists`).')
 param loomPurviewAccount string = ''
 
@@ -291,8 +294,8 @@ param deployAppsEnabled bool = false
 @description('Deploy AI Foundry Hub. Requires storage-account strategy; default off.')
 param aiFoundryEnabled bool = false
 
-@description('Deploy the dedicated AI Foundry Agent Service account (aifndry-loom-<location>) with the loom-agents project + chat/embedding model deployments. Backs LOOM_FOUNDRY_PROJECT_ENDPOINT + LOOM_AOAI_* so AI Functions, Copilot, and data-agent test-chat work out of the box. Independent of aiFoundryEnabled.')
-param agentFoundryEnabled bool = false
+@description('Deploy the dedicated AI Foundry Agent Service account (aifndry-loom-<location>) with the loom-agents project + chat/embedding model deployments. Backs LOOM_FOUNDRY_PROJECT_ENDPOINT + LOOM_AOAI_* so AI Functions, Copilot, and data-agent test-chat work out of the box. ON BY DEFAULT (opt-out) — set false to skip the AOAI account (the Copilot/data-agent/AI-functions surfaces then honest-gate). Independent of aiFoundryEnabled.')
+param agentFoundryEnabled bool = true
 
 @description('Inline-completion (ghost text) AOAI deployment name for notebook/SQL code cells (LOOM_AOAI_COMPLETION_DEPLOYMENT). Empty = ghost text uses the chat deployment (LOOM_AOAI_DEPLOYMENT). Set to a dedicated gpt-4o-mini slot for lower latency without consuming chat quota. Leave empty in GCC-High / IL5 regions where the model is unavailable.')
 param loomAoaiCompletionDeployment string = ''
@@ -300,8 +303,11 @@ param loomAoaiCompletionDeployment string = ''
 @description('Resource group of the AML workspace for MLflow experiment tracking (ml-experiment "Runs & metrics" tab). Empty → falls back to LOOM_FOUNDRY_RG.')
 param loomAmlRg string = ''
 
-@description('Deploy APIM. Premium V2 takes 30+ min; default off for fast iteration.')
-param apimEnabled bool = false
+@description('Deploy APIM (Premium) to back the API Marketplace. ON by default (opt-out) so a fresh deploy can publish/Try APIs on first login — ~30 min Premium provisioning. Set loomApimEnabled=false to skip.')
+param loomApimEnabled bool = true
+
+@description('DEPRECATED alias for loomApimEnabled, retained so existing .bicepparam files keep working. Now defaults true (was false). Set either flag false to opt out of APIM.')
+param apimEnabled bool = true
 
 @description('Deploy AI Search. Default off — capacity in eastus2 is intermittent.')
 param aiSearchEnabled bool = false
@@ -309,11 +315,40 @@ param aiSearchEnabled bool = false
 @description('Deploy ADX shared cluster (admin-plane) + per-DLZ ADX databases. Backs the RTI editor family — Eventhouse, KQL Database, KQL Queryset, KQL Dashboard, Eventstream. Default on as of 2026-05-27 (sweep-rti). Set false to skip ~$140/mo Dev SKU cluster.')
 param adxEnabled bool = true
 
+@description('Provision a NEW Event Hubs namespace in each DLZ (Real-Time Intelligence: Eventstream sources, Data Explorer receive, Mirroring CDC transport, event-schema-set Avro enforcement). Default true (opt-out). Set false to skip the ~namespace cost — the Eventstream / Data Explorer navigators then honest-gate. To REUSE an existing namespace instead of provisioning, set existingEventHubNamespace (the new namespace is skipped and the Console binds to the existing one). Entra-only auth, private-endpoint + servicebus DNS by default.')
+param loomEventHubEnabled bool = true
+
+@description('Provision the per-DLZ Azure Stream Analytics starter job (backs the stream-analytics-job editor + the Eventstream transform node). Default true (opt-out). Set false to skip the streaming-units cost — the editor then surfaces an honest infra-gate naming LOOM_ASA_RG. Distinct from streamAnalyticsEnabled (the deploy-planner tile), which provisions a separate planner job.')
+param loomStreamAnalyticsEnabled bool = true
+
+// =====================================================================
+// Data-engineering backend opt-out flags (default ON — provision new).
+// Forwarded to BOTH the admin-plane (env-blank mirror) and every DLZ
+// (provision gate) so a stock deploy is "everything on, opt-out".
+// =====================================================================
+@description('Provision the per-DLZ Synapse workspace (Serverless + dedicated + Spark loompool). Default ON. false skips Synapse + blanks LOOM_SYNAPSE_WORKSPACE so the editor honest-gates.')
+param loomSynapseEnabled bool = true
+
+@description('Provision the per-DLZ Databricks workspace (+ Access Connector + Unity Catalog when supported). Default ON. false skips Databricks + blanks LOOM_DATABRICKS_HOSTNAME.')
+param loomDatabricksEnabled bool = true
+
+@description('Provision the per-DLZ Azure Data Factory. Default ON. false skips ADF + blanks LOOM_ADF_NAME.')
+param loomDataFactoryEnabled bool = true
+
+@description('Provision the per-DLZ scaled self-hosted IR (VMSS scale-to-0). Default ON — a strong admin password is auto-generated into the deployment (see effShirAdminPassword) so SHIR provisions without manual input. false skips the SHIR VMSS + blanks LOOM_SHIR_VMSS_NAME.')
+param loomSelfHostedIrEnabled bool = true
+
 @description('Deploy a Gremlin-capable Cosmos DB account (EnableGremlin) + NoSQL vector account in each DLZ. Backs the cosmos-gremlin-graph (graph editor) and vector-store editors. Default on — the graph editor requires a Gremlin account at create-time (a NoSQL account cannot be converted). Set false to skip ~2 Cosmos accounts/DLZ.')
 param cosmosGraphVectorEnabled bool = true
 
+@description('Provision the Console\'s own SERVERLESS metadata Cosmos (the `loom` database the BFF reads/writes: items, workspaces, configs, copilot sessions, tenant-topology, …) in the hub for tenant/dlz-attach topologies. Default true (opt-out). Serverless removes the 25-container shared-throughput cap that broke workspaces/domains live. Disable ONLY when reusing an existing account via existingCosmosAccount — otherwise the Console env still points at LOOM_COSMOS_ENDPOINT and all item/config CRUD fails. Single-sub hosts this `loom` DB via the DLZ landing-zone cosmos.bicep instead, so this flag is a no-op there.')
+param loomConsoleCosmosEnabled bool = true
+
 @description('Deploy the Weave (Semantic Ontology) PostgreSQL + Apache AGE graph store in each DLZ. Backs Palantir-class ontology object/link/action instance write-back (the Ontology editor Objects / Write-back actions surfaces). Default on — Palantir-class ontology write-back requires the graph store. Set false to skip ~1 Burstable PG flexible server/DLZ.')
 param weaveOntologyEnabled bool = true
+
+@description('Wire the org-visuals Blob container backing Embed codes (F22) + Organizational visuals (F23): the Console UAMI data-plane grants (Storage Blob Data Contributor on the container + Storage Blob Delegator at account scope for getUserDelegationKey) and the LOOM_ORG_VISUALS_URL env var. Default on (opt-out) — the org-visuals container itself is always created by landing-zone/storage.bicep (it is part of the foundational medallion account); this flag governs only the grant + env wiring. Set false to leave Embed codes / Org visuals honestly config-gated (no SAS minting). No Fabric/Power BI dependency.')
+param loomOrgVisualsEnabled bool = true
 
 @description('Deploy the MAF (Microsoft Agent Framework, Gov AOAI-direct) orchestration-tier Container App (loom-copilot-maf). Set true in the GCC-High / IL5 params. The admin-plane gates activation on boundary∈{GCC-High,IL5} + containerPlatform==containerApps + deployAppsEnabled, so it is a safe no-op on the AKS path (the Console copilot-orchestrator then uses its documented Gov AOAI-direct fallback). Requires the loom-copilot-maf image pushed to ACR first.')
 param copilotMafEnabled bool = false
@@ -361,6 +396,10 @@ param existingApimSub string = ''
 param existingAdxClusterSub string = ''
 @description('Subscription id of the existing Foundry/AOAI account (cross-sub reuse).')
 param existingFoundrySub string = ''
+@description('Chat deployment name on the REUSED existing AOAI account (from scan EXISTING_AOAI_CHAT_DEPLOYMENT). Wires LOOM_AOAI_DEPLOYMENT/_CHAT_DEPLOYMENT so Copilot / data-agent / AI-functions work against the existing account. Empty = the existing path stays honest-gated on the model.')
+param existingFoundryChatDeployment string = ''
+@description('Embedding deployment name on the REUSED existing AOAI account (from scan EXISTING_AOAI_EMBED_DEPLOYMENT). Wires LOOM_AOAI_EMBED_DEPLOYMENT.')
+param existingFoundryEmbedDeployment string = ''
 @description('Reuse an existing Microsoft Purview account (short name). Overrides loomPurviewAccount.')
 param existingPurviewAccount string = ''
 @description('Resource group of the existing Purview account.')
@@ -385,6 +424,12 @@ param existingEventHubNamespace string = ''
 param existingEventHubRg string = ''
 @description('Subscription id of the existing Event Hubs namespace (cross-sub reuse).')
 param existingEventHubSub string = ''
+@description('Reuse an existing Azure Stream Analytics job (name) for the stream-analytics-job / Eventstream transform editors instead of provisioning the per-DLZ starter job. When set, loomStreamAnalyticsEnabled is forced off for the new starter job and the Console binds LOOM_ASA_RG/SUB + the job name to this existing job.')
+param existingAsaJob string = ''
+@description('Resource group of the existing Stream Analytics job.')
+param existingAsaRg string = ''
+@description('Subscription id of the existing Stream Analytics job (cross-sub reuse).')
+param existingAsaSub string = ''
 @description('Reuse an existing Databricks workspace (name) — informational for RBAC.')
 param existingDatabricksWorkspace string = ''
 @description('Resource group of the existing Databricks workspace.')
@@ -608,6 +653,15 @@ param loomMsalClientSecret string = ''
 @secure()
 param loomSessionSecret string = ''
 
+@description('Entra app-registration (MSAL) provisioning config — ONE object to stay under the admin-plane 256-param limit. Fields: enabled (default true — provision the app reg + client secret + stable SESSION_SECRET in KV so a fresh deploy signs in on first login, GH #1383; opt-out → unauth/BYO via loomMsalClientId); scriptIdentityId / scriptIdentityClientId (UAMI with Graph app-admin for the in-bicep deploymentScript — empty → the post-deploy bootstrap provisions it); scriptSubnetId (VNet-inject the script to reach the PE-locked KV); consoleHosts (comma-separated redirect-URI hosts, no scheme).')
+param loomMsalAppReg object = {
+  enabled: true
+  scriptIdentityId: ''
+  scriptIdentityClientId: ''
+  scriptSubnetId: ''
+  consoleHosts: ''
+}
+
 @description('Data mirroring backend selector (LOOM_MIRROR_BACKEND). Default adf-cdc (Azure-native CDC to ADLS Bronze, NO Fabric). synapse-link is Azure-native too; fabric is opt-in only and additionally requires loomDefaultFabricWorkspace.')
 @allowed(['adf-cdc', 'synapse-link', 'fabric'])
 param loomMirrorBackend string = 'adf-cdc'
@@ -615,10 +669,16 @@ param loomMirrorBackend string = 'adf-cdc'
 @description('Existing Azure Maps account name to bind for the Geo editors (LOOM_AZURE_MAPS_ACCOUNT). Empty deploys a fresh Gen2 account on Commercial/GCC (azureMapsEnabled), or leaves Geo in its honest-gate state on GCC-High/IL5. Passed through to the admin-plane module.')
 param loomAzureMapsAccount string = ''
 
-@description('Deploy a fresh Azure Maps Gen2 account for the Geo editors (Commercial/GCC only — the admin-plane module also gates on boundary). Set false on GCC-High/IL5 where Azure Maps is unavailable. Passed through to the admin-plane module.')
+@description('Deploy a fresh Azure Maps Gen2 account for the Geo editors. ON by default (opt-out) on Commercial/GCC — the admin-plane module also boundary-gates. Set loomMapsEnabled=false (or on GCC-High/IL5 where Azure Maps is unavailable) to skip; Geo then falls back to its honest-gate or a bound loomAzureMapsAccount. Passed through to the admin-plane module.')
+param loomMapsEnabled bool = true
+
+@description('DEPRECATED alias for loomMapsEnabled, retained so existing .bicepparam files keep working (GCC-High / IL5 set it false). Set either flag false to skip Azure Maps. Passed through to the admin-plane module.')
 param azureMapsEnabled bool = true
 
-@description('Deploy the hub Azure Firewall (admin-plane egress filtering). Default true. Distinct from firewallEnabled (deploy-planner). Set false to skip — nothing consumes the hub firewall; avoids FirewallPolicyUpdateFailed on reconcile.')
+@description('Deploy the hub Azure Firewall (admin-plane egress filtering). ON by default (opt-out). Distinct from firewallEnabled (deploy-planner). Set loomFirewallEnabled=false to skip — nothing consumes the hub firewall; disabling avoids FirewallPolicyUpdateFailed on reconcile.')
+param loomFirewallEnabled bool = true
+
+@description('DEPRECATED alias for loomFirewallEnabled, retained so existing .bicepparam files keep working. Set either flag false to skip the hub firewall.')
 param hubFirewallEnabled bool = true
 
 @description('Opt-in ADF CDC mirroring — pre-existing ADF linked service for the relational SOURCE (Azure SQL / SQL Server). Empty = built-in CSV snapshot engine (Azure-native, no Fabric).')
@@ -637,9 +697,19 @@ param loomMirrorCopyCadence string = '1h'
 @description('Default Fabric/Power BI workspace id (LOOM_DEFAULT_FABRIC_WORKSPACE). Leave EMPTY (default) for the Azure-native path — Fabric is strictly opt-in (per no-fabric-dependency.md) and only used when a *-backend env is also set to fabric.')
 param loomDefaultFabricWorkspace string = ''
 
-@description('Local admin password for the scaled self-hosted IR (SHIR) VMSS nodes in each DLZ. Empty → the SHIR is NOT deployed (honest gate); supply a Key-Vault-backed secret to enable the 4-node scale-to-0 self-hosted IR. No password is ever embedded/generated in the template.')
+@description('Local admin password for the scaled self-hosted IR (SHIR) VMSS nodes in each DLZ. Empty → a strong password is auto-generated into the deployment (effShirAdminPassword) so the SHIR provisions by default per deploy-readiness; supply a Key-Vault-backed secret to override. The VMSS stays at capacity 0 (scale-to-0) so the credential is never used interactively — nothing needs to RDP.')
 @secure()
 param shirAdminPassword string = ''
+
+// Auto-generate a complexity-satisfying SHIR admin password when none is
+// supplied, so loomSelfHostedIrEnabled=true provisions the VMSS on a stock
+// deploy (a VMSS requires a local credential). Derived deterministically from
+// resource ids — uniqueString returns 13 lowercase alphanumerics; toUpper +
+// the literal suffix add upper/lower/digit/symbol classes for Windows policy.
+// The VMSS is private + scale-to-0, so this is never an interactive login.
+var effShirAdminPassword = !empty(shirAdminPassword)
+  ? shirAdminPassword
+  : '${toUpper(substring(uniqueString(subscription().subscriptionId, 'loom-shir'), 0, 9))}${substring(uniqueString(deployment().name, 'loom-shir-lower'), 0, 9)}!7xQ'
 
 @description('Loom version label shown in the UI + on /api/version.')
 param loomVersion string = 'v0.1'
@@ -757,7 +827,7 @@ module adminPlane 'modules/admin-plane/main.bicep' = if (deployAdminPlane) {
     agentFoundryEnabled: agentFoundryEnabled
     loomAoaiCompletionDeployment: loomAoaiCompletionDeployment
     loomAmlRg: loomAmlRg
-    apimEnabled: apimEnabled
+    apimEnabled: (loomApimEnabled && apimEnabled)
     aiSearchEnabled: aiSearchEnabled
     adxEnabled: adxEnabled
     copilotMafEnabled: copilotMafEnabled
@@ -780,9 +850,16 @@ module adminPlane 'modules/admin-plane/main.bicep' = if (deployAdminPlane) {
       apimSub: existingApimSub
       adxClusterSub: existingAdxClusterSub
       foundrySub: existingFoundrySub
+      // Deployment names on a REUSED existing AOAI account (Gap A) so the
+      // Console env wires the full AOAI surface, not just the account name.
+      foundryChatDeployment: existingFoundryChatDeployment
+      foundryEmbedDeployment: existingFoundryEmbedDeployment
       purviewAccount: existingPurviewAccount
       purviewRg: existingPurviewRg
       purviewSub: existingPurviewSub
+      // #229 cross-region Purview location (empty = hub location). Carried on the
+      // BYO object to stay under admin-plane's 256-param ceiling.
+      purviewLocation: purviewLocation
       synapseWorkspace: existingSynapseWorkspace
       synapseRg: existingSynapseRg
       synapseSub: existingSynapseSub
@@ -799,6 +876,13 @@ module adminPlane 'modules/admin-plane/main.bicep' = if (deployAdminPlane) {
       adfFactory: existingAdfFactory
       adfRg: existingAdfRg
       adfSub: existingAdfSub
+      // Data-engineering opt-out mirrors (default true) — admin-plane blanks the
+      // matching LOOM_* env var when a DLZ backend is disabled, so the editor
+      // honest-gates instead of 502-ing. Carried here to stay under the 256-param ceiling.
+      deSynapse: loomSynapseEnabled
+      deDatabricks: loomDatabricksEnabled
+      deAdf: loomDataFactoryEnabled
+      deShir: loomSelfHostedIrEnabled
     }
     // Azure ML workspace for the notebook AML path. Name is the deterministic
     // deploy-planner ml-workspace.bicep name (uniqueString over the DLZ RG), so
@@ -827,14 +911,26 @@ module adminPlane 'modules/admin-plane/main.bicep' = if (deployAdminPlane) {
     // cluster's DLZ-scoped Event Hub / storage grants must NOT fire — they would
     // target the non-existent rg-csa-loom-dlz-single-<loc> RG (ResourceGroupNotFound).
     // Empty in non-single-sub so the grants skip; the DLZ applies them on attach.
-    loomEventHubNamespace: useSingleDlz ? 'evhns-loom-default-${location}' : ''
+    loomEventHubNamespace: (useSingleDlz && loomEventHubEnabled) ? 'evhns-loom-default-${location}' : ''
     loomDlzRg: useSingleDlz ? singleDlzRg.name : adminPlaneRgName
+    // Stream Analytics navigator binding. Single-sub: the starter job + its
+    // Stream-Analytics-Contributor grant live in the DLZ RG, so LOOM_ASA_RG must
+    // point there for the stream-analytics-job editor + the Eventstream transform
+    // node to work first-try (G1: previously empty → 501). When reusing an
+    // existing job, bind to its RG/SUB/name instead; empty when ASA is disabled or
+    // for tenant/multi-sub (the console can't bind one DLZ's job — patched post-
+    // deploy via patch-navigator-env.sh).
+    loomAsaRg: !empty(existingAsaJob) ? existingAsaRg : ((useSingleDlz && loomStreamAnalyticsEnabled) ? singleDlzRg.name : '')
+    loomAsaSub: !empty(existingAsaJob) ? existingAsaSub : ''
+    loomAsaJobName: !empty(existingAsaJob) ? existingAsaJob : 'asa-loom-default-${location}'
     loomCosmosAccount: take('cosmos-loom-default-${uniqueString(singleDlzRg.id)}', 44)
     // Tenant/dlz-attach: no local DLZ hosts the Console's `loom` Cosmos, so the
     // admin plane provisions it in the hub (else the Console points at a missing
     // account and all item/config CRUD fails). useSingleDlz already deploys it
-    // via the DLZ cosmos.bicep; BYO Cosmos overrides both.
-    deployConsoleCosmos: !useSingleDlz && empty(existingCosmosAccount)
+    // via the DLZ cosmos.bicep; BYO Cosmos overrides both. loomConsoleCosmosEnabled
+    // (default true) is the opt-out flag — disabling it is only valid alongside a
+    // BYO existingCosmosAccount (the empty() guard already enforces that).
+    deployConsoleCosmos: loomConsoleCosmosEnabled && !useSingleDlz && empty(existingCosmosAccount)
     // Forward the Cosmos data-plane endpoints to the Console so the vector-store
     // and graph editors bind to the deployed accounts by default (no manual
     // config). The DLZ `cosmos-graph-vector` module (cosmosGraphVectorEnabled,
@@ -897,10 +993,11 @@ module adminPlane 'modules/admin-plane/main.bicep' = if (deployAdminPlane) {
     loomMsalClientId: loomMsalClientId
     loomMsalClientSecret: loomMsalClientSecret
     loomSessionSecret: loomSessionSecret
+    loomMsalAppReg: loomMsalAppReg
     loomMirrorBackend: loomMirrorBackend
     loomAzureMapsAccount: loomAzureMapsAccount
-    azureMapsEnabled: azureMapsEnabled
-    firewallEnabled: hubFirewallEnabled
+    azureMapsEnabled: (loomMapsEnabled && azureMapsEnabled)
+    firewallEnabled: (loomFirewallEnabled && hubFirewallEnabled)
     loomMirrorSourceLinkedService: loomMirrorSourceLinkedService
     loomMirrorAdlsLinkedService: loomMirrorAdlsLinkedService
     loomMirrorSnowflakeLinkedService: loomMirrorSnowflakeLinkedService
@@ -932,6 +1029,26 @@ module adminPlane 'modules/admin-plane/main.bicep' = if (deployAdminPlane) {
     loomGovernPbiWorkspaceId: loomGovernPbiWorkspaceId
     loomGovernPbiReportId: loomGovernPbiReportId
     loomGrafanaDashboardUid: loomGrafanaDashboardUid
+    // Azure-native backend selectors (no-fabric-dependency) + the org-visuals
+    // opt-out, bundled into ONE object so the admin-plane module stays under the
+    // ARM 256-parameter limit (admin-plane cannot take another scalar param).
+    // Mirrors admin-plane/main.bicep's loomBackends default key-for-key; the
+    // orgVisuals key is driven by the operator-facing loomOrgVisualsEnabled flag
+    // (default true → 'enabled'; false → the Embed codes / Org visuals panes
+    // honest-gate while the medallion lake stays wired).
+    loomBackends: {
+      event: 'eventhubs'
+      activator: 'azure-monitor'
+      activatorTable: 'AppEvents_CL'
+      dashboard: 'adx'
+      lakehouse: 'adls'
+      catalog: 'azure'
+      bi: ''
+      domains: 'cosmos'
+      dataflow: 'adf'
+      dataproducts: ''
+      orgVisuals: loomOrgVisualsEnabled ? 'enabled' : 'disabled'
+    }
   }
 }
 
@@ -1062,6 +1179,10 @@ module singleDlz 'modules/landing-zone/main.bicep' = if (useSingleDlz) {
     adminPlanePrivateDnsZoneIds: hubPrivateDnsZoneIds
     adminPlaneAdxClusterRgName: adminPlaneRgName
     adxEnabled: adxEnabled
+    loomSynapseEnabled: loomSynapseEnabled
+    loomDatabricksEnabled: loomDatabricksEnabled
+    loomDataFactoryEnabled: loomDataFactoryEnabled
+    loomSelfHostedIrEnabled: loomSelfHostedIrEnabled
     adxClusterPrincipalId: hub.adxClusterPrincipalId
     adminEntraGroupId: adminEntraGroupId
     activatorPrincipalId: hub.activatorPrincipalId
@@ -1081,10 +1202,17 @@ module singleDlz 'modules/landing-zone/main.bicep' = if (useSingleDlz) {
     skipRoleGrants: skipRoleGrants
     consolePrincipalNeedsLifecycleWrite: consolePrincipalNeedsLifecycleWrite
     consolePrincipalNeedsCmkBind: consolePrincipalNeedsCmkBind
-    shirAdminPassword: shirAdminPassword
+    shirAdminPassword: effShirAdminPassword
     recycleRetentionDays: recycleRetentionDays
     cosmosGraphVectorEnabled: cosmosGraphVectorEnabled
     weaveOntologyEnabled: weaveOntologyEnabled
+    // RTI (Real-Time Intelligence) opt-out flags + existing-namespace reuse.
+    // Single-sub: the Eventstream/Data Explorer navigators bind to this DLZ's
+    // namespace, so reuse-an-existing skips provisioning here AND the admin-plane
+    // env points at the reused namespace (existingEventHubNamespace below).
+    loomEventHubEnabled: loomEventHubEnabled
+    existingEventHubNamespaceName: existingEventHubNamespace
+    enableStreamAnalytics: loomStreamAnalyticsEnabled && empty(existingAsaJob)
   }
 }
 
@@ -1143,6 +1271,10 @@ module dlz 'modules/landing-zone/main.bicep' = [for (subId, i) in dlzSubscriptio
     adminPlanePrivateDnsZoneIds: hubPrivateDnsZoneIds
     adminPlaneAdxClusterRgName: adminPlaneRgName
     adxEnabled: adxEnabled
+    loomSynapseEnabled: loomSynapseEnabled
+    loomDatabricksEnabled: loomDatabricksEnabled
+    loomDataFactoryEnabled: loomDataFactoryEnabled
+    loomSelfHostedIrEnabled: loomSelfHostedIrEnabled
     adxClusterPrincipalId: hub.adxClusterPrincipalId
     adminEntraGroupId: adminEntraGroupId
     activatorPrincipalId: hub.activatorPrincipalId
@@ -1162,10 +1294,15 @@ module dlz 'modules/landing-zone/main.bicep' = [for (subId, i) in dlzSubscriptio
     skipRoleGrants: skipRoleGrants
     consolePrincipalNeedsLifecycleWrite: consolePrincipalNeedsLifecycleWrite
     consolePrincipalNeedsCmkBind: consolePrincipalNeedsCmkBind
-    shirAdminPassword: shirAdminPassword
+    shirAdminPassword: effShirAdminPassword
     recycleRetentionDays: recycleRetentionDays
     cosmosGraphVectorEnabled: cosmosGraphVectorEnabled
     weaveOntologyEnabled: weaveOntologyEnabled
+    // RTI opt-out flags. Multi-sub: each DLZ provisions its OWN Event Hubs
+    // namespace + Stream Analytics job (existingEventHubNamespace is the hub-
+    // navigator binding, not a per-DLZ skip), so only the enable flags forward.
+    loomEventHubEnabled: loomEventHubEnabled
+    enableStreamAnalytics: loomStreamAnalyticsEnabled
   }
 }]
 
@@ -1247,6 +1384,10 @@ module dlzAttach 'modules/landing-zone/main.bicep' = if (topology == 'dlz-attach
     // needed. So the deploy-time ADX DB is skipped here; every other DLZ backend
     // (ADLS, Synapse, Databricks, Event Hubs, Cosmos) is in-sub and deploys normally.
     adxEnabled: false
+    loomSynapseEnabled: loomSynapseEnabled
+    loomDatabricksEnabled: loomDatabricksEnabled
+    loomDataFactoryEnabled: loomDataFactoryEnabled
+    loomSelfHostedIrEnabled: loomSelfHostedIrEnabled
     adxClusterPrincipalId: effHubAdxClusterPrincipalId
     adminEntraGroupId: adminEntraGroupId
     activatorPrincipalId: effHubActivatorPrincipalId
@@ -1266,10 +1407,15 @@ module dlzAttach 'modules/landing-zone/main.bicep' = if (topology == 'dlz-attach
     skipRoleGrants: skipRoleGrants
     consolePrincipalNeedsLifecycleWrite: consolePrincipalNeedsLifecycleWrite
     consolePrincipalNeedsCmkBind: consolePrincipalNeedsCmkBind
-    shirAdminPassword: shirAdminPassword
+    shirAdminPassword: effShirAdminPassword
     recycleRetentionDays: recycleRetentionDays
     cosmosGraphVectorEnabled: cosmosGraphVectorEnabled
     weaveOntologyEnabled: weaveOntologyEnabled
+    // RTI opt-out flags. dlz-attach: the attached DLZ provisions its own Event
+    // Hubs namespace + Stream Analytics starter job (ADX DB is created at runtime
+    // — see adxEnabled:false above), so only the enable flags forward.
+    loomEventHubEnabled: loomEventHubEnabled
+    enableStreamAnalytics: loomStreamAnalyticsEnabled
   }
 }
 
@@ -1283,6 +1429,29 @@ module dlzAttachAccessPolicyRbac 'modules/admin-plane/access-policy-rbac.bicep' 
   params: {
     consolePrincipalId: effHubConsolePrincipalId
     storageAccountName: dlzAttach!.outputs.storageAccountName
+    skipRoleGrants: skipRoleGrants
+  }
+}
+
+// dlz-attach: grant the existing hub Console UAMI the org-visuals data-plane
+// grants on the NEWLY-ATTACHED DLZ's storage account — Storage Blob Data
+// Contributor (org-visuals container scope: upload/read/delete embed-code +
+// custom-visual bundles) + Storage Blob Delegator (account scope:
+// getUserDelegationKey for the read-only embed SAS). In single-sub the admin
+// plane's orgVisualsRbac module already does this against the local DLZ account;
+// in dlz-attach the admin plane is NOT redeployed, so without this the attached
+// account's org-visuals container has no grant and Embed codes / Org visuals
+// 500 on SAS minting. The matching env (LOOM_ORG_VISUALS_URL) is wired post-
+// attach by the bootstrap (cross-deployment-timing constraint — admin-plane
+// already deployed; mirror of the Cosmos/Weave endpoint pattern). Gated on the
+// same loomOrgVisualsEnabled opt-out. The org-visuals container is created by
+// the attached DLZ's storage.bicep.
+module dlzAttachOrgVisualsRbac 'modules/landing-zone/org-visuals-rbac.bicep' = if (topology == 'dlz-attach' && loomOrgVisualsEnabled && !skipRoleGrants) {
+  name: 'dlz-attach-org-visuals-rbac'
+  scope: resourceGroup('rg-csa-loom-dlz-${attachDomainName}-${location}')
+  params: {
+    storageAccountName: dlzAttach!.outputs.storageAccountName
+    consolePrincipalId: effHubConsolePrincipalId
     skipRoleGrants: skipRoleGrants
   }
 }
@@ -1664,6 +1833,28 @@ module rtiHubRbac 'modules/admin-plane/rti-hub-rbac.bicep' = {
   params: {
     consolePrincipalId: dpConsolePrincipalId
     skipRoleGrants: skipRoleGrants
+  }
+}
+
+// =====================================================================
+// Stream Analytics Query Tester — Console UAMI at SUBSCRIPTION scope.
+//
+// Authorizes the subscription/location-scoped CompileQuery / TestQuery /
+// SampleInput actions the Eventstream transform builder + stream-analytics-job
+// editor call to validate + test SAQL (deploy-readiness G2). The RG-scoped
+// Stream Analytics Contributor grant (landing-zone/stream-analytics.bicep) does
+// NOT cover these — they live above any RG. Granted by default so Compile/Run
+// work on first login; skipped when ASA is opted out or skipRoleGrants is set.
+// Subscription-scoped own module (dpConsolePrincipalId is a module OUTPUT →
+// BCP177) — same pattern as rtiHubRbac above.
+// =====================================================================
+module asaQueryTesterRbac 'modules/admin-plane/asa-query-tester-rbac.bicep' = {
+  name: 'asa-query-tester-rbac'
+  scope: subscription()
+  params: {
+    consolePrincipalId: dpConsolePrincipalId
+    skipRoleGrants: skipRoleGrants
+    loomStreamAnalyticsEnabled: loomStreamAnalyticsEnabled
   }
 }
 

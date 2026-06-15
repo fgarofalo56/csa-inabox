@@ -33,6 +33,8 @@ param existingAdxClusterSub      = readEnvironmentVariable('EXISTING_KUSTO_SUB',
 param existingFoundryAccountName = readEnvironmentVariable('EXISTING_AOAI', '')
 param existingFoundryRg          = readEnvironmentVariable('EXISTING_AOAI_RG', '')
 param existingFoundrySub         = readEnvironmentVariable('EXISTING_AOAI_SUB', '')
+param existingFoundryChatDeployment  = readEnvironmentVariable('EXISTING_AOAI_CHAT_DEPLOYMENT', '')
+param existingFoundryEmbedDeployment = readEnvironmentVariable('EXISTING_AOAI_EMBED_DEPLOYMENT', '')
 param existingPurviewAccount     = readEnvironmentVariable('EXISTING_PURVIEW', '')
 param existingPurviewRg          = readEnvironmentVariable('EXISTING_PURVIEW_RG', '')
 param existingPurviewSub         = readEnvironmentVariable('EXISTING_PURVIEW_SUB', '')
@@ -45,6 +47,9 @@ param existingCosmosSub          = readEnvironmentVariable('EXISTING_COSMOS_ACCO
 param existingEventHubNamespace  = readEnvironmentVariable('EXISTING_EVENTHUB_NAMESPACE', '')
 param existingEventHubRg         = readEnvironmentVariable('EXISTING_EVENTHUB_RG', '')
 param existingEventHubSub        = readEnvironmentVariable('EXISTING_EVENTHUB_SUB', '')
+param existingAsaJob             = readEnvironmentVariable('EXISTING_ASA_JOB', '')
+param existingAsaRg              = readEnvironmentVariable('EXISTING_ASA_RG', '')
+param existingAsaSub             = readEnvironmentVariable('EXISTING_ASA_SUB', '')
 param existingDatabricksWorkspace = readEnvironmentVariable('EXISTING_DATABRICKS', '')
 param existingDatabricksRg       = readEnvironmentVariable('EXISTING_DATABRICKS_RG', '')
 param existingDatabricksSub      = readEnvironmentVariable('EXISTING_DATABRICKS_SUB', '')
@@ -104,6 +109,12 @@ param keyVaultHsmIsolated = true          // IL5 mandated
 param openaiLocation = 'usgovvirginia'
 param openaiEmbeddingsLocation = 'usgovarizona'
 param openaiChatModel = 'gpt-4o'
+// Deploy-readiness (opt-out): provision the dedicated AOAI account + gpt-4o chat
+// + embedding deployments so Copilot / data-agents / AI-functions work on first
+// login. Set false to skip (those surfaces then honest-gate). In Gov boundaries
+// the model/version may be pinned via foundry-project.bicep params if a region
+// lacks gpt-4o GlobalStandard.
+param agentFoundryEnabled = true
 param openaiEmbeddingsModel = 'text-embedding-3-large'
 
 // Power BI
@@ -118,7 +129,7 @@ param azureMapsEnabled = false
 param hubVnetCidr = '10.0.0.0/16'
 
 // Identity (Gov tenant)
-param adminEntraGroupId = '<replace-with-IL5-tenant-FiaB-Admins-group-guid>'
+param adminEntraGroupId = readEnvironmentVariable('LOOM_ADMIN_ENTRA_GROUP_ID', '')
 
 // Loom version + image tags
 param loomVersion = readEnvironmentVariable('LOOM_VERSION', 'v3.0')
@@ -151,10 +162,14 @@ param aiFoundryEnabled = false
 // (prompts pass unfiltered, never a silent claim of filtering).
 param contentSafetyEnabled = false
 param apimEnabled = true
+param hubFirewallEnabled = true
 param aiSearchEnabled = false
 param adxEnabled = true
-// Setup Orchestrator — enabled so the Console UAMI is granted Contributor on the
-// target sub(s) for cross-sub deploy. The Setup Orchestrator *Container App* is a
+// RTI backends — Event Hubs + Stream Analytics ON by default (opt-out). Entra-
+// only auth (the only IL5-allowed posture). Set the env var to 'false' to skip,
+// or reuse an existing namespace/job via the EXISTING_* vars above.
+param loomEventHubEnabled = bool(readEnvironmentVariable('LOOM_EVENTHUB_ENABLED', 'true'))
+param loomStreamAnalyticsEnabled = bool(readEnvironmentVariable('LOOM_STREAM_ANALYTICS_ENABLED', 'true'))
 // no-op here (containerPlatform=='aks' fails the setupOrchestratorActive gate); on
 // AKS the orchestrator runs via the cluster GitOps path as the same Console UAMI.
 param setupOrchestratorEnabled = bool(readEnvironmentVariable('LOOM_SETUP_ORCHESTRATOR_ENABLED', 'true'))
@@ -175,3 +190,13 @@ param complianceTags = {
   Data_Classification: 'CUI-SP'
   M365_Boundary: 'IL5'
 }
+
+// =====================================================================
+// Data-engineering backends — ON by default (opt-out). Set any to false to
+// skip that provision; the console editor then honest-gates (LOOM_* env blanked)
+// instead of 502-ing. See docs/fiab/prp/deploy-readiness-100pct.md.
+// =====================================================================
+param loomSynapseEnabled = true
+param loomDatabricksEnabled = true
+param loomDataFactoryEnabled = true
+param loomSelfHostedIrEnabled = true

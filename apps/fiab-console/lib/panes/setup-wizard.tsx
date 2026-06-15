@@ -77,7 +77,10 @@ import {
 import type { FluentIcon } from '@fluentui/react-icons';
 import { itemVisual } from '@/lib/components/ui/item-type-visual';
 import { CapacityEquivalencePanel } from '@/lib/components/setup/capacity-equivalence-panel';
+import { ServiceScanPanel } from '@/lib/components/setup/service-scan-panel';
 import { SetupDeploymentDiagram, type DiagramSpoke } from '@/lib/components/setup/deployment-diagram';
+import { SetupIdentityCard } from '@/lib/panes/setup-identity-step';
+import { SetupServiceChoices, type ServiceChoiceMap } from '@/lib/panes/setup-service-choices';
 import {
   regionsForBoundary,
   defaultRegion,
@@ -96,6 +99,7 @@ type Step =
   | 'subscription'
   | 'domain'
   | 'capacity'
+  | 'services'
   | 'review'
   | 'deploying'
   | 'done';
@@ -118,6 +122,20 @@ interface WizardState {
   capacitySku?: string;
   /** Optional vanity console URL (e.g. csa-loom.contoso.ai). Empty = generated Front Door host. */
   vanityDomain?: string;
+  /**
+   * Org-visuals (Embed codes F22 + Organizational visuals F23) opt-out. Default
+   * on — the deploy provisions the org-visuals container grant + wires
+   * LOOM_ORG_VISUALS_URL. undefined/true → enabled; false → those panes
+   * honest-gate (the medallion lake is unaffected). Threaded to main.bicep's
+   * loomOrgVisualsEnabled via the deploy payload.
+   */
+  loomOrgVisualsEnabled?: boolean;
+  /**
+   * Storage scan "use-existing" choice: a pre-existing HNS (Data Lake) account
+   * to reuse instead of provisioning a new one (the post-deploy bootstrap wires
+   * the medallion + org-visuals env from it). Empty = provision new.
+   */
+  existingLoomStorageAccount?: string;
   /** Multi-sub mode only: the deployment sub in which the DLZ lands (distinct from admin-plane sub) */
   dlzSubscriptionId?: string;
   dlzSubscriptionName?: string;
@@ -142,6 +160,13 @@ interface WizardState {
   runStatus?: 'pending' | 'queued' | 'in_progress' | 'completed' | 'not_found';
   runConclusion?: string | null;
   runUrl?: string;
+  /**
+   * Pre-deploy scan-and-choose decisions (the in-console twin of
+   * scripts/csa-loom/scan-and-deploy.sh). Keyed by service ('aisearch', …);
+   * threaded into the deploy POST as `serviceChoices` so the deploy provisions
+   * new / reuses an existing instance / disables per the operator's choice.
+   */
+  serviceChoices?: ServiceChoiceMap;
 }
 
 const REGION_BOUNDARY = (b?: Boundary): RegionBoundary => (b ?? 'Commercial') as RegionBoundary;
@@ -154,6 +179,7 @@ const RAIL_STEPS: { key: Step; label: string; hint: string }[] = [
   { key: 'subscription', label: 'Subscription & region', hint: 'Deploy target' },
   { key: 'domain', label: 'Domain name', hint: 'Landing-zone name' },
   { key: 'capacity', label: 'Capacity sizing', hint: 'Compute equivalence' },
+  { key: 'services', label: 'Scan & choose', hint: 'Reuse / new / disable' },
   { key: 'review', label: 'Review & deploy', hint: 'Confirm and launch' },
 ];
 
@@ -260,6 +286,11 @@ function renderBicepParam(s: WizardState): string {
     `param containerPlatform = '${isGov ? 'aks' : 'containerApps'}'`,
     `param capacitySku       = '${s.capacitySku ?? ''}'`,
     ...dlzLines,
+    ...(s.loomOrgVisualsEnabled === false
+      ? [`param loomOrgVisualsEnabled = false  // Embed codes / Org visuals honest-gated`]
+      : s.existingLoomStorageAccount
+        ? [`// Reuse existing Data Lake: ${s.existingLoomStorageAccount} (org-visuals env wired post-deploy)`]
+        : []),
     `// ... boundary-defaulted parameters omitted for brevity`,
     ``,
     `// Deploy target (passed to: az deployment sub create):`,
@@ -475,6 +506,36 @@ export function SetupWizardPane() {
   // Multi-sub Route B: existing-DLZ discovery (Azure Resource Graph).
   const [existingLoading, setExistingLoading] = useState(false);
   const [existingError, setExistingError] = useState<string | undefined>();
+
+  // Storage / org-visuals scan-and-choose (deploy-readiness). Discovers existing
+  // HNS (Data Lake) accounts via /api/setup/existing-storage so the operator can
+  // use-existing / provision-new / disable org-visuals. Recommendation =
+  // provision-new (Loom needs its exact medallion + org-visuals container layout).
+  const [storageScan, setStorageScan] = useState<
+    Array<{ name: string; rg: string; location: string; subscriptionId: string; isLoomNamed: boolean }>
+  >([]);
+  const [storageScanLoading, setStorageScanLoading] = useState(false);
+  const [storageScanError, setStorageScanError] = useState<string | undefined>();
+  const [storageScanned, setStorageScanned] = useState(false);
+  const scanStorage = useCallback(async () => {
+    setStorageScanLoading(true);
+    setStorageScanError(undefined);
+    try {
+      const res = await fetch('/api/setup/existing-storage');
+      const j = await res.json().catch(() => ({}));
+      if (!res.ok || !j.ok) {
+        setStorageScanError(j.error || `Storage scan failed (HTTP ${res.status}).`);
+        setStorageScan([]);
+      } else {
+        setStorageScan(Array.isArray(j.accounts) ? j.accounts : []);
+      }
+    } catch (e) {
+      setStorageScanError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setStorageScanLoading(false);
+      setStorageScanned(true);
+    }
+  }, []);
 
   const bicepPreview = useMemo(() => renderBicepParam(state), [state]);
 
@@ -816,6 +877,9 @@ export function SetupWizardPane() {
         return !!(config?.adminSubscriptionId || state.subscriptionId) && !!state.location;
       case 'domain': return !!state.domainName;
       case 'capacity': return !!state.capacitySku;
+      // Scan & choose is optional (recommended defaults are pre-seeded), so the
+      // step is "complete" once the operator has progressed past capacity.
+      case 'services': return !!state.capacitySku;
       case 'review': return state.step === 'done';
       default: return false;
     }
@@ -1273,7 +1337,26 @@ export function SetupWizardPane() {
             {/* Guided F-SKU → Azure-native compute equivalence (CU / Spark vCores /
                 Databricks / ADX / Synapse SQL + relative cost), grounded in Learn. */}
             <CapacityEquivalencePanel sku={state.capacitySku} />
-            <Footer onBack={() => go('domain')} nextDisabled={!state.capacitySku} onNext={() => go('review')} />
+            <Footer onBack={() => go('domain')} nextDisabled={!state.capacitySku} onNext={() => go('services')} />
+          </>
+        )}
+
+        {state.step === 'services' && (
+          <>
+            <div className={styles.stepHeader}>
+              <Subtitle2>Scan &amp; choose backends</Subtitle2>
+              <Body1>
+                Loom scans every subscription you can see and recommends, per service, whether to reuse an
+                existing instance or provision a new one. The default is everything-ON — keep the
+                recommendations or adjust any service. This is the same scan the CLI{' '}
+                <code>scripts/csa-loom/scan-and-deploy.sh</code> runs.
+              </Body1>
+            </div>
+            <SetupServiceChoices
+              value={state.serviceChoices ?? {}}
+              onChange={(next) => setState((s) => ({ ...s, serviceChoices: next }))}
+            />
+            <Footer onBack={() => go('capacity')} onNext={() => go('review')} />
           </>
         )}
 
@@ -1289,6 +1372,11 @@ export function SetupWizardPane() {
                     'otherwise Deploy dispatches the GitHub deploy workflow, or returns the exact command to run.'}
               </Body1>
             </div>
+
+            {/* Identity & admin scan-and-choose (deploy-readiness, GH #1383):
+                pick existing/new/disable for the Entra sign-in app + the
+                bootstrap admin (signed-in user recommended) before deploy. */}
+            <SetupIdentityCard />
 
             {/* Visual architecture diagram of the planned deployment (reuses the
                 T132 React Flow canvas, read-only, built from this wizard's state). */}
@@ -1353,6 +1441,100 @@ export function SetupWizardPane() {
 
             <Divider />
 
+            {!isWireExisting && (() => {
+              // Storage / OneLake / org-visuals scan-and-choose. The medallion
+              // lake is always provisioned (foundational); this card governs the
+              // org-visuals container grant + LOOM_ORG_VISUALS_URL (Embed codes
+              // F22 + Org visuals F23) and lets the operator reuse an existing
+              // HNS lake. Recommendation = provision-new.
+              const storageChoice: 'new' | 'existing' | 'disable' =
+                state.loomOrgVisualsEnabled === false
+                  ? 'disable'
+                  : state.existingLoomStorageAccount
+                    ? 'existing'
+                    : 'new';
+              return (
+                <div style={{ marginBottom: tokens.spacingVerticalM }}>
+                  <Body1Strong>Storage &amp; organizational visuals</Body1Strong>
+                  <div style={{ marginTop: tokens.spacingVerticalXS, marginBottom: tokens.spacingVerticalS }}>
+                    <Caption1>
+                      The medallion data lake (bronze/silver/gold) is always provisioned. Choose how to handle the
+                      org-visuals container that backs Embed codes &amp; Organizational visuals. Recommended: provision new.
+                    </Caption1>
+                  </div>
+                  <div style={{ display: 'flex', gap: tokens.spacingHorizontalS, flexWrap: 'wrap', marginBottom: tokens.spacingVerticalS }}>
+                    <Button
+                      size="small"
+                      appearance={storageChoice === 'new' ? 'primary' : 'secondary'}
+                      onClick={() => setState((s) => ({ ...s, loomOrgVisualsEnabled: undefined, existingLoomStorageAccount: undefined }))}
+                    >
+                      Provision new (recommended)
+                    </Button>
+                    <Button
+                      size="small"
+                      appearance={storageChoice === 'existing' ? 'primary' : 'secondary'}
+                      onClick={() => {
+                        if (!storageScanned) void scanStorage();
+                        setState((s) => ({ ...s, loomOrgVisualsEnabled: undefined }));
+                      }}
+                    >
+                      Use existing
+                    </Button>
+                    <Button
+                      size="small"
+                      appearance={storageChoice === 'disable' ? 'primary' : 'secondary'}
+                      onClick={() => setState((s) => ({ ...s, loomOrgVisualsEnabled: false, existingLoomStorageAccount: undefined }))}
+                    >
+                      Disable org-visuals
+                    </Button>
+                  </div>
+                  {storageChoice === 'existing' && (
+                    <div style={{ marginBottom: tokens.spacingVerticalS }}>
+                      {storageScanLoading && (
+                        <div className={styles.inlineLoad}><Spinner size="tiny" /><Caption1>Scanning subscriptions for Data Lake accounts…</Caption1></div>
+                      )}
+                      {storageScanError && (
+                        <MessageBar intent="error"><MessageBarBody>{storageScanError}</MessageBarBody></MessageBar>
+                      )}
+                      {!storageScanLoading && !storageScanError && storageScanned && storageScan.length === 0 && (
+                        <MessageBar intent="warning">
+                          <MessageBarBody>
+                            No HNS (Data Lake) accounts are visible to the Console identity — provision new instead, or grant
+                            it Reader on the subscription holding your lake and rescan.
+                          </MessageBarBody>
+                        </MessageBar>
+                      )}
+                      {storageScan.length > 0 && (
+                        <Dropdown
+                          size="small"
+                          placeholder="Select an existing Data Lake account"
+                          selectedOptions={state.existingLoomStorageAccount ? [state.existingLoomStorageAccount] : []}
+                          value={state.existingLoomStorageAccount || ''}
+                          onOptionSelect={(_e, d) =>
+                            setState((s) => ({ ...s, existingLoomStorageAccount: d.optionValue, loomOrgVisualsEnabled: undefined }))
+                          }
+                        >
+                          {storageScan.map((a) => (
+                            <Option key={`${a.subscriptionId}/${a.name}`} value={a.name} text={a.name}>
+                              {a.name}{a.isLoomNamed ? '  (Loom lake)' : ''} — {a.rg} · {a.location}
+                            </Option>
+                          ))}
+                        </Dropdown>
+                      )}
+                    </div>
+                  )}
+                  {storageChoice === 'disable' && (
+                    <MessageBar intent="warning">
+                      <MessageBarBody>
+                        Embed codes &amp; Organizational visuals will show their config gate (no SAS minting). The medallion
+                        lake and all other surfaces are unaffected. You can enable it later by redeploying with org-visuals on.
+                      </MessageBarBody>
+                    </MessageBar>
+                  )}
+                </div>
+              );
+            })()}
+
             {!isWireExisting && (
               <div>
                 <Body1Strong>Generated Bicep parameters</Body1Strong>
@@ -1360,8 +1542,15 @@ export function SetupWizardPane() {
               </div>
             )}
 
+            {!isWireExisting && (
+              <>
+                <Divider />
+                <ServiceScanPanel boundary={state.boundary || 'Commercial'} />
+              </>
+            )}
+
             <Footer
-              onBack={() => go(isWireExisting ? 'subscription' : 'capacity')}
+              onBack={() => go(isWireExisting ? 'subscription' : 'services')}
               onNext={deploy}
               nextLabel={isWireExisting ? 'Wire DLZ(s)' : 'Deploy'}
               nextIcon={<Send24Regular />}
