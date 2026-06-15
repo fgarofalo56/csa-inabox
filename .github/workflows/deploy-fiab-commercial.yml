@@ -69,6 +69,10 @@ on:
         description: 'Azure region (e.g. eastus2).'
         type: string
         required: false
+      tenant_admin_oid:
+        description: 'Bootstrap tenant admin — your Entra USER object id (az ad signed-in-user show --query id). Members bypass the feature-permission gate so the first human admin can open /admin/*. Empty → the deploying principal becomes the bootstrap admin (deployer().objectId), or set the FIAB_ADMIN_GROUP_ID secret for a group.'
+        type: string
+        required: false
       deployment_mode:
         description: 'single-sub or multi-sub.'
         type: choice
@@ -216,6 +220,7 @@ jobs:
             --parameters location="$AZURE_LOCATION" \
             --parameters purviewEnabled=${{ inputs.purview_enabled }} azureMapsEnabled=${{ inputs.azure_maps_enabled }} hubFirewallEnabled=${{ inputs.firewall_enabled }} deployAppsEnabled=${{ inputs.deploy_apps_enabled }} skipRoleGrants=${{ inputs.skip_role_grants }} frontDoorEnabled=${{ inputs.front_door_enabled }} \
             --parameters adminEntraGroupId=${{ secrets.FIAB_ADMIN_GROUP_ID }} \
+            ${{ inputs.tenant_admin_oid && format('--parameters loomTenantAdminOid={0}', inputs.tenant_admin_oid) || '' }} \
             --parameters loomVanityDomain="$CSA_LOOM_VANITY_DOMAIN" \
             ${CSA_LOOM_TOPOLOGY:+--parameters topology="$CSA_LOOM_TOPOLOGY"} \
             ${CSA_LOOM_TARGET_SUBSCRIPTION:+--parameters targetSubscriptionId="$CSA_LOOM_TARGET_SUBSCRIPTION" attachDomainName="$CSA_LOOM_DLZ_DOMAIN_NAMES"}
@@ -241,6 +246,7 @@ jobs:
             --parameters location="$AZURE_LOCATION" \
             --parameters purviewEnabled=${{ inputs.purview_enabled }} azureMapsEnabled=${{ inputs.azure_maps_enabled }} hubFirewallEnabled=${{ inputs.firewall_enabled }} deployAppsEnabled=${{ inputs.deploy_apps_enabled }} skipRoleGrants=${{ inputs.skip_role_grants }} frontDoorEnabled=${{ inputs.front_door_enabled }} \
             --parameters adminEntraGroupId=${{ secrets.FIAB_ADMIN_GROUP_ID }} \
+            ${{ inputs.tenant_admin_oid && format('--parameters loomTenantAdminOid={0}', inputs.tenant_admin_oid) || '' }} \
             --parameters loomVanityDomain="$CSA_LOOM_VANITY_DOMAIN" \
             ${CSA_LOOM_TOPOLOGY:+--parameters topology="$CSA_LOOM_TOPOLOGY"} \
             ${CSA_LOOM_TARGET_SUBSCRIPTION:+--parameters targetSubscriptionId="$CSA_LOOM_TARGET_SUBSCRIPTION" attachDomainName="$CSA_LOOM_DLZ_DOMAIN_NAMES"}

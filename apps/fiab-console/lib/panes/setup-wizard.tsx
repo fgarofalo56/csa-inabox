@@ -78,6 +78,7 @@ import type { FluentIcon } from '@fluentui/react-icons';
 import { itemVisual } from '@/lib/components/ui/item-type-visual';
 import { CapacityEquivalencePanel } from '@/lib/components/setup/capacity-equivalence-panel';
 import { SetupDeploymentDiagram, type DiagramSpoke } from '@/lib/components/setup/deployment-diagram';
+import { SetupIdentityCard } from '@/lib/panes/setup-identity-step';
 import {
   regionsForBoundary,
   defaultRegion,
@@ -1289,6 +1290,11 @@ export function SetupWizardPane() {
                     'otherwise Deploy dispatches the GitHub deploy workflow, or returns the exact command to run.'}
               </Body1>
             </div>
+
+            {/* Identity & admin scan-and-choose (deploy-readiness, GH #1383):
+                pick existing/new/disable for the Entra sign-in app + the
+                bootstrap admin (signed-in user recommended) before deploy. */}
+            <SetupIdentityCard />
 
             {/* Visual architecture diagram of the planned deployment (reuses the
                 T132 React Flow canvas, read-only, built from this wizard's state). */}

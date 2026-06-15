@@ -135,8 +135,12 @@ param skipRoleGrants = readEnvironmentVariable('LOOM_SKIP_ROLE_GRANTS', 'false')
 // Network
 param hubVnetCidr = '10.0.0.0/16'
 
-// Identity
-param adminEntraGroupId = '<replace-with-FiaB-Admins-group-guid>'
+// Identity. Empty (not a placeholder GUID) so a blank is DETECTABLE as blank:
+// when no admin group / oid is supplied, admin-plane falls back to the deploying
+// principal (deployer().objectId) as the bootstrap admin so the push-button path
+// is never locked out of /admin/* (GH #1383). Set LOOM_ADMIN_ENTRA_GROUP_ID to
+// your FiaB Admins security-group OID for a production multi-admin bootstrap.
+param adminEntraGroupId = readEnvironmentVariable('LOOM_ADMIN_ENTRA_GROUP_ID', '')
 
 // Feature-Permissions bootstrap admin — who can open /admin/* (Feature
 // Permissions, Domains, Security, …) BEFORE any grants exist. Without one of

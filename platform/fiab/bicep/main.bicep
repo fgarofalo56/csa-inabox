@@ -608,6 +608,15 @@ param loomMsalClientSecret string = ''
 @secure()
 param loomSessionSecret string = ''
 
+@description('Entra app-registration (MSAL) provisioning config — ONE object to stay under the admin-plane 256-param limit. Fields: enabled (default true — provision the app reg + client secret + stable SESSION_SECRET in KV so a fresh deploy signs in on first login, GH #1383; opt-out → unauth/BYO via loomMsalClientId); scriptIdentityId / scriptIdentityClientId (UAMI with Graph app-admin for the in-bicep deploymentScript — empty → the post-deploy bootstrap provisions it); scriptSubnetId (VNet-inject the script to reach the PE-locked KV); consoleHosts (comma-separated redirect-URI hosts, no scheme).')
+param loomMsalAppReg object = {
+  enabled: true
+  scriptIdentityId: ''
+  scriptIdentityClientId: ''
+  scriptSubnetId: ''
+  consoleHosts: ''
+}
+
 @description('Data mirroring backend selector (LOOM_MIRROR_BACKEND). Default adf-cdc (Azure-native CDC to ADLS Bronze, NO Fabric). synapse-link is Azure-native too; fabric is opt-in only and additionally requires loomDefaultFabricWorkspace.')
 @allowed(['adf-cdc', 'synapse-link', 'fabric'])
 param loomMirrorBackend string = 'adf-cdc'
@@ -897,6 +906,7 @@ module adminPlane 'modules/admin-plane/main.bicep' = if (deployAdminPlane) {
     loomMsalClientId: loomMsalClientId
     loomMsalClientSecret: loomMsalClientSecret
     loomSessionSecret: loomSessionSecret
+    loomMsalAppReg: loomMsalAppReg
     loomMirrorBackend: loomMirrorBackend
     loomAzureMapsAccount: loomAzureMapsAccount
     azureMapsEnabled: azureMapsEnabled
