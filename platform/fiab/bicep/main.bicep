@@ -543,6 +543,18 @@ param mysqlVersion string = '8.0.21'
 @maxValue(16384)
 param mysqlStorageSizeGB int = 20
 
+@description('Service Bus namespace SKU (deploy-planner). Basic is excluded — the module provisions a starter topic, which Basic does not support.')
+@allowed(['Standard', 'Premium'])
+param serviceBusSkuName string = 'Standard'
+
+@description('Azure Firewall tier (deploy-planner).')
+@allowed(['Standard', 'Premium'])
+param firewallTier string = 'Standard'
+
+@description('Stream Analytics starting streaming units (deploy-planner).')
+@allowed([1, 3, 6, 12, 18, 24, 30, 36, 42, 48])
+param streamAnalyticsStreamingUnits int = 3
+
 // Derive a valid Redis family + capacity for the chosen SKU (Premium uses the
 // P family starting at capacity 1; Basic/Standard use the C family at 0).
 var redisIsPremium = redisSkuName == 'Premium'
@@ -1316,6 +1328,7 @@ module dpServiceBus 'modules/deploy-planner/service-bus.bicep' = if (useSingleDl
   scope: singleDlzRg
   params: {
     location: location
+    skuName: serviceBusSkuName
     consolePrincipalId: dpConsolePrincipalId
     skipRoleGrants: skipRoleGrants
     complianceTags: complianceTags
@@ -1425,6 +1438,7 @@ module dpStreamAnalytics 'modules/deploy-planner/stream-analytics.bicep' = if (u
   scope: singleDlzRg
   params: {
     location: location
+    startingStreamingUnits: streamAnalyticsStreamingUnits
     consolePrincipalId: dpConsolePrincipalId
     skipRoleGrants: skipRoleGrants
     complianceTags: complianceTags
@@ -1514,6 +1528,7 @@ module dpFirewall 'modules/deploy-planner/firewall.bicep' = if (useSingleDlz && 
   scope: singleDlzRg
   params: {
     location: location
+    firewallTier: firewallTier
     consolePrincipalId: dpConsolePrincipalId
     skipRoleGrants: skipRoleGrants
     complianceTags: complianceTags
