@@ -12,16 +12,15 @@
 import * as React from 'react';
 import {
   Dialog, DialogSurface, DialogBody, DialogTitle, DialogContent, DialogActions,
-  Button, Spinner, Badge, MessageBar, MessageBarBody, makeStyles, tokens,
+  Button, Badge, makeStyles, tokens,
 } from '@fluentui/react-components';
 import { Dismiss20Regular } from '@fluentui/react-icons';
-import { ReportCanvas } from './report-canvas';
-import { useReportModel } from './use-report';
+import { ReportView } from './report-view';
+import type { ReportPayload } from './use-report';
 
 const useStyles = makeStyles({
   surface: { maxWidth: '95vw', width: '1180px' },
   titleRow: { display: 'flex', alignItems: 'center', gap: tokens.spacingHorizontalS, flexWrap: 'wrap' },
-  center: { display: 'flex', justifyContent: 'center', padding: tokens.spacingVerticalXXL },
 });
 
 export interface ReportViewerDialogProps {
@@ -35,8 +34,9 @@ export interface ReportViewerDialogProps {
 
 export function ReportViewerDialog({ open, onClose, fetchUrl, title, publishedBadge }: ReportViewerDialogProps): React.ReactElement {
   const s = useStyles();
-  const { data, loading, error } = useReportModel(open ? fetchUrl : null);
-  const heading = data?.template?.title || title || 'Report';
+  const [payload, setPayload] = React.useState<ReportPayload | null>(null);
+  React.useEffect(() => { if (!open) setPayload(null); }, [open]);
+  const heading = payload?.template?.title || title || 'Report';
 
   return (
     <Dialog open={open} onOpenChange={(_, d) => { if (!d.open) onClose(); }}>
@@ -45,16 +45,12 @@ export function ReportViewerDialog({ open, onClose, fetchUrl, title, publishedBa
           <DialogTitle action={<Button appearance="subtle" icon={<Dismiss20Regular />} aria-label="Close" onClick={onClose} />}>
             <span className={s.titleRow}>
               {heading}
-              {data?.template?.category && <Badge appearance="tint" color="brand" size="small">{data.template.category}</Badge>}
-              {(publishedBadge ?? data?.published) && <Badge appearance="tint" color="success" size="small">Published to org</Badge>}
+              {payload?.template?.category && <Badge appearance="tint" color="brand" size="small">{payload.template.category}</Badge>}
+              {(publishedBadge ?? payload?.published) && <Badge appearance="tint" color="success" size="small">Published to org</Badge>}
             </span>
           </DialogTitle>
           <DialogContent>
-            {loading && <div className={s.center}><Spinner label="Rendering report…" /></div>}
-            {error && (
-              <MessageBar intent="error"><MessageBarBody>{error}</MessageBarBody></MessageBar>
-            )}
-            {!loading && !error && data && <ReportCanvas model={data.model} sample={data.sample} />}
+            <ReportView fetchUrl={open ? fetchUrl : null} onLoaded={setPayload} />
           </DialogContent>
           <DialogActions>
             <Button appearance="secondary" onClick={onClose}>Close</Button>

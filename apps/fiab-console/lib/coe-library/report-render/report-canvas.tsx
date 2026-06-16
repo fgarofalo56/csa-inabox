@@ -17,16 +17,29 @@
 
 import * as React from 'react';
 import {
-  TabList, Tab, Text, Caption1, MessageBar, MessageBarBody,
+  TabList, Tab, Text, Caption1, MessageBar, MessageBarBody, Tooltip,
   makeStyles, tokens,
 } from '@fluentui/react-components';
-import { DataPie24Regular, PuzzlePiece24Regular } from '@fluentui/react-icons';
+import {
+  DataPie24Regular, PuzzlePiece24Regular,
+  CloudCheckmark16Regular, Database16Regular, Warning16Regular,
+} from '@fluentui/react-icons';
 import type { Page, ReportModel, Visual } from './pbir-parse';
 import type { SampleData } from './tmdl-sample';
+import type { EntityProvenance } from './use-report';
 import {
   buildVisualData, formatValue,
   type BarsData, type LineData, type PieData, type TableData, type CardData,
 } from './visual-data';
+
+/** The primary entity a visual projects (first field across its roles). */
+function primaryEntity(visual: Visual): string | null {
+  for (const role of Object.keys(visual.roles)) {
+    const f = visual.roles[role]?.[0];
+    if (f?.entity) return f.entity;
+  }
+  return null;
+}
 
 const PALETTE = [
   '#6E56CF', '#0F6CBD', '#107C10', '#CA5010',
@@ -70,7 +83,15 @@ const useStyles = makeStyles({
     overflow: 'hidden',
     textOverflow: 'ellipsis',
     flexShrink: 0,
+    display: 'flex',
+    alignItems: 'center',
+    gap: tokens.spacingHorizontalXS,
   },
+  tileHeadTitle: { overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', flex: 1, minWidth: 0 },
+  provDot: { display: 'inline-flex', flexShrink: 0, lineHeight: 1, cursor: 'default' },
+  provLive: { color: tokens.colorPaletteGreenForeground1 },
+  provSample: { color: tokens.colorNeutralForeground3 },
+  provError: { color: tokens.colorPaletteRedForeground1 },
   tileBody: { position: 'relative', flex: 1, minHeight: 0, overflow: 'hidden' },
   cardBody: {
     display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center',
@@ -106,7 +127,7 @@ const useStyles = makeStyles({
 });
 
 /** Measure an element's pixel size (ResizeObserver) so SVG can draw at 1:1. */
-function useElementSize<T extends HTMLElement>(): [React.RefObject<T>, { width: number; height: number }] {
+function useElementSize<T extends HTMLElement>(): [React.RefObject<T | null>, { width: number; height: number }] {
   const ref = React.useRef<T>(null);
   const [size, setSize] = React.useState({ width: 0, height: 0 });
   React.useEffect(() => {
@@ -295,12 +316,30 @@ function TableTile({ data }: { data: TableData }) {
   );
 }
 
-function VisualTile({ visual, sample }: { visual: Visual; sample: SampleData }) {
+function ProvenanceDot({ prov }: { prov: EntityProvenance }) {
+  const s = useStyles();
+  const icon = prov.source === 'live'
+    ? <CloudCheckmark16Regular className={s.provLive} />
+    : prov.source === 'error'
+      ? <Warning16Regular className={s.provError} />
+      : <Database16Regular className={s.provSample} />;
+  const label = prov.source === 'live' ? 'Live' : prov.source === 'error' ? 'Gate' : 'Sample';
+  return (
+    <Tooltip relationship="description" content={prov.note || `${label} data`} withArrow>
+      <span className={s.provDot} aria-label={`${label}: ${prov.note || ''}`}>{icon}</span>
+    </Tooltip>
+  );
+}
+
+function VisualTile({ visual, sample, prov }: { visual: Visual; sample: SampleData; prov?: EntityProvenance }) {
   const s = useStyles();
   const data = React.useMemo(() => buildVisualData(visual, sample), [visual, sample]);
   return (
     <>
-      <div className={s.tileHead} title={visual.title}>{visual.title}</div>
+      <div className={s.tileHead} title={visual.title}>
+        <span className={s.tileHeadTitle}>{visual.title}</span>
+        {prov && <ProvenanceDot prov={prov} />}
+      </div>
       <div className={s.tileBody}>
         {data.kind === 'card' && <CardTile data={data} />}
         {data.kind === 'bars' && <BarsTile data={data} />}
@@ -318,34 +357,73 @@ function VisualTile({ visual, sample }: { visual: Visual; sample: SampleData }) 
   );
 }
 
-function PageCanvas({ page, sample }: { page: Page; sample: SampleData }) {
+function PageCanvas({ page, sample, dataSources }: { page: Page; sample: SampleData; dataSources?: Record<string, EntityProvenance> }) {
   const s = useStyles();
   const W = page.width || 1280;
   const H = page.height || 720;
   return (
     <div className={s.canvasWrap}>
       <div className={s.canvas} style={{ aspectRatio: `${W} / ${H}` }}>
-        {page.visuals.map((v) => (
-          <div
-            key={v.id}
-            className={s.tile}
-            style={{
-              left: `${(v.x / W) * 100}%`,
-              top: `${(v.y / H) * 100}%`,
-              width: `${(v.w / W) * 100}%`,
-              height: `${(v.h / H) * 100}%`,
-              zIndex: v.z,
-            }}
-          >
-            <VisualTile visual={v} sample={sample} />
-          </div>
-        ))}
+        {page.visuals.map((v) => {
+          const entity = primaryEntity(v);
+          const prov = dataSources && entity ? dataSources[entity] : undefined;
+          return (
+            <div
+              key={v.id}
+              className={s.tile}
+              style={{
+                left: `${(v.x / W) * 100}%`,
+                top: `${(v.y / H) * 100}%`,
+                width: `${(v.w / W) * 100}%`,
+                height: `${(v.h / H) * 100}%`,
+                zIndex: v.z,
+              }}
+            >
+              <VisualTile visual={v} sample={sample} prov={prov} />
+            </div>
+          );
+        })}
       </div>
     </div>
   );
 }
 
-export function ReportCanvas({ model, sample }: { model: ReportModel; sample: SampleData }): React.ReactElement {
+export interface ReportCanvasProps {
+  model: ReportModel;
+  /** The table-set to render (live-merged in live mode, else bundled sample). */
+  sample: SampleData;
+  /** Per-entity provenance (live mode only) — drives per-visual labelling. */
+  dataSources?: Record<string, EntityProvenance>;
+  /** True when rendering live data (changes the summary banner). */
+  liveMode?: boolean;
+  /** Optional controls rendered above the banner (Live/Sample toggle, params). */
+  header?: React.ReactNode;
+}
+
+/** Summarize per-entity provenance into a truthful one-line banner. */
+function liveSummary(dataSources?: Record<string, EntityProvenance>): { intent: 'success' | 'warning'; text: string } {
+  const entries = Object.entries(dataSources || {});
+  const live = entries.filter(([, p]) => p.source === 'live');
+  const errored = entries.filter(([, p]) => p.source === 'error');
+  const sample = entries.filter(([, p]) => p.source === 'sample');
+  if (live.length && !errored.length && !sample.length) {
+    return { intent: 'success', text: `Live from your Azure estate — ${live.map(([e]) => e).join(', ')}.` };
+  }
+  if (live.length) {
+    const parts: string[] = [`Live: ${live.map(([e]) => e).join(', ')}`];
+    if (sample.length) parts.push(`sample (no live binding): ${sample.map(([e]) => e).join(', ')}`);
+    if (errored.length) parts.push(`needs setup: ${errored.map(([e]) => e).join(', ')}`);
+    return { intent: 'warning', text: parts.join(' · ') };
+  }
+  return {
+    intent: 'warning',
+    text: errored.length
+      ? `No live data yet — ${errored.map(([e]) => e).join(', ')} need provisioning/permissions (hover each tile). Showing sample.`
+      : 'No live Azure binding for this report yet — showing sample data.',
+  };
+}
+
+export function ReportCanvas({ model, sample, dataSources, liveMode, header }: ReportCanvasProps): React.ReactElement {
   const s = useStyles();
   const pages = model?.pages || [];
   const [active, setActive] = React.useState(pages[0]?.name ?? '');
@@ -360,21 +438,30 @@ export function ReportCanvas({ model, sample }: { model: ReportModel; sample: Sa
     );
   }
   const page = pages.find((p) => p.name === active) || pages[0];
+  const summary = liveMode ? liveSummary(dataSources) : null;
 
   return (
     <div className={s.root}>
-      <MessageBar intent="info">
-        <MessageBarBody>
-          Sample-data preview — connect live Azure sources by setting the report parameters
-          (TenantId, SubscriptionId, BillingScope, …) after cloning. No Microsoft Fabric or Power BI workspace is required.
-        </MessageBarBody>
-      </MessageBar>
+      {header}
+      {summary ? (
+        <MessageBar intent={summary.intent}>
+          <MessageBarBody>{summary.text} No Microsoft Fabric or Power BI workspace is required.</MessageBarBody>
+        </MessageBar>
+      ) : (
+        <MessageBar intent="info">
+          <MessageBarBody>
+            Sample-data preview — switch to <strong>Live</strong> to render this report against your own Azure
+            estate (Cost Management, Log Analytics, Resource Graph, Defender). No Microsoft Fabric or Power BI
+            workspace is required.
+          </MessageBarBody>
+        </MessageBar>
+      )}
       {pages.length > 1 && (
         <TabList className={s.tabs} selectedValue={page.name} onTabSelect={(_, d) => setActive(d.value as string)}>
           {pages.map((p) => <Tab key={p.name} value={p.name}>{p.displayName}</Tab>)}
         </TabList>
       )}
-      <PageCanvas page={page} sample={sample} />
+      <PageCanvas page={page} sample={sample} dataSources={liveMode ? dataSources : undefined} />
     </div>
   );
 }
