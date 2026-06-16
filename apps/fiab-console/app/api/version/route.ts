@@ -11,6 +11,8 @@
  */
 
 import { NextResponse } from 'next/server';
+import { readFileSync } from 'node:fs';
+import { join } from 'node:path';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -21,7 +23,43 @@ const UPSTREAM_REPO  = process.env.LOOM_FEEDBACK_REPO_NAME  || 'csa-inabox';
 
 interface Release { tag_name: string; name: string; published_at: string; html_url: string; body: string; prerelease: boolean; }
 
-const LOCAL_VERSION = process.env.LOOM_VERSION || process.env.NEXT_PUBLIC_LOOM_VERSION || 'dev';
+/**
+ * Resolve the REAL running version, in priority order, so "Currently running"
+ * reflects the deployed build rather than a stale hand-set env:
+ *
+ *  1. LOOM_VERSION — set from the release tag by deploy-parity (bicep defaults
+ *     it to the release's bare semver, e.g. '0.43.1'). When the in-product
+ *     updater rolls the apps to ghcr.io/<owner>/loom-*:<X.Y.Z>, this env
+ *     follows the image, so it is the authoritative running version.
+ *  2. The Docker build marker at public/build-marker.txt — stamped by the
+ *     Dockerfile with the build SHA (`sha=<git-sha>`). Used as a build
+ *     fingerprint when LOOM_VERSION is unset (proves which image is serving
+ *     even before LOOM_VERSION is wired). Surfaced as `build` in the response.
+ *  3. NEXT_PUBLIC_LOOM_VERSION, then 'dev'.
+ */
+function readBuildMarker(): { sha?: string; stamp?: string } {
+  for (const p of [
+    join(process.cwd(), 'public', 'build-marker.txt'),
+    join(process.cwd(), 'build-marker.txt'),
+  ]) {
+    try {
+      const txt = readFileSync(p, 'utf-8');
+      const sha = txt.match(/sha=([^\s]+)/)?.[1];
+      const stamp = txt.match(/stamp=([^\s]+)/)?.[1];
+      if (sha && sha !== 'unknown') return { sha, stamp };
+    } catch { /* try next path */ }
+  }
+  // Env-stamped fallback (Dockerfile sets ENV LOOM_BUILD_SHA too).
+  const sha = process.env.LOOM_BUILD_SHA;
+  if (sha && sha !== 'unknown') return { sha, stamp: process.env.LOOM_BUILD_TIMESTAMP };
+  return {};
+}
+
+const BUILD = readBuildMarker();
+const LOCAL_VERSION =
+  process.env.LOOM_VERSION ||
+  process.env.NEXT_PUBLIC_LOOM_VERSION ||
+  (BUILD.sha ? `build-${BUILD.sha.slice(0, 12)}` : 'dev');
 
 function compareSemver(a: string, b: string): number {
   const na = a.replace(/^v/, '').split('.').map(Number);
@@ -41,7 +79,7 @@ export async function GET() {
   try {
     const r = await fetch(`https://api.github.com/repos/${UPSTREAM_OWNER}/${UPSTREAM_REPO}/releases?per_page=10`, { headers, next: { revalidate: 300 } });
     if (!r.ok) {
-      return NextResponse.json({ current: LOCAL_VERSION, upstream: null, hasUpdate: false, error: `upstream-${r.status}` });
+      return NextResponse.json({ current: LOCAL_VERSION, build: BUILD, upstream: null, hasUpdate: false, error: `upstream-${r.status}` });
     }
     const releases = (await r.json()) as Release[];
     const stable = releases.filter((rel) => !rel.prerelease);
@@ -49,6 +87,7 @@ export async function GET() {
     const hasUpdate = latest ? compareSemver(LOCAL_VERSION, latest.tag_name) < 0 : false;
     return NextResponse.json({
       current: LOCAL_VERSION,
+      build: BUILD,
       upstream: latest && {
         tag: latest.tag_name,
         name: latest.name,
@@ -63,6 +102,6 @@ export async function GET() {
       repo: `${UPSTREAM_OWNER}/${UPSTREAM_REPO}`,
     });
   } catch (e) {
-    return NextResponse.json({ current: LOCAL_VERSION, upstream: null, hasUpdate: false, error: (e as Error).message }, { status: 200 });
+    return NextResponse.json({ current: LOCAL_VERSION, build: BUILD, upstream: null, hasUpdate: false, error: (e as Error).message }, { status: 200 });
   }
 }
