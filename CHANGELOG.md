@@ -25,6 +25,32 @@ This file is maintained automatically by
 [Conventional Commits](https://www.conventionalcommits.org/). See
 [RELEASE.md](RELEASE.md) for the release process.
 
+## [0.43.0](https://github.com/fgarofalo56/csa-inabox/compare/csa-inabox-v0.42.0...csa-inabox-v0.43.0) (2026-06-16)
+
+
+### Features
+
+* **coe-library:** render CoE report templates + publish to org + consumer gallery ([#1409](https://github.com/fgarofalo56/csa-inabox/issues/1409)) ([70e2cfe](https://github.com/fgarofalo56/csa-inabox/commit/70e2cfe34fd291749415ed77c776de5c66fd4032))
+* **coe-report-viewer:** render LIVE data from the customer's Azure estate ([#1412](https://github.com/fgarofalo56/csa-inabox/issues/1412)) ([1e8f318](https://github.com/fgarofalo56/csa-inabox/commit/1e8f3187f05bd11a533b9fa88096463d45e9ff94))
+* **mcp:** deploy built-in MCP server live + default-on bicep + catalog fixes ([#1413](https://github.com/fgarofalo56/csa-inabox/issues/1413)) ([bcde157](https://github.com/fgarofalo56/csa-inabox/commit/bcde157c9d98346e9ea1efbb44cecb1f5628ae4c))
+
+
+### Bug Fixes
+
+* **fiab-console:** LA token audience + hub detection + network topology dupes + Warp blank + cosmos scaling timeout + shortcut empty-path ([#1407](https://github.com/fgarofalo56/csa-inabox/issues/1407)) ([4f6f398](https://github.com/fgarofalo56/csa-inabox/commit/4f6f3980ca828009e4d97ba9683e4eb1461304ca))
+* **fiab-console:** paginated-report export streams real binary (not JSON renamed .pdf) + honest copy nits ([#1411](https://github.com/fgarofalo56/csa-inabox/issues/1411)) ([eb484cc](https://github.com/fgarofalo56/csa-inabox/commit/eb484cc09ac4c33e72d1810b42bcf61c4f447663))
+* **fiab-console:** wave-1 broken/vaporware items — make each real or honest-gate ([#1414](https://github.com/fgarofalo56/csa-inabox/issues/1414)) ([e47dfc0](https://github.com/fgarofalo56/csa-inabox/commit/e47dfc05fcb6f244d671ce3459d9c92bcd36e299))
+
+
+### Miscellaneous
+
+* **deps-dev:** Bump @types/node in /portal/react-webapp ([#1319](https://github.com/fgarofalo56/csa-inabox/issues/1319)) ([53e633a](https://github.com/fgarofalo56/csa-inabox/commit/53e633a2e0f6c6399d9e985b87df20f5495bb0ec))
+* **deps-dev:** Bump eslint-config-next in /portal/react-webapp ([#1316](https://github.com/fgarofalo56/csa-inabox/issues/1316)) ([45ed04a](https://github.com/fgarofalo56/csa-inabox/commit/45ed04a9574962842177127b3365c1b6aa255215))
+* **deps:** Bump @azure/msal-browser in /portal/react-webapp ([#1315](https://github.com/fgarofalo56/csa-inabox/issues/1315)) ([d079cdc](https://github.com/fgarofalo56/csa-inabox/commit/d079cdcf6620a13db8e643922d95c78f4331f881))
+* **deps:** Bump @radix-ui/react-dropdown-menu in /portal/react-webapp ([#1325](https://github.com/fgarofalo56/csa-inabox/issues/1325)) ([4d2d3a5](https://github.com/fgarofalo56/csa-inabox/commit/4d2d3a5e590bbb2941401460024708fe4666a0af))
+* **deps:** Bump @radix-ui/react-tabs in /portal/react-webapp ([#1323](https://github.com/fgarofalo56/csa-inabox/issues/1323)) ([52687b6](https://github.com/fgarofalo56/csa-inabox/commit/52687b6b140ae0d27950747e902d7b9ba79d75a7))
+* **deps:** Bump next from 16.2.7 to 16.2.9 in /portal/react-webapp ([#1321](https://github.com/fgarofalo56/csa-inabox/issues/1321)) ([01c98ba](https://github.com/fgarofalo56/csa-inabox/commit/01c98ba61dff5db0f78b8276eab6fdc88c28060c))
+
 ## [0.42.0](https://github.com/fgarofalo56/csa-inabox/compare/csa-inabox-v0.41.0...csa-inabox-v0.42.0) (2026-06-15)
 
 
