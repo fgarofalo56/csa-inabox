@@ -25,6 +25,31 @@ This file is maintained automatically by
 [Conventional Commits](https://www.conventionalcommits.org/). See
 [RELEASE.md](RELEASE.md) for the release process.
 
+## [0.44.0](https://github.com/fgarofalo56/csa-inabox/compare/csa-inabox-v0.43.1...csa-inabox-v0.44.0) (2026-06-16)
+
+
+### Features
+
+* **fiab-console:** in-product no-clone update path (Admin &gt; Updates rolls Container Apps to ghcr release images) ([#1426](https://github.com/fgarofalo56/csa-inabox/issues/1426)) ([8d34d8f](https://github.com/fgarofalo56/csa-inabox/commit/8d34d8f51b826cac19be2ddf33a389e02813961a))
+* **fiab:** make honest-gated runtime services default-on (DAB, dbt, Weave PG, EH receive, activator table) ([#1424](https://github.com/fgarofalo56/csa-inabox/issues/1424)) ([dd80091](https://github.com/fgarofalo56/csa-inabox/commit/dd80091b935d48d24aec3481be13bbada151a82a))
+
+
+### Bug Fixes
+
+* **fiab-console:** app-bundle datasets — real, repo-hosted, loaded (no vaporware) ([#1433](https://github.com/fgarofalo56/csa-inabox/issues/1433)) ([f1c06b6](https://github.com/fgarofalo56/csa-inabox/commit/f1c06b6fa0701c19fba1b51484e30bf7935f39ba))
+* **fiab-console:** cap AutoML max-concurrent-trials at the cluster's node count ([#1432](https://github.com/fgarofalo56/csa-inabox/issues/1432)) ([290c771](https://github.com/fgarofalo56/csa-inabox/commit/290c771ac8e5736860602532b26fb8472527f72d))
+* **fiab-console:** Copilot Studio family honesty — H1 schema / H2 channel gate / H3 analytics / H4 structured topic editor ([#1421](https://github.com/fgarofalo56/csa-inabox/issues/1421)) ([d637537](https://github.com/fgarofalo56/csa-inabox/commit/d637537e5fa7f07b6e7aec14ef40e9ac0373e6eb))
+* **fiab-console:** DLZ setup-wizard UX + landing-zone overview/visualize + cross-sub deploy pre-flight ([#1428](https://github.com/fgarofalo56/csa-inabox/issues/1428)) ([f8abbca](https://github.com/fgarofalo56/csa-inabox/commit/f8abbcaff21963e063078e8ca12f46f277580a11))
+* **fiab-console:** make map real (binding + layers) + mirrored-databricks an actual mirror (H7/H8) ([#1422](https://github.com/fgarofalo56/csa-inabox/issues/1422)) ([f1199ee](https://github.com/fgarofalo56/csa-inabox/commit/f1199ee22f6de8a039302266cbd2d6ba99edda95))
+* **fiab-console:** ship app-bundle sample datasets inside the console image ([#1434](https://github.com/fgarofalo56/csa-inabox/issues/1434)) ([aef51e1](https://github.com/fgarofalo56/csa-inabox/commit/aef51e11246253291697d3e8c7ea9a13aa944cf5))
+* **fiab-console:** shortcut parser accepts blob.core.windows.net + onelake:// URIs ([#1429](https://github.com/fgarofalo56/csa-inabox/issues/1429)) ([af8b71d](https://github.com/fgarofalo56/csa-inabox/commit/af8b71db49517b7389014e3201b4a86c4b387946))
+
+
+### Documentation
+
+* **fiab/audit:** persist E2E audit reports + live UI findings tracker ([#1427](https://github.com/fgarofalo56/csa-inabox/issues/1427)) ([e1ddbda](https://github.com/fgarofalo56/csa-inabox/commit/e1ddbda663a8d435c46e2b14e4345be6d969b232))
+* **fiab:** day-one ship plan + validation matrix + worktree cleanup (handoff) ([#1430](https://github.com/fgarofalo56/csa-inabox/issues/1430)) ([dbe64b7](https://github.com/fgarofalo56/csa-inabox/commit/dbe64b7b205351196fa1904c93984b674ea8e2bb))
+
 ## [0.43.1](https://github.com/fgarofalo56/csa-inabox/compare/csa-inabox-v0.43.0...csa-inabox-v0.43.1) (2026-06-16)
 
 
