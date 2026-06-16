@@ -54,7 +54,12 @@
 # principal. (No secret is read from or written to disk by this script.)
 set -euo pipefail
 
-WORKSPACE_ID="46c42501-e97a-4295-8cdb-b1c7000cce1f"   # operator default; override with --workspace-id
+# Customer-specific Power BI governance workspace. NOT a hardcoded contract:
+# override with --workspace-id or the LOOM_COE_WORKSPACE_ID env var. The literal
+# below is only the original operator's workspace; a clean deploy for a different
+# tenant MUST pass its own (publishing to a stale workspace would 403 or write to
+# the wrong tenant).
+WORKSPACE_ID="${LOOM_COE_WORKSPACE_ID:-46c42501-e97a-4295-8cdb-b1c7000cce1f}"   # operator default; override with --workspace-id / LOOM_COE_WORKSPACE_ID
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
 LIBRARY_PATH="$REPO_ROOT/docs/fiab/org-visuals/coe-library"

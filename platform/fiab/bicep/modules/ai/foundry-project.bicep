@@ -81,8 +81,8 @@ param embedModelName string = 'text-embedding-ada-002'
 @description('Embedding model version.')
 param embedModelVersion string = '2'
 
-@description('Embedding deployment SKU.')
-param embedModelSkuName string = 'Standard'
+@description('Embedding deployment SKU. GlobalStandard (not regional Standard) so the deploy succeeds in regions where the embedding model has NO regional Standard capacity — e.g. centralus, which only offers GlobalStandard for both gpt-4o AND the embedding models. Matches chatModelSkuName. Override per boundary only if a region requires a different capacity type.')
+param embedModelSkuName string = 'GlobalStandard'
 
 @description('Embedding deployment capacity (thousands of TPM).')
 @minValue(1)

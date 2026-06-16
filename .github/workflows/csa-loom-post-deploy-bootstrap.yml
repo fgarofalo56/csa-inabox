@@ -426,7 +426,7 @@ jobs:
           {
             "schemas":["urn:ietf:params:scim:schemas:core:2.0:ServicePrincipal"],
             "applicationId":"$CONSOLE_UAMI_CLIENT",
-            "displayName":"uami-loom-console-eastus2",
+            "displayName":"$CONSOLE_SQL_UAMI",
             "groups":[],
             "entitlements":[
               {"value":"workspace-access"},
