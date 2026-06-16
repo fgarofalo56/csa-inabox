@@ -1200,6 +1200,10 @@ module keyvault 'keyvault.bicep' = {
     privateDnsZoneVaultId: network.outputs.privateDnsZoneIds.keyvault
     workspaceId: monitoring.outputs.lawId
     complianceTags: complianceTags
+    // Built-in MCP shared API key — mirrored into KV so the Console (private-
+    // endpoint reachable) can load it for one-click registration. Default-on.
+    builtinMcpApiKeySecretName: loomBuiltinMcpActive ? loomBuiltinMcpApiKeySecretName : ''
+    builtinMcpApiKey: loomBuiltinMcpActive ? loomBuiltinMcpApiKey : ''
   }
 }
 
@@ -1306,6 +1310,49 @@ module containerPlatformModule 'container-platform.bicep' = {
     skipRoleGrants: skipRoleGrants
   }
 }
+
+// ---------------------------------------------------------------------------
+// Built-in MCP tool server (azure-functions/mcp-server) — DEFAULT-ON
+// ---------------------------------------------------------------------------
+// The in-repo Python Azure Function exposing vetted, read-only Loom operations
+// (catalog search + ARM inventory + ADF data-movement) as MCP tools. Provisioned
+// by default so every Loom deployment ships a registrable built-in MCP endpoint.
+// no-fabric-dependency: the tools call AI Search + ARM + ADF — all Azure-native.
+//
+// Default-on, expressed as a `var` (NOT a param) because admin-plane/main.bicep
+// is at the hard ARM 256-parameter cap (see loomConsoleTelemetryEnabled above).
+// Gated on deployAppsEnabled — the Python code is published separately (zip /
+// `func azure functionapp publish`), the same precondition as the loom-* images.
+var loomBuiltinMcpEnabled = true
+var loomBuiltinMcpActive = loomBuiltinMcpEnabled && deployAppsEnabled
+// KV secret name the Console loads the shared key from (via the MCP UAMI, which
+// already holds Key Vault Secrets User). MUST be 'loom-mcp-api-key' — the
+// built-in registration in mcp-servers-panel.tsx hardcodes that authValue.
+// Deterministic key value — stable across redeploys (no churn), matching the
+// loomInternalToken pattern.
+var loomBuiltinMcpApiKeySecretName = 'loom-mcp-api-key'
+var loomBuiltinMcpApiKey = guid(resourceGroup().id, 'loom-builtin-mcp-api-key-v1')
+// AI Search service name for the catalog tool (BYO or freshly provisioned).
+var effBuiltinMcpAiSearch = !empty(existingAiSearchService) ? existingAiSearchService : (aiSearchEnabled ? aiSearch!.outputs.searchName : '')
+
+module builtinMcp 'builtin-mcp.bicep' = if (loomBuiltinMcpActive) {
+  name: 'builtin-mcp'
+  params: {
+    location: location
+    apiKey: loomBuiltinMcpApiKey
+    loomSubscriptionId: subscription().subscriptionId
+    loomResourceGroups: [ resourceGroup().name ]
+    aiSearchService: effBuiltinMcpAiSearch
+    adfName: effAdfName
+    dlzResourceGroup: loomDlzRg
+    armEndpoint: environment().resourceManager
+    complianceTags: complianceTags
+  }
+}
+
+// Function /api/mcp endpoint wired onto the Console as LOOM_BUILTIN_MCP_URL.
+var builtinMcpUrl = loomBuiltinMcpActive ? builtinMcp!.outputs.mcpEndpoint : ''
+
 
 // ---------------------------------------------------------------------------
 // MCP persistence — Azure Files share + managedEnvironments/storages mount
@@ -3757,6 +3804,12 @@ output mcpServerUrl string = containerPlatform == 'containerApps'
 output mcpBridgeUrl string = containerPlatform == 'containerApps'
   ? 'https://loom-mcp-bridge.${containerPlatformModule.outputs.caeDefaultDomain}'
   : 'https://loom-mcp-bridge.${location}.csa-loom.internal'
+
+// Built-in MCP tool server (azure-functions/mcp-server) — empty until the
+// Function code is published (deployAppsEnabled). The Console reads the same
+// value as LOOM_BUILTIN_MCP_URL for one-click registration.
+output builtinMcpUrl string = builtinMcpUrl
+output builtinMcpApiKeySecretName string = loomBuiltinMcpActive ? loomBuiltinMcpApiKeySecretName : ''
 
 output catalogEndpoint string = catalogPrimary == 'purview'
   ? 'https://purview-csa-loom-${location}.purview.azure.${boundary == 'GCC-High' || boundary == 'IL5' ? 'us' : 'com'}'

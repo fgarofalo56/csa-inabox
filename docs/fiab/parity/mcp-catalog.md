@@ -96,8 +96,25 @@ with `LOOM_DEFAULT_FABRIC_WORKSPACE` unset.
   `LOOM_MCP_UAMI_ID`, `LOOM_MCP_UAMI_CLIENT_ID`, `LOOM_ACR_LOGIN_SERVER`,
   `LOOM_MCP_STORAGE_NAME`, `LOOM_MCP_FILE_SHARE`, and `LOOM_LOCATION`.
 
-The retired single-secret path's env vars (`LOOM_CAE_ID`, `LOOM_CAE_NAME`,
-`LOOM_CAE_DEFAULT_DOMAIN`, `LOOM_MCP_CATALOG_REGISTRY`) were pruned from
-`admin-plane/main.bicep` when Implementation B was removed, so bicep and runtime
-stay in sync (no dead env). All env vars derive from module outputs — no manual
-post-deploy step.
+The operational deploy client `lib/azure/mcp-deploy-client.ts`
+(`readMcpDeployConfig`) reads **`LOOM_CAE_ID`**, **`LOOM_CAE_NAME`**,
+**`LOOM_CAE_DEFAULT_DOMAIN`**, and **`LOOM_KEY_VAULT_URL`** (or `KEYVAULT_URI`) —
+NOT the `LOOM_ACA_ENV_*` aliases. These were erroneously pruned from
+`admin-plane/main.bicep` (the reconciliation note above wrongly assumed this code
+path had been removed — it is the active deploy path), so the 25-server
+browse-and-deploy catalog silently could not stand up a Container App live. They
+are now (re)wired alongside the `LOOM_ACA_ENV_*` aliases — both name sets are
+emitted from `containerPlatformModule.outputs` / `keyvault.outputs.keyVaultUri`.
+
+### Catalog expansion (2026-06)
+
+`lib/azure/mcp-catalog.ts` (the **deployable** allow-list the deploy client +
+`mcp-catalog-app.bicep` use) grew **25 → 29** with verified-real Docker MCP
+catalog images (HTTP 200 on `hub.docker.com/v2/repositories/mcp/<id>`):
+**context7** (research #14), **mongodb** (Cosmos DB for MongoDB), **elasticsearch**,
+**duckduckgo** (keyless privacy search). Servers the operator asked for that are
+*not* deployable containers are honestly excluded: **cloudflare** (remote-hosted
+SSE, no pullable image), **supabase** (npx-only, no `mcp/*` image). Two existing
+`preview:true` entries (**azure-devops**, **linear**) point at `mcp/*` images that
+404 today — flagged for follow-up (no official container exists; both are
+npx-based upstream).
