@@ -94,6 +94,10 @@ the remainder are honestly sample-tagged with the exact reason shown inline.
 Each resolver returns `{source:'error', note}` (gate naming the env var / role)
 on failure — never zeros-as-data.
 
+**Default mode:** admin surfaces (template preview, clone Open) default to
+**Live**; the org **consumer gallery** defaults to **Sample** (members can
+toggle) since live resolvers read the deployment estate via the Console UAMI.
+
 ### Visual-type coverage (rendered, real)
 
 `card` (+ multiRowCard/kpi/gauge → single aggregate), `clusteredColumnChart` /
