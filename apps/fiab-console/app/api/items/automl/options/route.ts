@@ -59,6 +59,13 @@ export async function GET() {
       configured: true,
       workspace: cfg.workspace,
       clusters,
+      // Honest signal for the wizard: AutoML sweeps REQUIRE an AmlCompute
+      // cluster. When none exists the wizard shows a MessageBar instead of an
+      // empty dropdown + a submit that can't succeed (no-vaporware.md).
+      needsCompute: clusters.length === 0,
+      ...(clusters.length === 0
+        ? { computeHint: `No AmlCompute cluster exists in workspace '${cfg.workspace}'. Create an AmlCompute cluster (Azure ML Studio → Compute → Compute clusters, or the Compute item) before submitting an AutoML run.` }
+        : {}),
       datastores: datastores.map((d) => ({
         name: d.name,
         datastoreType: d.datastoreType,

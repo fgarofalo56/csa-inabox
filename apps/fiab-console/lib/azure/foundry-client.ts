@@ -23,6 +23,7 @@ import {
 } from '@azure/identity';
 import { AcaManagedIdentityCredential } from '@/lib/azure/aca-managed-identity';
 import { armBase, armScope, amlDataPlaneHost, searchEndpointBase, searchAadScope } from './cloud-endpoints';
+import { resolveAmlTarget, amlWorkspaceArmPath, AmlNotConfiguredError } from './resolve-aml-target';
 
 const ARM_SCOPE = armScope();
 const ML_API = '2024-10-01';
@@ -98,6 +99,27 @@ async function readJson<T>(res: Response): Promise<T | null> {
     const msg =
       (parsed as any)?.error?.message ||
       (typeof parsed === 'string' ? parsed : `AI Foundry ${res.status}`);
+    throw new FoundryError(res.status, parsed, msg);
+  }
+  return (parsed as T) ?? ({} as T);
+}
+
+/**
+ * Strict body reader for WRITE verbs (PUT / POST). Unlike readJson, a 404 is
+ * NOT swallowed into null — it throws like any other non-2xx. This is what
+ * stops a create from reporting success over a null effect when the parent
+ * resource (e.g. the ML workspace) doesn't exist (no-vaporware.md).
+ */
+async function readJsonOrThrow<T>(res: Response): Promise<T> {
+  const text = await res.text();
+  let parsed: unknown = undefined;
+  if (text) {
+    try { parsed = JSON.parse(text); } catch { parsed = text; }
+  }
+  if (!res.ok) {
+    const msg =
+      (parsed as any)?.error?.message ||
+      (typeof parsed === 'string' && parsed ? parsed : `AI Foundry ${res.status}`);
     throw new FoundryError(res.status, parsed, msg);
   }
   return (parsed as T) ?? ({} as T);
@@ -407,8 +429,20 @@ function shapeCompute(raw: any): FoundryCompute {
 }
 
 export async function listComputes(): Promise<FoundryCompute[]> {
-  const rows = await pagedList('/computes');
-  return rows.map(shapeCompute);
+  // Compute targets live on the standalone AML WORKSPACE, not the Foundry hub
+  // (LOOM_FOUNDRY_NAME may be an AOAI account). Target amlWorkspaceBase().
+  const base = amlWorkspaceBase();
+  const out: any[] = [];
+  let res = await armFetch(`${base}/computes`, { apiVersion: ML_API });
+  let j = await readJson<{ value?: any[]; nextLink?: string }>(res);
+  while (j) {
+    if (Array.isArray(j.value)) out.push(...j.value);
+    if (!j.nextLink) break;
+    const token = await credential.getToken(ARM_SCOPE);
+    res = await fetchWithTimeout(j.nextLink, { headers: { authorization: `Bearer ${token!.token}` } });
+    j = await readJson<{ value?: any[]; nextLink?: string }>(res);
+  }
+  return out.map(shapeCompute);
 }
 
 // ---------------- Jobs (experiments / runs) ----------------
@@ -526,7 +560,15 @@ async function amlDataPlaneFetch(
   segment: string,
   init: RequestInit = {},
 ): Promise<Response> {
-  const region = process.env.LOOM_FOUNDRY_REGION || 'eastus2';
+  // The data-plane region MUST match where the AML workspace actually lives —
+  // a mismatch makes the data plane 404 "workspace not found". Resolve it from
+  // the AML target env (LOOM_AML_REGION → LOOM_FOUNDRY_REGION → LOOM_LOCATION),
+  // never a hard-coded eastus2 default.
+  const region =
+    process.env.LOOM_AML_REGION ||
+    process.env.LOOM_FOUNDRY_REGION ||
+    process.env.LOOM_LOCATION ||
+    'eastus2';
   const token = await credential.getToken(ARM_SCOPE);
   if (!token?.token) throw new Error('Failed to acquire ARM token for AML data plane');
   const url = `https://${amlDataPlaneHost(region)}${segment.startsWith('/') ? segment : '/' + segment}`;
@@ -540,6 +582,38 @@ async function amlDataPlaneFetch(
   });
 }
 
+/**
+ * ARM resource path of the standalone Azure ML WORKSPACE (kind=Default) used
+ * for compute targets, AutoML jobs, etc. This is distinct from the Foundry hub
+ * env (LOOM_FOUNDRY_NAME), which in current deployments points at an Azure
+ * OpenAI / AIServices account — NOT an ML workspace. Resolves via
+ * resolve-aml-target (LOOM_AML_WORKSPACE → … → LOOM_FOUNDRY_NAME fallback).
+ * Throws NotDeployedError (→ 503 honest gate) when the workspace can't be
+ * resolved from env, so callers never fake success.
+ */
+function amlWorkspaceBase(): string {
+  try {
+    return amlWorkspaceArmPath(resolveAmlTarget());
+  } catch (e) {
+    if (e instanceof AmlNotConfiguredError) {
+      throw new NotDeployedError('Azure Machine Learning workspace', e.hint);
+    }
+    throw e;
+  }
+}
+
+/** Resolve the AML workspace's ARM location; falls back to the configured AML
+ *  region (never a hard-coded eastus2). */
+async function amlWorkspaceLocation(): Promise<string> {
+  const target = resolveAmlTarget();
+  try {
+    const res = await armFetch(amlWorkspaceArmPath(target), { apiVersion: ML_API });
+    const j = await readJson<any>(res);
+    if (j?.location) return j.location;
+  } catch { /* fall through to the configured region */ }
+  return target.region;
+}
+
 function rg(): string {
   return process.env.LOOM_FOUNDRY_RG || 'rg-csa-loom-admin-eastus2';
 }
@@ -547,7 +621,7 @@ function sub(): string {
   return process.env.LOOM_FOUNDRY_SUB || required('LOOM_SUBSCRIPTION_ID');
 }
 function hubName(): string {
-  return process.env.LOOM_FOUNDRY_NAME || 'aifoundry-csa-loom-eastus2';
+  return process.env.LOOM_FOUNDRY_HUB_NAME || process.env.LOOM_FOUNDRY_NAME || 'aifoundry-csa-loom-eastus2';
 }
 function hubResourceId(): string {
   return `/subscriptions/${sub()}/resourceGroups/${rg()}/providers/Microsoft.MachineLearningServices/workspaces/${hubName()}`;
@@ -651,8 +725,33 @@ export async function getProject(name: string): Promise<FoundryProject | null> {
 }
 
 export async function createProject(name: string, displayName: string, description?: string): Promise<FoundryProject> {
-  const hub = await getWorkspaceInfo();
-  const location = hub?.location || 'eastus2';
+  // A Foundry project is a CHILD of a HUB-kind Azure ML workspace. Resolve the
+  // hub from LOOM_FOUNDRY_HUB_NAME (falling back to LOOM_FOUNDRY_NAME for
+  // back-compat) and VERIFY it is a real, hub-kind workspace before creating.
+  // If it isn't, honest-gate (no faked project) — per no-vaporware.md. In the
+  // current estate LOOM_FOUNDRY_NAME points at an Azure OpenAI account and
+  // there is no hub workspace, so this returns a precise 503.
+  const hub = hubName();
+  const hubPath = `/subscriptions/${sub()}/resourceGroups/${rg()}/providers/Microsoft.MachineLearningServices/workspaces/${encodeURIComponent(hub)}`;
+  const hubRes = await armFetch(hubPath, { apiVersion: ML_API });
+  const hubWs = await readJson<any>(hubRes); // 404 → null (not a real ML workspace)
+  if (!hubWs) {
+    throw new NotDeployedError(
+      'AI Foundry project',
+      `AI Foundry project requires a hub-kind Azure ML workspace, but '${hub}' was not found as a ` +
+      `Microsoft.MachineLearningServices/workspaces resource in resource group '${rg()}'. ` +
+      `Set LOOM_FOUNDRY_HUB_NAME to an existing Azure AI Foundry (Azure ML) hub workspace, or create one.`,
+    );
+  }
+  const kind = String(hubWs.kind || 'Default').toLowerCase();
+  if (kind !== 'hub') {
+    throw new NotDeployedError(
+      'AI Foundry project',
+      `AI Foundry project requires a hub-kind workspace; '${hub}' is kind='${hubWs.kind || 'Default'}'. ` +
+      `Set LOOM_FOUNDRY_HUB_NAME to an Azure ML hub workspace (create one in Azure AI Foundry) so projects can be created under it.`,
+    );
+  }
+  const location = hubWs.location || (await amlWorkspaceLocation());
   const body = {
     location,
     kind: 'Project',
@@ -660,14 +759,15 @@ export async function createProject(name: string, displayName: string, descripti
     properties: {
       friendlyName: displayName,
       description: description || '',
-      hubResourceId: hubResourceId(),
+      hubResourceId: hubPath,
     },
   };
   const res = await armFetch(
     `/subscriptions/${sub()}/resourceGroups/${rg()}/providers/Microsoft.MachineLearningServices/workspaces/${encodeURIComponent(name)}`,
     { apiVersion: ML_API, method: 'PUT', body: JSON.stringify(body) },
   );
-  const j = await readJson<any>(res);
+  // Strict: a 404/non-2xx here throws instead of shaping `null` into `{}`.
+  const j = await readJsonOrThrow<any>(res);
   return shapeProject(j);
 }
 
@@ -838,6 +938,18 @@ export async function createEvaluation(projectName: string, body: {
   const res = await amlDataPlaneFetch(seg, { method: 'POST', body: JSON.stringify(body) });
   if (!res.ok) {
     const t = await res.text();
+    // A 404 / "workspace not found" means the AML workspace or its region is
+    // mis-targeted (or the project doesn't exist) — surface an honest infra
+    // gate (503) naming the exact env, never a faked evaluation object.
+    if (res.status === 404 || /workspace\s+.*not\s+found/i.test(t)) {
+      throw new NotDeployedError(
+        'Azure ML evaluations',
+        `The Azure ML data plane could not find workspace/project '${projectName}' in region ` +
+        `'${process.env.LOOM_AML_REGION || process.env.LOOM_FOUNDRY_REGION || process.env.LOOM_LOCATION || 'eastus2'}'. ` +
+        `Set LOOM_AML_WORKSPACE + LOOM_AML_REGION (and LOOM_AML_RESOURCE_GROUP) to the deployed Azure ML workspace, ` +
+        `and grant the Console UAMI the "AzureML Data Scientist" role on it. Detail: ${String(t).slice(0, 160)}`,
+      );
+    }
     throw new FoundryError(res.status, t, `Evaluation create failed (${res.status}): ${t.slice(0, 240)}`);
   }
   return await res.json();
@@ -1500,7 +1612,7 @@ export function buildVectorIndexDefinition(opts: {
 // ---------------- Compute (extended) ----------------
 
 export async function getCompute(name: string): Promise<FoundryCompute | null> {
-  const res = await foundryFetch(`/computes/${encodeURIComponent(name)}`);
+  const res = await armFetch(`${amlWorkspaceBase()}/computes/${encodeURIComponent(name)}`, { apiVersion: ML_API });
   const j = await readJson<any>(res);
   return j ? shapeCompute(j) : null;
 }
@@ -1511,8 +1623,7 @@ export async function createCompute(name: string, body: {
   minNodeCount?: number;
   maxNodeCount?: number;
 }): Promise<FoundryCompute> {
-  const ws = await getWorkspaceInfo();
-  const location = ws?.location || 'eastus2';
+  const location = await amlWorkspaceLocation();
   const propsInner: any = body.computeType === 'AmlCompute'
     ? {
         vmSize: body.vmSize,
@@ -1531,10 +1642,15 @@ export async function createCompute(name: string, body: {
       properties: propsInner,
     },
   };
-  const res = await foundryFetch(`/computes/${encodeURIComponent(name)}`, {
-    method: 'PUT', body: JSON.stringify(armBody),
+  const res = await armFetch(`${amlWorkspaceBase()}/computes/${encodeURIComponent(name)}`, {
+    apiVersion: ML_API, method: 'PUT', body: JSON.stringify(armBody),
   });
-  const j = await readJson<any>(res);
+  // Compute provisioning is async — ARM returns 200/201 with a body, or 202.
+  if (res.status === 202) {
+    return { id: '', name, computeType: body.computeType, provisioningState: 'Creating' };
+  }
+  // Strict: a 404 (workspace/parent not found) THROWS — no faked `{}` success.
+  const j = await readJsonOrThrow<any>(res);
   return shapeCompute(j);
 }
 
@@ -1563,13 +1679,13 @@ export async function updateAmlComputeScale(name: string, body: {
       },
     },
   };
-  const ws = await getWorkspaceInfo();
+  const ws = await amlWorkspaceLocation();
   const armBody = {
-    location: ws?.location || 'eastus2',
+    location: ws,
     properties: props,
   };
-  const res = await foundryFetch(`/computes/${encodeURIComponent(name)}`, {
-    method: 'PATCH', body: JSON.stringify(armBody),
+  const res = await armFetch(`${amlWorkspaceBase()}/computes/${encodeURIComponent(name)}`, {
+    apiVersion: ML_API, method: 'PATCH', body: JSON.stringify(armBody),
   });
   if (!res.ok && res.status !== 202) {
     const t = await res.text();
@@ -1583,7 +1699,7 @@ export async function updateAmlComputeScale(name: string, body: {
 }
 
 export async function startCompute(name: string): Promise<void> {
-  const res = await foundryFetch(`/computes/${encodeURIComponent(name)}/start`, { method: 'POST' });
+  const res = await armFetch(`${amlWorkspaceBase()}/computes/${encodeURIComponent(name)}/start`, { apiVersion: ML_API, method: 'POST' });
   if (!res.ok && res.status !== 202 && res.status !== 204) {
     const t = await res.text();
     throw new FoundryError(res.status, t, `Compute start failed: ${t.slice(0, 240)}`);
@@ -1591,7 +1707,7 @@ export async function startCompute(name: string): Promise<void> {
 }
 
 export async function stopCompute(name: string): Promise<void> {
-  const res = await foundryFetch(`/computes/${encodeURIComponent(name)}/stop`, { method: 'POST' });
+  const res = await armFetch(`${amlWorkspaceBase()}/computes/${encodeURIComponent(name)}/stop`, { apiVersion: ML_API, method: 'POST' });
   if (!res.ok && res.status !== 202 && res.status !== 204) {
     const t = await res.text();
     throw new FoundryError(res.status, t, `Compute stop failed: ${t.slice(0, 240)}`);
@@ -1599,7 +1715,7 @@ export async function stopCompute(name: string): Promise<void> {
 }
 
 export async function deleteCompute(name: string): Promise<void> {
-  const res = await foundryFetch(`/computes/${encodeURIComponent(name)}`, { method: 'DELETE' });
+  const res = await armFetch(`${amlWorkspaceBase()}/computes/${encodeURIComponent(name)}`, { apiVersion: ML_API, method: 'DELETE' });
   if (!res.ok && res.status !== 202 && res.status !== 204 && res.status !== 404) {
     const t = await res.text();
     throw new FoundryError(res.status, t, `Compute delete failed: ${t.slice(0, 240)}`);

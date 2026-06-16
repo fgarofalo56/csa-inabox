@@ -704,9 +704,10 @@ export async function upsertWranglingDataFlow(
 export async function runWranglingDataFlow(
   dataFlowName: string,
   sinks: WranglingSink[] = [],
-  opts?: { computeType?: string; coreCount?: number },
+  opts?: { computeType?: string; coreCount?: number; integrationRuntimeName?: string },
 ): Promise<{ runId: string; pipelineName: string }> {
   const pipelineName = `loom-pq-run-${dataFlowName}`;
+  const integrationRuntimeName = opts?.integrationRuntimeName || 'AutoResolveIntegrationRuntime';
   const sinkRef = (s: WranglingSink) => ({
     name: s.sinkName,
     dataset: { referenceName: s.datasetName, type: 'DatasetReference' },
@@ -718,7 +719,7 @@ export async function runWranglingDataFlow(
     typeProperties: {
       dataFlow: { referenceName: dataFlowName, type: 'DataFlowReference' },
       integrationRuntime: {
-        referenceName: 'AutoResolveIntegrationRuntime',
+        referenceName: integrationRuntimeName,
         type: 'IntegrationRuntimeReference',
       },
       compute: { computeType: opts?.computeType || 'General', coreCount: opts?.coreCount ?? 8 },
@@ -893,6 +894,42 @@ export async function listIntegrationRuntimes(): Promise<AdfIntegrationRuntime[]
   const r = await call(`${base()}/integrationruntimes?api-version=${API}`);
   const body = await jsonOrThrow<{ value: AdfIntegrationRuntime[] }>(r, 'listIntegrationRuntimes');
   return body.value || [];
+}
+
+/**
+ * Resolve a Managed Azure IR usable for a Power Query / Wrangling Data Flow run.
+ * The built-in `AutoResolveIntegrationRuntime` does NOT resolve in every factory
+ * (some ARM-provisioned factories reject it for ExecuteWranglingDataflow with a
+ * 400 "invalid reference 'autoresolveintegrationruntime'"). So: discover an
+ * explicitly-defined Managed IR; if none exists, create a small Managed (Azure)
+ * IR (`loom-managed-ir`) and use it. Returns the IR name to reference. Throws
+ * on a real failure so the caller can honest-gate (never fakes a run).
+ */
+export async function ensureWranglingIntegrationRuntime(): Promise<string> {
+  const irs = await listIntegrationRuntimes();
+  const managed = irs.filter((ir) => (ir.properties?.type || '') === 'Managed');
+  // Prefer an explicitly-defined Managed IR (incl. an explicit AutoResolve one).
+  const preferred =
+    managed.find((ir) => ir.name === 'AutoResolveIntegrationRuntime') || managed[0];
+  if (preferred?.name) return preferred.name;
+  // No Managed IR is defined in this factory — create one. A Managed IR with
+  // AutoResolve compute location is the Azure-hosted Spark/data-movement IR that
+  // Power Query (Wrangling Data Flow) activities require.
+  const name = 'loom-managed-ir';
+  await upsertIntegrationRuntime(name, {
+    name,
+    properties: {
+      type: 'Managed',
+      description: 'Loom-managed Azure IR for Power Query / Wrangling Data Flow runs.',
+      typeProperties: {
+        computeProperties: {
+          location: 'AutoResolve',
+          dataFlowProperties: { computeType: 'General', coreCount: 8, timeToLive: 10 },
+        },
+      },
+    },
+  });
+  return name;
 }
 
 export async function getIntegrationRuntime(name: string): Promise<AdfIntegrationRuntime> {

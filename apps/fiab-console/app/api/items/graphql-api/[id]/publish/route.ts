@@ -8,7 +8,7 @@
  */
 import { NextRequest, NextResponse } from 'next/server';
 import { getSession } from '@/lib/auth/session';
-import { upsertApi, ApimError } from '@/lib/azure/apim-client';
+import { publishGraphqlApi, ApimError } from '@/lib/azure/apim-client';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -24,16 +24,14 @@ export async function POST(req: NextRequest, ctx: { params: Promise<{ id: string
   if (!path) return NextResponse.json({ ok: false, error: 'path required' }, { status: 400 });
   if (!sdl.trim()) return NextResponse.json({ ok: false, error: 'sdl (schema) required' }, { status: 400 });
   try {
-    const api = await upsertApi((await ctx.params).id, {
+    const api = await publishGraphqlApi((await ctx.params).id, {
       displayName,
       path,
+      sdl,
       protocols: ['https'],
       subscriptionRequired: body?.subscriptionRequired ?? true,
       serviceUrl: body?.serviceUrl,
       description: body?.description,
-      apiType: 'graphql',
-      format: 'graphql-link',
-      value: sdl,
     });
     return NextResponse.json({ ok: true, api });
   } catch (e: any) {
