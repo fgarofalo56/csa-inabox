@@ -22,20 +22,28 @@ import {
   unassignWorkspaceFromStage,
   listDeploymentPipelineStages,
   FabricError,
+  fabricHint,
 } from '@/lib/azure/fabric-client';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
 
 function gateOrError(e: unknown) {
-  if (e instanceof FabricError && (e.status === 401 || e.status === 403)) {
+  // Stage↔workspace assignment is Fabric-only. SPN-unauthorized responses come
+  // back not only as 401/403 but also as a Fabric `UnknownError` / 5xx — the
+  // audit (B2) flagged those falling through to a raw 500. Map ALL FabricError
+  // to the honest authorization gate.
+  if (e instanceof FabricError) {
     return NextResponse.json({
       ok: false,
-      gate: { missing: ['Fabric API authorization', 'Pipeline admin + workspace admin role'], message: e.hint || (e as Error).message },
+      gate: {
+        missing: ['Fabric API authorization', 'Pipeline admin + workspace admin role'],
+        message: e.hint || fabricHint(e.status) || (e as Error).message ||
+          'Fabric returned an unexpected error. Assigning a workspace to a pipeline stage requires the Console UAMI to be authorized for Fabric with pipeline + workspace admin rights.',
+      },
     });
   }
-  const status = e instanceof FabricError ? e.status : 500;
-  return NextResponse.json({ ok: false, error: (e as Error).message }, { status });
+  return NextResponse.json({ ok: false, error: (e as Error).message }, { status: 500 });
 }
 
 export async function POST(req: NextRequest, ctx: { params: Promise<{ id: string; stageId: string }> }) {

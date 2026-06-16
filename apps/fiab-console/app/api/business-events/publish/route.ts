@@ -56,6 +56,10 @@ export async function POST(req: NextRequest) {
   const typeId = typeof body?.typeId === 'string' ? body.typeId.trim() : '';
   const subject = typeof body?.subject === 'string' ? body.subject.trim() : '';
   const data = body?.data;
+  // Optional explicit channel selection from the UI (a real hub/topic chosen from
+  // the GET /channels list). Audit B5: we must NOT hard-code default names.
+  const reqEventHubName = typeof body?.eventHubName === 'string' ? body.eventHubName.trim() : '';
+  const reqEventGridTopic = typeof body?.eventGridTopic === 'string' ? body.eventGridTopic.trim() : '';
   if (!typeId) return NextResponse.json({ ok: false, error: 'typeId is required' }, { status: 400 });
   if (!subject) return NextResponse.json({ ok: false, error: 'subject is required' }, { status: 400 });
   if (!data || typeof data !== 'object' || Array.isArray(data)) {
@@ -86,17 +90,31 @@ export async function POST(req: NextRequest) {
   // 3a. Event Grid channel.
   if (type.channels.includes('eventgrid')) {
     const egGate = eventgridTopicsConfigGate();
+    // Resolve the topic from the UI selection → the type → the env-derived default
+    // (LOOM_EVENTGRID_BUSINESS_TOPIC). No hard-coded literal (audit B5).
+    const topic = reqEventGridTopic || type.eventGridTopic || defaultBusinessTopicName();
     if (egGate) {
       channelErrors.eventgrid = `Event Grid not configured: set ${egGate.missing}.`;
     } else {
-      const topic = type.eventGridTopic || defaultBusinessTopicName();
       try {
         results.eventgrid = await publishBusinessEvents(topic, [
           { eventType: type.eventType, subject, data: data as Record<string, unknown> },
         ]);
       } catch (e: any) {
         const status = e instanceof EventGridTopicsError ? e.status : 502;
-        channelErrors.eventgrid = `${e?.message || String(e)} (status ${status})`;
+        // Honest gate (audit B5): 401/403 = the UAMI lacks EventGrid Data Sender
+        // on the topic; 404 = the topic doesn't exist. Name the exact remediation.
+        if (status === 401 || status === 403) {
+          channelErrors.eventgrid =
+            `The Console UAMI is not authorized to send to Event Grid topic "${topic}". ` +
+            `Grant it the "EventGrid Data Sender" role on the topic (Access control (IAM) on the topic resource), then retry.`;
+        } else if (status === 404) {
+          channelErrors.eventgrid =
+            `Event Grid topic "${topic}" was not found. Select an existing topic from the channels list, ` +
+            `or set LOOM_EVENTGRID_BUSINESS_TOPIC to a provisioned topic / create it first.`;
+        } else {
+          channelErrors.eventgrid = `${e?.message || String(e)} (status ${status})`;
+        }
       }
     }
   }
@@ -104,9 +122,15 @@ export async function POST(req: NextRequest) {
   // 3b. Event Hubs channel.
   if (type.channels.includes('eventhub')) {
     const ehGate = eventhubsConfigGate();
-    const hub = type.eventHubName || process.env.LOOM_EVENTHUB_BUSINESS_HUB || 'loom-telemetry';
+    // Resolve the hub from the UI selection → the type → the env default. Do NOT
+    // hard-code "loom-telemetry" (audit B5) — if none resolves, gate honestly.
+    const hub = reqEventHubName || type.eventHubName || process.env.LOOM_EVENTHUB_BUSINESS_HUB || '';
     if (ehGate) {
       channelErrors.eventhub = `Event Hubs not configured: set ${ehGate.missing}.`;
+    } else if (!hub) {
+      channelErrors.eventhub =
+        'No Event Hub selected for this event type. Choose a hub from the channels list, ' +
+        'set the type\'s eventHubName, or set LOOM_EVENTHUB_BUSINESS_HUB to a provisioned hub.';
     } else {
       try {
         // Publish the same governed envelope to the durable stream.
@@ -124,7 +148,19 @@ export async function POST(req: NextRequest) {
         ]);
       } catch (e: any) {
         const status = e instanceof EventHubsDataError ? e.status : 502;
-        channelErrors.eventhub = `${e?.message || String(e)} (status ${status})`;
+        // Honest gate (audit B5): 404 = the hub isn't provisioned; 401/403 = the
+        // UAMI lacks Azure Event Hubs Data Sender on the namespace/hub.
+        if (status === 404) {
+          channelErrors.eventhub =
+            `Event Hub "${hub}" was not found in the configured namespace. Select an existing hub from the ` +
+            `channels list, or provision it / set LOOM_EVENTHUB_BUSINESS_HUB to a real hub.`;
+        } else if (status === 401 || status === 403) {
+          channelErrors.eventhub =
+            `The Console UAMI is not authorized to send to Event Hub "${hub}". ` +
+            `Grant it the "Azure Event Hubs Data Sender" role on the namespace (or hub), then retry.`;
+        } else {
+          channelErrors.eventhub = `${e?.message || String(e)} (status ${status})`;
+        }
       }
     }
   }

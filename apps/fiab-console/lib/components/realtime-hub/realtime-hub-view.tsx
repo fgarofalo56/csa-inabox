@@ -40,6 +40,7 @@ import {
 import {
   Search20Regular, MoreHorizontal20Regular, Eye20Regular,
   PlugConnected20Regular, Flow20Regular, ArrowSync20Regular,
+  Delete20Regular,
   Pulse24Regular, Flash24Regular, PlugConnected24Regular, Flow24Regular,
   DataTrending32Regular,
 } from '@fluentui/react-icons';
@@ -244,6 +245,31 @@ export function RealTimeHubView() {
     setConnectOpen(true);
   }
 
+  // Delete an eventstream (audit B1). The Azure-native eventstream is the Cosmos
+  // item — DELETE /api/items/eventstream/[id] now has its own handler (was 405).
+  // KQL tables are not deletable from here (they live in ADX), so the menu only
+  // offers Delete for streams.
+  const [deleting, setDeleting] = useState<string | null>(null);
+  async function deleteStream(s: DataStreamRow) {
+    if (deleting) return;
+    if (typeof window !== 'undefined' &&
+      !window.confirm(`Delete eventstream "${s.name}"? This removes the Loom eventstream item.`)) return;
+    setDeleting(s.id);
+    try {
+      const r = await fetch(`/api/items/eventstream/${encodeURIComponent(s.id)}`, { method: 'DELETE' });
+      if (!r.ok) {
+        const j = await r.json().catch(() => ({}));
+        if (typeof window !== 'undefined') window.alert(`Delete failed: ${j?.error || r.status}`);
+        return;
+      }
+      load();
+    } catch (e: any) {
+      if (typeof window !== 'undefined') window.alert(`Delete failed: ${String(e?.message || e)}`);
+    } finally {
+      setDeleting(null);
+    }
+  }
+
   const loading = data === null;
   const streams = data?.streams || [];
   const streamCount = streams.filter((s) => s.dataType === 'stream').length;
@@ -275,6 +301,12 @@ export function RealTimeHubView() {
               Open {s.dataType === 'stream' ? 'eventstream' : 'KQL database'}
             </MenuItem>
           </Link>
+          {s.dataType === 'stream' && (
+            <MenuItem icon={<Delete20Regular />} disabled={deleting === s.id}
+              onClick={() => deleteStream(s)}>
+              {deleting === s.id ? 'Deleting…' : 'Delete eventstream'}
+            </MenuItem>
+          )}
         </MenuList>
       </MenuPopover>
     </Menu>

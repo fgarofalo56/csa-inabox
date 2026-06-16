@@ -99,6 +99,27 @@ export async function GET(req: NextRequest) {
     if (e instanceof OneLakeLineageNotSupportedError) {
       return NextResponse.json({ ok: false, error: e.message, hint: e.hint, endpoint: e.endpoint }, { status: 501 });
     }
+    // Honest Purview data-plane RBAC gate (audit B11): LOOM_PURVIEW_ACCOUNT is set
+    // but the Console UAMI lacks an Atlas/Data Curator|Reader role on the
+    // collection → Purview returns 403 "Not authorized to access account". Render
+    // it as a remediation gate instead of a raw error.
+    if (e instanceof PurviewError && (e.status === 403 || e.status === 401)) {
+      return NextResponse.json(
+        {
+          ok: false,
+          code: 'purview_rbac_required',
+          error: 'The Console UAMI is not authorized on the Purview account (data-plane RBAC).',
+          gate: {
+            reason: 'Federated Purview lineage needs a Purview data-plane role on the collection.',
+            remediation:
+              'In the Microsoft Purview governance portal, grant the Console UAMI (LOOM_UAMI_CLIENT_ID) the ' +
+              '"Data Curator" (or at least "Data Reader") role on the root collection (Data Map → Collections → ' +
+              'Role assignments). LOOM_PURVIEW_ACCOUNT is already set; only the data-plane role is missing.',
+          },
+        },
+        { status: 503 },
+      );
+    }
     const status = e instanceof PurviewError || e instanceof UnityCatalogError || e instanceof OneLakeError ? e.status : 500;
     return NextResponse.json({ ok: false, error: e?.message || String(e) }, { status: status || 500 });
   }

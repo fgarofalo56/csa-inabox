@@ -8,6 +8,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import { getSession } from '@/lib/auth/session';
 import { jerr } from '../../../../items/_lib/item-crud';
 import { sqlConfigGate, listColumns } from '@/lib/azure/sql-objects-client';
+import { isSqlLoginFailure, sqlLoginGateBody } from '@/lib/azure/sql-login-gate';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -46,6 +47,10 @@ export async function GET(req: NextRequest, ctx: { params: Promise<{ kind: strin
       })),
     });
   } catch (e: any) {
+    // Honest SQL-login gate (audit B3).
+    if (isSqlLoginFailure(e)) {
+      return NextResponse.json(sqlLoginGateBody({ target: `${server} / ${database}`, detail: e?.message }), { status: 503 });
+    }
     return jerr(e?.message || String(e), 500);
   }
 }

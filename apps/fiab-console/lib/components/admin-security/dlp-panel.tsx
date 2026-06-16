@@ -653,7 +653,7 @@ function SimulateSection() {
     <div className={s.section}>
       <Subtitle2 block style={{ marginBottom: 8 }}>Simulate DLP policy match <Badge appearance="tint" color="warning">Preview</Badge></Subtitle2>
       <Caption1 block style={{ color: tokens.colorNeutralForeground3, marginBottom: 10 }}>
-        Sends sample text to <code>POST /beta/security/dataLossPrevention/evaluatePolicies</code>. If the tenant hasn't enrolled in this Graph preview, the route returns 501 with explicit remediation.
+        Microsoft Graph exposes no public REST API to simulate DLP policies, so this returns an honest 501 gate (no fabricated results). Test a policy in the Microsoft Purview portal (Data loss prevention &rarr; Policies &rarr; &ldquo;Test policy&rdquo;) or via Security &amp; Compliance PowerShell.
       </Caption1>
       <div className={s.fieldStack}>
         <Field label="Sample content (up to 64 KB)">

@@ -125,36 +125,26 @@ describe('dlp-graph-client', () => {
     expect(alerts[0]).toMatchObject({ id: 'a1', severity: 'high' });
   });
 
-  it('returns null from evaluatePolicy when Graph 404s (route translates to 501)', async () => {
-    // evaluatePolicy uses the shared readJson which returns null on 404
-    // (no throw). The BFF /api/admin/security/dlp/simulate route
-    // catches the resulting null + DlpError chain and translates it
-    // into HTTP 501 with the preview-not-enabled hint.
+  it('evaluatePolicy honest-gates with a typed 501 (no Graph call — B12: no public simulate API)', async () => {
+    // There is NO public Microsoft Graph REST endpoint for DLP simulation. The
+    // old /beta/security/dataLossPrevention/evaluatePolicies segment does not
+    // exist (live tenants return 400 "Resource not found for the segment"). So
+    // evaluatePolicy throws a typed 501 honest gate WITHOUT calling Graph; the
+    // BFF /api/admin/security/dlp/simulate route renders it as a MessageBar.
     process.env.LOOM_DLP_ENABLED = 'true';
-    fetchMock.mockResolvedValue(new Response('', { status: 404 }));
-    const mod = await import('../dlp-graph-client');
-    const result = await mod.evaluatePolicy({ content: 'test' });
-    expect(result).toBeNull();
-  });
-
-  it('surfaces a DlpError when Graph returns 500 on simulate', async () => {
-    process.env.LOOM_DLP_ENABLED = 'true';
-    const make500 = () => new Response(JSON.stringify({
-      error: { message: 'Internal error' },
-    }), { status: 500, headers: { 'content-type': 'application/json' } });
-    fetchMock.mockResolvedValueOnce(make500());
-    fetchMock.mockResolvedValueOnce(make500());
-
     const mod = await import('../dlp-graph-client');
     await expect(mod.evaluatePolicy({ content: 'test' })).rejects.toBeInstanceOf(mod.DlpError);
     try {
       await mod.evaluatePolicy({ content: 'test' });
     } catch (e: any) {
-      expect(e.status).toBe(500);
+      expect(e.status).toBe(501);
+      expect(e.endpoint).toBe('evaluatePolicy');
     }
+    // Never reaches the network — no non-existent segment is called.
+    expect(fetchMock).not.toHaveBeenCalled();
   });
 
-  it('rejects empty content on simulate before calling Graph', async () => {
+  it('rejects empty content on simulate before gating', async () => {
     process.env.LOOM_DLP_ENABLED = 'true';
     const mod = await import('../dlp-graph-client');
     await expect(mod.evaluatePolicy({ content: '' })).rejects.toBeInstanceOf(mod.DlpError);
@@ -181,6 +171,8 @@ describe('dlp-graph-client', () => {
     const violations = await mod.listDlpViolations();
     const [url] = fetchMock.mock.calls[0];
     expect(url).toContain('/v1.0/security/alerts_v2');
+    // B12: alerts_v2 rejects $expand=evidence with HTTP 400 — must NOT be sent.
+    expect(decodeURIComponent(String(url))).not.toContain('$expand');
     expect(violations).toHaveLength(1);
     expect(violations[0]).toMatchObject({
       alertId: 'v1', policyId: 'p1', policyName: 'Finance PII', ruleName: 'SSN rule',

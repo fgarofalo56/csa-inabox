@@ -27,7 +27,7 @@ import {
   pushProjectToDatabricks, runDbtOnDatabricks, runDbtOnRunner, dbtRunnerConfigGate,
 } from '@/lib/dbt/dbt-runner';
 import { generateProject, defaultDbtCommands, findDanglingRefs } from '@/lib/dbt/dbt-codegen';
-import type { DbtProjectGraph } from '@/lib/dbt/dbt-project-model';
+import { type DbtProjectGraph, validateDbtProjectGraph } from '@/lib/dbt/dbt-project-model';
 import { jerr, loadOwnedItem, updateOwnedItem } from '../../../_lib/item-crud';
 
 export const runtime = 'nodejs';
@@ -86,7 +86,25 @@ export async function POST(req: NextRequest, ctx: { params: Promise<{ id: string
     const spec: DbtState = { ...((item.state as any) || {}), ...override };
 
     // ── A/B: visual-builder project present ───────────────────────────────
-    if (spec.project && Array.isArray(spec.project.models) && spec.project.models.length > 0) {
+    // Validate the graph BEFORE codegen. A malformed graph (missing sources[], a
+    // model with no layer, etc.) previously threw an unguarded TypeError in
+    // generateProject → raw 502 (audit B10). Validate first and answer 400 with
+    // field-level errors. A project with no usable models falls through to the
+    // legacy BYO-repo path (which 400s honestly on its own).
+    if (spec.project && typeof spec.project === 'object' &&
+        Array.isArray(spec.project.models) && spec.project.models.length > 0) {
+      const validation = validateDbtProjectGraph(spec.project);
+      if (validation.length) {
+        return NextResponse.json(
+          {
+            ok: false,
+            code: 'invalid_project_graph',
+            error: `Invalid dbt project graph: ${validation.map((v) => `${v.field}: ${v.message}`).join('; ')}`,
+            errors: validation,
+          },
+          { status: 400 },
+        );
+      }
       const dangling = findDanglingRefs(spec.project);
       if (dangling.length) {
         return jerr(

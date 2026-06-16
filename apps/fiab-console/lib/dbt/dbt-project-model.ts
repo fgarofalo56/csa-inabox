@@ -132,3 +132,66 @@ export function emptyProjectGraph(projectName = 'loom_dbt_project'): DbtProjectG
 export function projectHasContent(g?: DbtProjectGraph | null): boolean {
   return !!g && Array.isArray(g.models) && g.models.length > 0;
 }
+
+/** A single field-level validation problem ({ field, message }). */
+export interface DbtGraphValidationError {
+  field: string;
+  message: string;
+}
+
+/**
+ * Server-side validation of a DbtProjectGraph before any code generation runs.
+ *
+ * The code generator (dbt-codegen.ts) assumes a well-formed graph: `sources` and
+ * `models` are arrays, `target.adapter` is set, and every model has a `name` +
+ * `layer`. A malformed graph (missing `sources[]`, a model with no `layer`, etc.)
+ * previously crashed codegen with an unguarded TypeError ("Cannot read
+ * properties of undefined (reading 'length')") which surfaced as a raw 502
+ * (audit B10). This returns precise field-level errors so the run route can
+ * answer 400 instead. Returns [] when the graph is safe to generate.
+ */
+export function validateDbtProjectGraph(g: unknown): DbtGraphValidationError[] {
+  const errors: DbtGraphValidationError[] = [];
+  if (!g || typeof g !== 'object') {
+    return [{ field: 'project', message: 'project graph is required' }];
+  }
+  const graph = g as Partial<DbtProjectGraph>;
+
+  if (!Array.isArray(graph.sources)) {
+    errors.push({ field: 'sources', message: 'sources must be an array (use [] when there are no sources)' });
+  } else {
+    graph.sources.forEach((s, i) => {
+      if (!s || typeof s !== 'object') {
+        errors.push({ field: `sources[${i}]`, message: 'source must be an object' });
+        return;
+      }
+      if (!s.name) errors.push({ field: `sources[${i}].name`, message: 'source name is required' });
+      if (!s.table) errors.push({ field: `sources[${i}].table`, message: 'source table is required' });
+    });
+  }
+
+  if (!Array.isArray(graph.models)) {
+    errors.push({ field: 'models', message: 'models must be an array' });
+  } else {
+    if (graph.models.length === 0) {
+      errors.push({ field: 'models', message: 'at least one model is required to run' });
+    }
+    const validLayers = new Set<MedallionLayer>(['bronze', 'silver', 'gold']);
+    graph.models.forEach((m, i) => {
+      if (!m || typeof m !== 'object') {
+        errors.push({ field: `models[${i}]`, message: 'model must be an object' });
+        return;
+      }
+      if (!m.name) errors.push({ field: `models[${i}].name`, message: 'model name is required' });
+      if (!m.layer) errors.push({ field: `models[${i}].layer`, message: 'model layer is required (bronze | silver | gold)' });
+      else if (!validLayers.has(m.layer)) errors.push({ field: `models[${i}].layer`, message: `invalid layer "${m.layer}" (expected bronze | silver | gold)` });
+      if (typeof m.sql !== 'string') errors.push({ field: `models[${i}].sql`, message: 'model sql body is required' });
+    });
+  }
+
+  if (!graph.target || typeof graph.target !== 'object' || !graph.target.adapter) {
+    errors.push({ field: 'target.adapter', message: 'target adapter is required (databricks | synapse | fabric)' });
+  }
+
+  return errors;
+}

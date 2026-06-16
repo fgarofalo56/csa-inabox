@@ -12,6 +12,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import { getSession } from '@/lib/auth/session';
 import { jerr } from '../../../../items/_lib/item-crud';
 import { sqlConfigGate, listSchemas, listTables, listViews, listProcedures } from '@/lib/azure/sql-objects-client';
+import { isSqlLoginFailure, sqlLoginGateBody } from '@/lib/azure/sql-login-gate';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -54,6 +55,12 @@ export async function GET(req: NextRequest, ctx: { params: Promise<{ kind: strin
       procedures: procedures.map((p) => ({ objectId: p.objectId, schema: p.schema, name: p.name })),
     });
   } catch (e: any) {
+    // Honest SQL-login gate (audit B3): the UAMI may lack a SQL login on the
+    // Synapse/SQL target → "Login failed for user" / ELOGIN. Return a structured
+    // 503 remediation instead of a raw 500.
+    if (isSqlLoginFailure(e)) {
+      return NextResponse.json(sqlLoginGateBody({ target: `${server} / ${database}`, detail: e?.message }), { status: 503 });
+    }
     return jerr(e?.message || String(e), 500);
   }
 }

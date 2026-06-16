@@ -15,9 +15,18 @@ describe('streamRowActions', () => {
     expect(a.previewTestEvents).toBe(true);
     expect(a.endpoints).toBe(true);
     expect(a.openEditor).toBe(true);
+    // eventstreams are deletable from the catalog (audit B1)
+    expect(a.deleteEventstream).toBe(true);
     // not a KQL/Eventhouse preview, not an Event Hub peek
     expect(a.previewData).toBe(false);
     expect(a.peekSendEvents).toBe(false);
+  });
+
+  it('only eventstream rows are deletable from the catalog (B1)', () => {
+    expect(streamRowActions('eventstream').deleteEventstream).toBe(true);
+    for (const kind of ['kql-database', 'eventhouse', 'eventhub-entity', 'adx-cluster', 'iothub']) {
+      expect(streamRowActions(kind).deleteEventstream).toBe(false);
+    }
   });
 
   it('KQL database + Eventhouse rows: preview data + open editor (no eventstream peek/endpoints)', () => {

@@ -31,7 +31,7 @@ import {
   MoreHorizontal20Regular, PlugConnected20Regular,
   ArrowSync20Regular, Pulse24Regular, Iot24Regular, DatabaseStack16Regular,
   Alert20Regular, DataUsage24Regular,
-  Eye20Regular, Flow20Regular,
+  Eye20Regular, Flow20Regular, Delete20Regular,
 } from '@fluentui/react-icons';
 import { SignInRequired } from '@/lib/components/sign-in-required';
 import { Section } from '@/lib/components/ui/section';
@@ -242,6 +242,37 @@ export function RtiHubView() {
     }
   }
 
+  // Delete a Loom eventstream (audit B1). The Azure-native eventstream is the
+  // Cosmos item; DELETE /api/items/eventstream/[id] now has its own handler.
+  async function deleteEventstream(row: RtiHubRow) {
+    if (typeof window !== 'undefined' &&
+      !window.confirm(`Delete eventstream "${row.name}"? This removes the Loom eventstream item.`)) return;
+    try {
+      const res = await fetch(`/api/items/eventstream/${encodeURIComponent(row.id)}`, { method: 'DELETE' });
+      const j = await res.json().catch(() => ({}));
+      if (!res.ok || j?.ok === false) {
+        dispatchToast(
+          <Toast><ToastTitle>Could not delete eventstream</ToastTitle>
+            <ToastBody>{j.error || `HTTP ${res.status}`}</ToastBody></Toast>,
+          { intent: 'error', timeout: 10000 },
+        );
+        return;
+      }
+      dispatchToast(
+        <Toast><ToastTitle>Eventstream deleted</ToastTitle>
+          <ToastBody>Removed “{row.name}”.</ToastBody></Toast>,
+        { intent: 'success', timeout: 7000 },
+      );
+      load();
+    } catch (e: any) {
+      dispatchToast(
+        <Toast><ToastTitle>Could not delete eventstream</ToastTitle>
+          <ToastBody>{e?.message || String(e)}</ToastBody></Toast>,
+        { intent: 'error', timeout: 10000 },
+      );
+    }
+  }
+
   function onSubscribed(result?: { link?: string }) {
     dispatchToast(
       <Toast><ToastTitle>Eventstream created</ToastTitle>
@@ -348,6 +379,11 @@ export function RtiHubView() {
                 <MenuDivider />
                 <MenuItem icon={<PlugConnected20Regular />} onClick={() => subscribe(r)}>Subscribe</MenuItem>
                 <MenuItem icon={<Alert20Regular />} onClick={() => makeActivator(r)}>Create activator</MenuItem>
+                {a.deleteEventstream && (
+                  <MenuItem icon={<Delete20Regular />} onClick={() => deleteEventstream(r)}>
+                    Delete eventstream
+                  </MenuItem>
+                )}
               </MenuList>
             </MenuPopover>
           </Menu>

@@ -783,8 +783,16 @@ export async function getEventHubCapture(eventHub: string): Promise<CaptureSpec 
 
 /**
  * Enable/disable/update Capture on an event hub by PUTing captureDescription
- * inline on the event-hub resource. When disabling, only `{enabled:false}` is
- * sent. When enabling, the storage account + container are required.
+ * inline on the event-hub resource. When enabling, the storage account +
+ * container are required.
+ *
+ * IMPORTANT (audit B6): ARM api-version 2024-01-01 rejects a bare
+ * `captureDescription:{enabled:false}` with
+ * `RequestJsonDeserializationFailure 400 "Required property 'encoding' not
+ * found"` — `encoding` and `destination` are required even to DISABLE. So on
+ * disable we carry over the EXISTING destination/encoding (read back from the
+ * hub) and only flip `enabled:false`. If capture was never configured there is
+ * nothing to disable, so we no-op and return the hub as-is.
  *
  *   PUT .../eventhubs/{eh}  body {properties:{captureDescription:{…}}}
  */
@@ -798,7 +806,44 @@ export async function updateEventHubCapture(
 
   let captureDescription: Record<string, unknown>;
   if (!spec.enabled) {
-    captureDescription = { enabled: false };
+    // Read the current hub so we can preserve the full capture shape ARM requires.
+    const getR = await callArm(
+      `${nsUrl(cfg)}/eventhubs/${encodeURIComponent(eh)}?api-version=${EH_API}`,
+    );
+    if (!getR.ok) {
+      throw new EventHubsArmError(getR.status, await getR.text(), `updateEventHubCapture (read for disable) failed ${getR.status}`);
+    }
+    const current: any = await getR.json();
+    const cd = current?.properties?.captureDescription;
+    if (!cd) {
+      // Capture is already absent/disabled — nothing to do. Return the hub as-is.
+      return shapeEventHub(current);
+    }
+    // Carry over the existing destination + encoding (required by ARM even on
+    // disable) and flip enabled:false. Fall back to caller-supplied / default
+    // destination if the existing one is somehow incomplete.
+    const existingDest = cd.destination;
+    const fallbackDestName = spec.destination === 'DataLake'
+      ? 'EventHubArchive.AzureDataLake'
+      : 'EventHubArchive.AzureBlockBlob';
+    const destination = existingDest && existingDest.name && existingDest.properties
+      ? existingDest
+      : {
+          name: fallbackDestName,
+          properties: {
+            storageAccountResourceId: (spec.storageAccountResourceId || '').trim(),
+            blobContainer: (spec.blobContainer || '').trim(),
+            archiveNameFormat: (spec.archiveNameFormat || '').trim() || CAPTURE_DEFAULT_ARCHIVE_NAME_FORMAT,
+          },
+        };
+    captureDescription = {
+      enabled: false,
+      encoding: cd.encoding || 'Avro',
+      intervalInSeconds: cd.intervalInSeconds ?? 300,
+      sizeLimitInBytes: cd.sizeLimitInBytes ?? 314572800,
+      skipEmptyArchives: cd.skipEmptyArchives ?? false,
+      destination,
+    };
   } else {
     const storageAccountResourceId = (spec.storageAccountResourceId || '').trim();
     const blobContainer = (spec.blobContainer || '').trim();
