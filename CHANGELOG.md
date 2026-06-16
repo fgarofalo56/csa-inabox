@@ -25,6 +25,30 @@ This file is maintained automatically by
 [Conventional Commits](https://www.conventionalcommits.org/). See
 [RELEASE.md](RELEASE.md) for the release process.
 
+## [0.43.1](https://github.com/fgarofalo56/csa-inabox/compare/csa-inabox-v0.43.0...csa-inabox-v0.43.1) (2026-06-16)
+
+
+### Bug Fixes
+
+* **fiab-console:** Wave 2 broken feature-surface fixes (B1-B12) ([#1418](https://github.com/fgarofalo56/csa-inabox/issues/1418)) ([52afe2a](https://github.com/fgarofalo56/csa-inabox/commit/52afe2a9aa815ba8809841cbbdd594775587d8dd))
+* **fiab-console:** Wave 2 UI updates — governance/admin/platform areas (§4) ([#1420](https://github.com/fgarofalo56/csa-inabox/issues/1420)) ([c3c9035](https://github.com/fgarofalo56/csa-inabox/commit/c3c9035d660f02665d3e96d801d8b51c5d54ed43))
+* **fiab-console:** Wave 2 UI updates — RTH/RTI/mirroring/APIs parity affordances ([#1419](https://github.com/fgarofalo56/csa-inabox/issues/1419)) ([2c2d542](https://github.com/fgarofalo56/csa-inabox/commit/2c2d542a658ccfef9618435cf456c70d6bb2baf1))
+* **fiab:** deploy-parity — sync live console fixes into the clean-deploy path ([#1415](https://github.com/fgarofalo56/csa-inabox/issues/1415)) ([1e05c22](https://github.com/fgarofalo56/csa-inabox/commit/1e05c2206bd91ce87873960b76863eed697ed2fc))
+
+
+### Documentation
+
+* **fiab:** concept docs answering 5 csa-uncovered Copilot questions ([#1416](https://github.com/fgarofalo56/csa-inabox/issues/1416)) ([dda80e6](https://github.com/fgarofalo56/csa-inabox/commit/dda80e68d397976e893f540d0d2d128ce82618b2))
+
+
+### Miscellaneous
+
+* **deps-dev:** Bump eslint in /portal/react-webapp ([#1320](https://github.com/fgarofalo56/csa-inabox/issues/1320)) ([9d012a4](https://github.com/fgarofalo56/csa-inabox/commit/9d012a4298708be6506750d3aee9b853a499bd62))
+* **deps-dev:** Bump tailwindcss in /portal/react-webapp ([#1318](https://github.com/fgarofalo56/csa-inabox/issues/1318)) ([330b95f](https://github.com/fgarofalo56/csa-inabox/commit/330b95fa7fc9929dee67a0bb0fec4718355a5b22))
+* **deps:** Bump @azure/msal-react in /portal/react-webapp ([#1313](https://github.com/fgarofalo56/csa-inabox/issues/1313)) ([511353c](https://github.com/fgarofalo56/csa-inabox/commit/511353c5e16d3566a65a7509d261a9813fcc6f2a))
+* **deps:** Bump @radix-ui/react-label in /portal/react-webapp ([#1314](https://github.com/fgarofalo56/csa-inabox/issues/1314)) ([adcd2a2](https://github.com/fgarofalo56/csa-inabox/commit/adcd2a2917e31c0f2483c761f975b515787b84dc))
+* **deps:** Bump @radix-ui/react-toast in /portal/react-webapp ([#1317](https://github.com/fgarofalo56/csa-inabox/issues/1317)) ([10e4eca](https://github.com/fgarofalo56/csa-inabox/commit/10e4eca9bc98e8173d5c208aa015f92967c4e4b3))
+
 ## [0.43.0](https://github.com/fgarofalo56/csa-inabox/compare/csa-inabox-v0.42.0...csa-inabox-v0.43.0) (2026-06-16)
 
 
