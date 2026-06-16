@@ -28,10 +28,17 @@ export async function GET(_req: NextRequest) {
     ok: false, error: 'LOOM_SUBSCRIPTION_ID not set',
   }, { status: 503 });
 
-  const rgs = [
-    process.env.LOOM_ADMIN_RG || 'rg-csa-loom-admin-eastus2',
-    process.env.LOOM_DLZ_RG || 'rg-csa-loom-dlz-single-eastus2',
-  ];
+  // Dedupe the RGs: in single-RG deployments LOOM_ADMIN_RG === LOOM_DLZ_RG, which
+  // previously enumerated the same APIM twice (audit B7). Compare case-insensitively
+  // (ARM RG names are case-insensitive) while preserving the original casing.
+  const rgs = Array.from(
+    new Map(
+      [
+        process.env.LOOM_ADMIN_RG || 'rg-csa-loom-admin-eastus2',
+        process.env.LOOM_DLZ_RG || 'rg-csa-loom-dlz-single-eastus2',
+      ].map((rg) => [rg.toLowerCase(), rg]),
+    ).values(),
+  );
 
   let token: string;
   try {
@@ -41,7 +48,9 @@ export async function GET(_req: NextRequest) {
     return NextResponse.json({ ok: false, error: `auth failed: ${e?.message}` }, { status: 502 });
   }
 
-  const instances: any[] = [];
+  // Dedupe instances by ARM resourceId — guards against the same APIM surfacing
+  // from overlapping RGs even if the RG list were not already deduped (audit B7).
+  const byId = new Map<string, any>();
   const errors: string[] = [];
 
   for (const rg of rgs) {
@@ -55,7 +64,10 @@ export async function GET(_req: NextRequest) {
       }
       const j: any = await r.json();
       for (const apim of (j.value || []) as any[]) {
-        instances.push({
+        const id = String(apim.id || `${rg}/${apim.name}`).toLowerCase();
+        if (byId.has(id)) continue;
+        byId.set(id, {
+          id: apim.id,
           name: apim.name,
           location: apim.location,
           resourceGroup: rg,
@@ -69,5 +81,5 @@ export async function GET(_req: NextRequest) {
     }
   }
 
-  return NextResponse.json({ ok: true, instances, errors });
+  return NextResponse.json({ ok: true, instances: Array.from(byId.values()), errors });
 }

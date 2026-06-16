@@ -44,6 +44,7 @@ import { resolveAccessMode } from '@/lib/azure/sql-access-mode';
 import { getUserSqlToken } from '@/lib/azure/sql-user-token-store';
 import { executeStatement, getWarehouse } from '@/lib/azure/databricks-client';
 import { compileGraph, type VqGraph, type SqlDialect } from '@/lib/editors/visual-query-compiler';
+import { isSqlLoginFailure, sqlLoginGateBody } from '@/lib/azure/sql-login-gate';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -170,6 +171,14 @@ export async function POST(req: NextRequest, ctx: { params: Promise<{ type: stri
       executedBy: session.claims.upn,
     });
   } catch (e: any) {
+    // Honest SQL-login gate (audit B3): a warehouse / Synapse Dedicated query
+    // fails with ELOGIN / "Login failed for user" when the Console UAMI has no
+    // SQL login on the pool. Return a structured 503 remediation gate instead of
+    // a raw 500/ELOGIN.
+    if (isSqlLoginFailure(e)) {
+      const target = DEDICATED_ENGINES.has(type) ? 'the Synapse dedicated SQL pool / warehouse' : 'the Synapse SQL endpoint';
+      return NextResponse.json({ ...sqlLoginGateBody({ target, detail: e?.message }), generatedSql }, { status: 503 });
+    }
     return NextResponse.json(
       { ok: false, error: e?.message || String(e), code: e?.code, generatedSql },
       { status: 502 },

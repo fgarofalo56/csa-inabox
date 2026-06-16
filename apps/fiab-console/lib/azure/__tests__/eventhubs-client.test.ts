@@ -156,14 +156,57 @@ describe('updateEventHubCapture', () => {
     expect(cd.destination.properties.archiveNameFormat).toContain('Namespace');
   });
 
-  it('PUTs captureDescription enabled=false to disable capture (no destination)', async () => {
+  it('disable carries over the existing destination + encoding (B6: ARM requires them even to disable)', async () => {
+    const calls: Call[] = [];
+    // GET (read current) returns an ENABLED capture; the subsequent PUT must
+    // preserve encoding + destination and only flip enabled:false.
+    const existing = {
+      name: 'orders-hub',
+      properties: {
+        captureDescription: {
+          enabled: true,
+          encoding: 'Avro',
+          intervalInSeconds: 300,
+          sizeLimitInBytes: 314572800,
+          skipEmptyArchives: false,
+          destination: {
+            name: 'EventHubArchive.AzureBlockBlob',
+            properties: {
+              storageAccountResourceId: '/subscriptions/sub-123/resourceGroups/rg/providers/Microsoft.Storage/storageAccounts/acct',
+              blobContainer: 'captures',
+              archiveNameFormat: '{Namespace}/{EventHub}/{PartitionId}/{Year}/{Month}/{Day}/{Hour}/{Minute}/{Second}',
+            },
+          },
+        },
+      },
+    };
+    mockFetch((_url, init) => {
+      // GET first, then PUT — both return the hub object.
+      return init?.method === 'PUT' ? { name: 'orders-hub', properties: { captureDescription: { enabled: false } } } : existing;
+    }, calls);
+
+    await updateEventHubCapture('orders-hub', { enabled: false });
+
+    // First call is the GET, second is the PUT.
+    expect(calls).toHaveLength(2);
+    expect(calls[0].init?.method ?? 'GET').toBe('GET');
+    expect(calls[1].init.method).toBe('PUT');
+    const cd = JSON.parse(calls[1].init.body).properties.captureDescription;
+    expect(cd.enabled).toBe(false);
+    expect(cd.encoding).toBe('Avro'); // required by ARM even to disable
+    expect(cd.destination.name).toBe('EventHubArchive.AzureBlockBlob');
+    expect(cd.destination.properties.storageAccountResourceId).toContain('storageAccounts/acct');
+  });
+
+  it('disable is a no-op (no PUT) when capture was never configured (B6)', async () => {
     const calls: Call[] = [];
     mockFetch(() => ({ name: 'orders-hub', properties: {} }), calls);
 
     await updateEventHubCapture('orders-hub', { enabled: false });
 
-    const body = JSON.parse(calls[0].init.body);
-    expect(body.properties.captureDescription).toEqual({ enabled: false });
+    // Only the GET happens; nothing to disable so no PUT is sent.
+    expect(calls).toHaveLength(1);
+    expect(calls[0].init?.method ?? 'GET').toBe('GET');
   });
 
   it('throws when enabling without a storage account', async () => {

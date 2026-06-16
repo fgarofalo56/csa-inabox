@@ -4,13 +4,12 @@
  * POST { content, policyIds?, metadata? }
  *   → ask Microsoft Graph DLP what would fire against sample text.
  *
- * Backing call: POST /beta/security/dataLossPrevention/evaluatePolicies.
- *
- * Reality: this endpoint is in Graph /beta + behind a tenant-level
- * preview flag in most tenants. If the tenant hasn't opted in, the
- * upstream call returns 404 — the route surfaces that as a 501 with the
- * remediation hint so the panel renders a clear MessageBar instead of
- * faking results.
+ * Reality (audit B12): there is NO public Microsoft Graph REST endpoint for DLP
+ * policy simulation — the old POST /beta/security/dataLossPrevention/evaluatePolicies
+ * segment does not exist (live tenants return 400 "Resource not found for the
+ * segment 'dataLossPrevention'"). evaluatePolicy() therefore throws a typed 501
+ * honest gate, which this route renders as a clear MessageBar (no faked results).
+ * If Microsoft ships a GA simulate API, repoint evaluatePolicy + remove the gate.
  */
 import { NextRequest, NextResponse } from 'next/server';
 import { getSession } from '@/lib/auth/session';
@@ -41,16 +40,17 @@ export async function POST(req: NextRequest) {
     });
     return NextResponse.json({ ok: true, evaluation });
   } catch (e) {
-    // 404 from upstream means the tenant hasn't enabled the Graph DLP
-    // simulate preview — surface that as a 501 with explicit remediation.
-    if (e instanceof DlpError && e.status === 404) {
+    // There is no public Graph DLP simulate API (audit B12) — evaluatePolicy()
+    // throws a typed 501 (or 404 from a legacy path). Surface either as an honest
+    // 501 gate with explicit remediation instead of leaking a raw error.
+    if (e instanceof DlpError && (e.status === 501 || e.status === 404)) {
       return NextResponse.json(
         {
           ok: false,
-          error: 'Graph DLP simulate endpoint not available for this tenant',
-          code: 'dlp_simulate_preview_not_enabled',
+          error: 'DLP policy simulation is not available via Microsoft Graph',
+          code: 'dlp_simulate_not_available',
           hint: {
-            followUp: 'Sign in to the Microsoft Purview portal at https://compliance.microsoft.com, open Data loss prevention → Policies, click "..." → "Test policy" on any policy. If the option is missing, your tenant has not been granted the Graph DLP simulate /beta preview. Open a Microsoft support ticket referencing endpoint /beta/security/dataLossPrevention/evaluatePolicies to request preview enrollment. Loom will start using the endpoint as soon as it returns 200.',
+            followUp: 'Microsoft Graph exposes no public REST API to simulate DLP policies. Test a policy in the Microsoft Purview portal (https://purview.microsoft.com → Data loss prevention → Policies → "..." → "Test policy") or via Security & Compliance PowerShell. Loom does not fabricate simulation results; this surface will light up automatically if Microsoft ships a GA Graph simulate endpoint.',
           },
         },
         { status: 501 },

@@ -48,6 +48,35 @@ export async function GET(req: NextRequest, ctx: { params: Promise<{ id: string 
   const workspaceId = req.nextUrl.searchParams.get('workspaceId');
   if (!workspaceId) return NextResponse.json({ ok: false, error: 'workspaceId required' }, { status: 400 });
   const id = (await ctx.params).id;
+
+  // ── Azure Monitor (DEFAULT) ── per no-fabric-dependency.md the activator detail
+  // is built from the Cosmos item, NOT from a live Fabric reflex. The audit (B4)
+  // flagged the old GET for ALWAYS calling api.fabric.microsoft.com → raw 401/502
+  // for a default-backend activator that has no state.content.rule. Build the
+  // detail + rule list from the persisted item (state.rules, then state.content
+  // bundle fallback) so the editor opens FULLY BUILT-OUT with no Fabric call.
+  if (!useFabric()) {
+    try {
+      const item = await loadOwnedItem(id, 'activator', session.claims.oid);
+      if (!item) return NextResponse.json({ ok: false, error: 'activator not found' }, { status: 404 });
+      const persisted = Array.isArray((item.state as any)?.rules) ? (item.state as any).rules : [];
+      // Prefer live-provisioned rules; fall back to the bundle's state.content.rule.
+      const bundleRule = persisted.length === 0 ? activatorRuleFromContent(item) : null;
+      const rules = persisted.length > 0 ? persisted : bundleRule ? [bundleRule] : [];
+      return NextResponse.json({
+        ok: true,
+        workspaceId,
+        activator: { id: item.id, displayName: item.displayName, description: item.description, type: 'Reflex' },
+        rules,
+        backend: 'azure-monitor' as const,
+        ...(bundleRule ? { source: 'bundle' as const, __loomContent: true as const } : {}),
+      });
+    } catch (e: any) {
+      return NextResponse.json({ ok: false, error: e?.message || String(e) }, { status: 502 });
+    }
+  }
+
+  // ── Fabric Reflex (opt-in only) ──
   try {
     const activator = await getActivator(workspaceId, id);
     return NextResponse.json({ ok: true, workspaceId, activator });

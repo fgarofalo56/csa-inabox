@@ -70,6 +70,9 @@ export async function PUT(req: NextRequest) {
     return NextResponse.json({ ok: true, hub: result });
   } catch (e: any) {
     const status = e?.status === 400 ? 400 : 502;
-    return NextResponse.json({ ok: false, error: e?.message || String(e) }, { status });
+    // Surface the real ARM error body (audit B6) so a deserialization / validation
+    // failure shows the actual reason (e.g. "Required property 'encoding' not found").
+    const armBody = typeof e?.body === 'string' ? e.body.slice(0, 800) : undefined;
+    return NextResponse.json({ ok: false, error: e?.message || String(e), armError: armBody }, { status });
   }
 }

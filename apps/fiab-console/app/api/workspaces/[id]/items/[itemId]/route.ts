@@ -12,6 +12,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import { getSession } from '@/lib/auth/session';
 import { itemsContainer, workspacesContainer, foldersContainer } from '@/lib/azure/cosmos-client';
 import { deleteLoomDoc, docForItem, upsertLoomDoc } from '@/lib/azure/loom-search';
+import { reconcileThreadEdgesOnDelete } from '@/lib/thread/thread-edges';
 import type { Workspace, WorkspaceItem } from '@/lib/types/workspace';
 
 export const runtime = 'nodejs';
@@ -126,12 +127,18 @@ export async function DELETE(
         try {
           await items.item(p.id, p.workspaceId).delete();
           void deleteLoomDoc(`it:${p.id}`);
+          // Reconcile lineage for cascade-deleted paired items too (audit B9).
+          void reconcileThreadEdgesOnDelete(s.claims.oid, p.id, { mode: 'remove' });
         } catch { /* ignore individual paired-delete failures */ }
       }
     } catch { /* ignore cascade query failures */ }
 
     await items.item(found.item.id, found.item.workspaceId).delete();
     void deleteLoomDoc(`it:${found.item.id}`);
+    // Auto-reconcile Thread/Weave lineage — this is a HARD delete, so hard-remove
+    // every edge touching this item (audit B9: this route previously skipped
+    // reconcile, which only ran from item-crud.ts, leaving orphan lineage edges).
+    void reconcileThreadEdgesOnDelete(s.claims.oid, found.item.id, { mode: 'remove' });
     return NextResponse.json({ ok: true });
   } catch (e: any) {
     return err(e?.message || 'Failed to delete item', 500, 'cosmos_error');

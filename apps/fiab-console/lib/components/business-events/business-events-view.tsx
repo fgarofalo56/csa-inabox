@@ -391,9 +391,15 @@ function RegisterTypeDialog({
               )}
               <Switch checked={chEventHub} label="Event Hubs (durable stream)" onChange={(_, d) => setChEventHub(!!d.checked)} />
               {chEventHub && (
-                <Field label="Event Hub (blank = loom-telemetry)">
-                  <Dropdown value={ehName} selectedOptions={ehName ? [ehName] : []} placeholder="loom-telemetry" onOptionSelect={(_, d) => setEhName(d.optionValue || '')}>
-                    <Option value="">Default (loom-telemetry)</Option>
+                <Field
+                  label="Event Hub"
+                  validationState={ehHubs.length === 0 ? 'warning' : 'none'}
+                  validationMessage={ehHubs.length === 0
+                    ? 'No Event Hubs visible in the configured namespace — provision a hub first.'
+                    : 'Pick a real hub from the namespace (blank uses the LOOM_EVENTHUB_BUSINESS_HUB deployment default).'}
+                >
+                  <Dropdown value={ehName} selectedOptions={ehName ? [ehName] : []} placeholder="Select an Event Hub…" onOptionSelect={(_, d) => setEhName(d.optionValue || '')}>
+                    <Option value="">Deployment default (LOOM_EVENTHUB_BUSINESS_HUB)</Option>
                     {ehHubs.map((h) => <Option key={h} value={h}>{h}</Option>)}
                   </Dropdown>
                 </Field>

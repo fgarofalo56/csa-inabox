@@ -776,14 +776,19 @@ function policyPath(scope: PolicyScope): string {
 export async function getPolicy(
   scope: PolicyScope,
 ): Promise<{ value: string; format: string } | null> {
+  // Read back with format=rawxml so the persisted policy XML is returned verbatim.
+  // The audit (B8) found that requesting format=xml read back an empty value even
+  // though the PUT (which sends format=xml/raw value) persisted the policy — the
+  // editor showed blank over an existing policy. ARM's `rawxml` representation
+  // returns the same literal XML body the PUT stored.
   const res = await apimFetch(policyPath(scope), {
-    query: { format: 'xml' },
+    query: { format: 'rawxml' },
   });
   const j = await readJson<any>(res);
   if (!j) return null;
   return {
     value: j?.properties?.value || '',
-    format: j?.properties?.format || 'xml',
+    format: j?.properties?.format || 'rawxml',
   };
 }
 
@@ -791,17 +796,20 @@ export async function upsertPolicy(
   scope: PolicyScope,
   value: string,
 ): Promise<{ value: string; format: string }> {
+  // PUT the literal policy XML as rawxml so the GET (format=rawxml) round-trips
+  // the exact same body (audit B8). `value` is unescaped XML, which is precisely
+  // what the rawxml format expects.
   const res = await apimFetch(policyPath(scope), {
     method: 'PUT',
     body: JSON.stringify({
-      properties: { format: 'xml', value },
+      properties: { format: 'rawxml', value },
     }),
   });
   const j = await readJson<any>(res);
   if (!j) throw new ApimError(404, null, 'PUT apim policy returned null');
   return {
     value: j?.properties?.value || value,
-    format: j?.properties?.format || 'xml',
+    format: j?.properties?.format || 'rawxml',
   };
 }
 

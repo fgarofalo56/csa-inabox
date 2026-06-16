@@ -37,6 +37,9 @@ export interface RtiRowActions {
   subscribe: boolean;
   /** Always available — create an activator (alert) watching this source. */
   createActivator: boolean;
+  /** Loom eventstream only: delete the eventstream item (audit B1). Discovered
+   *  Azure sources / KQL tables are not deletable from the catalog. */
+  deleteEventstream: boolean;
 }
 
 const LOOM_ITEM_KINDS: ReadonlySet<RtiRowKind> = new Set(['eventstream', 'kql-database', 'eventhouse']);
@@ -59,6 +62,7 @@ export function streamRowActions(kind: string): RtiRowActions {
     // Subscribe + activator are universal across every discovered/owned source.
     subscribe: true,
     createActivator: true,
+    deleteEventstream: k === 'eventstream',
   };
 }
 

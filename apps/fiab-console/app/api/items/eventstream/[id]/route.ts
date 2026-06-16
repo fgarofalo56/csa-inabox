@@ -18,6 +18,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { getSession } from '@/lib/auth/session';
 import { loadKustoItem, saveItemState, KustoError } from '@/lib/azure/kusto-client';
+import { itemsContainer } from '@/lib/azure/cosmos-client';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -144,6 +145,32 @@ export async function GET(_req: NextRequest, ctx: { params: Promise<{ id: string
       asaJobName: item.state?.asaJobName ?? null,
       config,
     });
+  } catch (e: any) {
+    const status = e instanceof KustoError ? e.status : 500;
+    return NextResponse.json({ ok: false, error: e?.message || String(e) }, { status });
+  }
+}
+
+/**
+ * DELETE /api/items/eventstream/[id]
+ *
+ * This static per-type route shadows the generic /api/items/[type]/[id] route
+ * (Next.js prefers the more-specific static segment), so it must export its own
+ * DELETE or the generic DELETE never runs → 405 (audit B1: created eventstreams
+ * were undeletable via any /api/items path). Delete the Cosmos item directly —
+ * the Azure-native eventstream IS the Cosmos record (no live Fabric Eventstream
+ * to tear down on the default path per no-fabric-dependency.md). Returns 404 when
+ * the caller's tenant doesn't own it.
+ */
+export async function DELETE(_req: NextRequest, ctx: { params: Promise<{ id: string }> }) {
+  const session = getSession();
+  if (!session) return NextResponse.json({ ok: false, error: 'unauthenticated' }, { status: 401 });
+  try {
+    const item = await loadKustoItem((await ctx.params).id, 'eventstream', session.claims.oid);
+    if (!item) return NextResponse.json({ ok: false, error: 'not found' }, { status: 404 });
+    const items = await itemsContainer();
+    await items.item(item.id, item.workspaceId).delete();
+    return NextResponse.json({ ok: true });
   } catch (e: any) {
     const status = e instanceof KustoError ? e.status : 500;
     return NextResponse.json({ ok: false, error: e?.message || String(e) }, { status });

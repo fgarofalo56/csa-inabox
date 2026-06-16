@@ -125,33 +125,34 @@ describe('deleteOperation', () => {
 });
 
 describe('policy (operation / api scope)', () => {
-  it('GETs the operation-scope policy at /apis/{id}/operations/{opId}/policies/policy?format=xml', async () => {
+  it('GETs the operation-scope policy with format=rawxml so saved XML reads back verbatim (B8)', async () => {
     let sentUrl = '';
     vi.stubGlobal('fetch', vi.fn(async (url: string) => {
       sentUrl = url;
-      return { status: 200, ok: true, text: async () => JSON.stringify({ properties: { format: 'xml', value: '<policies><inbound><base /></inbound></policies>' } }) } as any;
+      return { status: 200, ok: true, text: async () => JSON.stringify({ properties: { format: 'rawxml', value: '<policies><inbound><base /></inbound></policies>' } }) } as any;
     }));
     const { getPolicy } = await import('../apim-client');
     const out = await getPolicy('apis/orders/operations/get-order');
     expect(out?.value).toContain('<policies>');
-    expect(out?.format).toBe('xml');
+    expect(out?.format).toBe('rawxml');
     expect(sentUrl).toContain(`${BASE}/apis/orders/operations/get-order/policies/policy`);
-    expect(sentUrl).toContain('format=xml');
+    // Read-back MUST use rawxml (not xml) to match the PUT, else the value is empty.
+    expect(sentUrl).toContain('format=rawxml');
   });
 
-  it('PUTs the policy with { properties: { format: "xml", value } } at operation scope', async () => {
+  it('PUTs the policy with { properties: { format: "rawxml", value } } at operation scope (B8)', async () => {
     let sent: any = null;
     let sentUrl = '';
     vi.stubGlobal('fetch', vi.fn(async (url: string, init: any) => {
       sentUrl = url;
       sent = JSON.parse(init.body);
-      return { status: 200, ok: true, text: async () => JSON.stringify({ properties: { format: 'xml', value: sent.properties.value } }) } as any;
+      return { status: 200, ok: true, text: async () => JSON.stringify({ properties: { format: 'rawxml', value: sent.properties.value } }) } as any;
     }));
     const xml = '<policies><inbound><base /><rate-limit calls="10" renewal-period="60" /></inbound></policies>';
     const { upsertPolicy } = await import('../apim-client');
     const out = await upsertPolicy('apis/orders/operations/get-order', xml);
     expect(sentUrl).toContain(`${BASE}/apis/orders/operations/get-order/policies/policy`);
-    expect(sent.properties.format).toBe('xml');
+    expect(sent.properties.format).toBe('rawxml');
     expect(sent.properties.value).toBe(xml);
     expect(out.value).toBe(xml);
   });

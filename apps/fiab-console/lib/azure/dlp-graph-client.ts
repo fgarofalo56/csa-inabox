@@ -426,11 +426,13 @@ export async function listDlpViolations(
   const top = Math.min(200, Math.max(1, opts.top || 50));
   const since = opts.sinceIso || new Date(Date.now() - 30 * 24 * 3600_000).toISOString();
   const filter = `(detectionSource eq 'microsoftDataLossPrevention' or category eq 'DataLossPrevention') and createdDateTime ge ${since}`;
+  // NOTE (audit B12): do NOT request $expand=evidence — alerts_v2 rejects it with
+  // HTTP 400 "invalid $expand". Evidence is already returned inline on each alert
+  // (raw.evidence[]), so the per-item extraction below works without the expand.
   const qs = new URLSearchParams({
     $top: String(top),
     $filter: filter,
     $orderby: 'createdDateTime desc',
-    $expand: 'evidence',
   });
   const endpoint = `/v1.0/security/alerts_v2?${qs.toString()}`;
   const res = await graphFetch(endpoint);
@@ -518,34 +520,35 @@ export async function triggerScan(): Promise<never> {
 /**
  * Simulate a DLP policy against sample content.
  *
- * Backing call: POST /beta/security/dataLossPrevention/evaluatePolicies
+ * HONEST GATE (audit B12): there is NO public Microsoft Graph REST endpoint for
+ * DLP policy simulation. The previously-coded
+ * `POST /beta/security/dataLossPrevention/evaluatePolicies` does not exist —
+ * live tenants reject it with HTTP 400 "Resource not found for the segment
+ * 'dataLossPrevention'". Rather than call a non-existent segment (and leak a raw
+ * 400) or fake an evaluation, this throws a typed 501 DlpError carrying the only
+ * real mechanisms (the Purview portal "Test policy" action / Security &
+ * Compliance PowerShell). The BFF route renders that as an honest MessageBar.
  *
- * This endpoint is in /beta + behind a tenant-level preview flag in many
- * tenants. The BFF route translates a 404 here into a 501 with the
- * remediation hint (operator must enable the Graph DLP preview through
- * the Purview portal).
- *
- * Returns the raw evaluation response (includes matched policies + rules
- * + which sensitive info types triggered).
+ * If/when Microsoft ships a GA Graph simulate endpoint, repoint this to it.
  */
 export async function evaluatePolicy(payload: {
   content: string;
   policyIds?: string[];
   metadata?: Record<string, string>;
-}): Promise<unknown> {
+}): Promise<never> {
   assertEnabled();
   if (!payload?.content) throw new DlpError(400, null, 'content is required');
-  const endpoint = '/beta/security/dataLossPrevention/evaluatePolicies';
-  const body = {
-    content: { textContent: payload.content },
-    ...(payload.policyIds ? { policyIds: payload.policyIds } : {}),
-    ...(payload.metadata ? { metadata: payload.metadata } : {}),
-  };
-  const res = await graphFetch(endpoint, {
-    method: 'POST',
-    body: JSON.stringify(body),
-  });
-  return readJson<unknown>(res, endpoint);
+  throw new DlpError(
+    501,
+    {
+      portalLink: 'https://purview.microsoft.com',
+      powershellCmd: 'Test-DlpPolicies',
+    },
+    'No public Microsoft Graph REST API exists to simulate Purview DLP policies. ' +
+      'Test a policy in the Microsoft Purview portal (Data loss prevention → Policies → "Test policy") ' +
+      'or via Security & Compliance PowerShell. Loom does not fabricate simulation results.',
+    'evaluatePolicy',
+  );
 }
 
 // Test-only: expose internal helpers for unit tests

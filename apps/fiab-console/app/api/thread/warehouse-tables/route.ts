@@ -17,6 +17,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import { getSession } from '@/lib/auth/session';
 import { dedicatedTarget } from '@/lib/azure/synapse-sql-client';
 import { listTables } from '@/lib/azure/sql-objects-client';
+import { isSqlLoginFailure, sqlLoginGateBody } from '@/lib/azure/sql-login-gate';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -60,6 +61,16 @@ export async function GET(req: NextRequest) {
     }));
     return NextResponse.json({ ok: true, options });
   } catch (e: any) {
+    // Honest SQL-login gate (audit B3): a "Login failed for user" / ELOGIN means
+    // the Console UAMI has no SQL login on the dedicated pool — return a
+    // structured 503 remediation AND point at the custom-SQL escape hatch.
+    if (isSqlLoginFailure(e)) {
+      const gate = sqlLoginGateBody({ target: `${target.server} / ${target.database}`, detail: e?.message });
+      return NextResponse.json(
+        { ...gate, fallback: 'Switch the source to "A custom SQL query" to build directly from a SELECT.' },
+        { status: 503 },
+      );
+    }
     // The dedicated pool may be paused or have no catalog tables visible to the
     // Console identity. Surface that honestly AND point at the escape hatch:
     // both edges that use this route also accept a custom SQL query as source.
