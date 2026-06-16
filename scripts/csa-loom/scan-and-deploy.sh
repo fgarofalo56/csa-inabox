@@ -472,6 +472,48 @@ source "$OUT_ENV"
 bash "$SCRIPT_DIR/grant-navigator-rbac.sh" || echo "  (grant-navigator-rbac.sh reported issues — review above; reused-resource roles may need a manual grant)"
 bash "$SCRIPT_DIR/patch-navigator-env.sh"  || echo "  (patch-navigator-env.sh reported issues — review above)"
 
+# ---------------------------------------------------------------------------
+# Post-deploy DATA-PLANE bootstraps that CANNOT be expressed in bicep/ARM RBAC.
+# These mirror the canonical csa-loom-post-deploy-bootstrap.yml steps so the
+# one-button LOCAL deploy reaches the same working state as the GH-Actions path:
+#   • Purview Data Map roles (collection metadata policy, NOT ARM RBAC)
+#   • Synapse SQL CREATE USER … FROM EXTERNAL PROVIDER (TDS, needs sqlcmd)
+# Both are best-effort here (the runner must be Purview Collection Admin /
+# Synapse SQL Administrator); a failure prints how to finish via the workflow.
+# ---------------------------------------------------------------------------
+echo
+echo "Post-deploy data-plane bootstraps (Purview Data Map + Synapse SQL login)…"
+
+# Purview Data Map — grant the Console UAMI data-reader + data-curator (+ the
+# admin roles) on the root collection so catalog/lineage/sources/domains work
+# (was a 403). Discover the provisioned account; skip cleanly when Purview is
+# opted out or reused cross-sub.
+PURVIEW_ACCT="${LOOM_PURVIEW_ACCOUNT:-$(az purview account list -g "rg-csa-loom-admin-$REGION" --query "[?starts_with(name,'purview-csa-loom')].name | [0]" -o tsv 2>/dev/null || true)}"
+if [[ -n "${PURVIEW_ACCT:-}" ]]; then
+  for ROLE in data-reader data-curator data-source-administrator collection-administrator; do
+    PURVIEW_ACCOUNT="$PURVIEW_ACCT" ROLE="$ROLE" \
+      bash "$SCRIPT_DIR/grant-purview-datamap-role.sh" \
+      || echo "  (Purview '$ROLE' grant skipped/failed — run the deploy SP as Collection Admin, or use the GH workflow)"
+  done
+else
+  echo "  (no purview-csa-loom* account found — Purview opted out or reused cross-sub; skipping Data Map grants)"
+fi
+
+# Synapse SQL login for the Console UAMI (dedicated pool + serverless). Requires
+# sqlcmd; when absent, point at the workflow (which installs mssql-tools18) +
+# the canonical SQL bootstrap file rather than silently dropping it.
+if command -v sqlcmd >/dev/null 2>&1 || [[ -x /opt/mssql-tools18/bin/sqlcmd ]]; then
+  echo "  sqlcmd present — running the Synapse SQL login bootstrap is best done via"
+  echo "  csa-loom-post-deploy-bootstrap.yml (it manages the temp public-access window)."
+fi
+echo "  Synapse SQL login (CREATE USER … FROM EXTERNAL PROVIDER) for the Console UAMI:"
+echo "    run the 'SQL-level grants via sqlcmd' steps in"
+echo "    .github/workflows/csa-loom-post-deploy-bootstrap.yml (workflow_dispatch),"
+echo "    or apply platform/fiab/bootstrap/sql-security-bootstrap.sql per database"
+echo "    (the workflow now derives the region-correct uami-loom-console-<region> name)."
+
 echo
 echo "Done. CSA Loom deployed to subscription $ADMIN_SUB ($REGION), boundary $BOUNDARY_PARAM."
+echo "Finish data-plane bootstraps (Purview/Synapse SQL/Graph consent) by running the"
+echo "csa-loom-post-deploy-bootstrap workflow if any step above was skipped."
 echo "First login uses the bootstrap admin you set (loomTenantAdminOid/Group)."

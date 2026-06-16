@@ -711,8 +711,8 @@ var effShirAdminPassword = !empty(shirAdminPassword)
   ? shirAdminPassword
   : '${toUpper(substring(uniqueString(subscription().subscriptionId, 'loom-shir'), 0, 9))}${substring(uniqueString(deployment().name, 'loom-shir-lower'), 0, 9)}!7xQ'
 
-@description('Loom version label shown in the UI + on /api/version.')
-param loomVersion string = 'v0.1'
+@description('Loom version label shown in the UI (/admin/updates) + on /api/version. Wired to LOOM_VERSION / NEXT_PUBLIC_LOOM_VERSION. Default tracks the release-please manifest version (.release-please-manifest.json); a release/build pipeline should pass the exact tag (e.g. --parameters loomVersion=0.42.3). Bump this default when the major.minor release line advances so a clean default deploy never shows a stale "v0.1".')
+param loomVersion string = '0.42.0'
 
 @description('Container image tag per app (overridable per release).')
 param appImageTags object = {

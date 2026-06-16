@@ -306,8 +306,8 @@ var copilotMafActive = copilotMafEnabled && (boundary == 'GCC-High' || boundary 
 // dbt-runner Container App is only meaningful on Container Apps + when apps deploy.
 var dbtRunnerActive = dbtRunnerEnabled && containerPlatform == 'containerApps' && deployAppsEnabled
 
-@description('Loom version label shown in the UI (matches console image tag by convention).')
-param loomVersion string = 'v0.1'
+@description('Loom version label shown in the UI (/admin/updates) + /api/version. Wired to LOOM_VERSION / NEXT_PUBLIC_LOOM_VERSION. Default tracks the release-please manifest (.release-please-manifest.json); the top-level main.bicep passes its own loomVersion (a release/build pipeline should override with the exact tag). Kept in sync so a clean default deploy never shows "v0.1".')
+param loomVersion string = '0.42.0'
 
 @description('Loom Synapse workspace name (for env-var wiring on loom-console). Default uses the single-sub DLZ convention.')
 param loomSynapseWorkspace string = 'syn-loom-default-${location}'
@@ -806,6 +806,15 @@ var existingEventHubNamespace = byoExisting.?eventHubNamespace ?? ''
 var effEventHubNamespace = !empty(existingEventHubNamespace) ? existingEventHubNamespace : loomEventHubNamespace
 var effEventHubRg        = !empty(byoExisting.?eventHubRg ?? '') ? byoExisting.eventHubRg : (!empty(loomEventHubRg) ? loomEventHubRg : loomDlzRg)
 var byoEventHubSub       = !empty(byoExisting.?eventHubSub ?? '') ? byoExisting.eventHubSub : (!empty(loomEventHubSub) ? loomEventHubSub : subscription().subscriptionId)
+// Business-events Event Grid topic location — created in the DLZ RG /
+// deployment sub by modules/landing-zone/eventgrid-business.bicep. The
+// console's business-events client must target THAT RG/sub to find the topic,
+// so default the empty params to the DLZ RG / deployment sub (mirroring the
+// Event Hub navigator fallbacks above) instead of leaving them blank. Without
+// this, LOOM_EVENTGRID_RG/SUB ship empty on a clean deploy and the topic
+// lookup fails even though the topic exists.
+var effEventGridRg       = !empty(loomEventGridRg) ? loomEventGridRg : loomDlzRg
+var effEventGridSub      = !empty(loomEventGridSub) ? loomEventGridSub : subscription().subscriptionId
 // Databricks navigator — reuse hostname > provisioned/patched hostname.
 var existingDatabricksHostname = byoExisting.?databricksHostname ?? ''
 var effDatabricksHostname = !empty(existingDatabricksHostname) ? existingDatabricksHostname : (deDatabricksEnabled ? loomDatabricksHostname : '')
@@ -2155,6 +2164,16 @@ module appDeployments 'app-deployments.bicep' = if (containerPlatform == 'contai
             { name: 'LOOM_ACA_ENV_ID', value: containerPlatformModule.outputs.caeId }
             { name: 'LOOM_ACA_ENV_DOMAIN', value: containerPlatformModule.outputs.caeDefaultDomain }
             { name: 'LOOM_MCP_CATALOG_UAMI_ID', value: identity.outputs.uamiMcpId }
+            // Built-in MCP tool server (azure-functions/mcp-server) /api/mcp
+            // endpoint. The admin → External MCP Tools "Built-in server" card +
+            // GET /api/admin/mcp-servers/builtin read this for one-click
+            // registration. builtinMcpUrl is the deployed Function endpoint when
+            // loomBuiltinMcpActive (default-on once the Function code is
+            // published) and '' otherwise → the card honest-gates naming this
+            // var + the builtin-mcp.bicep module. (PR #1413 computed/output this
+            // value but never bound it to the console env — fixed here so a clean
+            // deploy self-registers the built-in server.)
+            { name: 'LOOM_BUILTIN_MCP_URL', value: builtinMcpUrl }
             // F4: schedule-time pipeline parameter overrides. KV defaults to the
             // admin-plane vault (Console UAMI already has Secrets Officer there);
             // point at a separate vault by overriding loomParamKeyVaultUri and
@@ -2300,8 +2319,8 @@ module appDeployments 'app-deployments.bicep' = if (containerPlatform == 'contai
             // custom-topic channel + durable Event Hub channel + governed
             // event-type registry (Cosmos). The Event Grid sub/RG default to the
             // deployment sub / DLZ RG when empty (eventgridTopicsConfigGate).
-            { name: 'LOOM_EVENTGRID_RG', value: loomEventGridRg }
-            { name: 'LOOM_EVENTGRID_SUB', value: loomEventGridSub }
+            { name: 'LOOM_EVENTGRID_RG', value: effEventGridRg }
+            { name: 'LOOM_EVENTGRID_SUB', value: effEventGridSub }
             { name: 'LOOM_EVENTGRID_BUSINESS_TOPIC', value: loomEventGridBusinessTopic }
             { name: 'LOOM_EVENTHUB_BUSINESS_HUB', value: loomEventHubBusinessHub }
             { name: 'LOOM_BUSINESS_EVENTS_CONTAINER', value: loomBusinessEventsContainer }

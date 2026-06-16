@@ -32,6 +32,14 @@ env:
   # the var once re-targets the whole bootstrap (incl. the Purview Data Map grant).
   CONSOLE_UAMI_PRINCIPAL: ${{ vars.LOOM_CONSOLE_UAMI_PRINCIPAL || 'e61f3eb3-c646-4183-8198-4c4a34cd9a01' }}
   CONSOLE_UAMI_CLIENT: ${{ vars.LOOM_CONSOLE_UAMI_CLIENT || 'c6272de5-3c4e-4b72-8b57-71b2e950209b' }}
+  # Console UAMI display NAME used for the Synapse SQL CREATE LOGIN/USER FROM
+  # EXTERNAL PROVIDER steps. identity.bicep names it uami-loom-console-<region>,
+  # so a non-eastus2 deploy MUST grant the right name or the Console UAMI gets
+  # "Login failed for user" (ELOGIN). Default tracks the eastus2 estate; the
+  # "Resolve Console UAMI SQL name" step below OVERRIDES this with the actual
+  # UAMI discovered in the admin RG so it is correct for any region. Override
+  # via repo var LOOM_CONSOLE_UAMI_NAME to pin it explicitly.
+  CONSOLE_SQL_UAMI: ${{ vars.LOOM_CONSOLE_UAMI_NAME || 'uami-loom-console-eastus2' }}
   # Weave (Semantic Ontology) graph store — the Console UAMI's Entra principal
   # NAME registered in PostgreSQL (must match LOOM_POSTGRES_AAD_USER on the
   # Console, default loom-console). The PG server name is resolved at runtime.
@@ -278,6 +286,31 @@ jobs:
             --assignee-principal-type ServicePrincipal \
             -o table || true
 
+      - name: Resolve Console UAMI SQL name (region-correct, not hardcoded)
+        run: |
+          set -uo pipefail
+          # identity.bicep names the Console UAMI uami-loom-console-<region>. The
+          # hardcoded eastus2 default in env: would create the SQL login for the
+          # WRONG name in any other region, leaving the Console UAMI with
+          # "Login failed for user" (ELOGIN) on every Synapse SQL call. Discover
+          # the real UAMI in the admin RG and derive the region from ADMIN_RG so
+          # CREATE LOGIN/USER targets the identity that actually runs the console.
+          DISCOVERED=$(az identity list -g "$ADMIN_RG" \
+            --query "[?contains(name,'console')].name | [0]" -o tsv 2>/dev/null || true)
+          if [ -n "${DISCOVERED:-}" ] && [ "$DISCOVERED" != "None" ]; then
+            echo "CONSOLE_SQL_UAMI=$DISCOVERED" >> "$GITHUB_ENV"
+            echo "Resolved Console UAMI SQL name from admin RG: $DISCOVERED"
+          else
+            # Fallback: derive region from the admin RG suffix (rg-csa-loom-admin-<region>).
+            REGION_FROM_RG="${ADMIN_RG##*-}"
+            if [ -n "$REGION_FROM_RG" ] && [ "$REGION_FROM_RG" != "$ADMIN_RG" ]; then
+              echo "CONSOLE_SQL_UAMI=uami-loom-console-$REGION_FROM_RG" >> "$GITHUB_ENV"
+              echo "Derived Console UAMI SQL name from admin RG region: uami-loom-console-$REGION_FROM_RG"
+            else
+              echo "Keeping configured CONSOLE_SQL_UAMI=$CONSOLE_SQL_UAMI"
+            fi
+          fi
+
       - name: SQL-level grants via sqlcmd (Serverless)
         run: |
           set -e
@@ -289,13 +322,13 @@ jobs:
           sudo apt-get update
           sudo ACCEPT_EULA=Y apt-get install -y mssql-tools18 unixodbc-dev
           export PATH="$PATH:/opt/mssql-tools18/bin"
-          # Connect to Serverless master, create UAMI as login + user
+          # Connect to Serverless master, create UAMI as login + user (region-correct name).
           sqlcmd -S "$SYNAPSE_WS-ondemand.sql.azuresynapse.net" -d master -G -P "$TOKEN" -Q "
-          IF NOT EXISTS (SELECT 1 FROM sys.server_principals WHERE name = 'uami-loom-console-eastus2')
-            CREATE LOGIN [uami-loom-console-eastus2] FROM EXTERNAL PROVIDER;
-          IF NOT EXISTS (SELECT 1 FROM sys.database_principals WHERE name = 'uami-loom-console-eastus2')
-            CREATE USER [uami-loom-console-eastus2] FROM LOGIN [uami-loom-console-eastus2];
-          ALTER SERVER ROLE sysadmin ADD MEMBER [uami-loom-console-eastus2];
+          IF NOT EXISTS (SELECT 1 FROM sys.server_principals WHERE name = '$CONSOLE_SQL_UAMI')
+            CREATE LOGIN [$CONSOLE_SQL_UAMI] FROM EXTERNAL PROVIDER;
+          IF NOT EXISTS (SELECT 1 FROM sys.database_principals WHERE name = '$CONSOLE_SQL_UAMI')
+            CREATE USER [$CONSOLE_SQL_UAMI] FROM LOGIN [$CONSOLE_SQL_UAMI];
+          ALTER SERVER ROLE sysadmin ADD MEMBER [$CONSOLE_SQL_UAMI];
           " || echo "Some grants may have failed (already exist or other) — continuing"
 
       - name: SQL-level grants via sqlcmd (Dedicated pool — F13 table/column/row security)
@@ -311,15 +344,48 @@ jobs:
           POOL="${LOOM_SYNAPSE_DEDICATED_POOL:-loompool}"
           TOKEN=$(az account get-access-token --resource https://database.windows.net --query accessToken -o tsv)
           export PATH="$PATH:/opt/mssql-tools18/bin"
-          # The dedicated pool must be running (resumed) for this to connect.
+          # The dedicated pool (the Azure-native "warehouse" backend) must be
+          # running (resumed) for this to connect. Use the region-correct UAMI
+          # name resolved above so the login matches the identity the console runs
+          # as (fixes ELOGIN on non-eastus2 deploys).
           sqlcmd -S "$SYNAPSE_WS.sql.azuresynapse.net" -d "$POOL" -G -P "$TOKEN" -I -b -Q "
-          IF NOT EXISTS (SELECT 1 FROM sys.database_principals WHERE name = 'uami-loom-console-eastus2')
-            CREATE USER [uami-loom-console-eastus2] FROM EXTERNAL PROVIDER;
-          IF IS_ROLEMEMBER('db_owner','uami-loom-console-eastus2') = 0
-            EXEC sp_addrolemember 'db_owner', 'uami-loom-console-eastus2';
+          IF NOT EXISTS (SELECT 1 FROM sys.database_principals WHERE name = '$CONSOLE_SQL_UAMI')
+            CREATE USER [$CONSOLE_SQL_UAMI] FROM EXTERNAL PROVIDER;
+          IF IS_ROLEMEMBER('db_owner','$CONSOLE_SQL_UAMI') = 0
+            EXEC sp_addrolemember 'db_owner', '$CONSOLE_SQL_UAMI';
           IF NOT EXISTS (SELECT 1 FROM sys.schemas WHERE name = 'LoomSecurity')
             EXEC('CREATE SCHEMA LoomSecurity');
           " || echo "::warning::Dedicated-pool F13 grants incomplete — ensure the pool '$POOL' is resumed and the UAMI is Synapse SQL Administrator."
+
+      - name: SQL-level grants via sqlcmd (Serverless user databases — warehouse/lakehouse SQL endpoints)
+        run: |
+          set -uo pipefail
+          # The serverless master login (above) authenticates the Console UAMI to
+          # the on-demand endpoint, but per-database SQL (warehouse/lakehouse
+          # logical DBs exposed as serverless databases, e.g. SELECT over external
+          # tables / OPENROWSET views) needs a CONTAINED USER in each user DB.
+          # Without it the Console UAMI connects to master fine but gets ELOGIN /
+          # "principal not found" against the warehouse DB. Create the user +
+          # db_owner in every non-system serverless database. Idempotent.
+          export PATH="$PATH:/opt/mssql-tools18/bin"
+          TOKEN=$(az account get-access-token --resource https://database.windows.net --query accessToken -o tsv)
+          ONDEMAND="$SYNAPSE_WS-ondemand.sql.azuresynapse.net"
+          # Enumerate user databases on the serverless endpoint.
+          DBS=$(sqlcmd -S "$ONDEMAND" -d master -G -P "$TOKEN" -h -1 -W -Q \
+            "SET NOCOUNT ON; SELECT name FROM sys.databases WHERE database_id > 4 AND name <> 'master';" 2>/dev/null | grep -vE '^\s*$' || true)
+          if [ -z "${DBS:-}" ]; then
+            echo "No serverless user databases yet (warehouse/lakehouse SQL endpoints are created on first item) — master login is sufficient for now. Re-run after creating a warehouse to grant per-DB access."
+            exit 0
+          fi
+          for DB in $DBS; do
+            echo "Granting [$CONSOLE_SQL_UAMI] db_owner on serverless DB: $DB"
+            sqlcmd -S "$ONDEMAND" -d "$DB" -G -P "$TOKEN" -I -b -Q "
+            IF NOT EXISTS (SELECT 1 FROM sys.database_principals WHERE name = '$CONSOLE_SQL_UAMI')
+              CREATE USER [$CONSOLE_SQL_UAMI] FROM EXTERNAL PROVIDER;
+            IF IS_ROLEMEMBER('db_owner','$CONSOLE_SQL_UAMI') = 0
+              EXEC sp_addrolemember 'db_owner', '$CONSOLE_SQL_UAMI';
+            " || echo "::warning::Per-DB grant on serverless DB '$DB' incomplete (continuing)."
+          done
 
       - name: Restore Synapse public access disabled
         if: always()

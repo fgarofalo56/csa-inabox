@@ -1984,6 +1984,29 @@ The Console UAMI needs **Reader** on each bound subscription for the ARG
 inventory to return rows; otherwise the surface shows an honest gate naming the
 exact `az role assignment create ... --role Reader --scope /subscriptions/<id>`.
 
+### Connections "Add existing" / `/api/azure/connectables` (Resource Graph) {#connectables-reader}
+
+The **Connections → Add existing** picker and `GET /api/azure/connectables`
+enumerate connectable Azure resources with an Azure Resource Graph query.
+Resource Graph honors RBAC, so the querying principal needs at least **Reader**
+at the subscription scope for resources to appear.
+
+- **Covered by bicep (day-one):** `modules/admin-plane/rti-hub-rbac.bicep`
+  (invoked unconditionally from `main.bicep`, `scope: subscription()`) grants the
+  **Console UAMI Reader at the deployment subscription scope**. The connectables
+  route's **UAMI fallback path** uses this grant, so "Add existing" works on a
+  clean deploy with no manual action. For additional subscriptions, set
+  `LOOM_EXTRA_SUBSCRIPTIONS` and grant the Console UAMI Reader there too.
+- **Optional per-user enhancement (tenant-admin step, NOT bicep-expressible):**
+  to let connectables enumerate with the **signed-in user's** identity instead of
+  the UAMI, the Loom console **app registration** needs the **Azure Service
+  Management** `user_impersonation` delegated permission with **admin consent**.
+  This is a one-time Entra tenant-admin action (Entra → App registrations →
+  Loom console → API permissions → Add **Azure Service Management** →
+  `user_impersonation` → **Grant admin consent**). Until then the UAMI path above
+  is used (and is sufficient). This cannot be granted from bicep because delegated
+  admin-consent is a Microsoft Graph / directory operation, not an ARM resource.
+
 ### Workspace → domain binding (required)
 
 Creating a workspace now **requires** a governance domain. Both
