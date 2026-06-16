@@ -888,11 +888,17 @@ const bundle: AppBundle = {
           { path: 'Files/audit', description: 'Federation audit events forwarded to Sentinel.' },
           { path: 'Files/catalog', description: 'Per-DLZ Purview catalog-scan rollups.' },
         ],
+        // Self-contained: the install uploads a repo-hosted catalog-overlay
+        // sample into THIS tenant's ADLS and registers a real queryable
+        // shortcut. The prior `catalog@{{ADLS_ACCOUNT}}/overlay` target did not
+        // exist on a fresh install (vaporware); replaced per no-vaporware.md.
         shortcuts: [
           {
             name: 'admin_plane_catalog',
-            target: 'abfss://catalog@{{ADLS_ACCOUNT}}.dfs.core.windows.net/overlay',
-            description: 'Read-only shortcut to the Admin Plane catalog overlay (department-wide domain hierarchy + policies).',
+            repoDataset: 'samples/app-data/multi-agency-onboarding/admin-plane-catalog-overlay.csv',
+            format: 'csv',
+            kind: 'files',
+            description: 'Admin Plane catalog overlay (department-wide domain hierarchy + policies). Repo-hosted sample uploaded into this lakehouse on install.',
           },
         ],
         deltaTables: [

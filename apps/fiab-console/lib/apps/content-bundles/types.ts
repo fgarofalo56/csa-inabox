@@ -84,7 +84,51 @@ export interface LakehouseContent {
   schemas?: { name: string; description?: string }[];
   /** `schema` names the schema each Delta table belongs to when schemasEnabled (defaults to 'dbo'). */
   deltaTables?: { name: string; ddl: string; schema?: string; sampleRows?: any[][] }[];
-  shortcuts?: { name: string; target: string; description?: string }[];
+  shortcuts?: LakehouseShortcutDecl[];
+}
+
+/**
+ * A lakehouse shortcut declared by a bundle. Per .claude/rules/no-vaporware.md
+ * a shortcut may NOT point at an external URL that 404s / a workspace that
+ * doesn't exist. There are exactly three honest shapes:
+ *
+ *  - `repoDataset` (PREFERRED, self-contained): a repo-relative path under
+ *    `samples/app-data/<app>/<file>`. At install the provisioner reads the
+ *    real file, uploads it into the TENANT'S OWN ADLS under the lakehouse's
+ *    `Files/_shortcuts/<name>/`, registers a real internal shortcut row, and
+ *    (when Synapse is configured) a queryable OPENROWSET view. Nothing external.
+ *
+ *  - `internal://<container>/<path>`: a pointer to another path on the
+ *    tenant's PRIMARY ADLS account. The UAMI already has read on it, so the
+ *    provisioner registers it + proves reachability with a live list probe.
+ *
+ *  - `publicAnonymous: true` with an `https://…`/`abfss://…` target: a
+ *    genuinely-public, anonymous-read dataset. The provisioner validates it
+ *    with an unauthenticated HEAD/GET (no UAMI RBAC) before registering it
+ *    `active`; if the probe fails it persists `pending` with the HTTP status.
+ *
+ * Anything else (a bare external `target` with neither flag) is registered
+ * `pending` with an honest gate explaining it is unverified — never a silent
+ * "active" claim over an unreachable URL.
+ */
+export interface LakehouseShortcutDecl {
+  name: string;
+  /**
+   * The shortcut target. Optional when `repoDataset` is set (the provisioner
+   * derives the in-tenant target from the uploaded file). For internal
+   * shortcuts use `internal://<container>/<path>`; for public ones an
+   * `https://`/`abfss://` URL with `publicAnonymous: true`.
+   */
+  target?: string;
+  description?: string;
+  /** Repo-relative sample file (preferred — self-contained, uploaded to the tenant ADLS). */
+  repoDataset?: string;
+  /** Section the shortcut hangs under (default 'files'). */
+  kind?: 'files' | 'tables';
+  /** Set true only for a genuinely public, anonymous-read external target. */
+  publicAnonymous?: boolean;
+  /** File format hint for the queryable view (default inferred from the file ext). */
+  format?: 'delta' | 'parquet' | 'csv' | 'json';
 }
 
 export interface SemanticModelContent {

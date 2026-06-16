@@ -13,8 +13,10 @@ const bundle: AppBundle = {
     'reference architecture. Use the companion `Lakehouse Inspector Walkthrough` notebook ' +
     'to profile rows, check nulls, and explore the gold layer with Spark SQL.\n\n' +
     'Folders mirror dbt layers exactly: `bronze/<entity>/`, `silver/<entity>/`, ' +
-    '`gold/<dim_or_fact>/`. Two OneLake shortcuts are pre-wired to demonstrate the ' +
-    'zero-copy pattern (curated public dataset + sister-workspace shortcut).',
+    '`gold/<dim_or_fact>/`. A self-contained shortcut (`retail-orders-public`) is ' +
+    'pre-wired to demonstrate the zero-copy pattern: a repo-hosted retail-orders ' +
+    'sample is uploaded into this lakehouse on install — browsable + queryable, ' +
+    'nothing external to reach.',
   sourceDocs: [
     'examples/fabric-e2e/ARCHITECTURE.md',
     'examples/fabric-e2e/contracts/dim_customer.yaml',
@@ -26,7 +28,7 @@ const bundle: AppBundle = {
     'examples/fabric-e2e/dbt/models/silver/silver_sales.sql',
     'examples/fabric-e2e/dbt/models/gold/fact_sales.sql',
     'examples/fabric-e2e/dbt/models/gold/dim_customer.sql',
-    'examples/financial-fraud-detection/contracts/fraud-scores.yaml',
+    'samples/app-data/lakehouse-inspector/retail-orders-public.csv',
   ],
   items: [
     {
@@ -355,19 +357,18 @@ const bundle: AppBundle = {
         ],
         shortcuts: [
           {
-            name: 'open-data-retail-public',
-            target: 'https://datasetsforfabric.blob.core.windows.net/retail-public/orders.csv',
+            // Self-contained: the install uploads this repo-hosted sample into
+            // THIS tenant's ADLS under Files/_shortcuts/retail-orders-public/
+            // and registers a real, queryable shortcut (Synapse OPENROWSET view
+            // when serverless is configured). No external URL that can 404.
+            name: 'retail-orders-public',
+            repoDataset: 'samples/app-data/lakehouse-inspector/retail-orders-public.csv',
+            format: 'csv',
+            kind: 'files',
             description:
-              'Read-only shortcut to a curated public retail orders dataset. Demonstrates the ' +
-              'OneLake-to-public-Azure-Storage shortcut pattern. No credentials required (anonymous read).',
-          },
-          {
-            name: 'sister-fraud-scores',
-            target: 'onelake://fraud-analytics-prod/lakehouse-fraud/gold/fraud_scores',
-            description:
-              'Cross-workspace shortcut to the certified fraud_scores Delta table in the ' +
-              'financial-fraud-detection workspace (see examples/financial-fraud-detection/contracts/fraud-scores.yaml). ' +
-              'Uses the workspace MI for auth — no SAS tokens.',
+              '267-row retail orders sample (repo-hosted) uploaded into this lakehouse on install. ' +
+              'Demonstrates the zero-copy shortcut pattern over a dataset that ships with the ' +
+              'product — browsable + queryable the moment the app opens, nothing external to reach.',
           },
         ],
       },
@@ -394,7 +395,7 @@ const bundle: AppBundle = {
               '2. Profile row counts per tier\n' +
               '3. Compute null counts on primary keys (data-quality smoke test)\n' +
               '4. Run sample queries against the gold star schema (`fact_sales` joined to dims)\n' +
-              '5. Inspect a OneLake shortcut to confirm cross-workspace reads work\n\n' +
+              '5. Read the `retail-orders-public` shortcut to confirm the zero-copy pattern works\n\n' +
               '> All cells are idempotent — run any in any order. Default language is **PySpark**; ' +
               'Spark SQL cells are tagged accordingly.',
           },
@@ -509,35 +510,28 @@ const bundle: AppBundle = {
             type: 'code',
             lang: 'pyspark',
             source:
-              '# 5. Read through the cross-workspace shortcut to fraud_scores (gold).\n' +
-              '#    Confirms the workspace MI has Storage Blob Data Reader on the sister ADLS path.\n' +
-              '#\n' +
-              '#    The sister storage account is deployment-specific, so we resolve it from the\n' +
-              '#    LOOM_SISTER_ADLS_ACCOUNT Spark conf / env var instead of hard-coding a placeholder.\n' +
-              '#    If it is not set, we print an honest remediation note rather than failing on an\n' +
-              "#    unresolved '<...>' path.\n" +
-              'import os\n' +
-              'sister = (\n' +
-              '    spark.conf.get("spark.loom.sisterAdlsAccount", None)\n' +
-              '    or os.environ.get("LOOM_SISTER_ADLS_ACCOUNT")\n' +
-              ')\n' +
-              'if not sister:\n' +
+              '# 5. Read through the self-contained `retail-orders-public` shortcut.\n' +
+              '#    The installer uploaded the repo-hosted retail-orders sample into THIS\n' +
+              '#    lakehouse under Files/_shortcuts/retail-orders-public/ — so this read is\n' +
+              '#    always reachable (no external dataset, no cross-workspace RBAC needed).\n' +
+              '#    Demonstrates the zero-copy shortcut pattern end-to-end.\n' +
+              'shortcut_path = "Files/_shortcuts/retail-orders-public/retail-orders-public.csv"\n' +
+              'try:\n' +
+              '    orders = (\n' +
+              '        spark.read.option("header", True).option("inferSchema", True)\n' +
+              '        .csv(shortcut_path)\n' +
+              '    )\n' +
+              '    print("retail-orders-public shortcut schema:")\n' +
+              '    orders.printSchema()\n' +
+              '    print(f"\\nrow count = {orders.count():,}")\n' +
+              '    orders.select("order_id", "order_date", "product_name", "extended_amount").show(5, truncate=False)\n' +
+              'except Exception as e:\n' +
               '    print(\n' +
-              '        "[GATE] Cross-workspace shortcut not configured.\\n"\n' +
-              '        "       Set the sister ADLS account before running this cell, e.g.:\\n"\n' +
-              '        "         spark.conf.set(\\"spark.loom.sisterAdlsAccount\\", \\"<your_fraud_adls_account>\\")\\n"\n' +
-              '        "       or provision LOOM_SISTER_ADLS_ACCOUNT in the workspace and grant the\\n"\n' +
-              '        "       workspace MI \\"Storage Blob Data Reader\\" on that account. The shortcut\\n"\n' +
-              '        "       target is declared on this lakehouse as \\"sister-fraud-scores\\"."\n' +
-              '    )\n' +
-              'else:\n' +
-              '    fraud = spark.read.format("delta").load(\n' +
-              '        f"abfss://gold@{sister}.dfs.core.windows.net/fraud_analytics/fraud_scores"\n' +
-              '    )\n' +
-              '    print("fraud_scores schema:")\n' +
-              '    fraud.printSchema()\n' +
-              '    print(f"\\nrow count = {fraud.count():,}")\n' +
-              '    fraud.select("transaction_id", "risk_tier", "fraud_probability").show(5, truncate=False)',
+              '        f"[GATE] Could not read the shortcut at {shortcut_path}: {type(e).__name__}: {e}\\n"\n' +
+              '        "       The installer uploads this sample when \\"Deploy artifacts to live\\n"\n' +
+              '        "       services\\" is ON. Re-run the install with deploy enabled, or browse\\n"\n' +
+              '        "       Files/_shortcuts/ in the Lakehouse editor to confirm it landed."\n' +
+              '    )',
           },
           {
             id: 'cell-md-next',

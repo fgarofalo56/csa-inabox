@@ -1,0 +1,9 @@
+domain_id,domain_name,parent_domain,owner_agency,classification,policy_id,policy_name,enforcement,effective_date
+DOM-100,Department Root,,Department CIO,CUI,POL-001,Department Data Sharing Baseline,enforced,2026-01-01
+DOM-101,Mission Operations,DOM-100,Mission Ops Agency,CUI,POL-010,Mission Data Handling,enforced,2026-01-15
+DOM-102,Field Services,DOM-100,Field Services Agency,Restricted-PII,POL-020,PII Redaction Required,enforced,2026-02-01
+DOM-103,Inspector General,DOM-100,IG Office,CUI,POL-030,Oversight Read-Only Access,enforced,2026-02-10
+DOM-104,Shared Analytics,DOM-100,Department CDO,CUI,POL-040,Cross-Domain Analytics Grant,monitored,2026-03-01
+DOM-111,Logistics,DOM-101,Mission Ops Agency,CUI,POL-011,Supply Chain Sharing,enforced,2026-03-15
+DOM-112,Personnel,DOM-102,Field Services Agency,Restricted-PII,POL-021,HR Data Minimization,enforced,2026-04-01
+DOM-113,Audit Trail,DOM-103,IG Office,CUI,POL-031,Immutable Audit Retention,enforced,2026-04-10

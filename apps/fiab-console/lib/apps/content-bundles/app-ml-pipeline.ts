@@ -642,15 +642,11 @@ const bundle: AppBundle = {
             ],
           },
         ],
-        shortcuts: [
-          {
-            name: 'feature_store_uc',
-            target: 'abfss://unity-catalog@onelake/ml/features',
-            description:
-              'Shortcut to the Unity-Catalog feature store schema so feature ' +
-              'tables are queryable from this lakehouse.',
-          },
-        ],
+        // No external shortcut: the churn feature tables are REAL Delta tables
+        // in THIS lakehouse (seeded above via deltaTables[].sampleRows), so they
+        // are already queryable here. The prior `feature_store_uc` shortcut
+        // pointed at a non-existent `abfss://unity-catalog@onelake/...` host
+        // (vaporware) and was removed per .claude/rules/no-vaporware.md.
       },
     },
 

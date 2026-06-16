@@ -1,0 +1,268 @@
+order_id,order_date,customer_id,customer_name,customer_segment,country,region,product_id,product_name,category,channel,quantity,unit_price,discount_pct,extended_amount
+ORD-200001,2026-01-01,CUST-0591,Umbrella Health,Enterprise,United Kingdom,EMEA,SKU-9810,"Portable SSD 2TB",Storage,Phone,5,189.00,0.0000,945.00
+ORD-200002,2026-01-01,CUST-0701,Stark Manufacturing,Enterprise,United States,AMER,SKU-9420,"Noise-Cancel Headset",Audio,Web,1,179.00,0.0000,179.00
+ORD-200003,2026-01-01,CUST-0017,Acme Industrial Holdings,Enterprise,United States,AMER,SKU-9999,"Workstation Laptop Pro",Computers,Partner,1,2499.00,0.1500,2124.15
+ORD-200004,2026-01-02,CUST-0103,Globex SA,SMB,France,EMEA,SKU-9214,"27" 4K UHD Monitor",Displays,Retail,2,129.00,0.0000,258.00
+ORD-200005,2026-01-02,CUST-0591,Umbrella Health,Enterprise,United Kingdom,EMEA,SKU-9101,"USB-C Hub Pro",Peripherals,Phone,5,19.95,0.1000,89.78
+ORD-200006,2026-01-02,CUST-0322,Hooli Pte Ltd,Enterprise,Singapore,APAC,SKU-9555,"Studio Microphone X",Audio,Retail,6,899.00,0.0000,5394.00
+ORD-200007,2026-01-03,CUST-0815,Wonka Confectionery,SMB,Germany,EMEA,SKU-9420,"Noise-Cancel Headset",Audio,Web,2,179.00,0.0000,358.00
+ORD-200008,2026-01-03,CUST-0322,Hooli Pte Ltd,Enterprise,Singapore,APAC,SKU-9301,"Wireless Mouse Lite",Peripherals,Retail,3,24.50,0.0000,73.50
+ORD-200009,2026-01-03,CUST-0480,Pied Piper Inc.,SMB,United States,AMER,SKU-9420,"Noise-Cancel Headset",Audio,Partner,3,179.00,0.0000,537.00
+ORD-200010,2026-01-03,CUST-0633,Wayne Logistics,Enterprise,United States,AMER,SKU-9555,"Studio Microphone X",Audio,Web,3,899.00,0.0000,2697.00
+ORD-200011,2026-01-03,CUST-0633,Wayne Logistics,Enterprise,United States,AMER,SKU-9610,"Webcam 1080p",Peripherals,Phone,1,59.00,0.0000,59.00
+ORD-200012,2026-01-04,CUST-0204,Initech LLC,SMB,United States,AMER,SKU-9101,"USB-C Hub Pro",Peripherals,Retail,3,19.95,0.0000,59.85
+ORD-200013,2026-01-04,CUST-0815,Wonka Confectionery,SMB,Germany,EMEA,SKU-9555,"Studio Microphone X",Audio,Web,5,899.00,0.0000,4495.00
+ORD-200014,2026-01-04,CUST-0103,Globex SA,SMB,France,EMEA,SKU-9001,"Mechanical Keyboard MK-1",Peripherals,Partner,6,49.99,0.1000,269.95
+ORD-200015,2026-01-04,CUST-0815,Wonka Confectionery,SMB,Germany,EMEA,SKU-9810,"Portable SSD 2TB",Storage,Web,4,189.00,0.0500,718.20
+ORD-200016,2026-01-05,CUST-0103,Globex SA,SMB,France,EMEA,SKU-9610,"Webcam 1080p",Peripherals,Web,1,59.00,0.0000,59.00
+ORD-200017,2026-01-05,CUST-0480,Pied Piper Inc.,SMB,United States,AMER,SKU-9214,"27" 4K UHD Monitor",Displays,Partner,2,129.00,0.0500,245.10
+ORD-200018,2026-01-05,CUST-0815,Wonka Confectionery,SMB,Germany,EMEA,SKU-9999,"Workstation Laptop Pro",Computers,Partner,4,2499.00,0.0000,9996.00
+ORD-200019,2026-01-05,CUST-0633,Wayne Logistics,Enterprise,United States,AMER,SKU-9810,"Portable SSD 2TB",Storage,Partner,5,189.00,0.0000,945.00
+ORD-200020,2026-01-05,CUST-0633,Wayne Logistics,Enterprise,United States,AMER,SKU-9001,"Mechanical Keyboard MK-1",Peripherals,Retail,5,49.99,0.1500,212.46
+ORD-200021,2026-01-05,CUST-0480,Pied Piper Inc.,SMB,United States,AMER,SKU-9001,"Mechanical Keyboard MK-1",Peripherals,Retail,6,49.99,0.0000,299.94
+ORD-200022,2026-01-06,CUST-0815,Wonka Confectionery,SMB,Germany,EMEA,SKU-9301,"Wireless Mouse Lite",Peripherals,Web,3,24.50,0.0500,69.83
+ORD-200023,2026-01-06,CUST-0103,Globex SA,SMB,France,EMEA,SKU-9555,"Studio Microphone X",Audio,Phone,2,899.00,0.0000,1798.00
+ORD-200024,2026-01-06,CUST-0103,Globex SA,SMB,France,EMEA,SKU-9610,"Webcam 1080p",Peripherals,Retail,1,59.00,0.1000,53.10
+ORD-200025,2026-01-07,CUST-0480,Pied Piper Inc.,SMB,United States,AMER,SKU-9101,"USB-C Hub Pro",Peripherals,Web,4,19.95,0.1500,67.83
+ORD-200026,2026-01-07,CUST-0480,Pied Piper Inc.,SMB,United States,AMER,SKU-9420,"Noise-Cancel Headset",Audio,Web,4,179.00,0.1500,608.60
+ORD-200027,2026-01-07,CUST-0480,Pied Piper Inc.,SMB,United States,AMER,SKU-9101,"USB-C Hub Pro",Peripherals,Partner,5,19.95,0.0000,99.75
+ORD-200028,2026-01-07,CUST-0480,Pied Piper Inc.,SMB,United States,AMER,SKU-9001,"Mechanical Keyboard MK-1",Peripherals,Partner,5,49.99,0.0500,237.45
+ORD-200029,2026-01-07,CUST-0480,Pied Piper Inc.,SMB,United States,AMER,SKU-9214,"27" 4K UHD Monitor",Displays,Retail,1,129.00,0.0000,129.00
+ORD-200030,2026-01-07,CUST-0204,Initech LLC,SMB,United States,AMER,SKU-9214,"27" 4K UHD Monitor",Displays,Partner,2,129.00,0.1500,219.30
+ORD-200031,2026-01-08,CUST-0701,Stark Manufacturing,Enterprise,United States,AMER,SKU-9420,"Noise-Cancel Headset",Audio,Retail,5,179.00,0.0000,895.00
+ORD-200032,2026-01-08,CUST-0480,Pied Piper Inc.,SMB,United States,AMER,SKU-9610,"Webcam 1080p",Peripherals,Web,6,59.00,0.1500,300.90
+ORD-200033,2026-01-08,CUST-0701,Stark Manufacturing,Enterprise,United States,AMER,SKU-9999,"Workstation Laptop Pro",Computers,Phone,4,2499.00,0.1500,8496.60
+ORD-200034,2026-01-08,CUST-0204,Initech LLC,SMB,United States,AMER,SKU-9999,"Workstation Laptop Pro",Computers,Retail,6,2499.00,0.1500,12744.90
+ORD-200035,2026-01-08,CUST-0204,Initech LLC,SMB,United States,AMER,SKU-9001,"Mechanical Keyboard MK-1",Peripherals,Phone,3,49.99,0.1500,127.47
+ORD-200036,2026-01-08,CUST-0322,Hooli Pte Ltd,Enterprise,Singapore,APAC,SKU-9810,"Portable SSD 2TB",Storage,Partner,4,189.00,0.0000,756.00
+ORD-200037,2026-01-09,CUST-0815,Wonka Confectionery,SMB,Germany,EMEA,SKU-9610,"Webcam 1080p",Peripherals,Retail,2,59.00,0.0000,118.00
+ORD-200038,2026-01-09,CUST-0591,Umbrella Health,Enterprise,United Kingdom,EMEA,SKU-9001,"Mechanical Keyboard MK-1",Peripherals,Phone,6,49.99,0.1500,254.95
+ORD-200039,2026-01-09,CUST-0103,Globex SA,SMB,France,EMEA,SKU-9810,"Portable SSD 2TB",Storage,Web,4,189.00,0.0000,756.00
+ORD-200040,2026-01-10,CUST-0322,Hooli Pte Ltd,Enterprise,Singapore,APAC,SKU-9810,"Portable SSD 2TB",Storage,Partner,3,189.00,0.0000,567.00
+ORD-200041,2026-01-10,CUST-0591,Umbrella Health,Enterprise,United Kingdom,EMEA,SKU-9214,"27" 4K UHD Monitor",Displays,Web,6,129.00,0.0000,774.00
+ORD-200042,2026-01-10,CUST-0701,Stark Manufacturing,Enterprise,United States,AMER,SKU-9101,"USB-C Hub Pro",Peripherals,Phone,4,19.95,0.0000,79.80
+ORD-200043,2026-01-10,CUST-0480,Pied Piper Inc.,SMB,United States,AMER,SKU-9101,"USB-C Hub Pro",Peripherals,Web,5,19.95,0.0000,99.75
+ORD-200044,2026-01-11,CUST-0480,Pied Piper Inc.,SMB,United States,AMER,SKU-9555,"Studio Microphone X",Audio,Partner,6,899.00,0.0500,5124.30
+ORD-200045,2026-01-11,CUST-0204,Initech LLC,SMB,United States,AMER,SKU-9810,"Portable SSD 2TB",Storage,Retail,5,189.00,0.1000,850.50
+ORD-200046,2026-01-11,CUST-0633,Wayne Logistics,Enterprise,United States,AMER,SKU-9555,"Studio Microphone X",Audio,Web,3,899.00,0.0000,2697.00
+ORD-200047,2026-01-11,CUST-0633,Wayne Logistics,Enterprise,United States,AMER,SKU-9555,"Studio Microphone X",Audio,Phone,1,899.00,0.0000,899.00
+ORD-200048,2026-01-11,CUST-0701,Stark Manufacturing,Enterprise,United States,AMER,SKU-9555,"Studio Microphone X",Audio,Phone,2,899.00,0.0000,1798.00
+ORD-200049,2026-01-11,CUST-0042,Smith Family Trust,Consumer,United States,AMER,SKU-9555,"Studio Microphone X",Audio,Partner,2,899.00,0.0000,1798.00
+ORD-200050,2026-01-12,CUST-0103,Globex SA,SMB,France,EMEA,SKU-9555,"Studio Microphone X",Audio,Retail,2,899.00,0.0000,1798.00
+ORD-200051,2026-01-12,CUST-0815,Wonka Confectionery,SMB,Germany,EMEA,SKU-9214,"27" 4K UHD Monitor",Displays,Phone,3,129.00,0.1500,328.95
+ORD-200052,2026-01-12,CUST-0701,Stark Manufacturing,Enterprise,United States,AMER,SKU-9101,"USB-C Hub Pro",Peripherals,Phone,2,19.95,0.1000,35.91
+ORD-200053,2026-01-13,CUST-0701,Stark Manufacturing,Enterprise,United States,AMER,SKU-9555,"Studio Microphone X",Audio,Phone,1,899.00,0.0000,899.00
+ORD-200054,2026-01-13,CUST-0017,Acme Industrial Holdings,Enterprise,United States,AMER,SKU-9001,"Mechanical Keyboard MK-1",Peripherals,Web,6,49.99,0.1000,269.95
+ORD-200055,2026-01-13,CUST-0017,Acme Industrial Holdings,Enterprise,United States,AMER,SKU-9001,"Mechanical Keyboard MK-1",Peripherals,Web,3,49.99,0.0000,149.97
+ORD-200056,2026-01-14,CUST-0322,Hooli Pte Ltd,Enterprise,Singapore,APAC,SKU-9214,"27" 4K UHD Monitor",Displays,Retail,6,129.00,0.1500,657.90
+ORD-200057,2026-01-14,CUST-0701,Stark Manufacturing,Enterprise,United States,AMER,SKU-9610,"Webcam 1080p",Peripherals,Retail,6,59.00,0.0000,354.00
+ORD-200058,2026-01-14,CUST-0204,Initech LLC,SMB,United States,AMER,SKU-9810,"Portable SSD 2TB",Storage,Retail,6,189.00,0.0000,1134.00
+ORD-200059,2026-01-14,CUST-0042,Smith Family Trust,Consumer,United States,AMER,SKU-9999,"Workstation Laptop Pro",Computers,Web,5,2499.00,0.0000,12495.00
+ORD-200060,2026-01-14,CUST-0591,Umbrella Health,Enterprise,United Kingdom,EMEA,SKU-9555,"Studio Microphone X",Audio,Retail,5,899.00,0.1500,3820.75
+ORD-200061,2026-01-15,CUST-0322,Hooli Pte Ltd,Enterprise,Singapore,APAC,SKU-9420,"Noise-Cancel Headset",Audio,Phone,3,179.00,0.0000,537.00
+ORD-200062,2026-01-15,CUST-0480,Pied Piper Inc.,SMB,United States,AMER,SKU-9420,"Noise-Cancel Headset",Audio,Retail,2,179.00,0.1000,322.20
+ORD-200063,2026-01-15,CUST-0815,Wonka Confectionery,SMB,Germany,EMEA,SKU-9214,"27" 4K UHD Monitor",Displays,Web,2,129.00,0.0000,258.00
+ORD-200064,2026-01-15,CUST-0017,Acme Industrial Holdings,Enterprise,United States,AMER,SKU-9420,"Noise-Cancel Headset",Audio,Retail,1,179.00,0.0000,179.00
+ORD-200065,2026-01-16,CUST-0815,Wonka Confectionery,SMB,Germany,EMEA,SKU-9810,"Portable SSD 2TB",Storage,Retail,6,189.00,0.1500,963.90
+ORD-200066,2026-01-16,CUST-0633,Wayne Logistics,Enterprise,United States,AMER,SKU-9214,"27" 4K UHD Monitor",Displays,Partner,1,129.00,0.0000,129.00
+ORD-200067,2026-01-16,CUST-0017,Acme Industrial Holdings,Enterprise,United States,AMER,SKU-9720,"Docking Station Ultra",Hubs & Docks,Phone,6,219.00,0.1000,1182.60
+ORD-200068,2026-01-16,CUST-0480,Pied Piper Inc.,SMB,United States,AMER,SKU-9999,"Workstation Laptop Pro",Computers,Phone,2,2499.00,0.1000,4498.20
+ORD-200069,2026-01-17,CUST-0633,Wayne Logistics,Enterprise,United States,AMER,SKU-9720,"Docking Station Ultra",Hubs & Docks,Phone,1,219.00,0.0500,208.05
+ORD-200070,2026-01-17,CUST-0701,Stark Manufacturing,Enterprise,United States,AMER,SKU-9214,"27" 4K UHD Monitor",Displays,Partner,2,129.00,0.1500,219.30
+ORD-200071,2026-01-17,CUST-0204,Initech LLC,SMB,United States,AMER,SKU-9420,"Noise-Cancel Headset",Audio,Phone,2,179.00,0.1500,304.30
+ORD-200072,2026-01-17,CUST-0591,Umbrella Health,Enterprise,United Kingdom,EMEA,SKU-9610,"Webcam 1080p",Peripherals,Web,6,59.00,0.0000,354.00
+ORD-200073,2026-01-17,CUST-0815,Wonka Confectionery,SMB,Germany,EMEA,SKU-9999,"Workstation Laptop Pro",Computers,Retail,5,2499.00,0.0000,12495.00
+ORD-200074,2026-01-17,CUST-0591,Umbrella Health,Enterprise,United Kingdom,EMEA,SKU-9999,"Workstation Laptop Pro",Computers,Partner,4,2499.00,0.0000,9996.00
+ORD-200075,2026-01-18,CUST-0591,Umbrella Health,Enterprise,United Kingdom,EMEA,SKU-9301,"Wireless Mouse Lite",Peripherals,Retail,2,24.50,0.1500,41.65
+ORD-200076,2026-01-18,CUST-0701,Stark Manufacturing,Enterprise,United States,AMER,SKU-9420,"Noise-Cancel Headset",Audio,Partner,6,179.00,0.0500,1020.30
+ORD-200077,2026-01-18,CUST-0017,Acme Industrial Holdings,Enterprise,United States,AMER,SKU-9610,"Webcam 1080p",Peripherals,Partner,2,59.00,0.0000,118.00
+ORD-200078,2026-01-18,CUST-0633,Wayne Logistics,Enterprise,United States,AMER,SKU-9720,"Docking Station Ultra",Hubs & Docks,Retail,6,219.00,0.0000,1314.00
+ORD-200079,2026-01-19,CUST-0591,Umbrella Health,Enterprise,United Kingdom,EMEA,SKU-9301,"Wireless Mouse Lite",Peripherals,Partner,3,24.50,0.0000,73.50
+ORD-200080,2026-01-19,CUST-0204,Initech LLC,SMB,United States,AMER,SKU-9610,"Webcam 1080p",Peripherals,Web,4,59.00,0.1000,212.40
+ORD-200081,2026-01-19,CUST-0591,Umbrella Health,Enterprise,United Kingdom,EMEA,SKU-9301,"Wireless Mouse Lite",Peripherals,Web,2,24.50,0.0000,49.00
+ORD-200082,2026-01-20,CUST-0103,Globex SA,SMB,France,EMEA,SKU-9420,"Noise-Cancel Headset",Audio,Partner,3,179.00,0.0500,510.15
+ORD-200083,2026-01-20,CUST-0701,Stark Manufacturing,Enterprise,United States,AMER,SKU-9001,"Mechanical Keyboard MK-1",Peripherals,Partner,1,49.99,0.0500,47.49
+ORD-200084,2026-01-20,CUST-0103,Globex SA,SMB,France,EMEA,SKU-9101,"USB-C Hub Pro",Peripherals,Phone,2,19.95,0.0000,39.90
+ORD-200085,2026-01-20,CUST-0204,Initech LLC,SMB,United States,AMER,SKU-9214,"27" 4K UHD Monitor",Displays,Partner,6,129.00,0.0500,735.30
+ORD-200086,2026-01-21,CUST-0322,Hooli Pte Ltd,Enterprise,Singapore,APAC,SKU-9214,"27" 4K UHD Monitor",Displays,Phone,3,129.00,0.0000,387.00
+ORD-200087,2026-01-21,CUST-0204,Initech LLC,SMB,United States,AMER,SKU-9420,"Noise-Cancel Headset",Audio,Partner,5,179.00,0.1500,760.75
+ORD-200088,2026-01-21,CUST-0591,Umbrella Health,Enterprise,United Kingdom,EMEA,SKU-9810,"Portable SSD 2TB",Storage,Retail,2,189.00,0.1000,340.20
+ORD-200089,2026-01-21,CUST-0042,Smith Family Trust,Consumer,United States,AMER,SKU-9999,"Workstation Laptop Pro",Computers,Partner,5,2499.00,0.0000,12495.00
+ORD-200090,2026-01-22,CUST-0701,Stark Manufacturing,Enterprise,United States,AMER,SKU-9214,"27" 4K UHD Monitor",Displays,Retail,4,129.00,0.1500,438.60
+ORD-200091,2026-01-22,CUST-0480,Pied Piper Inc.,SMB,United States,AMER,SKU-9810,"Portable SSD 2TB",Storage,Retail,1,189.00,0.0000,189.00
+ORD-200092,2026-01-22,CUST-0480,Pied Piper Inc.,SMB,United States,AMER,SKU-9720,"Docking Station Ultra",Hubs & Docks,Retail,6,219.00,0.0500,1248.30
+ORD-200093,2026-01-22,CUST-0591,Umbrella Health,Enterprise,United Kingdom,EMEA,SKU-9001,"Mechanical Keyboard MK-1",Peripherals,Retail,5,49.99,0.0000,249.95
+ORD-200094,2026-01-23,CUST-0701,Stark Manufacturing,Enterprise,United States,AMER,SKU-9555,"Studio Microphone X",Audio,Web,2,899.00,0.0500,1708.10
+ORD-200095,2026-01-23,CUST-0480,Pied Piper Inc.,SMB,United States,AMER,SKU-9999,"Workstation Laptop Pro",Computers,Partner,2,2499.00,0.1000,4498.20
+ORD-200096,2026-01-23,CUST-0103,Globex SA,SMB,France,EMEA,SKU-9101,"USB-C Hub Pro",Peripherals,Web,1,19.95,0.0000,19.95
+ORD-200097,2026-01-23,CUST-0103,Globex SA,SMB,France,EMEA,SKU-9810,"Portable SSD 2TB",Storage,Phone,3,189.00,0.0000,567.00
+ORD-200098,2026-01-23,CUST-0017,Acme Industrial Holdings,Enterprise,United States,AMER,SKU-9301,"Wireless Mouse Lite",Peripherals,Web,2,24.50,0.0000,49.00
+ORD-200099,2026-01-24,CUST-0204,Initech LLC,SMB,United States,AMER,SKU-9101,"USB-C Hub Pro",Peripherals,Web,6,19.95,0.0000,119.70
+ORD-200100,2026-01-24,CUST-0042,Smith Family Trust,Consumer,United States,AMER,SKU-9301,"Wireless Mouse Lite",Peripherals,Phone,2,24.50,0.1500,41.65
+ORD-200101,2026-01-24,CUST-0591,Umbrella Health,Enterprise,United Kingdom,EMEA,SKU-9610,"Webcam 1080p",Peripherals,Retail,2,59.00,0.0500,112.10
+ORD-200102,2026-01-25,CUST-0591,Umbrella Health,Enterprise,United Kingdom,EMEA,SKU-9214,"27" 4K UHD Monitor",Displays,Phone,6,129.00,0.0000,774.00
+ORD-200103,2026-01-25,CUST-0591,Umbrella Health,Enterprise,United Kingdom,EMEA,SKU-9720,"Docking Station Ultra",Hubs & Docks,Web,4,219.00,0.0000,876.00
+ORD-200104,2026-01-25,CUST-0017,Acme Industrial Holdings,Enterprise,United States,AMER,SKU-9610,"Webcam 1080p",Peripherals,Phone,2,59.00,0.1500,100.30
+ORD-200105,2026-01-25,CUST-0480,Pied Piper Inc.,SMB,United States,AMER,SKU-9420,"Noise-Cancel Headset",Audio,Partner,5,179.00,0.0000,895.00
+ORD-200106,2026-01-25,CUST-0591,Umbrella Health,Enterprise,United Kingdom,EMEA,SKU-9301,"Wireless Mouse Lite",Peripherals,Partner,4,24.50,0.0000,98.00
+ORD-200107,2026-01-26,CUST-0017,Acme Industrial Holdings,Enterprise,United States,AMER,SKU-9214,"27" 4K UHD Monitor",Displays,Phone,4,129.00,0.1000,464.40
+ORD-200108,2026-01-26,CUST-0103,Globex SA,SMB,France,EMEA,SKU-9301,"Wireless Mouse Lite",Peripherals,Phone,5,24.50,0.0000,122.50
+ORD-200109,2026-01-26,CUST-0322,Hooli Pte Ltd,Enterprise,Singapore,APAC,SKU-9420,"Noise-Cancel Headset",Audio,Partner,1,179.00,0.0000,179.00
+ORD-200110,2026-01-26,CUST-0042,Smith Family Trust,Consumer,United States,AMER,SKU-9214,"27" 4K UHD Monitor",Displays,Web,2,129.00,0.1000,232.20
+ORD-200111,2026-01-27,CUST-0591,Umbrella Health,Enterprise,United Kingdom,EMEA,SKU-9555,"Studio Microphone X",Audio,Retail,3,899.00,0.0000,2697.00
+ORD-200112,2026-01-27,CUST-0815,Wonka Confectionery,SMB,Germany,EMEA,SKU-9610,"Webcam 1080p",Peripherals,Retail,5,59.00,0.0000,295.00
+ORD-200113,2026-01-27,CUST-0480,Pied Piper Inc.,SMB,United States,AMER,SKU-9301,"Wireless Mouse Lite",Peripherals,Web,5,24.50,0.0500,116.38
+ORD-200114,2026-01-27,CUST-0017,Acme Industrial Holdings,Enterprise,United States,AMER,SKU-9810,"Portable SSD 2TB",Storage,Web,5,189.00,0.0000,945.00
+ORD-200115,2026-01-28,CUST-0591,Umbrella Health,Enterprise,United Kingdom,EMEA,SKU-9001,"Mechanical Keyboard MK-1",Peripherals,Retail,4,49.99,0.0500,189.96
+ORD-200116,2026-01-28,CUST-0815,Wonka Confectionery,SMB,Germany,EMEA,SKU-9214,"27" 4K UHD Monitor",Displays,Retail,5,129.00,0.1000,580.50
+ORD-200117,2026-01-28,CUST-0042,Smith Family Trust,Consumer,United States,AMER,SKU-9610,"Webcam 1080p",Peripherals,Partner,6,59.00,0.1000,318.60
+ORD-200118,2026-01-29,CUST-0591,Umbrella Health,Enterprise,United Kingdom,EMEA,SKU-9810,"Portable SSD 2TB",Storage,Web,1,189.00,0.0000,189.00
+ORD-200119,2026-01-29,CUST-0017,Acme Industrial Holdings,Enterprise,United States,AMER,SKU-9301,"Wireless Mouse Lite",Peripherals,Web,5,24.50,0.0000,122.50
+ORD-200120,2026-01-29,CUST-0701,Stark Manufacturing,Enterprise,United States,AMER,SKU-9555,"Studio Microphone X",Audio,Web,5,899.00,0.0500,4270.25
+ORD-200121,2026-01-30,CUST-0591,Umbrella Health,Enterprise,United Kingdom,EMEA,SKU-9420,"Noise-Cancel Headset",Audio,Web,2,179.00,0.1000,322.20
+ORD-200122,2026-01-30,CUST-0701,Stark Manufacturing,Enterprise,United States,AMER,SKU-9101,"USB-C Hub Pro",Peripherals,Retail,3,19.95,0.0000,59.85
+ORD-200123,2026-01-30,CUST-0322,Hooli Pte Ltd,Enterprise,Singapore,APAC,SKU-9001,"Mechanical Keyboard MK-1",Peripherals,Partner,1,49.99,0.1000,44.99
+ORD-200124,2026-01-31,CUST-0204,Initech LLC,SMB,United States,AMER,SKU-9810,"Portable SSD 2TB",Storage,Retail,3,189.00,0.1500,481.95
+ORD-200125,2026-01-31,CUST-0633,Wayne Logistics,Enterprise,United States,AMER,SKU-9555,"Studio Microphone X",Audio,Retail,3,899.00,0.1500,2292.45
+ORD-200126,2026-01-31,CUST-0204,Initech LLC,SMB,United States,AMER,SKU-9214,"27" 4K UHD Monitor",Displays,Phone,5,129.00,0.1000,580.50
+ORD-200127,2026-01-31,CUST-0591,Umbrella Health,Enterprise,United Kingdom,EMEA,SKU-9001,"Mechanical Keyboard MK-1",Peripherals,Web,2,49.99,0.0500,94.98
+ORD-200128,2026-01-31,CUST-0042,Smith Family Trust,Consumer,United States,AMER,SKU-9301,"Wireless Mouse Lite",Peripherals,Partner,3,24.50,0.1000,66.15
+ORD-200129,2026-01-31,CUST-0017,Acme Industrial Holdings,Enterprise,United States,AMER,SKU-9101,"USB-C Hub Pro",Peripherals,Phone,6,19.95,0.0000,119.70
+ORD-200130,2026-02-01,CUST-0701,Stark Manufacturing,Enterprise,United States,AMER,SKU-9101,"USB-C Hub Pro",Peripherals,Web,5,19.95,0.0500,94.76
+ORD-200131,2026-02-01,CUST-0204,Initech LLC,SMB,United States,AMER,SKU-9720,"Docking Station Ultra",Hubs & Docks,Partner,6,219.00,0.0500,1248.30
+ORD-200132,2026-02-01,CUST-0322,Hooli Pte Ltd,Enterprise,Singapore,APAC,SKU-9555,"Studio Microphone X",Audio,Partner,6,899.00,0.0000,5394.00
+ORD-200133,2026-02-01,CUST-0701,Stark Manufacturing,Enterprise,United States,AMER,SKU-9999,"Workstation Laptop Pro",Computers,Web,3,2499.00,0.0000,7497.00
+ORD-200134,2026-02-01,CUST-0103,Globex SA,SMB,France,EMEA,SKU-9420,"Noise-Cancel Headset",Audio,Web,2,179.00,0.1500,304.30
+ORD-200135,2026-02-01,CUST-0204,Initech LLC,SMB,United States,AMER,SKU-9555,"Studio Microphone X",Audio,Web,5,899.00,0.0500,4270.25
+ORD-200136,2026-02-02,CUST-0591,Umbrella Health,Enterprise,United Kingdom,EMEA,SKU-9101,"USB-C Hub Pro",Peripherals,Phone,6,19.95,0.0000,119.70
+ORD-200137,2026-02-02,CUST-0042,Smith Family Trust,Consumer,United States,AMER,SKU-9720,"Docking Station Ultra",Hubs & Docks,Retail,4,219.00,0.0000,876.00
+ORD-200138,2026-02-02,CUST-0204,Initech LLC,SMB,United States,AMER,SKU-9420,"Noise-Cancel Headset",Audio,Web,1,179.00,0.0500,170.05
+ORD-200139,2026-02-02,CUST-0017,Acme Industrial Holdings,Enterprise,United States,AMER,SKU-9555,"Studio Microphone X",Audio,Web,1,899.00,0.0000,899.00
+ORD-200140,2026-02-02,CUST-0815,Wonka Confectionery,SMB,Germany,EMEA,SKU-9810,"Portable SSD 2TB",Storage,Web,4,189.00,0.1500,642.60
+ORD-200141,2026-02-03,CUST-0633,Wayne Logistics,Enterprise,United States,AMER,SKU-9720,"Docking Station Ultra",Hubs & Docks,Partner,2,219.00,0.1500,372.30
+ORD-200142,2026-02-03,CUST-0815,Wonka Confectionery,SMB,Germany,EMEA,SKU-9555,"Studio Microphone X",Audio,Web,4,899.00,0.0500,3416.20
+ORD-200143,2026-02-03,CUST-0017,Acme Industrial Holdings,Enterprise,United States,AMER,SKU-9420,"Noise-Cancel Headset",Audio,Retail,3,179.00,0.0000,537.00
+ORD-200144,2026-02-04,CUST-0204,Initech LLC,SMB,United States,AMER,SKU-9999,"Workstation Laptop Pro",Computers,Web,6,2499.00,0.0000,14994.00
+ORD-200145,2026-02-04,CUST-0042,Smith Family Trust,Consumer,United States,AMER,SKU-9610,"Webcam 1080p",Peripherals,Web,3,59.00,0.0000,177.00
+ORD-200146,2026-02-04,CUST-0480,Pied Piper Inc.,SMB,United States,AMER,SKU-9301,"Wireless Mouse Lite",Peripherals,Retail,1,24.50,0.0500,23.27
+ORD-200147,2026-02-05,CUST-0204,Initech LLC,SMB,United States,AMER,SKU-9420,"Noise-Cancel Headset",Audio,Web,1,179.00,0.1500,152.15
+ORD-200148,2026-02-05,CUST-0591,Umbrella Health,Enterprise,United Kingdom,EMEA,SKU-9420,"Noise-Cancel Headset",Audio,Partner,1,179.00,0.0000,179.00
+ORD-200149,2026-02-05,CUST-0815,Wonka Confectionery,SMB,Germany,EMEA,SKU-9001,"Mechanical Keyboard MK-1",Peripherals,Retail,2,49.99,0.0500,94.98
+ORD-200150,2026-02-05,CUST-0701,Stark Manufacturing,Enterprise,United States,AMER,SKU-9555,"Studio Microphone X",Audio,Web,3,899.00,0.0000,2697.00
+ORD-200151,2026-02-05,CUST-0701,Stark Manufacturing,Enterprise,United States,AMER,SKU-9555,"Studio Microphone X",Audio,Web,3,899.00,0.1500,2292.45
+ORD-200152,2026-02-05,CUST-0103,Globex SA,SMB,France,EMEA,SKU-9610,"Webcam 1080p",Peripherals,Phone,4,59.00,0.0000,236.00
+ORD-200153,2026-02-06,CUST-0103,Globex SA,SMB,France,EMEA,SKU-9555,"Studio Microphone X",Audio,Retail,2,899.00,0.0500,1708.10
+ORD-200154,2026-02-06,CUST-0042,Smith Family Trust,Consumer,United States,AMER,SKU-9810,"Portable SSD 2TB",Storage,Web,3,189.00,0.0000,567.00
+ORD-200155,2026-02-06,CUST-0701,Stark Manufacturing,Enterprise,United States,AMER,SKU-9999,"Workstation Laptop Pro",Computers,Retail,2,2499.00,0.1500,4248.30
+ORD-200156,2026-02-07,CUST-0633,Wayne Logistics,Enterprise,United States,AMER,SKU-9301,"Wireless Mouse Lite",Peripherals,Web,3,24.50,0.1500,62.48
+ORD-200157,2026-02-07,CUST-0480,Pied Piper Inc.,SMB,United States,AMER,SKU-9610,"Webcam 1080p",Peripherals,Retail,5,59.00,0.0500,280.25
+ORD-200158,2026-02-07,CUST-0103,Globex SA,SMB,France,EMEA,SKU-9555,"Studio Microphone X",Audio,Retail,1,899.00,0.1500,764.15
+ORD-200159,2026-02-08,CUST-0042,Smith Family Trust,Consumer,United States,AMER,SKU-9720,"Docking Station Ultra",Hubs & Docks,Phone,1,219.00,0.0000,219.00
+ORD-200160,2026-02-08,CUST-0591,Umbrella Health,Enterprise,United Kingdom,EMEA,SKU-9214,"27" 4K UHD Monitor",Displays,Partner,3,129.00,0.0000,387.00
+ORD-200161,2026-02-08,CUST-0042,Smith Family Trust,Consumer,United States,AMER,SKU-9555,"Studio Microphone X",Audio,Phone,1,899.00,0.0500,854.05
+ORD-200162,2026-02-09,CUST-0204,Initech LLC,SMB,United States,AMER,SKU-9001,"Mechanical Keyboard MK-1",Peripherals,Phone,4,49.99,0.1500,169.97
+ORD-200163,2026-02-09,CUST-0017,Acme Industrial Holdings,Enterprise,United States,AMER,SKU-9720,"Docking Station Ultra",Hubs & Docks,Retail,6,219.00,0.0000,1314.00
+ORD-200164,2026-02-09,CUST-0480,Pied Piper Inc.,SMB,United States,AMER,SKU-9214,"27" 4K UHD Monitor",Displays,Phone,6,129.00,0.1500,657.90
+ORD-200165,2026-02-09,CUST-0480,Pied Piper Inc.,SMB,United States,AMER,SKU-9301,"Wireless Mouse Lite",Peripherals,Retail,3,24.50,0.1000,66.15
+ORD-200166,2026-02-09,CUST-0633,Wayne Logistics,Enterprise,United States,AMER,SKU-9420,"Noise-Cancel Headset",Audio,Partner,5,179.00,0.0000,895.00
+ORD-200167,2026-02-09,CUST-0633,Wayne Logistics,Enterprise,United States,AMER,SKU-9720,"Docking Station Ultra",Hubs & Docks,Retail,3,219.00,0.0500,624.15
+ORD-200168,2026-02-10,CUST-0591,Umbrella Health,Enterprise,United Kingdom,EMEA,SKU-9720,"Docking Station Ultra",Hubs & Docks,Retail,4,219.00,0.0500,832.20
+ORD-200169,2026-02-10,CUST-0042,Smith Family Trust,Consumer,United States,AMER,SKU-9101,"USB-C Hub Pro",Peripherals,Web,3,19.95,0.1000,53.86
+ORD-200170,2026-02-10,CUST-0017,Acme Industrial Holdings,Enterprise,United States,AMER,SKU-9810,"Portable SSD 2TB",Storage,Phone,2,189.00,0.1000,340.20
+ORD-200171,2026-02-10,CUST-0480,Pied Piper Inc.,SMB,United States,AMER,SKU-9610,"Webcam 1080p",Peripherals,Retail,1,59.00,0.1500,50.15
+ORD-200172,2026-02-10,CUST-0815,Wonka Confectionery,SMB,Germany,EMEA,SKU-9420,"Noise-Cancel Headset",Audio,Phone,1,179.00,0.0000,179.00
+ORD-200173,2026-02-10,CUST-0042,Smith Family Trust,Consumer,United States,AMER,SKU-9001,"Mechanical Keyboard MK-1",Peripherals,Web,1,49.99,0.0500,47.49
+ORD-200174,2026-02-11,CUST-0322,Hooli Pte Ltd,Enterprise,Singapore,APAC,SKU-9420,"Noise-Cancel Headset",Audio,Retail,4,179.00,0.0000,716.00
+ORD-200175,2026-02-11,CUST-0042,Smith Family Trust,Consumer,United States,AMER,SKU-9001,"Mechanical Keyboard MK-1",Peripherals,Partner,2,49.99,0.1000,89.98
+ORD-200176,2026-02-11,CUST-0701,Stark Manufacturing,Enterprise,United States,AMER,SKU-9420,"Noise-Cancel Headset",Audio,Phone,4,179.00,0.0000,716.00
+ORD-200177,2026-02-11,CUST-0204,Initech LLC,SMB,United States,AMER,SKU-9555,"Studio Microphone X",Audio,Retail,3,899.00,0.0500,2562.15
+ORD-200178,2026-02-11,CUST-0103,Globex SA,SMB,France,EMEA,SKU-9555,"Studio Microphone X",Audio,Partner,3,899.00,0.0500,2562.15
+ORD-200179,2026-02-12,CUST-0815,Wonka Confectionery,SMB,Germany,EMEA,SKU-9101,"USB-C Hub Pro",Peripherals,Phone,6,19.95,0.0500,113.71
+ORD-200180,2026-02-12,CUST-0591,Umbrella Health,Enterprise,United Kingdom,EMEA,SKU-9810,"Portable SSD 2TB",Storage,Phone,4,189.00,0.1000,680.40
+ORD-200181,2026-02-12,CUST-0480,Pied Piper Inc.,SMB,United States,AMER,SKU-9301,"Wireless Mouse Lite",Peripherals,Web,5,24.50,0.1000,110.25
+ORD-200182,2026-02-13,CUST-0591,Umbrella Health,Enterprise,United Kingdom,EMEA,SKU-9214,"27" 4K UHD Monitor",Displays,Web,4,129.00,0.0500,490.20
+ORD-200183,2026-02-13,CUST-0204,Initech LLC,SMB,United States,AMER,SKU-9610,"Webcam 1080p",Peripherals,Partner,3,59.00,0.1000,159.30
+ORD-200184,2026-02-13,CUST-0204,Initech LLC,SMB,United States,AMER,SKU-9001,"Mechanical Keyboard MK-1",Peripherals,Phone,2,49.99,0.0000,99.98
+ORD-200185,2026-02-13,CUST-0815,Wonka Confectionery,SMB,Germany,EMEA,SKU-9101,"USB-C Hub Pro",Peripherals,Phone,3,19.95,0.0000,59.85
+ORD-200186,2026-02-13,CUST-0017,Acme Industrial Holdings,Enterprise,United States,AMER,SKU-9720,"Docking Station Ultra",Hubs & Docks,Partner,3,219.00,0.0000,657.00
+ORD-200187,2026-02-14,CUST-0103,Globex SA,SMB,France,EMEA,SKU-9214,"27" 4K UHD Monitor",Displays,Retail,3,129.00,0.0500,367.65
+ORD-200188,2026-02-14,CUST-0103,Globex SA,SMB,France,EMEA,SKU-9301,"Wireless Mouse Lite",Peripherals,Phone,5,24.50,0.0000,122.50
+ORD-200189,2026-02-14,CUST-0591,Umbrella Health,Enterprise,United Kingdom,EMEA,SKU-9001,"Mechanical Keyboard MK-1",Peripherals,Partner,6,49.99,0.0000,299.94
+ORD-200190,2026-02-14,CUST-0480,Pied Piper Inc.,SMB,United States,AMER,SKU-9610,"Webcam 1080p",Peripherals,Phone,2,59.00,0.0500,112.10
+ORD-200191,2026-02-14,CUST-0591,Umbrella Health,Enterprise,United Kingdom,EMEA,SKU-9610,"Webcam 1080p",Peripherals,Retail,4,59.00,0.1500,200.60
+ORD-200192,2026-02-14,CUST-0591,Umbrella Health,Enterprise,United Kingdom,EMEA,SKU-9720,"Docking Station Ultra",Hubs & Docks,Partner,3,219.00,0.0000,657.00
+ORD-200193,2026-02-15,CUST-0701,Stark Manufacturing,Enterprise,United States,AMER,SKU-9555,"Studio Microphone X",Audio,Partner,1,899.00,0.0000,899.00
+ORD-200194,2026-02-15,CUST-0017,Acme Industrial Holdings,Enterprise,United States,AMER,SKU-9101,"USB-C Hub Pro",Peripherals,Partner,3,19.95,0.1500,50.87
+ORD-200195,2026-02-15,CUST-0322,Hooli Pte Ltd,Enterprise,Singapore,APAC,SKU-9420,"Noise-Cancel Headset",Audio,Web,5,179.00,0.1000,805.50
+ORD-200196,2026-02-16,CUST-0017,Acme Industrial Holdings,Enterprise,United States,AMER,SKU-9420,"Noise-Cancel Headset",Audio,Phone,3,179.00,0.1000,483.30
+ORD-200197,2026-02-16,CUST-0701,Stark Manufacturing,Enterprise,United States,AMER,SKU-9420,"Noise-Cancel Headset",Audio,Retail,2,179.00,0.1000,322.20
+ORD-200198,2026-02-16,CUST-0480,Pied Piper Inc.,SMB,United States,AMER,SKU-9214,"27" 4K UHD Monitor",Displays,Web,1,129.00,0.1000,116.10
+ORD-200199,2026-02-16,CUST-0017,Acme Industrial Holdings,Enterprise,United States,AMER,SKU-9214,"27" 4K UHD Monitor",Displays,Web,5,129.00,0.1500,548.25
+ORD-200200,2026-02-16,CUST-0204,Initech LLC,SMB,United States,AMER,SKU-9301,"Wireless Mouse Lite",Peripherals,Web,4,24.50,0.1000,88.20
+ORD-200201,2026-02-16,CUST-0815,Wonka Confectionery,SMB,Germany,EMEA,SKU-9214,"27" 4K UHD Monitor",Displays,Retail,5,129.00,0.1500,548.25
+ORD-200202,2026-02-17,CUST-0042,Smith Family Trust,Consumer,United States,AMER,SKU-9301,"Wireless Mouse Lite",Peripherals,Phone,4,24.50,0.0500,93.10
+ORD-200203,2026-02-17,CUST-0815,Wonka Confectionery,SMB,Germany,EMEA,SKU-9720,"Docking Station Ultra",Hubs & Docks,Phone,3,219.00,0.0000,657.00
+ORD-200204,2026-02-17,CUST-0017,Acme Industrial Holdings,Enterprise,United States,AMER,SKU-9420,"Noise-Cancel Headset",Audio,Web,1,179.00,0.0500,170.05
+ORD-200205,2026-02-17,CUST-0633,Wayne Logistics,Enterprise,United States,AMER,SKU-9301,"Wireless Mouse Lite",Peripherals,Partner,4,24.50,0.0000,98.00
+ORD-200206,2026-02-18,CUST-0042,Smith Family Trust,Consumer,United States,AMER,SKU-9720,"Docking Station Ultra",Hubs & Docks,Phone,6,219.00,0.0500,1248.30
+ORD-200207,2026-02-18,CUST-0103,Globex SA,SMB,France,EMEA,SKU-9720,"Docking Station Ultra",Hubs & Docks,Retail,5,219.00,0.0000,1095.00
+ORD-200208,2026-02-18,CUST-0591,Umbrella Health,Enterprise,United Kingdom,EMEA,SKU-9101,"USB-C Hub Pro",Peripherals,Retail,3,19.95,0.0000,59.85
+ORD-200209,2026-02-18,CUST-0701,Stark Manufacturing,Enterprise,United States,AMER,SKU-9810,"Portable SSD 2TB",Storage,Phone,1,189.00,0.0000,189.00
+ORD-200210,2026-02-18,CUST-0633,Wayne Logistics,Enterprise,United States,AMER,SKU-9810,"Portable SSD 2TB",Storage,Retail,4,189.00,0.0000,756.00
+ORD-200211,2026-02-19,CUST-0017,Acme Industrial Holdings,Enterprise,United States,AMER,SKU-9301,"Wireless Mouse Lite",Peripherals,Partner,1,24.50,0.1000,22.05
+ORD-200212,2026-02-19,CUST-0042,Smith Family Trust,Consumer,United States,AMER,SKU-9610,"Webcam 1080p",Peripherals,Retail,4,59.00,0.0000,236.00
+ORD-200213,2026-02-19,CUST-0322,Hooli Pte Ltd,Enterprise,Singapore,APAC,SKU-9555,"Studio Microphone X",Audio,Retail,5,899.00,0.1500,3820.75
+ORD-200214,2026-02-19,CUST-0701,Stark Manufacturing,Enterprise,United States,AMER,SKU-9810,"Portable SSD 2TB",Storage,Web,5,189.00,0.1000,850.50
+ORD-200215,2026-02-20,CUST-0322,Hooli Pte Ltd,Enterprise,Singapore,APAC,SKU-9610,"Webcam 1080p",Peripherals,Partner,1,59.00,0.0500,56.05
+ORD-200216,2026-02-20,CUST-0017,Acme Industrial Holdings,Enterprise,United States,AMER,SKU-9101,"USB-C Hub Pro",Peripherals,Partner,1,19.95,0.0500,18.95
+ORD-200217,2026-02-20,CUST-0322,Hooli Pte Ltd,Enterprise,Singapore,APAC,SKU-9555,"Studio Microphone X",Audio,Partner,1,899.00,0.0500,854.05
+ORD-200218,2026-02-20,CUST-0204,Initech LLC,SMB,United States,AMER,SKU-9810,"Portable SSD 2TB",Storage,Phone,2,189.00,0.1500,321.30
+ORD-200219,2026-02-20,CUST-0017,Acme Industrial Holdings,Enterprise,United States,AMER,SKU-9810,"Portable SSD 2TB",Storage,Phone,2,189.00,0.1000,340.20
+ORD-200220,2026-02-21,CUST-0322,Hooli Pte Ltd,Enterprise,Singapore,APAC,SKU-9610,"Webcam 1080p",Peripherals,Partner,6,59.00,0.0500,336.30
+ORD-200221,2026-02-21,CUST-0480,Pied Piper Inc.,SMB,United States,AMER,SKU-9101,"USB-C Hub Pro",Peripherals,Web,1,19.95,0.0000,19.95
+ORD-200222,2026-02-21,CUST-0017,Acme Industrial Holdings,Enterprise,United States,AMER,SKU-9214,"27" 4K UHD Monitor",Displays,Phone,6,129.00,0.0500,735.30
+ORD-200223,2026-02-21,CUST-0591,Umbrella Health,Enterprise,United Kingdom,EMEA,SKU-9301,"Wireless Mouse Lite",Peripherals,Retail,5,24.50,0.0000,122.50
+ORD-200224,2026-02-21,CUST-0480,Pied Piper Inc.,SMB,United States,AMER,SKU-9001,"Mechanical Keyboard MK-1",Peripherals,Phone,4,49.99,0.0000,199.96
+ORD-200225,2026-02-21,CUST-0480,Pied Piper Inc.,SMB,United States,AMER,SKU-9101,"USB-C Hub Pro",Peripherals,Retail,4,19.95,0.1500,67.83
+ORD-200226,2026-02-22,CUST-0480,Pied Piper Inc.,SMB,United States,AMER,SKU-9301,"Wireless Mouse Lite",Peripherals,Phone,2,24.50,0.1500,41.65
+ORD-200227,2026-02-22,CUST-0017,Acme Industrial Holdings,Enterprise,United States,AMER,SKU-9999,"Workstation Laptop Pro",Computers,Phone,6,2499.00,0.0500,14244.30
+ORD-200228,2026-02-22,CUST-0633,Wayne Logistics,Enterprise,United States,AMER,SKU-9720,"Docking Station Ultra",Hubs & Docks,Phone,4,219.00,0.1500,744.60
+ORD-200229,2026-02-22,CUST-0042,Smith Family Trust,Consumer,United States,AMER,SKU-9214,"27" 4K UHD Monitor",Displays,Partner,6,129.00,0.1500,657.90
+ORD-200230,2026-02-22,CUST-0701,Stark Manufacturing,Enterprise,United States,AMER,SKU-9610,"Webcam 1080p",Peripherals,Retail,2,59.00,0.1500,100.30
+ORD-200231,2026-02-23,CUST-0103,Globex SA,SMB,France,EMEA,SKU-9101,"USB-C Hub Pro",Peripherals,Retail,3,19.95,0.1500,50.87
+ORD-200232,2026-02-23,CUST-0017,Acme Industrial Holdings,Enterprise,United States,AMER,SKU-9001,"Mechanical Keyboard MK-1",Peripherals,Retail,2,49.99,0.1500,84.98
+ORD-200233,2026-02-23,CUST-0204,Initech LLC,SMB,United States,AMER,SKU-9999,"Workstation Laptop Pro",Computers,Retail,1,2499.00,0.1500,2124.15
+ORD-200234,2026-02-23,CUST-0017,Acme Industrial Holdings,Enterprise,United States,AMER,SKU-9214,"27" 4K UHD Monitor",Displays,Phone,4,129.00,0.1500,438.60
+ORD-200235,2026-02-23,CUST-0042,Smith Family Trust,Consumer,United States,AMER,SKU-9214,"27" 4K UHD Monitor",Displays,Web,1,129.00,0.1500,109.65
+ORD-200236,2026-02-24,CUST-0480,Pied Piper Inc.,SMB,United States,AMER,SKU-9610,"Webcam 1080p",Peripherals,Web,6,59.00,0.0000,354.00
+ORD-200237,2026-02-24,CUST-0017,Acme Industrial Holdings,Enterprise,United States,AMER,SKU-9214,"27" 4K UHD Monitor",Displays,Partner,3,129.00,0.0000,387.00
+ORD-200238,2026-02-24,CUST-0633,Wayne Logistics,Enterprise,United States,AMER,SKU-9214,"27" 4K UHD Monitor",Displays,Phone,6,129.00,0.0000,774.00
+ORD-200239,2026-02-24,CUST-0815,Wonka Confectionery,SMB,Germany,EMEA,SKU-9720,"Docking Station Ultra",Hubs & Docks,Web,5,219.00,0.0000,1095.00
+ORD-200240,2026-02-24,CUST-0017,Acme Industrial Holdings,Enterprise,United States,AMER,SKU-9999,"Workstation Laptop Pro",Computers,Phone,1,2499.00,0.0500,2374.05
+ORD-200241,2026-02-24,CUST-0815,Wonka Confectionery,SMB,Germany,EMEA,SKU-9810,"Portable SSD 2TB",Storage,Web,3,189.00,0.0500,538.65
+ORD-200242,2026-02-25,CUST-0815,Wonka Confectionery,SMB,Germany,EMEA,SKU-9720,"Docking Station Ultra",Hubs & Docks,Retail,3,219.00,0.1500,558.45
+ORD-200243,2026-02-25,CUST-0204,Initech LLC,SMB,United States,AMER,SKU-9214,"27" 4K UHD Monitor",Displays,Web,2,129.00,0.0000,258.00
+ORD-200244,2026-02-25,CUST-0815,Wonka Confectionery,SMB,Germany,EMEA,SKU-9101,"USB-C Hub Pro",Peripherals,Web,6,19.95,0.1000,107.73
+ORD-200245,2026-02-25,CUST-0480,Pied Piper Inc.,SMB,United States,AMER,SKU-9810,"Portable SSD 2TB",Storage,Web,6,189.00,0.0000,1134.00
+ORD-200246,2026-02-25,CUST-0103,Globex SA,SMB,France,EMEA,SKU-9999,"Workstation Laptop Pro",Computers,Partner,6,2499.00,0.0000,14994.00
+ORD-200247,2026-02-25,CUST-0480,Pied Piper Inc.,SMB,United States,AMER,SKU-9420,"Noise-Cancel Headset",Audio,Phone,1,179.00,0.1500,152.15
+ORD-200248,2026-02-26,CUST-0633,Wayne Logistics,Enterprise,United States,AMER,SKU-9720,"Docking Station Ultra",Hubs & Docks,Retail,2,219.00,0.0500,416.10
+ORD-200249,2026-02-26,CUST-0591,Umbrella Health,Enterprise,United Kingdom,EMEA,SKU-9610,"Webcam 1080p",Peripherals,Web,4,59.00,0.0000,236.00
+ORD-200250,2026-02-26,CUST-0322,Hooli Pte Ltd,Enterprise,Singapore,APAC,SKU-9214,"27" 4K UHD Monitor",Displays,Web,4,129.00,0.0000,516.00
+ORD-200251,2026-02-26,CUST-0204,Initech LLC,SMB,United States,AMER,SKU-9810,"Portable SSD 2TB",Storage,Retail,4,189.00,0.0000,756.00
+ORD-200252,2026-02-26,CUST-0480,Pied Piper Inc.,SMB,United States,AMER,SKU-9810,"Portable SSD 2TB",Storage,Phone,6,189.00,0.0500,1077.30
+ORD-200253,2026-02-27,CUST-0042,Smith Family Trust,Consumer,United States,AMER,SKU-9420,"Noise-Cancel Headset",Audio,Phone,3,179.00,0.0000,537.00
+ORD-200254,2026-02-27,CUST-0017,Acme Industrial Holdings,Enterprise,United States,AMER,SKU-9301,"Wireless Mouse Lite",Peripherals,Retail,1,24.50,0.0000,24.50
+ORD-200255,2026-02-27,CUST-0480,Pied Piper Inc.,SMB,United States,AMER,SKU-9001,"Mechanical Keyboard MK-1",Peripherals,Partner,6,49.99,0.0500,284.94
+ORD-200256,2026-02-27,CUST-0103,Globex SA,SMB,France,EMEA,SKU-9001,"Mechanical Keyboard MK-1",Peripherals,Retail,5,49.99,0.0000,249.95
+ORD-200257,2026-02-27,CUST-0480,Pied Piper Inc.,SMB,United States,AMER,SKU-9214,"27" 4K UHD Monitor",Displays,Phone,5,129.00,0.0500,612.75
+ORD-200258,2026-02-27,CUST-0701,Stark Manufacturing,Enterprise,United States,AMER,SKU-9101,"USB-C Hub Pro",Peripherals,Partner,5,19.95,0.0500,94.76
+ORD-200259,2026-02-28,CUST-0204,Initech LLC,SMB,United States,AMER,SKU-9555,"Studio Microphone X",Audio,Phone,5,899.00,0.0500,4270.25
+ORD-200260,2026-02-28,CUST-0322,Hooli Pte Ltd,Enterprise,Singapore,APAC,SKU-9999,"Workstation Laptop Pro",Computers,Partner,5,2499.00,0.0000,12495.00
+ORD-200261,2026-02-28,CUST-0633,Wayne Logistics,Enterprise,United States,AMER,SKU-9001,"Mechanical Keyboard MK-1",Peripherals,Phone,4,49.99,0.1000,179.96
+ORD-200262,2026-03-01,CUST-0591,Umbrella Health,Enterprise,United Kingdom,EMEA,SKU-9999,"Workstation Laptop Pro",Computers,Web,6,2499.00,0.0000,14994.00
+ORD-200263,2026-03-01,CUST-0017,Acme Industrial Holdings,Enterprise,United States,AMER,SKU-9999,"Workstation Laptop Pro",Computers,Partner,1,2499.00,0.1500,2124.15
+ORD-200264,2026-03-01,CUST-0322,Hooli Pte Ltd,Enterprise,Singapore,APAC,SKU-9001,"Mechanical Keyboard MK-1",Peripherals,Retail,1,49.99,0.1500,42.49
+ORD-200265,2026-03-01,CUST-0591,Umbrella Health,Enterprise,United Kingdom,EMEA,SKU-9720,"Docking Station Ultra",Hubs & Docks,Retail,2,219.00,0.0000,438.00
+ORD-200266,2026-03-01,CUST-0815,Wonka Confectionery,SMB,Germany,EMEA,SKU-9420,"Noise-Cancel Headset",Audio,Web,2,179.00,0.1000,322.20
+ORD-200267,2026-03-01,CUST-0103,Globex SA,SMB,France,EMEA,SKU-9001,"Mechanical Keyboard MK-1",Peripherals,Partner,4,49.99,0.0500,189.96

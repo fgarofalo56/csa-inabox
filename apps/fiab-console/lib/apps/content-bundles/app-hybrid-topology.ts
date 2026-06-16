@@ -374,12 +374,18 @@ DATASET   = "Census ACS 5-year tract aggregates"
 DATA_CLASS = "Public"           # GUARD: refuse if not Public/non-classified
 assert DATA_CLASS in ("Public",), "Only non-classified aggregates may move Commercial->Gov."
 
-SRC = "https://commrefdata.blob.core.windows.net/public/acs5yr/"          # Commercial
-DST = "abfss://bronze@govdlzlake.dfs.core.usgovcloudapi.net/reference/acs5yr/"  # Gov
+# ILLUSTRATIVE endpoints — the actual SRC/DST are CUSTOMER-supplied at runtime.
+# Loom ships the non-classified ACS aggregate IN-REPO and uploads it into this
+# lakehouse on install (see the 'commercial_aggregate' shortcut → Files/_shortcuts/
+# commercial_aggregate/), so the reference.acs5yr_tract data is genuinely present
+# WITHOUT any live cross-cloud fetch. These vars only document the movement shape.
+SRC = "Files/_shortcuts/commercial_aggregate/acs5yr-tract-aggregates.csv"   # in-tenant (repo-hosted)
+DST = "Tables/reference/acs5yr_tract"                                        # Gov lakehouse table
 
-# azcopy with SAS on each side (customer-supplied; never embedded in code).
-# subprocess.run(["azcopy","copy",SRC+"?<src-sas>",DST+"?<dst-sas>","--recursive"], check=True)
-print(f"[customer-initiated] azcopy {SRC} -> {DST}")
+# In a real cutover the customer runs azcopy with SAS on each side (customer-
+# supplied; never embedded in code). Loom never moves data automatically.
+# subprocess.run(["azcopy","copy","<src>?<src-sas>","<dst>?<dst-sas>","--recursive"], check=True)
+print(f"[customer-initiated] stage {SRC} -> {DST}")
 
 manifest = {"dataset": DATASET, "class": DATA_CLASS, "src": SRC, "dst": DST,
             "moved_at": datetime.now(timezone.utc).isoformat()}
@@ -739,14 +745,22 @@ const bundle: AppBundle = {
             ],
           },
         ],
+        // Self-contained: the install uploads a repo-hosted non-classified
+        // Census ACS-5yr tract aggregate into THIS tenant's lakehouse and
+        // registers a real queryable shortcut — standing in for the data the
+        // customer-initiated azcopy lands in Gov bronze. The prior target
+        // pointed at a tenant-specific `govdlzlake` account that does not exist
+        // on a fresh install (vaporware); replaced per no-vaporware.md.
         shortcuts: [
           {
             name: 'commercial_aggregate',
-            target: 'abfss://bronze@govdlzlake.dfs.core.usgovcloudapi.net/reference/',
+            repoDataset: 'samples/app-data/hybrid-topology/acs5yr-tract-aggregates.csv',
+            format: 'csv',
+            kind: 'files',
             description:
-              'OneLake/ADLS shortcut over the customer-copied Commercial ' +
-              'reference aggregate (non-classified only). Surfaces the data the ' +
-              'azcopy step landed; no live cross-cloud query.',
+              'Non-classified Census ACS 5-year tract aggregate (Public). Repo-hosted sample ' +
+              'uploaded into this lakehouse on install — stands in for the data the customer ' +
+              'azcopy step lands in Gov bronze; no live cross-cloud query.',
           },
         ],
       },

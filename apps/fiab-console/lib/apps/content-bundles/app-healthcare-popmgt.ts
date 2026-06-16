@@ -281,22 +281,30 @@ const bundle: AppBundle = {
             ],
           },
         ],
+        // Genuinely-public, anonymous-read federal datasets/APIs (no API key,
+        // no UAMI RBAC). `publicAnonymous: true` makes the install provisioner
+        // run a REAL unauthenticated reachability probe before registering each
+        // shortcut 'active'; if a probe fails it persists 'pending' with the
+        // HTTP status (honest gate) — never a silent 'active' over a dead URL.
         shortcuts: [
           {
             name: 'cms-public-data',
             target: 'https://data.cms.gov/provider-data/api/1/datastore/query',
+            publicAnonymous: true,
             description:
               'CMS Hospital Compare public dataset — national/state readmission benchmarks (HRRP, 30-day all-cause), HCAHPS, mortality. No API key required; refresh quarterly.',
           },
           {
             name: 'npi-registry',
             target: 'https://npiregistry.cms.hhs.gov/api/',
+            publicAnonymous: true,
             description:
               'CMS NPI Registry REST API — resolve provider NPI numbers to organization/clinician metadata for facility enrichment in dim_facility.',
           },
           {
             name: 'ahrq-ccs-mapping',
             target: 'https://hcup-us.ahrq.gov/toolssoftware/ccs/ccs.jsp',
+            publicAnonymous: true,
             description:
               'AHRQ HCUP CCS (Clinical Classifications Software) reference — ICD-10 to CCS category mapping used by silver.dim_diagnoses.',
           },
