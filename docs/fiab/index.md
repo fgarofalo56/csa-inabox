@@ -162,6 +162,23 @@ weave that produces the Fabric experience inside any Azure tenant*.
 
 </div>
 
+## Concepts
+
+Short, accurate answers to the most common questions:
+
+- [What is CSA Loom?](concepts/what-is-csa-loom.md) — five-minute
+  overview with deployment, console, parity services, tenancy model,
+  and Gov boundaries.
+- [dbt in CSA Loom](concepts/dbt-in-csa-loom.md) — how the dbt job
+  item type works, what backends it supports, and how dbt fits the
+  medallion architecture.
+- [Data Mesh on Azure](concepts/data-mesh-on-azure.md) — what data
+  mesh is, how CSA Loom implements it (domains → DLZs, data products,
+  Marketplace, federated governance), and step-by-step setup.
+- [Federal Use Cases](concepts/federal-use-cases.md) — federal and
+  government use cases including the FedRAMP Tracker, Federal Data
+  Mesh, Multi-Agency Onboarding, and Sovereign AI Agents app bundles.
+
 ## Locked architecture (15 decisions)
 
 | # | Decision | Locked value |
