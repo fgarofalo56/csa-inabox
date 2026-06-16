@@ -50,6 +50,29 @@ param consolePrincipalId string = ''
 @description('Skip role-assignment grants — set true when re-provisioning an environment that already has the grants, to avoid RoleAssignmentExists.')
 param skipRoleGrants bool = false
 
+// --- Default AmlCompute training cluster (AutoML / command jobs) -------------
+// The Foundry hub workspace is the DEFAULT AutoML target on a clean deploy
+// (LOOM_AML_WORKSPACE falls back to LOOM_FOUNDRY_NAME = this hub when no
+// dedicated AML workspace is enabled). AutoML + every AML compute JOB need an
+// AmlCompute cluster to run on; a fresh hub ships with NONE, so the AutoML
+// wizard honest-gates "No compute clusters found" and nothing runs day-one.
+// This default cluster fixes that at zero idle cost (minNodeCount=0 → scales to
+// zero when idle). Matches the live hand-provisioned cpu-cluster.
+@description('Default AmlCompute training cluster name on the Foundry hub (AutoML + command jobs). Empty skips creation. Live default: cpu-cluster.')
+param defaultComputeClusterName string = 'cpu-cluster'
+
+@description('Default AmlCompute cluster VM size. Standard_DS3_v2 (4 vCPU / 14 GiB) is a sensible AutoML default; override per region/quota.')
+param defaultComputeClusterVmSize string = 'Standard_DS3_v2'
+
+@description('Default AmlCompute cluster maximum node count (scale ceiling).')
+@minValue(1)
+@maxValue(100)
+param defaultComputeClusterMaxNodes int = 2
+
+@description('Idle seconds before the AmlCompute cluster scales nodes back down. With minNodeCount=0 this means zero idle cost when no jobs run.')
+@minValue(60)
+param defaultComputeClusterIdleSeconds int = 120
+
 @description('Compliance tags')
 param complianceTags object
 
@@ -145,6 +168,32 @@ resource amlComputeOperatorRole 'Microsoft.Authorization/roleAssignments@2022-04
       'e503ece1-11d0-4e8e-8e2c-7a6c3bf38815')
     principalId: consolePrincipalId
     principalType: 'ServicePrincipal'
+  }
+}
+
+// Default AmlCompute training cluster on the Foundry hub — what AutoML and
+// command jobs run on by default. minNodeCount=0 + nodeIdleTimeBeforeScaleDown
+// make it scale to zero when idle (no idle cost) and up on job submission.
+// Created by default so a clean deploy can run AutoML out of the box instead of
+// honest-gating on "No compute clusters found".
+// Grounded in Learn: Microsoft.MachineLearningServices/workspaces/computes
+// (computeType 'AmlCompute', properties.scaleSettings).
+resource defaultComputeCluster 'Microsoft.MachineLearningServices/workspaces/computes@2024-10-01' = if (!empty(defaultComputeClusterName)) {
+  parent: foundryHub
+  name: defaultComputeClusterName
+  location: location
+  tags: complianceTags
+  properties: {
+    computeType: 'AmlCompute'
+    properties: {
+      vmSize: defaultComputeClusterVmSize
+      vmPriority: 'Dedicated'
+      scaleSettings: {
+        minNodeCount: 0
+        maxNodeCount: defaultComputeClusterMaxNodes
+        nodeIdleTimeBeforeScaleDown: 'PT${defaultComputeClusterIdleSeconds}S'
+      }
+    }
   }
 }
 

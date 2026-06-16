@@ -41,6 +41,29 @@ param richDisplayComputeInstanceName string = ''
 @description('VM size for the rich-display compute instance.')
 param richDisplayComputeVmSize string = 'Standard_DS3_v2'
 
+// --- Default AmlCompute training cluster (AutoML / command jobs) -------------
+// AutoML and every AML compute JOB need an AmlCompute cluster to run on. A fresh
+// workspace ships with NONE, so the AutoML wizard honest-gates "No compute
+// clusters found" and nothing can run day-one. This default cluster makes the
+// AML compute path work out of the box, at zero idle cost: min_instances=0 means
+// it scales to zero nodes when idle, and idleSecondsBeforeScaleDown returns
+// nodes after a short idle window. (Matches the live hand-provisioned
+// cpu-cluster: AmlCompute, min 0 / max 2, Standard_DS3_v2, 120s scale-down.)
+@description('Default AmlCompute training cluster name (AutoML + command jobs). Empty skips creation. Live default: cpu-cluster.')
+param defaultComputeClusterName string = 'cpu-cluster'
+
+@description('Default AmlCompute cluster VM size. Standard_DS3_v2 (4 vCPU / 14 GiB) is a sensible AutoML default; override per region/quota.')
+param defaultComputeClusterVmSize string = 'Standard_DS3_v2'
+
+@description('Default AmlCompute cluster maximum node count (scale ceiling).')
+@minValue(1)
+@maxValue(100)
+param defaultComputeClusterMaxNodes int = 2
+
+@description('Idle seconds before the AmlCompute cluster scales nodes back down. With minNodeCount=0 this means zero idle cost when no jobs are running.')
+@minValue(60)
+param defaultComputeClusterIdleSeconds int = 120
+
 @description('Compliance tags applied to every resource.')
 param complianceTags object
 
@@ -162,6 +185,33 @@ resource displayComputeInstance 'Microsoft.MachineLearningServices/workspaces/co
   }
 }
 
+// Default AmlCompute training cluster — what AutoML and command jobs run on.
+// min/max node count + idleSecondsBeforeScaleDown make it scale to zero when
+// idle (no idle cost) and back up on job submission. Created by default so a
+// clean deploy can run AutoML immediately instead of honest-gating on "No
+// compute clusters found". Serialized after the optional display CI so the two
+// computes don't write the workspace concurrently.
+// Grounded in Learn: Microsoft.MachineLearningServices/workspaces/computes
+// (computeType 'AmlCompute', properties.scaleSettings).
+resource defaultComputeCluster 'Microsoft.MachineLearningServices/workspaces/computes@2023-04-01' = if (!empty(defaultComputeClusterName)) {
+  parent: workspace
+  name: defaultComputeClusterName
+  location: location
+  tags: complianceTags
+  properties: {
+    computeType: 'AmlCompute'
+    properties: {
+      vmSize: defaultComputeClusterVmSize
+      vmPriority: 'Dedicated'
+      scaleSettings: {
+        minNodeCount: 0
+        maxNodeCount: defaultComputeClusterMaxNodes
+        nodeIdleTimeBeforeScaleDown: 'PT${defaultComputeClusterIdleSeconds}S'
+      }
+    }
+  }
+}
+
 // AzureML Compute Operator — list / start / stop / restart Compute Instances
 // on this workspace (role e503ece1-11d0-4e8e-8e2c-7a6c3bf38815). Mirrors the
 // grant on the Foundry hub (ai-foundry.bicep) so the CI lifecycle routes
@@ -180,6 +230,7 @@ resource amlComputeOperator 'Microsoft.Authorization/roleAssignments@2022-04-01'
 output workspaceId string = workspace.id
 output workspaceName string = workspace.name
 output richDisplayComputeInstanceName string = (!empty(richDisplayComputeInstanceName) && !empty(richDisplayStartupScriptBase64)) ? richDisplayComputeInstanceName : ''
+output defaultComputeClusterName string = empty(defaultComputeClusterName) ? '' : defaultComputeCluster.name
 
 // --- Curated AML Environment: Pylance-grade Python IntelliSense ---
 // Backs the CSA Loom notebook "Open in VS Code for Web" path (AML compute
