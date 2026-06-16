@@ -56,7 +56,7 @@ const navItems = [
   { href: '/connections', icon: PlugConnected24Regular, label: 'Connections' },
   { href: '/deployment-pipelines', icon: CloudArrowUp24Regular, label: 'Deployment' },
   { href: '/admin', icon: ShieldKeyhole24Regular, label: 'Admin portal' },
-  { href: '/setup', icon: Settings24Regular, label: 'Setup wizard' },
+  { href: '/setup', icon: Settings24Regular, label: 'Setup & landing zones' },
 ];
 
 const useStyles = makeStyles({

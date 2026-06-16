@@ -470,11 +470,18 @@ export function AddLandingZoneWizardPane() {
           </Body1>
         </div>
 
-        {/* Read-only hub coordinates (from the tenant-topology doc). */}
+        {/* Read-only hub coordinates (from the tenant-topology doc). This is the
+            TARGET the new DLZ will attach to — shown read-only so the operator
+            never re-types an Azure id. It is NOT a pending status; the attach is
+            an explicit action below. */}
         <div className={styles.hubCard}>
           <span className={styles.iconChip} aria-hidden><Building24Regular /></span>
           <div className={styles.hubCardBody}>
-            <Body1Strong>Attaching to the existing hub</Body1Strong>
+            <Body1Strong>Target hub (read-only)</Body1Strong>
+            <Caption1 className={styles.label}>
+              The new landing zone will attach to this already-deployed hub. These coordinates are
+              inherited automatically — you don’t enter them.
+            </Caption1>
             <div className={styles.hubGrid}>
               <div className={styles.cell}>
                 <Caption1 className={styles.label}>Boundary</Caption1>
