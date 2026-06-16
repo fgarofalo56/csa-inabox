@@ -77,4 +77,17 @@ export interface CoeTemplateCloneDoc {
   status: 'cloned';
   clonedAt: string;
   clonedBy: string;
+  /**
+   * Publish-to-organization state. When true the clone appears in the
+   * org-wide consumer gallery (/api/org-reports) for every authenticated
+   * member of the deployment. Azure-native: this is a Cosmos flag, not a
+   * Power BI / Fabric workspace publish.
+   */
+  published?: boolean;
+  /** Audience scope — currently always 'organization' when published. */
+  audience?: 'organization';
+  /** ISO timestamp the clone was last published (cleared on unpublish). */
+  publishedAt?: string;
+  /** UPN/email of the user who published it. */
+  publishedBy?: string;
 }
