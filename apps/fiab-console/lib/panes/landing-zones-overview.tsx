@@ -24,6 +24,7 @@
 
 import * as React from 'react';
 import { useCallback, useEffect, useState } from 'react';
+import dynamic from 'next/dynamic';
 import {
   makeStyles, tokens, mergeClasses,
   Title3, Subtitle2, Body1, Body1Strong, Caption1,
@@ -36,8 +37,17 @@ import {
   ArrowClockwise20Regular, Dismiss24Regular, Open16Regular,
   GaugeRegular, Add16Regular, Wrench16Regular, Building24Regular,
 } from '@fluentui/react-icons';
-import { LandingZonesCanvas } from './landing-zones-canvas';
 import type { LandingZone, HubCoords, DlzAttachState } from '@/lib/setup/landing-zones-model';
+
+// React Flow (@xyflow/react) calls React.createContext at module load, which
+// breaks Next's server-side "collect page data" step (d.createContext is not a
+// function). Load the canvas client-only via next/dynamic so it never runs on
+// the server — same approach the other browser-only views use (copilot-diff,
+// monaco-textarea, powerbi-embed).
+const LandingZonesCanvas = dynamic(
+  () => import('./landing-zones-canvas').then((m) => m.LandingZonesCanvas),
+  { ssr: false, loading: () => <Spinner label="Loading map…" /> },
+);
 
 interface Overview {
   ok: boolean;
