@@ -17,7 +17,7 @@
  *   - Consumer groups   → /api/eventhubs/consumergroups  (per-hub list / create / delete; lazy-loaded per hub)
  *   - Schema groups     → /api/eventhubs/schemagroups    (list / create / delete)
  *   - Authorization rules → /api/eventhubs/authrules     (list SAS policies; reveal/rotate keys)
- *   - Networking        → /api/eventhubs/network         (read-only firewall summary)
+ *   - Networking        → /api/eventhubs/network         (firewall summary + editable rules)
  *   - Geo-recovery      → /api/eventhubs/geodr           (list Geo-DR configs)
  *
  * Authoring surfaces beyond list/create/delete open the tabbed
@@ -107,7 +107,7 @@ interface GeoRow { name: string; role?: string; partnerNamespace?: string; provi
 interface PeRow { name: string; privateEndpointId?: string; connectionStatus: string; provisioningState?: string }
 
 type CreateGroup = 'hub' | 'cg' | 'sg';
-type EditorTab = 'capture' | 'geodr' | 'sas' | 'privateendpoints';
+type EditorTab = 'capture' | 'networking' | 'geodr' | 'sas' | 'privateendpoints';
 
 function peStatusColor(s?: string) {
   if (s === 'Approved') return 'success' as const;
@@ -768,7 +768,7 @@ export function EventHubsNamespaceTree({ refreshKey = 0, onSelectEventHub }: Eve
             </Tree>
           </TreeItem>
 
-          {/* Networking (read-only firewall summary) */}
+          {/* Networking (firewall summary + editable IP / VNet rules via the editor) */}
           <TreeItem itemType="branch" value="g-network">
             <TreeItemLayout iconBefore={<ShieldKeyhole20Regular />}>Networking</TreeItemLayout>
             <Tree>
@@ -783,6 +783,9 @@ export function EventHubsNamespaceTree({ refreshKey = 0, onSelectEventHub }: Eve
                           <Badge size="small" appearance="tint">{network.defaultAction || '—'}</Badge>
                         </Tooltip>
                         <Caption1>{network.ipRuleCount} IP / {network.vnetRuleCount} VNet</Caption1>
+                        <Tooltip content="Edit networking (IP / VNet firewall, public access)" relationship="label">
+                          <Button size="small" appearance="subtle" icon={<Settings20Regular />} onClick={() => openEditor('', 'networking')} aria-label="Edit networking rules" />
+                        </Tooltip>
                       </span>
                     </span>
                   ) : <Spinner size="extra-tiny" label="Loading…" labelPosition="after" />}

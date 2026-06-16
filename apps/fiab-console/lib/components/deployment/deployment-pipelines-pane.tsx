@@ -257,18 +257,32 @@ function useLoomWorkspaces(): WorkspaceOpt[] | null {
 // ---- shared: Fabric workspace picker hook ----------------------------------
 
 function useFabricWorkspaces(): WorkspaceOpt[] | null {
+  return useFabricWorkspacesState().list;
+}
+
+/**
+ * Richer Fabric workspace hook that also surfaces the authorization gate, so the
+ * Git / Fabric tabs can render an explicit "Fabric not authorized" banner
+ * instead of a quiet "no workspaces visible" empty state. A non-OK response or
+ * an explicit `gate` from /api/fabric/workspaces means the Console UAMI isn't
+ * authorized for the Fabric APIs.
+ */
+function useFabricWorkspacesState(): { list: WorkspaceOpt[] | null; gate: Gate | null } {
   const [list, setList] = useState<WorkspaceOpt[] | null>(null);
+  const [gate, setGate] = useState<Gate | null>(null);
   useEffect(() => {
     fetch('/api/fabric/workspaces').then(async (r) => {
       const j = await r.json().catch(() => ({}));
+      if (j?.gate) { setGate(j.gate as Gate); setList([]); return; }
       if (j?.ok && Array.isArray(j.workspaces)) {
         setList(j.workspaces.map((w: any) => ({ id: w.id, name: w.name })));
       } else {
+        if (j?.error) setGate({ message: j.error, missing: [] });
         setList([]);
       }
     }).catch(() => setList([]));
   }, []);
-  return list;
+  return { list, gate };
 }
 
 // ---------------------------------------------------------------------------
@@ -1045,35 +1059,58 @@ function StageCompare({ pipelineId, stages, tick }: { pipelineId: string; stages
 
 function GitTab({ onUnauth }: { onUnauth: () => void }) {
   const styles = useStyles();
-  const workspaces = useFabricWorkspaces();
+  const { list: workspaces, gate } = useFabricWorkspacesState();
   const [workspaceId, setWorkspaceId] = useState('');
   const wsName = workspaces?.find((w) => w.id === workspaceId)?.name || '';
 
+  // Tab-level Fabric-authorization gate: when the Console UAMI can't see any
+  // Fabric workspaces (explicit gate, or an empty list with no error), Git
+  // integration is unavailable — surface it as a clear banner, not a quiet
+  // empty state. Git integration is a Fabric-only capability; Loom-native
+  // pipelines work standalone on the "Loom-native pipelines" tab.
+  const fabricUnauthorized = !!gate || (workspaces !== null && workspaces.length === 0);
+
   return (
     <div className={styles.section}>
-      <MessageBar intent="info">
-        <MessageBarBody>
-          Connect a Fabric workspace to an Azure DevOps or GitHub repository and branch, view the
-          per-item Git sync status, then <strong>commit to Git</strong> or <strong>update from Git</strong>.
-          Backed by the Fabric core/git REST APIs. Connecting as the Console identity (UAMI/SPN) requires a
-          configured Git provider credentials connection id (GitHub always requires one).
-        </MessageBarBody>
-      </MessageBar>
-      <div className={styles.toolbar}>
-        <Dropdown
-          aria-label="Workspace"
-          placeholder={workspaces === null ? 'Loading workspaces…' : 'Select a Fabric workspace'}
-          value={wsName}
-          selectedOptions={workspaceId ? [workspaceId] : []}
-          onOptionSelect={(_, d) => d.optionValue && setWorkspaceId(d.optionValue)}
-          disabled={!workspaces || workspaces.length === 0}
-          style={{ minWidth: 320 }}
-        >
-          {(workspaces || []).map((w) => <Option key={w.id} value={w.id} text={w.name}>{w.name}</Option>)}
-        </Dropdown>
-      </div>
-      {workspaces && workspaces.length === 0 && (
-        <div className={styles.empty}>No Fabric workspaces are visible to the Console identity.</div>
+      {fabricUnauthorized ? (
+        <MessageBar intent="warning">
+          <MessageBarBody>
+            <MessageBarTitle>Fabric Git integration not available</MessageBarTitle>
+            {gate?.message
+              ? gate.message
+              : 'The Console identity is not authorized for the Microsoft Fabric APIs, so no Fabric workspaces are visible.'}
+            {' '}Git integration is a Fabric-only capability. To enable it, grant the Console UAMI/SPN
+            Workspace Admin (or Contributor) on a Fabric workspace and enable the tenant setting
+            <strong> &ldquo;Service principals can use Fabric APIs&rdquo;</strong>.
+            {gate?.missing?.length ? <> Resolve: <strong>{gate.missing.join(', ')}</strong>.</> : null}
+            {' '}Loom-native deployment pipelines and ARM infra deployments work standalone — use the
+            <strong> Loom-native pipelines</strong> and <strong>Infra deployments (ARM)</strong> tabs.
+          </MessageBarBody>
+        </MessageBar>
+      ) : (
+        <MessageBar intent="info">
+          <MessageBarBody>
+            Connect a Fabric workspace to an Azure DevOps or GitHub repository and branch, view the
+            per-item Git sync status, then <strong>commit to Git</strong> or <strong>update from Git</strong>.
+            Backed by the Fabric core/git REST APIs. Connecting as the Console identity (UAMI/SPN) requires a
+            configured Git provider credentials connection id (GitHub always requires one).
+          </MessageBarBody>
+        </MessageBar>
+      )}
+      {!fabricUnauthorized && (
+        <div className={styles.toolbar}>
+          <Dropdown
+            aria-label="Workspace"
+            placeholder={workspaces === null ? 'Loading workspaces…' : 'Select a Fabric workspace'}
+            value={wsName}
+            selectedOptions={workspaceId ? [workspaceId] : []}
+            onOptionSelect={(_, d) => d.optionValue && setWorkspaceId(d.optionValue)}
+            disabled={!workspaces || workspaces.length === 0}
+            style={{ minWidth: 320 }}
+          >
+            {(workspaces || []).map((w) => <Option key={w.id} value={w.id} text={w.name}>{w.name}</Option>)}
+          </Dropdown>
+        </div>
       )}
       {workspaceId && <GitWorkspacePanel workspaceId={workspaceId} onUnauth={onUnauth} />}
     </div>

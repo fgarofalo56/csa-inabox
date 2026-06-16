@@ -1,8 +1,9 @@
 /**
  * Event Grid custom topics for business events.
  *
- *   GET  /api/business-events/topics            → { ok, topics, subscriptions }
- *   POST /api/business-events/topics            body { name, inputSchema? } → create (idempotent PUT)
+ *   GET    /api/business-events/topics          → { ok, topics, subscriptions }
+ *   POST   /api/business-events/topics          body { name, inputSchema? } → create (idempotent PUT)
+ *   DELETE /api/business-events/topics?name=…   → delete a custom topic (idempotent)
  *
  * Real ARM. Honest 503 gate when LOOM_EVENTGRID_SUB / RG is unset. The Console
  * UAMI must hold EventGrid Contributor on the resource group to create topics.
@@ -14,6 +15,7 @@ import {
   eventgridTopicsConfigGate,
   listEventGridTopics,
   createEventGridTopic,
+  deleteEventGridTopic,
   listTopicEventSubscriptions,
   EventGridTopicsError,
 } from '@/lib/azure/eventgrid-topics-client';
@@ -67,6 +69,21 @@ export async function POST(req: NextRequest) {
   try {
     const topic = await createEventGridTopic({ name, inputSchema });
     return NextResponse.json({ ok: true, topic });
+  } catch (e: any) {
+    const status = e instanceof EventGridTopicsError ? e.status : 502;
+    return NextResponse.json({ ok: false, error: e?.message || String(e) }, { status });
+  }
+}
+
+export async function DELETE(req: NextRequest) {
+  const session = getSession();
+  if (!session) return NextResponse.json({ ok: false, error: 'unauthenticated' }, { status: 401 });
+  const g = gate(); if (g) return g;
+  const name = req.nextUrl.searchParams.get('name')?.trim();
+  if (!name) return NextResponse.json({ ok: false, error: 'name query parameter is required' }, { status: 400 });
+  try {
+    const result = await deleteEventGridTopic(name);
+    return NextResponse.json({ ok: true, ...result });
   } catch (e: any) {
     const status = e instanceof EventGridTopicsError ? e.status : 502;
     return NextResponse.json({ ok: false, error: e?.message || String(e) }, { status });

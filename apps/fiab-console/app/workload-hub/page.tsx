@@ -374,15 +374,7 @@ export default function WorkloadHubPage() {
 
       {!loading && totals.more > 0 && (
         <Section title="More workloads">
-          {totals.more > 0 ? (
-            collection(more, totals.more, 'add-ons')
-          ) : (
-            <MessageBar intent="info">
-              <MessageBarBody>
-                Every optional add-on is already included in this tenant.
-              </MessageBarBody>
-            </MessageBar>
-          )}
+          {collection(more, totals.more, 'add-ons')}
           <div className={s.ctaCard}>
             <div className={s.ctaText}>
               <Text weight="semibold" block>Browse the full workload catalog</Text>

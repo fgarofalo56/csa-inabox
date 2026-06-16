@@ -298,6 +298,7 @@ function AdlsSection({ workspaceId, current, onChanged }: { workspaceId: string;
               <TableRow>
                 <TableHeaderCell>Account</TableHeaderCell>
                 <TableHeaderCell>Staging container</TableHeaderCell>
+                <TableHeaderCell>DFS endpoint</TableHeaderCell>
                 <TableHeaderCell>Status</TableHeaderCell>
                 <TableHeaderCell>Actions</TableHeaderCell>
               </TableRow>
@@ -309,6 +310,15 @@ function AdlsSection({ workspaceId, current, onChanged }: { workspaceId: string;
                   <div className={styles.detail}>{current.resourceGroup}</div>
                 </TableCell>
                 <TableCell>{current.containerName}</TableCell>
+                <TableCell>
+                  {current.dfsEndpoint ? (
+                    <Tooltip content={current.dfsEndpoint} relationship="label">
+                      <span className={styles.detail} style={{ wordBreak: 'break-all' }}>{current.dfsEndpoint}</span>
+                    </Tooltip>
+                  ) : (
+                    <span className={styles.detail}>—</span>
+                  )}
+                </TableCell>
                 <TableCell>
                   <Badge appearance="tint" color={statusBadge(current.status).color}>{statusBadge(current.status).label}</Badge>
                 </TableCell>

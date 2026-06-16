@@ -569,10 +569,26 @@ export async function runSelfAudit(now: string): Promise<AuditReport> {
 }
 
 // ── healer: runtime-safe fixes the console identity can actually apply ───────
-export interface FixOutcome { ok: boolean; detail: string; }
+export interface FixOutcome { ok: boolean; detail: string; dryRun?: boolean; }
 
-/** Apply a runtime-safe fix by id (admin-approved). Returns honest outcome. */
-export async function applyFix(fixId: string): Promise<FixOutcome> {
+/** Human description of what a runtime-safe fix WOULD do (for dry-run preview). */
+const FIX_PLAN: Record<string, string> = {
+  'ensure-cosmos':
+    'Would call createIfNotExists for the Loom Cosmos database and every Loom container (feature-permissions, workspaces, items, …). Idempotent: existing containers are left untouched; only missing ones are created.',
+};
+
+/**
+ * Apply a runtime-safe fix by id (admin-approved). When `dryRun` is true, no
+ * change is made — the returned detail describes exactly what the fix WOULD do,
+ * so the healer is demonstrable even when there is nothing to fix (fixable=0).
+ */
+export async function applyFix(fixId: string, opts: { dryRun?: boolean } = {}): Promise<FixOutcome> {
+  if (opts.dryRun) {
+    const plan = FIX_PLAN[fixId];
+    return plan
+      ? { ok: true, dryRun: true, detail: `Dry-run — no change applied. ${plan}` }
+      : { ok: false, dryRun: true, detail: `Dry-run — fix '${fixId}' is not a runtime-applicable action. Its remediation (env var / RBAC grant) must be applied and redeployed.` };
+  }
   switch (fixId) {
     case 'ensure-cosmos': {
       try {

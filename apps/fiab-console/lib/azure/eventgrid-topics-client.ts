@@ -222,6 +222,28 @@ export async function createEventGridTopic(spec: CreateTopicSpec): Promise<Event
   return shapeTopic(body);
 }
 
+/**
+ * Delete an Event Grid custom topic. Real ARM DELETE; 204/200 → ok, 404 →
+ * already gone (treated as success so the UI is idempotent). The Console UAMI
+ * needs "EventGrid Contributor" on the resource group.
+ */
+export async function deleteEventGridTopic(topic: string): Promise<{ deleted: boolean }> {
+  const cfg = readEventGridTopicsConfig();
+  const name = (topic || '').trim();
+  if (!name) throw new EventGridTopicsError(400, undefined, 'topic name is required');
+  const token = await armToken();
+  const res = await fetchWithTimeout(`${topicUrl(cfg, name)}?api-version=${EG_ARM_API}`, {
+    method: 'DELETE',
+    headers: { authorization: `Bearer ${token}`, accept: 'application/json' },
+  });
+  if (res.status === 404) return { deleted: false };
+  if (!res.ok) {
+    const text = await res.text().catch(() => '');
+    throw new EventGridTopicsError(res.status, text, text || `Event Grid topic delete ${res.status}`);
+  }
+  return { deleted: true };
+}
+
 export interface TopicEventSubscription {
   name: string;
   destinationType?: string;

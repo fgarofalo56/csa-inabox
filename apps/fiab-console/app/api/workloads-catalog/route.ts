@@ -1,6 +1,8 @@
 /**
- * GET  /api/workloads-catalog — list workloads available for the tenant.
- * POST /api/workloads-catalog — admin add a custom workload to the org catalog.
+ * GET    /api/workloads-catalog          — list workloads available for the tenant.
+ * POST   /api/workloads-catalog          — admin add a custom workload to the org catalog.
+ * PATCH  /api/workloads-catalog?id=…      — update an org catalog row (e.g. toggle `included`).
+ * DELETE /api/workloads-catalog?id=…      — remove a custom workload from the org catalog.
  */
 import { NextRequest, NextResponse } from 'next/server';
 import { getSession } from '@/lib/auth/session';
@@ -61,4 +63,44 @@ export async function POST(req: NextRequest) {
   };
   const { resource } = await c.items.create(doc);
   return NextResponse.json({ ok: true, workload: resource }, { status: 201 });
+}
+
+/** Update an org catalog row this tenant owns — currently the `included` toggle. */
+export async function PATCH(req: NextRequest) {
+  const s = getSession();
+  if (!s) return NextResponse.json({ ok: false, error: 'unauthenticated' }, { status: 401 });
+  const id = req.nextUrl.searchParams.get('id');
+  if (!id) return NextResponse.json({ ok: false, error: 'id required' }, { status: 400 });
+  const body = await req.json().catch(() => ({}));
+  const c = await workloadsCatalogContainer();
+  const { resource: existing } = await c.item(id, s.claims.oid).read().catch(() => ({ resource: null as any }));
+  if (!existing) return NextResponse.json({ ok: false, error: 'not found' }, { status: 404 });
+  const updated: any = {
+    ...existing,
+    ...(typeof body.included === 'boolean' ? { included: body.included } : {}),
+    ...(typeof body.name === 'string' && body.name.trim() ? { name: body.name.trim() } : {}),
+    ...(typeof body.description === 'string' ? { description: body.description } : {}),
+    ...(typeof body.category === 'string' && body.category.trim() ? { category: body.category.trim() } : {}),
+    ...(Array.isArray(body.featureSlugs) ? { featureSlugs: body.featureSlugs } : {}),
+    updatedAt: new Date().toISOString(),
+    updatedBy: s.claims.upn,
+  };
+  const { resource } = await c.item(id, s.claims.oid).replace(updated);
+  return NextResponse.json({ ok: true, workload: resource });
+}
+
+/** Remove a custom org catalog row this tenant owns. */
+export async function DELETE(req: NextRequest) {
+  const s = getSession();
+  if (!s) return NextResponse.json({ ok: false, error: 'unauthenticated' }, { status: 401 });
+  const id = req.nextUrl.searchParams.get('id');
+  if (!id) return NextResponse.json({ ok: false, error: 'id required' }, { status: 400 });
+  const c = await workloadsCatalogContainer();
+  try {
+    await c.item(id, s.claims.oid).delete();
+    return NextResponse.json({ ok: true });
+  } catch (e: any) {
+    if (e?.code === 404) return NextResponse.json({ ok: true });
+    return NextResponse.json({ ok: false, error: e?.message || String(e) }, { status: 500 });
+  }
 }

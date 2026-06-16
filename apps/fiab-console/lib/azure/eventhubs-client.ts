@@ -592,14 +592,28 @@ export async function listNamespaceKeys(
 }
 
 // ============================================================
-// Network rule set (read-only) — default IP / VNet firewall on the namespace.
+// Network rule set — default IP / VNet firewall on the namespace (read + write).
 // ============================================================
+export interface NetworkIpRule {
+  /** CIDR or single IP, e.g. 13.66.201.169/32. */
+  ipMask: string;
+  /** Always "Allow" for Event Hubs IP rules. */
+  action?: string;
+}
+export interface NetworkVnetRule {
+  /** ARM id of a subnet (must have the Microsoft.EventHub service endpoint). */
+  subnetId: string;
+  ignoreMissingVnetServiceEndpoint?: boolean;
+}
 export interface NetworkRuleSet {
   defaultAction?: string;       // Allow | Deny
   publicNetworkAccess?: string; // Enabled | Disabled | SecuredByPerimeter
   ipRuleCount: number;
   vnetRuleCount: number;
   trustedServiceAccessEnabled?: boolean;
+  /** Full rule lists for the editable Networking tab. */
+  ipRules: NetworkIpRule[];
+  vnetRules: NetworkVnetRule[];
 }
 
 export async function getNetworkRuleSet(): Promise<NetworkRuleSet> {
@@ -607,18 +621,68 @@ export async function getNetworkRuleSet(): Promise<NetworkRuleSet> {
   const r = await callArm(`${nsUrl(cfg)}/networkRuleSets/default?api-version=${EH_API}`);
   // A namespace with no firewall configured returns 404 — treat as "Allow all".
   if (r.status === 404) {
-    return { defaultAction: 'Allow', publicNetworkAccess: 'Enabled', ipRuleCount: 0, vnetRuleCount: 0 };
+    return { defaultAction: 'Allow', publicNetworkAccess: 'Enabled', ipRuleCount: 0, vnetRuleCount: 0, ipRules: [], vnetRules: [] };
   }
   if (!r.ok) throw new EventHubsArmError(r.status, await r.text(), `getNetworkRuleSet failed ${r.status}`);
   const body: any = await r.json();
   const p = body?.properties || {};
+  const ipRules: NetworkIpRule[] = Array.isArray(p.ipRules)
+    ? p.ipRules.map((x: any) => ({ ipMask: x?.ipMask, action: x?.action || 'Allow' })).filter((x: NetworkIpRule) => !!x.ipMask)
+    : [];
+  const vnetRules: NetworkVnetRule[] = Array.isArray(p.virtualNetworkRules)
+    ? p.virtualNetworkRules.map((x: any) => ({ subnetId: x?.subnet?.id, ignoreMissingVnetServiceEndpoint: x?.ignoreMissingVnetServiceEndpoint }))
+        .filter((x: NetworkVnetRule) => !!x.subnetId)
+    : [];
   return {
     defaultAction: p.defaultAction,
     publicNetworkAccess: p.publicNetworkAccess,
-    ipRuleCount: Array.isArray(p.ipRules) ? p.ipRules.length : 0,
-    vnetRuleCount: Array.isArray(p.virtualNetworkRules) ? p.virtualNetworkRules.length : 0,
+    ipRuleCount: ipRules.length,
+    vnetRuleCount: vnetRules.length,
     trustedServiceAccessEnabled: p.trustedServiceAccessEnabled,
+    ipRules,
+    vnetRules,
   };
+}
+
+export interface UpdateNetworkRuleSetSpec {
+  defaultAction?: 'Allow' | 'Deny';
+  publicNetworkAccess?: 'Enabled' | 'Disabled' | 'SecuredByPerimeter';
+  trustedServiceAccessEnabled?: boolean;
+  ipRules?: NetworkIpRule[];
+  vnetRules?: NetworkVnetRule[];
+}
+
+/**
+ * Update (PUT) the namespace default network rule set — IP firewall rules, VNet
+ * subnet rules, default action (Allow/Deny), public-network-access toggle and
+ * trusted-service access. One-for-one with the Azure portal Networking blade.
+ *
+ *   PUT .../networkRuleSets/default  body {properties:{defaultAction,virtualNetworkRules,ipRules,...}}
+ *
+ * publicNetworkAccess is a namespace property updated alongside the rule set via
+ * the same default rule-set resource (ARM accepts it on networkRuleSets default).
+ * Docs: https://learn.microsoft.com/rest/api/eventhub/namespaces-network-rule-set/create-or-update-network-rule-set
+ */
+export async function updateNetworkRuleSet(spec: UpdateNetworkRuleSetSpec): Promise<NetworkRuleSet> {
+  const cfg = readEventHubsConfig();
+  const ipRules = (spec.ipRules || []).filter((x) => x.ipMask?.trim()).map((x) => ({ ipMask: x.ipMask.trim(), action: 'Allow' }));
+  const vnetRules = (spec.vnetRules || []).filter((x) => x.subnetId?.trim()).map((x) => ({
+    subnet: { id: x.subnetId.trim() },
+    ignoreMissingVnetServiceEndpoint: x.ignoreMissingVnetServiceEndpoint ?? false,
+  }));
+  const properties: any = {
+    defaultAction: spec.defaultAction || 'Allow',
+    ipRules,
+    virtualNetworkRules: vnetRules,
+  };
+  if (spec.publicNetworkAccess) properties.publicNetworkAccess = spec.publicNetworkAccess;
+  if (typeof spec.trustedServiceAccessEnabled === 'boolean') properties.trustedServiceAccessEnabled = spec.trustedServiceAccessEnabled;
+  const r = await callArm(`${nsUrl(cfg)}/networkRuleSets/default?api-version=${EH_API}`, {
+    method: 'PUT',
+    body: JSON.stringify({ properties }),
+  });
+  if (!r.ok) throw new EventHubsArmError(r.status, await r.text(), `updateNetworkRuleSet failed ${r.status}`);
+  return getNetworkRuleSet();
 }
 
 // ============================================================

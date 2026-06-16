@@ -14,12 +14,14 @@
  */
 
 import { clientFetch } from '@/lib/client-fetch';
-import { useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import {
   Spinner, makeStyles, tokens, Badge, Input, Button, Caption1, Subtitle2, Tooltip,
+  Dialog, DialogSurface, DialogBody, DialogTitle, DialogContent, DialogActions,
+  Field, Textarea, MessageBar, MessageBarBody,
 } from '@fluentui/react-components';
-import { Search24Regular } from '@fluentui/react-icons';
+import { Search24Regular, Add24Regular, Delete20Regular } from '@fluentui/react-icons';
 import { PageShell } from '@/lib/components/page-shell';
 import { SignInRequired } from '@/lib/components/sign-in-required';
 import { itemVisual } from '@/lib/components/ui/item-type-visual';
@@ -29,6 +31,12 @@ interface Workload {
   id: string; name: string; description?: string;
   category?: string; included?: boolean;
   featureSlugs?: string[];
+  createdBy?: string;
+}
+
+/** A tenant-authored custom workload (vs a seeded GLOBAL → tenant copy). */
+function isCustom(w: Workload): boolean {
+  return !!w.createdBy || w.category === 'Org';
 }
 
 const useStyles = makeStyles({
@@ -66,6 +74,9 @@ const useStyles = makeStyles({
     },
   },
   cardHeader: { display: 'flex', alignItems: 'flex-start', gap: 12 },
+  cardActions: { position: 'absolute', top: 8, right: 8 },
+  cardRel: { position: 'relative' },
+  dialogCol: { display: 'flex', flexDirection: 'column', gap: 12, minWidth: 440 },
   iconBox: {
     width: 40, height: 40, borderRadius: 8,
     display: 'flex', alignItems: 'center', justifyContent: 'center',
@@ -135,15 +146,32 @@ export default function WorkloadsPage() {
   const [items, setItems] = useState<Workload[] | null>(null);
   const [unauth, setUnauth] = useState(false);
   const [q, setQ] = useState('');
+  const [addOpen, setAddOpen] = useState(false);
+  const [deletingId, setDeletingId] = useState<string | null>(null);
 
-  useEffect(() => {
-    clientFetch('/api/workloads-catalog').then(r => {
+  const load = useCallback(() => {
+    return clientFetch('/api/workloads-catalog').then(r => {
       if (r.status === 401 || r.status === 403) { setUnauth(true); setItems([]); return null; }
       return r.json();
     }).then(d => {
       if (d) setItems(Array.isArray(d?.workloads) ? d.workloads : []);
     }).catch(() => setItems([]));
   }, []);
+
+  useEffect(() => { void load(); }, [load]);
+
+  const removeWorkload = useCallback(async (w: Workload) => {
+    if (!confirm(`Remove the custom workload "${w.name}" from this tenant's catalog?`)) return;
+    setDeletingId(w.id);
+    try {
+      const r = await clientFetch(`/api/workloads-catalog?id=${encodeURIComponent(w.id)}`, { method: 'DELETE' });
+      const j = await r.json().catch(() => ({}));
+      if (!r.ok || !j?.ok) { alert(j?.error || `Delete failed (${r.status})`); return; }
+      await load();
+    } finally {
+      setDeletingId(null);
+    }
+  }, [load]);
 
   const filter = q.toLowerCase().trim();
   const visible = useMemo(() => (items ?? []).filter(w =>
@@ -189,7 +217,12 @@ export default function WorkloadsPage() {
             {filter ? `${shownCount} of ${totalCount} workloads` : `${totalCount} workloads`}
           </Caption1>
         )}
+        <Button appearance="primary" icon={<Add24Regular />} onClick={() => setAddOpen(true)} disabled={unauth}>
+          Add custom workload
+        </Button>
       </div>
+
+      <AddWorkloadDialog open={addOpen} onClose={() => setAddOpen(false)} onCreated={() => { setAddOpen(false); void load(); }} />
 
       {items === null && <Spinner label="Loading workloads…" />}
 
@@ -220,12 +253,25 @@ export default function WorkloadsPage() {
               return (
                 <div
                   key={w.id}
-                  className={s.card}
+                  className={`${s.card} ${s.cardRel}`}
                   role="button"
                   tabIndex={0}
                   onClick={() => openWorkload(w)}
                   onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); openWorkload(w); } }}
                 >
+                  {isCustom(w) && (
+                    <div className={s.cardActions} onClick={(e) => e.stopPropagation()}>
+                      <Tooltip content="Remove custom workload" relationship="label">
+                        <Button
+                          size="small" appearance="subtle"
+                          icon={deletingId === w.id ? <Spinner size="tiny" /> : <Delete20Regular />}
+                          disabled={deletingId === w.id}
+                          aria-label={`Remove ${w.name}`}
+                          onClick={() => removeWorkload(w)}
+                        />
+                      </Tooltip>
+                    </div>
+                  )}
                   <div className={s.cardHeader}>
                     {(() => {
                       const v = itemVisual(workloadTypeSlug(w));
@@ -274,5 +320,67 @@ export default function WorkloadsPage() {
         </div>
       ))}
     </PageShell>
+  );
+}
+
+/* ───────────────────────── Add custom workload ────────────────────────── */
+
+function AddWorkloadDialog({ open, onClose, onCreated }: { open: boolean; onClose: () => void; onCreated: () => void }) {
+  const s = useStyles();
+  const [name, setName] = useState('');
+  const [description, setDescription] = useState('');
+  const [featureSlugs, setFeatureSlugs] = useState('');
+  const [included, setIncluded] = useState(true);
+  const [saving, setSaving] = useState(false);
+  const [err, setErr] = useState<string | null>(null);
+
+  const reset = () => { setName(''); setDescription(''); setFeatureSlugs(''); setIncluded(true); setErr(null); };
+
+  const save = async () => {
+    setSaving(true); setErr(null);
+    try {
+      const slugs = featureSlugs.split(',').map((x) => x.trim()).filter(Boolean);
+      const r = await clientFetch('/api/workloads-catalog', {
+        method: 'POST', headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ name: name.trim(), description: description.trim() || undefined, category: 'Org', included, featureSlugs: slugs }),
+      });
+      const j = await r.json().catch(() => ({}));
+      if (!r.ok || !j?.ok) { setErr(j?.error || `Create failed (${r.status})`); return; }
+      reset(); onCreated();
+    } catch (e: any) { setErr(e?.message || String(e)); }
+    finally { setSaving(false); }
+  };
+
+  return (
+    <Dialog open={open} onOpenChange={(_, d) => { if (!d.open) { reset(); onClose(); } }}>
+      <DialogSurface>
+        <DialogBody>
+          <DialogTitle>Add a custom workload</DialogTitle>
+          <DialogContent>
+            <div className={s.dialogCol}>
+              {err && <MessageBar intent="error"><MessageBarBody>{err}</MessageBarBody></MessageBar>}
+              <Field label="Name" required>
+                <Input value={name} onChange={(_, d) => setName(d.value)} placeholder="e.g. Risk Analytics" />
+              </Field>
+              <Field label="Description">
+                <Textarea value={description} onChange={(_, d) => setDescription(d.value)} />
+              </Field>
+              <Field label="Capability item-type slugs (comma-separated)" hint="e.g. data-product, eventstream, kql-database — these drive the workload's icon + capability pills.">
+                <Input value={featureSlugs} onChange={(_, d) => setFeatureSlugs(d.value)} placeholder="data-product, eventstream" />
+              </Field>
+              <Field label="Include in this tenant by default">
+                <Badge appearance={included ? 'filled' : 'outline'} color={included ? 'success' : 'informative'} onClick={() => setIncluded((v) => !v)} style={{ cursor: 'pointer', alignSelf: 'flex-start' }}>
+                  {included ? 'Included' : 'Optional'}
+                </Badge>
+              </Field>
+            </div>
+          </DialogContent>
+          <DialogActions>
+            <Button appearance="secondary" onClick={() => { reset(); onClose(); }}>Cancel</Button>
+            <Button appearance="primary" onClick={save} disabled={saving || !name.trim()}>{saving ? 'Saving…' : 'Add workload'}</Button>
+          </DialogActions>
+        </DialogBody>
+      </DialogSurface>
+    </Dialog>
   );
 }
