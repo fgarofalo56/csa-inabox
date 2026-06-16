@@ -25,6 +25,29 @@ This file is maintained automatically by
 [Conventional Commits](https://www.conventionalcommits.org/). See
 [RELEASE.md](RELEASE.md) for the release process.
 
+## [0.42.0](https://github.com/fgarofalo56/csa-inabox/compare/csa-inabox-v0.41.0...csa-inabox-v0.42.0) (2026-06-15)
+
+
+### Features
+
+* **fiab-console:** live network topology resource-graph visual (/admin/network) ([#1402](https://github.com/fgarofalo56/csa-inabox/issues/1402)) ([22f28c7](https://github.com/fgarofalo56/csa-inabox/commit/22f28c7eed6c64e74814c4bbf4a9e4ea4f58e97e))
+* **fiab-deploy:** integrate 11 deploy-readiness domains — push-button 100% day-one ([#1400](https://github.com/fgarofalo56/csa-inabox/issues/1400)) ([63eb1e0](https://github.com/fgarofalo56/csa-inabox/commit/63eb1e037924d27ba42cdcc20a7560932ea4a4ef))
+* **fiab:** CoE Power BI report template library for Org Visuals (PBIP) + catalog + publish script ([#1404](https://github.com/fgarofalo56/csa-inabox/issues/1404)) ([a4d28f1](https://github.com/fgarofalo56/csa-inabox/commit/a4d28f1a04cc8a116a7fb3c56619c0cf4ee6f94b))
+
+
+### Bug Fixes
+
+* **ci:** unblock all PRs — bare server-fetch guard + mypy/pathspec Python Tests ([#1398](https://github.com/fgarofalo56/csa-inabox/issues/1398)) ([9f7a299](https://github.com/fgarofalo56/csa-inabox/commit/9f7a299102bce30b585f46d3eff05ea6329deaef))
+* **fiab-console:** ACA managed-identity credential — bypass @azure/identity MSI parse bug ([#1406](https://github.com/fgarofalo56/csa-inabox/issues/1406)) ([49864ef](https://github.com/fgarofalo56/csa-inabox/commit/49864efbea661c81f9639b112f92e7710646ed58))
+* **fiab-console:** backend-aware lakehouse/notebook sample SQL (Synapse Spark Hive default, Unity Catalog only on Databricks) ([#1403](https://github.com/fgarofalo56/csa-inabox/issues/1403)) ([3733ce2](https://github.com/fgarofalo56/csa-inabox/commit/3733ce2ff104c2f83bbcdf8c25403e1db20af1cd))
+* **fiab-console:** Fabric azure-native default + Foundry dropdown cross-sub enumeration + connections MI-credential hardening + opt-in walkthroughs ([#1401](https://github.com/fgarofalo56/csa-inabox/issues/1401)) ([c22a42f](https://github.com/fgarofalo56/csa-inabox/commit/c22a42f4a7e951ea5f49362c42acfd24418a6b55))
+* **fiab-console:** lakehouse shortcuts — external ADLS+SAS URL construction + in-tenant account enumeration (AAD) + connector sweep ([#1405](https://github.com/fgarofalo56/csa-inabox/issues/1405)) ([f2b1f26](https://github.com/fgarofalo56/csa-inabox/commit/f2b1f262daa8b20e092e68182e07f3b0c2787e5c))
+
+
+### Documentation
+
+* **fiab:** deploy-readiness PRP — push-button, 100% working, scan-and-choose ([#1385](https://github.com/fgarofalo56/csa-inabox/issues/1385)) ([e3f9c9f](https://github.com/fgarofalo56/csa-inabox/commit/e3f9c9f5734e53685a42d91d2450f0372d728ebf))
+
 ## [0.41.0](https://github.com/fgarofalo56/csa-inabox/compare/csa-inabox-v0.40.0...csa-inabox-v0.41.0) (2026-06-15)
 
 
