@@ -62,3 +62,25 @@ DAB runtime (deployed), Weave-PG (deployed; needs AGE bootstrap as UAMI), dbt-ru
 2. Land the open v0.11 batch: open the fix-shortcut-parser PR; diff-verify (two-dot vs main) + merge #1426, #1428, fix-shortcut-parser, fix-bundle-real-datasets, the AutoML-concurrency PR; build + roll **v0.11**; cut the release (#1423).
 3. Re-pair the operator's authenticated Chrome (claude-in-chrome) → begin the **validation loop** at P0, working down. Fix→reroll→re-verify.
 4. Update the matrix continuously (committed) as the auditable ship-readiness record.
+
+## 7. WORKTREE CLEANUP (do FIRST in the fresh session, before new work)
+This session + the prior one left ~15+ agent worktrees under `.claude/worktrees/agent-*` (each isolation:worktree agent). Most are for ALREADY-MERGED PRs; they hold branch locks (caused "cannot delete branch used by worktree" errors) + consume disk. **Before starting new work in the fresh context:**
+1. Confirm no agent is still running (this session's last in-flight: `fix-bundle-datasets` → `fix-bundle-real-datasets` branch/PR; everything else done/merged). Do NOT remove a running agent's worktree.
+2. Remove all agent worktrees + prune + delete merged branches:
+   ```bash
+   cd /e/Repos/GitHub/csa-inabox
+   git worktree list | grep '/.claude/worktrees/agent-' | awk '{print $1}' \
+     | while read w; do git worktree remove --force "$w"; done
+   git worktree prune
+   # delete local branches already merged to origin/main (keep open-PR branches):
+   git fetch origin --prune
+   git branch --merged origin/main | grep -vE '^\*|main' | xargs -r git branch -D
+   ```
+3. Open-PR branches to KEEP until merged: `self-update-clean` (#1426), `fix-dlz-setup-wizard` (#1428), `fix-shortcut-parser` (#1429), `fix-bundle-real-datasets` (pending), `docs-ship-plan` (#? these docs), the AutoML-concurrency branch (owed). Their worktrees can be removed once their PRs merge.
+4. The primary checkout (`E:/Repos/GitHub/csa-inabox`) is currently on branch `docs-ship-plan` — switch it back to `main` (`git checkout main && git pull`) at kickoff.
+
+## 8. MEMORY POINTERS (don't lose)
+- `csa_loom_v07_resume.md` — version/roll history + live fixes + deep-E2E status.
+- `csa_loom_live_provisioning_centralus.md` — full live provisioning ledger.
+- `csa_loom_aca_managed_identity_bug.md` — the credential root-cause (do not re-litigate).
+- All `docs/fiab/audit/*.md` — the audit reports + this matrix.
