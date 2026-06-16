@@ -308,6 +308,72 @@ export async function deleteApi(apiId: string): Promise<void> {
 }
 
 /**
+ * Publish a GraphQL API to APIM the SCHEMA-FIRST way (the only correct way for
+ * an inline SDL):
+ *   1. PUT the API with `type:'graphql'` (synthetic GraphQL when no backend
+ *      `serviceUrl`, pass-through when one is supplied).
+ *   2. PUT the SDL to the API's `schemas/{id}` sub-resource with contentType
+ *      `application/vnd.ms-azure-apim.graphql.schema`.
+ *
+ * This replaces the broken `format:'graphql-link'` import, whose `value` must
+ * be an absolute URI APIM fetches (so an inline SDL is rejected with
+ * ValidationError). Grounded in Microsoft Learn:
+ *   https://learn.microsoft.com/azure/api-management/graphql-schema-resolve-api
+ *   https://learn.microsoft.com/cli/azure/apim/api/schema  (schema-type)
+ */
+export async function publishGraphqlApi(
+  apiId: string,
+  body: {
+    displayName: string;
+    path: string;
+    sdl: string;
+    /** Optional backend GraphQL endpoint → pass-through; omitted → synthetic. */
+    serviceUrl?: string;
+    description?: string;
+    subscriptionRequired?: boolean;
+    protocols?: string[];
+  },
+): Promise<ApimApiSummary> {
+  // 1) Create / update the GraphQL API itself.
+  const properties: any = {
+    displayName: body.displayName,
+    path: body.path,
+    // `type` is the API-kind discriminator; `apiType` is the legacy alias —
+    // set both so every supported api-version accepts the GraphQL kind.
+    type: 'graphql',
+    apiType: 'graphql',
+    protocols: body.protocols && body.protocols.length ? body.protocols : ['https'],
+    subscriptionRequired: body.subscriptionRequired ?? true,
+  };
+  if (body.serviceUrl) properties.serviceUrl = body.serviceUrl;
+  if (body.description) properties.description = body.description;
+  const apiRes = await apimFetch(`/apis/${encodeURIComponent(apiId)}`, {
+    method: 'PUT',
+    body: JSON.stringify({ properties }),
+  });
+  const apiJson = await readJson<any>(apiRes);
+  if (!apiJson) throw new ApimError(404, null, 'PUT apim graphql api returned null');
+  const api = shapeApi(apiJson);
+
+  // 2) Upload the SDL to the GraphQL schema sub-resource.
+  const schemaRes = await apimFetch(`/apis/${encodeURIComponent(apiId)}/schemas/graphql`, {
+    method: 'PUT',
+    body: JSON.stringify({
+      properties: {
+        contentType: 'application/vnd.ms-azure-apim.graphql.schema',
+        document: { value: body.sdl },
+      },
+    }),
+  });
+  // PUT schema is 200/201 sync or 202 async (Location header). Any other
+  // non-2xx throws APIM's own validation message.
+  if (!schemaRes.ok && schemaRes.status !== 202) {
+    await readJson<unknown>(schemaRes); // throws ApimError(status, body, msg)
+  }
+  return api;
+}
+
+/**
  * Import (create or replace) an API from an OpenAPI / Swagger definition —
  * the "Create from definition → OpenAPI" flow in the Azure portal's APIM blade.
  *

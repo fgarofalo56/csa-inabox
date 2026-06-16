@@ -80,17 +80,31 @@ export function resolveAmlTarget(): AmlTarget {
   const missing: string[] = [];
 
   const subscriptionId =
-    process.env.LOOM_AML_SUBSCRIPTION || process.env.LOOM_SUBSCRIPTION_ID;
+    process.env.LOOM_AML_SUBSCRIPTION ||
+    process.env.LOOM_AML_SUB ||
+    process.env.LOOM_SUBSCRIPTION_ID;
   if (!subscriptionId) missing.push('LOOM_AML_SUBSCRIPTION (or LOOM_SUBSCRIPTION_ID)');
 
+  // The standalone AML workspace NAME. Accept LOOM_AML_WORKSPACE and the
+  // LOOM_AML_WORKSPACE_NAME alias. Fall back to LOOM_FOUNDRY_NAME ONLY for
+  // back-compat with older deployments where the Foundry hub WAS a real ML
+  // workspace — in deployments where LOOM_FOUNDRY_NAME points at an Azure
+  // OpenAI / AIServices account this fallback resolves to a non-ML resource, so
+  // the ML control-plane call will 404 honestly (the caller surfaces that as a
+  // real error / honest gate — never a faked success).
   const workspace =
-    process.env.LOOM_AML_WORKSPACE || process.env.LOOM_FOUNDRY_NAME;
+    process.env.LOOM_AML_WORKSPACE ||
+    process.env.LOOM_AML_WORKSPACE_NAME ||
+    process.env.LOOM_FOUNDRY_NAME;
   if (!workspace) missing.push('LOOM_AML_WORKSPACE (or LOOM_FOUNDRY_NAME)');
 
   if (missing.length) throw new AmlNotConfiguredError(missing);
 
   const region =
-    process.env.LOOM_AML_REGION || process.env.LOOM_FOUNDRY_REGION || 'eastus2';
+    process.env.LOOM_AML_REGION ||
+    process.env.LOOM_FOUNDRY_REGION ||
+    process.env.LOOM_LOCATION ||
+    'eastus2';
 
   const resourceGroup =
     process.env.LOOM_AML_RESOURCE_GROUP ||

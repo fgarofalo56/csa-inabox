@@ -355,7 +355,21 @@ export async function submitAutoMlJob(input: SubmitAutoMlInput): Promise<AutoMlJ
     body: JSON.stringify(armBody),
   });
   const j = await readJson<any>(res, 'submitAutoMlJob');
-  return j ? shapeAutoMlJob(j) : { name, status: 'NotStarted', taskType: input.task };
+  // readJson() returns null ONLY on a 404 — for a PUT that means the parent
+  // workspace or the referenced compute cluster doesn't exist. NEVER fabricate
+  // a synthetic {status:'NotStarted'} success over that null effect
+  // (no-vaporware.md): throw so the route surfaces an honest error / gate.
+  if (!j) {
+    throw new AutoMlError(
+      404,
+      undefined,
+      `AutoML job submit failed (404): the Azure ML workspace or the compute cluster ` +
+      `'${input.computeName}' was not found. Verify LOOM_AML_WORKSPACE points at a real ` +
+      `Azure ML workspace (resolved: ${resolveAmlTarget().workspace}) and that an AmlCompute ` +
+      `cluster named '${input.computeName}' exists in it.`,
+    );
+  }
+  return shapeAutoMlJob(j);
 }
 
 // ============================================================

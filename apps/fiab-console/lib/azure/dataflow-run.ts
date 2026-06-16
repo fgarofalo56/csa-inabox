@@ -23,6 +23,7 @@ import {
   upsertDataset,
   upsertWranglingDataFlow,
   runWranglingDataFlow,
+  ensureWranglingIntegrationRuntime,
   type WranglingSink,
 } from '@/lib/azure/adf-client';
 import { parseSharedQueries, type DataflowSink } from '@/lib/components/pipeline/dataflow/m-script';
@@ -178,7 +179,21 @@ export async function runDataflowAdf(itemId: string, workspaceId: string): Promi
   }
   const dataFlowName = `loom-pq-${itemId.slice(0, 8)}`;
   await upsertWranglingDataFlow(dataFlowName, m);
-  const run = await runWranglingDataFlow(dataFlowName, [built.sink]);
+  // Resolve an Integration Runtime that actually resolves in THIS factory. The
+  // built-in AutoResolveIntegrationRuntime is rejected by some factories for
+  // ExecuteWranglingDataflow ("invalid reference 'autoresolveintegrationruntime'"),
+  // so discover/create a Managed IR. Honest-gate if that fails (no opaque 502).
+  let integrationRuntimeName: string;
+  try {
+    integrationRuntimeName = await ensureWranglingIntegrationRuntime();
+  } catch (e: any) {
+    return {
+      ok: false, status: 503,
+      error: `No usable Integration Runtime in Data Factory '${process.env.LOOM_ADF_NAME || ''}' for the Power Query run.`,
+      hint: 'The factory has no Managed Integration Runtime and one could not be created. Create a Managed (Azure) Integration Runtime in the Data Factory (Manage → Integration runtimes → New → Azure, AutoResolve), then Run again. Detail: ' + (e?.message || String(e)),
+    };
+  }
+  const run = await runWranglingDataFlow(dataFlowName, [built.sink], { integrationRuntimeName });
   // Best-effort: persist the last run id for the editor's status pane.
   try {
     const next: WorkspaceItem = {
