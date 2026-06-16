@@ -27,8 +27,7 @@ import {
   Dismiss20Regular, ChannelShare20Regular,
 } from '@fluentui/react-icons';
 import { Section } from '@/lib/components/ui/section';
-import { ReportCanvas } from '@/lib/coe-library/report-render/report-canvas';
-import { useReportModel } from '@/lib/coe-library/report-render/use-report';
+import { ReportView } from '@/lib/coe-library/report-render/report-view';
 import { ReportViewerDialog } from '@/lib/coe-library/report-render/report-viewer-dialog';
 
 interface CoeTemplate {
@@ -340,10 +339,5 @@ export function CoeLibraryPane() {
 
 /** Report tab inside the template Preview dialog — renders the catalog template. */
 function TemplateReportTab({ templateId }: { templateId: string }) {
-  const s = useStyles();
-  const { data, loading, error } = useReportModel(`/api/admin/coe-library/render?templateId=${encodeURIComponent(templateId)}`);
-  if (loading) return <div className={s.centerPad}><Spinner label="Rendering report…" /></div>;
-  if (error) return <MessageBar intent="error"><MessageBarBody>{error}</MessageBarBody></MessageBar>;
-  if (!data) return <div className={s.centerPad}><Spinner label="Rendering report…" /></div>;
-  return <ReportCanvas model={data.model} sample={data.sample} />;
+  return <ReportView fetchUrl={`/api/admin/coe-library/render?templateId=${encodeURIComponent(templateId)}`} />;
 }

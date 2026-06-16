@@ -165,6 +165,7 @@ export function OrgReportsPane(): React.ReactElement {
         fetchUrl={openReport ? `/api/org-reports/render?id=${encodeURIComponent(openReport.id)}` : null}
         title={openReport?.displayName}
         publishedBadge
+        defaultLive={false}
       />
     </>
   );

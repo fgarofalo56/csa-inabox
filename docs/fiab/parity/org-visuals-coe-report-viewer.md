@@ -49,7 +49,7 @@ existing clone library (`org-visuals.md` covers upload/clone/list/delete).
 | 2 | Faithful layout | ✅ built | absolute %-positioned tiles on an `aspect-ratio` canvas from page width/height + z-order |
 | 3 | Multi-page switcher | ✅ built | Fluent `TabList` when `pages.length > 1` (parser preserves `pageOrder`) |
 | 4 | Titles | ✅ built | resolved from `objects.title` literal (quotes stripped) else humanized default |
-| 5 | Visual data | ✅ built | `buildVisualData` aggregates the TMDL SAMPLE rows; Fluent `MessageBar` labels it SAMPLE + names the params to connect live |
+| 5 | Visual data | ✅ built | `buildVisualData` aggregates each entity's rows. **Live by default** (admin): every visual resolves against the deployment's OWN Azure estate via `report-render/live-bindings`; entities with no first-party backend fall back to clearly-labelled SAMPLE. A **Live / Sample** toggle + a per-visual provenance dot (live ✓ / sample / honest-gate) + a parameter panel sit above the canvas |
 | 6 | Open from library | ✅ built | template card **Open report** → two-tab dialog (**Report** = canvas, **Details** = metadata); clone row **Open** → `ReportViewerDialog` (`?cloneId=`) |
 | 7 | Publish to org | ✅ built | clone row **Publish to organization** → `POST /api/admin/coe-library {action:'publish'}` → Cosmos flag + audit |
 | 8 | Unpublish | ✅ built | same control toggles → `{action:'unpublish'}` (clears flag → consumer 404s) |
@@ -58,6 +58,45 @@ existing clone library (`org-visuals.md` covers upload/clone/list/delete).
 | — | Honest unsupported visual | ⚠️ honest | unknown `visualType` → "‹type› preview not supported yet" tile (never a crash) |
 
 Zero ❌. Zero stub banners.
+
+## Live data coverage (per template / entity)
+
+**The promise is now real.** Before this change the viewer rendered ONLY the
+bundled TMDL sample and showed a MessageBar telling the user to "connect live
+Azure sources by setting the report parameters" — with **no execution path**
+behind it (a no-vaporware violation). Now each entity binds to a first-party
+CSA Loom Azure backend where one exists, resolved with ZERO manual entry
+(parameters default from the deployment's env: `LOOM_SUBSCRIPTION_ID`,
+`LOOM_LOG_ANALYTICS_WORKSPACE_ID`, …). Entities with no real Loom backend stay
+sample-backed and are **honestly tagged** (never fabricated).
+
+`?mode=live` on the render route resolves each entity → `{source, note}` +
+`{columns, rows}`; the viewer labels every visual with its true provenance.
+
+| Template | Entity | Status | Live backend (Azure-native) | Client |
+|----------|--------|--------|------------------------------|--------|
+| cloud-cost-finops | **Cost** | ✅ live | Azure Cost Management — MTD spend by service | `cost-client.getLoomCostSummary` |
+| cloud-cost-finops | **Budget** | ✅ live | Microsoft.Consumption budgets (⚠️ sample when none defined) | `cost-client` |
+| coe-adoption-maturity | **Adoption Signals** | ✅ live | Log Analytics — monthly active users (AppTraces loom-audit) | `monitor-client.queryLogs` |
+| coe-adoption-maturity | Maturity Assessment | ⚠️ sample | no live Loom backend (maturity is SharePoint/Dataverse/Cosmos) | — |
+| resource-inventory-sprawl | **Resources** | ✅ live | Azure Resource Graph — inventory by type/region | ARG (`runArg`) |
+| resource-inventory-sprawl | Orphans | ⚠️ sample | no live backend (orphan-cost estimation needs pricing) | — |
+| identity-access-governance | **Role Assignments** | ✅ live | Azure Resource Graph — `authorizationresources` (RBAC) | ARG (`runArg`) |
+| identity-access-governance | PIM | ⚠️ sample | no live backend (needs Graph RoleManagement.Read.Directory) | — |
+| security-compliance-posture | **Secure Score** | ✅ live | Microsoft Defender for Cloud — secure score | `defender-client.getDefenderSummary` |
+| security-compliance-posture | Policy Compliance | ⚠️ sample | no dedicated Loom policy-state client yet | — |
+| data-estate-governance | Assets / Lineage | ⚠️ sample | Purview search returns hits, not aggregate facet counts — left sample to avoid fabricating counts | — |
+| operational-health-sla | Availability / Incidents | ⚠️ sample | Heartbeat-uptime + MTTR not reconstructable without fabricating telemetry | — |
+| landing-zone-conformance | Conformance / Subscriptions | ⚠️ sample | no policy-state conformance client yet | — |
+
+**6 entities across 4 templates render LIVE** from the customer's estate today;
+the remainder are honestly sample-tagged with the exact reason shown inline.
+Each resolver returns `{source:'error', note}` (gate naming the env var / role)
+on failure — never zeros-as-data.
+
+**Default mode:** admin surfaces (template preview, clone Open) default to
+**Live**; the org **consumer gallery** defaults to **Sample** (members can
+toggle) since live resolvers read the deployment estate via the Console UAMI.
 
 ### Visual-type coverage (rendered, real)
 
@@ -73,11 +112,12 @@ unsupported tiles** on the default catalog.
 
 | Control | Backend |
 |---------|---------|
-| Template Report tab | `GET /api/admin/coe-library/render?templateId=` → `parseReportModel` + `parseSampleData` over bundled PBIP |
-| Clone Open | `GET /api/admin/coe-library/render?cloneId=` → reads clone doc (per-tenant) → renders source template's bundled PBIP |
+| Template Report tab | `GET /api/admin/coe-library/render?templateId=` → `parseReportModel` + `parseSampleData`; `&mode=live` also runs `resolveLiveReport` (per-entity Azure resolvers) |
+| Clone Open | `GET /api/admin/coe-library/render?cloneId=` (`&mode=live` supported) → renders source template's bundled PBIP + live estate data |
+| Live render w/ overrides | `POST /api/admin/coe-library/render?templateId=\|cloneId=` body `{params:{subscriptionId, billingScope, …}}` → `resolveLiveReport(overrides)` |
 | Publish / Unpublish | `POST /api/admin/coe-library {action, cloneId}` → `setClonePublished` (Cosmos upsert) + audit `coe-template.publish`/`.unpublish` |
 | Consumer gallery list | `GET /api/org-reports` (session-gated, NOT admin) → `listPublishedReports` (cross-partition `published = true`) |
-| Consumer open | `GET /api/org-reports/render?id=` → `getPublishedReport` (404 if unpublished) → render model |
+| Consumer open | `GET /api/org-reports/render?id=` (`&mode=live` + POST overrides supported) → `getPublishedReport` (404 if unpublished) → render model + live data |
 
 ### Data-model note (org scoping)
 
