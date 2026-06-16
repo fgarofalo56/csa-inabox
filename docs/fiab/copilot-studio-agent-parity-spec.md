@@ -64,6 +64,14 @@ From `apps/fiab-console/lib/editors/copilot-studio-editors.tsx::CopilotStudioAge
 - **Publish** button per agent — calls bound action `Microsoft.Dynamics.CRM.msdyn_PublishCopilot`
 - Tabs across to Knowledge / Topics / Actions / Channels / Analytics editors with the selected agent ID propagated
 - MessageBar `intent=warning` when env has no Dataverse, when Copilot Studio is not enabled (503 from client), or when the UAMI is not a Dataverse application user
+- **Honest schema errors (audit H1)** — the client's Dataverse error handler now maps ONLY the true
+  Copilot-Studio core entities (`msdyn_copilots` / `msdyn_knowledgesources` / `msdyn_botcomponents`)
+  to the friendly "enable Copilot Studio" 503. A genuine missing-entity (e.g. `msdyn_botchannels`,
+  `msdyn_bot_actions`) or missing-column (e.g. `msdyn_instructions`, `msdyn_modeldeployment` if they
+  do not exist on the live tenant's `msdyn_copilots`) now surfaces an honest error naming the
+  offending entity/column instead of masquerading as the enablement gate. **Live-tenant
+  verification of every `msdyn_*` entity/column remains required** — the client tells the truth on
+  failure, but confirming the schema against a provisioned Dataverse is the outstanding work.
 
 ## Gaps for parity
 

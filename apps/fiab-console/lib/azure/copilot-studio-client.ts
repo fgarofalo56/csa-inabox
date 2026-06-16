@@ -112,21 +112,74 @@ async function rawCall<T = any>(url: string, opts: CallOpts): Promise<T> {
   try { json = text ? JSON.parse(text) : null; } catch { /* leave as text */ }
   if (!res.ok) {
     const msg = (json?.error?.message || json?.message || text || `${opts.method ?? 'GET'} ${url} failed`).toString();
-    // Detect "Copilot Studio not enabled in this env" — the msdyn_copilots table
-    // and msdyn_knowledgesources table only exist when the env's admin has
-    // enabled Copilot Studio (separate per-env add-on, PPAC → env → Copilot
-    // Studio → Enable). Surface as a friendly 503 so editors render a quiet
-    // MessageBar instead of a loud error.
-    const isCsNotEnabled =
-      res.status === 404 &&
-      /Resource not found for the segment '(msdyn_copilots?|msdyn_knowledgesources?|msdyn_botcomponents?)'/i.test(msg);
-    if (isCsNotEnabled) {
+    // ----------------------------------------------------------------
+    // Honest error classification (H1 — see docs/fiab/audit §2 H1).
+    //
+    // Dataverse reports a missing entity-SET or a missing COLUMN with very
+    // different shapes. We must:
+    //   (a) map ONLY the canonical Copilot-Studio core entities — the ones
+    //       that genuinely don't exist until an admin enables Copilot Studio
+    //       on the environment — to the friendly "enable Copilot Studio" 503;
+    //   (b) surface EVERY other missing entity-set / missing column as an
+    //       HONEST schema error that names the offending entity/column, so a
+    //       wrong table (e.g. msdyn_botchannels, msdyn_bot_actions) or an
+    //       invented scalar column (e.g. msdyn_instructions) is not masked as
+    //       a benign enablement gate.
+    //
+    // The previous handler matched msdyn_botcomponents (topics) AND, more
+    // dangerously, would have masked any of the three core names while letting
+    // the genuinely-fabricated tables fall through inconsistently. We tighten
+    // it to the true Copilot-Studio enablement surfaces only.
+    // ----------------------------------------------------------------
+    const segMatch = msg.match(/Resource not found for the segment '([^']+)'/i);
+    const missingSegment = segMatch?.[1];
+    // Columns that don't exist surface as "Could not find a property named 'X'"
+    // (read) or "An undeclared property 'X' ... was found" (write).
+    const propMatch = msg.match(/(?:Could not find a property named|undeclared property)\s+'([^']+)'/i);
+    const missingProperty = propMatch?.[1];
+
+    // The entity sets whose absence truly means "Copilot Studio add-on not
+    // enabled on this environment". msdyn_copilots is the agent table; its
+    // absence is the authoritative signal. Knowledge sources / bot components
+    // are provisioned alongside it.
+    const CS_ENABLEMENT_ENTITIES = /^(msdyn_copilots?|msdyn_knowledgesources?|msdyn_botcomponents?)$/i;
+
+    if (res.status === 404 && missingSegment && CS_ENABLEMENT_ENTITIES.test(missingSegment)) {
       throw new CopilotStudioError(
         'Copilot Studio is not enabled in this environment. ' +
         'Enable it from Power Platform admin centre → Environments → <env> → Settings → Product → Features → "Copilot Studio".',
         503, json || text, url,
       );
     }
+
+    // A missing entity SET that is NOT a core enablement entity is a genuine
+    // schema error — the Dataverse table this client targets does not exist in
+    // this org (the leading suspects: msdyn_botchannels, msdyn_bot_actions).
+    // Surface it honestly so the operator sees the real cause instead of a
+    // misleading "enable Copilot Studio" message.
+    if (res.status === 404 && missingSegment) {
+      throw new CopilotStudioError(
+        `Dataverse entity set '${missingSegment}' was not found in this environment. ` +
+        `This table is not part of the standard Copilot Studio schema in this org — ` +
+        `verify the entity name against the live tenant's Dataverse metadata ` +
+        `(GET /api/data/v9.2/EntityDefinitions?$select=LogicalName,EntitySetName). ` +
+        `Channel state lives in Azure Bot Service and Actions are modelled by ` +
+        `msdyn_plugin / msdyn_pluginaction on current tenants.`,
+        502, json || text, url,
+      );
+    }
+
+    // A missing COLUMN (400 on write, 404 on $select read) is likewise a real
+    // schema error — name the column so an invented field (e.g.
+    // msdyn_instructions / msdyn_modeldeployment) is not hidden.
+    if (missingProperty) {
+      throw new CopilotStudioError(
+        `Dataverse column '${missingProperty}' does not exist on the target entity in this environment. ` +
+        `Verify the column logical name against the live tenant's Dataverse metadata before writing it.`,
+        res.status === 404 ? 502 : res.status, json || text, url,
+      );
+    }
+
     throw new CopilotStudioError(msg, res.status, json || text, url);
   }
   return (json as T) ?? ({} as T);
@@ -643,12 +696,79 @@ export async function listChannels(envId: string, agentId: string): Promise<Copi
   return (j.value || []).map(mapChannel);
 }
 
+/**
+ * Per-channel real-enablement requirements (H2 — see docs/fiab/audit §2 H2).
+ *
+ * Inserting an `msdyn_botchannels` Dataverse row does NOT enable a channel:
+ * the actual destination wiring lives in Azure Bot Service (Teams / Direct
+ * Line / Web Chat) and in third-party OAuth registrations (Slack / Facebook).
+ * Reporting "Published" off a Dataverse insert is vaporware. We therefore
+ * honest-gate the channels that require out-of-band registration, naming the
+ * exact configuration the operator must complete at the destination. A channel
+ * is only marked enabled by this client when the call it makes genuinely
+ * effects the channel.
+ *
+ * `null` means: this channel CAN be represented purely by the Dataverse row in
+ * this estate (used internally by the M365 publish orchestration for the
+ * msteams/M365-Copilot combined channel, whose downstream approval is itself
+ * surfaced as a tenant action).
+ */
+function channelEnablementGate(channelType: ChannelType): string | null {
+  switch (channelType) {
+    case 'teams':
+      return (
+        'Teams channel enablement requires Azure Bot Service channel registration. ' +
+        'Register the agent as an Azure Bot (Microsoft.BotService/botServices), add the ' +
+        'Microsoft Teams channel, and package/side-load the Teams app manifest. ' +
+        'Set LOOM_BOTSERVICE_RESOURCE_ID (+ Microsoft App registration) so Loom can ' +
+        'drive the registration; this is not done by a Dataverse row alone.'
+      );
+    case 'direct-line':
+      return (
+        'Direct Line requires an Azure Bot Service Direct Line channel + site secret. ' +
+        'Add the Direct Line channel on the Azure Bot resource and capture a site secret; ' +
+        'set LOOM_COPILOT_DIRECTLINE_SECRET (or the per-agent variant) — used by the ' +
+        'Test chat panel. A Dataverse row does not provision Direct Line.'
+      );
+    case 'web':
+      return (
+        'Web Chat requires a Direct Line secret (Web Chat is a Direct Line client). ' +
+        'Provision Direct Line on the Azure Bot resource, then embed the Web Chat ' +
+        'control with a token minted from that secret. Set LOOM_COPILOT_DIRECTLINE_SECRET.'
+      );
+    case 'slack':
+      return (
+        'Slack channel requires a Slack app (client id/secret + signing secret) registered ' +
+        'on the Azure Bot Service Slack channel, plus the Slack OAuth redirect/verification flow. ' +
+        'Configure the Slack channel on the Azure Bot resource; a Dataverse row does not ' +
+        'establish the Slack OAuth connection.'
+      );
+    case 'facebook':
+      return (
+        'Facebook (Messenger) channel requires a Facebook Page access token + App secret + ' +
+        'verify token configured on the Azure Bot Service Facebook channel, and the Messenger ' +
+        'webhook subscription. Configure it on the Azure Bot resource; a Dataverse row does not ' +
+        'establish the Messenger webhook.'
+      );
+    default:
+      return null;
+  }
+}
+
 export async function publishToChannel(
   envId: string,
   agentId: string,
   channelType: ChannelType,
   config: Record<string, any> = {},
 ): Promise<CopilotChannel> {
+  // H2: refuse to report success for channels whose real enablement is an
+  // Azure Bot Service / OAuth action this client cannot perform. The honest
+  // path is a precise gate naming what to configure, NOT a Dataverse insert
+  // that silently reaches nothing.
+  const gate = channelEnablementGate(channelType);
+  if (gate) {
+    throw new CopilotStudioError(gate, 501, { channelType, gated: true });
+  }
   const host = await envHost(envId);
   const dvBody: Record<string, any> = {
     msdyn_name: `${channelType}-channel`,
@@ -826,49 +946,89 @@ export async function publishToM365Copilot(envId: string, input: M365PublishInpu
 export interface CopilotAnalytics {
   agentId: string;
   windowDays: number;
-  sessions: number;
-  resolvedSessions: number;
-  escalatedSessions: number;
+  /**
+   * Whether a real analytics backend produced these numbers. When false the
+   * numeric fields are absent and `gateReason` explains what to provision —
+   * the editor must NOT render zeros as if they were measured telemetry
+   * (H3 — see docs/fiab/audit §2 H3 / §4 vaporware register).
+   */
+  available: boolean;
+  /** Present only when `available` is false. */
+  gateReason?: string;
+  sessions?: number;
+  resolvedSessions?: number;
+  escalatedSessions?: number;
   satisfactionScore?: number;
   resolutionRate?: number;
   escalationRate?: number;
   daily?: { date: string; sessions: number }[];
 }
 
+const ANALYTICS_GATE_REASON =
+  'Copilot Studio analytics backend is not available in this deployment. ' +
+  'No measured telemetry was returned for this agent/window. ' +
+  'Conversation KPIs come from Dataverse session/transcript tables ' +
+  '(msdyn_botsession / msdyn_conversationtranscript) projected with ' +
+  'Application Insights — provision that pipeline (or grant the Loom UAMI ' +
+  'access to the admin analytics API) to surface real sessions / resolution ' +
+  '/ CSAT. Zeros are intentionally NOT shown so an empty backend is not ' +
+  'mistaken for "0 sessions".';
+
 export async function getAnalytics(envId: string, agentId: string, days = 30): Promise<CopilotAnalytics> {
-  // Admin BAP analytics endpoint for Copilot Studio bots. If the analytics
-  // pipeline has not produced data yet, BAP returns an empty result — we
-  // surface zeros rather than throw, because that's the truthful state.
+  // Admin BAP analytics endpoint for Copilot Studio bots.
+  //
+  // H3: previously a 404/204 (no backend / no data) was coerced into an
+  // all-zeros KPI object, which rendered plausible-but-fabricated "0 sessions
+  // / — CSAT" telemetry. Per no-vaporware that is forbidden. We now return an
+  // explicit `available: false` gated state so the editor shows an honest
+  // MessageBar instead of fake numbers. Only a genuine, non-empty backend
+  // response yields `available: true` with measured values.
   const url = bapUrl(
     `/providers/Microsoft.BusinessAppPlatform/scopes/admin/environments/${envId}/copilots/${agentId}/analytics`,
     { window: `${days}d` },
   );
+  let j: any;
   try {
-    const j = await rawCall<any>(url, { scope: BAP_SCOPE });
-    const sessions = Number(j?.sessions ?? j?.totalSessions ?? 0);
-    const resolved = Number(j?.resolvedSessions ?? j?.resolved ?? 0);
-    const escalated = Number(j?.escalatedSessions ?? j?.escalated ?? 0);
-    const csat = j?.satisfactionScore ?? j?.csat;
-    const daily = Array.isArray(j?.daily)
-      ? j.daily.map((d: any) => ({ date: String(d.date), sessions: Number(d.sessions ?? 0) }))
-      : undefined;
-    return {
-      agentId,
-      windowDays: days,
-      sessions,
-      resolvedSessions: resolved,
-      escalatedSessions: escalated,
-      satisfactionScore: typeof csat === 'number' ? csat : undefined,
-      resolutionRate: sessions > 0 ? resolved / sessions : undefined,
-      escalationRate: sessions > 0 ? escalated / sessions : undefined,
-      daily,
-    };
+    j = await rawCall<any>(url, { scope: BAP_SCOPE });
   } catch (e) {
     if (e instanceof CopilotStudioError && (e.status === 404 || e.status === 204)) {
-      return { agentId, windowDays: days, sessions: 0, resolvedSessions: 0, escalatedSessions: 0 };
+      return { agentId, windowDays: days, available: false, gateReason: ANALYTICS_GATE_REASON };
     }
     throw e;
   }
+
+  // A 200 with an empty/null body (BAP returns 200 + no payload when the
+  // analytics pipeline exists but has produced nothing) is also "not
+  // available" — do NOT manufacture zeros.
+  const hasAnyMetric =
+    j != null &&
+    (j.sessions != null || j.totalSessions != null ||
+     j.resolvedSessions != null || j.resolved != null ||
+     j.escalatedSessions != null || j.escalated != null ||
+     Array.isArray(j.daily));
+  if (!hasAnyMetric) {
+    return { agentId, windowDays: days, available: false, gateReason: ANALYTICS_GATE_REASON };
+  }
+
+  const sessions = Number(j?.sessions ?? j?.totalSessions ?? 0);
+  const resolved = Number(j?.resolvedSessions ?? j?.resolved ?? 0);
+  const escalated = Number(j?.escalatedSessions ?? j?.escalated ?? 0);
+  const csat = j?.satisfactionScore ?? j?.csat;
+  const daily = Array.isArray(j?.daily)
+    ? j.daily.map((d: any) => ({ date: String(d.date), sessions: Number(d.sessions ?? 0) }))
+    : undefined;
+  return {
+    agentId,
+    windowDays: days,
+    available: true,
+    sessions,
+    resolvedSessions: resolved,
+    escalatedSessions: escalated,
+    satisfactionScore: typeof csat === 'number' ? csat : undefined,
+    resolutionRate: sessions > 0 ? resolved / sessions : undefined,
+    escalationRate: sessions > 0 ? escalated / sessions : undefined,
+    daily,
+  };
 }
 
 // ============================================================
