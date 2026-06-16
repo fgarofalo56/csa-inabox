@@ -20,7 +20,7 @@ import {
   ChainedTokenCredential,
 } from '@azure/identity';
 import { AcaManagedIdentityCredential } from '@/lib/azure/aca-managed-identity';
-import { armBase, armScope, armHost, adfFactoryDeepLinkId } from './cloud-endpoints';
+import { armBase, armScope, armHost, adfFactoryDeepLinkId, getLogAnalyticsHost, logAnalyticsTokenScope } from './cloud-endpoints';
 import { pathToHttpsUrl, KNOWN_CONTAINERS } from './adls-client';
 import { executeQuery, serverlessTarget } from './synapse-sql-client';
 
@@ -386,8 +386,10 @@ export async function listPipelineRuns(
 // ============================================================
 
 const LA_ENDPOINT_ADF =
-  process.env.LOOM_LOG_ANALYTICS_ENDPOINT || 'https://api.loganalytics.azure.com';
-const LA_SCOPE_ADF = `${LA_ENDPOINT_ADF}/.default`;
+  process.env.LOOM_LOG_ANALYTICS_ENDPOINT || getLogAnalyticsHost();
+// LA token audience (api.loganalytics.io) != query host (api.loganalytics.azure.com).
+// Deriving the scope from the host yields AADSTS500011. See logAnalyticsTokenScope().
+const LA_SCOPE_ADF = logAnalyticsTokenScope();
 
 /**
  * Honest config gate for the LA fallback. Returns the workspace GUID when

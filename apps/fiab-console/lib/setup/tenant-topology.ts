@@ -36,6 +36,15 @@ export interface TenantTopology {
   hubConsoleUamiId?: string;
   hubActivatorPrincipalId?: string;
   updatedAt?: string;
+  /**
+   * Where these coordinates came from. `cosmos` = the post-deploy bootstrap
+   * upsert (full coordinates). `console-env` = synthesised from the running
+   * Console's own wired environment when the bootstrap doc is absent — proves
+   * the hub exists (the Console is running IN it) so the Setup Wizard does not
+   * falsely report "no hub", even though only the env-available subset of
+   * coordinates is populated.
+   */
+  source?: 'cosmos' | 'console-env';
 }
 
 /** The single doc id every tenant-topology row uses (one hub per tenant). */
@@ -98,13 +107,64 @@ export interface TenantTopologyState {
   error?: string;
 }
 
+/**
+ * Synthesise hub coordinates from the RUNNING Console's own wired environment.
+ *
+ * The admin-plane bicep wires the Console app with its hub coordinates
+ * (LOOM_SUBSCRIPTION_ID + LOOM_ADMIN_RG at minimum — the Console literally runs
+ * inside the admin/hub RG). When BOTH are present the hub demonstrably exists,
+ * regardless of whether the post-deploy bootstrap upserted the tenant-topology
+ * Cosmos doc. This is the fix for the Setup Wizard falsely reporting
+ * "No hub is deployed yet" on a live, running console: a missing Cosmos doc is
+ * NOT proof of a missing hub.
+ *
+ * Returns null only when the Console is genuinely not wired to a hub (no
+ * subscription/admin-RG env) — i.e. a true first-run install target.
+ */
+export function deriveTopologyFromConsoleEnv(): TenantTopology | null {
+  const sub = (process.env.LOOM_SUBSCRIPTION_ID || '').trim();
+  const adminRg = (process.env.LOOM_ADMIN_RG || '').trim();
+  // Both are required to assert "the Console is running in a deployed hub".
+  if (!sub || !adminRg) return null;
+  const lawResourceId = (process.env.LOOM_LOG_ANALYTICS_RESOURCE_ID || '').trim();
+  const region = (process.env.LOOM_LOCATION || process.env.LOOM_REGION || '').trim();
+  const boundary = (process.env.LOOM_CLOUD_BOUNDARY || process.env.LOOM_CLOUD || '').trim();
+  const appInsights = (process.env.APPLICATIONINSIGHTS_CONNECTION_STRING || '').trim();
+  return {
+    id: TENANT_TOPOLOGY_DOC_ID,
+    tenantId: resolveTenantPartition(),
+    hubSubscriptionId: sub,
+    hubAdxClusterRgName: adminRg, // best-available admin-RG handle for display
+    ...(region ? { location: region } : {}),
+    ...(boundary ? { boundary } : {}),
+    ...(lawResourceId ? { hubLawId: lawResourceId } : {}),
+    ...(appInsights ? { hubAppInsightsConnectionString: appInsights } : {}),
+    source: 'console-env',
+  };
+}
+
 /** Read the topology doc, mapping a missing doc to {exists:false} and infra
- * failures to {error}. Never throws — the wizard needs all three outcomes. */
+ * failures to {error}. Never throws — the wizard needs all three outcomes.
+ *
+ * When the Cosmos doc is absent (or Cosmos is unreachable) we fall back to the
+ * Console's own wired hub coordinates ({@link deriveTopologyFromConsoleEnv}):
+ * a running Console proves its hub exists, so the wizard must not report
+ * first-run. Only when NEITHER the doc nor the env coordinates are present do we
+ * report exists:false (a genuine first-run install target). */
 export async function getTenantTopologySafe(tenantId?: string): Promise<TenantTopologyState> {
   try {
     const topology = await getTenantTopology(tenantId);
-    return { exists: !!topology, topology };
+    if (topology) return { exists: true, topology: { ...topology, source: topology.source ?? 'cosmos' } };
+    // No Cosmos doc — but the running Console may itself be the hub.
+    const envTopology = deriveTopologyFromConsoleEnv();
+    if (envTopology) return { exists: true, topology: envTopology };
+    return { exists: false, topology: null };
   } catch (e: any) {
+    // Cosmos unreachable. If the Console is wired to a hub, the hub still
+    // exists — report it (env-derived) rather than blocking the wizard on a
+    // transient Cosmos read error.
+    const envTopology = deriveTopologyFromConsoleEnv();
+    if (envTopology) return { exists: true, topology: envTopology };
     return { exists: false, topology: null, error: e?.message ?? String(e) };
   }
 }
