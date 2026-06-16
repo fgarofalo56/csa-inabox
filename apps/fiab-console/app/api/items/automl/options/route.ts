@@ -53,7 +53,10 @@ export async function GET() {
     const [computes, datastores] = await Promise.all([listComputes(), listAmlDatastores()]);
     const clusters = computes
       .filter((c) => (c.computeType || '') === 'AmlCompute')
-      .map((c) => ({ name: c.name, vmSize: c.vmSize, state: c.state, provisioningState: c.provisioningState }));
+      // maxNodeCount lets the wizard clamp max-concurrent-trials to the cluster
+      // size — submitting more concurrent trials than the cluster has nodes is a
+      // hard AML 400 ("max concurrent iterations is larger than max node of compute").
+      .map((c) => ({ name: c.name, vmSize: c.vmSize, state: c.state, provisioningState: c.provisioningState, maxNodeCount: c.maxNodeCount }));
     return NextResponse.json({
       ok: true,
       configured: true,
