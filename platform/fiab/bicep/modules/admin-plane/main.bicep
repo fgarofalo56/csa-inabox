@@ -309,6 +309,9 @@ var dbtRunnerActive = dbtRunnerEnabled && containerPlatform == 'containerApps' &
 @description('Loom version label shown in the UI (/admin/updates) + /api/version. Wired to LOOM_VERSION / NEXT_PUBLIC_LOOM_VERSION. Default tracks the release-please manifest (.release-please-manifest.json); the top-level main.bicep passes its own loomVersion (a release/build pipeline should override with the exact tag). Kept in sync so a clean default deploy never shows "v0.1".')
 param loomVersion string = '0.42.0'
 
+@description('GitHub Container Registry owner for the in-product (no-clone) update path. /admin/updates rolls the Loom Container Apps to ghcr.io/<owner>/loom-*:<release> public images via ARM. Wired to LOOM_GHCR_OWNER. Default matches the upstream repo owner.')
+param loomGhcrOwner string = 'fgarofalo56'
+
 @description('Loom Synapse workspace name (for env-var wiring on loom-console). Default uses the single-sub DLZ convention.')
 param loomSynapseWorkspace string = 'syn-loom-default-${location}'
 
@@ -1992,6 +1995,12 @@ module appDeployments 'app-deployments.bicep' = if (containerPlatform == 'contai
           [
             { name: 'LOOM_VERSION', value: loomVersion }
             { name: 'NEXT_PUBLIC_LOOM_VERSION', value: loomVersion }
+            // In-product (no-clone) update path: the public ghcr owner the
+            // updater pulls release images from (ghcr.io/<owner>/loom-*:<ver>).
+            // Defaults in code to LOOM_FEEDBACK_REPO_OWNER / 'fgarofalo56'.
+            // /admin/updates → "Update to vX.Y.Z" rolls the Container Apps to
+            // these images via ARM (Console UAMI has Container Apps Contributor).
+            { name: 'LOOM_GHCR_OWNER', value: loomGhcrOwner }
             { name: 'LOOM_SUBSCRIPTION_ID', value: subscription().subscriptionId }
             { name: 'LOOM_ADMIN_RG', value: resourceGroup().name }
             // Setup Orchestrator URL — the Setup Wizard's Deploy POSTs the captured

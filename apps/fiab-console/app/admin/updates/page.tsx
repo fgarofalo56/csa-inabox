@@ -6,9 +6,13 @@ import { AdminShell } from '@/lib/components/admin-shell';
 import {
   Body1, Caption1, Badge, Button, Spinner,
   MessageBar, MessageBarBody, MessageBarTitle,
+  Dialog, DialogTrigger, DialogSurface, DialogTitle, DialogBody, DialogContent, DialogActions,
   makeStyles, tokens,
 } from '@fluentui/react-components';
-import { ArrowSync24Regular, Checkmark24Filled, ArrowDownload24Regular } from '@fluentui/react-icons';
+import {
+  ArrowSync24Regular, Checkmark24Filled, ArrowDownload24Regular,
+  ArrowUpload24Regular, Checkmark20Filled, ErrorCircle20Filled, Subtract20Regular,
+} from '@fluentui/react-icons';
 import { Section } from '@/lib/components/ui/section';
 import { useAdminTabStyles } from '@/lib/components/ui/admin-tab-styles';
 import { LoomDataTable, type LoomColumn } from '@/lib/components/ui/loom-data-table';
@@ -173,6 +177,7 @@ function MarkdownNotes({ text }: { text: string }) {
 
 interface VersionInfo {
   current: string;
+  build?: { sha?: string; stamp?: string };
   upstream: null | { tag: string; name: string; publishedAt: string; url: string; notes: string };
   recent: { tag: string; name: string; publishedAt: string; url: string; prerelease: boolean }[];
   hasUpdate: boolean;
@@ -181,6 +186,23 @@ interface VersionInfo {
 }
 
 interface RecentRelease { tag: string; name: string; publishedAt: string; url: string; prerelease: boolean }
+
+interface AppApplyResult {
+  app: string;
+  fromImage: string;
+  toImage: string;
+  status: 'succeeded' | 'updating' | 'failed' | 'skipped';
+  provisioningState?: string;
+  error?: string;
+}
+
+interface PreflightGate {
+  ok: false;
+  reason: 'already-up-to-date' | 'no-upstream-release' | 'images-not-published' | 'arm-not-configured';
+  message: string;
+  missingImages?: { app: string; ref: string; exists: boolean; status: number }[];
+  missingEnv?: string[];
+}
 
 const useStyles = makeStyles({
   intro: { color: tokens.colorNeutralForeground3, marginBottom: tokens.spacingVerticalL },
@@ -210,6 +232,20 @@ const useStyles = makeStyles({
   },
   heroCol: { flex: 1, minWidth: '160px' },
   badgeWrap: { marginTop: tokens.spacingVerticalS },
+  buildLine: { marginTop: '4px', color: tokens.colorNeutralForeground3, fontFamily: 'Consolas, monospace', fontSize: '11px' },
+  applyList: { marginTop: tokens.spacingVerticalM, display: 'flex', flexDirection: 'column', gap: '6px' },
+  applyRow: {
+    display: 'flex', alignItems: 'center', gap: tokens.spacingHorizontalS,
+    padding: '6px 10px', borderRadius: tokens.borderRadiusMedium,
+    backgroundColor: tokens.colorNeutralBackground2,
+    border: `1px solid ${tokens.colorNeutralStroke2}`,
+  },
+  applyName: { fontFamily: 'Consolas, monospace', fontSize: '13px', minWidth: '180px' },
+  applyImage: { fontFamily: 'Consolas, monospace', fontSize: '11px', color: tokens.colorNeutralForeground3, overflowWrap: 'anywhere' },
+  ok: { color: tokens.colorPaletteGreenForeground1 },
+  fail: { color: tokens.colorPaletteRedForeground1 },
+  dim: { color: tokens.colorNeutralForeground3 },
+  dialogList: { margin: '8px 0 0', paddingLeft: '18px', fontSize: '13px' },
 });
 
 export default function UpdatesPage() {
@@ -218,6 +254,14 @@ export default function UpdatesPage() {
   const [info, setInfo] = useState<VersionInfo | null>(null);
   const [loading, setLoading] = useState(true);
 
+  // In-product update apply state.
+  const [confirmOpen, setConfirmOpen] = useState(false);
+  const [applying, setApplying] = useState(false);
+  const [applyResults, setApplyResults] = useState<AppApplyResult[] | null>(null);
+  const [applyGate, setApplyGate] = useState<PreflightGate | null>(null);
+  const [applyError, setApplyError] = useState<string | null>(null);
+  const [applyDone, setApplyDone] = useState<{ ok: boolean; tag: string } | null>(null);
+
   async function load() {
     setLoading(true);
     try { setInfo(await clientFetch('/api/version').then((r) => r.json())); }
@@ -225,6 +269,36 @@ export default function UpdatesPage() {
   }
 
   useEffect(() => { void load(); }, []);
+
+  async function runUpdate() {
+    if (!info?.upstream) return;
+    setConfirmOpen(false);
+    setApplying(true);
+    setApplyResults(null);
+    setApplyGate(null);
+    setApplyError(null);
+    setApplyDone(null);
+    try {
+      const res = await clientFetch('/api/admin/updates/apply', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ confirmTag: info.upstream.tag }),
+      }, 180_000); // rolling ~8 apps via ARM PATCH sequentially can exceed the 6s default
+      const j = await res.json().catch(() => ({}));
+      if (j?.results) {
+        setApplyResults(j.results as AppApplyResult[]);
+        setApplyDone({ ok: !!j.ok, tag: j?.target?.tag_name ?? info.upstream.tag });
+      } else if (j?.preflight && j.preflight.ok === false) {
+        setApplyGate(j.preflight as PreflightGate);
+      } else {
+        setApplyError(j?.error || `Update failed (HTTP ${res.status}).`);
+      }
+    } catch (e) {
+      setApplyError((e as Error).message);
+    } finally {
+      setApplying(false);
+    }
+  }
 
   const recentColumns: LoomColumn<RecentRelease>[] = [
     {
@@ -257,8 +331,9 @@ export default function UpdatesPage() {
     <AdminShell sectionTitle="Updates & version sync">
       <Body1 className={s.intro}>
         Loom is open source and continuously updated. This page shows your running build,
-        the latest version published upstream, and any release notes between them. Operators
-        run the linked GitHub Actions deploy with the new tag to pull updates.
+        the latest version published upstream, and any release notes between them. When an
+        update is available you can apply it in place — Loom rolls your Container Apps to the
+        new release&apos;s public images directly, with no repo clone or CI run required.
       </Body1>
       {loading ? (
         <Section><Spinner size="small" label="Checking for updates…" labelPosition="after" /></Section>
@@ -269,6 +344,9 @@ export default function UpdatesPage() {
               <div className={s.heroCol}>
                 <Caption1>Currently running</Caption1>
                 <div className={s.badgeWrap}><span className={s.vBadge}>{info.current}</span></div>
+                {info.build?.sha && (
+                  <div className={s.buildLine}>build {info.build.sha.slice(0, 12)}</div>
+                )}
               </div>
               <div className={s.heroCol}>
                 <Caption1>Latest upstream ({info.repo})</Caption1>
@@ -286,20 +364,121 @@ export default function UpdatesPage() {
             </div>
 
             <div className={s.actions}>
-              <Button appearance="secondary" icon={<ArrowSync24Regular />} onClick={load}>Re-check</Button>
+              <Button appearance="secondary" icon={<ArrowSync24Regular />} onClick={load} disabled={applying}>Re-check</Button>
               {info.upstream && info.hasUpdate && (
                 <>
-                  <Button appearance="primary" icon={<ArrowDownload24Regular />}
+                  <Dialog open={confirmOpen} onOpenChange={(_, d) => setConfirmOpen(d.open)}>
+                    <DialogTrigger disableButtonEnhancement>
+                      <Button appearance="primary" icon={<ArrowUpload24Regular />} disabled={applying}
+                        onClick={() => setConfirmOpen(true)}>
+                        {applying ? `Updating to ${info.upstream.tag}…` : `Update to ${info.upstream.tag}`}
+                      </Button>
+                    </DialogTrigger>
+                    <DialogSurface>
+                      <DialogBody>
+                        <DialogTitle>Update Loom to {info.upstream.tag}?</DialogTitle>
+                        <DialogContent>
+                          This rolls your Loom Container Apps to the public <code>{info.upstream.tag}</code> release
+                          images and briefly restarts them. The console itself is rolled last, so you may see a short
+                          reconnect at the end. No data is deleted; only the application images change.
+                          <ul className={s.dialogList}>
+                            <li>Each app is updated one at a time, with live status below.</li>
+                            <li>If the public images for this release are not yet published, the update will refuse with a clear message rather than break anything.</li>
+                          </ul>
+                        </DialogContent>
+                        <DialogActions>
+                          <DialogTrigger disableButtonEnhancement>
+                            <Button appearance="secondary">Cancel</Button>
+                          </DialogTrigger>
+                          <Button appearance="primary" icon={<ArrowUpload24Regular />} onClick={() => void runUpdate()}>
+                            Update now
+                          </Button>
+                        </DialogActions>
+                      </DialogBody>
+                    </DialogSurface>
+                  </Dialog>
+                  <Button appearance="secondary" icon={<ArrowDownload24Regular />}
                     as="a" href={info.upstream.url} target="_blank" rel="noreferrer">
-                    View release {info.upstream.tag} on GitHub
-                  </Button>
-                  <Button appearance="secondary"
-                    as="a" href={`https://github.com/${info.repo}/actions`} target="_blank" rel="noreferrer">
-                    Open deploy workflow
+                    View release notes
                   </Button>
                 </>
               )}
             </div>
+
+            {applying && (
+              <MessageBar intent="info" className={a.messageBar}>
+                <MessageBarBody>
+                  <Spinner size="tiny" /> Rolling Loom apps to {info.upstream?.tag}. This may take a minute — apps are updated one at a time.
+                </MessageBarBody>
+              </MessageBar>
+            )}
+
+            {applyError && (
+              <MessageBar intent="error" className={a.messageBar}>
+                <MessageBarBody><MessageBarTitle>Update failed</MessageBarTitle>{applyError}</MessageBarBody>
+              </MessageBar>
+            )}
+
+            {applyGate && (
+              <MessageBar intent="warning" className={a.messageBar}>
+                <MessageBarBody>
+                  <MessageBarTitle>Update not available yet</MessageBarTitle>
+                  {applyGate.message}
+                  {applyGate.missingImages && applyGate.missingImages.length > 0 && (
+                    <ul className={s.dialogList}>
+                      {applyGate.missingImages.map((m) => (
+                        <li key={m.app}><code>{m.ref}</code> (HTTP {m.status})</li>
+                      ))}
+                    </ul>
+                  )}
+                  {applyGate.missingEnv && applyGate.missingEnv.length > 0 && (
+                    <div>Set: <code>{applyGate.missingEnv.join(', ')}</code></div>
+                  )}
+                </MessageBarBody>
+              </MessageBar>
+            )}
+
+            {applyResults && (
+              <>
+                {applyDone && (
+                  <MessageBar intent={applyDone.ok ? 'success' : 'warning'} className={a.messageBar}>
+                    <MessageBarBody>
+                      <MessageBarTitle>
+                        {applyDone.ok
+                          ? `Update to ${applyDone.tag} applied`
+                          : `Update to ${applyDone.tag} completed with issues`}
+                      </MessageBarTitle>
+                      {applyDone.ok
+                        ? 'Apps are rolling to new revisions. Re-check in a minute to confirm the running version.'
+                        : 'Some apps did not update — see per-app status below. The update did not fake success.'}
+                    </MessageBarBody>
+                  </MessageBar>
+                )}
+                <div className={s.applyList}>
+                  {applyResults.map((r) => {
+                    const icon =
+                      r.status === 'failed' ? <ErrorCircle20Filled className={s.fail} />
+                      : r.status === 'skipped' ? <Subtract20Regular className={s.dim} />
+                      : <Checkmark20Filled className={s.ok} />;
+                    return (
+                      <div key={r.app} className={s.applyRow}>
+                        {icon}
+                        <span className={s.applyName}>{r.app}</span>
+                        {r.status === 'failed' ? (
+                          <span className={s.fail}>{r.error}</span>
+                        ) : r.status === 'skipped' ? (
+                          <span className={s.dim}>not deployed on this boundary — skipped</span>
+                        ) : (
+                          <span className={s.applyImage}>
+                            → {r.toImage.split('/').pop()} ({r.provisioningState || r.status})
+                          </span>
+                        )}
+                      </div>
+                    );
+                  })}
+                </div>
+              </>
+            )}
           </Section>
 
           {info.upstream && (
