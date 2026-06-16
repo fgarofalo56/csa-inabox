@@ -54,6 +54,20 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ ok: false, error: `Unsupported sourceType "${sourceType}".`, hint: `Allowed: ${RTH_SOURCE_TYPES.join(', ')}` }, { status: 400 });
   }
 
+  // Defense in depth: Fabric-only source types (FabricWorkspaceItemEvents /
+  // FabricJobEvents / FabricOneLakeEvents) require the Fabric backend. Reject
+  // them up front when Fabric isn't opted in, instead of silently creating an
+  // Azure-native eventstream item that can never produce those events
+  // (audit: rti-hub-catalog / connect-source — reject fabric-* when
+  // LOOM_EVENTSTREAM_BACKEND != fabric).
+  if (/^Fabric/.test(sourceType) && !FABRIC_OPT_IN) {
+    return NextResponse.json({
+      ok: false,
+      error: `Source type "${sourceType}" requires the Microsoft Fabric backend, which is not enabled in this deployment.`,
+      hint: 'Set LOOM_EVENTSTREAM_BACKEND=fabric and bind a Fabric workspace to use Fabric event sources, or pick an Azure-native source.',
+    }, { status: 400 });
+  }
+
   // ---- Fabric opt-in path (only when explicitly enabled + a workspace given) ----
   if (FABRIC_OPT_IN && fabricWorkspaceId) {
     try {

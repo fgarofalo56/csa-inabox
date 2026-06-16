@@ -702,7 +702,11 @@ function EntitiesStage({ cfg, mutate, activeEntity, setActiveEntity }: {
 }) {
   const s = useStyles();
   const [schema, setSchema] = useState<SchemaObjs | null>(null);
-  const [schemaGate, setSchemaGate] = useState<string | null>(null);
+  // The gate carries the structured SQL-login remediation (audit B3) so the
+  // editor surfaces the exact "CREATE USER … FROM EXTERNAL PROVIDER" grant
+  // (gate.remediation) and the missing knob (gate.missing) inline, instead of a
+  // raw driver string.
+  const [schemaGate, setSchemaGate] = useState<{ error: string; missing?: string; remediation?: string } | null>(null);
   const [loading, setLoading] = useState(false);
   const [entityTab, setEntityTab] = useState<EntityTab>('general');
 
@@ -710,16 +714,16 @@ function EntitiesStage({ cfg, mutate, activeEntity, setActiveEntity }: {
     const k = cfg.sourceRef.kind;
     const introspectable = k === 'mssql' || k === 'dwsql';
     if (!introspectable || !cfg.sourceRef.server || !cfg.sourceRef.database) {
-      setSchemaGate('Select an Azure SQL / Synapse (dwsql) server + database on the Data source stage to introspect tables/views/procedures.');
+      setSchemaGate({ error: 'Select an Azure SQL / Synapse (dwsql) server + database on the Data source stage to introspect tables/views/procedures.' });
       return;
     }
     setLoading(true); setSchemaGate(null);
     try {
       const r = await fetch(`/api/dab/sources/${k}/schema?server=${encodeURIComponent(cfg.sourceRef.server)}&database=${encodeURIComponent(cfg.sourceRef.database)}`);
       const j = await r.json();
-      if (!j.ok) setSchemaGate(j.error || `HTTP ${r.status}`);
+      if (!j.ok) setSchemaGate({ error: j.error || `HTTP ${r.status}`, missing: j.gate?.missing, remediation: j.gate?.remediation });
       else setSchema({ tables: j.tables, views: j.views, procedures: j.procedures });
-    } catch (e: any) { setSchemaGate(e?.message || String(e)); }
+    } catch (e: any) { setSchemaGate({ error: e?.message || String(e) }); }
     finally { setLoading(false); }
   }, [cfg.sourceRef]);
 
@@ -756,7 +760,14 @@ function EntitiesStage({ cfg, mutate, activeEntity, setActiveEntity }: {
 
       {schemaGate && (
         <MessageBar intent="warning"><MessageBarBody>
-          <MessageBarTitle>Schema not introspected</MessageBarTitle>{schemaGate}
+          <MessageBarTitle>Schema not introspected</MessageBarTitle>
+          {schemaGate.error}
+          {schemaGate.remediation && (
+            <><br /><Caption1 style={{ display: 'block', marginTop: 4, fontFamily: 'monospace', whiteSpace: 'pre-wrap' }}>{schemaGate.remediation}</Caption1></>
+          )}
+          {schemaGate.missing && !schemaGate.remediation && (
+            <><br /><Caption1>Set <code>{schemaGate.missing}</code>.</Caption1></>
+          )}
         </MessageBarBody></MessageBar>
       )}
 

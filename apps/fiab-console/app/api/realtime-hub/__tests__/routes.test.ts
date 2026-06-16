@@ -29,7 +29,14 @@ vi.mock('@/lib/azure/fabric-client', async () => {
 
 vi.mock('@/lib/azure/kusto-client', async () => {
   const actual: any = await vi.importActual('@/lib/azure/kusto-client');
-  return { ...actual, executeQuery: vi.fn(), defaultDatabase: vi.fn(() => 'loomdb-default') };
+  return {
+    ...actual,
+    executeQuery: vi.fn(),
+    defaultDatabase: vi.fn(() => 'loomdb-default'),
+    listDatabases: vi.fn(),
+    listTables: vi.fn(),
+    kustoConfigGate: vi.fn(() => null),
+  };
 });
 
 // NOTE: no importActual here — kv-secrets-client transitively imports
@@ -105,6 +112,8 @@ import { listConnections } from '@/lib/azure/connections-store';
 import { GET as STREAMS } from '../streams/route';
 import { POST as CONNECT } from '../connect-source/route';
 import { POST as PREVIEW } from '../preview/route';
+import { GET as DATABASES } from '../databases/route';
+import { listDatabases, listTables } from '@/lib/azure/kusto-client';
 import { GET as ENDPOINTS } from '../endpoints/route';
 import { GET as CERTS } from '../keyvault-certificates/route';
 import { GET as OPTIONS } from '../options/route';
@@ -222,6 +231,54 @@ describe('POST /api/realtime-hub/connect-source', () => {
     const [, , body] = (createOwnedItem as any).mock.calls[0];
     expect(body.state.source.type).toBe('AzureEventGridCustomTopic');
     expect(body.state.source.properties.topic).toBe('orders-events');
+  });
+
+  it('400 rejects Fabric-only source types when LOOM_EVENTSTREAM_BACKEND != fabric (defense in depth)', async () => {
+    (getSession as any).mockReturnValue(AUTH);
+    const res = await CONNECT(jsonReq({
+      workspaceId: 'ws-1', displayName: 'WS item events', sourceType: 'FabricWorkspaceItemEvents',
+    }));
+    expect(res.status).toBe(400);
+    const j = await res.json();
+    expect(j.error).toContain('Fabric backend');
+    // never silently creates an Azure-native item that can't produce these events
+    expect(createOwnedItem).not.toHaveBeenCalled();
+  });
+});
+
+// ---------------- databases (Preview drawer DB/table picker) ----------------
+describe('GET /api/realtime-hub/databases', () => {
+  it('401 when unauthenticated', async () => {
+    (getSession as any).mockReturnValue(null);
+    const res = await DATABASES({ nextUrl: new URL('https://x/api/realtime-hub/databases') } as any);
+    expect(res.status).toBe(401);
+  });
+
+  it('lists databases via .show databases (no database param)', async () => {
+    (getSession as any).mockReturnValue(AUTH);
+    (listDatabases as any).mockResolvedValue([{ name: 'loomdb' }, { name: 'telemetry' }]);
+    const res = await DATABASES({ nextUrl: new URL('https://x/api/realtime-hub/databases') } as any);
+    const j = await res.json();
+    expect(j.ok).toBe(true);
+    expect(j.databases.map((d: any) => d.name)).toEqual(['loomdb', 'telemetry']);
+    expect(listTables).not.toHaveBeenCalled();
+  });
+
+  it('lists tables for a given database via .show tables', async () => {
+    (getSession as any).mockReturnValue(AUTH);
+    (listTables as any).mockResolvedValue([{ name: 'Events' }, { name: 'Audit' }]);
+    const res = await DATABASES({ nextUrl: new URL('https://x/api/realtime-hub/databases?database=telemetry') } as any);
+    const j = await res.json();
+    expect(j.ok).toBe(true);
+    expect(j.database).toBe('telemetry');
+    expect(j.tables.map((t: any) => t.name)).toEqual(['Events', 'Audit']);
+    expect((listTables as any).mock.calls[0][0]).toBe('telemetry');
+  });
+
+  it('400 on an invalid clusterUri override', async () => {
+    (getSession as any).mockReturnValue(AUTH);
+    const res = await DATABASES({ nextUrl: new URL('https://x/api/realtime-hub/databases?clusterUri=ftp%3A%2F%2Fbad') } as any);
+    expect(res.status).toBe(400);
   });
 });
 

@@ -7,20 +7,27 @@
  * (POST /api/realtime-hub/preview, which server-builds `["table"] | take N`).
  *
  * Shared by both real-time surfaces (/realtime-hub and /rti-hub) so the preview
- * affordance has ONE implementation. No raw KQL is entered by the caller — the
- * table + database are picked and the route quotes the identifier server-side.
+ * affordance has ONE implementation. The DB + table are chosen from REAL
+ * pickers populated from `.show databases` / `.show tables`
+ * (GET /api/realtime-hub/databases) — matching the Fabric/ADX "pick a database,
+ * then a table" flow rather than assuming stream-name == table-name. The
+ * preview route quotes the identifier server-side so the caller never injects
+ * raw KQL.
  */
 
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import {
   Drawer, DrawerHeader, DrawerHeaderTitle, DrawerBody,
-  Button, Input, Field, Caption1, MessageBar, MessageBarBody,
+  Button, Field, Caption1, MessageBar, MessageBarBody, MessageBarTitle,
+  Dropdown, Option, Spinner,
   makeStyles, tokens,
 } from '@fluentui/react-components';
-import { Dismiss20Regular, Eye20Regular } from '@fluentui/react-icons';
+import { Dismiss20Regular, Eye20Regular, ArrowClockwise16Regular } from '@fluentui/react-icons';
 
 const useStyles = makeStyles({
   section: { marginBottom: tokens.spacingVerticalM },
+  pickerRow: { display: 'flex', alignItems: 'flex-end', gap: tokens.spacingHorizontalS },
+  pickerGrow: { flex: 1, minWidth: 0 },
   resultMeta: { display: 'flex', alignItems: 'center', gap: tokens.spacingHorizontalS, marginBottom: tokens.spacingVerticalS },
   resultScroll: {
     marginTop: tokens.spacingVerticalS,
@@ -62,13 +69,13 @@ export interface StreamPreviewDrawerProps {
   onClose: () => void;
   /** Drawer title (usually the stream / table name). */
   title: string;
-  /** Default KQL database to pre-fill (defaults to the server's loomdb-default when blank). */
+  /** Default KQL database to pre-select (defaults to the server's loomdb-default when blank). */
   defaultDb?: string;
-  /** Default table to pre-fill (e.g. a KQL table whose name == the item). */
+  /** Default table to pre-select (e.g. a KQL table whose name == the item). */
   defaultTable?: string;
   /** Optional ADX cluster URI to preview a *discovered* cluster (RTI hub ADX
    *  rows) instead of the env-configured default. Forwarded to the preview
-   *  route, which validates it server-side. */
+   *  + picker routes, which validate it server-side. */
   clusterUri?: string;
 }
 
@@ -80,7 +87,44 @@ export function StreamPreviewDrawer({ open, onClose, title, defaultDb, defaultTa
   const [err, setErr] = useState<string | null>(null);
   const [result, setResult] = useState<PreviewResult | null>(null);
 
-  // Re-seed the fields whenever the drawer is (re)opened onto a new target.
+  // Real DB/table picker state (from `.show databases` / `.show tables`).
+  const [databases, setDatabases] = useState<string[]>([]);
+  const [tables, setTables] = useState<string[]>([]);
+  const [dbLoading, setDbLoading] = useState(false);
+  const [tablesLoading, setTablesLoading] = useState(false);
+  const [pickerGate, setPickerGate] = useState<{ missing: string } | null>(null);
+  const [pickerErr, setPickerErr] = useState<string | null>(null);
+
+  const clusterQs = clusterUri ? `&clusterUri=${encodeURIComponent(clusterUri)}` : '';
+
+  async function loadDatabases() {
+    setDbLoading(true); setPickerErr(null); setPickerGate(null);
+    try {
+      const res = await fetch(`/api/realtime-hub/databases?_=1${clusterQs}`, { cache: 'no-store' });
+      const j = await res.json().catch(() => ({}));
+      if (!res.ok || !j.ok) { setPickerErr(j.error || `Could not list databases (HTTP ${res.status}).`); return; }
+      if (j.configured === false && j.gate) { setPickerGate(j.gate); return; }
+      setDatabases(Array.isArray(j.databases) ? j.databases.map((d: any) => d.name).filter(Boolean) : []);
+    } catch (e: any) { setPickerErr(e?.message || String(e)); }
+    finally { setDbLoading(false); }
+  }
+
+  async function loadTables(forDb: string) {
+    const target = forDb.trim();
+    setTables([]);
+    if (!target) return;
+    setTablesLoading(true); setPickerErr(null);
+    try {
+      const res = await fetch(`/api/realtime-hub/databases?database=${encodeURIComponent(target)}${clusterQs}`, { cache: 'no-store' });
+      const j = await res.json().catch(() => ({}));
+      if (!res.ok || !j.ok) { setPickerErr(j.error || `Could not list tables (HTTP ${res.status}).`); return; }
+      setTables(Array.isArray(j.tables) ? j.tables.map((t: any) => t.name).filter(Boolean) : []);
+    } catch (e: any) { setPickerErr(e?.message || String(e)); }
+    finally { setTablesLoading(false); }
+  }
+
+  // Re-seed the fields + (re)load the database list whenever the drawer is
+  // (re)opened onto a new target.
   const [seededFor, setSeededFor] = useState<string | null>(null);
   if (open && seededFor !== title) {
     setSeededFor(title);
@@ -88,8 +132,13 @@ export function StreamPreviewDrawer({ open, onClose, title, defaultDb, defaultTa
     setTable(defaultTable || '');
     setResult(null);
     setErr(null);
+    setTables([]);
   }
   if (!open && seededFor !== null) setSeededFor(null);
+
+  // Load databases on open; load tables whenever the selected database changes.
+  useEffect(() => { if (open) loadDatabases(); /* eslint-disable-next-line react-hooks/exhaustive-deps */ }, [open, clusterUri]);
+  useEffect(() => { if (open && db.trim()) loadTables(db); /* eslint-disable-next-line react-hooks/exhaustive-deps */ }, [db, open, clusterUri]);
 
   async function run() {
     setBusy(true); setErr(null); setResult(null);
@@ -114,15 +163,67 @@ export function StreamPreviewDrawer({ open, onClose, title, defaultDb, defaultTa
       </DrawerHeader>
       <DrawerBody>
         <div className={styles.section}>
-          <Caption1>Preview reads recent rows from the backing Eventhouse / KQL table via the real Kusto query path. The table identifier is quoted server-side — no raw KQL is sent.</Caption1>
+          <Caption1>Preview reads recent rows from the backing Eventhouse / KQL table via the real Kusto query path. Pick the database and table; the table identifier is quoted server-side — no raw KQL is sent.</Caption1>
         </div>
+
+        {pickerGate && (
+          <MessageBar intent="warning" className={styles.section}>
+            <MessageBarBody>
+              <MessageBarTitle>Kusto cluster not configured</MessageBarTitle>
+              Set <code>{pickerGate.missing}</code> to enable database/table discovery for the preview.
+            </MessageBarBody>
+          </MessageBar>
+        )}
+
         <Field label="KQL database" className={styles.section}>
-          <Input value={db} placeholder="Eventhouse / KQL database name (defaults to loomdb-default)"
-            onChange={(_, d) => setDb(d.value)} />
+          <div className={styles.pickerRow}>
+            <div className={styles.pickerGrow}>
+              <Dropdown
+                aria-label="KQL database"
+                disabled={!!pickerGate}
+                placeholder={
+                  pickerGate ? 'No cluster configured'
+                    : dbLoading ? 'Loading databases…'
+                    : databases.length === 0 ? 'No databases found (defaults to loomdb-default)'
+                    : 'Select a database…'
+                }
+                selectedOptions={db ? [db] : []}
+                value={db}
+                onOptionSelect={(_, d) => { const v = d.optionValue || ''; setDb(v); setTable(''); }}
+              >
+                {databases.map((name) => (
+                  <Option key={name} value={name} text={name}>{name}</Option>
+                ))}
+              </Dropdown>
+            </div>
+            <Button appearance="subtle"
+              icon={dbLoading ? <Spinner size="tiny" /> : <ArrowClockwise16Regular />}
+              aria-label="Refresh databases" onClick={loadDatabases} disabled={dbLoading || !!pickerGate} />
+          </div>
         </Field>
+
         <Field label="Table" required className={styles.section}>
-          <Input value={table} placeholder="KQL table to preview (e.g. Events)" onChange={(_, d) => setTable(d.value)} />
+          <Dropdown
+            aria-label="Table"
+            disabled={!!pickerGate || tablesLoading || (!db.trim() && databases.length > 0)}
+            placeholder={
+              !db.trim() && databases.length > 0 ? 'Select a database first'
+                : tablesLoading ? 'Loading tables…'
+                : tables.length === 0 ? 'No tables found in this database'
+                : 'Select a table…'
+            }
+            selectedOptions={table ? [table] : []}
+            value={table}
+            onOptionSelect={(_, d) => setTable(d.optionValue || '')}
+          >
+            {tables.map((name) => (
+              <Option key={name} value={name} text={name}>{name}</Option>
+            ))}
+          </Dropdown>
         </Field>
+
+        {pickerErr && <MessageBar intent="warning" style={{ marginBottom: 12 }}><MessageBarBody>{pickerErr}</MessageBarBody></MessageBar>}
+
         <Button appearance="primary" icon={<Eye20Regular />} disabled={!table.trim() || busy} onClick={run}>
           {busy ? 'Reading…' : 'Preview recent events'}
         </Button>
