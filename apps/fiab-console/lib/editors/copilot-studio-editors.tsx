@@ -10,10 +10,12 @@
  * Editors:
  *   CopilotStudioAgentEditor       — env picker, agent list/CRUD/Publish, tabs to other editors
  *   CopilotKnowledgeEditor         — agent picker, knowledge sources list + add (URL/file/SharePoint/Dataverse)
- *   CopilotTopicEditor             — agent picker, topics list, trigger phrases + flow YAML editor
+ *   CopilotTopicEditor             — agent picker, topics list, structured topic canvas
+ *                                    (Trigger/Message/Question/Condition/Action) + code-view toggle
  *   CopilotActionEditor            — agent picker, action list (Power Automate flow / connector / prebuilt)
  *   CopilotChannelEditor           — agent picker, channels grid + Publish-to-channel
- *   CopilotAnalyticsEditor         — agent picker, KPI cards + daily session sparkline placeholder
+ *   CopilotAnalyticsEditor         — agent picker, KPI cards + daily session bar chart;
+ *                                    honest "backend not available" gate (no fabricated zeros)
  *   CopilotTemplateLibraryEditor   — CSA template gallery (Cosmos-backed), Use template → creates agent in selected env
  */
 
@@ -34,21 +36,14 @@ import {
 import { ItemEditorChrome } from './item-editor-chrome';
 import type { FabricItemType } from '@/lib/catalog/fabric-item-types';
 import type { RibbonTab } from '@/lib/components/ribbon';
-import { MonacoTextarea } from '@/lib/components/editor/monaco-textarea';
 import { KeyValueGrid } from '@/lib/components/ui/key-value-grid';
+import { CopilotTopicCanvas } from './copilot-topic-canvas';
 
 const useStyles = makeStyles({
   pad: { padding: 16, display: 'flex', flexDirection: 'column', gap: 12, minHeight: 0, flex: 1 },
   toolbar: { display: 'flex', gap: 12, alignItems: 'center', flexWrap: 'wrap' },
   form: { display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12, alignItems: 'start' },
   formCol: { display: 'flex', flexDirection: 'column', gap: 12 },
-  yaml: {
-    width: '100%', minHeight: 260,
-    fontFamily: 'Consolas, "Cascadia Code", monospace', fontSize: 13, padding: 12,
-    border: `1px solid ${tokens.colorNeutralStroke2}`, borderRadius: 4,
-    backgroundColor: tokens.colorNeutralBackground3, color: tokens.colorNeutralForeground1,
-    resize: 'vertical',
-  },
   cardGrid: { display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(260px, 1fr))', gap: 12 },
   card: { padding: 12, border: `1px solid ${tokens.colorNeutralStroke2}`, borderRadius: 6, display: 'flex', flexDirection: 'column', gap: 8 },
   kpiGrid: { display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(180px, 1fr))', gap: 12 },
@@ -136,9 +131,11 @@ interface Channel {
 interface Analytics {
   agentId: string;
   windowDays: number;
-  sessions: number;
-  resolvedSessions: number;
-  escalatedSessions: number;
+  available: boolean;
+  gateReason?: string;
+  sessions?: number;
+  resolvedSessions?: number;
+  escalatedSessions?: number;
   satisfactionScore?: number;
   resolutionRate?: number;
   escalationRate?: number;
@@ -812,9 +809,6 @@ function TopicsPanel({ envId, agentId }: { envId: string; agentId: string }) {
           <Field label="Topic name" required>
             <Input id="topic-name-input" value={form.name} onChange={(_, d) => setFormField('name', d.value)} />
           </Field>
-          <Field label="Trigger phrases (one per line)">
-            <Textarea rows={8} value={form.triggerText} onChange={(_, d) => setFormField('triggerText', d.value)} />
-          </Field>
           <Subtitle2>Existing topics ({topics?.length ?? 0})</Subtitle2>
           {(topics || []).map((t) => (
             <div key={t.id} className={s.card} style={{ cursor: 'pointer', borderColor: t.id === selectedId ? tokens.colorBrandStroke1 : undefined }}
@@ -834,16 +828,18 @@ function TopicsPanel({ envId, agentId }: { envId: string; agentId: string }) {
           ))}
         </div>
         <div className={s.formCol}>
-          <Field label="Flow YAML">
-            <MonacoTextarea
-              value={form.flowYaml}
-              onChange={(v) => setFormField('flowYaml', v)}
-              language="plaintext"
-              height={320}
-              minHeight={240}
-              ariaLabel="Topic flow YAML"
-            />
-          </Field>
+          {/* H4 — structured topic canvas (default) with a code-view toggle,
+              replacing the raw AdaptiveDialog-YAML textarea. The canvas owns
+              both the trigger phrases and the flow body and reports them back. */}
+          <CopilotTopicCanvas
+            flowYaml={form.flowYaml}
+            triggerPhrases={form.triggerText.split('\n').map((p) => p.trim()).filter(Boolean)}
+            onChange={({ flowYaml, triggerPhrases }) => {
+              setForm((f) => ({ ...f, flowYaml, triggerText: triggerPhrases.join('\n') }));
+              setDirty(true);
+            }}
+            ariaLabel="Topic canvas"
+          />
         </div>
       </div>
     </div>
@@ -1050,6 +1046,10 @@ function ChannelsPanel({ envId, agentId, refreshSignal }: { envId: string; agent
   const s = useStyles();
   const [items, setItems] = useState<Channel[] | null>(null);
   const [error, setError] = useState<string | null>(null);
+  // H2 — channels whose real enablement needs Azure Bot Service / OAuth
+  // registration surface an honest per-channel gate (warning), distinct from a
+  // hard error. Keyed by channelType.
+  const [gates, setGates] = useState<Record<string, string>>({});
   const [busy, setBusy] = useState<string | null>(null);
   const [configText, setConfigText] = useState<Record<string, string>>({});
 
@@ -1070,6 +1070,7 @@ function ChannelsPanel({ envId, agentId, refreshSignal }: { envId: string; agent
   const publish = useCallback(async (channelType: string) => {
     if (!envId || !agentId) return;
     setBusy(channelType); setError(null);
+    setGates((g) => { const n = { ...g }; delete n[channelType]; return n; });
     let config: any = {};
     const raw = configText[channelType];
     if (raw) { try { config = JSON.parse(raw); } catch { setError(`Invalid JSON for ${channelType} config`); setBusy(null); return; } }
@@ -1079,7 +1080,17 @@ function ChannelsPanel({ envId, agentId, refreshSignal }: { envId: string; agent
         body: JSON.stringify({ envId, channelType, config }),
       });
       const j = await r.json();
-      if (!j.ok) { setError(j.error || 'publish failed'); return; }
+      if (!j.ok) {
+        // H2 — a 501 means the channel needs an Azure Bot Service / OAuth
+        // registration this surface cannot perform. Show it as an honest
+        // per-channel gate, not a generic publish error.
+        if (j.status === 501) {
+          setGates((g) => ({ ...g, [channelType]: j.error || 'This channel requires additional configuration.' }));
+        } else {
+          setError(j.error || 'publish failed');
+        }
+        return;
+      }
       await refresh();
     } catch (e: any) { setError(e?.message || String(e)); }
     finally { setBusy(null); }
@@ -1103,6 +1114,14 @@ function ChannelsPanel({ envId, agentId, refreshSignal }: { envId: string; agent
               </div>
               <Caption1>{ct.description}</Caption1>
               {existing?.embedUrl && <Caption1>Embed: <code>{existing.embedUrl}</code></Caption1>}
+              {gates[ct.type] && (
+                <MessageBar intent="warning">
+                  <MessageBarBody>
+                    <MessageBarTitle>Additional configuration required</MessageBarTitle>
+                    {gates[ct.type]}
+                  </MessageBarBody>
+                </MessageBar>
+              )}
               <Field label="Channel settings">
                 <KeyValueGrid
                   value={configText[ct.type] ?? ''}
@@ -1335,21 +1354,33 @@ export function CopilotAnalyticsEditor({ item, id }: { item: FabricItemType; id:
           </div>
           <ErrorBar error={error} hint={TENANT_HINT} />
           {loading && <Spinner size="small" label="Loading analytics…" labelPosition="after" />}
-          {data && (
+          {/* H3 — when no real analytics backend produced data, show an honest
+              gate instead of fabricated all-zero KPI tiles. */}
+          {data && !data.available && (
+            <MessageBar intent="warning">
+              <MessageBarBody>
+                <MessageBarTitle>Analytics backend not available</MessageBarTitle>
+                {data.gateReason ||
+                  'No measured telemetry was returned for this agent/window. ' +
+                  'Conversation KPIs require the Dataverse session/transcript tables + Application Insights pipeline.'}
+              </MessageBarBody>
+            </MessageBar>
+          )}
+          {data && data.available && (
             <>
               <div className={s.kpiGrid}>
                 <div className={s.kpi}>
                   <Caption1>Sessions ({data.windowDays}d)</Caption1>
-                  <div className={s.kpiValue}>{data.sessions.toLocaleString()}</div>
+                  <div className={s.kpiValue}>{(data.sessions ?? 0).toLocaleString()}</div>
                 </div>
                 <div className={s.kpi}>
                   <Caption1>Resolved</Caption1>
-                  <div className={s.kpiValue}>{data.resolvedSessions.toLocaleString()}</div>
+                  <div className={s.kpiValue}>{(data.resolvedSessions ?? 0).toLocaleString()}</div>
                   {data.resolutionRate !== undefined && <Caption1>{(data.resolutionRate * 100).toFixed(1)}% resolution rate</Caption1>}
                 </div>
                 <div className={s.kpi}>
                   <Caption1>Escalated</Caption1>
-                  <div className={s.kpiValue}>{data.escalatedSessions.toLocaleString()}</div>
+                  <div className={s.kpiValue}>{(data.escalatedSessions ?? 0).toLocaleString()}</div>
                   {data.escalationRate !== undefined && <Caption1>{(data.escalationRate * 100).toFixed(1)}% escalation rate</Caption1>}
                 </div>
                 <div className={s.kpi}>

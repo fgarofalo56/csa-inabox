@@ -60,15 +60,25 @@ From `apps/fiab-console/lib/editors/copilot-studio-editors.tsx::CopilotTopicEdit
 - Env picker + agent picker (shared with agent editor)
 - List topics (`GET /msdyn_botcomponents?$filter=componenttype eq 9 and _msdyn_copilotid_value eq {agentId}`)
 - Per-topic row: name · trigger-phrase count · modified-on
-- **Edit topic** drawer with two fields: trigger phrases (textarea, newline-separated) + flow YAML (Monaco editor, raw)
+- **Structured topic canvas** (default, audit H4) — a typed step list: Trigger phrases + an
+  ordered sequence of Message / Question / Condition / Action nodes, each with its own Fluent v9
+  form, serialized to/from the AdaptiveDialog YAML via `lib/copilot-studio/topic-model.ts`. A
+  "Code view" toggle still exposes the raw YAML (Monaco), and any AdaptiveDialog construct the
+  structured model can't represent is preserved verbatim as a read-only "Advanced (YAML)" node so
+  round-tripping is lossless. The raw-YAML textarea is no longer the primary surface
+  (ui-parity / loom_no_freeform_config).
 - POST/PATCH to `/msdyn_botcomponents` writing `data={triggerPhrases, flowYaml}` + `content=flowYaml`
 - **Delete topic**
 - MessageBar for Copilot-Studio-not-enabled 503
 
 ## Gaps for parity
 
-1. **Visual canvas** — Loom has raw YAML only; no node graph, no drag-and-drop, no node-add menu, no anchor-line editing
-2. **Node-type forms** — no typed Properties pane for Message · Question · Condition · Call action · Redirect · End · Generative answers · Adaptive Card · Variable management · Show typing
+1. **Visual canvas** — PARTIAL (audit H4): Loom now ships a structured step-list editor (ordered
+   nodes with move-up/down + add menu) and a code-view toggle. Still missing vs the full Copilot
+   Studio canvas: a true node graph with drag-and-drop and anchor-line editing.
+2. **Node-type forms** — PARTIAL: typed forms now exist for Message · Question · Condition · Action.
+   Still missing typed panes for Redirect · End · Generative answers · Adaptive Card · Variable
+   management · Show typing (these fall back to the Code view / "Advanced (YAML)" node).
 3. **Question node entity picker** — no dropdown of prebuilt entities (`Number`, `Date and time`, `Person name`, etc.); no closed-list / regex / multiple-choice authoring
 4. **Slot filling** — Loom can't model `Include metadata` / `Additional entity validation` (Power Fx) / `No valid entity found` behavior
 5. **Variables UI** — no variable browser with scope/type/`Receive from other topics`/`Send to other topics`; no `{x}` insertion picker inside Message text

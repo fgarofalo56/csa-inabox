@@ -51,8 +51,15 @@ From `apps/fiab-console/lib/editors/copilot-studio-editors.tsx::CopilotChannelEd
 - Env picker + agent picker (shared)
 - List channels (`GET /msdyn_botchannels?$filter=_msdyn_copilotid_value eq {agentId}`)
 - Per-channel row: name · type · enabled · embedUrl · config (JSON)
-- **Publish to channel** action with a `channelType` enum (`teams | web | direct-line | slack | facebook | custom`) + free-form `config` JSON
-- POST to `/msdyn_botchannels` with `msdyn_copilotid@odata.bind`
+- **Publish to channel** action with a `channelType` enum (`teams | web | direct-line | slack | facebook | custom`) + key/value `config`
+- **Honest per-channel gating (audit H2)** — `publishToChannel` no longer reports success off a bare
+  `msdyn_botchannels` insert (that row does not reach the destination). Channels whose real
+  enablement requires Azure Bot Service channel registration (Teams, Direct Line, Web Chat) or a
+  third-party OAuth registration (Slack, Facebook) now return a `501` naming exactly what to
+  configure on the Azure Bot resource; the editor renders that as a per-channel warning. Only the
+  combined Teams + Microsoft 365 Copilot channel used by the data-agent publish orchestration
+  (`msteams`) writes the Dataverse row (its downstream M365 admin approval is itself surfaced).
+- POST to `/msdyn_botchannels` with `msdyn_copilotid@odata.bind` (gated channels excepted, above)
 - MessageBar for Copilot-Studio-not-enabled 503
 
 ## Gaps for parity

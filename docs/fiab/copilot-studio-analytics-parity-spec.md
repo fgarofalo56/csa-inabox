@@ -70,9 +70,13 @@ From `apps/fiab-console/lib/editors/copilot-studio-editors.tsx::CopilotAnalytics
 - Env picker + agent picker (shared)
 - `getAnalytics(envId, agentId, days)` calls BAP `/copilots/{agentId}/analytics?window={days}d` (admin BAP endpoint)
 - KPI cards: Sessions · Resolved · Escalated · Resolution rate · Escalation rate · CSAT (when present)
-- Daily session sparkline placeholder fed from `daily[]` array (when BAP returns it)
+- Daily session bar chart fed from `daily[]` array (when BAP returns it)
 - Window picker: 7 / 30 / 90 days
-- Empty-state handling — when BAP analytics pipeline hasn't produced data yet, surfaces zeros rather than throws
+- Empty-state handling — when BAP analytics returns 404/204 or an empty 200 (pipeline not
+  available / no data), `getAnalytics` returns `available: false` + `gateReason` and the editor
+  renders an honest "analytics backend not available" warning. Zeros are **not** fabricated
+  (no-vaporware H3) — the Dataverse `msdyn_botsession`/transcript + App Insights pipeline must be
+  provisioned to surface real KPIs.
 - MessageBar for Copilot-Studio-not-enabled 503
 
 ## Gaps for parity
