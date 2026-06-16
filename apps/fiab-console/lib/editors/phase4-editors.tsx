@@ -50,7 +50,7 @@ import type { RibbonTab } from '@/lib/components/ribbon';
 import { MonacoTextarea } from '@/lib/components/editor/monaco-textarea';
 import { ComputePicker } from '@/lib/components/compute-picker';
 import { ForceDirectedGraph } from '@/lib/components/graph/force-directed-graph';
-import { GeoJsonMap } from '@/lib/components/graph/geojson-map';
+import { GeoJsonMap, type MapLayer, type MapLayerType } from '@/lib/components/graph/geojson-map';
 import { GraphTypeEditor } from '@/lib/components/graph/graph-type-editor';
 // Pure-logic helpers extracted for vitest coverage. See
 // `lib/editors/__tests__/family-utils.test.ts`.
@@ -3422,18 +3422,86 @@ export function PlanEditor({ item, id }: { item: FabricItemType; id: string }) {
   );
 }
 
-// ----- Map (Cosmos GeoJSON + JSON preview) -----
+// ----- Map (Fabric IQ Map — dataset binding + layers over Lakehouse/KQL/Ontology) -----
 const GEO_SAMPLE = `{\n  "type": "FeatureCollection",\n  "features": [\n    { "type": "Feature", "properties": { "name": "Seattle" }, "geometry": { "type": "Point", "coordinates": [-122.33, 47.61] } }\n  ]\n}`;
-interface MapState { geojson: string; [k: string]: unknown }
+
+/** Persisted data-source binding for the map (audit H7). */
+interface MapBinding {
+  source: '' | 'lakehouse' | 'kql' | 'ontology';
+  // lakehouse (Synapse Serverless)
+  database?: string; table?: string; sql?: string;
+  // kql (ADX)
+  kqlItemId?: string; db?: string; kql?: string;
+  // ontology (Weave/AGE)
+  ontologyItemId?: string; objectType?: string;
+  latProp?: string; lonProp?: string; valueProp?: string; labelProp?: string;
+  // shared column mapping (lakehouse/kql)
+  latCol?: string; lonCol?: string; valueCol?: string; labelCol?: string;
+  top?: number;
+}
+interface MapState {
+  geojson: string;
+  binding?: MapBinding;
+  layers?: MapLayer[];
+  [k: string]: unknown;
+}
+
+const DEFAULT_LAYERS: MapLayer[] = [
+  { id: 'pt', type: 'point', enabled: true, radius: 5 },
+  { id: 'heat', type: 'heatmap', enabled: false, weightProp: 'value', radius: 26 },
+];
+
+/** Build a GeoJSON FeatureCollection from {lat,lon,value?,label?} geo rows. */
+function geoRowsToGeoJSON(rows: Array<{ lat: number; lon: number; value?: number; label?: string }>): string {
+  const features = rows.map((r) => ({
+    type: 'Feature',
+    properties: {
+      ...(r.label != null ? { name: r.label } : {}),
+      ...(r.value != null ? { value: r.value } : {}),
+    },
+    geometry: { type: 'Point', coordinates: [r.lon, r.lat] },
+  }));
+  return JSON.stringify({ type: 'FeatureCollection', features }, null, 2);
+}
+
+interface ItemLite { id: string; displayName: string }
 
 export function MapEditor({ item, id }: { item: FabricItemType; id: string }) {
   const s = useStyles();
-  const { state, setState, loading, saving, error, savedAt, save, dirty } = useItemState<MapState>('map', id, { geojson: GEO_SAMPLE });
+  const { state, setState, loading, saving, error, savedAt, save, dirty } = useItemState<MapState>('map', id, {
+    geojson: GEO_SAMPLE, binding: { source: '' }, layers: DEFAULT_LAYERS,
+  });
   const [validateMsg, setValidateMsg] = useState<{ intent: 'success' | 'error'; text: string } | null>(null);
+  const [tab, setTab] = useState<'data' | 'json'>('data');
+
+  // Source-item pickers (KQL databases / ontologies in the tenant).
+  const [kqlItems, setKqlItems] = useState<ItemLite[] | null>(null);
+  const [ontologyItems, setOntologyItems] = useState<ItemLite[] | null>(null);
+
+  // Binding run state.
+  const [running, setRunning] = useState(false);
+  const [runMsg, setRunMsg] = useState<{ intent: 'success' | 'error' | 'warning'; text: string } | null>(null);
+
+  const binding: MapBinding = state.binding || { source: '' };
+  const layers: MapLayer[] = state.layers && state.layers.length ? state.layers : DEFAULT_LAYERS;
+
+  const setBinding = useCallback((patch: Partial<MapBinding>) => {
+    setState((p) => ({ ...p, binding: { ...(p.binding || { source: '' }), ...patch } }));
+  }, [setState]);
+
+  // Lazy-load pickers when the relevant source is chosen.
+  useEffect(() => {
+    if (binding.source === 'kql' && kqlItems === null) {
+      fetch('/api/items?type=kql-database').then((r) => r.json()).then((j) => setKqlItems((j?.items || []).map((it: any) => ({ id: it.id, displayName: it.displayName })))).catch(() => setKqlItems([]));
+    }
+    if (binding.source === 'ontology' && ontologyItems === null) {
+      fetch('/api/items?type=ontology').then((r) => r.json()).then((j) => setOntologyItems((j?.items || []).map((it: any) => ({ id: it.id, displayName: it.displayName })))).catch(() => setOntologyItems([]));
+    }
+  }, [binding.source, kqlItems, ontologyItems]);
+
   let parseErr: string | null = null;
   let featureCount = 0;
   let parsedGeo: unknown = null;
-  // bbox + zoom computed via `_family-utils` (vitest-covered).
   let bbox: { minLon: number; maxLon: number; minLat: number; maxLat: number } | null = null;
   try {
     const j = JSON.parse(state.geojson);
@@ -3442,16 +3510,10 @@ export function MapEditor({ item, id }: { item: FabricItemType; id: string }) {
     bbox = computeGeoBbox(j);
   } catch (e: any) { parseErr = e?.message || String(e); }
 
-  // v3.27: D-upgrade — Azure Maps tile preview. Static-map REST API is the
-  // simplest no-deps integration: just emit an <img>. Falls back to a
-  // MessageBar gate when LOOM_AZURE_MAPS_SUBSCRIPTION_KEY isn't set.
   const mapsKey = process.env.NEXT_PUBLIC_LOOM_AZURE_MAPS_KEY;
-  // Deployed Azure Maps account name (bicep binds NEXT_PUBLIC_LOOM_AZURE_MAPS_ACCOUNT).
-  // Surfaced in the basemap subtitle so the surface shows the account it uses.
   const configuredMapsAccount = process.env.NEXT_PUBLIC_LOOM_AZURE_MAPS_ACCOUNT || '';
   const centerLon = bbox ? (bbox.minLon + bbox.maxLon) / 2 : -122.33;
   const centerLat = bbox ? (bbox.minLat + bbox.maxLat) / 2 : 47.61;
-  // Naive zoom heuristic in `_family-utils.bboxToZoom` (vitest-covered).
   const zoom = bboxToZoom(bbox);
   const tileUrl = mapsKey
     ? `https://atlas.microsoft.com/map/static?api-version=2024-04-01&style=main&zoom=${zoom}&center=${centerLon},${centerLat}&width=640&height=320&subscription-key=${mapsKey}`
@@ -3467,37 +3529,209 @@ export function MapEditor({ item, id }: { item: FabricItemType; id: string }) {
     }
   }, [state.geojson]);
 
+  // Run the binding against the real backend and fold the geo rows into the
+  // map's GeoJSON so every layer renders live data (audit H7).
+  const runBinding = useCallback(async () => {
+    if (!binding.source) { setRunMsg({ intent: 'error', text: 'Pick a data source first.' }); return; }
+    if (!id || id === 'new') { setRunMsg({ intent: 'error', text: 'Save the map once so it has an id, then bind data.' }); return; }
+    setRunning(true); setRunMsg(null);
+    try {
+      const r = await fetch(`/api/items/map/${encodeURIComponent(id)}/data`, {
+        method: 'POST', headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ binding }),
+      });
+      const j = await r.json();
+      if (!j.ok) {
+        setRunMsg({ intent: j.code && /not_configured|503/.test(String(j.code)) ? 'warning' : 'error', text: j.error || `HTTP ${r.status}` });
+        return;
+      }
+      const rows = j.rows || [];
+      setState((p) => ({ ...p, geojson: geoRowsToGeoJSON(rows) }));
+      setRunMsg({ intent: rows.length ? 'success' : 'warning', text: `Bound ${rows.length} geo row(s) from ${binding.source}${j.total != null ? ` (${j.total} total)` : ''}. They render in the layers below — Save to persist.` });
+    } catch (e: any) {
+      setRunMsg({ intent: 'error', text: e?.message || String(e) });
+    } finally { setRunning(false); }
+  }, [binding, id, setState]);
+
+  const setLayer = useCallback((lid: string, patch: Partial<MapLayer>) => {
+    setState((p) => {
+      const cur = (p.layers && p.layers.length ? p.layers : DEFAULT_LAYERS);
+      return { ...p, layers: cur.map((l) => (l.id === lid ? { ...l, ...patch } : l)) };
+    });
+  }, [setState]);
+
+  const addLayer = useCallback((type: MapLayerType) => {
+    setState((p) => {
+      const cur = (p.layers && p.layers.length ? p.layers : DEFAULT_LAYERS);
+      const nl: MapLayer = { id: `${type}-${Date.now().toString(36)}`, type, enabled: true, weightProp: 'value', radius: type === 'heatmap' ? 26 : type === 'cluster' ? 10 : 5 };
+      return { ...p, layers: [...cur, nl] };
+    });
+  }, [setState]);
+
+  const removeLayer = useCallback((lid: string) => {
+    setState((p) => ({ ...p, layers: (p.layers || DEFAULT_LAYERS).filter((l) => l.id !== lid) }));
+  }, [setState]);
+
   const ribbon: RibbonTab[] = useMemo(() => [
     { id: 'home', label: 'Home', groups: [
       { label: 'Layer', actions: [
         { label: saving ? 'Saving…' : 'Save', onClick: () => save(), disabled: saving || dirty === false },
+        { label: running ? 'Binding…' : 'Run binding', onClick: runBinding, disabled: running || !binding.source },
         { label: 'Validate', onClick: runValidate },
       ]},
+      { label: 'Add layer', actions: [
+        { label: '+ Point', onClick: () => addLayer('point') },
+        { label: '+ Heatmap', onClick: () => addLayer('heatmap') },
+        { label: '+ Cluster', onClick: () => addLayer('cluster') },
+        { label: '+ Choropleth', onClick: () => addLayer('choropleth') },
+      ]},
     ]},
-  ], [save, saving, dirty, runValidate]);
+  ], [save, saving, dirty, running, runBinding, binding.source, runValidate, addLayer]);
 
   return (
     <ItemEditorChrome item={item} id={id} ribbon={ribbon} main={
       <div className={s.pad}>
         {loading && <Spinner size="small" label="Loading…" labelPosition="after" />}
+
+        <TabList selectedValue={tab} onTabSelect={(_, d) => setTab(d.value as 'data' | 'json')}>
+          <Tab value="data">Data binding</Tab>
+          <Tab value="json">GeoJSON (manual)</Tab>
+        </TabList>
+
+        {tab === 'data' && (
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+            <Subtitle2>Data source</Subtitle2>
+            <Caption1>Bind this map to a Lakehouse table, a KQL query, or an Ontology entity. Loom runs it against the real Azure backend (Synapse Serverless / ADX / Weave) — no Power BI or Fabric required.</Caption1>
+            <Field label="Source">
+              <Dropdown
+                placeholder="Pick a data source"
+                value={binding.source ? ({ lakehouse: 'Lakehouse (Synapse SQL)', kql: 'KQL (Azure Data Explorer)', ontology: 'Ontology (Weave)' } as any)[binding.source] : ''}
+                selectedOptions={binding.source ? [binding.source] : []}
+                onOptionSelect={(_, d) => setBinding({ source: (d.optionValue as MapBinding['source']) || '' })}
+              >
+                <Option value="lakehouse" text="Lakehouse (Synapse SQL)">Lakehouse (Synapse SQL)</Option>
+                <Option value="kql" text="KQL (Azure Data Explorer)">KQL (Azure Data Explorer)</Option>
+                <Option value="ontology" text="Ontology (Weave)">Ontology (Weave)</Option>
+              </Dropdown>
+            </Field>
+
+            {binding.source === 'lakehouse' && (
+              <>
+                <Field label="Database (Synapse Serverless DB)" hint="e.g. loom_lakehouse, or a paired mirror DB">
+                  <Input value={binding.database || ''} onChange={(_, d) => setBinding({ database: d.value })} placeholder="loom_lakehouse" />
+                </Field>
+                <Field label="Table / view (or use a SQL query below)">
+                  <Input value={binding.table || ''} onChange={(_, d) => setBinding({ table: d.value })} placeholder="[dbo].[stores]" />
+                </Field>
+                <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+                  <Field label="Latitude column"><Input value={binding.latCol || ''} onChange={(_, d) => setBinding({ latCol: d.value })} placeholder="lat" /></Field>
+                  <Field label="Longitude column"><Input value={binding.lonCol || ''} onChange={(_, d) => setBinding({ lonCol: d.value })} placeholder="lon" /></Field>
+                  <Field label="Value column (optional)"><Input value={binding.valueCol || ''} onChange={(_, d) => setBinding({ valueCol: d.value })} placeholder="revenue" /></Field>
+                  <Field label="Label column (optional)"><Input value={binding.labelCol || ''} onChange={(_, d) => setBinding({ labelCol: d.value })} placeholder="name" /></Field>
+                </div>
+                <Field label="SQL override (optional — alias columns lat, lon, value, label)">
+                  <Textarea value={binding.sql || ''} onChange={(_, d) => setBinding({ sql: d.value })} placeholder="SELECT TOP 500 latitude AS lat, longitude AS lon, sales AS value, store AS label FROM [dbo].[stores]" />
+                </Field>
+              </>
+            )}
+
+            {binding.source === 'kql' && (
+              <>
+                <Field label="KQL database item">
+                  <Dropdown
+                    placeholder={kqlItems === null ? 'Loading…' : 'Pick a KQL database'}
+                    value={kqlItems?.find((k) => k.id === binding.kqlItemId)?.displayName || ''}
+                    selectedOptions={binding.kqlItemId ? [binding.kqlItemId] : []}
+                    onOptionSelect={(_, d) => setBinding({ kqlItemId: d.optionValue })}
+                  >
+                    {(kqlItems || []).map((k) => <Option key={k.id} value={k.id} text={k.displayName}>{k.displayName}</Option>)}
+                  </Dropdown>
+                </Field>
+                <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+                  <Field label="Table"><Input value={binding.table || ''} onChange={(_, d) => setBinding({ table: d.value })} placeholder="Sightings" /></Field>
+                  <Field label="Latitude column"><Input value={binding.latCol || ''} onChange={(_, d) => setBinding({ latCol: d.value })} placeholder="lat" /></Field>
+                  <Field label="Longitude column"><Input value={binding.lonCol || ''} onChange={(_, d) => setBinding({ lonCol: d.value })} placeholder="lon" /></Field>
+                  <Field label="Value column (optional)"><Input value={binding.valueCol || ''} onChange={(_, d) => setBinding({ valueCol: d.value })} placeholder="magnitude" /></Field>
+                </div>
+                <Field label="KQL override (optional — project lat, lon, value, label)">
+                  <Textarea value={binding.kql || ''} onChange={(_, d) => setBinding({ kql: d.value })} placeholder={'Sightings\n| project lat=Latitude, lon=Longitude, value=Magnitude\n| take 500'} />
+                </Field>
+              </>
+            )}
+
+            {binding.source === 'ontology' && (
+              <>
+                <Field label="Ontology item">
+                  <Dropdown
+                    placeholder={ontologyItems === null ? 'Loading…' : 'Pick an ontology'}
+                    value={ontologyItems?.find((o) => o.id === binding.ontologyItemId)?.displayName || ''}
+                    selectedOptions={binding.ontologyItemId ? [binding.ontologyItemId] : []}
+                    onOptionSelect={(_, d) => setBinding({ ontologyItemId: d.optionValue })}
+                  >
+                    {(ontologyItems || []).map((o) => <Option key={o.id} value={o.id} text={o.displayName}>{o.displayName}</Option>)}
+                  </Dropdown>
+                </Field>
+                <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+                  <Field label="Object type (declared class)"><Input value={binding.objectType || ''} onChange={(_, d) => setBinding({ objectType: d.value })} placeholder="Store" /></Field>
+                  <Field label="Latitude property"><Input value={binding.latProp || ''} onChange={(_, d) => setBinding({ latProp: d.value })} placeholder="lat" /></Field>
+                  <Field label="Longitude property"><Input value={binding.lonProp || ''} onChange={(_, d) => setBinding({ lonProp: d.value })} placeholder="lon" /></Field>
+                  <Field label="Value property (optional)"><Input value={binding.valueProp || ''} onChange={(_, d) => setBinding({ valueProp: d.value })} placeholder="footfall" /></Field>
+                  <Field label="Label property (optional)"><Input value={binding.labelProp || ''} onChange={(_, d) => setBinding({ labelProp: d.value })} placeholder="name" /></Field>
+                </div>
+              </>
+            )}
+
+            {binding.source && (
+              <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+                <Button appearance="primary" disabled={running} onClick={runBinding}>{running ? 'Binding…' : 'Run binding'}</Button>
+                <Caption1>Runs the source live, then renders the rows in the layers below.</Caption1>
+              </div>
+            )}
+            {runMsg && <MessageBar intent={runMsg.intent}><MessageBarBody>{runMsg.text}</MessageBarBody></MessageBar>}
+
+            <Subtitle2 style={{ marginTop: 8 }}>Layers</Subtitle2>
+            {layers.map((l) => (
+              <div key={l.id} style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap', border: `1px solid ${tokens.colorNeutralStroke2}`, borderRadius: 6, padding: 8 }}>
+                <Switch checked={l.enabled !== false} onChange={(_, d) => setLayer(l.id, { enabled: d.checked })} label={l.type} />
+                {(l.type === 'heatmap' || l.type === 'cluster' || l.type === 'choropleth' || l.type === 'point') && (
+                  <Field label="Weight property" style={{ minWidth: 140 }}>
+                    <Input value={l.weightProp || ''} onChange={(_, d) => setLayer(l.id, { weightProp: d.value })} placeholder="value" />
+                  </Field>
+                )}
+                <Field label="Radius (px)" style={{ minWidth: 90 }}>
+                  <Input type="number" value={String(l.radius ?? '')} onChange={(_, d) => setLayer(l.id, { radius: Number(d.value) || undefined })} />
+                </Field>
+                <Button size="small" appearance="subtle" onClick={() => removeLayer(l.id)}>Remove</Button>
+              </div>
+            ))}
+            <Caption1>Add more from the ribbon (Point / Heatmap / Cluster / Choropleth). Choropleth shades Polygon features by weight; the others place glyphs at point geometry.</Caption1>
+          </div>
+        )}
+
+        {tab === 'json' && (
+          <>
+            <Subtitle2>GeoJSON ({featureCount} feature{featureCount === 1 ? '' : 's'})</Subtitle2>
+            <Caption1>Edited directly, or populated by Run binding. The map below renders it through the configured layers.</Caption1>
+            <MonacoTextarea value={state.geojson} onChange={(v) => setState((p) => ({ ...p, geojson: v }))} language="json" height={280} minHeight={200} ariaLabel="GeoJSON" />
+            {parseErr && <MessageBar intent="error"><MessageBarBody>Invalid JSON: {parseErr}</MessageBarBody></MessageBar>}
+            {validateMsg && <MessageBar intent={validateMsg.intent}><MessageBarBody>{validateMsg.text}</MessageBarBody></MessageBar>}
+          </>
+        )}
+
         {!mapsKey && (
           <MessageBar intent="info">
             <MessageBarBody>
               <MessageBarTitle>Vector overlay rendered offline</MessageBarTitle>
-              The GeoJSON features render as a live SVG overlay below — no Azure Maps account required. To layer an
+              The bound data + layers render as a live SVG overlay below — no Azure Maps account required. To layer an
               Azure Maps raster basemap <em>behind</em> the overlay, set <code>NEXT_PUBLIC_LOOM_AZURE_MAPS_KEY</code> in
               the Container App env to a key from a <code>Microsoft.Maps/accounts</code> resource.
             </MessageBarBody>
           </MessageBar>
         )}
-        <Subtitle2>GeoJSON ({featureCount} feature{featureCount === 1 ? '' : 's'})</Subtitle2>
-        <MonacoTextarea value={state.geojson} onChange={(v) => setState((p) => ({ ...p, geojson: v }))} language="json" height={280} minHeight={200} ariaLabel="GeoJSON" />
-        {parseErr && <MessageBar intent="error"><MessageBarBody>Invalid JSON: {parseErr}</MessageBarBody></MessageBar>}
-        {validateMsg && <MessageBar intent={validateMsg.intent}><MessageBarBody>{validateMsg.text}</MessageBarBody></MessageBar>}
         {!parseErr && (
           <>
             <Subtitle2>Map{tileUrl ? ` (Azure Maps basemap${configuredMapsAccount ? ` · ${configuredMapsAccount}` : ''} · zoom ${zoom}, center ${centerLat.toFixed(3)}, ${centerLon.toFixed(3)})` : ' (vector overlay)'}</Subtitle2>
-            <GeoJsonMap geojson={parsedGeo} rasterUrl={tileUrl} />
+            <GeoJsonMap geojson={parsedGeo} rasterUrl={tileUrl} layers={layers} />
           </>
         )}
         <SaveBar saving={saving} savedAt={savedAt} error={error} dirty={dirty} onSave={() => save()} />

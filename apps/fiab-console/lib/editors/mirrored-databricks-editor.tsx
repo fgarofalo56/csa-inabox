@@ -44,7 +44,9 @@ const useStyles = makeStyles({
 });
 
 interface WorkspaceLite { id: string; name: string; isOnDedicatedCapacity?: boolean }
-interface MirrorLite { id: string; displayName: string; catalogName?: string; hostname?: string }
+interface MirrorLite { id: string; displayName: string; catalogName?: string; hostname?: string; sqlItemId?: string; sqlDatabase?: string; sqlEndpoint?: string; viewCount?: string }
+interface PairingResult { ok?: boolean; code?: string; gate?: string; error?: string; status?: string; steps?: string[]; tablesResolved?: number; tablesSkipped?: number }
+interface SqlEndpointInfo { ok: boolean; provisioned: boolean; sqlItemId?: string | null; endpoint?: string | null; database?: string | null; viewCount?: string | null; catalogName?: string | null; error?: string }
 interface UcSchemaLite { name: string; full_name?: string; comment?: string }
 interface UcTableLite { name: string; full_name?: string; table_type?: string; data_source_format?: string; comment?: string }
 
@@ -91,6 +93,11 @@ export function MirroredDatabricksEditor({ item, id }: Props) {
   const [cDesc, setCDesc] = useState('');
   const [cBusy, setCBusy] = useState(false);
   const [cErr, setCErr] = useState<string | null>(null);
+  const [cPairing, setCPairing] = useState<PairingResult | null>(null);
+
+  // SQL endpoint tab (the paired Synapse Serverless endpoint over UC Delta tables)
+  const [sqlInfo, setSqlInfo] = useState<SqlEndpointInfo | null>(null);
+  const [sqlBusy, setSqlBusy] = useState(false);
 
   // Settings tab
   const [settingsBusy, setSettingsBusy] = useState(false);
@@ -141,6 +148,17 @@ export function MirroredDatabricksEditor({ item, id }: Props) {
     } catch (e: any) { setTablesErr(e?.message || String(e)); setTables([]); }
   }, []);
 
+  const loadSqlEndpoint = useCallback(async (wsId: string, mid: string) => {
+    setSqlBusy(true); setSqlInfo(null);
+    try {
+      const r = await fetch(`/api/items/mirrored-databricks/${encodeURIComponent(mid)}/sql-endpoint?workspaceId=${encodeURIComponent(wsId)}`);
+      const j = await r.json();
+      setSqlInfo(j as SqlEndpointInfo);
+    } catch (e: any) {
+      setSqlInfo({ ok: false, provisioned: false, error: e?.message || String(e) });
+    } finally { setSqlBusy(false); }
+  }, []);
+
   // Default to the first deployed workspace (rule 4: bind to the deployed
   // instance, never a blank required picker). User can still switch.
   useEffect(() => {
@@ -155,11 +173,15 @@ export function MirroredDatabricksEditor({ item, id }: Props) {
     if (!workspaceId || !mirrorId) return;
     if ((tab === 'catalog' || tab === 'tables') && schemas === null) loadSchemas(workspaceId, mirrorId);
     if (tab === 'tables' && schemaName && tables === null) loadTables(workspaceId, mirrorId, schemaName);
-  }, [tab, workspaceId, mirrorId, schemas, tables, schemaName, loadSchemas, loadTables]);
+    if (tab === 'sql' && sqlInfo === null && !sqlBusy) loadSqlEndpoint(workspaceId, mirrorId);
+  }, [tab, workspaceId, mirrorId, schemas, tables, schemaName, sqlInfo, sqlBusy, loadSchemas, loadTables, loadSqlEndpoint]);
+
+  // Reset SQL-endpoint info when switching mirrors so it re-resolves.
+  useEffect(() => { setSqlInfo(null); }, [mirrorId]);
 
   const create = useCallback(async () => {
     if (!workspaceId || !cName.trim() || !cCatalog.trim()) return;
-    setCBusy(true); setCErr(null);
+    setCBusy(true); setCErr(null); setCPairing(null);
     try {
       const r = await fetch(`/api/items/mirrored-databricks?workspaceId=${encodeURIComponent(workspaceId)}`, {
         method: 'POST', headers: { 'content-type': 'application/json' },
@@ -172,11 +194,22 @@ export function MirroredDatabricksEditor({ item, id }: Props) {
       });
       const j = await r.json();
       if (!j.ok) { setCErr(j.error || 'create failed'); return; }
-      setCreateOpen(false); setCName(''); setCCatalog(''); setCHostname(''); setCDesc('');
+      // Surface the real pairing outcome (endpoint paired vs honest gate). Keep
+      // the dialog open so the operator sees whether the catalog is queryable.
+      setCPairing((j.pairing as PairingResult) || null);
       await loadList(workspaceId);
-      if (j.mirror?.id) setMirrorId(j.mirror.id);
+      if (j.mirror?.id) {
+        setMirrorId(j.mirror.id);
+        // Refresh the SQL-endpoint view if the user is on that tab.
+        void loadSqlEndpoint(workspaceId, j.mirror.id);
+      }
+      // Only auto-close + reset when the pairing fully succeeded; otherwise the
+      // operator reads the gate and decides what to fix.
+      if (j.pairing?.ok) {
+        setCreateOpen(false); setCName(''); setCCatalog(''); setCHostname(''); setCDesc(''); setCPairing(null);
+      }
     } finally { setCBusy(false); }
-  }, [workspaceId, cName, cCatalog, cHostname, cDesc, loadList]);
+  }, [workspaceId, cName, cCatalog, cHostname, cDesc, loadList, loadSqlEndpoint]);
 
   const saveSettings = useCallback(async () => {
     if (!workspaceId || !mirrorId) return;
@@ -212,6 +245,7 @@ export function MirroredDatabricksEditor({ item, id }: Props) {
         { label: 'Overview', onClick: () => setTab('overview') },
         { label: 'Catalog', onClick: () => setTab('catalog'), disabled: !mirrorId },
         { label: 'Tables', onClick: () => setTab('tables'), disabled: !mirrorId },
+        { label: 'SQL endpoint', onClick: () => setTab('sql'), disabled: !mirrorId },
       ]},
       { label: 'Catalog', actions: [
         { label: 'Refresh metadata', onClick: mirrorId ? refresh : undefined, disabled: !mirrorId },
@@ -245,6 +279,7 @@ export function MirroredDatabricksEditor({ item, id }: Props) {
               <Tab value="overview">Overview</Tab>
               <Tab value="catalog">Catalog</Tab>
               <Tab value="tables">Tables</Tab>
+              <Tab value="sql">SQL endpoint</Tab>
               <Tab value="security">Security</Tab>
               <Tab value="settings">Settings</Tab>
             </TabList>
@@ -287,10 +322,28 @@ export function MirroredDatabricksEditor({ item, id }: Props) {
                       </Field>
                       <Field label="Description"><Textarea value={cDesc} onChange={(_, d) => setCDesc(d.value)} /></Field>
                       {cErr && <MessageBar intent="error"><MessageBarBody>{cErr}</MessageBarBody></MessageBar>}
+                      {cPairing && (
+                        <MessageBar intent={cPairing.ok ? 'success' : 'warning'}>
+                          <MessageBarBody>
+                            <MessageBarTitle>
+                              {cPairing.ok ? 'Catalog mounted & queryable' : 'Mirror created — endpoint not yet queryable'}
+                            </MessageBarTitle>
+                            {cPairing.ok ? (
+                              <>
+                                Paired a Synapse Serverless SQL endpoint over {cPairing.tablesResolved ?? 0} Delta table(s)
+                                {typeof cPairing.tablesSkipped === 'number' && cPairing.tablesSkipped > 0 ? ` (${cPairing.tablesSkipped} skipped)` : ''}.
+                                Open the <strong>SQL endpoint</strong> tab to query them. You can close this dialog.
+                              </>
+                            ) : (
+                              <>{cPairing.gate || cPairing.error || 'The catalog could not be paired to a SQL endpoint.'}</>
+                            )}
+                          </MessageBarBody>
+                        </MessageBar>
+                      )}
                     </DialogContent>
                     <DialogActions>
-                      <Button appearance="secondary" onClick={() => setCreateOpen(false)}>Cancel</Button>
-                      <Button appearance="primary" disabled={cBusy || !cName.trim() || !cCatalog.trim()} onClick={create}>{cBusy ? 'Creating…' : 'Create mirror'}</Button>
+                      <Button appearance="secondary" onClick={() => { setCreateOpen(false); setCPairing(null); }}>{cPairing ? 'Close' : 'Cancel'}</Button>
+                      <Button appearance="primary" disabled={cBusy || !cName.trim() || !cCatalog.trim()} onClick={create}>{cBusy ? 'Creating & pairing…' : 'Create mirror'}</Button>
                     </DialogActions>
                   </DialogBody>
                 </DialogSurface>
@@ -414,6 +467,55 @@ export function MirroredDatabricksEditor({ item, id }: Props) {
                       </TableBody>
                     </Table>
                   </div>
+                )}
+              </>
+            )}
+
+            {tab === 'sql' && (
+              <>
+                {!mirrorId && <Caption1>Select a mirror first.</Caption1>}
+                {mirrorId && (
+                  <div className={s.toolbar}>
+                    <Subtitle2>SQL analytics endpoint</Subtitle2>
+                    <Button size="small" appearance="outline" icon={<ArrowSync20Regular />} disabled={sqlBusy}
+                      onClick={() => loadSqlEndpoint(workspaceId, mirrorId)}>Refresh</Button>
+                  </div>
+                )}
+                {mirrorId && sqlBusy && <Spinner size="small" label="Resolving endpoint…" labelPosition="after" />}
+                {mirrorId && sqlInfo && !sqlBusy && (
+                  sqlInfo.provisioned ? (
+                    <>
+                      <MessageBar intent="success">
+                        <MessageBarBody>
+                          <MessageBarTitle>Catalog is queryable in Loom</MessageBarTitle>
+                          The mounted Unity Catalog{sqlInfo.catalogName ? <> <code>{sqlInfo.catalogName}</code></> : ''} is paired
+                          to a Synapse Serverless SQL endpoint{sqlInfo.viewCount ? <> with <strong>{sqlInfo.viewCount}</strong> Delta view(s)</> : ''}.
+                        </MessageBarBody>
+                      </MessageBar>
+                      <Caption1>Endpoint: <code>{sqlInfo.endpoint || '(set LOOM_SYNAPSE_WORKSPACE)'}</code></Caption1>
+                      <Caption1>Database: <code>{sqlInfo.database || '—'}</code></Caption1>
+                      <MessageBar intent="info">
+                        <MessageBarBody>
+                          <MessageBarTitle>Query it</MessageBarTitle>
+                          Connect any T-SQL client to the endpoint above and run e.g.
+                          <code style={{ display: 'block', marginTop: 4, fontFamily: 'Consolas, monospace' }}>
+                            USE [{sqlInfo.database || 'loom_dbxmirror_…'}]; SELECT TOP 100 * FROM [dbo].[&lt;schema&gt;_&lt;table&gt;];
+                          </code>
+                          Each view reads the UC table&apos;s Delta files directly (OPENROWSET FORMAT=&apos;delta&apos;) over ADLS Gen2 — Azure-native, no Fabric.
+                        </MessageBarBody>
+                      </MessageBar>
+                    </>
+                  ) : (
+                    <MessageBar intent="warning">
+                      <MessageBarBody>
+                        <MessageBarTitle>Not yet queryable</MessageBarTitle>
+                        {sqlInfo.error
+                          || 'This mirror has no paired SQL endpoint. Re-create the mirror after the prerequisites are met '
+                          + '(LOOM_DATABRICKS_HOSTNAME + USE CATALOG for UC, LOOM_SYNAPSE_WORKSPACE + Synapse SQL admin for the endpoint), '
+                          + 'or ensure the catalog has at least one Delta table with a resolvable ADLS storage location.'}
+                      </MessageBarBody>
+                    </MessageBar>
+                  )
                 )}
               </>
             )}

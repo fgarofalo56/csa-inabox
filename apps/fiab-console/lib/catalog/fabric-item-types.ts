@@ -893,15 +893,15 @@ export const FABRIC_ITEM_TYPES: readonly FabricItemType[] = [
   { slug: 'map', displayName: 'Map', restType: 'Map', category: 'Fabric IQ', preview: true,
     description: 'Geospatial visualization layered over Lakehouse, KQL, and Ontology data.',
     learnContent: {
-      "overview": "A Map is a geospatial visualization layered over Lakehouse, KQL, and Ontology data (preview). In Loom it is a map artifact bound to a geo-dataset, embeddable in reports and dashboards.",
+      "overview": "A Map is a geospatial visualization layered over Lakehouse, KQL, and Ontology data. In Loom the map binds to a live Azure-native source — a Synapse Serverless table (Lakehouse), an Azure Data Explorer KQL query, or a Weave Ontology entity — and renders point, heatmap, cluster, and choropleth layers over the returned geo rows. No Power BI / Fabric required; the vector overlay renders offline and an optional Azure Maps raster basemap layers behind it.",
       "steps": [
         {
           "title": "Bind a geo-dataset",
-          "body": "Point the map at a geo-dataset with point or polygon geometry."
+          "body": "On the Data binding tab, pick Lakehouse / KQL / Ontology, map the lat/lon (and optional value/label) columns, and Run binding — Loom queries the real backend and folds the rows into the map."
         },
         {
           "title": "Add layers",
-          "body": "Compose heatmap, choropleth, or point-cluster layers over the data."
+          "body": "Compose point, heatmap, cluster, or choropleth layers over the bound data; each can be weighted by a numeric value column/property."
         },
         {
           "title": "Style and color",
