@@ -24,6 +24,7 @@ import {
   deleteClone,
   getTemplate,
   isConfigured,
+  setClonePublished,
 } from '@/lib/coe-library/coe-library-client';
 
 export const runtime = 'nodejs';
@@ -86,6 +87,23 @@ export async function POST(req: NextRequest) {
   const who = s.claims.upn || s.claims.email || tenantId;
 
   const body = await req.json().catch(() => ({}));
+  const action = String(body.action || '').trim();
+
+  // Publish / unpublish a clone to the organization consumer gallery.
+  if (action === 'publish' || action === 'unpublish') {
+    const cloneId = String(body.cloneId || '').trim();
+    if (!cloneId) return err('cloneId is required', 400);
+    const publish = action === 'publish';
+    try {
+      const clone = await setClonePublished(tenantId, who, cloneId, publish);
+      await audit(tenantId, who, `coe-template.${action}`, { cloneId, templateId: clone.templateId });
+      return NextResponse.json({ ok: true, clone });
+    } catch (e: any) {
+      const msg = e?.message || String(e);
+      return err(msg, /unknown clone/.test(msg) ? 404 : 500);
+    }
+  }
+
   const templateId = String(body.templateId || '').trim();
   const displayName = body.displayName ? String(body.displayName).trim() : undefined;
   if (!templateId) return err('templateId is required', 400);

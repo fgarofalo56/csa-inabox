@@ -177,6 +177,30 @@ export async function refreshMaterializedLakeView(
         link: 'https://learn.microsoft.com/azure/synapse-analytics/security/how-to-grant-workspace-managed-identity-permissions',
       };
     }
+    // A Livy 400 (ErrorSource:User) on a healthy pool is, in practice, almost
+    // always Spark vCore quota / concurrent-session capacity rather than a code
+    // fault — classify it as an honest, actionable gate instead of an opaque
+    // 502 (no-vaporware.md). Match the explicit quota signals AND the bare Livy
+    // 400 "ErrorSource:User" / TooManyRequests shapes.
+    if (
+      /\bquota\b|\bv-?cores?\b|core count|capacity|exceede?d|exhaust|throttl|TooManyRequests|\b429\b/i.test(msg) ||
+      (/\b400\b/.test(msg) && /ErrorSource:User|Livy|spark batch|session/i.test(msg))
+    ) {
+      return {
+        ok: false,
+        gate: true,
+        code: 'synapse_spark_quota',
+        error:
+          `Synapse Spark could not start the refresh batch (${msg.slice(0, 160)}). ` +
+          `This is most often the Apache Spark pool's vCore quota / concurrent-session capacity, not the view definition.`,
+        remediation:
+          `Increase the Apache Spark vCore quota for workspace '${process.env.LOOM_SYNAPSE_WORKSPACE}' ` +
+          `(pool '${sparkPool}') — request a Synapse Spark vCore quota increase for the region in the Azure portal ` +
+          `(Quotas → Synapse Analytics), reduce the pool's node/executor size, or wait for in-flight Spark ` +
+          `sessions to free capacity, then Refresh again. No Microsoft Fabric required.`,
+        link: 'https://learn.microsoft.com/azure/synapse-analytics/spark/apache-spark-pool-configurations',
+      };
+    }
     return { ok: false, error: `Spark batch submit failed: ${msg.slice(0, 300)}` };
   }
 }

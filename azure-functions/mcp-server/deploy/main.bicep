@@ -54,6 +54,10 @@ param keyVaultName string
 @description('Key Vault secret name holding the shared MCP API key (LOOM_MCP_API_KEY).')
 param apiKeySecretName string = 'loom-mcp-api-key'
 
+@description('LITERAL shared MCP API key value. When non-empty it is set directly as the LOOM_MCP_API_KEY app setting, bypassing the Key Vault reference. REQUIRED on estates where the Loom Key Vault is private-link only — a Consumption Function App has no VNet integration and cannot resolve a @Microsoft.KeyVault(...) reference (it returns the literal reference string → the server 401s). Empty keeps the Key Vault reference (works only when the Function can reach the vault).')
+@secure()
+param apiKeyValue string = ''
+
 @description('Subscription that hosts the Loom deployment (for the ARM tools).')
 param loomSubscriptionId string = subscription().subscriptionId
 
@@ -91,6 +95,10 @@ resource storage 'Microsoft.Storage/storageAccounts@2023-05-01' = {
   properties: {
     minimumTlsVersion: 'TLS1_2'
     allowBlobPublicAccess: false
+    // Identity-based AzureWebJobsStorage (below) — shared key disabled to match
+    // AAD-only Loom estates (Azure Policy enforces allowSharedKeyAccess=false;
+    // a key-based connection string is rejected: KeyBasedAuthenticationNotPermitted).
+    allowSharedKeyAccess: false
     supportsHttpsTrafficOnly: true
   }
 }
@@ -139,11 +147,14 @@ resource functionApp 'Microsoft.Web/sites@2024-04-01' = {
       ftpsState: 'Disabled'
       minTlsVersion: '1.2'
       appSettings: [
-        { name: 'AzureWebJobsStorage', value: 'DefaultEndpointsProtocol=https;AccountName=${storage.name};EndpointSuffix=${environment().suffixes.storage};AccountKey=${storage.listKeys().keys[0].value}' }
+        { name: 'AzureWebJobsStorage__accountName', value: storage.name }
+        { name: 'AzureWebJobsStorage__blobServiceUri', value: 'https://${storage.name}.blob.${environment().suffixes.storage}' }
+        { name: 'AzureWebJobsStorage__queueServiceUri', value: 'https://${storage.name}.queue.${environment().suffixes.storage}' }
         { name: 'FUNCTIONS_EXTENSION_VERSION', value: '~4' }
         { name: 'FUNCTIONS_WORKER_RUNTIME', value: 'python' }
         { name: 'APPLICATIONINSIGHTS_CONNECTION_STRING', value: appInsights.properties.ConnectionString }
-        { name: 'LOOM_MCP_API_KEY', value: '@Microsoft.KeyVault(SecretUri=${apiKeySecretUri})' }
+        // Literal value when supplied (private-KV estates), else the KV reference.
+        { name: 'LOOM_MCP_API_KEY', value: empty(apiKeyValue) ? '@Microsoft.KeyVault(SecretUri=${apiKeySecretUri})' : apiKeyValue }
         { name: 'LOOM_SUBSCRIPTION_ID', value: loomSubscriptionId }
         { name: 'LOOM_RESOURCE_GROUPS', value: join(loomResourceGroups, ',') }
         { name: 'LOOM_AI_SEARCH_SERVICE', value: aiSearchService }
@@ -178,6 +189,32 @@ resource kvSecretsUser 'Microsoft.Authorization/roleAssignments@2022-04-01' = {
   scope: keyVault
   properties: {
     roleDefinitionId: subscriptionResourceId('Microsoft.Authorization/roleDefinitions', kvSecretsUserRoleId)
+    principalId: functionApp.identity.principalId
+    principalType: 'ServicePrincipal'
+  }
+}
+
+// Identity-based AzureWebJobsStorage needs the Function MI to hold data roles on
+// its runtime storage account (the AAD-only estate disallows the account key).
+// Storage Blob Data Owner — host package/lease blobs.
+var blobOwnerRoleId = 'b7e6dc6d-f1e8-4753-8033-0f276bb0955b'
+resource blobOwner 'Microsoft.Authorization/roleAssignments@2022-04-01' = {
+  name: guid(storage.id, functionApp.id, blobOwnerRoleId)
+  scope: storage
+  properties: {
+    roleDefinitionId: subscriptionResourceId('Microsoft.Authorization/roleDefinitions', blobOwnerRoleId)
+    principalId: functionApp.identity.principalId
+    principalType: 'ServicePrincipal'
+  }
+}
+
+// Storage Queue Data Contributor — host trigger/lease queues.
+var queueContribRoleId = '974c5e8b-45b9-4653-ba55-5f855dd0fb88'
+resource queueContrib 'Microsoft.Authorization/roleAssignments@2022-04-01' = {
+  name: guid(storage.id, functionApp.id, queueContribRoleId)
+  scope: storage
+  properties: {
+    roleDefinitionId: subscriptionResourceId('Microsoft.Authorization/roleDefinitions', queueContribRoleId)
     principalId: functionApp.identity.principalId
     principalType: 'ServicePrincipal'
   }

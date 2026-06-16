@@ -51,6 +51,13 @@ param workspaceId string
 @description('Compliance tags')
 param complianceTags object
 
+@description('Built-in MCP server shared API key secret name. Empty skips the secret. The Console loads this secret (via the MCP UAMI) to register the built-in MCP endpoint.')
+param builtinMcpApiKeySecretName string = ''
+
+@description('Built-in MCP server shared API key value (deterministic GUID from the orchestrator). Written as a KV secret so the Console can resolve it over the private endpoint.')
+@secure()
+param builtinMcpApiKey string = ''
+
 var kvName = take('kv-loom-${uniqueString(resourceGroup().id)}', 24)
 
 resource keyVault 'Microsoft.KeyVault/vaults@2024-11-01' = {
@@ -245,7 +252,19 @@ resource diagHsm 'Microsoft.Insights/diagnosticSettings@2021-05-01-preview' = if
   }
 }
 
+// Built-in MCP shared API key — written so the Console can resolve it over the
+// private endpoint (the MCP UAMI holds Key Vault Secrets User, granted above).
+// Declared as a child of the keyVault symbol so the name is start-calculable.
+resource builtinMcpKeySecret 'Microsoft.KeyVault/vaults/secrets@2024-11-01' = if (!empty(builtinMcpApiKeySecretName)) {
+  parent: keyVault
+  name: empty(builtinMcpApiKeySecretName) ? 'placeholder' : builtinMcpApiKeySecretName
+  properties: {
+    value: builtinMcpApiKey
+  }
+}
+
 output keyVaultId string = keyVault.id
 output keyVaultName string = keyVault.name
 output keyVaultUri string = keyVault.properties.vaultUri
 output managedHsmId string = hsmIsolated ? hsm.id : ''
+
