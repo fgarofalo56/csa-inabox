@@ -75,6 +75,8 @@ import {
   type KnownContainer,
 } from '@/lib/azure/adls-client';
 import { executeQuery as synapseExec, serverlessTarget } from '@/lib/azure/synapse-sql-client';
+import { createShortcut, type ShortcutKind, type ShortcutTargetType } from '@/lib/azure/lakehouse-shortcuts';
+import { readRepoDataset } from '@/lib/apps/repo-datasets';
 
 const FABRIC_BASE = process.env.LOOM_FABRIC_BASE || 'https://api.fabric.microsoft.com/v1';
 const FABRIC_SCOPE = 'https://api.fabric.microsoft.com/.default';
@@ -312,6 +314,258 @@ function safeRelPath(p: string): string {
     .join('/');
 }
 
+/** Declared shape of a bundle lakehouse shortcut (mirror of LakehouseShortcutDecl). */
+interface ShortcutDecl {
+  name: string;
+  target?: string;
+  description?: string;
+  repoDataset?: string;
+  kind?: 'files' | 'tables';
+  publicAnonymous?: boolean;
+  format?: 'delta' | 'parquet' | 'csv' | 'json';
+}
+
+/** Summary of one shortcut's provisioning outcome (folded into the step log). */
+interface ShortcutOutcome {
+  active: string[];   // registered + proven reachable
+  pending: string[];  // registered 'pending' with an honest gate (unverified/unreachable)
+  failed: string[];   // could not register at all
+}
+
+/**
+ * Provision a bundle's declared lakehouse shortcuts into REAL registry rows on
+ * the tenant's own infrastructure — per .claude/rules/no-vaporware.md no
+ * shortcut may point at an external URL that 404s or a workspace that doesn't
+ * exist. Three honest shapes (see LakehouseShortcutDecl):
+ *
+ *   1. repoDataset  → upload the repo file into THIS tenant's ADLS under
+ *      `<root>/Files/_shortcuts/<name>/<file>`, register an internal shortcut
+ *      pointing there + an optional Synapse OPENROWSET view (queryable).
+ *      Self-contained: nothing external, present + queryable after install.
+ *   2. internal://  → register pointing at the primary account; status 'active'
+ *      (the UAMI already reads the primary account; reachability is the lake's).
+ *   3. publicAnonymous + https/abfss → real unauthenticated HEAD/GET probe; on
+ *      2xx register 'active', else 'pending' with the HTTP status (honest gate).
+ *
+ * Anything else (a bare external target with no flag) is registered 'pending'
+ * with an honest "unverified external target" gate — never a silent 'active'.
+ *
+ * Best-effort: a shortcut failure is logged and never sinks the lakehouse
+ * install. `lakehouseId` is the Cosmos item id (the shortcut registry PK).
+ */
+async function provisionShortcuts(
+  input: Parameters<Provisioner>[0],
+  shortcuts: ShortcutDecl[],
+  ctx: {
+    container: KnownContainer;
+    root: string;
+    synapse: ReturnType<typeof serverlessTarget> | null;
+    createdBy: string;
+  },
+  steps: string[],
+): Promise<ShortcutOutcome> {
+  const outcome: ShortcutOutcome = { active: [], pending: [], failed: [] };
+  const lakehouseId = input.cosmosItemId;
+
+  for (const sc of shortcuts) {
+    const name = (sc?.name || '').trim();
+    if (!name) continue;
+    const kind: ShortcutKind = sc.kind === 'tables' ? 'tables' : 'files';
+
+    // ---- Shape 1: repo-hosted dataset → upload into THIS tenant's ADLS. ----
+    if (sc.repoDataset) {
+      const ds = readRepoDataset(sc.repoDataset);
+      if (!ds) {
+        // Honest gate: the declared sample file isn't on disk at runtime.
+        try {
+          await createShortcut({
+            lakehouseId,
+            tenantId: input.session?.claims?.oid,
+            name,
+            kind,
+            parentPath: '_shortcuts',
+            targetType: 'internal',
+            targetUri: `repo://${sc.repoDataset}`,
+            status: 'pending',
+            statusDetail:
+              `Repo dataset '${sc.repoDataset}' was not found in the deployed image. ` +
+              `Ensure samples/app-data is included in the standalone bundle (next.config outputFileTracingIncludes).`,
+            createdBy: ctx.createdBy,
+          });
+        } catch { /* registry write best-effort */ }
+        outcome.pending.push(name);
+        steps.push(`Shortcut ${name}: repo dataset '${sc.repoDataset}' not found at runtime → registered 'pending' (honest gate).`);
+        continue;
+      }
+      const relDir = `${ctx.root}/Files/_shortcuts/${safeRelPath(name)}`;
+      const relFile = `${relDir}/${ds.fileName}`;
+      try {
+        await adlsCreateDirectory(ctx.container, relDir);
+        await adlsUploadFile(ctx.container, relFile, ds.bytes, ds.contentType);
+        steps.push(`Shortcut ${name}: uploaded repo dataset ${ds.relPath} → ${ctx.container}/${relFile} (${ds.bytes.length} bytes).`);
+      } catch (e: any) {
+        outcome.failed.push(name);
+        steps.push(`Shortcut ${name}: upload of repo dataset failed ${e?.statusCode || ''} ${e?.message || String(e)}.`);
+        continue;
+      }
+
+      const abfssUri = resolveAbfssRoot(ctx.container, relFile) || undefined;
+      // Register a queryable Synapse view when serverless is configured (CSV/JSON).
+      let engineObject: string | undefined;
+      const fmt = sc.format || (ds.fileName.toLowerCase().endsWith('.json') ? 'json' : 'csv');
+      if (ctx.synapse && (fmt === 'csv' || fmt === 'json')) {
+        const httpsUrl = pathToHttpsUrl(ctx.container, relFile);
+        const viewLeaf = `shortcut_${safeRelPath(name)}`.replace(/[^A-Za-z0-9_]/g, '_');
+        const obj = `lakehouse.${viewLeaf}`;
+        const urlLiteral = httpsUrl.replace(/'/g, "''");
+        const fmtClause = fmt === 'json'
+          ? `FORMAT = ''CSV'', FIELDTERMINATOR = ''0x0b'', FIELDQUOTE = ''0x0b''`
+          : `FORMAT = ''CSV'', PARSER_VERSION = ''2.0'', HEADER_ROW = TRUE`;
+        const ddl =
+          `IF SCHEMA_ID('lakehouse') IS NULL EXEC('CREATE SCHEMA lakehouse');\n` +
+          `IF OBJECT_ID('${obj}','V') IS NOT NULL DROP VIEW ${obj};\n` +
+          `EXEC('CREATE VIEW ${obj} AS SELECT * FROM OPENROWSET(BULK ''${urlLiteral}'', ${fmtClause}) AS r');`;
+        try {
+          await synapseExec(ctx.synapse, ddl);
+          engineObject = obj;
+          steps.push(`Shortcut ${name}: registered Synapse serverless view ${obj} over the uploaded dataset.`);
+        } catch (e: any) {
+          steps.push(`Shortcut ${name}: OPENROWSET view register failed: ${e?.message || String(e)} (file is still real + browsable).`);
+        }
+      }
+      try {
+        await createShortcut({
+          lakehouseId,
+          tenantId: input.session?.claims?.oid,
+          name,
+          kind,
+          parentPath: '_shortcuts',
+          targetType: 'internal',
+          targetUri: `internal://${ctx.container}/${relFile}`,
+          abfssUri,
+          engine: engineObject ? 'synapse' : 'none',
+          engineObject,
+          format: fmt,
+          status: 'active',
+          createdBy: ctx.createdBy,
+        });
+        outcome.active.push(name);
+        steps.push(`Shortcut ${name}: registered 'active' (self-contained, in-tenant).`);
+      } catch (e: any) {
+        outcome.failed.push(name);
+        steps.push(`Shortcut ${name}: registry write failed: ${e?.message || String(e)}.`);
+      }
+      continue;
+    }
+
+    const target = (sc.target || '').trim();
+    if (!target) {
+      outcome.failed.push(name);
+      steps.push(`Shortcut ${name}: no target and no repoDataset declared; skipped.`);
+      continue;
+    }
+
+    // ---- Shape 2: internal:// pointer to the tenant's primary account. ----
+    if (/^internal:\/\//i.test(target)) {
+      try {
+        await createShortcut({
+          lakehouseId,
+          tenantId: input.session?.claims?.oid,
+          name,
+          kind,
+          targetType: 'internal',
+          targetUri: target,
+          status: 'active',
+          format: sc.format,
+          createdBy: ctx.createdBy,
+        });
+        outcome.active.push(name);
+        steps.push(`Shortcut ${name}: registered internal target ${target}.`);
+      } catch (e: any) {
+        outcome.failed.push(name);
+        steps.push(`Shortcut ${name}: internal registry write failed: ${e?.message || String(e)}.`);
+      }
+      continue;
+    }
+
+    // ---- Shape 3: genuinely-public anonymous external target. ----
+    if (sc.publicAnonymous && /^https?:\/\//i.test(target)) {
+      let reachable = false;
+      let detail = '';
+      try {
+        // Real unauthenticated probe — no UAMI RBAC. HEAD first, GET fallback
+        // (some static hosts reject HEAD). 2xx ⇒ the public dataset is live.
+        let res = await fetchWithTimeout(target, { method: 'HEAD', cache: 'no-store' }).catch(() => null);
+        if (!res || (!res.ok && res.status !== 405 && res.status !== 501)) {
+          res = await fetchWithTimeout(target, { method: 'GET', headers: { range: 'bytes=0-0' }, cache: 'no-store' }).catch(() => null);
+        }
+        if (res && (res.ok || res.status === 206)) reachable = true;
+        else detail = res ? `HTTP ${res.status}` : 'no response';
+      } catch (e: any) {
+        detail = e?.message || String(e);
+      }
+      const tType: ShortcutTargetType = 'adls';
+      try {
+        await createShortcut({
+          lakehouseId,
+          tenantId: input.session?.claims?.oid,
+          name,
+          kind,
+          targetType: tType,
+          targetUri: target,
+          status: reachable ? 'active' : 'pending',
+          statusDetail: reachable ? undefined : `Public dataset probe failed (${detail}); registered 'pending' until reachable.`,
+          format: sc.format,
+          createdBy: ctx.createdBy,
+        });
+        if (reachable) {
+          outcome.active.push(name);
+          steps.push(`Shortcut ${name}: public anonymous target reachable (probe 2xx) → registered 'active'.`);
+        } else {
+          outcome.pending.push(name);
+          steps.push(`Shortcut ${name}: public anonymous probe failed (${detail}) → registered 'pending' (honest gate).`);
+        }
+      } catch (e: any) {
+        outcome.failed.push(name);
+        steps.push(`Shortcut ${name}: public registry write failed: ${e?.message || String(e)}.`);
+      }
+      continue;
+    }
+
+    // ---- Fallback: a bare external target with no honesty flag. Register
+    //      'pending' with an explicit gate — NEVER a silent 'active'.
+    try {
+      await createShortcut({
+        lakehouseId,
+        tenantId: input.session?.claims?.oid,
+        name,
+        kind,
+        targetType: /^abfss:\/\//i.test(target) ? 'adls' : 'internal',
+        targetUri: target,
+        status: 'pending',
+        statusDetail:
+          'External target declared without repoDataset or publicAnonymous; not validated at install. ' +
+          'Configure credentials + Test, or re-point at a repo-hosted dataset.',
+        format: sc.format,
+        createdBy: ctx.createdBy,
+      });
+      outcome.pending.push(name);
+      steps.push(`Shortcut ${name}: unverified external target ${target} → registered 'pending' (honest gate).`);
+    } catch (e: any) {
+      outcome.failed.push(name);
+      steps.push(`Shortcut ${name}: registry write failed: ${e?.message || String(e)}.`);
+    }
+  }
+
+  if (shortcuts.length) {
+    steps.push(
+      `Shortcuts: ${outcome.active.length} active, ${outcome.pending.length} pending, ${outcome.failed.length} failed ` +
+        `(of ${shortcuts.length} declared).`,
+    );
+  }
+  return outcome;
+}
+
 /**
  * Azure-native DLZ fallback. Materialises the lakehouse in Loom's internal
  * Data Landing Zone ADLS Gen2 using the SAME UAMI + adls-client every other
@@ -539,10 +793,30 @@ async function provisionAzureNative(
     }
   }
 
+  // 4. Provision declared shortcuts as REAL registry rows (repo-hosted dataset
+  //    uploaded into THIS tenant's ADLS / internal pointer / probed public),
+  //    never a silent external 404. Best-effort: failures are logged, not fatal.
+  const shortcutDecls: ShortcutDecl[] = Array.isArray(content?.shortcuts) ? content.shortcuts : [];
+  let shortcutOutcome: ShortcutOutcome = { active: [], pending: [], failed: [] };
+  if (shortcutDecls.length) {
+    shortcutOutcome = await provisionShortcuts(
+      input,
+      shortcutDecls,
+      {
+        container,
+        root,
+        synapse,
+        createdBy: input.session?.claims?.upn || input.session?.claims?.email || input.session?.claims?.oid || 'install',
+      },
+      steps,
+    );
+  }
+
   steps.push(
     `Azure-native lakehouse materialised in ${container}/${root}: ${createdFolders.length} folder(s), ` +
       `${deltaTables.length} table folder(s) (${seeded.length} seeded, ${emptyTables.length} empty)` +
-      `${externalViews.length ? `, ${externalViews.length} Synapse view(s)` : ''}.`,
+      `${externalViews.length ? `, ${externalViews.length} Synapse view(s)` : ''}` +
+      `${shortcutDecls.length ? `, ${shortcutOutcome.active.length}/${shortcutDecls.length} shortcut(s) active` : ''}.`,
   );
 
   // abfss URI of this lakehouse's ADLS Gen2 root — the LOCATION for the paired
@@ -565,6 +839,9 @@ async function provisionAzureNative(
       ...(seeded.length ? { seededTables: seeded.join(',') } : {}),
       ...(emptyTables.length ? { emptyTables: emptyTables.join(',') } : {}),
       ...(externalViews.length ? { synapseViews: externalViews.join(',') } : {}),
+      ...(shortcutOutcome.active.length ? { shortcutsActive: shortcutOutcome.active.join(',') } : {}),
+      ...(shortcutOutcome.pending.length ? { shortcutsPending: shortcutOutcome.pending.join(',') } : {}),
+      ...(shortcutOutcome.failed.length ? { shortcutsFailed: shortcutOutcome.failed.join(',') } : {}),
     },
     steps,
   };

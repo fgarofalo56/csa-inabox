@@ -210,9 +210,15 @@ const NB_BOOTSTRAP_CELLS = [
       '    "fs.azure.account.oauth2.client.endpoint":\n' +
       '        f"https://login.microsoftonline.com/{tenant_id}/oauth2/token",\n' +
       '}\n\n' +
+      '# Customer-supplied ADLS Gen2 account + container (no hard-coded placeholder).\n' +
+      '# Set these as notebook widgets or job params; the mount is illustrative\n' +
+      '# setup, not a Loom-managed data load.\n' +
+      'adls_account = dbutils.widgets.get("adls_account") if "adls_account" in [w.name for w in dbutils.widgets.getAll()] else spark.conf.get("spark.loom.adlsAccount", "")\n' +
+      'adls_container = "landing"\n' +
+      'assert adls_account, "Set the adls_account widget (or spark.loom.adlsAccount) to your ADLS Gen2 account."\n' +
       'if not any(m.mountPoint == "/mnt/data" for m in dbutils.fs.mounts()):\n' +
       '    dbutils.fs.mount(\n' +
-      '        source="abfss://data@analyticsstorage.dfs.core.windows.net/",\n' +
+      '        source=f"abfss://{adls_container}@{adls_account}.dfs.core.windows.net/",\n' +
       '        mount_point="/mnt/data",\n' +
       '        extra_configs=configs,\n' +
       '    )\n\n' +
@@ -758,13 +764,19 @@ const bundle: AppBundle = {
             ],
           },
         ],
+        // Internal shortcut to the tenant's OWN landing container (Event Hubs
+        // Capture writes here). `internal://<container>/<path>` resolves to the
+        // primary ADLS account the Console UAMI already reads — no external host,
+        // no {{ADLS_ACCOUNT}} placeholder to 404. The install provisioner
+        // registers it as a real shortcut row.
         shortcuts: [
           {
             name: 'eventhub_capture',
-            target: 'abfss://landing@{{ADLS_ACCOUNT}}.dfs.core.windows.net/eventhub-capture',
+            target: 'internal://landing/eventhub-capture',
+            kind: 'files',
             description:
-              'Shortcut to the Event Hubs Capture container so the raw Avro/JSON ' +
-              'landing files are queryable without copying.',
+              'Shortcut to the tenant landing container Event Hubs Capture path so the raw ' +
+              'Avro/JSON capture files are queryable without copying.',
           },
         ],
       },

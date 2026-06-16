@@ -685,15 +685,12 @@ const bundle: AppBundle = {
             ],
           },
         ],
-        shortcuts: [
-          {
-            name: 'shared_from_marketplace',
-            target: 'deltasharing://marketplace/{consuming-domain}',
-            description:
-              'OneLake shortcut placeholder where Delta-Shared products from ' +
-              'other domains surface once a grant is approved (query-in-place).',
-          },
-        ],
+        // No placeholder shortcut: a `deltasharing://marketplace/{consuming-domain}`
+        // pseudo-target is not a resolvable address and would never become real
+        // (vaporware). Cross-domain Delta Sharing grants are created for real by
+        // the "Cross-Domain Delta Sharing Automation" notebook below, which
+        // registers the shared product as a genuine shortcut once a grant is
+        // approved. Removed per .claude/rules/no-vaporware.md.
       },
     },
 
