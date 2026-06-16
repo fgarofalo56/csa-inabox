@@ -579,6 +579,9 @@ param loomEventGridBusinessTopic string = 'loom-business-events'
 @description('Business Events — default Event Hub entity the durable channel publishes governed events to (LOOM_EVENTHUB_BUSINESS_HUB). Empty uses loom-telemetry.')
 param loomEventHubBusinessHub string = 'loom-telemetry'
 
+@description('Enable the Event Hubs Data Explorer "View / Peek events" AMQP receive path (LOOM_EVENTHUB_RECEIVE_ENABLED). Default on (opt-out) — the @azure/event-hubs SDK is bundled in the Console image and loaded lazily only on the receive path; the Console UAMI Data Owner role covers receive. Set false to leave View events honestly dependency-gated.')
+param loomEventHubReceiveEnabled bool = true
+
 @description('Business Events — Cosmos container holding the governed event-type registry (LOOM_BUSINESS_EVENTS_CONTAINER). Created on first write by business-events-store.ts. Live default: business-event-types.')
 param loomBusinessEventsContainer string = 'business-event-types'
 
@@ -2315,6 +2318,12 @@ module appDeployments 'app-deployments.bicep' = if (containerPlatform == 'contai
             { name: 'LOOM_EH_SCHEMA_GROUP', value: loomEhSchemaGroup }
             { name: 'LOOM_EVENTHUB_RG', value: effEventHubRg }
             { name: 'LOOM_EVENTHUB_SUB', value: byoEventHubSub }
+            // Event Hubs Data Explorer "View / Peek events" (AMQP receive). The
+            // @azure/event-hubs SDK is bundled in the Console image (package.json)
+            // and loaded lazily only on the receive path; default-on (opt-out) so
+            // portal-parity View works day-one. The Console UAMI's "Azure Event
+            // Hubs Data Owner" (already granted on the namespace) covers receive.
+            { name: 'LOOM_EVENTHUB_RECEIVE_ENABLED', value: loomEventHubReceiveEnabled ? '1' : '0' }
             // Business Events publishing surface (/business-events) — Event Grid
             // custom-topic channel + durable Event Hub channel + governed
             // event-type registry (Cosmos). The Event Grid sub/RG default to the

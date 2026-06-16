@@ -62,11 +62,19 @@ export function buildRuleQuery(rule: any): { query: string; note?: string } {
   const cond = rule?.condition || {};
   const table =
     rule?.sourceTable || rule?.table || rule?.stream || rule?.eventTable ||
-    process.env.LOOM_ACTIVATOR_DEFAULT_TABLE || 'AppEvents_CL';
+    process.env.LOOM_ACTIVATOR_DEFAULT_TABLE || 'AppEvents';
   const property = cond.property || cond.field || cond.condProperty || 'value';
   const op = kqlOperator(cond.operator || cond.condOperator);
   const value = cond.value ?? cond.condValue ?? 0;
-  const query = `${table}\n| where ${property} ${op} ${kqlValue(value)}`;
+  // column-safe predicate: resolve `property` via column_ifexists (falling back
+  // to the App Insights Properties custom-dimension bag) so the rule VALIDATES
+  // and provisions against a real table whose literal column may not exist —
+  // instead of a SEM0100 that surfaces as a 502. Numeric comparisons coerce the
+  // resolved scalar with todouble(); non-numeric ops compare as string.
+  const safeCol = `column_ifexists("${property}", tostring(parse_json(tostring(column_ifexists("Properties", dynamic({}))))["${property}"]))`;
+  const numericOp = ['>', '>=', '<', '<=', '==', '!='].includes(op);
+  const lhs = numericOp && typeof value === 'number' ? `todouble(${safeCol})` : safeCol;
+  const query = `${table}\n| extend _v = ${lhs}\n| where _v ${op} ${kqlValue(value)}`;
   const note = rule?.sourceTable || rule?.table
     ? undefined
     : `Alert query targets table '${table}' — set the rule's sourceTable (or LOOM_ACTIVATOR_DEFAULT_TABLE) to point at your data.`;

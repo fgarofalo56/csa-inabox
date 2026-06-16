@@ -264,17 +264,21 @@ describe('matchClassesToTables', () => {
 });
 
 describe('buildEntityChangeQuery', () => {
-  it('produces KQL with the entityType in a where clause + the operation filter', () => {
+  it('produces column-safe KQL with the entityType filter + the operation filter', () => {
     const q = buildEntityChangeQuery('Customer', 'lakehouse', 'item-123', 'MyEvents_CL');
     expect(q).toContain('MyEvents_CL');
-    expect(q).toContain('where entityType == "Customer"');
-    expect(q).toContain('operation in ("INSERT","UPDATE","DELETE")');
+    // column-safe predicate: literal column resolved via column_ifexists, then filtered.
+    expect(q).toContain('column_ifexists("entityType"');
+    expect(q).toContain('where _entityType == "Customer"');
+    expect(q).toContain('_operation in ("INSERT","UPDATE","DELETE")');
     expect(q).toContain('// Loom ontology entity-change trigger — lakehouse item-123');
   });
-  it('defaults the table to AppEvents_CL when none is provided', () => {
+  it('defaults the table to the real AppEvents table (not the phantom AppEvents_CL) when none is provided', () => {
     const prev = process.env.LOOM_ACTIVATOR_DEFAULT_TABLE;
     delete process.env.LOOM_ACTIVATOR_DEFAULT_TABLE;
-    expect(buildEntityChangeQuery('Order', 'warehouse', 'w1')).toContain('AppEvents_CL');
+    const q = buildEntityChangeQuery('Order', 'warehouse', 'w1');
+    expect(q).toContain('AppEvents');
+    expect(q).not.toContain('AppEvents_CL');
     if (prev !== undefined) process.env.LOOM_ACTIVATOR_DEFAULT_TABLE = prev;
   });
   it('escapes embedded quotes in the entity type and does not throw on odd input', () => {
