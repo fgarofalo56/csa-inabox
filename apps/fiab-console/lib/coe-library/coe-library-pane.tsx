@@ -18,14 +18,18 @@ import { useCallback, useEffect, useMemo, useState } from 'react';
 import {
   Spinner, Badge, Caption1, Body1, Button, Input, Field,
   Dialog, DialogSurface, DialogTitle, DialogBody, DialogContent, DialogActions,
-  MessageBar, MessageBarBody, MessageBarTitle,
+  MessageBar, MessageBarBody, MessageBarTitle, TabList, Tab,
   makeStyles, tokens, mergeClasses,
 } from '@fluentui/react-components';
 import {
-  Eye20Regular, Copy20Regular, Delete20Regular, ArrowSync24Regular,
-  DataArea20Regular, CheckmarkCircle20Filled,
+  Copy20Regular, Delete20Regular, ArrowSync24Regular,
+  DataArea20Regular, CheckmarkCircle20Filled, Open20Regular, Share20Regular,
+  Dismiss20Regular, ChannelShare20Regular,
 } from '@fluentui/react-icons';
 import { Section } from '@/lib/components/ui/section';
+import { ReportCanvas } from '@/lib/coe-library/report-render/report-canvas';
+import { useReportModel } from '@/lib/coe-library/report-render/use-report';
+import { ReportViewerDialog } from '@/lib/coe-library/report-render/report-viewer-dialog';
 
 interface CoeTemplate {
   id: string; title: string; description: string; category: string;
@@ -35,6 +39,7 @@ interface CoeTemplate {
 interface CoeClone {
   id: string; templateId: string; title: string; displayName: string;
   fileCount: number; blobCopied: boolean; clonedAt: string; clonedBy: string;
+  published?: boolean; publishedAt?: string; publishedBy?: string;
 }
 interface Catalog { version: string; description: string; templates: CoeTemplate[] }
 
@@ -78,6 +83,11 @@ const useStyles = makeStyles({
   dlgList: { margin: 0, paddingLeft: tokens.spacingHorizontalL, color: tokens.colorNeutralForeground2 },
   dlgGrid: { display: 'grid', gridTemplateColumns: '1fr', gap: tokens.spacingVerticalM },
   clonesRow: { display: 'flex', alignItems: 'center', gap: tokens.spacingHorizontalM, padding: tokens.spacingVerticalS, borderBottom: `1px solid ${tokens.colorNeutralStroke2}` },
+  cloneActions: { display: 'flex', alignItems: 'center', gap: tokens.spacingHorizontalXS, flexShrink: 0 },
+  previewSurface: { maxWidth: '95vw', width: '1180px' },
+  previewTabs: { marginBottom: tokens.spacingVerticalM },
+  reportTabBody: { minHeight: '420px' },
+  centerPad: { display: 'flex', justifyContent: 'center', padding: tokens.spacingVerticalXXL },
 });
 
 function fmt(iso?: string) { if (!iso) return '—'; const d = new Date(iso); return Number.isNaN(d.getTime()) ? '—' : d.toLocaleString(); }
@@ -92,8 +102,11 @@ export function CoeLibraryPane() {
   const [okMsg, setOkMsg] = useState<string | null>(null);
   const [blobGate, setBlobGate] = useState<any | null>(null);
   const [preview, setPreview] = useState<CoeTemplate | null>(null);
+  const [previewTab, setPreviewTab] = useState<'report' | 'details'>('report');
   const [cloneName, setCloneName] = useState('');
   const [busyId, setBusyId] = useState<string | null>(null);
+  // Open a cloned report in the full viewer (renders via ?cloneId=).
+  const [openClone, setOpenClone] = useState<CoeClone | null>(null);
 
   const load = useCallback(async () => {
     setLoading(true); setError(null);
@@ -117,7 +130,7 @@ export function CoeLibraryPane() {
       });
       const j = await r.json();
       if (!j.ok) { setError(j.error || `HTTP ${r.status}`); return; }
-      setOkMsg(`Added “${j.clone.displayName}” to your library${j.clone.blobCopied ? ` (${j.clone.fileCount} PBIP files copied to Blob)` : ''}. Publish it with scripts/csa-loom/publish-coe-reports.sh.`);
+      setOkMsg(`Added “${j.clone.displayName}” to your library${j.clone.blobCopied ? ` (${j.clone.fileCount} PBIP files copied to Blob)` : ''}. Open it below, then Publish to organization to share it in Organization reports.`);
       if (j.blobGate) setBlobGate(j.blobGate);
       setPreview(null); setCloneName('');
       await load();
@@ -135,6 +148,28 @@ export function CoeLibraryPane() {
       await load();
     } catch (e: any) { setError(e?.message || String(e)); }
     finally { setBusyId(null); }
+  }
+
+  async function togglePublish(c: CoeClone) {
+    const publish = !c.published;
+    setBusyId(c.id); setError(null); setOkMsg(null);
+    try {
+      const r = await fetch('/api/admin/coe-library', {
+        method: 'POST', headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ action: publish ? 'publish' : 'unpublish', cloneId: c.id }),
+      });
+      const j = await r.json();
+      if (!j.ok) { setError(j.error || `HTTP ${r.status}`); return; }
+      setOkMsg(publish
+        ? `Published “${c.displayName}” to your organization. It now appears in Organization reports for everyone.`
+        : `Unpublished “${c.displayName}”. It no longer appears in Organization reports.`);
+      await load();
+    } catch (e: any) { setError(e?.message || String(e)); }
+    finally { setBusyId(null); }
+  }
+
+  function openPreview(t: CoeTemplate) {
+    setPreview(t); setPreviewTab('report'); setCloneName(t.title);
   }
 
   const clonedIds = useMemo(() => new Set(clones.map((c) => c.templateId)), [clones]);
@@ -187,8 +222,8 @@ export function CoeLibraryPane() {
                   </div>
                 </div>
                 <div className={s.actions}>
-                  <Button size="small" appearance="secondary" icon={<Eye20Regular />} onClick={() => { setPreview(t); setCloneName(t.title); }}>Preview</Button>
-                  <Button size="small" appearance="primary" icon={busyId === t.id ? <Spinner size="tiny" /> : <Copy20Regular />}
+                  <Button size="small" appearance="primary" icon={<Open20Regular />} onClick={() => openPreview(t)}>Open report</Button>
+                  <Button size="small" appearance="secondary" icon={busyId === t.id ? <Spinner size="tiny" /> : <Copy20Regular />}
                     disabled={busyId === t.id} onClick={() => useTemplate(t)}>Use this template</Button>
                 </div>
               </div>
@@ -202,55 +237,84 @@ export function CoeLibraryPane() {
           {clones.map((c) => (
             <div key={c.id} className={s.clonesRow}>
               <Copy20Regular style={{ color: tokens.colorBrandForeground1 }} />
-              <div style={{ flexGrow: 1 }}>
+              <div style={{ flexGrow: 1, minWidth: 0 }}>
                 <Body1><strong>{c.displayName}</strong></Body1>{' '}
+                {c.published && (
+                  <Badge appearance="tint" color="success" size="small" icon={<ChannelShare20Regular />}>Published to org</Badge>
+                )}
                 <Caption1 style={{ color: tokens.colorNeutralForeground3 }}>
-                  from {c.title} • {c.blobCopied ? `${c.fileCount} files in Blob` : 'metadata only'} • cloned {fmt(c.clonedAt)} by {c.clonedBy}
+                  {' '}from {c.title} • {c.blobCopied ? `${c.fileCount} files in Blob` : 'metadata only'} • cloned {fmt(c.clonedAt)} by {c.clonedBy}
+                  {c.published && c.publishedAt ? ` • published ${fmt(c.publishedAt)}` : ''}
                 </Caption1>
               </div>
-              <Button size="small" appearance="subtle" icon={<Delete20Regular />} disabled={busyId === c.id} onClick={() => removeClone(c)}>Remove</Button>
+              <div className={s.cloneActions}>
+                <Button size="small" appearance="primary" icon={<Open20Regular />} onClick={() => setOpenClone(c)}>Open</Button>
+                <Button size="small" appearance={c.published ? 'subtle' : 'secondary'}
+                  icon={busyId === c.id ? <Spinner size="tiny" /> : <Share20Regular />}
+                  disabled={busyId === c.id} onClick={() => togglePublish(c)}>
+                  {c.published ? 'Unpublish' : 'Publish to organization'}
+                </Button>
+                <Button size="small" appearance="subtle" icon={<Delete20Regular />} disabled={busyId === c.id} onClick={() => removeClone(c)}>Remove</Button>
+              </div>
             </div>
           ))}
         </Section>
       )}
 
       <Dialog open={!!preview} onOpenChange={(_, d) => { if (!d.open) setPreview(null); }}>
-        <DialogSurface>
+        <DialogSurface className={s.previewSurface}>
           {preview && (
             <DialogBody>
-              <DialogTitle>{preview.title}</DialogTitle>
+              <DialogTitle action={<Button appearance="subtle" icon={<Dismiss20Regular />} aria-label="Close" onClick={() => setPreview(null)} />}>
+                <span className={s.metaRow} style={{ alignItems: 'center' }}>
+                  {preview.title}
+                  <Badge appearance="tint" color="brand" size="small">{preview.category}</Badge>
+                </span>
+              </DialogTitle>
               <DialogContent>
-                <div className={s.dlgGrid}>
-                  <Body1 style={{ color: tokens.colorNeutralForeground2 }}>{preview.description}</Body1>
-                  {preview.sampleData && (
-                    <MessageBar intent="info"><MessageBarBody>
-                      Ships with <strong>sample data</strong>. After cloning, connect it by setting the Power Query
-                      parameters and uncommenting the live source in each table.
-                    </MessageBarBody></MessageBar>
-                  )}
-                  <div>
-                    <Caption1 style={{ fontWeight: tokens.fontWeightSemibold }}>Pages</Caption1>
-                    <ul className={s.dlgList}>{preview.pages.map((p) => <li key={p}>{p}</li>)}</ul>
+                <TabList className={s.previewTabs} selectedValue={previewTab} onTabSelect={(_, d) => setPreviewTab(d.value as 'report' | 'details')}>
+                  <Tab value="report">Report</Tab>
+                  <Tab value="details">Details</Tab>
+                </TabList>
+
+                {previewTab === 'report' ? (
+                  <div className={s.reportTabBody}>
+                    <TemplateReportTab templateId={preview.id} />
                   </div>
-                  <div>
-                    <Caption1 style={{ fontWeight: tokens.fontWeightSemibold }}>Azure data sources</Caption1>
-                    <ul className={s.dlgList}>{preview.dataSources.map((d) => <li key={d}>{d}</li>)}</ul>
+                ) : (
+                  <div className={s.dlgGrid}>
+                    <Body1 style={{ color: tokens.colorNeutralForeground2 }}>{preview.description}</Body1>
+                    {preview.sampleData && (
+                      <MessageBar intent="info"><MessageBarBody>
+                        Ships with <strong>sample data</strong>. After cloning, connect it by setting the Power Query
+                        parameters and uncommenting the live source in each table.
+                      </MessageBarBody></MessageBar>
+                    )}
+                    <div>
+                      <Caption1 style={{ fontWeight: tokens.fontWeightSemibold }}>Pages</Caption1>
+                      <ul className={s.dlgList}>{preview.pages.map((p) => <li key={p}>{p}</li>)}</ul>
+                    </div>
+                    <div>
+                      <Caption1 style={{ fontWeight: tokens.fontWeightSemibold }}>Azure data sources</Caption1>
+                      <ul className={s.dlgList}>{preview.dataSources.map((d) => <li key={d}>{d}</li>)}</ul>
+                    </div>
+                    <div>
+                      <Caption1 style={{ fontWeight: tokens.fontWeightSemibold }}>Required roles (for live refresh)</Caption1>
+                      <ul className={s.dlgList}>{preview.requiredRoles.map((r) => <li key={r}>{r}</li>)}</ul>
+                    </div>
+                    <div>
+                      <Caption1 style={{ fontWeight: tokens.fontWeightSemibold }}>Parameters</Caption1>
+                      <div className={s.metaRow}>{preview.parameters.map((p) => <Badge key={p} appearance="outline" size="small">{p}</Badge>)}</div>
+                    </div>
+                    <Caption1 style={{ color: tokens.colorNeutralForeground3 }}>
+                      PBIP path: <code>{preview.pbipPath}</code>
+                    </Caption1>
                   </div>
-                  <div>
-                    <Caption1 style={{ fontWeight: tokens.fontWeightSemibold }}>Required roles (for live refresh)</Caption1>
-                    <ul className={s.dlgList}>{preview.requiredRoles.map((r) => <li key={r}>{r}</li>)}</ul>
-                  </div>
-                  <div>
-                    <Caption1 style={{ fontWeight: tokens.fontWeightSemibold }}>Parameters</Caption1>
-                    <div className={s.metaRow}>{preview.parameters.map((p) => <Badge key={p} appearance="outline" size="small">{p}</Badge>)}</div>
-                  </div>
-                  <Field label="Name for your clone">
-                    <Input value={cloneName} onChange={(_, d) => setCloneName(d.value)} placeholder={preview.title} />
-                  </Field>
-                  <Caption1 style={{ color: tokens.colorNeutralForeground3 }}>
-                    PBIP path: <code>{preview.pbipPath}</code>
-                  </Caption1>
-                </div>
+                )}
+
+                <Field label="Name for your clone" style={{ marginTop: tokens.spacingVerticalM }}>
+                  <Input value={cloneName} onChange={(_, d) => setCloneName(d.value)} placeholder={preview.title} />
+                </Field>
               </DialogContent>
               <DialogActions>
                 <Button appearance="secondary" onClick={() => setPreview(null)}>Close</Button>
@@ -262,6 +326,24 @@ export function CoeLibraryPane() {
           )}
         </DialogSurface>
       </Dialog>
+
+      {/* Open a cloned report (read-only) in the full viewer. */}
+      <ReportViewerDialog
+        open={!!openClone}
+        onClose={() => setOpenClone(null)}
+        fetchUrl={openClone ? `/api/admin/coe-library/render?cloneId=${encodeURIComponent(openClone.id)}` : null}
+        title={openClone?.displayName}
+      />
     </>
   );
+}
+
+/** Report tab inside the template Preview dialog — renders the catalog template. */
+function TemplateReportTab({ templateId }: { templateId: string }) {
+  const s = useStyles();
+  const { data, loading, error } = useReportModel(`/api/admin/coe-library/render?templateId=${encodeURIComponent(templateId)}`);
+  if (loading) return <div className={s.centerPad}><Spinner label="Rendering report…" /></div>;
+  if (error) return <MessageBar intent="error"><MessageBarBody>{error}</MessageBarBody></MessageBar>;
+  if (!data) return <div className={s.centerPad}><Spinner label="Rendering report…" /></div>;
+  return <ReportCanvas model={data.model} sample={data.sample} />;
 }

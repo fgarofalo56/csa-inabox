@@ -32,7 +32,7 @@ import {
   NotConfiguredError,
 } from '../clients/embed-codes-client';
 import { COE_CATALOG } from './catalog';
-import { TEMPLATE_FILES } from './templates-content';
+import { TEMPLATE_FILES, type TemplateFile } from './templates-content';
 import type { CoeCatalog, CoeTemplate, CoeTemplateCloneDoc } from './types';
 
 export { isConfigured, NotConfiguredError };
@@ -45,6 +45,70 @@ export function getCatalog(): CoeCatalog {
 /** Look up a single template by id (slug). */
 export function getTemplate(templateId: string): CoeTemplate | undefined {
   return COE_CATALOG.templates.find((t) => t.id === templateId);
+}
+
+/** The bundled PBIP file bytes for a template (real PBIR + TMDL), or []. */
+export function getTemplateFiles(templateId: string): TemplateFile[] {
+  return TEMPLATE_FILES[templateId] || [];
+}
+
+/** Read a single clone document for a tenant (or undefined if not found). */
+export async function getClone(tenantId: string, cloneId: string): Promise<CoeTemplateCloneDoc | undefined> {
+  const c = await coeTemplatesContainer();
+  const { resource } = await c.item(cloneId, tenantId).read<CoeTemplateCloneDoc>();
+  return resource && resource.tenantId === tenantId ? resource : undefined;
+}
+
+/**
+ * Publish (or unpublish) a clone to the organization. Updates the clone's
+ * Cosmos doc with the publish flag + audit fields. Azure-native: this surfaces
+ * the report in the in-product consumer gallery — no Power BI / Fabric publish.
+ */
+export async function setClonePublished(
+  tenantId: string,
+  who: string,
+  cloneId: string,
+  published: boolean,
+): Promise<CoeTemplateCloneDoc> {
+  const c = await coeTemplatesContainer();
+  const { resource } = await c.item(cloneId, tenantId).read<CoeTemplateCloneDoc>();
+  if (!resource || resource.tenantId !== tenantId) throw new Error(`unknown clone: ${cloneId}`);
+  const doc: CoeTemplateCloneDoc = {
+    ...resource,
+    published,
+    audience: published ? 'organization' : undefined,
+    publishedAt: published ? new Date().toISOString() : undefined,
+    publishedBy: published ? who : undefined,
+  };
+  await c.items.upsert(doc);
+  return doc;
+}
+
+/**
+ * List every clone published to the organization across the deployment.
+ * The console serves a single Entra tenant, so a cross-partition query for
+ * `published = true` is the org gallery. Most-recently-published first.
+ */
+export async function listPublishedReports(): Promise<CoeTemplateCloneDoc[]> {
+  const c = await coeTemplatesContainer();
+  const { resources } = await c.items
+    .query<CoeTemplateCloneDoc>({
+      query: 'SELECT * FROM c WHERE c.published = true ORDER BY c.publishedAt DESC',
+    })
+    .fetchAll();
+  return resources || [];
+}
+
+/** Read a single published clone by id (cross-partition; only if published). */
+export async function getPublishedReport(cloneId: string): Promise<CoeTemplateCloneDoc | undefined> {
+  const c = await coeTemplatesContainer();
+  const { resources } = await c.items
+    .query<CoeTemplateCloneDoc>({
+      query: 'SELECT * FROM c WHERE c.id = @id AND c.published = true',
+      parameters: [{ name: '@id', value: cloneId }],
+    })
+    .fetchAll();
+  return resources?.[0];
 }
 
 /** List a tenant's previously-cloned templates (most recent first). */

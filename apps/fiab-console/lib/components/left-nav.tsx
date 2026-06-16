@@ -26,6 +26,7 @@ import {
   Send24Regular,
   Flow24Regular,
   Alert24Regular,
+  DataPie24Regular,
 } from '@fluentui/react-icons';
 import { CopilotIcon } from './icons/copilot-icon';
 
@@ -38,6 +39,7 @@ const navItems = [
   { href: '/browse', icon: Apps24Regular, label: 'Browse' },
   { href: '/onelake', icon: Library24Regular, label: 'OneLake catalog' },
   { href: '/catalog', icon: GlobeSearch24Regular, label: 'Unified catalog' },
+  { href: '/org-reports', icon: DataPie24Regular, label: 'Organization reports' },
   { href: '/thread', icon: Branch24Regular, label: 'Lineage' },
   { href: '/api-marketplace', icon: Connector24Regular, label: 'API marketplace' },
   { href: '/governance', icon: ShieldCheckmark24Regular, label: 'Governance' },
