@@ -24,9 +24,9 @@ afterEach(() => {
 });
 
 describe('MCP_CATALOG', () => {
-  it('is the curated library of exactly 25 deployable servers', () => {
-    expect(MCP_CATALOG.length).toBe(25);
-    expect(MCP_CATALOG_SIZE).toBe(25);
+  it('is the curated library of exactly 29 deployable servers', () => {
+    expect(MCP_CATALOG.length).toBe(29);
+    expect(MCP_CATALOG_SIZE).toBe(29);
   });
 
   it('has only permissive licenses (no AGPL/SSPL/commercial)', () => {
@@ -60,9 +60,11 @@ describe('MCP_CATALOG', () => {
   });
 
   it('marks external-SaaS servers that need credentials with a secret env var', () => {
-    // fetch is the only external-saas server that needs no credential (it reaches
-    // arbitrary URLs but takes no API key); everything else SaaS is secret-gated.
-    for (const e of MCP_CATALOG.filter((x) => x.egress === 'external-saas' && x.id !== 'fetch')) {
+    // fetch + duckduckgo are the only external-saas servers that need no
+    // credential (they reach URLs but take no API key); everything else SaaS is
+    // secret-gated.
+    const keyless = new Set(['fetch', 'duckduckgo']);
+    for (const e of MCP_CATALOG.filter((x) => x.egress === 'external-saas' && !keyless.has(x.id))) {
       expect(e.secretEnv && e.secretEnv.length).toBeTruthy();
     }
   });

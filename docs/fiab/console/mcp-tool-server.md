@@ -5,10 +5,12 @@ Azure Function, that exposes a **vetted, read-only** subset of Loom operations a
 MCP tools. Any MCP client — the Loom agent loop, Claude, VS Code, etc. — can
 discover and call them.
 
-It is **opt-in and Azure-native**: it has its own bicep deploy module and is not
-provisioned by the main Loom orchestrator, and every tool calls Azure REST (AI
-Search, ARM) with the Function App's managed identity — no Fabric dependency, no
-mocks.
+It is **Azure-native and default-on**: provisioned by the admin-plane
+orchestrator behind `loomBuiltinMcpEnabled` (default `true`, gated on
+`deployAppsEnabled`), and every tool calls Azure REST (AI Search, ARM, ADF) with
+the Function App's managed identity — no Fabric dependency, no mocks. The Python
+code is published separately (zip / `func azure functionapp publish`), the same
+precondition as the loom-* container images.
 
 ## Source
 
@@ -93,7 +95,46 @@ tools at orchestrate time.
 
 ## Deploy
 
-See `azure-functions/mcp-server/DEPLOYMENT.md`. Summary: create the
-`loom-mcp-api-key` Key Vault secret → `az deployment group create` the bicep →
-`func azure functionapp publish` → grant Reader / Search Index Data Reader →
-register in Loom and set `LOOM_BUILTIN_MCP_URL`.
+**Default-on (orchestrated):** `platform/fiab/bicep/modules/admin-plane/main.bicep`
+provisions the Function via `builtin-mcp.bicep` (`loomBuiltinMcpEnabled = true`),
+writes a deterministic shared key to the admin Key Vault as
+`loom-mcp-api-key` (the name the console's built-in registration hardcodes), and
+sets `LOOM_BUILTIN_MCP_URL` +
+`LOOM_BUILTIN_MCP_API_KEY_SECRET` on the console. After the infra deploy, publish
+the Python code (zip / `func azure functionapp publish`).
+
+**Standalone:** see `azure-functions/mcp-server/DEPLOYMENT.md`.
+
+### Estate-correct deploy (AAD-only storage + private Key Vault)
+
+Validated live (sub `e093f4fd…` / centralus, 2026-06, Function `func-csa-loom-mcp`):
+
+- **Identity-based runtime storage.** The Loom estate enforces AAD-only storage
+  (Azure Policy sets `allowSharedKeyAccess=false`), so a key-based
+  `AzureWebJobsStorage` connection string is rejected
+  (`KeyBasedAuthenticationNotPermitted`). The Function uses
+  `AzureWebJobsStorage__accountName` + `__blobServiceUri` / `__queueServiceUri`,
+  and its MI holds **Storage Blob Data Owner** + **Storage Queue Data
+  Contributor** on its own storage account. Both bicep modules wire this.
+- **Literal API key (private vault).** The Loom Key Vault is private-link only; a
+  Consumption Function App has no VNet integration and **cannot resolve a
+  `@Microsoft.KeyVault(...)` reference** (it returns the literal reference string,
+  so the server 401s while `apiKeyConfigured` still reads `true`). The key is set
+  as a **literal** `LOOM_MCP_API_KEY` app setting (orchestrator: deterministic
+  `guid()`; standalone: pass `apiKeyValue`). The same value lives in Key Vault so
+  the console — which *can* reach the private vault over the CAE VNet — loads it
+  for one-click registration.
+- **Code publish on AAD-only storage.** With SCM basic auth disabled +
+  identity-based storage, `config-zip` (and `func` 4.5.0 on Python 3.13) fail.
+  Publish via **run-from-package**: build a self-contained zip (Linux wheels —
+  `pip install --platform manylinux2014_x86_64 --only-binary=:all: --target
+  .python_packages/lib/site-packages`), upload it to the Function storage, and set
+  `WEBSITE_RUN_FROM_PACKAGE` to the blob URL (resolved by the Function MI).
+
+Live receipts: `GET /api/health` → `200 {ok:true, apiKeyConfigured:true,
+tools:[15]}`; `POST /api/mcp` `tools/list` → `200` JSON-RPC result listing 15
+`loom_*` tools.
+
+Post-deploy honest gates (unchanged): grant Reader on cross-RG Loom resource
+groups, Search Index Data Reader on the AI Search service, and Data Factory
+Contributor on the Loom Data Factory.
