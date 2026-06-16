@@ -204,6 +204,11 @@ export function MirrorSourceWizard(props: MirrorSourceWizardProps) {
   const srcDef = useMemo(() => MIRROR_SOURCES.find((x) => x.id === createSrc) || MIRROR_SOURCES[0], [createSrc]);
   const isBigQuery = BIGQUERY_SOURCES.has(createSrc);
   const isOracle = GATEWAY_SOURCES.has(createSrc);
+  // Cosmos DB's change-feed engine connects via the Cosmos connection (account
+  // + database) and never uses a SQL server FQDN, so the Server field is hidden
+  // and dropped from the Start/verify gate (audit ui-gap: mirroring / Cosmos
+  // start gate — gate on database only).
+  const isCosmos = createSrc === 'CosmosDb';
 
   // Selecting a source resets its connection + source-specific fields so the
   // next step starts clean. Shared by click and keyboard (Enter/Space).
@@ -294,7 +299,7 @@ export function MirrorSourceWizard(props: MirrorSourceWizardProps) {
   }, [createSrc, effServer, effDb, isBigQuery, isOracle, mirrorId, workspaceId]);
 
   const runVerify = useCallback(async () => {
-    if (!effServer || !effDb) { setVerify({ status: 'err', msg: isBigQuery ? 'Enter the GCP project and dataset first.' : isOracle ? 'Enter the host and service name first.' : 'Enter the server and database first.' }); return; }
+    if ((!effServer && !isCosmos) || !effDb) { setVerify({ status: 'err', msg: isBigQuery ? 'Enter the GCP project and dataset first.' : isOracle ? 'Enter the host and service name first.' : isCosmos ? 'Enter the database first.' : 'Enter the server and database first.' }); return; }
     setVerify({ status: 'busy' });
     try {
       const r = await fetch('/api/items/mirrored-database/verify', {
@@ -306,7 +311,7 @@ export function MirrorSourceWizard(props: MirrorSourceWizardProps) {
       else if (j.ok) setVerify({ status: 'warn', msg: j.detail });
       else setVerify({ status: 'err', msg: j.hint ? `${j.error} — ${j.hint}` : (j.error || 'verification failed') });
     } catch (e: any) { setVerify({ status: 'err', msg: e?.message || String(e) }); }
-  }, [createSrc, effServer, effDb, isBigQuery, isOracle]);
+  }, [createSrc, effServer, effDb, isBigQuery, isOracle, isCosmos]);
 
   const submit = useCallback(async () => {
     if (!workspaceId || !createName.trim()) return;
@@ -457,6 +462,15 @@ export function MirrorSourceWizard(props: MirrorSourceWizardProps) {
                       </Field>
                     </div>
                   </>
+                ) : isCosmos ? (
+                  // Cosmos DB: account + database come from the Cosmos connection;
+                  // the change-feed engine never uses a SQL server FQDN, so only
+                  // the database is collected here (no Server field).
+                  <div style={{ display: 'flex', gap: 12, marginTop: 10 }}>
+                    <Field label="Database" required hint="The Cosmos database to mirror (account is taken from the connection)." style={{ flex: 1 }}>
+                      <Input value={createDb} onChange={(_, d) => { setCreateDb(d.value); setVerify({ status: 'idle' }); }} placeholder="prod" disabled={!!pickedConn?.database} />
+                    </Field>
+                  </div>
                 ) : (
                   <div style={{ display: 'flex', gap: 12, marginTop: 10 }}>
                     <Field label="Server / host" style={{ flex: 1 }}>

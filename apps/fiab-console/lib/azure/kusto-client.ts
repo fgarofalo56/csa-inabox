@@ -332,10 +332,13 @@ export async function executeQuery(database: string, kql: string, opts?: { clust
   return visualization ? { ...shaped, visualization } : shaped;
 }
 
-/** Execute a Kusto control command (`.show`, `.create`, `.add`, `.ingest`, etc.). */
-export async function executeMgmtCommand(database: string, command: string): Promise<KustoQueryResult> {
+/** Execute a Kusto control command (`.show`, `.create`, `.add`, `.ingest`, etc.).
+ *  An optional `clusterUri` targets a *discovered* ADX cluster (RTI hub catalog)
+ *  instead of the env-configured default; validate it with
+ *  {@link normalizeClusterUri} first. */
+export async function executeMgmtCommand(database: string, command: string, opts?: { clusterUri?: string }): Promise<KustoQueryResult> {
   const started = Date.now();
-  const json = await postRest('/v1/rest/mgmt', database || DEFAULT_DB, command);
+  const json = await postRest('/v1/rest/mgmt', database || DEFAULT_DB, command, opts?.clusterUri);
   const primary = (json?.Tables || [])[0];
   if (!primary) {
     return { columns: [], columnTypes: [], rows: [], rowCount: 0, executionMs: Date.now() - started, truncated: false };
@@ -343,9 +346,10 @@ export async function executeMgmtCommand(database: string, command: string): Pro
   return shapeTable(primary, Date.now() - started);
 }
 
-/** `.show databases` against NetDefaultDB. */
-export async function listDatabases(): Promise<Array<{ name: string; prettyName?: string; persistentStorage?: string }>> {
-  const r = await executeMgmtCommand('NetDefaultDB', '.show databases');
+/** `.show databases` against NetDefaultDB. Optional `clusterUri` targets a
+ *  discovered ADX cluster (RTI hub catalog) instead of the env default. */
+export async function listDatabases(opts?: { clusterUri?: string }): Promise<Array<{ name: string; prettyName?: string; persistentStorage?: string }>> {
+  const r = await executeMgmtCommand('NetDefaultDB', '.show databases', opts);
   const nameIdx = r.columns.indexOf('DatabaseName');
   const prettyIdx = r.columns.indexOf('PrettyName');
   const storIdx = r.columns.indexOf('PersistentStorage');
@@ -433,9 +437,10 @@ export async function listDatabasesWithDetails(): Promise<KustoDatabaseSummary[]
   });
 }
 
-/** `.show tables` for a given database. */
-export async function listTables(db: string): Promise<Array<{ name: string; folder?: string; docString?: string }>> {
-  const r = await executeMgmtCommand(db, '.show tables');
+/** `.show tables` for a given database. Optional `clusterUri` targets a
+ *  discovered ADX cluster (RTI hub catalog) instead of the env default. */
+export async function listTables(db: string, opts?: { clusterUri?: string }): Promise<Array<{ name: string; folder?: string; docString?: string }>> {
+  const r = await executeMgmtCommand(db, '.show tables', opts);
   const nameIdx = r.columns.indexOf('TableName');
   const folderIdx = r.columns.indexOf('Folder');
   const docIdx = r.columns.indexOf('DocString');

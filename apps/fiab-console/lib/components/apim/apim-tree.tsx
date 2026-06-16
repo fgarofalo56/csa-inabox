@@ -494,7 +494,7 @@ export function ApimTree({
           <TreeItem itemType="branch" value="g-gateways">
             {groupHeader('Gateways', <Globe20Regular />, gateways.length, undefined)}
             <Tree>
-              {fGateways.length === 0 && <TreeItem itemType="leaf" value="gw-empty"><TreeItemLayout><Caption1>{f ? 'No matches' : 'Managed gateway only'}</Caption1></TreeItemLayout></TreeItem>}
+              {fGateways.length === 0 && <TreeItem itemType="leaf" value="gw-empty"><TreeItemLayout><Caption1 style={{ color: tokens.colorNeutralForeground3 }}>{f ? 'No matches' : 'Managed gateway only — self-hosted gateways require the Premium (or Developer self-hosted) tier; this instance exposes only the built-in managed gateway.'}</Caption1></TreeItemLayout></TreeItem>}
               {fGateways.map((g) => (
                 <TreeItem key={g.name} itemType="leaf" value={`gw-${g.name}`}>
                   <TreeItemLayout iconBefore={<Globe20Regular />}>

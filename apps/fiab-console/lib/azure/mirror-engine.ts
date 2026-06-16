@@ -1092,10 +1092,18 @@ export async function runMirrorSnapshot(
       note,
     };
   }
-  if (!src.server || !src.database) {
+  // Cosmos connects via its connection (account) + database — the change-feed
+  // engine never uses a SQL server FQDN, so the Start gate requires database
+  // only (audit ui-gap: mirroring / Cosmos start gate — gate on database only).
+  if ((!src.server && !isCosmos) || !src.database) {
     return {
       ok: false, status: 'Gated', backend: 'azure-native-cdc', tables: [],
-      gate: { missing: 'source server + database', message: 'This mirror has no source server/database set. Edit the mirror to choose its source and connection, then Start.' },
+      gate: {
+        missing: isCosmos ? 'source database' : 'source server + database',
+        message: isCosmos
+          ? 'This Cosmos mirror has no source database set. Edit the mirror to choose its database and connection, then Start.'
+          : 'This mirror has no source server/database set. Edit the mirror to choose its source and connection, then Start.',
+      },
       note,
     };
   }

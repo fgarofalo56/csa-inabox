@@ -22,7 +22,7 @@ import { useRouter } from 'next/navigation';
 import {
   Subtitle2, Caption1, Badge, Button, Spinner, Select, Tab, TabList,
   Table, TableHeader, TableRow, TableHeaderCell, TableBody, TableCell,
-  MessageBar, MessageBarBody, MessageBarTitle,
+  MessageBar, MessageBarBody, MessageBarTitle, MessageBarActions,
   Dialog, DialogSurface, DialogBody, DialogTitle, DialogContent, DialogActions,
   Tree, TreeItem, TreeItemLayout,
   makeStyles, tokens,
@@ -153,21 +153,22 @@ export function MirroredDatabaseEditor({ item, id }: Props) {
   useEffect(() => { if (workspaceId && mirrorId) loadDetail(workspaceId, mirrorId); }, [workspaceId, mirrorId, loadDetail]);
 
   // Resolve the paired Serverless SQL analytics endpoint for the selected mirror.
-  useEffect(() => {
+  const reloadSqlPaired = useCallback(async () => {
     if (!workspaceId || !mirrorId) { setSqlPaired(null); return; }
-    let cancelled = false;
     setSqlPairedLoading(true);
-    fetch(`/api/items/mirrored-database/${encodeURIComponent(mirrorId)}/sql-endpoint?workspaceId=${encodeURIComponent(workspaceId)}`)
-      .then((r) => r.json())
-      .then((j) => {
-        if (cancelled) return;
-        if (j.ok && j.provisioned && j.sqlItemId) setSqlPaired({ itemId: j.sqlItemId, endpoint: j.endpoint, database: j.database });
-        else setSqlPaired(null);
-      })
-      .catch(() => { if (!cancelled) setSqlPaired(null); })
-      .finally(() => { if (!cancelled) setSqlPairedLoading(false); });
-    return () => { cancelled = true; };
+    try {
+      const r = await fetch(`/api/items/mirrored-database/${encodeURIComponent(mirrorId)}/sql-endpoint?workspaceId=${encodeURIComponent(workspaceId)}`);
+      const j = await r.json();
+      if (j.ok && j.provisioned && j.sqlItemId) setSqlPaired({ itemId: j.sqlItemId, endpoint: j.endpoint, database: j.database });
+      else setSqlPaired(null);
+    } catch {
+      setSqlPaired(null);
+    } finally {
+      setSqlPairedLoading(false);
+    }
   }, [workspaceId, mirrorId]);
+
+  useEffect(() => { void reloadSqlPaired(); }, [reloadSqlPaired]);
 
   const act = useCallback(async (action: 'start' | 'stop') => {
     if (!workspaceId || !mirrorId) return;
@@ -183,9 +184,12 @@ export function MirroredDatabaseEditor({ item, id }: Props) {
         const receipt = j.cdcName ? ` ADF CDC: ${j.cdcName}.` : '';
         setActionMsg(`${action} accepted. Status: ${j.status?.mirroringStatus || 'unknown'}.${receipt}${j.gate ? ` ${j.gate.message}` : ''}`);
         loadDetail(workspaceId, mirrorId);
+        // Start provisions the Azure-native ADF-CDC pairing → re-check so the
+        // SQL analytics endpoint link/badge appears without a manual refresh.
+        if (action === 'start') void reloadSqlPaired();
       }
     } finally { setActing(false); }
-  }, [workspaceId, mirrorId, loadDetail]);
+  }, [workspaceId, mirrorId, loadDetail, reloadSqlPaired]);
 
   // Open the wizard to CREATE a new mirror.
   const openNew = useCallback(() => {
@@ -476,9 +480,19 @@ export function MirroredDatabaseEditor({ item, id }: Props) {
               <Badge appearance="tint" color="success" title="Synapse Serverless SQL endpoint over the mirror Bronze">{sqlPaired.endpoint}</Badge>
             )}
             {mirrorId && !sqlPaired && !sqlPairedLoading && (
-              <Caption1 style={{ color: tokens.colorNeutralForeground3 }}>
-                No SQL analytics endpoint paired yet — Install the mirror (Azure-native ADF-CDC) to auto-provision it.
-              </Caption1>
+              <MessageBar intent="info" style={{ flexBasis: '100%' }}>
+                <MessageBarBody>
+                  <MessageBarTitle>No SQL analytics endpoint paired yet</MessageBarTitle>
+                  Install the mirror (Azure-native ADF-CDC) to auto-provision the paired Synapse Serverless SQL
+                  analytics endpoint over the mirror&apos;s Bronze data.
+                </MessageBarBody>
+                <MessageBarActions>
+                  <Button appearance="primary" size="small" icon={<Play20Regular />}
+                    disabled={acting} onClick={() => act('start')}>
+                    {acting ? 'Installing…' : 'Install & start mirror'}
+                  </Button>
+                </MessageBarActions>
+              </MessageBar>
             )}
             <MirrorSourceWizard
               open={wizardOpen}

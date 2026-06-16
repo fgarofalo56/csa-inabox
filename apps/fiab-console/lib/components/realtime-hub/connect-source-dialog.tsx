@@ -33,6 +33,20 @@ import {
 /** Sentinel option value for the inline "+ Create new…" affordance. */
 const CREATE_SENTINEL = '__loom_create_new__';
 
+/** Bare vault host (kv-name.vault.azure.net) from a full vault URI, for display. */
+function certVaultHost(vaultUri: string): string {
+  try { return new URL(vaultUri).host; } catch { return vaultUri; }
+}
+
+/** Azure portal deep-link to the vault's Certificates blade. Importing a cert
+ *  requires Key Vault "Certificate Officer", so the honest parity affordance is
+ *  to send the operator to the real vault rather than fake an in-app upload. */
+function certVaultPortalUrl(vaultUri: string): string {
+  const name = certVaultHost(vaultUri).split('.')[0] || certVaultHost(vaultUri);
+  // Portal search by vault name lands on the Key Vault → Certificates blade.
+  return `https://portal.azure.com/#blade/HubsExtension/BrowseResource/resourceType/Microsoft.KeyVault%2Fvaults?filter=${encodeURIComponent(name)}`;
+}
+
 const useStyles = makeStyles({
   surface: { maxWidth: '900px', width: '90vw' },
   layout: { display: 'grid', gridTemplateColumns: '190px 1fr', gap: '16px', minHeight: '440px' },
@@ -84,6 +98,15 @@ const useStyles = makeStyles({
   sectionTitle: { fontWeight: tokens.fontWeightSemibold, color: tokens.colorNeutralForeground1 },
   sectionIcon: { color: tokens.colorBrandForeground1, flexShrink: 0 },
   certRow: { display: 'flex', alignItems: 'flex-end', gap: tokens.spacingHorizontalS },
+  certEmpty: {
+    display: 'flex', alignItems: 'flex-start', gap: tokens.spacingHorizontalS,
+    marginTop: tokens.spacingVerticalS, padding: tokens.spacingVerticalS,
+    border: `1px dashed ${tokens.colorNeutralStroke2}`,
+    borderRadius: tokens.borderRadiusMedium,
+    backgroundColor: tokens.colorNeutralBackground2,
+    color: tokens.colorNeutralForeground2,
+    fontSize: tokens.fontSizeBase200, lineHeight: tokens.lineHeightBase200,
+  },
   certGrow: { flex: 1, minWidth: 0 },
   certOption: { display: 'flex', alignItems: 'center', gap: tokens.spacingHorizontalS, minWidth: 0, width: '100%' },
   certOptionIcon: { flexShrink: 0, color: tokens.colorNeutralForeground3 },
@@ -635,6 +658,24 @@ export function ConnectSourceDialog({
                               aria-label="Refresh certificates" onClick={loadCerts}
                               disabled={certsLoading || !!certGate} />
                           </div>
+                          {/* Vault configured but empty → honest "add a certificate"
+                              affordance pointing at the real vault (audit row:
+                              real-time-hub / keyvault-certificates). Importing a
+                              cert needs Certificate Officer in Key Vault, so the
+                              parity action is a deep-link to the vault's
+                              Certificates blade rather than a faked in-app upload. */}
+                          {!certGate && !certsLoading && certVaultUri && usableCerts.length === 0 && (
+                            <div className={styles.certEmpty}>
+                              <Certificate20Regular className={styles.certOptionIcon} aria-hidden />
+                              <span className={styles.certGrow}>
+                                No certificates in the eventstream mTLS vault yet.{' '}
+                                <FluentLink href={certVaultPortalUrl(certVaultUri)} target="_blank" rel="noreferrer">
+                                  Add a certificate in Key Vault
+                                </FluentLink>{' '}
+                                ({certVaultHost(certVaultUri)}), then Refresh.
+                              </span>
+                            </div>
+                          )}
                         </Field>,
                       );
                     } else if (f.kind === 'resource-select') {

@@ -267,7 +267,7 @@ export function ApimApiEditor({ item, id }: { item: FabricItemType; id: string }
   const [testHeaders, setTestHeaders] = useState('');
   const [testBody, setTestBody] = useState('');
   const [testBusy, setTestBusy] = useState(false);
-  const [testResp, setTestResp] = useState<{ status: number; statusText: string; headers: Record<string, string>; body: string } | null>(null);
+  const [testResp, setTestResp] = useState<{ status: number; statusText: string; headers: Record<string, string>; body: string; keySource?: string } | null>(null);
   const [testErr, setTestErr] = useState<string | null>(null);
 
   // Revisions tab.
@@ -522,7 +522,7 @@ export function ApimApiEditor({ item, id }: { item: FabricItemType; id: string }
       });
       const j = await r.json();
       if (!j.ok) { setTestErr(j.error || `HTTP ${r.status}`); return; }
-      setTestResp({ status: j.status, statusText: j.statusText, headers: j.headers, body: j.body });
+      setTestResp({ status: j.status, statusText: j.statusText, headers: j.headers, body: j.body, keySource: j.keySource });
     } catch (e: any) { setTestErr(e?.message || String(e)); }
     finally { setTestBusy(false); }
   }, [id, testMethod, testTemplate, testHeaders, testBody]);
@@ -768,7 +768,16 @@ export function ApimApiEditor({ item, id }: { item: FabricItemType; id: string }
                 <Button size="small" onClick={openSpecEditor} disabled={isNew}>Edit OpenAPI</Button>
               </div>
               {spec.loading && <Spinner size="tiny" label="Exporting from APIM…" labelPosition="after" />}
-              {!spec.loading && spec.error && <Caption1>Spec unavailable: {spec.error}</Caption1>}
+              {!spec.loading && spec.error && (
+                <MessageBar intent="info" style={{ marginTop: 6 }}>
+                  <MessageBarBody>
+                    <MessageBarTitle>No exportable spec</MessageBarTitle>
+                    {spec.error} APIs imported by reference (OpenAPI / WSDL / GraphQL link) have no inline
+                    OpenAPI document to export — Copy is disabled. Use &quot;Edit OpenAPI&quot; to attach a spec,
+                    or open the source link directly.
+                  </MessageBarBody>
+                </MessageBar>
+              )}
               {!spec.loading && !spec.error && (
                 <div className={s.specViewer} role="region" aria-label="OpenAPI spec (read-only)">
                   {spec.data?.value || (isNew ? 'Save the API first, then import a spec.' : '(no spec attached to this API)')}
@@ -861,6 +870,12 @@ export function ApimApiEditor({ item, id }: { item: FabricItemType; id: string }
                       {testResp.status} {testResp.statusText}
                     </Badge>
                     <Caption1>{testResp.headers['content-type'] || ''}</Caption1>
+                    {testResp.keySource && testResp.keySource !== 'none' && (
+                      <Badge appearance="tint" size="small"
+                        title="Which Ocp-Apim-Subscription-Key the gateway call used (manual key → selected subscription → all-access master fallback)">
+                        key: {testResp.keySource === 'master' ? 'master (all-access)' : testResp.keySource}
+                      </Badge>
+                    )}
                   </div>
                   <Caption1 style={{ color: tokens.colorNeutralForeground3 }}>Response headers</Caption1>
                   <div className={s.specViewer} style={{ maxHeight: 140 }}>
