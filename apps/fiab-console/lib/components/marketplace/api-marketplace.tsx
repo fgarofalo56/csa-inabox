@@ -122,6 +122,7 @@ export function ApiMarketplace() {
 
   // catalog
   const [loading, setLoading] = useState(true);
+  const [retrying, setRetrying] = useState(false);
   const [gate, setGate] = useState<{ msg: string; hint?: string; bicep?: string } | null>(null);
   const [err, setErr] = useState<string | null>(null);
   const [products, setProducts] = useState<ProductSummary[]>([]);
@@ -182,19 +183,38 @@ export function ApiMarketplace() {
   // ---------------- loaders ----------------
 
   const loadCatalog = useCallback(async () => {
-    setLoading(true); setErr(null); setGate(null);
+    setLoading(true); setErr(null); setGate(null); setRetrying(false);
+    // APIM gateways cold-start: the first request after idle can transiently 502
+    // /503/504. Auto-retry with backoff a couple of times before surfacing an
+    // error, so a cold gateway isn't reported as a failure.
+    const maxAttempts = 3;
     try {
-      const r = await fetch('/api/marketplace/catalog', { cache: 'no-store' });
-      const ct = r.headers.get('content-type') || '';
-      if (!ct.includes('application/json')) { setErr(`Unexpected response (${r.status})`); return; }
-      const j = await r.json();
-      if (r.status === 503 && j?.gated) { setGate({ msg: j.error, hint: j.hint, bicep: j.bicepModule }); return; }
-      if (!j?.ok) { setErr(j?.error || `HTTP ${r.status}`); return; }
-      setProducts(j.products || []);
-      setApis(j.apis || []);
-      setService(j.service || null);
-    } catch (e: any) { setErr(e?.message || String(e)); }
-    finally { setLoading(false); }
+      for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+        try {
+          const r = await fetch('/api/marketplace/catalog', { cache: 'no-store' });
+          const ct = r.headers.get('content-type') || '';
+          const j = ct.includes('application/json') ? await r.json() : null;
+          if (r.status === 503 && j?.gated) { setGate({ msg: j.error, hint: j.hint, bicep: j.bicepModule }); return; }
+          // Transient gateway cold-start (NOT an honest gate) → retry.
+          if ((r.status === 502 || r.status === 503 || r.status === 504) && attempt < maxAttempts) {
+            setRetrying(true);
+            await new Promise((res) => setTimeout(res, 1200 * attempt));
+            continue;
+          }
+          if (!j) { setErr(`Unexpected response (${r.status})`); return; }
+          if (!j?.ok) { setErr(j?.error || `HTTP ${r.status}`); return; }
+          setProducts(j.products || []);
+          setApis(j.apis || []);
+          setService(j.service || null);
+          return;
+        } catch (e: any) {
+          if (attempt < maxAttempts) { setRetrying(true); await new Promise((res) => setTimeout(res, 1200 * attempt)); continue; }
+          setErr(e?.message || String(e));
+        }
+      }
+    } finally {
+      setLoading(false); setRetrying(false);
+    }
   }, []);
 
   const loadSubscriptions = useCallback(async () => {
@@ -617,7 +637,10 @@ export function ApiMarketplace() {
         <>
           {loading && (
             <Section title="API catalog">
-              <Spinner label="Loading catalog from API Management…" labelPosition="after" />
+              <Spinner
+                label={retrying ? 'Gateway is warming up — retrying…' : 'Loading catalog from API Management…'}
+                labelPosition="after"
+              />
             </Section>
           )}
 

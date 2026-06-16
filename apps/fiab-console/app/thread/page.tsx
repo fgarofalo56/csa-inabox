@@ -91,6 +91,15 @@ const useStyles = makeStyles({
   arrow: { color: tokens.colorNeutralForeground3, verticalAlign: 'middle' },
   toolbar: { display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: tokens.spacingHorizontalM, flexWrap: 'wrap' },
   tileFooter: { display: 'inline-flex', alignItems: 'center', gap: tokens.spacingHorizontalXS, flexWrap: 'wrap' },
+  emptyCanvas: {
+    display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center',
+    gap: tokens.spacingVerticalM, textAlign: 'center', padding: tokens.spacingVerticalXXXL,
+    minHeight: '320px',
+    border: `1px dashed ${tokens.colorNeutralStroke2}`, borderRadius: tokens.borderRadiusXLarge,
+    backgroundColor: tokens.colorNeutralBackground2,
+  },
+  emptyGlyph: { color: tokens.colorBrandForeground1, opacity: 0.85, fontSize: '44px', width: '44px', height: '44px' },
+  emptyActions: { display: 'flex', gap: tokens.spacingHorizontalS, flexWrap: 'wrap', justifyContent: 'center' },
 });
 
 function typeColor(t: string): 'brand' | 'success' | 'warning' | 'informative' | 'subtle' {
@@ -306,11 +315,23 @@ export default function ThreadLineagePage() {
         hasEdges ? (
           <LineageCanvas ref={canvasRef} nodes={graph.nodes} edges={graph.edges} />
         ) : (
-          <MessageBar intent="info">
-            <MessageBarBody>
-              No Weave edges yet. Open any data item’s editor and choose “Weave” to wire it into another Loom service.
-            </MessageBarBody>
-          </MessageBar>
+          <div className={styles.emptyCanvas}>
+            <Branch24Regular className={styles.emptyGlyph} />
+            <Title2>No lineage yet</Title2>
+            <Body1 className={styles.intro}>
+              Your Thread graph is empty. Lineage edges appear here automatically when you use
+              {' '}<strong>Weave</strong> on an item&apos;s editor — analyze a dataset in a Notebook, add it as a
+              Data Agent source, build a Power BI model, or publish it as an API.
+            </Body1>
+            <div className={styles.emptyActions}>
+              <Button appearance="primary" icon={<Open16Regular />} onClick={() => router.push('/browse')}>
+                Browse items to Weave
+              </Button>
+              <Button appearance="secondary" onClick={() => router.push('/workload-hub')}>
+                Create a new item
+              </Button>
+            </div>
+          </div>
         )
       ) : (
         <LoomDataTable<ThreadEdge>

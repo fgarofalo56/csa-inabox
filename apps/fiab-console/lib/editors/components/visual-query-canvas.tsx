@@ -110,6 +110,8 @@ interface RunResult {
   error?: string;
   code?: string;
   state?: string;
+  /** B3 SQL-login honest gate (code === 'sql_login_required'). */
+  gate?: { reason?: string; remediation?: string; sql?: string };
 }
 
 /** One result row wrapped with a stable id for the sortable/filterable DataGrid. */
@@ -675,7 +677,25 @@ function CanvasInner(props: VisualQueryCanvasProps) {
         </div>
       )}
 
-      {!running && result && !result.ok && (
+      {/* B3 honest gate: the Console UAMI has no SQL login on the pool/warehouse.
+          Render the actionable remediation (CREATE USER … FROM EXTERNAL PROVIDER)
+          instead of leaking the raw ELOGIN driver string. */}
+      {!running && result && !result.ok && result.code === 'sql_login_required' && (
+        <MessageBar intent="warning">
+          <MessageBarBody>
+            <MessageBarTitle>Grant the Console identity a SQL login</MessageBarTitle>
+            {result.gate?.reason || result.error || 'The Console managed identity is not a SQL login on this pool/warehouse.'}
+            {result.gate?.remediation && <div style={{ marginTop: 6 }}>{result.gate.remediation}</div>}
+            {result.gate?.sql && (
+              <pre style={{ marginTop: 8, padding: 8, borderRadius: 6, overflowX: 'auto', fontSize: 12, fontFamily: tokens.fontFamilyMonospace, whiteSpace: 'pre' }}>
+                {result.gate.sql}
+              </pre>
+            )}
+          </MessageBarBody>
+        </MessageBar>
+      )}
+
+      {!running && result && !result.ok && result.code !== 'sql_login_required' && (
         <MessageBar intent="error">
           <MessageBarBody>
             <MessageBarTitle>Query failed</MessageBarTitle>

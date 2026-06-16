@@ -88,6 +88,7 @@ const useStyles = makeStyles({
   meter: { display: 'flex', gap: tokens.spacingHorizontalL, flexWrap: 'wrap' },
   meterCard: { flex: '1 1 240px', minWidth: 240, padding: tokens.spacingVerticalM, borderRadius: tokens.borderRadiusLarge, border: `1px solid ${tokens.colorNeutralStroke2}`, backgroundColor: tokens.colorNeutralBackground1 },
   meterList: { margin: `${tokens.spacingVerticalXS} 0 0`, paddingLeft: '18px', display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalXXS },
+  topicRow: { display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: tokens.spacingHorizontalS },
   mono: { fontFamily: tokens.fontFamilyMonospace, fontSize: '12px' },
   chips: { display: 'flex', gap: tokens.spacingHorizontalXS, flexWrap: 'wrap' },
   dialogCol: { display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalM, minWidth: 480, maxWidth: '100%' },
@@ -249,7 +250,12 @@ export function BusinessEventsView() {
             <Subtitle2>Event Grid topics</Subtitle2>
             {egTopics.length === 0 ? <Caption1>No custom topics.</Caption1> : (
               <ul className={s.meterList}>
-                {egTopics.map((t) => <li key={t.name}><span className={s.mono}>{t.name}</span> <Caption1>· {t.inputSchema || 'CloudEvents'}</Caption1></li>)}
+                {egTopics.map((t) => (
+                  <li key={t.name} className={s.topicRow}>
+                    <span><span className={s.mono}>{t.name}</span> <Caption1>· {t.inputSchema || 'CloudEvents'}{t.provisioningState && t.provisioningState !== 'Succeeded' ? ` · ${t.provisioningState}` : ''}</Caption1></span>
+                    <DeleteTopicButton name={t.name} onDeleted={load} />
+                  </li>
+                ))}
               </ul>
             )}
             {channels?.metering && (
@@ -429,6 +435,11 @@ function PublishDialog({ type, onPublished }: { type: EventType; onPublished: ()
   const [result, setResult] = useState<string | null>(null);
   const [err, setErr] = useState<string | null>(null);
   const [errors, setErrors] = useState<string[]>([]);
+  // Per-channel outcome so a successful Event Hubs send is never hidden behind
+  // an Event Grid RBAC failure (B5 follow-up — honest per-channel status).
+  const [channelStatus, setChannelStatus] = useState<
+    { channel: Channel; ok: boolean; detail: string }[]
+  >([]);
 
   const coerce = useCallback((f: EventField, raw: string): unknown => {
     if (raw === '' && !f.required) return undefined;
@@ -441,7 +452,7 @@ function PublishDialog({ type, onPublished }: { type: EventType; onPublished: ()
   }, []);
 
   const publish = async () => {
-    setPublishing(true); setErr(null); setErrors([]); setResult(null);
+    setPublishing(true); setErr(null); setErrors([]); setResult(null); setChannelStatus([]);
     const data: Record<string, unknown> = {};
     for (const f of type.fields) {
       const v = coerce(f, values[f.name] ?? '');
@@ -454,21 +465,45 @@ function PublishDialog({ type, onPublished }: { type: EventType; onPublished: ()
       });
       const j = await res.json().catch(() => ({}));
       if (j?.code === 'schema_validation_failed') { setErrors(j.errors || []); return; }
-      if (!res.ok || !j?.ok) {
-        const ce = j?.channelErrors ? Object.entries(j.channelErrors).map(([k, v]) => `${k}: ${v}`).join('; ') : '';
-        setErr(j?.error || ce || `Publish failed (${res.status})`); return;
+
+      // Build a per-channel status table from results + channelErrors so a
+      // successful Event Hubs send is reported even when Event Grid fails (or
+      // vice-versa). Only fall back to a single error bar when neither side
+      // succeeded and there is a top-level error (e.g. unauth / bad request).
+      const status: { channel: Channel; ok: boolean; detail: string }[] = [];
+      if (type.channels.includes('eventgrid')) {
+        if (j.results?.eventgrid) {
+          status.push({ channel: 'eventgrid', ok: true, detail: `published ${j.results.eventgrid.published}` });
+        } else if (j.channelErrors?.eventgrid) {
+          status.push({ channel: 'eventgrid', ok: false, detail: String(j.channelErrors.eventgrid) });
+        }
       }
-      const parts: string[] = [];
-      if (j.results?.eventgrid) parts.push(`Event Grid (${j.results.eventgrid.published})`);
-      if (j.results?.eventhub) parts.push(`Event Hubs (${j.results.eventhub.sent})`);
-      setResult(`Published to ${parts.join(' + ') || 'no channel'}.`);
-      onPublished();
+      if (type.channels.includes('eventhub')) {
+        if (j.results?.eventhub) {
+          status.push({ channel: 'eventhub', ok: true, detail: `sent ${j.results.eventhub.sent}` });
+        } else if (j.channelErrors?.eventhub) {
+          status.push({ channel: 'eventhub', ok: false, detail: String(j.channelErrors.eventhub) });
+        }
+      }
+      setChannelStatus(status);
+
+      const anyOk = status.some((c) => c.ok) || res.ok;
+      if (status.length === 0 && (!res.ok || !j?.ok)) {
+        setErr(j?.error || `Publish failed (${res.status})`); return;
+      }
+      if (anyOk) {
+        const okParts = status.filter((c) => c.ok).map((c) => (c.channel === 'eventgrid' ? 'Event Grid' : 'Event Hubs'));
+        setResult(`Published to ${okParts.join(' + ') || 'no channel'}.`);
+        onPublished();
+      } else if (status.length > 0) {
+        setErr('Publish failed on all selected channels — see per-channel status below.');
+      }
     } catch (e: any) { setErr(e?.message || String(e)); }
     finally { setPublishing(false); }
   };
 
   return (
-    <Dialog open={open} onOpenChange={(_, d) => { setOpen(d.open); if (!d.open) { setResult(null); setErr(null); setErrors([]); } }}>
+    <Dialog open={open} onOpenChange={(_, d) => { setOpen(d.open); if (!d.open) { setResult(null); setErr(null); setErrors([]); setChannelStatus([]); } }}>
       <DialogTrigger disableButtonEnhancement>
         <Button appearance="primary" size="small" icon={<Send20Regular />} style={{ marginTop: 8 }}>Publish event</Button>
       </DialogTrigger>
@@ -487,6 +522,18 @@ function PublishDialog({ type, onPublished }: { type: EventType; onPublished: ()
                 </MessageBar>
               )}
               {result && <MessageBar intent="success"><MessageBarBody>{result}</MessageBarBody></MessageBar>}
+              {channelStatus.length > 0 && (
+                <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+                  {channelStatus.map((c) => (
+                    <MessageBar key={c.channel} intent={c.ok ? 'success' : 'error'}>
+                      <MessageBarBody>
+                        <MessageBarTitle>{c.channel === 'eventgrid' ? 'Event Grid' : 'Event Hubs'}</MessageBarTitle>
+                        {c.detail}
+                      </MessageBarBody>
+                    </MessageBar>
+                  ))}
+                </div>
+              )}
               <Field label="Subject" required hint="The resource this event is about, e.g. orders/12345">
                 <Input value={subject} onChange={(_, d) => setSubject(d.value)} />
               </Field>
@@ -520,6 +567,34 @@ function PublishDialog({ type, onPublished }: { type: EventType; onPublished: ()
         </DialogBody>
       </DialogSurface>
     </Dialog>
+  );
+}
+
+/* ───────────────────────── Delete Event Grid topic ────────────────────── */
+
+function DeleteTopicButton({ name, onDeleted }: { name: string; onDeleted: () => void }) {
+  const [busy, setBusy] = useState(false);
+  const remove = async () => {
+    if (!confirm(`Delete Event Grid custom topic "${name}"? Active subscribers will stop receiving events.`)) return;
+    setBusy(true);
+    try {
+      const res = await fetch(`/api/business-events/topics?name=${encodeURIComponent(name)}`, { method: 'DELETE' });
+      const j = await res.json().catch(() => ({}));
+      if (!res.ok || !j?.ok) alert(j?.error || `Delete failed (${res.status})`);
+      onDeleted();
+    } finally {
+      setBusy(false);
+    }
+  };
+  return (
+    <Tooltip content="Delete custom topic" relationship="label">
+      <Button
+        icon={busy ? <Spinner size="tiny" /> : <Delete20Regular />}
+        appearance="subtle" size="small" disabled={busy}
+        aria-label={`Delete topic ${name}`}
+        onClick={remove}
+      />
+    </Tooltip>
   );
 }
 

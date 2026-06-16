@@ -33,8 +33,32 @@ const TYPES: { value: string; label: string }[] = [
   { value: 'postgres', label: 'PostgreSQL' },
   { value: 'storage-adls', label: 'ADLS Gen2 / Storage' },
   { value: 'cosmos', label: 'Azure Cosmos DB' },
+  { value: 'event-hub', label: 'Event Hubs' },
+  { value: 'service-bus', label: 'Service Bus' },
+  { value: 'key-vault', label: 'Key Vault' },
   { value: 'generic-sql', label: 'Generic SQL Server' },
 ];
+
+/** Types whose connection target is an account/namespace/vault host, not a SQL server + database. */
+const HOSTLESS_DB_TYPES = new Set(['storage-adls', 'event-hub', 'service-bus', 'key-vault']);
+
+function hostLabel(type: string): string {
+  switch (type) {
+    case 'storage-adls': return 'Account / host';
+    case 'event-hub': case 'service-bus': return 'Namespace / host';
+    case 'key-vault': return 'Vault / host';
+    default: return 'Server / host';
+  }
+}
+function hostPlaceholder(type: string): string {
+  switch (type) {
+    case 'storage-adls': return 'myaccount';
+    case 'event-hub': return 'myns.servicebus.windows.net';
+    case 'service-bus': return 'mybus.servicebus.windows.net';
+    case 'key-vault': return 'myvault.vault.azure.net';
+    default: return 'myserver.database.windows.net';
+  }
+}
 
 const METHODS: { value: string; label: string; hint: string }[] = [
   { value: 'entra-mi', label: 'Entra (managed identity)', hint: 'The Console identity connects — no secret. The source must allow this Entra principal.' },
@@ -127,10 +151,10 @@ export function ConnectionBuilder({
 
               {authMethod !== 'connection-string' && (
                 <>
-                  <Field label={type === 'storage-adls' ? 'Account / host' : 'Server / host'}>
-                    <Input value={host} placeholder={type === 'storage-adls' ? 'myaccount' : 'myserver.database.windows.net'} onChange={(_, d) => setHost(d.value)} />
+                  <Field label={hostLabel(type)}>
+                    <Input value={host} placeholder={hostPlaceholder(type)} onChange={(_, d) => setHost(d.value)} />
                   </Field>
-                  {type !== 'storage-adls' && (
+                  {!HOSTLESS_DB_TYPES.has(type) && (
                     <Field label="Database">
                       <Input value={database} placeholder="mydb" onChange={(_, d) => setDatabase(d.value)} />
                     </Field>

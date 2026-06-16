@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import { getSession } from '@/lib/auth/session';
 import { itemsContainer, workspacesContainer } from '@/lib/azure/cosmos-client';
 import { upsertLoomDoc, docForItem } from '@/lib/azure/loom-search';
+import { findItemType } from '@/lib/catalog/fabric-item-types';
 import type { Workspace, WorkspaceItem } from '@/lib/types/workspace';
 
 export const runtime = 'nodejs';
@@ -52,6 +53,10 @@ export async function POST(req: NextRequest, props: { params: Promise<{ id: stri
   const { itemType, displayName, description, folderId, customAttributes } = body || {};
   if (!itemType || typeof itemType !== 'string') return err('itemType is required', 400, 'missing_itemType');
   if (!displayName || typeof displayName !== 'string') return err('displayName is required', 400, 'missing_displayName');
+  // Reject junk slugs: itemType must be a real Fabric item type from the registry.
+  if (!findItemType(itemType)) {
+    return err(`Unknown itemType "${itemType}". Must be a registered Fabric item-type slug.`, 400, 'invalid_itemType');
+  }
 
   try {
     const ws = await loadWorkspace(params.id, session.claims.oid);

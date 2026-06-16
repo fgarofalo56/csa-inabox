@@ -33,7 +33,7 @@ import {
 } from '@fluentui/react-components';
 import {
   Play20Regular, Search20Regular, ArrowClockwise20Regular,
-  DatabaseStack20Regular,
+  Database20Regular,
 } from '@fluentui/react-icons';
 import { ItemEditorChrome } from './item-editor-chrome';
 import type { FabricItemType } from '@/lib/catalog/fabric-item-types';
@@ -183,6 +183,28 @@ export function TapestryEditor({ item, id }: { item: FabricItemType; id: string 
     return runTimeline();
   }, [tab, runLink, runGeo, runTimeline]);
 
+  // One-click: materialize the sample investigation graph (Node_*/Edge_* tables)
+  // so the empty panes have real data to query, then re-run the active pane.
+  const [seeding, setSeeding] = useState(false);
+  const [seedMsg, setSeedMsg] = useState<string | null>(null);
+  const loadSampleGraph = useCallback(async () => {
+    setSeeding(true); setSeedMsg(null);
+    try {
+      const r = await fetch('/api/admin/load-sample-data?kind=investigation', { method: 'POST' });
+      const j = await r.json().catch(() => ({}));
+      if (!r.ok || j?.ok === false) {
+        setSeedMsg(j?.error || j?.gate?.message || `Could not load sample graph (HTTP ${r.status}).`);
+        return;
+      }
+      setSeedMsg('Sample investigation graph loaded. Running analysis…');
+      await Promise.all([runLink(), runGeo(), runTimeline()]);
+    } catch (e: any) {
+      setSeedMsg(e?.message || String(e));
+    } finally {
+      setSeeding(false);
+    }
+  }, [runLink, runGeo, runTimeline]);
+
   const linkGraph = useMemo(() => {
     if (!linkResult || !linkResult.ok) return null;
     // The route returns Kusto { columns, rows } — reshape rows into objects
@@ -234,7 +256,7 @@ export function TapestryEditor({ item, id }: { item: FabricItemType; id: string 
       leftPanel={
         <div className={s.treePad}>
           <div className={s.treeHeader}>
-            <DatabaseStack20Regular />
+            <Database20Regular />
             <Subtitle2>Investigation</Subtitle2>
           </div>
           <Caption1>
@@ -248,8 +270,17 @@ export function TapestryEditor({ item, id }: { item: FabricItemType; id: string 
           <Field label="Seed / focus node id (shared)" hint="Set by clicking a node, or type one. Used by shortest-path / neighbors and carried across panes.">
             <Input value={seedId} onChange={(_: unknown, d: any) => setSeedId(d.value)} placeholder="p-alice" />
           </Field>
+          <Divider />
+          <Button
+            appearance="primary" icon={<Database20Regular />}
+            onClick={loadSampleGraph} disabled={seeding}
+          >
+            {seeding ? 'Loading sample…' : 'Load sample investigation graph'}
+          </Button>
+          {seedMsg && <Caption1 className={s.hint}>{seedMsg}</Caption1>}
           <Caption1 className={s.hint}>
-            Tip: run admin <strong>Load sample data</strong> (kind=investigation) once to seed Node_*/Edge_* tables.
+            Seeds the Node_*/Edge_* ADX tables (people, orgs, locations, events) so the link, geo, and
+            timeline panes have a real graph to query. Idempotent — safe to re-run.
           </Caption1>
         </div>
       }

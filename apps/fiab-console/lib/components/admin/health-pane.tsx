@@ -97,16 +97,17 @@ export function HealthPane() {
 
   useEffect(() => { load(); }, [load]);
 
-  const heal = useCallback(async (fixId: string) => {
+  const heal = useCallback(async (fixId: string, dryRun = false) => {
     setHealing(fixId); setHealMsg(null);
     try {
       const r = await fetch('/api/admin/self-audit', {
         method: 'POST', headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ fixId }),
+        body: JSON.stringify({ fixId, dryRun }),
       });
       const j = await r.json();
-      setHealMsg(j.detail || (j.ok ? 'Fix applied.' : 'Fix failed.'));
-      await load();
+      setHealMsg(j.detail || (j.ok ? (dryRun ? 'Dry-run complete.' : 'Fix applied.') : 'Fix failed.'));
+      // A dry-run changes nothing, so don't re-run the audit (which clears the message).
+      if (!dryRun) await load();
     } catch (e: any) { setHealMsg(e?.message || String(e)); }
     finally { setHealing(null); }
   }, [load]);
@@ -115,6 +116,10 @@ export function HealthPane() {
     const fixables = (report?.results || []).filter((r) => r.fixId).map((r) => r.fixId!) as string[];
     for (const f of fixables) await heal(f);
   }, [report, heal]);
+
+  // Dry-run the canonical runtime-safe fix so the healer is demonstrable even
+  // when fixable=0 (nothing currently broken). Read-only — applies no change.
+  const dryRunDemo = useCallback(() => heal('ensure-cosmos', true), [heal]);
 
   if (loading && !report) {
     return <div style={{ padding: 40, display: 'flex', justifyContent: 'center' }}><Spinner label="Running self-audit…" /></div>;
@@ -151,6 +156,13 @@ export function HealthPane() {
           </div>
           <div style={{ display: 'flex', gap: 8 }}>
             <Button icon={<ArrowSync24Regular />} appearance="outline" onClick={load} disabled={loading}>Re-run</Button>
+            <Button
+              icon={<Wrench24Regular />} appearance="outline"
+              onClick={dryRunDemo} disabled={healing !== null}
+              title="Preview what the runtime-safe healer would do — no change is applied"
+            >
+              {healing ? 'Dry-running…' : 'Dry-run healer'}
+            </Button>
             {isAdmin && fixableCount > 0 && (
               <Button icon={<Wrench24Regular />} appearance="primary" onClick={() => setConfirm({ kind: 'all' })}>
                 Heal {fixableCount} auto-fixable
@@ -250,12 +262,22 @@ export function HealthPane() {
                     </div>
                   )}
                 </div>
-                {r.status !== 'pass' && r.fixId && isAdmin && (
-                  <Button size="small" appearance="primary" icon={<Wrench24Regular />}
-                    disabled={healing === r.fixId}
-                    onClick={() => setConfirm({ kind: 'one', fixId: r.fixId })}>
-                    {healing === r.fixId ? 'Healing…' : 'Heal'}
-                  </Button>
+                {r.status !== 'pass' && r.fixId && (
+                  <div style={{ display: 'flex', gap: 6 }}>
+                    <Button size="small" appearance="outline" icon={<Wrench24Regular />}
+                      disabled={healing === r.fixId}
+                      title="Preview this fix — no change is applied"
+                      onClick={() => heal(r.fixId!, true)}>
+                      {healing === r.fixId ? 'Dry-running…' : 'Dry-run'}
+                    </Button>
+                    {isAdmin && (
+                      <Button size="small" appearance="primary" icon={<Wrench24Regular />}
+                        disabled={healing === r.fixId}
+                        onClick={() => setConfirm({ kind: 'one', fixId: r.fixId })}>
+                        {healing === r.fixId ? 'Healing…' : 'Heal'}
+                      </Button>
+                    )}
+                  </div>
                 )}
               </div>
             </div>

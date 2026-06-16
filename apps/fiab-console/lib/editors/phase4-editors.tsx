@@ -1618,6 +1618,22 @@ export function OntologyEditor({ item, id }: { item: FabricItemType; id: string 
         <div className={s.ontoSourceGrid}>
           <div>
             <Subtitle2>Source ({classes.length} classes)</Subtitle2>
+            <Caption1 style={{ display: 'block', marginBottom: 6, color: tokens.colorNeutralForeground3 }}>
+              One class per line — DSL: <code>ClassName : ParentClass -- description</code> (parent and
+              description optional). Example: <code>Account : Party -- a customer account</code>. Indentation is
+              ignored; <code>Child : Parent</code> defines the IS_A hierarchy.
+            </Caption1>
+            {/* Warn when nothing parses, so the editor doesn't silently produce a
+                0-class ontology that materialize/bind/run-action can't act on. */}
+            {classes.length === 0 && (state.source || '').trim().length > 0 && (
+              <MessageBar intent="warning" style={{ marginBottom: 6 }}>
+                <MessageBarBody>
+                  The source has content but parsed to <strong>0 classes</strong>. Each class needs its own line
+                  in the form <code>ClassName : ParentClass -- description</code>. Fix the grammar above and the
+                  class hierarchy will populate.
+                </MessageBarBody>
+              </MessageBar>
+            )}
             {/* v3.28 Phase 4.5: functional setState — materializeToGraphModel
                 does NOT write back to state, so this is defensive but cheap. */}
             <MonacoTextarea value={state.source} onChange={(v) => setState((p) => ({ ...p, source: v }))} language="json" height={400} minHeight={320} ariaLabel="Ontology source" />

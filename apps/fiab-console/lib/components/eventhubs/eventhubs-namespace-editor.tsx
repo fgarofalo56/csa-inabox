@@ -33,7 +33,7 @@ import {
 import {
   Archive20Regular, Globe20Regular, Key20Regular, LinkSquare20Regular,
   Eye20Regular, ArrowSync16Regular, Delete16Regular, Add20Regular,
-  Checkmark16Regular, Dismiss16Regular, Copy16Regular,
+  Checkmark16Regular, Dismiss16Regular, Copy16Regular, Shield20Regular,
 } from '@fluentui/react-icons';
 
 const useStyles = makeStyles({
@@ -80,6 +80,7 @@ const GEODR_ROUTE = '/api/eventhubs/geodr';
 const GEODR_ACTIONS_ROUTE = '/api/eventhubs/geodr-actions';
 const AUTH_ROUTE = '/api/eventhubs/authrules';
 const PE_ROUTE = '/api/eventhubs/private-endpoints';
+const NETWORK_ROUTE = '/api/eventhubs/network';
 
 const DEFAULT_ARCHIVE_NAME_FORMAT =
   '{Namespace}/{EventHub}/{PartitionId}/{Year}/{Month}/{Day}/{Hour}/{Minute}/{Second}';
@@ -89,11 +90,20 @@ async function readJson(res: Response): Promise<any> {
   try { return text ? JSON.parse(text) : {}; } catch { return { ok: false, error: text || `HTTP ${res.status}` }; }
 }
 
-type EditorTab = 'capture' | 'geodr' | 'sas' | 'privateendpoints';
+type EditorTab = 'capture' | 'networking' | 'geodr' | 'sas' | 'privateendpoints';
 
 interface AuthRow { name: string; rights: string[]; scope: string }
 interface GeoRow { name: string; role?: string; partnerNamespace?: string; provisioningState?: string }
 interface PeRow { name: string; privateEndpointId?: string; connectionStatus: string; provisioningState?: string; description?: string }
+interface IpRule { ipMask: string; action?: string }
+interface VnetRule { subnetId: string; ignoreMissingVnetServiceEndpoint?: boolean }
+interface NetworkRules {
+  defaultAction?: string;
+  publicNetworkAccess?: string;
+  trustedServiceAccessEnabled?: boolean;
+  ipRules: IpRule[];
+  vnetRules: VnetRule[];
+}
 interface AccessKeys {
   keyName?: string;
   primaryKey?: string;
@@ -126,12 +136,14 @@ export function EventHubsNamespaceEditor({ open, hub, initialTab = 'capture', on
           <DialogContent>
             <TabList selectedValue={tab} onTabSelect={(_, dt) => setTab(dt.value as EditorTab)}>
               {hub && <Tab value="capture" icon={<Archive20Regular />}>Capture</Tab>}
+              <Tab value="networking" icon={<Shield20Regular />}>Networking</Tab>
               <Tab value="geodr" icon={<Globe20Regular />}>Geo-recovery</Tab>
               <Tab value="sas" icon={<Key20Regular />}>SAS keys</Tab>
               <Tab value="privateendpoints" icon={<LinkSquare20Regular />}>Private endpoints</Tab>
             </TabList>
 
             {tab === 'capture' && hub && <CaptureTab hub={hub} onSaved={onSaved} />}
+            {tab === 'networking' && <NetworkingTab onSaved={onSaved} />}
             {tab === 'geodr' && <GeoDrTab onSaved={onSaved} />}
             {tab === 'sas' && <SasTab hub={hub} onSaved={onSaved} />}
             {tab === 'privateendpoints' && <PrivateEndpointsTab onSaved={onSaved} />}
@@ -706,6 +718,177 @@ function PrivateEndpointsTab({ onSaved }: { onSaved?: () => void }) {
       <Caption1 className={s.hint}>
         The namespace private endpoint is provisioned by <code>eventhubs.bicep</code> with <code>groupIds: ['namespace']</code> and DNS zone <code>privatelink.servicebus.windows.net</code> (Commercial) / <code>privatelink.servicebus.usgovcloudapi.net</code> (USGov). Use this panel to approve or reject cross-tenant / manual connection requests.
       </Caption1>
+    </div>
+  );
+}
+
+// ===================================================================
+// Networking tab (namespace) — editable IP / VNet firewall + public access
+// ===================================================================
+function NetworkingTab({ onSaved }: { onSaved?: () => void }) {
+  const s = useStyles();
+  const [loading, setLoading] = useState(true);
+  const [saving, setSaving] = useState(false);
+  const [err, setErr] = useState<string | null>(null);
+  const [msg, setMsg] = useState<string | null>(null);
+  const [gate, setGate] = useState<string | null>(null);
+
+  const [defaultAction, setDefaultAction] = useState<'Allow' | 'Deny'>('Allow');
+  const [publicAccess, setPublicAccess] = useState<'Enabled' | 'Disabled' | 'SecuredByPerimeter'>('Enabled');
+  const [trustedServices, setTrustedServices] = useState(false);
+  const [ipRules, setIpRules] = useState<IpRule[]>([]);
+  const [vnetRules, setVnetRules] = useState<VnetRule[]>([]);
+  const [newIp, setNewIp] = useState('');
+  const [newSubnet, setNewSubnet] = useState('');
+
+  const load = useCallback(async () => {
+    setLoading(true); setErr(null); setMsg(null); setGate(null);
+    try {
+      const j = await readJson(await fetch(NETWORK_ROUTE));
+      if (j.code === 'not_configured') { setGate(j.missing || 'LOOM_EVENTHUB_NAMESPACE'); return; }
+      if (!j.ok) { setErr(j.error || 'failed to read network rules'); return; }
+      const n: NetworkRules = j.network || { ipRules: [], vnetRules: [] };
+      setDefaultAction(n.defaultAction === 'Deny' ? 'Deny' : 'Allow');
+      setPublicAccess((n.publicNetworkAccess as any) || 'Enabled');
+      setTrustedServices(!!n.trustedServiceAccessEnabled);
+      setIpRules(Array.isArray(n.ipRules) ? n.ipRules : []);
+      setVnetRules(Array.isArray(n.vnetRules) ? n.vnetRules : []);
+    } catch (e: any) { setErr(e?.message || String(e)); }
+    finally { setLoading(false); }
+  }, []);
+
+  useEffect(() => { void load(); }, [load]);
+
+  const addIp = () => {
+    const v = newIp.trim();
+    if (!v) return;
+    if (ipRules.some((r) => r.ipMask === v)) { setErr(`IP rule ${v} already added.`); return; }
+    setIpRules((p) => [...p, { ipMask: v, action: 'Allow' }]); setNewIp(''); setErr(null);
+  };
+  const addSubnet = () => {
+    const v = newSubnet.trim();
+    if (!v) return;
+    if (vnetRules.some((r) => r.subnetId === v)) { setErr('Subnet rule already added.'); return; }
+    setVnetRules((p) => [...p, { subnetId: v }]); setNewSubnet(''); setErr(null);
+  };
+
+  const save = useCallback(async () => {
+    setSaving(true); setErr(null); setMsg(null);
+    try {
+      const j = await readJson(await fetch(NETWORK_ROUTE, {
+        method: 'PUT', headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ defaultAction, publicNetworkAccess: publicAccess, trustedServiceAccessEnabled: trustedServices, ipRules, vnetRules }),
+      }));
+      if (j.code === 'not_configured') { setGate(j.missing || 'LOOM_EVENTHUB_NAMESPACE'); return; }
+      if (!j.ok) { setErr(j.error || 'failed to save network rules'); return; }
+      const n: NetworkRules = j.network || { ipRules: [], vnetRules: [] };
+      setIpRules(Array.isArray(n.ipRules) ? n.ipRules : []);
+      setVnetRules(Array.isArray(n.vnetRules) ? n.vnetRules : []);
+      setMsg('Networking rules saved.');
+      onSaved?.();
+    } catch (e: any) { setErr(e?.message || String(e)); }
+    finally { setSaving(false); }
+  }, [defaultAction, publicAccess, trustedServices, ipRules, vnetRules, onSaved]);
+
+  if (gate) return <GateBar missing={gate} />;
+
+  return (
+    <div className={s.panel}>
+      {loading ? <Spinner size="tiny" label="Loading network rules…" /> : (
+        <>
+          <Field label="Public network access" hint="Disabled forces all traffic through private endpoints.">
+            <Dropdown
+              value={publicAccess === 'SecuredByPerimeter' ? 'Secured by network security perimeter' : publicAccess === 'Disabled' ? 'Disabled' : 'Enabled (selected networks)'}
+              selectedOptions={[publicAccess]}
+              onOptionSelect={(_, d) => setPublicAccess((d.optionValue as any) || 'Enabled')}
+            >
+              <Option value="Enabled" text="Enabled (selected networks)">Enabled (selected networks)</Option>
+              <Option value="Disabled" text="Disabled">Disabled</Option>
+              <Option value="SecuredByPerimeter" text="Secured by network security perimeter">Secured by network security perimeter</Option>
+            </Dropdown>
+          </Field>
+          <div className={s.row}>
+            <Field label="Default action" hint="Deny = only the IP / VNet rules below may connect.">
+              <Dropdown value={defaultAction} selectedOptions={[defaultAction]} onOptionSelect={(_, d) => setDefaultAction((d.optionValue as 'Allow' | 'Deny') || 'Allow')}>
+                <Option value="Allow">Allow</Option>
+                <Option value="Deny">Deny</Option>
+              </Dropdown>
+            </Field>
+            <Field label="Allow trusted Microsoft services">
+              <Switch checked={trustedServices} onChange={(_, d) => setTrustedServices(d.checked)} />
+            </Field>
+          </div>
+
+          <div className={s.sectionTitle}>IP firewall rules</div>
+          <div className={s.row}>
+            <Field label="Add IP / CIDR" className={s.grow}>
+              <Input value={newIp} onChange={(_, v) => setNewIp(v.value)} placeholder="13.66.201.169/32" onKeyDown={(e) => { if (e.key === 'Enter') addIp(); }} />
+            </Field>
+            <Button appearance="secondary" icon={<Add20Regular />} onClick={addIp}>Add IP rule</Button>
+          </div>
+          {ipRules.length === 0 ? <Caption1 className={s.hint}>No IP rules.</Caption1> : (
+            <div className={s.gridWrap}>
+              <Table size="small" aria-label="IP firewall rules">
+                <TableHeader className={s.stickyHead}>
+                  <TableRow><TableHeaderCell>IP / CIDR</TableHeaderCell><TableHeaderCell>Action</TableHeaderCell><TableHeaderCell>Remove</TableHeaderCell></TableRow>
+                </TableHeader>
+                <TableBody>
+                  {ipRules.map((r) => (
+                    <TableRow key={r.ipMask}>
+                      <TableCell><span className={s.mono}>{r.ipMask}</span></TableCell>
+                      <TableCell><Badge size="small" appearance="outline">{r.action || 'Allow'}</Badge></TableCell>
+                      <TableCell>
+                        <Tooltip content="Remove IP rule" relationship="label">
+                          <Button size="small" appearance="subtle" icon={<Delete16Regular />} aria-label={`Remove IP rule ${r.ipMask}`} onClick={() => setIpRules((p) => p.filter((x) => x.ipMask !== r.ipMask))} />
+                        </Tooltip>
+                      </TableCell>
+                    </TableRow>
+                  ))}
+                </TableBody>
+              </Table>
+            </div>
+          )}
+
+          <div className={s.sectionTitle}>Virtual network rules</div>
+          <div className={s.row}>
+            <Field label="Add subnet ARM resource ID" className={s.grow} hint="The subnet must have the Microsoft.EventHub service endpoint enabled.">
+              <Input value={newSubnet} onChange={(_, v) => setNewSubnet(v.value)} placeholder="/subscriptions/.../virtualNetworks/vnet/subnets/subnet1" onKeyDown={(e) => { if (e.key === 'Enter') addSubnet(); }} />
+            </Field>
+            <Button appearance="secondary" icon={<Add20Regular />} onClick={addSubnet}>Add VNet rule</Button>
+          </div>
+          {vnetRules.length === 0 ? <Caption1 className={s.hint}>No VNet rules.</Caption1> : (
+            <div className={s.gridWrap}>
+              <Table size="small" aria-label="Virtual network rules">
+                <TableHeader className={s.stickyHead}>
+                  <TableRow><TableHeaderCell>Subnet</TableHeaderCell><TableHeaderCell>Remove</TableHeaderCell></TableRow>
+                </TableHeader>
+                <TableBody>
+                  {vnetRules.map((r) => (
+                    <TableRow key={r.subnetId}>
+                      <TableCell><Tooltip content={r.subnetId} relationship="label"><span className={s.keyVal}>{r.subnetId.split('/').slice(-3).join('/')}</span></Tooltip></TableCell>
+                      <TableCell>
+                        <Tooltip content="Remove VNet rule" relationship="label">
+                          <Button size="small" appearance="subtle" icon={<Delete16Regular />} aria-label={`Remove VNet rule ${r.subnetId}`} onClick={() => setVnetRules((p) => p.filter((x) => x.subnetId !== r.subnetId))} />
+                        </Tooltip>
+                      </TableCell>
+                    </TableRow>
+                  ))}
+                </TableBody>
+              </Table>
+            </div>
+          )}
+
+          {err && <MessageBar intent="error"><MessageBarBody><MessageBarTitle>Networking error</MessageBarTitle>{err}</MessageBarBody></MessageBar>}
+          {msg && <MessageBar intent="success"><MessageBarBody>{msg}</MessageBarBody></MessageBar>}
+          <Caption1 className={s.hint}>
+            With <strong>Default action = Deny</strong> only the listed IP and VNet rules can connect; the Console UAMI&apos;s own egress IP/subnet must be allowed or this console loses access. Mirrors the Azure portal <em>Networking</em> blade.
+          </Caption1>
+          <div className={s.row}>
+            <Button appearance="primary" icon={<Shield20Regular />} onClick={save} disabled={saving}>{saving ? 'Saving…' : 'Save networking'}</Button>
+            <Button appearance="subtle" icon={<ArrowSync16Regular />} onClick={load} disabled={saving || loading}>Reload</Button>
+          </div>
+        </>
+      )}
     </div>
   );
 }
