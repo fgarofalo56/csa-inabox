@@ -30,9 +30,11 @@ export interface ReportViewerDialogProps {
   /** Fallback title until the payload's template title loads. */
   title?: string;
   publishedBadge?: boolean;
+  /** Default to live data. Admin surfaces = true; consumer gallery = false. */
+  defaultLive?: boolean;
 }
 
-export function ReportViewerDialog({ open, onClose, fetchUrl, title, publishedBadge }: ReportViewerDialogProps): React.ReactElement {
+export function ReportViewerDialog({ open, onClose, fetchUrl, title, publishedBadge, defaultLive }: ReportViewerDialogProps): React.ReactElement {
   const s = useStyles();
   const [payload, setPayload] = React.useState<ReportPayload | null>(null);
   React.useEffect(() => { if (!open) setPayload(null); }, [open]);
@@ -50,7 +52,7 @@ export function ReportViewerDialog({ open, onClose, fetchUrl, title, publishedBa
             </span>
           </DialogTitle>
           <DialogContent>
-            <ReportView fetchUrl={open ? fetchUrl : null} onLoaded={setPayload} />
+            <ReportView fetchUrl={open ? fetchUrl : null} onLoaded={setPayload} defaultLive={defaultLive} />
           </DialogContent>
           <DialogActions>
             <Button appearance="secondary" onClick={onClose}>Close</Button>
