@@ -153,7 +153,7 @@ const useStyles = makeStyles({
   actionCell: { display: 'flex', gap: '4px' },
 });
 
-interface ClusterLite { name: string; vmSize?: string; state?: string; provisioningState?: string }
+interface ClusterLite { name: string; vmSize?: string; state?: string; provisioningState?: string; maxNodeCount?: number }
 interface DatastoreLite { name: string; datastoreType?: string; isDefault?: boolean; path?: string | null }
 interface AutoMlJobLite {
   name: string; displayName?: string; experimentName?: string; taskType?: string;
@@ -239,6 +239,30 @@ export function AutoMlEditor({ item, id }: { item: FabricItemType; id: string })
     }
   }, [computeName, datastore]);
 
+  // Max concurrent trials cannot exceed the SELECTED cluster's max node count —
+  // AML rejects the job with a hard 400 ("max concurrent iterations is larger
+  // than max node of compute") otherwise. Derive the ceiling from the cluster
+  // the user picked (undefined maxNodeCount → fall back to the static 100 cap so
+  // we never block when the value is unknown).
+  const selectedClusterMaxNodes = useMemo<number | undefined>(() => {
+    const c = clusters.find((x) => x.name === computeName);
+    return typeof c?.maxNodeCount === 'number' && c.maxNodeCount > 0 ? c.maxNodeCount : undefined;
+  }, [clusters, computeName]);
+
+  const concurrencyCeiling = selectedClusterMaxNodes ?? 100;
+  const concurrencyExceedsCluster =
+    selectedClusterMaxNodes !== undefined && maxConcurrentTrials > selectedClusterMaxNodes;
+
+  // Clamp max-concurrent-trials down to the selected cluster's node count when
+  // the user switches to a smaller cluster (so the default 4 can't silently
+  // produce the AML 400 against a 2-node cluster). Only clamps DOWN — never
+  // raises the user's chosen value.
+  useEffect(() => {
+    if (selectedClusterMaxNodes !== undefined && maxConcurrentTrials > selectedClusterMaxNodes) {
+      setMaxConcurrentTrials(selectedClusterMaxNodes);
+    }
+  }, [selectedClusterMaxNodes, maxConcurrentTrials]);
+
   const loadJobs = useCallback(async () => {
     setJobsLoading(true);
     try {
@@ -302,10 +326,11 @@ export function AutoMlEditor({ item, id }: { item: FabricItemType; id: string })
       case 'Dataset': return !!datastore && !!trainingDataUri && !!targetColumn.trim() &&
         (task !== 'Forecasting' || !!timeColumn.trim());
       case 'Compute': return !!computeName;
-      case 'Settings': return !!primaryMetric && experimentTimeoutMinutes >= 15 && maxTrials >= 1;
+      case 'Settings': return !!primaryMetric && experimentTimeoutMinutes >= 15 && maxTrials >= 1 &&
+        !concurrencyExceedsCluster;
       case 'Review': return true;
     }
-  }, [task, datastore, trainingDataUri, targetColumn, timeColumn, computeName, primaryMetric, experimentTimeoutMinutes, maxTrials]);
+  }, [task, datastore, trainingDataUri, targetColumn, timeColumn, computeName, primaryMetric, experimentTimeoutMinutes, maxTrials, concurrencyExceedsCluster]);
 
   const canSubmit = configured && !submitting &&
     stepValid('Task') && stepValid('Dataset') && stepValid('Compute') && stepValid('Settings');
@@ -581,9 +606,23 @@ export function AutoMlEditor({ item, id }: { item: FabricItemType; id: string })
                     <SpinButton value={maxTrials} min={1} max={1000} step={1}
                       onChange={(_, d) => setMaxTrials(Number(d.value ?? d.displayValue) || 20)} />
                   </Field>
-                  <Field label="Max concurrent trials">
-                    <SpinButton value={maxConcurrentTrials} min={1} max={100} step={1}
-                      onChange={(_, d) => setMaxConcurrentTrials(Number(d.value ?? d.displayValue) || 4)} />
+                  <Field
+                    label="Max concurrent trials"
+                    hint={selectedClusterMaxNodes !== undefined
+                      ? `Capped at the '${computeName}' cluster's ${selectedClusterMaxNodes} node${selectedClusterMaxNodes === 1 ? '' : 's'}`
+                      : 'Cannot exceed the selected compute cluster’s node count'}
+                    validationState={concurrencyExceedsCluster ? 'error' : 'none'}
+                    validationMessage={concurrencyExceedsCluster
+                      ? `Exceeds the cluster's ${selectedClusterMaxNodes} nodes — AML rejects this with a 400. Lower it to ${selectedClusterMaxNodes} or pick a larger cluster.`
+                      : undefined}
+                  >
+                    <SpinButton value={maxConcurrentTrials} min={1} max={concurrencyCeiling} step={1}
+                      onChange={(_, d) => {
+                        const n = Number(d.value ?? d.displayValue) || 4;
+                        // Clamp to [1, cluster max nodes] so the control can't be
+                        // driven past what the selected cluster can run.
+                        setMaxConcurrentTrials(Math.max(1, Math.min(n, concurrencyCeiling)));
+                      }} />
                   </Field>
                   {task !== 'Forecasting' && (
                     <Field label="Cross-validation folds" hint="Used when no validation split is provided">

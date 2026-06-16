@@ -218,6 +218,13 @@ export interface AmlCompute {
   state?: string;
   vmSize?: string;
   createdOn?: string;
+  /**
+   * AmlCompute cluster scale ceiling (scaleSettings.maxNodeCount). AutoML caps
+   * max-concurrent-trials at this — submitting more concurrent trials than the
+   * cluster has nodes is a hard AML 400 ("max concurrent iterations is larger
+   * than max node of compute"). Undefined for ComputeInstance / when absent.
+   */
+  maxNodeCount?: number;
 }
 
 /** A Compute Instance view (subset of AmlCompute) used by the notebook path. */
@@ -226,6 +233,10 @@ export type AmlComputeInstance = AmlCompute;
 function shapeCompute(raw: any): AmlCompute {
   const p = raw?.properties || {};
   const inner = p.properties || {};
+  const maxNodeCount =
+    typeof inner?.scaleSettings?.maxNodeCount === 'number'
+      ? inner.scaleSettings.maxNodeCount
+      : undefined;
   return {
     id: raw?.id,
     name: raw?.name,
@@ -235,6 +246,7 @@ function shapeCompute(raw: any): AmlCompute {
     state: inner.state || p.provisioningState,
     vmSize: inner.vmSize,
     createdOn: p.createdOn,
+    maxNodeCount,
   };
 }
 
