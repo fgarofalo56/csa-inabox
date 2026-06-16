@@ -323,6 +323,63 @@ export async function updateContainerAppScale(
   return shape(await r.json());
 }
 
+export interface ImageRollResult {
+  name: string;
+  /** The image the matching container served BEFORE the PATCH. */
+  fromImage: string;
+  /** The image the container was rolled TO. */
+  toImage: string;
+  /** ARM provisioningState after the PATCH (or 'Updating' for an async 202). */
+  provisioningState: string;
+}
+
+/**
+ * Roll a single container app to a new image — the in-product update path.
+ *
+ * GET the full resource, swap the matching container's `image` (preserving every
+ * other bicep-declared property: env, secrets, ingress, probes, scale,
+ * registries, identity), then PATCH the template back. With
+ * activeRevisionsMode 'Single' the new revision replaces the old one, so expect
+ * a brief restart of the rolled app. Returns the before/after image + the ARM
+ * provisioningState. Throws AcaArmError verbatim so the caller can surface the
+ * precise ARM message (e.g. ImagePullBackOff for an image that isn't published).
+ *
+ * No registries mutation: the updater targets PUBLIC ghcr.io images, which need
+ * no registry credential. If the app's existing `registries[]` lists a private
+ * ACR, that entry is left intact (harmless — the new public image just isn't
+ * matched to it). Callers that update to a private registry image must wire the
+ * registry separately.
+ */
+export async function updateContainerAppImage(name: string, image: string): Promise<ImageRollResult> {
+  if (!image || !image.trim()) throw new AcaArmError(400, undefined, 'image required');
+  const cfg = readAcaConfig();
+  const raw = await getContainerAppRaw(name);
+  const props = raw.properties || (raw.properties = {});
+  const tmpl = props.template || (props.template = {});
+  const containers: any[] = Array.isArray(tmpl.containers) ? tmpl.containers : [];
+  if (containers.length === 0) {
+    throw new AcaArmError(500, raw, `Container app ${name} has no containers in its template.`);
+  }
+  // Match the primary container by name (== app name) else fall back to first.
+  const container = containers.find((c) => c?.name === name) || containers[0];
+  const fromImage = String(container.image || '');
+  container.image = image;
+
+  const body: any = { properties: { template: tmpl } };
+  const r = await callArm(
+    `${appUrl(cfg, name)}?api-version=${ACA_API}`,
+    { method: 'PATCH', body: JSON.stringify(body) },
+  );
+  if (!r.ok && r.status !== 202) {
+    throw new AcaArmError(r.status, await r.text(), `updateContainerAppImage(${name}) failed ${r.status}`);
+  }
+  let provisioningState = 'Updating';
+  if (r.status !== 202) {
+    try { provisioningState = (await r.json())?.properties?.provisioningState || 'Updating'; } catch { /* keep */ }
+  }
+  return { name, fromImage, toImage: image, provisioningState };
+}
+
 // ---------------------------------------------------------------------------
 // MCP deploy + Azure Files mount (persistence)
 // ---------------------------------------------------------------------------

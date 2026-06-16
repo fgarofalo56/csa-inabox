@@ -1,0 +1,143 @@
+name: publish-ghcr-images
+
+# CSA Loom — publish PUBLIC release images to GitHub Container Registry.
+#
+# This is the supply side of the in-product (no-clone) update path. On every
+# release tag (release-please publishes `csa-inabox-vX.Y.Z`) it builds each
+# deployable Loom app and pushes it to a PUBLIC ghcr package:
+#
+#   ghcr.io/<owner>/<app>:X.Y.Z   (bare semver — the tag the in-product
+#   ghcr.io/<owner>/<app>:latest    updater pulls; see
+#                                   apps/fiab-console/lib/updates/update-apply.ts)
+#
+# A deployed tenant's Console can then PATCH its Container Apps to the new public
+# image via ARM (the Console UAMI already holds Container Apps Contributor) —
+# WITHOUT the customer ever cloning the repo or running CI.
+#
+# This does NOT replace build-fiab-images.yml (which pushes to the customer's
+# PRIVATE ACR). Both can run; this one is the public channel for self-update.
+#
+# Visibility: ghcr packages are created PRIVATE by default. After the first
+# successful push of each package, a one-time manual step (or the
+# `gh api` call in docs/fiab/in-product-update-path.md) flips each package to
+# PUBLIC so anonymous ACA image pulls + the updater's manifest HEAD succeed.
+
+on:
+  push:
+    tags:
+      - 'csa-inabox-v*'
+  workflow_dispatch:
+    inputs:
+      tag_override:
+        description: 'Bare semver to tag images with (e.g. 0.43.1). Defaults to the release tag.'
+        type: string
+        required: false
+
+permissions:
+  contents: read
+  packages: write
+
+jobs:
+  publish:
+    name: Build + push ${{ matrix.app }} → ghcr (public)
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - app: loom-console
+            context: ./apps/fiab-console
+          - app: loom-setup-orchestrator
+            context: ./apps/fiab-setup-orchestrator
+          - app: loom-mcp
+            context: ./apps/fiab-mcp-config
+          - app: loom-mcp-bridge
+            context: ./apps/fiab-mcp-bridge
+          - app: loom-activator
+            context: ./apps/fiab-activator-engine
+          - app: loom-mirroring
+            context: ./apps/fiab-mirroring-engine
+          - app: loom-direct-lake-shim
+            context: ./apps/fiab-direct-lake-shim
+          - app: loom-copilot-maf
+            context: ./apps/copilot-maf
+    steps:
+      - uses: actions/checkout@v4
+
+      # Derive the bare semver image tag from the git tag (csa-inabox-v0.43.1 →
+      # 0.43.1) or the workflow_dispatch override. The updater pulls this tag.
+      - id: ver
+        run: |
+          if [ -n "${{ inputs.tag_override }}" ]; then
+            VER="${{ inputs.tag_override }}"
+          else
+            VER="${GITHUB_REF_NAME#csa-inabox-v}"
+          fi
+          echo "version=$VER" >> "$GITHUB_OUTPUT"
+          OWNER="${GITHUB_REPOSITORY_OWNER}"
+          echo "owner_lc=$(echo "$OWNER" | tr '[:upper:]' '[:lower:]')" >> "$GITHUB_OUTPUT"
+          echo "::notice::Publishing ${{ matrix.app }}:$VER"
+
+      - name: Log in to ghcr.io
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Build + push (public channel)
+        uses: docker/build-push-action@v6
+        with:
+          context: ${{ matrix.context }}
+          file: ${{ matrix.context }}/Dockerfile
+          push: true
+          build-args: |
+            LOOM_BUILD_SHA=${{ github.sha }}
+            LOOM_BUILD_TIMESTAMP=${{ github.event.repository.updated_at }}
+          tags: |
+            ghcr.io/${{ steps.ver.outputs.owner_lc }}/${{ matrix.app }}:${{ steps.ver.outputs.version }}
+            ghcr.io/${{ steps.ver.outputs.owner_lc }}/${{ matrix.app }}:latest
+          cache-from: type=gha,scope=ghcr-${{ matrix.app }}
+          cache-to: type=gha,mode=max,scope=ghcr-${{ matrix.app }}
+          labels: |
+            org.opencontainers.image.source=https://github.com/${{ github.repository }}
+            org.opencontainers.image.revision=${{ github.sha }}
+            org.opencontainers.image.version=${{ steps.ver.outputs.version }}
+            csa.loom.component=${{ matrix.app }}
+
+      - name: Summary
+        run: |
+          {
+            echo "### ${{ matrix.app }}"
+            echo ""
+            echo "- \`ghcr.io/${{ steps.ver.outputs.owner_lc }}/${{ matrix.app }}:${{ steps.ver.outputs.version }}\`"
+            echo "- \`ghcr.io/${{ steps.ver.outputs.owner_lc }}/${{ matrix.app }}:latest\`"
+            echo ""
+          } >> "$GITHUB_STEP_SUMMARY"
+
+  remind-make-public:
+    name: Reminder — packages must be public for self-update
+    needs: publish
+    runs-on: ubuntu-latest
+    if: always()
+    steps:
+      - run: |
+          {
+            echo "## In-product update path"
+            echo ""
+            echo "Images pushed to ghcr. For the in-product updater + anonymous ACA pulls to work,"
+            echo "each ghcr package must be **public** (they default to private on first push)."
+            echo "One-time per package, an org/user admin runs:"
+            echo ""
+            echo '```bash'
+            echo 'for a in loom-console loom-mcp loom-mcp-bridge loom-activator loom-mirroring \'
+            echo '         loom-direct-lake-shim loom-copilot-maf loom-setup-orchestrator; do'
+            echo '  gh api -X PATCH "/user/packages/container/$a" -f visibility=public || true'
+            echo 'done'
+            echo '```'
+            echo ""
+            echo "See docs/fiab/in-product-update-path.md."
+          } >> "$GITHUB_STEP_SUMMARY"
