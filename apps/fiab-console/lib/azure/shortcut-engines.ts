@@ -74,6 +74,15 @@ export interface TablesRegistration {
 
 const ABFSS_RE = /^abfss:\/\/([^@]+)@([^/]+)\.dfs\.core\.windows\.net\/(.*)$/i;
 const HTTPS_DFS_RE = /^https:\/\/([^.]+)\.dfs\.core\.windows\.net\/([^/]+)\/(.*)$/i;
+// ADLS Gen2 accounts expose the SAME data over a blob.core.windows.net endpoint.
+// Catalogs / public datasets often hand out the blob URL; normalize it to the dfs
+// endpoint (the listPaths/data-plane API is dfs-only) so a blob URL is accepted.
+const HTTPS_BLOB_RE = /^https:\/\/([^.]+)\.blob\.core\.windows\.net\/([^/]+)\/(.*)$/i;
+// Internal Loom OneLake reference: onelake://<workspace>/<lakehouse>/<path>.
+// Same-tenant cross-workspace — resolves against the deployment's internal
+// OneLake/ADLS account (internalAccount()), workspace = container, the lakehouse
+// + sub-path become the path. Mirrors Fabric's onelake:// scheme, Azure-native.
+const ONELAKE_RE = /^onelake:\/\/([^/]+)\/([^/]+)\/?(.*)$/i;
 
 export interface AbfssParts {
   container: string;
@@ -87,6 +96,8 @@ export interface AbfssParts {
  * Accepts:
  *   abfss://<container>@<acct>.dfs.core.windows.net/<path>
  *   https://<acct>.dfs.core.windows.net/<container>/<path>
+ *   https://<acct>.blob.core.windows.net/<container>/<path>  (normalized to dfs)
+ *   onelake://<workspace>/<lakehouse>/<path>  (internal Loom OneLake, cross-workspace)
  *   internal://<container>/<path>  (internal Loom lakehouse, account-relative)
  */
 export function parseAbfss(targetUri: string, internalAccount?: () => string): AbfssParts | null {
@@ -101,6 +112,23 @@ export function parseAbfss(targetUri: string, internalAccount?: () => string): A
     const [, account, container, path] = m;
     const clean = path.replace(/^\/+/, '');
     return { container, account, path: clean, abfss: `abfss://${container}@${account}.dfs.core.windows.net/${clean}` };
+  }
+  // blob.core.windows.net is the same ADLS Gen2 account over the blob endpoint —
+  // normalize to the dfs form the data-plane API requires.
+  m = u.match(HTTPS_BLOB_RE);
+  if (m) {
+    const [, account, container, path] = m;
+    const clean = path.replace(/^\/+/, '');
+    return { container, account, path: clean, abfss: `abfss://${container}@${account}.dfs.core.windows.net/${clean}` };
+  }
+  // onelake://<workspace>/<lakehouse>/<path> → internal OneLake/ADLS account,
+  // workspace as the container, lakehouse + sub-path as the path.
+  const onelake = u.match(ONELAKE_RE);
+  if (onelake && internalAccount) {
+    const [, workspace, lakehouse, path] = onelake;
+    const account = internalAccount();
+    const clean = `${lakehouse}/${(path || '')}`.replace(/\/+$/, '').replace(/^\/+/, '');
+    return { container: workspace, account, path: clean, abfss: `abfss://${workspace}@${account}.dfs.core.windows.net/${clean}` };
   }
   const internal = u.match(/^internal:\/\/([^/]+)\/?(.*)$/i);
   if (internal && internalAccount) {
