@@ -1,11 +1,19 @@
 import { NextRequest, NextResponse } from 'next/server';
+import { ChainedTokenCredential, DefaultAzureCredential, ManagedIdentityCredential } from '@azure/identity';
 import { getSession } from '@/lib/auth/session';
 import { enforceCapability } from '@/lib/auth/feature-gate';
+import { armScope } from '@/lib/azure/cloud-endpoints';
 import {
   getTenantTopologySafe,
   HUB_COORDINATE_KEYS,
   type TenantTopology,
 } from '@/lib/setup/tenant-topology';
+import {
+  checkSubscriptionDeployPermission,
+  checkProvidersRegistered,
+  buildContributorGrantCommand,
+  buildProviderRegisterCommands,
+} from '@/lib/setup/deploy-preflight';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -177,6 +185,27 @@ function orchestratorUrl(): string {
   return (process.env.LOOM_SETUP_ORCHESTRATOR_URL || '').trim().replace(/\/+$/, '');
 }
 
+// ── Pre-flight credential ──────────────────────────────────────────────────
+// The deploy pre-flight (permission + RP-registration check on the TARGET sub)
+// runs under the Console's own identity — the same chain existing-dlzs uses.
+// These are Reader-only reads, so the check never needs more rights than the
+// UAMI already has; it only PREDICTS whether the deploy (under the orchestrator
+// identity, which is the SAME UAMI when no separate orchestrator is wired, or
+// the operator's az credential for the copy-paste path) would be authorized.
+const preflightUamiClientId = process.env.LOOM_UAMI_CLIENT_ID || process.env.AZURE_CLIENT_ID;
+const preflightCredential = preflightUamiClientId
+  ? new ChainedTokenCredential(
+      new ManagedIdentityCredential({ clientId: preflightUamiClientId }),
+      new DefaultAzureCredential(),
+    )
+  : new DefaultAzureCredential();
+
+async function armTokenForPreflight(): Promise<string> {
+  const t = await preflightCredential.getToken(armScope());
+  if (!t?.token) throw new Error('Failed to acquire ARM token for deploy pre-flight');
+  return t.token;
+}
+
 export async function POST(req: NextRequest) {
   const session = getSession();
   if (!session) {
@@ -303,6 +332,59 @@ export async function POST(req: NextRequest) {
 
   const isGov = body.boundary === 'GCC-High' || body.boundary === 'IL5';
   const region = body.location || (isGov ? 'usgovvirginia' : 'eastus2');
+
+  // ── Cross-subscription deploy pre-flight (item-4 fix) ─────────────────────
+  // Before firing ANY deploy tier, confirm the deploying identity can actually
+  // write to the target subscription. Live diagnosis showed cross-sub DLZ
+  // deploys failing opaquely because the Console UAMI holds only Reader on the
+  // target sub (enough to list it + see its RGs, NOT to run a sub-scoped
+  // deployment). We check the caller's effective ARM permissions (Reader-only
+  // read) and, when the write actions are missing, return a precise honest gate
+  // with the exact `az role assignment create` — instead of a downstream 403 or
+  // a copy-paste command the operator can't tell will fail. We also surface any
+  // unregistered RPs so a half-prepared sub gets a clear "register these" hint.
+  //
+  // The check is skipped when LOOM_SKIP_DEPLOY_PREFLIGHT=1 (escape hatch for an
+  // environment where the deploying identity differs from the Console UAMI and
+  // the UAMI genuinely can't read permissions) — the downstream tiers remain
+  // the hard guard. It's a prediction, not the authorization itself.
+  const skipPreflight = process.env.LOOM_SKIP_DEPLOY_PREFLIGHT === '1';
+  if (!skipPreflight && body.subscriptionId) {
+    const perm = await checkSubscriptionDeployPermission(body.subscriptionId, armTokenForPreflight);
+    // Only BLOCK on a definitive "cannot deploy" answer. A check error (token /
+    // network / 403-on-read) is non-fatal — fall through to the deploy tiers,
+    // which surface their own honest gate.
+    if (!perm.error && !perm.canDeploy) {
+      const principalObjectId = process.env.LOOM_CONSOLE_PRINCIPAL_ID || hubTopology?.hubConsolePrincipalId;
+      const grant = buildContributorGrantCommand({
+        subscriptionId: body.subscriptionId,
+        principalObjectId,
+        principalType: 'ServicePrincipal',
+        isGov,
+      });
+      const providers = await checkProvidersRegistered(body.subscriptionId, armTokenForPreflight);
+      const rpLines =
+        providers.missing.length > 0
+          ? '\n\nAlso register the resource providers this DLZ needs on the target subscription:\n' +
+            buildProviderRegisterCommands(providers.missing, body.subscriptionId).join('\n')
+          : '';
+      return NextResponse.json(
+        {
+          ok: false,
+          error: 'forbidden',
+          requiredRole: 'Contributor',
+          targetSubscriptionId: body.subscriptionId,
+          missingProviders: providers.missing,
+          remediation:
+            `The deploying identity does not have permission to deploy a Data Landing Zone into ` +
+            `subscription ${body.subscriptionId}. A subscription-scoped deployment requires the ` +
+            `Contributor role (you have at most Reader there — enough to see it, not to deploy). ` +
+            `Grant Contributor on the target subscription, then retry:\n\n${grant}${rpLines}`,
+        },
+        { status: 403 },
+      );
+    }
+  }
 
   // Validate multi-sub spoke ids when present (parallel arrays the bicep loop reads).
   if (Array.isArray(body.dlzSubscriptionIds) && body.dlzSubscriptionIds.length) {
