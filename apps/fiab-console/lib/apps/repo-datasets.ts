@@ -6,7 +6,7 @@
  * actually load it so the data is present + queryable after install. Bundles
  * declare a repo-relative path under `samples/app-data/<app>/<file>` on a
  * lakehouse shortcut (`repoDataset`) or anywhere else that needs real bytes;
- * this module resolves that path against the repo root and returns the file
+ * this module resolves that path against the app root and returns the file
  * contents so the lakehouse provisioner can upload it into the tenant's own
  * ADLS Gen2 (self-contained — no external URL that can 404).
  *
@@ -14,18 +14,19 @@
  * traversal, absolute path, or path that escapes that prefix is rejected — a
  * bundle can never coax this into reading an arbitrary file off the host.
  *
- * Runtime root resolution mirrors lib/azure/loom-docs-index.ts: walk up from
- * cwd looking for the repo-root marker (`mkdocs.yml`), since in ACA `cwd` is
- * the Next.js standalone server dir, not the repo root. The `samples/` tree is
- * kept in the standalone bundle via `outputFileTracingIncludes` in
- * next.config.mjs so the files exist at runtime; when a file genuinely can't
- * be found we return null and the caller honest-gates (status:'pending') with
- * the exact missing path — never a silent success.
+ * Runtime root resolution: the `samples/` tree lives INSIDE the fiab-console
+ * package (`apps/fiab-console/samples/app-data/**`) so it is inside the Docker
+ * build context, and the Dockerfile copies `/app/samples` into the standalone
+ * runner image. Both at runtime in ACA (`node server.js`, cwd `/app`) and in
+ * `next dev` (cwd `apps/fiab-console`) the tree therefore sits at
+ * `<cwd>/samples/app-data/**`, so we resolve against `process.cwd()`. When a
+ * file genuinely can't be found we return null and the caller honest-gates
+ * (status:'pending') with the exact missing path — never a silent success.
  */
 import fs from 'fs';
 import path from 'path';
 
-/** Sub-tree that repo datasets MUST live under (relative to repo root). */
+/** Sub-tree that repo datasets MUST live under (relative to the app root). */
 export const REPO_DATASET_PREFIX = 'samples/app-data';
 
 export interface RepoDataset {
@@ -41,16 +42,14 @@ export interface RepoDataset {
   contentType: string;
 }
 
-/** Find the repo root by walking up from cwd to the `mkdocs.yml` marker. */
+/**
+ * App root that the `samples/app-data` tree hangs off. The tree ships inside
+ * the fiab-console package and the Dockerfile copies it next to `server.js`,
+ * so at runtime it is always `<cwd>/samples/app-data` — both in the standalone
+ * image (cwd `/app`) and under `next dev` (cwd `apps/fiab-console`).
+ */
 function repoRoot(): string {
-  let dir = process.cwd();
-  for (let i = 0; i < 8; i++) {
-    if (fs.existsSync(path.join(dir, 'mkdocs.yml'))) return dir;
-    const parent = path.dirname(dir);
-    if (parent === dir) break;
-    dir = parent;
-  }
-  return dir;
+  return process.cwd();
 }
 
 /** Map a sample-data extension to a content type for the ADLS upload. */

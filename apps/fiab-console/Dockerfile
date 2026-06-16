@@ -77,6 +77,12 @@ RUN addgroup --system --gid 1001 nodejs && \
 COPY --from=builder /app/public ./public
 COPY --from=builder --chown=nextjs:nodejs /app/.next/standalone ./
 COPY --from=builder --chown=nextjs:nodejs /app/.next/static ./.next/static
+# Repo-hosted app-bundle sample datasets. They live inside the fiab-console
+# package (so they're in the Docker build context) but are NOT part of Next's
+# traced standalone output, so copy them explicitly next to server.js. At
+# runtime lib/apps/repo-datasets.ts reads them from <cwd>/samples/app-data and
+# the install provisioner uploads them into the tenant's own ADLS.
+COPY --from=builder --chown=nextjs:nodejs /app/samples ./samples
 
 # Overwrite any source-tree marker with one stamped at build time.
 # Validator probes /build-marker.txt and grep's for sha=<expected>.

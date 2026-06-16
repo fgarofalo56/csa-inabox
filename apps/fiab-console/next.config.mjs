@@ -14,14 +14,12 @@ const nextConfig = {
   // standalone server output. `ws` powers the Pylance/pylsp WebSocket bridge
   // (lib/lsp/pylsp-bridge.mjs) and must load natively, not be webpack-bundled.
   serverExternalPackages: ['mssql', 'tedious', '@azure/storage-file-datalake', 'ws'],
-  // Repo-hosted app-bundle sample datasets (samples/app-data/**) are read at
-  // runtime by lib/apps/repo-datasets.ts and uploaded into the tenant's own
-  // ADLS at install time, so they MUST ship inside the standalone server
-  // output. The provisioning route is the include anchor; the glob reaches up
-  // to the repo root (three levels above apps/fiab-console).
-  outputFileTracingIncludes: {
-    '/api/apps/[id]/install': ['../../samples/app-data/**/*'],
-  },
+  // Repo-hosted app-bundle sample datasets live at apps/fiab-console/samples/
+  // app-data/** and are read at runtime by lib/apps/repo-datasets.ts (relative
+  // to process.cwd()) then uploaded into the tenant's own ADLS at install time.
+  // They are copied into the standalone runner explicitly by the Dockerfile
+  // (COPY /app/samples ./samples) rather than via Next file-tracing, so no
+  // outputFileTracingIncludes entry is needed.
   experimental: {
     serverActions: { allowedOrigins: ['localhost:3000', 'loom-console.*'] },
     // Next.js 15: instrumentation.ts is enabled by default; instrumentationHook
