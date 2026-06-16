@@ -17,7 +17,7 @@
  */
 
 import { fetchWithTimeout } from '@/lib/azure/fetch-with-timeout';
-import { listPaths } from './adls-client';
+import { listPaths, containerExistsOn } from './adls-client';
 import { getDfsSuffix } from './cloud-endpoints';
 import { serverlessTarget, executeQuery } from './synapse-sql-client';
 import {
@@ -57,6 +57,14 @@ export interface ResolveResult {
   abfssUri?: string;
   /** Validated reachable (for ADLS/internal Files). */
   reachable?: boolean;
+  /**
+   * The account + filesystem are reachable, but the specific target PATH does
+   * not exist yet (404 PathNotFound) — e.g. a brand-new folder or a container
+   * root with no children. Like Fabric/OneLake, a shortcut to an empty/missing
+   * folder under a reachable filesystem is ALLOWED (it resolves data lazily),
+   * so this is NOT a hard failure.
+   */
+  empty?: boolean;
 }
 
 export interface TablesRegistration {
@@ -122,8 +130,52 @@ export async function resolveAndTestAdls(
   // (NOT Loom's default account) proves the UAMI can read it. Requires the
   // Console UAMI to have Storage Blob Data Reader on parts.account — see
   // scripts/csa-loom/grant-shortcut-storage-rbac.sh.
-  await listPaths(parts.container, parts.path, 1, parts.account);
-  return { abfssUri: parts.abfss, reachable: true };
+  //
+  // Reachability semantics (parity with Fabric/OneLake): a shortcut may target
+  // a container ROOT or a folder that is empty / not-yet-created. A 404
+  // PathNotFound on the PATH is therefore NOT a hard failure — only an
+  // unreachable ACCOUNT or a missing FILESYSTEM (container) is. So when the path
+  // probe 404s we confirm the filesystem itself exists and, if so, allow the
+  // shortcut as reachable-but-empty. Auth (403) and network errors still fail.
+  try {
+    await listPaths(parts.container, parts.path, 1, parts.account);
+    return { abfssUri: parts.abfss, reachable: true };
+  } catch (e: any) {
+    const status: number | undefined =
+      e?.statusCode ?? e?.response?.status ?? e?.details?.statusCode;
+    const codeStr = String(e?.code ?? e?.details?.errorCode ?? e?.errorCode ?? '');
+    const msg = String(e?.message ?? e ?? '');
+    const isAuth = status === 403 || /authorization|forbidden|permission/i.test(codeStr + ' ' + msg);
+    // Distinguish a missing PATH (allowed) from a missing FILESYSTEM (real fail).
+    const fsMissing = /FilesystemNotFound|ContainerNotFound/i.test(codeStr);
+    const pathMissing =
+      !fsMissing &&
+      (status === 404 || /PathNotFound|SourcePathNotFound/i.test(codeStr) ||
+        /the specified path does not exist/i.test(msg));
+
+    if (isAuth) throw e; // real RBAC failure — surface the access-denied message.
+
+    if (pathMissing) {
+      // The path doesn't exist yet — confirm the FILESYSTEM (container) is real
+      // and reachable before allowing the shortcut. containerExistsOn returns
+      // false on auth/network/404, so a true here proves a reachable filesystem.
+      const fsReachable = await containerExistsOn(parts.account, parts.container);
+      if (fsReachable) {
+        return { abfssUri: parts.abfss, reachable: true, empty: true };
+      }
+      throw Object.assign(
+        new Error(
+          `Filesystem '${parts.container}' was not found (or is unreachable) on account ` +
+            `'${parts.account}'. The target account/container must exist and the Console UAMI ` +
+            `must have Storage Blob Data Reader on it. (The target path itself may be empty — ` +
+            `that is allowed once the filesystem is reachable.)`,
+        ),
+        { code: 'FilesystemNotFound', statusCode: 404 },
+      );
+    }
+    // Filesystem explicitly missing, or any other error (network/DNS) → real fail.
+    throw e;
+  }
 }
 
 /** Which Tables engine is available, in preference order (Synapse, then Databricks). null = none. */

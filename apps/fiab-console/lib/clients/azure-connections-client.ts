@@ -45,7 +45,7 @@ import {
   type TokenCredential,
 } from '@azure/identity';
 import { AcaManagedIdentityCredential } from '@/lib/azure/aca-managed-identity';
-import { armBase, armScope, stripArmBase, getLogAnalyticsHost, dfsUrl } from '@/lib/azure/cloud-endpoints';
+import { armBase, armScope, stripArmBase, getLogAnalyticsHost, logAnalyticsTokenScope, dfsUrl } from '@/lib/azure/cloud-endpoints';
 import { getServiceClientFor } from '@/lib/azure/adls-client';
 import { listStorageAccounts, type StorageAccountSummary } from '@/lib/azure/storage-discovery';
 import { azureConnectionsContainer } from '@/lib/azure/cosmos-client';
@@ -350,7 +350,7 @@ async function probeAdlsStaging(accountName: string, container: string): Promise
 async function probeLawQuery(customerId: string): Promise<void> {
   let t;
   try {
-    t = await credential.getToken(`${getLogAnalyticsHost()}/.default`);
+    t = await credential.getToken(logAnalyticsTokenScope());
   } catch (e: any) {
     throw new AzureConnectionError(credentialErrorMessage('the Log Analytics query data plane'), 401);
   }

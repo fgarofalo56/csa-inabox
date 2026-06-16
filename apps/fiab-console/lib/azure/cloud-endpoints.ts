@@ -678,6 +678,36 @@ export function getLogAnalyticsHost(): string {
   return isGovCloud() ? 'https://api.loganalytics.us' : 'https://api.loganalytics.azure.com';
 }
 
+/**
+ * AAD `.default` token SCOPE for the Log Analytics QUERY data plane.
+ *
+ * CRITICAL: the token audience is NOT the same as the query HOST. The query
+ * REST endpoint is served from `api.loganalytics.azure.com` (Commercial), but
+ * the AAD-registered resource principal for that data plane is
+ * `https://api.loganalytics.io` — there is NO service principal named
+ * `https://api.loganalytics.azure.com` in any tenant. Deriving the scope from
+ * the host (`${getLogAnalyticsHost()}/.default`) yields
+ * AADSTS500011 "resource principal ... was not found in the tenant" and breaks
+ * every LA-querying surface (Monitor logs, audit-logs, copilot-usage, usage
+ * trends, the ADF run-log probe, the connections LA probe).
+ *
+ * Per-cloud audience (verified against Microsoft Learn — the Azure Monitor
+ * Log Analytics query API audience, and the Azure Government endpoint mapping):
+ *   Commercial / GCC : https://api.loganalytics.io
+ *   GCC-High / IL5 / DoD (AzureUSGovernment) : https://api.loganalytics.us
+ *
+ * `LOOM_LOG_ANALYTICS_SCOPE` overrides outright for clouds we don't enumerate
+ * (e.g. air-gapped). Note the Gov audience host equals the Gov query host —
+ * only Commercial has the host/audience split.
+ */
+export function logAnalyticsTokenScope(): string {
+  const explicit = process.env.LOOM_LOG_ANALYTICS_SCOPE;
+  if (explicit) return explicit.endsWith('/.default') ? explicit : `${explicit.replace(/\/+$/, '')}/.default`;
+  return isGovCloud()
+    ? 'https://api.loganalytics.us/.default'
+    : 'https://api.loganalytics.io/.default';
+}
+
 /** Azure Blob storage hostname suffix (no leading dot, no account prefix). */
 export function getBlobSuffix(): string {
   return isGovCloud() ? 'blob.core.usgovcloudapi.net' : 'blob.core.windows.net';

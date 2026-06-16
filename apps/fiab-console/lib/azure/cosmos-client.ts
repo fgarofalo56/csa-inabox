@@ -906,18 +906,38 @@ const KNOWN_CONTAINER_IDS = [
   'metastore-registrations',
 ];
 
-/** List all Loom containers with their current throughput shape. */
+/** List all Loom containers with their current throughput shape.
+ *
+ * BOUNDED: previously this looped over all ~60 KNOWN_CONTAINER_IDS serially,
+ * issuing TWO Cosmos round-trips each (read + readOffer) = ~120 sequential
+ * calls. On a cold console or an RBAC-throttled account that blew past the
+ * route deadline ("Timed out"). Now each container is probed with bounded
+ * concurrency and a per-call abort timeout, so a slow/hanging container can't
+ * stall the whole list and the route returns promptly. Tunables:
+ *   LOOM_COSMOS_SCALING_CONCURRENCY (default 12)
+ *   LOOM_COSMOS_SCALING_PROBE_MS    (default 4000, per-container deadline)
+ */
 export async function listContainerThroughput(): Promise<ContainerThroughputInfo[]> {
   await ensure();
-  const out: ContainerThroughputInfo[] = [];
-  for (const id of KNOWN_CONTAINER_IDS) {
+  const concurrency = Math.max(1, Number(process.env.LOOM_COSMOS_SCALING_CONCURRENCY) || 12);
+  const probeMs = Math.max(500, Number(process.env.LOOM_COSMOS_SCALING_PROBE_MS) || 4000);
+  // Overall wall-clock budget: once exceeded, workers stop pulling new ids and
+  // we return what we have so the BFF route never hangs past its own ceiling.
+  const totalMs = Math.max(2000, Number(process.env.LOOM_COSMOS_SCALING_TOTAL_MS) || 15000);
+  const deadline = Date.now() + totalMs;
+
+  const probe = async (id: string): Promise<ContainerThroughputInfo | null> => {
+    // One AbortController per container so a per-call timeout actually cancels
+    // the in-flight Cosmos request rather than leaking a dangling promise.
+    const ac = new AbortController();
+    const timer = setTimeout(() => ac.abort(), probeMs);
     try {
       const c = _db!.container(id);
-      const def = await c.read();
+      const def = await c.read({ abortSignal: ac.signal });
       const partitionKey = (def?.resource?.partitionKey?.paths || [])[0];
       let info: ContainerThroughputInfo = { id, partitionKey, mode: 'unknown' };
       try {
-        const off = await c.readOffer();
+        const off = await c.readOffer({ abortSignal: ac.signal });
         if (off?.resource) {
           const r: any = off.resource;
           const autoMax = r?.content?.offerAutopilotSettings?.maxThroughput;
@@ -930,14 +950,32 @@ export async function listContainerThroughput(): Promise<ContainerThroughputInfo
           info.mode = 'serverless';
         }
       } catch {
-        // Serverless accounts return 404 on readOffer.
+        // Serverless accounts (and database-shared-throughput containers)
+        // return 404/no-offer on readOffer.
         info.mode = 'serverless';
       }
-      out.push(info);
+      return info;
     } catch {
-      // skip containers that don't exist in this account
+      // Container doesn't exist in this account, or the read timed out/aborted.
+      return null;
+    } finally {
+      clearTimeout(timer);
     }
-  }
+  };
+
+  // Bounded-concurrency pool over the known container ids (parallel, not serial).
+  const out: ContainerThroughputInfo[] = [];
+  let next = 0;
+  const worker = async () => {
+    while (next < KNOWN_CONTAINER_IDS.length && Date.now() < deadline) {
+      const i = next++;
+      const info = await probe(KNOWN_CONTAINER_IDS[i]);
+      if (info) out.push(info);
+    }
+  };
+  await Promise.all(Array.from({ length: Math.min(concurrency, KNOWN_CONTAINER_IDS.length) }, worker));
+  // Stable order (parallelism scrambles completion order).
+  out.sort((a, b) => a.id.localeCompare(b.id));
   return out;
 }
 

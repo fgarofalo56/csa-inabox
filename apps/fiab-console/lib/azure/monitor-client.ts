@@ -31,13 +31,19 @@ import {
   ManagedIdentityCredential,
 } from '@azure/identity';
 import { AcaManagedIdentityCredential } from '@/lib/azure/aca-managed-identity';
-import { armBase, armScope } from './cloud-endpoints';
+import { armBase, armScope, getLogAnalyticsHost, logAnalyticsTokenScope } from './cloud-endpoints';
 
 // Sovereign-cloud ARM host + scope (Commercial / GCC-High / IL5).
 const ARM = armBase();
 const ARM_SCOPE = armScope();
-const LA_ENDPOINT = process.env.LOOM_LOG_ANALYTICS_ENDPOINT || 'https://api.loganalytics.azure.com';
-const LA_SCOPE = `${LA_ENDPOINT}/.default`;
+// LA QUERY HOST (the REST endpoint) vs LA TOKEN SCOPE (the AAD audience) are
+// DISTINCT: the Commercial query host is `api.loganalytics.azure.com` but the
+// AAD resource principal is `https://api.loganalytics.io`. Deriving the scope
+// from the host yields AADSTS500011 ("resource principal ... was not found in
+// the tenant"). Host comes from getLogAnalyticsHost() (gov-correct); scope
+// comes from logAnalyticsTokenScope().
+const LA_ENDPOINT = process.env.LOOM_LOG_ANALYTICS_ENDPOINT || getLogAnalyticsHost();
+const LA_SCOPE = logAnalyticsTokenScope();
 
 // API versions (stable unless noted).
 const ARM_RESOURCES_API = '2021-04-01';

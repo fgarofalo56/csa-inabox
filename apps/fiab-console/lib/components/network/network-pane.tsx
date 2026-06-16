@@ -29,7 +29,6 @@ import {
   PlugConnected24Regular, Checkmark16Filled, Warning16Filled,
   Info16Filled, Dismiss16Filled,
 } from '@fluentui/react-icons';
-import { NetworkTopologyCanvas } from './topology-canvas';
 import { FullNetworkTopologyCanvas } from './full-topology-canvas';
 
 interface DnsRecord { fqdn: string; ips: string[]; zone: string; }
@@ -431,20 +430,11 @@ export function NetworkPane() {
         </div>
       )}
 
-      {/* 2c · Topology graph */}
-      {!loading && data?.ok && ((data.vnets?.length ?? 0) > 0 || (data.endpoints?.length ?? 0) > 0) && (
-        <div style={card}>
-          <div style={head}>
-            <Globe24Regular />
-            <Subtitle2>CSA Loom network topology</Subtitle2>
-          </div>
-          <Body1 style={{ display: 'block', marginBottom: 10, color: tokens.colorNeutralForeground3 }}>
-            vNets → subnets → NSGs → private endpoints → the Azure service each fronts, tagged with the owning
-            Loom domain (resolved via Azure Resource Graph). Select any node for its live ARM detail.
-          </Body1>
-          <NetworkTopologyCanvas data={{ endpoints: (data.endpoints || []) as any, vnets: (data.vnets || []) as any, nsgs: (data.nsgs || []) as any, zones: data.zones || [], dnsZones: (data.dnsZones || []) as any }} />
-        </div>
-      )}
+      {/* 2c · (removed) The old private-endpoint-derived topology graph used to
+          render a SECOND "CSA Loom network topology" card here, duplicating the
+          comprehensive Azure-Resource-Graph FullNetworkTopologyCanvas in section
+          0 above (and frequently rendering empty when the PE inventory was thin).
+          Section 0 is the single source of truth for the network topology visual. */}
 
       {/* 3 · Enterprise DNS */}
       <div style={card}>
