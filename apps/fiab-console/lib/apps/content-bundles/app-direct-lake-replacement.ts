@@ -667,14 +667,21 @@ const bundle: AppBundle = {
             ],
           },
         ],
+        // Self-contained: the install uploads a repo-hosted legacy-BI export
+        // manifest into THIS tenant's ADLS and registers a real queryable
+        // shortcut. The prior target pointed at an external `legacy-exports@
+        // {{ADLS_ACCOUNT}}` container that does not exist on a fresh install
+        // (vaporware); replaced per .claude/rules/no-vaporware.md.
         shortcuts: [
           {
             name: 'legacy-bi-export-archive',
-            target: 'abfss://legacy-exports@{{ADLS_ACCOUNT}}.dfs.core.windows.net/pbirs-archive',
+            repoDataset: 'samples/app-data/direct-lake-replacement/legacy-bi-export-manifest.csv',
+            format: 'csv',
+            kind: 'files',
             description:
-              'Read-only shortcut to the archived legacy BI server exports ' +
-              '(Power BI Report Server / third-party workbooks) kept for the ' +
-              'parallel-run validation period (playbook Step 8 cutover).',
+              'Manifest of archived legacy BI server exports (Power BI Report Server / SSRS / ' +
+              'Tableau / Cognos) kept for the parallel-run validation period (playbook Step 8 ' +
+              'cutover). Repo-hosted sample uploaded into this lakehouse on install.',
           },
         ],
       },

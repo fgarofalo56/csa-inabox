@@ -1,0 +1,11 @@
+report_id,report_name,source_platform,export_format,row_count,last_refreshed,owner_email,retained_until,validation_status
+RPT-0001,Quarterly Sales Summary,PowerBI Report Server,pbix,148230,2025-12-31,bi-team@contoso.com,2026-06-30,validated
+RPT-0002,Regional Margin Analysis,PowerBI Report Server,pbix,98412,2025-12-31,bi-team@contoso.com,2026-06-30,validated
+RPT-0003,Inventory Aging,SSRS,rdl,52119,2025-12-30,ops@contoso.com,2026-06-30,pending
+RPT-0004,Customer Churn Cohorts,Tableau,twbx,33920,2025-12-29,analytics@contoso.com,2026-06-30,validated
+RPT-0005,Executive KPI Pack,PowerBI Report Server,pbix,12044,2025-12-31,exec-bi@contoso.com,2026-09-30,validated
+RPT-0006,Supplier Scorecards,Cognos,xml,28710,2025-12-28,procurement@contoso.com,2026-06-30,pending
+RPT-0007,Marketing Spend Rollup,Tableau,twbx,41552,2025-12-30,marketing@contoso.com,2026-06-30,validated
+RPT-0008,Financial Close Pack,SSRS,rdl,77310,2025-12-31,finance@contoso.com,2026-12-31,validated
+RPT-0009,Store Footfall Trends,PowerBI Report Server,pbix,205884,2025-12-29,retail-ops@contoso.com,2026-06-30,validated
+RPT-0010,Returns & Warranty,Cognos,xml,19233,2025-12-27,support@contoso.com,2026-06-30,pending
