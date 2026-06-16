@@ -61,6 +61,48 @@ interface SynapseServerlessSqlPoolContent {
   database?: string;
   /** Mirrored tables — one OPENROWSET CSV view is created per entry. */
   tables?: Array<{ schema: string; table: string }>;
+
+  // ── Databricks-UC-mirror fields (set by ITEM_PAIRING_RULES['mirrored-databricks']) ──
+  /**
+   * Cosmos item id of the parent mirrored-databricks. Presence ⇒ the
+   * Databricks-UC branch: instead of relative CSV folders under one adlsRoot,
+   * each UC table is an EXTERNAL Delta table at its own absolute abfss
+   * `storageLocation`, so we register one external data source per distinct
+   * storage-account root and one OPENROWSET(...FORMAT='delta') view per table.
+   * This is the Azure-native "shortcut" that makes the mounted UC catalog
+   * queryable in Loom — no Microsoft Fabric / OneLake.
+   */
+  databricksMirrorItemId?: string;
+  /** Parent mirror display name (used to name the per-mirror DB + data sources). */
+  databricksMirrorName?: string;
+  /** Unity Catalog name being mirrored (provenance + receipt). */
+  ucCatalogName?: string;
+  /**
+   * UC tables to expose as Delta OPENROWSET views. `storageLocation` is the
+   * absolute abfss:// Delta root (the table's `_delta_log` parent) returned by
+   * the UC tables API for EXTERNAL/MANAGED Delta tables.
+   */
+  ucTables?: Array<{ schema: string; table: string; storageLocation: string; format?: string }>;
+}
+
+/** Parse an abfss:// (or https dfs) Delta storage location into a
+ * { root, relative } pair: `root` is the container@account.dfs.core root
+ * usable as an EXTERNAL DATA SOURCE LOCATION; `relative` is the path within
+ * it (the Delta folder). Returns null when the URI can't be parsed (caller
+ * then falls back to using the absolute location directly). */
+export function splitAbfss(loc: string): { root: string; relative: string } | null {
+  const m = /^abfss:\/\/([^@/]+)@([^/]+)(\/.*)?$/i.exec(loc.trim());
+  if (m) {
+    const [, container, host, path] = m;
+    return { root: `abfss://${container}@${host}/`, relative: (path || '/').replace(/^\/+/, '') };
+  }
+  // https://<account>.dfs.core.windows.net/<container>/<path>
+  const h = /^https?:\/\/([^/]+)\/([^/]+)(\/.*)?$/i.exec(loc.trim());
+  if (h) {
+    const [, host, container, path] = h;
+    return { root: `abfss://${container}@${host}/`, relative: (path || '/').replace(/^\/+/, '') };
+  }
+  return null;
 }
 
 /** SQL-safe identifier fragment (letters/digits/underscore only). */
@@ -102,6 +144,20 @@ export const synapseSqlPoolProvisioner: Provisioner = async (input): Promise<Pro
   }
 
   const content = (input.content || {}) as SynapseServerlessSqlPoolContent;
+
+  // ── Databricks-UC-mirror branch ───────────────────────────────────────────
+  // Each UC table is an EXTERNAL Delta table whose `storageLocation` already
+  // lives in ADLS Gen2. We make the mounted catalog queryable in Loom by
+  // registering, per distinct storage-account root, one EXTERNAL DATA SOURCE +
+  // WorkspaceIdentity (workspace MSI) credential, then one
+  // OPENROWSET(... FORMAT='delta') view per table. This is the Azure-native
+  // shortcut — Synapse Serverless reads the same Delta files the UC governs, no
+  // Microsoft Fabric / OneLake. Grounded in Microsoft Learn:
+  //   https://learn.microsoft.com/azure/synapse-analytics/sql/query-delta-lake-format
+  if (content.databricksMirrorItemId) {
+    return provisionDatabricksMirror(input, content, ws, steps);
+  }
+
   const isMirror = !!content.mirrorItemId;
   const sourceLabel = isMirror ? 'mirror' : 'lakehouse';
   const adlsRoot = (content.adlsRoot || '').trim();
@@ -300,3 +356,181 @@ export const synapseSqlPoolProvisioner: Provisioner = async (input): Promise<Pro
     steps,
   };
 };
+
+/**
+ * Pair a Synapse Serverless SQL endpoint over a Databricks Unity Catalog
+ * mirror. Creates a per-mirror user database, then for every distinct ADLS
+ * storage-account root a credential-backed EXTERNAL DATA SOURCE, then one
+ * OPENROWSET(... FORMAT='delta') view per UC table at its relative Delta path.
+ * The result is that `mirrored-databricks` mounts a catalog that is queryable
+ * as T-SQL in Loom — the missing "pair an endpoint / create a shortcut" half of
+ * the item (audit H8). Real TDS only; honest gates on missing data / auth.
+ */
+async function provisionDatabricksMirror(
+  input: { displayName: string; cosmosItemId?: string },
+  content: SynapseServerlessSqlPoolContent,
+  ws: string,
+  steps: string[],
+): Promise<ProvisionResult> {
+  const name = content.databricksMirrorName || input.displayName;
+  const ucTables = (content.ucTables || []).filter((t) => t && t.storageLocation && t.table);
+  if (ucTables.length === 0) {
+    return {
+      status: 'remediation',
+      gate: {
+        reason:
+          `No queryable Unity Catalog Delta tables found for catalog "${content.ucCatalogName || name}" — ` +
+          'nothing to mount as a SQL endpoint.',
+        remediation:
+          'The mounted UC catalog must contain at least one Delta table with a resolvable storage location ' +
+          '(EXTERNAL tables, or MANAGED tables whose storage_location the UC API returns). MANAGED tables on a ' +
+          'metastore-managed storage root the Synapse MSI cannot read are skipped; expose the data as an EXTERNAL ' +
+          'Delta table on an ADLS Gen2 location the Synapse workspace MSI can read (Storage Blob Data Reader).',
+        link: 'https://learn.microsoft.com/azure/databricks/connect/unity-catalog/external-locations',
+      },
+      steps,
+    };
+  }
+
+  const DB = `loom_dbxmirror_${safeIdent(name)}`.slice(0, 128);
+  const endpoint = `${ws}-ondemand.${getSynapseSqlSuffix()}`;
+  const userTarget = serverlessTarget(DB);
+
+  // Step 1 — per-mirror user database (CREATE DATABASE runs from master).
+  try {
+    await synapseExec(
+      serverlessTarget('master'),
+      `IF DB_ID(N'${DB}') IS NULL EXEC('CREATE DATABASE [${DB}]');`,
+    );
+    steps.push(`Serverless user database [${DB}] ready on ${endpoint}.`);
+  } catch (e: any) {
+    if (isAuthError(e)) {
+      return {
+        status: 'remediation',
+        gate: {
+          reason: `Synapse Serverless rejected CREATE DATABASE: ${(e?.message || String(e)).slice(0, 160)}`,
+          remediation:
+            'Grant the Console UAMI (LOOM_UAMI_CLIENT_ID) the Synapse SQL Administrator role on the workspace ' +
+            '(it must be the workspace AAD admin or hold CONTROL SERVER on the Serverless endpoint to create databases).',
+          link: 'https://learn.microsoft.com/azure/synapse-analytics/security/how-to-set-up-access-control',
+        },
+        steps,
+      };
+    }
+    return { status: 'failed', error: `CREATE DATABASE [${DB}] failed: ${e?.message || String(e)}`, steps };
+  }
+
+  // Step 2 — WorkspaceIdentity credential (workspace MSI passthrough). The same
+  // credential serves every external data source below.
+  try {
+    await synapseExec(
+      userTarget,
+      `IF NOT EXISTS (SELECT 1 FROM sys.database_scoped_credentials WHERE name = N'WorkspaceIdentity')\n` +
+        `  EXEC('CREATE DATABASE SCOPED CREDENTIAL [WorkspaceIdentity] WITH IDENTITY = ''Managed Identity''');`,
+    );
+    steps.push('Database scoped credential [WorkspaceIdentity] (workspace MSI) ready.');
+  } catch (e: any) {
+    if (isAuthError(e)) {
+      return {
+        status: 'remediation',
+        gate: {
+          reason: `Synapse Serverless rejected CREATE DATABASE SCOPED CREDENTIAL: ${(e?.message || String(e)).slice(0, 160)}`,
+          remediation:
+            `Grant the Console UAMI CONTROL on the [${DB}] database, and ensure the Synapse workspace system MSI has ` +
+            'Storage Blob Data Reader on the ADLS account(s) backing the Databricks Unity Catalog external locations.',
+          link: 'https://learn.microsoft.com/azure/synapse-analytics/sql/develop-storage-files-storage-access-control?tabs=managed-identity',
+        },
+        steps,
+      };
+    }
+    return { status: 'failed', error: `CREATE DATABASE SCOPED CREDENTIAL failed: ${e?.message || String(e)}`, steps };
+  }
+
+  // Step 3 — one EXTERNAL DATA SOURCE per distinct storage-account root, then
+  // one OPENROWSET(...FORMAT='delta') view per UC table.
+  const dsByRoot = new Map<string, string>(); // root → data source name
+  let dsMade = 0;
+  let viewsMade = 0;
+  let firstView: string | null = null;
+  for (const t of ucTables) {
+    const split = splitAbfss(t.storageLocation);
+    // Resolve a data source for this table's root (create once per root).
+    let ds: string | undefined;
+    let relative: string | null = null;
+    if (split) {
+      relative = split.relative;
+      ds = dsByRoot.get(split.root);
+      if (!ds) {
+        ds = `loom_ds_dbx_${dsMade}_${safeIdent(name)}`.slice(0, 120);
+        const locLiteral = split.root.replace(/'/g, "''");
+        const dsDdl =
+          `IF EXISTS (SELECT 1 FROM sys.external_data_sources WHERE name = N'${ds}')\n` +
+          `  EXEC('DROP EXTERNAL DATA SOURCE [${ds}]');\n` +
+          `EXEC('CREATE EXTERNAL DATA SOURCE [${ds}] WITH (LOCATION = ''${locLiteral}'', CREDENTIAL = [WorkspaceIdentity])');`;
+        try {
+          await synapseExec(userTarget, dsDdl);
+          dsByRoot.set(split.root, ds);
+          dsMade += 1;
+          steps.push(`External data source [${ds}] → ${split.root} (credential: WorkspaceIdentity).`);
+        } catch (e: any) {
+          steps.push(`Data source for ${split.root} note: ${(e?.message || String(e)).slice(0, 120)}.`);
+          ds = undefined;
+        }
+      }
+    }
+
+    const viewName = `${safeIdent(t.schema)}_${safeIdent(t.table)}`;
+    // With a data source: relative Delta path. Without one (unparseable URI):
+    // fall back to the absolute location directly in BULK (no DATA_SOURCE).
+    const viewDdl =
+      ds && relative !== null
+        ? `CREATE OR ALTER VIEW [dbo].[${viewName}] AS\n` +
+          `SELECT * FROM OPENROWSET(\n` +
+          `  BULK '${relative.replace(/'/g, "''")}', DATA_SOURCE = '${ds}', FORMAT = 'delta'\n` +
+          `) AS rows;`
+        : `CREATE OR ALTER VIEW [dbo].[${viewName}] AS\n` +
+          `SELECT * FROM OPENROWSET(\n` +
+          `  BULK '${t.storageLocation.replace(/'/g, "''")}', FORMAT = 'delta'\n` +
+          `) AS rows;`;
+    try {
+      await synapseExec(userTarget, viewDdl);
+      viewsMade += 1;
+      if (!firstView) firstView = viewName;
+      steps.push(`View [dbo].[${viewName}] → ${t.schema}.${t.table} (Delta).`);
+    } catch (e: any) {
+      steps.push(`View [dbo].[${viewName}] note: ${(e?.message || String(e)).slice(0, 120)}.`);
+    }
+  }
+
+  // Step 4 — real-row receipt over the first view (non-fatal).
+  if (firstView) {
+    try {
+      const probe = await synapseExec(userTarget, `SELECT TOP 10 * FROM [dbo].[${firstView}];`);
+      steps.push(
+        `SELECT TOP 10 [dbo].[${firstView}] → ${probe.rowCount} row(s), ${probe.columns.length} col(s) ` +
+          `(${probe.executionMs}ms).` +
+          (probe.rowCount > 0 ? ' Live Delta rows confirmed (receipt).' : ' View resolves; table currently empty.'),
+      );
+    } catch (e: any) {
+      steps.push(`Real-table probe [dbo].[${firstView}] note: ${(e?.message || String(e)).slice(0, 140)}.`);
+    }
+  }
+
+  steps.push(
+    `Databricks UC mirror SQL endpoint: [${DB}] on ${endpoint} with ${viewsMade} Delta view(s) ` +
+      `over ${dsMade} storage root(s) (catalog ${content.ucCatalogName || name}).`,
+  );
+
+  return {
+    status: 'created',
+    resourceId: endpoint,
+    secondaryIds: {
+      backend: 'synapse-serverless',
+      endpoint,
+      database: DB,
+      viewCount: String(viewsMade),
+      ...(content.databricksMirrorItemId ? { databricksMirrorItemId: content.databricksMirrorItemId } : {}),
+    },
+    steps,
+  };
+}

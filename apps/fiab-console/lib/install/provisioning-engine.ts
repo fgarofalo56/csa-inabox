@@ -33,6 +33,7 @@ import { dataPipelineProvisioner } from './provisioners/data-pipeline';
 import { eventstreamProvisioner } from './provisioners/eventstream';
 import { kqlDashboardProvisioner } from './provisioners/kql-dashboard';
 import { mirroredDatabaseProvisioner } from './provisioners/mirrored-database';
+import { mirroredDatabricksProvisioner } from './provisioners/mirrored-databricks';
 import { databricksNotebookProvisioner } from './provisioners/databricks-notebook';
 import { reportProvisioner } from './provisioners/report';
 import { dataProductProvisioner } from './provisioners/data-product';
@@ -69,6 +70,7 @@ export const PROVISIONERS: Record<string, Provisioner> = {
   'data-pipeline': dataPipelineProvisioner,
   'eventstream': eventstreamProvisioner,
   'mirrored-database': mirroredDatabaseProvisioner, // replicate legacy SQL → Bronze (Fabric Mirroring)
+  'mirrored-databricks': mirroredDatabricksProvisioner, // mount a Databricks UC catalog → pair a Synapse Serverless SQL endpoint over its Delta tables (H8)
   'databricks-notebook': databricksNotebookProvisioner, // import + run the Silver/Gold medallion notebooks
   'report': reportProvisioner, // create the PBIR report bound byConnection to the semantic model
   'data-product': dataProductProvisioner, // create Purview Unified Catalog data products + glossary terms

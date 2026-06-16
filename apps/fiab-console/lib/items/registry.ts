@@ -103,6 +103,43 @@ export const ITEM_PAIRING_RULES: Record<string, PairedItemDef[]> = {
       deriveName: (input) => `${input.displayName} SQL Analytics`,
     },
   ],
+  // Mirrored Databricks (audit H8 + no-fabric-dependency.md): a
+  // MirroredAzureDatabricksCatalog mounts a Unity Catalog whose EXTERNAL Delta
+  // tables already live in ADLS Gen2. We pair it 1:1 with a
+  // `synapse-serverless-sql-pool` so the mounted catalog is QUERYABLE in Loom as
+  // T-SQL — one OPENROWSET(...FORMAT='delta') view per UC table over the table's
+  // own abfss storage location. This is the Azure-native "shortcut" (the missing
+  // mirror half of the item); no Microsoft Fabric / OneLake.
+  //
+  // The mirrored-databricks provisioner resolves the UC tables + storage
+  // locations and stamps them onto result.secondaryIds.ucTablesJson, which
+  // deriveContent forwards. deriveContent returns null when Databricks is not
+  // configured / the catalog has no resolvable Delta tables (honest skip — the
+  // paired provisioner would otherwise have nothing to mount).
+  'mirrored-databricks': [
+    {
+      pairedType: 'synapse-serverless-sql-pool',
+      deriveContent: (result, input) => {
+        const ucTablesJson = result.secondaryIds?.ucTablesJson;
+        if (!ucTablesJson) return null; // Databricks unconfigured / no Delta tables — honest skip.
+        let ucTables: Array<{ schema: string; table: string; storageLocation: string; format?: string }> = [];
+        try {
+          ucTables = JSON.parse(ucTablesJson);
+        } catch {
+          return null;
+        }
+        if (!Array.isArray(ucTables) || ucTables.length === 0) return null;
+        const c = (input.content || {}) as Record<string, unknown>;
+        return {
+          databricksMirrorItemId: input.cosmosItemId,
+          databricksMirrorName: input.displayName,
+          ucCatalogName: (c.catalogName as string) || result.secondaryIds?.catalogName,
+          ucTables,
+        };
+      },
+      deriveName: (input) => `${input.displayName} SQL Analytics`,
+    },
+  ],
   // Data Marketplace (Wave 4): the data-product type is registered so the
   // provisioning engine treats it as a known item. It catalogs into Loom's own
   // Azure-native Cosmos DataProductStore (no Fabric / Purview-unified-catalog

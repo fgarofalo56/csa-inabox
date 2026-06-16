@@ -19,6 +19,24 @@
 import { useMemo } from 'react';
 import { Caption1, tokens } from '@fluentui/react-components';
 
+/** A render layer over the same projected features. Layers compose: e.g. a
+ * heatmap under a point layer. `weightProp` selects a numeric feature property
+ * used to size/intensify heatmap + cluster + choropleth rendering. */
+export type MapLayerType = 'point' | 'heatmap' | 'cluster' | 'choropleth';
+export interface MapLayer {
+  id: string;
+  type: MapLayerType;
+  /** Off layers are kept in state but not drawn. Defaults to on. */
+  enabled?: boolean;
+  /** Feature property holding a numeric weight/value (heatmap/cluster/choropleth). */
+  weightProp?: string;
+  /** Base radius (px) for point/heatmap/cluster glyphs. */
+  radius?: number;
+  /** Color ramp endpoints (CSS colors) for value-driven layers. */
+  colorLow?: string;
+  colorHigh?: string;
+}
+
 export interface GeoJsonMapProps {
   /** Parsed GeoJSON object (FeatureCollection / Feature / Geometry). */
   geojson: unknown;
@@ -26,6 +44,41 @@ export interface GeoJsonMapProps {
   height?: number;
   /** Optional raster tile URL to draw behind the vector overlay. */
   rasterUrl?: string | null;
+  /**
+   * Render layers. When omitted, the legacy single vector overlay is drawn
+   * (back-compat). When provided, each enabled layer is rendered in order over
+   * the same projection — point / heatmap / cluster / choropleth.
+   */
+  layers?: MapLayer[];
+}
+
+/** Read a numeric weight from a feature's properties. */
+function weightOf(f: any, prop?: string): number {
+  if (!prop) return 1;
+  const v = f?.properties?.[prop];
+  const n = typeof v === 'number' ? v : Number(v);
+  return Number.isFinite(n) ? n : 0;
+}
+
+/** First lon/lat coordinate of a feature (used to anchor point glyphs). */
+function firstCoord(geom: any): [number, number] | null {
+  let found: [number, number] | null = null;
+  const visit = (arr: any) => {
+    if (found || !Array.isArray(arr)) return;
+    if (typeof arr[0] === 'number' && typeof arr[1] === 'number') { found = [arr[0], arr[1]]; return; }
+    arr.forEach(visit);
+  };
+  visit(geom?.coordinates);
+  return found;
+}
+
+/** Linear interpolate between two hex colors (#rrggbb) at t∈[0,1]. */
+function lerpColor(a: string, b: string, t: number): string {
+  const pa = /^#?([0-9a-f]{2})([0-9a-f]{2})([0-9a-f]{2})$/i.exec(a);
+  const pb = /^#?([0-9a-f]{2})([0-9a-f]{2})([0-9a-f]{2})$/i.exec(b);
+  if (!pa || !pb) return b;
+  const c = (i: number) => Math.round(parseInt(pa[i], 16) + (parseInt(pb[i], 16) - parseInt(pa[i], 16)) * t);
+  return `rgb(${c(1)}, ${c(2)}, ${c(3)})`;
 }
 
 interface Bounds { minLon: number; maxLon: number; minLat: number; maxLat: number }
@@ -49,8 +102,9 @@ function walkCoords(geom: any, cb: (lon: number, lat: number) => void) {
   visit(c);
 }
 
-export function GeoJsonMap({ geojson, width = 640, height = 360, rasterUrl }: GeoJsonMapProps) {
+export function GeoJsonMap({ geojson, width = 640, height = 360, rasterUrl, layers }: GeoJsonMapProps) {
   const features = useMemo(() => collectFeatures(geojson), [geojson]);
+  const activeLayers = useMemo(() => (layers || []).filter((l) => l.enabled !== false), [layers]);
 
   const bounds = useMemo<Bounds | null>(() => {
     let minLon = Infinity, maxLon = -Infinity, minLat = Infinity, maxLat = -Infinity;
@@ -111,7 +165,101 @@ export function GeoJsonMap({ geojson, width = 640, height = 360, rasterUrl }: Ge
             <line x1={pad} y1={pad + t * (height - 2 * pad)} x2={width - pad} y2={pad + t * (height - 2 * pad)} stroke={tokens.colorNeutralStroke2} strokeDasharray="2 4" />
           </g>
         ))}
-        {features.map((f, fi) => {
+        {/* Layered rendering (point/heatmap/cluster/choropleth) — drawn when
+            the caller supplies `layers`. Each enabled layer renders over the
+            same projection. Falls through to the legacy vector overlay below
+            when no layers are provided (back-compat). */}
+        {activeLayers.map((layer) => {
+          const radius = layer.radius ?? (layer.type === 'heatmap' ? 26 : layer.type === 'cluster' ? 10 : 5);
+          const colorLow = layer.colorLow ?? '#2a6df4';
+          const colorHigh = layer.colorHigh ?? '#e23c3c';
+          // Value range across features for color/size scaling.
+          let minW = Infinity, maxW = -Infinity;
+          for (const f of features) { const w = weightOf(f, layer.weightProp); if (w < minW) minW = w; if (w > maxW) maxW = w; }
+          const span = maxW - minW;
+          const norm = (w: number) => (span > 1e-9 ? (w - minW) / span : 0.5);
+
+          if (layer.type === 'heatmap') {
+            const gid = `heat-${layer.id}`;
+            return (
+              <g key={layer.id}>
+                <defs>
+                  <radialGradient id={gid}>
+                    <stop offset="0%" stopColor={colorHigh} stopOpacity={0.55} />
+                    <stop offset="60%" stopColor={colorLow} stopOpacity={0.28} />
+                    <stop offset="100%" stopColor={colorLow} stopOpacity={0} />
+                  </radialGradient>
+                </defs>
+                {features.map((f, fi) => {
+                  const c = firstCoord(f.geometry); if (!c) return null;
+                  const [x, y] = project(c[0], c[1]);
+                  const r = radius * (0.6 + 0.8 * norm(weightOf(f, layer.weightProp)));
+                  return <circle key={fi} cx={x} cy={y} r={r} fill={`url(#${gid})`} />;
+                })}
+              </g>
+            );
+          }
+
+          if (layer.type === 'cluster') {
+            return (
+              <g key={layer.id}>
+                {features.map((f, fi) => {
+                  const c = firstCoord(f.geometry); if (!c) return null;
+                  const [x, y] = project(c[0], c[1]);
+                  const w = weightOf(f, layer.weightProp);
+                  const r = radius * (0.7 + 1.1 * norm(w));
+                  return (
+                    <g key={fi}>
+                      <circle cx={x} cy={y} r={r} fill={colorLow} fillOpacity={0.45} stroke={colorHigh} strokeWidth={1.25} />
+                      <text x={x} y={y + 4} fontSize={11} textAnchor="middle" fill={tokens.colorNeutralForeground1}>{Math.round(w)}</text>
+                    </g>
+                  );
+                })}
+              </g>
+            );
+          }
+
+          if (layer.type === 'choropleth') {
+            return (
+              <g key={layer.id}>
+                {features.map((f, fi) => {
+                  const geom = f.geometry; if (!geom) return null;
+                  const t = norm(weightOf(f, layer.weightProp));
+                  const col = lerpColor(colorLow, colorHigh, t);
+                  const drawRing = (ring: number[][], key: string) => {
+                    const pts = ring.map(([lon, lat]) => project(lon, lat).join(',')).join(' ');
+                    return <polygon key={key} points={pts} fill={col} fillOpacity={0.55} stroke={stroke} strokeWidth={1} />;
+                  };
+                  if (geom.type === 'Polygon') return <g key={fi}>{geom.coordinates.map((r: number[][], i: number) => drawRing(r, `${fi}-${i}`))}</g>;
+                  if (geom.type === 'MultiPolygon') return <g key={fi}>{geom.coordinates.flatMap((p: number[][][], pi: number) => p.map((r, ri) => drawRing(r, `${fi}-${pi}-${ri}`)))}</g>;
+                  // Non-polygon features in a choropleth fall back to a colored dot.
+                  const c = firstCoord(geom); if (!c) return null;
+                  const [x, y] = project(c[0], c[1]);
+                  return <circle key={fi} cx={x} cy={y} r={radius + 2} fill={col} fillOpacity={0.7} stroke={stroke} strokeWidth={1} />;
+                })}
+              </g>
+            );
+          }
+
+          // point layer — value-colored markers.
+          return (
+            <g key={layer.id}>
+              {features.map((f, fi) => {
+                const c = firstCoord(f.geometry); if (!c) return null;
+                const [x, y] = project(c[0], c[1]);
+                const col = layer.weightProp ? lerpColor(colorLow, colorHigh, norm(weightOf(f, layer.weightProp))) : stroke;
+                const name = f.properties?.name || f.properties?.title || f.properties?.label;
+                return (
+                  <g key={fi}>
+                    <circle cx={x} cy={y} r={radius} fill={col} stroke={tokens.colorNeutralBackground1} strokeWidth={1.25} />
+                    {name && <text x={x + radius + 3} y={y + 4} fontSize={11} fill={tokens.colorNeutralForeground1}>{String(name)}</text>}
+                  </g>
+                );
+              })}
+            </g>
+          );
+        })}
+        {activeLayers.length === 0 && features.map((f, fi) => {
           const geom = f.geometry;
           if (!geom) return null;
           const name = f.properties?.name || f.properties?.title || f.properties?.id;
