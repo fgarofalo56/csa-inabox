@@ -92,23 +92,33 @@ function firstSource(item: WorkspaceItem): { kind: string; name: string } | null
 function buildStreamAlertQuery(
   streamName: string,
   source: { kind: string; name: string } | null,
-  cond: { property?: string; operator?: string; threshold?: number | string },
+  cond: { property?: string; operator?: string; threshold?: number | string; sourceTable?: string },
 ): string {
+  // Real, always-present App Insights table by default (NOT the phantom
+  // `AppEvents_CL`). Caller may override per-rule via body.sourceTable, or
+  // deployment-wide via LOOM_EVENTSTREAM_EVENTS_TABLE / LOOM_ACTIVATOR_DEFAULT_TABLE.
   const table =
-    (process.env.LOOM_EVENTSTREAM_EVENTS_TABLE ||
+    ((cond.sourceTable && String(cond.sourceTable).trim()) ||
+      process.env.LOOM_EVENTSTREAM_EVENTS_TABLE ||
       process.env.LOOM_ACTIVATOR_DEFAULT_TABLE ||
-      'AppEvents_CL').trim() || 'AppEvents_CL';
+      'AppEvents').trim() || 'AppEvents';
   const srcName = source?.name ? String(source.name).replace(/"/g, '\\"') : '';
   const op = mapOp(cond.operator);
   const prop = (cond.property && String(cond.property).trim()) || 'value';
   const val = formatVal(cond.threshold);
+  // column-safe accessors (column_ifexists + Properties bag fallback) so the
+  // rule VALIDATES / provisions against a real table whose literal columns may
+  // not exist — instead of a SEM0100 that surfaces as a 502.
+  const safe = (c: string) =>
+    `column_ifexists("${c}", tostring(parse_json(tostring(column_ifexists("Properties", dynamic({}))))["${c}"]))`;
   const lines = [
     `// Loom Eventstream alert — stream "${streamName.replace(/"/g, '\\"')}"`,
     `// pre-seeded source: ${source ? `${source.kind} "${source.name}"` : '(no source yet)'}`,
     table,
+    `| extend _src = ${safe('source')}, _streamSource = ${safe('streamSource_s')}, _v = ${safe(prop)}`,
   ];
-  if (srcName) lines.push(`| where source == "${srcName}" or streamSource_s == "${srcName}"`);
-  lines.push(`| where ${prop} ${op} ${val}`);
+  if (srcName) lines.push(`| where _src == "${srcName}" or _streamSource == "${srcName}"`);
+  lines.push(`| where _v ${op} ${val}`);
   return lines.join('\n');
 }
 
@@ -168,6 +178,9 @@ export async function POST(req: NextRequest, ctx: { params: Promise<{ id: string
   const windowSize = typeof body?.windowSize === 'string' ? body.windowSize : 'PT5M';
   const severity = typeof body?.severity === 'number' ? body.severity : 3;
   const action = body?.action && typeof body.action === 'object' ? body.action : undefined;
+  // Optional per-rule source table override (e.g. an eventstream's own custom
+  // log table). Falls back to LOOM_EVENTSTREAM_EVENTS_TABLE / default below.
+  const sourceTable = typeof body?.sourceTable === 'string' && body.sourceTable.trim() ? body.sourceTable.trim() : undefined;
 
   const es = await loadOwnedItem(id, ITEM_TYPE, session.claims.oid);
   if (!es) return err('eventstream not found', 404, 'not_found');
@@ -207,7 +220,7 @@ export async function POST(req: NextRequest, ctx: { params: Promise<{ id: string
   //    stream source's KQL.
   const act = await loadOwnedItem(activatorId, 'activator', session.claims.oid);
   if (!act) return err('backing activator not found', 404, 'activator_not_found');
-  const query = buildStreamAlertQuery(streamName, source, { property, operator, threshold });
+  const query = buildStreamAlertQuery(streamName, source, { property, operator, threshold, sourceTable });
   let rule: MonitorRuleRecord;
   try {
     rule = await createMonitorActivatorRule(act.displayName, {

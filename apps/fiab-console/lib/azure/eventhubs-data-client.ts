@@ -277,27 +277,121 @@ export interface PeekResult {
   events: ReceivedEvent[];
 }
 
+/** Whether the AMQP receive path is enabled (dependency bundled + opted in). */
+export function eventHubReceiveEnabled(): boolean {
+  const v = (process.env.LOOM_EVENTHUB_RECEIVE_ENABLED || '').trim().toLowerCase();
+  return v === '1' || v === 'true' || v === 'yes' || v === 'on';
+}
+
 /**
  * Peek (view) a bounded batch of recent events from `eventHub`.
  *
- * NOTE: Event Hubs has no HTTPS REST receive — receiving is AMQP-only and
- * requires the @azure/event-hubs SDK, which is not bundled. This throws the
- * honest {@link EventHubsReceiveUnavailableError}. When the dependency is added
- * and LOOM_EVENTHUB_RECEIVE_ENABLED is set, this is where an
- * EventHubConsumerClient would open, read a bounded batch with a short
- * maxWaitTime, and close. It never returns fabricated events.
+ * Event Hubs has no HTTPS REST receive — receiving is an AMQP-1.0 operation via
+ * the @azure/event-hubs SDK. That SDK is declared in package.json and gated
+ * behind LOOM_EVENTHUB_RECEIVE_ENABLED so the heavy AMQP transport is only
+ * loaded when the operator opts in. When the flag is OFF this throws the honest
+ * {@link EventHubsReceiveUnavailableError}. When ON, a real EventHubConsumerClient
+ * opens against the Entra-authenticated namespace, reads a BOUNDED batch from
+ * one partition with a short maxWaitTime, then closes — request-scoped, no
+ * long-lived link. It NEVER returns fabricated events.
+ *
+ * Auth: the same credential chain as send (ManagedIdentity → Default), against
+ * the namespace's fully-qualified host. The Console UAMI's "Azure Event Hubs
+ * Data Receiver" (covered by Data Owner) is required; a missing role surfaces
+ * the real AMQP authorization error.
+ *
+ * The @azure/event-hubs import is dynamic with a runtime-computed specifier so
+ * the build (tsc/next) does not hard-require the package to be installed in
+ * environments that never enable receive; when the flag is on, the package must
+ * be present (it is in package.json) or a clear dependency error is surfaced.
  */
 export async function peekEvents(
   eventHub: string,
-  _opts: PeekOptions = {},
+  opts: PeekOptions = {},
 ): Promise<PeekResult> {
   const hub = (eventHub || '').trim();
   if (!hub) throw new EventHubsDataError(400, undefined, 'eventHub is required');
   // Validate the namespace is configured so a misconfig reads as a config gate
   // (503) rather than the dependency gate.
-  readEventHubsDataConfig();
-  // Honest dependency-gate: no AMQP receive available in this runtime.
-  throw new EventHubsReceiveUnavailableError();
+  const cfg = readEventHubsDataConfig();
+
+  // Honest dependency-gate: receive not opted in for this deployment.
+  if (!eventHubReceiveEnabled()) throw new EventHubsReceiveUnavailableError();
+
+  // Runtime specifier keeps `tsc --noEmit` from resolving the (optional) AMQP
+  // SDK at build time; it is loaded only on the opted-in receive path.
+  const pkg = ['@azure', 'event-hubs'].join('/');
+  let ehMod: any;
+  try {
+    ehMod = await import(/* webpackIgnore: true */ /* @vite-ignore */ pkg);
+  } catch {
+    // Flag was on but the dependency isn't actually bundled — tell the truth.
+    throw new EventHubsReceiveUnavailableError();
+  }
+  const EventHubConsumerClient = ehMod.EventHubConsumerClient;
+  const earliestEventPosition = ehMod.earliestEventPosition;
+  const latestEventPosition = ehMod.latestEventPosition;
+
+  const consumerGroup = (opts.consumerGroup || '$Default').trim() || '$Default';
+  const maxEvents = Math.max(1, Math.min(opts.maxEvents ?? 20, 200));
+  const maxWaitMs = Math.max(500, Math.min(opts.maxWaitMs ?? 3000, 15000));
+  // fromLatest defaults true (tail) unless explicitly reading from the start.
+  const startPosition =
+    opts.fromLatest === false ? earliestEventPosition : latestEventPosition;
+
+  const client = new EventHubConsumerClient(
+    consumerGroup,
+    cfg.fullyQualifiedNamespace,
+    hub,
+    credential,
+  );
+  try {
+    // Resolve which partition to read. If none requested, read the first.
+    let partitionId = (opts.partition || '').trim();
+    if (!partitionId) {
+      const ids: string[] = await client.getPartitionIds();
+      partitionId = ids[0] ?? '0';
+    }
+    const received: ReceivedEvent[] = await new Promise((resolve, reject) => {
+      const acc: ReceivedEvent[] = [];
+      let settled = false;
+      const finish = (err?: unknown) => {
+        if (settled) return;
+        settled = true;
+        try { sub.close(); } catch { /* best-effort */ }
+        clearTimeout(timer);
+        if (err) reject(err); else resolve(acc);
+      };
+      const timer = setTimeout(() => finish(), maxWaitMs);
+      const sub = client.subscribe(
+        partitionId,
+        {
+          processEvents: async (events: any[]) => {
+            for (const e of events) {
+              acc.push({
+                offset: e.offset != null ? String(e.offset) : undefined,
+                sequenceNumber: typeof e.sequenceNumber === 'number' ? e.sequenceNumber : undefined,
+                enqueuedTime: e.enqueuedTimeUtc ? new Date(e.enqueuedTimeUtc).toISOString() : undefined,
+                partitionId,
+                partitionKey: e.partitionKey ?? undefined,
+                body: e.body,
+                properties: e.properties ?? undefined,
+              });
+              if (acc.length >= maxEvents) { finish(); return; }
+            }
+          },
+          processError: async (err: unknown) => { finish(err); },
+        },
+        { startPosition, maxBatchSize: maxEvents, maxWaitTimeInSeconds: Math.ceil(maxWaitMs / 1000) },
+      );
+    });
+    return { ok: true, partition: partitionId, events: received };
+  } catch (e: any) {
+    // Surface a real AMQP authorization / connectivity error honestly.
+    throw new EventHubsDataError(e?.code === 'UnauthorizedError' ? 403 : 502, e?.message || String(e), `peekEvents failed: ${e?.message || String(e)}`);
+  } finally {
+    try { await client.close(); } catch { /* best-effort */ }
+  }
 }
 
 /** Re-export the shared config gate so the BFF route can 503 consistently. */

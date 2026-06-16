@@ -210,12 +210,21 @@ export function matchClassesToTables(
 
 /**
  * Build the Azure-native (Log Analytics KQL) change-detection query for an
- * Activator trigger fired on entity changes. The query targets the custom-log
- * table the Loom activator engine emits entity-change events to
- * (`LOOM_ACTIVATOR_DEFAULT_TABLE`, default `AppEvents_CL`) and fires when a row
- * with the matching `entityType` and a write operation (INSERT/UPDATE/DELETE)
- * appears. The created scheduledQueryRule runs this verbatim — see
- * activator-monitor.ts buildRuleQuery (a verbatim `query` always wins).
+ * Activator trigger fired on entity changes. The query targets the table the
+ * Loom activator engine emits entity-change events to
+ * (`LOOM_ACTIVATOR_DEFAULT_TABLE`, default `AppEvents` — a real, always-present
+ * Application Insights custom-events table, NOT the phantom `AppEvents_CL`) and
+ * fires when a row with the matching `entityType` and a write operation
+ * (INSERT/UPDATE/DELETE) appears. The created scheduledQueryRule runs this
+ * verbatim — see activator-monitor.ts buildRuleQuery (a verbatim `query` always
+ * wins).
+ *
+ * The entityType/operation predicates are resolved with `column_ifexists` and a
+ * fall-back into the App Insights `Properties` custom-dimensions bag, so the
+ * query VALIDATES (and the scheduledQueryRule provisions) against a table whose
+ * literal columns may not exist yet — instead of a SEM0100 semantic error that
+ * surfaces as a 502. This is what makes the activator quick-create work
+ * day-one: a real table + a column-safe predicate.
  *
  * Pure + side-effect-free except for reading the env default table name, so it
  * is vitest-coverable. `sourceKind`/`sourceItemId` are recorded in the query
@@ -228,14 +237,18 @@ export function buildEntityChangeQuery(
   sourceItemId: string,
   defaultTable?: string,
 ): string {
-  const table = (defaultTable || process.env.LOOM_ACTIVATOR_DEFAULT_TABLE || 'AppEvents_CL').trim() || 'AppEvents_CL';
+  const table = (defaultTable || process.env.LOOM_ACTIVATOR_DEFAULT_TABLE || 'AppEvents').trim() || 'AppEvents';
   const et = String(entityType || '').replace(/"/g, '\\"');
   const src = String(sourceItemId || '').replace(/[\r\n]/g, ' ');
   return [
     `// Loom ontology entity-change trigger — ${sourceKind} ${src}`,
     table,
-    `| where entityType == "${et}"`,
-    `| where operation in ("INSERT","UPDATE","DELETE")`,
+    // column-safe: use the literal column when present, else read the custom
+    // dimension from the App Insights Properties bag (where Loom emits it).
+    `| extend _entityType = column_ifexists("entityType", tostring(parse_json(tostring(column_ifexists("Properties", dynamic({}))))["entityType"]))`,
+    `| extend _operation = column_ifexists("operation", tostring(parse_json(tostring(column_ifexists("Properties", dynamic({}))))["operation"]))`,
+    `| where _entityType == "${et}"`,
+    `| where _operation in ("INSERT","UPDATE","DELETE")`,
   ].join('\n');
 }
 

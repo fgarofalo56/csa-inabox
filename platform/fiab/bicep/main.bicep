@@ -347,6 +347,15 @@ param loomConsoleCosmosEnabled bool = true
 @description('Deploy the Weave (Semantic Ontology) PostgreSQL + Apache AGE graph store in each DLZ. Backs Palantir-class ontology object/link/action instance write-back (the Ontology editor Objects / Write-back actions surfaces). Default on — Palantir-class ontology write-back requires the graph store. Set false to skip ~1 Burstable PG flexible server/DLZ.')
 param weaveOntologyEnabled bool = true
 
+@description('Deploy the shared Data API builder (DAB) preview runtime (loom-dab-preview Container App, public MCR image) that the DAB editor\'s live REST/GraphQL testers + publish probe point at via LOOM_DAB_PREVIEW_URL. Default on (opt-out) — the DAB engine serves /health + REST/GraphQL roots immediately on an empty-entities config, so DAB preview/publish work day-one; the SQL target defaults to the DLZ Synapse serverless endpoint (entity queries additionally require the Console UAMI SQL login — see scripts/csa-loom/grant-dab-sql.sh). Container Apps only. Set false to leave DAB preview/publish honestly config-gated on LOOM_DAB_PREVIEW_URL.')
+param dabRuntimeEnabled bool = true
+
+@description('Deploy the loom-dbt-runner Container App (dbt-core + dbt-synapse + dbt-fabric + ODBC Driver 18) that executes generated dbt projects against the Synapse dedicated SQL pool. Synapse has no native dbt task, so this runtime is required for Synapse dbt-job targets (the Databricks target runs natively as a Databricks Job dbt_task, no extra infra). Default on (opt-out), but the admin-plane only activates it when the loom-dbt-runner image is present in ACR (dbtRunnerImageReady); otherwise the dbt-job run surface stays honestly gated on LOOM_DBT_RUNNER_URL. Container Apps only.')
+param dbtRunnerEnabled bool = true
+
+@description('Set true once the loom-dbt-runner image has been built + pushed to ACR (scripts/csa-loom/build-dbt-runner.sh). Gates the live loom-dbt-runner Container App deployment so a clean first deploy (no image yet) does not fail on an unresolvable image ref — the dbt-job run surface honest-gates until the image is ready, then this flips on. Default false.')
+param dbtRunnerImageReady bool = false
+
 @description('Wire the org-visuals Blob container backing Embed codes (F22) + Organizational visuals (F23): the Console UAMI data-plane grants (Storage Blob Data Contributor on the container + Storage Blob Delegator at account scope for getUserDelegationKey) and the LOOM_ORG_VISUALS_URL env var. Default on (opt-out) — the org-visuals container itself is always created by landing-zone/storage.bicep (it is part of the foundational medallion account); this flag governs only the grant + env wiring. Set false to leave Embed codes / Org visuals honestly config-gated (no SAS minting). No Fabric/Power BI dependency.')
 param loomOrgVisualsEnabled bool = true
 
@@ -966,6 +975,18 @@ module adminPlane 'modules/admin-plane/main.bicep' = if (deployAdminPlane) {
     loomWeavePgFqdn: (useSingleDlz && weaveOntologyEnabled) ? '${take('psql-loom-weave-default-${uniqueString(singleDlzRg.id)}', 63)}.${pgHostSuffix}' : ''
     loomWeavePgDatabase: (useSingleDlz && weaveOntologyEnabled) ? 'loom-weave' : ''
     loomWeaveGraph: (useSingleDlz && weaveOntologyEnabled) ? 'loom_ontology' : ''
+    // DAB preview runtime (loom-dab-preview) — default-on. SQL target defaults to
+    // the DLZ Synapse serverless SQL endpoint (deterministic workspace name, same
+    // pattern as loomSynapseWorkspace below); the DAB engine boots healthy on an
+    // empty-entities config so REST/GraphQL/publish preview work day-one. Entity
+    // queries also need the Console UAMI SQL login (grant-dab-sql.sh). Empty FQDN
+    // when Synapse is off → admin-plane skips DAB + honest-gates the editor.
+    dabRuntimeEnabled: dabRuntimeEnabled
+    dabSqlServerFqdn: (dabRuntimeEnabled && loomSynapseEnabled) ? 'syn-loom-default-${location}-ondemand.sql.azuresynapse.net' : ''
+    dabSqlDatabase: (dabRuntimeEnabled && loomSynapseEnabled) ? 'master' : ''
+    // dbt-runner (loom-dbt-runner) — default-on but image-gated: the admin-plane
+    // only deploys the Container App when the image is present in ACR.
+    dbtRunnerEnabled: (dbtRunnerEnabled && dbtRunnerImageReady)
     // Bind the console's warehouse/SQL env (LOOM_SYNAPSE_WORKSPACE /
     // LOOM_SYNAPSE_DEDICATED_POOL) to the DLZ Synapse workspace + dedicated pool
     // the landing-zone provisions (synapse.bicep: 'syn-loom-${domainName}-${location}'
