@@ -222,33 +222,78 @@ export const synapseSqlPoolProvisioner: Provisioner = async (input): Promise<Pro
   }
 
   // Step 2 — credential (workspace MSI passthrough) + external data source.
+  //
+  // Run as DISCRETE, individually-diagnosed statements rather than one batch.
+  // Serverless can fail CREATE EXTERNAL DATA SOURCE with SQL 15151 ("the
+  // specified credential cannot be found or the user does not have permission")
+  // when the scoped credential silently wasn't created — so we (a) ensure a
+  // database master key exists (idempotent; some serverless credential paths
+  // require it), (b) create the Managed-Identity credential and VERIFY the row
+  // actually lands before referencing it, then (c) (re)create the external data
+  // source. On any failure we surface the FULL error + which sub-step broke, so
+  // the receipt is actionable instead of a misleading "grant CONTROL" hint (the
+  // UAMI is typically already the workspace AAD admin).
   const userTarget = serverlessTarget(DB);
   const locLiteral = location.replace(/'/g, "''");
-  const ddl =
-    `IF NOT EXISTS (SELECT 1 FROM sys.database_scoped_credentials WHERE name = N'WorkspaceIdentity')\n` +
-    `  EXEC('CREATE DATABASE SCOPED CREDENTIAL [WorkspaceIdentity] WITH IDENTITY = ''Managed Identity''');\n` +
-    `IF EXISTS (SELECT 1 FROM sys.external_data_sources WHERE name = N'${DS}')\n` +
-    `  EXEC('DROP EXTERNAL DATA SOURCE [${DS}]');\n` +
-    `EXEC('CREATE EXTERNAL DATA SOURCE [${DS}] WITH (LOCATION = ''${locLiteral}'', CREDENTIAL = [WorkspaceIdentity])');`;
+  const errText = (e: any) => (e?.message || String(e)).replace(/\s+/g, ' ').trim();
+  let stage = 'master key';
   try {
-    await synapseExec(userTarget, ddl);
+    await synapseExec(
+      userTarget,
+      `IF NOT EXISTS (SELECT 1 FROM sys.symmetric_keys WHERE name = '##MS_DatabaseMasterKey##')\n` +
+        `  EXEC('CREATE MASTER KEY');`,
+    );
+
+    stage = 'scoped credential';
+    await synapseExec(
+      userTarget,
+      `IF NOT EXISTS (SELECT 1 FROM sys.database_scoped_credentials WHERE name = N'WorkspaceIdentity')\n` +
+        `  EXEC('CREATE DATABASE SCOPED CREDENTIAL [WorkspaceIdentity] WITH IDENTITY = ''Managed Identity''');`,
+    );
+    // Verify the credential actually exists — a silent no-op here is exactly
+    // what produces the downstream 15151 on CREATE EXTERNAL DATA SOURCE.
+    const check = await synapseExec(
+      userTarget,
+      `SELECT COUNT(*) AS n FROM sys.database_scoped_credentials WHERE name = N'WorkspaceIdentity';`,
+    );
+    const credRows = Number(check?.rows?.[0]?.[0] ?? 0);
+    if (credRows < 1) {
+      return {
+        status: 'failed',
+        error:
+          `Scoped credential [WorkspaceIdentity] did not materialise in [${DB}] after CREATE (sys.database_scoped_credentials ` +
+          `count=${credRows}). The external data source cannot be created without it.`,
+        steps,
+      };
+    }
+    steps.push(`Scoped credential [WorkspaceIdentity] present in [${DB}] (Managed Identity).`);
+
+    stage = 'external data source';
+    await synapseExec(
+      userTarget,
+      `IF EXISTS (SELECT 1 FROM sys.external_data_sources WHERE name = N'${DS}')\n` +
+        `  EXEC('DROP EXTERNAL DATA SOURCE [${DS}]');\n` +
+        `EXEC('CREATE EXTERNAL DATA SOURCE [${DS}] WITH (LOCATION = ''${locLiteral}'', CREDENTIAL = [WorkspaceIdentity])');`,
+    );
     steps.push(`External data source [${DS}] → ${location} (credential: WorkspaceIdentity / Managed Identity).`);
   } catch (e: any) {
+    const msg = errText(e);
     if (isAuthError(e)) {
       return {
         status: 'remediation',
         gate: {
-          reason: `Synapse Serverless rejected CREATE EXTERNAL DATA SOURCE: ${(e?.message || String(e)).slice(0, 160)}`,
+          reason: `Synapse Serverless rejected the ${stage} step: ${msg.slice(0, 220)}`,
           remediation:
-            `Grant the Console UAMI CONTROL on the [${DB}] database (to create the scoped credential + external data ` +
-            'source), and ensure the Synapse workspace system MSI has Storage Blob Data Contributor on the DLZ ADLS ' +
-            'account (landing-zone/synapse-storage-rbac.bicep grants this).',
+            `The Console UAMI must be the Synapse workspace Entra (AAD) admin — or hold CONTROL on [${DB}] — AND the ` +
+            `Synapse workspace SYSTEM-assigned MSI must have Storage Blob Data Contributor on the DLZ ADLS account ` +
+            `(landing-zone/synapse-storage-rbac.bicep). If both are already in place, this is the serverless ` +
+            `Managed-Identity credential / master-key path; full error: ${msg.slice(0, 400)}`,
           link: 'https://learn.microsoft.com/azure/synapse-analytics/sql/develop-storage-files-storage-access-control?tabs=managed-identity',
         },
         steps,
       };
     }
-    return { status: 'failed', error: `CREATE EXTERNAL DATA SOURCE [${DS}] failed: ${e?.message || String(e)}`, steps };
+    return { status: 'failed', error: `Serverless ${stage} step failed: ${msg}`, steps };
   }
 
   // Step 2.5 (mirror only) — EXTERNAL FILE FORMAT (CSV, skip-header) + one
