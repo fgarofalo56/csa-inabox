@@ -15297,13 +15297,21 @@ function PaginatedReportDesigner({ item, id }: { item: FabricItemType; id: strin
     if (!def || !workspaceId) return;
     setExportBusy(format); setExportErr(null); setExportHint(undefined);
     try {
-      const r = await fetch(`/api/items/paginated-report/${encodeURIComponent(id)}/render`, {
+      // Export goes through the binary /export route (real PDF / Excel / Word
+      // bytes from the renderer Function), NOT /render (which returns the
+      // on-screen JSON page-model). Send the authored definition so the export
+      // reflects exactly what's on screen. Parameter defaults seed the renderer
+      // as structured values (not a free-form blob — loom-no-freeform-config).
+      const parameterValues = (def.parameters || [])
+        .filter((p) => p.defaultValue != null && p.defaultValue !== '')
+        .map((p) => ({ name: p.name, value: String(p.defaultValue) }));
+      const r = await fetch(`/api/items/paginated-report/${encodeURIComponent(id)}/export`, {
         method: 'POST', headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ workspaceId, format }),
+        body: JSON.stringify({ definition: def, workspaceId, format, parameterValues }),
       });
       if (!r.ok) {
         const j = await r.json().catch(() => ({}));
-        setExportErr(j.error || `render failed (HTTP ${r.status})`);
+        setExportErr(j.error || `export failed (HTTP ${r.status})`);
         if (j.hint) setExportHint(j.hint);
         return;
       }

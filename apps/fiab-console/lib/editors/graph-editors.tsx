@@ -5,7 +5,7 @@
  *
  * Real wiring:
  *  - Cosmos Gremlin: real query via /api/items/cosmos-gremlin-graph/[id]/query
- *    (gremlin npm + AAD or account-key auth). Surfaces 501 deferred messages
+ *    (gremlin npm + AAD or account-key auth). Surfaces 503 deferred messages
  *    when runtime not configured.
  *  - Cypher / GQL: KQL backends (ADX `make-graph` + `graph-match` for Cypher
  *    semantics) are dispatched via the existing /api/items/kql-database/[id]/query
@@ -204,7 +204,7 @@ export function CosmosGremlinGraphEditor({ item, id }: { item: FabricItemType; i
             <MessageBarBody>
               <MessageBarTitle>Cosmos Gremlin runtime</MessageBarTitle>
               Real traversal execution gated on <code>LOOM_COSMOS_GREMLIN_ENDPOINT</code> + <code>gremlin</code> npm
-              package. When not configured the BFF returns 501 with a deferred-reason payload (rendered here).
+              package. When not configured the BFF returns 503 with a deferred-reason payload (rendered here).
               When the response contains vertices + edges the force-directed view renders below the raw JSON.
             </MessageBarBody>
           </MessageBar>

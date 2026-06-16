@@ -10,7 +10,7 @@
  * v3.x — the editor renders the edge/node tables.
  *
  * NOTE: gremlin requires WebSocket. The npm `gremlin` package is added in
- * package.json; if not installed at runtime, the route returns a 501 with
+ * package.json; if not installed at runtime, the route returns a 503 with
  * a clear deferred-reason MessageBar surfaced to the editor.
  */
 
@@ -69,7 +69,7 @@ const credential = uamiClientId
  */
 export async function executeGremlin(query: string): Promise<GremlinResult> {
   // Lazy require — the `gremlin` package is a peer dep. If it's missing we
-  // throw a 501 so the route handler can surface a clean deferred message.
+  // throw a 503 so the route handler can surface a clean deferred message.
   // eslint-disable-next-line @typescript-eslint/no-var-requires
   let gremlin: any;
   try {

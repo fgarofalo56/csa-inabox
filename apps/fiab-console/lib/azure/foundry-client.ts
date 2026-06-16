@@ -914,12 +914,16 @@ export async function moderateImage(imageBase64: string): Promise<any> {
 }
 
 export async function listContentSafetyPolicies(): Promise<{ name: string; thresholds: Record<string, number> }[]> {
-  // The data-plane "blocklists" + "categories" are the closest analog. Surface
-  // the default category set for now; real custom blocklists in v2.6.
+  // Honest gate only — `contentSafetyEndpoint()` throws NotDeployedError when
+  // Content Safety isn't provisioned, which drives the editor's not-deployed
+  // MessageBar. We do NOT fabricate a "default" threshold row: Azure AI Content
+  // Safety has no data-plane API that returns configured category thresholds as
+  // a policy list (thresholds live in Foundry RAI policies / custom blocklists).
+  // Live text/image moderation below is fully real. Wiring real RAI-policy +
+  // blocklist management is tracked in:
+  // TODO(#1410): https://github.com/fgarofalo56/csa-inabox/issues/1410
   contentSafetyEndpoint(); // throws NotDeployedError if not configured
-  return [
-    { name: 'default', thresholds: { hate: 4, selfHarm: 4, sexual: 4, violence: 4 } },
-  ];
+  return [];
 }
 
 // ---------------- Copilot safety pipeline (verdict-shaped wrappers) ----------

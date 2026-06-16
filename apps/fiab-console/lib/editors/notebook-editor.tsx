@@ -1,12 +1,15 @@
 'use client';
 
 /**
- * NotebookEditor — Fabric-native notebook editor wired to live Fabric REST.
+ * NotebookEditor — Azure-native notebook editor (no Microsoft Fabric required).
  *
- * Auth gate: requires the Console UAMI's SP to be (a) registered in the
- * Fabric tenant ("Service principals can use Fabric APIs") and (b) added
- * to the target workspace. If either is missing, the editor surfaces the
- * underlying 401/403 verbatim via MessageBar — no mocks.
+ * Per .claude/rules/no-fabric-dependency.md this is the DEFAULT path: authoring,
+ * listing, and execution work with ZERO Fabric tenant/workspace bound. The
+ * notebook definition persists to Cosmos item state; cell execution runs against
+ * the Azure-native compute the notebook is bound to (Synapse Spark, Databricks,
+ * or Azure ML). A real Microsoft Fabric workspace is strictly opt-in (selected
+ * explicitly) — never a precondition; when an opt-in Fabric call returns 401/403
+ * the editor surfaces it verbatim via MessageBar — no mocks.
  *
  * Backed by /api/loom/workspaces + /api/items/notebook/**.
  */

@@ -12,8 +12,9 @@
  *   - GeoQueryEditor     — KQL-or-TSQL toggle, pre-populated with H3 + ST
  *                          examples. Submits to Kusto or Synapse Serverless.
  *   - GeoPipelineEditor  — Cosmos-backed pointer to an ADF pipeline with a
- *                          "geo enrichment" flag. ADF integration deferred to
- *                          v3.x.
+ *                          "geo enrichment" flag. Trigger run fires a real ADF
+ *                          createRun; enrichment activities are operator-built
+ *                          in ADF (the seeded pipeline ships empty).
  *
  * Honest about runtime: Azure Maps account, H3 SQL UDFs, and reverse-geocode
  * pipelines are NOT deployed in this Loom instance — the MessageBars say so.
