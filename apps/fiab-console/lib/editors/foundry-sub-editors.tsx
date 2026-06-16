@@ -718,7 +718,7 @@ export function ContentSafetyEditor({ item, id }: { item: FabricItemType; id: st
         : (
           <>
             <Subtitle2>Content Safety</Subtitle2>
-            <Caption1>Default category set + severity thresholds. Custom blocklists land in v2.6.</Caption1>
+            <Caption1>Live text &amp; image moderation against the Azure AI Content Safety harm categories (hate, self-harm, sexual, violence). Custom RAI-policy &amp; blocklist management is tracked in issue #1410.</Caption1>
             <div className={s.card}>
               <Subtitle2>Text moderation</Subtitle2>
               <Textarea value={text} onChange={(_, d) => setText(d.value)} resize="vertical" rows={4} placeholder="Paste text to evaluate…" />

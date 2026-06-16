@@ -2367,7 +2367,7 @@ export const FABRIC_ITEM_TYPES: readonly FabricItemType[] = [
   { slug: 'geo-pipeline',                displayName: 'Geo pipeline',                restType: 'GeoPipeline',               category: 'Azure Geoanalytics',
     description: 'ADF/Synapse pipeline specialized for geo enrichment (H3 index, reverse geocode, buffer).',
     learnContent: {
-      "overview": "A Geo pipeline is an ADF/Synapse pipeline specialized for geo enrichment — H3 index, reverse geocode, buffer. In Loom it is a Cosmos-backed pointer to an ADF pipeline with a geo-enrichment flag; ADF integration is deferred to v3.x.",
+      "overview": "A Geo pipeline is an ADF/Synapse pipeline specialized for geo enrichment — H3 index, reverse geocode, buffer. In Loom it is a Cosmos-backed pointer to an ADF pipeline with a geo-enrichment flag. Trigger run fires a real ADF createRun against the bound pipeline and returns a live run id; the enrichment activities themselves are operator-built in ADF (the seeded loom-geo-enrich pipeline ships empty).",
       "steps": [
         {
           "title": "Define the enrichment",
@@ -2379,7 +2379,7 @@ export const FABRIC_ITEM_TYPES: readonly FabricItemType[] = [
         },
         {
           "title": "Save",
-          "body": "Save persists the configuration; full ADF execution is deferred to v3.x and disclosed in a MessageBar."
+          "body": "Save persists the configuration. Trigger run fires a real ADF createRun on the bound pipeline; the geo-enrichment activities are operator-built in ADF (the seeded pipeline ships empty), which the receipt discloses."
         },
         {
           "title": "Output a geo-dataset",
