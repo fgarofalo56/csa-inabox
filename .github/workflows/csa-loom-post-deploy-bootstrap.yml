@@ -95,6 +95,31 @@ jobs:
             echo "::warning::No Key Vault found in $ADMIN_RG — skipping MSAL app-reg provisioning"
             exit 0
           fi
+          # REACHABILITY: the Loom Key Vault is deployed with
+          # publicNetworkAccess=Disabled (private), so the `az keyvault secret set`
+          # calls the script makes (loom-msal-client-secret + session-secret) are
+          # NOT reachable from this public ubuntu-latest runner and would fail
+          # silently, leaving login broken AFTER a "successful" deploy. Mirror the
+          # Purview/Synapse steps: temporarily flip the KV to public for the write
+          # window and RESTORE it to Disabled/Deny via a trap so it runs even on
+          # failure. NOTE: use the CORRECT flag --public-network-access (NOT
+          # --public-network-enabled).
+          KV_ORIG_PNA=""
+          restore_kv_pna() {
+            if [ -n "${KV_NAME:-}" ] && [ "${KV_ORIG_PNA:-Enabled}" != "Enabled" ]; then
+              echo "-> restoring Key Vault $KV_NAME publicNetworkAccess=Disabled"
+              az keyvault update -n "$KV_NAME" --public-network-access Disabled --default-action Deny -o none || true
+            fi
+          }
+          trap restore_kv_pna EXIT
+          KV_ORIG_PNA="$(az keyvault show -n "$KV_NAME" --query "properties.publicNetworkAccess" -o tsv 2>/dev/null || echo Enabled)"
+          echo "Key Vault $KV_NAME publicNetworkAccess=$KV_ORIG_PNA"
+          if [ "$KV_ORIG_PNA" != "Enabled" ]; then
+            echo "-> temporarily enabling Key Vault public access for the secret-write window"
+            az keyvault update -n "$KV_NAME" --public-network-access Enabled --default-action Allow -o none || \
+              echo "::warning::Could not enable Key Vault public access — secret writes may be unreachable from the runner."
+            sleep 20
+          fi
           # Resolve the Console Container App's runtime FQDN to add to redirect URIs.
           CONSOLE_FQDN=$(az containerapp show -n loom-console -g "$ADMIN_RG" --query "properties.configuration.ingress.fqdn" -o tsv 2>/dev/null || true)
           HOSTS="${CSA_LOOM_CONSOLE_HOSTS:-}"
