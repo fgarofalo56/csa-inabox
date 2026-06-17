@@ -264,6 +264,11 @@ module synapse 'synapse.bicep' = if (loomSynapseEnabled) {
     adminEntraGroupId: adminEntraGroupId
     consolePrincipalId: consolePrincipalId
     consoleUamiName: consoleUamiName
+    // App (client) id — needed for the Synapse SQL Administrator grant so the
+    // console UAMI gets a WORKING serverless login (CREATE DATABASE). Granting
+    // by object id alone yields a broken login (Graph-fetch limitation when an
+    // SPI grants to another SPI) — see synapse.bicep consoleSqlAdminRoleScript.
+    consoleUamiAppId: consoleUamiAppId
     workspaceId: adminPlaneLawId
     complianceTags: complianceTags
     skipRoleGrants: skipRoleGrants
