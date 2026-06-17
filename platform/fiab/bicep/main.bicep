@@ -171,8 +171,8 @@ param powerBiSku string
 // until they are supplied — see docs/fiab/v3-tenant-bootstrap.md#usage-analytics-embed.
 @description('Deploy a Power BI Embedded (A1) capacity for the Govern/Usage embedded reports (Commercial / GCC).')
 param pbiEmbeddedEnabled bool = false
-@description('Deploy Azure Managed Grafana for the Govern/Usage embedded dashboards (GCC-High / IL5).')
-param managedGrafanaEnabled bool = false
+@description('Deploy Azure Managed Grafana for the Govern/Usage embedded dashboards (GCC-High / IL5). Day-one default ON so the Govern/Usage embed surfaces resolve without a setup gate; set false to opt out.')
+param managedGrafanaEnabled bool = true
 @description('LOOM_USAGE_REPORT_KIND for /admin/usage "Open analytics". "powerbi" (Commercial/GCC), "grafana" (GCC-High/IL5), or empty (native charts only).')
 @allowed([ '', 'powerbi', 'grafana' ])
 param loomUsageReportKind string = ''
@@ -294,8 +294,8 @@ param skipRoleGrants bool = false
 @description('Deploy Loom apps (Container Apps for Console/MCP/etc.). Requires container images in ACR — set false on initial provision, then true after CI image-build pipeline runs (PRP-16).')
 param deployAppsEnabled bool = false
 
-@description('Deploy AI Foundry Hub. Requires storage-account strategy; default off.')
-param aiFoundryEnabled bool = false
+@description('Deploy AI Foundry Hub. Requires storage-account strategy. Day-one default ON so the Foundry Hub / Copilot / AI-functions surfaces resolve without a setup gate; set false to opt out.')
+param aiFoundryEnabled bool = true
 
 @description('Deploy the dedicated AI Foundry Agent Service account (aifndry-loom-<location>) with the loom-agents project + chat/embedding model deployments. Backs LOOM_FOUNDRY_PROJECT_ENDPOINT + LOOM_AOAI_* so AI Functions, Copilot, and data-agent test-chat work out of the box. ON BY DEFAULT (opt-out) — set false to skip the AOAI account (the Copilot/data-agent/AI-functions surfaces then honest-gate). Independent of aiFoundryEnabled.')
 param agentFoundryEnabled bool = true
@@ -312,8 +312,14 @@ param loomApimEnabled bool = true
 @description('DEPRECATED alias for loomApimEnabled, retained so existing .bicepparam files keep working. Now defaults true (was false). Set either flag false to opt out of APIM.')
 param apimEnabled bool = true
 
-@description('Deploy AI Search. Default off — capacity in eastus2 is intermittent.')
-param aiSearchEnabled bool = false
+@description('Deploy AI Search. Day-one default ON so the AI Search / reindex / data-product-search / help-copilot surfaces resolve without a setup gate; set false to opt out (e.g. if regional capacity is intermittent).')
+param aiSearchEnabled bool = true
+
+@description('Deploy Azure Analysis Services (the Azure-native tabular engine backing the semantic-model / BI surfaces). Day-one default ON so the AAS / XMLA / DirectQuery surfaces resolve without a setup gate; set false to opt out (e.g. GCC-High / DoD where AAS is unavailable — the documented Synapse-Serverless / Loom-native fallback applies). Passed through to admin-plane/main.bicep aasEnabled. No Power BI / Fabric required (XMLA is the opt-in alternative).')
+param aasEnabled bool = true
+
+@description('Deploy the report-subscription delivery Logic App (integration/report-subscription-logicapp.bicep) so report subscriptions deliver day one. Day-one default ON; set false to opt out. Passed through to admin-plane/main.bicep reportSubscriptionsEnabled.')
+param reportSubscriptionsEnabled bool = true
 
 @description('Deploy ADX shared cluster (admin-plane) + per-DLZ ADX databases. Backs the RTI editor family — Eventhouse, KQL Database, KQL Queryset, KQL Dashboard, Eventstream. Default on as of 2026-05-27 (sweep-rti). Set false to skip ~$140/mo Dev SKU cluster.')
 param adxEnabled bool = true
@@ -478,8 +484,8 @@ param mysqlEnabled bool = false
 @description('Deploy an Azure Cache for Redis (Basic C0, Entra auth enabled).')
 param redisEnabled bool = false
 
-@description('Deploy an Azure Event Grid custom topic (local-auth disabled).')
-param eventGridEnabled bool = false
+@description('Deploy an Azure Event Grid custom topic (local-auth disabled). Day-one default ON so the business-events topics surface resolves without a setup gate; set false to opt out.')
+param eventGridEnabled bool = true
 
 @description('Deploy an Azure Service Bus namespace (Standard, SAS disabled) + starter queue/topic.')
 param serviceBusEnabled bool = false
@@ -496,8 +502,8 @@ param aiServicesEnabled bool = false
 @description('Deploy a Document Intelligence (FormRecognizer) account (Entra-only).')
 param documentIntelligenceEnabled bool = false
 
-@description('Deploy a Content Safety account (Entra-only).')
-param contentSafetyEnabled bool = false
+@description('Deploy a Content Safety account (Entra-only). Day-one default ON so the Foundry content-safety surface resolves without a setup gate; set false to opt out (e.g. DoD regions where Content Safety is unavailable).')
+param contentSafetyEnabled bool = true
 
 @description('Deploy an Azure App Service (Linux B1 plan + web app, HTTPS-only).')
 param appServiceEnabled bool = false
@@ -524,8 +530,8 @@ param vmAdminSshPublicKey string = ''
 @description('Deploy an Azure Batch account (BatchService mode) + backing auto-storage (managed-identity auth).')
 param batchEnabled bool = false
 
-@description('Deploy a Consumption Logic App (empty editable workflow).')
-param logicAppsEnabled bool = false
+@description('Deploy a Consumption Logic App (empty editable workflow). Day-one default ON so the logic-app provisioner + approval/report-subscription delivery surfaces resolve without a setup gate; set false to opt out.')
+param logicAppsEnabled bool = true
 
 @description('Deploy an Azure Static Web App (standalone, no repo link).')
 param staticWebAppsEnabled bool = false
@@ -849,6 +855,12 @@ module adminPlane 'modules/admin-plane/main.bicep' = if (deployAdminPlane) {
     apimEnabled: (loomApimEnabled && apimEnabled)
     aiSearchEnabled: aiSearchEnabled
     adxEnabled: adxEnabled
+    // audit day-one gap-closure: aasEnabled + reportSubscriptionsEnabled were
+    // declared on admin-plane/main.bicep but never passed from the top level, so
+    // AAS (semantic-model / BI Azure-native default) and the report-subscription
+    // delivery Logic App never deployed even when intended. Wire them through.
+    aasEnabled: aasEnabled
+    reportSubscriptionsEnabled: reportSubscriptionsEnabled
     copilotMafEnabled: copilotMafEnabled
     setupOrchestratorEnabled: setupOrchestratorEnabled
     setupTemplateUri: setupTemplateUri

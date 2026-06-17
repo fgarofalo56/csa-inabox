@@ -164,6 +164,10 @@ param contentSafetyEnabled = false
 param apimEnabled = true
 param hubFirewallEnabled = true
 param aiSearchEnabled = false
+// Azure Analysis Services is NOT available in the DoD regions — pin OFF (main.bicep
+// now defaults aasEnabled=true for Commercial day-one). The semantic-model surfaces
+// fall back to Synapse-Serverless / Loom-native here per the documented boundary.
+param aasEnabled = false
 param adxEnabled = true
 // RTI backends — Event Hubs + Stream Analytics ON by default (opt-out). Entra-
 // only auth (the only IL5-allowed posture). Set the env var to 'false' to skip,
