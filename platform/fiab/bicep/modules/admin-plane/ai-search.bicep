@@ -130,6 +130,27 @@ resource consoleIndexDataRole 'Microsoft.Authorization/roleAssignments@2022-04-0
   }
 }
 
+// Search Service Contributor → Console UAMI.
+// Control-plane role required for the ai-search-index provisioner
+// (lib/install/provisioners/ai-search.ts) and the AI Search navigator to manage
+// the service object itself: create/update indexes, indexers, data sources and
+// skillsets, and read service statistics. The provisioner's own 403 remediation
+// names this exact role. Index DATA operations ride consoleIndexDataRole above;
+// this grant covers the index/indexer/datasource/skillset LIFECYCLE so the
+// provisioner creates+loads indexes day one without a manual grant. Day-one gap
+// closure plan §D3. Role id 7ca78c08-252a-4471-8644-bb5ff32d4ba0 (cloud-agnostic).
+resource consoleSearchServiceContributor 'Microsoft.Authorization/roleAssignments@2022-04-01' = if (!skipRoleGrants && !empty(consolePrincipalId)) {
+  scope: search
+  name: guid(search.id, consolePrincipalId, '7ca78c08-252a-4471-8644-bb5ff32d4ba0')
+  properties: {
+    roleDefinitionId: subscriptionResourceId(
+      'Microsoft.Authorization/roleDefinitions',
+      '7ca78c08-252a-4471-8644-bb5ff32d4ba0')
+    principalId: consolePrincipalId
+    principalType: 'ServicePrincipal'
+  }
+}
+
 // Storage account that holds debug-session state (referenced when provided).
 // `last(split(id,'/'))` is the account name; the role assignment is scoped to it.
 resource debugStorage 'Microsoft.Storage/storageAccounts@2023-05-01' existing = if (!empty(debugSessionStorageId)) {
