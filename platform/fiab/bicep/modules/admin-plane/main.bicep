@@ -189,8 +189,8 @@ param adxSkuName string = 'Dev(No SLA)_Standard_E2a_v4'
 @description('Deploy an Azure Analysis Services (AAS) Standard server — the Azure-native semantic-model backend (no Fabric/Power BI). Hosts Import-mode tabular databases for refresh-now / scheduled-refresh. Default off.')
 param aasEnabled bool = false
 
-@description('AAS SKU (Standard tier). S1 (~$160/mo) is the minimum that supports the data-plane refresh REST API with a service-principal admin.')
-@allowed(['S0', 'S1', 'S2', 'S4', 'S8', 'S9'])
+@description('AAS SKU (Standard tier). S1 (~$160/mo) is the minimum that supports the data-plane refresh REST API with a service-principal admin. S0 is the cheapest Standard SKU. S8v2 / S9v2 are the v2 high-QPU SKUs (the legacy S8 / S9 are excluded — not available in many regions).')
+@allowed(['S0', 'S1', 'S2', 'S4', 'S8v2', 'S9v2'])
 param aasSkuName string = 'S1'
 
 @description('Reuse an existing AAS server name instead of provisioning one (any RG). When set, the module is skipped and LOOM_AAS_SERVER_NAME points at it.')
@@ -1072,9 +1072,9 @@ param loomBackends object = {
 @description('Azure region of the AAS server (e.g. eastus2). Used by the DirectQuery source binder; falls back to the deployment location.')
 param loomAasRegion string = location
 
-@description('Azure Analysis Services SKU when loomSemanticBackend=analysis-services. B1=Basic (cheapest with SLA), S0=Standard, D1=Developer (no SLA). AAS is Commercial/GCC only — never deployed at GCC-High / IL5 (the orchestrator guards on boundary).')
-@allowed(['B1', 'B2', 'S0', 'S1', 'S2', 'S4', 'D1'])
-param loomAasSku string = 'B1'
+@description('Azure Analysis Services SKU when loomSemanticBackend=analysis-services. Standard tier only — S0 is the cheapest Standard SKU and is broadly available. Developer (D1) and Basic (B1/B2) tiers are excluded because they are not offered in many regions (centralus exposes only S0, S1, S2, S4, S8v2, S9v2). AAS is Commercial/GCC only — never deployed at GCC-High / IL5 (the orchestrator guards on boundary).')
+@allowed(['S0', 'S1', 'S2', 'S4', 'S8v2', 'S9v2'])
+param loomAasSku string = 'S0'
 
 @description('Pre-existing AAS server URL (asazure://<region>.asazure.windows.net/<name>) to wire as LOOM_AAS_SERVER_URL instead of deploying a new server. Leave empty to let analysis-services.bicep create one (requires loomSemanticBackend=analysis-services on a Commercial/GCC boundary). Power BI Premium XMLA users set LOOM_POWERBI_XMLA_ENDPOINT directly instead.')
 param loomAasServerUrl string = ''
@@ -1091,9 +1091,9 @@ param loomAasResourceGroup string = ''
 @description('Service-principal client id (appId) made an AAS server admin for data-plane XMLA (RLS/OLS role authoring via LOOM_AAS_CLIENT_ID/SECRET). Empty = the Console UAMI is the sole AAS admin (composite-model path). Store the SPN secret in Key Vault and wire LOOM_AAS_CLIENT_SECRET as a secretRef.')
 param aasSpnClientId string = ''
 
-@description('Azure Analysis Services SKU. D1 = Developer (no SLA, test). B/S = Basic/Standard (prod).')
-@allowed(['D1', 'B1', 'B2', 'S0', 'S1', 'S2', 'S4', 'S8', 'S9'])
-param aasSku string = 'D1'
+@description('Azure Analysis Services SKU for the composite-model server. Standard tier only — S0 is the smallest/cheapest Standard SKU and is broadly available across regions. The Developer (D1) and Basic (B1/B2) tiers are NOT offered in many regions (e.g. centralus exposes only S0, S1, S2, S4, S8v2, S9v2), so they are no longer selectable here to avoid SkuNotAvailable on a day-one deploy. S8v2 / S9v2 are the v2 high-QPU SKUs.')
+@allowed(['S0', 'S1', 'S2', 'S4', 'S8v2', 'S9v2'])
+param aasSku string = 'S0'
 
 
 
@@ -1591,7 +1591,10 @@ module aas 'analysis-services.bicep' = if (aasEnabled) {
     location: location
     serverName: 'aasloom${uniqueString(resourceGroup().id)}'
     skuName: aasSku
-    skuTier: aasSku == 'D1' ? 'Development' : (startsWith(aasSku, 'B') ? 'Basic' : 'Standard')
+    // All selectable aasSku values are Standard-tier (D1/B1/B2 removed — not
+    // available in many regions, e.g. centralus). AAS rejects a server whose
+    // sku.tier does not match the sku.name family, so this is always 'Standard'.
+    skuTier: 'Standard'
     aasDatabase: 'LoomComposite'
     consolePrincipalId: identity.outputs.uamiConsolePrincipalId
     // RLS/OLS Security tab: when an operator supplies a dedicated SPN it becomes
@@ -3726,9 +3729,23 @@ module aasShim 'aas.bicep' = if (loomDirectLakeShimEnabled && !empty(loomDlzRg) 
 // Item-level Share — constrained RBAC-Admin on the SQL server's RG so the
 // per-database Share dialog can assign Reader/Contributor/SQL DB Contributor
 // at the Microsoft.Sql/servers/databases scope (ABAC-limited to those roles).
-module sqlDatabaseShareRbac 'sql-database-share-rbac.bicep' = if (!skipRoleGrants) {
+//
+// COLLISION GUARD: this grant and workspaceRbac (above) both assign the SAME
+// role — Role Based Access Control Administrator — to the SAME principal (the
+// Console UAMI). Azure dedupes role assignments by (principal, role, scope),
+// NOT by name, so two RBAC-Admin assignments to the UAMI at the same RG fail the
+// second one with `RoleAssignmentExists` (the centralus round-2 symptom, since
+// loomSqlServerRg defaults to empty → this resolves to loomDlzRg, the very RG
+// workspaceRbac targets). To stay idempotent on a fresh deploy we deploy THIS
+// grant only when its RG is DISTINCT from the workspaceRbac RG; when they
+// coincide, workspaceRbac's ABAC condition already includes SQL DB Contributor,
+// so the single grant serves both the Manage Access and per-DB Share features.
+var sqlShareRg = !empty(loomSqlServerRg) ? loomSqlServerRg : loomDlzRg
+var workspaceRbacDeployed = !empty(loomDlzRg) && !skipRoleGrants
+var sqlShareRgDistinct = !workspaceRbacDeployed || (toLower(sqlShareRg) != toLower(loomDlzRg))
+module sqlDatabaseShareRbac 'sql-database-share-rbac.bicep' = if (!skipRoleGrants && !empty(sqlShareRg) && sqlShareRgDistinct) {
   name: 'console-sql-database-share-rbac'
-  scope: resourceGroup(!empty(loomSqlServerRg) ? loomSqlServerRg : loomDlzRg)
+  scope: resourceGroup(sqlShareRg)
   params: {
     consolePrincipalId: identity.outputs.uamiConsolePrincipalId
     skipRoleGrants: skipRoleGrants

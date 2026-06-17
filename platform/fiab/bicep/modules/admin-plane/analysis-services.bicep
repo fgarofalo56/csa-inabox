@@ -37,13 +37,13 @@ param location string
 @maxLength(63)
 param serverName string = 'aasloom'
 
-@description('AAS SKU name')
-@allowed(['D1', 'B1', 'B2', 'S0', 'S1', 'S2', 'S4', 'S8', 'S9'])
-param skuName string = 'D1'
+@description('AAS SKU name. Standard tier only — S0 is the smallest/cheapest Standard SKU and is broadly available. Developer (D1) and Basic (B1/B2) tiers are not offered in many regions (centralus exposes only S0, S1, S2, S4, S8v2, S9v2), so they are excluded here to avoid SkuNotAvailable on a day-one deploy.')
+@allowed(['S0', 'S1', 'S2', 'S4', 'S8v2', 'S9v2'])
+param skuName string = 'S0'
 
-@description('SKU tier')
-@allowed(['Development', 'Basic', 'Standard'])
-param skuTier string = 'Development'
+@description('SKU tier — Standard for every selectable skuName above.')
+@allowed(['Standard'])
+param skuTier string = 'Standard'
 
 @description('AAS database / model name wired into LOOM_AAS_DATABASE')
 param aasDatabase string = 'LoomComposite'

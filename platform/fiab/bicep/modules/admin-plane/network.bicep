@@ -294,10 +294,22 @@ resource firewallPip 'Microsoft.Network/publicIPAddresses@2024-05-01' = if (fire
   }
 }
 
+// The firewall references the policy via firewallPolicyId. On a FRESH deploy
+// (firewallPolicyReconcile=false) the policy resource is created in THIS
+// deployment, so the firewall MUST wait for the policy to reach a Succeeded
+// provisioning state before it is PUT — otherwise ARM can PUT the firewall
+// while the policy is still settling and then, when finalizing the policy,
+// report `FirewallPolicyUpdateFailed: Put on Firewall Policy ... Failed with 1
+// faulted referenced firewalls` (the centralus round-2 symptom). An EXPLICIT
+// dependsOn on the just-created policy makes the policy-then-firewall ordering
+// deterministic (Learn quickstart pattern: firewallPolicies → azureFirewalls).
+// On a reconcile pass the policy is referenced as `existing`, so there is
+// nothing to wait on — only depend on the freshly-created policy.
 resource firewall 'Microsoft.Network/azureFirewalls@2024-05-01' = if (firewallEnabled) {
   name: 'fw-csa-loom-${location}'
   location: location
   tags: complianceTags
+  dependsOn: firewallPolicyReconcile ? [] : [ firewallPolicy ]
   properties: {
     sku: {
       name: 'AZFW_VNet'

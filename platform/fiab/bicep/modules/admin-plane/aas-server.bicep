@@ -37,8 +37,8 @@ param location string
 @description('AAS server name (lowercase alphanumerics, globally unique within the region).')
 param serverName string = 'aasloom${uniqueString(resourceGroup().id)}'
 
-@description('SKU name — Standard tier required for the data-plane refresh REST API.')
-@allowed(['S0', 'S1', 'S2', 'S4', 'S8', 'S9'])
+@description('SKU name — Standard tier required for the data-plane refresh REST API. S0 is the smallest/cheapest Standard SKU and is broadly available; S8v2 / S9v2 are the v2 high-QPU SKUs. The legacy S8 / S9 (non-v2) SKUs are NOT offered in many regions (e.g. centralus exposes only S0, S1, S2, S4, S8v2, S9v2), so they are excluded to avoid SkuNotAvailable.')
+@allowed(['S0', 'S1', 'S2', 'S4', 'S8v2', 'S9v2'])
 param skuName string = 'S1'
 
 @description('LAW resource id for diagnostic settings.')
