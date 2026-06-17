@@ -270,6 +270,9 @@ param hubConsoleUamiId string = ''
 @description('dlz-attach: existing hub Activator UAMI principal id.')
 param hubActivatorPrincipalId string = ''
 
+@description('dlz-attach: subscription id of the EXISTING hub (admin plane). REQUIRED for the cross-sub hub-side VNet peering + hub console DLZ env wiring, since the dlz-attach deployment is submitted at the DLZ subscription scope and those two integration pieces must land in the HUB sub. Empty (default) falls back first to hubCoordinates.adminPlaneSubId, then to adminPlaneSubId (the deployment sub) for the single-sub / same-sub case.')
+param hubAdminSubscriptionId string = ''
+
 @description('Admin Entra group object ID for FiaB Admins')
 param adminEntraGroupId string
 
@@ -1157,6 +1160,22 @@ var effHubConsoleUamiAppId = !empty(hubConsoleUamiAppId) ? hubConsoleUamiAppId :
 var effHubConsoleUamiId = !empty(hubConsoleUamiId) ? hubConsoleUamiId : hub.consoleUamiResourceId
 var effHubCatalogEndpoint = !empty(hubCatalogEndpoint) ? hubCatalogEndpoint : hub.catalogEndpoint
 
+// ── dlz-attach cross-sub integration (hub-side peering + hub-console env) ──────
+// Hub subscription id for the cross-sub modules below. Prefer the explicit param,
+// then hubCoordinates.adminPlaneSubId, then the deployment-sub adminPlaneSubId
+// (same-sub fallback). The hub admin RG name is already resolved as
+// `adminPlaneRgName` (from hubCoordinates.adminPlaneRgName).
+var effHubSubscriptionId = !empty(hubAdminSubscriptionId) ? hubAdminSubscriptionId : (!empty(string(hubCoordinates.?adminPlaneSubId ?? '')) ? string(hubCoordinates.adminPlaneSubId) : adminPlaneSubId)
+// Hub VNet NAME (last segment of the hub VNet resource id) for the reverse peering.
+var effHubVnetName = !empty(effHubVnetId) ? last(split(effHubVnetId, '/')) : ''
+// Start-of-deployment-computable guards for the two cross-sub modules. The `if`
+// condition cannot reference `eff*`/`hub` (they fold in adminPlane.outputs, which
+// are unknown at deployment start → BCP177). In dlz-attach the admin plane is
+// never deployed, so these guards read ONLY the dlz-attach input params, which
+// IS what dlz-attach always provides (individual hub* params OR hubCoordinates).
+var dlzAttachHasHubVnet = !empty(hubVnetId) || !empty(string(hubCoordinates.?hubVnetId ?? ''))
+var dlzAttachHasHubConsoleUami = !empty(hubConsoleUamiId) || !empty(string(hubCoordinates.?consoleUamiResourceId ?? ''))
+
 // audit-t156 — DLZ inventory for the topologyManifest output. for-expressions
 // must be the direct value of a var (BCP138), so the multi-sub fan-out list is
 // built here and combined with the single-sub case via a plain ternary.
@@ -1481,6 +1500,65 @@ module dlzAttachOrgVisualsRbac 'modules/landing-zone/org-visuals-rbac.bicep' = i
     storageAccountName: dlzAttach!.outputs.storageAccountName
     consolePrincipalId: effHubConsolePrincipalId
     skipRoleGrants: skipRoleGrants
+  }
+}
+
+// BUG 1 FIX — dlz-attach: create the REVERSE hub→DLZ VNet peering in the HUB
+// VNet, in the HUB subscription. The DLZ→hub peering is made inside the DLZ VNet
+// by landing-zone/network.bicep, but on a cross-sub attach the deployment runs at
+// the DLZ subscription scope and never touches the hub VNet, so the peering stays
+// "Initiated" and the hub console can't route to the private DLZ resources. This
+// cross-sub module (scope = hub admin RG/sub) adds the missing half so the
+// peering reaches "Connected". Guard reads only the dlz-attach input params
+// (start-of-deployment computable — eff*/hub fold in adminPlane.outputs).
+module dlzAttachHubPeering 'modules/landing-zone/hub-side-peering.bicep' = if (topology == 'dlz-attach' && dlzAttachHasHubVnet) {
+  name: 'dlz-attach-hub-peering-${attachDomainName}'
+  scope: resourceGroup(effHubSubscriptionId, adminPlaneRgName)
+  params: {
+    hubVnetName: effHubVnetName
+    dlzSpokeVnetId: dlzAttach!.outputs.spokeVnetId
+    domainName: attachDomainName
+  }
+}
+
+// BUG 2 FIX — dlz-attach: wire the hub console's DLZ data-plane env vars
+// (LOOM_ADLS_ACCOUNT / LOOM_LANDING_URL / LOOM_BRONZE_URL / LOOM_SILVER_URL /
+// LOOM_GOLD_URL / LOOM_SYNAPSE_WORKSPACE) onto the ALREADY-DEPLOYED hub console.
+// In single-sub these are baked into the console container app definition from
+// singleDlz.outputs; in dlz-attach the admin plane / console is never redeployed,
+// so without this the lakehouse/notebook/warehouse editors honest-gate on the hub
+// even though the DLZ data plane is live. Runs a cross-sub deploymentScript
+// (scope = hub admin RG/sub) as the hub Console UAMI doing an ADDITIVE
+// `az containerapp update --set-env-vars`. The values are also emitted as outputs
+// (below) so the orchestrator/bootstrap can verify or re-apply them. Guarded on
+// having the hub Console UAMI resource id (start-computable param-only guard);
+// on AKS boundaries (no Container App) it is skipped (the cluster GitOps path
+// sets env instead) via the containerApps check.
+module dlzAttachHubConsoleEnv 'modules/landing-zone/hub-console-dlz-env.bicep' = if (topology == 'dlz-attach' && containerPlatform == 'containerApps' && dlzAttachHasHubConsoleUami) {
+  name: 'dlz-attach-hub-console-env-${attachDomainName}'
+  scope: resourceGroup(effHubSubscriptionId, adminPlaneRgName)
+  params: {
+    location: location
+    consoleAppName: 'loom-console'
+    scriptUamiId: effHubConsoleUamiId
+    dlzAdlsAccount: dlzAttach!.outputs.storageAccountName
+    dlzSynapseWorkspace: loomSynapseEnabled ? dlzAttach!.outputs.synapseWorkspaceName : ''
+    // Event Hubs: the attached DLZ provisions its own evhns-loom-<domain>-<region>
+    // namespace (loomEventHubEnabled threaded into dlzAttach above), and the
+    // eventhubs.bicep module already grants the hub Console UAMI Azure Event Hubs
+    // Data Owner + Contributor + Data Receiver on it (consolePrincipalId =
+    // effHubConsolePrincipalId). What was missing is the console ENV pointing at
+    // it — the console's LOOM_EVENTHUB_* defaulted to the admin/single-sub RG and
+    // the hub sub, so the Eventstream / Data Explorer navigators honest-gated even
+    // though the namespace is live. Thread the real namespace name + DLZ RG/sub so
+    // the env is re-pointed at the attached DLZ. Empty namespace name (EH disabled)
+    // => the env var is skipped and the editor honest-gates (correct behavior).
+    dlzEventHubNamespace: loomEventHubEnabled ? dlzAttach!.outputs.eventHubsNamespaceName : ''
+    dlzResourceGroup: 'rg-csa-loom-dlz-${attachDomainName}-${location}'
+    // dlz-attach deploys main.bicep at the DLZ subscription scope, so the DLZ sub
+    // is the deployment subscription. The console runs in the hub admin sub.
+    dlzSubscriptionId: subscription().subscriptionId
+    complianceTags: complianceTags
   }
 }
 
@@ -2017,3 +2095,20 @@ output hubActivatorPrincipalId string = topology == 'tenant' ? adminPlane!.outpu
 // contract self-describing for the bootstrap step.
 output dlzAttachTargetSubscriptionId string = topology == 'dlz-attach' ? targetSubscriptionId : ''
 output dlzAttachHubAiServicesAccountName string = topology == 'dlz-attach' ? hubAiServicesAccountName : ''
+
+// dlz-attach echo-back: the EXACT hub-console DLZ env vars this attach wired (so
+// the orchestrator can verify, or re-apply `az containerapp update --set-env-vars`
+// on the hub console if the cross-sub deploymentScript was skipped/failed).
+// Sourced from the hub-console env module's outputs (computed there to keep
+// environment() out of the subscription-scoped main.bicep). Empty unless the
+// module ran (dlz-attach + containerApps + hub Console UAMI present).
+var dlzAttachConsoleEnvWired = topology == 'dlz-attach' && containerPlatform == 'containerApps' && dlzAttachHasHubConsoleUami
+output dlzAttachConsoleAdlsAccount string = dlzAttachConsoleEnvWired ? dlzAttachHubConsoleEnv!.outputs.loomAdlsAccount : ''
+output dlzAttachConsoleLandingUrl string = dlzAttachConsoleEnvWired ? dlzAttachHubConsoleEnv!.outputs.loomLandingUrl : ''
+output dlzAttachConsoleBronzeUrl string = dlzAttachConsoleEnvWired ? dlzAttachHubConsoleEnv!.outputs.loomBronzeUrl : ''
+output dlzAttachConsoleSilverUrl string = dlzAttachConsoleEnvWired ? dlzAttachHubConsoleEnv!.outputs.loomSilverUrl : ''
+output dlzAttachConsoleGoldUrl string = dlzAttachConsoleEnvWired ? dlzAttachHubConsoleEnv!.outputs.loomGoldUrl : ''
+output dlzAttachConsoleSynapseWorkspace string = dlzAttachConsoleEnvWired ? dlzAttachHubConsoleEnv!.outputs.loomSynapseWorkspace : ''
+// dlz-attach echo-back: the hub-side peering name created in the hub VNet (so the
+// orchestrator can poll for "Connected"). Empty unless the peering module ran.
+output dlzAttachHubPeeringName string = (topology == 'dlz-attach' && dlzAttachHasHubVnet) ? dlzAttachHubPeering!.outputs.peeringName : ''

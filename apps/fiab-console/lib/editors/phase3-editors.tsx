@@ -9556,7 +9556,7 @@ interface WHSchemaResp {
   error?: string;
 }
 
-const SAMPLE_SQL = `-- Fabric Warehouse (Loom-Gov: backed by Synapse Dedicated SQL pool)\nSELECT 1 AS smoke, DB_NAME() AS db, SUSER_NAME() AS upn, SYSDATETIMEOFFSET() AS now_utc;`;
+const SAMPLE_SQL = `-- Fabric Warehouse (Loom-Gov: backed by Synapse Dedicated SQL pool)\nSELECT 1 AS smoke, DB_NAME() AS db, SYSTEM_USER AS upn, SYSDATETIMEOFFSET() AS now_utc;`;
 
 function formatCell(v: unknown): string {
   if (v === null || v === undefined) return 'NULL';
