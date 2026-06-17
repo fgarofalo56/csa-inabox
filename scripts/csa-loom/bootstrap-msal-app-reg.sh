@@ -104,8 +104,8 @@ if [ -n "${CONSOLE_APP_NAME:-}" ] && [ -n "${CONSOLE_RG:-}" ]; then
       "loom-msal-client-secret=${SECRET}" -o none || echo "    WARN: inline secret set failed"
   fi
   az containerapp update -n "${CONSOLE_APP_NAME}" -g "${CONSOLE_RG}" \
-    --set-env-vars "LOOM_MSAL_CLIENT_ID=${APP_ID}" -o none || echo "    WARN: env-var update failed"
-  echo "    wired LOOM_MSAL_CLIENT_ID=${APP_ID}"
+    --set-env-vars "LOOM_MSAL_CLIENT_ID=${APP_ID}" "LOOM_MSAL_CLIENT_SECRET=secretref:${MSAL_SECRET_NAME}" -o none || echo "    WARN: env-var update failed"
+  echo "    wired LOOM_MSAL_CLIENT_ID=${APP_ID} + LOOM_MSAL_CLIENT_SECRET=secretref:${MSAL_SECRET_NAME}"
 fi
 
 echo "==> Done. App (client) id: ${APP_ID}"
