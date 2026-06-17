@@ -67,7 +67,12 @@ resource apim 'Microsoft.ApiManagement/service@2024-06-01-preview' = {
     virtualNetworkConfiguration: {
       subnetResourceId: apimSubnetId
     }
-    publicNetworkAccess: 'Disabled'
+    // Do NOT set publicNetworkAccess:'Disabled' here. With
+    // virtualNetworkType:'Internal' the gateway is already private (VNet-only),
+    // and Azure REJECTS publicNetworkAccess:'Disabled' DURING service creation
+    // (ActivateServiceWithPrivateEndpointAccessNotAllowed). Internal VNet mode
+    // makes the data plane private without this property; setting it at create
+    // breaks a clean greenfield deploy.
     customProperties: {
       'Microsoft.WindowsAzure.ApiManagement.Gateway.Protocols.Server.Http2': 'true'
       'Microsoft.WindowsAzure.ApiManagement.Gateway.Security.Protocols.Tls10': 'false'
