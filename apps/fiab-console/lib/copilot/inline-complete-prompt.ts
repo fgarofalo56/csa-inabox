@@ -26,11 +26,44 @@ export interface ChatMessage {
   content: string;
 }
 
+/**
+ * Cluster-runtime grounding for ghost-text completion. Kept in sync with
+ * lib/components/editor/cluster-runtime.copilotRuntimeDirective (that module is
+ * client-only / React-adjacent; this server-pure copy avoids importing it).
+ */
+function inlineRuntimeDirective(runtime?: string): string {
+  switch (runtime) {
+    case 'databricks':
+      return (
+        ' The notebook is attached to a DATABRICKS Spark cluster — complete with ' +
+        'Databricks APIs (`dbutils.fs`/`dbutils.secrets`/`dbutils.widgets`/' +
+        '`dbutils.notebook`, `display(df)`, Unity Catalog `catalog.schema.table` ' +
+        'names, %sql/%md/%run/%pip magics). Do NOT emit mssparkutils/notebookutils.'
+      );
+    case 'azure-ml':
+      return (
+        ' The notebook runs on an AZURE MACHINE LEARNING Compute Instance (plain ' +
+        'Python, no implicit Spark) — complete with the Azure ML SDK v2 ' +
+        '(`azure.ai.ml` MLClient/command/automl) and `mlflow`. Do NOT assume a ' +
+        '`spark`/`dbutils`/`mssparkutils` global exists.'
+      );
+    case 'synapse-spark':
+    default:
+      return (
+        ' The notebook is attached to an AZURE SYNAPSE Spark pool — complete with ' +
+        '`mssparkutils`/`notebookutils` (fs/credentials/env/runtime/notebook) and ' +
+        '%%pyspark/%%spark/%%sql cell magics. Do NOT emit Databricks ' +
+        '`dbutils`/`display()` or the Azure ML SDK.'
+      );
+  }
+}
+
 export function buildInlineMessages(
   prefix: string,
   lang: string,
   priorCells: string[],
   schema: string,
+  runtime?: string,
 ): ChatMessage[] {
   const langName = INLINE_LANG_LABEL[lang] || lang;
   const schemaSection = schema.trim()
@@ -38,9 +71,10 @@ export function buildInlineMessages(
     : '';
 
   const system =
-    `You are an inline code-completion engine for the CSA Loom platform ` +
-    `(Azure Synapse Spark notebooks). The active cell is written in ${langName}. ` +
-    `Assume a SparkSession named \`spark\` is already available. The user has ` +
+    `You are an inline code-completion engine for the CSA Loom platform. ` +
+    `The active cell is written in ${langName}.` +
+    inlineRuntimeDirective(runtime) +
+    ` The user has ` +
     `typed the PREFIX shown last. Continue the code from EXACTLY where the ` +
     `PREFIX ends. Return ONLY the new characters to insert after the cursor — ` +
     `do NOT repeat any of the prefix, do NOT wrap in markdown fences, do NOT ` +

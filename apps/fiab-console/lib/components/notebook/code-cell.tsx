@@ -19,6 +19,8 @@ import { parseCopilotCommand, copilotResultCell } from '@/lib/components/noteboo
 import { inCellResultAction } from '@/lib/copilot/notebook-tools';
 import { MonacoTextarea, type MonacoLanguage } from '@/lib/components/editor/monaco-textarea';
 import { registerInlineCompletion, type InlineCompletionContext } from '@/lib/components/editor/inline-completion';
+import { registerClusterIntelliSense, type ClusterIntelliSenseContext } from '@/lib/components/editor/cluster-intellisense';
+import { type ClusterRuntime, RUNTIME_LABEL } from '@/lib/components/editor/cluster-runtime';
 import { useInlineCompleteToggle } from '@/lib/components/editor/use-inline-complete-toggle';
 import { CopilotPane } from './copilot-pane';
 import { RichDisplay } from '@/lib/components/notebook/rich-display';
@@ -179,6 +181,26 @@ export interface CodeCellProps {
   notebookId?: string;
   /** Parent splices the Copilot-generated cell directly below this one. */
   onInsertBelow?: (cell: NotebookCell) => void;
+  /**
+   * Runtime derived from the attached compute (Databricks / Synapse Spark /
+   * Azure ML). Drives cluster-aware IntelliSense (dbutils vs mssparkutils vs
+   * azure.ai.ml) and the runtime grounding fed to the in-cell Copilot. Defaults
+   * to 'synapse-spark' (the historically-validated Livy path) when absent.
+   */
+  runtime?: ClusterRuntime;
+}
+
+/** Map a notebook cell language to the Monaco language id (mirror of monaco-textarea.mapLanguage). */
+function toMonacoLang(lang: NotebookCellLang | undefined): string {
+  switch (lang) {
+    case 'pyspark':
+    case 'python': return 'python';
+    case 'spark': return 'scala';
+    case 'sparksql':
+    case 'tsql': return 'sql';
+    case 'sparkr': return 'r';
+    default: return 'python';
+  }
 }
 
 const PY_LANGS = new Set<NotebookCellLang>(['python', 'pyspark']);
@@ -188,7 +210,7 @@ const PY_LANGS = new Set<NotebookCellLang>(['python', 'pyspark']);
  * popover with slash commands; the result is inserted as a new cell below.
  * Slash parsing + result-cell construction live in ./copilot-commands.
  */
-export function CodeCell({ cell, active, onFocus, onChange, onRun, onStop, onDelete, onMoveUp, onMoveDown, onDuplicate, onConvertToMarkdown, canMoveUp, canMoveDown, dragHandleProps, notebookId, workspaceId, computeId, lspWsUrl, priorCells, schemaContext, onInsertBelow }: CodeCellProps) {
+export function CodeCell({ cell, active, onFocus, onChange, onRun, onStop, onDelete, onMoveUp, onMoveDown, onDuplicate, onConvertToMarkdown, canMoveUp, canMoveDown, dragHandleProps, notebookId, workspaceId, computeId, lspWsUrl, priorCells, schemaContext, onInsertBelow, runtime = 'synapse-spark' }: CodeCellProps) {
   const s = useStyles();
   const [running, setRunning] = useState(false);
   const [maximized, setMaximized] = useState(false);
@@ -262,26 +284,51 @@ export function CodeCell({ cell, active, onFocus, onChange, onRun, onStop, onDel
   // Live context for the inline-completion provider (read on each invocation).
   const ctxRef = useRef<InlineCompletionContext>({
     enabled: completionEnabled, locked, lang: cell.lang || 'pyspark',
-    priorCells: priorCells || [], schemaContext,
+    priorCells: priorCells || [], schemaContext, runtime,
   });
   useEffect(() => {
     ctxRef.current = {
       enabled: completionEnabled, locked, lang: cell.lang || 'pyspark',
-      priorCells: priorCells || [], schemaContext,
+      priorCells: priorCells || [], schemaContext, runtime,
     };
-  }, [completionEnabled, locked, cell.lang, priorCells, schemaContext]);
+  }, [completionEnabled, locked, cell.lang, priorCells, schemaContext, runtime]);
+
+  // Live context for the cluster-aware (runtime-specific) completion provider.
+  // Read on each keystroke so flipping the runtime/lang takes effect instantly.
+  const clusterCtxRef = useRef<ClusterIntelliSenseContext>({
+    runtime, monacoLanguage: toMonacoLang(cell.lang),
+  });
+  useEffect(() => {
+    clusterCtxRef.current = { runtime, monacoLanguage: toMonacoLang(cell.lang) };
+  }, [runtime, cell.lang]);
 
   const disposeRef = useRef<{ dispose(): void } | null>(null);
+  const clusterDisposeRef = useRef<{ dispose(): void } | null>(null);
   // Unified Monaco onReady: capture editor/monaco for the LSP attach effect AND
-  // register the inline-completion provider.
+  // register the inline-completion + cluster-aware completion providers.
   const handleEditorReady = useCallback((editor: any, monaco: any) => {
     editorRef.current = editor;
     monacoRef.current = monaco;
     setEditorReady((n) => n + 1);
     disposeRef.current?.dispose();
     disposeRef.current = registerInlineCompletion(editor, monaco, () => ctxRef.current);
+    clusterDisposeRef.current?.dispose();
+    clusterDisposeRef.current = registerClusterIntelliSense(editor, monaco, () => clusterCtxRef.current);
   }, []);
-  useEffect(() => () => disposeRef.current?.dispose(), []);
+  useEffect(() => () => { disposeRef.current?.dispose(); clusterDisposeRef.current?.dispose(); }, []);
+
+  // Re-register the cluster provider when the cell's Monaco language changes
+  // (e.g. PySpark → Scala), since the provider is keyed by Monaco language id.
+  // Switching runtime alone needs no re-register (the getter reads it live).
+  const monacoLangKey = toMonacoLang(cell.lang);
+  useEffect(() => {
+    if (!editorRef.current || !monacoRef.current) return;
+    clusterDisposeRef.current?.dispose();
+    clusterDisposeRef.current = registerClusterIntelliSense(
+      editorRef.current, monacoRef.current, () => clusterCtxRef.current,
+    );
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [monacoLangKey, editorReady]);
 
   // ESC dismisses the maximized state.
   useEffect(() => {
@@ -328,6 +375,9 @@ export function CodeCell({ cell, active, onFocus, onChange, onRun, onStop, onDel
           // workspaceId lets the route pull the REAL last error from the live
           // Livy session for /fix when the cell has no cached error output.
           workspaceId: workspaceId || '',
+          // Runtime so the Copilot targets the correct cluster's syntax/APIs
+          // (Databricks dbutils/display vs Synapse mssparkutils vs Azure ML SDK).
+          runtime,
         }),
       });
       const j = await res.json().catch(() => ({ ok: false, error: `HTTP ${res.status}` }));
@@ -351,7 +401,7 @@ export function CodeCell({ cell, active, onFocus, onChange, onRun, onStop, onDel
     } finally {
       setCopilotBusy(false);
     }
-  }, [notebookId, cell, copilotDraft, onInsertBelow, workspaceId]);
+  }, [notebookId, cell, copilotDraft, onInsertBelow, workspaceId, runtime]);
 
   const setLang = (lang: NotebookCellLang) => onChange({ ...cell, lang });
   const setSource = (source: string) => onChange({ ...cell, source });
@@ -413,6 +463,14 @@ export function CodeCell({ cell, active, onFocus, onChange, onRun, onStop, onDel
             %%{magic} → Spark
           </Badge>
         )}
+        <Badge
+          appearance="outline"
+          size="small"
+          color={runtime === 'databricks' ? 'important' : runtime === 'azure-ml' ? 'success' : 'brand'}
+          title={`IntelliSense + Copilot tuned for ${RUNTIME_LABEL[runtime]} (switches with the attached compute)`}
+        >
+          {RUNTIME_LABEL[runtime]}
+        </Badge>
         {collapsed && <Badge appearance="outline" size="small">{lineCount} line{lineCount === 1 ? '' : 's'} hidden</Badge>}
         {locked && <Badge appearance="outline" color="warning" size="small">locked</Badge>}
         {lspEligible && (

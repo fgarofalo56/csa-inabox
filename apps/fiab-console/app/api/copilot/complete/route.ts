@@ -113,6 +113,7 @@ export async function POST(req: NextRequest) {
     ? body.priorCells.map((c: unknown) => String(c ?? '')).slice(-3)
     : [];
   const clientSchema = String(body?.schemaContext || '');
+  const runtime = String(body?.runtime || '');
 
   // Tenant org-wide gate (cached, soft-fails to enabled).
   const tenantId = session.claims.oid;
@@ -152,7 +153,7 @@ export async function POST(req: NextRequest) {
     );
   }
 
-  const messages = buildInlineMessages(prefix, lang, priorCells, clientSchema);
+  const messages = buildInlineMessages(prefix, lang, priorCells, clientSchema, runtime);
 
   try {
     const token = await aoaiToken();

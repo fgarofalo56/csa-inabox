@@ -33,6 +33,8 @@ export interface InlineCompletionContext {
   priorCells: string[];
   /** Lakehouse / notebook schema hint. */
   schemaContext?: string;
+  /** Cluster runtime so ghost text uses cluster-correct APIs. */
+  runtime?: string;
 }
 
 type IDisposable = { dispose(): void };
@@ -86,6 +88,7 @@ function ensureProvider(monaco: any, langId: string) {
                 lang: info.lang,
                 priorCells: (info.priorCells || []).slice(-3),
                 schemaContext: info.schemaContext || undefined,
+                runtime: info.runtime || undefined,
               }),
             });
             const j = await res.json().catch(() => null);
