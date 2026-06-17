@@ -23,6 +23,7 @@ import {
 } from '@azure/identity';
 import { AcaManagedIdentityCredential } from '@/lib/azure/aca-managed-identity';
 import { armHost, detectLoomCloud } from './cloud-endpoints';
+import { discoverResourceCoordsByName } from './resource-graph-coords';
 
 // Cloud-aware endpoint hosts. ARM host comes from cloud-endpoints (AZURE_CLOUD /
 // LOOM_ARM_ENDPOINT aware); AZURE_ARM_HOST stays as an explicit per-call override.
@@ -106,7 +107,7 @@ export function devBase(): string {
   return `https://${ws()}.${DEV_HOST_SUFFIX}`;
 }
 
-async function callArm(url: string, init?: RequestInit): Promise<Response> {
+async function callArmRaw(url: string, init?: RequestInit): Promise<Response> {
   const tok = await credential.getToken(ARM_SCOPE);
   if (!tok?.token) throw new Error('Failed to acquire ARM token');
   return fetchWithTimeout(url, {
@@ -117,6 +118,67 @@ async function callArm(url: string, init?: RequestInit): Promise<Response> {
       'content-type': 'application/json',
     },
   });
+}
+
+// ---------------------------------------------------------------------------
+// DLZ coordinate self-heal (generalized from synapse-pool-arm.ts / PR #1445).
+//
+// In the multi-sub dlz-attach topology the env resolves the DEFAULT workspace
+// coords to the ADMIN plane (LOOM_SYNAPSE_SUB || LOOM_SUBSCRIPTION_ID +
+// LOOM_DLZ_RG), but the workspace can actually live in the DLZ sub — so the
+// configured control-plane URL (bigDataPools / sqlPools / kustoPools) 404s (or
+// 403s). On a 404/403 (or transport error) for a DEFAULT-workspace URL we
+// discover the workspace's REAL {subscriptionId, resourceGroup} by name via
+// Azure Resource Graph, cache it, and retry by rewriting the
+// /subscriptions/<sub>/resourceGroups/<rg> segment — one choke-point fix for
+// every control-plane op. Scoped to the DEFAULT workspace: explicit domain
+// `target` URLs (armBase(target), which carry authoritative coords) and the
+// dev-plane (callDev — no sub/rg in its host) are NOT rewritten.
+// ---------------------------------------------------------------------------
+
+let resolvedDefaultCoords: { subscriptionId: string; resourceGroup: string } | null = null;
+
+function defaultWorkspaceSegment(coords: { subscriptionId: string; resourceGroup: string }): string {
+  return `/subscriptions/${coords.subscriptionId}/resourceGroups/${coords.resourceGroup}/providers/Microsoft.Synapse/workspaces/${ws()}`;
+}
+
+/** True when `url` targets the env-configured DEFAULT workspace (so self-heal is safe). */
+function isDefaultWorkspaceUrl(url: string): boolean {
+  try {
+    return url.includes(defaultWorkspaceSegment({ subscriptionId: sub(), resourceGroup: rg() }));
+  } catch {
+    return false;
+  }
+}
+
+async function callArm(url: string, init?: RequestInit): Promise<Response> {
+  if (resolvedDefaultCoords && isDefaultWorkspaceUrl(url)) {
+    const healed = url.replace(
+      defaultWorkspaceSegment({ subscriptionId: sub(), resourceGroup: rg() }),
+      defaultWorkspaceSegment(resolvedDefaultCoords),
+    );
+    return callArmRaw(healed, init);
+  }
+
+  const res = await callArmRaw(url, init).catch(() => null);
+  if (res && res.ok) return res;
+
+  if ((!res || res.status === 404 || res.status === 403) && isDefaultWorkspaceUrl(url)) {
+    const discovered = await discoverResourceCoordsByName({
+      resourceType: 'Microsoft.Synapse/workspaces',
+      name: ws(),
+      credential,
+    });
+    if (discovered) {
+      resolvedDefaultCoords = discovered;
+      const healed = url.replace(
+        defaultWorkspaceSegment({ subscriptionId: sub(), resourceGroup: rg() }),
+        defaultWorkspaceSegment(discovered),
+      );
+      return callArmRaw(healed, init);
+    }
+  }
+  return res ?? callArmRaw(url, init);
 }
 
 async function callDev(path: string, init?: RequestInit): Promise<Response> {
