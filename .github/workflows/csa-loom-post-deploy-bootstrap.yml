@@ -226,6 +226,37 @@ jobs:
               || echo "::warning::Purview '$ROLE' grant failed — the deploy SP may not be Collection Admin on $PURVIEW_ACCOUNT (add it once in the Purview portal, then re-run)."
           done
 
+      - name: Purview Unified Catalog governance-domain + Data Product Owner (guidance)
+        # Day-one gap closure plan §D3/§D4. The Purview UNIFIED Catalog
+        # (purview.microsoft.com) governance-domain creation AND its role grants
+        # (Data Product Owner / Data Steward / Catalog Reader) have NO public
+        # data-plane REST / az CLI surface as of 2026-06 — they are portal-only.
+        # The classic Data Map grants above are fully automated; this unified path
+        # is an honest, documented gate (plan §D4) that fires ONLY when an operator
+        # has opted into the unified-catalog data-products backend. We print the
+        # exact, ordered portal runbook (create domain → add the Console UAMI as
+        # Data Product Owner + Catalog Reader) via the existing guidance script so
+        # the operator has the steps in the workflow log; the Console renders the
+        # matching honest-gate MessageBar until the grant lands. Nothing here fails
+        # the deploy — the data-products surface falls through to the Cosmos
+        # adapter by default (no Fabric/Power BI dependency).
+        if: ${{ vars.LOOM_DATAPRODUCTS_BACKEND == 'unified-catalog' }}
+        env:
+          LOOM_PURVIEW_UNIFIED_ACCOUNT: ${{ vars.LOOM_PURVIEW_UNIFIED_ACCOUNT || '' }}
+          LOOM_PURVIEW_UC_ENDPOINT: ${{ vars.LOOM_PURVIEW_UC_ENDPOINT || '' }}
+          LOOM_PURVIEW_GOVERNANCE_DOMAIN_ID: ${{ vars.LOOM_PURVIEW_GOVERNANCE_DOMAIN_ID || '' }}
+        run: |
+          set -uo pipefail
+          echo "== Purview Unified Catalog: governance-domain + Data Product Owner grant =="
+          echo "   (unified-catalog backend opted in via LOOM_DATAPRODUCTS_BACKEND)"
+          chmod +x scripts/csa-loom/grant-purview-uc-role.sh
+          CONSOLE_UAMI_PRINCIPAL="$CONSOLE_UAMI_PRINCIPAL" \
+            LOOM_PURVIEW_UNIFIED_ACCOUNT="$LOOM_PURVIEW_UNIFIED_ACCOUNT" \
+            LOOM_PURVIEW_UC_ENDPOINT="$LOOM_PURVIEW_UC_ENDPOINT" \
+            LOOM_PURVIEW_GOVERNANCE_DOMAIN_ID="$LOOM_PURVIEW_GOVERNANCE_DOMAIN_ID" \
+            bash scripts/csa-loom/grant-purview-uc-role.sh \
+            || echo "::warning::Unified Catalog role grant is portal-only — follow the printed runbook, then the data-products surface activates."
+
       - name: Seed default governance taxonomy (classifications / labels / domains)
         env:
           # Deploy-readiness (#229): make /governance + /admin/security POPULATED
