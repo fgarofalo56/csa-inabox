@@ -100,6 +100,45 @@ export function langLabel(lang: string): string {
   return LANG_LABEL[lang] || lang;
 }
 
+export type AssistRuntime = 'databricks' | 'synapse-spark' | 'azure-ml';
+
+/**
+ * Cluster-runtime grounding line appended to every assist system prompt so the
+ * Copilot generates / fixes code for the CORRECT runtime the cell runs on.
+ * Server-pure (no React) so the route can import it; mirrors
+ * cluster-runtime.copilotRuntimeDirective.
+ */
+export function assistRuntimeDirective(runtime?: string): string {
+  switch (runtime) {
+    case 'databricks':
+      return (
+        ' TARGET RUNTIME: Databricks Spark — use Databricks idioms: `dbutils` ' +
+        '(fs/secrets/widgets/notebook), `display(df)` to visualize, the ' +
+        'preconfigured `spark` session, Unity Catalog three-part names ' +
+        '(catalog.schema.table), and %sql/%md/%run/%pip magics. Do NOT use ' +
+        'mssparkutils/notebookutils or %%-style Synapse magics.'
+      );
+    case 'azure-ml':
+      return (
+        ' TARGET RUNTIME: Azure Machine Learning (Compute Instance, plain Python ' +
+        '— there is NO implicit Spark session). Use the Azure ML SDK v2 ' +
+        '(`azure.ai.ml`): `MLClient` with `DefaultAzureCredential`, ' +
+        '`command(...)` jobs, `ml_client.jobs.create_or_update(...)`, AutoML via ' +
+        '`automl.classification()/regression()/forecasting()`, and MLflow ' +
+        '(`mlflow.start_run`/`log_metric`/`autolog`) for tracking. Do NOT assume ' +
+        'a `spark`/`dbutils`/`mssparkutils` global exists.'
+      );
+    case 'synapse-spark':
+    default:
+      return (
+        ' TARGET RUNTIME: Azure Synapse Spark (Livy) — use `mssparkutils`/' +
+        '`notebookutils` (fs/credentials/env/runtime/notebook), the ' +
+        'preconfigured `spark` session, and %%pyspark/%%spark/%%sql/%%sparkr ' +
+        'cell magics. Do NOT use Databricks `dbutils`/`display()` or the Azure ML SDK.'
+      );
+  }
+}
+
 /**
  * Build the AOAI system + user message pair for the cell-scoped assist. The
  * code-modifying modes (fix / comments / optimize / generate) return ONLY code
@@ -114,11 +153,13 @@ export function buildAssistMessages(
   prompt: string,
   errorText: string,
   schema: string,
+  runtime?: string,
 ): { role: 'system' | 'user'; content: string }[] {
   const langName = langLabel(String(lang));
   const schemaSection = (schema || '').trim()
     ? `\n\nLakehouse schema context (ground every reference in these REAL container/table/column names — never invent them):\n${schema}`
     : '';
+  const runtimeSection = assistRuntimeDirective(runtime);
   const codeOnly =
     ` Return ONLY the resulting ${langName} code for the cell — no markdown fences, no commentary, ` +
     `no leading language tag. Preserve the user's variable, DataFrame, and column names exactly.`;
@@ -128,10 +169,11 @@ export function buildAssistMessages(
       {
         role: 'system',
         content:
-          `You are a Spark notebook code generator for the CSA Loom platform (Azure Synapse Spark). ` +
+          `You are a notebook code generator for the CSA Loom platform. ` +
           `Given a natural-language request and the CURRENT CELL, write idiomatic, runnable ${langName} ` +
-          `code for a SINGLE notebook cell. Assume a SparkSession named \`spark\` is already available. ` +
-          `If the request is a refactor of the current cell (e.g. "convert to a function"), transform the ` +
+          `code for a SINGLE notebook cell.` +
+          runtimeSection +
+          ` If the request is a refactor of the current cell (e.g. "convert to a function"), transform the ` +
           `current cell's code accordingly while keeping the same behaviour.` +
           codeOnly +
           schemaSection,
@@ -150,10 +192,11 @@ export function buildAssistMessages(
       {
         role: 'system',
         content:
-          `You are a Spark notebook assistant for the CSA Loom platform. Explain what the following ` +
+          `You are a notebook assistant for the CSA Loom platform. Explain what the following ` +
           `${langName} cell does in 3-5 concise sentences, referencing the ACTUAL variable, DataFrame, ` +
           `and column names. Describe the data flow, transformations, and business intent. Plain prose, ` +
           `no code fences.` +
+          runtimeSection +
           schemaSection,
       },
       { role: 'user', content: `Cell source:\n\`\`\`\n${source}\n\`\`\`` },
@@ -165,9 +208,10 @@ export function buildAssistMessages(
       {
         role: 'system',
         content:
-          `You are a Spark notebook assistant for the CSA Loom platform. Return the CURRENT ${langName} ` +
+          `You are a notebook assistant for the CSA Loom platform. Return the CURRENT ${langName} ` +
           `cell's source with a clear, concise comment/docstring added above or beside every non-trivial ` +
           `line, preserving the EXACT logic and variable names. Do not change behaviour.` +
+          runtimeSection +
           codeOnly +
           schemaSection,
       },
@@ -180,11 +224,12 @@ export function buildAssistMessages(
       {
         role: 'system',
         content:
-          `You are a Spark performance engineer for the CSA Loom platform. Rewrite the CURRENT ${langName} ` +
-          `cell for better Spark performance — avoid Python UDFs in favour of native/vectorized functions, ` +
-          `broadcast small DataFrames, push down predicates and prune columns before joins, cache reused ` +
-          `DataFrames, and prefer DataFrame ops over collect(). Keep the SAME output and the user's variable ` +
-          `names.` +
+          `You are a performance engineer for the CSA Loom platform. Rewrite the CURRENT ${langName} ` +
+          `cell for better performance. For Spark runtimes: avoid Python UDFs in favour of native/vectorized ` +
+          `functions, broadcast small DataFrames, push down predicates and prune columns before joins, cache ` +
+          `reused DataFrames, and prefer DataFrame ops over collect(). Keep the SAME output and the user's ` +
+          `variable names.` +
+          runtimeSection +
           codeOnly +
           schemaSection,
       },
@@ -197,8 +242,9 @@ export function buildAssistMessages(
     {
       role: 'system',
       content:
-        `You are a Spark notebook debugger for the CSA Loom platform. Fix the following ${langName} cell ` +
+        `You are a notebook debugger for the CSA Loom platform. Fix the following ${langName} cell ` +
         `that produced an error, using the real error/traceback below to find the root cause.` +
+        runtimeSection +
         codeOnly +
         schemaSection,
     },

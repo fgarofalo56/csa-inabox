@@ -138,6 +138,7 @@ export async function POST(req: NextRequest, ctx: { params: Promise<{ id: string
   const prompt = String(body?.prompt || '');
   let errorText = String(body?.errorText || '');
   const workspaceId = String(body?.workspaceId || '');
+  const runtime = String(body?.runtime || '');
 
   if (mode === 'generate' && !prompt.trim() && !source.trim()) {
     return NextResponse.json(
@@ -194,7 +195,7 @@ export async function POST(req: NextRequest, ctx: { params: Promise<{ id: string
   const serverSchema = await buildServerSchemaContext().catch(() => '');
   const schema = [clientSchema, serverSchema].filter(Boolean).join('\n');
 
-  const messages = buildAssistMessages(mode, lang, source, prompt, errorText, schema);
+  const messages = buildAssistMessages(mode, lang, source, prompt, errorText, schema, runtime);
 
   try {
     const token = await aoaiToken();

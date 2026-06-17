@@ -57,6 +57,7 @@ import {
   notebookRefactorCellsTool,
 } from '@/lib/copilot/notebook-persona-tools';
 import type { NotebookCell, NotebookCellLang } from '@/lib/types/notebook-cell';
+import { assistRuntimeDirective } from '@/lib/copilot/notebook-tools';
 
 // The supported slash commands — a FIXED server-validated allowlist (no
 // arbitrary free-form command injected into the model prompt). The first four
@@ -96,13 +97,15 @@ const LANG_LABEL: Record<string, string> = {
   tsql: 'T-SQL',
 };
 
-function systemPrompt(command: Command, langName: string, schema: string): string {
+function systemPrompt(command: Command, langName: string, schema: string, runtime?: string): string {
   const schemaSection = schema.trim()
     ? `\n\nLakehouse datastore schema (ground every reference in these REAL column names + types — never invent table or column names):\n${schema}`
     : '';
   const base =
-    `You are the CSA Loom Notebook Copilot, an assistant docked beside an Azure Synapse Spark notebook. ` +
-    `The notebook language is ${langName}. You are given the prior cells (for context) and the CURRENT CELL ` +
+    `You are the CSA Loom Notebook Copilot, an assistant docked beside a notebook. ` +
+    `The notebook language is ${langName}.` +
+    assistRuntimeDirective(runtime) +
+    ` You are given the prior cells (for context) and the CURRENT CELL ` +
     `the user is working on. Reference the user's ACTUAL variable, DataFrame, and column names from the cells ` +
     `and the schema — do not use generic placeholders.`;
   switch (command) {
@@ -214,6 +217,8 @@ interface AssistBody {
   activeCellId?: string;
   lang?: NotebookCellLang;
   errorText?: string;
+  /** Cluster runtime (databricks | synapse-spark | azure-ml) for syntax grounding. */
+  runtime?: string;
   /** Free-text argument after a slash command (e.g. `/generate <text>`). */
   text?: string;
   // ---- Notebook persona context (real call-time data) ----
@@ -277,6 +282,7 @@ export async function POST(req: NextRequest) {
   const activeCellId = String(body.activeCellId || cells[cells.length - 1].id);
   const lang = String(body.lang || cells.find((c) => c.id === activeCellId)?.lang || 'pyspark');
   const errorText = String(body.errorText || '');
+  const runtimeKind = String(body.runtime || '');
   const sessionId =
     body.sessionId || `nbcopilot-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
   const userOid = session.claims.oid || session.claims.upn || session.claims.email || 'unknown';
@@ -317,6 +323,7 @@ export async function POST(req: NextRequest) {
       schema,
       lastRunTelemetry: formatLastRunTelemetry(body.sessionReceipt, body.lastOutput),
       cloud: detectLoomCloud(),
+      runtimeDirective: assistRuntimeDirective(runtimeKind),
     };
 
     // Inject a REAL tool-result block (read-only tools, no AOAI tool-call round-trip).
@@ -364,7 +371,7 @@ export async function POST(req: NextRequest) {
   } else {
     // ---- Single-cell helper path (fix/explain/comments/optimize) ----
     messages = [
-      { role: 'system', content: systemPrompt(command, langName, schema) },
+      { role: 'system', content: systemPrompt(command, langName, schema, runtimeKind) },
       { role: 'user', content: userMessage(command, cells, activeCellId, errorText) },
     ];
   }
