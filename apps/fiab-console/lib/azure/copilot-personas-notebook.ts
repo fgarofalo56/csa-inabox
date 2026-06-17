@@ -44,6 +44,12 @@ export interface PersonaSystemCtx {
   lastRunTelemetry?: string;
   /** Sovereign boundary from detectLoomCloud(): Commercial | GCC | GCC-High | DoD. */
   cloud: string;
+  /**
+   * Cluster runtime grounding sentence (from assistRuntimeDirective) so the
+   * persona generates / fixes code with the correct cluster's APIs. '' when the
+   * caller has no runtime to declare (back-compat → Synapse Spark default).
+   */
+  runtimeDirective?: string;
 }
 
 export interface SlashCommand {
@@ -121,12 +127,15 @@ export function notebookSystemPrompt(ctx: PersonaSystemCtx): string {
         'and Synapse is *.dev.azuresynapse.us.'
       : '';
 
+  const runtimeSection = ctx.runtimeDirective?.trim() ? `\n\n${ctx.runtimeDirective.trim()}` : '';
+
   return (
     `You are the CSA Loom Notebook Copilot — a context-aware AI assistant docked beside the notebook ` +
     `"${ctx.notebookName}" (${ctx.cellCount} cell${ctx.cellCount === 1 ? '' : 's'}, default language: ${langName}). ` +
     `You are the Azure-native parity surface for the Fabric Notebook Copilot — there is no Fabric or ` +
     `OneLake dependency. Schema reads and table profiling come straight from the ADLS Gen2 Delta ` +
     `transaction log, so NO interactive Spark session is required for those.` +
+    runtimeSection +
     `\n\nCapabilities:` +
     `\n  /summarize  — describe every cell in the notebook, referencing the user's ACTUAL variable & column names.` +
     `\n  /generate   — produce runnable ${langName} that loads and joins real tables BY NAME from the schema below.` +

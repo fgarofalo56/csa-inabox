@@ -45,6 +45,7 @@ import { setCopilotContext } from '@/lib/components/copilot-pane';
 import { VariablesPane, type VarRow } from '@/lib/components/notebook/variables-pane';
 import { type NotebookCell, type NotebookCellLang, emptyCell, migrateLegacyState } from '@/lib/types/notebook-cell';
 import { registerBridge } from '@/lib/copilot/apply-change';
+import { runtimeFromComputeKind, starterCellFor, RUNTIME_LABEL, type ClusterRuntime } from '@/lib/components/editor/cluster-runtime';
 
 // Ribbon is now built dynamically inside the component so each action can
 // hold a real onClick wired to the editor's handlers. See `buildRibbon`
@@ -117,12 +118,11 @@ function cellRoutesToSpark(source: string): boolean {
   return SPARK_MAGICS.includes(line.trim().toLowerCase().split(/\s+/)[0]);
 }
 
-// AML-path Python starter — runs on a Compute Instance, not a Spark pool, so it
-// uses plain Python (no implicit `spark` session). Drag a datastore path from
-// the Datastores sidebar to read data. `deltalake` ships delta-rs schema reads.
-const STARTER_AML_PY = `# Azure ML notebook (Python 3.10 on a Compute Instance)\n# Drag a datastore path from the Datastores sidebar to insert an abfss:// URI.\n# Delta schema via delta-rs:\n#   from deltalake import DeltaTable\n#   print(DeltaTable("abfss://<fs>@<acct>.dfs.core.windows.net/<path>").schema().json())\nprint("Hello from your AML Compute Instance")\n`;
-
-const STARTER_AML_R = `# Azure ML notebook (R on a Compute Instance)\n# Run with the R kernel. Drag a datastore path from the Datastores sidebar.\nprint("Hello from R on your AML Compute Instance")\n`;
+// Starter cells per cluster type now come from starterCellFor() in
+// lib/components/editor/cluster-runtime.ts (Databricks dbutils/display vs
+// Synapse mssparkutils vs Azure ML SDK) so a NEW notebook seeds with the
+// runtime-correct syntax. STARTER_PY remains the in-editor default seed +
+// loadDetail fallback for the historically-validated PySpark path.
 
 function starterCells(): NotebookCell[] {
   return [
@@ -333,6 +333,10 @@ export function NotebookEditor({ item, id }: Props) {
   // instead of cold-starting on every run.
   const [startingCompute, setStartingCompute] = useState(false);
   const selectedCompute = cp.computes.find(c => c.id === computeId) || null;
+  // Runtime derived from the attached compute. Drives cluster-aware IntelliSense
+  // (dbutils vs mssparkutils vs azure.ai.ml) + Copilot grounding. Defaults to
+  // Synapse Spark (the validated Livy path) when nothing is selected yet.
+  const clusterRuntime: ClusterRuntime = runtimeFromComputeKind(selectedCompute?.kind);
   const startCompute = useCallback(async () => {
     if (!computeId) return;
     setStartingCompute(true); setRunMsg('Starting compute…');
@@ -733,8 +737,13 @@ export function NotebookEditor({ item, id }: Props) {
       // editor's default cell language after loadDetail re-parses the record.
       const aml = workspaceType === 'aml';
       const isR = createKernel === 'r';
-      const code = isR ? STARTER_AML_R : (aml ? STARTER_AML_PY : STARTER_PY);
       const lang: NotebookCellLang = isR ? 'sparkr' : (aml ? 'python' : 'pyspark');
+      // Seed with a starter cell that matches the attached cluster TYPE so the
+      // first cell already uses the right syntax (Databricks dbutils/display vs
+      // Synapse mssparkutils vs Azure ML SDK). AML mode forces the azure-ml
+      // runtime; otherwise it follows the selected compute (clusterRuntime).
+      const seedRuntime: ClusterRuntime = aml ? 'azure-ml' : clusterRuntime;
+      const code = starterCellFor(seedRuntime, lang);
       const definition = { code, lang };
       const r = await fetch(`/api/items/notebook?workspaceId=${encodeURIComponent(workspaceId)}`, {
         method: 'POST',
@@ -1530,6 +1539,16 @@ export function NotebookEditor({ item, id }: Props) {
                     {selectedCompute?.state || 'unknown'}
                   </Badge>
                 )}
+                {computeId && (
+                  <Badge
+                    appearance="outline"
+                    color={clusterRuntime === 'databricks' ? 'important' : clusterRuntime === 'azure-ml' ? 'success' : 'brand'}
+                    size="small"
+                    title={`IntelliSense, syntax, and Copilot are tuned for ${RUNTIME_LABEL[clusterRuntime]}. Switching the compute switches them.`}
+                  >
+                    {RUNTIME_LABEL[clusterRuntime]} syntax
+                  </Badge>
+                )}
                 {/* Start a terminated cluster / paused pool / stopped AML CI here. */}
                 {computeId && selectedCompute && !isComputeRunning(selectedCompute.state) &&
                   (selectedCompute.kind === 'databricks-cluster' || selectedCompute.kind === 'synapse-dedicated-sql' || selectedCompute.kind === 'aml-ci') && (
@@ -1852,6 +1871,7 @@ export function NotebookEditor({ item, id }: Props) {
                         notebookId={notebookId}
                         workspaceId={workspaceId}
                         computeId={computeId}
+                        runtime={clusterRuntime}
                         lspWsUrl={lspWsUrl}
                         priorCells={cells.slice(0, idx).filter(pc => pc.type === 'code').slice(-3).map(pc => pc.source)}
                         schemaContext={inlineSchemaContext}
@@ -1958,6 +1978,7 @@ export function NotebookEditor({ item, id }: Props) {
           activeCellId={activeCellId}
           attachedSources={attachedSources}
           defaultLang={defaultLang}
+          runtime={clusterRuntime}
           notebookName={(notebooks || []).find((n) => n.id === notebookId)?.displayName || notebookId}
           sessionReceipt={sessionReceipt}
           sessionConfig={sessionCfg}
