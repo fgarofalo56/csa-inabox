@@ -30,8 +30,11 @@ param adminEntraGroupId string
 @description('Loom Console UAMI principal ID — set as Synapse AAD admin so the BFF can query SQL via DefaultAzureCredential.')
 param consolePrincipalId string = ''
 
-@description('Loom Console UAMI client ID — used for the SQL admin login name (must be valid AAD object).')
+@description('Loom Console UAMI name — used for the SQL admin login name (display label only; SQL matches on the SID, not this login).')
 param consoleUamiName string = ''
+
+@description('Loom Console UAMI application/client id — used as the SID of the Synapse SQL Active Directory admin. For a managed-identity SQL AAD admin, SQL matches the incoming access-token appid against the admin SID, so this MUST be the UAMI clientId (appId), NOT its objectId/principalId — otherwise serverless CREATE DATABASE fails with ELOGIN "Login failed for user \'<token-identified principal>\'". Falls back to consolePrincipalId only if unset (legacy callers).')
+param consoleUamiAppId string = ''
 
 @description('Skip role-assignment grants — set true when re-provisioning an environment that already has the grants, to avoid RoleAssignmentExists.')
 param skipRoleGrants bool = false
@@ -266,13 +269,21 @@ resource fw 'Microsoft.Synapse/workspaces/firewallRules@2021-06-01' = [for rule 
 //     (BFF requires it for v2.0) and fall back to the admin group.
 // =====================================================================
 
+// SID for a managed-identity SQL AAD admin MUST be the UAMI's CLIENT (application)
+// id, not its objectId/principalId. SQL authenticates the BFF by matching the
+// access-token appid against this SID; using the principalId makes serverless
+// CREATE DATABASE fail with ELOGIN ("Login failed for user
+// '<token-identified principal>'"). Prefer consoleUamiAppId; fall back to the
+// principalId only for legacy callers that don't thread the appId yet.
+var consoleAadAdminSid = !empty(consoleUamiAppId) ? consoleUamiAppId : consolePrincipalId
+
 resource consoleAadAdmin 'Microsoft.Synapse/workspaces/administrators@2021-06-01' = if (!empty(consolePrincipalId) && !empty(consoleUamiName)) {
   parent: synapseWs
   name: 'activeDirectory'
   properties: {
     administratorType: 'ServicePrincipal'
     login: consoleUamiName
-    sid: consolePrincipalId
+    sid: consoleAadAdminSid
     tenantId: subscription().tenantId
   }
 }
@@ -364,6 +375,74 @@ param synapseDataPlaneRoles array = []
 @description('UAMI resource ID with Synapse Administrator role pre-assigned, used by the role-assignment deployment script. When empty, the script is skipped.')
 param synapseRoleAssignmentUamiId string = ''
 
+// =====================================================================
+// Deployment-script staging storage account
+//   Azure deploymentScripts stage their script + outputs on a storage
+//   account that the backing Azure Container Instance mounts as a FILE
+//   SHARE — and the ONLY way ACI can mount a file share is via a SHARED
+//   KEY. A DLZ subscription commonly enforces `allowSharedKeyAccess=false`
+//   (Azure Policy), so the script service's auto-created SA (or any data
+//   SA) rejects key auth and the script fails on a clean dlz-attach deploy
+//   with `KeyBasedAuthenticationNotPermitted (403)`.
+//
+//   Fix: stand up a small DEDICATED staging SA that explicitly ALLOWS
+//   shared-key access (it only ever holds the throwaway script file share
+//   + log blobs, never data) and point each deploymentScript at it via the
+//   `storageAccountSettings` property. Per Learn
+//   (deployment-script-template#use-existing-storage-account):
+//     - kind must be Storage/StorageV2 (StorageV2 here)
+//     - allowSharedKeyAccess MUST be true
+//     - storage firewall rules are NOT supported → public network access on
+//     - the deploying principal needs listKeys on the SA (it has Contributor
+//       on this RG via the deployment), which is how storageAccountKey below
+//       is supplied. The script UAMI mounts via that key, so it needs no
+//       extra RBAC on this SA — keeping the grant minimal.
+// =====================================================================
+
+// True when ANY of the three role-grant deployment scripts in this module will
+// be created — only then do we need (and pay for) the staging SA. The
+// artifact-publisher + spark-submit scripts both gate on consolePrincipalId;
+// the role-assignment script gates on data-plane-roles + admin group.
+var anyConsoleScript = !empty(consolePrincipalId)
+var anyRolesScript = length(synapseDataPlaneRoles) > 0 && !empty(adminEntraGroupId)
+var anyDeploymentScript = !empty(synapseRoleAssignmentUamiId) && !skipRoleGrants && (anyConsoleScript || anyRolesScript)
+
+var scriptStagingSaName = take('sadsloom${replace(domainName, '-', '')}${uniqueString(resourceGroup().id, 'synapse-script-staging')}', 24)
+
+resource scriptStagingStorage 'Microsoft.Storage/storageAccounts@2023-05-01' = if (anyDeploymentScript) {
+  name: scriptStagingSaName
+  location: location
+  tags: complianceTags
+  kind: 'StorageV2'
+  sku: { name: 'Standard_LRS' }
+  properties: {
+    // REQUIRED for deploymentScripts — ACI mounts the staging file share via a
+    // shared key. This SA holds only ephemeral script staging (never data), so
+    // allowing shared-key access here does NOT weaken the data-plane posture.
+    allowSharedKeyAccess: true
+    allowBlobPublicAccess: false
+    minimumTlsVersion: 'TLS1_2'
+    supportsHttpsTrafficOnly: true
+    // deploymentScripts do not support storage firewall rules (Learn), so the
+    // staging SA keeps default public network access; it carries no data.
+    publicNetworkAccess: 'Enabled'
+    networkAcls: {
+      defaultAction: 'Allow'
+      bypass: 'AzureServices'
+    }
+  }
+}
+
+// storageAccountSettings block reused by all three deployment scripts below.
+// storageAccountKey is only dereferenced when the SA exists (anyDeploymentScript),
+// which is exactly the condition under which the consuming scripts deploy — so
+// the BCP422 "resource may not exist" advisory is a false positive here.
+var scriptStorageSettings = {
+  storageAccountName: scriptStagingSaName
+  #disable-next-line BCP422
+  storageAccountKey: anyDeploymentScript ? scriptStagingStorage.listKeys().keys[0].value : ''
+}
+
 resource roleAssignmentScript 'Microsoft.Resources/deploymentScripts@2023-08-01' = if (length(synapseDataPlaneRoles) > 0 && !empty(synapseRoleAssignmentUamiId) && !empty(adminEntraGroupId)) {
   name: 'apply-synapse-roles-${domainName}'
   location: location
@@ -379,6 +458,9 @@ resource roleAssignmentScript 'Microsoft.Resources/deploymentScripts@2023-08-01'
     azCliVersion: '2.64.0'
     retentionInterval: 'PT1H'
     timeout: 'PT30M'
+    // Stage on the dedicated shared-key-enabled SA so this does not hit
+    // KeyBasedAuthenticationNotPermitted on a DLZ that denies shared-key access.
+    storageAccountSettings: scriptStorageSettings
     arguments: '${synapseWs.name} ${adminEntraGroupId} "${join(synapseDataPlaneRoles, ',')}"'
     scriptContent: '''
 WORKSPACE=$1
@@ -425,6 +507,8 @@ resource consoleSparkSubmitRoleScript 'Microsoft.Resources/deploymentScripts@202
     azCliVersion: '2.64.0'
     retentionInterval: 'PT1H'
     timeout: 'PT15M'
+    // Stage on the dedicated shared-key-enabled SA (DLZ may deny shared-key on data SAs).
+    storageAccountSettings: scriptStorageSettings
     arguments: '${synapseWs.name} ${consolePrincipalId} ${sparkPoolName}'
     scriptContent: '''
 WORKSPACE=$1
@@ -476,6 +560,8 @@ resource consoleArtifactPublisherRoleScript 'Microsoft.Resources/deploymentScrip
     azCliVersion: '2.64.0'
     retentionInterval: 'PT1H'
     timeout: 'PT15M'
+    // Stage on the dedicated shared-key-enabled SA (DLZ may deny shared-key on data SAs).
+    storageAccountSettings: scriptStorageSettings
     arguments: '${synapseWs.name} ${consolePrincipalId}'
     scriptContent: '''
 WORKSPACE=$1
