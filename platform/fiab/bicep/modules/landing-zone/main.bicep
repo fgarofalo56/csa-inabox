@@ -264,9 +264,11 @@ module synapse 'synapse.bicep' = if (loomSynapseEnabled) {
     adminEntraGroupId: adminEntraGroupId
     consolePrincipalId: consolePrincipalId
     consoleUamiName: consoleUamiName
-    // appId is the SID of the Synapse SQL AAD admin — SQL matches the BFF
-    // token's appid against it, so the clientId (NOT the objectId/principalId)
-    // is required or serverless CREATE DATABASE fails with ELOGIN.
+    // appId (client id, NOT objectId/principalId) used by synapse.bicep both as
+    // the Synapse SQL AAD admin SID and for the Synapse SQL Administrator grant
+    // (consoleSqlAdminRoleScript) — required for a WORKING serverless login or
+    // CREATE DATABASE fails with ELOGIN (Graph-fetch limitation when an SPI
+    // grants to another SPI by object id).
     consoleUamiAppId: consoleUamiAppId
     workspaceId: adminPlaneLawId
     complianceTags: complianceTags

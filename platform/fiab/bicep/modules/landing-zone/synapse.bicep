@@ -33,7 +33,7 @@ param consolePrincipalId string = ''
 @description('Loom Console UAMI name — used for the SQL admin login name (display label only; SQL matches on the SID, not this login).')
 param consoleUamiName string = ''
 
-@description('Loom Console UAMI application/client id — used as the SID of the Synapse SQL Active Directory admin. For a managed-identity SQL AAD admin, SQL matches the incoming access-token appid against the admin SID, so this MUST be the UAMI clientId (appId), NOT its objectId/principalId — otherwise serverless CREATE DATABASE fails with ELOGIN "Login failed for user \'<token-identified principal>\'". Falls back to consolePrincipalId only if unset (legacy callers).')
+@description('Loom Console UAMI APPLICATION (client) id. Used two ways, both requiring the appId (clientId), NOT the objectId/principalId: (1) the SID of the Synapse SQL Active Directory admin — SQL matches the incoming access-token appid against the admin SID; (2) the Synapse SQL Administrator grant — when an SPI grants a Synapse-RBAC role to another SPI by OBJECT id, Synapse cannot fetch the app id from Microsoft Graph and produces a BROKEN serverless login. Either way the wrong id yields ELOGIN "Login failed for user \'<token-identified principal>\'" on serverless CREATE DATABASE (Learn: resources-self-help-sql-on-demand#security, Solution 3). Empty = SQL Administrator grant skipped + admin SID falls back to consolePrincipalId (legacy callers).')
 param consoleUamiAppId string = ''
 
 @description('Skip role-assignment grants — set true when re-provisioning an environment that already has the grants, to avoid RoleAssignmentExists.')
@@ -577,6 +577,106 @@ az synapse role assignment create \
   }
 }
 
+// Grant the Loom Console UAMI the Synapse data-plane role "Synapse SQL
+// Administrator" (roleDefinition 7af0c69a-a548-47d6-aea3-d00e69bd83aa) so it can
+// run CREATE DATABASE / DDL against the Serverless SQL (-ondemand) endpoint —
+// the operation the lakehouse provisioner's `synapse-serverless-sql-pool` step
+// performs. Without it that step fails LIVE with:
+//   "Synapse Serverless rejected CREATE DATABASE: Login failed for user
+//    '<token-identified principal>'."
+//
+// WHY the other grants are NOT enough:
+//   - Setting the workspace AAD admin via ARM (workspaces/administrators,
+//     sid = objectId OR appId) does NOT create a working serverless login for a
+//     managed identity. Synapse cannot fetch the application id from Microsoft
+//     Graph when it provisions a login for another SPI/app — a documented known
+//     limitation. (Learn: resources-self-help-sql-on-demand#security —
+//     "Microsoft Entra service principal sign-in failures when SPI creates a
+//     role assignment".)
+//   - Synapse Artifact Publisher + Compute Operator are artifact/compute roles;
+//     neither confers SQL CONTROL SERVER on the serverless endpoint.
+//
+// WHY THIS MECHANISM (Learn Solution 3, not Solution 1 or 2):
+//   - Solution 1 (portal/Studio "Access control") relies on a *user's* delegated
+//     Graph permissions to resolve the app id — not available to this script,
+//     which runs AS an SPI (synapseRoleAssignmentUamiId).
+//   - Solution 2 (CREATE LOGIN ... FROM EXTERNAL PROVIDER on the -ondemand
+//     endpoint) resolves the app id server-side, but the serverless SQL endpoint
+//     is publicNetworkAccess=Disabled behind the managed VNet here, so a
+//     deploymentScript container cannot reach it without VNet injection.
+//   - Solution 3 — `New-AzSynapseRoleAssignment -RoleDefinitionName
+//     "Synapse SQL Administrator" -ObjectId <APP/client id>` — passes the
+//     APPLICATION id in -ObjectId, which is exactly what makes the serverless
+//     login resolvable (it sidesteps the Graph fetch). It targets the Synapse
+//     MANAGEMENT/dev endpoint (reachable from the container, like the existing
+//     `az synapse role assignment create` scripts above), so it works with the
+//     SQL data-plane endpoints locked down. NOTE: `az synapse role assignment
+//     create --assignee-object-id <appId>` rejects an app id as
+//     InvalidPrincipalId, so the CLI object-id path CANNOT be used for the app-id
+//     workaround — Az PowerShell is required.
+//
+// Per the Learn Note we also add the grant by OBJECT id so the Synapse Studio
+// "Access control" UI displays the assignment (the app-id grant is the one that
+// makes the serverless login work, but it is not surfaced in the UI).
+//
+// Requires consoleUamiAppId (the APP/client id) and synapseRoleAssignmentUamiId
+// (already holding Synapse Administrator, same prerequisite as the scripts above).
+// PROVEN LIVE: granting Synapse SQL Administrator to the console UAMI made
+// serverless CREATE DATABASE succeed on the DLZ Synapse workspace.
+resource consoleSqlAdminRoleScript 'Microsoft.Resources/deploymentScripts@2023-08-01' = if (!empty(consolePrincipalId) && !empty(consoleUamiAppId) && !empty(synapseRoleAssignmentUamiId) && !skipRoleGrants) {
+  name: 'assign-console-sql-admin-${domainName}'
+  location: location
+  tags: complianceTags
+  kind: 'AzurePowerShell'
+  identity: {
+    type: 'UserAssigned'
+    userAssignedIdentities: {
+      '${synapseRoleAssignmentUamiId}': {}
+    }
+  }
+  properties: {
+    azPowerShellVersion: '11.5'
+    retentionInterval: 'PT1H'
+    timeout: 'PT15M'
+    arguments: '-Workspace ${synapseWs.name} -ConsoleAppId ${consoleUamiAppId} -ConsoleObjectId ${consolePrincipalId}'
+    scriptContent: '''
+param([string]$Workspace, [string]$ConsoleAppId, [string]$ConsoleObjectId)
+$ErrorActionPreference = 'Continue'
+$role = 'Synapse SQL Administrator'
+
+# Primary grant — by APPLICATION (client) id. This is what makes the serverless
+# login resolvable; granting by object id alone yields a broken login because
+# Synapse can't fetch the app id from Graph when an SPI grants to another SPI.
+Write-Host "Granting '$role' to console UAMI by APP id $ConsoleAppId on $Workspace (functional serverless login)..."
+try {
+  New-AzSynapseRoleAssignment -WorkspaceName $Workspace -RoleDefinitionName $role -ObjectId $ConsoleAppId -ErrorAction Stop | Out-Null
+  Write-Host "  OK (app id)"
+} catch {
+  if ($_.Exception.Message -match 'Conflict|already exists|RoleAssignmentAlreadyExists') {
+    Write-Host "  Already assigned (app id) — no-op"
+  } else {
+    Write-Warning "  app-id grant failed: $($_.Exception.Message)"
+  }
+}
+
+# Secondary grant — by OBJECT id, so Synapse Studio Access control UI shows it.
+Write-Host "Granting '$role' to console UAMI by OBJECT id $ConsoleObjectId on $Workspace (UI visibility)..."
+try {
+  New-AzSynapseRoleAssignment -WorkspaceName $Workspace -RoleDefinitionName $role -ObjectId $ConsoleObjectId -ErrorAction Stop | Out-Null
+  Write-Host "  OK (object id)"
+} catch {
+  if ($_.Exception.Message -match 'Conflict|already exists|RoleAssignmentAlreadyExists') {
+    Write-Host "  Already assigned (object id) — no-op"
+  } else {
+    Write-Warning "  object-id grant failed (non-fatal): $($_.Exception.Message)"
+  }
+}
+
+$DeploymentScriptOutputs = @{ role = $role; appId = $ConsoleAppId }
+'''
+  }
+}
+
 // =====================================================================
 // Server-level SQL audit (sends events to LAW)
 // =====================================================================
@@ -747,3 +847,4 @@ output sparkPoolName string = deploySparkPool ? sparkPool.name : ''
 output sparkPoolId string = deploySparkPool ? sparkPool.id : ''
 output consoleSparkSubmitRoleAssigned bool = !empty(consolePrincipalId) && deploySparkPool && !empty(synapseRoleAssignmentUamiId) && !skipRoleGrants
 output consoleArtifactPublisherRoleAssigned bool = !empty(consolePrincipalId) && !empty(synapseRoleAssignmentUamiId) && !skipRoleGrants
+output consoleSqlAdminRoleAssigned bool = !empty(consolePrincipalId) && !empty(consoleUamiAppId) && !empty(synapseRoleAssignmentUamiId) && !skipRoleGrants
