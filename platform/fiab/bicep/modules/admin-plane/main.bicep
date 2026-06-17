@@ -1156,6 +1156,11 @@ module network 'network.bicep' = {
     consolePrincipalId: identity.outputs.uamiConsolePrincipalId
     skipRoleGrants: skipRoleGrants
     firewallEnabled: firewallEnabled
+    // Reconcile passes (skipRoleGrants=true) are exactly the redeploys where a
+    // firewall-policy re-PUT trips FirewallPolicyUpdateFailed ("faulted referenced
+    // firewalls"). Reuse that signal so the network module references the EXISTING
+    // policy instead of re-PUTing it — no extra top-level param needed.
+    firewallPolicyReconcile: skipRoleGrants
   }
 }
 
@@ -3603,6 +3608,11 @@ module frontDoor 'front-door.bicep' = if (frontDoorEnabled && containerPlatform 
     caeDefaultDomain: containerPlatformModule.outputs.caeDefaultDomain
     consoleFqdn: 'loom-console.${containerPlatformModule.outputs.caeDefaultDomain}'
     vanityDomain: loomVanityDomain
+    // Auto-approve the FD -> ACA env Private Link connection so a clean deploy is
+    // end-to-end functional (no manual portal "Approve"; otherwise FD 504s until
+    // approved). The Console UAMI holds Network Contributor on this admin-plane RG
+    // (network.bicep F15), which can approve the PE connection on the CAE.
+    scriptIdentityId: identity.outputs.uamiConsoleId
     complianceTags: complianceTags
   }
 }

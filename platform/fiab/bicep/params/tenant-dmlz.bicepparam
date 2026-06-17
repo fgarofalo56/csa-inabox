@@ -185,7 +185,15 @@ param contentSafetyEnabled = true
 param agentFoundryEnabled = true
 param apimEnabled = true
 param hubFirewallEnabled = true
-param aiSearchEnabled = false
+// Day-one gap-closure (audit): flip the Azure-native service toggles ON so the
+// console surfaces resolve without setup gates. FedCiv = Azure Commercial, so AAS
+// is available. No Fabric / Power BI dependency on any default path.
+param aiSearchEnabled = true
+param aasEnabled = true
+param managedGrafanaEnabled = true
+param eventGridEnabled = true
+param reportSubscriptionsEnabled = true
+param logicAppsEnabled = true
 param adxEnabled = true
 param cosmosGraphVectorEnabled = true
 // Console's own serverless metadata Cosmos (the `loom` DB the BFF reads/writes).

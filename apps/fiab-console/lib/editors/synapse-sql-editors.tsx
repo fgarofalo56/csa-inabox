@@ -557,7 +557,7 @@ function poolBadgeColor(state: string): 'success' | 'warning' | 'severe' | 'info
 export function SynapseDedicatedSqlPoolEditor({ item, id }: { item: FabricItemType; id: string }) {
   const s = useStyles();
   const [sqlText0] = useState<string>(
-    `-- Synapse Dedicated SQL pool — MPP T-SQL. Pool auto-pauses overnight; click Resume if Paused.\n-- Tip: highlight part of the script and Run to execute only the selection.\nSELECT 1 AS smoke, DB_NAME() AS db, SUSER_NAME() AS upn, SYSDATETIMEOFFSET() AS now_utc;`,
+    `-- Synapse Dedicated SQL pool — MPP T-SQL. Pool auto-pauses overnight; click Resume if Paused.\n-- Tip: highlight part of the script and Run to execute only the selection.\nSELECT 1 AS smoke, DB_NAME() AS db, SYSTEM_USER AS upn, SYSDATETIMEOFFSET() AS now_utc;`,
   );
   const { tabs, activeTabId, activeTab, setActiveTabId, addTab, closeTab, patchTab, setActiveSql, setActiveResult } =
     useSqlTabs<QueryResponse>(sqlText0, { slug: 'warehouse', itemId: id !== 'new' ? id : undefined });

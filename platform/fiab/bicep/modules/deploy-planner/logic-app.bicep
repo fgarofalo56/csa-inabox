@@ -47,11 +47,19 @@ resource workflow 'Microsoft.Logic/workflows@2019-05-01' = {
   }
 }
 
-// Logic App Contributor — manage/run/edit the workflow over ARM
+// Logic App Contributor — manage/run/edit Logic Apps over ARM
 // (role 87a39d53-fc1b-424a-814c-f7e04687dc9e).
+//
+// Scoped to the RESOURCE GROUP, not just the seeded `workflow` above. The Loom
+// Console logic-app provisioner (lib/install/provisioners/logic-app.ts) PUTs
+// NEW workflows by name into LOOM_LOGIC_RG (== this DLZ RG) when a user installs
+// a Logic Apps-backed app or creates a logic-app item — a workflow-scoped grant
+// only let the UAMI edit the one pre-created workflow and returned 403 on every
+// new-workflow PUT. RG scope lets the BFF create/manage sibling workflows day
+// one (the navigator's primary action) without a manual grant. Day-one gap
+// closure plan §D3. Idempotent (stable guid name); skipped when re-provisioning.
 resource logicContributor 'Microsoft.Authorization/roleAssignments@2022-04-01' = if (!empty(consolePrincipalId) && !skipRoleGrants) {
-  scope: workflow
-  name: guid(workflow.id, consolePrincipalId, '87a39d53-fc1b-424a-814c-f7e04687dc9e')
+  name: guid(resourceGroup().id, consolePrincipalId, '87a39d53-fc1b-424a-814c-f7e04687dc9e')
   properties: {
     roleDefinitionId: subscriptionResourceId('Microsoft.Authorization/roleDefinitions', '87a39d53-fc1b-424a-814c-f7e04687dc9e')
     principalId: consolePrincipalId
