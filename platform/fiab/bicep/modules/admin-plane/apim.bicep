@@ -67,7 +67,12 @@ resource apim 'Microsoft.ApiManagement/service@2024-06-01-preview' = {
     virtualNetworkConfiguration: {
       subnetResourceId: apimSubnetId
     }
-    publicNetworkAccess: 'Disabled'
+    // Do NOT set publicNetworkAccess:'Disabled' here. With
+    // virtualNetworkType:'Internal' the gateway is already private (VNet-only),
+    // and Azure REJECTS publicNetworkAccess:'Disabled' DURING service creation
+    // (ActivateServiceWithPrivateEndpointAccessNotAllowed). Internal VNet mode
+    // makes the data plane private without this property; setting it at create
+    // breaks a clean greenfield deploy.
     customProperties: {
       'Microsoft.WindowsAzure.ApiManagement.Gateway.Protocols.Server.Http2': 'true'
       'Microsoft.WindowsAzure.ApiManagement.Gateway.Security.Protocols.Tls10': 'false'
@@ -100,15 +105,14 @@ resource globalPolicy 'Microsoft.ApiManagement/service/policies@2024-06-01-previ
     value: '''
 <policies>
   <inbound>
-    <base />
     <set-header name="X-Loom-Request-Id" exists-action="override">
-      <value>@(context.RequestId)</value>
+      <value>@(context.RequestId.ToString())</value>
     </set-header>
     <set-header name="X-Loom-Tenant" exists-action="override">
       <value>@(context.Request.Headers.GetValueOrDefault("X-Loom-Tenant", "unknown"))</value>
     </set-header>
-    <rate-limit-by-key calls="100" renewal-period="60" counter-key="@(context.Subscription?.Id ?? context.IpAddress)" />
-    <cors allow-credentials="true">
+    <rate-limit-by-key calls="100" renewal-period="60" counter-key="@(context.Subscription?.Id ?? context.Request.IpAddress)" />
+    <cors allow-credentials="false">
       <allowed-origins>
         <origin>*</origin>
       </allowed-origins>
@@ -121,10 +125,9 @@ resource globalPolicy 'Microsoft.ApiManagement/service/policies@2024-06-01-previ
     </cors>
   </inbound>
   <backend>
-    <base />
+    <forward-request />
   </backend>
   <outbound>
-    <base />
     <set-header name="Strict-Transport-Security" exists-action="override">
       <value>max-age=31536000; includeSubDomains</value>
     </set-header>
@@ -135,9 +138,6 @@ resource globalPolicy 'Microsoft.ApiManagement/service/policies@2024-06-01-previ
       <value>DENY</value>
     </set-header>
   </outbound>
-  <on-error>
-    <base />
-  </on-error>
 </policies>
 '''
     format: 'xml'

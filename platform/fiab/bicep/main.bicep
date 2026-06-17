@@ -732,6 +732,13 @@ param appImageTags object = {
   activator: 'v0.1'
   mirroring: 'v0.1'
   directLake: 'v0.1'
+  // setupOrchestrator + maf are referenced by the admin-plane module when
+  // deployAppsEnabled (setup-orchestrator + MAF tier Container Apps). They were
+  // missing here, so the forwarded object lacked the keys and the apps-enabled
+  // deploy failed ("property 'setupOrchestrator' doesn't exist"). Keep in sync
+  // with modules/admin-plane/main.bicep appImageTags.
+  setupOrchestrator: 'v0.1'
+  maf: 'v0.1'
 }
 
 // =====================================================================
