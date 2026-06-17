@@ -37,6 +37,15 @@ param dlzAdlsAccount string
 @description('DLZ Synapse workspace name → LOOM_SYNAPSE_WORKSPACE. Empty when Synapse is disabled (the env var is then skipped).')
 param dlzSynapseWorkspace string = ''
 
+@description('DLZ Event Hubs namespace NAME (short) → LOOM_EVENTHUB_NAMESPACE. Empty when Event Hubs is disabled (the var is then skipped, and the Eventstream / Data Explorer editors honest-gate, which is the correct behavior).')
+param dlzEventHubNamespace string = ''
+
+@description('DLZ resource group name → LOOM_EVENTHUB_RG (and LOOM_DLZ_RG). In dlz-attach the console was deployed with these pointing at the admin/single-sub defaults, so they must be re-pointed at the attached DLZ RG.')
+param dlzResourceGroup string
+
+@description('DLZ subscription id → LOOM_EVENTHUB_SUB. The attached DLZ lives in its own subscription, distinct from the hub admin sub the console runs in — without this the app falls back to LOOM_SUBSCRIPTION_ID (the hub sub) and the Event Hubs navigator looks in the wrong subscription.')
+param dlzSubscriptionId string
+
 @description('Compliance tags.')
 param complianceTags object
 
@@ -76,6 +85,9 @@ resource wireDlzEnv 'Microsoft.Resources/deploymentScripts@2023-08-01' = {
       { name: 'SILVER_URL', value: silverUrl }
       { name: 'GOLD_URL', value: goldUrl }
       { name: 'SYNAPSE_WS', value: dlzSynapseWorkspace }
+      { name: 'EVENTHUB_NS', value: dlzEventHubNamespace }
+      { name: 'DLZ_RG', value: dlzResourceGroup }
+      { name: 'DLZ_SUB', value: dlzSubscriptionId }
     ]
     scriptContent: '''
 set -euo pipefail
@@ -94,6 +106,32 @@ SET_ARGS=( \
 )
 if [ -n "$SYNAPSE_WS" ]; then
   SET_ARGS+=( "LOOM_SYNAPSE_WORKSPACE=$SYNAPSE_WS" )
+fi
+
+# Re-point the DLZ resource group + subscription at the ATTACHED DLZ. In
+# dlz-attach the console was deployed with LOOM_DLZ_RG / LOOM_EVENTHUB_RG pointing
+# at the admin/single-sub default RG and the sub-scoped vars at the hub sub, so
+# cross-sub DLZ resources (Event Hubs, and any RG/sub-relative navigator) resolve
+# to the wrong place. LOOM_DLZ_RG is the default RG many navigators fall back to,
+# so re-pointing it fixes the whole DLZ coordinate set, not just Event Hubs.
+if [ -n "$DLZ_RG" ]; then
+  SET_ARGS+=( "LOOM_DLZ_RG=$DLZ_RG" )
+fi
+
+# Event Hubs — the Eventstream / Real-Time Data Explorer navigators bind to this
+# namespace. LOOM_EVENTHUB_RG / LOOM_EVENTHUB_SUB are set explicitly (rather than
+# relying on the app's LOOM_DLZ_RG / LOOM_SUBSCRIPTION_ID fallbacks) because the
+# console's LOOM_SUBSCRIPTION_ID is the HUB sub, not the DLZ sub. Only set when a
+# namespace exists (empty => editor honest-gates, the correct behavior — so we
+# skip the var rather than blank it).
+if [ -n "$EVENTHUB_NS" ]; then
+  SET_ARGS+=( "LOOM_EVENTHUB_NAMESPACE=$EVENTHUB_NS" )
+  if [ -n "$DLZ_RG" ]; then
+    SET_ARGS+=( "LOOM_EVENTHUB_RG=$DLZ_RG" )
+  fi
+  if [ -n "$DLZ_SUB" ]; then
+    SET_ARGS+=( "LOOM_EVENTHUB_SUB=$DLZ_SUB" )
+  fi
 fi
 
 echo "  set-env-vars: ${SET_ARGS[*]}"
@@ -115,3 +153,7 @@ output loomBronzeUrl string = bronzeUrl
 output loomSilverUrl string = silverUrl
 output loomGoldUrl string = goldUrl
 output loomSynapseWorkspace string = dlzSynapseWorkspace
+output loomEventHubNamespace string = dlzEventHubNamespace
+output loomEventHubRg string = dlzResourceGroup
+output loomEventHubSub string = dlzSubscriptionId
+output loomDlzRg string = dlzResourceGroup

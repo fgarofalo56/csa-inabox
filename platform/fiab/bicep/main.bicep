@@ -1543,6 +1543,21 @@ module dlzAttachHubConsoleEnv 'modules/landing-zone/hub-console-dlz-env.bicep' =
     scriptUamiId: effHubConsoleUamiId
     dlzAdlsAccount: dlzAttach!.outputs.storageAccountName
     dlzSynapseWorkspace: loomSynapseEnabled ? dlzAttach!.outputs.synapseWorkspaceName : ''
+    // Event Hubs: the attached DLZ provisions its own evhns-loom-<domain>-<region>
+    // namespace (loomEventHubEnabled threaded into dlzAttach above), and the
+    // eventhubs.bicep module already grants the hub Console UAMI Azure Event Hubs
+    // Data Owner + Contributor + Data Receiver on it (consolePrincipalId =
+    // effHubConsolePrincipalId). What was missing is the console ENV pointing at
+    // it — the console's LOOM_EVENTHUB_* defaulted to the admin/single-sub RG and
+    // the hub sub, so the Eventstream / Data Explorer navigators honest-gated even
+    // though the namespace is live. Thread the real namespace name + DLZ RG/sub so
+    // the env is re-pointed at the attached DLZ. Empty namespace name (EH disabled)
+    // => the env var is skipped and the editor honest-gates (correct behavior).
+    dlzEventHubNamespace: loomEventHubEnabled ? dlzAttach!.outputs.eventHubsNamespaceName : ''
+    dlzResourceGroup: 'rg-csa-loom-dlz-${attachDomainName}-${location}'
+    // dlz-attach deploys main.bicep at the DLZ subscription scope, so the DLZ sub
+    // is the deployment subscription. The console runs in the hub admin sub.
+    dlzSubscriptionId: subscription().subscriptionId
     complianceTags: complianceTags
   }
 }
