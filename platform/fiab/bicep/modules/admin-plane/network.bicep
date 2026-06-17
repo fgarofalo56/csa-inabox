@@ -34,6 +34,19 @@ param skipRoleGrants bool = false
 @description('Deploy the Azure Firewall + its policy + public IP for hub egress filtering. Nothing else in the template consumes the firewall (no forced-tunnel UDRs), so it is safe to disable. Default true. Set false to skip — useful when the firewall-policy re-PUT trips FirewallPolicyUpdateFailed on idempotent reconcile passes, or to reduce cost; the egress appliance can be added back later.')
 param firewallEnabled bool = true
 
+@description('''Idempotent-reconcile guard for the hub firewall policy. On a re-PUT,
+ARM pushes the firewall *policy* down to every firewall that references it; if the
+referenced firewall is in any non-Succeeded provisioning state at that instant the
+policy PUT aborts with `FirewallPolicyUpdateFailed: Put on Firewall Policy ... Failed
+with 1 faulted referenced firewalls`. On a fresh deploy leave this false (the policy
+is created). On a reconcile/redeploy of an environment whose firewall + policy already
+exist UNCHANGED, set this true: the module then references the EXISTING policy instead
+of re-PUTing it, so the firewall keeps its reference but no policy push is triggered —
+sidestepping the faulted-firewall race. Wired from the admin-plane skipRoleGrants flag
+(the existing "this is a reconcile pass" signal). Has no effect when firewallEnabled is
+false.''')
+param firewallPolicyReconcile bool = false
+
 
 // =====================================================================
 // Subnet calculations
@@ -244,8 +257,15 @@ resource bastion 'Microsoft.Network/bastionHosts@2024-05-01' = {
 
 var firewallSku = boundary == 'IL5' || boundary == 'GCC-High' ? 'Premium' : 'Standard'
 
-resource firewallPolicy 'Microsoft.Network/firewallPolicies@2024-05-01' = if (firewallEnabled) {
-  name: 'fwpol-csa-loom-${location}'
+var firewallPolicyName = 'fwpol-csa-loom-${location}'
+
+// Create the policy only on a fresh deploy (or a reconcile that intends to update
+// it). On a pure reconcile pass (firewallPolicyReconcile=true) we DON'T re-PUT it —
+// re-PUTing a firewall policy re-pushes it to its referenced firewall, which faults
+// the deploy if that firewall is mid-/post-update (FirewallPolicyUpdateFailed:
+// "... Failed with 1 faulted referenced firewalls"). See firewallPolicyReconcile.
+resource firewallPolicy 'Microsoft.Network/firewallPolicies@2024-05-01' = if (firewallEnabled && !firewallPolicyReconcile) {
+  name: firewallPolicyName
   location: location
   tags: complianceTags
   properties: {
@@ -253,6 +273,15 @@ resource firewallPolicy 'Microsoft.Network/firewallPolicies@2024-05-01' = if (fi
     threatIntelMode: 'Alert'
   }
 }
+
+// Existing reference used on reconcile passes so the firewall can keep its policy
+// binding without the module re-PUTing (and re-pushing) the policy.
+resource firewallPolicyExisting 'Microsoft.Network/firewallPolicies@2024-05-01' existing = if (firewallEnabled && firewallPolicyReconcile) {
+  name: firewallPolicyName
+}
+
+// Resolve the policy id from whichever path is active.
+var firewallPolicyId = firewallPolicyReconcile ? firewallPolicyExisting.id : firewallPolicy.id
 
 resource firewallPip 'Microsoft.Network/publicIPAddresses@2024-05-01' = if (firewallEnabled) {
   name: 'pip-fw-csa-loom-${location}'
@@ -274,7 +303,7 @@ resource firewall 'Microsoft.Network/azureFirewalls@2024-05-01' = if (firewallEn
       name: 'AZFW_VNet'
       tier: firewallSku
     }
-    firewallPolicy: { id: firewallPolicy.id }
+    firewallPolicy: { id: firewallPolicyId }
     ipConfigurations: [
       {
         name: 'ipconfig'
