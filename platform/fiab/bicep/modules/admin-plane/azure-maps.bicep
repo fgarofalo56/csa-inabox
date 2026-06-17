@@ -40,6 +40,19 @@ param keyVaultId string
 @description('Compliance tags')
 param complianceTags object
 
+@description('''Allowed CORS origins for the Maps account data plane (the SPA
+tile-preview path calls the Maps REST API from the browser). Per the Azure Maps
+CORS schema each entry must be a CONCRETE origin (scheme://host[:port]) — a
+wildcard-subdomain host like `https://*.b02.azurefd.net` is NOT a valid origin
+and ARM rejects it (InvalidParameter: allowedOrigins has an invalid type). To
+allow the Loom Front Door front end, pass its concrete endpoint origin (e.g.
+`https://loom-xxxxx.z01.azurefd.net`). Default is `['*']` (the schema-sanctioned
+allow-all token) so day-one tile preview works before the FD endpoint host is
+known; tighten to the concrete origin once the Front Door endpoint is provisioned.
+Grounded in Microsoft Learn (azure-maps-authentication#cross-origin-resource-sharing-cors
+and the @azure/arm-maps CorsRule.allowedOrigins contract).''')
+param allowedCorsOrigins array = ['*']
+
 var mapsAccountName = 'maps-csa-loom-${uniqueString(resourceGroup().id)}'
 
 // Azure Maps account
@@ -52,7 +65,9 @@ resource mapsAccount 'Microsoft.Maps/accounts@2024-07-01-preview' = if (boundary
   identity: { type: 'SystemAssigned' }
   properties: {
     disableLocalAuth: false                              // SPA preview still needs key auth
-    cors: { corsRules: [{ allowedOrigins: ['https://*.b02.azurefd.net'] }] }
+    // allowedOrigins must be concrete origins or the '*' allow-all token — never
+    // a wildcard-subdomain host (ARM InvalidParameter). See allowedCorsOrigins.
+    cors: { corsRules: [{ allowedOrigins: allowedCorsOrigins }] }
     // Atlas is a public-only multi-tenant service — there is no PE for
     // Microsoft.Maps/accounts. `publicNetworkAccess` is NOT a valid
     // property on this resource type (the resource is always public).
