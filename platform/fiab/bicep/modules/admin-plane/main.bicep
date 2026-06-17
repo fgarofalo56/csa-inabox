@@ -3849,8 +3849,16 @@ output mcpBridgeUrl string = containerPlatform == 'containerApps'
 output builtinMcpUrl string = builtinMcpUrl
 output builtinMcpApiKeySecretName string = loomBuiltinMcpActive ? loomBuiltinMcpApiKeySecretName : ''
 
+// Purview endpoint uses the catalog module's own purviewEndpoint output (which
+// is built from the SELF-HEALED purview region — catalog.bicep falls back to a
+// Purview-supported region when the hub `location`, e.g. centralus, is not in the
+// Purview availability set). Recomputing with `${location}` here would emit the
+// wrong host for an unsupported hub region. Falls back to the location-derived
+// host only when purviewEndpoint is empty (purview disabled).
 output catalogEndpoint string = catalogPrimary == 'purview'
-  ? 'https://purview-csa-loom-${location}.purview.azure.${boundary == 'GCC-High' || boundary == 'IL5' ? 'us' : 'com'}'
+  ? (!empty(catalog.outputs.purviewEndpoint)
+      ? catalog.outputs.purviewEndpoint
+      : 'https://purview-csa-loom-${location}.purview.azure.${boundary == 'GCC-High' || boundary == 'IL5' ? 'us' : 'com'}')
   : (catalogPrimary == 'unity-catalog-managed'
       ? 'https://adb-csa-loom-${location}.azuredatabricks.${boundary == 'GCC-High' || boundary == 'IL5' ? 'us' : 'net'}'
       : 'https://atlas-csa-loom.${location}.aks.csa-loom.internal')

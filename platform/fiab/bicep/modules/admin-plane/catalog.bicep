@@ -59,7 +59,59 @@ param complianceTags object
 // hub region lacks Purview capacity. Used for the account location AND its name
 // so LOOM_PURVIEW_ACCOUNT (derived from the same pattern in admin-plane/main.bicep)
 // matches the real account host.
-var effPurviewLocation = empty(purviewLocation) ? location : purviewLocation
+//
+// Day-one self-heal (centralus deploy failure 2026-06-17): Microsoft.Purview/accounts
+// is NOT available in every Azure region. A hub in an unsupported region (e.g.
+// centralus) would fail with LocationNotAvailableForResourceType. So when the
+// caller passes no explicit `purviewLocation` AND the hub `location` is not in
+// Purview's supported set, fall back to the documented `purviewFallbackLocation`
+// (default eastus2 — the nearest supported region to centralus). When the caller
+// DOES pass an explicit purviewLocation it is honored verbatim (BYO override).
+// Supported-region list grounded in Microsoft Learn + the ARM availability list
+// returned by the platform:
+//   https://learn.microsoft.com/purview/data-governance-purview-portal#regions
+//   https://learn.microsoft.com/azure/purview (Azure products by region)
+// ARM available set: eastus, eastus2, westus, westus2, westus3, westcentralus,
+//   southcentralus, canadacentral, canadaeast, brazilsouth, northeurope,
+//   westeurope, swedencentral, uksouth, francecentral, germanywestcentral,
+//   switzerlandnorth, southeastasia, centralindia, japaneast, koreacentral,
+//   australiaeast, uaenorth, qatarcentral, southafricanorth.
+var purviewSupportedRegions = [
+  'eastus'
+  'eastus2'
+  'westus'
+  'westus2'
+  'westus3'
+  'westcentralus'
+  'southcentralus'
+  'canadacentral'
+  'canadaeast'
+  'brazilsouth'
+  'northeurope'
+  'westeurope'
+  'swedencentral'
+  'uksouth'
+  'francecentral'
+  'germanywestcentral'
+  'switzerlandnorth'
+  'southeastasia'
+  'centralindia'
+  'japaneast'
+  'koreacentral'
+  'australiaeast'
+  'uaenorth'
+  'qatarcentral'
+  'southafricanorth'
+]
+
+@description('Fallback region for the Purview account when the hub `location` is not a Purview-supported region and no explicit `purviewLocation` is given. Defaults to eastus2 (nearest supported region to centralus). Must be a region in the Purview supported set.')
+param purviewFallbackLocation string = 'eastus2'
+
+// Resolution order: explicit purviewLocation (BYO) > hub location if supported >
+// documented fallback. Never emits an unsupported region to the account resource.
+var effPurviewLocation = !empty(purviewLocation)
+  ? purviewLocation
+  : (contains(purviewSupportedRegions, toLower(location)) ? location : purviewFallbackLocation)
 var purviewAccountName = 'purview-csa-loom-${effPurviewLocation}'
 
 resource purview 'Microsoft.Purview/accounts@2024-04-01-preview' = if (purviewEnabled) {
@@ -160,7 +212,9 @@ resource purviewPortalPeDns 'Microsoft.Network/privateEndpoints/privateDnsZoneGr
   }
 }
 
-resource purviewAdminRole 'Microsoft.Authorization/roleAssignments@2022-04-01' = if (purviewEnabled && !skipRoleGrants) {
+// Guarded on !empty(adminEntraGroupId): an empty admin-group principal would
+// trigger ARM InvalidPrincipalId.
+resource purviewAdminRole 'Microsoft.Authorization/roleAssignments@2022-04-01' = if (purviewEnabled && !skipRoleGrants && !empty(adminEntraGroupId)) {
   scope: purview
   name: guid(purview.id, adminEntraGroupId, '8a3c2885-9b38-4fd2-9d99-91af537c1347')
   properties: {

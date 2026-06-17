@@ -98,8 +98,12 @@ resource search 'Microsoft.Search/searchServices@2025-02-01-preview' = {
   }
 }
 
-// Search Service Contributor role to admin group
-resource roleAssign 'Microsoft.Authorization/roleAssignments@2022-04-01' = if (!skipRoleGrants) {
+// Search Service Contributor role to admin group.
+// Guarded on !empty(adminEntraGroupId): when no admin Entra group is supplied
+// (optional param) this assignment must be SKIPPED rather than fire with an
+// empty principalId — an empty principal triggers ARM InvalidPrincipalId
+// (day-one centralus deploy failure 2026-06-17).
+resource roleAssign 'Microsoft.Authorization/roleAssignments@2022-04-01' = if (!skipRoleGrants && !empty(adminEntraGroupId)) {
   scope: search
   name: guid(search.id, adminEntraGroupId, '7ca78c08-252a-4471-8644-bb5ff32d4ba0')
   properties: {

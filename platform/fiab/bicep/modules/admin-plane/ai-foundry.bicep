@@ -84,8 +84,10 @@ resource foundryHub 'Microsoft.MachineLearningServices/workspaces@2024-10-01' = 
   }
 }
 
-// Azure ML Owner role to admin group
-resource hubOwnerRole 'Microsoft.Authorization/roleAssignments@2022-04-01' = if (!skipRoleGrants) {
+// Azure ML Data Scientist role to admin group.
+// Guarded on !empty(adminEntraGroupId): an empty admin-group principal would
+// trigger ARM InvalidPrincipalId (day-one centralus deploy failure 2026-06-17).
+resource hubOwnerRole 'Microsoft.Authorization/roleAssignments@2022-04-01' = if (!skipRoleGrants && !empty(adminEntraGroupId)) {
   scope: foundryHub
   name: guid(foundryHub.id, adminEntraGroupId, 'f6c7c914-8db3-469d-8ca1-694a8f32e121')
   properties: {
