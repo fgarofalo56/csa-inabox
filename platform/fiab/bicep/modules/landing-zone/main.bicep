@@ -719,6 +719,13 @@ output silverContainerUrl string = storage.outputs.silverContainerUrl
 output goldContainerUrl string = storage.outputs.goldContainerUrl
 output landingContainerUrl string = storage.outputs.landingContainerUrl
 output eventHubsNamespaceFqdn string = provisionEventHub ? eventhubs!.outputs.namespaceFqdn : ''
+// Event Hubs namespace NAME (short) — threaded to the hub console env in
+// dlz-attach (LOOM_EVENTHUB_NAMESPACE) so the Eventstream / Data Explorer
+// navigators bind to THIS DLZ's namespace instead of honest-gating. When a
+// namespace is REUSED (existingEventHubNamespaceName) we surface that name; when
+// EH is disabled the output is empty (the console then honest-gates, the correct
+// behavior).
+output eventHubsNamespaceName string = provisionEventHub ? eventhubs!.outputs.namespaceName : existingEventHubNamespaceName
 output cosmosEndpoint string = cosmos.outputs.endpoint
 output storageEventGridTopicId string = storage.outputs.eventGridTopicId
 
