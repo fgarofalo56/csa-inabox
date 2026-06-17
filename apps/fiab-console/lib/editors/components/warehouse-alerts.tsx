@@ -246,6 +246,7 @@ export function WarehouseAlerts({ engine, id, warehouseId, open, onOpenChange }:
   const alerts = list?.alerts || [];
 
   return (
+    <>
     <Dialog open={open} onOpenChange={(_, d) => onOpenChange(d.open)}>
       <DialogSurface style={{ maxWidth: '920px', width: '95vw' }}>
         <DialogBody>
@@ -329,8 +330,16 @@ export function WarehouseAlerts({ engine, id, warehouseId, open, onOpenChange }:
           </DialogActions>
         </DialogBody>
       </DialogSurface>
+    </Dialog>
 
-      {/* ── New-alert editor (Query / Condition / Schedule / Destination) ── */}
+    {/*
+      * New-alert editor (Query / Condition / Schedule / Destination).
+      * Rendered as a SIBLING of the list Dialog, never nested inside its
+      * DialogSurface — a Fluent Dialog nested in another Dialog's surface
+      * breaks the parent's open/close (the nested modal's focus-trap keeps the
+      * parent surface mounted, so the list Dialog rendered open on mount and
+      * Close failed to dismiss it).
+      */}
       <Dialog open={editorOpen} onOpenChange={(_, d) => setEditorOpen(d.open)}>
         <DialogSurface style={{ maxWidth: '780px', width: '95vw' }}>
           <DialogBody>
@@ -501,6 +510,6 @@ export function WarehouseAlerts({ engine, id, warehouseId, open, onOpenChange }:
           </DialogBody>
         </DialogSurface>
       </Dialog>
-    </Dialog>
+    </>
   );
 }

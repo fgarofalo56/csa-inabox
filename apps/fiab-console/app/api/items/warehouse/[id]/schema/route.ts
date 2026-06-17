@@ -21,7 +21,31 @@ export async function GET(req: NextRequest) {
   const session = getSession();
   if (!session) return NextResponse.json({ error: 'unauthenticated' }, { status: 401 });
 
-  const state = await getPoolState().catch(() => null);
+  // Distinguish a genuine non-Online pool (Paused/Resuming → 409, honest gate)
+  // from a probe failure (ARM unreachable / scope wrong → 502, surfaced as an
+  // error, NOT a false "paused" banner that discourages running queries).
+  let state: Awaited<ReturnType<typeof getPoolState>> | null = null;
+  let probeError: string | null = null;
+  try {
+    state = await getPoolState();
+  } catch (e: any) {
+    probeError = e?.message || String(e);
+  }
+
+  if (probeError) {
+    return NextResponse.json(
+      {
+        ok: false,
+        state: 'Unknown',
+        sku: 'unknown',
+        warehouse: process.env.LOOM_SYNAPSE_DEDICATED_POOL,
+        error: `Could not read the Synapse Dedicated SQL pool state from ARM: ${probeError}`,
+        message: 'Warehouse compute status is unavailable — the pool-state probe failed. Verify the Console identity has Reader on the Synapse workspace and that LOOM_SYNAPSE_WORKSPACE / LOOM_SYNAPSE_DEDICATED_POOL are correct.',
+      },
+      { status: 502 },
+    );
+  }
+
   if (!state || state.state !== 'Online') {
     return NextResponse.json(
       {
