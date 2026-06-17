@@ -31,6 +31,7 @@ import {
 import { AcaManagedIdentityCredential } from '@/lib/azure/aca-managed-identity';
 import { armBase, armScope } from './cloud-endpoints';
 import { fetchWithTimeout } from './fetch-with-timeout';
+import { discoverResourceCoordsByName } from './resource-graph-coords';
 
 const ARM_SCOPE = armScope();
 const KUSTO_API = '2023-08-15';
@@ -113,6 +114,70 @@ async function callArm(url: string, init?: RequestInit): Promise<Response> {
   });
 }
 
+// ---------------------------------------------------------------------------
+// DLZ coordinate self-heal (generalized from synapse-pool-arm.ts / PR #1445).
+//
+// In the multi-sub dlz-attach topology the env resolves the ADX cluster coords
+// to the ADMIN plane (LOOM_KUSTO_SUB || LOOM_SUBSCRIPTION_ID + LOOM_KUSTO_RG ||
+// LOOM_DLZ_RG), but the cluster can actually live in the DLZ sub — so the
+// configured `Microsoft.Kusto/clusters/{name}` URL 404s (or 403s) and every
+// ARM op (get-state / start / stop / databases / dataConnections /
+// attachedDatabaseConfigurations) silently fails. On a 404/403 (or transport
+// error) we discover the cluster's REAL {subscriptionId, resourceGroup} by name
+// via Azure Resource Graph, cache it for the process, and retry. Because every
+// sub-resource URL derives from `clusterUrl(cfg)`, resolving the cluster coords
+// fixes them all.
+// ---------------------------------------------------------------------------
+
+let resolvedCoords: KustoClusterArmConfig | null = null;
+
+async function discoverClusterCoords(cfg: KustoClusterArmConfig): Promise<KustoClusterArmConfig | null> {
+  const coords = await discoverResourceCoordsByName({
+    resourceType: 'Microsoft.Kusto/clusters',
+    name: cfg.clusterName,
+    credential,
+  });
+  if (!coords) return null;
+  return {
+    subscriptionId: coords.subscriptionId,
+    resourceGroup: coords.resourceGroup,
+    clusterName: cfg.clusterName,
+  };
+}
+
+/**
+ * Build an ARM URL from cluster coordinates and call it, self-healing across a
+ * sub/RG mismatch. `buildUrl(coords)` produces the cluster-or-sub-resource URL
+ * for a given set of coordinates (it already includes `?api-version=…`).
+ *
+ * Tries the cached coords, then the env-configured coords; on a 404/403 (or a
+ * transport error) it discovers the cluster's real coords via Resource Graph,
+ * caches them, and retries — so the returned Response reflects the resource's
+ * REAL ARM state. Falls back to re-issuing against the configured URL so the
+ * real ARM error (status + body) surfaces to the caller.
+ */
+async function callClusterArm(
+  cfg: KustoClusterArmConfig,
+  buildUrl: (coords: KustoClusterArmConfig) => string,
+  init?: RequestInit,
+): Promise<Response> {
+  if (resolvedCoords) return callArm(buildUrl(resolvedCoords), init);
+
+  const res = await callArm(buildUrl(cfg), init).catch(() => null);
+  if (res && res.ok) {
+    resolvedCoords = cfg;
+    return res;
+  }
+  if (!res || res.status === 404 || res.status === 403) {
+    const discovered = await discoverClusterCoords(cfg);
+    if (discovered) {
+      resolvedCoords = discovered;
+      return callArm(buildUrl(discovered), init);
+    }
+  }
+  return res ?? callArm(buildUrl(cfg), init);
+}
+
 export interface OptimizedAutoscale {
   isEnabled: boolean;
   minimum: number;
@@ -157,7 +222,7 @@ function shape(raw: any): KustoClusterArm {
 
 export async function getKustoClusterArm(): Promise<KustoClusterArm> {
   const cfg = readKustoArmConfig();
-  const r = await callArm(`${clusterUrl(cfg)}?api-version=${KUSTO_API}`);
+  const r = await callClusterArm(cfg, (c) => `${clusterUrl(c)}?api-version=${KUSTO_API}`);
   if (!r.ok) {
     throw new KustoArmError(r.status, await r.text(), `getKustoCluster failed ${r.status}`);
   }
@@ -176,8 +241,9 @@ export async function updateKustoClusterSku(
   const tier = newSkuName.toLowerCase().startsWith('dev(no sla)') ? 'Basic' : 'Standard';
   const body: any = { sku: { name: newSkuName, tier } };
   if (typeof capacity === 'number' && capacity > 0) body.sku.capacity = capacity;
-  const r = await callArm(
-    `${clusterUrl(cfg)}?api-version=${KUSTO_API}`,
+  const r = await callClusterArm(
+    cfg,
+    (c) => `${clusterUrl(c)}?api-version=${KUSTO_API}`,
     { method: 'PATCH', body: JSON.stringify(body) },
   );
   if (!r.ok && r.status !== 202) {
@@ -209,7 +275,7 @@ export async function updateKustoClusterSku(
 
 export async function stopKustoCluster(): Promise<{ provisioningState: string }> {
   const cfg = readKustoArmConfig();
-  const r = await callArm(`${clusterUrl(cfg)}/stop?api-version=${KUSTO_API}`, { method: 'POST' });
+  const r = await callClusterArm(cfg, (c) => `${clusterUrl(c)}/stop?api-version=${KUSTO_API}`, { method: 'POST' });
   if (!r.ok && r.status !== 202 && r.status !== 204) {
     throw new KustoArmError(r.status, await r.text(), `stopKustoCluster failed ${r.status}`);
   }
@@ -218,7 +284,7 @@ export async function stopKustoCluster(): Promise<{ provisioningState: string }>
 
 export async function startKustoCluster(): Promise<{ provisioningState: string }> {
   const cfg = readKustoArmConfig();
-  const r = await callArm(`${clusterUrl(cfg)}/start?api-version=${KUSTO_API}`, { method: 'POST' });
+  const r = await callClusterArm(cfg, (c) => `${clusterUrl(c)}/start?api-version=${KUSTO_API}`, { method: 'POST' });
   if (!r.ok && r.status !== 202 && r.status !== 204) {
     throw new KustoArmError(r.status, await r.text(), `startKustoCluster failed ${r.status}`);
   }
@@ -233,7 +299,7 @@ export async function startKustoCluster(): Promise<{ provisioningState: string }
  */
 export async function deleteKustoCluster(): Promise<{ provisioningState: string }> {
   const cfg = readKustoArmConfig();
-  const r = await callArm(`${clusterUrl(cfg)}?api-version=${KUSTO_API}`, { method: 'DELETE' });
+  const r = await callClusterArm(cfg, (c) => `${clusterUrl(c)}?api-version=${KUSTO_API}`, { method: 'DELETE' });
   // 200 (sync), 202 (async), 204 (already gone) are all success.
   if (!r.ok && r.status !== 202 && r.status !== 204) {
     throw new KustoArmError(r.status, await r.text(), `deleteKustoCluster failed ${r.status}`);
@@ -335,7 +401,7 @@ function shapeDataConnection(raw: any): DataConnectionArm {
 
 export async function listDataConnections(database: string): Promise<DataConnectionArm[]> {
   const cfg = readKustoArmConfig();
-  const r = await callArm(`${dataConnectionsBaseUrl(cfg, database)}?api-version=${KUSTO_API}`);
+  const r = await callClusterArm(cfg, (c) => `${dataConnectionsBaseUrl(c, database)}?api-version=${KUSTO_API}`);
   if (!r.ok) throw new KustoArmError(r.status, await r.text(), `listDataConnections failed ${r.status}`);
   const body: any = await r.json();
   return Array.isArray(body?.value) ? body.value.map(shapeDataConnection) : [];
@@ -361,8 +427,9 @@ export async function createOrUpdateDataConnection(
       databaseRouting: 'Single',
     },
   };
-  const r = await callArm(
-    `${dataConnectionsBaseUrl(cfg, database)}/${encodeURIComponent(name)}?api-version=${KUSTO_API}`,
+  const r = await callClusterArm(
+    cfg,
+    (c) => `${dataConnectionsBaseUrl(c, database)}/${encodeURIComponent(name)}?api-version=${KUSTO_API}`,
     { method: 'PUT', body: JSON.stringify(payload) },
   );
   // ARM returns 200 (update) / 201 (create), or 202 + Location for async ops.
@@ -439,8 +506,9 @@ export async function createIotHubDataConnection(
       databaseRouting: 'Single',
     },
   };
-  const r = await callArm(
-    `${dataConnectionsBaseUrl(cfg, database)}/${encodeURIComponent(name)}?api-version=${KUSTO_API}`,
+  const r = await callClusterArm(
+    cfg,
+    (c) => `${dataConnectionsBaseUrl(c, database)}/${encodeURIComponent(name)}?api-version=${KUSTO_API}`,
     { method: 'PUT', body: JSON.stringify(payload) },
   );
   if (!r.ok && r.status !== 202) {
@@ -457,8 +525,9 @@ export async function createIotHubDataConnection(
 
 export async function deleteDataConnection(database: string, name: string): Promise<void> {
   const cfg = readKustoArmConfig();
-  const r = await callArm(
-    `${dataConnectionsBaseUrl(cfg, database)}/${encodeURIComponent(name)}?api-version=${KUSTO_API}`,
+  const r = await callClusterArm(
+    cfg,
+    (c) => `${dataConnectionsBaseUrl(c, database)}/${encodeURIComponent(name)}?api-version=${KUSTO_API}`,
     { method: 'DELETE' },
   );
   // 200/204 (sync delete) or 202 (async) or 404 (already gone) are all OK.
@@ -482,8 +551,11 @@ export async function deleteDataConnection(database: string, name: string): Prom
  */
 export async function deleteKustoDatabase(dbName: string): Promise<{ provisioningState: string }> {
   const cfg = readKustoArmConfig();
-  const url = `${clusterUrl(cfg)}/databases/${encodeURIComponent(dbName)}?api-version=${KUSTO_API}`;
-  const r = await callArm(url, { method: 'DELETE' });
+  const r = await callClusterArm(
+    cfg,
+    (c) => `${clusterUrl(c)}/databases/${encodeURIComponent(dbName)}?api-version=${KUSTO_API}`,
+    { method: 'DELETE' },
+  );
   // 200 sync delete, 202 async delete, 204 already-gone are all success.
   if (!r.ok && r.status !== 202) {
     throw new KustoArmError(r.status, await r.text(), `deleteKustoDatabase(${dbName}) failed ${r.status}`);
@@ -511,8 +583,9 @@ export async function updateKustoClusterAutoscale(
       optimizedAutoscale: { isEnabled, minimum, maximum, version: 1 },
     },
   };
-  const r = await callArm(
-    `${clusterUrl(cfg)}?api-version=${KUSTO_API}`,
+  const r = await callClusterArm(
+    cfg,
+    (c) => `${clusterUrl(c)}?api-version=${KUSTO_API}`,
     { method: 'PATCH', body: JSON.stringify(body) },
   );
   if (!r.ok && r.status !== 202) {
@@ -585,7 +658,7 @@ export async function attachFollowerDatabase(
       defaultPrincipalsModificationKind: cfg.defaultPrincipalsModificationKind,
     },
   };
-  const r = await callArm(attachedConfigUrl(arm, cfg.configName), {
+  const r = await callClusterArm(arm, (c) => attachedConfigUrl(c, cfg.configName), {
     method: 'PUT',
     body: JSON.stringify(body),
   });
@@ -613,8 +686,7 @@ export interface AttachedDatabaseConfigurationResult {
 /** List all attachedDatabaseConfigurations on the Loom follower cluster. */
 export async function listAttachedDatabaseConfigurations(): Promise<AttachedDatabaseConfigurationResult[]> {
   const cfg = readKustoArmConfig();
-  const url = `${clusterUrl(cfg)}/attachedDatabaseConfigurations?api-version=${KUSTO_API}`;
-  const r = await callArm(url);
+  const r = await callClusterArm(cfg, (c) => `${clusterUrl(c)}/attachedDatabaseConfigurations?api-version=${KUSTO_API}`);
   if (!r.ok) {
     throw new KustoArmError(r.status, await r.text(), `listAttachedDatabaseConfigurations failed ${r.status}`);
   }
@@ -635,7 +707,7 @@ export async function listAttachedDatabaseConfigurations(): Promise<AttachedData
 /** Detach (DELETE) a follower configuration by its short config name. */
 export async function detachFollowerDatabase(configName: string): Promise<void> {
   const cfg = readKustoArmConfig();
-  const r = await callArm(attachedConfigUrl(cfg, configName), { method: 'DELETE' });
+  const r = await callClusterArm(cfg, (c) => attachedConfigUrl(c, configName), { method: 'DELETE' });
   // ARM returns 200 (deleted), 202 (async delete), or 204 (already gone).
   if (!r.ok && r.status !== 202 && r.status !== 204) {
     throw new KustoArmError(r.status, await r.text(), `detachFollowerDatabase failed ${r.status}`);
@@ -662,8 +734,9 @@ export async function updateKustoStreamingIngest(
 ): Promise<KustoClusterArm> {
   const cfg = readKustoArmConfig();
   const body = { properties: { enableStreamingIngest: enabled } };
-  const r = await callArm(
-    `${clusterUrl(cfg)}?api-version=${KUSTO_API}`,
+  const r = await callClusterArm(
+    cfg,
+    (c) => `${clusterUrl(c)}?api-version=${KUSTO_API}`,
     { method: 'PATCH', body: JSON.stringify(body) },
   );
   if (!r.ok && r.status !== 202) {

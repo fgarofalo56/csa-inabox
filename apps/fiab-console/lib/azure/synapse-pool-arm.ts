@@ -8,10 +8,10 @@ import { DefaultAzureCredential, ManagedIdentityCredential, ChainedTokenCredenti
 import { AcaManagedIdentityCredential } from '@/lib/azure/aca-managed-identity';
 import { armBase, armScope } from './cloud-endpoints';
 import { fetchWithTimeout } from './fetch-with-timeout';
+import { discoverResourceCoordsByName } from './resource-graph-coords';
 
 const ARM_SCOPE = armScope();
 const ARM_API = '2021-06-01';
-const RESOURCE_GRAPH_API = '2022-10-01';
 const uamiClientId = process.env.LOOM_UAMI_CLIENT_ID || process.env.AZURE_CLIENT_ID;
 const credential: ChainedTokenCredential | DefaultAzureCredential = uamiClientId
   ? new ChainedTokenCredential(new AcaManagedIdentityCredential(), new ManagedIdentityCredential({ clientId: uamiClientId }), new DefaultAzureCredential())
@@ -80,30 +80,17 @@ async function armFetch(url: string, init?: RequestInit): Promise<Response> {
  * env-configured ARM scope doesn't resolve the pool — so the status badge
  * reflects the real ARM state instead of a false "Unknown".
  *
- * ARG ref: POST {arm}/providers/Microsoft.ResourceGraph/resources
- *   https://learn.microsoft.com/rest/api/azureresourcegraph/resourcegraph/resources/resources
+ * Delegates to the shared `discoverResourceCoordsByName` helper (PR
+ * generalizing #1445) so every DLZ-targeting ARM client self-heals identically.
  */
 async function discoverCoordsByName(): Promise<WorkspaceCoords | null> {
   const ws = required('LOOM_SYNAPSE_WORKSPACE');
-  const query = [
-    'Resources',
-    `| where type =~ 'microsoft.synapse/workspaces' and name =~ '${ws.replace(/'/g, "\\'")}'`,
-    '| project subscriptionId, resourceGroup',
-    '| take 1',
-  ].join('\n');
-  try {
-    const res = await armFetch(
-      `${armBase()}/providers/Microsoft.ResourceGraph/resources?api-version=${RESOURCE_GRAPH_API}`,
-      { method: 'POST', body: JSON.stringify({ query, options: { resultFormat: 'objectArray', $top: 1 } }) },
-    );
-    if (!res.ok) return null;
-    const json = await res.json();
-    const row = Array.isArray(json?.data) ? json.data[0] : undefined;
-    const sub = row?.subscriptionId ? String(row.subscriptionId) : '';
-    const rg = row?.resourceGroup ? String(row.resourceGroup) : '';
-    if (sub && rg) return { sub, rg };
-  } catch { /* fall through to null */ }
-  return null;
+  const coords = await discoverResourceCoordsByName({
+    resourceType: 'Microsoft.Synapse/workspaces',
+    name: ws,
+    credential,
+  });
+  return coords ? { sub: coords.subscriptionId, rg: coords.resourceGroup } : null;
 }
 
 /**
