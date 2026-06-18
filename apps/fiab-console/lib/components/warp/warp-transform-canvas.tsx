@@ -151,7 +151,7 @@ const useStyles = makeStyles({
   empty: {
     position: 'absolute', inset: 0, display: 'flex', flexDirection: 'column',
     alignItems: 'center', justifyContent: 'center', gap: tokens.spacingVerticalM,
-    pointerEvents: 'none', color: tokens.colorNeutralForeground3, zIndex: 1, textAlign: 'center', padding: '24px',
+    pointerEvents: 'none', color: tokens.colorNeutralForeground3, zIndex: 1, textAlign: 'center', padding: tokens.spacingHorizontalXXL,
   },
   emptyActions: { display: 'flex', gap: tokens.spacingHorizontalS, pointerEvents: 'auto', flexWrap: 'wrap', justifyContent: 'center' },
   tableWrap: {
@@ -159,12 +159,12 @@ const useStyles = makeStyles({
     border: `1px solid ${tokens.colorNeutralStroke2}`,
     borderRadius: tokens.borderRadiusMedium,
   },
-  cell: { fontFamily: 'Consolas, "Cascadia Code", monospace', fontSize: '12px', whiteSpace: 'nowrap', maxWidth: '360px', overflow: 'hidden', textOverflow: 'ellipsis' },
+  cell: { fontFamily: 'Consolas, "Cascadia Code", monospace', fontSize: tokens.fontSizeBase200, whiteSpace: 'nowrap', maxWidth: '360px', overflow: 'hidden', textOverflow: 'ellipsis' },
   nullCell: { color: tokens.colorNeutralForeground4, fontStyle: 'italic' },
-  aggRow: { display: 'flex', gap: '4px', alignItems: 'center' },
-  checkList: { display: 'flex', flexDirection: 'column', gap: '2px', maxHeight: '170px', overflowY: 'auto', paddingLeft: '2px' },
+  aggRow: { display: 'flex', gap: tokens.spacingHorizontalXS, alignItems: 'center' },
+  checkList: { display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalXS, maxHeight: '170px', overflowY: 'auto', paddingLeft: '2px' },
   wizardCard: {
-    display: 'flex', flexDirection: 'column', gap: '4px', padding: tokens.spacingVerticalM,
+    display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalXS, padding: tokens.spacingVerticalM,
     borderRadius: tokens.borderRadiusLarge,
     ...shorthands.border('1px', 'solid', tokens.colorNeutralStroke2),
     backgroundColor: tokens.colorNeutralBackground1, cursor: 'pointer', textAlign: 'left',
@@ -177,8 +177,12 @@ const useStyles = makeStyles({
 // Node colours + icons
 // ============================================================
 
+// Node accent colours: source uses the brand blue token; transform/join/sink keep
+// their vivid hex values — no Fluent v9 "solid vivid" palette tokens exist for
+// purple (#7719aa), green (#107c10), or red (#c50f1f) that would preserve the
+// same luminosity as the Background2 variants, so they are left as literals.
 const STEP_COLOR: Record<VqStepKind, string> = {
-  source: '#0078d4',
+  source: tokens.colorBrandBackground,
   filter: '#7719aa', 'select-columns': '#7719aa', 'keep-top-rows': '#7719aa',
   'group-by': '#7719aa', sort: '#7719aa', derive: '#7719aa', rename: '#7719aa',
   cast: '#7719aa', dedup: '#7719aa',
@@ -227,11 +231,11 @@ function WarpNodeImpl({ data, selected }: NodeProps) {
       data-warp-kind={d.kind}
       aria-label={`${d.kind} ${d.label}`}
       style={{
-        position: 'relative', width: 190, padding: '10px 12px', borderRadius: 6,
+        position: 'relative', width: 190, padding: `10px ${tokens.spacingHorizontalM}`, borderRadius: 6,
         background: tokens.colorNeutralBackground1,
         border: `1px solid ${selected ? tokens.colorBrandStroke1 : tokens.colorNeutralStroke2}`,
         boxShadow: selected ? `0 0 0 2px ${tokens.colorBrandBackground2}` : '0 1px 2px rgba(0,0,0,0.06)',
-        display: 'flex', gap: 8, alignItems: 'flex-start', cursor: 'pointer', userSelect: 'none',
+        display: 'flex', gap: tokens.spacingHorizontalS, alignItems: 'flex-start', cursor: 'pointer', userSelect: 'none',
       }}
     >
       {d.kind !== 'source' && !twoIn && (
@@ -248,9 +252,9 @@ function WarpNodeImpl({ data, selected }: NodeProps) {
       )}
       <div style={{ width: 6, alignSelf: 'stretch', borderRadius: 2, background: color }} />
       <div style={{ color, display: 'flex', alignItems: 'center', flexShrink: 0 }}>{stepIcon(d.kind)}</div>
-      <div style={{ display: 'flex', flexDirection: 'column', gap: 2, minWidth: 0, flex: 1 }}>
+      <div style={{ display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalXS, minWidth: 0, flex: 1 }}>
         <div style={{ fontWeight: 600, fontSize: 13, color: tokens.colorNeutralForeground1, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{d.label}</div>
-        <Badge appearance="filled" size="small" style={{ backgroundColor: color, color: '#fff', alignSelf: 'flex-start' }}>{STEP_LABEL[d.kind]}</Badge>
+        <Badge appearance="filled" size="small" style={{ backgroundColor: color, color: tokens.colorNeutralForegroundInverted, alignSelf: 'flex-start' }}>{STEP_LABEL[d.kind]}</Badge>
       </div>
     </div>
   );
@@ -721,7 +725,7 @@ function CanvasInner(props: WarpTransformCanvasProps) {
             <MessageBarTitle>Grant the Console identity a SQL login</MessageBarTitle>
             {result.gate?.reason || result.error}
             {result.gate?.remediation && <div style={{ marginTop: 6 }}>{result.gate.remediation}</div>}
-            {result.gate?.sql && <pre style={{ marginTop: 8, padding: 8, borderRadius: 6, overflowX: 'auto', fontSize: 12, fontFamily: tokens.fontFamilyMonospace, whiteSpace: 'pre' }}>{result.gate.sql}</pre>}
+            {result.gate?.sql && <pre style={{ marginTop: tokens.spacingVerticalS, padding: tokens.spacingVerticalS, borderRadius: 6, overflowX: 'auto', fontSize: tokens.fontSizeBase200, fontFamily: tokens.fontFamilyMonospace, whiteSpace: 'pre' }}>{result.gate.sql}</pre>}
           </MessageBarBody>
         </MessageBar>
       )}

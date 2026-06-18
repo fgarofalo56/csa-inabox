@@ -28,7 +28,7 @@ const useStyles = makeStyles({
     flexDirection: 'column',
     gap: tokens.spacingVerticalS,
   },
-  urlLabel: { fontSize: '11px', textTransform: 'uppercase', letterSpacing: '0.06em', color: tokens.colorNeutralForeground3, fontWeight: 600 },
+  urlLabel: { fontSize: tokens.fontSizeBase100, textTransform: 'uppercase', letterSpacing: '0.06em', color: tokens.colorNeutralForeground3, fontWeight: 600 },
   urlValue: { wordBreak: 'break-all' },
 });
 
@@ -116,7 +116,7 @@ export function ApimDeveloperPortalPane() {
       render: (r) => (
         <div>
           <strong>{r.name}</strong>
-          {r.description && <Caption1 style={{ display: 'block', marginTop: '2px' }}>{r.description}</Caption1>}
+          {r.description && <Caption1 style={{ display: 'block', marginTop: tokens.spacingVerticalXS }}>{r.description}</Caption1>}
         </div>
       ),
     },

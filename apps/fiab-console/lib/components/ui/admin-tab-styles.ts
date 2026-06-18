@@ -103,4 +103,23 @@ export const useAdminTabStyles = makeStyles({
   brandText: { color: tokens.colorBrandForeground1 },
   /** Tight inline row of icon buttons / chips. */
   rowGapXS: { display: 'flex', gap: tokens.spacingHorizontalXS },
+  /**
+   * Responsive stat/KPI card grid — `repeat(auto-fill, minmax(200px,1fr))`.
+   * Use wherever a row of stat cards needs to reflow on narrow viewports.
+   * Each card should use the `cardSection` style or its own padding/border.
+   */
+  statGrid: {
+    display: 'grid',
+    gridTemplateColumns: 'repeat(auto-fill, minmax(200px, 1fr))',
+    gap: tokens.spacingHorizontalL,
+  },
+  /**
+   * Bordered section separator card — token border-top + paddingTop.
+   * Replaces `borderTop: '1px solid …' + paddingTop: 'NNpx'` patterns
+   * inside admin tabs and detail panes.
+   */
+  cardSection: {
+    borderTop: `1px solid ${tokens.colorNeutralStroke2}`,
+    paddingTop: tokens.spacingVerticalM,
+  },
 });

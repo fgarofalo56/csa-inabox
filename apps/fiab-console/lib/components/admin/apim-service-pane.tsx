@@ -23,8 +23,8 @@ const useStyles = makeStyles({
     border: `1px solid ${tokens.colorNeutralStroke2}`,
     backgroundColor: tokens.colorNeutralBackground2,
   },
-  statLabel: { fontSize: '11px', textTransform: 'uppercase', letterSpacing: '0.06em', color: tokens.colorNeutralForeground3, fontWeight: 600 },
-  statValue: { fontSize: '20px', fontWeight: 700, marginTop: '8px', lineHeight: 1.1 },
+  statLabel: { fontSize: tokens.fontSizeBase100, textTransform: 'uppercase', letterSpacing: '0.06em', color: tokens.colorNeutralForeground3, fontWeight: 600 },
+  statValue: { fontSize: tokens.fontSizeBase500, fontWeight: 700, marginTop: tokens.spacingVerticalS, lineHeight: 1.1 },
 });
 
 const SKU_OPTIONS = ['Developer', 'Basic', 'Standard', 'Premium', 'BasicV2', 'StandardV2'];

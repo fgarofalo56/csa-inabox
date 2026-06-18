@@ -151,7 +151,7 @@ export function ApimNamedValuesPane() {
       render: (v) => (
         <div>
           <strong>{v.displayName}</strong>
-          <Caption1 style={{ display: 'block', marginTop: '2px', color: tokens.colorNeutralForeground3 }}>{v.name}</Caption1>
+          <Caption1 style={{ display: 'block', marginTop: tokens.spacingVerticalXS, color: tokens.colorNeutralForeground3 }}>{v.name}</Caption1>
         </div>
       ),
     },
@@ -182,7 +182,7 @@ export function ApimNamedValuesPane() {
       render: (v) => (
         <div>
           {(v.tags || []).map((t) => (
-            <Badge key={t} appearance="outline" size="small" style={{ marginRight: '4px' }}>
+            <Badge key={t} appearance="outline" size="small" style={{ marginRight: tokens.spacingHorizontalXS }}>
               {t}
             </Badge>
           ))}

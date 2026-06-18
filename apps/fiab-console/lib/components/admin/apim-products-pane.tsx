@@ -159,7 +159,7 @@ export function ApimProductsPane() {
       render: (p) => (
         <div>
           <strong>{p.displayName}</strong>
-          {p.description && <Caption1 style={{ display: 'block', marginTop: '4px', color: tokens.colorNeutralForeground3 }}>{p.description}</Caption1>}
+          {p.description && <Caption1 style={{ display: 'block', marginTop: tokens.spacingVerticalXS, color: tokens.colorNeutralForeground3 }}>{p.description}</Caption1>}
         </div>
       ),
     },

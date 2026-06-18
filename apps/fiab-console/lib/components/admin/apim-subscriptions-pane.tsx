@@ -149,7 +149,7 @@ export function ApimSubscriptionsPane() {
       render: (s) => (
         <div>
           <strong>{s.displayName}</strong>
-          <Caption1 style={{ display: 'block', marginTop: '2px', color: tokens.colorNeutralForeground3 }}>{s.name}</Caption1>
+          <Caption1 style={{ display: 'block', marginTop: tokens.spacingVerticalXS, color: tokens.colorNeutralForeground3 }}>{s.name}</Caption1>
         </div>
       ),
     },
@@ -247,7 +247,7 @@ export function ApimSubscriptionsPane() {
                 <div className={styles.keyList}>
                   <div>
                     <Caption1 style={{ fontWeight: 600 }}>Primary key</Caption1>
-                    <div className={styles.keyRow} style={{ marginTop: '8px' }}>
+                    <div className={styles.keyRow} style={{ marginTop: tokens.spacingVerticalS }}>
                       <code className={`${styles.keyCode}${keys.primaryKey ? '' : ` ${styles.keyCodeEmpty}`}`}>
                         {keys.primaryKey || '(not set)'}
                       </code>
@@ -268,7 +268,7 @@ export function ApimSubscriptionsPane() {
                   </div>
                   <div>
                     <Caption1 style={{ fontWeight: 600 }}>Secondary key</Caption1>
-                    <div className={styles.keyRow} style={{ marginTop: '8px' }}>
+                    <div className={styles.keyRow} style={{ marginTop: tokens.spacingVerticalS }}>
                       <code className={`${styles.keyCode}${keys.secondaryKey ? '' : ` ${styles.keyCodeEmpty}`}`}>
                         {keys.secondaryKey || '(not set)'}
                       </code>

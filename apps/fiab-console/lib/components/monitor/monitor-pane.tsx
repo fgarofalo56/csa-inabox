@@ -92,7 +92,7 @@ const useStyles = makeStyles({
   toolbar: { display: 'flex', gap: tokens.spacingHorizontalM, alignItems: 'center', flexWrap: 'wrap', marginBottom: tokens.spacingVerticalL },
   code: {
     width: '100%', maxHeight: '320px', overflow: 'auto', whiteSpace: 'pre',
-    fontFamily: 'Consolas, "Cascadia Code", monospace', fontSize: '12px',
+    fontFamily: 'Consolas, "Cascadia Code", monospace', fontSize: tokens.fontSizeBase200,
     padding: tokens.spacingVerticalM, borderRadius: tokens.borderRadiusMedium,
     border: `1px solid ${tokens.colorNeutralStroke2}`, backgroundColor: tokens.colorNeutralBackground3,
     color: tokens.colorNeutralForeground1,
@@ -119,11 +119,11 @@ const useStyles = makeStyles({
   healthBarWrap: { flex: '1 1 320px', minWidth: '240px', display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalS },
   healthBar: { display: 'flex', height: '16px', borderRadius: tokens.borderRadiusLarge, overflow: 'hidden', backgroundColor: tokens.colorNeutralBackground3 },
   healthLegend: { display: 'flex', gap: tokens.spacingHorizontalL, flexWrap: 'wrap' },
-  legendItem: { display: 'flex', alignItems: 'center', gap: tokens.spacingHorizontalXS, fontSize: '12px', color: tokens.colorNeutralForeground2 },
+  legendItem: { display: 'flex', alignItems: 'center', gap: tokens.spacingHorizontalXS, fontSize: tokens.fontSizeBase200, color: tokens.colorNeutralForeground2 },
   swatch: { width: '10px', height: '10px', borderRadius: tokens.borderRadiusSmall, display: 'inline-block' },
   // breakdown bars (resources by type)
   breakdown: { display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalS },
-  breakdownRow: { display: 'grid', gridTemplateColumns: '200px 1fr 40px', gap: tokens.spacingHorizontalM, alignItems: 'center', fontSize: '12px' },
+  breakdownRow: { display: 'grid', gridTemplateColumns: '200px 1fr 40px', gap: tokens.spacingHorizontalM, alignItems: 'center', fontSize: tokens.fontSizeBase200 },
   breakdownLabel: { color: tokens.colorNeutralForeground2, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' },
   breakdownTrack: { height: '10px', borderRadius: tokens.borderRadiusMedium, backgroundColor: tokens.colorNeutralBackground3, overflow: 'hidden' },
   breakdownFill: { height: '100%', borderRadius: tokens.borderRadiusMedium, backgroundColor: tokens.colorBrandBackground },
