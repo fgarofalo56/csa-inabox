@@ -644,9 +644,14 @@ export async function queryLoomAppEvents(opts: {
   if (!workspaceId) throw new MonitorNotConfiguredError(['LOOM_LOG_ANALYTICS_WORKSPACE_ID']);
 
   const lim = Math.min(1000, Math.max(1, opts.limit ?? 500));
-  // ISO time-range duration for the queryLogs `timespan` param.
-  const timespanParam = opts.startTime
-    ? `${opts.startTime}/${opts.endTime ?? new Date().toISOString()}`
+  // ISO time-range for the queryLogs `timespan` param. A start/end pair must be
+  // a well-formed `start/end` interval; guard the empty-string case (an empty
+  // `endTime` would yield "start/" which the Logs API rejects with
+  // "The request had some invalid properties"). Fall back to an ISO duration.
+  const startTime = opts.startTime?.trim();
+  const endTime = opts.endTime?.trim();
+  const timespanParam = startTime
+    ? `${startTime}/${endTime || new Date().toISOString()}`
     : 'P7D';
 
   // Post-projection filters (applied to the extended columns). JSON.stringify
@@ -655,9 +660,13 @@ export async function queryLoomAppEvents(opts: {
   const typeClause = opts.eventType ? `| where kind == ${JSON.stringify(opts.eventType)}`      : '';
   const itemClause = opts.itemId    ? `| where itemId contains ${JSON.stringify(opts.itemId)}` : '';
 
+  // `customDimensions` is a dynamic column — compare via tostring() so the Logs
+  // query API doesn't reject the dynamic-vs-string predicate. Filter on
+  // TimeGenerated explicitly too (matches the `timespan` window) so the query
+  // is valid even if the service-level timespan is widened.
   const kql = `
 AppTraces
-| where customDimensions.source == "loom-audit"
+| where tostring(customDimensions.source) == "loom-audit"
 | extend
     who    = tostring(customDimensions.userId),
     kind   = tostring(customDimensions.eventType),

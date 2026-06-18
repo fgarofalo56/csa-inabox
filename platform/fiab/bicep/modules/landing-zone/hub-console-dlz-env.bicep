@@ -43,8 +43,14 @@ param dlzEventHubNamespace string = ''
 @description('DLZ resource group name → LOOM_EVENTHUB_RG (and LOOM_DLZ_RG). In dlz-attach the console was deployed with these pointing at the admin/single-sub defaults, so they must be re-pointed at the attached DLZ RG.')
 param dlzResourceGroup string
 
-@description('DLZ subscription id → LOOM_EVENTHUB_SUB. The attached DLZ lives in its own subscription, distinct from the hub admin sub the console runs in — without this the app falls back to LOOM_SUBSCRIPTION_ID (the hub sub) and the Event Hubs navigator looks in the wrong subscription.')
+@description('DLZ subscription id → LOOM_EVENTHUB_SUB + LOOM_DLZ_SUBSCRIPTION_ID. The attached DLZ lives in its own subscription, distinct from the hub admin sub the console runs in — without this the app falls back to LOOM_SUBSCRIPTION_ID (the hub sub) and DLZ navigators (Event Hubs, Capacity page, etc.) look in the wrong subscription.')
 param dlzSubscriptionId string
+
+@description('DLZ Databricks workspace URL (e.g. adb-123.4.azuredatabricks.net) → LOOM_DATABRICKS_HOSTNAME. Empty when Databricks is disabled (the var is then skipped and the Databricks-backed surfaces honest-gate, which is correct).')
+param dlzDatabricksWorkspaceUrl string = ''
+
+@description('DLZ Azure Data Factory name → LOOM_ADF_NAME / LOOM_ADF_FACTORY. Empty when ADF is disabled (the var is then skipped and the mirror/CDC editors honest-gate).')
+param dlzAdfFactoryName string = ''
 
 @description('Compliance tags.')
 param complianceTags object
@@ -156,6 +162,8 @@ resource wireDlzEnv 'Microsoft.Resources/deploymentScripts@2023-08-01' = {
       { name: 'EVENTHUB_NS', value: dlzEventHubNamespace }
       { name: 'DLZ_RG', value: dlzResourceGroup }
       { name: 'DLZ_SUB', value: dlzSubscriptionId }
+      { name: 'DATABRICKS_URL', value: dlzDatabricksWorkspaceUrl }
+      { name: 'ADF_NAME', value: dlzAdfFactoryName }
     ]
     scriptContent: '''
 set -euo pipefail
@@ -185,6 +193,33 @@ fi
 # so re-pointing it fixes the whole DLZ coordinate set, not just Event Hubs.
 if [ -n "$DLZ_RG" ]; then
   SET_ARGS+=( "LOOM_DLZ_RG=$DLZ_RG" )
+fi
+
+# DLZ subscription — the attached DLZ lives in its own sub, distinct from the hub
+# admin sub the console runs in. LOOM_DLZ_SUBSCRIPTION_ID lets DLZ-scoped
+# navigators (Capacity page ARM listing, ADF, etc.) target the right sub instead
+# of falling back to the hub's LOOM_SUBSCRIPTION_ID.
+if [ -n "$DLZ_SUB" ]; then
+  SET_ARGS+=( "LOOM_DLZ_SUBSCRIPTION_ID=$DLZ_SUB" )
+fi
+
+# Databricks workspace hostname — empty when Databricks is disabled (skip the var
+# so the Databricks-backed surfaces honest-gate, which is correct).
+if [ -n "$DATABRICKS_URL" ]; then
+  SET_ARGS+=( "LOOM_DATABRICKS_HOSTNAME=$DATABRICKS_URL" )
+fi
+
+# Azure Data Factory — set both the canonical LOOM_ADF_NAME and the
+# LOOM_ADF_FACTORY alias the adf-client also reads, plus the ADF RG/sub (the DLZ
+# RG/sub). Empty name => ADF disabled, so skip (mirror/CDC editors honest-gate).
+if [ -n "$ADF_NAME" ]; then
+  SET_ARGS+=( "LOOM_ADF_NAME=$ADF_NAME" "LOOM_ADF_FACTORY=$ADF_NAME" )
+  if [ -n "$DLZ_RG" ]; then
+    SET_ARGS+=( "LOOM_ADF_RG=$DLZ_RG" )
+  fi
+  if [ -n "$DLZ_SUB" ]; then
+    SET_ARGS+=( "LOOM_ADF_SUB=$DLZ_SUB" "LOOM_ADF_SUBSCRIPTION_ID=$DLZ_SUB" )
+  fi
 fi
 
 # Event Hubs — the Eventstream / Real-Time Data Explorer navigators bind to this
@@ -227,3 +262,6 @@ output loomEventHubNamespace string = dlzEventHubNamespace
 output loomEventHubRg string = dlzResourceGroup
 output loomEventHubSub string = dlzSubscriptionId
 output loomDlzRg string = dlzResourceGroup
+output loomDlzSubscriptionId string = dlzSubscriptionId
+output loomDatabricksHostname string = dlzDatabricksWorkspaceUrl
+output loomAdfFactoryName string = dlzAdfFactoryName

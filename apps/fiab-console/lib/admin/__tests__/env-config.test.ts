@@ -5,6 +5,8 @@ import {
   getEditableEnv,
   maskValue,
   buildSyncArtifacts,
+  ENV_ALIAS_GROUPS,
+  aliasSatisfiedKeys,
 } from '../env-config';
 
 describe('admin/env-config registry', () => {
@@ -69,6 +71,30 @@ describe('admin/env-config registry', () => {
     expect(usage?.role).toMatch(/Power BI workspace Member|Grafana/);
     // Cosmos (a core var) also carries its provisioning hint.
     expect(getEditableEnv('LOOM_COSMOS_ENDPOINT')?.provisionedBy).toBeTruthy();
+  });
+
+  it('exposes anyOf alias groups (either/or requirements) including bootstrap-admin', () => {
+    const hasAdminGroup = ENV_ALIAS_GROUPS.some(
+      (g) => g.includes('LOOM_TENANT_ADMIN_OID') && g.includes('LOOM_TENANT_ADMIN_GROUP_ID'),
+    );
+    expect(hasAdminGroup).toBe(true);
+    // Cosmos alias pair + MSAL/Azure tenant alias pair are also groups.
+    expect(ENV_ALIAS_GROUPS.some((g) => g.includes('LOOM_COSMOS_ENDPOINT') && g.includes('COSMOS_ENDPOINT'))).toBe(true);
+    expect(ENV_ALIAS_GROUPS.some((g) => g.includes('AZURE_TENANT_ID') && g.includes('LOOM_MSAL_TENANT_ID'))).toBe(true);
+  });
+
+  it('marks the OTHER member of a satisfied anyOf group as satisfied (no false critical)', () => {
+    // OID set, GROUP_ID unset → GROUP_ID is satisfied (the either/or is met).
+    const setKeys = new Set(['LOOM_TENANT_ADMIN_OID']);
+    const satisfied = aliasSatisfiedKeys((k) => setKeys.has(k));
+    expect(satisfied.has('LOOM_TENANT_ADMIN_GROUP_ID')).toBe(true);
+    // The directly-set key is NOT in the satisfied (alias) set.
+    expect(satisfied.has('LOOM_TENANT_ADMIN_OID')).toBe(false);
+    // COSMOS_ENDPOINT is satisfied when its preferred alias LOOM_COSMOS_ENDPOINT is set.
+    const cosmosSet = new Set(['LOOM_COSMOS_ENDPOINT']);
+    expect(aliasSatisfiedKeys((k) => cosmosSet.has(k)).has('COSMOS_ENDPOINT')).toBe(true);
+    // Nothing set → nothing alias-satisfied.
+    expect(aliasSatisfiedKeys(() => false).size).toBe(0);
   });
 
   it('flags bicep-derived vars (org-visuals, LA workspace) with derived=true', () => {
