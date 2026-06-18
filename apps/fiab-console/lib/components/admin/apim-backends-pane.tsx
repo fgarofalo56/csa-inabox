@@ -146,7 +146,7 @@ export function ApimBackendsPane() {
       render: (b) => (
         <div>
           <strong>{b.title || b.name}</strong>
-          {b.description && <Caption1 style={{ display: 'block', marginTop: '2px' }}>{b.description}</Caption1>}
+          {b.description && <Caption1 style={{ display: 'block', marginTop: tokens.spacingVerticalXS }}>{b.description}</Caption1>}
         </div>
       ),
     },

@@ -177,7 +177,7 @@ export function ApimApisPane() {
       render: (a) => (
         <div>
           <strong>{a.displayName}</strong>
-          <Caption1 style={{ display: 'block', marginTop: '4px', color: tokens.colorNeutralForeground3 }}>{a.path}</Caption1>
+          <Caption1 style={{ display: 'block', marginTop: tokens.spacingVerticalXS, color: tokens.colorNeutralForeground3 }}>{a.path}</Caption1>
         </div>
       ),
     },
