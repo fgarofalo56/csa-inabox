@@ -100,7 +100,7 @@ export const VALUE_HINT: Record<string, string> = {
   LOOM_AOAI_ENDPOINT: 'https://<aoai-or-foundry>.openai.azure.com/',
   LOOM_AOAI_DEPLOYMENT: 'gpt-4o-mini',
   LOOM_LOG_ANALYTICS_RESOURCE_ID: '/subscriptions/<sub>/resourceGroups/<rg>/providers/Microsoft.OperationalInsights/workspaces/<law>',
-  LOOM_ALERT_RG: '<alert-resource-group>',
+  LOOM_ALERT_RG: env('LOOM_ADMIN_RG') || '<alert-resource-group (defaults to the admin RG)>',
   LOOM_ADF_FACTORY: '<data-factory-name>',
   LOOM_PURVIEW_ACCOUNT: '<purview-account-name>',
   LOOM_GRAPH_USERS_ENABLED: 'true',
@@ -320,8 +320,8 @@ export const ENV_CHECKS: EnvSpec[] = [
   {
     id: 'svc-monitor-alerts', category: 'azure-services', title: 'Azure Monitor (Activator alerts)', severity: 'optional',
     required: ['LOOM_LOG_ANALYTICS_RESOURCE_ID'], anyOf: [['LOOM_ALERT_RG', 'LOOM_ADMIN_RG']], warnOnMiss: true,
-    remediation: 'Set LOOM_LOG_ANALYTICS_RESOURCE_ID (alert query scope) + LOOM_ALERT_RG so the Azure-native Activator can create scheduled-query alert rules.',
-    provisionedBy: 'modules/admin-plane/main.bicep (monitoring module → apps[] env, auto-derived)',
+    remediation: 'Set LOOM_LOG_ANALYTICS_RESOURCE_ID (alert query scope) + LOOM_ALERT_RG so the Azure-native Activator can create scheduled-query alert rules. A push-button deploy wires both day-one (LOOM_ALERT_RG defaults to the admin RG) and provisions a default alert set — Console availability, 5xx errors, replica restarts — plus a default action group (modules/admin-plane/monitoring-default-alerts.bicep), so /monitor Alerts shows a real default set out of the box.',
+    provisionedBy: 'modules/admin-plane/main.bicep (monitoring module → apps[] env, auto-derived) + modules/admin-plane/monitoring-default-alerts.bicep (default alert rules + action group)',
     role: 'Monitoring Contributor (UAMI) on the alert resource group',
   },
   {
