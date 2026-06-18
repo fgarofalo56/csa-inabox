@@ -218,6 +218,19 @@ jobs:
           if [ -n "${CONSOLE_FQDN:-}" ]; then
             HOSTS="${HOSTS:+$HOSTS,}$CONSOLE_FQDN"
           fi
+          # INCIDENT 2026-06-17: real users reach the console through Azure Front
+          # Door, NOT the direct ACA ingress FQDN above — so the browser sends the
+          # Front Door host as redirect_uri. Registering only the ACA host caused
+          # AADSTS50011 redirect-URI mismatch at login. Discover the Front Door
+          # endpoint hostname(s) generically (no hardcoded estate FD host) across
+          # every AFD profile in the admin RG and append each to HOSTS so the
+          # callback is registered for the real user-facing host(s). Best-effort:
+          # a missing AFD must not fail the step.
+          for AFD_PROFILE in $(az afd profile list -g "$ADMIN_RG" --query "[].name" -o tsv 2>/dev/null || true); do
+            for FD_HOST in $(az afd endpoint list --profile-name "$AFD_PROFILE" -g "$ADMIN_RG" --query "[].hostName" -o tsv 2>/dev/null || true); do
+              [ -n "$FD_HOST" ] && HOSTS="${HOSTS:+$HOSTS,}$FD_HOST"
+            done
+          done
           UAMI_ID=$(az identity list -g "$ADMIN_RG" --query "[?contains(name,'console')].id | [0]" -o tsv 2>/dev/null || true)
           chmod +x scripts/csa-loom/bootstrap-msal-app-reg.sh
           OUT=$(KEYVAULT_NAME="$KV_NAME" \
