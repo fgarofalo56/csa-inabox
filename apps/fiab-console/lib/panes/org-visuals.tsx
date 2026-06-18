@@ -23,6 +23,7 @@ import { Section, Toolbar } from '@/lib/components/ui/section';
 import { LoomDataTable, type LoomColumn } from '@/lib/components/ui/loom-data-table';
 import { NotConfiguredBar, type NotConfiguredHint } from '@/lib/components/admin-security/not-configured-bar';
 import { CoeLibraryPane } from '@/lib/coe-library/coe-library-pane';
+import { DashboardsPane } from '@/lib/coe-library/builder/dashboards-pane';
 
 interface OrgVisual {
   id: string;
@@ -219,6 +220,8 @@ export function OrgVisualsPane() {
 
   return (
     <>
+      <DashboardsPane />
+
       <CoeLibraryPane />
 
       <Section title="About organizational visuals">
