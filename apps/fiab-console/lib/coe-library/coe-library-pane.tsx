@@ -24,11 +24,22 @@ import {
 import {
   Copy20Regular, Delete20Regular, ArrowSync24Regular,
   DataArea20Regular, CheckmarkCircle20Filled, Open20Regular, Share20Regular,
-  Dismiss20Regular, ChannelShare20Regular,
+  Dismiss20Regular, ChannelShare20Regular, PlugConnected20Regular, CloudCheckmark16Regular,
 } from '@fluentui/react-icons';
 import { Section } from '@/lib/components/ui/section';
 import { ReportView } from '@/lib/coe-library/report-render/report-view';
 import { ReportViewerDialog } from '@/lib/coe-library/report-render/report-viewer-dialog';
+import { TemplateIconChip } from '@/lib/coe-library/template-icons';
+
+/**
+ * Templates with a first-party live Azure binding (see report-render/live-bindings).
+ * These render REAL tenant data day-one (no manual connection step). MUST stay in
+ * sync with LIVE_BINDINGS keys in live-bindings.ts.
+ */
+const LIVE_TEMPLATE_IDS = new Set([
+  'cloud-cost-finops', 'resource-inventory-sprawl', 'security-compliance-posture',
+  'identity-access-governance', 'coe-adoption-maturity',
+]);
 
 interface CoeTemplate {
   id: string; title: string; description: string; category: string;
@@ -71,8 +82,8 @@ const useStyles = makeStyles({
     ':hover': { boxShadow: tokens.shadow16, transform: 'translateY(-2px)' },
   },
   thumb: {
-    height: '96px', display: 'flex', alignItems: 'flex-end', padding: tokens.spacingHorizontalM,
-    color: '#fff',
+    height: '96px', display: 'flex', alignItems: 'center', gap: tokens.spacingHorizontalS,
+    padding: tokens.spacingHorizontalM, color: '#fff',
   },
   thumbTitle: { fontWeight: tokens.fontWeightSemibold, fontSize: tokens.fontSizeBase400, textShadow: '0 1px 4px #0008' },
   body: { display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalS, padding: tokens.spacingHorizontalM, flexGrow: 1 },
@@ -106,6 +117,8 @@ export function CoeLibraryPane() {
   const [busyId, setBusyId] = useState<string | null>(null);
   // Open a cloned report in the full viewer (renders via ?cloneId=).
   const [openClone, setOpenClone] = useState<CoeClone | null>(null);
+  // "Connect to real data" — open a template in the viewer defaulted to LIVE.
+  const [connectLive, setConnectLive] = useState<CoeTemplate | null>(null);
 
   const load = useCallback(async () => {
     setLoading(true); setError(null);
@@ -177,12 +190,13 @@ export function CoeLibraryPane() {
     <>
       <Section title="Default report templates — Cloud Center of Excellence (CoE)">
         <Body1 style={{ color: tokens.colorNeutralForeground2, lineHeight: 1.5, marginBottom: tokens.spacingVerticalM }}>
-          A ready-to-use library of Power BI report templates for enterprise & environment management — adoption,
+          A ready-to-use library of report templates for enterprise & environment management — adoption,
           FinOps, security posture, inventory, identity, data governance, operations and landing-zone conformance.
           Each is a version-controlled PBIP (PBIR + TMDL) that queries your own Azure estate (Cost Management, Azure
-          Resource Graph, Log Analytics, Defender, Purview, Microsoft Graph). Preview one, then <strong>Use this template</strong> to
-          clone it into your library and rebrand it. Templates ship with clearly-labelled <strong>sample data</strong> until you
-          connect them — no Microsoft Fabric or Power BI workspace is required to browse or clone.
+          Resource Graph, Log Analytics, Defender, Purview, Microsoft Graph). Templates marked <strong>Live data</strong> render
+          your <strong>real tenant estate day-one</strong> — click <strong>Connect to real data</strong> to view them live (no manual
+          setup). Others ship with clearly-labelled sample data until the matching Azure source is provisioned. Preview
+          one, then <strong>Use this template</strong> to clone and rebrand it. No Microsoft Fabric or Power BI workspace is required.
         </Body1>
 
         {error && <MessageBar intent="error" style={{ marginBottom: 12 }}><MessageBarBody>{error}</MessageBarBody></MessageBar>}
@@ -204,11 +218,15 @@ export function CoeLibraryPane() {
             {(cat?.templates || []).map((t) => (
               <div key={t.id} className={s.card}>
                 <div className={s.thumb} style={{ background: GRAD[t.category] || 'linear-gradient(135deg,#444,#1B1A29)' }}>
+                  <TemplateIconChip templateId={t.id} category={t.category} size="lg" onThumb />
                   <span className={s.thumbTitle}>{t.title}</span>
                 </div>
                 <div className={s.body}>
                   <div className={s.metaRow}>
                     <Badge appearance="tint" color="brand" size="small">{t.category}</Badge>
+                    {LIVE_TEMPLATE_IDS.has(t.id) && (
+                      <Badge appearance="tint" color="success" size="small" icon={<CloudCheckmark16Regular />}>Live data</Badge>
+                    )}
                     {clonedIds.has(t.id) && (
                       <Badge appearance="tint" color="success" size="small" icon={<CheckmarkCircle20Filled />}>In your library</Badge>
                     )}
@@ -222,7 +240,10 @@ export function CoeLibraryPane() {
                 </div>
                 <div className={s.actions}>
                   <Button size="small" appearance="primary" icon={<Open20Regular />} onClick={() => openPreview(t)}>Open report</Button>
-                  <Button size="small" appearance="secondary" icon={busyId === t.id ? <Spinner size="tiny" /> : <Copy20Regular />}
+                  {LIVE_TEMPLATE_IDS.has(t.id) && (
+                    <Button size="small" appearance="secondary" icon={<PlugConnected20Regular />} onClick={() => setConnectLive(t)}>Connect to real data</Button>
+                  )}
+                  <Button size="small" appearance="subtle" icon={busyId === t.id ? <Spinner size="tiny" /> : <Copy20Regular />}
                     disabled={busyId === t.id} onClick={() => useTemplate(t)}>Use this template</Button>
                 </div>
               </div>
@@ -332,6 +353,16 @@ export function CoeLibraryPane() {
         onClose={() => setOpenClone(null)}
         fetchUrl={openClone ? `/api/admin/coe-library/render?cloneId=${encodeURIComponent(openClone.id)}` : null}
         title={openClone?.displayName}
+      />
+
+      {/* "Connect to real data" — open the template rendered LIVE against the
+          tenant's own Azure estate (Cost / Resource Graph / Defender / Log Analytics). */}
+      <ReportViewerDialog
+        open={!!connectLive}
+        onClose={() => setConnectLive(null)}
+        fetchUrl={connectLive ? `/api/admin/coe-library/render?templateId=${encodeURIComponent(connectLive.id)}` : null}
+        title={connectLive?.title}
+        defaultLive
       />
     </>
   );

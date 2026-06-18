@@ -91,9 +91,12 @@ export async function setClonePublished(
  */
 export async function listPublishedReports(): Promise<CoeTemplateCloneDoc[]> {
   const c = await coeTemplatesContainer();
+  // The `coe-templates` container also holds Loom-native dashboard docs
+  // (kind:'loom-dashboard'); exclude them here so the CoE consumer gallery only
+  // renders PBIP-template clones. Published dashboards are listed separately.
   const { resources } = await c.items
     .query<CoeTemplateCloneDoc>({
-      query: 'SELECT * FROM c WHERE c.published = true ORDER BY c.publishedAt DESC',
+      query: "SELECT * FROM c WHERE c.published = true AND (NOT IS_DEFINED(c.kind) OR c.kind != 'loom-dashboard') ORDER BY c.publishedAt DESC",
     })
     .fetchAll();
   return resources || [];

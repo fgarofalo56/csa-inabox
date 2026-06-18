@@ -25,6 +25,8 @@ import { ReportViewerDialog } from '@/lib/coe-library/report-render/report-viewe
 
 interface OrgReport {
   id: string;
+  /** 'report' = CoE PBIP clone, 'dashboard' = Loom-native builder dashboard. */
+  kind?: 'report' | 'dashboard';
   templateId: string;
   displayName: string;
   title: string;
@@ -162,7 +164,7 @@ export function OrgReportsPane(): React.ReactElement {
       <ReportViewerDialog
         open={!!openReport}
         onClose={() => setOpenId(null)}
-        fetchUrl={openReport ? `/api/org-reports/render?id=${encodeURIComponent(openReport.id)}` : null}
+        fetchUrl={openReport ? `/api/org-reports/render?id=${encodeURIComponent(openReport.id)}${openReport.kind === 'dashboard' ? '&kind=dashboard' : ''}` : null}
         title={openReport?.displayName}
         publishedBadge
         defaultLive={false}
