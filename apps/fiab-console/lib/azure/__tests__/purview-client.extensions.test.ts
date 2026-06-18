@@ -295,4 +295,63 @@ describe('purview-client (classic Data Map)', () => {
     await expect(mod.deleteAtlasEntityByQualifiedName('DataSet', 'loom://x')).rejects.toBeInstanceOf(mod.PurviewNotConfiguredError);
     expect(fetchMock).not.toHaveBeenCalled();
   });
+
+  // ── F19 audit-log query (BUG A regression) ────────────────────────────────
+  it('queryAuditLog short-circuits to an honest gate (no API call) when no asset is named', async () => {
+    const mod = await import('../purview-client');
+    const page = await mod.queryAuditLog({ pageSize: 50 });
+    // The classic Data Map audit/query API is per-asset; without guid/qualifiedName
+    // we must NOT call it (that 400s "Either guid or typeName/qualifiedName not
+    // provided") — instead return the needsAsset gate.
+    expect(fetchMock).not.toHaveBeenCalled();
+    expect(page.events).toEqual([]);
+    expect(page.needsAsset).toBe(mod.PURVIEW_AUDIT_NEEDS_ASSET);
+  });
+
+  it('queryAuditLog calls audit/query with a guid and parses the real resultData shape', async () => {
+    fetchMock.mockResolvedValue(new Response(JSON.stringify({
+      lastPage: true,
+      resultData: [
+        {
+          id: 'log-1',
+          creationTime: '2026-06-01T08:27:05',
+          operation: 'ClassificationAdded',
+          userId: 'analyst@contoso.com',
+          objectId: 'f432d351-5442-4724-945b-516d5d501fc9',
+          objectName: 'sales.csv',
+          objectType: 'azure_blob_path',
+        },
+      ],
+    }), { status: 200 }));
+    const mod = await import('../purview-client');
+    const page = await mod.queryAuditLog({ guid: 'f432d351-5442-4724-945b-516d5d501fc9', pageSize: 50 });
+    expect(fetchMock).toHaveBeenCalled();
+    const [url, init] = fetchMock.mock.calls[0];
+    expect(url).toContain('/datamap/api/audit/query');
+    const body = JSON.parse(init.body);
+    expect(body.category).toBe('Asset');
+    expect(body.guid).toBe('f432d351-5442-4724-945b-516d5d501fc9');
+    expect(page.events).toHaveLength(1);
+    expect(page.events[0]).toMatchObject({
+      id: 'log-1',
+      at: '2026-06-01T08:27:05',
+      who: 'analyst@contoso.com',
+      kind: 'ClassificationAdded',
+      itemId: 'f432d351-5442-4724-945b-516d5d501fc9',
+      category: 'azure_blob_path',
+      source: 'purview',
+    });
+  });
+
+  it('queryAuditLog accepts a qualifiedName (asset ref) instead of a guid', async () => {
+    fetchMock.mockResolvedValue(new Response(JSON.stringify({ lastPage: true, resultData: [] }), { status: 200 }));
+    const mod = await import('../purview-client');
+    const page = await mod.queryAuditLog({ qualifiedName: 'https://x.blob.core.windows.net/c/f.json', typeName: 'azure_blob_path' });
+    expect(fetchMock).toHaveBeenCalled();
+    const body = JSON.parse(fetchMock.mock.calls[0][1].body);
+    expect(body.qualifiedName).toBe('https://x.blob.core.windows.net/c/f.json');
+    expect(body.typeName).toBe('azure_blob_path');
+    expect(page.events).toEqual([]);
+    expect(page.needsAsset).toBeUndefined();
+  });
 });

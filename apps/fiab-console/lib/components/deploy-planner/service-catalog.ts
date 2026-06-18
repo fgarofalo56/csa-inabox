@@ -221,14 +221,27 @@ export const SERVICE_CATALOG: ServiceDef[] = [
   { key: 'containerInstances', label: 'Container Instances', category: 'compute', iconSlug: 'container-instances', bicepFlag: 'containerInstancesEnabled',
     glyph: Box24Regular, icon: 'Container-Instances.png', color: '#0078d4',
     pricingDetailsUrl: 'https://azure.microsoft.com/pricing/details/container-instances/',
-    description: 'Single-shot serverless containers (sample image group, start/stop-able).' },
+    description: 'Single-shot serverless containers (sample image group, start/stop-able).',
+    config: [
+      { key: 'cpuCores', label: 'vCPU cores', type: 'select', allowed: ['1', '2', '4'],
+        default: '1', emit: 'int', bicepParam: 'containerInstancesCpuCores',
+        help: 'CPU cores requested by the container group.' },
+      { key: 'memoryInGB', label: 'Memory (GB)', type: 'number', min: 1, max: 16,
+        default: 1, bicepParam: 'containerInstancesMemoryInGB', help: '1–16 GB.' },
+    ] },
   { key: 'vm', label: 'Virtual Machines', category: 'compute', iconSlug: 'virtual-machine', bicepFlag: 'vmEnabled',
     glyph: Server24Regular, icon: 'Virtual-Machine.png', color: '#0078d4',
     pricingDetailsUrl: 'https://azure.microsoft.com/pricing/details/virtual-machines/linux/',
     retail: { serviceName: 'Virtual Machines', armSkuName: 'Standard_D2s_v5',
       exclude: ['Spot', 'Low Priority', 'Windows'],
       unitNote: 'Standard_D2s_v5 Linux on-demand · 730 hrs/mo (excludes OS disk + egress)' },
-    description: 'Linux IaaS VM (isolated VNet/subnet + NIC, no public IP, SSH-key auth, managed OS disk).' },
+    description: 'Linux IaaS VM (isolated VNet/subnet + NIC, no public IP, SSH-key auth, managed OS disk).',
+    config: [
+      { key: 'vmSize', label: 'VM size', type: 'select',
+        allowed: ['Standard_B1s', 'Standard_B2s', 'Standard_B2ms', 'Standard_D2s_v5', 'Standard_D4s_v5', 'Standard_D8s_v5'],
+        default: 'Standard_B2s', bicepParam: 'vmSize',
+        help: 'B-series are low-cost burstable; D-series are general-purpose with more vCPU/RAM.' },
+    ] },
   { key: 'batch', label: 'Azure Batch', category: 'compute', iconSlug: 'batch-accounts', bicepFlag: 'batchEnabled',
     glyph: AppsList24Regular, color: '#0078d4',
     description: 'Large-scale parallel + HPC batch compute (BatchService mode + managed-identity auto-storage).' },
@@ -237,7 +250,12 @@ export const SERVICE_CATALOG: ServiceDef[] = [
     description: 'Low-code workflow automation (Consumption Logic App, empty editable workflow).' },
   { key: 'staticWebApps', label: 'Static Web Apps', category: 'compute', iconSlug: 'static-web-apps', bicepFlag: 'staticWebAppsEnabled',
     glyph: Apps24Regular, color: '#0078d4',
-    description: 'Globally-distributed static front-ends + managed APIs (standalone, no repo link).' },
+    description: 'Globally-distributed static front-ends + managed APIs (standalone, no repo link).',
+    config: [
+      { key: 'skuName', label: 'SKU', type: 'select', allowed: ['Free', 'Standard'],
+        default: 'Standard', bicepParam: 'staticWebAppsSkuName',
+        help: 'Free is the cheapest functional tier; Standard adds custom auth, private endpoints, and an SLA.' },
+    ] },
   { key: 'appConfiguration', label: 'App Configuration', category: 'compute', iconSlug: 'app-configuration', bicepFlag: null, planOnly: true,
     glyph: ClipboardTaskListLtr24Regular, color: '#0078d4',
     description: 'Centralized feature flags + app settings store. Plan-only — real Azure App Configuration, not yet wired to a one-button bicep toggle.' },
@@ -363,7 +381,13 @@ export const SERVICE_CATALOG: ServiceDef[] = [
     description: 'Threat protection + prompt-shield for AI workloads.' },
   { key: 'mlWorkspace', label: 'Azure Machine Learning', category: 'ai', iconSlug: 'machine-learning', bicepFlag: 'mlWorkspaceEnabled',
     glyph: Bot24Regular, icon: 'Machine-Learning-Studio-(Classic)-Web-Services.png', color: '#7c3aed',
-    description: 'AML workspace for training + MLOps (provisions its KV/Storage/AppInsights dependencies).' },
+    description: 'AML workspace for training + MLOps (provisions its KV/Storage/AppInsights dependencies).',
+    config: [
+      { key: 'computeVmSize', label: 'Compute instance size', type: 'select',
+        allowed: ['Standard_DS3_v2', 'Standard_DS4_v2', 'Standard_D4s_v3', 'Standard_E4s_v3'],
+        default: 'Standard_DS3_v2', bicepParam: 'mlComputeVmSize',
+        help: 'VM size for the rich-display compute instance (DS/D = general purpose; E = memory-optimized).' },
+    ] },
   { key: 'aiServices', label: 'Azure AI Services (multi)', category: 'ai', iconSlug: 'cognitive-services', bicepFlag: 'aiServicesEnabled',
     glyph: Sparkle24Regular, icon: 'Azure-Applied-AI-Services.png', color: '#7c3aed',
     description: 'Multi-service Cognitive Services account (Entra-only, custom subdomain).' },
@@ -418,7 +442,15 @@ export const SERVICE_CATALOG: ServiceDef[] = [
     description: 'Simple durable message queue on Storage (shared-key disabled) + starter queue.' },
   { key: 'signalr', label: 'SignalR / Web PubSub', category: 'integration', iconSlug: 'signalr', bicepFlag: 'signalrEnabled',
     glyph: Group24Regular, color: '#e3008c',
-    description: 'Real-time websocket fan-out (SignalR Standard_S1, AAD-only).' },
+    description: 'Real-time websocket fan-out (SignalR Standard_S1, AAD-only).',
+    config: [
+      { key: 'skuName', label: 'SKU', type: 'select', allowed: ['Free_F1', 'Standard_S1', 'Premium_P1'],
+        default: 'Standard_S1', bicepParam: 'signalrSkuName',
+        help: 'Free_F1 for dev (fixed 1 unit, 20 connections); Standard_S1 for production fan-out; Premium_P1 adds isolation + autoscale.' },
+      { key: 'skuCapacity', label: 'Units', type: 'number', min: 1, max: 100,
+        default: 1, bicepParam: 'signalrSkuCapacity',
+        help: '1 unit ≈ 1,000 concurrent connections. Free_F1 ignores this (always 1).' },
+    ] },
   { key: 'businessProcess', label: 'Business Process Tracking', category: 'integration', iconSlug: 'business-process-tracking', bicepFlag: null, planOnly: true,
     glyph: ArrowRouting24Regular, icon: 'Business-Process-Tracking.png', color: '#e3008c',
     description: 'Track long-running business transactions. Plan-only — a preview capability layered on a Standard Logic App + tracking store, not a single self-contained resource.' },
@@ -488,7 +520,13 @@ export const SERVICE_CATALOG: ServiceDef[] = [
     description: 'Global edge + WAF (Commercial).' },
   { key: 'cdn', label: 'CDN Profile', category: 'networking', iconSlug: 'cdn-profiles', bicepFlag: 'cdnEnabled',
     glyph: Globe24Regular, icon: 'CDN-Profiles.png', color: '#004578',
-    description: 'Content delivery / edge cache (Standard Microsoft CDN profile; endpoints added from the navigator).' },
+    description: 'Content delivery / edge cache (Standard Microsoft CDN profile; endpoints added from the navigator).',
+    config: [
+      { key: 'skuName', label: 'CDN SKU', type: 'select',
+        allowed: ['Standard_Microsoft', 'Standard_Akamai', 'Standard_Verizon', 'Premium_Verizon'],
+        default: 'Standard_Microsoft', bicepParam: 'cdnSkuName',
+        help: 'Standard_Microsoft is the Microsoft-managed classic CDN tier; Verizon/Akamai are partner tiers (Premium_Verizon adds rules engine).' },
+    ] },
   { key: 'vpnGateway', label: 'VPN Gateway', category: 'networking', iconSlug: 'virtual-network-gateways', bicepFlag: 'vpnGatewayEnabled',
     glyph: ArrowBidirectionalUpDown24Regular, color: '#004578',
     pricingDetailsUrl: 'https://azure.microsoft.com/pricing/details/vpn-gateway/',
@@ -621,4 +659,33 @@ export function resolveConfigValue(field: ConfigField, stored: Record<string, Co
   if (raw === undefined) return field.default;
   const c = coerceConfigValue(field, raw);
   return c === undefined ? field.default : c;
+}
+
+/**
+ * Configuration status for a placed service, driving the per-node badge and the
+ * Validate sweep:
+ *   - 'none'       → the service has no configurable knobs (core / no schema).
+ *   - 'default'    → it HAS knobs but the operator hasn't set any yet, so it
+ *                    deploys with module defaults. Surfaced as "needs review" so
+ *                    a complete, intentional deployment is the explicit goal.
+ *   - 'configured' → at least one knob carries a valid, operator-set value.
+ *   - 'invalid'    → a stored value fails its field constraint (out of @allowed
+ *                    / bounds / pattern); the export would fall back to default,
+ *                    so it is flagged as an error to fix.
+ * No field is hard-"required" today (every knob has a module default), so the
+ * gate is honest: defaults are valid, but an unreviewed service is called out.
+ */
+export type ConfigStatus = 'none' | 'default' | 'configured' | 'invalid';
+
+export function configStatus(key: string, stored: Record<string, ConfigValue> | undefined): ConfigStatus {
+  const fields = configFor(key);
+  if (!fields.length) return 'none';
+  let anySet = false;
+  for (const f of fields) {
+    const raw = stored?.[f.key];
+    if (raw === undefined) continue;
+    if (coerceConfigValue(f, raw) === undefined) return 'invalid';
+    anySet = true;
+  }
+  return anySet ? 'configured' : 'default';
 }

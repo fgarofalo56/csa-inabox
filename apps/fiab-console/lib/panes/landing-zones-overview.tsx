@@ -78,11 +78,45 @@ function stateBadge(s: DlzAttachState): React.ReactElement {
   }
 }
 
+/** Result of POST /api/setup/landing-zones/grant. */
+interface GrantResult {
+  ok: boolean;
+  error?: string;
+  reason?: string;
+  remediation?: string;
+  commands?: string[];
+  outcomes?: Array<{ role: string; status: string; error?: string }>;
+}
+
 export function LandingZonesOverviewPane({ onAttach }: { onAttach?: () => void }): React.ReactElement {
   const styles = useStyles();
   const [data, setData] = useState<Overview | null>(null);
   const [loading, setLoading] = useState(true);
   const [selected, setSelected] = useState<LandingZone | null>(null);
+  const [granting, setGranting] = useState(false);
+  const [grant, setGrant] = useState<GrantResult | null>(null);
+
+  // Auto-set the Console UAMI's least-privilege RBAC on the selected DLZ's
+  // resource group (real ARM via the grant route). On success the DLZ flips to
+  // 'attached' on the next load; on an honest gate the route returns the exact
+  // RG-scoped `az` command, which we render in the drawer (no raw error).
+  const repair = useCallback(async (zone: LandingZone) => {
+    setGranting(true);
+    setGrant(null);
+    try {
+      const res = await fetch('/api/setup/landing-zones/grant', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ subscriptionId: zone.subscriptionId, resourceGroup: zone.rg }),
+      });
+      const j = (await res.json().catch(() => ({}))) as GrantResult;
+      setGrant({ ...j, ok: res.ok && !!j.ok });
+    } catch (e) {
+      setGrant({ ok: false, error: e instanceof Error ? e.message : String(e) });
+    } finally {
+      setGranting(false);
+    }
+  }, []);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -153,9 +187,10 @@ export function LandingZonesOverviewPane({ onAttach }: { onAttach?: () => void }
         <MessageBar intent="warning">
           <MessageBarBody>
             <MessageBarTitle>{detached.length} landing zone{detached.length === 1 ? '' : 's'} need re-attach / RBAC repair</MessageBarTitle>
-            The Console identity has only Reader on the subscription(s) these DLZs live in, so it
-            cannot manage them. Grant it Contributor on the target subscription to re-attach, then
-            Refresh. Select a zone below for the exact command.
+            The Console identity has only Reader on these DLZs&apos; resource group(s), so it cannot
+            manage them. Grant it Contributor scoped to the DLZ resource group (least-privilege —
+            no subscription-wide grant needed) to re-attach, then Refresh. Select a zone below for
+            the exact command.
           </MessageBarBody>
         </MessageBar>
       )}
@@ -216,7 +251,7 @@ export function LandingZonesOverviewPane({ onAttach }: { onAttach?: () => void }
       </div>
 
       {/* Detail / repair drawer */}
-      <OverlayDrawer position="end" open={selected != null} onOpenChange={(_, d) => { if (!d.open) setSelected(null); }} size="medium">
+      <OverlayDrawer position="end" open={selected != null} onOpenChange={(_, d) => { if (!d.open) { setSelected(null); setGrant(null); } }} size="medium">
         <DrawerHeader>
           <DrawerHeaderTitle action={<Button appearance="subtle" aria-label="Close" icon={<Dismiss24Regular />} onClick={() => setSelected(null)} />}>
             {selected?.domainName || ''}
@@ -238,15 +273,52 @@ export function LandingZonesOverviewPane({ onAttach }: { onAttach?: () => void }
                 <MessageBar intent="warning">
                   <MessageBarBody>
                     <MessageBarTitle>Re-attach / RBAC repair</MessageBarTitle>
-                    The Console identity has only Reader on this subscription. Grant it Contributor so it
-                    can manage and re-attach this landing zone, then Refresh:
-                    <pre className={mergeClasses(styles.mono, styles.preWrap)} style={{ marginTop: 8 }}>
-{`az role assignment create \\
-  --assignee-object-id <console-uami-object-id> \\
-  --assignee-principal-type ServicePrincipal \\
-  --role Contributor \\
-  --scope /subscriptions/${selected.subscriptionId}`}
-                    </pre>
+                    The Console identity has only Reader on this landing zone&apos;s resource group.
+                    Click <b>Grant RBAC</b> to set the least-privilege roles automatically — the
+                    Console assigns itself Contributor (+ the minimal data-plane roles) scoped to the
+                    DLZ resource group, in its own subscription (no subscription-wide grant). Then
+                    Refresh.
+                    <div style={{ marginTop: 10 }}>
+                      <Button
+                        appearance="primary"
+                        size="small"
+                        icon={granting ? <Spinner size="tiny" /> : <Wrench16Regular />}
+                        disabled={granting}
+                        onClick={() => void repair(selected)}
+                      >
+                        {granting ? 'Granting…' : 'Grant RBAC'}
+                      </Button>
+                    </div>
+                  </MessageBarBody>
+                </MessageBar>
+              )}
+
+              {/* Grant outcome — success, or the honest copy-paste gate when the
+                  Console UAMI itself cannot write role assignments on the RG. */}
+              {grant && grant.ok && (
+                <MessageBar intent="success" style={{ marginTop: 12 }}>
+                  <MessageBarBody>
+                    <MessageBarTitle>RBAC granted</MessageBarTitle>
+                    The Console now holds the least-privilege role set on this landing zone&apos;s
+                    resource group. Refresh to see it as <b>Attached</b>.
+                    <div style={{ marginTop: 10 }}>
+                      <Button appearance="primary" size="small" icon={<ArrowClockwise20Regular />} onClick={() => { setGrant(null); setSelected(null); void load(); }}>
+                        Refresh
+                      </Button>
+                    </div>
+                  </MessageBarBody>
+                </MessageBar>
+              )}
+              {grant && !grant.ok && (
+                <MessageBar intent="warning" style={{ marginTop: 12 }}>
+                  <MessageBarBody>
+                    <MessageBarTitle>
+                      {grant.commands?.length ? 'Run this grant as an operator with RBAC rights' : 'Could not grant RBAC'}
+                    </MessageBarTitle>
+                    <div className={styles.preWrap}>{grant.remediation || grant.error || 'Unknown error.'}</div>
+                    {grant.commands?.length ? (
+                      <pre className={mergeClasses(styles.mono, styles.preWrap)} style={{ marginTop: 8 }}>{grant.commands.join('\n')}</pre>
+                    ) : null}
                   </MessageBarBody>
                 </MessageBar>
               )}

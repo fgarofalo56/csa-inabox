@@ -171,8 +171,8 @@ module storage 'storage.bicep' = {
     cmkKeyUri: storageCmkKeyUri
     cmkIdentityId: storageCmkIdentityId
     privateEndpointSubnetId: network.outputs.privateEndpointSubnetId
-    privateDnsZoneBlobId: adminPlanePrivateDnsZoneIds.blob
-    privateDnsZoneDfsId: adminPlanePrivateDnsZoneIds.dfs
+    privateDnsZoneBlobId: string(adminPlanePrivateDnsZoneIds.?blob ?? '')
+    privateDnsZoneDfsId: string(adminPlanePrivateDnsZoneIds.?dfs ?? '')
     workspaceId: adminPlaneLawId
     complianceTags: complianceTags
     recycleRetentionDays: recycleRetentionDays
@@ -194,6 +194,11 @@ module databricks 'databricks.bicep' = if (loomDatabricksEnabled) {
     boundary: boundary
     storageCmkKeyUri: storageCmkKeyUri
     workspaceId: adminPlaneLawId
+    // #1466 — front-end (databricks_ui_api) private endpoint so the Console
+    // reaches the PE-locked workspace (publicNetworkAccess Disabled) privately
+    // instead of "403 Unauthorized network access to workspace".
+    privateEndpointSubnetId: network.outputs.privateEndpointSubnetId
+    databricksPrivateDnsZoneId: string(adminPlanePrivateDnsZoneIds.?databricks ?? '')
     complianceTags: complianceTags
   }
 }
@@ -264,6 +269,12 @@ module synapse 'synapse.bicep' = if (loomSynapseEnabled) {
     adminEntraGroupId: adminEntraGroupId
     consolePrincipalId: consolePrincipalId
     consoleUamiName: consoleUamiName
+    // appId (client id, NOT objectId/principalId) used by synapse.bicep both as
+    // the Synapse SQL AAD admin SID and for the Synapse SQL Administrator grant
+    // (consoleSqlAdminRoleScript) — required for a WORKING serverless login or
+    // CREATE DATABASE fails with ELOGIN (Graph-fetch limitation when an SPI
+    // grants to another SPI by object id).
+    consoleUamiAppId: consoleUamiAppId
     workspaceId: adminPlaneLawId
     complianceTags: complianceTags
     skipRoleGrants: skipRoleGrants
@@ -382,7 +393,7 @@ module eventhubs 'eventhubs.bicep' = if (provisionEventHub) {
     location: location
     domainName: domainName
     privateEndpointSubnetId: network.outputs.privateEndpointSubnetId
-    privateDnsZoneServicebusId: adminPlanePrivateDnsZoneIds.servicebus
+    privateDnsZoneServicebusId: string(adminPlanePrivateDnsZoneIds.?servicebus ?? '')
     workspaceId: adminPlaneLawId
     consolePrincipalId: consolePrincipalId
     // ADF factory MI gets Azure Event Hubs Data Sender so Eventstream "CDC"
@@ -443,7 +454,7 @@ module cosmos 'cosmos.bicep' = {
     location: location
     domainName: domainName
     privateEndpointSubnetId: network.outputs.privateEndpointSubnetId
-    privateDnsZoneCosmosId: adminPlanePrivateDnsZoneIds.cosmos
+    privateDnsZoneCosmosId: string(adminPlanePrivateDnsZoneIds.?cosmos ?? '')
     workspaceId: adminPlaneLawId
     consolePrincipalId: consolePrincipalId
     skipRoleGrants: skipRoleGrants
@@ -651,13 +662,15 @@ module cosmosGraphVector 'cosmos-graph-vector.bicep' = if (cosmosGraphVectorEnab
     boundary: boundary
     domainName: domainName
     privateEndpointSubnetId: network.outputs.privateEndpointSubnetId
-    privateDnsZoneCosmosId: adminPlanePrivateDnsZoneIds.cosmos
+    privateDnsZoneCosmosId: string(adminPlanePrivateDnsZoneIds.?cosmos ?? '')
     // Caller is expected to add a privatelink.gremlin.cosmos.azure.com zone
     // to `adminPlanePrivateDnsZoneIds`. Older admin-planes that haven't
     // shipped that zone yet fall back to the SQL Cosmos zone (the Gremlin
     // PE then registers but DNS won't resolve — documented honest-gate
-    // until the network module is bumped).
-    privateDnsZoneCosmosGremlinId: contains(adminPlanePrivateDnsZoneIds, 'cosmosGremlin') ? adminPlanePrivateDnsZoneIds.cosmosGremlin : adminPlanePrivateDnsZoneIds.cosmos
+    // until the network module is bumped). In dlz-attach the whole map can be
+    // {} (hub coordinates carry no DNS zones); safe-deref keeps the expression
+    // from throwing "property 'cosmos' doesn't exist" on an empty object.
+    privateDnsZoneCosmosGremlinId: string(adminPlanePrivateDnsZoneIds.?cosmosGremlin ?? (adminPlanePrivateDnsZoneIds.?cosmos ?? ''))
     workspaceId: adminPlaneLawId
     consolePrincipalId: consolePrincipalId
     complianceTags: complianceTags
@@ -719,6 +732,13 @@ output silverContainerUrl string = storage.outputs.silverContainerUrl
 output goldContainerUrl string = storage.outputs.goldContainerUrl
 output landingContainerUrl string = storage.outputs.landingContainerUrl
 output eventHubsNamespaceFqdn string = provisionEventHub ? eventhubs!.outputs.namespaceFqdn : ''
+// Event Hubs namespace NAME (short) — threaded to the hub console env in
+// dlz-attach (LOOM_EVENTHUB_NAMESPACE) so the Eventstream / Data Explorer
+// navigators bind to THIS DLZ's namespace instead of honest-gating. When a
+// namespace is REUSED (existingEventHubNamespaceName) we surface that name; when
+// EH is disabled the output is empty (the console then honest-gates, the correct
+// behavior).
+output eventHubsNamespaceName string = provisionEventHub ? eventhubs!.outputs.namespaceName : existingEventHubNamespaceName
 output cosmosEndpoint string = cosmos.outputs.endpoint
 output storageEventGridTopicId string = storage.outputs.eventGridTopicId
 

@@ -239,7 +239,7 @@ function AdxSection({ resource, onState }: { resource: AzureRes; onState: (s?: s
         <Button appearance="primary" icon={<ArrowUp16Regular />} disabled={busy} onClick={() => setConfirm(true)}>
           {busy ? 'Scaling…' : 'Apply SKU'}
         </Button>
-        <Button appearance="subtle" icon={<ArrowSync16Regular />} disabled={busy} onClick={load} title="Refresh" />
+        <Button appearance="subtle" icon={<ArrowSync16Regular />} disabled={busy} onClick={load} title="Refresh" aria-label="Refresh" />
       </div>
       <ResultBar result={result} />
       <ConfirmScaleDialog open={confirm} resourceName={resource.name} action={`Scale to ${sku} (capacity ${capacity})`} onConfirm={apply} onCancel={() => setConfirm(false)} />
@@ -340,7 +340,7 @@ function SynapseSection({ resource, onState }: { resource: AzureRes; onState: (s
           onClick={() => setConfirm({ action: `Resume ${pool}`, run: () => lifecycle('resume') })}>Resume</Button>
         <Button icon={<Pause16Regular />} disabled={busy || /paus/.test(curState)}
           onClick={() => setConfirm({ action: `Pause ${pool}`, run: () => lifecycle('pause') })}>Pause</Button>
-        <Button appearance="subtle" icon={<ArrowSync16Regular />} disabled={busy} onClick={load} title="Refresh" />
+        <Button appearance="subtle" icon={<ArrowSync16Regular />} disabled={busy} onClick={load} title="Refresh" aria-label="Refresh" />
       </div>
       <ResultBar result={result} />
       <ConfirmScaleDialog open={!!confirm} resourceName={resource.name} action={confirm?.action || ''} onConfirm={() => confirm?.run()} onCancel={() => setConfirm(null)} />
@@ -515,7 +515,7 @@ function VmssSection({ resource, onState }: { resource: AzureRes; onState: (s?: 
           onClick={() => setConfirm({ action: 'Start (scale to 4 nodes)', run: () => scale(4) })}>Start (4)</Button>
         <Button icon={<Pause16Regular />} disabled={busy || capacity === 0}
           onClick={() => setConfirm({ action: 'Stop (scale to 0 nodes)', run: () => scale(0) })}>Stop (0)</Button>
-        <Button appearance="subtle" icon={<ArrowSync16Regular />} disabled={busy} onClick={load} title="Refresh" />
+        <Button appearance="subtle" icon={<ArrowSync16Regular />} disabled={busy} onClick={load} title="Refresh" aria-label="Refresh" />
       </div>
       <ResultBar result={result} />
       <ConfirmScaleDialog open={!!confirm} resourceName={resource.name} action={confirm?.action || ''} onConfirm={() => confirm?.run()} onCancel={() => setConfirm(null)} />
@@ -579,7 +579,7 @@ function ContainerAppSection({ resource, onState }: { resource: AzureRes; onStat
         <Button appearance="primary" icon={<ArrowUp16Regular />} disabled={busy || max < min} onClick={() => setConfirm(true)}>
           {busy ? 'Applying…' : 'Apply scale'}
         </Button>
-        <Button appearance="subtle" icon={<ArrowSync16Regular />} disabled={busy} onClick={load} title="Refresh" />
+        <Button appearance="subtle" icon={<ArrowSync16Regular />} disabled={busy} onClick={load} title="Refresh" aria-label="Refresh" />
       </div>
       <ResultBar result={result} />
       <ConfirmScaleDialog open={confirm} resourceName={resource.name} action={`Set replicas to min ${min} / max ${max}`} onConfirm={apply} onCancel={() => setConfirm(false)} />
@@ -644,7 +644,7 @@ function AksSection({ resource, onState }: { resource: AzureRes; onState: (s?: s
         <Button appearance="primary" icon={<ArrowUp16Regular />} disabled={busy || !pool} onClick={() => setConfirm(true)}>
           {busy ? 'Scaling…' : 'Apply count'}
         </Button>
-        <Button appearance="subtle" icon={<ArrowSync16Regular />} disabled={busy} onClick={load} title="Refresh" />
+        <Button appearance="subtle" icon={<ArrowSync16Regular />} disabled={busy} onClick={load} title="Refresh" aria-label="Refresh" />
       </div>
       <Caption1 style={{ color: tokens.colorNeutralForeground3 }}>Setting a fixed count disables the cluster autoscaler on this pool.</Caption1>
       <ResultBar result={result} />
@@ -704,7 +704,7 @@ function AiSearchSection({ resource, onState }: { resource: AzureRes; onState: (
         <Button appearance="primary" icon={<ArrowUp16Regular />} disabled={busy} onClick={() => setConfirm(true)}>
           {busy ? 'Scaling…' : 'Apply'}
         </Button>
-        <Button appearance="subtle" icon={<ArrowSync16Regular />} disabled={busy} onClick={load} title="Refresh" />
+        <Button appearance="subtle" icon={<ArrowSync16Regular />} disabled={busy} onClick={load} title="Refresh" aria-label="Refresh" />
       </div>
       <Caption1 style={{ color: tokens.colorNeutralForeground3 }}>The SKU tier is immutable after creation — only replicas/partitions scale in place.</Caption1>
       <ResultBar result={result} />
@@ -766,7 +766,7 @@ function ApimSection({ resource, onState }: { resource: AzureRes; onState: (s?: 
         <Button appearance="primary" icon={<ArrowUp16Regular />} disabled={busy} onClick={() => setConfirm(true)}>
           {busy ? 'Scaling…' : 'Apply'}
         </Button>
-        <Button appearance="subtle" icon={<ArrowSync16Regular />} disabled={busy} onClick={load} title="Refresh" />
+        <Button appearance="subtle" icon={<ArrowSync16Regular />} disabled={busy} onClick={load} title="Refresh" aria-label="Refresh" />
       </div>
       <ResultBar result={result} />
       <ConfirmScaleDialog open={confirm} resourceName={resource.name} action={`Scale to ${sku} × ${capacity}`} onConfirm={apply} onCancel={() => setConfirm(false)} />
@@ -834,7 +834,7 @@ function CosmosSection({ resource, onState }: { resource: AzureRes; onState: (s?
           <Button appearance="primary" icon={<ArrowUp16Regular />} disabled={busy || !container} onClick={() => setConfirm(true)}>
             {busy ? 'Applying…' : 'Apply RU/s'}
           </Button>
-          <Button appearance="subtle" icon={<ArrowSync16Regular />} disabled={busy} onClick={load} title="Refresh" />
+          <Button appearance="subtle" icon={<ArrowSync16Regular />} disabled={busy} onClick={load} title="Refresh" aria-label="Refresh" />
         </div>
       )}
       <ResultBar result={result} />

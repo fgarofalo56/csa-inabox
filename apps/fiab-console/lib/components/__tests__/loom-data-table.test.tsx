@@ -104,4 +104,23 @@ describe('LoomDataTable', () => {
     expect(screen.getByText('Loading…')).toBeInTheDocument();
     expect(screen.queryByText('Charlie')).not.toBeInTheDocument();
   });
+
+  it('renders an opt-in skeleton (no spinner) when loading + skeleton', () => {
+    const { container } = renderTable({ loading: true, skeleton: true });
+    // The bare spinner label must NOT appear; the skeleton region does.
+    expect(screen.queryByText('Loading…')).not.toBeInTheDocument();
+    expect(screen.getByLabelText('Loading data table')).toBeInTheDocument();
+    expect(screen.queryByText('Charlie')).not.toBeInTheDocument();
+    // skeleton renders placeholder items (header + body rows)
+    expect(container.querySelectorAll('[aria-label="Loading data table"]').length).toBe(1);
+  });
+
+  it('announces the filtered count via an aria-live status', () => {
+    renderTable();
+    // unfiltered: shows the total
+    expect(screen.getByText('Showing 3 items')).toBeInTheDocument();
+    const filter = screen.getByLabelText('Filter by Name');
+    fireEvent.change(filter, { target: { value: 'li' } });
+    expect(screen.getByText('Showing 2 of 3 items')).toBeInTheDocument();
+  });
 });

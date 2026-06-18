@@ -50,8 +50,8 @@ param skipRoleGrants bool = false
 @allowed([ 1, 3, 6, 12, 18, 24, 30, 36, 42, 48 ])
 param startingStreamingUnits int = 3
 
-@description('Log Analytics workspace ID for diagnostic settings.')
-param workspaceId string
+@description('Log Analytics workspace ID for diagnostic settings. Empty (dlz-attach with no hub LAW coordinate) skips the diagnostic settings.')
+param workspaceId string = ''
 
 @description('Compliance tags applied to every resource.')
 param complianceTags object
@@ -158,7 +158,7 @@ resource asaBlobDataContributor 'Microsoft.Authorization/roleAssignments@2022-04
 // Diagnostic settings → standardized Loom LAW
 // =====================================================================
 
-resource diag 'Microsoft.Insights/diagnosticSettings@2021-05-01-preview' = {
+resource diag 'Microsoft.Insights/diagnosticSettings@2021-05-01-preview' = if (!empty(workspaceId)) {
   scope: asaJob
   name: 'diag-loom-stdz'
   properties: {

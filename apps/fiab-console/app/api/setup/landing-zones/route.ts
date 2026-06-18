@@ -23,9 +23,13 @@ import { ChainedTokenCredential, DefaultAzureCredential, ManagedIdentityCredenti
 import { getSession } from '@/lib/auth/session';
 import { armBase, armScope } from '@/lib/azure/cloud-endpoints';
 import { getTenantTopologySafe } from '@/lib/setup/tenant-topology';
-import { checkSubscriptionDeployPermission } from '@/lib/setup/deploy-preflight';
+import {
+  checkSubscriptionDeployPermission,
+  checkResourceGroupManagePermission,
+} from '@/lib/setup/deploy-preflight';
 import {
   buildLandingZonesOverview,
+  rgKey,
   type DlzRgRow,
   type HubCoords,
 } from '@/lib/setup/landing-zones-model';
@@ -124,10 +128,15 @@ export async function GET() {
     );
   }
 
-  // ── Attach state: probe write permission on each DISTINCT cross-sub ─────────
-  // A DLZ in a sub the Console can only READ is 'detached' (needs RBAC repair
-  // before navigators can manage it). Same-sub DLZs are always manageable.
-  // We probe once per distinct cross-sub (not per DLZ) to bound ARM calls.
+  // ── Attach state: probe write permission for each cross-sub DLZ ─────────────
+  // Least-privilege multi-sub model: the Console UAMI is granted Contributor
+  // scoped to the **DLZ resource group**, NOT the whole subscription (the DLZ
+  // sub holds many non-Loom workloads, so a sub-wide grant is an over-reach we
+  // never do). So a DLZ is 'attached' when the UAMI can write at EITHER the RG
+  // scope (the normal case) OR the subscription scope. We probe sub-scope once
+  // per distinct cross-sub (cheap, and covers single-sub deploys), then probe
+  // RG-scope only for the DLZ RGs whose sub is NOT already sub-writable — that
+  // is exactly the set the old sub-only check wrongly flagged as needing repair.
   const hubSub = hub?.hubSubscriptionId;
   const crossSubs = Array.from(
     new Set(dlzRows.map((r) => r.subscriptionId).filter((s) => !!hubSub && s !== hubSub)),
@@ -138,14 +147,43 @@ export async function GET() {
     try {
       const perm = await checkSubscriptionDeployPermission(sub, armToken);
       // Only mark writable on a definitive yes; a check error leaves it out, so
-      // the model reports 'detached' conservatively (honest — better to flag a
-      // possibly-fine DLZ for repair than to claim a broken one is attached).
+      // the RG-scope probe below (or the model) decides conservatively.
       if (!perm.error && perm.canDeploy) writableSubs.add(sub);
     } catch {
       /* leave out of writable set */
     }
   }
 
-  const overview = buildLandingZonesOverview(hub, topo.exists, dlzRows, writableSubs);
+  // RG-scope probe: for every cross-sub DLZ whose subscription is NOT sub-writable,
+  // check whether the UAMI can manage that specific RG (RG-scoped Contributor).
+  // The permissions endpoint is GET (Permissions - List For Resource Group); a
+  // verified RG-scoped Contributor therefore reads as canManage=true. When the
+  // read itself errors (token/network/cross-sub 403) we record the RG as
+  // 'unknown' rather than letting the model report a false 'detached' — an
+  // undeterminable read must never masquerade as Reader-only.
+  const writableRgs = new Set<string>();
+  const unknownRgs = new Set<string>();
+  const rgsToProbe = dlzRows.filter(
+    (r) => !!hubSub && r.subscriptionId !== hubSub && !writableSubs.has(r.subscriptionId),
+  );
+  await Promise.all(
+    rgsToProbe.map(async (r) => {
+      const key = rgKey(r.subscriptionId, r.name);
+      try {
+        const perm = await checkResourceGroupManagePermission(r.subscriptionId, r.name, armToken);
+        if (perm.error) unknownRgs.add(key);
+        else if (perm.canManage) writableRgs.add(key);
+        // else: definitive Reader-only → leave out → model reports 'detached'.
+      } catch {
+        unknownRgs.add(key); // could not determine → 'unknown', not 'detached'
+      }
+    }),
+  );
+
+  const overview = buildLandingZonesOverview(hub, topo.exists, dlzRows, {
+    writableSubs,
+    writableRgs,
+    unknownRgs,
+  });
   return NextResponse.json({ ok: true, ...overview });
 }

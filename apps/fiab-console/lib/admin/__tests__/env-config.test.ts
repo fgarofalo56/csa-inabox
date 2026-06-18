@@ -5,6 +5,8 @@ import {
   getEditableEnv,
   maskValue,
   buildSyncArtifacts,
+  ENV_ALIAS_GROUPS,
+  aliasSatisfiedKeys,
 } from '../env-config';
 
 describe('admin/env-config registry', () => {
@@ -19,9 +21,13 @@ describe('admin/env-config registry', () => {
   });
 
   it('flattens anyOf groups into individual settable keys', () => {
-    // entra-app anyOf includes AZURE_CLIENT_ID — the alias key must be settable.
-    expect(isEditableEnvKey('LOOM_ENTRA_CLIENT_ID')).toBe(true);
-    expect(isEditableEnvKey('AZURE_CLIENT_ID')).toBe(true);
+    // entra-app required LOOM_MSAL_CLIENT_ID + anyOf [AZURE_TENANT_ID |
+    // LOOM_MSAL_TENANT_ID]; cosmos-config anyOf [LOOM_COSMOS_ENDPOINT |
+    // COSMOS_ENDPOINT] — every alias key in those groups must be settable.
+    expect(isEditableEnvKey('LOOM_MSAL_CLIENT_ID')).toBe(true);
+    expect(isEditableEnvKey('AZURE_TENANT_ID')).toBe(true);
+    expect(isEditableEnvKey('LOOM_MSAL_TENANT_ID')).toBe(true);
+    expect(isEditableEnvKey('COSMOS_ENDPOINT')).toBe(true);
   });
 
   it('flags secret-typed keys and never echoes their value', () => {
@@ -69,6 +75,60 @@ describe('admin/env-config registry', () => {
     expect(usage?.role).toMatch(/Power BI workspace Member|Grafana/);
     // Cosmos (a core var) also carries its provisioning hint.
     expect(getEditableEnv('LOOM_COSMOS_ENDPOINT')?.provisionedBy).toBeTruthy();
+  });
+
+  it('exposes anyOf alias groups (either/or requirements) including bootstrap-admin', () => {
+    const hasAdminGroup = ENV_ALIAS_GROUPS.some(
+      (g) => g.includes('LOOM_TENANT_ADMIN_OID') && g.includes('LOOM_TENANT_ADMIN_GROUP_ID'),
+    );
+    expect(hasAdminGroup).toBe(true);
+    // Cosmos alias pair + MSAL/Azure tenant alias pair are also groups.
+    expect(ENV_ALIAS_GROUPS.some((g) => g.includes('LOOM_COSMOS_ENDPOINT') && g.includes('COSMOS_ENDPOINT'))).toBe(true);
+    expect(ENV_ALIAS_GROUPS.some((g) => g.includes('AZURE_TENANT_ID') && g.includes('LOOM_MSAL_TENANT_ID'))).toBe(true);
+  });
+
+  it('marks the OTHER member of a satisfied anyOf group as satisfied (no false critical)', () => {
+    // OID set, GROUP_ID unset → GROUP_ID is satisfied (the either/or is met).
+    const setKeys = new Set(['LOOM_TENANT_ADMIN_OID']);
+    const satisfied = aliasSatisfiedKeys((k) => setKeys.has(k));
+    expect(satisfied.has('LOOM_TENANT_ADMIN_GROUP_ID')).toBe(true);
+    // The directly-set key is NOT in the satisfied (alias) set.
+    expect(satisfied.has('LOOM_TENANT_ADMIN_OID')).toBe(false);
+    // COSMOS_ENDPOINT is satisfied when its preferred alias LOOM_COSMOS_ENDPOINT is set.
+    const cosmosSet = new Set(['LOOM_COSMOS_ENDPOINT']);
+    expect(aliasSatisfiedKeys((k) => cosmosSet.has(k)).has('COSMOS_ENDPOINT')).toBe(true);
+    // Nothing set → nothing alias-satisfied.
+    expect(aliasSatisfiedKeys(() => false).size).toBe(0);
+  });
+
+  it('marks the Power BI embed vars satisfied when the Grafana embed path is active (mutually-exclusive backends)', () => {
+    // Day-one the deploy wires the Grafana embed path (#1461): KIND=grafana +
+    // the two stable dashboard UIDs. The four Power BI embed vars are then the
+    // UNUSED alternative backend and must report as alias-satisfied (so the
+    // env-config catalog counts them as configured → 40/40, not a false
+    // "not set"). This is the either/or that backs the Wave-2 coverage fix.
+    const grafanaSet = new Set([
+      'LOOM_USAGE_REPORT_KIND', 'LOOM_REPORT_KIND',
+      'LOOM_GRAFANA_USAGE_DASHBOARD_UID', 'LOOM_GRAFANA_DASHBOARD_UID', 'LOOM_GRAFANA_ENDPOINT',
+    ]);
+    const satisfied = aliasSatisfiedKeys((k) => grafanaSet.has(k));
+    expect(satisfied.has('LOOM_USAGE_PBI_WORKSPACE_ID')).toBe(true);
+    expect(satisfied.has('LOOM_USAGE_PBI_REPORT_ID')).toBe(true);
+    expect(satisfied.has('LOOM_GOVERN_PBI_WORKSPACE_ID')).toBe(true);
+    expect(satisfied.has('LOOM_GOVERN_PBI_REPORT_ID')).toBe(true);
+    // LOOM_ALERT_RG is the either/or partner of LOOM_ADMIN_RG — satisfied when
+    // the admin RG is set (bicep also emits LOOM_ALERT_RG directly day-one).
+    const adminRgSet = new Set(['LOOM_ADMIN_RG']);
+    expect(aliasSatisfiedKeys((k) => adminRgSet.has(k)).has('LOOM_ALERT_RG')).toBe(true);
+  });
+
+  it('exposes exactly the 45 editable runtime variables (catalog completeness)', () => {
+    // The env-config catalog is the union of every required + anyOf key across
+    // ENV_CHECKS. The /admin/env-config coverage badge reads N-of-45; this pins
+    // the catalog size so a drift in ENV_CHECKS is caught in CI. Bumped to 45 by
+    // the day-one self-audit expansion (MCP deploy/built-in, Warp SQL engine,
+    // Databricks, Purview UC endpoint, DLP enable, ACA env coords).
+    expect(EDITABLE_ENV.length).toBe(45);
   });
 
   it('flags bicep-derived vars (org-visuals, LA workspace) with derived=true', () => {

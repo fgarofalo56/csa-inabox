@@ -7,7 +7,32 @@
  * popover render wiring is covered by code-cell-copilot.test.tsx (jsdom).
  */
 import { describe, it, expect } from 'vitest';
-import { parseInCellCommand, inCellResultAction, buildAssistMessages } from '../notebook-tools';
+import { parseInCellCommand, inCellResultAction, buildAssistMessages, assistRuntimeDirective } from '../notebook-tools';
+
+describe('assistRuntimeDirective + buildAssistMessages runtime threading', () => {
+  it('injects the Databricks directive into the generate system prompt', () => {
+    const msgs = buildAssistMessages('generate', 'pyspark', '', 'read a table', '', '', 'databricks');
+    expect(msgs[0].content).toMatch(/Databricks Spark/);
+    expect(msgs[0].content).toMatch(/dbutils/);
+    expect(msgs[0].content).not.toMatch(/mssparkutils/);
+  });
+  it('injects the Azure ML directive (SDK v2, no Spark) into the fix system prompt', () => {
+    const msgs = buildAssistMessages('fix', 'python', 'x=1', '', 'NameError', '', 'azure-ml');
+    expect(msgs[0].content).toMatch(/azure\.ai\.ml/);
+    expect(msgs[0].content).toMatch(/no implicit Spark session|NO implicit Spark/i);
+  });
+  it('defaults to Synapse Spark directive when runtime is absent (back-compat)', () => {
+    const msgs = buildAssistMessages('explain', 'pyspark', 'df.show()', '', '', '');
+    expect(msgs[0].content).toMatch(/Synapse Spark/);
+    expect(msgs[0].content).toMatch(/mssparkutils/);
+  });
+  it('assistRuntimeDirective names the correct APIs per runtime', () => {
+    expect(assistRuntimeDirective('databricks')).toMatch(/dbutils/);
+    expect(assistRuntimeDirective('synapse-spark')).toMatch(/mssparkutils/);
+    expect(assistRuntimeDirective('azure-ml')).toMatch(/automl/);
+    expect(assistRuntimeDirective(undefined)).toMatch(/Synapse Spark/);
+  });
+});
 
 describe('parseInCellCommand', () => {
   it('maps /explain to explain mode', () => {

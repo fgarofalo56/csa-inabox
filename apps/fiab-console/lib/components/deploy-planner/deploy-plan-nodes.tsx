@@ -15,7 +15,8 @@ import * as React from 'react';
 import { memo } from 'react';
 import { Handle, Position, type NodeProps } from '@xyflow/react';
 import { Badge, Caption1, tokens } from '@fluentui/react-components';
-import { serviceByKey, serviceVisual } from './service-catalog';
+import { CheckmarkCircle12Filled, Circle12Regular } from '@fluentui/react-icons';
+import { serviceByKey, serviceVisual, type ConfigStatus } from './service-catalog';
 import { iconUrl } from '../ui/item-type-visual';
 
 const BOUNDARY_TINT: Record<string, string> = {
@@ -38,6 +39,8 @@ export interface DomainNodeData {
 }
 export interface ServiceNodeData {
   serviceKey: string;
+  /** Per-resource config status, computed by the view (drives the node badge). */
+  configStatus?: ConfigStatus;
   [key: string]: unknown;
 }
 
@@ -56,9 +59,9 @@ function SubscriptionNodeImpl({ data, width, height, selected }: NodeProps) {
       }}
     >
       <div style={{
-        display: 'flex', alignItems: 'center', gap: tokens.spacingHorizontalS,
+        display: 'flex', alignItems: 'center', gap: 8,
         padding: '6px 10px', borderBottom: `1px solid ${tint}40`,
-        background: `${tint}1a`, borderTopLeftRadius: tokens.borderRadiusLarge, borderTopRightRadius: tokens.borderRadiusLarge,
+        background: `${tint}1a`, borderTopLeftRadius: 8, borderTopRightRadius: 8,
       }}>
         <span style={{ fontWeight: 700, fontSize: 13, color: tokens.colorNeutralForeground1 }}>{d.name}</span>
         <Badge appearance="tint" size="small" style={{ color: tint }}>{d.boundary || 'Commercial'}</Badge>
@@ -75,7 +78,7 @@ function DomainNodeImpl({ data, width, height, selected }: NodeProps) {
       data-plan-domain={d.name}
       style={{
         width: width ?? 300, height: height ?? 150,
-        borderRadius: tokens.borderRadiusLarge,
+        borderRadius: 8,
         border: `1.5px ${selected ? 'solid' : 'dashed'} ${selected ? tokens.colorBrandStroke1 : tokens.colorNeutralStroke1}`,
         background: tokens.colorNeutralBackground1,
         boxSizing: 'border-box',
@@ -110,8 +113,8 @@ function ServiceNodeImpl({ data, selected }: NodeProps) {
       title={def?.description}
       style={{
         width: 132,
-        display: 'flex', alignItems: 'center', gap: tokens.spacingHorizontalS,
-        padding: '6px 9px', borderRadius: tokens.borderRadiusLarge,
+        display: 'flex', alignItems: 'center', gap: 8,
+        padding: '6px 9px', borderRadius: 8,
         background: tokens.colorNeutralBackground1,
         border: `1px solid ${selected ? tokens.colorBrandStroke1 : tokens.colorNeutralStroke2}`,
         boxShadow: selected ? `0 0 0 2px ${tokens.colorBrandBackground2}` : '0 1px 2px rgba(0,0,0,0.06)',
@@ -126,15 +129,24 @@ function ServiceNodeImpl({ data, selected }: NodeProps) {
         whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis',
       }}>{vis.label}</span>
       {def?.config?.length ? (
-        <span title="Has configurable SKU / tier" style={{
-          flexShrink: 0, width: 7, height: 7, borderRadius: tokens.borderRadiusMedium,
-          background: tokens.colorBrandBackground,
-        }} />
+        d.configStatus === 'configured' ? (
+          <CheckmarkCircle12Filled aria-label="Configured" title="Configured ✓"
+            style={{ flexShrink: 0, color: tokens.colorPaletteGreenForeground1 }} />
+        ) : d.configStatus === 'invalid' ? (
+          <span role="img" aria-label="Invalid configuration" title="Invalid configuration — open to fix" style={{
+            flexShrink: 0, width: 7, height: 7, borderRadius: 4,
+            background: tokens.colorPaletteRedBackground3,
+          }} />
+        ) : (
+          <Circle12Regular aria-label="Needs configuration"
+            title="Using defaults — select to review its SKU / tier"
+            style={{ flexShrink: 0, color: tokens.colorNeutralForeground3 }} />
+        )
       ) : null}
       {def?.planOnly && (
         <span role="img" aria-label="Plan-only — no one-button bicep toggle yet"
           title="Plan-only — no one-button bicep toggle yet" style={{
-          flexShrink: 0, width: 7, height: 7, borderRadius: tokens.borderRadiusMedium,
+          flexShrink: 0, width: 7, height: 7, borderRadius: 4,
           background: tokens.colorPaletteMarigoldBackground3,
         }} />
       )}

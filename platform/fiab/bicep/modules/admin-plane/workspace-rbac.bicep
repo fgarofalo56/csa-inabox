@@ -32,12 +32,21 @@ param skipRoleGrants bool = false
 var rbacAdminRoleId = 'f58310d9-a9f6-439a-9e8d-f62e7b41a168' // Role Based Access Control Administrator
 var contributorRoleId = 'b24988ac-6180-42a0-ab88-20f7382dd24c'
 var readerRoleId = 'acdd72a7-3385-48ef-bd42-f606fba81ae7'
+// SQL DB Contributor — included so this single RBAC-Admin grant ALSO covers the
+// per-Azure-SQL-database Share dialog when its RG is the SAME RG as this one
+// (the common single-RG / hub-only deploy where loomSqlServerRg defaults to
+// loomDlzRg). Azure rejects a second RBAC-Admin assignment to the same principal
+// at the same scope (RoleAssignmentExists, by principal+role+scope — name is
+// irrelevant), so the parent skips the separate sql-database-share-rbac grant
+// when the RGs coincide and relies on this broadened condition instead.
+var sqlDbContribRoleId = '9b7fa17d-e63e-47b0-bb0a-15c516ac86ec'
 
 // ABAC condition (v2.0): permit roleAssignments write AND delete ONLY when the
-// targeted RoleDefinitionId is Contributor or Reader. All other roles (Owner,
-// User Access Administrator, etc.) are blocked even though the UAMI holds
-// RBAC-Admin. Guards both the create (Request) and remove (Resource) actions.
-var rbacCondition = '((!(ActionMatches{\'Microsoft.Authorization/roleAssignments/write\'})) OR (@Request[Microsoft.Authorization/roleAssignments:RoleDefinitionId] ForAnyOfAnyValues:GuidEquals {${contributorRoleId}, ${readerRoleId}})) AND ((!(ActionMatches{\'Microsoft.Authorization/roleAssignments/delete\'})) OR (@Resource[Microsoft.Authorization/roleAssignments:RoleDefinitionId] ForAnyOfAnyValues:GuidEquals {${contributorRoleId}, ${readerRoleId}}))'
+// targeted RoleDefinitionId is Contributor, Reader, or SQL DB Contributor. All
+// other roles (Owner, User Access Administrator, etc.) are blocked even though
+// the UAMI holds RBAC-Admin. Guards both the create (Request) and remove
+// (Resource) actions.
+var rbacCondition = '((!(ActionMatches{\'Microsoft.Authorization/roleAssignments/write\'})) OR (@Request[Microsoft.Authorization/roleAssignments:RoleDefinitionId] ForAnyOfAnyValues:GuidEquals {${contributorRoleId}, ${readerRoleId}, ${sqlDbContribRoleId}})) AND ((!(ActionMatches{\'Microsoft.Authorization/roleAssignments/delete\'})) OR (@Resource[Microsoft.Authorization/roleAssignments:RoleDefinitionId] ForAnyOfAnyValues:GuidEquals {${contributorRoleId}, ${readerRoleId}, ${sqlDbContribRoleId}}))'
 
 resource wsRbacAdmin 'Microsoft.Authorization/roleAssignments@2022-04-01' = if (!empty(consolePrincipalId) && !skipRoleGrants) {
   // guid() is deterministic — re-running after the grant exists is a no-op.
@@ -48,6 +57,6 @@ resource wsRbacAdmin 'Microsoft.Authorization/roleAssignments@2022-04-01' = if (
     principalType: 'ServicePrincipal'
     condition: rbacCondition
     conditionVersion: '2.0'
-    description: 'Loom Console UAMI: create/delete Contributor + Reader workspace role assignments (F5 Manage Access). Constrained to those two built-in roles via ABAC.'
+    description: 'Loom Console UAMI: create/delete Contributor + Reader workspace role assignments (F5 Manage Access) and Reader/Contributor/SQL DB Contributor per-database Share assignments. Constrained to those built-in roles via ABAC.'
   }
 }

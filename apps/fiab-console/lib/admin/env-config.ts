@@ -96,6 +96,42 @@ export const EDITABLE_ENV: EditableEnvVar[] = (() => {
 
 const EDITABLE_BY_KEY = new Map(EDITABLE_ENV.map((e) => [e.key, e]));
 
+/**
+ * The `anyOf` groups across every check — each group is a set of keys where
+ * setting ANY ONE satisfies the requirement (an either/or, e.g.
+ * LOOM_TENANT_ADMIN_OID | LOOM_TENANT_ADMIN_GROUP_ID, or the alias pairs
+ * AZURE_TENANT_ID | LOOM_MSAL_TENANT_ID and LOOM_COSMOS_ENDPOINT |
+ * COSMOS_ENDPOINT). Surfaced so /admin/env-config can mark the OTHER members of
+ * a satisfied group as "satisfied" instead of a false critical-unset.
+ */
+export const ENV_ALIAS_GROUPS: string[][] = (() => {
+  const groups: string[][] = [];
+  for (const spec of ENV_CHECKS) {
+    for (const group of spec.anyOf || []) {
+      const members = group.map((k) => k.trim()).filter(Boolean);
+      if (members.length > 1) groups.push(members);
+    }
+  }
+  return groups;
+})();
+
+/**
+ * Given a predicate that reports whether a key is currently set, returns the
+ * set of keys that are NOT directly set but belong to an `anyOf` group that is
+ * already satisfied by a sibling. The env-config surface treats these as
+ * "satisfied" rather than critical-unset (an either/or requirement met by the
+ * alias / preferred key — e.g. GROUP_ID unset while OID is set).
+ */
+export function aliasSatisfiedKeys(isSet: (key: string) => boolean): Set<string> {
+  const satisfied = new Set<string>();
+  for (const group of ENV_ALIAS_GROUPS) {
+    if (group.some(isSet)) {
+      for (const k of group) if (!isSet(k)) satisfied.add(k);
+    }
+  }
+  return satisfied;
+}
+
 /** Is `key` in the editable whitelist? */
 export function isEditableEnvKey(key: string): boolean {
   return EDITABLE_BY_KEY.has(key);

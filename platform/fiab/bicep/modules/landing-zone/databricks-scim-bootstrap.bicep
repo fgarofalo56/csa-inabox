@@ -48,6 +48,50 @@ param spokeSubnetId string
 @description('Resource group of the UAMI that runs the script (must have Contributor on this RG)')
 param scriptUamiId string
 
+// =====================================================================
+// Deployment-script staging storage account
+//   Azure deploymentScripts stage their script + outputs on a storage
+//   account that the backing Azure Container Instance mounts as a FILE
+//   SHARE — and the ONLY way ACI can mount a file share is via a SHARED
+//   KEY. A DLZ subscription commonly enforces `allowSharedKeyAccess=false`
+//   (Azure Policy), so the script service's auto-created SA rejects key auth
+//   and this SCIM bootstrap fails with `KeyBasedAuthenticationNotPermitted
+//   (403)`.
+//
+//   Fix: stand up a small DEDICATED staging SA that explicitly ALLOWS
+//   shared-key access (it only ever holds the throwaway script file share
+//   + log blobs, never data) and point the deploymentScript at it via the
+//   `storageAccountSettings` property. Mirrors the #1440 pattern in
+//   landing-zone/synapse.bicep. Per Learn (deployment-script-template#use-
+//   existing-storage-account): kind StorageV2, allowSharedKeyAccess=true, no
+//   storage firewall (public network on); the deploying principal supplies
+//   the key via listKeys (it has Contributor on this RG via the deployment).
+// =====================================================================
+var scriptStagingSaName = take('sadsloomscim${uniqueString(resourceGroup().id, 'databricks-scim-staging')}', 24)
+
+resource scriptStagingStorage 'Microsoft.Storage/storageAccounts@2023-05-01' = {
+  name: scriptStagingSaName
+  location: location
+  kind: 'StorageV2'
+  sku: { name: 'Standard_LRS' }
+  properties: {
+    // REQUIRED for deploymentScripts — ACI mounts the staging file share via a
+    // shared key. This SA holds only ephemeral script staging (never data), so
+    // allowing shared-key access here does NOT weaken the data-plane posture.
+    allowSharedKeyAccess: true
+    allowBlobPublicAccess: false
+    minimumTlsVersion: 'TLS1_2'
+    supportsHttpsTrafficOnly: true
+    // deploymentScripts do not support storage firewall rules (Learn), so the
+    // staging SA keeps default public network access; it carries no data.
+    publicNetworkAccess: 'Enabled'
+    networkAcls: {
+      defaultAction: 'Allow'
+      bypass: 'AzureServices'
+    }
+  }
+}
+
 resource bootstrap 'Microsoft.Resources/deploymentScripts@2023-08-01' = {
   name: 'loom-dbx-scim-bootstrap'
   location: location
@@ -61,6 +105,12 @@ resource bootstrap 'Microsoft.Resources/deploymentScripts@2023-08-01' = {
     retentionInterval: 'PT1H'
     timeout: 'PT30M'
     cleanupPreference: 'OnSuccess'
+    // Stage on the dedicated shared-key-enabled SA so this does not hit
+    // KeyBasedAuthenticationNotPermitted on a DLZ that denies shared-key access.
+    storageAccountSettings: {
+      storageAccountName: scriptStagingSaName
+      storageAccountKey: scriptStagingStorage.listKeys().keys[0].value
+    }
     containerSettings: {
       subnetIds: [
         { id: spokeSubnetId }

@@ -53,6 +53,35 @@ param skipRoleGrants bool = false
 @description('Compliance tags')
 param complianceTags object
 
+// --- Default chat model deployment (day-one Copilot model) -------------------
+// The AIServices account below hosts AOAI model deployments. On a fresh deploy
+// NO model exists unless one is created here, so the self-audit "Azure OpenAI /
+// Foundry" + "Copilot/agents model reachable" checks warn ("No AOAI model
+// deployment resolved") even though the account is live. Deploy a small,
+// broadly-available chat model by default so the shared-hub AOAI endpoint
+// (LOOM_AOAI_ENDPOINT, wired from this account's aoaiInferenceEndpoint when the
+// dedicated Agent Service account is not the resolved source) has a working
+// model day-one. gpt-4o-mini / GlobalStandard is the cheapest gpt-4o-class slot
+// and is available in Commercial + Azure Government regions used by Loom.
+@description('Deploy a default chat model on the AIServices account so the shared-hub AOAI endpoint has a model day-one (clears the self-audit "No AOAI model" warning). Set false to skip (e.g. a region without GlobalStandard quota for this model).')
+param deployDefaultChatModel bool = true
+
+@description('Default chat deployment name (becomes LOOM_AOAI_DEPLOYMENT when this account is the resolved AOAI source).')
+param defaultChatDeploymentName string = 'gpt-4o-mini'
+
+@description('Default chat model name.')
+param defaultChatModelName string = 'gpt-4o-mini'
+
+@description('Default chat model version. 2024-07-18 is the GA gpt-4o-mini version (Commercial + Azure Government).')
+param defaultChatModelVersion string = '2024-07-18'
+
+@description('Default chat deployment SKU. GlobalStandard so the deploy succeeds in regions (e.g. centralus) that only offer GlobalStandard for gpt-4o-class models.')
+param defaultChatModelSkuName string = 'GlobalStandard'
+
+@description('Default chat deployment capacity (thousands of TPM).')
+@minValue(1)
+param defaultChatModelCapacity int = 10
+
 // =====================================================================
 // Foundry Hub (Azure ML Workspace kind=Hub for Foundry; kind=Default
 // for classic in boundaries without Foundry support)
@@ -84,8 +113,10 @@ resource foundryHub 'Microsoft.MachineLearningServices/workspaces@2024-10-01' = 
   }
 }
 
-// Azure ML Owner role to admin group
-resource hubOwnerRole 'Microsoft.Authorization/roleAssignments@2022-04-01' = if (!skipRoleGrants) {
+// Azure ML Data Scientist role to admin group.
+// Guarded on !empty(adminEntraGroupId): an empty admin-group principal would
+// trigger ARM InvalidPrincipalId (day-one centralus deploy failure 2026-06-17).
+resource hubOwnerRole 'Microsoft.Authorization/roleAssignments@2022-04-01' = if (!skipRoleGrants && !empty(adminEntraGroupId)) {
   scope: foundryHub
   name: guid(foundryHub.id, adminEntraGroupId, 'f6c7c914-8db3-469d-8ca1-694a8f32e121')
   properties: {
@@ -202,7 +233,7 @@ resource diag 'Microsoft.Insights/diagnosticSettings@2021-05-01-preview' = {
 // target THIS account (foundry-cs-client.ts resolves it by name).
 // =====================================================================
 
-resource aiServices 'Microsoft.CognitiveServices/accounts@2024-10-01' = {
+resource aiServices 'Microsoft.CognitiveServices/accounts@2025-04-01-preview' = {
   name: 'aoai-csa-loom-${location}'
   location: location
   tags: complianceTags
@@ -213,10 +244,14 @@ resource aiServices 'Microsoft.CognitiveServices/accounts@2024-10-01' = {
     customSubDomainName: 'aoai-csa-loom-${location}'
     // Enable Microsoft Foundry project management on this AIServices account so
     // the Foundry Agent Service (data-agent Publish + Foundry agent editor) has a
-    // real project endpoint to target (foundry-agent-client.ts). The property is
-    // valid on the runtime API; the bundled bicep type lib is behind, hence the
-    // suppression below.
-    #disable-next-line BCP037
+    // real project endpoint to target (foundry-agent-client.ts). REQUIRED before
+    // the `foundryProject` child below can be created — without it the project
+    // deploy fails: "Project can only be created under AIServices Kind account
+    // with allowProjectManagement set to true." This property is only recognized
+    // from api-version 2025-04-01-preview onward; the previous 2024-10-01 silently
+    // dropped it (BCP037), so the account was created WITHOUT project management
+    // and the child project failed (pass-6 centralus deploy 2026-06-17). Bumped to
+    // 2025-04-01-preview (same family as the project child + ai/foundry-project.bicep).
     allowProjectManagement: true
     publicNetworkAccess: boundary == 'Commercial' ? 'Enabled' : 'Disabled'
     networkAcls: { defaultAction: boundary == 'Commercial' ? 'Allow' : 'Deny' }
@@ -238,6 +273,32 @@ resource foundryProject 'Microsoft.CognitiveServices/accounts/projects@2025-04-0
   properties: {
     displayName: 'CSA Loom'
     description: 'CSA Loom default Foundry project — Data Agents runtime + agent grounding'
+  }
+}
+
+// Default chat model deployment (day-one Copilot model). Created on the
+// AIServices account so the shared-hub AOAI endpoint has a working model the
+// moment the deploy finishes — this is what clears the self-audit
+// "No AOAI model deployment resolved" warning when this account (not the
+// dedicated Agent Service account) is the resolved LOOM_AOAI_ENDPOINT source.
+// Serialized after the project (CognitiveServices rejects concurrent writes to
+// one account; the project is created first so both don't race).
+resource defaultChatDeployment 'Microsoft.CognitiveServices/accounts/deployments@2025-04-01-preview' = if (deployDefaultChatModel) {
+  parent: aiServices
+  name: defaultChatDeploymentName
+  dependsOn: [ foundryProject ]
+  sku: {
+    name: defaultChatModelSkuName
+    capacity: defaultChatModelCapacity
+  }
+  properties: {
+    model: {
+      format: 'OpenAI'
+      name: defaultChatModelName
+      version: defaultChatModelVersion
+    }
+    versionUpgradeOption: 'OnceNewDefaultVersionAvailable'
+    raiPolicyName: 'Microsoft.DefaultV2'
   }
 }
 
@@ -305,6 +366,9 @@ output hubKind string = workspaceKind
 output hubManagedIdentityPrincipalId string = foundryHub.identity.principalId
 output aiServicesAccountName string = aiServices.name
 output aiServicesEndpoint string = aiServices.properties.endpoint
+// LOOM_AOAI_DEPLOYMENT when this shared-hub account is the resolved AOAI source.
+// Empty when no default model was deployed (deployDefaultChatModel=false).
+output defaultChatDeploymentName string = deployDefaultChatModel ? defaultChatDeploymentName : ''
 // AOAI inference endpoint (the .openai.azure.* host the AI Functions / Copilot
 // clients call — distinct from the generic Cognitive Services endpoint above).
 // Sovereign-aware: GCC-High / IL5 / IL6 use .openai.azure.us. Wired into

@@ -61,12 +61,43 @@ const LOCAL_VERSION =
   process.env.NEXT_PUBLIC_LOOM_VERSION ||
   (BUILD.sha ? `build-${BUILD.sha.slice(0, 12)}` : 'dev');
 
+/**
+ * Parse the major.minor.patch core out of a version/tag string into a numeric
+ * triple. Tolerates ANY prefix before the version core, including a repo-scoped
+ * release tag such as `csa-inabox-v0.44.0` or a bare `v0.43.1` — the GitHub
+ * release tags for this repo carry the `csa-inabox-v` prefix, while
+ * LOOM_VERSION is a bare semver (`0.42.0`). A previous anchored `^(\d+)…`
+ * regex returned null for the prefixed upstream tag, so compareSemver treated
+ * the real upstream release as "not comparable" and reported a false
+ * "Up to date" badge. Now we scan for the first `X.Y[.Z]` token anywhere in
+ * the string. Returns null only when no numeric core exists at all (e.g. a
+ * `build-<sha>` fingerprint), so callers can distinguish "older" from
+ * "not a comparable version".
+ */
+function parseSemverCore(s: string): [number, number, number] | null {
+  // Find the first version-looking token: <major>.<minor>[.<patch>], optionally
+  // preceded by a `v`/`V`. The leading boundary (start-or-non-digit) prevents
+  // matching a digit that is part of a longer number.
+  const m = s.trim().match(/(?:^|[^0-9])v?(\d+)\.(\d+)(?:\.(\d+))?/i);
+  if (!m) return null;
+  return [Number(m[1]) || 0, Number(m[2]) || 0, Number(m[3]) || 0];
+}
+
+/**
+ * Semver compare on the major.minor.patch core. Returns -1 if a<b, 1 if a>b,
+ * 0 if equal. When the LOCAL version has no parseable semver core (a dev /
+ * build-SHA build) but the upstream tag does, treat local as OLDER (-1) so an
+ * update is offered rather than a false "Up to date". The previous string→
+ * Number split produced NaN for such builds and silently returned 0.
+ */
 function compareSemver(a: string, b: string): number {
-  const na = a.replace(/^v/, '').split('.').map(Number);
-  const nb = b.replace(/^v/, '').split('.').map(Number);
-  for (let i = 0; i < Math.max(na.length, nb.length); i += 1) {
-    const x = na[i] ?? 0; const y = nb[i] ?? 0;
-    if (x !== y) return x < y ? -1 : 1;
+  const na = parseSemverCore(a);
+  const nb = parseSemverCore(b);
+  if (!na && !nb) return 0;
+  if (!na) return -1; // local not comparable, upstream is a real release → older
+  if (!nb) return 1;
+  for (let i = 0; i < 3; i += 1) {
+    if (na[i] !== nb[i]) return na[i] < nb[i] ? -1 : 1;
   }
   return 0;
 }

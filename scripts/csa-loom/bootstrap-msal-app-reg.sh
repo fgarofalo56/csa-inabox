@@ -3,10 +3,12 @@
 # CSA Loom — Entra app registration (MSAL) provisioner
 # =====================================================================
 # Day-one deploy-readiness (GH #1383). Idempotent: create-or-reuse the Loom
-# Console Entra app registration, reconcile its redirect URIs to the live
-# console host(s), enable public-client (device-code CLI) flows, ensure the
-# delegated Microsoft Graph User.Read scope, reset the client secret, and
-# persist both the client secret and a STABLE SESSION_SECRET to Key Vault.
+# Console Entra app registration, MERGE its redirect URIs with the live console
+# host(s) (never overwrite — keeps the Front Door callback), keep it a
+# CONFIDENTIAL web app (isFallbackPublicClient=false, since it uses a client
+# secret), ensure the delegated Microsoft Graph User.Read scope, reset the
+# client secret, and persist both the client secret and a STABLE SESSION_SECRET
+# to Key Vault.
 # Finally wire LOOM_MSAL_CLIENT_ID + the secretRefs onto the Console Container
 # App so interactive login works on first sign-in.
 #
@@ -60,19 +62,48 @@ else
   fi
 fi
 
-echo "==> Reconciling redirect URIs"
+echo "==> Reconciling redirect URIs (MERGE — never overwrite existing callbacks)"
+# INCIDENT 2026-06-17: this step used to OVERWRITE web.redirectUris with only the
+# computed set derived from the ACA ingress FQDN. Real users reach the console
+# through Azure Front Door (e.g. loom-console-xxxx.b02.azurefd.net), so the app
+# sends the Front Door host as redirect_uri. Overwriting dropped the Front Door
+# callback → AADSTS50011 redirect-URI mismatch → interactive login dead. We now
+# UNION the computed redirects with the app's CURRENT web.redirectUris so any
+# already-correct Front Door callback survives even if the caller only passes the
+# ACA host.
 REDIRECTS=()
 IFS=',' read -ra HOSTS <<< "${CONSOLE_HOSTS}"
 for h in "${HOSTS[@]}"; do
   h="$(echo "$h" | tr -d ' ')"
   [ -n "$h" ] && REDIRECTS+=("https://${h}/auth/callback")
 done
-REDIRECTS+=("http://localhost:3000/auth/callback")
-echo "    ${REDIRECTS[*]}"
-az ad app update --id "${APP_ID}" --web-redirect-uris "${REDIRECTS[@]}" || echo "    WARN: redirect-uri update failed (app owned elsewhere?)"
+REDIRECTS+=("http://localhost:3000/auth/callback") # preserve dev callback
+# Read the app's current web redirect URIs and union with the computed set.
+CURRENT_REDIRECTS="$(az ad app show --id "${APP_ID}" --query "web.redirectUris" -o tsv 2>/dev/null || true)"
+while IFS= read -r r; do
+  r="$(echo "$r" | tr -d ' \r')"
+  [ -n "$r" ] && REDIRECTS+=("$r")
+done <<< "${CURRENT_REDIRECTS}"
+# Dedupe while preserving order.
+MERGED_REDIRECTS=()
+for r in "${REDIRECTS[@]}"; do
+  dup=0
+  for seen in "${MERGED_REDIRECTS[@]:-}"; do
+    [ "$seen" = "$r" ] && { dup=1; break; }
+  done
+  [ "$dup" -eq 0 ] && MERGED_REDIRECTS+=("$r")
+done
+echo "    ${MERGED_REDIRECTS[*]}"
+az ad app update --id "${APP_ID}" --web-redirect-uris "${MERGED_REDIRECTS[@]}" || echo "    WARN: redirect-uri update failed (app owned elsewhere?)"
 
-echo "==> Enabling public-client flows (device-code CLI) + delegated Graph User.Read"
-az ad app update --id "${APP_ID}" --set isFallbackPublicClient=true || echo "    WARN: isFallbackPublicClient update failed"
+echo "==> Ensuring confidential web app (NOT a fallback public client) + delegated Graph User.Read"
+# INCIDENT 2026-06-17: this step used to set isFallbackPublicClient=true. The Loom
+# Console is a CONFIDENTIAL web app that authenticates with a client secret. When
+# isFallbackPublicClient=true, Entra treats the client as public and rejects the
+# client_secret at the token exchange → AADSTS700025 "Client is public so neither
+# client_assertion nor client_secret should be presented." → login dead. It MUST
+# be false. (Idempotent: --set is safe to re-run.)
+az ad app update --id "${APP_ID}" --set isFallbackPublicClient=false || echo "    WARN: isFallbackPublicClient update failed"
 az ad app update --id "${APP_ID}" --required-resource-accesses "${GRAPH_RA}" || echo "    WARN: required-resource-accesses update failed"
 
 echo "==> Resetting client secret + persisting to Key Vault ${KEYVAULT_NAME}"
@@ -94,18 +125,36 @@ fi
 if [ -n "${CONSOLE_APP_NAME:-}" ] && [ -n "${CONSOLE_RG:-}" ]; then
   echo "==> Wiring Container App ${CONSOLE_APP_NAME} (${CONSOLE_RG})"
   KV_URI="${KEYVAULT_URI:-https://${KEYVAULT_NAME}.vault.azure.net/}"
+  KVREF_OK=0
   if [ -n "${UAMI_RESOURCE_ID:-}" ]; then
-    az containerapp secret set -n "${CONSOLE_APP_NAME}" -g "${CONSOLE_RG}" --secrets \
+    # Preferred + durable: make the Container App secret a KV REFERENCE
+    # (unversioned URI → resolves the LATEST version on each new revision). This
+    # is what permanently breaks the "bootstrap rotates the secret → running
+    # console keeps the OLD baked value → AADSTS7000215 → login loop" cycle: a
+    # future rotation propagates on the next revision roll with no re-wiring.
+    if az containerapp secret set -n "${CONSOLE_APP_NAME}" -g "${CONSOLE_RG}" --secrets \
       "loom-msal-client-secret=keyvaultref:${KV_URI}secrets/${MSAL_SECRET_NAME},identityref:${UAMI_RESOURCE_ID}" \
-      "session-secret=keyvaultref:${KV_URI}secrets/${SESSION_SECRET_NAME},identityref:${UAMI_RESOURCE_ID}" -o none || \
-      echo "    WARN: KV-backed secret set failed; falling back to inline"
-  else
+      "session-secret=keyvaultref:${KV_URI}secrets/${SESSION_SECRET_NAME},identityref:${UAMI_RESOURCE_ID}" -o none; then
+      KVREF_OK=1
+    else
+      echo "    WARN: KV-backed secret set failed; falling back to the inline rotated value"
+    fi
+  fi
+  # Belt-and-suspenders: if the KV reference could not be wired (no UAMI, or the
+  # secret-set failed — e.g. RBAC still propagating), push the FRESHLY-ROTATED
+  # literal value so the running console gets the matching secret immediately on
+  # this run even on a KV-literal estate. (We already hold ${SECRET} from the
+  # credential reset above.)
+  if [ "${KVREF_OK}" -ne 1 ]; then
     az containerapp secret set -n "${CONSOLE_APP_NAME}" -g "${CONSOLE_RG}" --secrets \
       "loom-msal-client-secret=${SECRET}" -o none || echo "    WARN: inline secret set failed"
   fi
+  # Force a new revision so the updated secret value/reference is picked up
+  # immediately (a secret-set alone does NOT roll running replicas). Setting the
+  # env vars both wires LOOM_MSAL_CLIENT_ID and serves as the revision-roll.
   az containerapp update -n "${CONSOLE_APP_NAME}" -g "${CONSOLE_RG}" \
-    --set-env-vars "LOOM_MSAL_CLIENT_ID=${APP_ID}" -o none || echo "    WARN: env-var update failed"
-  echo "    wired LOOM_MSAL_CLIENT_ID=${APP_ID}"
+    --set-env-vars "LOOM_MSAL_CLIENT_ID=${APP_ID}" "LOOM_MSAL_CLIENT_SECRET=secretref:${MSAL_SECRET_NAME}" -o none || echo "    WARN: env-var update failed"
+  echo "    wired LOOM_MSAL_CLIENT_ID=${APP_ID} + LOOM_MSAL_CLIENT_SECRET=secretref:${MSAL_SECRET_NAME} (kvref=${KVREF_OK})"
 fi
 
 echo "==> Done. App (client) id: ${APP_ID}"

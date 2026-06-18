@@ -1083,6 +1083,7 @@ export function DataPipelineEditor({ item, id }: Props) {
                           </TableCell>
                           <TableCell>
                             <Button size="small" appearance="subtle" icon={<Delete20Regular />}
+                              aria-label="Delete parameter"
                               onClick={() => patchSpec((prev) => {
                                 const next = parameters.filter((x) => x.name !== p.name);
                                 return { ...prev, properties: { ...prev.properties, parameters: paramsToSpec(next) } };
@@ -1147,6 +1148,7 @@ export function DataPipelineEditor({ item, id }: Props) {
                           </TableCell>
                           <TableCell>
                             <Button size="small" appearance="subtle" icon={<Delete20Regular />}
+                              aria-label="Delete variable"
                               onClick={() => patchSpec((prev) => {
                                 const next = variables.filter((x) => x.name !== v.name);
                                 return { ...prev, properties: { ...prev.properties, variables: varsToSpec(next) } };

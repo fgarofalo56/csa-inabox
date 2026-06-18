@@ -71,6 +71,14 @@ export interface DomainItem {
   name: string;
   description?: string;
   color?: string;
+  /**
+   * Fluent icon NAME representing this domain (see lib/domains/domain-icons
+   * DOMAIN_ICONS). Rendered as a white glyph on a `themeColor` chip. Optional
+   * with a safe default ('building') so legacy domains keep rendering.
+   */
+  icon?: string;
+  /** Brand-ish theme color (hex) for the domain glyph chip. Defaults to brand blue. */
+  themeColor?: string;
   owners?: string[];
   /** Domain admins (UPNs / group names) — can change domain settings. */
   admins?: string[];
@@ -139,22 +147,30 @@ export function starterDomains(who: string): DomainItem[] {
     id: string,
     name: string,
     description: string,
+    icon: string,
+    themeColor: string,
     parentId?: string,
   ): DomainItem => ({
     id,
     name,
     description,
+    icon,
+    themeColor,
     parentId,
     status: 'registered',
     createdAt: now,
     createdBy: who,
   });
+  // Each starter ships with a themed Fluent icon + color so the Domains surface
+  // renders icon-in-colored-chip out of the box (never plain colored squares):
+  //   Default → building/home · Finance → money · Sales & Marketing → megaphone
+  //   Operations → gear · People & HR → people.
   return [
-    base('default', 'Default', 'Default domain — the fallback binding for workspaces until a Data Landing Zone is attached.'),
-    base('finance', 'Finance', 'Financial planning, reporting, and chargeback data products.'),
-    base('sales-marketing', 'Sales & Marketing', 'Pipeline, campaign, and customer-360 data products.'),
-    base('operations', 'Operations', 'Supply-chain, logistics, and operational telemetry.'),
-    base('people', 'People & HR', 'Workforce, recruiting, and people-analytics data products.', 'operations'),
+    base('default', 'Default', 'Default domain — the fallback binding for workspaces until a Data Landing Zone is attached.', 'building', '#0078d4'),
+    base('finance', 'Finance', 'Financial planning, reporting, and chargeback data products.', 'money', '#107c10'),
+    base('sales-marketing', 'Sales & Marketing', 'Pipeline, campaign, and customer-360 data products.', 'megaphone', '#e3008c'),
+    base('operations', 'Operations', 'Supply-chain, logistics, and operational telemetry.', 'gear', '#5c2d91'),
+    base('people', 'People & HR', 'Workforce, recruiting, and people-analytics data products.', 'people', '#bd7800', 'operations'),
   ];
 }
 

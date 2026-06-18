@@ -28,23 +28,23 @@
  *     unset (no Fabric dependency).
  */
 
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useState } from 'react';
 import {
   Spinner, Button, Text, Body1, Caption1,
-  TabList, Tab, Dropdown, Option,
+  TabList, Tab,
   MessageBar, MessageBarBody, MessageBarTitle,
   makeStyles, tokens,
 } from '@fluentui/react-components';
 import {
   Flow20Regular, Code20Regular, BranchFork20Regular, DatabaseLightning20Regular,
-  Beaker20Regular, ArrowRight20Regular, Open16Regular, Play20Regular,
+  Beaker20Regular, ArrowRight20Regular, Open16Regular,
 } from '@fluentui/react-icons';
 import { Section } from '@/lib/components/ui/section';
 import { ItemTile } from '@/lib/components/ui/item-tile';
 import { TileGrid } from '@/lib/components/ui/tile-grid';
 import { SignInRequired } from '@/lib/components/sign-in-required';
-import { compileGraph, type VqGraph, type SqlDialect } from '@/lib/editors/visual-query-compiler';
 import type { WarpItem } from '@/app/api/experience/warp/home/route';
+import { WarpTransformCanvas, type WarpRunTarget, type WarpWorkspaceOption } from '@/lib/components/warp/warp-transform-canvas';
 
 interface HomeData {
   ok: true;
@@ -53,29 +53,12 @@ interface HomeData {
   counts: { pipelines: number; codeRepos: number; total: number };
 }
 
-type WarpTab = 'pipeline' | 'code';
+interface TransformsData {
+  targets: WarpRunTarget[];
+  workspaces: WarpWorkspaceOption[];
+}
 
-/**
- * A small, real worked example the read-only preview compiles live: filter →
- * choose columns → group-by + aggregate → sort. Demonstrates the exact graph
- * shape the canvas builds and feeds to the run route.
- */
-const DEMO_GRAPH: VqGraph = {
-  nodes: [
-    { id: 's1', kind: 'source', inputs: [], schema: 'dbo', table: 'fact_sale' },
-    { id: 'f1', kind: 'filter', inputs: ['s1'], whereExpression: '[total_excluding_tax] > 0' },
-    { id: 'c1', kind: 'select-columns', inputs: ['f1'], columns: ['city_key', 'total_excluding_tax'] },
-    {
-      id: 'g1',
-      kind: 'group-by',
-      inputs: ['c1'],
-      groupBy: ['city_key'],
-      aggregates: [{ func: 'SUM', field: 'total_excluding_tax', alias: 'revenue' }],
-    },
-    { id: 'o1', kind: 'sort', inputs: ['g1'], sortKeys: [{ field: 'revenue', dir: 'DESC' }] },
-  ],
-  outputId: 'o1',
-};
+type WarpTab = 'pipeline' | 'code';
 
 const PIPELINE_CREATE: { slug: string; label: string; icon: JSX.Element }[] = [
   { slug: 'data-pipeline', label: 'New data pipeline', icon: <Flow20Regular /> },
@@ -155,29 +138,6 @@ const useStyles = makeStyles({
     marginBottom: tokens.spacingVerticalL,
   },
   empty: { color: tokens.colorNeutralForeground3 },
-  previewWrap: {
-    border: `1px solid ${tokens.colorNeutralStroke2}`,
-    borderRadius: tokens.borderRadiusLarge,
-    backgroundColor: tokens.colorNeutralBackground1,
-    overflow: 'hidden',
-  },
-  previewHead: {
-    display: 'flex', alignItems: 'center', justifyContent: 'space-between',
-    gap: tokens.spacingHorizontalM, flexWrap: 'wrap',
-    padding: `${tokens.spacingVerticalS} ${tokens.spacingHorizontalL}`,
-    borderBottom: `1px solid ${tokens.colorNeutralStroke2}`,
-    backgroundColor: tokens.colorNeutralBackground2,
-  },
-  previewSql: {
-    margin: 0,
-    padding: tokens.spacingVerticalL,
-    fontFamily: tokens.fontFamilyMonospace,
-    fontSize: '12.5px',
-    lineHeight: 1.5,
-    whiteSpace: 'pre',
-    overflowX: 'auto',
-    color: tokens.colorNeutralForeground1,
-  },
   learnGrid: {
     display: 'grid',
     gap: tokens.spacingHorizontalL,
@@ -220,11 +180,25 @@ export function WarpHubContent() {
   const [unauth, setUnauth] = useState(false);
   const [loading, setLoading] = useState(true);
   const [tab, setTab] = useState<WarpTab>('pipeline');
-  const [dialect, setDialect] = useState<SqlDialect>('sparksql');
+  const [transforms, setTransforms] = useState<TransformsData>({ targets: [], workspaces: [] });
 
-  // The preview is compiled live by the same pure compiler the canvas + run
-  // route use — a faithful demo of the canvas → SQL contract, not sample text.
-  const previewSql = useMemo(() => compileGraph(DEMO_GRAPH, dialect), [dialect]);
+  // Run targets + workspaces for the editable transform canvas (best-effort —
+  // the canvas still builds/saves a graph even if these are empty).
+  useEffect(() => {
+    let alive = true;
+    Promise.all([
+      fetch('/api/experience/warp/transforms').then((r) => (r.ok ? r.json() : null)).catch(() => null),
+      fetch('/api/workspaces').then((r) => (r.ok ? r.json() : null)).catch(() => null),
+    ]).then(([t, ws]) => {
+      if (!alive) return;
+      const targets: WarpRunTarget[] = t?.ok && Array.isArray(t.targets) ? t.targets : [];
+      const workspaces: WarpWorkspaceOption[] = Array.isArray(ws)
+        ? ws.map((w: any) => ({ id: w.id, name: w.name || w.displayName || w.id }))
+        : [];
+      setTransforms({ targets, workspaces });
+    });
+    return () => { alive = false; };
+  }, []);
 
   useEffect(() => {
     let alive = true;
@@ -321,46 +295,35 @@ export function WarpHubContent() {
         )}
       </div>
 
-      {/* Pipeline Builder: live generated-SQL preview from the same compiler. */}
+      {/* Pipeline Builder: the editable visual transform canvas. Build a
+          Source → Transform → Sink graph, configure each node with guided
+          controls, and Validate / Preview / Run against a real Azure-native
+          SQL engine. The graph compiles live to T-SQL / Spark SQL (Code tab)
+          and saves to Cosmos. */}
       {tab === 'pipeline' && (
         <Section
-          title="Visual transform → SQL"
+          title="Visual transform builder"
           actions={
-            <Dropdown
+            <Button
               size="small"
-              value={dialect === 'sparksql' ? 'Spark SQL' : 'T-SQL'}
-              selectedOptions={[dialect]}
-              onOptionSelect={(_, data2) => setDialect((data2.optionValue as SqlDialect) || 'sparksql')}
-              aria-label="Preview SQL dialect"
+              appearance="subtle"
+              as="a"
+              href="/browse?type=data-pipeline"
+              icon={<ArrowRight20Regular />}
+              iconPosition="after"
             >
-              <Option value="sparksql">Spark SQL</Option>
-              <Option value="tsql">T-SQL</Option>
-            </Dropdown>
+              Open in a data pipeline
+            </Button>
           }
         >
           <Body1 style={{ color: tokens.colorNeutralForeground2, marginBottom: tokens.spacingVerticalM, display: 'block' }}>
-            A worked example (filter → choose columns → group-by + sum → sort) compiled
-            live by the same engine the canvas previews with and the run route executes.
-            Open a data pipeline, warehouse or lakehouse and use the Visual query tab to
-            build and run your own against the real backend.
+            Build a transform on the canvas — add a source, chain steps (filter,
+            select, derive, aggregate, join, union, rename, cast, dedup, sort),
+            and land it in a sink. Pick a run target and Validate / Preview / Run
+            against a live Synapse or Databricks backend. The Code tab shows the
+            generated SQL. Azure-native by default; no Microsoft Fabric required.
           </Body1>
-          <div className={s.previewWrap}>
-            <div className={s.previewHead}>
-              <Caption1 style={{ fontWeight: tokens.fontWeightSemibold }}>
-                Generated {dialect === 'sparksql' ? 'Spark SQL' : 'T-SQL'}
-              </Caption1>
-              <Button
-                size="small"
-                appearance="subtle"
-                as="a"
-                href="/browse?type=data-pipeline"
-                icon={<Play20Regular />}
-              >
-                Build & run on a pipeline
-              </Button>
-            </div>
-            <pre className={s.previewSql}>{previewSql}</pre>
-          </div>
+          <WarpTransformCanvas targets={transforms.targets} workspaces={transforms.workspaces} />
         </Section>
       )}
 

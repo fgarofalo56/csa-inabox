@@ -11,23 +11,26 @@
 
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import {
-  Button, Badge, Spinner, Caption1, Subtitle2,
-  Table, TableHeader, TableRow, TableHeaderCell, TableBody, TableCell,
+  Button, Badge, Caption1, Subtitle2,
   MessageBar, MessageBarBody, MessageBarTitle,
   Input, Dropdown, Option, Field,
   makeStyles, tokens,
 } from '@fluentui/react-components';
 import { ArrowSync24Regular, ArrowDownload20Regular } from '@fluentui/react-icons';
+import { LoomDataTable, type LoomColumn } from '@/lib/components/ui/loom-data-table';
 
 const useStyles = makeStyles({
   section: {
-    padding: tokens.spacingVerticalM, borderRadius: tokens.borderRadiusLarge,
+    padding: tokens.spacingHorizontalM,
+    borderRadius: tokens.borderRadiusLarge,
     border: `1px solid ${tokens.colorNeutralStroke2}`,
     backgroundColor: tokens.colorNeutralBackground1,
   },
   toolbar: {
     display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(160px, 1fr))',
-    gap: tokens.spacingHorizontalS, marginBottom: tokens.spacingVerticalM, alignItems: 'end',
+    gap: tokens.spacingHorizontalS,
+    marginBottom: tokens.spacingVerticalM,
+    alignItems: 'end',
   },
 });
 
@@ -91,6 +94,26 @@ export function AuditPanel() {
     return data.rows.filter((r) => (r.kind || '').toLowerCase().includes(category));
   }, [data, category]);
 
+  const columns = useMemo<LoomColumn<AuditRow>[]>(() => [
+    {
+      key: 'at', label: 'When', width: 200,
+      getValue: (r) => Date.parse(r.at) || 0,
+      render: (r) => <Caption1>{new Date(r.at).toLocaleString()}</Caption1>,
+    },
+    { key: 'who', label: 'Who', width: 180, render: (r) => r.who || '—' },
+    {
+      key: 'kind', label: 'Kind', width: 160,
+      getValue: (r) => r.kind || '',
+      render: (r) => <Badge appearance="outline" size="small">{r.kind}</Badge>,
+    },
+    { key: 'key', label: 'Key', render: (r) => <Caption1>{r.key || '—'}</Caption1> },
+    {
+      key: 'itemId', label: 'Target',
+      getValue: (r) => r.itemId || '',
+      render: (r) => <code style={{ fontSize: 11 }}>{r.itemId || '—'}</code>,
+    },
+  ], []);
+
   const exportCsv = () => {
     const headers = ['at', 'who', 'kind', 'key', 'itemId'];
     const lines = [headers.join(',')];
@@ -134,38 +157,21 @@ export function AuditPanel() {
           <Button icon={<ArrowDownload20Regular />} onClick={exportCsv} disabled={!filteredRows.length}>CSV</Button>
         </div>
       </div>
-      {loading && <Spinner label="Loading audit log…" />}
       {error && (
         <MessageBar intent="error">
           <MessageBarBody><MessageBarTitle>Failed to load</MessageBarTitle>{error}</MessageBarBody>
         </MessageBar>
       )}
-      {!loading && !error && filteredRows.length === 0 && (
-        <Caption1 block style={{ color: tokens.colorNeutralForeground3 }}>No audit events match this filter.</Caption1>
-      )}
-      {!loading && !error && filteredRows.length > 0 && (
-        <Table size="small" aria-label="Audit events">
-          <TableHeader>
-            <TableRow>
-              <TableHeaderCell>When</TableHeaderCell>
-              <TableHeaderCell>Who</TableHeaderCell>
-              <TableHeaderCell>Kind</TableHeaderCell>
-              <TableHeaderCell>Key</TableHeaderCell>
-              <TableHeaderCell>Target</TableHeaderCell>
-            </TableRow>
-          </TableHeader>
-          <TableBody>
-            {filteredRows.slice(0, 200).map((r) => (
-              <TableRow key={r.id}>
-                <TableCell><Caption1>{new Date(r.at).toLocaleString()}</Caption1></TableCell>
-                <TableCell>{r.who || '—'}</TableCell>
-                <TableCell><Badge appearance="outline" size="small">{r.kind}</Badge></TableCell>
-                <TableCell><Caption1>{r.key || '—'}</Caption1></TableCell>
-                <TableCell><code style={{ fontSize: 11 }}>{r.itemId || '—'}</code></TableCell>
-              </TableRow>
-            ))}
-          </TableBody>
-        </Table>
+      {!error && (
+        <LoomDataTable<AuditRow>
+          columns={columns}
+          rows={filteredRows.slice(0, 200)}
+          getRowId={(r) => r.id}
+          loading={loading}
+          skeleton
+          empty="No audit events match this filter."
+          ariaLabel="Audit events"
+        />
       )}
       {filteredRows.length > 200 && (
         <Caption1 block style={{ marginTop: 8, color: tokens.colorNeutralForeground3 }}>

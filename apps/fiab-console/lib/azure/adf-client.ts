@@ -23,6 +23,7 @@ import { AcaManagedIdentityCredential } from '@/lib/azure/aca-managed-identity';
 import { armBase, armScope, armHost, adfFactoryDeepLinkId, getLogAnalyticsHost, logAnalyticsTokenScope } from './cloud-endpoints';
 import { pathToHttpsUrl, KNOWN_CONTAINERS } from './adls-client';
 import { executeQuery, serverlessTarget } from './synapse-sql-client';
+import { discoverResourceCoordsByName } from './resource-graph-coords';
 
 const API = '2018-06-01';
 
@@ -111,7 +112,7 @@ export async function getDefaultFactory(): Promise<{
   return jsonOrThrow(r, 'getDefaultFactory');
 }
 
-async function call(url: string, init?: RequestInit): Promise<Response> {
+async function callRaw(url: string, init?: RequestInit): Promise<Response> {
   const tok = await credential.getToken(ARM_SCOPE);
   if (!tok?.token) throw new Error('Failed to acquire ARM token');
   return fetchWithTimeout(url, {
@@ -122,6 +123,74 @@ async function call(url: string, init?: RequestInit): Promise<Response> {
       'content-type': 'application/json',
     },
   });
+}
+
+// ---------------------------------------------------------------------------
+// DLZ coordinate self-heal (generalized from synapse-pool-arm.ts / PR #1445).
+//
+// In the multi-sub dlz-attach topology the env resolves the DEFAULT factory
+// coords to the ADMIN plane (LOOM_ADF_SUB || LOOM_SUBSCRIPTION_ID + LOOM_ADF_RG
+// || LOOM_DLZ_RG), but the factory can actually live in the DLZ sub — so the
+// configured ARM URL 404s (or 403s). On a 404/403 (or transport error) for a
+// DEFAULT-factory URL we discover the factory's REAL {subscriptionId,
+// resourceGroup} by name via Azure Resource Graph, cache it, and retry by
+// rewriting the /subscriptions/<sub>/resourceGroups/<rg> segment — a single
+// choke-point fix that covers every ARM op without touching its call site.
+//
+// Scoped to the DEFAULT factory only: URLs that target the configured default
+// sub+rg+factory name. Cross-factory `externalBase(...)` URLs and explicit
+// domain `target` URLs (which already carry authoritative coords) are NOT
+// rewritten — discovery keys on LOOM_ADF_NAME, which is only correct for the
+// default factory.
+// ---------------------------------------------------------------------------
+
+let resolvedDefaultCoords: { subscriptionId: string; resourceGroup: string } | null = null;
+
+function defaultFactorySegment(coords: { subscriptionId: string; resourceGroup: string }): string {
+  return `/subscriptions/${coords.subscriptionId}/resourceGroups/${coords.resourceGroup}/providers/Microsoft.DataFactory/factories/${adfName()}`;
+}
+
+/** True when `url` targets the env-configured DEFAULT factory (so self-heal is safe). */
+function isDefaultFactoryUrl(url: string): boolean {
+  try {
+    return url.includes(defaultFactorySegment({ subscriptionId: sub(), resourceGroup: rg() }));
+  } catch {
+    return false;
+  }
+}
+
+async function call(url: string, init?: RequestInit): Promise<Response> {
+  // Already self-healed this process: rewrite default-factory URLs up front.
+  if (resolvedDefaultCoords && isDefaultFactoryUrl(url)) {
+    const healed = url.replace(
+      defaultFactorySegment({ subscriptionId: sub(), resourceGroup: rg() }),
+      defaultFactorySegment(resolvedDefaultCoords),
+    );
+    return callRaw(healed, init);
+  }
+
+  const res = await callRaw(url, init).catch(() => null);
+  if (res && res.ok) return res;
+
+  // 404/403 (or transport error) on a DEFAULT-factory URL: the env scope is
+  // wrong/insufficient. Discover the factory's real coords and retry once.
+  if ((!res || res.status === 404 || res.status === 403) && isDefaultFactoryUrl(url)) {
+    const discovered = await discoverResourceCoordsByName({
+      resourceType: 'Microsoft.DataFactory/factories',
+      name: adfName(),
+      credential,
+    });
+    if (discovered) {
+      resolvedDefaultCoords = discovered;
+      const healed = url.replace(
+        defaultFactorySegment({ subscriptionId: sub(), resourceGroup: rg() }),
+        defaultFactorySegment(discovered),
+      );
+      return callRaw(healed, init);
+    }
+  }
+  // No discovery hit — re-issue (or return) so the real ARM error surfaces.
+  return res ?? callRaw(url, init);
 }
 
 async function jsonOrThrow<T>(r: Response, label: string): Promise<T> {

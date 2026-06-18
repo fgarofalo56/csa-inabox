@@ -127,7 +127,11 @@ else
   fi
 fi
 
-# Reconcile web redirect URIs to every known console host + localhost dev.
+# Reconcile web redirect URIs by MERGING the computed set with the app's CURRENT
+# redirect URIs (never overwrite). INCIDENT 2026-06-17: overwriting with only the
+# computed set (derived from the ACA ingress FQDN passed in CONSOLE_HOSTS) dropped
+# the Azure Front Door callback that real users hit → AADSTS50011 redirect-URI
+# mismatch → login dead. Union + dedupe keeps any already-correct Front Door host.
 REDIRECTS=()
 IFS=',' read -ra HOSTS <<< "${CONSOLE_HOSTS:-}"
 for h in "${HOSTS[@]}"; do
@@ -135,11 +139,25 @@ for h in "${HOSTS[@]}"; do
   [ -n "$h" ] && REDIRECTS+=("https://$h/auth/callback")
 done
 REDIRECTS+=("http://localhost:3000/auth/callback")
-echo "Reconciling redirect URIs: ${REDIRECTS[*]}"
-az ad app update --id "$APP_ID" --web-redirect-uris "${REDIRECTS[@]}" || echo "WARN: redirect-uri update failed (app may be owned elsewhere)"
+CURRENT_REDIRECTS=$(az ad app show --id "$APP_ID" --query "web.redirectUris" -o tsv 2>/dev/null || true)
+while IFS= read -r r; do
+  r=$(echo "$r" | tr -d ' \r')
+  [ -n "$r" ] && REDIRECTS+=("$r")
+done <<< "$CURRENT_REDIRECTS"
+MERGED_REDIRECTS=()
+for r in "${REDIRECTS[@]}"; do
+  dup=0
+  for seen in "${MERGED_REDIRECTS[@]:-}"; do [ "$seen" = "$r" ] && { dup=1; break; }; done
+  [ "$dup" -eq 0 ] && MERGED_REDIRECTS+=("$r")
+done
+echo "Reconciling redirect URIs: ${MERGED_REDIRECTS[*]}"
+az ad app update --id "$APP_ID" --web-redirect-uris "${MERGED_REDIRECTS[@]}" || echo "WARN: redirect-uri update failed (app may be owned elsewhere)"
 
-# Public-client flows on (device-code CLI login) + delegated Graph User.Read.
-az ad app update --id "$APP_ID" --set isFallbackPublicClient=true || echo "WARN: isFallbackPublicClient update failed"
+# CONFIDENTIAL web app — it authenticates with a client secret, so it must NOT be
+# a fallback public client. INCIDENT 2026-06-17: isFallbackPublicClient=true made
+# Entra treat the client as public and reject the client_secret at token exchange
+# → AADSTS700025 → login dead. Keep it false. Plus delegated Graph User.Read.
+az ad app update --id "$APP_ID" --set isFallbackPublicClient=false || echo "WARN: isFallbackPublicClient update failed"
 az ad app update --id "$APP_ID" --required-resource-accesses "$GRAPH_RA" || echo "WARN: required-resource-accesses update failed"
 
 # Reset the client secret (2-year lifetime) and persist to Key Vault.

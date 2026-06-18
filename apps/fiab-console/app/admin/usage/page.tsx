@@ -66,6 +66,10 @@ interface Embed {
 
 const WINDOWS = [7, 14, 30] as const;
 
+/** Longer client budget for the heavier multi-sub usage query (Cosmos + Log
+ * Analytics), so a real query isn't aborted at the 6s page-load default. */
+const USAGE_FETCH_TIMEOUT_MS = 30_000;
+
 const useStyles = makeStyles({
   intro: {
     color: tokens.colorNeutralForeground3,
@@ -234,11 +238,16 @@ export default function UsagePage() {
     try {
       const qs = new URLSearchParams({ days: String(d) });
       if (feat) qs.set('feature', feat);
-      const r = await clientFetch(`/api/admin/usage?${qs.toString()}`);
+      // Usage merges Cosmos inventory + multi-sub Log Analytics telemetry, which
+      // can run past the 6s page-load default — give it a longer (still bounded)
+      // budget so a real query isn't aborted with a cryptic AbortError.
+      const r = await clientFetch(`/api/admin/usage?${qs.toString()}`, undefined, USAGE_FETCH_TIMEOUT_MS);
       const j = await r.json();
       if (!j.ok) { setError(j.error || 'failed'); return; }
       setData(j);
     } catch (e: unknown) {
+      // clientFetch relabels a timeout to ClientFetchTimeoutError with a clear
+      // message; everything else surfaces its own message.
       setError(e instanceof Error ? e.message : String(e));
     } finally { setLoading(false); }
   }, []);

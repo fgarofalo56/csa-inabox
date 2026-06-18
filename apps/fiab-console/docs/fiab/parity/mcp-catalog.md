@@ -99,7 +99,14 @@ with `LOOM_DEFAULT_FABRIC_WORKSPACE` unset.
   - register: `saveMcpServer` → Cosmos `mcp-servers`
   - audit: `auditLogContainer`
 - Tool discovery: `copilot-orchestrator` → `buildMcpShim` → `listMcpServers` →
-  `listMcpTools` (`<endpoint>/tools/list`) per server.
+  `listMcpTools` per server. The MCP client speaks **Streamable HTTP** — it
+  POSTs JSON-RPC to the single configured endpoint URL (the `method` field
+  selects `initialize` / `tools/list` / `tools/call`; there are NO
+  `/tools/list` sub-paths), sends `initialize` first, echoes the returned
+  `Mcp-Session-Id`, and parses either a JSON or `text/event-stream` body.
+- Connectivity probe persists on save: POST/PUT `/api/admin/mcp-servers` runs
+  the real handshake and writes `lastTestResult` so the registered-servers
+  table shows live tool counts + a "Tested" badge day-one.
 
 ## Bicep + env sync
 

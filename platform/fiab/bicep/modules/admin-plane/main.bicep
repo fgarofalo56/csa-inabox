@@ -189,8 +189,8 @@ param adxSkuName string = 'Dev(No SLA)_Standard_E2a_v4'
 @description('Deploy an Azure Analysis Services (AAS) Standard server — the Azure-native semantic-model backend (no Fabric/Power BI). Hosts Import-mode tabular databases for refresh-now / scheduled-refresh. Default off.')
 param aasEnabled bool = false
 
-@description('AAS SKU (Standard tier). S1 (~$160/mo) is the minimum that supports the data-plane refresh REST API with a service-principal admin.')
-@allowed(['S0', 'S1', 'S2', 'S4', 'S8', 'S9'])
+@description('AAS SKU (Standard tier). S1 (~$160/mo) is the minimum that supports the data-plane refresh REST API with a service-principal admin. S0 is the cheapest Standard SKU. S8v2 / S9v2 are the v2 high-QPU SKUs (the legacy S8 / S9 are excluded — not available in many regions).')
+@allowed(['S0', 'S1', 'S2', 'S4', 'S8v2', 'S9v2'])
 param aasSkuName string = 'S1'
 
 @description('Reuse an existing AAS server name instead of provisioning one (any RG). When set, the module is skipped and LOOM_AAS_SERVER_NAME points at it.')
@@ -588,7 +588,7 @@ param loomBusinessEventsContainer string = 'business-event-types'
 @description('Optional ARM resource ID of a default IoT Hub for ADX data connections (KQL Database → Add data connection wizard). When set, the IoT Hub picker pre-selects this hub; when empty, the wizard discovers all IoT Hubs visible to the Loom identity via Resource Graph. The ADX cluster system-assigned managed identity must hold "IoT Hub Contributor" (role ID 4763167e-fb37-48bb-8710-0fcd9d82e439, grants Microsoft.Devices/IotHubs/IotHubKeys/read) at the target IoT Hub scope for device-to-cloud ingestion to succeed — because the hub is user-selected at runtime, that grant is a one-time operator action surfaced as an honest-gate MessageBar in the editor.')
 param loomIotHubResourceId string = ''
 
-@description('Loom Alert Rules resource group (for monitoring alerts/rules). Empty defaults to LOOM_DLZ_RG.')
+@description('Loom Alert Rules resource group — where the day-one Azure Monitor alert rules + action group are created and where the Azure-native Activator writes scheduled-query alerts. Empty defaults to the admin resource group (resourceGroup().name) so LOOM_ALERT_RG is always wired day-one (no manual config). Override only to target a separate alerts RG.')
 param loomAlertRg string = ''
 
 @description('ARM management endpoint. Empty defaults to https://management.azure.com (Commercial). Set to https://management.usgovcloudapi.net for GCC-High / IL5.')
@@ -870,8 +870,8 @@ param loomAzureMapsKeySecretName string = 'loom-azure-maps-primary-key'
 @description('Purview account name (short, NOT full URL) — e.g. "purview-csa-loom-eastus2". When empty, /admin/security Purview tab + /api/items/data-product/*/register-purview return HTTP 503 with a structured remediation hint.')
 param loomPurviewAccount string = ''
 
-@description('Enable Microsoft Information Protection (sensitivity labels / label policies) calls via Microsoft Graph. Requires the Console UAMI to have InformationProtectionPolicy.Read.All admin-consented. When false, /admin/security Information Protection tab returns 503.')
-param loomMipEnabled bool = false
+@description('Enable Microsoft Information Protection (sensitivity labels / label policies + /admin/batch-labeling real MIP labels) calls via Microsoft Graph. DEFAULTS ON (opt-out): the post-deploy bootstrap grants the Console UAMI InformationProtectionPolicy.Read.All by default, so the surface uses real labels day-one once a Tenant Administrator issues admin consent (until then the tab renders the honest 503 NotConfigured MessageBar, never an empty stub). When false, /admin/security Information Protection + batch-labeling MIP labels are suppressed.')
+param loomMipEnabled bool = true
 
 @description('Enable sensitivity-label + label-policy CRUD (create/edit/delete) via the SCC PowerShell sidecar. Deploys azure-functions/scc-labels and wires LOOM_MIP_ADMIN_ENABLED / LOOM_SCC_LABELS_ENDPOINT / LOOM_SCC_LABELS_KEY into the Console. The sidecar needs the SCC app (Exchange.ManageAsApp + Compliance Administrator) + auth cert provisioned in post-deploy bootstrap. When false (default), label/policy READS still work but CRUD returns the honest 503 mip_admin_not_configured gate.')
 param loomMipAdminEnabled bool = false
@@ -1072,9 +1072,9 @@ param loomBackends object = {
 @description('Azure region of the AAS server (e.g. eastus2). Used by the DirectQuery source binder; falls back to the deployment location.')
 param loomAasRegion string = location
 
-@description('Azure Analysis Services SKU when loomSemanticBackend=analysis-services. B1=Basic (cheapest with SLA), S0=Standard, D1=Developer (no SLA). AAS is Commercial/GCC only — never deployed at GCC-High / IL5 (the orchestrator guards on boundary).')
-@allowed(['B1', 'B2', 'S0', 'S1', 'S2', 'S4', 'D1'])
-param loomAasSku string = 'B1'
+@description('Azure Analysis Services SKU when loomSemanticBackend=analysis-services. Standard tier only — S0 is the cheapest Standard SKU and is broadly available. Developer (D1) and Basic (B1/B2) tiers are excluded because they are not offered in many regions (centralus exposes only S0, S1, S2, S4, S8v2, S9v2). AAS is Commercial/GCC only — never deployed at GCC-High / IL5 (the orchestrator guards on boundary).')
+@allowed(['S0', 'S1', 'S2', 'S4', 'S8v2', 'S9v2'])
+param loomAasSku string = 'S0'
 
 @description('Pre-existing AAS server URL (asazure://<region>.asazure.windows.net/<name>) to wire as LOOM_AAS_SERVER_URL instead of deploying a new server. Leave empty to let analysis-services.bicep create one (requires loomSemanticBackend=analysis-services on a Commercial/GCC boundary). Power BI Premium XMLA users set LOOM_POWERBI_XMLA_ENDPOINT directly instead.')
 param loomAasServerUrl string = ''
@@ -1091,9 +1091,9 @@ param loomAasResourceGroup string = ''
 @description('Service-principal client id (appId) made an AAS server admin for data-plane XMLA (RLS/OLS role authoring via LOOM_AAS_CLIENT_ID/SECRET). Empty = the Console UAMI is the sole AAS admin (composite-model path). Store the SPN secret in Key Vault and wire LOOM_AAS_CLIENT_SECRET as a secretRef.')
 param aasSpnClientId string = ''
 
-@description('Azure Analysis Services SKU. D1 = Developer (no SLA, test). B/S = Basic/Standard (prod).')
-@allowed(['D1', 'B1', 'B2', 'S0', 'S1', 'S2', 'S4', 'S8', 'S9'])
-param aasSku string = 'D1'
+@description('Azure Analysis Services SKU for the composite-model server. Standard tier only — S0 is the smallest/cheapest Standard SKU and is broadly available across regions. The Developer (D1) and Basic (B1/B2) tiers are NOT offered in many regions (e.g. centralus exposes only S0, S1, S2, S4, S8v2, S9v2), so they are no longer selectable here to avoid SkuNotAvailable on a day-one deploy. S8v2 / S9v2 are the v2 high-QPU SKUs.')
+@allowed(['S0', 'S1', 'S2', 'S4', 'S8v2', 'S9v2'])
+param aasSku string = 'S0'
 
 
 
@@ -1138,6 +1138,31 @@ module monitoring 'monitoring.bicep' = {
   }
 }
 
+// Day-one DEFAULT Azure Monitor alert rules + action group (opt-out). Lands in
+// THIS admin RG, which is the LOOM_ALERT_RG default (LOOM_ALERT_RG =
+// resourceGroup().name when loomAlertRg is empty — see the apps[] env below), so
+// the /monitor Alerts surface (lib/azure/monitor-client.listScheduledQueryRules,
+// scoped to LOOM_ALERT_RG) finds these rules out of the box. Azure-native
+// Activator parity — no Microsoft Fabric required (no-fabric-dependency.md).
+// (If an operator overrides loomAlertRg to a SEPARATE RG, the default set still
+// installs here in the admin RG; they manage alerts in their chosen RG and the
+// always-on Monitoring Contributor grant + the Activator wizard cover that path.)
+module defaultAlerts 'monitoring-default-alerts.bicep' = {
+  name: 'monitoring-default-alerts'
+  params: {
+    location: location
+    complianceTags: complianceTags
+    lawId: monitoring.outputs.lawId
+    consoleAppName: 'loom-console'
+    // No admin email param day-one (keeps the admin-plane module under the
+    // 256 ARM/Bicep parameter limit). The default rules notify subscription
+    // Owners (the admin group) via the ARM-role receiver; an operator adds an
+    // email/SMS/webhook receiver to the loom-default-alerts action group from
+    // the /monitor Alerts editor. Opt-out via the module's skipDefaultAlerts.
+    notifyOwners: true
+  }
+}
+
 // =====================================================================
 // 2. Network foundation
 // =====================================================================
@@ -1156,6 +1181,11 @@ module network 'network.bicep' = {
     consolePrincipalId: identity.outputs.uamiConsolePrincipalId
     skipRoleGrants: skipRoleGrants
     firewallEnabled: firewallEnabled
+    // Reconcile passes (skipRoleGrants=true) are exactly the redeploys where a
+    // firewall-policy re-PUT trips FirewallPolicyUpdateFailed ("faulted referenced
+    // firewalls"). Reuse that signal so the network module references the EXISTING
+    // policy instead of re-PUTing it — no extra top-level param needed.
+    firewallPolicyReconcile: skipRoleGrants
   }
 }
 
@@ -1236,7 +1266,14 @@ module entraAppReg 'entra-app-registration.bicep' = if (loomMsalAppRegEnabled &&
   params: {
     location: location
     appDisplayName: 'CSA Loom Console (${resourceGroup().name})'
-    consoleHosts: loomMsalAppRegConsoleHosts
+    // Pass the param hosts UNIONed with the live Front Door endpoint host so the
+    // app registration registers https://<front-door>/auth/callback up front.
+    // INCIDENT 2026-06-17: real users reach the console through Azure Front Door,
+    // so the browser sends the FD host as redirect_uri. Registering only the ACA
+    // ingress host caused AADSTS50011 redirect-URI mismatch → login dead. The
+    // script merges (never overwrites) redirect URIs, so passing the FD host here
+    // is additive and safe. (fdOn ⇒ frontDoor module deployed ⇒ host available.)
+    consoleHosts: effectiveMsalConsoleHosts
     existingClientId: loomMsalClientId
     scriptIdentityId: loomMsalAppRegScriptIdentityId
     scriptSubnetId: loomMsalAppRegScriptSubnetId
@@ -1252,6 +1289,11 @@ var loomMsalAppRegEnabled = bool(loomMsalAppReg.?enabled ?? true)
 var loomMsalAppRegScriptIdentityId = string(loomMsalAppReg.?scriptIdentityId ?? '')
 var loomMsalAppRegScriptSubnetId = string(loomMsalAppReg.?scriptSubnetId ?? '')
 var loomMsalAppRegConsoleHosts = string(loomMsalAppReg.?consoleHosts ?? '')
+// Union the configured console hosts with the live Front Door endpoint host so
+// the in-bicep app-registration script registers the Front Door /auth/callback
+// (the real user-facing host) — not just the ACA ingress FQDN. See INCIDENT
+// 2026-06-17 note on the entraAppReg module call above.
+var effectiveMsalConsoleHosts = fdOn ? (empty(loomMsalAppRegConsoleHosts) ? frontDoor.outputs.frontDoorEndpointHostName : '${loomMsalAppRegConsoleHosts},${frontDoor.outputs.frontDoorEndpointHostName}') : loomMsalAppRegConsoleHosts
 
 // Effective MSAL client id: an explicit loomMsalClientId (BYO existing app)
 // wins; otherwise the app-registration the entra-app-registration script
@@ -1263,7 +1305,27 @@ var effectiveMsalClientId = !empty(loomMsalClientId) ? loomMsalClientId : (msalA
 // secretRef) when the script provisioned them into Key Vault; otherwise inline
 // (explicit param value / stable per-RG GUID) so day-one bicep-only deploys
 // still mint sessions.
-var msalSecretKvBacked = msalAppRegProvisioned && empty(loomMsalClientSecret)
+//
+// INCIDENT (recurring, GH #1470): the loom-msal-client-secret Container App
+// secret was baked as a LITERAL (keyVaultUrl null) on every estate where the
+// MSAL secret was NOT provisioned by the in-bicep script
+// (msalAppRegProvisioned=false → the post-deploy bootstrap writes it to KV
+// instead). The bootstrap step ROTATES the Entra client secret + writes the new
+// value to KV on every run, but a literal Container App secret keeps emitting
+// the OLD value → AADSTS7000215 invalid_client → interactive login loops after
+// each bootstrap run. The durable fix: make the secret a Key Vault REFERENCE
+// (unversioned secret URI → Container Apps resolves the LATEST version on each
+// new revision) whenever the deployment is wiring an MSAL client id AND the
+// caller did not pin an explicit literal secret. Both provisioning paths (the
+// in-bicep entra-app-registration script AND the post-deploy bootstrap) write
+// the secret to KV under the same name (loom-msal-client-secret), so the KV
+// reference is valid in either case; a rotation then propagates on the next
+// revision roll. Only a BYO explicit literal secret (loomMsalClientSecret set)
+// stays inline. The condition below KV-backs whenever no explicit literal was
+// pinned AND the app-reg flow is the source of the secret (in-bicep script
+// provisioned it, OR the flag is on so the bootstrap writes/rotates it in KV);
+// when neither holds the prior inline behaviour is preserved.
+var msalSecretKvBacked = empty(loomMsalClientSecret) && (msalAppRegProvisioned || loomMsalAppRegEnabled)
 var sessionSecretKvBacked = msalAppRegProvisioned && empty(loomSessionSecret)
 
 // Console's own `loom` Cosmos — HUB-scoped. Only deployed in tenant/dlz-attach
@@ -1586,14 +1648,25 @@ module aas 'analysis-services.bicep' = if (aasEnabled) {
     location: location
     serverName: 'aasloom${uniqueString(resourceGroup().id)}'
     skuName: aasSku
-    skuTier: aasSku == 'D1' ? 'Development' : (startsWith(aasSku, 'B') ? 'Basic' : 'Standard')
+    // All selectable aasSku values are Standard-tier (D1/B1/B2 removed — not
+    // available in many regions, e.g. centralus). AAS rejects a server whose
+    // sku.tier does not match the sku.name family, so this is always 'Standard'.
+    skuTier: 'Standard'
     aasDatabase: 'LoomComposite'
     consolePrincipalId: identity.outputs.uamiConsolePrincipalId
     // RLS/OLS Security tab: when an operator supplies a dedicated SPN it becomes
     // the AAS data-plane admin (LOOM_AAS_CLIENT_ID authors roles over XMLA).
     // Otherwise the Console UAMI is the sole admin (composite-model path).
     aasAdminUpn: !empty(aasSpnClientId) ? 'app:${aasSpnClientId}@${tenant().tenantId}' : 'app:${identity.outputs.uamiConsoleClientId}@${tenant().tenantId}'
-    skipRoleGrants: skipRoleGrants
+    // IMPORTANT: this `aas` (composite-model) module and the `aasServer`
+    // (import-mode) module below BOTH resolve to the SAME physical AAS server —
+    // both use server name `aasloom${uniqueString(resourceGroup().id)}`. If both
+    // were allowed to grant the Console UAMI Reader, Azure would dedupe on
+    // (principal,role,scope) and fail the second with RoleAssignmentExists
+    // (pass-6 centralus deploy 2026-06-17). aas-server.bicep is the SINGLE owner
+    // of the Reader grant on this shared server, so force-skip the grant here.
+    // (The server-admin XMLA membership is data-plane, set independently below.)
+    skipRoleGrants: true
     tags: complianceTags
   }
 }
@@ -2521,6 +2594,10 @@ module appDeployments 'app-deployments.bicep' = if (containerPlatform == 'contai
             // other boundaries pass through verbatim (Commercial | GCC | GCC-High).
             { name: 'LOOM_CLOUD', value: boundary == 'IL5' ? 'GCC-High' : boundary }
             { name: 'AZURE_TENANT_ID', value: loomMsalTenantId }
+            // LOOM_MSAL_TENANT_ID is an alias of AZURE_TENANT_ID (self-audit anyOf:
+            // AZURE_TENANT_ID | LOOM_MSAL_TENANT_ID). Set it on day one so the
+            // env-config surface shows it satisfied rather than a false gap.
+            { name: 'LOOM_MSAL_TENANT_ID', value: loomMsalTenantId }
             { name: 'LOOM_COSMOS_ENDPOINT', value: !empty(loomCosmosAccount) ? 'https://${loomCosmosAccount}.documents.${environment().suffixes.storage == 'core.usgovcloudapi.net' ? 'azure.us' : 'azure.com'}:443/' : '' }
             { name: 'LOOM_COSMOS_DATABASE', value: 'loom' }
             // Direct-Lake-shim (Azure-native parity for Fabric Direct Lake).
@@ -3146,6 +3223,12 @@ module appDeployments 'app-deployments.bicep' = if (containerPlatform == 'contai
             // otherwise fall back to the shared Hub's project (ai-foundry.bicep).
             // Empty when neither is deployed.
             { name: 'LOOM_FOUNDRY_PROJECT_ENDPOINT', value: agentFoundryEnabled ? agentFoundry!.outputs.projectEndpoint : ((aiFoundryEnabled && empty(existingFoundryAccountName)) ? aiFoundry!.outputs.projectEndpoint : '') }
+            // Foundry ACCOUNT-level endpoint (alias of the project endpoint for
+            // self-audit's anyOf: LOOM_AOAI_ENDPOINT | LOOM_FOUNDRY_PROJECT_ENDPOINT
+            // | LOOM_FOUNDRY_ENDPOINT). Sourced from the dedicated Agent Service
+            // account (aoaiEndpoint) when present, else the shared Foundry hub's
+            // AI Services account endpoint. Empty when neither is deployed.
+            { name: 'LOOM_FOUNDRY_ENDPOINT',         value: agentFoundryEnabled ? agentFoundry!.outputs.aoaiEndpoint : ((aiFoundryEnabled && empty(existingFoundryAccountName)) ? aiFoundry!.outputs.aiServicesEndpoint : (!empty(existingFoundryAccountName) ? byoFoundryEndpoint : '')) }
             { name: 'LOOM_FOUNDRY_PROJECT_ID',       value: agentFoundryEnabled ? agentFoundry!.outputs.projectId : ((aiFoundryEnabled && empty(existingFoundryAccountName)) ? aiFoundry!.outputs.projectId : '') }
             { name: 'LOOM_FOUNDRY_PROJECT_NAME',     value: agentFoundryEnabled ? agentFoundry!.outputs.projectNameOut : '' }
             // AOAI inference endpoint + model deployment names for the Agent
@@ -3156,12 +3239,20 @@ module appDeployments 'app-deployments.bicep' = if (containerPlatform == 'contai
             // deploy — the deployment is then discovered from the hub connections
             // by resolveAoaiTarget()).
             { name: 'LOOM_AOAI_ENDPOINT',          value: agentFoundryEnabled ? agentFoundry!.outputs.aoaiEndpoint : (!empty(existingFoundryAccountName) ? byoFoundryEndpoint : ((aiFoundryEnabled && empty(existingFoundryAccountName)) ? aiFoundry!.outputs.aoaiInferenceEndpoint : '')) }
-            { name: 'LOOM_AOAI_CHAT_DEPLOYMENT',   value: agentFoundryEnabled ? agentFoundry!.outputs.chatDeployment : byoFoundryChatDeployment }
+            // Deployment-name resolution order: dedicated Agent Service account
+            // (agentFoundry, default on) → an explicit BYO deployment → the shared
+            // Foundry hub's default model (ai-foundry.bicep now deploys gpt-4o-mini
+            // on its AIServices account by default). The hub fallback is what makes
+            // LOOM_AOAI_ENDPOINT (already wired to aiFoundry's inference endpoint
+            // below) actually resolve a model on a hub-only / partial deploy — the
+            // exact gap that left the live estate's aoai-csa-loom account with NO
+            // deployment and the self-audit warning "No AOAI model deployment resolved".
+            { name: 'LOOM_AOAI_CHAT_DEPLOYMENT',   value: agentFoundryEnabled ? agentFoundry!.outputs.chatDeployment : (!empty(byoFoundryChatDeployment) ? byoFoundryChatDeployment : ((aiFoundryEnabled && empty(existingFoundryAccountName)) ? aiFoundry!.outputs.defaultChatDeploymentName : '')) }
             // The copilot/data-agent orchestrators read LOOM_AOAI_DEPLOYMENT (not
             // the _CHAT_ variant) to resolve the model — keep both in sync so the
             // Copilot/data-agent chat works out of the box (the "no AOAI model"
             // gap was exactly this name mismatch on the live deploy).
-            { name: 'LOOM_AOAI_DEPLOYMENT',        value: agentFoundryEnabled ? agentFoundry!.outputs.chatDeployment : byoFoundryChatDeployment }
+            { name: 'LOOM_AOAI_DEPLOYMENT',        value: agentFoundryEnabled ? agentFoundry!.outputs.chatDeployment : (!empty(byoFoundryChatDeployment) ? byoFoundryChatDeployment : ((aiFoundryEnabled && empty(existingFoundryAccountName)) ? aiFoundry!.outputs.defaultChatDeploymentName : '')) }
             // AOAI Chat Completions API version. resolveAoaiTarget() reads
             // process.env.LOOM_AOAI_API_VERSION (default 2024-10-21). Exposing it
             // here lets operators advance the version (e.g. for o-series reasoning
@@ -3603,6 +3694,11 @@ module frontDoor 'front-door.bicep' = if (frontDoorEnabled && containerPlatform 
     caeDefaultDomain: containerPlatformModule.outputs.caeDefaultDomain
     consoleFqdn: 'loom-console.${containerPlatformModule.outputs.caeDefaultDomain}'
     vanityDomain: loomVanityDomain
+    // Auto-approve the FD -> ACA env Private Link connection so a clean deploy is
+    // end-to-end functional (no manual portal "Approve"; otherwise FD 504s until
+    // approved). The Console UAMI holds Network Contributor on this admin-plane RG
+    // (network.bicep F15), which can approve the PE connection on the CAE.
+    scriptIdentityId: identity.outputs.uamiConsoleId
     complianceTags: complianceTags
   }
 }
@@ -3716,9 +3812,23 @@ module aasShim 'aas.bicep' = if (loomDirectLakeShimEnabled && !empty(loomDlzRg) 
 // Item-level Share — constrained RBAC-Admin on the SQL server's RG so the
 // per-database Share dialog can assign Reader/Contributor/SQL DB Contributor
 // at the Microsoft.Sql/servers/databases scope (ABAC-limited to those roles).
-module sqlDatabaseShareRbac 'sql-database-share-rbac.bicep' = if (!skipRoleGrants) {
+//
+// COLLISION GUARD: this grant and workspaceRbac (above) both assign the SAME
+// role — Role Based Access Control Administrator — to the SAME principal (the
+// Console UAMI). Azure dedupes role assignments by (principal, role, scope),
+// NOT by name, so two RBAC-Admin assignments to the UAMI at the same RG fail the
+// second one with `RoleAssignmentExists` (the centralus round-2 symptom, since
+// loomSqlServerRg defaults to empty → this resolves to loomDlzRg, the very RG
+// workspaceRbac targets). To stay idempotent on a fresh deploy we deploy THIS
+// grant only when its RG is DISTINCT from the workspaceRbac RG; when they
+// coincide, workspaceRbac's ABAC condition already includes SQL DB Contributor,
+// so the single grant serves both the Manage Access and per-DB Share features.
+var sqlShareRg = !empty(loomSqlServerRg) ? loomSqlServerRg : loomDlzRg
+var workspaceRbacDeployed = !empty(loomDlzRg) && !skipRoleGrants
+var sqlShareRgDistinct = !workspaceRbacDeployed || (toLower(sqlShareRg) != toLower(loomDlzRg))
+module sqlDatabaseShareRbac 'sql-database-share-rbac.bicep' = if (!skipRoleGrants && !empty(sqlShareRg) && sqlShareRgDistinct) {
   name: 'console-sql-database-share-rbac'
-  scope: resourceGroup(!empty(loomSqlServerRg) ? loomSqlServerRg : loomDlzRg)
+  scope: resourceGroup(sqlShareRg)
   params: {
     consolePrincipalId: identity.outputs.uamiConsolePrincipalId
     skipRoleGrants: skipRoleGrants
@@ -3805,9 +3915,11 @@ resource grafana 'Microsoft.Dashboard/grafana@2023-09-01' = if (managedGrafanaEn
   }
 }
 
-// Grafana Viewer (60750a24-ce75-4119-aa84-5b8f3c5db3e0) for the Console UAMI —
+// Grafana Viewer (60921a7e-fef1-4a43-9b16-a26c52ad4769) for the Console UAMI —
 // granted via a module (a role-assignment name must be calculable at deploy
-// start, which a module output is not, but a module param is).
+// start, which a module output is not, but a module param is). NOTE: the role
+// GUID lives in grafana-rbac.bicep; the previously-cited 60750a24-… is NOT a
+// valid built-in role and caused RoleDefinitionDoesNotExist — corrected there.
 module grafanaViewer 'grafana-rbac.bicep' = if (managedGrafanaEnabled) {
   name: 'console-grafana-viewer'
   params: {
@@ -3839,8 +3951,16 @@ output mcpBridgeUrl string = containerPlatform == 'containerApps'
 output builtinMcpUrl string = builtinMcpUrl
 output builtinMcpApiKeySecretName string = loomBuiltinMcpActive ? loomBuiltinMcpApiKeySecretName : ''
 
+// Purview endpoint uses the catalog module's own purviewEndpoint output (which
+// is built from the SELF-HEALED purview region — catalog.bicep falls back to a
+// Purview-supported region when the hub `location`, e.g. centralus, is not in the
+// Purview availability set). Recomputing with `${location}` here would emit the
+// wrong host for an unsupported hub region. Falls back to the location-derived
+// host only when purviewEndpoint is empty (purview disabled).
 output catalogEndpoint string = catalogPrimary == 'purview'
-  ? 'https://purview-csa-loom-${location}.purview.azure.${boundary == 'GCC-High' || boundary == 'IL5' ? 'us' : 'com'}'
+  ? (!empty(catalog.outputs.purviewEndpoint)
+      ? catalog.outputs.purviewEndpoint
+      : 'https://purview-csa-loom-${location}.purview.azure.${boundary == 'GCC-High' || boundary == 'IL5' ? 'us' : 'com'}')
   : (catalogPrimary == 'unity-catalog-managed'
       ? 'https://adb-csa-loom-${location}.azuredatabricks.${boundary == 'GCC-High' || boundary == 'IL5' ? 'us' : 'net'}'
       : 'https://atlas-csa-loom.${location}.aks.csa-loom.internal')

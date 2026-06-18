@@ -40,8 +40,8 @@ param privateEndpointSubnetId string
 @description('Private DNS zone resource ID for privatelink.adf.azure.com (commercial) — must be linked to hub + spoke VNets. Empty = the PE registers but its DNS zone group is skipped (the factory still provisions; DNS resolves once the zone is added). Decoupled so a missing zone no longer silently skips the whole factory.')
 param adfPrivateDnsZoneId string = ''
 
-@description('Log Analytics workspace ID for diagnostic settings.')
-param workspaceId string
+@description('Log Analytics workspace ID for diagnostic settings. Empty (dlz-attach with no hub LAW coordinate) skips the diagnostic settings.')
+param workspaceId string = ''
 
 @description('Compliance tags applied to every resource.')
 param complianceTags object
@@ -205,7 +205,7 @@ resource adfStorageBlobContributor 'Microsoft.Authorization/roleAssignments@2022
 // Diagnostic settings → standardized Loom LAW
 // =====================================================================
 
-resource diag 'Microsoft.Insights/diagnosticSettings@2021-05-01-preview' = {
+resource diag 'Microsoft.Insights/diagnosticSettings@2021-05-01-preview' = if (!empty(workspaceId)) {
   scope: adf
   name: 'diag-loom-stdz'
   properties: {

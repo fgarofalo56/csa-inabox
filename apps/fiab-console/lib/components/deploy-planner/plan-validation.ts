@@ -3,7 +3,7 @@
  * warnings) and the server sanitizer (so persisted edges always reference real
  * nodes). No render, so it runs in the default node vitest env.
  */
-import { serviceByKey } from './service-catalog';
+import { serviceByKey, configStatus } from './service-catalog';
 import type { PlanSubscription, PlanEdge } from './types';
 
 export interface PlanIssue {
@@ -65,7 +65,9 @@ export function validatePlan(subs: PlanSubscription[]): PlanIssue[] {
     } else if (totalServices === 0) {
       issues.push({ level: 'warning', message: `“${sub.name}” has no services planned yet.` });
     }
-    // plan-only services are not auto-provisioned by main.bicep
+    // plan-only services are not auto-provisioned by main.bicep; configurable
+    // services with invalid stored values (or never reviewed) are flagged so a
+    // complete, intentional deployment is the explicit goal.
     for (const dom of sub.domains) {
       for (const key of dom.services) {
         const def = serviceByKey(key);
@@ -73,6 +75,19 @@ export function validatePlan(subs: PlanSubscription[]): PlanIssue[] {
           issues.push({
             level: 'warning',
             message: `“${def.label}” in ${sub.name}/${dom.name} is plan-only — it is not deployed by the exported bicepparam (provision it separately).`,
+          });
+          continue;
+        }
+        const status = configStatus(key, sub.serviceConfigs?.[key]);
+        if (status === 'invalid') {
+          issues.push({
+            level: 'error',
+            message: `“${def?.label || key}” in ${sub.name}/${dom.name} has an invalid configuration value — open it and fix the flagged field before export.`,
+          });
+        } else if (status === 'default') {
+          issues.push({
+            level: 'warning',
+            message: `“${def?.label || key}” in ${sub.name}/${dom.name} still uses default SKU/tier — select it to review its configuration.`,
           });
         }
       }

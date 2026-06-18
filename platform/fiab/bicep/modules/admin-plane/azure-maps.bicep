@@ -40,6 +40,19 @@ param keyVaultId string
 @description('Compliance tags')
 param complianceTags object
 
+@description('''Allowed CORS origins for the Maps account data plane (the SPA
+tile-preview path calls the Maps REST API from the browser). Per the Azure Maps
+CORS schema each entry must be a CONCRETE origin (scheme://host[:port]) — a
+wildcard-subdomain host like `https://*.b02.azurefd.net` is NOT a valid origin
+and ARM rejects it (InvalidParameter: allowedOrigins has an invalid type). To
+allow the Loom Front Door front end, pass its concrete endpoint origin (e.g.
+`https://loom-xxxxx.z01.azurefd.net`). Default is `['*']` (the schema-sanctioned
+allow-all token) so day-one tile preview works before the FD endpoint host is
+known; tighten to the concrete origin once the Front Door endpoint is provisioned.
+Grounded in Microsoft Learn (azure-maps-authentication#cross-origin-resource-sharing-cors
+and the @azure/arm-maps CorsRule.allowedOrigins contract).''')
+param allowedCorsOrigins array = ['*']
+
 var mapsAccountName = 'maps-csa-loom-${uniqueString(resourceGroup().id)}'
 
 // Azure Maps account
@@ -49,10 +62,19 @@ resource mapsAccount 'Microsoft.Maps/accounts@2024-07-01-preview' = if (boundary
   tags: complianceTags
   sku: { name: sku }
   kind: 'Gen2'
-  identity: { type: 'SystemAssigned' }
+  // NO managed identity: Azure Maps accounts are GLOBAL (location:'global') and
+  // a global-location resource CANNOT host a managed identity — ARM rejects it
+  // with "UnsupportedLocation: Global location does not support Managed Identity"
+  // (pass-6 centralus deploy 2026-06-17). The account does not need a system MI
+  // for Loom's usage: the Console calls Maps with its OWN UAMI (granted Azure
+  // Maps Data Reader below for AAD calls) plus the primary key (stashed in Key
+  // Vault for the SPA tile-preview path). The Maps account MI principalId is not
+  // referenced by any role assignment, so removing it is safe.
   properties: {
     disableLocalAuth: false                              // SPA preview still needs key auth
-    cors: { corsRules: [{ allowedOrigins: ['https://*.b02.azurefd.net'] }] }
+    // allowedOrigins must be concrete origins or the '*' allow-all token — never
+    // a wildcard-subdomain host (ARM InvalidParameter). See allowedCorsOrigins.
+    cors: { corsRules: [{ allowedOrigins: allowedCorsOrigins }] }
     // Atlas is a public-only multi-tenant service — there is no PE for
     // Microsoft.Maps/accounts. `publicNetworkAccess` is NOT a valid
     // property on this resource type (the resource is always public).

@@ -54,6 +54,8 @@ export interface CopilotChatPaneProps {
   activeCellId: string | null;
   attachedSources: AttachedSource[];
   defaultLang: NotebookCellLang;
+  /** Cluster runtime (databricks | synapse-spark | azure-ml) — grounds Copilot syntax. */
+  runtime?: string;
   /** Notebook display name — grounds the persona system prompt. */
   notebookName?: string;
   /** Livy session-create receipt (id, numExecutors, …) — for /perf telemetry. */
@@ -169,7 +171,7 @@ function segments(text: string): { type: 'text' | 'code'; value: string }[] {
 
 export function CopilotChatPane({
   open, onOpenChange, notebookId, workspaceId, cells, activeCellId, attachedSources, defaultLang,
-  notebookName, sessionReceipt, sessionConfig, onApplyCells,
+  runtime, notebookName, sessionReceipt, sessionConfig, onApplyCells,
 }: CopilotChatPaneProps) {
   const s = useStyles();
   const [messages, setMessages] = useState<ChatMessage[]>([]);
@@ -297,6 +299,7 @@ export function CopilotChatPane({
             cells: ctx,
             activeCellId: active,
             lang: activeCell.lang || defaultLang,
+            runtime,
             errorText,
             text: freeText,
             attachedSources,
@@ -373,7 +376,7 @@ export function CopilotChatPane({
       }
     },
     [streaming, contextCells, cells, activeCellId, defaultLang, attachedSources, notebookId, workspaceId,
-     notebookName, sessionReceipt, sessionConfig],
+     notebookName, sessionReceipt, sessionConfig, runtime],
   );
 
   const onKeyDown = useCallback(

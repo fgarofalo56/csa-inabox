@@ -198,6 +198,52 @@ function isDlpSegmentUnavailable(e: unknown): boolean {  if (!(e instanceof DlpE
   return e.status === 400 && /Resource not found for the segment|dataLossPrevention/i.test(msg);
 }
 
+/**
+ * Honest gate for the Graph Security app-role gap on the alerts_v2 path. When
+ * the Console UAMI holds LOOM_DLP_ENABLED but the SecurityAlert.Read.All /
+ * SecurityIncident.Read.All AppRoles are NOT granted+consented, Graph rejects
+ * /v1.0/security/alerts_v2 with 401/403 and a body that reads
+ * "Missing application roles: SecurityAlert.Read.All, SecurityAlert.ReadWrite.All,
+ *  SecurityIncident.Read.All, SecurityIncident.ReadWrite.All". We surface that as
+ * a configured-but-unconsented gate naming the exact roles + the bootstrap step
+ * that grants them, instead of leaking the raw 403 as "Could not load violations".
+ */
+function graphSecurityRoleHint(status: number): DlpNotConfiguredHint {
+  const h = notConfiguredHint('LOOM_DLP_ENABLED');
+  h.rolesRequired = [
+    {
+      name: 'SecurityAlert.Read.All',
+      appRoleId: 'bf394140-e372-4bf9-a898-299cfc7564e5',
+      scope: 'Microsoft Graph (app permission, admin-consented)',
+      reason: 'Required to read DLP alerts/violations via /v1.0/security/alerts_v2.',
+    },
+    {
+      name: 'SecurityIncident.Read.All',
+      appRoleId: '45cc0394-e837-488b-a098-1918f48d186c',
+      scope: 'Microsoft Graph (app permission, admin-consented)',
+      reason: 'Graph names this role alongside SecurityAlert on the alerts_v2 403; both are needed to clear the gate.',
+    },
+  ];
+  h.bicepStatus =
+    `LOOM_DLP_ENABLED=true, but Microsoft Graph answered ${status} on /v1.0/security/alerts_v2 — ` +
+    'the Console UAMI is missing the Graph Security application roles SecurityAlert.Read.All and ' +
+    'SecurityIncident.Read.All (or admin consent has not been issued for them).';
+  h.followUp =
+    'Run scripts/csa-loom/grant-graph-approles.sh (the csa-loom-post-deploy-bootstrap "Grant MIP+DLP Graph AppRoles" step grants both roles), ' +
+    'then have a Tenant Administrator click Entra ID → Enterprise applications → Console UAMI → Permissions → ' +
+    '"Grant admin consent for <tenant>". DLP violations load automatically once consent lands. Read-only roles ' +
+    '(Read.All) are sufficient — the panel performs no write/remediation against Graph Security.';
+  return h;
+}
+
+/** True when a Graph alerts_v2 error is an authorization/role-consent failure. */
+function isGraphSecurityRoleMissing(e: unknown): boolean {
+  if (!(e instanceof DlpError)) return false;
+  if (e.status !== 401 && e.status !== 403) return false;
+  const msg = (e.message || '') + ' ' + JSON.stringify(e.body || '');
+  return /Missing application roles|SecurityAlert|SecurityIncident|Authorization_RequestDenied|insufficient privileges/i.test(msg);
+}
+
 // ============================================================
 // Low-level fetch
 // ============================================================
@@ -395,7 +441,15 @@ export async function listDlpAlerts(opts: { top?: number; sinceIso?: string } = 
   const qs = new URLSearchParams({ $top: String(top), $filter: filter, $orderby: 'createdDateTime desc' });
   const endpoint = `/v1.0/security/alerts_v2?${qs.toString()}`;
   const res = await graphFetch(endpoint);
-  const j = await readJson<{ value?: any[] }>(res, endpoint);
+  let j: { value?: any[] } | null;
+  try {
+    j = await readJson<{ value?: any[] }>(res, endpoint);
+  } catch (e) {
+    if (isGraphSecurityRoleMissing(e)) {
+      throw new DlpNotConfiguredError(graphSecurityRoleHint((e as DlpError).status));
+    }
+    throw e;
+  }
   return (j?.value || []).map((raw): DlpAlert => ({
     id: raw?.id,
     title: raw?.title,
@@ -436,7 +490,15 @@ export async function listDlpViolations(
   });
   const endpoint = `/v1.0/security/alerts_v2?${qs.toString()}`;
   const res = await graphFetch(endpoint);
-  const j = await readJson<{ value?: any[] }>(res, endpoint);
+  let j: { value?: any[] } | null;
+  try {
+    j = await readJson<{ value?: any[] }>(res, endpoint);
+  } catch (e) {
+    if (isGraphSecurityRoleMissing(e)) {
+      throw new DlpNotConfiguredError(graphSecurityRoleHint((e as DlpError).status));
+    }
+    throw e;
+  }
   const out = (j?.value || []).map((raw): DlpViolation => {
     const ev: any[] = Array.isArray(raw?.evidences) ? raw.evidences : (Array.isArray(raw?.evidence) ? raw.evidence : []);
     const add = raw?.additionalData || raw?.additionalDetails || {};

@@ -190,24 +190,47 @@ describe('/api/admin/domains', () => {
     expect(r.status).toBe(401);
   });
 
-  it('GET seeds an empty domain list and surfaces the Purview honest gate', async () => {
+  it('GET returns the domain list WITHOUT blocking on the Purview probe', async () => {
+    // The domains list GET is decoupled from the Purview Data Map probe (a slow
+    // 403 over a private endpoint used to push it past the client timeout). It
+    // must return the list fast and carry NO `purview` field — that now lives on
+    // the separate /purview-status endpoint the page fetches lazily.
     const { GET } = await import('@/app/api/admin/domains/route');
     const r = await GET();
     const j = await r.json();
     expect(r.status).toBe(200);
     expect(j.ok).toBe(true);
-    expect(j.domains).toEqual([]);
+    expect(Array.isArray(j.domains)).toBe(true);
+    expect(j.purview).toBeUndefined();
+    // Crucially, the Purview Data Map probe is NOT invoked on the list path.
+    expect(listBusinessDomainsMock).not.toHaveBeenCalled();
+  });
+
+  it('purview-status GET surfaces the Purview not-configured honest gate', async () => {
+    const { GET } = await import('@/app/api/admin/domains/purview-status/route');
+    const r = await GET();
+    const j = await r.json();
+    expect(r.status).toBe(200);
+    expect(j.ok).toBe(true);
     expect(j.purview.configured).toBe(false);
-    expect(j.purview.gated).toBe(true);
+    // The default mock throws PurviewNotConfiguredError → non-gated honest hint.
+    expect(j.purview.gated).toBe(false);
     expect(j.purview.hint).toMatch(/LOOM_PURVIEW_ACCOUNT/);
   });
 
-  it('GET marks Purview as configured when listBusinessDomains resolves', async () => {
+  it('purview-status GET marks Purview as configured when listBusinessDomains resolves', async () => {
     listBusinessDomainsMock.mockResolvedValue([{ id: 'g1', name: 'Finance' }]);
-    const { GET } = await import('@/app/api/admin/domains/route');
+    const { GET } = await import('@/app/api/admin/domains/purview-status/route');
     const j = await (await GET()).json();
     expect(j.purview.configured).toBe(true);
     expect(j.purview.domains[0].name).toBe('Finance');
+  });
+
+  it('purview-status GET 401 when unauthenticated', async () => {
+    getSessionMock.mockReturnValue(null);
+    const { GET } = await import('@/app/api/admin/domains/purview-status/route');
+    const r = await GET();
+    expect(r.status).toBe(401);
   });
 
   it('POST creates a domain with normalized id + owners array', async () => {

@@ -25,6 +25,7 @@ import { DomainImageChip } from '@/lib/components/domain-image-presets';
 
 interface Domain {
   id: string; name: string; description?: string; color?: string; imageKey?: string;
+  icon?: string; themeColor?: string;
   parentId?: string; workspaceCount?: number;
   contributors?: { scope: 'AllTenant' | 'AdminsOnly' | 'SpecificUsersAndGroups' };
   delegatedSettings?: { defaultSensitivityLabelName?: string; certificationEnabled?: boolean };
@@ -128,7 +129,7 @@ export default function GovernanceDomainsPage() {
           {(domains || []).map((d) => (
             <div key={d.id} className={s.card}>
               <div className={s.cardHead}>
-                <DomainImageChip imageKey={d.imageKey} fallbackColor={d.color} size={44} />
+                <DomainImageChip imageKey={d.imageKey} icon={d.icon} themeColor={d.themeColor} fallbackColor={d.color} size={44} />
                 <div style={{ minWidth: 0 }}>
                   <Subtitle2 style={{ display: 'block' }}>{d.name}</Subtitle2>
                   <Caption1 style={{ color: tokens.colorNeutralForeground3 }}>

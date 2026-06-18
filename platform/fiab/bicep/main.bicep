@@ -99,8 +99,8 @@ param purviewLocation string = ''
 @description('Purview account name (short, NOT full URL) to wire into the Loom Console. When empty, /admin/security Purview tab returns 503 with a structured remediation hint. Set this to an EXISTING Purview account name in the tenant — only one Enterprise-tier Purview is allowed per tenant, so most deployments REUSE the tenant-level account rather than provisioning a second one (which fails with `EnterpriseTenantAlreadyExists`).')
 param loomPurviewAccount string = ''
 
-@description('Enable Microsoft Information Protection reads via Microsoft Graph for the Console (sensitivity labels + label policies + apply-label evaluation). Requires the Console UAMI to be admin-consented for InformationProtectionPolicy.Read.All + SensitivityLabel.Evaluate. Defaults off — the bootstrap workflow flips the AppRoles, then operators re-deploy with this true.')
-param loomMipEnabled bool = false
+@description('Enable Microsoft Information Protection reads via Microsoft Graph for the Console (sensitivity labels + label policies + apply-label evaluation + /admin/batch-labeling real MIP labels). DEFAULTS ON (opt-out): the post-deploy bootstrap grants the Console UAMI InformationProtectionPolicy.Read.All + SensitivityLabel.Evaluate by default, so MIP labels light up day-one. A Tenant Administrator must still click "Grant admin consent" once in Entra → Enterprise applications → Console UAMI → Permissions; until consent is issued every Graph MIP call returns 403 and the surface renders the honest NotConfigured MessageBar (never an empty stub). Set false only to suppress the MIP surfaces entirely.')
+param loomMipEnabled bool = true
 
 @description('Enable sensitivity-label + label-policy CRUD (create/edit/delete) via the SCC PowerShell sidecar (azure-functions/scc-labels). Microsoft Graph has no write surface for labels/policies, so CRUD runs through Security & Compliance PowerShell with certificate-based app auth (Exchange.ManageAsApp + Compliance Administrator). Defaults off — bootstrap provisions the SCC app + auth cert, then operators re-deploy with this true. Label/policy READS work regardless; only CRUD is gated.')
 param loomMipAdminEnabled bool = false
@@ -171,8 +171,8 @@ param powerBiSku string
 // until they are supplied — see docs/fiab/v3-tenant-bootstrap.md#usage-analytics-embed.
 @description('Deploy a Power BI Embedded (A1) capacity for the Govern/Usage embedded reports (Commercial / GCC).')
 param pbiEmbeddedEnabled bool = false
-@description('Deploy Azure Managed Grafana for the Govern/Usage embedded dashboards (GCC-High / IL5).')
-param managedGrafanaEnabled bool = false
+@description('Deploy Azure Managed Grafana for the Govern/Usage embedded dashboards (GCC-High / IL5). Day-one default ON so the Govern/Usage embed surfaces resolve without a setup gate; set false to opt out.')
+param managedGrafanaEnabled bool = true
 @description('LOOM_USAGE_REPORT_KIND for /admin/usage "Open analytics". "powerbi" (Commercial/GCC), "grafana" (GCC-High/IL5), or empty (native charts only).')
 @allowed([ '', 'powerbi', 'grafana' ])
 param loomUsageReportKind string = ''
@@ -191,6 +191,27 @@ param loomGovernPbiWorkspaceId string = ''
 param loomGovernPbiReportId string = ''
 @description('Managed Grafana dashboard UID for the Govern Admin "View more" (when loomReportKind=grafana).')
 param loomGrafanaDashboardUid string = ''
+
+// ── Day-one Grafana embed defaults ────────────────────────────────────────
+// When Managed Grafana is deployed (managedGrafanaEnabled) and the operator has
+// NOT explicitly chosen a report backend, default the Govern (F2) + Usage (F21)
+// embeds to the always-deployable, Fabric-free grafana path with the stable
+// dashboard UIDs the post-deploy bootstrap creates. This closes the last two
+// self-audit warnings day-one without requiring a Power BI tenant. The Power BI
+// path is untouched: setting loomReportKind/loomUsageReportKind=powerbi (or any
+// non-empty value) wins over these defaults. The dashboards are created
+// idempotently by .github/workflows/csa-loom-post-deploy-bootstrap.yml from
+// platform/fiab/grafana/*.json using these same UIDs.
+@description('Stable Grafana dashboard UID for the day-one Governance (F2) embed. Must match platform/fiab/grafana/loom-governance.json.')
+param loomGrafanaGovernanceDashboardUidDefault string = 'loom-governance'
+@description('Stable Grafana dashboard UID for the day-one Usage (F21) embed. Must match platform/fiab/grafana/loom-usage.json.')
+param loomGrafanaUsageDashboardUidDefault string = 'loom-usage'
+
+var grafanaEmbedDayOne = managedGrafanaEnabled && !pbiEmbeddedEnabled
+var effectiveLoomReportKind = !empty(loomReportKind) ? loomReportKind : (grafanaEmbedDayOne ? 'grafana' : '')
+var effectiveLoomUsageReportKind = !empty(loomUsageReportKind) ? loomUsageReportKind : (grafanaEmbedDayOne ? 'grafana' : '')
+var effectiveLoomGrafanaDashboardUid = !empty(loomGrafanaDashboardUid) ? loomGrafanaDashboardUid : (grafanaEmbedDayOne ? loomGrafanaGovernanceDashboardUidDefault : '')
+var effectiveLoomGrafanaUsageDashboardUid = !empty(loomGrafanaUsageDashboardUid) ? loomGrafanaUsageDashboardUid : (grafanaEmbedDayOne ? loomGrafanaUsageDashboardUidDefault : '')
 
 @description('Storage requires CMK (true at IL5)')
 param storageRequireCmk bool = false
@@ -270,6 +291,9 @@ param hubConsoleUamiId string = ''
 @description('dlz-attach: existing hub Activator UAMI principal id.')
 param hubActivatorPrincipalId string = ''
 
+@description('dlz-attach: subscription id of the EXISTING hub (admin plane). REQUIRED for the cross-sub hub-side VNet peering + hub console DLZ env wiring, since the dlz-attach deployment is submitted at the DLZ subscription scope and those two integration pieces must land in the HUB sub. Empty (default) falls back first to hubCoordinates.adminPlaneSubId, then to adminPlaneSubId (the deployment sub) for the single-sub / same-sub case.')
+param hubAdminSubscriptionId string = ''
+
 @description('Admin Entra group object ID for FiaB Admins')
 param adminEntraGroupId string
 
@@ -291,8 +315,8 @@ param skipRoleGrants bool = false
 @description('Deploy Loom apps (Container Apps for Console/MCP/etc.). Requires container images in ACR — set false on initial provision, then true after CI image-build pipeline runs (PRP-16).')
 param deployAppsEnabled bool = false
 
-@description('Deploy AI Foundry Hub. Requires storage-account strategy; default off.')
-param aiFoundryEnabled bool = false
+@description('Deploy AI Foundry Hub. Requires storage-account strategy. Day-one default ON so the Foundry Hub / Copilot / AI-functions surfaces resolve without a setup gate; set false to opt out.')
+param aiFoundryEnabled bool = true
 
 @description('Deploy the dedicated AI Foundry Agent Service account (aifndry-loom-<location>) with the loom-agents project + chat/embedding model deployments. Backs LOOM_FOUNDRY_PROJECT_ENDPOINT + LOOM_AOAI_* so AI Functions, Copilot, and data-agent test-chat work out of the box. ON BY DEFAULT (opt-out) — set false to skip the AOAI account (the Copilot/data-agent/AI-functions surfaces then honest-gate). Independent of aiFoundryEnabled.')
 param agentFoundryEnabled bool = true
@@ -309,8 +333,14 @@ param loomApimEnabled bool = true
 @description('DEPRECATED alias for loomApimEnabled, retained so existing .bicepparam files keep working. Now defaults true (was false). Set either flag false to opt out of APIM.')
 param apimEnabled bool = true
 
-@description('Deploy AI Search. Default off — capacity in eastus2 is intermittent.')
-param aiSearchEnabled bool = false
+@description('Deploy AI Search. Day-one default ON so the AI Search / reindex / data-product-search / help-copilot surfaces resolve without a setup gate; set false to opt out (e.g. if regional capacity is intermittent).')
+param aiSearchEnabled bool = true
+
+@description('Deploy Azure Analysis Services (the Azure-native tabular engine backing the semantic-model / BI surfaces). Day-one default ON so the AAS / XMLA / DirectQuery surfaces resolve without a setup gate; set false to opt out (e.g. GCC-High / DoD where AAS is unavailable — the documented Synapse-Serverless / Loom-native fallback applies). Passed through to admin-plane/main.bicep aasEnabled. No Power BI / Fabric required (XMLA is the opt-in alternative).')
+param aasEnabled bool = true
+
+@description('Deploy the report-subscription delivery Logic App (integration/report-subscription-logicapp.bicep) so report subscriptions deliver day one. Day-one default ON; set false to opt out. Passed through to admin-plane/main.bicep reportSubscriptionsEnabled.')
+param reportSubscriptionsEnabled bool = true
 
 @description('Deploy ADX shared cluster (admin-plane) + per-DLZ ADX databases. Backs the RTI editor family — Eventhouse, KQL Database, KQL Queryset, KQL Dashboard, Eventstream. Default on as of 2026-05-27 (sweep-rti). Set false to skip ~$140/mo Dev SKU cluster.')
 param adxEnabled bool = true
@@ -475,8 +505,8 @@ param mysqlEnabled bool = false
 @description('Deploy an Azure Cache for Redis (Basic C0, Entra auth enabled).')
 param redisEnabled bool = false
 
-@description('Deploy an Azure Event Grid custom topic (local-auth disabled).')
-param eventGridEnabled bool = false
+@description('Deploy an Azure Event Grid custom topic (local-auth disabled). Day-one default ON so the business-events topics surface resolves without a setup gate; set false to opt out.')
+param eventGridEnabled bool = true
 
 @description('Deploy an Azure Service Bus namespace (Standard, SAS disabled) + starter queue/topic.')
 param serviceBusEnabled bool = false
@@ -493,8 +523,8 @@ param aiServicesEnabled bool = false
 @description('Deploy a Document Intelligence (FormRecognizer) account (Entra-only).')
 param documentIntelligenceEnabled bool = false
 
-@description('Deploy a Content Safety account (Entra-only).')
-param contentSafetyEnabled bool = false
+@description('Deploy a Content Safety account (Entra-only). Day-one default ON so the Foundry content-safety surface resolves without a setup gate; set false to opt out (e.g. DoD regions where Content Safety is unavailable).')
+param contentSafetyEnabled bool = true
 
 @description('Deploy an Azure App Service (Linux B1 plan + web app, HTTPS-only).')
 param appServiceEnabled bool = false
@@ -521,8 +551,8 @@ param vmAdminSshPublicKey string = ''
 @description('Deploy an Azure Batch account (BatchService mode) + backing auto-storage (managed-identity auth).')
 param batchEnabled bool = false
 
-@description('Deploy a Consumption Logic App (empty editable workflow).')
-param logicAppsEnabled bool = false
+@description('Deploy a Consumption Logic App (empty editable workflow). Day-one default ON so the logic-app provisioner + approval/report-subscription delivery surfaces resolve without a setup gate; set false to opt out.')
+param logicAppsEnabled bool = true
 
 @description('Deploy an Azure Static Web App (standalone, no repo link).')
 param staticWebAppsEnabled bool = false
@@ -608,6 +638,40 @@ param firewallTier string = 'Standard'
 @description('Stream Analytics starting streaming units (deploy-planner).')
 @allowed([1, 3, 6, 12, 18, 24, 30, 36, 42, 48])
 param streamAnalyticsStreamingUnits int = 3
+
+@description('Virtual Machine size (deploy-planner). Burstable/general-purpose Linux sizes; Standard_B2s is a low-cost starter.')
+@allowed(['Standard_B1s', 'Standard_B2s', 'Standard_B2ms', 'Standard_D2s_v5', 'Standard_D4s_v5', 'Standard_D8s_v5'])
+param vmSize string = 'Standard_B2s'
+
+@description('SignalR SKU (deploy-planner). Free_F1 for dev, Standard_S1 for functional fan-out, Premium_P1 for isolation + autoscale.')
+@allowed(['Free_F1', 'Standard_S1', 'Premium_P1'])
+param signalrSkuName string = 'Standard_S1'
+
+@description('SignalR unit count (deploy-planner). 1 unit ≈ 1,000 concurrent connections; Free_F1 is fixed at 1.')
+@minValue(1)
+@maxValue(100)
+param signalrSkuCapacity int = 1
+
+@description('Static Web Apps SKU (deploy-planner). Free is the cheapest functional tier; Standard adds custom auth + SLA.')
+@allowed(['Free', 'Standard'])
+param staticWebAppsSkuName string = 'Standard'
+
+@description('CDN profile SKU (deploy-planner).')
+@allowed(['Standard_Microsoft', 'Standard_Akamai', 'Standard_Verizon', 'Premium_Verizon'])
+param cdnSkuName string = 'Standard_Microsoft'
+
+@description('Container Instances vCPU cores (deploy-planner).')
+@allowed([1, 2, 4])
+param containerInstancesCpuCores int = 1
+
+@description('Container Instances memory in GB (deploy-planner).')
+@minValue(1)
+@maxValue(16)
+param containerInstancesMemoryInGB int = 1
+
+@description('Azure Machine Learning rich-display compute instance VM size (deploy-planner).')
+@allowed(['Standard_DS3_v2', 'Standard_DS4_v2', 'Standard_D4s_v3', 'Standard_E4s_v3'])
+param mlComputeVmSize string = 'Standard_DS3_v2'
 
 // Derive a valid Redis family + capacity for the chosen SKU (Premium uses the
 // P family starting at capacity 1; Basic/Standard use the C family at 0).
@@ -846,6 +910,12 @@ module adminPlane 'modules/admin-plane/main.bicep' = if (deployAdminPlane) {
     apimEnabled: (loomApimEnabled && apimEnabled)
     aiSearchEnabled: aiSearchEnabled
     adxEnabled: adxEnabled
+    // audit day-one gap-closure: aasEnabled + reportSubscriptionsEnabled were
+    // declared on admin-plane/main.bicep but never passed from the top level, so
+    // AAS (semantic-model / BI Azure-native default) and the report-subscription
+    // delivery Logic App never deployed even when intended. Wire them through.
+    aasEnabled: aasEnabled
+    reportSubscriptionsEnabled: reportSubscriptionsEnabled
     copilotMafEnabled: copilotMafEnabled
     setupOrchestratorEnabled: setupOrchestratorEnabled
     setupTemplateUri: setupTemplateUri
@@ -1049,14 +1119,14 @@ module adminPlane 'modules/admin-plane/main.bicep' = if (deployAdminPlane) {
     // gates until the report/dashboard ids + UAMI membership are supplied.
     pbiEmbeddedEnabled: pbiEmbeddedEnabled
     managedGrafanaEnabled: managedGrafanaEnabled
-    loomUsageReportKind: loomUsageReportKind
+    loomUsageReportKind: effectiveLoomUsageReportKind
     loomUsagePbiWorkspaceId: loomUsagePbiWorkspaceId
     loomUsagePbiReportId: loomUsagePbiReportId
-    loomGrafanaUsageDashboardUid: loomGrafanaUsageDashboardUid
-    loomReportKind: loomReportKind
+    loomGrafanaUsageDashboardUid: effectiveLoomGrafanaUsageDashboardUid
+    loomReportKind: effectiveLoomReportKind
     loomGovernPbiWorkspaceId: loomGovernPbiWorkspaceId
     loomGovernPbiReportId: loomGovernPbiReportId
-    loomGrafanaDashboardUid: loomGrafanaDashboardUid
+    loomGrafanaDashboardUid: effectiveLoomGrafanaDashboardUid
     // Azure-native backend selectors (no-fabric-dependency) + the org-visuals
     // opt-out, bundled into ONE object so the admin-plane module stays under the
     // ARM 256-parameter limit (admin-plane cannot take another scalar param).
@@ -1156,6 +1226,22 @@ var effHubConsoleUamiName = !empty(hubConsoleUamiName) ? hubConsoleUamiName : hu
 var effHubConsoleUamiAppId = !empty(hubConsoleUamiAppId) ? hubConsoleUamiAppId : hub.consoleUamiAppId
 var effHubConsoleUamiId = !empty(hubConsoleUamiId) ? hubConsoleUamiId : hub.consoleUamiResourceId
 var effHubCatalogEndpoint = !empty(hubCatalogEndpoint) ? hubCatalogEndpoint : hub.catalogEndpoint
+
+// ── dlz-attach cross-sub integration (hub-side peering + hub-console env) ──────
+// Hub subscription id for the cross-sub modules below. Prefer the explicit param,
+// then hubCoordinates.adminPlaneSubId, then the deployment-sub adminPlaneSubId
+// (same-sub fallback). The hub admin RG name is already resolved as
+// `adminPlaneRgName` (from hubCoordinates.adminPlaneRgName).
+var effHubSubscriptionId = !empty(hubAdminSubscriptionId) ? hubAdminSubscriptionId : (!empty(string(hubCoordinates.?adminPlaneSubId ?? '')) ? string(hubCoordinates.adminPlaneSubId) : adminPlaneSubId)
+// Hub VNet NAME (last segment of the hub VNet resource id) for the reverse peering.
+var effHubVnetName = !empty(effHubVnetId) ? last(split(effHubVnetId, '/')) : ''
+// Start-of-deployment-computable guards for the two cross-sub modules. The `if`
+// condition cannot reference `eff*`/`hub` (they fold in adminPlane.outputs, which
+// are unknown at deployment start → BCP177). In dlz-attach the admin plane is
+// never deployed, so these guards read ONLY the dlz-attach input params, which
+// IS what dlz-attach always provides (individual hub* params OR hubCoordinates).
+var dlzAttachHasHubVnet = !empty(hubVnetId) || !empty(string(hubCoordinates.?hubVnetId ?? ''))
+var dlzAttachHasHubConsoleUami = !empty(hubConsoleUamiId) || !empty(string(hubCoordinates.?consoleUamiResourceId ?? ''))
 
 // audit-t156 — DLZ inventory for the topologyManifest output. for-expressions
 // must be the direct value of a var (BCP138), so the multi-sub fan-out list is
@@ -1484,6 +1570,71 @@ module dlzAttachOrgVisualsRbac 'modules/landing-zone/org-visuals-rbac.bicep' = i
   }
 }
 
+// BUG 1 FIX — dlz-attach: create the REVERSE hub→DLZ VNet peering in the HUB
+// VNet, in the HUB subscription. The DLZ→hub peering is made inside the DLZ VNet
+// by landing-zone/network.bicep, but on a cross-sub attach the deployment runs at
+// the DLZ subscription scope and never touches the hub VNet, so the peering stays
+// "Initiated" and the hub console can't route to the private DLZ resources. This
+// cross-sub module (scope = hub admin RG/sub) adds the missing half so the
+// peering reaches "Connected". Guard reads only the dlz-attach input params
+// (start-of-deployment computable — eff*/hub fold in adminPlane.outputs).
+module dlzAttachHubPeering 'modules/landing-zone/hub-side-peering.bicep' = if (topology == 'dlz-attach' && dlzAttachHasHubVnet) {
+  name: 'dlz-attach-hub-peering-${attachDomainName}'
+  scope: resourceGroup(effHubSubscriptionId, adminPlaneRgName)
+  params: {
+    hubVnetName: effHubVnetName
+    dlzSpokeVnetId: dlzAttach!.outputs.spokeVnetId
+    domainName: attachDomainName
+  }
+}
+
+// BUG 2 FIX — dlz-attach: wire the hub console's DLZ data-plane env vars
+// (LOOM_ADLS_ACCOUNT / LOOM_LANDING_URL / LOOM_BRONZE_URL / LOOM_SILVER_URL /
+// LOOM_GOLD_URL / LOOM_SYNAPSE_WORKSPACE) onto the ALREADY-DEPLOYED hub console.
+// In single-sub these are baked into the console container app definition from
+// singleDlz.outputs; in dlz-attach the admin plane / console is never redeployed,
+// so without this the lakehouse/notebook/warehouse editors honest-gate on the hub
+// even though the DLZ data plane is live. Runs a cross-sub deploymentScript
+// (scope = hub admin RG/sub) as the hub Console UAMI doing an ADDITIVE
+// `az containerapp update --set-env-vars`. The values are also emitted as outputs
+// (below) so the orchestrator/bootstrap can verify or re-apply them. Guarded on
+// having the hub Console UAMI resource id (start-computable param-only guard);
+// on AKS boundaries (no Container App) it is skipped (the cluster GitOps path
+// sets env instead) via the containerApps check.
+module dlzAttachHubConsoleEnv 'modules/landing-zone/hub-console-dlz-env.bicep' = if (topology == 'dlz-attach' && containerPlatform == 'containerApps' && dlzAttachHasHubConsoleUami) {
+  name: 'dlz-attach-hub-console-env-${attachDomainName}'
+  scope: resourceGroup(effHubSubscriptionId, adminPlaneRgName)
+  params: {
+    location: location
+    consoleAppName: 'loom-console'
+    scriptUamiId: effHubConsoleUamiId
+    dlzAdlsAccount: dlzAttach!.outputs.storageAccountName
+    dlzSynapseWorkspace: loomSynapseEnabled ? dlzAttach!.outputs.synapseWorkspaceName : ''
+    // Event Hubs: the attached DLZ provisions its own evhns-loom-<domain>-<region>
+    // namespace (loomEventHubEnabled threaded into dlzAttach above), and the
+    // eventhubs.bicep module already grants the hub Console UAMI Azure Event Hubs
+    // Data Owner + Contributor + Data Receiver on it (consolePrincipalId =
+    // effHubConsolePrincipalId). What was missing is the console ENV pointing at
+    // it — the console's LOOM_EVENTHUB_* defaulted to the admin/single-sub RG and
+    // the hub sub, so the Eventstream / Data Explorer navigators honest-gated even
+    // though the namespace is live. Thread the real namespace name + DLZ RG/sub so
+    // the env is re-pointed at the attached DLZ. Empty namespace name (EH disabled)
+    // => the env var is skipped and the editor honest-gates (correct behavior).
+    dlzEventHubNamespace: loomEventHubEnabled ? dlzAttach!.outputs.eventHubsNamespaceName : ''
+    dlzResourceGroup: 'rg-csa-loom-dlz-${attachDomainName}-${location}'
+    // dlz-attach deploys main.bicep at the DLZ subscription scope, so the DLZ sub
+    // is the deployment subscription. The console runs in the hub admin sub.
+    dlzSubscriptionId: subscription().subscriptionId
+    // Databricks workspace URL + ADF factory name from the attached DLZ. Empty
+    // when the respective service is disabled (the var is then skipped and the
+    // editor honest-gates). These re-point the console's Databricks/ADF env at
+    // the cross-sub DLZ rather than the admin/single-sub defaults baked at deploy.
+    dlzDatabricksWorkspaceUrl: loomDatabricksEnabled ? dlzAttach!.outputs.databricksWorkspaceUrl : ''
+    dlzAdfFactoryName: loomDataFactoryEnabled ? dlzAttach!.outputs.adfFactoryName : ''
+    complianceTags: complianceTags
+  }
+}
+
 
 // real, self-contained Azure resource into the DLZ RG when its flag is on.
 // consolePrincipalId wires the Loom Console UAMI so the matching navigator
@@ -1559,6 +1710,8 @@ module dpSignalr 'modules/deploy-planner/signalr.bicep' = if (useSingleDlz && si
   scope: singleDlzRg
   params: {
     location: location
+    skuName: signalrSkuName
+    skuCapacity: signalrSkuCapacity
     consolePrincipalId: dpConsolePrincipalId
     skipRoleGrants: skipRoleGrants
     complianceTags: complianceTags
@@ -1646,6 +1799,8 @@ module dpContainerInstances 'modules/deploy-planner/container-instances.bicep' =
   scope: singleDlzRg
   params: {
     location: location
+    cpuCores: containerInstancesCpuCores
+    memoryInGB: containerInstancesMemoryInGB
     consolePrincipalId: dpConsolePrincipalId
     skipRoleGrants: skipRoleGrants
     complianceTags: complianceTags
@@ -1680,6 +1835,7 @@ module dpVm 'modules/deploy-planner/virtual-machine.bicep' = if (useSingleDlz &&
   scope: singleDlzRg
   params: {
     location: location
+    vmSize: vmSize
     adminSshPublicKey: vmAdminSshPublicKey
     consolePrincipalId: dpConsolePrincipalId
     skipRoleGrants: skipRoleGrants
@@ -1714,6 +1870,7 @@ module dpStaticWebApps 'modules/deploy-planner/static-web-app.bicep' = if (useSi
   scope: singleDlzRg
   params: {
     location: location
+    skuName: staticWebAppsSkuName
     consolePrincipalId: dpConsolePrincipalId
     skipRoleGrants: skipRoleGrants
     complianceTags: complianceTags
@@ -1725,6 +1882,7 @@ module dpCdn 'modules/deploy-planner/cdn.bicep' = if (useSingleDlz && cdnEnabled
   scope: singleDlzRg
   params: {
     location: location
+    skuName: cdnSkuName
     consolePrincipalId: dpConsolePrincipalId
     skipRoleGrants: skipRoleGrants
     complianceTags: complianceTags
@@ -1798,6 +1956,7 @@ module dpMlWorkspace 'modules/deploy-planner/ml-workspace.bicep' = if (useSingle
   scope: singleDlzRg
   params: {
     location: location
+    richDisplayComputeVmSize: mlComputeVmSize
     consolePrincipalId: dpConsolePrincipalId
     skipRoleGrants: skipRoleGrants
     complianceTags: complianceTags
@@ -2017,3 +2176,20 @@ output hubActivatorPrincipalId string = topology == 'tenant' ? adminPlane!.outpu
 // contract self-describing for the bootstrap step.
 output dlzAttachTargetSubscriptionId string = topology == 'dlz-attach' ? targetSubscriptionId : ''
 output dlzAttachHubAiServicesAccountName string = topology == 'dlz-attach' ? hubAiServicesAccountName : ''
+
+// dlz-attach echo-back: the EXACT hub-console DLZ env vars this attach wired (so
+// the orchestrator can verify, or re-apply `az containerapp update --set-env-vars`
+// on the hub console if the cross-sub deploymentScript was skipped/failed).
+// Sourced from the hub-console env module's outputs (computed there to keep
+// environment() out of the subscription-scoped main.bicep). Empty unless the
+// module ran (dlz-attach + containerApps + hub Console UAMI present).
+var dlzAttachConsoleEnvWired = topology == 'dlz-attach' && containerPlatform == 'containerApps' && dlzAttachHasHubConsoleUami
+output dlzAttachConsoleAdlsAccount string = dlzAttachConsoleEnvWired ? dlzAttachHubConsoleEnv!.outputs.loomAdlsAccount : ''
+output dlzAttachConsoleLandingUrl string = dlzAttachConsoleEnvWired ? dlzAttachHubConsoleEnv!.outputs.loomLandingUrl : ''
+output dlzAttachConsoleBronzeUrl string = dlzAttachConsoleEnvWired ? dlzAttachHubConsoleEnv!.outputs.loomBronzeUrl : ''
+output dlzAttachConsoleSilverUrl string = dlzAttachConsoleEnvWired ? dlzAttachHubConsoleEnv!.outputs.loomSilverUrl : ''
+output dlzAttachConsoleGoldUrl string = dlzAttachConsoleEnvWired ? dlzAttachHubConsoleEnv!.outputs.loomGoldUrl : ''
+output dlzAttachConsoleSynapseWorkspace string = dlzAttachConsoleEnvWired ? dlzAttachHubConsoleEnv!.outputs.loomSynapseWorkspace : ''
+// dlz-attach echo-back: the hub-side peering name created in the hub VNet (so the
+// orchestrator can poll for "Connected"). Empty unless the peering module ran.
+output dlzAttachHubPeeringName string = (topology == 'dlz-attach' && dlzAttachHasHubVnet) ? dlzAttachHubPeering!.outputs.peeringName : ''

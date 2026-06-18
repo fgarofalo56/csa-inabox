@@ -25,6 +25,43 @@ This file is maintained automatically by
 [Conventional Commits](https://www.conventionalcommits.org/). See
 [RELEASE.md](RELEASE.md) for the release process.
 
+## [0.45.0](https://github.com/fgarofalo56/csa-inabox/compare/csa-inabox-v0.44.0...csa-inabox-v0.45.0) (2026-06-18)
+
+
+### Features
+
+* **fiab-console:** cluster-aware IntelliSense + syntax + Copilot (Databricks / Synapse Spark / Azure ML) ([#1451](https://github.com/fgarofalo56/csa-inabox/issues/1451)) ([28b15b7](https://github.com/fgarofalo56/csa-inabox/commit/28b15b7d7583852579771ffcce142f506e44b987))
+* **fiab:** day-one Grafana Govern/Usage embed dashboards (auto-create + default KIND=grafana) ([#1461](https://github.com/fgarofalo56/csa-inabox/issues/1461)) ([6a6ce52](https://github.com/fgarofalo56/csa-inabox/commit/6a6ce5272b31381a3831a1877bcbad6933c3ef0e))
+
+
+### Bug Fixes
+
+* **bicep+bootstrap:** day-one deploy-time RBAC + service bootstraps (zero permission gates) ([#1453](https://github.com/fgarofalo56/csa-inabox/issues/1453)) ([1c81685](https://github.com/fgarofalo56/csa-inabox/commit/1c81685a3e8ebeca1c5d52a3563fdf381f5540af))
+* **bicep:** admin-portal day-one defaults (AOAI model+endpoint, tenant-admin OID, org-visuals env) ([#1458](https://github.com/fgarofalo56/csa-inabox/issues/1458)) ([e1f14cd](https://github.com/fgarofalo56/csa-inabox/commit/e1f14cdbd2bf81c9bb0a9bb84ac855ccb0b6c7e5))
+* **bicep:** day-one clean-deploy hardening (APIM create+policy, appImageTags, FD privatelink) ([#1438](https://github.com/fgarofalo56/csa-inabox/issues/1438)) ([25b69a8](https://github.com/fgarofalo56/csa-inabox/commit/25b69a8ae03128873644a3707aed2241f2dc7a85))
+* **bicep:** day-one clean-deploy integration ([#1440](https://github.com/fgarofalo56/csa-inabox/issues/1440) + [#1441](https://github.com/fgarofalo56/csa-inabox/issues/1441) + [#1442](https://github.com/fgarofalo56/csa-inabox/issues/1442) + [#1444](https://github.com/fgarofalo56/csa-inabox/issues/1444)) ([#1446](https://github.com/fgarofalo56/csa-inabox/issues/1446)) ([d6a9a2a](https://github.com/fgarofalo56/csa-inabox/commit/d6a9a2adc8971e2ad3515a8ce65cbe4134ff012f))
+* **bicep:** day-one deploy errors in newly-enabled modules ([#1454](https://github.com/fgarofalo56/csa-inabox/issues/1454)) ([65c054f](https://github.com/fgarofalo56/csa-inabox/commit/65c054f0da62f0ceff2b35a74494717317f2be39))
+* **bicep:** day-one gap closure — enable Azure-native services by default (zero setup gates) ([#1452](https://github.com/fgarofalo56/csa-inabox/issues/1452)) ([c79990e](https://github.com/fgarofalo56/csa-inabox/commit/c79990e92f5773f48f1ac1f789c41fc53b273357))
+* **bicep:** day-one hardening of dormant modules (Maps MI, Purview managed-EH, Foundry project account, AAS Reader dedup + idempotent role GUIDs) ([#1456](https://github.com/fgarofalo56/csa-inabox/issues/1456)) ([1b32c2c](https://github.com/fgarofalo56/csa-inabox/commit/1b32c2c6cc0be6c4a4557441148cfc2b9b6b74d3))
+* **bicep:** day-one hub deploy round-2 (AAS SKU, firewall policy ordering, duplicate RBAC-admin assignment) ([#1455](https://github.com/fgarofalo56/csa-inabox/issues/1455)) ([ab2560a](https://github.com/fgarofalo56/csa-inabox/commit/ab2560a0b22f46911e0d957c21adb30bafcd7711))
+* **csa-loom:** wire LOOM_MSAL_CLIENT_SECRET env + open KV for bootstrap secret write ([#1439](https://github.com/fgarofalo56/csa-inabox/issues/1439)) ([927b68c](https://github.com/fgarofalo56/csa-inabox/commit/927b68c8a59e5dfd622f98a46c3ed5b6f85803a7))
+* **deploy:** cross-sub dlz-attach hub-coordinates + region-parameterize post-deploy-bootstrap ([#1457](https://github.com/fgarofalo56/csa-inabox/issues/1457)) ([1017e73](https://github.com/fgarofalo56/csa-inabox/commit/1017e73940ded86dc2d0caf71c381ab04ade76f1))
+* **fiab-bootstrap:** MSAL app-reg must stay confidential + register Front Door redirect (login-breaking) ([#1463](https://github.com/fgarofalo56/csa-inabox/issues/1463)) ([7f89715](https://github.com/fgarofalo56/csa-inabox/commit/7f89715920ad328d2ccb7d2a33ce852181a7ea98))
+* **fiab-console:** admin-portal day-one gaps — multi-sub capacity, audit query bugs, version-compare, env-config criticality, bicep env completeness ([#1462](https://github.com/fgarofalo56/csa-inabox/issues/1462)) ([1facf66](https://github.com/fgarofalo56/csa-inabox/commit/1facf6626518a4e7c259d265bd462311f4f44b84))
+* **fiab-console:** admin-portal round 2 — audit Purview/LAW queries, version-compare display, landing-zone RG-scope RBAC check ([#1464](https://github.com/fgarofalo56/csa-inabox/issues/1464)) ([3fcbc50](https://github.com/fgarofalo56/csa-inabox/commit/3fcbc5002294f358af5623833b9c1f3eb052ff6d))
+* **fiab-console:** dedicated-SQL seed query — SUSER_NAME() unsupported on Synapse Dedicated pool ([#1448](https://github.com/fgarofalo56/csa-inabox/issues/1448)) ([78384f8](https://github.com/fgarofalo56/csa-inabox/commit/78384f83bd8a885aa690ba79efbb274fe0c6d476))
+* **fiab-console:** generalize DLZ ARM coordinate self-heal (Resource Graph) to Kusto + others ([#1447](https://github.com/fgarofalo56/csa-inabox/issues/1447)) ([94daabb](https://github.com/fgarofalo56/csa-inabox/commit/94daabbe947f46a5751901ee1117aa132d98b810))
+* **fiab-console:** serverless-SQL external data source — master key + per-step diagnosis ([#1437](https://github.com/fgarofalo56/csa-inabox/issues/1437)) ([b8ccd38](https://github.com/fgarofalo56/csa-inabox/commit/b8ccd38139501adc8f6aeb12c9a24b816c86de0d))
+* **fiab-console:** warehouse status probe (false "Unknown") + Alerts dialog auto-open/no-close ([#1445](https://github.com/fgarofalo56/csa-inabox/issues/1445)) ([c19c549](https://github.com/fgarofalo56/csa-inabox/commit/c19c54955c7315dc9fca04294fb2662682ce1c0d))
+* **fiab-deploy:** DLZ deploymentScripts use key-auth staging storage ([#1460](https://github.com/fgarofalo56/csa-inabox/issues/1460)) ([b67abd9](https://github.com/fgarofalo56/csa-inabox/commit/b67abd9375a5b3d0fd29bd98f3795f070c084b01))
+
+
+### Documentation
+
+* **fiab/audit:** post-roll sweep — Warehouse fixes confirmed live + RAG Builder + image roll ([#1449](https://github.com/fgarofalo56/csa-inabox/issues/1449)) ([b82555e](https://github.com/fgarofalo56/csa-inabox/commit/b82555e88da272d695cf839938b26456e67a2e43))
+* **fiab/audit:** serverless-SQL endpoint now PASS (Synapse SQL Administrator RBAC fix) ([#1443](https://github.com/fgarofalo56/csa-inabox/issues/1443)) ([a3bd22e](https://github.com/fgarofalo56/csa-inabox/commit/a3bd22ea095794a318bed6c912c4fcedf1d6bc61))
+* **fiab/audit:** validation matrix — P0 datasets PASS (v0.11 live), serverless-SQL FAIL ([#1435](https://github.com/fgarofalo56/csa-inabox/issues/1435)) ([2962217](https://github.com/fgarofalo56/csa-inabox/commit/2962217256b9be8dc7b5a740a990d73c88877f4c))
+
 ## [0.44.0](https://github.com/fgarofalo56/csa-inabox/compare/csa-inabox-v0.43.1...csa-inabox-v0.44.0) (2026-06-16)
 
 

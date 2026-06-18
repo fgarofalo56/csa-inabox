@@ -98,7 +98,23 @@ async function readJsonOrGate(r: Response): Promise<any> {
   }
 }
 
-export function NotebookImportWizard(): React.ReactElement {
+/** A specific notebook to prefill the wizard with (from a gallery card). */
+export interface PrefillNotebook {
+  bundleId: string;
+  notebookDisplayName: string;
+  hasSampleData?: boolean;
+}
+
+export interface NotebookImportWizardProps {
+  /** When set, the picker is locked to this notebook and the dialog opens
+   *  straight to workspace + sample-data selection. */
+  prefill?: PrefillNotebook;
+  /** Custom trigger element (cloned with an onClick). Defaults to the
+   *  "Import notebook" primary button used by the Learning Hub action band. */
+  trigger?: React.ReactElement;
+}
+
+export function NotebookImportWizard({ prefill, trigger }: NotebookImportWizardProps = {}): React.ReactElement {
   const s = useStyles();
   const [open, setOpen] = React.useState(false);
   const [workspaces, setWorkspaces] = React.useState<WorkspaceLite[]>([]);
@@ -131,7 +147,10 @@ export function NotebookImportWizard(): React.ReactElement {
         if (wsList.length === 1) setPickedWs(wsList[0].id);
         const nbList: NotebookOption[] = nbData?.notebooks || [];
         setNotebooks(nbList);
-        if (nbList.length && !pickedNbKey) {
+        // Prefill locks the picker to one notebook; otherwise default to first.
+        if (prefill) {
+          setPickedNbKey(`${prefill.bundleId}::${prefill.notebookDisplayName}`);
+        } else if (nbList.length && !pickedNbKey) {
           setPickedNbKey(`${nbList[0].bundleId}::${nbList[0].notebookDisplayName}`);
         }
       })
@@ -174,9 +193,13 @@ export function NotebookImportWizard(): React.ReactElement {
 
   return (
     <>
-      <Button appearance="primary" icon={<NotebookAdd24Regular />} onClick={() => setOpen(true)}>
-        Import notebook
-      </Button>
+      {trigger
+        ? React.cloneElement(trigger as React.ReactElement<{ onClick?: () => void }>, { onClick: () => setOpen(true) })
+        : (
+          <Button appearance="primary" icon={<NotebookAdd24Regular />} onClick={() => setOpen(true)}>
+            Import notebook
+          </Button>
+        )}
 
       <Dialog open={open} onOpenChange={(_, d) => setOpen(d.open)}>
         <DialogSurface>
@@ -214,9 +237,10 @@ export function NotebookImportWizard(): React.ReactElement {
                     </MessageBar>
                   )}
 
-                  <Field label="Notebook" required hint="Prebuilt notebooks from the app content bundles.">
+                  <Field label="Notebook" required hint={prefill ? 'Selected from the Notebooks gallery.' : 'Prebuilt notebooks from the app content bundles.'}>
                     <Dropdown
                       placeholder="Pick a notebook"
+                      disabled={!!prefill}
                       selectedOptions={pickedNbKey ? [pickedNbKey] : []}
                       value={pickedNb ? `${pickedNb.notebookDisplayName} · ${pickedNb.bundleLabel}` : ''}
                       onOptionSelect={(_, d) => setPickedNbKey(d.optionValue || '')}

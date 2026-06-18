@@ -65,6 +65,15 @@ if [[ -z "$DBX_HOST" ]]; then
 fi
 add LOOM_DATABRICKS_HOSTNAME  "$DBX_HOST"
 add LOOM_DATABRICKS_HOSTNAMES "$DBX_HOST"
+# Unity Catalog ACCOUNT API (Catalog → Metastores: enumerate/one-click-attach +
+# /catalog/domains UC mirror). The Databricks ACCOUNT id is NOT exposed by ARM
+# (it lives in the accounts.azuredatabricks.net plane), so it can't be
+# discovered — it comes from the operator/CI via DATABRICKS_ACCOUNT_ID (find it
+# at accounts.azuredatabricks.net → top-right → Account). Without it the UC
+# surfaces honest-gate (registration + catalog listing still work). The
+# account-host override is for sovereign clouds (accounts.azuredatabricks.us).
+add LOOM_DATABRICKS_ACCOUNT_ID   "${DATABRICKS_ACCOUNT_ID:-${LOOM_DATABRICKS_ACCOUNT_ID:-}}"
+add LOOM_DATABRICKS_ACCOUNT_HOST "${DATABRICKS_ACCOUNT_HOST:-${LOOM_DATABRICKS_ACCOUNT_HOST:-}}"
 
 # ---------------------------------------------------------------------------
 # ADX / Kusto — shared cluster lives in the admin plane.

@@ -11,18 +11,20 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
-  Spinner, Badge, Caption1, Body1, Input, Button, Field, Switch,
+  Spinner, Badge, Caption1, Input, Button, Field, Switch,
   MessageBar, MessageBarBody, MessageBarTitle,
   makeStyles, tokens,
 } from '@fluentui/react-components';
 import {
-  ArrowUpload24Regular, Delete20Regular, ArrowSync24Regular, Info20Regular,
+  ArrowUpload24Regular, Delete20Regular, ArrowSync24Regular,
   DocumentArrowUp20Regular, ImageAdd20Regular,
 } from '@fluentui/react-icons';
 import { Section, Toolbar } from '@/lib/components/ui/section';
 import { LoomDataTable, type LoomColumn } from '@/lib/components/ui/loom-data-table';
 import { NotConfiguredBar, type NotConfiguredHint } from '@/lib/components/admin-security/not-configured-bar';
+import { SectionExplainer } from '@/lib/components/ui/learn-popover';
 import { CoeLibraryPane } from '@/lib/coe-library/coe-library-pane';
+import { DashboardsPane } from '@/lib/coe-library/builder/dashboards-pane';
 
 interface OrgVisual {
   id: string;
@@ -39,7 +41,6 @@ interface OrgVisual {
 }
 
 const useStyles = makeStyles({
-  explainer: { display: 'flex', gap: tokens.spacingHorizontalM, alignItems: 'flex-start' },
   uploadGrid: {
     display: 'flex',
     columnGap: tokens.spacingHorizontalM,
@@ -219,18 +220,17 @@ export function OrgVisualsPane() {
 
   return (
     <>
+      <DashboardsPane />
+
       <CoeLibraryPane />
 
       <Section title="About organizational visuals">
-        <div className={s.explainer}>
-          <Info20Regular style={{ color: tokens.colorBrandForeground1, flexShrink: 0, marginTop: 2 }} />
-          <Body1 style={{ color: tokens.colorNeutralForeground2, lineHeight: 1.5 }}>
-            Upload custom visual bundles (<code>.pbiviz</code>) to make them available across the whole
-            tenant. Loom stores each bundle Azure-natively as a real Blob in the <code>org-visuals</code>
-            container and tracks its version + enabled state — no Microsoft Fabric or Power BI workspace
-            required. Toggle <strong>Enabled</strong> to control tenant-wide availability.
-          </Body1>
-        </div>
+        <SectionExplainer>
+          Upload custom visual bundles (<code>.pbiviz</code>) to make them available across the whole
+          tenant. Loom stores each bundle Azure-natively as a real Blob in the <code>org-visuals</code>
+          container and tracks its version + enabled state — no Microsoft Fabric or Power BI workspace
+          required. Toggle <strong>Enabled</strong> to control tenant-wide availability.
+        </SectionExplainer>
       </Section>
 
       {gate && (

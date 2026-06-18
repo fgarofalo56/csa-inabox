@@ -13,15 +13,16 @@
 import { clientFetch } from '@/lib/client-fetch';
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import {
-  Spinner, Badge, Caption1, Body1, Button, Checkbox, Dropdown, Option, Divider,
+  Spinner, Badge, Caption1, Button, Checkbox, Dropdown, Option, Divider,
   MessageBar, MessageBarBody, MessageBarTitle,
   makeStyles, tokens,
 } from '@fluentui/react-components';
-import { ArrowSync24Regular, Tag24Regular, Info20Regular, CheckmarkCircle20Regular } from '@fluentui/react-icons';
+import { ArrowSync24Regular, Tag24Regular, CheckmarkCircle20Regular } from '@fluentui/react-icons';
 import { AdminShell } from '@/lib/components/admin-shell';
 import { Section, Toolbar } from '@/lib/components/ui/section';
 import { LoomDataTable, type LoomColumn } from '@/lib/components/ui/loom-data-table';
 import { useAdminTabStyles } from '@/lib/components/ui/admin-tab-styles';
+import { SectionExplainer } from '@/lib/components/ui/learn-popover';
 
 interface CatalogItem {
   id: string;
@@ -63,7 +64,6 @@ interface LoadData {
 }
 
 const useStyles = makeStyles({
-  explainer: { display: 'flex', gap: tokens.spacingHorizontalM, alignItems: 'flex-start' },
   swatch: { width: '14px', height: '14px', borderRadius: '3px', display: 'inline-block', verticalAlign: 'middle', flexShrink: 0 },
   pickerRow: { display: 'flex', gap: tokens.spacingHorizontalL, alignItems: 'flex-end', flexWrap: 'wrap', marginBottom: tokens.spacingVerticalM },
   field: { display: 'flex', flexDirection: 'column', gap: '4px', minWidth: '260px' },
@@ -220,18 +220,15 @@ export default function BatchLabelingPage() {
   return (
     <AdminShell sectionTitle="Batch labeling">
       <Section title="About batch labeling">
-        <div className={s.explainer}>
-          <Info20Regular className={a.infoIcon} />
-          <Body1 className={a.explainerText}>
-            Select multiple catalog items, pick a sensitivity label, and apply it in one action. The Cosmos
-            label-assignment is <strong>always written immediately</strong> to each item. When a Microsoft Purview
-            account is configured, the label is also stamped as an asset classification on the matching catalog
-            asset. When you pick a <strong>Microsoft Information Protection (MIP)</strong> label and
-            <code> LOOM_POWERBI_ADMIN_LABELS=true</code>, items with a linked Power BI artifact can additionally be
-            labeled via the Power BI Admin <em>InformationProtection.setLabels</em> API (requires the Console UAMI to
-            be a Fabric Administrator). The results grid below shows the real per-item outcome of every write.
-          </Body1>
-        </div>
+        <SectionExplainer>
+          Select multiple catalog items, pick a sensitivity label, and apply it in one action. The Cosmos
+          label-assignment is <strong>always written immediately</strong> to each item. When a Microsoft Purview
+          account is configured, the label is also stamped as an asset classification on the matching catalog
+          asset. When you pick a <strong>Microsoft Information Protection (MIP)</strong> label and
+          <code> LOOM_POWERBI_ADMIN_LABELS=true</code>, items with a linked Power BI artifact can additionally be
+          labeled via the Power BI Admin <em>InformationProtection.setLabels</em> API (requires the Console UAMI to
+          be a Fabric Administrator). The results grid below shows the real per-item outcome of every write.
+        </SectionExplainer>
       </Section>
 
       {error && <MessageBar intent="error" className={a.messageBar}><MessageBarBody><MessageBarTitle>Could not load</MessageBarTitle>{error}</MessageBarBody></MessageBar>}

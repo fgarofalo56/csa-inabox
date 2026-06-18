@@ -34,6 +34,19 @@ param skipRoleGrants bool = false
 @description('Deploy the Azure Firewall + its policy + public IP for hub egress filtering. Nothing else in the template consumes the firewall (no forced-tunnel UDRs), so it is safe to disable. Default true. Set false to skip — useful when the firewall-policy re-PUT trips FirewallPolicyUpdateFailed on idempotent reconcile passes, or to reduce cost; the egress appliance can be added back later.')
 param firewallEnabled bool = true
 
+@description('''Idempotent-reconcile guard for the hub firewall policy. On a re-PUT,
+ARM pushes the firewall *policy* down to every firewall that references it; if the
+referenced firewall is in any non-Succeeded provisioning state at that instant the
+policy PUT aborts with `FirewallPolicyUpdateFailed: Put on Firewall Policy ... Failed
+with 1 faulted referenced firewalls`. On a fresh deploy leave this false (the policy
+is created). On a reconcile/redeploy of an environment whose firewall + policy already
+exist UNCHANGED, set this true: the module then references the EXISTING policy instead
+of re-PUTing it, so the firewall keeps its reference but no policy push is triggered —
+sidestepping the faulted-firewall race. Wired from the admin-plane skipRoleGrants flag
+(the existing "this is a reconcile pass" signal). Has no effect when firewallEnabled is
+false.''')
+param firewallPolicyReconcile bool = false
+
 
 // =====================================================================
 // Subnet calculations
@@ -244,8 +257,15 @@ resource bastion 'Microsoft.Network/bastionHosts@2024-05-01' = {
 
 var firewallSku = boundary == 'IL5' || boundary == 'GCC-High' ? 'Premium' : 'Standard'
 
-resource firewallPolicy 'Microsoft.Network/firewallPolicies@2024-05-01' = if (firewallEnabled) {
-  name: 'fwpol-csa-loom-${location}'
+var firewallPolicyName = 'fwpol-csa-loom-${location}'
+
+// Create the policy only on a fresh deploy (or a reconcile that intends to update
+// it). On a pure reconcile pass (firewallPolicyReconcile=true) we DON'T re-PUT it —
+// re-PUTing a firewall policy re-pushes it to its referenced firewall, which faults
+// the deploy if that firewall is mid-/post-update (FirewallPolicyUpdateFailed:
+// "... Failed with 1 faulted referenced firewalls"). See firewallPolicyReconcile.
+resource firewallPolicy 'Microsoft.Network/firewallPolicies@2024-05-01' = if (firewallEnabled && !firewallPolicyReconcile) {
+  name: firewallPolicyName
   location: location
   tags: complianceTags
   properties: {
@@ -253,6 +273,15 @@ resource firewallPolicy 'Microsoft.Network/firewallPolicies@2024-05-01' = if (fi
     threatIntelMode: 'Alert'
   }
 }
+
+// Existing reference used on reconcile passes so the firewall can keep its policy
+// binding without the module re-PUTing (and re-pushing) the policy.
+resource firewallPolicyExisting 'Microsoft.Network/firewallPolicies@2024-05-01' existing = if (firewallEnabled && firewallPolicyReconcile) {
+  name: firewallPolicyName
+}
+
+// Resolve the policy id from whichever path is active.
+var firewallPolicyId = firewallPolicyReconcile ? firewallPolicyExisting.id : firewallPolicy.id
 
 resource firewallPip 'Microsoft.Network/publicIPAddresses@2024-05-01' = if (firewallEnabled) {
   name: 'pip-fw-csa-loom-${location}'
@@ -265,16 +294,28 @@ resource firewallPip 'Microsoft.Network/publicIPAddresses@2024-05-01' = if (fire
   }
 }
 
+// The firewall references the policy via firewallPolicyId. On a FRESH deploy
+// (firewallPolicyReconcile=false) the policy resource is created in THIS
+// deployment, so the firewall MUST wait for the policy to reach a Succeeded
+// provisioning state before it is PUT — otherwise ARM can PUT the firewall
+// while the policy is still settling and then, when finalizing the policy,
+// report `FirewallPolicyUpdateFailed: Put on Firewall Policy ... Failed with 1
+// faulted referenced firewalls` (the centralus round-2 symptom). An EXPLICIT
+// dependsOn on the just-created policy makes the policy-then-firewall ordering
+// deterministic (Learn quickstart pattern: firewallPolicies → azureFirewalls).
+// On a reconcile pass the policy is referenced as `existing`, so there is
+// nothing to wait on — only depend on the freshly-created policy.
 resource firewall 'Microsoft.Network/azureFirewalls@2024-05-01' = if (firewallEnabled) {
   name: 'fw-csa-loom-${location}'
   location: location
   tags: complianceTags
+  dependsOn: firewallPolicyReconcile ? [] : [ firewallPolicy ]
   properties: {
     sku: {
       name: 'AZFW_VNet'
       tier: firewallSku
     }
-    firewallPolicy: { id: firewallPolicy.id }
+    firewallPolicy: { id: firewallPolicyId }
     ipConfigurations: [
       {
         name: 'ipconfig'
@@ -336,6 +377,18 @@ var dnsZones = [
   // Gov: .purview.azure.us / .purviewstudio.azure.us.
   'privatelink.purview.azure.${boundary == 'GCC-High' || boundary == 'IL5' ? 'us' : 'com'}'
   'privatelink.purviewstudio.azure.${boundary == 'GCC-High' || boundary == 'IL5' ? 'us' : 'com'}'
+  // #1466 — Azure Databricks workspace (front-end / UI-API private link). The
+  // DLZ databricks.bicep deploys the workspace with publicNetworkAccess:
+  // 'Disabled', so the Console (in the hub VNet) gets "403 Unauthorized network
+  // access to workspace" unless it reaches the workspace privately. A
+  // databricks_ui_api private endpoint (DLZ spoke) registers the per-workspace
+  // host (adb-<id>.NN.azuredatabricks.net) on this zone; linking the zone to the
+  // hub VNet lets the Console resolve it to the PE's private IP. Index 23.
+  // Commercial: privatelink.azuredatabricks.net; Gov (GCC-High/IL5):
+  // privatelink.databricks.azure.us. Grounded in Microsoft Learn
+  // (private-endpoint-dns: Microsoft.Databricks/workspaces, subresources
+  // databricks_ui_api / browser_authentication).
+  'privatelink.${boundary == 'GCC-High' || boundary == 'IL5' ? 'databricks.azure.us' : 'azuredatabricks.net'}'
 ]
 
 resource privateDnsZones 'Microsoft.Network/privateDnsZones@2024-06-01' = [for zone in dnsZones: {
@@ -474,4 +527,10 @@ output privateDnsZoneIds object = {
   // the hub VNet by default.
   purview: privateDnsZones[21].id
   purviewStudio: privateDnsZones[22].id
+  // #1466 — Azure Databricks front-end private-link zone (index 23). The DLZ
+  // databricks.bicep reads adminPlanePrivateDnsZoneIds.databricks for the
+  // databricks_ui_api PE's DNS group so the PE-locked workspace
+  // (publicNetworkAccess Disabled) resolves to a private IP from the hub VNet.
+  // Without it the Console hits "403 Unauthorized network access to workspace".
+  databricks: privateDnsZones[23].id
 }

@@ -9,6 +9,7 @@ import { describe, it, expect } from 'vitest';
 import {
   parseDlzRgName,
   buildLandingZonesOverview,
+  rgKey,
   type DlzRgRow,
   type HubCoords,
 } from '../landing-zones-model';
@@ -54,6 +55,63 @@ describe('buildLandingZonesOverview', () => {
     // writableSubs = only the hub sub → the cross-sub DLZ is not writable.
     const o = buildLandingZonesOverview(hub, true, rows, new Set([HUB_SUB]));
     expect(o.landingZones[0].attachState).toBe('detached');
+  });
+
+  it('marks attached when the DLZ RG is writable (RG-scoped Contributor) even though the sub is Reader-only', () => {
+    // The least-privilege multi-sub case: UAMI has Contributor on the DLZ RG,
+    // only Reader at the subscription. The DLZ must be healthy, NOT "needs repair".
+    const o = buildLandingZonesOverview(hub, true, rows, {
+      writableSubs: new Set([HUB_SUB]), // sub is NOT writable
+      writableRgs: new Set([rgKey(TARGET_SUB, 'rg-csa-loom-dlz-default-centralus')]),
+    });
+    expect(o.landingZones[0].attachState).toBe('attached');
+  });
+
+  it('marks detached only when NEITHER the RG nor the sub is writable', () => {
+    const o = buildLandingZonesOverview(hub, true, rows, {
+      writableSubs: new Set([HUB_SUB]),
+      writableRgs: new Set<string>(), // RG not writable either
+    });
+    expect(o.landingZones[0].attachState).toBe('detached');
+  });
+
+  it('multi-sub: RG-scoped Contributor in the DLZ OWN sub → attached, no re-attach warning (the live false-positive fix)', () => {
+    // Live: DLZ in sub 363ef5d1…, hub/admin in e093f4fd…. The UAMI holds
+    // Contributor scoped to rg-csa-loom-dlz-default-centralus IN THE DLZ SUB and
+    // only Reader at the subscription scope. Evaluated in the DLZ's own sub, the
+    // RG is writable → attached. No 'detached' → the overview shows no warning.
+    const o = buildLandingZonesOverview(hub, true, rows, {
+      writableSubs: new Set([HUB_SUB]), // Reader-only at the DLZ subscription scope
+      writableRgs: new Set([rgKey(TARGET_SUB, 'rg-csa-loom-dlz-default-centralus')]),
+    });
+    expect(o.landingZones[0].crossSubscription).toBe(true);
+    expect(o.landingZones[0].attachState).toBe('attached');
+    expect(o.landingZones.some((z) => z.attachState === 'detached')).toBe(false);
+  });
+
+  it('reports unknown (not detached) when the RG permission read could not be determined', () => {
+    // A cross-sub 403/transient read failure must not masquerade as Reader-only.
+    const o = buildLandingZonesOverview(hub, true, rows, {
+      writableSubs: new Set([HUB_SUB]),
+      writableRgs: new Set<string>(),
+      unknownRgs: new Set([rgKey(TARGET_SUB, 'rg-csa-loom-dlz-default-centralus')]),
+    });
+    expect(o.landingZones[0].attachState).toBe('unknown');
+  });
+
+  it('writable RG still wins over an unknown signal for the same RG', () => {
+    const key = rgKey(TARGET_SUB, 'rg-csa-loom-dlz-default-centralus');
+    const o = buildLandingZonesOverview(hub, true, rows, {
+      writableSubs: new Set([HUB_SUB]),
+      writableRgs: new Set([key]),
+      unknownRgs: new Set([key]),
+    });
+    expect(o.landingZones[0].attachState).toBe('attached');
+  });
+
+  it('still accepts the legacy bare Set<string> of writable subs', () => {
+    const o = buildLandingZonesOverview(hub, true, rows, new Set([HUB_SUB, TARGET_SUB]));
+    expect(o.landingZones[0].attachState).toBe('attached');
   });
 
   it('marks attached for a same-sub DLZ regardless of cross-sub writability', () => {

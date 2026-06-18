@@ -61,11 +61,11 @@ export const DP_MODULES: Record<string, DpModuleSpec> = {
   // compute & apps
   appService: { file: 'app-service.bicep', scope: 'rg', config: { planSku: 'planSku', linuxFxVersion: 'linuxFxVersion' } },
   functions: { file: 'functions.bicep', scope: 'rg', config: { workerRuntime: 'functionsWorkerRuntime', linuxFxVersion: 'linuxFxVersion' } },
-  containerInstances: { file: 'container-instances.bicep', scope: 'rg' },
-  vm: { file: 'virtual-machine.bicep', scope: 'rg' },
+  containerInstances: { file: 'container-instances.bicep', scope: 'rg', config: { cpuCores: 'cpuCores', memoryInGB: 'memoryInGB' } },
+  vm: { file: 'virtual-machine.bicep', scope: 'rg', config: { vmSize: 'vmSize' } },
   batch: { file: 'batch.bicep', scope: 'rg' },
   logicApps: { file: 'logic-app.bicep', scope: 'rg' },
-  staticWebApps: { file: 'static-web-app.bicep', scope: 'rg' },
+  staticWebApps: { file: 'static-web-app.bicep', scope: 'rg', config: { skuName: 'skuName' } },
   // data & analytics
   postgres: { file: 'postgres.bicep', scope: 'rg', config: { version: 'postgresVersion', storageSizeGB: 'storageSizeGB' } },
   mysql: { file: 'mysql.bicep', scope: 'rg', config: { version: 'mysqlVersion', storageSizeGB: 'storageSizeGB' } },
@@ -79,17 +79,17 @@ export const DP_MODULES: Record<string, DpModuleSpec> = {
   visionServices: { file: 'cognitive-account.bicep', scope: 'rg', extra: { kind: "'ComputerVision'", nameFragment: "'vision'" } },
   speechServices: { file: 'cognitive-account.bicep', scope: 'rg', extra: { kind: "'SpeechServices'", nameFragment: "'speech'" } },
   languageServices: { file: 'cognitive-account.bicep', scope: 'rg', extra: { kind: "'TextAnalytics'", nameFragment: "'language'" } },
-  mlWorkspace: { file: 'ml-workspace.bicep', scope: 'rg' },
+  mlWorkspace: { file: 'ml-workspace.bicep', scope: 'rg', config: { computeVmSize: 'richDisplayComputeVmSize' } },
   // integration & messaging
   eventGrid: { file: 'event-grid.bicep', scope: 'rg' },
   serviceBus: { file: 'service-bus.bicep', scope: 'rg', config: { skuName: 'skuName' } },
   storageQueues: { file: 'storage-queues.bicep', scope: 'rg' },
-  signalr: { file: 'signalr.bicep', scope: 'rg' },
+  signalr: { file: 'signalr.bicep', scope: 'rg', config: { skuName: 'skuName', skuCapacity: 'skuCapacity' } },
   // governance & security — these are subscription-scoped (no rg)
   defenderCloud: { file: 'defender-cloud.bicep', scope: 'sub' },
   policy: { file: 'policy-assignment.bicep', scope: 'sub' },
   // networking & edge
-  cdn: { file: 'cdn.bicep', scope: 'rg' },
+  cdn: { file: 'cdn.bicep', scope: 'rg', config: { skuName: 'skuName' } },
   loadBalancer: { file: 'load-balancer.bicep', scope: 'rg' },
   firewall: { file: 'firewall.bicep', scope: 'rg', config: { tier: 'firewallTier' } },
 };

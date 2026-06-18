@@ -30,14 +30,14 @@ param domainName string
 @description('Private endpoint subnet ID')
 param privateEndpointSubnetId string
 
-@description('Private DNS zone ID for cosmos (NoSQL Sql group)')
-param privateDnsZoneCosmosId string
+@description('Private DNS zone ID for cosmos (NoSQL Sql group). Empty (dlz-attach with no hub DNS coordinates) skips the vector PE private DNS zone group.')
+param privateDnsZoneCosmosId string = ''
 
-@description('Private DNS zone ID for cosmos Gremlin (privatelink.gremlin.cosmos.azure.com)')
-param privateDnsZoneCosmosGremlinId string
+@description('Private DNS zone ID for cosmos Gremlin (privatelink.gremlin.cosmos.azure.com). Empty (dlz-attach with no hub DNS coordinates) skips the Gremlin PE private DNS zone group.')
+param privateDnsZoneCosmosGremlinId string = ''
 
-@description('Log Analytics workspace ID for diagnostic settings')
-param workspaceId string
+@description('Log Analytics workspace ID for diagnostic settings. Empty (dlz-attach with no hub LAW coordinate) skips the diagnostic settings.')
+param workspaceId string = ''
 
 @description('Console UAMI principal ID for Cosmos data plane RBAC')
 param consolePrincipalId string
@@ -129,7 +129,7 @@ resource pe 'Microsoft.Network/privateEndpoints@2024-05-01' = {
   }
 }
 
-resource peDnsGroup 'Microsoft.Network/privateEndpoints/privateDnsZoneGroups@2024-05-01' = {
+resource peDnsGroup 'Microsoft.Network/privateEndpoints/privateDnsZoneGroups@2024-05-01' = if (!empty(privateDnsZoneCosmosGremlinId)) {
   parent: pe
   name: 'default'
   properties: {
@@ -248,7 +248,7 @@ resource pe2 'Microsoft.Network/privateEndpoints@2024-05-01' = {
   }
 }
 
-resource pe2DnsGroup 'Microsoft.Network/privateEndpoints/privateDnsZoneGroups@2024-05-01' = {
+resource pe2DnsGroup 'Microsoft.Network/privateEndpoints/privateDnsZoneGroups@2024-05-01' = if (!empty(privateDnsZoneCosmosId)) {
   parent: pe2
   name: 'default'
   properties: {
@@ -262,7 +262,7 @@ resource pe2DnsGroup 'Microsoft.Network/privateEndpoints/privateDnsZoneGroups@20
 // Diagnostic settings → Loom LAW
 // =====================================================================
 
-resource gremlinDiag 'Microsoft.Insights/diagnosticSettings@2021-05-01-preview' = {
+resource gremlinDiag 'Microsoft.Insights/diagnosticSettings@2021-05-01-preview' = if (!empty(workspaceId)) {
   scope: gremlinAccount
   name: 'diag-loom-stdz'
   properties: {
@@ -276,7 +276,7 @@ resource gremlinDiag 'Microsoft.Insights/diagnosticSettings@2021-05-01-preview' 
   }
 }
 
-resource vectorDiag 'Microsoft.Insights/diagnosticSettings@2021-05-01-preview' = {
+resource vectorDiag 'Microsoft.Insights/diagnosticSettings@2021-05-01-preview' = if (!empty(workspaceId)) {
   scope: vectorAccount
   name: 'diag-loom-stdz'
   properties: {

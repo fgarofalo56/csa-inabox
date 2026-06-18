@@ -313,4 +313,28 @@ describe('bicep drift guard (no-vaporware)', () => {
     expect(out).toContain("param firewallTier = 'Premium'");
     expect(out).toContain('param streamAnalyticsStreamingUnits = 12'); // int, bare
   });
+
+  it('emits config for the wave-3 additions (vm/signalr/staticWebApps/cdn/aci/ml)', () => {
+    const sub: PlanSubscription = {
+      id: 'sub-1', name: 'Cfg2', boundary: 'Commercial',
+      domains: [{ domainId: 'd', name: 'D', services: ['vm', 'signalr', 'staticWebApps', 'cdn', 'containerInstances', 'mlWorkspace'] }],
+      serviceConfigs: {
+        vm: { vmSize: 'Standard_D4s_v5' },
+        signalr: { skuName: 'Premium_P1', skuCapacity: 5 },
+        staticWebApps: { skuName: 'Free' },
+        cdn: { skuName: 'Premium_Verizon' },
+        containerInstances: { cpuCores: 2, memoryInGB: 4 },
+        mlWorkspace: { computeVmSize: 'Standard_E4s_v3' },
+      },
+    };
+    const out = planToBicepparam(sub);
+    expect(out).toContain("param vmSize = 'Standard_D4s_v5'");
+    expect(out).toContain("param signalrSkuName = 'Premium_P1'");
+    expect(out).toContain('param signalrSkuCapacity = 5'); // int, bare
+    expect(out).toContain("param staticWebAppsSkuName = 'Free'");
+    expect(out).toContain("param cdnSkuName = 'Premium_Verizon'");
+    expect(out).toContain('param containerInstancesCpuCores = 2');  // numeric select → int
+    expect(out).toContain('param containerInstancesMemoryInGB = 4'); // number → int
+    expect(out).toContain("param mlComputeVmSize = 'Standard_E4s_v3'");
+  });
 });

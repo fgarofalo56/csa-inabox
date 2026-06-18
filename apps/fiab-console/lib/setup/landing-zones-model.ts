@@ -39,11 +39,19 @@ export interface HubCoords {
  *                   "wired" from the RG being discoverable in a sub the Console
  *                   has at least Reader on — Resource Graph honours RBAC, so a
  *                   returned RG means the Console can see it).
- *   - 'detached'  : the RG exists but is in a subscription the Console cannot
- *                   write to (Reader-only) — it may need re-attach / RBAC repair
- *                   before navigators can manage it. (Determined by the route
- *                   from the deploy pre-flight permission check.)
+ *   - 'detached'  : the RG exists but the Console can only READ it (Reader-only
+ *                   at BOTH the RG scope and the subscription scope) — it may
+ *                   need re-attach / RBAC repair before navigators can manage
+ *                   it. (Determined by the route from the deploy pre-flight
+ *                   permission check.)
  *   - 'unknown'   : permission could not be determined.
+ *
+ * IMPORTANT (multi-sub least-privilege): the Console UAMI is granted Contributor
+ * scoped to the **DLZ resource group**, NOT subscription-wide (the DLZ sub holds
+ * many non-Loom workloads). So a DLZ is 'attached' when the UAMI can write at
+ * EITHER the RG scope (the normal multi-sub case) OR the subscription scope
+ * (single-sub / hub-sub). Requiring sub-scope write would false-flag every
+ * correctly-secured RG-scoped DLZ as needing repair.
  */
 export type DlzAttachState = 'attached' | 'detached' | 'unknown';
 
@@ -73,19 +81,52 @@ export function parseDlzRgName(rg: string): { domainName: string; region: string
   return { domainName: m[1], region: m[2] };
 }
 
+/** Options carrying the permission signals the route probed from live ARM. */
+export interface AttachStateInputs {
+  /** Subscription ids the Console can WRITE to (sub-scoped Contributor/Owner). */
+  writableSubs?: Set<string>;
+  /**
+   * Resource-group ids (`<subscriptionId>/<rgName>`, lowercased) the Console can
+   * MANAGE in place (RG-scoped Contributor/Owner). This is the normal multi-sub
+   * signal — the UAMI gets RG-scoped, not sub-scoped, Contributor.
+   */
+  writableRgs?: Set<string>;
+  /**
+   * Resource-group ids (`<subscriptionId>/<rgName>`, lowercased) whose permission
+   * check could NOT be determined (the ARM permissions read itself errored —
+   * token/network/403). These resolve to 'unknown' rather than 'detached' so a
+   * transient or cross-sub read failure is never mis-reported as Reader-only
+   * (no-vaporware: an undeterminable state is honest, a false "needs repair" is not).
+   */
+  unknownRgs?: Set<string>;
+}
+
+/** Stable `<subscriptionId>/<rgName>` key (lowercased) for an RG. */
+export function rgKey(subscriptionId: string, rg: string): string {
+  return `${subscriptionId}/${rg}`.toLowerCase();
+}
+
 /**
- * PURE: map the hub + DLZ RG rows into the overview. `writableSubs` is the set
- * of subscription ids the Console can WRITE to (Contributor+) — used to mark a
- * cross-sub DLZ in a Reader-only sub as 'detached' (needs RBAC repair before it
- * can be managed). When `writableSubs` is undefined the attach state is
- * 'unknown' (permission not probed) rather than guessed.
+ * PURE: map the hub + DLZ RG rows into the overview. A DLZ is 'attached' when
+ * the Console can write at EITHER the RG scope (`writableRgs`, the normal
+ * least-privilege multi-sub grant) OR the subscription scope (`writableSubs`,
+ * single-sub / hub-sub). Same-sub-as-hub DLZs are always attached. When NEITHER
+ * signal is supplied the attach state is 'unknown' (permission not probed)
+ * rather than guessed.
+ *
+ * Back-compat: the 4th arg may be a bare `Set<string>` of writable sub ids (the
+ * original signature) or the richer {@link AttachStateInputs}.
  */
 export function buildLandingZonesOverview(
   hub: HubCoords | null,
   hubExists: boolean,
   dlzRgRows: DlzRgRow[],
-  writableSubs?: Set<string>,
+  perms?: Set<string> | AttachStateInputs,
 ): LandingZonesOverview {
+  const inputs: AttachStateInputs =
+    perms instanceof Set ? { writableSubs: perms } : perms ?? {};
+  const { writableSubs, writableRgs, unknownRgs } = inputs;
+  const probed = !!writableSubs || !!writableRgs || !!unknownRgs;
   const hubSub = hub?.hubSubscriptionId;
   const landingZones: LandingZone[] = [];
   for (const row of dlzRgRows) {
@@ -93,10 +134,21 @@ export function buildLandingZonesOverview(
     if (!parsed) continue;
     const crossSubscription = !!hubSub && row.subscriptionId !== hubSub;
     let attachState: DlzAttachState = 'unknown';
-    if (writableSubs) {
-      // Same-sub-as-hub DLZs are always manageable; cross-sub depends on write rights.
+    if (probed) {
+      const key = rgKey(row.subscriptionId, row.name);
+      const subWritable = !!writableSubs?.has(row.subscriptionId);
+      const rgWritable = !!writableRgs?.has(key);
+      const rgUnknown = !!unknownRgs?.has(key);
+      // Same-sub-as-hub DLZs are always manageable; otherwise RG- OR sub-scope
+      // write is enough (RG-scope is the normal least-privilege grant). When the
+      // RG permission read itself could not be determined we report 'unknown'
+      // (not 'detached') so an undeterminable read never false-flags Reader-only.
       attachState =
-        !crossSubscription || writableSubs.has(row.subscriptionId) ? 'attached' : 'detached';
+        !crossSubscription || subWritable || rgWritable
+          ? 'attached'
+          : rgUnknown
+            ? 'unknown'
+            : 'detached';
     }
     landingZones.push({
       id: `${row.subscriptionId}/${row.name}`,

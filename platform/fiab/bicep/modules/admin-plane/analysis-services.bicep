@@ -37,13 +37,13 @@ param location string
 @maxLength(63)
 param serverName string = 'aasloom'
 
-@description('AAS SKU name')
-@allowed(['D1', 'B1', 'B2', 'S0', 'S1', 'S2', 'S4', 'S8', 'S9'])
-param skuName string = 'D1'
+@description('AAS SKU name. Standard tier only — S0 is the smallest/cheapest Standard SKU and is broadly available. Developer (D1) and Basic (B1/B2) tiers are not offered in many regions (centralus exposes only S0, S1, S2, S4, S8v2, S9v2), so they are excluded here to avoid SkuNotAvailable on a day-one deploy.')
+@allowed(['S0', 'S1', 'S2', 'S4', 'S8v2', 'S9v2'])
+param skuName string = 'S0'
 
-@description('SKU tier')
-@allowed(['Development', 'Basic', 'Standard'])
-param skuTier string = 'Development'
+@description('SKU tier — Standard for every selectable skuName above.')
+@allowed(['Standard'])
+param skuTier string = 'Standard'
 
 @description('AAS database / model name wired into LOOM_AAS_DATABASE')
 param aasDatabase string = 'LoomComposite'
@@ -83,11 +83,24 @@ resource aasServer 'Microsoft.AnalysisServices/servers@2017-08-01' = {
 
 // ARM Reader for the Console UAMI (control-plane visibility; the AAS admin list
 // above grants the data-plane XMLA rights).
+//
+// The role-assignment NAME is the stable guid(scope, principalId, readerRoleId)
+// — i.e. the actual Reader role definition GUID, NOT a literal 'reader' string.
+// Azure dedupes a role assignment by (principal, role, scope), so when this
+// composite-model module and aas-server.bicep both target the SAME server
+// (admin-plane/main.bicep passes the identical `aasloom${uniqueString}` name to
+// both when aasEnabled), the prior literal-'reader' name produced a DIFFERENT
+// assignment GUID for the same (principal,role,scope) tuple — Azure then failed
+// with RoleAssignmentExists (pass-6 centralus deploy 2026-06-17). Using the real
+// role GUID here makes both modules compute the identical assignment name; and
+// admin-plane/main.bicep additionally passes skipRoleGrants:true to the shared
+// `aas` instantiation so aas-server.bicep is the SINGLE owner of this grant.
+var readerRoleId = 'acdd72a7-3385-48ef-bd42-f606fba81ae7'
 resource aasReaderRbac 'Microsoft.Authorization/roleAssignments@2022-04-01' = if (!skipRoleGrants && !empty(consolePrincipalId)) {
-  name: guid(aasServer.id, consolePrincipalId, 'reader')
+  name: guid(aasServer.id, consolePrincipalId, readerRoleId)
   scope: aasServer
   properties: {
-    roleDefinitionId: subscriptionResourceId('Microsoft.Authorization/roleDefinitions', 'acdd72a7-3385-48ef-bd42-f606fba81ae7') // Reader
+    roleDefinitionId: subscriptionResourceId('Microsoft.Authorization/roleDefinitions', readerRoleId) // Reader
     principalId: consolePrincipalId
     principalType: 'ServicePrincipal'
   }

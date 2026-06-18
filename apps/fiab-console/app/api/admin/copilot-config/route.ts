@@ -1,8 +1,12 @@
 /**
  * GET  /api/admin/copilot-config — current tenant-wide Copilot & Agents config
- *   → { ok, config, accounts, defaultAccount, accountsError? }
+ *   → { ok, config, accounts, defaultAccount, envDefaults, accountsError? }
  *     (accounts is the live list of model-hosting Cognitive Services accounts so
- *      the picker can render even on first load.)
+ *      the picker can render even on first load. envDefaults surfaces the
+ *      deployment-level env-var fallbacks — LOOM_AOAI_ENDPOINT /
+ *      LOOM_AOAI_DEPLOYMENT / LOOM_FOUNDRY_PROJECT_ENDPOINT|ID — that the chat
+ *      backends already use when no tenant doc is saved, so the UI can show
+ *      "linked + working day-one" instead of blank fields.)
  * PUT  /api/admin/copilot-config — body: { config: TenantCopilotConfig }
  *   Persists to the `copilot-config` Cosmos container (one doc per tenant) and
  *   emits an audit-log entry. Returns { ok, config }.
@@ -71,7 +75,18 @@ export async function GET() {
         ? { error: e.message, hint: e.hint }
         : { error: e?.message || String(e) };
     }
-    return NextResponse.json({ ok: true, config, accounts, defaultAccount, accountsError });
+    // Env-var fallbacks the chat backends already honor (copilot-orchestrator
+    // resolveAoaiTarget → LOOM_AOAI_ENDPOINT/_DEPLOYMENT; foundry-agent-client →
+    // LOOM_FOUNDRY_PROJECT_ENDPOINT/_ID). Surfaced so the UI shows Copilot is
+    // linked + working on a fresh deploy even before any admin save. Non-secret
+    // (endpoint hosts + deployment NAMES only — never keys/tokens).
+    const envDefaults = {
+      aoaiEndpoint: process.env.LOOM_AOAI_ENDPOINT || undefined,
+      copilotChatDeployment: process.env.LOOM_AOAI_DEPLOYMENT || undefined,
+      foundryProjectEndpoint: process.env.LOOM_FOUNDRY_PROJECT_ENDPOINT || undefined,
+      foundryProjectId: process.env.LOOM_FOUNDRY_PROJECT_ID || undefined,
+    };
+    return NextResponse.json({ ok: true, config, accounts, defaultAccount, envDefaults, accountsError });
   } catch (e: any) {
     return err(e?.message || String(e), 500);
   }

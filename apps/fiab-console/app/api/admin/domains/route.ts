@@ -18,8 +18,11 @@
  * mirrors are best-effort and never block the write. NO Fabric dependency —
  * both back-ends are Azure-native and independently optional.
  *
- * GET   /api/admin/domains — list tenant domains (+ workspace count + Purview &
- *                            Unity Catalog link status when configured)
+ * GET   /api/admin/domains — list tenant domains (+ workspace count + Unity
+ *                            Catalog link status). The Purview mirror status is
+ *                            split out to GET /api/admin/domains/purview-status
+ *                            so a slow/403 Purview Data Map probe can't block
+ *                            the list (6s-timeout regression fix).
  * POST  /api/admin/domains   body: { id, name, description?, color?, owners?, admins?, parentId? }
  * PATCH /api/admin/domains?id=...  body: subset of mutable fields, incl. `parentId` (MOVE)
  * DELETE /api/admin/domains?id=...
@@ -27,10 +30,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { getSession } from '@/lib/auth/session';
 import { tenantSettingsContainer, workspacesContainer } from '@/lib/azure/cosmos-client';
-import {
-  listBusinessDomains,
-  PurviewNotConfiguredError,
-} from '@/lib/azure/purview-client';
 import {
   mirrorDomainUpsert,
   mirrorDomainMove,
@@ -65,40 +64,6 @@ export const dynamic = 'force-dynamic';
 
 async function loadOrSeed(tenantId: string, who: string): Promise<DomainsDoc> {
   return loadOrSeedDomains(tenantId, who);
-}
-
-/**
- * Resolve the Purview business-domain mirror state. Returns either the list
- * of Purview business-domain names (so the UI can show which Cosmos domains
- * are also governed in Purview) or an honest gate describing the one-time
- * provisioning step. Never throws — Purview is optional.
- */
-async function purviewStatus(): Promise<
-  | { configured: true; domains: Array<{ id?: string; name: string }> }
-  | { configured: false; gated: false; hint: string }
-> {
-  try {
-    const domains = await listBusinessDomains();
-    return {
-      configured: true,
-      domains: (domains || []).map((d: any) => ({ id: d.id, name: d.name || d.displayName })),
-    };
-  } catch (e: any) {
-    if (e instanceof PurviewNotConfiguredError) {
-      return {
-        configured: false,
-        gated: false,
-        hint:
-          "Purview mirror inactive — domains live in Loom's Cosmos store and fully work. To also mirror them in Purview, set LOOM_PURVIEW_ACCOUNT (admin-plane/main.bicep apps[] env) and deploy with purviewEnabled=true. NOTE: classic Purview Data Map has no \"business domains\"; Loom maps domains to Atlas collections/assets instead.",
-      };
-    }
-    // Any other Purview error (auth, transient) is still non-fatal here.
-    return {
-      configured: false,
-      gated: false,
-      hint: `Purview mirror unavailable: ${e?.message || String(e)}. Domains are stored in Loom and work offline.`,
-    };
-  }
 }
 
 /**
@@ -146,12 +111,16 @@ export async function GET() {
     const domainCatalogs = Array.from(
       new Set(doc.items.map((d) => (d.parentId ? unityName(d.parentId) : unityName(d.id)))),
     );
-    const [purview, counts, unity] = await Promise.all([
-      purviewStatus(), workspaceCounts(tenantId), unityLinkStatus(domainCatalogs),
+    // NOTE: the Purview business-domain mirror status is DELIBERATELY NOT fetched
+    // here. The Purview Data Map data-plane probe can answer 403 slowly behind a
+    // private endpoint, and waiting on it pushed this GET past the client's fetch
+    // timeout → the "Could not load domains — timed out" regression. The domains
+    // live in Cosmos and are fast; they must never block on Purview. The page
+    // fetches GET /api/admin/domains/purview-status LAZILY after the list renders
+    // and marks `purviewLinked` / shows the honest mirror gate from that result.
+    const [counts, unity] = await Promise.all([
+      workspaceCounts(tenantId), unityLinkStatus(domainCatalogs),
     ]);
-    const purviewNames = new Set(
-      purview.configured ? purview.domains.map((d) => (d.name || '').toLowerCase()) : [],
-    );
     // D2 tier per domain for the calling session: tenant-admin / domain-admin /
     // domain-contributor / null. Drives the tier badge on /admin/permissions and
     // the domain-picker filtering on /workspaces. The Graph fallback inside
@@ -163,12 +132,14 @@ export async function GET() {
     const domains = doc.items.map((d, i) => ({
       ...d,
       workspaceCount: counts[d.id] || 0,
-      purviewLinked: purviewNames.has((d.name || '').toLowerCase()),
+      // purviewLinked is resolved client-side from the lazy purview-status call
+      // (see /api/admin/domains/purview-status) so this list never blocks on the
+      // Purview Data Map probe.
       unityLinked: unityLinkedFor(d, unity),
       callerTier: tiers[i] as DomainTier,
     }));
     return NextResponse.json({
-      ok: true, domains, updatedAt: doc.updatedAt, purview, unity,
+      ok: true, domains, updatedAt: doc.updatedAt, unity,
       isTenantAdmin: isTenantAdminTier(s),
       domainGroupProvisioning: domainGroupProvisioningEnabled(),
       imageStorageConfigured: !!process.env.LOOM_DOMAIN_IMAGE_STORAGE,
@@ -237,6 +208,8 @@ export async function POST(req: NextRequest) {
       id, name,
       description: body?.description || undefined,
       color: body?.color || undefined,
+      icon: typeof body?.icon === 'string' && body.icon.trim() ? body.icon.trim() : undefined,
+      themeColor: typeof body?.themeColor === 'string' && body.themeColor.trim() ? body.themeColor.trim() : undefined,
       owners: normalizeOwners(body?.owners),
       admins: normalizeOwners(body?.admins),
       adminGroupId: typeof body?.adminGroupId === 'string' && body.adminGroupId.trim() ? body.adminGroupId.trim() : undefined,
@@ -384,6 +357,8 @@ export async function PATCH(req: NextRequest) {
     if (typeof body?.name === 'string' && body.name.trim()) domain.name = body.name.trim();
     if (body?.description !== undefined) domain.description = String(body.description || '').trim() || undefined;
     if (body?.color !== undefined) domain.color = String(body.color || '').trim() || undefined;
+    if (body?.icon !== undefined) domain.icon = String(body.icon || '').trim() || undefined;
+    if (body?.themeColor !== undefined) domain.themeColor = String(body.themeColor || '').trim() || undefined;
     if (body?.imageKey !== undefined) domain.imageKey = String(body.imageKey || '').trim() || undefined;
     if (body?.admins !== undefined) domain.admins = normalizeOwners(body.admins);
     if (body?.owners !== undefined) domain.owners = normalizeOwners(body.owners);

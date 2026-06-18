@@ -53,10 +53,14 @@ param purviewEnabled = bool(readEnvironmentVariable('LOOM_PURVIEW_ENABLED', 'tru
 // to a short account name to REUSE an existing Purview instead.
 param loomPurviewAccount = readEnvironmentVariable('LOOM_PURVIEW_ACCOUNT', '')
 param purviewLocation = readEnvironmentVariable('LOOM_PURVIEW_LOCATION', '')
-// Information Protection + DLP — opt in after the post-deploy bootstrap
-// workflow grants the Graph AppRoles AND admin consent is issued.
-// Set LOOM_MIP_ENABLED / LOOM_DLP_ENABLED env vars to flip these on.
-param loomMipEnabled = bool(readEnvironmentVariable('LOOM_MIP_ENABLED', 'false'))
+// Information Protection + DLP — wired day-one. The post-deploy bootstrap
+// grants the Console UAMI the Graph AppRoles (the appRoleAssignment to the MI
+// IS the grant — no separate interactive admin-consent step is needed). Both
+// default ON so LOOM_MIP_ENABLED + LOOM_DLP_ENABLED reach the Console out of
+// the box; until the AppRoles land (deploy SP needs AppRoleAssignment.ReadWrite.All
+// — see docs/fiab/v3-tenant-bootstrap.md) the tabs render the honest 503 gate,
+// never an empty stub. Override with LOOM_MIP_ENABLED=false to suppress.
+param loomMipEnabled = bool(readEnvironmentVariable('LOOM_MIP_ENABLED', 'true'))
 // DLP defaults ON: the bootstrap grants the DLP AppRoles by default, so the
 // DLP tab is wired out of the box. Override with LOOM_DLP_ENABLED=false to gate it.
 param loomDlpEnabled = bool(readEnvironmentVariable('LOOM_DLP_ENABLED', 'true'))
@@ -90,10 +94,17 @@ param powerBiSku = 'F64'
 // the "Service principals can use Power BI APIs" tenant setting are supplied
 // (post-deploy admin actions — docs/fiab/v3-tenant-bootstrap.md#usage-analytics-embed).
 // The native Fluent usage/governance charts always work without these.
-param loomUsageReportKind     = readEnvironmentVariable('LOOM_USAGE_REPORT_KIND', 'powerbi')
+// Day-one default is EMPTY → main.bicep falls through to the Azure-native
+// Managed Grafana embed (managedGrafanaEnabled + pbiEmbeddedEnabled=false),
+// pointing the Govern (F2) + Usage (F21) embeds at the stable dashboards
+// (loom-governance / loom-usage) the post-deploy bootstrap creates. This closes
+// the two self-audit warnings out of the box WITHOUT a Power BI tenant. Set
+// LOOM_REPORT_KIND/LOOM_USAGE_REPORT_KIND=powerbi (+ the workspace/report ids)
+// to opt into the Power BI Embedded path instead.
+param loomUsageReportKind     = readEnvironmentVariable('LOOM_USAGE_REPORT_KIND', '')
 param loomUsagePbiWorkspaceId = readEnvironmentVariable('LOOM_USAGE_PBI_WORKSPACE_ID', '')
 param loomUsagePbiReportId    = readEnvironmentVariable('LOOM_USAGE_PBI_REPORT_ID', '')
-param loomReportKind          = readEnvironmentVariable('LOOM_REPORT_KIND', 'powerbi')
+param loomReportKind          = readEnvironmentVariable('LOOM_REPORT_KIND', '')
 param loomGovernPbiWorkspaceId = readEnvironmentVariable('LOOM_GOVERN_PBI_WORKSPACE_ID', '')
 param loomGovernPbiReportId    = readEnvironmentVariable('LOOM_GOVERN_PBI_REPORT_ID', '')
 // Opt-in dedicated Power BI Embedded (A1) capacity for the embed token path.
@@ -157,7 +168,10 @@ param contentSafetyEnabled = true
 param agentFoundryEnabled = true
 param apimEnabled = true
 param hubFirewallEnabled = true
-param aiSearchEnabled = false
+// AI Search — day-one default ON (audit gap-closure). Clears the AI Search /
+// reindex / data-product-search / help-copilot / synonym-maps surfaces so they
+// resolve without a "set LOOM_AI_SEARCH_SERVICE" setup gate. Set false to opt out.
+param aiSearchEnabled = true
 param adxEnabled = true
 // RTI (Real-Time Intelligence) backends — Event Hubs + Stream Analytics. ON by
 // default (opt-out); set the env var to 'false' to skip the cost. Event Hubs
@@ -192,11 +206,31 @@ param appGatewayEnabled = true
 // surfaces LOOM_AML_WORKSPACE/RG/REGION to the console. No Fabric dependency.
 param mlWorkspaceEnabled = true
 
-// BI stack — Azure Analysis Services + Direct Lake shim are opt-in on the
-// admin-plane (modules/admin-plane/main.bicep params aasEnabled, aasSkuName,
-// loomBiBackend, loomDirectLakeShimEnabled). Top-level top-level main.bicep
-// keeps the defaults conservative; flip the admin-plane params directly when
-// opting in. Azure-native, no Fabric / Power BI workspace dependency.
+// BI stack — Azure Analysis Services is the Azure-native default tabular engine
+// behind the semantic-model / report surfaces. Day-one default ON (audit
+// gap-closure) so the AAS / XMLA / DirectQuery surfaces resolve without a
+// "set LOOM_AAS_SERVER" setup gate. main.bicep now passes aasEnabled through to
+// admin-plane (the passthrough was previously missing). Azure-native — no Fabric /
+// Power BI workspace dependency (XMLA / Direct Lake shim remain opt-in). Set false
+// for GCC-High / DoD (AAS unavailable there → Synapse-Serverless / Loom-native fallback).
+param aasEnabled = true
+
+// Azure Managed Grafana — day-one default ON (audit gap-closure) so the
+// Govern / Usage embedded-dashboard surfaces resolve without a
+// "set LOOM_GRAFANA_ENDPOINT" setup gate.
+param managedGrafanaEnabled = true
+
+// Event Grid custom topic — day-one default ON (audit gap-closure) so the
+// business-events topics surface resolves without a "set LOOM_EVENTGRID_SUB" gate.
+param eventGridEnabled = true
+
+// Report-subscription delivery (Logic App + function) — day-one default ON
+// (audit gap-closure) so report subscriptions deliver without a setup gate.
+param reportSubscriptionsEnabled = true
+
+// Consumption Logic App (logic-app provisioner + approval / report-subscription
+// delivery) — day-one default ON (audit gap-closure).
+param logicAppsEnabled = true
 
 // ---------- Bring-your-own existing services (reuse instead of provision-new) ----------
 // Set the EXISTING_* env var (or edit here) to point Loom at an EXISTING resource

@@ -267,13 +267,13 @@ export default function CopilotPage() {
 
   const sessionColumns = useMemo<LoomColumn<SessionSummary>[]>(() => [
     {
-      key: 'prompt', label: 'Prompt', width: 420,
+      key: 'prompt', label: 'Prompt', width: 420, sortable: true, filterable: true,
       getValue: (r) => r.prompt || '(no prompt)',
       render: (r) => <Text weight="semibold">{(r.prompt || '(no prompt)').slice(0, 120)}</Text>,
     },
-    { key: 'stepCount', label: 'Steps', width: 90, filterable: false, getValue: (r) => r.stepCount },
+    { key: 'stepCount', label: 'Steps', width: 90, sortable: true, filterable: false, getValue: (r) => r.stepCount },
     {
-      key: 'updatedAt', label: 'Updated', width: 200, filterable: false,
+      key: 'updatedAt', label: 'Updated', width: 200, sortable: true, filterable: true, filterType: 'date',
       getValue: (r) => r.updatedAt,
       render: (r) => <Caption1>{new Date(r.updatedAt).toLocaleString()}</Caption1>,
     },

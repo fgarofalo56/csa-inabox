@@ -3,16 +3,17 @@
 import { clientFetch } from '@/lib/client-fetch';
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import {
-  Spinner, Badge, Caption1, Body1, Input, Textarea, Button,
+  Spinner, Badge, Caption1, Input, Textarea, Button,
   MessageBar, MessageBarBody, MessageBarTitle,
   Dialog, DialogSurface, DialogBody, DialogTitle, DialogContent, DialogActions,
   makeStyles, tokens,
 } from '@fluentui/react-components';
-import { Add24Regular, Delete20Regular, ArrowSync24Regular, Info20Regular } from '@fluentui/react-icons';
+import { Add24Regular, Delete20Regular, ArrowSync24Regular } from '@fluentui/react-icons';
 import { AdminShell } from '@/lib/components/admin-shell';
 import { Section, Toolbar } from '@/lib/components/ui/section';
 import { useAdminTabStyles } from '@/lib/components/ui/admin-tab-styles';
 import { LoomDataTable, type LoomColumn } from '@/lib/components/ui/loom-data-table';
+import { SectionExplainer } from '@/lib/components/ui/learn-popover';
 
 interface SensitivityLabel {
   id: string;
@@ -24,7 +25,6 @@ interface SensitivityLabel {
 }
 
 const useStyles = makeStyles({
-  explainer: { display: 'flex', gap: tokens.spacingHorizontalM, alignItems: 'flex-start' },
   swatch: { width: '16px', height: '16px', borderRadius: '3px', display: 'inline-block', verticalAlign: 'middle', marginRight: '8px', flexShrink: 0 },
   swatchRow: { display: 'flex', alignItems: 'center', gap: tokens.spacingHorizontalXS },
   colorRow: { display: 'flex', gap: tokens.spacingHorizontalXS },
@@ -111,12 +111,9 @@ export default function SensitivityLabelsPage() {
   return (
     <AdminShell sectionTitle='Sensitivity labels'>
       <Section title='About sensitivity labels'>
-        <div className={s.explainer}>
-          <Info20Regular className={a.infoIcon} />
-          <Body1 className={a.explainerText}>
-            Sensitivity labels are Loom-native tags (distinct from Microsoft Purview Information Protection labels). Each label carries a <strong>name</strong>, a <strong>color</strong> for visual distinction, and an optional <strong>protection note</strong> describing DLP rules or handling requirements. Use these to classify assets by sensitivity level: Restricted, Confidential, Internal, Public.
-          </Body1>
-        </div>
+        <SectionExplainer>
+          Sensitivity labels are Loom-native tags (distinct from Microsoft Purview Information Protection labels). Each label carries a <strong>name</strong>, a <strong>color</strong> for visual distinction, and an optional <strong>protection note</strong> describing DLP rules or handling requirements. Use these to classify assets by sensitivity level: Restricted, Confidential, Internal, Public.
+        </SectionExplainer>
       </Section>
 
       <MessageBar intent='warning' className={a.messageBar}>

@@ -26,7 +26,7 @@ import {
 
 type AuditStatus = 'pass' | 'warn' | 'fail';
 type AuditSeverity = 'critical' | 'recommended' | 'optional';
-type AuditCategory = 'identity' | 'data-plane' | 'azure-services' | 'permissions' | 'security' | 'enrichment';
+type AuditCategory = 'identity' | 'data-plane' | 'azure-services' | 'permissions' | 'security' | 'enrichment' | 'builders' | 'catalog-governance' | 'ai-copilot';
 interface CheckResult {
   id: string; category: AuditCategory; title: string; severity: AuditSeverity; status: AuditStatus;
   detail: string; remediation?: string; fixId?: string; redeploy?: boolean; docs?: string;
@@ -45,8 +45,11 @@ const CATEGORY_LABEL: Record<AuditCategory, string> = {
   'permissions': 'Permissions',
   'security': 'Security posture',
   'enrichment': 'Enrichment',
+  'builders': 'Builders',
+  'catalog-governance': 'Catalog & governance backends',
+  'ai-copilot': 'AI & Copilot',
 };
-const CATEGORY_ORDER: AuditCategory[] = ['identity', 'data-plane', 'permissions', 'azure-services', 'security', 'enrichment'];
+const CATEGORY_ORDER: AuditCategory[] = ['identity', 'data-plane', 'permissions', 'azure-services', 'catalog-governance', 'ai-copilot', 'builders', 'security', 'enrichment'];
 
 const card: React.CSSProperties = {
   padding: 20, border: `1px solid ${tokens.colorNeutralStroke2}`,

@@ -839,15 +839,16 @@ export function ApiMarketplace() {
 
           {detailTab === 'operations' && (
             <div className={s.tabBody}>
-              {ops.loading && <Spinner size="tiny" label="Loading operations…" labelPosition="after" />}
               {ops.error && <MessageBar intent="warning"><MessageBarBody>{ops.error}</MessageBarBody></MessageBar>}
-              {!ops.loading && !ops.error && (
+              {!ops.error && (
                 <LoomDataTable<Operation>
                   ariaLabel="Operations"
+                  loading={ops.loading}
+                  skeleton
                   columns={[
-                    { key: 'method', label: 'Method', width: 110, getValue: (r) => r.method || '', render: (r) => <Badge appearance="tint">{r.method}</Badge> },
-                    { key: 'name', label: 'Name', width: 240, getValue: (r) => r.displayName || r.name, render: (r) => r.displayName || r.name },
-                    { key: 'url', label: 'URL template', width: 280, getValue: (r) => r.urlTemplate || '', render: (r) => <code>{r.urlTemplate}</code> },
+                    { key: 'method', label: 'Method', width: 110, sortable: true, filterable: true, getValue: (r) => r.method || '', render: (r) => <Badge appearance="tint">{r.method}</Badge> },
+                    { key: 'name', label: 'Name', width: 240, sortable: true, filterable: true, getValue: (r) => r.displayName || r.name, render: (r) => r.displayName || r.name },
+                    { key: 'url', label: 'URL template', width: 280, sortable: true, filterable: true, getValue: (r) => r.urlTemplate || '', render: (r) => <code>{r.urlTemplate}</code> },
                     {
                       key: 'try', label: 'Try', width: 90, sortable: false, filterable: false,
                       render: (r) => (
