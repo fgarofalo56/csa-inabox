@@ -261,7 +261,9 @@ function OverviewTab({ onUnauth }: { onUnauth: () => void }) {
     }).catch((e) => { if (alive) { setErr(String(e)); setResources([]); setHealth({}); } });
 
     // 2) Resource Health — slow, parallel, best-effort. Never blocks the grid.
-    clientFetch('/api/monitor/health').then(async (r) => {
+    // Crawls Resource Health across every Loom subscription (admin + DLZ), so
+    // give it the longer action budget rather than the 6s first-paint default.
+    actionFetch('/api/monitor/health').then(async (r) => {
       if (!alive) return;
       if (r.status === 401 || r.status === 403) { setHealth({}); return; }
       const j = await r.json();
@@ -898,7 +900,10 @@ function ActivityTab({ onUnauth }: { onUnauth: () => void }) {
   useEffect(() => {
     let alive = true;
     setEvents(null); setGate(null); setErr(null);
-    clientFetch(`/api/monitor/activity?days=${days}`).then(async (r) => {
+    // The Activity Log crawl paginates control-plane events across every Loom RG
+    // (admin + DLZ subs) — heavier than the 6s default, so use the longer action
+    // budget (clientFetch relabels a timeout to a clear message).
+    actionFetch(`/api/monitor/activity?days=${days}`).then(async (r) => {
       if (!alive) return;
       if (r.status === 401 || r.status === 403) { onUnauth(); setEvents([]); return; }
       const j = await r.json();
@@ -1411,7 +1416,10 @@ function CostTab({ onUnauth }: { onUnauth: () => void }) {
   useEffect(() => {
     let alive = true;
     setData(null); setGate(null); setErr(null);
-    clientFetch(`/api/monitor/cost?timeframe=${encodeURIComponent(timeframe)}`).then(async (r) => {
+    // Cost aggregates Microsoft.CostManagement across every Loom subscription —
+    // legitimately heavier than the 6s page-load budget, so use the longer
+    // action budget. clientFetch relabels a timeout to a clear message.
+    actionFetch(`/api/monitor/cost?timeframe=${encodeURIComponent(timeframe)}`).then(async (r) => {
       if (!alive) return;
       if (r.status === 401 || r.status === 403) { onUnauth(); setData(null); return; }
       // Read text first: a gateway 502/504 returns an HTML error page, not JSON,
@@ -1640,7 +1648,10 @@ function SecurityTab({ onUnauth }: { onUnauth: () => void }) {
   useEffect(() => {
     let alive = true;
     setData(null); setGate(null); setErr(null);
-    clientFetch('/api/monitor/defender').then(async (r) => {
+    // Defender for Cloud aggregates secure-score + recommendations + alerts
+    // across the Loom subscriptions — heavier than the 6s default, so use the
+    // longer action budget (clientFetch relabels a timeout to a clear message).
+    actionFetch('/api/monitor/defender').then(async (r) => {
       if (!alive) return;
       if (r.status === 401 || r.status === 403) { onUnauth(); setData(null); return; }
       const j = await r.json();
