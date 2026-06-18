@@ -76,6 +76,58 @@ var goldUrl = 'https://${dlzAdlsAccount}.${dfsSuffix}/gold'
 // ADLS/medallion env. (Note: .blob — not the .dfs medallion host.)
 var orgVisualsUrl = 'https://${dlzAdlsAccount}.blob.${environment().suffixes.storage}/org-visuals'
 
+// =====================================================================
+// Deployment-script staging storage account
+//   Azure deploymentScripts stage their script + outputs on a storage
+//   account that the backing Azure Container Instance mounts as a FILE
+//   SHARE — and the ONLY way ACI can mount a file share is via a SHARED
+//   KEY. A subscription that enforces `allowSharedKeyAccess=false` (Azure
+//   Policy — common on the DLZ AND the hub) makes the script service's
+//   auto-created SA reject key auth, and this deploymentScript fails on a
+//   clean dlz-attach deploy with `KeyBasedAuthenticationNotPermitted (403)`.
+//
+//   Fix: stand up a small DEDICATED staging SA that explicitly ALLOWS
+//   shared-key access (it only ever holds the throwaway script file share
+//   + log blobs, never data) and point the deploymentScript at it via the
+//   `storageAccountSettings` property. Per Learn
+//   (deployment-script-template#use-existing-storage-account):
+//     - kind must be Storage/StorageV2 (StorageV2 here)
+//     - allowSharedKeyAccess MUST be true
+//     - storage firewall rules are NOT supported → public network access on
+//     - the deploying principal needs listKeys on the SA (it has Contributor
+//       on this RG via the deployment), which is how storageAccountKey below
+//       is supplied. The script UAMI mounts via that key, so it needs no
+//       extra RBAC on this SA — keeping the grant minimal.
+//   Mirrors the #1440 pattern in landing-zone/synapse.bicep. This module is
+//   scoped to the HUB admin RG/sub (main.bicep), so the staging SA lives in
+//   the hub RG where the script actually runs.
+// =====================================================================
+var scriptStagingSaName = take('sadsloomhce${uniqueString(resourceGroup().id, 'hub-console-dlz-env-staging')}', 24)
+
+resource scriptStagingStorage 'Microsoft.Storage/storageAccounts@2023-05-01' = {
+  name: scriptStagingSaName
+  location: location
+  tags: complianceTags
+  kind: 'StorageV2'
+  sku: { name: 'Standard_LRS' }
+  properties: {
+    // REQUIRED for deploymentScripts — ACI mounts the staging file share via a
+    // shared key. This SA holds only ephemeral script staging (never data), so
+    // allowing shared-key access here does NOT weaken the data-plane posture.
+    allowSharedKeyAccess: true
+    allowBlobPublicAccess: false
+    minimumTlsVersion: 'TLS1_2'
+    supportsHttpsTrafficOnly: true
+    // deploymentScripts do not support storage firewall rules (Learn), so the
+    // staging SA keeps default public network access; it carries no data.
+    publicNetworkAccess: 'Enabled'
+    networkAcls: {
+      defaultAction: 'Allow'
+      bypass: 'AzureServices'
+    }
+  }
+}
+
 resource wireDlzEnv 'Microsoft.Resources/deploymentScripts@2023-08-01' = {
   name: 'wire-hub-console-dlz-env'
   location: location
@@ -91,6 +143,12 @@ resource wireDlzEnv 'Microsoft.Resources/deploymentScripts@2023-08-01' = {
     azCliVersion: '2.64.0'
     retentionInterval: 'PT1H'
     timeout: 'PT15M'
+    // Stage on the dedicated shared-key-enabled SA so this does not hit
+    // KeyBasedAuthenticationNotPermitted on a sub that denies shared-key access.
+    storageAccountSettings: {
+      storageAccountName: scriptStagingSaName
+      storageAccountKey: scriptStagingStorage.listKeys().keys[0].value
+    }
     environmentVariables: [
       { name: 'APP_NAME', value: consoleAppName }
       { name: 'RG_NAME', value: resourceGroup().name }
