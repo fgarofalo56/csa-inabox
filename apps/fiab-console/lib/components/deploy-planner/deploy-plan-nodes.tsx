@@ -15,7 +15,8 @@ import * as React from 'react';
 import { memo } from 'react';
 import { Handle, Position, type NodeProps } from '@xyflow/react';
 import { Badge, Caption1, tokens } from '@fluentui/react-components';
-import { serviceByKey, serviceVisual } from './service-catalog';
+import { CheckmarkCircle12Filled, Circle12Regular } from '@fluentui/react-icons';
+import { serviceByKey, serviceVisual, type ConfigStatus } from './service-catalog';
 import { iconUrl } from '../ui/item-type-visual';
 
 const BOUNDARY_TINT: Record<string, string> = {
@@ -38,6 +39,8 @@ export interface DomainNodeData {
 }
 export interface ServiceNodeData {
   serviceKey: string;
+  /** Per-resource config status, computed by the view (drives the node badge). */
+  configStatus?: ConfigStatus;
   [key: string]: unknown;
 }
 
@@ -126,10 +129,19 @@ function ServiceNodeImpl({ data, selected }: NodeProps) {
         whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis',
       }}>{vis.label}</span>
       {def?.config?.length ? (
-        <span title="Has configurable SKU / tier" style={{
-          flexShrink: 0, width: 7, height: 7, borderRadius: 4,
-          background: tokens.colorBrandBackground,
-        }} />
+        d.configStatus === 'configured' ? (
+          <CheckmarkCircle12Filled aria-label="Configured" title="Configured ✓"
+            style={{ flexShrink: 0, color: tokens.colorPaletteGreenForeground1 }} />
+        ) : d.configStatus === 'invalid' ? (
+          <span role="img" aria-label="Invalid configuration" title="Invalid configuration — open to fix" style={{
+            flexShrink: 0, width: 7, height: 7, borderRadius: 4,
+            background: tokens.colorPaletteRedBackground3,
+          }} />
+        ) : (
+          <Circle12Regular aria-label="Needs configuration"
+            title="Using defaults — select to review its SKU / tier"
+            style={{ flexShrink: 0, color: tokens.colorNeutralForeground3 }} />
+        )
       ) : null}
       {def?.planOnly && (
         <span role="img" aria-label="Plan-only — no one-button bicep toggle yet"

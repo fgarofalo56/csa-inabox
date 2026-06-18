@@ -106,4 +106,29 @@ describe('planToBicep — emission', () => {
     const out = planToBicep({ id: 's', name: 'Empty', boundary: 'Commercial', domains: [] });
     expect(out).toContain('No module-backed services are selected');
   });
+
+  it('threads the wave-3 additions config into their module params', () => {
+    const wave3: PlanSubscription = {
+      id: 's', name: 'W3', boundary: 'Commercial',
+      domains: [{ domainId: 'd', name: 'D', services: ['vm', 'signalr', 'staticWebApps', 'cdn', 'containerInstances', 'mlWorkspace'] }],
+      serviceConfigs: {
+        vm: { vmSize: 'Standard_D4s_v5' },
+        signalr: { skuName: 'Premium_P1', skuCapacity: 3 },
+        staticWebApps: { skuName: 'Free' },
+        cdn: { skuName: 'Premium_Verizon' },
+        containerInstances: { cpuCores: 4, memoryInGB: 8 },
+        mlWorkspace: { computeVmSize: 'Standard_E4s_v3' },
+      },
+    };
+    const out = planToBicep(wave3);
+    // module param names (NOT the top-level main.bicep param names)
+    expect(out).toContain("vmSize: 'Standard_D4s_v5'");
+    expect(out).toContain("skuName: 'Premium_P1'");
+    expect(out).toContain('skuCapacity: 3');
+    expect(out).toContain("skuName: 'Free'");          // static web app
+    expect(out).toContain("skuName: 'Premium_Verizon'"); // cdn
+    expect(out).toContain('cpuCores: 4');
+    expect(out).toContain('memoryInGB: 8');
+    expect(out).toContain("richDisplayComputeVmSize: 'Standard_E4s_v3'");
+  });
 });
