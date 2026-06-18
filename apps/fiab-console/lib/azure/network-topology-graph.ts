@@ -42,6 +42,7 @@ import {
 } from '@azure/identity';
 import { AcaManagedIdentityCredential } from '@/lib/azure/aca-managed-identity';
 import { armBase, armScope } from './cloud-endpoints';
+import { dlzSubscriptionId } from './loom-subscriptions';
 
 const ARM_SCOPE = process.env.LOOM_ARM_SCOPE || armScope();
 const ARG_API = '2022-10-01';
@@ -146,15 +147,21 @@ const NETWORK_TYPES = [
 
 /**
  * Resolve the set of subscriptions to query: LOOM_SUBSCRIPTION_ID (primary)
- * unioned with the comma-separated LOOM_EXTRA_SUBSCRIPTIONS. De-duplicated,
- * order preserved. Empty when neither is set — the route turns that into an
- * honest config gate instead of a 5xx.
+ * unioned with the DLZ subscription (LOOM_DLZ_SUBSCRIPTION_ID) and the
+ * comma-separated LOOM_EXTRA_SUBSCRIPTIONS. De-duplicated, order preserved.
+ * Empty when none is set — the route turns that into an honest config gate
+ * instead of a 5xx.
+ *
+ * The live multi-sub bug: the DLZ sub was omitted, so the topology canvas
+ * rendered EMPTY (the hub + DLZ VNets / peering / PEs / NSGs live in the DLZ
+ * sub). Including it populates the full CSA Loom network estate.
  */
 export function topologySubscriptionScope(): string[] {
   const primary = (process.env.LOOM_SUBSCRIPTION_ID || '').trim();
+  const dlz = dlzSubscriptionId();
   const extra = (process.env.LOOM_EXTRA_SUBSCRIPTIONS || '')
     .split(',').map((s) => s.trim()).filter(Boolean);
-  return Array.from(new Set([primary, ...extra].filter(Boolean)));
+  return Array.from(new Set([primary, dlz, ...extra].filter((s): s is string => !!s)));
 }
 
 async function argToken(): Promise<string> {

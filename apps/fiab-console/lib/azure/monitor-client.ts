@@ -32,6 +32,11 @@ import {
 } from '@azure/identity';
 import { AcaManagedIdentityCredential } from '@/lib/azure/aca-managed-identity';
 import { armBase, armScope, getLogAnalyticsHost, logAnalyticsTokenScope } from './cloud-endpoints';
+import {
+  loomResourceGroupScopes,
+  loomSubscriptionScope,
+  type ResourceGroupScope,
+} from './loom-subscriptions';
 
 // Sovereign-cloud ARM host + scope (Commercial / GCC-High / IL5).
 const ARM = armBase();
@@ -103,30 +108,35 @@ export class MonitorNotConfiguredError extends Error {
 // ----------------------------------------------------------------------------
 
 export interface MonitorConfig {
+  /** The admin/hub subscription — the console runs here. Kept for back-compat. */
   subscriptionId: string;
-  /** Distinct RGs the Loom platform deploys into. */
+  /** Distinct RG names the Loom platform deploys into (any subscription). */
   resourceGroups: string[];
+  /**
+   * Each Loom RG paired with the subscription it ACTUALLY lives in. In a
+   * multi-sub topology the DLZ RG lives in LOOM_DLZ_SUBSCRIPTION_ID, not the
+   * admin sub — querying it under the admin sub returns ResourceGroupNotFound
+   * (the live "could not be found" symptom). Iterate this, not subscriptionId,
+   * for per-RG ARM list calls.
+   */
+  resourceGroupScopes: ResourceGroupScope[];
+  /** Every subscription the Loom deployment spans (admin + DLZ + extras). */
+  subscriptions: string[];
 }
 
-/** Read the subscription + the set of Loom resource groups from env. */
+/** Read the subscription(s) + the set of Loom resource groups from env. */
 export function readMonitorConfig(): MonitorConfig {
   const subscriptionId = process.env.LOOM_SUBSCRIPTION_ID || '';
   if (!subscriptionId) throw new MonitorNotConfiguredError(['LOOM_SUBSCRIPTION_ID']);
-  const rgs = new Set<string>();
-  for (const v of [
-    process.env.LOOM_ADMIN_RG,
-    process.env.LOOM_ACA_RG,
-    process.env.LOOM_DLZ_RG,
-    process.env.LOOM_AI_SEARCH_RG,
-    process.env.LOOM_KUSTO_RG,
-    process.env.LOOM_APIM_RG,
-    process.env.LOOM_FOUNDRY_RG,
-    process.env.LOOM_AOAI_RG,
-  ]) {
-    if (v && v.trim()) rgs.add(v.trim());
-  }
-  if (rgs.size === 0) throw new MonitorNotConfiguredError(['LOOM_ADMIN_RG (or any Loom *_RG)']);
-  return { subscriptionId, resourceGroups: Array.from(rgs) };
+  const scopes = loomResourceGroupScopes(subscriptionId);
+  if (scopes.length === 0) throw new MonitorNotConfiguredError(['LOOM_ADMIN_RG (or any Loom *_RG)']);
+  const resourceGroups = Array.from(new Set(scopes.map((s) => s.rg)));
+  return {
+    subscriptionId,
+    resourceGroups,
+    resourceGroupScopes: scopes,
+    subscriptions: loomSubscriptionScope(),
+  };
 }
 
 /** Log Analytics workspace GUID, or null when unconfigured (→ honest gate). */
@@ -300,14 +310,17 @@ export async function listResources(): Promise<LoomResource[]> {
   // TTL-memoized: the inventory only shifts when resources are created/deleted,
   // so a tab revisit / Refresh inside the window is served from memory.
   return cached(
-    `resources:${cfg.subscriptionId}:${cfg.resourceGroups.join(',')}`,
+    // Key on the full (sub,rg) scope set so a multi-sub deploy memoizes correctly.
+    `resources:${cfg.resourceGroupScopes.map((s) => `${s.sub}/${s.rg}`).join(',')}`,
     INVENTORY_TTL_MS,
     async () => {
       const all: LoomResource[] = [];
       await Promise.all(
-        cfg.resourceGroups.map(async (rg) => {
+        // Pair each RG with the subscription it actually lives in (DLZ RG → DLZ
+        // sub) so the DLZ RG doesn't 404 under the admin sub.
+        cfg.resourceGroupScopes.map(async ({ rg, sub }) => {
           const j = await armGet(
-            `/subscriptions/${cfg.subscriptionId}/resourceGroups/${rg}/resources?api-version=${ARM_RESOURCES_API}`,
+            `/subscriptions/${sub}/resourceGroups/${rg}/resources?api-version=${ARM_RESOURCES_API}`,
           );
           for (const r of j?.value || []) {
             all.push({
@@ -354,17 +367,28 @@ export interface ResourceHealthStatus {
  */
 export async function listResourceHealth(): Promise<Record<string, ResourceHealthStatus>> {
   const cfg = readMonitorConfig();
-  return cached(`health:${cfg.subscriptionId}`, HEALTH_TTL_MS, async () => {
-    // Fast path: one Resource Graph call instead of the paginated crawl.
-    try {
-      const arg = await resourceHealthViaResourceGraph(cfg.subscriptionId);
-      if (Object.keys(arg).length > 0) return arg;
-      // ARG returned no rows (PaaS-heavy estate not covered by HealthResources)
-      // — fall through to the authoritative availabilityStatuses crawl.
-    } catch {
-      // ARG provider not registered / unavailable / RBAC — fall back to crawl.
-    }
-    return resourceHealthViaCrawl(cfg.subscriptionId);
+  // Health must cover EVERY subscription the deployment spans — in multi-sub the
+  // DLZ resources live in the DLZ sub, so a single-sub crawl misses them.
+  const subs = cfg.subscriptions.length ? cfg.subscriptions : [cfg.subscriptionId];
+  return cached(`health:${subs.join(',')}`, HEALTH_TTL_MS, async () => {
+    const merged: Record<string, ResourceHealthStatus> = {};
+    await Promise.all(
+      subs.map(async (sub) => {
+        let perSub: Record<string, ResourceHealthStatus> = {};
+        // Fast path: one Resource Graph call instead of the paginated crawl.
+        try {
+          perSub = await resourceHealthViaResourceGraph(sub);
+          // ARG returned no rows (PaaS-heavy estate not covered by
+          // HealthResources) — fall through to the authoritative crawl.
+          if (Object.keys(perSub).length === 0) perSub = await resourceHealthViaCrawl(sub);
+        } catch {
+          // ARG provider unavailable / RBAC — fall back to the crawl for this sub.
+          try { perSub = await resourceHealthViaCrawl(sub); } catch { perSub = {}; }
+        }
+        Object.assign(merged, perSub);
+      }),
+    );
+    return merged;
   });
 }
 
@@ -805,27 +829,53 @@ union isfuzzy=true (SynapseIntegrationPipelineRuns
           Status, Start, End, Submitter="", ErrorCode="", ErrorMessage="")`
     : '';
 
-  // ADFPipelineRun has NO TriggerName column. The submitter (trigger name for
-  // triggered runs, caller UPN for manual runs) lives in the dynamic
-  // SystemParameters JSON blob (per learn.microsoft.com/azure/data-factory/
-  // monitor-data-factory-reference: $.properties.SystemParameters -> dynamic).
-  // Extend the blob, coalescing the trigger name first, then the manual-run
-  // executor UPN. tostring(parse_json(...)) tolerates an empty/missing blob
-  // (yields "") so this never errors on either run type.
+  // CRITICAL (parity with the F19 audit-log fix #1464): the workspace only has
+  // an `ADFPipelineRun` table when an Azure Data Factory routes its diagnostic
+  // logs there. In a deployment with no ADF wired (the Azure-native default —
+  // Synapse-only, or neither), a bare `ADFPipelineRun | ...` query fails with
+  // HTTP 400 BadArgumentError / SyntaxError, surfaced to the operator as
+  // "The request had some invalid properties". Lead with
+  // `union isfuzzy=true (ADFPipelineRun)` so an unresolved table degrades to
+  // ZERO rows instead of failing the whole Activities feed. `isfuzzy` only
+  // affects source resolution; once the table exists the query runs as before.
+  // The extend/project guard the dynamic SystemParameters blob — ADFPipelineRun
+  // has NO TriggerName column; the submitter (trigger name for triggered runs,
+  // caller UPN for manual runs) lives in the dynamic SystemParameters JSON
+  // (learn.microsoft.com/azure/data-factory/monitor-data-factory-reference).
+  // tostring(parse_json(...)) tolerates an empty/missing blob (yields "").
+  // https://learn.microsoft.com/kusto/query/union-operator (isfuzzy=true)
   const kql = `
-ADFPipelineRun
+union isfuzzy=true (ADFPipelineRun
 | where TimeGenerated >= ago(${days}d)
 | extend _sp = parse_json(SystemParameters)
 | project TimeGenerated, Name=PipelineName, RunId, ItemType="Pipeline",
           Status, Start, End,
           Submitter=tostring(coalesce(_sp.TriggerName, _sp.ExecutorUserPrincipalName, _sp.UserPrincipalName)),
-          ErrorCode, ErrorMessage
+          ErrorCode, ErrorMessage)
 ${synapseUnion}
 | order by TimeGenerated desc
 | take ${limit}
 `.trim();
 
-  const result = await queryLogs(kql, timespan);
+  let result: LogQueryResult;
+  try {
+    result = await queryLogs(kql, timespan);
+  } catch (e) {
+    // Belt-and-suspenders, mirroring queryLoomAppEvents: if the workspace still
+    // rejects the query because no source table can be resolved, degrade to
+    // ZERO runs rather than failing the Activities feed. Auth (401/403) and
+    // not-configured errors still propagate so the route renders their gate.
+    if (
+      e instanceof MonitorError &&
+      e.status === 400 &&
+      /invalid propert|SyntaxError|SemanticError|Failed to resolve|could not be found/i.test(
+        `${e.message} ${JSON.stringify(e.body ?? '')}`,
+      )
+    ) {
+      return [];
+    }
+    throw e;
+  }
   const at = (name: string) => result.columns.indexOf(name);
   const tIdx = at('TimeGenerated');
   const nIdx = at('Name');
@@ -923,7 +973,7 @@ export async function listActivityLog(opts?: { days?: number; maxPerRg?: number 
   // paginates the management eventtypes across every Loom RG, so a tab revisit /
   // Refresh inside the window is served from memory instead of re-crawling ARM.
   return cached(
-    `activitylog:${cfg.subscriptionId}:${cfg.resourceGroups.join(',')}:${days}:${maxPerRg}`,
+    `activitylog:${cfg.resourceGroupScopes.map((s) => `${s.sub}/${s.rg}`).join(',')}:${days}:${maxPerRg}`,
     ACTIVITY_LOG_TTL_MS,
     () => _listActivityLog(cfg, days, maxPerRg),
   );
@@ -943,13 +993,16 @@ async function _listActivityLog(
 
   const events: ActivityLogEvent[] = [];
   await Promise.all(
-    cfg.resourceGroups.map(async (rg) => {
+    // The Activity Log is subscription-scoped, so query each RG against the
+    // subscription it actually lives in (DLZ RG → DLZ sub) — otherwise the DLZ
+    // RG's events are invisible (queried in the wrong sub).
+    cfg.resourceGroupScopes.map(async ({ rg, sub }) => {
       const filter =
         `eventTimestamp ge '${startTime}' and eventTimestamp le '${endTime}' and resourceGroupName eq '${rg}'`;
       const qs = new URLSearchParams({ 'api-version': ACTIVITY_LOG_API });
       // $filter / $select OData params: encode values, leave the operators readable.
       let next: string | null =
-        `/subscriptions/${cfg.subscriptionId}/providers/Microsoft.Insights/eventtypes/management/values?${qs.toString()}&$filter=${encodeURIComponent(filter)}&$select=${select}`;
+        `/subscriptions/${sub}/providers/Microsoft.Insights/eventtypes/management/values?${qs.toString()}&$filter=${encodeURIComponent(filter)}&$select=${select}`;
       let guard = 0;
       let taken = 0;
       while (next && guard < 10 && taken < maxPerRg) {

@@ -14,6 +14,7 @@ import { getSession } from '@/lib/auth/session';
 import {
   listActivityLog, MonitorNotConfiguredError, MonitorError,
 } from '@/lib/azure/monitor-client';
+import { FetchTimeoutError } from '@/lib/azure/fetch-with-timeout';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -29,7 +30,35 @@ export async function GET(req: NextRequest) {
     if (e instanceof MonitorNotConfiguredError) {
       return NextResponse.json({ ok: false, gate: { missing: e.missing, message: e.message } });
     }
+    if (e instanceof MonitorError && (e.status === 401 || e.status === 403)) {
+      return NextResponse.json({
+        ok: false,
+        gate: {
+          missing: ['Monitoring Reader'],
+          message:
+            'The Console identity cannot read the Azure Activity Log. Grant the Console UAMI '
+            + '"Monitoring Reader" (or Reader) on the Loom subscriptions so the Activity log can '
+            + 'enumerate control-plane events across the admin and DLZ resource groups.',
+        },
+      });
+    }
+    // A bare transport failure (DNS / network / timeout) surfaces as the cryptic
+    // "fetch failed" / FetchTimeoutError. Return an honest, actionable message
+    // (HTTP 200 so the pane shows a MessageBar, never an unhandled error banner).
+    const msg = (e as Error)?.message || String(e);
+    if (e instanceof FetchTimeoutError || /fetch failed|ENOTFOUND|ECONNREFUSED|ETIMEDOUT|aborted/i.test(msg)) {
+      return NextResponse.json({
+        ok: false,
+        gate: {
+          missing: [],
+          message:
+            'Could not reach Azure Resource Manager to read the Activity Log (the request failed or '
+            + 'timed out). Confirm the Console container app has outbound network access to ARM and '
+            + 'that LOOM_SUBSCRIPTION_ID / LOOM_DLZ_SUBSCRIPTION_ID are correct, then retry.',
+        },
+      });
+    }
     const status = e instanceof MonitorError ? e.status : 500;
-    return NextResponse.json({ ok: false, error: (e as Error).message }, { status });
+    return NextResponse.json({ ok: false, error: msg }, { status });
   }
 }

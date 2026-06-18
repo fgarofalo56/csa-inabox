@@ -20,6 +20,7 @@ import { useCallback, useEffect, useMemo, useState } from 'react';
 import {
   Badge, Button, Dropdown, Option, Caption1, Text,
   MessageBar, MessageBarBody, MessageBarTitle,
+  Dialog, DialogSurface, DialogTitle, DialogContent, DialogBody, DialogActions, DialogTrigger,
   makeStyles, tokens,
 } from '@fluentui/react-components';
 import { ArrowSync20Regular } from '@fluentui/react-icons';
@@ -116,6 +117,9 @@ export function RefreshSummaryPane() {
   const [status, setStatus] = useState('(All)');
   const [workspace, setWorkspace] = useState('(All)');
   const [tick, setTick] = useState(0);
+  // Row → status-detail dialog (the "clickable rows" parity with Fabric's
+  // refresh-history drill-in). Uses the data already fetched — no new backend.
+  const [detail, setDetail] = useState<RefreshRow | null>(null);
 
   useEffect(() => {
     let alive = true;
@@ -278,6 +282,7 @@ export function RefreshSummaryPane() {
           rows={tableRows}
           getRowId={(r) => r.__id}
           loading={loading}
+          onRowClick={(r) => setDetail(r)}
           empty={gate
             ? 'Configure Log Analytics to read pipeline and dataflow run history.'
             : 'No pipeline or dataflow runs in this window.'}
@@ -290,6 +295,51 @@ export function RefreshSummaryPane() {
           </Caption1>
         )}
       </Section>
+
+      {/* Status detail — click a row to drill into its last run + schedule. */}
+      <Dialog open={detail != null} onOpenChange={(_, d) => { if (!d.open) setDetail(null); }}>
+        <DialogSurface>
+          <DialogBody>
+            <DialogTitle>{detail?.displayName || detail?.pipelineName || 'Run detail'}</DialogTitle>
+            <DialogContent>
+              {detail && (
+                <div style={{ display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalS }}>
+                  <div><Caption1>Item type</Caption1><div><Text>{detail.itemType}</Text></div></div>
+                  {detail.workspaceName && (
+                    <div><Caption1>Workspace</Caption1><div><Text>{detail.workspaceName}</Text></div></div>
+                  )}
+                  <div><Caption1>Last run status</Caption1><div>{statusBadge(detail.lastRunStatus)}</div></div>
+                  <div><Caption1>Last run</Caption1><div><Text>{fmtTime(detail.lastRunAt)}</Text></div></div>
+                  <div><Caption1>Duration</Caption1><div><Text>{fmtDuration(detail.lastRunDurationMs)}</Text></div></div>
+                  {detail.lastRunError && (
+                    <MessageBar intent="error">
+                      <MessageBarBody>{detail.lastRunError}</MessageBarBody>
+                    </MessageBar>
+                  )}
+                  <div><Caption1>Next scheduled run</Caption1><div><Text>{fmtTime(detail.nextRunAt)}</Text></div></div>
+                  {detail.recurrenceDesc && (
+                    <div><Caption1>Recurrence</Caption1><div><Text>{detail.recurrenceDesc}</Text></div></div>
+                  )}
+                  {detail.triggerName && (
+                    <div>
+                      <Caption1>Trigger</Caption1>
+                      <div><Text>{detail.triggerName}{detail.triggerType ? ` (${detail.triggerType})` : ''}{detail.triggerState ? ` · ${detail.triggerState}` : ''}</Text></div>
+                    </div>
+                  )}
+                  {detail.lastRunId && (
+                    <div><Caption1>Run id</Caption1><div><Text>{detail.lastRunId}</Text></div></div>
+                  )}
+                </div>
+              )}
+            </DialogContent>
+            <DialogActions>
+              <DialogTrigger disableButtonEnhancement>
+                <Button appearance="secondary">Close</Button>
+              </DialogTrigger>
+            </DialogActions>
+          </DialogBody>
+        </DialogSurface>
+      </Dialog>
     </div>
   );
 }

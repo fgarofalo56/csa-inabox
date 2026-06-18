@@ -26,6 +26,7 @@ import {
 } from '@azure/identity';
 import { AcaManagedIdentityCredential } from '@/lib/azure/aca-managed-identity';
 import { readMonitorConfig, MonitorError, MonitorNotConfiguredError } from './monitor-client';
+import { loomSubscriptionScope } from './loom-subscriptions';
 import { armBase, armScope } from './cloud-endpoints';
 
 // Sovereign-cloud ARM host + scope (Commercial / GCC-High / IL5).
@@ -34,18 +35,14 @@ const ARM_SCOPE = armScope();
 const COST_API = '2023-03-01';
 const BUDGETS_API = '2023-05-01';
 
-/** Distinct set of subscriptions the Loom deployment spans (admin + DLZ + BYO). */
+/**
+ * Distinct set of subscriptions the Loom deployment spans (admin + DLZ + BYO).
+ * Delegates to the shared scope resolver so the DLZ sub
+ * (LOOM_DLZ_SUBSCRIPTION_ID) is always included — the live multi-sub bug was
+ * that the DLZ sub was omitted here, so its spend never rolled into the total.
+ */
 export function loomSubscriptions(): string[] {
-  const subs = new Set<string>();
-  const add = (v?: string) => { if (v && v.trim()) subs.add(v.trim()); };
-  add(process.env.LOOM_SUBSCRIPTION_ID);
-  add(process.env.LOOM_DLZ_SUB);
-  add(process.env.LOOM_ASA_SUB);
-  add(process.env.LOOM_EVENTHUB_SUB);
-  add(process.env.LOOM_AI_SEARCH_SUB);
-  add(process.env.LOOM_FOUNDRY_SUB);
-  for (const s of (process.env.LOOM_COST_SUBSCRIPTIONS || '').split(',')) add(s);
-  return Array.from(subs);
+  return loomSubscriptionScope();
 }
 
 export type CostTimeframe = 'MonthToDate' | 'BillingMonthToDate' | 'TheLastMonth' | 'Last7Days' | 'Last30Days';
