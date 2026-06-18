@@ -63,13 +63,22 @@ const LOCAL_VERSION =
 
 /**
  * Parse the major.minor.patch core out of a version/tag string into a numeric
- * triple. Strips a leading `v`, any pre-release/build-metadata suffix
- * (`-rc.1`, `+meta`), and tolerates partial versions. Returns null when no
- * numeric core can be found (e.g. a `build-<sha>` fingerprint), so callers can
- * distinguish "older" from "not a comparable version".
+ * triple. Tolerates ANY prefix before the version core, including a repo-scoped
+ * release tag such as `csa-inabox-v0.44.0` or a bare `v0.43.1` — the GitHub
+ * release tags for this repo carry the `csa-inabox-v` prefix, while
+ * LOOM_VERSION is a bare semver (`0.42.0`). A previous anchored `^(\d+)…`
+ * regex returned null for the prefixed upstream tag, so compareSemver treated
+ * the real upstream release as "not comparable" and reported a false
+ * "Up to date" badge. Now we scan for the first `X.Y[.Z]` token anywhere in
+ * the string. Returns null only when no numeric core exists at all (e.g. a
+ * `build-<sha>` fingerprint), so callers can distinguish "older" from
+ * "not a comparable version".
  */
 function parseSemverCore(s: string): [number, number, number] | null {
-  const m = s.trim().replace(/^v/i, '').match(/^(\d+)(?:\.(\d+))?(?:\.(\d+))?/);
+  // Find the first version-looking token: <major>.<minor>[.<patch>], optionally
+  // preceded by a `v`/`V`. The leading boundary (start-or-non-digit) prevents
+  // matching a digit that is part of a longer number.
+  const m = s.trim().match(/(?:^|[^0-9])v?(\d+)\.(\d+)(?:\.(\d+))?/i);
   if (!m) return null;
   return [Number(m[1]) || 0, Number(m[2]) || 0, Number(m[3]) || 0];
 }

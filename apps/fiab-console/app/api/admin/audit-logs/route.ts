@@ -81,7 +81,7 @@ export async function GET(req: NextRequest) {
   const itemId = (p.get('itemId') || '').trim();
   const top    = Math.min(1000, Math.max(1, Number(p.get('top') || 200)));
 
-  const gates: { purview?: string; la?: string } = {};
+  const gates: { purview?: string; purviewInfo?: string; la?: string } = {};
 
   // ── 1. Cosmos (primary) ────────────────────────────────────────────────────
   async function fetchCosmos(): Promise<AuditRow[]> {
@@ -103,6 +103,12 @@ export async function GET(req: NextRequest) {
   }
 
   // ── 2. Purview governance events ───────────────────────────────────────────
+  // The classic Data Map audit/query endpoint is per-asset: it needs a GUID (or
+  // qualifiedName). When the operator hasn't entered an Item ID filter,
+  // queryAuditLog short-circuits and returns `needsAsset` — we surface that as
+  // an informational gate (not an error), so the page no longer shows the raw
+  // "Illegal argument: Either guid or typeName/qualifiedName not provided"
+  // banner. An asset GUID typed into the Item ID filter loads its real history.
   async function fetchPurview(): Promise<AuditRow[]> {
     const page = await queryAuditLog({
       startTime:     since  || undefined,
@@ -113,6 +119,7 @@ export async function GET(req: NextRequest) {
       keywords:      q      || undefined,
       pageSize:      top,
     });
+    if (page.needsAsset) gates.purviewInfo = page.needsAsset;
     return page.events.map((e): AuditRow => ({
       id:       e.id,
       itemId:   e.itemId,

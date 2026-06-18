@@ -40,6 +40,30 @@ const DEPLOY_WRITE_ACTIONS = [
   'Microsoft.Resources/subscriptions/resourceGroups/write',
 ];
 
+/**
+ * The control-plane actions needed to MANAGE an already-deployed DLZ resource
+ * group in place (run RG-scoped deployments + write resources inside it). This
+ * is the bar for a DLZ being "attached/manageable" — distinct from
+ * DEPLOY_WRITE_ACTIONS (which is the sub-scope bar for CREATING a brand-new DLZ
+ * RG via `az deployment sub create`).
+ *
+ * Why this matters (multi-sub security model): the Console UAMI is granted
+ * Contributor scoped to the **DLZ resource group**, NOT the whole subscription
+ * — the DLZ sub holds many non-Loom workloads, so a sub-wide grant is an
+ * over-reach we never do. A DLZ whose RG the UAMI can write is healthy even
+ * though the UAMI has only Reader at the subscription scope. Checking only
+ * sub-scope permission therefore false-flagged every RG-scoped-Contributor DLZ
+ * as "needs re-attach / RBAC repair".
+ *
+ * Contributor (or Owner) at RG scope grants `*`/`Microsoft.Resources/*`
+ * (minus the Authorization notActions), so both of these resolve to allowed;
+ * Reader-only does not.
+ */
+const RG_MANAGE_ACTIONS = [
+  'Microsoft.Resources/deployments/write',
+  'Microsoft.Resources/deployments/validate/action',
+];
+
 /** RPs every Azure-native DLZ provisions (no-fabric-dependency — no Fabric RP). */
 export const DLZ_REQUIRED_PROVIDERS = [
   'Microsoft.Storage', // ADLS Gen2 medallion lake
@@ -98,6 +122,17 @@ function isActionAllowed(perms: ArmPermission[], action: string): boolean {
 export function canDeployAtScope(perms: ArmPermission[]): boolean {
   if (!perms || perms.length === 0) return false;
   return DEPLOY_WRITE_ACTIONS.every((a) => isActionAllowed(perms, a));
+}
+
+/**
+ * PURE: given the caller's ARM permission entries at RESOURCE-GROUP scope, can
+ * they manage that RG in place (RG-scoped deployments + resource writes)? This
+ * is the bar for a DLZ being "attached/manageable" with RG-scoped Contributor
+ * — see RG_MANAGE_ACTIONS. Reader → false; Contributor/Owner at RG scope → true.
+ */
+export function canManageResourceGroup(perms: ArmPermission[]): boolean {
+  if (!perms || perms.length === 0) return false;
+  return RG_MANAGE_ACTIONS.every((a) => isActionAllowed(perms, a));
 }
 
 /** PURE: which of the required RPs are NOT in the Registered set. */
@@ -183,6 +218,54 @@ export async function checkSubscriptionDeployPermission(
     return { canDeploy: canDeployAtScope(perms), permissions: perms };
   } catch (e: any) {
     return { canDeploy: false, permissions: [], error: `ARM permissions request failed: ${e?.message ?? String(e)}` };
+  }
+}
+
+/**
+ * LIVE: ask ARM for the caller's effective permissions on a specific resource
+ * group and decide whether they can MANAGE it in place (RG-scoped Contributor /
+ * Owner). Used by the DLZ overview to treat an RG-scoped-Contributor DLZ as
+ * attached even when the UAMI has only Reader at the subscription scope (the
+ * intended least-privilege multi-sub model). Same permissions API as the
+ * sub-scope check, just at RG scope.
+ *
+ * Returns `canManage:false` with `error` set when the check itself fails
+ * (token/network/403) so the caller can decide conservatively without leaking
+ * a deny it cannot prove.
+ */
+export async function checkResourceGroupManagePermission(
+  subscriptionId: string,
+  resourceGroup: string,
+  getToken: () => Promise<string>,
+): Promise<{ canManage: boolean; permissions: ArmPermission[]; error?: string }> {
+  if (!GUID_RE.test(subscriptionId)) {
+    return { canManage: false, permissions: [], error: `invalid subscriptionId: ${subscriptionId}` };
+  }
+  if (!resourceGroup || !/^[\w.()-]{1,90}$/.test(resourceGroup)) {
+    return { canManage: false, permissions: [], error: `invalid resourceGroup: ${resourceGroup}` };
+  }
+  let token: string;
+  try {
+    token = await getToken();
+  } catch (e: any) {
+    return { canManage: false, permissions: [], error: `token: ${e?.message ?? String(e)}` };
+  }
+  try {
+    const res = await fetch(
+      `${armBase()}/subscriptions/${subscriptionId}/resourceGroups/${encodeURIComponent(
+        resourceGroup,
+      )}/providers/Microsoft.Authorization/permissions?api-version=2022-04-01`,
+      { method: 'POST', headers: { authorization: `Bearer ${token}`, 'content-type': 'application/json' }, cache: 'no-store' },
+    );
+    if (!res.ok) {
+      const t = await res.text().catch(() => '');
+      return { canManage: false, permissions: [], error: `ARM permissions ${res.status}: ${t.slice(0, 200)}` };
+    }
+    const j: any = await res.json();
+    const perms = (j?.value || []) as ArmPermission[];
+    return { canManage: canManageResourceGroup(perms), permissions: perms };
+  } catch (e: any) {
+    return { canManage: false, permissions: [], error: `ARM permissions request failed: ${e?.message ?? String(e)}` };
   }
 }
 

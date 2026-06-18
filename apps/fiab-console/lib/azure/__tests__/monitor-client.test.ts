@@ -329,6 +329,43 @@ describe('queryLogs', () => {
   });
 });
 
+describe('queryLoomAppEvents (F19 audit — Log Analytics source)', () => {
+  it('leads the KQL with `union isfuzzy=true (AppTraces)` so a missing table degrades to empty', async () => {
+    const calls = captureFetch(() => ({ body: { tables: [{ name: 'PrimaryResult', columns: [], rows: [] }] } }));
+    const { queryLoomAppEvents } = await import('../monitor-client');
+    await queryLoomAppEvents({ limit: 10 });
+    const body = JSON.parse(String(calls[0].init?.body));
+    expect(body.query).toContain('union isfuzzy=true (AppTraces)');
+    // No bare leading `AppTraces` table reference (which 400s on a workspace
+    // without App Insights traces).
+    expect(body.query).not.toMatch(/^AppTraces/m);
+  });
+
+  it('builds a valid start/end timespan and never an open-ended "start/" (the live LAW bug)', async () => {
+    const calls = captureFetch(() => ({ body: { tables: [{ columns: [], rows: [] }] } }));
+    const { queryLoomAppEvents } = await import('../monitor-client');
+    await queryLoomAppEvents({ startTime: '2026-06-01T00:00:00.000Z', endTime: '' });
+    const body = JSON.parse(String(calls[0].init?.body));
+    expect(body.timespan).toMatch(/^2026-06-01T00:00:00\.000Z\/.+Z$/);
+    expect(body.timespan).not.toMatch(/\/$/);
+  });
+
+  it('degrades to [] (not an error) on a 400 BadArgumentError/SyntaxError from a missing table', async () => {
+    captureFetch(() => ({
+      status: 400,
+      body: { error: { code: 'BadArgumentError', message: 'The request had some invalid properties', innererror: { code: 'SyntaxError', message: 'Syntax error' } } },
+    }));
+    const { queryLoomAppEvents } = await import('../monitor-client');
+    await expect(queryLoomAppEvents({ limit: 5 })).resolves.toEqual([]);
+  });
+
+  it('still throws an auth error (403) so the route renders the role gate', async () => {
+    captureFetch(() => ({ status: 403, body: { error: { code: 'InvalidAuthenticationToken', message: 'forbidden' } } }));
+    const { queryLoomAppEvents, MonitorError } = await import('../monitor-client');
+    await expect(queryLoomAppEvents({ limit: 5 })).rejects.toBeInstanceOf(MonitorError);
+  });
+});
+
 describe('listActivityLog', () => {
   it('GETs the Activity Log management eventtypes with a resourceGroupName $filter', async () => {
     const calls = captureFetch(() => ({

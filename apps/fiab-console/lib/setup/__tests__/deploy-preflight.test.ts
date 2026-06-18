@@ -9,10 +9,12 @@
 import { describe, it, expect, vi, afterEach } from 'vitest';
 import {
   canDeployAtScope,
+  canManageResourceGroup,
   missingProviders,
   buildContributorGrantCommand,
   buildProviderRegisterCommands,
   checkSubscriptionDeployPermission,
+  checkResourceGroupManagePermission,
   DLZ_REQUIRED_PROVIDERS,
   type ArmPermission,
 } from '../deploy-preflight';
@@ -55,6 +57,35 @@ describe('canDeployAtScope', () => {
       { actions: ['Microsoft.Resources/*', 'Microsoft.Resources/subscriptions/resourceGroups/write'], notActions: [] },
     ];
     expect(canDeployAtScope(scoped)).toBe(true);
+  });
+});
+
+describe('canManageResourceGroup (RG-scoped Contributor — the multi-sub least-privilege case)', () => {
+  it('returns true for Contributor at RG scope (can run RG deployments)', () => {
+    expect(canManageResourceGroup(CONTRIBUTOR)).toBe(true);
+  });
+
+  it('returns true for Owner', () => {
+    expect(canManageResourceGroup(OWNER)).toBe(true);
+  });
+
+  it('returns false for Reader-only', () => {
+    expect(canManageResourceGroup(READER)).toBe(false);
+  });
+
+  it('returns false for empty permissions', () => {
+    expect(canManageResourceGroup([])).toBe(false);
+  });
+
+  it('does NOT require the sub-scope-only resourceGroups/write action', () => {
+    // RG-scoped Contributor cannot create new RGs, but can manage the existing
+    // one — the RG-manage bar must not include the sub-scope create action.
+    const rgScoped: ArmPermission[] = [
+      { actions: ['Microsoft.Resources/deployments/*'], notActions: [] },
+    ];
+    expect(canManageResourceGroup(rgScoped)).toBe(true);
+    // The sub-scope deploy check still requires the RG-create action → false.
+    expect(canDeployAtScope(rgScoped)).toBe(false);
   });
 });
 
@@ -151,5 +182,40 @@ describe('checkSubscriptionDeployPermission (live shape, stubbed I/O)', () => {
     const r = await checkSubscriptionDeployPermission(TARGET, async () => { throw new Error('no token'); });
     expect(r.canDeploy).toBe(false);
     expect(r.error).toMatch(/token: no token/);
+  });
+});
+
+describe('checkResourceGroupManagePermission (live shape, stubbed I/O)', () => {
+  const TARGET = '363ef5d1-0e77-4594-a530-f51af23dbf8c';
+  const RG = 'rg-csa-loom-dlz-default-centralus';
+  afterEach(() => vi.restoreAllMocks());
+
+  it('rejects an invalid subscription id without calling ARM', async () => {
+    const getToken = vi.fn(async () => 'tok');
+    const r = await checkResourceGroupManagePermission('not-a-guid', RG, getToken);
+    expect(r.canManage).toBe(false);
+    expect(r.error).toMatch(/invalid subscriptionId/);
+    expect(getToken).not.toHaveBeenCalled();
+  });
+
+  it('returns canManage=true for RG-scoped Contributor (the multi-sub healthy case)', async () => {
+    vi.stubGlobal('fetch', vi.fn(async () => new Response(JSON.stringify({ value: CONTRIBUTOR }), { status: 200 })));
+    const r = await checkResourceGroupManagePermission(TARGET, RG, async () => 'tok');
+    expect(r.canManage).toBe(true);
+    expect(r.error).toBeUndefined();
+  });
+
+  it('returns canManage=false for Reader-only on the RG', async () => {
+    vi.stubGlobal('fetch', vi.fn(async () => new Response(JSON.stringify({ value: READER }), { status: 200 })));
+    const r = await checkResourceGroupManagePermission(TARGET, RG, async () => 'tok');
+    expect(r.canManage).toBe(false);
+  });
+
+  it('hits the RG-scoped permissions endpoint', async () => {
+    const fetchMock = vi.fn(async () => new Response(JSON.stringify({ value: OWNER }), { status: 200 }));
+    vi.stubGlobal('fetch', fetchMock);
+    await checkResourceGroupManagePermission(TARGET, RG, async () => 'tok');
+    const url = String(fetchMock.mock.calls[0][0]);
+    expect(url).toContain(`/subscriptions/${TARGET}/resourceGroups/${RG}/providers/Microsoft.Authorization/permissions`);
   });
 });

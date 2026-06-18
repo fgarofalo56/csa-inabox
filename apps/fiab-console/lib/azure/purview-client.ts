@@ -1907,11 +1907,28 @@ export interface PurviewAuditQueryOpts {
   userId?: string;        // UPN filter — API "userId"
   operationType?: string; // e.g. 'ClassificationAdded' — API "operationType"
   guid?: string;          // asset GUID — API "guid"
+  qualifiedName?: string; // asset qualifiedName — API "qualifiedName" (Asset category only)
+  typeName?: string;      // asset typeName — API "typeName" (Asset category only)
   keywords?: string;      // free-text — API "keywords"
   category?: string;      // REQUIRED by the API — default 'Asset' (see queryAuditLog)
   pageSize?: number;      // default 200, max 1000
   continuationToken?: string;
 }
+
+/**
+ * Honest-gate signal returned by queryAuditLog when the caller did not name an
+ * asset. The classic Data Map `audit/query` endpoint queries the history of ONE
+ * asset/glossaryTerm/classificationDef — it has no tenant-wide "all events"
+ * mode. Calling it without `guid` (or `qualifiedName`) yields HTTP 400
+ * "Illegal argument: Either guid or typeName/qualifiedName not provided".
+ * Rather than emit that raw error, queryAuditLog short-circuits and the BFF
+ * surfaces this as an informational MessageBar.
+ */
+export const PURVIEW_AUDIT_NEEDS_ASSET =
+  'Purview Data Map audit history is per-asset. Enter an asset GUID in the Item ID ' +
+  'filter to load its governance history (classification, label, glossary and ' +
+  'entity changes). The classic Data Map audit/query API has no tenant-wide feed; ' +
+  'Loom-native and Log Analytics rows cover account-wide activity.';
 
 export interface PurviewAuditEvent {
   id: string;
@@ -1928,6 +1945,12 @@ export interface PurviewAuditPage {
   events: PurviewAuditEvent[];
   continuationToken?: string;
   lastPage: boolean;
+  /**
+   * Set when the query was NOT issued because no asset identifier was supplied
+   * (the API is per-asset). The BFF renders this as an informational gate
+   * instead of an error banner. `events` is [] in this case.
+   */
+  needsAsset?: string;
 }
 
 /**
@@ -1950,6 +1973,23 @@ export interface PurviewAuditPage {
  */
 export async function queryAuditLog(opts: PurviewAuditQueryOpts): Promise<PurviewAuditPage> {
   purviewAccount(); // throws PurviewNotConfiguredError when env var unset
+
+  // The classic Data Map audit/query endpoint queries the history of ONE asset
+  // (or glossaryTerm / classificationDef). It REQUIRES an asset identifier:
+  // `guid` OR `qualifiedName` (+ optional `typeName`). Issued without one, the
+  // service returns HTTP 400 "Illegal argument: Either guid or
+  // typeName/qualifiedName not provided" — there is no tenant-wide "all events"
+  // mode on this API (grounded in the REST reference:
+  // https://learn.microsoft.com/rest/api/purview/datamapdataplane/audit/query —
+  // "Query audit logs for an asset, glossaryTerm, classificationDef, etc.").
+  // So when the caller hasn't named an asset, short-circuit to an honest gate
+  // instead of provoking the raw 400 banner. Loom-native (Cosmos) + Log
+  // Analytics rows cover account-wide activity in the audit grid.
+  const hasAssetRef = !!(opts.guid || opts.qualifiedName);
+  if (!hasAssetRef) {
+    return { events: [], lastPage: true, needsAsset: PURVIEW_AUDIT_NEEDS_ASSET };
+  }
+
   const token = await credential.getToken(PURVIEW_SCOPE);
   if (!token?.token) throw new Error('Failed to acquire Purview data-plane token');
 
@@ -1969,6 +2009,8 @@ export async function queryAuditLog(opts: PurviewAuditQueryOpts): Promise<Purvie
   if (opts.userId)            payload.userId            = opts.userId;
   if (opts.operationType)     payload.operationType     = opts.operationType;
   if (opts.guid)              payload.guid              = opts.guid;
+  if (opts.qualifiedName)     payload.qualifiedName     = opts.qualifiedName;
+  if (opts.typeName)          payload.typeName          = opts.typeName;
   if (opts.keywords)          payload.keywords          = opts.keywords;
   if (opts.continuationToken) payload.continuationToken = opts.continuationToken;
 
@@ -1987,14 +2029,25 @@ export async function queryAuditLog(opts: PurviewAuditQueryOpts): Promise<Purvie
     throw new PurviewError(res.status, j, `Purview audit query failed: ${res.status}`);
   }
 
-  const j = await readJson<{ value?: any[]; continuationToken?: string; lastPage?: boolean }>(res);
-  const events: PurviewAuditEvent[] = (j?.value || []).map((v: any): PurviewAuditEvent => ({
-    id:       v.id ?? String(v.timestamp ?? v.creationTime ?? Math.random()),
-    at:       v.timestamp ?? v.creationTime ?? '',
+  // Response shape per the REST reference: { resultData: AuditLog[],
+  // continuationToken, lastPage, totalResultCount, recordCount }. AuditLog
+  // fields are creationTime / operation / userId / objectId / objectName /
+  // objectType — NOT timestamp/operationType/guid. Tolerate the legacy `value`
+  // key as a fallback in case a given account version uses it.
+  const j = await readJson<{
+    resultData?: any[];
+    value?: any[];
+    continuationToken?: string;
+    lastPage?: boolean;
+  }>(res);
+  const rows = j?.resultData ?? j?.value ?? [];
+  const events: PurviewAuditEvent[] = rows.map((v: any): PurviewAuditEvent => ({
+    id:       v.id ?? v.changeRequestId ?? String(v.creationTime ?? v.timestamp ?? Math.random()),
+    at:       v.creationTime ?? v.timestamp ?? '',
     who:      v.userId ?? v.user ?? '',
-    kind:     v.operationType ?? v.operation ?? v.category ?? '',
-    itemId:   v.guid ?? v.resourceId ?? '',
-    category: v.category ?? '',
+    kind:     v.operation ?? v.operationType ?? v.category ?? '',
+    itemId:   v.objectId ?? v.objectName ?? v.guid ?? v.resourceId ?? '',
+    category: v.objectType ?? v.category ?? '',
     source:   'purview',
     raw:      v,
   }));
