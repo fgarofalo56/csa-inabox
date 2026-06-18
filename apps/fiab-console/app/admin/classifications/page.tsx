@@ -3,17 +3,18 @@
 import { clientFetch } from '@/lib/client-fetch';
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import {
-  Spinner, Badge, Caption1, Body1, Input, Textarea, Button,
+  Spinner, Badge, Caption1, Input, Textarea, Button,
   MessageBar, MessageBarBody, MessageBarTitle,
   Dialog, DialogSurface, DialogBody, DialogTitle, DialogContent, DialogActions,
   Dropdown, Option,
   makeStyles, tokens,
 } from '@fluentui/react-components';
-import { Add24Regular, Delete20Regular, ArrowSync24Regular, Info20Regular, CloudSync24Regular, Play24Regular } from '@fluentui/react-icons';
+import { Add24Regular, Delete20Regular, ArrowSync24Regular, CloudSync24Regular, Play24Regular } from '@fluentui/react-icons';
 import { AdminShell } from '@/lib/components/admin-shell';
 import { Section, Toolbar } from '@/lib/components/ui/section';
 import { LoomDataTable, type LoomColumn } from '@/lib/components/ui/loom-data-table';
 import { useAdminTabStyles } from '@/lib/components/ui/admin-tab-styles';
+import { SectionExplainer } from '@/lib/components/ui/learn-popover';
 
 interface ClassificationRule {
   id: string;
@@ -39,11 +40,6 @@ interface ScanSource { id: string; name: string; kind?: string }
 interface ScanDef { id: string; name: string; kind?: string }
 
 const useStyles = makeStyles({
-  explainer: {
-    display: 'flex',
-    gap: tokens.spacingHorizontalM,
-    alignItems: 'flex-start',
-  },
   field: { display: 'flex', flexDirection: 'column', gap: '12px' },
   banner: { marginBottom: tokens.spacingVerticalL },
   explainerList: { margin: '8px 0 0 0', paddingLeft: '20px' },
@@ -169,17 +165,14 @@ export default function ClassificationsPage() {
   return (
     <AdminShell sectionTitle='Classifications'>
       <Section title='About classification rules'>
-        <div className={s.explainer}>
-          <Info20Regular className={a.infoIcon} />
-          <Body1 className={a.explainerText}>
-            Classification rules detect sensitive-info types and apply classifications (PII, PHI, PCI, Confidential, etc.) to catalog items on scan. Each rule is pushed to Microsoft Purview as a <strong>custom classification rule</strong> and rolled into a <strong>custom scan rule set</strong>, so it actually classifies data when a scan runs. Choose a <strong>match strategy</strong>:
-            <ul className={s.explainerList}>
-              <li><strong>Column name regex:</strong> Match column names (e.g., <code>.*email.*</code>)</li>
-              <li><strong>Data regex:</strong> Match data values (e.g., <code>{'\\d{3}-\\d{2}-\\d{4}'}</code> for SSN)</li>
-              <li><strong>Dictionary:</strong> Match against a word list (comma-separated)</li>
-            </ul>
-          </Body1>
-        </div>
+        <SectionExplainer>
+          Classification rules detect sensitive-info types and apply classifications (PII, PHI, PCI, Confidential, etc.) to catalog items on scan. Each rule is pushed to Microsoft Purview as a <strong>custom classification rule</strong> and rolled into a <strong>custom scan rule set</strong>, so it actually classifies data when a scan runs. Choose a <strong>match strategy</strong>:
+          <ul className={s.explainerList}>
+            <li><strong>Column name regex:</strong> Match column names (e.g., <code>.*email.*</code>)</li>
+            <li><strong>Data regex:</strong> Match data values (e.g., <code>{'\\d{3}-\\d{2}-\\d{4}'}</code> for SSN)</li>
+            <li><strong>Dictionary:</strong> Match against a word list (comma-separated)</li>
+          </ul>
+        </SectionExplainer>
       </Section>
 
       {/* Live Purview sync state — replaces the old static "applied on next scan" banner. */}

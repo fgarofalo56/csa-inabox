@@ -11,18 +11,19 @@
 
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import {
-  Spinner, Badge, Caption1, Body1, Input, Button, Field,
+  Spinner, Badge, Caption1, Input, Button, Field,
   MessageBar, MessageBarBody, MessageBarTitle,
   Dialog, DialogSurface, DialogBody, DialogTitle, DialogContent, DialogActions,
   makeStyles, tokens,
 } from '@fluentui/react-components';
 import {
-  Add24Regular, Delete20Regular, ArrowSync24Regular, Info20Regular,
+  Add24Regular, Delete20Regular, ArrowSync24Regular,
   Copy20Regular, Open20Regular,
 } from '@fluentui/react-icons';
 import { Section, Toolbar } from '@/lib/components/ui/section';
 import { LoomDataTable, type LoomColumn } from '@/lib/components/ui/loom-data-table';
 import { NotConfiguredBar, type NotConfiguredHint } from '@/lib/components/admin-security/not-configured-bar';
+import { SectionExplainer } from '@/lib/components/ui/learn-popover';
 
 interface EmbedCode {
   id: string;
@@ -37,7 +38,6 @@ interface EmbedCode {
 }
 
 const useStyles = makeStyles({
-  explainer: { display: 'flex', gap: tokens.spacingHorizontalM, alignItems: 'flex-start' },
   urlRow: { display: 'flex', gap: '8px', alignItems: 'center', width: '100%' },
 });
 
@@ -152,16 +152,13 @@ export function EmbedCodesPane() {
   return (
     <>
       <Section title="About embed codes">
-        <div className={s.explainer}>
-          <Info20Regular style={{ color: tokens.colorBrandForeground1, flexShrink: 0, marginTop: 2 }} />
-          <Body1 style={{ color: tokens.colorNeutralForeground2, lineHeight: 1.5 }}>
-            An embed code is a tenant-scoped, read-only <strong>signed URL</strong> that lets a report or
-            custom visual be embedded outside Loom. Loom generates it Azure-natively as a Blob Storage
-            <strong> user-delegation SAS</strong> (signed with the platform managed identity, never an
-            account key) — no Microsoft Fabric or Power BI workspace required. <strong>Revoke</strong> deletes
-            the backing object so the URL stops resolving immediately.
-          </Body1>
-        </div>
+        <SectionExplainer>
+          An embed code is a tenant-scoped, read-only <strong>signed URL</strong> that lets a report or
+          custom visual be embedded outside Loom. Loom generates it Azure-natively as a Blob Storage
+          <strong> user-delegation SAS</strong> (signed with the platform managed identity, never an
+          account key) — no Microsoft Fabric or Power BI workspace required. <strong>Revoke</strong> deletes
+          the backing object so the URL stops resolving immediately.
+        </SectionExplainer>
       </Section>
 
       {gate && (

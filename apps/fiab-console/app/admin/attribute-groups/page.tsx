@@ -28,12 +28,13 @@ import {
 } from '@fluentui/react-components';
 import {
   Add24Regular, Delete20Regular, Edit20Regular, ArrowSync24Regular,
-  ArrowUp20Regular, ArrowDown20Regular, Info20Regular,
+  ArrowUp20Regular, ArrowDown20Regular,
 } from '@fluentui/react-icons';
 import { AdminShell } from '@/lib/components/admin-shell';
 import { Section, Toolbar } from '@/lib/components/ui/section';
 import { LoomDataTable, type LoomColumn } from '@/lib/components/ui/loom-data-table';
 import { useAdminTabStyles } from '@/lib/components/ui/admin-tab-styles';
+import { SectionExplainer } from '@/lib/components/ui/learn-popover';
 import {
   type AttributeGroup, type AttributeDef, type AttributeFieldType,
   ATTRIBUTE_FIELD_TYPES, CHOICE_FIELD_TYPES, kebab, validateAttributes,
@@ -42,7 +43,6 @@ import {
 interface DomainItem { id: string; name: string; }
 
 const useStyles = makeStyles({
-  explainer: { display: 'flex', gap: tokens.spacingHorizontalM, alignItems: 'flex-start' },
   formCol: { display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalM },
   attrRow: {
     display: 'flex', alignItems: 'center', gap: tokens.spacingHorizontalS,
@@ -246,19 +246,16 @@ export default function AttributeGroupsPage() {
   return (
     <AdminShell sectionTitle="Custom attributes">
       <Section title="About custom attributes">
-        <div className={s.explainer}>
-          <Info20Regular className={atab.infoIcon} />
-          <Body1 className={atab.explainerText}>
-            Define <strong>attribute groups</strong> that attach extra, governed metadata to the items people create.
-            Each attribute has a field type (<strong>Text</strong>, <strong>Single choice</strong>, <strong>Multiple choice</strong>,
-            <strong> Date</strong>, <strong>Boolean</strong>, <strong>Integer</strong>, <strong>Double</strong>, or <strong>Rich text</strong>),
-            an optional <strong>required</strong> flag, and (for choice types) a list of allowed values.
-            Scope a group to one or more <strong>domains</strong> — leave the scope empty to apply it to every domain.
-            Required attributes appear on the Create wizard&apos;s <strong>Custom attributes</strong> step for items in those domains and
-            block completion until they have a value. This is Loom&apos;s Azure-native equivalent of Purview Unified Catalog custom metadata —
-            no Purview account is required.
-          </Body1>
-        </div>
+        <SectionExplainer>
+          Define <strong>attribute groups</strong> that attach extra, governed metadata to the items people create.
+          Each attribute has a field type (<strong>Text</strong>, <strong>Single choice</strong>, <strong>Multiple choice</strong>,
+          <strong> Date</strong>, <strong>Boolean</strong>, <strong>Integer</strong>, <strong>Double</strong>, or <strong>Rich text</strong>),
+          an optional <strong>required</strong> flag, and (for choice types) a list of allowed values.
+          Scope a group to one or more <strong>domains</strong> — leave the scope empty to apply it to every domain.
+          Required attributes appear on the Create wizard&apos;s <strong>Custom attributes</strong> step for items in those domains and
+          block completion until they have a value. This is Loom&apos;s Azure-native equivalent of Purview Unified Catalog custom metadata —
+          no Purview account is required.
+        </SectionExplainer>
       </Section>
 
       {error && <MessageBar intent="error" className={atab.messageBar}><MessageBarBody><MessageBarTitle>Could not load attribute groups</MessageBarTitle>{error}</MessageBarBody></MessageBar>}
