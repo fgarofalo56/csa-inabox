@@ -24,10 +24,9 @@ import {
   MessageBar, MessageBarBody, MessageBarTitle,
   Caption1, Body1, makeStyles, tokens,
 } from '@fluentui/react-components';
-import { Save24Regular, ArrowClockwise20Regular, Sparkle20Regular } from '@fluentui/react-icons';
+import { Save24Regular, ArrowClockwise20Regular, Sparkle20Regular, PlugConnected20Regular, Open16Regular } from '@fluentui/react-icons';
+import Link from 'next/link';
 import { Section } from '@/lib/components/ui/section';
-import { McpServersPanel } from '@/lib/components/admin/mcp-servers-panel';
-import { IqMcpPanel } from '@/lib/components/admin/iq-mcp-panel';
 import {
   RECOMMENDED_CHAT_MODELS, RECOMMENDED_EMBED_MODELS, looksLikeEmbedding,
   type TenantCopilotConfig,
@@ -56,6 +55,15 @@ const useStyles = makeStyles({
   bar: { display: 'flex', gap: tokens.spacingHorizontalM, alignItems: 'center', flexWrap: 'wrap' },
   spacer: { flex: 1 },
   hint: { color: tokens.colorNeutralForeground3, fontSize: '12px' },
+  mcpLink: {
+    display: 'inline-flex',
+    alignItems: 'center',
+    gap: tokens.spacingHorizontalXXS,
+    color: tokens.colorBrandForeground1,
+    textDecoration: 'none',
+    fontWeight: tokens.fontWeightSemibold,
+    ':hover': { textDecoration: 'underline' },
+  },
 });
 
 const NONE = '__none__';
@@ -442,9 +450,17 @@ export function CopilotAgentsConfig() {
           {saving ? 'Saving…' : 'Save Copilot & Agents'}
         </Button>
       </div>
+      <MessageBar intent="info" icon={<PlugConnected20Regular />}>
+        <MessageBarBody>
+          <MessageBarTitle>MCP Servers moved to their own page</MessageBarTitle>
+          Browse + deploy the curated MCP server catalog, manage deployed servers, and connect
+          external MCP endpoints on the dedicated{' '}
+          <Link href="/admin/mcp-servers" className={s.mcpLink}>
+            MCP Servers page <Open16Regular />
+          </Link>.
+        </MessageBarBody>
+      </MessageBar>
     </Section>
-    <McpServersPanel />
-    <IqMcpPanel />
     </>
   );
 }
