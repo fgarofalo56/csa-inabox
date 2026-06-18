@@ -37,7 +37,7 @@ import {
 import { SubscriptionNode, DomainNode, ServiceNode, ServiceIconChip } from './deploy-plan-nodes';
 import {
   SERVICE_CATALOG, SERVICE_CATEGORY_ORDER, servicesByCategory, serviceByKey, serviceVisual,
-  SERVICE_COUNT, TOGGLEABLE_SERVICE_COUNT, configFor, resolveConfigValue,
+  SERVICE_COUNT, TOGGLEABLE_SERVICE_COUNT, configFor, resolveConfigValue, configStatus,
   type ServiceDef, type ServiceCategory, type ConfigField,
 } from './service-catalog';
 import { iconUrl } from '../ui/item-type-visual';
@@ -104,7 +104,7 @@ function buildNodes(subs: PlanSubscription[], sel: Selection): { nodes: Node[]; 
           id: `svc:${si}:${di}:${key}`, type: 'service', parentId: domId, extent: 'parent',
           position: { x: DOMAIN_PAD + col * (SVC_W + SVC_GAP_X), y: DOMAIN_HEADER + DOMAIN_PAD + row * (SVC_H + SVC_GAP_Y) },
           draggable: false, selectable: true,
-          data: { serviceKey: key },
+          data: { serviceKey: key, configStatus: configStatus(key, sub.serviceConfigs?.[key]) },
           selected: sel?.kind === 'service' && sel.si === si && sel.di === di && sel.key === key,
         });
       });
@@ -577,8 +577,24 @@ function PlannerInner() {
 
   const selectedSub = sel?.kind === 'subscription' ? subs[sel.si] : null;
   const selectedSvc = sel?.kind === 'service'
-    ? { def: serviceByKey(sel.key), stored: subs[sel.si]?.serviceConfigs?.[sel.key], subName: subs[sel.si]?.name }
+    ? {
+        def: serviceByKey(sel.key),
+        stored: subs[sel.si]?.serviceConfigs?.[sel.key],
+        subName: subs[sel.si]?.name,
+        status: configStatus(sel.key, subs[sel.si]?.serviceConfigs?.[sel.key]),
+      }
     : null;
+
+  // Reset the selected service's stored config so it falls back to module
+  // defaults (clears the "configured" badge, never leaves an invalid value).
+  const resetServiceConfig = useCallback(() => {
+    if (sel?.kind !== 'service') return;
+    const svcKey = sel.key;
+    mutate((d) => {
+      const sub = d[sel.si];
+      if (sub?.serviceConfigs) delete sub.serviceConfigs[svcKey];
+    });
+  }, [sel, mutate]);
 
   if (loading) return <Spinner label="Loading deployment plan…" />;
 
@@ -590,8 +606,12 @@ function PlannerInner() {
           Plan from a catalog of {SERVICE_COUNT} Azure service types ({TOGGLEABLE_SERVICE_COUNT} have a
           one-button bicep toggle; <Badge size="tiny" appearance="outline" color="warning">plan</Badge> services
           are real Azure but not auto-provisioned by main.bicep yet, so they are not written as bicep params).
-          Drop services into domains, <strong>select a service to configure its SKU / tier / runtime</strong>, and
-          drag from a service&apos;s right edge to another to record a dependency. Save persists to Cosmos. To
+          Drop services into domains, then <strong>select a placed service to configure its SKU / tier / runtime</strong> in
+          the inspector below the canvas. A node shows{' '}
+          <CheckmarkCircle20Regular style={{ verticalAlign: 'text-bottom', color: tokens.colorPaletteGreenForeground1, width: 14, height: 14 }} aria-hidden /> once you&apos;ve
+          set a value and a hollow dot while it still uses module defaults; <strong>Validate</strong> calls out any service
+          left on defaults or with an invalid value. Drag from a service&apos;s right edge to another to record a dependency.
+          Save persists to Cosmos. To
           deploy, use <strong>Export bicep</strong> on a subscription — choose <code>.bicepparam</code> (drives the
           maintained main.bicep) or a standalone <code>.bicep</code> template (your dependency arrows become module{' '}
           <code>dependsOn</code>) — then run
@@ -819,6 +839,19 @@ function PlannerInner() {
             )}
             {selectedSvc.def.planOnly && (
               <Badge size="small" appearance="outline" color="warning">plan-only</Badge>
+            )}
+            {selectedSvc.status === 'configured' && (
+              <Badge size="small" appearance="tint" color="success" icon={<CheckmarkCircle20Regular />}>configured</Badge>
+            )}
+            {selectedSvc.status === 'default' && (
+              <Badge size="small" appearance="outline" color="warning">using defaults</Badge>
+            )}
+            {selectedSvc.status === 'invalid' && (
+              <Badge size="small" appearance="tint" color="danger">invalid</Badge>
+            )}
+            {(selectedSvc.status === 'configured' || selectedSvc.status === 'invalid') && (
+              <Button size="small" appearance="subtle" onClick={resetServiceConfig}
+                style={{ marginLeft: 'auto' }}>Reset to defaults</Button>
             )}
           </div>
 

@@ -10,7 +10,7 @@ import { dirname, resolve } from 'node:path';
 import {
   serviceNodeIds, parseServiceNodeId, pruneEdges, validatePlan,
 } from '../plan-validation';
-import { SERVICE_CATALOG } from '../service-catalog';
+import { SERVICE_CATALOG, configStatus } from '../service-catalog';
 import type { PlanSubscription } from '../types';
 
 const here = dirname(fileURLToPath(import.meta.url));
@@ -84,6 +84,43 @@ describe('validatePlan', () => {
     subs[0].edges = [{ from: 'svc:0:0:appService', to: 'svc:0:0:redis' }];
     const issues = validatePlan(subs);
     expect(issues.filter((i) => i.level === 'error')).toHaveLength(0);
+  });
+});
+
+describe('configStatus + validate config-review gate', () => {
+  it('reports none/default/configured/invalid honestly', () => {
+    // core service with no schema
+    expect(configStatus('storage', undefined)).toBe('none');
+    // toggleable with a schema, nothing set → using defaults
+    expect(configStatus('redis', undefined)).toBe('default');
+    expect(configStatus('redis', {})).toBe('default');
+    // a valid stored value → configured
+    expect(configStatus('redis', { skuName: 'Premium' })).toBe('configured');
+    // an out-of-@allowed value → invalid
+    expect(configStatus('redis', { skuName: 'bogus' })).toBe('invalid');
+  });
+
+  it('warns when a configurable service still uses defaults, errors when invalid', () => {
+    const subs: PlanSubscription[] = [{
+      id: 's', name: 'A', boundary: 'Commercial',
+      domains: [{ domainId: 'd', name: 'D', services: ['redis', 'vm'] }],
+      serviceConfigs: { vm: { vmSize: 'Standard_NOPE' } },
+    }];
+    const issues = validatePlan(subs);
+    // redis: unset → "using default" warning
+    expect(issues.some((i) => i.level === 'warning' && /default SKU\/tier/i.test(i.message))).toBe(true);
+    // vm: invalid stored size → error
+    expect(issues.some((i) => i.level === 'error' && /invalid configuration/i.test(i.message))).toBe(true);
+  });
+
+  it('does not warn once a configurable service carries a valid value', () => {
+    const subs: PlanSubscription[] = [{
+      id: 's', name: 'A', boundary: 'Commercial',
+      domains: [{ domainId: 'd', name: 'D', services: ['redis'] }],
+      serviceConfigs: { redis: { skuName: 'Standard' } },
+    }];
+    const issues = validatePlan(subs);
+    expect(issues.some((i) => /default SKU\/tier/i.test(i.message))).toBe(false);
   });
 });
 
