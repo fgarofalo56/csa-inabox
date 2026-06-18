@@ -26,7 +26,7 @@
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import {
   ReactFlow, ReactFlowProvider, Background, BackgroundVariant, Controls, MiniMap, Panel,
-  MarkerType, type Node, type Edge,
+  MarkerType, useReactFlow, useNodesInitialized, type Node, type Edge,
 } from '@xyflow/react';
 import '@xyflow/react/dist/style.css';
 import {
@@ -62,7 +62,13 @@ const KIND_STYLE: Record<TopoNodeKind, { bg: string; border: string; icon: strin
 
 const useStyles = makeStyles({
   shell: {
-    position: 'relative', width: '100%', height: '100%', minHeight: '560px',
+    // Definite height — NOT `height: 100%`. This canvas renders inside an
+    // auto-height card (network-pane), so a percentage height resolves against
+    // an indefinite parent and collapses to ~0; ReactFlow then measures the
+    // container as 0×0 at mount and `fitView` zooms the (large, multi-sub)
+    // estate to nothing → blank canvas even though the data loaded. A definite
+    // height makes the container real on first paint so the map renders.
+    position: 'relative', width: '100%', height: '640px', minHeight: '560px',
     backgroundColor: tokens.colorNeutralBackground1,
     border: `1px solid ${tokens.colorNeutralStroke2}`,
     borderRadius: tokens.borderRadiusLarge, overflow: 'hidden',
@@ -318,6 +324,29 @@ const NODE_LEGEND: TopoNodeKind[] = [
   'vnet', 'subnet', 'pe', 'nsg', 'firewall', 'bastion', 'managedenv', 'appgateway', 'loadbalancer', 'privatednszone',
 ];
 
+const FIT_VIEW_OPTIONS = { padding: 0.15, minZoom: 0.1, maxZoom: 1.5 } as const;
+
+/**
+ * Re-runs `fitView` once React Flow has measured every node's real dimensions
+ * (and again whenever the node count changes — e.g. a refetch returns more
+ * resources). The `fitView` prop on <ReactFlow> only fits on the very first
+ * render, which can land before node sizes are known; on a large multi-sub
+ * estate that leaves the graph framed wrong or off-screen. This guarantees the
+ * whole estate is centered and zoomed-to-fit the moment the layout is real.
+ * Renders nothing.
+ */
+function FitViewOnInit({ deps }: { deps: unknown }): null {
+  const nodesInitialized = useNodesInitialized();
+  const { fitView } = useReactFlow();
+  useEffect(() => {
+    if (!nodesInitialized) return;
+    // rAF so the fit runs after the browser has laid the container out.
+    const raf = requestAnimationFrame(() => { void fitView(FIT_VIEW_OPTIONS); });
+    return () => cancelAnimationFrame(raf);
+  }, [nodesInitialized, fitView, deps]);
+  return null;
+}
+
 function GraphInner({ graph }: { graph: { nodes: TopoNode[]; edges: TopoEdge[] } }): React.ReactElement {
   const styles = useStyles();
   const [selected, setSelected] = useState<TopoNode | null>(null);
@@ -351,9 +380,11 @@ function GraphInner({ graph }: { graph: { nodes: TopoNode[]; edges: TopoEdge[] }
           edges={edges}
           onNodeClick={onNodeClick}
           fitView
+          fitViewOptions={FIT_VIEW_OPTIONS}
           minZoom={0.1}
           attributionPosition="bottom-left"
         >
+          <FitViewOnInit deps={nodes.length} />
           <Background variant={BackgroundVariant.Lines} gap={16} size={1} />
           <Controls showInteractive={false} />
           <Panel position="top-left">
