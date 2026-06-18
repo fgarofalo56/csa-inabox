@@ -49,9 +49,73 @@ export type VqStepKind =
   | 'keep-top-rows'
   | 'group-by'
   | 'sort'
-  | 'join';
+  | 'join'
+  // Wave-3 Warp transform-builder steps. All compile to SQL via the same pure
+  // engine; every input is a guided control (column pickers, type dropdowns)
+  // except the one allowed 1:1 expression slot per derive column.
+  | 'derive'
+  | 'rename'
+  | 'cast'
+  | 'dedup'
+  | 'union'
+  | 'sink';
 
 export type VqSortDir = 'ASC' | 'DESC';
+
+/** A computed/derived column: name + a single SQL expression (the 1:1 builder slot). */
+export interface VqDeriveColumn {
+  /** Output column name — a controlled text field, not freeform SQL. */
+  name: string;
+  /** The expression, e.g. `[unit_price] * [quantity]`. The allowed freeform slot. */
+  expression: string;
+}
+
+/** A column rename mapping (controlled pickers both sides). */
+export interface VqRenameMap {
+  /** Source column name (picker). */
+  from: string;
+  /** New column name (controlled text). */
+  to: string;
+}
+
+/** Common SQL target types for a CAST step — a controlled dropdown, never freeform. */
+export type VqCastType =
+  | 'INT'
+  | 'BIGINT'
+  | 'FLOAT'
+  | 'DECIMAL(18,2)'
+  | 'VARCHAR(4000)'
+  | 'STRING'
+  | 'DATE'
+  | 'DATETIME2'
+  | 'TIMESTAMP'
+  | 'BOOLEAN';
+
+export interface VqCastSpec {
+  /** Column to cast (picker). */
+  field: string;
+  /** Target type (dropdown). */
+  to: VqCastType;
+}
+
+export const VQ_CAST_TYPES_TSQL: VqCastType[] = [
+  'INT', 'BIGINT', 'FLOAT', 'DECIMAL(18,2)', 'VARCHAR(4000)', 'DATE', 'DATETIME2',
+];
+export const VQ_CAST_TYPES_SPARK: VqCastType[] = [
+  'INT', 'BIGINT', 'FLOAT', 'DECIMAL(18,2)', 'STRING', 'DATE', 'TIMESTAMP', 'BOOLEAN',
+];
+
+/** A Warp sink target — where the transform output lands. */
+export type VqSinkMode = 'view' | 'table';
+
+export interface VqSinkConfig {
+  /** Target schema (optional). */
+  schema?: string;
+  /** Target table/view name. */
+  table?: string;
+  /** Materialize as a table (CTAS) or a view. */
+  mode?: VqSinkMode;
+}
 
 export interface VqSortKey {
   /** Column name — a controlled picker, not freeform SQL. */
@@ -96,6 +160,24 @@ export interface VqNode {
   joinKind?: VqJoinKind;
   leftKey?: string; // controlled picker — a column name, not freeform SQL
   rightKey?: string; // controlled picker — a column name, not freeform SQL
+
+  // derive — add computed columns (each is name + one SQL expression slot)
+  derived?: VqDeriveColumn[];
+
+  // rename — column rename mappings (controlled pickers)
+  renames?: VqRenameMap[];
+
+  // cast — change a column's type (controlled type dropdown)
+  casts?: VqCastSpec[];
+
+  // dedup — DISTINCT, optionally keyed (controlled column checklist)
+  dedupKeys?: string[];
+
+  // union — append two input chains (UNION ALL by default)
+  unionAll?: boolean;
+
+  // sink — the transform target (CTAS table or view)
+  sink?: VqSinkConfig;
 }
 
 export interface VqGraph {
@@ -234,9 +316,105 @@ function compileNodeBody(
       );
     }
 
+    case 'derive': {
+      const from = inputRef(node.inputs[0]);
+      const cols = (node.derived || []).filter((c) => c && c.name && c.name.trim());
+      if (!cols.length) return `SELECT * FROM ${from}`;
+      const exprs = cols
+        .map((c) => `${(c.expression || 'NULL').trim() || 'NULL'} AS ${quoteId(c.name, dialect)}`)
+        .join(', ');
+      return `SELECT *, ${exprs} FROM ${from}`;
+    }
+
+    case 'rename': {
+      const from = inputRef(node.inputs[0]);
+      const maps = (node.renames || []).filter((m) => m && m.from && m.from.trim() && m.to && m.to.trim());
+      if (!maps.length) return `SELECT * FROM ${from}`;
+      // Project every renamed column explicitly; callers add un-renamed columns
+      // by leaving them out of the map (they survive only if also selected
+      // upstream). To keep behaviour intuitive we emit the renamed projections
+      // plus a trailing * so untouched columns flow through.
+      const projs = maps.map((m) => `${quoteId(m.from, dialect)} AS ${quoteId(m.to, dialect)}`).join(', ');
+      return `SELECT ${projs}, * FROM ${from}`;
+    }
+
+    case 'cast': {
+      const from = inputRef(node.inputs[0]);
+      const casts = (node.casts || []).filter((c) => c && c.field && c.field.trim());
+      if (!casts.length) return `SELECT * FROM ${from}`;
+      const projs = casts
+        .map((c) => `CAST(${quoteId(c.field, dialect)} AS ${c.to}) AS ${quoteId(c.field, dialect)}`)
+        .join(', ');
+      return `SELECT ${projs}, * FROM ${from}`;
+    }
+
+    case 'dedup': {
+      const from = inputRef(node.inputs[0]);
+      const keys = (node.dedupKeys || []).filter(Boolean);
+      if (!keys.length) {
+        // Whole-row de-duplicate.
+        return `SELECT DISTINCT * FROM ${from}`;
+      }
+      // Keyed de-dup → one row per key combination (ROW_NUMBER window, dialect-agnostic SQL).
+      const partition = keys.map((k) => quoteId(k, dialect)).join(', ');
+      return (
+        `SELECT * FROM (\n` +
+        `  SELECT *, ROW_NUMBER() OVER (PARTITION BY ${partition} ORDER BY ${quoteId(keys[0], dialect)}) AS __rn FROM ${from}\n` +
+        `) __d WHERE __d.__rn = 1`
+      );
+    }
+
+    case 'union': {
+      const a = inputRef(node.inputs[0]);
+      const b = inputRef(node.inputs[1]);
+      const op = node.unionAll === false ? 'UNION' : 'UNION ALL';
+      return `SELECT * FROM ${a}\n${op}\nSELECT * FROM ${b}`;
+    }
+
+    case 'sink':
+      // A sink is a pass-through in CTE position; the CREATE wrapper is applied
+      // by compileGraph when the sink is the output node (see below).
+      return `SELECT * FROM ${inputRef(node.inputs[0])}`;
+
     default:
       return `SELECT * FROM ${inputRef(node.inputs[0])}`;
   }
+}
+
+/**
+ * Wrap a final SELECT in a CTAS / CREATE VIEW statement for a sink node.
+ *
+ * The `withClause` (a `WITH …\n` string, or empty) is kept separate from the
+ * `finalSelect` so the statement is valid in BOTH dialects:
+ *   - T-SQL has no `CREATE TABLE … AS`; it materializes with `SELECT … INTO`,
+ *     and a leading `WITH` is legal *before* the SELECT. So we emit
+ *     `WITH … SELECT * INTO target FROM (…)` — i.e. inject `INTO target` into
+ *     the final SELECT. Views: `CREATE OR ALTER VIEW … AS WITH … SELECT …`,
+ *     which T-SQL permits inside a view body.
+ *   - Spark SQL supports `CREATE TABLE … AS WITH … SELECT …` and
+ *     `CREATE OR REPLACE VIEW … AS WITH … SELECT …` directly.
+ */
+function wrapSink(sink: VqSinkConfig, withClause: string, finalSelect: string, dialect: SqlDialect): string {
+  const target =
+    sink.schema && sink.schema.trim()
+      ? `${quoteId(sink.schema, dialect)}.${quoteId(sink.table || 'transform_output', dialect)}`
+      : quoteId(sink.table || 'transform_output', dialect);
+  const mode: VqSinkMode = sink.mode === 'view' ? 'view' : 'table';
+
+  if (mode === 'view') {
+    const verb = dialect === 'tsql' ? 'CREATE OR ALTER VIEW' : 'CREATE OR REPLACE VIEW';
+    return `${verb} ${target} AS\n${withClause}${finalSelect}`;
+  }
+
+  // table (materialize)
+  if (dialect === 'tsql') {
+    // SELECT … INTO target FROM … — splice `INTO target` after the SELECT list.
+    // finalSelect is always `SELECT * FROM <cte>`, so inject after `SELECT *`.
+    const intoSelect = finalSelect.replace(/^SELECT \*/, `SELECT *\nINTO ${target}`);
+    return `${withClause}${intoSelect}`;
+  }
+  // Spark SQL CTAS.
+  return `CREATE TABLE ${target} AS\n${withClause}${finalSelect}`;
 }
 
 // ============================================================
@@ -307,15 +485,29 @@ export function compileGraph(graph: VqGraph, dialect: SqlDialect): string {
     return `${VQ_HEADER}\nSELECT * FROM ${sourceRef(order[0], dialect)}\n`;
   }
 
-  // Assign CTE names.
+  // A trailing sink is the materialization wrapper, not a CTE — peel it off and
+  // wrap the SELECT over its single upstream input.
+  const isSinkOutput = output.kind === 'sink' && output.inputs.length > 0;
+  const sinkNode = isSinkOutput ? output : null;
+  const selectFromId = isSinkOutput ? output.inputs[0] : output.id;
+  const cteNodes = isSinkOutput ? order.filter((n) => n.id !== output.id) : order;
+
+  // Assign CTE names (skip the sink node — it never becomes a CTE).
   const names = new Map<string, string>();
-  order.forEach((n, i) => names.set(n.id, cteNameFor(n.id, i + 1)));
+  cteNodes.forEach((n, i) => names.set(n.id, cteNameFor(n.id, i + 1)));
   const inputRef = (id: string) => names.get(id) || quoteId('missing', dialect);
 
-  const ctes = order.map((n) => {
+  const ctes = cteNodes.map((n) => {
     const body = compileNodeBody(n, inputRef, dialect).replace(/\n/g, '\n    ');
     return `${names.get(n.id)} AS (\n    ${body}\n)`;
   });
 
-  return `${VQ_HEADER}\nWITH ${ctes.join(',\n')}\nSELECT * FROM ${names.get(output.id)}\n`;
+  const finalSelect = `SELECT * FROM ${names.get(selectFromId) || quoteId('missing', dialect)}`;
+  const withClause = ctes.length ? `WITH ${ctes.join(',\n')}\n` : '';
+
+  if (sinkNode && sinkNode.sink && (sinkNode.sink.table || '').trim()) {
+    return `${VQ_HEADER}\n${wrapSink(sinkNode.sink, withClause, finalSelect, dialect)}\n`;
+  }
+
+  return `${VQ_HEADER}\n${withClause}${finalSelect}\n`;
 }
