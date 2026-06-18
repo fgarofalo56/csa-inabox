@@ -128,7 +128,7 @@ function dedupe(arr: string[]): string[] {
 // Shared per-render context (memoizes expensive, multi-entity backends)
 // ---------------------------------------------------------------------------
 
-class RenderCtx {
+export class RenderCtx {
   private memo = new Map<string, Promise<unknown>>();
   once<T>(key: string, fn: () => Promise<T>): Promise<T> {
     if (!this.memo.has(key)) this.memo.set(key, fn());
@@ -455,6 +455,149 @@ const LIVE_BINDINGS: Record<string, Record<string, Resolver>> = {
     'Secure Score': resolveSecureScore,
   },
 };
+
+/**
+ * Selectable Azure-native data sources for the Loom-native visual builder.
+ *
+ * Each entry reuses one of the resolvers above (same real Azure REST the CoE
+ * templates render), exposing it as a pickable source for a builder tile. The
+ * `columns` advertise the fields a tile can map to category / value; `category`
+ * + `valueColumns` are sensible defaults the builder pre-selects.
+ *
+ * Azure-native only — every source is Cost Management / Resource Graph /
+ * Defender / Log Analytics. No Microsoft Fabric / Power BI dependency.
+ */
+export interface BuilderSource {
+  /** Stable id used in a saved dashboard tile spec. */
+  id: string;
+  /** Display label in the builder source picker. */
+  label: string;
+  /** One-line description of what it returns. */
+  description: string;
+  /** The Azure data plane (for the source chip + honest gate copy). */
+  plane: 'Cost Management' | 'Azure Resource Graph' | 'Defender for Cloud' | 'Log Analytics';
+  /** Azure role required for a live refresh (named in honest gates). */
+  requiredRole: string;
+  /** Columns the source emits (drives the builder's field pickers). */
+  columns: string[];
+  /** Default category (axis / group-by) column. */
+  defaultCategory: string;
+  /** Default value (measure) column. */
+  defaultValue: string;
+  /** Resolver producing the real {columns, rows}. */
+  resolver: Resolver;
+}
+
+export const BUILDER_SOURCES: BuilderSource[] = [
+  {
+    id: 'cost-by-service',
+    label: 'Cost by service (month-to-date)',
+    description: 'Amortized month-to-date spend grouped by Azure service across your subscriptions.',
+    plane: 'Cost Management',
+    requiredRole: 'Cost Management Reader',
+    columns: COST_COLUMNS,
+    defaultCategory: 'ServiceName',
+    defaultValue: 'PreTaxCost',
+    resolver: resolveCost,
+  },
+  {
+    id: 'budgets',
+    label: 'Consumption budgets',
+    description: 'Monthly Azure Consumption budgets by subscription.',
+    plane: 'Cost Management',
+    requiredRole: 'Cost Management Reader',
+    columns: ['SubscriptionName', 'MonthlyBudget'],
+    defaultCategory: 'SubscriptionName',
+    defaultValue: 'MonthlyBudget',
+    resolver: resolveBudget,
+  },
+  {
+    id: 'resource-inventory',
+    label: 'Resource inventory',
+    description: 'Estate inventory from Azure Resource Graph, summarized by type, region and subscription.',
+    plane: 'Azure Resource Graph',
+    requiredRole: 'Reader (subscription/MG)',
+    columns: ['ResourceType', 'Location', 'SubscriptionName', 'Environment', 'HasOwnerTag', 'ResourceCount'],
+    defaultCategory: 'ResourceType',
+    defaultValue: 'ResourceCount',
+    resolver: resolveResources,
+  },
+  {
+    id: 'role-assignments',
+    label: 'RBAC role assignments',
+    description: 'Azure RBAC role-assignment counts by role and principal type (authorizationresources).',
+    plane: 'Azure Resource Graph',
+    requiredRole: 'Reader (subscription/MG)',
+    columns: ['RoleName', 'Scope', 'PrincipalType', 'IsPrivileged', 'AssignmentCount'],
+    defaultCategory: 'RoleName',
+    defaultValue: 'AssignmentCount',
+    resolver: resolveRoleAssignments,
+  },
+  {
+    id: 'secure-score',
+    label: 'Defender secure score',
+    description: 'Microsoft Defender for Cloud secure score (current / max / percentage).',
+    plane: 'Defender for Cloud',
+    requiredRole: 'Security Reader',
+    columns: ['SubscriptionName', 'CurrentScore', 'MaxScore', 'Percentage'],
+    defaultCategory: 'SubscriptionName',
+    defaultValue: 'Percentage',
+    resolver: resolveSecureScore,
+  },
+  {
+    id: 'adoption-mau',
+    label: 'CSA Loom monthly active users',
+    description: 'Monthly active CSA Loom users from Log Analytics (AppTraces loom-audit telemetry).',
+    plane: 'Log Analytics',
+    requiredRole: 'Log Analytics Reader',
+    columns: ['Service', 'Month', 'MonthlyActiveUsers', 'WorkloadsOnboarded'],
+    defaultCategory: 'Month',
+    defaultValue: 'MonthlyActiveUsers',
+    resolver: resolveAdoptionSignals,
+  },
+];
+
+const BUILDER_SOURCE_BY_ID: Record<string, BuilderSource> = Object.fromEntries(
+  BUILDER_SOURCES.map((s) => [s.id, s]),
+);
+
+export function getBuilderSource(id: string): BuilderSource | undefined {
+  return BUILDER_SOURCE_BY_ID[id];
+}
+
+/**
+ * Resolve one builder source against the customer's estate. Returns the real
+ * {columns, rows} (live) or an EntityBindingResult with source 'sample'/'error'
+ * and an honest note — never fabricated. Shares the same RenderCtx so multiple
+ * tiles backed by the same plane (e.g. cost + budgets) reuse one upstream call.
+ */
+export async function resolveBuilderSource(
+  sourceId: string,
+  overrides: ReportParamOverrides = {},
+  ctx: RenderCtx = new RenderCtx(),
+): Promise<EntityBindingResult> {
+  const src = getBuilderSource(sourceId);
+  if (!src) return { source: 'error', note: `Unknown data source: ${sourceId}` };
+  const params = resolveReportParams(overrides);
+  try {
+    return await src.resolver(params, ctx);
+  } catch (e: any) {
+    return { source: 'error', note: `Live render failed: ${e?.message || String(e)}` };
+  }
+}
+
+/** Resolve many builder sources at once, sharing one RenderCtx (per-render memo). */
+export async function resolveBuilderSources(
+  sourceIds: string[],
+  overrides: ReportParamOverrides = {},
+): Promise<Record<string, EntityBindingResult>> {
+  const ctx = new RenderCtx();
+  const unique = Array.from(new Set(sourceIds.filter(Boolean)));
+  const entries = await Promise.all(
+    unique.map(async (id): Promise<[string, EntityBindingResult]> => [id, await resolveBuilderSource(id, overrides, ctx)]),
+  );
+  return Object.fromEntries(entries);
+}
 
 /** True when (templateId, entity) has a first-party live Azure backend. */
 export function hasLiveBinding(templateId: string, entity: string): boolean {
