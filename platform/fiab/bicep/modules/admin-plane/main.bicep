@@ -1601,7 +1601,15 @@ module aas 'analysis-services.bicep' = if (aasEnabled) {
     // the AAS data-plane admin (LOOM_AAS_CLIENT_ID authors roles over XMLA).
     // Otherwise the Console UAMI is the sole admin (composite-model path).
     aasAdminUpn: !empty(aasSpnClientId) ? 'app:${aasSpnClientId}@${tenant().tenantId}' : 'app:${identity.outputs.uamiConsoleClientId}@${tenant().tenantId}'
-    skipRoleGrants: skipRoleGrants
+    // IMPORTANT: this `aas` (composite-model) module and the `aasServer`
+    // (import-mode) module below BOTH resolve to the SAME physical AAS server —
+    // both use server name `aasloom${uniqueString(resourceGroup().id)}`. If both
+    // were allowed to grant the Console UAMI Reader, Azure would dedupe on
+    // (principal,role,scope) and fail the second with RoleAssignmentExists
+    // (pass-6 centralus deploy 2026-06-17). aas-server.bicep is the SINGLE owner
+    // of the Reader grant on this shared server, so force-skip the grant here.
+    // (The server-admin XMLA membership is data-plane, set independently below.)
+    skipRoleGrants: true
     tags: complianceTags
   }
 }
@@ -3832,9 +3840,11 @@ resource grafana 'Microsoft.Dashboard/grafana@2023-09-01' = if (managedGrafanaEn
   }
 }
 
-// Grafana Viewer (60750a24-ce75-4119-aa84-5b8f3c5db3e0) for the Console UAMI —
+// Grafana Viewer (60921a7e-fef1-4a43-9b16-a26c52ad4769) for the Console UAMI —
 // granted via a module (a role-assignment name must be calculable at deploy
-// start, which a module output is not, but a module param is).
+// start, which a module output is not, but a module param is). NOTE: the role
+// GUID lives in grafana-rbac.bicep; the previously-cited 60750a24-… is NOT a
+// valid built-in role and caused RoleDefinitionDoesNotExist — corrected there.
 module grafanaViewer 'grafana-rbac.bicep' = if (managedGrafanaEnabled) {
   name: 'console-grafana-viewer'
   params: {

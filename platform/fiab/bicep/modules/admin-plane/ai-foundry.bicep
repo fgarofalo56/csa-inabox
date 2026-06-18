@@ -204,7 +204,7 @@ resource diag 'Microsoft.Insights/diagnosticSettings@2021-05-01-preview' = {
 // target THIS account (foundry-cs-client.ts resolves it by name).
 // =====================================================================
 
-resource aiServices 'Microsoft.CognitiveServices/accounts@2024-10-01' = {
+resource aiServices 'Microsoft.CognitiveServices/accounts@2025-04-01-preview' = {
   name: 'aoai-csa-loom-${location}'
   location: location
   tags: complianceTags
@@ -215,10 +215,14 @@ resource aiServices 'Microsoft.CognitiveServices/accounts@2024-10-01' = {
     customSubDomainName: 'aoai-csa-loom-${location}'
     // Enable Microsoft Foundry project management on this AIServices account so
     // the Foundry Agent Service (data-agent Publish + Foundry agent editor) has a
-    // real project endpoint to target (foundry-agent-client.ts). The property is
-    // valid on the runtime API; the bundled bicep type lib is behind, hence the
-    // suppression below.
-    #disable-next-line BCP037
+    // real project endpoint to target (foundry-agent-client.ts). REQUIRED before
+    // the `foundryProject` child below can be created — without it the project
+    // deploy fails: "Project can only be created under AIServices Kind account
+    // with allowProjectManagement set to true." This property is only recognized
+    // from api-version 2025-04-01-preview onward; the previous 2024-10-01 silently
+    // dropped it (BCP037), so the account was created WITHOUT project management
+    // and the child project failed (pass-6 centralus deploy 2026-06-17). Bumped to
+    // 2025-04-01-preview (same family as the project child + ai/foundry-project.bicep).
     allowProjectManagement: true
     publicNetworkAccess: boundary == 'Commercial' ? 'Enabled' : 'Disabled'
     networkAcls: { defaultAction: boundary == 'Commercial' ? 'Allow' : 'Deny' }
