@@ -13,7 +13,7 @@
  * This module turns that into a precise, honest gate BEFORE the deploy fires:
  *
  *   1. {@link checkSubscriptionDeployPermission} — ARM
- *      `POST {arm}/subscriptions/{sub}/providers/Microsoft.Authorization/permissions`
+ *      `GET {arm}/subscriptions/{sub}/providers/Microsoft.Authorization/permissions`
  *      returns the *caller's* effective `actions`/`notActions` at sub scope.
  *      {@link canDeployAtScope} evaluates whether they cover the deployment
  *      write actions (a wildcard, `Microsoft.Resources/*`, or
@@ -205,9 +205,11 @@ export async function checkSubscriptionDeployPermission(
     return { canDeploy: false, permissions: [], error: `token: ${e?.message ?? String(e)}` };
   }
   try {
+    // Permissions - List is a GET (per the Authorization REST API); POST returns
+    // 405/404 and would be mis-read as a deny.
     const res = await fetch(
       `${armBase()}/subscriptions/${subscriptionId}/providers/Microsoft.Authorization/permissions?api-version=2022-04-01`,
-      { method: 'POST', headers: { authorization: `Bearer ${token}`, 'content-type': 'application/json' }, cache: 'no-store' },
+      { method: 'GET', headers: { authorization: `Bearer ${token}` }, cache: 'no-store' },
     );
     if (!res.ok) {
       const t = await res.text().catch(() => '');
@@ -251,11 +253,14 @@ export async function checkResourceGroupManagePermission(
     return { canManage: false, permissions: [], error: `token: ${e?.message ?? String(e)}` };
   }
   try {
+    // Permissions - List For Resource Group is a GET (per the Authorization REST
+    // API). POST returns 405/404, which the caller would mis-read as "Reader-only"
+    // and false-flag a verified RG-scoped-Contributor DLZ as needing RBAC repair.
     const res = await fetch(
       `${armBase()}/subscriptions/${subscriptionId}/resourceGroups/${encodeURIComponent(
         resourceGroup,
       )}/providers/Microsoft.Authorization/permissions?api-version=2022-04-01`,
-      { method: 'POST', headers: { authorization: `Bearer ${token}`, 'content-type': 'application/json' }, cache: 'no-store' },
+      { method: 'GET', headers: { authorization: `Bearer ${token}` }, cache: 'no-store' },
     );
     if (!res.ok) {
       const t = await res.text().catch(() => '');

@@ -156,17 +156,26 @@ export async function GET() {
 
   // RG-scope probe: for every cross-sub DLZ whose subscription is NOT sub-writable,
   // check whether the UAMI can manage that specific RG (RG-scoped Contributor).
+  // The permissions endpoint is GET (Permissions - List For Resource Group); a
+  // verified RG-scoped Contributor therefore reads as canManage=true. When the
+  // read itself errors (token/network/cross-sub 403) we record the RG as
+  // 'unknown' rather than letting the model report a false 'detached' — an
+  // undeterminable read must never masquerade as Reader-only.
   const writableRgs = new Set<string>();
+  const unknownRgs = new Set<string>();
   const rgsToProbe = dlzRows.filter(
     (r) => !!hubSub && r.subscriptionId !== hubSub && !writableSubs.has(r.subscriptionId),
   );
   await Promise.all(
     rgsToProbe.map(async (r) => {
+      const key = rgKey(r.subscriptionId, r.name);
       try {
         const perm = await checkResourceGroupManagePermission(r.subscriptionId, r.name, armToken);
-        if (!perm.error && perm.canManage) writableRgs.add(rgKey(r.subscriptionId, r.name));
+        if (perm.error) unknownRgs.add(key);
+        else if (perm.canManage) writableRgs.add(key);
+        // else: definitive Reader-only → leave out → model reports 'detached'.
       } catch {
-        /* leave out of writable set — model reports 'detached' conservatively */
+        unknownRgs.add(key); // could not determine → 'unknown', not 'detached'
       }
     }),
   );
@@ -174,6 +183,7 @@ export async function GET() {
   const overview = buildLandingZonesOverview(hub, topo.exists, dlzRows, {
     writableSubs,
     writableRgs,
+    unknownRgs,
   });
   return NextResponse.json({ ok: true, ...overview });
 }

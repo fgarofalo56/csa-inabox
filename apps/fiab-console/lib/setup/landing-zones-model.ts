@@ -91,6 +91,14 @@ export interface AttachStateInputs {
    * signal — the UAMI gets RG-scoped, not sub-scoped, Contributor.
    */
   writableRgs?: Set<string>;
+  /**
+   * Resource-group ids (`<subscriptionId>/<rgName>`, lowercased) whose permission
+   * check could NOT be determined (the ARM permissions read itself errored —
+   * token/network/403). These resolve to 'unknown' rather than 'detached' so a
+   * transient or cross-sub read failure is never mis-reported as Reader-only
+   * (no-vaporware: an undeterminable state is honest, a false "needs repair" is not).
+   */
+  unknownRgs?: Set<string>;
 }
 
 /** Stable `<subscriptionId>/<rgName>` key (lowercased) for an RG. */
@@ -117,8 +125,8 @@ export function buildLandingZonesOverview(
 ): LandingZonesOverview {
   const inputs: AttachStateInputs =
     perms instanceof Set ? { writableSubs: perms } : perms ?? {};
-  const { writableSubs, writableRgs } = inputs;
-  const probed = !!writableSubs || !!writableRgs;
+  const { writableSubs, writableRgs, unknownRgs } = inputs;
+  const probed = !!writableSubs || !!writableRgs || !!unknownRgs;
   const hubSub = hub?.hubSubscriptionId;
   const landingZones: LandingZone[] = [];
   for (const row of dlzRgRows) {
@@ -127,12 +135,20 @@ export function buildLandingZonesOverview(
     const crossSubscription = !!hubSub && row.subscriptionId !== hubSub;
     let attachState: DlzAttachState = 'unknown';
     if (probed) {
+      const key = rgKey(row.subscriptionId, row.name);
       const subWritable = !!writableSubs?.has(row.subscriptionId);
-      const rgWritable = !!writableRgs?.has(rgKey(row.subscriptionId, row.name));
+      const rgWritable = !!writableRgs?.has(key);
+      const rgUnknown = !!unknownRgs?.has(key);
       // Same-sub-as-hub DLZs are always manageable; otherwise RG- OR sub-scope
-      // write is enough (RG-scope is the normal least-privilege grant).
+      // write is enough (RG-scope is the normal least-privilege grant). When the
+      // RG permission read itself could not be determined we report 'unknown'
+      // (not 'detached') so an undeterminable read never false-flags Reader-only.
       attachState =
-        !crossSubscription || subWritable || rgWritable ? 'attached' : 'detached';
+        !crossSubscription || subWritable || rgWritable
+          ? 'attached'
+          : rgUnknown
+            ? 'unknown'
+            : 'detached';
     }
     landingZones.push({
       id: `${row.subscriptionId}/${row.name}`,
