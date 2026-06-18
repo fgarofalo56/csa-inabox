@@ -588,7 +588,7 @@ param loomBusinessEventsContainer string = 'business-event-types'
 @description('Optional ARM resource ID of a default IoT Hub for ADX data connections (KQL Database → Add data connection wizard). When set, the IoT Hub picker pre-selects this hub; when empty, the wizard discovers all IoT Hubs visible to the Loom identity via Resource Graph. The ADX cluster system-assigned managed identity must hold "IoT Hub Contributor" (role ID 4763167e-fb37-48bb-8710-0fcd9d82e439, grants Microsoft.Devices/IotHubs/IotHubKeys/read) at the target IoT Hub scope for device-to-cloud ingestion to succeed — because the hub is user-selected at runtime, that grant is a one-time operator action surfaced as an honest-gate MessageBar in the editor.')
 param loomIotHubResourceId string = ''
 
-@description('Loom Alert Rules resource group (for monitoring alerts/rules). Empty defaults to LOOM_DLZ_RG.')
+@description('Loom Alert Rules resource group — where the day-one Azure Monitor alert rules + action group are created and where the Azure-native Activator writes scheduled-query alerts. Empty defaults to the admin resource group (resourceGroup().name) so LOOM_ALERT_RG is always wired day-one (no manual config). Override only to target a separate alerts RG.')
 param loomAlertRg string = ''
 
 @description('ARM management endpoint. Empty defaults to https://management.azure.com (Commercial). Set to https://management.usgovcloudapi.net for GCC-High / IL5.')
@@ -870,8 +870,8 @@ param loomAzureMapsKeySecretName string = 'loom-azure-maps-primary-key'
 @description('Purview account name (short, NOT full URL) — e.g. "purview-csa-loom-eastus2". When empty, /admin/security Purview tab + /api/items/data-product/*/register-purview return HTTP 503 with a structured remediation hint.')
 param loomPurviewAccount string = ''
 
-@description('Enable Microsoft Information Protection (sensitivity labels / label policies) calls via Microsoft Graph. Requires the Console UAMI to have InformationProtectionPolicy.Read.All admin-consented. When false, /admin/security Information Protection tab returns 503.')
-param loomMipEnabled bool = false
+@description('Enable Microsoft Information Protection (sensitivity labels / label policies + /admin/batch-labeling real MIP labels) calls via Microsoft Graph. DEFAULTS ON (opt-out): the post-deploy bootstrap grants the Console UAMI InformationProtectionPolicy.Read.All by default, so the surface uses real labels day-one once a Tenant Administrator issues admin consent (until then the tab renders the honest 503 NotConfigured MessageBar, never an empty stub). When false, /admin/security Information Protection + batch-labeling MIP labels are suppressed.')
+param loomMipEnabled bool = true
 
 @description('Enable sensitivity-label + label-policy CRUD (create/edit/delete) via the SCC PowerShell sidecar. Deploys azure-functions/scc-labels and wires LOOM_MIP_ADMIN_ENABLED / LOOM_SCC_LABELS_ENDPOINT / LOOM_SCC_LABELS_KEY into the Console. The sidecar needs the SCC app (Exchange.ManageAsApp + Compliance Administrator) + auth cert provisioned in post-deploy bootstrap. When false (default), label/policy READS still work but CRUD returns the honest 503 mip_admin_not_configured gate.')
 param loomMipAdminEnabled bool = false
@@ -1135,6 +1135,31 @@ module monitoring 'monitoring.bicep' = {
     publicIngestionEnabled: monitorPublicIngestionEnabled
     // /monitor Logs (KQL) tab — Console UAMI gets Log Analytics Reader on the LAW.
     consolePrincipalId: identity.outputs.uamiConsolePrincipalId
+  }
+}
+
+// Day-one DEFAULT Azure Monitor alert rules + action group (opt-out). Lands in
+// THIS admin RG, which is the LOOM_ALERT_RG default (LOOM_ALERT_RG =
+// resourceGroup().name when loomAlertRg is empty — see the apps[] env below), so
+// the /monitor Alerts surface (lib/azure/monitor-client.listScheduledQueryRules,
+// scoped to LOOM_ALERT_RG) finds these rules out of the box. Azure-native
+// Activator parity — no Microsoft Fabric required (no-fabric-dependency.md).
+// (If an operator overrides loomAlertRg to a SEPARATE RG, the default set still
+// installs here in the admin RG; they manage alerts in their chosen RG and the
+// always-on Monitoring Contributor grant + the Activator wizard cover that path.)
+module defaultAlerts 'monitoring-default-alerts.bicep' = {
+  name: 'monitoring-default-alerts'
+  params: {
+    location: location
+    complianceTags: complianceTags
+    lawId: monitoring.outputs.lawId
+    consoleAppName: 'loom-console'
+    // No admin email param day-one (keeps the admin-plane module under the
+    // 256 ARM/Bicep parameter limit). The default rules notify subscription
+    // Owners (the admin group) via the ARM-role receiver; an operator adds an
+    // email/SMS/webhook receiver to the loom-default-alerts action group from
+    // the /monitor Alerts editor. Opt-out via the module's skipDefaultAlerts.
+    notifyOwners: true
   }
 }
 

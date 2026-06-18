@@ -121,7 +121,14 @@ export function EnvConfigPane() {
 
   const coverage = useMemo(() => {
     if (!data) return { set: 0, total: 0, missingCritical: 0 };
-    const set = data.editable.filter((e) => data.current[e.key]?.set).length;
+    // "Configured" = a requirement that is met: directly set, bicep-derived, OR
+    // satisfied by an `anyOf` sibling/alias. The last case is what makes the
+    // mutually-exclusive report backends honest: when the Grafana embed path is
+    // active (LOOM_*_REPORT_KIND=grafana + the dashboard UID set), the four
+    // Power BI embed vars are the UNUSED alternative backend and report
+    // "satisfied (alias set)" — so they count toward coverage rather than
+    // showing as a false "not set" (per no-vaporware.md / no-fabric-dependency.md).
+    const set = data.editable.filter((e) => isSatisfied(e.key)).length;
     const missingCritical = data.editable.filter(
       (e) => e.severity === 'critical' && !isSatisfied(e.key),
     ).length;
@@ -224,10 +231,11 @@ export function EnvConfigPane() {
               <ProgressBar
                 value={coveragePct} thickness="large"
                 color={coverage.missingCritical > 0 ? 'warning' : coverage.set === coverage.total ? 'success' : 'brand'}
-                aria-label={`${coverage.set} of ${coverage.total} runtime variables configured`}
+                aria-label={`${coverage.set} of ${coverage.total} runtime variables configured (set, derived, or satisfied)`}
               />
               <Caption1 style={{ display: 'block', color: tokens.colorNeutralForeground3, marginTop: 4 }}>
-                {Math.round(coveragePct * 100)}% of editable runtime variables have a value
+                {Math.round(coveragePct * 100)}% of editable runtime variables are configured
+                (set, bicep-derived, or satisfied by an alternative backend)
               </Caption1>
             </div>
           </div>

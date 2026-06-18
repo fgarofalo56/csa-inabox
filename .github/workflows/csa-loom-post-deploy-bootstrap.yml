@@ -1263,6 +1263,8 @@ jobs:
           echo "Power Platform: UAMI registered as Management App (unblocks PP + Copilot Studio)"
           echo "Dataverse: MSAL SP registered as Application User w/ SA role on every env with Dataverse (idempotent)"
           echo "MIP+DLP Graph: InformationProtectionPolicy.Read.All + SensitivityLabel.Evaluate + Policy.Read.All + SecurityAlert.Read.All granted to Console UAMI"
+          echo "  (LOOM_MIP_ENABLED defaults ON — batch labeling uses real MIP labels once admin consent is issued)"
+          echo "Monitor Alerts: default rule set (Console availability, 5xx, replica restarts) + loom-default-alerts action group provisioned by bicep in LOOM_ALERT_RG (the admin RG); visible day-one on /monitor Alerts"
           echo ""
           echo "Still needs manual steps (not grantable via SP):"
           echo "  • Microsoft Graph admin consent — Tenant Administrator must click 'Grant admin consent'"
