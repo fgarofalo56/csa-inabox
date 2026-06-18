@@ -479,6 +479,62 @@ reachability fallback** adds that IP to an `ALLOW` list via
 `POST /api/2.0/ip-access-lists`. The PE is preferred (no IP drift, matches the
 Network page "private by default" posture).
 
+## Databricks Unity Catalog — account id + account-admin (day-one) {#databricks-uc-account}
+
+The **Catalog → Metastores** Unified-Catalog page (`/catalog/metastores`, the
+one-click metastore **attach**) and the **`/catalog/domains`** UC-mirror surface
+talk to the Databricks **account** plane
+(`accounts.azuredatabricks.net/api/2.0/accounts/{account_id}/...`) — a different
+plane than the workspace SCIM the bootstrap already configures. Enumerating and
+attaching metastores is an **account-level** operation, so it needs two things
+that workspace-level SCIM can't provide:
+
+1. **`LOOM_DATABRICKS_ACCOUNT_ID`** on the Console — the Databricks account GUID.
+   This is **not discoverable from ARM** (the workspace resource doesn't expose
+   it), so it's supplied as config:
+   - **Greenfield / single-sub:** set the env var `LOOM_DATABRICKS_ACCOUNT_ID`
+     before the deploy. `params/*.bicepparam` reads it
+     (`readEnvironmentVariable('LOOM_DATABRICKS_ACCOUNT_ID','')`) → `main.bicep`
+     `databricksAccountId` → `admin-plane/main.bicep` wires it onto the console
+     as `LOOM_DATABRICKS_ACCOUNT_ID` (+ `LOOM_DATABRICKS_ACCOUNT_HOST` for
+     sovereign clouds).
+   - **dlz-attach / tenant (admin plane not redeployed):** set the repo var
+     **`DATABRICKS_ACCOUNT_ID`** (and optionally `DATABRICKS_ACCOUNT_HOST` =
+     `accounts.azuredatabricks.us` for Gov). The **Enable Unity Catalog** bootstrap
+     step then patches `LOOM_DATABRICKS_ACCOUNT_ID` onto the live console Container
+     App. `scripts/csa-loom/patch-navigator-env.sh` also wires it (reads
+     `DATABRICKS_ACCOUNT_ID` / `LOOM_DATABRICKS_ACCOUNT_ID` from the env).
+
+   Find the account id at **accounts.azuredatabricks.net → top-right user menu →
+   Account ID** (or the `?account_id=` URL).
+
+2. **Console UAMI is a Databricks _account admin_.** The bootstrap's **Enable
+   Unity Catalog** step runs `scripts/csa-loom/enable-unity-catalog.sh`, which
+   adds the Console UAMI as an account service principal and PATCHes it the
+   `account_admin` role (account-level SCIM
+   `/accounts/{id}/scim/v2/ServicePrincipals`). **One-time prereq:** the deploy
+   SP (`limitlessdata_deploy`) must itself be a **Databricks account admin** for
+   that PATCH to succeed — an existing account admin (the AAD identity that
+   created the account / first workspace, typically a Global Admin or platform
+   owner) promotes the deploy SP once via the account console
+   (accounts.azuredatabricks.net → User management → Service principals → mark as
+   account admin). If the deploy SP isn't an account admin, the step emits a
+   `::warning::` and the UC surfaces honest-gate (workspace registration +
+   catalog listing still work) — it is **never** a hard deploy blocker.
+
+Without `LOOM_DATABRICKS_ACCOUNT_ID`, the console UC client
+(`lib/azure/unity-catalog-account-client.ts`) throws
+`UnityCatalogAccountNotConfiguredError`, which the BFF renders as an honest
+MessageBar naming the env var — registration and catalog listing remain
+functional; only the one-click metastore **attach** is unavailable.
+
+| Piece | Where |
+|---|---|
+| Console env `LOOM_DATABRICKS_ACCOUNT_ID` / `…_HOST` | `admin-plane/main.bicep` (apps[].env), param `databricksAccountId` |
+| Param source | `params/*.bicepparam` (`readEnvironmentVariable('LOOM_DATABRICKS_ACCOUNT_ID')`) |
+| Account-admin + metastore + default catalog | `scripts/csa-loom/enable-unity-catalog.sh` (bootstrap **Enable Unity Catalog** step) |
+| dlz-attach live env bridge | bootstrap **Enable Unity Catalog** step + `scripts/csa-loom/patch-navigator-env.sh` |
+
 ## Batch labeling — Power BI Admin setLabels {#batch-labeling-powerbi-setlabels}
 
 The **Admin → Batch labeling** page (`/admin/batch-labeling`) bulk-applies a
@@ -1098,6 +1154,43 @@ object id.
 limitation). Until a `LOOM_STORAGE_ENDPOINT_SUFFIX` is introduced, only
 **same-account** references are supported in sovereign clouds; cross-account
 references there are blocked until the DFS host is parameterized.
+
+---
+
+## AI Foundry (AIServices) — Console UAMI Cognitive Services roles {#foundry-aiservices-roles}
+
+> **#1468.** CSA Loom's default "Foundry" is an **AIServices Cognitive Services
+> account** (`aifndry-loom-<region>`, `kind=AIServices`) — *not* a classic
+> `Microsoft.MachineLearningServices/workspaces`. The AzureML "Data Scientist"
+> role/scope does not apply to it, so the old bootstrap grant 404'd and (because
+> the steps weren't decoupled) cascade-skipped the grants after it.
+
+For the AIServices Foundry account the Console UAMI needs **Cognitive Services
+roles** on the account scope, granted by the bootstrap **Grant Console UAMI
+Foundry roles** step (type-aware; decoupled `continue-on-error`):
+
+| Role | GUID | Why |
+|---|---|---|
+| Cognitive Services User | `a97b65f3-24c7-4388-baec-2e87135dc908` | read/list the account, deployments, models |
+| Cognitive Services OpenAI User | `5e0bd9bd-7b93-4f28-af87-19fc36ad61bd` | chat/completions/embeddings data-plane calls (Entra auth) |
+
+The step detects the account type and only takes the AzureML path
+(`AzureML Data Scientist` + `AzureML Compute Operator`, below) when a real
+`Microsoft.MachineLearningServices/workspaces` exists. To grant manually on an
+AIServices estate:
+
+```bash
+AISVC=$(az cognitiveservices account list -g <admin-rg> \
+  --query "[?contains(name,'aifndry') || kind=='AIServices'].id | [0]" -o tsv)
+for ROLE in a97b65f3-24c7-4388-baec-2e87135dc908 5e0bd9bd-7b93-4f28-af87-19fc36ad61bd; do
+  az role assignment create --assignee-object-id <console-uami-oid> \
+    --assignee-principal-type ServicePrincipal --role "$ROLE" --scope "$AISVC"
+done
+```
+
+The single-sub greenfield path also grants these from bicep (`ai-foundry.bicep`
+Cognitive Services role assignments). The AzureML section below applies **only**
+to a BYO classic MLServices hub.
 
 ---
 
