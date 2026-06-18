@@ -126,7 +126,16 @@ resource purview 'Microsoft.Purview/accounts@2024-04-01-preview' = if (purviewEn
   properties: {
     managedResourceGroupName: 'rg-mng-purview-csa-loom-${effPurviewLocation}'
     publicNetworkAccess: 'Disabled'
-    managedEventHubState: 'Enabled'
+    // managedEventHubState: the classic managed Event Hub namespace (the Atlas
+    // Kafka notification feed) can no longer be ENABLED on newly-created accounts
+    // — the service rejects `Enabled` ("The managed event hub namespace cannot be
+    // enabled for account … from 2023-05-01-preview api version", pass-6 centralus
+    // deploy 2026-06-17). Loom's Azure-native catalog path (Data Map REST +
+    // Databricks UC / classic collections) does NOT consume the managed Event Hub,
+    // so set 'NotSpecified' — the account provisions without the managed EH and the
+    // ARM control plane is satisfied. Schema-valid value per Microsoft.Purview/
+    // accounts AccountProperties (Disabled | Enabled | NotSpecified).
+    managedEventHubState: 'NotSpecified'
   }
 }
 

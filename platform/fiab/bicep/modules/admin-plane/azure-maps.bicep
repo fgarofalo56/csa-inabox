@@ -62,7 +62,14 @@ resource mapsAccount 'Microsoft.Maps/accounts@2024-07-01-preview' = if (boundary
   tags: complianceTags
   sku: { name: sku }
   kind: 'Gen2'
-  identity: { type: 'SystemAssigned' }
+  // NO managed identity: Azure Maps accounts are GLOBAL (location:'global') and
+  // a global-location resource CANNOT host a managed identity — ARM rejects it
+  // with "UnsupportedLocation: Global location does not support Managed Identity"
+  // (pass-6 centralus deploy 2026-06-17). The account does not need a system MI
+  // for Loom's usage: the Console calls Maps with its OWN UAMI (granted Azure
+  // Maps Data Reader below for AAD calls) plus the primary key (stashed in Key
+  // Vault for the SPA tile-preview path). The Maps account MI principalId is not
+  // referenced by any role assignment, so removing it is safe.
   properties: {
     disableLocalAuth: false                              // SPA preview still needs key auth
     // allowedOrigins must be concrete origins or the '*' allow-all token — never
