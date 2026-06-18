@@ -453,7 +453,18 @@ export function RealTimeHubView() {
             placeholder="Search streams by name, source, or workspace…" value={q} onChange={(_, d) => setQ(d.value)} />
         </div>
 
-        {loading ? (
+        {loading && view === 'list' ? (
+          // List view shows a stable skeleton (matching the column layout)
+          // rather than a centered spinner, so the grid doesn't jump in.
+          <LoomDataTable
+            ariaLabel="All data streams"
+            columns={columns}
+            rows={[]}
+            getRowId={(s) => `${s.dataType}-${s.workspaceId}-${s.id}`}
+            loading
+            skeleton
+          />
+        ) : loading ? (
           <div className={styles.loadingWrap}>
             <Spinner label="Loading data streams…" />
           </div>

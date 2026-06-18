@@ -41,6 +41,8 @@ import {
   DataGridCell,
   createTableColumn,
   Spinner,
+  Skeleton,
+  SkeletonItem,
   Input,
   Dropdown,
   Option,
@@ -98,6 +100,14 @@ export interface LoomDataTableProps<T> {
   noFilters?: boolean;
   /** Optional aria-label for the grid. */
   ariaLabel?: string;
+  /**
+   * Opt-in skeleton loading state. When `loading` is true AND this is set,
+   * render gray placeholder rows that match the column layout (a stable
+   * skeleton) instead of the bare centered Spinner. Defaults off so existing
+   * consumers keep the Spinner behavior. Pass a number for the row count, or
+   * `true` for the default of 6 rows.
+   */
+  skeleton?: boolean | number;
 }
 
 const useStyles = makeStyles({
@@ -135,7 +145,8 @@ const useStyles = makeStyles({
   headerRow: {
     position: 'sticky',
     top: 0,
-    zIndex: 2,
+    // Header must stay ABOVE both the body and the sticky filter row on scroll.
+    zIndex: 3,
     backgroundColor: tokens.colorNeutralBackground1,
     borderBottom: `2px solid ${tokens.colorNeutralStroke2}`,
   },
@@ -162,7 +173,9 @@ const useStyles = makeStyles({
     borderBottom: `1px solid ${tokens.colorNeutralStroke2}`,
     position: 'sticky',
     top: 0,
-    zIndex: 1,
+    // Above the body rows, but below the header row (zIndex 3) so the header
+    // is never occluded by the filter band when the body scrolls under it.
+    zIndex: 2,
     flexWrap: 'wrap',
   },
   filterField: {
@@ -195,6 +208,37 @@ const useStyles = makeStyles({
     minHeight: '180px',
     color: tokens.colorNeutralForeground3,
     textAlign: 'center',
+  },
+  // aria-live region announcing the filtered result count to screen readers.
+  // Visually hidden — the count is already visible via the rows themselves.
+  srStatus: {
+    position: 'absolute',
+    width: '1px',
+    height: '1px',
+    padding: 0,
+    margin: '-1px',
+    overflow: 'hidden',
+    clip: 'rect(0 0 0 0)',
+    whiteSpace: 'nowrap',
+    border: 0,
+  },
+  // skeleton loading state: placeholder rows matching the column layout
+  skeletonRow: {
+    display: 'flex',
+    gap: tokens.spacingHorizontalS,
+    paddingTop: '10px',
+    paddingBottom: '10px',
+    paddingLeft: tokens.spacingHorizontalM,
+    paddingRight: tokens.spacingHorizontalM,
+    borderBottom: `1px solid ${tokens.colorNeutralStroke3}`,
+  },
+  skeletonHeaderRow: {
+    backgroundColor: tokens.colorNeutralBackground1,
+    borderBottom: `2px solid ${tokens.colorNeutralStroke2}`,
+  },
+  skeletonCell: {
+    flex: '1 1 0',
+    minWidth: 0,
   },
 });
 
@@ -247,6 +291,7 @@ export function LoomDataTable<T>(props: LoomDataTableProps<T>): React.ReactEleme
     onRowClick,
     noFilters = false,
     ariaLabel,
+    skeleton = false,
   } = props;
   const styles = useStyles();
 
@@ -348,6 +393,33 @@ export function LoomDataTable<T>(props: LoomDataTableProps<T>): React.ReactEleme
   );
 
   if (loading) {
+    // Opt-in skeleton: stable placeholder rows matching the column layout so
+    // the table doesn't collapse to a spinner / jump when data arrives.
+    if (skeleton) {
+      const rowCount = typeof skeleton === 'number' ? Math.max(1, skeleton) : 6;
+      return (
+        <div className={styles.root}>
+          <Skeleton aria-label="Loading data table">
+            <div className={mergeClasses(styles.skeletonRow, styles.skeletonHeaderRow)}>
+              {columns.map((col) => (
+                <div key={col.key} className={styles.skeletonCell}>
+                  <SkeletonItem shape="rectangle" style={{ width: '60%', height: 16 }} />
+                </div>
+              ))}
+            </div>
+            {Array.from({ length: rowCount }).map((_, r) => (
+              <div key={r} className={styles.skeletonRow}>
+                {columns.map((col) => (
+                  <div key={col.key} className={styles.skeletonCell}>
+                    <SkeletonItem shape="rectangle" style={{ width: '85%', height: 14 }} />
+                  </div>
+                ))}
+              </div>
+            ))}
+          </Skeleton>
+        </div>
+      );
+    }
     return (
       <div className={styles.root}>
         <div className={styles.stateBox}>
@@ -359,6 +431,12 @@ export function LoomDataTable<T>(props: LoomDataTableProps<T>): React.ReactEleme
 
   return (
     <div className={styles.root}>
+      {/* Announce the filtered result count to assistive tech. */}
+      <div className={styles.srStatus} role="status" aria-live="polite">
+        {filteredRows.length === rows.length
+          ? `Showing ${rows.length} ${rows.length === 1 ? 'item' : 'items'}`
+          : `Showing ${filteredRows.length} of ${rows.length} ${rows.length === 1 ? 'item' : 'items'}`}
+      </div>
       {anyFilterable && (
         <div className={styles.filterRow} role="search">
           {columns.map((col) => {
