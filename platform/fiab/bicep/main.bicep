@@ -192,6 +192,27 @@ param loomGovernPbiReportId string = ''
 @description('Managed Grafana dashboard UID for the Govern Admin "View more" (when loomReportKind=grafana).')
 param loomGrafanaDashboardUid string = ''
 
+// ── Day-one Grafana embed defaults ────────────────────────────────────────
+// When Managed Grafana is deployed (managedGrafanaEnabled) and the operator has
+// NOT explicitly chosen a report backend, default the Govern (F2) + Usage (F21)
+// embeds to the always-deployable, Fabric-free grafana path with the stable
+// dashboard UIDs the post-deploy bootstrap creates. This closes the last two
+// self-audit warnings day-one without requiring a Power BI tenant. The Power BI
+// path is untouched: setting loomReportKind/loomUsageReportKind=powerbi (or any
+// non-empty value) wins over these defaults. The dashboards are created
+// idempotently by .github/workflows/csa-loom-post-deploy-bootstrap.yml from
+// platform/fiab/grafana/*.json using these same UIDs.
+@description('Stable Grafana dashboard UID for the day-one Governance (F2) embed. Must match platform/fiab/grafana/loom-governance.json.')
+param loomGrafanaGovernanceDashboardUidDefault string = 'loom-governance'
+@description('Stable Grafana dashboard UID for the day-one Usage (F21) embed. Must match platform/fiab/grafana/loom-usage.json.')
+param loomGrafanaUsageDashboardUidDefault string = 'loom-usage'
+
+var grafanaEmbedDayOne = managedGrafanaEnabled && !pbiEmbeddedEnabled
+var effectiveLoomReportKind = !empty(loomReportKind) ? loomReportKind : (grafanaEmbedDayOne ? 'grafana' : '')
+var effectiveLoomUsageReportKind = !empty(loomUsageReportKind) ? loomUsageReportKind : (grafanaEmbedDayOne ? 'grafana' : '')
+var effectiveLoomGrafanaDashboardUid = !empty(loomGrafanaDashboardUid) ? loomGrafanaDashboardUid : (grafanaEmbedDayOne ? loomGrafanaGovernanceDashboardUidDefault : '')
+var effectiveLoomGrafanaUsageDashboardUid = !empty(loomGrafanaUsageDashboardUid) ? loomGrafanaUsageDashboardUid : (grafanaEmbedDayOne ? loomGrafanaUsageDashboardUidDefault : '')
+
 @description('Storage requires CMK (true at IL5)')
 param storageRequireCmk bool = false
 
@@ -1064,14 +1085,14 @@ module adminPlane 'modules/admin-plane/main.bicep' = if (deployAdminPlane) {
     // gates until the report/dashboard ids + UAMI membership are supplied.
     pbiEmbeddedEnabled: pbiEmbeddedEnabled
     managedGrafanaEnabled: managedGrafanaEnabled
-    loomUsageReportKind: loomUsageReportKind
+    loomUsageReportKind: effectiveLoomUsageReportKind
     loomUsagePbiWorkspaceId: loomUsagePbiWorkspaceId
     loomUsagePbiReportId: loomUsagePbiReportId
-    loomGrafanaUsageDashboardUid: loomGrafanaUsageDashboardUid
-    loomReportKind: loomReportKind
+    loomGrafanaUsageDashboardUid: effectiveLoomGrafanaUsageDashboardUid
+    loomReportKind: effectiveLoomReportKind
     loomGovernPbiWorkspaceId: loomGovernPbiWorkspaceId
     loomGovernPbiReportId: loomGovernPbiReportId
-    loomGrafanaDashboardUid: loomGrafanaDashboardUid
+    loomGrafanaDashboardUid: effectiveLoomGrafanaDashboardUid
     // Azure-native backend selectors (no-fabric-dependency) + the org-visuals
     // opt-out, bundled into ONE object so the admin-plane module stays under the
     // ARM 256-parameter limit (admin-plane cannot take another scalar param).

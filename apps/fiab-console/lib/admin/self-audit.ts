@@ -105,15 +105,20 @@ export const VALUE_HINT: Record<string, string> = {
   LOOM_PURVIEW_ACCOUNT: '<purview-account-name>',
   LOOM_GRAPH_USERS_ENABLED: 'true',
   // Usage analytics embed (F21) + Govern embed (F2) — per-cloud report backend.
-  LOOM_USAGE_REPORT_KIND: 'powerbi',
+  // Day-one default is Azure Managed Grafana (Fabric-free): bicep deploys Grafana
+  // (managedGrafanaEnabled) and the post-deploy bootstrap creates the two stable
+  // dashboards (uids loom-governance / loom-usage) from platform/fiab/grafana/.
+  // Power BI is the opt-in alternative (Commercial/GCC) — swap the KIND + ids below.
+  LOOM_USAGE_REPORT_KIND: 'grafana',
+  LOOM_GRAFANA_USAGE_DASHBOARD_UID: 'loom-usage',
+  LOOM_GRAFANA_ENDPOINT: 'https://<name>-<hash>.<region>.grafana.azure.com',
+  LOOM_REPORT_KIND: 'grafana',
+  LOOM_GRAFANA_DASHBOARD_UID: 'loom-governance',
+  // Opt-in Power BI alternative (set LOOM_*_REPORT_KIND=powerbi to use):
   LOOM_USAGE_PBI_WORKSPACE_ID: '<power-bi-workspace-guid>',
   LOOM_USAGE_PBI_REPORT_ID: '<power-bi-report-guid>',
-  LOOM_GRAFANA_USAGE_DASHBOARD_UID: '<managed-grafana-dashboard-uid>',
-  LOOM_GRAFANA_ENDPOINT: 'https://<name>-<hash>.<region>.grafana.azure.com',
-  LOOM_REPORT_KIND: 'powerbi',
   LOOM_GOVERN_PBI_WORKSPACE_ID: '<power-bi-workspace-guid>',
   LOOM_GOVERN_PBI_REPORT_ID: '<power-bi-report-guid>',
-  LOOM_GRAFANA_DASHBOARD_UID: '<managed-grafana-dashboard-uid>',
   // Derived by bicep (org-visuals URL from the storage account; LAW customerId
   // from the monitoring module). Operators normally never set these by hand.
   LOOM_ORG_VISUALS_URL: 'https://<adls-account>.blob.<storage-suffix>/org-visuals',

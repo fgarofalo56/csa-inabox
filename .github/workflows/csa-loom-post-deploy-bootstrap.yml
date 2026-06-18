@@ -1169,6 +1169,56 @@ jobs:
             bash scripts/csa-loom/bootstrap-weave-pg.sh \
             || echo "::warning::Weave PG bootstrap incomplete — ensure the deploy SP is a PG Entra admin on $WEAVE_PG_SERVER, then re-run."
 
+      - name: Create Govern/Usage Grafana dashboards (F2 + F21 embed, day-one)
+        if: always()
+        continue-on-error: true
+        run: |
+          # Day-one Govern (F2) + Usage (F21) embedded analytics. bicep deploys
+          # Azure Managed Grafana (managedGrafanaEnabled) and wires the console env
+          # LOOM_REPORT_KIND=grafana / LOOM_USAGE_REPORT_KIND=grafana + the stable
+          # UIDs (loom-governance / loom-usage). This step creates the two real
+          # dashboards (over the OOB Azure Monitor data source) so the embeds
+          # resolve immediately. Idempotent — re-runs with --overwrite. The UIDs
+          # MUST match the bicep defaults + platform/fiab/grafana/*.json.
+          set -uo pipefail
+          az account set --subscription "$ADMIN_SUB" 2>/dev/null || true
+          GRAFANA_NAME=$(az grafana list -g "$ADMIN_RG" --query "[?starts_with(name,'grafana-csa-loom')].name | [0]" -o tsv 2>/dev/null)
+          if [ -z "${GRAFANA_NAME:-}" ] || [ "$GRAFANA_NAME" = "None" ]; then
+            echo "::notice::No grafana-csa-loom-* instance in $ADMIN_RG — deploy with managedGrafanaEnabled=true to create it, then re-run this job."
+            exit 0
+          fi
+          echo "Managed Grafana: $GRAFANA_NAME"
+          az extension add -n amg -y 2>/dev/null || az extension update -n amg 2>/dev/null || true
+          GRAFANA_ID=$(az grafana show -n "$GRAFANA_NAME" -g "$ADMIN_RG" --query id -o tsv 2>/dev/null)
+          # The deploy SP must be a Grafana Admin to create dashboards via the API.
+          DEPLOY_SP_OID=$(az ad sp show --id "$(az account show --query user.name -o tsv)" --query id -o tsv 2>/dev/null || echo "")
+          if [ -n "$DEPLOY_SP_OID" ] && [ -n "${GRAFANA_ID:-}" ]; then
+            az role assignment create --assignee-object-id "$DEPLOY_SP_OID" --assignee-principal-type ServicePrincipal \
+              --role "22926164-76b3-42b3-bc55-97df8dab3e41" --scope "$GRAFANA_ID" \
+              -o none 2>&1 | grep -v "already exists" || echo "  (deploy SP Grafana Admin already assigned)"
+          fi
+          # The Grafana managed identity needs Monitoring Reader to read metrics/logs.
+          GRAFANA_MI=$(az grafana show -n "$GRAFANA_NAME" -g "$ADMIN_RG" --query "identity.principalId" -o tsv 2>/dev/null)
+          if [ -n "${GRAFANA_MI:-}" ] && [ "$GRAFANA_MI" != "None" ]; then
+            for S in "$ADMIN_SUB" "$DLZ_SUB"; do
+              [ -n "$S" ] && az role assignment create --assignee-object-id "$GRAFANA_MI" --assignee-principal-type ServicePrincipal \
+                --role "Monitoring Reader" --scope "/subscriptions/$S" \
+                -o none 2>&1 | grep -v "already exists" || true
+            done
+          fi
+          sleep 30
+          for D in loom-governance loom-usage; do
+            if [ -f "platform/fiab/grafana/${D}.json" ]; then
+              az grafana dashboard create -n "$GRAFANA_NAME" -g "$ADMIN_RG" --overwrite \
+                --definition "@platform/fiab/grafana/${D}.json" \
+                --query "{uid:uid,status:status}" -o tsv 2>&1 \
+                && echo "  created/updated dashboard: $D" \
+                || echo "::warning::Could not create dashboard $D — ensure the deploy SP has Grafana Admin on $GRAFANA_NAME, then re-run."
+            else
+              echo "::warning::platform/fiab/grafana/${D}.json not found — skipping."
+            fi
+          done
+
       - name: Verify console runtime (probes / resources / telemetry)
         if: always()
         continue-on-error: true

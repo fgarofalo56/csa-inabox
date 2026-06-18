@@ -1,0 +1,138 @@
+{
+  "uid": "loom-usage",
+  "title": "CSA Loom — Usage",
+  "tags": ["csa-loom", "usage", "f21"],
+  "schemaVersion": 39,
+  "version": 0,
+  "editable": true,
+  "timezone": "",
+  "time": { "from": "now-24h", "to": "now" },
+  "refresh": "5m",
+  "panels": [
+    {
+      "id": 1,
+      "type": "timeseries",
+      "title": "Console requests / sec (loom-console)",
+      "description": "Azure Container App ingress request volume for the loom-console app — overall platform usage.",
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 0 },
+      "datasource": { "type": "grafana-azure-monitor-datasource", "uid": "azure-monitor-oob" },
+      "targets": [
+        {
+          "refId": "A",
+          "queryType": "Azure Monitor",
+          "datasource": { "type": "grafana-azure-monitor-datasource", "uid": "azure-monitor-oob" },
+          "azureMonitor": {
+            "resources": [
+              {
+                "subscription": "e093f4fd-5047-4ee4-968d-a56942c665f3",
+                "resourceGroup": "rg-csa-loom-admin-centralus",
+                "metricNamespace": "microsoft.app/containerapps",
+                "resourceName": "loom-console"
+              }
+            ],
+            "metricNamespace": "microsoft.app/containerapps",
+            "metricName": "Requests",
+            "aggregation": "Total",
+            "timeGrain": "auto"
+          }
+        }
+      ]
+    },
+    {
+      "id": 2,
+      "type": "timeseries",
+      "title": "Active replicas",
+      "description": "loom-console replica count over time — scale activity tracks active usage.",
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 0 },
+      "datasource": { "type": "grafana-azure-monitor-datasource", "uid": "azure-monitor-oob" },
+      "targets": [
+        {
+          "refId": "A",
+          "queryType": "Azure Monitor",
+          "datasource": { "type": "grafana-azure-monitor-datasource", "uid": "azure-monitor-oob" },
+          "azureMonitor": {
+            "resources": [
+              {
+                "subscription": "e093f4fd-5047-4ee4-968d-a56942c665f3",
+                "resourceGroup": "rg-csa-loom-admin-centralus",
+                "metricNamespace": "microsoft.app/containerapps",
+                "resourceName": "loom-console"
+              }
+            ],
+            "metricNamespace": "microsoft.app/containerapps",
+            "metricName": "Replicas",
+            "aggregation": "Maximum",
+            "timeGrain": "auto"
+          }
+        }
+      ]
+    },
+    {
+      "id": 3,
+      "type": "timeseries",
+      "title": "CPU & memory (loom-console)",
+      "description": "Container App processor and working-set usage — resource footprint of active sessions.",
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 8 },
+      "datasource": { "type": "grafana-azure-monitor-datasource", "uid": "azure-monitor-oob" },
+      "targets": [
+        {
+          "refId": "A",
+          "queryType": "Azure Monitor",
+          "datasource": { "type": "grafana-azure-monitor-datasource", "uid": "azure-monitor-oob" },
+          "azureMonitor": {
+            "resources": [
+              {
+                "subscription": "e093f4fd-5047-4ee4-968d-a56942c665f3",
+                "resourceGroup": "rg-csa-loom-admin-centralus",
+                "metricNamespace": "microsoft.app/containerapps",
+                "resourceName": "loom-console"
+              }
+            ],
+            "metricNamespace": "microsoft.app/containerapps",
+            "metricName": "UsageNanoCores",
+            "aggregation": "Average",
+            "timeGrain": "auto"
+          }
+        },
+        {
+          "refId": "B",
+          "queryType": "Azure Monitor",
+          "datasource": { "type": "grafana-azure-monitor-datasource", "uid": "azure-monitor-oob" },
+          "azureMonitor": {
+            "resources": [
+              {
+                "subscription": "e093f4fd-5047-4ee4-968d-a56942c665f3",
+                "resourceGroup": "rg-csa-loom-admin-centralus",
+                "metricNamespace": "microsoft.app/containerapps",
+                "resourceName": "loom-console"
+              }
+            ],
+            "metricNamespace": "microsoft.app/containerapps",
+            "metricName": "WorkingSetBytes",
+            "aggregation": "Average",
+            "timeGrain": "auto"
+          }
+        }
+      ]
+    },
+    {
+      "id": 4,
+      "type": "timeseries",
+      "title": "Console request volume by status (Log Analytics)",
+      "description": "loom-console ingress requests grouped by HTTP status from ContainerAppSystemLogs / console logs — usage and error trend.",
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 8 },
+      "datasource": { "type": "grafana-azure-monitor-datasource", "uid": "azure-monitor-oob" },
+      "targets": [
+        {
+          "refId": "A",
+          "queryType": "Azure Log Analytics",
+          "datasource": { "type": "grafana-azure-monitor-datasource", "uid": "azure-monitor-oob" },
+          "azureLogAnalytics": {
+            "resources": ["/subscriptions/e093f4fd-5047-4ee4-968d-a56942c665f3/resourceGroups/rg-csa-loom-admin-centralus/providers/Microsoft.OperationalInsights/workspaces/law-csa-loom-centralus"],
+            "query": "ContainerAppConsoleLogs_CL | where ContainerName_s == 'loom-console' | summarize Entries=count() by bin(TimeGenerated, 1h) | order by TimeGenerated asc"
+          }
+        }
+      ]
+    }
+  ]
+}
