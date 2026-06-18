@@ -256,6 +256,8 @@ export async function POST(req: NextRequest) {
       id, name,
       description: body?.description || undefined,
       color: body?.color || undefined,
+      icon: typeof body?.icon === 'string' && body.icon.trim() ? body.icon.trim() : undefined,
+      themeColor: typeof body?.themeColor === 'string' && body.themeColor.trim() ? body.themeColor.trim() : undefined,
       owners: normalizeOwners(body?.owners),
       admins: normalizeOwners(body?.admins),
       adminGroupId: typeof body?.adminGroupId === 'string' && body.adminGroupId.trim() ? body.adminGroupId.trim() : undefined,
@@ -403,6 +405,8 @@ export async function PATCH(req: NextRequest) {
     if (typeof body?.name === 'string' && body.name.trim()) domain.name = body.name.trim();
     if (body?.description !== undefined) domain.description = String(body.description || '').trim() || undefined;
     if (body?.color !== undefined) domain.color = String(body.color || '').trim() || undefined;
+    if (body?.icon !== undefined) domain.icon = String(body.icon || '').trim() || undefined;
+    if (body?.themeColor !== undefined) domain.themeColor = String(body.themeColor || '').trim() || undefined;
     if (body?.imageKey !== undefined) domain.imageKey = String(body.imageKey || '').trim() || undefined;
     if (body?.admins !== undefined) domain.admins = normalizeOwners(body.admins);
     if (body?.owners !== undefined) domain.owners = normalizeOwners(body.owners);
