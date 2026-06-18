@@ -97,6 +97,34 @@ describe('admin/env-config registry', () => {
     expect(aliasSatisfiedKeys(() => false).size).toBe(0);
   });
 
+  it('marks the Power BI embed vars satisfied when the Grafana embed path is active (mutually-exclusive backends)', () => {
+    // Day-one the deploy wires the Grafana embed path (#1461): KIND=grafana +
+    // the two stable dashboard UIDs. The four Power BI embed vars are then the
+    // UNUSED alternative backend and must report as alias-satisfied (so the
+    // env-config catalog counts them as configured → 40/40, not a false
+    // "not set"). This is the either/or that backs the Wave-2 coverage fix.
+    const grafanaSet = new Set([
+      'LOOM_USAGE_REPORT_KIND', 'LOOM_REPORT_KIND',
+      'LOOM_GRAFANA_USAGE_DASHBOARD_UID', 'LOOM_GRAFANA_DASHBOARD_UID', 'LOOM_GRAFANA_ENDPOINT',
+    ]);
+    const satisfied = aliasSatisfiedKeys((k) => grafanaSet.has(k));
+    expect(satisfied.has('LOOM_USAGE_PBI_WORKSPACE_ID')).toBe(true);
+    expect(satisfied.has('LOOM_USAGE_PBI_REPORT_ID')).toBe(true);
+    expect(satisfied.has('LOOM_GOVERN_PBI_WORKSPACE_ID')).toBe(true);
+    expect(satisfied.has('LOOM_GOVERN_PBI_REPORT_ID')).toBe(true);
+    // LOOM_ALERT_RG is the either/or partner of LOOM_ADMIN_RG — satisfied when
+    // the admin RG is set (bicep also emits LOOM_ALERT_RG directly day-one).
+    const adminRgSet = new Set(['LOOM_ADMIN_RG']);
+    expect(aliasSatisfiedKeys((k) => adminRgSet.has(k)).has('LOOM_ALERT_RG')).toBe(true);
+  });
+
+  it('exposes exactly the 40 editable runtime variables (catalog completeness)', () => {
+    // The env-config catalog is the union of every required + anyOf key across
+    // ENV_CHECKS. The /admin/env-config coverage badge reads N-of-40; this pins
+    // the catalog size so a drift in ENV_CHECKS is caught in CI.
+    expect(EDITABLE_ENV.length).toBe(40);
+  });
+
   it('flags bicep-derived vars (org-visuals, LA workspace) with derived=true', () => {
     expect(getEditableEnv('LOOM_ORG_VISUALS_URL')?.derived).toBe(true);
     expect(getEditableEnv('LOOM_LOG_ANALYTICS_WORKSPACE_ID')?.derived).toBe(true);
