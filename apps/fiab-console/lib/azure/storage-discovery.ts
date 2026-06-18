@@ -19,6 +19,7 @@ import {
 } from '@azure/identity';
 import { AcaManagedIdentityCredential } from '@/lib/azure/aca-managed-identity';
 import { armBase, armScope, stripArmBase } from './cloud-endpoints';
+import { loomSubscriptionScope } from './loom-subscriptions';
 
 const ARM_SCOPE = armScope();
 const SUBSCRIPTIONS_API = '2022-12-01';
@@ -83,8 +84,13 @@ async function armList<T = any>(firstPath: string): Promise<T[]> {
 }
 
 async function subscriptionIds(): Promise<string[]> {
-  const single = process.env.LOOM_SUBSCRIPTION_ID;
-  if (single) return [single.trim()];
+  // Prefer the explicit Loom scope (admin + DLZ + extras) so a multi-sub deploy
+  // lists DLZ-sub storage accounts too — the live bug was that only
+  // LOOM_SUBSCRIPTION_ID was queried, hiding DLZ ADLS accounts from the picker.
+  const scope = loomSubscriptionScope();
+  if (scope.length) return scope;
+  // No explicit scope configured → enumerate every subscription the identity
+  // can read (unchanged fallback behaviour).
   const subs = await armList<{ subscriptionId: string }>(`/subscriptions?api-version=${SUBSCRIPTIONS_API}`);
   return subs.map((s) => s.subscriptionId).filter(Boolean);
 }

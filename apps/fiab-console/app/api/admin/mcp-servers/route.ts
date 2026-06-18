@@ -14,7 +14,8 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { getSession } from '@/lib/auth/session';
 import { auditLogContainer } from '@/lib/azure/cosmos-client';
-import { listMcpServers, getMcpServer, saveMcpServer, deleteMcpServer } from '@/lib/azure/mcp-config-store';
+import { listMcpServers, getMcpServer, saveMcpServer, deleteMcpServer, updateMcpServerTestResult } from '@/lib/azure/mcp-config-store';
+import { listMcpTools } from '@/lib/azure/mcp-client';
 import type { McpServerConfig, McpServerConfigDoc } from '@/lib/types/mcp-config';
 
 export const runtime = 'nodejs';
@@ -74,6 +75,26 @@ function sanitize(input: any): McpServerConfig {
   return out;
 }
 
+/**
+ * Best-effort connectivity probe on save: run the real MCP handshake
+ * (initialize → tools/list) and persist the result as `lastTestResult` so the
+ * registered-servers table shows live tool counts + a "Tested" badge without a
+ * separate manual click. Never throws — a server that's enabled but momentarily
+ * unreachable is still registered; the persisted error explains why on the row.
+ */
+async function probeAndPersist(tenantId: string, doc: McpServerConfigDoc): Promise<McpServerConfigDoc> {
+  if (!doc.enabled) return doc;
+  try {
+    const tools = await listMcpTools(doc.endpoint, doc.authMethod, doc.authValue, 5000);
+    await updateMcpServerTestResult(tenantId, doc.serverId, { toolCount: tools.length });
+    return { ...doc, lastTestResult: { at: new Date().toISOString(), toolCount: tools.length } };
+  } catch (e: any) {
+    const error = e?.message || String(e);
+    await updateMcpServerTestResult(tenantId, doc.serverId, { error });
+    return { ...doc, lastTestResult: { at: new Date().toISOString(), toolCount: 0, error } };
+  }
+}
+
 export async function GET() {
   const s = getSession();
   if (!s) return err('unauthenticated', 401);
@@ -101,7 +122,8 @@ export async function POST(req: NextRequest) {
   const body = await req.json().catch(() => ({}));
   try {
     const config = sanitize(body.config);
-    const doc = await saveMcpServer(tenantId, undefined, who, config);
+    const saved = await saveMcpServer(tenantId, undefined, who, config);
+    const doc = await probeAndPersist(tenantId, saved);
     // Audit
     try {
       const audit = await auditLogContainer();
@@ -140,7 +162,8 @@ export async function PUT(req: NextRequest) {
     if (config.catalogId === undefined && existing.catalogId) config.catalogId = existing.catalogId;
     if (config.configValues === undefined && existing.configValues) config.configValues = existing.configValues;
     if (config.secretRefs === undefined && existing.secretRefs) config.secretRefs = existing.secretRefs;
-    const doc = await saveMcpServer(tenantId, serverId, who, config);
+    const saved = await saveMcpServer(tenantId, serverId, who, config);
+    const doc = await probeAndPersist(tenantId, saved);
     // Audit
     try {
       const changed = (KEYS as string[]).filter((k) => (existing as any)[k] !== (config as any)[k]);

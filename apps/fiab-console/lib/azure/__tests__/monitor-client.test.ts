@@ -366,6 +366,63 @@ describe('queryLoomAppEvents (F19 audit — Log Analytics source)', () => {
   });
 });
 
+describe('readMonitorConfig — multi-sub resource-group scopes', () => {
+  it('pairs the DLZ RG with the DLZ sub and admin RGs with the admin sub', async () => {
+    process.env.LOOM_DLZ_SUBSCRIPTION_ID = 'dlz-sub';
+    process.env.LOOM_DLZ_RG = 'rg-dlz';
+    const { readMonitorConfig } = await import('../monitor-client');
+    const cfg = readMonitorConfig();
+    const dlz = cfg.resourceGroupScopes.find((s) => s.rg === 'rg-dlz');
+    const admin = cfg.resourceGroupScopes.find((s) => s.rg === 'rg-admin');
+    expect(dlz?.sub).toBe('dlz-sub');           // queried under the DLZ sub (no 404)
+    expect(admin?.sub).toBe('sub-1');
+    expect(cfg.subscriptions).toEqual(expect.arrayContaining(['sub-1', 'dlz-sub']));
+    delete process.env.LOOM_DLZ_SUBSCRIPTION_ID;
+  });
+});
+
+describe('listResources — multi-sub', () => {
+  it('queries the DLZ RG under the DLZ subscription (not the admin sub)', async () => {
+    process.env.LOOM_DLZ_SUBSCRIPTION_ID = 'dlz-sub';
+    process.env.LOOM_DLZ_RG = 'rg-dlz';
+    const calls = captureFetch(() => ({ body: { value: [] } }));
+    const { listResources } = await import('../monitor-client');
+    await listResources();
+    // The DLZ RG list call must target the DLZ sub, not sub-1.
+    expect(calls.some((c) => c.url.includes('/subscriptions/dlz-sub/resourceGroups/rg-dlz/resources'))).toBe(true);
+    expect(calls.some((c) => c.url.includes('/subscriptions/sub-1/resourceGroups/rg-dlz/resources'))).toBe(false);
+    delete process.env.LOOM_DLZ_SUBSCRIPTION_ID;
+  });
+});
+
+describe('queryActivityFeed — Activities (LAW)', () => {
+  it('leads the KQL with `union isfuzzy=true (ADFPipelineRun)` so a missing table degrades to empty', async () => {
+    const calls = captureFetch(() => ({ body: { tables: [{ name: 'PrimaryResult', columns: [], rows: [] }] } }));
+    const { queryActivityFeed } = await import('../monitor-client');
+    await queryActivityFeed({ days: 7, includeSynapse: false });
+    const body = JSON.parse(String(calls[0].init?.body));
+    expect(body.query).toContain('union isfuzzy=true (ADFPipelineRun');
+    // No bare leading `ADFPipelineRun` (which 400s "invalid properties" when no
+    // ADF routes logs to the workspace).
+    expect(body.query).not.toMatch(/^ADFPipelineRun/m);
+  });
+
+  it('degrades to [] (not an error) on a 400 BadArgumentError/SyntaxError from a missing table', async () => {
+    captureFetch(() => ({
+      status: 400,
+      body: { error: { code: 'BadArgumentError', message: 'The request had some invalid properties', innererror: { code: 'SyntaxError', message: 'Syntax error' } } },
+    }));
+    const { queryActivityFeed } = await import('../monitor-client');
+    await expect(queryActivityFeed({ days: 7 })).resolves.toEqual([]);
+  });
+
+  it('still throws an auth error (403) so the route renders the gate', async () => {
+    captureFetch(() => ({ status: 403, body: { error: { message: 'forbidden' } } }));
+    const { queryActivityFeed, MonitorError } = await import('../monitor-client');
+    await expect(queryActivityFeed({ days: 7 })).rejects.toBeInstanceOf(MonitorError);
+  });
+});
+
 describe('listActivityLog', () => {
   it('GETs the Activity Log management eventtypes with a resourceGroupName $filter', async () => {
     const calls = captureFetch(() => ({
@@ -385,6 +442,16 @@ describe('listActivityLog', () => {
     expect(url).toContain('api-version=2015-04-01');
     expect(decodeURIComponent(url)).toContain("resourceGroupName eq 'rg-admin'");
     expect(events[0]).toMatchObject({ operationName: 'Create deployment', status: 'Succeeded', resourceGroup: 'rg-admin' });
+  });
+
+  it('queries the DLZ RG under the DLZ subscription (multi-sub)', async () => {
+    process.env.LOOM_DLZ_SUBSCRIPTION_ID = 'dlz-sub';
+    process.env.LOOM_DLZ_RG = 'rg-dlz';
+    const calls = captureFetch(() => ({ body: { value: [] } }));
+    const { listActivityLog } = await import('../monitor-client');
+    await listActivityLog({ days: 7 });
+    expect(calls.some((c) => c.url.includes('/subscriptions/dlz-sub/providers/Microsoft.Insights/eventtypes'))).toBe(true);
+    delete process.env.LOOM_DLZ_SUBSCRIPTION_ID;
   });
 });
 

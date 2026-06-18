@@ -15,6 +15,7 @@ import { ApimSubscriptionsPane } from '@/lib/components/admin/apim-subscriptions
 import { ApimNamedValuesPane } from '@/lib/components/admin/apim-named-values-pane';
 import { ApimBackendsPane } from '@/lib/components/admin/apim-backends-pane';
 import { ApimPoliciesPane } from '@/lib/components/admin/apim-policies-pane';
+import { ApimDeveloperPortalPane } from '@/lib/components/admin/apim-developer-portal-pane';
 
 interface GateResponse {
   configured: boolean;
@@ -104,6 +105,7 @@ export default function ApiManagementPage() {
           <Tab value="named-values">Named values</Tab>
           <Tab value="backends">Backends</Tab>
           <Tab value="policies">Policies</Tab>
+          <Tab value="developer-portal">Developer portal</Tab>
         </TabList>
       </Section>
 
@@ -114,6 +116,7 @@ export default function ApiManagementPage() {
       {activeTab === 'named-values' && <ApimNamedValuesPane />}
       {activeTab === 'backends' && <ApimBackendsPane />}
       {activeTab === 'policies' && <ApimPoliciesPane />}
+      {activeTab === 'developer-portal' && <ApimDeveloperPortalPane />}
     </AdminShell>
   );
 }

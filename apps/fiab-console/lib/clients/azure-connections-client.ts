@@ -46,6 +46,7 @@ import {
 } from '@azure/identity';
 import { AcaManagedIdentityCredential } from '@/lib/azure/aca-managed-identity';
 import { armBase, armScope, stripArmBase, getLogAnalyticsHost, logAnalyticsTokenScope, dfsUrl } from '@/lib/azure/cloud-endpoints';
+import { loomSubscriptionScope } from '@/lib/azure/loom-subscriptions';
 import { getServiceClientFor } from '@/lib/azure/adls-client';
 import { listStorageAccounts, type StorageAccountSummary } from '@/lib/azure/storage-discovery';
 import { azureConnectionsContainer } from '@/lib/azure/cosmos-client';
@@ -208,9 +209,11 @@ async function armList<T = any>(firstPath: string): Promise<T[]> {
 }
 
 function subscriptionIds(): string[] {
-  const single = process.env.LOOM_SUBSCRIPTION_ID;
-  if (single && single.trim()) return [single.trim()];
-  return [];
+  // Span EVERY subscription the deployment covers (admin + DLZ + extras). The
+  // live multi-sub bug: only LOOM_SUBSCRIPTION_ID was queried, so a DLZ Log
+  // Analytics workspace (in LOOM_DLZ_SUBSCRIPTION_ID) never appeared in the
+  // "Add existing Azure" picker.
+  return loomSubscriptionScope();
 }
 
 /**
