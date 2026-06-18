@@ -153,9 +153,10 @@ export function LandingZonesOverviewPane({ onAttach }: { onAttach?: () => void }
         <MessageBar intent="warning">
           <MessageBarBody>
             <MessageBarTitle>{detached.length} landing zone{detached.length === 1 ? '' : 's'} need re-attach / RBAC repair</MessageBarTitle>
-            The Console identity has only Reader on the subscription(s) these DLZs live in, so it
-            cannot manage them. Grant it Contributor on the target subscription to re-attach, then
-            Refresh. Select a zone below for the exact command.
+            The Console identity has only Reader on these DLZs&apos; resource group(s), so it cannot
+            manage them. Grant it Contributor scoped to the DLZ resource group (least-privilege —
+            no subscription-wide grant needed) to re-attach, then Refresh. Select a zone below for
+            the exact command.
           </MessageBarBody>
         </MessageBar>
       )}
@@ -238,14 +239,16 @@ export function LandingZonesOverviewPane({ onAttach }: { onAttach?: () => void }
                 <MessageBar intent="warning">
                   <MessageBarBody>
                     <MessageBarTitle>Re-attach / RBAC repair</MessageBarTitle>
-                    The Console identity has only Reader on this subscription. Grant it Contributor so it
-                    can manage and re-attach this landing zone, then Refresh:
+                    The Console identity has only Reader on this landing zone&apos;s resource group.
+                    Grant it Contributor scoped to the DLZ resource group (least-privilege — this
+                    DLZ subscription holds other workloads, so no subscription-wide grant is needed),
+                    then Refresh:
                     <pre className={mergeClasses(styles.mono, styles.preWrap)} style={{ marginTop: 8 }}>
 {`az role assignment create \\
   --assignee-object-id <console-uami-object-id> \\
   --assignee-principal-type ServicePrincipal \\
   --role Contributor \\
-  --scope /subscriptions/${selected.subscriptionId}`}
+  --scope /subscriptions/${selected.subscriptionId}/resourceGroups/${selected.rg}`}
                     </pre>
                   </MessageBarBody>
                 </MessageBar>

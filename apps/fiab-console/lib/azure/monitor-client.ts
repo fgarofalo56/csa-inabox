@@ -661,11 +661,23 @@ export async function queryLoomAppEvents(opts: {
   const itemClause = opts.itemId    ? `| where itemId contains ${JSON.stringify(opts.itemId)}` : '';
 
   // `customDimensions` is a dynamic column — compare via tostring() so the Logs
-  // query API doesn't reject the dynamic-vs-string predicate. Filter on
-  // TimeGenerated explicitly too (matches the `timespan` window) so the query
-  // is valid even if the service-level timespan is widened.
+  // query API doesn't reject the dynamic-vs-string predicate.
+  //
+  // CRITICAL: the workspace only has an `AppTraces` table when an
+  // Application-Insights (workspace-based) resource ships traces into it. In a
+  // deployment without App Insights wired (e.g. the connection string was
+  // dropped as a console hotfix), `AppTraces` does NOT exist and a bare
+  // `AppTraces | ...` query fails with HTTP 400 BadArgumentError /
+  // innererror SyntaxError — surfaced to the operator as
+  // "The request had some invalid properties". Lead with
+  // `union isfuzzy=true (AppTraces)` so an unresolved table degrades to ZERO
+  // rows (with a query-status warning) instead of failing the whole request.
+  // `isfuzzy` only affects source resolution; once `AppTraces` exists the
+  // query runs exactly as before. The `columnifexists`-style guards keep the
+  // extend/project valid even when the fuzzy union resolves to an empty schema.
+  // https://learn.microsoft.com/kusto/query/union-operator (isfuzzy=true)
   const kql = `
-AppTraces
+union isfuzzy=true (AppTraces)
 | where tostring(customDimensions.source) == "loom-audit"
 | extend
     who    = tostring(customDimensions.userId),
@@ -679,7 +691,28 @@ ${itemClause}
 | take ${lim}
 `.trim();
 
-  const result = await queryLogs(kql, timespanParam);
+  let result: LogQueryResult;
+  try {
+    result = await queryLogs(kql, timespanParam);
+  } catch (e) {
+    // Belt-and-suspenders: if the workspace rejects the query because the
+    // `AppTraces` table (or its dynamic columns) cannot be resolved — a
+    // BadArgumentError / SyntaxError ("The request had some invalid
+    // properties") on a workspace with no Application-Insights traces — degrade
+    // to ZERO Loom-app rows rather than failing the audit grid. Auth (401/403)
+    // and not-configured errors still propagate so the route renders their
+    // specific honest gate.
+    if (
+      e instanceof MonitorError &&
+      e.status === 400 &&
+      /invalid propert|SyntaxError|SemanticError|Failed to resolve|could not be found/i.test(
+        `${e.message} ${JSON.stringify(e.body ?? '')}`,
+      )
+    ) {
+      return [];
+    }
+    throw e;
+  }
 
   const colIdx = (name: string) => result.columns.indexOf(name);
   const tIdx   = colIdx('TimeGenerated');

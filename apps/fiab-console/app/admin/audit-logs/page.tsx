@@ -46,7 +46,7 @@ interface AuditResponse {
   error?: string;
   rows?: AuditRow[];
   kinds?: string[];
-  gates?: { purview?: string; la?: string };
+  gates?: { purview?: string; purviewInfo?: string; la?: string };
 }
 
 const SOURCE_LABEL: Record<AuditSource, string> = {
@@ -127,7 +127,7 @@ export default function AuditLogsPage() {
   const [since, setSince] = useState('');
   const [user, setUser] = useState('');
   const [itemId, setItemId] = useState('');
-  const [gates, setGates] = useState<{ purview?: string; la?: string }>({});
+  const [gates, setGates] = useState<{ purview?: string; purviewInfo?: string; la?: string }>({});
 
   const load = useCallback(async () => {
     setLoading(true); setError(null);
@@ -237,6 +237,15 @@ export default function AuditLogsPage() {
           <MessageBarBody>
             <MessageBarTitle>Purview audit partial</MessageBarTitle>
             {gates.purview}
+          </MessageBarBody>
+        </MessageBar>
+      )}
+
+      {gates.purviewInfo && (
+        <MessageBar intent="info" className={atab.messageBar}>
+          <MessageBarBody>
+            <MessageBarTitle>Purview audit is per-asset</MessageBarTitle>
+            {gates.purviewInfo}
           </MessageBarBody>
         </MessageBar>
       )}
