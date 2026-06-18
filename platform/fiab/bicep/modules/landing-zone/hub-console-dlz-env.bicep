@@ -61,6 +61,15 @@ var bronzeUrl = 'https://${dlzAdlsAccount}.${dfsSuffix}/bronze'
 var silverUrl = 'https://${dlzAdlsAccount}.${dfsSuffix}/silver'
 var goldUrl = 'https://${dlzAdlsAccount}.${dfsSuffix}/gold'
 
+// Org-visuals (Embed codes F22 / Organizational visuals F23) container URL —
+// the BLOB endpoint of the same DLZ storage account. Single-sub bakes
+// LOOM_ORG_VISUALS_URL into the console env from loomStorageAccount; in
+// dlz-attach the console was deployed before this DLZ existed, so the var is
+// blank and the self-audit "Embed codes / Org visuals" check warns even though
+// the org-visuals container is live. Wire it here, additively, alongside the
+// ADLS/medallion env. (Note: .blob — not the .dfs medallion host.)
+var orgVisualsUrl = 'https://${dlzAdlsAccount}.blob.${environment().suffixes.storage}/org-visuals'
+
 resource wireDlzEnv 'Microsoft.Resources/deploymentScripts@2023-08-01' = {
   name: 'wire-hub-console-dlz-env'
   location: location
@@ -84,6 +93,7 @@ resource wireDlzEnv 'Microsoft.Resources/deploymentScripts@2023-08-01' = {
       { name: 'BRONZE_URL', value: bronzeUrl }
       { name: 'SILVER_URL', value: silverUrl }
       { name: 'GOLD_URL', value: goldUrl }
+      { name: 'ORG_VISUALS_URL', value: orgVisualsUrl }
       { name: 'SYNAPSE_WS', value: dlzSynapseWorkspace }
       { name: 'EVENTHUB_NS', value: dlzEventHubNamespace }
       { name: 'DLZ_RG', value: dlzResourceGroup }
@@ -103,6 +113,7 @@ SET_ARGS=( \
   "LOOM_BRONZE_URL=$BRONZE_URL" \
   "LOOM_SILVER_URL=$SILVER_URL" \
   "LOOM_GOLD_URL=$GOLD_URL" \
+  "LOOM_ORG_VISUALS_URL=$ORG_VISUALS_URL" \
 )
 if [ -n "$SYNAPSE_WS" ]; then
   SET_ARGS+=( "LOOM_SYNAPSE_WORKSPACE=$SYNAPSE_WS" )
@@ -152,6 +163,7 @@ output loomLandingUrl string = landingUrl
 output loomBronzeUrl string = bronzeUrl
 output loomSilverUrl string = silverUrl
 output loomGoldUrl string = goldUrl
+output loomOrgVisualsUrl string = orgVisualsUrl
 output loomSynapseWorkspace string = dlzSynapseWorkspace
 output loomEventHubNamespace string = dlzEventHubNamespace
 output loomEventHubRg string = dlzResourceGroup

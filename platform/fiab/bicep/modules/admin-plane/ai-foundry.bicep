@@ -53,6 +53,35 @@ param skipRoleGrants bool = false
 @description('Compliance tags')
 param complianceTags object
 
+// --- Default chat model deployment (day-one Copilot model) -------------------
+// The AIServices account below hosts AOAI model deployments. On a fresh deploy
+// NO model exists unless one is created here, so the self-audit "Azure OpenAI /
+// Foundry" + "Copilot/agents model reachable" checks warn ("No AOAI model
+// deployment resolved") even though the account is live. Deploy a small,
+// broadly-available chat model by default so the shared-hub AOAI endpoint
+// (LOOM_AOAI_ENDPOINT, wired from this account's aoaiInferenceEndpoint when the
+// dedicated Agent Service account is not the resolved source) has a working
+// model day-one. gpt-4o-mini / GlobalStandard is the cheapest gpt-4o-class slot
+// and is available in Commercial + Azure Government regions used by Loom.
+@description('Deploy a default chat model on the AIServices account so the shared-hub AOAI endpoint has a model day-one (clears the self-audit "No AOAI model" warning). Set false to skip (e.g. a region without GlobalStandard quota for this model).')
+param deployDefaultChatModel bool = true
+
+@description('Default chat deployment name (becomes LOOM_AOAI_DEPLOYMENT when this account is the resolved AOAI source).')
+param defaultChatDeploymentName string = 'gpt-4o-mini'
+
+@description('Default chat model name.')
+param defaultChatModelName string = 'gpt-4o-mini'
+
+@description('Default chat model version. 2024-07-18 is the GA gpt-4o-mini version (Commercial + Azure Government).')
+param defaultChatModelVersion string = '2024-07-18'
+
+@description('Default chat deployment SKU. GlobalStandard so the deploy succeeds in regions (e.g. centralus) that only offer GlobalStandard for gpt-4o-class models.')
+param defaultChatModelSkuName string = 'GlobalStandard'
+
+@description('Default chat deployment capacity (thousands of TPM).')
+@minValue(1)
+param defaultChatModelCapacity int = 10
+
 // =====================================================================
 // Foundry Hub (Azure ML Workspace kind=Hub for Foundry; kind=Default
 // for classic in boundaries without Foundry support)
@@ -247,6 +276,32 @@ resource foundryProject 'Microsoft.CognitiveServices/accounts/projects@2025-04-0
   }
 }
 
+// Default chat model deployment (day-one Copilot model). Created on the
+// AIServices account so the shared-hub AOAI endpoint has a working model the
+// moment the deploy finishes — this is what clears the self-audit
+// "No AOAI model deployment resolved" warning when this account (not the
+// dedicated Agent Service account) is the resolved LOOM_AOAI_ENDPOINT source.
+// Serialized after the project (CognitiveServices rejects concurrent writes to
+// one account; the project is created first so both don't race).
+resource defaultChatDeployment 'Microsoft.CognitiveServices/accounts/deployments@2025-04-01-preview' = if (deployDefaultChatModel) {
+  parent: aiServices
+  name: defaultChatDeploymentName
+  dependsOn: [ foundryProject ]
+  sku: {
+    name: defaultChatModelSkuName
+    capacity: defaultChatModelCapacity
+  }
+  properties: {
+    model: {
+      format: 'OpenAI'
+      name: defaultChatModelName
+      version: defaultChatModelVersion
+    }
+    versionUpgradeOption: 'OnceNewDefaultVersionAvailable'
+    raiPolicyName: 'Microsoft.DefaultV2'
+  }
+}
+
 // Grant the Console UAMI Cognitive Services Contributor so the BFF can
 // deploy models, read quota, read keys, and toggle public access.
 resource aiServicesUamiRole 'Microsoft.Authorization/roleAssignments@2022-04-01' = if (!empty(consolePrincipalId) && !skipRoleGrants) {
@@ -311,6 +366,9 @@ output hubKind string = workspaceKind
 output hubManagedIdentityPrincipalId string = foundryHub.identity.principalId
 output aiServicesAccountName string = aiServices.name
 output aiServicesEndpoint string = aiServices.properties.endpoint
+// LOOM_AOAI_DEPLOYMENT when this shared-hub account is the resolved AOAI source.
+// Empty when no default model was deployed (deployDefaultChatModel=false).
+output defaultChatDeploymentName string = deployDefaultChatModel ? defaultChatDeploymentName : ''
 // AOAI inference endpoint (the .openai.azure.* host the AI Functions / Copilot
 // clients call — distinct from the generic Cognitive Services endpoint above).
 // Sovereign-aware: GCC-High / IL5 / IL6 use .openai.azure.us. Wired into
