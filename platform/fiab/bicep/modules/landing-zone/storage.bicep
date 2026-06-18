@@ -25,14 +25,14 @@ param cmkKeyVersion string = ''
 @description('Private endpoints subnet ID')
 param privateEndpointSubnetId string
 
-@description('Private DNS zone ID for blob')
-param privateDnsZoneBlobId string
+@description('Private DNS zone ID for blob. Empty (dlz-attach with no hub DNS coordinates) skips the blob PE private DNS zone group.')
+param privateDnsZoneBlobId string = ''
 
-@description('Private DNS zone ID for dfs')
-param privateDnsZoneDfsId string
+@description('Private DNS zone ID for dfs. Empty (dlz-attach with no hub DNS coordinates) skips the dfs PE private DNS zone group.')
+param privateDnsZoneDfsId string = ''
 
-@description('Log Analytics workspace ID for diagnostic settings')
-param workspaceId string
+@description('Log Analytics workspace ID for diagnostic settings. Empty (dlz-attach with no hub LAW coordinate) skips the diagnostic settings.')
+param workspaceId string = ''
 
 @description('Compliance tags')
 param complianceTags object
@@ -140,7 +140,7 @@ resource peBlob 'Microsoft.Network/privateEndpoints@2024-05-01' = {
   }
 }
 
-resource peBlobDnsGroup 'Microsoft.Network/privateEndpoints/privateDnsZoneGroups@2024-05-01' = {
+resource peBlobDnsGroup 'Microsoft.Network/privateEndpoints/privateDnsZoneGroups@2024-05-01' = if (!empty(privateDnsZoneBlobId)) {
   parent: peBlob
   name: 'default'
   properties: {
@@ -169,7 +169,7 @@ resource peDfs 'Microsoft.Network/privateEndpoints@2024-05-01' = {
   }
 }
 
-resource peDfsDnsGroup 'Microsoft.Network/privateEndpoints/privateDnsZoneGroups@2024-05-01' = {
+resource peDfsDnsGroup 'Microsoft.Network/privateEndpoints/privateDnsZoneGroups@2024-05-01' = if (!empty(privateDnsZoneDfsId)) {
   parent: peDfs
   name: 'default'
   properties: {
@@ -183,7 +183,7 @@ resource peDfsDnsGroup 'Microsoft.Network/privateEndpoints/privateDnsZoneGroups@
 // Diagnostic settings → standardized Loom LAW
 // =====================================================================
 
-resource diagAccount 'Microsoft.Insights/diagnosticSettings@2021-05-01-preview' = {
+resource diagAccount 'Microsoft.Insights/diagnosticSettings@2021-05-01-preview' = if (!empty(workspaceId)) {
   scope: sa
   name: 'diag-loom-stdz'
   properties: {
@@ -195,7 +195,7 @@ resource diagAccount 'Microsoft.Insights/diagnosticSettings@2021-05-01-preview' 
   }
 }
 
-resource diagBlob 'Microsoft.Insights/diagnosticSettings@2021-05-01-preview' = {
+resource diagBlob 'Microsoft.Insights/diagnosticSettings@2021-05-01-preview' = if (!empty(workspaceId)) {
   scope: bs
   name: 'diag-loom-stdz'
   properties: {

@@ -28,11 +28,11 @@ param maxThroughputUnits int = 20
 @description('Private endpoint subnet ID')
 param privateEndpointSubnetId string
 
-@description('Private DNS zone ID for Service Bus / Event Hubs')
-param privateDnsZoneServicebusId string
+@description('Private DNS zone ID for Service Bus / Event Hubs. Empty (dlz-attach with no hub DNS coordinates) skips the PE private DNS zone group.')
+param privateDnsZoneServicebusId string = ''
 
-@description('Log Analytics workspace ID for diagnostic settings')
-param workspaceId string
+@description('Log Analytics workspace ID for diagnostic settings. Empty (dlz-attach with no hub LAW coordinate) skips the diagnostic settings.')
+param workspaceId string = ''
 
 @description('Loom Console UAMI principal ID — granted Azure Event Hubs Data Owner (data plane) + Contributor (ARM control plane) on the namespace so the Eventstream editor\'s Event Hubs navigator can create/list/delete hubs, consumer groups, and schema groups. Empty skips the grants.')
 param consolePrincipalId string = ''
@@ -209,7 +209,7 @@ resource pe 'Microsoft.Network/privateEndpoints@2024-05-01' = {
   }
 }
 
-resource peDnsGroup 'Microsoft.Network/privateEndpoints/privateDnsZoneGroups@2024-05-01' = {
+resource peDnsGroup 'Microsoft.Network/privateEndpoints/privateDnsZoneGroups@2024-05-01' = if (!empty(privateDnsZoneServicebusId)) {
   parent: pe
   name: 'default'
   properties: {
@@ -220,7 +220,7 @@ resource peDnsGroup 'Microsoft.Network/privateEndpoints/privateDnsZoneGroups@202
 }
 
 // Diagnostic settings → standardized Loom LAW
-resource diag 'Microsoft.Insights/diagnosticSettings@2021-05-01-preview' = {
+resource diag 'Microsoft.Insights/diagnosticSettings@2021-05-01-preview' = if (!empty(workspaceId)) {
   scope: ns
   name: 'diag-loom-stdz'
   properties: {

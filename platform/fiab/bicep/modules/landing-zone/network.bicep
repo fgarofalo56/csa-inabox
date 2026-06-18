@@ -13,8 +13,8 @@ param domainName string
 @description('Spoke VNet CIDR')
 param spokeVnetCidr string = '10.100.0.0/16'
 
-@description('Admin Plane hub VNet ID for peering')
-param adminPlaneHubVnetId string
+@description('Admin Plane hub VNet ID for peering. Empty (dlz-attach with no hub VNet coordinate) skips the DLZ->hub peering; the reverse hub->DLZ peering is created by the hub-side-peering module in main.bicep.')
+param adminPlaneHubVnetId string = ''
 
 @description('Compliance tags')
 param complianceTags object
@@ -172,7 +172,7 @@ resource nsgDbx 'Microsoft.Network/networkSecurityGroups@2024-05-01' = {
 }
 
 // Peering DLZ → Hub
-resource peerToHub 'Microsoft.Network/virtualNetworks/virtualNetworkPeerings@2024-05-01' = {
+resource peerToHub 'Microsoft.Network/virtualNetworks/virtualNetworkPeerings@2024-05-01' = if (!empty(adminPlaneHubVnetId)) {
   parent: spokeVnet
   name: 'peer-to-admin-hub'
   properties: {
