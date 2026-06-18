@@ -86,6 +86,15 @@ const purviewCalls: any[] = [];
 
 vi.mock('@/lib/azure/purview-client', () => {
   class PurviewNotConfiguredError extends Error {}
+  class PurviewError extends Error {
+    status: number;
+    body: unknown;
+    constructor(status: number, body: unknown, message?: string) {
+      super(message || `Purview Data Map call failed (${status})`);
+      this.status = status;
+      this.body = body;
+    }
+  }
   // Mirror the real ≤36-char slug helper (route uses it to derive the parent
   // collection name for subdomains).
   const domainCollectionName = (idOrName: string) =>
@@ -96,6 +105,7 @@ vi.mock('@/lib/azure/purview-client', () => {
       .slice(0, 36) || 'domain';
   return {
     PurviewNotConfiguredError,
+    PurviewError,
     isPurviewConfigured: () => !!process.env.LOOM_PURVIEW_ACCOUNT,
     domainCollectionName,
     listBusinessDomains: async () => [],
@@ -270,6 +280,33 @@ describe('/api/admin/domains — Cosmos persistence + Purview collection mirror 
     expect(j.mirror.purview.skipped).toBe(true);
     expect(settingsDocs.get('domains:tenant-1').items.some((d: any) => d.id === 'ops4')).toBe(true);
     expect(purviewCalls).toHaveLength(0);
+  });
+
+  it('GET surfaces an honest gate (never a raw 500) when Purview answers 403 "Not authorized"', async () => {
+    // Purview provisioned but the UAMI lacks a Data Map role on the root
+    // collection → listBusinessDomains throws PurviewError(403). The route must
+    // STILL return ok:true with domains rendered from Cosmos, and an honest,
+    // non-configured purview status whose hint names the role to grant.
+    const purviewMod: any = await import('@/lib/azure/purview-client');
+    const spy = vi.spyOn(purviewMod, 'listBusinessDomains').mockRejectedValue(
+      new purviewMod.PurviewError(403, { error: 'Not authorized to access account' }),
+    );
+    try {
+      const { GET } = await import('../route');
+      const res = await GET();
+      const j = await res.json();
+      expect(res.status).toBe(200);
+      expect(j.ok).toBe(true);
+      // Domains still render from Loom's Cosmos store.
+      expect(Array.isArray(j.domains)).toBe(true);
+      // Honest gate — configured:false + gated:true + a hint naming Data Curator/Reader.
+      expect(j.purview.configured).toBe(false);
+      expect(j.purview.gated).toBe(true);
+      expect(j.purview.hint).toMatch(/Data Curator|Data Reader/);
+      expect(j.purview.hint).not.toMatch(/^Purview mirror unavailable/);
+    } finally {
+      spy.mockRestore();
+    }
   });
 });
 
