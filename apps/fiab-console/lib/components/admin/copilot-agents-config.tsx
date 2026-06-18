@@ -36,6 +36,14 @@ import {
 interface AccountRow { name: string; rg: string; sub?: string; location?: string; kind?: string; endpoint?: string }
 interface DeploymentRow { name: string; modelName?: string; modelVersion?: string; provisioningState?: string }
 interface IndexRow { name: string }
+/** Deployment-level env-var fallbacks the chat backends already honor (so the
+ *  surface can show Copilot "linked + working day-one" before any save). */
+interface EnvDefaults {
+  aoaiEndpoint?: string;
+  copilotChatDeployment?: string;
+  foundryProjectEndpoint?: string;
+  foundryProjectId?: string;
+}
 
 const useStyles = makeStyles({
   grid: {
@@ -58,6 +66,7 @@ export function CopilotAgentsConfig() {
   const [original, setOriginal] = useState<TenantCopilotConfig>({});
   const [accounts, setAccounts] = useState<AccountRow[]>([]);
   const [accountsError, setAccountsError] = useState<{ error: string; hint?: string } | null>(null);
+  const [envDefaults, setEnvDefaults] = useState<EnvDefaults>({});
   const [deployments, setDeployments] = useState<DeploymentRow[]>([]);
   const [deploymentsError, setDeploymentsError] = useState<string | null>(null);
   const [indexes, setIndexes] = useState<IndexRow[]>([]);
@@ -79,14 +88,24 @@ export function CopilotAgentsConfig() {
       if (r.status === 401 || r.status === 403) { setLoadError('Sign-in required'); return; }
       const j = await r.json();
       if (!j.ok) { setLoadError(j.error || `HTTP ${r.status}`); return; }
-      setConfig({ ...j.config });
-      setOriginal({ ...j.config });
+      const saved = (j.config || {}) as TenantCopilotConfig;
+      const env = (j.envDefaults || {}) as EnvDefaults;
+      setOriginal({ ...saved });
       setAccounts(Array.isArray(j.accounts) ? j.accounts : []);
       setAccountsError(j.accountsError || null);
-      // Preselect the env/discovery default account if the admin hasn't chosen one.
-      if (!j.config?.foundryAccount && j.defaultAccount) {
-        setConfig((c) => ({ ...c, foundryAccount: j.defaultAccount }));
-      }
+      setEnvDefaults(env);
+      // Seed unset fields from the deployment env defaults the chat backends
+      // already use, so the surface shows Copilot "linked + working day-one"
+      // rather than blank. These seeded values are NOT marked dirty until the
+      // admin edits them (original stays the saved doc), but Save will persist
+      // them as the explicit tenant choice if the admin clicks it.
+      const seeded: TenantCopilotConfig = { ...saved };
+      if (!seeded.foundryAccount && j.defaultAccount) seeded.foundryAccount = j.defaultAccount;
+      if (!seeded.aoaiEndpoint && env.aoaiEndpoint) seeded.aoaiEndpoint = env.aoaiEndpoint;
+      if (!seeded.copilotChatDeployment && env.copilotChatDeployment) seeded.copilotChatDeployment = env.copilotChatDeployment;
+      if (!seeded.foundryProjectEndpoint && env.foundryProjectEndpoint) seeded.foundryProjectEndpoint = env.foundryProjectEndpoint;
+      if (!seeded.foundryProjectId && env.foundryProjectId) seeded.foundryProjectId = env.foundryProjectId;
+      setConfig(seeded);
     } catch (e: any) {
       setLoadError(e?.message || String(e));
     } finally { setLoading(false); }
@@ -155,6 +174,17 @@ export function CopilotAgentsConfig() {
     [config, original],
   );
 
+  // Copilot is "linked + working" when an AOAI endpoint AND a chat deployment
+  // resolve — from the admin's saved/seeded config OR the deployment env vars
+  // the backend falls back to. Surfaced as a day-one success banner so the
+  // surface never looks blank/unconfigured on a fresh deploy.
+  const effectiveEndpoint = config.aoaiEndpoint || envDefaults.aoaiEndpoint;
+  const effectiveChat = config.copilotChatDeployment || envDefaults.copilotChatDeployment;
+  const linked = !!(effectiveEndpoint && effectiveChat);
+  const linkedFromEnv =
+    !original.aoaiEndpoint && !original.copilotChatDeployment &&
+    !!(envDefaults.aoaiEndpoint && envDefaults.copilotChatDeployment);
+
   const save = useCallback(async () => {
     if (saving) return;
     setSaving(true); setSaveError(null); setStatus(null);
@@ -220,6 +250,18 @@ export function CopilotAgentsConfig() {
       {loadError && (
         <MessageBar intent="error">
           <MessageBarBody><MessageBarTitle>Could not load config</MessageBarTitle>{loadError}</MessageBarBody>
+        </MessageBar>
+      )}
+
+      {linked && (
+        <MessageBar intent="success" icon={<Sparkle20Regular />}>
+          <MessageBarBody>
+            <MessageBarTitle>Copilot is linked and working</MessageBarTitle>
+            Chat model <code>{effectiveChat}</code> on <code>{(effectiveEndpoint || '').replace(/^https:\/\//, '')}</code>.
+            {linkedFromEnv
+              ? ' Inherited from this deployment’s AI Foundry env defaults (LOOM_AOAI_ENDPOINT / LOOM_AOAI_DEPLOYMENT). Save to pin these as the explicit tenant choice, or pick different deployments below.'
+              : ' From the saved tenant configuration below.'}
+          </MessageBarBody>
         </MessageBar>
       )}
 

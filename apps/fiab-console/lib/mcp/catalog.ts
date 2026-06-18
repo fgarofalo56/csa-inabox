@@ -1040,8 +1040,9 @@ export interface McpCatalogEntry {
   ingressPort: number;
   /**
    * Path appended to the internal FQDN to form the MCP endpoint Loom registers
-   * (e.g. '/mcp' → https://<app>.<caeDomain>/mcp). The MCP client appends
-   * `/tools/list` + `/tools/call` to this base.
+   * (e.g. '/mcp' → https://<app>.<caeDomain>/mcp). The MCP client speaks
+   * Streamable HTTP: it POSTs JSON-RPC (initialize / tools/list / tools/call)
+   * directly to THIS endpoint — there are no `/tools/list` sub-paths.
    */
   mcpPath: string;
   /** Optional container entrypoint override (argv[0]). */
