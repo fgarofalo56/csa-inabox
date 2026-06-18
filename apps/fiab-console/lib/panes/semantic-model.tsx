@@ -82,29 +82,29 @@ interface DeployResult {
 }
 
 const useStyles = makeStyles({
-  root: { display: 'flex', flexDirection: 'column', gap: '16px', height: '100%' },
+  root: { display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalL, height: '100%' },
   loading: {
     display: 'flex', alignItems: 'center', justifyContent: 'center',
     minHeight: '240px',
   },
-  header: { display: 'flex', alignItems: 'center', gap: '12px' },
+  header: { display: 'flex', alignItems: 'center', gap: tokens.spacingHorizontalM },
   spacer: { flex: 1 },
   card: {
     ...shorthands.border('1px', 'solid', tokens.colorNeutralStroke2),
     borderRadius: tokens.borderRadiusLarge,
     backgroundColor: tokens.colorNeutralBackground1,
     boxShadow: tokens.shadow2,
-    paddingTop: '16px', paddingRight: '20px', paddingBottom: '16px', paddingLeft: '20px',
-    display: 'flex', flexDirection: 'column', gap: '12px',
+    paddingTop: tokens.spacingVerticalL, paddingRight: tokens.spacingHorizontalXL, paddingBottom: tokens.spacingVerticalL, paddingLeft: tokens.spacingHorizontalXL,
+    display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalM,
   },
-  cardHead: { display: 'flex', alignItems: 'center', gap: '8px' },
+  cardHead: { display: 'flex', alignItems: 'center', gap: tokens.spacingHorizontalS },
   cardIcon: {
     fontSize: '20px', color: tokens.colorBrandForeground1,
     display: 'flex', alignItems: 'center',
   },
   cardCount: { marginLeft: 'auto' },
-  deployRow: { display: 'flex', alignItems: 'flex-end', gap: '12px', flexWrap: 'wrap' },
-  field: { display: 'flex', flexDirection: 'column', gap: '4px', minWidth: '220px' },
+  deployRow: { display: 'flex', alignItems: 'flex-end', gap: tokens.spacingHorizontalM, flexWrap: 'wrap' },
+  field: { display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalXS, minWidth: '220px' },
   fieldLabel: { color: tokens.colorNeutralForeground2, fontWeight: 600 },
   dbGrid: {
     display: 'grid',

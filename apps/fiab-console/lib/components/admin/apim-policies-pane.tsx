@@ -101,7 +101,7 @@ export function ApimPoliciesPane() {
           style={{
             fontFamily: 'monospace',
             fontSize: '13px',
-            padding: '12px',
+            padding: tokens.spacingVerticalM,
             borderRadius: tokens.borderRadiusMedium,
             border: `1px solid ${tokens.colorNeutralStroke2}`,
             minHeight: '400px',

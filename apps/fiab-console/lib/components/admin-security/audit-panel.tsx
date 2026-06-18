@@ -21,13 +21,13 @@ import { ArrowSync24Regular, ArrowDownload20Regular } from '@fluentui/react-icon
 
 const useStyles = makeStyles({
   section: {
-    padding: 12, borderRadius: 8,
+    padding: tokens.spacingVerticalM, borderRadius: tokens.borderRadiusLarge,
     border: `1px solid ${tokens.colorNeutralStroke2}`,
     backgroundColor: tokens.colorNeutralBackground1,
   },
   toolbar: {
     display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(160px, 1fr))',
-    gap: 8, marginBottom: 12, alignItems: 'end',
+    gap: tokens.spacingHorizontalS, marginBottom: tokens.spacingVerticalM, alignItems: 'end',
   },
 });
 

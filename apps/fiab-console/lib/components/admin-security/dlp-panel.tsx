@@ -30,14 +30,14 @@ import { DlpManagePolicies } from './dlp-manage-policies';
 import { IdentityPicker, type IdentityHit } from '../ui/identity-picker';
 
 const useStyles = makeStyles({
-  subTabs: { marginBottom: 12 },
+  subTabs: { marginBottom: tokens.spacingVerticalM },
   section: {
-    padding: 12, borderRadius: 8,
+    padding: tokens.spacingVerticalM, borderRadius: tokens.borderRadiusLarge,
     border: `1px solid ${tokens.colorNeutralStroke2}`,
     backgroundColor: tokens.colorNeutralBackground1,
   },
-  toolbar: { display: 'flex', gap: 8, marginBottom: 8, alignItems: 'center' },
-  fieldStack: { display: 'flex', flexDirection: 'column', gap: 10, maxWidth: 720 },
+  toolbar: { display: 'flex', gap: tokens.spacingHorizontalS, marginBottom: tokens.spacingVerticalS, alignItems: 'center' },
+  fieldStack: { display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalS, maxWidth: '720px' },
 });
 
 interface ApiState<T> {

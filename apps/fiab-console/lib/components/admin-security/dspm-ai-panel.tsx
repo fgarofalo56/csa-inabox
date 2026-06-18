@@ -100,7 +100,7 @@ const useStyles = makeStyles({
   statValAlert: { fontSize: '32px', lineHeight: '34px', fontWeight: tokens.fontWeightSemibold, color: tokens.colorPaletteRedForeground1 },
   statLabel: { fontSize: '12px', color: tokens.colorNeutralForeground3, textTransform: 'uppercase', letterSpacing: '0.04em' },
   chips: { display: 'flex', flexWrap: 'wrap', gap: tokens.spacingHorizontalS },
-  sourceChips: { display: 'flex', flexWrap: 'wrap', gap: '4px' },
+  sourceChips: { display: 'flex', flexWrap: 'wrap', gap: tokens.spacingHorizontalXS },
   loadingBox: { display: 'flex', justifyContent: 'center', padding: tokens.spacingVerticalXXL },
   gap: { marginBottom: tokens.spacingVerticalL },
   muted: { color: tokens.colorNeutralForeground3 },

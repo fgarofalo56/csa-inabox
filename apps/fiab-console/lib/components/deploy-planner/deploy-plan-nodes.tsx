@@ -56,9 +56,9 @@ function SubscriptionNodeImpl({ data, width, height, selected }: NodeProps) {
       }}
     >
       <div style={{
-        display: 'flex', alignItems: 'center', gap: 8,
+        display: 'flex', alignItems: 'center', gap: tokens.spacingHorizontalS,
         padding: '6px 10px', borderBottom: `1px solid ${tint}40`,
-        background: `${tint}1a`, borderTopLeftRadius: 8, borderTopRightRadius: 8,
+        background: `${tint}1a`, borderTopLeftRadius: tokens.borderRadiusLarge, borderTopRightRadius: tokens.borderRadiusLarge,
       }}>
         <span style={{ fontWeight: 700, fontSize: 13, color: tokens.colorNeutralForeground1 }}>{d.name}</span>
         <Badge appearance="tint" size="small" style={{ color: tint }}>{d.boundary || 'Commercial'}</Badge>
@@ -75,7 +75,7 @@ function DomainNodeImpl({ data, width, height, selected }: NodeProps) {
       data-plan-domain={d.name}
       style={{
         width: width ?? 300, height: height ?? 150,
-        borderRadius: 8,
+        borderRadius: tokens.borderRadiusLarge,
         border: `1.5px ${selected ? 'solid' : 'dashed'} ${selected ? tokens.colorBrandStroke1 : tokens.colorNeutralStroke1}`,
         background: tokens.colorNeutralBackground1,
         boxSizing: 'border-box',
@@ -110,8 +110,8 @@ function ServiceNodeImpl({ data, selected }: NodeProps) {
       title={def?.description}
       style={{
         width: 132,
-        display: 'flex', alignItems: 'center', gap: 8,
-        padding: '6px 9px', borderRadius: 8,
+        display: 'flex', alignItems: 'center', gap: tokens.spacingHorizontalS,
+        padding: '6px 9px', borderRadius: tokens.borderRadiusLarge,
         background: tokens.colorNeutralBackground1,
         border: `1px solid ${selected ? tokens.colorBrandStroke1 : tokens.colorNeutralStroke2}`,
         boxShadow: selected ? `0 0 0 2px ${tokens.colorBrandBackground2}` : '0 1px 2px rgba(0,0,0,0.06)',
@@ -127,14 +127,14 @@ function ServiceNodeImpl({ data, selected }: NodeProps) {
       }}>{vis.label}</span>
       {def?.config?.length ? (
         <span title="Has configurable SKU / tier" style={{
-          flexShrink: 0, width: 7, height: 7, borderRadius: 4,
+          flexShrink: 0, width: 7, height: 7, borderRadius: tokens.borderRadiusMedium,
           background: tokens.colorBrandBackground,
         }} />
       ) : null}
       {def?.planOnly && (
         <span role="img" aria-label="Plan-only — no one-button bicep toggle yet"
           title="Plan-only — no one-button bicep toggle yet" style={{
-          flexShrink: 0, width: 7, height: 7, borderRadius: 4,
+          flexShrink: 0, width: 7, height: 7, borderRadius: tokens.borderRadiusMedium,
           background: tokens.colorPaletteMarigoldBackground3,
         }} />
       )}

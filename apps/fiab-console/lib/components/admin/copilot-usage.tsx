@@ -160,7 +160,7 @@ const useStyles = makeStyles({
   sparkRow: {
     display: 'flex',
     alignItems: 'flex-end',
-    gap: '2px',
+    gap: tokens.spacingHorizontalXXS,
     height: '80px',
     marginTop: tokens.spacingVerticalS,
   },

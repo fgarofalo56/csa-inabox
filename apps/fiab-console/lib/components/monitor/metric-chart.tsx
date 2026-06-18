@@ -18,20 +18,20 @@ export interface MetricPoint {
 const useStyles = makeStyles({
   card: {
     border: `1px solid ${tokens.colorNeutralStroke2}`,
-    borderRadius: '10px',
+    borderRadius: tokens.borderRadiusLarge,
     backgroundColor: tokens.colorNeutralBackground1,
-    padding: '14px',
+    padding: tokens.spacingVerticalL,
     display: 'flex',
     flexDirection: 'column',
-    gap: '8px',
+    gap: tokens.spacingVerticalS,
     minWidth: 0,
   },
-  head: { display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', gap: '8px' },
+  head: { display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', gap: tokens.spacingHorizontalS },
   title: { fontSize: '13px', fontWeight: 600, color: tokens.colorNeutralForeground1 },
   unit: { fontSize: '11px', color: tokens.colorNeutralForeground3 },
   last: { fontSize: '22px', fontWeight: 700, color: tokens.colorBrandForeground1, lineHeight: 1.1 },
   meta: { fontSize: '11px', color: tokens.colorNeutralForeground3 },
-  empty: { fontSize: '12px', color: tokens.colorNeutralForeground3, paddingTop: '18px', paddingBottom: '18px', textAlign: 'center' },
+  empty: { fontSize: '12px', color: tokens.colorNeutralForeground3, paddingTop: tokens.spacingVerticalL, paddingBottom: tokens.spacingVerticalL, textAlign: 'center' },
 });
 
 const W = 260;
