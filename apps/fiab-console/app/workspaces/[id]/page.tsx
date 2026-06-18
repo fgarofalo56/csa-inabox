@@ -35,11 +35,11 @@ import { getWorkspace, type Workspace } from '@/lib/api/workspaces';
 import { getItemTypeColor } from '@/lib/components/item-type-icon';
 
 const useStyles = makeStyles({
-  back: { marginBottom: '12px' },
-  header: { display: 'flex', alignItems: 'center', gap: '16px', marginBottom: '8px' },
+  back: { marginBottom: tokens.spacingVerticalM },
+  header: { display: 'flex', alignItems: 'center', gap: tokens.spacingHorizontalL, marginBottom: tokens.spacingVerticalS },
   spacer: { flex: 1 },
   meta: { fontSize: '11px', color: tokens.colorNeutralForeground3 },
-  tabs: { marginBottom: '12px' },
+  tabs: { marginBottom: tokens.spacingVerticalM },
 });
 
 export default function WorkspaceDetailPage(props: { params: Promise<{ id: string }> }) {

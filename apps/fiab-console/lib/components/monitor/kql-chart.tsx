@@ -23,17 +23,17 @@ export type KqlChartType = 'timechart' | 'barchart' | 'piechart';
 const useStyles = makeStyles({
   card: {
     border: `1px solid ${tokens.colorNeutralStroke2}`,
-    borderRadius: '10px',
+    borderRadius: tokens.borderRadiusLarge,
     backgroundColor: tokens.colorNeutralBackground1,
-    padding: '14px',
+    padding: tokens.spacingVerticalL,
     display: 'flex',
     flexDirection: 'column',
-    gap: '10px',
+    gap: tokens.spacingVerticalS,
     minWidth: 0,
   },
-  legend: { display: 'flex', flexWrap: 'wrap', gap: '12px', alignItems: 'center' },
-  legendItem: { display: 'flex', alignItems: 'center', gap: '6px', fontSize: '11px', color: tokens.colorNeutralForeground2 },
-  swatch: { width: '10px', height: '10px', borderRadius: '2px', flexShrink: 0 },
+  legend: { display: 'flex', flexWrap: 'wrap', gap: tokens.spacingHorizontalM, alignItems: 'center' },
+  legendItem: { display: 'flex', alignItems: 'center', gap: tokens.spacingHorizontalXS, fontSize: '11px', color: tokens.colorNeutralForeground2 },
+  swatch: { width: '10px', height: '10px', borderRadius: tokens.borderRadiusSmall, flexShrink: 0 },
   meta: { fontSize: '11px', color: tokens.colorNeutralForeground3 },
 });
 

@@ -89,7 +89,7 @@ interface Gate { missing: string[]; message: string }
 // ---- styles ----------------------------------------------------------------
 
 const useStyles = makeStyles({
-  toolbar: { display: 'flex', gap: '12px', alignItems: 'center', flexWrap: 'wrap', marginBottom: '16px' },
+  toolbar: { display: 'flex', gap: tokens.spacingHorizontalM, alignItems: 'center', flexWrap: 'wrap', marginBottom: tokens.spacingVerticalL },
   code: {
     width: '100%', maxHeight: '320px', overflow: 'auto', whiteSpace: 'pre',
     fontFamily: 'Consolas, "Cascadia Code", monospace', fontSize: '12px',
@@ -100,39 +100,39 @@ const useStyles = makeStyles({
   // KPI stat cards
   stats: {
     display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(180px, 1fr))',
-    gap: '14px',
+    gap: tokens.spacingHorizontalL,
   },
   stat: {
-    padding: '16px', borderRadius: '10px',
+    padding: tokens.spacingVerticalL, borderRadius: tokens.borderRadiusLarge,
     border: `1px solid ${tokens.colorNeutralStroke2}`,
     backgroundColor: tokens.colorNeutralBackground1,
-    display: 'flex', flexDirection: 'column', gap: '4px',
+    display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalXS,
   },
   statLabel: { fontSize: '11px', color: tokens.colorNeutralForeground3, fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.05em' },
   statValue: { fontSize: '26px', fontWeight: 700, lineHeight: 1.1 },
   statAccentSuccess: { color: tokens.colorPaletteGreenForeground1 },
   statAccentWarn: { color: tokens.colorPaletteYellowForeground1 },
   statAccentDanger: { color: tokens.colorPaletteRedForeground1 },
-  charts: { display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(260px, 1fr))', gap: '14px' },
+  charts: { display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(260px, 1fr))', gap: tokens.spacingHorizontalL },
   // health roll-up: a horizontal stacked bar + legend
-  healthRow: { display: 'flex', gap: '24px', alignItems: 'center', flexWrap: 'wrap' },
-  healthBarWrap: { flex: '1 1 320px', minWidth: '240px', display: 'flex', flexDirection: 'column', gap: '8px' },
-  healthBar: { display: 'flex', height: '16px', borderRadius: '8px', overflow: 'hidden', backgroundColor: tokens.colorNeutralBackground3 },
-  healthLegend: { display: 'flex', gap: '16px', flexWrap: 'wrap' },
-  legendItem: { display: 'flex', alignItems: 'center', gap: '6px', fontSize: '12px', color: tokens.colorNeutralForeground2 },
-  swatch: { width: '10px', height: '10px', borderRadius: '3px', display: 'inline-block' },
+  healthRow: { display: 'flex', gap: tokens.spacingHorizontalXXL, alignItems: 'center', flexWrap: 'wrap' },
+  healthBarWrap: { flex: '1 1 320px', minWidth: '240px', display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalS },
+  healthBar: { display: 'flex', height: '16px', borderRadius: tokens.borderRadiusLarge, overflow: 'hidden', backgroundColor: tokens.colorNeutralBackground3 },
+  healthLegend: { display: 'flex', gap: tokens.spacingHorizontalL, flexWrap: 'wrap' },
+  legendItem: { display: 'flex', alignItems: 'center', gap: tokens.spacingHorizontalXS, fontSize: '12px', color: tokens.colorNeutralForeground2 },
+  swatch: { width: '10px', height: '10px', borderRadius: tokens.borderRadiusSmall, display: 'inline-block' },
   // breakdown bars (resources by type)
-  breakdown: { display: 'flex', flexDirection: 'column', gap: '10px' },
-  breakdownRow: { display: 'grid', gridTemplateColumns: '200px 1fr 40px', gap: '12px', alignItems: 'center', fontSize: '12px' },
+  breakdown: { display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalS },
+  breakdownRow: { display: 'grid', gridTemplateColumns: '200px 1fr 40px', gap: tokens.spacingHorizontalM, alignItems: 'center', fontSize: '12px' },
   breakdownLabel: { color: tokens.colorNeutralForeground2, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' },
-  breakdownTrack: { height: '10px', borderRadius: '5px', backgroundColor: tokens.colorNeutralBackground3, overflow: 'hidden' },
-  breakdownFill: { height: '100%', borderRadius: '5px', backgroundColor: tokens.colorBrandBackground },
+  breakdownTrack: { height: '10px', borderRadius: tokens.borderRadiusMedium, backgroundColor: tokens.colorNeutralBackground3, overflow: 'hidden' },
+  breakdownFill: { height: '100%', borderRadius: tokens.borderRadiusMedium, backgroundColor: tokens.colorBrandBackground },
   breakdownCount: { textAlign: 'right', color: tokens.colorNeutralForeground3, fontVariantNumeric: 'tabular-nums' },
-  resPicker: { display: 'flex', gap: '12px', alignItems: 'center', flexWrap: 'wrap', marginBottom: '16px' },
-  kqlBox: { display: 'flex', flexDirection: 'column', gap: '8px', marginBottom: '16px' },
-  gap: { marginBottom: '12px' },
-  skelGrid: { display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(180px, 1fr))', gap: '14px' },
-  skelCard: { height: '92px', borderRadius: '10px' },
+  resPicker: { display: 'flex', gap: tokens.spacingHorizontalM, alignItems: 'center', flexWrap: 'wrap', marginBottom: tokens.spacingVerticalL },
+  kqlBox: { display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalS, marginBottom: tokens.spacingVerticalL },
+  gap: { marginBottom: tokens.spacingVerticalM },
+  skelGrid: { display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(180px, 1fr))', gap: tokens.spacingHorizontalL },
+  skelCard: { height: '92px', borderRadius: tokens.borderRadiusLarge },
   rowActions: { display: 'flex', gap: tokens.spacingHorizontalXS, alignItems: 'center' },
 });
 

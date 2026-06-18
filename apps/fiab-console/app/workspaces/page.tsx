@@ -132,7 +132,7 @@ const useStyles = makeStyles({
   chipRow: {
     display: 'flex',
     flexWrap: 'wrap',
-    gap: '6px',
+    gap: tokens.spacingHorizontalXS,
     alignItems: 'center',
     minHeight: '24px',
     marginBottom: tokens.spacingVerticalM,
@@ -140,12 +140,12 @@ const useStyles = makeStyles({
   chip: {
     display: 'inline-flex',
     alignItems: 'center',
-    gap: '4px',
-    paddingTop: '3px',
-    paddingBottom: '3px',
-    paddingLeft: '8px',
-    paddingRight: '6px',
-    borderRadius: '12px',
+    gap: tokens.spacingHorizontalXS,
+    paddingTop: tokens.spacingVerticalXS,
+    paddingBottom: tokens.spacingVerticalXS,
+    paddingLeft: tokens.spacingHorizontalS,
+    paddingRight: tokens.spacingHorizontalXS,
+    borderRadius: tokens.borderRadiusCircular,
     backgroundColor: tokens.colorNeutralBackground3,
     color: tokens.colorNeutralForeground2,
     fontSize: '12px',
@@ -168,14 +168,20 @@ const useStyles = makeStyles({
     color: tokens.colorBrandForeground1,
     fontSize: '12px',
     fontWeight: 600,
-    padding: '3px 6px',
+    paddingTop: tokens.spacingVerticalXS,
+    paddingBottom: tokens.spacingVerticalXS,
+    paddingLeft: tokens.spacingHorizontalXS,
+    paddingRight: tokens.spacingHorizontalXS,
   },
   bulkBar: {
     display: 'flex',
     alignItems: 'center',
-    gap: '10px',
+    gap: tokens.spacingHorizontalS,
     flexWrap: 'wrap',
-    padding: '8px 12px',
+    paddingTop: tokens.spacingVerticalS,
+    paddingBottom: tokens.spacingVerticalS,
+    paddingLeft: tokens.spacingHorizontalM,
+    paddingRight: tokens.spacingHorizontalM,
     borderRadius: tokens.borderRadiusLarge,
     backgroundColor: tokens.colorNeutralBackground3,
     border: `1px solid ${tokens.colorNeutralStroke2}`,
@@ -185,7 +191,7 @@ const useStyles = makeStyles({
   nameCell: {
     display: 'inline-flex',
     alignItems: 'center',
-    gap: '8px',
+    gap: tokens.spacingHorizontalS,
     minWidth: 0,
   },
   nameChip: {
@@ -200,7 +206,7 @@ const useStyles = makeStyles({
   actionsCell: {
     display: 'inline-flex',
     alignItems: 'center',
-    gap: '2px',
+    gap: tokens.spacingHorizontalXXS,
   },
   empty: {
     paddingTop: tokens.spacingVerticalXXXL,
@@ -233,7 +239,7 @@ const useStyles = makeStyles({
   dialogHint: {
     color: tokens.colorNeutralForeground3,
   },
-  formCol: { display: 'flex', flexDirection: 'column', gap: '12px' },
+  formCol: { display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalM },
 });
 
 // ---------------------------------------------------------------------------

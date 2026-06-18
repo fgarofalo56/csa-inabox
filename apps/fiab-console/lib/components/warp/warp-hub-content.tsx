@@ -144,7 +144,7 @@ const useStyles = makeStyles({
     gridTemplateColumns: 'repeat(auto-fill, minmax(220px, 1fr))',
   },
   learnCard: {
-    display: 'flex', flexDirection: 'column', gap: '4px',
+    display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalXS,
     padding: tokens.spacingVerticalM,
     borderRadius: tokens.borderRadiusLarge,
     border: `1px solid ${tokens.colorNeutralStroke2}`,

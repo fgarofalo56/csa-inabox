@@ -33,13 +33,13 @@ import {
 import { NotConfiguredBar, type NotConfiguredHint } from './not-configured-bar';
 
 const useStyles = makeStyles({
-  wrap: { marginBottom: 16 },
-  toolbar: { display: 'flex', gap: 8, marginBottom: 8, alignItems: 'center' },
-  fieldStack: { display: 'flex', flexDirection: 'column', gap: 12, minWidth: 460 },
-  row: { display: 'flex', gap: 16, flexWrap: 'wrap' },
-  checks: { display: 'flex', flexDirection: 'column', gap: 4 },
-  workloadCell: { display: 'flex', gap: 4, flexWrap: 'wrap' },
-  rowActions: { display: 'flex', gap: 4, justifyContent: 'flex-end' },
+  wrap: { marginBottom: tokens.spacingVerticalL },
+  toolbar: { display: 'flex', gap: tokens.spacingHorizontalS, marginBottom: tokens.spacingVerticalS, alignItems: 'center' },
+  fieldStack: { display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalM, minWidth: '460px' },
+  row: { display: 'flex', gap: tokens.spacingHorizontalL, flexWrap: 'wrap' },
+  checks: { display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalXS },
+  workloadCell: { display: 'flex', gap: tokens.spacingHorizontalXS, flexWrap: 'wrap' },
+  rowActions: { display: 'flex', gap: tokens.spacingHorizontalXS, justifyContent: 'flex-end' },
 });
 
 // Policy enforcement modes (New/Set-DlpCompliancePolicy -Mode).
