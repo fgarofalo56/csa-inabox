@@ -709,6 +709,23 @@ jobs:
             --region "$DBX_REGION" --workspace-id "$WS_ID" --uami-app-id "$CONSOLE_UAMI_CLIENT" \
             --workspace-host "$DBX_HOST" --default-catalog main \
             || echo "::warning::UC auto-enable failed (deploy SP likely not a Databricks account admin). See docs/fiab/catalog/metastores.md"
+          # Wire LOOM_DATABRICKS_ACCOUNT_ID onto the LIVE console (tenant/dlz-attach
+          # bridge): the single-sub path gets it from admin-plane bicep apps[].env
+          # (param databricksAccountId), but a dlz-attach deploy does NOT redeploy
+          # the admin plane, so the Catalog → Metastores UC enumerate/attach +
+          # /catalog/domains UC-mirror surfaces would honest-gate on a missing env.
+          # The console UC client (lib/azure/unity-catalog-account-client.ts) reads
+          # LOOM_DATABRICKS_ACCOUNT_ID; set it now so the surfaces are live day-one.
+          CONSOLE_APP=$(az containerapp list -g "$ADMIN_RG" --query "[?contains(name,'loom-console') || contains(name,'console')].name | [0]" -o tsv 2>/dev/null || true)
+          if [ -n "$CONSOLE_APP" ]; then
+            ENVPAIRS=("LOOM_DATABRICKS_ACCOUNT_ID=$DATABRICKS_ACCOUNT_ID")
+            [ -n "${DATABRICKS_ACCOUNT_HOST:-}" ] && ENVPAIRS+=("LOOM_DATABRICKS_ACCOUNT_HOST=$DATABRICKS_ACCOUNT_HOST")
+            az containerapp update -g "$ADMIN_RG" -n "$CONSOLE_APP" --set-env-vars "${ENVPAIRS[@]}" -o none 2>&1 | tail -1 \
+              && echo "Wired LOOM_DATABRICKS_ACCOUNT_ID onto $CONSOLE_APP (UC metastore enumerate/attach now configured)." \
+              || echo "::warning::Could not set LOOM_DATABRICKS_ACCOUNT_ID on $CONSOLE_APP — run scripts/csa-loom/patch-navigator-env.sh (it now wires this env)."
+          else
+            echo "::notice::No console Container App found in $ADMIN_RG — the single-sub bicep path wires LOOM_DATABRICKS_ACCOUNT_ID via admin-plane apps[].env."
+          fi
 
       - name: Restore Databricks public access disabled
         if: always()
@@ -815,39 +832,70 @@ jobs:
           fi
           bash scripts/csa-loom/grant-uami-graph-roles.sh
 
-      - name: Grant Console UAMI AzureML Data Scientist on Foundry workspace (unblocks Foundry editors)
+      # ── Foundry grants (#1468) ──────────────────────────────────────────────
+      # CSA Loom's "Foundry" is an AIServices Cognitive Services account
+      # (aifndry-loom-<region>, kind=AIServices) — NOT a classic
+      # Microsoft.MachineLearningServices/workspaces. The old steps granted
+      # "AzureML Data Scientist" on a MLServices scope; on an AIServices estate
+      # the scope doesn't exist, the grant 404s, AND (because the steps had no
+      # `continue-on-error`) the failure CASCADE-SKIPPED the dependent grants
+      # after it (Compute Operator, Foundry-storage reader, DLZ blob contributor).
+      #
+      # Fix: detect the account type and grant the CORRECT roles —
+      #   AIServices  → Cognitive Services User (a97b65f3-24c7-4388-baec-2e87135dc908)
+      #               + Cognitive Services OpenAI User (5e0bd9bd-7b93-4f28-af87-19fc36ad61bd)
+      #   MLServices  → AzureML Data Scientist + AzureML Compute Operator (legacy hub)
+      # Role GUIDs verified against Microsoft Learn (Azure built-in roles, AI+ML).
+      # Every grant below is DECOUPLED — `if: always()` + `continue-on-error: true`
+      # — so one failing grant emits a `::warning::` and the rest still run.
+      - name: Grant Console UAMI Foundry roles (AIServices → Cognitive Services; MLServices → AzureML)
+        if: always()
+        continue-on-error: true
         run: |
-          FOUNDRY_WS=$(az resource list -g $ADMIN_RG --resource-type Microsoft.MachineLearningServices/workspaces --query "[0].id" -o tsv)
-          if [ -n "$FOUNDRY_WS" ]; then
-            echo "Foundry workspace: $FOUNDRY_WS"
-            az role assignment create \
-              --assignee-object-id $CONSOLE_UAMI_PRINCIPAL \
-              --assignee-principal-type ServicePrincipal \
-              --role "AzureML Data Scientist" \
-              --scope "$FOUNDRY_WS" \
-              -o table 2>&1 | grep -v "already exists" || echo "Already assigned"
-          else
-            echo "No Foundry workspace in $ADMIN_RG — skipping"
-          fi
+          set -uo pipefail
+          # Built-in role GUIDs (use ids so a misspelled role name can't 404).
+          ROLE_COG_USER="a97b65f3-24c7-4388-baec-2e87135dc908"        # Cognitive Services User
+          ROLE_COG_OAI_USER="5e0bd9bd-7b93-4f28-af87-19fc36ad61bd"    # Cognitive Services OpenAI User
+          ROLE_AML_DS="f6c7c914-8db3-469d-8ca1-694a8f32e121"          # AzureML Data Scientist
+          ROLE_AML_CO="e503ece1-11d0-4e8e-8e2c-7a6c3bf38815"          # AzureML Compute Operator
 
-      - name: Grant Console UAMI AzureML Compute Operator on Foundry workspace (unblocks CI list/start/status)
-        run: |
-          FOUNDRY_WS=$(az resource list -g $ADMIN_RG --resource-type Microsoft.MachineLearningServices/workspaces --query "[0].id" -o tsv)
-          if [ -n "$FOUNDRY_WS" ]; then
-            echo "Foundry workspace: $FOUNDRY_WS"
+          grant() { # <role-guid> <scope> <label>
             az role assignment create \
-              --assignee-object-id $CONSOLE_UAMI_PRINCIPAL \
+              --assignee-object-id "$CONSOLE_UAMI_PRINCIPAL" \
               --assignee-principal-type ServicePrincipal \
-              --role "AzureML Compute Operator" \
-              --scope "$FOUNDRY_WS" \
-              -o table 2>&1 | grep -v "already exists" || echo "Already assigned"
-          else
-            echo "No Foundry workspace in $ADMIN_RG — skipping"
+              --role "$1" --scope "$2" -o none 2>/tmp/grant.err \
+              && echo "  granted $3" \
+              || { grep -q "already exists\|RoleAssignmentExists" /tmp/grant.err \
+                     && echo "  $3 already assigned" \
+                     || echo "::warning::Foundry grant '$3' failed: $(tr -d '\n' </tmp/grant.err)"; }
+          }
+
+          # Prefer an AIServices/Cognitive-Services account (the CSA Loom default).
+          AISVC=$(az cognitiveservices account list -g "$ADMIN_RG" \
+                    --query "[?contains(name,'aifndry') || kind=='AIServices' || kind=='OpenAI'].id | [0]" -o tsv 2>/dev/null || true)
+          MLWS=$(az resource list -g "$ADMIN_RG" --resource-type Microsoft.MachineLearningServices/workspaces --query "[0].id" -o tsv 2>/dev/null || true)
+
+          if [ -n "$AISVC" ]; then
+            echo "Foundry is an AIServices/Cognitive Services account: $AISVC"
+            grant "$ROLE_COG_USER" "$AISVC" "Cognitive Services User"
+            grant "$ROLE_COG_OAI_USER" "$AISVC" "Cognitive Services OpenAI User"
+          fi
+          if [ -n "$MLWS" ]; then
+            echo "AzureML (MachineLearningServices) workspace present: $MLWS"
+            grant "$ROLE_AML_DS" "$MLWS" "AzureML Data Scientist"
+            grant "$ROLE_AML_CO" "$MLWS" "AzureML Compute Operator"
+          fi
+          if [ -z "$AISVC" ] && [ -z "$MLWS" ]; then
+            echo "::warning::No AIServices account and no MachineLearningServices workspace in $ADMIN_RG — Foundry editors will honest-gate. Re-run the deploy with agentFoundryEnabled=true."
           fi
 
       - name: Grant Console UAMI Storage Blob Data Reader on Foundry storage (unblocks datastores)
+        # Decoupled (#1468): runs regardless of the role-grant step's outcome.
+        if: always()
+        continue-on-error: true
         run: |
-          STG=$(az storage account list -g $ADMIN_RG --query "[?contains(name,'aifound') || contains(name,'foundry') || contains(name,'aml')].id" -o tsv | head -1)
+          set -uo pipefail
+          STG=$(az storage account list -g $ADMIN_RG --query "[?contains(name,'aifound') || contains(name,'aifndry') || contains(name,'foundry') || contains(name,'aml')].id" -o tsv | head -1)
           if [ -n "$STG" ]; then
             echo "Foundry storage: $STG"
             az role assignment create \
@@ -857,7 +905,7 @@ jobs:
               --scope "$STG" \
               -o table 2>&1 | grep -v "already exists" || echo "Already assigned"
           else
-            echo "No Foundry storage in $ADMIN_RG — skipping"
+            echo "No Foundry storage in $ADMIN_RG — skipping (AIServices accounts have no managed storage; this is expected)"
           fi
 
       - name: Grant Console UAMI Storage Blob Data Contributor on DLZ (lakehouse writes + notebook .ipynb backup)
@@ -865,6 +913,9 @@ jobs:
         # published Synapse notebooks as .ipynb into ADLS silver/loom/notebooks/
         # (synapse-notebook PUT route → adls-client.uploadFile). Both need Storage
         # Blob Data Contributor on the DLZ data-lake account. Idempotent.
+        # Decoupled (#1468): previously cascade-skipped by the AzureML grant failure.
+        if: always()
+        continue-on-error: true
         run: |
           DLZ_STG=$(az storage account list --subscription "$DLZ_SUB" -g $DLZ_RG --query "[?contains(name,'dls') || contains(name,'lake') || contains(name,'adls')].id" -o tsv | head -1)
           [ -z "$DLZ_STG" ] && DLZ_STG=$(az storage account list --subscription "$DLZ_SUB" -g $DLZ_RG --query "[0].id" -o tsv)
