@@ -676,10 +676,10 @@ export function ShortcutListGrid({ itemType = 'lakehouse', lakehouseId, rows, lo
                     <Button size="small" appearance="subtle" icon={busy[sc.id] === 'test' ? <Spinner size="tiny" /> : <ArrowSync16Regular />} onClick={() => test(sc)} disabled={!!busy[sc.id]}>Test</Button>
                   </Tooltip>
                   <Tooltip content="Rename" relationship="label">
-                    <Button size="small" appearance="subtle" icon={<Edit16Regular />} onClick={() => { setEditing(sc); setEditName(sc.name); setEditError(null); }} disabled={!!busy[sc.id]} />
+                    <Button size="small" appearance="subtle" icon={<Edit16Regular />} aria-label="Rename shortcut" onClick={() => { setEditing(sc); setEditName(sc.name); setEditError(null); }} disabled={!!busy[sc.id]} />
                   </Tooltip>
                   <Tooltip content="Delete (never deletes source data)" relationship="label">
-                    <Button size="small" appearance="subtle" icon={busy[sc.id] === 'delete' ? <Spinner size="tiny" /> : <Delete16Regular />} onClick={() => remove(sc)} disabled={!!busy[sc.id]} />
+                    <Button size="small" appearance="subtle" icon={busy[sc.id] === 'delete' ? <Spinner size="tiny" /> : <Delete16Regular />} aria-label="Delete shortcut" onClick={() => remove(sc)} disabled={!!busy[sc.id]} />
                   </Tooltip>
                 </div>
               </TableCell>

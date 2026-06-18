@@ -329,7 +329,7 @@ function IpFirewallTab({ workspaceId }: { workspaceId: string }) {
                   <TableCell>{r.direction === 'Inbound' ? r.sourceAddressPrefix : r.destinationAddressPrefix}</TableCell>
                   <TableCell>{r.provisioningState || '—'}</TableCell>
                   <TableCell>
-                    <Button appearance="subtle" size="small" icon={<Delete16Regular />} disabled={busy || !r.managed} title={r.managed ? 'Delete rule' : 'Platform-managed rule — not editable here'} onClick={() => remove(r.name)} />
+                    <Button appearance="subtle" size="small" icon={<Delete16Regular />} disabled={busy || !r.managed} title={r.managed ? 'Delete rule' : 'Platform-managed rule — not editable here'} aria-label="Delete NSG rule" onClick={() => remove(r.name)} />
                   </TableCell>
                 </TableRow>
               ))}
@@ -458,7 +458,7 @@ function OutboundTab({ workspaceId }: { workspaceId: string }) {
                   <TableCell><Badge appearance="tint" color={r.state === 'Succeeded' ? 'success' : 'warning'}>{r.state}</Badge></TableCell>
                   <TableCell>{r.addedAt ? new Date(r.addedAt).toLocaleString() : '—'}</TableCell>
                   <TableCell>
-                    <Button appearance="subtle" size="small" icon={<Delete16Regular />} disabled={busy} title="Delete rule" onClick={() => remove(r.id)} />
+                    <Button appearance="subtle" size="small" icon={<Delete16Regular />} disabled={busy} title="Delete rule" aria-label="Delete private endpoint rule" onClick={() => remove(r.id)} />
                   </TableCell>
                 </TableRow>
               ))}
@@ -570,7 +570,7 @@ function TrustedTab({ workspaceId }: { workspaceId: string }) {
                   <TableCell>{t.direction}</TableCell>
                   <TableCell>{t.addedAt ? new Date(t.addedAt).toLocaleString() : '—'}</TableCell>
                   <TableCell>
-                    <Button appearance="subtle" size="small" icon={<Delete16Regular />} disabled={busy} title="Remove" onClick={() => remove(t.id)} />
+                    <Button appearance="subtle" size="small" icon={<Delete16Regular />} disabled={busy} title="Remove" aria-label="Remove trusted instance" onClick={() => remove(t.id)} />
                   </TableCell>
                 </TableRow>
               ))}
