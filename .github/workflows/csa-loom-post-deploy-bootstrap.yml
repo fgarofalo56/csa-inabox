@@ -626,6 +626,48 @@ jobs:
             echo
           fi
 
+      - name: Databricks reachability fallback (IP access-list for Console egress)
+        # #1466 FALLBACK to the databricks_ui_api Private Endpoint (databricks.bicep).
+        # PRIMARY day-one fix: the PE + privatelink.azuredatabricks.net DNS zone make
+        # the PE-locked workspace (publicNetworkAccess Disabled) reachable from the hub
+        # VNet with NO IP drift — so the Console no longer gets "403 Unauthorized network
+        # access to workspace". This step only matters when an operator runs the
+        # workspace with publicNetworkAccess=Enabled (no PE): then the workspace IP
+        # access list, if enabled, can still block the Console's NAT egress IP. We add
+        # that egress IP to an ALLOW list so the Console reaches the workspace over the
+        # public path too. Opt-in via repo var LOOM_DBX_IP_ALLOWLIST_FALLBACK=true
+        # (default off — the PE is the supported posture). Reuses the public-access
+        # window opened above for SCIM. Grounded in Microsoft Learn
+        # (ip-access-list-workspace: POST /api/2.0/ip-access-lists, list_type ALLOW).
+        if: ${{ vars.LOOM_DBX_IP_ALLOWLIST_FALLBACK == 'true' }}
+        continue-on-error: true
+        env:
+          # The Console's outbound egress IP (the hub NAT gateway / firewall public IP).
+          # Set this repo var to the deployment's egress IP (CIDR ok, e.g. 20.1.2.3/32).
+          CONSOLE_EGRESS_IP: ${{ vars.LOOM_CONSOLE_EGRESS_IP }}
+        run: |
+          set -uo pipefail
+          if [ -z "${CONSOLE_EGRESS_IP:-}" ]; then
+            echo "::warning::LOOM_DBX_IP_ALLOWLIST_FALLBACK=true but LOOM_CONSOLE_EGRESS_IP unset — cannot allowlist. Prefer the databricks_ui_api Private Endpoint (no IP drift)."
+            exit 0
+          fi
+          TOKEN=$(az account get-access-token --resource 2ff814a6-3304-4ab8-85cb-cd0e6f879c1d --query accessToken -o tsv)
+          # Make sure the IP access-list feature is on (no-op if already enabled).
+          curl -sS -X PATCH "https://$DBX_HOST/api/2.0/workspace-conf" \
+            -H "Authorization: Bearer $TOKEN" -H "Content-Type: application/json" \
+            -d '{"enableIpAccessLists":"true"}' >/dev/null || true
+          PAYLOAD=$(printf '{"label":"csa-loom-console","list_type":"ALLOW","ip_addresses":["%s"]}' "$CONSOLE_EGRESS_IP")
+          R=$(curl -sS -w "%{http_code}" -o /tmp/dbx_ipacl.json -X POST \
+            "https://$DBX_HOST/api/2.0/ip-access-lists" \
+            -H "Authorization: Bearer $TOKEN" -H "Content-Type: application/json" -d "$PAYLOAD")
+          if [[ "$R" == "200" ]]; then
+            echo "  Console egress $CONSOLE_EGRESS_IP added to Databricks ALLOW list."
+          elif grep -qi "already exists\|duplicate" /tmp/dbx_ipacl.json 2>/dev/null; then
+            echo "  ALLOW list 'csa-loom-console' already present (idempotent)."
+          else
+            echo "::warning::IP allowlist add returned $R: $(cat /tmp/dbx_ipacl.json). Prefer the databricks_ui_api Private Endpoint."
+          fi
+
       - name: Enable Unity Catalog (metastore + default catalog + UAMI account-admin)
         # Default-on UC enablement. Runs against the Databricks ACCOUNT API
         # (accounts.azuredatabricks.net, NOT the network-locked workspace) to
@@ -1012,15 +1054,18 @@ jobs:
           #                                             granting both clears the DLP/IP
           #                                             "Missing application roles" gate)
           #
-          # Each grant is idempotent — the script re-runs cleanly. After
-          # this job completes, a Tenant Administrator MUST click "Grant
-          # admin consent" in Entra → Enterprise applications → Console
-          # UAMI → Permissions for the AppRoles to take effect. Until
-          # consent is issued, every Graph call returns 403 and the
-          # /admin/security panels render an explicit remediation
-          # MessageBar.
-          set -e
+          # Each grant is idempotent — re-runs cleanly. For a MANAGED IDENTITY
+          # the appRoleAssignment POST below IS the grant: it takes effect
+          # immediately, with NO separate "Grant admin consent" click (that is
+          # the app-registration pattern, not the MI pattern). The ONLY
+          # prerequisite is that the bootstrap principal can assign Graph app
+          # roles — i.e. it holds AppRoleAssignment.ReadWrite.All on Microsoft
+          # Graph. If it doesn't, the POST returns 403 and we surface the exact
+          # one-time tenant remediation below (non-fatal — the /admin/security
+          # tabs then render the honest 503 NotConfigured MessageBar).
+          set -uo pipefail
           GRAPH_SP_ID=$(az ad sp list --filter "appId eq '00000003-0000-0000-c000-000000000000'" --query "[0].id" -o tsv)
+          FORBIDDEN=0
           if [ -z "$GRAPH_SP_ID" ]; then
             echo "  Could not resolve Microsoft Graph SP — skipping AppRole grants"
           else
@@ -1046,15 +1091,31 @@ jobs:
                 echo "  $NAME granted"
               elif grep -q "Permission being assigned already exists" /tmp/approle.json 2>/dev/null; then
                 echo "  $NAME already granted (idempotent)"
+              elif [[ "$R" == "403" ]]; then
+                FORBIDDEN=1
+                echo "  $NAME grant 403 FORBIDDEN — bootstrap principal cannot assign Graph app roles."
               else
                 echo "  $NAME grant returned $R: $(cat /tmp/approle.json)"
               fi
             done
-            echo ""
-            echo "  Tenant Administrator action required:"
-            echo "    Open Entra ID → Enterprise applications → Console UAMI → Permissions"
-            echo "    Click 'Grant admin consent for <tenant>'"
-            echo "    Without consent, /admin/security MIP+DLP tabs render the NotConfigured MessageBar."
+            if [[ "$FORBIDDEN" == "1" ]]; then
+              echo "::warning title=MIP/DLP Graph AppRoles not granted (403)::Deploy SP lacks AppRoleAssignment.ReadWrite.All on Microsoft Graph. /admin/security MIP+DLP tabs stay on the honest 503 NotConfigured gate until a Global Admin runs the one-time grant — see docs/fiab/v3-tenant-bootstrap.md (Step: Grant the deploy SP Graph AppRoleAssignment.ReadWrite.All)."
+              echo ""
+              echo "  ===================================================================="
+              echo "  ONE-TIME TENANT ACTION — a Global Administrator runs ONCE:"
+              echo "    DEPLOY_SP_OBJID=<deploy SP service-principal object id>"
+              echo "    GRAPH_SP_ID=\$(az ad sp list --filter \"appId eq '00000003-0000-0000-c000-000000000000'\" --query '[0].id' -o tsv)"
+              echo "    APPROLE_RW=\$(az ad sp show --id \$GRAPH_SP_ID --query \"appRoles[?value=='AppRoleAssignment.ReadWrite.All'].id | [0]\" -o tsv)"
+              echo "    az rest --method POST --url \"https://graph.microsoft.com/v1.0/servicePrincipals/\$DEPLOY_SP_OBJID/appRoleAssignments\" \\"
+              echo "      --headers 'Content-Type=application/json' \\"
+              echo "      --body \"{\\\"principalId\\\":\\\"\$DEPLOY_SP_OBJID\\\",\\\"resourceId\\\":\\\"\$GRAPH_SP_ID\\\",\\\"appRoleId\\\":\\\"\$APPROLE_RW\\\"}\""
+              echo "  Then re-run this job — the grants succeed unattended thereafter."
+              echo "  (Assigning an app role to the Console MI IS the grant — no admin-consent click.)"
+              echo "  ===================================================================="
+            else
+              echo ""
+              echo "  Graph AppRoles assigned to the Console UAMI — effective immediately (MI app-role assignment = grant; no admin-consent click)."
+            fi
           fi
 
       - name: Ensure AI Search governance catalog index (loom-governance-items, day-one)

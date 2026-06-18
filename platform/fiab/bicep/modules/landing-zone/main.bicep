@@ -194,6 +194,11 @@ module databricks 'databricks.bicep' = if (loomDatabricksEnabled) {
     boundary: boundary
     storageCmkKeyUri: storageCmkKeyUri
     workspaceId: adminPlaneLawId
+    // #1466 — front-end (databricks_ui_api) private endpoint so the Console
+    // reaches the PE-locked workspace (publicNetworkAccess Disabled) privately
+    // instead of "403 Unauthorized network access to workspace".
+    privateEndpointSubnetId: network.outputs.privateEndpointSubnetId
+    databricksPrivateDnsZoneId: string(adminPlanePrivateDnsZoneIds.?databricks ?? '')
     complianceTags: complianceTags
   }
 }

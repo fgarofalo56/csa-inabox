@@ -53,10 +53,14 @@ param purviewEnabled = bool(readEnvironmentVariable('LOOM_PURVIEW_ENABLED', 'tru
 // to a short account name to REUSE an existing Purview instead.
 param loomPurviewAccount = readEnvironmentVariable('LOOM_PURVIEW_ACCOUNT', '')
 param purviewLocation = readEnvironmentVariable('LOOM_PURVIEW_LOCATION', '')
-// Information Protection + DLP — opt in after the post-deploy bootstrap
-// workflow grants the Graph AppRoles AND admin consent is issued.
-// Set LOOM_MIP_ENABLED / LOOM_DLP_ENABLED env vars to flip these on.
-param loomMipEnabled = bool(readEnvironmentVariable('LOOM_MIP_ENABLED', 'false'))
+// Information Protection + DLP — wired day-one. The post-deploy bootstrap
+// grants the Console UAMI the Graph AppRoles (the appRoleAssignment to the MI
+// IS the grant — no separate interactive admin-consent step is needed). Both
+// default ON so LOOM_MIP_ENABLED + LOOM_DLP_ENABLED reach the Console out of
+// the box; until the AppRoles land (deploy SP needs AppRoleAssignment.ReadWrite.All
+// — see docs/fiab/v3-tenant-bootstrap.md) the tabs render the honest 503 gate,
+// never an empty stub. Override with LOOM_MIP_ENABLED=false to suppress.
+param loomMipEnabled = bool(readEnvironmentVariable('LOOM_MIP_ENABLED', 'true'))
 // DLP defaults ON: the bootstrap grants the DLP AppRoles by default, so the
 // DLP tab is wired out of the box. Override with LOOM_DLP_ENABLED=false to gate it.
 param loomDlpEnabled = bool(readEnvironmentVariable('LOOM_DLP_ENABLED', 'true'))
