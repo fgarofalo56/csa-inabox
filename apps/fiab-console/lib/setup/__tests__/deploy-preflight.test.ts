@@ -212,10 +212,62 @@ describe('checkResourceGroupManagePermission (live shape, stubbed I/O)', () => {
   });
 
   it('hits the RG-scoped permissions endpoint', async () => {
-    const fetchMock = vi.fn(async () => new Response(JSON.stringify({ value: OWNER }), { status: 200 }));
+    const fetchMock = vi.fn((..._args: Parameters<typeof fetch>) =>
+      Promise.resolve(new Response(JSON.stringify({ value: OWNER }), { status: 200 })),
+    );
     vi.stubGlobal('fetch', fetchMock);
     await checkResourceGroupManagePermission(TARGET, RG, async () => 'tok');
     const url = String(fetchMock.mock.calls[0][0]);
     expect(url).toContain(`/subscriptions/${TARGET}/resourceGroups/${RG}/providers/Microsoft.Authorization/permissions`);
+  });
+
+  it('uses GET (Permissions - List For Resource Group is GET; POST 405s and would false-flag Reader-only)', async () => {
+    // Regression for the live multi-sub false "only Reader": the permissions list
+    // API is GET, not POST. The old POST returned a non-2xx that the route treated
+    // as a deny, so a verified RG-scoped Contributor was reported as needing repair.
+    const fetchMock = vi.fn((..._args: Parameters<typeof fetch>) =>
+      Promise.resolve(new Response(JSON.stringify({ value: CONTRIBUTOR }), { status: 200 })),
+    );
+    vi.stubGlobal('fetch', fetchMock);
+    await checkResourceGroupManagePermission(TARGET, RG, async () => 'tok');
+    const init = fetchMock.mock.calls[0][1] as RequestInit | undefined;
+    expect((init?.method ?? 'GET').toUpperCase()).toBe('GET');
+  });
+
+  it('evaluates the RG in the DLZ OWN subscription, not a hard-coded admin sub', async () => {
+    // Multi-sub: the DLZ lives in 363ef5d1…; the admin/hub sub is e093f4fd…. The
+    // scope must be built from the DLZ's own subscription id passed in.
+    const ADMIN_SUB = 'e093f4fd-5047-4ee4-968d-a56942c665f3';
+    const fetchMock = vi.fn((..._args: Parameters<typeof fetch>) =>
+      Promise.resolve(new Response(JSON.stringify({ value: CONTRIBUTOR }), { status: 200 })),
+    );
+    vi.stubGlobal('fetch', fetchMock);
+    const r = await checkResourceGroupManagePermission(TARGET, RG, async () => 'tok');
+    expect(r.canManage).toBe(true);
+    const url = String(fetchMock.mock.calls[0][0]);
+    expect(url).toContain(`/subscriptions/${TARGET}/`);
+    expect(url).not.toContain(ADMIN_SUB);
+  });
+
+  it('surfaces an ARM error (not a silent deny) so the route can report unknown', async () => {
+    vi.stubGlobal('fetch', vi.fn(async () => new Response('forbidden', { status: 403 })));
+    const r = await checkResourceGroupManagePermission(TARGET, RG, async () => 'tok');
+    expect(r.canManage).toBe(false);
+    expect(r.error).toMatch(/ARM permissions 403/);
+  });
+});
+
+describe('checkSubscriptionDeployPermission uses GET (regression)', () => {
+  const TARGET = '363ef5d1-0e77-4594-a530-f51af23dbf8c';
+  afterEach(() => vi.restoreAllMocks());
+
+  it('uses GET — Permissions - List is GET, POST 405s', async () => {
+    const fetchMock = vi.fn((..._args: Parameters<typeof fetch>) =>
+      Promise.resolve(new Response(JSON.stringify({ value: OWNER }), { status: 200 })),
+    );
+    vi.stubGlobal('fetch', fetchMock);
+    await checkSubscriptionDeployPermission(TARGET, async () => 'tok');
+    const init = fetchMock.mock.calls[0][1] as RequestInit | undefined;
+    expect((init?.method ?? 'GET').toUpperCase()).toBe('GET');
   });
 });
