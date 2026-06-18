@@ -13,10 +13,10 @@
  * Uses @xyflow/react — the same lib the network / deploy-planner canvases use.
  */
 
-import React, { useCallback, useMemo } from 'react';
+import React, { useCallback, useEffect, useMemo } from 'react';
 import {
   ReactFlow, ReactFlowProvider, Background, BackgroundVariant, Controls, MiniMap, Panel,
-  MarkerType, type Node, type Edge,
+  MarkerType, useReactFlow, useNodesInitialized, type Node, type Edge,
 } from '@xyflow/react';
 import '@xyflow/react/dist/style.css';
 import { makeStyles, tokens, Subtitle2, Body1 } from '@fluentui/react-components';
@@ -30,7 +30,13 @@ const STATE_STYLE: Record<DlzAttachState, { bg: string; border: string; label: s
 
 const useStyles = makeStyles({
   shell: {
-    position: 'relative', width: '100%', height: '100%', minHeight: '420px',
+    // Definite height — NOT `height: 100%`. The canvas is rendered inside an
+    // auto-height flex-column card, so a percentage height resolves against an
+    // indefinite parent and collapses to ~0; ReactFlow then measures the
+    // container as 0×0 at mount and `fitView` zooms the (small) hub+DLZ cluster
+    // to nothing → blank canvas. A definite height makes the container real on
+    // the first paint so the map (nodes, edges, Controls, MiniMap, legend) shows.
+    position: 'relative', width: '100%', height: '480px', minHeight: '420px',
     backgroundColor: tokens.colorNeutralBackground1,
     border: `1px solid ${tokens.colorNeutralStroke2}`,
     borderRadius: tokens.borderRadiusLarge, overflow: 'hidden',
@@ -54,6 +60,27 @@ const useStyles = makeStyles({
 });
 
 const HUB_ID = '__hub__';
+
+const FIT_VIEW_OPTIONS = { padding: 0.2, minZoom: 0.2, maxZoom: 1.5 } as const;
+
+/**
+ * Re-runs `fitView` once React Flow has measured every node's real dimensions
+ * (and again whenever the node set changes — e.g. another DLZ is attached). The
+ * `fitView` prop on <ReactFlow> only fits on the very first render, which can
+ * land before node sizes are known; this guarantees the hub+DLZ cluster is
+ * centered and zoomed-to-fit the moment the layout is real. Renders nothing.
+ */
+function FitViewOnInit({ deps }: { deps: unknown }): null {
+  const nodesInitialized = useNodesInitialized();
+  const { fitView } = useReactFlow();
+  useEffect(() => {
+    if (!nodesInitialized) return;
+    // rAF so the fit runs after the browser has laid the container out.
+    const raf = requestAnimationFrame(() => { void fitView(FIT_VIEW_OPTIONS); });
+    return () => cancelAnimationFrame(raf);
+  }, [nodesInitialized, fitView, deps]);
+  return null;
+}
 
 /** Lay the hub in the center and the DLZs around it in a ring. */
 function layout(hub: HubCoords | null, zones: LandingZone[]): { nodes: Node[]; edges: Edge[] } {
@@ -151,7 +178,8 @@ function CanvasInner({
   return (
     <div className={styles.shell}>
       <ReactFlowProvider>
-        <ReactFlow nodes={nodes} edges={edges} onNodeClick={onNodeClick} fitView minZoom={0.2} attributionPosition="bottom-left">
+        <ReactFlow nodes={nodes} edges={edges} onNodeClick={onNodeClick} fitView fitViewOptions={FIT_VIEW_OPTIONS} minZoom={0.2} attributionPosition="bottom-left">
+          <FitViewOnInit deps={nodes.length} />
           <Background variant={BackgroundVariant.Dots} gap={16} size={1} />
           <Controls showInteractive={false} />
           <Panel position="top-left">
