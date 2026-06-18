@@ -32,11 +32,17 @@ echo "Microsoft Graph SP object id: $GRAPH_SP_ID"
 # ids under the Graph SP's appRoles[] (type=Role), not oauth2PermissionScopes.
 #   InformationProtectionPolicy.Read.All -> MIP sensitivity-label policy reads
 #   Policy.Read.All                      -> DLP / tenant policy reads
+#   SecurityAlert.Read.All               -> DLP alerts/violations (alerts_v2)
+#   SecurityIncident.Read.All            -> Graph Security incidents; alerts_v2
+#                                           403 names this alongside SecurityAlert,
+#                                           so granting both clears the DLP/IP
+#                                           "Missing application roles" gate.
 declare -a ROLES=(
   "InformationProtectionPolicy.Read.All:19da66cb-0fb0-4390-b071-ebc76a349482"
   "Policy.Read.All:246dd0d5-5bd0-4def-940b-0421030a5b68"
   "SensitivityLabel.Evaluate:57f0b71b-a759-45a0-9a0f-cc099fbd9a44"
   "SecurityAlert.Read.All:bf394140-e372-4bf9-a898-299cfc7564e5"
+  "SecurityIncident.Read.All:45cc0394-e837-488b-a098-1918f48d186c"
 )
 
 TOKEN=$(az account get-access-token --resource https://graph.microsoft.com --query accessToken -o tsv)

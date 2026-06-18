@@ -1001,12 +1001,16 @@ jobs:
 
       - name: Grant MIP+DLP Graph AppRoles (Information Protection + DLP for /admin/security)
         run: |
-          # Grant the Console UAMI four Microsoft Graph application
-          # permissions required by /admin/security:
+          # Grant the Console UAMI five Microsoft Graph application
+          # permissions required by /admin/security + /governance DLP:
           #   - InformationProtectionPolicy.Read.All  (MIP labels + policies)
           #   - SensitivityLabel.Evaluate              (apply-label action)
           #   - Policy.Read.All                        (DLP policies + rules)
-          #   - SecurityAlert.Read.All                 (DLP alerts)
+          #   - SecurityAlert.Read.All                 (DLP alerts/violations via alerts_v2)
+          #   - SecurityIncident.Read.All              (Graph Security incidents — alerts_v2
+          #                                             403 names this alongside SecurityAlert;
+          #                                             granting both clears the DLP/IP
+          #                                             "Missing application roles" gate)
           #
           # Each grant is idempotent — the script re-runs cleanly. After
           # this job completes, a Tenant Administrator MUST click "Grant
@@ -1026,6 +1030,7 @@ jobs:
               "SensitivityLabel.Evaluate:57f0b71b-a759-45a0-9a0f-cc099fbd9a44" \
               "Policy.Read.All:246dd0d5-5bd0-4def-940b-0421030a5b68" \
               "SecurityAlert.Read.All:bf394140-e372-4bf9-a898-299cfc7564e5" \
+              "SecurityIncident.Read.All:45cc0394-e837-488b-a098-1918f48d186c" \
             ; do
               NAME="${ROLE%%:*}"
               APPROLE_ID="${ROLE##*:}"
@@ -1051,6 +1056,46 @@ jobs:
             echo "    Click 'Grant admin consent for <tenant>'"
             echo "    Without consent, /admin/security MIP+DLP tabs render the NotConfigured MessageBar."
           fi
+
+      - name: Ensure AI Search governance catalog index (loom-governance-items, day-one)
+        # Day-one gap closure (#1470): the Governance → Catalog page queries the
+        # `loom-governance-items` AI Search index; on a fresh deploy it doesn't
+        # exist yet, so the page 404'd ("index not found" → "Could not load
+        # catalog"). Create it here so the catalog loads on first sign-in. The
+        # search service is PE-locked + disableLocalAuth=true, so the script flips
+        # publicNetworkAccess on for the PUT window (AAD token), then restores it.
+        # The Console BFF also self-heals the index from inside the VNet on first
+        # load, so this step is belt-and-braces; non-fatal on failure.
+        if: always()
+        continue-on-error: true
+        env:
+          # BYO existing search service wins; else discover the deployed one.
+          EXISTING_AI_SEARCH_SERVICE: ${{ vars.LOOM_AI_SEARCH_SERVICE || '' }}
+          EXISTING_AI_SEARCH_RG: ${{ vars.LOOM_AI_SEARCH_RG || '' }}
+          # Sovereign data-plane host suffix (US Gov uses search.usgovcloudapi.net).
+          SEARCH_SUFFIX: ${{ vars.LOOM_SEARCH_SUFFIX || 'search.windows.net' }}
+        run: |
+          set -uo pipefail
+          SEARCH_SERVICE="${EXISTING_AI_SEARCH_SERVICE:-}"
+          SEARCH_RG="${EXISTING_AI_SEARCH_RG:-$ADMIN_RG}"
+          SEARCH_SUB="$ADMIN_SUB"
+          if [ -z "$SEARCH_SERVICE" ]; then
+            # ai-search.bicep names it search-loom-<uniqueString(rg)>. Discover in the admin RG.
+            SEARCH_SERVICE=$(az search service list -g "$ADMIN_RG" --subscription "$ADMIN_SUB" \
+              --query "[?starts_with(name,'search-loom')].name | [0]" -o tsv 2>/dev/null || true)
+            [ -z "$SEARCH_SERVICE" ] && SEARCH_SERVICE=$(az search service list -g "$ADMIN_RG" --subscription "$ADMIN_SUB" \
+              --query "[0].name" -o tsv 2>/dev/null || true)
+          fi
+          if [ -z "$SEARCH_SERVICE" ]; then
+            echo "::notice::No AI Search service in $ADMIN_RG (aiSearchEnabled=false or BYO not set) — catalog stays on the Cosmos fallback. Skipping index ensure."
+            exit 0
+          fi
+          echo "AI Search service: $SEARCH_SERVICE (rg=$SEARCH_RG)"
+          chmod +x scripts/csa-loom/ensure-search-index.sh
+          SEARCH_SERVICE="$SEARCH_SERVICE" SEARCH_RG="$SEARCH_RG" SUBSCRIPTION="$SEARCH_SUB" \
+            SEARCH_SUFFIX="$SEARCH_SUFFIX" \
+            bash scripts/csa-loom/ensure-search-index.sh \
+            || echo "::warning::Governance index ensure incomplete — the Console BFF self-heals it on first catalog load."
 
       - name: Provision SCC labels + DLP sidecar (label, label-policy & DLP CRUD)
         if: always()
@@ -1089,29 +1134,88 @@ jobs:
             bash scripts/csa-loom/provision-scc-labels-sidecar.sh || true
           fi
 
-      - name: Publish Govern posture-refresh Function code (if the app exists)
+      - name: Deploy + wire Govern posture-refresh Function (day-one)
         if: always()
+        continue-on-error: true
         run: |
-          # Publishes the azure-functions/posture-refresh code to the Function
-          # App provisioned by azure-functions/posture-refresh/deploy/main.bicep.
-          # Pre-computes the Govern → Admin view (F2) posture aggregates into the
-          # Cosmos posture-aggregates container every 5 min. The Console BFF still
-          # computes live values, so this is a latency pre-warm, not a hard
-          # dependency — the step is best-effort (skips cleanly if the app or the
-          # func CLI is absent).
+          # Day-one gap closure (#1470): the Govern tab's on-open posture refresh
+          # needs the posture-refresh Function (LOOM_POSTURE_FUNCTION_URL was empty
+          # → "On-open refresh not provisioned" gate). Provision it END-TO-END here
+          # rather than in the main deploy (the Function needs the Cosmos endpoint,
+          # which would create an admin-plane→DLZ ordering coupling): (1) DEPLOY the
+          # bicep into the admin RG if the app is absent, (2) PUBLISH the code,
+          # (3) store the host key in Key Vault (loom-posture-function-key), and
+          # (4) set LOOM_POSTURE_FUNCTION_URL + the LOOM_POSTURE_FUNCTION_KEY
+          # secretRef on the Console app. The Console BFF still computes posture LIVE
+          # from Cosmos, so this is a latency pre-warm + on-open recompute, never a
+          # hard dependency. Every sub-step is best-effort; the honest gate in
+          # app/api/governance/govern/refresh/route.ts remains until the URL lands.
           set +e
-          POSTURE_FUNC=$(az functionapp list --query "[?starts_with(name, 'func-loom-posture')].name | [0]" -o tsv 2>/dev/null)
+          POSTURE_FUNC=$(az functionapp list -g "$ADMIN_RG" --subscription "$ADMIN_SUB" --query "[?starts_with(name, 'func-loom-posture')].name | [0]" -o tsv 2>/dev/null)
+          # Resolve the Loom Cosmos account (admin RG first, then DLZ) for the bicep params.
+          COSMOS_ACCT=$(az cosmosdb list --subscription "$ADMIN_SUB" -g "$ADMIN_RG" --query "[?starts_with(name,'cosmos-loom')].name | [0]" -o tsv 2>/dev/null)
+          COSMOS_RG="$ADMIN_RG"; COSMOS_SUB="$ADMIN_SUB"
+          if [ -z "$COSMOS_ACCT" ]; then
+            COSMOS_ACCT=$(az cosmosdb list --subscription "$DLZ_SUB" -g "$DLZ_RG" --query "[?starts_with(name,'cosmos-loom')].name | [0]" -o tsv 2>/dev/null)
+            COSMOS_RG="$DLZ_RG"; COSMOS_SUB="$DLZ_SUB"
+          fi
           if [ -z "$POSTURE_FUNC" ]; then
-            echo "  No posture-refresh Function App found — skipping (deploy azure-functions/posture-refresh/deploy/main.bicep to enable the pre-compute path)."
+            if [ -z "$COSMOS_ACCT" ]; then
+              echo "::warning::No Loom Cosmos account found in $ADMIN_RG or $DLZ_RG — cannot deploy posture-refresh. Govern stays on the live-compute path (honest gate). Re-run after Cosmos exists."
+            else
+              COSMOS_ENDPOINT=$(az cosmosdb show -n "$COSMOS_ACCT" -g "$COSMOS_RG" --subscription "$COSMOS_SUB" --query documentEndpoint -o tsv 2>/dev/null)
+              echo "Deploying posture-refresh Function into $ADMIN_RG (cosmos=$COSMOS_ACCT)…"
+              az deployment group create --subscription "$ADMIN_SUB" -g "$ADMIN_RG" \
+                --name posture-refresh-$(date +%s) \
+                -f azure-functions/posture-refresh/deploy/main.bicep \
+                -p loomCosmosEndpoint="$COSMOS_ENDPOINT" \
+                   loomCosmosAccountName="$COSMOS_ACCT" \
+                   loomCosmosAccountResourceGroup="$COSMOS_RG" \
+                -o none \
+                && echo "  posture-refresh deployed." \
+                || echo "::warning::posture-refresh bicep deploy failed (deploy SP rights on $ADMIN_RG? cross-RG Cosmos RBAC?) — re-run; Govern stays on live-compute."
+              POSTURE_FUNC=$(az functionapp list -g "$ADMIN_RG" --subscription "$ADMIN_SUB" --query "[?starts_with(name, 'func-loom-posture')].name | [0]" -o tsv 2>/dev/null)
+            fi
+          fi
+          if [ -z "$POSTURE_FUNC" ]; then
+            echo "  No posture-refresh Function App (deploy step did not yield one) — skipping publish + wiring."
             exit 0
           fi
-          if ! command -v func >/dev/null 2>&1; then
-            echo "  Azure Functions Core Tools (func) not installed on this runner — skipping code publish for $POSTURE_FUNC."
-            exit 0
+          echo "posture-refresh Function App: $POSTURE_FUNC"
+          # Publish code (best-effort; needs func Core Tools on the runner).
+          if command -v func >/dev/null 2>&1; then
+            echo "Publishing posture-refresh code to $POSTURE_FUNC ..."
+            ( cd azure-functions/posture-refresh && func azure functionapp publish "$POSTURE_FUNC" --python ) \
+              || echo "  publish non-zero — re-run: cd azure-functions/posture-refresh && func azure functionapp publish $POSTURE_FUNC --python"
+          else
+            echo "  func Core Tools not on runner — skipping code publish (re-run from a runner that has it)."
           fi
-          echo "Publishing posture-refresh code to $POSTURE_FUNC ..."
-          ( cd azure-functions/posture-refresh && func azure functionapp publish "$POSTURE_FUNC" --python ) || \
-            echo "  posture-refresh publish returned non-zero — re-run manually: cd azure-functions/posture-refresh && func azure functionapp publish $POSTURE_FUNC --python"
+          # Resolve the Function base URL + host key; store the key in Key Vault.
+          FUNC_HOST=$(az functionapp show -n "$POSTURE_FUNC" -g "$ADMIN_RG" --subscription "$ADMIN_SUB" --query defaultHostName -o tsv 2>/dev/null)
+          FUNC_URL="https://${FUNC_HOST}"
+          HOST_KEY=$(az functionapp keys list -n "$POSTURE_FUNC" -g "$ADMIN_RG" --subscription "$ADMIN_SUB" --query "functionKeys.default || masterKey" -o tsv 2>/dev/null)
+          KV_NAME=$(az keyvault list -g "$ADMIN_RG" --subscription "$ADMIN_SUB" --query "[?starts_with(name,'kv-loom')].name | [0]" -o tsv 2>/dev/null)
+          [ -z "$KV_NAME" ] && KV_NAME=$(az keyvault list -g "$ADMIN_RG" --subscription "$ADMIN_SUB" --query "[0].name" -o tsv 2>/dev/null)
+          if [ -n "$HOST_KEY" ] && [ -n "$KV_NAME" ]; then
+            # KV is private — flip public for the write window, restore on exit.
+            KV_PNA=$(az keyvault show -n "$KV_NAME" --query "properties.publicNetworkAccess" -o tsv 2>/dev/null || echo Enabled)
+            if [ "$KV_PNA" != "Enabled" ]; then
+              az keyvault update -n "$KV_NAME" --public-network-access Enabled --default-action Allow -o none 2>/dev/null; sleep 15
+            fi
+            az keyvault secret set --vault-name "$KV_NAME" --name loom-posture-function-key --value "$HOST_KEY" -o none 2>/dev/null \
+              && echo "  Stored host key in KV $KV_NAME/loom-posture-function-key." \
+              || echo "::warning::Could not write loom-posture-function-key to $KV_NAME — the URL still works without the key if the Function allows anonymous; else set the secret manually."
+            if [ "$KV_PNA" != "Enabled" ]; then
+              az keyvault update -n "$KV_NAME" --public-network-access Disabled --default-action Deny -o none 2>/dev/null
+            fi
+          fi
+          # Set the URL on the Console (and the key secretRef if a KV secret exists).
+          if [ -n "$FUNC_HOST" ]; then
+            az containerapp update -g "$ADMIN_RG" -n loom-console \
+              --set-env-vars "LOOM_POSTURE_FUNCTION_URL=$FUNC_URL" -o none 2>/dev/null \
+              && echo "  Wired LOOM_POSTURE_FUNCTION_URL=$FUNC_URL on loom-console." \
+              || echo "::warning::Could not set LOOM_POSTURE_FUNCTION_URL on loom-console — set it manually (admin-plane param loomPostureFunctionUrl)."
+          fi
 
       - name: Grant Identity Picker Graph AppRoles (User/Group/Application Read.All for the reusable picker)
         run: |

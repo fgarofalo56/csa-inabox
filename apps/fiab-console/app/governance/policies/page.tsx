@@ -519,8 +519,9 @@ export default function PoliciesPage() {
             <MessageBarBody>
               <MessageBarTitle>DLP not wired in this deployment</MessageBarTitle>
               {vGate} Set <code>LOOM_DLP_ENABLED=true</code> on the Console Container App and grant the
-              <code> SecurityAlert.Read.All</code> Graph AppRole (post-deploy bootstrap
-              <code> grant-graph-approles.sh</code>).
+              <code> SecurityAlert.Read.All</code> + <code>SecurityIncident.Read.All</code> Graph AppRoles
+              (post-deploy bootstrap <code>grant-graph-approles.sh</code>), then have a Tenant Admin grant
+              admin consent.
             </MessageBarBody>
           </MessageBar>
         )}

@@ -97,6 +97,7 @@ export const VALUE_HINT: Record<string, string> = {
   LOOM_EVENTHUB_NAMESPACE: '<eventhubs-namespace>',
   LOOM_ADLS_ACCOUNT: '<adls-gen2-account-name>',
   LOOM_AI_SEARCH_SERVICE: '<ai-search-service-name>',
+  LOOM_POSTURE_FUNCTION_URL: 'https://func-loom-posture-refresh-<hash>.azurewebsites.net',
   LOOM_AOAI_ENDPOINT: 'https://<aoai-or-foundry>.openai.azure.com/',
   LOOM_AOAI_DEPLOYMENT: 'gpt-4o-mini',
   LOOM_LOG_ANALYTICS_RESOURCE_ID: '/subscriptions/<sub>/resourceGroups/<rg>/providers/Microsoft.OperationalInsights/workspaces/<law>',
@@ -330,6 +331,13 @@ export const ENV_CHECKS: EnvSpec[] = [
     remediation: 'Set LOOM_ADF_FACTORY (+ LOOM_ADF_RG / LOOM_ADF_SUBSCRIPTION_ID) to enable the ADF-CDC mirrored-database backend (source SQL → ADLS Bronze).',
     provisionedBy: 'modules/landing-zone (ADF factory) → apps[] env',
     role: 'Data Factory Contributor (UAMI) on the factory',
+  },
+  {
+    id: 'svc-posture-refresh', category: 'azure-services', title: 'Govern posture-refresh Function (on-open recompute)', severity: 'optional',
+    required: ['LOOM_POSTURE_FUNCTION_URL'], warnOnMiss: true,
+    remediation: 'Set LOOM_POSTURE_FUNCTION_URL to the posture-refresh Function base URL so the Govern tab recomputes data-owner posture on tab-open. Without it the Govern view still renders posture computed LIVE from Cosmos — only the on-open pre-warm is gated. The post-deploy bootstrap deploys azure-functions/posture-refresh/deploy/main.bicep, publishes the code, stores the host key in Key Vault (loom-posture-function-key → LOOM_POSTURE_FUNCTION_KEY secretRef), and sets this URL on the Console.',
+    provisionedBy: 'azure-functions/posture-refresh/deploy/main.bicep → admin-plane param loomPostureFunctionUrl (apps[] env) + csa-loom-post-deploy-bootstrap "Govern posture-refresh Function" step',
+    role: 'Cosmos DB Built-in Data Contributor (Function MI) on the Loom Cosmos account',
   },
   // ── enrichment ──
   {
