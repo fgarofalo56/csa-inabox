@@ -28,13 +28,14 @@ import {
   makeStyles, tokens,
 } from '@fluentui/react-components';
 import {
-  Add24Regular, Delete20Regular, ArrowSync24Regular, Info20Regular,
+  Add24Regular, Delete20Regular, ArrowSync24Regular,
   MoreHorizontal20Regular, Settings20Regular, BranchFork20Regular, Folder20Regular,
   ArrowMove20Regular, Cloud20Regular,
 } from '@fluentui/react-icons';
 import { AdminShell } from '@/lib/components/admin-shell';
 import { Section, Toolbar } from '@/lib/components/ui/section';
 import { useAdminTabStyles } from '@/lib/components/ui/admin-tab-styles';
+import { SectionExplainer } from '@/lib/components/ui/learn-popover';
 import { LoomDataTable, type LoomColumn } from '@/lib/components/ui/loom-data-table';
 import { DomainSettingsPane, type DomainRecord } from '@/lib/panes/domain-settings-pane';
 import { DomainImageChip } from '@/lib/components/domain-image-presets';
@@ -54,7 +55,6 @@ type PurviewStatus =
   | { configured: false; gated: boolean; hint: string };
 
 const useStyles = makeStyles({
-  explainer: { display: 'flex', gap: tokens.spacingHorizontalM, alignItems: 'flex-start' },
   nameCell: { display: 'flex', alignItems: 'center', gap: '8px', minWidth: 0 },
   createGrid: { display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalM },
   dialogIntro: { marginBottom: tokens.spacingVerticalM },
@@ -290,17 +290,14 @@ export default function DomainsPage() {
   return (
     <AdminShell sectionTitle="Domains">
       <Section title="What is a domain?">
-        <div className={s.explainer}>
-          <Info20Regular className={a.infoIcon} />
-          <Body1 className={a.explainerText}>
-            A domain is a governance-scoped, labeled grouping of data products and workspaces —
-            Finance, Operations, Mission-Ops. It carries <strong>admins</strong>, contributors, a description,
-            an image, and delegated settings, and is the unit Loom uses to organize the tenant&apos;s data estate
-            (the same concept Microsoft Purview calls a <em>business domain</em> and Fabric calls a <em>domain</em>).
-            Workspaces tag themselves to it via their <code> domain</code> field. Open a domain&apos;s actions to
-            configure its settings, assign workspaces, or create a subdomain.
-          </Body1>
-        </div>
+        <SectionExplainer>
+          A domain is a governance-scoped, labeled grouping of data products and workspaces —
+          Finance, Operations, Mission-Ops. It carries <strong>admins</strong>, contributors, a description,
+          an image, and delegated settings, and is the unit Loom uses to organize the tenant&apos;s data estate
+          (the same concept Microsoft Purview calls a <em>business domain</em> and Fabric calls a <em>domain</em>).
+          Workspaces tag themselves to it via their <code> domain</code> field. Open a domain&apos;s actions to
+          configure its settings, assign workspaces, or create a subdomain.
+        </SectionExplainer>
       </Section>
 
       {purview && !purview.configured && (
