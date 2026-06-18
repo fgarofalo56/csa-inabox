@@ -21,7 +21,7 @@
 import { clientFetch } from '@/lib/client-fetch';
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import {
-  Spinner, Badge, Caption1, Body1, Input, Textarea, Button,
+  Spinner, Badge, Caption1, Body1, Input, Button,
   MessageBar, MessageBarBody, MessageBarTitle, Checkbox, Dropdown, Option,
   Dialog, DialogSurface, DialogBody, DialogTitle, DialogContent, DialogActions,
   Menu, MenuTrigger, MenuPopover, MenuList, MenuItem,
@@ -38,7 +38,7 @@ import { useAdminTabStyles } from '@/lib/components/ui/admin-tab-styles';
 import { LoomDataTable, type LoomColumn } from '@/lib/components/ui/loom-data-table';
 import { DomainSettingsPane, type DomainRecord } from '@/lib/panes/domain-settings-pane';
 import { DomainImageChip } from '@/lib/components/domain-image-presets';
-import { DomainImageGallery } from '@/lib/components/domain-image-gallery';
+import { CreateDomainDialog } from '@/lib/domains/create-domain-dialog';
 
 interface Domain extends DomainRecord {
   createdAt: string; createdBy: string; purviewDomainId?: string;
@@ -80,15 +80,10 @@ export default function DomainsPage() {
   const [q, setQ] = useState('');
   const [actionErr, setActionErr] = useState<string | null>(null);
 
-  // Create dialog state (also used for subdomains via createParentId).
+  // Create dialog state. The themed CreateDomainDialog handles both the
+  // library/custom create flow and (with a pre-selected parent) "New subdomain".
   const [createOpen, setCreateOpen] = useState(false);
   const [createParentId, setCreateParentId] = useState<string | null>(null);
-  const [newId, setNewId] = useState('');
-  const [newName, setNewName] = useState('');
-  const [newDesc, setNewDesc] = useState('');
-  const [newAdmins, setNewAdmins] = useState('');
-  const [newImageKey, setNewImageKey] = useState('');
-  const [creating, setCreating] = useState(false);
 
   // Settings pane.
   const [selected, setSelected] = useState<Domain | null>(null);
@@ -121,37 +116,8 @@ export default function DomainsPage() {
 
   function openCreate(parentId: string | null) {
     setCreateParentId(parentId);
-    setNewId(''); setNewName(''); setNewDesc(''); setNewAdmins(''); setNewImageKey('');
     setActionErr(null);
     setCreateOpen(true);
-  }
-
-  async function create() {
-    if (!newId.trim() || !newName.trim()) { setActionErr('id and name required'); return; }
-    setCreating(true); setActionErr(null);
-    try {
-      const r = await clientFetch('/api/admin/domains', {
-        method: 'POST', headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({
-          id: newId.trim(), name: newName.trim(),
-          description: newDesc.trim() || undefined,
-          admins: newAdmins.trim() || undefined,
-          parentId: createParentId || undefined,
-        }),
-      });
-      const j = await r.json();
-      if (!j.ok) { setActionErr(j.error || `HTTP ${r.status}`); return; }
-      // Persist image selection if one was chosen (POST doesn't take imageKey).
-      if (newImageKey && j.domain?.id) {
-        await clientFetch(`/api/admin/domains?id=${encodeURIComponent(j.domain.id)}`, {
-          method: 'PATCH', headers: { 'content-type': 'application/json' },
-          body: JSON.stringify({ imageKey: newImageKey }),
-        }).catch(() => {});
-      }
-      setCreateOpen(false);
-      await load();
-    } catch (e: any) { setActionErr(e?.message || String(e)); }
-    finally { setCreating(false); }
   }
 
   async function remove(id: string) {
@@ -216,7 +182,7 @@ export default function DomainsPage() {
       key: 'name', label: 'Name', width: 220, getValue: (d) => d.name,
       render: (d) => (
         <span className={s.nameCell}>
-          <DomainImageChip imageKey={d.imageKey} fallbackColor={d.color} size={28} />
+          <DomainImageChip imageKey={d.imageKey} icon={d.icon} themeColor={d.themeColor} fallbackColor={d.color} size={28} />
           <strong>{d.name}</strong>
           {d.parentId && <Badge appearance="outline" size="small">subdomain</Badge>}
         </span>
@@ -302,8 +268,6 @@ export default function DomainsPage() {
     },
   ], [s, a, purviewNames, nameById, isTenantAdmin]); // eslint-disable-line react-hooks/exhaustive-deps
 
-  const parentName = createParentId ? (nameById[createParentId] || createParentId) : null;
-
   return (
     <AdminShell sectionTitle="Domains">
       <Section title="What is a domain?">
@@ -376,58 +340,15 @@ export default function DomainsPage() {
         )}
       </Section>
 
-      {/* Create / New subdomain dialog */}
-      <Dialog open={createOpen} onOpenChange={(_, d) => setCreateOpen(d.open)}>
-        <DialogSurface>
-          <DialogBody>
-            <DialogTitle>{createParentId ? `New subdomain of ${parentName}` : 'Create new domain'}</DialogTitle>
-            <DialogContent>
-              <div className={s.createGrid}>
-                <div>
-                  <Caption1 className={a.fieldLabel}>ID (lowercase, hyphens)</Caption1>
-                  <Input value={newId} onChange={(_, d) => setNewId(d.value)} placeholder="e.g. finance" className={a.fullWidth} />
-                </div>
-                <div>
-                  <Caption1 className={a.fieldLabel}>Name (required)</Caption1>
-                  <Input value={newName} onChange={(_, d) => setNewName(d.value)} placeholder={createParentId ? 'Subdomain name' : 'Finance'} className={a.fullWidth} />
-                </div>
-                {!createParentId && (
-                  <div>
-                    <Caption1 className={a.fieldLabel}>Domain admins (optional, comma-separated)</Caption1>
-                    <Input
-                      value={newAdmins}
-                      onChange={(_, d) => setNewAdmins(d.value)}
-                      placeholder="alice@contoso.com, fin-admins@contoso.com"
-                      className={a.fullWidth}
-                    />
-                  </div>
-                )}
-                <div>
-                  <Caption1 className={a.fieldLabel}>Description</Caption1>
-                  <Textarea value={newDesc} onChange={(_, d) => setNewDesc(d.value)} resize="vertical" className={a.fullWidth} />
-                </div>
-                {!createParentId && (
-                  <div>
-                    <Caption1 className={a.fieldLabel}>Image</Caption1>
-                    <DomainImageGallery value={newImageKey} onChange={setNewImageKey} />
-                  </div>
-                )}
-                {createParentId && (
-                  <Caption1 className={a.muted}>
-                    Subdomains have general settings only and inherit their parent domain&apos;s admins.
-                  </Caption1>
-                )}
-              </div>
-            </DialogContent>
-            <DialogActions>
-              <Button appearance="secondary" onClick={() => setCreateOpen(false)}>Cancel</Button>
-              <Button appearance="primary" onClick={create} disabled={creating || !newId.trim() || !newName.trim()}>
-                {creating ? 'Creating…' : 'Create'}
-              </Button>
-            </DialogActions>
-          </DialogBody>
-        </DialogSurface>
-      </Dialog>
+      {/* Create new domain (Federal agency library + custom) / New subdomain */}
+      <CreateDomainDialog
+        open={createOpen}
+        onOpenChange={setCreateOpen}
+        existing={(domains || []).map((d) => ({ id: d.id, name: d.name, parentId: d.parentId }))}
+        initialParentId={createParentId}
+        initialMode={createParentId ? 'custom' : undefined}
+        onCreated={load}
+      />
 
       {/* Settings side pane */}
       <DomainSettingsPane

@@ -8,6 +8,7 @@
  * screenshot harnesses. Colors come from the Fluent palette.
  */
 import * as React from 'react';
+import { DomainGlyph } from '@/lib/domains/domain-icons';
 
 /** 16 Fluent-palette colors for the "Color" section of the gallery. */
 export const DOMAIN_COLOR_SWATCHES = [
@@ -81,13 +82,24 @@ export function renderDomainIcon(key: string, size = 24): React.ReactElement | n
  * without it we fall back to a neutral image glyph so the row still renders.
  */
 export function DomainImageChip({
-  imageKey, fallbackColor, size = 32, blobUrl,
+  imageKey, fallbackColor, size = 32, blobUrl, icon, themeColor,
 }: {
   imageKey?: string;
   fallbackColor?: string;
   size?: number;
   blobUrl?: string;
+  /** Fluent icon NAME — takes precedence over imageKey/color when set. */
+  icon?: string;
+  /** Theme color (hex) paired with `icon`. */
+  themeColor?: string;
 }): React.ReactElement {
+  // Preferred path: a Fluent icon name + theme color on the domain model. This
+  // is what seeded domains and library-created domains carry, so they render as
+  // an icon-in-colored-chip rather than a plain colored square. An explicit
+  // imageKey (chosen in the Image tab) still wins so existing selections stick.
+  if (icon && !imageKey) {
+    return <DomainGlyph icon={icon} color={themeColor || fallbackColor} size={size} />;
+  }
   const base: React.CSSProperties = {
     width: size, height: size, borderRadius: Math.round(size / 4), flexShrink: 0,
     display: 'inline-flex', alignItems: 'center', justifyContent: 'center',

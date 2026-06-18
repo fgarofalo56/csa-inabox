@@ -60,6 +60,10 @@ export interface DomainRecord {
   name: string;
   description?: string;
   color?: string;
+  /** Fluent icon name (lib/domains/domain-icons) — domain glyph. */
+  icon?: string;
+  /** Theme color (hex) paired with `icon`. */
+  themeColor?: string;
   owners?: string[];
   admins?: string[];
   contributors?: DomainContributors;
@@ -314,7 +318,7 @@ function ImageTab({ domain, onSaved }: { domain: DomainRecord; onSaved: (d: Doma
     <div className={styles.tabPanel}>
       <Body1>Choose an image or color to represent this domain in the catalog domain selector.</Body1>
       <div className={styles.previewRow}>
-        <DomainImageChip imageKey={imageKey} fallbackColor={domain.color} size={64} />
+        <DomainImageChip imageKey={imageKey} icon={domain.icon} themeColor={domain.themeColor} fallbackColor={domain.color} size={64} />
         <Caption1 className={styles.note}>Current selection preview</Caption1>
       </div>
       <DomainImageGallery value={imageKey} onChange={setImageKey} />
