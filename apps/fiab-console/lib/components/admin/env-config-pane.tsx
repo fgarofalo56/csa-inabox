@@ -37,7 +37,7 @@ interface EditableEnvVar {
   label: string; valueHint: string; secret: boolean; required: boolean; il5Restricted?: boolean;
   provisionedBy?: string; role?: string; derived?: boolean;
 }
-interface CurrentVal { set: boolean; status?: 'set' | 'derived' | 'unset'; value?: string; secret: boolean }
+interface CurrentVal { set: boolean; status?: 'set' | 'derived' | 'satisfied' | 'unset'; satisfiedByAlias?: boolean; value?: string; secret: boolean }
 interface EnvConfigGet {
   ok: boolean; error?: string;
   editable: EditableEnvVar[];
@@ -110,14 +110,23 @@ export function EnvConfigPane() {
 
   const dirtyKeys = useMemo(() => Object.keys(edits).filter((k) => edits[k]?.trim()), [edits]);
 
+  // A key's requirement is met when it's directly set, bicep-derived, OR an
+  // `anyOf` sibling/alias is set (satisfiedByAlias). Only a truly unmet key
+  // counts as a gap — this is what stops the false "critical not set" for the
+  // either/or vars (e.g. GROUP_ID when OID is set).
+  const isSatisfied = useCallback((key: string) => {
+    const c = data?.current[key];
+    return !!c && (c.set || c.status === 'derived' || c.status === 'satisfied' || !!c.satisfiedByAlias);
+  }, [data]);
+
   const coverage = useMemo(() => {
     if (!data) return { set: 0, total: 0, missingCritical: 0 };
     const set = data.editable.filter((e) => data.current[e.key]?.set).length;
     const missingCritical = data.editable.filter(
-      (e) => e.severity === 'critical' && !data.current[e.key]?.set,
+      (e) => e.severity === 'critical' && !isSatisfied(e.key),
     ).length;
     return { set, total: data.editable.length, missingCritical };
-  }, [data]);
+  }, [data, isSatisfied]);
 
   const save = useCallback(async () => {
     if (dirtyKeys.length === 0) return;
@@ -161,7 +170,7 @@ export function EnvConfigPane() {
   const filtersActive = q.length > 0 || unsetOnly || criticalOnly;
   const matches = (e: EditableEnvVar) => {
     if (criticalOnly && e.severity !== 'critical') return false;
-    if (unsetOnly && data.current[e.key]?.set) return false;
+    if (unsetOnly && isSatisfied(e.key)) return false;
     if (q && !(e.key.toLowerCase().includes(q) || e.label.toLowerCase().includes(q))) return false;
     return true;
   };
@@ -394,9 +403,11 @@ export function EnvConfigPane() {
                       {e.secret && <Badge appearance="tint" size="small" color="brand">secret</Badge>}
                       {cur?.set
                         ? <Badge appearance="tint" size="small" color="success" icon={<CheckmarkCircle24Filled />}>set</Badge>
-                        : (e.derived
-                          ? <Badge appearance="tint" size="small" color="informative" icon={<Info16Regular />}>derived</Badge>
-                          : <Badge appearance="tint" size="small" color="warning" icon={<Warning24Filled />}>not set</Badge>)}
+                        : (cur?.status === 'satisfied' || cur?.satisfiedByAlias)
+                          ? <Badge appearance="tint" size="small" color="success" icon={<CheckmarkCircle24Filled />}>satisfied (alias set)</Badge>
+                          : (e.derived
+                            ? <Badge appearance="tint" size="small" color="informative" icon={<Info16Regular />}>derived</Badge>
+                            : <Badge appearance="tint" size="small" color="warning" icon={<Warning24Filled />}>not set</Badge>)}
                       {modified && <Badge appearance="filled" size="small" color="brand" icon={<Edit16Filled />}>modified</Badge>}
                       {disabledIl5 && <Badge appearance="tint" size="small" color="danger">restricted in {data.cloud}</Badge>}
                     </div>
@@ -407,8 +418,9 @@ export function EnvConfigPane() {
                       </Caption1>
                     )}
                     {/* When unset/derived, name the exact bicep module + role that
-                        provisions this var (the "how to fill it" acceptance row). */}
-                    {!cur?.set && (e.provisionedBy || e.role) && (
+                        provisions this var (the "how to fill it" acceptance row).
+                        Suppressed when an alias sibling already satisfies it. */}
+                    {!cur?.set && !(cur?.status === 'satisfied' || cur?.satisfiedByAlias) && (e.provisionedBy || e.role) && (
                       <div style={{ marginTop: 4, display: 'grid', gap: 2 }}>
                         {e.provisionedBy && (
                           <Caption1 style={{ display: 'flex', alignItems: 'flex-start', gap: 4, color: tokens.colorNeutralForeground3 }}>

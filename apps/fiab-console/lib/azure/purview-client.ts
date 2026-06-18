@@ -1908,6 +1908,7 @@ export interface PurviewAuditQueryOpts {
   operationType?: string; // e.g. 'ClassificationAdded' — API "operationType"
   guid?: string;          // asset GUID — API "guid"
   keywords?: string;      // free-text — API "keywords"
+  category?: string;      // REQUIRED by the API — default 'Asset' (see queryAuditLog)
   pageSize?: number;      // default 200, max 1000
   continuationToken?: string;
 }
@@ -1953,6 +1954,12 @@ export async function queryAuditLog(opts: PurviewAuditQueryOpts): Promise<Purvie
   if (!token?.token) throw new Error('Failed to acquire Purview data-plane token');
 
   const payload: Record<string, unknown> = {
+    // `category` is REQUIRED by the Data Map audit/query API — omitting it (or
+    // sending it empty) yields "Illegal argument: Category should not be empty".
+    // 'Asset' is the documented default and covers the audit-grid use case
+    // (every Learn example sets category:"Asset").
+    // https://learn.microsoft.com/purview/data-map-history#query-audit-log-using-the-rest-api
+    category: opts.category || 'Asset',
     sortBy: 'CreationTime',
     sortOrder: 'Descending',
     pageSize: Math.min(1000, Math.max(1, opts.pageSize ?? 200)),

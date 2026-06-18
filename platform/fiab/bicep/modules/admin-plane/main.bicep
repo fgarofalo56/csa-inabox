@@ -2537,6 +2537,10 @@ module appDeployments 'app-deployments.bicep' = if (containerPlatform == 'contai
             // other boundaries pass through verbatim (Commercial | GCC | GCC-High).
             { name: 'LOOM_CLOUD', value: boundary == 'IL5' ? 'GCC-High' : boundary }
             { name: 'AZURE_TENANT_ID', value: loomMsalTenantId }
+            // LOOM_MSAL_TENANT_ID is an alias of AZURE_TENANT_ID (self-audit anyOf:
+            // AZURE_TENANT_ID | LOOM_MSAL_TENANT_ID). Set it on day one so the
+            // env-config surface shows it satisfied rather than a false gap.
+            { name: 'LOOM_MSAL_TENANT_ID', value: loomMsalTenantId }
             { name: 'LOOM_COSMOS_ENDPOINT', value: !empty(loomCosmosAccount) ? 'https://${loomCosmosAccount}.documents.${environment().suffixes.storage == 'core.usgovcloudapi.net' ? 'azure.us' : 'azure.com'}:443/' : '' }
             { name: 'LOOM_COSMOS_DATABASE', value: 'loom' }
             // Direct-Lake-shim (Azure-native parity for Fabric Direct Lake).
@@ -3162,6 +3166,12 @@ module appDeployments 'app-deployments.bicep' = if (containerPlatform == 'contai
             // otherwise fall back to the shared Hub's project (ai-foundry.bicep).
             // Empty when neither is deployed.
             { name: 'LOOM_FOUNDRY_PROJECT_ENDPOINT', value: agentFoundryEnabled ? agentFoundry!.outputs.projectEndpoint : ((aiFoundryEnabled && empty(existingFoundryAccountName)) ? aiFoundry!.outputs.projectEndpoint : '') }
+            // Foundry ACCOUNT-level endpoint (alias of the project endpoint for
+            // self-audit's anyOf: LOOM_AOAI_ENDPOINT | LOOM_FOUNDRY_PROJECT_ENDPOINT
+            // | LOOM_FOUNDRY_ENDPOINT). Sourced from the dedicated Agent Service
+            // account (aoaiEndpoint) when present, else the shared Foundry hub's
+            // AI Services account endpoint. Empty when neither is deployed.
+            { name: 'LOOM_FOUNDRY_ENDPOINT',         value: agentFoundryEnabled ? agentFoundry!.outputs.aoaiEndpoint : ((aiFoundryEnabled && empty(existingFoundryAccountName)) ? aiFoundry!.outputs.aiServicesEndpoint : (!empty(existingFoundryAccountName) ? byoFoundryEndpoint : '')) }
             { name: 'LOOM_FOUNDRY_PROJECT_ID',       value: agentFoundryEnabled ? agentFoundry!.outputs.projectId : ((aiFoundryEnabled && empty(existingFoundryAccountName)) ? aiFoundry!.outputs.projectId : '') }
             { name: 'LOOM_FOUNDRY_PROJECT_NAME',     value: agentFoundryEnabled ? agentFoundry!.outputs.projectNameOut : '' }
             // AOAI inference endpoint + model deployment names for the Agent

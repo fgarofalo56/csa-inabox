@@ -1570,6 +1570,12 @@ module dlzAttachHubConsoleEnv 'modules/landing-zone/hub-console-dlz-env.bicep' =
     // dlz-attach deploys main.bicep at the DLZ subscription scope, so the DLZ sub
     // is the deployment subscription. The console runs in the hub admin sub.
     dlzSubscriptionId: subscription().subscriptionId
+    // Databricks workspace URL + ADF factory name from the attached DLZ. Empty
+    // when the respective service is disabled (the var is then skipped and the
+    // editor honest-gates). These re-point the console's Databricks/ADF env at
+    // the cross-sub DLZ rather than the admin/single-sub defaults baked at deploy.
+    dlzDatabricksWorkspaceUrl: loomDatabricksEnabled ? dlzAttach!.outputs.databricksWorkspaceUrl : ''
+    dlzAdfFactoryName: loomDataFactoryEnabled ? dlzAttach!.outputs.adfFactoryName : ''
     complianceTags: complianceTags
   }
 }
