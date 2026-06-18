@@ -28,6 +28,7 @@ import { itemsContainer, workspacesContainer } from '@/lib/azure/cosmos-client';
 import {
   isGovernanceCatalogSearchConfigured,
   searchGovernanceCatalog,
+  ensureGovernanceCatalogIndex,
   isCatalogDataType,
   type GovernanceCatalogHit,
 } from '@/lib/azure/governance-catalog-index';
@@ -62,7 +63,7 @@ export async function GET(req: NextRequest) {
 
     // ----- AI Search path: real facets + discoverable items the caller can't open
     if (isGovernanceCatalogSearchConfigured()) {
-      const result = await searchGovernanceCatalog({
+      const runSearch = () => searchGovernanceCatalog({
         q,
         tenantId: s.claims.oid,
         callerWorkspaceIds,
@@ -73,6 +74,24 @@ export async function GET(req: NextRequest) {
         top: 100,
         skip,
       });
+      let result: Awaited<ReturnType<typeof searchGovernanceCatalog>> = null;
+      try {
+        result = await runSearch();
+      } catch (se: any) {
+        // Index genuinely absent (404 "index not found") → self-heal the index
+        // from inside the VNet, then retry once. If ensure/retry still fails,
+        // fall through to the Cosmos path below rather than surfacing a raw 404
+        // as "Could not load catalog" (no-vaporware: degrade gracefully).
+        const msg = se?.message || String(se);
+        if (/\(404\)|index not found|was not found|No index/i.test(msg)) {
+          const ensured = await ensureGovernanceCatalogIndex();
+          if (ensured.ok) {
+            try { result = await runSearch(); } catch { result = null; }
+          }
+        } else {
+          throw se;
+        }
+      }
       if (result) {
         const wsSet = new Set(callerWorkspaceIds);
         const assets = (result.hits as GovernanceCatalogHit[])
@@ -106,7 +125,8 @@ export async function GET(req: NextRequest) {
           source: 'aisearch',
         });
       }
-      // result === null only when not configured — handled below.
+      // result === null when AI Search isn't configured OR the index was absent
+      // and self-heal didn't take — fall through to the Cosmos path below.
     }
 
     // ----- Cosmos fallback (AI Search not deployed): substring + in-memory facets
