@@ -1241,7 +1241,14 @@ module entraAppReg 'entra-app-registration.bicep' = if (loomMsalAppRegEnabled &&
   params: {
     location: location
     appDisplayName: 'CSA Loom Console (${resourceGroup().name})'
-    consoleHosts: loomMsalAppRegConsoleHosts
+    // Pass the param hosts UNIONed with the live Front Door endpoint host so the
+    // app registration registers https://<front-door>/auth/callback up front.
+    // INCIDENT 2026-06-17: real users reach the console through Azure Front Door,
+    // so the browser sends the FD host as redirect_uri. Registering only the ACA
+    // ingress host caused AADSTS50011 redirect-URI mismatch → login dead. The
+    // script merges (never overwrites) redirect URIs, so passing the FD host here
+    // is additive and safe. (fdOn ⇒ frontDoor module deployed ⇒ host available.)
+    consoleHosts: effectiveMsalConsoleHosts
     existingClientId: loomMsalClientId
     scriptIdentityId: loomMsalAppRegScriptIdentityId
     scriptSubnetId: loomMsalAppRegScriptSubnetId
@@ -1257,6 +1264,11 @@ var loomMsalAppRegEnabled = bool(loomMsalAppReg.?enabled ?? true)
 var loomMsalAppRegScriptIdentityId = string(loomMsalAppReg.?scriptIdentityId ?? '')
 var loomMsalAppRegScriptSubnetId = string(loomMsalAppReg.?scriptSubnetId ?? '')
 var loomMsalAppRegConsoleHosts = string(loomMsalAppReg.?consoleHosts ?? '')
+// Union the configured console hosts with the live Front Door endpoint host so
+// the in-bicep app-registration script registers the Front Door /auth/callback
+// (the real user-facing host) — not just the ACA ingress FQDN. See INCIDENT
+// 2026-06-17 note on the entraAppReg module call above.
+var effectiveMsalConsoleHosts = fdOn ? (empty(loomMsalAppRegConsoleHosts) ? frontDoor.outputs.frontDoorEndpointHostName : '${loomMsalAppRegConsoleHosts},${frontDoor.outputs.frontDoorEndpointHostName}') : loomMsalAppRegConsoleHosts
 
 // Effective MSAL client id: an explicit loomMsalClientId (BYO existing app)
 // wins; otherwise the app-registration the entra-app-registration script
