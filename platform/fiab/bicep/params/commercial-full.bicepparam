@@ -90,10 +90,17 @@ param powerBiSku = 'F64'
 // the "Service principals can use Power BI APIs" tenant setting are supplied
 // (post-deploy admin actions — docs/fiab/v3-tenant-bootstrap.md#usage-analytics-embed).
 // The native Fluent usage/governance charts always work without these.
-param loomUsageReportKind     = readEnvironmentVariable('LOOM_USAGE_REPORT_KIND', 'powerbi')
+// Day-one default is EMPTY → main.bicep falls through to the Azure-native
+// Managed Grafana embed (managedGrafanaEnabled + pbiEmbeddedEnabled=false),
+// pointing the Govern (F2) + Usage (F21) embeds at the stable dashboards
+// (loom-governance / loom-usage) the post-deploy bootstrap creates. This closes
+// the two self-audit warnings out of the box WITHOUT a Power BI tenant. Set
+// LOOM_REPORT_KIND/LOOM_USAGE_REPORT_KIND=powerbi (+ the workspace/report ids)
+// to opt into the Power BI Embedded path instead.
+param loomUsageReportKind     = readEnvironmentVariable('LOOM_USAGE_REPORT_KIND', '')
 param loomUsagePbiWorkspaceId = readEnvironmentVariable('LOOM_USAGE_PBI_WORKSPACE_ID', '')
 param loomUsagePbiReportId    = readEnvironmentVariable('LOOM_USAGE_PBI_REPORT_ID', '')
-param loomReportKind          = readEnvironmentVariable('LOOM_REPORT_KIND', 'powerbi')
+param loomReportKind          = readEnvironmentVariable('LOOM_REPORT_KIND', '')
 param loomGovernPbiWorkspaceId = readEnvironmentVariable('LOOM_GOVERN_PBI_WORKSPACE_ID', '')
 param loomGovernPbiReportId    = readEnvironmentVariable('LOOM_GOVERN_PBI_REPORT_ID', '')
 // Opt-in dedicated Power BI Embedded (A1) capacity for the embed token path.

@@ -1,0 +1,122 @@
+{
+  "uid": "loom-governance",
+  "title": "CSA Loom — Governance",
+  "tags": ["csa-loom", "governance", "f2"],
+  "schemaVersion": 39,
+  "version": 0,
+  "editable": true,
+  "timezone": "",
+  "time": { "from": "now-24h", "to": "now" },
+  "refresh": "5m",
+  "templating": {
+    "list": [
+      {
+        "name": "sub",
+        "label": "Subscription",
+        "type": "datasource",
+        "hide": 2,
+        "query": "grafana-azure-monitor-datasource"
+      }
+    ]
+  },
+  "panels": [
+    {
+      "id": 1,
+      "type": "stat",
+      "title": "CSA Loom resources (Azure Resource Graph)",
+      "description": "Live count of every Azure resource in the rg-csa-loom-* resource groups across the estate.",
+      "gridPos": { "h": 5, "w": 8, "x": 0, "y": 0 },
+      "datasource": { "type": "grafana-azure-monitor-datasource", "uid": "azure-monitor-oob" },
+      "options": { "reduceOptions": { "calcs": ["lastNotNull"] }, "colorMode": "value", "graphMode": "none" },
+      "targets": [
+        {
+          "refId": "A",
+          "queryType": "Azure Resource Graph",
+          "datasource": { "type": "grafana-azure-monitor-datasource", "uid": "azure-monitor-oob" },
+          "azureResourceGraph": {
+            "query": "Resources | where resourceGroup startswith 'rg-csa-loom-' | summarize count()"
+          },
+          "subscriptions": ["e093f4fd-5047-4ee4-968d-a56942c665f3", "363ef5d1-0e77-4594-a530-f51af23dbf8c"]
+        }
+      ]
+    },
+    {
+      "id": 2,
+      "type": "piechart",
+      "title": "Resources by type",
+      "description": "Distribution of CSA Loom resources by Azure resource type — governance inventory at a glance.",
+      "gridPos": { "h": 9, "w": 8, "x": 8, "y": 0 },
+      "datasource": { "type": "grafana-azure-monitor-datasource", "uid": "azure-monitor-oob" },
+      "options": { "legend": { "displayMode": "table", "placement": "right", "values": ["value"] }, "reduceOptions": { "calcs": ["lastNotNull"] } },
+      "targets": [
+        {
+          "refId": "A",
+          "queryType": "Azure Resource Graph",
+          "datasource": { "type": "grafana-azure-monitor-datasource", "uid": "azure-monitor-oob" },
+          "azureResourceGraph": {
+            "query": "Resources | where resourceGroup startswith 'rg-csa-loom-' | summarize Count=count() by type | order by Count desc"
+          },
+          "subscriptions": ["e093f4fd-5047-4ee4-968d-a56942c665f3", "363ef5d1-0e77-4594-a530-f51af23dbf8c"]
+        }
+      ]
+    },
+    {
+      "id": 3,
+      "type": "table",
+      "title": "Resources by resource group",
+      "description": "CSA Loom resource counts per resource group (admin + DLZ planes).",
+      "gridPos": { "h": 9, "w": 8, "x": 16, "y": 0 },
+      "datasource": { "type": "grafana-azure-monitor-datasource", "uid": "azure-monitor-oob" },
+      "targets": [
+        {
+          "refId": "A",
+          "queryType": "Azure Resource Graph",
+          "datasource": { "type": "grafana-azure-monitor-datasource", "uid": "azure-monitor-oob" },
+          "azureResourceGraph": {
+            "query": "Resources | where resourceGroup startswith 'rg-csa-loom-' | summarize Resources=count() by resourceGroup, subscriptionId | order by Resources desc"
+          },
+          "subscriptions": ["e093f4fd-5047-4ee4-968d-a56942c665f3", "363ef5d1-0e77-4594-a530-f51af23dbf8c"]
+        }
+      ]
+    },
+    {
+      "id": 4,
+      "type": "timeseries",
+      "title": "Governance activity — admin / RBAC / policy writes",
+      "description": "AzureActivity write & action operations on CSA Loom resources (role assignments, policy, deployments) from Log Analytics.",
+      "gridPos": { "h": 9, "w": 12, "x": 0, "y": 9 },
+      "datasource": { "type": "grafana-azure-monitor-datasource", "uid": "azure-monitor-oob" },
+      "fieldConfig": { "defaults": { "custom": { "drawStyle": "bars", "stacking": { "mode": "normal" } } } },
+      "targets": [
+        {
+          "refId": "A",
+          "queryType": "Azure Log Analytics",
+          "datasource": { "type": "grafana-azure-monitor-datasource", "uid": "azure-monitor-oob" },
+          "azureLogAnalytics": {
+            "resources": ["/subscriptions/e093f4fd-5047-4ee4-968d-a56942c665f3/resourceGroups/rg-csa-loom-admin-centralus/providers/Microsoft.OperationalInsights/workspaces/law-csa-loom-centralus"],
+            "query": "AzureActivity | where OperationNameValue has_any ('roleAssignments','policyAssignments','deployments','providers/Microsoft.Authorization') or CategoryValue == 'Administrative' | summarize Operations=count() by bin(TimeGenerated, 1h), CategoryValue | order by TimeGenerated asc"
+          }
+        }
+      ]
+    },
+    {
+      "id": 5,
+      "type": "table",
+      "title": "Recent administrative operations",
+      "description": "Most recent administrative (governance) operations across the CSA Loom estate — who did what.",
+      "gridPos": { "h": 9, "w": 12, "x": 12, "y": 9 },
+      "datasource": { "type": "grafana-azure-monitor-datasource", "uid": "azure-monitor-oob" },
+      "targets": [
+        {
+          "refId": "A",
+          "queryType": "Azure Log Analytics",
+          "datasource": { "type": "grafana-azure-monitor-datasource", "uid": "azure-monitor-oob" },
+          "azureLogAnalytics": {
+            "resources": ["/subscriptions/e093f4fd-5047-4ee4-968d-a56942c665f3/resourceGroups/rg-csa-loom-admin-centralus/providers/Microsoft.OperationalInsights/workspaces/law-csa-loom-centralus"],
+            "query": "AzureActivity | where CategoryValue == 'Administrative' | project TimeGenerated, OperationNameValue, Caller, ActivityStatusValue, _ResourceId | order by TimeGenerated desc | take 50"
+          }
+        }
+      ]
+    }
+  ]
+}
