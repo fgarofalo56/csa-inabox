@@ -19,11 +19,11 @@ param domainName string
 @description('Private endpoint subnet ID')
 param privateEndpointSubnetId string
 
-@description('Private DNS zone ID for cosmos')
-param privateDnsZoneCosmosId string
+@description('Private DNS zone ID for cosmos. Empty (dlz-attach with no hub DNS coordinates) skips the private DNS zone group.')
+param privateDnsZoneCosmosId string = ''
 
-@description('Log Analytics workspace ID for diagnostic settings')
-param workspaceId string
+@description('Log Analytics workspace ID for diagnostic settings. Empty (dlz-attach with no hub LAW coordinate) skips the diagnostic setting.')
+param workspaceId string = ''
 
 @description('Loom Console UAMI principal ID — granted "DocumentDB Account Contributor" on this account so the Cosmos DB control-plane navigator (databases/containers/stored-procs) can CRUD via ARM AND the Connect panel can call listKeys / listConnectionStrings / regenerateKey. The account sets disableLocalAuth=true, so AAD RBAC is the only data-plane path. "Cosmos DB Operator" is NOT sufficient (it blocks key access). Empty skips the grant.')
 param consolePrincipalId string = ''
@@ -246,7 +246,7 @@ resource pe 'Microsoft.Network/privateEndpoints@2024-05-01' = {
   }
 }
 
-resource peDnsGroup 'Microsoft.Network/privateEndpoints/privateDnsZoneGroups@2024-05-01' = {
+resource peDnsGroup 'Microsoft.Network/privateEndpoints/privateDnsZoneGroups@2024-05-01' = if (!empty(privateDnsZoneCosmosId)) {
   parent: pe
   name: 'default'
   properties: {
@@ -257,7 +257,7 @@ resource peDnsGroup 'Microsoft.Network/privateEndpoints/privateDnsZoneGroups@202
 }
 
 // Diagnostic settings → standardized Loom LAW
-resource diag 'Microsoft.Insights/diagnosticSettings@2021-05-01-preview' = {
+resource diag 'Microsoft.Insights/diagnosticSettings@2021-05-01-preview' = if (!empty(workspaceId)) {
   scope: account
   name: 'diag-loom-stdz'
   properties: {

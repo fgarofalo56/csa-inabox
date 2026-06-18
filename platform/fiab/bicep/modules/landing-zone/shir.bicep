@@ -61,8 +61,8 @@ param consolePrincipalId string
 @description('Skip role-assignment grants (avoid RoleAssignmentExists on re-provision).')
 param skipRoleGrants bool = false
 
-@description('Log Analytics workspace ID for diagnostic settings.')
-param workspaceId string
+@description('Log Analytics workspace ID for diagnostic settings. Empty (dlz-attach with no hub LAW coordinate) skips the diagnostic settings.')
+param workspaceId string = ''
 
 @description('Compliance tags applied to every resource.')
 param complianceTags object
@@ -190,7 +190,7 @@ resource consoleVmssContributor 'Microsoft.Authorization/roleAssignments@2022-04
 // Diagnostic settings → standardized Loom LAW
 // =====================================================================
 
-resource diag 'Microsoft.Insights/diagnosticSettings@2021-05-01-preview' = {
+resource diag 'Microsoft.Insights/diagnosticSettings@2021-05-01-preview' = if (!empty(workspaceId)) {
   scope: vmss
   name: 'diag-loom-stdz'
   properties: {

@@ -23,8 +23,8 @@ param publicSubnetName string
 @allowed(['Commercial', 'GCC', 'GCC-High', 'IL5'])
 param boundary string
 
-@description('Log Analytics workspace ID for diagnostic settings')
-param workspaceId string
+@description('Log Analytics workspace ID for diagnostic settings. Empty (dlz-attach with no hub LAW coordinate) skips the diagnostic settings.')
+param workspaceId string = ''
 
 @description('Compliance tags')
 param complianceTags object
@@ -96,7 +96,7 @@ resource accessConnector 'Microsoft.Databricks/accessConnectors@2024-09-01-previ
 // Diagnostic settings → standardized Loom LAW
 // =====================================================================
 
-resource diag 'Microsoft.Insights/diagnosticSettings@2021-05-01-preview' = {
+resource diag 'Microsoft.Insights/diagnosticSettings@2021-05-01-preview' = if (!empty(workspaceId)) {
   scope: workspace
   name: 'diag-loom-stdz'
   properties: {

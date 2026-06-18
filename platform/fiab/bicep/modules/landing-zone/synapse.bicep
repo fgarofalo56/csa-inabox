@@ -57,8 +57,8 @@ param firewallRules array = [
 @description('Allow Azure services to access (when public endpoint is up)')
 param allowAzureServices bool = false
 
-@description('Log Analytics workspace ID for diagnostic + audit + telemetry')
-param workspaceId string
+@description('Log Analytics workspace ID for diagnostic + audit + telemetry. Empty (dlz-attach with no hub LAW coordinate) skips the diagnostic settings.')
+param workspaceId string = ''
 
 @description('Audit log retention days (Synapse SQL audit)')
 @minValue(7)
@@ -216,7 +216,7 @@ resource dedicatedPool 'Microsoft.Synapse/workspaces/sqlPools@2021-06-01' = if (
 
 // Diagnostic settings on the Dedicated pool — separate from workspace
 // because pool-level diagnostic categories differ from workspace.
-resource dedicatedPoolDiag 'Microsoft.Insights/diagnosticSettings@2021-05-01-preview' = if (deployDedicatedPool) {
+resource dedicatedPoolDiag 'Microsoft.Insights/diagnosticSettings@2021-05-01-preview' = if (deployDedicatedPool && !empty(workspaceId)) {
   scope: dedicatedPool
   name: 'diag-loom-stdz'
   properties: {
@@ -815,7 +815,7 @@ resource peDevDnsGroup 'Microsoft.Network/privateEndpoints/privateDnsZoneGroups@
 // Diagnostic settings → standardized Loom LAW
 // =====================================================================
 
-resource diagInner 'Microsoft.Insights/diagnosticSettings@2021-05-01-preview' = {
+resource diagInner 'Microsoft.Insights/diagnosticSettings@2021-05-01-preview' = if (!empty(workspaceId)) {
   scope: synapseWs
   name: 'diag-loom-stdz'
   properties: {
