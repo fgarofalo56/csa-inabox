@@ -211,6 +211,133 @@ describe('compileGraph', () => {
     expect(sql).toMatch(/SELECT \* FROM q2_o1\s*$/m);
   });
 
+  // ---- Wave-3 Warp transform-builder steps ----
+
+  it('compiles a derive step to a computed column projection', () => {
+    const g: VqGraph = {
+      nodes: [
+        source('s1', 'dbo', 'fact_sale'),
+        { id: 'd1', kind: 'derive', inputs: ['s1'], derived: [{ name: 'net', expression: '[price] * [qty]' }] },
+      ],
+    };
+    const sql = compileGraph(g, 'tsql');
+    expect(sql).toContain('SELECT *, [price] * [qty] AS [net] FROM q1_s1');
+  });
+
+  it('compiles a cast step to CAST(... AS type)', () => {
+    const g: VqGraph = {
+      nodes: [
+        source('s1', 'dbo', 'fact_sale'),
+        { id: 'c1', kind: 'cast', inputs: ['s1'], casts: [{ field: 'amount', to: 'DECIMAL(18,2)' }] },
+      ],
+    };
+    const sql = compileGraph(g, 'tsql');
+    expect(sql).toContain('CAST([amount] AS DECIMAL(18,2)) AS [amount]');
+  });
+
+  it('compiles a rename step to AS projections', () => {
+    const g: VqGraph = {
+      nodes: [
+        source('s1', 'dbo', 'fact_sale'),
+        { id: 'r1', kind: 'rename', inputs: ['s1'], renames: [{ from: 'amt', to: 'amount' }] },
+      ],
+    };
+    const sql = compileGraph(g, 'tsql');
+    expect(sql).toContain('SELECT [amt] AS [amount], * FROM q1_s1');
+  });
+
+  it('compiles a keyless dedup to SELECT DISTINCT', () => {
+    const g: VqGraph = {
+      nodes: [
+        source('s1', 'dbo', 'fact_sale'),
+        { id: 'x1', kind: 'dedup', inputs: ['s1'], dedupKeys: [] },
+      ],
+    };
+    expect(compileGraph(g, 'tsql')).toContain('SELECT DISTINCT * FROM q1_s1');
+  });
+
+  it('compiles a keyed dedup to a ROW_NUMBER window', () => {
+    const g: VqGraph = {
+      nodes: [
+        source('s1', 'dbo', 'fact_sale'),
+        { id: 'x1', kind: 'dedup', inputs: ['s1'], dedupKeys: ['id'] },
+      ],
+    };
+    const sql = compileGraph(g, 'tsql');
+    expect(sql).toContain('ROW_NUMBER() OVER (PARTITION BY [id]');
+    expect(sql).toContain('__rn = 1');
+  });
+
+  it('compiles a union of two sources', () => {
+    const g: VqGraph = {
+      nodes: [
+        source('s1', 'dbo', 'a'),
+        source('s2', 'dbo', 'b'),
+        { id: 'u1', kind: 'union', inputs: ['s1', 's2'], unionAll: true },
+      ],
+      outputId: 'u1',
+    };
+    const sql = compileGraph(g, 'tsql');
+    expect(sql).toContain('UNION ALL');
+    expect(sql).toContain('[a]');
+    expect(sql).toContain('[b]');
+  });
+
+  it('wraps a sink node as CTAS (CREATE TABLE … AS) for Spark SQL', () => {
+    const g: VqGraph = {
+      nodes: [
+        { id: 's1', kind: 'source', inputs: [], table: 'raw' },
+        { id: 'f1', kind: 'filter', inputs: ['s1'], whereExpression: '`x` > 0' },
+        { id: 'snk', kind: 'sink', inputs: ['f1'], sink: { mode: 'table', schema: 'silver', table: 'clean' } },
+      ],
+      outputId: 'snk',
+    };
+    const sql = compileGraph(g, 'sparksql');
+    expect(sql).toContain('CREATE TABLE `silver`.`clean` AS');
+    expect(sql).toContain('WITH ');
+    expect(sql).not.toContain('snk AS ('); // sink is never a CTE
+  });
+
+  it('materializes a T-SQL sink table via SELECT … INTO (WITH stays in front)', () => {
+    const g: VqGraph = {
+      nodes: [
+        source('s1', 'dbo', 'fact_sale'),
+        { id: 'f1', kind: 'filter', inputs: ['s1'], whereExpression: '[amt] > 0' },
+        { id: 'snk', kind: 'sink', inputs: ['f1'], sink: { mode: 'table', schema: 'dbo', table: 'clean' } },
+      ],
+      outputId: 'snk',
+    };
+    const sql = compileGraph(g, 'tsql');
+    expect(sql).toMatch(/^-- Generated[\s\S]*WITH /m);
+    expect(sql).toContain('INTO [dbo].[clean]');
+    expect(sql).not.toContain('CREATE TABLE'); // T-SQL uses SELECT … INTO, not CTAS
+  });
+
+  it('wraps a sink node as a CREATE VIEW when mode is view', () => {
+    const g: VqGraph = {
+      nodes: [
+        source('s1', 'dbo', 'fact_sale'),
+        { id: 'snk', kind: 'sink', inputs: ['s1'], sink: { mode: 'view', table: 'v_sales' } },
+      ],
+      outputId: 'snk',
+    };
+    const sql = compileGraph(g, 'tsql');
+    expect(sql).toContain('CREATE OR ALTER VIEW [v_sales] AS');
+  });
+
+  it('a sink with an empty table name falls back to a plain SELECT', () => {
+    const g: VqGraph = {
+      nodes: [
+        source('s1', 'dbo', 'fact_sale'),
+        { id: 'snk', kind: 'sink', inputs: ['s1'], sink: { mode: 'table', table: '' } },
+      ],
+      outputId: 'snk',
+    };
+    const sql = compileGraph(g, 'tsql');
+    expect(sql).not.toContain('CREATE TABLE');
+    expect(sql).toContain('SELECT * FROM');
+  });
+
   it('prunes dead branches not feeding the output', () => {
     const g: VqGraph = {
       nodes: [
