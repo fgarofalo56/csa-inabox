@@ -53,7 +53,13 @@ import {
   type TableColumnDefinition,
   type TableColumnSizingOptions,
 } from '@fluentui/react-components';
-import { DismissCircle24Regular, Search16Regular } from '@fluentui/react-icons';
+import {
+  DismissCircle24Regular,
+  Search16Regular,
+  ArrowUp16Filled,
+  ArrowDown16Filled,
+  ArrowSort16Regular,
+} from '@fluentui/react-icons';
 
 /** A single column definition. Generic over the row type. */
 export interface LoomColumn<T> {
@@ -153,6 +159,43 @@ const useStyles = makeStyles({
   headerCell: {
     fontWeight: tokens.fontWeightSemibold,
     color: tokens.colorNeutralForeground1,
+  },
+  // Sortable column header: show pointer cursor + hover tint so users know it's clickable.
+  sortableHeader: {
+    cursor: 'pointer',
+    userSelect: 'none',
+    ':hover': {
+      backgroundColor: tokens.colorNeutralBackground1Hover,
+    },
+  },
+  // Inner wrapper for the header label + sort icon (keeps them on one line with a gap).
+  sortHeaderContent: {
+    display: 'inline-flex',
+    alignItems: 'center',
+    gap: tokens.spacingHorizontalXS,
+    // Reserve a fixed slot for the icon so toggling active/inactive sort
+    // doesn't cause the label to reflow left/right.
+    minWidth: 0,
+    width: '100%',
+  },
+  // The icon slot: fixed 16×16 so it never causes column-width reflow.
+  sortIcon: {
+    flexShrink: 0,
+    width: '16px',
+    height: '16px',
+    display: 'flex',
+    alignItems: 'center',
+    justifyContent: 'center',
+    // Neutral affordance icon on non-active sortable columns — visible only on header hover.
+    opacity: 0.35,
+    ':hover': {
+      opacity: 1,
+    },
+  },
+  // Active sort icon: always fully opaque and brand-tinted.
+  sortIconActive: {
+    opacity: 1,
+    color: tokens.colorBrandForeground1,
   },
   bodyRow: {
     transitionDuration: tokens.durationFaster,
@@ -254,6 +297,14 @@ type FilterKind = 'text' | 'select' | 'date';
 /** Per-column filter value. text: substring; select: value ∈ set; date: from/to (gt/lt). */
 interface ColFilter { text?: string; selected?: string[]; from?: string; to?: string }
 
+/** Local sort tracking (mirrors Fluent's internal SortState shape). */
+interface SortSnap {
+  /** The columnId that is currently sorted, or undefined for unsorted. */
+  sortColumn: string | undefined;
+  /** Direction of the active sort. */
+  sortDirection: 'ascending' | 'descending';
+}
+
 const NAME_RE = /(^|_|\b)(name|title|displayname|label)(\b|_|$)/i;
 const DATE_RE = /(date|time|created|modified|updated|timestamp|lastrun|expires|expiry|when)/i;
 const SELECT_CARDINALITY_CAP = 40;
@@ -281,6 +332,55 @@ function asDateMs(v: string | number): number | null {
   return Number.isFinite(t) ? t : null;
 }
 
+// ---------------------------------------------------------------------------
+// SortableHeaderCell
+// A React component rendered from renderHeaderCell(). It reads the current
+// sort snap via a ref so the fluentColumns memo doesn't need to be recreated
+// every time the sort column / direction changes. Calls useStyles() itself so
+// it participates in the same Fluent style context as LoomDataTable.
+// ---------------------------------------------------------------------------
+interface SortableHeaderCellProps {
+  label: string;
+  isSortable: boolean;
+  colKey: string;
+  sortSnapRef: React.RefObject<SortSnap>;
+}
+
+function SortableHeaderCell({ label, isSortable, colKey, sortSnapRef }: SortableHeaderCellProps) {
+  const styles = useStyles();
+  // The ref.current is always the latest sortSnap because LoomDataTable updates
+  // it synchronously in a useEffect, and the re-render that caused this call was
+  // itself triggered by onSortChange → setState → render cycle.
+  const snap = sortSnapRef.current;
+  const isActive = isSortable && snap != null && snap.sortColumn === colKey;
+
+  if (!isSortable) {
+    // Non-sortable columns: plain label, no icon, no pointer.
+    return <>{label}</>;
+  }
+
+  // Sortable columns: label + sort icon in a fixed-width slot.
+  const SortIcon = isActive
+    ? snap.sortDirection === 'ascending'
+      ? ArrowUp16Filled
+      : ArrowDown16Filled
+    : ArrowSort16Regular;
+
+  return (
+    <span className={styles.sortHeaderContent}>
+      <span style={{ minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+        {label}
+      </span>
+      <span
+        className={mergeClasses(styles.sortIcon, isActive ? styles.sortIconActive : undefined)}
+        aria-hidden="true"
+      >
+        <SortIcon />
+      </span>
+    </span>
+  );
+}
+
 export function LoomDataTable<T>(props: LoomDataTableProps<T>): React.ReactElement {
   const {
     columns,
@@ -299,6 +399,14 @@ export function LoomDataTable<T>(props: LoomDataTableProps<T>): React.ReactEleme
   const [filters, setFilters] = React.useState<Record<string, ColFilter>>({});
   const anyFilterable =
     !noFilters && columns.some((c) => c.filterable !== false);
+
+  // Local mirror of Fluent's internal sort state — updated via onSortChange so
+  // we can render the correct aria-sort attribute and sort icon on each header cell
+  // without overriding Fluent's own sort logic (DataGrid stays uncontrolled).
+  const [sortSnap, setSortSnap] = React.useState<SortSnap>({
+    sortColumn: undefined,
+    sortDirection: 'ascending',
+  });
 
   // Distinct values per column (for select dropdowns) + the resolved kind.
   const colMeta = React.useMemo(() => {
@@ -352,11 +460,27 @@ export function LoomDataTable<T>(props: LoomDataTableProps<T>): React.ReactEleme
     );
   }, [rows, filters, columns, colMeta]);
 
+  // which columns are sortable (Fluent `sortable` is grid-wide; per-column we
+  // gate by not rendering the sort affordance on non-sortable headers)
+  const sortableKeys = React.useMemo(
+    () => new Set(columns.filter((c) => c.sortable !== false).map((c) => c.key)),
+    [columns],
+  );
+
   // Fluent column definitions with compareItems (sort) + renderCell.
+  // renderHeaderCell is defined as a stable React component (SortableHeaderCell)
+  // that reads the latest sortSnap via a ref so the memoized column definitions
+  // never need to be recreated just because the active sort column changed.
+  // The ref is updated synchronously during render so it's always current by the
+  // time any child reads it.
+  const sortSnapRef = React.useRef<SortSnap>(sortSnap);
+  sortSnapRef.current = sortSnap;
+
   const fluentColumns: TableColumnDefinition<T>[] = React.useMemo(
     () =>
-      columns.map((col) =>
-        createTableColumn<T>({
+      columns.map((col) => {
+        const isSortable = sortableKeys.has(col.key);
+        return createTableColumn<T>({
           columnId: col.key,
           compare: (a, b) => {
             const av = defaultGetValue(col, a);
@@ -364,12 +488,20 @@ export function LoomDataTable<T>(props: LoomDataTableProps<T>): React.ReactEleme
             if (typeof av === 'number' && typeof bv === 'number') return av - bv;
             return String(av).localeCompare(String(bv));
           },
-          renderHeaderCell: () => col.label,
+          renderHeaderCell: () => (
+            <SortableHeaderCell
+              label={col.label}
+              isSortable={isSortable}
+              colKey={col.key}
+              sortSnapRef={sortSnapRef}
+            />
+          ),
           renderCell: (row) =>
             col.render ? col.render(row) : String(defaultGetValue(col, row)),
-        }),
-      ),
-    [columns],
+        });
+      }),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [columns, sortableKeys],
   );
 
   // resizable column sizing options from declared widths
@@ -384,13 +516,6 @@ export function LoomDataTable<T>(props: LoomDataTableProps<T>): React.ReactEleme
     }
     return out;
   }, [columns]);
-
-  // which columns are sortable (Fluent `sortable` is grid-wide; per-column we
-  // gate by not registering a sort handler on non-sortable headers)
-  const sortableKeys = React.useMemo(
-    () => new Set(columns.filter((c) => c.sortable !== false).map((c) => c.key)),
-    [columns],
-  );
 
   if (loading) {
     // Opt-in skeleton: stable placeholder rows matching the column layout so
@@ -523,20 +648,39 @@ export function LoomDataTable<T>(props: LoomDataTableProps<T>): React.ReactEleme
         focusMode="cell"
         aria-label={ariaLabel ?? 'Data table'}
         className={styles.grid}
+        onSortChange={(_e, newSort) => {
+          setSortSnap({
+            sortColumn: newSort.sortColumn != null ? String(newSort.sortColumn) : undefined,
+            sortDirection: newSort.sortDirection,
+          });
+        }}
       >
         <DataGridHeader>
           <DataGridRow className={styles.headerRow}>
-            {({ renderHeaderCell, columnId }) => (
-              <DataGridHeaderCell
-                className={styles.headerCell}
-                // disable sort affordance on non-sortable columns
-                {...(sortableKeys.has(String(columnId))
-                  ? {}
-                  : { 'aria-sort': undefined })}
-              >
-                {renderHeaderCell()}
-              </DataGridHeaderCell>
-            )}
+            {({ renderHeaderCell, columnId }) => {
+              const colKey = String(columnId);
+              const isSortable = sortableKeys.has(colKey);
+              const isActive = isSortable && sortSnap.sortColumn === colKey;
+              // aria-sort: only on sortable columns; the active column carries the direction.
+              const ariaSort: React.AriaAttributes['aria-sort'] = !isSortable
+                ? undefined
+                : isActive
+                ? sortSnap.sortDirection === 'ascending'
+                  ? 'ascending'
+                  : 'descending'
+                : 'none';
+              return (
+                <DataGridHeaderCell
+                  className={mergeClasses(
+                    styles.headerCell,
+                    isSortable ? styles.sortableHeader : undefined,
+                  )}
+                  aria-sort={ariaSort}
+                >
+                  {renderHeaderCell()}
+                </DataGridHeaderCell>
+              );
+            }}
           </DataGridRow>
         </DataGridHeader>
 

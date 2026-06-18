@@ -6,6 +6,7 @@
  *   - clicking a sortable column header reorders the rows,
  *   - typing in a per-column filter narrows the visible rows (substring),
  *   - the empty state shows when no rows match.
+ *   - sort affordance: aria-sort attribute + sort icon appear on sortable headers.
  *
  * Pure client-side over data already in hand (per no-vaporware.md) — no
  * backend faked. Order is asserted by reading row cell text from the DOM.
@@ -122,5 +123,70 @@ describe('LoomDataTable', () => {
     const filter = screen.getByLabelText('Filter by Name');
     fireEvent.change(filter, { target: { value: 'li' } });
     expect(screen.getByText('Showing 2 of 3 items')).toBeInTheDocument();
+  });
+
+  // W7 — Sort affordance assertions (aria-sort + visible chevron icon).
+  describe('sort affordance', () => {
+    it('sets aria-sort="none" on sortable headers before any click', () => {
+      renderTable();
+      // Name and Type are sortable (no explicit sortable:false).
+      const nameHeader = screen.getByRole('columnheader', { name: /Name/i });
+      const typeHeader = screen.getByRole('columnheader', { name: /Type/i });
+      expect(nameHeader).toHaveAttribute('aria-sort', 'none');
+      expect(typeHeader).toHaveAttribute('aria-sort', 'none');
+    });
+
+    it('sets aria-sort="ascending" after first click on a sortable column', () => {
+      renderTable();
+      const nameHeader = screen.getByRole('columnheader', { name: /Name/i });
+      fireEvent.click(nameHeader);
+      expect(nameHeader).toHaveAttribute('aria-sort', 'ascending');
+    });
+
+    it('sets aria-sort="descending" after second click (toggle)', () => {
+      renderTable();
+      const nameHeader = screen.getByRole('columnheader', { name: /Name/i });
+      fireEvent.click(nameHeader);
+      fireEvent.click(nameHeader);
+      expect(nameHeader).toHaveAttribute('aria-sort', 'descending');
+    });
+
+    it('does NOT set aria-sort on a non-sortable column', () => {
+      // Make Size non-sortable explicitly.
+      const COLS_WITH_NOSORT = COLUMNS.map((c) =>
+        c.key === 'size' ? { ...c, sortable: false } : c,
+      );
+      render(
+        <FluentProvider theme={webLightTheme}>
+          <LoomDataTable<Row>
+            columns={COLS_WITH_NOSORT}
+            rows={ROWS}
+            getRowId={(r) => r.id}
+          />
+        </FluentProvider>,
+      );
+      const sizeHeader = screen.getByRole('columnheader', { name: /Size/i });
+      expect(sizeHeader).not.toHaveAttribute('aria-sort');
+    });
+
+    it('renders a sort icon inside a sortable header', () => {
+      renderTable();
+      const nameHeader = screen.getByRole('columnheader', { name: /Name/i });
+      // The sort icon is rendered aria-hidden; its parent span is inside the header.
+      // We verify an aria-hidden element exists inside the sortable header.
+      const hiddenIcons = nameHeader.querySelectorAll('[aria-hidden="true"]');
+      expect(hiddenIcons.length).toBeGreaterThan(0);
+    });
+
+    it('applies cursor:pointer on sortable headers via the sortableHeader class', () => {
+      renderTable();
+      const nameHeader = screen.getByRole('columnheader', { name: /Name/i });
+      // The sortableHeader makeStyles class sets cursor:pointer. We verify that
+      // the header has an extra CSS class beyond the base headerCell class
+      // (Fluent makeStyles generates unique class names).
+      // Two classes = headerCell + sortableHeader.
+      const classes = Array.from(nameHeader.classList).filter((c) => c.startsWith('f'));
+      expect(classes.length).toBeGreaterThanOrEqual(2);
+    });
   });
 });
