@@ -78,6 +78,16 @@ interface ExistingDlz {
   rg: string;
 }
 
+/** Result of POST /api/setup/landing-zones/grant (RBAC auto-grant). */
+interface GrantState {
+  ok: boolean;
+  error?: string;
+  reason?: string;
+  remediation?: string;
+  commands?: string[];
+  outcomes?: Array<{ role: string; status: string; error?: string }>;
+}
+
 const GUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 const CAPACITY_OPTIONS: { sku: string; note: string; tag?: string }[] = [
@@ -185,6 +195,38 @@ export function AddLandingZoneWizardPane() {
   const [deployError, setDeployError] = useState<string | undefined>();
   const [deploymentId, setDeploymentId] = useState<string | undefined>();
   const [workflowFile, setWorkflowFile] = useState<string | undefined>();
+
+  // RBAC auto-grant — fired after a successful attach so the Console UAMI gets
+  // the least-privilege role set (Contributor + minimal data-plane) scoped to
+  // the NEW DLZ's resource group, in its own subscription. The grant runs once
+  // the DLZ RG exists; on an honest gate (the Console can't write role
+  // assignments itself) the route returns the exact RG-scoped `az` command.
+  const [grant, setGrant] = useState<GrantState | null>(null);
+  const [granting, setGranting] = useState(false);
+
+  const dlzResourceGroup = useMemo(
+    () => (domainName && hub?.location ? `rg-csa-loom-dlz-${domainName}-${hub.location}` : ''),
+    [domainName, hub?.location],
+  );
+
+  const grantRbac = useCallback(async () => {
+    if (!targetSubscriptionId || !dlzResourceGroup) return;
+    setGranting(true);
+    setGrant(null);
+    try {
+      const res = await fetch('/api/setup/landing-zones/grant', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ subscriptionId: targetSubscriptionId, resourceGroup: dlzResourceGroup }),
+      });
+      const j = (await res.json().catch(() => ({}))) as GrantState;
+      setGrant({ ...j, ok: res.ok && !!j.ok });
+    } catch (e) {
+      setGrant({ ok: false, error: e instanceof Error ? e.message : String(e) });
+    } finally {
+      setGranting(false);
+    }
+  }, [targetSubscriptionId, dlzResourceGroup]);
 
   const loadHub = useCallback(async () => {
     setHubLoading(true);
@@ -394,6 +436,58 @@ export function AddLandingZoneWizardPane() {
               {deploymentId && <> Deployment ID: <code>{deploymentId}</code></>}
               {workflowFile && <> Workflow: <code>{workflowFile}</code></>}
             </Body1>
+            {/* RBAC auto-grant — set the Console UAMI's least-privilege roles on
+                the new DLZ's resource group so it can manage/deploy into it. The
+                DLZ RG materializes during the attach; this grant can be run as
+                soon as it exists. On an honest gate the exact RG-scoped command
+                is shown (no raw error). */}
+            <MessageBar intent={grant?.ok ? 'success' : grant && !grant.ok ? 'warning' : 'info'}>
+              <MessageBarBody>
+                <MessageBarTitle>
+                  {grant?.ok
+                    ? 'Console RBAC granted on the new landing zone'
+                    : grant && !grant.ok
+                      ? grant.commands?.length
+                        ? 'Run this grant as an operator with RBAC rights'
+                        : 'Could not grant RBAC automatically'
+                      : 'Grant the Console RBAC on the new landing zone'}
+                </MessageBarTitle>
+                {grant?.ok ? (
+                  <>
+                    The Console now holds the least-privilege role set (Contributor + minimal
+                    data-plane) scoped to <code>{dlzResourceGroup}</code> — it can see, attach,
+                    create, and deploy into this landing zone.
+                  </>
+                ) : grant && !grant.ok ? (
+                  <>
+                    <div className={styles.preWrapTop}>{grant.remediation || grant.error || 'Unknown error.'}</div>
+                    {grant.commands?.length ? (
+                      <pre className={styles.preWrapTop}>{grant.commands.join('\n')}</pre>
+                    ) : null}
+                  </>
+                ) : (
+                  <>
+                    Once the resource group <code>{dlzResourceGroup || 'rg-csa-loom-dlz-…'}</code>{' '}
+                    exists, click below to assign the Console UAMI Contributor (+ the minimal
+                    data-plane roles) scoped to that resource group — least-privilege, in the DLZ&apos;s
+                    own subscription.
+                  </>
+                )}
+                {(!grant || !grant.ok) && (
+                  <div style={{ marginTop: 10 }}>
+                    <Button
+                      appearance="primary"
+                      size="small"
+                      icon={granting ? <Spinner size="tiny" /> : <Send24Regular />}
+                      disabled={granting || !dlzResourceGroup}
+                      onClick={() => void grantRbac()}
+                    >
+                      {granting ? 'Granting…' : grant && !grant.ok ? 'Retry grant' : 'Grant Console RBAC'}
+                    </Button>
+                  </div>
+                )}
+              </MessageBarBody>
+            </MessageBar>
             <MessageBar intent="info">
               <MessageBarBody>
                 <MessageBarTitle>Next steps</MessageBarTitle>
@@ -412,6 +506,7 @@ export function AddLandingZoneWizardPane() {
                 setTargetSubscriptionName('');
                 setDeploymentId(undefined);
                 setWorkflowFile(undefined);
+                setGrant(null);
               }}
             >
               Attach another
