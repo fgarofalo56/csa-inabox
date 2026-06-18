@@ -30,7 +30,9 @@ import {
   Database16Regular, DatabaseStack16Regular, Table16Regular, FolderOpen16Regular,
   Box16Regular, DocumentData16Regular, Notebook16Regular, Flow16Regular,
   DataHistogram16Regular, BranchRequest16Regular,
+  FolderOpen20Regular,
 } from '@fluentui/react-icons';
+import { EmptyState } from '@/lib/components/empty-state';
 
 interface TreeNode {
   id: string;
@@ -269,7 +271,15 @@ export function TreeBrowser({ source, onSelect }: Props) {
         </div>
         {isExpanded && childNodes && (
           childNodes.length === 0
-            ? <Caption1 style={{ paddingLeft: 6 + (depth + 1) * 18, display: 'block', padding: '4px 0', color: tokens.colorNeutralForeground3 }}>(empty)</Caption1>
+            ? (
+              <Caption1
+                style={{ paddingLeft: 6 + (depth + 1) * 18, display: 'block', padding: '4px 0', color: tokens.colorNeutralForeground3 }}
+                role="status"
+                aria-label="No items in this folder"
+              >
+                No items in this folder
+              </Caption1>
+            )
             : childNodes.map((c) => renderNode(c, depth + 1, [...parentPath, node.id]))
         )}
       </div>
@@ -300,7 +310,13 @@ export function TreeBrowser({ source, onSelect }: Props) {
         </MessageBar>
       )}
       {(!roots || roots.length === 0)
-        ? <Caption1>No nodes returned for this source.</Caption1>
+        ? (
+          <EmptyState
+            icon={<FolderOpen20Regular />}
+            title="Nothing to browse"
+            body="No items were returned for this source. The service may not be configured or the Console identity may not have read access."
+          />
+        )
         : (
           <>
             <div style={{ display: 'flex', gap: 4, alignItems: 'center', padding: '2px 0 6px', borderBottom: `1px solid ${tokens.colorNeutralStroke3}`, marginBottom: 4 }}>

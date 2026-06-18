@@ -13,6 +13,8 @@ import {
   tokens,
   Select,
   Spinner,
+  Skeleton,
+  SkeletonItem,
   MessageBar,
   MessageBarBody,
   Tab,
@@ -132,7 +134,16 @@ export function LakehousePane() {
       <div className={styles.root}>
         <aside className={styles.panel}>
           <Body1Strong>Tables ({tables.length})</Body1Strong>
-          {tablesQ.isLoading && <Spinner size="tiny" label="Loading tables…" />}
+          {tablesQ.isLoading && (
+            <Skeleton aria-label="Loading tables" style={{ display: 'flex', flexDirection: 'column', gap: 8, marginTop: 8 }}>
+              {[...Array(4)].map((_, i) => (
+                <div key={i} style={{ display: 'flex', alignItems: 'center', gap: 8, paddingLeft: i % 2 === 0 ? 0 : 20 }}>
+                  <SkeletonItem shape="rectangle" style={{ width: 16, height: 16, flexShrink: 0 }} />
+                  <SkeletonItem shape="rectangle" style={{ width: `${50 + (i * 13) % 40}%`, height: 14 }} />
+                </div>
+              ))}
+            </Skeleton>
+          )}
           {tablesQ.isError && <Caption1 style={{ color: tokens.colorPaletteRedForeground1 }}>{(tablesQ.error as Error)?.message}</Caption1>}
           <Tree aria-label="Table explorer">
             {Object.entries(

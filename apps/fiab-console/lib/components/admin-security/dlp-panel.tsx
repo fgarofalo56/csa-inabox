@@ -24,7 +24,8 @@ import {
   Textarea, Field, Dropdown, Option, Input,
   makeStyles, tokens,
 } from '@fluentui/react-components';
-import { ArrowSync24Regular, ShieldProhibited24Regular } from '@fluentui/react-icons';
+import { ArrowSync24Regular, ShieldProhibited24Regular, ShieldLock20Regular, AlertBadge20Regular, ClipboardTextLtr20Regular, History20Regular } from '@fluentui/react-icons';
+import { EmptyState } from '@/lib/components/empty-state';
 import { NotConfiguredBar, type NotConfiguredHint } from './not-configured-bar';
 import { DlpManagePolicies } from './dlp-manage-policies';
 import { IdentityPicker, type IdentityHit } from '../ui/identity-picker';
@@ -170,7 +171,12 @@ function PoliciesSection() {
         </MessageBar>
       )}
       {state.data?.ok && (state.data.policies || []).length === 0 && (
-        <Caption1 block style={{ color: tokens.colorNeutralForeground3 }}>No DLP policies configured.</Caption1>
+        <EmptyState
+          icon={<ClipboardTextLtr20Regular />}
+          title="No DLP policies"
+          body="No Microsoft Purview DLP policies are configured for this tenant. Create policies in the Microsoft Purview compliance portal."
+          primaryAction={{ label: 'Open Purview compliance portal', href: 'https://compliance.microsoft.com/datalossprevention', appearance: 'primary' }}
+        />
       )}
       {state.data?.ok && (state.data.policies || []).length > 0 && (
         <Table size="small" aria-label="DLP policies">
@@ -209,7 +215,11 @@ function PoliciesSection() {
             <MessageBar intent="error"><MessageBarBody>{rules.error}</MessageBarBody></MessageBar>
           )}
           {rules.data?.ok && (rules.data.rules || []).length === 0 && (
-            <Caption1 block style={{ color: tokens.colorNeutralForeground3 }}>No rules defined for this policy.</Caption1>
+            <EmptyState
+              icon={<ClipboardTextLtr20Regular />}
+              title="No rules"
+              body="This policy has no rules defined yet."
+            />
           )}
           {rules.data?.ok && (rules.data.rules || []).length > 0 && (
             <Table size="small">
@@ -264,7 +274,11 @@ function ViolationsSection() {
         <MessageBar intent="error"><MessageBarBody><MessageBarTitle>Failed (HTTP {state.errorStatus})</MessageBarTitle>{state.error}</MessageBarBody></MessageBar>
       )}
       {state.data?.ok && (state.data.violations || []).length === 0 && (
-        <Caption1 block style={{ color: tokens.colorNeutralForeground3 }}>No DLP violations detected in the last 30 days.</Caption1>
+        <EmptyState
+          icon={<ShieldLock20Regular />}
+          title="No violations"
+          body="No DLP violations were detected in the last 30 days. This is a healthy signal — policies are either not triggered or not yet enforced."
+        />
       )}
       {state.data?.ok && (state.data.violations || []).length > 0 && (
         <Table size="small" aria-label="DLP violations">
@@ -320,7 +334,11 @@ function AlertsSection() {
         <MessageBar intent="error"><MessageBarBody><MessageBarTitle>Failed (HTTP {state.errorStatus})</MessageBarTitle>{state.error}</MessageBarBody></MessageBar>
       )}
       {state.data?.ok && (state.data.alerts || []).length === 0 && (
-        <Caption1 block style={{ color: tokens.colorNeutralForeground3 }}>No DLP alerts in the last 30 days.</Caption1>
+        <EmptyState
+          icon={<AlertBadge20Regular />}
+          title="No alerts"
+          body="No DLP alerts were generated in the last 30 days."
+        />
       )}
       {state.data?.ok && (state.data.alerts || []).length > 0 && (
         <Table size="small" aria-label="DLP alerts">
@@ -586,9 +604,11 @@ function RestrictSection() {
       )}
 
       {historyLoaded && history.length === 0 && (
-        <Caption1 block style={{ color: tokens.colorNeutralForeground3, marginTop: 16 }}>
-          No restrict-access actions recorded yet.
-        </Caption1>
+        <EmptyState
+          icon={<History20Regular />}
+          title="No restrict-access actions"
+          body="No restrict-access actions have been recorded yet. Use the form above to revoke a principal's data-plane access."
+        />
       )}
       {history.length > 0 && (
         <div style={{ marginTop: 16 }}>

@@ -26,13 +26,15 @@ import { useCallback, useEffect, useMemo, useState } from 'react';
 import {
   Spinner, Badge, Button, MessageBar, MessageBarBody, MessageBarTitle,
   Dialog, DialogTrigger, DialogSurface, DialogTitle, DialogBody, DialogContent, DialogActions,
-  Field, Input, Textarea, Dropdown, Option, Checkbox, Caption1, Body1, Subtitle2,
+  Field, Input, Textarea, Dropdown, Option, Checkbox, Caption1, Subtitle2,
   Card, CardHeader, Switch, Divider, makeStyles, tokens, Tooltip, Link,
 } from '@fluentui/react-components';
 import {
   Add20Regular, Delete20Regular, Send20Regular, ArrowSync20Regular,
   Flash24Regular, ShieldCheckmark20Regular, DataUsage20Regular, Channel20Regular,
+  Flash20Regular,
 } from '@fluentui/react-icons';
+import { EmptyState } from '@/lib/components/empty-state';
 import { SignInRequired } from '@/lib/components/sign-in-required';
 import { Section } from '@/lib/components/ui/section';
 
@@ -191,7 +193,11 @@ export function BusinessEventsView() {
         {!types ? (
           <Spinner label="Loading governed types…" />
         ) : types.length === 0 ? (
-          <Body1>No governed event types yet. Register one to start publishing structured business signals.</Body1>
+          <EmptyState
+            icon={<Flash20Regular />}
+            title="No governed event types"
+            body="Register a governed event type (use the button above) to start publishing structured, schema-validated business signals to Event Grid and Event Hubs."
+          />
         ) : (
           <div className={s.typeGrid}>
             {types.map((t) => (

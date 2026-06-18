@@ -42,7 +42,8 @@ import {
   tokens,
   mergeClasses,
 } from '@fluentui/react-components';
-import { ArrowSync24Regular, Open16Regular } from '@fluentui/react-icons';
+import { ArrowSync24Regular, Open16Regular, Search16Regular } from '@fluentui/react-icons';
+import { EmptyState } from '@/lib/components/empty-state';
 import { Section } from '@/lib/components/ui/section';
 import { LoomDataTable, type LoomColumn } from '@/lib/components/ui/loom-data-table';
 import { itemVisual } from '@/lib/components/ui/item-type-visual';
@@ -533,10 +534,11 @@ export function FederatedSearch() {
             onRowClick={(h) => setDetail(h)}
             ariaLabel="Catalog search results"
             empty={
-              <span>
-                No results. Try a broader keyword, clear filters, or check the source
-                warnings above.
-              </span>
+              <EmptyState
+                icon={<Search16Regular />}
+                title="No results"
+                body="Try a broader keyword, clear the type filter, or check the source warnings above."
+              />
             }
           />
         )}

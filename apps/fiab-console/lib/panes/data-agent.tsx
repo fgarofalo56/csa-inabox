@@ -83,6 +83,7 @@ import {
   CloudArrowUp16Regular,
 } from '@fluentui/react-icons';
 import { normalizeDaSources } from '@/lib/editors/_family-utils';
+import { EmptyState } from '@/lib/components/empty-state';
 
 // ---------------------------------------------------------------------------
 // Wire types — mirror the BFF route shapes.
@@ -724,16 +725,13 @@ export function DataAgentPane() {
             <Button size="small" onClick={() => void loadAgents()}>Retry</Button>
           </div>
         ) : agents.length === 0 ? (
-          <div className={s.railState}>
-            <Sparkle20Regular className={s.emptyGlyph} />
-            <Body1>No data agents yet.</Body1>
-            <Caption1>
-              Create a governed Q&amp;A agent grounded in your warehouse, lakehouse, semantic models, KQL,
-              and more — then test and publish it.
-            </Caption1>
-            <Button appearance="primary" icon={<Add20Regular />} onClick={startCreate}>
-              New data agent
-            </Button>
+          <div className={s.railList}>
+            <EmptyState
+              icon={<Sparkle20Regular />}
+              title="No data agents"
+              body="Create a governed Q&A agent grounded in your warehouse, lakehouse, semantic models, KQL, and more — then test and publish it."
+              primaryAction={{ label: 'New data agent', onClick: startCreate }}
+            />
           </div>
         ) : (
           <div className={s.railList} role="listbox" aria-label="Data agents">
