@@ -12,6 +12,8 @@
  */
 import { useEffect, useState } from 'react';
 import { Spinner, Caption1, MessageBar, MessageBarBody, makeStyles, tokens } from '@fluentui/react-components';
+import { BranchFork16Regular } from '@fluentui/react-icons';
+import { EmptyState } from '@/lib/components/empty-state';
 
 interface Node { id: string; label: string; type?: string; source: string; }
 interface Edge { from: string; to: string; type?: string; }
@@ -61,7 +63,13 @@ export function LineageGraph({ source, id, host, workspaceId }: Props) {
       </MessageBarBody>
     </MessageBar>
   );
-  if (!data || data.nodes.length === 0) return <Caption1>No lineage edges for this asset.</Caption1>;
+  if (!data || data.nodes.length === 0) return (
+    <EmptyState
+      icon={<BranchFork16Regular />}
+      title="No lineage edges"
+      body="No upstream or downstream lineage was recorded for this asset. Run a Purview scan, trigger a Databricks job, or publish a pipeline to build lineage."
+    />
+  );
 
   // Radial layout around the focus node (or the first node).
   const focusIdx = Math.max(0, data.nodes.findIndex((n) => n.id === id));

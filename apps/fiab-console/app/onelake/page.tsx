@@ -62,6 +62,8 @@ import {
   makeStyles,
   tokens,
   mergeClasses,
+  Skeleton,
+  SkeletonItem,
 } from '@fluentui/react-components';
 import {
   Dismiss20Regular,
@@ -85,6 +87,7 @@ import {
 
 import { PageShell } from '@/lib/components/page-shell';
 import { SignInRequired } from '@/lib/components/sign-in-required';
+import { EmptyState } from '@/lib/components/empty-state';
 import { Section, Toolbar } from '@/lib/components/ui/section';
 import { ViewToggle, type LoomView } from '@/lib/components/ui/view-toggle';
 import { ItemTile } from '@/lib/components/ui/item-tile';
@@ -499,9 +502,26 @@ function TablesTab({ itemId }: { itemId: string }) {
       </MessageBar>
     );
   }
-  if (tables === null) return <Spinner size="tiny" label="Loading tables…" />;
+  if (tables === null) {
+    return (
+      <Skeleton aria-label="Loading Delta tables" style={{ display: 'flex', flexDirection: 'column', gap: 8, padding: '8px 0' }}>
+        {[...Array(5)].map((_, i) => (
+          <div key={i} style={{ display: 'flex', alignItems: 'center', gap: 8, paddingLeft: i % 2 === 0 ? 0 : 20 }}>
+            <SkeletonItem shape="rectangle" style={{ width: 16, height: 16, flexShrink: 0 }} />
+            <SkeletonItem shape="rectangle" style={{ width: `${55 + (i * 11) % 35}%`, height: 14 }} />
+          </div>
+        ))}
+      </Skeleton>
+    );
+  }
   if (tables.length === 0) {
-    return <Text size={200}>No Delta tables in this lakehouse yet.</Text>;
+    return (
+      <EmptyState
+        icon={<Table20Regular />}
+        title="No Delta tables"
+        body="No Delta tables in this lakehouse yet. Write data to the Tables/ path in ADLS to register them."
+      />
+    );
   }
 
   const bySchema = tables.reduce<Record<string, DeltaTable[]>>((acc, t) => {

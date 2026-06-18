@@ -12,6 +12,8 @@ import {
   MessageBar,
   MessageBarBody,
   MessageBarTitle,
+  Skeleton,
+  SkeletonItem,
 } from '@fluentui/react-components';
 import { Add24Regular, Play24Filled, Delete24Regular, Open24Regular } from '@fluentui/react-icons';
 
@@ -54,6 +56,23 @@ const useStyles = makeStyles({
     padding: '12px',
     backgroundColor: tokens.colorNeutralBackground3,
     borderTop: `1px solid ${tokens.colorNeutralStroke3}`,
+    whiteSpace: 'pre-wrap',
+  },
+  cellRunning: {
+    padding: '12px',
+    backgroundColor: tokens.colorNeutralBackground3,
+    borderTop: `1px solid ${tokens.colorNeutralStroke3}`,
+    display: 'flex',
+    flexDirection: 'column',
+    gap: '8px',
+  },
+  cellError: {
+    fontFamily: 'Cascadia Code, Consolas, monospace',
+    fontSize: '13px',
+    padding: '12px',
+    backgroundColor: tokens.colorStatusDangerBackground1,
+    borderTop: `1px solid ${tokens.colorStatusDangerBorder1}`,
+    color: tokens.colorStatusDangerForeground1,
     whiteSpace: 'pre-wrap',
   },
 });
@@ -170,7 +189,19 @@ export function NotebookPane() {
             rows={6}
             spellCheck={false}
           />
-          {cell.output && <pre className={styles.cellOut}>{cell.output}</pre>}
+          {cell.running ? (
+            <div className={styles.cellRunning}>
+              <Skeleton aria-label="Cell running…">
+                <SkeletonItem shape="rectangle" style={{ width: '75%', height: 14 }} />
+                <SkeletonItem shape="rectangle" style={{ width: '55%', height: 14 }} />
+                <SkeletonItem shape="rectangle" style={{ width: '40%', height: 14 }} />
+              </Skeleton>
+            </div>
+          ) : cell.output ? (
+            cell.output.startsWith('Error') || cell.output.startsWith('HTTP 4') || cell.output.startsWith('HTTP 5')
+              ? <pre className={styles.cellError}>{cell.output}</pre>
+              : <pre className={styles.cellOut}>{cell.output}</pre>
+          ) : null}
         </div>
       ))}
     </div>
