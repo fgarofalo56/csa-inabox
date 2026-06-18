@@ -1,9 +1,23 @@
 /**
- * MCP (Model Context Protocol) JSON-RPC over HTTPS client.
+ * MCP (Model Context Protocol) JSON-RPC over HTTPS client — Streamable HTTP
+ * transport (the current MCP transport; SSE-only servers are also tolerated).
  *
  * Communicates with external MCP servers to:
  *   1. Fetch tool lists (tools/list)
  *   2. Call tools (tools/call)
+ *
+ * Transport (per the MCP spec + Microsoft Learn "Troubleshoot MCP servers on
+ * Azure Container Apps"): a single JSON-RPC endpoint where the `method` field
+ * selects the operation. The client therefore:
+ *   • POSTs every request to the configured endpoint URL itself — NOT to
+ *     `<endpoint>/tools/list` or `<endpoint>/tools/call` sub-paths (those 404
+ *     against a real MCP server).
+ *   • Sends `initialize` FIRST (servers reply -32601 "Method not found" to a
+ *     tools/* call that arrives before initialize), capturing the
+ *     `Mcp-Session-Id` response header and echoing it on subsequent calls.
+ *   • Advertises `Accept: application/json, text/event-stream` and parses
+ *     either a plain JSON body or an SSE-framed (`text/event-stream`) body —
+ *     Streamable HTTP servers may respond with either.
  *
  * Auth: Authorization header or Key Vault secret reference (resolved at call time).
  */
@@ -16,7 +30,7 @@ import {
 } from '@azure/identity';
 import { AcaManagedIdentityCredential } from '@/lib/azure/aca-managed-identity';
 import { kvScope, kvSuffix } from './cloud-endpoints';
-import type { McpToolsListResponse, McpToolsCallRequest, McpToolsCallResponse } from '../types/mcp-config';
+import type { McpToolsListResponse } from '../types/mcp-config';
 
 // Resolve Key Vault secrets over the KV REST API (no @azure/keyvault-secrets
 // dependency) using the same UAMI→DefaultAzureCredential chain every Loom
@@ -56,7 +70,15 @@ export async function resolveAuthHeader(
       });
       if (!res.ok) throw new Error(`KV ${res.status}`);
       const j = await res.json();
-      return j?.value || '';
+      const secret = String(j?.value || '');
+      // KV-stored MCP keys are bare API keys (e.g. the Loom built-in server's
+      // `loom-mcp-api-key`). Send them as a Bearer credential unless the secret
+      // already carries an explicit auth scheme. ('header' auth stays verbatim
+      // so an admin who pasted a full "Bearer …"/"Basic …" value is honored.)
+      if (secret && !/^(bearer|basic|negotiate|digest)\s/i.test(secret)) {
+        return `Bearer ${secret}`;
+      }
+      return secret;
     } catch (e: any) {
       throw new Error(`Failed to resolve Key Vault secret ${secretName}: ${e?.message || e}`);
     }
@@ -64,8 +86,138 @@ export async function resolveAuthHeader(
   return authValue;
 }
 
+/** Protocol version we advertise on initialize. Servers negotiate down if needed. */
+const MCP_PROTOCOL_VERSION = '2025-06-18';
+
+interface JsonRpcResponse {
+  jsonrpc?: string;
+  id?: string | number;
+  result?: any;
+  error?: { code: number; message: string; data?: unknown };
+}
+
 /**
- * Fetch the list of available tools from an MCP server (tools/list).
+ * Parse a Streamable HTTP response body into a single JSON-RPC response.
+ * Streamable HTTP servers may answer a POST with either:
+ *   • `application/json` — a single JSON object, or
+ *   • `text/event-stream` — one or more SSE `data:` frames (we take the first
+ *     frame that carries a JSON-RPC response matching our request id).
+ */
+function parseRpcBody(contentType: string, text: string, wantId: string): JsonRpcResponse {
+  const ct = (contentType || '').toLowerCase();
+  if (ct.includes('text/event-stream')) {
+    // Concatenate consecutive `data:` lines per SSE event, then JSON.parse each
+    // event payload and return the first that is a JSON-RPC response.
+    let fallback: JsonRpcResponse | null = null;
+    for (const block of text.split(/\r?\n\r?\n/)) {
+      const data = block
+        .split(/\r?\n/)
+        .filter((l) => l.startsWith('data:'))
+        .map((l) => l.slice(5).trim())
+        .join('\n');
+      if (!data) continue;
+      try {
+        const obj = JSON.parse(data) as JsonRpcResponse;
+        if (obj && (obj.result !== undefined || obj.error !== undefined)) {
+          if (String(obj.id) === wantId) return obj;
+          fallback = fallback || obj;
+        }
+      } catch { /* skip non-JSON SSE frames (comments / pings) */ }
+    }
+    if (fallback) return fallback;
+    throw new Error('MCP server returned an SSE stream with no JSON-RPC response');
+  }
+  // Plain JSON (or empty body).
+  if (!text.trim()) return {};
+  return JSON.parse(text) as JsonRpcResponse;
+}
+
+/**
+ * Open an MCP session against the single JSON-RPC endpoint: send `initialize`,
+ * then the follow-up `notifications/initialized`. Returns the negotiated
+ * `Mcp-Session-Id` (when the server issues one) so subsequent tools/* calls can
+ * echo it. Throws on transport / protocol failure with the server's message.
+ */
+async function initializeSession(
+  endpoint: string,
+  authHeader: string,
+  signal: AbortSignal,
+): Promise<{ sessionId?: string }> {
+  const url = endpoint.replace(/\/$/, '');
+  const initId = `init-${Date.now()}`;
+  const baseHeaders: Record<string, string> = {
+    'content-type': 'application/json',
+    accept: 'application/json, text/event-stream',
+    ...(authHeader ? { authorization: authHeader } : {}),
+  };
+  const res = await fetchWithTimeout(url, {
+    method: 'POST',
+    headers: baseHeaders,
+    body: JSON.stringify({
+      jsonrpc: '2.0',
+      id: initId,
+      method: 'initialize',
+      params: {
+        protocolVersion: MCP_PROTOCOL_VERSION,
+        capabilities: { tools: {} },
+        clientInfo: { name: 'csa-loom-console', version: '1.0' },
+      },
+    }),
+    signal,
+  });
+  if (!res.ok) {
+    const text = await res.text().catch(() => '');
+    throw new Error(`initialize failed — HTTP ${res.status}: ${text.slice(0, 200)}`);
+  }
+  const sessionId = res.headers.get('mcp-session-id') || res.headers.get('Mcp-Session-Id') || undefined;
+  const body = parseRpcBody(res.headers.get('content-type') || '', await res.text(), initId);
+  if (body.error) throw new Error(`MCP initialize error: ${body.error.message}`);
+
+  // Best-effort `initialized` notification (no id, no response expected).
+  try {
+    await fetchWithTimeout(url, {
+      method: 'POST',
+      headers: { ...baseHeaders, ...(sessionId ? { 'mcp-session-id': sessionId } : {}) },
+      body: JSON.stringify({ jsonrpc: '2.0', method: 'notifications/initialized' }),
+      signal,
+    });
+  } catch { /* notification delivery is non-fatal */ }
+
+  return { sessionId };
+}
+
+/** POST a single JSON-RPC request to the endpoint and return the parsed response. */
+async function rpcCall(
+  endpoint: string,
+  authHeader: string,
+  sessionId: string | undefined,
+  method: string,
+  params: Record<string, unknown>,
+  signal: AbortSignal,
+): Promise<JsonRpcResponse> {
+  const url = endpoint.replace(/\/$/, '');
+  const id = `${method.replace(/\W/g, '')}-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+  const res = await fetchWithTimeout(url, {
+    method: 'POST',
+    headers: {
+      'content-type': 'application/json',
+      accept: 'application/json, text/event-stream',
+      ...(authHeader ? { authorization: authHeader } : {}),
+      ...(sessionId ? { 'mcp-session-id': sessionId } : {}),
+    },
+    body: JSON.stringify({ jsonrpc: '2.0', id, method, params }),
+    signal,
+  });
+  if (!res.ok) {
+    const text = await res.text().catch(() => '');
+    throw new Error(`${method} — HTTP ${res.status}: ${text.slice(0, 200)}`);
+  }
+  return parseRpcBody(res.headers.get('content-type') || '', await res.text(), id);
+}
+
+/**
+ * Fetch the list of available tools from an MCP server.
+ * Performs the full Streamable HTTP handshake: initialize → tools/list.
  */
 export async function listMcpTools(
   endpoint: string,
@@ -78,38 +230,19 @@ export async function listMcpTools(
   const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
 
   try {
-    const res = await fetchWithTimeout(`${endpoint.replace(/\/$/, '')}/tools/list`, {
-      method: 'POST',
-      headers: {
-        'content-type': 'application/json',
-        ...(authHeader ? { authorization: authHeader } : {}),
-      },
-      body: JSON.stringify({
-        jsonrpc: '2.0',
-        id: `list-${Date.now()}`,
-        method: 'tools/list',
-        params: {},
-      }),
-      signal: controller.signal,
-    });
-
-    if (!res.ok) {
-      const text = await res.text().catch(() => '');
-      throw new Error(`HTTP ${res.status}: ${text.slice(0, 200)}`);
-    }
-
-    const body: McpToolsListResponse = await res.json();
-    if (body.error) {
-      throw new Error(`MCP error: ${body.error.message}`);
-    }
-    return body.result?.tools || [];
+    const { sessionId } = await initializeSession(endpoint, authHeader, controller.signal);
+    const body = await rpcCall(endpoint, authHeader, sessionId, 'tools/list', {}, controller.signal);
+    if (body.error) throw new Error(`MCP error: ${body.error.message}`);
+    const result = body.result as McpToolsListResponse['result'];
+    return result?.tools || [];
   } finally {
     clearTimeout(timeoutId);
   }
 }
 
 /**
- * Call a tool on an MCP server (tools/call).
+ * Call a tool on an MCP server.
+ * Performs the full Streamable HTTP handshake: initialize → tools/call.
  */
 export async function callMcpTool(
   endpoint: string,
@@ -124,33 +257,12 @@ export async function callMcpTool(
   const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
 
   try {
-    const callId = `call-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
-    const req: McpToolsCallRequest = {
-      jsonrpc: '2.0',
-      id: callId,
-      method: 'tools/call',
-      params: { name: toolName, arguments: args },
-    };
-
-    const res = await fetchWithTimeout(`${endpoint.replace(/\/$/, '')}/tools/call`, {
-      method: 'POST',
-      headers: {
-        'content-type': 'application/json',
-        ...(authHeader ? { authorization: authHeader } : {}),
-      },
-      body: JSON.stringify(req),
-      signal: controller.signal,
-    });
-
-    if (!res.ok) {
-      const text = await res.text().catch(() => '');
-      throw new Error(`HTTP ${res.status}: ${text.slice(0, 200)}`);
-    }
-
-    const body: McpToolsCallResponse = await res.json();
-    if (body.error) {
-      throw new Error(`MCP error: ${body.error.message}`);
-    }
+    const { sessionId } = await initializeSession(endpoint, authHeader, controller.signal);
+    const body = await rpcCall(
+      endpoint, authHeader, sessionId, 'tools/call',
+      { name: toolName, arguments: args }, controller.signal,
+    );
+    if (body.error) throw new Error(`MCP error: ${body.error.message}`);
     return body.result;
   } finally {
     clearTimeout(timeoutId);

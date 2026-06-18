@@ -709,15 +709,26 @@ export function McpServersPanel() {
                       <Badge appearance="outline" color="warning" size="small">Disabled</Badge>
                     )}
                     {server.lastTestResult && (
-                      <div className={s.testStatus}>
-                        <Checkmark20Regular style={{ fontSize: 14, color: tokens.colorPaletteGreenForeground1 }} />
-                        <Caption1>Tested {new Date(server.lastTestResult.at).toLocaleDateString()}</Caption1>
-                      </div>
+                      server.lastTestResult.error ? (
+                        <div className={s.testStatus} title={server.lastTestResult.error}>
+                          <PlugDisconnected24Regular style={{ fontSize: 14, color: tokens.colorPaletteRedForeground1 }} />
+                          <Caption1>Unreachable {new Date(server.lastTestResult.at).toLocaleDateString()}</Caption1>
+                        </div>
+                      ) : (
+                        <div className={s.testStatus}>
+                          <Checkmark20Regular style={{ fontSize: 14, color: tokens.colorPaletteGreenForeground1 }} />
+                          <Caption1>Tested {new Date(server.lastTestResult.at).toLocaleDateString()}</Caption1>
+                        </div>
+                      )
                     )}
                   </TableCell>
                   <TableCell>
                     {server.lastTestResult ? (
-                      <Caption1>{server.lastTestResult.toolCount} tools</Caption1>
+                      server.lastTestResult.error ? (
+                        <Caption1 className={s.errLine} title={server.lastTestResult.error}>connection failed</Caption1>
+                      ) : (
+                        <Caption1>{server.lastTestResult.toolCount} tools</Caption1>
+                      )
                     ) : (
                       <Caption1>—</Caption1>
                     )}
