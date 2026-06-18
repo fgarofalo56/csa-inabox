@@ -21,9 +21,13 @@ describe('admin/env-config registry', () => {
   });
 
   it('flattens anyOf groups into individual settable keys', () => {
-    // entra-app anyOf includes AZURE_CLIENT_ID — the alias key must be settable.
-    expect(isEditableEnvKey('LOOM_ENTRA_CLIENT_ID')).toBe(true);
-    expect(isEditableEnvKey('AZURE_CLIENT_ID')).toBe(true);
+    // entra-app required LOOM_MSAL_CLIENT_ID + anyOf [AZURE_TENANT_ID |
+    // LOOM_MSAL_TENANT_ID]; cosmos-config anyOf [LOOM_COSMOS_ENDPOINT |
+    // COSMOS_ENDPOINT] — every alias key in those groups must be settable.
+    expect(isEditableEnvKey('LOOM_MSAL_CLIENT_ID')).toBe(true);
+    expect(isEditableEnvKey('AZURE_TENANT_ID')).toBe(true);
+    expect(isEditableEnvKey('LOOM_MSAL_TENANT_ID')).toBe(true);
+    expect(isEditableEnvKey('COSMOS_ENDPOINT')).toBe(true);
   });
 
   it('flags secret-typed keys and never echoes their value', () => {
@@ -118,11 +122,13 @@ describe('admin/env-config registry', () => {
     expect(aliasSatisfiedKeys((k) => adminRgSet.has(k)).has('LOOM_ALERT_RG')).toBe(true);
   });
 
-  it('exposes exactly the 40 editable runtime variables (catalog completeness)', () => {
+  it('exposes exactly the 45 editable runtime variables (catalog completeness)', () => {
     // The env-config catalog is the union of every required + anyOf key across
-    // ENV_CHECKS. The /admin/env-config coverage badge reads N-of-40; this pins
-    // the catalog size so a drift in ENV_CHECKS is caught in CI.
-    expect(EDITABLE_ENV.length).toBe(40);
+    // ENV_CHECKS. The /admin/env-config coverage badge reads N-of-45; this pins
+    // the catalog size so a drift in ENV_CHECKS is caught in CI. Bumped to 45 by
+    // the day-one self-audit expansion (MCP deploy/built-in, Warp SQL engine,
+    // Databricks, Purview UC endpoint, DLP enable, ACA env coords).
+    expect(EDITABLE_ENV.length).toBe(45);
   });
 
   it('flags bicep-derived vars (org-visuals, LA workspace) with derived=true', () => {
