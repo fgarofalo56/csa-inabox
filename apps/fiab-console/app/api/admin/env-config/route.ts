@@ -42,6 +42,7 @@ import {
   getEditableEnv,
   maskValue,
   buildSyncArtifacts,
+  aliasSatisfiedKeys,
 } from '@/lib/admin/env-config';
 import { CTX } from '@/lib/admin/self-audit';
 
@@ -130,17 +131,26 @@ export async function GET() {
 
   // Current presence/values from the running container's env (this BFF runs in
   // loom-console, so process.env IS the live deployment config). Secret values
-  // are NEVER returned — only their set/unset flag. `status` is a 3-way honest
-  // signal: 'set' (present), 'derived' (bicep auto-fills it from another
-  // resource on deploy — expected, not an operator action), or 'unset'.
-  const current: Record<string, { set: boolean; status: 'set' | 'derived' | 'unset'; value?: string; secret: boolean }> = {};
+  // are NEVER returned — only their set/unset flag. `status` is an honest signal:
+  // 'set' (present), 'derived' (bicep auto-fills it from another resource on
+  // deploy — expected, not an operator action), 'satisfied' (this key is unset
+  // but an `anyOf` sibling/alias IS set, e.g. GROUP_ID unset while OID is set, so
+  // the either/or requirement is met — NOT a critical gap), or 'unset'.
+  const isSet = (key: string) => ((process.env[key] || '').trim().length > 0);
+  const satisfiedKeys = aliasSatisfiedKeys(isSet);
+  const current: Record<string, { set: boolean; status: 'set' | 'derived' | 'satisfied' | 'unset'; satisfiedByAlias?: boolean; value?: string; secret: boolean }> = {};
   for (const e of EDITABLE_ENV) {
     const raw = (process.env[e.key] || '').trim();
     const set = raw.length > 0;
-    const status: 'set' | 'derived' | 'unset' = set ? 'set' : (e.derived ? 'derived' : 'unset');
+    const satisfiedByAlias = !set && satisfiedKeys.has(e.key);
+    const status: 'set' | 'derived' | 'satisfied' | 'unset' = set
+      ? 'set'
+      : satisfiedByAlias
+        ? 'satisfied'
+        : (e.derived ? 'derived' : 'unset');
     current[e.key] = e.secret
-      ? { set, status, secret: true }
-      : { set, status, value: raw, secret: false };
+      ? { set, status, satisfiedByAlias: satisfiedByAlias || undefined, secret: true }
+      : { set, status, satisfiedByAlias: satisfiedByAlias || undefined, value: raw, secret: false };
   }
 
   let desired: EnvConfigDoc | null = null;

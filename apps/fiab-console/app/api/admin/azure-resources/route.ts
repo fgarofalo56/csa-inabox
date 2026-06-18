@@ -9,9 +9,14 @@
  * piece of work; the page surfaces a MessageBar saying so honestly.
  *
  * Env vars consumed:
- *   LOOM_SUBSCRIPTION_ID   (default: pulled from MSAL tenant if not set)
- *   LOOM_ADMIN_RG          (default: rg-csa-loom-admin-eastus2)
- *   LOOM_DLZ_RG            (default: rg-csa-loom-dlz-single-eastus2)
+ *   LOOM_SUBSCRIPTION_ID       (admin-plane subscription)
+ *   LOOM_DLZ_SUBSCRIPTION_ID   (DLZ subscription; falls back to LOOM_SUBSCRIPTION_ID for single-sub)
+ *   LOOM_ADMIN_RG              (default: rg-csa-loom-admin-eastus2)
+ *   LOOM_DLZ_RG               (default: rg-csa-loom-dlz-single-eastus2)
+ *
+ * In a multi-sub topology the DLZ RG lives in a DIFFERENT subscription than the
+ * admin RG, so each RG must be paired with its OWN subscription when building the
+ * ARM URL — otherwise the DLZ RG returns 404 ResourceGroupNotFound.
  */
 import { NextRequest, NextResponse } from 'next/server';
 import { getSession } from '@/lib/auth/session';
@@ -50,9 +55,13 @@ export async function GET(_req: NextRequest) {
     }, { status: 503 });
   }
 
-  const rgs = [
-    process.env.LOOM_ADMIN_RG || 'rg-csa-loom-admin-eastus2',
-    process.env.LOOM_DLZ_RG || 'rg-csa-loom-dlz-single-eastus2',
+  // The DLZ RG may live in a different subscription than the admin RG in a
+  // multi-sub topology. Pair each RG with its correct subscription; fall back to
+  // the admin sub when LOOM_DLZ_SUBSCRIPTION_ID is unset (single-sub deploy).
+  const dlzSub = process.env.LOOM_DLZ_SUBSCRIPTION_ID || sub;
+  const rgPairs: Array<{ rg: string; sub: string }> = [
+    { rg: process.env.LOOM_ADMIN_RG || 'rg-csa-loom-admin-eastus2', sub },
+    { rg: process.env.LOOM_DLZ_RG || 'rg-csa-loom-dlz-single-eastus2', sub: dlzSub },
   ];
 
   let token: string;
@@ -66,9 +75,9 @@ export async function GET(_req: NextRequest) {
   const all: Array<ArmResource & { resourceGroup: string }> = [];
   const errors: string[] = [];
 
-  for (const rg of rgs) {
+  for (const { rg, sub: rgSub } of rgPairs) {
     try {
-      const url = `${armBase()}/subscriptions/${sub}/resourceGroups/${rg}/resources?api-version=2024-03-01&$expand=provisioningState`;
+      const url = `${armBase()}/subscriptions/${rgSub}/resourceGroups/${rg}/resources?api-version=2024-03-01&$expand=provisioningState`;
       const r = await fetch(url, { headers: { authorization: `Bearer ${token}` } });
       if (!r.ok) {
         const t = await r.text();
@@ -106,7 +115,8 @@ export async function GET(_req: NextRequest) {
   return NextResponse.json({
     ok: true,
     subscription: sub,
-    resourceGroups: rgs,
+    resourceGroups: rgPairs.map(p => p.rg),
+    subscriptions: rgPairs.map(p => ({ resourceGroup: p.rg, subscription: p.sub })),
     totalResources: resources.length,
     byProvider,
     resources,
