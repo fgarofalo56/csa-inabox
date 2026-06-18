@@ -1305,7 +1305,27 @@ var effectiveMsalClientId = !empty(loomMsalClientId) ? loomMsalClientId : (msalA
 // secretRef) when the script provisioned them into Key Vault; otherwise inline
 // (explicit param value / stable per-RG GUID) so day-one bicep-only deploys
 // still mint sessions.
-var msalSecretKvBacked = msalAppRegProvisioned && empty(loomMsalClientSecret)
+//
+// INCIDENT (recurring, GH #1470): the loom-msal-client-secret Container App
+// secret was baked as a LITERAL (keyVaultUrl null) on every estate where the
+// MSAL secret was NOT provisioned by the in-bicep script
+// (msalAppRegProvisioned=false → the post-deploy bootstrap writes it to KV
+// instead). The bootstrap step ROTATES the Entra client secret + writes the new
+// value to KV on every run, but a literal Container App secret keeps emitting
+// the OLD value → AADSTS7000215 invalid_client → interactive login loops after
+// each bootstrap run. The durable fix: make the secret a Key Vault REFERENCE
+// (unversioned secret URI → Container Apps resolves the LATEST version on each
+// new revision) whenever the deployment is wiring an MSAL client id AND the
+// caller did not pin an explicit literal secret. Both provisioning paths (the
+// in-bicep entra-app-registration script AND the post-deploy bootstrap) write
+// the secret to KV under the same name (loom-msal-client-secret), so the KV
+// reference is valid in either case; a rotation then propagates on the next
+// revision roll. Only a BYO explicit literal secret (loomMsalClientSecret set)
+// stays inline. The condition below KV-backs whenever no explicit literal was
+// pinned AND the app-reg flow is the source of the secret (in-bicep script
+// provisioned it, OR the flag is on so the bootstrap writes/rotates it in KV);
+// when neither holds the prior inline behaviour is preserved.
+var msalSecretKvBacked = empty(loomMsalClientSecret) && (msalAppRegProvisioned || loomMsalAppRegEnabled)
 var sessionSecretKvBacked = msalAppRegProvisioned && empty(loomSessionSecret)
 
 // Console's own `loom` Cosmos — HUB-scoped. Only deployed in tenant/dlz-attach
