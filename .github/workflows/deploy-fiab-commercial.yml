@@ -209,12 +209,92 @@ jobs:
           echo "Provider/feature registration complete (best-effort)."
           exit 0
 
+      # GAP 1 FIX — dlz-attach hub coordinates (cross-sub).
+      # A dlz-attach deployment is submitted AT the DLZ (target) subscription scope,
+      # but the existing hub (admin plane: Console UAMI, hub VNet) lives in a
+      # DIFFERENT subscription — `inputs.subscription`, the hub sub. main.bicep needs
+      # these hub coordinates to (a) make the reverse hub→DLZ VNet peering land in the
+      # hub VNet/sub (dlzAttachHubPeering, scope=resourceGroup(hubAdminSubscriptionId,
+      # adminPlaneRgName)), (b) update the hub Console's DLZ env (dlzAttachHubConsoleEnv,
+      # same scope, run as the hub Console UAMI), and (c) grant the hub Console UAMI
+      # data-plane RBAC on the new DLZ resources. Without them, hubAdminSubscriptionId
+      # falls back to the DEPLOYMENT (DLZ) sub and effHubVnetId/effHubConsoleUamiId are
+      # empty → cross-sub peering + console-env wiring silently target the wrong sub.
+      # We discover them live from the hub admin RG (rg-csa-loom-admin-<hub-region>) in
+      # the HUB sub. The hub region == AZURE_LOCATION (the consistent region for the
+      # whole tenant); the dlz-attach deploys into target_subscription at that region.
+      # Prefer the hub deploy's topologyManifest output when a recent successful hub
+      # deployment is found; otherwise query the resources directly.
+      - name: Discover dlz-attach hub coordinates (hub sub)
+        id: hubcoords
+        if: env.CSA_LOOM_TOPOLOGY == 'dlz-attach'
+        run: |
+          set -uo pipefail
+          HUB_SUB="${CSA_LOOM_SUBSCRIPTION_OVERRIDE}"
+          if [ -z "$HUB_SUB" ]; then
+            echo "::error::dlz-attach requires 'subscription' (the existing HUB/admin-plane subscription id) so the cross-sub hub peering + console env land in the right sub."; exit 1
+          fi
+          HUB_RG="rg-csa-loom-admin-${AZURE_LOCATION}"
+          echo "Hub sub=$HUB_SUB  hub admin RG=$HUB_RG  region=$AZURE_LOCATION"
+          az account set --subscription "$HUB_SUB"
+
+          HUB_VNET_ID=""; HUB_UAMI_PRINCIPAL=""; HUB_UAMI_CLIENT=""; HUB_UAMI_ID=""; HUB_UAMI_NAME=""
+          # (1) Prefer the most-recent SUCCEEDED hub deployment's topologyManifest.hub.
+          MANIFEST=""
+          DEP_NAME=$(az deployment sub list --subscription "$HUB_SUB" \
+            --query "sort_by([?properties.provisioningState=='Succeeded' && properties.outputs.topologyManifest != null], &properties.timestamp)[-1].name" \
+            -o tsv 2>/dev/null || true)
+          if [ -n "${DEP_NAME:-}" ] && [ "$DEP_NAME" != "None" ]; then
+            MANIFEST=$(az deployment sub show --subscription "$HUB_SUB" --name "$DEP_NAME" \
+              --query "properties.outputs.topologyManifest.value.hub" -o json 2>/dev/null || true)
+          fi
+          if [ -n "${MANIFEST:-}" ] && [ "$MANIFEST" != "null" ]; then
+            echo "Found hub topologyManifest from deployment '$DEP_NAME'."
+            HUB_VNET_ID=$(echo "$MANIFEST" | python3 -c "import sys,json;print(json.load(sys.stdin).get('hubVnetId',''))" 2>/dev/null || true)
+            HUB_UAMI_PRINCIPAL=$(echo "$MANIFEST" | python3 -c "import sys,json;print(json.load(sys.stdin).get('consolePrincipalId',''))" 2>/dev/null || true)
+            HUB_UAMI_CLIENT=$(echo "$MANIFEST" | python3 -c "import sys,json;print(json.load(sys.stdin).get('consoleUamiAppId',''))" 2>/dev/null || true)
+            HUB_UAMI_ID=$(echo "$MANIFEST" | python3 -c "import sys,json;print(json.load(sys.stdin).get('consoleUamiResourceId',''))" 2>/dev/null || true)
+            HUB_UAMI_NAME=$(echo "$MANIFEST" | python3 -c "import sys,json;print(json.load(sys.stdin).get('consoleUamiName',''))" 2>/dev/null || true)
+          fi
+          # (2) Live-query fallback for anything the manifest didn't supply.
+          if [ -z "${HUB_VNET_ID:-}" ] || [ "$HUB_VNET_ID" = "null" ]; then
+            HUB_VNET_ID=$(az network vnet show -g "$HUB_RG" -n "vnet-csa-loom-hub-${AZURE_LOCATION}" --query id -o tsv 2>/dev/null || true)
+            [ -z "$HUB_VNET_ID" ] && HUB_VNET_ID=$(az network vnet list -g "$HUB_RG" --query "[?contains(name,'hub')].id | [0]" -o tsv 2>/dev/null || true)
+          fi
+          if [ -z "${HUB_UAMI_ID:-}" ] || [ "$HUB_UAMI_ID" = "null" ]; then
+            UAMI_NAME=$(az identity list -g "$HUB_RG" --query "[?contains(name,'console')].name | [0]" -o tsv 2>/dev/null || true)
+            [ -z "$UAMI_NAME" ] && UAMI_NAME="uami-loom-console-${AZURE_LOCATION}"
+            UAMI_JSON=$(az identity show -n "$UAMI_NAME" -g "$HUB_RG" -o json 2>/dev/null || true)
+            if [ -n "${UAMI_JSON:-}" ]; then
+              HUB_UAMI_NAME="$UAMI_NAME"
+              HUB_UAMI_PRINCIPAL=$(echo "$UAMI_JSON" | python3 -c "import sys,json;print(json.load(sys.stdin).get('principalId',''))" 2>/dev/null || true)
+              HUB_UAMI_CLIENT=$(echo "$UAMI_JSON" | python3 -c "import sys,json;print(json.load(sys.stdin).get('clientId',''))" 2>/dev/null || true)
+              HUB_UAMI_ID=$(echo "$UAMI_JSON" | python3 -c "import sys,json;print(json.load(sys.stdin).get('id',''))" 2>/dev/null || true)
+            fi
+          fi
+          if [ -z "${HUB_VNET_ID:-}" ] || [ -z "${HUB_UAMI_ID:-}" ]; then
+            echo "::error::Could not discover hub coordinates in $HUB_SUB / $HUB_RG (hubVnetId='${HUB_VNET_ID:-}', consoleUamiId='${HUB_UAMI_ID:-}'). Confirm the hub (topology=tenant) is deployed in 'subscription' at region '$AZURE_LOCATION'."; exit 1
+          fi
+          echo "hub_admin_sub=$HUB_SUB"          >> "$GITHUB_OUTPUT"
+          echo "hub_vnet_id=$HUB_VNET_ID"        >> "$GITHUB_OUTPUT"
+          echo "hub_uami_principal=$HUB_UAMI_PRINCIPAL" >> "$GITHUB_OUTPUT"
+          echo "hub_uami_client=$HUB_UAMI_CLIENT"       >> "$GITHUB_OUTPUT"
+          echo "hub_uami_id=$HUB_UAMI_ID"        >> "$GITHUB_OUTPUT"
+          echo "hub_uami_name=$HUB_UAMI_NAME"    >> "$GITHUB_OUTPUT"
+          echo "::notice::Hub coords — sub=$HUB_SUB vnet=$HUB_VNET_ID uami=$HUB_UAMI_NAME ($HUB_UAMI_PRINCIPAL)"
+
       - name: Bicep what-if (preview)
         id: whatif
         run: |
+          # Assemble the dlz-attach hub-coordinate params only when topology=dlz-attach.
+          HUB_PARAMS=""
+          if [ "$CSA_LOOM_TOPOLOGY" = "dlz-attach" ]; then
+            HUB_PARAMS="hubAdminSubscriptionId=${{ steps.hubcoords.outputs.hub_admin_sub }} hubVnetId=${{ steps.hubcoords.outputs.hub_vnet_id }} hubConsolePrincipalId=${{ steps.hubcoords.outputs.hub_uami_principal }} hubConsoleUamiName=${{ steps.hubcoords.outputs.hub_uami_name }} hubConsoleUamiAppId=${{ steps.hubcoords.outputs.hub_uami_client }} hubConsoleUamiId=${{ steps.hubcoords.outputs.hub_uami_id }}"
+          fi
           az deployment sub what-if \
             --name csa-loom-ci-${{ github.run_id }} \
             --location $AZURE_LOCATION \
+            ${CSA_LOOM_TARGET_SUBSCRIPTION:+--subscription "$CSA_LOOM_TARGET_SUBSCRIPTION"} \
             --template-file platform/fiab/bicep/main.bicep \
             --parameters platform/fiab/bicep/params/commercial.bicepparam \
             --parameters location="$AZURE_LOCATION" \
@@ -223,7 +303,8 @@ jobs:
             ${{ inputs.tenant_admin_oid && format('--parameters loomTenantAdminOid={0}', inputs.tenant_admin_oid) || '' }} \
             --parameters loomVanityDomain="$CSA_LOOM_VANITY_DOMAIN" \
             ${CSA_LOOM_TOPOLOGY:+--parameters topology="$CSA_LOOM_TOPOLOGY"} \
-            ${CSA_LOOM_TARGET_SUBSCRIPTION:+--parameters targetSubscriptionId="$CSA_LOOM_TARGET_SUBSCRIPTION" attachDomainName="$CSA_LOOM_DLZ_DOMAIN_NAMES"}
+            ${CSA_LOOM_TARGET_SUBSCRIPTION:+--parameters targetSubscriptionId="$CSA_LOOM_TARGET_SUBSCRIPTION" attachDomainName="$CSA_LOOM_DLZ_DOMAIN_NAMES"} \
+            ${HUB_PARAMS:+--parameters $HUB_PARAMS}
 
       - name: Provision (idempotent)
         id: provision
@@ -237,6 +318,13 @@ jobs:
           # them). Infra-only validates the entire Bicep stack end-to-end.
           # dlz-attach targets the NEW subscription (target_subscription).
           DEPLOY_SUB="${{ steps.topology_guard.outputs.deploy_sub }}"
+          # dlz-attach: pass the cross-sub hub coordinates discovered above so the
+          # hub-side peering + hub-console-env modules (and DLZ RBAC) target the HUB
+          # sub, not the deployment (DLZ) sub.
+          HUB_PARAMS=""
+          if [ "$CSA_LOOM_TOPOLOGY" = "dlz-attach" ]; then
+            HUB_PARAMS="hubAdminSubscriptionId=${{ steps.hubcoords.outputs.hub_admin_sub }} hubVnetId=${{ steps.hubcoords.outputs.hub_vnet_id }} hubConsolePrincipalId=${{ steps.hubcoords.outputs.hub_uami_principal }} hubConsoleUamiName=${{ steps.hubcoords.outputs.hub_uami_name }} hubConsoleUamiAppId=${{ steps.hubcoords.outputs.hub_uami_client }} hubConsoleUamiId=${{ steps.hubcoords.outputs.hub_uami_id }}"
+          fi
           az deployment sub create \
             --name "$DEPLOY_NAME" \
             --location "$AZURE_LOCATION" \
@@ -249,7 +337,8 @@ jobs:
             ${{ inputs.tenant_admin_oid && format('--parameters loomTenantAdminOid={0}', inputs.tenant_admin_oid) || '' }} \
             --parameters loomVanityDomain="$CSA_LOOM_VANITY_DOMAIN" \
             ${CSA_LOOM_TOPOLOGY:+--parameters topology="$CSA_LOOM_TOPOLOGY"} \
-            ${CSA_LOOM_TARGET_SUBSCRIPTION:+--parameters targetSubscriptionId="$CSA_LOOM_TARGET_SUBSCRIPTION" attachDomainName="$CSA_LOOM_DLZ_DOMAIN_NAMES"}
+            ${CSA_LOOM_TARGET_SUBSCRIPTION:+--parameters targetSubscriptionId="$CSA_LOOM_TARGET_SUBSCRIPTION" attachDomainName="$CSA_LOOM_DLZ_DOMAIN_NAMES"} \
+            ${HUB_PARAMS:+--parameters $HUB_PARAMS}
           CONSOLE_URL=$(az deployment sub show --name "$DEPLOY_NAME" --query "properties.outputs.consoleUrl.value" -o tsv 2>/dev/null || echo "")
           echo "console_url=$CONSOLE_URL" >> "$GITHUB_OUTPUT"
           echo "deploy_name=$DEPLOY_NAME" >> "$GITHUB_OUTPUT"

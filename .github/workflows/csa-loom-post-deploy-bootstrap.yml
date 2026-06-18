@@ -9,37 +9,71 @@ name: csa-loom-post-deploy-bootstrap
 
 on:
   workflow_dispatch:
+    inputs:
+      region:
+        description: 'Azure region the deploy landed in (e.g. eastus2, centralus). Every RG / workspace / UAMI name below DERIVES from this — rg-csa-loom-admin-<region>, syn-loom-default-<region>, apim-csa-loom-<region>, uami-loom-console-<region>, etc. Defaults to eastus2 to back-comp the original estate.'
+        type: string
+        default: eastus2
+        required: false
+      admin_subscription:
+        description: 'Subscription id holding the ADMIN plane (hub) — Console UAMI, Key Vault, APIM, Purview, Foundry. Empty → falls back to dlz_subscription / the login subscription, which is correct for a single-sub deploy where admin + DLZ share a subscription.'
+        type: string
+        required: false
+      dlz_subscription:
+        description: 'Subscription id holding the Data Landing Zone (Synapse / Databricks / ADLS). Empty → defaults to the legacy DLZ sub (363ef5d1) for back-comp; set it for any cross-sub / non-eastus2 deploy. In a single-sub deploy set it equal to admin_subscription.'
+        type: string
+        required: false
+      dlz_domain:
+        description: 'DLZ domain segment for the DLZ resource-group name: rg-csa-loom-dlz-<dlz_domain>-<region>. Defaults to "single" (the single-sub / single-DLZ convention).'
+        type: string
+        default: single
+        required: false
 
 permissions:
   id-token: write
   contents: read
 
 env:
-  SUB: 363ef5d1-0e77-4594-a530-f51af23dbf8c
-  ADMIN_RG: rg-csa-loom-admin-eastus2
-  DLZ_RG: rg-csa-loom-dlz-single-eastus2
-  SYNAPSE_WS: syn-loom-default-eastus2
-  DBX_WS: adb-loom-default-eastus2
+  # Region drives every region-stamped name below. Overridable via the `region`
+  # input; defaults to eastus2 so the original estate keeps working with no input.
+  REGION: ${{ inputs.region || 'eastus2' }}
+  # ADMIN (hub) sub holds the Console UAMI / KV / APIM / Purview / Foundry.
+  # DLZ sub holds Synapse / Databricks / ADLS. They are the SAME in single-sub.
+  # admin_subscription empty → fall back to dlz_subscription, then the legacy sub.
+  # dlz_subscription empty → legacy DLZ sub (363ef5d1) for back-comp.
+  ADMIN_SUB: ${{ inputs.admin_subscription || inputs.dlz_subscription || '363ef5d1-0e77-4594-a530-f51af23dbf8c' }}
+  DLZ_SUB: ${{ inputs.dlz_subscription || '363ef5d1-0e77-4594-a530-f51af23dbf8c' }}
+  # SUB kept as an alias of the ADMIN sub for the many steps that scope grants /
+  # role assignments to the admin plane (Cost/Security/Monitor, APIM, Reader, …).
+  # The "Resolve deploy coordinates" step re-points SUB to the admin sub at runtime.
+  SUB: ${{ inputs.admin_subscription || inputs.dlz_subscription || '363ef5d1-0e77-4594-a530-f51af23dbf8c' }}
+  ADMIN_RG: rg-csa-loom-admin-${{ inputs.region || 'eastus2' }}
+  DLZ_RG: rg-csa-loom-dlz-${{ inputs.dlz_domain || 'single' }}-${{ inputs.region || 'eastus2' }}
+  SYNAPSE_WS: syn-loom-default-${{ inputs.region || 'eastus2' }}
+  DBX_WS: adb-loom-default-${{ inputs.region || 'eastus2' }}
+  # DBX_HOST is deploy-specific (per-workspace adb-<id>.<n>.azuredatabricks.net) and
+  # CANNOT be derived from region — the "Resolve deploy coordinates" step resolves it
+  # at runtime from the workspace's workspaceUrl. Default tracks the eastus2 estate.
   DBX_HOST: adb-7405613013893759.19.azuredatabricks.net
-  APIM_NAME: apim-csa-loom-eastus2
+  APIM_NAME: apim-csa-loom-${{ inputs.region || 'eastus2' }}
   # Console UAMI principal (object) id + client (app) id. De-hardcoded so a
   # non-eastus2 / non-Commercial / different-tenant deploy grants the RIGHT
-  # identity. Source these from the bicep deploy outputs
-  # identity.outputs.uamiConsolePrincipalId / uamiConsoleClientId and surface
-  # them as repo vars LOOM_CONSOLE_UAMI_PRINCIPAL / LOOM_CONSOLE_UAMI_CLIENT;
-  # both fall back to the live Commercial defaults so the existing estate keeps
-  # working with no var set. Every grant step below references these, so setting
-  # the var once re-targets the whole bootstrap (incl. the Purview Data Map grant).
+  # identity. Precedence: repo var (explicit BYO) → RUNTIME RESOLUTION (the
+  # "Resolve deploy coordinates" step queries `az identity show -n
+  # uami-loom-console-<region> -g rg-csa-loom-admin-<region>` and overrides these
+  # in $GITHUB_ENV) → the live eastus2 defaults below (so the original estate
+  # keeps working with no var + no resolution). Every grant step references these,
+  # so the runtime resolution re-targets the whole bootstrap (incl. Purview).
   CONSOLE_UAMI_PRINCIPAL: ${{ vars.LOOM_CONSOLE_UAMI_PRINCIPAL || 'e61f3eb3-c646-4183-8198-4c4a34cd9a01' }}
   CONSOLE_UAMI_CLIENT: ${{ vars.LOOM_CONSOLE_UAMI_CLIENT || 'c6272de5-3c4e-4b72-8b57-71b2e950209b' }}
   # Console UAMI display NAME used for the Synapse SQL CREATE LOGIN/USER FROM
   # EXTERNAL PROVIDER steps. identity.bicep names it uami-loom-console-<region>,
   # so a non-eastus2 deploy MUST grant the right name or the Console UAMI gets
-  # "Login failed for user" (ELOGIN). Default tracks the eastus2 estate; the
-  # "Resolve Console UAMI SQL name" step below OVERRIDES this with the actual
-  # UAMI discovered in the admin RG so it is correct for any region. Override
-  # via repo var LOOM_CONSOLE_UAMI_NAME to pin it explicitly.
-  CONSOLE_SQL_UAMI: ${{ vars.LOOM_CONSOLE_UAMI_NAME || 'uami-loom-console-eastus2' }}
+  # "Login failed for user" (ELOGIN). Default now DERIVES from the region input;
+  # the "Resolve Console UAMI SQL name" step below still OVERRIDES this with the
+  # actual UAMI discovered in the admin RG so it is correct even for a renamed
+  # identity. Override via repo var LOOM_CONSOLE_UAMI_NAME to pin it explicitly.
+  CONSOLE_SQL_UAMI: ${{ vars.LOOM_CONSOLE_UAMI_NAME || format('uami-loom-console-{0}', inputs.region || 'eastus2') }}
   # Weave (Semantic Ontology) graph store — the Console UAMI's Entra principal
   # NAME registered in PostgreSQL (must match LOOM_POSTGRES_AAD_USER on the
   # Console, default loom-console). The PG server name is resolved at runtime.
@@ -75,6 +109,64 @@ jobs:
           set -e
           az account show --query "{user:user.name, sub:id}" -o table
           echo "Acting as Synapse initial admin (b9c3cc65-522e-49c9-ad02-914676aa5a6b)"
+
+      - name: Resolve deploy coordinates (region-correct Console UAMI principal/client + Databricks host)
+        # Region-parameterize the OLD eastus2 hardcodes. The env: block derives every
+        # RG / workspace name from the `region` input; this step resolves the values
+        # that can ONLY be known at runtime against the live admin sub:
+        #   - Console UAMI principalId + clientId (az identity show on uami-loom-console-<region>)
+        #   - the actual UAMI display NAME (for the SQL CREATE LOGIN steps)
+        #   - the Databricks workspace host (per-workspace adb-<id>.<n>.azuredatabricks.net)
+        # Repo vars LOOM_CONSOLE_UAMI_PRINCIPAL / _CLIENT / _NAME still WIN (explicit
+        # BYO override); otherwise these overwrite the eastus2 defaults in $GITHUB_ENV
+        # so every downstream grant targets the identity this deploy actually created.
+        run: |
+          set -uo pipefail
+          echo "region=$REGION  admin_sub=$ADMIN_SUB  dlz_sub=$DLZ_SUB  admin_rg=$ADMIN_RG  dlz_rg=$DLZ_RG"
+          # --- Console UAMI (admin sub) ---
+          az account set --subscription "$ADMIN_SUB" 2>/dev/null || true
+          UAMI_NAME="uami-loom-console-$REGION"
+          # Discover the real UAMI in the admin RG (tolerates a renamed identity).
+          DISCOVERED_NAME=$(az identity list -g "$ADMIN_RG" \
+            --query "[?contains(name,'console')].name | [0]" -o tsv 2>/dev/null || true)
+          [ -n "${DISCOVERED_NAME:-}" ] && [ "$DISCOVERED_NAME" != "None" ] && UAMI_NAME="$DISCOVERED_NAME"
+          UAMI_JSON=$(az identity show -n "$UAMI_NAME" -g "$ADMIN_RG" 2>/dev/null || true)
+          if [ -n "${UAMI_JSON:-}" ]; then
+            RES_PRINCIPAL=$(echo "$UAMI_JSON" | python3 -c "import sys,json;print(json.load(sys.stdin).get('principalId',''))" 2>/dev/null || true)
+            RES_CLIENT=$(echo "$UAMI_JSON"   | python3 -c "import sys,json;print(json.load(sys.stdin).get('clientId',''))"   2>/dev/null || true)
+          fi
+          # Repo-var override wins; else runtime-resolved; else keep the env default.
+          if [ -n "${{ vars.LOOM_CONSOLE_UAMI_PRINCIPAL }}" ]; then
+            echo "Using repo var LOOM_CONSOLE_UAMI_PRINCIPAL (override)"
+          elif [ -n "${RES_PRINCIPAL:-}" ]; then
+            echo "CONSOLE_UAMI_PRINCIPAL=$RES_PRINCIPAL" >> "$GITHUB_ENV"
+            echo "Resolved Console UAMI principalId: $RES_PRINCIPAL ($UAMI_NAME)"
+          else
+            echo "::warning::Could not resolve Console UAMI in $ADMIN_RG — keeping default CONSOLE_UAMI_PRINCIPAL. Set LOOM_CONSOLE_UAMI_PRINCIPAL or check region/admin_subscription."
+          fi
+          if [ -n "${{ vars.LOOM_CONSOLE_UAMI_CLIENT }}" ]; then
+            echo "Using repo var LOOM_CONSOLE_UAMI_CLIENT (override)"
+          elif [ -n "${RES_CLIENT:-}" ]; then
+            echo "CONSOLE_UAMI_CLIENT=$RES_CLIENT" >> "$GITHUB_ENV"
+            echo "Resolved Console UAMI clientId: $RES_CLIENT"
+          fi
+          # Display NAME for the SQL CREATE LOGIN steps (repo var still wins).
+          if [ -z "${{ vars.LOOM_CONSOLE_UAMI_NAME }}" ]; then
+            echo "CONSOLE_SQL_UAMI=$UAMI_NAME" >> "$GITHUB_ENV"
+            echo "Resolved Console UAMI SQL name: $UAMI_NAME"
+          fi
+          # --- Databricks host (dlz sub) ---
+          az account set --subscription "$DLZ_SUB" 2>/dev/null || true
+          DBX_URL=$(az databricks workspace show -g "$DLZ_RG" -n "$DBX_WS" --query workspaceUrl -o tsv 2>/dev/null \
+                    || az databricks workspace show -g "$ADMIN_RG" -n "$DBX_WS" --query workspaceUrl -o tsv 2>/dev/null || true)
+          if [ -n "${DBX_URL:-}" ] && [ "$DBX_URL" != "None" ]; then
+            echo "DBX_HOST=$DBX_URL" >> "$GITHUB_ENV"
+            echo "Resolved Databricks host: $DBX_URL"
+          else
+            echo "::notice::Could not resolve Databricks workspaceUrl for $DBX_WS — keeping default DBX_HOST (SCIM step is best-effort)."
+          fi
+          # Restore the admin sub as the active context for the grant steps.
+          az account set --subscription "$SUB" 2>/dev/null || true
 
       - name: Provision MSAL app registration (sign-in app + redirect URIs + secret in KV)
         # Day-one deploy-readiness (GH #1383): create/reconcile the per-deployment
@@ -269,11 +361,11 @@ jobs:
           # The governance docs live in the CONSOLE Cosmos `loom` DB (tenant-settings
           # + governance-domains containers). In tenant mode the console Cosmos is in
           # the ADMIN RG; discover it there first, then fall back to the DLZ RG.
-          COSMOS_ACCT="$(az cosmosdb list -g "$ADMIN_RG" --query "[?starts_with(name,'cosmos-loom')].name | [0]" -o tsv 2>/dev/null || true)"
-          COSMOS_RG="$ADMIN_RG"
+          COSMOS_ACCT="$(az cosmosdb list --subscription "$ADMIN_SUB" -g "$ADMIN_RG" --query "[?starts_with(name,'cosmos-loom')].name | [0]" -o tsv 2>/dev/null || true)"
+          COSMOS_RG="$ADMIN_RG"; COSMOS_SUB="$ADMIN_SUB"
           if [ -z "$COSMOS_ACCT" ]; then
-            COSMOS_ACCT="$(az cosmosdb list -g "$DLZ_RG" --query "[?starts_with(name,'cosmos-loom')].name | [0]" -o tsv 2>/dev/null || true)"
-            COSMOS_RG="$DLZ_RG"
+            COSMOS_ACCT="$(az cosmosdb list --subscription "$DLZ_SUB" -g "$DLZ_RG" --query "[?starts_with(name,'cosmos-loom')].name | [0]" -o tsv 2>/dev/null || true)"
+            COSMOS_RG="$DLZ_RG"; COSMOS_SUB="$DLZ_SUB"
           fi
           if [ -z "$COSMOS_ACCT" ]; then
             echo "::warning::Could not resolve a cosmos-loom* account in $ADMIN_RG or $DLZ_RG — skipping governance seed."
@@ -281,7 +373,7 @@ jobs:
           fi
           echo "== seeding governance taxonomy into $COSMOS_ACCT (rg=$COSMOS_RG, db=loom) =="
           chmod +x scripts/csa-loom/seed-governance.sh
-          LOOM_SUBSCRIPTION_ID="$SUB" LOOM_COSMOS_ACCOUNT="$COSMOS_ACCT" LOOM_COSMOS_RG="$COSMOS_RG" \
+          LOOM_SUBSCRIPTION_ID="$COSMOS_SUB" LOOM_COSMOS_ACCOUNT="$COSMOS_ACCT" LOOM_COSMOS_RG="$COSMOS_RG" \
             LOOM_COSMOS_DATABASE="loom" LOOM_PURVIEW_ACCOUNT="$LOOM_PURVIEW_ACCOUNT" \
             bash scripts/csa-loom/seed-governance.sh \
             || echo "::warning::governance seed failed (Cosmos Data Contributor RBAC on $COSMOS_ACCT for the deploy SP?) — surfaces start empty until re-run."
@@ -307,21 +399,21 @@ jobs:
           # so Spark notebooks can initialize the Hive metastore (otherwise
           # SHOW NAMESPACES fails with InvalidAbfsRestOperationException -1).
           chmod +x scripts/csa-loom/fix-synapse-spark-storage-access.sh
-          SYNAPSE_WS="$SYNAPSE_WS" SYNAPSE_RG="$DLZ_RG" SUBSCRIPTION="$SUB" \
+          SYNAPSE_WS="$SYNAPSE_WS" SYNAPSE_RG="$DLZ_RG" SUBSCRIPTION="$DLZ_SUB" \
             bash scripts/csa-loom/fix-synapse-spark-storage-access.sh \
             || echo "::warning::Synapse Spark storage fix incomplete — check the deploy SP's rights on the default storage account."
 
       - name: Enable Synapse public access (temp)
         run: |
           set -e
-          az resource update --ids "/subscriptions/$SUB/resourceGroups/$DLZ_RG/providers/Microsoft.Synapse/workspaces/$SYNAPSE_WS" \
+          az resource update --ids "/subscriptions/$DLZ_SUB/resourceGroups/$DLZ_RG/providers/Microsoft.Synapse/workspaces/$SYNAPSE_WS" \
             --api-version 2021-06-01 --set properties.publicNetworkAccess=Enabled \
             --query "properties.publicNetworkAccess" -o tsv
           sleep 30
           # Allow GHA runner IP through firewall
           GHA_IP=$(curl -sS https://ifconfig.me)
           echo "GHA IP: $GHA_IP"
-          az synapse workspace firewall-rule create -g $DLZ_RG --workspace-name $SYNAPSE_WS \
+          az synapse workspace firewall-rule create --subscription "$DLZ_SUB" -g $DLZ_RG --workspace-name $SYNAPSE_WS \
             --name allow-gha-bootstrap-$(date +%s) --start-ip-address "$GHA_IP" --end-ip-address "$GHA_IP" || true
           sleep 30
 
@@ -446,7 +538,7 @@ jobs:
       - name: Restore Synapse public access disabled
         if: always()
         run: |
-          az resource update --ids "/subscriptions/$SUB/resourceGroups/$DLZ_RG/providers/Microsoft.Synapse/workspaces/$SYNAPSE_WS" \
+          az resource update --ids "/subscriptions/$DLZ_SUB/resourceGroups/$DLZ_RG/providers/Microsoft.Synapse/workspaces/$SYNAPSE_WS" \
             --api-version 2021-06-01 --set properties.publicNetworkAccess=Disabled \
             --query "properties.publicNetworkAccess" -o tsv
 
@@ -457,9 +549,9 @@ jobs:
           # GHA runner can't reach `/api/2.0/preview/scim/v2/...` without
           # publicNetworkAccess=Enabled. We flip it on, do the SCIM PATCH,
           # and restore disabled in the always-run cleanup step below.
-          DBX_RID=$(az resource list -g $DLZ_RG --resource-type Microsoft.Databricks/workspaces --query "[?name=='$DBX_WS'].id" -o tsv)
+          DBX_RID=$(az resource list --subscription "$DLZ_SUB" -g $DLZ_RG --resource-type Microsoft.Databricks/workspaces --query "[?name=='$DBX_WS'].id" -o tsv)
           if [ -z "$DBX_RID" ]; then
-            DBX_RID=$(az resource list -g $ADMIN_RG --resource-type Microsoft.Databricks/workspaces --query "[?name=='$DBX_WS'].id" -o tsv)
+            DBX_RID=$(az resource list --subscription "$ADMIN_SUB" -g $ADMIN_RG --resource-type Microsoft.Databricks/workspaces --query "[?name=='$DBX_WS'].id" -o tsv)
           fi
           echo "DBX_RID=$DBX_RID"
           if [ -n "$DBX_RID" ]; then
@@ -546,11 +638,11 @@ jobs:
             echo "  docs/fiab/catalog/metastores.md#enabling-unity-catalog"
             exit 0
           fi
-          WS_ID=$(az databricks workspace show -g "$DLZ_RG" -n "$DBX_WS" --query workspaceId -o tsv 2>/dev/null \
-                  || az databricks workspace show -g "$ADMIN_RG" -n "$DBX_WS" --query workspaceId -o tsv 2>/dev/null)
-          REGION=$(az databricks workspace show -g "$DLZ_RG" -n "$DBX_WS" --query location -o tsv 2>/dev/null \
-                   || az databricks workspace show -g "$ADMIN_RG" -n "$DBX_WS" --query location -o tsv 2>/dev/null)
-          if [ -z "$WS_ID" ] || [ -z "$REGION" ]; then
+          WS_ID=$(az databricks workspace show --subscription "$DLZ_SUB" -g "$DLZ_RG" -n "$DBX_WS" --query workspaceId -o tsv 2>/dev/null \
+                  || az databricks workspace show --subscription "$ADMIN_SUB" -g "$ADMIN_RG" -n "$DBX_WS" --query workspaceId -o tsv 2>/dev/null)
+          DBX_REGION=$(az databricks workspace show --subscription "$DLZ_SUB" -g "$DLZ_RG" -n "$DBX_WS" --query location -o tsv 2>/dev/null \
+                   || az databricks workspace show --subscription "$ADMIN_SUB" -g "$ADMIN_RG" -n "$DBX_WS" --query location -o tsv 2>/dev/null)
+          if [ -z "$WS_ID" ] || [ -z "$DBX_REGION" ]; then
             echo "::warning::Could not resolve Databricks workspaceId/region — skipping UC auto-enable."; exit 0
           fi
           chmod +x scripts/csa-loom/enable-unity-catalog.sh
@@ -559,16 +651,16 @@ jobs:
           # real configured catalog. Tolerate non-account-admin deploy SP: warn,
           # don't fail the bootstrap.
           bash scripts/csa-loom/enable-unity-catalog.sh \
-            --region "$REGION" --workspace-id "$WS_ID" --uami-app-id "$CONSOLE_UAMI_CLIENT" \
+            --region "$DBX_REGION" --workspace-id "$WS_ID" --uami-app-id "$CONSOLE_UAMI_CLIENT" \
             --workspace-host "$DBX_HOST" --default-catalog main \
             || echo "::warning::UC auto-enable failed (deploy SP likely not a Databricks account admin). See docs/fiab/catalog/metastores.md"
 
       - name: Restore Databricks public access disabled
         if: always()
         run: |
-          DBX_RID=$(az resource list -g $DLZ_RG --resource-type Microsoft.Databricks/workspaces --query "[?name=='$DBX_WS'].id" -o tsv)
+          DBX_RID=$(az resource list --subscription "$DLZ_SUB" -g $DLZ_RG --resource-type Microsoft.Databricks/workspaces --query "[?name=='$DBX_WS'].id" -o tsv)
           if [ -z "$DBX_RID" ]; then
-            DBX_RID=$(az resource list -g $ADMIN_RG --resource-type Microsoft.Databricks/workspaces --query "[?name=='$DBX_WS'].id" -o tsv)
+            DBX_RID=$(az resource list --subscription "$ADMIN_SUB" -g $ADMIN_RG --resource-type Microsoft.Databricks/workspaces --query "[?name=='$DBX_WS'].id" -o tsv)
           fi
           if [ -n "$DBX_RID" ]; then
             az resource update --ids "$DBX_RID" --api-version 2024-05-01 \
@@ -621,12 +713,15 @@ jobs:
         # First grant the Console UAMI Monitoring Contributor so the in-console
         # Monitor → Diagnostics tab's "Enable" buttons work at runtime too.
         run: |
-          for RG in "$ADMIN_RG" "$DLZ_RG"; do
+          # ADMIN_RG lives in the admin sub; DLZ_RG may live in a DIFFERENT sub on a
+          # cross-sub dlz-attach. Pair each RG with its sub so the scope is correct.
+          for PAIR in "$ADMIN_SUB:$ADMIN_RG" "$DLZ_SUB:$DLZ_RG"; do
+            RG_SUB="${PAIR%%:*}"; RG="${PAIR##*:}"
             az role assignment create \
               --assignee-object-id $CONSOLE_UAMI_PRINCIPAL \
               --assignee-principal-type ServicePrincipal \
               --role "Monitoring Contributor" \
-              --scope "/subscriptions/$SUB/resourceGroups/$RG" \
+              --scope "/subscriptions/$RG_SUB/resourceGroups/$RG" \
               -o table 2>&1 | grep -v "already exists" || echo "Monitoring Contributor already assigned on $RG"
           done
           # Idempotent sweep — skips resources already routing to the LAW and
@@ -646,7 +741,7 @@ jobs:
             --assignee-object-id $CONSOLE_UAMI_PRINCIPAL \
             --assignee-principal-type ServicePrincipal \
             --role "Role Based Access Control Administrator" \
-            --scope "/subscriptions/$SUB/resourceGroups/$DLZ_RG" \
+            --scope "/subscriptions/$DLZ_SUB/resourceGroups/$DLZ_RG" \
             --condition "$COND" --condition-version "2.0" \
             -o table 2>&1 | grep -v "already exists" || echo "RBAC Admin (constrained) already assigned on $DLZ_RG"
 
@@ -716,8 +811,8 @@ jobs:
         # (synapse-notebook PUT route → adls-client.uploadFile). Both need Storage
         # Blob Data Contributor on the DLZ data-lake account. Idempotent.
         run: |
-          DLZ_STG=$(az storage account list -g $DLZ_RG --query "[?contains(name,'dls') || contains(name,'lake') || contains(name,'adls')].id" -o tsv | head -1)
-          [ -z "$DLZ_STG" ] && DLZ_STG=$(az storage account list -g $DLZ_RG --query "[0].id" -o tsv)
+          DLZ_STG=$(az storage account list --subscription "$DLZ_SUB" -g $DLZ_RG --query "[?contains(name,'dls') || contains(name,'lake') || contains(name,'adls')].id" -o tsv | head -1)
+          [ -z "$DLZ_STG" ] && DLZ_STG=$(az storage account list --subscription "$DLZ_SUB" -g $DLZ_RG --query "[0].id" -o tsv)
           if [ -n "$DLZ_STG" ]; then
             echo "DLZ data-lake storage: $DLZ_STG"
             az role assignment create \
@@ -756,9 +851,9 @@ jobs:
           # Discover the DLZ HNS (Data Lake) account — reuse-first via repo var.
           SA_ACCT="${EXISTING_LOOM_STORAGE_ACCOUNT:-}"
           if [ -z "$SA_ACCT" ]; then
-            SA_ACCT=$(az storage account list -g "$DLZ_RG" \
+            SA_ACCT=$(az storage account list --subscription "$DLZ_SUB" -g "$DLZ_RG" \
               --query "[?starts_with(name,'saloom') && isHnsEnabled].name | [0]" -o tsv 2>/dev/null)
-            [ -z "$SA_ACCT" ] && SA_ACCT=$(az storage account list -g "$DLZ_RG" \
+            [ -z "$SA_ACCT" ] && SA_ACCT=$(az storage account list --subscription "$DLZ_SUB" -g "$DLZ_RG" \
               --query "[?isHnsEnabled].name | [0]" -o tsv 2>/dev/null)
           fi
           if [ -z "$SA_ACCT" ]; then
@@ -766,7 +861,7 @@ jobs:
             exit 0
           fi
           echo "DLZ ADLS account: $SA_ACCT"
-          SA_ID=$(az storage account show -n "$SA_ACCT" -g "$DLZ_RG" --query id -o tsv)
+          SA_ID=$(az storage account show --subscription "$DLZ_SUB" -n "$SA_ACCT" -g "$DLZ_RG" --query id -o tsv)
           # Storage Blob Delegator (account scope) — getUserDelegationKey for embed SAS.
           az role assignment create \
             --assignee-object-id "$CONSOLE_UAMI_PRINCIPAL" \
@@ -775,8 +870,8 @@ jobs:
             --scope "$SA_ID" \
             -o table 2>&1 | grep -v "already exists" || echo "Storage Blob Delegator already assigned"
           # Wire the storage env on the live console app (single merged revision).
-          SA_BLOB=$(az storage account show -n "$SA_ACCT" -g "$DLZ_RG" --query "primaryEndpoints.blob" -o tsv)
-          SA_DFS=$(az storage account show -n "$SA_ACCT" -g "$DLZ_RG"  --query "primaryEndpoints.dfs"  -o tsv)
+          SA_BLOB=$(az storage account show --subscription "$DLZ_SUB" -n "$SA_ACCT" -g "$DLZ_RG" --query "primaryEndpoints.blob" -o tsv)
+          SA_DFS=$(az storage account show --subscription "$DLZ_SUB" -n "$SA_ACCT" -g "$DLZ_RG"  --query "primaryEndpoints.dfs"  -o tsv)
           SA_BLOB="${SA_BLOB%/}"; SA_DFS="${SA_DFS%/}"
           CONSOLE_APP="${LOOM_CONSOLE_APP:-loom-console}"
           az containerapp update -g "$ADMIN_RG" -n "$CONSOLE_APP" --set-env-vars \
@@ -1048,7 +1143,7 @@ jobs:
           # one-time CREATE EXTENSION AGE + create_graph + pgaadauth_create_principal
           # that cannot be done in bicep. Idempotent — re-runs cleanly.
           set -uo pipefail
-          WEAVE_PG_SERVER=$(az postgres flexible-server list -g "$DLZ_RG" \
+          WEAVE_PG_SERVER=$(az postgres flexible-server list --subscription "$DLZ_SUB" -g "$DLZ_RG" \
             --query "[?starts_with(name,'psql-loom-weave')].name | [0]" -o tsv 2>/dev/null)
           if [ -z "$WEAVE_PG_SERVER" ]; then
             echo "::notice::No psql-loom-weave-* server in $DLZ_RG — deploy with weaveOntologyEnabled=true to create it, then re-run this job."
@@ -1062,14 +1157,14 @@ jobs:
             || az account show --query user.name -o tsv 2>/dev/null)
           DEPLOY_SP_OID=$(az ad sp show --id "$(az account show --query user.name -o tsv)" --query id -o tsv 2>/dev/null || echo "")
           if [ -n "$DEPLOY_SP_OID" ]; then
-            az postgres flexible-server ad-admin create -g "$DLZ_RG" -s "$WEAVE_PG_SERVER" \
+            az postgres flexible-server ad-admin create --subscription "$DLZ_SUB" -g "$DLZ_RG" -s "$WEAVE_PG_SERVER" \
               --object-id "$DEPLOY_SP_OID" --display-name "loom-deploy-sp" --type ServicePrincipal \
               -o none 2>/dev/null || echo "  (deploy SP may already be a PG admin — continuing)"
             sleep 20
             export PG_ADMIN_USER="loom-deploy-sp"
           fi
           chmod +x scripts/csa-loom/bootstrap-weave-pg.sh
-          SUB="$SUB" DLZ_RG="$DLZ_RG" WEAVE_PG_SERVER="$WEAVE_PG_SERVER" \
+          SUB="$DLZ_SUB" DLZ_RG="$DLZ_RG" WEAVE_PG_SERVER="$WEAVE_PG_SERVER" \
             CONSOLE_UAMI_NAME="$CONSOLE_UAMI_NAME" \
             bash scripts/csa-loom/bootstrap-weave-pg.sh \
             || echo "::warning::Weave PG bootstrap incomplete — ensure the deploy SP is a PG Entra admin on $WEAVE_PG_SERVER, then re-run."
