@@ -1378,6 +1378,10 @@ export async function getServiceInfo(): Promise<{
   rg: string;
   state?: string;
   gatewayUrl?: string;
+  developerPortalUrl?: string;
+  portalUrl?: string;
+  managementApiUrl?: string;
+  developerPortalStatus?: string;
 } | null> {
   const res = await apimFetch('');
   const j = await readJson<any>(res);
@@ -1387,5 +1391,81 @@ export async function getServiceInfo(): Promise<{
     rg: process.env.LOOM_APIM_RG || 'rg-csa-loom-admin-eastus2',
     state: j?.properties?.provisioningState,
     gatewayUrl: j?.properties?.gatewayUrl,
+    developerPortalUrl: j?.properties?.developerPortalUrl,
+    portalUrl: j?.properties?.portalUrl,
+    managementApiUrl: j?.properties?.managementApiUrl,
+    developerPortalStatus: j?.properties?.developerPortalStatus,
   };
+}
+
+// ---------------- Developer portal (portalRevisions) ----------------
+
+/**
+ * A developer-portal revision (PortalRevisionContract). Each "publish" creates
+ * a revision; `isCurrent` marks the publicly-served one. Grounded in:
+ *   https://learn.microsoft.com/rest/api/apimanagement/portal-revision
+ *   https://learn.microsoft.com/azure/api-management/developer-portal-overview
+ */
+export interface ApimPortalRevision {
+  id: string;
+  name: string;
+  description?: string;
+  isCurrent?: boolean;
+  status?: string;             // 'pending' | 'publishing' | 'completed' | 'failed'
+  statusDetails?: string;
+  createdDateTime?: string;
+  updatedDateTime?: string;
+}
+
+function shapePortalRevision(raw: any): ApimPortalRevision {
+  const p = raw?.properties || {};
+  return {
+    id: raw?.id,
+    name: raw?.name,
+    description: p.description,
+    isCurrent: p.isCurrent,
+    status: p.status,
+    statusDetails: p.statusDetails,
+    createdDateTime: p.createdDateTime,
+    updatedDateTime: p.updatedDateTime,
+  };
+}
+
+/** GET /portalRevisions — developer-portal publish history (newest first). */
+export async function listPortalRevisions(): Promise<ApimPortalRevision[]> {
+  const res = await apimFetch(`/portalRevisions`);
+  const j = await readJson<{ value: any[] }>(res);
+  const rows = (j?.value || []).map(shapePortalRevision);
+  // Newest first so the UI shows the latest publish at the top.
+  return rows.sort((a, b) => (b.createdDateTime || '').localeCompare(a.createdDateTime || ''));
+}
+
+/**
+ * PUT /portalRevisions/{revisionId} — publish the developer portal (the "Publish"
+ * action on the portal overview). Creates a new revision by running the portal's
+ * publishing pipeline; `isCurrent:true` makes it the publicly-served version.
+ *
+ * This is an async/LRO operation: ARM returns 201/202 with an
+ * Azure-AsyncOperation header. We don't block on the poll here — the revision is
+ * created and the UI re-lists revisions to show the in-progress/completed state.
+ */
+export async function publishPortalRevision(
+  opts: { revisionId?: string; description?: string; isCurrent?: boolean } = {},
+): Promise<ApimPortalRevision> {
+  const revisionId = opts.revisionId || `rev-${Date.now()}`;
+  const properties: any = {
+    description: opts.description || `Published from Loom Console ${new Date().toISOString()}`,
+    isCurrent: opts.isCurrent ?? true,
+  };
+  const res = await apimFetch(`/portalRevisions/${encodeURIComponent(revisionId)}`, {
+    method: 'PUT',
+    body: JSON.stringify({ properties }),
+  });
+  // Publish is a long-running op: 201 (created) or 202 (accepted) are success.
+  if (res.status === 202) {
+    return { id: revisionId, name: revisionId, status: 'publishing', isCurrent: properties.isCurrent, description: properties.description };
+  }
+  const j = await readJson<any>(res);
+  if (!j) return { id: revisionId, name: revisionId, status: 'publishing', isCurrent: properties.isCurrent, description: properties.description };
+  return shapePortalRevision(j);
 }
