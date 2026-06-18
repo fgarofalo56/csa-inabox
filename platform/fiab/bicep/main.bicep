@@ -639,6 +639,40 @@ param firewallTier string = 'Standard'
 @allowed([1, 3, 6, 12, 18, 24, 30, 36, 42, 48])
 param streamAnalyticsStreamingUnits int = 3
 
+@description('Virtual Machine size (deploy-planner). Burstable/general-purpose Linux sizes; Standard_B2s is a low-cost starter.')
+@allowed(['Standard_B1s', 'Standard_B2s', 'Standard_B2ms', 'Standard_D2s_v5', 'Standard_D4s_v5', 'Standard_D8s_v5'])
+param vmSize string = 'Standard_B2s'
+
+@description('SignalR SKU (deploy-planner). Free_F1 for dev, Standard_S1 for functional fan-out, Premium_P1 for isolation + autoscale.')
+@allowed(['Free_F1', 'Standard_S1', 'Premium_P1'])
+param signalrSkuName string = 'Standard_S1'
+
+@description('SignalR unit count (deploy-planner). 1 unit ≈ 1,000 concurrent connections; Free_F1 is fixed at 1.')
+@minValue(1)
+@maxValue(100)
+param signalrSkuCapacity int = 1
+
+@description('Static Web Apps SKU (deploy-planner). Free is the cheapest functional tier; Standard adds custom auth + SLA.')
+@allowed(['Free', 'Standard'])
+param staticWebAppsSkuName string = 'Standard'
+
+@description('CDN profile SKU (deploy-planner).')
+@allowed(['Standard_Microsoft', 'Standard_Akamai', 'Standard_Verizon', 'Premium_Verizon'])
+param cdnSkuName string = 'Standard_Microsoft'
+
+@description('Container Instances vCPU cores (deploy-planner).')
+@allowed([1, 2, 4])
+param containerInstancesCpuCores int = 1
+
+@description('Container Instances memory in GB (deploy-planner).')
+@minValue(1)
+@maxValue(16)
+param containerInstancesMemoryInGB int = 1
+
+@description('Azure Machine Learning rich-display compute instance VM size (deploy-planner).')
+@allowed(['Standard_DS3_v2', 'Standard_DS4_v2', 'Standard_D4s_v3', 'Standard_E4s_v3'])
+param mlComputeVmSize string = 'Standard_DS3_v2'
+
 // Derive a valid Redis family + capacity for the chosen SKU (Premium uses the
 // P family starting at capacity 1; Basic/Standard use the C family at 0).
 var redisIsPremium = redisSkuName == 'Premium'
@@ -1676,6 +1710,8 @@ module dpSignalr 'modules/deploy-planner/signalr.bicep' = if (useSingleDlz && si
   scope: singleDlzRg
   params: {
     location: location
+    skuName: signalrSkuName
+    skuCapacity: signalrSkuCapacity
     consolePrincipalId: dpConsolePrincipalId
     skipRoleGrants: skipRoleGrants
     complianceTags: complianceTags
@@ -1763,6 +1799,8 @@ module dpContainerInstances 'modules/deploy-planner/container-instances.bicep' =
   scope: singleDlzRg
   params: {
     location: location
+    cpuCores: containerInstancesCpuCores
+    memoryInGB: containerInstancesMemoryInGB
     consolePrincipalId: dpConsolePrincipalId
     skipRoleGrants: skipRoleGrants
     complianceTags: complianceTags
@@ -1797,6 +1835,7 @@ module dpVm 'modules/deploy-planner/virtual-machine.bicep' = if (useSingleDlz &&
   scope: singleDlzRg
   params: {
     location: location
+    vmSize: vmSize
     adminSshPublicKey: vmAdminSshPublicKey
     consolePrincipalId: dpConsolePrincipalId
     skipRoleGrants: skipRoleGrants
@@ -1831,6 +1870,7 @@ module dpStaticWebApps 'modules/deploy-planner/static-web-app.bicep' = if (useSi
   scope: singleDlzRg
   params: {
     location: location
+    skuName: staticWebAppsSkuName
     consolePrincipalId: dpConsolePrincipalId
     skipRoleGrants: skipRoleGrants
     complianceTags: complianceTags
@@ -1842,6 +1882,7 @@ module dpCdn 'modules/deploy-planner/cdn.bicep' = if (useSingleDlz && cdnEnabled
   scope: singleDlzRg
   params: {
     location: location
+    skuName: cdnSkuName
     consolePrincipalId: dpConsolePrincipalId
     skipRoleGrants: skipRoleGrants
     complianceTags: complianceTags
@@ -1915,6 +1956,7 @@ module dpMlWorkspace 'modules/deploy-planner/ml-workspace.bicep' = if (useSingle
   scope: singleDlzRg
   params: {
     location: location
+    richDisplayComputeVmSize: mlComputeVmSize
     consolePrincipalId: dpConsolePrincipalId
     skipRoleGrants: skipRoleGrants
     complianceTags: complianceTags
