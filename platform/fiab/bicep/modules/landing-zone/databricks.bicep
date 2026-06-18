@@ -35,6 +35,12 @@ param disablePublicIp bool = true
 @description('Customer-managed key for storage (IL5)')
 param storageCmkKeyUri string = ''
 
+@description('Spoke subnet resource id hosting inbound private endpoints (snet-private-endpoints). Empty skips the databricks_ui_api private endpoint (the workspace then relies on the IP-access-list fallback in post-deploy bootstrap).')
+param privateEndpointSubnetId string = ''
+
+@description('Admin Plane / hub private DNS zone id for privatelink.azuredatabricks.net (Commercial) or privatelink.databricks.azure.us (Gov). Linked to the hub VNet so the Console resolves the workspace host to the PE private IP. Empty skips the PE DNS group (the A record must then be wired manually).')
+param databricksPrivateDnsZoneId string = ''
+
 var workspaceName = 'adb-loom-${domainName}-${location}'
 
 // The MRG (managed resource group) name must be globally unique and
@@ -84,6 +90,52 @@ resource accessConnector 'Microsoft.Databricks/accessConnectors@2024-09-01-previ
   tags: complianceTags
   identity: {
     type: 'SystemAssigned'
+  }
+}
+
+// =====================================================================
+// Front-end (databricks_ui_api) private endpoint — #1466
+// =====================================================================
+// The workspace sets publicNetworkAccess: 'Disabled', so the Loom Console
+// (hub VNet) gets "403 Unauthorized network access to workspace" over the
+// public path. This PE on the spoke private-endpoint subnet exposes the
+// workspace UI/REST API privately; the databricks_ui_api subresource is the
+// primary front-end endpoint (handles REST API calls for inbound + classic
+// compute-plane Private Link). The DNS group registers the per-workspace host
+// (adb-<id>.NN.azuredatabricks.net) on the shared privatelink.azuredatabricks.net
+// zone, which is linked to the hub VNet — so the Console resolves it to the PE
+// private IP and reaches the workspace over hub→spoke peering. SSO over a
+// private path additionally needs a browser_authentication endpoint, but the
+// Console's calls are REST/UI-API, so databricks_ui_api is sufficient here.
+// Grounded in Microsoft Learn (Configure Inbound Private Link; private-endpoint-dns).
+resource peUiApi 'Microsoft.Network/privateEndpoints@2024-03-01' = if (!empty(privateEndpointSubnetId)) {
+  name: 'pe-adb-loom-${domainName}-uiapi'
+  location: location
+  tags: complianceTags
+  properties: {
+    subnet: { id: privateEndpointSubnetId }
+    privateLinkServiceConnections: [
+      {
+        name: 'adb-ui-api'
+        properties: {
+          privateLinkServiceId: workspace.id
+          groupIds: [ 'databricks_ui_api' ]
+        }
+      }
+    ]
+  }
+}
+
+resource peUiApiDnsGroup 'Microsoft.Network/privateEndpoints/privateDnsZoneGroups@2024-03-01' = if (!empty(privateEndpointSubnetId) && !empty(databricksPrivateDnsZoneId)) {
+  parent: peUiApi
+  name: 'default'
+  properties: {
+    privateDnsZoneConfigs: [
+      {
+        name: 'privatelink-azuredatabricks-net'
+        properties: { privateDnsZoneId: databricksPrivateDnsZoneId }
+      }
+    ]
   }
 }
 

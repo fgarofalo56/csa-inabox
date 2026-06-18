@@ -377,6 +377,18 @@ var dnsZones = [
   // Gov: .purview.azure.us / .purviewstudio.azure.us.
   'privatelink.purview.azure.${boundary == 'GCC-High' || boundary == 'IL5' ? 'us' : 'com'}'
   'privatelink.purviewstudio.azure.${boundary == 'GCC-High' || boundary == 'IL5' ? 'us' : 'com'}'
+  // #1466 — Azure Databricks workspace (front-end / UI-API private link). The
+  // DLZ databricks.bicep deploys the workspace with publicNetworkAccess:
+  // 'Disabled', so the Console (in the hub VNet) gets "403 Unauthorized network
+  // access to workspace" unless it reaches the workspace privately. A
+  // databricks_ui_api private endpoint (DLZ spoke) registers the per-workspace
+  // host (adb-<id>.NN.azuredatabricks.net) on this zone; linking the zone to the
+  // hub VNet lets the Console resolve it to the PE's private IP. Index 23.
+  // Commercial: privatelink.azuredatabricks.net; Gov (GCC-High/IL5):
+  // privatelink.databricks.azure.us. Grounded in Microsoft Learn
+  // (private-endpoint-dns: Microsoft.Databricks/workspaces, subresources
+  // databricks_ui_api / browser_authentication).
+  'privatelink.${boundary == 'GCC-High' || boundary == 'IL5' ? 'databricks.azure.us' : 'azuredatabricks.net'}'
 ]
 
 resource privateDnsZones 'Microsoft.Network/privateDnsZones@2024-06-01' = [for zone in dnsZones: {
@@ -515,4 +527,10 @@ output privateDnsZoneIds object = {
   // the hub VNet by default.
   purview: privateDnsZones[21].id
   purviewStudio: privateDnsZones[22].id
+  // #1466 — Azure Databricks front-end private-link zone (index 23). The DLZ
+  // databricks.bicep reads adminPlanePrivateDnsZoneIds.databricks for the
+  // databricks_ui_api PE's DNS group so the PE-locked workspace
+  // (publicNetworkAccess Disabled) resolves to a private IP from the hub VNet.
+  // Without it the Console hits "403 Unauthorized network access to workspace".
+  databricks: privateDnsZones[23].id
 }

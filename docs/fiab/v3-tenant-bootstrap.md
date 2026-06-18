@@ -312,62 +312,172 @@ completion. If gated, the MessageBar names the unset env var.
 
 ---
 
-## Microsoft Graph admin consent — MIP + DLP {#graph-admin-consent-mip-dlp}
+## Microsoft Graph app-roles — MIP + DLP (day-one) {#graph-admin-consent-mip-dlp}
 
 Loom's **/admin/security** MIP (sensitivity labels) and DLP tabs call Microsoft
-Graph **app-only** with the Console UAMI. That requires two **application**
-app-roles on Microsoft Graph, granted to the UAMI **and** admin-consented at the
-tenant. ARM/bicep cannot grant Graph app-roles, so this is a one-time script +
-a one-time admin click.
+Graph **app-only** with the Console UAMI. That requires the five **application**
+app-roles below on Microsoft Graph, assigned to the Console UAMI's service
+principal.
 
 | App-role (application permission) | App-role id | Backs |
 |---|---|---|
 | `InformationProtectionPolicy.Read.All` | `19da66cb-0fb0-4390-b071-ebc76a349482` | MIP sensitivity-label policy reads |
+| `SensitivityLabel.Evaluate` | `57f0b71b-a759-45a0-9a0f-cc099fbd9a44` | apply-label evaluation |
 | `Policy.Read.All` | `246dd0d5-5bd0-4def-940b-0421030a5b68` | DLP / tenant policy reads |
+| `SecurityAlert.Read.All` | `bf394140-e372-4bf9-a898-299cfc7564e5` | DLP alerts/violations (alerts_v2) |
+| `SecurityIncident.Read.All` | `45cc0394-e837-488b-a098-1918f48d186c` | Graph Security incidents (alerts_v2) |
 
 > These are the **Application** app-role ids (type `Role`), not the delegated
 > `oauth2PermissionScopes` ids. Using the delegated id silently fails app-only.
 
-### Step 1 — Grant the app-roles to the Console UAMI
+**This is automated day-one.** The flags `loomMipEnabled` / `loomDlpEnabled`
+default `true` (so the Console gets `LOOM_MIP_ENABLED=true` + `LOOM_DLP_ENABLED=true`
+out of the box), and the post-deploy bootstrap job **Grant MIP+DLP Graph
+AppRoles** assigns the five app-roles automatically. There is **no separate
+"Grant admin consent" click** for a managed identity — assigning the app-role to
+the UAMI's service principal *is* the grant, and it takes effect immediately.
+(The interactive "Grant admin consent" prompt is the *app-registration* pattern,
+where a Global/Application Administrator approves a *requested* permission. A
+managed identity has no app registration and no consent prompt.) Until the
+app-roles land, the tabs render the honest `503 NotConfigured` MessageBar — never
+an empty stub.
+
+### The one-time tenant prerequisite (only if the grants 403)
+
+Assigning Graph app-roles to the UAMI requires the **bootstrap/deploy principal**
+to hold **`AppRoleAssignment.ReadWrite.All` on Microsoft Graph** (or the
+*Privileged Role Administrator* directory role). The deploy SP is created with
+Azure RBAC (Owner/Contributor) but **not** with this Graph directory privilege,
+so on the very first deploy the **Grant MIP+DLP Graph AppRoles** step may `403`.
+When it does, the step prints a `::warning::` with the exact remediation below
+and continues (non-fatal — the tabs stay on the honest gate). A
+**Global Administrator** runs this **once**, then re-runs the bootstrap job:
 
 ```bash
-az login    # as a user/SP with Application.ReadWrite.All on Graph
+# As a Global Administrator / Privileged Role Administrator:
+DEPLOY_SP_OBJID=<the deploy SP service-principal OBJECT id>   # az ad sp show --id <deploy appId> --query id -o tsv
+GRAPH_SP_ID=$(az ad sp list --filter "appId eq '00000003-0000-0000-c000-000000000000'" --query "[0].id" -o tsv)
+APPROLE_RW=$(az ad sp show --id "$GRAPH_SP_ID" \
+  --query "appRoles[?value=='AppRoleAssignment.ReadWrite.All'].id | [0]" -o tsv)
+az rest --method POST \
+  --url "https://graph.microsoft.com/v1.0/servicePrincipals/$DEPLOY_SP_OBJID/appRoleAssignments" \
+  --headers "Content-Type=application/json" \
+  --body "{\"principalId\":\"$DEPLOY_SP_OBJID\",\"resourceId\":\"$GRAPH_SP_ID\",\"appRoleId\":\"$APPROLE_RW\"}"
+```
+
+This is the **only** thing that lets the bootstrap assign the MIP/DLP app-roles
+unattended. It can't be self-served from the deploy because granting a Graph
+directory privilege to *itself* would be a privilege-escalation an Azure RBAC
+role can't perform — it requires a directory-role holder.
+
+### Manual fallback (no bootstrap)
+
+```bash
+az login    # as a user/SP with AppRoleAssignment.ReadWrite.All on Graph
 CONSOLE_UAMI_PRINCIPAL=<console UAMI object id> \
   ./scripts/csa-loom/grant-graph-approles.sh
 ```
 
-The script is idempotent (re-running is a no-op). It POSTs
-`appRoleAssignments` on the UAMI's service principal against the Microsoft Graph
-SP (`appId 00000003-0000-0000-c000-000000000000`).
-
-### Step 2 — Tenant admin consent
-
-A **Privileged Role Administrator / Global Administrator** must consent:
-
-> Entra ID → Enterprise applications → *Console UAMI* → Permissions →
-> **Grant admin consent for `<tenant>`**
-
-Until consent is issued, every Graph call returns 403 and the MIP/DLP tabs show
-their honest `403 — AppRole not consented` MessageBars.
-
-### Step 3 — Flip the feature flags
-
-```bash
-az containerapp update --name <loom-console-app> --resource-group <loom-admin-rg> \
-  --set-env-vars LOOM_MIP_ENABLED=true LOOM_DLP_ENABLED=true
-```
-
-Or set `loomMipEnabled = true` / `loomDlpEnabled = true` in the `.bicepparam`
-and re-deploy admin-plane (the env wiring is already in `admin-plane/main.bicep`).
+Idempotent (re-running is a no-op). It POSTs `appRoleAssignments` on the UAMI's
+service principal against the Microsoft Graph SP
+(`appId 00000003-0000-0000-c000-000000000000`).
 
 ### Bicep sync
 
-- Env flags `LOOM_MIP_ENABLED` / `LOOM_DLP_ENABLED`:
+- Env flags `LOOM_MIP_ENABLED` / `LOOM_DLP_ENABLED` default ON:
   `platform/fiab/bicep/modules/admin-plane/main.bicep` (`loomMipEnabled` /
-  `loomDlpEnabled` params).
-- The two Graph app-roles are **Graph-plane** grants and intentionally cannot be
-  expressed in ARM/bicep — hence `scripts/csa-loom/grant-graph-approles.sh` +
-  the admin-consent click above.
+  `loomDlpEnabled` params) + `params/commercial-full.bicepparam`.
+- The five Graph app-roles are **Graph-plane** grants and intentionally cannot be
+  expressed in ARM/bicep — hence the bootstrap step +
+  `scripts/csa-loom/grant-graph-approles.sh`.
+
+## DLP policy CRUD — SCC PowerShell sidecar {#dlp-scc-sidecar}
+
+The DLP **reads** (policies/rules/alerts/violations/simulate) and the
+Azure-native **Restrict-access** revokes work day-one via Graph + ADLS/Synapse/ADX
+(above). DLP policy **authoring** (create/edit/delete DLP compliance policies +
+rules) has **no Microsoft Graph write surface** — it runs through Security &
+Compliance PowerShell (`Get/New/Set/Remove-DlpCompliancePolicy` +
+`*-DlpComplianceRule`). The same applies to sensitivity-label + label-policy CRUD
+(`New-/Set-/Remove-Label`, `*-LabelPolicy`). Loom proxies all of this to a
+PowerShell Azure Function — `azure-functions/scc-labels` — deployed by
+`platform/fiab/bicep/modules/admin-plane/scc-labels-function.bicep` and wired into
+the Console as `LOOM_DLP_ADMIN_ENABLED` / `LOOM_MIP_ADMIN_ENABLED` +
+`LOOM_SCC_LABELS_ENDPOINT` / `LOOM_SCC_LABELS_KEY`.
+
+The sidecar authenticates to SCC with **certificate-based app-only auth**
+(`Connect-IPPSSession -AppId … -Certificate … -Organization …`). That app needs
+the Graph app-role **`Exchange.ManageAsApp`** + the Entra directory role
+**Compliance Administrator**. Creating an app registration, assigning a directory
+role, and uploading an auth certificate are **interactive Entra-admin actions** —
+they can't be self-served by an Azure deploy SP — so DLP/label **CRUD** is
+**opt-in** (`loomDlpAdminEnabled` / `loomMipAdminEnabled`, default `false`). Until
+it's wired, the DLP-management tab renders the honest `dlp_admin_not_configured`
+gate; everything else on the page works.
+
+### One-time setup
+
+The post-deploy bootstrap step **Provision SCC labels + DLP sidecar** runs
+`scripts/csa-loom/provision-scc-labels-sidecar.sh` every deploy and performs the
+automatable parts: it creates/reuses the SCC app registration, grants
+`Exchange.ManageAsApp`, assigns Compliance Administrator (when the bootstrap
+principal is a Privileged Role Administrator), and — once the Function app exists
+— publishes the `labels/` + `dlp/` code. The remaining one-time human actions:
+
+1. **Create an auth certificate** and upload its public key (`.cer`) to the SCC
+   app registration; install the PFX into the Function app and set
+   `WEBSITE_LOAD_CERTIFICATES` to the thumbprint (the `sccCertThumbprint` param
+   wires this app setting).
+2. **Re-deploy admin-plane** with `loomDlpAdminEnabled = true` (and/or
+   `loomMipAdminEnabled = true`), `sccAppId = <app id>`,
+   `sccCertThumbprint = <thumbprint>`,
+   `sccOrganization = <tenant>.onmicrosoft.com` (sovereign clouds also set
+   `sccConnectionUri`, e.g. `https://ps.compliance.protection.office365.us`).
+3. **Consent `Exchange.ManageAsApp`** for the SCC app (Entra → App registrations →
+   *CSA Loom SCC Labels Sidecar* → API permissions → Grant admin consent). This
+   IS the app-registration pattern, so the interactive consent click *is*
+   required here (unlike the Console UAMI app-roles above).
+
+### Bicep sync
+
+- Module: `platform/fiab/bicep/modules/admin-plane/scc-labels-function.bicep`
+  (deploys when `loomMipAdminEnabled || loomDlpAdminEnabled`).
+- Env: `LOOM_DLP_ADMIN_ENABLED` / `LOOM_MIP_ADMIN_ENABLED` +
+  `LOOM_SCC_LABELS_ENDPOINT` / `LOOM_SCC_LABELS_KEY` in
+  `admin-plane/main.bicep`.
+
+## Databricks reachability — private endpoint (day-one) {#databricks-private-endpoint}
+
+The DLZ Databricks workspace (`databricks.bicep`) is VNet-injected with
+`publicNetworkAccess: 'Disabled'`. Without a private path the Console
+(`/api/.../databricks/*`) gets **`403 Unauthorized network access to workspace`**
+(#1466). The day-one fix is **private-by-default**: a **`databricks_ui_api`
+private endpoint** on the DLZ spoke `snet-private-endpoints` subnet, plus the
+**`privatelink.azuredatabricks.net`** private DNS zone (Gov:
+`privatelink.databricks.azure.us`) linked to the hub VNet. The PE registers the
+per-workspace host (`adb-<id>.NN.azuredatabricks.net`) on the zone, so the Console
+resolves the workspace to its private IP and reaches it over hub→spoke peering.
+No tenant action and **no IP-allowlist drift**.
+
+| Piece | Where |
+|---|---|
+| Private DNS zone (`privatelink.azuredatabricks.net` / `…databricks.azure.us`) | `admin-plane/network.bicep` (`dnsZones[23]`, output key `databricks`) |
+| `databricks_ui_api` PE + DNS group | `landing-zone/databricks.bicep` (`peUiApi`, `peUiApiDnsGroup`) |
+| Threading | `main.bicep` → `landing-zone/main.bicep` (`databricks` module gets `privateEndpointSubnetId` + `databricksPrivateDnsZoneId`) |
+
+> The Console's calls are REST/UI-API, so `databricks_ui_api` is sufficient. A
+> `browser_authentication` PE is only needed for browser **SSO** over a private
+> path (not used by Loom's server-side calls).
+
+### IP-allowlist fallback (opt-in)
+
+If an operator runs the workspace with `publicNetworkAccess=Enabled` instead of
+the PE, the workspace IP access list (when enabled) can still block the Console's
+NAT egress IP. Set repo vars `LOOM_DBX_IP_ALLOWLIST_FALLBACK=true` +
+`LOOM_CONSOLE_EGRESS_IP=<egress IP/CIDR>` and the bootstrap step **Databricks
+reachability fallback** adds that IP to an `ALLOW` list via
+`POST /api/2.0/ip-access-lists`. The PE is preferred (no IP drift, matches the
+Network page "private by default" posture).
 
 ## Batch labeling — Power BI Admin setLabels {#batch-labeling-powerbi-setlabels}
 
