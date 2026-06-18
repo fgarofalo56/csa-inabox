@@ -548,6 +548,7 @@ export function PropertiesPanel({ activity, allActivities, parameters, variables
                     onPatch({ userProperties: ups });
                   }} />
                 <Button size="small" appearance="subtle" icon={<Delete20Regular />}
+                  aria-label="Remove user property"
                   onClick={() => {
                     const ups = [...(activity.userProperties || [])];
                     ups.splice(i, 1);

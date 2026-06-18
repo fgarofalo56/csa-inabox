@@ -238,7 +238,7 @@ export default function GovernanceScansPage() {
       {/* Scans drawer */}
       <Drawer type="overlay" position="end" open={!!drawerSource} onOpenChange={(_, d) => { if (!d.open) setDrawerSource(null); }} size="medium">
         <DrawerHeader>
-          <DrawerHeaderTitle action={<Button appearance="subtle" icon={<Dismiss24Regular />} onClick={() => setDrawerSource(null)} />}>
+          <DrawerHeaderTitle action={<Button appearance="subtle" icon={<Dismiss24Regular />} aria-label="Close scans drawer" onClick={() => setDrawerSource(null)} />}>
             Scans — {drawerSource?.name}
           </DrawerHeaderTitle>
         </DrawerHeader>

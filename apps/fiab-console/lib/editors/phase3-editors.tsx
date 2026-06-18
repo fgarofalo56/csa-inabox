@@ -13192,7 +13192,7 @@ export function SemanticModelEditor({ item, id }: { item: FabricItemType; id: st
                                   <TableCell>
                                     <Input size="small" value={m.detailColumn} onChange={(_, d) => updateAltMap(i, { detailColumn: d.value })} placeholder={m.summarization === 'Count' ? '(rows — optional)' : 'SalesAmount'} />
                                   </TableCell>
-                                  <TableCell><Button size="small" appearance="subtle" icon={<Delete20Regular />} onClick={() => removeAltMap(i)} title="remove mapping" /></TableCell>
+                                  <TableCell><Button size="small" appearance="subtle" icon={<Delete20Regular />} onClick={() => removeAltMap(i)} title="remove mapping" aria-label="Remove column mapping" /></TableCell>
                                 </TableRow>
                               ))}
                             </TableBody>
@@ -14827,7 +14827,7 @@ function ReportLikeEditor({
                     <div className={s.card}>
                       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 6 }}>
                         <Subtitle2>Bookmarks ({bookmarks.length})</Subtitle2>
-                        <Button size="small" appearance="subtle" icon={<ArrowSync20Regular />} onClick={reloadBookmarks} title="reload report bookmarks" />
+                        <Button size="small" appearance="subtle" icon={<ArrowSync20Regular />} onClick={reloadBookmarks} title="reload report bookmarks" aria-label="Reload report bookmarks" />
                       </div>
                       {bookmarks.length === 0 && <Caption1>No bookmarks. Use Capture bookmark.</Caption1>}
                       <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
