@@ -3172,12 +3172,20 @@ module appDeployments 'app-deployments.bicep' = if (containerPlatform == 'contai
             // deploy — the deployment is then discovered from the hub connections
             // by resolveAoaiTarget()).
             { name: 'LOOM_AOAI_ENDPOINT',          value: agentFoundryEnabled ? agentFoundry!.outputs.aoaiEndpoint : (!empty(existingFoundryAccountName) ? byoFoundryEndpoint : ((aiFoundryEnabled && empty(existingFoundryAccountName)) ? aiFoundry!.outputs.aoaiInferenceEndpoint : '')) }
-            { name: 'LOOM_AOAI_CHAT_DEPLOYMENT',   value: agentFoundryEnabled ? agentFoundry!.outputs.chatDeployment : byoFoundryChatDeployment }
+            // Deployment-name resolution order: dedicated Agent Service account
+            // (agentFoundry, default on) → an explicit BYO deployment → the shared
+            // Foundry hub's default model (ai-foundry.bicep now deploys gpt-4o-mini
+            // on its AIServices account by default). The hub fallback is what makes
+            // LOOM_AOAI_ENDPOINT (already wired to aiFoundry's inference endpoint
+            // below) actually resolve a model on a hub-only / partial deploy — the
+            // exact gap that left the live estate's aoai-csa-loom account with NO
+            // deployment and the self-audit warning "No AOAI model deployment resolved".
+            { name: 'LOOM_AOAI_CHAT_DEPLOYMENT',   value: agentFoundryEnabled ? agentFoundry!.outputs.chatDeployment : (!empty(byoFoundryChatDeployment) ? byoFoundryChatDeployment : ((aiFoundryEnabled && empty(existingFoundryAccountName)) ? aiFoundry!.outputs.defaultChatDeploymentName : '')) }
             // The copilot/data-agent orchestrators read LOOM_AOAI_DEPLOYMENT (not
             // the _CHAT_ variant) to resolve the model — keep both in sync so the
             // Copilot/data-agent chat works out of the box (the "no AOAI model"
             // gap was exactly this name mismatch on the live deploy).
-            { name: 'LOOM_AOAI_DEPLOYMENT',        value: agentFoundryEnabled ? agentFoundry!.outputs.chatDeployment : byoFoundryChatDeployment }
+            { name: 'LOOM_AOAI_DEPLOYMENT',        value: agentFoundryEnabled ? agentFoundry!.outputs.chatDeployment : (!empty(byoFoundryChatDeployment) ? byoFoundryChatDeployment : ((aiFoundryEnabled && empty(existingFoundryAccountName)) ? aiFoundry!.outputs.defaultChatDeploymentName : '')) }
             // AOAI Chat Completions API version. resolveAoaiTarget() reads
             // process.env.LOOM_AOAI_API_VERSION (default 2024-10-21). Exposing it
             // here lets operators advance the version (e.g. for o-series reasoning
