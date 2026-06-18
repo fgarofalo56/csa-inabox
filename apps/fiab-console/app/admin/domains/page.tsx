@@ -99,20 +99,39 @@ export default function DomainsPage() {
   // Attach-existing-subscription dialog.
   const [attachFor, setAttachFor] = useState<Domain | null>(null);
 
+  // The Purview business-domain mirror status is fetched LAZILY from its own
+  // endpoint AFTER the domains list renders. The Purview Data Map probe can
+  // answer 403 slowly behind a private endpoint; folding it into the list GET
+  // pushed that request past the client fetch timeout ("Could not load domains
+  // — timed out"). Decoupled here so a slow/403 Purview probe never blocks the
+  // list — the mirror MessageBar simply fills in when/if this resolves.
+  const loadPurview = useCallback(async () => {
+    try {
+      const r = await clientFetch('/api/admin/domains/purview-status', undefined, 30000);
+      const j = await r.json();
+      if (j.ok) setPurview(j.purview || null);
+    } catch { /* non-fatal — domains list already rendered without the mirror */ }
+  }, []);
+
   const load = useCallback(async () => {
     setLoading(true); setError(null);
     try {
-      const r = await clientFetch('/api/admin/domains');
+      // Generous 30s budget — the domains list is a heavier multi-sub query
+      // (workspace counts + Unity Catalog link status) and the 6s default was
+      // tripping on it. Matches the Usage page budget from #1471.
+      const r = await clientFetch('/api/admin/domains', undefined, 30000);
       const j = await r.json();
       if (!j.ok) { setError(j.error || 'failed'); return; }
       setDomains(j.domains || []);
-      setPurview(j.purview || null);
       setIsTenantAdmin(j.isTenantAdmin !== false);
     } catch (e: any) { setError(e?.message || String(e)); }
     finally { setLoading(false); }
   }, []);
 
   useEffect(() => { load(); }, [load]);
+  // Kick the Purview-mirror probe independently so it can resolve (or stay
+  // pending) without gating the list above.
+  useEffect(() => { loadPurview(); }, [loadPurview]);
 
   function openCreate(parentId: string | null) {
     setCreateParentId(parentId);

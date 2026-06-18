@@ -124,7 +124,9 @@ export default function CatalogDomainsPage() {
   const loadDomains = useCallback(async () => {
     setLoading(true); setError(null);
     try {
-      const r = await clientFetch('/api/admin/domains');
+      // 30s budget: the domains list is a heavier multi-sub query (workspace
+      // counts + Unity Catalog status) and the 6s default could trip on it.
+      const r = await clientFetch('/api/admin/domains', undefined, 30000);
       const j: AdminDomainsResponse = await r.json();
       if (!j.ok) { setError(j.error || `HTTP ${r.status}`); return; }
       setDomains(j.domains || []);
@@ -156,6 +158,24 @@ export default function CatalogDomainsPage() {
   }, [domains]);
 
   const rootDomains = useMemo(() => (domains || []).filter((d) => !d.parentId), [domains]);
+
+  // Which Loom domains are mirrored as Purview collections — derived CLIENT-SIDE
+  // from the classic Data Map collections this page already loads (domain ⇄
+  // collection per unified-domain-mapper). The list GET no longer carries a
+  // server-computed `purviewLinked` flag (it was decoupled so the Purview probe
+  // can't block the list); we recompute it here without an extra round-trip.
+  const purviewNames = useMemo(() => {
+    const names = new Set<string>();
+    for (const c of classic?.collections || []) {
+      if (c.friendlyName) names.add(c.friendlyName.toLowerCase());
+      if (c.name) names.add(c.name.toLowerCase());
+    }
+    return names;
+  }, [classic]);
+  const isPurviewLinked = useCallback(
+    (d: LoomDomain) => purviewNames.has((d.name || '').toLowerCase()),
+    [purviewNames],
+  );
 
   function openCreate() { setDlg({ mode: 'create' }); setFId(''); setFName(''); setFDesc(''); setFParent(''); setActionErr(null); }
   function openSubdomain(parent: LoomDomain) { setDlg({ mode: 'subdomain', parentId: parent.id }); setFId(''); setFName(''); setFDesc(''); setFParent(parent.id); setActionErr(null); }
@@ -228,10 +248,10 @@ export default function CatalogDomainsPage() {
     },
     {
       key: 'governance', label: 'Mirrors', width: 170, sortable: false, filterable: false,
-      getValue: (d) => `${d.purviewLinked ? 'purview ' : ''}${d.unityLinked ? 'unity' : ''}`,
+      getValue: (d) => `${isPurviewLinked(d) ? 'purview ' : ''}${d.unityLinked ? 'unity' : ''}`,
       render: (d) => (
         <span className={s.linkBadges}>
-          <Badge appearance={d.purviewLinked ? 'filled' : 'outline'} color={d.purviewLinked ? 'brand' : undefined} size="small">Purview</Badge>
+          <Badge appearance={isPurviewLinked(d) ? 'filled' : 'outline'} color={isPurviewLinked(d) ? 'brand' : undefined} size="small">Purview</Badge>
           <Badge appearance={d.unityLinked ? 'filled' : 'outline'} color={d.unityLinked ? 'success' : undefined} size="small">Unity</Badge>
         </span>
       ),
