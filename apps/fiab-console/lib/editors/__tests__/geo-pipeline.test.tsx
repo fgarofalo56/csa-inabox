@@ -11,12 +11,13 @@
  * pipeline parameters — no longer a "deferred to v3.x" MessageBar.
  */
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
-import { render, screen, waitFor, fireEvent } from '@testing-library/react';
+import { render, screen, waitFor, fireEvent, cleanup } from '@testing-library/react';
 import { GeoPipelineEditor } from '../geo-editors';
 import { makeItem, installFetchMock } from './test-helpers';
 
 describe('GeoPipelineEditor', () => {
-  afterEach(() => { vi.restoreAllMocks(); });
+  // globals:false means cleanup is not automatic; prevents DOM accumulation between tests.
+  afterEach(() => { cleanup(); vi.restoreAllMocks(); });
 
   it('mounts and surfaces at least one ribbon button', async () => {
     installFetchMock({});
@@ -48,8 +49,10 @@ describe('GeoPipelineEditor', () => {
       render(<GeoPipelineEditor item={makeItem('geo-pipeline', 'Geo pipeline')} id="gp-1" />);
       await waitFor(() => expect(screen.getByTestId('chrome')).toBeInTheDocument(), { timeout: 5000 });
 
-      // The ribbon "Trigger run" button fires the run route.
-      const triggerBtn = await screen.findByText(/Trigger run/i);
+      // The ribbon "Trigger run" button fires the run route. Use getByRole('button')
+      // to disambiguate from the <span>/<strong> description text that also contains
+      // "Trigger run" in the geo-pipeline editor's informational copy.
+      const triggerBtn = await screen.findByRole('button', { name: /Trigger run/i });
       fireEvent.click(triggerBtn);
 
       await waitFor(() => {

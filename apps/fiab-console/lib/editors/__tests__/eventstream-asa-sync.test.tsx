@@ -9,7 +9,7 @@
  *     returned output receipt renders in a success MessageBar
  */
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
-import { render, screen, waitFor, fireEvent } from '@testing-library/react';
+import { render, screen, waitFor, fireEvent, cleanup } from '@testing-library/react';
 import { EventstreamEditor } from '../phase3-editors';
 import { makeItem, installFetchMock } from './test-helpers';
 
@@ -45,7 +45,8 @@ describe('EventstreamEditor — Push destinations to ASA', () => {
     calls = m.calls;
   });
 
-  afterEach(() => { vi.restoreAllMocks(); });
+  // globals:false means cleanup is not automatic; prevents DOM accumulation between tests.
+  afterEach(() => { cleanup(); vi.restoreAllMocks(); });
 
   it('renders the ASA job input + per-kind destination ribbon actions', async () => {
     render(<EventstreamEditor item={makeItem('eventstream', 'Eventstream')} id="es-fixture" />);
@@ -76,9 +77,11 @@ describe('EventstreamEditor — Push destinations to ASA', () => {
     });
     await waitFor(() => {
       expect(screen.getByText('Destinations pushed to ASA')).toBeTruthy();
-      // The receipt lists the created output aliases.
-      expect(screen.getByText('kusto-out')).toBeTruthy();
-      expect(screen.getByText('lake-out')).toBeTruthy();
+      // The receipt lists the created output aliases. "kusto-out" / "lake-out"
+      // also appear in the sinks config panel (from the GET response), so use
+      // getAllByText and confirm at least one match (the receipt entry).
+      expect(screen.getAllByText('kusto-out').length).toBeGreaterThan(0);
+      expect(screen.getAllByText('lake-out').length).toBeGreaterThan(0);
     });
   });
 });

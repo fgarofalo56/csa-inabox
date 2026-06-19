@@ -81,8 +81,10 @@ describe('ActivatorEditor', () => {
     // Once a workspace is chosen the first reflex auto-selects and its rules load.
     await waitFor(() => expect(calls.some((c) => c.url.includes('/api/items/activator/reflex-1/rules'))).toBe(true));
 
-    // Open the rule wizard.
-    fireEvent.click(screen.getByRole('button', { name: /New rule/i }));
+    // Open the rule wizard. Two "New rule" buttons exist legitimately: one in the
+    // ribbon stub and one as the DialogTrigger in the reflex detail panel. Click
+    // the first — both open the same wizard.
+    fireEvent.click(screen.getAllByRole('button', { name: /New rule/i })[0]);
 
     // The Monitor-native wizard sections render.
     await waitFor(() => expect(screen.getByText(/DATA SOURCE/)).toBeInTheDocument());
@@ -121,7 +123,8 @@ describe('ActivatorEditor', () => {
     fireEvent.change(within(container).getByRole('combobox'), { target: { value: 'ws-1' } });
     await waitFor(() => expect(calls.some((c) => c.url.includes('/api/items/activator/reflex-1/rules'))).toBe(true));
 
-    fireEvent.click(screen.getByRole('button', { name: /New rule/i }));
+    // Two "New rule" buttons: ribbon stub + DialogTrigger inline. Use first.
+    fireEvent.click(screen.getAllByRole('button', { name: /New rule/i })[0]);
     await waitFor(() => expect(screen.getByText(/DATA SOURCE/)).toBeInTheDocument());
 
     // Default KQL source shows the verbatim-query hint.

@@ -7,7 +7,7 @@
  * 'new'.
  */
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
-import { render, screen, waitFor, fireEvent } from '@testing-library/react';
+import { render, screen, waitFor, fireEvent, cleanup } from '@testing-library/react';
 import { KqlDashboardEditor } from '../phase3-editors';
 import { makeItem, installFetchMock } from './test-helpers';
 
@@ -28,7 +28,8 @@ describe('KqlDashboardEditor', () => {
     calls = m.calls;
   });
 
-  afterEach(() => { vi.restoreAllMocks(); });
+  // globals:false means cleanup is not automatic; prevents DOM accumulation between tests.
+  afterEach(() => { cleanup(); vi.restoreAllMocks(); });
 
   it('renders tiles from GET ?run=1', async () => {
     render(<KqlDashboardEditor item={makeItem('kql-dashboard', 'KQL Dashboard')} id="dash-fixture" />);

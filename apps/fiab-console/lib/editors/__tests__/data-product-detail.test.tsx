@@ -11,7 +11,7 @@
  * are stubbed by vitest.setup.ts.
  */
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
-import { render, screen, waitFor, fireEvent, within } from '@testing-library/react';
+import { render, screen, waitFor, fireEvent, within, cleanup } from '@testing-library/react';
 import { DataProductDetailEditor } from '../data-product-detail';
 import { makeItem, installFetchMock } from './test-helpers';
 
@@ -52,8 +52,10 @@ function mountWith(extra: Record<string, unknown> = {}) {
 }
 
 describe('DataProductDetailEditor', () => {
+  // globals:false means @testing-library/react does NOT auto-register cleanup.
+  // Without explicit cleanup, renders accumulate across tests → "found multiple elements".
   beforeEach(() => { vi.restoreAllMocks(); });
-  afterEach(() => { vi.restoreAllMocks(); });
+  afterEach(() => { cleanup(); vi.restoreAllMocks(); });
 
   it('renders the product name and status badge from the GET response', async () => {
     mountWith();

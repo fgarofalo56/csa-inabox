@@ -10,7 +10,7 @@
  * search-management surface from B-grade (functional, untested) to A-grade.
  */
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
-import { render, screen, waitFor } from '@testing-library/react';
+import { render, screen, waitFor, cleanup } from '@testing-library/react';
 import { FullTextSearchPanel, VectorIndexPanel } from '../components/sql-search-management';
 import { installFetchMock } from './test-helpers';
 
@@ -23,7 +23,8 @@ describe('FullTextSearchPanel', () => {
       }),
     });
   });
-  afterEach(() => { vi.restoreAllMocks(); });
+  // globals:false means cleanup is not automatic; prevents DOM accumulation between tests.
+  afterEach(() => { cleanup(); vi.restoreAllMocks(); });
 
   it('shows a pick-a-server gate when no server/database is selected', async () => {
     let err: unknown = null;
@@ -60,7 +61,9 @@ describe('VectorIndexPanel', () => {
     let err: unknown = null;
     try {
       render(<VectorIndexPanel id="abc" server="srv.database.windows.net" database="db" />);
-      await waitFor(() => expect(screen.getByText(/Vector indexes/i)).toBeInTheDocument(), { timeout: 5000 });
+      // "Vector indexes" appears in the MessageBarTitle AND the Subtitle2 heading
+      // within a single render, so use getAllByText and assert at least one matches.
+      await waitFor(() => expect(screen.getAllByText(/Vector indexes/i).length).toBeGreaterThan(0), { timeout: 5000 });
     } catch (e) { err = e; }
     if (err) expect(String((err as any)?.message || err)).toMatch(/unauth|fetch|cannot read|undefined|null|require|import/i);
   });

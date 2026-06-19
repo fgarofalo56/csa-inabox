@@ -58,8 +58,9 @@ describe('MirrorSourceWizard — Snowflake Iceberg option', () => {
     // Check Iceberg.
     fireEvent.click(screen.getByLabelText(/Include Iceberg tables/i));
 
-    // Submit.
-    fireEvent.click(screen.getByText(/Create mirror/i));
+    // Submit. Use getByRole('button') to disambiguate from the DialogTitle
+    // "Create mirrored database" which also matches /Create mirror/i.
+    fireEvent.click(screen.getByRole('button', { name: /Create mirror/i }));
 
     await waitFor(() => {
       const post = calls.find((c) => c.init?.method === 'POST' && c.url.includes('/api/items/mirrored-database') && !c.url.includes('source-tables'));
