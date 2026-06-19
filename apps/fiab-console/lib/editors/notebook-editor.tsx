@@ -16,7 +16,7 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
-  Subtitle2, Caption1, Badge, Button, Spinner, Input,
+  Subtitle2, Caption1, Badge, Button, Spinner, Input, Tooltip,
   Tree, TreeItem, TreeItemLayout, Select,
   Table, TableHeader, TableRow, TableHeaderCell, TableBody, TableCell,
   MessageBar, MessageBarBody, MessageBarTitle,
@@ -26,6 +26,7 @@ import {
 import {
   Play20Regular, Add20Regular, Save20Regular, ArrowSync20Regular, Delete20Regular, Notebook20Regular,
   History20Regular, ArrowUpload20Regular, Open20Regular, Library20Regular, Settings20Regular, Sparkle20Regular, BracesVariable20Regular,
+  Copy20Regular, Info16Regular,
 } from '@fluentui/react-icons';
 import { ItemEditorChrome } from './item-editor-chrome';
 import type { FabricItemType } from '@/lib/catalog/fabric-item-types';
@@ -232,6 +233,10 @@ export function NotebookEditor({ item, id }: Props) {
   const [attachOpen, setAttachOpen] = useState(false);
   const [availableLakehouses, setAvailableLakehouses] = useState<LakehouseLite[] | null>(null);
   const [attachBusy, setAttachBusy] = useState(false);
+  // Issue #655: resolved abfss path per attached lakehouse id, surfaced in the
+  // Data items list so the user sees the REAL path the auto-mount preamble uses
+  // (and can copy it). { abfss } when resolvable, { hint } for an honest gate.
+  const [resolvedPaths, setResolvedPaths] = useState<Record<string, { abfss?: string; hint?: string }>>({});
   // Phase 3: History drawer
   const [historyOpen, setHistoryOpen] = useState(false);
   // Copilot chat pane (docked right drawer, ~25% width)
@@ -573,6 +578,32 @@ export function NotebookEditor({ item, id }: Props) {
     setAttachOpen(true);
     if (availableLakehouses === null) loadLakehouses();
   }, [availableLakehouses, loadLakehouses]);
+
+  // Issue #655: resolve the abfss root for each attached lakehouse so the Data
+  // items list shows the real path (and an honest gate when unresolvable). The
+  // SAME resolution the run route's auto-mount preamble uses.
+  useEffect(() => {
+    if (!workspaceId) return;
+    const lakehouses = attachedSources.filter((s) => s.kind === 'lakehouse');
+    if (lakehouses.length === 0) return;
+    let cancelled = false;
+    (async () => {
+      for (const lh of lakehouses) {
+        if (resolvedPaths[lh.id]) continue; // already resolved this id
+        try {
+          const r = await fetch(`/api/items/lakehouse/${encodeURIComponent(lh.id)}/abfss?workspaceId=${encodeURIComponent(workspaceId)}`);
+          const j = await r.json().catch(() => ({}));
+          if (cancelled) return;
+          if (j?.ok && j.resolved && j.abfss) {
+            setResolvedPaths((prev) => ({ ...prev, [lh.id]: { abfss: j.abfss } }));
+          } else if (j?.ok) {
+            setResolvedPaths((prev) => ({ ...prev, [lh.id]: { hint: j.hint || 'Path not resolved.' } }));
+          }
+        } catch { /* leave unresolved — chip shows neither path nor false gate */ }
+      }
+    })();
+    return () => { cancelled = true; };
+  }, [attachedSources, workspaceId, resolvedPaths]);
 
   /**
    * Persist the attached-sources list IMMEDIATELY, with the explicit next
@@ -1448,24 +1479,55 @@ export function NotebookEditor({ item, id }: Props) {
                 <Caption1>No sources attached. Attach a Lakehouse so cells can read its OneLake mount.</Caption1>
               ) : (
                 <Tree aria-label="Attached sources">
-                  {attachedSources.map((src) => (
+                  {attachedSources.map((src) => {
+                    const resolved = src.kind === 'lakehouse' ? resolvedPaths[src.id] : undefined;
+                    return (
                     <TreeItem key={src.id} itemType="leaf" value={src.id}>
                       <TreeItemLayout
                         iconBefore={<Notebook20Regular />}
                       >
-                        <div style={{ display: 'flex', alignItems: 'center', gap: 6, width: '100%' }}>
-                          <span style={{ flex: 1 }}>
-                            {src.isDefault ? <strong>{src.displayName}</strong> : src.displayName}
-                            {src.isDefault && <Badge appearance="outline" color="brand" size="small" style={{ marginLeft: 6 }}>default</Badge>}
-                          </span>
-                          {!src.isDefault && (
-                            <Button size="small" appearance="subtle" onClick={(e) => { e.stopPropagation(); promoteDefault(src.id); }}>Pin</Button>
+                        <div style={{ display: 'flex', flexDirection: 'column', gap: 2, width: '100%' }}>
+                          <div style={{ display: 'flex', alignItems: 'center', gap: 6, width: '100%' }}>
+                            <span style={{ flex: 1 }}>
+                              {src.isDefault ? <strong>{src.displayName}</strong> : src.displayName}
+                              {src.isDefault && <Badge appearance="outline" color="brand" size="small" style={{ marginLeft: 6 }}>default</Badge>}
+                            </span>
+                            {!src.isDefault && (
+                              <Button size="small" appearance="subtle" onClick={(e) => { e.stopPropagation(); promoteDefault(src.id); }}>Pin</Button>
+                            )}
+                            <Button size="small" appearance="subtle" onClick={(e) => { e.stopPropagation(); detachSource(src.id); }}>×</Button>
+                          </div>
+                          {/* Issue #655: real abfss path the auto-mount preamble
+                              exposes as loom_lakehouses['<name>'] — copyable. An
+                              honest gate tooltip when storage isn't configured. */}
+                          {resolved?.abfss && (
+                            <div style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
+                              <Caption1
+                                style={{ flex: 1, fontFamily: tokens.fontFamilyMonospace, fontSize: 11, color: tokens.colorNeutralForeground3, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}
+                                title={resolved.abfss}
+                              >{resolved.abfss}</Caption1>
+                              <Tooltip content={`Copy abfss path (use as loom_lakehouses['${src.displayName}'])`} relationship="label">
+                                <Button
+                                  size="small"
+                                  appearance="subtle"
+                                  icon={<Copy20Regular />}
+                                  onClick={(e) => { e.stopPropagation(); void navigator.clipboard?.writeText(resolved.abfss || ''); }}
+                                />
+                              </Tooltip>
+                            </div>
                           )}
-                          <Button size="small" appearance="subtle" onClick={(e) => { e.stopPropagation(); detachSource(src.id); }}>×</Button>
+                          {!resolved?.abfss && resolved?.hint && (
+                            <Tooltip content={resolved.hint} relationship="description">
+                              <Caption1 style={{ display: 'flex', alignItems: 'center', gap: 4, color: tokens.colorPaletteYellowForeground1, fontSize: 11 }}>
+                                <Info16Regular /> path not configured
+                              </Caption1>
+                            </Tooltip>
+                          )}
                         </div>
                       </TreeItemLayout>
                     </TreeItem>
-                  ))}
+                    );
+                  })}
                 </Tree>
               )}
               <Button size="small" appearance="outline" icon={<Add20Regular />} onClick={openAttach} disabled={!workspaceId} style={{ marginTop: 8, alignSelf: 'flex-start' }}>

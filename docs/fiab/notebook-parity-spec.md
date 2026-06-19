@@ -170,8 +170,9 @@ Per-cell **Run cell ▷** button:
 1. User clicks **+ Add data items** in Explorer panel
 2. Modal: list Loom Cosmos items of `itemType = lakehouse` in this workspace
 3. Selected → appended to `state.attachedSources[]`, becomes browsable in tree
-4. **First attached lakehouse becomes the "default lakehouse"** — Spark session is started with `spark.sql.defaultDatabase = <its name>` and OneLake mount points wired up
-5. Tree under a lakehouse: `Tables` + `Files` folders, expanded on click — `Tables` lists Delta tables from the Cosmos metadata + ADLS scan; `Files` is the ADLS Gen2 browse (already wired in Lakehouse editor)
+4. **First attached lakehouse becomes the "default lakehouse"** — Spark session is started with `spark.sql.defaultDatabase = <its name>`
+5. **Auto-mount preamble (Azure-native, issue #655)** — when a NEW Spark session is created, an abfss preamble is injected (Synapse Livy: as a session statement; Databricks one-time PYTHON run: prepended to the cell) defining `loom_lakehouses = {"<displayName>": "abfss://<container>@<account>.dfs.<suffix>/<root>"}` so cells can `spark.read.format('delta').load(loom_lakehouses['sales'] + '/Tables/orders')` without typing storage paths. Paths come from the lakehouse's provisioned DLZ ADLS Gen2 coordinates (`state.provisioning.secondaryIds.adlsRoot` / `{container, rootPath}`), resolved by `lib/azure/lakehouse-abfss.ts` — **no OneLake / Microsoft Fabric dependency**. Unresolvable sources (no provisioning record / no `LOOM_*_URL` configured) are skipped silently (no guessed paths, per `no-vaporware.md`); the Data items chip surfaces the resolved path with a copy button, or an honest "path not configured" gate tooltip naming the env var to set.
+6. Tree under a lakehouse: `Tables` + `Files` folders, expanded on click — `Tables` lists Delta tables from the Cosmos metadata + ADLS scan; `Files` is the ADLS Gen2 browse (already wired in Lakehouse editor)
 
 ---
 
