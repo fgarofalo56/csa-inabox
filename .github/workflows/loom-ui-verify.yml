@@ -1,0 +1,196 @@
+name: loom-ui-verify
+
+# Unattended CSA Loom console verification — no MFA, no user credentials.
+#
+# Auth chain:
+#   1. OIDC federated credential → azure/login@v2 (no client secret on disk)
+#   2. az keyvault secret show → SESSION_SECRET (masked immediately)
+#   3. Playwright global-setup mints a loom_session cookie from SESSION_SECRET
+#   4. `verify` project tests run against the live console URL
+#
+# One-time setup per docs/fiab/agent-unattended-access.md:
+#   - Create/choose a service principal (e.g. loom-ui-verify-sp)
+#   - Add a GitHub OIDC federated credential for this repo + this workflow
+#   - Grant it: Key Vault Secrets User on the loom KV (for SESSION_SECRET)
+#   - Set GH secrets: AZURE_CLIENT_ID, AZURE_TENANT_ID, AZURE_SUBSCRIPTION_ID
+#   - Set GH vars:    LOOM_VERIFY_URL, LOOM_AUTOMATION_OID, LOOM_AUTOMATION_UPN,
+#                     LOOM_AUTOMATION_NAME, LOOM_KV_NAME (default: auto-discover)
+
+on:
+  workflow_dispatch:
+    inputs:
+      region:
+        description: 'Azure region the admin plane was deployed to'
+        type: string
+        default: 'centralus'
+      console_url:
+        description: 'Loom console URL to verify (leave blank to use LOOM_VERIFY_URL var)'
+        type: string
+        default: ''
+      admin_rg:
+        description: 'Admin-plane resource group (for auto-discovering the KV when LOOM_KV_NAME is not set)'
+        type: string
+        default: ''
+      kv_name:
+        description: 'Key Vault name containing the session-secret (overrides auto-discovery)'
+        type: string
+        default: ''
+
+  schedule:
+    # Weekly on Monday at 06:00 UTC — early morning before the business day
+    - cron: '0 6 * * 1'
+
+permissions:
+  id-token: write   # OIDC token for azure/login
+  contents: read
+  checks: write     # allows annotating the check run (optional)
+
+env:
+  # --- resolve console URL: workflow input → repo var → hardcoded default ---
+  LOOM_URL: ${{ inputs.console_url || vars.LOOM_VERIFY_URL || 'https://loom-console-fvbbctd4eehqbkcs.b02.azurefd.net' }}
+  # --- automation identity (baked into the minted session cookie) -----------
+  LOOM_AUTOMATION_OID:  ${{ vars.LOOM_AUTOMATION_OID  || '' }}
+  LOOM_AUTOMATION_UPN:  ${{ vars.LOOM_AUTOMATION_UPN  || 'loom-verify@automation.local' }}
+  LOOM_AUTOMATION_NAME: ${{ vars.LOOM_AUTOMATION_NAME || 'Loom Verify [automation]' }}
+  # --- Key Vault / secret names (stable across deployments per bicep) -------
+  # The KV secret for SESSION_SECRET is always named 'session-secret' (set in
+  # platform/fiab/bicep/modules/admin-plane/entra-app-registration.bicep:68).
+  KV_SECRET_NAME: 'session-secret'
+
+jobs:
+  verify:
+    name: 'Loom UI verify (unattended)'
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    steps:
+      # -----------------------------------------------------------------------
+      # 1. Checkout
+      # -----------------------------------------------------------------------
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      # -----------------------------------------------------------------------
+      # 2. Azure OIDC login — no client secret on disk.
+      #    The SP must have a GitHub OIDC federated credential targeting this
+      #    repo (see docs/fiab/agent-unattended-access.md §one-time-setup).
+      # -----------------------------------------------------------------------
+      - name: Azure login (OIDC)
+        uses: azure/login@v2
+        with:
+          client-id:       ${{ secrets.AZURE_CLIENT_ID }}
+          tenant-id:       ${{ secrets.AZURE_TENANT_ID }}
+          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+
+      # -----------------------------------------------------------------------
+      # 3. Resolve Key Vault name, then fetch + mask SESSION_SECRET.
+      #    Priority:  workflow input → repo var → auto-discover from admin RG.
+      # -----------------------------------------------------------------------
+      - name: Resolve Key Vault + fetch SESSION_SECRET
+        id: secrets
+        env:
+          INPUT_KV:       ${{ inputs.kv_name }}
+          VAR_KV:         ${{ vars.LOOM_KV_NAME }}
+          INPUT_ADMIN_RG: ${{ inputs.admin_rg }}
+          VAR_ADMIN_RG:   ${{ vars.LOOM_ADMIN_RG }}
+        run: |
+          set -euo pipefail
+
+          # --- resolve KV name ---
+          KV="${INPUT_KV:-${VAR_KV:-}}"
+          if [[ -z "$KV" ]]; then
+            # Auto-discover: look in the admin RG for a KV whose name starts with kv-loom
+            ADMIN_RG="${INPUT_ADMIN_RG:-${VAR_ADMIN_RG:-}}"
+            if [[ -z "$ADMIN_RG" ]]; then
+              # Last resort: list all KVs in the subscription and find the loom one
+              echo "No admin RG provided; searching subscription for loom Key Vault..."
+              KV=$(az keyvault list \
+                     --query "[?starts_with(name,'kv-loom') || starts_with(name,'loom-kv')].name | [0]" \
+                     -o tsv 2>/dev/null || true)
+            else
+              echo "Auto-discovering KV in resource group: $ADMIN_RG"
+              KV=$(az keyvault list -g "$ADMIN_RG" \
+                     --query "[0].name" -o tsv 2>/dev/null || true)
+            fi
+          fi
+
+          if [[ -z "$KV" ]]; then
+            echo "::error::Could not resolve a Key Vault name. Set the LOOM_KV_NAME repo variable or pass kv_name as a workflow input."
+            exit 1
+          fi
+          echo "Using Key Vault: $KV"
+
+          # --- fetch SESSION_SECRET ---
+          SS=$(az keyvault secret show \
+                 --vault-name "$KV" \
+                 --name "$KV_SECRET_NAME" \
+                 --query value -o tsv 2>/dev/null || true)
+
+          if [[ -z "$SS" ]]; then
+            # Try alternate name loom-session-secret for older deployments
+            SS=$(az keyvault secret show \
+                   --vault-name "$KV" \
+                   --name "loom-session-secret" \
+                   --query value -o tsv 2>/dev/null || true)
+          fi
+
+          if [[ -z "$SS" ]]; then
+            echo "::error::Could not read '$KV_SECRET_NAME' (or 'loom-session-secret') from Key Vault $KV. Ensure the SP has Key Vault Secrets User on this KV."
+            exit 1
+          fi
+
+          # MASK immediately — never echoed after this point
+          echo "::add-mask::$SS"
+          echo "SESSION_SECRET=$SS" >> "$GITHUB_ENV"
+          echo "Fetched and masked SESSION_SECRET from $KV/$KV_SECRET_NAME"
+
+      # -----------------------------------------------------------------------
+      # 4. Node.js + pnpm setup
+      # -----------------------------------------------------------------------
+      - name: Setup Node.js 20
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 9
+
+      - name: Install console dependencies
+        run: pnpm -C apps/fiab-console install --frozen-lockfile
+
+      # -----------------------------------------------------------------------
+      # 5. Install Playwright + Chromium only (lightweight)
+      # -----------------------------------------------------------------------
+      - name: Install Playwright browsers (Chromium)
+        run: pnpm -C apps/fiab-console exec playwright install --with-deps chromium
+
+      # -----------------------------------------------------------------------
+      # 6. Run the `verify` project
+      #    - `mint` setup project runs first (global-setup.ts) → writes
+      #      e2e/.auth/loom-state.json (gitignored, ephemeral in CI)
+      #    - `verify` tests run with the minted storageState
+      # -----------------------------------------------------------------------
+      - name: Run loom-ui-verify (--project=verify)
+        run: pnpm -C apps/fiab-console exec playwright test --project=verify
+        env:
+          SESSION_SECRET:       ${{ env.SESSION_SECRET }}
+          LOOM_URL:             ${{ env.LOOM_URL }}
+          LOOM_AUTOMATION_OID:  ${{ env.LOOM_AUTOMATION_OID }}
+          LOOM_AUTOMATION_UPN:  ${{ env.LOOM_AUTOMATION_UPN }}
+          LOOM_AUTOMATION_NAME: ${{ env.LOOM_AUTOMATION_NAME }}
+          CI: 'true'
+
+      # -----------------------------------------------------------------------
+      # 7. Upload Playwright HTML report as artifact (always, even on failure)
+      # -----------------------------------------------------------------------
+      - name: Upload Playwright report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: loom-ui-verify-report-${{ github.run_id }}
+          path: |
+            apps/fiab-console/playwright-report/
+            apps/fiab-console/test-results/uat/
+          retention-days: 14
