@@ -42,7 +42,7 @@ vi.mock('@/lib/azure/databricks-client', async () => {
 
 import { GET, POST } from '../route';
 import { getSession } from '@/lib/auth/session';
-import { listPaths, downloadFile } from '@/lib/azure/adls-client';
+import { listPaths, downloadFile, getAccountName } from '@/lib/azure/adls-client';
 import { databricksConfigGate, listWarehouses, executeStatement } from '@/lib/azure/databricks-client';
 
 function getReq(params: Record<string, string>) {
@@ -55,6 +55,11 @@ function postReq(body: any) {
 
 beforeEach(() => {
   vi.resetAllMocks();
+  // vi.resetAllMocks() clears the factory's getAccountName implementation
+  // (() => 'loomdlz'), leaving it returning undefined — which would make the
+  // route build an `abfss://…@undefined.dfs…` path. Re-assert it each test so
+  // the ADLS account resolves to the expected DLZ account name.
+  (getAccountName as any).mockReturnValue('loomdlz');
 });
 afterEach(() => {
   delete process.env.LOOM_DATABRICKS_HOSTNAME;

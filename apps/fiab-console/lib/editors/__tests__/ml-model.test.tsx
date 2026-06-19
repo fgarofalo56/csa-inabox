@@ -32,10 +32,13 @@ describe('MlModelEditor', () => {
 
   it('renders the MLflow stage for a bound model version', async () => {
     installFetchMock({
-      // longest-match wins, so /bind, /stage, /endpoint beat the bare model GET
-      '/bind': () => ({ ok: true, bound: { modelName: 'fraud' }, workspaces: [], models: [] }),
-      '/stage': () => ({ ok: true, model: 'fraud', versions: [{ name: 'fraud', version: '5', currentStage: 'Production', runId: 'run-9' }] }),
-      '/endpoint': () => ({ ok: true, endpoints: [] }),
+      // installFetchMock picks the LONGEST matching key, so the sub-routes must
+      // be keyed by their full path — '/bind' alone loses to '/api/items/ml-model/m1'
+      // (which is a substring of '/api/items/ml-model/m1/bind'), routing the
+      // bind/stage/endpoint calls into the bare-model handler.
+      '/api/items/ml-model/m1/bind': () => ({ ok: true, bound: { modelName: 'fraud' }, workspaces: [], models: [] }),
+      '/api/items/ml-model/m1/stage': () => ({ ok: true, model: 'fraud', versions: [{ name: 'fraud', version: '5', currentStage: 'Production', runId: 'run-9' }] }),
+      '/api/items/ml-model/m1/endpoint': () => ({ ok: true, endpoints: [] }),
       '/api/items/ml-model/m1': () => ({
         ok: true,
         model: { name: 'fraud', latestVersion: '5' },

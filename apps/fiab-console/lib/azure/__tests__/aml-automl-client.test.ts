@@ -98,7 +98,11 @@ describe('listAutoMlJobs', () => {
     ] } }));
     const { listAutoMlJobs } = await import('../aml-automl-client');
     const out = await listAutoMlJobs();
-    expect(decodeURIComponent(calls[0].url)).toMatch(/\/jobs\?api-version=2024-10-01&\$filter=jobType eq 'AutoML'/);
+    // The $filter is carried as a URLSearchParams query: spaces become '+', and
+    // depending on how the URL is captured the '$' and quotes may be percent-
+    // encoded (%24 / %27). Decode first, then assert (decodeURIComponent leaves
+    // '+' intact, so spaces remain '+' in the decoded form).
+    expect(decodeURIComponent(calls[0].url)).toMatch(/\/jobs\?api-version=2024-10-01&\$filter=jobType\+eq\+'AutoML'/);
     expect(out).toHaveLength(1);
     expect(out[0].name).toBe('a');
     expect(out[0].taskType).toBe('Regression');

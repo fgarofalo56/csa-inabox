@@ -67,8 +67,12 @@ describe('AdxDatabaseTree', () => {
 
     // The Policies group header shows the live count once loadAll resolves —
     // proving /api/adx/policies flowed through to setPolicies and the group.
+    // The header now renders the label and the count separately: a
+    // <span>Policies</span> plus a count <Badge> (aria-label "<n> Policies"),
+    // rather than the old single "Policies (1)" string.
     await waitFor(() => {
-      expect(screen.getByText(/Policies \(1\)/)).toBeInTheDocument();
+      expect(screen.getByText('Policies', { selector: 'span' })).toBeInTheDocument();
+      expect(screen.getByLabelText('1 Policies')).toBeInTheDocument();
     });
   });
 });

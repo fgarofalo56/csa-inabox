@@ -10,7 +10,7 @@ import {
   mlvDeltaPath,
   buildRefreshAdfPipeline,
   type MlvSpec,
-} from './materialized-lake-view-model';
+} from '../materialized-lake-view-model';
 
 const baseSql: MlvSpec = {
   language: 'sql',

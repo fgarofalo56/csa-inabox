@@ -100,7 +100,12 @@ describe('ActivatorEditor', () => {
     fireEvent.change(screen.getByLabelText(/Window size/i), { target: { value: 'PT15M' } });
     fireEvent.change(severity, { target: { value: '1' } });
 
-    fireEvent.click(screen.getByRole('button', { name: /^Add$/ }));
+    // The submit button lives in the modal Dialog's DialogActions. Under jsdom,
+    // Fluent v9's modal Dialog marks its surface out of the default a11y tree
+    // (getByText/getByLabelText still match the dialog body — that's how the
+    // fields above were filled — but getByRole hides it). Query with hidden:true
+    // so we click the REAL "Add" button and assert the REAL POST below.
+    fireEvent.click(screen.getByRole('button', { name: /^Add$/, hidden: true }));
 
     await waitFor(() => {
       const post = calls.find((c) => c.url.includes('/api/items/activator/reflex-1/rules') && (c.init?.method === 'POST'));

@@ -38,13 +38,16 @@ function captureFetch(impl: (url: string, init?: RequestInit) => { status?: numb
 }
 
 describe('adf-client REST shapes', () => {
+  // First dynamic import of adf-client compiles its module graph (cold), which
+  // can take >1.5s under load. The REST call itself is a stubbed fetch; give the
+  // cold import headroom so this isn't a flaky timeout.
   it('listPipelines hits factories/{f}/pipelines with api-version', async () => {
     const calls = captureFetch(() => ({ body: { value: [{ name: 'p1', properties: {} }] } }));
     const { listPipelines } = await import('../adf-client');
     const out = await listPipelines();
     expect(calls[0].url).toMatch(/Microsoft\.DataFactory\/factories\/adf-loom\/pipelines\?api-version=2018-06-01/);
     expect(out[0].name).toBe('p1');
-  });
+  }, 20000);
 
   it('upsertPipeline PUTs name+properties to the named pipeline', async () => {
     const calls = captureFetch(() => ({ body: { name: 'ingest', properties: { activities: [] } } }));

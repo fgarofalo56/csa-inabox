@@ -39,6 +39,10 @@ describe('EventhouseEditor', () => {
     await waitFor(() => {
       expect(calls.some((c) => c.url.includes('/api/items/eventhouse/eh-fixture'))).toBe(true);
     });
+    // The database list lives on the "Databases" tab (default tab is the
+    // system overview). Switch to it to reveal the loaded database cards.
+    const dbTab = await screen.findByRole('tab', { name: /Databases/i });
+    fireEvent.click(dbTab);
     await waitFor(() => {
       expect(screen.getByText('loomdb-default')).toBeInTheDocument();
       expect(screen.getByText('iot-telemetry')).toBeInTheDocument();
@@ -47,8 +51,9 @@ describe('EventhouseEditor', () => {
 
   it('exposes a "New KQL database" primary button', async () => {
     renderWithProviders(<EventhouseEditor item={makeItem('eventhouse', 'Eventhouse')} id="eh-fixture" />);
-    await waitFor(() => expect(screen.getByText('loomdb-default')).toBeInTheDocument());
-    // Toolbar button text — the dialog trigger.
+    // The "New KQL database" primary button lives in the always-visible
+    // toolbar; wait for the cluster to load (tab bar appears) first.
+    await screen.findByRole('tab', { name: /Databases/i });
     const newDbButtons = screen.getAllByRole('button', { name: /New KQL database/i });
     expect(newDbButtons.length).toBeGreaterThan(0);
   });

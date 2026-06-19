@@ -184,14 +184,17 @@ describe('POST /api/deployment-pipelines/[id]/deploy', () => {
 
   it('source + target stages share a workspace → 400 duplicate_workspace (no deploy call)', async () => {
     let deployCalled = false;
+    // NB: the base path '/deploymentPipelines' itself contains the substring
+    // '/deploy', so the deploy endpoint must be matched by its trailing segment
+    // (.../stages then .../deploy) — not a bare includes('/deploy').
     stubFetch((u) => {
-      if (u.includes('/stages') && !u.includes('/deploy')) {
+      if (u.endsWith('/deploy')) { deployCalled = true; return { status: 202 }; }
+      if (u.includes('/stages')) {
         return { body: { value: [
           { id: 's1', order: 0, displayName: 'Development', workspaceId: 'ws-shared' },
           { id: 's2', order: 1, displayName: 'Test', workspaceId: 'ws-shared' },
         ] } };
       }
-      if (u.includes('/deploy')) { deployCalled = true; return { status: 202 }; }
       return { body: {} };
     });
     const { POST } = await import('@/app/api/deployment-pipelines/[id]/deploy/route');

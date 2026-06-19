@@ -282,28 +282,37 @@ describe('/api/admin/domains — Cosmos persistence + Purview collection mirror 
     expect(purviewCalls).toHaveLength(0);
   });
 
-  it('GET surfaces an honest gate (never a raw 500) when Purview answers 403 "Not authorized"', async () => {
+  it('surfaces an honest gate (never a raw 500) when Purview answers 403 "Not authorized"', async () => {
     // Purview provisioned but the UAMI lacks a Data Map role on the root
-    // collection → listBusinessDomains throws PurviewError(403). The route must
-    // STILL return ok:true with domains rendered from Cosmos, and an honest,
-    // non-configured purview status whose hint names the role to grant.
+    // collection → listBusinessDomains throws PurviewError(403). The Purview
+    // mirror status was DECOUPLED from the domains-list GET (a slow/403 Data Map
+    // probe used to push the list past the client timeout) onto the separate
+    // /purview-status endpoint. So: the list GET must still return ok:true with
+    // domains from Cosmos and NO `purview` field, and /purview-status surfaces
+    // the honest, non-configured gate whose hint names the role to grant.
     const purviewMod: any = await import('@/lib/azure/purview-client');
     const spy = vi.spyOn(purviewMod, 'listBusinessDomains').mockRejectedValue(
       new purviewMod.PurviewError(403, { error: 'Not authorized to access account' }),
     );
     try {
+      // Domains list — fast, Cosmos-only, never blocks on the Purview probe.
       const { GET } = await import('../route');
       const res = await GET();
       const j = await res.json();
       expect(res.status).toBe(200);
       expect(j.ok).toBe(true);
-      // Domains still render from Loom's Cosmos store.
       expect(Array.isArray(j.domains)).toBe(true);
-      // Honest gate — configured:false + gated:true + a hint naming Data Curator/Reader.
-      expect(j.purview.configured).toBe(false);
-      expect(j.purview.gated).toBe(true);
-      expect(j.purview.hint).toMatch(/Data Curator|Data Reader/);
-      expect(j.purview.hint).not.toMatch(/^Purview mirror unavailable/);
+      expect(j.purview).toBeUndefined();
+
+      // Purview mirror status (lazy) — honest gate: configured:false +
+      // gated:true + a hint naming Data Curator/Reader.
+      const { GET: purviewStatusGET } = await import('../purview-status/route');
+      const pj = await (await purviewStatusGET()).json();
+      expect(pj.ok).toBe(true);
+      expect(pj.purview.configured).toBe(false);
+      expect(pj.purview.gated).toBe(true);
+      expect(pj.purview.hint).toMatch(/Data Curator|Data Reader/);
+      expect(pj.purview.hint).not.toMatch(/^Purview mirror unavailable/);
     } finally {
       spy.mockRestore();
     }

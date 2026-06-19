@@ -34,11 +34,19 @@ describe('ScorecardEditor', () => {
       installFetchMock({
         '/api/powerbi/workspaces': () => ({ ok: true, workspaces: [{ id: 'ws1', name: 'Analytics' }] }),
         '/api/items/scorecard?workspaceId': () => ({ ok: true, scorecards: [{ id: 'sc1', displayName: 'Q3 OKRs' }] }),
-        '/api/items/scorecard/sc1': () => ({
+        // installFetchMock picks the LONGEST matching key. The goals request
+        // (.../scorecard/sc1?workspaceId=ws1) also contains the list key's
+        // '?workspaceId' substring, so the goals key must include the id +
+        // query prefix to out-length the list key and route correctly.
+        '/api/items/scorecard/sc1?workspaceId': () => ({
           ok: true,
           workspaceId: 'ws1',
           scorecard: { id: 'sc1', displayName: 'Q3 OKRs' },
-          goals: [{ id: 'g1', name: 'Grow ARR', currentValue: 80, targetValue: 100, status: 'onTrack', owner: 'Dana', dueDate: '2026-09-30' }],
+          // The grid renders the UI status band from `statusUi` (an editor-only
+          // ScorecardGoalStatusUi), distinct from the rollup engine's `status`
+          // StatusColor. `statusUi: 'onTrack'` is what surfaces the "On track"
+          // band label via scStatusLabel().
+          goals: [{ id: 'g1', name: 'Grow ARR', currentValue: 80, targetValue: 100, statusUi: 'onTrack', owner: 'Dana', dueDate: '2026-09-30' }],
         }),
       });
       render(<ScorecardEditor item={makeItem('scorecard', 'Scorecard')} id="sc1" />);

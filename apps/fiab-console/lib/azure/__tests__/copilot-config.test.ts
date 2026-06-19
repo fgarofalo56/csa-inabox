@@ -93,6 +93,10 @@ describe('resolveAoaiTarget precedence', () => {
     delete process.env.LOOM_AOAI_DEPLOYMENT;
   });
 
+  // The first dynamic import of copilot-orchestrator compiles its large service-client
+  // module graph (Synapse/Databricks/APIM/ADX/ADF/Power BI/Fabric/Cosmos clients), which
+  // can take >2s cold. The resolution logic itself is synchronous; give the cold import
+  // headroom so this isn't a flaky timeout under load.
   it('uses tenant config (aoaiEndpoint + copilotChatDeployment) over env/discovery', async () => {
     process.env.LOOM_AOAI_ENDPOINT = 'https://env.openai.azure.com';
     process.env.LOOM_AOAI_DEPLOYMENT = 'env-deploy';
@@ -104,7 +108,7 @@ describe('resolveAoaiTarget precedence', () => {
     expect(t.endpoint).toBe('https://tenant.openai.azure.com');
     expect(t.deployment).toBe('tenant-gpt-4o');
     expect(listConnections).not.toHaveBeenCalled();
-  });
+  }, 20000);
 
   it('honest gate when an account/endpoint is set but no chat deployment chosen', async () => {
     const { resolveAoaiTarget, NoAoaiDeploymentError } = await import('@/lib/azure/copilot-orchestrator');

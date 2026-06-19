@@ -281,14 +281,16 @@ describe('PostgreSQL flexible server routes', () => {
     expect(deletePgFw).toHaveBeenCalledWith('pg', 'r');
   });
 
-  it('query — returns an honest 501 gate (never fabricates rows)', async () => {
+  it('query — returns an honest config gate (503, never fabricates rows)', async () => {
     (getSession as any).mockReturnValue(session);
     const res = await pgQueryPOST(bodyReq('http://x/', { server: 'pg', database: 'app', sql: 'SELECT 1' }));
     const j = await res.json();
-    expect(res.status).toBe(501);
+    // The unprovisioned-dependency gate (UAMI not registered as a PG Entra
+    // principal) is a 503 service-config gate carrying { gated:true }.
+    expect(res.status).toBe(503);
     expect(j.ok).toBe(false);
     expect(j.gated).toBe(true);
-    expect(j.error).toMatch(/pg/);
+    expect(j.error).toMatch(/pg/i);
   });
 
   it('query — 400 when sql missing', async () => {
@@ -336,7 +338,9 @@ describe('POST /azure-sql-database/[id]/query (multi-result-set shape)', () => {
     expect(j.columns).toEqual(['a']);
     expect(j.rows).toEqual([[1]]);
     expect(j.rowCount).toBe(1);
-    expect(executeQueryBatch).toHaveBeenCalledWith('s', 'd', "PRINT 'x'; SELECT 1 AS a; SELECT 2 AS b, 3 AS c;");
+    // The route forwards an optional 4th cancel-token options arg (undefined
+    // when the body carries no requestId).
+    expect(executeQueryBatch).toHaveBeenCalledWith('s', 'd', "PRINT 'x'; SELECT 1 AS a; SELECT 2 AS b, 3 AS c;", undefined);
   });
 
   it('propagates an AzureSqlError status (e.g. 401 token failure)', async () => {

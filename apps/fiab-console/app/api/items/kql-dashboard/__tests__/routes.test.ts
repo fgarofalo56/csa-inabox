@@ -101,7 +101,12 @@ describe('GET /api/items/kql-dashboard/[id]', () => {
     const res = await GET(getReq('?run=1&param._state=Texas'), ctx);
     await res.json();
     const [, executedKql] = (executeQuery as any).mock.calls[0];
-    expect(executedKql).toContain('State == "Texas"');
+    // Params are bound safely via a `declare query_parameters(...)` prefix
+    // (Kusto-native parameterization) rather than inlined into the predicate —
+    // the value appears in the declare block, and the body still references the
+    // variable token. This is safer than literal substitution (no injection).
+    expect(executedKql).toMatch(/declare query_parameters\([^)]*_state:string = "Texas"/);
+    expect(executedKql).toContain('State == _state');
   });
 
   it('binds a tile to its data source database', async () => {
@@ -244,8 +249,12 @@ describe('POST /api/items/kql-dashboard/[id]/run', () => {
     expect(j.tiles[0].result).toEqual(RESULT);
     expect(loadKustoItem).not.toHaveBeenCalled(); // /new short-circuits the Cosmos read
     const [, executedKql] = (executeQuery as any).mock.calls[0];
+    // Synthetic time tokens (_startTime) are text-substituted; named params
+    // (_s) are bound via a `declare query_parameters(...)` prefix and the body
+    // keeps the variable token (safer than literal inlining).
     expect(executedKql).toContain('ago(1h)');
-    expect(executedKql).toContain('State == "CA"');
+    expect(executedKql).toMatch(/declare query_parameters\([^)]*_s:string = "CA"/);
+    expect(executedKql).toContain('State == _s');
   });
 
   it('returns a per-tile error instead of failing the whole run', async () => {

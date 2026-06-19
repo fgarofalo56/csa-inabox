@@ -27,6 +27,17 @@ vi.mock('@/lib/azure/onelake-catalog-client', async () => {
   return { ...actual, searchOneLake: vi.fn() };
 });
 
+// The "onelake" source is Azure-native by DEFAULT (no-fabric-dependency rule):
+// it lists the caller's OWN Loom workspace items from Cosmos via item-crud, and
+// only falls through to real Fabric OneLake when LOOM_LAKEHOUSE_BACKEND=fabric.
+// The route lazily imports this module, so stub it for the default path.
+const listAllOwnedItemsMock = vi.fn();
+const listOwnedWorkspacesMock = vi.fn();
+vi.mock('../../items/_lib/item-crud', () => ({
+  listAllOwnedItems: (...a: any[]) => listAllOwnedItemsMock(...a),
+  listOwnedWorkspaces: (...a: any[]) => listOwnedWorkspacesMock(...a),
+}));
+
 import { GET } from '../search/route';
 import { getSession } from '@/lib/auth/session';
 import { searchPurview, PurviewNotConfiguredError } from '@/lib/azure/purview-client';
@@ -55,7 +66,11 @@ describe('GET /api/catalog/search', () => {
     (getSession as any).mockReturnValue({ claims: { oid: 'u' } });
     (searchPurview as any).mockResolvedValue([{ id: 'p1', name: 'p', entityType: 'Table' }]);
     (searchUnity as any).mockResolvedValue([{ source: 'unity-catalog', workspace_hostname: 'h.x', type: 'table', full_name: 'c.s.t', name: 't' }]);
-    (searchOneLake as any).mockResolvedValue([{ source: 'onelake', workspace_id: 'w', workspace_name: 'W', item_id: 'i', type: 'Lakehouse', display_name: 'lh' }]);
+    // Default "onelake" source = the caller's own Loom items from Cosmos.
+    listAllOwnedItemsMock.mockResolvedValue([
+      { id: 'i', displayName: 'foo-lakehouse', itemType: 'lakehouse', workspaceId: 'w', updatedAt: '2026-05-01T00:00:00Z' },
+    ]);
+    listOwnedWorkspacesMock.mockResolvedValue([{ id: 'w', name: 'W' }]);
 
     const res = await GET(req('http://x/api/catalog/search?q=foo') as any);
     const j = await res.json();

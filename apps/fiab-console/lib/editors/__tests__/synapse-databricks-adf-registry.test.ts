@@ -28,7 +28,7 @@ const REGISTRY_SRC = readFileSync(
 const FAMILY: Record<string, [string, string]> = {
   // Synapse SQL (real-REST: TDS over PE + AAD MI)
   'synapse-dedicated-sql-pool':  ['SynapseDedicatedSqlPoolEditor',  './synapse-sql-editors'],
-  'synapse-serverless-sql-pool': ['SynapseServerlessSqlPoolEditor', './synapse-sql-editors'],
+  'synapse-serverless-sql-pool': ['SynapseServerlessSqlEditor', './synapse-serverless-sql-editor'],
   // Synapse Spark + Pipeline (real-REST: ARM + dev endpoint)
   'synapse-spark-pool':          ['SynapseSparkPoolEditor',         './azure-services-editors'],
   'synapse-pipeline':            ['SynapsePipelineEditor',          './azure-services-editors'],

@@ -57,7 +57,12 @@ describe('StoredFunctionEditor (inside KqlDatabaseEditor)', () => {
     await waitFor(() => {
       expect(calls.some((c) => c.url.includes('/api/adx/functions') && !c.init?.method)).toBe(true);
     });
-    const branch = await screen.findByText(/^Functions \(\d+\)/);
+    // The group header now renders the label and the count separately: a
+    // <span>Functions</span> plus a count <Badge> (aria-label "<n> Functions"),
+    // rather than the old single "Functions (n)" string. Match the label span
+    // and confirm the count badge loaded before expanding.
+    const branch = await screen.findByText('Functions', { selector: 'span' });
+    await screen.findByLabelText(/\d+ Functions/);
     fireEvent.click(branch);
     await waitFor(() => expect(screen.getByText('fn_existing')).toBeInTheDocument());
   }

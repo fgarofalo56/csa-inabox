@@ -47,7 +47,10 @@ describe('ThreadLineagePage view toggle', () => {
   it('does NOT render the ViewToggle when there are zero edges', async () => {
     installFetchMock({ '/api/thread/edges': () => ({ ok: true, edges: [] }) });
     mount();
-    await waitFor(() => expect(screen.getByText(/No Weave edges yet/i)).toBeInTheDocument());
+    // Default view is the graph canvas; with zero edges it renders the
+    // "No lineage yet" empty state (the "No Weave edges yet" copy is the
+    // list-view LoomDataTable empty prop, only reachable once edges exist).
+    await waitFor(() => expect(screen.getByText(/No lineage yet/i)).toBeInTheDocument());
     expect(screen.queryByRole('button', { name: 'List view' })).toBeNull();
   });
 
