@@ -29,6 +29,7 @@ import {
 } from '@fluentui/react-icons';
 import { Section } from '@/lib/components/ui/section';
 import { LoomDataTable, type LoomColumn } from '@/lib/components/ui/loom-data-table';
+import { EmptyState } from '@/lib/components/empty-state';
 import { NotConfiguredBar, type NotConfiguredHint } from './not-configured-bar';
 
 interface SourceRow { name: string; type: string; label: string | null }
@@ -223,7 +224,17 @@ export function DspmAiPanel({ days = 30 }: { days?: number }) {
 
       {loading && !resp && <div className={s.loadingBox}><Spinner label="Computing AI data-exposure posture…" /></div>}
 
-      {resp?.ok && resp.summary && (
+      {/* Empty estate — API responded ok but no agents exist yet. */}
+      {resp?.ok && resp.summary && resp.summary.agentCount === 0 && (
+        <EmptyState
+          icon={<Bot24Regular />}
+          title="No AI agents found yet"
+          body="DSPM for AI posture — which agents touch sensitive-labeled data — appears here once data agents exist in the estate. Create a data agent, operations agent, or prompt flow, attach data sources, and return to this view."
+          primaryAction={{ label: 'Create a data agent', href: '/data-agent' }}
+        />
+      )}
+
+      {resp?.ok && resp.summary && resp.summary.agentCount > 0 && (
         <>
           <Section
             title="AI data-exposure posture"

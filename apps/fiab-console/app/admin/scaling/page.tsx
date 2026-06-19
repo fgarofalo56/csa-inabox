@@ -899,12 +899,21 @@ export default function ScalingPage() {
           }
         />
 
-        {/* Foundry compute */}
+        {/* Foundry compute — requires a real AML workspace (kind=Hub or standalone).
+             LOOM_FOUNDRY_NAME may point at an Azure OpenAI account, which is not an ML
+             workspace. The gate hint from the route gives precise env-var + bicep steps. */}
         <ServiceCard
           title="AI Foundry — AML compute"
-          subtitle="vmSize + min/max nodes for AmlCompute targets."
+          subtitle="vmSize + min/max nodes for AmlCompute targets. Requires a Microsoft.MachineLearningServices/workspaces resource."
           loading={!foundryData}
-          gateMessage={foundryData && !foundryData.ok ? { title: 'AI Foundry not configured', body: `${foundryData.error}${foundryData.hint ? ' — ' + foundryData.hint : ''}` } : undefined}
+          gateMessage={
+            foundryData && !foundryData.ok
+              ? {
+                  title: 'Azure ML workspace not configured',
+                  body: `${foundryData.error}${foundryData.hint ? ' — ' + foundryData.hint : ''}`,
+                }
+              : undefined
+          }
           controls={
             <LoomDataTable
               columns={foundryColumns}
@@ -912,7 +921,7 @@ export default function ScalingPage() {
               getRowId={(r) => r.name}
               noFilters
               ariaLabel="AI Foundry AML compute"
-              empty="No AML compute targets."
+              empty="No AML compute targets found. Computes are created in Azure ML Studio or via the Azure ML CLI."
             />
           }
         />
