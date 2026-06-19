@@ -18,7 +18,32 @@
 #   CONSOLE_UAMI_PRINCIPAL=<oid> SUBS="sub1,sub2" ./scripts/csa-loom/grant-console-rbac.sh
 set -uo pipefail
 
-UAMI="${CONSOLE_UAMI_PRINCIPAL:-e61f3eb3-c646-4183-8198-4c4a34cd9a01}"
+# ---------------------------------------------------------------------------
+# PRINCIPAL RESOLUTION
+# If CONSOLE_UAMI_PRINCIPAL is not set, resolve it from the deployment.
+# The script will NEVER fall back to the e61f3eb3 placeholder — if the
+# principal cannot be resolved, it exits with a clear error.
+# ---------------------------------------------------------------------------
+UAMI="${CONSOLE_UAMI_PRINCIPAL:-}"
+if [ -z "${UAMI:-}" ]; then
+  echo "-> CONSOLE_UAMI_PRINCIPAL not set — resolving from deployment..."
+  _ADMIN_RG="${ADMIN_RG:-}"
+  if [ -z "$_ADMIN_RG" ]; then
+    _ADMIN_RG=$(az containerapp list --query "[?name=='loom-console'].resourceGroup | [0]" -o tsv 2>/dev/null || true)
+  fi
+  if [ -n "$_ADMIN_RG" ]; then
+    UAMI=$(az identity list -g "$_ADMIN_RG" \
+      --query "[?contains(name,'console')].principalId | [0]" -o tsv 2>/dev/null || true)
+  fi
+  if [ -z "${UAMI:-}" ]; then
+    echo "ERROR: Could not resolve the Console UAMI principal id."
+    echo "  Set CONSOLE_UAMI_PRINCIPAL=<object-id> explicitly, or ensure ADMIN_RG"
+    echo "  is set and the Console UAMI (uami-loom-console-*) exists there."
+    exit 1
+  fi
+  echo "   Resolved Console UAMI principal: $UAMI"
+fi
+
 # Comma- or space-separated subscription list; default to the current account.
 SUBS="${SUBS:-${LOOM_SUBSCRIPTION_ID:-$(az account show --query id -o tsv 2>/dev/null)}}"
 SUBS="${SUBS//,/ }"
