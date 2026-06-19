@@ -168,8 +168,11 @@ if [ "${PURVIEW_TOGGLE_PUBLIC:-0}" = "1" ]; then
         _HTTP=$(curl -sS -o /dev/null -w '%{http_code}' \
           -H "Authorization: Bearer $_TOKEN_PROBE" \
           "${BASE}/policystore/metadataPolicies?collectionName=${PURVIEW_ACCOUNT}&api-version=${API_VERSION}" 2>/dev/null || echo "000")
-        if [ "$_HTTP" = "200" ] || [ "$_HTTP" = "401" ] || [ "$_HTTP" = "403" ]; then
-          # 401/403 means reachable but auth; 200 = ready.
+        if [ "$_HTTP" = "200" ] || [ "$_HTTP" = "401" ]; then
+          # 200 = ready; 401 = reachable but token needs refresh (still recoverable).
+          # NOTE: do NOT break on 403 — a PE-protected account returns 403
+          # ("AccountProtectedByPrivateEndpoint") until public access actually
+          # propagates, so 403 means NOT-yet-reachable, not ready.
           echo "   endpoint reachable (HTTP $_HTTP) after ${_POLL_WAIT}s"
           break
         fi
