@@ -12,6 +12,13 @@ vi.mock('@/lib/auth/session', () => ({
   getSession: vi.fn(() => ({ claims: { oid: 'oid-test', upn: 'u@t.com' }, exp: Date.now() / 1000 + 3600 })),
 }));
 
+// Short-circuit the DLZ gate (it calls loadTenantDomains → Cosmos → real
+// network). Return null (allow access) so route handlers reach their
+// actual logic without hanging on a Cosmos connection.
+vi.mock('@/lib/auth/dlz-gate', () => ({
+  denyIfNoDlzAccess: vi.fn(async () => null),
+}));
+
 vi.mock('@azure/identity', () => {
   class Cred { async getToken() { return { token: 'tk', expiresOnTimestamp: Date.now() + 3600_000 }; } }
   return { DefaultAzureCredential: Cred, ManagedIdentityCredential: Cred, ChainedTokenCredential: Cred };

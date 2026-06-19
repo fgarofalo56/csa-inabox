@@ -8,9 +8,9 @@
  *   - pre-save id === 'new' gate suppresses the fetch
  */
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
-import { render, screen, waitFor, fireEvent, cleanup } from '@testing-library/react';
+import { screen, waitFor, fireEvent, cleanup } from '@testing-library/react';
 import { KqlDatabaseEditor } from '../phase3-editors';
-import { makeItem, installFetchMock } from './test-helpers';
+import { makeItem, installFetchMock, renderWithProviders } from './test-helpers';
 
 describe('KqlDatabaseEditor', () => {
   let calls: Array<{ url: string; init?: RequestInit }>;
@@ -65,7 +65,7 @@ describe('KqlDatabaseEditor', () => {
   afterEach(() => { cleanup(); vi.restoreAllMocks(); });
 
   it('fetches DB details + table list on mount', async () => {
-    render(<KqlDatabaseEditor item={makeItem('kql-database', 'KQL Database')} id="kqldb-fixture" />);
+    renderWithProviders(<KqlDatabaseEditor item={makeItem('kql-database', 'KQL Database')} id="kqldb-fixture" />);
     await waitFor(() => {
       expect(calls.some((c) => c.url.endsWith('/api/items/kql-database/kqldb-fixture'))).toBe(true);
     });
@@ -76,7 +76,7 @@ describe('KqlDatabaseEditor', () => {
   });
 
   it('Run button posts to /query and renders the result', async () => {
-    render(<KqlDatabaseEditor item={makeItem('kql-database', 'KQL Database')} id="kqldb-fixture" />);
+    renderWithProviders(<KqlDatabaseEditor item={makeItem('kql-database', 'KQL Database')} id="kqldb-fixture" />);
     await waitFor(() => expect(screen.getByText('Events')).toBeInTheDocument());
     const runBtn = screen.getByRole('button', { name: /^Run/i });
     fireEvent.click(runBtn);
@@ -86,12 +86,12 @@ describe('KqlDatabaseEditor', () => {
   });
 
   it('skips the DB fetch when id is "new" (pre-save gate)', () => {
-    render(<KqlDatabaseEditor item={makeItem('kql-database', 'KQL Database')} id="new" />);
+    renderWithProviders(<KqlDatabaseEditor item={makeItem('kql-database', 'KQL Database')} id="new" />);
     expect(calls.filter((c) => c.url.endsWith('/api/items/kql-database/new')).length).toBe(0);
   });
 
   it('Ingestion mapping wizard opens from the ribbon, builds the grid, and POSTs to /api/adx/ingestion-mappings', async () => {
-    render(<KqlDatabaseEditor item={makeItem('kql-database', 'KQL Database')} id="kqldb-fixture" />);
+    renderWithProviders(<KqlDatabaseEditor item={makeItem('kql-database', 'KQL Database')} id="kqldb-fixture" />);
     await waitFor(() => expect(screen.getByText('Events')).toBeInTheDocument());
 
     // Ribbon action (surfaced as a <button> by the chrome stub) opens the wizard.
@@ -118,7 +118,7 @@ describe('KqlDatabaseEditor', () => {
   });
 
   it('Get data wizard ingests with format + ingestionMappingReference', async () => {
-    render(<KqlDatabaseEditor item={makeItem('kql-database', 'KQL Database')} id="kqldb-fixture" />);
+    renderWithProviders(<KqlDatabaseEditor item={makeItem('kql-database', 'KQL Database')} id="kqldb-fixture" />);
     await waitFor(() => expect(screen.getByText('Events')).toBeInTheDocument());
 
     fireEvent.click(screen.getByRole('button', { name: 'Get data' }));
@@ -144,7 +144,7 @@ describe('KqlDatabaseEditor', () => {
   });
 
   it('Diagram tab fetches schema-graph and renders entity nodes', async () => {
-    render(<KqlDatabaseEditor item={makeItem('kql-database', 'KQL Database')} id="kqldb-fixture" />);
+    renderWithProviders(<KqlDatabaseEditor item={makeItem('kql-database', 'KQL Database')} id="kqldb-fixture" />);
     await waitFor(() => expect(screen.getByText('Events')).toBeInTheDocument());
     fireEvent.click(screen.getByRole('tab', { name: /diagram/i }));
     await waitFor(() => {

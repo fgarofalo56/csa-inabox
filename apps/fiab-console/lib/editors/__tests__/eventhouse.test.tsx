@@ -10,9 +10,9 @@
  *   - the "id === 'new'" pre-save gate skips the fetch
  */
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
-import { render, screen, waitFor, fireEvent } from '@testing-library/react';
+import { screen, waitFor, fireEvent } from '@testing-library/react';
 import { EventhouseEditor } from '../phase3-editors';
-import { makeItem, installFetchMock } from './test-helpers';
+import { makeItem, installFetchMock, renderWithProviders } from './test-helpers';
 
 describe('EventhouseEditor', () => {
   let calls: Array<{ url: string; init?: RequestInit }>;
@@ -35,7 +35,7 @@ describe('EventhouseEditor', () => {
   afterEach(() => { vi.restoreAllMocks(); });
 
   it('fetches cluster + lists databases on mount', async () => {
-    render(<EventhouseEditor item={makeItem('eventhouse', 'Eventhouse')} id="eh-fixture" />);
+    renderWithProviders(<EventhouseEditor item={makeItem('eventhouse', 'Eventhouse')} id="eh-fixture" />);
     await waitFor(() => {
       expect(calls.some((c) => c.url.includes('/api/items/eventhouse/eh-fixture'))).toBe(true);
     });
@@ -46,7 +46,7 @@ describe('EventhouseEditor', () => {
   });
 
   it('exposes a "New KQL database" primary button', async () => {
-    render(<EventhouseEditor item={makeItem('eventhouse', 'Eventhouse')} id="eh-fixture" />);
+    renderWithProviders(<EventhouseEditor item={makeItem('eventhouse', 'Eventhouse')} id="eh-fixture" />);
     await waitFor(() => expect(screen.getByText('loomdb-default')).toBeInTheDocument());
     // Toolbar button text — the dialog trigger.
     const newDbButtons = screen.getAllByRole('button', { name: /New KQL database/i });
@@ -54,7 +54,7 @@ describe('EventhouseEditor', () => {
   });
 
   it('skips the cluster fetch when id is "new" (pre-save gate)', () => {
-    render(<EventhouseEditor item={makeItem('eventhouse', 'Eventhouse')} id="new" />);
+    renderWithProviders(<EventhouseEditor item={makeItem('eventhouse', 'Eventhouse')} id="new" />);
     expect(calls.filter((c) => c.url.includes('/api/items/eventhouse/new')).length).toBe(0);
   });
 });

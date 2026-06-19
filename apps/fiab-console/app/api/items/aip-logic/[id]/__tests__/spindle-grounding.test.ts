@@ -9,12 +9,26 @@
  */
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 
-vi.mock('../../_lib/palantir-crud', () => ({
+// Prevent cosmos-client from calling endpoint() at module-init time.
+// The palantir-crud mock makes loadOntologySurface a no-op vi.fn(), but the
+// module graph still evaluates cosmos-client.ts (via item-crud.ts) before the
+// mock intercepts — causing "LOOM_COSMOS_ENDPOINT not set". Mocking the whole
+// cosmos-client short-circuits that initialization path entirely.
+vi.mock('@/lib/azure/cosmos-client', () => ({
+  itemsContainer: vi.fn(),
+  tenantSettingsContainer: vi.fn(),
+  workspacesContainer: vi.fn(),
+}));
+
+// Use the absolute alias path so Vitest resolves this mock to the same
+// module that _spindle-grounding.ts imports (relative paths from the
+// __tests__/ subfolder would resolve one extra level away).
+vi.mock('@/app/api/items/_lib/palantir-crud', () => ({
   loadOntologySurface: vi.fn(),
 }));
 
 import { resolveSpindleGrounding } from '../_spindle-grounding';
-import { loadOntologySurface } from '../../_lib/palantir-crud';
+import { loadOntologySurface } from '@/app/api/items/_lib/palantir-crud';
 
 const mockSurface = loadOntologySurface as unknown as ReturnType<typeof vi.fn>;
 
