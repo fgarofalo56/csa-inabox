@@ -34,16 +34,29 @@
 import { fetchWithTimeout } from '@/lib/azure/fetch-with-timeout';
 import { ChainedTokenCredential, DefaultAzureCredential, ManagedIdentityCredential } from '@azure/identity';
 import { AcaManagedIdentityCredential } from '@/lib/azure/aca-managed-identity';
-import { buildModelBimTmsl, type TmslRelationship } from './aas-tmsl';
+import { buildModelBimTmsl, type TmslRelationship, AasError, aasDefaultDatabase } from './aas-tmsl';
 
-// Re-export the pure TMSL builders + types so callers can import them from
-// aas-client (the route does). The builders live in aas-tmsl.ts (zero imports)
-// so they stay trivially unit-testable without the @azure/identity weight.
+// Re-export the pure TMSL builders + helpers + types so callers can import them
+// from aas-client (routes do). The builders + network-free helpers live in
+// aas-tmsl.ts (zero @azure/identity imports) so they stay trivially
+// unit-testable without the credential chain.
 export {
+  // TMSL builders
   buildCreateOrReplaceRelationshipTmsl,
   buildDeleteRelationshipTmsl,
   buildAlterTableHierarchyTmsl,
   buildModelBimTmsl,
+  // Network-free AAS helpers (moved to aas-tmsl for testability — re-exported
+  // here so every existing `import { AasError } from './aas-client'` keeps working)
+  AasError,
+  isAasConfigured,
+  aasDefaultDatabase,
+  xmlaUrl,
+  requireXmlaUrl,
+  resolveDatabase,
+  buildSoapEnvelope,
+  extractFault,
+  parseXmlaRows,
 } from './aas-tmsl';
 export type {
   TmslCardinality, TmslCrossFilter, TmslRelationship,
@@ -414,28 +427,8 @@ export interface BuildCompositeOptions {
   targetEngine?: 'fabric' | 'aas-standalone';
 }
 
-// ---------------------------------------------------------------------------
-// Shared error type
-// ---------------------------------------------------------------------------
-
-export class AasError extends Error {
-  status: number;
-  body?: unknown;
-  endpoint?: string;
-  /** Stable machine code for callers (e.g. 'aas_xmla_not_supported'). */
-  code?: string;
-  /** Operator-actionable remediation surfaced in the MessageBar. */
-  remediation?: string;
-  constructor(message: string, status: number, body?: unknown, endpoint?: string, code?: string, remediation?: string) {
-    super(message);
-    this.name = 'AasError';
-    this.status = status;
-    this.body = body;
-    this.endpoint = endpoint;
-    this.code = code;
-    this.remediation = remediation;
-  }
-}
+// AasError is defined in aas-tmsl.ts and re-exported above (with the other
+// network-free helpers). It is still in scope here via the import statement.
 
 // ---------------------------------------------------------------------------
 // AAS async-refresh + DAX query (feature set B)
@@ -1685,15 +1678,8 @@ import {
 // from aas-client alongside the network functions.
 export { buildMeasureUpsertTmsl, buildMeasureEvalQuery } from './aas-tmsl';
 
-/** True when LOOM_AAS_SERVER (the asazure:// connection string) is set. */
-export function isAasConfigured(): boolean {
-  return !!(process.env.LOOM_AAS_SERVER || '').trim();
-}
-
-/** Configured AAS model database name (LOOM_AAS_DATABASE), or '' if unset. */
-export function aasDefaultDatabase(): string {
-  return (process.env.LOOM_AAS_DATABASE || '').trim();
-}
+// isAasConfigured + aasDefaultDatabase are defined in aas-tmsl.ts and re-exported
+// from the top of this file. They are in scope here via the AasError import.
 
 function resolveAasMeasureDatabase(database?: string): string {
   const db = (database || aasDefaultDatabase()).trim();
