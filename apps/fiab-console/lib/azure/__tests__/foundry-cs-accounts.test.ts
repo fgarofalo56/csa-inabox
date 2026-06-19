@@ -55,8 +55,13 @@ describe('foundry-cs-client / listAccounts', () => {
     const { listAccounts } = await import('../foundry-cs-client');
     const out = await listAccounts();
 
-    // ARM subscription-wide list path + api-version.
-    expect(calls[0].url).toMatch(/\/subscriptions\/sub-1\/providers\/Microsoft\.CognitiveServices\/accounts\?api-version=/);
+    // listAccounts now enumerates accessible subscriptions (GET /subscriptions)
+    // BEFORE listing accounts per-sub, so the account-list call is no longer
+    // calls[0]. Assert order-independently that the per-sub ARM list path +
+    // api-version was hit.
+    expect(
+      calls.some((c) => /\/subscriptions\/sub-1\/providers\/Microsoft\.CognitiveServices\/accounts\?api-version=/.test(c.url)),
+    ).toBe(true);
     // ComputerVision is filtered out; AIServices/OpenAI kept and sorted by name (ais1 < aoai1).
     expect(out.map((a) => a.name)).toEqual(['ais1', 'aoai1']);
     expect(out.find((a) => a.name === 'aoai1')).toMatchObject({ name: 'aoai1', kind: 'OpenAI', location: 'eastus2', rg: 'rg-a', endpoint: 'https://aoai1.openai.azure.com/' });
