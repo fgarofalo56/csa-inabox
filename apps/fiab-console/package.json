@@ -1,6 +1,6 @@
 {
   "name": "@csa-loom/fiab-console",
-  "version": "0.48.0",
+  "version": "0.48.1",
   "private": true,
   "description": "CSA Loom Console — Microsoft Fabric workspace experience for Azure Government tenants",
   "scripts": {

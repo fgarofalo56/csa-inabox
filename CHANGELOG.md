@@ -25,6 +25,14 @@ This file is maintained automatically by
 [Conventional Commits](https://www.conventionalcommits.org/). See
 [RELEASE.md](RELEASE.md) for the release process.
 
+## [0.48.1](https://github.com/fgarofalo56/csa-inabox/compare/csa-inabox-v0.48.0...csa-inabox-v0.48.1) (2026-06-19)
+
+
+### Bug Fixes
+
+* **fiab-console/setup:** wizard can toggle eventhubs + streamanalytics (parity with CLI/bicep) ([#1540](https://github.com/fgarofalo56/csa-inabox/issues/1540)) ([c99562b](https://github.com/fgarofalo56/csa-inabox/commit/c99562b9a6958844646addf656aaadd89c8d439a)), closes [#1532](https://github.com/fgarofalo56/csa-inabox/issues/1532)
+* **fiab-console:** make App Config AAD token scope endpoint-aware ([#1531](https://github.com/fgarofalo56/csa-inabox/issues/1531)) ([#1539](https://github.com/fgarofalo56/csa-inabox/issues/1539)) ([78f0609](https://github.com/fgarofalo56/csa-inabox/commit/78f0609362f1708ca65881619338ac012da83026))
+
 ## [0.48.0](https://github.com/fgarofalo56/csa-inabox/compare/csa-inabox-v0.47.0...csa-inabox-v0.48.0) (2026-06-19)
 
 
