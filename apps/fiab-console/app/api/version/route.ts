@@ -27,16 +27,40 @@ interface Release { tag_name: string; name: string; published_at: string; html_u
  * Resolve the REAL running version, in priority order, so "Currently running"
  * reflects the deployed build rather than a stale hand-set env:
  *
- *  1. LOOM_VERSION — set from the release tag by deploy-parity (bicep defaults
- *     it to the release's bare semver, e.g. '0.43.1'). When the in-product
- *     updater rolls the apps to ghcr.io/<owner>/loom-*:<X.Y.Z>, this env
- *     follows the image, so it is the authoritative running version.
- *  2. The Docker build marker at public/build-marker.txt — stamped by the
+ *  1. package.json `version` (#1468) — the AUTHORITATIVE source. It is baked
+ *     into the image at build time (Next standalone copies package.json next to
+ *     server.js) and release-please keeps it in lockstep with the released
+ *     semver via `extra-files` in .release-please-config.json. Because it
+ *     travels WITH the image, it cannot drift the way the LOOM_VERSION env can:
+ *     the bicep `loomVersion` param defaults to a hand-set value (historically
+ *     '0.42.0') that a clean default deploy never updates, which is exactly why
+ *     /api/version used to report a stale "current". package.json wins.
+ *  2. LOOM_VERSION — env override, honored only when package.json carries no
+ *     parseable semver (e.g. a local `pnpm dev` run from a checkout whose
+ *     package.json was hand-edited). A release/build pipeline may still set it
+ *     to pin an exact tag.
+ *  3. The Docker build marker at public/build-marker.txt — stamped by the
  *     Dockerfile with the build SHA (`sha=<git-sha>`). Used as a build
- *     fingerprint when LOOM_VERSION is unset (proves which image is serving
- *     even before LOOM_VERSION is wired). Surfaced as `build` in the response.
- *  3. NEXT_PUBLIC_LOOM_VERSION, then 'dev'.
+ *     fingerprint (proves which image is serving). Surfaced as `build` in the
+ *     response and used as the version only when nothing else resolves.
+ *  4. NEXT_PUBLIC_LOOM_VERSION, then 'dev'.
  */
+function readPackageVersion(): string | undefined {
+  // In the Next standalone runtime cwd is the standalone root, which holds a
+  // copied package.json; from a source checkout cwd is the app dir. Both work.
+  for (const p of [
+    join(process.cwd(), 'package.json'),
+    join(process.cwd(), 'apps', 'fiab-console', 'package.json'),
+  ]) {
+    try {
+      const v = JSON.parse(readFileSync(p, 'utf-8'))?.version;
+      // Only accept a real semver core; ignore '0.1.0-scaffold'-style or absent.
+      if (typeof v === 'string' && /^\d+\.\d+(\.\d+)?/.test(v.trim())) return v.trim();
+    } catch { /* try next path */ }
+  }
+  return undefined;
+}
+
 function readBuildMarker(): { sha?: string; stamp?: string } {
   for (const p of [
     join(process.cwd(), 'public', 'build-marker.txt'),
@@ -57,6 +81,7 @@ function readBuildMarker(): { sha?: string; stamp?: string } {
 
 const BUILD = readBuildMarker();
 const LOCAL_VERSION =
+  readPackageVersion() ||
   process.env.LOOM_VERSION ||
   process.env.NEXT_PUBLIC_LOOM_VERSION ||
   (BUILD.sha ? `build-${BUILD.sha.slice(0, 12)}` : 'dev');

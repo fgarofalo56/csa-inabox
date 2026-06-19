@@ -15,7 +15,8 @@ name: release-please
 # its own GITHUB_TOKEN (which CAN write commit statuses) to mark every
 # required check on the PR head SHA as a success with a clear note that
 # release PRs only modify version metadata files (CHANGELOG.md,
-# pyproject.toml, .release-please-manifest.json) and therefore none of the
+# pyproject.toml, .release-please-manifest.json, and the version-only bump in
+# apps/fiab-console/package.json via extra-files) and therefore none of the
 # code/data/IaC checks are meaningful for them.
 #
 # This is honest — we're not faking results from real test runs that failed.
@@ -104,7 +105,7 @@ jobs:
             files=$(gh api "repos/${REPO}/pulls/${num}/files" --jq '.[].filename' | sort -u)
             echo "Files changed:"
             printf '  %s\n' $files
-            unexpected=$(printf '%s\n' $files | grep -Ev '^(CHANGELOG\.md|pyproject\.toml|\.release-please-manifest\.json)$' || true)
+            unexpected=$(printf '%s\n' $files | grep -Ev '^(CHANGELOG\.md|pyproject\.toml|\.release-please-manifest\.json|apps/fiab-console/package\.json)$' || true)
             if [ -n "$unexpected" ]; then
               echo "::error::Release PR #${num} touches non-metadata files; refusing to auto-pass required checks:"
               echo "$unexpected"
