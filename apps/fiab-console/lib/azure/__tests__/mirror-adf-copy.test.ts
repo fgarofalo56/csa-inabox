@@ -42,7 +42,16 @@ vi.mock('../adls-client', () => ({
   resolveAbfssRoot: (c: string, p: string) => `abfss://${c}@acct.dfs.core.windows.net/${p}`,
   uploadFile: (...a: any[]) => uploadFile(...a),
 }));
-vi.mock('../cloud-endpoints', () => ({ dfsSuffix: () => 'dfs.core.windows.net', httpsToAbfss: (u: string) => u }));
+// Keep the real cloud-endpoints exports (mirror-engine → synapse-dev-client
+// imports armHost from here) and only override the two helpers these tests need.
+vi.mock('../cloud-endpoints', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('../cloud-endpoints')>()),
+  dfsSuffix: () => 'dfs.core.windows.net',
+  httpsToAbfss: (u: string) => u,
+}));
+// synapse-dev-client transitively pulls @azure/identity, so stub the one export
+// mirror-engine imports from it (submitSparkBatchJob).
+vi.mock('../synapse-dev-client', () => ({ submitSparkBatchJob: vi.fn(async () => ({})) }));
 vi.mock('../azure-sql-client', () => ({ executeParameterized: vi.fn(), enableMirroring: vi.fn() }));
 vi.mock('../sql-objects-client', () => ({ listTables: vi.fn(async () => []), sqlConfigGate: () => null }));
 const executePostgresQuery = vi.fn(async () => ({ columns: ['id', 'name'], rows: [[1, 'a']], rowCount: 1, executionMs: 1 }));

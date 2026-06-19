@@ -18,7 +18,7 @@ import {
   listBusinessDomains, createBusinessDomain, deleteBusinessDomain,
   searchPurview, getLineageSubgraph, listCollections,
   registerAtlasEntity, createAtlasGlossaryTerm, applyGlossaryTerm,
-  PurviewNotConfiguredError, PurviewUnifiedCatalogGateError,
+  PurviewNotConfiguredError,
 } from '../purview-client';
 
 const realFetch = global.fetch;
@@ -47,17 +47,42 @@ describe('NotConfigured gate', () => {
   });
 });
 
-describe('business domains (unified-catalog-only honest gate)', () => {
-  it('listBusinessDomains throws the unified-catalog gate on a classic account', async () => {
-    await expect(listBusinessDomains()).rejects.toBeInstanceOf(PurviewUnifiedCatalogGateError);
-    // The gate is a subclass of PurviewNotConfiguredError so BFF catches render it.
-    await expect(listBusinessDomains()).rejects.toBeInstanceOf(PurviewNotConfiguredError);
+describe('business domains (classic Data Map collection mirror)', () => {
+  // Business domains are mirrored 1:1 onto classic Data Map collections (a
+  // Loom domain ⇄ a non-root collection), so these surfaces are REAL on a
+  // classic account rather than gated to unified-catalog only. See
+  // purview-client.ts listBusinessDomains / createBusinessDomain / delete.
+  it('listBusinessDomains mirrors non-root collections as domains', async () => {
+    mockFetch(() => ({
+      value: [
+        { name: 'root', friendlyName: 'Root', parentCollection: null },
+        { name: 'finance', friendlyName: 'Finance', description: 'Books', parentCollection: { referenceName: 'root' } },
+      ],
+    }));
+    const out = await listBusinessDomains();
+    // The root collection is excluded; the child surfaces as a domain.
+    expect(out).toHaveLength(1);
+    expect(out[0]).toMatchObject({ id: 'finance', name: 'Finance', description: 'Books', parentId: 'root' });
   });
-  it('createBusinessDomain / deleteBusinessDomain also gate (no fabricated data)', async () => {
-    await expect(createBusinessDomain({ name: 'X' })).rejects.toBeInstanceOf(PurviewUnifiedCatalogGateError);
-    await expect(deleteBusinessDomain('d1')).rejects.toBeInstanceOf(PurviewUnifiedCatalogGateError);
+  it('createBusinessDomain PUTs a classic collection; deleteBusinessDomain DELETEs it', async () => {
+    const calls: { url: string; method: string }[] = [];
+    mockFetch((u, init) => {
+      calls.push({ url: u, method: (init?.method as string) || 'GET' });
+      // listCollections() lookup for the root collection during create.
+      if (u.includes('/collections?') || /\/collections\?api-version/.test(u)) {
+        return { value: [{ name: 'root', friendlyName: 'Root', parentCollection: null }] };
+      }
+      return { name: 'x', friendlyName: 'X' };
+    });
+    const created = await createBusinessDomain({ name: 'X' });
+    expect(created.name).toBe('X');
+    expect(calls.some((c) => c.method === 'PUT' && c.url.includes('/collections/'))).toBe(true);
+
+    calls.length = 0;
+    await deleteBusinessDomain('d1');
+    expect(calls.some((c) => c.method === 'DELETE' && c.url.includes('/collections/d1'))).toBe(true);
   });
-  it('still throws NotConfigured (account-unset) before the unified-catalog gate', async () => {
+  it('still throws NotConfigured when the account env is unset (before any fetch)', async () => {
     delete process.env.LOOM_PURVIEW_ACCOUNT;
     await expect(listBusinessDomains()).rejects.toBeInstanceOf(PurviewNotConfiguredError);
   });

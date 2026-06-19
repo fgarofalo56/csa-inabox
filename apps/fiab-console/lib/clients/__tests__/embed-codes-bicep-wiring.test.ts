@@ -65,8 +65,13 @@ describe('embed-codes / org-visuals bicep wiring', () => {
   });
 
   it('admin-plane grants the org-visuals RBAC only when loomStorageAccount is set', () => {
+    // The guard requires both !skipRoleGrants and a non-empty loomStorageAccount.
+    // It now also AND-gates on the org-visuals backend toggle
+    // (`(loomBackends.?orgVisuals ?? 'enabled') != 'disabled'`) — accept the
+    // optional trailing backend condition so the guard stays pinned without
+    // over-fitting to the exact toggle spelling.
     expect(adminMain).toMatch(
-      /module orgVisualsRbac '\.\.\/landing-zone\/org-visuals-rbac\.bicep' = if \(!skipRoleGrants && !empty\(loomStorageAccount\)\)/,
+      /module orgVisualsRbac '\.\.\/landing-zone\/org-visuals-rbac\.bicep' = if \(!skipRoleGrants && !empty\(loomStorageAccount\)/,
     );
   });
 

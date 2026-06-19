@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import { OPS_TOOL_SCHEMAS, executeOpsIntention, type OpsIntention } from '../ops-tools';
-import { COPILOT_PERSONAS, OPS_PERSONA_ID, getPersona } from '../../azure/copilot-personas';
+import { OPS_COPILOT_PERSONAS, OPS_PERSONA_ID } from '../../azure/copilot-personas';
 
 /**
  * Offline unit coverage for the Ops Admin Copilot wiring. The AOAI-classify and
@@ -10,7 +10,7 @@ import { COPILOT_PERSONAS, OPS_PERSONA_ID, getPersona } from '../../azure/copilo
 
 describe('ops persona', () => {
   it('exposes the ops-admin persona with an RBAC gate env var', () => {
-    const p = getPersona(OPS_PERSONA_ID);
+    const p = OPS_COPILOT_PERSONAS[OPS_PERSONA_ID];
     expect(p).toBeDefined();
     expect(p!.requiredGroupEnvVar).toBe('LOOM_OPS_ADMIN_ENTRA_GROUP');
     expect(p!.requiredArmActions && p!.requiredArmActions.length).toBeGreaterThan(0);
@@ -19,7 +19,7 @@ describe('ops persona', () => {
 
   it('persona toolFilter matches the registered ops tool schemas exactly', () => {
     const schemaNames = OPS_TOOL_SCHEMAS.map((t: any) => t.function.name).sort();
-    const filter = [...(COPILOT_PERSONAS[OPS_PERSONA_ID].toolFilter as string[])].sort();
+    const filter = [...(OPS_COPILOT_PERSONAS[OPS_PERSONA_ID].toolFilter as string[])].sort();
     expect(schemaNames).toEqual(filter);
   });
 

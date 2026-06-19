@@ -26,13 +26,16 @@ vi.mock('@/lib/azure/aas-client', () => ({
   // the agg table name (the SOAP shaping itself is covered in aas-client.test.ts).
   buildAggTableTmsl: (p: any) => JSON.stringify({ createOrReplace: { table: { name: p.aggTableName } } }),
   executeTmsl: vi.fn(),
+  // The aggregation write goes through executeAggTmsl(catalog, tmsl) — the
+  // XMLA-endpoint-targeted variant — not the (server, db, tmsl) executeTmsl.
+  executeAggTmsl: vi.fn(),
   AasError: class AasError extends Error { status = 502; },
 }));
 
 import { POST as modelPOST } from '../semantic-model/[id]/model/route';
 import { getSession } from '@/lib/auth/session';
 import { getDataset, executeDatasetQueries } from '@/lib/azure/powerbi-client';
-import { xmlaConfigGate, executeTmsl } from '@/lib/azure/aas-client';
+import { xmlaConfigGate, executeTmsl, executeAggTmsl } from '@/lib/azure/aas-client';
 
 function bodyReq(url: string, body: any) {
   const u = new URL(url);
@@ -89,13 +92,13 @@ describe('POST semantic-model/[id]/model (aggregations)', () => {
     expect(j.ok).toBe(false);
     expect(j.xmlaUnavailable).toBe(true);
     expect(j.missing).toBe('LOOM_POWERBI_XMLA_ENDPOINT');
-    expect(executeTmsl).not.toHaveBeenCalled();
+    expect(executeAggTmsl).not.toHaveBeenCalled();
   });
 
   it('resolves the catalog, applies TMSL, and runs the probe on the happy path', async () => {
     (getSession as any).mockReturnValue({ claims: {} });
     (getDataset as any).mockResolvedValue({ id: 'd1', name: 'SalesModel' });
-    (executeTmsl as any).mockResolvedValue({ ok: true });
+    (executeAggTmsl as any).mockResolvedValue({ ok: true });
     (executeDatasetQueries as any).mockResolvedValue({ results: [{ tables: [{ rows: [{ Total: 42 }] }] }] });
 
     const res = await modelPOST(
@@ -108,8 +111,8 @@ describe('POST semantic-model/[id]/model (aggregations)', () => {
     expect(j.catalog).toBe('SalesModel');
     expect(j.columns).toBe(2);
     expect(j.probeResult.rows[0].Total).toBe(42);
-    // executeTmsl called with the catalog + a TMSL string carrying the table.
-    expect((executeTmsl as any).mock.calls[0][0]).toBe('SalesModel');
-    expect(String((executeTmsl as any).mock.calls[0][1])).toContain('SalesAgg');
+    // executeAggTmsl called with the catalog + a TMSL string carrying the table.
+    expect((executeAggTmsl as any).mock.calls[0][0]).toBe('SalesModel');
+    expect(String((executeAggTmsl as any).mock.calls[0][1])).toContain('SalesAgg');
   });
 });

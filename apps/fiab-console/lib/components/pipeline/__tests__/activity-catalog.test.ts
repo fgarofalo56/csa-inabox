@@ -28,12 +28,17 @@ describe('activity-catalog', () => {
   });
 
   it('marks Fabric-only activities as non-runnable with remediation', () => {
+    // Office 365 Outlook send-email has NO native ADF equivalent → it stays
+    // non-runnable with an honest remediation pointing at the Web-activity +
+    // Microsoft Graph alternative.
     const office = findByKey('Office365Outlook');
     expect(office?.runnable).toBe(false);
     expect(office?.remediation).toBeTruthy();
-    const dfg2 = findByKey('DataflowGen2');
-    expect(dfg2?.runnable).toBe(false);
-    expect(dfg2?.remediation).toBeTruthy();
+    // NOTE: DataflowGen2 is NOT asserted here. Per .claude/rules/no-fabric-dependency.md
+    // it now runs on the Azure-native path (ADF Spark via ExecuteWranglingDataflow /
+    // a published WranglingDataFlow resource), so it is correctly `runnable: true`
+    // with Fabric strictly opt-in (LOOM_DATAFLOW_BACKEND=fabric). It is no longer a
+    // Fabric-only activity.
   });
 
   it('every catalog entry has a build() that produces a valid PipelineActivity', () => {

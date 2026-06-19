@@ -74,6 +74,25 @@ vi.mock('@/lib/azure/purview-client', () => ({
 
 vi.mock('@/lib/azure/cloud-endpoints', async (importOriginal) => ({ ...(await importOriginal() as any), isGovCloud: () => false }));
 
+// label-protection powers ONLY the PATCH (F20/F21) path, which these tests do
+// not exercise. It pulls a heavy transitive graph (ARM/identity access-grant
+// clients) whose first-load init blocked the very first handler call for ~2s,
+// pushing the unauthenticated GET test over its timeout. Stub it so route
+// import is fast; the GET/PUT paths under test never call into it.
+vi.mock('@/lib/azure/label-protection', () => ({
+  isProtectedLabel: () => false,
+  checkLabelChangeRights: vi.fn(async () => ({ allowed: true })),
+  enforceLabelRbac: vi.fn(async () => ({ ok: true })),
+  resolveItemBackingScope: vi.fn(async () => null),
+}));
+
+// @azure/identity is constructed deep in the (now-stubbed) graph; mock it too
+// so no real credential/environment probing happens on import.
+vi.mock('@azure/identity', () => {
+  class Cred { async getToken() { return { token: 'tk', expiresOnTimestamp: Date.now() + 3600_000 }; } }
+  return { DefaultAzureCredential: Cred, ManagedIdentityCredential: Cred, ChainedTokenCredential: Cred };
+});
+
 const ctx = (type: string, id: string) => ({ params: Promise.resolve({ type, id }) });
 
 beforeEach(() => {

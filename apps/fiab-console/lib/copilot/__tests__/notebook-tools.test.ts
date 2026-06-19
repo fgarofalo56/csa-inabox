@@ -14,7 +14,11 @@ describe('assistRuntimeDirective + buildAssistMessages runtime threading', () =>
     const msgs = buildAssistMessages('generate', 'pyspark', '', 'read a table', '', '', 'databricks');
     expect(msgs[0].content).toMatch(/Databricks Spark/);
     expect(msgs[0].content).toMatch(/dbutils/);
-    expect(msgs[0].content).not.toMatch(/mssparkutils/);
+    // The Databricks directive names `mssparkutils` only to STEER AWAY from it
+    // ("Do NOT use mssparkutils/notebookutils …"). Assert that negative framing
+    // rather than the literal absence of the word — the Synapse-only API must be
+    // forbidden, not silently omitted.
+    expect(msgs[0].content).toMatch(/Do NOT use mssparkutils/);
   });
   it('injects the Azure ML directive (SDK v2, no Spark) into the fix system prompt', () => {
     const msgs = buildAssistMessages('fix', 'python', 'x=1', '', 'NameError', '', 'azure-ml');

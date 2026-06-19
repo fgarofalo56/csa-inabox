@@ -25,11 +25,19 @@ vi.mock('../adls-client', () => ({
   pathToHttpsUrl: (c: string, p: string) => `https://acct.dfs.core.windows.net/${c}/${p}`,
   uploadFile: vi.fn(async () => {}),
 }));
-vi.mock('../cloud-endpoints', () => ({ dfsSuffix: () => 'dfs.core.windows.net' }));
+// Keep the real cloud-endpoints exports (mirror-engine → synapse-dev-client
+// imports armHost from here) and only override dfsSuffix for deterministic paths.
+vi.mock('../cloud-endpoints', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('../cloud-endpoints')>()),
+  dfsSuffix: () => 'dfs.core.windows.net',
+}));
 // Stub the remaining azure-client imports of mirror-engine so the real Azure
 // SDKs (@azure/identity, @azure/cosmos, mssql) never load — runMirrorAdfCdc
 // exercises none of them, and the shared pnpm store omits some of their
 // transitive packages under vitest's ESM loader (broken-harness workaround).
+// synapse-dev-client transitively pulls @azure/identity, so stub the one export
+// mirror-engine imports from it (submitSparkBatchJob).
+vi.mock('../synapse-dev-client', () => ({ submitSparkBatchJob: vi.fn(async () => ({})) }));
 vi.mock('../azure-sql-client', () => ({ executeParameterized: vi.fn(), enableMirroring: vi.fn() }));
 vi.mock('../sql-objects-client', () => ({ listTables: vi.fn(async () => []), sqlConfigGate: () => null }));
 vi.mock('../postgres-flex-client', () => ({ executePostgresQuery: vi.fn(), listPostgresTables: vi.fn(async () => []), postgresQueryGate: () => null }));

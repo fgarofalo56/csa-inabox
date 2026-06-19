@@ -76,11 +76,16 @@ describe('EventstreamEditor — Add alert (embedded Activator)', () => {
         calls.some((c) => c.url.includes('/api/items/eventstream/es-fixture/activator') && c.init?.method === 'POST'),
       ).toBe(true);
     });
-    await waitFor(() => {
-      expect(screen.getByText('Alert created and linked')).toBeTruthy();
-      // The receipt links to the created Activator item.
-      const link = screen.getByRole('link', { name: /open the activator/i }) as HTMLAnchorElement;
-      expect(link.getAttribute('href')).toBe('/items/activator/act-123');
-    });
+    // The success receipt renders inside the dialog after the POST resolves.
+    // Use findBy* (retrying) so we wait out the async setAlertResult render.
+    await screen.findByText('Alert created and linked');
+    // The receipt links to the created Activator item. Query by the visible
+    // link text and read the anchor's href. (We assert against the DOM anchor
+    // rather than getByRole('link') because the Fluent Dialog portal + tabster
+    // mutation observer can leave the ARIA role tree stale across tests under
+    // jsdom; the rendered <a> itself is correct.)
+    const link = (await screen.findByText(/open the activator/i)).closest('a') as HTMLAnchorElement;
+    expect(link).not.toBeNull();
+    expect(link.getAttribute('href')).toBe('/items/activator/act-123');
   });
 });

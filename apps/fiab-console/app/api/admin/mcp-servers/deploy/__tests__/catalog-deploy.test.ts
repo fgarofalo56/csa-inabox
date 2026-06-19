@@ -142,8 +142,10 @@ describe('POST /api/admin/mcp-servers/deploy (catalog wizard)', () => {
     expect(doc.catalogId).toBe('github');
     expect(doc.deployment.containerAppName).toMatch(/^loom-mcp-github-/);
     expect(doc.deployment.provisioningState).toBe('Succeeded');
-    // configValues holds only the non-secret field.
-    expect(doc.configValues).toEqual({ toolsets: 'all' });
+    // configValues holds the non-secret fields, including catalog defaults
+    // applied for fields the caller didn't supply (github's `readonly` defaults
+    // to 'true' per the catalog entry).
+    expect(doc.configValues).toEqual({ toolsets: 'all', readonly: 'true' });
     // secretRefs holds the KV NAME for the secret, not the value.
     expect(Object.keys(doc.secretRefs)).toEqual(['pat']);
     expect(doc.secretRefs.pat).toBeTruthy();

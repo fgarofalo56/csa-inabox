@@ -38,6 +38,18 @@ const PRODUCT = {
 
 function mountWith(extra: Record<string, unknown> = {}) {
   installFetchMock({
+    // Observability tab GET — honest ADX gate (no fake health/lineage). The
+    // missing env var is the REAL one the BFF reports (adxConfigGate() →
+    // LOOM_KUSTO_CLUSTER_URI). This key MUST be longer than the detail key
+    // ('/api/data-products/') so installFetchMock's longest-substring-wins
+    // routing picks it for the /observability request.
+    '/api/data-products/p1/observability': () => ({
+      ok: true,
+      lineage: null,
+      healthCharts: null,
+      dqScore: null,
+      gate: { adx: { missing: 'LOOM_KUSTO_CLUSTER_URI' } },
+    }),
     '/api/data-products/': () => ({
       ok: true,
       isOwner: true,
@@ -91,8 +103,11 @@ describe('DataProductDetailEditor', () => {
     mountWith();
     await waitFor(() => expect(screen.getByText('Test product')).toBeInTheDocument());
     fireEvent.click(screen.getByRole('tab', { name: /data observability/i }));
+    // The ADX honest-gate MessageBar names the exact env var to set. The real
+    // env var (per lib/azure/data-quality-client.ts adxConfigGate) is
+    // LOOM_KUSTO_CLUSTER_URI — not the stale LOOM_KUSTO_ENDPOINT.
     await waitFor(() =>
-      expect(screen.getByText(/LOOM_KUSTO_ENDPOINT/)).toBeInTheDocument(),
+      expect(screen.getByText(/LOOM_KUSTO_CLUSTER_URI/)).toBeInTheDocument(),
     );
   });
 

@@ -26,16 +26,28 @@ vi.mock('@/lib/azure/cosmos-client', () => ({
 }));
 
 // EH SR gate: null = configured (the gate returns null when env is present).
-let srGate: { missing: string } | null = { missing: 'LOOM_EH_SCHEMA_GROUP' };
-const putSchemaVersion = vi.fn(async (..._a: any[]) => ({}));
-class EventHubsArmError extends Error {
-  status: number; body: unknown;
-  constructor(message: string, status: number, body?: unknown) { super(message); this.status = status; this.body = body; }
-}
+// vi.mock factories are hoisted above all module-level statements, so anything
+// they reference must be created inside vi.hoisted() (which runs first). The EH
+// SR mock returns the EventHubsArmError CLASS directly (not lazily), so it can't
+// be a plain top-level declaration — it would be in the temporal-dead-zone when
+// the hoisted factory runs. Bundle the shared mock state here.
+const ehMocks = vi.hoisted(() => {
+  class EventHubsArmError extends Error {
+    status: number; body: unknown;
+    constructor(message: string, status: number, body?: unknown) { super(message); this.status = status; this.body = body; }
+  }
+  return {
+    state: { srGate: { missing: 'LOOM_EH_SCHEMA_GROUP' } as { missing: string } | null },
+    putSchemaVersion: vi.fn(async (..._a: any[]) => ({})),
+    EventHubsArmError,
+  };
+});
+const putSchemaVersion = ehMocks.putSchemaVersion;
+const EventHubsArmError = ehMocks.EventHubsArmError;
 vi.mock('@/lib/azure/eventhubs-client', () => ({
-  schemaRegistryConfigGate: () => srGate,
-  putSchemaVersion: (...a: any[]) => putSchemaVersion(...a),
-  EventHubsArmError,
+  schemaRegistryConfigGate: () => ehMocks.state.srGate,
+  putSchemaVersion: (...a: any[]) => ehMocks.putSchemaVersion(...a),
+  EventHubsArmError: ehMocks.EventHubsArmError,
 }));
 
 import { POST } from '../route';
@@ -67,7 +79,7 @@ const ctx = { params: Promise.resolve({ id: 'ess-1' }) };
 describe('check-compat route', () => {
   beforeEach(() => {
     cosmosItem = makeSet();
-    srGate = { missing: 'LOOM_EH_SCHEMA_GROUP' }; // EH SR NOT configured by default
+    ehMocks.state.srGate = { missing: 'LOOM_EH_SCHEMA_GROUP' }; // EH SR NOT configured by default
     putSchemaVersion.mockClear();
     readMock.mockClear();
   });
@@ -103,7 +115,7 @@ describe('check-compat route', () => {
   });
 
   it('dryRunInProcess:true uses in-process validator even when EH SR is configured', async () => {
-    srGate = null; // EH SR IS configured
+    ehMocks.state.srGate = null; // EH SR IS configured
     cosmosItem = makeSet({ latest: avro([{ name: 'a', type: 'string' }]) });
     const newSchema = avro([{ name: 'a', type: 'string' }, { name: 'b', type: 'int', default: 0 }]); // safe add
     const res = await POST(req({ subject: 'orders.OrderEvent', newSchema, dryRunInProcess: true }), ctx);
@@ -113,7 +125,7 @@ describe('check-compat route', () => {
   });
 
   it('without dryRun, delegates to EH SR when configured', async () => {
-    srGate = null; // EH SR IS configured
+    ehMocks.state.srGate = null; // EH SR IS configured
     cosmosItem = makeSet({ latest: avro([{ name: 'a', type: 'string' }]) });
     const newSchema = avro([{ name: 'a', type: 'string' }, { name: 'b', type: 'int', default: 0 }]);
     const res = await POST(req({ subject: 'orders.OrderEvent', newSchema }), ctx);
@@ -123,7 +135,7 @@ describe('check-compat route', () => {
   });
 
   it('EH SR 400 → incompatible with the service detail (authoritative path)', async () => {
-    srGate = null;
+    ehMocks.state.srGate = null;
     cosmosItem = makeSet({ latest: avro([{ name: 'a', type: 'string' }]) });
     putSchemaVersion.mockRejectedValueOnce(new EventHubsArmError('bad', 400, 'incompatible: field b removed'));
     const res = await POST(req({ subject: 'orders.OrderEvent', newSchema: avro([{ name: 'a', type: 'string' }]) }), ctx);

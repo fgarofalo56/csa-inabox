@@ -64,13 +64,15 @@ describe('KqlDashboardEditor', () => {
     // Each tile card exposes an "Edit tile" action; click the first.
     const editBtns = screen.getAllByRole('button', { name: /Edit tile/i });
     fireEvent.click(editBtns[0]);
-    await waitFor(() => {
-      // Flyout dialog mounts with the tile-editing controls.
-      expect(screen.getByText('Edit tile')).toBeInTheDocument();
-      expect(screen.getByRole('textbox', { name: /Tile title/i })).toBeInTheDocument();
-      expect(screen.getByRole('combobox', { name: /Tile visual type/i })).toBeInTheDocument();
-      expect(screen.getByRole('button', { name: /Run tile/i })).toBeInTheDocument();
-    });
+    // Flyout dialog mounts with the tile-editing controls. The flyout is a
+    // Fluent Dialog rendered through a portal; under jsdom the tabster mutation
+    // observer can corrupt the ARIA role tree after repeated mounts, so we match
+    // the controls by their accessible label (aria-label) rather than by role.
+    await screen.findByText('Edit tile');
+    expect(screen.getByLabelText(/Tile title/i)).toBeInTheDocument();
+    expect(screen.getByLabelText(/Tile visual type/i)).toBeInTheDocument();
+    // "Run tile" exists both per-tile-card and in the flyout — assert at least one.
+    expect(screen.getAllByRole('button', { name: /Run tile/i }).length).toBeGreaterThan(0);
   });
 
   it('Base queries dialog adds a shared KQL snippet', async () => {

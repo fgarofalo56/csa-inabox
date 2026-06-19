@@ -8,28 +8,40 @@ import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
  */
 
 // --- mocked backends ---------------------------------------------------------
+// vi.mock factories are hoisted above all top-level declarations, so every
+// variable they reference must be created inside vi.hoisted() (or be named
+// /^mock/). The error classes, spies, and stub containers all live here.
 
-class MipNotConfiguredError extends Error { hint = { missingEnvVar: 'LOOM_MIP_ENABLED' }; }
-class MonitorNotConfiguredError extends Error { missing = ['LOOM_LOG_ANALYTICS_WORKSPACE_ID']; }
+const mocks = vi.hoisted(() => {
+  class MipNotConfiguredError extends Error { hint = { missingEnvVar: 'LOOM_MIP_ENABLED' }; }
+  class MonitorNotConfiguredError extends Error { missing = ['LOOM_LOG_ANALYTICS_WORKSPACE_ID']; }
+  const state: { itemsResources: any[] } = { itemsResources: [] };
+  const WS = { items: { query: () => ({ fetchAll: async () => ({ resources: [{ id: 'ws1' }] }) }) } };
+  const ITEMS = { items: { query: () => ({ fetchAll: async () => ({ resources: state.itemsResources }) }) } };
+  return {
+    MipNotConfiguredError,
+    MonitorNotConfiguredError,
+    labelsMock: vi.fn(),
+    queryLogsMock: vi.fn(),
+    state,
+    WS,
+    ITEMS,
+  };
+});
 
-const labelsMock = vi.fn();
-const queryLogsMock = vi.fn();
-
-const WS = { items: { query: () => ({ fetchAll: async () => ({ resources: [{ id: 'ws1' }] }) }) } };
-let ITEMS_RESOURCES: any[] = [];
-const ITEMS = { items: { query: () => ({ fetchAll: async () => ({ resources: ITEMS_RESOURCES }) }) } };
+const { MipNotConfiguredError, MonitorNotConfiguredError, labelsMock, queryLogsMock } = mocks;
 
 vi.mock('../cosmos-client', () => ({
-  workspacesContainer: async () => WS,
-  itemsContainer: async () => ITEMS,
+  workspacesContainer: async () => mocks.WS,
+  itemsContainer: async () => mocks.ITEMS,
 }));
 vi.mock('../mip-graph-client', () => ({
-  listSensitivityLabels: () => labelsMock(),
-  MipNotConfiguredError,
+  listSensitivityLabels: () => mocks.labelsMock(),
+  MipNotConfiguredError: mocks.MipNotConfiguredError,
 }));
 vi.mock('../monitor-client', () => ({
-  queryLogs: (...a: any[]) => queryLogsMock(...a),
-  MonitorNotConfiguredError,
+  queryLogs: (...a: any[]) => mocks.queryLogsMock(...a),
+  MonitorNotConfiguredError: mocks.MonitorNotConfiguredError,
 }));
 
 import { computeDspmAiPosture, DspmAiNotConfiguredError } from '../dspm-ai-client';
@@ -37,7 +49,7 @@ import { computeDspmAiPosture, DspmAiNotConfiguredError } from '../dspm-ai-clien
 const ORIG = process.env.LOOM_COSMOS_ENDPOINT;
 beforeEach(() => {
   process.env.LOOM_COSMOS_ENDPOINT = 'https://acct.documents.azure.com:443/';
-  ITEMS_RESOURCES = [
+  mocks.state.itemsResources = [
     { id: 'lh1', displayName: 'Sales LH', itemType: 'lakehouse', workspaceId: 'ws1', state: { sensitivityLabel: 'Confidential' } },
     { id: 'wh1', displayName: 'Ops WH', itemType: 'warehouse', workspaceId: 'ws1', state: { sensitivityLabel: 'Internal' } },
     { id: 'pub1', displayName: 'Public DS', itemType: 'lakehouse', workspaceId: 'ws1', state: {} },
@@ -113,7 +125,7 @@ describe('computeDspmAiPosture', () => {
     // Real Purview DSPM-for-AI inventories all "apps and agents", not just one
     // item type. A prompt-flow grounded on a labeled source must surface here;
     // an operations-agent with no grounded sources surfaces with zero sources.
-    ITEMS_RESOURCES.push(
+    mocks.state.itemsResources.push(
       {
         id: 'pf1', displayName: 'Forecast flow', itemType: 'prompt-flow', workspaceId: 'ws1',
         state: { sources: [{ id: 'lh1', name: 'Sales LH', type: 'lakehouse' }] },

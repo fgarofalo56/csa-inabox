@@ -99,14 +99,18 @@ describe('KqlDatabaseEditor', () => {
     expect(await screen.findByText('New ingestion mapping')).toBeInTheDocument();
 
     // Step 1 — name + format; the target table defaults to the first DB table.
+    // The wizard is a Fluent Dialog rendered through a portal; under jsdom the
+    // tabster mutation observer can corrupt the ARIA role tree after repeated
+    // mounts, so the step buttons are matched by their button text rather than
+    // by getByRole('button', { name }).
     fireEvent.change(screen.getByPlaceholderText('EventMapping'), { target: { value: 'EventMapping' } });
-    fireEvent.click(screen.getByRole('button', { name: 'Next' }));
+    fireEvent.click(screen.getByText('Next', { selector: 'button' }));
 
     // Step 2 — a column-map grid row exists; fill the target column then create.
     const col = await screen.findByLabelText('Target column for row 1');
     fireEvent.change(col, { target: { value: 'ts' } });
 
-    fireEvent.click(screen.getByRole('button', { name: 'Create mapping' }));
+    fireEvent.click(screen.getByText('Create mapping', { selector: 'button' }));
     await waitFor(() => {
       const post = calls.find((c) => c.url.includes('/api/adx/ingestion-mappings') && c.init?.method === 'POST');
       expect(post).toBeTruthy();
@@ -121,16 +125,31 @@ describe('KqlDatabaseEditor', () => {
     renderWithProviders(<KqlDatabaseEditor item={makeItem('kql-database', 'KQL Database')} id="kqldb-fixture" />);
     await waitFor(() => expect(screen.getByText('Events')).toBeInTheDocument());
 
-    fireEvent.click(screen.getByRole('button', { name: 'Get data' }));
+    // The Get data ribbon action + the dialog's controls live inside a Fluent
+    // Dialog portal; under jsdom the tabster mutation observer can corrupt the
+    // ARIA role tree, so match buttons by text. The "Format" Select has no
+    // associated <label>/aria-label (it is preceded by a Caption1 caption), so
+    // resolve it from that caption's container rather than by getByLabelText.
+    fireEvent.click(screen.getByText('Get data', { selector: 'button' }));
     expect(await screen.findByText(/Get data — ingest a file/)).toBeInTheDocument();
 
     fireEvent.change(screen.getByPlaceholderText('events'), { target: { value: 'Events' } });
-    fireEvent.change(screen.getByLabelText('Format'), { target: { value: 'json' } });
+    const formatSelect = screen
+      .getByText('Format', { selector: 'span' })
+      .parentElement!.querySelector('select') as HTMLSelectElement;
+    fireEvent.change(formatSelect, { target: { value: 'json' } });
     fireEvent.change(screen.getByPlaceholderText('EventMapping'), { target: { value: 'EventMapping' } });
-    const file = new File(['{"ts":"2026-01-01T00:00:00Z"}'], 'sample.json', { type: 'application/json' });
+    const fileContent = '{"ts":"2026-01-01T00:00:00Z"}';
+    const file = new File([fileContent], 'sample.json', { type: 'application/json' });
+    // jsdom's File does not implement Blob.text() (it exists in real browsers),
+    // and the editor reads the file with `await file.text()` before building the
+    // inline .ingest command. Polyfill it on this instance so the submit path runs.
+    if (typeof (file as any).text !== 'function') {
+      Object.defineProperty(file, 'text', { value: async () => fileContent });
+    }
     fireEvent.change(screen.getByLabelText('File to ingest'), { target: { files: [file] } });
 
-    fireEvent.click(screen.getByRole('button', { name: /Create/ }));
+    fireEvent.click(screen.getByText(/^Create$/, { selector: 'button' }));
     await waitFor(() => {
       const post = calls.find((c) =>
         c.url.includes('/api/items/kql-database/kqldb-fixture/query') &&

@@ -117,6 +117,15 @@ vi.mock('@/lib/azure/purview-client', () => ({
   queryAuditLog: (...args: any[]) => queryAuditLogMock(...args),
   PurviewNotConfiguredError: FakePurviewNotConfigured,
   PurviewError: FakePurviewError,
+  // The domain POST/DELETE handlers write through the unified-domain-mapper,
+  // which (unmocked) calls these purview-client gate/write helpers. Default the
+  // gate to "not configured" so the mirror is skipped cleanly and the route
+  // reaches its real Cosmos persistence path (no spurious 500 from undefined).
+  isPurviewConfigured: () => false,
+  domainCollectionName: (id: string) => id,
+  createBusinessDomain: vi.fn(),
+  updateBusinessDomain: vi.fn(),
+  deleteBusinessDomain: vi.fn(),
 }));
 
 // Monitor / Log Analytics — default to NOT configured (honest gate path)
@@ -264,7 +273,10 @@ describe('/api/admin/domains', () => {
     const { POST, DELETE } = await import('@/app/api/admin/domains/route');
     await POST(req('/api/admin/domains', { id: 'mkt', name: 'Marketing' }));
     const ok = await DELETE(req('/api/admin/domains?id=mkt'));
-    expect((await ok.json()).domains).toEqual([]);
+    // loadOrSeedDomains seeds the tenant's default domain(s); after deleting
+    // 'mkt' it must be gone from the returned list (the seeded defaults remain).
+    const remaining = (await ok.json()).domains as Array<{ id: string }>;
+    expect(remaining.some((d) => d.id === 'mkt')).toBe(false);
     const nf = await DELETE(req('/api/admin/domains?id=ghost'));
     expect(nf.status).toBe(404);
   });
@@ -505,7 +517,7 @@ describe('/api/admin/usage', () => {
       { itemId: 'i1', at: new Date().toISOString() },
     ]);
     const { GET } = await import('@/app/api/admin/usage/route');
-    const j = await (await GET()).json();
+    const j = await (await GET(req('/api/admin/usage'))).json();
     expect(j.ok).toBe(true);
     expect(j.totals.items).toBe(3);
     expect(j.totals.workspaces).toBe(1);
