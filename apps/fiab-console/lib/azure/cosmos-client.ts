@@ -376,9 +376,20 @@ export interface MetastoreRegistration {
   updatedAt?: string;
 }
 
+/** Thrown when LOOM_COSMOS_ENDPOINT is not set or the client cannot connect. */
+export class CosmosNotConfiguredError extends Error {
+  readonly code = 'cosmos_not_configured';
+  readonly missing: string[];
+  constructor(missing: string[] = ['LOOM_COSMOS_ENDPOINT']) {
+    super(`Cosmos DB is not configured in this deployment. Missing: ${missing.join(', ')}`);
+    this.name = 'CosmosNotConfiguredError';
+    this.missing = missing;
+  }
+}
+
 function endpoint(): string {
   const v = process.env.LOOM_COSMOS_ENDPOINT;
-  if (!v) throw new Error('LOOM_COSMOS_ENDPOINT not set');
+  if (!v) throw new CosmosNotConfiguredError(['LOOM_COSMOS_ENDPOINT']);
   return v;
 }
 

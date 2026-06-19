@@ -6,10 +6,10 @@ import {
   Spinner, Badge, Caption1, Body1, Input, Button, Dropdown, Option, Switch, Field,
   MessageBar, MessageBarBody, MessageBarTitle,
   Dialog, DialogSurface, DialogBody, DialogTitle, DialogContent, DialogActions,
-  Table, TableHeader, TableRow, TableHeaderCell, TableBody, TableCell,
   Subtitle2, Divider, Tooltip,
   makeStyles, tokens,
 } from '@fluentui/react-components';
+import { Section, Toolbar } from '@/lib/components/ui/section';
 import { Add24Regular, ArrowSync24Regular, Delete20Regular, Folder20Regular, Document20Regular, ArrowUp16Regular } from '@fluentui/react-icons';
 import { GovernanceShell } from '@/lib/components/governance-shell';
 import { LoomDataTable, type LoomColumn } from '@/lib/components/ui/loom-data-table';
@@ -45,19 +45,11 @@ interface DlpMeta {
 const KINDS = ['DLP', 'Masking', 'RLS', 'Retention', 'Access'] as const;
 
 const useStyles = makeStyles({
-  toolbar: { display: 'flex', gap: 12, alignItems: 'center', marginBottom: 12,
-    paddingBottom: 12, borderBottom: `1px solid ${tokens.colorNeutralStroke2}` },
-  spacer: { flex: 1 },
-  empty: { padding: 32, color: tokens.colorNeutralForeground3, fontSize: 13, textAlign: 'center' },
-  rule: { fontFamily: 'Consolas, monospace', fontSize: 12, maxWidth: 360, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' },
-  dlpCard: {
-    marginBottom: 16, padding: 16, borderRadius: 8,
-    border: `1px solid ${tokens.colorNeutralStroke2}`,
-    backgroundColor: tokens.colorNeutralBackground1,
-  },
-  dlpToolbar: { display: 'flex', gap: 8, alignItems: 'center', marginBottom: 10, flexWrap: 'wrap' },
-  pickList: { display: 'flex', flexDirection: 'column', gap: 4, maxHeight: 160, overflowY: 'auto' },
-  chips: { display: 'flex', gap: 6, flexWrap: 'wrap' },
+  empty: { padding: tokens.spacingVerticalXXL, color: tokens.colorNeutralForeground3, fontSize: tokens.fontSizeBase200, textAlign: 'center' },
+  rule: { fontFamily: tokens.fontFamilyMonospace, fontSize: tokens.fontSizeBase200, maxWidth: '360px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' },
+  dlpToolbar: { display: 'flex', gap: tokens.spacingHorizontalS, alignItems: 'center', marginBottom: tokens.spacingVerticalS, flexWrap: 'wrap' },
+  pickList: { display: 'flex', flexDirection: 'column', gap: '4px', maxHeight: '160px', overflowY: 'auto' },
+  chips: { display: 'flex', gap: tokens.spacingHorizontalS, flexWrap: 'wrap' },
 });
 
 function kindColor(k: string): any {
@@ -70,6 +62,7 @@ export default function PoliciesPage() {
   const [policies, setPolicies] = useState<Policy[] | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [cosmosGate, setCosmosGate] = useState<string | null>(null);
   const [actionErr, setActionErr] = useState<string | null>(null);
 
   // ── DLP (F22) — violations, last-scan, trigger-scan, restrict-access ────────
@@ -205,10 +198,15 @@ export default function PoliciesPage() {
   };
 
   const load = useCallback(async () => {
-    setLoading(true); setError(null);
+    setLoading(true); setError(null); setCosmosGate(null);
     try {
       const r = await clientFetch('/api/governance/policies');
       const j = await r.json();
+      if (r.status === 503 && j?.code === 'cosmos_not_configured') {
+        setCosmosGate(j?.gate?.message || 'Cosmos DB is not configured in this deployment.');
+        setPolicies([]);
+        return;
+      }
       if (!j.ok) { setError(j.error); return; }
       setPolicies(j.policies || []);
     } catch (e: any) { setError(e?.message || String(e)); }
@@ -452,27 +450,37 @@ export default function PoliciesPage() {
 
   return (
     <GovernanceShell sectionTitle="Policies">
-      <Body1 style={{ color: tokens.colorNeutralForeground3, marginBottom: 12 }}>
+      <Body1 style={{ color: tokens.colorNeutralForeground3, marginBottom: tokens.spacingVerticalM }}>
         DLP, dynamic data masking, row-level security, retention, and access policies. Stored per tenant
         in Cosmos and visible to downstream enforcement code (Synapse SQL, Lakehouse query gate, etc.).
       </Body1>
 
-      <div className={s.toolbar}>
-        <div className={s.spacer} />
-        <Button icon={<ArrowSync24Regular />} onClick={load} disabled={loading}>Refresh</Button>
-        <Button appearance="primary" icon={<Add24Regular />} onClick={() => setOpen(true)}>New policy</Button>
-      </div>
+      <Toolbar actions={
+        <>
+          <Button icon={<ArrowSync24Regular />} onClick={load} disabled={loading}>Refresh</Button>
+          <Button appearance="primary" icon={<Add24Regular />} onClick={() => setOpen(true)}>New policy</Button>
+        </>
+      } />
+
+      {cosmosGate && (
+        <MessageBar intent="warning" style={{ marginBottom: tokens.spacingVerticalM }}>
+          <MessageBarBody>
+            <MessageBarTitle>Cosmos DB not configured</MessageBarTitle>
+            {cosmosGate} Set <code>LOOM_COSMOS_ENDPOINT</code> on the Console Container App and grant
+            the Console UAMI the <code>Cosmos DB Built-in Data Contributor</code> role at account scope.
+          </MessageBarBody>
+        </MessageBar>
+      )}
 
       {(error || actionErr) && (
-        <MessageBar intent="error" style={{ marginBottom: 12 }}>
+        <MessageBar intent="error" style={{ marginBottom: tokens.spacingVerticalM }}>
           <MessageBarBody><MessageBarTitle>Error</MessageBarTitle>{error || actionErr}</MessageBarBody>
         </MessageBar>
       )}
 
       {/* ── DLP (F22): violations · last-scan · trigger-scan · restrict-access ── */}
-      <div className={s.dlpCard}>
-        <div className={s.dlpToolbar}>
-          <Subtitle2 style={{ marginRight: 'auto' }}>Data loss prevention</Subtitle2>
+      <Section title="Data loss prevention" actions={
+        <div style={{ display: 'flex', gap: tokens.spacingHorizontalS, alignItems: 'center', flexWrap: 'wrap' }}>
           <Caption1 style={{ color: tokens.colorNeutralForeground3 }}>
             {dlpMeta?.boundary ? `${dlpMeta.boundary} · ` : ''}
             Last checked: {dlpMeta?.lastScannedAt ? dlpMeta.lastScannedAt.slice(0, 16).replace('T', ' ') : '—'}
@@ -482,10 +490,10 @@ export default function PoliciesPage() {
           <Button size="small" onClick={triggerScan} disabled={scanning}>{scanning ? 'Requesting…' : 'Trigger scan'}</Button>
           <Button size="small" appearance="primary" onClick={() => { setRstOpen(true); setRstMsg(null); }}>Restrict access</Button>
         </div>
-
+      }>
         {/* Honest-gate MessageBar for Gov/DoD — policy authoring not on Graph there. */}
         {dlpMeta && !dlpMeta.dlpPolicyApiAvailable && (
-          <MessageBar intent="warning" style={{ marginBottom: 10 }}>
+          <MessageBar intent="warning" style={{ marginBottom: tokens.spacingVerticalS }}>
             <MessageBarBody>
               <MessageBarTitle>Partial DLP in {dlpMeta.boundary}</MessageBarTitle>
               Microsoft Graph&apos;s <code>/beta/security/dataLossPreventionPolicies</code> policy
@@ -500,7 +508,7 @@ export default function PoliciesPage() {
         )}
 
         {scanMsg && (
-          <MessageBar intent={scanMsg.intent} style={{ marginBottom: 10 }}>
+          <MessageBar intent={scanMsg.intent} style={{ marginBottom: tokens.spacingVerticalS }}>
             <MessageBarBody>
               <MessageBarTitle>{scanMsg.title}</MessageBarTitle>
               {scanMsg.body}
@@ -515,7 +523,7 @@ export default function PoliciesPage() {
         )}
 
         {vGate && (
-          <MessageBar intent="warning" style={{ marginBottom: 10 }}>
+          <MessageBar intent="warning" style={{ marginBottom: tokens.spacingVerticalS }}>
             <MessageBarBody>
               <MessageBarTitle>DLP not wired in this deployment</MessageBarTitle>
               {vGate} Set <code>LOOM_DLP_ENABLED=true</code> on the Console Container App and grant the
@@ -526,7 +534,7 @@ export default function PoliciesPage() {
           </MessageBar>
         )}
         {vErr && !vGate && (
-          <MessageBar intent="error" style={{ marginBottom: 10 }}>
+          <MessageBar intent="error" style={{ marginBottom: tokens.spacingVerticalS }}>
             <MessageBarBody><MessageBarTitle>Could not load violations</MessageBarTitle>{vErr}</MessageBarBody>
           </MessageBar>
         )}
@@ -536,38 +544,24 @@ export default function PoliciesPage() {
           <Caption1 style={{ color: tokens.colorNeutralForeground3 }}>No DLP violations detected in the last 30 days.</Caption1>
         )}
         {!vLoading && violations.length > 0 && (
-          <Table size="small" aria-label="DLP violations">
-            <TableHeader>
-              <TableRow>
-                <TableHeaderCell>Detected</TableHeaderCell>
-                <TableHeaderCell>Policy</TableHeaderCell>
-                <TableHeaderCell>Item</TableHeaderCell>
-                <TableHeaderCell>User</TableHeaderCell>
-                <TableHeaderCell>Severity</TableHeaderCell>
-                <TableHeaderCell>Action</TableHeaderCell>
-              </TableRow>
-            </TableHeader>
-            <TableBody>
-              {violations.slice(0, 50).map((v) => (
-                <TableRow key={v.alertId}>
-                  <TableCell><Caption1>{v.detectedAt?.slice(0, 16).replace('T', ' ') || '—'}</Caption1></TableCell>
-                  <TableCell><strong>{v.policyName || '—'}</strong>{v.ruleName ? <Caption1 block style={{ color: tokens.colorNeutralForeground3 }}>{v.ruleName}</Caption1> : null}</TableCell>
-                  <TableCell>
-                    <Caption1 title={v.itemPath}>{(v.itemPath || '—').slice(0, 44)}</Caption1>
-                    {v.itemType ? <Badge appearance="outline" size="small" style={{ marginLeft: 4 }}>{v.itemType}</Badge> : null}
-                  </TableCell>
-                  <TableCell><Caption1>{v.user || '—'}</Caption1></TableCell>
-                  <TableCell><Badge color={v.severity === 'high' ? 'danger' : v.severity === 'medium' ? 'warning' : 'subtle'}>{v.severity || '—'}</Badge></TableCell>
-                  <TableCell><Caption1>{v.action || v.status || '—'}</Caption1></TableCell>
-                </TableRow>
-              ))}
-            </TableBody>
-          </Table>
+          <LoomDataTable<DlpViolation>
+            ariaLabel="DLP violations"
+            getRowId={(v) => v.alertId}
+            rows={violations.slice(0, 50)}
+            columns={[
+              { key: 'detectedAt', label: 'Detected', sortable: true, width: 150, getValue: (v) => v.detectedAt || '', render: (v) => <Caption1>{v.detectedAt?.slice(0, 16).replace('T', ' ') || '—'}</Caption1> },
+              { key: 'policyName', label: 'Policy', sortable: true, filterable: true, getValue: (v) => v.policyName || '', render: (v) => <><strong>{v.policyName || '—'}</strong>{v.ruleName ? <Caption1 block style={{ color: tokens.colorNeutralForeground3 }}>{v.ruleName}</Caption1> : null}</> },
+              { key: 'itemPath', label: 'Item', sortable: true, filterable: true, getValue: (v) => v.itemPath || '', render: (v) => <><Caption1 title={v.itemPath}>{(v.itemPath || '—').slice(0, 44)}</Caption1>{v.itemType ? <Badge appearance="tint" size="small" style={{ marginLeft: 4 }}>{v.itemType}</Badge> : null}</> },
+              { key: 'user', label: 'User', sortable: true, filterable: true, getValue: (v) => v.user || '', render: (v) => <Caption1>{v.user || '—'}</Caption1> },
+              { key: 'severity', label: 'Severity', sortable: true, filterable: true, width: 110, getValue: (v) => v.severity || '', render: (v) => <Badge appearance="tint" color={v.severity === 'high' ? 'danger' : v.severity === 'medium' ? 'warning' : 'subtle'} size="small">{v.severity || '—'}</Badge> },
+              { key: 'action', label: 'Action', sortable: true, filterable: true, getValue: (v) => v.action || v.status || '', render: (v) => <Caption1>{v.action || v.status || '—'}</Caption1> },
+            ] as LoomColumn<DlpViolation>[]}
+          />
         )}
 
         {(dlpMeta?.restrictions?.length ?? 0) > 0 && (
           <>
-            <Divider style={{ marginTop: 12, marginBottom: 8 }} />
+            <Divider style={{ marginTop: tokens.spacingVerticalM, marginBottom: tokens.spacingVerticalS }} />
             <Caption1 block style={{ color: tokens.colorNeutralForeground3, marginBottom: 4 }}>Recent restrict-access actions</Caption1>
             <div className={s.chips}>
               {dlpMeta!.restrictions!.slice(0, 8).map((r) => (
@@ -584,11 +578,11 @@ export default function PoliciesPage() {
             </div>
           </>
         )}
-      </div>
+      </Section>
 
       {loading && !error && <Spinner label="Loading policies…" />}
 
-      {!loading && !error && (policies?.length ?? 0) === 0 && (
+      {!loading && !error && !cosmosGate && (policies?.length ?? 0) === 0 && (
         <div className={s.empty}>
           No policies defined yet. Click <strong>New policy</strong> to add your first DLP, masking, RLS, retention, or access rule.
         </div>

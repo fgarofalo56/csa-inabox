@@ -3,10 +3,10 @@
 import { useEffect, useState } from 'react';
 import {
   Spinner, Badge, Caption1, Body1, Subtitle2, Button,
-  Table, TableHeader, TableRow, TableHeaderCell, TableBody, TableCell,
   MessageBar, MessageBarBody, MessageBarTitle,
   makeStyles, tokens,
 } from '@fluentui/react-components';
+import { Toolbar } from '@/lib/components/ui/section';
 import { ArrowSync24Regular, Open16Regular } from '@fluentui/react-icons';
 import { GovernanceShell } from '@/lib/components/governance-shell';
 import { LoomDataTable, type LoomColumn } from '@/lib/components/ui/loom-data-table';
@@ -28,18 +28,18 @@ interface Insights {
 const useStyles = makeStyles({
   statsRow: {
     display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(180px, 1fr))',
-    gap: 12, marginBottom: 20,
+    gap: tokens.spacingHorizontalM, marginBottom: tokens.spacingVerticalXL,
   },
   statCard: {
-    padding: 16, borderRadius: 8,
+    padding: tokens.spacingVerticalL, borderRadius: tokens.borderRadiusLarge,
     border: `1px solid ${tokens.colorNeutralStroke2}`,
     backgroundColor: tokens.colorNeutralBackground1,
+    boxShadow: tokens.shadow2,
   },
-  statVal: { fontSize: 28, fontWeight: 600, color: tokens.colorBrandForeground1 },
-  statLabel: { fontSize: 12, color: tokens.colorNeutralForeground3 },
-  pct: { fontSize: 14, color: tokens.colorNeutralForeground3 },
-  bar: { height: 6, background: tokens.colorNeutralBackground3, borderRadius: 3, overflow: 'hidden', marginTop: 2 },
-  barFill: { height: '100%', background: tokens.colorBrandBackground, borderRadius: 3 },
+  statVal: { fontSize: tokens.fontSizeHero700, fontWeight: tokens.fontWeightSemibold, color: tokens.colorBrandForeground1 },
+  statLabel: { fontSize: tokens.fontSizeBase200, color: tokens.colorNeutralForeground3 },
+  bar: { height: '6px', background: tokens.colorNeutralBackground3, borderRadius: tokens.borderRadiusSmall, overflow: 'hidden', marginTop: '2px' },
+  barFill: { height: '100%', background: tokens.colorBrandBackground, borderRadius: tokens.borderRadiusSmall },
 });
 
 /** Coverage cell: a thin progress bar + "n (p%)" for a sortable LoomDataTable. */
@@ -79,9 +79,7 @@ export default function InsightsPage() {
         Tenant-wide governance KPIs derived live from your Cosmos catalog + audit log.
       </Body1>
 
-      <div style={{ display: 'flex', justifyContent: 'flex-end', marginBottom: 12 }}>
-        <Button icon={<ArrowSync24Regular />} onClick={load} disabled={loading}>Refresh</Button>
-      </div>
+      <Toolbar actions={<Button icon={<ArrowSync24Regular />} onClick={load} disabled={loading}>Refresh</Button>} />
 
       {error && (
         <MessageBar intent="error">
@@ -203,41 +201,36 @@ export default function InsightsPage() {
             </div>
           )}
 
-          <Subtitle2 style={{ display: 'block', marginBottom: 8 }}>Most classified items</Subtitle2>
+          <Subtitle2 style={{ display: 'block', marginBottom: tokens.spacingVerticalS }}>Most classified items</Subtitle2>
           {data.topClassified.length === 0 ? (
             <Caption1 style={{ color: tokens.colorNeutralForeground3 }}>No classified items yet.</Caption1>
           ) : (
-            <Table size="small" aria-label="Most classified">
-              <TableHeader>
-                <TableRow>
-                  <TableHeaderCell>Item</TableHeaderCell>
-                  <TableHeaderCell>Classifications</TableHeaderCell>
-                  <TableHeaderCell></TableHeaderCell>
-                </TableRow>
-              </TableHeader>
-              <TableBody>
-                {data.topClassified.map((it) => (
-                  <TableRow key={it.id}>
-                    <TableCell>
-                      <strong>{it.displayName}</strong>
-                      <Caption1 style={{ display: 'block', color: tokens.colorNeutralForeground3 }}>{it.itemType}</Caption1>
-                    </TableCell>
-                    <TableCell>
-                      {it.classifications.map((c) => (
-                        <Badge key={c} appearance="outline" size="small" style={{ marginRight: 4 }}>{c}</Badge>
-                      ))}
-                      <strong style={{ marginLeft: 4 }}>({it.count})</strong>
-                    </TableCell>
-                    <TableCell>
-                      <a href={`/items/${it.itemType}/${it.id}`}
-                         style={{ display: 'inline-flex', alignItems: 'center', gap: 4, fontSize: 12 }}>
-                        Open <Open16Regular />
-                      </a>
-                    </TableCell>
-                  </TableRow>
-                ))}
-              </TableBody>
-            </Table>
+            <LoomDataTable
+              ariaLabel="Most classified items"
+              getRowId={(it) => it.id}
+              rows={data.topClassified}
+              columns={[
+                {
+                  key: 'displayName', label: 'Item', sortable: true, filterable: true,
+                  getValue: (it) => it.displayName,
+                  render: (it) => <><strong>{it.displayName}</strong><Caption1 style={{ display: 'block', color: tokens.colorNeutralForeground3 }}>{it.itemType}</Caption1></>,
+                },
+                {
+                  key: 'classifications', label: 'Classifications', sortable: false, filterable: true,
+                  getValue: (it) => it.classifications.join(' '),
+                  render: (it) => <>{it.classifications.map((c) => <Badge key={c} appearance="tint" size="small" style={{ marginRight: 4 }}>{c}</Badge>)}<strong style={{ marginLeft: 4 }}>({it.count})</strong></>,
+                },
+                {
+                  key: 'open', label: '', sortable: false, filterable: false, width: 90,
+                  render: (it) => (
+                    <a href={`/items/${it.itemType}/${it.id}`}
+                       style={{ display: 'inline-flex', alignItems: 'center', gap: 4, fontSize: 12 }}>
+                      Open <Open16Regular />
+                    </a>
+                  ),
+                },
+              ] as LoomColumn<{ id: string; displayName: string; itemType: string; count: number; classifications: string[] }>[]}
+            />
           )}
         </>
       )}

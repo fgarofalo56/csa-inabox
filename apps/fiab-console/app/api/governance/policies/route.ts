@@ -5,7 +5,7 @@
  */
 import { NextRequest, NextResponse } from 'next/server';
 import { getSession } from '@/lib/auth/session';
-import { tenantSettingsContainer } from '@/lib/azure/cosmos-client';
+import { tenantSettingsContainer, CosmosNotConfiguredError } from '@/lib/azure/cosmos-client';
 import {
   enforceAccessGrant, revokeAccessGrant, revokeStructuredGrant,
   type AccessPermission, type AccessScopeType, type PrincipalType,
@@ -61,6 +61,19 @@ async function loadOrSeed(tenantId: string): Promise<PoliciesDoc> {
   return seed;
 }
 
+function cosmosGateResponse() {
+  return NextResponse.json({
+    ok: false,
+    code: 'cosmos_not_configured',
+    gate: {
+      missing: ['LOOM_COSMOS_ENDPOINT'],
+      message:
+        'Governance policies require Cosmos DB. Set LOOM_COSMOS_ENDPOINT on the Console Container App ' +
+        'and grant the Console UAMI the Cosmos DB Built-in Data Contributor role at account scope.',
+    },
+  }, { status: 503 });
+}
+
 export async function GET() {
   const s = getSession();
   if (!s) return NextResponse.json({ ok: false, error: 'unauthenticated' }, { status: 401 });
@@ -68,6 +81,7 @@ export async function GET() {
     const doc = await loadOrSeed(s.claims.oid);
     return NextResponse.json({ ok: true, policies: doc.items, updatedAt: doc.updatedAt });
   } catch (e: any) {
+    if (e instanceof CosmosNotConfiguredError) return cosmosGateResponse();
     return NextResponse.json({ ok: false, error: e?.message || String(e) }, { status: 500 });
   }
 }
@@ -129,6 +143,7 @@ export async function POST(req: NextRequest) {
     await c.item(doc.id, tenantId).replace(doc);
     return NextResponse.json({ ok: true, policy, policies: doc.items });
   } catch (e: any) {
+    if (e instanceof CosmosNotConfiguredError) return cosmosGateResponse();
     return NextResponse.json({ ok: false, error: e?.message || String(e) }, { status: 500 });
   }
 }
@@ -150,6 +165,7 @@ export async function PUT(req: NextRequest) {
     await c.item(doc.id, tenantId).replace(doc);
     return NextResponse.json({ ok: true, policy: doc.items[ix], policies: doc.items });
   } catch (e: any) {
+    if (e instanceof CosmosNotConfiguredError) return cosmosGateResponse();
     return NextResponse.json({ ok: false, error: e?.message || String(e) }, { status: 500 });
   }
 }
@@ -188,6 +204,7 @@ export async function DELETE(req: NextRequest) {
     await c.item(doc.id, tenantId).replace(doc);
     return NextResponse.json({ ok: true, policies: doc.items });
   } catch (e: any) {
+    if (e instanceof CosmosNotConfiguredError) return cosmosGateResponse();
     return NextResponse.json({ ok: false, error: e?.message || String(e) }, { status: 500 });
   }
 }

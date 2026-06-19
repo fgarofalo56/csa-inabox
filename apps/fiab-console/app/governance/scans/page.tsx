@@ -28,6 +28,7 @@ import { Add24Regular, ArrowSync24Regular, Delete20Regular, Play20Regular, Dismi
 import { LoomDataTable, type LoomColumn } from '@/lib/components/ui/loom-data-table';
 import { GovernanceShell } from '@/lib/components/governance-shell';
 import { PurviewGate, usePurviewStatus } from '@/lib/components/purview-gate';
+import { Section, Toolbar } from '@/lib/components/ui/section';
 
 interface Source { id: string; name: string; kind?: string; endpoint?: string; collectionId?: string; }
 interface Scan { id: string; name: string; kind?: string; }
@@ -40,12 +41,8 @@ const SOURCE_KINDS = [
 ];
 
 const useStyles = makeStyles({
-  toolbar: { display: 'flex', gap: 12, alignItems: 'center', marginBottom: 12,
-    paddingBottom: 12, borderBottom: `1px solid ${tokens.colorNeutralStroke2}` },
-  spacer: { flex: 1 },
-  empty: { padding: 32, color: tokens.colorNeutralForeground3, fontSize: 13, textAlign: 'center' },
-  form: { display: 'flex', flexDirection: 'column', gap: 12, minWidth: 380 },
-  runStatus: { fontSize: 11, padding: '2px 8px', borderRadius: 999, display: 'inline-block' },
+  empty: { padding: tokens.spacingVerticalXXL, color: tokens.colorNeutralForeground3, fontSize: tokens.fontSizeBase200, textAlign: 'center' },
+  form: { display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalM, minWidth: '380px' },
 });
 
 function runColor(status?: string): 'success' | 'danger' | 'warning' | 'informative' {
@@ -172,19 +169,20 @@ export default function GovernanceScansPage() {
 
       <PurviewGate status={purview} surface="Scans & sources" reload={reloadStatus} />
 
-      <div className={s.toolbar}>
-        <div className={s.spacer} />
-        <Button icon={<ArrowSync24Regular />} onClick={() => { reloadStatus(); loadSources(); }} disabled={loading}>Refresh</Button>
-        <Button appearance="primary" icon={<Add24Regular />} disabled={!live} onClick={() => setOpen(true)}>Register source</Button>
-      </div>
+      <Toolbar actions={
+        <>
+          <Button icon={<ArrowSync24Regular />} onClick={() => { reloadStatus(); loadSources(); }} disabled={loading}>Refresh</Button>
+          <Button appearance="primary" icon={<Add24Regular />} disabled={!live} onClick={() => setOpen(true)}>Register source</Button>
+        </>
+      } />
 
       {actionErr && (
-        <MessageBar intent="error" style={{ marginBottom: 12 }}>
+        <MessageBar intent="error" style={{ marginBottom: tokens.spacingVerticalM }}>
           <MessageBarBody><MessageBarTitle>Action failed</MessageBarTitle>{actionErr}</MessageBarBody>
         </MessageBar>
       )}
       {error && (
-        <MessageBar intent="error" style={{ marginBottom: 12 }}>
+        <MessageBar intent="error" style={{ marginBottom: tokens.spacingVerticalM }}>
           <MessageBarBody><MessageBarTitle>Could not load sources</MessageBarTitle>{error}</MessageBarBody>
         </MessageBar>
       )}
@@ -258,7 +256,7 @@ export default function GovernanceScansPage() {
               </div>
               {(runsByScan[sc.name] || []).map((run) => (
                 <div key={run.runId} style={{ fontSize: 12, padding: '2px 0', display: 'flex', gap: 8, alignItems: 'center' }}>
-                  <Badge className={s.runStatus} appearance="tint" color={runColor(run.status)} size="small">{run.status || '—'}</Badge>
+                  <Badge appearance="tint" color={runColor(run.status)} size="small">{run.status || '—'}</Badge>
                   <span style={{ color: tokens.colorNeutralForeground3 }}>{run.startTime ? new Date(run.startTime).toLocaleString() : run.runId}</span>
                   {run.errorMessage && <span style={{ color: tokens.colorPaletteRedForeground1 }}>· {run.errorMessage}</span>}
                 </div>
