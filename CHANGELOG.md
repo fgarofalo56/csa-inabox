@@ -25,6 +25,60 @@ This file is maintained automatically by
 [Conventional Commits](https://www.conventionalcommits.org/). See
 [RELEASE.md](RELEASE.md) for the release process.
 
+## [0.46.0](https://github.com/fgarofalo56/csa-inabox/compare/csa-inabox-v0.45.0...csa-inabox-v0.46.0) (2026-06-19)
+
+
+### Features
+
+* **deploy-planner:** cost respects configured SKUs + configurable high-variance services ([#1509](https://github.com/fgarofalo56/csa-inabox/issues/1509)) ([a92a9c8](https://github.com/fgarofalo56/csa-inabox/commit/a92a9c834f625d8451afedc74cfd10ac5dcc31d8))
+* **fiab-console:** A+ polish — LoomDataTable z-index/aria-live/skeleton + tokenized EmptyState + adopt on key tables ([#1493](https://github.com/fgarofalo56/csa-inabox/issues/1493)) ([d9972ce](https://github.com/fgarofalo56/csa-inabox/commit/d9972ce226f9ab399c8a1eb61fd04de69eea92b6))
+* **fiab-console:** auto-set least-privilege RBAC when attaching a Data Landing Zone ([#1470](https://github.com/fgarofalo56/csa-inabox/issues/1470)) ([#1473](https://github.com/fgarofalo56/csa-inabox/issues/1473)) ([0b9e051](https://github.com/fgarofalo56/csa-inabox/commit/0b9e051369c25ae55725c1a2d0dc576cc1fc5d9e))
+* **fiab-console:** deploy-planner per-resource config inspector + config-aware bicep export ([#1470](https://github.com/fgarofalo56/csa-inabox/issues/1470)) ([#1484](https://github.com/fgarofalo56/csa-inabox/issues/1484)) ([55af24e](https://github.com/fgarofalo56/csa-inabox/commit/55af24efedb9ca6133bca99d0daf6fe149a9e5fe))
+* **fiab-console:** expand Health & self-audit to validate all new surfaces + data-plane day-one config ([#1490](https://github.com/fgarofalo56/csa-inabox/issues/1490)) ([7178e62](https://github.com/fgarofalo56/csa-inabox/commit/7178e62c5522d0bcb7b30f7e0f57f09a80395911))
+* **fiab-console:** full Purview Atlas lineage write (createAtlasLineage + GUID write-back + richer typeNames + Thread edge emit) ([#1510](https://github.com/fgarofalo56/csa-inabox/issues/1510)) ([b1065a1](https://github.com/fgarofalo56/csa-inabox/commit/b1065a1b02294dfc237c7ab6b541da6f819e9129))
+* **fiab-console:** Learning Hub overhaul — Knowledge-Center gallery + import-with-sample-data wizard + Learning Hub Copilot ([#1488](https://github.com/fgarofalo56/csa-inabox/issues/1488)) ([1520cee](https://github.com/fgarofalo56/csa-inabox/commit/1520cee345846f86c3eefc0944fd6f3e8dcb92a9)), closes [#1470](https://github.com/fgarofalo56/csa-inabox/issues/1470)
+* **fiab-console:** MCP Servers catalog as a first-class admin page + nav entry ([#1485](https://github.com/fgarofalo56/csa-inabox/issues/1485)) ([dfe2728](https://github.com/fgarofalo56/csa-inabox/commit/dfe27285c0ea9553938fa40899f998c42d5efeda)), closes [#1470](https://github.com/fgarofalo56/csa-inabox/issues/1470)
+* **fiab-console:** Organizational Visuals — per-template icons + real-data binding + Loom-native visual builder ([#1486](https://github.com/fgarofalo56/csa-inabox/issues/1486)) ([6cc5a83](https://github.com/fgarofalo56/csa-inabox/commit/6cc5a833563b6e312218fde33602ad4adc060958))
+* **fiab-console:** shared LearnPopover + SectionExplainer primitives, adopt on 7 surfaces (epic [#1470](https://github.com/fgarofalo56/csa-inabox/issues/1470)) ([#1495](https://github.com/fgarofalo56/csa-inabox/issues/1495)) ([28daea3](https://github.com/fgarofalo56/csa-inabox/commit/28daea3abad34d5d44e712dd83514687b883afec))
+* **fiab-console:** themed pre-built domains + Federal Civilian agency domain library in Create-new-domain ([#1481](https://github.com/fgarofalo56/csa-inabox/issues/1481)) ([262d463](https://github.com/fgarofalo56/csa-inabox/commit/262d4635b6c4703d8de4778d3979b077e837032c)), closes [#1470](https://github.com/fgarofalo56/csa-inabox/issues/1470)
+* **fiab-console:** W4 EmptyState adoption + W3 tree/cell skeletons ([#1498](https://github.com/fgarofalo56/csa-inabox/issues/1498)) ([065bd0d](https://github.com/fgarofalo56/csa-inabox/commit/065bd0d7d1feffd81a1ee3286b03c6830478421b))
+* **fiab-console:** W7 — sort affordance + aria-sort on LoomDataTable ([#1497](https://github.com/fgarofalo56/csa-inabox/issues/1497)) ([d65bbd0](https://github.com/fgarofalo56/csa-inabox/commit/d65bbd0a97c11c690be1185d6f726a804655283e))
+* **fiab-console:** Warp — editable visual transform canvas + starter wizards (compiles/runs on Azure-native engines) ([#1487](https://github.com/fgarofalo56/csa-inabox/issues/1487)) ([8d19e69](https://github.com/fgarofalo56/csa-inabox/commit/8d19e69705cd0bf9ce3af2c6221d33a532a60265))
+* **fiab-console:** Wave-2 day-one config — 40/40 runtime config, default Monitor alerts, MIP default-on ([#1476](https://github.com/fgarofalo56/csa-inabox/issues/1476)) ([c2b8b52](https://github.com/fgarofalo56/csa-inabox/commit/c2b8b527cac8ce1dc54daeda4fe70735cce35a6e))
+* **fiab:** day-one scripting — DLP Graph roles + flags + SCC sidecar, Databricks Private Link ([#1491](https://github.com/fgarofalo56/csa-inabox/issues/1491)) ([cb0a2c2](https://github.com/fgarofalo56/csa-inabox/commit/cb0a2c28a1f9ce75b1e30ba3fdcfd66b2eabf8c4))
+
+
+### Bug Fixes
+
+* **bootstrap:** day-one UAMI resolution, Purview PE-toggle, MG Reader + prereqs doc ([#1512](https://github.com/fgarofalo56/csa-inabox/issues/1512)) ([ecb01bf](https://github.com/fgarofalo56/csa-inabox/commit/ecb01bfe1c155a9da2c2bbe1ed2c98d1d820d8f8))
+* **fiab-bootstrap:** Foundry AIServices role grant (not AzureML) + Databricks UC account config day-one ([#1492](https://github.com/fgarofalo56/csa-inabox/issues/1492)) ([093db53](https://github.com/fgarofalo56/csa-inabox/commit/093db53a5adeaf728ebc52b516e6eaaca932ccdb))
+* **fiab-console:** connections auth-method picker + DSPM empty-state + AML compute gate clarity ([#1511](https://github.com/fgarofalo56/csa-inabox/issues/1511)) ([818c623](https://github.com/fgarofalo56/csa-inabox/commit/818c623126a3c82307347435845a8981cdf72579))
+* **fiab-console:** Copilot/Agents linked day-one + External MCP connect actually works (Streamable HTTP) ([#1475](https://github.com/fgarofalo56/csa-inabox/issues/1475)) ([4ec3497](https://github.com/fgarofalo56/csa-inabox/commit/4ec349725d97b51fa075d8daed46359627e4eee3))
+* **fiab-console:** domains list no longer blocks on the Purview mirror probe (6s timeout regression) ([#1482](https://github.com/fgarofalo56/csa-inabox/issues/1482)) ([2b2e3e2](https://github.com/fgarofalo56/csa-inabox/commit/2b2e3e20619a4b0eb56e6f81ad45bc355fc23757)), closes [#1470](https://github.com/fgarofalo56/csa-inabox/issues/1470)
+* **fiab-console:** honest Purview Data Map role gate on /admin/domains (Wave 1) ([#1472](https://github.com/fgarofalo56/csa-inabox/issues/1472)) ([72bbde0](https://github.com/fgarofalo56/csa-inabox/commit/72bbde01603d46ea6028c391754748023df4ef3a))
+* **fiab-console:** landing-zone map renders (React-Flow container sizing / fitView) ([#1477](https://github.com/fgarofalo56/csa-inabox/issues/1477)) ([8933e51](https://github.com/fgarofalo56/csa-inabox/commit/8933e51f73f0e5e793d8feeb4f7c06dac5f8f364)), closes [#1470](https://github.com/fgarofalo56/csa-inabox/issues/1470)
+* **fiab-console:** landing-zone re-attach check uses GET for Microsoft.Authorization/permissions (multi-sub false "only Reader") ([#1465](https://github.com/fgarofalo56/csa-inabox/issues/1465)) ([c2ada61](https://github.com/fgarofalo56/csa-inabox/commit/c2ada613ffb3fa5771c925d5133204ccedd8e7f7))
+* **fiab-console:** network topology canvas — per-subnet columns, computed DNS Y, dots bg, readable fonts ([#1507](https://github.com/fgarofalo56/csa-inabox/issues/1507)) ([447f63f](https://github.com/fgarofalo56/csa-inabox/commit/447f63f5de00591ead07f5dc33841a62a85ffd09))
+* **fiab-console:** network topology graph renders (React-Flow sizing/fitView) ([#1480](https://github.com/fgarofalo56/csa-inabox/issues/1480)) ([415ac01](https://github.com/fgarofalo56/csa-inabox/commit/415ac01e4d743e64c6894f9689f4a14d47c386ab)), closes [#1470](https://github.com/fgarofalo56/csa-inabox/issues/1470)
+* **fiab-console:** repair Vitest test-infra (providers, mocks, env, timeouts) ([#1502](https://github.com/fgarofalo56/csa-inabox/issues/1502)) ([1960c8d](https://github.com/fgarofalo56/csa-inabox/commit/1960c8dffeb03188c13028a4adabc933e380418a))
+* **fiab-console:** restyle governance pages to Web 3.0 design system + policies Cosmos gate ([#1508](https://github.com/fgarofalo56/csa-inabox/issues/1508)) ([eddeb98](https://github.com/fgarofalo56/csa-inabox/commit/eddeb98eb9ccf918a25a303398fa183de60e49c4))
+* **fiab-console:** Wave 1 — multi-sub RG/subscription resolution, AbortError relabel, Activities/Activity-log LAW queries ([#1471](https://github.com/fgarofalo56/csa-inabox/issues/1471)) ([8b580f2](https://github.com/fgarofalo56/csa-inabox/commit/8b580f2cfb721f8bc23354f2b5bd63dbf8f9014a))
+* **fiab-console:** wire all API Management CRUD buttons (dead-button day-one blocker) ([#1489](https://github.com/fgarofalo56/csa-inabox/issues/1489)) ([c2431ce](https://github.com/fgarofalo56/csa-inabox/commit/c2431ced33732aa9cbf86d6bfadc9725e9890af8)), closes [#1470](https://github.com/fgarofalo56/csa-inabox/issues/1470)
+* **fiab-console:** wire APIM admin Backends + Policies + Developer portal tabs ([#1470](https://github.com/fgarofalo56/csa-inabox/issues/1470)) ([#1474](https://github.com/fgarofalo56/csa-inabox/issues/1474)) ([c78e77a](https://github.com/fgarofalo56/csa-inabox/commit/c78e77a3ea0f43fbc6134db8bd4752cf8f9ca116))
+* **fiab:** day-one config round-2 — DLP Graph Security roles + AI Search governance index + posture-refresh function ([#1470](https://github.com/fgarofalo56/csa-inabox/issues/1470)) ([#1478](https://github.com/fgarofalo56/csa-inabox/issues/1478)) ([029c070](https://github.com/fgarofalo56/csa-inabox/commit/029c0706ae0e50f19f5e514641c6c230455944b8))
+* **fiab:** MSAL console secret as Key Vault reference so bootstrap rotations stop breaking login (AADSTS7000215) ([#1479](https://github.com/fgarofalo56/csa-inabox/issues/1479)) ([c2de651](https://github.com/fgarofalo56/csa-inabox/commit/c2de65103f68b21c6012142ae176ad3a1d40c45a))
+
+
+### Documentation
+
+* **fiab/audit:** day-one validation scorecard + A+ polish backlog (post-roll sweep) ([#1500](https://github.com/fgarofalo56/csa-inabox/issues/1500)) ([3e60ddb](https://github.com/fgarofalo56/csa-inabox/commit/3e60ddb82e668bbee22459732a745064cdd57072))
+
+
+### Tests
+
+* **fiab-console:** fix cluster-A stale vitest expectations (5 files) ([#1506](https://github.com/fgarofalo56/csa-inabox/issues/1506)) ([064db25](https://github.com/fgarofalo56/csa-inabox/commit/064db25eef490b593c32640087224b66ebf40e16))
+* **fiab-console:** fix TestingLibraryElementError found-multiple-elements in 9 render tests (closes [#1504](https://github.com/fgarofalo56/csa-inabox/issues/1504), epic [#1470](https://github.com/fgarofalo56/csa-inabox/issues/1470)) ([#1505](https://github.com/fgarofalo56/csa-inabox/issues/1505)) ([eb14b71](https://github.com/fgarofalo56/csa-inabox/commit/eb14b710bffb5015e0e786126fda222c7d2a7eb1))
+
 ## [0.45.0](https://github.com/fgarofalo56/csa-inabox/compare/csa-inabox-v0.44.0...csa-inabox-v0.45.0) (2026-06-18)
 
 
