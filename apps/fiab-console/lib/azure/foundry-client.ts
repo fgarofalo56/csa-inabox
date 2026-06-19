@@ -1025,17 +1025,125 @@ export async function moderateImage(imageBase64: string): Promise<any> {
   return await res.json();
 }
 
+// ---------------- Custom text blocklists (Content Safety data-plane) ---------
+//
+// Custom blocklists let an admin add bespoke terms / regexes on top of the
+// built-in harm classifiers. They live on the Content Safety data-plane (the
+// same host as text:analyze), NOT on ARM:
+//   list items create = PATCH {ep}/contentsafety/text/blocklists/{name}
+//   list blocklists   = GET   {ep}/contentsafety/text/blocklists
+//   get blocklist     = GET   {ep}/contentsafety/text/blocklists/{name}
+//   delete blocklist  = DELETE {ep}/contentsafety/text/blocklists/{name}
+//   add items         = POST  {ep}/contentsafety/text/blocklists/{name}:addOrUpdateBlocklistItems
+//   remove items      = POST  {ep}/contentsafety/text/blocklists/{name}:removeBlocklistItems
+//   list items        = GET   {ep}/contentsafety/text/blocklists/{name}/blocklistItems
+// api-version 2024-09-01. RBAC: Cognitive Services Contributor (or Owner) for
+// the write ops; Cognitive Services User suffices for the GETs.
+// Ref: https://learn.microsoft.com/azure/ai-services/content-safety/how-to/use-blocklist
+
+const CS_DATA_API = '2024-09-01';
+
+export interface Blocklist { blocklistName: string; description?: string }
+export interface BlocklistItem { blocklistItemId: string; text: string; description?: string; isRegex?: boolean }
+
+async function contentSafetyFetch(path: string, init: RequestInit = {}): Promise<Response> {
+  const ep = contentSafetyEndpoint();
+  const tok = await contentSafetyToken();
+  const sep = path.includes('?') ? '&' : '?';
+  const url = `${ep}/contentsafety${path}${sep}api-version=${CS_DATA_API}`;
+  return fetchWithTimeout(url, {
+    ...init,
+    headers: { ...(init.headers || {}), authorization: `Bearer ${tok}`, 'content-type': 'application/json' },
+  });
+}
+
+async function readContentSafety<T>(res: Response, op: string, allow404 = false): Promise<T | null> {
+  if (allow404 && res.status === 404) return null;
+  const text = await res.text();
+  let parsed: any = undefined;
+  if (text) { try { parsed = JSON.parse(text); } catch { parsed = text; } }
+  if (!res.ok) {
+    const msg = parsed?.error?.message || (typeof parsed === 'string' ? parsed : `${op} failed (${res.status})`);
+    throw new FoundryError(res.status, parsed, `Content Safety ${op}: ${String(msg).slice(0, 240)}`);
+  }
+  return (parsed as T) ?? ({} as T);
+}
+
+/**
+ * RAI content-filter policies (ARM) — replaces the previously fabricated
+ * "default" threshold row. Delegates to the Cognitive Services account client so
+ * every threshold returned is a REAL persisted policy value. The honest
+ * not-deployed gate is preserved: when neither a Content Safety endpoint nor a
+ * model-hosting account is configured, the underlying client throws and the
+ * route surfaces a warning MessageBar.
+ */
 export async function listContentSafetyPolicies(): Promise<{ name: string; thresholds: Record<string, number> }[]> {
-  // Honest gate only — `contentSafetyEndpoint()` throws NotDeployedError when
-  // Content Safety isn't provisioned, which drives the editor's not-deployed
-  // MessageBar. We do NOT fabricate a "default" threshold row: Azure AI Content
-  // Safety has no data-plane API that returns configured category thresholds as
-  // a policy list (thresholds live in Foundry RAI policies / custom blocklists).
-  // Live text/image moderation below is fully real. Wiring real RAI-policy +
-  // blocklist management is tracked in:
-  // TODO(#1410): https://github.com/fgarofalo56/csa-inabox/issues/1410
-  contentSafetyEndpoint(); // throws NotDeployedError if not configured
+  // Honest gate — throws NotDeployedError when Content Safety isn't provisioned.
+  contentSafetyEndpoint();
+  // The real policy list + thresholds come from the RAI-policy ARM surface,
+  // exposed via /api/items/content-safety/rai-policies. This legacy helper is
+  // kept for the verdict-shaped pipeline callers and intentionally returns an
+  // empty array (no fabricated thresholds) — the editor reads the RAI route.
   return [];
+}
+
+export async function listBlocklists(): Promise<Blocklist[]> {
+  const res = await contentSafetyFetch('/text/blocklists');
+  const j = await readContentSafety<{ value?: Blocklist[] }>(res, 'list blocklists');
+  return (j?.value || []).map((b) => ({ blocklistName: b.blocklistName, description: b.description }));
+}
+
+/** Create or update a blocklist (PATCH). Returns the persisted blocklist. */
+export async function upsertBlocklist(name: string, description?: string): Promise<Blocklist> {
+  const res = await contentSafetyFetch(`/text/blocklists/${encodeURIComponent(name)}`, {
+    method: 'PATCH',
+    body: JSON.stringify({ description: description ?? '' }),
+  });
+  const j = await readContentSafety<Blocklist>(res, 'create blocklist');
+  return { blocklistName: j?.blocklistName ?? name, description: j?.description ?? description };
+}
+
+export async function deleteBlocklist(name: string): Promise<void> {
+  const res = await contentSafetyFetch(`/text/blocklists/${encodeURIComponent(name)}`, { method: 'DELETE' });
+  if (!res.ok && ![200, 204, 404].includes(res.status)) {
+    await readContentSafety(res, 'delete blocklist');
+  }
+}
+
+export async function listBlocklistItems(name: string): Promise<BlocklistItem[]> {
+  const res = await contentSafetyFetch(`/text/blocklists/${encodeURIComponent(name)}/blocklistItems`);
+  const j = await readContentSafety<{ value?: any[]; values?: any[] }>(res, 'list blocklist items');
+  // The API spells this `value` in current docs; older payloads used `values`.
+  const rows = j?.value || (j as any)?.values || [];
+  return rows.map((i: any) => ({ blocklistItemId: i.blocklistItemId, text: i.text, description: i.description, isRegex: i.isRegex }));
+}
+
+export interface AddBlocklistItemInput { text: string; description?: string; isRegex?: boolean }
+
+/** Add (or update) up to 100 items to a blocklist in one call. */
+export async function addBlocklistItems(name: string, items: AddBlocklistItemInput[]): Promise<BlocklistItem[]> {
+  const res = await contentSafetyFetch(`/text/blocklists/${encodeURIComponent(name)}:addOrUpdateBlocklistItems`, {
+    method: 'POST',
+    body: JSON.stringify({
+      blocklistItems: items.map((i) => ({
+        text: i.text,
+        ...(i.description ? { description: i.description } : {}),
+        ...(i.isRegex ? { isRegex: true } : {}),
+      })),
+    }),
+  });
+  const j = await readContentSafety<{ blocklistItems?: any[] }>(res, 'add blocklist items');
+  return (j?.blocklistItems || []).map((i: any) => ({ blocklistItemId: i.blocklistItemId, text: i.text, description: i.description, isRegex: i.isRegex }));
+}
+
+export async function removeBlocklistItems(name: string, blocklistItemIds: string[]): Promise<void> {
+  const res = await contentSafetyFetch(`/text/blocklists/${encodeURIComponent(name)}:removeBlocklistItems`, {
+    method: 'POST',
+    body: JSON.stringify({ blocklistItemIds }),
+  });
+  if (!res.ok && res.status !== 204) {
+    await readContentSafety(res, 'remove blocklist items');
+  }
 }
 
 // ---------------- Copilot safety pipeline (verdict-shaped wrappers) ----------

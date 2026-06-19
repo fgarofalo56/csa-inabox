@@ -671,20 +671,62 @@ export function EvaluationEditor({ item, id }: { item: FabricItemType; id: strin
 // 4. ContentSafetyEditor
 // =====================================================================
 
+// Azure AI Content Safety harm categories + the RAI content-filter source
+// dimensions, grounded in the raiPolicies ARM schema (RaiPolicyContentFilter):
+// each (category, source) pair carries an independent severity threshold.
+const RAI_HARM_CATEGORIES = ['Hate', 'Sexual', 'Violence', 'Selfharm'] as const;
+const RAI_SEVERITY: Array<'Low' | 'Medium' | 'High'> = ['Low', 'Medium', 'High'];
+const RAI_SOURCES: Array<'Prompt' | 'Completion'> = ['Prompt', 'Completion'];
+
+interface RaiFilterRow { name: string; source: 'Prompt' | 'Completion'; enabled: boolean; blocking: boolean; severityThreshold?: 'Low' | 'Medium' | 'High' }
+
+/** Seed the four harm categories × {Prompt, Completion} at Medium/blocking. */
+function defaultFilterRows(): RaiFilterRow[] {
+  const rows: RaiFilterRow[] = [];
+  for (const c of RAI_HARM_CATEGORIES) {
+    for (const src of RAI_SOURCES) {
+      rows.push({ name: c, source: src, enabled: true, blocking: true, severityThreshold: 'Medium' });
+    }
+  }
+  return rows;
+}
+
 export function ContentSafetyEditor({ item, id }: { item: FabricItemType; id: string }) {
   const s = useStyles();
-  const [policies, reloadPolicies] = useApi<{ policies: any[] }>('/api/items/content-safety');
+  const [tab, setTab] = useState<'moderation' | 'filters' | 'blocklists'>('moderation');
+
+  // ---- Moderation (live text/image analyze) ----
+  const [gate, reloadGate] = useApi<{ policies: any[] }>('/api/items/content-safety');
   const [text, setText] = useState('');
   const [result, setResult] = useState<any>(null);
   const [busy, setBusy] = useState(false);
   const [imgB64, setImgB64] = useState('');
 
-  // Content Safety is a tenant-level Azure AI Content Safety resource; without
-  // an ARM id in the policies response, the most useful deep-link is the
-  // Content Safety Studio app at contentsafety.azure.com.
+  // ---- RAI content-filter policies (ARM) ----
+  const [policies, reloadPolicies] = useApi<{ policies: any[] }>('/api/items/content-safety/rai-policies');
+  const [polName, setPolName] = useState('');
+  const [polBase, setPolBase] = useState('Microsoft.DefaultV2');
+  const [filterRows, setFilterRows] = useState<RaiFilterRow[]>(defaultFilterRows());
+  const [polBusy, setPolBusy] = useState(false);
+  const [polMsg, setPolMsg] = useState<{ error?: string; hint?: string; notDeployed?: boolean; ok?: string } | null>(null);
+
+  // ---- Custom blocklists (data-plane) ----
+  const [blocklists, reloadBlocklists] = useApi<{ blocklists: any[] }>('/api/items/content-safety/blocklists');
+  const [blName, setBlName] = useState('');
+  const [blDesc, setBlDesc] = useState('');
+  const [blBusy, setBlBusy] = useState(false);
+  const [blMsg, setBlMsg] = useState<{ error?: string; hint?: string; notDeployed?: boolean; ok?: string } | null>(null);
+  const [selectedBl, setSelectedBl] = useState<string | null>(null);
+  const [items, setItems] = useState<{ loading: boolean; rows: any[]; error?: string }>({ loading: false, rows: [] });
+  const [itemText, setItemText] = useState('');
+  const [itemDesc, setItemDesc] = useState('');
+  const [itemRegex, setItemRegex] = useState(false);
+
+  // Content Safety is a tenant-level Azure AI Content Safety resource; the most
+  // useful deep-link is the Content Safety Studio app at contentsafety.azure.com.
   const ribbon = useMemo(
-    () => buildBaseRibbon(reloadPolicies, 'https://contentsafety.cognitive.azure.com/'),
-    [reloadPolicies],
+    () => buildBaseRibbon(() => { reloadGate(); reloadPolicies(); reloadBlocklists(); }, 'https://contentsafety.cognitive.azure.com/'),
+    [reloadGate, reloadPolicies, reloadBlocklists],
   );
 
   const analyze = async (kind: 'text' | 'image') => {
@@ -711,29 +753,309 @@ export function ContentSafetyEditor({ item, id }: { item: FabricItemType; id: st
     reader.readAsDataURL(f);
   };
 
+  const setRow = (i: number, patch: Partial<RaiFilterRow>) =>
+    setFilterRows((rows) => rows.map((r, idx) => (idx === i ? { ...r, ...patch } : r)));
+
+  // Load an existing policy into the editor form. System-managed (Microsoft
+  // default) policies are read-only, so clear the name to force a clone under a
+  // new user-managed name rather than attempting to overwrite the system policy.
+  const editPolicy = (p: any) => {
+    const readOnly = String(p.type || '').toLowerCase() === 'systemmanaged';
+    setPolName(readOnly ? '' : (p.name || ''));
+    setPolBase(p.basePolicyName || (readOnly ? p.name : '') || '');
+    const rows: RaiFilterRow[] = (p.contentFilters || []).map((f: any) => ({
+      name: f.name, source: f.source || 'Prompt', enabled: f.enabled !== false,
+      blocking: f.blocking !== false, severityThreshold: f.severityThreshold,
+    }));
+    setFilterRows(rows.length ? rows : defaultFilterRows());
+    setPolMsg(null);
+    setTab('filters');
+  };
+
+  const savePolicy = async () => {
+    if (!polName.trim()) { setPolMsg({ error: 'Policy name is required.' }); return; }
+    setPolBusy(true); setPolMsg(null);
+    const j = await postJson('/api/items/content-safety/rai-policies', {
+      name: polName.trim(),
+      basePolicyName: polBase.trim() || undefined,
+      contentFilters: filterRows,
+    });
+    setPolBusy(false);
+    if (j.ok) { setPolMsg({ ok: `Saved policy "${polName.trim()}".` }); reloadPolicies(); }
+    else setPolMsg({ error: j.error, hint: j.hint, notDeployed: j.notDeployed });
+  };
+
+  const deletePolicy = async (name: string) => {
+    setPolBusy(true); setPolMsg(null);
+    const r = await fetch(`/api/items/content-safety/rai-policies?name=${encodeURIComponent(name)}`, { method: 'DELETE' });
+    const j = await r.json();
+    setPolBusy(false);
+    if (j.ok) { setPolMsg({ ok: `Deleted policy "${name}".` }); reloadPolicies(); }
+    else setPolMsg({ error: j.error, hint: j.hint, notDeployed: j.notDeployed });
+  };
+
+  const loadItems = useCallback(async (name: string) => {
+    setItems({ loading: true, rows: [] });
+    const r = await fetch(`/api/items/content-safety/blocklists/items?name=${encodeURIComponent(name)}`);
+    const j = await r.json();
+    if (j.ok) setItems({ loading: false, rows: j.items || [] });
+    else setItems({ loading: false, rows: [], error: j.error });
+  }, []);
+
+  useEffect(() => { if (selectedBl) loadItems(selectedBl); }, [selectedBl, loadItems]);
+
+  const saveBlocklist = async () => {
+    if (!blName.trim()) { setBlMsg({ error: 'Blocklist name is required.' }); return; }
+    setBlBusy(true); setBlMsg(null);
+    const j = await postJson('/api/items/content-safety/blocklists', { name: blName.trim(), description: blDesc.trim() || undefined });
+    setBlBusy(false);
+    if (j.ok) { setBlMsg({ ok: `Saved blocklist "${blName.trim()}".` }); setBlName(''); setBlDesc(''); reloadBlocklists(); }
+    else setBlMsg({ error: j.error, hint: j.hint, notDeployed: j.notDeployed });
+  };
+
+  const deleteBlocklist = async (name: string) => {
+    setBlBusy(true); setBlMsg(null);
+    const r = await fetch(`/api/items/content-safety/blocklists?name=${encodeURIComponent(name)}`, { method: 'DELETE' });
+    const j = await r.json();
+    setBlBusy(false);
+    if (j.ok) { setBlMsg({ ok: `Deleted blocklist "${name}".` }); if (selectedBl === name) setSelectedBl(null); reloadBlocklists(); }
+    else setBlMsg({ error: j.error, hint: j.hint, notDeployed: j.notDeployed });
+  };
+
+  const addItem = async () => {
+    if (!selectedBl || !itemText.trim()) return;
+    setBlBusy(true); setBlMsg(null);
+    const j = await postJson(`/api/items/content-safety/blocklists/items?name=${encodeURIComponent(selectedBl)}`, {
+      items: [{ text: itemText.trim(), description: itemDesc.trim() || undefined, isRegex: itemRegex }],
+    });
+    setBlBusy(false);
+    if (j.ok) { setItemText(''); setItemDesc(''); setItemRegex(false); loadItems(selectedBl); }
+    else setBlMsg({ error: j.error, hint: j.hint, notDeployed: j.notDeployed });
+  };
+
+  const removeItem = async (itemId: string) => {
+    if (!selectedBl) return;
+    setBlBusy(true); setBlMsg(null);
+    const r = await fetch(`/api/items/content-safety/blocklists/items?name=${encodeURIComponent(selectedBl)}&id=${encodeURIComponent(itemId)}`, { method: 'DELETE' });
+    const j = await r.json();
+    setBlBusy(false);
+    if (j.ok) loadItems(selectedBl);
+    else setBlMsg({ error: j.error, hint: j.hint, notDeployed: j.notDeployed });
+  };
+
   return <Shell item={item} id={id} ribbon={ribbon}>
     <div className={s.pad}>
-      {policies.error
-        ? <ErrorBar msg={policies.error} hint={policies.hint} notDeployed={policies.notDeployed} />
-        : (
-          <>
-            <Subtitle2>Content Safety</Subtitle2>
-            <Caption1>Live text &amp; image moderation against the Azure AI Content Safety harm categories (hate, self-harm, sexual, violence). Custom RAI-policy &amp; blocklist management is tracked in issue #1410.</Caption1>
-            <div className={s.card}>
-              <Subtitle2>Text moderation</Subtitle2>
-              <Textarea value={text} onChange={(_, d) => setText(d.value)} resize="vertical" rows={4} placeholder="Paste text to evaluate…" />
-              <Button appearance="primary" onClick={() => analyze('text')} disabled={busy || !text}>Analyze text</Button>
+      <Subtitle2>Content Safety</Subtitle2>
+      <Caption1>Live text &amp; image moderation, real RAI content-filter policies (per-category severity thresholds), and custom term/regex blocklists against the Azure AI Content Safety harm categories (hate, self-harm, sexual, violence).</Caption1>
+
+      <TabList selectedValue={tab} onTabSelect={(_, d) => setTab(d.value as typeof tab)}>
+        <Tab value="moderation">Moderation</Tab>
+        <Tab value="filters">Content filters</Tab>
+        <Tab value="blocklists">Blocklists</Tab>
+      </TabList>
+
+      {/* ---- Moderation ---- */}
+      {tab === 'moderation' && (
+        gate.error
+          ? <ErrorBar msg={gate.error} hint={gate.hint} notDeployed={gate.notDeployed} />
+          : (
+            <>
+              <div className={s.card}>
+                <Subtitle2>Text moderation</Subtitle2>
+                <Textarea value={text} onChange={(_, d) => setText(d.value)} resize="vertical" rows={4} placeholder="Paste text to evaluate…" />
+                <Button appearance="primary" onClick={() => analyze('text')} disabled={busy || !text}>Analyze text</Button>
+              </div>
+              <div className={s.card}>
+                <Subtitle2>Image moderation</Subtitle2>
+                <input type="file" accept="image/*" onChange={(e) => onFile(e.target.files?.[0])} />
+                <Button appearance="primary" onClick={() => analyze('image')} disabled={busy || !imgB64}>Analyze image</Button>
+              </div>
+              {result && (result.ok
+                ? <pre className={s.monaco}>{JSON.stringify(result.result, null, 2)}</pre>
+                : <ErrorBar msg={result.error} hint={result.hint} notDeployed={result.notDeployed} />)}
+            </>
+          )
+      )}
+
+      {/* ---- RAI content-filter policies ---- */}
+      {tab === 'filters' && (
+        gate.error
+          ? <ErrorBar msg={gate.error} hint={gate.hint} notDeployed={gate.notDeployed} />
+          : (
+            <>
+              <div className={s.card}>
+                <div className={s.toolbar}>
+                  <Subtitle2>Content-filter policies</Subtitle2>
+                  <Button size="small" onClick={reloadPolicies}>Reload</Button>
+                </div>
+                <Caption1>Responsible-AI content filters on the model-hosting account (Microsoft.CognitiveServices/accounts/raiPolicies). Each category has an independent severity threshold per source — these are the real persisted policy values used by your model deployments.</Caption1>
+                {policies.loading ? <Spinner size="small" /> : policies.error ? <ErrorBar msg={policies.error} hint={policies.hint} notDeployed={policies.notDeployed} /> : (
+                  <div className={s.tableWrap}>
+                    <Table size="small" aria-label="RAI policies">
+                      <TableHeader><TableRow>
+                        <TableHeaderCell>Name</TableHeaderCell><TableHeaderCell>Type</TableHeaderCell>
+                        <TableHeaderCell>Base</TableHeaderCell><TableHeaderCell>Filters</TableHeaderCell>
+                        <TableHeaderCell>Blocklists</TableHeaderCell><TableHeaderCell>Actions</TableHeaderCell>
+                      </TableRow></TableHeader>
+                      <TableBody>
+                        {(policies.data?.policies || []).map((p: any) => {
+                          const readOnly = String(p.type || '').toLowerCase() === 'systemmanaged';
+                          return (
+                            <TableRow key={p.name}>
+                              <TableCell className={s.cell}>{p.name}</TableCell>
+                              <TableCell className={s.cell}>{readOnly ? <Badge color="informative">System</Badge> : <Badge color="brand">User</Badge>}</TableCell>
+                              <TableCell className={s.cell}>{p.basePolicyName || '—'}</TableCell>
+                              <TableCell className={s.cell}>{(p.contentFilters || []).length}</TableCell>
+                              <TableCell className={s.cell}>{(p.customBlocklists || []).length}</TableCell>
+                              <TableCell className={s.cell}>
+                                <Button size="small" appearance="subtle" onClick={() => editPolicy(p)}>{readOnly ? 'Clone' : 'Edit'}</Button>
+                                {!readOnly && <Button size="small" appearance="subtle" disabled={polBusy} onClick={() => deletePolicy(p.name)}>Delete</Button>}
+                              </TableCell>
+                            </TableRow>
+                          );
+                        })}
+                        {(policies.data?.policies || []).length === 0 && (
+                          <TableRow><TableCell className={s.cell}>No content-filter policies yet.</TableCell></TableRow>
+                        )}
+                      </TableBody>
+                    </Table>
+                  </div>
+                )}
+              </div>
+
+              <div className={s.card}>
+                <Subtitle2>Create / edit policy</Subtitle2>
+                <div className={s.toolbar}>
+                  <Field label="Policy name"><Input value={polName} onChange={(_, d) => setPolName(d.value)} placeholder="my-content-filter" /></Field>
+                  <Field label="Base policy"><Input value={polBase} onChange={(_, d) => setPolBase(d.value)} placeholder="Microsoft.DefaultV2" /></Field>
+                </div>
+                <div className={s.tableWrap}>
+                  <Table size="small" aria-label="Content filters">
+                    <TableHeader><TableRow>
+                      <TableHeaderCell>Category</TableHeaderCell><TableHeaderCell>Source</TableHeaderCell>
+                      <TableHeaderCell>Enabled</TableHeaderCell><TableHeaderCell>Blocking</TableHeaderCell>
+                      <TableHeaderCell>Severity threshold</TableHeaderCell>
+                    </TableRow></TableHeader>
+                    <TableBody>
+                      {filterRows.map((r, i) => (
+                        <TableRow key={`${r.name}-${r.source}-${i}`}>
+                          <TableCell className={s.cell}>{r.name}</TableCell>
+                          <TableCell className={s.cell}>{r.source}</TableCell>
+                          <TableCell className={s.cell}><Checkbox checked={r.enabled} onChange={(_, d) => setRow(i, { enabled: !!d.checked })} /></TableCell>
+                          <TableCell className={s.cell}><Checkbox checked={r.blocking} onChange={(_, d) => setRow(i, { blocking: !!d.checked })} /></TableCell>
+                          <TableCell className={s.cell}>
+                            <Dropdown
+                              size="small"
+                              selectedOptions={r.severityThreshold ? [r.severityThreshold] : []}
+                              value={r.severityThreshold || ''}
+                              disabled={!r.enabled}
+                              onOptionSelect={(_, d) => setRow(i, { severityThreshold: d.optionValue as RaiFilterRow['severityThreshold'] })}
+                            >
+                              {RAI_SEVERITY.map((sv) => <Option key={sv} value={sv}>{sv}</Option>)}
+                            </Dropdown>
+                          </TableCell>
+                        </TableRow>
+                      ))}
+                    </TableBody>
+                  </Table>
+                </div>
+                <div className={s.toolbar}>
+                  <Button appearance="primary" disabled={polBusy || !polName.trim()} onClick={savePolicy}>Save policy</Button>
+                  <Button disabled={polBusy} onClick={() => { setPolName(''); setPolBase('Microsoft.DefaultV2'); setFilterRows(defaultFilterRows()); setPolMsg(null); }}>Reset</Button>
+                </div>
+                {polMsg?.ok && <MessageBar intent="success"><MessageBarBody>{polMsg.ok}</MessageBarBody></MessageBar>}
+                {polMsg?.error && <ErrorBar msg={polMsg.error} hint={polMsg.hint} notDeployed={polMsg.notDeployed} />}
+              </div>
+            </>
+          )
+      )}
+
+      {/* ---- Custom blocklists ---- */}
+      {tab === 'blocklists' && (
+        <>
+          <div className={s.card}>
+            <div className={s.toolbar}>
+              <Subtitle2>Custom blocklists</Subtitle2>
+              <Button size="small" onClick={reloadBlocklists}>Reload</Button>
             </div>
-            <div className={s.card}>
-              <Subtitle2>Image moderation</Subtitle2>
-              <input type="file" accept="image/*" onChange={(e) => onFile(e.target.files?.[0])} />
-              <Button appearance="primary" onClick={() => analyze('image')} disabled={busy || !imgB64}>Analyze image</Button>
+            <Caption1>Custom term / regex blocklists on the Content Safety data-plane. Attach one to a content-filter policy (Content filters tab) to enforce it. Max 10,000 terms total across all lists; 128 chars per term.</Caption1>
+            {blocklists.loading ? <Spinner size="small" /> : blocklists.error ? <ErrorBar msg={blocklists.error} hint={blocklists.hint} notDeployed={blocklists.notDeployed} /> : (
+              <div className={s.tableWrap}>
+                <Table size="small" aria-label="Blocklists">
+                  <TableHeader><TableRow>
+                    <TableHeaderCell>Name</TableHeaderCell><TableHeaderCell>Description</TableHeaderCell><TableHeaderCell>Actions</TableHeaderCell>
+                  </TableRow></TableHeader>
+                  <TableBody>
+                    {(blocklists.data?.blocklists || []).map((b: any) => (
+                      <TableRow key={b.blocklistName} style={{ background: selectedBl === b.blocklistName ? tokens.colorNeutralBackground2 : undefined }}>
+                        <TableCell className={s.cell}>{b.blocklistName}</TableCell>
+                        <TableCell className={s.cell}>{b.description || '—'}</TableCell>
+                        <TableCell className={s.cell}>
+                          <Button size="small" appearance="subtle" onClick={() => setSelectedBl(b.blocklistName)}>Items</Button>
+                          <Button size="small" appearance="subtle" disabled={blBusy} onClick={() => deleteBlocklist(b.blocklistName)}>Delete</Button>
+                        </TableCell>
+                      </TableRow>
+                    ))}
+                    {(blocklists.data?.blocklists || []).length === 0 && (
+                      <TableRow><TableCell className={s.cell}>No blocklists yet.</TableCell></TableRow>
+                    )}
+                  </TableBody>
+                </Table>
+              </div>
+            )}
+          </div>
+
+          <div className={s.card}>
+            <Subtitle2>Create / update blocklist</Subtitle2>
+            <div className={s.toolbar}>
+              <Field label="Name"><Input value={blName} onChange={(_, d) => setBlName(d.value)} placeholder="my-blocklist" /></Field>
+              <Field label="Description"><Input value={blDesc} onChange={(_, d) => setBlDesc(d.value)} placeholder="(optional)" /></Field>
+              <Button appearance="primary" disabled={blBusy || !blName.trim()} onClick={saveBlocklist}>Save blocklist</Button>
             </div>
-            {result && (result.ok
-              ? <pre className={s.monaco}>{JSON.stringify(result.result, null, 2)}</pre>
-              : <ErrorBar msg={result.error} hint={result.hint} notDeployed={result.notDeployed} />)}
-          </>
-        )}
+            {blMsg?.ok && <MessageBar intent="success"><MessageBarBody>{blMsg.ok}</MessageBarBody></MessageBar>}
+            {blMsg?.error && <ErrorBar msg={blMsg.error} hint={blMsg.hint} notDeployed={blMsg.notDeployed} />}
+          </div>
+
+          {selectedBl && (
+            <div className={s.card}>
+              <div className={s.toolbar}>
+                <Subtitle2>Items · {selectedBl}</Subtitle2>
+                <Button size="small" onClick={() => loadItems(selectedBl)}>Reload</Button>
+                <Button size="small" appearance="subtle" onClick={() => setSelectedBl(null)}>Close</Button>
+              </div>
+              <div className={s.toolbar}>
+                <Field label="Term / pattern"><Input value={itemText} onChange={(_, d) => setItemText(d.value)} placeholder="term to block" /></Field>
+                <Field label="Description"><Input value={itemDesc} onChange={(_, d) => setItemDesc(d.value)} placeholder="(optional)" /></Field>
+                <Checkbox label="Regex" checked={itemRegex} onChange={(_, d) => setItemRegex(!!d.checked)} />
+                <Button appearance="primary" disabled={blBusy || !itemText.trim()} onClick={addItem}>Add item</Button>
+              </div>
+              {items.loading ? <Spinner size="small" /> : items.error ? <ErrorBar msg={items.error} /> : (
+                <div className={s.tableWrap}>
+                  <Table size="small" aria-label="Blocklist items">
+                    <TableHeader><TableRow>
+                      <TableHeaderCell>Term</TableHeaderCell><TableHeaderCell>Regex</TableHeaderCell>
+                      <TableHeaderCell>Description</TableHeaderCell><TableHeaderCell>Actions</TableHeaderCell>
+                    </TableRow></TableHeader>
+                    <TableBody>
+                      {items.rows.map((it: any) => (
+                        <TableRow key={it.blocklistItemId}>
+                          <TableCell className={s.cell}>{it.text}</TableCell>
+                          <TableCell className={s.cell}>{it.isRegex ? <Badge color="warning">regex</Badge> : '—'}</TableCell>
+                          <TableCell className={s.cell}>{it.description || '—'}</TableCell>
+                          <TableCell className={s.cell}><Button size="small" appearance="subtle" disabled={blBusy} onClick={() => removeItem(it.blocklistItemId)}>Remove</Button></TableCell>
+                        </TableRow>
+                      ))}
+                      {items.rows.length === 0 && (
+                        <TableRow><TableCell className={s.cell}>No items in this blocklist.</TableCell></TableRow>
+                      )}
+                    </TableBody>
+                  </Table>
+                </div>
+              )}
+            </div>
+          )}
+        </>
+      )}
     </div>
   </Shell>;
 }

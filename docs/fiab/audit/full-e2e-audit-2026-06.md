@@ -224,7 +224,7 @@ info bars cite "returns 501" while the code returns 503.
 |---|---|---|
 | 🚫 copilot-studio-analytics | 404/204 coerced to all-zeros KPIs | `copilot-studio-client.ts:838-872` |
 | 🚫 geo-pipeline Trigger run | GREEN "enrichment ran" over `activities:[]` | `adf.bicep:125`; `geo-editors.tsx:895-927` |
-| 🚫 content-safety policies | `listContentSafetyPolicies()` returns hard-coded `default` thresholds + "lands in v2.6" caption with no ticket; data never rendered | `foundry-client.ts:916-923`; `foundry-sub-editors.tsx:716-721` |
+| ✅ content-safety policies | FIXED (#1410): fabricated `default` thresholds removed; `ContentSafetyEditor` now renders REAL RAI content-filter policies (Microsoft.CognitiveServices/accounts/raiPolicies) with per-category severity threshold create/edit/delete, and REAL custom blocklist CRUD (Content Safety data-plane). Honest 503 gate when the endpoint env var is unset. | `foundry-cs-client.ts` (listRaiPolicies/upsertRaiPolicy/deleteRaiPolicy); `foundry-client.ts` (list/upsert/deleteBlocklist + items); `foundry-sub-editors.tsx` ContentSafetyEditor |
 | 🚫 operations-agent | "Phase 1 stub"; absent capabilities deferred to a *doc*, not a tracked TODO (no-vaporware violation) | `phase4-editors.tsx:3556-3561` |
 
 Borderline (real call, null effect): copilot-studio-channel publish (H2),

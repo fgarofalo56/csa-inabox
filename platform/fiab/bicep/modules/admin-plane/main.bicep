@@ -1630,6 +1630,10 @@ module contentSafety '../deploy-planner/cognitive-account.bicep' = if (contentSa
     nameFragment: 'contentsafety'
     skuName: 'S0'
     consolePrincipalId: identity.outputs.uamiConsolePrincipalId
+    // Custom-blocklist management (create/delete lists + add/remove items) is a
+    // data-plane WRITE op that needs Cognitive Services Contributor; the default
+    // User grant is read/analyze-only. (Issue #1410 — real blocklist CRUD.)
+    grantContributor: true
     skipRoleGrants: skipRoleGrants
     complianceTags: complianceTags
   }

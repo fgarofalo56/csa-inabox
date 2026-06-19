@@ -1235,3 +1235,174 @@ export async function listActivityLog(hours = 24, selector?: AccountSelector): P
   }));
   return { account: acct, events };
 }
+
+// ---------------- RAI content-filter policies (ARM, account-scoped) ----------
+//
+// Responsible-AI content-filter policies live on the Cognitive Services /
+// AIServices account as a child resource:
+//   Microsoft.CognitiveServices/accounts/{name}/raiPolicies
+// Each policy carries a list of per-category content filters with a severity
+// threshold (Low/Medium/High), a source (Prompt/Completion), enabled + blocking
+// flags, plus a list of attached custom blocklists. A model deployment binds one
+// via `raiPolicyName`. This is the REAL surface the Azure AI Foundry "content
+// filters" page edits — no fabricated thresholds.
+//
+// ARM ops (Operation RaiPolicies_*):
+//   list   = GET    {account}/raiPolicies
+//   get    = GET    {account}/raiPolicies/{name}
+//   put    = PUT    {account}/raiPolicies/{name}   (create / update)
+//   delete = DELETE {account}/raiPolicies/{name}
+// Ref: https://learn.microsoft.com/azure/templates/microsoft.cognitiveservices/accounts/raipolicies
+//
+// RBAC: the Console UAMI needs `Cognitive Services Contributor` at the account
+// scope for PUT/DELETE (Reader is enough for the list/get tabs). The admin-plane
+// ai-foundry.bicep already grants Contributor on the model-hosting account.
+
+export type RaiSeverityThreshold = 'Low' | 'Medium' | 'High';
+export type RaiFilterSource = 'Prompt' | 'Completion';
+export type RaiPolicyMode = 'Default' | 'Deferred' | 'Blocking' | 'Asynchronous_filter';
+
+export interface RaiContentFilter {
+  /** Harm category / filter name — e.g. Hate, Sexual, Violence, Selfharm, Jailbreak, Protected Material. */
+  name: string;
+  enabled?: boolean;
+  /** True = block, false = annotate only. */
+  blocking?: boolean;
+  /** Severity at which content is filtered. Absent for non-severity filters (e.g. Jailbreak). */
+  severityThreshold?: RaiSeverityThreshold;
+  source?: RaiFilterSource;
+}
+
+export interface RaiCustomBlocklist {
+  blocklistName: string;
+  blocking?: boolean;
+  source?: RaiFilterSource;
+}
+
+export interface RaiPolicy {
+  id?: string;
+  name: string;
+  /** Type — 'UserManaged' (editable/deletable) or 'SystemManaged' (Microsoft defaults, read-only). */
+  type?: string;
+  basePolicyName?: string;
+  mode?: RaiPolicyMode;
+  contentFilters: RaiContentFilter[];
+  customBlocklists: RaiCustomBlocklist[];
+}
+
+function shapeRaiFilter(raw: any): RaiContentFilter {
+  return {
+    name: raw?.name,
+    enabled: typeof raw?.enabled === 'boolean' ? raw.enabled : undefined,
+    blocking: typeof raw?.blocking === 'boolean' ? raw.blocking : undefined,
+    severityThreshold: raw?.severityThreshold,
+    source: raw?.source,
+  };
+}
+
+function shapeRaiBlocklist(raw: any): RaiCustomBlocklist {
+  return {
+    blocklistName: raw?.blocklistName,
+    blocking: typeof raw?.blocking === 'boolean' ? raw.blocking : undefined,
+    source: raw?.source,
+  };
+}
+
+function shapeRaiPolicy(raw: any): RaiPolicy {
+  const p = raw?.properties || {};
+  return {
+    id: raw?.id,
+    name: raw?.name,
+    type: p.type,
+    basePolicyName: p.basePolicyName,
+    mode: p.mode,
+    contentFilters: (p.contentFilters || []).map(shapeRaiFilter),
+    customBlocklists: (p.customBlocklists || []).map(shapeRaiBlocklist),
+  };
+}
+
+export async function listRaiPolicies(selector?: AccountSelector): Promise<{ account: CsAccount; policies: RaiPolicy[] }> {
+  const acct = await resolveAccount(false, selector);
+  const res = await armFetch(`${accountPath(acct)}/raiPolicies`);
+  const j = await readJson<{ value?: any[] }>(res);
+  const policies = (j?.value || []).map(shapeRaiPolicy)
+    .sort((a, b) => (a.name || '').localeCompare(b.name || ''));
+  return { account: acct, policies };
+}
+
+export async function getRaiPolicy(name: string, selector?: AccountSelector): Promise<{ account: CsAccount; policy: RaiPolicy | null }> {
+  const acct = await resolveAccount(false, selector);
+  const res = await armFetch(`${accountPath(acct)}/raiPolicies/${encodeURIComponent(name)}`);
+  const j = await readJson<any>(res);
+  return { account: acct, policy: j ? shapeRaiPolicy(j) : null };
+}
+
+export interface UpsertRaiPolicyInput {
+  name: string;
+  basePolicyName?: string;
+  mode?: RaiPolicyMode;
+  contentFilters: RaiContentFilter[];
+  customBlocklists?: RaiCustomBlocklist[];
+}
+
+/**
+ * Create or update an RAI content-filter policy (PUT). The severity thresholds
+ * come straight from the caller (the editor's per-category dropdowns) and are
+ * persisted to Azure — they are real policy values, never synthesised.
+ */
+export async function upsertRaiPolicy(input: UpsertRaiPolicyInput, selector?: AccountSelector): Promise<RaiPolicy> {
+  const acct = await resolveAccount(false, selector);
+  const body: any = {
+    properties: {
+      ...(input.basePolicyName ? { basePolicyName: input.basePolicyName } : {}),
+      ...(input.mode ? { mode: input.mode } : {}),
+      contentFilters: input.contentFilters.map((f) => ({
+        name: f.name,
+        ...(f.enabled !== undefined ? { enabled: f.enabled } : {}),
+        ...(f.blocking !== undefined ? { blocking: f.blocking } : {}),
+        ...(f.severityThreshold ? { severityThreshold: f.severityThreshold } : {}),
+        ...(f.source ? { source: f.source } : {}),
+      })),
+      ...(input.customBlocklists?.length
+        ? {
+            customBlocklists: input.customBlocklists.map((b) => ({
+              blocklistName: b.blocklistName,
+              ...(b.blocking !== undefined ? { blocking: b.blocking } : {}),
+              ...(b.source ? { source: b.source } : {}),
+            })),
+          }
+        : {}),
+    },
+  };
+  const res = await armFetch(
+    `${accountPath(acct)}/raiPolicies/${encodeURIComponent(input.name)}`,
+    { method: 'PUT', body: JSON.stringify(body) },
+  );
+  if (!res.ok && ![200, 201, 202].includes(res.status)) {
+    const t = await res.text();
+    throw new CsError(res.status, t, `Upsert RAI policy failed: ${t.slice(0, 240)}`);
+  }
+  const j = await readJson<any>(res);
+  // Async (202) PUTs return no body — echo the requested shape so the UI updates.
+  return j && (j as any).name
+    ? shapeRaiPolicy(j)
+    : {
+        name: input.name,
+        basePolicyName: input.basePolicyName,
+        mode: input.mode,
+        contentFilters: input.contentFilters,
+        customBlocklists: input.customBlocklists || [],
+      };
+}
+
+export async function deleteRaiPolicy(name: string, selector?: AccountSelector): Promise<void> {
+  const acct = await resolveAccount(false, selector);
+  const res = await armFetch(
+    `${accountPath(acct)}/raiPolicies/${encodeURIComponent(name)}`,
+    { method: 'DELETE' },
+  );
+  if (!res.ok && ![200, 202, 204, 404].includes(res.status)) {
+    const t = await res.text();
+    throw new CsError(res.status, t, `Delete RAI policy failed: ${t.slice(0, 240)}`);
+  }
+}
