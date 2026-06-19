@@ -7,3 +7,5 @@ public/monaco/
 test-results/
 playwright-report/
 tsconfig.tsbuildinfo
+# Playwright auth state — contains minted session cookies; never commit.
+e2e/.auth/
