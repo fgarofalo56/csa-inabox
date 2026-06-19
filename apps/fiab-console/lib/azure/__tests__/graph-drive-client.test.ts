@@ -139,8 +139,9 @@ describe('resolveSharingUrl', () => {
     );
     const { driveId, item } = await resolveSharingUrl('https://contoso.sharepoint.com/sites/Finance/Shared%20Documents/Q4.xlsx');
     const url = String(fetchSpy.mock.calls[0][0]);
-    // share id is "u!<base64url>" url-encoded ("u!" => "u%21")
-    expect(url).toContain('/shares/u%21');
+    // share id is the literal "u!<base64url>" token used directly in the path
+    // (per MS Graph "encode sharing URLs"; the "!" is not percent-encoded).
+    expect(url).toContain('/shares/u!');
     expect(url).toContain('/driveItem');
     expect(driveId).toBe('drive-7');
     expect(item).toMatchObject({ id: 'item-9', name: 'Q4.xlsx', isFolder: false, path: 'Reports/Q4.xlsx' });

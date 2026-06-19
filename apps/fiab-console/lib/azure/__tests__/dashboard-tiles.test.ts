@@ -23,7 +23,7 @@ describe('cloud-endpoints — AAS suffix/scope', () => {
     vi.resetModules();
     const m = await import('../cloud-endpoints');
     expect(m.aasSuffix()).toBe(['asazure', 'windows', 'net'].join('.'));
-    expect(m.aasScope()).toBe(`https://*.${['asazure', 'windows', 'net'].join('.')}/.default`);
+    expect(m.aasScope()).toBe(`https://*.${['asazure', 'windows', 'net'].join('.')}`);
   });
 
   it('Gov → asazure.usgovcloudapi.net', async () => {
