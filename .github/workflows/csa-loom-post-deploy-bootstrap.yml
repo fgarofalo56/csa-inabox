@@ -322,14 +322,20 @@ jobs:
           else
             echo "::warning::Could not resolve a Microsoft.Purview/accounts id for '$PURVIEW_ACCOUNT' — proceeding (account may be public, in a different RG, or absent)."
           fi
+          # All four roles are granted in a single script invocation (ROLES env).
+          # The script handles the PE-toggle + restore internally (PURVIEW_TOGGLE_PUBLIC=1)
+          # and polls until reachable (up to 8 min), so the outer workflow no longer
+          # needs to manage the ARM toggle or loop over roles.
           chmod +x scripts/csa-loom/grant-purview-datamap-role.sh
-          for ROLE in data-reader data-curator data-source-administrator collection-administrator; do
-            echo "== granting Console UAMI '$ROLE' on $PURVIEW_ACCOUNT root collection (cloud=$PURVIEW_CLOUD) =="
-            PURVIEW_ACCOUNT="$PURVIEW_ACCOUNT" PURVIEW_CLOUD="$PURVIEW_CLOUD" \
-              CONSOLE_UAMI_PRINCIPAL="$CONSOLE_UAMI_PRINCIPAL" ROLE="$ROLE" \
-              bash scripts/csa-loom/grant-purview-datamap-role.sh \
-              || echo "::warning::Purview '$ROLE' grant failed — the deploy SP may not be Collection Admin on $PURVIEW_ACCOUNT (add it once in the Purview portal, then re-run)."
-          done
+          echo "== granting all Purview Data Map roles on $PURVIEW_ACCOUNT (cloud=$PURVIEW_CLOUD) =="
+          PURVIEW_ACCOUNT="$PURVIEW_ACCOUNT" \
+            PURVIEW_CLOUD="$PURVIEW_CLOUD" \
+            PURVIEW_TOGGLE_PUBLIC=1 \
+            CONSOLE_UAMI_PRINCIPAL="$CONSOLE_UAMI_PRINCIPAL" \
+            ROLES="data-reader data-curator data-source-administrator collection-administrator" \
+            ADMIN_RG="$ADMIN_RG" \
+            bash scripts/csa-loom/grant-purview-datamap-role.sh \
+            || echo "::warning::Purview Data Map role grants failed — the deploy SP may not be Collection Admin on $PURVIEW_ACCOUNT (add it once in the Purview portal, then re-run)."
 
       - name: Purview Unified Catalog governance-domain + Data Product Owner (guidance)
         # Day-one gap closure plan §D3/§D4. The Purview UNIFIED Catalog
@@ -403,6 +409,45 @@ jobs:
           CONSOLE_UAMI_PRINCIPAL="$CONSOLE_UAMI_PRINCIPAL" SUBS="$SUB" \
             bash scripts/csa-loom/grant-console-rbac.sh \
             || echo "::warning::Some Console UAMI RBAC grants failed — the deploy SP needs Owner / User Access Administrator on the subscription."
+
+      - name: Grant Console UAMI Reader at tenant-root management group (Connections cross-sub discovery)
+        # The Connections "add existing" dialog discovers Azure resources
+        # (subscriptions, existing services) via Azure Resource Graph. Resource
+        # Graph returns rows only for scopes where the caller holds at least
+        # Reader. Sub-scoped grants only cover the admin subscription, so
+        # resources in DLZ subs and any other subs the tenant owns are invisible.
+        # Granting Reader at the TENANT-ROOT management group propagates
+        # Read access to EVERY subscription in the tenant (inherited), making
+        # cross-sub discovery work without per-sub grants.
+        #
+        # The tenant-root MG id equals the AAD tenant id. The deploy SP needs
+        # Microsoft.Management/register RP + either Owner/UAAM on the MG or the
+        # ManagementGroupAccess Entra built-in — see docs/fiab/v3-tenant-bootstrap.md.
+        # If the grant is denied (runner lacks MG-write), we log a clear warning
+        # and continue (the step is non-fatal by design).
+        #
+        # Repo var LOOM_TENANT_ROOT_MG_ID lets operators override the MG id
+        # for tenants that use a custom top-level MG name; defaults to the
+        # AAD tenant id (which IS the tenant-root MG id in Azure).
+        run: |
+          set -uo pipefail
+          TENANT_ID="${{ vars.LOOM_TENANT_ROOT_MG_ID || '' }}"
+          if [ -z "${TENANT_ID:-}" ]; then
+            TENANT_ID="$(az account show --query tenantId -o tsv 2>/dev/null || true)"
+          fi
+          if [ -z "${TENANT_ID:-}" ]; then
+            echo "::warning::Could not resolve tenant id for tenant-root MG grant — skipping."
+            exit 0
+          fi
+          MG_SCOPE="/providers/Microsoft.Management/managementGroups/$TENANT_ID"
+          echo "Granting Reader at tenant-root MG: $MG_SCOPE"
+          az role assignment create \
+            --assignee-object-id "$CONSOLE_UAMI_PRINCIPAL" \
+            --assignee-principal-type ServicePrincipal \
+            --role "Reader" \
+            --scope "$MG_SCOPE" \
+            -o table 2>&1 | grep -v "already exists" \
+            || echo "::warning::Tenant-root MG Reader grant failed — the deploy SP needs Owner/UAAM on the root management group or the ManagementGroupAccess Entra role. See docs/fiab/v3-tenant-bootstrap.md §cross-sub-discovery. Cross-sub discovery in the Connections pane will be limited to the admin subscription until this grant is applied."
 
       - name: Fix Synapse Spark storage access (Hive metastore abfss)
         run: |
@@ -1467,11 +1512,15 @@ jobs:
         if: always()
         run: |
           echo "==== Bootstrap complete ===="
+          echo "Console UAMI resolved: $CONSOLE_UAMI_PRINCIPAL (grants below all target this principal)"
+          echo "Purview Data Map: data-reader + data-curator + data-source-administrator + collection-administrator granted on root collection (PE toggle + restore handled by script)"
           echo "Weave ontology: PG + Apache AGE graph 'loom_ontology' created; Console UAMI registered as PG principal (object/link/action instance write-back)"
           echo "Synapse: UAMI granted Synapse Administrator + SQL Administrator + SQL-level sysadmin"
           echo "Databricks: UAMI registered as SP via SCIM (workspace-access + databricks-sql-access + allow-cluster-create + allow-instance-pool-create)"
           echo "APIM: Service Contributor granted (if APIM provisioned)"
           echo "Admin RG: Reader granted (for /admin/capacity full inventory)"
+          echo "Subscription RBAC: Reader + Security Reader + Resource Policy Contributor + Cost Management Reader + Monitoring Contributor (all sub-scoped)"
+          echo "Tenant-root MG: Reader at /providers/Microsoft.Management/managementGroups/<tenantId> (Connections cross-sub discovery)"
           echo "Foundry workspace: AzureML Data Scientist granted (unblocks /api/foundry/workspace + datastores)"
           echo "Foundry workspace: AzureML Compute Operator granted (unblocks /api/foundry/computes list/start/status)"
           echo "Foundry storage: Blob Data Reader granted"
@@ -1482,10 +1531,14 @@ jobs:
           echo "  (LOOM_MIP_ENABLED defaults ON — batch labeling uses real MIP labels once admin consent is issued)"
           echo "Monitor Alerts: default rule set (Console availability, 5xx, replica restarts) + loom-default-alerts action group provisioned by bicep in LOOM_ALERT_RG (the admin RG); visible day-one on /monitor Alerts"
           echo ""
-          echo "Still needs manual steps (not grantable via SP):"
-          echo "  • Microsoft Graph admin consent — Tenant Administrator must click 'Grant admin consent'"
-          echo "    in Entra ID → Enterprise applications → Console UAMI → Permissions. Required for"
-          echo "    /admin/security MIP+DLP tabs to return real data instead of 403."
+          echo "Still needs manual steps (not grantable via SP) — see docs/fiab/v3-tenant-bootstrap.md §day-one-prereqs:"
+          echo "  • Microsoft Graph admin-consent for managed-identity AppRole grants — a Global/Application Administrator runs once:"
+          echo "    az rest --method POST --url https://graph.microsoft.com/v1.0/servicePrincipals/<DEPLOY_SP_OID>/appRoleAssignments"
+          echo "    --body '{\"principalId\":\"<DEPLOY_SP_OID>\",\"resourceId\":\"<GRAPH_SP_OID>\",\"appRoleId\":\"<AppRoleAssignment.ReadWrite.All id>\"}'"
+          echo "    After that, re-running this bootstrap job grants MI AppRoles unattended. Details in docs/fiab/v3-tenant-bootstrap.md."
+          echo "  • Azure Service Management delegated permission admin-consent on the MSAL app reg (for Connections user-delegated cross-sub auth)."
+          echo "  • Tenant-root MG Reader for Connections cross-sub discovery (deploy SP needs Owner/UAAM on root MG)."
+          echo "  • DLP policy LIST (informationProtection/dataLossPreventionPolicies /beta) — Microsoft support preview enrollment."
           echo "  • Power Platform Admin — grant at https://admin.powerplatform.microsoft.com"
           echo "    Add SP id $CONSOLE_UAMI_PRINCIPAL as Power Platform Administrator."
           echo "  • Power BI tenant SP enablement — Fabric admin portal"

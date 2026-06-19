@@ -8,6 +8,144 @@ that names the exact step), per `.claude/rules/no-vaporware.md`.
 
 ---
 
+## Day-one operator prerequisites {#day-one-prereqs}
+
+The post-deploy bootstrap workflow (`csa-loom-post-deploy-bootstrap`) automates
+every grant that an Azure service principal can perform unattended. The checklist
+below covers the **residual one-time tenant actions** that require a human
+(Global Administrator, Privileged Role Administrator, or tenant owner) because
+they touch directory-level consent, sovereign enrollment, or management-group
+hierarchy that a deploy SP normally cannot reach. Run these once after the first
+deploy; they are idempotent and do not need to be repeated for re-deploys.
+
+### Prerequisite A — Deploy SP: `AppRoleAssignment.ReadWrite.All` on Microsoft Graph {#prereq-graph-approle-write}
+
+**Why:** The bootstrap workflow grants Microsoft Graph application roles (`InformationProtectionPolicy.Read.All`,
+`Policy.Read.All`, `SensitivityLabel.Evaluate`, `SecurityAlert.Read.All`, and the Identity Picker roles)
+to the Console managed identity. Assigning app-roles to a managed identity IS the grant — there is
+no separate "Grant admin consent" click. However, the assignment itself requires the deploy SP to hold
+`AppRoleAssignment.ReadWrite.All` on Microsoft Graph.
+
+**Action:** A Global Administrator or Privileged Role Administrator runs **once**:
+
+```bash
+# Step 1 — find the deploy SP's service-principal object id
+DEPLOY_SP_OBJID=$(az ad sp show --id <deploy-SP-appId> --query id -o tsv)
+
+# Step 2 — find Microsoft Graph SP id
+GRAPH_SP_ID=$(az ad sp list --filter "appId eq '00000003-0000-0000-c000-000000000000'" --query "[0].id" -o tsv)
+
+# Step 3 — find the AppRoleAssignment.ReadWrite.All app-role id on Graph
+APPROLE_RW=$(az ad sp show --id $GRAPH_SP_ID \
+  --query "appRoles[?value=='AppRoleAssignment.ReadWrite.All'].id | [0]" -o tsv)
+
+# Step 4 — grant the deploy SP AppRoleAssignment.ReadWrite.All
+az rest --method POST \
+  --url "https://graph.microsoft.com/v1.0/servicePrincipals/$DEPLOY_SP_OBJID/appRoleAssignments" \
+  --headers "Content-Type=application/json" \
+  --body "{\"principalId\":\"$DEPLOY_SP_OBJID\",\"resourceId\":\"$GRAPH_SP_ID\",\"appRoleId\":\"$APPROLE_RW\"}"
+```
+
+After this, re-run the bootstrap workflow. All Graph AppRole grants will succeed
+unattended from that point forward. Until this is done, the
+`/admin/security` MIP + DLP tabs and the Identity Picker render honest
+`MessageBar` gates (not blank/broken screens).
+
+### Prerequisite B — MSAL app-reg: admin-consent `Azure Service Management user_impersonation` {#prereq-azure-svc-mgmt-consent}
+
+**Why:** The Connections "Add existing" wizard uses the signed-in user's
+delegated identity (the MSAL token) to enumerate subscriptions and
+resources across the tenant via `https://management.azure.com/subscriptions`.
+This requires the `Azure Service Management / user_impersonation` delegated
+permission to be admin-consented on the Loom MSAL app registration.
+
+**Action:** A Global Administrator or Application Administrator runs **once**:
+
+```bash
+# Via the Azure portal:
+# Entra ID → App registrations → <loom-msal-app> → API permissions
+# → Add a permission → Azure Service Management → Delegated
+# → user_impersonation → Add
+# → Grant admin consent for <tenant>
+
+# Or via CLI (replace APP_OID with the app registration's OBJECT id):
+APP_OID=$(az ad app show --id $LOOM_MSAL_CLIENT_ID --query id -o tsv)
+AZURE_SVC_MGMT_SP=$(az ad sp list --filter "appId eq '797f4846-ba00-4fd7-ba43-dac1f8f63013'" --query "[0].id" -o tsv)
+USER_IMP_SCOPE_ID=$(az ad sp show --id $AZURE_SVC_MGMT_SP \
+  --query "oauth2PermissionScopes[?value=='user_impersonation'].id | [0]" -o tsv)
+
+# Add the required resource access to the app registration
+az rest --method PATCH \
+  --url "https://graph.microsoft.com/v1.0/applications/$APP_OID" \
+  --headers "Content-Type=application/json" \
+  --body "{\"requiredResourceAccess\":[{\"resourceAppId\":\"797f4846-ba00-4fd7-ba43-dac1f8f63013\",\"resourceAccess\":[{\"id\":\"$USER_IMP_SCOPE_ID\",\"type\":\"Scope\"}]}]}"
+
+# Grant admin consent for the delegated permission
+az rest --method POST \
+  --url "https://graph.microsoft.com/v1.0/oauth2PermissionGrants" \
+  --headers "Content-Type=application/json" \
+  --body "{\"clientId\":\"$AZURE_SVC_MGMT_SP\",\"consentType\":\"AllPrincipals\",\"resourceId\":\"$AZURE_SVC_MGMT_SP\",\"scope\":\"user_impersonation\"}"
+```
+
+Without this, the Connections "Add existing" user-delegated cross-sub
+auth returns a 403 (`insufficient_claims`) and the Connections pane
+renders an honest MessageBar with this exact remediation.
+
+### Prerequisite C — Tenant-root management group: Console UAMI `Reader` {#prereq-tenant-root-mg-reader}
+
+**Why:** Azure Resource Graph returns rows only for scopes where the
+caller has at least Reader. The bootstrap workflow attempts to grant
+Reader at the tenant-root management group (which propagates to every
+subscription in the tenant), but this requires the deploy SP to hold
+Owner or User Access Administrator on the root management group —
+a privilege most deploy SPs don't have by default.
+
+**Action:** A tenant Owner or an identity with the `ManagementGroupAccess`
+Entra built-in role runs **once**:
+
+```bash
+# Find the tenant root management group id (equals the AAD tenant id)
+TENANT_ID=$(az account show --query tenantId -o tsv)
+MG_SCOPE="/providers/Microsoft.Management/managementGroups/$TENANT_ID"
+
+# Optional: override with LOOM_TENANT_ROOT_MG_ID repo var for non-default root MG name
+# MG_SCOPE="/providers/Microsoft.Management/managementGroups/<custom-root-mg-name>"
+
+# Grant Console UAMI Reader at the tenant root (inherits to all subs)
+az role assignment create \
+  --assignee-object-id <CONSOLE_UAMI_PRINCIPAL_ID> \
+  --assignee-principal-type ServicePrincipal \
+  --role "Reader" \
+  --scope "$MG_SCOPE"
+```
+
+Without this grant, Connections cross-sub discovery only sees resources in
+the admin subscription. The Connections "Add existing" pane still works but
+shows resources from the admin sub only.
+
+### Prerequisite D — DLP policy LIST: Microsoft preview enrollment {#prereq-dlp-preview-enrollment}
+
+**Why:** The `informationProtection/dataLossPreventionPolicies` endpoint
+(`/beta`) that backs the DLP Policies list in `/admin/security` is
+in public preview and requires the tenant to be enrolled. DLP
+**alerts**, **violations**, and the Azure-native **Restrict-access**
+enforcement tab use GA Graph endpoints and work without enrollment.
+
+**Action:** File a **Microsoft support ticket** to enroll your tenant in
+the `informationProtection.dataLossPreventionPolicies` beta feature:
+
+```
+Product: Microsoft Graph
+Feature: Information Protection / Data Loss Prevention
+Request: Enroll tenant <tenantId> in the informationProtection/dataLossPreventionPolicies /beta preview
+```
+
+Until enrolled, the Policy list segment shows an honest `MessageBar`
+explaining the enrollment requirement. Alerts, violations, and
+Restrict-access are unaffected.
+
+---
+
 ## Deployment topology — `deploymentMode` & DLZ-attach {#deployment-topology}
 
 `platform/fiab/bicep/main.bicep` requires a **`deploymentMode`** parameter
