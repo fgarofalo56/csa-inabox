@@ -26,6 +26,7 @@ import {
   getDevOpsBase,
   getAppConfigSuffix,
   getAppConfigScope,
+  appConfigSuffixFromEndpoint,
   appConfigEndpointFromName,
   aasSuffix,
 } from '../cloud-endpoints';
@@ -358,5 +359,55 @@ describe('appConfigEndpointFromName', () => {
   it('builds an azconfig.azure.us URL in GCC-High', () => {
     withCloud('GCC-High');
     expect(appConfigEndpointFromName('ac-loom')).toBe('https://ac-loom.azconfig.azure.us');
+  });
+});
+
+describe('App Config scope — endpoint-aware (issue #1531)', () => {
+  const ORIG_SUFFIX = process.env.LOOM_APPCONFIG_SUFFIX;
+  afterEach(() => {
+    if (ORIG_SUFFIX === undefined) delete process.env.LOOM_APPCONFIG_SUFFIX;
+    else process.env.LOOM_APPCONFIG_SUFFIX = ORIG_SUFFIX;
+  });
+
+  it('derives the gov suffix from an azconfig.azure.us endpoint even in a Commercial boundary', () => {
+    withCloud('Commercial');
+    delete process.env.LOOM_APPCONFIG_SUFFIX;
+    expect(appConfigSuffixFromEndpoint('https://ac-loom.azconfig.azure.us')).toBe('azconfig.azure.us');
+    expect(getAppConfigScope('https://ac-loom.azconfig.azure.us')).toBe('https://azconfig.azure.us/.default');
+  });
+
+  it('derives the commercial suffix from an azconfig.io endpoint even in a Gov boundary', () => {
+    withCloud('GCC-High');
+    delete process.env.LOOM_APPCONFIG_SUFFIX;
+    expect(appConfigSuffixFromEndpoint('https://ac-loom.azconfig.io')).toBe('azconfig.io');
+    expect(getAppConfigScope('https://ac-loom.azconfig.io')).toBe('https://azconfig.io/.default');
+  });
+
+  it('accepts a bare host (no scheme) and is case-insensitive', () => {
+    withCloud('Commercial');
+    delete process.env.LOOM_APPCONFIG_SUFFIX;
+    expect(appConfigSuffixFromEndpoint('AC-LOOM.AZCONFIG.AZURE.US')).toBe('azconfig.azure.us');
+    expect(appConfigSuffixFromEndpoint('https://ac-loom.azconfig.azure.us/kv/x?api-version=1')).toBe('azconfig.azure.us');
+  });
+
+  it('honours LOOM_APPCONFIG_SUFFIX when the host matches a sovereign suffix the matrix does not enumerate', () => {
+    withCloud('Commercial');
+    process.env.LOOM_APPCONFIG_SUFFIX = 'appconfig.sovereign.example';
+    expect(appConfigSuffixFromEndpoint('https://ac-loom.appconfig.sovereign.example')).toBe('appconfig.sovereign.example');
+    expect(getAppConfigScope('https://ac-loom.appconfig.sovereign.example')).toBe('https://appconfig.sovereign.example/.default');
+  });
+
+  it('falls back to the cloud-derived suffix for an unrecognised host (no fabricated host)', () => {
+    withCloud('GCC-High');
+    delete process.env.LOOM_APPCONFIG_SUFFIX;
+    expect(appConfigSuffixFromEndpoint('https://ac-loom.example.invalid')).toBe('azconfig.azure.us');
+  });
+
+  it('no-arg form stays cloud-derived (back-compat)', () => {
+    withCloud('GCC-High');
+    delete process.env.LOOM_APPCONFIG_SUFFIX;
+    expect(getAppConfigScope()).toBe('https://azconfig.azure.us/.default');
+    withCloud('Commercial');
+    expect(getAppConfigScope()).toBe('https://azconfig.io/.default');
   });
 });

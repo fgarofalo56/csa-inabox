@@ -77,20 +77,28 @@ describe('resolveParamBindings', () => {
     expect(getToken).toHaveBeenCalledWith('https://azconfig.io/.default');
   });
 
-  // FIXME(#1504): real bug — App Config token scope is derived from the active
-  // cloud (getAppConfigScope() → isGovCloud()) instead of from the configured
-  // LOOM_PARAM_APPCONFIG endpoint. When the endpoint is a Gov host
-  // (azconfig.azure.us) but LOOM_CLOUD is unset/Commercial, the resolver mints a
-  // Commercial-scope token (azconfig.io/.default) that will 401 against the Gov
-  // endpoint. The KV path (kvScope) correctly derives the scope from the vault
-  // URI; the App Config path (acScope ignores its `_endpoint` arg) should be
-  // symmetric. Fix requires an endpoint-aware scope helper in cloud-endpoints.ts
-  // (the only file allowed the azconfig.* literals), not a test change.
-  it.skip('derives the gov App Config scope from an azure.us endpoint', async () => {
+  // Fixed by #1531: the App Config token scope is now derived from the
+  // configured LOOM_PARAM_APPCONFIG endpoint HOSTNAME (acScope → endpoint-aware
+  // getAppConfigScope), symmetric with the KV path (kvScope from the vault URI).
+  // A Gov host (azconfig.azure.us) mints a Gov-audience token even when
+  // LOOM_CLOUD is unset/Commercial, so it no longer 401s against the Gov store.
+  it('derives the gov App Config scope from an azure.us endpoint', async () => {
+    delete process.env.LOOM_CLOUD;
+    delete process.env.AZURE_CLOUD;
     process.env.LOOM_PARAM_APPCONFIG = 'https://ac-loom.azconfig.azure.us';
     vi.stubGlobal('fetch', vi.fn(async () => new Response(JSON.stringify({ value: 'x' }), { status: 200 })));
     await resolveParamBindings({ p: ac('k') });
     expect(getToken).toHaveBeenCalledWith('https://azconfig.azure.us/.default');
+  });
+
+  it('derives the commercial App Config scope from an azconfig.io endpoint even in a Gov boundary', async () => {
+    // Endpoint host wins over the active cloud: a Commercial store reached from a
+    // Gov-badged console must still mint a Commercial-audience token.
+    process.env.LOOM_CLOUD = 'GCC-High';
+    process.env.LOOM_PARAM_APPCONFIG = 'https://ac-loom.azconfig.io';
+    vi.stubGlobal('fetch', vi.fn(async () => new Response(JSON.stringify({ value: 'x' }), { status: 200 })));
+    await resolveParamBindings({ p: ac('k') });
+    expect(getToken).toHaveBeenCalledWith('https://azconfig.io/.default');
   });
 
   it('surfaces a real KV 403 verbatim with status', async () => {
