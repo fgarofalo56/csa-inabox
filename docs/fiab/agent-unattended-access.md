@@ -224,3 +224,153 @@ A non-200/401 on any endpoint exits the job non-zero (Failed) — that's the ale
 (read via ARM), because the console's `SESSION_SECRET` is not currently KV-backed/synced —
 see the tracked desync issue. Once the console secret is KV-backed + synced, switch the job
 secret to a `keyvaultref`.
+
+---
+
+## Full visual UAT (in-VNet, unattended)
+
+`loom-uat` is a separate Container App Job that runs the **complete
+`e2e/*.uat.ts` Playwright suite** against the live console using real Chromium
+— headless, no human in the loop.  The suite covers all editor types, the
+catalog, admin pages, copilot, app installs, and nav pages.
+
+### Files
+
+| Path | Purpose |
+|------|---------|
+| `apps/fiab-console/Dockerfile.uat` | Playwright runner image (`mcr.microsoft.com/playwright:v1.48.0-jammy` base, full app deps, Chromium pre-installed) |
+| `apps/fiab-console/e2e/run-uat-unattended.mjs` | Headless entrypoint: mint → storageState → `playwright test` → `UAT_RESULT` summary |
+| `scripts/csa-loom/deploy-loom-uat-job.sh` | Build image via ACR Tasks + create/update the `loom-uat` CA Job |
+
+### How headless auth works (UAT edition)
+
+The entrypoint (`run-uat-unattended.mjs`) inlines the same HKDF + AES-256-GCM
+derivation as `mint-session.ts` — no TypeScript import chain needed.  It:
+
+1. Reads `SESSION_SECRET` from the job's secret ref (set from the console ARM
+   literal by `deploy-loom-uat-job.sh`).
+2. Derives the AES-256 key via `crypto.hkdfSync('sha256', secret, 32×0x00,
+   'loom-session-v1', 32)`.
+3. Encrypts the claims JSON and wraps it as `iv(12) || authTag(16) ||
+   ciphertext` → base64url → `loom_session` cookie value.
+4. Writes a Playwright `storageState` object to `.auth/loom-state.json`.
+5. Sets `LOOM_STORAGE_STATE` so `playwright.config.ts` picks it up (`uat`
+   project: `storageState: process.env.LOOM_STORAGE_STATE`).
+6. Runs `pnpm exec playwright test --project=uat` with Chromium in headless
+   mode (enforced by `CI=true` in the image).
+
+### Deploy the job
+
+```bash
+export ADMIN_RG=rg-csa-loom-admin-centralus
+export SUB=<admin-plane-subscription-id>
+export CAE=cae-csa-loom-centralus
+export CONSOLE_APP=loom-console
+export CONSOLE_UAMI_ID=/subscriptions/<sub>/resourcegroups/rg-csa-loom-admin-centralus/providers/Microsoft.ManagedIdentity/userAssignedIdentities/<uami-name>
+export ACR=acrloomk6mvh5sm6z7do.azurecr.io
+export LOOM_URL=https://loom-console.b02.azurefd.net
+export LOOM_AUTOMATION_OID=<tenant-admin-object-id>
+
+./scripts/csa-loom/deploy-loom-uat-job.sh
+```
+
+The script:
+
+1. Temporarily enables ACR public access (both `publicNetworkAccess` and
+   `networkRuleSet.defaultAction`) so `az acr build` can upload the source
+   tarball from a public shell.  Sleeps 35 s for propagation.
+2. Builds and pushes `loom-uat:latest` via ACR Tasks (the build runs inside
+   Azure — inside the VNet — so the private ACR push succeeds).
+3. Restores `publicNetworkAccess=Disabled` (always, even on build failure).
+4. Creates or updates the `loom-uat` Container App Job:
+   - UAMI: same console UAMI (already has AcrPull + Storage access)
+   - Resources: 2 CPU / 4 GiB (Chromium is memory-heavy)
+   - `replicaTimeout`: 3600 s (1 hour — sufficient for the full suite)
+   - `replicaRetryLimit`: 0 (a flaky test should not silently re-run)
+5. Sets the job's `session-secret` from the console's ARM literal (piped,
+   never printed, unset immediately).
+
+### Run a slice first (recommended)
+
+Run a single spec or grep pattern to confirm connectivity and auth before
+launching the full suite:
+
+```bash
+# Re-deploy targeting just the catalog specs:
+UAT_GREP=catalog ./scripts/csa-loom/deploy-loom-uat-job.sh
+
+# Trigger:
+az containerapp job start -n loom-uat -g $ADMIN_RG --subscription $SUB
+```
+
+Useful `UAT_GREP` values:
+
+| `UAT_GREP` | Specs matched |
+|------------|---------------|
+| `catalog`  | catalog.uat.ts, catalog-uat.uat.ts |
+| `admin`    | admin-security.uat.ts, admin-scaling.uat.ts |
+| `editors`  | editors.uat.ts |
+| `apps`     | apps.uat.ts, use-case-apps-uat.uat.ts |
+| `nav`      | nav-pages.uat.ts |
+| `copilot`  | copilot.uat.ts, help-copilot.uat.ts |
+| `deep`     | deep-functional-uat.uat.ts |
+| `no-cuts`  | no-cuts-sweep-v3.uat.ts |
+
+### Run the full suite
+
+```bash
+az containerapp job start -n loom-uat -g $ADMIN_RG --subscription $SUB
+```
+
+All specs matching `e2e/*.uat.ts` run serially (`workers: 1`) to avoid
+workspace collisions (the suite manipulates shared console state).
+
+### Where results land
+
+**Container logs (always available):**
+
+```kusto
+ContainerAppConsoleLogs_CL
+| where ContainerName_s == "uat"
+| where Log_s contains "UAT_RESULT"
+| order by TimeGenerated desc
+```
+
+The runner emits a structured one-liner at the end of every run:
+
+```
+UAT_RESULT pass=<n> fail=<n> skip=<n>
+```
+
+The job exits non-zero if any test failed, which marks the CA Job execution
+as `Failed` — use Azure Monitor alerts on job execution status for proactive
+notification.
+
+**HTML report (optional):**
+
+Set `LOOM_UAT_RESULTS_CONTAINER` to an ADLS Gen2 / Blob container URL before
+deploying the job.  After the run the entrypoint uploads `playwright-report/`
+and `test-results/uat/report.json` to
+`<container>/uat-runs/<timestamp>/playwright-report/` using `az storage blob
+upload-batch --auth-mode login` (the console UAMI already has Storage Blob
+Data Contributor).
+
+```bash
+export LOOM_UAT_RESULTS_CONTAINER=https://<account>.blob.core.windows.net/<container>
+./scripts/csa-loom/deploy-loom-uat-job.sh
+```
+
+Open the HTML report by downloading `playwright-report/index.html` from the
+blob and opening it locally.
+
+### Image maintenance
+
+- **Playwright version pin**: `Dockerfile.uat` uses
+  `mcr.microsoft.com/playwright:v1.48.0-jammy`.  Update the base tag whenever
+  `@playwright/test` is bumped in `package.json` (they must match).
+- **SESSION_SECRET rotation**: after a console secret rotation, re-run
+  `deploy-loom-uat-job.sh` (step 5 re-reads the console's new literal and
+  updates the job secret automatically).
+- **KV-backed secret (future)**: once issue #1534 is resolved, switch the job
+  secret `session-secret` to a `keyvaultref` pointing at the same KV secret
+  name.

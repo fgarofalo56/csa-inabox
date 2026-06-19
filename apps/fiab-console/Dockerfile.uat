@@ -1,0 +1,63 @@
+# CSA Loom — Playwright UAT runner image
+#
+# Full visual UAT (in-VNet, unattended).  Used by the `loom-uat` Container App
+# Job so the entire e2e/*.uat.ts suite runs headless inside the console VNet
+# with no human sign-in — auth is handled by the session-mint mechanism in
+# e2e/auth/mint-session.ts.
+#
+# Base: mcr.microsoft.com/playwright:v1.48.0-jammy ships Chromium + all its
+# system deps so we never need to download a browser binary at run time.  The
+# version is pinned to match @playwright/test ^1.48.0 in package.json.
+#
+# Build context: apps/fiab-console/  (from repo root: --file apps/fiab-console/Dockerfile.uat apps/fiab-console/)
+# Build via ACR Tasks (private ACR, public access toggled during build):
+#   az acr build --registry <acr> --image loom-uat:latest \
+#     --file apps/fiab-console/Dockerfile.uat apps/fiab-console/
+
+FROM mcr.microsoft.com/playwright:v1.48.0-jammy
+
+# ------------------------------------------------------------------ #
+# System: enable corepack so pnpm is available at the correct version #
+# ------------------------------------------------------------------ #
+# The Playwright base is Debian (jammy) — corepack ships with Node 20.
+RUN corepack enable && corepack prepare pnpm@9 --activate
+
+WORKDIR /app
+
+# ------------------------------------------------------------------ #
+# Dependencies — copy manifests first for cache efficiency            #
+# ------------------------------------------------------------------ #
+COPY package.json pnpm-lock.yaml ./
+
+# Install ALL deps (incl. devDeps — @playwright/test, TypeScript, etc.).
+# The e2e specs import lib/ modules so we need the full dependency tree.
+# --frozen-lockfile ensures the lockfile is respected exactly.
+RUN pnpm install --frozen-lockfile
+
+# ------------------------------------------------------------------ #
+# Application source (excluding build artefacts — see .dockerignore) #
+# ------------------------------------------------------------------ #
+COPY . .
+
+# Safety no-op: the Playwright base already ships Chromium, but running
+# `playwright install chromium` in this image ensures the channel listed
+# in playwright.config.ts is satisfied even if the base image drifts.
+RUN pnpm exec playwright install chromium --with-deps || true
+
+# ------------------------------------------------------------------ #
+# Runtime env                                                          #
+# ------------------------------------------------------------------ #
+# Headed display is unnecessary — Chromium always runs headless inside
+# the Container App Job, but DISPLAY must be set for the Playwright
+# launcher not to complain.  The jammy base ships Xvfb; we don't need
+# it because we pass --headless to Chromium directly.
+ENV PLAYWRIGHT_BROWSERS_PATH=/ms-playwright
+ENV CI=true
+ENV NODE_ENV=test
+
+# ------------------------------------------------------------------ #
+# Entrypoint                                                           #
+# ------------------------------------------------------------------ #
+# The run script mints the session cookie, sets LOOM_STORAGE_STATE,
+# then delegates to `pnpm exec playwright test`.
+ENTRYPOINT ["node", "e2e/run-uat-unattended.mjs"]
