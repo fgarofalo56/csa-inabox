@@ -5,9 +5,9 @@
  * Upload / New folder / Refresh and that the Tables tab is reachable.
  */
 import { describe, it, expect, beforeEach, vi, afterEach } from 'vitest';
-import { render, screen, waitFor } from '@testing-library/react';
+import { screen, waitFor } from '@testing-library/react';
 import { LakehouseEditor } from '../lakehouse-editor';
-import { makeItem, installFetchMock } from './test-helpers';
+import { makeItem, installFetchMock, renderWithProviders } from './test-helpers';
 
 describe('LakehouseEditor', () => {
   beforeEach(() => {
@@ -32,7 +32,7 @@ describe('LakehouseEditor', () => {
   afterEach(() => { vi.restoreAllMocks(); });
 
   it('renders, loads containers, and exposes the file toolbar', async () => {
-    render(<LakehouseEditor item={makeItem('lakehouse', 'Lakehouse')} id="lh-1" />);
+    renderWithProviders(<LakehouseEditor item={makeItem('lakehouse', 'Lakehouse')} id="lh-1" />);
     await waitFor(() => {
       expect(screen.getAllByText('lakehouse-fixture').length).toBeGreaterThan(0);
     });
@@ -42,7 +42,7 @@ describe('LakehouseEditor', () => {
   });
 
   it('renders the Files / Tables / Schemas / Preview / SQL / Shortcuts tab strip', async () => {
-    render(<LakehouseEditor item={makeItem('lakehouse', 'Lakehouse')} id="lh-1" />);
+    renderWithProviders(<LakehouseEditor item={makeItem('lakehouse', 'Lakehouse')} id="lh-1" />);
     await waitFor(() => {
       expect(screen.getAllByText('lakehouse-fixture').length).toBeGreaterThan(0);
     });

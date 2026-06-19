@@ -13,9 +13,9 @@
  *   3. Delete fires DELETE /api/adx/functions?name=… and shows a receipt.
  */
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
-import { render, screen, waitFor, within, fireEvent, cleanup } from '@testing-library/react';
+import { screen, waitFor, within, fireEvent, cleanup } from '@testing-library/react';
 import { KqlDatabaseEditor } from '../phase3-editors';
-import { makeItem, installFetchMock } from './test-helpers';
+import { makeItem, installFetchMock, renderWithProviders } from './test-helpers';
 
 const FIXTURE_ID = 'kqldb-fn-test';
 
@@ -63,12 +63,12 @@ describe('StoredFunctionEditor (inside KqlDatabaseEditor)', () => {
   }
 
   it('lists functions from GET /api/adx/functions on mount', async () => {
-    render(<KqlDatabaseEditor item={makeItem('kql-database', 'KQL Database')} id={FIXTURE_ID} />);
+    renderWithProviders(<KqlDatabaseEditor item={makeItem('kql-database', 'KQL Database')} id={FIXTURE_ID} />);
     await expandFunctions();
   });
 
   it('Edit → Save POSTs name + args + body to /api/adx/functions and shows a receipt', async () => {
-    render(<KqlDatabaseEditor item={makeItem('kql-database', 'KQL Database')} id={FIXTURE_ID} />);
+    renderWithProviders(<KqlDatabaseEditor item={makeItem('kql-database', 'KQL Database')} id={FIXTURE_ID} />);
     await expandFunctions();
 
     fireEvent.click(screen.getByRole('button', { name: /Edit fn_existing/i }));
@@ -93,7 +93,7 @@ describe('StoredFunctionEditor (inside KqlDatabaseEditor)', () => {
   });
 
   it('Delete fires DELETE /api/adx/functions with the function name', async () => {
-    render(<KqlDatabaseEditor item={makeItem('kql-database', 'KQL Database')} id={FIXTURE_ID} />);
+    renderWithProviders(<KqlDatabaseEditor item={makeItem('kql-database', 'KQL Database')} id={FIXTURE_ID} />);
     await expandFunctions();
 
     fireEvent.click(screen.getByRole('button', { name: /Edit fn_existing/i }));
