@@ -314,6 +314,31 @@ describe('bicep drift guard (no-vaporware)', () => {
     expect(out).toContain('param streamAnalyticsStreamingUnits = 12'); // int, bare
   });
 
+  it('emits config for the wave-4 additions (aiSearch/apim/aks/vpnGateway/appGateway)', () => {
+    const sub: PlanSubscription = {
+      id: 'sub-1', name: 'CfgP2', boundary: 'Commercial',
+      domains: [{ domainId: 'd', name: 'D', services: ['aiSearch', 'apim', 'aks', 'vpnGateway', 'appGateway'] }],
+      serviceConfigs: {
+        aiSearch: { tier: 'standard3', replicaCount: 2, partitionCount: 3 },
+        apim: { skuName: 'Standard' },
+        aks: { nodeVmSize: 'Standard_D8s_v5', nodeCount: 5, tier: 'Premium' },
+        vpnGateway: { skuName: 'VpnGw2AZ' },
+        appGateway: { tier: 'WAF_v2', capacity: 4 },
+      },
+    };
+    const out = planToBicepparam(sub);
+    expect(out).toContain("param aiSearchTier = 'standard3'");
+    expect(out).toContain('param aiSearchReplicaCount = 2');    // int
+    expect(out).toContain('param aiSearchPartitionCount = 3');  // int (select with emit:int)
+    expect(out).toContain("param apimSkuName = 'Standard'");
+    expect(out).toContain("param aksNodeVmSize = 'Standard_D8s_v5'");
+    expect(out).toContain('param aksNodeCount = 5');
+    expect(out).toContain("param aksTier = 'Premium'");
+    expect(out).toContain("param vpnGatewaySkuName = 'VpnGw2AZ'");
+    expect(out).toContain("param appGatewayTier = 'WAF_v2'");
+    expect(out).toContain('param appGatewayCapacity = 4');
+  });
+
   it('emits config for the wave-3 additions (vm/signalr/staticWebApps/cdn/aci/ml)', () => {
     const sub: PlanSubscription = {
       id: 'sub-1', name: 'Cfg2', boundary: 'Commercial',

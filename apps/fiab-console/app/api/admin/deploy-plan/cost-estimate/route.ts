@@ -30,7 +30,7 @@
  */
 import { NextRequest, NextResponse } from 'next/server';
 import { getSession } from '@/lib/auth/session';
-import { metersForServices } from '@/lib/components/deploy-planner/service-catalog';
+import { metersForServices, meterSkuFromConfig, configFor, coerceConfigValue } from '@/lib/components/deploy-planner/service-catalog';
 import { BOUNDARY_DEFAULT_REGION } from '@/lib/components/deploy-planner/bicepparam';
 import { normalizeCurrency, normalizeRegion, DEFAULT_CURRENCY } from '@/lib/components/deploy-planner/cost-options';
 import {
@@ -38,7 +38,7 @@ import {
   FALLBACK_MONTHLY_USD,
   type RetailPriceItem, type PriceResult,
 } from '@/lib/components/deploy-planner/cost-estimate';
-import type { PlanSubscription } from '@/lib/components/deploy-planner/types';
+import type { PlanSubscription, ServiceConfig } from '@/lib/components/deploy-planner/types';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -91,6 +91,29 @@ async function fetchMeterItems(serviceName: string, region: string, currencyCode
   return items;
 }
 
+/**
+ * Validate + coerce one service's stored config for the cost-estimate route —
+ * mirrors the sanitizeServiceConfigs function in the PUT route so the same
+ * validation gate (coerceConfigValue) protects both paths. Drops unknown keys
+ * and values the bicep module would reject, so only valid SKU choices reach
+ * the meterSkuFromConfig override and the pricing query.
+ */
+function sanitizeCostServiceConfigs(raw: unknown): Record<string, ServiceConfig> | undefined {
+  if (!raw || typeof raw !== 'object') return undefined;
+  const out: Record<string, ServiceConfig> = {};
+  for (const [key, val] of Object.entries(raw as Record<string, unknown>)) {
+    const fields = configFor(key);
+    if (!fields.length || !val || typeof val !== 'object') continue;
+    const cfg: ServiceConfig = {};
+    for (const field of fields) {
+      const coerced = coerceConfigValue(field, (val as Record<string, unknown>)[field.key]);
+      if (coerced !== undefined) cfg[field.key] = coerced;
+    }
+    if (Object.keys(cfg).length) out[key] = cfg;
+  }
+  return Object.keys(out).length ? out : undefined;
+}
+
 function sanitizeSubscription(raw: any): PlanSubscription {
   return {
     id: String(raw?.id || 'sub-1').slice(0, 80),
@@ -102,6 +125,11 @@ function sanitizeSubscription(raw: any): PlanSubscription {
       name: String(d?.name || d?.domainId || '').slice(0, 120),
       services: Array.isArray(d?.services) ? d.services.map((x: any) => String(x)).slice(0, 64) : [],
     })) : [],
+    // Pass serviceConfigs through (validated) so per-SKU meter overrides apply
+    // to the cost estimate — previously this was silently dropped here, causing
+    // all cost estimates to use the static representative-SKU meter regardless
+    // of what the operator had configured (e.g. Redis Premium priced as Basic C0).
+    serviceConfigs: sanitizeCostServiceConfigs(raw?.serviceConfigs),
   };
 }
 
@@ -142,13 +170,25 @@ export async function POST(req: NextRequest) {
   // labelled USD list price below.
   let currency = reqCurrency;
 
+  // Per-service configs (validated above) — used to derive the config-aware
+  // meter for services whose configured SKU selects a different retail-price row
+  // than the static representative-SKU default (e.g. Redis Premium ≠ Basic C0,
+  // App Service P1v3 ≠ B1, AI Search S3 ≠ S1, APIM Standard ≠ Developer).
+  const svcConfigs = sub.serviceConfigs ?? {};
+
   await Promise.all(meters.map(async (m) => {
     detailUrls[m.key] = m.pricingDetailsUrl;
+    // Derive the effective meter for this service: if the operator configured a
+    // SKU that maps to a different price row, meterSkuFromConfig returns an
+    // overridden meter (different match/exclude/qty); otherwise it returns the
+    // static meter unchanged. The armSkuName pin (for VM sizes) also comes from
+    // the config-aware meter so the API filter is as tight as possible.
+    const effectiveMeter = meterSkuFromConfig(m.key, svcConfigs[m.key], m.meter);
     try {
-      const items = await fetchMeterItems(m.meter.serviceName, queryRegion, reqCurrency, m.meter.armSkuName);
-      const row = pickMeterRow(items, m.meter);
+      const items = await fetchMeterItems(effectiveMeter.serviceName, queryRegion, reqCurrency, effectiveMeter.armSkuName);
+      const row = pickMeterRow(items, effectiveMeter);
       if (row) {
-        const pr = priceResultFromRow(row, m.meter);
+        const pr = priceResultFromRow(row, effectiveMeter);
         priceMap[m.key] = pr;
         currency = pr.currency || currency;
       }
@@ -162,7 +202,7 @@ export async function POST(req: NextRequest) {
         const usdNote = reqCurrency !== 'USD' ? ' (USD list price)' : '';
         priceMap[m.key] = {
           monthly: fb.monthly, unitPrice: fb.monthly, unit: '1/Month', qty: 1,
-          sku: fb.sku, assumed: `${m.meter.unitNote} — live API unreachable, showing cached Azure list price${usdNote}.`,
+          sku: fb.sku, assumed: `${effectiveMeter.unitNote} — live API unreachable, showing cached Azure list price${usdNote}.`,
           currency: 'USD', source: 'fallback-list-price',
         };
       }
