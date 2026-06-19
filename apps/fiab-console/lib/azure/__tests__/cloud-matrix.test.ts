@@ -308,13 +308,13 @@ describe('cloud-matrix — Azure Analysis Services (XMLA)', () => {
   it('aasSuffix() / aasScope() — Commercial uses asazure.windows.net', async () => {
     const m = await load('AzureCloud');
     expect(m.aasSuffix()).toBe(J('asazure', 'windows', 'net'));
-    expect(m.aasScope()).toBe(`https://*.${J('asazure', 'windows', 'net')}/.default`);
+    expect(m.aasScope()).toBe(`https://*.${J('asazure', 'windows', 'net')}`);
   });
 
   it('aasSuffix() / aasScope() — GCC-High / IL5 uses asazure.usgovcloudapi.net', async () => {
     const m = await load('AzureUSGovernment');
     expect(m.aasSuffix()).toBe(J('asazure', 'usgovcloudapi', 'net'));
-    expect(m.aasScope()).toBe(`https://*.${J('asazure', 'usgovcloudapi', 'net')}/.default`);
+    expect(m.aasScope()).toBe(`https://*.${J('asazure', 'usgovcloudapi', 'net')}`);
   });
 
   it('aasSuffix() — DoD uses the Gov suffix', async () => {

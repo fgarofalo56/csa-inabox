@@ -113,7 +113,7 @@ describe('POST /api/monitor/logs', () => {
   it('resolves a preset to KQL and returns rows', async () => {
     stubFetch(() => ({ body: { tables: [{ columns: [{ name: 'TimeGenerated' }], rows: [['t']] }] } }));
     const { POST } = await import('@/app/api/monitor/logs/route');
-    const r = await POST(req('POST', 'https://loom.test/api/monitor/logs', { preset: 'signIns' }));
+    const r = await POST(req('POST', 'https://loom.test/api/monitor/logs', { preset: 'sec-signins' }));
     expect(r.status).toBe(200);
     expect((await r.json()).data.rowCount).toBe(1);
   });
