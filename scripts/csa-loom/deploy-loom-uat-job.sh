@@ -125,11 +125,15 @@ echo "[deploy-loom-uat-job] 2/5 Building loom-uat:latest via ACR Tasks..."
 # Run from inside the app dir with a relative context (".") + relative
 # --file so the Windows `az` CLI gets a path it understands (an MSYS
 # absolute path like /e/... is rejected by Windows az acr build).
+# --no-logs: the Windows az CLI crashes rendering ACR build logs that contain
+# thin-space/Unicode chars (pnpm output) — 'charmap' codec can't encode  .
+# Skip streaming; az still waits for the run + returns its success/fail status.
 ( cd "$APP_DIR" && az acr build \
   --registry "$ACR_NAME" \
   --image "loom-uat:latest" \
   --file "Dockerfile.uat" \
   --subscription "$SUB" \
+  --no-logs \
   . )
 echo "[deploy-loom-uat-job] Image built: $UAT_IMAGE"
 
