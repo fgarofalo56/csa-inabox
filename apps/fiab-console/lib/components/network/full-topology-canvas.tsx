@@ -108,16 +108,46 @@ function edgeStyle(kind: TopoEdge['kind']): { stroke: string; dash?: string; ani
 
 /**
  * Compute a deterministic layout from the plain server graph. vNets row across
- * the top with subnets stacked inside; each subnet's attached leaves fan out in
- * a column beneath it; private DNS zones in a bottom band. Returns React Flow
- * nodes (with JSX labels) + edges.
+ * the top with subnets stacked inside; each subnet gets its OWN column so
+ * leaves never overlap; private DNS zones sit in a band below the deepest leaf.
+ * Returns React Flow nodes (with JSX labels) + edges.
+ *
+ * Coordinate system
+ * ─────────────────
+ *   Row 0  (y=0)                vNet containers, laid out left-to-right.
+ *                                Each vNet's width = max(MIN_VNET_W, subnetCount * (LEAF_W + LEAF_GAP)).
+ *                                Subnets are listed inside as dashed chips at
+ *                                x=8, y=SUBNET_TOP + sIdx*SUBNET_H.
+ *
+ *   Row 1  (y=maxVnetBottom+80)  Leaf band — one vertical column per subnet.
+ *                                subnetAbsY[snId]  = maxVnetBottom + 80   (uniform row)
+ *                                subnetColX[snId]  = vnetX + sIdx*(LEAF_W+LEAF_GAP)
+ *                                Within a column leaves stack at ly += LEAF_H + LEAF_V_GAP.
+ *
+ *   Row 2  (y=deepestLeafBottom+80)  DNS zones in a wrapping grid row.
+ *
+ * FIX 1 (overlap): subnetAbsY / subnetColX are now per-subnet, not per-vNet.
+ * FIX 2 (DNS gap): zoneY is computed from the ACTUAL deepest leaf, not a hardcoded guess.
  */
 function layout(graph: { nodes: TopoNode[]; edges: TopoEdge[] }): { nodes: Node[]; edges: Edge[] } {
   const rfNodes: Node[] = [];
   const rfEdges: Edge[] = [];
 
-  const VNET_W = 300, SUBNET_H = 46, SUBNET_TOP = 40, SUBNET_PAD = 10, VNET_GAP = 60;
-  const LEAF_W = 150, LEAF_H = 56;
+  // ── Sizing constants ──────────────────────────────────────────────────────
+  // FIX 4: wider nodes + readable font sizes.
+  const LEAF_W     = 200;   // was 150 — now legible at 1× zoom
+  const LEAF_H     = 68;    // explicit height so ReactFlow can measure nodes
+  const LEAF_GAP   = 28;    // horizontal gap between subnet columns (NEW)
+  const LEAF_V_GAP = 16;    // vertical gap between leaves in the same column
+  const MIN_VNET_W = 260;   // minimum vNet container width
+
+  const SUBNET_H   = 46;
+  const SUBNET_TOP = 40;
+  const SUBNET_PAD = 12;
+  const VNET_GAP   = 80;    // horizontal gap between vNet containers
+
+  const LEAF_ROW_TOP = 80;  // gap between bottom of vNet containers and first leaf row
+  const DNS_ROW_GAP  = 80;  // gap between deepest leaf and DNS zone row
 
   const nodeById = new Map(graph.nodes.map((n) => [n.id, n]));
   const subnetsByVnet = new Map<string, TopoNode[]>();
@@ -128,28 +158,34 @@ function layout(graph: { nodes: TopoNode[]; edges: TopoEdge[] }): { nodes: Node[
     subnetsByVnet.get(sn.parentNodeId)!.push(sn);
   }
 
-  // Map each subnet → its on-canvas absolute Y baseline so leaves can stack below.
-  const subnetAbsY = new Map<string, number>();
-  const subnetX = new Map<string, number>();
+  // Per-subnet layout: absolute X for the leaf column + absolute Y for the leaf baseline.
+  const subnetColX  = new Map<string, number>(); // FIX 1: per-subnet (was shared per-vNet)
+  const subnetAbsY  = new Map<string, number>(); // FIX 1: uniform row, per-subnet entry
 
   let vnetX = 0;
   let maxVnetBottom = 0;
+
   for (const v of vnets) {
     const subnets = subnetsByVnet.get(v.id) || [];
+    const subnetCount = Math.max(1, subnets.length);
+
+    // FIX 1: vNet width expands to contain all its subnet columns.
+    const vnetW = Math.max(MIN_VNET_W, subnetCount * (LEAF_W + LEAF_GAP) - LEAF_GAP + 16);
     const vnetH = Math.max(110, SUBNET_TOP + subnets.length * SUBNET_H + SUBNET_PAD);
+
     const st = KIND_STYLE.vnet;
     rfNodes.push({
       id: v.id, type: 'default', position: { x: vnetX, y: 0 },
       style: {
-        width: VNET_W, height: vnetH, padding: 10, borderRadius: 8,
+        width: vnetW, height: vnetH, padding: 10, borderRadius: 8,
         backgroundColor: st.bg, border: `2px solid ${st.border}`,
       },
       data: {
         topo: v,
         label: (
           <div>
-            <div style={{ fontWeight: 600, fontSize: 12 }}>{st.icon} {v.name}</div>
-            <div style={{ fontSize: 10, color: tokens.colorNeutralForeground3 }}>
+            <div style={{ fontWeight: 600, fontSize: 13 }}>{st.icon} {v.name}</div>
+            <div style={{ fontSize: 11, color: tokens.colorNeutralForeground3 }}>
               {(v.meta?.addressPrefixes as string[] | undefined)?.join(', ') || '(no prefix)'}
             </div>
           </div>
@@ -158,46 +194,57 @@ function layout(graph: { nodes: TopoNode[]; edges: TopoEdge[] }): { nodes: Node[
     });
 
     let sy = SUBNET_TOP;
-    for (const sn of subnets) {
+    subnets.forEach((sn, sIdx) => {
       const sst = KIND_STYLE.subnet;
+      // FIX 1: subnet chip width matches the column width so the chip aligns with leaves below.
+      const chipW = LEAF_W;
+      const chipX = 8 + sIdx * (LEAF_W + LEAF_GAP);
       rfNodes.push({
         id: sn.id, type: 'default', parentId: v.id, extent: 'parent' as const,
-        position: { x: 8, y: sy },
+        position: { x: chipX, y: sy },
         style: {
-          width: VNET_W - 16, height: SUBNET_H - 8, padding: 6, borderRadius: 4,
-          backgroundColor: sst.bg, border: `1px dashed ${sst.border}`, fontSize: 11,
+          width: chipW, height: SUBNET_H - 8, padding: 6, borderRadius: 4,
+          backgroundColor: sst.bg, border: `1px dashed ${sst.border}`, fontSize: 12,
         },
         data: {
           topo: sn,
           label: (
-            <div style={{ lineHeight: 1.25 }}>
-              <span style={{ fontWeight: 600 }}>{sn.name}</span>{' '}
-              <span style={{ fontSize: 9, color: tokens.colorNeutralForeground3 }}>
+            <div style={{ lineHeight: 1.3 }}>
+              <span style={{ fontWeight: 600, fontSize: 12 }}>{sn.name}</span>{' '}
+              <span style={{ fontSize: 11, color: tokens.colorNeutralForeground3 }}>
                 {sn.meta?.addressPrefix as string}
               </span>
               {Number(sn.meta?.privateEndpointCount || 0) > 0 && (
-                <span style={{ marginLeft: 4, fontSize: 8, background: tokens.colorBrandBackground, color: '#FFF', padding: '1px 4px', borderRadius: 3 }}>
+                <span style={{ marginLeft: 4, fontSize: 10, background: tokens.colorBrandBackground, color: '#FFF', padding: '1px 4px', borderRadius: 3 }}>
                   {sn.meta?.privateEndpointCount as number} PE
                 </span>
               )}
               {sn.meta?.nsg && (
-                <span style={{ marginLeft: 4, fontSize: 8, background: '#B45309', color: '#FFF', padding: '1px 4px', borderRadius: 3 }}>NSG</span>
+                <span style={{ marginLeft: 4, fontSize: 10, background: '#B45309', color: '#FFF', padding: '1px 4px', borderRadius: 3 }}>NSG</span>
               )}
             </div>
           ),
         },
       });
-      subnetAbsY.set(sn.id, vnetH + 40); // baseline below this vNet
-      subnetX.set(sn.id, vnetX + (VNET_W - LEAF_W) / 2);
+      // FIX 1: each subnet gets its own column X; Y is uniform (set after all vNets are laid out).
+      subnetColX.set(sn.id, vnetX + chipX);
+      subnetAbsY.set(sn.id, 0); // placeholder — filled in after maxVnetBottom is known
       sy += SUBNET_H;
-    }
+    });
 
     maxVnetBottom = Math.max(maxVnetBottom, vnetH);
-    vnetX += VNET_W + VNET_GAP;
+    vnetX += vnetW + VNET_GAP;
   }
 
+  // FIX 1: Now that maxVnetBottom is known, compute the uniform leaf-row Y for every subnet.
+  const leafRowY = maxVnetBottom + LEAF_ROW_TOP;
+  for (const [snId] of subnetAbsY) {
+    subnetAbsY.set(snId, leafRowY);
+  }
+
+  // ── Leaf placement ────────────────────────────────────────────────────────
   // Leaves attached to a subnet (pe / nsg / firewall / bastion / managedenv /
-  // appgateway / loadbalancer) — stack in a column beneath their FIRST subnet.
+  // appgateway / loadbalancer) — stack in a column beneath THEIR OWN subnet.
   const leavesBySubnet = new Map<string, TopoNode[]>();
   const subnetForLeaf = new Map<string, string>();
   for (const e of graph.edges) {
@@ -217,31 +264,41 @@ function layout(graph: { nodes: TopoNode[]; edges: TopoEdge[] }): { nodes: Node[
     leavesBySubnet.get(key)!.push(n);
   }
 
-  const leafBaseline = maxVnetBottom + 60;
-  let floatingX = 0;
+  // Track the deepest leaf Y reached so we can place DNS zones just below.
+  let deepestLeafBottom = leafRowY;
+
+  let floatingX = vnetX; // floating leaves park to the right of all vNets
   for (const [subnetId, leaves] of leavesBySubnet) {
     const colX = subnetId === '__floating__'
-      ? (floatingX += LEAF_W + 24, floatingX - (LEAF_W + 24))
-      : (subnetX.get(subnetId) ?? 0);
-    let ly = subnetId === '__floating__' ? leafBaseline : (subnetAbsY.get(subnetId) ?? leafBaseline);
+      ? (floatingX += LEAF_W + LEAF_GAP, floatingX - (LEAF_W + LEAF_GAP))
+      : (subnetColX.get(subnetId) ?? 0);
+    let ly = subnetId === '__floating__' ? leafRowY : (subnetAbsY.get(subnetId) ?? leafRowY);
     leaves.forEach((leaf) => {
       const st = KIND_STYLE[leaf.kind];
       rfNodes.push({
         id: leaf.id, type: 'default', position: { x: colX, y: ly },
         style: {
-          width: LEAF_W, padding: '6px 8px', borderRadius: 4, fontSize: 10,
+          width: LEAF_W,
+          height: LEAF_H,   // FIX 4: explicit height so ReactFlow measures the node
+          padding: '8px 10px', borderRadius: 4,
           textAlign: 'center', backgroundColor: st.bg, border: `2px solid ${st.border}`,
+          boxSizing: 'border-box' as const,
         },
         data: {
           topo: leaf,
           label: (
-            <div style={{ lineHeight: 1.3 }} title={leaf.name}>
-              <div>{st.icon}</div>
-              <div style={{ fontSize: 9, fontWeight: 600, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+            <div style={{ lineHeight: 1.35 }} title={leaf.name}>
+              <div style={{ fontSize: 16 }}>{st.icon}</div>
+              {/* FIX 4: label font raised to 12px */}
+              <div style={{ fontSize: 12, fontWeight: 600, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
                 {leaf.name}
               </div>
               {leaf.kind === 'pe' && leaf.meta?.target && (
-                <div style={{ fontSize: 8, color: tokens.colorNeutralForeground3, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                // FIX 4: PE target at 11px with ellipsis + title tooltip
+                <div
+                  style={{ fontSize: 11, color: tokens.colorNeutralForeground3, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}
+                  title={leaf.meta.target as string}
+                >
                   → {leaf.meta.target as string}
                 </div>
               )}
@@ -249,25 +306,34 @@ function layout(graph: { nodes: TopoNode[]; edges: TopoEdge[] }): { nodes: Node[
           ),
         },
       });
-      ly += LEAF_H + 14;
+      ly += LEAF_H + LEAF_V_GAP;
+      deepestLeafBottom = Math.max(deepestLeafBottom, ly);
     });
   }
 
-  // Private DNS zones — floating info band at the very bottom.
+  // ── DNS zone band ─────────────────────────────────────────────────────────
+  // FIX 2: zoneY computed from ACTUAL deepest leaf, not a hardcoded +320 guess.
   const dnsZones = graph.nodes.filter((n) => n.kind === 'privatednszone');
-  const zoneY = leafBaseline + 320;
+  const DNS_ZONE_W = LEAF_W;
+  const DNS_ZONE_H = 48;
+  const DNS_COLS    = Math.max(1, Math.floor((vnetX - VNET_GAP + LEAF_GAP) / (DNS_ZONE_W + LEAF_GAP)));
+  const zoneY = deepestLeafBottom + DNS_ROW_GAP;
   dnsZones.forEach((z, i) => {
     const st = KIND_STYLE.privatednszone;
+    const col = i % DNS_COLS;
+    const row = Math.floor(i / DNS_COLS);
     rfNodes.push({
-      id: z.id, type: 'default', position: { x: i * (LEAF_W + 16), y: zoneY },
+      id: z.id, type: 'default',
+      position: { x: col * (DNS_ZONE_W + LEAF_GAP), y: zoneY + row * (DNS_ZONE_H + 12) },
       style: {
-        width: LEAF_W, padding: '6px 8px', borderRadius: 4, fontSize: 9,
+        width: DNS_ZONE_W, height: DNS_ZONE_H,
+        padding: '6px 10px', borderRadius: 4, boxSizing: 'border-box' as const,
         backgroundColor: st.bg, border: `1px solid ${st.border}`,
       },
       data: {
         topo: z,
         label: (
-          <div style={{ fontSize: 9, fontWeight: 600, color: tokens.colorBrandForeground1 }} title={z.name}>
+          <div style={{ fontSize: 12, fontWeight: 600, color: tokens.colorBrandForeground1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} title={z.name}>
             {st.icon} {z.name.replace('privatelink.', '')}
           </div>
         ),
@@ -385,7 +451,8 @@ function GraphInner({ graph }: { graph: { nodes: TopoNode[]; edges: TopoEdge[] }
           attributionPosition="bottom-left"
         >
           <FitViewOnInit deps={nodes.length} />
-          <Background variant={BackgroundVariant.Lines} gap={16} size={1} />
+          {/* FIX 3: Dots background to match every other Loom canvas (pipeline, deploy-planner, landing-zones). */}
+          <Background variant={BackgroundVariant.Dots} gap={20} size={1} color={tokens.colorNeutralStroke2} />
           <Controls showInteractive={false} />
           <Panel position="top-left">
             <div className={styles.legend} aria-label="Topology legend">
