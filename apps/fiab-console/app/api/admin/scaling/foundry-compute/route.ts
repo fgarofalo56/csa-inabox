@@ -20,16 +20,28 @@ export async function GET(_req: NextRequest) {
   if (!s) return NextResponse.json({ ok: false, error: 'unauthenticated' }, { status: 401 });
   const denied = await denyIfNoDlzAccess(s, 'scaling');
   if (denied) return denied;
-  if (!process.env.LOOM_FOUNDRY_NAME) {
-    return NextResponse.json({
-      ok: false, error: 'AI Foundry hub not configured',
-      hint: 'Set LOOM_FOUNDRY_NAME on loom-console.',
-    }, { status: 503 });
-  }
+  // AML compute scaling requires a real Microsoft.MachineLearningServices/workspaces resource
+  // (kind=Hub or standalone). LOOM_FOUNDRY_NAME alone is insufficient — it may point at an
+  // Azure OpenAI / AIServices account which is NOT an ML workspace and will produce an opaque
+  // ARM 404 when computes are listed. Resolve via resolve-aml-target (LOOM_AML_WORKSPACE first,
+  // LOOM_FOUNDRY_NAME as a back-compat fallback) and surface a precise gate when unconfigured.
   try {
     const computes = await listComputes();
     return NextResponse.json({ ok: true, computes });
   } catch (e: any) {
+    // AmlNotConfiguredError (re-thrown as NotDeployedError from foundry-client::amlWorkspaceBase)
+    // is an honest gate: list the exact env vars and the bicep path so admins know what to set.
+    if (e?.service === 'Azure Machine Learning workspace' || e?.name === 'AmlNotConfiguredError') {
+      return NextResponse.json({
+        ok: false,
+        error: 'AML compute scaling requires a Microsoft.MachineLearningServices/workspaces resource (kind=Hub or standalone workspace) — not an Azure OpenAI / AIServices account.',
+        hint: (
+          'Set LOOM_AML_WORKSPACE (and optionally LOOM_AML_RG / LOOM_AML_SUB if the workspace is in a different resource group or subscription) to a deployed Azure ML workspace. ' +
+          'Alternatively, deploy AI Foundry with aiFoundryEnabled=true and foundryPortalEnabled=true in bicep/modules/ai-foundry.bicep to provision a Hub-kind workspace automatically. ' +
+          'Then grant the Console UAMI the "AzureML Data Scientist" role on the workspace.'
+        ),
+      }, { status: 503 });
+    }
     return NextResponse.json({ ok: false, error: e?.message || String(e) }, { status: 502 });
   }
 }

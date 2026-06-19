@@ -12,7 +12,7 @@
  * client wizard. Host derivation that needs sovereign-cloud suffix helpers
  * lives in the route (which already imports cloud-endpoints).
  */
-import type { ConnectionType } from './connections-store';
+import type { ConnectionType, AuthMethod } from './connections-store';
 
 export interface ConnectableArmType {
   /** Lower-case ARM resource type for an ARG `type in~ (...)` literal. */
@@ -95,6 +95,40 @@ export function normalizeHost(raw: string | undefined | null): string {
     .trim();
 }
 
+/**
+ * Auth methods available per connection type in the "Add existing" wizard.
+ * Ordered: MI-first (preferred where it works), then secret-bearing options.
+ */
+export const CONN_TYPE_AUTH_OPTIONS: Record<ConnectionType, AuthMethod[]> = {
+  // MI works for all SQL types via AAD token; sql-password is the fallback for
+  // SQL auth logins or when the user isn't a DB admin.
+  'azure-sql':          ['entra-mi', 'sql-password'],
+  'synapse-dedicated':  ['entra-mi', 'sql-password'],
+  'synapse-serverless': ['entra-mi', 'sql-password'],
+  'generic-sql':        ['entra-mi', 'sql-password'],
+  // Databricks: PAT (connection-string) is the most common integration token.
+  'databricks-sql':     ['entra-mi', 'connection-string'],
+  // Postgres: sql-password is the native auth; MI via AAD possible but niche.
+  'postgres':           ['sql-password', 'entra-mi'],
+  // Storage: MI is the preferred path; account-key for older integrations.
+  'storage-adls':       ['entra-mi', 'account-key'],
+  // Cosmos / EH / SB: connection-string is widely used; MI is also supported.
+  'cosmos':             ['entra-mi', 'connection-string'],
+  'event-hub':          ['entra-mi', 'connection-string'],
+  'service-bus':        ['entra-mi', 'connection-string'],
+  // Key Vault: MI only — no credential type makes sense for a KV reference.
+  'key-vault':          ['entra-mi'],
+};
+
+/** Human label for each AuthMethod (used in the wizard dropdown). */
+export const AUTH_METHOD_LABEL: Record<AuthMethod, string> = {
+  'entra-mi':         'Managed identity (Entra)',
+  'sql-password':     'SQL / password',
+  'connection-string':'Connection string',
+  'account-key':      'Account key',
+  'service-principal':'Service principal',
+};
+
 /** Shape returned by GET /api/azure/connectables for one discovered resource. */
 export interface ConnectableResource {
   /** Full ARM resource id (non-secret provenance pinned onto the connection). */
@@ -112,6 +146,6 @@ export interface ConnectableResource {
   subscriptionName?: string;
   resourceGroup: string;
   location?: string;
-  /** Default auth method suggested on import (MI-first → no secret needed). */
-  suggestedAuth: 'entra-mi';
+  /** Default auth method suggested on import — MI-first where supported. */
+  suggestedAuth: AuthMethod;
 }

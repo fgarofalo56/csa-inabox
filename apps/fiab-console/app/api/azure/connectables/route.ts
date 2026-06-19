@@ -40,7 +40,7 @@ import {
   armBase, armScope, getSqlSuffix, synapseSqlSuffix,
 } from '@/lib/azure/cloud-endpoints';
 import {
-  CONNECTABLE_ARM_TYPES, armTypeToConnType, normalizeHost,
+  CONNECTABLE_ARM_TYPES, armTypeToConnType, normalizeHost, CONN_TYPE_AUTH_OPTIONS,
   type ConnectableResource,
 } from '@/lib/azure/connectable-types';
 
@@ -181,6 +181,9 @@ function toConnectable(row: ArgRow): ConnectableResource | null {
       break;
   }
 
+  // Pick the first (most preferred) auth method for this connection type.
+  const suggestedAuth = (CONN_TYPE_AUTH_OPTIONS[connType]?.[0]) ?? 'entra-mi';
+
   return {
     armResourceId: row.id,
     name: row.name,
@@ -192,7 +195,7 @@ function toConnectable(row: ArgRow): ConnectableResource | null {
     subscriptionName: row.subName || undefined,
     resourceGroup: row.resourceGroup || '',
     location: row.location || undefined,
-    suggestedAuth: 'entra-mi',
+    suggestedAuth,
   };
 }
 
