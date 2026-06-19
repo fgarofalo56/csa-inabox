@@ -306,8 +306,8 @@ var copilotMafActive = copilotMafEnabled && (boundary == 'GCC-High' || boundary 
 // dbt-runner Container App is only meaningful on Container Apps + when apps deploy.
 var dbtRunnerActive = dbtRunnerEnabled && containerPlatform == 'containerApps' && deployAppsEnabled
 
-@description('Loom version label shown in the UI (/admin/updates) + /api/version. Wired to LOOM_VERSION / NEXT_PUBLIC_LOOM_VERSION. Default tracks the release-please manifest (.release-please-manifest.json); the top-level main.bicep passes its own loomVersion (a release/build pipeline should override with the exact tag). Kept in sync so a clean default deploy never shows "v0.1".')
-param loomVersion string = '0.42.0'
+@description('Loom version label shown in the UI (/admin/updates) + /api/version. Wired to LOOM_VERSION / NEXT_PUBLIC_LOOM_VERSION. NOTE (#1468): /api/version now reads the authoritative version from the image\'s package.json (release-please-synced), so this env is a fallback override only. Default tracks the release-please manifest (.release-please-manifest.json); the top-level main.bicep passes its own loomVersion. Kept in sync so a clean default deploy never shows a stale label.')
+param loomVersion string = '0.45.0'
 
 @description('Loom Synapse workspace name (for env-var wiring on loom-console). Default uses the single-sub DLZ convention.')
 param loomSynapseWorkspace string = 'syn-loom-default-${location}'
