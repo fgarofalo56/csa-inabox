@@ -134,18 +134,14 @@ describe('serviceChoicesToParams', () => {
 });
 
 describe('ui-parity: SETUP_SCAN_SERVICES vs byo-wizard.sh SERVICES', () => {
-  // FIXME(#1504): real bug — wizard↔CLI/bicep drift. byo-wizard.sh flags
-  // `eventhubs` (loomEventHubEnabled) and `streamanalytics`
-  // (loomStreamAnalyticsEnabled) as disableable, and both are real
-  // `param ... bool = true` flags in platform/fiab/bicep/main.bicep, but the
-  // wizard catalog (lib/setup/scan-services.ts) does not expose either as a
-  // choosable/disableable service: the `eventhubs` def carries no `enabledFlag`
-  // and `streamanalytics` has no entry at all. The wizard therefore can't
-  // disable two services the CLI + bicep support. The fix is a product change
-  // to scan-services.ts (add `enabledFlag: 'loomEventHubEnabled'` to the
-  // eventhubs def and add a streamanalytics def), not a test edit — left to the
-  // owning team. Skipped (not silently passed) so the drift stays visible.
-  it.skip('covers every flagged service the CLI knows (no drift)', () => {
+  // Fixed in #1532: byo-wizard.sh flags `eventhubs` (loomEventHubEnabled) and
+  // `streamanalytics` (loomStreamAnalyticsEnabled) as disableable, and both are
+  // real `param ... bool = true` flags in platform/fiab/bicep/main.bicep. The
+  // wizard catalog (lib/setup/scan-services.ts) now carries the `eventhubs`
+  // enable flag and a `streamanalytics` def, so the wizard can disable exactly
+  // the services the CLI + bicep support. This test pins that there is no
+  // remaining wizard↔CLI/bicep drift on any flagged service.
+  it('covers every flagged service the CLI knows (no drift)', () => {
     const cli = readFileSync(
       join(process.cwd(), '..', '..', 'scripts', 'csa-loom', 'byo-wizard.sh'),
       'utf8',
