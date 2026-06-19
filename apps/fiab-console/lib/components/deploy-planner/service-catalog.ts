@@ -193,7 +193,19 @@ export const SERVICE_CATALOG: ServiceDef[] = [
     description: 'Stores the Loom app images (core — always deployed).' },
   { key: 'aks', label: 'Kubernetes Service (AKS)', category: 'compute', iconSlug: 'azure-kubernetes-service', bicepFlag: 'atlasOnAksEnabled',
     glyph: Grid24Regular, icon: 'Kubernetes-Services.png', color: '#0078d4',
-    description: 'Managed Kubernetes — enables the optional Atlas-on-AKS workload.' },
+    description: 'Managed Kubernetes — enables the optional Atlas-on-AKS workload.',
+    config: [
+      { key: 'nodeVmSize', label: 'Node VM size', type: 'select',
+        allowed: ['Standard_D2s_v5', 'Standard_D4s_v5', 'Standard_D8s_v5', 'Standard_E4s_v5', 'Standard_E8s_v5'],
+        default: 'Standard_D4s_v5', bicepParam: 'aksNodeVmSize',
+        help: 'D-series = general-purpose; E-series = memory-optimized. D4s_v5 covers most workloads.' },
+      { key: 'nodeCount', label: 'System-pool nodes', type: 'number', min: 1, max: 10,
+        default: 3, bicepParam: 'aksNodeCount',
+        help: '3 = HA; 1 = dev/cost-saving (no zone-redundancy).' },
+      { key: 'tier', label: 'Cluster tier', type: 'select', allowed: ['Free', 'Standard', 'Premium'],
+        default: 'Standard', bicepParam: 'aksTier',
+        help: 'Free = dev/test (no SLA); Standard = 99.9% SLA; Premium = 99.95% SLA + enterprise features.' },
+    ] },
   { key: 'appService', label: 'App Service', category: 'compute', iconSlug: 'app-service', bicepFlag: 'appServiceEnabled',
     glyph: Globe24Regular, icon: 'App-Services.png', color: '#0078d4',
     pricingDetailsUrl: 'https://azure.microsoft.com/pricing/details/app-service/linux/',
@@ -375,7 +387,20 @@ export const SERVICE_CATALOG: ServiceDef[] = [
     pricingDetailsUrl: 'https://azure.microsoft.com/pricing/details/search/',
     retail: { serviceName: 'Azure Cognitive Search', match: ['Standard S1'], exclude: ['CC'],
       unitNote: 'Standard S1 search unit · 730 hrs/mo (1 replica × 1 partition)' },
-    description: 'Vector + keyword index for RAG over Loom items.' },
+    description: 'Vector + keyword index for RAG over Loom items.',
+    config: [
+      { key: 'tier', label: 'Tier', type: 'select',
+        allowed: ['free', 'basic', 'standard', 'standard2', 'standard3'],
+        default: 'standard', bicepParam: 'aiSearchTier',
+        help: 'free = dev/test (3 indexes, no SLA); basic = low-volume prod; standard/S2/S3 = progressively more throughput + storage.' },
+      { key: 'replicaCount', label: 'Replicas', type: 'number', min: 1, max: 12,
+        default: 1, bicepParam: 'aiSearchReplicaCount',
+        help: 'Each replica handles one query load; 2+ gives high availability. Multiplies the monthly cost.' },
+      { key: 'partitionCount', label: 'Partitions', type: 'select',
+        allowed: ['1', '2', '3', '4', '6', '12'],
+        default: '1', emit: 'int', bicepParam: 'aiSearchPartitionCount',
+        help: 'Each partition adds ~25 GB of index capacity. Multiplies the monthly cost.' },
+    ] },
   { key: 'defenderForAI', label: 'Defender for AI', category: 'ai', iconSlug: 'defender-for-cloud', bicepFlag: 'defenderForAIEnabled',
     glyph: ShieldCheckmark24Regular, color: '#7c3aed',
     description: 'Threat protection + prompt-shield for AI workloads.' },
@@ -422,7 +447,13 @@ export const SERVICE_CATALOG: ServiceDef[] = [
     pricingDetailsUrl: 'https://azure.microsoft.com/pricing/details/api-management/',
     retail: { serviceName: 'API Management', match: ['Developer'], exclude: ['Self Hosted Gateway', 'Consumption'],
       unitNote: 'Developer tier unit · 730 hrs/mo (non-production, no SLA)' },
-    description: 'API gateway fronting data + AI APIs.' },
+    description: 'API gateway fronting data + AI APIs.',
+    config: [
+      { key: 'skuName', label: 'SKU tier', type: 'select',
+        allowed: ['Consumption', 'Developer', 'Basic', 'Standard', 'Premium'],
+        default: 'Developer', bicepParam: 'apimSkuName',
+        help: 'Consumption = serverless per-call (no SLA); Developer = single-node no-SLA; Basic/Standard = SLA; Premium = multi-region + VNet integration.' },
+    ] },
   { key: 'eventhubs', label: 'Event Hubs', category: 'integration', iconSlug: 'event-hubs', bicepFlag: null,
     glyph: Pulse24Regular, icon: 'Event-Hubs.png', color: '#e3008c',
     description: 'Streaming ingestion for Eventstream sources.' },
@@ -514,7 +545,15 @@ export const SERVICE_CATALOG: ServiceDef[] = [
     pricingDetailsUrl: 'https://azure.microsoft.com/pricing/details/application-gateway/',
     retail: { serviceName: 'Application Gateway', match: ['Standard', 'Fixed'], exclude: ['Basic', 'WAF'],
       unitNote: 'Standard_v2 fixed gateway-hour · 730 hrs/mo (excludes per-capacity-unit + data processing)' },
-    description: 'WAF + L7 ingress for the console.' },
+    description: 'WAF + L7 ingress for the console.',
+    config: [
+      { key: 'tier', label: 'Tier', type: 'select', allowed: ['Standard_v2', 'WAF_v2'],
+        default: 'Standard_v2', bicepParam: 'appGatewayTier',
+        help: 'Standard_v2 = L7 with autoscale; WAF_v2 adds OWASP Core Rule Set protection (~$40/mo extra).' },
+      { key: 'capacity', label: 'Fixed capacity units', type: 'number', min: 1, max: 32,
+        default: 2, bicepParam: 'appGatewayCapacity',
+        help: '1 capacity unit covers ~500 RPS / 2,500 persistent connections. 2 = minimum HA.' },
+    ] },
   { key: 'frontDoor', label: 'Front Door', category: 'networking', iconSlug: 'front-doors', bicepFlag: 'frontDoorEnabled',
     glyph: GlobeShield24Regular, icon: 'Front-Door-and-CDN-Profiles.png', color: '#004578',
     description: 'Global edge + WAF (Commercial).' },
@@ -532,7 +571,13 @@ export const SERVICE_CATALOG: ServiceDef[] = [
     pricingDetailsUrl: 'https://azure.microsoft.com/pricing/details/vpn-gateway/',
     retail: { serviceName: 'VPN Gateway', match: ['VpnGw1'], exclude: ['VpnGw1AZ', 'VpnGw2', 'VpnGw3', 'VpnGw4', 'VpnGw5', 'P2S', 'Connection'],
       unitNote: 'VpnGw1 gateway-hour · 730 hrs/mo (excludes S2S/P2S connection + egress)' },
-    description: 'Hybrid connectivity into the landing zone.' },
+    description: 'Hybrid connectivity into the landing zone.',
+    config: [
+      { key: 'skuName', label: 'Gateway SKU', type: 'select',
+        allowed: ['VpnGw1', 'VpnGw2', 'VpnGw3', 'VpnGw1AZ', 'VpnGw2AZ', 'VpnGw3AZ'],
+        default: 'VpnGw1', bicepParam: 'vpnGatewaySkuName',
+        help: 'VpnGw1 = 650 Mbps (~$138/mo); VpnGw2 = 1 Gbps (~$238/mo); AZ variants add zone-redundancy (~1.5× cost).' },
+    ] },
   { key: 'loadBalancer', label: 'Load Balancer', category: 'networking', iconSlug: 'load-balancers', bicepFlag: 'loadBalancerEnabled',
     glyph: ArrowRouting24Regular, icon: 'Load-Balancers.png', color: '#004578',
     description: 'Internal Standard L4 load balancer (isolated VNet/subnet + frontend/pool/probe/rule).' },
@@ -602,6 +647,185 @@ export function metersForServices(keys: string[]): Array<{ key: string; label: s
     if (def?.retail) out.push({ key: def.key, label: def.label, category: def.category, meter: def.retail, pricingDetailsUrl: def.pricingDetailsUrl });
   }
   return out;
+}
+
+/**
+ * Derive a config-aware `RetailMeter` for a service that has a stored config
+ * value affecting which Azure Retail Prices meter to query. Returns a NEW meter
+ * object with the `match`/`exclude`/`armSkuName`/`unitNote` overridden to the
+ * SKU the operator actually configured — so the cost estimate prices the CHOSEN
+ * SKU, not just the static representative default.
+ *
+ * Only services where the config value unambiguously selects a different meter
+ * are handled here (the caller falls back to the static `retail` entry for any
+ * service not listed, so the behavior is additive and safe). The mapping must
+ * only use REAL Azure Retail Prices API meter substrings.
+ */
+export function meterSkuFromConfig(
+  key: string,
+  config: Record<string, ConfigValue> | undefined,
+  staticMeter: RetailMeter,
+): RetailMeter {
+  if (!config) return staticMeter;
+
+  switch (key) {
+    case 'appService': {
+      const sku = String(config.planSku ?? 'B1');
+      // App Service plan meters carry the plan SKU in their skuName/meterName
+      // (e.g. "B2 Linux" for B2, "P1 v3 Linux" for P1v3). Exclude Windows +
+      // Isolated + Free so we never price the wrong OS or tier.
+      const skuLabel = sku === 'P0v3' ? 'P0 v3' : sku === 'P1v3' ? 'P1 v3' : sku;
+      return {
+        ...staticMeter,
+        match: [skuLabel.toLowerCase()],
+        exclude: ['Windows', 'Isolated', 'Free'],
+        unitNote: `${sku} Linux plan · 730 hrs/mo (1 instance)`,
+      };
+    }
+
+    case 'vm': {
+      const vmSize = String(config.vmSize ?? 'Standard_B2s');
+      return {
+        ...staticMeter,
+        armSkuName: vmSize,
+        match: undefined,
+        exclude: ['Spot', 'Low Priority', 'Windows'],
+        unitNote: `${vmSize} Linux on-demand · 730 hrs/mo (excludes OS disk + egress)`,
+      };
+    }
+
+    case 'redis': {
+      const skuName = String(config.skuName ?? 'Basic');
+      // Redis meters: "C0 Cache Instance" (Basic/Standard) or "P1 Cache Instance" (Premium)
+      const matchMap: Record<string, string[]> = {
+        Basic: ['C0', 'Basic'],
+        Standard: ['C1', 'Standard'],
+        Premium: ['P1', 'Premium'],
+      };
+      const excludeMap: Record<string, string[]> = {
+        Basic: ['Premium', 'Standard', 'Enterprise'],
+        Standard: ['Premium', 'Basic', 'Enterprise'],
+        Premium: ['Basic', 'Standard', 'Enterprise'],
+      };
+      return {
+        ...staticMeter,
+        match: matchMap[skuName] ?? ['C0'],
+        exclude: excludeMap[skuName] ?? ['Premium', 'Enterprise'],
+        unitNote: `${skuName} ${skuName === 'Premium' ? 'P1' : skuName === 'Standard' ? 'C1' : 'C0'} · 730 hrs/mo`,
+      };
+    }
+
+    case 'postgres': {
+      // PostgreSQL storage pricing is per GB/month; compute is separate B1ms row.
+      // The storage GB config doesn't change the compute meter — pricing still keys
+      // off the Flexible Server Burstable B1ms compute row (storage is separate).
+      // So for postgres, the static meter (B1ms) is always correct; no override needed.
+      return staticMeter;
+    }
+
+    case 'mysql': {
+      // Same as postgres — B1ms compute row is the representative meter.
+      return staticMeter;
+    }
+
+    case 'streamAnalytics': {
+      const su = Number(config.streamingUnits ?? 3);
+      // Stream Analytics Standard SU pricing is linear per SU/hour — the qty
+      // multiplier captures the count, so the meter itself doesn't change.
+      return {
+        ...staticMeter,
+        defaultMonthlyQty: Number.isFinite(su) && su > 0 ? su : 3,
+        unitNote: `Standard ${su} SU · 730 hrs/mo`,
+      };
+    }
+
+    case 'firewall': {
+      const tier = String(config.tier ?? 'Standard');
+      // Premium Firewall deployment meter is a different product name row
+      return {
+        ...staticMeter,
+        match: [tier, 'Deployment'],
+        exclude: tier === 'Standard' ? ['Premium', 'Basic', 'Hub', 'Data Processed'] : ['Standard', 'Basic', 'Hub', 'Data Processed'],
+        unitNote: `${tier} deployment-hour · 730 hrs/mo (excludes per-GB data processing)`,
+      };
+    }
+
+    case 'aiSearch': {
+      const tier = String(config.tier ?? 'standard');
+      const replicas = Number(config.replicaCount ?? 1);
+      const partitions = Number(config.partitionCount ?? 1);
+      const units = (Number.isFinite(replicas) ? replicas : 1) * (Number.isFinite(partitions) ? partitions : 1);
+      // AI Search meter: "S1" for standard, "S2" for standard2, "S3" for standard3,
+      // "B" for basic, "F" for free.
+      const tierLabelMap: Record<string, string> = {
+        free: 'F',
+        basic: 'B',
+        standard: 'S1',
+        standard2: 'S2',
+        standard3: 'S3',
+      };
+      const tierLabel = tierLabelMap[tier] ?? 'S1';
+      return {
+        ...staticMeter,
+        match: [tierLabel === 'F' ? 'Free' : tierLabel === 'B' ? 'Basic' : tierLabel],
+        exclude: tier === 'free' ? ['Standard', 'Basic', 'CC'] :
+          tier === 'basic' ? ['Standard', 'Free', 'CC'] : ['Free', 'Basic', 'CC'],
+        defaultMonthlyQty: units,
+        unitNote: `${tierLabel} search unit × ${units} (${replicas}r × ${partitions}p) · 730 hrs/mo`,
+      };
+    }
+
+    case 'apim': {
+      const sku = String(config.skuName ?? 'Developer');
+      // APIM meters: the product name row differs by SKU tier
+      const matchMap: Record<string, string[]> = {
+        Consumption: ['Consumption'],
+        Developer: ['Developer'],
+        Basic: ['Basic'],
+        Standard: ['Standard'],
+        Premium: ['Premium'],
+      };
+      const excludeMap: Record<string, string[]> = {
+        Consumption: ['Developer', 'Basic', 'Standard', 'Premium', 'Self Hosted Gateway'],
+        Developer: ['Consumption', 'Basic', 'Standard', 'Premium', 'Self Hosted Gateway'],
+        Basic: ['Consumption', 'Developer', 'Standard', 'Premium', 'Self Hosted Gateway'],
+        Standard: ['Consumption', 'Developer', 'Basic', 'Premium', 'Self Hosted Gateway'],
+        Premium: ['Consumption', 'Developer', 'Basic', 'Standard', 'Self Hosted Gateway'],
+      };
+      return {
+        ...staticMeter,
+        match: matchMap[sku] ?? ['Developer'],
+        exclude: excludeMap[sku] ?? ['Consumption', 'Self Hosted Gateway'],
+        unitNote: `${sku} tier unit · 730 hrs/mo`,
+      };
+    }
+
+    case 'vpnGateway': {
+      const sku = String(config.skuName ?? 'VpnGw1');
+      // VPN Gateway meter: sku name appears in the row; exclude other SKU variants
+      // and per-connection/S2S/P2S rows
+      return {
+        ...staticMeter,
+        match: [sku],
+        exclude: ['Connection', 'S2S', 'P2S',
+          ...['VpnGw1', 'VpnGw2', 'VpnGw3', 'VpnGw1AZ', 'VpnGw2AZ', 'VpnGw3AZ'].filter((s) => s !== sku)],
+        unitNote: `${sku} gateway-hour · 730 hrs/mo (excludes S2S/P2S connection + egress)`,
+      };
+    }
+
+    case 'appGateway': {
+      const tier = String(config.tier ?? 'Standard_v2');
+      return {
+        ...staticMeter,
+        match: [tier === 'WAF_v2' ? 'WAF' : 'Standard', 'Fixed'],
+        exclude: tier === 'WAF_v2' ? ['Basic', 'Standard_v2', 'Capacity'] : ['Basic', 'WAF', 'Capacity'],
+        unitNote: `${tier} fixed gateway-hour · 730 hrs/mo (excludes per-capacity-unit + data processing)`,
+      };
+    }
+
+    default:
+      return staticMeter;
+  }
 }
 
 /** QA/debug — how many distinct service types the catalog covers. */

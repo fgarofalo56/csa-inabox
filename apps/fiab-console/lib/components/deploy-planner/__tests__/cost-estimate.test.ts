@@ -14,7 +14,7 @@ import {
 import {
   pricingCalculatorUrl, breakdownToCsv, breakdownToJson, serviceDetailsUrl,
 } from '../pricing-calculator-link';
-import { metersForServices, serviceByKey } from '../service-catalog';
+import { metersForServices, serviceByKey, meterSkuFromConfig, configFor, type RetailMeter } from '../service-catalog';
 import {
   normalizeCurrency, isSupportedCurrency, normalizeRegion, regionLabel,
   RETAIL_CURRENCIES, COMMERCIAL_REGIONS, DEFAULT_CURRENCY,
@@ -213,5 +213,218 @@ describe('pricing-calculator-link helpers', () => {
   });
   it('breakdownToJson round-trips to the same summary', () => {
     expect(JSON.parse(breakdownToJson(summary))).toEqual(summary);
+  });
+});
+
+describe('meterSkuFromConfig — P1: config-aware meter derivation', () => {
+  it('appService: changing planSku changes the match substring', () => {
+    const staticMeter = serviceByKey('appService')!.retail!;
+    const defaultMeter = meterSkuFromConfig('appService', { planSku: 'B1' }, staticMeter);
+    const premiumMeter = meterSkuFromConfig('appService', { planSku: 'P1v3' }, staticMeter);
+    // Both should have match arrays
+    expect(defaultMeter.match).toBeDefined();
+    expect(premiumMeter.match).toBeDefined();
+    // They must differ — different SKU = different match
+    expect(defaultMeter.match).not.toEqual(premiumMeter.match);
+    // B1 match should contain 'b1'
+    expect(defaultMeter.match!.some((m) => m.toLowerCase().includes('b1'))).toBe(true);
+    // P1v3 match should contain 'p1'
+    expect(premiumMeter.match!.some((m) => m.toLowerCase().includes('p1'))).toBe(true);
+    // Both exclude Windows
+    expect(defaultMeter.exclude).toContain('Windows');
+    expect(premiumMeter.exclude).toContain('Windows');
+  });
+
+  it('vm: changing vmSize changes the armSkuName pin', () => {
+    const staticMeter = serviceByKey('vm')!.retail!;
+    const b2sMeter = meterSkuFromConfig('vm', { vmSize: 'Standard_B2s' }, staticMeter);
+    const d4Meter = meterSkuFromConfig('vm', { vmSize: 'Standard_D4s_v5' }, staticMeter);
+    expect(b2sMeter.armSkuName).toBe('Standard_B2s');
+    expect(d4Meter.armSkuName).toBe('Standard_D4s_v5');
+    // They differ
+    expect(b2sMeter.armSkuName).not.toBe(d4Meter.armSkuName);
+    // Note in the unitNote should mention the VM size
+    expect(b2sMeter.unitNote).toContain('Standard_B2s');
+    expect(d4Meter.unitNote).toContain('Standard_D4s_v5');
+  });
+
+  it('redis: Basic/Standard/Premium produce distinct match+exclude sets', () => {
+    const staticMeter = serviceByKey('redis')!.retail!;
+    const basicMeter = meterSkuFromConfig('redis', { skuName: 'Basic' }, staticMeter);
+    const stdMeter = meterSkuFromConfig('redis', { skuName: 'Standard' }, staticMeter);
+    const premMeter = meterSkuFromConfig('redis', { skuName: 'Premium' }, staticMeter);
+    // Each tier should have at least one match token
+    expect(basicMeter.match!.length).toBeGreaterThan(0);
+    expect(stdMeter.match!.length).toBeGreaterThan(0);
+    expect(premMeter.match!.length).toBeGreaterThan(0);
+    // Tiers differ from each other
+    expect(basicMeter.match).not.toEqual(stdMeter.match);
+    expect(stdMeter.match).not.toEqual(premMeter.match);
+    // Premium should not be excluded when pricing Premium
+    expect(premMeter.exclude).not.toContain('Premium');
+    // Standard should not be excluded when pricing Standard
+    expect(stdMeter.exclude).not.toContain('Standard');
+    // Basic should not be excluded when pricing Basic
+    expect(basicMeter.exclude).not.toContain('Basic');
+  });
+
+  it('streamAnalytics: configured SU count flows into defaultMonthlyQty', () => {
+    const staticMeter = serviceByKey('streamAnalytics')!.retail!;
+    const meter3 = meterSkuFromConfig('streamAnalytics', { streamingUnits: 3 }, staticMeter);
+    const meter12 = meterSkuFromConfig('streamAnalytics', { streamingUnits: 12 }, staticMeter);
+    expect(meter3.defaultMonthlyQty).toBe(3);
+    expect(meter12.defaultMonthlyQty).toBe(12);
+    // Different quantity → different monthly cost when same unit price
+    const fakeItem: RetailPriceItem = { retailPrice: 1, unitOfMeasure: '1 Hour', skuName: 'Standard SU', type: 'Consumption' };
+    const pr3 = priceResultFromRow(fakeItem, meter3);
+    const pr12 = priceResultFromRow(fakeItem, meter12);
+    expect(pr12.monthly).toBe(pr3.monthly * 4); // 12 SU vs 3 SU
+  });
+
+  it('aiSearch: tier and replica/partition counts affect match + qty', () => {
+    const staticMeter = serviceByKey('aiSearch')!.retail!;
+    const s1Meter = meterSkuFromConfig('aiSearch', { tier: 'standard', replicaCount: 1, partitionCount: 1 }, staticMeter);
+    const s3Meter = meterSkuFromConfig('aiSearch', { tier: 'standard3', replicaCount: 2, partitionCount: 3 }, staticMeter);
+    const basicMeter = meterSkuFromConfig('aiSearch', { tier: 'basic', replicaCount: 1, partitionCount: 1 }, staticMeter);
+    // Different tiers → different match
+    expect(s1Meter.match).not.toEqual(s3Meter.match);
+    expect(basicMeter.match).not.toEqual(s1Meter.match);
+    // S3 with 2r×3p = 6 units
+    expect(s3Meter.defaultMonthlyQty).toBe(6);
+    // S1 1r×1p = 1 unit
+    expect(s1Meter.defaultMonthlyQty).toBe(1);
+    // Unit note mentions the tier label
+    expect(s1Meter.unitNote).toContain('S1');
+    expect(s3Meter.unitNote).toContain('S3');
+    expect(basicMeter.unitNote).toContain('B');
+  });
+
+  it('apim: different SKU tiers produce different match arrays', () => {
+    const staticMeter = serviceByKey('apim')!.retail!;
+    const devMeter = meterSkuFromConfig('apim', { skuName: 'Developer' }, staticMeter);
+    const stdMeter = meterSkuFromConfig('apim', { skuName: 'Standard' }, staticMeter);
+    const premMeter = meterSkuFromConfig('apim', { skuName: 'Premium' }, staticMeter);
+    // Tiers differ
+    expect(devMeter.match).not.toEqual(stdMeter.match);
+    expect(stdMeter.match).not.toEqual(premMeter.match);
+    // Developer meter should match 'Developer'
+    expect(devMeter.match!.some((m) => m.toLowerCase().includes('developer'))).toBe(true);
+    // Standard meter should match 'Standard'
+    expect(stdMeter.match!.some((m) => m.toLowerCase().includes('standard'))).toBe(true);
+    // Premium meter should not exclude Premium
+    expect(premMeter.exclude).not.toContain('Premium');
+  });
+
+  it('vpnGateway: SKU choice changes the match + exclude set', () => {
+    const staticMeter = serviceByKey('vpnGateway')!.retail!;
+    const gw1 = meterSkuFromConfig('vpnGateway', { skuName: 'VpnGw1' }, staticMeter);
+    const gw2 = meterSkuFromConfig('vpnGateway', { skuName: 'VpnGw2' }, staticMeter);
+    expect(gw1.match!.some((m) => m.includes('VpnGw1'))).toBe(true);
+    expect(gw2.match!.some((m) => m.includes('VpnGw2'))).toBe(true);
+    // VpnGw1 meter should exclude VpnGw2 to prevent picking the wrong row
+    expect(gw1.exclude!.some((e) => e.includes('VpnGw2'))).toBe(true);
+    // VpnGw2 meter should exclude VpnGw1
+    expect(gw2.exclude!.some((e) => e.includes('VpnGw1'))).toBe(true);
+  });
+
+  it('appGateway: WAF_v2 vs Standard_v2 produces different match arrays', () => {
+    const staticMeter = serviceByKey('appGateway')!.retail!;
+    const stdMeter = meterSkuFromConfig('appGateway', { tier: 'Standard_v2', capacity: 2 }, staticMeter);
+    const wafMeter = meterSkuFromConfig('appGateway', { tier: 'WAF_v2', capacity: 2 }, staticMeter);
+    expect(stdMeter.match).not.toEqual(wafMeter.match);
+    // WAF meter should have 'WAF' in match
+    expect(wafMeter.match!.some((m) => m.toLowerCase().includes('waf'))).toBe(true);
+  });
+
+  it('returns the static meter unchanged for unknown service keys', () => {
+    const meter: RetailMeter = { serviceName: 'Unknown', unitNote: 'test' };
+    expect(meterSkuFromConfig('unknownService', { foo: 'bar' }, meter)).toBe(meter);
+  });
+
+  it('returns the static meter unchanged when config is undefined', () => {
+    const staticMeter = serviceByKey('redis')!.retail!;
+    expect(meterSkuFromConfig('redis', undefined, staticMeter)).toBe(staticMeter);
+  });
+});
+
+describe('P2 — new config schemas (aiSearch, apim, aks, vpnGateway, appGateway)', () => {
+  it('aiSearch has a config schema with tier, replicaCount, partitionCount', () => {
+    const fields = configFor('aiSearch');
+    expect(fields.length).toBeGreaterThanOrEqual(3);
+    const tierField = fields.find((f) => f.key === 'tier');
+    expect(tierField).toBeDefined();
+    expect(tierField!.allowed).toContain('free');
+    expect(tierField!.allowed).toContain('standard');
+    expect(tierField!.allowed).toContain('standard3');
+    expect(tierField!.bicepParam).toBe('aiSearchTier');
+    const replicaField = fields.find((f) => f.key === 'replicaCount');
+    expect(replicaField).toBeDefined();
+    expect(replicaField!.type).toBe('number');
+    expect(replicaField!.bicepParam).toBe('aiSearchReplicaCount');
+    const partField = fields.find((f) => f.key === 'partitionCount');
+    expect(partField).toBeDefined();
+    expect(partField!.bicepParam).toBe('aiSearchPartitionCount');
+  });
+
+  it('apim has a config schema with skuName selector', () => {
+    const fields = configFor('apim');
+    expect(fields.length).toBeGreaterThanOrEqual(1);
+    const skuField = fields.find((f) => f.key === 'skuName');
+    expect(skuField).toBeDefined();
+    expect(skuField!.allowed).toContain('Developer');
+    expect(skuField!.allowed).toContain('Standard');
+    expect(skuField!.allowed).toContain('Premium');
+    expect(skuField!.allowed).toContain('Consumption');
+    expect(skuField!.bicepParam).toBe('apimSkuName');
+  });
+
+  it('aks has a config schema with nodeVmSize, nodeCount, tier', () => {
+    const fields = configFor('aks');
+    expect(fields.length).toBeGreaterThanOrEqual(3);
+    const vmField = fields.find((f) => f.key === 'nodeVmSize');
+    expect(vmField).toBeDefined();
+    expect(vmField!.bicepParam).toBe('aksNodeVmSize');
+    const countField = fields.find((f) => f.key === 'nodeCount');
+    expect(countField).toBeDefined();
+    expect(countField!.type).toBe('number');
+    expect(countField!.bicepParam).toBe('aksNodeCount');
+    const tierField = fields.find((f) => f.key === 'tier');
+    expect(tierField).toBeDefined();
+    expect(tierField!.allowed).toContain('Free');
+    expect(tierField!.allowed).toContain('Standard');
+    expect(tierField!.allowed).toContain('Premium');
+    expect(tierField!.bicepParam).toBe('aksTier');
+  });
+
+  it('vpnGateway has a config schema with skuName', () => {
+    const fields = configFor('vpnGateway');
+    expect(fields.length).toBeGreaterThanOrEqual(1);
+    const skuField = fields.find((f) => f.key === 'skuName');
+    expect(skuField).toBeDefined();
+    expect(skuField!.allowed).toContain('VpnGw1');
+    expect(skuField!.allowed).toContain('VpnGw2AZ');
+    expect(skuField!.bicepParam).toBe('vpnGatewaySkuName');
+  });
+
+  it('appGateway has a config schema with tier and capacity', () => {
+    const fields = configFor('appGateway');
+    expect(fields.length).toBeGreaterThanOrEqual(2);
+    const tierField = fields.find((f) => f.key === 'tier');
+    expect(tierField).toBeDefined();
+    expect(tierField!.allowed).toContain('Standard_v2');
+    expect(tierField!.allowed).toContain('WAF_v2');
+    expect(tierField!.bicepParam).toBe('appGatewayTier');
+    const capField = fields.find((f) => f.key === 'capacity');
+    expect(capField).toBeDefined();
+    expect(capField!.type).toBe('number');
+    expect(capField!.bicepParam).toBe('appGatewayCapacity');
+  });
+
+  it('all new P2 config services remain toggleable (not core/plan-only)', () => {
+    for (const key of ['aiSearch', 'apim', 'aks', 'vpnGateway', 'appGateway']) {
+      const def = serviceByKey(key)!;
+      expect(def.bicepFlag, `${key} must be toggleable`).toBeTruthy();
+      expect(def.planOnly).toBeFalsy();
+    }
   });
 });

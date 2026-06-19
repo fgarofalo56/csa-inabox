@@ -673,6 +673,49 @@ param containerInstancesMemoryInGB int = 1
 @allowed(['Standard_DS3_v2', 'Standard_DS4_v2', 'Standard_D4s_v3', 'Standard_E4s_v3'])
 param mlComputeVmSize string = 'Standard_DS3_v2'
 
+@description('Azure AI Search tier (deploy-planner). Free = dev/test (3 indexes); Basic = low-volume production; Standard S1/S2/S3 = progressively more capacity. Replica + partition counts scale the unit cost.')
+@allowed(['free', 'basic', 'standard', 'standard2', 'standard3'])
+param aiSearchTier string = 'standard'
+
+@description('Azure AI Search replica count (deploy-planner). Each additional replica doubles the hourly cost. 1 = minimum.')
+@minValue(1)
+@maxValue(12)
+param aiSearchReplicaCount int = 1
+
+@description('Azure AI Search partition count (deploy-planner). Each additional partition doubles the hourly cost and storage. 1 = minimum.')
+@allowed([1, 2, 3, 4, 6, 12])
+param aiSearchPartitionCount int = 1
+
+@description('API Management SKU (deploy-planner). Consumption = serverless per-call; Developer = single-node no-SLA; Basic/Standard = SLA; Premium = multi-region + VNet integration.')
+@allowed(['Consumption', 'Developer', 'Basic', 'Standard', 'Premium'])
+param apimSkuName string = 'Developer'
+
+@description('AKS node VM size (deploy-planner). Standard_D4s_v5 is the recommended general-purpose system-pool size.')
+@allowed(['Standard_D2s_v5', 'Standard_D4s_v5', 'Standard_D8s_v5', 'Standard_E4s_v5', 'Standard_E8s_v5'])
+param aksNodeVmSize string = 'Standard_D4s_v5'
+
+@description('AKS system-pool node count (deploy-planner). 3 = HA; 1 = dev/cost-saving.')
+@minValue(1)
+@maxValue(10)
+param aksNodeCount int = 3
+
+@description('AKS cluster tier (deploy-planner). Free = dev/test (no SLA); Standard = 99.9% SLA; Premium = 99.95% SLA + additional enterprise features.')
+@allowed(['Free', 'Standard', 'Premium'])
+param aksTier string = 'Standard'
+
+@description('VPN Gateway SKU (deploy-planner). VpnGw1 = 650 Mbps; VpnGw2 = 1 Gbps; VpnGw3 = 1.25 Gbps; AZ variants add zone-redundancy.')
+@allowed(['VpnGw1', 'VpnGw2', 'VpnGw3', 'VpnGw1AZ', 'VpnGw2AZ', 'VpnGw3AZ'])
+param vpnGatewaySkuName string = 'VpnGw1'
+
+@description('Application Gateway tier (deploy-planner). Standard_v2 = L7 with autoscale; WAF_v2 = L7 + OWASP WAF rules.')
+@allowed(['Standard_v2', 'WAF_v2'])
+param appGatewayTier string = 'Standard_v2'
+
+@description('Application Gateway fixed capacity unit count (deploy-planner). 1 unit covers ~500 RPS; use 2+ for HA. Autoscale disables the fixed count.')
+@minValue(1)
+@maxValue(32)
+param appGatewayCapacity int = 2
+
 // Derive a valid Redis family + capacity for the chosen SKU (Premium uses the
 // P family starting at capacity 1; Basic/Standard use the C family at 0).
 var redisIsPremium = redisSkuName == 'Premium'
