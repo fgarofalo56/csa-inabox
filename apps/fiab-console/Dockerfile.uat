@@ -19,8 +19,10 @@ FROM mcr.microsoft.com/playwright:v1.48.0-jammy
 # ------------------------------------------------------------------ #
 # System: enable corepack so pnpm is available at the correct version #
 # ------------------------------------------------------------------ #
-# The Playwright base is Debian (jammy) — corepack ships with Node 20.
-RUN corepack enable && corepack prepare pnpm@9 --activate
+# The Playwright base is Debian (jammy) — corepack ships with Node 20, but the
+# pinned corepack in this base fails pnpm signature verification ("Cannot find
+# matching keyid"), so install pnpm directly via npm instead of corepack.
+RUN npm install -g pnpm@9
 
 WORKDIR /app
 
