@@ -354,4 +354,73 @@ describe('purview-client (classic Data Map)', () => {
     expect(page.events).toEqual([]);
     expect(page.needsAsset).toBeUndefined();
   });
+
+  // ── createAtlasLineage ────────────────────────────────────────────────────
+
+  it('createAtlasLineage POSTs a Process entity with inputs/outputs as guid refs', async () => {
+    fetchMock.mockResolvedValue(new Response(JSON.stringify({
+      guidAssignments: { '-1': 'process-guid-abc' },
+      mutatedEntities: { CREATE: [{ guid: 'process-guid-abc', typeName: 'Process' }] },
+    }), { status: 200 }));
+    const mod = await import('../purview-client');
+    const result = await mod.createAtlasLineage({
+      inputs: ['guid-from-dataset'],
+      outputs: ['guid-to-dataset'],
+      processQualifiedName: 'loom://process/edge_t1_a_b_publish',
+      processName: 'Sales LH → Reports API (publish)',
+    });
+    expect(result).toBe('process-guid-abc');
+    const [url, init] = fetchMock.mock.calls[0];
+    expect(url).toContain('/datamap/api/atlas/v2/entity');
+    expect((init as any).method).toBe('POST');
+    const body = JSON.parse((init as any).body);
+    expect(body.entity.typeName).toBe('Process');
+    expect(body.entity.attributes.qualifiedName).toBe('loom://process/edge_t1_a_b_publish');
+    expect(body.entity.attributes.name).toBe('Sales LH → Reports API (publish)');
+    expect(body.entity.attributes.inputs).toEqual([{ guid: 'guid-from-dataset' }]);
+    expect(body.entity.attributes.outputs).toEqual([{ guid: 'guid-to-dataset' }]);
+  });
+
+  it('createAtlasLineage returns null when guidAssignments is empty', async () => {
+    fetchMock.mockResolvedValue(new Response(JSON.stringify({ guidAssignments: {}, mutatedEntities: {} }), { status: 200 }));
+    const mod = await import('../purview-client');
+    const result = await mod.createAtlasLineage({
+      inputs: ['g1'],
+      outputs: ['g2'],
+      processQualifiedName: 'loom://process/edge_x',
+      processName: 'A → B',
+    });
+    expect(result).toBeNull();
+  });
+
+  it('createAtlasLineage throws PurviewNotConfiguredError when LOOM_PURVIEW_ACCOUNT is unset', async () => {
+    delete process.env.LOOM_PURVIEW_ACCOUNT;
+    vi.resetModules();
+    const mod = await import('../purview-client');
+    await expect(mod.createAtlasLineage({
+      inputs: ['g1'],
+      outputs: ['g2'],
+      processQualifiedName: 'loom://process/x',
+      processName: 'A → B',
+    })).rejects.toBeInstanceOf(mod.PurviewNotConfiguredError);
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it('createAtlasLineage supports multiple inputs and outputs (multi-source Process)', async () => {
+    fetchMock.mockResolvedValue(new Response(JSON.stringify({
+      guidAssignments: { '-1': 'proc-multi' },
+    }), { status: 200 }));
+    const mod = await import('../purview-client');
+    await mod.createAtlasLineage({
+      inputs: ['g-in-1', 'g-in-2'],
+      outputs: ['g-out-1', 'g-out-2'],
+      processQualifiedName: 'loom://process/multi',
+      processName: 'Multi-source join',
+    });
+    const body = JSON.parse(fetchMock.mock.calls[0][1].body);
+    expect(body.entity.attributes.inputs).toHaveLength(2);
+    expect(body.entity.attributes.outputs).toHaveLength(2);
+    expect(body.entity.attributes.inputs).toContainEqual({ guid: 'g-in-1' });
+    expect(body.entity.attributes.inputs).toContainEqual({ guid: 'g-in-2' });
+  });
 });

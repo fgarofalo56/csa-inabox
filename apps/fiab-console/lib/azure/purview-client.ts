@@ -737,6 +737,80 @@ export async function registerAtlasEntity(p: RegisterAtlasEntityPayload): Promis
 }
 
 /**
+ * Options for writing an Atlas Process lineage edge.
+ *
+ * The Atlas `Process` type is a built-in base supertype that carries
+ * `inputs` and `outputs` as lists of entity references (by GUID). Atlas
+ * renders this as a directed lineage arrow from every input entity to every
+ * output entity in the Data Map lineage graph.
+ *
+ * Both `inputs` and `outputs` must be GUIDs that already exist in the Atlas
+ * store (typically the `primaryGuid` returned by a previous
+ * `registerAtlasEntity` call). Supplying an unknown GUID is a no-op in the
+ * lineage graph; the Process entity itself is still created.
+ *
+ * @see https://learn.microsoft.com/purview/data-gov-api-atlas-2-2
+ */
+export interface CreateAtlasLineageOpts {
+  /** GUIDs of Atlas entities that are the data sources (upstream nodes). */
+  inputs: string[];
+  /** GUIDs of Atlas entities that are the data sinks (downstream nodes). */
+  outputs: string[];
+  /**
+   * Stable URI-style qualifiedName for the Process entity.  Atlas dedupes on
+   * this value so re-writing the same edge is an idempotent upsert (no
+   * duplicate Process nodes in the lineage graph).
+   * Recommended form: `loom://process/<edgeId>`.
+   */
+  processQualifiedName: string;
+  /** Human-readable label shown on the lineage edge in the Purview catalog. */
+  processName: string;
+}
+
+/**
+ * Write (or upsert) an Atlas `Process` lineage edge so Purview renders a
+ * directed arrow from each `input` entity GUID to each `output` entity GUID
+ * in its Data Map lineage graph.  Returns the process entity GUID on success,
+ * or `null` on any error (best-effort — callers must never throw based on
+ * this return value).
+ *
+ * This function is intentionally separate from `registerAtlasEntity` because
+ * the Atlas `Process` entity type carries the special `inputs`/`outputs`
+ * relationship arrays in the entity body, not in `attributes` — and requires
+ * its referenced entity GUIDs to be resolved before the call.
+ *
+ * Auth: same UAMI credential chain as all other purviewFetch calls.
+ */
+export async function createAtlasLineage(opts: CreateAtlasLineageOpts): Promise<string | null> {
+  purviewAccount(); // throws PurviewNotConfiguredError when unconfigured
+  if (!opts.processQualifiedName) throw new PurviewError(400, null, 'processQualifiedName is required');
+  if (!opts.processName) throw new PurviewError(400, null, 'processName is required');
+
+  // Build entity references (Atlas expects { guid } objects in inputs/outputs).
+  const toRef = (guid: string) => ({ guid });
+  const body = {
+    entity: {
+      typeName: 'Process',
+      attributes: {
+        qualifiedName: opts.processQualifiedName,
+        name: opts.processName,
+        inputs: (opts.inputs || []).filter(Boolean).map(toRef),
+        outputs: (opts.outputs || []).filter(Boolean).map(toRef),
+      },
+    },
+  };
+
+  const res = await purviewFetch('/datamap/api/atlas/v2/entity', {
+    method: 'POST',
+    body: JSON.stringify(body),
+  });
+  const j = await readJson<any>(res);
+  const guidAssignments = j?.guidAssignments || {};
+  const processGuid = Object.values(guidAssignments)[0] as string | undefined;
+  return processGuid ?? null;
+}
+
+/**
  * Soft-delete an Atlas entity by its unique `qualifiedName`. Mirrors the
  * portal "Delete" on a catalog asset and the Atlas incremental-scan rule:
  *
