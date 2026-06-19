@@ -9,14 +9,15 @@
  * from B-grade (functional, untested) to A-grade (functional + Vitest).
  */
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
-import { render, screen, waitFor, fireEvent } from '@testing-library/react';
+import { render, screen, waitFor, fireEvent, cleanup } from '@testing-library/react';
 import { DataProductEditor } from '../apim-editors';
 import { DeleteDataProductDialog } from '../components/delete-data-product-dialog';
 import { makeItem, installFetchMock } from './test-helpers';
 
 describe('DataProductEditor', () => {
+  // globals:false means cleanup is not automatic; add it to prevent DOM accumulation.
   beforeEach(() => { installFetchMock({}); });
-  afterEach(() => { vi.restoreAllMocks(); });
+  afterEach(() => { cleanup(); vi.restoreAllMocks(); });
 
   it('mounts and surfaces at least one ribbon button', async () => {
     let err: unknown = null;
@@ -31,7 +32,8 @@ describe('DataProductEditor', () => {
 });
 
 describe('DeleteDataProductDialog', () => {
-  afterEach(() => { vi.restoreAllMocks(); });
+  // globals:false means cleanup is not automatic; add it to prevent DOM accumulation.
+  afterEach(() => { cleanup(); vi.restoreAllMocks(); });
 
   it('enables delete only once the typed name matches exactly', async () => {
     installFetchMock({

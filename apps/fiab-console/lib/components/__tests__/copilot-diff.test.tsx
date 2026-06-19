@@ -12,8 +12,8 @@
  * the diff surface renders synchronously and we can assert the before/after text
  * actually flows into it.
  */
-import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { render, screen, fireEvent } from '@testing-library/react';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
+import { render, screen, fireEvent, cleanup } from '@testing-library/react';
 import React from 'react';
 
 // Stub next/dynamic → a synchronous DiffEditor that surfaces original/modified.
@@ -41,6 +41,7 @@ const CHANGE: ProposedChange = {
 };
 
 beforeEach(() => { vi.clearAllMocks(); });
+afterEach(() => { cleanup(); });
 
 describe('CopilotDiff approval gate', () => {
   it('renders nothing interactive when change is null', () => {
