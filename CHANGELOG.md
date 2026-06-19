@@ -25,6 +25,26 @@ This file is maintained automatically by
 [Conventional Commits](https://www.conventionalcommits.org/). See
 [RELEASE.md](RELEASE.md) for the release process.
 
+## [0.47.0](https://github.com/fgarofalo56/csa-inabox/compare/csa-inabox-v0.46.0...csa-inabox-v0.47.0) (2026-06-19)
+
+
+### Features
+
+* **content-safety:** wire real RAI-policy + custom-blocklist management ([#1517](https://github.com/fgarofalo56/csa-inabox/issues/1517)) ([b3c4c04](https://github.com/fgarofalo56/csa-inabox/commit/b3c4c044a2aeb23cb9c91d162f4c3adda964e99c)), closes [#1410](https://github.com/fgarofalo56/csa-inabox/issues/1410)
+* **fiab-console/e2e:** unattended console verify harness (SESSION_SECRET mint, no MFA) ([#1520](https://github.com/fgarofalo56/csa-inabox/issues/1520)) ([11dcf3c](https://github.com/fgarofalo56/csa-inabox/commit/11dcf3c4ff0657b947ea0b945d44bb8e54d3e390))
+
+
+### Bug Fixes
+
+* **csa-loom:** Purview Data Map grant jq matched wrong rule id (endswith→startswith) ([#1513](https://github.com/fgarofalo56/csa-inabox/issues/1513)) ([ffbab36](https://github.com/fgarofalo56/csa-inabox/commit/ffbab36d4a921bcb2b77422c5ce7afbfd56aa709))
+* **csa-loom:** Purview self-toggle poll must not treat PE-403 as reachable ([#1518](https://github.com/fgarofalo56/csa-inabox/issues/1518)) ([06eff16](https://github.com/fgarofalo56/csa-inabox/commit/06eff1696a99469a4d7a9d2866cb8f7b8d9d82ef))
+* **fiab-console:** green long-tail vitest failures ([#1504](https://github.com/fgarofalo56/csa-inabox/issues/1504)) ([#1519](https://github.com/fgarofalo56/csa-inabox/issues/1519)) ([3c668e0](https://github.com/fgarofalo56/csa-inabox/commit/3c668e0a463f1e7a3cb601d412ec4374089d693c))
+
+
+### Documentation
+
+* **fiab/audit:** day-one gap-closure plan (zero setup gates) ([#1450](https://github.com/fgarofalo56/csa-inabox/issues/1450)) ([c904cfc](https://github.com/fgarofalo56/csa-inabox/commit/c904cfc5c0375a2608301c906ae09e5bc83820a0))
+
 ## [0.46.0](https://github.com/fgarofalo56/csa-inabox/compare/csa-inabox-v0.45.0...csa-inabox-v0.46.0) (2026-06-19)
 
 
