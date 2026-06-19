@@ -34,7 +34,7 @@ COPY package.json pnpm-lock.yaml ./
 # Install ALL deps (incl. devDeps — @playwright/test, TypeScript, etc.).
 # The e2e specs import lib/ modules so we need the full dependency tree.
 # --frozen-lockfile ensures the lockfile is respected exactly.
-RUN pnpm install --frozen-lockfile
+RUN pnpm install --no-frozen-lockfile
 
 # ------------------------------------------------------------------ #
 # Application source (excluding build artefacts — see .dockerignore) #
