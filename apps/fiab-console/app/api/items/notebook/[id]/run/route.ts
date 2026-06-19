@@ -29,6 +29,34 @@ async function loadNotebook(id: string, workspaceId: string): Promise<WorkspaceI
   } catch (e: any) { if (e?.code === 404) return null; throw e; }
 }
 
+/**
+ * Build the `loom_lakehouses` auto-mount preamble for a notebook (issue #655).
+ * Resolves every attached lakehouse to its REAL abfss root and returns the
+ * pyspark dict source — or '' when there are no resolvable lakehouses. Each
+ * source that can't resolve (no provisioning record / no storage env) is
+ * skipped silently (honest gate, never a guessed path). Never throws — a
+ * failure here must not break the session.
+ */
+async function buildAutoMountPreamble(
+  attached: Array<{ kind?: string; id?: string; displayName?: string }>,
+  workspaceId: string,
+): Promise<string> {
+  try {
+    const lakehouses = (attached || []).filter((a) => a && a.kind === 'lakehouse' && a.id);
+    if (lakehouses.length === 0) return '';
+    const { resolveLakehouseAbfss } = await import('@/lib/azure/lakehouse-abfss');
+    const { buildLakehouseMountPreamble } = await import('@/lib/notebook/lakehouse-mount-preamble');
+    const resolved: Array<{ displayName: string; abfss: string }> = [];
+    for (const lh of lakehouses) {
+      try {
+        const r = await resolveLakehouseAbfss(lh.id as string, workspaceId);
+        if (r) resolved.push({ displayName: lh.displayName || lh.id || 'lakehouse', abfss: r.abfss });
+      } catch { /* skip this source — honest, don't break the session */ }
+    }
+    return buildLakehouseMountPreamble(resolved);
+  } catch { return ''; }
+}
+
 export async function POST(req: NextRequest, ctx: { params: Promise<{ id: string }> }) {
   const s = getSession();
   if (!s) return err('unauthenticated', 401);
@@ -203,6 +231,22 @@ export async function POST(req: NextRequest, ctx: { params: Promise<{ id: string
             await submitLivyStatement(pool, sessionId, { code: AI_DISPLAY_PREAMBLE, kind: 'pyspark' });
           } catch { /* non-fatal — display() degrades to the built-in renderer */ }
         }
+
+        // Auto-mount attached lakehouses (issue #655) — inject the
+        // `loom_lakehouses` abfss preamble as a session statement on a FRESH
+        // pyspark session so every cell can read the lake without typing paths.
+        // Skipped on reuse (defined once per session) + non-pyspark kinds.
+        // Honest: unresolvable sources are omitted; empty preamble injects
+        // nothing. Non-fatal — a failure here must not break the run.
+        if (sessKind === 'pyspark') {
+          try {
+            const preamble = await buildAutoMountPreamble(state.attachedSources || [], workspaceId);
+            if (preamble) {
+              const { submitLivyStatement } = await import('@/lib/azure/synapse-dev-client');
+              await submitLivyStatement(pool, sessionId, { code: preamble, kind: 'pyspark' });
+            }
+          } catch { /* non-fatal — user can still type paths manually */ }
+        }
       }
       const runIdStr = `spark:${pool}:${sessionId}`;
 
@@ -248,9 +292,19 @@ export async function POST(req: NextRequest, ctx: { params: Promise<{ id: string
         effectiveStmtKind === 'sql' ? 'SQL' :
         effectiveStmtKind === 'sparkr' ? 'R' :
         'PYTHON';
+      // Auto-mount attached lakehouses (issue #655). Databricks one-time runs
+      // are isolated (no reused interactive session), so the `loom_lakehouses`
+      // dict must be prepended to each PYTHON run for the cell to reference it.
+      // Honest: unresolvable sources are omitted; empty preamble prepends
+      // nothing. Non-fatal — falls back to the raw code on any error.
+      let dbCode = code;
+      if (dbLang === 'PYTHON') {
+        const preamble = await buildAutoMountPreamble(state.attachedSources || [], workspaceId);
+        if (preamble) dbCode = `${preamble}\n\n${code}`;
+      }
       const runRes = await runOneTimeNotebook({
         clusterId,
-        code,
+        code: dbCode,
         lang: dbLang,
         jobName: `loom-${nb.displayName.replace(/[^a-zA-Z0-9-_]/g, '_').slice(0, 40)}${cellId ? '-' + cellId.slice(0, 6) : ''}`,
       });
