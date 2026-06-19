@@ -657,11 +657,39 @@ export function aasSuffix(): string {
 }
 
 /**
- * AAD token scope for AAS data-plane calls. Per Microsoft Learn the literal
- * `*` character must appear as the subdomain — it is NOT a wildcard:
- *   "the audience must have the `*` character as the subdomain"
+ * AAD token scope for AAS data-plane calls.
+ *
+ * **No-arg form** (existing behaviour): returns the wildcard-subdomain audience
+ * `https://*.asazure.windows.net` (or the Gov equivalent). Per Microsoft Learn
+ * the literal `*` is NOT a wildcard — it is the required subdomain character.
+ *
+ * **Server-URI form** (new): when an `asazure://` URI is supplied, derives a
+ * per-host `.default` scope by extracting the host from the URI:
+ *   `asazure://eastus.asazure.windows.net/myserver`
+ *     → `https://eastus.asazure.windows.net/.default`
+ * This form is used by the XMLA DAX-query path (tabular-eval-client.ts) where
+ * the token audience must match the exact server host, not the wildcard.
+ *
+ * Throws when called in Azure Government (GCC-High / IL5 / DoD) with a server
+ * URI, because AAS is not available in those clouds — the caller must fall back
+ * to the loom-native backend.
  */
-export function aasScope(): string {
+export function aasScope(serverUri?: string): string {
+  if (serverUri) {
+    if (isGovCloud()) {
+      throw new Error(
+        'Azure Analysis Services is not available in Azure Government (GCC-High / IL5 / DoD). ' +
+          'Use the Loom-native backend (LOOM_SEMANTIC_BACKEND=loom-native, the default) instead.',
+      );
+    }
+    // Extract the host from an asazure:// URI or pass through an https:// host.
+    const m = serverUri.match(/^asazure:\/\/([^/]+)\//i);
+    if (m) return `https://${m[1]}/.default`;
+    // https:// form — strip scheme and path to get the bare host.
+    const h = serverUri.replace(/^https?:\/\//i, '').split('/')[0];
+    if (h) return `https://${h}/.default`;
+    throw new Error(`aasScope: cannot derive host from server URI "${serverUri}"`);
+  }
   return `https://*.${aasSuffix()}`;
 }
 

@@ -1,7 +1,3 @@
-// SKIPPED: tests a planned extraction of the network-free XMLA helpers
-// (buildSoapEnvelope/extractFault/parseXmlaRows/requireXmlaUrl/resolveDatabase)
-// from aas-client.ts into aas-tmsl.ts. Un-skip when that refactor lands. See
-// no-vaporware.md — do not add dead/duplicate exports just to green this.
 /**
  * aas-tmsl — unit tests for the network-free core of the Azure Analysis
  * Services XMLA client: server-base parsing, SOAP envelope escaping, fault
@@ -39,7 +35,7 @@ afterEach(() => {
   process.env = { ...SAVED };
 });
 
-describe.skip('aas-tmsl — configuration gate', () => {
+describe('aas-tmsl — configuration gate', () => {
   it('isAasConfigured() is false when LOOM_AAS_SERVER is unset', () => {
     expect(isAasConfigured()).toBe(false);
     expect(aasDefaultDatabase()).toBe('');
@@ -74,7 +70,7 @@ describe.skip('aas-tmsl — configuration gate', () => {
   });
 });
 
-describe.skip('aas-tmsl — SOAP envelope', () => {
+describe('aas-tmsl — SOAP envelope', () => {
   it('escapes &, <, > in DAX so the envelope stays valid XML', () => {
     const env = buildSoapEnvelope('DB1', 'EVALUATE FILTER(Sales, Sales[Amount] > 5 && Sales[Qty] < 10 & TRUE)');
     expect(env).toContain('&gt; 5 &amp;&amp; ');
@@ -86,7 +82,7 @@ describe.skip('aas-tmsl — SOAP envelope', () => {
   });
 });
 
-describe.skip('aas-tmsl — fault + row parsing', () => {
+describe('aas-tmsl — fault + row parsing', () => {
   it('extractFault() reads <faultstring> with and without namespace prefix', () => {
     expect(extractFault('<soap:Fault><soap:faultstring>Boom happened</soap:faultstring></soap:Fault>')).toBe('Boom happened');
     expect(extractFault('<Fault><faultstring>Plain fault</faultstring></Fault>')).toBe('Plain fault');

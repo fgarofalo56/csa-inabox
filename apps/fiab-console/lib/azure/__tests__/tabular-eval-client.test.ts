@@ -149,11 +149,7 @@ describe('resolveBackend — default loom-native, AAS opt-in, gov forced', () =>
   });
 });
 
-// SKIPPED: asserts a planned aasScope(serverUri) signature that derives a
-// per-host /.default scope from an asazure:// URI. The version on main takes no
-// argument (wildcard audience). Un-skip when aasScope is extended to accept a
-// server URI. See no-vaporware.md — do not add the signature just to green this.
-describe.skip('aasScope / aasXmlaUrl — Azure-native (NOT Power BI) endpoints', () => {
+describe('aasScope / aasXmlaUrl — Azure-native (NOT Power BI) endpoints', () => {
   it('derives the .default scope from the AAS server host (Commercial)', () => {
     commercial();
     expect(aasScope('asazure://eastus.asazure.windows.net/loomaas')).toBe(
