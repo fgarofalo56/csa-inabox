@@ -70,7 +70,8 @@ vi.mock('@/lib/azure/container-apps-arm-client', async (importOriginal) => {
   };
 });
 
-vi.mock('@/lib/azure/cloud-endpoints', () => ({
+vi.mock('@/lib/azure/cloud-endpoints', async (importOriginal) => ({
+  ...(await importOriginal() as any),
   isGovCloud: () => false,
   cloudBoundaryLabel: () => 'Commercial',
 }));

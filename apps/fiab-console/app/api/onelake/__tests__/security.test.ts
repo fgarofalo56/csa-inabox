@@ -35,7 +35,8 @@ vi.mock('@/lib/azure/unity-catalog-client', () => ({
   listPermissions: vi.fn(),
   UnityCatalogNotConfiguredError: class extends Error {},
 }));
-vi.mock('@/lib/azure/cloud-endpoints', () => ({
+vi.mock('@/lib/azure/cloud-endpoints', async (importOriginal) => ({
+  ...(await importOriginal() as any),
   isGovCloud: vi.fn(() => false),
   graphBase: vi.fn(() => 'https://graph.microsoft.com/v1.0'),
   graphScope: vi.fn(() => 'https://graph.microsoft.com/.default'),

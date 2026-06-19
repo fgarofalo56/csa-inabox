@@ -52,7 +52,7 @@ const H = vi.hoisted(() => {
 });
 
 vi.mock('@/lib/auth/session', () => ({ getSession: vi.fn() }));
-vi.mock('@/lib/azure/cloud-endpoints', () => ({ detectLoomCloud: vi.fn(), isGovCloud: vi.fn() }));
+vi.mock('@/lib/azure/cloud-endpoints', async (importOriginal) => ({ ...(await importOriginal() as any), detectLoomCloud: vi.fn(), isGovCloud: vi.fn() }));
 vi.mock('@/lib/azure/unity-catalog-client', () => ({
   getTableLineage: vi.fn(),
   getTableLineageSystemTables: vi.fn(),

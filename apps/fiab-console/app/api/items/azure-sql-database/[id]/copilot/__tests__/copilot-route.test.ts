@@ -38,7 +38,8 @@ vi.mock('@/lib/azure/copilot-config-store', () => ({
 
 // Default suffix is Gov so we can prove the bare-name → openai.azure.us host.
 const getOpenAiSuffixMock = vi.fn(() => 'openai.azure.us');
-vi.mock('@/lib/azure/cloud-endpoints', () => ({
+vi.mock('@/lib/azure/cloud-endpoints', async (importOriginal) => ({
+  ...(await importOriginal() as any),
   cogScope: () => 'https://cognitiveservices.azure.us/.default',
   getOpenAiSuffix: () => getOpenAiSuffixMock(),
 }));

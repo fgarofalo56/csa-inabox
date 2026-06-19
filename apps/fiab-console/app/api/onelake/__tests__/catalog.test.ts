@@ -35,7 +35,8 @@ vi.mock('@/lib/azure/onelake-catalog-client', () => ({
   listOneLakeWorkspaces: vi.fn(),
   listAllOneLakeItems: vi.fn(),
 }));
-vi.mock('@/lib/azure/cloud-endpoints', () => ({
+vi.mock('@/lib/azure/cloud-endpoints', async (importOriginal) => ({
+  ...(await importOriginal() as any),
   assertFabricFamilyAvailable: vi.fn(),
 }));
 vi.mock('@/lib/azure/domains-client', () => ({
