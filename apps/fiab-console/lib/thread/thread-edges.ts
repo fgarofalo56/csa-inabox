@@ -66,14 +66,21 @@ export interface RecordEdgeInput {
  * Record a Thread edge. Best-effort — swallows errors so an edge action never
  * fails because of the observability write. `createdAt` is stamped by the
  * caller-free `new Date()` at write time (server route context).
+ *
+ * After the Cosmos upsert, if `LOOM_PURVIEW_ACCOUNT` is set, this also emits
+ * an Atlas Process lineage edge into Microsoft Purview so the Data Map lineage
+ * graph reflects the same Weave connections stored in Cosmos. The Purview emit
+ * is doubly-wrapped in best-effort (never throws into recordThreadEdge).
  */
 export async function recordThreadEdge(session: SessionPayload, input: RecordEdgeInput): Promise<void> {
+  let edgeId: string | undefined;
   try {
     const tenantId = session.claims.oid;
     const container = await threadEdgesContainer();
     const now = new Date().toISOString();
+    edgeId = `edge_${tenantId}_${input.fromItemId}_${input.toItemId}_${input.action}`.replace(/[^A-Za-z0-9_-]/g, '_');
     const doc: ThreadEdge = {
-      id: `edge_${tenantId}_${input.fromItemId}_${input.toItemId}_${input.action}`.replace(/[^A-Za-z0-9_-]/g, '_'),
+      id: edgeId,
       tenantId,
       fromItemId: input.fromItemId,
       fromType: input.fromType,
@@ -89,6 +96,60 @@ export async function recordThreadEdge(session: SessionPayload, input: RecordEdg
     };
     // Upsert so re-weaving the same pair/action refreshes (not duplicates) the edge.
     await container.items.upsert(doc);
+
+    // ── Purview Atlas lineage emit (best-effort, fire-and-forget) ────────────
+    // Emit a Process entity into Purview so the Data Map lineage graph mirrors
+    // the Loom Weave edge just written to Cosmos. We only proceed when:
+    //   1. LOOM_PURVIEW_ACCOUNT is configured (gate, no-op otherwise).
+    //   2. Both endpoints have a purviewGuid in their item state (resolved via
+    //      best-effort Cosmos reads below). If either GUID is missing the emit
+    //      is skipped — we do NOT block on Purview registration side-effects.
+    // This block is doubly-wrapped (outer try below + inner try here) so ANY
+    // error path in the Purview emit is isolated from the main edge record.
+    if (process.env.LOOM_PURVIEW_ACCOUNT && edgeId) {
+      void (async () => {
+        try {
+          const { createAtlasLineage } = await import('@/lib/azure/purview-client');
+          const { itemsContainer } = await import('@/lib/azure/cosmos-client');
+          const items = await itemsContainer();
+          // Resolve both endpoints' purviewGuid from their Cosmos item state.
+          // toExternal items are not Loom items — skip Purview emit for them.
+          if (input.toExternal) return;
+          const [fromRead, toRead] = await Promise.allSettled([
+            items.items
+              .query<{ state?: { purviewGuid?: string } }>({
+                query: 'SELECT c.state FROM c WHERE c.id = @id',
+                parameters: [{ name: '@id', value: input.fromItemId }],
+              })
+              .fetchAll(),
+            items.items
+              .query<{ state?: { purviewGuid?: string } }>({
+                query: 'SELECT c.state FROM c WHERE c.id = @id',
+                parameters: [{ name: '@id', value: input.toItemId }],
+              })
+              .fetchAll(),
+          ]);
+          const fromGuid = fromRead.status === 'fulfilled'
+            ? fromRead.value.resources?.[0]?.state?.purviewGuid
+            : undefined;
+          const toGuid = toRead.status === 'fulfilled'
+            ? toRead.value.resources?.[0]?.state?.purviewGuid
+            : undefined;
+          // Skip emit when either GUID is missing — Purview lineage requires
+          // both endpoints to exist as Atlas entities with known GUIDs.
+          if (!fromGuid || !toGuid) return;
+          await createAtlasLineage({
+            inputs: [fromGuid],
+            outputs: [toGuid],
+            processQualifiedName: `loom://process/${edgeId}`,
+            processName: `${input.fromName || input.fromItemId} → ${input.toName || input.toItemId} (${input.action})`,
+          });
+        } catch {
+          /* Purview lineage emit is best-effort — never surface into the caller */
+        }
+      })();
+    }
+    // ── end Purview emit ─────────────────────────────────────────────────────
   } catch {
     /* observability write is best-effort — never block the edge action */
   }
