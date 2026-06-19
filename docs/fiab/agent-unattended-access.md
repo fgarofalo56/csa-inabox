@@ -193,3 +193,34 @@ health score and the word "check", which catches a complete front-end crash.
   runner filesystem.
 - No browser opens, no interactive login prompt is shown, no MFA challenge is
   issued — the entire auth chain is HKDF + AES-GCM in Node.js.
+
+---
+
+## Unattended UI/API verification — the WORKING path (in-VNet Container App Job)
+
+> The GitHub-Actions workflow above only works with a **self-hosted/VNet runner**:
+> the loom estate is fully private (Key Vault / ACR / Purview `publicNetworkAccess=Disabled`),
+> so a public GitHub-hosted runner cannot reach the KV data plane to read `SESSION_SECRET`.
+> The path that works today is a **Container App Job inside the console's VNet**.
+
+**`loom-verify`** (deployed by `scripts/csa-loom/deploy-loom-verify-job.sh`) runs in
+`cae-csa-loom-centralus` using the **console image** + the **console UAMI** (already has
+AcrPull + KV access). It mints a `loom_session` cookie from the console's `SESSION_SECRET`
+(the app's own AES-256-GCM/HKDF scheme, `lib/auth/session.ts`) with the tenant-admin oid and
+a labelled `loom-ui-verify@automation` upn, then probes the key admin/security/governance
+APIs. No MFA, no user credentials, nothing exposed publicly.
+
+**Run it (fully unattended):**
+```
+az containerapp job start -n loom-verify -g rg-csa-loom-admin-centralus --subscription <sub>
+# read the result from Log Analytics (cae workspace):
+#   ContainerAppConsoleLogs_CL | where ContainerName_s == 'verify' and Log_s has 'LOOM_VERIFY_RESULT'
+# Expect: {"/api/admin/self-audit":200, ".../purview/sources":200, ".../scans":200,
+#          ".../mip/labels":200, ".../dspm-ai...":200, ".../domains/purview-status":200}
+```
+A non-200/401 on any endpoint exits the job non-zero (Failed) — that's the alert signal.
+
+**Secret note:** the job's `session-secret` is set from the console's **literal** value
+(read via ARM), because the console's `SESSION_SECRET` is not currently KV-backed/synced —
+see the tracked desync issue. Once the console secret is KV-backed + synced, switch the job
+secret to a `keyvaultref`.

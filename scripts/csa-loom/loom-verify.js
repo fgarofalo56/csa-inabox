@@ -1,0 +1,11 @@
+const crypto=require('crypto');
+const ss=process.env.SESSION_SECRET;
+const url=(process.env.LOOM_URL||'').replace(/\/+$/,'');
+const claims={oid:process.env.LOOM_AUTOMATION_OID,name:process.env.LOOM_AUTOMATION_NAME||'verify',upn:process.env.LOOM_AUTOMATION_UPN||'verify@auto'};
+const exp=Math.floor(Date.now()/1000)+3600;
+const key=Buffer.from(crypto.hkdfSync('sha256',Buffer.from(ss,'utf-8'),Buffer.alloc(32),Buffer.from('loom-session-v1'),32));
+const iv=crypto.randomBytes(12);const c=crypto.createCipheriv('aes-256-gcm',key,iv);
+const enc=Buffer.concat([c.update(Buffer.from(JSON.stringify({claims,exp}))),c.final()]);const tag=c.getAuthTag();
+const cookie='loom_session='+Buffer.concat([iv,tag,enc]).toString('base64url');
+const eps=['/api/admin/self-audit','/api/admin/security/purview/sources','/api/governance/scans','/api/admin/security/mip/labels','/api/admin/dspm-ai?days=30','/api/admin/domains/purview-status'];
+(async()=>{let fail=0;const out={};for(const e of eps){try{const r=await fetch(url+e,{headers:{cookie}});out[e]=r.status;if(r.status>=500||r.status===401)fail++;}catch(x){out[e]='ERR:'+(x&&x.message);fail++;}}console.log('LOOM_VERIFY_RESULT '+JSON.stringify(out));console.log(fail?('VERIFY_FAIL count='+fail):'VERIFY_PASS');process.exit(fail?1:0);})();
