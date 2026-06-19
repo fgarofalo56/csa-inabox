@@ -16,20 +16,21 @@
 import { clientFetch } from '@/lib/client-fetch';
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import {
-  Badge, Caption1, Body1, Input, Button, Title3,
+  Badge, Caption1, Body1, Button, Title3,
   MessageBar, MessageBarBody, MessageBarTitle,
   Drawer, DrawerHeader, DrawerHeaderTitle, DrawerBody,
   Field, Dropdown, Option, Textarea, Divider,
   makeStyles, tokens,
 } from '@fluentui/react-components';
 import {
-  Search24Regular, ArrowSync24Regular, Open16Regular, Dismiss24Regular,
+  ArrowSync24Regular, Open16Regular, Dismiss24Regular,
   ShieldCheckmark16Regular, BranchFork16Regular, Key16Regular, Open20Regular,
   Eye16Regular, DatabaseSearch20Regular,
 } from '@fluentui/react-icons';
 import { useRouter } from 'next/navigation';
 import { GovernanceShell } from '@/lib/components/governance-shell';
 import { LoomDataTable, type LoomColumn } from '@/lib/components/ui/loom-data-table';
+import { Section, Toolbar } from '@/lib/components/ui/section';
 
 interface Asset {
   id: string;
@@ -63,34 +64,12 @@ interface Facets {
 interface DomainOption { id: string; name: string; }
 
 const useStyles = makeStyles({
-  toolbar: {
-    display: 'flex', gap: 12, alignItems: 'center', marginBottom: 12,
-    paddingBottom: 12, borderBottom: `1px solid ${tokens.colorNeutralStroke2}`,
-    flexWrap: 'wrap',
-  },
-  spacer: { flex: 1 },
-  filterChip: {
-    fontSize: 12,
-    color: tokens.colorNeutralForeground3,
-    padding: '4px 10px', borderRadius: 999,
-    backgroundColor: tokens.colorNeutralBackground2,
-    cursor: 'pointer',
-    border: `1px solid ${tokens.colorNeutralStroke2}`,
-  },
-  filterChipActive: {
-    backgroundColor: tokens.colorBrandBackground2,
-    borderColor: tokens.colorBrandStroke2,
-    color: tokens.colorBrandForeground1,
-  },
-  classChips: { display: 'flex', gap: 4, flexWrap: 'wrap' },
+  classChips: { display: 'flex', gap: tokens.spacingHorizontalXS, flexWrap: 'wrap' },
   classChip: {
-    fontSize: 11, padding: '2px 8px', borderRadius: 999,
+    fontSize: tokens.fontSizeBase200, padding: `2px ${tokens.spacingHorizontalS}`,
+    borderRadius: tokens.borderRadiusCircular,
     backgroundColor: tokens.colorPaletteBlueBackground2,
     color: tokens.colorPaletteBlueForeground2,
-  },
-  tableWrap: {
-    border: `1px solid ${tokens.colorNeutralStroke2}`,
-    borderRadius: 8, overflow: 'auto',
   },
   clickRow: { cursor: 'pointer' },
   drawer: { width: '440px', maxWidth: '94vw' },
@@ -99,6 +78,7 @@ const useStyles = makeStyles({
   metaLabel: { color: tokens.colorNeutralForeground3 },
   actions: { display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalS },
   actionRow: { display: 'flex', gap: tokens.spacingHorizontalS, flexWrap: 'wrap' },
+  filterChips: { display: 'flex', gap: tokens.spacingHorizontalXS, flexWrap: 'wrap', marginBottom: tokens.spacingVerticalM },
 });
 
 const TYPE_ORDER = ['lakehouse', 'warehouse', 'semantic-model', 'kql-database', 'eventhouse', 'mirrored-database', 'data-product', 'vector-store'];
@@ -302,63 +282,62 @@ export default function GovernanceCatalogPage() {
         )}
       </Body1>
 
-      <div className={s.toolbar}>
-        <Input
-          contentBefore={<Search24Regular />}
-          placeholder="Search assets, owners, classifications…"
-          value={q}
-          onChange={(_, d) => setQ(d.value)}
-          style={{ flex: 1, minWidth: 240, maxWidth: 420 }}
-        />
-        <Field style={{ minWidth: 170 }}>
-          <Dropdown
-            aria-label="Domain scope"
-            value={domainName}
-            selectedOptions={[domainFilter]}
-            onOptionSelect={(_, d) => setDomainFilter(d.optionValue || '')}
-          >
-            <Option value="">All domains</Option>
-            {domains.map((dm) => (
-              <Option key={dm.id} value={dm.id} text={dm.name}>
-                {dm.name}{domainCounts.has(dm.id) ? ` (${domainCounts.get(dm.id)})` : ''}
-              </Option>
-            ))}
-          </Dropdown>
-        </Field>
-        {endorsementOptions.length > 0 && (
-          <Dropdown
-            aria-label="Endorsement"
-            style={{ minWidth: 150 }}
-            value={endorsementFilter || 'Any endorsement'}
-            selectedOptions={[endorsementFilter]}
-            onOptionSelect={(_, d) => setEndorsementFilter(d.optionValue || '')}
-          >
-            <Option value="">Any endorsement</Option>
-            {endorsementOptions.map((v) => <Option key={v} value={v}>{v}</Option>)}
-          </Dropdown>
-        )}
-        {sensitivityOptions.length > 0 && (
-          <Dropdown
-            aria-label="Sensitivity"
-            style={{ minWidth: 150 }}
-            value={sensitivityFilter || 'Any sensitivity'}
-            selectedOptions={[sensitivityFilter]}
-            onOptionSelect={(_, d) => setSensitivityFilter(d.optionValue || '')}
-          >
-            <Option value="">Any sensitivity</Option>
-            {sensitivityOptions.map((v) => <Option key={v} value={v}>{v}</Option>)}
-          </Dropdown>
-        )}
-        <div className={s.spacer} />
-        <Caption1 style={{ color: tokens.colorNeutralForeground3 }}>
-          {total} asset{total === 1 ? '' : 's'}
-        </Caption1>
-        <Button appearance="subtle" icon={<DatabaseSearch20Regular />} onClick={reindex} disabled={reindexBusy}
-          title="Rebuild the AI Search catalog index from Cosmos">
-          {reindexBusy ? 'Rebuilding…' : 'Rebuild index'}
-        </Button>
-        <Button icon={<ArrowSync24Regular />} onClick={load} disabled={loading}>Refresh</Button>
-      </div>
+      <Toolbar
+        search={q}
+        onSearch={setQ}
+        searchPlaceholder="Search assets, owners, classifications…"
+        actions={
+          <>
+            <Field style={{ minWidth: 170 }}>
+              <Dropdown
+                aria-label="Domain scope"
+                value={domainName}
+                selectedOptions={[domainFilter]}
+                onOptionSelect={(_, d) => setDomainFilter(d.optionValue || '')}
+              >
+                <Option value="">All domains</Option>
+                {domains.map((dm) => (
+                  <Option key={dm.id} value={dm.id} text={dm.name}>
+                    {dm.name}{domainCounts.has(dm.id) ? ` (${domainCounts.get(dm.id)})` : ''}
+                  </Option>
+                ))}
+              </Dropdown>
+            </Field>
+            {endorsementOptions.length > 0 && (
+              <Dropdown
+                aria-label="Endorsement"
+                style={{ minWidth: 150 }}
+                value={endorsementFilter || 'Any endorsement'}
+                selectedOptions={[endorsementFilter]}
+                onOptionSelect={(_, d) => setEndorsementFilter(d.optionValue || '')}
+              >
+                <Option value="">Any endorsement</Option>
+                {endorsementOptions.map((v) => <Option key={v} value={v}>{v}</Option>)}
+              </Dropdown>
+            )}
+            {sensitivityOptions.length > 0 && (
+              <Dropdown
+                aria-label="Sensitivity"
+                style={{ minWidth: 150 }}
+                value={sensitivityFilter || 'Any sensitivity'}
+                selectedOptions={[sensitivityFilter]}
+                onOptionSelect={(_, d) => setSensitivityFilter(d.optionValue || '')}
+              >
+                <Option value="">Any sensitivity</Option>
+                {sensitivityOptions.map((v) => <Option key={v} value={v}>{v}</Option>)}
+              </Dropdown>
+            )}
+            <Caption1 style={{ color: tokens.colorNeutralForeground3 }}>
+              {total} asset{total === 1 ? '' : 's'}
+            </Caption1>
+            <Button appearance="subtle" icon={<DatabaseSearch20Regular />} onClick={reindex} disabled={reindexBusy}
+              title="Rebuild the AI Search catalog index from Cosmos">
+              {reindexBusy ? 'Rebuilding…' : 'Rebuild index'}
+            </Button>
+            <Button icon={<ArrowSync24Regular />} onClick={load} disabled={loading}>Refresh</Button>
+          </>
+        }
+      />
 
       {reindexMsg && (
         <MessageBar intent={reindexMsg.ok ? 'success' : 'warning'} style={{ marginBottom: 12 }}>
@@ -367,25 +346,31 @@ export default function GovernanceCatalogPage() {
       )}
 
       {typeChips.length > 0 && (
-        <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', marginBottom: 12 }}>
-          <span
-            className={`${s.filterChip} ${!typeFilter ? s.filterChipActive : ''}`}
+        <div className={s.filterChips}>
+          <Badge
+            appearance={!typeFilter ? 'filled' : 'tint'}
+            color={!typeFilter ? 'brand' : 'informative'}
+            size="medium"
+            style={{ cursor: 'pointer' }}
             onClick={() => setTypeFilter('')}
             role="button"
             tabIndex={0}
           >
             All ({total})
-          </span>
+          </Badge>
           {typeChips.map((t) => (
-            <span
+            <Badge
               key={t}
-              className={`${s.filterChip} ${typeFilter === t ? s.filterChipActive : ''}`}
+              appearance={typeFilter === t ? 'filled' : 'tint'}
+              color={typeFilter === t ? 'brand' : 'informative'}
+              size="medium"
+              style={{ cursor: 'pointer' }}
               onClick={() => setTypeFilter(t === typeFilter ? '' : t)}
               role="button"
               tabIndex={0}
             >
               {typeLabel(t)} ({typeCounts.get(t) || 0})
-            </span>
+            </Badge>
           ))}
         </div>
       )}

@@ -10,6 +10,7 @@ import {
 import { ArrowSync24Regular, Open16Regular } from '@fluentui/react-icons';
 import { GovernanceShell } from '@/lib/components/governance-shell';
 import { LoomDataTable, type LoomColumn } from '@/lib/components/ui/loom-data-table';
+import { Section, Toolbar } from '@/lib/components/ui/section';
 
 interface Distribution { label: string; count: number; }
 interface LabeledItem { id: string; displayName: string; itemType: string; workspaceName?: string; label: string; }
@@ -21,19 +22,20 @@ interface Resp {
 const useStyles = makeStyles({
   statsRow: {
     display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(180px, 1fr))',
-    gap: 12, marginBottom: 20,
+    gap: tokens.spacingHorizontalM, marginBottom: tokens.spacingVerticalXL,
   },
   statCard: {
-    padding: 16, borderRadius: 8,
+    padding: tokens.spacingVerticalL, borderRadius: tokens.borderRadiusLarge,
     border: `1px solid ${tokens.colorNeutralStroke2}`,
     backgroundColor: tokens.colorNeutralBackground1,
+    boxShadow: tokens.shadow2,
   },
-  statVal: { fontSize: 28, fontWeight: 600, color: tokens.colorBrandForeground1 },
-  statLabel: { fontSize: 12, color: tokens.colorNeutralForeground3 },
-  empty: { padding: 32, color: tokens.colorNeutralForeground3, fontSize: 13, textAlign: 'center' },
-  labelGrid: { display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(200px, 1fr))', gap: 12, marginBottom: 20 },
+  statVal: { fontSize: tokens.fontSizeHero700, fontWeight: tokens.fontWeightSemibold, color: tokens.colorBrandForeground1 },
+  statLabel: { fontSize: tokens.fontSizeBase200, color: tokens.colorNeutralForeground3 },
+  empty: { padding: tokens.spacingVerticalXXL, color: tokens.colorNeutralForeground3, fontSize: tokens.fontSizeBase200, textAlign: 'center' },
+  labelGrid: { display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(200px, 1fr))', gap: tokens.spacingHorizontalM, marginBottom: tokens.spacingVerticalXL },
   labelCard: {
-    display: 'flex', flexDirection: 'column', gap: 8, padding: 16, cursor: 'pointer',
+    display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalS, padding: tokens.spacingVerticalL, cursor: 'pointer',
     border: `1px solid ${tokens.colorNeutralStroke2}`, borderLeftWidth: '4px',
     borderRadius: tokens.borderRadiusLarge, backgroundColor: tokens.colorNeutralBackground1,
     boxShadow: tokens.shadow2, textAlign: 'left', width: '100%',
@@ -41,9 +43,9 @@ const useStyles = makeStyles({
   },
   labelCardSel: { outline: `2px solid ${tokens.colorBrandStroke1}`, outlineOffset: '-1px' },
   labelCardTop: { display: 'flex', alignItems: 'center', justifyContent: 'space-between' },
-  labelCount: { fontSize: 26, fontWeight: 700, color: tokens.colorNeutralForeground1 },
-  bar: { height: 6, borderRadius: 3, backgroundColor: tokens.colorNeutralBackground4, overflow: 'hidden' },
-  barFill: { height: '100%', borderRadius: 3 },
+  labelCount: { fontSize: tokens.fontSizeHero700, fontWeight: tokens.fontWeightBold, color: tokens.colorNeutralForeground1 },
+  bar: { height: '6px', borderRadius: tokens.borderRadiusSmall, backgroundColor: tokens.colorNeutralBackground4, overflow: 'hidden' },
+  barFill: { height: '100%', borderRadius: tokens.borderRadiusSmall },
 });
 
 function labelColor(l: string): 'subtle' | 'informative' | 'warning' | 'danger' | 'severe' {
@@ -102,9 +104,7 @@ export default function SensitivityPage() {
         derived live from each item's <code>state.sensitivityLabel</code> field.
       </Body1>
 
-      <div style={{ display: 'flex', justifyContent: 'flex-end', marginBottom: 12 }}>
-        <Button icon={<ArrowSync24Regular />} onClick={load} disabled={loading}>Refresh</Button>
-      </div>
+      <Toolbar actions={<Button icon={<ArrowSync24Regular />} onClick={load} disabled={loading}>Refresh</Button>} />
 
       {error && (
         <MessageBar intent="error">

@@ -21,6 +21,7 @@ import {
 import { ArrowSync24Regular, Settings20Regular } from '@fluentui/react-icons';
 import Link from 'next/link';
 import { GovernanceShell } from '@/lib/components/governance-shell';
+import { Toolbar } from '@/lib/components/ui/section';
 import { DomainImageChip } from '@/lib/components/domain-image-presets';
 
 interface Domain {
@@ -37,23 +38,26 @@ const SCOPE_LABEL: Record<string, string> = {
 };
 
 const useStyles = makeStyles({
-  grid: { display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(280px, 1fr))', gap: 16, marginTop: 16 },
+  grid: { display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(280px, 1fr))', gap: tokens.spacingHorizontalL, marginTop: tokens.spacingVerticalL },
   card: {
-    display: 'flex', flexDirection: 'column', gap: 10, padding: 16,
+    display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalM, padding: tokens.spacingVerticalL,
     border: `1px solid ${tokens.colorNeutralStroke2}`, borderRadius: tokens.borderRadiusLarge,
     backgroundColor: tokens.colorNeutralBackground1, boxShadow: tokens.shadow2,
   },
-  cardHead: { display: 'flex', alignItems: 'center', gap: 12 },
-  badgeRow: { display: 'flex', flexWrap: 'wrap', gap: 6 },
+  cardHead: { display: 'flex', alignItems: 'center', gap: tokens.spacingHorizontalM },
+  badgeRow: { display: 'flex', flexWrap: 'wrap', gap: tokens.spacingHorizontalS },
   statsRow: {
-    display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(150px, 1fr))', gap: 12, marginBottom: 4,
+    display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(150px, 1fr))',
+    gap: tokens.spacingHorizontalM, marginBottom: tokens.spacingVerticalS,
   },
   statCard: {
-    padding: 16, borderRadius: 8, border: `1px solid ${tokens.colorNeutralStroke2}`,
+    padding: tokens.spacingVerticalL, borderRadius: tokens.borderRadiusLarge,
+    border: `1px solid ${tokens.colorNeutralStroke2}`,
     backgroundColor: tokens.colorNeutralBackground1,
+    boxShadow: tokens.shadow2,
   },
-  statVal: { fontSize: 28, fontWeight: 600, color: tokens.colorBrandForeground1 },
-  statLabel: { fontSize: 12, color: tokens.colorNeutralForeground3 },
+  statVal: { fontSize: tokens.fontSizeHero700, fontWeight: tokens.fontWeightSemibold, color: tokens.colorBrandForeground1 },
+  statLabel: { fontSize: tokens.fontSizeBase200, color: tokens.colorNeutralForeground3 },
 });
 
 export default function GovernanceDomainsPage() {
@@ -111,9 +115,7 @@ export default function GovernanceDomainsPage() {
         <div className={s.statCard}><div className={s.statVal}>{stats.workspaces}</div><div className={s.statLabel}>Assigned workspaces</div></div>
       </div>
 
-      <div style={{ display: 'flex', justifyContent: 'flex-end' }}>
-        <Button icon={<ArrowSync24Regular />} onClick={load} disabled={loading}>Refresh</Button>
-      </div>
+      <Toolbar actions={<Button icon={<ArrowSync24Regular />} onClick={load} disabled={loading}>Refresh</Button>} />
 
       {loading && !domains ? (
         <Spinner label="Loading domains…" />

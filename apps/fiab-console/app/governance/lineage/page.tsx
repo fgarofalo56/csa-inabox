@@ -15,12 +15,13 @@ import { clientFetch } from '@/lib/client-fetch';
 import { Suspense, useEffect, useMemo, useState } from 'react';
 import { useSearchParams } from 'next/navigation';
 import {
-  Spinner, Badge, Caption1, Subtitle2, Body1, Input, Button,
+  Spinner, Badge, Caption1, Subtitle2, Body1, Button,
   MessageBar, MessageBarBody, MessageBarTitle,
   makeStyles, tokens,
 } from '@fluentui/react-components';
-import { ArrowSync24Regular, Search24Regular, Open16Regular } from '@fluentui/react-icons';
+import { ArrowSync24Regular, Open16Regular } from '@fluentui/react-icons';
 import { GovernanceShell } from '@/lib/components/governance-shell';
+import { Toolbar } from '@/lib/components/ui/section';
 import {
   STATUS_LABEL, STATUS_COLOR, type PropagationStatus,
 } from '@/lib/governance/label-propagation';
@@ -51,33 +52,24 @@ const PROP_DOT: Record<PropagationStatus, string> = {
 };
 
 const useStyles = makeStyles({
-  toolbar: {
-    display: 'flex', gap: 12, alignItems: 'center', marginBottom: 12,
-    paddingBottom: 12, borderBottom: `1px solid ${tokens.colorNeutralStroke2}`,
-  },
-  spacer: { flex: 1 },
-  pill: {
-    fontSize: 12, color: tokens.colorNeutralForeground3,
-    padding: '4px 10px', borderRadius: 999,
-    backgroundColor: tokens.colorNeutralBackground2,
-  },
   canvas: {
     border: `1px solid ${tokens.colorNeutralStroke2}`,
-    borderRadius: 8, overflow: 'auto',
+    borderRadius: tokens.borderRadiusLarge, overflow: 'auto',
     backgroundColor: tokens.colorNeutralBackground1,
-    minHeight: 480,
+    minHeight: '480px',
   },
   legend: {
-    display: 'flex', gap: 16, alignItems: 'center',
-    padding: 12,
-    color: tokens.colorNeutralForeground3, fontSize: 12,
+    display: 'flex', gap: tokens.spacingHorizontalL, alignItems: 'center',
+    padding: tokens.spacingVerticalM,
+    color: tokens.colorNeutralForeground3, fontSize: tokens.fontSizeBase200,
   },
   detail: {
-    padding: 16, borderTop: `1px solid ${tokens.colorNeutralStroke2}`,
+    padding: tokens.spacingVerticalL, borderTop: `1px solid ${tokens.colorNeutralStroke2}`,
     backgroundColor: tokens.colorNeutralBackground2,
+    borderRadius: `0 0 ${tokens.borderRadiusLarge} ${tokens.borderRadiusLarge}`,
   },
   empty: {
-    padding: 32, color: tokens.colorNeutralForeground3, fontSize: 13, textAlign: 'center',
+    padding: tokens.spacingVerticalXXL, color: tokens.colorNeutralForeground3, fontSize: tokens.fontSizeBase200, textAlign: 'center',
   },
 });
 
@@ -256,39 +248,38 @@ function LineageInner() {
         )}
       </Body1>
 
-      <div className={s.toolbar}>
-        <Input
-          contentBefore={<Search24Regular />}
-          placeholder="Filter by name, type, or workspace…"
-          value={q}
-          onChange={(_, d) => setQ(d.value)}
-          style={{ flex: 1, maxWidth: 480 }}
-        />
-        {focusId && focusLabel && (
-          <Badge appearance="tint" color="brand" size="large">
-            Focused: {focusLabel}
-            <Button size="small" appearance="transparent" onClick={() => { setFocusId(null); setSelectedId(null); }} style={{ minWidth: 'auto', marginLeft: 4 }}>Show all</Button>
-          </Badge>
-        )}
-        <div className={s.spacer} />
-        <Caption1 className={s.pill}>{filteredNodes.length} items</Caption1>
-        <Caption1 className={s.pill}>{filteredEdges.length} edges</Caption1>
-        {propMeta && (
-          <Badge
-            appearance="tint"
-            color={propMeta.pending > 0 ? 'warning' : 'success'}
-            size="large"
-            title={
-              propMeta.lastRunAt
-                ? `Label propagation last ran ${new Date(propMeta.lastRunAt).toLocaleString()} (source: ${propMeta.source})`
-                : 'Label-propagation timer Function has not written state yet — status shown is computed live'
-            }
-          >
-            {propMeta.pending > 0 ? `${propMeta.pending} label propagation pending` : 'Labels in sync'}
-          </Badge>
-        )}
-        <Button icon={<ArrowSync24Regular />} onClick={load} disabled={loading}>Refresh</Button>
-      </div>
+      <Toolbar
+        search={q}
+        onSearch={setQ}
+        searchPlaceholder="Filter by name, type, or workspace…"
+        actions={
+          <>
+            {focusId && focusLabel && (
+              <Badge appearance="tint" color="brand" size="large">
+                Focused: {focusLabel}
+                <Button size="small" appearance="transparent" onClick={() => { setFocusId(null); setSelectedId(null); }} style={{ minWidth: 'auto', marginLeft: 4 }}>Show all</Button>
+              </Badge>
+            )}
+            <Badge appearance="tint" color="informative" size="medium">{filteredNodes.length} items</Badge>
+            <Badge appearance="tint" color="informative" size="medium">{filteredEdges.length} edges</Badge>
+            {propMeta && (
+              <Badge
+                appearance="tint"
+                color={propMeta.pending > 0 ? 'warning' : 'success'}
+                size="large"
+                title={
+                  propMeta.lastRunAt
+                    ? `Label propagation last ran ${new Date(propMeta.lastRunAt).toLocaleString()} (source: ${propMeta.source})`
+                    : 'Label-propagation timer Function has not written state yet — status shown is computed live'
+                }
+              >
+                {propMeta.pending > 0 ? `${propMeta.pending} label propagation pending` : 'Labels in sync'}
+              </Badge>
+            )}
+            <Button icon={<ArrowSync24Regular />} onClick={load} disabled={loading}>Refresh</Button>
+          </>
+        }
+      />
 
       {error && (
         <MessageBar intent="error">
@@ -432,7 +423,7 @@ function LineageInner() {
                 Open editor <Open16Regular />
               </a>
 
-              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 16, marginTop: 12 }}>
+              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: tokens.spacingHorizontalL, marginTop: tokens.spacingVerticalM }}>
                 <div>
                   <Caption1 style={{ display: 'block', marginBottom: 4 }}>
                     <strong>Upstream ({selectedUpstream.length})</strong> — items that feed this one

@@ -23,6 +23,7 @@ import {
 import { ArrowSync24Regular, Settings24Regular, ShieldError24Regular } from '@fluentui/react-icons';
 import { GovernanceShell } from '@/lib/components/governance-shell';
 import { LoomDataTable, type LoomColumn } from '@/lib/components/ui/loom-data-table';
+import { Section, Toolbar } from '@/lib/components/ui/section';
 
 type Severity = 'low' | 'medium' | 'high';
 
@@ -66,39 +67,35 @@ const TIMEZONES = [
 const useStyles = makeStyles({
   statsRow: {
     display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(180px, 1fr))',
-    gap: 12, marginBottom: 20,
+    gap: tokens.spacingHorizontalM, marginBottom: tokens.spacingVerticalXL,
   },
   statCard: {
-    position: 'relative', padding: 16, borderRadius: 8, overflow: 'hidden',
+    position: 'relative', padding: tokens.spacingVerticalL, borderRadius: tokens.borderRadiusLarge, overflow: 'hidden',
     border: `1px solid ${tokens.colorNeutralStroke2}`,
     backgroundColor: tokens.colorNeutralBackground1,
+    boxShadow: tokens.shadow2,
     transition: 'box-shadow 120ms ease, transform 120ms ease',
     ':hover': { boxShadow: tokens.shadow8, transform: 'translateY(-1px)' },
   },
   statCardAlert: {
-    borderColor: tokens.colorPaletteRedBorder2,
-    '::before': {
-      content: '""', position: 'absolute', insetBlock: 0, insetInlineStart: 0, width: 3,
-      backgroundColor: tokens.colorPaletteRedBackground3,
-    },
+    borderTopColor: tokens.colorPaletteRedBorder2,
+    borderRightColor: tokens.colorPaletteRedBorder2,
+    borderBottomColor: tokens.colorPaletteRedBorder2,
+    borderLeftColor: tokens.colorPaletteRedBackground3,
+    borderLeftWidth: '3px',
   },
-  statVal: { fontSize: 28, fontWeight: 600, color: tokens.colorBrandForeground1, lineHeight: '32px' },
+  statVal: { fontSize: tokens.fontSizeHero700, fontWeight: tokens.fontWeightSemibold, color: tokens.colorBrandForeground1, lineHeight: '1.1' },
   statValAlert: { color: tokens.colorPaletteRedForeground1 },
-  statLabel: { fontSize: 12, color: tokens.colorNeutralForeground3 },
-  sectionHeader: { display: 'flex', alignItems: 'center', gap: 8, marginBottom: 8 },
-  settings: {
-    padding: 16, borderRadius: 8, marginBottom: 20,
-    border: `1px solid ${tokens.colorNeutralStroke2}`,
-    backgroundColor: tokens.colorNeutralBackground1,
-  },
+  statLabel: { fontSize: tokens.fontSizeBase200, color: tokens.colorNeutralForeground3 },
+  sectionHeader: { display: 'flex', alignItems: 'center', gap: tokens.spacingHorizontalS, marginBottom: tokens.spacingVerticalS },
   settingsGrid: {
-    display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(220px, 1fr))', gap: 16, marginTop: 12,
+    display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(220px, 1fr))',
+    gap: tokens.spacingHorizontalL, marginTop: tokens.spacingVerticalM,
   },
   indicatorRow: {
-    display: 'flex', flexDirection: 'column', gap: 2,
-    padding: '8px 0',
+    display: 'flex', flexDirection: 'column', gap: '2px',
+    padding: `${tokens.spacingVerticalS} 0`,
   },
-  toolbar: { display: 'flex', flexWrap: 'wrap', justifyContent: 'flex-end', gap: 8, marginBottom: 12 },
 });
 
 const sevColor = (s: Severity): 'danger' | 'warning' | 'informative' =>
@@ -160,21 +157,23 @@ export default function IrmPage() {
         Microsoft Fabric or Purview-IRM dependency.
       </Body1>
 
-      <div className={s.toolbar}>
-        <Dropdown
-          aria-label="Analysis window"
-          value={`Last ${days} days`}
-          selectedOptions={[String(days)]}
-          onOptionSelect={(_, dt) => { const d = Number(dt.optionValue); setDays(d); load(d); }}
-          style={{ minWidth: 150 }}
-        >
-          {[7, 14, 30, 60, 90].map((d) => <Option key={d} value={String(d)}>{`Last ${d} days`}</Option>)}
-        </Dropdown>
-        <Button icon={<Settings24Regular />} onClick={() => setShowSettings((v) => !v)} appearance={showSettings ? 'primary' : 'secondary'}>
-          Indicators &amp; thresholds
-        </Button>
-        <Button icon={<ArrowSync24Regular />} onClick={() => load()} disabled={loading}>Refresh</Button>
-      </div>
+      <Toolbar actions={
+        <>
+          <Dropdown
+            aria-label="Analysis window"
+            value={`Last ${days} days`}
+            selectedOptions={[String(days)]}
+            onOptionSelect={(_, dt) => { const d = Number(dt.optionValue); setDays(d); load(d); }}
+            style={{ minWidth: 150 }}
+          >
+            {[7, 14, 30, 60, 90].map((d) => <Option key={d} value={String(d)}>{`Last ${d} days`}</Option>)}
+          </Dropdown>
+          <Button icon={<Settings24Regular />} onClick={() => setShowSettings((v) => !v)} appearance={showSettings ? 'primary' : 'secondary'}>
+            Indicators &amp; thresholds
+          </Button>
+          <Button icon={<ArrowSync24Regular />} onClick={() => load()} disabled={loading}>Refresh</Button>
+        </>
+      } />
 
       {error && (
         <MessageBar intent="error">
@@ -195,9 +194,17 @@ export default function IrmPage() {
       )}
 
       {showSettings && draft && (
-        <div className={s.settings}>
-          <Subtitle2 style={{ display: 'block', marginBottom: 4 }}>Indicators</Subtitle2>
-          <Caption1 style={{ color: tokens.colorNeutralForeground3 }}>
+        <Section title="Indicators &amp; thresholds" actions={
+          <>
+            <Button appearance="primary" onClick={saveSettings} disabled={saving}>
+              {saving ? 'Saving…' : 'Save & recompute'}
+            </Button>
+            <Button appearance="subtle" onClick={() => { setDraft(data?.thresholds || draft); setShowSettings(false); }}>Cancel</Button>
+            {saveMsg && <Caption1 style={{ color: tokens.colorNeutralForeground3 }}>{saveMsg}</Caption1>}
+          </>
+        }>
+          <Subtitle2 style={{ display: 'block', marginBottom: tokens.spacingVerticalXS }}>Indicators</Subtitle2>
+          <Caption1 style={{ color: tokens.colorNeutralForeground3, display: 'block', marginBottom: tokens.spacingVerticalM }}>
             Like Purview IRM, indicators are off until you opt in. Toggle which signals contribute to risk.
           </Caption1>
           {(data?.indicators || []).map((ind) => (
@@ -213,8 +220,8 @@ export default function IrmPage() {
             </div>
           ))}
 
-          <Divider style={{ margin: '12px 0' }} />
-          <Subtitle2 style={{ display: 'block', marginBottom: 4 }}>Thresholds</Subtitle2>
+          <Divider style={{ margin: `${tokens.spacingVerticalM} 0` }} />
+          <Subtitle2 style={{ display: 'block', marginBottom: tokens.spacingVerticalXS }}>Thresholds</Subtitle2>
           <div className={s.settingsGrid}>
             <Field label="Volume z-score cutoff">
               <SpinButton value={draft.volumeZ} step={0.5} min={0} max={6}
@@ -254,14 +261,7 @@ export default function IrmPage() {
               <Switch checked={draft.flagWeekends} onChange={(_, dt) => patchDraft({ flagWeekends: !!dt.checked })} />
             </Field>
           </div>
-          <div style={{ display: 'flex', gap: 8, marginTop: 16, alignItems: 'center' }}>
-            <Button appearance="primary" onClick={saveSettings} disabled={saving}>
-              {saving ? 'Saving…' : 'Save & recompute'}
-            </Button>
-            <Button appearance="subtle" onClick={() => { setDraft(data?.thresholds || draft); setShowSettings(false); }}>Cancel</Button>
-            {saveMsg && <Caption1 style={{ color: tokens.colorNeutralForeground3 }}>{saveMsg}</Caption1>}
-          </div>
-        </div>
+        </Section>
       )}
 
       {loading && !error && <Spinner label="Computing insider-risk indicators…" />}
