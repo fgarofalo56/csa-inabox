@@ -54,7 +54,9 @@ export interface ScanServiceDef {
   /**
    * Bicep `loom<Svc>Enabled` flag, when the service has a provisioning toggle.
    * Services WITHOUT a flag are DLZ-provisioned with the platform (synapse,
-   * cosmos, eventhubs, databricks, adf) — they cannot be "disabled".
+   * cosmos, databricks, adf) — they cannot be "disabled". Event Hubs and Stream
+   * Analytics DO carry opt-out flags (loomEventHubEnabled /
+   * loomStreamAnalyticsEnabled), so they are disableable.
    */
   enabledFlag?: string;
   /**
@@ -72,7 +74,7 @@ export interface ScanServiceDef {
 }
 
 /**
- * The 11 Azure-native backends the Setup Wizard can scan + wire. Order matches
+ * The 12 Azure-native backends the Setup Wizard can scan + wire. Order matches
  * byo-wizard.sh's SERVICES array. `existing*` params are present only for the
  * services main.bicep declares them for (verified against
  * platform/fiab/bicep/main.bicep) — Maps has a flag only, so its reuse path is
@@ -193,6 +195,27 @@ export const SETUP_SCAN_SERVICES: ScanServiceDef[] = [
     envName: 'EXISTING_EVENTHUB_NAMESPACE',
     envRg: 'EXISTING_EVENTHUB_RG',
     envSub: 'EXISTING_EVENTHUB_SUB',
+    // main.bicep `param loomEventHubEnabled bool = true` (opt-out): set false to
+    // skip the namespace cost (the Eventstream / Data Explorer navigators then
+    // honest-gate). byo-wizard.sh flags this row the same way.
+    enabledFlag: 'loomEventHubEnabled',
+    defaultOn: true,
+  },
+  {
+    key: 'streamanalytics',
+    label: 'Stream Analytics',
+    armType: 'microsoft.streamanalytics/streamingjobs',
+    existingNameParam: 'existingAsaJob',
+    existingRgParam: 'existingAsaRg',
+    existingSubParam: 'existingAsaSub',
+    envName: 'EXISTING_ASA_JOB',
+    envRg: 'EXISTING_ASA_RG',
+    envSub: 'EXISTING_ASA_SUB',
+    // main.bicep `param loomStreamAnalyticsEnabled bool = true` (opt-out): backs
+    // the stream-analytics-job editor + the Eventstream transform node. Set false
+    // to skip the streaming-units cost (the editor then honest-gates on
+    // LOOM_ASA_RG). byo-wizard.sh flags this row the same way.
+    enabledFlag: 'loomStreamAnalyticsEnabled',
     defaultOn: true,
   },
   {
