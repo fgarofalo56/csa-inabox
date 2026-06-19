@@ -24,7 +24,8 @@ vi.mock('@/lib/azure/copilot-orchestrator', () => ({
   NoAoaiDeploymentError: FakeNoAoai,
 }));
 
-vi.mock('@/lib/azure/cloud-endpoints', () => ({
+vi.mock('@/lib/azure/cloud-endpoints', async (importOriginal) => ({
+  ...(await importOriginal() as any),
   cogScope: () => 'https://cognitiveservices.azure.com/.default',
 }));
 

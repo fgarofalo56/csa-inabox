@@ -72,7 +72,7 @@ vi.mock('@/lib/azure/purview-client', () => ({
   registerAtlasEntity: (...a: any[]) => registerAtlas(...a),
 }));
 
-vi.mock('@/lib/azure/cloud-endpoints', () => ({ isGovCloud: () => false }));
+vi.mock('@/lib/azure/cloud-endpoints', async (importOriginal) => ({ ...(await importOriginal() as any), isGovCloud: () => false }));
 
 const ctx = (type: string, id: string) => ({ params: Promise.resolve({ type, id }) });
 

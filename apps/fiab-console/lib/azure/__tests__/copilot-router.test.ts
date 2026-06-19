@@ -27,7 +27,7 @@ vi.mock('@/lib/azure/copilot-orchestrator', () => ({
 vi.mock('@/lib/azure/help-copilot-orchestrator', () => ({
   orchestrateHelp: (...a: unknown[]) => orchestrateHelpMock(...a),
 }));
-vi.mock('@/lib/azure/cloud-endpoints', () => ({ cogScope: () => 'https://cognitiveservices.azure.com/.default' }));
+vi.mock('@/lib/azure/cloud-endpoints', async (importOriginal) => ({ ...(await importOriginal() as any), cogScope: () => 'https://cognitiveservices.azure.com/.default' }));
 
 const fetchWithTimeoutMock = vi.fn();
 vi.mock('@/lib/azure/fetch-with-timeout', () => ({
