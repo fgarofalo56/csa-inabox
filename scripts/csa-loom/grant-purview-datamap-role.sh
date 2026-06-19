@@ -218,7 +218,7 @@ for ROLE in $ROLE_LIST; do
     --arg suffix "$ROLE_SUFFIX" \
     --arg oid "$UAMI_PRINCIPAL" '
     .properties.attributeRules |= map(
-      if (.id | endswith($suffix)) then
+      if (.id | startswith($suffix + ":")) then
         .dnfCondition |= ( . // [] | map(
           map(
             if (.attributeName == "principal.microsoft.id")
