@@ -59,12 +59,17 @@ function kvScope(vaultUri: string): string {
     : 'https://vault.azure.net/.default';
 }
 
-/** Derive the App Configuration AAD scope for the active cloud (commercial vs gov). */
-function acScope(_endpoint: string): string {
-  // Centralised in cloud-endpoints.ts (the only file allowed the azconfig.*
-  // literals) so the no-vaporware grep gate stays green and Commercial / GCC /
-  // GCC-High / IL5 / DoD all resolve from one source of truth.
-  return getAppConfigScope();
+/**
+ * Derive the App Configuration AAD scope from the configured store ENDPOINT
+ * (commercial vs gov) — symmetric with `kvScope()` above. Centralised in
+ * cloud-endpoints.ts (the only file allowed the azconfig.* literals) so the
+ * no-vaporware grep gate stays green and every boundary resolves from one
+ * source of truth. Endpoint-derived (not cloud-derived) so a Gov store
+ * (`*.azconfig.azure.us`) mints a Gov-audience token even when LOOM_CLOUD is
+ * unset/Commercial — otherwise the Commercial-scope token 401s (issue #1531).
+ */
+function acScope(endpoint: string): string {
+  return getAppConfigScope(endpoint);
 }
 
 async function token(scope: string): Promise<string> {

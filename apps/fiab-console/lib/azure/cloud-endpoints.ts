@@ -1162,9 +1162,53 @@ export function getAppConfigSuffix(): string {
   return isGovCloud() ? 'azconfig.azure.us' : 'azconfig.io';
 }
 
-/** AAD `.default` scope for App Configuration data-plane tokens. */
-export function getAppConfigScope(): string {
-  return `https://${getAppConfigSuffix()}/.default`;
+/**
+ * AAD `.default` scope for App Configuration data-plane tokens.
+ *
+ * ENDPOINT-AWARE: when an App Config endpoint URL/host is supplied the scope is
+ * derived from the endpoint's HOSTNAME — symmetric with `kvScope()` for Key
+ * Vault — so a Gov store (`*.azconfig.azure.us`) always mints a Gov-audience
+ * token even when `LOOM_CLOUD`/`AZURE_CLOUD` is unset or says Commercial.
+ * Deriving the audience from the active cloud alone mints a Commercial-scope
+ * token (`azconfig.io/.default`) that 401s against a Gov endpoint (issue #1531).
+ *
+ * The no-arg form is retained for back-compat (cloud-derived) for any caller
+ * that only knows the boundary, mirroring how `aasScope()` exposes an
+ * endpoint-free default. The `LOOM_APPCONFIG_SUFFIX` override still applies to
+ * the no-arg/cloud-derived path via `getAppConfigSuffix()`.
+ */
+export function getAppConfigScope(endpoint?: string): string {
+  const suffix = endpoint ? appConfigSuffixFromEndpoint(endpoint) : getAppConfigSuffix();
+  return `https://${suffix}/.default`;
+}
+
+/**
+ * Derive the App Configuration data-plane suffix from a store endpoint URL or
+ * host (e.g. `https://ac-loom.azconfig.azure.us` → `azconfig.azure.us`).
+ *
+ * Recognises every enumerated sovereign suffix from its hostname so the AAD
+ * audience matches the store the call actually targets. A `LOOM_APPCONFIG_SUFFIX`
+ * override is honoured when its value appears in the host (sovereign clouds the
+ * matrix doesn't enumerate). When the host matches none of the known suffixes
+ * we fall back to the cloud-derived suffix — an honest best-effort that keeps
+ * the no-Fabric / no-vaporware contract (no fabricated host).
+ */
+export function appConfigSuffixFromEndpoint(endpoint: string): string {
+  const host = (endpoint || '')
+    .replace(/^https?:\/\//i, '')
+    .replace(/\/.*$/, '')
+    .toLowerCase();
+  if (!host) return getAppConfigSuffix();
+  const override = process.env.LOOM_APPCONFIG_SUFFIX;
+  if (override) {
+    const o = override.replace(/^\.+/, '').replace(/\/+$/, '').toLowerCase();
+    if (o && host.endsWith(o)) return o;
+  }
+  // Gov suffix is the more specific match — test it first so a Gov host is not
+  // mis-read as Commercial.
+  if (host.endsWith('azconfig.azure.us')) return 'azconfig.azure.us';
+  if (host.endsWith('azconfig.io')) return 'azconfig.io';
+  return getAppConfigSuffix();
 }
 
 /** Build the App Configuration endpoint URL from a store name. */
