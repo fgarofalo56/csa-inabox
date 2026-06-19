@@ -25,6 +25,21 @@ This file is maintained automatically by
 [Conventional Commits](https://www.conventionalcommits.org/). See
 [RELEASE.md](RELEASE.md) for the release process.
 
+## [0.48.0](https://github.com/fgarofalo56/csa-inabox/compare/csa-inabox-v0.47.0...csa-inabox-v0.48.0) (2026-06-19)
+
+
+### Features
+
+* **csa-loom:** in-VNet loom-verify Container App Job for unattended console verification ([#1533](https://github.com/fgarofalo56/csa-inabox/issues/1533)) ([9ccc3d1](https://github.com/fgarofalo56/csa-inabox/commit/9ccc3d181eed7d29198a7f3fce3bdbab7cc905bf))
+* **fiab-console/e2e:** unattended in-VNet full-visual Playwright UAT runner ([#1536](https://github.com/fgarofalo56/csa-inabox/issues/1536)) ([2e25872](https://github.com/fgarofalo56/csa-inabox/commit/2e25872ac045bb54d709b85adc719ce45988c3bd))
+
+
+### Bug Fixes
+
+* **csa-loom:** loom-uat build — include e2e (per-Dockerfile ignore), no-frozen-lockfile, --no-logs ([#1541](https://github.com/fgarofalo56/csa-inabox/issues/1541)) ([ba9a3f9](https://github.com/fgarofalo56/csa-inabox/commit/ba9a3f90517bf88f7a991c85697192d549de5c25))
+* **csa-loom:** loom-uat deploy — az acr build needs relative context (Windows az) ([#1537](https://github.com/fgarofalo56/csa-inabox/issues/1537)) ([8876d27](https://github.com/fgarofalo56/csa-inabox/commit/8876d2728b4676ac6ab3598807e6cbdeea976922))
+* **csa-loom:** loom-uat Dockerfile install pnpm via npm (corepack keyid bug) ([#1538](https://github.com/fgarofalo56/csa-inabox/issues/1538)) ([3cc5064](https://github.com/fgarofalo56/csa-inabox/commit/3cc50647d4a0b21b0a38f76c10740133dbc5254d))
+
 ## [0.47.0](https://github.com/fgarofalo56/csa-inabox/compare/csa-inabox-v0.46.0...csa-inabox-v0.47.0) (2026-06-19)
 
 
