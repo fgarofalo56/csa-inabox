@@ -122,12 +122,15 @@ sleep 35
 # ---------------------------------------------------------------------------
 echo ""
 echo "[deploy-loom-uat-job] 2/5 Building loom-uat:latest via ACR Tasks..."
-az acr build \
+# Run from inside the app dir with a relative context (".") + relative
+# --file so the Windows `az` CLI gets a path it understands (an MSYS
+# absolute path like /e/... is rejected by Windows az acr build).
+( cd "$APP_DIR" && az acr build \
   --registry "$ACR_NAME" \
   --image "loom-uat:latest" \
-  --file "$APP_DIR/Dockerfile.uat" \
+  --file "Dockerfile.uat" \
   --subscription "$SUB" \
-  "$APP_DIR"
+  . )
 echo "[deploy-loom-uat-job] Image built: $UAT_IMAGE"
 
 # ---------------------------------------------------------------------------
