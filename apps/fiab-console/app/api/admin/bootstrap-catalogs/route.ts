@@ -16,6 +16,8 @@ import { NextRequest, NextResponse } from 'next/server';
 import { getSession } from '@/lib/auth/session';
 import { appsCatalogContainer, workloadsCatalogContainer } from '@/lib/azure/cosmos-client';
 import { ensureDataProductsIndex } from '@/lib/azure/loom-data-products-search';
+import { listBundleIds, getBundle } from '@/lib/apps/content-bundles';
+import { CATALOG_META } from '@/lib/apps/content-bundles/catalog-meta';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -23,44 +25,67 @@ export const dynamic = 'force-dynamic';
 const TENANT = 'GLOBAL';
 
 /**
- * items[] is what the /api/apps/[id]/install route reads to create
- * workspace items in Cosmos. v3.27 omitted items[] which made every
- * app install report `installed: []` — the F-grade vaporware finding
- * called out in docs/fiab/parity-gap/apps-catalog-rollup.md.
- * Mirrored from scripts/csa-loom/seed-catalogs.sh.
+ * Apps to seed under tenant=GLOBAL.
+ *
+ * SINGLE SOURCE OF TRUTH (apps-catalog A+ cluster, 2026-06-20):
+ * derived from the content-bundle registry (`listBundleIds`) +
+ * `CATALOG_META`, NOT a hand-maintained array. The previous hard-coded
+ * `APPS` const had two vaporware defects this eliminates:
+ *
+ *   1. **id drift** — five entries used the bare slug
+ *      (`change-feed-processor`, `direct-lake-replacement`,
+ *      `federal-data-mesh`, `ml-pipeline`, `multi-agency-onboarding`)
+ *      while the registered bundle's appId is `app-<slug>`. Install →
+ *      getBundle(id) then returned undefined for those, so the GLOBAL
+ *      seed produced catalog docs whose rich content never resolved (and
+ *      collided with the registry-backstop's correctly-id'd copy → two
+ *      tiles for the same app, one broken).
+ *   2. **14 missing apps** — the array seeded only 15 of the 29
+ *      registered bundles. The documented use-cases (data-governance,
+ *      logic-apps-integration, real-time-dashboards, azure-realtime-
+ *      analytics, sovereign-ai-agents, hybrid-topology), the Supercharge
+ *      bundles, and workspace-monitoring never reached the GLOBAL seed,
+ *      so a fresh deploy showed them only after the live
+ *      /api/apps-catalog registry backstop ran (and never at all where
+ *      the per-tenant copy is taken straight from GLOBAL).
+ *
+ * Deriving from the registry guarantees the GLOBAL seed, the live
+ * registry backstop (app/api/apps-catalog/route.ts), and the install
+ * resolver (getBundle) all agree on id + items[], so EVERY app is
+ * installable for real. items[] carries the lean `{type, template}`
+ * shape (rich content stays in-process per content-bundles/index.ts so
+ * the Cosmos doc stays well under the 2 MB per-doc limit).
  */
-const APPS = [
-  { id:'app-fedramp-tracker', name:'FedRAMP Compliance Tracker', description:'Track FedRAMP control implementation across Loom-deployed services. Maps Synapse, Databricks, ADX, APIM, AI Foundry to NIST 800-53 controls.', category:'Compliance', publisher:'CSA',
-    items:[{type:'scorecard',template:'fedramp-controls'},{type:'kql-dashboard',template:'compliance-events'}] },
-  { id:'app-data-steward', name:'Data Steward Console', description:'Curate datasets, manage classifications, certify endorsements. Wires Purview + AI Search + Synapse Serverless for lineage + search.', category:'Governance', publisher:'CSA',
-    items:[{type:'data-product',template:'steward-default'},{type:'semantic-model',template:'steward-glossary'}] },
-  { id:'app-rag-builder', name:'RAG Builder', description:'Stand up a Retrieval-Augmented Generation pipeline. Builds an AI Search index, wires Foundry prompt-flow, deploys an evaluation suite.', category:'AI', publisher:'CSA',
-    items:[{type:'ai-search-index',template:'rag-default'},{type:'prompt-flow',template:'rag-basic'},{type:'evaluation',template:'rag-quality'}] },
-  { id:'app-lakehouse-inspector', name:'Lakehouse Inspector', description:'Browse bronze/silver/gold ADLS containers, preview Parquet/Delta files via Synapse Serverless, profile data quality.', category:'Data', publisher:'CSA',
-    items:[{type:'lakehouse',template:'medallion'}] },
-  { id:'app-pipeline-designer', name:'Pipeline Designer', description:'Visual + JSON authoring for Synapse pipelines, ADF, Databricks Jobs. Common run history + alerting.', category:'Data Engineering', publisher:'CSA',
-    items:[{type:'synapse-pipeline',template:'blank'},{type:'adf-pipeline',template:'blank'},{type:'databricks-job',template:'blank'}] },
-  { id:'app-casino-analytics', name:'Casino Analytics', description:'Reference architecture: player-grain facts, table games, real-time win/loss, Activator alerts for high-roller events.', category:'Industry', publisher:'CSA',
-    items:[{type:'warehouse',template:'casino-dw'},{type:'activator',template:'high-roller-alert'}] },
-  { id:'app-healthcare-popmgt', name:'Healthcare Population Health', description:'FHIR-on-Lakehouse + risk stratification model + Power BI patient dashboards. HIPAA-aligned.', category:'Industry', publisher:'CSA',
-    items:[{type:'lakehouse',template:'fhir-medallion'},{type:'ml-model',template:'risk-stratification'}] },
-  { id:'app-iot-realtime', name:'IoT Real-Time Insights', description:'IoT Hub → Event Hubs → ADX → KQL dashboards. Activator alerts on device anomalies. End-to-end in one workspace.', category:'Real-Time', publisher:'CSA',
-    items:[{type:'eventstream',template:'iot-default'},{type:'kql-database',template:'iot-telemetry'},{type:'kql-dashboard',template:'device-health'}] },
-  { id:'app-finops-cost', name:'FinOps Cost Optimizer', description:'Per-domain chargeback report, Synapse pool auto-pause schedule, idle workload finder. Cosmos-backed budgets.', category:'Operations', publisher:'CSA',
-    items:[{type:'semantic-model',template:'finops-cost'},{type:'report',template:'finops-monthly'}] },
-  { id:'app-fabric-mirror-onboard', name:'Fabric Mirror Onboarding', description:'One-click setup for Fabric Mirroring: Azure SQL Mirror, Snowflake Mirror, Cosmos Mirror with target workspace + RBAC.', category:'Data', publisher:'CSA',
-    items:[{type:'mirrored-database',template:'azure-sql-mirror'}] },
-  { id:'change-feed-processor', name:'Change Feed Processor', description:'Event-driven sync on the Cosmos DB change feed: a Functions-hosted processor fans each change out to Event Hubs, AI Search, Redis, and Delta Lake. Ships the fan-out eventstream, processor + Delta-sync notebooks, orders lakehouse + AI Search index, and a change-feed-lag KQL DB + dashboard + Activator alert.', category:'Real-Time', publisher:'CSA',
-    items:[{type:'eventstream',template:'order-change-fanout'},{type:'notebook',template:'change-feed-processor'},{type:'notebook',template:'delta-sync'},{type:'lakehouse',template:'orders-delta'},{type:'ai-search-index',template:'orders'},{type:'kql-database',template:'change-feed-monitoring'},{type:'kql-dashboard',template:'change-feed-health'},{type:'activator',template:'change-feed-lag-alert'}] },
-  { id:'direct-lake-replacement', name:'Direct Lake-Replacement', description:'Migrate off a legacy BI server to Power BI Premium + a Loom lakehouse with 5-30s freshness via the Direct-Lake-Shim warm-cache materializer: Mirror to Bronze, Silver/Gold Databricks notebooks, Event Grid -> eventstream -> partition-refresh pipeline (TOM RequestRefresh), Import semantic model + report, and a freshness Activator watchdog.', category:'Data', publisher:'CSA',
-    items:[{type:'mirrored-database',template:'legacy-sales-oltp'},{type:'lakehouse',template:'direct-lake-replacement'},{type:'databricks-notebook',template:'silver-cleanse'},{type:'databricks-notebook',template:'gold-star-schema'},{type:'eventstream',template:'gold-commit-shim'},{type:'data-pipeline',template:'dl-shim-refresh'},{type:'semantic-model',template:'sales-analytics-import'},{type:'report',template:'sales-analytics'},{type:'activator',template:'shim-freshness-watchdog'}] },
-  { id:'federal-data-mesh', name:'Federal Data Mesh', description:'A federal department running multiple agencies as autonomous data-product domains (per-DLZ subscriptions) federated under a Department-CIO governance plane. Seeds a cross-domain marketplace data product + AI Search catalog, Agency A domain lakehouse, Delta Sharing automation notebook, federated access register (warehouse), cross-agency semantic model + report, and a FederationAudit ADX DB + dashboard + Activator alert.', category:'Government', publisher:'CSA',
-    items:[{type:'data-product',template:'cross-domain-marketplace'},{type:'lakehouse',template:'agency-a-domain'},{type:'notebook',template:'cross-domain-delta-sharing'},{type:'warehouse',template:'federated-access-register'},{type:'semantic-model',template:'cross-agency-performance'},{type:'report',template:'cross-agency-dashboards'},{type:'kql-database',template:'federation-audit'},{type:'kql-dashboard',template:'federation-cost'},{type:'activator',template:'label-violation-alert'},{type:'ai-search-index',template:'data-product-catalog'},{type:'data-pipeline',template:'federation-sync'}] },
-  { id:'ml-pipeline', name:'ML Pipeline (MLOps)', description:'A complete customer-churn MLOps loop on Databricks + Azure ML: feature store, MLflow/XGBoost training registered to Unity Catalog, validation gate, Model Serving deployment, and Lakehouse-Monitoring drift detection. Seeds five notebooks, the churn lakehouse, monitoring warehouse, MLOps orchestration pipeline, and a model-drift Activator alert.', category:'AI', publisher:'CSA',
-    items:[{type:'lakehouse',template:'ml-churn'},{type:'notebook',template:'feature-engineering'},{type:'notebook',template:'model-training'},{type:'notebook',template:'model-validation'},{type:'notebook',template:'model-deployment'},{type:'notebook',template:'model-monitoring'},{type:'ml-model',template:'customer-churn'},{type:'warehouse',template:'ml-monitoring'},{type:'data-pipeline',template:'mlops-orchestration'},{type:'activator',template:'model-drift-alert'}] },
-  { id:'multi-agency-onboarding', name:'Multi-Agency Onboarding', description:'The operational + governance analytics estate for onboarding additional agencies to a federal CSA Loom deployment as Data Landing Zones (DLZs) under a central Admin Plane. Seeds the DLZ Onboarding Registry (warehouse), the orchestrator notebook + provision/validate pipeline (PIM -> Bicep deploy -> peering check -> catalog scan -> smoke test), a federation-governance lakehouse, onboarding-telemetry KQL DB, governance semantic model + cockpit report, and a deployment-health Activator alert.', category:'Government', publisher:'CSA',
-    items:[{type:'warehouse',template:'dlz-onboarding-registry'},{type:'notebook',template:'dlz-onboarding-orchestrator'},{type:'data-pipeline',template:'dlz-provision-validate'},{type:'lakehouse',template:'federation-governance'},{type:'kql-database',template:'onboarding-telemetry'},{type:'semantic-model',template:'federation-governance'},{type:'report',template:'onboarding-cockpit'},{type:'activator',template:'dlz-deployment-health'}] },
-];
+export function buildApps() {
+  const apps: Array<{
+    id: string;
+    name: string;
+    description: string;
+    icon: string;
+    category: string;
+    publisher: string;
+    items: { type: string; template: string }[];
+  }> = [];
+  for (const appId of listBundleIds()) {
+    const meta = CATALOG_META[appId];
+    if (!meta) continue; // bundle without catalog metadata — skip (still installable directly)
+    const bundle = getBundle(appId);
+    apps.push({
+      id: appId,
+      name: meta.name,
+      description: meta.description,
+      icon: meta.icon,
+      category: meta.category,
+      publisher: meta.publisher,
+      // Lean {type, template} refs — install reads getBundle(appId) for the
+      // rich starter content, so template just points back at the bundle id.
+      items: (bundle?.items || []).map((i) => ({ type: i.itemType, template: appId })),
+    });
+  }
+  return apps;
+}
+
+const APPS = buildApps();
 
 const WORKLOADS = [
   { id:'wl-data-engineering', name:'Data Engineering', description:'Synapse + ADF + Spark pools for ETL/ELT at scale.', category:'Included', included:true, featureSlugs:['synapse-serverless-sql-pool','synapse-dedicated-sql-pool','synapse-spark-pool','synapse-pipeline','adf-pipeline','spark-job-definition','environment','copy-job'] },
