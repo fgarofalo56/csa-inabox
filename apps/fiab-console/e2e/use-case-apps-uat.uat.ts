@@ -1,5 +1,5 @@
 /**
- * Front-end UAT for all 21 use-case apps.
+ * Front-end UAT for all 29 use-case apps.
  *
  * Unlike the API smokes, this drives the ACTUAL browser UI:
  *   1. open /apps catalog (real render) → screenshot
@@ -24,7 +24,7 @@ fs.mkdirSync(SHOT_DIR, { recursive: true });
 
 interface ProvStep { itemType: string; displayName: string; result?: { status?: string; error?: string } }
 
-test('use-case apps — catalog renders all 21', async ({ browser }) => {
+test('use-case apps — catalog renders all 29', async ({ browser }) => {
   const ctx = await browser.newContext();
   await signIn(ctx);
   const page = await ctx.newPage();
@@ -34,10 +34,10 @@ test('use-case apps — catalog renders all 21', async ({ browser }) => {
   const ids: string[] = (list.apps || []).map((a: any) => a.id);
   recordVerdict({
     surface: 'page:/apps', feature: 'catalog-render',
-    verdict: ids.length >= 21 ? 'A' : 'C', status: ids.length >= 21 ? 'pass' : 'fail',
-    notes: `${ids.length} apps in catalog (expect 21)`,
+    verdict: ids.length >= 29 ? 'A' : 'C', status: ids.length >= 29 ? 'pass' : 'fail',
+    notes: `${ids.length} apps in catalog (expect 29)`,
   });
-  expect(ids.length).toBeGreaterThanOrEqual(21);
+  expect(ids.length).toBeGreaterThanOrEqual(29);
   await ctx.close();
 });
 
@@ -49,6 +49,10 @@ const APP_IDS = [
   'app-casino-analytics', 'app-data-steward', 'app-fabric-mirror-onboard',
   'app-fedramp-tracker', 'app-finops-cost', 'app-healthcare-popmgt',
   'app-iot-realtime', 'app-lakehouse-inspector', 'app-pipeline-designer', 'app-rag-builder',
+  'app-workspace-monitoring',
+  'app-supercharge-bronze', 'app-supercharge-silver', 'app-supercharge-gold',
+  'app-supercharge-ml', 'app-supercharge-streaming', 'app-supercharge-utils',
+  'app-supercharge-guide',
 ];
 
 for (const appId of APP_IDS) {

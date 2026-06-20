@@ -604,7 +604,9 @@ function CanvasInner(props: WarpTransformCanvasProps) {
             <Option key={`${t.engine}|${t.id}`} value={`${t.engine}|${t.id}`} text={t.label}>{t.label}</Option>
           ))}
         </Dropdown>
-        <Badge appearance="outline">{dialect === 'tsql' ? 'T-SQL' : 'Spark SQL'}</Badge>
+        {target
+          ? <Badge appearance="outline">{dialect === 'tsql' ? 'T-SQL' : 'Spark SQL'}</Badge>
+          : <Badge appearance="outline" color="informative">No engine</Badge>}
         <div className={s.toolbarSpacer} />
         <Button icon={<Sparkle20Regular />} appearance="secondary" onClick={() => setWizardOpen(true)}>New from pattern</Button>
         <Button icon={<CheckmarkCircle20Regular />} appearance="secondary" disabled={!nodes.length || !target || running} onClick={() => void callRun('validate')}>Validate</Button>
@@ -614,7 +616,7 @@ function CanvasInner(props: WarpTransformCanvasProps) {
 
       <TabList selectedValue={view} onTabSelect={(_, d) => setView(d.value as WarpView)}>
         <Tab value="canvas" icon={<BranchFork20Regular />}>Visual canvas</Tab>
-        <Tab value="code" icon={<ColumnTriple20Regular />}>Code ({dialect === 'tsql' ? 'T-SQL' : 'Spark SQL'})</Tab>
+        <Tab value="code" icon={<ColumnTriple20Regular />}>Code{target ? ` (${dialect === 'tsql' ? 'T-SQL' : 'Spark SQL'})` : ''}</Tab>
       </TabList>
 
       {validateMsg && (
