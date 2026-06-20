@@ -27,7 +27,7 @@
  * warehouse) — these surfaces gate themselves via MessageBar already.
  */
 import { test, expect } from '@playwright/test';
-import { BASE, signIn } from './_lib/uat';
+import { BASE, signIn, createWorkspace, createItem } from './_lib/uat';
 
 interface RibbonProbe {
   type: string;
@@ -65,7 +65,22 @@ for (const p of PROBES) {
     const seenUrls: string[] = [];
     page.on('request', (r) => seenUrls.push(r.url()));
 
-    await page.goto(`${BASE}/items/${p.type}/${encodeURIComponent(p.id)}`, { waitUntil: 'networkidle' });
+    // Provision a real workspace + item of this type so the editor has a
+    // record to load and renders its full ribbon. The previous hardcoded ids
+    // (loomspark/main/smoke/echo) don't exist in a fresh estate → the editor
+    // page 404s on getItem → renders an error/empty shell with no ribbon →
+    // false "button ABSENT" failures. Creating the item per probe is the
+    // workspace-per-item pattern and exercises the real editor.
+    let itemId = p.id;
+    try {
+      const wsId = await createWorkspace(page, `uat-nocuts-${p.type}-${Date.now()}`);
+      itemId = await createItem(page, wsId, p.type, `nocuts ${p.type}`);
+    } catch {
+      // Fall back to the configured id if creation fails (e.g. a non-creatable
+      // type) — the assertions below still apply.
+    }
+
+    await page.goto(`${BASE}/items/${p.type}/${encodeURIComponent(itemId)}`, { waitUntil: 'networkidle' });
     await page.waitForTimeout(1500); // let the editor settle
 
     // Locate the ribbon button by accessible name.

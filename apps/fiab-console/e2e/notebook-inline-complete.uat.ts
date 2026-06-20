@@ -67,8 +67,11 @@ test('inline completion: comment yields a real AOAI ghost suggestion, Tab insert
     // Wait for the first Monaco code editor to mount.
     const editor = page.locator('.monaco-editor').first();
     await editor.waitFor({ state: 'visible', timeout: 30_000 });
-    // Click into the editable surface and type the trigger comment.
-    await editor.locator('.view-lines').click();
+    // Click into the editable surface and type the trigger comment. Monaco's
+    // `.view-lines` is a layered, frequently-repainting surface — Playwright's
+    // actionability/stability checks can time out on it, so force the click
+    // (still a real mouse click that focuses the editor).
+    await editor.locator('.view-lines').click({ force: true });
     await page.keyboard.type('# read csv into df\n', { delay: 25 });
 
     // Ghost text renders as a Monaco inline-suggestion decoration. Different

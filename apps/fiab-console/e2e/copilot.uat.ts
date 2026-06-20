@@ -284,13 +284,16 @@ test.describe('Cross-item Copilot orchestrator — ask + tool plan', () => {
       await page.goto(`${BASE}/copilot`, { waitUntil: 'networkidle' });
       // Launch the full-screen console from the landing hero.
       await page.getByRole('button', { name: /Launch Copilot/i }).click();
-      const box = page.getByPlaceholder(/Find the top 10 revenue customers/i);
+      // The full-screen console's prompt box placeholder is "Ask anything — e.g.
+      // …" and the submit control is a "Send" button (was "Find the top 10…" /
+      // "Ask CSA Loom Copilot" — both renamed; verified live).
+      const box = page.getByPlaceholder(/Ask anything/i);
       await expect(box).toBeVisible({ timeout: 15_000 });
       await box.fill('list my workspaces');
-      // Capture the real orchestrate response while clicking Ask.
+      // Capture the real orchestrate response while clicking Send.
       const [resp] = await Promise.all([
         page.waitForResponse('**/api/copilot/orchestrate', { timeout: 30_000 }),
-        page.getByRole('button', { name: /Ask CSA Loom Copilot/i }).click(),
+        page.getByRole('button', { name: /^Send$/i }).click(),
       ]);
       const probe = await read(resp);
       assertPrimaryAction('persona:cross-item-copilot', 'orchestrate', probe);
