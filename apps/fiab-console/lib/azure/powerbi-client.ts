@@ -462,6 +462,17 @@ export async function deleteReport(workspaceId: string, reportId: string): Promi
   await call(`/groups/${encodeURIComponent(workspaceId)}/reports/${encodeURIComponent(reportId)}`, { method: 'DELETE' });
 }
 
+/**
+ * Delete a semantic model (dataset) from a workspace.
+ * Power BI REST supports this via `DELETE /groups/{groupId}/datasets/{datasetId}`
+ * (Datasets - Delete Dataset In Group). The caller's identity must have write
+ * access to the workspace.
+ * Docs: https://learn.microsoft.com/rest/api/power-bi/datasets/delete-dataset-in-group
+ */
+export async function deleteDataset(workspaceId: string, datasetId: string): Promise<void> {
+  await call(`/groups/${encodeURIComponent(workspaceId)}/datasets/${encodeURIComponent(datasetId)}`, { method: 'DELETE' });
+}
+
 export async function listPaginatedReports(workspaceId: string): Promise<PbiReport[]> {
   const all = await listReports(workspaceId);
   return all.filter((r) => r.reportType === 'PaginatedReport');

@@ -4,13 +4,15 @@ import { useCallback, useEffect, useMemo, useState } from 'react';
 import {
   tokens, Spinner, MessageBar, MessageBarBody, Button,
   Caption1, Tooltip, Dialog, DialogSurface, DialogBody, DialogTitle, DialogContent,
-  DialogActions, Field, Input, Dropdown, Option, Textarea,
+  DialogActions, Field, Input, Dropdown, Option, Textarea, Switch, Badge, Divider,
 } from '@fluentui/react-components';
-import { Delete24Regular, Edit24Regular } from '@fluentui/react-icons';
+import { Delete24Regular, Edit24Regular, ShieldKeyhole20Regular } from '@fluentui/react-icons';
 import { Section, Toolbar } from '@/lib/components/ui/section';
 import { LoomDataTable, type LoomColumn } from '@/lib/components/ui/loom-data-table';
 import { ApimBackendSummary } from '@/lib/azure/apim-client';
 import { apimFetchJson } from './apim-pane-fetch';
+
+type AuthMode = 'none' | 'authorization' | 'header' | 'query';
 
 interface BackendForm {
   name: string;
@@ -18,9 +20,21 @@ interface BackendForm {
   protocol: 'http' | 'soap';
   title: string;
   description: string;
+  // Authorization credentials (maps to ARM BackendCredentialsContract).
+  authMode: AuthMode;
+  authScheme: string;       // for authorization header, e.g. 'Bearer'
+  authParameter: string;    // token / header-value / query-value
+  authParamName: string;    // header or query parameter name
+  // TLS validation toggles (ARM BackendTlsProperties).
+  validateCertChain: boolean;
+  validateCertName: boolean;
 }
 
-const EMPTY_FORM: BackendForm = { name: '', url: '', protocol: 'http', title: '', description: '' };
+const EMPTY_FORM: BackendForm = {
+  name: '', url: '', protocol: 'http', title: '', description: '',
+  authMode: 'none', authScheme: 'Bearer', authParameter: '', authParamName: '',
+  validateCertChain: true, validateCertName: true,
+};
 
 export function ApimBackendsPane() {
   const [backends, setBackends] = useState<ApimBackendSummary[]>([]);
@@ -66,12 +80,37 @@ export function ApimBackendsPane() {
 
   const openEdit = useCallback((b: ApimBackendSummary) => {
     setEditing(b);
+    // Hydrate the auth section from whichever credential shape is set.
+    const creds = b.credentials;
+    let authMode: AuthMode = 'none';
+    let authScheme = 'Bearer';
+    let authParameter = '';
+    let authParamName = '';
+    if (creds?.authorization) {
+      authMode = 'authorization';
+      authScheme = creds.authorization.scheme || 'Bearer';
+      authParameter = creds.authorization.parameter || '';
+    } else if (creds?.header && Object.keys(creds.header).length) {
+      authMode = 'header';
+      authParamName = Object.keys(creds.header)[0];
+      authParameter = (creds.header[authParamName] || [])[0] || '';
+    } else if (creds?.query && Object.keys(creds.query).length) {
+      authMode = 'query';
+      authParamName = Object.keys(creds.query)[0];
+      authParameter = (creds.query[authParamName] || [])[0] || '';
+    }
     setForm({
       name: b.name,
       url: b.url || '',
       protocol: b.protocol === 'soap' ? 'soap' : 'http',
       title: b.title || '',
       description: b.description || '',
+      authMode,
+      authScheme,
+      authParameter,
+      authParamName,
+      validateCertChain: b.tls?.validateCertificateChain !== false,
+      validateCertName: b.tls?.validateCertificateName !== false,
     });
     setDialogError(null);
     setDialogOpen(true);
@@ -79,8 +118,28 @@ export function ApimBackendsPane() {
 
   async function handleSave() {
     if (!form.url.trim()) { setDialogError('Runtime URL is required.'); return; }
+    // Validate the auth section before hitting ARM.
+    if (form.authMode === 'authorization' && (!form.authScheme.trim() || !form.authParameter.trim())) {
+      setDialogError('Authorization header requires both a scheme (e.g. Bearer) and a parameter (token).');
+      return;
+    }
+    if ((form.authMode === 'header' || form.authMode === 'query') && (!form.authParamName.trim() || !form.authParameter.trim())) {
+      setDialogError(`The ${form.authMode} credential requires both a name and a value.`);
+      return;
+    }
     setSaving(true);
     setDialogError(null);
+
+    // Shape the optional credentials onto the ARM BackendCredentialsContract.
+    let credentials: Record<string, unknown> | undefined;
+    if (form.authMode === 'authorization') {
+      credentials = { authorization: { scheme: form.authScheme.trim(), parameter: form.authParameter.trim() } };
+    } else if (form.authMode === 'header') {
+      credentials = { header: { [form.authParamName.trim()]: [form.authParameter.trim()] } };
+    } else if (form.authMode === 'query') {
+      credentials = { query: { [form.authParamName.trim()]: [form.authParameter.trim()] } };
+    }
+
     try {
       // POST upserts by name (edit reuses the existing name; create derives one
       // from name or URL server-side). The route does a real ARM PUT /backends.
@@ -93,6 +152,8 @@ export function ApimBackendsPane() {
           protocol: form.protocol,
           title: form.title.trim() || undefined,
           description: form.description.trim() || undefined,
+          credentials,
+          tls: { validateCertificateChain: form.validateCertChain, validateCertificateName: form.validateCertName },
         }),
       });
       if (d.ok) {
@@ -165,6 +226,18 @@ export function ApimBackendsPane() {
       label: 'Protocol',
       width: 100,
       render: (b) => <Caption1>{b.protocol || 'http'}</Caption1>,
+    },
+    {
+      key: 'auth',
+      label: 'Auth',
+      width: 120,
+      render: (b) => {
+        const c = b.credentials;
+        const kind = c?.authorization ? 'Authorization' : c?.header ? 'Header' : c?.query ? 'Query' : null;
+        return kind
+          ? <Badge appearance="tint" color="brand" icon={<ShieldKeyhole20Regular />}>{kind}</Badge>
+          : <Caption1 style={{ color: tokens.colorNeutralForeground3 }}>None</Caption1>;
+      },
     },
     {
       key: 'actions',
@@ -261,6 +334,85 @@ export function ApimBackendsPane() {
                     rows={2}
                     onChange={(_, d) => setForm((f) => ({ ...f, description: d.value }))}
                   />
+                </Field>
+
+                <Divider />
+
+                {/* Authorization credentials — real ARM BackendCredentialsContract. */}
+                <Field
+                  label="Authorization credentials"
+                  hint="Credentials API Management presents to the backend on each request."
+                >
+                  <Dropdown
+                    value={
+                      form.authMode === 'none' ? 'None'
+                        : form.authMode === 'authorization' ? 'Authorization header'
+                        : form.authMode === 'header' ? 'Custom request header'
+                        : 'Query parameter'
+                    }
+                    selectedOptions={[form.authMode]}
+                    onOptionSelect={(_, d) => setForm((f) => ({ ...f, authMode: (d.optionValue as AuthMode) || 'none' }))}
+                  >
+                    <Option value="none">None</Option>
+                    <Option value="authorization">Authorization header</Option>
+                    <Option value="header">Custom request header</Option>
+                    <Option value="query">Query parameter</Option>
+                  </Dropdown>
+                </Field>
+                {form.authMode === 'authorization' && (
+                  <div style={{ display: 'flex', gap: tokens.spacingHorizontalM }}>
+                    <Field label="Scheme" required style={{ flex: 1 }}>
+                      <Input
+                        value={form.authScheme}
+                        placeholder="Bearer"
+                        onChange={(_, d) => setForm((f) => ({ ...f, authScheme: d.value }))}
+                      />
+                    </Field>
+                    <Field label="Parameter (token)" required style={{ flex: 2 }}>
+                      <Input
+                        type="password"
+                        value={form.authParameter}
+                        placeholder="eyJ0eXAi…"
+                        onChange={(_, d) => setForm((f) => ({ ...f, authParameter: d.value }))}
+                      />
+                    </Field>
+                  </div>
+                )}
+                {(form.authMode === 'header' || form.authMode === 'query') && (
+                  <div style={{ display: 'flex', gap: tokens.spacingHorizontalM }}>
+                    <Field label={form.authMode === 'header' ? 'Header name' : 'Query parameter name'} required style={{ flex: 1 }}>
+                      <Input
+                        value={form.authParamName}
+                        placeholder={form.authMode === 'header' ? 'x-api-key' : 'code'}
+                        onChange={(_, d) => setForm((f) => ({ ...f, authParamName: d.value }))}
+                      />
+                    </Field>
+                    <Field label="Value" required style={{ flex: 2 }}>
+                      <Input
+                        type="password"
+                        value={form.authParameter}
+                        onChange={(_, d) => setForm((f) => ({ ...f, authParameter: d.value }))}
+                      />
+                    </Field>
+                  </div>
+                )}
+
+                <Divider />
+
+                {/* TLS validation toggles (ARM BackendTlsProperties). */}
+                <Field label="TLS validation" hint="Disable only for self-signed / internal backends.">
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalXS }}>
+                    <Switch
+                      checked={form.validateCertChain}
+                      label="Validate certificate chain"
+                      onChange={(_, d) => setForm((f) => ({ ...f, validateCertChain: d.checked }))}
+                    />
+                    <Switch
+                      checked={form.validateCertName}
+                      label="Validate certificate name"
+                      onChange={(_, d) => setForm((f) => ({ ...f, validateCertName: d.checked }))}
+                    />
+                  </div>
                 </Field>
               </div>
             </DialogContent>

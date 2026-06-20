@@ -36,7 +36,9 @@ values, Backends, Subscriptions, Gateways).
 | **Backends** — list with url + protocol | ✅ built | `GET /api/apim/backends` → `listBackends()` → ARM `GET …/backends` |
 | Create backend (name + url + protocol + title) | ✅ built (＋New dialog) | `POST /api/apim/backends` → `upsertBackend()` → ARM `PUT …/backends/{id}` |
 | Delete backend | ✅ built (inline) | `DELETE /api/apim/backends?id=` → `deleteBackend()` → ARM `DELETE …/backends/{id}` (If-Match: *) |
-| Backend credentials / circuit breaker / TLS / pool | ⚠️ deferred | url+protocol+title+description wired; advanced contract fields deferred |
+| Backend **authorization credentials** (Authorization header / custom header / query param) | ✅ built (create+edit dialog, `Auth` column badge) | `POST /api/apim/backends` `{credentials}` → `upsertBackend()` → ARM `PUT …/backends/{id}` `properties.credentials` (`BackendCredentialsContract`) |
+| Backend **TLS validation** (cert chain / cert name) | ✅ built (two switches in the dialog) | same `PUT …/backends/{id}` → `properties.tls` (`BackendTlsProperties`) |
+| Backend circuit breaker / load-balanced pool | ⚠️ deferred | `BackendCircuitBreaker` / pool members are a separate ARM contract; in-UI authoring deferred (tracked) |
 | **Subscriptions** — list with scope + state | ✅ built | `GET /api/apim/subscriptions` → `listSubscriptions()` → ARM `GET …/subscriptions` |
 | Create subscription (name + scope: all APIs / product / API) | ✅ built (＋New dialog, active) | `POST /api/apim/subscriptions` → `createSubscription()` → ARM `PUT …/subscriptions/{sid}` |
 | Delete subscription | ✅ built (inline) | `DELETE /api/apim/subscriptions?id=` → `deleteSubscription()` → ARM `DELETE …/subscriptions/{sid}` (If-Match: *) |
