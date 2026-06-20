@@ -181,6 +181,13 @@ if [[ -n "$LOOM_UAT_RESULTS_ACCOUNT" ]]; then
   RESULTS_ACCOUNT_ENV="- { name: LOOM_UAT_RESULTS_ACCOUNT, value: \"${LOOM_UAT_RESULTS_ACCOUNT}\" }"
 fi
 
+# UAMI client id — lets the runner's ACA managed-identity token fetch (for the
+# blob results upload) target the right user-assigned identity. See #1555.
+UAMI_CLIENT_ID_ENV=""
+if [[ -n "${LOOM_UAMI_CLIENT_ID:-}" ]]; then
+  UAMI_CLIENT_ID_ENV="- { name: LOOM_UAMI_CLIENT_ID, value: \"${LOOM_UAMI_CLIENT_ID}\" }"
+fi
+
 # Write the YAML to a repo-relative temp path, NOT mktemp(1): on Windows/MSYS
 # `mktemp` yields a /tmp/tmp.XXXX path that the Windows `az` CLI cannot read
 # ("does not exist"), which silently breaks the job create/update step.
@@ -223,6 +230,7 @@ properties:
           ${UAT_GREP_ENV}
           ${RESULTS_CONTAINER_ENV}
           ${RESULTS_ACCOUNT_ENV}
+          ${UAMI_CLIENT_ID_ENV}
           - { name: SESSION_SECRET,          secretRef: session-secret }
 YAML
 

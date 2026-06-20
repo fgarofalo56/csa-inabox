@@ -172,12 +172,23 @@ export function pageSlug(p: string): string {
   return trimmed === '' ? 'home' : trimmed.replace(/\//g, '-');
 }
 
-/** Common create-workspace helper. */
-export async function createWorkspace(page: Page, name?: string): Promise<string> {
+/** Common create-workspace helper.
+ *
+ * The POST /api/workspaces route requires a governance `domain` binding
+ * (t158 — a workspace MUST be bound to a domain). `default` is the built-in
+ * fallback domain (DEFAULT_DOMAIN_ID, always present in the registry), so it is
+ * the parity-correct value when the caller doesn't specify one. Omitting it
+ * makes the route return 400 `domain_required` and every workspace-creating
+ * test dies at setup. */
+export async function createWorkspace(page: Page, name?: string, domain = 'default'): Promise<string> {
   const r = await page.request.post(`${BASE}/api/workspaces`, {
-    data: { name: name || `uat-${Date.now()}` },
+    data: { name: name || `uat-${Date.now()}`, domain },
   });
-  expect(r.ok()).toBeTruthy();
+  if (!r.ok()) {
+    throw new Error(
+      `createWorkspace failed: POST /api/workspaces -> ${r.status()} ${await r.text().catch(() => '')}`,
+    );
+  }
   return (await r.json()).id as string;
 }
 
