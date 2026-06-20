@@ -86,8 +86,11 @@ LOOM_AUTOMATION_NAME="${LOOM_AUTOMATION_NAME:-LoomUAT[automation]}"
 UAT_PROJECT="${UAT_PROJECT:-uat}"
 UAT_GREP="${UAT_GREP:-}"  # empty = full suite
 
-# Optional: ADLS/blob URL for HTML report upload.
+# Optional: blob container + storage account for report/screenshot upload
+# (the runner uploads test-results/uat/report.json + artifacts via the UAMI,
+# in-VNet, so PE-protected DLZ storage is reachable). See #1555.
 LOOM_UAT_RESULTS_CONTAINER="${LOOM_UAT_RESULTS_CONTAINER:-}"
+LOOM_UAT_RESULTS_ACCOUNT="${LOOM_UAT_RESULTS_ACCOUNT:-}"
 
 # Image to push.
 UAT_IMAGE="${ACR}/loom-uat:latest"
@@ -173,6 +176,11 @@ if [[ -n "$LOOM_UAT_RESULTS_CONTAINER" ]]; then
   RESULTS_CONTAINER_ENV="- { name: LOOM_UAT_RESULTS_CONTAINER, value: \"${LOOM_UAT_RESULTS_CONTAINER}\" }"
 fi
 
+RESULTS_ACCOUNT_ENV=""
+if [[ -n "$LOOM_UAT_RESULTS_ACCOUNT" ]]; then
+  RESULTS_ACCOUNT_ENV="- { name: LOOM_UAT_RESULTS_ACCOUNT, value: \"${LOOM_UAT_RESULTS_ACCOUNT}\" }"
+fi
+
 TMP="$(mktemp)"
 cat > "$TMP" <<YAML
 location: centralus
@@ -210,6 +218,7 @@ properties:
           - { name: UAT_PROJECT,             value: "${UAT_PROJECT}" }
           ${UAT_GREP_ENV}
           ${RESULTS_CONTAINER_ENV}
+          ${RESULTS_ACCOUNT_ENV}
           - { name: SESSION_SECRET,          secretRef: session-secret }
 YAML
 
