@@ -475,8 +475,10 @@ export function DataPipelineEditor({ item, id }: Props) {
         body: JSON.stringify({ definition: { properties: spec.properties } }),
       });
       const j = await r.json();
+      const warnCount = j.validation?.warningCount ?? 0;
+      const actCount = j.validation?.activities?.length ?? activities.length;
       const okMsg = j.ok
-        ? `Validation passed — ADF accepts ${j.validation?.activities?.length ?? activities.length} activities.`
+        ? `Validation passed — ${actCount} activit${actCount === 1 ? 'y' : 'ies'} checked${warnCount ? `, ${warnCount} warning${warnCount === 1 ? '' : 's'}` : ''}.`
         : `Validation failed: ${j.error || 'unknown'}`;
       setValidation({ ok: !!j.ok, message: okMsg });
       dispatchToast(

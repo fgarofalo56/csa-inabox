@@ -307,53 +307,16 @@ export async function debugPipeline(
   return jsonOrThrow<PipelineRunResponse>(r, `debugPipeline(${name})`);
 }
 
-/**
- * Validate a pipeline JSON against ADF's syntactic + reference checker.
- *
- * ADF exposes two flavours of validation:
- *   1. POST factories/{f}/pipelines/{name}/validate — validate persisted pipeline
- *   2. POST factories/{f}/validatePipeline?api-version=... — validate by value
- *
- * Pass `spec` to validate an in-memory payload; pass nothing to validate the
- * persisted version. Returns the raw ADF response inside `body` plus status
- * so callers can surface ADF's structured error message verbatim.
+/*
+ * NOTE: there is intentionally no `validatePipeline` ARM helper here. The Azure
+ * Data Factory MANAGEMENT REST API does NOT expose a public "validate pipeline"
+ * action (no `factories/{f}/validatePipeline` or `pipelines/{name}/validate`
+ * endpoint — the SDK `Validate()` methods are client-side object validators and
+ * Studio's "Validate all" is internal). Pipeline validation is performed
+ * server-side by `@/lib/azure/pipeline-validate` (validatePipelineSpec), which
+ * the data-pipeline + adf-pipeline /validate BFF routes call. See
+ * no-vaporware.md.
  */
-export interface AdfValidateResponse {
-  activities?: Array<{ name?: string; type?: string }>;
-  parameters?: unknown;
-  variables?: unknown;
-  error?: { code?: string; message?: string };
-}
-
-export async function validatePipeline(
-  name: string,
-  spec?: AdfPipeline,
-): Promise<{ ok: boolean; status: number; body: AdfValidateResponse; errorText?: string }> {
-  if (!spec) {
-    const r = await call(
-      `${base()}/pipelines/${encodeURIComponent(name)}/validate?api-version=${API}`,
-      { method: 'POST' },
-    );
-    const text = await r.text();
-    let body: AdfValidateResponse = {};
-    try { body = text ? (JSON.parse(text) as AdfValidateResponse) : {}; } catch { /* empty */ }
-    return { ok: r.ok, status: r.status, body, errorText: r.ok ? undefined : text };
-  }
-  const r = await call(
-    `${base()}/validatePipeline?api-version=${API}`,
-    {
-      method: 'POST',
-      body: JSON.stringify({
-        name: spec.name || name,
-        properties: spec.properties || { activities: [] },
-      }),
-    },
-  );
-  const text = await r.text();
-  let body: AdfValidateResponse = {};
-  try { body = text ? (JSON.parse(text) as AdfValidateResponse) : {}; } catch { /* empty */ }
-  return { ok: r.ok, status: r.status, body, errorText: r.ok ? undefined : text };
-}
 
 export interface AdfActivityRun {
   activityRunId: string;
