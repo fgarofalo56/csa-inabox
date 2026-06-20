@@ -13005,15 +13005,20 @@ export function SemanticModelEditor({ item, id }: { item: FabricItemType; id: st
                         <Input value={displayFolder} onChange={(_, d) => setDisplayFolder(d.value)} placeholder={'Finance\\KPIs'} />
                       </Field>
                     </div>
-                    <Caption1 style={{ marginTop: 8 }}>DAX expression</Caption1>
-                    <MonacoTextarea
-                      value={daxExpr}
-                      onChange={setDaxExpr}
-                      language="dax"
-                      height={140}
-                      minHeight={100}
-                      ariaLabel="DAX expression editor"
-                    />
+                    <Field
+                      label="DAX expression"
+                      hint="e.g. CALCULATE(SUM('Sales'[Amount]), ALL('Date')). Validate before saving."
+                      style={{ marginTop: 8 }}
+                    >
+                      <MonacoTextarea
+                        value={daxExpr}
+                        onChange={setDaxExpr}
+                        language="dax"
+                        height={140}
+                        minHeight={100}
+                        ariaLabel="DAX expression editor"
+                      />
+                    </Field>
                     <div style={{ display: 'flex', gap: 8, alignItems: 'center', marginTop: 8 }}>
                       <Button
                         appearance="primary"

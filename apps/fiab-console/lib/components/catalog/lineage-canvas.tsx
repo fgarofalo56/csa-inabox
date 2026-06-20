@@ -309,12 +309,20 @@ const useStyles = makeStyles({
   legendItem: { display: 'flex', alignItems: 'center', gap: 4 },
   legendSwatch: { width: 10, height: 10, borderRadius: 2, display: 'inline-block' },
   detail: {
-    position: 'absolute', top: 12, right: 12, width: 300, maxHeight: 'calc(100% - 24px)',
+    position: 'absolute', top: 12, right: 12,
+    // Responsive: cap to the available canvas width so the panel never bleeds
+    // off-screen on a narrow viewport. 300px on wide canvases, otherwise the
+    // canvas width minus both 12px gutters.
+    width: 300, maxWidth: 'calc(100% - 24px)',
+    maxHeight: 'calc(100% - 24px)',
     overflowY: 'auto', zIndex: 10,
     background: tokens.colorNeutralBackground1,
     border: `1px solid ${tokens.colorNeutralStroke1}`,
     borderRadius: 8, padding: 14,
     boxShadow: tokens.shadow16,
+    // Keyboard/scroll affordance: the panel is focusable and outlined when
+    // focused so keyboard users land here after selecting a node.
+    ':focus-visible': { outline: `2px solid ${tokens.colorBrandStroke1}`, outlineOffset: '-2px' },
   },
   detailRow: { display: 'flex', flexDirection: 'column', gap: 2, marginBottom: 10 },
 });
@@ -337,6 +345,7 @@ const LineageCanvasInner = forwardRef<LineageCanvasHandle, LineageCanvasProps>(f
 ) {
   const s = useStyles();
   const rf = useReactFlow();
+  const detailRef = useRef<HTMLDivElement | null>(null);
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [focusMode, setFocusMode] = useState(false);
   const [search, setSearch] = useState('');
@@ -444,6 +453,12 @@ const LineageCanvasInner = forwardRef<LineageCanvasHandle, LineageCanvasProps>(f
 
   const selected = selectedId ? srcNodes.find((n) => n.id === selectedId) : null;
 
+  // Move keyboard focus onto the detail panel when a node is selected so
+  // keyboard users are taken to its actions (and Esc/Tab return them out).
+  useEffect(() => {
+    if (selectedId && detailRef.current) detailRef.current.focus();
+  }, [selectedId]);
+
   return (
     <div className={s.shell} data-testid="lineage-canvas" aria-label="Data lineage canvas">
       <ReactFlow
@@ -528,7 +543,14 @@ const LineageCanvasInner = forwardRef<LineageCanvasHandle, LineageCanvasProps>(f
       </ReactFlow>
 
       {selected && (
-        <div className={s.detail} role="complementary" aria-label="Asset detail">
+        <div
+          ref={detailRef}
+          className={s.detail}
+          role="complementary"
+          aria-label="Asset detail"
+          tabIndex={-1}
+          onKeyDown={(e) => { if (e.key === 'Escape') setSelectedId(null); }}
+        >
           <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 12 }}>
             <span style={{ color: styleForType(selected.type).color, display: 'inline-flex' }}>
               {(() => { const I = styleForType(selected.type).Icon; return <I fontSize={16} />; })()}
