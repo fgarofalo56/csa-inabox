@@ -3,8 +3,10 @@
 /**
  * Governance → Master data management (MDM + reference data).
  *
- * Azure-native, self-built match-merge (no Microsoft Fabric, no partner SaaS —
- * Purview MDM is partner-only). Tabs:
+ * Azure-native, self-built match-merge — no Microsoft Fabric and no partner MDM
+ * SaaS (Purview MDM is partner-only). The match/merge engine runs on the
+ * workspace's Azure Databricks SQL Warehouse (real Spark SQL); see the Match +
+ * merge note below. Tabs:
  *   - Models          : define entity match attributes + survivorship rules
  *   - Reference data  : managed code lists / domains (RDM), versioned
  *   - Match           : run scored candidate-duplicate matching for steward review
