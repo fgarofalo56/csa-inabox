@@ -343,6 +343,35 @@ const GEO_FORMAT_OPTIONS: Array<{ value: GeoDatasetState['format']; label: strin
   { value: 'csv', label: 'CSV (lat / lon columns)' },
 ];
 
+/**
+ * Map a file extension to its geometry storage format. Drives the format
+ * dropdown's auto-detect when the user types a path ending in a recognised
+ * extension (the documented intent: "select a container, geometry column, and
+ * format"). Returns undefined for unknown / no extension so the user's explicit
+ * choice is never clobbered. `.json` maps to geojson (the Inspect probe reads
+ * line-delimited GeoJSON), `.geojsonl`/`.ndjson` likewise.
+ */
+function formatFromPath(path: string): GeoDatasetState['format'] | undefined {
+  const m = /\.([a-z0-9]+)$/i.exec((path || '').trim());
+  if (!m) return undefined;
+  switch (m[1].toLowerCase()) {
+    case 'parquet':
+    case 'parq':
+      return 'parquet';
+    case 'geojson':
+    case 'geojsonl':
+    case 'ndjson':
+    case 'json':
+      return 'geojson';
+    case 'csv':
+    case 'tsv':
+    case 'txt':
+      return 'csv';
+    default:
+      return undefined;
+  }
+}
+
 /** SRID picker options — the spatial reference systems the dataset declares. */
 const GEO_SRID_OPTIONS: Array<{ value: string; label: string }> = [
   { value: '4326', label: '4326 (WGS84 — lat/lon)' },
@@ -442,6 +471,7 @@ function GeoDatasetEditorBody({ item, id }: { item: FabricItemType; id: string }
   const lh = useLakehouseContainers();
   const split = splitAdlsPath(state.adlsPath || '');
   const containerAccountUrl = (lh.containers || []).find((c) => c.name === split.container)?.url;
+  const detectedFormat = formatFromPath(state.adlsPath || '');
   const canSave = dirty && !saving;
 
   // Inspect: probe the first row of the dataset via Synapse Serverless
@@ -562,11 +592,23 @@ function GeoDatasetEditorBody({ item, id }: { item: FabricItemType; id: string }
               </MessageBarBody>
             </MessageBar>
           )}
-          <Field label="Path suffix (under selected container)" hint={`Effective path: ${state.adlsPath || '(select a container)'}`}>
+          <Field
+            label="Path suffix (under selected container)"
+            hint={`Effective path: ${state.adlsPath || '(select a container)'}${detectedFormat && detectedFormat !== state.format ? ` · detected ${detectedFormat} from extension` : ''}`}
+          >
             <Input
               value={split.suffix}
-              onChange={(_: unknown, d: any) => setState((p) => ({ ...p, adlsPath: joinAdlsPath(split.container, d.value, containerAccountUrl) }))}
-              placeholder="geo/events/"
+              onChange={(_: unknown, d: any) => setState((p) => {
+                // Auto-detect the storage format from a recognised file
+                // extension so the dropdown follows the typed path. The user can
+                // still override it afterwards (an explicit dropdown choice on an
+                // extension-less path is preserved — we only set when detected).
+                const detected = formatFromPath(d.value);
+                const next = { ...p, adlsPath: joinAdlsPath(split.container, d.value, containerAccountUrl) };
+                if (detected) next.format = detected;
+                return next;
+              })}
+              placeholder="geo/events/orders.parquet"
               disabled={!split.container}
             />
           </Field>
