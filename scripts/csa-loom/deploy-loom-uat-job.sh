@@ -122,6 +122,12 @@ sleep 35
 # ---------------------------------------------------------------------------
 echo ""
 echo "[deploy-loom-uat-job] 2/5 Building loom-uat:latest via ACR Tasks..."
+# The default .dockerignore excludes e2e/ + tests/ (to keep the console image
+# lean), and ACR Tasks does NOT honor a per-Dockerfile <Dockerfile>.dockerignore.
+# So temporarily drop the e2e/tests exclusion for THIS build only (the runner
+# needs the specs), then restore it in Step 3.
+cp "$APP_DIR/.dockerignore" "$APP_DIR/.dockerignore.bak"
+grep -vxE 'e2e|tests' "$APP_DIR/.dockerignore.bak" > "$APP_DIR/.dockerignore"
 # Run from inside the app dir with a relative context (".") + relative
 # --file so the Windows `az` CLI gets a path it understands (an MSYS
 # absolute path like /e/... is rejected by Windows az acr build).
@@ -141,7 +147,8 @@ echo "[deploy-loom-uat-job] Image built: $UAT_IMAGE"
 # Step 3 — Restore ACR public access=Disabled (always, even on build failure)
 # ---------------------------------------------------------------------------
 echo ""
-echo "[deploy-loom-uat-job] 3/5 Restoring ACR public access=Disabled..."
+echo "[deploy-loom-uat-job] 3/5 Restoring ACR public access=Disabled + .dockerignore..."
+[ -f "$APP_DIR/.dockerignore.bak" ] && mv "$APP_DIR/.dockerignore.bak" "$APP_DIR/.dockerignore"
 az acr update --name "$ACR_NAME" --default-action Deny \
   -o tsv --query "networkRuleSet.defaultAction" --subscription "$SUB" || true
 az acr update --name "$ACR_NAME" --public-network-enabled false \
@@ -185,6 +192,11 @@ properties:
     registries:
       - server: ${ACR}
         identity: ${CONSOLE_UAMI_ID}
+    secrets:
+      # Defined with a placeholder so the SESSION_SECRET secretRef resolves at
+      # create time; overwritten with the console's real literal in Step 5.
+      - name: session-secret
+        value: "placeholder-overwritten-step5"
   template:
     containers:
       - name: uat
