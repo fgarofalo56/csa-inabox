@@ -27,7 +27,10 @@ test.beforeEach(async ({ context }) => { await signIn(context); });
 test('admin scaling page renders all 10 service cards', async ({ page }) => {
   const { consoleErrors, networkErrors } = await captureFailures(page, async () => {
     await page.goto(`${BASE}/admin/scaling`, { waitUntil: 'domcontentloaded' });
-    await expect(page.getByText('Scale by SKU', { exact: false })).toBeVisible({ timeout: 15_000 });
+    // "Scale by SKU" appears twice — the sidebar nav link AND the page heading
+    // (AdminShell renders sectionTitle as an <h2>). Scope to the heading role so
+    // the locator resolves to exactly one element (no strict-mode violation).
+    await expect(page.getByRole('heading', { name: /Scale by SKU/ })).toBeVisible({ timeout: 15_000 });
     for (const title of CARDS) {
       const card = page.locator(`section`).filter({ hasText: title });
       const visible = await card.first().isVisible().catch(() => false);
@@ -54,7 +57,9 @@ test('admin scaling page renders all 10 service cards', async ({ page }) => {
 
 test('each card exposes a scale dropdown (or honest gate message)', async ({ page }) => {
   await page.goto(`${BASE}/admin/scaling`, { waitUntil: 'domcontentloaded' });
-  await expect(page.getByText('Scale by SKU', { exact: false })).toBeVisible({ timeout: 15_000 });
+  // Scope to the heading role — "Scale by SKU" also appears as a sidebar nav
+  // link, so an unscoped getByText resolves to 2 elements (strict-mode error).
+  await expect(page.getByRole('heading', { name: /Scale by SKU/ })).toBeVisible({ timeout: 15_000 });
   for (const title of CARDS) {
     const card = page.locator(`section`).filter({ hasText: title }).first();
     // Card must show either a dropdown / Apply button OR a MessageBar gate.
