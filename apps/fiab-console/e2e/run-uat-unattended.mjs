@@ -161,6 +161,49 @@ function readSummary() {
 }
 
 /**
+ * Enumerate every FAILED test from report.json and print one grep-friendly line
+ * each: `UAT_FAIL <file>:<line> › <title> :: <first error line>`. This is the
+ * per-run triage signal that survives in Log Analytics even when the blob
+ * upload fails — it covers ALL specs (no-cuts, admin pages, etc.), not just the
+ * use-case-apps verdicts. Walks the Playwright JSON reporter suite tree.
+ */
+function printFailedTests() {
+  let report;
+  try {
+    report = JSON.parse(fs.readFileSync(REPORT_JSON, 'utf-8'));
+  } catch {
+    return;
+  }
+  const fails = [];
+  const walk = (suite, fileHint) => {
+    const file = suite.file || fileHint || '';
+    for (const spec of suite.specs || []) {
+      for (const t of spec.tests || []) {
+        const bad = (t.results || []).some(
+          (r) => r.status && r.status !== 'passed' && r.status !== 'skipped' && r.status !== 'expected',
+        );
+        const ok = (t.results || []).some((r) => r.status === 'passed' || r.status === 'expected');
+        if (bad && !ok) {
+          const errRaw =
+            (t.results || []).map((r) => r.error?.message).find(Boolean) || '';
+          const errLine = String(errRaw)
+            .replace(/\[[0-9;]*m/g, '') // strip ANSI
+            .split('\n')[0]
+            .slice(0, 200);
+          fails.push(`UAT_FAIL ${spec.file || file}:${spec.line ?? '?'} › ${spec.title} :: ${errLine}`);
+        }
+      }
+    }
+    for (const child of suite.suites || []) walk(child, file);
+  };
+  for (const s of report.suites || []) walk(s, s.file);
+  if (fails.length) {
+    console.error(`[run-uat-unattended] ${fails.length} failing test(s) (full list for triage):`);
+    for (const line of fails) console.error(line);
+  }
+}
+
+/**
  * Parse verdicts.ndjson to separate realFails from infra-gated outcomes.
  * A verdict is infra-gated when:
  *   - status==='fail' AND notes contain provision-failure keywords that
@@ -229,9 +272,36 @@ async function uploadResults(runTag) {
     // Dynamic import — avoids ESM/CJS issues with top-level await unavailability
     // in older Node versions and keeps the import lazy (not needed in dry runs).
     const { BlobServiceClient } = await import('@azure/storage-blob');
-    const { DefaultAzureCredential } = await import('@azure/identity');
 
-    const credential = new DefaultAzureCredential();
+    // On Azure Container Apps, @azure/identity's DefaultAzureCredential FAILS to
+    // parse the MI token (the ACA endpoint returns `expires_on` as Unix-seconds
+    // and omits `expires_in`), which is exactly the `ChainedTokenCredential
+    // authentication failed` we hit. Mirror the console's AcaManagedIdentityCredential:
+    // raw-fetch the 2019-08-01 endpoint with X-IDENTITY-HEADER and map
+    // expires_on → ms. Fall back to DefaultAzureCredential off-ACA (local dev).
+    const endpoint = process.env.IDENTITY_ENDPOINT || process.env.MSI_ENDPOINT;
+    const header = process.env.IDENTITY_HEADER || process.env.MSI_SECRET;
+    const clientId = process.env.LOOM_UAMI_CLIENT_ID || process.env.AZURE_CLIENT_ID || undefined;
+    let credential;
+    if (endpoint && header) {
+      credential = {
+        async getToken(scopes) {
+          const scope = Array.isArray(scopes) ? scopes[0] : scopes;
+          const resource = String(scope).replace(/\/\.default$/, '');
+          const u = new URL(endpoint);
+          u.searchParams.set('resource', resource);
+          u.searchParams.set('api-version', '2019-08-01');
+          if (clientId) u.searchParams.set('client_id', clientId);
+          const res = await fetch(u.toString(), { headers: { 'X-IDENTITY-HEADER': header } });
+          if (!res.ok) throw new Error(`ACA MI token fetch ${res.status}: ${await res.text().catch(() => '')}`);
+          const j = await res.json();
+          return { token: j.access_token, expiresOnTimestamp: Number(j.expires_on) * 1000 };
+        },
+      };
+    } else {
+      const { DefaultAzureCredential } = await import('@azure/identity');
+      credential = new DefaultAzureCredential();
+    }
     const serviceUrl = `https://${accountName}.blob.core.windows.net`;
     const blobService = new BlobServiceClient(serviceUrl, credential);
     const containerClient = blobService.getContainerClient(containerName);
@@ -395,6 +465,8 @@ async function main() {
     if (infraGatedSteps > 0) {
       console.log(`[run-uat-unattended] ${infraGatedSteps} provision step(s) are infra-gated (honest gates — NOT code bugs).`);
     }
+    // Always enumerate the actual failing tests (all specs) for per-run triage.
+    if (fail > 0) printFailedTests();
     if (fail > 0 && realFailCount === 0 && !strictProvision) {
       console.log(`[run-uat-unattended] All ${fail} Playwright failure(s) are infra-gated. No code bugs. Exiting 0.`);
     } else if (realFailCount === 0 && fail === 0) {
