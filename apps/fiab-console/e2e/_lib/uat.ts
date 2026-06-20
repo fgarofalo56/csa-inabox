@@ -203,3 +203,31 @@ export async function createItem(page: Page, wsId: string, type: string, display
   expect(r.ok()).toBeTruthy();
   return (await r.json()).id as string;
 }
+
+/**
+ * Poll an app-install job to terminal state and return the completed job doc.
+ *
+ * The app install POST is ASYNC (202 `{ ok, jobId, totalItems }`): item creation
+ * + Phase-2 provisioning run in a background worker so a long provision can't
+ * 504. The dialog polls GET /api/apps/install-jobs/{jobId}. Tests must do the
+ * same — the 202 body has NO `installed`/`provision`; those land on the job doc
+ * when it reaches a terminal phase (`done` / status done|partial|failed).
+ *
+ * Returns the last-known job doc (terminal if it finished within the timeout).
+ */
+export async function pollInstallJob(page: Page, jobId: string, timeoutMs = 240_000): Promise<any> {
+  const deadline = Date.now() + timeoutMs;
+  let job: any = null;
+  while (Date.now() < deadline) {
+    const r = await page.request.get(`${BASE}/api/apps/install-jobs/${jobId}`);
+    if (r.ok()) {
+      const b = await r.json().catch(() => ({}));
+      job = b?.job ?? b;
+      const terminal =
+        job && (job.phase === 'done' || ['done', 'partial', 'failed', 'completed'].includes(job.status));
+      if (terminal) return job;
+    }
+    await page.waitForTimeout(3000);
+  }
+  return job;
+}

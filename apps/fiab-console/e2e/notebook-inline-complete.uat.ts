@@ -57,7 +57,9 @@ test('inline completion: comment yields a real AOAI ghost suggestion, Tab insert
     }
   });
 
-  await ctx.tracing.start({ screenshots: true, snapshots: true, sources: true });
+  // NB: playwright.config.ts already enables `trace: 'retain-on-failure'`, which
+  // starts tracing on the context — calling tracing.start() again throws
+  // "Tracing has been already started". Rely on the config-level trace instead.
   try {
     const id = await createItem(page, wsId, 'notebook');
     await page.goto(`${BASE}/items/notebook/${id}`, { waitUntil: 'networkidle' });
@@ -94,7 +96,6 @@ test('inline completion: comment yields a real AOAI ghost suggestion, Tab insert
     });
     await page.screenshot({ path: path.join(testInfo.outputDir, 'inline-complete-accepted.png'), fullPage: true });
   } finally {
-    await ctx.tracing.stop({ path: path.join(testInfo.outputDir, 'inline-complete-trace.zip') });
     await ctx.close();
   }
 });

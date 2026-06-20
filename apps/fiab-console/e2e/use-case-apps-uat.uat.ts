@@ -38,7 +38,7 @@
 import { test, expect } from '@playwright/test';
 import path from 'node:path';
 import fs from 'node:fs';
-import { BASE, signIn, captureFailures, recordVerdict, createWorkspace } from './_lib/uat';
+import { BASE, signIn, captureFailures, recordVerdict, createWorkspace, pollInstallJob } from './_lib/uat';
 
 const SHOT_DIR = path.join(process.cwd(), 'test-results', 'uat', 'use-case-apps');
 fs.mkdirSync(SHOT_DIR, { recursive: true });
@@ -162,8 +162,13 @@ for (const appId of APP_IDS) {
       return body;
     });
 
-    const installed: any[] = result?.installed || [];
-    const steps: ProvStep[] = result?.provision?.steps || [];
+    // The install POST is async (202 { jobId }); item creation + provisioning
+    // run in a background worker. Poll the job to terminal state, then read the
+    // installed items + provision steps off the completed job doc.
+    const jobId: string | undefined = result?.jobId;
+    const job = jobId ? await pollInstallJob(page, jobId) : null;
+    const installed: any[] = job?.installed || result?.installed || [];
+    const steps: ProvStep[] = job?.provision?.steps || result?.provision?.steps || [];
     const { realFailSteps, infraGatedSteps } = classifySteps(steps);
     const created = steps.filter((s) => ['created', 'exists'].includes(s.result?.status || ''));
 
