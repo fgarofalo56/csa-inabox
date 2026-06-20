@@ -14,13 +14,23 @@
 import { test, expect } from '@playwright/test';
 import { BASE, signIn, captureFailures, recordVerdict } from './_lib/uat';
 
+// `onLoad` marks the tabs that unconditionally issue their primary
+// /api/catalog/* fetch on first render. The others are LAZY by design and we
+// only assert that they render (the click/conditional paths are covered by the
+// per-feature tests below):
+//   • /catalog/domains    — the LIST loads from /api/admin/domains (Cosmos, fast);
+//     /api/catalog/domains (the classic Purview Data Map mirror) fires only when a
+//     Purview account is live (#1482 decoupled the slow Purview probe from load).
+//   • /catalog/permissions — the PermissionMatrix is a write-only form; it calls
+//     /api/catalog/permissions only on Grant/Revoke, never on load.
+//   • /catalog/browse, /catalog/lineage — interactive; fetch after user input.
 const TABS = [
-  { path: '/catalog',              endpoint: '/api/catalog/search',      label: 'Federated search' },
-  { path: '/catalog/browse',       endpoint: '/api/catalog/browse',      label: 'Browse' },
-  { path: '/catalog/domains',      endpoint: '/api/catalog/domains',     label: 'Business domains' },
-  { path: '/catalog/permissions',  endpoint: '/api/catalog/permissions', label: 'Permissions' },
-  { path: '/catalog/metastores',   endpoint: '/api/catalog/metastores',  label: 'Metastores' },
-  { path: '/catalog/lineage',      endpoint: '/api/catalog/lineage',     label: 'Lineage' },
+  { path: '/catalog',              endpoint: '/api/catalog/search',      label: 'Federated search', onLoad: true },
+  { path: '/catalog/browse',       endpoint: '/api/catalog/browse',      label: 'Browse',           onLoad: false },
+  { path: '/catalog/domains',      endpoint: '/api/admin/domains',       label: 'Business domains', onLoad: true },
+  { path: '/catalog/permissions',  endpoint: '/api/catalog/permissions', label: 'Permissions',      onLoad: false },
+  { path: '/catalog/metastores',   endpoint: '/api/catalog/metastores',  label: 'Metastores',       onLoad: true },
+  { path: '/catalog/lineage',      endpoint: '/api/catalog/lineage',     label: 'Lineage',          onLoad: false },
 ];
 
 for (const tab of TABS) {
@@ -29,11 +39,14 @@ for (const tab of TABS) {
     await signIn(ctx);
     const page = await ctx.newPage();
     const start = Date.now();
-    const apiCalls: { url: string; status: number }[] = [];
+    const apiCalls: { url: string }[] = [];
 
-    page.on('response', (r) => {
-      const u = r.url();
-      if (u.includes('/api/catalog/')) apiCalls.push({ url: u, status: r.status() });
+    // Track the REQUEST (not the response): "a fetch was issued on load" is the
+    // assertion, and a request is recorded even if the call later aborts on the
+    // client timeout — which a slow multi-sub catalog/admin route can do.
+    page.on('request', (req) => {
+      const u = req.url();
+      if (u.includes('/api/catalog/') || u.includes('/api/admin/domains')) apiCalls.push({ url: u });
     });
 
     const { consoleErrors, networkErrors } = await captureFailures(page, async () => {
@@ -47,10 +60,11 @@ for (const tab of TABS) {
     const titleVisible = body.includes('Unified catalog') || body.includes(tab.label);
     const crashed = body.includes('Application error') || body.includes('Failed to load');
 
-    // Browse + lineage are interactive — they only fire their fetch after user
-    // input. We just assert the page rendered and let the per-feature tests
-    // exercise the click paths.
-    const expectsCallOnLoad = ['/catalog', '/catalog/domains', '/catalog/metastores', '/catalog/permissions'].includes(tab.path);
+    // Only the tabs flagged onLoad eagerly fetch their endpoint on first render;
+    // the lazy ones (browse, domains' Purview mirror, permissions, lineage) fire
+    // on user input or only when their optional back-end is live, so we just
+    // assert the page rendered and let the per-feature tests exercise those paths.
+    const expectsCallOnLoad = tab.onLoad;
     const calledExpected = !expectsCallOnLoad || apiCalls.some((c) => c.url.includes(tab.endpoint));
 
     let verdict: 'A' | 'B' | 'C' | 'F';
