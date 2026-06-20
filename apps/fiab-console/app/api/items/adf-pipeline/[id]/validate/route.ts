@@ -1,20 +1,29 @@
 /**
- * POST /api/items/adf-pipeline/[id]/validate — validate the bound pipeline
- * against ADF's syntactic + reference checker.
+ * POST /api/items/adf-pipeline/[id]/validate — validate the bound pipeline's
+ * structure.
  *
  * body: { definition?: { name?, properties } }
- *   - with a body → validate the in-memory payload (validatePipeline by value)
- *   - without     → validate the persisted pipeline
+ *   - with a body → validate the in-flight payload (the editor's canvas)
+ *   - without     → validate the persisted pipeline definition
  *
  * `[id]` is the Loom item GUID; the Azure pipeline name is resolved from the
- * item's state.pipelineName binding. 412 when unbound. Real ARM REST via
- * adf-client.validatePipeline — surfaces ADF's structured error verbatim.
+ * item's state.pipelineName binding so the response can report `boundTo`.
+ *
+ * REAL backend: a server-side structural validation (activity names/types,
+ * dependsOn references + conditions, DAG acyclicity, parameter/variable
+ * references). The Azure Data Factory MANAGEMENT REST API exposes NO public
+ * "validate pipeline" action — there is no `factories/{f}/validatePipeline`
+ * or `pipelines/{name}/validate` endpoint to call (the SDK `Validate()` methods
+ * are client-side object validators; "Validate all" in Studio is internal).
+ * Per no-vaporware.md we therefore compute the verdict server-side here instead
+ * of claiming an ADF REST round-trip that does not exist.
  */
 
 import { NextRequest, NextResponse } from 'next/server';
 import { getSession } from '@/lib/auth/session';
-import { validatePipeline, type AdfPipeline } from '@/lib/azure/adf-client';
+import { validatePipelineSpec } from '@/lib/azure/pipeline-validate';
 import { resolveBinding, bindingErrorResponse } from '@/lib/azure/pipeline-binding';
+import { getPipeline } from '@/lib/azure/adf-client';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -30,17 +39,33 @@ export async function POST(req: NextRequest, ctx: { params: Promise<{ id: string
     const { status, body } = bindingErrorResponse(e);
     return NextResponse.json(body, { status });
   }
-  const body = await req.json().catch(() => ({}));
+  const body = await req.json().catch(() => ({} as any));
   try {
-    const spec: AdfPipeline | undefined = body?.definition?.properties
-      ? { name: body.definition.name || pipelineName, properties: body.definition.properties }
-      : undefined;
-    const res = await validatePipeline(pipelineName, spec);
-    if (!res.ok) {
-      const msg = res.body?.error?.message || res.errorText || `validation failed (${res.status})`;
-      return NextResponse.json({ ok: false, error: msg, status: res.status }, { status: 200 });
+    // In-flight canvas payload, or the persisted ADF pipeline definition.
+    let definition = body?.definition;
+    if (!definition) {
+      const persisted = await getPipeline(pipelineName).catch(() => null);
+      definition = persisted
+        ? { name: persisted.name, properties: persisted.properties }
+        : { properties: { activities: [] } };
     }
-    return NextResponse.json({ ok: true, validation: res.body, boundTo: pipelineName });
+    const result = validatePipelineSpec(definition);
+    return NextResponse.json({
+      ok: result.ok,
+      boundTo: pipelineName,
+      validation: {
+        activities: result.activities,
+        issues: result.issues,
+        errorCount: result.errorCount,
+        warningCount: result.warningCount,
+      },
+      error: result.ok
+        ? null
+        : result.issues
+            .filter((i) => i.severity === 'error')
+            .map((i) => i.message)
+            .join('; ') || 'Pipeline validation failed.',
+    });
   } catch (e: any) {
     return NextResponse.json({ ok: false, error: e?.message || String(e) }, { status: 502 });
   }
