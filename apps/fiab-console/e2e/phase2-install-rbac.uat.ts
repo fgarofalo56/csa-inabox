@@ -10,7 +10,7 @@
  *      when no grant exists.
  */
 import { test, expect } from '@playwright/test';
-import { BASE, signIn, recordVerdict, createWorkspace, deleteWorkspace } from './_lib/uat';
+import { BASE, signIn, recordVerdict, createWorkspace, deleteWorkspace, pollInstallJob } from './_lib/uat';
 
 let wsId: string;
 
@@ -42,17 +42,20 @@ test('Phase 2 — install with deploy=false returns skipped report', async ({ br
   expect(r.ok()).toBeTruthy();
   const body = await r.json();
   expect(body.ok).toBe(true);
-  expect(body.provision).toBeTruthy();
-  expect(body.provision.outcome).toBe('skipped');
-  expect(body.provision.mode).toBe('shared');
-  for (const s of body.provision.steps) {
+  // Install is async (202 { jobId }); poll the job for the provision report.
+  const job = await pollInstallJob(page, body.jobId);
+  expect(job, 'install job reached terminal state').toBeTruthy();
+  expect(job.provision).toBeTruthy();
+  expect(job.provision.outcome).toBe('skipped');
+  expect(job.provision.mode).toBe('shared');
+  for (const s of job.provision.steps) {
     expect(s.result.status).toBe('skipped');
   }
   recordVerdict({
     surface: 'api:/api/apps/.../install',
     feature: 'phase2-skip',
     verdict: 'A', status: 'pass',
-    notes: `deploy=false skipped ${body.provision.steps.length} steps`,
+    notes: `deploy=false skipped ${job.provision.steps.length} steps`,
   });
   await ctx.close();
 });
@@ -67,10 +70,13 @@ test('Phase 2 — install with deploy=true returns structured provision steps', 
   expect(r.ok()).toBeTruthy();
   const body = await r.json();
   expect(body.ok).toBe(true);
-  expect(body.provision).toBeTruthy();
-  expect(['all-created', 'all-remediation', 'partial', 'skipped']).toContain(body.provision.outcome);
+  // Install is async (202 { jobId }); poll the job for the provision report.
+  const job = await pollInstallJob(page, body.jobId);
+  expect(job, 'install job reached terminal state').toBeTruthy();
+  expect(job.provision).toBeTruthy();
+  expect(['all-created', 'all-remediation', 'partial', 'skipped']).toContain(job.provision.outcome);
   // Every step should have a structured result.
-  for (const s of body.provision.steps) {
+  for (const s of job.provision.steps) {
     expect(s).toHaveProperty('itemType');
     expect(s).toHaveProperty('cosmosItemId');
     expect(s.result).toHaveProperty('status');
@@ -86,7 +92,7 @@ test('Phase 2 — install with deploy=true returns structured provision steps', 
     surface: 'api:/api/apps/.../install',
     feature: 'phase2-real',
     verdict: 'A', status: 'pass',
-    notes: `outcome=${body.provision.outcome}, steps=${body.provision.steps.length}`,
+    notes: `outcome=${job.provision.outcome}, steps=${job.provision.steps.length}`,
   });
   await ctx.close();
 });
