@@ -53,7 +53,11 @@ HERE="$(cd "$(dirname "$0")" && pwd)"
 B64="$(base64 -w0 "$HERE/loom-verify.js" 2>/dev/null || base64 "$HERE/loom-verify.js" | tr -d '\n')"
 CAEID="$(az containerapp env show -n "$CAE" -g "$ADMIN_RG" --subscription "$SUB" --query id -o tsv | tr -d '\r')"
 
-TMP="$(mktemp)"
+# Repo-relative temp path (NOT mktemp): on Windows/MSYS the /tmp/tmp.XXXX path
+# from mktemp(1) is unreadable by the Windows `az` CLI ("does not exist").
+REPO_ROOT_VERIFY="$(cd "$HERE/../.." && pwd)"
+mkdir -p "$REPO_ROOT_VERIFY/temp"
+TMP="$REPO_ROOT_VERIFY/temp/loom-verify-job-$$.yaml"
 cat > "$TMP" <<YAML
 location: centralus
 identity:

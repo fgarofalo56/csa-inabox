@@ -181,7 +181,11 @@ if [[ -n "$LOOM_UAT_RESULTS_ACCOUNT" ]]; then
   RESULTS_ACCOUNT_ENV="- { name: LOOM_UAT_RESULTS_ACCOUNT, value: \"${LOOM_UAT_RESULTS_ACCOUNT}\" }"
 fi
 
-TMP="$(mktemp)"
+# Write the YAML to a repo-relative temp path, NOT mktemp(1): on Windows/MSYS
+# `mktemp` yields a /tmp/tmp.XXXX path that the Windows `az` CLI cannot read
+# ("does not exist"), which silently breaks the job create/update step.
+mkdir -p "$REPO_ROOT/temp"
+TMP="$REPO_ROOT/temp/loom-uat-job-$$.yaml"
 cat > "$TMP" <<YAML
 location: centralus
 identity:
