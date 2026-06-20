@@ -25,6 +25,38 @@ This file is maintained automatically by
 [Conventional Commits](https://www.conventionalcommits.org/). See
 [RELEASE.md](RELEASE.md) for the release process.
 
+## [0.48.2](https://github.com/fgarofalo56/csa-inabox/compare/csa-inabox-v0.48.1...csa-inabox-v0.48.2) (2026-06-20)
+
+
+### Bug Fixes
+
+* **csa-loom:** loom-uat deploy — define job secret + temp-strip e2e from .dockerignore ([#1545](https://github.com/fgarofalo56/csa-inabox/issues/1545)) ([f26a84d](https://github.com/fgarofalo56/csa-inabox/commit/f26a84d12b34203c148c6425a02c158f96d0036a))
+
+
+### Code Refactoring
+
+* **fiab-console:** extract network-free AAS XMLA helpers into aas-tmsl.ts (Closes [#1503](https://github.com/fgarofalo56/csa-inabox/issues/1503)) ([#1544](https://github.com/fgarofalo56/csa-inabox/issues/1544)) ([61e3225](https://github.com/fgarofalo56/csa-inabox/commit/61e3225fa58ea3832bea1730e9801abc0e02631c))
+
+
+### Tests
+
+* **fiab-console:** fix no-cuts-sweep-v3 synapse-pipeline button label drift ([#1547](https://github.com/fgarofalo56/csa-inabox/issues/1547)) ([7bb289b](https://github.com/fgarofalo56/csa-inabox/commit/7bb289be56c71c49843eab84cbb7a73ca967fd62)), closes [#1546](https://github.com/fgarofalo56/csa-inabox/issues/1546)
+* **fiab-console:** fix UAT test-side drift in admin-scaling + catalog specs ([#1548](https://github.com/fgarofalo56/csa-inabox/issues/1548)) ([23c8333](https://github.com/fgarofalo56/csa-inabox/commit/23c8333e825d03067e5f5912ca8e7d50f355059f)), closes [#1546](https://github.com/fgarofalo56/csa-inabox/issues/1546)
+
+
+### Miscellaneous
+
+* **deps-dev:** Bump @types/node in /portal/react-webapp ([#1526](https://github.com/fgarofalo56/csa-inabox/issues/1526)) ([8fca9ee](https://github.com/fgarofalo56/csa-inabox/commit/8fca9ee5453e1525bf9614d03e152bf22c9dd52e))
+* **deps-dev:** Update pathspec requirement ([#1530](https://github.com/fgarofalo56/csa-inabox/issues/1530)) ([72a2a61](https://github.com/fgarofalo56/csa-inabox/commit/72a2a616e25e76be478a2f96ed884ec15cc880b7))
+* **deps:** Bump @azure/msal-browser in /portal/react-webapp ([#1524](https://github.com/fgarofalo56/csa-inabox/issues/1524)) ([cbdd243](https://github.com/fgarofalo56/csa-inabox/commit/cbdd2436ab46567022fabf79678a4496fd356161))
+* **deps:** Bump @azure/msal-react in /portal/react-webapp ([#1522](https://github.com/fgarofalo56/csa-inabox/issues/1522)) ([52f9ed5](https://github.com/fgarofalo56/csa-inabox/commit/52f9ed563666a3ee8a32ce4df1bd3154431d9b4d))
+* **deps:** Bump @radix-ui/react-dialog in /portal/react-webapp ([#1529](https://github.com/fgarofalo56/csa-inabox/issues/1529)) ([245bed3](https://github.com/fgarofalo56/csa-inabox/commit/245bed3847062401abdb93c928ba833493afb65f))
+* **deps:** Bump @radix-ui/react-dropdown-menu in /portal/react-webapp ([#1521](https://github.com/fgarofalo56/csa-inabox/issues/1521)) ([2e46b63](https://github.com/fgarofalo56/csa-inabox/commit/2e46b6382dca242eaa81ec07c07a5c3c3c6f2169))
+* **deps:** Bump @radix-ui/react-select in /portal/react-webapp ([#1523](https://github.com/fgarofalo56/csa-inabox/issues/1523)) ([12b57a8](https://github.com/fgarofalo56/csa-inabox/commit/12b57a829d6cd89e2f21c352e8a47af0b9679f63))
+* **deps:** Bump @radix-ui/react-tabs in /portal/react-webapp ([#1528](https://github.com/fgarofalo56/csa-inabox/issues/1528)) ([1935871](https://github.com/fgarofalo56/csa-inabox/commit/19358711b37c156be9f5e5a4b2cfe110ff910324))
+* **deps:** Bump axios from 1.17.0 to 1.18.0 in /portal/react-webapp ([#1525](https://github.com/fgarofalo56/csa-inabox/issues/1525)) ([5d30ecf](https://github.com/fgarofalo56/csa-inabox/commit/5d30ecf30756b55a73f22ae51febacca53d05a9d))
+* **deps:** Bump react-hook-form in /portal/react-webapp ([#1527](https://github.com/fgarofalo56/csa-inabox/issues/1527)) ([5ac5b64](https://github.com/fgarofalo56/csa-inabox/commit/5ac5b64c459dff7dc8413359640078a6d0fb1366))
+
 ## [0.48.1](https://github.com/fgarofalo56/csa-inabox/compare/csa-inabox-v0.48.0...csa-inabox-v0.48.1) (2026-06-19)
 
 
