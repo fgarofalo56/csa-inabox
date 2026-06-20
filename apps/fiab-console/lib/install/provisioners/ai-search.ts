@@ -33,6 +33,7 @@ import { fetchWithTimeout } from '@/lib/azure/fetch-with-timeout';
 import { ChainedTokenCredential, DefaultAzureCredential, ManagedIdentityCredential } from '@azure/identity';
 import { AcaManagedIdentityCredential } from '@/lib/azure/aca-managed-identity';
 import type { Provisioner, ProvisionResult } from './types';
+import { resolveInfraResidual } from './types';
 
 const SEARCH_API = '2024-07-01';
 const uamiClientId = process.env.LOOM_UAMI_CLIENT_ID;
@@ -334,7 +335,7 @@ export const aiSearchProvisioner: Provisioner = async (input): Promise<Provision
   }
   if (!putRes.ok) {
     const t = await putRes.text();
-    return { status: 'failed', error: `Search index PUT ${putRes.status}: ${t.slice(0, 300)}`, steps };
+    return resolveInfraResidual(`Search index PUT ${putRes.status}: ${t.slice(0, 300)}`, 'Confirm the AI Search service named by LOOM_AI_SEARCH_SERVICE exists and is reachable, and grant the Console UAMI Search Service Contributor on it.', { status: putRes.status, link: 'https://learn.microsoft.com/azure/search/search-howto-managed-identities-data-sources', steps });
   }
   steps.push(`Index PUT ${putRes.status} OK.`);
 

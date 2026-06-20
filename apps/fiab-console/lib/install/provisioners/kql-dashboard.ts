@@ -39,6 +39,7 @@ import { ChainedTokenCredential, DefaultAzureCredential, ManagedIdentityCredenti
 import { AcaManagedIdentityCredential } from '@/lib/azure/aca-managed-identity';
 import { FabricError, fabricHint } from '@/lib/azure/fabric-client';
 import type { Provisioner, ProvisionResult } from './types';
+import { resolveInfraResidual } from './types';
 
 const FABRIC_BASE = process.env.LOOM_FABRIC_BASE || 'https://api.fabric.microsoft.com/v1';
 const FABRIC_SCOPE = 'https://api.fabric.microsoft.com/.default';
@@ -315,11 +316,11 @@ export const kqlDashboardProvisioner: Provisioner = async (input): Promise<Provi
     };
   }
   if (list.status >= 400) {
-    return {
-      status: 'failed',
-      error: `List kqlDashboards ${list.status}: ${typeof list.body === 'string' ? list.body : JSON.stringify(list.body)}`,
-      steps,
-    };
+    return resolveInfraResidual(
+      `List kqlDashboards ${list.status}: ${typeof list.body === 'string' ? list.body : JSON.stringify(list.body)}`,
+      fabricHint(list.status) || 'Add the Console UAMI as a Contributor on this Fabric workspace (and bind it to a capacity).',
+      { status: list.status, link: `https://app.fabric.microsoft.com/groups/${ws}/settings`, steps },
+    );
   }
 
   const existing = Array.isArray(list.body?.value)
@@ -346,11 +347,11 @@ export const kqlDashboardProvisioner: Provisioner = async (input): Promise<Provi
       };
     }
     if (upd.status >= 400 && upd.status !== 202) {
-      return {
-        status: 'failed',
-        error: `updateDefinition ${upd.status}: ${typeof upd.body === 'string' ? upd.body : JSON.stringify(upd.body)}`,
-        steps,
-      };
+      return resolveInfraResidual(
+        `updateDefinition ${upd.status}: ${typeof upd.body === 'string' ? upd.body : JSON.stringify(upd.body)}`,
+        fabricHint(upd.status) || 'Add the Console UAMI as a Contributor on this Fabric workspace (and bind it to a capacity).',
+        { status: upd.status, link: `https://app.fabric.microsoft.com/groups/${ws}/settings`, steps },
+      );
     }
     steps.push(`updateDefinition ${upd.status} OK.`);
     return {
@@ -379,11 +380,11 @@ export const kqlDashboardProvisioner: Provisioner = async (input): Promise<Provi
     };
   }
   if (create.status >= 400 && create.status !== 202) {
-    return {
-      status: 'failed',
-      error: `Create kqlDashboards ${create.status}: ${typeof create.body === 'string' ? create.body : JSON.stringify(create.body)}`,
-      steps,
-    };
+    return resolveInfraResidual(
+      `Create kqlDashboards ${create.status}: ${typeof create.body === 'string' ? create.body : JSON.stringify(create.body)}`,
+      fabricHint(create.status) || 'Add the Console UAMI as a Contributor on this Fabric workspace (and bind it to a capacity).',
+      { status: create.status, link: `https://app.fabric.microsoft.com/groups/${ws}/settings`, steps },
+    );
   }
   const dashboardId = create.body?.id;
   steps.push(`Created KQL dashboard ${dashboardId || '(long-running)'}.`);

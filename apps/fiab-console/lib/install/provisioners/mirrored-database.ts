@@ -39,6 +39,7 @@ import {
   fabricHint,
 } from '@/lib/azure/fabric-client';
 import type { Provisioner, ProvisionResult } from './types';
+import { resolveInfraResidual } from './types';
 
 /** ADF object name: letters/digits/_ only, ≤ 260; first char a letter. */
 function adfName(s: string): string {
@@ -249,7 +250,7 @@ async function provisionAdfCdc(input: any, steps: string[]): Promise<ProvisionRe
         steps,
       };
     }
-    return { status: 'failed', error: msg, steps };
+    return resolveInfraResidual(msg, 'Confirm the ADF factory (LOOM_ADF_NAME / LOOM_DLZ_RG) exists and grant the Console UAMI the "Data Factory Contributor" role on it so it can author linked services / datasets / pipelines.', { link: 'https://learn.microsoft.com/azure/data-factory/concepts-roles-permissions', steps });
   }
 }
 
@@ -355,7 +356,7 @@ async function provisionFabricMirror(input: any, steps: string[], ws: string): P
         steps,
       };
     }
-    return { status: 'failed', error: e?.message || String(e), steps };
+    return resolveInfraResidual(e, fabricHint((e as any)?.status) || 'Add the Console UAMI to this Fabric workspace as a Contributor (and bind it to a capacity) so it can create + start the mirrored database.', { link: `https://app.fabric.microsoft.com/groups/${ws}/settings`, steps });
   }
 }
 

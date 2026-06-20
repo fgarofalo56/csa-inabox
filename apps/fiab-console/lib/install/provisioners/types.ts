@@ -96,6 +96,97 @@ export interface ProvisionResult {
   steps?: string[];
 }
 
+/**
+ * Infra / permission signal detector for catch-block + non-OK-status residuals.
+ *
+ * Per .claude/rules/no-vaporware.md, a MISSING-INFRA or MISSING-PERMISSION
+ * condition (env unset, resource 404, UAMI lacks a role, quota=0, throttling)
+ * must surface as an honest `remediation` gate — NOT a hard `failed` that the
+ * full-visual UAT treats as an app install failure. A `failed` is reserved for
+ * genuine unexpected errors (real bug, malformed input, logic error).
+ *
+ * Provisioners already return precise `remediation` gates for the auth/config
+ * cases they can name explicitly (401/403, missing env var). This helper covers
+ * the *residual* path: the final `catch(e)` after those explicit checks, and
+ * non-OK REST statuses, where the error may STILL be an infra/permission cause
+ * that wasn't separately matched (404, "does not exist", 429 throttling, an
+ * unprovisioned workspace/namespace/pool/cluster). The real error text is
+ * always preserved in the gate so the receipt stays debuggable.
+ */
+const INFRA_SIGNAL_RE =
+  /not found|does not exist|no such|forbidden|unauthorized|authorizationfailed|not configured|quota|\bthrottl|too many requests|\b429\b|\b403\b|\b404\b|no .{0,40}(workspace|namespace|pool|cluster|endpoint)/i;
+
+/** True when the error/status looks like a missing-infra / missing-permission
+ *  condition rather than a genuine code/logic/input bug. */
+export function isInfraOrPermissionError(e: unknown, status?: number): boolean {
+  if (status === 401 || status === 403 || status === 404 || status === 429) return true;
+  const anyE = e as any;
+  const s = anyE?.status ?? anyE?.statusCode;
+  if (s === 401 || s === 403 || s === 404 || s === 429) return true;
+  const msg =
+    typeof e === 'string'
+      ? e
+      : anyE?.message
+        ? String(anyE.message)
+        : e != null
+          ? String(e)
+          : '';
+  return INFRA_SIGNAL_RE.test(msg);
+}
+
+/**
+ * Resolve a residual error into either an honest `remediation` gate (when it
+ * matches an infra/permission signal) or a genuine `failed`. Use at the bottom
+ * of a catch block / after a non-OK status, *after* the provisioner's explicit
+ * 401/403/config checks have already run.
+ *
+ * @param e            the caught error (or an already-stringified message)
+ * @param remediation  the precise, actionable remediation text (env var to set
+ *                     / role to grant + scope / resource to provision)
+ * @param opts.reason  short gate reason; defaults to the error message
+ * @param opts.link    optional docs / portal link
+ * @param opts.errorPrefix optional prefix applied to the `failed` error text
+ * @param opts.steps   the running step log to attach
+ * @param opts.status  HTTP status when known (for non-exception residuals)
+ * @param opts.resourceId / opts.secondaryIds  carried onto the result
+ */
+export function resolveInfraResidual(
+  e: unknown,
+  remediation: string,
+  opts: {
+    reason?: string;
+    link?: string;
+    errorPrefix?: string;
+    steps?: string[];
+    status?: number;
+    resourceId?: string;
+    secondaryIds?: Record<string, string>;
+  } = {},
+): ProvisionResult {
+  const raw =
+    typeof e === 'string' ? e : (e as any)?.message ? String((e as any).message) : String(e);
+  if (isInfraOrPermissionError(e, opts.status)) {
+    return {
+      status: 'remediation',
+      ...(opts.resourceId ? { resourceId: opts.resourceId } : {}),
+      ...(opts.secondaryIds ? { secondaryIds: opts.secondaryIds } : {}),
+      gate: {
+        reason: opts.reason || raw,
+        remediation: `${remediation} (underlying error: ${raw.slice(0, 300)})`,
+        ...(opts.link ? { link: opts.link } : {}),
+      },
+      steps: opts.steps,
+    };
+  }
+  return {
+    status: 'failed',
+    error: opts.errorPrefix ? `${opts.errorPrefix}${raw}` : raw,
+    ...(opts.resourceId ? { resourceId: opts.resourceId } : {}),
+    ...(opts.secondaryIds ? { secondaryIds: opts.secondaryIds } : {}),
+    steps: opts.steps,
+  };
+}
+
 export interface ProvisionerInput {
   session: ProvisionerSession;
   target: ProvisionTarget;

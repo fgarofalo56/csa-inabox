@@ -20,6 +20,7 @@
  */
 import { listDataPipelines, upsertDataPipeline, FabricError, fabricHint } from '@/lib/azure/fabric-client';
 import type { Provisioner, ProvisionResult } from './types';
+import { resolveInfraResidual } from './types';
 import { buildRunParameters, triggerAndPollPipelineRun } from './_seed-data-pipeline';
 import { synapsePipelineProvisioner } from './synapse-pipeline';
 import { adfPipelineProvisioner } from './adf-pipeline';
@@ -152,6 +153,6 @@ export const dataPipelineProvisioner: Provisioner = async (input): Promise<Provi
         steps,
       };
     }
-    return { status: 'failed', error: e?.message || String(e), steps };
+    return resolveInfraResidual(e, 'Add the Console UAMI to this Fabric workspace as a Member/Contributor (and bind the workspace to a capacity) so it can create + run data pipelines.', { link: `https://app.fabric.microsoft.com/groups/${ws}/settings`, steps });
   }
 };

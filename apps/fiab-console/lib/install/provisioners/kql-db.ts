@@ -17,6 +17,7 @@
  */
 import { createDatabase, executeMgmtCommand, executeQuery, ingestInline, KustoError } from '@/lib/azure/kusto-client';
 import type { Provisioner, ProvisionResult } from './types';
+import { resolveInfraResidual } from './types';
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
@@ -352,7 +353,7 @@ export const kqlDatabaseProvisioner: Provisioner = async (input): Promise<Provis
         steps,
       };
     }
-    return { status: 'failed', error: e?.message || String(e), steps };
+    return resolveInfraResidual(e, 'Confirm LOOM_KUSTO_CLUSTER_URI points at a running ADX cluster and grant the Console UAMI Contributor on the cluster so it can create databases via ARM.', { link: 'https://learn.microsoft.com/azure/data-explorer/manage-cluster-permissions', steps });
   }
 
   // 1b. Wait for the async ARM create to materialize on the data plane before
@@ -394,7 +395,7 @@ export const kqlDatabaseProvisioner: Provisioner = async (input): Promise<Provis
           steps,
         };
       }
-      return { status: 'failed', error: e?.message || String(e), steps };
+      return resolveInfraResidual(e, `Grant the Console UAMI AllDatabasesAdmin on the ADX cluster so it can read database '${dbName}'.`, { link: 'https://learn.microsoft.com/azure/data-explorer/access-control/principals-and-identity-providers', steps });
     }
   }
 

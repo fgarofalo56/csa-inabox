@@ -86,8 +86,11 @@ LOOM_AUTOMATION_NAME="${LOOM_AUTOMATION_NAME:-LoomUAT[automation]}"
 UAT_PROJECT="${UAT_PROJECT:-uat}"
 UAT_GREP="${UAT_GREP:-}"  # empty = full suite
 
-# Optional: ADLS/blob URL for HTML report upload.
+# Optional: blob container + storage account for report/screenshot upload
+# (the runner uploads test-results/uat/report.json + artifacts via the UAMI,
+# in-VNet, so PE-protected DLZ storage is reachable). See #1555.
 LOOM_UAT_RESULTS_CONTAINER="${LOOM_UAT_RESULTS_CONTAINER:-}"
+LOOM_UAT_RESULTS_ACCOUNT="${LOOM_UAT_RESULTS_ACCOUNT:-}"
 
 # Image to push.
 UAT_IMAGE="${ACR}/loom-uat:latest"
@@ -173,7 +176,16 @@ if [[ -n "$LOOM_UAT_RESULTS_CONTAINER" ]]; then
   RESULTS_CONTAINER_ENV="- { name: LOOM_UAT_RESULTS_CONTAINER, value: \"${LOOM_UAT_RESULTS_CONTAINER}\" }"
 fi
 
-TMP="$(mktemp)"
+RESULTS_ACCOUNT_ENV=""
+if [[ -n "$LOOM_UAT_RESULTS_ACCOUNT" ]]; then
+  RESULTS_ACCOUNT_ENV="- { name: LOOM_UAT_RESULTS_ACCOUNT, value: \"${LOOM_UAT_RESULTS_ACCOUNT}\" }"
+fi
+
+# Write the YAML to a repo-relative temp path, NOT mktemp(1): on Windows/MSYS
+# `mktemp` yields a /tmp/tmp.XXXX path that the Windows `az` CLI cannot read
+# ("does not exist"), which silently breaks the job create/update step.
+mkdir -p "$REPO_ROOT/temp"
+TMP="$REPO_ROOT/temp/loom-uat-job-$$.yaml"
 cat > "$TMP" <<YAML
 location: centralus
 identity:
@@ -210,6 +222,7 @@ properties:
           - { name: UAT_PROJECT,             value: "${UAT_PROJECT}" }
           ${UAT_GREP_ENV}
           ${RESULTS_CONTAINER_ENV}
+          ${RESULTS_ACCOUNT_ENV}
           - { name: SESSION_SECRET,          secretRef: session-secret }
 YAML
 

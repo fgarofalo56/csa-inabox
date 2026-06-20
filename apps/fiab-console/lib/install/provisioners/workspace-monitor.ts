@@ -65,6 +65,7 @@ import {
 } from '@/lib/azure/monitor-client';
 import { armBase } from '@/lib/azure/cloud-endpoints';
 import type { Provisioner, ProvisionResult } from './types';
+import { resolveInfraResidual } from './types';
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
@@ -443,7 +444,7 @@ export const workspaceMonitorProvisioner: Provisioner = async (input): Promise<P
         steps,
       };
     }
-    return { status: 'failed', error: e?.message || String(e), steps };
+    return resolveInfraResidual(e, 'Confirm LOOM_KUSTO_CLUSTER_URI points at a running ADX cluster and grant the Console UAMI Contributor on the cluster so it can create the monitoring database via ARM.', { link: 'https://learn.microsoft.com/azure/data-explorer/manage-cluster-permissions', steps });
   }
 
   // 3b. Wait for the async ARM create to materialize before issuing commands.
@@ -464,7 +465,7 @@ export const workspaceMonitorProvisioner: Provisioner = async (input): Promise<P
           steps,
         };
       }
-      return { status: 'failed', error: e?.message || String(e), steps };
+      return resolveInfraResidual(e, `Grant the Console UAMI AllDatabasesAdmin on the ADX cluster so it can read the monitoring database '${MONITOR_DB}'.`, { link: 'https://learn.microsoft.com/azure/data-explorer/access-control/principals-and-identity-providers', steps });
     }
     if (!ready) {
       return {
