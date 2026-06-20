@@ -38,6 +38,7 @@ import { ChainedTokenCredential, DefaultAzureCredential, ManagedIdentityCredenti
 import { AcaManagedIdentityCredential } from '@/lib/azure/aca-managed-identity';
 import { FabricError, fabricHint } from '@/lib/azure/fabric-client';
 import type { Provisioner, ProvisionResult } from './types';
+import { resolveInfraResidual } from './types';
 import { fetchWithTimeout } from '@/lib/azure/fetch-with-timeout';
 
 const FABRIC_BASE = process.env.LOOM_FABRIC_BASE || 'https://api.fabric.microsoft.com/v1';
@@ -344,7 +345,7 @@ export const reportProvisioner: Provisioner = async (input): Promise<ProvisionRe
     });
     if (!upd.ok && upd.status !== 202) {
       const t = await upd.text();
-      return { status: 'failed', error: `Fabric report updateDefinition ${upd.status}: ${t.slice(0, 300)}`, steps };
+      return resolveInfraResidual(`Fabric report updateDefinition ${upd.status}: ${t.slice(0, 300)}`, fabricHint(upd.status) || 'Add the Console UAMI as a Contributor on this Fabric workspace (and bind it to a capacity).', { status: upd.status, link: `https://app.fabric.microsoft.com/groups/${ws}/settings`, steps });
     }
     steps.push(`Updated report ${match.id}.`);
     return { status: 'exists', resourceId: match.id, secondaryIds: { fabricWorkspaceId: ws, semanticModelId: resolved.id }, steps };
@@ -365,7 +366,7 @@ export const reportProvisioner: Provisioner = async (input): Promise<ProvisionRe
   }
   if (!createRes.ok && createRes.status !== 202) {
     const t = await createRes.text();
-    return { status: 'failed', error: `Fabric reports ${createRes.status}: ${t.slice(0, 300)}`, steps };
+    return resolveInfraResidual(`Fabric reports ${createRes.status}: ${t.slice(0, 300)}`, fabricHint(createRes.status) || 'Add the Console UAMI as a Contributor on this Fabric workspace (and bind it to a capacity).', { status: createRes.status, link: `https://app.fabric.microsoft.com/groups/${ws}/settings`, steps });
   }
   let body: any = null;
   try { body = await createRes.clone().json(); } catch {}

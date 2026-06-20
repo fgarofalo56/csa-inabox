@@ -41,6 +41,7 @@ import {
   mkdirsWorkspace as mkdirsDatabricksWorkspace,
 } from '@/lib/azure/databricks-client';
 import type { Provisioner, ProvisionResult } from './types';
+import { resolveInfraResidual } from './types';
 
 /** Normalize a bundle cell to { type, lang, sourceLines[] } regardless of the
  * legacy alias used (`type`/`kind`, `lang`/`language`, string|string[] source). */
@@ -271,7 +272,7 @@ async function provisionAzureNative(
           steps,
         };
       }
-      return { status: 'failed', error: msg, steps };
+      return resolveInfraResidual(msg, `Confirm the Synapse workspace '${ws}' exists and grant the Console UAMI the "Synapse Artifact Publisher" (or "Synapse Administrator") Synapse-RBAC role on it.`, { steps });
     }
   }
 
@@ -308,7 +309,7 @@ async function provisionAzureNative(
           steps,
         };
       }
-      return { status: 'failed', error: msg, steps };
+      return resolveInfraResidual(msg, `Confirm Databricks workspace '${host}' is reachable and add the Console UAMI as a workspace user/admin (SCIM bootstrap) with CAN MANAGE on /Shared so it can import notebooks.`, { link: `https://${host}`, steps });
     }
   }
 
@@ -387,6 +388,6 @@ export const notebookProvisioner: Provisioner = async (input): Promise<Provision
         steps,
       };
     }
-    return { status: 'failed', error: e?.message || String(e), steps };
+    return resolveInfraResidual(e, fabricHint((e as any)?.status) || 'Add the Console UAMI to this Fabric workspace as a Contributor (and bind it to a capacity) so it can create the notebook.', { link: `https://app.fabric.microsoft.com/groups/${ws}/settings`, steps });
   }
 };

@@ -63,6 +63,7 @@
 import { FabricError, fabricHint } from '@/lib/azure/fabric-client';
 import { fetchWithTimeout } from '@/lib/azure/fetch-with-timeout';
 import type { Provisioner, ProvisionResult } from './types';
+import { resolveInfraResidual } from './types';
 import { ChainedTokenCredential, DefaultAzureCredential, ManagedIdentityCredential } from '@azure/identity';
 import { AcaManagedIdentityCredential } from '@/lib/azure/aca-managed-identity';
 import {
@@ -656,7 +657,7 @@ async function provisionAzureNative(
         steps,
       };
     }
-    return { status: 'failed', error: `Create lakehouse root failed: ${msg}`, steps };
+    return resolveInfraResidual(msg, `Confirm the DLZ ADLS account/container '${container}' exists and grant the Console managed identity (LOOM_UAMI_CLIENT_ID) Storage Blob Data Contributor on it.`, { reason: 'ADLS: could not create the lakehouse root directory.', errorPrefix: 'Create lakehouse root failed: ', link: 'https://learn.microsoft.com/azure/storage/blobs/assign-azure-role-data-access', steps });
   }
 
   const createdFolders: string[] = [];
@@ -880,7 +881,7 @@ export const lakehouseProvisioner: Provisioner = async (input): Promise<Provisio
     };
   }
   if (list.status >= 400) {
-    return { status: 'failed', error: `List lakehouses ${list.status}: ${typeof list.body === 'string' ? list.body : JSON.stringify(list.body)}`, steps };
+    return resolveInfraResidual(`List lakehouses ${list.status}: ${typeof list.body === 'string' ? list.body : JSON.stringify(list.body)}`, fabricHint(list.status) || 'Add the Console UAMI as a Contributor on this Fabric workspace (and bind it to a capacity).', { status: list.status, link: `https://app.fabric.microsoft.com/groups/${ws}/settings`, steps });
   }
 
   const existing = Array.isArray(list.body?.value)
@@ -908,7 +909,7 @@ export const lakehouseProvisioner: Provisioner = async (input): Promise<Provisio
       };
     }
     if (create.status >= 400) {
-      return { status: 'failed', error: `Create lakehouse ${create.status}: ${typeof create.body === 'string' ? create.body : JSON.stringify(create.body)}`, steps };
+      return resolveInfraResidual(`Create lakehouse ${create.status}: ${typeof create.body === 'string' ? create.body : JSON.stringify(create.body)}`, fabricHint(create.status) || 'Add the Console UAMI as a Contributor on this Fabric workspace (and bind it to a capacity).', { status: create.status, link: `https://app.fabric.microsoft.com/groups/${ws}/settings`, steps });
     }
     lakehouseId = create.body?.id;
     steps.push(`Created lakehouse ${lakehouseId}.`);

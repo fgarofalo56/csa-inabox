@@ -42,6 +42,7 @@ import {
 } from '@/lib/azure/databricks-client';
 import { buildDatabricksSource } from './_seed-databricks';
 import type { Provisioner, ProvisionResult } from './types';
+import { resolveInfraResidual } from './types';
 
 const SHARED_CLUSTER_KEY = 'medallion_shared';
 
@@ -316,7 +317,7 @@ export const databricksJobProvisioner: Provisioner = async (input): Promise<Prov
         steps,
       };
     }
-    return { status: 'failed', error: e?.message || String(e), steps };
+    return resolveInfraResidual(e, 'Confirm LOOM_DATABRICKS_HOSTNAME points at the deployed Databricks workspace and add the Console UAMI (LOOM_UAMI_CLIENT_ID) as a workspace user with Workflows access (SCIM bootstrap) so it can create + run jobs.', { link: 'https://learn.microsoft.com/azure/databricks/jobs/automate', steps });
   }
 
   const secondaryIds: Record<string, string> = { backend: 'databricks', jobId: String(jobId) };

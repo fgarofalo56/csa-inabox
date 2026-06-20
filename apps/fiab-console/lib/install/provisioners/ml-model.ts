@@ -55,6 +55,7 @@ import {
 } from '@/lib/azure/databricks-client';
 import { resolveRunCluster } from './_seed-databricks';
 import type { Provisioner, ProvisionResult } from './types';
+import { resolveInfraResidual } from './types';
 
 interface MlModelContentLike {
   kind?: string;
@@ -249,7 +250,7 @@ export const mlModelProvisioner: Provisioner = async (input): Promise<ProvisionR
         secondaryIds: { notebookPath: nbPath },
       };
     }
-    return { status: 'failed', error: `Import training notebook failed: ${e?.message || String(e)}`, steps };
+    return resolveInfraResidual(e, 'Confirm LOOM_DATABRICKS_HOSTNAME points at the deployed Databricks workspace and add the Console UAMI as a workspace user/admin (SCIM bootstrap) so install can import the model-training notebook.', { errorPrefix: 'Import training notebook failed: ', link: 'https://learn.microsoft.com/azure/databricks/api/workspace/workspace/import', steps });
   }
 
   // 2. Submit a one-time run that trains + registers the model.
@@ -278,12 +279,7 @@ export const mlModelProvisioner: Provisioner = async (input): Promise<ProvisionR
         secondaryIds: { notebookPath: nbPath },
       };
     }
-    return {
-      status: 'failed',
-      error: `Submit training run failed: ${e?.message || String(e)}`,
-      steps,
-      secondaryIds: { notebookPath: nbPath },
-    };
+    return resolveInfraResidual(e, 'Grant the Console UAMI "Can Restart"/"Can Attach To" on the Databricks cluster (or job-run permission) so install can train + register the model.', { errorPrefix: 'Submit training run failed: ', link: 'https://learn.microsoft.com/azure/databricks/api/workspace/jobs/submit', secondaryIds: { notebookPath: nbPath }, steps });
   }
 
   // 3. Async hand-off: take a SHORT best-effort early peek (≤ ~8s) so a

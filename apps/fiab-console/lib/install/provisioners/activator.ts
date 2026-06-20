@@ -23,6 +23,7 @@ import {
   MonitorError,
 } from '@/lib/azure/monitor-client';
 import type { Provisioner, ProvisionResult } from './types';
+import { resolveInfraResidual } from './types';
 
 /** Sanitize a display name into an ARM resource name (alnum / - / _, ≤ 90). */
 function safeRuleName(displayName: string, suffix: string): string {
@@ -205,7 +206,7 @@ async function provisionFabricReflex(input: any, steps: string[], ws: string): P
         steps,
       };
     }
-    return { status: 'failed', error: e?.message || String(e), steps };
+    return resolveInfraResidual(e, 'Add the Console UAMI to the Fabric workspace as Contributor and enable the tenant setting "Service principals can use Fabric APIs" so it can create/list Activator (Reflex) items.', { link: `https://app.fabric.microsoft.com/groups/${ws}/settings`, steps });
   }
 
   const rules = rulesFromContent(input.content);

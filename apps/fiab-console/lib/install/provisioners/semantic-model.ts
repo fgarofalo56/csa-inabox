@@ -41,6 +41,7 @@ import {
 import { ChainedTokenCredential, DefaultAzureCredential, ManagedIdentityCredential } from '@azure/identity';
 import { AcaManagedIdentityCredential } from '@/lib/azure/aca-managed-identity';
 import type { Provisioner, ProvisionResult } from './types';
+import { resolveInfraResidual } from './types';
 
 const FABRIC_BASE = process.env.LOOM_FABRIC_BASE || 'https://api.fabric.microsoft.com/v1';
 const uamiClientId = process.env.LOOM_UAMI_CLIENT_ID;
@@ -409,7 +410,7 @@ async function provisionViaPowerBi(input: any, steps: string[]): Promise<Provisi
         steps,
       };
     }
-    return { status: 'failed', error: e instanceof Error ? e.message : String(e), steps };
+    return resolveInfraResidual(e, POWERBI_SP_HINT, { reason: 'Power BI: could not list workspaces to host the semantic model.', link: 'https://app.powerbi.com', steps });
   }
 
   if (!pbi.id) {
@@ -453,7 +454,7 @@ async function provisionViaPowerBi(input: any, steps: string[]): Promise<Provisi
         steps,
       };
     }
-    return { status: 'failed', error: e instanceof Error ? e.message : String(e), steps };
+    return resolveInfraResidual(e, POWERBI_SP_HINT, { reason: 'Power BI: could not create the semantic model (push dataset).', link: `https://app.powerbi.com/groups/${ws}/settings`, steps });
   }
   steps.push(`Created push dataset ${created.id}.`);
 
@@ -610,7 +611,7 @@ export const semanticModelProvisioner: Provisioner = async (input): Promise<Prov
     };
   }
   if (!res.ok && res.status !== 202) {
-    return { status: 'failed', error: `Fabric ${res.status}: ${typeof body === 'string' ? body : JSON.stringify(body || text).slice(0, 300)}`, steps };
+    return resolveInfraResidual(`Fabric ${res.status}: ${typeof body === 'string' ? body : JSON.stringify(body || text).slice(0, 300)}`, fabricHint(res.status) || 'Add the Console UAMI as a Contributor on this Fabric workspace (and bind it to a capacity).', { status: res.status, link: `https://app.fabric.microsoft.com/groups/${ws}/settings`, steps });
   }
   steps.push(`POST semanticModels ${res.status} OK.`);
   return {

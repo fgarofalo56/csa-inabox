@@ -20,6 +20,7 @@
 import { executeQuery as synapseExec, dedicatedTarget, type SynapseTarget } from '@/lib/azure/synapse-sql-client';
 import { getPoolState, resumePool } from '@/lib/azure/synapse-pool-arm';
 import type { Provisioner, ProvisionResult, RemediationGate } from './types';
+import { resolveInfraResidual } from './types';
 
 const BACKEND = process.env.LOOM_WAREHOUSE_BACKEND || 'synapse-dedicated';
 
@@ -472,7 +473,11 @@ export const warehouseProvisioner: Provisioner = async (input): Promise<Provisio
             // honestly rather than surface a bare failed.
             return { status: 'remediation', gate: RESUME_GATE, steps };
           }
-          return { status: 'failed', error: msg, steps };
+          // Auth + paused-pool are already handled above; a residual that still
+          // matches an infra/permission signal (e.g. "does not exist", 404,
+          // throttling) becomes an honest gate, while a genuine T-SQL/DDL error
+          // stays a real failure with its full message preserved.
+          return resolveInfraResidual(msg, 'In the Synapse workspace > Manage > Security, add the Console UAMI as a member of the dedicated SQL pool (CREATE USER ... FROM EXTERNAL PROVIDER; ALTER ROLE db_owner ADD MEMBER ...) and confirm the pool exists and is online.', { reason: 'Synapse dedicated SQL pool rejected a DDL batch.', link: 'https://learn.microsoft.com/azure/synapse-analytics/security/how-to-set-up-access-control', steps });
         }
       }
     }

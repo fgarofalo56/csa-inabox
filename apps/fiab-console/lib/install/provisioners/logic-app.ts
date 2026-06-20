@@ -35,6 +35,7 @@ import {
 } from '@azure/identity';
 import { AcaManagedIdentityCredential } from '@/lib/azure/aca-managed-identity';
 import type { Provisioner, ProvisionResult } from './types';
+import { resolveInfraResidual } from './types';
 import { triggerAndPollWorkflowRun } from './_seed-logic-app';
 import { armBase, armScope, LOGIC_APP_WORKFLOW_SCHEMA } from '../../azure/cloud-endpoints';
 
@@ -288,6 +289,6 @@ export const logicAppProvisioner: Provisioner = async (input): Promise<Provision
         steps,
       };
     }
-    return { status: 'failed', error: e?.message || String(e), steps };
+    return resolveInfraResidual(e, `Grant the Console UAMI the "Logic App Contributor" role on resource group ${cfg.resourceGroup} (and confirm the resource group exists) so it can author + run the workflow.`, { link: 'https://learn.microsoft.com/azure/role-based-access-control/built-in-roles#logic-app-contributor', steps });
   }
 };

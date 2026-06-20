@@ -38,6 +38,7 @@ import { fetchWithTimeout } from '@/lib/azure/fetch-with-timeout';
 import { ChainedTokenCredential, DefaultAzureCredential, ManagedIdentityCredential } from '@azure/identity';
 import { AcaManagedIdentityCredential } from '@/lib/azure/aca-managed-identity';
 import type { Provisioner, ProvisionResult } from './types';
+import { resolveInfraResidual } from './types';
 
 // Latest Unified Catalog data-plane API version (public preview).
 const UC_API = process.env.LOOM_PURVIEW_UC_API_VERSION || '2026-03-20-preview';
@@ -162,7 +163,7 @@ export const dataProductProvisioner: Provisioner = async (input): Promise<Provis
   try {
     tok = await token();
   } catch (e: any) {
-    return { status: 'failed', error: e?.message || String(e), steps };
+    return resolveInfraResidual(e, 'Could not acquire an Entra token for the Purview Unified Catalog data plane. Confirm the Console managed identity (LOOM_UAMI_CLIENT_ID) is configured and has Catalog access on the Purview account.', { link: 'https://learn.microsoft.com/purview/unified-catalog-governance-domains-create-manage', steps });
   }
   const headers = { authorization: `Bearer ${tok}`, 'content-type': 'application/json' } as const;
 

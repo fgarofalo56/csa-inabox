@@ -29,6 +29,7 @@
  */
 import { createEvaluation, FoundryError } from '@/lib/azure/foundry-client';
 import type { Provisioner, ProvisionResult } from './types';
+import { resolveInfraResidual } from './types';
 
 /**
  * Map a bundle metric name to an Azure AI evaluation evaluator id.
@@ -129,6 +130,6 @@ export const evaluationProvisioner: Provisioner = async (input): Promise<Provisi
         steps,
       };
     }
-    return { status: 'failed', error: e?.message || String(e), steps };
+    return resolveInfraResidual(e, `Confirm LOOM_FOUNDRY_PROJECT names an existing AI Foundry project and grant the Console UAMI "AzureML Data Scientist" on the project workspace '${project}'.`, { link: 'https://learn.microsoft.com/azure/machine-learning/how-to-assign-roles', steps });
   }
 };

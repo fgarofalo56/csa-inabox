@@ -26,6 +26,7 @@ import {
   EventHubsArmError,
 } from '@/lib/azure/eventhubs-client';
 import type { Provisioner, ProvisionResult } from './types';
+import { resolveInfraResidual } from './types';
 import { fetchWithTimeout } from '@/lib/azure/fetch-with-timeout';
 
 const FABRIC_BASE = process.env.LOOM_FABRIC_BASE || 'https://api.fabric.microsoft.com/v1';
@@ -129,7 +130,7 @@ async function provisionEventHubs(input: any, steps: string[]): Promise<Provisio
         steps,
       };
     }
-    return { status: 'failed', error: e?.message || String(e), steps };
+    return resolveInfraResidual(e, 'Confirm LOOM_EVENTHUBS_NAMESPACE points at a deployed Event Hubs namespace and grant the Console UAMI "Azure Event Hubs Data Owner" + Contributor on it so it can create hubs + consumer groups.', { link: 'https://learn.microsoft.com/azure/event-hubs/authenticate-application', steps });
   }
 }
 
@@ -188,7 +189,7 @@ async function provisionFabricEventstream(input: any, steps: string[], ws: strin
     });
     if (!updateRes.ok && updateRes.status !== 202) {
       const t = await updateRes.text();
-      return { status: 'failed', error: `Fabric updateDefinition ${updateRes.status}: ${t.slice(0, 300)}`, steps };
+      return resolveInfraResidual(`Fabric updateDefinition ${updateRes.status}: ${t.slice(0, 300)}`, fabricHint(updateRes.status) || 'Add the Console UAMI to this Fabric workspace as a Contributor (and bind it to a capacity).', { status: updateRes.status, link: `https://app.fabric.microsoft.com/groups/${ws}/settings`, steps });
     }
     steps.push(`Updated eventstream ${match.id}.`);
     return { status: 'exists', resourceId: match.id, secondaryIds: { backend: 'fabric', fabricWorkspaceId: ws }, steps };
@@ -209,7 +210,7 @@ async function provisionFabricEventstream(input: any, steps: string[], ws: strin
   }
   if (!createRes.ok && createRes.status !== 202) {
     const t = await createRes.text();
-    return { status: 'failed', error: `Fabric eventstreams ${createRes.status}: ${t.slice(0, 300)}`, steps };
+    return resolveInfraResidual(`Fabric eventstreams ${createRes.status}: ${t.slice(0, 300)}`, fabricHint(createRes.status) || 'Add the Console UAMI to this Fabric workspace as a Contributor (and bind it to a capacity).', { status: createRes.status, link: `https://app.fabric.microsoft.com/groups/${ws}/settings`, steps });
   }
   let body: any = null;
   try { body = await createRes.clone().json(); } catch {}

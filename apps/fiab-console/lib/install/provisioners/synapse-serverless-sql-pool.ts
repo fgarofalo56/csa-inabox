@@ -38,6 +38,7 @@
  * this provisioner returns an honest remediation rather than a stub.
  */
 import type { Provisioner, ProvisionResult } from './types';
+import { resolveInfraResidual } from './types';
 import {
   executeQuery as synapseExec,
   serverlessTarget,
@@ -218,7 +219,7 @@ export const synapseSqlPoolProvisioner: Provisioner = async (input): Promise<Pro
         steps,
       };
     }
-    return { status: 'failed', error: `CREATE DATABASE [${DB}] failed: ${e?.message || String(e)}`, steps };
+    return resolveInfraResidual(e, `Confirm the Synapse Serverless endpoint ${endpoint} is reachable and grant the Console UAMI (LOOM_UAMI_CLIENT_ID) the Synapse SQL Administrator role on the workspace (the ARM AAD admin alone does not create a serverless login for an MI — see the Serverless-SQL AAD login fix).`, { errorPrefix: `CREATE DATABASE [${DB}] failed: `, link: 'https://learn.microsoft.com/azure/synapse-analytics/security/how-to-set-up-access-control', steps });
   }
 
   // Step 2 — credential (workspace MSI passthrough) + external data source.
@@ -293,7 +294,7 @@ export const synapseSqlPoolProvisioner: Provisioner = async (input): Promise<Pro
         steps,
       };
     }
-    return { status: 'failed', error: `Serverless ${stage} step failed: ${msg}`, steps };
+    return resolveInfraResidual(msg, `The Console UAMI must be the Synapse workspace Entra (AAD) admin (or hold CONTROL on [${DB}]) and the Synapse workspace system MSI must have Storage Blob Data Contributor on the DLZ ADLS account (landing-zone/synapse-storage-rbac.bicep).`, { reason: `Synapse Serverless rejected the ${stage} step.`, errorPrefix: `Serverless ${stage} step failed: `, link: 'https://learn.microsoft.com/azure/synapse-analytics/sql/develop-storage-files-storage-access-control?tabs=managed-identity', steps });
   }
 
   // Step 2.5 (mirror only) — EXTERNAL FILE FORMAT (CSV, skip-header) + one
@@ -462,7 +463,7 @@ async function provisionDatabricksMirror(
         steps,
       };
     }
-    return { status: 'failed', error: `CREATE DATABASE [${DB}] failed: ${e?.message || String(e)}`, steps };
+    return resolveInfraResidual(e, `Confirm the Synapse Serverless endpoint ${endpoint} is reachable and grant the Console UAMI (LOOM_UAMI_CLIENT_ID) the Synapse SQL Administrator role on the workspace (the ARM AAD admin alone does not create a serverless login for an MI — see the Serverless-SQL AAD login fix).`, { errorPrefix: `CREATE DATABASE [${DB}] failed: `, link: 'https://learn.microsoft.com/azure/synapse-analytics/security/how-to-set-up-access-control', steps });
   }
 
   // Step 2 — WorkspaceIdentity credential (workspace MSI passthrough). The same
@@ -488,7 +489,7 @@ async function provisionDatabricksMirror(
         steps,
       };
     }
-    return { status: 'failed', error: `CREATE DATABASE SCOPED CREDENTIAL failed: ${e?.message || String(e)}`, steps };
+    return resolveInfraResidual(e, `Grant the Console UAMI CONTROL on the [${DB}] database, and ensure the Synapse workspace system MSI has Storage Blob Data Reader on the ADLS account(s) backing the Databricks Unity Catalog external locations.`, { errorPrefix: 'CREATE DATABASE SCOPED CREDENTIAL failed: ', link: 'https://learn.microsoft.com/azure/synapse-analytics/sql/develop-storage-files-storage-access-control?tabs=managed-identity', steps });
   }
 
   // Step 3 — one EXTERNAL DATA SOURCE per distinct storage-account root, then

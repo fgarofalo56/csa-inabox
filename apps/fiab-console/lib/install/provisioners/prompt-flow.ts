@@ -35,6 +35,7 @@ import {
   FoundryError,
 } from '@/lib/azure/foundry-client';
 import type { Provisioner, ProvisionResult } from './types';
+import { resolveInfraResidual } from './types';
 
 /**
  * Translate a bundle `prompt-flow` content blob (our editor schema) into
@@ -149,7 +150,7 @@ export const promptFlowProvisioner: Provisioner = async (input): Promise<Provisi
     if (e instanceof FoundryError && e.status === 404) {
       return remediation404(project, steps);
     }
-    return { status: 'failed', error: e?.message || String(e), steps };
+    return resolveInfraResidual(e, `Confirm LOOM_FOUNDRY_PROJECT names an existing AI Foundry project and grant the Console UAMI the data-plane role needed to author prompt flows on project '${project}'.`, { link: 'https://learn.microsoft.com/azure/ai-foundry/how-to/develop/evaluate-sdk', steps });
   }
 };
 
