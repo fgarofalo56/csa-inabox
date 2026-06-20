@@ -66,12 +66,16 @@ test('data-pipeline editor — build 2-activity pipeline, save, validate, run', 
       const canvas = page.locator('[data-testid="pipeline-canvas"]');
       await expect(canvas).toBeVisible();
 
-      // Click the "Wait" tile in the palette to insert Wait1.
-      await page.locator('[data-palette-key="Wait"]').first().click();
+      // Click the "Wait" tile in the palette to insert Wait1. The palette tiles
+      // are draggable divs (role=button, draggable=true) — Playwright's .click()
+      // applies actionability/stability checks that can time out on a draggable
+      // element, so dispatch the click event directly (verified live: this adds
+      // the node identically to a user click).
+      await page.locator('[data-palette-key="Wait"]').first().dispatchEvent('click');
       await page.waitForTimeout(500);
 
       // Insert a Web activity.
-      await page.locator('[data-palette-key="Web"]').first().click();
+      await page.locator('[data-palette-key="Web"]').first().dispatchEvent('click');
       await page.waitForTimeout(500);
 
       // Both activities should now exist on the canvas.

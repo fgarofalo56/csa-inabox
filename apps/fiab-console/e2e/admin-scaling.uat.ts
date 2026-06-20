@@ -64,7 +64,11 @@ test('each card exposes a scale dropdown (or honest gate message)', async ({ pag
     const card = page.locator(`section`).filter({ hasText: title }).first();
     // Card must show either a dropdown / Apply button OR a MessageBar gate.
     const hasDropdown = await card.locator('button:has-text("Apply"), [role="combobox"]').count() > 0;
-    const hasGate = await card.locator('text=not configured, text=Missing env, text=remediation').count() > 0;
+    // Honest-gate phrasings vary per card (e.g. the Fabric/Power BI card shows
+    // "No Fabric or Power BI capacities visible to the Console UAMI."). Match a
+    // broad set of honest-gate signals case-insensitively over the card text.
+    const cardText = (await card.innerText().catch(() => '')) || '';
+    const hasGate = /not configured|missing env|remediation|not provisioned|not deployed|no .*(capacit|cluster|pool|warehouse|service|resource).* (visible|found)|not visible|set LOOM_|grant the console/i.test(cardText);
     const ok = hasDropdown || hasGate;
     recordVerdict({
       surface: 'page:/admin/scaling',

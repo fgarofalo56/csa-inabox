@@ -105,15 +105,16 @@ for (const e of FAMILY) {
       expect(body, `${e.type}: hard-load failure`).not.toContain('workspaceId required');
 
       // The ribbon group label is rendered by the Fluent UI ribbon as a
-      // visible group caption; assert it's somewhere on the page.
-      // Note: chrome label collisions are common ('Item' is generic), so
-      // any single occurrence is enough.
-      expect(body, `${e.type}: ribbon group '${e.ribbonGroup}' missing`).toContain(e.ribbonGroup);
+      // visible group caption. The ribbon CSS uppercases group captions
+      // (text-transform), and Chromium's innerText reflects that — so the
+      // rendered text is e.g. "ITEM", not "Item". Match case-insensitively.
+      const bodyLc = body.toLowerCase();
+      expect(bodyLc, `${e.type}: ribbon group '${e.ribbonGroup}' missing`).toContain(e.ribbonGroup.toLowerCase());
 
       // Assert at least one primary-action label appears (button OR
       // tooltip-disabled action; the Fluent ribbon renders both as
-      // text-bearing nodes).
-      const primaryHit = e.primary.some((p) => body.includes(p));
+      // text-bearing nodes). Case-insensitive for the same reason.
+      const primaryHit = e.primary.some((p) => bodyLc.includes(p.toLowerCase()));
       expect(primaryHit, `${e.type}: none of primary actions ${e.primary.join('|')} visible`).toBe(true);
 
       // Surface hydration errors as test diagnostics, but don't fail —

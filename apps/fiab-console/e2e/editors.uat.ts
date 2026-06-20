@@ -51,7 +51,19 @@ for (const type of EDITOR_TYPES) {
     const start = Date.now();
 
     try {
-      const id = await createItem(page, wsId, type);
+      // Some registry editors are page/hub editors, NOT catalog item types
+      // (e.g. 'data-science-home' renders at /experience/data-science/home, not
+      // /items/...). createItem 400s 'invalid_itemType' for those, and the item
+      // editor route 404s — they aren't item editors, so skip them here rather
+      // than fail. (They're covered by their own page specs.)
+      const probe = await page.request.post(`${BASE}/api/workspaces/${wsId}/items`, {
+        data: { itemType: type, displayName: `uat-${type}-${Date.now()}` },
+      });
+      if (probe.status() === 400 && /invalid_itemType|Unknown itemType/i.test(await probe.text().catch(() => ''))) {
+        test.skip(true, `${type} is not a catalog item type (page/hub editor) — not an item-editor test`);
+      }
+      expect(probe.ok(), `createItem ${type}`).toBeTruthy();
+      const id = (await probe.json()).id as string;
 
       const { consoleErrors, networkErrors } = await captureFailures(page, async () => {
         await page.goto(`${BASE}/items/${type}/${id}`, { waitUntil: 'networkidle' });
