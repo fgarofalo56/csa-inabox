@@ -45,20 +45,31 @@ fs.mkdirSync(SHOT_DIR, { recursive: true });
 
 const STRICT_PROVISION = process.env.UAT_STRICT_PROVISION === '1';
 
-interface ProvStep { itemType: string; displayName: string; result?: { status?: string; error?: string } }
+interface ProvGate { reason?: string; remediation?: string }
+interface ProvStep { itemType: string; displayName: string; result?: { status?: string; error?: string; gate?: ProvGate } }
 
 /**
  * Pattern that classifies a provision-step error as an honest infra-gate
  * rather than a code bug. Keep this list conservative — unknown error text
- * defaults to realFail to avoid silently hiding bugs.
+ * defaults to realFail to avoid silently hiding bugs. Includes the network /
+ * private-endpoint / auth signals the Azure data-plane emits in an
+ * under-provisioned estate (Synapse PE-locked, SQL endpoint DNS, etc.).
  */
-const INFRA_GATE_RE = /not configured|not found|unauthorized|forbidden|does not exist|no .* workspace|provision|quota|RBAC|role|429|403|404|env var/i;
+const INFRA_GATE_RE = /not configured|not found|unauthorized|forbidden|does not exist|no .* workspace|provision|quota|RBAC|role|429|403|404|env var|enotfound|getaddrinfo|failed to connect|publicnetworkaccess|public network|private endpoint|not accessible|econnrefused|etimedout|grant the console|set LOOM_/i;
 
 /**
  * Classify provision steps into realFail vs infraGated groups.
- * A step is infraGated when status === 'failed' or 'remediation' AND
- * the error text matches INFRA_GATE_RE. Everything else that is
- * status === 'failed' is a realFail.
+ *
+ * A `status:'remediation'` step is BY DEFINITION an honest infra-gate
+ * (no-vaporware): the provisioner deliberately surfaced a precise remediation
+ * (env var to set / RBAC role to grant / resource to provision). Its text lives
+ * in `result.gate.{reason,remediation}`, NOT `result.error` — the previous
+ * version read only `result.error` (empty for remediation) so EVERY remediation
+ * step was mis-flagged as a realFail.
+ *
+ * A `status:'failed'` step is classified by its error/gate text against
+ * INFRA_GATE_RE: infra/permission/network → infraGated; anything else → realFail
+ * (a genuine code bug, surfaced loudly).
  */
 function classifySteps(steps: ProvStep[]): {
   realFailSteps: ProvStep[];
@@ -69,7 +80,9 @@ function classifySteps(steps: ProvStep[]): {
   for (const s of steps) {
     const st = s.result?.status;
     if (st !== 'failed' && st !== 'remediation') continue;
-    const err = s.result?.error || '';
+    if (st === 'remediation') { infraGatedSteps.push(s); continue; }
+    const g = s.result?.gate;
+    const err = `${s.result?.error || ''} ${g?.reason || ''} ${g?.remediation || ''}`;
     if (INFRA_GATE_RE.test(err)) {
       infraGatedSteps.push(s);
     } else {

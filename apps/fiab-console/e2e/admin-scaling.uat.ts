@@ -56,10 +56,14 @@ test('admin scaling page renders all 10 service cards', async ({ page }) => {
 });
 
 test('each card exposes a scale dropdown (or honest gate message)', async ({ page }) => {
-  await page.goto(`${BASE}/admin/scaling`, { waitUntil: 'domcontentloaded' });
+  await page.goto(`${BASE}/admin/scaling`, { waitUntil: 'networkidle' });
   // Scope to the heading role — "Scale by SKU" also appears as a sidebar nav
   // link, so an unscoped getByText resolves to 2 elements (strict-mode error).
   await expect(page.getByRole('heading', { name: /Scale by SKU/ })).toBeVisible({ timeout: 15_000 });
+  // Each card fetches its resource list async (combobox renders on data, or the
+  // honest gate renders on empty/403). Give the cards a beat to resolve so we
+  // don't check before either the dropdown or the gate has rendered.
+  await page.waitForTimeout(3500);
   for (const title of CARDS) {
     const card = page.locator(`section`).filter({ hasText: title }).first();
     // Card must show either a dropdown / Apply button OR a MessageBar gate.
