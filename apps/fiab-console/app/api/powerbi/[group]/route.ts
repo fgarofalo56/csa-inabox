@@ -15,7 +15,8 @@
  *
  *   DELETE /api/powerbi/reports?workspaceId=W&id=R    → delete report
  *   DELETE /api/powerbi/dataflows?workspaceId=W&id=D  → delete dataflow
- *   DELETE /api/powerbi/datasets|dashboards           → 501 (REST unsupported)
+ *   DELETE /api/powerbi/datasets?workspaceId=W&id=D   → delete semantic model
+ *   DELETE /api/powerbi/dashboards                    → 501 (no user-scoped REST DELETE)
  *
  * Every list/action hits the real Power BI REST via the existing
  * powerbi-client.ts (no mocks). The honest config-gate (LOOM_UAMI_CLIENT_ID /
@@ -40,6 +41,7 @@ import {
   refreshDataflow,
   deleteReport,
   deleteDataflow,
+  deleteDataset,
 } from '@/lib/azure/powerbi-client';
 
 export const runtime = 'nodejs';
@@ -165,14 +167,20 @@ export async function DELETE(req: NextRequest, ctx: { params: Promise<{ group: s
       await deleteDataflow(workspaceId, id);
       return NextResponse.json({ ok: true });
     }
-    // Power BI's user-scoped REST has no DELETE for datasets/dashboards.
+    if (group === 'datasets') {
+      // Power BI REST supports DELETE /groups/{groupId}/datasets/{datasetId}
+      // (Datasets - Delete Dataset In Group).
+      await deleteDataset(workspaceId, id);
+      return NextResponse.json({ ok: true });
+    }
+    // Power BI's user-scoped REST has no DELETE for dashboards — the only
+    // supported path is the Power BI service UI. Honest 501 gate (not a no-op).
     return NextResponse.json(
       {
         ok: false,
         error:
-          group === 'datasets'
-            ? 'Power BI REST does not support deleting a semantic model via the workspace API. Delete it from the Power BI service UI.'
-            : 'Power BI REST does not support deleting a dashboard via the workspace API. Delete it from the Power BI service UI.',
+          'Power BI REST does not support deleting a dashboard via the workspace API. Delete it from the Power BI service UI.',
+        hint: 'Open the dashboard in the Power BI service and use More options (...) → Delete.',
       },
       { status: 501 },
     );

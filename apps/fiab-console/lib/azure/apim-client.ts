@@ -1276,6 +1276,26 @@ export async function getNamedValueSecret(id: string): Promise<{ value?: string 
 
 // ---------------- Backends ----------------
 
+/**
+ * Authorization-credential shapes for a backend, mapped 1:1 onto the ARM
+ * `BackendCredentialsContract` (Microsoft.ApiManagement/service/backends).
+ * https://learn.microsoft.com/azure/templates/microsoft.apimanagement/service/backends
+ */
+export interface ApimBackendCredentials {
+  /** Authorization header credentials: { scheme, parameter }, e.g. {scheme:'Bearer', parameter:'<token>'}. */
+  authorization?: { scheme: string; parameter: string };
+  /** Custom request headers injected toward the backend: { 'x-api-key': ['v1'] }. */
+  header?: Record<string, string[]>;
+  /** Query-string parameters injected toward the backend: { 'code': ['v1'] }. */
+  query?: Record<string, string[]>;
+}
+
+/** Backend TLS validation toggles (ARM BackendTlsProperties). */
+export interface ApimBackendTls {
+  validateCertificateChain?: boolean;
+  validateCertificateName?: boolean;
+}
+
 export interface ApimBackendSummary {
   id: string;
   name: string;
@@ -1284,6 +1304,10 @@ export interface ApimBackendSummary {
   title?: string;
   description?: string;
   resourceId?: string;
+  /** Auth credentials configured on the backend (parameter values are returned
+   *  masked by ARM for secrets, but the presence/shape round-trips for editing). */
+  credentials?: ApimBackendCredentials;
+  tls?: ApimBackendTls;
 }
 
 export interface ApimBackendBody {
@@ -1292,10 +1316,22 @@ export interface ApimBackendBody {
   title?: string;
   description?: string;
   resourceId?: string;
+  credentials?: ApimBackendCredentials;
+  tls?: ApimBackendTls;
 }
 
 function shapeBackend(raw: any): ApimBackendSummary {
   const p = raw?.properties || {};
+  const creds = p.credentials || undefined;
+  const credentials: ApimBackendCredentials | undefined = creds
+    ? {
+        authorization: creds.authorization
+          ? { scheme: creds.authorization.scheme, parameter: creds.authorization.parameter }
+          : undefined,
+        header: creds.header || undefined,
+        query: creds.query || undefined,
+      }
+    : undefined;
   return {
     id: raw?.id,
     name: raw?.name,
@@ -1304,6 +1340,13 @@ function shapeBackend(raw: any): ApimBackendSummary {
     title: p.title,
     description: p.description,
     resourceId: p.resourceId,
+    credentials,
+    tls: p.tls
+      ? {
+          validateCertificateChain: p.tls.validateCertificateChain,
+          validateCertificateName: p.tls.validateCertificateName,
+        }
+      : undefined,
   };
 }
 
@@ -1334,6 +1377,24 @@ export async function upsertBackend(
   if (body.title) properties.title = body.title;
   if (body.description) properties.description = body.description;
   if (body.resourceId) properties.resourceId = body.resourceId;
+  if (body.credentials) {
+    const c: any = {};
+    if (body.credentials.authorization?.scheme && body.credentials.authorization?.parameter) {
+      c.authorization = {
+        scheme: body.credentials.authorization.scheme,
+        parameter: body.credentials.authorization.parameter,
+      };
+    }
+    if (body.credentials.header && Object.keys(body.credentials.header).length) c.header = body.credentials.header;
+    if (body.credentials.query && Object.keys(body.credentials.query).length) c.query = body.credentials.query;
+    if (Object.keys(c).length) properties.credentials = c;
+  }
+  if (body.tls && (body.tls.validateCertificateChain !== undefined || body.tls.validateCertificateName !== undefined)) {
+    properties.tls = {
+      validateCertificateChain: body.tls.validateCertificateChain ?? true,
+      validateCertificateName: body.tls.validateCertificateName ?? true,
+    };
+  }
   const res = await apimFetch(`/backends/${encodeURIComponent(id)}`, {
     method: 'PUT',
     body: JSON.stringify({ properties }),
