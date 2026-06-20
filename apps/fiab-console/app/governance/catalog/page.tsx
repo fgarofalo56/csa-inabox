@@ -16,8 +16,8 @@
 import { clientFetch } from '@/lib/client-fetch';
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import {
-  Badge, Caption1, Body1, Button, Title3,
-  MessageBar, MessageBarBody, MessageBarTitle,
+  Badge, Caption1, Body1, Button, Title3, Link,
+  MessageBar, MessageBarBody, MessageBarTitle, MessageBarActions,
   Drawer, DrawerHeader, DrawerHeaderTitle, DrawerBody,
   Field, Dropdown, Option, Textarea, Divider,
   makeStyles, tokens,
@@ -480,7 +480,24 @@ export default function GovernanceCatalogPage() {
               </Field>
               {reqResult && (
                 <MessageBar intent={reqResult.ok ? 'success' : 'error'}>
-                  <MessageBarBody>{reqResult.message}</MessageBarBody>
+                  <MessageBarBody>
+                    {reqResult.ok && <MessageBarTitle>Request submitted</MessageBarTitle>}
+                    {reqResult.message}
+                    {reqResult.ok && (
+                      <>
+                        {' '}Track its status under{' '}
+                        <Link onClick={() => router.push('/governance/access-requests')}>My access requests</Link>
+                        {' '}— the owner reviews and grants it in Governance → Policies.
+                      </>
+                    )}
+                  </MessageBarBody>
+                  {reqResult.ok && (
+                    <MessageBarActions>
+                      <Button size="small" appearance="transparent" onClick={() => router.push('/governance/access-requests')}>
+                        View my requests
+                      </Button>
+                    </MessageBarActions>
+                  )}
                 </MessageBar>
               )}
               <div>

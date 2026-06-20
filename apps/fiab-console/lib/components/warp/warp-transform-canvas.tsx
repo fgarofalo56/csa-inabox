@@ -146,7 +146,11 @@ const useStyles = makeStyles({
     ...shorthands.borderRadius(tokens.borderRadiusMedium),
     ...shorthands.padding(tokens.spacingVerticalL, tokens.spacingHorizontalL),
     display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalS,
-    height: '520px', overflowY: 'auto',
+    // Flex/scroll to fit: a tall node form (e.g. Group-by with many aggregates,
+    // or Join with two column pickers) no longer clips. The inspector grows
+    // with its content but never exceeds the canvas height, scrolling within
+    // when it would, instead of hard-clipping at a fixed 520px.
+    minHeight: '460px', maxHeight: '520px', overflowY: 'auto',
   },
   empty: {
     position: 'absolute', inset: 0, display: 'flex', flexDirection: 'column',
