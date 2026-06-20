@@ -206,7 +206,9 @@ properties:
   environmentId: ${CAEID}
   configuration:
     triggerType: Manual
-    replicaTimeout: 3600
+    # 2h — the full suite now exercises real install->provision->editor for all 29
+    # apps (tests no longer die fast at setup since #1561), so it runs much longer.
+    replicaTimeout: 7200
     replicaRetryLimit: 0
     manualTriggerConfig:
       parallelism: 1
