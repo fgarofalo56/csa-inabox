@@ -25,6 +25,21 @@ This file is maintained automatically by
 [Conventional Commits](https://www.conventionalcommits.org/). See
 [RELEASE.md](RELEASE.md) for the release process.
 
+## [0.49.0](https://github.com/fgarofalo56/csa-inabox/compare/csa-inabox-v0.48.2...csa-inabox-v0.49.0) (2026-06-20)
+
+
+### Features
+
+* **fiab-console/uat:** blob results upload + real-vs-infra-gate verdict separation ([#1555](https://github.com/fgarofalo56/csa-inabox/issues/1555)) ([e77bc61](https://github.com/fgarofalo56/csa-inabox/commit/e77bc61fb36ec5b178bebcd3cf3123428b41adcc))
+* **fiab-console:** geo-dataset format auto-detect + KQL dashboard tile CSV/clipboard export ([#1552](https://github.com/fgarofalo56/csa-inabox/issues/1552)) ([75862b0](https://github.com/fgarofalo56/csa-inabox/commit/75862b0f318d73ff5f68163ef70aa57191aab516))
+
+
+### Bug Fixes
+
+* **fiab-console/apps:** every use-case app installs — derive GLOBAL seed from the bundle registry ([#1553](https://github.com/fgarofalo56/csa-inabox/issues/1553)) ([1d90bb8](https://github.com/fgarofalo56/csa-inabox/commit/1d90bb897dc642e481fe13d343bec56b5b141cca))
+* **fiab-console:** A+ claims-vs-reality — honest comments + Warp badge + UAT count ([#1551](https://github.com/fgarofalo56/csa-inabox/issues/1551)) ([09656fb](https://github.com/fgarofalo56/csa-inabox/commit/09656fbb5983e383209db43dcbd8be0d379b7f60))
+* **fiab-console:** A+ UI polish — lineage panel responsiveness, catalog request tracking, warp inspector flex, DAX field ([#1550](https://github.com/fgarofalo56/csa-inabox/issues/1550)) ([5effbd9](https://github.com/fgarofalo56/csa-inabox/commit/5effbd95b8081f18b9f58a789374698a08f378ca))
+
 ## [0.48.2](https://github.com/fgarofalo56/csa-inabox/compare/csa-inabox-v0.48.1...csa-inabox-v0.48.2) (2026-06-20)
 
 
