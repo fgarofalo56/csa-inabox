@@ -429,7 +429,11 @@ async function main() {
   let playwrightExitCode = 0;
   try {
     const grepArg = grep ? ` --grep "${grep}"` : '';
-    const cmd = `pnpm exec playwright test --project=${project}${grepArg}`;
+    // UAT_GREP_INVERT excludes matching test titles — e.g. "tutorial:" to skip
+    // the slow screenshot-generation suite during a fast functional run.
+    const grepInvert = process.env.UAT_GREP_INVERT || '';
+    const grepInvertArg = grepInvert ? ` --grep-invert "${grepInvert}"` : '';
+    const cmd = `pnpm exec playwright test --project=${project}${grepArg}${grepInvertArg}`;
     console.log(`[run-uat-unattended] running: ${cmd}`);
     execSync(cmd, {
       cwd: ROOT,
