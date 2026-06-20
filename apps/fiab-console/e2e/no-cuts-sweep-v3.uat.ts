@@ -34,8 +34,9 @@ const PROBES: RibbonProbe[] = [
   // Synapse Spark pool
   { type: 'synapse-spark-pool', id: process.env.UAT_SPARK_POOL || 'loomspark', buttonLabel: /^Scale$/, expectsDialog: true },
   { type: 'synapse-spark-pool', id: process.env.UAT_SPARK_POOL || 'loomspark', buttonLabel: /^Auto-pause$/, expectsDialog: true },
-  // Synapse Pipeline
-  { type: 'synapse-pipeline', id: process.env.UAT_SYN_PIPELINE || 'smoke', buttonLabel: /^Triggers$/, expectsDialog: true, expectedRequest: /\/triggers/ },
+  // Synapse Pipeline — the ribbon's "Add trigger" button opens the Triggers
+  // dialog (title "Triggers — <pipeline>") and fires GET <apiBase>/triggers.
+  { type: 'synapse-pipeline', id: process.env.UAT_SYN_PIPELINE || 'smoke', buttonLabel: /^Add trigger$/, expectsDialog: true, expectedRequest: /\/triggers/ },
   // Lakehouse
   { type: 'lakehouse', id: process.env.UAT_LAKEHOUSE_ID || 'main', buttonLabel: /^Permissions$/, expectsDialog: true, expectedRequest: /\/lakehouse\/permissions/ },
   { type: 'lakehouse', id: process.env.UAT_LAKEHOUSE_ID || 'main', buttonLabel: /^Settings$/, expectsDialog: true, expectedRequest: /\/lakehouse\/settings/ },
