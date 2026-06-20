@@ -50,7 +50,7 @@ import {
   ArrowImport20Regular,
   Eye20Regular, Form20Regular,
   ArrowMaximize20Regular, Pin20Regular, Flash20Regular, Sparkle20Regular,
-  ArrowDownload20Regular,
+  ArrowDownload20Regular, Copy20Regular,
 } from '@fluentui/react-icons';
 import { AdxDatabaseTree } from '@/lib/components/adx/adx-database-tree';
 import { AdxRbacPanel } from '@/lib/components/adx/adx-rbac-panel';
@@ -275,6 +275,44 @@ function cfDecoration(match: CfMatch): { bg: string; fg: string; icon: JSX.Eleme
     }
   }
   return { bg, fg, icon: cfIconEl(match.icon), tag: match.tag, hideText: match.hideText, applyTo: match.applyTo, targetColumn: match.targetColumn, cellColumns: match.cellColumns };
+}
+
+/**
+ * Serialise a Kusto result (columns + rows) to RFC-4180 CSV. Fields containing
+ * a comma, quote, or newline are double-quoted with embedded quotes doubled;
+ * null/undefined become empty cells; objects/arrays are JSON-stringified so a
+ * dynamic column round-trips. Used by the KQL Dashboard tile export (download +
+ * clipboard) — the same client-side result already rendered in the tile, so no
+ * backend round-trip is needed.
+ */
+function kqlResultToCsv(columns: string[], rows: unknown[][]): string {
+  const esc = (v: unknown): string => {
+    if (v === null || v === undefined) return '';
+    const str = typeof v === 'object' ? JSON.stringify(v) : String(v);
+    return /[",\n\r]/.test(str) ? `"${str.replace(/"/g, '""')}"` : str;
+  };
+  const header = columns.map(esc).join(',');
+  const body = rows.map((r) => columns.map((_, c) => esc(r[c])).join(',')).join('\r\n');
+  return rows.length ? `${header}\r\n${body}` : header;
+}
+
+/** Trigger a browser download of `text` as `filename` (client-only; no-op SSR). */
+function downloadTextFile(filename: string, text: string, mime = 'text/csv;charset=utf-8'): void {
+  if (typeof document === 'undefined' || typeof URL === 'undefined') return;
+  const blob = new Blob([text], { type: mime });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = filename;
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  setTimeout(() => URL.revokeObjectURL(url), 0);
+}
+
+/** Slugify a tile title into a safe-ish filename stem. */
+function slugifyForFile(s: string): string {
+  return (s || 'tile').trim().toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 60) || 'tile';
 }
 
 /** Per-column numeric min/max across the result, for color-by-value auto-scale. */
@@ -6484,6 +6522,41 @@ export function KqlDashboardEditor({ item, id }: { item: FabricItemType; id: str
     setDirty(true);
   }, []);
 
+  // Export a tile's REAL result (the same Kusto rows already rendered) to CSV.
+  // Fabric Real-Time Dashboard tiles expose an "Export to CSV" / "Copy to
+  // clipboard" tile action; this is the 1:1. Pure client-side — the result is
+  // already in memory, so no backend round-trip is needed.
+  const exportTileCsv = useCallback((idx: number) => {
+    const t = tiles[idx];
+    const res = t?.result;
+    if (!res?.ok || !Array.isArray(res.columns) || !Array.isArray(res.rows)) {
+      setSaveErr('Run the tile first — there is no result to export yet.');
+      return;
+    }
+    const csv = kqlResultToCsv(res.columns, res.rows);
+    downloadTextFile(`${slugifyForFile(t.title)}.csv`, csv);
+    setSaveErr(null);
+    setSaveMsg(`Exported ${res.rows.length} row${res.rows.length === 1 ? '' : 's'} from “${t.title}” to CSV.`);
+  }, [tiles]);
+
+  const copyTileCsv = useCallback(async (idx: number) => {
+    const t = tiles[idx];
+    const res = t?.result;
+    if (!res?.ok || !Array.isArray(res.columns) || !Array.isArray(res.rows)) {
+      setSaveErr('Run the tile first — there is no result to copy yet.');
+      return;
+    }
+    const csv = kqlResultToCsv(res.columns, res.rows);
+    try {
+      if (typeof navigator === 'undefined' || !navigator.clipboard) throw new Error('Clipboard unavailable in this browser.');
+      await navigator.clipboard.writeText(csv);
+      setSaveErr(null);
+      setSaveMsg(`Copied ${res.rows.length} row${res.rows.length === 1 ? '' : 's'} from “${t.title}” to the clipboard (CSV).`);
+    } catch (e: any) {
+      setSaveErr(`Could not copy to clipboard: ${e?.message || e}. Use Export CSV instead.`);
+    }
+  }, [tiles]);
+
   // Run a single tile live (the tile-editor "Run" button — Fabric parity).
   const runTile = useCallback(async (idx: number) => {
     const t = tiles[idx];
@@ -6826,6 +6899,16 @@ export function KqlDashboardEditor({ item, id }: { item: FabricItemType; id: str
                 </div>
                 <div style={{ display: 'flex', gap: 2 }}>
                   <Button size="small" appearance="subtle" icon={<Play20Regular />} onClick={() => runTile(i)} aria-label="Run tile" title="Run this tile" />
+                  <Button
+                    size="small" appearance="subtle" icon={<ArrowDownload20Regular />}
+                    onClick={() => exportTileCsv(i)} disabled={!t.result?.ok}
+                    aria-label="Export tile result to CSV"
+                    title={t.result?.ok ? 'Export this tile’s result to CSV' : 'Run the tile first to enable export'} />
+                  <Button
+                    size="small" appearance="subtle" icon={<Copy20Regular />}
+                    onClick={() => copyTileCsv(i)} disabled={!t.result?.ok}
+                    aria-label="Copy tile result to clipboard"
+                    title={t.result?.ok ? 'Copy this tile’s result (CSV) to the clipboard' : 'Run the tile first to enable copy'} />
                   <Button size="small" appearance="subtle" onClick={() => setTileFlyoutIdx(i)} aria-label="Edit tile">
                     Edit
                   </Button>
