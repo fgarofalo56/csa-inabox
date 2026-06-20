@@ -171,6 +171,13 @@ if [[ -n "$UAT_GREP" ]]; then
   UAT_GREP_ENV="- { name: UAT_GREP, value: \"${UAT_GREP}\" }"
 fi
 
+# UAT_GREP_INVERT excludes matching test titles (e.g. "tutorial:" to skip the
+# slow screenshot suite during a fast functional run). See #1564.
+UAT_GREP_INVERT_ENV=""
+if [[ -n "${UAT_GREP_INVERT:-}" ]]; then
+  UAT_GREP_INVERT_ENV="- { name: UAT_GREP_INVERT, value: \"${UAT_GREP_INVERT}\" }"
+fi
+
 RESULTS_CONTAINER_ENV=""
 if [[ -n "$LOOM_UAT_RESULTS_CONTAINER" ]]; then
   RESULTS_CONTAINER_ENV="- { name: LOOM_UAT_RESULTS_CONTAINER, value: \"${LOOM_UAT_RESULTS_CONTAINER}\" }"
@@ -233,6 +240,7 @@ properties:
           - { name: LOOM_AUTOMATION_NAME,    value: "${LOOM_AUTOMATION_NAME}" }
           - { name: UAT_PROJECT,             value: "${UAT_PROJECT}" }
           ${UAT_GREP_ENV}
+          ${UAT_GREP_INVERT_ENV}
           ${RESULTS_CONTAINER_ENV}
           ${RESULTS_ACCOUNT_ENV}
           ${UAMI_CLIENT_ID_ENV}
