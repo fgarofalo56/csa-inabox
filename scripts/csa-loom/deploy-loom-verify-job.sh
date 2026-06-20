@@ -58,6 +58,8 @@ CAEID="$(az containerapp env show -n "$CAE" -g "$ADMIN_RG" --subscription "$SUB"
 REPO_ROOT_VERIFY="$(cd "$HERE/../.." && pwd)"
 mkdir -p "$REPO_ROOT_VERIFY/temp"
 TMP="$REPO_ROOT_VERIFY/temp/loom-verify-job-$$.yaml"
+# Windows `az` needs a Windows path (E:\...), not an MSYS path (/e/...).
+TMP_AZ="$(cygpath -w "$TMP" 2>/dev/null || echo "$TMP")"
 cat > "$TMP" <<YAML
 location: centralus
 identity:
@@ -91,8 +93,8 @@ properties:
           - { name: SESSION_SECRET, secretRef: session-secret }
 YAML
 
-az containerapp job create -n loom-verify -g "$ADMIN_RG" --subscription "$SUB" --yaml "$TMP" -o none 2>/dev/null \
-  || az containerapp job update -n loom-verify -g "$ADMIN_RG" --subscription "$SUB" --yaml "$TMP" -o none
+az containerapp job create -n loom-verify -g "$ADMIN_RG" --subscription "$SUB" --yaml "$TMP_AZ" -o none 2>/dev/null \
+  || az containerapp job update -n loom-verify -g "$ADMIN_RG" --subscription "$SUB" --yaml "$TMP_AZ" -o none
 rm -f "$TMP"
 
 # Set the job secret to the CONSOLE's literal SESSION_SECRET (read via ARM,

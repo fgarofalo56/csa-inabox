@@ -193,6 +193,9 @@ fi
 # ("does not exist"), which silently breaks the job create/update step.
 mkdir -p "$REPO_ROOT/temp"
 TMP="$REPO_ROOT/temp/loom-uat-job-$$.yaml"
+# The Windows `az` CLI needs a Windows path (E:\...), not an MSYS path (/e/...).
+# Convert with cygpath when available; fall back to the raw path off-Windows.
+TMP_AZ="$(cygpath -w "$TMP" 2>/dev/null || echo "$TMP")"
 cat > "$TMP" <<YAML
 location: centralus
 identity:
@@ -235,9 +238,9 @@ properties:
 YAML
 
 az containerapp job create -n loom-uat -g "$ADMIN_RG" --subscription "$SUB" \
-  --yaml "$TMP" -o none 2>/dev/null \
+  --yaml "$TMP_AZ" -o none 2>/dev/null \
   || az containerapp job update -n loom-uat -g "$ADMIN_RG" --subscription "$SUB" \
-       --yaml "$TMP" -o none
+       --yaml "$TMP_AZ" -o none
 rm -f "$TMP"
 
 # ---------------------------------------------------------------------------
