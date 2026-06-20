@@ -81,7 +81,16 @@ for (const p of PROBES) {
     }
 
     await page.goto(`${BASE}/items/${p.type}/${encodeURIComponent(itemId)}`, { waitUntil: 'networkidle' });
-    await page.waitForTimeout(1500); // let the editor settle
+    // For a persisted item the page first runs getItem (React Query → Spinner),
+    // THEN mounts the editor + ribbon — so a fixed short wait races the ribbon.
+    // Wait for the ribbon button to attach (up to 20s); if it never attaches the
+    // count below is 0 and the no-cuts assertion fails correctly.
+    await page
+      .getByRole('button', { name: p.buttonLabel })
+      .first()
+      .waitFor({ state: 'attached', timeout: 20_000 })
+      .catch(() => {});
+    await page.waitForTimeout(500);
 
     // Locate the ribbon button by accessible name.
     // -----------------------------------------------------------------------
