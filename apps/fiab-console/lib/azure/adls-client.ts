@@ -104,21 +104,42 @@ export interface ContainerInfo {
  * Probe each known container via exists() and return only those that
  * actually exist. This avoids needing list-account-level permission.
  */
+/** True when at least one DLZ container URL is configured (LOOM_*_URL). */
+export function hasConfiguredContainers(): boolean {
+  return KNOWN_CONTAINERS.some((c) => !!containerUrl(c));
+}
+
 export async function listContainers(): Promise<ContainerInfo[]> {
-  const svc = getServiceClient();
-  const out: ContainerInfo[] = [];
-  for (const name of KNOWN_CONTAINERS) {
+  // Day-1, no-config: if no LOOM_{BRONZE,SILVER,GOLD,LANDING}_URL is set there is
+  // nothing to probe — return an honest empty list FAST (never throw, never hang).
+  if (!hasConfiguredContainers()) return [];
+
+  let svc: DataLakeServiceClient;
+  try {
+    svc = getServiceClient();
+  } catch {
+    return [];
+  }
+
+  // Probe each configured container in PARALLEL with a hard per-probe timeout.
+  // Without the abort signal, fs.exists() against an unreachable account
+  // (private-endpoint-only / wrong DNS) retries with backoff and HANGS — the
+  // request never returns and Front Door answers 504. The abort guarantees the
+  // route returns within ~6s with whatever it could reach.
+  const probes = KNOWN_CONTAINERS.map(async (name): Promise<ContainerInfo | null> => {
     const url = containerUrl(name);
-    if (!url) continue;
+    if (!url) return null;
     const fs = svc.getFileSystemClient(name);
     try {
-      const exists = await fs.exists();
-      if (exists) out.push({ name, url });
+      const exists = await fs.exists({ abortSignal: AbortSignal.timeout(6000) });
+      return exists ? { name, url } : null;
     } catch {
-      // skip on auth/network failures — surface elsewhere via listPaths
+      // timeout / auth / network — skip this container, don't fail the whole list
+      return null;
     }
-  }
-  return out;
+  });
+  const results = await Promise.all(probes);
+  return results.filter((c): c is ContainerInfo => c !== null);
 }
 
 export interface PathEntry {
