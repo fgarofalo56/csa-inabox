@@ -23,20 +23,14 @@
  * No secrets are ever returned (mirrors the env-config masking convention).
  */
 import { NextRequest, NextResponse } from 'next/server';
-import { ChainedTokenCredential, DefaultAzureCredential, ManagedIdentityCredential } from '@azure/identity';
 import { getSession } from '@/lib/auth/session';
 import { graphBase } from '@/lib/auth/msal';
+import { uamiArmCredential } from '@/lib/azure/arm-credential';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
 
-const uamiClientId = process.env.LOOM_UAMI_CLIENT_ID;
-const credential = uamiClientId
-  ? new ChainedTokenCredential(
-      new ManagedIdentityCredential({ clientId: uamiClientId }),
-      new DefaultAzureCredential(),
-    )
-  : new DefaultAzureCredential();
+const credential = uamiArmCredential();
 
 interface DiscoveredApp {
   appId: string;

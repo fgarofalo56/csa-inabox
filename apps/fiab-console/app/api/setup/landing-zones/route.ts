@@ -19,9 +19,9 @@
  * No Fabric handles anywhere (no-fabric-dependency) — coordinates are Azure ids.
  */
 import { NextResponse } from 'next/server';
-import { ChainedTokenCredential, DefaultAzureCredential, ManagedIdentityCredential } from '@azure/identity';
 import { getSession } from '@/lib/auth/session';
 import { armBase, armScope } from '@/lib/azure/cloud-endpoints';
+import { uamiArmCredential } from '@/lib/azure/arm-credential';
 import { getTenantTopologySafe } from '@/lib/setup/tenant-topology';
 import {
   checkSubscriptionDeployPermission,
@@ -37,13 +37,7 @@ import {
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
 
-const uamiClientId = process.env.LOOM_UAMI_CLIENT_ID || process.env.AZURE_CLIENT_ID;
-const credential = uamiClientId
-  ? new ChainedTokenCredential(
-      new ManagedIdentityCredential({ clientId: uamiClientId }),
-      new DefaultAzureCredential(),
-    )
-  : new DefaultAzureCredential();
+const credential = uamiArmCredential();
 
 async function armToken(): Promise<string> {
   const t = await credential.getToken(armScope());

@@ -16,9 +16,9 @@
  *   { ok: false, error }                                          (auth only)
  */
 import { NextRequest, NextResponse } from 'next/server';
-import { ChainedTokenCredential, DefaultAzureCredential, ManagedIdentityCredential } from '@azure/identity';
 import { getSession } from '@/lib/auth/session';
 import { armBase } from '@/lib/azure/cloud-endpoints';
+import { uamiArmCredential } from '@/lib/azure/arm-credential';
 import {
   regionsForBoundary,
   regionDisplayName,
@@ -32,13 +32,7 @@ export const dynamic = 'force-dynamic';
 const GUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const VALID_BOUNDARIES: RegionBoundary[] = ['Commercial', 'GCC', 'GCC-High', 'IL5', 'DoD'];
 
-const uamiClientId = process.env.LOOM_UAMI_CLIENT_ID;
-const credential = uamiClientId
-  ? new ChainedTokenCredential(
-      new ManagedIdentityCredential({ clientId: uamiClientId }),
-      new DefaultAzureCredential(),
-    )
-  : new DefaultAzureCredential();
+const credential = uamiArmCredential();
 
 /** Live ARM region list for the chosen subscription. Returns null on any failure. */
 async function liveRegions(subId: string): Promise<AzureRegion[] | null> {

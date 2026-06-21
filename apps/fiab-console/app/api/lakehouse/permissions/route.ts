@@ -61,7 +61,7 @@ import {
   type RlsSubject,
   type SynapseTarget,
 } from '@/lib/azure/synapse-permissions-client';
-import { ChainedTokenCredential, DefaultAzureCredential, ManagedIdentityCredential } from '@azure/identity';
+import { uamiArmCredential } from '@/lib/azure/arm-credential';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -91,10 +91,8 @@ function resolveDedicated(): { target: SynapseTarget } | { gate: NextResponse } 
 }
 
 // ── Microsoft Graph OID → UPN enrichment (opt-in via LOOM_GRAPH_USERS_ENABLED) ─
-const uamiClientId = process.env.LOOM_UAMI_CLIENT_ID;
-const graphCredential = uamiClientId
-  ? new ChainedTokenCredential(new ManagedIdentityCredential({ clientId: uamiClientId }), new DefaultAzureCredential())
-  : new DefaultAzureCredential();
+// ACA-first UAMI chain (see lib/azure/arm-credential.ts — the ACA MI token bug).
+const graphCredential = uamiArmCredential();
 
 function graphBase(): string {
   // graph.microsoft.com (commercial) / graph.microsoft.us (Gov) — env-driven.

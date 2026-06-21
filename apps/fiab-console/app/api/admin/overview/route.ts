@@ -25,11 +25,7 @@
  * leakage is structurally impossible.
  */
 import { NextResponse } from 'next/server';
-import {
-  ChainedTokenCredential,
-  DefaultAzureCredential,
-  ManagedIdentityCredential,
-} from '@azure/identity';
+import { uamiArmCredential } from '@/lib/azure/arm-credential';
 import { getSession } from '@/lib/auth/session';
 import {
   workspacesContainer,
@@ -156,10 +152,7 @@ async function tenantSettingsCount(tenantId: string): Promise<number> {
 // ----------------------------------------------------------------------------
 
 function graphCredential() {
-  const clientId = process.env.LOOM_UAMI_CLIENT_ID || process.env.AZURE_CLIENT_ID;
-  return clientId
-    ? new ChainedTokenCredential(new ManagedIdentityCredential({ clientId }), new DefaultAzureCredential())
-    : new DefaultAzureCredential();
+  return uamiArmCredential();
 }
 
 /**

@@ -31,7 +31,7 @@ import { getSession } from '@/lib/auth/session';
 import {
   executeMgmtCommand, ingestInline, KustoError,
 } from '@/lib/azure/kusto-client';
-import { ChainedTokenCredential, DefaultAzureCredential, ManagedIdentityCredential } from '@azure/identity';
+import { uamiArmCredential } from '@/lib/azure/arm-credential';
 import { armBase, armScope } from '@/lib/azure/cloud-endpoints';
 
 export const runtime = 'nodejs';
@@ -40,10 +40,8 @@ export const dynamic = 'force-dynamic';
 const MAX_FILE_BYTES = 5 * 1024 * 1024; // 5 MB
 const MAX_INLINE_ROWS = 50_000;
 
-const uamiClientId = process.env.LOOM_UAMI_CLIENT_ID;
-const credential = uamiClientId
-  ? new ChainedTokenCredential(new ManagedIdentityCredential({ clientId: uamiClientId }), new DefaultAzureCredential())
-  : new DefaultAzureCredential();
+// ACA-first UAMI chain (see lib/azure/arm-credential.ts — the ACA MI token bug).
+const credential = uamiArmCredential();
 
 // Cloud-aware ARM base/scope come from cloud-endpoints (armBase / armScope),
 // which honor LOOM_ARM_ENDPOINT / AZURE_CLOUD for Gov (GCC-High / IL5).

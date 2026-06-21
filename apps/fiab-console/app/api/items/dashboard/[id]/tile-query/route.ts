@@ -30,11 +30,7 @@ export const dynamic = 'force-dynamic';
 
 import { NextRequest, NextResponse } from 'next/server';
 import { getSession } from '@/lib/auth/session';
-import {
-  ChainedTokenCredential,
-  DefaultAzureCredential,
-  ManagedIdentityCredential,
-} from '@azure/identity';
+import { uamiArmCredential } from '@/lib/azure/arm-credential';
 import {
   executeDatasetQueries,
   PowerBiError,
@@ -49,13 +45,8 @@ type TileKind = 'dax' | 'kusto' | 'streaming-adx';
 const MAX_ROWS = 1_000;
 
 // ---------- AOAI credential (identical pattern to the KQL assist edge) -------
-const uamiClientId = process.env.LOOM_UAMI_CLIENT_ID || process.env.AZURE_CLIENT_ID;
-const credential = uamiClientId
-  ? new ChainedTokenCredential(
-      new ManagedIdentityCredential({ clientId: uamiClientId }),
-      new DefaultAzureCredential(),
-    )
-  : new DefaultAzureCredential();
+// ACA-first UAMI chain (see lib/azure/arm-credential.ts — the ACA MI token bug).
+const credential = uamiArmCredential();
 
 async function aoaiToken(): Promise<string> {
   const audience = process.env.LOOM_AOAI_AUDIENCE || 'https://cognitiveservices.azure.com';

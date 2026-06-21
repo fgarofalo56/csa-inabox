@@ -32,11 +32,7 @@
  */
 
 import { NextRequest, NextResponse } from 'next/server';
-import {
-  ChainedTokenCredential,
-  DefaultAzureCredential,
-  ManagedIdentityCredential,
-} from '@azure/identity';
+import { uamiArmCredential } from '@/lib/azure/arm-credential';
 
 import { getSession } from '@/lib/auth/session';
 import { cogScope } from '@/lib/azure/cloud-endpoints';
@@ -62,10 +58,8 @@ export const dynamic = 'force-dynamic';
 
 // ── AOAI credential + chat (mirrors lib/copilot/dax-tools.ts) ────────────────
 
-const uamiClientId = process.env.LOOM_UAMI_CLIENT_ID || process.env.AZURE_CLIENT_ID;
-const credential = uamiClientId
-  ? new ChainedTokenCredential(new ManagedIdentityCredential({ clientId: uamiClientId }), new DefaultAzureCredential())
-  : new DefaultAzureCredential();
+// ACA-first UAMI chain (shared helper) — AcaManagedIdentityCredential first.
+const credential = uamiArmCredential();
 
 async function aoaiToken(): Promise<string> {
   const t = await credential.getToken(cogScope());

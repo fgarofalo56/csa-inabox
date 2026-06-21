@@ -14,11 +14,7 @@
  * LOOM_AOAI_ENDPOINT / LOOM_AOAI_DEPLOYMENT.
  */
 import { NextRequest, NextResponse } from 'next/server';
-import {
-  ChainedTokenCredential,
-  DefaultAzureCredential,
-  ManagedIdentityCredential,
-} from '@azure/identity';
+import { uamiArmCredential } from '@/lib/azure/arm-credential';
 import { getSession } from '@/lib/auth/session';
 import { isTenantAdmin } from '@/lib/auth/feature-gate';
 import { resolveAoaiTarget, NoAoaiDeploymentError } from '@/lib/azure/copilot-orchestrator';
@@ -27,13 +23,8 @@ import { cogScope } from '@/lib/azure/cloud-endpoints';
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
 
-const uamiClientId = process.env.LOOM_UAMI_CLIENT_ID || process.env.AZURE_CLIENT_ID;
-const credential = uamiClientId
-  ? new ChainedTokenCredential(
-      new ManagedIdentityCredential({ clientId: uamiClientId }),
-      new DefaultAzureCredential(),
-    )
-  : new DefaultAzureCredential();
+// ---------- Credential (ACA-first UAMI chain — shared helper) ----------
+const credential = uamiArmCredential();
 
 export async function POST(req: NextRequest) {
   const s = getSession();

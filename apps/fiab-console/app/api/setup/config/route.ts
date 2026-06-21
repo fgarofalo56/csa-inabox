@@ -18,22 +18,16 @@
  * No secrets are ever returned (mirrors the env-config masking convention).
  */
 import { NextResponse } from 'next/server';
-import { ChainedTokenCredential, DefaultAzureCredential, ManagedIdentityCredential } from '@azure/identity';
 import { getSession } from '@/lib/auth/session';
 import { armBase, cloudBoundaryLabel } from '@/lib/azure/cloud-endpoints';
+import { uamiArmCredential } from '@/lib/azure/arm-credential';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
 
 const GUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
-const uamiClientId = process.env.LOOM_UAMI_CLIENT_ID;
-const credential = uamiClientId
-  ? new ChainedTokenCredential(
-      new ManagedIdentityCredential({ clientId: uamiClientId }),
-      new DefaultAzureCredential(),
-    )
-  : new DefaultAzureCredential();
+const credential = uamiArmCredential();
 
 /** Best-effort friendly name for the admin subscription — never blocks the response. */
 async function resolveSubName(subId: string): Promise<string | undefined> {

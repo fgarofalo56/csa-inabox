@@ -73,12 +73,11 @@ async function aoaiPlan(userOid: string, system: string, user: string): Promise<
   const cfg = await loadTenantCopilotConfig(userOid).catch(() => null);
   const target = await resolveAoaiTarget(cfg);
 
-  const { ChainedTokenCredential, DefaultAzureCredential, ManagedIdentityCredential } = await import('@azure/identity');
+  const { uamiArmCredential } = await import('@/lib/azure/arm-credential');
   const { cogScope } = await import('@/lib/azure/cloud-endpoints');
-  const uamiClientId = process.env.LOOM_UAMI_CLIENT_ID || process.env.AZURE_CLIENT_ID;
-  const credential = uamiClientId
-    ? new ChainedTokenCredential(new ManagedIdentityCredential({ clientId: uamiClientId }), new DefaultAzureCredential())
-    : new DefaultAzureCredential();
+  // ACA-first UAMI chain (shared helper) — AcaManagedIdentityCredential is the
+  // first link so the ACA MI token bug never breaks AOAI token acquisition.
+  const credential = uamiArmCredential();
   const tok = await credential.getToken(cogScope());
   if (!tok?.token) throw new Error('Failed to acquire an Azure OpenAI token for the model-structure Copilot.');
 

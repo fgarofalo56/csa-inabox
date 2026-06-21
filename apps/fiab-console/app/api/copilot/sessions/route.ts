@@ -30,24 +30,14 @@ import {
 } from '@/lib/azure/copilot-orchestrator';
 import { loadTenantCopilotConfig } from '@/lib/azure/copilot-config-store';
 import { copilotSessionsContainer } from '@/lib/azure/cosmos-client';
-import {
-  ChainedTokenCredential,
-  DefaultAzureCredential,
-  ManagedIdentityCredential,
-} from '@azure/identity';
+import { uamiArmCredential } from '@/lib/azure/arm-credential';
 import { buildCellFixMessages, parseCellFixResponse } from '@/lib/copilot/notebook-tools';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
 
-// ---------- Credential (identical pattern to copilot-orchestrator/assist) ----------
-const uamiClientId = process.env.LOOM_UAMI_CLIENT_ID || process.env.AZURE_CLIENT_ID;
-const credential = uamiClientId
-  ? new ChainedTokenCredential(
-      new ManagedIdentityCredential({ clientId: uamiClientId }),
-      new DefaultAzureCredential(),
-    )
-  : new DefaultAzureCredential();
+// ---------- Credential (ACA-first UAMI chain — shared helper) ----------
+const credential = uamiArmCredential();
 
 export async function GET() {
   const session = getSession();

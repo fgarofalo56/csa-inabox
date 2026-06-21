@@ -29,11 +29,7 @@
  */
 
 import { armBase, armScope, detectLoomCloud } from '@/lib/azure/cloud-endpoints';
-import {
-  ChainedTokenCredential,
-  DefaultAzureCredential,
-  ManagedIdentityCredential,
-} from '@azure/identity';
+import { uamiArmCredential } from '@/lib/azure/arm-credential';
 
 /**
  * The role set auto-granted to the Console UAMI when a DLZ is attached/repaired.
@@ -123,14 +119,9 @@ export interface GrantRgScopedRolesResult {
 }
 
 // MI-FIRST credential chain (matches landing-zones/route.ts + adls-client.ts):
-// never a bare DefaultAzureCredential when a UAMI client id is wired.
-const uamiClientId = process.env.LOOM_UAMI_CLIENT_ID || process.env.AZURE_CLIENT_ID;
-const grantCredential = uamiClientId
-  ? new ChainedTokenCredential(
-      new ManagedIdentityCredential({ clientId: uamiClientId }),
-      new DefaultAzureCredential(),
-    )
-  : new DefaultAzureCredential();
+// the ACA-first chain so the broken stock-SDK MI token path is never the first
+// link in production (see lib/azure/arm-credential.ts).
+const grantCredential = uamiArmCredential();
 
 async function defaultArmToken(): Promise<string> {
   const t = await grantCredential.getToken(armScope());

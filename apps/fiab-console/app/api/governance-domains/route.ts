@@ -24,17 +24,14 @@
 import { NextResponse } from 'next/server';
 import { getSession } from '@/lib/auth/session';
 import { tenantSettingsContainer } from '@/lib/azure/cosmos-client';
-import { ChainedTokenCredential, DefaultAzureCredential, ManagedIdentityCredential } from '@azure/identity';
+import { uamiArmCredential } from '@/lib/azure/arm-credential';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
 
 const UC_API = process.env.LOOM_PURVIEW_UC_API_VERSION || '2026-03-20-preview';
 
-const uamiClientId = process.env.LOOM_UAMI_CLIENT_ID;
-const credential = uamiClientId
-  ? new ChainedTokenCredential(new ManagedIdentityCredential({ clientId: uamiClientId }), new DefaultAzureCredential())
-  : new DefaultAzureCredential();
+const credential = uamiArmCredential();
 
 interface DomainOption { id: string; name: string; description?: string }
 
