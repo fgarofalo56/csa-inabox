@@ -21,11 +21,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import crypto from 'node:crypto';
 import { getSession } from '@/lib/auth/session';
-import {
-  ChainedTokenCredential,
-  DefaultAzureCredential,
-  ManagedIdentityCredential,
-} from '@azure/identity';
+import { uamiArmCredential } from '@/lib/azure/arm-credential';
 import { graphBase, graphScope } from '@/lib/azure/cloud-endpoints';
 import { resolveAoaiTarget, NoAoaiDeploymentError } from '@/lib/azure/copilot-orchestrator';
 import { loadTenantCopilotConfig } from '@/lib/azure/copilot-config-store';
@@ -36,13 +32,7 @@ import { copilotSessionsContainer } from '@/lib/azure/cosmos-client';
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
 
-const uamiClientId = process.env.LOOM_UAMI_CLIENT_ID || process.env.AZURE_CLIENT_ID;
-const credential: ChainedTokenCredential | DefaultAzureCredential = uamiClientId
-  ? new ChainedTokenCredential(
-      new ManagedIdentityCredential({ clientId: uamiClientId }),
-      new DefaultAzureCredential(),
-    )
-  : new DefaultAzureCredential();
+const credential = uamiArmCredential();
 
 const persona = OPS_COPILOT_PERSONAS[OPS_PERSONA_ID];
 

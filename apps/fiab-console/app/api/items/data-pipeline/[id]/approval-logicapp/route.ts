@@ -27,11 +27,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { getSession } from '@/lib/auth/session';
 import { itemsContainer } from '@/lib/azure/cosmos-client';
-import {
-  DefaultAzureCredential,
-  ManagedIdentityCredential,
-  ChainedTokenCredential,
-} from '@azure/identity';
+import { uamiArmCredential } from '@/lib/azure/arm-credential';
 import type { WorkspaceItem } from '@/lib/types/workspace';
 import { armBase, armScope } from '@/lib/azure/cloud-endpoints';
 
@@ -44,13 +40,8 @@ const ARM_ENDPOINT = armBase();
 const ARM_SCOPE = armScope();
 const LOGIC_API = '2019-05-01';
 
-const uamiClientId = process.env.LOOM_UAMI_CLIENT_ID || process.env.AZURE_CLIENT_ID;
-const credential: ChainedTokenCredential | DefaultAzureCredential = uamiClientId
-  ? new ChainedTokenCredential(
-      new ManagedIdentityCredential({ clientId: uamiClientId }),
-      new DefaultAzureCredential(),
-    )
-  : new DefaultAzureCredential();
+// ACA-first UAMI chain (see lib/azure/arm-credential.ts — the ACA MI token bug).
+const credential = uamiArmCredential();
 
 function err(error: string, status: number, extra?: Record<string, unknown>) {
   return NextResponse.json({ ok: false, error, ...(extra || {}) }, { status });

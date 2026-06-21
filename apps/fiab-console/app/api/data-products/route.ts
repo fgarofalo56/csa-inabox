@@ -43,7 +43,7 @@ import {
   listOwnedItems,
   listOwnedWorkspaces,
 } from '@/app/api/items/_lib/item-crud';
-import { ChainedTokenCredential, DefaultAzureCredential, ManagedIdentityCredential } from '@azure/identity';
+import { uamiArmCredential } from '@/lib/azure/arm-credential';
 import { PUBLISH_STATUSES, type PublishStatus } from '@/lib/azure/loom-data-products-search';
 import {
   DATA_PRODUCT_DESCRIPTION_MAX,
@@ -59,10 +59,7 @@ const ITEM_TYPE = 'data-product';
 const GUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const UC_API = process.env.LOOM_PURVIEW_UC_API_VERSION || '2026-03-20-preview';
 
-const uamiClientId = process.env.LOOM_UAMI_CLIENT_ID;
-const credential = uamiClientId
-  ? new ChainedTokenCredential(new ManagedIdentityCredential({ clientId: uamiClientId }), new DefaultAzureCredential())
-  : new DefaultAzureCredential();
+const credential = uamiArmCredential();
 
 /** Resolve the Purview Unified Catalog data-plane endpoint (opt-in). */
 function resolveUcEndpoint(): string | undefined {

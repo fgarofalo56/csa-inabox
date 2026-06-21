@@ -15,16 +15,14 @@
  */
 import { NextRequest, NextResponse } from 'next/server';
 import { getSession } from '@/lib/auth/session';
-import { ChainedTokenCredential, DefaultAzureCredential, ManagedIdentityCredential } from '@azure/identity';
+import { uamiArmCredential } from '@/lib/azure/arm-credential';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
 
 const FABRIC_SCOPE = 'https://api.fabric.microsoft.com/.default';
-const uamiClientId = process.env.LOOM_UAMI_CLIENT_ID;
-const credential = uamiClientId
-  ? new ChainedTokenCredential(new ManagedIdentityCredential({ clientId: uamiClientId }), new DefaultAzureCredential())
-  : new DefaultAzureCredential();
+// ACA-first UAMI chain (see lib/azure/arm-credential.ts — the ACA MI token bug).
+const credential = uamiArmCredential();
 
 export async function POST(req: NextRequest, ctx: { params: Promise<{ id: string }> }) {
   const session = getSession();

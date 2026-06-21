@@ -43,11 +43,7 @@ import {
   NoAoaiDeploymentError,
 } from '@/lib/azure/copilot-orchestrator';
 import { loadTenantCopilotConfig } from '@/lib/azure/copilot-config-store';
-import {
-  ChainedTokenCredential,
-  DefaultAzureCredential,
-  ManagedIdentityCredential,
-} from '@azure/identity';
+import { uamiArmCredential } from '@/lib/azure/arm-credential';
 import { cogScope, getOpenAiSuffix } from '@/lib/azure/cloud-endpoints';
 import { executeQuery } from '@/lib/azure/azure-sql-client';
 
@@ -55,14 +51,8 @@ import { executeQuery } from '@/lib/azure/azure-sql-client';
 const COMMANDS = ['fix', 'explain', 'nl2sql'] as const;
 type Command = (typeof COMMANDS)[number];
 
-// ---------- Credential (identical pattern to copilot-orchestrator) ----------
-const uamiClientId = process.env.LOOM_UAMI_CLIENT_ID || process.env.AZURE_CLIENT_ID;
-const credential = uamiClientId
-  ? new ChainedTokenCredential(
-      new ManagedIdentityCredential({ clientId: uamiClientId }),
-      new DefaultAzureCredential(),
-    )
-  : new DefaultAzureCredential();
+// ---------- Credential (ACA-first UAMI chain — shared helper) ----------
+const credential = uamiArmCredential();
 
 async function aoaiToken(): Promise<string> {
   const t = await credential.getToken(cogScope());

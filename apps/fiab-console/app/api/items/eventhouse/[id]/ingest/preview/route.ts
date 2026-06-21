@@ -20,7 +20,7 @@
 
 import { NextRequest, NextResponse } from 'next/server';
 import { getSession } from '@/lib/auth/session';
-import { ChainedTokenCredential, DefaultAzureCredential, ManagedIdentityCredential } from '@azure/identity';
+import { uamiArmCredential } from '@/lib/azure/arm-credential';
 import { detectSchema, abfssToHttps, isSasUrl } from '@/lib/ingest/schema-detect';
 
 export const runtime = 'nodejs';
@@ -29,10 +29,8 @@ export const dynamic = 'force-dynamic';
 const PREVIEW_BYTES = 16 * 1024; // 16 KB is plenty for header + a few rows
 const STORAGE_SCOPE = 'https://storage.azure.com/.default';
 
-const uamiClientId = process.env.LOOM_UAMI_CLIENT_ID;
-const credential = uamiClientId
-  ? new ChainedTokenCredential(new ManagedIdentityCredential({ clientId: uamiClientId }), new DefaultAzureCredential())
-  : new DefaultAzureCredential();
+// ACA-first UAMI chain (see lib/azure/arm-credential.ts — the ACA MI token bug).
+const credential = uamiArmCredential();
 
 async function handleFile(req: NextRequest): Promise<NextResponse> {
   const form = await req.formData();

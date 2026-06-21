@@ -46,6 +46,7 @@ import {
 } from '@/lib/azure/purview-client';
 import { getUnifiedLineage } from '@/lib/azure/unified-lineage';
 import { itemsContainer, workspacesContainer } from '@/lib/azure/cosmos-client';
+import { AcaManagedIdentityCredential } from '@/lib/azure/aca-managed-identity';
 import type { Workspace, WorkspaceItem } from '@/lib/types/workspace';
 
 export const runtime = 'nodejs';
@@ -87,21 +88,23 @@ const atlasUamiClientId = process.env.LOOM_UAMI_CLIENT_ID || process.env.AZURE_C
 let _atlasCredential: { getToken(scope: string): Promise<{ token: string } | null> } | null = null;
 
 /**
- * Lazily construct the Atlas-on-AKS credential. `@azure/identity` is imported
- * dynamically (not at module top) so the route module loads without pulling the
- * full MSAL ESM graph until the DoD/IL5 Atlas path actually executes.
+ * Lazily construct the Atlas-on-AKS credential. The heavy MSAL `@azure/identity`
+ * graph is imported dynamically (not at module top) so the route module loads
+ * without pulling it until the DoD/IL5 Atlas path actually executes. The
+ * lightweight {@link AcaManagedIdentityCredential} (core-auth only) is PREPENDED
+ * as the first link so the ACA managed-identity token bug is bypassed in
+ * production (see lib/azure/arm-credential.ts).
  */
 async function atlasGetToken(scope: string): Promise<{ token: string } | null> {
   if (!_atlasCredential) {
     const { ChainedTokenCredential, DefaultAzureCredential, ManagedIdentityCredential } = await import(
       '@azure/identity'
     );
-    _atlasCredential = atlasUamiClientId
-      ? new ChainedTokenCredential(
-          new ManagedIdentityCredential({ clientId: atlasUamiClientId }),
-          new DefaultAzureCredential(),
-        )
-      : new DefaultAzureCredential();
+    _atlasCredential = new ChainedTokenCredential(
+      new AcaManagedIdentityCredential(),
+      new ManagedIdentityCredential(atlasUamiClientId ? { clientId: atlasUamiClientId } : {}),
+      new DefaultAzureCredential(),
+    );
   }
   return _atlasCredential.getToken(scope);
 }

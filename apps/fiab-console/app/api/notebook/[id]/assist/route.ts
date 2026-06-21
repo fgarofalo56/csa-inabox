@@ -32,11 +32,7 @@ import {
   resolveAoaiTarget,
   NoAoaiDeploymentError,
 } from '@/lib/azure/copilot-orchestrator';
-import {
-  ChainedTokenCredential,
-  DefaultAzureCredential,
-  ManagedIdentityCredential,
-} from '@azure/identity';
+import { uamiArmCredential } from '@/lib/azure/arm-credential';
 import { serverlessTarget, executeQuery } from '@/lib/azure/synapse-sql-client';
 import { cogScope } from '@/lib/azure/cloud-endpoints';
 import { buildAssistMessages, type InCellMode } from '@/lib/copilot/notebook-tools';
@@ -46,14 +42,8 @@ import { getLastLivyError } from '@/lib/azure/synapse-livy-client';
 type AssistMode = InCellMode; // 'generate' | 'explain' | 'fix' | 'comments' | 'optimize'
 const ASSIST_MODES: AssistMode[] = ['generate', 'explain', 'fix', 'comments', 'optimize'];
 
-// ---------- Credential (identical pattern to copilot-orchestrator) ----------
-const uamiClientId = process.env.LOOM_UAMI_CLIENT_ID || process.env.AZURE_CLIENT_ID;
-const credential = uamiClientId
-  ? new ChainedTokenCredential(
-      new ManagedIdentityCredential({ clientId: uamiClientId }),
-      new DefaultAzureCredential(),
-    )
-  : new DefaultAzureCredential();
+// ---------- Credential (ACA-first UAMI chain — shared helper) ----------
+const credential = uamiArmCredential();
 
 async function aoaiToken(): Promise<string> {
   // Boundary-aware AOAI audience: cogScope() returns .us for Gov (GCC-High /

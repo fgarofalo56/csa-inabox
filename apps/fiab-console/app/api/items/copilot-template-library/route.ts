@@ -15,7 +15,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import type { Container } from '@azure/cosmos';
 import { CosmosClient } from '@azure/cosmos';
-import { ChainedTokenCredential, DefaultAzureCredential, ManagedIdentityCredential } from '@azure/identity';
+import { uamiArmCredential } from '@/lib/azure/arm-credential';
 import { getSession } from '@/lib/auth/session';
 
 export const runtime = 'nodejs';
@@ -171,11 +171,9 @@ let _container: Container | null = null;
 let _seeded = false;
 
 function credential() {
-  const clientId = process.env.LOOM_UAMI_CLIENT_ID;
-  const chain: any[] = [];
-  if (clientId) chain.push(new ManagedIdentityCredential({ clientId }));
-  chain.push(new DefaultAzureCredential());
-  return new ChainedTokenCredential(...chain);
+  // ACA-first UAMI chain (shared helper) — AcaManagedIdentityCredential is the
+  // first link so the ACA MI token bug never breaks Cosmos AAD auth.
+  return uamiArmCredential();
 }
 
 async function getContainer(): Promise<Container> {

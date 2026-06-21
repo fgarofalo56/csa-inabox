@@ -36,11 +36,7 @@ import { getSession } from '@/lib/auth/session';
 import { NoAoaiDeploymentError } from '@/lib/azure/copilot-orchestrator';
 import { resolveCompletionTarget } from '@/lib/copilot/inline-complete';
 import { cogScope } from '@/lib/azure/cloud-endpoints';
-import {
-  ChainedTokenCredential,
-  DefaultAzureCredential,
-  ManagedIdentityCredential,
-} from '@azure/identity';
+import { uamiArmCredential } from '@/lib/azure/arm-credential';
 import { tenantSettingsContainer } from '@/lib/azure/cosmos-client';
 import { defaultSettings, type TenantSettingsDoc } from '@/lib/types/tenant-settings';
 import {
@@ -48,14 +44,8 @@ import {
   cleanInlineCompletion,
 } from '@/lib/copilot/inline-complete-prompt';
 
-// ---------- Credential (identical pattern to copilot-orchestrator) ----------
-const uamiClientId = process.env.LOOM_UAMI_CLIENT_ID || process.env.AZURE_CLIENT_ID;
-const credential = uamiClientId
-  ? new ChainedTokenCredential(
-      new ManagedIdentityCredential({ clientId: uamiClientId }),
-      new DefaultAzureCredential(),
-    )
-  : new DefaultAzureCredential();
+// ---------- Credential (ACA-first UAMI chain — shared helper) ----------
+const credential = uamiArmCredential();
 
 async function aoaiToken(): Promise<string> {
   // cogScope() picks the correct cognitiveservices audience per sovereign

@@ -52,11 +52,7 @@ import {
   resolveAoaiTarget,
   NoAoaiDeploymentError,
 } from '@/lib/azure/copilot-orchestrator';
-import {
-  ChainedTokenCredential,
-  DefaultAzureCredential,
-  ManagedIdentityCredential,
-} from '@azure/identity';
+import { uamiArmCredential } from '@/lib/azure/arm-credential';
 import { cogScope } from '@/lib/azure/cloud-endpoints';
 import {
   dedicatedTarget,
@@ -94,14 +90,8 @@ function dialectFor(engine: Engine): string {
   }
 }
 
-// ---------- Credential (identical pattern to copilot-orchestrator) ----------
-const uamiClientId = process.env.LOOM_UAMI_CLIENT_ID || process.env.AZURE_CLIENT_ID;
-const credential = uamiClientId
-  ? new ChainedTokenCredential(
-      new ManagedIdentityCredential({ clientId: uamiClientId }),
-      new DefaultAzureCredential(),
-    )
-  : new DefaultAzureCredential();
+// ---------- Credential (ACA-first UAMI chain — shared helper) ----------
+const credential = uamiArmCredential();
 
 // cogScope() is the cloud-aware AOAI `.default` scope (cognitiveservices.azure.com
 // in Commercial/GCC, cognitiveservices.azure.us in Gov) — single source of truth.

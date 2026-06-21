@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { ChainedTokenCredential, DefaultAzureCredential, ManagedIdentityCredential } from '@azure/identity';
 import { getSession } from '@/lib/auth/session';
+import { uamiArmCredential } from '@/lib/azure/arm-credential';
 import { enforceCapability } from '@/lib/auth/feature-gate';
 import { armScope } from '@/lib/azure/cloud-endpoints';
 import {
@@ -192,13 +192,7 @@ function orchestratorUrl(): string {
 // UAMI already has; it only PREDICTS whether the deploy (under the orchestrator
 // identity, which is the SAME UAMI when no separate orchestrator is wired, or
 // the operator's az credential for the copy-paste path) would be authorized.
-const preflightUamiClientId = process.env.LOOM_UAMI_CLIENT_ID || process.env.AZURE_CLIENT_ID;
-const preflightCredential = preflightUamiClientId
-  ? new ChainedTokenCredential(
-      new ManagedIdentityCredential({ clientId: preflightUamiClientId }),
-      new DefaultAzureCredential(),
-    )
-  : new DefaultAzureCredential();
+const preflightCredential = uamiArmCredential();
 
 async function armTokenForPreflight(): Promise<string> {
   const t = await preflightCredential.getToken(armScope());

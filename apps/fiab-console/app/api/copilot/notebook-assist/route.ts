@@ -41,11 +41,7 @@ import {
   persistStep,
 } from '@/lib/azure/copilot-orchestrator';
 import { loadTenantCopilotConfig } from '@/lib/azure/copilot-config-store';
-import {
-  ChainedTokenCredential,
-  DefaultAzureCredential,
-  ManagedIdentityCredential,
-} from '@azure/identity';
+import { uamiArmCredential } from '@/lib/azure/arm-credential';
 import { cogScope, detectLoomCloud } from '@/lib/azure/cloud-endpoints';
 import { buildDatastoreSchema } from '@/lib/azure/delta-schema';
 import { NOTEBOOK_PERSONA, type PersonaSystemCtx } from '@/lib/azure/copilot-personas-notebook';
@@ -72,14 +68,8 @@ type Command = (typeof COMMANDS)[number];
 /** A minimal ToolContext for the read-only notebook tools (no item mutation). */
 const TOOL_CTX = { userOid: 'system', session: { claims: { oid: 'system' } } } as const;
 
-// ---------- Credential (identical pattern to copilot-orchestrator) ----------
-const uamiClientId = process.env.LOOM_UAMI_CLIENT_ID || process.env.AZURE_CLIENT_ID;
-const credential = uamiClientId
-  ? new ChainedTokenCredential(
-      new ManagedIdentityCredential({ clientId: uamiClientId }),
-      new DefaultAzureCredential(),
-    )
-  : new DefaultAzureCredential();
+// ---------- Credential (ACA-first UAMI chain — shared helper) ----------
+const credential = uamiArmCredential();
 
 async function aoaiToken(): Promise<string> {
   const t = await credential.getToken(cogScope());

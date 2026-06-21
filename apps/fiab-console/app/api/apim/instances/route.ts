@@ -6,18 +6,13 @@
  */
 import { NextRequest, NextResponse } from 'next/server';
 import { getSession } from '@/lib/auth/session';
-import { ChainedTokenCredential, ManagedIdentityCredential, DefaultAzureCredential } from '@azure/identity';
+import { uamiArmCredential } from '@/lib/azure/arm-credential';
 import { armBase, armScope } from '@/lib/azure/cloud-endpoints';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
 
-const credential = new ChainedTokenCredential(
-  ...(process.env.LOOM_UAMI_CLIENT_ID
-    ? [new ManagedIdentityCredential({ clientId: process.env.LOOM_UAMI_CLIENT_ID })]
-    : []),
-  new DefaultAzureCredential(),
-);
+const credential = uamiArmCredential();
 
 export async function GET(_req: NextRequest) {
   const s = getSession();

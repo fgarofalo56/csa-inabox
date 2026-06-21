@@ -34,11 +34,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { getSession } from '@/lib/auth/session';
 import { getUserArmToken } from '@/lib/azure/user-token-store';
-import {
-  DefaultAzureCredential,
-  ManagedIdentityCredential,
-  ChainedTokenCredential,
-} from '@azure/identity';
+import { uamiArmCredential } from '@/lib/azure/arm-credential';
 import { armBase, armScope } from '@/lib/azure/cloud-endpoints';
 
 export const runtime = 'nodejs';
@@ -67,11 +63,8 @@ function sanitize(s: string): string {
 }
 
 /** UAMI → DefaultAzureCredential chain (matches adf-client / foundry-cs-client). */
-function uamiCredential(): ChainedTokenCredential | DefaultAzureCredential {
-  const clientId = process.env.LOOM_UAMI_CLIENT_ID;
-  return clientId
-    ? new ChainedTokenCredential(new ManagedIdentityCredential({ clientId }), new DefaultAzureCredential())
-    : new DefaultAzureCredential();
+function uamiCredential() {
+  return uamiArmCredential();
 }
 
 /**
