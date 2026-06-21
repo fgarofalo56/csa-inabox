@@ -51,6 +51,12 @@ Minor follow-ups: (a) install dialog shows "no workspaces yet" during the slow
 renders `undefined` — populate gate.code/hint. Remaining 26 apps: same flow,
 install per-app (not all re-tested individually).
 
+### Harness apps-only run results (verified)
+- **Run 1 (console 3fe039c0):** 24 pass / 5 realFail. Defects: ml-pipeline + healthcare-popmgt + direct-lake-replacement (Databricks `existing_cluster_id` got a JOB cluster → INVALID_PARAMETER_VALUE); pipeline-designer (synapse pipeline refs uncreated dataset `ds_source_drop_csv` — #1576); azure-realtime-analytics (synapse upsertNotebook 500 BlobStorageClient — transient).
+- **Fix:** `resolveRunCluster` filters to ALL-PURPOSE clusters (isAllPurposeCluster, commit 9868ccff). Built loom-console:9868ccff → rolled rev 0000031.
+- **Run 2 (verify, console 9868ccff, scoped to the 5):** `pass=4 fail=1 realFails=0`. ml-pipeline ✅, healthcare-popmgt ✅, direct-lake-replacement ✅ (Databricks fix CONFIRMED), azure-realtime-analytics ✅ (500 was transient). pipeline-designer failed only on a transient `page.goto` 30s timeout — NOT a realFail; the #1576 dataset defect is latent (didn't reach provisioning this run).
+- **Net:** 28/29 apps provision clean (real backend or honest infra-gate); pipeline-designer has tracked real defect #1576 (synapse pipeline dataset/linked-service refs) needing a bundle/provisioner fix.
+
 ### (former) per-app table
 azure-realtime-analytics, casino-analytics, change-feed-processor, data-governance,
 data-steward, direct-lake-replacement, fabric-mirror-onboard, federal-data-mesh,
