@@ -13,20 +13,35 @@
  *               names) | project ...", options: { resultFormat:'objectArray',
  *               $top, $skipToken } }
  *
- * CREDENTIAL LADDER (response tagged `via`):
- *   1. via:'user' — the signed-in user's delegated ARM token (on-behalf-of,
- *      lib/azure/user-token-store). This is the task's "delegated token, NOT
- *      the UAMI": ARG honours the caller's own RBAC + ABAC condition
- *      assignments, so they see exactly the resources they're entitled to.
- *   2. via:'uami'  — the Loom UAMI ChainedTokenCredential ARM token fallback.
+ * CREDENTIAL + TRANSPORT LADDER (response tagged `via`):
+ *   1. via:'user'     — signed-in user's delegated ARM token via ARG (fast,
+ *      single multi-type query; honours the caller's own RBAC + ABAC).
+ *   2. via:'uami'      — Loom UAMI ARM token via ARG (Reader-at-root fallback).
+ *   3. via:'user-arm'  — user token via the plain ARM control-plane resource
+ *      list (FALLBACK). Used when ARG errored or returned zero rows.
+ *   4. via:'uami-arm'  — UAMI token via the ARM control-plane resource list.
  *
- * `subscriptions` is intentionally omitted so ARG spans every subscription the
- * token's identity can read. Paging via `$skipToken` is followed so large
- * tenants are not truncated at the 1000-row page limit. When neither path sees
- * anything, returns an honest gate (code:'no_access') naming the exact one-time
- * admin actions — per .claude/rules/no-vaporware.md. Tokens are never logged or
- * returned to the browser. All hosts use cloud-endpoints suffix helpers so the
- * derived coordinates are correct in every sovereign cloud.
+ * WHY THE ARM-LIST FALLBACK: live testing showed ARG can return a bare-
+ * correlationId error (or zero rows) for the UAMI even though it holds Reader
+ * at the root MG + subs AND the plain ARM resource list works for the same
+ * token. So ARG is the FAST primary path, but when it errors or yields nothing
+ * we fall back to the proven control-plane list:
+ *   GET {ARM}/subscriptions?api-version=2022-12-01                 → subs
+ *   GET {ARM}/subscriptions/{sub}/resources
+ *        ?$filter=resourceType eq '<armType>'&api-version=2021-04-01 → rows
+ * Both follow `nextLink` paging, bounded by a subscription cap, a per-list
+ * page-guard, and an overall wall-clock budget so a large/slow tenant can't
+ * hang the gateway. The control-plane list returns no property bag, so hosts
+ * are derived by sovereign-cloud naming convention in toConnectable() rather
+ * than from ARG endpoint fields.
+ *
+ * ARG omits `subscriptions` so it spans every subscription the token can read;
+ * `$skipToken` paging avoids the 1000-row truncation. The honest gate
+ * (code:'no_access', per .claude/rules/no-vaporware.md) is returned ONLY when
+ * BOTH ARG and the ARM-list fallback genuinely see nothing on every credential
+ * — true no-access. Tokens are never logged or returned to the browser. All
+ * hosts use cloud-endpoints suffix helpers so coordinates are correct in every
+ * sovereign cloud.
  */
 import { NextResponse } from 'next/server';
 import { getSession } from '@/lib/auth/session';
@@ -39,6 +54,7 @@ import {
 import { AcaManagedIdentityCredential } from '@/lib/azure/aca-managed-identity';
 import {
   armBase, armScope, getSqlSuffix, synapseSqlSuffix,
+  cosmosSuffix, serviceBusSuffix, kvSuffix,
 } from '@/lib/azure/cloud-endpoints';
 import {
   CONNECTABLE_ARM_TYPES, armTypeToConnType, normalizeHost, CONN_TYPE_AUTH_OPTIONS,
@@ -50,6 +66,24 @@ export const dynamic = 'force-dynamic';
 
 const ARM_SCOPE = armScope();
 const ARG_URL = `${armBase()}/providers/Microsoft.ResourceGraph/resources?api-version=2021-03-01`;
+
+// ----- ARM resource-list FALLBACK plumbing --------------------------------
+// When Azure Resource Graph (the fast single-query primary path) errors or
+// returns nothing for an identity that demonstrably has read access, fall back
+// to the plain ARM control-plane resource list, which is proven reliable here:
+//   GET {ARM}/subscriptions?api-version=2022-12-01                 → subs
+//   GET {ARM}/subscriptions/{sub}/resources
+//        ?$filter=resourceType eq '<armType>'&api-version=2021-04-01 → rows
+// Both follow `nextLink` paging. The control-plane list does NOT return a
+// property bag, so derived hosts come from toConnectable()'s naming-convention
+// fallbacks (SQL/Synapse/Storage/Cosmos/EH/SB/KV) instead of ARG endpoint
+// fields. Bounded by a subscription cap, a per-list page-guard, and an overall
+// wall-clock budget so a slow/large tenant can't hang the gateway.
+const SUBS_URL = `${armBase()}/subscriptions?api-version=2022-12-01`;
+const ARM_LIST_API_VERSION = '2021-04-01';
+const MAX_SUBSCRIPTIONS = 200;
+const MAX_PAGES_PER_LIST = 50;
+const ARM_FALLBACK_BUDGET_MS = 25_000;
 
 interface ArgRow {
   id: string;
@@ -152,6 +186,137 @@ async function runArg(
   return { ok: true, rows };
 }
 
+/** Extract `subscriptionId` and `resourceGroup` out of a full ARM resource id. */
+function coordsFromId(id: string): { subscriptionId: string; resourceGroup: string } {
+  const sub = /\/subscriptions\/([^/]+)/i.exec(id || '')?.[1] || '';
+  const rg = /\/resourcegroups\/([^/]+)/i.exec(id || '')?.[1] || '';
+  return { subscriptionId: sub, resourceGroup: rg };
+}
+
+/** GET helper with a bearer token and an AbortSignal; returns text + status. */
+async function armGet(
+  url: string,
+  token: string,
+  signal: AbortSignal,
+): Promise<{ ok: true; body: any } | { ok: false; status: number; error: string }> {
+  let res: Response;
+  try {
+    res = await fetch(url, {
+      method: 'GET',
+      headers: { authorization: `Bearer ${token}`, 'content-type': 'application/json' },
+      signal,
+    });
+  } catch (e: any) {
+    return { ok: false, status: 502, error: sanitize(e?.message || String(e)) };
+  }
+  const text = await res.text();
+  if (!res.ok) {
+    let msg = text;
+    try { const j = JSON.parse(text); msg = j?.error?.message || j?.error?.code || text; } catch { /* non-JSON */ }
+    return { ok: false, status: res.status, error: sanitize(msg) };
+  }
+  let body: any = {};
+  try { body = text ? JSON.parse(text) : {}; } catch { return { ok: false, status: 502, error: 'ARM returned a non-JSON body' }; }
+  return { ok: true, body };
+}
+
+/** List every subscription the token can read, following nextLink paging. */
+async function listSubscriptions(
+  token: string,
+  signal: AbortSignal,
+): Promise<{ ok: true; subs: { id: string; name?: string }[] } | { ok: false; status: number; error: string }> {
+  const subs: { id: string; name?: string }[] = [];
+  let url: string | undefined = SUBS_URL;
+  let guard = 0;
+  while (url && guard++ < MAX_PAGES_PER_LIST && subs.length < MAX_SUBSCRIPTIONS) {
+    const r = await armGet(url, token, signal);
+    if (!r.ok) return r;
+    const arr = Array.isArray(r.body?.value) ? r.body.value : [];
+    for (const s of arr) {
+      const subId = typeof s?.subscriptionId === 'string' ? s.subscriptionId : '';
+      if (subId) subs.push({ id: subId, name: typeof s?.displayName === 'string' ? s.displayName : undefined });
+    }
+    url = typeof r.body?.nextLink === 'string' ? r.body.nextLink : undefined;
+  }
+  return { ok: true, subs: subs.slice(0, MAX_SUBSCRIPTIONS) };
+}
+
+/** List one ARM resource type within one subscription, following nextLink. */
+async function listResourcesOfType(
+  token: string,
+  subId: string,
+  armType: string,
+  subName: string | undefined,
+  signal: AbortSignal,
+): Promise<ArgRow[]> {
+  const rows: ArgRow[] = [];
+  const filter = encodeURIComponent(`resourceType eq '${armType}'`);
+  let url: string | undefined =
+    `${armBase()}/subscriptions/${subId}/resources?$filter=${filter}&api-version=${ARM_LIST_API_VERSION}`;
+  let guard = 0;
+  while (url && guard++ < MAX_PAGES_PER_LIST) {
+    const r = await armGet(url, token, signal);
+    if (!r.ok) {
+      // A single sub that 403s / 404s shouldn't sink the whole enumeration —
+      // skip it and let the other subscriptions contribute their resources.
+      break;
+    }
+    const arr = Array.isArray(r.body?.value) ? r.body.value : [];
+    for (const res of arr) {
+      const id = typeof res?.id === 'string' ? res.id : '';
+      if (!id) continue;
+      const { resourceGroup } = coordsFromId(id);
+      rows.push({
+        id,
+        name: typeof res?.name === 'string' ? res.name : '',
+        type: typeof res?.type === 'string' ? res.type : armType,
+        kind: typeof res?.kind === 'string' ? res.kind : undefined,
+        location: typeof res?.location === 'string' ? res.location : undefined,
+        resourceGroup,
+        subscriptionId: subId,
+        subName,
+        // No property bag on the control-plane list → host derived downstream.
+        host: '',
+      });
+    }
+    url = typeof r.body?.nextLink === 'string' ? r.body.nextLink : undefined;
+  }
+  return rows;
+}
+
+/**
+ * ARM control-plane resource-list fallback. Enumerates every connectable ARM
+ * type across every subscription the token can read, mapping the bare control-
+ * plane rows into the same ArgRow shape the ARG path produces. Returns rows on
+ * success (possibly empty) or an error descriptor if even the subscriptions
+ * list is unreachable (true no-access).
+ */
+async function runArmList(
+  token: string,
+): Promise<{ ok: true; rows: ArgRow[] } | { ok: false; status: number; error: string }> {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), ARM_FALLBACK_BUDGET_MS);
+  try {
+    const subsResult = await listSubscriptions(token, controller.signal);
+    if (!subsResult.ok) return subsResult;
+    const rows: ArgRow[] = [];
+    for (const sub of subsResult.subs) {
+      if (controller.signal.aborted) break;
+      for (const c of CONNECTABLE_ARM_TYPES) {
+        if (controller.signal.aborted) break;
+        const typeRows = await listResourcesOfType(token, sub.id, c.armType, sub.name, controller.signal);
+        rows.push(...typeRows);
+      }
+    }
+    rows.sort((a, b) => (a.name || '').localeCompare(b.name || ''));
+    return { ok: true, rows };
+  } catch (e: any) {
+    return { ok: false, status: 502, error: sanitize(e?.message || String(e)) };
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
 /** Last `/databases/<db>` segment's parent server name, for SQL DB hosts. */
 function sqlServerFromId(id: string): string | null {
   const m = /\/servers\/([^/]+)\/databases\//i.exec(id || '');
@@ -185,6 +350,20 @@ function toConnectable(row: ArgRow): ConnectableResource | null {
       // Storage connections key off the bare account name (the builder's
       // "Account / host" field), not the full dfs URL.
       host = row.name;
+      break;
+    case 'cosmos':
+      // ARM resource-list carries no property bag (no documentEndpoint), so
+      // derive the canonical account FQDN by naming convention when absent.
+      if (!host) host = `${row.name}.${cosmosSuffix()}`;
+      break;
+    case 'event-hub':
+    case 'service-bus':
+      // EH and SB namespaces share the servicebus.* suffix; derive the
+      // namespace FQDN when the ARG serviceBusEndpoint wasn't available.
+      if (!host) host = `${row.name}.${serviceBusSuffix()}`;
+      break;
+    case 'key-vault':
+      if (!host) host = `${row.name}.${kvSuffix()}`;
       break;
     default:
       break;
@@ -224,48 +403,70 @@ export async function GET() {
     return NextResponse.json({ ok: false, code: 'unauthenticated', error: 'Not signed in.' }, { status: 401 });
   }
 
-  const finalize = (rows: ArgRow[], via: 'user' | 'uami') => {
+  type Via = 'user' | 'uami' | 'user-arm' | 'uami-arm';
+  const finalize = (rows: ArgRow[], via: Via) => {
     const resources = rows
       .map(toConnectable)
       .filter((r): r is ConnectableResource => r !== null);
     return NextResponse.json({ ok: true, resources, via });
   };
 
-  // ---- (a) User delegated ARM token (per-user RBAC + ABAC) ---------------
+  // Tokens captured on the ARG pass so the ARM-list fallback can reuse them
+  // without re-acquiring (the user token is per-user RBAC; the UAMI token is
+  // the Reader-at-root fallback).
+  let userToken: string | null = null;
+  let uamiToken: string | null = null;
+
+  // ---- (a) User delegated ARM token (per-user RBAC + ABAC) — ARG fast path
   let userArgError: { status: number; error: string } | null = null;
   try {
-    const userToken = await getUserArmToken(session.claims.oid);
+    userToken = (await getUserArmToken(session.claims.oid)) || null;
     if (userToken) {
       const r = await runArg(userToken);
-      if (r.ok) return finalize(r.rows, 'user');
-      userArgError = { status: r.status, error: r.error };
+      // Return immediately only when ARG succeeded AND saw rows; an empty ARG
+      // result with a healthy token falls through to the ARM-list fallback,
+      // which is proven to enumerate where ARG silently returns nothing.
+      if (r.ok && r.rows.length > 0) return finalize(r.rows, 'user');
+      if (!r.ok) userArgError = { status: r.status, error: r.error };
     }
   } catch {
     // fall through to UAMI
   }
 
-  // ---- (b) UAMI fallback -------------------------------------------------
+  // ---- (b) UAMI — ARG fast path -----------------------------------------
+  let uamiArgError: { status: number; error: string } | null = null;
   try {
     const tok = await uamiCredential().getToken(ARM_SCOPE);
-    if (tok?.token) {
-      const r = await runArg(tok.token);
-      if (r.ok) {
-        if (r.rows.length === 0 && userArgError) {
-          return NextResponse.json({ ok: false, code: 'no_access', error: GATE_MESSAGE }, { status: 200 });
-        }
-        return finalize(r.rows, 'uami');
-      }
-      return NextResponse.json(
-        { ok: false, code: 'no_access', error: `${GATE_MESSAGE} (Resource Graph error via UAMI: ${r.error})` },
-        { status: 200 },
-      );
+    uamiToken = tok?.token || null;
+    if (uamiToken) {
+      const r = await runArg(uamiToken);
+      if (r.ok && r.rows.length > 0) return finalize(r.rows, 'uami');
+      if (!r.ok) uamiArgError = { status: r.status, error: r.error };
     }
   } catch (e: any) {
-    return NextResponse.json(
-      { ok: false, code: 'no_access', error: `${GATE_MESSAGE} (Could not acquire a UAMI ARM token: ${sanitize(e?.message || String(e))})` },
-      { status: 200 },
-    );
+    uamiArgError = { status: 502, error: sanitize(e?.message || String(e)) };
   }
 
-  return NextResponse.json({ ok: false, code: 'no_access', error: GATE_MESSAGE }, { status: 200 });
+  // ---- (c) ARM control-plane resource-list FALLBACK ----------------------
+  // ARG either errored or returned zero rows on every credential available.
+  // Try the proven ARM resource-list with the same tokens: user first (per-
+  // user RBAC), then UAMI (Reader at root). First path that yields rows wins.
+  if (userToken) {
+    const r = await runArmList(userToken);
+    if (r.ok && r.rows.length > 0) return finalize(r.rows, 'user-arm');
+  }
+  if (uamiToken) {
+    const r = await runArmList(uamiToken);
+    if (r.ok && r.rows.length > 0) return finalize(r.rows, 'uami-arm');
+  }
+
+  // ---- (d) Honest gate — BOTH ARG and the ARM-list fallback saw nothing --
+  const detail =
+    uamiArgError ? ` (Resource Graph error via UAMI: ${uamiArgError.error})`
+    : userArgError ? ` (Resource Graph error via user token: ${userArgError.error})`
+    : '';
+  return NextResponse.json(
+    { ok: false, code: 'no_access', error: `${GATE_MESSAGE}${detail}` },
+    { status: 200 },
+  );
 }
