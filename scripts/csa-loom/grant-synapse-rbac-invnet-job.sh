@@ -37,6 +37,18 @@
 #   DLZ_SUB                      subscription holding the Synapse workspace
 #   SYNAPSE_WS                   Synapse workspace name (PE-only)
 #   CONSOLE_UAMI_PRINCIPAL       Console UAMI object (principal) id — the grantee
+#                                (used for the Studio-UI-visible assignment)
+#   CONSOLE_UAMI_APPID           Console UAMI application (client) id — the FUNCTIONAL
+#                                serverless/warehouse SQL login. REQUIRED: per the MS
+#                                Learn serverless-SQL troubleshooting guidance
+#                                (resources-self-help-sql-on-demand#security), Synapse
+#                                CANNOT fetch the app id from Microsoft Graph when one
+#                                service principal grants a role to ANOTHER service
+#                                principal, so a role assignment by OBJECT id alone
+#                                yields a BROKEN login ("Login failed for user
+#                                '<token-identified principal>'"). The fix is to add the
+#                                assignment to BOTH object id AND app id; the app-id one
+#                                is what makes the serverless/warehouse login actually work.
 #   DEPLOY_SP_CLIENT_ID / DEPLOY_SP_SECRET / DEPLOY_SP_TENANT
 #                                the limitlessdata_deploy SP creds (workspace admin)
 #   LOCATION (optional)          job location; defaults to the CAE location
@@ -48,6 +60,7 @@ CAE="${CAE:?set CAE to the console Container App Environment name (VNet-integrat
 DLZ_SUB="${DLZ_SUB:?set DLZ_SUB to the Synapse workspace subscription id}"
 SYNAPSE_WS="${SYNAPSE_WS:?set SYNAPSE_WS to the Synapse workspace name}"
 CONSOLE_UAMI_PRINCIPAL="${CONSOLE_UAMI_PRINCIPAL:?set CONSOLE_UAMI_PRINCIPAL to the Console UAMI object id (grantee)}"
+CONSOLE_UAMI_APPID="${CONSOLE_UAMI_APPID:?set CONSOLE_UAMI_APPID to the Console UAMI application (client) id — the FUNCTIONAL serverless/warehouse SQL login (SP-to-SP Graph limitation)}"
 DEPLOY_SP_CLIENT_ID="${DEPLOY_SP_CLIENT_ID:?set DEPLOY_SP_CLIENT_ID (limitlessdata_deploy app id — workspace Synapse admin)}"
 DEPLOY_SP_SECRET="${DEPLOY_SP_SECRET:?set DEPLOY_SP_SECRET (limitlessdata_deploy client secret)}"
 DEPLOY_SP_TENANT="${DEPLOY_SP_TENANT:?set DEPLOY_SP_TENANT (AAD tenant id)}"
@@ -64,16 +77,21 @@ LOCATION="${LOCATION:-$(az containerapp env show -n "$CAE" -g "$ADMIN_RG" --subs
 
 # The grant script the job container runs IN-VNET. It logs in as the deploy SP
 # (the workspace Synapse admin) and grants the three Synapse-RBAC roles to the
-# Console UAMI by OBJECT id. NOTE: Synapse SQL Administrator granted by OBJECT id
-# alone yields a BROKEN serverless login when an SPI grants to another SPI (Synapse
-# can't fetch the app id from Graph) — so the durable functional grant is the
-# AzurePowerShell consoleSqlAdminRoleScript in synapse.bicep (grants by APP id).
-# This in-VNET job is the COMPLEMENTARY path that also makes the assignment when
-# the bicep deployment-script ACI couldn't reach the PE-only dev endpoint; it
-# grants Synapse Administrator (which DOES confer SQL admin server-side via the
-# workspace role) + Synapse SQL Administrator + Artifact Publisher so the warehouse
-# / serverless / artifact paths all work. Reaching the dev endpoint privately is
-# the whole point — it runs inside the VNet.
+# Console UAMI by BOTH object id AND app (client) id.
+#
+# WHY BOTH (the core fix, Refs #1549): per the MS Learn serverless-SQL
+# troubleshooting guide (resources-self-help-sql-on-demand#security), "There's a
+# known limitation for service principals, which prevents Azure Synapse from
+# fetching the application ID from Microsoft Graph when it creates a role
+# assignment for another SPI." So a Synapse SQL Administrator assignment by
+# OBJECT id alone yields a BROKEN serverless/warehouse login — CREATE DATABASE
+# still fails with "Login failed for user '<token-identified principal>'". MS
+# Learn's recommendation is to add the role assignment to BOTH the object id and
+# the application id; the APP-ID assignment is the one that produces a working
+# login. We therefore grant each role twice: by $UAMI (object id, so the grantee
+# shows up correctly in the Synapse Studio UI) and by $UAMI_APPID (app id, the
+# FUNCTIONAL login). Reaching the dev endpoint privately is the whole point — it
+# runs inside the VNet.
 # The grant script is base64-encoded and passed as a single-line env value (GRANT_B64)
 # so it embeds cleanly in the YAML (a multi-line inline value would break YAML). The
 # container decodes + runs it. (Mirrors the base64 approach in deploy-loom-verify-job.sh.)
@@ -83,15 +101,52 @@ az cloud set --name "${AZ_CLOUD:-AzureCloud}" >/dev/null 2>&1 || true
 az login --service-principal -u "$SP_CLIENT_ID" -p "$SP_SECRET" --tenant "$SP_TENANT" >/dev/null
 az account set --subscription "$DLZ_SUB" >/dev/null
 for ROLE in "Synapse Administrator" "Synapse SQL Administrator" "Synapse Artifact Publisher"; do
-  echo "Granting [$ROLE] to Console UAMI $UAMI on $SYNAPSE_WS (in-VNET, PE-only dev endpoint)..."
-  az synapse role assignment create \
-    --workspace-name "$SYNAPSE_WS" \
-    --role "$ROLE" \
-    --assignee-object-id "$UAMI" \
-    --assignee-principal-type ServicePrincipal \
-    && echo "  OK: $ROLE" \
-    || echo "  (already assigned, or insufficient rights — review output): $ROLE"
+  # Grant each role TWICE: by object id (Studio-UI display) AND by app id
+  # (the FUNCTIONAL serverless/warehouse login — SP-to-SP Graph limitation).
+  # SID label is just for the log line; the assignee id is what matters.
+  for SID in "object:$UAMI" "appid:$UAMI_APPID"; do
+    KIND="${SID%%:*}"; ID="${SID#*:}"
+    [ -z "$ID" ] && { echo "  (skip $KIND — empty id): $ROLE"; continue; }
+    echo "Granting [$ROLE] to Console UAMI ($KIND=$ID) on $SYNAPSE_WS (in-VNET, PE-only dev endpoint)..."
+    az synapse role assignment create \
+      --workspace-name "$SYNAPSE_WS" \
+      --role "$ROLE" \
+      --assignee-object-id "$ID" \
+      --assignee-principal-type ServicePrincipal \
+      && echo "  OK ($KIND): $ROLE" \
+      || echo "  (already assigned, or insufficient rights — review output) ($KIND): $ROLE"
+  done
 done
+
+# BELT-AND-SUSPENDERS (Solution 2 from the MS Learn serverless-SQL guide):
+# in addition to the dual role assignment above, also create the EXPLICIT
+# serverless login on the on-demand endpoint:
+#   CREATE LOGIN [<uami-display-name>] FROM EXTERNAL PROVIDER;
+# This is OPTIONAL — the dual (object+app id) role assignment above is the
+# PRIMARY fix. We only attempt this if a SQL client (sqlcmd) is already present
+# in the azure-cli image; we do NOT install heavy deps and we NEVER fail the job
+# if it's missing or errors. Connect as the deploy SP using its AAD access token
+# (-G access-token auth via -P). Requires CONSOLE_SQL_UAMI (the UAMI display
+# name) to be set; if it isn't, skip.
+if command -v sqlcmd >/dev/null 2>&1; then
+  if [ -n "${CONSOLE_SQL_UAMI:-}" ]; then
+    ONDEMAND="$SYNAPSE_WS-ondemand.sql.azuresynapse.net"
+    echo "Creating explicit serverless login [$CONSOLE_SQL_UAMI] on $ONDEMAND (belt-and-suspenders)..."
+    TOKEN=$(az account get-access-token --resource https://database.windows.net/ --query accessToken -o tsv 2>/dev/null || true)
+    if [ -n "${TOKEN:-}" ]; then
+      sqlcmd -S "$ONDEMAND" -d master -G -P "$TOKEN" -b -Q \
+        "IF NOT EXISTS (SELECT 1 FROM sys.server_principals WHERE name = N'$CONSOLE_SQL_UAMI') CREATE LOGIN [$CONSOLE_SQL_UAMI] FROM EXTERNAL PROVIDER;" \
+        && echo "  OK: explicit serverless login [$CONSOLE_SQL_UAMI]" \
+        || echo "  (serverless login create skipped/failed — non-fatal; dual role-assignment above is the primary fix)"
+    else
+      echo "  (could not get a SQL access token — skipping explicit serverless login; non-fatal)"
+    fi
+  else
+    echo "  (CONSOLE_SQL_UAMI not set — skipping explicit serverless login; non-fatal)"
+  fi
+else
+  echo "  (no sqlcmd in image — skipping explicit serverless login; the dual role-assignment above is the primary fix)"
+fi
 echo "LOOM_SYNAPSE_RBAC_RESULT done"
 GRANT_EOF
 GRANT_B64="$(printf '%s' "$GRANT_SCRIPT" | base64 -w0 2>/dev/null || printf '%s' "$GRANT_SCRIPT" | base64 | tr -d '\n')"
@@ -129,6 +184,8 @@ properties:
           - { name: DLZ_SUB, value: "${DLZ_SUB}" }
           - { name: SYNAPSE_WS, value: "${SYNAPSE_WS}" }
           - { name: UAMI, value: "${CONSOLE_UAMI_PRINCIPAL}" }
+          - { name: UAMI_APPID, value: "${CONSOLE_UAMI_APPID}" }
+          - { name: CONSOLE_SQL_UAMI, value: "${CONSOLE_SQL_UAMI:-}" }
           - { name: AZ_CLOUD, value: "${AZ_CLOUD:-AzureCloud}" }
           - { name: GRANT_B64, value: "${GRANT_B64}" }
 YAML

@@ -1,0 +1,85 @@
+# CSA Loom — grant the Console UAMI the Synapse data-plane roles (in-VNET, NO
+# public network access). Standalone, dispatchable fix for the serverless /
+# warehouse "Login failed for user '<token-identified principal>'" failure.
+#
+# Refs #1549. ROOT CAUSE: for a service principal / managed identity the Synapse
+# SQL login/role-assignment SID must be the APPLICATION (client) id, NOT only the
+# object (principal) id — Synapse can't fetch the app id from Microsoft Graph when
+# one SPI grants a role to another SPI (MS Learn: resources-self-help-sql-on-
+# demand#security). The grant script run here adds the assignment to BOTH ids, so
+# the serverless/warehouse login actually works.
+#
+# This job ONLY runs the Synapse RBAC grant — NO MSAL app-reg steps, NO public-
+# network toggle, NO other bootstrap logic (those carry a known login-break risk).
+# It runs the grant from a Container App Job in the Console's VNet-integrated
+# environment, so it reaches the PE-only dev endpoint privately. No public access.
+name: csa-loom-grant-synapse-rbac
+
+on:
+  workflow_dispatch:
+    inputs:
+      admin_rg:
+        description: Hub admin resource group (holds the CAE + Console UAMI)
+        required: false
+        default: rg-csa-loom-admin-centralus
+      admin_sub:
+        description: Hub admin subscription id
+        required: false
+        default: e093f4fd-5047-4ee4-968d-a56942c665f3
+      cae:
+        description: Console Container App Environment name (VNet-integrated)
+        required: false
+        default: cae-csa-loom-centralus
+      dlz_sub:
+        description: Subscription holding the Synapse workspace
+        required: false
+        default: 363ef5d1-0e77-4594-a530-f51af23dbf8c
+      synapse_ws:
+        description: Synapse workspace name (PE-only)
+        required: false
+        default: syn-loom-default-centralus
+      console_uami_principal:
+        description: Console UAMI object (principal) id — Studio-UI display assignment
+        required: false
+        default: 85e5d083-7fd9-4588-9a28-6c035bea11a3
+      console_uami_appid:
+        description: Console UAMI application (client) id — the FUNCTIONAL serverless/warehouse login
+        required: false
+        default: f4f25dd9-e7aa-4ba0-ae18-6c902217964d
+
+permissions:
+  contents: read
+
+jobs:
+  grant:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Azure login (limitlessdata_deploy SP)
+        uses: azure/login@v2
+        with:
+          creds: |
+            {
+              "clientId": "${{ secrets.AZURE_CLIENT_ID }}",
+              "clientSecret": "${{ secrets.AZURE_CLIENT_SECRET }}",
+              "subscriptionId": "${{ secrets.AZURE_SUBSCRIPTION_ID }}",
+              "tenantId": "${{ secrets.AZURE_TENANT_ID }}"
+            }
+
+      - name: Grant Console UAMI Synapse RBAC (in-VNET, dual object+app id) — Refs #1549
+        env:
+          ADMIN_RG: ${{ inputs.admin_rg }}
+          ADMIN_SUB: ${{ inputs.admin_sub }}
+          CAE: ${{ inputs.cae }}
+          DLZ_SUB: ${{ inputs.dlz_sub }}
+          SYNAPSE_WS: ${{ inputs.synapse_ws }}
+          CONSOLE_UAMI_PRINCIPAL: ${{ inputs.console_uami_principal }}
+          CONSOLE_UAMI_APPID: ${{ inputs.console_uami_appid }}
+          DEPLOY_SP_CLIENT_ID: ${{ secrets.AZURE_CLIENT_ID }}
+          DEPLOY_SP_SECRET: ${{ secrets.AZURE_CLIENT_SECRET }}
+          DEPLOY_SP_TENANT: ${{ secrets.AZURE_TENANT_ID }}
+        run: |
+          set -uo pipefail
+          chmod +x scripts/csa-loom/grant-synapse-rbac-invnet-job.sh
+          bash scripts/csa-loom/grant-synapse-rbac-invnet-job.sh
