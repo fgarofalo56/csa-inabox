@@ -36,6 +36,7 @@ import {
   ManagedIdentityCredential,
   ChainedTokenCredential,
 } from '@azure/identity';
+import { AcaManagedIdentityCredential } from '@/lib/azure/aca-managed-identity';
 import {
   armBase, armScope, getSqlSuffix, synapseSqlSuffix,
 } from '@/lib/azure/cloud-endpoints';
@@ -67,11 +68,19 @@ function sanitize(s: string): string {
   return (s || '').replace(/<[^>]*>/g, ' ').replace(/\s+/g, ' ').trim().slice(0, 600);
 }
 
-function uamiCredential(): ChainedTokenCredential | DefaultAzureCredential {
+function uamiCredential(): ChainedTokenCredential {
   const clientId = process.env.LOOM_UAMI_CLIENT_ID;
-  return clientId
-    ? new ChainedTokenCredential(new ManagedIdentityCredential({ clientId }), new DefaultAzureCredential())
-    : new DefaultAzureCredential();
+  // MI-FIRST + ACA-FIRST: on Azure Container Apps the stock @azure/identity
+  // ManagedIdentityCredential cannot parse the ACA MI token (expires_on is
+  // Unix-seconds, expires_in absent) — it yields a token ARG rejects, which
+  // surfaced as a misleading "no resources" gate even with Reader granted.
+  // AcaManagedIdentityCredential (raw 2019-08-01 + X-IDENTITY-HEADER) must be
+  // first, mirroring adls-client.ts and the other data-plane clients.
+  return new ChainedTokenCredential(
+    new AcaManagedIdentityCredential(),
+    new ManagedIdentityCredential(clientId ? { clientId } : {}),
+    new DefaultAzureCredential(),
+  );
 }
 
 /**
