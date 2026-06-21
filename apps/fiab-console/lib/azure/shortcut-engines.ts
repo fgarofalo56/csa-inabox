@@ -213,10 +213,39 @@ export function pickTablesEngine(): ShortcutEngine | null {
   return null;
 }
 
-/** Synapse Serverless external-table / view object name for a shortcut. */
+/** Synapse Serverless external-table / view object name (2-part: schema.object). */
 function synapseObject(name: string): string {
   const safe = name.replace(/[^a-z0-9_]+/gi, '_');
   return `shortcuts.${safe}`;
+}
+
+/**
+ * Dedicated Synapse Serverless USER database for shortcut views / external data
+ * sources / scoped credentials. Synapse Serverless FORBIDS `CREATE VIEW`,
+ * `CREATE EXTERNAL DATA SOURCE`, `CREATE MASTER KEY`, and `CREATE DATABASE
+ * SCOPED CREDENTIAL` in the built-in `master` database ("CREATE/ALTER VIEW is
+ * not supported in master database") — they must live in a user DB. The view
+ * is referenced cross-database with a 3-part name from any context (master
+ * included), which serverless supports. Overridable for non-default deployments.
+ */
+const SERVERLESS_DB = process.env.LOOM_SERVERLESS_DB || 'loom_lakehouse';
+
+/** 3-part `<db>.schema.object` so the view is queryable cross-database. */
+function synapseQualified(twoPartObj: string): string {
+  return `${SERVERLESS_DB}.${twoPartObj}`;
+}
+
+// CREATE DATABASE is idempotent + cheap once created; cache within the module.
+let serverlessDbEnsured = false;
+/** Create the serverless user DB if absent. CREATE DATABASE must be its own
+ *  batch on serverless, so wrap it in EXEC under an existence guard. */
+async function ensureServerlessDb(): Promise<void> {
+  if (serverlessDbEnsured) return;
+  await executeQuery(
+    serverlessTarget('master'),
+    `IF NOT EXISTS (SELECT 1 FROM sys.databases WHERE name = '${SERVERLESS_DB}') EXEC('CREATE DATABASE [${SERVERLESS_DB}]');`,
+  );
+  serverlessDbEnsured = true;
 }
 
 /** Databricks UC fully-qualified table for a shortcut. */
@@ -397,8 +426,9 @@ export async function createTablesShortcut(args: {
       `IF OBJECT_ID('${obj}','V') IS NOT NULL DROP VIEW ${obj};\n` +
       `EXEC('CREATE VIEW ${obj} AS SELECT * FROM OPENROWSET(BULK ''${key}'', ` +
       `DATA_SOURCE = ''${dsName}'', FORMAT = ''${fmt}''${csvOpts}) AS r');`;
-    await executeQuery(serverlessTarget('master'), ddl);
-    return { engine: 'synapse', engineObject: obj };
+    await ensureServerlessDb();
+    await executeQuery(serverlessTarget(SERVERLESS_DB), ddl);
+    return { engine: 'synapse', engineObject: synapseQualified(obj) };
   }
 
   const engine = pickTablesEngine();
@@ -429,8 +459,9 @@ export async function createTablesShortcut(args: {
         `IF OBJECT_ID('${obj}','V') IS NOT NULL DROP VIEW ${obj};\n` +
         `EXEC('CREATE VIEW ${obj} AS SELECT * FROM OPENROWSET(BULK ''${key}'', ` +
         `DATA_SOURCE = ''${args.external.synapseDataSource}'', FORMAT = ''${fmt}''${csvOpts}) AS r');`;
-      await executeQuery(serverlessTarget('master'), ddl);
-      return { engine, engineObject: obj };
+      await ensureServerlessDb();
+      await executeQuery(serverlessTarget(SERVERLESS_DB), ddl);
+      return { engine, engineObject: synapseQualified(obj) };
     }
 
     const parts = parseAbfss(args.abfssUri);
@@ -445,8 +476,9 @@ export async function createTablesShortcut(args: {
       `IF SCHEMA_ID('shortcuts') IS NULL EXEC('CREATE SCHEMA shortcuts');\n` +
       `IF OBJECT_ID('${obj}','V') IS NOT NULL DROP VIEW ${obj};\n` +
       `EXEC('CREATE VIEW ${obj} AS SELECT * FROM OPENROWSET(BULK ''${bulkUrl}'', FORMAT = ''${fmt}''${csvOpts}) AS r');`;
-    await executeQuery(serverlessTarget('master'), ddl);
-    return { engine, engineObject: obj };
+    await ensureServerlessDb();
+    await executeQuery(serverlessTarget(SERVERLESS_DB), ddl);
+    return { engine, engineObject: synapseQualified(obj) };
   }
 
   // Databricks Unity Catalog — needs a running SQL Warehouse to run the DDL.
@@ -481,9 +513,14 @@ export async function dropShortcutObject(args: {
 }): Promise<void> {
   if (!args.engine || args.engine === 'none' || !args.engineObject) return;
   if (args.engine === 'synapse') {
+    // engineObject is `<db>.schema.object`; DROP VIEW can't take a cross-db
+    // 3-part name, so connect to the owning DB and drop the 2-part name there.
+    const parts = args.engineObject.split('.');
+    const db = parts.length === 3 ? parts[0] : SERVERLESS_DB;
+    const obj = parts.length === 3 ? `${parts[1]}.${parts[2]}` : args.engineObject;
     await executeQuery(
-      serverlessTarget('master'),
-      `IF OBJECT_ID('${args.engineObject}','V') IS NOT NULL DROP VIEW ${args.engineObject};`,
+      serverlessTarget(db),
+      `IF OBJECT_ID('${obj}','V') IS NOT NULL DROP VIEW ${obj};`,
     );
     return;
   }
@@ -912,7 +949,8 @@ export async function bindExternalSource(args: {
       `WITH IDENTITY = 'S3 Access Key', SECRET = '${secret.trim().replace(/'/g, "''")}';\n` +
       `CREATE EXTERNAL DATA SOURCE ${dsName} ` +
       `WITH (LOCATION = '${obj.prefix}', CREDENTIAL = ${cred});`;
-    await executeQuery(serverlessTarget('master'), ddl);
+    await ensureServerlessDb();
+    await executeQuery(serverlessTarget(SERVERLESS_DB), ddl);
     return { readUri: targetUri, synapse: { dataSource: dsName, scopedCredential: cred } };
   }
 
