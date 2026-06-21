@@ -754,7 +754,18 @@ resource peSqlOnDemand 'Microsoft.Network/privateEndpoints@2024-03-01' = if (!em
   }
 }
 
-resource peDev 'Microsoft.Network/privateEndpoints@2024-03-01' = if (!empty(privateEndpointSubnetId) && !empty(synapseDevPrivateDnsZoneId)) {
+// Synapse Dev private endpoint (group-id 'Dev') — backs dev.azuresynapse.net,
+// the endpoint the Console hits to IMPORT notebooks / pipelines / SJDs and to
+// run `az synapse role assignment create` (the in-VNET RBAC grant). It MUST be
+// decoupled from the dev DNS zone: the live centralus deploy had Sql +
+// SqlOnDemand PEs but NO Dev PE (the dev zone id wasn't threaded), so the
+// Console got 403 PublicNetworkAccessDenied on every notebook/pipeline import.
+// We create the Dev PE whenever the PE subnet exists (same condition as
+// peSql/peSqlOnDemand); the DNS zone GROUP below still gates on the zone id, and
+// the bootstrap's hub-DNS A-record sweep upserts the record if the cross-sub
+// zone-group link didn't fire. LIVE FIX (Refs #1549): created pe-syn-loom-default-dev
+// + hub A-record by hand; this makes it day-one.
+resource peDev 'Microsoft.Network/privateEndpoints@2024-03-01' = if (!empty(privateEndpointSubnetId)) {
   name: 'pe-syn-loom-${domainName}-dev'
   location: location
   tags: complianceTags
