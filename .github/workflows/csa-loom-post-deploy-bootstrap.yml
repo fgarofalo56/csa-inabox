@@ -449,6 +449,30 @@ jobs:
             -o table 2>&1 | grep -v "already exists" \
             || echo "::warning::Tenant-root MG Reader grant failed — the deploy SP needs Owner/UAAM on the root management group or the ManagementGroupAccess Entra role. See docs/fiab/v3-tenant-bootstrap.md §cross-sub-discovery. Cross-sub discovery in the Connections pane will be limited to the admin subscription until this grant is applied."
 
+      - name: Grant Console UAMI Reader on the DLZ subscription (cross-sub discovery fallback) — Refs #1549
+        # The tenant-root MG grant above propagates Reader to EVERY sub by inheritance,
+        # but MG-write is commonly DENIED on the runner (the deploy SP often lacks
+        # Owner/UAAM on the root MG). When that happens, the Console still can't
+        # enumerate DLZ resources (Connections "Add existing" / discover returns empty
+        # for the DLZ sub). This step is the explicit, narrower fallback that the LIVE
+        # centralus fix applied alongside the MG grant: grant Reader directly at the DLZ
+        # subscription scope so cross-sub discovery works even without the MG grant. Skips
+        # cleanly when the DLZ sub == the admin sub (single-sub: already Reader). Idempotent.
+        run: |
+          set -uo pipefail
+          if [ -z "${DLZ_SUB:-}" ] || [ "$DLZ_SUB" = "$ADMIN_SUB" ]; then
+            echo "DLZ sub == admin sub (or unset) — Reader already covered by the admin-sub grants; skipping."
+            exit 0
+          fi
+          echo "Granting Reader to Console UAMI at DLZ subscription scope: /subscriptions/$DLZ_SUB"
+          az role assignment create \
+            --assignee-object-id "$CONSOLE_UAMI_PRINCIPAL" \
+            --assignee-principal-type ServicePrincipal \
+            --role "Reader" \
+            --scope "/subscriptions/$DLZ_SUB" \
+            -o table 2>&1 | grep -v "already exists" \
+            || echo "::warning::DLZ-sub Reader grant failed — the deploy SP needs Owner/User Access Administrator on the DLZ subscription ($DLZ_SUB). Cross-sub resource discovery for this DLZ will be limited until applied."
+
       - name: Fix Synapse Spark storage access (Hive metastore abfss)
         run: |
           set -uo pipefail
@@ -461,7 +485,69 @@ jobs:
             bash scripts/csa-loom/fix-synapse-spark-storage-access.sh \
             || echo "::warning::Synapse Spark storage fix incomplete — check the deploy SP's rights on the default storage account."
 
-      - name: Enable Synapse public access (temp)
+      - name: Upsert DLZ private-endpoint A-records into HUB private-DNS zones (no-public) — Refs #1549
+        # DAY-ONE no-public reachability fix. The Console runs in the HUB VNet but the
+        # DLZ data planes (ADLS dfs/blob, Synapse Sql/SqlOnDemand/Dev, +ADX/EH/KV/Cosmos)
+        # are PE-only in the DLZ VNet. Their A-records land in the DLZ-side private-DNS
+        # zones, NOT the hub-linked zones the Console resolves against — so the Console
+        # got lakehouse 504 / lakehouse-query ENOTFOUND / notebook|pipeline|warehouse
+        # provisioning failures. The bicep attaches a privateDnsZoneGroup that targets
+        # the HUB zones cross-sub, but when the hub zone-id map wasn't threaded into the
+        # DLZ deploy the group is skipped and the hub zone has no record. This step is the
+        # durable fallback: it enumerates each DLZ PE's customDnsConfigs (fqdn+IP, set by
+        # Azure on PE creation regardless of any zone group) and upserts the A-record into
+        # the matching hub privatelink zone. Pure private DNS — NO public access. Idempotent.
+        run: |
+          set -uo pipefail
+          chmod +x scripts/csa-loom/upsert-hub-dns-arecords.sh
+          ADMIN_SUB="$ADMIN_SUB" ADMIN_RG="$ADMIN_RG" DLZ_SUB="$DLZ_SUB" DLZ_RG="$DLZ_RG" \
+            bash scripts/csa-loom/upsert-hub-dns-arecords.sh \
+            || echo "::warning::Hub private-DNS A-record sweep incomplete — the deploy SP needs Private DNS Zone Contributor on $ADMIN_RG + Reader on $DLZ_RG. DLZ data planes may be unreachable from the Console until re-run."
+
+      - name: Grant Console UAMI Synapse RBAC (in-VNET, NO public access) — Refs #1549
+        # NO-PUBLIC day-one fix. The Synapse workspace is publicNetworkAccess=Disabled
+        # behind a managed VNet, so `az synapse role assignment create` (which targets
+        # the dev/management endpoint dev.azuresynapse.net) is NOT reachable from this
+        # public ubuntu-latest runner. The OLD flow flipped the workspace to public for
+        # the grant window — a no-public-network VIOLATION. Instead we run the grant from
+        # a Container App Job in the CONSOLE's VNet-integrated environment (the hub VNet),
+        # which reaches the PE-only dev endpoint privately over hub<->DLZ peering + the
+        # hub private-DNS records upserted above. The job authenticates as the deploy SP
+        # (the workspace Synapse admin) and grants the Console UAMI Synapse Administrator
+        # + Synapse SQL Administrator + Artifact Publisher — which is what makes warehouse
+        # + serverless-sql-pool CREATE DATABASE stop failing with
+        # "Login failed for user '<token-identified principal>'".
+        # Resolve the CAE in the admin RG; skip cleanly if none (no console = nothing to grant).
+        run: |
+          set -uo pipefail
+          CAE_NAME=$(az containerapp env list -g "$ADMIN_RG" --subscription "$ADMIN_SUB" \
+            --query "[?contains(name,'cae') || contains(name,'loom')].name | [0]" -o tsv 2>/dev/null || true)
+          if [ -z "${CAE_NAME:-}" ]; then
+            echo "::warning::No Container App Environment in $ADMIN_RG — cannot run the in-VNET Synapse RBAC grant. Re-run after the admin plane is deployed, or grant 'Synapse SQL Administrator' to the Console UAMI manually."
+            exit 0
+          fi
+          echo "Console CAE for in-VNET grant: $CAE_NAME"
+          chmod +x scripts/csa-loom/grant-synapse-rbac-invnet-job.sh
+          ADMIN_RG="$ADMIN_RG" ADMIN_SUB="$ADMIN_SUB" CAE="$CAE_NAME" \
+          DLZ_SUB="$DLZ_SUB" SYNAPSE_WS="$SYNAPSE_WS" \
+          CONSOLE_UAMI_PRINCIPAL="$CONSOLE_UAMI_PRINCIPAL" \
+          DEPLOY_SP_CLIENT_ID="${{ secrets.AZURE_CLIENT_ID }}" \
+          DEPLOY_SP_SECRET="${{ secrets.AZURE_CLIENT_SECRET }}" \
+          DEPLOY_SP_TENANT="${{ secrets.AZURE_TENANT_ID }}" \
+            bash scripts/csa-loom/grant-synapse-rbac-invnet-job.sh \
+            || echo "::warning::In-VNET Synapse RBAC grant job did not complete — warehouse/serverless provisioning may still ELOGIN. Check the CAE Log Analytics ContainerAppConsoleLogs_CL."
+
+      - name: Enable Synapse public access (temp — OPT-IN ONLY, default OFF)
+        # DEFAULT OFF (no public network access — the in-VNET grant above replaces it).
+        # The sqlcmd CREATE LOGIN/USER steps below need to reach the SQL data-plane
+        # endpoints from this PUBLIC runner; on first deploy there are no serverless
+        # user databases yet (they're created on first item), so those steps no-op and
+        # the in-VNET RBAC grant is sufficient. An operator who needs to (re)run the
+        # sqlcmd logins from the runner against an EXISTING workspace can opt in by
+        # setting repo var LOOM_SYNAPSE_PUBLIC_TOGGLE=true; the public window is then
+        # opened here and ALWAYS restored to Disabled by the "Restore Synapse public
+        # access disabled" step (if: always()). Leave it unset for the no-public posture.
+        if: ${{ vars.LOOM_SYNAPSE_PUBLIC_TOGGLE == 'true' }}
         run: |
           set -e
           az resource update --ids "/subscriptions/$DLZ_SUB/resourceGroups/$DLZ_RG/providers/Microsoft.Synapse/workspaces/$SYNAPSE_WS" \
@@ -474,23 +560,6 @@ jobs:
           az synapse workspace firewall-rule create --subscription "$DLZ_SUB" -g $DLZ_RG --workspace-name $SYNAPSE_WS \
             --name allow-gha-bootstrap-$(date +%s) --start-ip-address "$GHA_IP" --end-ip-address "$GHA_IP" || true
           sleep 30
-
-      - name: Grant Console UAMI Synapse Administrator
-        run: |
-          set -e
-          az synapse role assignment create \
-            --workspace-name $SYNAPSE_WS \
-            --role "Synapse Administrator" \
-            --assignee-object-id $CONSOLE_UAMI_PRINCIPAL \
-            --assignee-principal-type ServicePrincipal \
-            -o table || echo "Already assigned or partial"
-          # Also grant SQL Administrator just for sanity (SQL pool access)
-          az synapse role assignment create \
-            --workspace-name $SYNAPSE_WS \
-            --role "Synapse SQL Administrator" \
-            --assignee-object-id $CONSOLE_UAMI_PRINCIPAL \
-            --assignee-principal-type ServicePrincipal \
-            -o table || true
 
       - name: Resolve Console UAMI SQL name (region-correct, not hardcoded)
         run: |
@@ -518,6 +587,12 @@ jobs:
           fi
 
       - name: SQL-level grants via sqlcmd (Serverless)
+        # OPT-IN ONLY (no-public default). sqlcmd reaches the PE-only -ondemand SQL
+        # endpoint, which is only routable from this public runner inside the
+        # opt-in public window (LOOM_SYNAPSE_PUBLIC_TOGGLE=true). On the default
+        # no-public path this step is skipped; the in-VNET Synapse RBAC grant above
+        # plus the bicep AzurePowerShell SQL-admin grant create the serverless login.
+        if: ${{ vars.LOOM_SYNAPSE_PUBLIC_TOGGLE == 'true' }}
         run: |
           set -e
           # Acquire AAD token for Synapse SQL
@@ -538,6 +613,10 @@ jobs:
           " || echo "Some grants may have failed (already exist or other) — continuing"
 
       - name: SQL-level grants via sqlcmd (Dedicated pool — F13 table/column/row security)
+        # OPT-IN ONLY (no-public default) — reaches the PE-only dedicated SQL endpoint
+        # from the public runner; only routable inside the LOOM_SYNAPSE_PUBLIC_TOGGLE
+        # window. The in-VNET grant + bicep SQL-admin grant cover the day-one path.
+        if: ${{ vars.LOOM_SYNAPSE_PUBLIC_TOGGLE == 'true' }}
         run: |
           set -e
           # The Permissions dialog's Table/Column/Row tabs run real
@@ -564,6 +643,11 @@ jobs:
           " || echo "::warning::Dedicated-pool F13 grants incomplete — ensure the pool '$POOL' is resumed and the UAMI is Synapse SQL Administrator."
 
       - name: SQL-level grants via sqlcmd (Serverless user databases — warehouse/lakehouse SQL endpoints)
+        # OPT-IN ONLY (no-public default) — per-DB contained-user grants on the PE-only
+        # -ondemand endpoint, only routable inside the LOOM_SYNAPSE_PUBLIC_TOGGLE window.
+        # On first deploy there are no serverless user databases yet (created on first
+        # item), so this is a no-op on the day-one path anyway.
+        if: ${{ vars.LOOM_SYNAPSE_PUBLIC_TOGGLE == 'true' }}
         run: |
           set -uo pipefail
           # The serverless master login (above) authenticates the Console UAMI to
@@ -593,12 +677,16 @@ jobs:
             " || echo "::warning::Per-DB grant on serverless DB '$DB' incomplete (continuing)."
           done
 
-      - name: Restore Synapse public access disabled
+      - name: Restore Synapse public access disabled (safety net) — Refs #1549
+        # Runs always(). On the no-public default path the public toggle was never
+        # opened, so this just RE-ASSERTS the correct posture (publicNetworkAccess=
+        # Disabled) — a harmless no-op that also catches any drift. On the opt-in
+        # LOOM_SYNAPSE_PUBLIC_TOGGLE path it closes the window even if a SQL step failed.
         if: always()
         run: |
           az resource update --ids "/subscriptions/$DLZ_SUB/resourceGroups/$DLZ_RG/providers/Microsoft.Synapse/workspaces/$SYNAPSE_WS" \
             --api-version 2021-06-01 --set properties.publicNetworkAccess=Disabled \
-            --query "properties.publicNetworkAccess" -o tsv
+            --query "properties.publicNetworkAccess" -o tsv || true
 
       - name: Enable Databricks public access (temp, so GHA can reach SCIM)
         run: |
