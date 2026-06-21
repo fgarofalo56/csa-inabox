@@ -919,6 +919,47 @@ export function LakehouseEditor({ item, id }: Props) {
     finally { setShortcutsBusy(false); }
   }, [loadShortcuts]);
 
+  // Query THROUGH a shortcut (Files or non-engine internal/adls) — the
+  // zero-copy parity action with Fabric's "query a shortcut". A Tables shortcut
+  // bound to an engine queries its registered object (handled inline below); a
+  // Files shortcut has no SQL object, so we resolve its stored abfss target to a
+  // real Synapse Serverless OPENROWSET. The serverless /query route executes the
+  // SQL verbatim, so the BULK URL must carry the REAL storage account host
+  // (taken from the shortcut's resolved abfssUri) — not a placeholder.
+  const queryShortcut = useCallback((sc: ShortcutRow) => {
+    // abfss://<container>@<account>.dfs.core.windows.net/<path>
+    //   → https://<account>.dfs.core.windows.net/<container>/<path>  (OPENROWSET BULK)
+    const toBulk = (uri?: string): string | null => {
+      if (!uri) return null;
+      const m = uri.match(/^abfss:\/\/([^@]+)@([^/]+)\/(.*)$/i);
+      if (m) return `https://${m[2]}/${m[1]}/${m[3].replace(/\/+$/, '')}`;
+      return null;
+    };
+    const base = toBulk(sc.abfssUri);
+    if (!base) {
+      // No resolved physical path yet (e.g. an external-cloud shortcut, or a
+      // row created before reachability was proven). Run Test to resolve it.
+      setShortcutsError(
+        `Shortcut "${sc.name}" has no resolved ADLS path to query directly (target type ${sc.targetType}). ` +
+        `Run Test to resolve it, or — for an external-cloud source — register it as a Tables shortcut so it gets a SQL object.`,
+      );
+      return;
+    }
+    const fmt = (sc.format || '').toLowerCase();
+    let bulk = base;
+    let clause: string;
+    if (fmt === 'delta') { clause = "FORMAT='DELTA'"; }
+    else if (fmt === 'parquet') { bulk = `${base}/*.parquet`; clause = "FORMAT='PARQUET'"; }
+    else { bulk = `${base}/*.csv`; clause = "FORMAT='CSV', PARSER_VERSION='2.0', HEADER_ROW=TRUE"; }
+    setSqlText(
+      `-- Query THROUGH shortcut '${sc.name}' (${sc.fullPath}) — zero-copy.\n` +
+      `-- Resolves the shortcut target ${sc.targetUri} to its physical path.\n` +
+      `-- Adjust FORMAT (CSV / PARQUET / DELTA) if the source data differs.\n` +
+      `SELECT TOP 100 *\nFROM OPENROWSET(BULK '${bulk}', ${clause}) AS r;`,
+    );
+    setTab('sql');
+  }, []);
+
   // Load shortcuts when the tab is opened or the container changes.
   useEffect(() => {
     if (tab === 'shortcuts' && shortcutLakehouseId) loadShortcuts();
@@ -3456,6 +3497,9 @@ export function LakehouseEditor({ item, id }: Props) {
                                           setSqlText(`SELECT TOP 100 * FROM ${sc.engineObject};`);
                                           setTab('sql');
                                         }}>Query (SQL)</MenuItem>
+                                      )}
+                                      {!(sc.kind === 'tables' && sc.engineObject) && (
+                                        <MenuItem icon={<Play20Regular />} onClick={() => queryShortcut(sc)}>Query (SQL)</MenuItem>
                                       )}
                                       <MenuItem icon={<ArrowSync20Regular />} onClick={() => testShortcut(sc)}>Test</MenuItem>
                                       <MenuItem icon={<Delete20Regular />} onClick={() => deleteShortcutRow(sc)}>Delete</MenuItem>

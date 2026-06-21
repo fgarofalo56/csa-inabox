@@ -37,6 +37,23 @@ interface ComputeTarget {
   runEndpoint: string;
 }
 
+/**
+ * Bound a discovery probe so an unreachable PE-only endpoint (Synapse dev /
+ * Databricks) can never hang the request into a Front Door origin-timeout 503.
+ * On timeout we surface an honest error row and keep going — the picker still
+ * renders the always-on Serverless target. Prevents the aggressive client
+ * retry loop that otherwise floods the connection pool (and starves sibling
+ * POSTs like shortcut-create with "Failed to fetch").
+ */
+function withTimeout<T>(p: Promise<T>, ms: number, kind: string): Promise<T> {
+  return Promise.race([
+    p,
+    new Promise<T>((_, reject) =>
+      setTimeout(() => reject(new Error(`${kind} discovery timed out after ${ms}ms (endpoint unreachable from the Console VNet?)`)), ms),
+    ),
+  ]);
+}
+
 export async function GET() {
   const s = getSession();
   if (!s) return NextResponse.json({ ok: false, error: 'unauthenticated' }, { status: 401 });
@@ -58,7 +75,7 @@ export async function GET() {
 
   // Synapse Spark pools — ARM discovery
   try {
-    const pools = await listSparkPools();
+    const pools = await withTimeout(listSparkPools(), 8000, 'synapse-spark');
     for (const p of pools) {
       computes.push({
         id: `spark:${p.name}`,
@@ -76,7 +93,7 @@ export async function GET() {
 
   // Databricks clusters
   try {
-    const clusters = await listClusters();
+    const clusters = await withTimeout(listClusters(), 8000, 'databricks-cluster');
     for (const c of clusters) {
       computes.push({
         id: `databricks:${c.cluster_id}`,
@@ -96,7 +113,7 @@ export async function GET() {
   try {
     const { listDedicatedSqlPools } = await import('@/lib/azure/synapse-dev-client');
     if (typeof listDedicatedSqlPools === 'function') {
-      const pools = await listDedicatedSqlPools();
+      const pools = await withTimeout(listDedicatedSqlPools(), 8000, 'synapse-dedicated-sql');
       for (const p of pools) {
         computes.push({
           id: `dedicated-sql:${p.name}`,
@@ -117,7 +134,7 @@ export async function GET() {
   try {
     const { amlIsConfigured, listCIs, ciIsRunning } = await import('@/lib/azure/aml-client');
     if (amlIsConfigured()) {
-      const cis = await listCIs();
+      const cis = await withTimeout(listCIs(), 8000, 'aml-ci');
       for (const ci of cis) {
         computes.push({
           id: `aml-ci:${ci.name}`,
