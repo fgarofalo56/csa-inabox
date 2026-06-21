@@ -958,6 +958,22 @@ export interface Cluster {
   custom_tags?: Record<string, string>;
   spark_conf?: Record<string, string>;
   data_security_mode?: string;
+  /**
+   * How the cluster was created. Only 'UI' / 'API' clusters are ALL-PURPOSE
+   * (interactive) and accepted by `runs/submit` `existing_cluster_id`. 'JOB'
+   * (and PIPELINE/MODELS/SQL) clusters are ephemeral/job clusters — passing one
+   * to existing_cluster_id returns `INVALID_PARAMETER_VALUE … not an all-purpose
+   * cluster`. clusters/list returns recently-run job clusters too, so callers
+   * that need an interactive cluster MUST filter on this.
+   */
+  cluster_source?: string;
+}
+
+/** Is this an ALL-PURPOSE (interactive) cluster usable as existing_cluster_id?
+ *  Accepts UI/API-sourced clusters; treats a missing cluster_source as
+ *  all-purpose (older API shape) rather than over-filtering. */
+export function isAllPurposeCluster(c: Cluster): boolean {
+  return !c.cluster_source || c.cluster_source === 'UI' || c.cluster_source === 'API';
 }
 
 export interface ClusterSpec {

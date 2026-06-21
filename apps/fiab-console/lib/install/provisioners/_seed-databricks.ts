@@ -28,6 +28,7 @@ import {
   runNotebook,
   getJobRun,
   listClusters,
+  isAllPurposeCluster,
   type JobRun,
   type Cluster,
 } from '@/lib/azure/databricks-client';
@@ -100,11 +101,17 @@ export async function resolveRunCluster(): Promise<ClusterResolution> {
       },
     };
   }
-  const running = clusters.find((c) => c.state === 'RUNNING');
+  // ONLY all-purpose (interactive) clusters are accepted by runs/submit
+  // existing_cluster_id. clusters/list also returns recently-run JOB clusters,
+  // and picking a RUNNING job cluster here was the root cause of
+  // "INVALID_PARAMETER_VALUE … is not an all-purpose cluster" (ml-pipeline,
+  // healthcare-popmgt, direct-lake-replacement). Filter them out.
+  const allPurpose = clusters.filter(isAllPurposeCluster);
+  const running = allPurpose.find((c) => c.state === 'RUNNING');
   if (running) return { clusterId: running.cluster_id };
-  const startable = clusters.find(
+  const startable = allPurpose.find(
     (c) => c.state && !['TERMINATED', 'TERMINATING', 'ERROR'].includes(c.state),
-  ) || clusters.find((c) => c.state === 'TERMINATED');
+  ) || allPurpose.find((c) => c.state === 'TERMINATED');
   if (startable) return { clusterId: startable.cluster_id };
 
   return {
