@@ -3,7 +3,7 @@ import { getSession } from '@/lib/auth/session';
 import { workspacesContainer, itemsContainer } from '@/lib/azure/cosmos-client';
 import { upsertLoomDoc, docForWorkspace } from '@/lib/azure/loom-search';
 import { applyWorkspaceBindings } from '@/lib/azure/workspace-bindings';
-import { domainExists } from '@/lib/azure/domain-registry';
+import { domainExists, DEFAULT_DOMAIN_ID } from '@/lib/azure/domain-registry';
 import type { Workspace } from '@/lib/types/workspace';
 
 export const runtime = 'nodejs';
@@ -64,11 +64,14 @@ export async function POST(req: NextRequest) {
   const { name, description, capacity, domain } = body || {};
   if (!name || typeof name !== 'string') return err('name is required', 400, 'missing_name');
 
-  // A workspace MUST be bound to a governance domain (t158). The domain must
-  // exist in this tenant's registry; the `default` starter domain is the
-  // guaranteed fallback (seeded on first read).
-  const domainId = typeof domain === 'string' ? domain.trim() : '';
-  if (!domainId) return err('domain is required — pick the governance domain this workspace belongs to', 400, 'domain_required');
+  // A workspace is bound to a governance domain (t158). When the caller doesn't
+  // pick one (the picker only lists domains they administer, which a fresh
+  // tenant has none of), fall back to the `default` starter domain — the
+  // guaranteed binding target seeded on first read. This makes the "Domain
+  // (optional)" field honest and unblocks day-one workspace creation (and thus
+  // app install, which requires a workspace). An explicitly-provided unknown
+  // domain is still rejected.
+  const domainId = (typeof domain === 'string' ? domain.trim() : '') || DEFAULT_DOMAIN_ID;
   if (!(await domainExists(session.claims.oid, domainId))) {
     return err(`Unknown domain '${domainId}' — it is not registered in this tenant.`, 400, 'unknown_domain');
   }

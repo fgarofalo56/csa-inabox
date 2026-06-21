@@ -19,7 +19,7 @@ import { listAllWorkspacesAdmin } from '@/lib/clients/workspaces-client';
 import { workspacesContainer } from '@/lib/azure/cosmos-client';
 import { upsertLoomDoc, docForWorkspace } from '@/lib/azure/loom-search';
 import { applyWorkspaceBindings } from '@/lib/azure/workspace-bindings';
-import { domainExists } from '@/lib/azure/domain-registry';
+import { domainExists, DEFAULT_DOMAIN_ID } from '@/lib/azure/domain-registry';
 import type { Workspace, WorkspaceLicenseMode } from '@/lib/types/workspace';
 
 export const runtime = 'nodejs';
@@ -67,13 +67,11 @@ export async function POST(req: NextRequest) {
   // authoritative tenant topology). The domain must exist in this tenant's
   // registry; the `default` starter domain is the guaranteed fallback for
   // legacy / single-domain tenants (loadOrSeedDomains seeds it on first read).
-  const domain = typeof body?.domain === 'string' ? body.domain.trim() : '';
-  if (!domain) {
-    return NextResponse.json(
-      { ok: false, error: 'domain is required — pick the governance domain this workspace belongs to', code: 'domain_required' },
-      { status: 400 },
-    );
-  }
+  // When the caller omits a domain (the picker only lists domains they
+  // administer — a fresh tenant has none), fall back to the seeded `default`
+  // domain so workspace creation works day-one. An explicit unknown domain is
+  // still rejected below.
+  const domain = (typeof body?.domain === 'string' ? body.domain.trim() : '') || DEFAULT_DOMAIN_ID;
   if (!(await domainExists(s.claims.oid, domain))) {
     return NextResponse.json(
       { ok: false, error: `Unknown domain '${domain}' — it is not registered in this tenant.`, code: 'unknown_domain' },
