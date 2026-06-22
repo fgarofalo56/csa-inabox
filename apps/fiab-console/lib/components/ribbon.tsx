@@ -7,7 +7,7 @@
  * in docs/fiab/fabric-feature-inventory.md §3.
  */
 
-import { useState, type ReactElement } from 'react';
+import { useState, useEffect, type ReactElement } from 'react';
 import {
   Tab,
   TabList,
@@ -18,43 +18,63 @@ import {
   MenuPopover,
   MenuList,
   MenuItem,
+  Tooltip,
   makeStyles,
   tokens,
   type ButtonProps,
 } from '@fluentui/react-components';
-import { ChevronDown16Regular } from '@fluentui/react-icons';
+import { ChevronDown16Regular, ChevronUp16Regular } from '@fluentui/react-icons';
+
+/** Persisted per-user ribbon density. Shared across every editor so the choice
+ *  ("give me more canvas") sticks wherever you go. */
+const RIBBON_COLLAPSE_KEY = 'loom.ribbon.collapsed';
 
 const useStyles = makeStyles({
   root: {
     backgroundColor: tokens.colorNeutralBackground1,
     border: `1px solid ${tokens.colorNeutralStroke2}`,
-    borderRadius: '4px',
+    borderRadius: tokens.borderRadiusLarge,
     overflow: 'hidden',
+    boxShadow: tokens.shadow2,
   },
-  tabs: {
-    paddingLeft: '8px',
+  // Header row holds the tab strip (left, grows) + the collapse toggle (right).
+  header: {
+    display: 'flex',
+    alignItems: 'center',
     borderBottom: `1px solid ${tokens.colorNeutralStroke2}`,
     backgroundColor: tokens.colorNeutralBackground2,
+    paddingRight: '4px',
   },
+  tabs: {
+    flex: 1,
+    minWidth: 0,
+    paddingLeft: '8px',
+  },
+  collapseBtn: { flexShrink: 0 },
   body: {
     display: 'flex',
     alignItems: 'stretch',
-    padding: '8px',
-    gap: '8px',
-    minHeight: '64px',
+    flexWrap: 'wrap',
+    padding: '10px 12px',
+    columnGap: '4px',
+    rowGap: '8px',
+    minHeight: '60px',
   },
   group: {
     display: 'flex',
     flexDirection: 'column',
-    alignItems: 'center',
+    alignItems: 'flex-start',
     gap: '4px',
-    padding: '0 8px',
+    padding: '0 10px',
   },
-  groupRow: { display: 'flex', alignItems: 'center', gap: '4px', flex: 1 },
+  groupRow: { display: 'flex', alignItems: 'center', gap: '2px', flex: 1 },
   groupLabel: {
-    fontSize: '11px',
+    fontSize: '10px',
+    lineHeight: '12px',
+    letterSpacing: '0.04em',
     color: tokens.colorNeutralForeground3,
     textTransform: 'uppercase',
+    fontWeight: tokens.fontWeightSemibold,
   },
 });
 
@@ -98,19 +118,47 @@ interface Props {
 export function Ribbon({ tabs, defaultTabId }: Props) {
   const styles = useStyles();
   const [active, setActive] = useState(defaultTabId ?? tabs[0]?.id ?? '');
+  // Collapsed = show only the tab strip, hiding the action body → reclaims
+  // ~60px of vertical canvas/editor real estate. Persisted per-user across all
+  // editors. Clicking a tab while collapsed re-expands (Office-ribbon behavior).
+  const [collapsed, setCollapsed] = useState(false);
+  useEffect(() => {
+    try { setCollapsed(localStorage.getItem(RIBBON_COLLAPSE_KEY) === '1'); } catch { /* SSR / no storage */ }
+  }, []);
+  const setCollapsedPersisted = (v: boolean) => {
+    setCollapsed(v);
+    try { localStorage.setItem(RIBBON_COLLAPSE_KEY, v ? '1' : '0'); } catch { /* ignore */ }
+  };
   const current = tabs.find((t) => t.id === active) ?? tabs[0];
   return (
     <div className={styles.root}>
-      <TabList
-        className={styles.tabs}
-        selectedValue={active}
-        onTabSelect={(_, d) => setActive(d.value as string)}
-        size="small"
-      >
-        {tabs.map((t) => (
-          <Tab key={t.id} value={t.id}>{t.label}</Tab>
-        ))}
-      </TabList>
+      <div className={styles.header}>
+        <TabList
+          className={styles.tabs}
+          selectedValue={active}
+          onTabSelect={(_, d) => { setActive(d.value as string); if (collapsed) setCollapsedPersisted(false); }}
+          size="small"
+        >
+          {tabs.map((t) => (
+            <Tab key={t.id} value={t.id}>{t.label}</Tab>
+          ))}
+        </TabList>
+        <Tooltip
+          relationship="label"
+          content={collapsed ? 'Expand the ribbon' : 'Collapse the ribbon for more space'}
+        >
+          <Button
+            className={styles.collapseBtn}
+            appearance="subtle"
+            size="small"
+            aria-label={collapsed ? 'Expand ribbon' : 'Collapse ribbon'}
+            aria-expanded={!collapsed}
+            icon={collapsed ? <ChevronDown16Regular /> : <ChevronUp16Regular />}
+            onClick={() => setCollapsedPersisted(!collapsed)}
+          />
+        </Tooltip>
+      </div>
+      {!collapsed && (
       <div className={styles.body}>
         {current?.groups.map((g, gi) => (
           <div key={gi} style={{ display: 'flex', alignItems: 'stretch' }}>
@@ -190,6 +238,7 @@ export function Ribbon({ tabs, defaultTabId }: Props) {
           </div>
         ))}
       </div>
+      )}
     </div>
   );
 }

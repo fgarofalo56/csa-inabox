@@ -16,7 +16,7 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
-  Subtitle2, Caption1, Badge, Button, Spinner, Input, Tooltip,
+  Subtitle2, Caption1, Badge, Button, Spinner, Input, Tooltip, Divider,
   Tree, TreeItem, TreeItemLayout, Select,
   Table, TableHeader, TableRow, TableHeaderCell, TableBody, TableCell,
   MessageBar, MessageBarBody, MessageBarTitle,
@@ -59,7 +59,8 @@ const useStyles = makeStyles({
   // / Import / New) line up on one baseline instead of the buttons floating
   // mid-height — which made the row read as crammed/overlapping. Wider gap +
   // row-gap gives the labels breathing room when the row wraps.
-  toolbar: { display: 'flex', columnGap: 16, rowGap: 10, alignItems: 'flex-end', flexWrap: 'wrap', paddingBottom: 4 },
+  toolbar: { display: 'flex', columnGap: 20, rowGap: 12, alignItems: 'flex-end', flexWrap: 'wrap', padding: '4px 4px 12px', borderBottom: `1px solid ${tokens.colorNeutralStroke2}`, marginBottom: 4 },
+  toolDivider: { alignSelf: 'stretch', minHeight: 36 },
   editor: {
     width: '100%', minHeight: 280,
     fontFamily: 'Consolas, "Cascadia Code", monospace', fontSize: 13, padding: 12,
@@ -1631,6 +1632,7 @@ export function NotebookEditor({ item, id }: Props) {
                 )}
               </div>
             </div>
+            <Divider vertical className={s.toolDivider} />
             <Button appearance="outline" icon={<ArrowSync20Regular />} onClick={() => workspaceId && loadList(workspaceId)} disabled={!workspaceId}>Refresh</Button>
             {/* Library & Environment: compact AML environment selector (Fabric ribbon parity). */}
             <div style={{ display: 'flex', flexDirection: 'column', gap: 4, minWidth: 240 }}>
