@@ -73,6 +73,9 @@ import {
   accessRequestsContainer,
   auditLogContainer,
 } from '@/lib/azure/cosmos-client';
+import {
+  upsertDataProductDoc, deleteDataProductDoc, docForDataProduct,
+} from '@/lib/azure/loom-data-products-search';
 import { deleteOwnedItem } from '../../items/_lib/item-crud';
 import {
   deleteDataProductBestEffort,
@@ -645,6 +648,12 @@ export async function PATCH(req: NextRequest, props: { params: Promise<{ id: str
           ifMatch ? { accessCondition: { type: 'IfMatch', condition: ifMatch } } : undefined,
         );
       const saved = resource as WithEtag;
+      // Re-mirror to the consumer-discovery index so publish / unpublish / edit
+      // is reflected in Discover. Published → upserted + visible; Draft/Deprecated
+      // → upserted but filtered out by the Published-only consumer search. This
+      // was missing — the PATCH wrote Cosmos but never updated the index, so
+      // publishing a draft never surfaced it. Best-effort (never throws).
+      void upsertDataProductDoc(docForDataProduct(saved, session.claims.oid));
       return NextResponse.json(
         {
           ok: true,
