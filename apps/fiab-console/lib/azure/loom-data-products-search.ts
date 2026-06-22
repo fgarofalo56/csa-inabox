@@ -257,16 +257,18 @@ export async function upsertDataProductDoc(doc: DataProductDoc): Promise<void> {
   }
 }
 
-/** Best-effort delete by index doc id. */
+/** Best-effort delete by index doc id. Tolerates the legacy `dp:` colon form —
+ *  the stored key uses `dp_` (colons are invalid AI Search keys), so sanitize. */
 export async function deleteDataProductDoc(id: string): Promise<void> {
   if (!isDataProductsSearchConfigured()) return;
   try {
     const svc = serviceName();
     const tok = await searchToken();
+    const key = id.replace(/:/g, '_');
     await fetchWithTimeout(`${serviceBase(svc)}/indexes/${DATA_PRODUCTS_INDEX}/docs/index?api-version=${SEARCH_API}`, {
       method: 'POST',
       headers: { authorization: `Bearer ${tok}`, 'content-type': 'application/json' },
-      body: JSON.stringify({ value: [{ '@search.action': 'delete', id }] }),
+      body: JSON.stringify({ value: [{ '@search.action': 'delete', id: key }] }),
     });
   } catch {
     /* swallow */
@@ -411,7 +413,11 @@ export function docForDataProduct(
   const ps = String(state.publishStatus || 'Draft') as PublishStatus;
   const domain = state.domain ? String(state.domain) : undefined;
   return {
-    id: `dp:${item.id}`,
+    // AI Search document keys may only contain letters, digits, _, -, =.
+    // A colon (the old `dp:` prefix) is INVALID and 400'd every upsert
+    // ("Invalid document key") — which is why no data product ever indexed.
+    // Use an underscore separator; the GUID's dashes are allowed.
+    id: `dp_${item.id}`,
     tenantId,
     workspaceId: item.workspaceId,
     displayName: item.displayName,

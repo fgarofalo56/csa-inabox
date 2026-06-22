@@ -241,7 +241,7 @@ export function DataProductsMarketplace() {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify({
-        assetId: hit.id.replace(/^dp:/, ''),
+        assetId: hit.id.replace(/^dp[:_]/, ''),
         assetName: hit.displayName,
         itemType: 'data-product',
         permission,
