@@ -514,6 +514,30 @@ export async function deletePipeline(name: string): Promise<void> {
   }
 }
 
+/**
+ * Upsert a linked service by name (Synapse Studio dev REST). Used to
+ * auto-provision the linked services a bundled pipeline's activities reference
+ * so the pipeline document validates on commit (Synapse rejects a pipeline that
+ * references a non-existent linked service: "invalid reference '<name>'").
+ */
+export async function upsertLinkedService(name: string, properties: Record<string, unknown>): Promise<void> {
+  const r = await callDev(
+    `/linkedservices/${encodeURIComponent(name)}?api-version=${DEV_API}`,
+    { method: 'PUT', body: JSON.stringify({ name, properties }) },
+  );
+  await commitArtifact<unknown>(r, `upsertLinkedService(${name})`);
+}
+
+/** Upsert a dataset by name (Synapse Studio dev REST) — same purpose as
+ *  upsertLinkedService: satisfy a pipeline's DatasetReference on commit. */
+export async function upsertDataset(name: string, properties: Record<string, unknown>): Promise<void> {
+  const r = await callDev(
+    `/datasets/${encodeURIComponent(name)}?api-version=${DEV_API}`,
+    { method: 'PUT', body: JSON.stringify({ name, properties }) },
+  );
+  await commitArtifact<unknown>(r, `upsertDataset(${name})`);
+}
+
 export interface PipelineRunResponse { runId: string; }
 
 export async function runPipeline(

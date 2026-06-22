@@ -28,6 +28,8 @@ import {
   upsertPipeline,
   runPipeline,
   getPipelineRun,
+  upsertLinkedService,
+  upsertDataset,
 } from '@/lib/azure/synapse-dev-client';
 import type { Provisioner, ProvisionResult } from './types';
 import { upsertAndRunDevPipeline, type DevPipelineAdapter } from './_seed-dev-pipeline';
@@ -61,6 +63,12 @@ const adapter: DevPipelineAdapter = {
     const run = await getPipelineRun(runId);
     return { runId, status: run.status, message: run.message };
   },
+  async upsertLinkedService(name, properties) {
+    await upsertLinkedService(name, properties);
+  },
+  async upsertDataset(name, properties) {
+    await upsertDataset(name, properties);
+  },
 };
 
 export const synapsePipelineProvisioner: Provisioner = async (input): Promise<ProvisionResult> => {
@@ -85,8 +93,21 @@ export const synapsePipelineProvisioner: Provisioner = async (input): Promise<Pr
   const seed = await upsertAndRunDevPipeline(adapter, pipelineName, input.content);
   steps.push(...seed.steps);
 
-  // Could not even author the pipeline — RBAC gate or hard failure.
+  // Could not even author the pipeline — RBAC gate, missing-reference gate, or
+  // hard failure.
   if (!seed.upserted) {
+    if (seed.needsReference) {
+      return {
+        status: 'remediation',
+        gate: {
+          reason: `Pipeline references an artifact that isn't provisioned on this estate: ${seed.needsReference.message}`,
+          remediation:
+            'The pipeline definition is saved. Loom auto-creates the ADLS linked service + datasets it references; a remaining unresolved reference is typically a Databricks linked service — set LOOM_DATABRICKS_HOSTNAME (and grant the Console UAMI workspace access) so the notebook activities bind, then re-run install. No Fabric required.',
+          link: 'https://learn.microsoft.com/azure/synapse-analytics/data-integration/linked-service',
+        },
+        steps,
+      };
+    }
     if (seed.authGate) {
       return {
         status: 'remediation',

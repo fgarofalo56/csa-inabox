@@ -48,6 +48,115 @@ export interface DevPipelineAdapter {
   createRun(name: string, params?: Record<string, unknown>): Promise<string>;
   /** Resolve the latest run status for the given runId (best-effort). */
   getRunStatus(runId: string): Promise<DevPipelineRunStatus | undefined>;
+  /** Optional — PUT a linked service (to satisfy a pipeline's references). */
+  upsertLinkedService?(name: string, properties: Record<string, unknown>): Promise<void>;
+  /** Optional — PUT a dataset (to satisfy a pipeline's DatasetReferences). */
+  upsertDataset?(name: string, properties: Record<string, unknown>): Promise<void>;
+}
+
+/** A linked-service / dataset reference discovered in a pipeline's activities. */
+interface PipelineRefs {
+  linkedServices: Set<string>;
+  /** dataset name → set of parameter names the pipeline passes to it. */
+  datasets: Map<string, Set<string>>;
+}
+
+/** Recursively walk an activity graph collecting every LinkedServiceReference
+ * and DatasetReference (with the parameter names passed to each dataset). The
+ * bundle nests activities under `config.activities` (Until/ForEach/If), so we
+ * descend into any `activities` array we find. */
+export function collectPipelineRefs(content: any): PipelineRefs {
+  const linkedServices = new Set<string>();
+  const datasets = new Map<string, Set<string>>();
+  const visit = (node: any): void => {
+    if (!node || typeof node !== 'object') return;
+    if (Array.isArray(node)) { node.forEach(visit); return; }
+    if (node.type === 'LinkedServiceReference' && typeof node.referenceName === 'string') {
+      linkedServices.add(node.referenceName);
+    }
+    if (node.type === 'DatasetReference' && typeof node.referenceName === 'string') {
+      const params = datasets.get(node.referenceName) || new Set<string>();
+      if (node.parameters && typeof node.parameters === 'object') {
+        for (const k of Object.keys(node.parameters)) params.add(k);
+      }
+      datasets.set(node.referenceName, params);
+    }
+    for (const v of Object.values(node)) visit(v);
+  };
+  visit(content?.activities);
+  return { linkedServices, datasets };
+}
+
+/** Best-effort ADLS Gen2 endpoint for the stub linked service — derived from
+ * the DLZ container env vars. A placeholder still commits (Synapse validates
+ * reference existence, not connectivity, at PUT time). */
+function adlsStubUrl(): string {
+  for (const k of ['LOOM_LANDING_URL', 'LOOM_BRONZE_URL', 'LOOM_SILVER_URL', 'LOOM_GOLD_URL']) {
+    const v = process.env[k];
+    const m = v && v.match(/^https:\/\/([^/]+)/i);
+    if (m) return `https://${m[1]}`;
+  }
+  const acct = process.env.LOOM_ADLS_ACCOUNT;
+  if (acct) return `https://${acct}.dfs.core.windows.net`;
+  return 'https://loomdlzstub.dfs.core.windows.net';
+}
+
+/**
+ * Auto-provision minimal valid stubs for every linked service + dataset the
+ * pipeline references, so the pipeline document validates on commit. Linked
+ * services are AzureBlobFS (workspace MI auth); datasets are parameterized
+ * DelimitedText on the first referenced ADLS linked service. Best-effort: each
+ * failure is logged and skipped (the pipeline upsert then surfaces an honest
+ * gate). No-op when the adapter doesn't support reference upserts. */
+async function ensurePipelineReferences(
+  adapter: DevPipelineAdapter,
+  content: any,
+  steps: string[],
+): Promise<void> {
+  if (!adapter.upsertLinkedService || !adapter.upsertDataset) return;
+  const refs = collectPipelineRefs(content);
+  if (refs.linkedServices.size === 0 && refs.datasets.size === 0) return;
+  const url = adlsStubUrl();
+  const lsList = [...refs.linkedServices];
+  for (const ls of lsList) {
+    try {
+      await adapter.upsertLinkedService(ls, {
+        type: 'AzureBlobFS',
+        typeProperties: { url },
+        annotations: ['loom-autoprovisioned'],
+      });
+    } catch (e: any) {
+      steps.push(`${adapter.label}: could not auto-create linked service '${ls}': ${e?.message || e}`);
+    }
+  }
+  const defaultLs = lsList.find((n) => /adls|blob|storage|gen2/i.test(n)) || lsList[0] || 'ls_loom_adls';
+  // Ensure a fallback ADLS linked service exists for datasets even if the
+  // pipeline only referenced non-ADLS linked services.
+  if (!refs.linkedServices.has(defaultLs)) {
+    try {
+      await adapter.upsertLinkedService(defaultLs, { type: 'AzureBlobFS', typeProperties: { url }, annotations: ['loom-autoprovisioned'] });
+    } catch { /* best-effort */ }
+  }
+  for (const [ds, paramNames] of refs.datasets) {
+    const parameters: Record<string, { type: string }> = {};
+    for (const p of paramNames) parameters[p] = { type: 'String' };
+    try {
+      await adapter.upsertDataset(ds, {
+        type: 'DelimitedText',
+        linkedServiceName: { referenceName: defaultLs, type: 'LinkedServiceReference' },
+        ...(paramNames.size > 0 ? { parameters } : {}),
+        typeProperties: {
+          location: { type: 'AzureBlobFSLocation', fileSystem: 'landing' },
+          columnDelimiter: ',',
+          firstRowAsHeader: true,
+        },
+        annotations: ['loom-autoprovisioned'],
+      });
+    } catch (e: any) {
+      steps.push(`${adapter.label}: could not auto-create dataset '${ds}': ${e?.message || e}`);
+    }
+  }
+  steps.push(`${adapter.label}: ensured ${lsList.length} linked service(s) + ${refs.datasets.size} dataset(s) the pipeline references.`);
 }
 
 export interface DevPipelineSeedResult {
@@ -69,6 +178,10 @@ export interface DevPipelineSeedResult {
    * action is precise and one-time) rather than a bare failure.
    */
   authGate?: { status: number; message: string };
+  /** Set when the pipeline still references an artifact that couldn't be
+   * auto-created (e.g. a Databricks linked service on an estate without
+   * Databricks). The provisioner maps this to a precise remediation gate. */
+  needsReference?: { message: string };
   /** Set when a non-auth REST error occurred; provisioner reports as failed. */
   error?: string;
 }
@@ -152,6 +265,12 @@ export async function upsertAndRunDevPipeline(
   const props = buildDevPipelineProperties(content);
   const runParams = buildDevRunParameters(content?.parameters);
 
+  // 0) Auto-provision the linked services + datasets the pipeline references so
+  //    its document validates on commit (Synapse/ADF reject a pipeline that
+  //    references a non-existent dataset/linked service: "invalid reference
+  //    '<name>'"). Best-effort; residual unresolved refs become an honest gate.
+  await ensurePipelineReferences(adapter, content, steps);
+
   // 1) Upsert the pipeline (create or update by name).
   try {
     await adapter.upsert(pipelineName, props);
@@ -161,6 +280,14 @@ export async function upsertAndRunDevPipeline(
     const status = statusFromError(msg);
     if (status === 401 || status === 403) {
       return { upserted: false, triggered: false, steps, authGate: { status, message: msg } };
+    }
+    // An "invalid reference" after auto-provisioning means the pipeline still
+    // points at an artifact we can't synthesize on this estate (typically a
+    // Databricks linked service when Databricks isn't wired). Honest gate, not
+    // a hard product failure — the pipeline definition is saved to Cosmos and
+    // commits once the referenced backend is provisioned.
+    if (/invalid reference|not exist|cannot be found|notfound/i.test(msg)) {
+      return { upserted: false, triggered: false, steps, needsReference: { message: msg } };
     }
     return { upserted: false, triggered: false, steps, error: msg };
   }

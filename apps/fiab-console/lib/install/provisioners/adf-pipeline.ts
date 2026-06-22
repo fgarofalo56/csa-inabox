@@ -29,6 +29,8 @@ import {
   upsertPipeline,
   runPipeline,
   listPipelineRuns,
+  upsertLinkedService,
+  upsertDataset,
 } from '@/lib/azure/adf-client';
 import type { Provisioner, ProvisionResult } from './types';
 import { upsertAndRunDevPipeline, type DevPipelineAdapter } from './_seed-dev-pipeline';
@@ -56,6 +58,12 @@ const adapter: DevPipelineAdapter = {
     const match = runs.find((r) => r.runId === runId) || runs[0];
     return match ? { runId, status: match.status, message: match.message } : undefined;
   },
+  async upsertLinkedService(name, properties) {
+    await upsertLinkedService(name, { name, properties } as any);
+  },
+  async upsertDataset(name, properties) {
+    await upsertDataset(name, { name, properties } as any);
+  },
 };
 
 export const adfPipelineProvisioner: Provisioner = async (input): Promise<ProvisionResult> => {
@@ -81,6 +89,18 @@ export const adfPipelineProvisioner: Provisioner = async (input): Promise<Provis
   steps.push(...seed.steps);
 
   if (!seed.upserted) {
+    if (seed.needsReference) {
+      return {
+        status: 'remediation',
+        gate: {
+          reason: `Pipeline references an artifact that isn't provisioned on this estate: ${seed.needsReference.message}`,
+          remediation:
+            'The pipeline definition is saved. Loom auto-creates the ADLS linked service + datasets it references; a remaining unresolved reference is typically a Databricks linked service — set LOOM_DATABRICKS_HOSTNAME (and grant the factory access) so the notebook activities bind, then re-run install.',
+          link: 'https://learn.microsoft.com/azure/data-factory/concepts-linked-services',
+        },
+        steps,
+      };
+    }
     if (seed.authGate) {
       return {
         status: 'remediation',

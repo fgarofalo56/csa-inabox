@@ -30,25 +30,32 @@ export async function GET(req: NextRequest) {
 
     // ?count=true — aggregate item counts grouped by workspaceId. Cross-
     // partition query on the items container, filtered to workspace ids
-    // owned by this tenant. Cheap because we only project workspaceId.
+    // owned by this tenant. Cheap because we only project workspaceId, but with
+    // many workspaces (100+) the cross-partition aggregate can outrun the
+    // Front Door ~30s origin window → 503. Bound it with a timeout and fall
+    // back to the unenriched list rather than 503ing the whole page.
     try {
       const ids = resources.map(w => w.id);
       const items = await itemsContainer();
-      // Build IN clause params: @w0, @w1, ...
       const inParams = ids.map((id, i) => ({ name: `@w${i}`, value: id }));
       const inExpr = inParams.map(p => p.name).join(',');
-      const { resources: countRows } = await items.items
+      const aggregate = items.items
         .query<{ workspaceId: string; n: number }>({
           query: `SELECT c.workspaceId, COUNT(1) AS n FROM c WHERE c.workspaceId IN (${inExpr}) GROUP BY c.workspaceId`,
           parameters: inParams,
         })
         .fetchAll();
+      const timeout = new Promise<never>((_, reject) =>
+        setTimeout(() => reject(new Error('count-enrichment timed out')), 10_000),
+      );
+      const { resources: countRows } = await Promise.race([aggregate, timeout]);
       const counts = new Map<string, number>();
       for (const row of countRows) counts.set(row.workspaceId, row.n ?? 0);
       const enriched = resources.map(w => ({ ...w, itemCount: counts.get(w.id) ?? 0 }));
       return NextResponse.json(enriched);
     } catch {
-      // If the aggregate fails (e.g., RU limit), return the unenriched list.
+      // Aggregate failed/timed out (RU limit, 100+ workspaces) — return the
+      // unenriched list (no itemCount) so the page still renders fast.
       return NextResponse.json(resources);
     }
   } catch (e: any) {

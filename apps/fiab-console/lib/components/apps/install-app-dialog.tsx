@@ -33,7 +33,7 @@ import {
   Button, Badge, Caption1,
   MessageBar, MessageBarBody, MessageBarTitle,
   Dialog, DialogTrigger, DialogSurface, DialogBody, DialogTitle, DialogContent, DialogActions,
-  Dropdown, Option, Field, Switch, RadioGroup, Radio, Input, ProgressBar,
+  Dropdown, Option, Field, Switch, RadioGroup, Radio, Input, ProgressBar, Spinner,
   makeStyles, mergeClasses, tokens,
 } from '@fluentui/react-components';
 import { useJobsStore } from '@/lib/state/jobs-store';
@@ -167,6 +167,7 @@ export function InstallAppDialog({
   const [provisionReport, setProvisionReport] = React.useState<ProvisionReport | null>(null);
   const [retrying, setRetrying] = React.useState<string | null>(null);
   const [activeJobId, setActiveJobId] = React.useState<string | null>(null);
+  const [wsLoading, setWsLoading] = React.useState(false);
 
   // Module-scope async-install kickoff + poll (task-019). Owning the poll in the
   // jobs-store means a long provision survives the dialog closing / tab nav and
@@ -185,14 +186,17 @@ export function InstallAppDialog({
     }).catch(() => {});
   }, [open, resolvedCount, appId]);
 
-  // Load workspaces when the dialog opens.
+  // Load workspaces when the dialog opens. Track loading so the picker shows a
+  // "Loading…" hint instead of the misleading "no workspaces yet" message
+  // during the (sometimes multi-second) /api/workspaces fetch.
   React.useEffect(() => {
     if (!open || workspaces.length) return;
+    setWsLoading(true);
     fetch('/api/workspaces').then(r => r.json()).then((d: any) => {
       const list = Array.isArray(d) ? d : (d?.workspaces || []);
       setWorkspaces(list);
       if (list.length === 1) setPickedWs(list[0].id);
-    }).catch(() => {});
+    }).catch(() => {}).finally(() => setWsLoading(false));
   }, [open, workspaces.length]);
 
   // Load folders for the picked workspace so the user can target a folder.
@@ -285,7 +289,8 @@ export function InstallAppDialog({
                     Items with matching name + type are skipped (idempotent).
                   </div>
                   <Field label="Workspace" required>
-                    <Dropdown placeholder="Pick a workspace"
+                    <Dropdown placeholder={wsLoading ? 'Loading workspaces…' : 'Pick a workspace'}
+                      disabled={wsLoading}
                       selectedOptions={pickedWs ? [pickedWs] : []}
                       value={workspaces.find(w => w.id === pickedWs)?.name || ''}
                       onOptionSelect={(_, d) => setPickedWs(d.optionValue || '')}>
@@ -294,7 +299,10 @@ export function InstallAppDialog({
                       ))}
                     </Dropdown>
                   </Field>
-                  {workspaces.length === 0 && (
+                  {wsLoading && (
+                    <div className={s.hint}><Spinner size="tiny" label="Loading your workspaces…" labelPosition="after" /></div>
+                  )}
+                  {!wsLoading && workspaces.length === 0 && (
                     <MessageBar intent="warning">
                       <MessageBarBody>
                         You don't have any workspaces yet. Create one at <Link href="/workspaces">/workspaces</Link> first.
