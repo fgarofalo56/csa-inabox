@@ -111,16 +111,31 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ ok: false, code: 'spark_not_configured', error: SPARK_GATE_HINT, hint: SPARK_GATE_HINT, data: pending ?? row }, { status: 503 });
   }
 
-  // 3) Run CREATE SCHEMA IF NOT EXISTS `<name>` on the Spark pool via Livy.
-  try {
-    await runSparkSqlAndWait(sparkPool(), `CREATE SCHEMA IF NOT EXISTS \`${name}\``);
-    const active = await updateSchemaStatus(lakehouseId, name, 'active');
-    return NextResponse.json({ ok: true, data: active ?? row });
-  } catch (e: any) {
-    const msg = sanitize(e);
-    const errRow = await updateSchemaStatus(lakehouseId, name, 'error', msg);
-    return NextResponse.json({ ok: false, code: 'spark_error', error: msg, data: errRow ?? row }, { status: 502 });
-  }
+  // 3) Run CREATE SCHEMA IF NOT EXISTS `<name>` on the Spark pool via Livy — in
+  //    the BACKGROUND. A COLD Livy/Spark session cold-start takes minutes, which
+  //    blew past the Front Door ~30-240s window → HTTP 504 (with a raw HTML body)
+  //    on a freshly-idle pool. The catalog row is already registered (step 1) so
+  //    the schema is usable in the catalog immediately; the Spark metastore
+  //    database materializes async and the row flips to 'active' (or 'error')
+  //    when the DDL settles. CREATE SCHEMA IF NOT EXISTS is idempotent, so a
+  //    retry is safe. (Same floating-promise pattern as /api/apps/[id]/install.)
+  void (async () => {
+    try {
+      await runSparkSqlAndWait(sparkPool(), `CREATE SCHEMA IF NOT EXISTS \`${name}\``);
+      await updateSchemaStatus(lakehouseId, name, 'active');
+    } catch (e: any) {
+      await updateSchemaStatus(lakehouseId, name, 'error', sanitize(e));
+    }
+  })();
+  return NextResponse.json({
+    ok: true,
+    data: row,
+    materializing: true,
+    note:
+      'Schema registered in the catalog. The Spark metastore database is being created in the background ' +
+      '(CREATE SCHEMA on the Spark pool via Livy) — it can take a minute or two while the Spark session warms up, ' +
+      'then the schema shows as active. Tables can be addressed under it as soon as it materializes.',
+  });
 }
 
 export async function DELETE(req: NextRequest) {
