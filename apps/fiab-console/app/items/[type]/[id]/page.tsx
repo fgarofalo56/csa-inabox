@@ -65,19 +65,23 @@ export default function ItemEditorPage(props: Props) {
 
   const Editor = getEditor(type);
 
-  if (!isNew && q.isLoading) {
-    return <Spinner label="Loading item…" />;
-  }
-
-  // A dedicated editor ALWAYS renders its full ribbon + surface (ui-parity.md):
-  // even when the live-backend load errors (e.g. a resource-bound item whose
-  // Azure resource isn't provisioned yet — getSparkPool 404, apim 404), the
-  // editor must render with its actions present (disabled + an honest inline
-  // gate), NOT be replaced by a page-level error that hides the whole ribbon.
-  // The editor reads the same ['item', type, id] query and handles the error
-  // state itself. Only fall back to a bare error bar when there's no editor.
+  // A dedicated editor ALWAYS renders its full ribbon + surface IMMEDIATELY
+  // (ui-parity.md) — it must NOT be gated behind the page-level getItem query.
+  // Many resource-bound editors' getItem does a LIVE Azure probe (getSparkPool,
+  // apim, etc.) that is slow or 404s when the backing resource isn't
+  // provisioned; gating the page on q.isLoading/q.error meant the editor (and
+  // its whole ribbon) didn't mount until that settled — a "Loading item…" /
+  // "Failed to load" page that hid every action. The editor reads the SAME
+  // ['item', type, id] query and renders its own inline loading/error/gate
+  // state with the ribbon present (disabled), exactly as it does for `/new`.
+  // The page-level Spinner/error below is only for the generic (no-editor)
+  // fallback view.
   if (Editor) {
     return <Editor item={item} id={id} />;
+  }
+
+  if (!isNew && q.isLoading) {
+    return <Spinner label="Loading item…" />;
   }
 
   if (!isNew && q.error) {
