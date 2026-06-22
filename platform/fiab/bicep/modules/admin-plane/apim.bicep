@@ -265,7 +265,48 @@ resource sampleSubscription 'Microsoft.ApiManagement/service/subscriptions@2024-
   dependsOn: [ sampleProductApiLink ]
 }
 
+// ───────────────────────────────────────────────────────────────────────────
+// Internal-APIM gateway DNS (day-one).
+// With virtualNetworkType:'Internal' the public gateway hostname
+// (<name>.azure-api.net) has NO reachable endpoint — so in-VNet callers (the
+// Loom Console "Try it" console, any server-side gateway call) get "fetch
+// failed" resolving it. Create the azure-api.net private DNS zone with an A
+// record to the gateway's private IP, linked to the APIM VNet, so the hostname
+// resolves internally to the private gateway. (Was created live for the
+// centralus env; baked here so a fresh deploy has working Try-it day-one.)
+var apimVnetName = split(apimSubnetId, '/')[8]
+
+resource apimVnet 'Microsoft.Network/virtualNetworks@2023-09-01' existing = {
+  name: apimVnetName
+}
+
+resource apimGatewayDnsZone 'Microsoft.Network/privateDnsZones@2020-06-01' = {
+  name: 'azure-api.net'
+  location: 'global'
+  tags: complianceTags
+}
+
+resource apimGatewayDnsA 'Microsoft.Network/privateDnsZones/A@2020-06-01' = {
+  parent: apimGatewayDnsZone
+  name: apim.name // <name>.azure-api.net -> the internal gateway IP
+  properties: {
+    ttl: 3600
+    aRecords: [ { ipv4Address: apim.properties.privateIPAddresses[0] } ]
+  }
+}
+
+resource apimGatewayDnsLink 'Microsoft.Network/privateDnsZones/virtualNetworkLinks@2020-06-01' = {
+  parent: apimGatewayDnsZone
+  name: 'link-${apimVnetName}'
+  location: 'global'
+  properties: {
+    registrationEnabled: false
+    virtualNetwork: { id: apimVnet.id }
+  }
+}
+
 output apimId string = apim.id
 output apimName string = apim.name
 output apimGatewayUrl string = apim.properties.gatewayUrl
 output apimManagedIdentityPrincipalId string = apim.identity.principalId
+output apimPrivateIp string = apim.properties.privateIPAddresses[0]

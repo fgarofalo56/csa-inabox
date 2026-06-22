@@ -165,6 +165,29 @@ if [[ -n "$UAMI_APP_ID" ]]; then
   else
     echo "    WARN: could not resolve/create the UAMI account service principal — grant it account_admin manually." >&2
   fi
+
+  # account_admin is an ACCOUNT role — it does NOT include the data-plane
+  # metastore privileges needed to PUBLISH Delta shares (Marketplace → Data
+  # shares → Shared by me, which failed live with "User does not have CREATE
+  # SHARE on Metastore"). Grant CREATE SHARE/RECIPIENT/PROVIDER on the metastore
+  # to the UAMI via the workspace UC REST — the deploy identity is a metastore
+  # admin, so it can grant. Inbound subscribe needs only workspace access and
+  # already works without this. Best-effort + idempotent.
+  if [[ -n "$WORKSPACE_HOST" ]]; then
+    echo ">>> Granting Delta Sharing metastore privileges (CREATE SHARE/RECIPIENT/PROVIDER) to UAMI ${UAMI_APP_ID}"
+    GRANT_BODY="$(jq -n --arg p "$UAMI_APP_ID" '{changes:[{principal:$p, add:["CREATE_SHARE","CREATE_RECIPIENT","CREATE_PROVIDER"]}]}')"
+    GRANT_CODE="$(curl -s -o /tmp/uc_share_grant.json -w '%{http_code}' --max-time 60 \
+      "${auth[@]}" -X PATCH \
+      "https://${WORKSPACE_HOST}/api/2.1/unity-catalog/permissions/metastore/${METASTORE_ID}" \
+      -d "$GRANT_BODY")"
+    if [[ "$GRANT_CODE" == "200" ]]; then
+      echo "    granted CREATE SHARE/RECIPIENT/PROVIDER on the metastore."
+    else
+      echo "    WARN: Delta Sharing grant returned HTTP ${GRANT_CODE} ($(head -c 160 /tmp/uc_share_grant.json 2>/dev/null)); a metastore admin can run scripts/csa-loom/grant-databricks-delta-sharing.sh." >&2
+    fi
+  else
+    echo "    NOTE: pass --workspace-host to also grant Delta Sharing publish privileges to the UAMI."
+  fi
 fi
 
 echo ""
