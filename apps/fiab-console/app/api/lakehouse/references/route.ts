@@ -105,11 +105,21 @@ export async function GET(req: NextRequest) {
       const account = (ref.state as LakehouseState | undefined)?.storageAccount || primaryAccount || '';
       const containers = ownedContainersOf(ref);
       // Pass-through RBAC probe: which containers the UAMI can actually reach.
+      // Each containerExistsOn is a LIVE ADLS call — against PE-only/unreachable
+      // storage it can hang with no timeout, stalling the whole GET past the
+      // Front Door ~30s window → the client sees "Failed to fetch" and the
+      // picker wrongly shows "no other lakehouses". Bound each probe (4s); a
+      // timeout just marks the container unreachable (honest) and never blocks
+      // the reference list.
       let reachable = false;
       if (account) {
         for (const c of containers) {
           // eslint-disable-next-line no-await-in-loop
-          if (await containerExistsOn(account, c)) { reachable = true; break; }
+          const ok = await Promise.race([
+            containerExistsOn(account, c).catch(() => false),
+            new Promise<boolean>((resolve) => setTimeout(() => resolve(false), 4000)),
+          ]);
+          if (ok) { reachable = true; break; }
         }
       }
       references.push({
