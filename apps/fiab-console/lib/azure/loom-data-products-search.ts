@@ -159,9 +159,32 @@ export async function ensureDataProductsIndex(): Promise<{ created: boolean; ok:
     const get = await fetchWithTimeout(`${base}/indexes/${DATA_PRODUCTS_INDEX}?api-version=${SEARCH_API}`, {
       headers: { authorization: `Bearer ${tok}` },
     });
-    const exists = get.status === 200;
-    // PUT reconciles the schema whether creating or updating. For an existing
-    // index this is an additive update (adds accessModel etc.).
+    if (get.status === 200) {
+      // EXISTING index: reconcile ADDITIVELY against the LIVE definition so we
+      // never overwrite live field attributes (which would 400 on drift). Read
+      // the live fields, append only the fields our code defines that are
+      // absent (e.g. a newly-added accessModel), and PUT the merged definition.
+      let live: any = null;
+      try { live = await get.json(); } catch { live = null; }
+      const liveFields: any[] = Array.isArray(live?.fields) ? live.fields : [];
+      const liveNames = new Set(liveFields.map((f) => String(f?.name)));
+      const wantFields = (DATA_PRODUCTS_INDEX_DEFINITION as any).fields as any[];
+      const missing = wantFields.filter((f) => !liveNames.has(f.name));
+      if (missing.length === 0) return { created: false, ok: true };
+      const mergedBody = { ...live, fields: [...liveFields, ...missing] };
+      const put = await fetchWithTimeout(`${base}/indexes/${DATA_PRODUCTS_INDEX}?api-version=${SEARCH_API}`, {
+        method: 'PUT',
+        headers: { authorization: `Bearer ${tok}`, 'content-type': 'application/json' },
+        body: JSON.stringify(mergedBody),
+      });
+      if (!put.ok) {
+        const t = await put.text();
+        // Non-fatal: index is still searchable; callers degrade (strip the field).
+        return { created: false, ok: true, error: `additive field add skipped (${put.status}): ${t.slice(0, 160)}` };
+      }
+      return { created: false, ok: true };
+    }
+    // ABSENT: create from our full definition.
     const put = await fetchWithTimeout(`${base}/indexes/${DATA_PRODUCTS_INDEX}?api-version=${SEARCH_API}`, {
       method: 'PUT',
       headers: { authorization: `Bearer ${tok}`, 'content-type': 'application/json' },
@@ -169,30 +192,49 @@ export async function ensureDataProductsIndex(): Promise<{ created: boolean; ok:
     });
     if (!put.ok) {
       const t = await put.text();
-      // On an EXISTING index, a non-additive drift would 400 — non-fatal: the
-      // index is still searchable, so report ok and let callers degrade.
-      if (exists) return { created: false, ok: true, error: `additive update skipped (${put.status}): ${t.slice(0, 160)}` };
       return { created: false, ok: false, error: `ensure index PUT ${put.status}: ${t.slice(0, 200)}` };
     }
-    return { created: !exists, ok: true };
+    return { created: true, ok: true };
   } catch (e: any) {
     return { created: false, ok: false, error: e?.message || String(e) };
   }
 }
 
-/** Best-effort upsert. Never throws — the index is derived, never authoritative. */
+/** Best-effort upsert. Never throws — the index is derived, never authoritative.
+ *  Resilient to index schema drift: if the doc carries a property the live index
+ *  doesn't have yet (e.g. accessModel on an older index), it reconciles the
+ *  index + retries, then as a last resort strips unknown fields and retries so
+ *  the product ALWAYS indexes (the field just isn't searchable until the schema
+ *  catches up). Without this a single new field silently de-indexed every
+ *  product (the create→publish→Discover break). */
 export async function upsertDataProductDoc(doc: DataProductDoc): Promise<void> {
   if (!isDataProductsSearchConfigured()) return;
   try {
     const svc = serviceName();
     const tok = await searchToken();
-    // Ensure the index exists on first write (cheap GET when it already does).
-    await ensureDataProductsIndex();
-    await fetchWithTimeout(`${serviceBase(svc)}/indexes/${DATA_PRODUCTS_INDEX}/docs/index?api-version=${SEARCH_API}`, {
+    const url = `${serviceBase(svc)}/indexes/${DATA_PRODUCTS_INDEX}/docs/index?api-version=${SEARCH_API}`;
+    const post = (d: Record<string, unknown>) => fetchWithTimeout(url, {
       method: 'POST',
       headers: { authorization: `Bearer ${tok}`, 'content-type': 'application/json' },
-      body: JSON.stringify({ value: [{ '@search.action': 'mergeOrUpload', ...doc }] }),
+      body: JSON.stringify({ value: [{ '@search.action': 'mergeOrUpload', ...d }] }),
     });
+    // Ensure the index exists + reconcile its schema on first write.
+    await ensureDataProductsIndex();
+    let res = await post(doc as unknown as Record<string, unknown>);
+    if (!res.ok) {
+      const t = await res.text();
+      // Unknown field (index predates a doc field) → reconcile + retry; then
+      // strip optional new fields and retry so the doc still indexes.
+      if (/does not exist|not a known field|unknown field|cannot be found|property/i.test(t)) {
+        await ensureDataProductsIndex();
+        res = await post(doc as unknown as Record<string, unknown>);
+        if (!res.ok) {
+          const { accessModel, ...rest } = doc as DataProductDoc & Record<string, unknown>;
+          void accessModel;
+          await post(rest);
+        }
+      }
+    }
   } catch {
     /* swallow — index is best-effort */
   }

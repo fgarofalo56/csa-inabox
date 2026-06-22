@@ -558,7 +558,7 @@ function NewShareDialog({ open, setOpen, onDone }: { open: boolean; setOpen: (b:
                 method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ name, comment }),
               });
               const j = await r.json(); setBusy(false);
-              if (!j.ok) { setErr(j.error || 'Failed'); return; }
+              if (!j.ok) { setErr([j.error, j.hint].filter(Boolean).join(' — ') || 'Failed'); return; }
               setOpen(false); setName(''); setComment(''); onDone();
             }}>{busy ? 'Creating…' : 'Create'}</Button>
             <DialogTrigger disableButtonEnhancement><Button appearance="secondary">Cancel</Button></DialogTrigger>
@@ -617,7 +617,7 @@ function NewRecipientDialog({ open, setOpen, onDone }: { open: boolean; setOpen:
                   body: JSON.stringify({ name, authentication_type: auth, comment, ...(auth === 'DATABRICKS' ? { data_recipient_global_metastore_id: gmid } : {}) }),
                 });
                 const j = await r.json(); setBusy(false);
-                if (!j.ok) { setErr(j.error || 'Failed'); return; }
+                if (!j.ok) { setErr([j.error, j.hint].filter(Boolean).join(' — ') || 'Failed'); return; }
                 onDone();
                 const url = j.recipient?.tokens?.[0]?.activation_url;
                 if (url) setActivation(url); else { setOpen(false); setName(''); }

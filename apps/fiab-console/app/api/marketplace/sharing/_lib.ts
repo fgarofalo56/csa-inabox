@@ -60,10 +60,12 @@ export function sharingErrorResponse(e: any): NextResponse {
     );
   }
   const msg = String(e?.message || e);
-  // Delta Sharing not enabled on the metastore, or the UAMI lacks the metastore
-  // CREATE_SHARE / sharing-admin privilege — both are honest infra gates.
+  // Delta Sharing not enabled on the metastore, or the UAMI lacks a metastore
+  // sharing privilege (CREATE SHARE / RECIPIENT / PROVIDER) — both are honest
+  // infra gates. Match Databricks' phrasings: "delta sharing is not enabled",
+  // "User does not have CREATE SHARE on Metastore '…'", "is not a metastore admin".
   if (
-    /delta.?sharing|not enabled|sharing is disabled|CREATE_SHARE|metastore admin|PERMISSION_DENIED|not authorized/i.test(
+    /delta.?sharing|not enabled|sharing is disabled|CREATE[ _](SHARE|RECIPIENT|PROVIDER)|does not have .*(SHARE|RECIPIENT|PROVIDER)|metastore admin|on Metastore|PERMISSION_DENIED|not authorized|does not have permission/i.test(
       msg,
     )
   ) {
@@ -71,9 +73,9 @@ export function sharingErrorResponse(e: any): NextResponse {
       {
         ok: false,
         gated: true,
-        error: `Delta Sharing is unavailable on this metastore: ${msg}`,
+        error: `Delta Sharing publishing is unavailable: ${msg}`,
         hint:
-          'Enable Delta Sharing on the Unity Catalog metastore and grant the Loom Console UAMI the metastore-admin / CREATE_SHARE + CREATE_RECIPIENT privileges (Databricks account console → metastore → Delta Sharing). See scripts/csa-loom/grant-databricks-system-tables-role.sh for the grant pattern.',
+          'Grant the Loom Console UAMI the metastore sharing privileges (CREATE SHARE, CREATE RECIPIENT, CREATE PROVIDER) — or make it a metastore admin — and ensure Delta Sharing is enabled on the Unity Catalog metastore. Run scripts/csa-loom/grant-databricks-delta-sharing.sh (a metastore admin executes `GRANT CREATE SHARE/RECIPIENT/PROVIDER ON METASTORE TO `<uami>``). Subscribing to inbound shares needs only workspace access.',
       },
       { status: 501 },
     );
