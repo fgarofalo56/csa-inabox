@@ -82,6 +82,27 @@ mirrored-database, dataflow, spark-job-definition, data-agent, ai-search-index,
 ai-foundry-project, data-api-builder, sql-database, cosmos.
 (109 total slugs; many are sub-objects — core/createable ones first.)
 
+## Functional (no-cuts) run — 2026-06-22, console b10e9166 (rev 0032)
+Operator pushback: the deep-functional /new sweep is a SMOKE test (editor renders
++ button clickable), NOT proof the item works. Ran `no-cuts-sweep-v3` (UAT_GREP=
+ribbon) which creates a real item per probe + asserts the ribbon button is PRESENT
+(absent=fail; present-but-disabled=pass). Result: **pass=21 fail=8**.
+- 8 fails = ribbon button ABSENT on a freshly-created persisted item: warehouse
+  (New SQL query, Save as table), synapse-spark-pool (Scale, Auto-pause),
+  synapse-pipeline (Add trigger), apim-api (Edit OpenAPI), databricks-sql-warehouse
+  (Query history), data-product (Save).
+- ROOT CAUSE (real, not test artifact): createItem 201 for all 8 types (real
+  items); the buttons EXIST in editor source + render on /new. The resource-bound
+  editors (synapse-sql-editors.tsx etc.) **early-return `<Spinner>` (loading) or
+  an error `<MessageBar>` BEFORE the ribbon** — a just-created item with no
+  reachable Azure backend errors the editor's data fetch → ribbon hidden →
+  "button absent." **ui-parity violation**: per `.claude/rules/ui-parity.md` +
+  the no-cuts rule, the full ribbon must render with actions DISABLED + an honest
+  gate, never vanish. FIX = move loading/error states BELOW the ribbon (always
+  render the ribbon) in each resource-bound editor — needs live browser
+  verification per editor (risky to blind-refactor). Power Platform items (power-*,
+  copilot-studio-*) honest-gate on the SP grant (see csa_loom_powerplatform_sp_grant).
+
 ## Phase D — In-editor "Add" actions + every page/tab
 Per editor: ribbon/canvas add buttons. Plus admin-portal pages, governance,
 monitor, connections (already swept #2 prior), lineage, catalog.
