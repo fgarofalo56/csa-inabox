@@ -704,6 +704,39 @@ functional; only the one-click metastore **attach** is unavailable.
 | Account-admin + metastore + default catalog | `scripts/csa-loom/enable-unity-catalog.sh` (bootstrap **Enable Unity Catalog** step) |
 | dlz-attach live env bridge | bootstrap **Enable Unity Catalog** step + `scripts/csa-loom/patch-navigator-env.sh` |
 
+## Delta Sharing — Marketplace "Data shares" tab {#delta-sharing}
+
+The unified **Marketplace** (`/marketplace`) → **Data shares** tab is
+bidirectional Databricks Unity Catalog Delta Sharing (publish outbound shares +
+recipients; subscribe to inbound provider shares, including Databricks
+Marketplace listings). It reuses the same workspace binding as Unity Catalog
+(`LOOM_DATABRICKS_HOSTNAMES`, or a Cosmos metastore registration) — there is no
+extra env var.
+
+For the **publish** (provider) operations to work, two things must be true on
+the bound Unity Catalog metastore:
+
+1. **Delta Sharing is enabled** on the metastore (Databricks account console →
+   metastore → *Delta Sharing* → enable; set the sharing organization name).
+2. **The Console UAMI has the metastore sharing-admin privileges** —
+   `CREATE_SHARE` + `CREATE_RECIPIENT` + `CREATE_PROVIDER` (or metastore admin).
+   Grant via the same pattern as
+   `scripts/csa-loom/grant-databricks-system-tables-role.sh`.
+
+If either is missing the BFF (`/api/marketplace/sharing/*`) returns a structured
+**501 gate** the UI renders as a Fluent MessageBar naming the exact remediation;
+the full Data-shares surface still renders (no-vaporware). Delta Sharing is an
+**Azure Databricks** feature — this is a legitimate Azure infra gate, not a
+Microsoft Fabric dependency (`no-fabric-dependency.md`). The **subscribe**
+(consumer) side — listing inbound providers and mounting a share as a read-only
+catalog — needs only workspace access, not sharing-admin.
+
+| Piece | Where |
+|---|---|
+| Workspace binding | `LOOM_DATABRICKS_HOSTNAMES` (admin-plane/main.bicep apps[].env) — shared with Unity Catalog |
+| Delta Sharing enable + UAMI sharing-admin | Databricks account console / `grant-databricks-system-tables-role.sh` pattern |
+| BFF routes | `app/api/marketplace/sharing/{shares,recipients,providers}` |
+
 ## Batch labeling — Power BI Admin setLabels {#batch-labeling-powerbi-setlabels}
 
 The **Admin → Batch labeling** page (`/admin/batch-labeling`) bulk-applies a

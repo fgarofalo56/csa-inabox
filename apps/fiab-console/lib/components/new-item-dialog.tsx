@@ -140,6 +140,9 @@ export function NewItemDialog({ defaultCategory, workspaceId }: Props = {}) {
       // Deprecated item types (e.g. datamart) have no create path — never offer
       // them in the New item dialog, whether browsing or searching.
       if (i.deprecated) return false;
+      // Core surfaces (e.g. data-marketplace) are reached from a top-level nav
+      // destination, not "created" per workspace — never offer them here.
+      if (i.coreSurface) return false;
       if (q) {
         // when searching, ignore the category filter so the user finds
         // results across all workloads

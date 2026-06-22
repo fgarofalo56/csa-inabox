@@ -66,6 +66,8 @@ export interface DataProductDoc {
   publishStatus: PublishStatus;
   sla?: string;
   url: string;
+  /** governed (default) | self-serve | request — drives the subscribe flow. */
+  accessModel?: string;
   touchedAt: string; // ISO-8601
 }
 
@@ -123,6 +125,7 @@ export const DATA_PRODUCTS_INDEX_DEFINITION = {
     { name: 'publishStatus', type: 'Edm.String', filterable: true, facetable: true, retrievable: true },
     { name: 'sla', type: 'Edm.String', retrievable: true },
     { name: 'url', type: 'Edm.String', retrievable: true },
+    { name: 'accessModel', type: 'Edm.String', filterable: true, facetable: true, retrievable: true },
     { name: 'touchedAt', type: 'Edm.DateTimeOffset', sortable: true, filterable: true, retrievable: true },
   ],
 };
@@ -137,7 +140,7 @@ export const DEFAULT_FACETS = [
 ];
 
 const SELECT =
-  'id,tenantId,workspaceId,displayName,description,domain,domainName,productType,owner,glossaryTerms,CDEs,publishStatus,sla,url,touchedAt';
+  'id,tenantId,workspaceId,displayName,description,domain,domainName,productType,owner,glossaryTerms,CDEs,publishStatus,sla,url,accessModel,touchedAt';
 
 /** Idempotent: create the `loom-data-products` index if absent. */
 export async function ensureDataProductsIndex(): Promise<{ created: boolean; ok: boolean; error?: string }> {
@@ -326,6 +329,7 @@ export function docForDataProduct(
     publishStatus: PUBLISH_STATUSES.includes(ps) ? ps : 'Draft',
     sla: state.sla ? String(state.sla) : undefined,
     url: `/items/data-product/${item.id}`,
+    accessModel: state.accessModel ? String(state.accessModel) : 'governed',
     touchedAt: item.updatedAt || item.createdAt,
   };
 }

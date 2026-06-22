@@ -837,6 +837,221 @@ export async function getColumnLineageSystemTables(
 }
 
 // ============================================================
+// Delta Sharing — provider (outbound) + recipient (inbound)
+// ============================================================
+//
+// Powers the "Data shares" surface of Loom Marketplace. Bidirectional:
+//
+//   OUTBOUND (this metastore is the provider)
+//     - shares:      a named read-only collection of tables/schemas/volumes
+//     - recipients:  the org you share with (TOKEN = open Delta Sharing to any
+//                    client; DATABRICKS = D2D to another UC metastore)
+//     - share perms: grant a recipient SELECT on a share
+//
+//   INBOUND (this metastore is the recipient)
+//     - providers:        the orgs sharing data WITH us (incl. Databricks
+//                         Marketplace listings, which materialize as providers)
+//     - provider shares:  the shares a provider exposes to us
+//     - mount:            createCatalog({ provider_name, share_name }) attaches
+//                         an inbound share as a read-only catalog (already above)
+//
+// All real UC REST (/api/2.1/unity-catalog/{shares,recipients,providers}). No
+// mocks. A metastore that has Delta Sharing disabled returns a typed
+// UnityCatalogError the BFF surfaces as an honest gate.
+
+export interface UCDataObject {
+  /** full_name of the table/schema/volume being shared. */
+  name: string;
+  data_object_type: 'TABLE' | 'SCHEMA' | 'VOLUME' | 'MODEL' | 'NOTEBOOK_FILE' | string;
+  /** Alias the recipient sees instead of the source full_name. */
+  shared_as?: string;
+  added_at?: number;
+  added_by?: string;
+  comment?: string;
+  /** History sharing — required for streaming reads of the shared table. */
+  history_data_sharing_status?: 'ENABLED' | 'DISABLED' | string;
+  cdf_enabled?: boolean;
+}
+
+export interface UCShare {
+  name: string;
+  comment?: string;
+  owner?: string;
+  created_at?: number;
+  updated_at?: number;
+  objects?: UCDataObject[];
+  workspace_hostname?: string;
+}
+
+export interface UCRecipientToken {
+  id?: string;
+  /** The activation URL the recipient opens to download their credential file
+   *  (TOKEN auth only). Never logged — surfaced once to the share owner. */
+  activation_url?: string;
+  expiration_time?: number;
+  created_at?: number;
+}
+
+export interface UCRecipient {
+  name: string;
+  authentication_type: 'TOKEN' | 'DATABRICKS' | string;
+  comment?: string;
+  owner?: string;
+  /** Present for DATABRICKS (D2D) recipients — the target metastore's sharing id. */
+  data_recipient_global_metastore_id?: string;
+  created_at?: number;
+  tokens?: UCRecipientToken[];
+  workspace_hostname?: string;
+}
+
+export interface UCProvider {
+  name: string;
+  authentication_type?: string;
+  comment?: string;
+  owner?: string;
+  /** D2D providers carry the source metastore's global id. */
+  data_provider_global_metastore_id?: string;
+  created_at?: number;
+  /** Recipient-side activation file contents for TOKEN providers (write-only on create). */
+  recipient_profile_str?: string;
+  workspace_hostname?: string;
+}
+
+// ---- Outbound: shares -------------------------------------------------
+
+export async function listShares(host: string): Promise<UCShare[]> {
+  const j = await ucFetch<{ shares?: UCShare[] }>(host, '/api/2.1/unity-catalog/shares');
+  return (j.shares || []).map((s) => ({ ...s, workspace_hostname: host }));
+}
+
+export async function getShare(host: string, name: string, includeData = true): Promise<UCShare> {
+  const j = await ucFetch<UCShare>(host, `/api/2.1/unity-catalog/shares/${encodeURIComponent(name)}`, {
+    query: includeData ? { include_shared_data: 'true' } : undefined,
+  });
+  return { ...j, workspace_hostname: host };
+}
+
+export async function createShare(host: string, body: { name: string; comment?: string }): Promise<UCShare> {
+  const j = await ucFetch<UCShare>(host, '/api/2.1/unity-catalog/shares', { method: 'POST', body });
+  return { ...j, workspace_hostname: host };
+}
+
+/** Add or remove data objects (tables/schemas/volumes) on a share. Mirrors the
+ *  UC `PATCH /shares/{name}` updates list. */
+export async function updateShareObjects(
+  host: string,
+  name: string,
+  changes: { add?: UCDataObject[]; remove?: Array<{ name: string }> },
+): Promise<UCShare> {
+  const updates = [
+    ...(changes.add || []).map((o) => ({ action: 'ADD', data_object: o })),
+    ...(changes.remove || []).map((o) => ({ action: 'REMOVE', data_object: { name: o.name, data_object_type: 'TABLE' } })),
+  ];
+  const j = await ucFetch<UCShare>(host, `/api/2.1/unity-catalog/shares/${encodeURIComponent(name)}`, {
+    method: 'PATCH',
+    body: { updates },
+  });
+  return { ...j, workspace_hostname: host };
+}
+
+export async function deleteShare(host: string, name: string): Promise<void> {
+  await ucFetch(host, `/api/2.1/unity-catalog/shares/${encodeURIComponent(name)}`, { method: 'DELETE' });
+}
+
+/** Recipients currently granted SELECT on a share. */
+export async function getSharePermissions(host: string, name: string): Promise<UCPermissions> {
+  return ucFetch<UCPermissions>(host, `/api/2.1/unity-catalog/shares/${encodeURIComponent(name)}/permissions`);
+}
+
+/** Grant / revoke a recipient on a share (privilege is always `SELECT` for
+ *  Delta Sharing shares). */
+export async function updateSharePermissions(
+  host: string,
+  name: string,
+  changes: { add?: string[]; remove?: string[] },
+): Promise<UCPermissions> {
+  return ucFetch<UCPermissions>(host, `/api/2.1/unity-catalog/shares/${encodeURIComponent(name)}/permissions`, {
+    method: 'PATCH',
+    body: {
+      changes: [
+        ...(changes.add || []).map((principal) => ({ principal, add: ['SELECT'] })),
+        ...(changes.remove || []).map((principal) => ({ principal, remove: ['SELECT'] })),
+      ],
+    },
+  });
+}
+
+// ---- Outbound: recipients --------------------------------------------
+
+export async function listRecipients(host: string): Promise<UCRecipient[]> {
+  const j = await ucFetch<{ recipients?: UCRecipient[] }>(host, '/api/2.1/unity-catalog/recipients');
+  return (j.recipients || []).map((r) => ({ ...r, workspace_hostname: host }));
+}
+
+export async function getRecipient(host: string, name: string): Promise<UCRecipient> {
+  const j = await ucFetch<UCRecipient>(host, `/api/2.1/unity-catalog/recipients/${encodeURIComponent(name)}`);
+  return { ...j, workspace_hostname: host };
+}
+
+export async function createRecipient(
+  host: string,
+  body: {
+    name: string;
+    authentication_type: 'TOKEN' | 'DATABRICKS';
+    comment?: string;
+    /** Required for DATABRICKS (D2D) recipients — the consumer metastore's sharing id. */
+    data_recipient_global_metastore_id?: string;
+  },
+): Promise<UCRecipient> {
+  const j = await ucFetch<UCRecipient>(host, '/api/2.1/unity-catalog/recipients', { method: 'POST', body });
+  return { ...j, workspace_hostname: host };
+}
+
+export async function deleteRecipient(host: string, name: string): Promise<void> {
+  await ucFetch(host, `/api/2.1/unity-catalog/recipients/${encodeURIComponent(name)}`, { method: 'DELETE' });
+}
+
+// ---- Inbound: providers ----------------------------------------------
+
+export async function listProviders(host: string): Promise<UCProvider[]> {
+  const j = await ucFetch<{ providers?: UCProvider[] }>(host, '/api/2.1/unity-catalog/providers');
+  return (j.providers || []).map((p) => ({ ...p, workspace_hostname: host }));
+}
+
+export async function getProvider(host: string, name: string): Promise<UCProvider> {
+  const j = await ucFetch<UCProvider>(host, `/api/2.1/unity-catalog/providers/${encodeURIComponent(name)}`);
+  return { ...j, workspace_hostname: host };
+}
+
+/** The shares a provider exposes to us (inbound). Each can be mounted as a
+ *  read-only catalog with {@link createCatalog}({ provider_name, share_name }). */
+export async function listProviderShares(host: string, providerName: string): Promise<UCShare[]> {
+  const j = await ucFetch<{ shares?: UCShare[] }>(
+    host,
+    `/api/2.1/unity-catalog/providers/${encodeURIComponent(providerName)}/shares`,
+  );
+  return (j.shares || []).map((s) => ({ ...s, workspace_hostname: host }));
+}
+
+/** Create an inbound provider from a TOKEN recipient-profile activation file
+ *  (the open Delta Sharing handshake — e.g. a Databricks Marketplace listing or
+ *  a third-party share). */
+export async function createProvider(
+  host: string,
+  body: { name: string; recipient_profile_str: string; comment?: string },
+): Promise<UCProvider> {
+  const j = await ucFetch<UCProvider>(host, '/api/2.1/unity-catalog/providers', {
+    method: 'POST',
+    body: { ...body, authentication_type: 'TOKEN' },
+  });
+  return { ...j, workspace_hostname: host };
+}
+
+export async function deleteProvider(host: string, name: string): Promise<void> {
+  await ucFetch(host, `/api/2.1/unity-catalog/providers/${encodeURIComponent(name)}`, { method: 'DELETE' });
+}
+
+// ============================================================
 // Federated search over UC
 // ============================================================
 

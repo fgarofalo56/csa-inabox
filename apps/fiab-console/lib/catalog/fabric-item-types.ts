@@ -79,6 +79,14 @@ export interface FabricItemType {
    * MessageBar + a migration action instead of an authoring surface.
    */
   deprecated?: boolean;
+  /**
+   * True when the item type is a CORE Loom surface reached from a top-level nav
+   * destination rather than created per-workspace. The New item dialog filters
+   * these out (you don't "create a marketplace") but the editor/route still
+   * works so the nav page can render it. Used by data-marketplace, which lives
+   * under the unified Loom Marketplace (/marketplace).
+   */
+  coreSurface?: boolean;
   /** Learn / Getting started popup content. Required for every type. */
   learnContent?: LearnContent;
 }
@@ -2538,8 +2546,8 @@ export const FABRIC_ITEM_TYPES: readonly FabricItemType[] = [
     } },
 
   // --- v3 — Push-button data-products library (CSA-curated templates + instances) ---
-  { slug: 'data-marketplace',            displayName: 'Data marketplace',            restType: 'DataMarketplace',           category: 'CSA Data Products',
-    description: 'Consumer discovery hub for Published data products — faceted search, governance-domain card grid, and access requests. Backed by Azure AI Search.',
+  { slug: 'data-marketplace',            displayName: 'Data marketplace',            restType: 'DataMarketplace',           category: 'CSA Data Products', coreSurface: true,
+    description: 'Consumer discovery hub for Published data products — faceted search, governance-domain card grid, and access requests. Backed by Azure AI Search. Now a core surface under the unified Loom Marketplace (/marketplace).',
     learnContent: {
       "overview": "The Data marketplace is the consumer-facing discovery surface for the tenant's Published data products (F14/F18). It searches a dedicated Azure AI Search index (loom-data-products) that mirrors every Published data-product item, with faceted navigation over governance domain, type, owner, glossary terms, and critical data elements (CDEs). It is Azure-native — no Microsoft Fabric or Power BI dependency.",
       "steps": [

@@ -89,6 +89,8 @@ interface Hit {
   sla?: string;
   url?: string;
   workspaceId?: string;
+  /** governed (default) | self-serve | request — how a subscribe is provisioned. */
+  accessModel?: string;
 }
 
 interface Product {
@@ -113,7 +115,13 @@ const FACET_LABELS: Record<string, string> = {
 };
 const FACET_ORDER = ['domainName', 'productType', 'owner', 'glossaryTerms', 'CDEs'];
 
-export function DataMarketplaceEditor({ item, id }: { item: FabricItemType; id: string }) {
+/**
+ * DataProductsMarketplace — the data-product discover/domains/publish/access
+ * panels, with no item chrome. Embedded as the "Data products" tab of the
+ * unified Loom Marketplace (/marketplace) AND wrapped by DataMarketplaceEditor
+ * for the legacy item route.
+ */
+export function DataProductsMarketplace() {
   const s = useStyles();
   const [tab, setTab] = useState<string>('discover');
 
@@ -233,31 +241,16 @@ export function DataMarketplaceEditor({ item, id }: { item: FabricItemType; id: 
       method: 'POST',
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify({
-        assetId: hit.workspaceId ? hit.id.replace(/^dp:/, '') : hit.id.replace(/^dp:/, ''),
+        assetId: hit.id.replace(/^dp:/, ''),
         assetName: hit.displayName,
         itemType: 'data-product',
         permission,
+        accessModel: hit.accessModel || 'governed',
       }),
     });
     const j = await r.json();
     return j;
   }, []);
-
-  const ribbon: RibbonTab[] = [
-    {
-      id: 'home',
-      label: 'Home',
-      groups: [
-        {
-          label: 'Marketplace',
-          actions: [
-            { label: 'Refresh', icon: <ArrowSync20Regular />,
-              onClick: () => { void runSearch(submitted, selected); if (tab === 'publish') void loadProducts(); if (tab === 'access') void loadRequests(); } },
-          ],
-        },
-      ],
-    },
-  ];
 
   const domainCards = facets.domainName || [];
 
@@ -361,6 +354,11 @@ export function DataMarketplaceEditor({ item, id }: { item: FabricItemType; id: 
                     <div className={s.cardMeta}>
                       {h.domainName && <Badge appearance="tint" color="brand">{h.domainName}</Badge>}
                       {h.productType && <Badge appearance="outline">{h.productType}</Badge>}
+                      {h.accessModel && h.accessModel !== 'governed' && (
+                        <Badge appearance="tint" color={h.accessModel === 'self-serve' ? 'success' : 'informative'}>
+                          {h.accessModel === 'self-serve' ? 'Self-serve' : 'Request only'}
+                        </Badge>
+                      )}
                       {h.owner && <Caption1 className={s.hint}>Owner: {h.owner}</Caption1>}
                       {(h.glossaryTerms || []).map((t) => <Tag key={`g-${t}`} size="extra-small">{t}</Tag>)}
                       {(h.CDEs || []).map((c) => <Tag key={`c-${c}`} size="extra-small" appearance="outline">CDE: {c}</Tag>)}
@@ -459,7 +457,32 @@ export function DataMarketplaceEditor({ item, id }: { item: FabricItemType; id: 
     </div>
   );
 
-  return <ItemEditorChrome item={item} id={id} ribbon={ribbon} main={main} />;
+  return main;
+}
+
+/**
+ * DataMarketplaceEditor — legacy item-route wrapper (/items/data-marketplace/…).
+ * data-marketplace is now a coreSurface reached from the unified Loom
+ * Marketplace, so this wrapper just frames the panels with item chrome and a
+ * pointer to the full marketplace.
+ */
+export function DataMarketplaceEditor({ item, id }: { item: FabricItemType; id: string }) {
+  const ribbon: RibbonTab[] = [
+    {
+      id: 'home',
+      label: 'Home',
+      groups: [
+        {
+          label: 'Marketplace',
+          actions: [
+            { label: 'Open Loom Marketplace', icon: <Open20Regular />,
+              onClick: () => { window.location.href = '/marketplace'; } },
+          ],
+        },
+      ],
+    },
+  ];
+  return <ItemEditorChrome item={item} id={id} ribbon={ribbon} main={<DataProductsMarketplace />} />;
 }
 
 /** A small request-access control with a permission picker + confirmation. */
@@ -530,12 +553,13 @@ function PublishTab({
   const [glossary, setGlossary] = useState('');
   const [cdes, setCdes] = useState('');
   const [publishStatus, setPublishStatus] = useState('Published');
+  const [accessModel, setAccessModel] = useState('governed');
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<string | null>(null);
 
   const reset = () => {
     setName(''); setDesc(''); setDomain(''); setProductType(''); setOwner(''); setSla('');
-    setGlossary(''); setCdes(''); setPublishStatus('Published'); setErr(null);
+    setGlossary(''); setCdes(''); setPublishStatus('Published'); setAccessModel('governed'); setErr(null);
   };
 
   const submit = async () => {
@@ -547,7 +571,7 @@ function PublishTab({
         headers: { 'content-type': 'application/json' },
         body: JSON.stringify({
           workspaceId, displayName: name, description: desc,
-          state: { domain, productType, owner, sla, glossaryTerms: glossary, CDEs: cdes, publishStatus },
+          state: { domain, productType, owner, sla, glossaryTerms: glossary, CDEs: cdes, publishStatus, accessModel },
         }),
       });
       const j = await r.json();
@@ -667,6 +691,14 @@ function PublishTab({
                     <option value="Published">Published</option>
                     <option value="Draft">Draft</option>
                     <option value="Deprecated">Deprecated</option>
+                  </Select>
+                </Field>
+                <Field label="Access model" className={styles.field}
+                  hint="How a consumer's subscribe is provisioned.">
+                  <Select value={accessModel} onChange={(_, d) => setAccessModel(d.value)}>
+                    <option value="governed">Governed — multi-tier approval → real RBAC</option>
+                    <option value="self-serve">Self-serve — immediate grant where policy allows</option>
+                    <option value="request">Request only — owner provisions manually</option>
                   </Select>
                 </Field>
               </div>

@@ -1662,6 +1662,17 @@ export interface ScheduledQueryRuleInput {
   actionGroupIds?: string[];
   /** Whether the rule evaluates. Default true; set false to "stop" the rule. */
   enabled?: boolean;
+  /**
+   * Skip create-time KQL validation. Default TRUE for Loom-created rules: a
+   * bundled alert's query often targets a table that doesn't exist on a fresh
+   * estate yet (e.g. AppEvents_CL before any data lands), and Azure Monitor
+   * REJECTS rule creation with "Failed to resolve table … semantic error" when
+   * it validates the query against an empty workspace. With skipQueryValidation
+   * the rule IS created and the query is validated at RUN time instead — the
+   * rule simply fires once the table/data exists. (Microsoft.Insights
+   * scheduledQueryRules property `skipQueryValidation`.)
+   */
+  skipQueryValidation?: boolean;
 }
 
 /** Create/update a scheduled query alert rule. Returns its ARM id. */
@@ -1699,6 +1710,9 @@ export async function upsertScheduledQueryRule(input: ScheduledQueryRuleInput): 
         ],
       },
       autoMitigate: true,
+      // Create the rule even when its query targets a table that doesn't exist
+      // yet (bundle demo tables on a fresh estate); validated at run time.
+      skipQueryValidation: input.skipQueryValidation ?? true,
       actions: input.actionGroupIds && input.actionGroupIds.length
         ? { actionGroups: input.actionGroupIds }
         : undefined,

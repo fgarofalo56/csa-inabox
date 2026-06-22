@@ -20,7 +20,7 @@ import {
   auditLogContainer, notificationsContainer, accessRequestWorkflowContainer,
 } from '@/lib/azure/cosmos-client';
 import { inferScopeType, type AccessRequestDoc } from '@/lib/types/access-request-workflow';
-import type { AccessScopeType } from '@/lib/azure/access-policy-client';
+import { enforceAccessGrant, type AccessScopeType } from '@/lib/azure/access-policy-client';
 import crypto from 'node:crypto';
 
 export const runtime = 'nodejs';
@@ -28,6 +28,11 @@ export const dynamic = 'force-dynamic';
 
 const PERMS = new Set(['read', 'write', 'admin']);
 const SCOPE_TYPES = new Set<AccessScopeType>(['adls-container', 'warehouse', 'kql-database', 'workspace', 'item', 'collection']);
+// Per-product access model the owner sets at publish time (see PublishTab):
+//   governed   — multi-tier approval → real RBAC on final approval (DEFAULT)
+//   self-serve — attempt an immediate real RBAC grant; fall back to governed
+//   request    — record the request + notify the owner; provisioning is manual
+const ACCESS_MODELS = new Set(['governed', 'self-serve', 'request']);
 
 export async function POST(req: NextRequest) {
   const s = getSession();
@@ -47,10 +52,45 @@ export async function POST(req: NextRequest) {
   const scopeType: AccessScopeType =
     SCOPE_TYPES.has(body?.scopeType) ? body.scopeType : inferScopeType(itemType);
   const scopeRef = String(body?.scopeRef || '').trim().slice(0, 200);
+  const accessModel = ACCESS_MODELS.has(body?.accessModel) ? body.accessModel : 'governed';
   if (!assetId) return NextResponse.json({ ok: false, error: 'assetId is required' }, { status: 400 });
 
   const requester = s.claims.upn || s.claims.email || s.claims.oid;
   const now = new Date().toISOString();
+
+  // Self-serve: try to provision a REAL RBAC grant immediately. Needs a concrete
+  // scopeRef (the backing container/db/pool) — when present and the grant lands
+  // 'active' we short-circuit. Anything else (no scopeRef, honest gate, or error)
+  // falls through to the governed approval workflow so the request is never lost.
+  if (accessModel === 'self-serve' && scopeRef) {
+    try {
+      const grant = await enforceAccessGrant({
+        principalId: s.claims.oid,
+        principalName: requester,
+        principalType: 'User',
+        scopeType,
+        scopeRef,
+        permission: permission as any,
+      });
+      if (grant.status === 'active') {
+        try {
+          const audit = await auditLogContainer();
+          await audit.items.create({
+            id: crypto.randomUUID(), itemId: assetId, itemType,
+            action: 'access-granted',
+            summary: `${requester} self-served ${permission} access to ${assetName} (${grant.roleName || scopeType}).`,
+            upn: requester, at: now,
+          });
+        } catch { /* audit best-effort */ }
+        return NextResponse.json({
+          ok: true,
+          granted: true,
+          roleAssignmentId: grant.roleAssignmentId,
+          message: `Self-serve access to "${assetName}" granted immediately (${grant.roleName || scopeType}).`,
+        });
+      }
+    } catch { /* fall through to governed workflow */ }
+  }
 
   try {
     // 1) Durable audit-log entry on the asset (owner sees it in item activity).
@@ -84,34 +124,43 @@ export async function POST(req: NextRequest) {
       createdAt: now,
     });
 
-    // 3) Durable approval-workflow row — opened at the MANAGER tier.
-    const arContainer = await accessRequestWorkflowContainer();
-    const requestDoc: AccessRequestDoc = {
-      id: crypto.randomUUID(),
-      tenantId: s.claims.oid,
-      kind: 'access-request',
-      assetId,
-      assetName,
-      itemType,
-      scopeType,
-      scopeRef,
-      permission,
-      justification,
-      requesterId: s.claims.oid,
-      requesterUpn: requester,
-      requestedAt: now,
-      tier: 'manager',
-      status: 'open',
-    };
-    const { resource: savedReq } = await arContainer.items.create(requestDoc);
+    // 3) Approval-workflow row — opened at the MANAGER tier — for the GOVERNED
+    //    model (default) and for self-serve that fell through (couldn't auto-grant).
+    //    The 'request' model is notify-only: the owner provisions manually, so we
+    //    deliberately skip the multi-tier workflow row.
+    let savedReqId: string | undefined;
+    if (accessModel !== 'request') {
+      const arContainer = await accessRequestWorkflowContainer();
+      const requestDoc: AccessRequestDoc = {
+        id: crypto.randomUUID(),
+        tenantId: s.claims.oid,
+        kind: 'access-request',
+        assetId,
+        assetName,
+        itemType,
+        scopeType,
+        scopeRef,
+        permission,
+        justification,
+        requesterId: s.claims.oid,
+        requesterUpn: requester,
+        requestedAt: now,
+        tier: 'manager',
+        status: 'open',
+      };
+      const { resource: savedReq } = await arContainer.items.create(requestDoc);
+      savedReqId = savedReq?.id;
+    }
 
     return NextResponse.json({
       ok: true,
-      requestId: savedReq?.id,
+      requestId: savedReqId,
       message:
-        `Access request for "${assetName}" recorded${ownerUpn ? ` and routed to ${ownerUpn}` : ''}. ` +
-        'It now awaits multi-tier approval (manager → privacy → approver → access provider) ' +
-        'in Governance → Access requests.',
+        accessModel === 'request'
+          ? `Access request for "${assetName}" recorded${ownerUpn ? ` and the owner (${ownerUpn})` : ' and the owner'} was notified. Provisioning is handled manually by the owner.`
+          : `Access request for "${assetName}" recorded${ownerUpn ? ` and routed to ${ownerUpn}` : ''}. ` +
+            'It now awaits multi-tier approval (manager → privacy → approver → access provider) ' +
+            'in Governance → Access requests.',
     });
   } catch (e: any) {
     return NextResponse.json({ ok: false, error: e?.message || String(e) }, { status: 500 });

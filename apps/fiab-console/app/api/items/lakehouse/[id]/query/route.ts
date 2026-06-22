@@ -111,6 +111,31 @@ export async function POST(req: NextRequest, _ctx: { params: Promise<{ id: strin
         { status: 502 },
       );
     }
+    // Empty / non-existent target path. OPENROWSET errors ("Content of
+    // directory on path '…' cannot be listed", "Cannot bulk load … does not
+    // exist", "path … not found") when the file/folder it points at has no
+    // data yet — e.g. a shortcut to an Event Hubs capture path before any
+    // events land, or a medallion folder not yet populated. This is an honest
+    // "no data yet" state, not a failure — surface it as such, not a raw
+    // EREQUEST.
+    const isEmptyPath = /cannot be listed|does not exist|not found|no files|path.*could not be found|0x80070002/i.test(raw);
+    if (isEmptyPath) {
+      const m = raw.match(/path '([^']+)'/i);
+      const where = m ? ` ('${m[1]}')` : '';
+      return NextResponse.json(
+        {
+          ok: false,
+          code: 'empty_or_missing_path',
+          error:
+            `No data at the query target${where} yet. The path is empty or doesn't exist — ` +
+            `for a shortcut, its source hasn't been populated (e.g. an Event Hubs capture ` +
+            `path before any events land, or a folder not yet written). Point the query/` +
+            `shortcut at a populated path, run the pipeline/capture that fills it, or upload ` +
+            `a file, then re-run. (No rows is expected until then.)`,
+        },
+        { status: 200 },
+      );
+    }
     return NextResponse.json(
       {
         ok: false,

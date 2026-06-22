@@ -1,13 +1,10 @@
-import { PageShell } from '@/lib/components/page-shell';
-import { ApiMarketplace } from '@/lib/components/marketplace/api-marketplace';
+import { redirect } from 'next/navigation';
 
-export default function ApiMarketplacePage() {
-  return (
-    <PageShell
-      title="API marketplace"
-      subtitle="Discover the APIs your tenant publishes through API Management. Browse products and APIs, inspect operations and OpenAPI specs, try a live call through the gateway, and subscribe to request access keys."
-    >
-      <ApiMarketplace />
-    </PageShell>
-  );
+/**
+ * Legacy /api-marketplace → the APIs tab of the unified Loom Marketplace.
+ * The standalone "API marketplace" merged into /marketplace (data products +
+ * APIs + Delta Sharing data shares in one surface).
+ */
+export default function ApiMarketplaceRedirect() {
+  redirect('/marketplace?tab=apis');
 }
