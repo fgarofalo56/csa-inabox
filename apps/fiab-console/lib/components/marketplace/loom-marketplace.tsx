@@ -30,8 +30,8 @@ import { MyAccess } from './my-access';
 import { DataProductsMarketplace } from '@/lib/editors/data-marketplace';
 
 const useStyles = makeStyles({
-  tabs: { borderBottom: `1px solid ${tokens.colorNeutralStroke2}`, marginBottom: 12 },
-  body: { display: 'flex', flexDirection: 'column', minHeight: 0 },
+  tabs: { borderBottom: `1px solid ${tokens.colorNeutralStroke2}`, marginBottom: tokens.spacingVerticalL },
+  body: { display: 'flex', flexDirection: 'column', minHeight: 0, flex: 1 },
 });
 
 const TABS = ['discover', 'products', 'apis', 'shares', 'access'] as const;

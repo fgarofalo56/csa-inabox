@@ -25,20 +25,28 @@ import {
 } from '@fluentui/react-components';
 import {
   Search20Regular, ArrowSync20Regular, Connector20Regular, Database20Regular,
-  Share20Regular, DataPie20Regular, Open20Regular,
+  Share20Regular, DataPie20Regular, Open20Regular, StoreMicrosoft24Regular,
 } from '@fluentui/react-icons';
+import { TileGrid } from '@/lib/components/ui/tile-grid';
+import { EmptyState } from '@/lib/components/empty-state';
 
 const useStyles = makeStyles({
-  pad: { display: 'flex', flexDirection: 'column', gap: 12 },
-  row: { display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' },
+  pad: { display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalL, minHeight: 0, flex: 1 },
+  row: { display: 'flex', gap: tokens.spacingHorizontalM, alignItems: 'center', flexWrap: 'wrap' },
   hint: { color: tokens.colorNeutralForeground3 },
-  kinds: { display: 'flex', gap: 6, flexWrap: 'wrap', alignItems: 'center' },
-  grid: { display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(280px, 1fr))', gap: 12 },
-  card: { padding: 12, display: 'flex', flexDirection: 'column', gap: 6 },
-  meta: { display: 'flex', gap: 6, flexWrap: 'wrap', alignItems: 'center', marginTop: 4 },
-  actions: { display: 'flex', gap: 8, marginTop: 6 },
-  empty: { padding: 24, textAlign: 'center', color: tokens.colorNeutralForeground3 },
-  notes: { display: 'flex', flexDirection: 'column', gap: 4 },
+  kinds: { display: 'flex', gap: tokens.spacingHorizontalS, flexWrap: 'wrap', alignItems: 'center' },
+  card: {
+    padding: tokens.spacingHorizontalL,
+    display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalS,
+    borderRadius: tokens.borderRadiusLarge,
+    boxShadow: tokens.shadow4,
+    border: `1px solid ${tokens.colorNeutralStroke2}`,
+    transition: 'box-shadow 0.15s, transform 0.15s',
+    ':hover': { boxShadow: tokens.shadow16, transform: 'translateY(-2px)' },
+  },
+  meta: { display: 'flex', gap: tokens.spacingHorizontalS, flexWrap: 'wrap', alignItems: 'center', marginTop: tokens.spacingVerticalXS },
+  actions: { display: 'flex', gap: tokens.spacingHorizontalS, marginTop: tokens.spacingVerticalS },
+  notes: { display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalXS },
 });
 
 type Kind = 'Data product' | 'API' | 'Data share' | 'Model & report';
@@ -209,10 +217,14 @@ export function UnifiedDiscover({ onGoTab }: { onGoTab?: (tab: string) => void }
       )}
 
       {filtered.length === 0 && !loading && (
-        <div className={s.empty}>No marketplace listings match. Publish a data product, expose an API, or bind a Databricks workspace for data shares.</div>
+        <EmptyState
+          icon={<StoreMicrosoft24Regular />}
+          title="No marketplace listings yet"
+          body="Publish a data product, expose an API through API Management, or bind a Databricks workspace to subscribe to live Delta Sharing data shares — they'll all surface here."
+        />
       )}
 
-      <div className={s.grid}>
+      <TileGrid minTileWidth={280}>
         {filtered.map((l) => (
           <Tooltip key={l.id} relationship="description" content={l.subtitle || l.title}>
             <Card className={s.card}>
@@ -236,7 +248,7 @@ export function UnifiedDiscover({ onGoTab }: { onGoTab?: (tab: string) => void }
             </Card>
           </Tooltip>
         ))}
-      </div>
+      </TileGrid>
     </div>
   );
 }

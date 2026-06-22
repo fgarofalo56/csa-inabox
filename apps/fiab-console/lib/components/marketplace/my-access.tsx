@@ -20,10 +20,14 @@ import {
 import { ArrowSync20Regular, Connector20Regular, Database20Regular } from '@fluentui/react-icons';
 
 const useStyles = makeStyles({
-  pad: { padding: 16, display: 'flex', flexDirection: 'column', gap: 12 },
-  row: { display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' },
+  pad: { display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalL, minHeight: 0, flex: 1 },
+  row: { display: 'flex', gap: tokens.spacingHorizontalM, alignItems: 'center', flexWrap: 'wrap' },
   hint: { color: tokens.colorNeutralForeground3 },
-  empty: { padding: 16, textAlign: 'center', color: tokens.colorNeutralForeground3 },
+  empty: {
+    paddingTop: tokens.spacingVerticalXL, paddingBottom: tokens.spacingVerticalXL,
+    textAlign: 'center', color: tokens.colorNeutralForeground3,
+    border: `1px dashed ${tokens.colorNeutralStroke2}`, borderRadius: tokens.borderRadiusLarge,
+  },
 });
 
 interface Sub { id?: string; name?: string; displayName?: string; productName?: string; state?: string }

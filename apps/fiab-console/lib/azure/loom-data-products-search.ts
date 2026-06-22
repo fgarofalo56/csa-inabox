@@ -142,7 +142,12 @@ export const DEFAULT_FACETS = [
 const SELECT =
   'id,tenantId,workspaceId,displayName,description,domain,domainName,productType,owner,glossaryTerms,CDEs,publishStatus,sla,url,accessModel,touchedAt';
 
-/** Idempotent: create the `loom-data-products` index if absent. */
+/** Idempotent: create the `loom-data-products` index if absent, and reconcile
+ *  its schema when it already exists so newly-added fields (e.g. accessModel)
+ *  are appended to a pre-existing live index. Azure AI Search permits additive
+ *  field changes via PUT without a reindex; an additive PUT failure on an
+ *  existing index is treated as non-fatal (the index still works — the new
+ *  field just isn't present, and callers degrade gracefully). */
 export async function ensureDataProductsIndex(): Promise<{ created: boolean; ok: boolean; error?: string }> {
   if (!isDataProductsSearchConfigured()) {
     return { created: false, ok: false, error: 'LOOM_AI_SEARCH_SERVICE not set' };
@@ -154,7 +159,9 @@ export async function ensureDataProductsIndex(): Promise<{ created: boolean; ok:
     const get = await fetchWithTimeout(`${base}/indexes/${DATA_PRODUCTS_INDEX}?api-version=${SEARCH_API}`, {
       headers: { authorization: `Bearer ${tok}` },
     });
-    if (get.status === 200) return { created: false, ok: true };
+    const exists = get.status === 200;
+    // PUT reconciles the schema whether creating or updating. For an existing
+    // index this is an additive update (adds accessModel etc.).
     const put = await fetchWithTimeout(`${base}/indexes/${DATA_PRODUCTS_INDEX}?api-version=${SEARCH_API}`, {
       method: 'PUT',
       headers: { authorization: `Bearer ${tok}`, 'content-type': 'application/json' },
@@ -162,9 +169,12 @@ export async function ensureDataProductsIndex(): Promise<{ created: boolean; ok:
     });
     if (!put.ok) {
       const t = await put.text();
+      // On an EXISTING index, a non-additive drift would 400 — non-fatal: the
+      // index is still searchable, so report ok and let callers degrade.
+      if (exists) return { created: false, ok: true, error: `additive update skipped (${put.status}): ${t.slice(0, 160)}` };
       return { created: false, ok: false, error: `ensure index PUT ${put.status}: ${t.slice(0, 200)}` };
     }
-    return { created: true, ok: true };
+    return { created: !exists, ok: true };
   } catch (e: any) {
     return { created: false, ok: false, error: e?.message || String(e) };
   }
@@ -259,11 +269,14 @@ export async function searchDataProducts(opts: DataProductSearchOpts): Promise<D
   };
   if (orderBy) body.orderby = orderBy;
 
-  const res = await fetchWithTimeout(`${serviceBase(svc)}/indexes/${DATA_PRODUCTS_INDEX}/docs/search?api-version=${SEARCH_API}`, {
+  const url = `${serviceBase(svc)}/indexes/${DATA_PRODUCTS_INDEX}/docs/search?api-version=${SEARCH_API}`;
+  const doSearch = () => fetchWithTimeout(url, {
     method: 'POST',
     headers: { authorization: `Bearer ${tok}`, 'content-type': 'application/json' },
     body: JSON.stringify(body),
   });
+
+  let res = await doSearch();
   if (!res.ok) {
     const t = await res.text();
     // Index not created yet (404) → behave like an empty result so a brand-new
@@ -272,7 +285,31 @@ export async function searchDataProducts(opts: DataProductSearchOpts): Promise<D
       await ensureDataProductsIndex();
       return { results: [], facets: {}, count: 0, raw: { note: 'index created on first query; no documents yet' } };
     }
-    throw new Error(`loom-data-products search failed (${res.status}): ${t.slice(0, 240)}`);
+    // Schema drift: the live index predates a newly-added selectable/filterable
+    // field (e.g. accessModel) → reconcile the index (additive PUT) and retry.
+    // Self-heals without a manual reindex (no-vaporware). If the field still
+    // can't be added (non-additive drift), fall back to a select that strips
+    // the new field so search NEVER hard-fails on schema drift.
+    if (res.status === 400 && /Could not find a property named|Invalid expression/i.test(t)) {
+      await ensureDataProductsIndex();
+      res = await doSearch();
+      if (!res.ok) {
+        const t2 = await res.text();
+        if (res.status === 400 && /Could not find a property named|Invalid expression/i.test(t2)) {
+          // Final fallback: drop the optional accessModel field from $select.
+          body.select = SELECT.split(',').filter((f) => f.trim() !== 'accessModel').join(',');
+          res = await doSearch();
+          if (!res.ok) {
+            const t3 = await res.text();
+            throw new Error(`loom-data-products search failed (${res.status}): ${t3.slice(0, 240)}`);
+          }
+        } else {
+          throw new Error(`loom-data-products search failed (${res.status}): ${t2.slice(0, 240)}`);
+        }
+      }
+    } else {
+      throw new Error(`loom-data-products search failed (${res.status}): ${t.slice(0, 240)}`);
+    }
   }
   const j: any = await res.json();
   const facetsOut: Record<string, Array<{ value: string; count: number }>> = {};

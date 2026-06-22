@@ -34,23 +34,33 @@ import {
 import {
   ArrowSync20Regular, Add20Regular, Delete20Regular, Share20Regular,
   CloudArrowDown20Regular, Copy20Regular, Database20Regular,
+  CloudArrowDown24Regular, Share24Regular, Person24Regular,
 } from '@fluentui/react-icons';
+import { TileGrid } from '@/lib/components/ui/tile-grid';
+import { EmptyState } from '@/lib/components/empty-state';
 
 const useStyles = makeStyles({
-  pad: { padding: 16, display: 'flex', flexDirection: 'column', gap: 12 },
-  tabs: { borderBottom: `1px solid ${tokens.colorNeutralStroke2}`, paddingBottom: 4 },
-  row: { display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' },
+  pad: { display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalL, minHeight: 0, flex: 1 },
+  tabs: { borderBottom: `1px solid ${tokens.colorNeutralStroke2}` },
+  row: { display: 'flex', gap: tokens.spacingHorizontalM, alignItems: 'center', flexWrap: 'wrap' },
   hint: { color: tokens.colorNeutralForeground3 },
-  grid: { display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(280px, 1fr))', gap: 12 },
-  card: { padding: 12, display: 'flex', flexDirection: 'column', gap: 6 },
-  cardActions: { display: 'flex', gap: 8, marginTop: 6, flexWrap: 'wrap' },
-  formGrid: { display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(220px, 1fr))', gap: 12 },
-  field: { display: 'flex', flexDirection: 'column', gap: 4, minWidth: 200 },
-  mono: {
-    fontFamily: 'Consolas, monospace', fontSize: 11, whiteSpace: 'pre-wrap', wordBreak: 'break-all',
-    background: tokens.colorNeutralBackground2, padding: 8, borderRadius: 4, maxHeight: 160, overflow: 'auto',
+  card: {
+    padding: tokens.spacingHorizontalL,
+    display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalS,
+    borderRadius: tokens.borderRadiusLarge,
+    boxShadow: tokens.shadow4,
+    border: `1px solid ${tokens.colorNeutralStroke2}`,
+    transition: 'box-shadow 0.15s, transform 0.15s',
+    ':hover': { boxShadow: tokens.shadow16, transform: 'translateY(-2px)' },
   },
-  empty: { padding: 24, textAlign: 'center', color: tokens.colorNeutralForeground3 },
+  cardActions: { display: 'flex', gap: tokens.spacingHorizontalS, marginTop: tokens.spacingVerticalS, flexWrap: 'wrap', alignItems: 'center' },
+  formGrid: { display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(220px, 1fr))', gap: tokens.spacingHorizontalL },
+  field: { display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalXS, minWidth: '200px' },
+  mono: {
+    fontFamily: 'Consolas, monospace', fontSize: tokens.fontSizeBase200, whiteSpace: 'pre-wrap', wordBreak: 'break-all',
+    backgroundColor: tokens.colorNeutralBackground2, padding: tokens.spacingHorizontalM,
+    borderRadius: tokens.borderRadiusMedium, maxHeight: '160px', overflow: 'auto',
+  },
 });
 
 interface Gate { error: string; hint?: string; missing?: string }
@@ -185,9 +195,14 @@ function InboundPanel({
 
       {providers === null && <Spinner size="tiny" />}
       {providers && providers.length === 0 && (
-        <div className={styles.empty}>No inbound providers yet. Add one from a recipient activation file.</div>
+        <EmptyState
+          icon={<CloudArrowDown24Regular />}
+          title="No inbound providers yet"
+          body="A provider is an organization (or Databricks Marketplace listing) sharing live data with you. Add one from a recipient activation file to mount its shares as read-only catalogs — no data is copied."
+          primaryAction={{ label: 'Add provider', onClick: () => setAddOpen(true) }}
+        />
       )}
-      <div className={styles.grid}>
+      <TileGrid minTileWidth={280}>
         {(providers || []).map((p) => (
           <Card key={p.name} className={styles.card}>
             <CardHeader
@@ -211,7 +226,7 @@ function InboundPanel({
             </div>
           </Card>
         ))}
-      </div>
+      </TileGrid>
 
       <AddProviderDialog open={addOpen} setOpen={setAddOpen} onDone={onChange} />
     </>
@@ -332,13 +347,20 @@ function OutboundPanel({
         <Button appearance="primary" icon={<Add20Regular />} onClick={() => setShareOpen(true)}>New share</Button>
       </div>
       {shares === null && <Spinner size="tiny" />}
-      {shares && shares.length === 0 && <div className={styles.empty}>No shares yet. Create one, add tables, then grant a recipient.</div>}
-      <div className={styles.grid}>
+      {shares && shares.length === 0 && (
+        <EmptyState
+          icon={<Share24Regular />}
+          title="No shares published yet"
+          body="A share is a read-only collection of tables you expose to recipients inside or outside your tenant via Delta Sharing. Create one, add tables, then grant a recipient."
+          primaryAction={{ label: 'New share', onClick: () => setShareOpen(true) }}
+        />
+      )}
+      <TileGrid minTileWidth={280}>
         {(shares || []).map((sh) => (
           <ShareCard key={sh.name} share={sh} recipients={recipients || []} host={host} styles={styles}
             onChange={onChange} busy={busy} setBusy={setBusy} />
         ))}
-      </div>
+      </TileGrid>
 
       <Divider />
 
@@ -351,7 +373,14 @@ function OutboundPanel({
         another Unity Catalog metastore (by its sharing identifier).
       </Caption1>
       {recipients === null && <Spinner size="tiny" />}
-      {recipients && recipients.length === 0 && <div className={styles.empty}>No recipients yet.</div>}
+      {recipients && recipients.length === 0 && (
+        <EmptyState
+          icon={<Person24Regular />}
+          title="No recipients yet"
+          body="A recipient is who you share with — TOKEN for open Delta Sharing (any client, via an activation link) or DATABRICKS for another Unity Catalog metastore."
+          primaryAction={{ label: 'New recipient', onClick: () => setRecipOpen(true) }}
+        />
+      )}
       {recipients && recipients.length > 0 && (
         <Table>
           <TableHeader>
