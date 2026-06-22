@@ -69,16 +69,23 @@ export default function ItemEditorPage(props: Props) {
     return <Spinner label="Loading item…" />;
   }
 
+  // A dedicated editor ALWAYS renders its full ribbon + surface (ui-parity.md):
+  // even when the live-backend load errors (e.g. a resource-bound item whose
+  // Azure resource isn't provisioned yet — getSparkPool 404, apim 404), the
+  // editor must render with its actions present (disabled + an honest inline
+  // gate), NOT be replaced by a page-level error that hides the whole ribbon.
+  // The editor reads the same ['item', type, id] query and handles the error
+  // state itself. Only fall back to a bare error bar when there's no editor.
+  if (Editor) {
+    return <Editor item={item} id={id} />;
+  }
+
   if (!isNew && q.error) {
     return (
       <MessageBar intent="error">
         <MessageBarBody>Failed to load item: {(q.error as Error).message}</MessageBarBody>
       </MessageBar>
     );
-  }
-
-  if (Editor) {
-    return <Editor item={item} id={id} />;
   }
 
   const persisted = q.data;
