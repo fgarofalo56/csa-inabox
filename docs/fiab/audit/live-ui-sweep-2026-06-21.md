@@ -66,7 +66,16 @@ pipeline-designer, rag-builder, real-time-dashboards, sovereign-ai-agents,
 supercharge-{bronze,silver,gold,ml,streaming}, workspace-monitoring
 → status table filled as tested.
 
-## Phase C — "Add item" core types (provision + open editor + primary action)
+## Phase C — New-item sweep: ALL 109 item types — VERIFIED CLEAN ✅
+deep-functional-uat (`/items/<slug>/new` → primary ribbon action → assert real
+effect) against console 9868ccff (rev 0031), in 5 batches (the full-109 single
+run times out at 2h and SIGKILL drops the buffer → MUST batch):
+batch1 18, batch2 26, batch3 32, batch4 32, dataverse-table 1 = **109/109 pass,
+realFails=0.** Every item type's New-item editor renders + primary action is
+actionable — no dead editors, no crashes, no real defects. (Harness scope =
+editor-render + primary-action actionability per type, not every single control.)
+
+## Phase C (legacy) — core types (provision + open editor + primary action)
 Priority core: lakehouse, warehouse, notebook, data-pipeline, eventstream,
 eventhouse, kql-database, kql-dashboard, activator, semantic-model, report,
 mirrored-database, dataflow, spark-job-definition, data-agent, ai-search-index,
