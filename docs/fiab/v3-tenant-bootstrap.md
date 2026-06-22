@@ -221,6 +221,37 @@ The same pattern backs the Governance **"View more"** (F2) embed.
 (`/api/admin/usage/embed`) honestly returns **503** with the exact follow-up
 until the report id + workspace membership are supplied.
 
+### Power Platform — Power Apps / Power Automate / Dataverse / Copilot Studio
+
+The Power Platform admin APIs (`api.bap.microsoft.com` BusinessAppPlatform,
+Power Automate, Power Apps) reject **any** service principal that is not
+registered as a *management application*. Without this, the console surfaces:
+
+> The service principal `<objId>` for application `<appId>` does not have
+> permission to access `…/Microsoft.BusinessAppPlatform/scopes/admin/environments`
+
+This is a Power Platform **control-plane** grant — it cannot be expressed in
+Bicep/ARM. Run ONCE as a Power Platform / Global Administrator:
+
+```bash
+# Registers the Console UAMI SP as a Power Platform management application.
+APP_ID=<LOOM_UAMI_CLIENT_ID> bash scripts/csa-loom/grant-powerplatform-sp.sh
+```
+
+Then, for **Dataverse**-backed items (Power Apps, Dataverse tables, Power Pages
+metadata, Copilot Studio), add the same (or a dedicated `LOOM_DATAVERSE_CLIENT_ID`)
+SP as an **Application User** with the **System Administrator** role in each
+target environment:
+
+```bash
+pac admin application-user create --application-id <appId> \
+    --environment <env-id> --role 'System Administrator'
+```
+
+Power Pages site provisioning (api.powerplatform.com/powerpages) only supports
+delegated (user) auth, NOT service-principal — that surface stays an honest gate
+and must be driven from the Power Platform admin centre.
+
 ### Commercial / GCC — Power BI Embedded
 
 1. **Publish a usage report** to a Power BI workspace (or reuse the F64 capacity
