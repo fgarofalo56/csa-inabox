@@ -874,7 +874,13 @@ export function DataPipelineEditor({ item, id }: Props) {
           )}
           {detailErr && <MessageBar intent="error"><MessageBarBody>{detailErr}</MessageBarBody></MessageBar>}
 
-          {!pipelineId && (
+          {/* Onboarding banner + start cards: only while the canvas is EMPTY and
+              no pipeline is bound. The moment the first activity is dropped (or a
+              pipeline loads), collapse them so the designer + the selected-node
+              properties panel get the full height — previously they stayed
+              (pipelineId still null until Save) and squeezed the properties into
+              a tiny bottom strip you could only read by collapsing the palette. */}
+          {!pipelineId && activities.length === 0 && (
             <div>
               {seedErr && (
                 <MessageBar intent={seedErrIntent} style={{ marginBottom: 8 }}>

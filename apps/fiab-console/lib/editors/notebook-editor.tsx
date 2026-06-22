@@ -54,7 +54,12 @@ import { runtimeFromComputeKind, starterCellFor, RUNTIME_LABEL, type ClusterRunt
 
 const useStyles = makeStyles({
   pad: { padding: 16, display: 'flex', flexDirection: 'column', gap: 12, flex: 1, minHeight: 0, position: 'relative' },
-  toolbar: { display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' },
+  // Bottom-align so the label+control groups (Compute backend / Workspace /
+  // Compute target / Environment) and the bare action buttons (Refresh / Manage
+  // / Import / New) line up on one baseline instead of the buttons floating
+  // mid-height — which made the row read as crammed/overlapping. Wider gap +
+  // row-gap gives the labels breathing room when the row wraps.
+  toolbar: { display: 'flex', columnGap: 16, rowGap: 10, alignItems: 'flex-end', flexWrap: 'wrap', paddingBottom: 4 },
   editor: {
     width: '100%', minHeight: 280,
     fontFamily: 'Consolas, "Cascadia Code", monospace', fontSize: 13, padding: 12,
