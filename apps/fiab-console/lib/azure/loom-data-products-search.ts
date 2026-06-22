@@ -218,25 +218,42 @@ export async function upsertDataProductDoc(doc: DataProductDoc): Promise<void> {
       headers: { authorization: `Bearer ${tok}`, 'content-type': 'application/json' },
       body: JSON.stringify({ value: [{ '@search.action': 'mergeOrUpload', ...d }] }),
     });
+    // The AI Search "index documents" API returns HTTP 200 even when a doc
+    // fails — the per-document status is in the body's `value[].status`. So a
+    // failure can be EITHER a non-2xx HTTP code (batch/schema error) OR a 200
+    // with a per-doc error. Treat both as failure.
+    const failureOf = async (r: Response): Promise<string | null> => {
+      const text = await r.text();
+      if (!r.ok) return `HTTP ${r.status}: ${text.slice(0, 240)}`;
+      try {
+        const j = JSON.parse(text);
+        const bad = (j?.value || []).find((v: any) => typeof v?.statusCode === 'number' && v.statusCode >= 400);
+        if (bad) return `doc ${bad.key}: ${bad.statusCode} ${bad.errorMessage || ''}`.slice(0, 240);
+      } catch { /* non-JSON 200 — treat as success */ }
+      return null;
+    };
+
     // Ensure the index exists + reconcile its schema on first write.
     await ensureDataProductsIndex();
-    let res = await post(doc as unknown as Record<string, unknown>);
-    if (!res.ok) {
-      const t = await res.text();
+    let fail = await failureOf(await post(doc as unknown as Record<string, unknown>));
+    if (fail) {
       // Unknown field (index predates a doc field) → reconcile + retry; then
       // strip optional new fields and retry so the doc still indexes.
-      if (/does not exist|not a known field|unknown field|cannot be found|property/i.test(t)) {
-        await ensureDataProductsIndex();
-        res = await post(doc as unknown as Record<string, unknown>);
-        if (!res.ok) {
-          const { accessModel, ...rest } = doc as DataProductDoc & Record<string, unknown>;
-          void accessModel;
-          await post(rest);
-        }
+      await ensureDataProductsIndex();
+      fail = await failureOf(await post(doc as unknown as Record<string, unknown>));
+      if (fail) {
+        const { accessModel, ...rest } = doc as DataProductDoc & Record<string, unknown>;
+        void accessModel;
+        fail = await failureOf(await post(rest));
       }
     }
-  } catch {
-    /* swallow — index is best-effort */
+    if (fail) {
+      // Surface the real reason in container logs (best-effort index, never
+      // throws) — this was silently swallowed, hiding why products never indexed.
+      console.warn(`[loom-data-products] upsert of ${doc.id} failed: ${fail}`);
+    }
+  } catch (e: any) {
+    console.warn(`[loom-data-products] upsert threw: ${e?.message || String(e)}`);
   }
 }
 

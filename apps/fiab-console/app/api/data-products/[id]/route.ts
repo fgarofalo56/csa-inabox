@@ -652,8 +652,11 @@ export async function PATCH(req: NextRequest, props: { params: Promise<{ id: str
       // is reflected in Discover. Published → upserted + visible; Draft/Deprecated
       // → upserted but filtered out by the Published-only consumer search. This
       // was missing — the PATCH wrote Cosmos but never updated the index, so
-      // publishing a draft never surfaced it. Best-effort (never throws).
-      void upsertDataProductDoc(docForDataProduct(saved, session.claims.oid));
+      // publishing a draft never surfaced it. AWAITED (not fire-and-forget) so it
+      // actually completes within the request — a floating promise after the
+      // response isn't reliably run on the serverless/container runtime, which is
+      // why products never indexed. Best-effort: never fails the request.
+      try { await upsertDataProductDoc(docForDataProduct(saved, session.claims.oid)); } catch { /* index is derived */ }
       return NextResponse.json(
         {
           ok: true,
