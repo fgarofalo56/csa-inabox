@@ -513,13 +513,13 @@ export function ApimTree({
           {/* Honest "coming" rows — APIM exposes these; the editor wires some, the
               tree-level affordance is not built yet. Never a fake list. */}
           <TreeItem itemType="branch" value="g-coming">
-            <TreeItemLayout iconBefore={<Warning20Regular />}>More (in the editor / coming)</TreeItemLayout>
+            <TreeItemLayout iconBefore={<Warning20Regular />}>More — in the API editor</TreeItemLayout>
             <Tree>
               {[
-                [‘Policy XML editor’, ‘Global / API / product policy XML — open the APIM policy editor from the API editor’s "Open policy editor" action. Full XML editing, snippet gallery, scope selector, validation, and save are live.’],
-                [‘API operations authoring’, ‘Add/edit/delete operations with parameters + per-operation policy. Today operations are imported via the OpenAPI document in the API editor; manual authoring is coming.’],
-                [‘OpenAPI import wizard’, ‘Multi-step import (validate + map + preview) — today ＋New API takes an OpenAPI link inline, and the editor has full inline/link/WSDL/GraphQL import.’],
-                [‘Revisions & versions’, ‘API revisions + version sets — revisions are fully live in the API editor’s Revisions tab (list, create, release); a tree-level version-set view is coming.’],
+                [`Policy XML editor`, `Global / API / product policy XML — open the APIM policy editor from the API editor's "Open policy editor" action. Full XML editing, snippet gallery, scope selector, validation, and save are live.`],
+                [`API operations authoring`, `Add/edit/delete operations with parameters + per-operation policy. Operations are imported via the OpenAPI document in the API editor.`],
+                [`OpenAPI import`, `+New API takes an OpenAPI link inline, and the editor has full inline / link / WSDL / GraphQL import.`],
+                [`Revisions & versions`, `API revisions are fully live in the API editor's Revisions tab (list, create, release); version sets are managed in the Azure portal.`],
               ].map(([label, why]) => (
                 <TreeItem key={label} itemType="leaf" value={`coming-${label}`}>
                   <Tooltip content={why} relationship="description">
