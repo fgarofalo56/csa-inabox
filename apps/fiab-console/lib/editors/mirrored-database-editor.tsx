@@ -114,8 +114,6 @@ export function MirroredDatabaseEditor({ item, id }: Props) {
   // Wizard state — the create/edit flow lives in MirrorSourceWizard.
   const [wizardOpen, setWizardOpen] = useState(false);
   const [editing, setEditing] = useState(false);
-  // TEMP DIAG (mirror dialog-stuck bug): trace wizardOpen transitions live.
-  useEffect(() => { try { console.log('[loom-mirror-dbg] wizardOpen=', wizardOpen, 'id=', id); } catch {} }, [wizardOpen, id]);
   const [wizardInitial, setWizardInitial] = useState<
     {
       sourceType?: string; server?: string; database?: string; connectionId?: string;
@@ -496,13 +494,19 @@ export function MirroredDatabaseEditor({ item, id }: Props) {
                 </MessageBarActions>
               </MessageBar>
             )}
+            {/* Only MOUNT the wizard while open. The always-mounted form left
+                its Fluent Dialog visible even with open=false (the surface
+                didn't unmount), so the create/edit popup got stuck on screen +
+                appeared on a fresh /new load. Conditional-mount makes wizardOpen
+                the single source of truth: closed → not in the tree at all. */}
+            {wizardOpen && (
             <MirrorSourceWizard
               open={wizardOpen}
               editing={editing}
               workspaceId={workspaceId}
               mirrorId={editing ? mirrorId : undefined}
               initialSrc={wizardInitial}
-              onClose={() => { console.log('[loom-mirror-dbg] onClose fired'); setWizardOpen(false); setEditing(false); }}
+              onClose={() => { setWizardOpen(false); setEditing(false); }}
               onCreated={async (newId) => {
                 setWizardOpen(false); setEditing(false);
                 if (workspaceId) await loadList(workspaceId);
@@ -514,6 +518,7 @@ export function MirroredDatabaseEditor({ item, id }: Props) {
                 if (workspaceId && mid) loadDetail(workspaceId, mid);
               }}
             />
+            )}
             <Button appearance="primary" icon={<Play20Regular />} disabled={!mirrorId || acting} onClick={() => act('start')}>Start</Button>
             <Button appearance="outline" icon={<Pause20Regular />} disabled={!mirrorId || acting} onClick={() => act('stop')}>Stop</Button>
             <Button appearance="subtle" icon={<Delete20Regular />} disabled={!mirrorId} onClick={del}>Delete</Button>
