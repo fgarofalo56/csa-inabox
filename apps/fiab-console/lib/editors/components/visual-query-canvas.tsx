@@ -157,15 +157,15 @@ const useStyles = makeStyles({
   sqlBar: { display: 'flex', gap: tokens.spacingHorizontalM, alignItems: 'center', flexWrap: 'wrap' },
   resultBar: { display: 'flex', gap: tokens.spacingHorizontalS, alignItems: 'center', flexWrap: 'wrap' },
   resultSpacer: { flex: 1 },
-  filterInput: { maxWidth: 240 },
+  filterInput: { maxWidth: '240px' },
   tableWrap: {
-    overflow: 'auto', maxHeight: 320,
+    overflow: 'auto', maxHeight: '320px',
     border: `1px solid ${tokens.colorNeutralStroke2}`,
     borderRadius: tokens.borderRadiusMedium,
   },
   resultLoading: {
     display: 'flex', alignItems: 'center', justifyContent: 'center',
-    gap: tokens.spacingHorizontalS, minHeight: 120,
+    gap: tokens.spacingHorizontalS, minHeight: '120px',
     border: `1px solid ${tokens.colorNeutralStroke2}`,
     borderRadius: tokens.borderRadiusMedium,
     backgroundColor: tokens.colorNeutralBackground2,
@@ -173,11 +173,11 @@ const useStyles = makeStyles({
   },
   cell: {
     fontFamily: 'Consolas, "Cascadia Code", monospace', fontSize: tokens.fontSizeBase200,
-    whiteSpace: 'nowrap', maxWidth: 360, overflow: 'hidden', textOverflow: 'ellipsis',
+    whiteSpace: 'nowrap', maxWidth: '360px', overflow: 'hidden', textOverflow: 'ellipsis',
   },
   nullCell: { color: tokens.colorNeutralForeground4, fontStyle: 'italic' },
   aggRow: { display: 'flex', gap: tokens.spacingHorizontalXS, alignItems: 'center' },
-  checkList: { display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalXXS, maxHeight: 180, overflowY: 'auto', paddingLeft: tokens.spacingHorizontalXXS },
+  checkList: { display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalXXS, maxHeight: '180px', overflowY: 'auto', paddingLeft: tokens.spacingHorizontalXXS },
 });
 
 // ============================================================

@@ -54,7 +54,7 @@ const useStyles = makeStyles({
   toolbar: { display: 'flex', gap: tokens.spacingHorizontalM, alignItems: 'center', flexWrap: 'wrap' },
   metaGrid: { display: 'grid', gridTemplateColumns: 'auto 1fr', gap: `${tokens.spacingVerticalXS} ${tokens.spacingHorizontalL}`, alignItems: 'baseline' },
   metaKey: { color: tokens.colorNeutralForeground3, fontSize: tokens.fontSizeBase200 },
-  tableWrap: { overflow: 'auto', maxHeight: 480, border: `1px solid ${tokens.colorNeutralStroke2}`, borderRadius: tokens.borderRadiusMedium },
+  tableWrap: { overflow: 'auto', maxHeight: '480px', border: `1px solid ${tokens.colorNeutralStroke2}`, borderRadius: tokens.borderRadiusMedium },
   // Keep the header visible while scrolling long metadata lists (up to 500 rows).
   stickyHead: {
     position: 'sticky', top: 0, zIndex: 1,
@@ -64,9 +64,9 @@ const useStyles = makeStyles({
   // Filter row above a table — search box + live result count, right-aligned count.
   filterRow: { display: 'flex', alignItems: 'center', gap: tokens.spacingHorizontalM, flexWrap: 'wrap' },
   filterCount: { color: tokens.colorNeutralForeground3, marginLeft: 'auto' },
-  cell: { fontSize: tokens.fontSizeBase200, whiteSpace: 'nowrap', maxWidth: 360, overflow: 'hidden', textOverflow: 'ellipsis' },
+  cell: { fontSize: tokens.fontSizeBase200, whiteSpace: 'nowrap', maxWidth: '360px', overflow: 'hidden', textOverflow: 'ellipsis' },
   cellClickable: {
-    fontSize: tokens.fontSizeBase200, whiteSpace: 'nowrap', maxWidth: 360, overflow: 'hidden', textOverflow: 'ellipsis',
+    fontSize: tokens.fontSizeBase200, whiteSpace: 'nowrap', maxWidth: '360px', overflow: 'hidden', textOverflow: 'ellipsis',
     cursor: 'pointer', color: tokens.colorBrandForegroundLink,
   },
   empty: { padding: tokens.spacingVerticalL, color: tokens.colorNeutralForeground3, fontStyle: 'italic' },

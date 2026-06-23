@@ -76,7 +76,7 @@ const useStyles = makeStyles({
     fontWeight: tokens.fontWeightSemibold,
   },
   tabLabel: { display: 'flex', alignItems: 'center', gap: tokens.spacingHorizontalXS },
-  tabClose: { minWidth: 16, width: 16, height: 16, padding: 0 },
+  tabClose: { minWidth: tokens.spacingHorizontalL, width: tokens.spacingHorizontalL, height: tokens.spacingVerticalL, padding: 0 },
   panel: { flex: 1, minHeight: 0, overflow: 'auto', paddingTop: tokens.spacingVerticalM, paddingBottom: tokens.spacingVerticalM, paddingLeft: tokens.spacingHorizontalM, paddingRight: tokens.spacingHorizontalM, display: 'flex', flexDirection: 'column' },
 });
 

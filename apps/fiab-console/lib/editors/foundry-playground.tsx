@@ -98,7 +98,7 @@ const useCatalogStyles = makeStyles({
     backgroundColor: tokens.colorNeutralBackground2, border: `1px solid ${tokens.colorNeutralStroke2}`, borderRadius: tokens.borderRadiusLarge,
   },
   filterBar: { display: 'flex', gap: tokens.spacingHorizontalS, flexWrap: 'wrap', alignItems: 'flex-end' },
-  filterField: { minWidth: 150 },
+  filterField: { minWidth: '150px' },
   countRow: { display: 'flex', alignItems: 'baseline', gap: tokens.spacingHorizontalM, flexWrap: 'wrap' },
   grid: { display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(280px, 1fr))', gap: tokens.spacingVerticalM },
   card: {
@@ -114,7 +114,7 @@ const useCatalogStyles = makeStyles({
   // detail panel
   detail: { padding: tokens.spacingVerticalL, display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalM, minHeight: 0, flex: 1, overflow: 'auto' },
   detailHead: { display: 'flex', alignItems: 'center', gap: tokens.spacingHorizontalM },
-  metaGrid: { display: 'grid', gridTemplateColumns: 'auto 1fr', gap: `${tokens.spacingVerticalXS} ${tokens.spacingHorizontalL}`, alignItems: 'baseline', maxWidth: 640 },
+  metaGrid: { display: 'grid', gridTemplateColumns: 'auto 1fr', gap: `${tokens.spacingVerticalXS} ${tokens.spacingHorizontalL}`, alignItems: 'baseline', maxWidth: '640px' },
   metaKey: { color: tokens.colorNeutralForeground3, fontSize: tokens.fontSizeBase200 },
   empty: { padding: tokens.spacingVerticalXXL, color: tokens.colorNeutralForeground3, fontStyle: 'italic', textAlign: 'center' },
 });
@@ -454,7 +454,7 @@ const useChatStyles = makeStyles({
   sliderRow: { display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalXXS },
   sliderHead: { display: 'flex', justifyContent: 'space-between', alignItems: 'baseline' },
   centerHead: { display: 'flex', alignItems: 'center', gap: tokens.spacingHorizontalM, padding: `${tokens.spacingVerticalM} ${tokens.spacingHorizontalL}`, borderBottom: `1px solid ${tokens.colorNeutralStroke2}`, flexWrap: 'wrap' },
-  empty: { margin: 'auto', color: tokens.colorNeutralForeground3, textAlign: 'center', maxWidth: 420 },
+  empty: { margin: 'auto', color: tokens.colorNeutralForeground3, textAlign: 'center', maxWidth: '420px' },
 });
 
 interface ChatMsg { role: 'user' | 'assistant'; content: string; pending?: boolean; error?: boolean }
@@ -725,9 +725,9 @@ const useMediaStyles = makeStyles({
   panel: { display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalM, padding: tokens.spacingVerticalL },
   // Result panel keeps a stable height so the empty / loading placeholder reads
   // as an intentional, centered drop-zone rather than a collapsed card.
-  resultPanel: { display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalM, padding: tokens.spacingVerticalL, minHeight: 320 },
+  resultPanel: { display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalM, padding: tokens.spacingVerticalL, minHeight: '320px' },
   resultGrid: { display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(220px, 1fr))', gap: tokens.spacingVerticalM },
-  img: { width: '100%', maxHeight: 360, objectFit: 'contain', backgroundColor: tokens.colorNeutralBackground3, borderRadius: tokens.borderRadiusLarge, border: `1px solid ${tokens.colorNeutralStroke2}` },
+  img: { width: '100%', maxHeight: '360px', objectFit: 'contain', backgroundColor: tokens.colorNeutralBackground3, borderRadius: tokens.borderRadiusLarge, border: `1px solid ${tokens.colorNeutralStroke2}` },
   empty: { margin: 'auto', color: tokens.colorNeutralForeground3, textAlign: 'center', padding: tokens.spacingVerticalXXL },
 });
 

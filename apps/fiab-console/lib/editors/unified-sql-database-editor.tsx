@@ -130,9 +130,9 @@ const PG_SKUS = [
 const useStyles = makeStyles({
   pad: { padding: tokens.spacingVerticalL, display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalM, minHeight: 0, flex: 1 },
   toolbar: { display: 'flex', gap: tokens.spacingHorizontalM, alignItems: 'center', flexWrap: 'wrap' },
-  resultBox: { borderTop: `1px solid ${tokens.colorNeutralStroke2}`, paddingTop: tokens.spacingVerticalM, minHeight: 160 },
+  resultBox: { borderTop: `1px solid ${tokens.colorNeutralStroke2}`, paddingTop: tokens.spacingVerticalM, minHeight: '160px' },
   resultMeta: { display: 'flex', gap: tokens.spacingHorizontalM, alignItems: 'center', marginBottom: tokens.spacingVerticalS, flexWrap: 'wrap' },
-  tableWrap: { overflow: 'auto', maxHeight: 360, border: `1px solid ${tokens.colorNeutralStroke2}`, borderRadius: tokens.borderRadiusMedium },
+  tableWrap: { overflow: 'auto', maxHeight: '360px', border: `1px solid ${tokens.colorNeutralStroke2}`, borderRadius: tokens.borderRadiusMedium },
   cell: { fontFamily: 'Consolas, monospace', fontSize: tokens.fontSizeBase200, whiteSpace: 'nowrap' },
   treePad: { padding: tokens.spacingVerticalS, display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalS },
   formRow: { display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalXS },
@@ -167,15 +167,15 @@ const useStyles = makeStyles({
   queryRow: { display: 'flex', gap: tokens.spacingHorizontalM, alignItems: 'stretch', minHeight: 0 },
   queryMain: { flex: 1, minWidth: 0, display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalS },
   copilotPane: {
-    width: 340, flexShrink: 0, display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalS,
+    width: '340px', flexShrink: 0, display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalS,
     border: `1px solid ${tokens.colorNeutralStroke2}`, borderRadius: tokens.borderRadiusLarge, padding: tokens.spacingVerticalS,
-    background: tokens.colorNeutralBackground2, maxHeight: 560,
+    background: tokens.colorNeutralBackground2, maxHeight: '560px',
   },
   copilotHead: { display: 'flex', alignItems: 'center', gap: tokens.spacingHorizontalXS, flexWrap: 'wrap' },
   copilotHeadActions: { marginLeft: 'auto', display: 'flex', gap: tokens.spacingHorizontalXS },
   copilotLog: {
     flex: 1, overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalS,
-    minHeight: 160, paddingRight: tokens.spacingHorizontalXS,
+    minHeight: '160px', paddingRight: tokens.spacingHorizontalXS,
   },
   msgUser: {
     alignSelf: 'flex-end', maxWidth: '92%', background: tokens.colorBrandBackground2,

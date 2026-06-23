@@ -51,13 +51,13 @@ import {
 } from '@fluentui/react-icons';
 
 const useStyles = makeStyles({
-  root: { display: 'flex', flexDirection: 'column', gap: 8, padding: 8, height: '100%', minWidth: 240 },
-  header: { display: 'flex', alignItems: 'center', gap: 4, justifyContent: 'space-between' },
+  root: { display: 'flex', flexDirection: 'column', gap: tokens.spacingHorizontalS, padding: tokens.spacingHorizontalS, height: '100%', minWidth: '240px' },
+  header: { display: 'flex', alignItems: 'center', gap: tokens.spacingHorizontalXS, justifyContent: 'space-between' },
   title: { fontWeight: tokens.fontWeightSemibold, fontSize: tokens.fontSizeBase300 },
-  groupLayout: { display: 'flex', alignItems: 'center', gap: 6, width: '100%' },
-  groupActions: { marginLeft: 'auto', display: 'flex', alignItems: 'center', gap: 2 },
-  leafRow: { display: 'flex', alignItems: 'center', gap: 4, width: '100%' },
-  leafActions: { marginLeft: 'auto', display: 'flex', alignItems: 'center', gap: 2 },
+  groupLayout: { display: 'flex', alignItems: 'center', gap: tokens.spacingHorizontalSNudge, width: '100%' },
+  groupActions: { marginLeft: 'auto', display: 'flex', alignItems: 'center', gap: tokens.spacingHorizontalXXS },
+  leafRow: { display: 'flex', alignItems: 'center', gap: tokens.spacingHorizontalXS, width: '100%' },
+  leafActions: { marginLeft: 'auto', display: 'flex', alignItems: 'center', gap: tokens.spacingHorizontalXXS },
 });
 
 const R = {

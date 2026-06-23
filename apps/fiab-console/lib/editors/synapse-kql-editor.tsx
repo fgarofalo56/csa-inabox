@@ -38,7 +38,7 @@ import { useCallback, useEffect, useState } from 'react';
 const useStyles = makeStyles({
   body: { display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalM, height: '100%', overflow: 'hidden' },
   conn: { display: 'flex', gap: tokens.spacingHorizontalM, flexWrap: 'wrap' },
-  connField: { minWidth: 220 },
+  connField: { minWidth: '220px' },
   toolbar: { display: 'flex', gap: tokens.spacingHorizontalS, alignItems: 'center', flexWrap: 'wrap' },
   editor: {
     fontFamily: 'Consolas, "Cascadia Code", monospace', fontSize: tokens.fontSizeBase300,

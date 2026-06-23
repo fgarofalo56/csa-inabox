@@ -41,10 +41,10 @@ import {
 import type { DataProductDoc } from '@/lib/dataproducts/edit-model';
 
 const useStyles = makeStyles({
-  body: { display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalM, minWidth: 540 },
+  body: { display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalM, minWidth: '540px' },
   steps: { display: 'flex', gap: tokens.spacingHorizontalS, alignItems: 'center', marginBottom: tokens.spacingVerticalXS },
   row: { display: 'flex', gap: tokens.spacingHorizontalM, alignItems: 'flex-end', flexWrap: 'wrap' },
-  field: { flex: 1, minWidth: 200 },
+  field: { flex: 1, minWidth: '200px' },
   endorseRow: { display: 'flex', gap: tokens.spacingHorizontalS, alignItems: 'center' },
   hint: { color: tokens.colorNeutralForeground3 },
   saveBar: {

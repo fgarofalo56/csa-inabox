@@ -29,21 +29,21 @@ const useStyles = makeStyles({
   panel: { display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalM, minHeight: 0 },
   toolbar: { display: 'flex', gap: tokens.spacingHorizontalS, alignItems: 'center', flexWrap: 'wrap' },
   spacer: { marginLeft: 'auto' },
-  tableWrap: { overflow: 'auto', maxHeight: 320, border: `1px solid ${tokens.colorNeutralStroke2}`, borderRadius: tokens.borderRadiusMedium },
+  tableWrap: { overflow: 'auto', maxHeight: '320px', border: `1px solid ${tokens.colorNeutralStroke2}`, borderRadius: tokens.borderRadiusMedium },
   code: { fontFamily: 'Consolas, monospace', fontSize: tokens.fontSizeBase200 },
   ddlPreview: {
     fontFamily: 'Consolas, monospace', fontSize: tokens.fontSizeBase200, whiteSpace: 'pre-wrap',
     background: tokens.colorNeutralBackground3, padding: tokens.spacingVerticalS, borderRadius: tokens.borderRadiusMedium,
     border: `1px solid ${tokens.colorNeutralStroke2}`, marginTop: tokens.spacingVerticalS,
   },
-  dialogGrid: { display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalS, minWidth: 460 },
+  dialogGrid: { display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalS, minWidth: '460px' },
   rowActions: { display: 'flex', gap: tokens.spacingHorizontalXS, flexWrap: 'wrap', alignItems: 'center' },
-  colList: { display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalXS, maxHeight: 180, overflowY: 'auto' },
+  colList: { display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalXS, maxHeight: '180px', overflowY: 'auto' },
   colRow: { display: 'flex', gap: tokens.spacingHorizontalS, alignItems: 'center' },
-  colLang: { minWidth: 160 },
+  colLang: { minWidth: '160px' },
   bgRunning: { color: tokens.colorNeutralForeground3 },
-  dialogWide: { maxWidth: 640, width: '92vw' },
-  dialogMed: { maxWidth: 560, width: '92vw' },
+  dialogWide: { maxWidth: '640px', width: '92vw' },
+  dialogMed: { maxWidth: '560px', width: '92vw' },
 });
 
 // Common LCIDs for the FTS column-language dropdown (grounded in sys.fulltext_languages).

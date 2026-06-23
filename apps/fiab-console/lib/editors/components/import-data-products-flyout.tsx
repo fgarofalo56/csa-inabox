@@ -45,7 +45,7 @@ const useStyles = makeStyles({
     width: '100%',
   },
   tableWrap: {
-    overflow: 'auto', maxHeight: 240,
+    overflow: 'auto', maxHeight: '240px',
     border: `1px solid ${tokens.colorNeutralStroke2}`,
     borderRadius: tokens.borderRadiusMedium,
   },

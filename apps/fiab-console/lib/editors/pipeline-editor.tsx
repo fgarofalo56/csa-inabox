@@ -59,8 +59,8 @@ const useStyles = makeStyles({
   },
   body: { flex: 1, overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalS, paddingRight: tokens.spacingHorizontalXS },
   msg: { padding: `${tokens.spacingVerticalS} ${tokens.spacingHorizontalM}`, borderRadius: tokens.borderRadiusXLarge, maxWidth: '95%', fontSize: tokens.fontSizeBase300 },
-  msgCopilot: { backgroundColor: tokens.colorNeutralBackground2, alignSelf: 'flex-start', borderTopLeftRadius: 4 },
-  msgYou: { backgroundColor: tokens.colorBrandBackground2, alignSelf: 'flex-end', borderTopRightRadius: 4 },
+  msgCopilot: { backgroundColor: tokens.colorNeutralBackground2, alignSelf: 'flex-start', borderTopLeftRadius: '4px' },
+  msgYou: { backgroundColor: tokens.colorBrandBackground2, alignSelf: 'flex-end', borderTopRightRadius: '4px' },
   stepRow: {
     display: 'flex', alignItems: 'center', gap: tokens.spacingHorizontalS,
     color: tokens.colorNeutralForeground3, fontSize: tokens.fontSizeBase200, paddingLeft: tokens.spacingHorizontalXXS, marginTop: tokens.spacingVerticalXS,
@@ -68,7 +68,7 @@ const useStyles = makeStyles({
   composer: { display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalS, paddingTop: tokens.spacingVerticalS, borderTop: `1px solid ${tokens.colorNeutralStroke2}` },
   picker: {
     border: `1px solid ${tokens.colorNeutralStroke2}`, borderRadius: tokens.borderRadiusLarge,
-    maxHeight: 168, overflowY: 'auto', backgroundColor: tokens.colorNeutralBackground1,
+    maxHeight: '168px', overflowY: 'auto', backgroundColor: tokens.colorNeutralBackground1,
   },
   pickItem: {
     display: 'flex', alignItems: 'center', gap: tokens.spacingHorizontalS, padding: `${tokens.spacingVerticalXS} ${tokens.spacingHorizontalS}`,

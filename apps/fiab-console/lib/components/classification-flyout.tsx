@@ -34,26 +34,26 @@ interface Props { type: string; id: string; }
 interface TaxonomyEntry { name: string; sensitivity?: string; color?: string; description?: string; }
 
 const useStyles = makeStyles({
-  list: { display: 'flex', flexDirection: 'column', gap: 12 },
+  list: { display: 'flex', flexDirection: 'column', gap: tokens.spacingHorizontalM },
   loading: { display: 'flex', justifyContent: 'center', padding: 'var(--loom-space-4, 16px)' },
   applied: {
-    display: 'flex', flexDirection: 'column', gap: 6,
+    display: 'flex', flexDirection: 'column', gap: tokens.spacingHorizontalSNudge,
     padding: 'var(--loom-space-3, 12px)',
     border: `1px solid ${tokens.colorNeutralStroke2}`,
     borderRadius: 'var(--loom-radius-md, 6px)',
     backgroundColor: tokens.colorNeutralBackground2,
   },
-  appliedHead: { display: 'flex', alignItems: 'center', gap: 6 },
-  chips: { display: 'flex', flexWrap: 'wrap', gap: 6 },
+  appliedHead: { display: 'flex', alignItems: 'center', gap: tokens.spacingHorizontalSNudge },
+  chips: { display: 'flex', flexWrap: 'wrap', gap: tokens.spacingHorizontalSNudge },
   swatch: {
-    display: 'inline-block', width: 10, height: 10, borderRadius: 3, flexShrink: 0,
+    display: 'inline-block', width: tokens.spacingHorizontalMNudge, height: tokens.spacingVerticalMNudge, borderRadius: '3px', flexShrink: 0,
     border: `1px solid ${tokens.colorNeutralStroke2}`,
   },
-  optionRow: { display: 'flex', flexDirection: 'column', gap: 2, minWidth: 0 },
-  optionName: { display: 'flex', alignItems: 'center', gap: 8 },
-  optionDesc: { fontSize: 12, color: tokens.colorNeutralForeground3 },
-  actions: { display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' },
-  link: { display: 'inline-flex', alignItems: 'center', gap: 4, fontWeight: 600, verticalAlign: 'middle' },
+  optionRow: { display: 'flex', flexDirection: 'column', gap: tokens.spacingHorizontalXXS, minWidth: 0 },
+  optionName: { display: 'flex', alignItems: 'center', gap: tokens.spacingHorizontalS },
+  optionDesc: { fontSize: tokens.fontSizeBase200, color: tokens.colorNeutralForeground3 },
+  actions: { display: 'flex', gap: tokens.spacingHorizontalS, alignItems: 'center', flexWrap: 'wrap' },
+  link: { display: 'inline-flex', alignItems: 'center', gap: tokens.spacingHorizontalXS, fontWeight: 600, verticalAlign: 'middle' },
 });
 
 export function ClassificationPane({ type, id }: Props) {

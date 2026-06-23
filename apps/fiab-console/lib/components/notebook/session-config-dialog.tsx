@@ -42,10 +42,10 @@ export {
 export type { SessionConfig, LivyConfigureOptions } from './session-config';
 
 const useStyles = makeStyles({
-  body: { display: 'flex', flexDirection: 'column', gap: 18, minWidth: 420 },
-  sliderRow: { display: 'flex', alignItems: 'center', gap: 12 },
+  body: { display: 'flex', flexDirection: 'column', gap: '18px', minWidth: '420px' },
+  sliderRow: { display: 'flex', alignItems: 'center', gap: tokens.spacingHorizontalM },
   slider: { flex: 1 },
-  valueBadge: { minWidth: 64, textAlign: 'right' },
+  valueBadge: { minWidth: '64px', textAlign: 'right' },
   hint: { color: tokens.colorNeutralForeground3 },
 });
 

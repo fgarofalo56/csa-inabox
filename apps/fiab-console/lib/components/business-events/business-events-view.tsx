@@ -88,12 +88,12 @@ const useStyles = makeStyles({
   typeBody: { display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalXS },
   fieldRow: { display: 'grid', gridTemplateColumns: '1.4fr 1fr auto auto', gap: tokens.spacingHorizontalS, alignItems: 'end', marginBottom: tokens.spacingVerticalS },
   meter: { display: 'flex', gap: tokens.spacingHorizontalL, flexWrap: 'wrap' },
-  meterCard: { flex: '1 1 240px', minWidth: 240, padding: tokens.spacingVerticalM, borderRadius: tokens.borderRadiusLarge, border: `1px solid ${tokens.colorNeutralStroke2}`, backgroundColor: tokens.colorNeutralBackground1 },
+  meterCard: { flex: '1 1 240px', minWidth: '240px', padding: tokens.spacingVerticalM, borderRadius: tokens.borderRadiusLarge, border: `1px solid ${tokens.colorNeutralStroke2}`, backgroundColor: tokens.colorNeutralBackground1 },
   meterList: { margin: `${tokens.spacingVerticalXS} 0 0`, paddingLeft: '18px', display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalXXS },
   topicRow: { display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: tokens.spacingHorizontalS },
   mono: { fontFamily: tokens.fontFamilyMonospace, fontSize: '12px' },
   chips: { display: 'flex', gap: tokens.spacingHorizontalXS, flexWrap: 'wrap' },
-  dialogCol: { display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalM, minWidth: 480, maxWidth: '100%' },
+  dialogCol: { display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalM, minWidth: '480px', maxWidth: '100%' },
   footnote: { display: 'block', marginTop: tokens.spacingVerticalM, color: tokens.colorNeutralForeground3 },
 });
 

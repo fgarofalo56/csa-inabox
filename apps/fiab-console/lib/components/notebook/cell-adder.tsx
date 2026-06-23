@@ -8,7 +8,7 @@ const useStyles = makeStyles({
     display: 'flex',
     alignItems: 'center',
     justifyContent: 'center',
-    gap: 8,
+    gap: tokens.spacingHorizontalS,
     padding: '2px 0',
     opacity: 0.35,
     transition: 'opacity 0.15s',
@@ -16,7 +16,7 @@ const useStyles = makeStyles({
   },
   line: {
     flex: 1,
-    height: 1,
+    height: '1px',
     backgroundColor: tokens.colorNeutralStroke2,
   },
 });

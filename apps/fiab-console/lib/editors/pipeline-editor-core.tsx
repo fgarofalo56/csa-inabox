@@ -54,9 +54,9 @@ import type { RibbonTab } from '@/lib/components/ribbon';
 
 const useStyles = makeStyles({
   pad: { padding: tokens.spacingVerticalL, display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalM },
-  gate: { padding: tokens.spacingVerticalL, display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalL, maxWidth: 720 },
+  gate: { padding: tokens.spacingVerticalL, display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalL, maxWidth: '720px' },
   row: { display: 'flex', gap: tokens.spacingHorizontalM, alignItems: 'flex-end', flexWrap: 'wrap' },
-  field: { flex: 1, minWidth: 220, display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalXS },
+  field: { flex: 1, minWidth: '220px', display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalXS },
 });
 
 export interface ActivityTemplate {

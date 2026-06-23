@@ -41,7 +41,7 @@ import type { FabricItemType } from '@/lib/catalog/fabric-item-types';
 import type { RibbonTab } from '@/lib/components/ribbon';
 
 const useStyles = makeStyles({
-  pad: { padding: tokens.spacingVerticalL, display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalL, maxWidth: 640 },
+  pad: { padding: tokens.spacingVerticalL, display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalL, maxWidth: '640px' },
   field: { display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalXS },
   actions: { display: 'flex', gap: tokens.spacingHorizontalM, alignItems: 'center', marginTop: tokens.spacingVerticalXS },
   list: { display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalS, marginTop: tokens.spacingVerticalXS },

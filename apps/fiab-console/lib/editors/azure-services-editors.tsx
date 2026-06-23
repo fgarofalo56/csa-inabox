@@ -38,11 +38,11 @@ import { PipelineEditorCore } from './pipeline-editor-core';
 
 const useStyles = makeStyles({
   pad: { padding: tokens.spacingVerticalL, display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalM },
-  form: { padding: tokens.spacingVerticalXL, display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalM, maxWidth: 720 },
+  form: { padding: tokens.spacingVerticalXL, display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalM, maxWidth: '720px' },
   row: { display: 'flex', gap: tokens.spacingHorizontalM },
   field: { flex: 1, display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalXS },
   monaco: {
-    width: '100%', minHeight: 200,
+    width: '100%', minHeight: '200px',
     fontFamily: 'Consolas, "Cascadia Code", monospace', fontSize: tokens.fontSizeBase300, padding: tokens.spacingVerticalM,
     border: `1px solid ${tokens.colorNeutralStroke2}`, borderRadius: tokens.borderRadiusMedium,
     backgroundColor: tokens.colorNeutralBackground3, color: tokens.colorNeutralForeground1,

@@ -67,7 +67,7 @@ const FN_OPTIONS: { key: AiFn; label: string; desc: string }[] = [
 ];
 
 const useStyles = makeStyles({
-  body: { display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalL, minWidth: 520 },
+  body: { display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalL, minWidth: '520px' },
   row: { display: 'flex', gap: tokens.spacingHorizontalM },
   flex1: { flex: 1 },
   receipt: {

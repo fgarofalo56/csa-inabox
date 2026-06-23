@@ -72,16 +72,16 @@ const useStyles = makeStyles({
   pad: { padding: tokens.spacingVerticalL, display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalM, minHeight: 0, flex: 1 },
   toolbar: { display: 'flex', gap: tokens.spacingHorizontalM, alignItems: 'center', flexWrap: 'wrap' },
   editor: {
-    width: '100%', minHeight: 200,
+    width: '100%', minHeight: '200px',
     fontFamily: 'Consolas, "Cascadia Code", monospace', fontSize: tokens.fontSizeBase300, padding: tokens.spacingVerticalM,
     border: `1px solid ${tokens.colorNeutralStroke2}`, borderRadius: tokens.borderRadiusMedium,
     backgroundColor: tokens.colorNeutralBackground3, color: tokens.colorNeutralForeground1,
     resize: 'vertical',
   },
-  resultBox: { borderTop: `1px solid ${tokens.colorNeutralStroke2}`, paddingTop: tokens.spacingVerticalM, minHeight: 200 },
+  resultBox: { borderTop: `1px solid ${tokens.colorNeutralStroke2}`, paddingTop: tokens.spacingVerticalM, minHeight: '200px' },
   resultMeta: { display: 'flex', gap: tokens.spacingHorizontalM, alignItems: 'center', marginBottom: tokens.spacingVerticalS },
   resultActions: { marginLeft: 'auto', display: 'flex', gap: tokens.spacingHorizontalXS },
-  tableWrap: { overflow: 'auto', maxHeight: 360, border: `1px solid ${tokens.colorNeutralStroke2}`, borderRadius: tokens.borderRadiusMedium },
+  tableWrap: { overflow: 'auto', maxHeight: '360px', border: `1px solid ${tokens.colorNeutralStroke2}`, borderRadius: tokens.borderRadiusMedium },
   cell: { fontFamily: 'Consolas, monospace', fontSize: tokens.fontSizeBase200, whiteSpace: 'nowrap' },
   treePad: { padding: tokens.spacingHorizontalS },
   treeRow: {
@@ -97,7 +97,7 @@ const useStyles = makeStyles({
   },
   cellPre: {
     fontFamily: 'Consolas, monospace', fontSize: tokens.fontSizeBase200, whiteSpace: 'pre-wrap',
-    margin: 0, maxHeight: 320, overflow: 'auto', color: tokens.colorNeutralForeground1,
+    margin: 0, maxHeight: '320px', overflow: 'auto', color: tokens.colorNeutralForeground1,
   },
   // ---- Unity Catalog write-path dialog layout (tokenized, no raw inline styles) ----
   dlgCol: { display: 'flex', flexDirection: 'column', rowGap: tokens.spacingVerticalM },

@@ -31,7 +31,8 @@ import {
 import {
   Add20Regular, ArrowSync20Regular, Database20Regular,
   PlugConnected20Regular, Key16Regular, CheckmarkCircle16Filled,
-  Layer20Regular,
+  Layer20Regular, Edit20Regular, Beaker20Regular,
+  CheckmarkCircle20Regular, DismissCircle20Regular, Warning20Regular,
 } from '@fluentui/react-icons';
 import { ConnectionBuilder, type ConnectionView } from '@/lib/components/connections/connection-builder';
 
@@ -198,6 +199,8 @@ export function MirrorSourceWizard(props: MirrorSourceWizardProps) {
   const [tablesMsg, setTablesMsg] = useState<string | null>(null);
   const [selTables, setSelTables] = useState<Set<string>>(new Set());
   const [verify, setVerify] = useState<{ status: 'idle' | 'busy' | 'ok' | 'warn' | 'err'; msg?: string }>({ status: 'idle' });
+  const [connTest, setConnTest] = useState<{ status: 'idle' | 'busy' | 'ok' | 'warn' | 'err'; msg?: string }>({ status: 'idle' });
+  const [editConnOpen, setEditConnOpen] = useState(false);
   const [createBusy, setCreateBusy] = useState(false);
   const [createErr, setCreateErr] = useState<string | null>(null);
 
@@ -322,6 +325,24 @@ export function MirrorSourceWizard(props: MirrorSourceWizardProps) {
     } catch (e: any) { setVerify({ status: 'err', msg: e?.message || String(e) }); }
   }, [createSrc, effServer, effDb, isBigQuery, isOracle, isCosmos]);
 
+  const testConnection = useCallback(async () => {
+    if (!pickedConn) return;
+    setConnTest({ status: 'busy' });
+    try {
+      const r = await fetch(`/api/connections/${encodeURIComponent(pickedConn.id)}/test`, { method: 'POST' });
+      const j = await r.json();
+      if (!r.ok || !j.ok) {
+        setConnTest({ status: 'err', msg: j.hint ? `${j.error} — ${j.hint}` : (j.error || 'test failed') });
+      } else if (j.reachable) {
+        setConnTest({ status: 'ok', msg: j.detail || 'Connection successful.' });
+      } else {
+        setConnTest({ status: 'warn', msg: j.detail || 'Connection validated on first use.' });
+      }
+    } catch (e: any) {
+      setConnTest({ status: 'err', msg: e?.message || String(e) });
+    }
+  }, [pickedConn]);
+
   const submit = useCallback(async () => {
     if (!workspaceId || !createName.trim()) return;
     setCreateBusy(true); setCreateErr(null);
@@ -427,7 +448,7 @@ export function MirrorSourceWizard(props: MirrorSourceWizardProps) {
                   <Field style={{ flex: 1 }}>
                     <Dropdown placeholder={connections.length ? 'Select a connection' : 'No saved connections yet — create one'}
                       value={pickedConn ? pickedConn.name : ''} selectedOptions={connId ? [connId] : []}
-                      onOptionSelect={(_, d) => setConnId(d.optionValue || '')}>
+                      onOptionSelect={(_, d) => { setConnId(d.optionValue || ''); setConnTest({ status: 'idle' }); }}>
                       {compatibleConns.length > 0 && (
                         <OptionGroup label="Recommended for this source">
                           {compatibleConns.map((c) => (
@@ -450,12 +471,40 @@ export function MirrorSourceWizard(props: MirrorSourceWizardProps) {
                   </Field>
                   <Button appearance="outline" icon={<PlugConnected20Regular />}
                     onClick={() => setConnBuilderOpen(true)}>New connection</Button>
+                  {pickedConn && (
+                    <Button appearance="outline" icon={<Edit20Regular />}
+                      onClick={() => { setConnTest({ status: 'idle' }); setEditConnOpen(true); }}>
+                      Edit
+                    </Button>
+                  )}
+                  {pickedConn && (
+                    <Button appearance="outline" icon={<Beaker20Regular />}
+                      disabled={connTest.status === 'busy'}
+                      onClick={() => { setConnTest({ status: 'idle' }); testConnection(); }}>
+                      {connTest.status === 'busy' ? 'Testing…' : 'Test connection'}
+                    </Button>
+                  )}
                 </div>
                 {pickedConn && (
                   <div className={s.connRow} style={{ marginTop: tokens.spacingVerticalS }}>
                     {pickedConn.hasSecret ? <Key16Regular /> : <CheckmarkCircle16Filled style={{ color: tokens.colorPaletteGreenForeground1 }} />}
                     <Caption1>Auth: <strong>{pickedConn.authMethod}</strong>{pickedConn.hasSecret ? ' (secret in Key Vault)' : ''}</Caption1>
                   </div>
+                )}
+                {connTest.status === 'ok' && (
+                  <MessageBar intent="success" style={{ marginTop: tokens.spacingVerticalS }}>
+                    <MessageBarBody><CheckmarkCircle20Regular style={{ verticalAlign: 'middle', marginRight: 4 }} />{connTest.msg}</MessageBarBody>
+                  </MessageBar>
+                )}
+                {connTest.status === 'warn' && (
+                  <MessageBar intent="info" style={{ marginTop: tokens.spacingVerticalS }}>
+                    <MessageBarBody><Warning20Regular style={{ verticalAlign: 'middle', marginRight: 4 }} />{connTest.msg}</MessageBarBody>
+                  </MessageBar>
+                )}
+                {connTest.status === 'err' && (
+                  <MessageBar intent="error" style={{ marginTop: tokens.spacingVerticalS }}>
+                    <MessageBarBody><DismissCircle20Regular style={{ verticalAlign: 'middle', marginRight: 4 }} />{connTest.msg}</MessageBarBody>
+                  </MessageBar>
                 )}
                 {isBigQuery ? (
                   <div style={{ display: 'flex', gap: tokens.spacingHorizontalM, marginTop: tokens.spacingVerticalL }}>
@@ -649,6 +698,17 @@ export function MirrorSourceWizard(props: MirrorSourceWizardProps) {
       </DialogSurface>
       <ConnectionBuilder open={connBuilderOpen} onClose={() => setConnBuilderOpen(false)}
         onCreated={(c) => { setConnections((prev) => [...prev.filter((x) => x.id !== c.id), c]); setConnId(c.id); }} />
+      {pickedConn && (
+        <ConnectionBuilder
+          open={editConnOpen}
+          onClose={() => setEditConnOpen(false)}
+          editConnection={pickedConn}
+          onSaved={(updated) => {
+            setConnections((prev) => prev.map((x) => x.id === updated.id ? updated : x));
+            setEditConnOpen(false);
+          }}
+        />
+      )}
     </Dialog>
   );
 }

@@ -30,7 +30,7 @@ const useStyles = makeStyles({
     display: 'flex',
     flexDirection: 'column',
     border: `1px solid ${tokens.colorNeutralStroke2}`,
-    borderRadius: 4,
+    borderRadius: tokens.borderRadiusMedium,
     backgroundColor: tokens.colorNeutralBackground1,
   },
   shellActive: {
@@ -53,7 +53,7 @@ const useStyles = makeStyles({
     zIndex: 999,
   },
   header: {
-    display: 'flex', alignItems: 'center', gap: 8,
+    display: 'flex', alignItems: 'center', gap: tokens.spacingHorizontalS,
     padding: '4px 8px',
     backgroundColor: tokens.colorNeutralBackground2,
     borderBottom: `1px solid ${tokens.colorNeutralStroke2}`,
@@ -70,9 +70,9 @@ const useStyles = makeStyles({
   },
   editor: {
     width: '100%',
-    minHeight: 80,
+    minHeight: '80px',
     fontFamily: 'Consolas, "Cascadia Code", monospace',
-    fontSize: 13, padding: 8,
+    fontSize: '13px', padding: tokens.spacingHorizontalS,
     border: 'none',
     backgroundColor: tokens.colorNeutralBackground3,
     color: tokens.colorNeutralForeground1,
@@ -90,13 +90,13 @@ const useStyles = makeStyles({
     resize: 'none',
   },
   outputBox: {
-    padding: 8,
+    padding: tokens.spacingHorizontalS,
     fontFamily: 'Consolas, monospace',
-    fontSize: 12,
+    fontSize: tokens.fontSizeBase200,
     whiteSpace: 'pre-wrap',
     borderTop: `1px solid ${tokens.colorNeutralStroke2}`,
     backgroundColor: tokens.colorNeutralBackground2,
-    maxHeight: 240,
+    maxHeight: '240px',
     overflow: 'auto',
   },
   outputBoxMaximized: {
@@ -108,8 +108,8 @@ const useStyles = makeStyles({
   badgeCount: {
     fontFamily: 'Consolas, monospace',
     color: tokens.colorNeutralForeground3,
-    fontSize: 11,
-    minWidth: 32,
+    fontSize: '11px',
+    minWidth: '32px',
     textAlign: 'right',
   },
 });

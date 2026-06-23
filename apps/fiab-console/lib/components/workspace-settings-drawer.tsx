@@ -55,9 +55,9 @@ interface Props {
 
 const useStyles = makeStyles({
   trigger: { flexShrink: 0 },
-  body: { display: 'flex', flexDirection: 'column', gap: 12 },
-  section: { display: 'flex', flexDirection: 'column', gap: 12 },
-  row: { display: 'flex', gap: 8, alignItems: 'center' },
+  body: { display: 'flex', flexDirection: 'column', gap: tokens.spacingHorizontalM },
+  section: { display: 'flex', flexDirection: 'column', gap: tokens.spacingHorizontalM },
+  row: { display: 'flex', gap: tokens.spacingHorizontalS, alignItems: 'center' },
 });
 
 type TabId = 'general' | 'permissions' | 'networking' | 'git' | 'onelake' | 'encryption' | 'spark' | 'sensitivity' | 'danger';

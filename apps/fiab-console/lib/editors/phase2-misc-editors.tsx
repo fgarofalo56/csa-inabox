@@ -42,7 +42,7 @@ import { emptyProjectGraph, type DbtProjectGraph } from '@/lib/dbt/dbt-project-m
 import type { GeneratedFile } from '@/lib/dbt/dbt-codegen';
 
 const useStyles = makeStyles({
-  form: { padding: tokens.spacingVerticalXL, display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalM, maxWidth: 820 },
+  form: { padding: tokens.spacingVerticalXL, display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalM, maxWidth: '820px' },
   row: { display: 'flex', gap: tokens.spacingHorizontalM },
   field: { flex: 1, display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalXS },
   tabBar: { padding: `${tokens.spacingVerticalS} ${tokens.spacingHorizontalL} 0`, borderBottom: `1px solid ${tokens.colorNeutralStroke2}` },
@@ -68,13 +68,13 @@ const useStyles = makeStyles({
   emptyIcon: { fontSize: '28px', color: tokens.colorNeutralForeground4 },
   fileGrid: {
     display: 'grid', gridTemplateColumns: '260px 1fr', gap: tokens.spacingHorizontalM,
-    minHeight: 360, alignItems: 'stretch',
+    minHeight: '360px', alignItems: 'stretch',
   },
   fileList: {
     display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalXXS,
     border: `1px solid ${tokens.colorNeutralStroke2}`, borderRadius: tokens.borderRadiusMedium,
     backgroundColor: tokens.colorNeutralBackground2,
-    padding: tokens.spacingVerticalXS, overflowY: 'auto', maxHeight: 480,
+    padding: tokens.spacingVerticalXS, overflowY: 'auto', maxHeight: '480px',
   },
   fileBtn: { justifyContent: 'flex-start', fontFamily: tokens.fontFamilyMonospace, fontSize: tokens.fontSizeBase200 },
   filePane: { display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalXS, minWidth: 0 },
@@ -84,7 +84,7 @@ const useStyles = makeStyles({
     color: tokens.colorNeutralForeground2,
   },
   json: {
-    width: '100%', minHeight: 120, padding: tokens.spacingVerticalS,
+    width: '100%', minHeight: '120px', padding: tokens.spacingVerticalS,
     fontFamily: 'Consolas, "Cascadia Code", monospace', fontSize: tokens.fontSizeBase200,
     border: `1px solid ${tokens.colorNeutralStroke2}`, borderRadius: tokens.borderRadiusMedium,
     backgroundColor: tokens.colorNeutralBackground3, color: tokens.colorNeutralForeground1,

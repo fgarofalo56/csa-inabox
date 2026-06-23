@@ -17,7 +17,7 @@ const useStyles = makeStyles({
     display: 'flex',
     flexDirection: 'column',
     border: `1px solid ${tokens.colorNeutralStroke2}`,
-    borderRadius: 4,
+    borderRadius: tokens.borderRadiusMedium,
     backgroundColor: tokens.colorNeutralBackground1,
   },
   shellActive: { border: `1px solid ${tokens.colorBrandStroke1}` },
@@ -38,7 +38,7 @@ const useStyles = makeStyles({
     zIndex: 999,
   },
   header: {
-    display: 'flex', alignItems: 'center', gap: 8,
+    display: 'flex', alignItems: 'center', gap: tokens.spacingHorizontalS,
     padding: '4px 8px',
     backgroundColor: tokens.colorNeutralBackground2,
     borderBottom: `1px solid ${tokens.colorNeutralStroke2}`,
@@ -54,8 +54,8 @@ const useStyles = makeStyles({
     ':active': { cursor: 'grabbing' },
   },
   editor: {
-    width: '100%', minHeight: 80,
-    fontFamily: 'Consolas, monospace', fontSize: 13, padding: 8,
+    width: '100%', minHeight: '80px',
+    fontFamily: 'Consolas, monospace', fontSize: '13px', padding: tokens.spacingHorizontalS,
     border: 'none', outline: 'none',
     backgroundColor: tokens.colorNeutralBackground3,
     color: tokens.colorNeutralForeground1, resize: 'vertical',
@@ -71,8 +71,8 @@ const useStyles = makeStyles({
     resize: 'none',
   },
   rendered: {
-    padding: 12,
-    fontSize: 14,
+    padding: tokens.spacingHorizontalM,
+    fontSize: tokens.fontSizeBase300,
     lineHeight: 1.5,
     color: tokens.colorNeutralForeground1,
   },
@@ -80,7 +80,7 @@ const useStyles = makeStyles({
     flex: 1,
     overflow: 'auto',
   },
-  tag: { fontFamily: 'Consolas, monospace', color: tokens.colorNeutralForeground3, fontSize: 11 },
+  tag: { fontFamily: 'Consolas, monospace', color: tokens.colorNeutralForeground3, fontSize: '11px' },
 });
 
 // Minimal markdown renderer: headings (#/##/###), bold (**x**), italic (*x*), code (`x`), bullet lists (-), links [t](u).

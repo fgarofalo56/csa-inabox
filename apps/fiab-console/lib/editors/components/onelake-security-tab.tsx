@@ -33,17 +33,17 @@ const useStyles = makeStyles({
   toolbar: { display: 'flex', gap: tokens.spacingHorizontalS, alignItems: 'center', flexWrap: 'wrap' },
   chips: { display: 'flex', gap: tokens.spacingHorizontalXS, flexWrap: 'wrap' },
   pickList: {
-    maxHeight: 220, overflow: 'auto', border: `1px solid ${tokens.colorNeutralStroke2}`,
+    maxHeight: '220px', overflow: 'auto', border: `1px solid ${tokens.colorNeutralStroke2}`,
     borderRadius: tokens.borderRadiusMedium, padding: tokens.spacingVerticalS, display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalXS,
   },
   resultRow: {
     padding: `${tokens.spacingVerticalS} ${tokens.spacingHorizontalL}`, cursor: 'pointer', borderRadius: tokens.borderRadiusMedium,
     ':hover': { backgroundColor: tokens.colorNeutralBackground2Hover },
   },
-  step: { display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalM, minHeight: 280 },
+  step: { display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalM, minHeight: '280px' },
   stepNum: {
     display: 'inline-flex', alignItems: 'center', justifyContent: 'center',
-    width: 22, height: 22, borderRadius: '50%',
+    width: '22px', height: '22px', borderRadius: '50%',
     backgroundColor: tokens.colorBrandBackground, color: tokens.colorNeutralForegroundOnBrand,
     fontSize: tokens.fontSizeBase200, fontWeight: 700, marginRight: tokens.spacingHorizontalS,
   },

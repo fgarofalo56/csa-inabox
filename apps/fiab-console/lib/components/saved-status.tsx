@@ -18,8 +18,8 @@ type State = { kind: 'idle' } | { kind: 'saving' } | { kind: 'saved'; at: number
 const useStyles = makeStyles({
   root: {
     display: 'inline-flex', alignItems: 'center',
-    gap: 6, color: 'rgba(255,255,255,0.78)',
-    fontSize: 12, whiteSpace: 'nowrap',
+    gap: tokens.spacingHorizontalSNudge, color: 'rgba(255,255,255,0.78)',
+    fontSize: tokens.fontSizeBase200, whiteSpace: 'nowrap',
     paddingLeft: 'var(--loom-space-2)',
     paddingRight: 'var(--loom-space-2)',
   },

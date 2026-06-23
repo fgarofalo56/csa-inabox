@@ -9,8 +9,8 @@
 import { Button, makeStyles, tokens, MessageBar, MessageBarBody, MessageBarTitle } from '@fluentui/react-components';
 
 const useStyles = makeStyles({
-  wrap: { marginTop: 8, marginBottom: 12 },
-  row: { display: 'flex', gap: 12, alignItems: 'center', flexWrap: 'wrap' },
+  wrap: { marginTop: tokens.spacingVerticalS, marginBottom: tokens.spacingVerticalM },
+  row: { display: 'flex', gap: tokens.spacingHorizontalM, alignItems: 'center', flexWrap: 'wrap' },
 });
 
 export function SignInRequired({ subject }: { subject?: string }) {

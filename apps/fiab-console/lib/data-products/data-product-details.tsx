@@ -28,11 +28,11 @@ import {
 } from '@/lib/catalog/data-product-enums';
 
 const useStyles = makeStyles({
-  grid: { display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(280px, 1fr))', gap: 12, maxWidth: 920 },
-  card: { padding: 14, borderRadius: 8, border: `1px solid ${tokens.colorNeutralStroke2}`, display: 'flex', flexDirection: 'column', gap: 4 },
-  section: { display: 'flex', flexDirection: 'column', gap: 12, maxWidth: 920 },
+  grid: { display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(280px, 1fr))', gap: tokens.spacingHorizontalM, maxWidth: '920px' },
+  card: { padding: '14px', borderRadius: tokens.borderRadiusXLarge, border: `1px solid ${tokens.colorNeutralStroke2}`, display: 'flex', flexDirection: 'column', gap: tokens.spacingHorizontalXS },
+  section: { display: 'flex', flexDirection: 'column', gap: tokens.spacingHorizontalM, maxWidth: '920px' },
   desc: { whiteSpace: 'pre-wrap' },
-  tags: { display: 'flex', gap: 6, flexWrap: 'wrap' },
+  tags: { display: 'flex', gap: tokens.spacingHorizontalSNudge, flexWrap: 'wrap' },
 });
 
 interface DataProductItem {

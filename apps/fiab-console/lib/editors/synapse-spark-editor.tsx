@@ -43,7 +43,7 @@ const useStyles = makeStyles({
   toolbar: { display: 'flex', gap: tokens.spacingHorizontalS, alignItems: 'center', flexWrap: 'wrap' },
   tabBody: { display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalM, overflow: 'auto', flex: 1, minHeight: 0, paddingTop: tokens.spacingVerticalS },
   row: { display: 'flex', gap: tokens.spacingHorizontalM, flexWrap: 'wrap' },
-  field: { flex: 1, minWidth: 200, display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalXS },
+  field: { flex: 1, minWidth: '200px', display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalXS },
   mono: { fontFamily: 'Consolas, "Cascadia Code", monospace', fontSize: tokens.fontSizeBase300 },
   // Constrain the (long) Spark application id so it never blows out the runs grid.
   appIdCell: {

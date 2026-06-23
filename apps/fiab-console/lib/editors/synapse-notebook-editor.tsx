@@ -86,7 +86,7 @@ const useStyles = makeStyles({
   output: {
     fontFamily: 'Consolas, "Cascadia Code", monospace', fontSize: tokens.fontSizeBase200, whiteSpace: 'pre-wrap',
     padding: tokens.spacingVerticalS, borderTop: `1px solid ${tokens.colorNeutralStroke2}`,
-    backgroundColor: tokens.colorNeutralBackground3, maxHeight: 280, overflow: 'auto',
+    backgroundColor: tokens.colorNeutralBackground3, maxHeight: '280px', overflow: 'auto',
   },
   outputErr: { color: tokens.colorPaletteRedForeground1, backgroundColor: tokens.colorPaletteRedBackground1 },
   md: { padding: tokens.spacingVerticalM, fontSize: tokens.fontSizeBase300, lineHeight: 1.5, color: tokens.colorNeutralForeground1 },
@@ -108,7 +108,7 @@ const useStyles = makeStyles({
   },
   outlineEmpty: { padding: `${tokens.spacingVerticalXXS} ${tokens.spacingHorizontalXS}`, color: tokens.colorNeutralForeground3, fontSize: tokens.fontSizeBase200 },
   addBar: { display: 'flex', gap: tokens.spacingHorizontalS, justifyContent: 'center', padding: `${tokens.spacingVerticalXS} 0` },
-  richOut: { borderTop: `1px solid ${tokens.colorNeutralStroke2}`, backgroundColor: tokens.colorNeutralBackground1, padding: tokens.spacingVerticalS, maxHeight: 320, overflow: 'auto' },
+  richOut: { borderTop: `1px solid ${tokens.colorNeutralStroke2}`, backgroundColor: tokens.colorNeutralBackground1, padding: tokens.spacingVerticalS, maxHeight: '320px', overflow: 'auto' },
   richTable: { width: 'max-content', minWidth: '100%' },
   richImg: { maxWidth: '100%', display: 'block' },
   richHtml: { overflow: 'auto', fontSize: tokens.fontSizeBase300 },

@@ -44,7 +44,7 @@ import {
 } from '@/lib/azure/load-to-table-codegen';
 
 const useStyles = makeStyles({
-  body: { display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalL, minWidth: 480 },
+  body: { display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalL, minWidth: '480px' },
   steps: { display: 'flex', gap: tokens.spacingHorizontalS, alignItems: 'center', marginBottom: tokens.spacingVerticalXS },
   summary: {
     display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalS,

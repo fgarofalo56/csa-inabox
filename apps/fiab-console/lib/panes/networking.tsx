@@ -41,7 +41,7 @@ const useStyles = makeStyles({
   addRow: { display: 'flex', gap: tokens.spacingHorizontalS, alignItems: 'flex-end', flexWrap: 'wrap' },
   note: { color: tokens.colorNeutralForeground3, fontSize: '12px', lineHeight: 1.5 },
   switchRow: { display: 'flex', gap: tokens.spacingHorizontalM, alignItems: 'center' },
-  formGrid: { display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalS, maxWidth: 640 },
+  formGrid: { display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalS, maxWidth: '640px' },
   tableWrap: { overflowX: 'auto' },
   actions: { display: 'flex', gap: tokens.spacingHorizontalS, alignItems: 'center' },
 });

@@ -24,25 +24,25 @@ import { activityIcon } from './activity-icons';
 
 const useStyles = makeStyles({
   root: {
-    display: 'flex', flexDirection: 'column', gap: 8,
-    padding: 8, minWidth: 248, maxWidth: 288,
+    display: 'flex', flexDirection: 'column', gap: tokens.spacingHorizontalS,
+    padding: tokens.spacingHorizontalS, minWidth: '248px', maxWidth: '288px',
     overflowY: 'auto', overflowX: 'hidden',
   },
-  group: { display: 'flex', flexDirection: 'column', gap: 4 },
+  group: { display: 'flex', flexDirection: 'column', gap: tokens.spacingHorizontalXS },
   header: {
     display: 'flex', justifyContent: 'space-between', alignItems: 'center',
     padding: '4px 6px', cursor: 'pointer',
     backgroundColor: tokens.colorNeutralBackground3,
-    borderRadius: 4,
+    borderRadius: tokens.borderRadiusMedium,
     userSelect: 'none',
   },
-  list: { display: 'flex', flexDirection: 'column', gap: 2 },
+  list: { display: 'flex', flexDirection: 'column', gap: tokens.spacingHorizontalXXS },
   tile: {
-    display: 'flex', alignItems: 'center', gap: 8,
-    padding: '6px 8px', borderRadius: 4,
+    display: 'flex', alignItems: 'center', gap: tokens.spacingHorizontalS,
+    padding: '6px 8px', borderRadius: tokens.borderRadiusMedium,
     border: `1px solid ${tokens.colorNeutralStroke2}`,
     backgroundColor: tokens.colorNeutralBackground1,
-    cursor: 'grab', fontSize: 12,
+    cursor: 'grab', fontSize: tokens.fontSizeBase200,
     transitionProperty: 'background-color, border-color',
     transitionDuration: '120ms',
     ':hover': {
@@ -51,8 +51,8 @@ const useStyles = makeStyles({
     },
     ':active': { cursor: 'grabbing' },
   },
-  swatch: { width: 10, height: 24, borderRadius: 2, flexShrink: 0 },
-  labelCol: { display: 'flex', flexDirection: 'column', gap: 1, minWidth: 0, flex: 1 },
+  swatch: { width: tokens.spacingHorizontalMNudge, height: tokens.spacingVerticalXXL, borderRadius: '2px', flexShrink: 0 },
+  labelCol: { display: 'flex', flexDirection: 'column', gap: '1px', minWidth: 0, flex: 1 },
   labelText: { fontWeight: 500, color: tokens.colorNeutralForeground1, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' },
   empty: { padding: '8px 6px', color: tokens.colorNeutralForeground3 },
 });

@@ -51,15 +51,15 @@ const useStyles = makeStyles({
   kpiValue: { fontSize: tokens.fontSizeBase700, fontWeight: 600 },
   treePad: { padding: tokens.spacingVerticalS },
   spark: {
-    height: 60, display: 'flex', alignItems: 'flex-end', gap: tokens.spacingHorizontalXXS,
+    height: '60px', display: 'flex', alignItems: 'flex-end', gap: tokens.spacingHorizontalXXS,
     border: `1px solid ${tokens.colorNeutralStroke2}`, borderRadius: tokens.borderRadiusMedium, padding: tokens.spacingVerticalXS,
     backgroundColor: tokens.colorNeutralBackground3,
   },
   bar: { flex: 1, backgroundColor: tokens.colorBrandBackground, borderRadius: tokens.borderRadiusSmall },
   tagRow: { display: 'flex', flexWrap: 'wrap', gap: tokens.spacingHorizontalXS },
-  chatWrap: { display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalS, maxWidth: 720 },
+  chatWrap: { display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalS, maxWidth: '720px' },
   chatLog: {
-    height: 360, overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalS,
+    height: '360px', overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalS,
     border: `1px solid ${tokens.colorNeutralStroke2}`, borderRadius: tokens.borderRadiusLarge, padding: tokens.spacingVerticalM,
     backgroundColor: tokens.colorNeutralBackground2,
   },

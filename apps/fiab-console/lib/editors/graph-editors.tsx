@@ -43,7 +43,7 @@ import { cypherToKql, TranslationError } from '@/lib/azure/cypher-kql-translator
 const useStyles = makeStyles({
   pad: { padding: tokens.spacingVerticalL, display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalM },
   editor: {
-    width: '100%', minHeight: 160,
+    width: '100%', minHeight: '160px',
     fontFamily: 'Consolas, monospace', fontSize: tokens.fontSizeBase300, padding: tokens.spacingHorizontalM,
     border: `1px solid ${tokens.colorNeutralStroke2}`, borderRadius: tokens.borderRadiusMedium,
     backgroundColor: tokens.colorNeutralBackground3, color: tokens.colorNeutralForeground1,
@@ -51,19 +51,19 @@ const useStyles = makeStyles({
   },
   treePad: { padding: tokens.spacingHorizontalM, display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalM },
   field: { display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalXS },
-  tableWrap: { overflow: 'auto', maxHeight: 320, border: `1px solid ${tokens.colorNeutralStroke2}`, borderRadius: tokens.borderRadiusMedium },
+  tableWrap: { overflow: 'auto', maxHeight: '320px', border: `1px solid ${tokens.colorNeutralStroke2}`, borderRadius: tokens.borderRadiusMedium },
   // Vector store surfaces
   toolbar: { display: 'flex', gap: tokens.spacingHorizontalS, alignItems: 'center', flexWrap: 'wrap' },
   searchRow: { display: 'flex', gap: tokens.spacingHorizontalM, alignItems: 'flex-end', flexWrap: 'wrap' },
-  fullField: { flex: 1, minWidth: 220 },
-  kField: { width: 96 },
+  fullField: { flex: 1, minWidth: '220px' },
+  kField: { width: '96px' },
   sectionHeader: {
     display: 'flex', alignItems: 'center', gap: tokens.spacingHorizontalS,
     marginTop: tokens.spacingVerticalS,
   },
   jsonView: {
     fontFamily: tokens.fontFamilyMonospace, fontSize: tokens.fontSizeBase200,
-    maxHeight: 320, overflow: 'auto', margin: 0,
+    maxHeight: '320px', overflow: 'auto', margin: 0,
     backgroundColor: tokens.colorNeutralBackground3,
     color: tokens.colorNeutralForeground1,
     ...shorthands.padding(tokens.spacingVerticalM, tokens.spacingHorizontalM),

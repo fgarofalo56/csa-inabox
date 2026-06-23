@@ -50,9 +50,9 @@ const useStyles = makeStyles({
   toolbar: { display: 'flex', gap: tokens.spacingHorizontalS, alignItems: 'center', flexWrap: 'wrap' },
   treePad: { padding: tokens.spacingVerticalS },
   tabs: { borderBottom: `1px solid ${tokens.colorNeutralStroke2}`, padding: `${tokens.spacingVerticalS} ${tokens.spacingHorizontalS} 0` },
-  tableWrap: { overflow: 'auto', maxHeight: 360, border: `1px solid ${tokens.colorNeutralStroke2}`, borderRadius: tokens.borderRadiusMedium },
+  tableWrap: { overflow: 'auto', maxHeight: '360px', border: `1px solid ${tokens.colorNeutralStroke2}`, borderRadius: tokens.borderRadiusMedium },
   cell: { fontFamily: 'Consolas, monospace', fontSize: tokens.fontSizeBase200, whiteSpace: 'nowrap' },
-  field: { display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalXS, minWidth: 220 },
+  field: { display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalXS, minWidth: '220px' },
 });
 
 interface WorkspaceLite { id: string; name: string }
@@ -688,13 +688,13 @@ function definitionToModel(properties: any): DfModel {
 
 const useNodeStyles = makeStyles({
   node: {
-    width: 196, borderRadius: tokens.borderRadiusMedium,
+    width: '196px', borderRadius: tokens.borderRadiusMedium,
     border: `1px solid ${tokens.colorNeutralStroke1}`,
     backgroundColor: tokens.colorNeutralBackground1,
     boxShadow: tokens.shadow4, overflow: 'hidden', cursor: 'pointer',
   },
-  selected: { outline: `2px solid ${tokens.colorBrandStroke1}`, outlineOffset: 1 },
-  bar: { height: 4 },
+  selected: { outline: `2px solid ${tokens.colorBrandStroke1}`, outlineOffset: '1px' },
+  bar: { height: tokens.spacingVerticalXS },
   body: { padding: `${tokens.spacingVerticalS} ${tokens.spacingHorizontalMNudge}`, display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalXXS },
   name: { fontWeight: 600, fontSize: tokens.fontSizeBase300, color: tokens.colorNeutralForeground1, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' },
 });
@@ -721,9 +721,9 @@ const nodeTypes = { dfNode: DfNode };
 const useDesignerStyles = makeStyles({
   shell: { display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalS, flex: 1, minHeight: 0 },
   topbar: { display: 'flex', gap: tokens.spacingHorizontalS, alignItems: 'center', flexWrap: 'wrap' },
-  threePane: { display: 'flex', flex: 1, minHeight: 460, gap: tokens.spacingHorizontalS },
+  threePane: { display: 'flex', flex: 1, minHeight: '460px', gap: tokens.spacingHorizontalS },
   palette: {
-    flexShrink: 0, width: 200, padding: tokens.spacingVerticalS, display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalSNudge,
+    flexShrink: 0, width: '200px', padding: tokens.spacingVerticalS, display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalSNudge,
     border: `1px solid ${tokens.colorNeutralStroke2}`, borderRadius: tokens.borderRadiusMedium,
     backgroundColor: tokens.colorNeutralBackground1, overflow: 'auto',
   },
@@ -735,7 +735,7 @@ const useDesignerStyles = makeStyles({
   },
   canvasCol: { flex: 1, minWidth: 0, border: `1px solid ${tokens.colorNeutralStroke2}`, borderRadius: tokens.borderRadiusMedium, overflow: 'hidden' },
   configCol: {
-    flexShrink: 0, width: 300, padding: tokens.spacingVerticalM, display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalMNudge,
+    flexShrink: 0, width: '300px', padding: tokens.spacingVerticalM, display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalMNudge,
     border: `1px solid ${tokens.colorNeutralStroke2}`, borderRadius: tokens.borderRadiusMedium,
     backgroundColor: tokens.colorNeutralBackground1, overflow: 'auto',
   },

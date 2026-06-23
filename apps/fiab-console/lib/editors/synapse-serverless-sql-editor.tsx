@@ -46,16 +46,16 @@ const useStyles = makeStyles({
   pad: { padding: tokens.spacingVerticalL, display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalM, minHeight: 0, flex: 1 },
   toolbar: { display: 'flex', gap: tokens.spacingHorizontalM, alignItems: 'center', flexWrap: 'wrap' },
   connect: { display: 'flex', gap: tokens.spacingHorizontalS, alignItems: 'center' },
-  editorWrap: { minHeight: 220 },
-  resultBox: { borderTop: `1px solid ${tokens.colorNeutralStroke2}`, paddingTop: tokens.spacingVerticalM, minHeight: 200, display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalS },
+  editorWrap: { minHeight: '220px' },
+  resultBox: { borderTop: `1px solid ${tokens.colorNeutralStroke2}`, paddingTop: tokens.spacingVerticalM, minHeight: '200px', display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalS },
   resultMeta: { display: 'flex', gap: tokens.spacingHorizontalM, alignItems: 'center', flexWrap: 'wrap' },
   resultActions: { marginLeft: 'auto', display: 'flex', gap: tokens.spacingHorizontalXS },
-  tableWrap: { overflow: 'auto', maxHeight: 320, border: `1px solid ${tokens.colorNeutralStroke2}`, borderRadius: tokens.borderRadiusMedium },
+  tableWrap: { overflow: 'auto', maxHeight: '320px', border: `1px solid ${tokens.colorNeutralStroke2}`, borderRadius: tokens.borderRadiusMedium },
   cell: { fontFamily: 'Consolas, monospace', fontSize: tokens.fontSizeBase200, whiteSpace: 'nowrap' },
   messages: {
     fontFamily: 'Consolas, monospace', fontSize: tokens.fontSizeBase200, whiteSpace: 'pre-wrap',
     backgroundColor: tokens.colorNeutralBackground3, borderRadius: tokens.borderRadiusMedium, padding: tokens.spacingVerticalM,
-    color: tokens.colorNeutralForeground2, maxHeight: 280, overflow: 'auto', margin: 0,
+    color: tokens.colorNeutralForeground2, maxHeight: '280px', overflow: 'auto', margin: 0,
   },
 });
 

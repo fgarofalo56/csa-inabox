@@ -23,8 +23,8 @@ import type {
 } from './types';
 
 const useStyles = makeStyles({
-  pane: { padding: 16, display: 'flex', flexDirection: 'column', gap: 12, overflow: 'auto' },
-  rowActions: { display: 'flex', gap: 6, alignItems: 'flex-end', flexWrap: 'wrap' },
+  pane: { padding: tokens.spacingHorizontalL, display: 'flex', flexDirection: 'column', gap: tokens.spacingHorizontalM, overflow: 'auto' },
+  rowActions: { display: 'flex', gap: tokens.spacingHorizontalSNudge, alignItems: 'flex-end', flexWrap: 'wrap' },
 });
 
 const PARAM_TYPES: PipelineParameterType[] = ['string', 'int', 'float', 'bool', 'array', 'object', 'secureString'];

@@ -41,17 +41,17 @@ interface ActivityRow {
 }
 
 const useStyles = makeStyles({
-  root: { display: 'flex', flexDirection: 'column', gap: 8, padding: 12, overflow: 'auto', flex: 1, minHeight: 0 },
-  header: { display: 'flex', gap: 8, alignItems: 'center' },
+  root: { display: 'flex', flexDirection: 'column', gap: tokens.spacingHorizontalS, padding: tokens.spacingHorizontalM, overflow: 'auto', flex: 1, minHeight: 0 },
+  header: { display: 'flex', gap: tokens.spacingHorizontalS, alignItems: 'center' },
   detailBox: {
-    padding: 12,
+    padding: tokens.spacingHorizontalM,
     backgroundColor: tokens.colorNeutralBackground3,
     border: `1px solid ${tokens.colorNeutralStroke2}`,
-    borderRadius: 4,
+    borderRadius: tokens.borderRadiusMedium,
     overflow: 'auto',
-    maxHeight: 240,
+    maxHeight: '240px',
   },
-  mono: { fontFamily: 'Consolas, monospace', fontSize: 11, whiteSpace: 'pre-wrap', wordBreak: 'break-all' },
+  mono: { fontFamily: 'Consolas, monospace', fontSize: '11px', whiteSpace: 'pre-wrap', wordBreak: 'break-all' },
 });
 
 function statusBadge(s?: string) {

@@ -54,16 +54,16 @@ export type { MappingFormat, MappingRow } from './ingestion-mapping-format';
 export { detectSchema, serializeMapping } from './ingestion-mapping-format';
 
 const useStyles = makeStyles({
-  body: { display: 'flex', flexDirection: 'column', gap: 12, minWidth: 560 },
-  row: { display: 'flex', gap: 12, alignItems: 'flex-end', flexWrap: 'wrap' },
-  field: { flex: 1, minWidth: 180 },
+  body: { display: 'flex', flexDirection: 'column', gap: tokens.spacingHorizontalM, minWidth: '560px' },
+  row: { display: 'flex', gap: tokens.spacingHorizontalM, alignItems: 'flex-end', flexWrap: 'wrap' },
+  field: { flex: 1, minWidth: '180px' },
   fileRow: {
-    display: 'flex', flexDirection: 'column', gap: 4,
-    padding: 8, border: `1px dashed ${tokens.colorNeutralStroke2}`, borderRadius: 6,
+    display: 'flex', flexDirection: 'column', gap: tokens.spacingHorizontalXS,
+    padding: tokens.spacingHorizontalS, border: `1px dashed ${tokens.colorNeutralStroke2}`, borderRadius: tokens.borderRadiusLarge,
   },
-  gridCellInput: { minWidth: 120 },
-  select: { minWidth: 110 },
-  steps: { display: 'flex', gap: 6, alignItems: 'center' },
+  gridCellInput: { minWidth: '120px' },
+  select: { minWidth: '110px' },
+  steps: { display: 'flex', gap: tokens.spacingHorizontalSNudge, alignItems: 'center' },
 });
 
 /** Display formats with friendly labels for the format selector. */

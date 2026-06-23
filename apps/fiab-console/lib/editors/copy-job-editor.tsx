@@ -41,7 +41,7 @@ const useStyles = makeStyles({
     paddingRight: tokens.spacingHorizontalL, paddingBottom: 0,
     borderBottom: `1px solid ${tokens.colorNeutralStroke2}`,
   },
-  body: { padding: tokens.spacingVerticalXL, display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalM, maxWidth: 920 },
+  body: { padding: tokens.spacingVerticalXL, display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalM, maxWidth: '920px' },
   toolbar: { display: 'flex', gap: tokens.spacingHorizontalS, alignItems: 'center', flexWrap: 'wrap' },
   specGrid: { display: 'grid', gridTemplateColumns: 'minmax(140px, 200px) 1fr', rowGap: tokens.spacingVerticalXS, columnGap: tokens.spacingHorizontalL, alignItems: 'baseline' },
   label: { color: tokens.colorNeutralForeground3 },

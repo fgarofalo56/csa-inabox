@@ -25,17 +25,17 @@ import {
 } from '@fluentui/react-icons';
 
 const useStyles = makeStyles({
-  root: { display: 'flex', flexDirection: 'column', gap: 20, padding: '8px 4px', overflow: 'auto', height: '100%' },
-  hero: { display: 'flex', flexDirection: 'column', gap: 4, alignItems: 'center', textAlign: 'center', paddingTop: 12 },
+  root: { display: 'flex', flexDirection: 'column', gap: tokens.spacingHorizontalXL, padding: '8px 4px', overflow: 'auto', height: '100%' },
+  hero: { display: 'flex', flexDirection: 'column', gap: tokens.spacingHorizontalXS, alignItems: 'center', textAlign: 'center', paddingTop: tokens.spacingVerticalM },
   heroSub: { color: tokens.colorNeutralForeground2 },
-  cards: { display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(280px, 1fr))', gap: 16, maxWidth: 920, margin: '0 auto', width: '100%' },
+  cards: { display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(280px, 1fr))', gap: tokens.spacingHorizontalL, maxWidth: '920px', margin: '0 auto', width: '100%' },
   card: { cursor: 'pointer' },
   cardLink: { textDecoration: 'none' },
-  cardDesc: { color: tokens.colorNeutralForeground3, display: 'block', marginTop: 4 },
-  columns: { display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(220px, 1fr))', gap: 24, maxWidth: 920, margin: '0 auto', width: '100%' },
-  col: { display: 'flex', flexDirection: 'column', gap: 8 },
+  cardDesc: { color: tokens.colorNeutralForeground3, display: 'block', marginTop: tokens.spacingVerticalXS },
+  columns: { display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(220px, 1fr))', gap: tokens.spacingHorizontalXXL, maxWidth: '920px', margin: '0 auto', width: '100%' },
+  col: { display: 'flex', flexDirection: 'column', gap: tokens.spacingHorizontalS },
   colTitle: { fontWeight: tokens.fontWeightSemibold, fontSize: tokens.fontSizeBase400 },
-  linkRow: { display: 'flex', flexDirection: 'column', gap: 2 },
+  linkRow: { display: 'flex', flexDirection: 'column', gap: tokens.spacingHorizontalXXS },
   linkSub: { color: tokens.colorNeutralForeground3 },
 });
 

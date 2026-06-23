@@ -287,44 +287,44 @@ const useStyles = makeStyles({
   shell: {
     position: 'relative',
     width: '100%',
-    height: 560,
+    height: '560px',
     overflow: 'hidden',
     backgroundColor: tokens.colorNeutralBackground3,
     border: `1px solid ${tokens.colorNeutralStroke2}`,
-    borderRadius: 8,
+    borderRadius: tokens.borderRadiusXLarge,
   },
   toolbar: {
-    display: 'flex', gap: 4, alignItems: 'center',
+    display: 'flex', gap: tokens.spacingHorizontalXS, alignItems: 'center',
     background: tokens.colorNeutralBackground1,
     border: `1px solid ${tokens.colorNeutralStroke2}`,
-    borderRadius: 6, padding: 4,
+    borderRadius: tokens.borderRadiusLarge, padding: tokens.spacingHorizontalXS,
   },
-  search: { width: 184 },
+  search: { width: '184px' },
   legend: {
-    display: 'flex', flexWrap: 'wrap', gap: 8, maxWidth: 340,
+    display: 'flex', flexWrap: 'wrap', gap: tokens.spacingHorizontalS, maxWidth: '340px',
     background: tokens.colorNeutralBackground1,
     border: `1px solid ${tokens.colorNeutralStroke2}`,
-    borderRadius: 6, padding: '6px 8px',
+    borderRadius: tokens.borderRadiusLarge, padding: '6px 8px',
   },
-  legendItem: { display: 'flex', alignItems: 'center', gap: 4 },
-  legendSwatch: { width: 10, height: 10, borderRadius: 2, display: 'inline-block' },
+  legendItem: { display: 'flex', alignItems: 'center', gap: tokens.spacingHorizontalXS },
+  legendSwatch: { width: tokens.spacingHorizontalMNudge, height: tokens.spacingVerticalMNudge, borderRadius: '2px', display: 'inline-block' },
   detail: {
-    position: 'absolute', top: 12, right: 12,
+    position: 'absolute', top: tokens.spacingVerticalM, right: tokens.spacingHorizontalM,
     // Responsive: cap to the available canvas width so the panel never bleeds
     // off-screen on a narrow viewport. 300px on wide canvases, otherwise the
     // canvas width minus both 12px gutters.
-    width: 300, maxWidth: 'calc(100% - 24px)',
+    width: '300px', maxWidth: 'calc(100% - 24px)',
     maxHeight: 'calc(100% - 24px)',
     overflowY: 'auto', zIndex: 10,
     background: tokens.colorNeutralBackground1,
     border: `1px solid ${tokens.colorNeutralStroke1}`,
-    borderRadius: 8, padding: 14,
+    borderRadius: tokens.borderRadiusXLarge, padding: '14px',
     boxShadow: tokens.shadow16,
     // Keyboard/scroll affordance: the panel is focusable and outlined when
     // focused so keyboard users land here after selecting a node.
     ':focus-visible': { outline: `2px solid ${tokens.colorBrandStroke1}`, outlineOffset: '-2px' },
   },
-  detailRow: { display: 'flex', flexDirection: 'column', gap: 2, marginBottom: 10 },
+  detailRow: { display: 'flex', flexDirection: 'column', gap: tokens.spacingHorizontalXXS, marginBottom: tokens.spacingVerticalMNudge },
 });
 
 export interface LineageCanvasHandle {

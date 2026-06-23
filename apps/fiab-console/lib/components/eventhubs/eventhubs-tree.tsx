@@ -54,13 +54,13 @@ import {
 import { EventHubsNamespaceEditor } from './eventhubs-namespace-editor';
 
 const useStyles = makeStyles({
-  root: { display: 'flex', flexDirection: 'column', gap: 8, padding: 8, height: '100%', minWidth: 260 },
-  header: { display: 'flex', alignItems: 'center', gap: 4, justifyContent: 'space-between' },
+  root: { display: 'flex', flexDirection: 'column', gap: tokens.spacingHorizontalS, padding: tokens.spacingHorizontalS, height: '100%', minWidth: '260px' },
+  header: { display: 'flex', alignItems: 'center', gap: tokens.spacingHorizontalXS, justifyContent: 'space-between' },
   title: { fontWeight: tokens.fontWeightSemibold, fontSize: tokens.fontSizeBase300 },
-  groupLayout: { display: 'flex', alignItems: 'center', gap: 6, width: '100%' },
-  groupActions: { marginLeft: 'auto', display: 'flex', alignItems: 'center', gap: 2 },
-  leafRow: { display: 'flex', alignItems: 'center', gap: 4, width: '100%' },
-  leafActions: { marginLeft: 'auto', display: 'flex', alignItems: 'center', gap: 2 },
+  groupLayout: { display: 'flex', alignItems: 'center', gap: tokens.spacingHorizontalSNudge, width: '100%' },
+  groupActions: { marginLeft: 'auto', display: 'flex', alignItems: 'center', gap: tokens.spacingHorizontalXXS },
+  leafRow: { display: 'flex', alignItems: 'center', gap: tokens.spacingHorizontalXS, width: '100%' },
+  leafActions: { marginLeft: 'auto', display: 'flex', alignItems: 'center', gap: tokens.spacingHorizontalXXS },
 });
 
 // Data Explorer styles. New makeStyles use STRING CSS values (px units) so the

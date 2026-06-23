@@ -55,13 +55,13 @@ import {
 
 const useStyles = makeStyles({
   tabBar: { padding: `${tokens.spacingVerticalS} ${tokens.spacingHorizontalL} 0`, borderBottom: `1px solid ${tokens.colorNeutralStroke2}` },
-  tabBody: { padding: tokens.spacingVerticalXXL, display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalM, maxWidth: 1000 },
+  tabBody: { padding: tokens.spacingVerticalXXL, display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalM, maxWidth: '1000px' },
   row: { display: 'flex', gap: tokens.spacingHorizontalM, flexWrap: 'wrap' },
-  field: { flex: 1, minWidth: 180, display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalXS },
+  field: { flex: 1, minWidth: '180px', display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalXS },
   toolbar: { display: 'flex', gap: tokens.spacingHorizontalS, alignItems: 'center', flexWrap: 'wrap' },
   mono: { fontFamily: 'Consolas, "Cascadia Code", monospace', fontSize: tokens.fontSizeBase200 },
   pre: {
-    margin: 0, maxHeight: 280, overflow: 'auto', padding: tokens.spacingVerticalMNudge,
+    margin: 0, maxHeight: '280px', overflow: 'auto', padding: tokens.spacingVerticalMNudge,
     fontFamily: 'Consolas, "Cascadia Code", monospace', fontSize: tokens.fontSizeBase200, lineHeight: '1.4',
     backgroundColor: tokens.colorNeutralBackground3, color: tokens.colorNeutralForeground1,
     borderRadius: tokens.borderRadiusMedium, whiteSpace: 'pre-wrap', wordBreak: 'break-word',

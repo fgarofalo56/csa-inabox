@@ -56,14 +56,14 @@ const useStyles = makeStyles({
   toolbar: { display: 'flex', gap: tokens.spacingHorizontalM, alignItems: 'center', flexWrap: 'wrap' },
   form: { display: 'grid', gridTemplateColumns: '1fr 1fr', gap: tokens.spacingVerticalM, alignItems: 'start' },
   monaco: {
-    width: '100%', minHeight: 400,
+    width: '100%', minHeight: '400px',
     fontFamily: 'Consolas, "Cascadia Code", monospace', fontSize: tokens.fontSizeBase300, padding: tokens.spacingVerticalM,
     border: `1px solid ${tokens.colorNeutralStroke2}`, borderRadius: tokens.borderRadiusMedium,
     backgroundColor: tokens.colorNeutralBackground3, color: tokens.colorNeutralForeground1,
     resize: 'vertical',
   },
   specViewer: {
-    width: '100%', minHeight: 280, maxHeight: 480,
+    width: '100%', minHeight: '280px', maxHeight: '480px',
     fontFamily: 'Consolas, "Cascadia Code", monospace', fontSize: tokens.fontSizeBase200, padding: tokens.spacingVerticalM,
     border: `1px solid ${tokens.colorNeutralStroke2}`, borderRadius: tokens.borderRadiusMedium,
     backgroundColor: tokens.colorNeutralBackground3, color: tokens.colorNeutralForeground1,

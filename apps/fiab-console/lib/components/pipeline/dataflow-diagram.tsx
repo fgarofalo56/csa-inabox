@@ -36,7 +36,7 @@ const useStyles = makeStyles({
   },
   paletteCol: {
     flexShrink: 0,
-    width: 240,
+    width: '240px',
     backgroundColor: tokens.colorNeutralBackground1,
     border: `1px solid ${tokens.colorNeutralStroke2}`,
     borderRadius: tokens.borderRadiusMedium,
@@ -48,11 +48,11 @@ const useStyles = makeStyles({
   },
   centerCol: { flex: 1, display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalS, minWidth: 0 },
   tile: {
-    display: 'flex', flexDirection: 'column', gap: 2,
+    display: 'flex', flexDirection: 'column', gap: tokens.spacingHorizontalXXS,
     padding: '6px 8px', borderRadius: tokens.borderRadiusMedium,
     border: `1px solid ${tokens.colorNeutralStroke2}`,
     backgroundColor: tokens.colorNeutralBackground1,
-    cursor: 'grab', fontSize: 12, textAlign: 'left',
+    cursor: 'grab', fontSize: tokens.fontSizeBase200, textAlign: 'left',
     ':hover': { backgroundColor: tokens.colorNeutralBackground1Hover, borderColor: tokens.colorBrandStroke1 },
   },
   tileLabel: { fontWeight: 600, color: tokens.colorNeutralForeground1 },

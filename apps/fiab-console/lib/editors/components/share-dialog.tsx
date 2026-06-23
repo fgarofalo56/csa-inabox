@@ -70,11 +70,11 @@ const useStyles = makeStyles({
   root: { display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalM },
   card: { border: `1px solid ${tokens.colorNeutralStroke2}`, borderRadius: tokens.borderRadiusLarge, padding: tokens.spacingVerticalM, display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalS },
   searchRow: { display: 'grid', gridTemplateColumns: '160px 1fr auto', gap: tokens.spacingHorizontalS, alignItems: 'end' },
-  resultsWrap: { maxHeight: 200, overflow: 'auto', border: `1px solid ${tokens.colorNeutralStroke2}`, borderRadius: tokens.borderRadiusMedium },
+  resultsWrap: { maxHeight: '200px', overflow: 'auto', border: `1px solid ${tokens.colorNeutralStroke2}`, borderRadius: tokens.borderRadiusMedium },
   resultRow: { display: 'flex', alignItems: 'center', gap: tokens.spacingHorizontalS, padding: `${tokens.spacingVerticalXS} ${tokens.spacingHorizontalS}`, cursor: 'pointer', borderBottom: `1px solid ${tokens.colorNeutralStroke3}` },
   selectedRow: { background: tokens.colorBrandBackground2 },
   assignRow: { display: 'grid', gridTemplateColumns: '1fr 220px auto', gap: tokens.spacingHorizontalS, alignItems: 'end' },
-  tableWrap: { overflow: 'auto', maxHeight: 280, border: `1px solid ${tokens.colorNeutralStroke2}`, borderRadius: tokens.borderRadiusMedium },
+  tableWrap: { overflow: 'auto', maxHeight: '280px', border: `1px solid ${tokens.colorNeutralStroke2}`, borderRadius: tokens.borderRadiusMedium },
   mono: { fontFamily: 'Consolas, monospace', fontSize: tokens.fontSizeBase100 },
 });
 

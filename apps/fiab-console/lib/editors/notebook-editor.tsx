@@ -60,16 +60,16 @@ const useStyles = makeStyles({
   // mid-height — which made the row read as crammed/overlapping. Wider gap +
   // row-gap gives the labels breathing room when the row wraps.
   toolbar: { display: 'flex', columnGap: tokens.spacingHorizontalXL, rowGap: tokens.spacingVerticalM, alignItems: 'flex-end', flexWrap: 'wrap', padding: `${tokens.spacingVerticalXS} ${tokens.spacingHorizontalXS} ${tokens.spacingVerticalM}`, borderBottom: `1px solid ${tokens.colorNeutralStroke2}`, marginBottom: tokens.spacingVerticalXS },
-  toolDivider: { alignSelf: 'stretch', minHeight: 36 },
+  toolDivider: { alignSelf: 'stretch', minHeight: '36px' },
   editor: {
-    width: '100%', minHeight: 280,
+    width: '100%', minHeight: '280px',
     fontFamily: 'Consolas, "Cascadia Code", monospace', fontSize: tokens.fontSizeBase300, padding: tokens.spacingVerticalM,
     border: `1px solid ${tokens.colorNeutralStroke2}`, borderRadius: tokens.borderRadiusMedium,
     backgroundColor: tokens.colorNeutralBackground3, color: tokens.colorNeutralForeground1,
     resize: 'vertical',
   },
   treePad: { padding: tokens.spacingVerticalS },
-  tableWrap: { overflow: 'auto', maxHeight: 240, border: `1px solid ${tokens.colorNeutralStroke2}`, borderRadius: tokens.borderRadiusMedium },
+  tableWrap: { overflow: 'auto', maxHeight: '240px', border: `1px solid ${tokens.colorNeutralStroke2}`, borderRadius: tokens.borderRadiusMedium },
   cell: { fontFamily: 'Consolas, monospace', fontSize: tokens.fontSizeBase200, whiteSpace: 'nowrap' },
   // Bottom-left session status badge — overlays the editor surface like the
   // Synapse Studio session indicator (Idle / Running / Error).

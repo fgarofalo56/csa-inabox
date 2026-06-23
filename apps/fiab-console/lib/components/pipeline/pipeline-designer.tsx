@@ -80,18 +80,18 @@ const useStyles = makeStyles({
   paletteHeader: {
     display: 'flex', alignItems: 'center', justifyContent: 'space-between',
     padding: '4px 6px 4px 10px', borderBottom: `1px solid ${tokens.colorNeutralStroke2}`,
-    fontWeight: 600, fontSize: 12,
+    fontWeight: 600, fontSize: tokens.fontSizeBase200,
   },
   paletteRail: {
-    flexShrink: 0, width: 36, display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 8,
-    paddingTop: 4,
+    flexShrink: 0, width: '36px', display: 'flex', flexDirection: 'column', alignItems: 'center', gap: tokens.spacingHorizontalS,
+    paddingTop: tokens.spacingVerticalXS,
     backgroundColor: tokens.colorNeutralBackground1,
     border: `1px solid ${tokens.colorNeutralStroke2}`,
     borderRadius: tokens.borderRadiusMedium,
   },
   railLabel: {
     writingMode: 'vertical-rl', transform: 'rotate(180deg)',
-    color: tokens.colorNeutralForeground3, fontSize: 12, userSelect: 'none', marginTop: 4,
+    color: tokens.colorNeutralForeground3, fontSize: tokens.fontSizeBase200, userSelect: 'none', marginTop: tokens.spacingVerticalXS,
   },
   // The canvas + bottom dock stack — this is the ADF "authoring canvas + the
   // panel at the bottom of the canvas" arrangement.

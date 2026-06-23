@@ -1,21 +1,25 @@
 'use client';
 
 /**
- * ConnectionBuilder — a reusable dialog to create a Key Vault-backed Loom
- * Connection. Mounted by the Connections page, the mirrored-database wizard, and
- * (future) ADF/Synapse linked-service editors. Pick a source type → an auth
+ * ConnectionBuilder — a reusable dialog to create OR edit a Key Vault-backed
+ * Loom Connection. Mounted by the Connections page, the mirrored-database
+ * wizard, and ADF/Synapse linked-service editors. Pick a source type → an auth
  * method → fill the per-method fields; any secret is POSTed and written to Key
  * Vault server-side (never kept in the page). Fluent v9 + Loom tokens.
+ *
+ * Edit mode: pass `editConnection` to prefill all fields and PATCH instead of
+ * POST. The secret field is optional in edit mode — leaving it blank keeps the
+ * existing stored secret unchanged.
  */
 
-import { useState, useCallback } from 'react';
+import { useState, useCallback, useEffect } from 'react';
 import {
   Dialog, DialogSurface, DialogBody, DialogTitle, DialogContent, DialogActions,
-  Field, Input, Dropdown, Option, Button, Badge, MessageBar, MessageBarBody,
+  Field, Input, Dropdown, Option, Button, MessageBar, MessageBarBody,
   Caption1, makeStyles, tokens,
 } from '@fluentui/react-components';
 import {
-  DatabasePlugConnected20Regular, Key20Regular, ShieldKeyhole20Regular,
+  DatabasePlugConnected20Regular, Key20Regular, ShieldKeyhole20Regular, Edit20Regular,
 } from '@fluentui/react-icons';
 import { itemVisual } from '@/lib/components/ui/item-type-visual';
 import { CONN_TILE_SLUG } from '@/lib/azure/connectable-types';
@@ -23,6 +27,7 @@ import { CONN_TILE_SLUG } from '@/lib/azure/connectable-types';
 export interface ConnectionView {
   id: string; name: string; type: string; authMethod: string; hasSecret: boolean;
   host?: string; database?: string; username?: string;
+  spnTenantId?: string; spnClientId?: string; description?: string;
 }
 
 const TYPES: { value: string; label: string }[] = [
@@ -75,13 +80,19 @@ const useStyles = makeStyles({
 });
 
 export function ConnectionBuilder({
-  open, onClose, onCreated, lockType,
+  open, onClose, onCreated, onSaved, lockType, editConnection,
 }: {
   open: boolean;
   onClose: () => void;
-  onCreated: (c: ConnectionView) => void;
+  /** Fires after a successful CREATE with the new ConnectionView. */
+  onCreated?: (c: ConnectionView) => void;
+  /** Fires after a successful PATCH with the updated ConnectionView. */
+  onSaved?: (c: ConnectionView) => void;
   lockType?: string;
+  /** When set, the dialog is in edit mode: fields are prefilled and the submit PATCHes. */
+  editConnection?: ConnectionView;
 }) {
+  const isEdit = !!editConnection;
   const s = useStyles();
   const [name, setName] = useState('');
   const [type, setType] = useState(lockType || 'azure-sql');
@@ -95,28 +106,64 @@ export function ConnectionBuilder({
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<string | null>(null);
 
+  // Prefill from editConnection when the dialog opens in edit mode.
+  useEffect(() => {
+    if (!open) return;
+    if (editConnection) {
+      setName(editConnection.name || '');
+      setType(editConnection.type || 'azure-sql');
+      setAuthMethod(editConnection.authMethod || 'entra-mi');
+      setHost(editConnection.host || '');
+      setDatabase(editConnection.database || '');
+      setUsername(editConnection.username || '');
+      setSpnTenantId(editConnection.spnTenantId || '');
+      setSpnClientId(editConnection.spnClientId || '');
+      setSecret('');
+      setErr(null);
+    } else {
+      setName(''); setType(lockType || 'azure-sql'); setAuthMethod('entra-mi');
+      setHost(''); setDatabase(''); setUsername(''); setSpnTenantId(''); setSpnClientId('');
+      setSecret(''); setErr(null);
+    }
+  }, [open, editConnection, lockType]);
+
   const needsSecret = ['sql-password', 'connection-string', 'account-key', 'service-principal'].includes(authMethod);
   const secretLabel = authMethod === 'connection-string' ? 'Connection string'
     : authMethod === 'account-key' ? 'Account key'
     : authMethod === 'service-principal' ? 'Client secret' : 'Password';
 
-  const reset = () => { setName(''); setType(lockType || 'azure-sql'); setAuthMethod('entra-mi'); setHost(''); setDatabase(''); setUsername(''); setSpnTenantId(''); setSpnClientId(''); setSecret(''); setErr(null); };
+  // In create mode, secret is required. In edit mode it is optional (blank = keep existing).
+  const secretRequired = needsSecret && !isEdit;
 
   const submit = useCallback(async () => {
     setBusy(true); setErr(null);
     try {
-      const r = await fetch('/api/connections', {
-        method: 'POST', headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ name, type, authMethod, host, database, username, spnTenantId, spnClientId, secret: needsSecret ? secret : undefined }),
-      });
-      const j = await r.json();
-      if (!r.ok || !j.ok) { setErr(j?.error || `HTTP ${r.status}`); return; }
-      onCreated(j.connection);
-      reset();
-      onClose();
+      if (isEdit && editConnection) {
+        // PATCH — only send fields that changed; never send an empty secret (would wipe KV).
+        const body: Record<string, unknown> = { name, host, database, username, spnTenantId, spnClientId, authMethod };
+        if (needsSecret && secret) body.secret = secret;
+        const r = await fetch(`/api/connections/${encodeURIComponent(editConnection.id)}`, {
+          method: 'PATCH', headers: { 'content-type': 'application/json' },
+          body: JSON.stringify(body),
+        });
+        const j = await r.json();
+        if (!r.ok || !j.ok) { setErr(j?.error || `HTTP ${r.status}`); return; }
+        onSaved?.(j.connection);
+        onClose();
+      } else {
+        // POST — create new connection.
+        const r = await fetch('/api/connections', {
+          method: 'POST', headers: { 'content-type': 'application/json' },
+          body: JSON.stringify({ name, type, authMethod, host, database, username, spnTenantId, spnClientId, secret: needsSecret ? secret : undefined }),
+        });
+        const j = await r.json();
+        if (!r.ok || !j.ok) { setErr(j?.error || `HTTP ${r.status}`); return; }
+        onCreated?.(j.connection);
+        onClose();
+      }
     } catch (e: any) { setErr(e?.message || String(e)); }
     finally { setBusy(false); }
-  }, [name, type, authMethod, host, database, username, spnTenantId, spnClientId, secret, needsSecret, onCreated, onClose]);
+  }, [isEdit, editConnection, name, type, authMethod, host, database, username, spnTenantId, spnClientId, secret, needsSecret, onCreated, onSaved, onClose]);
 
   const typeLabel = TYPES.find((t) => t.value === type)?.label || type;
   const methodObj = METHODS.find((m) => m.value === authMethod);
@@ -125,14 +172,19 @@ export function ConnectionBuilder({
     <Dialog open={open} onOpenChange={(_, d) => { if (!d.open) onClose(); }}>
       <DialogSurface>
         <DialogBody>
-          <DialogTitle><span className={s.secretRow}><DatabasePlugConnected20Regular /> New connection</span></DialogTitle>
+          <DialogTitle>
+            <span className={s.secretRow}>
+              {isEdit ? <Edit20Regular /> : <DatabasePlugConnected20Regular />}
+              {isEdit ? 'Edit connection' : 'New connection'}
+            </span>
+          </DialogTitle>
           <DialogContent>
             <div className={s.body}>
               <Field label="Name" required>
                 <Input value={name} placeholder="e.g. prod-sales-sql" onChange={(_, d) => setName(d.value)} />
               </Field>
               <Field label="Source type" required>
-                <Dropdown value={typeLabel} selectedOptions={[type]} disabled={!!lockType}
+                <Dropdown value={typeLabel} selectedOptions={[type]} disabled={!!lockType || isEdit}
                   onOptionSelect={(_, d) => setType(d.optionValue || 'azure-sql')}>
                   {TYPES.map((t) => {
                     const TypeIcon = itemVisual(CONN_TILE_SLUG[t.value as keyof typeof CONN_TILE_SLUG] ?? t.value).icon;
@@ -173,9 +225,19 @@ export function ConnectionBuilder({
               )}
 
               {needsSecret && (
-                <Field label={`${secretLabel} (→ Key Vault)`} required
-                  hint="Stored in Key Vault — never saved in plaintext.">
-                  <Input type="password" contentBefore={<Key20Regular />} value={secret} onChange={(_, d) => setSecret(d.value)} />
+                <Field
+                  label={`${secretLabel} (→ Key Vault)`}
+                  required={secretRequired}
+                  hint={isEdit
+                    ? 'Leave blank to keep the stored secret unchanged. Enter a new value to rotate it in Key Vault.'
+                    : 'Stored in Key Vault — never saved in plaintext.'}>
+                  <Input
+                    type="password"
+                    contentBefore={<Key20Regular />}
+                    value={secret}
+                    placeholder={isEdit && editConnection?.hasSecret ? '(secret stored — leave blank to keep)' : undefined}
+                    onChange={(_, d) => setSecret(d.value)}
+                  />
                 </Field>
               )}
               {authMethod === 'entra-mi' && (
@@ -190,8 +252,12 @@ export function ConnectionBuilder({
           </DialogContent>
           <DialogActions>
             <Button appearance="secondary" onClick={onClose}>Cancel</Button>
-            <Button appearance="primary" icon={<Key20Regular />} disabled={busy || !name.trim() || (needsSecret && !secret)} onClick={submit}>
-              {busy ? 'Saving…' : 'Create connection'}
+            <Button
+              appearance="primary"
+              icon={isEdit ? <Edit20Regular /> : <Key20Regular />}
+              disabled={busy || !name.trim() || (secretRequired && !secret)}
+              onClick={submit}>
+              {busy ? 'Saving…' : (isEdit ? 'Save changes' : 'Create connection')}
             </Button>
           </DialogActions>
         </DialogBody>

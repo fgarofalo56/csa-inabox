@@ -45,12 +45,12 @@ export interface JobLite {
 }
 
 const useStyles = makeStyles({
-  body: { display: 'flex', flexDirection: 'column', gap: 8 },
-  toolbar: { display: 'flex', alignItems: 'center', gap: 8 },
+  body: { display: 'flex', flexDirection: 'column', gap: tokens.spacingHorizontalS },
+  toolbar: { display: 'flex', alignItems: 'center', gap: tokens.spacingHorizontalS },
   spacer: { flex: 1 },
   card: {
     border: `1px solid ${tokens.colorNeutralStroke2}`,
-    borderRadius: 4,
+    borderRadius: tokens.borderRadiusMedium,
     backgroundColor: tokens.colorNeutralBackground1,
     cursor: 'pointer',
     transition: 'background-color 0.1s',
@@ -61,16 +61,16 @@ const useStyles = makeStyles({
     backgroundColor: tokens.colorNeutralBackground2,
   },
   cardHead: {
-    display: 'flex', alignItems: 'center', gap: 8,
+    display: 'flex', alignItems: 'center', gap: tokens.spacingHorizontalS,
     padding: '8px 10px',
   },
   cardBody: {
     padding: '8px 10px',
     borderTop: `1px solid ${tokens.colorNeutralStroke2}`,
-    display: 'flex', flexDirection: 'column', gap: 8,
+    display: 'flex', flexDirection: 'column', gap: tokens.spacingHorizontalS,
   },
-  meta: { fontFamily: 'Consolas, monospace', fontSize: 11, color: tokens.colorNeutralForeground3 },
-  failure: { color: tokens.colorPaletteRedForeground1, fontSize: 12 },
+  meta: { fontFamily: 'Consolas, monospace', fontSize: '11px', color: tokens.colorNeutralForeground3 },
+  failure: { color: tokens.colorPaletteRedForeground1, fontSize: tokens.fontSizeBase200 },
 });
 
 interface BadgeColor { color: 'success' | 'danger' | 'warning' | 'informative' | 'brand'; label: string; }

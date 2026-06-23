@@ -50,12 +50,12 @@ const STRATEGIES: { value: Strategy; label: string }[] = [
 ];
 
 const useStyles = makeStyles({
-  intro: { display: 'block', color: tokens.colorNeutralForeground3, marginBottom: tokens.spacingVerticalL, maxWidth: 760 },
+  intro: { display: 'block', color: tokens.colorNeutralForeground3, marginBottom: tokens.spacingVerticalL, maxWidth: '760px' },
   row: { display: 'flex', gap: tokens.spacingHorizontalM, flexWrap: 'wrap', alignItems: 'flex-end' },
-  fields: { display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalM, minWidth: 520, maxHeight: '64vh', overflowY: 'auto' },
+  fields: { display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalM, minWidth: '520px', maxHeight: '64vh', overflowY: 'auto' },
   attrRow: { display: 'flex', gap: tokens.spacingHorizontalS, alignItems: 'flex-end' },
   sub: { display: 'block', marginTop: tokens.spacingVerticalM, marginBottom: tokens.spacingVerticalXS },
-  bar: { flex: 1, minWidth: 60, maxWidth: 140, height: 6, backgroundColor: tokens.colorNeutralBackground3, borderRadius: tokens.borderRadiusCircular, overflow: 'hidden' },
+  bar: { flex: 1, minWidth: '60px', maxWidth: '140px', height: tokens.spacingVerticalSNudge, backgroundColor: tokens.colorNeutralBackground3, borderRadius: tokens.borderRadiusCircular, overflow: 'hidden' },
   barFill: { height: '100%', display: 'block' },
   pctCell: { display: 'flex', alignItems: 'center', gap: tokens.spacingHorizontalS },
 });

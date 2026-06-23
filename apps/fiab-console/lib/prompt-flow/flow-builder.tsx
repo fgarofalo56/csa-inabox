@@ -36,41 +36,41 @@ import {
 } from './flow-dag';
 
 const useStyles = makeStyles({
-  root: { display: 'flex', flexDirection: 'column', gap: 8, flex: 1, minHeight: 0 },
-  toolbar: { display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap', padding: '4px 0' },
-  body: { display: 'grid', gridTemplateColumns: '1fr 360px', gap: 8, flex: 1, minHeight: 420 },
+  root: { display: 'flex', flexDirection: 'column', gap: tokens.spacingHorizontalS, flex: 1, minHeight: 0 },
+  toolbar: { display: 'flex', gap: tokens.spacingHorizontalS, alignItems: 'center', flexWrap: 'wrap', padding: '4px 0' },
+  body: { display: 'grid', gridTemplateColumns: '1fr 360px', gap: tokens.spacingHorizontalS, flex: 1, minHeight: '420px' },
   canvasWrap: {
-    position: 'relative', minHeight: 420, overflow: 'hidden',
+    position: 'relative', minHeight: '420px', overflow: 'hidden',
     backgroundColor: tokens.colorNeutralBackground3,
-    border: `1px solid ${tokens.colorNeutralStroke2}`, borderRadius: 6,
+    border: `1px solid ${tokens.colorNeutralStroke2}`, borderRadius: tokens.borderRadiusLarge,
     backgroundImage: `radial-gradient(${tokens.colorNeutralStroke2} 1px, transparent 1px)`,
     backgroundSize: '20px 20px',
   },
-  inner: { position: 'absolute', top: 0, left: 0, width: 3000, height: 2200, transformOrigin: '0 0' },
+  inner: { position: 'absolute', top: 0, left: 0, width: '3000px', height: '2200px', transformOrigin: '0 0' },
   svg: { position: 'absolute', inset: 0, pointerEvents: 'none', overflow: 'visible' },
   node: {
-    position: 'absolute', width: 180, minHeight: 64, padding: 10, borderRadius: 8,
+    position: 'absolute', width: '180px', minHeight: '64px', padding: tokens.spacingHorizontalMNudge, borderRadius: tokens.borderRadiusXLarge,
     border: `1px solid ${tokens.colorNeutralStroke1}`, backgroundColor: tokens.colorNeutralBackground1,
-    cursor: 'pointer', display: 'flex', flexDirection: 'column', gap: 4, userSelect: 'none',
+    cursor: 'pointer', display: 'flex', flexDirection: 'column', gap: tokens.spacingHorizontalXS, userSelect: 'none',
     boxShadow: tokens.shadow4,
   },
-  nodeSel: { outline: `2px solid ${tokens.colorBrandStroke1}`, outlineOffset: 1 },
-  nodeHead: { display: 'flex', alignItems: 'center', gap: 6 },
+  nodeSel: { outline: `2px solid ${tokens.colorBrandStroke1}`, outlineOffset: '1px' },
+  nodeHead: { display: 'flex', alignItems: 'center', gap: tokens.spacingHorizontalSNudge },
   ioNode: { backgroundColor: tokens.colorNeutralBackground4 },
   panel: {
-    display: 'flex', flexDirection: 'column', gap: 8, minHeight: 0, overflow: 'auto',
-    border: `1px solid ${tokens.colorNeutralStroke2}`, borderRadius: 6, padding: 10,
+    display: 'flex', flexDirection: 'column', gap: tokens.spacingHorizontalS, minHeight: 0, overflow: 'auto',
+    border: `1px solid ${tokens.colorNeutralStroke2}`, borderRadius: tokens.borderRadiusLarge, padding: tokens.spacingHorizontalMNudge,
     backgroundColor: tokens.colorNeutralBackground1,
   },
   formRow: { display: 'grid', gridTemplateColumns: '110px 1fr', gap: '6px 10px', alignItems: 'center' },
-  kvRow: { display: 'grid', gridTemplateColumns: '1fr 1fr auto', gap: 6, alignItems: 'center' },
+  kvRow: { display: 'grid', gridTemplateColumns: '1fr 1fr auto', gap: tokens.spacingHorizontalSNudge, alignItems: 'center' },
   mono: {
-    width: '100%', fontFamily: 'Consolas, monospace', fontSize: 12, padding: 8,
-    border: `1px solid ${tokens.colorNeutralStroke2}`, borderRadius: 4,
+    width: '100%', fontFamily: 'Consolas, monospace', fontSize: tokens.fontSizeBase200, padding: tokens.spacingHorizontalS,
+    border: `1px solid ${tokens.colorNeutralStroke2}`, borderRadius: tokens.borderRadiusMedium,
     backgroundColor: tokens.colorNeutralBackground3, color: tokens.colorNeutralForeground1,
-    minHeight: 80, resize: 'vertical',
+    minHeight: '80px', resize: 'vertical',
   },
-  legend: { display: 'flex', gap: 10, flexWrap: 'wrap', alignItems: 'center' },
+  legend: { display: 'flex', gap: tokens.spacingHorizontalMNudge, flexWrap: 'wrap', alignItems: 'center' },
 });
 
 const NODE_W = 180;

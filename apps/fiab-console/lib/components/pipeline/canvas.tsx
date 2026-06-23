@@ -56,15 +56,15 @@ const useStyles = makeStyles({
   shell: {
     position: 'relative',
     flex: 1,
-    minHeight: 400,
+    minHeight: '400px',
     overflow: 'hidden',
     backgroundColor: tokens.colorNeutralBackground3,
     border: `1px solid ${tokens.colorNeutralStroke2}`,
-    borderRadius: 4,
+    borderRadius: tokens.borderRadiusMedium,
   },
   hint: {
     position: 'absolute',
-    left: 12, bottom: 12,
+    left: tokens.spacingHorizontalM, bottom: tokens.spacingVerticalM,
     maxWidth: '55%',
     zIndex: 5,
     pointerEvents: 'none',
@@ -73,7 +73,7 @@ const useStyles = makeStyles({
     color: tokens.colorNeutralForeground3,
     backgroundColor: tokens.colorNeutralBackground1,
     padding: '2px 6px',
-    borderRadius: 4,
+    borderRadius: tokens.borderRadiusMedium,
     border: `1px solid ${tokens.colorNeutralStroke2}`,
   },
   empty: {

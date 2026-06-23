@@ -45,7 +45,7 @@ import { KeyValueGrid } from '@/lib/components/ui/key-value-grid';
 
 const useStyles = makeStyles({
   tabBar: { padding: `${tokens.spacingVerticalS} ${tokens.spacingHorizontalL} 0`, borderBottom: `1px solid ${tokens.colorNeutralStroke2}` },
-  tabBody: { padding: tokens.spacingVerticalXL, display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalM, maxWidth: 900 },
+  tabBody: { padding: tokens.spacingVerticalXL, display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalM, maxWidth: '900px' },
   row: { display: 'flex', gap: tokens.spacingHorizontalM },
   field: { flex: 1, display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalXS },
   fileRow: { display: 'flex', gap: tokens.spacingHorizontalS, alignItems: 'flex-end' },
@@ -60,7 +60,7 @@ const useStyles = makeStyles({
   resultBox: { marginTop: tokens.spacingVerticalS, borderTop: `1px solid ${tokens.colorNeutralStroke2}`, paddingTop: tokens.spacingVerticalM },
   mono: { fontFamily: 'Consolas, "Cascadia Code", monospace', fontSize: tokens.fontSizeBase200 },
   logPre: {
-    margin: 0, maxHeight: 320, overflow: 'auto', padding: tokens.spacingVerticalS,
+    margin: 0, maxHeight: '320px', overflow: 'auto', padding: tokens.spacingVerticalS,
     fontFamily: 'Consolas, "Cascadia Code", monospace', fontSize: tokens.fontSizeBase200, lineHeight: '1.4',
     backgroundColor: tokens.colorNeutralBackground3, color: tokens.colorNeutralForeground1,
     borderRadius: tokens.borderRadiusMedium, whiteSpace: 'pre-wrap', wordBreak: 'break-all',

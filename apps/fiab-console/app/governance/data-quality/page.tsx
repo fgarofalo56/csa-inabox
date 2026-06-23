@@ -38,13 +38,13 @@ interface RuleResult { ruleId: string; name: string; check: CheckType; scope: st
 interface DqRun { id: string; backend: string; target: string; score: number | null; ruleCount: number; passingRules: number; breakdown: RuleResult[]; ranAt: string; ranBy: string; tables?: string[] }
 
 const useStyles = makeStyles({
-  intro: { display: 'block', color: tokens.colorNeutralForeground3, marginBottom: 16, maxWidth: 760 },
-  toolbar: { display: 'flex', alignItems: 'center', gap: 12, marginBottom: 16, flexWrap: 'wrap' },
+  intro: { display: 'block', color: tokens.colorNeutralForeground3, marginBottom: tokens.spacingVerticalL, maxWidth: '760px' },
+  toolbar: { display: 'flex', alignItems: 'center', gap: tokens.spacingHorizontalM, marginBottom: tokens.spacingVerticalL, flexWrap: 'wrap' },
   grow: { flex: 1 },
-  fields: { display: 'flex', flexDirection: 'column', gap: 12, minWidth: 420 },
-  row: { display: 'flex', gap: 12, flexWrap: 'wrap' },
-  pctCell: { display: 'flex', alignItems: 'center', gap: 8 },
-  bar: { flex: 1, minWidth: 60, maxWidth: 140, height: 6, backgroundColor: tokens.colorNeutralBackground3, borderRadius: tokens.borderRadiusCircular, overflow: 'hidden' },
+  fields: { display: 'flex', flexDirection: 'column', gap: tokens.spacingHorizontalM, minWidth: '420px' },
+  row: { display: 'flex', gap: tokens.spacingHorizontalM, flexWrap: 'wrap' },
+  pctCell: { display: 'flex', alignItems: 'center', gap: tokens.spacingHorizontalS },
+  bar: { flex: 1, minWidth: '60px', maxWidth: '140px', height: tokens.spacingVerticalSNudge, backgroundColor: tokens.colorNeutralBackground3, borderRadius: tokens.borderRadiusCircular, overflow: 'hidden' },
   barFill: { height: '100%', display: 'block' },
   scoreBig: { fontSize: tokens.fontSizeHero700, fontWeight: tokens.fontWeightSemibold },
 });

@@ -30,7 +30,7 @@ const useStyles = makeStyles({
   cardActive: { padding: tokens.spacingHorizontalM, border: `2px solid ${tokens.colorBrandStroke1}`, borderRadius: tokens.borderRadiusMedium, background: tokens.colorBrandBackground2 },
   treePad: { padding: tokens.spacingHorizontalM, display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalS },
   field: { display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalXS },
-  tableWrap: { overflow: 'auto', maxHeight: 360, border: `1px solid ${tokens.colorNeutralStroke2}`, borderRadius: tokens.borderRadiusSmall },
+  tableWrap: { overflow: 'auto', maxHeight: '360px', border: `1px solid ${tokens.colorNeutralStroke2}`, borderRadius: tokens.borderRadiusSmall },
 });
 
 interface Template {

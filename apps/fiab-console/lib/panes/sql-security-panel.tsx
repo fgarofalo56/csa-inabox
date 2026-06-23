@@ -39,17 +39,17 @@ import { MonacoTextarea } from '@/lib/components/editor/monaco-textarea';
 import { OBJECT_PERMISSIONS, type ObjectPermission } from '@/lib/sql/tsql-builders';
 
 const useStyles = makeStyles({
-  root: { display: 'flex', flexDirection: 'column', gap: 12, padding: 4, minHeight: 0 },
-  toolbar: { display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' },
+  root: { display: 'flex', flexDirection: 'column', gap: tokens.spacingHorizontalM, padding: tokens.spacingHorizontalXS, minHeight: 0 },
+  toolbar: { display: 'flex', gap: tokens.spacingHorizontalS, alignItems: 'center', flexWrap: 'wrap' },
   card: {
-    border: `1px solid ${tokens.colorNeutralStroke2}`, borderRadius: 6, padding: 16,
-    display: 'flex', flexDirection: 'column', gap: 12, backgroundColor: tokens.colorNeutralBackground1,
+    border: `1px solid ${tokens.colorNeutralStroke2}`, borderRadius: tokens.borderRadiusLarge, padding: tokens.spacingHorizontalL,
+    display: 'flex', flexDirection: 'column', gap: tokens.spacingHorizontalM, backgroundColor: tokens.colorNeutralBackground1,
   },
-  grid2: { display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12 },
-  permRow: { display: 'flex', gap: 12, flexWrap: 'wrap' },
-  actions: { display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' },
-  tableWrap: { overflow: 'auto', maxHeight: 320, border: `1px solid ${tokens.colorNeutralStroke2}`, borderRadius: 4 },
-  mono: { fontFamily: 'Consolas, monospace', fontSize: 12 },
+  grid2: { display: 'grid', gridTemplateColumns: '1fr 1fr', gap: tokens.spacingHorizontalM },
+  permRow: { display: 'flex', gap: tokens.spacingHorizontalM, flexWrap: 'wrap' },
+  actions: { display: 'flex', gap: tokens.spacingHorizontalS, alignItems: 'center', flexWrap: 'wrap' },
+  tableWrap: { overflow: 'auto', maxHeight: '320px', border: `1px solid ${tokens.colorNeutralStroke2}`, borderRadius: tokens.borderRadiusMedium },
+  mono: { fontFamily: 'Consolas, monospace', fontSize: tokens.fontSizeBase200 },
 });
 
 // ------------------------------------------------------------------

@@ -28,19 +28,19 @@ export interface PinnedItem {
 const useStyles = makeStyles({
   root: {
     display: 'flex', flexDirection: 'column',
-    paddingTop: 4, paddingBottom: 4,
+    paddingTop: tokens.spacingVerticalXS, paddingBottom: tokens.spacingVerticalXS,
     borderTop: `1px solid ${tokens.colorNeutralStroke2}`,
-    marginTop: 4,
+    marginTop: tokens.spacingVerticalXS,
   },
   header: {
-    display: 'flex', alignItems: 'center', gap: 6,
+    display: 'flex', alignItems: 'center', gap: tokens.spacingHorizontalSNudge,
     padding: '8px 16px 4px',
-    fontSize: 11, textTransform: 'uppercase', letterSpacing: '0.06em',
+    fontSize: '11px', textTransform: 'uppercase', letterSpacing: '0.06em',
     color: tokens.colorNeutralForeground3, fontWeight: 600,
   },
   item: {
-    display: 'flex', alignItems: 'center', gap: 8,
-    padding: '6px 16px', fontSize: 13,
+    display: 'flex', alignItems: 'center', gap: tokens.spacingHorizontalS,
+    padding: '6px 16px', fontSize: '13px',
     color: tokens.colorNeutralForeground1, textDecoration: 'none',
     cursor: 'pointer',
     ':hover': { backgroundColor: tokens.colorNeutralBackground2Hover },
@@ -51,10 +51,10 @@ const useStyles = makeStyles({
     fontWeight: 600,
   },
   label: { flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' },
-  unpin: { minWidth: 20, height: 20, padding: 0, opacity: 0.6, ':hover': { opacity: 1 } },
+  unpin: { minWidth: tokens.spacingHorizontalXL, height: tokens.spacingVerticalXL, padding: 0, opacity: 0.6, ':hover': { opacity: 1 } },
   empty: {
     padding: '0 16px 8px',
-    fontSize: 11, color: tokens.colorNeutralForeground3,
+    fontSize: '11px', color: tokens.colorNeutralForeground3,
     fontStyle: 'italic',
   },
 });
