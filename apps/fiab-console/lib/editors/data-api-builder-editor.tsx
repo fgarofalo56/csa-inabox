@@ -54,9 +54,9 @@ import type {
 } from '@/app/api/dab/_lib/dab-config-model';
 
 const useStyles = makeStyles({
-  rail: { display: 'flex', flexDirection: 'column', gap: '2px', padding: '8px' },
+  rail: { display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalXXS, padding: tokens.spacingVerticalS },
   railItem: {
-    display: 'flex', alignItems: 'center', gap: '8px', padding: '8px 10px', borderRadius: '6px',
+    display: 'flex', alignItems: 'center', gap: tokens.spacingHorizontalS, padding: `${tokens.spacingVerticalS} ${tokens.spacingHorizontalM}`, borderRadius: tokens.borderRadiusMedium,
     cursor: 'pointer', color: tokens.colorNeutralForeground2, fontSize: tokens.fontSizeBase300,
     ':hover': { backgroundColor: tokens.colorNeutralBackground2Hover },
   },
@@ -65,28 +65,28 @@ const useStyles = makeStyles({
     fontWeight: tokens.fontWeightSemibold,
   },
   railNum: {
-    minWidth: '20px', height: '20px', borderRadius: '10px', display: 'inline-flex', alignItems: 'center',
-    justifyContent: 'center', fontSize: '11px', backgroundColor: tokens.colorNeutralBackground4,
+    minWidth: '20px', height: '20px', borderRadius: tokens.borderRadiusCircular, display: 'inline-flex', alignItems: 'center',
+    justifyContent: 'center', fontSize: tokens.fontSizeBase100, backgroundColor: tokens.colorNeutralBackground4,
   },
-  body: { padding: '16px', display: 'flex', flexDirection: 'column', gap: '16px', maxWidth: '920px' },
-  field: { display: 'flex', flexDirection: 'column', gap: '4px' },
-  row: { display: 'flex', gap: '12px', flexWrap: 'wrap', alignItems: 'flex-end' },
+  body: { padding: tokens.spacingHorizontalL, display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalL, maxWidth: '920px' },
+  field: { display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalXS },
+  row: { display: 'flex', gap: tokens.spacingHorizontalM, flexWrap: 'wrap', alignItems: 'flex-end' },
   card: {
-    border: `1px solid ${tokens.colorNeutralStroke2}`, borderRadius: '8px', padding: '12px',
-    display: 'flex', flexDirection: 'column', gap: '10px',
+    border: `1px solid ${tokens.colorNeutralStroke2}`, borderRadius: tokens.borderRadiusLarge, padding: tokens.spacingHorizontalM,
+    display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalS,
   },
-  entityList: { display: 'flex', flexDirection: 'column', gap: '4px', padding: '8px' },
+  entityList: { display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalXS, padding: tokens.spacingVerticalS },
   entityRow: {
-    display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '8px',
-    padding: '6px 10px', borderRadius: '6px', cursor: 'pointer',
+    display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: tokens.spacingHorizontalS,
+    padding: `${tokens.spacingVerticalS} ${tokens.spacingHorizontalM}`, borderRadius: tokens.borderRadiusMedium, cursor: 'pointer',
     ':hover': { backgroundColor: tokens.colorNeutralBackground2Hover },
   },
   entityRowActive: { backgroundColor: tokens.colorBrandBackground2, fontWeight: tokens.fontWeightSemibold },
-  tabBar: { display: 'flex', gap: '4px', borderBottom: `1px solid ${tokens.colorNeutralStroke2}`, marginBottom: '8px', flexWrap: 'wrap' },
+  tabBar: { display: 'flex', gap: tokens.spacingHorizontalXS, borderBottom: `1px solid ${tokens.colorNeutralStroke2}`, marginBottom: tokens.spacingVerticalS, flexWrap: 'wrap' },
   tabBtn: { borderBottomWidth: '2px', borderBottomStyle: 'solid', borderBottomColor: 'transparent', borderRadius: 0 },
   tabBtnActive: { borderBottomColor: tokens.colorBrandStroke1, color: tokens.colorBrandForeground1 },
-  mono: { fontFamily: 'Consolas, monospace', fontSize: '12px', whiteSpace: 'pre', overflow: 'auto', maxHeight: '480px', backgroundColor: tokens.colorNeutralBackground2, padding: '12px', borderRadius: '6px' },
-  pillRow: { display: 'flex', gap: '6px', flexWrap: 'wrap' },
+  mono: { fontFamily: 'Consolas, monospace', fontSize: tokens.fontSizeBase200, whiteSpace: 'pre', overflow: 'auto', maxHeight: '480px', backgroundColor: tokens.colorNeutralBackground2, padding: tokens.spacingHorizontalM, borderRadius: tokens.borderRadiusMedium },
+  pillRow: { display: 'flex', gap: tokens.spacingHorizontalS, flexWrap: 'wrap' },
 });
 
 type Stage = 'source' | 'entities' | 'runtime' | 'preview' | 'config';
@@ -763,7 +763,7 @@ function EntitiesStage({ cfg, mutate, activeEntity, setActiveEntity }: {
           <MessageBarTitle>Schema not introspected</MessageBarTitle>
           {schemaGate.error}
           {schemaGate.remediation && (
-            <><br /><Caption1 style={{ display: 'block', marginTop: 4, fontFamily: 'monospace', whiteSpace: 'pre-wrap' }}>{schemaGate.remediation}</Caption1></>
+            <><br /><Caption1 style={{ display: 'block', marginTop: tokens.spacingVerticalXS, fontFamily: 'monospace', whiteSpace: 'pre-wrap' }}>{schemaGate.remediation}</Caption1></>
           )}
           {schemaGate.missing && !schemaGate.remediation && (
             <><br /><Caption1>Set <code>{schemaGate.missing}</code>.</Caption1></>
@@ -783,7 +783,7 @@ function EntitiesStage({ cfg, mutate, activeEntity, setActiveEntity }: {
       <Divider />
 
       {/* Defined entities + editor */}
-      <div style={{ display: 'grid', gridTemplateColumns: 'minmax(180px, 240px) 1fr', gap: 12 }}>
+      <div style={{ display: 'grid', gridTemplateColumns: 'minmax(180px, 240px) 1fr', gap: tokens.spacingHorizontalM }}>
         <div className={s.entityList}>
           {cfg.entities.length === 0 && <Caption1>No entities yet.</Caption1>}
           {cfg.entities.map((e) => (

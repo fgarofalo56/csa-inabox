@@ -62,24 +62,24 @@ import { useJobsStore } from '@/lib/state/jobs-store';
 import { DeltaPreviewGrid, type ColStat } from './components/delta-preview-grid';
 
 const useStyles = makeStyles({
-  treePad: { padding: 8 },
-  pad: { padding: 16, display: 'flex', flexDirection: 'column', gap: 12, minHeight: 0, flex: 1 },
-  tabs: { borderBottom: `1px solid ${tokens.colorNeutralStroke2}`, padding: '8px 8px 0' },
-  toolbar: { display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' },
-  tableWrap: { overflow: 'auto', maxHeight: 480, border: `1px solid ${tokens.colorNeutralStroke2}`, borderRadius: 4 },
-  cell: { fontFamily: 'Consolas, monospace', fontSize: 12, whiteSpace: 'nowrap' },
+  treePad: { padding: tokens.spacingVerticalS },
+  pad: { padding: tokens.spacingVerticalL, display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalM, minHeight: 0, flex: 1 },
+  tabs: { borderBottom: `1px solid ${tokens.colorNeutralStroke2}`, padding: `${tokens.spacingVerticalS} ${tokens.spacingHorizontalS} 0` },
+  toolbar: { display: 'flex', gap: tokens.spacingHorizontalS, alignItems: 'center', flexWrap: 'wrap' },
+  tableWrap: { overflow: 'auto', maxHeight: 480, border: `1px solid ${tokens.colorNeutralStroke2}`, borderRadius: tokens.borderRadiusMedium },
+  cell: { fontFamily: 'Consolas, monospace', fontSize: tokens.fontSizeBase200, whiteSpace: 'nowrap' },
   rowHover: { ':hover': { backgroundColor: tokens.colorNeutralBackground2Hover, cursor: 'pointer' } },
   rowSelected: { backgroundColor: tokens.colorNeutralBackground1Selected },
   editor: {
     width: '100%', minHeight: 160,
-    fontFamily: 'Consolas, "Cascadia Code", monospace', fontSize: 13, padding: 12,
-    border: `1px solid ${tokens.colorNeutralStroke2}`, borderRadius: 4,
+    fontFamily: 'Consolas, "Cascadia Code", monospace', fontSize: tokens.fontSizeBase300, padding: tokens.spacingVerticalM,
+    border: `1px solid ${tokens.colorNeutralStroke2}`, borderRadius: tokens.borderRadiusMedium,
     backgroundColor: tokens.colorNeutralBackground3, color: tokens.colorNeutralForeground1,
     resize: 'vertical',
   },
   preview: { width: '100%', minHeight: 240,
-    fontFamily: 'Consolas, "Cascadia Code", monospace', fontSize: 12, padding: 12,
-    border: `1px solid ${tokens.colorNeutralStroke2}`, borderRadius: 4,
+    fontFamily: 'Consolas, "Cascadia Code", monospace', fontSize: tokens.fontSizeBase200, padding: tokens.spacingVerticalM,
+    border: `1px solid ${tokens.colorNeutralStroke2}`, borderRadius: tokens.borderRadiusMedium,
     backgroundColor: tokens.colorNeutralBackground3, color: tokens.colorNeutralForeground1 },
 });
 
@@ -1295,7 +1295,7 @@ export function LakehouseEditor({ item, id }: Props) {
             contentAfter={principalBusy ? <Spinner size="extra-tiny" /> : undefined}
           />
           {principalResults.length > 0 && (
-            <div style={{ position: 'absolute', zIndex: 10, top: '100%', left: 0, right: 0, maxHeight: 200, overflow: 'auto', background: tokens.colorNeutralBackground1, border: `1px solid ${tokens.colorNeutralStroke1}`, borderRadius: 4, boxShadow: tokens.shadow8 }}>
+            <div style={{ position: 'absolute', zIndex: 10, top: '100%', left: 0, right: 0, maxHeight: 200, overflow: 'auto', background: tokens.colorNeutralBackground1, border: `1px solid ${tokens.colorNeutralStroke1}`, borderRadius: tokens.borderRadiusMedium, boxShadow: tokens.shadow8 }}>
               {principalResults.map((p) => (
                 <div
                   key={p.id}
@@ -1303,7 +1303,7 @@ export function LakehouseEditor({ item, id }: Props) {
                   tabIndex={0}
                   onClick={() => { setSelectedPrincipal(p); setPrincipalResults([]); }}
                   onKeyDown={(e) => { if (e.key === 'Enter') { setSelectedPrincipal(p); setPrincipalResults([]); } }}
-                  style={{ padding: '6px 10px', cursor: 'pointer' }}
+                  style={{ padding: `${tokens.spacingVerticalS} ${tokens.spacingHorizontalM}`, cursor: 'pointer' }}
                   className={s.rowHover}
                 >
                   <Body1>{p.displayName}</Body1>
@@ -2330,7 +2330,7 @@ export function LakehouseEditor({ item, id }: Props) {
       leftPanel={
         <div className={s.treePad}>
           {/* Primary lakehouse — always bold to distinguish it from references. */}
-          <Caption1 style={{ display: 'block', padding: '2px 0 6px', fontWeight: tokens.fontWeightBold }}>
+          <Caption1 style={{ display: 'block', padding: `${tokens.spacingVerticalXXS} 0 ${tokens.spacingVerticalS}`, fontWeight: tokens.fontWeightBold }}>
             <Database20Regular style={{ verticalAlign: 'middle', marginRight: 4 }} />
             {itemQ.data?.displayName ?? 'Primary lakehouse'}
           </Caption1>
@@ -2491,7 +2491,7 @@ export function LakehouseEditor({ item, id }: Props) {
           )}
 
           {/* ── Reference lakehouses (F8) ─────────────────────────────── */}
-          <div style={{ display: 'flex', alignItems: 'center', gap: 4, marginTop: 14, padding: '4px 0' }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: tokens.spacingHorizontalXS, marginTop: 14, padding: `${tokens.spacingVerticalXS} 0` }}>
             <Caption1 style={{ flex: 1, fontWeight: tokens.fontWeightSemibold }}>
               <LinkMultiple20Regular style={{ verticalAlign: 'middle', marginRight: 4 }} />
               References
@@ -2506,7 +2506,7 @@ export function LakehouseEditor({ item, id }: Props) {
             <MessageBar intent="error"><MessageBarBody>{refsError}</MessageBarBody></MessageBar>
           )}
           {references !== null && references.length === 0 && !refsLoading && (
-            <Caption1 style={{ display: 'block', padding: '0 4px', color: tokens.colorNeutralForeground3 }}>
+            <Caption1 style={{ display: 'block', padding: `0 ${tokens.spacingHorizontalXS}`, color: tokens.colorNeutralForeground3 }}>
               No references. Click + to browse another lakehouse in this workspace side-by-side.
             </Caption1>
           )}
@@ -2555,12 +2555,12 @@ export function LakehouseEditor({ item, id }: Props) {
               Write actions are rendered DISABLED with an explanatory tooltip —
               references are read-only by construction (no write BFF route). */}
           {refSelection && (
-            <div style={{ borderBottom: `1px solid ${tokens.colorNeutralStroke2}`, padding: 12, display: 'flex', flexDirection: 'column', gap: 8, background: tokens.colorNeutralBackground2 }}>
+            <div style={{ borderBottom: `1px solid ${tokens.colorNeutralStroke2}`, padding: tokens.spacingVerticalM, display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalS, background: tokens.colorNeutralBackground2 }}>
               <div className={s.toolbar}>
                 <Badge appearance="filled" color="informative" icon={<LinkMultiple20Regular />}>Reference · read-only</Badge>
                 <Subtitle2>{refSelection.displayName}</Subtitle2>
                 <Caption1>· {refSelection.container}/{leafName(refSelection.entry.name)}</Caption1>
-                <div style={{ display: 'flex', gap: 6, marginLeft: 'auto' }}>
+                <div style={{ display: 'flex', gap: tokens.spacingHorizontalS, marginLeft: 'auto' }}>
                   <Tooltip relationship="label" content="Write actions are disabled on reference lakehouses. Switch to the primary lakehouse to upload files.">
                     <span><Button appearance="primary" icon={<ArrowUpload20Regular />} disabled>Upload</Button></span>
                   </Tooltip>
@@ -2759,7 +2759,7 @@ export function LakehouseEditor({ item, id }: Props) {
                     } : undefined}
                   >
                     {isDragOver && (
-                      <div style={{ padding: 8, textAlign: 'center', color: tokens.colorBrandForeground1, fontWeight: 600 }}>
+                      <div style={{ padding: tokens.spacingVerticalS, textAlign: 'center', color: tokens.colorBrandForeground1, fontWeight: 600 }}>
                         Drop files or a folder to upload into /{currentPrefix || ''} (folder tree preserved)
                       </div>
                     )}
@@ -2777,8 +2777,8 @@ export function LakehouseEditor({ item, id }: Props) {
                         {currentListing.length === 0 && (
                           <TableRow>
                             <TableCell colSpan={5}>
-                              <div style={{ padding: 20, textAlign: 'center' }}>
-                                <Body1 style={{ display: 'block', marginBottom: 8 }}>
+                              <div style={{ padding: tokens.spacingVerticalXXL, textAlign: 'center' }}>
+                                <Body1 style={{ display: 'block', marginBottom: tokens.spacingVerticalS }}>
                                   No files in <strong>/{currentPrefix || ''}</strong> yet.
                                 </Body1>
                                 <Caption1 style={{ display: 'block' }}>
@@ -2936,7 +2936,7 @@ export function LakehouseEditor({ item, id }: Props) {
                                   {bundleDeltaTables.map((t) => (
                                     <TableRow key={t.name}>
                                       <TableCell><strong>{t.name}</strong></TableCell>
-                                      <TableCell><code style={{ fontSize: 11, whiteSpace: 'pre-wrap' }}>{t.ddl}</code></TableCell>
+                                      <TableCell><code style={{ fontSize: tokens.fontSizeBase100, whiteSpace: 'pre-wrap' }}>{t.ddl}</code></TableCell>
                                       <TableCell className={s.cell}>{t.sampleRows?.length ?? 0}</TableCell>
                                       <TableCell>
                                         <Menu>
@@ -2994,8 +2994,8 @@ export function LakehouseEditor({ item, id }: Props) {
                           const childTables = childListing && childListing !== 'loading' && !('error' in (childListing as any))
                             ? (childListing as PathEntry[]).filter((e) => e.isDirectory) : [];
                           return (
-                            <div key={schemaDir.name} style={{ border: `1px solid ${tokens.colorNeutralStroke2}`, borderRadius: 6, padding: 10 }}>
-                              <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 6 }}>
+                            <div key={schemaDir.name} style={{ border: `1px solid ${tokens.colorNeutralStroke2}`, borderRadius: tokens.borderRadiusLarge, padding: tokens.spacingVerticalM }}>
+                              <div style={{ display: 'flex', alignItems: 'center', gap: tokens.spacingHorizontalS, marginBottom: tokens.spacingVerticalS }}>
                                 <Database20Regular />
                                 <Subtitle2>{schemaName}</Subtitle2>
                                 {schemaName === 'dbo' && <Badge appearance="tint" color="informative" size="small">default</Badge>}
@@ -3026,9 +3026,9 @@ export function LakehouseEditor({ item, id }: Props) {
                                           return (
                                             <TableRow key={t.name}>
                                               <TableCell><strong>{tableName}</strong></TableCell>
-                                              <TableCell><code style={{ fontSize: 11 }}>{shortcutLakehouseId}.{schemaName}.{tableName}</code></TableCell>
+                                              <TableCell><code style={{ fontSize: tokens.fontSizeBase100 }}>{shortcutLakehouseId}.{schemaName}.{tableName}</code></TableCell>
                                               <TableCell>
-                                                <span style={{ display: 'inline-flex', gap: 6 }}>
+                                                <span style={{ display: 'inline-flex', gap: tokens.spacingHorizontalS }}>
                                                   <Button size="small" appearance="primary"
                                                     onClick={() => {
                                                       setSqlText(`-- 4-part name: ${shortcutLakehouseId}.${schemaName}.${tableName}\n-- Serverless view (if registered): SELECT TOP 100 * FROM loom_lakehouse.${schemaName}.${tableName};\nSELECT TOP 100 *\nFROM OPENROWSET(BULK 'https://__account__.dfs.core.windows.net/${activeContainer}/${t.name}', FORMAT='DELTA') AS r;`);
@@ -3074,10 +3074,10 @@ export function LakehouseEditor({ item, id }: Props) {
                     : st === 'broken' ? <ErrorCircle20Filled style={{ color: tokens.colorPaletteRedForeground1 }} />
                     : <Clock20Regular style={{ color: tokens.colorPaletteYellowForeground1 }} />;
                   return (
-                    <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalL }}>
                       {Object.entries(bySchema).map(([schema, schemaTables]) => (
                         <div key={schema}>
-                          <Subtitle2 style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 6 }}>
+                          <Subtitle2 style={{ display: 'flex', alignItems: 'center', gap: tokens.spacingHorizontalS, marginBottom: tokens.spacingVerticalS }}>
                             <Database20Regular /> {schema} <Caption1>({schemaTables.length})</Caption1>
                           </Subtitle2>
                           <div className={s.tableWrap}>
@@ -3142,7 +3142,7 @@ export function LakehouseEditor({ item, id }: Props) {
                   <Badge appearance="filled" color="brand">{activeContainer || 'no container'}</Badge>
                   {historyTable ? (
                     <>
-                      <Caption1>Delta version history — <strong>{leafName(historyTable)}</strong> <code style={{ fontSize: 11 }}>/{historyTable}</code></Caption1>
+                      <Caption1>Delta version history — <strong>{leafName(historyTable)}</strong> <code style={{ fontSize: tokens.fontSizeBase100 }}>/{historyTable}</code></Caption1>
                       <Button appearance="outline" icon={<ArrowSync20Regular />}
                         disabled={historyLoading || !activeContainer}
                         onClick={() => historyTable && loadHistory(historyTable)}>
@@ -3318,7 +3318,7 @@ export function LakehouseEditor({ item, id }: Props) {
                         {schemas.map((sc) => (
                           <TableRow key={sc.name}>
                             <TableCell>
-                              <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}>
+                              <span style={{ display: 'inline-flex', alignItems: 'center', gap: tokens.spacingHorizontalS }}>
                                 <Database20Regular />
                                 <strong>{sc.name}</strong>
                                 {sc.isDefault && <Badge appearance="tint" color="informative" size="small">default</Badge>}
@@ -3356,7 +3356,7 @@ export function LakehouseEditor({ item, id }: Props) {
                     testShortcut(selectedShortcut);
                   }
                 }}
-                style={{ display: 'flex', flexDirection: 'column', gap: 12, flex: 1, minHeight: 0 }}
+                style={{ display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalM, flex: 1, minHeight: 0 }}
               >
                 <div className={s.toolbar}>
                   <Badge appearance="filled" color="brand">{shortcutLakehouseId || 'no lakehouse'}</Badge>
@@ -3389,7 +3389,7 @@ export function LakehouseEditor({ item, id }: Props) {
                     </MessageBar>
                     {bundleShortcuts.length > 0 && (
                       <>
-                        <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginTop: 12 }}>
+                        <div style={{ display: 'flex', alignItems: 'center', gap: tokens.spacingHorizontalS, marginTop: tokens.spacingVerticalM }}>
                           <Caption1 style={{ display: 'block' }}>
                             <strong>Planned shortcuts from the installed app bundle</strong> — register each into the live backend.
                           </Caption1>
@@ -3417,7 +3417,7 @@ export function LakehouseEditor({ item, id }: Props) {
                                       <CloudLink20Regular style={{ verticalAlign: 'middle', marginRight: 4 }} />
                                       <strong>{sc.name}</strong>
                                     </TableCell>
-                                    <TableCell><code style={{ fontSize: 11 }}>{sc.target}</code></TableCell>
+                                    <TableCell><code style={{ fontSize: tokens.fontSizeBase100 }}>{sc.target}</code></TableCell>
                                     <TableCell>{sc.description || '—'}</TableCell>
                                     <TableCell>
                                       {live ? (
@@ -3465,7 +3465,7 @@ export function LakehouseEditor({ item, id }: Props) {
                               <CloudLink20Regular style={{ verticalAlign: 'middle', marginRight: 4 }} />
                               <strong>{sc.name}</strong>
                             </TableCell>
-                            <TableCell><code style={{ fontSize: 11 }}>{sc.fullPath}</code></TableCell>
+                            <TableCell><code style={{ fontSize: tokens.fontSizeBase100 }}>{sc.fullPath}</code></TableCell>
                             <TableCell>
                               <Badge appearance="outline" color={sc.targetType === 'adls' || sc.targetType === 'internal' ? 'brand' : 'warning'}>
                                 {sc.targetType}
@@ -3478,7 +3478,7 @@ export function LakehouseEditor({ item, id }: Props) {
                               {sc.status === 'error' && <Badge appearance="tint" color="danger" icon={<ErrorCircle20Filled aria-hidden="true" />} title={sc.statusDetail}>Broken</Badge>}
                             </TableCell>
                             <TableCell>
-                              <div style={{ display: 'flex', gap: 4, alignItems: 'center' }}>
+                              <div style={{ display: 'flex', gap: tokens.spacingHorizontalXS, alignItems: 'center' }}>
                                 {sc.status === 'error' && (
                                   <Button size="small" appearance="outline" icon={<ArrowSync20Regular />}
                                     onClick={() => testShortcut(sc)} disabled={shortcutsBusy}
@@ -3690,17 +3690,17 @@ export function LakehouseEditor({ item, id }: Props) {
                   {scStep === 1 && (
                     <>
                       <Caption1>Choose the source to virtualize into <strong>{shortcutLakehouseId}</strong>. ADLS Gen2 and internal Loom lakehouse work on the Console UAMI; external clouds (S3, GCS, Dataverse) store credentials in Key Vault.</Caption1>
-                      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 8, marginTop: 12 }}>
+                      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: tokens.spacingHorizontalS, marginTop: tokens.spacingVerticalM }}>
                         {SHORTCUT_SOURCE_CARDS.map((src) => (
                           <Button
                             key={src.type}
                             appearance={scType === src.type ? 'primary' : 'outline'}
                             onClick={() => setScType(src.type)}
-                            style={{ justifyContent: 'flex-start', height: 'auto', padding: '10px 12px', textAlign: 'left' }}
+                            style={{ justifyContent: 'flex-start', height: 'auto', padding: `${tokens.spacingVerticalM} ${tokens.spacingHorizontalM}`, textAlign: 'left' }}
                           >
-                            <span style={{ display: 'flex', alignItems: 'center', gap: 10, width: '100%' }}>
+                            <span style={{ display: 'flex', alignItems: 'center', gap: tokens.spacingHorizontalSNudge, width: '100%' }}>
                               <ShortcutSourceLogo type={src.type} size={28} />
-                              <span style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-start', gap: 2, minWidth: 0 }}>
+                              <span style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-start', gap: tokens.spacingVerticalXXS, minWidth: 0 }}>
                                 <span style={{ fontWeight: 600 }}>{src.label}</span>
                                 <Caption1 style={{ color: tokens.colorNeutralForeground3, whiteSpace: 'normal' }}>{src.blurb}</Caption1>
                                 <Badge appearance="tint" color={src.uamiReady ? 'success' : 'warning'} size="small">
@@ -3715,7 +3715,7 @@ export function LakehouseEditor({ item, id }: Props) {
                   )}
 
                   {scStep === 2 && (
-                    <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalMNudge }}>
                       {scType === 'internal' && (
                         <>
                           <Field label="Source container (Loom lakehouse)" required>
@@ -3759,7 +3759,7 @@ export function LakehouseEditor({ item, id }: Props) {
                                   })}
                                 </Dropdown>
                               </Field>
-                              <div style={{ display: 'flex', gap: 8 }}>
+                              <div style={{ display: 'flex', gap: tokens.spacingHorizontalS }}>
                                 <Field label="Container / filesystem" required style={{ flex: 1 }}>
                                   <Input value={scAdlsContainer} onChange={(_, d) => setScAdlsContainer(d.value)} placeholder="landing" />
                                 </Field>
@@ -3896,7 +3896,7 @@ export function LakehouseEditor({ item, id }: Props) {
                   )}
 
                   {scStep === 3 && (
-                    <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalMNudge }}>
                       <Field label="Section" required hint={scType === 'sharepoint' ? 'SharePoint / OneDrive content surfaces under Files (Graph is a file API).' : undefined}>
                         <Dropdown
                           selectedOptions={[scKind]}
@@ -3973,7 +3973,7 @@ export function LakehouseEditor({ item, id }: Props) {
               <DialogBody>
                 <DialogTitle>Download with sensitivity label</DialogTitle>
                 <DialogContent>
-                  <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalM }}>
                     <Caption1>
                       Stamp a Microsoft Information Protection sensitivity label onto{' '}
                       <strong>{labelDlgEntry ? leafName(labelDlgEntry.name) : ''}</strong> as it downloads.
@@ -4143,7 +4143,7 @@ export function LakehouseEditor({ item, id }: Props) {
                         Azure RBAC role assignments scoped to the container. Storage Blob Data
                         Reader/Contributor/Owner govern data-plane access (read/write/manage).
                       </Caption1>
-                      <div style={{ overflow: 'auto', margin: '8px 0 12px' }}>
+                      <div style={{ overflow: 'auto', margin: `${tokens.spacingVerticalS} 0 ${tokens.spacingVerticalM}` }}>
                         <Table aria-label="Role assignments" size="small">
                           <TableHeader><TableRow>
                             <TableHeaderCell>Principal</TableHeaderCell>
@@ -4157,7 +4157,7 @@ export function LakehouseEditor({ item, id }: Props) {
                             )}
                             {permsRows.map((r) => (
                               <TableRow key={r.id}>
-                                <TableCell>{r.upn ? <span>{r.upn}</span> : <code style={{ fontSize: 11 }}>{r.principalId?.slice(0, 8)}…</code>}</TableCell>
+                                <TableCell>{r.upn ? <span>{r.upn}</span> : <code style={{ fontSize: tokens.fontSizeBase100 }}>{r.principalId?.slice(0, 8)}…</code>}</TableCell>
                                 <TableCell>{r.principalType || '—'}</TableCell>
                                 <TableCell>{r.roleName || '—'}</TableCell>
                                 <TableCell><Button size="small" appearance="subtle" disabled={permsBusy} onClick={() => revokePerm(r.id)}>Revoke</Button></TableCell>
@@ -4167,7 +4167,7 @@ export function LakehouseEditor({ item, id }: Props) {
                         </Table>
                       </div>
                       <Subtitle2>Grant access</Subtitle2>
-                      <div style={{ display: 'grid', gridTemplateColumns: '2fr 1fr 2fr', gap: 12, marginTop: 8 }}>
+                      <div style={{ display: 'grid', gridTemplateColumns: '2fr 1fr 2fr', gap: tokens.spacingHorizontalM, marginTop: tokens.spacingVerticalS }}>
                         <Field label="Principal object id" required>
                           <Input value={newPrincipalId} onChange={(_, d) => setNewPrincipalId(d.value)} placeholder="11111111-2222-3333-4444-555555555555" />
                         </Field>
@@ -4210,7 +4210,7 @@ export function LakehouseEditor({ item, id }: Props) {
                         Principals are Entra users (UPN); the database user is created
                         <code> FROM EXTERNAL PROVIDER</code> on first grant.
                       </Caption1>
-                      <div style={{ overflow: 'auto', margin: '8px 0 12px' }}>
+                      <div style={{ overflow: 'auto', margin: `${tokens.spacingVerticalS} 0 ${tokens.spacingVerticalM}` }}>
                         <Table aria-label="Table grants" size="small">
                           <TableHeader><TableRow>
                             <TableHeaderCell>Principal (UPN)</TableHeaderCell>
@@ -4234,7 +4234,7 @@ export function LakehouseEditor({ item, id }: Props) {
                         </Table>
                       </div>
                       <Subtitle2>Grant table SELECT</Subtitle2>
-                      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12, marginTop: 8 }}>
+                      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: tokens.spacingHorizontalM, marginTop: tokens.spacingVerticalS }}>
                         {renderPrincipalPicker()}
                         <Field label="Table / view" required>
                           <Dropdown
@@ -4249,7 +4249,7 @@ export function LakehouseEditor({ item, id }: Props) {
                           </Dropdown>
                         </Field>
                       </div>
-                      <div style={{ marginTop: 12, display: 'flex', justifyContent: 'flex-end' }}>
+                      <div style={{ marginTop: tokens.spacingVerticalM, display: 'flex', justifyContent: 'flex-end' }}>
                         <Button appearance="primary" onClick={grantSqlTable} disabled={permsBusy || !selectedPrincipal || selTableId == null}>
                           Grant SELECT
                         </Button>
@@ -4264,7 +4264,7 @@ export function LakehouseEditor({ item, id }: Props) {
                         Column-level <code>GRANT SELECT</code> restricts a principal to specific columns of a
                         table/view. Pick a table, then check the columns to expose.
                       </Caption1>
-                      <div style={{ overflow: 'auto', margin: '8px 0 12px' }}>
+                      <div style={{ overflow: 'auto', margin: `${tokens.spacingVerticalS} 0 ${tokens.spacingVerticalM}` }}>
                         <Table aria-label="Column grants" size="small">
                           <TableHeader><TableRow>
                             <TableHeaderCell>Principal (UPN)</TableHeaderCell>
@@ -4288,7 +4288,7 @@ export function LakehouseEditor({ item, id }: Props) {
                         </Table>
                       </div>
                       <Subtitle2>Grant column SELECT</Subtitle2>
-                      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12, marginTop: 8 }}>
+                      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: tokens.spacingHorizontalM, marginTop: tokens.spacingVerticalS }}>
                         {renderPrincipalPicker()}
                         <Field label="Table / view" required>
                           <Dropdown
@@ -4304,9 +4304,9 @@ export function LakehouseEditor({ item, id }: Props) {
                         </Field>
                       </div>
                       {selTableId != null && (
-                        <div style={{ marginTop: 12 }}>
+                        <div style={{ marginTop: tokens.spacingVerticalM }}>
                           <Caption1>Columns to expose ({selColIds.length} selected)</Caption1>
-                          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 4, maxHeight: 200, overflow: 'auto', border: `1px solid ${tokens.colorNeutralStroke2}`, borderRadius: 4, padding: 8, marginTop: 4 }}>
+                          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: tokens.spacingHorizontalXS, maxHeight: 200, overflow: 'auto', border: `1px solid ${tokens.colorNeutralStroke2}`, borderRadius: tokens.borderRadiusMedium, padding: tokens.spacingVerticalS, marginTop: tokens.spacingVerticalXS }}>
                             {sqlCols.length === 0 && <Caption1>No columns.</Caption1>}
                             {sqlCols.map((c) => (
                               <Checkbox
@@ -4319,7 +4319,7 @@ export function LakehouseEditor({ item, id }: Props) {
                           </div>
                         </div>
                       )}
-                      <div style={{ marginTop: 12, display: 'flex', justifyContent: 'flex-end' }}>
+                      <div style={{ marginTop: tokens.spacingVerticalM, display: 'flex', justifyContent: 'flex-end' }}>
                         <Button appearance="primary" onClick={grantSqlColumn} disabled={permsBusy || !selectedPrincipal || selTableId == null || selColIds.length === 0}>
                           Grant column SELECT
                         </Button>
@@ -4334,7 +4334,7 @@ export function LakehouseEditor({ item, id }: Props) {
                         Row-level security applies a <code>SECURITY POLICY</code> + inline filter predicate so a
                         principal only sees rows whose filter column matches their identity. Dedicated SQL pool only.
                       </Caption1>
-                      <div style={{ overflow: 'auto', margin: '8px 0 12px' }}>
+                      <div style={{ overflow: 'auto', margin: `${tokens.spacingVerticalS} 0 ${tokens.spacingVerticalM}` }}>
                         <Table aria-label="Security policies" size="small">
                           <TableHeader><TableRow>
                             <TableHeaderCell>Policy</TableHeaderCell>
@@ -4358,7 +4358,7 @@ export function LakehouseEditor({ item, id }: Props) {
                         </Table>
                       </div>
                       <Subtitle2>Create row-level security policy</Subtitle2>
-                      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: 12, marginTop: 8 }}>
+                      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: tokens.spacingHorizontalM, marginTop: tokens.spacingVerticalS }}>
                         <Field label="Table" required>
                           <Dropdown
                             placeholder="Select a table"
@@ -4541,17 +4541,17 @@ export function LakehouseEditor({ item, id }: Props) {
                       <MessageBarBody>
                         <MessageBarTitle>Clustering applied</MessageBarTitle>
                         ALTER TABLE … CLUSTER BY ran. Run OPTIMIZE in a notebook to re-cluster existing rows.
-                        {lcSql ? <><br /><code style={{ fontSize: 11 }}>{lcSql}</code></> : null}
+                        {lcSql ? <><br /><code style={{ fontSize: tokens.fontSizeBase100 }}>{lcSql}</code></> : null}
                       </MessageBarBody>
                     </MessageBar>
                   )}
 
                   {/* ---- Expose as Iceberg (OneLake "Iceberg V2 endpoint" parity → Delta UniForm) ---- */}
-                  <Subtitle2 style={{ marginTop: 12 }}>
+                  <Subtitle2 style={{ marginTop: tokens.spacingVerticalM }}>
                     Expose as Iceberg{' '}
                     <Badge appearance="tint" color="brand" size="small">Iceberg V2</Badge>
                   </Subtitle2>
-                  <MessageBar intent="info" style={{ marginBottom: 4 }}>
+                  <MessageBar intent="info" style={{ marginBottom: tokens.spacingVerticalXS }}>
                     <MessageBarBody>
                       Just like Fabric OneLake, your Delta table is read by Iceberg readers — there is no
                       separate "Iceberg endpoint" to provision. On save, Loom enables{' '}
@@ -4612,17 +4612,17 @@ export function LakehouseEditor({ item, id }: Props) {
                     })()}
                   </Field>
                   {icebergEndpoint && (
-                    <div style={{ display: 'flex', flexDirection: 'column', gap: 6, padding: '10px 12px', borderRadius: tokens.borderRadiusMedium, background: tokens.colorNeutralBackground3, border: `1px solid ${tokens.colorNeutralStroke2}` }}>
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalSNudge, padding: `${tokens.spacingVerticalMNudge} ${tokens.spacingHorizontalM}`, borderRadius: tokens.borderRadiusMedium, background: tokens.colorNeutralBackground3, border: `1px solid ${tokens.colorNeutralStroke2}` }}>
                       <Caption1 style={{ fontWeight: 600 }}>Iceberg endpoint (metadata path readers point at)</Caption1>
                       {([
                         ['ADLS path (abfss)', icebergEndpoint.abfss],
                         ['Iceberg catalog / metadata folder (HTTPS)', icebergEndpoint.httpsMetadataFolder],
                         ['Snowflake EXTERNAL VOLUME base (azure://)', icebergEndpoint.azureMetadataFolder],
                       ] as [string, string][]).map(([label, val]) => (
-                        <div key={label} style={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
+                        <div key={label} style={{ display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalXXS }}>
                           <Caption1 style={{ color: tokens.colorNeutralForeground3 }}>{label}</Caption1>
-                          <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-                            <code style={{ fontSize: 11, wordBreak: 'break-all', flex: 1 }}>{val}</code>
+                          <div style={{ display: 'flex', alignItems: 'center', gap: tokens.spacingHorizontalSNudge }}>
+                            <code style={{ fontSize: tokens.fontSizeBase100, wordBreak: 'break-all', flex: 1 }}>{val}</code>
                             <Tooltip content={`Copy ${label}`} relationship="label">
                               <Button
                                 size="small"
@@ -4659,14 +4659,14 @@ export function LakehouseEditor({ item, id }: Props) {
                         UniForm is on. Delta generates Iceberg V2 metadata after the next write transaction
                         (or immediately for existing data). If the table has deletion vectors, run{' '}
                         <code>REORG TABLE … APPLY (UPGRADE UNIFORM(ICEBERG_COMPAT_VERSION=2))</code> in a notebook.
-                        {icebergSql ? <><br /><code style={{ fontSize: 11 }}>{icebergSql}</code></> : null}
+                        {icebergSql ? <><br /><code style={{ fontSize: tokens.fontSizeBase100 }}>{icebergSql}</code></> : null}
                       </MessageBarBody>
                     </MessageBar>
                   )}
 
                   {/* ---- Fabric-only acceleration (honest gate, F22) ---- */}
-                  <Subtitle2 style={{ marginTop: 12 }}>Fabric-only acceleration (honest gate)</Subtitle2>
-                  <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+                  <Subtitle2 style={{ marginTop: tokens.spacingVerticalM }}>Fabric-only acceleration (honest gate)</Subtitle2>
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalXS }}>
                     <Switch
                       checked={settings.fabricToggles?.vorder ?? false}
                       onChange={(_, d) => setSettings((s) => ({ ...s, fabricToggles: { vorder: d.checked, autotune: s.fabricToggles?.autotune ?? false, nativeExecution: s.fabricToggles?.nativeExecution ?? false } }))}
@@ -4682,7 +4682,7 @@ export function LakehouseEditor({ item, id }: Props) {
                       </MessageBarBody>
                     </MessageBar>
                   </div>
-                  <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalXS }}>
                     <Switch
                       checked={settings.fabricToggles?.autotune ?? false}
                       onChange={(_, d) => setSettings((s) => ({ ...s, fabricToggles: { vorder: s.fabricToggles?.vorder ?? false, autotune: d.checked, nativeExecution: s.fabricToggles?.nativeExecution ?? false } }))}
@@ -4697,7 +4697,7 @@ export function LakehouseEditor({ item, id }: Props) {
                       </MessageBarBody>
                     </MessageBar>
                   </div>
-                  <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalXS }}>
                     <Switch
                       checked={settings.fabricToggles?.nativeExecution ?? false}
                       onChange={(_, d) => setSettings((s) => ({ ...s, fabricToggles: { vorder: s.fabricToggles?.vorder ?? false, autotune: s.fabricToggles?.autotune ?? false, nativeExecution: d.checked } }))}
@@ -4798,7 +4798,7 @@ export function LakehouseEditor({ item, id }: Props) {
               <DialogBody>
                 <DialogTitle>Share — {activeContainer || 'lakehouse'}</DialogTitle>
                 <DialogContent>
-                  <Caption1 style={{ display: 'block', marginBottom: 8, color: tokens.colorNeutralForeground3 }}>
+                  <Caption1 style={{ display: 'block', marginBottom: tokens.spacingVerticalS, color: tokens.colorNeutralForeground3 }}>
                     Grant a user, group, or service principal access to this lakehouse
                     container via Azure RBAC. Provide the Entra ID object id of the
                     recipient. Sharing is applied directly on the storage scope — no
@@ -4821,7 +4821,7 @@ export function LakehouseEditor({ item, id }: Props) {
                       placeholder="11111111-2222-3333-4444-555555555555"
                     />
                   </Field>
-                  <Field label="Principal type" style={{ marginTop: 8 }}>
+                  <Field label="Principal type" style={{ marginTop: tokens.spacingVerticalS }}>
                     <Dropdown
                       selectedOptions={[sharePrincipalType]}
                       value={sharePrincipalType}
@@ -4832,7 +4832,7 @@ export function LakehouseEditor({ item, id }: Props) {
                       <Option value="ServicePrincipal">Service principal</Option>
                     </Dropdown>
                   </Field>
-                  <Field label="Permission level" style={{ marginTop: 8 }}>
+                  <Field label="Permission level" style={{ marginTop: tokens.spacingVerticalS }}>
                     <Dropdown
                       selectedOptions={[shareRole]}
                       value={shareRole}
@@ -4926,7 +4926,7 @@ export function LakehouseEditor({ item, id }: Props) {
                       query the Delta tables with T-SQL and build reports from there.
                     </MessageBarBody>
                   </MessageBar>
-                  <Caption1 style={{ display: 'block', marginTop: 12, color: tokens.colorNeutralForeground3 }}>
+                  <Caption1 style={{ display: 'block', marginTop: tokens.spacingVerticalM, color: tokens.colorNeutralForeground3 }}>
                     If your org runs a Fabric capacity alongside Loom, set{' '}
                     <code>LOOM_LAKEHOUSE_BACKEND=fabric</code> with a bound workspace to
                     enable the native "New semantic model" command — it stays strictly

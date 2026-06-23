@@ -62,17 +62,17 @@ import type { WorkspaceItem } from '@/lib/types/workspace';
 // ============================================================================
 
 const useObsStyles = makeStyles({
-  col: { display: 'flex', flexDirection: 'column', gap: '12px' },
-  row: { display: 'flex', gap: '8px', alignItems: 'center', flexWrap: 'wrap' },
-  gauge: { display: 'flex', flexDirection: 'column', gap: '4px', minWidth: '180px' },
-  gaugeHead: { display: 'flex', alignItems: 'baseline', gap: '8px' },
-  cardGrid: { display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(320px, 1fr))', gap: '12px' },
-  actionGrid: { display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(280px, 1fr))', gap: '12px' },
-  card: { padding: '12px' },
+  col: { display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalM },
+  row: { display: 'flex', gap: tokens.spacingHorizontalS, alignItems: 'center', flexWrap: 'wrap' },
+  gauge: { display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalXS, minWidth: '180px' },
+  gaugeHead: { display: 'flex', alignItems: 'baseline', gap: tokens.spacingHorizontalS },
+  cardGrid: { display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(320px, 1fr))', gap: tokens.spacingHorizontalM },
+  actionGrid: { display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(280px, 1fr))', gap: tokens.spacingHorizontalM },
+  card: { padding: tokens.spacingHorizontalM },
   kql: {
-    fontFamily: 'Consolas, "Cascadia Code", monospace', fontSize: '11px',
+    fontFamily: 'Consolas, "Cascadia Code", monospace', fontSize: tokens.fontSizeBase100,
     color: tokens.colorNeutralForeground3, whiteSpace: 'pre-wrap', wordBreak: 'break-all',
-    margin: 0, marginTop: '4px',
+    margin: 0, marginTop: tokens.spacingVerticalXS,
   },
   scroll: { overflowX: 'auto', maxHeight: '260px' },
 });
@@ -180,7 +180,7 @@ function ResultTable({ columns, rows }: { columns: string[]; rows: unknown[][] }
         <TableBody>
           {rows.slice(0, 50).map((row, i) => (
             <TableRow key={i}>
-              {columns.map((_, j) => <TableCell key={j}><code style={{ fontSize: 11 }}>{String((row as any[])[j] ?? '')}</code></TableCell>)}
+              {columns.map((_, j) => <TableCell key={j}><code style={{ fontSize: tokens.fontSizeBase100 }}>{String((row as any[])[j] ?? '')}</code></TableCell>)}
             </TableRow>
           ))}
           {rows.length === 0 && <TableRow><TableCell>(no rows)</TableCell></TableRow>}
@@ -240,7 +240,7 @@ function TriggerScanCard({ id }: { id: string }) {
   return (
     <Card className={s.card}>
       <CardHeader header={<Body1><strong>Trigger Purview scan</strong></Body1>} description={<Caption1>Re-scan a registered data source to refresh classifications + lineage.</Caption1>} image={<ScanType20Regular />} />
-      <div className={s.col} style={{ marginTop: 8 }}>
+      <div className={s.col} style={{ marginTop: tokens.spacingVerticalS }}>
         <Field label="Data source">
           <Dropdown placeholder={sources == null ? 'Loading…' : sources.length ? 'Select a source' : 'No registered sources'} value={source} selectedOptions={source ? [source] : []} disabled={!sources?.length} onOptionSelect={(_, d) => d.optionValue && pickSource(d.optionValue)}>
             {(sources || []).map((x) => <Option key={x} value={x}>{x}</Option>)}
@@ -295,7 +295,7 @@ function ActionCard({
   return (
     <Card className={s.card}>
       <CardHeader header={<Body1><strong>{title}</strong></Body1>} description={<Caption1>{desc}</Caption1>} image={icon} />
-      <div style={{ marginTop: 8, display: 'flex', flexDirection: 'column', gap: 8 }}>
+      <div style={{ marginTop: tokens.spacingVerticalS, display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalS }}>
         <Button appearance="primary" icon={busy ? <Spinner size="extra-tiny" /> : icon} onClick={run} disabled={busy} style={{ alignSelf: 'flex-start' }}>
           {busy ? 'Running…' : title}
         </Button>
@@ -386,7 +386,7 @@ export function ObservabilityTabContent({ id, obs, loading, err, refresh }: {
                 <TableRow key={b.ruleId}>
                   <TableCell><strong>{b.name}</strong></TableCell>
                   <TableCell><code>{b.check}</code></TableCell>
-                  <TableCell><code style={{ fontSize: 11 }}>{b.scope}</code></TableCell>
+                  <TableCell><code style={{ fontSize: tokens.fontSizeBase100 }}>{b.scope}</code></TableCell>
                   <TableCell>{b.detail}</TableCell>
                   <TableCell><Badge appearance="filled" color={b.passed ? 'success' : 'danger'}>{b.passed ? 'pass' : 'fail'}</Badge></TableCell>
                 </TableRow>
@@ -419,7 +419,7 @@ export function ObservabilityTabContent({ id, obs, loading, err, refresh }: {
                   <TableRow key={n.id}>
                     <TableCell>{n.label || n.id}</TableCell>
                     <TableCell><code>{n.type || '—'}</code></TableCell>
-                    <TableCell><code style={{ fontSize: 11 }}>{String(n.id).slice(0, 12)}…</code></TableCell>
+                    <TableCell><code style={{ fontSize: tokens.fontSizeBase100 }}>{String(n.id).slice(0, 12)}…</code></TableCell>
                   </TableRow>
                 ))}
               </TableBody>
@@ -429,7 +429,7 @@ export function ObservabilityTabContent({ id, obs, loading, err, refresh }: {
                 <Caption1 style={{ color: tokens.colorNeutralForeground3 }}>Edges</Caption1>
                 <div className={s.scroll}>
                   {lineage.edges.map((e: any, i: number) => (
-                    <div key={i}><code style={{ fontSize: 11 }}>{String(e.from).slice(0, 8)}… → {String(e.to).slice(0, 8)}…{e.label ? ` (${e.label})` : ''}</code></div>
+                    <div key={i}><code style={{ fontSize: tokens.fontSizeBase100 }}>{String(e.from).slice(0, 8)}… → {String(e.to).slice(0, 8)}…{e.label ? ` (${e.label})` : ''}</code></div>
                   ))}
                 </div>
               </>
@@ -471,19 +471,19 @@ const useStyles = makeStyles({
   badges: { display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'wrap' },
   avatars: { display: 'flex', alignItems: 'center', gap: 4 },
   actions: { display: 'flex', alignItems: 'center', gap: 8 },
-  body: { display: 'flex', flexDirection: 'column', gap: 16 },
-  card: { padding: 12 },
-  grid2: { display: 'grid', gridTemplateColumns: 'max-content 1fr', columnGap: 16, rowGap: 8, alignItems: 'center' },
-  attrGrid: { display: 'grid', gridTemplateColumns: 'minmax(160px, 240px) 1fr', columnGap: 16, rowGap: 6 },
-  sectionTitle: { display: 'flex', alignItems: 'center', gap: 8, marginTop: 4 },
-  contactRow: { display: 'flex', alignItems: 'center', gap: 8, marginBottom: 8, flexWrap: 'wrap' },
+  body: { display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalL },
+  card: { padding: tokens.spacingHorizontalM },
+  grid2: { display: 'grid', gridTemplateColumns: 'max-content 1fr', columnGap: tokens.spacingHorizontalL, rowGap: tokens.spacingVerticalS, alignItems: 'center' },
+  attrGrid: { display: 'grid', gridTemplateColumns: 'minmax(160px, 240px) 1fr', columnGap: tokens.spacingHorizontalL, rowGap: tokens.spacingVerticalS },
+  sectionTitle: { display: 'flex', alignItems: 'center', gap: tokens.spacingHorizontalS, marginTop: tokens.spacingVerticalXS },
+  contactRow: { display: 'flex', alignItems: 'center', gap: tokens.spacingHorizontalS, marginBottom: tokens.spacingVerticalS, flexWrap: 'wrap' },
   contactName: { minWidth: 180 },
-  links: { display: 'flex', flexDirection: 'column', gap: 4 },
-  link: { display: 'inline-flex', alignItems: 'center', gap: 4 },
+  links: { display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalXS },
+  link: { display: 'inline-flex', alignItems: 'center', gap: tokens.spacingHorizontalXS },
   muted: { color: tokens.colorNeutralForeground3, fontStyle: 'italic' },
-  gaugeWrap: { display: 'flex', alignItems: 'center', gap: 16 },
-  healthCards: { display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(240px, 1fr))', gap: 8 },
-  subsBar: { display: 'flex', alignItems: 'center', gap: 8, marginTop: 8 },
+  gaugeWrap: { display: 'flex', alignItems: 'center', gap: tokens.spacingHorizontalL },
+  healthCards: { display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(240px, 1fr))', gap: tokens.spacingHorizontalS },
+  subsBar: { display: 'flex', alignItems: 'center', gap: tokens.spacingHorizontalS, marginTop: tokens.spacingVerticalS },
 });
 
 interface SubscriberRow {
@@ -726,7 +726,7 @@ export function DataProductDetailEditor({ item, id }: { item: FabricItemType; id
         </TabList>
 
         {tab === 'details' && (
-          <div className={s.body} style={{ marginTop: 12 }}>
+          <div className={s.body} style={{ marginTop: tokens.spacingVerticalM }}>
             {/* Description */}
             <Card className={s.card}>
               <CardHeader header={<Subtitle2>Description</Subtitle2>} />
@@ -779,7 +779,7 @@ export function DataProductDetailEditor({ item, id }: { item: FabricItemType; id
                     </Button>
                   </div>
                   {labelMsg && (
-                    <MessageBar intent={labelMsg.intent === 'success' ? 'success' : 'error'} style={{ marginTop: 8 }}>
+                    <MessageBar intent={labelMsg.intent === 'success' ? 'success' : 'error'} style={{ marginTop: tokens.spacingVerticalS }}>
                       <MessageBarBody>{labelMsg.text}</MessageBarBody>
                     </MessageBar>
                   )}
@@ -806,7 +806,7 @@ export function DataProductDetailEditor({ item, id }: { item: FabricItemType; id
                 </div>
               )}
               {subs !== null && subs.length > 0 && (
-                <Table size="small" style={{ marginTop: 8 }}>
+                <Table size="small" style={{ marginTop: tokens.spacingVerticalS }}>
                   <TableBody>
                     {subs.map((sub) => (
                       <TableRow key={sub.id}>
@@ -853,7 +853,7 @@ export function DataProductDetailEditor({ item, id }: { item: FabricItemType; id
             {/* Health-action cards — derived from real DQ posture */}
             <div>
               <Subtitle2 className={s.sectionTitle}>Health actions</Subtitle2>
-              <div className={s.healthCards} style={{ marginTop: 8 }}>
+              <div className={s.healthCards} style={{ marginTop: tokens.spacingVerticalS }}>
                 {dqScore === null ? (
                   <Card className={s.card}>
                     <CardHeader header={<Body1>Configure data-quality rules</Body1>}
@@ -897,7 +897,7 @@ export function DataProductDetailEditor({ item, id }: { item: FabricItemType; id
         )}
 
         {tab === 'observability' && (
-          <div style={{ marginTop: 12 }}>
+          <div style={{ marginTop: tokens.spacingVerticalM }}>
             <ObservabilityTabContent
               id={id}
               obs={observability.data}

@@ -385,14 +385,17 @@ export function LogicAppEditor({ item, id }: Props) {
 
             {detail && tab === 'code' && (
               <>
-                <Body1>Full Workflow Definition Language (WDL) definition.</Body1>
+                <Body1>Workflow Definition Language (WDL) — read-only view of the deployed definition.</Body1>
+                <Caption1 style={{ color: tokens.colorNeutralForeground3, display: 'block', marginBottom: tokens.spacingVerticalS }}>
+                  Edit triggers and actions in the Designer tab; this shows the resulting WDL the runtime executes.
+                </Caption1>
                 <MonacoTextarea
                   value={definitionJson}
-                  onChange={() => { /* read-only view; edits land via Save in a follow-up */ }}
+                  onChange={() => { /* intentional: this is a read-only view of the deployed WDL */ }}
                   language="json"
                   readOnly
                   height={520}
-                  ariaLabel="Workflow definition JSON"
+                  ariaLabel="Workflow definition JSON (read-only)"
                 />
               </>
             )}

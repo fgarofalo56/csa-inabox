@@ -128,75 +128,75 @@ const PG_SKUS = [
 //    in-grid search) — shared by the Query and Schema tabs below. ──
 
 const useStyles = makeStyles({
-  pad: { padding: 16, display: 'flex', flexDirection: 'column', gap: 12, minHeight: 0, flex: 1 },
-  toolbar: { display: 'flex', gap: 12, alignItems: 'center', flexWrap: 'wrap' },
-  resultBox: { borderTop: `1px solid ${tokens.colorNeutralStroke2}`, paddingTop: 12, minHeight: 160 },
-  resultMeta: { display: 'flex', gap: 12, alignItems: 'center', marginBottom: 8, flexWrap: 'wrap' },
-  tableWrap: { overflow: 'auto', maxHeight: 360, border: `1px solid ${tokens.colorNeutralStroke2}`, borderRadius: 4 },
-  cell: { fontFamily: 'Consolas, monospace', fontSize: 12, whiteSpace: 'nowrap' },
-  treePad: { padding: 8, display: 'flex', flexDirection: 'column', gap: 10 },
-  formRow: { display: 'flex', flexDirection: 'column', gap: 4 },
-  formGrid: { display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12 },
+  pad: { padding: tokens.spacingVerticalL, display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalM, minHeight: 0, flex: 1 },
+  toolbar: { display: 'flex', gap: tokens.spacingHorizontalM, alignItems: 'center', flexWrap: 'wrap' },
+  resultBox: { borderTop: `1px solid ${tokens.colorNeutralStroke2}`, paddingTop: tokens.spacingVerticalM, minHeight: 160 },
+  resultMeta: { display: 'flex', gap: tokens.spacingHorizontalM, alignItems: 'center', marginBottom: tokens.spacingVerticalS, flexWrap: 'wrap' },
+  tableWrap: { overflow: 'auto', maxHeight: 360, border: `1px solid ${tokens.colorNeutralStroke2}`, borderRadius: tokens.borderRadiusMedium },
+  cell: { fontFamily: 'Consolas, monospace', fontSize: tokens.fontSizeBase200, whiteSpace: 'nowrap' },
+  treePad: { padding: tokens.spacingVerticalS, display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalS },
+  formRow: { display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalXS },
+  formGrid: { display: 'grid', gridTemplateColumns: '1fr 1fr', gap: tokens.spacingHorizontalM },
   select: {
-    padding: 6, borderRadius: 4, border: `1px solid ${tokens.colorNeutralStroke2}`,
+    padding: tokens.spacingVerticalXS, borderRadius: tokens.borderRadiusMedium, border: `1px solid ${tokens.colorNeutralStroke2}`,
     background: tokens.colorNeutralBackground1, color: tokens.colorNeutralForeground1,
   },
-  card: { border: `1px solid ${tokens.colorNeutralStroke2}`, borderRadius: 6, padding: 12, display: 'flex', flexDirection: 'column', gap: 8 },
+  card: { border: `1px solid ${tokens.colorNeutralStroke2}`, borderRadius: tokens.borderRadiusLarge, padding: tokens.spacingVerticalM, display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalS },
   fullWidth: { width: '100%' },
-  resultActions: { marginLeft: 'auto', display: 'flex', gap: 4 },
+  resultActions: { marginLeft: 'auto', display: 'flex', gap: tokens.spacingHorizontalXS },
   treeWrap: {
     flex: 1, minHeight: '360px', border: `1px solid ${tokens.colorNeutralStroke2}`,
-    borderRadius: '4px', overflow: 'hidden',
+    borderRadius: tokens.borderRadiusMedium, overflow: 'hidden',
   },
-  ruleGrid: { display: 'grid', gridTemplateColumns: '2fr 1fr 1fr auto', gap: '12px', alignItems: 'end' },
+  ruleGrid: { display: 'grid', gridTemplateColumns: '2fr 1fr 1fr auto', gap: tokens.spacingHorizontalM, alignItems: 'end' },
   // ---- Saved queries panel ----
-  qpToolbar: { display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' },
-  qpFolders: { display: 'flex', flexDirection: 'column', gap: 16, marginTop: 4 },
-  qpFolderHead: { display: 'flex', gap: 8, alignItems: 'center', paddingBottom: 4, borderBottom: `1px solid ${tokens.colorNeutralStroke2}` },
-  qpList: { display: 'flex', flexDirection: 'column', gap: 2, marginTop: 6 },
+  qpToolbar: { display: 'flex', gap: tokens.spacingHorizontalS, alignItems: 'center', flexWrap: 'wrap' },
+  qpFolders: { display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalL, marginTop: tokens.spacingVerticalXS },
+  qpFolderHead: { display: 'flex', gap: tokens.spacingHorizontalS, alignItems: 'center', paddingBottom: tokens.spacingVerticalXS, borderBottom: `1px solid ${tokens.colorNeutralStroke2}` },
+  qpList: { display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalXXS, marginTop: tokens.spacingVerticalXS },
   qpRow: {
-    display: 'flex', alignItems: 'center', gap: 8, padding: '6px 8px', borderRadius: 4,
+    display: 'flex', alignItems: 'center', gap: tokens.spacingHorizontalS, padding: `${tokens.spacingVerticalXS} ${tokens.spacingHorizontalS}`, borderRadius: tokens.borderRadiusMedium,
     cursor: 'pointer', border: '1px solid transparent',
   },
   qpRowSel: { background: tokens.colorNeutralBackground1Selected, border: `1px solid ${tokens.colorBrandStroke1}` },
   qpRowMain: { display: 'flex', flexDirection: 'column', gap: 0, minWidth: 0, flex: 1 },
   qpName: { fontWeight: 600, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' },
-  qpMeta: { color: tokens.colorNeutralForeground3, fontSize: 11, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' },
-  qpEmpty: { color: tokens.colorNeutralForeground3, fontStyle: 'italic', padding: '8px 0' },
+  qpMeta: { color: tokens.colorNeutralForeground3, fontSize: tokens.fontSizeBase100, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' },
+  qpEmpty: { color: tokens.colorNeutralForeground3, fontStyle: 'italic', padding: `${tokens.spacingVerticalS} 0` },
   // ── Copilot side pane (Query tab) ──
-  queryRow: { display: 'flex', gap: 12, alignItems: 'stretch', minHeight: 0 },
-  queryMain: { flex: 1, minWidth: 0, display: 'flex', flexDirection: 'column', gap: 8 },
+  queryRow: { display: 'flex', gap: tokens.spacingHorizontalM, alignItems: 'stretch', minHeight: 0 },
+  queryMain: { flex: 1, minWidth: 0, display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalS },
   copilotPane: {
-    width: 340, flexShrink: 0, display: 'flex', flexDirection: 'column', gap: 8,
-    border: `1px solid ${tokens.colorNeutralStroke2}`, borderRadius: 6, padding: 10,
+    width: 340, flexShrink: 0, display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalS,
+    border: `1px solid ${tokens.colorNeutralStroke2}`, borderRadius: tokens.borderRadiusLarge, padding: tokens.spacingVerticalS,
     background: tokens.colorNeutralBackground2, maxHeight: 560,
   },
-  copilotHead: { display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'wrap' },
-  copilotHeadActions: { marginLeft: 'auto', display: 'flex', gap: 4 },
+  copilotHead: { display: 'flex', alignItems: 'center', gap: tokens.spacingHorizontalXS, flexWrap: 'wrap' },
+  copilotHeadActions: { marginLeft: 'auto', display: 'flex', gap: tokens.spacingHorizontalXS },
   copilotLog: {
-    flex: 1, overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: 8,
-    minHeight: 160, paddingRight: 4,
+    flex: 1, overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalS,
+    minHeight: 160, paddingRight: tokens.spacingHorizontalXS,
   },
   msgUser: {
     alignSelf: 'flex-end', maxWidth: '92%', background: tokens.colorBrandBackground2,
-    color: tokens.colorNeutralForeground1, borderRadius: 6, padding: '6px 8px', fontSize: 12,
+    color: tokens.colorNeutralForeground1, borderRadius: tokens.borderRadiusLarge, padding: `${tokens.spacingVerticalXS} ${tokens.spacingHorizontalS}`, fontSize: tokens.fontSizeBase200,
   },
   msgAssistant: {
     alignSelf: 'flex-start', maxWidth: '100%', background: tokens.colorNeutralBackground1,
-    border: `1px solid ${tokens.colorNeutralStroke2}`, borderRadius: 6, padding: '6px 8px',
-    fontSize: 12, whiteSpace: 'pre-wrap', wordBreak: 'break-word',
+    border: `1px solid ${tokens.colorNeutralStroke2}`, borderRadius: tokens.borderRadiusLarge, padding: `${tokens.spacingVerticalXS} ${tokens.spacingHorizontalS}`,
+    fontSize: tokens.fontSizeBase200, whiteSpace: 'pre-wrap', wordBreak: 'break-word',
   },
-  msgFoot: { display: 'flex', gap: 4, marginTop: 4, flexWrap: 'wrap' },
-  copilotInputRow: { display: 'flex', flexDirection: 'column', gap: 6 },
+  msgFoot: { display: 'flex', gap: tokens.spacingHorizontalXS, marginTop: tokens.spacingVerticalXS, flexWrap: 'wrap' },
+  copilotInputRow: { display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalXS },
   codeBlock: {
-    fontFamily: 'Consolas, monospace', fontSize: 12, background: tokens.colorNeutralBackground3,
-    borderRadius: 4, padding: '6px 8px', whiteSpace: 'pre-wrap', wordBreak: 'break-word',
-    margin: '4px 0',
+    fontFamily: 'Consolas, monospace', fontSize: tokens.fontSizeBase200, background: tokens.colorNeutralBackground3,
+    borderRadius: tokens.borderRadiusMedium, padding: `${tokens.spacingVerticalXS} ${tokens.spacingHorizontalS}`, whiteSpace: 'pre-wrap', wordBreak: 'break-word',
+    margin: `${tokens.spacingVerticalXS} 0`,
   },
-  connCard: { border: `1px solid ${tokens.colorNeutralStroke2}`, borderRadius: 6, padding: 12, display: 'flex', flexDirection: 'column', gap: 8, marginTop: 16 },
-  connCodeWrap: { position: 'relative', background: tokens.colorNeutralBackground3, borderRadius: 4, padding: 8 },
-  connCode: { fontFamily: 'Consolas, monospace', fontSize: 11, whiteSpace: 'pre-wrap', wordBreak: 'break-all', margin: 0, color: tokens.colorNeutralForeground1 },
-  connCopyBtn: { position: 'absolute', top: 4, right: 4 },
+  connCard: { border: `1px solid ${tokens.colorNeutralStroke2}`, borderRadius: tokens.borderRadiusLarge, padding: tokens.spacingVerticalM, display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalS, marginTop: tokens.spacingVerticalL },
+  connCodeWrap: { position: 'relative', background: tokens.colorNeutralBackground3, borderRadius: tokens.borderRadiusMedium, padding: tokens.spacingVerticalS },
+  connCode: { fontFamily: 'Consolas, monospace', fontSize: tokens.fontSizeBase100, whiteSpace: 'pre-wrap', wordBreak: 'break-all', margin: 0, color: tokens.colorNeutralForeground1 },
+  connCopyBtn: { position: 'absolute', top: tokens.spacingVerticalXS, right: tokens.spacingHorizontalXS },
 });
 
 // ---- content-type guarded fetch ----------------------------------------
@@ -599,8 +599,8 @@ function SqlServerAdminPanel({
               {fwRules.map((r) => (
                 <TableRow key={r.name}>
                   <TableCell><strong>{r.name}</strong></TableCell>
-                  <TableCell><code style={{ fontSize: 11 }}>{r.startIpAddress}</code></TableCell>
-                  <TableCell><code style={{ fontSize: 11 }}>{r.endIpAddress}</code></TableCell>
+                  <TableCell><code style={{ fontSize: tokens.fontSizeBase100 }}>{r.startIpAddress}</code></TableCell>
+                  <TableCell><code style={{ fontSize: tokens.fontSizeBase100 }}>{r.endIpAddress}</code></TableCell>
                   <TableCell>
                     <Tooltip content={`Delete firewall rule ${r.name}`} relationship="label">
                       <Button size="small" appearance="subtle" icon={<Delete20Regular />} aria-label={`Delete firewall rule ${r.name}`} disabled={fwBusy} onClick={() => setConfirmDeleteRule(r.name)}>Delete</Button>
@@ -1469,7 +1469,7 @@ export function UnifiedSqlDatabaseEditor({ item, id }: { item: FabricItemType; i
               FQDN: <code>{serverFqdn}</code>
               <Tooltip content="Copy FQDN" relationship="label">
                 <Button size="small" appearance="subtle" icon={<Copy20Regular />} aria-label="Copy server FQDN"
-                  onClick={() => navigator.clipboard?.writeText(serverFqdn)} style={{ marginLeft: 4 }} />
+                  onClick={() => navigator.clipboard?.writeText(serverFqdn)} style={{ marginLeft: tokens.spacingHorizontalXS }} />
               </Tooltip>
             </Caption1>
           )}
@@ -1516,7 +1516,7 @@ export function UnifiedSqlDatabaseEditor({ item, id }: { item: FabricItemType; i
                           <TableRow key={x.id}>
                             <TableCell><strong>{x.name}</strong></TableCell>
                             <TableCell>{x.location}</TableCell>
-                            <TableCell><code style={{ fontSize: 11 }}>{x.fqdn}</code></TableCell>
+                            <TableCell><code style={{ fontSize: tokens.fontSizeBase100 }}>{x.fqdn}</code></TableCell>
                             <TableCell><Button size="small" appearance="subtle" onClick={() => { pickServer('azure-sql', x.name); setTab('query'); }}>Connect</Button></TableCell>
                           </TableRow>
                         ))}
@@ -1525,7 +1525,7 @@ export function UnifiedSqlDatabaseEditor({ item, id }: { item: FabricItemType; i
                   </div>
                 )}
 
-              <Subtitle2 style={{ marginTop: 8 }}>SQL Managed Instances ({inv?.mi.instances.length ?? 0})</Subtitle2>
+              <Subtitle2 style={{ marginTop: tokens.spacingVerticalS }}>SQL Managed Instances ({inv?.mi.instances.length ?? 0})</Subtitle2>
               {miGate
                 ? <MessageBar intent="warning"><MessageBarBody><MessageBarTitle>SQL MI not reachable</MessageBarTitle>{miGate}</MessageBarBody></MessageBar>
                 : (
@@ -1538,7 +1538,7 @@ export function UnifiedSqlDatabaseEditor({ item, id }: { item: FabricItemType; i
                             <TableCell><strong>{x.name}</strong></TableCell>
                             <TableCell>{x.state}</TableCell>
                             <TableCell>{x.location}</TableCell>
-                            <TableCell><code style={{ fontSize: 11 }}>{x.fqdn}</code></TableCell>
+                            <TableCell><code style={{ fontSize: tokens.fontSizeBase100 }}>{x.fqdn}</code></TableCell>
                             <TableCell><Button size="small" appearance="subtle" onClick={() => pickServer('managed-instance', x.name)}>Select</Button></TableCell>
                           </TableRow>
                         ))}
@@ -1547,7 +1547,7 @@ export function UnifiedSqlDatabaseEditor({ item, id }: { item: FabricItemType; i
                   </div>
                 )}
 
-              <Subtitle2 style={{ marginTop: 8 }}>PostgreSQL Flexible Servers ({inv?.postgres.servers.length ?? 0})</Subtitle2>
+              <Subtitle2 style={{ marginTop: tokens.spacingVerticalS }}>PostgreSQL Flexible Servers ({inv?.postgres.servers.length ?? 0})</Subtitle2>
               {pgGate
                 ? <MessageBar intent="warning"><MessageBarBody><MessageBarTitle>PostgreSQL not reachable</MessageBarTitle>{pgGate} · Grant the console UAMI <code>Reader</code> on the subscription; the provider is <code>Microsoft.DBforPostgreSQL/flexibleServers</code>.</MessageBarBody></MessageBar>
                 : (
@@ -1560,7 +1560,7 @@ export function UnifiedSqlDatabaseEditor({ item, id }: { item: FabricItemType; i
                             <TableCell><strong>{x.name}</strong></TableCell>
                             <TableCell>PG {x.version}</TableCell>
                             <TableCell>{x.location}</TableCell>
-                            <TableCell><code style={{ fontSize: 11 }}>{x.fqdn}</code></TableCell>
+                            <TableCell><code style={{ fontSize: tokens.fontSizeBase100 }}>{x.fqdn}</code></TableCell>
                             <TableCell><Button size="small" appearance="subtle" onClick={() => { pickServer('postgres', x.name); setTab('query'); }}>Connect</Button></TableCell>
                           </TableRow>
                         ))}
@@ -1745,7 +1745,7 @@ export function UnifiedSqlDatabaseEditor({ item, id }: { item: FabricItemType; i
               <div className={s.toolbar}>
                 <Badge appearance="filled" color="brand">{family === 'postgres' ? 'PostgreSQL' : family === 'managed-instance' ? 'SQL MI' : 'Azure SQL'}</Badge>
                 <Caption1>server: <strong>{server || 'not set'}</strong>{family !== 'managed-instance' && <>, db: <strong>{database || 'not set'}</strong></>}</Caption1>
-                <div style={{ marginLeft: 'auto', display: 'flex', gap: 8 }}>
+                <div style={{ marginLeft: 'auto', display: 'flex', gap: tokens.spacingVerticalS }}>
                   <Tooltip content={family !== 'azure-sql' ? 'SQL Copilot is Azure SQL (T-SQL) only' : !(server && database) ? 'Connect a server + database first' : 'Fix / Explain / NL→T-SQL + inline ghost text'} relationship="label">
                     <Button appearance={copilotOpen ? 'primary' : 'outline'} icon={copilotOpen ? <Sparkle20Filled /> : <Sparkle20Regular />}
                       onClick={() => setCopilotOpen((v) => !v)} disabled={family !== 'azure-sql'}>
@@ -1931,7 +1931,7 @@ export function UnifiedSqlDatabaseEditor({ item, id }: { item: FabricItemType; i
               {/* INFORMATION_SCHEMA fallback grid (works for any reachable engine via the query path). */}
               {server && (
                 <>
-                  <div className={s.toolbar} style={{ marginTop: 8 }}>
+                  <div className={s.toolbar} style={{ marginTop: tokens.spacingVerticalS }}>
                     <Caption1>INFORMATION_SCHEMA.TABLES on <strong>{database || server || 'not set'}</strong></Caption1>
                     <Button size="small" appearance="outline" onClick={loadSchema} disabled={schemaLoading || !server}>Refresh</Button>
                   </div>
@@ -2124,7 +2124,7 @@ export function UnifiedSqlDatabaseEditor({ item, id }: { item: FabricItemType; i
                 <MessageBar intent="info">
                   <MessageBarBody>
                     <MessageBarTitle>One-time: grant the factory managed identity write access</MessageBarTitle>
-                    <code style={{ fontSize: 11, whiteSpace: 'pre-wrap' }}>{getDataMsg.factoryMiPrincipalHint}</code>
+                    <code style={{ fontSize: tokens.fontSizeBase100, whiteSpace: 'pre-wrap' }}>{getDataMsg.factoryMiPrincipalHint}</code>
                   </MessageBarBody>
                 </MessageBar>
               )}
@@ -2214,7 +2214,7 @@ export function UnifiedSqlDatabaseEditor({ item, id }: { item: FabricItemType; i
                       {mirror.bronze.basePath && (
                         <Tooltip content="Copy Bronze base path" relationship="label">
                           <Button size="small" appearance="subtle" icon={<Copy20Regular />}
-                            onClick={() => navigator.clipboard?.writeText(String(mirror.bronze.basePath))} style={{ marginLeft: 4 }} />
+                            onClick={() => navigator.clipboard?.writeText(String(mirror.bronze.basePath))} style={{ marginLeft: tokens.spacingHorizontalXS }} />
                         </Tooltip>
                       )}
                     </Caption1>
@@ -2229,7 +2229,7 @@ export function UnifiedSqlDatabaseEditor({ item, id }: { item: FabricItemType; i
                           {t.error ? <> — {t.error}</> : null}
                         </Caption1>
                         {t.openrowset && (
-                          <div className={s.cell} style={{ whiteSpace: 'pre-wrap', display: 'flex', gap: 4, alignItems: 'flex-start' }}>
+                          <div className={s.cell} style={{ whiteSpace: 'pre-wrap', display: 'flex', gap: tokens.spacingVerticalXS, alignItems: 'flex-start' }}>
                             <code style={{ flex: 1 }}>{t.openrowset}</code>
                             <Tooltip content="Copy Synapse Serverless query" relationship="label">
                               <Button size="small" appearance="subtle" icon={<Copy20Regular />}
@@ -2251,7 +2251,7 @@ export function UnifiedSqlDatabaseEditor({ item, id }: { item: FabricItemType; i
               <DialogBody>
                 <DialogTitle>{editingQueryId ? 'Rename / edit saved query' : 'Save query'}</DialogTitle>
                 <DialogContent>
-                  <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalM }}>
                     <Field label="Name" required>
                       <Input value={saveName} onChange={(_, d) => setSaveName(d.value)} placeholder="Top customers by revenue" maxLength={120} />
                     </Field>
@@ -2279,7 +2279,7 @@ export function UnifiedSqlDatabaseEditor({ item, id }: { item: FabricItemType; i
                         value={saveSql}
                         onChange={(_, d) => setSaveSql(d.value)}
                         rows={8}
-                        textarea={{ style: { fontFamily: 'Consolas, monospace', fontSize: 12 } }}
+                        textarea={{ style: { fontFamily: 'Consolas, monospace', fontSize: tokens.fontSizeBase200 } }}
                         aria-label="SQL text to save"
                       />
                     </Field>

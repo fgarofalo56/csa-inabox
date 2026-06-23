@@ -82,53 +82,53 @@ const WINDOWS: { hours: number; label: string }[] = [
 const TOPNS = [5, 10, 15, 20, 25];
 
 const useStyles = makeStyles({
-  root: { display: 'flex', flexDirection: 'column', gap: '12px' },
+  root: { display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalM },
   toolbar: {
-    display: 'flex', flexWrap: 'wrap', alignItems: 'flex-end', gap: '12px',
-    padding: '12px', borderRadius: tokens.borderRadiusMedium,
+    display: 'flex', flexWrap: 'wrap', alignItems: 'flex-end', gap: tokens.spacingHorizontalM,
+    padding: tokens.spacingVerticalM, borderRadius: tokens.borderRadiusMedium,
     backgroundColor: tokens.colorNeutralBackground2,
     border: `1px solid ${tokens.colorNeutralStroke2}`,
   },
-  field: { display: 'flex', flexDirection: 'column', gap: '2px', minWidth: '150px' },
-  split: { display: 'flex', gap: '16px', alignItems: 'stretch', flexWrap: 'wrap' },
-  leftCol: { flex: '1 1 460px', minWidth: '380px', display: 'flex', flexDirection: 'column', gap: '8px' },
+  field: { display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalXXS, minWidth: '150px' },
+  split: { display: 'flex', gap: tokens.spacingHorizontalL, alignItems: 'stretch', flexWrap: 'wrap' },
+  leftCol: { flex: '1 1 460px', minWidth: '380px', display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalS },
   rightCol: {
-    flex: '1 1 420px', minWidth: '360px', display: 'flex', flexDirection: 'column', gap: '12px',
-    padding: '12px', borderRadius: tokens.borderRadiusMedium,
+    flex: '1 1 420px', minWidth: '360px', display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalM,
+    padding: tokens.spacingVerticalM, borderRadius: tokens.borderRadiusMedium,
     backgroundColor: tokens.colorNeutralBackground1,
     border: `1px solid ${tokens.colorNeutralStroke2}`,
   },
   barRow: {
-    display: 'flex', alignItems: 'center', gap: '8px', cursor: 'pointer',
-    padding: '6px 8px', borderRadius: tokens.borderRadiusSmall,
+    display: 'flex', alignItems: 'center', gap: tokens.spacingHorizontalS, cursor: 'pointer',
+    padding: `${tokens.spacingVerticalXS} ${tokens.spacingHorizontalS}`, borderRadius: tokens.borderRadiusSmall,
     border: `1px solid transparent`,
   },
   barRowSelected: {
     backgroundColor: tokens.colorBrandBackground2,
     border: `1px solid ${tokens.colorBrandStroke1}`,
   },
-  barLabel: { flex: '0 0 46px', fontFamily: tokens.fontFamilyMonospace, fontSize: '12px' },
-  barTrack: { flex: '1 1 auto', height: '22px', position: 'relative', backgroundColor: tokens.colorNeutralBackground3, borderRadius: '2px', overflow: 'hidden' },
-  barFill: { position: 'absolute', left: 0, top: 0, bottom: 0, backgroundColor: tokens.colorBrandBackground, borderRadius: '2px' },
-  barText: { position: 'absolute', left: '6px', top: 0, bottom: 0, display: 'flex', alignItems: 'center', fontSize: '11px', color: tokens.colorNeutralForegroundOnBrand, whiteSpace: 'nowrap', maxWidth: 'calc(100% - 12px)', overflow: 'hidden', textOverflow: 'ellipsis' },
-  barValue: { flex: '0 0 auto', minWidth: '92px', textAlign: 'right', fontSize: '12px', fontVariantNumeric: 'tabular-nums' },
+  barLabel: { flex: '0 0 46px', fontFamily: tokens.fontFamilyMonospace, fontSize: tokens.fontSizeBase200 },
+  barTrack: { flex: '1 1 auto', height: '22px', position: 'relative', backgroundColor: tokens.colorNeutralBackground3, borderRadius: tokens.borderRadiusSmall, overflow: 'hidden' },
+  barFill: { position: 'absolute', left: 0, top: 0, bottom: 0, backgroundColor: tokens.colorBrandBackground, borderRadius: tokens.borderRadiusSmall },
+  barText: { position: 'absolute', left: '6px', top: 0, bottom: 0, display: 'flex', alignItems: 'center', fontSize: tokens.fontSizeBase100, color: tokens.colorNeutralForegroundOnBrand, whiteSpace: 'nowrap', maxWidth: 'calc(100% - 12px)', overflow: 'hidden', textOverflow: 'ellipsis' },
+  barValue: { flex: '0 0 auto', minWidth: '92px', textAlign: 'right', fontSize: tokens.fontSizeBase200, fontVariantNumeric: 'tabular-nums' },
   detailText: {
-    fontFamily: tokens.fontFamilyMonospace, fontSize: '12px', whiteSpace: 'pre-wrap',
+    fontFamily: tokens.fontFamilyMonospace, fontSize: tokens.fontSizeBase200, whiteSpace: 'pre-wrap',
     wordBreak: 'break-word', backgroundColor: tokens.colorNeutralBackground3,
-    padding: '8px', borderRadius: tokens.borderRadiusSmall, maxHeight: '220px', overflow: 'auto',
+    padding: tokens.spacingVerticalS, borderRadius: tokens.borderRadiusSmall, maxHeight: '220px', overflow: 'auto',
   },
   planXml: {
-    fontFamily: tokens.fontFamilyMonospace, fontSize: '11px', whiteSpace: 'pre-wrap',
+    fontFamily: tokens.fontFamilyMonospace, fontSize: tokens.fontSizeBase100, whiteSpace: 'pre-wrap',
     wordBreak: 'break-word', backgroundColor: tokens.colorNeutralBackground3,
-    padding: '8px', borderRadius: tokens.borderRadiusSmall, maxHeight: '260px', overflow: 'auto',
+    padding: tokens.spacingVerticalS, borderRadius: tokens.borderRadiusSmall, maxHeight: '260px', overflow: 'auto',
   },
-  metricChips: { display: 'flex', gap: '8px', flexWrap: 'wrap' },
+  metricChips: { display: 'flex', gap: tokens.spacingHorizontalS, flexWrap: 'wrap' },
   chip: {
-    display: 'flex', flexDirection: 'column', gap: '2px', padding: '6px 10px',
+    display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalXXS, padding: `${tokens.spacingVerticalXS} ${tokens.spacingHorizontalS}`,
     borderRadius: tokens.borderRadiusMedium, backgroundColor: tokens.colorNeutralBackground3, minWidth: '96px',
   },
-  detailsSummary: { cursor: 'pointer', fontWeight: tokens.fontWeightSemibold, fontSize: '13px' },
-  empty: { padding: '16px', color: tokens.colorNeutralForeground3 },
+  detailsSummary: { cursor: 'pointer', fontWeight: tokens.fontWeightSemibold, fontSize: tokens.fontSizeBase300 },
+  empty: { padding: tokens.spacingVerticalL, color: tokens.colorNeutralForeground3 },
 });
 
 function fmtMetric(row: TopQueryRow, metric: Metric): number {
@@ -435,7 +435,7 @@ export function SqlPerformanceDashboard({ id, server, database }: SqlPerformance
 
               {/* Query text */}
               <div>
-                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 4 }}>
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: tokens.spacingVerticalXS }}>
                   <Label size="small"><DocumentText20Regular style={{ verticalAlign: 'middle' }} /> Query text</Label>
                   <Tooltip content="Copy query text" relationship="label">
                     <Button size="small" appearance="subtle" icon={<Copy20Regular />} aria-label="Copy query text"
@@ -462,7 +462,7 @@ export function SqlPerformanceDashboard({ id, server, database }: SqlPerformance
                   <Spinner size="tiny" label="Loading plan…" labelPosition="after" />
                 ) : plan?.queryPlanXml ? (
                   <>
-                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', margin: '6px 0' }}>
+                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', margin: `${tokens.spacingVerticalXS} 0` }}>
                       <Caption1>plan #{plan.planId}{plan.lastCompileTime && ` · compiled ${new Date(plan.lastCompileTime).toLocaleString()}`}</Caption1>
                       <Tooltip content="Copy plan XML" relationship="label">
                         <Button size="small" appearance="subtle" icon={<Copy20Regular />} aria-label="Copy plan XML"

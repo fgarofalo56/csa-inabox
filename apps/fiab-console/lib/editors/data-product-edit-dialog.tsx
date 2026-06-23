@@ -41,15 +41,15 @@ import {
 import type { DataProductDoc } from '@/lib/dataproducts/edit-model';
 
 const useStyles = makeStyles({
-  body: { display: 'flex', flexDirection: 'column', gap: 12, minWidth: 540 },
-  steps: { display: 'flex', gap: 6, alignItems: 'center', marginBottom: 4 },
-  row: { display: 'flex', gap: 12, alignItems: 'flex-end', flexWrap: 'wrap' },
+  body: { display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalM, minWidth: 540 },
+  steps: { display: 'flex', gap: tokens.spacingHorizontalS, alignItems: 'center', marginBottom: tokens.spacingVerticalXS },
+  row: { display: 'flex', gap: tokens.spacingHorizontalM, alignItems: 'flex-end', flexWrap: 'wrap' },
   field: { flex: 1, minWidth: 200 },
-  endorseRow: { display: 'flex', gap: 10, alignItems: 'center' },
+  endorseRow: { display: 'flex', gap: tokens.spacingHorizontalS, alignItems: 'center' },
   hint: { color: tokens.colorNeutralForeground3 },
   saveBar: {
-    display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 12,
-    paddingTop: 6, borderTop: `1px solid ${tokens.colorNeutralStroke2}`,
+    display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: tokens.spacingHorizontalM,
+    paddingTop: tokens.spacingVerticalS, borderTop: `1px solid ${tokens.colorNeutralStroke2}`,
   },
 });
 
@@ -212,7 +212,7 @@ export function DataProductEditDialog({ id, open, onOpenChange, onSaved }: DataP
       <DialogSurface style={{ maxWidth: 720 }}>
         <DialogBody>
           <DialogTitle>
-            <span style={{ display: 'inline-flex', alignItems: 'center', gap: 8 }}>
+            <span style={{ display: 'inline-flex', alignItems: 'center', gap: tokens.spacingHorizontalS }}>
               <Edit20Regular />
               Edit data product
               {endorsed && <Badge appearance="tint" color="brand" size="small">Endorsed</Badge>}

@@ -39,15 +39,15 @@ import {
 import { useCallback, useEffect, useState } from 'react';
 
 const useStyles = makeStyles({
-  body: { display: 'flex', flexDirection: 'column', gap: 12, height: '100%', overflow: 'hidden' },
-  toolbar: { display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' },
-  tabBody: { display: 'flex', flexDirection: 'column', gap: 12, overflow: 'auto', flex: 1, minHeight: 0, paddingTop: tokens.spacingVerticalS },
-  row: { display: 'flex', gap: 12, flexWrap: 'wrap' },
-  field: { flex: 1, minWidth: 200, display: 'flex', flexDirection: 'column', gap: 4 },
-  mono: { fontFamily: 'Consolas, "Cascadia Code", monospace', fontSize: '13px' },
+  body: { display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalM, height: '100%', overflow: 'hidden' },
+  toolbar: { display: 'flex', gap: tokens.spacingHorizontalS, alignItems: 'center', flexWrap: 'wrap' },
+  tabBody: { display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalM, overflow: 'auto', flex: 1, minHeight: 0, paddingTop: tokens.spacingVerticalS },
+  row: { display: 'flex', gap: tokens.spacingHorizontalM, flexWrap: 'wrap' },
+  field: { flex: 1, minWidth: 200, display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalXS },
+  mono: { fontFamily: 'Consolas, "Cascadia Code", monospace', fontSize: tokens.fontSizeBase300 },
   // Constrain the (long) Spark application id so it never blows out the runs grid.
   appIdCell: {
-    fontFamily: 'Consolas, "Cascadia Code", monospace', fontSize: '13px',
+    fontFamily: 'Consolas, "Cascadia Code", monospace', fontSize: tokens.fontSizeBase300,
     maxWidth: '220px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
   },
   hint: { color: tokens.colorNeutralForeground3 },
@@ -224,7 +224,7 @@ export function SynapseSparkEditor({ name, onClose }: SynapseSparkEditorProps) {
       </DrawerHeader>
       <DrawerBody>
         {loading ? (
-          <div style={{ padding: 16 }}><Spinner label="Loading Spark job definition…" /></div>
+          <div style={{ padding: tokens.spacingVerticalL }}><Spinner label="Loading Spark job definition…" /></div>
         ) : (
           <div className={s.body}>
             {error && (

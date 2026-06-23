@@ -44,17 +44,17 @@ const useStyles = makeStyles({
   },
   headTitle: { fontWeight: tokens.fontWeightSemibold, color: tokens.colorNeutralForeground1, fontSize: tokens.fontSizeBase200 },
   spacer: { flex: 1 },
-  toggle: { display: 'inline-flex', gap: '2px' },
+  toggle: { display: 'inline-flex', gap: tokens.spacingHorizontalXXS },
   body: { padding: tokens.spacingHorizontalM },
   // KPI
   kpiWrap: { display: 'flex', flexWrap: 'wrap', gap: tokens.spacingHorizontalL },
   kpi: {
-    display: 'flex', flexDirection: 'column', gap: '2px', minWidth: '120px',
+    display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalXXS, minWidth: '120px',
     padding: tokens.spacingHorizontalM, borderRadius: tokens.borderRadiusMedium,
     background: tokens.colorNeutralBackground1, border: `1px solid ${tokens.colorNeutralStroke2}`,
   },
   kpiValue: {
-    fontSize: '30px', lineHeight: '34px', fontWeight: tokens.fontWeightBold,
+    fontSize: tokens.fontSizeBase500, fontWeight: tokens.fontWeightBold,
     color: tokens.colorBrandForeground1, fontVariantNumeric: 'tabular-nums',
   },
   kpiLabel: { color: tokens.colorNeutralForeground3, fontSize: tokens.fontSizeBase200, textTransform: 'uppercase', letterSpacing: '0.04em' },
@@ -62,11 +62,11 @@ const useStyles = makeStyles({
   tableWrap: { overflowX: 'auto', maxHeight: '320px', overflowY: 'auto' },
   table: { borderCollapse: 'collapse', width: '100%', fontSize: tokens.fontSizeBase200 },
   th: {
-    textAlign: 'left', padding: '6px 12px 6px 0', position: 'sticky', top: 0,
+    textAlign: 'left', padding: `${tokens.spacingVerticalS} ${tokens.spacingHorizontalM} ${tokens.spacingVerticalS} 0`, position: 'sticky', top: 0,
     background: tokens.colorNeutralBackground1, color: tokens.colorNeutralForeground3,
     borderBottom: `1px solid ${tokens.colorNeutralStroke2}`, whiteSpace: 'nowrap',
   },
-  td: { padding: '5px 12px 5px 0', borderBottom: `1px solid ${tokens.colorNeutralStroke3}`, whiteSpace: 'nowrap', fontVariantNumeric: 'tabular-nums' },
+  td: { padding: `${tokens.spacingVerticalXS} ${tokens.spacingHorizontalM} ${tokens.spacingVerticalXS} 0`, borderBottom: `1px solid ${tokens.colorNeutralStroke3}`, whiteSpace: 'nowrap', fontVariantNumeric: 'tabular-nums' },
 });
 
 type VizKind = 'kpi' | 'chart' | 'table';

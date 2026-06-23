@@ -37,20 +37,20 @@ const SERIES_COLORS = [
 const useStyles = makeStyles({
   card: {
     border: `1px solid ${tokens.colorNeutralStroke2}`,
-    borderRadius: '10px',
+    borderRadius: tokens.borderRadiusXLarge,
     backgroundColor: tokens.colorNeutralBackground1,
-    padding: '14px',
+    padding: tokens.spacingVerticalM,
     display: 'flex',
     flexDirection: 'column',
-    gap: '12px',
+    gap: tokens.spacingVerticalM,
     minWidth: 0,
   },
-  controls: { display: 'flex', gap: '12px', flexWrap: 'wrap', alignItems: 'flex-end' },
+  controls: { display: 'flex', gap: tokens.spacingHorizontalM, flexWrap: 'wrap', alignItems: 'flex-end' },
   picker: { minWidth: '160px' },
-  legend: { display: 'flex', flexWrap: 'wrap', gap: '12px', alignItems: 'center' },
-  legendItem: { display: 'flex', alignItems: 'center', gap: '6px', fontSize: '11px', color: tokens.colorNeutralForeground2 },
-  swatch: { width: '10px', height: '10px', borderRadius: '2px', flexShrink: 0 },
-  meta: { fontSize: '11px', color: tokens.colorNeutralForeground3 },
+  legend: { display: 'flex', flexWrap: 'wrap', gap: tokens.spacingHorizontalM, alignItems: 'center' },
+  legendItem: { display: 'flex', alignItems: 'center', gap: tokens.spacingHorizontalXS, fontSize: tokens.fontSizeBase100, color: tokens.colorNeutralForeground2 },
+  swatch: { width: '10px', height: '10px', borderRadius: tokens.borderRadiusSmall, flexShrink: 0 },
+  meta: { fontSize: tokens.fontSizeBase100, color: tokens.colorNeutralForeground3 },
 });
 
 function isNumericColumn(rows: unknown[][], colIdx: number): boolean {

@@ -46,13 +46,13 @@ import type { FabricItemType } from '@/lib/catalog/fabric-item-types';
 import type { RibbonTab } from '@/lib/components/ribbon';
 
 const useStyles = makeStyles({
-  pad: { padding: 16, display: 'flex', flexDirection: 'column', gap: 12, flex: 1, minHeight: 0 },
-  toolbar: { display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' },
-  treePad: { padding: 8 },
-  tabs: { borderBottom: `1px solid ${tokens.colorNeutralStroke2}`, padding: '8px 8px 0' },
-  tableWrap: { overflow: 'auto', maxHeight: 360, border: `1px solid ${tokens.colorNeutralStroke2}`, borderRadius: 4 },
-  cell: { fontFamily: 'Consolas, monospace', fontSize: 12, whiteSpace: 'nowrap' },
-  field: { display: 'flex', flexDirection: 'column', gap: 4, minWidth: 220 },
+  pad: { padding: tokens.spacingVerticalL, display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalM, flex: 1, minHeight: 0 },
+  toolbar: { display: 'flex', gap: tokens.spacingHorizontalS, alignItems: 'center', flexWrap: 'wrap' },
+  treePad: { padding: tokens.spacingVerticalS },
+  tabs: { borderBottom: `1px solid ${tokens.colorNeutralStroke2}`, padding: `${tokens.spacingVerticalS} ${tokens.spacingHorizontalS} 0` },
+  tableWrap: { overflow: 'auto', maxHeight: 360, border: `1px solid ${tokens.colorNeutralStroke2}`, borderRadius: tokens.borderRadiusMedium },
+  cell: { fontFamily: 'Consolas, monospace', fontSize: tokens.fontSizeBase200, whiteSpace: 'nowrap' },
+  field: { display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalXS, minWidth: 220 },
 });
 
 interface WorkspaceLite { id: string; name: string }
@@ -214,7 +214,7 @@ export function MountedAdfEditor({ item, id }: Props) {
     <ItemEditorChrome item={item} id={id} ribbon={ribbon}
       leftPanel={
         <div className={s.treePad}>
-          <Subtitle2 style={{ marginBottom: 8 }}>Mounted factories</Subtitle2>
+          <Subtitle2 style={{ marginBottom: tokens.spacingVerticalS }}>Mounted factories</Subtitle2>
           {!workspaceId && <Caption1>Select a workspace.</Caption1>}
           {workspaceId && mounts === null && <Spinner size="tiny" label="Loading…" />}
           {mounts && mounts.length === 0 && <Caption1>No mounts yet.</Caption1>}
@@ -498,7 +498,7 @@ function DataFlowsTab() {
   }
 
   return (
-    <div style={{ display: 'flex', flexDirection: 'column', gap: 12, flex: 1, minHeight: 0 }}>
+    <div style={{ display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalM, flex: 1, minHeight: 0 }}>
       <div className={s.toolbar}>
         <Badge appearance="filled" color="brand" icon={<Database20Regular />}>Mapping Data Flows</Badge>
         <div className={s.field}>
@@ -519,7 +519,7 @@ function DataFlowsTab() {
                 <Field label="Name" required hint="1-260 chars: letters, digits, underscore">
                   <Input value={newName} onChange={(_, d) => setNewName(d.value)} placeholder="transform_orders" />
                 </Field>
-                {createErr && <MessageBar intent="error" style={{ marginTop: 8 }}><MessageBarBody>{createErr}</MessageBarBody></MessageBar>}
+                {createErr && <MessageBar intent="error" style={{ marginTop: tokens.spacingVerticalS }}><MessageBarBody>{createErr}</MessageBarBody></MessageBar>}
               </DialogContent>
               <DialogActions>
                 <Button appearance="secondary" onClick={() => setCreateOpen(false)}>Cancel</Button>
@@ -695,8 +695,8 @@ const useNodeStyles = makeStyles({
   },
   selected: { outline: `2px solid ${tokens.colorBrandStroke1}`, outlineOffset: 1 },
   bar: { height: 4 },
-  body: { padding: '8px 10px', display: 'flex', flexDirection: 'column', gap: 2 },
-  name: { fontWeight: 600, fontSize: 13, color: tokens.colorNeutralForeground1, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' },
+  body: { padding: `${tokens.spacingVerticalS} ${tokens.spacingHorizontalMNudge}`, display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalXXS },
+  name: { fontWeight: 600, fontSize: tokens.fontSizeBase300, color: tokens.colorNeutralForeground1, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' },
 });
 
 interface DfNodeData extends Record<string, unknown> { stream: DfStream }
@@ -719,23 +719,23 @@ function DfNode({ data, selected }: NodeProps) {
 const nodeTypes = { dfNode: DfNode };
 
 const useDesignerStyles = makeStyles({
-  shell: { display: 'flex', flexDirection: 'column', gap: 8, flex: 1, minHeight: 0 },
-  topbar: { display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' },
-  threePane: { display: 'flex', flex: 1, minHeight: 460, gap: 8 },
+  shell: { display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalS, flex: 1, minHeight: 0 },
+  topbar: { display: 'flex', gap: tokens.spacingHorizontalS, alignItems: 'center', flexWrap: 'wrap' },
+  threePane: { display: 'flex', flex: 1, minHeight: 460, gap: tokens.spacingHorizontalS },
   palette: {
-    flexShrink: 0, width: 200, padding: 8, display: 'flex', flexDirection: 'column', gap: 6,
+    flexShrink: 0, width: 200, padding: tokens.spacingVerticalS, display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalSNudge,
     border: `1px solid ${tokens.colorNeutralStroke2}`, borderRadius: tokens.borderRadiusMedium,
     backgroundColor: tokens.colorNeutralBackground1, overflow: 'auto',
   },
   tile: {
-    display: 'flex', flexDirection: 'column', gap: 2, padding: '6px 8px',
+    display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalXXS, padding: `${tokens.spacingVerticalSNudge} ${tokens.spacingHorizontalS}`,
     borderRadius: tokens.borderRadiusMedium, border: `1px solid ${tokens.colorNeutralStroke2}`,
     backgroundColor: tokens.colorNeutralBackground1, cursor: 'pointer', textAlign: 'left',
     ':hover': { backgroundColor: tokens.colorNeutralBackground1Hover, borderColor: tokens.colorBrandStroke1 },
   },
   canvasCol: { flex: 1, minWidth: 0, border: `1px solid ${tokens.colorNeutralStroke2}`, borderRadius: tokens.borderRadiusMedium, overflow: 'hidden' },
   configCol: {
-    flexShrink: 0, width: 300, padding: 12, display: 'flex', flexDirection: 'column', gap: 10,
+    flexShrink: 0, width: 300, padding: tokens.spacingVerticalM, display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalMNudge,
     border: `1px solid ${tokens.colorNeutralStroke2}`, borderRadius: tokens.borderRadiusMedium,
     backgroundColor: tokens.colorNeutralBackground1, overflow: 'auto',
   },
@@ -961,7 +961,7 @@ function InnerDesigner({ name, datasets, reloadKey }: DesignerProps) {
                 onClick={() => addTransform(t.kind)}
                 onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); addTransform(t.kind); } }}
               >
-                <span style={{ fontWeight: 600, borderLeft: `3px solid ${t.color}`, paddingLeft: 6 }}>{t.label}</span>
+                <span style={{ fontWeight: 600, borderLeft: `3px solid ${t.color}`, paddingLeft: tokens.spacingHorizontalSNudge }}>{t.label}</span>
                 <Caption1 style={{ color: tokens.colorNeutralForeground3 }}>{t.desc}</Caption1>
               </div>
             </Tooltip>

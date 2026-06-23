@@ -83,7 +83,7 @@ const useStyles = makeStyles({
     backgroundColor: tokens.colorNeutralBackground3, borderBottom: `1px solid ${tokens.colorNeutralStroke2}`,
   },
   code: {
-    fontFamily: tokens.fontFamilyMonospace, fontSize: '12px', lineHeight: '18px',
+    fontFamily: tokens.fontFamilyMonospace, fontSize: tokens.fontSizeBase200, lineHeight: '18px',
     whiteSpace: 'pre', overflow: 'auto', maxHeight: '420px', margin: 0,
     padding: tokens.spacingVerticalM, backgroundColor: tokens.colorNeutralBackground2,
   },

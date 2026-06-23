@@ -69,27 +69,27 @@ import { MonacoTextarea } from '@/lib/components/editor/monaco-textarea';
 
 const useStyles = makeStyles({
   shell: {
-    display: 'flex', flexDirection: 'column', gap: '8px', padding: '12px', flex: 1, minHeight: 0,
+    display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalS, padding: tokens.spacingHorizontalM, flex: 1, minHeight: 0,
   },
-  topbar: { display: 'flex', gap: '8px', alignItems: 'center', flexWrap: 'wrap' },
-  threePane: { display: 'flex', flex: 1, minHeight: '480px', gap: '8px' },
+  topbar: { display: 'flex', gap: tokens.spacingHorizontalS, alignItems: 'center', flexWrap: 'wrap' },
+  threePane: { display: 'flex', flex: 1, minHeight: '480px', gap: tokens.spacingHorizontalS },
   paletteCol: {
     flexShrink: 0,
     backgroundColor: tokens.colorNeutralBackground1,
     border: `1px solid ${tokens.colorNeutralStroke2}`,
-    borderRadius: '4px',
+    borderRadius: tokens.borderRadiusSmall,
     overflow: 'hidden',
     display: 'flex',
   },
-  centerCol: { flex: 1, display: 'flex', flexDirection: 'column', gap: '8px', minWidth: 0 },
-  treePad: { padding: '8px' },
-  tabBody: { padding: '12px', overflow: 'auto', flex: 1, display: 'flex', flexDirection: 'column', gap: '8px' },
+  centerCol: { flex: 1, display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalS, minWidth: 0 },
+  treePad: { padding: tokens.spacingVerticalS },
+  tabBody: { padding: tokens.spacingHorizontalM, overflow: 'auto', flex: 1, display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalS },
 
   // ── ADF-Studio designer layout: palette | (canvas over a resizable config dock) ──
   // The canvas FILLS the space above the dock; the dock has an explicit,
   // user-dragged height with its own internal scroll, so expanding/collapsing
   // sections inside the activity config NEVER resizes the canvas.
-  designerRow: { display: 'flex', flex: 1, minHeight: '560px', gap: '8px', minWidth: 0 },
+  designerRow: { display: 'flex', flex: 1, minHeight: '560px', gap: tokens.spacingHorizontalS, minWidth: 0 },
   designerMain: { flex: 1, display: 'flex', flexDirection: 'column', minWidth: 0, minHeight: 0 },
   canvasWrap: { flex: 1, minHeight: '180px', display: 'flex', overflow: 'hidden' },
   splitter: {
@@ -114,7 +114,7 @@ const useStyles = makeStyles({
     overflow: 'auto',
     backgroundColor: tokens.colorNeutralBackground1,
     border: `1px solid ${tokens.colorNeutralStroke2}`,
-    borderRadius: '4px',
+    borderRadius: tokens.borderRadiusSmall,
     minHeight: '120px',
   },
 });
@@ -821,7 +821,7 @@ export function DataPipelineEditor({ item, id }: Props) {
     <ItemEditorChrome item={item} id={id} ribbon={ribbon}
       leftPanel={
         <div className={s.treePad}>
-          <Subtitle2 style={{ marginBottom: 8 }}>Pipelines</Subtitle2>
+          <Subtitle2 style={{ marginBottom: tokens.spacingVerticalS }}>Pipelines</Subtitle2>
           {!workspaceId && <Caption1>Select a workspace.</Caption1>}
           {workspaceId && pipelines === null && <Spinner size="tiny" label="Loading…" />}
           {pipelines && pipelines.length === 0 && !listErr && <Caption1>No pipelines.</Caption1>}
@@ -841,7 +841,7 @@ export function DataPipelineEditor({ item, id }: Props) {
           <Toaster toasterId={toastId} />
           <div className={s.topbar}>
             <Badge appearance="filled" color="brand">Fabric Data Pipeline</Badge>
-            <div style={{ display: 'flex', flexDirection: 'column', gap: 4, minWidth: 280 }}>
+            <div style={{ display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalXS, minWidth: 280 }}>
               <Caption1>Workspace</Caption1>
               <Select value={workspaceId} onChange={(_, d) => setWorkspaceId(d.value)} disabled={ws.loading || (ws.workspaces?.length ?? 0) === 0}>
                 {!workspaceId && <option value="">{ws.loading ? 'Loading workspaces…' : 'Select a workspace'}</option>}
@@ -883,14 +883,14 @@ export function DataPipelineEditor({ item, id }: Props) {
           {!pipelineId && activities.length === 0 && (
             <div>
               {seedErr && (
-                <MessageBar intent={seedErrIntent} style={{ marginBottom: 8 }}>
+                <MessageBar intent={seedErrIntent} style={{ marginBottom: tokens.spacingVerticalS }}>
                   <MessageBarBody>
                     <MessageBarTitle>Practice with sample data</MessageBarTitle>
                     {seedErr}
                   </MessageBarBody>
                 </MessageBar>
               )}
-              <MessageBar intent="info" style={{ marginBottom: 8 }}>
+              <MessageBar intent="info" style={{ marginBottom: tokens.spacingVerticalS }}>
                 <MessageBarBody>
                   Design your pipeline below — drag activities from the palette onto the canvas and wire them
                   up. To <strong>Save / Validate / Run</strong> against the live backing, pick a workspace
@@ -909,11 +909,11 @@ export function DataPipelineEditor({ item, id }: Props) {
                   style={{
                     cursor: canCreate ? 'pointer' : 'not-allowed',
                     opacity: canCreate ? 1 : 0.6,
-                    padding: 18,
+                    padding: tokens.spacingHorizontalXL,
                     border: `1px solid ${tokens.colorNeutralStroke2}`,
-                    borderRadius: 8,
+                    borderRadius: tokens.borderRadiusLarge,
                     backgroundColor: tokens.colorNeutralBackground1,
-                    display: 'flex', flexDirection: 'column', gap: 6,
+                    display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalS,
                   }}
                   onClick={canCreate ? () => setCreateOpen(true) : undefined}
                   onKeyDown={(e) => { if (canCreate && (e.key === 'Enter' || e.key === ' ')) { e.preventDefault(); setCreateOpen(true); } }}
@@ -933,11 +933,11 @@ export function DataPipelineEditor({ item, id }: Props) {
                   aria-busy={seeding}
                   style={{
                     cursor: seeding ? 'default' : 'pointer',
-                    padding: 18,
+                    padding: tokens.spacingHorizontalXL,
                     border: `1px solid ${tokens.colorNeutralStroke2}`,
-                    borderRadius: 8,
+                    borderRadius: tokens.borderRadiusLarge,
                     backgroundColor: tokens.colorNeutralBackground1,
-                    display: 'flex', flexDirection: 'column', gap: 6,
+                    display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalS,
                   }}
                   onClick={seeding ? undefined : practiceWithSampleData}
                   onKeyDown={(e) => { if (!seeding && (e.key === 'Enter' || e.key === ' ')) { e.preventDefault(); practiceWithSampleData(); } }}
@@ -958,11 +958,11 @@ export function DataPipelineEditor({ item, id }: Props) {
                   tabIndex={0}
                   style={{
                     cursor: 'pointer',
-                    padding: 18,
+                    padding: tokens.spacingHorizontalXL,
                     border: `1px solid ${tokens.colorNeutralStroke2}`,
-                    borderRadius: 8,
+                    borderRadius: tokens.borderRadiusLarge,
                     backgroundColor: tokens.colorNeutralBackground1,
-                    display: 'flex', flexDirection: 'column', gap: 6,
+                    display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalS,
                   }}
                   onClick={() => setGalleryOpen(true)}
                   onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); setGalleryOpen(true); } }}
@@ -1197,7 +1197,7 @@ export function DataPipelineEditor({ item, id }: Props) {
                       }))} />
                   </Field>
 
-                  <Subtitle2 style={{ marginTop: 16 }}>Active triggers ({triggers.length})</Subtitle2>
+                  <Subtitle2 style={{ marginTop: tokens.spacingVerticalL }}>Active triggers ({triggers.length})</Subtitle2>
                   {triggers.length === 0 && <Caption1>No triggers wired to this pipeline yet.</Caption1>}
                   <Table size="small">
                     <TableBody>
@@ -1220,7 +1220,7 @@ export function DataPipelineEditor({ item, id }: Props) {
                     </TableBody>
                   </Table>
 
-                  <Subtitle2 style={{ marginTop: 16 }}>Raw spec</Subtitle2>
+                  <Subtitle2 style={{ marginTop: tokens.spacingVerticalL }}>Raw spec</Subtitle2>
                   <Caption1>Edit pipeline JSON directly. Saved on Save.</Caption1>
                   <MonacoTextarea
                     value={specToText(spec)}
@@ -1253,7 +1253,7 @@ export function DataPipelineEditor({ item, id }: Props) {
                 <DialogTitle>Create Fabric data pipeline</DialogTitle>
                 <DialogContent>
                   <Input placeholder="displayName" value={createName} onChange={(_, d) => setCreateName(d.value)} style={{ width: '100%' }} />
-                  {createErr && <MessageBar intent="error" style={{ marginTop: 8 }}><MessageBarBody>{createErr}</MessageBarBody></MessageBar>}
+                  {createErr && <MessageBar intent="error" style={{ marginTop: tokens.spacingVerticalS }}><MessageBarBody>{createErr}</MessageBarBody></MessageBar>}
                 </DialogContent>
                 <DialogActions>
                   <Button appearance="secondary" onClick={() => setCreateOpen(false)}>Cancel</Button>

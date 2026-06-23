@@ -67,15 +67,15 @@ interface Props {
 }
 
 const useStyles = makeStyles({
-  root: { display: 'flex', flexDirection: 'column', gap: 12 },
-  card: { border: `1px solid ${tokens.colorNeutralStroke2}`, borderRadius: 6, padding: 12, display: 'flex', flexDirection: 'column', gap: 10 },
-  searchRow: { display: 'grid', gridTemplateColumns: '160px 1fr auto', gap: 8, alignItems: 'end' },
-  resultsWrap: { maxHeight: 200, overflow: 'auto', border: `1px solid ${tokens.colorNeutralStroke2}`, borderRadius: 4 },
-  resultRow: { display: 'flex', alignItems: 'center', gap: 8, padding: '6px 8px', cursor: 'pointer', borderBottom: `1px solid ${tokens.colorNeutralStroke3}` },
+  root: { display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalM },
+  card: { border: `1px solid ${tokens.colorNeutralStroke2}`, borderRadius: tokens.borderRadiusLarge, padding: tokens.spacingVerticalM, display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalS },
+  searchRow: { display: 'grid', gridTemplateColumns: '160px 1fr auto', gap: tokens.spacingHorizontalS, alignItems: 'end' },
+  resultsWrap: { maxHeight: 200, overflow: 'auto', border: `1px solid ${tokens.colorNeutralStroke2}`, borderRadius: tokens.borderRadiusMedium },
+  resultRow: { display: 'flex', alignItems: 'center', gap: tokens.spacingHorizontalS, padding: `${tokens.spacingVerticalXS} ${tokens.spacingHorizontalS}`, cursor: 'pointer', borderBottom: `1px solid ${tokens.colorNeutralStroke3}` },
   selectedRow: { background: tokens.colorBrandBackground2 },
-  assignRow: { display: 'grid', gridTemplateColumns: '1fr 220px auto', gap: 8, alignItems: 'end' },
-  tableWrap: { overflow: 'auto', maxHeight: 280, border: `1px solid ${tokens.colorNeutralStroke2}`, borderRadius: 4 },
-  mono: { fontFamily: 'Consolas, monospace', fontSize: 11 },
+  assignRow: { display: 'grid', gridTemplateColumns: '1fr 220px auto', gap: tokens.spacingHorizontalS, alignItems: 'end' },
+  tableWrap: { overflow: 'auto', maxHeight: 280, border: `1px solid ${tokens.colorNeutralStroke2}`, borderRadius: tokens.borderRadiusMedium },
+  mono: { fontFamily: 'Consolas, monospace', fontSize: tokens.fontSizeBase100 },
 });
 
 async function fetchJson(input: string, init?: RequestInit): Promise<any> {
@@ -291,7 +291,7 @@ export function ShareDialog({ itemId, server, database, open }: Props) {
 
       {view === 'current' && (
         <div className={s.card}>
-          <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: tokens.spacingHorizontalS }}>
             <Subtitle2><PeopleTeam20Regular style={{ verticalAlign: 'middle' }} /> Role assignments at this database</Subtitle2>
             <Button size="small" appearance="outline" onClick={loadAssignments} disabled={loadingAssignments} style={{ marginLeft: 'auto' }}>
               {loadingAssignments ? 'Refreshing…' : 'Refresh'}

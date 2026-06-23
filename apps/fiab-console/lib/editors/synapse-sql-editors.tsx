@@ -52,21 +52,21 @@ import type { ScriptObjectType, ScriptMode } from '@/lib/azure/sql-object-script
 import { downloadBlob, resultsToCsv, resultsToJson } from './components/result-export';
 
 const useStyles = makeStyles({
-  pad: { padding: 16, display: 'flex', flexDirection: 'column', gap: 12, minHeight: 0, flex: 1 },
-  toolbar: { display: 'flex', gap: 12, alignItems: 'center', flexWrap: 'wrap' },
+  pad: { padding: tokens.spacingVerticalL, display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalM, minHeight: 0, flex: 1 },
+  toolbar: { display: 'flex', gap: tokens.spacingHorizontalM, alignItems: 'center', flexWrap: 'wrap' },
   editor: {
     width: '100%', minHeight: 200,
-    fontFamily: 'Consolas, "Cascadia Code", monospace', fontSize: 13, padding: 12,
-    border: `1px solid ${tokens.colorNeutralStroke2}`, borderRadius: 4,
+    fontFamily: 'Consolas, "Cascadia Code", monospace', fontSize: tokens.fontSizeBase300, padding: tokens.spacingVerticalM,
+    border: `1px solid ${tokens.colorNeutralStroke2}`, borderRadius: tokens.borderRadiusMedium,
     backgroundColor: tokens.colorNeutralBackground3, color: tokens.colorNeutralForeground1,
     resize: 'vertical',
   },
-  resultBox: { borderTop: `1px solid ${tokens.colorNeutralStroke2}`, paddingTop: 12, minHeight: 200 },
-  resultMeta: { display: 'flex', gap: 12, alignItems: 'center', marginBottom: 8, flexWrap: 'wrap' },
-  resultActions: { marginLeft: 'auto', display: 'flex', gap: 4 },
-  tableWrap: { overflow: 'auto', maxHeight: 360, border: `1px solid ${tokens.colorNeutralStroke2}`, borderRadius: 4 },
-  cell: { fontFamily: 'Consolas, monospace', fontSize: 12, whiteSpace: 'nowrap' },
-  treePad: { padding: 8 },
+  resultBox: { borderTop: `1px solid ${tokens.colorNeutralStroke2}`, paddingTop: tokens.spacingVerticalM, minHeight: 200 },
+  resultMeta: { display: 'flex', gap: tokens.spacingHorizontalM, alignItems: 'center', marginBottom: tokens.spacingVerticalS, flexWrap: 'wrap' },
+  resultActions: { marginLeft: 'auto', display: 'flex', gap: tokens.spacingHorizontalXS },
+  tableWrap: { overflow: 'auto', maxHeight: 360, border: `1px solid ${tokens.colorNeutralStroke2}`, borderRadius: tokens.borderRadiusMedium },
+  cell: { fontFamily: 'Consolas, monospace', fontSize: tokens.fontSizeBase200, whiteSpace: 'nowrap' },
+  treePad: { padding: tokens.spacingVerticalS },
 });
 
 interface QueryResponse {
@@ -1246,7 +1246,7 @@ export function SynapseDedicatedSqlPoolEditor({ item, id }: { item: FabricItemTy
               <DialogBody>
                 <DialogTitle>Query history — {poolState?.pool || 'Dedicated SQL pool'}</DialogTitle>
                 <DialogContent>
-                  <Caption1 style={{ display: 'block', marginBottom: 8 }}>
+                  <Caption1 style={{ display: 'block', marginBottom: tokens.spacingVerticalS }}>
                     Source: <code>sys.dm_pdw_exec_requests</code> — last 50 distributed requests (the DMV retains ~10,000 rows).
                   </Caption1>
                   {qhBusy && <Spinner size="tiny" label="Loading…" labelPosition="after" />}
@@ -1289,7 +1289,7 @@ export function SynapseDedicatedSqlPoolEditor({ item, id }: { item: FabricItemTy
                             <TableCell className={s.cell}>{e.total_elapsed_time_ms != null ? `${(e.total_elapsed_time_ms / 1000).toFixed(1)}s` : '—'}</TableCell>
                             <TableCell className={s.cell}>{e.resource_class || '—'}</TableCell>
                             <TableCell style={{ maxWidth: 400, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-                              <code style={{ fontSize: 11 }}>{(e.query_text || '').slice(0, 200) || '—'}</code>
+                              <code style={{ fontSize: tokens.fontSizeBase100 }}>{(e.query_text || '').slice(0, 200) || '—'}</code>
                             </TableCell>
                           </TableRow>
                         ))}
@@ -1311,7 +1311,7 @@ export function SynapseDedicatedSqlPoolEditor({ item, id }: { item: FabricItemTy
               <DialogBody>
                 <DialogTitle>Save as table (CTAS — Synapse Dedicated)</DialogTitle>
                 <DialogContent>
-                  <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalM }}>
                     {ctasError && (
                       <MessageBar intent="error"><MessageBarBody><MessageBarTitle>CTAS failed</MessageBarTitle>{ctasError}</MessageBarBody></MessageBar>
                     )}
@@ -1319,7 +1319,7 @@ export function SynapseDedicatedSqlPoolEditor({ item, id }: { item: FabricItemTy
                       Emits <code>CREATE TABLE [schema].[name] WITH (DISTRIBUTION = …, …INDEX) AS SELECT …</code>.
                       CTAS is the recommended way to create distributed tables on a Dedicated SQL pool — it runs in parallel and lets you choose the distribution + index strategy.
                     </Caption1>
-                    <div style={{ display: 'flex', gap: 8 }}>
+                    <div style={{ display: 'flex', gap: tokens.spacingHorizontalS }}>
                       <Field label="Schema" required style={{ flex: 1 }}>
                         <Input value={ctasSchema} onChange={(_, d) => setCtasSchema(d.value)} placeholder="dbo" />
                       </Field>
@@ -1327,7 +1327,7 @@ export function SynapseDedicatedSqlPoolEditor({ item, id }: { item: FabricItemTy
                         <Input value={ctasName} onChange={(_, d) => setCtasName(d.value)} placeholder="orders_summary" />
                       </Field>
                     </div>
-                    <div style={{ display: 'flex', gap: 8, alignItems: 'flex-end' }}>
+                    <div style={{ display: 'flex', gap: tokens.spacingHorizontalS, alignItems: 'flex-end' }}>
                       <Field label="Distribution" style={{ flex: 1 }}>
                         <Dropdown value={ctasDist} selectedOptions={[ctasDist]}
                           onOptionSelect={(_, d) => d.optionValue && setCtasDist(d.optionValue as 'ROUND_ROBIN' | 'HASH' | 'REPLICATE')}>
@@ -1342,7 +1342,7 @@ export function SynapseDedicatedSqlPoolEditor({ item, id }: { item: FabricItemTy
                         </Field>
                       )}
                     </div>
-                    <div style={{ display: 'flex', gap: 8, alignItems: 'flex-end' }}>
+                    <div style={{ display: 'flex', gap: tokens.spacingHorizontalS, alignItems: 'flex-end' }}>
                       <Field label="Index type" style={{ flex: 1 }}>
                         <Dropdown value={ctasIndex} selectedOptions={[ctasIndex]}
                           onOptionSelect={(_, d) => d.optionValue && setCtasIndex(d.optionValue as 'CLUSTERED COLUMNSTORE INDEX' | 'HEAP' | 'CLUSTERED INDEX')}>
@@ -1376,7 +1376,7 @@ export function SynapseDedicatedSqlPoolEditor({ item, id }: { item: FabricItemTy
               <DialogBody>
                 <DialogTitle>Select into (copy table)</DialogTitle>
                 <DialogContent>
-                  <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalM }}>
                     {siError && (
                       <MessageBar intent="error"><MessageBarBody><MessageBarTitle>SELECT INTO failed</MessageBarTitle>{siError}</MessageBarBody></MessageBar>
                     )}
@@ -1388,7 +1388,7 @@ export function SynapseDedicatedSqlPoolEditor({ item, id }: { item: FabricItemTy
                         a specific distribution or index, use Save as table (CTAS) instead.
                       </MessageBarBody>
                     </MessageBar>
-                    <div style={{ display: 'flex', gap: 8 }}>
+                    <div style={{ display: 'flex', gap: tokens.spacingHorizontalS }}>
                       <Field label="Source schema" style={{ flex: 1 }}>
                         <Input value={siSourceSchema} onChange={(_, d) => setSiSourceSchema(d.value)} />
                       </Field>
@@ -1396,7 +1396,7 @@ export function SynapseDedicatedSqlPoolEditor({ item, id }: { item: FabricItemTy
                         <Input value={siSourceTable} onChange={(_, d) => setSiSourceTable(d.value)} />
                       </Field>
                     </div>
-                    <div style={{ display: 'flex', gap: 8 }}>
+                    <div style={{ display: 'flex', gap: tokens.spacingHorizontalS }}>
                       <Field label="Target schema" style={{ flex: 1 }}>
                         <Input value={siTargetSchema} onChange={(_, d) => setSiTargetSchema(d.value)} />
                       </Field>

@@ -122,7 +122,7 @@ function GeoSaveBar({ saving, dirty, savedAt, error, onSave }: {
   saving: boolean; dirty: boolean; savedAt: string | null; error: string | null; onSave: () => void;
 }) {
   return (
-    <div style={{ display: 'flex', alignItems: 'center', gap: 12, padding: '8px 0', borderTop: `1px solid ${tokens.colorNeutralStroke2}` }}>
+    <div style={{ display: 'flex', alignItems: 'center', gap: tokens.spacingHorizontalM, padding: `${tokens.spacingVerticalS} 0`, borderTop: `1px solid ${tokens.colorNeutralStroke2}` }}>
       <Button appearance="primary" icon={<Save20Regular />} onClick={onSave} disabled={saving || !dirty}>
         {saving ? 'Saving…' : dirty ? 'Save' : 'Saved'}
       </Button>
@@ -136,54 +136,54 @@ function GeoSaveBar({ saving, dirty, savedAt, error, onSave }: {
 }
 
 const useStyles = makeStyles({
-  pad: { padding: '16px', display: 'flex', flexDirection: 'column', gap: '12px' },
-  treePad: { padding: '12px', display: 'flex', flexDirection: 'column', gap: '8px' },
-  field: { display: 'flex', flexDirection: 'column', gap: '4px' },
+  pad: { padding: tokens.spacingVerticalL, display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalM },
+  treePad: { padding: tokens.spacingHorizontalM, display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalS },
+  field: { display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalXS },
   codeBlock: {
-    fontFamily: 'Consolas, monospace', fontSize: '12px', lineHeight: '18px',
-    margin: '0', padding: '12px', borderRadius: tokens.borderRadiusMedium,
+    fontFamily: 'Consolas, monospace', fontSize: tokens.fontSizeBase200, lineHeight: '18px',
+    margin: '0', padding: tokens.spacingVerticalM, borderRadius: tokens.borderRadiusMedium,
     border: `1px solid ${tokens.colorNeutralStroke2}`,
     backgroundColor: tokens.colorNeutralBackground2, color: tokens.colorNeutralForeground1,
     whiteSpace: 'pre-wrap', wordBreak: 'break-word', maxHeight: '240px', overflow: 'auto',
   },
   enrichGroup: {
-    display: 'flex', flexDirection: 'column', gap: '8px',
-    padding: '12px', borderRadius: tokens.borderRadiusMedium,
+    display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalS,
+    padding: tokens.spacingVerticalM, borderRadius: tokens.borderRadiusMedium,
     border: `1px solid ${tokens.colorNeutralStroke2}`,
     backgroundColor: tokens.colorNeutralBackground2,
   },
   schemaRow: {
-    display: 'flex', flexDirection: 'column', gap: '2px',
-    borderBottom: `1px solid ${tokens.colorNeutralStroke3}`, paddingBottom: '6px', paddingTop: '2px',
+    display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalXXS,
+    borderBottom: `1px solid ${tokens.colorNeutralStroke3}`, paddingBottom: tokens.spacingVerticalS, paddingTop: tokens.spacingVerticalXXS,
   },
   // Bounding-box side-rail readout under the schema panel.
   bboxRail: {
-    marginTop: '8px', paddingTop: '8px',
+    marginTop: tokens.spacingVerticalS, paddingTop: tokens.spacingVerticalS,
     borderTop: `1px solid ${tokens.colorNeutralStroke3}`,
-    display: 'flex', flexDirection: 'column', gap: '2px',
+    display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalXXS,
   },
   bboxValue: {
     display: 'block', color: tokens.colorNeutralForeground3,
-    fontFamily: 'Consolas, monospace', fontSize: '11px', wordBreak: 'break-all',
+    fontFamily: 'Consolas, monospace', fontSize: tokens.fontSizeBase100, wordBreak: 'break-all',
   },
   // Last-run header row (title + run badges + timestamp).
-  runHeader: { display: 'flex', alignItems: 'center', gap: '8px', flexWrap: 'wrap' },
+  runHeader: { display: 'flex', alignItems: 'center', gap: tokens.spacingHorizontalS, flexWrap: 'wrap' },
   // Modern Fluent-toned parameter grid for the ADF run receipt.
   runTable: {
-    borderCollapse: 'collapse', width: '100%', fontSize: '12px', marginTop: '4px',
+    borderCollapse: 'collapse', width: '100%', fontSize: tokens.fontSizeBase200, marginTop: tokens.spacingVerticalXS,
     tableLayout: 'fixed',
   },
   runTh: {
-    textAlign: 'left', padding: '6px 8px', fontWeight: 600,
+    textAlign: 'left', padding: `${tokens.spacingVerticalXS} ${tokens.spacingHorizontalS}`, fontWeight: 600,
     color: tokens.colorNeutralForeground2,
     borderBottom: `1px solid ${tokens.colorNeutralStroke2}`,
   },
   runTd: {
-    padding: '6px 8px', verticalAlign: 'top',
+    padding: `${tokens.spacingVerticalXS} ${tokens.spacingHorizontalS}`, verticalAlign: 'top',
     borderBottom: `1px solid ${tokens.colorNeutralStroke3}`,
   },
   runMono: {
-    padding: '6px 8px', verticalAlign: 'top',
+    padding: `${tokens.spacingVerticalXS} ${tokens.spacingHorizontalS}`, verticalAlign: 'top',
     borderBottom: `1px solid ${tokens.colorNeutralStroke3}`,
     fontFamily: 'Consolas, monospace', wordBreak: 'break-all',
   },
@@ -407,7 +407,7 @@ function GeoSchemaPanel({ columns, rows, geomColumn }: { columns: string[]; rows
   const s = useStyles();
   const row0 = Array.isArray(rows) && rows.length > 0 ? rows[0] : [];
   return (
-    <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+    <div style={{ display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalXS }}>
       <Caption1 style={{ fontWeight: 600 }}>Schema ({columns.length} column{columns.length === 1 ? '' : 's'})</Caption1>
       {columns.map((c, i) => {
         const cell = Array.isArray(row0) ? (row0 as unknown[])[i] : undefined;
@@ -416,7 +416,7 @@ function GeoSchemaPanel({ columns, rows, geomColumn }: { columns: string[]; rows
         const preview = cell == null ? '∅' : String(cell).slice(0, 64);
         return (
           <div key={c} className={s.schemaRow}>
-            <div style={{ display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'wrap' }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: tokens.spacingHorizontalXS, flexWrap: 'wrap' }}>
               <Caption1 style={{ fontWeight: isGeom ? 700 : 500, color: isGeom ? tokens.colorBrandForeground1 : tokens.colorNeutralForeground1 }}>{c}</Caption1>
               {isGeom && <Badge appearance="tint" color="brand" size="small">geometry</Badge>}
               {enc && <Badge appearance="outline" color="informative" size="small">{enc}</Badge>}

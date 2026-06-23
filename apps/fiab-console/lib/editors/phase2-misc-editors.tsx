@@ -42,15 +42,15 @@ import { emptyProjectGraph, type DbtProjectGraph } from '@/lib/dbt/dbt-project-m
 import type { GeneratedFile } from '@/lib/dbt/dbt-codegen';
 
 const useStyles = makeStyles({
-  form: { padding: '20px', display: 'flex', flexDirection: 'column', gap: 12, maxWidth: 820 },
-  row: { display: 'flex', gap: 12 },
-  field: { flex: 1, display: 'flex', flexDirection: 'column', gap: 4 },
-  tabBar: { padding: '8px 16px 0', borderBottom: `1px solid ${tokens.colorNeutralStroke2}` },
-  tabBody: { padding: 20, display: 'flex', flexDirection: 'column', gap: 12 },
-  toolbar: { display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap', marginTop: 8 },
-  status: { display: 'flex', gap: 8, alignItems: 'center' },
-  resultBox: { marginTop: 16, borderTop: `1px solid ${tokens.colorNeutralStroke2}`, paddingTop: 12 },
-  mono: { fontFamily: 'Consolas, "Cascadia Code", monospace', fontSize: 12 },
+  form: { padding: tokens.spacingVerticalXL, display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalM, maxWidth: 820 },
+  row: { display: 'flex', gap: tokens.spacingHorizontalM },
+  field: { flex: 1, display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalXS },
+  tabBar: { padding: `${tokens.spacingVerticalS} ${tokens.spacingHorizontalL} 0`, borderBottom: `1px solid ${tokens.colorNeutralStroke2}` },
+  tabBody: { padding: tokens.spacingVerticalXL, display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalM },
+  toolbar: { display: 'flex', gap: tokens.spacingHorizontalS, alignItems: 'center', flexWrap: 'wrap', marginTop: tokens.spacingVerticalS },
+  status: { display: 'flex', gap: tokens.spacingHorizontalS, alignItems: 'center' },
+  resultBox: { marginTop: tokens.spacingVerticalL, borderTop: `1px solid ${tokens.colorNeutralStroke2}`, paddingTop: tokens.spacingVerticalM },
+  mono: { fontFamily: 'Consolas, "Cascadia Code", monospace', fontSize: tokens.fontSizeBase200 },
   builderHeader: {
     display: 'flex', alignItems: 'center', gap: tokens.spacingHorizontalS, flexWrap: 'wrap',
     color: tokens.colorNeutralForeground2,
@@ -71,22 +71,22 @@ const useStyles = makeStyles({
     minHeight: 360, alignItems: 'stretch',
   },
   fileList: {
-    display: 'flex', flexDirection: 'column', gap: 2,
+    display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalXXS,
     border: `1px solid ${tokens.colorNeutralStroke2}`, borderRadius: tokens.borderRadiusMedium,
     backgroundColor: tokens.colorNeutralBackground2,
     padding: tokens.spacingVerticalXS, overflowY: 'auto', maxHeight: 480,
   },
-  fileBtn: { justifyContent: 'flex-start', fontFamily: tokens.fontFamilyMonospace, fontSize: 12 },
+  fileBtn: { justifyContent: 'flex-start', fontFamily: tokens.fontFamilyMonospace, fontSize: tokens.fontSizeBase200 },
   filePane: { display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalXS, minWidth: 0 },
   filePaneHeader: {
-    display: 'flex', alignItems: 'center', gap: 6,
-    fontFamily: tokens.fontFamilyMonospace, fontSize: 12,
+    display: 'flex', alignItems: 'center', gap: tokens.spacingHorizontalS,
+    fontFamily: tokens.fontFamilyMonospace, fontSize: tokens.fontSizeBase200,
     color: tokens.colorNeutralForeground2,
   },
   json: {
-    width: '100%', minHeight: 120, padding: 10,
-    fontFamily: 'Consolas, "Cascadia Code", monospace', fontSize: 12,
-    border: `1px solid ${tokens.colorNeutralStroke2}`, borderRadius: 4,
+    width: '100%', minHeight: 120, padding: tokens.spacingVerticalS,
+    fontFamily: 'Consolas, "Cascadia Code", monospace', fontSize: tokens.fontSizeBase200,
+    border: `1px solid ${tokens.colorNeutralStroke2}`, borderRadius: tokens.borderRadiusMedium,
     backgroundColor: tokens.colorNeutralBackground3, color: tokens.colorNeutralForeground1,
     resize: 'vertical',
   },
@@ -679,7 +679,7 @@ export function DbtJobEditor({ item, id }: { item: FabricItemType; id: string })
 
           {/* ── GENERATED FILES ─────────────────────────────────────── */}
           {tab === 'files' && (
-            <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+            <div style={{ display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalM }}>
               <div className={styles.toolbar}>
                 <Button appearance="primary" onClick={generate} disabled={!canGenerate}>Generate project files</Button>
                 {busy && <Spinner size="tiny" label="Generating…" labelPosition="after" />}
@@ -794,7 +794,7 @@ export function DbtJobEditor({ item, id }: { item: FabricItemType; id: string })
 
           {/* ── RUNS ────────────────────────────────────────────────── */}
           {tab === 'runs' && (
-            <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+            <div style={{ display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalM }}>
               <div className={styles.toolbar}>
                 <Button appearance="primary" onClick={run} disabled={!canRunDbt}>Run dbt</Button>
                 <Button onClick={loadRuns} disabled={busy}>Refresh runs</Button>

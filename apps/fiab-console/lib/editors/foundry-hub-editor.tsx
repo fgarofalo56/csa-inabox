@@ -44,34 +44,34 @@ import { FoundryAgentsPanel } from '@/lib/components/foundry/foundry-agents';
 import { LineChart, BarChart, StatTile, type LineSeries, type Bar } from '@/lib/components/foundry/foundry-charts';
 
 const useStyles = makeStyles({
-  pad: { padding: 16, display: 'flex', flexDirection: 'column', gap: 12, minHeight: 0, flex: 1 },
-  tabBar: { padding: '8px 16px 0', borderBottom: `1px solid ${tokens.colorNeutralStroke2}`, overflowX: 'auto' },
-  metaGrid: { display: 'grid', gridTemplateColumns: 'auto 1fr', gap: '6px 16px', alignItems: 'baseline' },
-  metaKey: { color: tokens.colorNeutralForeground3, fontSize: 12 },
-  tableWrap: { overflow: 'auto', maxHeight: 460, border: `1px solid ${tokens.colorNeutralStroke2}`, borderRadius: 4 },
-  cell: { fontSize: 12, whiteSpace: 'nowrap', maxWidth: 360, overflow: 'hidden', textOverflow: 'ellipsis' },
-  empty: { padding: 16, color: tokens.colorNeutralForeground3, fontStyle: 'italic' },
-  toolbar: { display: 'flex', gap: 12, alignItems: 'center', flexWrap: 'wrap' },
-  secret: { fontFamily: 'monospace', fontSize: 12, wordBreak: 'break-all' },
+  pad: { padding: tokens.spacingVerticalL, display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalM, minHeight: 0, flex: 1 },
+  tabBar: { padding: `${tokens.spacingVerticalS} ${tokens.spacingHorizontalL} 0`, borderBottom: `1px solid ${tokens.colorNeutralStroke2}`, overflowX: 'auto' },
+  metaGrid: { display: 'grid', gridTemplateColumns: 'auto 1fr', gap: `${tokens.spacingVerticalXS} ${tokens.spacingHorizontalL}`, alignItems: 'baseline' },
+  metaKey: { color: tokens.colorNeutralForeground3, fontSize: tokens.fontSizeBase200 },
+  tableWrap: { overflow: 'auto', maxHeight: 460, border: `1px solid ${tokens.colorNeutralStroke2}`, borderRadius: tokens.borderRadiusMedium },
+  cell: { fontSize: tokens.fontSizeBase200, whiteSpace: 'nowrap', maxWidth: 360, overflow: 'hidden', textOverflow: 'ellipsis' },
+  empty: { padding: tokens.spacingVerticalL, color: tokens.colorNeutralForeground3, fontStyle: 'italic' },
+  toolbar: { display: 'flex', gap: tokens.spacingHorizontalM, alignItems: 'center', flexWrap: 'wrap' },
+  secret: { fontFamily: 'monospace', fontSize: tokens.fontSizeBase200, wordBreak: 'break-all' },
   // Stat tiles laid out as an even responsive grid (no ragged flex-wrap rows).
   statRow: {
     display: 'grid',
     gridTemplateColumns: 'repeat(auto-fill, minmax(140px, 1fr))',
-    gap: 12,
+    gap: tokens.spacingVerticalM,
   },
   // Charts laid out two-up on wide screens, single-column when narrow.
   chartGrid: {
     display: 'grid',
     gridTemplateColumns: 'repeat(auto-fit, minmax(360px, 1fr))',
-    gap: 16,
+    gap: tokens.spacingHorizontalL,
   },
   // A framed "card" around a chart + its heading/caption so the dashboard reads
   // as discrete panels rather than loose SVGs floating on the background.
   chartCard: {
     display: 'flex',
     flexDirection: 'column',
-    gap: 4,
-    padding: 12,
+    gap: tokens.spacingVerticalXS,
+    padding: tokens.spacingVerticalM,
     border: `1px solid ${tokens.colorNeutralStroke2}`,
     borderRadius: tokens.borderRadiusLarge,
     backgroundColor: tokens.colorNeutralBackground1,
@@ -82,9 +82,9 @@ const useStyles = makeStyles({
   detailCard: {
     display: 'flex',
     flexDirection: 'column',
-    gap: 8,
-    padding: 12,
-    marginTop: 8,
+    gap: tokens.spacingVerticalS,
+    padding: tokens.spacingVerticalM,
+    marginTop: tokens.spacingVerticalS,
     border: `1px solid ${tokens.colorNeutralStroke2}`,
     borderRadius: tokens.borderRadiusLarge,
     backgroundColor: tokens.colorNeutralBackground1,
@@ -265,7 +265,7 @@ function DeployModelDialog({ open, onClose, onDeployed, acct }: { open: boolean;
         <DialogBody>
           <DialogTitle>Deploy a model</DialogTitle>
           <DialogContent>
-            <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+            <div style={{ display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalM }}>
               {catalog.error && <GateBar msg={catalog.error} hint={catalog.hint} notDeployed={catalog.notDeployed} />}
               <Field label="Model">
                 {models.length > 0 ? (
@@ -389,7 +389,7 @@ function ModelsPanel({ active, nonce, acct }: { active: boolean; nonce: number; 
         </div>
       )}
 
-      <Subtitle2 style={{ marginTop: 12 }}>Online endpoints</Subtitle2>
+      <Subtitle2 style={{ marginTop: tokens.spacingVerticalM }}>Online endpoints</Subtitle2>
       {eps.loading ? <Spinner size="small" /> : eps.error ? <GateBar msg={eps.error} hint={eps.hint} notDeployed={eps.notDeployed} /> : endpoints.length === 0 ? (
         <EmptyText>No managed online endpoints.</EmptyText>
       ) : (
@@ -413,7 +413,7 @@ function ModelsPanel({ active, nonce, acct }: { active: boolean; nonce: number; 
         </div>
       )}
 
-      <Subtitle2 style={{ marginTop: 12 }}>Registered models</Subtitle2>
+      <Subtitle2 style={{ marginTop: tokens.spacingVerticalM }}>Registered models</Subtitle2>
       {models.loading ? <Spinner size="small" /> : models.error ? <GateBar msg={models.error} hint={models.hint} notDeployed={models.notDeployed} /> : regModels.length === 0 ? (
         <EmptyText>No registered models in this hub.</EmptyText>
       ) : (
@@ -537,7 +537,7 @@ function NetworkingPanel({ active, nonce, acct }: { active: boolean; nonce: numb
             <span className={s.metaKey}>IP rules</span><span>{(Array.isArray(net.ipRules) ? net.ipRules : []).join(', ') || '—'}</span>
             <span className={s.metaKey}>VNet rules</span><span>{(Array.isArray(net.virtualNetworkRules) ? net.virtualNetworkRules : []).length}</span>
           </div>
-          <Subtitle2 style={{ marginTop: 8 }}>Private endpoints</Subtitle2>
+          <Subtitle2 style={{ marginTop: tokens.spacingVerticalS }}>Private endpoints</Subtitle2>
           {(Array.isArray(net.privateEndpoints) ? net.privateEndpoints : []).length === 0 ? <EmptyText>No private endpoint connections.</EmptyText> : (
             <div className={s.tableWrap}>
               <Table aria-label="Private endpoints" size="small">
@@ -623,7 +623,7 @@ function KeysPanel({ active, nonce, acct }: { active: boolean; nonce: number; ac
           </div>
           {keys.regionalEndpoints && Object.keys(keys.regionalEndpoints).length > 0 && (
             <>
-              <Subtitle2 style={{ marginTop: 8 }}>Regional endpoints</Subtitle2>
+              <Subtitle2 style={{ marginTop: tokens.spacingVerticalS }}>Regional endpoints</Subtitle2>
               <div className={s.tableWrap}>
                 <Table aria-label="Regional endpoints" size="small">
                   <TableHeader><TableRow><TableHeaderCell>Capability</TableHeaderCell><TableHeaderCell>URL</TableHeaderCell></TableRow></TableHeader>
@@ -784,7 +784,7 @@ function JobsPanel({ active, nonce }: { active: boolean; nonce: number }) {
           </TableBody>
         </Table>
       </div>
-      <Subtitle2 style={{ marginTop: 16 }}>Recent jobs</Subtitle2>
+      <Subtitle2 style={{ marginTop: tokens.spacingVerticalL }}>Recent jobs</Subtitle2>
       <div className={s.tableWrap}>
         <Table aria-label="Jobs" size="small">
           <TableHeader><TableRow>
@@ -898,13 +898,13 @@ function CreateEvalDialog({ open, onClose, onCreated, acct }: { open: boolean; o
         <DialogBody>
           <DialogTitle>Create an evaluation</DialogTitle>
           <DialogContent>
-            <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+            <div style={{ display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalM }}>
               <Caption1>Defines an evaluation structure (data schema + one or more graders). After creating, upload a JSONL dataset and start a run from the Runs section below — no portal hop required.</Caption1>
               <Field label="Evaluation name" required><Input value={name} onChange={(_, d) => setName(d.value)} placeholder="qa-accuracy-eval" /></Field>
               <Body1 style={{ fontWeight: 600 }}>Testing criteria (graders)</Body1>
               {rows.map((c, i) => (
-                <div key={i} style={{ display: 'flex', flexDirection: 'column', gap: 6, padding: 10, border: `1px solid ${tokens.colorNeutralStroke2}`, borderRadius: 6 }}>
-                  <div style={{ display: 'flex', gap: 8, alignItems: 'flex-end' }}>
+                <div key={i} style={{ display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalXS, padding: tokens.spacingVerticalS, border: `1px solid ${tokens.colorNeutralStroke2}`, borderRadius: tokens.borderRadiusLarge }}>
+                  <div style={{ display: 'flex', gap: tokens.spacingHorizontalS, alignItems: 'flex-end' }}>
                     <Field label="Grader type" style={{ flex: 1 }}>
                       <Dropdown value={GRADER_LABEL[c.type]} selectedOptions={[c.type]} onOptionSelect={(_, d) => d.optionValue && setRow(i, { type: d.optionValue as CriterionRow['type'] })}>
                         {(Object.keys(GRADER_LABEL) as CriterionRow['type'][]).map((t) => <Option key={t} value={t}>{GRADER_LABEL[t]}</Option>)}
@@ -1013,7 +1013,7 @@ function StartRunDialog({ open, onClose, onStarted, evalItem, acct }: {
         <DialogBody>
           <DialogTitle>Start a run · {evalItem?.name || evalItem?.id}</DialogTitle>
           <DialogContent>
-            <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+            <div style={{ display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalM }}>
               <Caption1>Upload a JSONL dataset (one object per line with an <code>input</code> and <code>expected</code> field), pick the deployment to grade, and start. The run samples the model per row, then applies this evaluation’s graders.</Caption1>
               <Field label="Run name (optional)"><Input value={runName} onChange={(_, d) => setRunName(d.value)} placeholder="baseline-run" /></Field>
               <Field label="Deployment to grade" required>
@@ -1059,19 +1059,19 @@ function EvalDetailCard({ evalItem }: { evalItem: EvalSummary }) {
   return (
     <div className={s.detailCard}>
       <Body1 style={{ fontWeight: 600 }}>Evaluation details</Body1>
-      <div style={{ display: 'grid', gridTemplateColumns: 'auto 1fr', gap: '4px 16px', alignItems: 'baseline' }}>
+      <div style={{ display: 'grid', gridTemplateColumns: 'auto 1fr', gap: `${tokens.spacingVerticalXXS} ${tokens.spacingHorizontalL}`, alignItems: 'baseline' }}>
         <Caption1>ID</Caption1><Caption1 style={{ fontFamily: 'monospace' }}>{evalItem.id}</Caption1>
         <Caption1>Data-source type</Caption1><Caption1>{dsc?.type || 'custom'}</Caption1>
         <Caption1>Item schema fields</Caption1>
-        <div style={{ display: 'flex', gap: 4, flexWrap: 'wrap' }}>
+        <div style={{ display: 'flex', gap: tokens.spacingHorizontalXS, flexWrap: 'wrap' }}>
           {fields.length ? fields.map((f) => <Badge key={f} appearance="outline">{f}</Badge>) : <Caption1>—</Caption1>}
         </div>
       </div>
-      <Caption1 style={{ fontWeight: 600, marginTop: 4 }}>Testing criteria ({criteria.length})</Caption1>
+      <Caption1 style={{ fontWeight: 600, marginTop: tokens.spacingVerticalXS }}>Testing criteria ({criteria.length})</Caption1>
       {criteria.length === 0 ? <Caption1>No graders defined.</Caption1> : (
-        <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+        <div style={{ display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalXS }}>
           {criteria.map((c, i) => (
-            <div key={i} style={{ display: 'flex', gap: 6, alignItems: 'center', flexWrap: 'wrap' }}>
+            <div key={i} style={{ display: 'flex', gap: tokens.spacingHorizontalXS, alignItems: 'center', flexWrap: 'wrap' }}>
               <Badge appearance="tint" color="brand">{c?.type || 'grader'}</Badge>
               <Caption1>{c?.name || `criterion ${i + 1}`}</Caption1>
               {c?.model && <Caption1 style={{ color: tokens.colorNeutralForeground3 }}>· model: {c.model}</Caption1>}
@@ -1193,7 +1193,7 @@ function EvaluationsPanel({ active, nonce, acct }: { active: boolean; nonce: num
         <>
           {/* A7 — eval detail: the data-source schema + testing criteria the eval grades on. */}
           <EvalDetailCard evalItem={selected} />
-          <div className={s.toolbar} style={{ marginTop: 12 }}>
+          <div className={s.toolbar} style={{ marginTop: tokens.spacingVerticalM }}>
             <Subtitle2>Runs · {selected.name || selected.id}</Subtitle2>
             <Button size="small" appearance="primary" onClick={() => setRunOpen(true)}>+ Start a run</Button>
             <Button size="small" onClick={() => loadRuns(selected)}>Reload runs</Button>
@@ -1248,7 +1248,7 @@ function EvaluationsPanel({ active, nonce, acct }: { active: boolean; nonce: num
               value2: r.resultCounts?.failed ?? Math.max(0, (r.resultCounts?.total ?? 0) - (r.resultCounts?.passed ?? 0)),
             }));
             return (
-              <div className={s.chartGrid} style={{ marginTop: 12 }}>
+              <div className={s.chartGrid} style={{ marginTop: tokens.spacingVerticalM }}>
                 <div className={s.chartCard}>
                   <Body1 className={s.chartTitle}>Pass-rate trend</Body1>
                   <Caption1 className={s.chartCaption}>Pass rate across this evaluation’s graded runs (oldest → newest).</Caption1>
@@ -1267,7 +1267,7 @@ function EvaluationsPanel({ active, nonce, acct }: { active: boolean; nonce: num
 
       {selected && selectedRun && (
         <>
-          <Subtitle2 style={{ marginTop: 12 }}>Per-row results · {selectedRun.name || selectedRun.id}</Subtitle2>
+          <Subtitle2 style={{ marginTop: tokens.spacingVerticalM }}>Per-row results · {selectedRun.name || selectedRun.id}</Subtitle2>
           {items.loading ? <Spinner size="small" /> : items.error ? <GateBar msg={items.error} hint={items.hint} /> : items.list.length === 0 ? (
             <EmptyText>No output items for this run yet. Items appear once the run completes grading.</EmptyText>
           ) : (
@@ -1284,7 +1284,7 @@ function EvaluationsPanel({ active, nonce, acct }: { active: boolean; nonce: num
                       <TableCell className={s.cell}>{it.status || '—'}</TableCell>
                       <TableCell className={s.cell}>
                         {it.results.length ? it.results.map((r, i) => (
-                          <Badge key={i} appearance="tint" color={r.passed === true ? 'success' : r.passed === false ? 'danger' : 'informative'} style={{ marginRight: 4 }}>
+                          <Badge key={i} appearance="tint" color={r.passed === true ? 'success' : r.passed === false ? 'danger' : 'informative'} style={{ marginRight: tokens.spacingHorizontalXS }}>
                             {(r.name || 'grader')}{r.score !== undefined ? ` ${r.score.toFixed(2)}` : ''}{r.passed === true ? ' ✓' : r.passed === false ? ' ✗' : ''}
                           </Badge>
                         )) : '—'}
@@ -1382,7 +1382,7 @@ function MonitoringPanel({ active, nonce }: { active: boolean; nonce: number }) 
             <StatTile label="Latency p50" value={sum.totals.p50Ms !== undefined ? `${Math.round(sum.totals.p50Ms)} ms` : '—'} />
             <StatTile label="Latency p95" value={sum.totals.p95Ms !== undefined ? `${Math.round(sum.totals.p95Ms)} ms` : '—'} />
           </div>
-          <div className={s.chartGrid} style={{ marginTop: 8 }}>
+          <div className={s.chartGrid} style={{ marginTop: tokens.spacingVerticalS }}>
             <div className={s.chartCard}>
               <Body1 className={s.chartTitle}>Request volume</Body1>
               <Caption1 className={s.chartCaption}>Requests vs failures over time.</Caption1>
@@ -1394,12 +1394,12 @@ function MonitoringPanel({ active, nonce }: { active: boolean; nonce: number }) 
               <LineChart series={tokSeries} xIsTime xLabel="time" yLabel="tokens" yFormat={(v) => fmtNum(Math.round(v))} width={480} height={220} emptyText="No token usage telemetry in this window." />
             </div>
           </div>
-          <div className={s.chartCard} style={{ marginTop: 8 }}>
+          <div className={s.chartCard} style={{ marginTop: tokens.spacingVerticalS }}>
             <Body1 className={s.chartTitle}>Latency by operation (p95)</Body1>
             <Caption1 className={s.chartCaption}>Slowest operations by 95th-percentile duration (top 12 by call count).</Caption1>
             <BarChart bars={opBars} width={620} valueFormat={(v) => `${v} ms`} emptyText="No operations recorded in this window." />
           </div>
-          <Subtitle2 style={{ marginTop: 8 }}>Operations ({sum.byOperation.length})</Subtitle2>
+          <Subtitle2 style={{ marginTop: tokens.spacingVerticalS }}>Operations ({sum.byOperation.length})</Subtitle2>
           <Caption1 className={s.chartCaption}>Click a column header to sort.</Caption1>
           <div className={s.tableWrap} style={{ maxHeight: 260 }}>
             <Table size="small" aria-label="Operations" sortable>
@@ -1558,9 +1558,9 @@ function FineTuningPanel({ active, nonce, acct }: { active: boolean; nonce: numb
       {jobsState.error && <GateBar msg={jobsState.error} hint={jobsState.hint} notDeployed={jobsState.notDeployed} />}
       {msg && <MessageBar intent={msg.intent}><MessageBarBody>{msg.text}{msg.hint ? <><br /><Caption1>{msg.hint}</Caption1></> : null}</MessageBarBody></MessageBar>}
 
-      <div style={{ display: 'grid', gridTemplateColumns: 'minmax(280px, 360px) 1fr', gap: 16, alignItems: 'start' }}>
+      <div style={{ display: 'grid', gridTemplateColumns: 'minmax(280px, 360px) 1fr', gap: tokens.spacingHorizontalL, alignItems: 'start' }}>
         {/* Upload training data */}
-        <div style={{ display: 'flex', flexDirection: 'column', gap: 10, padding: 12, border: `1px solid ${tokens.colorNeutralStroke2}`, borderRadius: 6 }}>
+        <div style={{ display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalS, padding: tokens.spacingVerticalM, border: `1px solid ${tokens.colorNeutralStroke2}`, borderRadius: tokens.borderRadiusLarge }}>
           <Body1 style={{ fontWeight: 600 }}>Upload training data</Body1>
           <Caption1>JSONL with chat-format examples (one <code>{'{ "messages": [...] }'}</code> per line).</Caption1>
           <input type="file" accept=".jsonl,.json,text/plain" disabled={uploading} onChange={(e) => { const f = e.target.files?.[0]; if (f) upload(f); }} />
@@ -1579,7 +1579,7 @@ function FineTuningPanel({ active, nonce, acct }: { active: boolean; nonce: numb
         </div>
 
         {/* Create job */}
-        <div style={{ display: 'flex', flexDirection: 'column', gap: 10, padding: 12, border: `1px solid ${tokens.colorNeutralStroke2}`, borderRadius: 6 }}>
+        <div style={{ display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalS, padding: tokens.spacingVerticalM, border: `1px solid ${tokens.colorNeutralStroke2}`, borderRadius: tokens.borderRadiusLarge }}>
           <Body1 style={{ fontWeight: 600 }}>Create a fine-tuning job</Body1>
           <Field label="Base model">
             {fineTunable.length ? (
@@ -1604,7 +1604,7 @@ function FineTuningPanel({ active, nonce, acct }: { active: boolean; nonce: numb
             </Dropdown>
           </Field>
           <Field label="Suffix (optional — names the fine-tuned model)"><Input value={suffix} onChange={(_, d) => setSuffix(d.value)} placeholder="my-tuned" /></Field>
-          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 8 }}>
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: tokens.spacingVerticalS }}>
             <Field label="Epochs"><Input type="number" value={epochs} onChange={(_, d) => setEpochs(d.value)} placeholder="auto" /></Field>
             <Field label="Batch size"><Input type="number" value={batchSize} onChange={(_, d) => setBatchSize(d.value)} placeholder="auto" /></Field>
             <Field label="LR multiplier"><Input type="number" value={lrMult} onChange={(_, d) => setLrMult(d.value)} placeholder="auto" /></Field>
@@ -1613,7 +1613,7 @@ function FineTuningPanel({ active, nonce, acct }: { active: boolean; nonce: numb
         </div>
       </div>
 
-      <Subtitle2 style={{ marginTop: 8 }}>Fine-tuning jobs</Subtitle2>
+      <Subtitle2 style={{ marginTop: tokens.spacingVerticalS }}>Fine-tuning jobs</Subtitle2>
       {jobsState.loading ? <Spinner size="small" /> : jobs.length === 0 ? (
         <EmptyText>No fine-tuning jobs yet. Upload training data and create a job above.</EmptyText>
       ) : (
@@ -1649,7 +1649,7 @@ function FineTuningPanel({ active, nonce, acct }: { active: boolean; nonce: numb
 
       {selectedJob && (
         <>
-          <Subtitle2 style={{ marginTop: 12 }}>Training metrics · {selectedJob.id}</Subtitle2>
+          <Subtitle2 style={{ marginTop: tokens.spacingVerticalM }}>Training metrics · {selectedJob.id}</Subtitle2>
           {selectedJob.error?.message ? <GateBar msg={selectedJob.error.message} /> : null}
           {events.loading ? <Spinner size="small" /> : events.error ? <GateBar msg={events.error} /> : events.list.length === 0 ? (
             <EmptyText>No training events yet. Loss metrics appear here as the job trains.</EmptyText>
@@ -1669,7 +1669,7 @@ function FineTuningPanel({ active, nonce, acct }: { active: boolean; nonce: numb
                 if (valid.length) lossSeries.push({ label: 'Validation loss', color: tokens.colorPaletteRedForeground1, points: valid });
                 if (!lossSeries.length) return null;
                 return (
-                  <div className={s.chartCard} style={{ marginBottom: 12 }}>
+                  <div className={s.chartCard} style={{ marginBottom: tokens.spacingVerticalM }}>
                     <Body1 className={s.chartTitle}>Loss curve</Body1>
                     <Caption1 className={s.chartCaption}>Training and validation loss over training steps.</Caption1>
                     <LineChart series={lossSeries} xLabel="step" yLabel="loss" width={620} height={240} emptyText="No loss metrics emitted yet." />
@@ -1710,8 +1710,8 @@ function FineTuningPanel({ active, nonce, acct }: { active: boolean; nonce: numb
 
 const usePickerStyles = makeStyles({
   bar: {
-    display: 'flex', alignItems: 'center', gap: 12, flexWrap: 'wrap',
-    padding: '8px 16px', borderBottom: `1px solid ${tokens.colorNeutralStroke2}`,
+    display: 'flex', alignItems: 'center', gap: tokens.spacingHorizontalM, flexWrap: 'wrap',
+    padding: `${tokens.spacingVerticalS} ${tokens.spacingHorizontalL}`, borderBottom: `1px solid ${tokens.colorNeutralStroke2}`,
     backgroundColor: tokens.colorNeutralBackground2,
   },
   grow: { flex: 1 },
@@ -1859,7 +1859,7 @@ export function FoundryHubEditor({ item, id }: { item: FabricItemType; id: strin
       <>
         <AccountPickerBar acct={acct} onSelect={onSelectAccount} onHub={onHub} />
         {crossSubHub && (
-          <div style={{ padding: '4px 16px' }}>
+          <div style={{ padding: `${tokens.spacingVerticalXXS} ${tokens.spacingHorizontalL}` }}>
             <Badge appearance="tint" color="brand">Hub/project selected: {crossSubHub.name}</Badge>
           </div>
         )}

@@ -24,13 +24,13 @@ import type { FabricItemType } from '@/lib/catalog/fabric-item-types';
 import type { RibbonTab } from '@/lib/components/ribbon';
 
 const useStyles = makeStyles({
-  pad: { padding: 16, display: 'flex', flexDirection: 'column', gap: 12 },
-  grid: { display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(280px, 1fr))', gap: 12 },
-  card: { padding: 12, cursor: 'pointer', border: `1px solid ${tokens.colorNeutralStroke2}`, borderRadius: 6 },
-  cardActive: { padding: 12, border: `2px solid ${tokens.colorBrandStroke1}`, borderRadius: 6, background: tokens.colorBrandBackground2 },
-  treePad: { padding: 12, display: 'flex', flexDirection: 'column', gap: 8 },
-  field: { display: 'flex', flexDirection: 'column', gap: 4 },
-  tableWrap: { overflow: 'auto', maxHeight: 360, border: `1px solid ${tokens.colorNeutralStroke2}`, borderRadius: 4 },
+  pad: { padding: tokens.spacingHorizontalL, display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalM },
+  grid: { display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(280px, 1fr))', gap: tokens.spacingHorizontalM },
+  card: { padding: tokens.spacingHorizontalM, cursor: 'pointer', border: `1px solid ${tokens.colorNeutralStroke2}`, borderRadius: tokens.borderRadiusMedium },
+  cardActive: { padding: tokens.spacingHorizontalM, border: `2px solid ${tokens.colorBrandStroke1}`, borderRadius: tokens.borderRadiusMedium, background: tokens.colorBrandBackground2 },
+  treePad: { padding: tokens.spacingHorizontalM, display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalS },
+  field: { display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalXS },
+  tableWrap: { overflow: 'auto', maxHeight: 360, border: `1px solid ${tokens.colorNeutralStroke2}`, borderRadius: tokens.borderRadiusSmall },
 });
 
 interface Template {
@@ -169,8 +169,8 @@ export function DataProductTemplateEditor({ item, id }: { item: FabricItemType; 
                 <div key={t.slug} className={s.card} onClick={() => setSelected(t)}>
                   <Subtitle2>{t.displayName}</Subtitle2>
                   <Caption1>{t.category} · ~${t.estimatedMonthlyCostUsd.toLocaleString()}/mo</Caption1>
-                  <Body1 style={{ marginTop: 6 }}>{t.description}</Body1>
-                  <Caption1 style={{ marginTop: 6 }}>{t.components.length} components</Caption1>
+                  <Body1 style={{ marginTop: tokens.spacingVerticalS }}>{t.description}</Body1>
+                  <Caption1 style={{ marginTop: tokens.spacingVerticalS }}>{t.components.length} components</Caption1>
                 </div>
               ))}
               {filtered.length === 0 && <Caption1>No templates match "{filter}".</Caption1>}
@@ -184,7 +184,7 @@ export function DataProductTemplateEditor({ item, id }: { item: FabricItemType; 
               <Subtitle2>{selected.displayName}</Subtitle2>
               <Caption1>{selected.category} · estimated ~${selected.estimatedMonthlyCostUsd.toLocaleString()}/mo</Caption1>
               <Body1>{selected.description}</Body1>
-              <Subtitle2 style={{ marginTop: 10 }}>Components</Subtitle2>
+              <Subtitle2 style={{ marginTop: tokens.spacingVerticalM }}>Components</Subtitle2>
               <div className={s.tableWrap}>
                 <Table size="small">
                   <TableHeader><TableRow>
@@ -196,7 +196,7 @@ export function DataProductTemplateEditor({ item, id }: { item: FabricItemType; 
                     {selected.components.map((c, i) => (
                       <TableRow key={i}>
                         <TableCell><strong>{c.label}</strong></TableCell>
-                        <TableCell><code style={{ fontSize: 12 }}>{c.slug}</code></TableCell>
+                        <TableCell><code style={{ fontSize: tokens.fontSizeBase200 }}>{c.slug}</code></TableCell>
                         <TableCell>{c.description}</TableCell>
                       </TableRow>
                     ))}
@@ -214,7 +214,7 @@ export function DataProductTemplateEditor({ item, id }: { item: FabricItemType; 
                   value={workspaceId}
                   onChange={(e) => setWorkspaceId(e.target.value)}
                   disabled={ws.loading || (ws.workspaces?.length ?? 0) === 0}
-                  style={{ padding: 6, borderRadius: 4, border: `1px solid ${tokens.colorNeutralStroke2}`, background: tokens.colorNeutralBackground1, color: tokens.colorNeutralForeground1 }}
+                  style={{ padding: tokens.spacingVerticalS, borderRadius: tokens.borderRadiusSmall, border: `1px solid ${tokens.colorNeutralStroke2}`, background: tokens.colorNeutralBackground1, color: tokens.colorNeutralForeground1 }}
                 >
                   {ws.loading && <option value="">Loading workspaces…</option>}
                   {!ws.loading && (ws.workspaces?.length ?? 0) === 0 && (
@@ -328,7 +328,7 @@ export function DataProductInstanceEditor({ item, id }: { item: FabricItemType; 
         <Subtitle2>Instance</Subtitle2>
         <Caption1>{instance?.displayName || '—'}</Caption1>
         <Caption1>Template: <code>{instance?.state?.template || '—'}</code></Caption1>
-        <Button size="small" onClick={refreshHealth} style={{ marginTop: 8, alignSelf: 'flex-start' }}>Check component health</Button>
+        <Button size="small" onClick={refreshHealth} style={{ marginTop: tokens.spacingVerticalS, alignSelf: 'flex-start' }}>Check component health</Button>
       </div>}
       main={
         <div className={s.pad}>
@@ -348,8 +348,8 @@ export function DataProductInstanceEditor({ item, id }: { item: FabricItemType; 
                   return (
                     <TableRow key={c.itemId}>
                       <TableCell><a href={`/items/${c.slug}/${c.itemId}`}>{c.displayName}</a></TableCell>
-                      <TableCell><code style={{ fontSize: 12 }}>{c.slug}</code></TableCell>
-                      <TableCell><code style={{ fontSize: 11 }}>{c.itemId}</code></TableCell>
+                      <TableCell><code style={{ fontSize: tokens.fontSizeBase200 }}>{c.slug}</code></TableCell>
+                      <TableCell><code style={{ fontSize: tokens.fontSizeBase100 }}>{c.itemId}</code></TableCell>
                       <TableCell>
                         {!h && <Caption1 style={{ color: tokens.colorNeutralForeground3 }}>Click "Check component health"</Caption1>}
                         {h?.status === 'ok' && <Badge appearance="filled" color="success">OK</Badge>}

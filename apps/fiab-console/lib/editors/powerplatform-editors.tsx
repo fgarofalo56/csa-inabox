@@ -49,12 +49,12 @@ const DV_REQUIRED_LEVELS = ['None', 'Recommended', 'ApplicationRequired'] as con
 import { aiStateLabel, aiStatusLabel } from './_family-utils';
 
 const useStyles = makeStyles({
-  pad: { padding: 16, display: 'flex', flexDirection: 'column', gap: 12, minHeight: 0, flex: 1 },
-  tabBar: { padding: '8px 16px 0', borderBottom: `1px solid ${tokens.colorNeutralStroke2}` },
-  toolbar: { display: 'flex', gap: 12, alignItems: 'center', flexWrap: 'wrap' },
-  metaGrid: { display: 'grid', gridTemplateColumns: 'auto 1fr', gap: '6px 16px', alignItems: 'baseline' },
-  metaKey: { color: tokens.colorNeutralForeground3, fontSize: 12 },
-  tableWrap: { overflow: 'auto', maxHeight: 480, border: `1px solid ${tokens.colorNeutralStroke2}`, borderRadius: 4 },
+  pad: { padding: tokens.spacingVerticalL, display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalM, minHeight: 0, flex: 1 },
+  tabBar: { padding: `${tokens.spacingVerticalS} ${tokens.spacingHorizontalL} 0`, borderBottom: `1px solid ${tokens.colorNeutralStroke2}` },
+  toolbar: { display: 'flex', gap: tokens.spacingHorizontalM, alignItems: 'center', flexWrap: 'wrap' },
+  metaGrid: { display: 'grid', gridTemplateColumns: 'auto 1fr', gap: `${tokens.spacingVerticalXS} ${tokens.spacingHorizontalL}`, alignItems: 'baseline' },
+  metaKey: { color: tokens.colorNeutralForeground3, fontSize: tokens.fontSizeBase200 },
+  tableWrap: { overflow: 'auto', maxHeight: 480, border: `1px solid ${tokens.colorNeutralStroke2}`, borderRadius: tokens.borderRadiusMedium },
   // Keep the header visible while scrolling long metadata lists (up to 500 rows).
   stickyHead: {
     position: 'sticky', top: 0, zIndex: 1,
@@ -62,25 +62,25 @@ const useStyles = makeStyles({
     boxShadow: `inset 0 -1px 0 ${tokens.colorNeutralStroke2}`,
   },
   // Filter row above a table — search box + live result count, right-aligned count.
-  filterRow: { display: 'flex', alignItems: 'center', gap: 12, flexWrap: 'wrap' },
+  filterRow: { display: 'flex', alignItems: 'center', gap: tokens.spacingHorizontalM, flexWrap: 'wrap' },
   filterCount: { color: tokens.colorNeutralForeground3, marginLeft: 'auto' },
-  cell: { fontSize: 12, whiteSpace: 'nowrap', maxWidth: 360, overflow: 'hidden', textOverflow: 'ellipsis' },
+  cell: { fontSize: tokens.fontSizeBase200, whiteSpace: 'nowrap', maxWidth: 360, overflow: 'hidden', textOverflow: 'ellipsis' },
   cellClickable: {
-    fontSize: 12, whiteSpace: 'nowrap', maxWidth: 360, overflow: 'hidden', textOverflow: 'ellipsis',
+    fontSize: tokens.fontSizeBase200, whiteSpace: 'nowrap', maxWidth: 360, overflow: 'hidden', textOverflow: 'ellipsis',
     cursor: 'pointer', color: tokens.colorBrandForegroundLink,
   },
-  empty: { padding: 16, color: tokens.colorNeutralForeground3, fontStyle: 'italic' },
+  empty: { padding: tokens.spacingVerticalL, color: tokens.colorNeutralForeground3, fontStyle: 'italic' },
   // Environment lifecycle command bar + dialog form — string-valued per the
   // Griffel makeStyles convention used for all new Loom surfaces.
-  cmdBar: { display: 'flex', alignItems: 'center', flexWrap: 'wrap', gap: '4px' },
-  dialogForm: { display: 'flex', flexDirection: 'column', gap: '12px', minWidth: '420px' },
+  cmdBar: { display: 'flex', alignItems: 'center', flexWrap: 'wrap', gap: tokens.spacingVerticalXS },
+  dialogForm: { display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalM, minWidth: '420px' },
   dvBox: {
-    display: 'flex', flexDirection: 'column', gap: '12px',
-    padding: '12px', borderRadius: '4px',
+    display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalM,
+    padding: tokens.spacingVerticalM, borderRadius: tokens.borderRadiusMedium,
     border: `1px solid ${tokens.colorNeutralStroke2}`,
     backgroundColor: tokens.colorNeutralBackground2,
   },
-  row2: { display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '12px' },
+  row2: { display: 'grid', gridTemplateColumns: '1fr 1fr', gap: tokens.spacingVerticalM },
 });
 
 // SKU options the BAP create API accepts (Microsoft Learn: New-AdminPowerAppEnvironment
@@ -992,8 +992,8 @@ export function DataverseTableEditor({ item, id }: { item: FabricItemType; id: s
                             <TableRow key={a.MetadataId}>
                               <TableCell className={s.cell}>
                                 <strong>{a.LogicalName}</strong>
-                                {a.IsPrimaryId && <Badge size="small" appearance="tint" color="brand" style={{ marginLeft: 6 }}>PK</Badge>}
-                                {a.IsPrimaryName && <Badge size="small" appearance="tint" color="success" style={{ marginLeft: 6 }}>Name</Badge>}
+                                {a.IsPrimaryId && <Badge size="small" appearance="tint" color="brand" style={{ marginLeft: tokens.spacingHorizontalXS }}>PK</Badge>}
+                                {a.IsPrimaryName && <Badge size="small" appearance="tint" color="success" style={{ marginLeft: tokens.spacingHorizontalXS }}>Name</Badge>}
                               </TableCell>
                               <TableCell className={s.cell}>{a.DisplayName?.UserLocalizedLabel?.Label || '—'}</TableCell>
                               <TableCell className={s.cell}>{a.AttributeType || '—'}</TableCell>
@@ -1571,7 +1571,7 @@ export function PowerAppEditor({ item, id }: { item: FabricItemType; id: string 
                       <span className={s.metaKey}>Play URL</span><span>{app.playerEmbedUri ? <a href={app.playerEmbedUri} target="_blank" rel="noreferrer">{app.playerEmbedUri}</a> : '—'}</span>
                     </div>
 
-                    <Subtitle2 style={{ marginTop: 8 }}>Connectors / data sources</Subtitle2>
+                    <Subtitle2 style={{ marginTop: tokens.spacingVerticalS }}>Connectors / data sources</Subtitle2>
                     {(app.connectionReferences && app.connectionReferences.length > 0)
                       ? (
                         <div className={s.tableWrap}>
@@ -1637,7 +1637,7 @@ export function PowerAppEditor({ item, id }: { item: FabricItemType; id: string 
                       <iframe
                         title={`Power App player — ${app.displayName}`}
                         src={app.playerEmbedUri}
-                        style={{ width: '100%', height: 720, border: `1px solid ${tokens.colorNeutralStroke2}`, borderRadius: 4 }}
+                        style={{ width: '100%', height: 720, border: `1px solid ${tokens.colorNeutralStroke2}`, borderRadius: tokens.borderRadiusMedium }}
                         allow="geolocation; microphone; camera; clipboard-write; clipboard-read"
                         onError={() => setEmbedBlocked(true)}
                       />
@@ -1706,7 +1706,7 @@ export function PowerAppEditor({ item, id }: { item: FabricItemType; id: string 
                         <TableRow key={a.name}>
                           <TableCell className={s.cellClickable} onClick={() => { setPick({ appId: a.name, appType: a.appType }); setTab('detail'); setEmbedBlocked(false); }}>
                             <strong>{a.displayName}</strong>
-                            {a.name === boundAppId && <Badge size="small" appearance="tint" color="success" style={{ marginLeft: 6 }}>Bound</Badge>}
+                            {a.name === boundAppId && <Badge size="small" appearance="tint" color="success" style={{ marginLeft: tokens.spacingHorizontalXS }}>Bound</Badge>}
                           </TableCell>
                           <TableCell className={s.cell}>{a.appType || '—'}</TableCell>
                           <TableCell className={s.cell}>{a.owner?.displayName || a.owner?.email || '—'}</TableCell>
@@ -1910,7 +1910,7 @@ export function PowerAutomateFlowEditor({ item, id }: { item: FabricItemType; id
 
             {flowTab === 'runs' && (
               <>
-                <Subtitle2 style={{ marginTop: 12 }}>Recent runs</Subtitle2>
+                <Subtitle2 style={{ marginTop: tokens.spacingVerticalM }}>Recent runs</Subtitle2>
                 {runsSt.loading && <Spinner size="small" label="Loading runs…" labelPosition="after" />}
                 {runsSt.error && <ErrorBar msg={runsSt.error} hint={runsSt.hint} />}
                 {runsSt.data && (
@@ -2246,7 +2246,7 @@ export function AiBuilderModelEditor({ item, id }: { item: FabricItemType; id: s
             )}
             {detailSt.data?.model && (
               <>
-                <Subtitle2 style={{ marginTop: 12 }}>Lifecycle</Subtitle2>
+                <Subtitle2 style={{ marginTop: tokens.spacingVerticalM }}>Lifecycle</Subtitle2>
                 <div className={s.toolbar}>
                   <Button appearance="primary" disabled={busy !== null} onClick={() => runAction('train')}>
                     {busy === 'train' ? 'Training…' : 'Train'}
@@ -2260,7 +2260,7 @@ export function AiBuilderModelEditor({ item, id }: { item: FabricItemType; id: s
                     <MessageBarBody>{actionMsg.text}</MessageBarBody>
                   </MessageBar>
                 )}
-                <Subtitle2 style={{ marginTop: 12 }}>Real-time prediction</Subtitle2>
+                <Subtitle2 style={{ marginTop: tokens.spacingVerticalM }}>Real-time prediction</Subtitle2>
                 <Caption1>
                   POSTs to the Dataverse <code>Predict</code> action. The input shape is model-specific — e.g. a
                   prediction model expects <code>{'{ "V2": { "&lt;column&gt;": value } }'}</code>. Only published
@@ -2271,7 +2271,7 @@ export function AiBuilderModelEditor({ item, id }: { item: FabricItemType; id: s
                     rows={6}
                     value={predictJson}
                     onChange={(_, d) => setPredictJson(d.value)}
-                    style={{ fontFamily: 'Consolas, monospace', fontSize: 12 }}
+                    style={{ fontFamily: 'Consolas, monospace', fontSize: tokens.fontSizeBase200 }}
                   />
                 </Field>
                 <div>
@@ -2280,8 +2280,8 @@ export function AiBuilderModelEditor({ item, id }: { item: FabricItemType; id: s
                   </Button>
                 </div>
                 {predictResult && (
-                  <div className={s.tableWrap} style={{ padding: 8 }}>
-                    <pre style={{ margin: 0, fontSize: 12, whiteSpace: 'pre-wrap' }}>{predictResult}</pre>
+                  <div className={s.tableWrap} style={{ padding: tokens.spacingVerticalS }}>
+                    <pre style={{ margin: 0, fontSize: tokens.fontSizeBase200, whiteSpace: 'pre-wrap' }}>{predictResult}</pre>
                   </div>
                 )}
               </>

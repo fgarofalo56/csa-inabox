@@ -166,7 +166,7 @@ export function PbiModelViewPanel({ workspaceId, datasetId }: PbiModelViewPanelP
   const editableRels = relationships.filter((r) => r.editable !== false);
 
   return (
-    <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+    <div style={{ display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalM }}>
       {loading && <Spinner size="tiny" label="Loading model…" labelPosition="after" />}
       {loadErr && (
         <MessageBar intent="error"><MessageBarBody><MessageBarTitle>Model load failed</MessageBarTitle>{loadErr}</MessageBarBody></MessageBar>
@@ -204,11 +204,11 @@ export function PbiModelViewPanel({ workspaceId, datasetId }: PbiModelViewPanelP
       {/* Authored relationships — toggle active / inactive (USERELATIONSHIP). */}
       <div>
         <Subtitle2>Authored relationships ({editableRels.length})</Subtitle2>
-        <Caption1 style={{ color: tokens.colorNeutralForeground3, display: 'block', marginTop: 2 }}>
+        <Caption1 style={{ color: tokens.colorNeutralForeground3, display: 'block', marginTop: tokens.spacingVerticalXXS }}>
           Mark a relationship inactive to make it a role-playing relationship usable via DAX <code>USERELATIONSHIP</code>.
           Source-derived relationships are read-only here; redraw them on the canvas to author an editable copy.
         </Caption1>
-        <div style={{ overflow: 'auto', maxHeight: 220, border: `1px solid ${tokens.colorNeutralStroke2}`, borderRadius: 4, marginTop: 6 }}>
+        <div style={{ overflow: 'auto', maxHeight: 220, border: `1px solid ${tokens.colorNeutralStroke2}`, borderRadius: tokens.borderRadiusMedium, marginTop: tokens.spacingVerticalS }}>
           <Table aria-label="Authored relationships" size="small">
             <TableHeader>
               <TableRow>
@@ -262,15 +262,15 @@ export function PbiModelViewPanel({ workspaceId, datasetId }: PbiModelViewPanelP
 
       {/* Read-only TMSL (model.bim) preview — the receipt of what is written. */}
       <div>
-        <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: tokens.spacingHorizontalS }}>
           <Database20Regular />
           <Subtitle2>TMSL preview (model.bim)</Subtitle2>
         </div>
-        <Caption1 style={{ color: tokens.colorNeutralForeground3, display: 'block', marginTop: 2 }}>
+        <Caption1 style={{ color: tokens.colorNeutralForeground3, display: 'block', marginTop: tokens.spacingVerticalXXS }}>
           The full tabular model definition built from your relationships + hierarchies. Inactive relationships show
           <code> isActive: false</code>; each hierarchy emits an ordered <code>levels</code> array.
         </Caption1>
-        <div style={{ marginTop: 6 }}>
+        <div style={{ marginTop: tokens.spacingVerticalS }}>
           <MonacoTextarea
             value={data?.tmsl || '{}'}
             onChange={() => { /* read-only */ }}

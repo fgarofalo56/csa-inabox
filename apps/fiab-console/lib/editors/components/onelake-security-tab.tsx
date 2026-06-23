@@ -29,23 +29,23 @@ import {
 } from '@fluentui/react-icons';
 
 const useStyles = makeStyles({
-  root: { display: 'flex', flexDirection: 'column', gap: 12, padding: 16, minHeight: 0, flex: 1 },
-  toolbar: { display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' },
-  chips: { display: 'flex', gap: 4, flexWrap: 'wrap' },
+  root: { display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalM, padding: tokens.spacingVerticalL, minHeight: 0, flex: 1 },
+  toolbar: { display: 'flex', gap: tokens.spacingHorizontalS, alignItems: 'center', flexWrap: 'wrap' },
+  chips: { display: 'flex', gap: tokens.spacingHorizontalXS, flexWrap: 'wrap' },
   pickList: {
     maxHeight: 220, overflow: 'auto', border: `1px solid ${tokens.colorNeutralStroke2}`,
-    borderRadius: 4, padding: 8, display: 'flex', flexDirection: 'column', gap: 4,
+    borderRadius: tokens.borderRadiusMedium, padding: tokens.spacingVerticalS, display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalXS,
   },
   resultRow: {
-    padding: '6px 10px', cursor: 'pointer', borderRadius: 4,
+    padding: `${tokens.spacingVerticalS} ${tokens.spacingHorizontalL}`, cursor: 'pointer', borderRadius: tokens.borderRadiusMedium,
     ':hover': { backgroundColor: tokens.colorNeutralBackground2Hover },
   },
-  step: { display: 'flex', flexDirection: 'column', gap: 12, minHeight: 280 },
+  step: { display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalM, minHeight: 280 },
   stepNum: {
     display: 'inline-flex', alignItems: 'center', justifyContent: 'center',
     width: 22, height: 22, borderRadius: '50%',
     backgroundColor: tokens.colorBrandBackground, color: tokens.colorNeutralForegroundOnBrand,
-    fontSize: 12, fontWeight: 700, marginRight: 8,
+    fontSize: tokens.fontSizeBase200, fontWeight: 700, marginRight: tokens.spacingHorizontalS,
   },
 });
 
@@ -396,7 +396,7 @@ export function OneLakeSecurityTab({ itemId, itemType, container, workspaceId, f
             <select
               value={verifyRoleId}
               onChange={(e) => { setVerifyRoleId(e.target.value); const role = (roles || []).find((x) => x.id === e.target.value); setVerifyPath(role?.paths.find((p) => p !== '*') || ''); }}
-              style={{ padding: 6 }}
+              style={{ padding: tokens.spacingVerticalS }}
             >
               <option value="">Select a role…</option>
               {(roles || []).map((r) => <option key={r.id} value={r.id}>{r.roleName}</option>)}
@@ -437,7 +437,7 @@ export function OneLakeSecurityTab({ itemId, itemType, container, workspaceId, f
       <Dialog open={wizardOpen} onOpenChange={(_, d) => setWizardOpen(d.open)}>
         <DialogSurface style={{ maxWidth: 640 }}>
           <DialogBody>
-            <DialogTitle><ShieldTask20Regular style={{ verticalAlign: 'middle', marginRight: 8 }} />New data-access role · step {step} of 3</DialogTitle>
+            <DialogTitle><ShieldTask20Regular style={{ verticalAlign: 'middle', marginRight: tokens.spacingHorizontalS }} />New data-access role · step {step} of 3</DialogTitle>
             <DialogContent>
               {step === 1 && (
                 <div className={s.step}>
@@ -511,7 +511,7 @@ export function OneLakeSecurityTab({ itemId, itemType, container, workspaceId, f
                     </div>
                   )}
                   <Field label="…or add a raw Entra object id">
-                    <div style={{ display: 'flex', gap: 8 }}>
+                    <div style={{ display: 'flex', gap: tokens.spacingHorizontalS }}>
                       <Input value={rawOid} onChange={(_, d) => setRawOid(d.value)} placeholder="00000000-0000-0000-0000-000000000000" />
                       <Button onClick={addRawOid} icon={<Add20Regular />}>Add</Button>
                     </div>

@@ -69,20 +69,20 @@ interface DeliveryGate {
 }
 
 const useStyles = makeStyles({
-  root: { display: 'flex', flexDirection: 'column', gap: '12px' },
-  headRow: { display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '8px' },
+  root: { display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalM },
+  headRow: { display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: tokens.spacingHorizontalS },
   subCard: {
     border: `1px solid ${tokens.colorNeutralStroke2}`,
     borderRadius: tokens.borderRadiusMedium,
-    padding: '10px 12px',
+    padding: `${tokens.spacingVerticalS} ${tokens.spacingHorizontalM}`,
     display: 'flex',
     flexDirection: 'column',
-    gap: '6px',
+    gap: tokens.spacingVerticalXS,
   },
-  subTop: { display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '8px', flexWrap: 'wrap' },
+  subTop: { display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: tokens.spacingHorizontalS, flexWrap: 'wrap' },
   meta: { color: tokens.colorNeutralForeground3 },
-  actions: { display: 'flex', alignItems: 'center', gap: '6px' },
-  formGrid: { display: 'flex', flexDirection: 'column', gap: '12px', minWidth: '420px' },
+  actions: { display: 'flex', alignItems: 'center', gap: tokens.spacingHorizontalXS },
+  formGrid: { display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalM, minWidth: '420px' },
 });
 
 const PRESET_CUSTOM = '__custom__';
@@ -209,7 +209,7 @@ export function ReportSubscriptionsPanel({
   return (
     <div className={s.root}>
       <div className={s.headRow}>
-        <Subtitle2><MailClock20Regular style={{ verticalAlign: 'middle', marginRight: 6 }} />Subscriptions</Subtitle2>
+        <Subtitle2><MailClock20Regular style={{ verticalAlign: 'middle', marginRight: tokens.spacingHorizontalXS }} />Subscriptions</Subtitle2>
         <div className={s.actions}>
           <Button size="small" appearance="subtle" icon={<ArrowSync16Regular />} onClick={load} disabled={loading}>Refresh</Button>
           <Button size="small" appearance="primary" icon={<Add20Regular />} onClick={() => { resetForm(); setOpen(true); }} disabled={!workspaceId}>
@@ -241,7 +241,7 @@ export function ReportSubscriptionsPanel({
       {(subs || []).map((sub) => (
         <div key={sub.id} className={s.subCard}>
           <div className={s.subTop}>
-            <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: tokens.spacingHorizontalS, flexWrap: 'wrap' }}>
               <Badge appearance="filled" color={sub.enabled ? 'brand' : 'subtle'}>{sub.format}</Badge>
               <strong>{scheduleLabel(sub.cron)}</strong>
               {sub.lastStatus && (
@@ -267,7 +267,7 @@ export function ReportSubscriptionsPanel({
           )}
 
           {openLogsFor === sub.id && (
-            <div style={{ marginTop: 6 }}>
+            <div style={{ marginTop: tokens.spacingVerticalS }}>
               {logsErr && <MessageBar intent="error"><MessageBarBody>{logsErr}</MessageBarBody></MessageBar>}
               {!logs && !logsErr && <Spinner size="tiny" label="Loading delivery history…" />}
               {logs && logs.length === 0 && <Caption1 className={s.meta}>No deliveries recorded yet.</Caption1>}

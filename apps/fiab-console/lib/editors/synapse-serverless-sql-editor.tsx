@@ -43,18 +43,18 @@ import {
 import { downloadBlob, resultsToCsv, resultsToJson } from './components/result-export';
 
 const useStyles = makeStyles({
-  pad: { padding: 16, display: 'flex', flexDirection: 'column', gap: 12, minHeight: 0, flex: 1 },
-  toolbar: { display: 'flex', gap: 12, alignItems: 'center', flexWrap: 'wrap' },
-  connect: { display: 'flex', gap: 8, alignItems: 'center' },
+  pad: { padding: tokens.spacingVerticalL, display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalM, minHeight: 0, flex: 1 },
+  toolbar: { display: 'flex', gap: tokens.spacingHorizontalM, alignItems: 'center', flexWrap: 'wrap' },
+  connect: { display: 'flex', gap: tokens.spacingHorizontalS, alignItems: 'center' },
   editorWrap: { minHeight: 220 },
-  resultBox: { borderTop: `1px solid ${tokens.colorNeutralStroke2}`, paddingTop: 12, minHeight: 200, display: 'flex', flexDirection: 'column', gap: 8 },
-  resultMeta: { display: 'flex', gap: 12, alignItems: 'center', flexWrap: 'wrap' },
-  resultActions: { marginLeft: 'auto', display: 'flex', gap: 4 },
-  tableWrap: { overflow: 'auto', maxHeight: 320, border: `1px solid ${tokens.colorNeutralStroke2}`, borderRadius: 4 },
-  cell: { fontFamily: 'Consolas, monospace', fontSize: 12, whiteSpace: 'nowrap' },
+  resultBox: { borderTop: `1px solid ${tokens.colorNeutralStroke2}`, paddingTop: tokens.spacingVerticalM, minHeight: 200, display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalS },
+  resultMeta: { display: 'flex', gap: tokens.spacingHorizontalM, alignItems: 'center', flexWrap: 'wrap' },
+  resultActions: { marginLeft: 'auto', display: 'flex', gap: tokens.spacingHorizontalXS },
+  tableWrap: { overflow: 'auto', maxHeight: 320, border: `1px solid ${tokens.colorNeutralStroke2}`, borderRadius: tokens.borderRadiusMedium },
+  cell: { fontFamily: 'Consolas, monospace', fontSize: tokens.fontSizeBase200, whiteSpace: 'nowrap' },
   messages: {
-    fontFamily: 'Consolas, monospace', fontSize: 12, whiteSpace: 'pre-wrap',
-    backgroundColor: tokens.colorNeutralBackground3, borderRadius: 4, padding: 12,
+    fontFamily: 'Consolas, monospace', fontSize: tokens.fontSizeBase200, whiteSpace: 'pre-wrap',
+    backgroundColor: tokens.colorNeutralBackground3, borderRadius: tokens.borderRadiusMedium, padding: tokens.spacingVerticalM,
     color: tokens.colorNeutralForeground2, maxHeight: 280, overflow: 'auto', margin: 0,
   },
 });

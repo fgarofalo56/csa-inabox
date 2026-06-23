@@ -45,17 +45,17 @@ import { MetricChart } from '@/lib/components/monitor/metric-chart';
 // can reference inline setState / save / loadList / setTab state.)
 
 const useStyles = makeStyles({
-  pad: { padding: 16, display: 'flex', flexDirection: 'column', gap: 12 },
-  toolbar: { display: 'flex', gap: 12, alignItems: 'center', flexWrap: 'wrap' },
-  tabBar: { padding: '8px 16px 0', borderBottom: `1px solid ${tokens.colorNeutralStroke2}` },
+  pad: { padding: tokens.spacingVerticalL, display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalM },
+  toolbar: { display: 'flex', gap: tokens.spacingHorizontalM, alignItems: 'center', flexWrap: 'wrap' },
+  tabBar: { padding: `${tokens.spacingVerticalS} ${tokens.spacingHorizontalL} 0`, borderBottom: `1px solid ${tokens.colorNeutralStroke2}` },
   queryArea: {
     width: '100%', minHeight: 360,
-    fontFamily: 'Consolas, "Cascadia Code", monospace', fontSize: 13, padding: 12,
-    border: `1px solid ${tokens.colorNeutralStroke2}`, borderRadius: 4,
+    fontFamily: 'Consolas, "Cascadia Code", monospace', fontSize: tokens.fontSizeBase300, padding: tokens.spacingVerticalM,
+    border: `1px solid ${tokens.colorNeutralStroke2}`, borderRadius: tokens.borderRadiusMedium,
     backgroundColor: tokens.colorNeutralBackground3, color: tokens.colorNeutralForeground1,
     resize: 'vertical',
   },
-  tableWrap: { overflow: 'auto', maxHeight: 320, border: `1px solid ${tokens.colorNeutralStroke2}`, borderRadius: 4 },
+  tableWrap: { overflow: 'auto', maxHeight: 320, border: `1px solid ${tokens.colorNeutralStroke2}`, borderRadius: tokens.borderRadiusMedium },
 });
 
 interface AsaJob {
@@ -498,7 +498,7 @@ export function StreamAnalyticsJobEditor({ item, id }: { item: FabricItemType; i
               <DialogBody>
                 <DialogTitle>Add output</DialogTitle>
                 <DialogContent>
-                  <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalS }}>
                     <Field label="Output alias" required hint="Reference this in your SAQL as INTO [alias].">
                       <Input value={outForm.name || ''} onChange={(_, d) => setOF('name', d.value)} />
                     </Field>
@@ -586,14 +586,14 @@ export function StreamAnalyticsJobEditor({ item, id }: { item: FabricItemType; i
           )}
 
           {tab === 'builder' && (
-            <div style={{ display: 'grid', gridTemplateColumns: '1fr 360px', gap: 16 }}>
-              <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+            <div style={{ display: 'grid', gridTemplateColumns: '1fr 360px', gap: tokens.spacingHorizontalL }}>
+              <div style={{ display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalS }}>
                 <Subtitle2>Guided transform builder</Subtitle2>
                 <Caption1>
                   Configure a filter / aggregate / window / join through guided fields. The
                   generated SAQL compiles to this job&apos;s transformation — no hand-written query.
                 </Caption1>
-                <div style={{ display: 'flex', gap: 8 }}>
+                <div style={{ display: 'flex', gap: tokens.spacingHorizontalS }}>
                   <Field label="Source alias (FROM)" style={{ flex: 1 }}>
                     <Input value={builderSource} onChange={(_, d) => setBuilderSource(d.value)} aria-label="Builder source alias" />
                   </Field>
@@ -604,7 +604,7 @@ export function StreamAnalyticsJobEditor({ item, id }: { item: FabricItemType; i
                 <Divider />
                 <Subtitle2>Generated SAQL</Subtitle2>
                 <MonacoTextarea value={builderSaql} onChange={() => {}} language="sql" height={220} readOnly ariaLabel="Builder generated SAQL" />
-                <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+                <div style={{ display: 'flex', gap: tokens.spacingHorizontalS, flexWrap: 'wrap' }}>
                   <Button appearance="outline" icon={<Save20Regular />} onClick={() => { setQuery(builderSaql); setTab('query'); }}>
                     Copy to Query tab
                   </Button>
@@ -616,7 +616,7 @@ export function StreamAnalyticsJobEditor({ item, id }: { item: FabricItemType; i
                   </Button>
                 </div>
               </div>
-              <div style={{ borderLeft: `1px solid ${tokens.colorNeutralStroke2}`, paddingLeft: 16, maxHeight: 560, overflowY: 'auto' }}>
+              <div style={{ borderLeft: `1px solid ${tokens.colorNeutralStroke2}`, paddingLeft: tokens.spacingHorizontalL, maxHeight: 560, overflowY: 'auto' }}>
                 <AsaTransformInspector
                   value={builderTransform}
                   sources={[{ kind: 'eventhub', name: builderSource || 'input' }]}
@@ -628,7 +628,7 @@ export function StreamAnalyticsJobEditor({ item, id }: { item: FabricItemType; i
           )}
 
           {tab === 'test' && (
-            <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+            <div style={{ display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalS }}>
               <Subtitle2>Test query with sample data</Subtitle2>
               <Caption1>
                 <strong>Compile</strong> validates the current Query against ASA (no infra needed).
@@ -638,7 +638,7 @@ export function StreamAnalyticsJobEditor({ item, id }: { item: FabricItemType; i
               <Field label="Sample events (JSON array)">
                 <MonacoTextarea value={sampleText} onChange={setSampleText} language="json" height={160} ariaLabel="Sample events JSON" />
               </Field>
-              <div style={{ display: 'flex', gap: 8 }}>
+              <div style={{ display: 'flex', gap: tokens.spacingHorizontalS }}>
                 <Button appearance="outline" disabled={testBusy || !selected} onClick={() => runTest('compile')}>
                   {testBusy ? 'Working…' : 'Compile query'}
                 </Button>
@@ -737,7 +737,7 @@ export function StreamAnalyticsJobEditor({ item, id }: { item: FabricItemType; i
           )}
 
           {tab === 'outputs' && (
-            <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+            <div style={{ display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalS }}>
               <div className={s.toolbar}>
                 <Button appearance="primary" icon={<Add20Regular />} disabled={!selected} onClick={openAddOutput}>
                   Add output
@@ -787,10 +787,10 @@ export function StreamAnalyticsJobEditor({ item, id }: { item: FabricItemType; i
           )}
 
           {tab === 'monitoring' && (
-            <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+            <div style={{ display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalM }}>
               <Subtitle2>Job summary</Subtitle2>
               <div>
-                <Caption1 style={{ display: 'block', marginTop: 4 }}>State: <strong>{jobState}</strong></Caption1>
+                <Caption1 style={{ display: 'block', marginTop: tokens.spacingVerticalXS }}>State: <strong>{jobState}</strong></Caption1>
                 <Caption1 style={{ display: 'block' }}>Last output event time: {job?.lastOutputEventTime || '—'}</Caption1>
                 <Caption1 style={{ display: 'block' }}>SKU: {job?.sku || '—'}</Caption1>
                 <Caption1 style={{ display: 'block' }}>Streaming Units: {job?.streamingUnits ?? '—'}</Caption1>
@@ -805,7 +805,7 @@ export function StreamAnalyticsJobEditor({ item, id }: { item: FabricItemType; i
                 </MessageBar>
               )}
 
-              <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
+              <div style={{ display: 'flex', gap: tokens.spacingHorizontalS, alignItems: 'center', flexWrap: 'wrap' }}>
                 <Subtitle2>Live metrics (last 1 hour, 5-minute grain)</Subtitle2>
                 <Button size="small" appearance="outline" icon={<ArrowSync20Regular />}
                   onClick={() => loadMetrics(selected)} disabled={metricsLoading || !selected}>
@@ -819,7 +819,7 @@ export function StreamAnalyticsJobEditor({ item, id }: { item: FabricItemType; i
               {metricsLoading && !metrics && <Spinner size="tiny" label="Loading metrics…" />}
 
               {metrics && metrics.length > 0 && (
-                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(220px, 1fr))', gap: 12 }}>
+                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(220px, 1fr))', gap: tokens.spacingVerticalM }}>
                   {metrics.map((m) => (
                     <MetricChart key={m.name} title={metricLabel(m.name)} unit={metricUnit(m.name) || m.unit} points={m.points} />
                   ))}

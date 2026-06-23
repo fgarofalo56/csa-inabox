@@ -33,10 +33,10 @@ const RETENTION_LABELS: Record<number, string> = {
 };
 
 const useStyles = makeStyles({
-  body: { display: 'flex', flexDirection: 'column', gap: '16px', minWidth: '440px' },
+  body: { display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalL, minWidth: '440px' },
   hint: { color: tokens.colorNeutralForeground3 },
-  ops: { display: 'flex', gap: '6px', flexWrap: 'wrap', marginTop: '4px' },
-  vacuumRow: { display: 'flex', flexDirection: 'column', gap: '6px' },
+  ops: { display: 'flex', gap: tokens.spacingHorizontalS, flexWrap: 'wrap', marginTop: tokens.spacingVerticalXS },
+  vacuumRow: { display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalS },
 });
 
 interface DeltaMaintenanceDialogProps {
@@ -115,7 +115,7 @@ export function DeltaMaintenanceDialog({ open, onOpenChange, container, tableNam
       <DialogSurface>
         <DialogBody>
           <DialogTitle>
-            <Wrench20Regular style={{ verticalAlign: 'middle', marginRight: 8 }} />
+            <Wrench20Regular style={{ verticalAlign: 'middle', marginRight: tokens.spacingHorizontalS }} />
             Maintain table — {tableName}
           </DialogTitle>
           <DialogContent>

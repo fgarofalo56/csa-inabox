@@ -130,41 +130,41 @@ const useStyles = makeStyles({
     width: '100%',
     minHeight: '180px',
     fontFamily: 'Consolas, "Cascadia Code", monospace',
-    fontSize: '13px',
-    padding: '12px',
+    fontSize: tokens.fontSizeBase200,
+    padding: tokens.spacingVerticalM,
     border: `1px solid ${tokens.colorNeutralStroke2}`,
-    borderRadius: '4px',
+    borderRadius: tokens.borderRadiusMedium,
     backgroundColor: tokens.colorNeutralBackground3,
     color: tokens.colorNeutralForeground1,
     resize: 'vertical',
   },
-  pad: { padding: '16px', display: 'flex', flexDirection: 'column', gap: '12px' },
-  toolbar: { display: 'flex', gap: '8px', alignItems: 'center', flexWrap: 'wrap' },
+  pad: { padding: tokens.spacingVerticalL, display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalM },
+  toolbar: { display: 'flex', gap: tokens.spacingVerticalS, alignItems: 'center', flexWrap: 'wrap' },
   card: {
-    padding: '12px', border: `1px solid ${tokens.colorNeutralStroke2}`,
-    borderRadius: '6px', backgroundColor: tokens.colorNeutralBackground1,
+    padding: tokens.spacingVerticalM, border: `1px solid ${tokens.colorNeutralStroke2}`,
+    borderRadius: tokens.borderRadiusLarge, backgroundColor: tokens.colorNeutralBackground1,
   },
-  cardGrid: { display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(220px, 1fr))', gap: '12px' },
-  tabBar: { padding: '8px 16px 0', borderBottom: `1px solid ${tokens.colorNeutralStroke2}` },
-  resultBox: { borderTop: `1px solid ${tokens.colorNeutralStroke2}`, paddingTop: 12, minHeight: 180 },
-  resultMeta: { display: 'flex', gap: 12, alignItems: 'center', marginBottom: 8 },
-  tableWrap: { overflow: 'auto', maxHeight: 320, border: `1px solid ${tokens.colorNeutralStroke2}`, borderRadius: 4 },
-  cell: { fontFamily: 'Consolas, monospace', fontSize: 12, whiteSpace: 'nowrap' },
-  treePad: { padding: 8 },
+  cardGrid: { display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(220px, 1fr))', gap: tokens.spacingVerticalM },
+  tabBar: { padding: `${tokens.spacingVerticalS} ${tokens.spacingHorizontalL} 0`, borderBottom: `1px solid ${tokens.colorNeutralStroke2}` },
+  resultBox: { borderTop: `1px solid ${tokens.colorNeutralStroke2}`, paddingTop: tokens.spacingVerticalM, minHeight: 180 },
+  resultMeta: { display: 'flex', gap: tokens.spacingVerticalM, alignItems: 'center', marginBottom: tokens.spacingVerticalS },
+  tableWrap: { overflow: 'auto', maxHeight: 320, border: `1px solid ${tokens.colorNeutralStroke2}`, borderRadius: tokens.borderRadiusMedium },
+  cell: { fontFamily: 'Consolas, monospace', fontSize: tokens.fontSizeBase200, whiteSpace: 'nowrap' },
+  treePad: { padding: tokens.spacingVerticalS },
   assistBar: {
-    display: 'flex', gap: '6px', padding: '4px 8px', alignItems: 'center',
+    display: 'flex', gap: tokens.spacingVerticalS, padding: `${tokens.spacingVerticalXS} ${tokens.spacingHorizontalS}`, alignItems: 'center',
     borderTop: `1px solid ${tokens.colorNeutralStroke2}`,
     backgroundColor: tokens.colorNeutralBackground2,
   },
   assistResult: {
-    fontFamily: 'Consolas, "Cascadia Code", monospace', fontSize: '12px',
+    fontFamily: 'Consolas, "Cascadia Code", monospace', fontSize: tokens.fontSizeBase200,
     whiteSpace: 'pre-wrap', margin: 0, overflowX: 'auto',
   },
   // Live auto-refresh status pill — mirrors Fabric Real-Time Dashboard's
   // "live" affordance so the user can see the continuous cadence is firing.
   livePill: {
-    display: 'inline-flex', alignItems: 'center', gap: '6px',
-    padding: '2px 8px', borderRadius: '9999px',
+    display: 'inline-flex', alignItems: 'center', gap: tokens.spacingVerticalS,
+    padding: `${tokens.spacingVerticalXXS} ${tokens.spacingHorizontalS}`, borderRadius: '9999px',
     backgroundColor: tokens.colorNeutralBackground3,
     border: `1px solid ${tokens.colorNeutralStroke2}`,
     color: tokens.colorNeutralForeground3,
@@ -365,10 +365,10 @@ function StatCard({ columns, rows, conditionalRules }: { columns: string[]; rows
   return (
     <div role="img" aria-label="stat card" style={{
       display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center',
-      padding: 16, minHeight: 120, border: `1px solid ${tokens.colorNeutralStroke2}`, borderRadius: 6,
+      padding: tokens.spacingVerticalL, minHeight: 120, border: `1px solid ${tokens.colorNeutralStroke2}`, borderRadius: tokens.borderRadiusLarge,
       background: deco?.bg ?? tokens.colorNeutralBackground1,
     }}>
-      <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+      <div style={{ display: 'flex', alignItems: 'center', gap: tokens.spacingVerticalS }}>
         {deco?.icon && <span style={{ display: 'inline-flex', color: deco.fg ?? tokens.colorBrandForeground1 }}>{deco.icon}</span>}
         <div style={{ fontSize: 40, fontWeight: 700, color: deco?.fg ?? tokens.colorBrandForeground1, lineHeight: 1.1 }}>{display}</div>
       </div>
@@ -400,16 +400,16 @@ function PieChart({ columns, rows, onValueClick }: { columns: string[]; rows: un
     return { path: `M${cx},${cy} L${x1},${y1} A${r},${r} 0 ${large} 1 ${x2},${y2} Z`, color: PIE_COLORS[i % PIE_COLORS.length], ...d };
   });
   return (
-    <div style={{ display: 'flex', gap: 12, alignItems: 'center', flexWrap: 'wrap' }}>
+    <div style={{ display: 'flex', gap: tokens.spacingVerticalM, alignItems: 'center', flexWrap: 'wrap' }}>
       <svg width={240} height={240} viewBox="0 0 240 240" role="img" aria-label="pie chart">
         {arcs.map((a, i) => <path key={i} d={a.path} fill={a.color} stroke={tokens.colorNeutralBackground1} strokeWidth={1}
           style={onValueClick ? { cursor: 'pointer' } : undefined}
           onClick={onValueClick ? () => onValueClick(a.label) : undefined}><title>{`${a.label}: ${a.value.toLocaleString()}${onValueClick ? ' (click to drill through)' : ''}`}</title></path>)}
       </svg>
-      <div style={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
+      <div style={{ display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalXXS }}>
         {arcs.map((a, i) => (
-          <div key={i} style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-            <span style={{ width: 10, height: 10, background: a.color, borderRadius: 2, display: 'inline-block' }} />
+          <div key={i} style={{ display: 'flex', alignItems: 'center', gap: tokens.spacingVerticalS }}>
+            <span style={{ width: 10, height: 10, background: a.color, borderRadius: tokens.borderRadiusSmall, display: 'inline-block' }} />
             <Caption1>{a.label}: {a.value.toLocaleString()} ({Math.round((a.value / total) * 100)}%)</Caption1>
           </div>
         ))}
@@ -436,7 +436,7 @@ function MapVisual({ columns, rows }: { columns: string[]; rows: unknown[][] }) 
     .filter((p) => Number.isFinite(p.lat) && Number.isFinite(p.lon));
   return (
     <svg width="100%" viewBox={`0 0 ${W} ${H}`} role="img" aria-label="point map"
-      style={{ border: `1px solid ${tokens.colorNeutralStroke2}`, borderRadius: 4, background: tokens.colorNeutralBackground2 }}>
+      style={{ border: `1px solid ${tokens.colorNeutralStroke2}`, borderRadius: tokens.borderRadiusMedium, background: tokens.colorNeutralBackground2 }}>
       <rect x={0} y={0} width={W} height={H} fill="none" stroke={tokens.colorNeutralStroke2} />
       {pts.map((p, i) => { const { x, y } = proj(p.lat, p.lon); return <circle key={i} cx={x} cy={y} r={3} fill={tokens.colorBrandBackground} opacity={0.75}><title>{`${p.lat}, ${p.lon}`}</title></circle>; })}
     </svg>
@@ -481,7 +481,7 @@ function ResultChart({ columns, rows, kind, onValueClick }: { columns: string[];
     const xVal = (v: number) => padL + ((v - minV) / (maxV - minV || 1)) * plotW;
     return (
       <svg width="100%" viewBox={`0 0 ${W} ${Math.max(H, padT + data.length * rowH + padB)}`} role="img" aria-label="bar chart"
-        style={{ border: `1px solid ${tokens.colorNeutralStroke2}`, borderRadius: 4, background: tokens.colorNeutralBackground1 }}>
+        style={{ border: `1px solid ${tokens.colorNeutralStroke2}`, borderRadius: tokens.borderRadiusMedium, background: tokens.colorNeutralBackground1 }}>
         {data.map((d, i) => (
           <g key={i}>
             <rect x={padL} y={padT + i * rowH + 2} width={Math.max(0, xVal(d.value) - padL)} height={rowH - 4} fill={tokens.colorBrandBackground}
@@ -499,7 +499,7 @@ function ResultChart({ columns, rows, kind, onValueClick }: { columns: string[];
   }
 
   return (
-    <svg width="100%" viewBox={`0 0 ${W} ${H}`} role="img" aria-label={`${kind} chart`} style={{ border: `1px solid ${tokens.colorNeutralStroke2}`, borderRadius: 4, background: tokens.colorNeutralBackground1 }}>
+    <svg width="100%" viewBox={`0 0 ${W} ${H}`} role="img" aria-label={`${kind} chart`} style={{ border: `1px solid ${tokens.colorNeutralStroke2}`, borderRadius: tokens.borderRadiusMedium, background: tokens.colorNeutralBackground1 }}>
       <line x1={padL} y1={padT + plotH} x2={W - padR} y2={padT + plotH} stroke={tokens.colorNeutralStroke2} />
       <line x1={padL} y1={padT} x2={padL} y2={padT + plotH} stroke={tokens.colorNeutralStroke2} />
       <text x={padL - 6} y={y(maxV)} fontSize="10" textAnchor="end" fill={tokens.colorNeutralForeground3}>{maxV.toLocaleString()}</text>
@@ -617,7 +617,7 @@ function ConditionalTable({ columns, rows, conditionalRules, drillColumn, onDril
   const drillIdx = drillColumn && onDrill ? columns.findIndex((c) => c === drillColumn) : -1;
   const drillActive = drillIdx >= 0 && !!onDrill;
   return (
-    <div style={{ maxHeight: 200, overflow: 'auto', border: `1px solid ${tokens.colorNeutralStroke2}`, borderRadius: 4 }}>
+    <div style={{ maxHeight: 200, overflow: 'auto', border: `1px solid ${tokens.colorNeutralStroke2}`, borderRadius: tokens.borderRadiusMedium }}>
       <Table aria-label="tile result" size="small">
         <TableHeader><TableRow>{columns.map((c) => <TableHeaderCell key={c}>{c}</TableHeaderCell>)}</TableRow></TableHeader>
         <TableBody>
@@ -643,8 +643,8 @@ function ConditionalTable({ columns, rows, conditionalRules, drillColumn, onDril
                   const showIcon = !!cellMatch?.icon;
                   const hideText = cellMatch?.hideText;
                   return (
-                    <TableCell key={j} style={{ fontFamily: 'Consolas, monospace', fontSize: 11, whiteSpace: 'nowrap', backgroundColor: bg, color: fg }}>
-                      <span style={{ display: 'inline-flex', alignItems: 'center', gap: 4 }}>
+                    <TableCell key={j} style={{ fontFamily: 'Consolas, monospace', fontSize: tokens.fontSizeBase100, whiteSpace: 'nowrap', backgroundColor: bg, color: fg }}>
+                      <span style={{ display: 'inline-flex', alignItems: 'center', gap: tokens.spacingVerticalXS }}>
                         {showIcon && <span style={{ display: 'inline-flex', color: fg }}>{cellMatch!.icon}</span>}
                         {!hideText && fmtCell(row[j])}
                         {cellMatch?.tag && <span style={{ fontStyle: 'italic', opacity: 0.85 }}>{cellMatch.tag}</span>}
@@ -745,7 +745,7 @@ function KqlResultsPanel({ result, loading, itemId, itemType }: { result: KqlRes
         {renderName && <Badge appearance="outline" color="brand" title="from the query's | render operator">render: {renderName}</Badge>}
         {result.truncated && <Badge appearance="outline" color="warning">truncated at 5,000</Badge>}
         {rows.length > 0 && (
-          <div style={{ marginLeft: 'auto', display: 'flex', gap: 4, flexWrap: 'wrap' }} role="tablist" aria-label="Result view">
+          <div style={{ marginLeft: 'auto', display: 'flex', gap: tokens.spacingVerticalXS, flexWrap: 'wrap' }} role="tablist" aria-label="Result view">
             {KQL_VIZ_CHOICES.map((v) => (
               <Button key={v.value} size="small" appearance={viz === v.value ? 'primary' : 'subtle'}
                 onClick={() => { setViz(v.value); setUserPicked(true); }} aria-pressed={viz === v.value}>
@@ -972,9 +972,9 @@ export function EventhouseCapacityPanel({ id }: { id: string }) {
   ];
 
   return (
-    <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
+    <div style={{ display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalL }}>
       {/* Section 1 — Throttle state */}
-      <div style={{ display: 'flex', alignItems: 'center', gap: 12, flexWrap: 'wrap' }}>
+      <div style={{ display: 'flex', alignItems: 'center', gap: tokens.spacingVerticalM, flexWrap: 'wrap' }}>
         <Subtitle2>Throttle state</Subtitle2>
         <Badge appearance="filled" color={throttleActive ? 'danger' : 'success'}>
           {throttleActive ? 'Throttled' : 'Healthy'}
@@ -1002,7 +1002,7 @@ export function EventhouseCapacityPanel({ id }: { id: string }) {
           return (
             <div key={g.label} className={s.card}>
               <Caption1 style={{ color: tokens.colorNeutralForeground3 }}>{g.label}</Caption1>
-              <div style={{ fontSize: 22, fontWeight: 600, color: pct !== undefined ? utilColor(pct) : undefined }}>{display}</div>
+              <div style={{ fontSize: tokens.fontSizeBase500, fontWeight: 600, color: pct !== undefined ? utilColor(pct) : undefined }}>{display}</div>
               {pct !== undefined && (
                 <ProgressBar value={pct / 100} thickness="large" color={pct >= 90 ? 'error' : pct >= 70 ? 'warning' : 'success'} />
               )}
@@ -1014,7 +1014,7 @@ export function EventhouseCapacityPanel({ id }: { id: string }) {
       {/* Section 2 — Capacity slots (.show capacity) */}
       <div>
         <Subtitle2>Capacity slots</Subtitle2>
-        <Caption1 style={{ display: 'block', marginBottom: 8 }}>
+        <Caption1 style={{ display: 'block', marginBottom: tokens.spacingVerticalS }}>
           Live cluster slot utilization across every data-management operation type (from <code>.show capacity</code>).
         </Caption1>
         {slots.length === 0 && <Caption1>No capacity rows returned.</Caption1>}
@@ -1041,7 +1041,7 @@ export function EventhouseCapacityPanel({ id }: { id: string }) {
                       <TableCell>{slot.consumed}</TableCell>
                       <TableCell>{slot.remaining}</TableCell>
                       <TableCell>
-                        <div style={{ display: 'flex', alignItems: 'center', gap: 8, minWidth: 120 }}>
+                        <div style={{ display: 'flex', alignItems: 'center', gap: tokens.spacingVerticalS, minWidth: 120 }}>
                           <ProgressBar value={util / 100} color={util >= 90 ? 'error' : util >= 70 ? 'warning' : 'success'} style={{ flex: 1 }} />
                           <span style={{ color: utilColor(util) }}>{util}%</span>
                         </div>
@@ -1057,7 +1057,7 @@ export function EventhouseCapacityPanel({ id }: { id: string }) {
       </div>
 
       {/* Section 3 — Ingestion capacity policy (editable) */}
-      <div className={s.card} style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+      <div className={s.card} style={{ display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalM }}>
         <Subtitle2>Ingestion capacity policy</Subtitle2>
         <Caption1>
           Caps total concurrent ingestion operations. Effective slots ={' '}
@@ -1065,7 +1065,7 @@ export function EventhouseCapacityPanel({ id }: { id: string }) {
           Applied via <code>.alter-merge cluster policy capacity</code> — changes can take up to an hour to take effect.
           Microsoft recommends consulting support before changing capacity.
         </Caption1>
-        <div style={{ display: 'flex', gap: 16, flexWrap: 'wrap' }}>
+        <div style={{ display: 'flex', gap: tokens.spacingVerticalL, flexWrap: 'wrap' }}>
           <Field label="ClusterMaximumConcurrentOperations" hint="Hard cap on concurrent ingestions (long).">
             <Input
               type="number"
@@ -1097,7 +1097,7 @@ export function EventhouseCapacityPanel({ id }: { id: string }) {
             <MessageBarBody>
               <MessageBarTitle>{applyResult.ok ? 'Capacity policy applied' : 'Apply failed'}</MessageBarTitle>
               {applyResult.ok
-                ? <span style={{ fontFamily: 'Consolas, monospace', fontSize: 12, wordBreak: 'break-all' }}>
+                ? <span style={{ fontFamily: 'Consolas, monospace', fontSize: tokens.fontSizeBase200, wordBreak: 'break-all' }}>
                     {applyResult.applied}
                     {applyResult.effectivePolicy ? ` → ${applyResult.effectivePolicy.slice(0, 300)}` : ''}
                   </span>
@@ -1131,7 +1131,7 @@ export function EventhouseCapacityPanel({ id }: { id: string }) {
       </MessageBar>
 
       {/* Section 6 — Mission-critical exempt honest-gate */}
-      <div className={s.card} style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+      <div className={s.card} style={{ display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalS }}>
         <Subtitle2>Mission-critical exempt</Subtitle2>
         <Switch checked={false} disabled label="Exempt from capacity throttling (not applicable to ADX)" />
         <MessageBar intent="warning">
@@ -1225,12 +1225,12 @@ const EH_TIMESPAN_LABEL: Record<EhTimespan, string> = {
 function EhStatTile({ label, value, hint }: { label: string; value: string; hint?: string }) {
   return (
     <div style={{
-      padding: 14, minHeight: 92, border: `1px solid ${tokens.colorNeutralStroke2}`,
-      borderRadius: 6, background: tokens.colorNeutralBackground1, display: 'flex',
-      flexDirection: 'column', gap: 2,
+      padding: tokens.spacingVerticalL, minHeight: 92, border: `1px solid ${tokens.colorNeutralStroke2}`,
+      borderRadius: tokens.borderRadiusLarge, background: tokens.colorNeutralBackground1, display: 'flex',
+      flexDirection: 'column', gap: tokens.spacingVerticalXXS,
     }}>
       <Caption1 style={{ color: tokens.colorNeutralForeground3 }}>{label}</Caption1>
-      <div style={{ fontSize: 26, fontWeight: 700, color: tokens.colorBrandForeground1, lineHeight: 1.15 }}>{value}</div>
+      <div style={{ fontSize: tokens.fontSizeBase600, fontWeight: 700, color: tokens.colorBrandForeground1, lineHeight: 1.15 }}>{value}</div>
       {hint && <Caption1 style={{ color: tokens.colorNeutralForeground3 }}>{hint}</Caption1>}
     </div>
   );
@@ -1293,7 +1293,7 @@ function EventhouseOverviewPanel({
           icon={<ArrowSync20Regular />}
           onClick={onRefresh}
           disabled={loading}
-          style={{ marginLeft: 8 }}
+          style={{ marginLeft: tokens.spacingHorizontalS }}
         >
           {loading ? 'Loading…' : 'Refresh'}
         </Button>
@@ -1408,10 +1408,10 @@ function EventhouseOverviewPanel({
           </div>
 
           {/* top queried dbs + top users */}
-          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(320px, 1fr))', gap: 12 }}>
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(320px, 1fr))', gap: tokens.spacingVerticalM }}>
             <div className={s.card}>
               <Subtitle2>Top databases by query count</Subtitle2>
-              <div className={s.tableWrap} style={{ marginTop: 8 }}>
+              <div className={s.tableWrap} style={{ marginTop: tokens.spacingVerticalS }}>
                 <Table size="small" aria-label="Top queried databases">
                   <TableHeader>
                     <TableRow>
@@ -1435,7 +1435,7 @@ function EventhouseOverviewPanel({
             </div>
             <div className={s.card}>
               <Subtitle2>Top users by query count</Subtitle2>
-              <div className={s.tableWrap} style={{ marginTop: 8 }}>
+              <div className={s.tableWrap} style={{ marginTop: tokens.spacingVerticalS }}>
                 <Table size="small" aria-label="Top users">
                   <TableHeader>
                     <TableRow>
@@ -2285,10 +2285,10 @@ export function EventhouseEditor({ item, id }: { item: FabricItemType; id: strin
                     placeholder="database-name"
                     value={newName}
                     onChange={(_: unknown, d: any) => setNewName(d.value)}
-                    style={{ marginTop: 12, width: '100%' }}
+                    style={{ marginTop: tokens.spacingVerticalM, width: '100%' }}
                   />
                   {createErr && (
-                    <MessageBar intent="error" style={{ marginTop: 12 }}>
+                    <MessageBar intent="error" style={{ marginTop: tokens.spacingVerticalM }}>
                       <MessageBarBody>{createErr}</MessageBarBody>
                     </MessageBar>
                   )}
@@ -2306,13 +2306,13 @@ export function EventhouseEditor({ item, id }: { item: FabricItemType; id: strin
             <DialogSurface>
               <DialogBody>
                 <DialogTitle>
-                  <span style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                  <span style={{ display: 'flex', alignItems: 'center', gap: tokens.spacingVerticalS }}>
                     <DataBarVertical20Regular />
                     New Real-Time Dashboard
                   </span>
                 </DialogTitle>
                 <DialogContent>
-                  <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalM }}>
                     <Caption1>
                       Creates a KQL dashboard in this workspace, pre-wired to the{' '}
                       <strong>{selectedDb || state?.defaultDatabase || 'default'}</strong> KQL
@@ -2398,9 +2398,9 @@ export function EventhouseEditor({ item, id }: { item: FabricItemType; id: strin
 
         {state?.ok && activeTab === 'databases' && (
           <>
-            <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: tokens.spacingVerticalS}}>
               <Subtitle2>Databases ({dbCount})</Subtitle2>
-              <div style={{ marginLeft: 'auto', display: 'flex', gap: 4 }} role="group" aria-label="Database view">
+              <div style={{ marginLeft: 'auto', display: 'flex', gap: tokens.spacingVerticalXS}} role="group" aria-label="Database view">
                 <Button
                   size="small"
                   appearance={dbView === 'tile' ? 'primary' : 'subtle'}
@@ -2442,18 +2442,18 @@ export function EventhouseEditor({ item, id }: { item: FabricItemType; id: strin
                       }}
                     >
                       <Caption1 style={{ color: tokens.colorNeutralForeground3 }}>KQL database</Caption1>
-                      <div style={{ fontSize: 18, fontWeight: 600 }}>{d.name}</div>
+                      <div style={{ fontSize: tokens.fontSizeBase400, fontWeight: 600 }}>{d.name}</div>
                       {d.prettyName && d.prettyName !== d.name && <Caption1>{d.prettyName}</Caption1>}
-                      <div style={{ display: 'flex', gap: 10, marginTop: 4, flexWrap: 'wrap', color: tokens.colorNeutralForeground3 }}>
+                      <div style={{ display: 'flex', gap: tokens.spacingVerticalM, marginTop: tokens.spacingVerticalXS, flexWrap: 'wrap', color: tokens.colorNeutralForeground3 }}>
                         {typeof d.totalSizeMb === 'number' && <Caption1>{fmtDbSize(d.totalSizeMb)}</Caption1>}
                         {typeof d.retentionDays === 'number' && <Caption1>ret {d.retentionDays}d</Caption1>}
                         {typeof d.tableCount === 'number' && <Caption1>{d.tableCount} {d.tableCount === 1 ? 'table' : 'tables'}</Caption1>}
                       </div>
-                      <div style={{ display: 'flex', gap: 6, marginTop: 6, flexWrap: 'wrap' }}>
+                      <div style={{ display: 'flex', gap: tokens.spacingVerticalS, marginTop: tokens.spacingVerticalS, flexWrap: 'wrap' }}>
                         {d.name === state.defaultDatabase && <Badge appearance="filled" color="brand">default</Badge>}
                         {isSelected && <Badge appearance="outline" color="informative">selected</Badge>}
                       </div>
-                      <div style={{ marginTop: 8, display: 'flex', gap: 4, flexWrap: 'wrap' }}>
+                      <div style={{ marginTop: tokens.spacingVerticalS, display: 'flex', gap: tokens.spacingVerticalXS, flexWrap: 'wrap' }}>
                         <Button size="small" appearance="primary" icon={<Play20Regular />}
                           onClick={(e) => { e.stopPropagation(); openKqlEditor(d.name); }}
                           title="Query data (this tab)">
@@ -2508,14 +2508,14 @@ export function EventhouseEditor({ item, id }: { item: FabricItemType; id: strin
                         <TableCell>
                           <span style={{ fontWeight: 600 }}>{d.name}</span>
                           {d.name === state.defaultDatabase &&
-                            <Badge appearance="filled" color="brand" style={{ marginLeft: 6 }}>default</Badge>}
+                            <Badge appearance="filled" color="brand" style={{ marginLeft: tokens.spacingHorizontalS }}>default</Badge>}
                         </TableCell>
                         <TableCell>{typeof d.tableCount === 'number' ? d.tableCount : '—'}</TableCell>
                         <TableCell>{fmtDbSize(d.totalSizeMb)}</TableCell>
                         <TableCell>{typeof d.retentionDays === 'number' ? `${d.retentionDays} days` : '—'}</TableCell>
                         <TableCell>{typeof d.hotCacheDays === 'number' ? `${d.hotCacheDays} days` : '—'}</TableCell>
                         <TableCell>
-                          <div style={{ display: 'flex', gap: 4 }}>
+                          <div style={{ display: 'flex', gap: tokens.spacingVerticalXS}}>
                             <Button size="small" appearance="primary" icon={<Play20Regular />}
                               aria-label={`Query ${d.name}`}
                               onClick={(e) => { e.stopPropagation(); openKqlEditor(d.name); }}
@@ -2560,7 +2560,7 @@ export function EventhouseEditor({ item, id }: { item: FabricItemType; id: strin
                       ADX cluster. This cannot be undone — an ARM DELETE is issued immediately.
                     </Caption1>
                     {deleteErr && (
-                      <MessageBar intent="error" style={{ marginTop: 12 }}>
+                      <MessageBar intent="error" style={{ marginTop: tokens.spacingVerticalM }}>
                         <MessageBarBody>{deleteErr}</MessageBarBody>
                       </MessageBar>
                     )}
@@ -2585,7 +2585,7 @@ export function EventhouseEditor({ item, id }: { item: FabricItemType; id: strin
                   <DialogTitle>Get data into KQL</DialogTitle>
                   <DialogContent>
                     <Caption1>Target database: <strong>{selectedDb || '(none)'}</strong></Caption1>
-                    <div style={{ display: 'flex', flexDirection: 'column', gap: 12, marginTop: 12 }}>
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalM, marginTop: tokens.spacingVerticalM }}>
                       <div>
                         <Label>Source</Label>
                         <Select value={getDataMode} onChange={(_, d) => setGetDataMode(d.value as any)}>
@@ -2660,7 +2660,7 @@ export function EventhouseEditor({ item, id }: { item: FabricItemType; id: strin
                             <Input value={getDataOneLakePath} onChange={(_, d) => setGetDataOneLakePath(d.value)} placeholder="abfss://bronze@account.dfs.core.windows.net/folder/data.csv" />
                           </div>
                           {loomContainers.length > 0 && (
-                            <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', alignItems: 'center' }}>
+                            <div style={{ display: 'flex', gap: tokens.spacingVerticalS, flexWrap: 'wrap', alignItems: 'center' }}>
                               <Caption1>Quick-pick:</Caption1>
                               {loomContainers.map((c) => (
                                 <Button
@@ -2702,9 +2702,9 @@ export function EventhouseEditor({ item, id }: { item: FabricItemType; id: strin
                       )}
                     </div>
                     {schemaPreview && schemaPreview.columns.length > 0 && (
-                      <div style={{ marginTop: 12, border: `1px solid ${tokens.colorNeutralStroke2}`, borderRadius: 4, padding: 8 }}>
+                      <div style={{ marginTop: tokens.spacingVerticalM, border: `1px solid ${tokens.colorNeutralStroke2}`, borderRadius: tokens.borderRadiusMedium, padding: tokens.spacingVerticalS }}>
                         <Caption1><strong>Detected schema</strong>{schemaPreview.detectedFormat ? ` (${schemaPreview.detectedFormat})` : ''}</Caption1>
-                        <div style={{ overflowX: 'auto', marginTop: 4 }}>
+                        <div style={{ overflowX: 'auto', marginTop: tokens.spacingVerticalXS }}>
                           <Table size="small" aria-label="Detected schema preview">
                             <TableHeader>
                               <TableRow>
@@ -2726,7 +2726,7 @@ export function EventhouseEditor({ item, id }: { item: FabricItemType; id: strin
                       </div>
                     )}
                     {getDataResult && (
-                      <MessageBar intent={getDataResult.ok ? 'success' : 'error'} style={{ marginTop: 12 }}>
+                      <MessageBar intent={getDataResult.ok ? 'success' : 'error'} style={{ marginTop: tokens.spacingVerticalM }}>
                         <MessageBarBody>
                           {getDataResult.ok
                             ? `Ingested ${getDataResult.rows ?? '?'} rows into ${getDataResult.tableName || getDataTable}`
@@ -2751,7 +2751,7 @@ export function EventhouseEditor({ item, id }: { item: FabricItemType; id: strin
                 <DialogBody>
                   <DialogTitle>Data policies — {selectedDb}</DialogTitle>
                   <DialogContent>
-                    <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalM}}>
                       <div>
                         <Label>Hot cache (days)</Label>
                         <Input
@@ -2796,7 +2796,7 @@ export function EventhouseEditor({ item, id }: { item: FabricItemType; id: strin
                       </div>
                     </div>
                     {policiesErr && (
-                      <MessageBar intent="error" style={{ marginTop: 12 }}>
+                      <MessageBar intent="error" style={{ marginTop: tokens.spacingVerticalM }}>
                         <MessageBarBody>{policiesErr}</MessageBarBody>
                       </MessageBar>
                     )}
@@ -2827,7 +2827,7 @@ export function EventhouseEditor({ item, id }: { item: FabricItemType; id: strin
                       binding — no copy, no ingestion job. The ADX cluster managed identity must
                       hold Storage Blob Data Reader on the target ADLS account.
                     </Caption1>
-                    <div style={{ display: 'flex', flexDirection: 'column', gap: 12, marginTop: 12 }}>
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalM, marginTop: tokens.spacingVerticalM }}>
                       <div>
                         <Label required>Target KQL database</Label>
                         <Select value={selectedDb} onChange={(_, d) => setSelectedDb(d.value)}>
@@ -2847,7 +2847,7 @@ export function EventhouseEditor({ item, id }: { item: FabricItemType; id: strin
                           value={deltaAbfss}
                           onChange={(_, d) => setDeltaAbfss(d.value)}
                           placeholder="abfss://bronze@account.dfs.core.windows.net/orders/"
-                          style={{ fontFamily: 'Consolas, monospace', fontSize: 12 }}
+                          style={{ fontFamily: 'Consolas, monospace', fontSize: tokens.fontSizeBase200}}
                         />
                         <Caption1>Root folder of the Delta table (the folder containing _delta_log).</Caption1>
                       </div>
@@ -2874,20 +2874,20 @@ export function EventhouseEditor({ item, id }: { item: FabricItemType; id: strin
                     </div>
 
                     {deltaResult && !deltaResult.ok && (
-                      <MessageBar intent="error" style={{ marginTop: 12 }}>
+                      <MessageBar intent="error" style={{ marginTop: tokens.spacingVerticalM }}>
                         <MessageBarBody>
                           <MessageBarTitle>Binding failed</MessageBarTitle>
                           {deltaResult.error}
-                          {deltaResult.hint && <div style={{ marginTop: 6 }}><Caption1>{deltaResult.hint}</Caption1></div>}
+                          {deltaResult.hint && <div style={{ marginTop: tokens.spacingVerticalS }}><Caption1>{deltaResult.hint}</Caption1></div>}
                         </MessageBarBody>
                       </MessageBar>
                     )}
 
                     {deltaResult?.ok && (
-                      <MessageBar intent="success" style={{ marginTop: 12 }}>
+                      <MessageBar intent="success" style={{ marginTop: tokens.spacingVerticalM }}>
                         <MessageBarBody>
                           <MessageBarTitle>External table {deltaResult.externalTableName} bound</MessageBarTitle>
-                          <div style={{ marginTop: 6, display: 'flex', flexDirection: 'column', gap: 4 }}>
+                          <div style={{ marginTop: tokens.spacingVerticalS, display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalXS}}>
                             {deltaResult.kqlViewName && (
                               <Caption1>KQL view: <code>{deltaResult.kqlViewName}()</code></Caption1>
                             )}
@@ -2928,7 +2928,7 @@ export function EventhouseEditor({ item, id }: { item: FabricItemType; id: strin
                 <DialogBody>
                   <DialogTitle>Export to OneLake / ADLS Gen2 (Delta)</DialogTitle>
                   <DialogContent>
-                    <Caption1 style={{ display: 'block', marginBottom: 8 }}>
+                    <Caption1 style={{ display: 'block', marginBottom: tokens.spacingVerticalS}}>
                       Configures a Kusto continuous-export job that writes Delta files to ADLS Gen2 on
                       each interval. The ADX cluster&rsquo;s system-assigned MI authenticates to storage
                       (impersonation — no SAS key). Requires <strong>Storage Blob Data Contributor</strong> on
@@ -2938,7 +2938,7 @@ export function EventhouseEditor({ item, id }: { item: FabricItemType; id: strin
 
                     {/* Honest gate — fires when LOOM_RTI_EXPORT_ADLS is not set */}
                     {exportResult?.code === 'no_adls_config' && (
-                      <MessageBar intent="warning" style={{ marginBottom: 12 }}>
+                      <MessageBar intent="warning" style={{ marginBottom: tokens.spacingVerticalM}}>
                         <MessageBarBody>
                           <MessageBarTitle>ADLS export not configured</MessageBarTitle>
                           {exportResult.hint ||
@@ -2948,7 +2948,7 @@ export function EventhouseEditor({ item, id }: { item: FabricItemType; id: strin
                       </MessageBar>
                     )}
 
-                    <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalM}}>
                       <div>
                         <Label>Source table</Label>
                         <Input
@@ -3011,17 +3011,17 @@ export function EventhouseEditor({ item, id }: { item: FabricItemType; id: strin
 
                     {/* Active exports list */}
                     {exportsLoading && (
-                      <Spinner size="extra-small" label="Loading exports…" style={{ marginTop: 12 }} />
+                      <Spinner size="extra-small" label="Loading exports…" style={{ marginTop: tokens.spacingVerticalM}} />
                     )}
                     {continuousExports.length > 0 && (
-                      <div style={{ marginTop: 16 }}>
+                      <div style={{ marginTop: tokens.spacingVerticalL}}>
                         <Caption1 style={{ fontWeight: 600 }}>Active exports ({continuousExports.length})</Caption1>
                         {continuousExports.map((ce) => (
-                          <div key={ce.name} style={{ fontSize: 12, marginTop: 4, fontFamily: 'monospace' }}>
+                          <div key={ce.name} style={{ fontSize: tokens.fontSizeBase200, marginTop: tokens.spacingVerticalXS, fontFamily: 'monospace' }}>
                             <strong>{ce.name}</strong>
                             {ce.externalTableName && ` → ${ce.externalTableName}`}
                             {ce.lastRunResult && (
-                              <Caption1 style={{ marginLeft: 8 }}>{ce.lastRunResult}</Caption1>
+                              <Caption1 style={{ marginLeft: tokens.spacingHorizontalS}}>{ce.lastRunResult}</Caption1>
                             )}
                           </div>
                         ))}
@@ -3030,7 +3030,7 @@ export function EventhouseEditor({ item, id }: { item: FabricItemType; id: strin
 
                     {/* Success receipt */}
                     {exportResult?.ok && (
-                      <MessageBar intent="success" style={{ marginTop: 12 }}>
+                      <MessageBar intent="success" style={{ marginTop: tokens.spacingVerticalM}}>
                         <MessageBarBody>
                           <MessageBarTitle>Export configured</MessageBarTitle>
                           Delta files will land at <code>{exportResult.abfssPath}</code> every {exportInterval}.
@@ -3041,7 +3041,7 @@ export function EventhouseEditor({ item, id }: { item: FabricItemType; id: strin
 
                     {/* Error (not the honest gate) */}
                     {exportResult && !exportResult.ok && exportResult.code !== 'no_adls_config' && (
-                      <MessageBar intent="error" style={{ marginTop: 12 }}>
+                      <MessageBar intent="error" style={{ marginTop: tokens.spacingVerticalM}}>
                         <MessageBarBody>{exportResult.error}</MessageBarBody>
                       </MessageBar>
                     )}
@@ -3073,7 +3073,7 @@ export function EventhouseEditor({ item, id }: { item: FabricItemType; id: strin
                   <DialogTitle>Purge records — {selectedDb}</DialogTitle>
                   <DialogContent>
                     {purgeStep === 'idle' && (
-                      <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+                      <div style={{ display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalM}}>
                         <MessageBar intent="warning">
                           <MessageBarBody>
                             <MessageBarTitle>Irreversible erasure</MessageBarTitle>
@@ -3093,7 +3093,7 @@ export function EventhouseEditor({ item, id }: { item: FabricItemType; id: strin
                           <div>
                             <Label>Predicate — all conditions are joined with AND</Label>
                             {purgePredicates.map((pred, i) => (
-                              <div key={i} style={{ display: 'flex', gap: 6, alignItems: 'center', marginTop: 6 }}>
+                              <div key={i} style={{ display: 'flex', gap: tokens.spacingVerticalS, alignItems: 'center', marginTop: tokens.spacingVerticalS}}>
                                 <Select
                                   value={pred.column}
                                   onChange={(_, d) => setPurgePredicates((ps) => ps.map((p, j) => (j === i ? { ...p, column: d.value } : p)))}
@@ -3135,11 +3135,11 @@ export function EventhouseEditor({ item, id }: { item: FabricItemType; id: strin
                               appearance="outline"
                               icon={<Add20Regular />}
                               onClick={() => setPurgePredicates((ps) => [...ps, { column: '', op: '==', value: '' }])}
-                              style={{ marginTop: 8 }}
+                              style={{ marginTop: tokens.spacingVerticalS}}
                             >
                               Add condition
                             </Button>
-                            <Caption1 style={{ display: 'block', marginTop: 8, color: tokens.colorNeutralForeground3 }}>
+                            <Caption1 style={{ display: 'block', marginTop: tokens.spacingVerticalS, color: tokens.colorNeutralForeground3 }}>
                               Predicate:{' '}
                               <code style={{ fontFamily: 'Consolas, monospace' }}>
                                 where {purgePredicates.filter((p) => p.column && p.value).map((p) => `["${p.column}"] ${p.op} "${p.value}"`).join(' and ') || '(incomplete)'}
@@ -3152,7 +3152,7 @@ export function EventhouseEditor({ item, id }: { item: FabricItemType; id: strin
                     )}
 
                     {purgeStep === 'verified' && purgeVerifyResult && (
-                      <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+                      <div style={{ display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalM}}>
                         <MessageBar intent="warning">
                           <MessageBarBody>
                             <MessageBarTitle>Confirm purge</MessageBarTitle>
@@ -3175,7 +3175,7 @@ export function EventhouseEditor({ item, id }: { item: FabricItemType; id: strin
                     )}
 
                     {purgeStep === 'done' && purgeCommitResult && (
-                      <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+                      <div style={{ display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalM}}>
                         <MessageBar intent="success">
                           <MessageBarBody>
                             <MessageBarTitle>Purge scheduled</MessageBarTitle>
@@ -3234,13 +3234,13 @@ export function EventhouseEditor({ item, id }: { item: FabricItemType; id: strin
                   <DialogTitle>Optimized auto-scale</DialogTitle>
                   <DialogContent>
                     {state?.sku && (
-                      <Caption1 style={{ display: 'block', marginBottom: 8 }}>
+                      <Caption1 style={{ display: 'block', marginBottom: tokens.spacingVerticalS}}>
                         Cluster SKU: <strong>{state.sku.name}</strong> ({state.sku.tier} tier
                         {typeof state.sku.capacity === 'number' ? `, ${state.sku.capacity} instance${state.sku.capacity === 1 ? '' : 's'}` : ''})
                       </Caption1>
                     )}
                     {isDevSku && (
-                      <MessageBar intent="warning" style={{ marginBottom: 12 }}>
+                      <MessageBar intent="warning" style={{ marginBottom: tokens.spacingVerticalM}}>
                         <MessageBarBody>
                           <MessageBarTitle>Dev/Basic SKU — auto-scale not supported</MessageBarTitle>
                           Optimized auto-scale requires a Standard-tier ADX SKU
@@ -3250,7 +3250,7 @@ export function EventhouseEditor({ item, id }: { item: FabricItemType; id: strin
                         </MessageBarBody>
                       </MessageBar>
                     )}
-                    <div style={{ display: 'flex', flexDirection: 'column', gap: 14, opacity: isDevSku ? 0.5 : 1 }}>
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalL, opacity: isDevSku ? 0.5 : 1 }}>
                       <div>
                         <Switch
                           checked={autoscaleEnabled}
@@ -3294,7 +3294,7 @@ export function EventhouseEditor({ item, id }: { item: FabricItemType; id: strin
                       </div>
                     </div>
                     {autoscaleResult && (
-                      <MessageBar intent={autoscaleResult.ok ? 'success' : 'error'} style={{ marginTop: 12 }}>
+                      <MessageBar intent={autoscaleResult.ok ? 'success' : 'error'} style={{ marginTop: tokens.spacingVerticalM}}>
                         <MessageBarBody>
                           {autoscaleResult.msg}
                           {autoscaleResult.provisioningState && (
@@ -4491,7 +4491,7 @@ export function KqlDatabaseEditor({ item, id }: { item: FabricItemType; id: stri
           <TabList
             selectedValue={editorTab}
             onTabSelect={(_: unknown, d: any) => setEditorTab(d.value as 'query' | 'diagram')}
-            style={{ marginBottom: 4 }}
+            style={{ marginBottom: tokens.spacingVerticalXS}}
           >
             <Tab value="query" icon={<Play20Regular />}>Query</Tab>
             <Tab value="diagram" icon={<Flowchart20Regular />}>Diagram</Tab>
@@ -4558,7 +4558,7 @@ export function KqlDatabaseEditor({ item, id }: { item: FabricItemType; id: stri
           )}
           {/* Suggestion / explanation result */}
           {(assistView === 'suggestion' || assistView === 'explain-result') && assistResult && (
-            <MessageBar intent={assistView === 'explain-result' ? 'info' : 'success'} style={{ margin: '4px 0 0' }}>
+            <MessageBar intent={assistView === 'explain-result' ? 'info' : 'success'} style={{ margin: `${tokens.spacingVerticalXS} 0 0` }}>
               <MessageBarBody>
                 <pre className={s.assistResult}>{assistResult}</pre>
               </MessageBarBody>
@@ -4581,7 +4581,7 @@ export function KqlDatabaseEditor({ item, id }: { item: FabricItemType; id: stri
           )}
           {/* Honest config gate / error */}
           {assistError && (
-            <MessageBar intent="error" style={{ margin: '4px 0 0' }}>
+            <MessageBar intent="error" style={{ margin: `${tokens.spacingVerticalXS} 0 0` }}>
               <MessageBarBody>{assistError}</MessageBarBody>
               <MessageBarActions>
                 <Button size="small" onClick={() => setAssistError(null)}>Dismiss</Button>
@@ -4597,7 +4597,7 @@ export function KqlDatabaseEditor({ item, id }: { item: FabricItemType; id: stri
               tables/functions exist on the live cluster the navigator + Run
               hit the real backend; these template rows are clearly labeled. */}
           {info?.contentFallback && (
-            <div style={{ marginTop: 12, display: 'flex', flexDirection: 'column', gap: 12 }}>
+            <div style={{ marginTop: tokens.spacingVerticalM, display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalM}}>
               <MessageBar intent="info">
                 <MessageBarBody>
                   <MessageBarTitle>App template — schema & starter queries</MessageBarTitle>
@@ -4611,7 +4611,7 @@ export function KqlDatabaseEditor({ item, id }: { item: FabricItemType; id: stri
               {Array.isArray(info.schema) && info.schema.length > 0 && (
                 <div>
                   <Subtitle2>Tables ({info.schema.length})</Subtitle2>
-                  <Tree aria-label="Starter table schema" style={{ marginTop: 6 }}>
+                  <Tree aria-label="Starter table schema" style={{ marginTop: tokens.spacingVerticalS}}>
                     {info.schema.map((t) => (
                       <TreeItem key={t.name} itemType="branch" value={`stbl-${t.name}`}>
                         <TreeItemLayout iconBefore={<DocumentTable20Regular />}>
@@ -4631,7 +4631,7 @@ export function KqlDatabaseEditor({ item, id }: { item: FabricItemType; id: stri
                           ))}
                         </Tree>
                         {Array.isArray(t.sample) && t.sample.length > 0 && (
-                          <div style={{ overflowX: 'auto', margin: '4px 0 8px 24px' }}>
+                          <div style={{ overflowX: 'auto', margin: `${tokens.spacingVerticalXS} 0 ${tokens.spacingVerticalS} ${tokens.spacingHorizontalXXL}` }}>
                             <Table size="extra-small" aria-label={`${t.name} sample rows`}>
                               <TableHeader>
                                 <TableRow>
@@ -4661,7 +4661,7 @@ export function KqlDatabaseEditor({ item, id }: { item: FabricItemType; id: stri
               {Array.isArray(info.starterQueries) && info.starterQueries.length > 0 && (
                 <div>
                   <Subtitle2>Starter queries ({info.starterQueries.length})</Subtitle2>
-                  <div style={{ display: 'flex', flexDirection: 'column', gap: 4, marginTop: 6 }}>
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalXS, marginTop: tokens.spacingVerticalS}}>
                     {info.starterQueries.map((q) => (
                       <Button
                         key={q.name}
@@ -4728,7 +4728,7 @@ export function KqlDatabaseEditor({ item, id }: { item: FabricItemType; id: stri
               <DialogBody>
                 <DialogTitle>Delete {deleteTarget?.kind} &quot;{deleteTarget?.name}&quot;?</DialogTitle>
                 <DialogContent>
-                  <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalS}}>
                     <Caption1>
                       Issues a <code>.drop {deleteTarget?.kind ?? ''} [&quot;{deleteTarget?.name ?? ''}&quot;]</code> management
                       command against the live ADX cluster. This cannot be undone.
@@ -4760,7 +4760,7 @@ export function KqlDatabaseEditor({ item, id }: { item: FabricItemType; id: stri
                   {wizardKind === 'follower' && 'Database shortcut — attach follower (read-only)'}
                 </DialogTitle>
                 <DialogContent>
-                  <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalS}}>
                     {wizardKind === 'table' && (
                       <>
                         <Field label="Table name" required>
@@ -4938,9 +4938,9 @@ export function KqlDatabaseEditor({ item, id }: { item: FabricItemType; id: stri
                           </MessageBar>
                         )}
                         {wizDcConnections.length > 0 && (
-                          <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+                          <div style={{ display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalXS}}>
                             <Caption1>Existing data connections ({wizDcConnections.length})</Caption1>
-                            <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>
+                            <div style={{ display: 'flex', flexWrap: 'wrap', gap: tokens.spacingVerticalS}}>
                               {wizDcConnections.map((c) => (
                                 <Badge key={c.name} appearance="outline" color="informative">
                                   {c.name}{c.properties?.provisioningState ? ` · ${c.properties.provisioningState}` : ''}
@@ -5059,7 +5059,7 @@ export function KqlDatabaseEditor({ item, id }: { item: FabricItemType; id: stri
                     : `Edit function · ${fnName}`}
                 </DialogTitle>
                 <DialogContent>
-                  <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalM}}>
                     <Field label="Function name" required hint="Stored as a database-scoped KQL function (folder: Loom).">
                       <Input
                         value={fnName}
@@ -5072,9 +5072,9 @@ export function KqlDatabaseEditor({ item, id }: { item: FabricItemType; id: stri
                     </Field>
 
                     <Field label="Parameters" hint="Typed signature, e.g. days:int. Leave empty for a no-argument function.">
-                      <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+                      <div style={{ display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalS}}>
                         {fnParams.map((p, i) => (
-                          <div key={i} style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+                          <div key={i} style={{ display: 'flex', gap: tokens.spacingVerticalS, alignItems: 'center' }}>
                             <Input
                               size="small"
                               placeholder="paramName"
@@ -5176,7 +5176,7 @@ export function KqlDatabaseEditor({ item, id }: { item: FabricItemType; id: stri
               <DialogBody>
                 <DialogTitle>New data connection (Microsoft.Kusto/dataConnections)</DialogTitle>
                 <DialogContent>
-                  <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalM}}>
                     <Caption1>
                       Stream events into a table via a real ADX data connection. Azure-native — no Fabric
                       workspace required. The ADX cluster managed identity must be able to read the source’s
@@ -5194,7 +5194,7 @@ export function KqlDatabaseEditor({ item, id }: { item: FabricItemType; id: stri
                     </Field>
 
                     {dcSourcesLoading && (
-                      <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+                      <div style={{ display: 'flex', gap: tokens.spacingVerticalS, alignItems: 'center' }}>
                         <Spinner size="tiny" /> <Caption1>Discovering {dcKind === 'iothub' ? 'IoT Hubs' : 'Event Hubs namespaces'}…</Caption1>
                       </div>
                     )}
@@ -5274,7 +5274,7 @@ export function KqlDatabaseEditor({ item, id }: { item: FabricItemType; id: stri
                     {dcExisting && dcExisting.length > 0 && (
                       <div>
                         <Subtitle2>Existing connections ({dcExisting.length})</Subtitle2>
-                        <Table size="extra-small" aria-label="Existing data connections" style={{ marginTop: 6 }}>
+                        <Table size="extra-small" aria-label="Existing data connections" style={{ marginTop: tokens.spacingVerticalS}}>
                           <TableHeader>
                             <TableRow>
                               <TableHeaderCell>Name</TableHeaderCell>
@@ -5370,7 +5370,7 @@ export function KqlDatabaseEditor({ item, id }: { item: FabricItemType; id: stri
                 <DialogTitle>Row-level security · {rlsTable}</DialogTitle>
                 <DialogContent>
                   {rlsLoading ? <Spinner size="tiny" label="Loading RLS policy…" /> : (
-                    <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalM}}>
                       <MessageBar intent="info">
                         <MessageBarBody>
                           Sets <code>.alter table [&quot;{rlsTable}&quot;] policy row_level_security</code>.
@@ -5760,7 +5760,7 @@ export function KqlQuerysetEditor({ item, id }: { item: FabricItemType; id: stri
     <ItemEditorChrome item={item} id={id} ribbon={ribbon}
       leftPanel={
         <div className={s.treePad}>
-          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 8 }}>
+          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: tokens.spacingVerticalS}}>
             <Subtitle2>Queries</Subtitle2>
             <Button size="small" icon={<Add20Regular />} onClick={addQuery} appearance="subtle">New</Button>
           </div>
@@ -5862,7 +5862,7 @@ export function KqlQuerysetEditor({ item, id }: { item: FabricItemType; id: stri
           )}
           {/* Suggestion / explanation result */}
           {(assistView === 'suggestion' || assistView === 'explain-result') && assistResult && (
-            <MessageBar intent={assistView === 'explain-result' ? 'info' : 'success'} style={{ margin: '4px 0 0' }}>
+            <MessageBar intent={assistView === 'explain-result' ? 'info' : 'success'} style={{ margin: `${tokens.spacingVerticalXS} 0 0` }}>
               <MessageBarBody>
                 <pre className={s.assistResult}>{assistResult}</pre>
               </MessageBarBody>
@@ -5879,7 +5879,7 @@ export function KqlQuerysetEditor({ item, id }: { item: FabricItemType; id: stri
           )}
           {/* Honest config gate / error */}
           {assistError && (
-            <MessageBar intent="error" style={{ margin: '4px 0 0' }}>
+            <MessageBar intent="error" style={{ margin: `${tokens.spacingVerticalXS} 0 0` }}>
               <MessageBarBody>{assistError}</MessageBarBody>
               <MessageBarActions>
                 <Button size="small" onClick={() => setAssistError(null)}>Dismiss</Button>
@@ -5893,7 +5893,7 @@ export function KqlQuerysetEditor({ item, id }: { item: FabricItemType; id: stri
               <DialogBody>
                 <DialogTitle>Save query to KQL Dashboard</DialogTitle>
                 <DialogContent>
-                  <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalS}}>
                     <Caption1>Tile title</Caption1>
                     <Input value={pinTitle} onChange={(_: unknown, d: any) => setPinTitle(d.value)} />
                     <Caption1>Dashboard</Caption1>
@@ -5917,7 +5917,7 @@ export function KqlQuerysetEditor({ item, id }: { item: FabricItemType; id: stri
               <DialogBody>
                 <DialogTitle>Create Activator rule from query</DialogTitle>
                 <DialogContent>
-                  <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalS}}>
                     <Caption1>Rule name</Caption1>
                     <Input value={alertName} onChange={(_: unknown, d: any) => setAlertName(d.value)} />
                     <Caption1>Activator</Caption1>
@@ -5942,7 +5942,7 @@ export function KqlQuerysetEditor({ item, id }: { item: FabricItemType; id: stri
               <DialogBody>
                 <DialogTitle>Bind query source</DialogTitle>
                 <DialogContent>
-                  <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalM}}>
                     <Caption1>
                       Select the data source for this query. Log Analytics and Application
                       Insights sources run as federated cross-cluster queries from the ADX
@@ -5977,7 +5977,7 @@ export function KqlQuerysetEditor({ item, id }: { item: FabricItemType; id: stri
 
                     {/* Available: show the proxy URI and a copy-ready KQL snippet */}
                     {draftSrcType === 'log-analytics' && !qs?.laGate && qs?.laProxyUri && (
-                      <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+                      <div style={{ display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalS}}>
                         <Caption1>Workspace: <strong>{qs.laWorkspaceName}</strong></Caption1>
                         <Caption1>Cross-cluster KQL snippet — paste into your query:</Caption1>
                         <Textarea
@@ -5988,7 +5988,7 @@ export function KqlQuerysetEditor({ item, id }: { item: FabricItemType; id: stri
                             `union MyAdxTable, LA.Heartbeat\n| take 10`
                           }
                           rows={5}
-                          style={{ fontFamily: 'monospace', fontSize: 12 }}
+                          style={{ fontFamily: 'monospace', fontSize: tokens.fontSizeBase200}}
                         />
                         <Caption1 style={{ color: tokens.colorNeutralForeground3 }}>
                           The UAMI holds Log Analytics Reader on this workspace. Queries run via
@@ -6031,7 +6031,7 @@ export function KqlQuerysetEditor({ item, id }: { item: FabricItemType; id: stri
                 <DialogTitle>Share queryset</DialogTitle>
                 <DialogContent>
                   <Caption1>Anyone with access to this Loom item can open it. Permissions are managed via the workspace item ACL (Loom RBAC).</Caption1>
-                  <div style={{ marginTop: 8, display: 'flex', flexDirection: 'column', gap: 8 }}>
+                  <div style={{ marginTop: tokens.spacingVerticalS, display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalS}}>
                     <Caption1>Canonical URL</Caption1>
                     <Input value={typeof window !== 'undefined' ? window.location.href : ''} readOnly aria-label="Queryset URL" />
                     <Button appearance="outline" onClick={() => { if (typeof navigator !== 'undefined' && navigator.clipboard) navigator.clipboard.writeText(window.location.href).catch(() => {}); }}>Copy URL</Button>
@@ -6189,12 +6189,12 @@ function ConditionalFormattingEditor({ viz, rules, columns, onChange }: {
   const removeCond = (ri: number, ci: number) =>
     onChange(rules.map((r, i) => (i === ri ? { ...r, conditions: (r.conditions || []).filter((_, j) => j !== ci) } : r)));
 
-  const fieldRow: React.CSSProperties = { display: 'flex', gap: 6, alignItems: 'center', flexWrap: 'wrap' };
+  const fieldRow: React.CSSProperties = { display: 'flex', gap: tokens.spacingVerticalS, alignItems: 'center', flexWrap: 'wrap' };
   return (
-    <div style={{ border: `1px solid ${tokens.colorNeutralStroke2}`, borderRadius: 6, padding: 8, display: 'flex', flexDirection: 'column', gap: 8, background: tokens.colorNeutralBackground2 }}>
-      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8, flexWrap: 'wrap' }}>
+    <div style={{ border: `1px solid ${tokens.colorNeutralStroke2}`, borderRadius: tokens.borderRadiusLarge, padding: tokens.spacingVerticalS, display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalS, background: tokens.colorNeutralBackground2 }}>
+      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: tokens.spacingVerticalS, flexWrap: 'wrap' }}>
         <Caption1 style={{ fontWeight: 600 }}>Conditional formatting</Caption1>
-        <div style={{ display: 'flex', gap: 4 }}>
+        <div style={{ display: 'flex', gap: tokens.spacingVerticalXS}}>
           <Button size="small" icon={<Add20Regular />} onClick={() => addRule('condition')}>Color by condition</Button>
           {isTable && <Button size="small" icon={<Add20Regular />} onClick={() => addRule('value')}>Color by value</Button>}
         </div>
@@ -6206,8 +6206,8 @@ function ConditionalFormattingEditor({ viz, rules, columns, onChange }: {
         <Caption1 style={{ color: tokens.colorNeutralForeground3 }}>No rules — cells render unstyled. Add a rule to color cells by a data threshold.</Caption1>
       )}
       {rules.map((rule, ri) => (
-        <div key={ri} style={{ border: `1px solid ${tokens.colorNeutralStroke3}`, borderRadius: 4, padding: 8, display: 'flex', flexDirection: 'column', gap: 6, background: tokens.colorNeutralBackground1 }}>
-          <div style={{ display: 'flex', gap: 6, alignItems: 'center', justifyContent: 'space-between' }}>
+        <div key={ri} style={{ border: `1px solid ${tokens.colorNeutralStroke3}`, borderRadius: tokens.borderRadiusMedium, padding: tokens.spacingVerticalS, display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalS, background: tokens.colorNeutralBackground1 }}>
+          <div style={{ display: 'flex', gap: tokens.spacingVerticalS, alignItems: 'center', justifyContent: 'space-between' }}>
             <Badge appearance="outline" color={rule.type === 'value' ? 'informative' : 'brand'}>{rule.type === 'value' ? 'Color by value' : 'Color by condition'}</Badge>
             <Input size="small" style={{ flex: 1 }} value={rule.name || ''} placeholder={`Rule ${ri + 1} name (optional)`} aria-label={`Rule ${ri + 1} name`} onChange={(_: unknown, d: any) => update(ri, { name: d.value || undefined })} />
             <Button size="small" appearance="subtle" icon={<Delete20Regular />} aria-label={`Delete rule ${ri + 1}`} onClick={() => removeRule(ri)} />
@@ -6799,9 +6799,9 @@ export function KqlDashboardEditor({ item, id }: { item: FabricItemType; id: str
 
       {/* Parameter filter bar — Fabric renders selected dashboard params here. */}
       {params.length > 0 && (
-        <div style={{ display: 'flex', gap: 12, flexWrap: 'wrap', alignItems: 'flex-end', padding: '4px 0' }}>
+        <div style={{ display: 'flex', gap: tokens.spacingVerticalM, flexWrap: 'wrap', alignItems: 'flex-end', padding: `${tokens.spacingVerticalXS} 0` }}>
           {params.map((p, i) => (
-            <div key={i} style={{ display: 'flex', flexDirection: 'column', gap: 2, minWidth: 160 }}>
+            <div key={i} style={{ display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalXXS, minWidth: 160 }}>
               <Caption1 style={{ color: tokens.colorNeutralForeground3 }}>{p.label || p.variableName}</Caption1>
               {p.type === 'fixed' || p.type === 'datasource' ? (
                 <Select value={(p.value as string) || ''}
@@ -6839,7 +6839,7 @@ export function KqlDashboardEditor({ item, id }: { item: FabricItemType; id: str
                     onChange={(e) => updateParam(i, { value: Array.from(e.target.selectedOptions).map((o) => o.value) })}
                     onBlur={() => runDependentTiles(p.variableName)}
                     aria-label={p.label || p.variableName}
-                    style={{ minWidth: 160, padding: 4, border: `1px solid ${tokens.colorNeutralStroke1}`, borderRadius: 4, background: tokens.colorNeutralBackground1, color: tokens.colorNeutralForeground1 }}>
+                    style={{ minWidth: 160, padding: tokens.spacingVerticalXS, border: `1px solid ${tokens.colorNeutralStroke1}`, borderRadius: tokens.borderRadiusMedium, background: tokens.colorNeutralBackground1, color: tokens.colorNeutralForeground1 }}>
                     {p.values.map((v) => <option key={v} value={v}>{v}</option>)}
                   </select>
                 ) : (
@@ -6881,7 +6881,7 @@ export function KqlDashboardEditor({ item, id }: { item: FabricItemType; id: str
       )}
 
       {/* Tile grid — 12-col CSS grid; each tile spans its w/h. */}
-      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(12, 1fr)', gap: 12, gridAutoRows: 'minmax(120px, auto)' }}>
+      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(12, 1fr)', gap: tokens.spacingVerticalM, gridAutoRows: 'minmax(120px, auto)' }}>
         {tiles.map((t, i) => {
           const span = Math.max(1, Math.min(12, t.w || 4));
           const rowSpan = Math.max(1, Math.min(8, t.h || 2));
@@ -6891,9 +6891,9 @@ export function KqlDashboardEditor({ item, id }: { item: FabricItemType; id: str
               <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
                 <div>
                   <Caption1 style={{ color: tokens.colorNeutralForeground3 }}>{t.viz.toUpperCase()} · {dsName}</Caption1>
-                  <div style={{ fontSize: 15, fontWeight: 600 }}>{t.title}</div>
+                  <div style={{ fontSize: tokens.fontSizeBase300, fontWeight: 600 }}>{t.title}</div>
                 </div>
-                <div style={{ display: 'flex', gap: 2 }}>
+                <div style={{ display: 'flex', gap: tokens.spacingVerticalXXS}}>
                   <Button size="small" appearance="subtle" icon={<Play20Regular />} onClick={() => runTile(i)} aria-label="Run tile" title="Run this tile" />
                   <Button
                     size="small" appearance="subtle" icon={<ArrowDownload20Regular />}
@@ -6912,9 +6912,9 @@ export function KqlDashboardEditor({ item, id }: { item: FabricItemType; id: str
                 </div>
               </div>
 
-              {t.error && <MessageBar intent="error" style={{ marginTop: 6 }}><MessageBarBody>{t.error}</MessageBarBody></MessageBar>}
+              {t.error && <MessageBar intent="error" style={{ marginTop: tokens.spacingVerticalS}}><MessageBarBody>{t.error}</MessageBarBody></MessageBar>}
               {t.result && t.result.ok && (
-                <div style={{ marginTop: 8, flex: 1, minHeight: 0 }}>
+                <div style={{ marginTop: tokens.spacingVerticalS, flex: 1, minHeight: 0 }}>
                   <TileVisual
                     viz={t.viz}
                     result={t.result}
@@ -6935,7 +6935,7 @@ export function KqlDashboardEditor({ item, id }: { item: FabricItemType; id: str
                   </span>
                 </div>
               )}
-              {!t.result && !t.error && <Caption1 style={{ marginTop: 8, color: tokens.colorNeutralForeground3 }}>Run the tile to see results.</Caption1>}
+              {!t.result && !t.error && <Caption1 style={{ marginTop: tokens.spacingVerticalS, color: tokens.colorNeutralForeground3 }}>Run the tile to see results.</Caption1>}
             </div>
           );
         })}
@@ -6954,12 +6954,12 @@ export function KqlDashboardEditor({ item, id }: { item: FabricItemType; id: str
                 const i = tileFlyoutIdx;
                 const t = tiles[i];
                 return (
-                  <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalS}}>
                     <div>
                       <Caption1>Title</Caption1>
                       <Input value={t.title} onChange={(_: unknown, d: any) => updateTile(i, { title: d.value })} placeholder="Title" aria-label="Tile title" />
                     </div>
-                    <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+                    <div style={{ display: 'flex', gap: tokens.spacingVerticalS, flexWrap: 'wrap' }}>
                       <div style={{ flex: 1, minWidth: 140 }}>
                         <Caption1>Visual</Caption1>
                         <Select value={t.viz} onChange={(_: unknown, d: any) => updateTile(i, { viz: d.value as TileViz })} aria-label="Tile visual type">
@@ -6974,7 +6974,7 @@ export function KqlDashboardEditor({ item, id }: { item: FabricItemType; id: str
                         </Select>
                       </div>
                     </div>
-                    <div style={{ display: 'flex', gap: 8 }}>
+                    <div style={{ display: 'flex', gap: tokens.spacingVerticalS}}>
                       <div style={{ flex: 1 }}>
                         <Caption1>Width (1–12)</Caption1>
                         <Input type="number" value={String(t.w || 4)} onChange={(_: unknown, d: any) => updateTile(i, { w: Math.max(1, Math.min(12, parseInt(d.value, 10) || 4)) })} aria-label="Tile width" />
@@ -6996,7 +6996,7 @@ export function KqlDashboardEditor({ item, id }: { item: FabricItemType; id: str
                     <Button size="small" appearance="primary" icon={<Play20Regular />} onClick={() => runTile(i)}>Run tile</Button>
                     {t.error && <MessageBar intent="error"><MessageBarBody><MessageBarTitle>Query failed</MessageBarTitle>{t.error}</MessageBarBody></MessageBar>}
                     {t.result && t.result.ok && (
-                      <div style={{ border: `1px solid ${tokens.colorNeutralStroke2}`, borderRadius: 6, padding: 8 }}>
+                      <div style={{ border: `1px solid ${tokens.colorNeutralStroke2}`, borderRadius: tokens.borderRadiusLarge, padding: tokens.spacingVerticalS }}>
                         <TileVisual viz={t.viz} result={t.result} conditionalRules={t.conditionalRules} />
                       </div>
                     )}
@@ -7004,9 +7004,9 @@ export function KqlDashboardEditor({ item, id }: { item: FabricItemType; id: str
                     {/* Drill-through (Fabric: visual Interactions > Drillthrough).
                         Clicking a result value sets a dashboard parameter and
                         re-runs every tile (single-page cross-filter). */}
-                    <div style={{ borderTop: `1px solid ${tokens.colorNeutralStroke2}`, paddingTop: 8, marginTop: 4 }}>
+                    <div style={{ borderTop: `1px solid ${tokens.colorNeutralStroke2}`, paddingTop: 8, marginTop: tokens.spacingVerticalXS}}>
                       <Caption1 style={{ fontWeight: 600 }}>Drill-through</Caption1>
-                      <Caption1 style={{ color: tokens.colorNeutralForeground3, display: 'block', marginBottom: 4 }}>
+                      <Caption1 style={{ color: tokens.colorNeutralForeground3, display: 'block', marginBottom: tokens.spacingVerticalXS}}>
                         Clicking a value in this tile injects it into a dashboard parameter and re-runs all tiles.
                       </Caption1>
                       {params.length === 0 ? (
@@ -7016,7 +7016,7 @@ export function KqlDashboardEditor({ item, id }: { item: FabricItemType; id: str
                           </MessageBarBody>
                         </MessageBar>
                       ) : (
-                        <div style={{ display: 'flex', gap: 6, alignItems: 'flex-end', flexWrap: 'wrap' }}>
+                        <div style={{ display: 'flex', gap: tokens.spacingVerticalS, alignItems: 'flex-end', flexWrap: 'wrap' }}>
                           <div style={{ flex: 1, minWidth: 140 }}>
                             <Caption1>Column (from query result)</Caption1>
                             {t.result?.ok && (t.result.columns?.length ?? 0) > 0 ? (
@@ -7073,7 +7073,7 @@ export function KqlDashboardEditor({ item, id }: { item: FabricItemType; id: str
                         </div>
                       )}
                       {t.drillthrough?.column && t.drillthrough?.paramName && (
-                        <Caption1 style={{ color: tokens.colorNeutralForeground3, display: 'block', marginTop: 4 }}>
+                        <Caption1 style={{ color: tokens.colorNeutralForeground3, display: 'block', marginTop: tokens.spacingVerticalXS}}>
                           Click a value in this tile → sets <code>{t.drillthrough.paramName}</code> to the value in column <code>{t.drillthrough.column}</code> and re-runs all tiles.
                         </Caption1>
                       )}
@@ -7082,7 +7082,7 @@ export function KqlDashboardEditor({ item, id }: { item: FabricItemType; id: str
                     {/* Conditional formatting (Fabric RTD: color by condition / by value).
                         Applies to table + stat (card) visuals. */}
                     {(t.viz === 'table' || t.viz === 'stat') && (
-                      <div style={{ borderTop: `1px solid ${tokens.colorNeutralStroke2}`, paddingTop: 8, marginTop: 4 }}>
+                      <div style={{ borderTop: `1px solid ${tokens.colorNeutralStroke2}`, paddingTop: 8, marginTop: tokens.spacingVerticalXS}}>
                         <ConditionalFormattingEditor
                           viz={t.viz}
                           rules={t.conditionalRules || []}
@@ -7117,10 +7117,10 @@ export function KqlDashboardEditor({ item, id }: { item: FabricItemType; id: str
                 parenthesised sub-query, so a common filter or projection backs many tiles
                 without copy-paste (Fabric Real-Time Dashboard base-query parity).
               </Caption1>
-              <div style={{ display: 'flex', flexDirection: 'column', gap: 12, marginTop: 8 }}>
+              <div style={{ display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalM, marginTop: tokens.spacingVerticalS}}>
                 {baseQueries.map((q, idx) => (
-                  <div key={q.id} style={{ border: `1px solid ${tokens.colorNeutralStroke2}`, borderRadius: 6, padding: 8, display: 'flex', flexDirection: 'column', gap: 6 }}>
-                    <div style={{ display: 'flex', gap: 8, alignItems: 'flex-end' }}>
+                  <div key={q.id} style={{ border: `1px solid ${tokens.colorNeutralStroke2}`, borderRadius: tokens.borderRadiusLarge, padding: tokens.spacingVerticalS, display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalS}}>
+                    <div style={{ display: 'flex', gap: tokens.spacingVerticalS, alignItems: 'flex-end' }}>
                       <div style={{ flex: 1 }}>
                         <Caption1>Name (referenced as $baseQuery('…'))</Caption1>
                         <Input value={q.name} onChange={(_: unknown, d: any) => updateBaseQuery(idx, { name: d.value })} placeholder="Filtered" aria-label="Base query name" />
@@ -7154,12 +7154,12 @@ export function KqlDashboardEditor({ item, id }: { item: FabricItemType; id: str
         <DialogSurface style={{ maxWidth: 640 }}>
           <DialogBody>
             <DialogTitle>
-              <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}>
+              <span style={{ display: 'inline-flex', alignItems: 'center', gap: tokens.spacingVerticalS}}>
                 <Sparkle20Regular /> Add a tile with Copilot
               </span>
             </DialogTitle>
             <DialogContent>
-              <Caption1 style={{ display: 'block', marginBottom: 10, color: tokens.colorNeutralForeground3 }}>
+              <Caption1 style={{ display: 'block', marginBottom: tokens.spacingVerticalM, color: tokens.colorNeutralForeground3 }}>
                 Describe the visualization you want in plain language. Copilot reads the live
                 schema of <strong>{defaultDb}</strong>, writes the KQL, picks a chart type, and
                 validates the query against Azure Data Explorer before adding the tile.
@@ -7176,18 +7176,18 @@ export function KqlDashboardEditor({ item, id }: { item: FabricItemType; id: str
                   }}
                 />
               </Field>
-              <Caption1 style={{ display: 'block', marginTop: 4, color: tokens.colorNeutralForeground3 }}>
+              <Caption1 style={{ display: 'block', marginTop: tokens.spacingVerticalXS, color: tokens.colorNeutralForeground3 }}>
                 Press <kbd style={{ fontFamily: tokens.fontFamilyMonospace }}>Ctrl</kbd>+<kbd style={{ fontFamily: tokens.fontFamilyMonospace }}>Enter</kbd> to generate.
               </Caption1>
               {dataSources.length > 0 && (
-                <Field label="Data source (optional)" style={{ marginTop: 10 }}>
+                <Field label="Data source (optional)" style={{ marginTop: tokens.spacingVerticalM}}>
                   <Select value={aiDataSourceId} onChange={(_: unknown, d: any) => setAiDataSourceId(d.value)} disabled={aiBusy}>
                     <option value="">Dashboard default ({defaultDb})</option>
                     {dataSources.map((ds) => <option key={ds.id} value={ds.id}>{ds.name} · {ds.database}</option>)}
                   </Select>
                 </Field>
               )}
-              <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6, marginTop: 12 }}>
+              <div style={{ display: 'flex', flexWrap: 'wrap', gap: tokens.spacingVerticalS, marginTop: tokens.spacingVerticalM}}>
                 <Caption1 style={{ color: tokens.colorNeutralForeground3, width: '100%' }}>Try:</Caption1>
                 {[
                   'Total events in the last 24 hours',
@@ -7207,7 +7207,7 @@ export function KqlDashboardEditor({ item, id }: { item: FabricItemType; id: str
                 ))}
               </div>
               {aiErr && (
-                <MessageBar intent="error" style={{ marginTop: 12 }}>
+                <MessageBar intent="error" style={{ marginTop: tokens.spacingVerticalM}}>
                   <MessageBarBody><MessageBarTitle>Could not generate the tile</MessageBarTitle>{aiErr}</MessageBarBody>
                 </MessageBar>
               )}
@@ -7229,9 +7229,9 @@ export function KqlDashboardEditor({ item, id }: { item: FabricItemType; id: str
             <DialogTitle>Data sources</DialogTitle>
             <DialogContent>
               <Caption1>Bind the dashboard to one or more KQL databases on the Loom shared ADX cluster. Tiles select a source; query-based parameters can run against a source.</Caption1>
-              <div style={{ display: 'flex', flexDirection: 'column', gap: 8, marginTop: 8 }}>
+              <div style={{ display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalS, marginTop: tokens.spacingVerticalS}}>
                 {dataSources.map((ds, idx) => (
-                  <div key={ds.id} style={{ display: 'flex', gap: 8, alignItems: 'flex-end' }}>
+                  <div key={ds.id} style={{ display: 'flex', gap: tokens.spacingVerticalS, alignItems: 'flex-end' }}>
                     <div style={{ flex: 1 }}>
                       <Caption1>Name</Caption1>
                       <Input value={ds.name} onChange={(_: unknown, d: any) => updateDataSource(idx, { name: d.value })} />
@@ -7277,10 +7277,10 @@ export function KqlDashboardEditor({ item, id }: { item: FabricItemType; id: str
                 Time range exposes <code>_startTime</code>/<code>_endTime</code>; <code>_loomTimeFrom</code> is also supported.
                 <code> multi</code> renders as <code>dynamic([...])</code> for <code>x in (_var)</code> filters.
               </Caption1>
-              <div style={{ display: 'flex', flexDirection: 'column', gap: 12, marginTop: 8 }}>
+              <div style={{ display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalM, marginTop: tokens.spacingVerticalS}}>
                 {params.map((p, idx) => (
-                  <div key={idx} style={{ border: `1px solid ${tokens.colorNeutralStroke2}`, borderRadius: 6, padding: 8, display: 'flex', flexDirection: 'column', gap: 6 }}>
-                    <div style={{ display: 'flex', gap: 8 }}>
+                  <div key={idx} style={{ border: `1px solid ${tokens.colorNeutralStroke2}`, borderRadius: tokens.borderRadiusLarge, padding: tokens.spacingVerticalS, display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalS}}>
+                    <div style={{ display: 'flex', gap: tokens.spacingVerticalS}}>
                       <div style={{ flex: 1 }}>
                         <Caption1>Variable name</Caption1>
                         <Input value={p.variableName} onChange={(_: unknown, d: any) => updateParam(idx, { variableName: d.value })} placeholder="_eventType" />
@@ -7291,7 +7291,7 @@ export function KqlDashboardEditor({ item, id }: { item: FabricItemType; id: str
                       </div>
                       <Button appearance="subtle" icon={<Delete20Regular />} onClick={() => removeParam(idx)} aria-label="Remove parameter" />
                     </div>
-                    <div style={{ display: 'flex', gap: 8 }}>
+                    <div style={{ display: 'flex', gap: tokens.spacingVerticalS}}>
                       <div style={{ flex: 1 }}>
                         <Caption1>Type</Caption1>
                         <Select value={p.type} onChange={(_: unknown, d: any) => updateParam(idx, { type: d.value as DashParamType })}>
@@ -7324,8 +7324,8 @@ export function KqlDashboardEditor({ item, id }: { item: FabricItemType; id: str
                     {p.type === 'query' && (
                       <>
                         <Caption1>Values query (returns one column)</Caption1>
-                        <Textarea value={p.query || ''} onChange={(_: unknown, d: any) => updateParam(idx, { query: d.value })} rows={2} style={{ fontFamily: 'Consolas, monospace', fontSize: 12 }} placeholder="StormEvents | distinct State" />
-                        <div style={{ display: 'flex', gap: 8, alignItems: 'flex-end' }}>
+                        <Textarea value={p.query || ''} onChange={(_: unknown, d: any) => updateParam(idx, { query: d.value })} rows={2} style={{ fontFamily: 'Consolas, monospace', fontSize: tokens.fontSizeBase200}} placeholder="StormEvents | distinct State" />
+                        <div style={{ display: 'flex', gap: tokens.spacingVerticalS, alignItems: 'flex-end' }}>
                           <div style={{ flex: 1 }}>
                             <Caption1>Run against source</Caption1>
                             <Select value={p.dataSourceId || ''} onChange={(_: unknown, d: any) => updateParam(idx, { dataSourceId: d.value || undefined })}>
@@ -7362,10 +7362,10 @@ export function KqlDashboardEditor({ item, id }: { item: FabricItemType; id: str
                 value={jsonText}
                 onChange={(_: unknown, d: any) => { setJsonText(d.value); setJsonErr(null); }}
                 rows={20}
-                style={{ width: '100%', fontFamily: 'Consolas, monospace', fontSize: 12, marginTop: 8 }}
+                style={{ width: '100%', fontFamily: 'Consolas, monospace', fontSize: tokens.fontSizeBase200, marginTop: tokens.spacingVerticalS}}
                 aria-label="Dashboard JSON model"
               />
-              {jsonErr && <MessageBar intent="error" style={{ marginTop: 8 }}><MessageBarBody><MessageBarTitle>JSON parse error</MessageBarTitle>{jsonErr}</MessageBarBody></MessageBar>}
+              {jsonErr && <MessageBar intent="error" style={{ marginTop: tokens.spacingVerticalS}}><MessageBarBody><MessageBarTitle>JSON parse error</MessageBarTitle>{jsonErr}</MessageBarBody></MessageBar>}
             </DialogContent>
             <DialogActions>
               <Button appearance="secondary" onClick={() => setJsonOpen(false)}>Cancel</Button>
@@ -7382,7 +7382,7 @@ export function KqlDashboardEditor({ item, id }: { item: FabricItemType; id: str
             <DialogTitle>Share dashboard</DialogTitle>
             <DialogContent>
               <Caption1>Anyone with access to this Loom item can view it. Permissions are managed via the workspace item ACL.</Caption1>
-              <div style={{ marginTop: 8, display: 'flex', flexDirection: 'column', gap: 8 }}>
+              <div style={{ marginTop: tokens.spacingVerticalS, display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalS}}>
                 <Caption1>Canonical URL</Caption1>
                 <Input value={typeof window !== 'undefined' ? window.location.href : ''} readOnly />
                 <Button appearance="outline" onClick={() => { if (typeof navigator !== 'undefined' && navigator.clipboard) navigator.clipboard.writeText(window.location.href).catch(() => {}); }}>Copy URL</Button>
@@ -7917,7 +7917,7 @@ export function EventstreamEditor({ item, id }: { item: FabricItemType; id: stri
               <MessageBarTitle>Destinations pushed to ASA</MessageBarTitle>
               {asaSyncMsg}
               {asaOutputs.length > 0 && (
-                <ul style={{ margin: '6px 0 0', paddingLeft: 18 }}>
+                <ul style={{ margin: `${tokens.spacingVerticalXS} 0 0`, paddingLeft: 18 }}>
                   {asaOutputs.map((o) => (
                     <li key={o.name}><code>{o.name}</code> → {o.type}</li>
                   ))}
@@ -7938,7 +7938,7 @@ export function EventstreamEditor({ item, id }: { item: FabricItemType; id: stri
                   The Console UAMI must be a Contributor (or higher) on that workspace and the tenant
                   must have &quot;Service principals can use Fabric APIs&quot; enabled.
                 </Caption1>
-                <Field label="Fabric workspace ID" required style={{ marginTop: 12 }}>
+                <Field label="Fabric workspace ID" required style={{ marginTop: tokens.spacingVerticalM}}>
                   <Input
                     value={fabricWsId}
                     onChange={(_: unknown, d: any) => setFabricWsId(d.value)}
@@ -7946,7 +7946,7 @@ export function EventstreamEditor({ item, id }: { item: FabricItemType; id: stri
                   />
                 </Field>
                 {publishErr && (
-                  <MessageBar intent="error" style={{ marginTop: 12 }}>
+                  <MessageBar intent="error" style={{ marginTop: tokens.spacingVerticalM}}>
                     <MessageBarBody>
                       <MessageBarTitle>Publish failed</MessageBarTitle>
                       {publishErr}{publishHint ? <><br /><Caption1>{publishHint}</Caption1></> : null}
@@ -7954,7 +7954,7 @@ export function EventstreamEditor({ item, id }: { item: FabricItemType; id: stri
                   </MessageBar>
                 )}
                 {publishMsg && !publishErr && (
-                  <MessageBar intent="success" style={{ marginTop: 12 }}>
+                  <MessageBar intent="success" style={{ marginTop: tokens.spacingVerticalM}}>
                     <MessageBarBody>{publishMsg}</MessageBarBody>
                   </MessageBar>
                 )}
@@ -7987,7 +7987,7 @@ export function EventstreamEditor({ item, id }: { item: FabricItemType; id: stri
                     background: tokens.colorNeutralBackground2,
                   }}
                 >
-                  <Flash20Regular style={{ flexShrink: 0, marginTop: 2, color: tokens.colorBrandForeground1 }} />
+                  <Flash20Regular style={{ flexShrink: 0, marginTop: tokens.spacingVerticalXXS, color: tokens.colorBrandForeground1 }} />
                   <Caption1 style={{ color: tokens.colorNeutralForeground2 }}>
                     Creates an <strong>Activator</strong> alert linked to this Eventstream and
                     pre-seeds it with the stream&apos;s source. Loom maps the alert to a real
@@ -7996,7 +7996,7 @@ export function EventstreamEditor({ item, id }: { item: FabricItemType; id: stri
                     this stream&apos;s events.
                   </Caption1>
                 </div>
-                <Field label="Alert name" style={{ marginTop: 12 }}>
+                <Field label="Alert name" style={{ marginTop: tokens.spacingVerticalM}}>
                   <Input
                     value={alertName}
                     onChange={(_: unknown, d: any) => setAlertName(d.value)}
@@ -8004,7 +8004,7 @@ export function EventstreamEditor({ item, id }: { item: FabricItemType; id: stri
                     aria-label="Alert name"
                   />
                 </Field>
-                <div style={{ display: 'flex', gap: 8, marginTop: 12 }}>
+                <div style={{ display: 'flex', gap: tokens.spacingVerticalS, marginTop: tokens.spacingVerticalM}}>
                   <Field label="Event property" style={{ flex: 2 }}>
                     <Input
                       value={alertProperty}
@@ -8037,7 +8037,7 @@ export function EventstreamEditor({ item, id }: { item: FabricItemType; id: stri
                     />
                   </Field>
                 </div>
-                <div style={{ display: 'flex', gap: 8, marginTop: 12 }}>
+                <div style={{ display: 'flex', gap: tokens.spacingVerticalS, marginTop: tokens.spacingVerticalM}}>
                   <Field label="Evaluate every" style={{ flex: 1 }}>
                     <Dropdown
                       selectedOptions={[alertFrequency]}
@@ -8064,7 +8064,7 @@ export function EventstreamEditor({ item, id }: { item: FabricItemType; id: stri
                 <div
                   aria-live="polite"
                   style={{
-                    marginTop: 12,
+                    marginTop: tokens.spacingVerticalM,
                     padding: tokens.spacingVerticalS,
                     borderRadius: tokens.borderRadiusMedium,
                     background: tokens.colorNeutralBackground3,
@@ -8072,7 +8072,7 @@ export function EventstreamEditor({ item, id }: { item: FabricItemType; id: stri
                   }}
                 >
                   <Caption1 style={{ color: tokens.colorNeutralForeground3 }}>Rule preview</Caption1>
-                  <div style={{ marginTop: 4, fontFamily: tokens.fontFamilyMonospace, fontSize: tokens.fontSizeBase200, color: tokens.colorNeutralForeground1 }}>
+                  <div style={{ marginTop: tokens.spacingVerticalXS, fontFamily: tokens.fontFamilyMonospace, fontSize: tokens.fontSizeBase200, color: tokens.colorNeutralForeground1 }}>
                     Fire when <strong>{(alertProperty.trim() || 'value')}</strong>{' '}
                     {{ gt: '>', lt: '<', gte: '≥', lte: '≤', eq: '=', ne: '≠' }[alertOperator]}{' '}
                     <strong>{(alertThreshold.trim() || '0')}</strong>, evaluated every{' '}
@@ -8081,7 +8081,7 @@ export function EventstreamEditor({ item, id }: { item: FabricItemType; id: stri
                   </div>
                 </div>
                 {alertErr && (
-                  <MessageBar intent={alertHint ? 'warning' : 'error'} style={{ marginTop: 12 }}>
+                  <MessageBar intent={alertHint ? 'warning' : 'error'} style={{ marginTop: tokens.spacingVerticalM}}>
                     <MessageBarBody>
                       <MessageBarTitle>{alertHint ? 'Azure Monitor not configured' : 'Add alert failed'}</MessageBarTitle>
                       {alertErr}{alertHint ? <><br /><Caption1>{alertHint}</Caption1></> : null}
@@ -8089,7 +8089,7 @@ export function EventstreamEditor({ item, id }: { item: FabricItemType; id: stri
                   </MessageBar>
                 )}
                 {alertResult && !alertErr && (
-                  <MessageBar intent="success" style={{ marginTop: 12 }}>
+                  <MessageBar intent="success" style={{ marginTop: tokens.spacingVerticalM}}>
                     <MessageBarBody>
                       <MessageBarTitle>Alert created and linked</MessageBarTitle>
                       Linked Activator <strong>{alertResult.activatorName || alertResult.activatorId}</strong> with
@@ -8401,7 +8401,7 @@ function EventstreamSqlOperatorTab({
   }, [testResult]);
 
   return (
-    <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+    <div style={{ display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalM}}>
       <MessageBar intent="info">
         <MessageBarBody>
           <MessageBarTitle>Code-first T-SQL operator</MessageBarTitle>
@@ -8412,7 +8412,7 @@ function EventstreamSqlOperatorTab({
         </MessageBarBody>
       </MessageBar>
 
-      <div style={{ display: 'flex', gap: 12, alignItems: 'flex-end', flexWrap: 'wrap' }}>
+      <div style={{ display: 'flex', gap: tokens.spacingVerticalM, alignItems: 'flex-end', flexWrap: 'wrap' }}>
         <Field label="ASA job" style={{ minWidth: 240 }}>
           <Input value={asaJobName} onChange={(_: unknown, d: any) => onAsaJobName(d.value)} placeholder="asa-loom-default-eastus2" />
         </Field>
@@ -8437,9 +8437,9 @@ function EventstreamSqlOperatorTab({
       )}
       {saveMsg && !saveErr && <Caption1 style={{ color: tokens.colorNeutralForeground3 }}>{saveMsg}</Caption1>}
 
-      <div style={{ display: 'grid', gridTemplateColumns: 'minmax(0, 1.6fr) minmax(0, 1fr)', gap: 16, alignItems: 'start' }}>
+      <div style={{ display: 'grid', gridTemplateColumns: 'minmax(0, 1.6fr) minmax(0, 1fr)', gap: tokens.spacingVerticalL, alignItems: 'start' }}>
         {/* T-SQL editor */}
-        <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+        <div style={{ display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalS}}>
           <Caption1>Stream Analytics query (T-SQL / SAQL). Input alias: <code>[eventstream-input]</code>.</Caption1>
           <MonacoTextarea
             value={query}
@@ -8459,10 +8459,10 @@ function EventstreamSqlOperatorTab({
               <MessageBarBody>
                 <MessageBarTitle>{compileResult.valid && compileResult.errors.length === 0 ? 'Query compiled' : 'Compile errors'}</MessageBarTitle>
                 {compileResult.errors.length === 0
-                  ? <>Outputs: {compileResult.outputs.length ? compileResult.outputs.map((o) => <code key={o} style={{ marginRight: 6 }}>{o}</code>) : '(none)'}</>
-                  : <ul style={{ margin: '6px 0 0', paddingLeft: 18 }}>{compileResult.errors.map((e, i) => <li key={i}>{e.startLine ? `Line ${e.startLine}: ` : ''}{e.message}</li>)}</ul>}
+                  ? <>Outputs: {compileResult.outputs.length ? compileResult.outputs.map((o) => <code key={o} style={{ marginRight: tokens.spacingHorizontalS}}>{o}</code>) : '(none)'}</>
+                  : <ul style={{ margin: `${tokens.spacingVerticalXS} 0 0`, paddingLeft: 18 }}>{compileResult.errors.map((e, i) => <li key={i}>{e.startLine ? `Line ${e.startLine}: ` : ''}{e.message}</li>)}</ul>}
                 {compileResult.warnings.length > 0 && (
-                  <ul style={{ margin: '6px 0 0', paddingLeft: 18, color: tokens.colorPaletteYellowForeground2 }}>
+                  <ul style={{ margin: `${tokens.spacingVerticalXS} 0 0`, paddingLeft: 18, color: tokens.colorPaletteYellowForeground2 }}>
                     {compileResult.warnings.map((w, i) => <li key={i}>{w}</li>)}
                   </ul>
                 )}
@@ -8472,9 +8472,9 @@ function EventstreamSqlOperatorTab({
         </div>
 
         {/* Named sinks manager */}
-        <div className={s.card} style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
-          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8 }}>
-            <div style={{ display: 'flex', alignItems: 'center', gap: 8, minWidth: 0 }}>
+        <div className={s.card} style={{ display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalM}}>
+          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: tokens.spacingVerticalS}}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: tokens.spacingVerticalS, minWidth: 0 }}>
               <Subtitle2>Named sinks</Subtitle2>
               {sinks.length > 0 && <Badge appearance="tint" color="informative">{sinks.length}</Badge>}
             </div>
@@ -8499,8 +8499,8 @@ function EventstreamSqlOperatorTab({
           )}
           {sinks.length === 0 && <Caption1 style={{ color: tokens.colorNeutralForeground3 }}>No sinks yet. Add one per <code>INTO [alias]</code> in your query.</Caption1>}
           {sinks.map((sink, idx) => (
-            <div key={idx} style={{ border: `1px solid ${tokens.colorNeutralStroke2}`, borderRadius: 6, padding: 10, display: 'flex', flexDirection: 'column', gap: 8 }}>
-              <div style={{ display: 'flex', gap: 8, alignItems: 'flex-end' }}>
+            <div key={idx} style={{ border: `1px solid ${tokens.colorNeutralStroke2}`, borderRadius: tokens.borderRadiusLarge, padding: tokens.spacingVerticalM, display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalS }}>
+              <div style={{ display: 'flex', gap: tokens.spacingVerticalS, alignItems: 'flex-end' }}>
                 <Field label="INTO alias" style={{ flex: 1 }}>
                   <Input value={sink.alias} onChange={(_: unknown, d: any) => updateSink(idx, { alias: d.value })} placeholder="hot-path" />
                 </Field>
@@ -8515,7 +8515,7 @@ function EventstreamSqlOperatorTab({
                 <Button appearance="subtle" icon={<Delete20Regular />} onClick={() => removeSink(idx)} aria-label={`Remove sink ${sink.alias}`} />
               </div>
               {sink.kind === 'kusto' && (
-                <div style={{ display: 'flex', gap: 8 }}>
+                <div style={{ display: 'flex', gap: tokens.spacingVerticalS}}>
                   <Field label="Database" style={{ flex: 1 }}>
                     <Input value={sink.database || ''} onChange={(_: unknown, d: any) => updateSink(idx, { database: d.value })} placeholder="loomdb-default" />
                   </Field>
@@ -8525,7 +8525,7 @@ function EventstreamSqlOperatorTab({
                 </div>
               )}
               {sink.kind === 'lakehouse' && (
-                <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+                <div style={{ display: 'flex', gap: tokens.spacingVerticalS, flexWrap: 'wrap' }}>
                   <Field label="Storage account" style={{ flex: 1, minWidth: 120 }}>
                     <Input value={sink.storageAccount || ''} onChange={(_: unknown, d: any) => updateSink(idx, { storageAccount: d.value })} placeholder="(or LOOM_ADLS_ACCOUNT)" />
                   </Field>
@@ -8538,7 +8538,7 @@ function EventstreamSqlOperatorTab({
                 </div>
               )}
               {(sink.kind === 'eventhub' || sink.kind === 'reflex') && (
-                <div style={{ display: 'flex', gap: 8 }}>
+                <div style={{ display: 'flex', gap: tokens.spacingVerticalS}}>
                   <Field label="Namespace" style={{ flex: 1 }}>
                     <Input value={sink.namespace || ''} onChange={(_: unknown, d: any) => updateSink(idx, { namespace: d.value })} placeholder="(or LOOM_EVENTHUBS_NAMESPACE)" />
                   </Field>
@@ -8553,12 +8553,12 @@ function EventstreamSqlOperatorTab({
       </div>
 
       {/* Per-output test */}
-      <div className={s.card} style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+      <div className={s.card} style={{ display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalM}}>
         <Subtitle2>Test a single output</Subtitle2>
         <Caption1 style={{ color: tokens.colorNeutralForeground3 }}>
           Runs only the statements writing to the selected <code>INTO</code> alias against the sample events and returns that sink&apos;s rows (real ASA Test Query).
         </Caption1>
-        <div style={{ display: 'flex', gap: 12, alignItems: 'flex-end', flexWrap: 'wrap' }}>
+        <div style={{ display: 'flex', gap: tokens.spacingVerticalM, alignItems: 'flex-end', flexWrap: 'wrap' }}>
           <Field label="Output (INTO alias)" style={{ minWidth: 220 }}>
             <Select value={testAlias} onChange={(_: unknown, d: any) => setTestAlias(d.value)}>
               <option value="">Select an output…</option>
@@ -8591,32 +8591,32 @@ function EventstreamSqlOperatorTab({
               {' '}· {testResult.rows.length} row{testResult.rows.length === 1 ? '' : 's'}
             </Caption1>
             {testResult.errors && testResult.errors.length > 0 && (
-              <MessageBar intent="error" style={{ marginTop: 6 }}><MessageBarBody>{testResult.errors.join('; ')}</MessageBarBody></MessageBar>
+              <MessageBar intent="error" style={{ marginTop: tokens.spacingVerticalS}}><MessageBarBody>{testResult.errors.join('; ')}</MessageBarBody></MessageBar>
             )}
             {testResult.rows.length > 0 ? (
               <>
-                <div className={s.tableWrap} style={{ marginTop: 8 }}>
-                  <table style={{ borderCollapse: 'collapse', width: '100%', fontSize: 12 }}>
+                <div className={s.tableWrap} style={{ marginTop: tokens.spacingVerticalS}}>
+                  <table style={{ borderCollapse: 'collapse', width: '100%', fontSize: tokens.fontSizeBase200}}>
                     <thead>
-                      <tr>{testColumns.map((c) => <th key={c} style={{ textAlign: 'left', padding: '6px 8px', borderBottom: `1px solid ${tokens.colorNeutralStroke2}`, position: 'sticky', top: 0, background: tokens.colorNeutralBackground2, fontWeight: 600, whiteSpace: 'nowrap' }}>{c}</th>)}</tr>
+                      <tr>{testColumns.map((c) => <th key={c} style={{ textAlign: 'left', padding: `${tokens.spacingVerticalS} ${tokens.spacingHorizontalS}`, borderBottom: `1px solid ${tokens.colorNeutralStroke2}`, position: 'sticky', top: 0, background: tokens.colorNeutralBackground2, fontWeight: 600, whiteSpace: 'nowrap' }}>{c}</th>)}</tr>
                     </thead>
                     <tbody>
                       {testResult.rows.slice(0, 100).map((row, ri) => (
                         <tr key={ri} style={{ background: ri % 2 ? tokens.colorNeutralBackground1 : tokens.colorNeutralBackground2 }}>
-                          {testColumns.map((c) => <td key={c} className={s.cell} style={{ padding: '4px 8px', borderBottom: `1px solid ${tokens.colorNeutralStroke3}` }}>{typeof row?.[c] === 'object' ? JSON.stringify(row[c]) : String(row?.[c] ?? '')}</td>)}
+                          {testColumns.map((c) => <td key={c} className={s.cell} style={{ padding: `${tokens.spacingVerticalXS} ${tokens.spacingHorizontalS}`, borderBottom: `1px solid ${tokens.colorNeutralStroke3}` }}>{typeof row?.[c] === 'object' ? JSON.stringify(row[c]) : String(row?.[c] ?? '')}</td>)}
                         </tr>
                       ))}
                     </tbody>
                   </table>
                 </div>
                 {testResult.rows.length > 100 && (
-                  <Caption1 style={{ color: tokens.colorNeutralForeground3, marginTop: 6 }}>
+                  <Caption1 style={{ color: tokens.colorNeutralForeground3, marginTop: tokens.spacingVerticalS}}>
                     Showing first 100 of {testResult.rows.length} rows.
                   </Caption1>
                 )}
               </>
             ) : (
-              <Caption1 style={{ color: tokens.colorNeutralForeground3, marginTop: 8 }}>
+              <Caption1 style={{ color: tokens.colorNeutralForeground3, marginTop: tokens.spacingVerticalS}}>
                 No rows produced{testResult.outputUri ? ' (output written to the test storage location).' : '.'}
               </Caption1>
             )}
@@ -8727,7 +8727,7 @@ function WorkspacePicker({
   workspaces: PbiWorkspaceLite[] | null;
 }) {
   return (
-    <div style={{ display: 'flex', flexDirection: 'column', gap: 6, minWidth: 280 }}>
+    <div style={{ display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalS, minWidth: 280 }}>
       <Caption1>Workspace</Caption1>
       <Select value={value} onChange={(_: unknown, d: any) => onChange(d.value)} disabled={loading || (workspaces?.length ?? 0) === 0}>
         {!value && <option value="">{loading ? 'Loading workspaces…' : 'Select a workspace'}</option>}
@@ -8749,7 +8749,7 @@ function WorkspacePicker({
             <MessageBarTitle>No Power BI workspaces</MessageBarTitle>
             The Console service principal can&apos;t see any Power BI workspaces. Create one (or get added to one) in Power BI, then Refresh.
             <br />
-            <Button appearance="primary" size="small" style={{ marginTop: 6 }}
+            <Button appearance="primary" size="small" style={{ marginTop: tokens.spacingVerticalS}}
               onClick={() => { try { window.open('https://app.powerbi.com/groups/me/list', '_blank', 'noreferrer'); } catch { /* popup blocked */ } }}>
               Open Power BI
             </Button>
@@ -9180,7 +9180,7 @@ export function ActivatorEditor({ item, id }: { item: FabricItemType; id: string
     <ItemEditorChrome item={item} id={id} ribbon={ribbon}
       leftPanel={
         <div className={s.treePad}>
-          <Subtitle2 style={{ marginBottom: 8 }}>Reflexes</Subtitle2>
+          <Subtitle2 style={{ marginBottom: tokens.spacingVerticalS}}>Reflexes</Subtitle2>
           {!workspaceId && <Caption1>Select a workspace.</Caption1>}
           {workspaceId && loading && <Spinner size="tiny" label="Loading…" />}
           {activators && activators.length === 0 && !loading && <Caption1>No reflexes in this workspace.</Caption1>}
@@ -9208,8 +9208,8 @@ export function ActivatorEditor({ item, id }: { item: FabricItemType; id: string
                   <DialogTitle>Create Activator (reflex)</DialogTitle>
                   <DialogContent>
                     <Input placeholder="displayName" value={createName} onChange={(_: unknown, d: any) => setCreateName(d.value)} style={{ width: '100%' }} />
-                    <Input placeholder="description (optional)" value={createDesc} onChange={(_: unknown, d: any) => setCreateDesc(d.value)} style={{ width: '100%', marginTop: 8 }} />
-                    {createErr && <MessageBar intent="error" style={{ marginTop: 8 }}><MessageBarBody>{createErr}</MessageBarBody></MessageBar>}
+                    <Input placeholder="description (optional)" value={createDesc} onChange={(_: unknown, d: any) => setCreateDesc(d.value)} style={{ width: '100%', marginTop: tokens.spacingVerticalS}} />
+                    {createErr && <MessageBar intent="error" style={{ marginTop: tokens.spacingVerticalS}}><MessageBarBody>{createErr}</MessageBarBody></MessageBar>}
                   </DialogContent>
                   <DialogActions>
                     <Button appearance="secondary" onClick={() => setCreateOpen(false)}>Cancel</Button>
@@ -9231,7 +9231,7 @@ export function ActivatorEditor({ item, id }: { item: FabricItemType; id: string
 
               {activeView === 'rules' && (
               <>
-              <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: tokens.spacingVerticalS}}>
                 <Subtitle2>Rules</Subtitle2>
                 <Dialog open={ruleOpen} onOpenChange={(_: unknown, d: any) => setRuleOpen(d.open)}>
                   <DialogTrigger disableButtonEnhancement>
@@ -9241,13 +9241,13 @@ export function ActivatorEditor({ item, id }: { item: FabricItemType; id: string
                     <DialogBody>
                       <DialogTitle>Add rule</DialogTitle>
                       <DialogContent>
-                        <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+                        <div style={{ display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalM}}>
                           <Field label="Rule name" required>
                             <Input placeholder="e.g. Latency SLA breach" value={ruleName} onChange={(_: unknown, d: any) => setRuleName(d.value)} />
                           </Field>
 
                           <Caption1 style={{ color: tokens.colorNeutralForeground3 }}>DATA SOURCE</Caption1>
-                          <div style={{ display: 'flex', gap: 8 }}>
+                          <div style={{ display: 'flex', gap: tokens.spacingVerticalS}}>
                             <Field label="Source type" style={{ width: 240 }}>
                               <Select value={sourceType} onChange={(_: unknown, d: any) => setSourceType(d.value as 'kql' | 'eventhub')}>
                                 <option value="kql">KQL query (Log Analytics)</option>
@@ -9265,7 +9265,7 @@ export function ActivatorEditor({ item, id }: { item: FabricItemType; id: string
                           )}
                           {sourceType === 'eventhub' && (
                             <>
-                              <div style={{ border: `1px solid ${tokens.colorNeutralStroke2}`, borderRadius: 4, maxHeight: 220, overflow: 'auto' }}>
+                              <div style={{ border: `1px solid ${tokens.colorNeutralStroke2}`, borderRadius: tokens.borderRadiusMedium, maxHeight: 220, overflow: 'auto' }}>
                                 <EventHubsNamespaceTree onSelectEventHub={(hub) => { setSelectedHub(hub); setSourceTable(`${hub}_CL`); }} />
                               </div>
                               {selectedHub && (
@@ -9284,7 +9284,7 @@ export function ActivatorEditor({ item, id }: { item: FabricItemType; id: string
                           {!(sourceType === 'kql' && kqlQuery.trim()) && (
                             <>
                               <Caption1 style={{ color: tokens.colorNeutralForeground3 }}>WHEN — condition</Caption1>
-                              <div style={{ display: 'flex', gap: 8 }}>
+                              <div style={{ display: 'flex', gap: tokens.spacingVerticalS}}>
                                 <Field label="Property" style={{ flex: 1 }}>
                                   <Input placeholder="e.g. latency_ms" value={condProperty} onChange={(_: unknown, d: any) => setCondProperty(d.value)} />
                                 </Field>
@@ -9320,7 +9320,7 @@ export function ActivatorEditor({ item, id }: { item: FabricItemType; id: string
                             </Field>
                           ) : (
                           <>
-                          <div style={{ display: 'flex', gap: 8 }}>
+                          <div style={{ display: 'flex', gap: tokens.spacingVerticalS}}>
                             <Field label="Do" style={{ width: 200 }}>
                               <Select value={actKind} onChange={(_: unknown, d: any) => setActKind(d.value)}>
                                 <option value="TeamsMessage">Post to Teams</option>
@@ -9351,7 +9351,7 @@ export function ActivatorEditor({ item, id }: { item: FabricItemType; id: string
                             </Field>
                           )}
                           {actKind === 'SMS' && (
-                            <div style={{ display: 'flex', gap: 8 }}>
+                            <div style={{ display: 'flex', gap: tokens.spacingVerticalS}}>
                               <Field label="Country code" style={{ width: 140 }} hint="e.g. 1 for US">
                                 <Input value={actCountryCode} onChange={(_: unknown, d: any) => setActCountryCode(d.value)} />
                               </Field>
@@ -9361,11 +9361,11 @@ export function ActivatorEditor({ item, id }: { item: FabricItemType; id: string
                             </div>
                           )}
                           {actKind === 'LogicApp' && (
-                            <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+                            <div style={{ display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalS}}>
                               <Field label="Logic App resource id" hint="Microsoft.Logic/workflows resource id (Consumption workflow with an HTTP trigger).">
                                 <Input placeholder="/subscriptions/.../providers/Microsoft.Logic/workflows/wf-alert" value={actLogicAppResourceId} onChange={(_: unknown, d: any) => setActLogicAppResourceId(d.value)} />
                               </Field>
-                              <div style={{ display: 'flex', gap: 8, alignItems: 'flex-end' }}>
+                              <div style={{ display: 'flex', gap: tokens.spacingVerticalS, alignItems: 'flex-end' }}>
                                 <Field label="Trigger name" style={{ width: 160 }}>
                                   <Input value={actLogicAppTrigger} onChange={(_: unknown, d: any) => setActLogicAppTrigger(d.value)} />
                                 </Field>
@@ -9383,7 +9383,7 @@ export function ActivatorEditor({ item, id }: { item: FabricItemType; id: string
                           )}
 
                           <Caption1 style={{ color: tokens.colorNeutralForeground3 }}>EVALUATION</Caption1>
-                          <div style={{ display: 'flex', gap: 8 }}>
+                          <div style={{ display: 'flex', gap: tokens.spacingVerticalS}}>
                             <Field label="Evaluation frequency" style={{ width: 200 }}>
                               <Select value={evalFreq} onChange={(_: unknown, d: any) => setEvalFreq(d.value)}>
                                 {['PT1M', 'PT5M', 'PT15M', 'PT30M', 'PT1H', 'PT6H'].map((f) => <option key={f} value={f}>{f}</option>)}
@@ -9476,10 +9476,10 @@ export function ActivatorEditor({ item, id }: { item: FabricItemType; id: string
                   with a real "Test notification" button that fires the group's
                   receivers (webhook receiver logs the Common Alert Schema payload). */}
               {rules.some((r) => r.actionGroupId) && (
-                <div style={{ marginTop: 16 }}>
+                <div style={{ marginTop: tokens.spacingVerticalL}}>
                   <Subtitle2>Action groups</Subtitle2>
-                  {agMsg && <MessageBar intent={agMsg.startsWith('Test failed') ? 'error' : 'success'} style={{ marginTop: 8 }}><MessageBarBody>{agMsg}</MessageBarBody></MessageBar>}
-                  <div className={s.tableWrap} style={{ marginTop: 8 }}>
+                  {agMsg && <MessageBar intent={agMsg.startsWith('Test failed') ? 'error' : 'success'} style={{ marginTop: tokens.spacingVerticalS}}><MessageBarBody>{agMsg}</MessageBarBody></MessageBar>}
+                  <div className={s.tableWrap} style={{ marginTop: tokens.spacingVerticalS}}>
                     <Table aria-label="Action groups" size="small">
                       <TableHeader><TableRow>
                         <TableHeaderCell>Rule</TableHeaderCell>
@@ -9515,7 +9515,7 @@ export function ActivatorEditor({ item, id }: { item: FabricItemType; id: string
 
               {activeView === 'history' && (
               <>
-                <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                <div style={{ display: 'flex', alignItems: 'center', gap: tokens.spacingVerticalS}}>
                   <Subtitle2>Run history</Subtitle2>
                   <Caption1 style={{ color: tokens.colorNeutralForeground3 }}>fired &amp; resolved events · last 30 days · Azure Monitor</Caption1>
                   <Button size="small" appearance="outline" icon={<ArrowSync20Regular />} onClick={loadHistory} disabled={historyLoading} style={{ marginLeft: 'auto' }}>
@@ -9571,7 +9571,7 @@ export function ActivatorEditor({ item, id }: { item: FabricItemType; id: string
                     <DialogTitle>Alert payload — {payloadEvent?.alertRule}</DialogTitle>
                     <DialogContent>
                       {payloadEvent && (
-                        <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+                        <div style={{ display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalS}}>
                           <Caption1><strong>Condition</strong>: {payloadEvent.monitorCondition} · {payloadEvent.alertState}{payloadEvent.severity ? ` · ${payloadEvent.severity}` : ''}</Caption1>
                           <Caption1><strong>Fired</strong>: {payloadEvent.startDateTime ? new Date(payloadEvent.startDateTime).toLocaleString() : '—'}{payloadEvent.monitorConditionResolvedDateTime ? ` · resolved ${new Date(payloadEvent.monitorConditionResolvedDateTime).toLocaleString()}` : ''}</Caption1>
                           <Caption1><strong>Rows matched</strong>: {payloadEvent.payload?.matchingRowsCount ?? '—'} ({payloadEvent.payload?.operator || '—'} {payloadEvent.payload?.threshold ?? '—'})</Caption1>
@@ -9975,7 +9975,7 @@ export function WarehouseEditor({ item, id }: { item: FabricItemType; id: string
   return (
     <ItemEditorChrome item={item} id={id} ribbon={ribbon}
       leftPanel={
-        <div style={{ padding: 8 }}>
+        <div style={{ padding: tokens.spacingVerticalS }}>
           <Tree aria-label="Warehouse explorer" defaultOpenItems={['schemas', 'starter', 'starter-queries', 'dbt-models']}>
             {hasBundle && (
               <TreeItem itemType="branch" value="starter">
@@ -10260,7 +10260,7 @@ export function WarehouseEditor({ item, id }: { item: FabricItemType; id: string
           )}
           {result?.ok && (
             <>
-              <div style={{ display: 'flex', gap: 12, alignItems: 'center' }}>
+              <div style={{ display: 'flex', gap: tokens.spacingVerticalM, alignItems: 'center' }}>
                 <Badge appearance="filled" color="success">{result.rowCount ?? result.rows?.length ?? 0} rows</Badge>
                 <Caption1>· {result.executionMs} ms</Caption1>
                 {result.truncated && <Badge appearance="outline" color="warning">truncated at 5,000</Badge>}
@@ -10277,7 +10277,7 @@ export function WarehouseEditor({ item, id }: { item: FabricItemType; id: string
               {(result.rows?.length ?? 0) === 0 ? (
                 <Caption1>Query returned no rows.</Caption1>
               ) : (
-                <div style={{ overflow: 'auto', maxHeight: 360, border: `1px solid ${tokens.colorNeutralStroke2}`, borderRadius: 4 }}>
+                <div style={{ overflow: 'auto', maxHeight: 360, border: `1px solid ${tokens.colorNeutralStroke2}`, borderRadius: tokens.borderRadiusMedium }}>
                   <Table aria-label="Query results" size="small">
                     <TableHeader><TableRow>
                       {(result.columns || []).map((c) => <TableHeaderCell key={c}>{c}</TableHeaderCell>)}
@@ -10286,7 +10286,7 @@ export function WarehouseEditor({ item, id }: { item: FabricItemType; id: string
                       {(result.rows || []).map((row, i) => (
                         <TableRow key={i}>
                           {(result.columns || []).map((_, j) => (
-                            <TableCell key={j} style={{ fontFamily: 'Consolas, monospace', fontSize: 12, whiteSpace: 'nowrap' }}>{formatCell(row[j])}</TableCell>
+                            <TableCell key={j} style={{ fontFamily: 'Consolas, monospace', fontSize: tokens.fontSizeBase200, whiteSpace: 'nowrap' }}>{formatCell(row[j])}</TableCell>
                           ))}
                         </TableRow>
                       ))}
@@ -10628,14 +10628,14 @@ function AasSemanticModelPanel({ item, id }: { item: FabricItemType; id: string 
               </div>
 
               {tab === 'storage' && (
-                <div style={{ marginTop: 12 }}>
+                <div style={{ marginTop: tokens.spacingVerticalM}}>
                   <Subtitle2>Storage mode</Subtitle2>
-                  <Caption1 style={{ color: tokens.colorNeutralForeground3, display: 'block', marginTop: 4 }}>
+                  <Caption1 style={{ color: tokens.colorNeutralForeground3, display: 'block', marginTop: tokens.spacingVerticalXS}}>
                     Sourced from <code>GET …/Microsoft.AnalysisServices/servers/{serverName || '{name}'}/databases/{dbName}</code> (api-version 2017-08-01,
                     <code> properties.model.storageMode</code>). Changing the storage mode is a model operation — use the XMLA endpoint
                     (SSMS / Tabular Editor) or the AAS REST <code>createOrReplace</code> TMSL command.
                   </Caption1>
-                  <div style={{ marginTop: 12, display: 'flex', gap: 12, flexWrap: 'wrap', alignItems: 'center' }}>
+                  <div style={{ marginTop: tokens.spacingVerticalM, display: 'flex', gap: tokens.spacingVerticalM, flexWrap: 'wrap', alignItems: 'center' }}>
                     <Badge appearance="filled" color={current?.storageMode === 'InMemory' || !current?.storageMode ? 'brand' : 'informative'} size="large">
                       {storageLabel(current?.storageMode)}
                     </Badge>
@@ -10648,19 +10648,19 @@ function AasSemanticModelPanel({ item, id }: { item: FabricItemType; id: string 
               )}
 
               {tab === 'refresh' && (
-                <div style={{ marginTop: 12, display: 'flex', flexDirection: 'column', gap: 16 }}>
+                <div style={{ marginTop: tokens.spacingVerticalM, display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalL}}>
                   <div>
                     <Subtitle2>Scheduled refresh</Subtitle2>
-                    <Caption1 style={{ color: tokens.colorNeutralForeground3, display: 'block', marginTop: 4 }}>
+                    <Caption1 style={{ color: tokens.colorNeutralForeground3, display: 'block', marginTop: tokens.spacingVerticalXS}}>
                       Stored as the <code>loom-refresh-schedule</code> tag on the AAS server resource (visible in the Azure portal).
                       A scheduler invokes the AAS async-refresh REST API at the configured times. AAS has no 30-minute-boundary
                       constraint, so any <code>HH:MM</code> is allowed.
                     </Caption1>
-                    <div style={{ display: 'flex', flexDirection: 'column', gap: 10, marginTop: 10, maxWidth: 560 }}>
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalM, marginTop: tokens.spacingVerticalM, maxWidth: 560 }}>
                       <Switch label="Enable scheduled refresh" checked={schedEnabled} onChange={(_, d) => setSchedEnabled(d.checked)} />
                       <div>
                         <Caption1>Refresh days</Caption1>
-                        <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', marginTop: 4 }}>
+                        <div style={{ display: 'flex', gap: tokens.spacingVerticalS, flexWrap: 'wrap', marginTop: tokens.spacingVerticalXS}}>
                           {AAS_DAYS.map((day) => (
                             <Button key={day} size="small" appearance={schedDays.includes(day) ? 'primary' : 'outline'} onClick={() => toggleSchedDay(day)}>{day.slice(0, 3)}</Button>
                           ))}
@@ -10678,7 +10678,7 @@ function AasSemanticModelPanel({ item, id }: { item: FabricItemType; id: string 
                           <option value="MailOnFailure">Email on failure</option>
                         </Select>
                       </Field>
-                      <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+                      <div style={{ display: 'flex', gap: tokens.spacingVerticalS, alignItems: 'center' }}>
                         <Button appearance="primary" icon={<Save20Regular />} disabled={schedBusy} onClick={saveSchedule}>{schedBusy ? 'Saving…' : 'Apply'}</Button>
                         {schedUpdatedAt && <Caption1>Last saved: {schedUpdatedAt}</Caption1>}
                       </div>
@@ -10688,10 +10688,10 @@ function AasSemanticModelPanel({ item, id }: { item: FabricItemType; id: string 
 
                   <div>
                     <Subtitle2>Refresh history</Subtitle2>
-                    <Caption1 style={{ color: tokens.colorNeutralForeground3, display: 'block', marginTop: 4 }}>
+                    <Caption1 style={{ color: tokens.colorNeutralForeground3, display: 'block', marginTop: tokens.spacingVerticalXS}}>
                       Last 30 days from <code>GET …/models/{dbName}/refreshes</code> (AAS async-refresh REST API), newest first.
                     </Caption1>
-                    <div className={s.tableWrap} style={{ marginTop: 8 }}>
+                    <div className={s.tableWrap} style={{ marginTop: tokens.spacingVerticalS}}>
                       <Table aria-label="AAS refresh history" size="small">
                         <TableHeader><TableRow>
                           <TableHeaderCell>Refresh ID</TableHeaderCell>
@@ -10796,7 +10796,7 @@ function SemanticModelSecurityTab(props: SecurityTabProps) {
     expr && expr.trim() ? validateRlsDax(expr) : { ok: true as const };
 
   return (
-    <div style={{ display: 'flex', flexDirection: 'column', gap: 20 }}>
+    <div style={{ display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalXL }}>
       {gate && (
         <MessageBar intent="warning">
           <MessageBarBody>
@@ -10809,7 +10809,7 @@ function SemanticModelSecurityTab(props: SecurityTabProps) {
 
       {/* Section 1 — Roles grid */}
       <div>
-        <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: tokens.spacingVerticalS}}>
           <Subtitle2>Model roles</Subtitle2>
           <Button size="small" appearance="outline" icon={<ArrowSync20Regular />} onClick={onReload} disabled={busy}>{busy ? 'Loading…' : 'Reload'}</Button>
           <Button size="small" appearance="primary" icon={<Add20Regular />} onClick={onAddRole} disabled={!!gate}>Add role</Button>
@@ -10818,8 +10818,8 @@ function SemanticModelSecurityTab(props: SecurityTabProps) {
         <Caption1 style={{ color: tokens.colorNeutralForeground3 }}>
           Each role applies a row filter (RLS) and/or hides tables &amp; columns (OLS). Saving deploys the full role set to the model via XMLA <code>createOrReplace</code>.
         </Caption1>
-        {saveMsg && <MessageBar intent={saveMsg.ok ? 'success' : 'error'} style={{ marginTop: 6 }}><MessageBarBody>{saveMsg.text}</MessageBarBody></MessageBar>}
-        <div className={s.tableWrap} style={{ marginTop: 8 }}>
+        {saveMsg && <MessageBar intent={saveMsg.ok ? 'success' : 'error'} style={{ marginTop: tokens.spacingVerticalS}}><MessageBarBody>{saveMsg.text}</MessageBarBody></MessageBar>}
+        <div className={s.tableWrap} style={{ marginTop: tokens.spacingVerticalS}}>
           <Table aria-label="Roles" size="small">
             <TableHeader><TableRow>
               <TableHeaderCell>Role</TableHeaderCell>
@@ -10856,8 +10856,8 @@ function SemanticModelSecurityTab(props: SecurityTabProps) {
 
       {/* Sections 2 + 3 — per-role RLS DAX + OLS matrix */}
       {role && (
-        <div style={{ display: 'flex', flexDirection: 'column', gap: 16, padding: 12, border: `1px solid ${tokens.colorNeutralStroke2}`, borderRadius: tokens.borderRadiusMedium }}>
-          <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+        <div style={{ display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalL, padding: tokens.spacingVerticalM, border: `1px solid ${tokens.colorNeutralStroke2}`, borderRadius: tokens.borderRadiusMedium }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: tokens.spacingVerticalS}}>
             <Subtitle2>Editing role:</Subtitle2>
             <Input value={role.name} onChange={(_, d) => onRenameRole(role.name, d.value)} style={{ maxWidth: 240 }} aria-label="Role name" />
           </div>
@@ -10876,7 +10876,7 @@ function SemanticModelSecurityTab(props: SecurityTabProps) {
           {/* Section 2 — Row-level security (DAX filter) */}
           <div>
             <Subtitle2>Row-level security (DAX filter)</Subtitle2>
-            <div className={s.tableWrap} style={{ marginTop: 8 }}>
+            <div className={s.tableWrap} style={{ marginTop: tokens.spacingVerticalS}}>
               <Table aria-label="Row filters" size="small">
                 <TableHeader><TableRow>
                   <TableHeaderCell>Table</TableHeaderCell>
@@ -10913,13 +10913,13 @@ function SemanticModelSecurityTab(props: SecurityTabProps) {
             <Caption1 style={{ color: tokens.colorNeutralForeground3 }}>
               Hide a whole table or specific columns from this role. A table set to <strong>None</strong> hides all of its columns (column rows below are disabled).
             </Caption1>
-            <div style={{ display: 'flex', flexDirection: 'column', gap: 8, marginTop: 8 }}>
+            <div style={{ display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalS, marginTop: tokens.spacingVerticalS}}>
               {tables.map((t) => {
                 const tp = tablePerm(t.name);
                 const tableHidden = tp?.metadataPermission === 'none';
                 return (
-                  <div key={t.name} style={{ border: `1px solid ${tokens.colorNeutralStroke2}`, borderRadius: tokens.borderRadiusSmall, padding: 8 }}>
-                    <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+                  <div key={t.name} style={{ border: `1px solid ${tokens.colorNeutralStroke2}`, borderRadius: tokens.borderRadiusSmall, padding: tokens.spacingVerticalS }}>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: tokens.spacingVerticalM}}>
                       <Label weight="semibold" style={{ minWidth: 160 }}>{t.name}</Label>
                       <Field label="Table" orientation="horizontal">
                         <Select
@@ -10933,11 +10933,11 @@ function SemanticModelSecurityTab(props: SecurityTabProps) {
                       </Field>
                     </div>
                     {(t.columns || []).length > 0 && (
-                      <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8, marginTop: 6, opacity: tableHidden ? 0.4 : 1 }}>
+                      <div style={{ display: 'flex', flexWrap: 'wrap', gap: tokens.spacingVerticalS, marginTop: tokens.spacingVerticalS, opacity: tableHidden ? 0.4 : 1 }}>
                         {(t.columns || []).map((c) => {
                           const cp = (tp?.columnPermissions || []).find((x) => x.name === c.name);
                           return (
-                            <div key={c.name} style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
+                            <div key={c.name} style={{ display: 'flex', alignItems: 'center', gap: tokens.spacingVerticalXS}}>
                               <Caption1>{c.name}</Caption1>
                               <Select
                                 value={cp?.metadataPermission === 'none' ? 'none' : 'read'}
@@ -10963,14 +10963,14 @@ function SemanticModelSecurityTab(props: SecurityTabProps) {
       )}
 
       {/* Section 4 — Test as role (receipt) */}
-      <div style={{ padding: 12, border: `1px solid ${tokens.colorNeutralStroke2}`, borderRadius: tokens.borderRadiusMedium }}>
+      <div style={{ padding: tokens.spacingVerticalM, border: `1px solid ${tokens.colorNeutralStroke2}`, borderRadius: tokens.borderRadiusMedium }}>
         <Subtitle2>Test as role</Subtitle2>
-        <MessageBar intent="info" style={{ marginTop: 6 }}>
+        <MessageBar intent="info" style={{ marginTop: tokens.spacingVerticalS}}>
           <MessageBarBody>
             Runs a DAX query impersonating a role via the XMLA <code>EffectiveUserName</code> + <code>Roles</code> connection properties. The named user must exist in the tenant and hold Read access on the model. The result table is your receipt: a restricted role returns only filtered rows, and OLS-hidden columns are absent from the output.
           </MessageBarBody>
         </MessageBar>
-        <div style={{ display: 'flex', flexDirection: 'column', gap: 10, marginTop: 10, maxWidth: 720 }}>
+        <div style={{ display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalM, marginTop: tokens.spacingVerticalM, maxWidth: 720 }}>
           <Field label="Effective user (Entra UPN to impersonate)">
             <Input value={testUpn} onChange={(_, d) => onTestUpn(d.value)} placeholder="alice@contoso.com" />
           </Field>
@@ -10990,7 +10990,7 @@ function SemanticModelSecurityTab(props: SecurityTabProps) {
           {testResult && (
             <div>
               <Caption1 style={{ color: tokens.colorNeutralForeground3 }}>{testResult.rowCount} row(s) returned as role <strong>{selectedRole}</strong>.</Caption1>
-              <div className={s.tableWrap} style={{ marginTop: 6 }}>
+              <div className={s.tableWrap} style={{ marginTop: tokens.spacingVerticalS}}>
                 <Table aria-label="Test-as-role result" size="small">
                   <TableHeader><TableRow>
                     {Object.keys(testResult.rows[0] || {}).map((k) => <TableHeaderCell key={k}>{k}</TableHeaderCell>)}
@@ -11142,7 +11142,7 @@ const useCopilotPaneStyles = makeStyles({
       border: `${tokens.strokeWidthThin} solid ${tokens.colorNeutralStroke1}`,
     },
   },
-  cpMeta: { display: 'flex', flexDirection: 'column', rowGap: '2px', minWidth: 0 },
+  cpMeta: { display: 'flex', flexDirection: 'column', rowGap: tokens.spacingVerticalXXS, minWidth: 0 },
   cpLabelRow: { display: 'flex', columnGap: tokens.spacingHorizontalXS, alignItems: 'center' },
   emptyState: {
     display: 'flex',
@@ -11317,11 +11317,11 @@ function SemanticModelCopilotPane({ id }: { id: string }) {
             <MessageBarTitle>{applyResult.ok ? 'Edits applied' : 'Apply failed'}</MessageBarTitle>
             {applyResult.text}
             {applyResult.applied && applyResult.applied.length > 0 && (
-              <ul style={{ margin: '6px 0 0', paddingLeft: 18 }}>{applyResult.applied.map((a, i) => <li key={i}>{a}</li>)}</ul>
+              <ul style={{ margin: `${tokens.spacingVerticalXS} 0 0`, paddingLeft: 18 }}>{applyResult.applied.map((a, i) => <li key={i}>{a}</li>)}</ul>
             )}
             {applyResult.skipped && applyResult.skipped.length > 0 && (
-              <div style={{ marginTop: 6 }}><strong>Skipped:</strong>
-                <ul style={{ margin: '2px 0 0', paddingLeft: 18 }}>{applyResult.skipped.map((a, i) => <li key={i}>{a}</li>)}</ul>
+              <div style={{ marginTop: tokens.spacingVerticalS}}><strong>Skipped:</strong>
+                <ul style={{ margin: `${tokens.spacingVerticalXXS} 0 0`, paddingLeft: 18 }}>{applyResult.skipped.map((a, i) => <li key={i}>{a}</li>)}</ul>
               </div>
             )}
           </MessageBarBody>
@@ -12526,7 +12526,7 @@ export function SemanticModelEditor({ item, id }: { item: FabricItemType; id: st
                 <DialogBody>
                   <DialogTitle>Get data — Power Query (M) ingest</DialogTitle>
                   <DialogContent>
-                    <MessageBar intent="info" style={{ marginBottom: 12 }}>
+                    <MessageBar intent="info" style={{ marginBottom: tokens.spacingVerticalM}}>
                       <MessageBarBody>
                         <MessageBarTitle>Azure-native, no Fabric required</MessageBarTitle>
                         Author a Power Query (M) mashup, then <strong>Run ingest</strong>: Loom compiles it into an ADF
@@ -12545,21 +12545,21 @@ export function SemanticModelEditor({ item, id }: { item: FabricItemType; id: st
                     </div>
 
                     {ingestTab === 'source' && (
-                      <div style={{ marginTop: 12 }}>
+                      <div style={{ marginTop: tokens.spacingVerticalM}}>
                         <Caption1 style={{ color: tokens.colorNeutralForeground3 }}>
                           Choose a connector. Loom inserts its Power Query <code>Source =</code> step — edit the connection
                           details on the next tab. External connectors reference a server / account you already configured.
                         </Caption1>
-                        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(240px, 1fr))', gap: 12, marginTop: 12 }}>
+                        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(240px, 1fr))', gap: tokens.spacingVerticalM, marginTop: tokens.spacingVerticalM}}>
                           {INGEST_SOURCES.map((src) => (
                             <div key={src.key} className={s.card} style={{ cursor: 'pointer' }} role="button" tabIndex={0}
                               onClick={() => insertSource(src.m)}
                               onKeyDown={(e) => { if (e.key === 'Enter') insertSource(src.m); }}>
-                              <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                              <div style={{ display: 'flex', alignItems: 'center', gap: tokens.spacingVerticalS}}>
                                 <Database20Regular />
                                 <span style={{ fontWeight: 600 }}>{src.label}</span>
                               </div>
-                              <Caption1 style={{ marginTop: 6, color: tokens.colorNeutralForeground3 }}>{src.hint}</Caption1>
+                              <Caption1 style={{ marginTop: tokens.spacingVerticalS, color: tokens.colorNeutralForeground3 }}>{src.hint}</Caption1>
                             </div>
                           ))}
                         </div>
@@ -12567,14 +12567,14 @@ export function SemanticModelEditor({ item, id }: { item: FabricItemType; id: st
                     )}
 
                     {ingestTab === 'transform' && (
-                      <div style={{ marginTop: 12, display: 'flex', flexDirection: 'column', minHeight: 420 }}>
+                      <div style={{ marginTop: tokens.spacingVerticalM, display: 'flex', flexDirection: 'column', minHeight: 420 }}>
                         <PowerQueryHost mScript={ingestMScript} onChange={setIngestMScript} />
                       </div>
                     )}
 
                     {ingestTab === 'run' && (
-                      <div style={{ marginTop: 12 }}>
-                        <div style={{ display: 'flex', gap: 16, flexWrap: 'wrap' }}>
+                      <div style={{ marginTop: tokens.spacingVerticalM}}>
+                        <div style={{ display: 'flex', gap: tokens.spacingVerticalL, flexWrap: 'wrap' }}>
                           <Field label="Delta destination (ADLS zone)" style={{ minWidth: 220 }}>
                             <Select value={ingestContainer} onChange={(_, d) => setIngestContainer(d.value as 'bronze' | 'silver' | 'gold')}>
                               <option value="bronze">bronze</option>
@@ -12586,14 +12586,14 @@ export function SemanticModelEditor({ item, id }: { item: FabricItemType; id: st
                             <Input value={ingestAasTable} onChange={(_, d) => setIngestAasTable(d.value)} placeholder="(output query name)" />
                           </Field>
                         </div>
-                        <div style={{ display: 'flex', gap: 8, alignItems: 'center', marginTop: 16 }}>
+                        <div style={{ display: 'flex', gap: tokens.spacingVerticalS, alignItems: 'center', marginTop: tokens.spacingVerticalL}}>
                           <Button appearance="primary" icon={<Play20Regular />} disabled={ingestRunning} onClick={runIngest}>
                             {ingestRunning ? 'Running ingest…' : 'Run ingest'}
                           </Button>
                           {ingestRunning && <Spinner size="tiny" />}
                         </div>
                         {ingestResult?.ok && (
-                          <MessageBar intent="success" style={{ marginTop: 12 }}>
+                          <MessageBar intent="success" style={{ marginTop: tokens.spacingVerticalM}}>
                             <MessageBarBody>
                               <MessageBarTitle>Ingest dispatched</MessageBarTitle>
                               Delta landing at <code>{ingestResult.deltaPath}</code> — ADF run <code>{ingestResult.adfRunId}</code>
@@ -12603,7 +12603,7 @@ export function SemanticModelEditor({ item, id }: { item: FabricItemType; id: st
                           </MessageBar>
                         )}
                         {ingestResult && !ingestResult.ok && (
-                          <MessageBar intent="error" style={{ marginTop: 12 }}>
+                          <MessageBar intent="error" style={{ marginTop: tokens.spacingVerticalM}}>
                             <MessageBarBody>
                               <MessageBarTitle>Ingest failed</MessageBarTitle>
                               {ingestResult.error}
@@ -12611,7 +12611,7 @@ export function SemanticModelEditor({ item, id }: { item: FabricItemType; id: st
                           </MessageBar>
                         )}
                         {(ingestResult?.warnings || []).map((w, i) => (
-                          <MessageBar key={i} intent="warning" style={{ marginTop: 8 }}>
+                          <MessageBar key={i} intent="warning" style={{ marginTop: tokens.spacingVerticalS}}>
                             <MessageBarBody>{w}</MessageBarBody>
                           </MessageBar>
                         ))}
@@ -12634,7 +12634,7 @@ export function SemanticModelEditor({ item, id }: { item: FabricItemType; id: st
             {refreshErr && <MessageBar intent="error"><MessageBarBody>{refreshErr}</MessageBarBody></MessageBar>}
             {detailErr && <MessageBar intent="error"><MessageBarBody>{detailErr}</MessageBarBody></MessageBar>}
             {!powerBiConfigured && (
-              <MessageBar intent="info" style={{ marginBottom: 12 }}>
+              <MessageBar intent="info" style={{ marginBottom: tokens.spacingVerticalM}}>
                 <MessageBarBody>
                   <MessageBarTitle>Power BI embed is opt-in</MessageBarTitle>
                   The Console identity isn&rsquo;t registered in Power BI / not in any workspace. This editor shows Loom-native table, relationship, and measure (DAX) metadata. To enable Build model / Refresh / the Power BI Embed tab, register the Console UAMI in your Power BI tenant and add it to a workspace. <a href="https://learn.microsoft.com/power-bi/admin/service-principal-api-considerations" target="_blank" rel="noreferrer">Power BI service principal setup</a>.
@@ -12642,7 +12642,7 @@ export function SemanticModelEditor({ item, id }: { item: FabricItemType; id: st
               </MessageBar>
             )}
             {detail?.dataset && (
-              <div style={{ display: 'flex', gap: 12, alignItems: 'center', flexWrap: 'wrap' }}>
+              <div style={{ display: 'flex', gap: tokens.spacingVerticalM, alignItems: 'center', flexWrap: 'wrap' }}>
                 <Caption1>Owner: <strong>{detail.dataset.configuredBy || '—'}</strong></Caption1>
                 <Caption1>Mode: <strong>{detail.dataset.targetStorageMode || '—'}</strong></Caption1>
                 {detail.dataset.isRefreshable === false && <Badge appearance="outline" color="warning">not refreshable</Badge>}
@@ -12677,9 +12677,9 @@ export function SemanticModelEditor({ item, id }: { item: FabricItemType; id: st
               <div className={s.pad}>
                 {tab === 'tables' && (
                   <>
-                    {modelLoading && <Spinner size="tiny" label="Loading column metadata via XMLA…" style={{ justifyContent: 'flex-start', marginBottom: 8 }} />}
+                    {modelLoading && <Spinner size="tiny" label="Loading column metadata via XMLA…" style={{ justifyContent: 'flex-start', marginBottom: tokens.spacingVerticalS}} />}
                     {modelGate && (
-                      <MessageBar intent={modelGate.missing === 'error' ? 'error' : 'warning'} style={{ marginBottom: 8 }}>
+                      <MessageBar intent={modelGate.missing === 'error' ? 'error' : 'warning'} style={{ marginBottom: tokens.spacingVerticalS}}>
                         <MessageBarBody>
                           <MessageBarTitle>{modelGate.missing === 'error' ? 'Column metadata load failed' : 'Column editor not configured'}</MessageBarTitle>
                           {modelGate.detail}
@@ -12690,13 +12690,13 @@ export function SemanticModelEditor({ item, id }: { item: FabricItemType; id: st
                       </MessageBar>
                     )}
                     {modelBackend && (
-                      <div style={{ marginBottom: 8 }}>
+                      <div style={{ marginBottom: tokens.spacingVerticalS}}>
                         <Badge appearance="tint" color="brand">XMLA backend: {modelBackend === 'analysis-services' ? 'Azure Analysis Services' : 'Power BI Premium XMLA'}</Badge>
                       </div>
                     )}
                     {/* Table selector + add actions */}
                     {(modelTables || detail?.tables) && (
-                      <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'center', marginBottom: 10 }}>
+                      <div style={{ display: 'flex', gap: tokens.spacingVerticalS, flexWrap: 'wrap', alignItems: 'center', marginBottom: tokens.spacingVerticalM}}>
                         <Field label="Table" style={{ minWidth: 220 }}>
                           <Select value={selectedTableName} onChange={(_, d) => { setSelectedTableName(d.value); setEditCol(null); setColPatch({}); }}>
                             {(modelTables ?? (detail?.tables as any[]) ?? []).map((t: { name: string; isCalculatedTable?: boolean }) => (
@@ -12704,19 +12704,19 @@ export function SemanticModelEditor({ item, id }: { item: FabricItemType; id: st
                             ))}
                           </Select>
                         </Field>
-                        <Button size="small" appearance="outline" icon={<Add20Regular />} style={{ marginTop: 22 }}
+                        <Button size="small" appearance="outline" icon={<Add20Regular />} style={{ marginTop: tokens.spacingVerticalXXL }}
                           onClick={() => { setCalcMsg(null); setCalcColDlgOpen(true); }}
                           disabled={!selectedTableName || !modelTables}
                           title={!modelTables ? 'Configure LOOM_AAS_SERVER_URL to enable calculated columns' : 'Add a calculated column (DAX)'}>
                           Add calculated column
                         </Button>
-                        <Button size="small" appearance="outline" icon={<Table20Regular />} style={{ marginTop: 22 }}
+                        <Button size="small" appearance="outline" icon={<Table20Regular />} style={{ marginTop: tokens.spacingVerticalXXL }}
                           onClick={() => { setCalcMsg(null); setCalcTableDlgOpen(true); }}
                           disabled={!modelTables}
                           title={!modelTables ? 'Configure LOOM_AAS_SERVER_URL to enable calculated tables' : 'Create a calculated table (DAX)'}>
                           Add calculated table
                         </Button>
-                        <Button size="small" appearance="subtle" icon={<ArrowSync20Regular />} style={{ marginTop: 22 }}
+                        <Button size="small" appearance="subtle" icon={<ArrowSync20Regular />} style={{ marginTop: tokens.spacingVerticalXXL }}
                           onClick={() => { setModelTables(null); setModelGate(null); loadModel(); }}
                           disabled={!datasetId || modelLoading}>
                           Reload
@@ -12752,7 +12752,7 @@ export function SemanticModelEditor({ item, id }: { item: FabricItemType; id: st
                                 <TableRow key={c.name} aria-label={c.name}>
                                   <TableCell>
                                     {c.name}
-                                    {c.type === 'calculated' && <Badge appearance="outline" size="small" color="brand" style={{ marginLeft: 4 }}>calc</Badge>}
+                                    {c.type === 'calculated' && <Badge appearance="outline" size="small" color="brand" style={{ marginLeft: tokens.spacingHorizontalXS}}>calc</Badge>}
                                   </TableCell>
                                   <TableCell>{c.type ?? 'data'}</TableCell>
                                   <TableCell>{c.dataType ?? '—'}</TableCell>
@@ -12778,9 +12778,9 @@ export function SemanticModelEditor({ item, id }: { item: FabricItemType; id: st
                     })()}
                     {/* Column edit panel — full metadata surface */}
                     {editCol && (
-                      <div className={s.card} style={{ marginTop: 12 }}>
+                      <div className={s.card} style={{ marginTop: tokens.spacingVerticalM}}>
                         <Subtitle2>Edit column: {editCol.tableName}[{editCol.col.name}]</Subtitle2>
-                        <div style={{ display: 'flex', gap: 12, flexWrap: 'wrap', marginTop: 8 }}>
+                        <div style={{ display: 'flex', gap: tokens.spacingVerticalM, flexWrap: 'wrap', marginTop: tokens.spacingVerticalS}}>
                           <Field label="Data category" style={{ minWidth: 180 }}>
                             <Select value={colPatch.dataCategory ?? editCol.col.dataCategory ?? ''}
                               onChange={(_, d) => setColPatch((p) => ({ ...p, dataCategory: d.value || undefined }))}>
@@ -12820,7 +12820,7 @@ export function SemanticModelEditor({ item, id }: { item: FabricItemType; id: st
                           </Field>
                         </div>
                         {editCol.col.type === 'calculated' && (
-                          <div style={{ marginTop: 10 }}>
+                          <div style={{ marginTop: tokens.spacingVerticalM}}>
                             <Caption1>DAX expression</Caption1>
                             <MonacoTextarea
                               value={colPatch.expression ?? editCol.col.expression ?? ''}
@@ -12829,7 +12829,7 @@ export function SemanticModelEditor({ item, id }: { item: FabricItemType; id: st
                               ariaLabel="Calculated column DAX expression" />
                           </div>
                         )}
-                        <div style={{ display: 'flex', gap: 8, alignItems: 'center', marginTop: 10 }}>
+                        <div style={{ display: 'flex', gap: tokens.spacingVerticalS, alignItems: 'center', marginTop: tokens.spacingVerticalM}}>
                           <Button appearance="primary" icon={<Save20Regular />}
                             disabled={patchBusy || Object.keys(colPatch).length === 0}
                             onClick={patchColumn}>
@@ -12837,10 +12837,10 @@ export function SemanticModelEditor({ item, id }: { item: FabricItemType; id: st
                           </Button>
                           <Button appearance="subtle" onClick={() => { setEditCol(null); setColPatch({}); setPatchMsg(null); }}>Cancel</Button>
                         </div>
-                        {patchMsg && <MessageBar intent={patchMsg.ok ? 'success' : 'error'} style={{ marginTop: 8 }}><MessageBarBody>{patchMsg.text}</MessageBarBody></MessageBar>}
+                        {patchMsg && <MessageBar intent={patchMsg.ok ? 'success' : 'error'} style={{ marginTop: tokens.spacingVerticalS}}><MessageBarBody>{patchMsg.text}</MessageBarBody></MessageBar>}
                       </div>
                     )}
-                    {patchMsg && !editCol && <MessageBar intent={patchMsg.ok ? 'success' : 'error'} style={{ marginTop: 8 }}><MessageBarBody>{patchMsg.text}</MessageBarBody></MessageBar>}
+                    {patchMsg && !editCol && <MessageBar intent={patchMsg.ok ? 'success' : 'error'} style={{ marginTop: tokens.spacingVerticalS}}><MessageBarBody>{patchMsg.text}</MessageBarBody></MessageBar>}
                     {/* Read-only measures for the selected table */}
                     {(() => {
                       const tbl: SmTable | undefined =
@@ -12848,14 +12848,14 @@ export function SemanticModelEditor({ item, id }: { item: FabricItemType; id: st
                         (detail?.tables?.find((t) => t.name === selectedTableName) as any);
                       if (!tbl?.measures?.length) return null;
                       return (
-                        <div style={{ marginTop: 12 }}>
+                        <div style={{ marginTop: tokens.spacingVerticalM}}>
                           <Caption1 style={{ color: tokens.colorNeutralForeground3 }}>Measures in {tbl.name} (read-only — edit via the Measures tab)</Caption1>
                           <div className={s.cell}>{tbl.measures.map((m) => m.name).join(', ')}</div>
                         </div>
                       );
                     })()}
                     {/* Composite (per-table storage mode) controls — origin/main integration */}
-                    <Caption1 style={{ color: tokens.colorNeutralForeground3, display: 'block', marginTop: 16, marginBottom: 8 }}>
+                    <Caption1 style={{ color: tokens.colorNeutralForeground3, display: 'block', marginTop: tokens.spacingVerticalL, marginBottom: tokens.spacingVerticalS}}>
                       Set a per-table <strong>storage mode</strong> to build a composite model that mixes
                       Import, DirectQuery, and Dual tables. Apply pushes a <code>model.bim</code> TMSL with a
                       per-partition mode (Fabric updateDefinition), or returns it as an <code>Invoke-ASCmd</code>
@@ -12908,7 +12908,7 @@ export function SemanticModelEditor({ item, id }: { item: FabricItemType; id: st
                         </TableBody>
                       </Table>
                     </div>
-                    <div style={{ display: 'flex', gap: 8, alignItems: 'center', marginTop: 12 }}>
+                    <div style={{ display: 'flex', gap: tokens.spacingVerticalS, alignItems: 'center', marginTop: tokens.spacingVerticalM}}>
                       <Button
                         appearance="primary"
                         icon={<ArrowSync20Regular />}
@@ -12925,16 +12925,16 @@ export function SemanticModelEditor({ item, id }: { item: FabricItemType; id: st
                       )}
                     </div>
                     {modesMsg && (
-                      <MessageBar intent={modesMsg.ok ? 'success' : 'error'} style={{ marginTop: 8 }}>
+                      <MessageBar intent={modesMsg.ok ? 'success' : 'error'} style={{ marginTop: tokens.spacingVerticalS}}>
                         <MessageBarBody>{modesMsg.text}</MessageBarBody>
                       </MessageBar>
                     )}
                     {tmslReceipt && (
-                      <details style={{ marginTop: 8 }}>
+                      <details style={{ marginTop: tokens.spacingVerticalS}}>
                         <summary style={{ cursor: 'pointer' }}>
                           <Caption1>TMSL receipt (apply offline: <code>Invoke-ASCmd -Server &quot;asazure://…&quot; -Query &lt;tmsl&gt;</code>)</Caption1>
                         </summary>
-                        <pre style={{ maxHeight: 240, overflow: 'auto', fontSize: 11, fontFamily: 'Consolas, monospace', background: tokens.colorNeutralBackground2, padding: 8, borderRadius: 4, marginTop: 4 }}>
+                        <pre style={{ maxHeight: 240, overflow: 'auto', fontSize: tokens.fontSizeBase100, fontFamily: 'Consolas, monospace', background: tokens.colorNeutralBackground2, padding: tokens.spacingVerticalS, borderRadius: tokens.borderRadiusMedium, marginTop: tokens.spacingVerticalXS}}>
                           {tmslReceipt.slice(0, 4000)}
                         </pre>
                       </details>
@@ -12948,9 +12948,9 @@ export function SemanticModelEditor({ item, id }: { item: FabricItemType; id: st
                       on an imported model requires XMLA / Desktop; push datasets accept relationships at create time via the <strong>Build model</strong> tab.
                     </Caption1>
                     {relationships.length === 0 ? (
-                      <Caption1 style={{ marginTop: 8 }}>No relationships returned for this model.</Caption1>
+                      <Caption1 style={{ marginTop: tokens.spacingVerticalS}}>No relationships returned for this model.</Caption1>
                     ) : (
-                      <div className={s.tableWrap} style={{ marginTop: 8 }}>
+                      <div className={s.tableWrap} style={{ marginTop: tokens.spacingVerticalS}}>
                         <Table aria-label="Relationships" size="small">
                           <TableHeader><TableRow>
                             <TableHeaderCell>Name</TableHeaderCell>
@@ -12990,21 +12990,21 @@ export function SemanticModelEditor({ item, id }: { item: FabricItemType; id: st
                         (<code>LOOM_POWERBI_XMLA_ENDPOINT</code>) or Power BI Desktop.
                       </MessageBarBody>
                     </MessageBar>
-                    <Field label="Model name" required style={{ maxWidth: 420, marginTop: 8 }}>
+                    <Field label="Model name" required style={{ maxWidth: 420, marginTop: tokens.spacingVerticalS}}>
                       <Input value={bModelName} onChange={(_, d) => setBModelName(d.value)} placeholder="My semantic model" />
                     </Field>
                     {bTables.map((t, ti) => (
-                      <div key={ti} className={s.card} style={{ marginTop: 8 }}>
-                        <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+                      <div key={ti} className={s.card} style={{ marginTop: tokens.spacingVerticalS}}>
+                        <div style={{ display: 'flex', gap: tokens.spacingVerticalS, alignItems: 'center' }}>
                           <Field label="Table" style={{ minWidth: 220 }}>
                             <Input value={t.name} onChange={(_, d) => setBTables((p) => p.map((x, i) => i === ti ? { ...x, name: d.value } : x))} />
                           </Field>
                           <Button appearance="subtle" icon={<Delete20Regular />} aria-label="Remove table"
-                            onClick={() => setBTables((p) => p.filter((_, i) => i !== ti))} style={{ marginTop: 22 }} />
+                            onClick={() => setBTables((p) => p.filter((_, i) => i !== ti))} style={{ marginTop: tokens.spacingVerticalXXL }} />
                         </div>
-                        <Caption1 style={{ marginTop: 6 }}>Columns</Caption1>
+                        <Caption1 style={{ marginTop: tokens.spacingVerticalS}}>Columns</Caption1>
                         {t.columns.map((c, ci) => (
-                          <div key={ci} style={{ display: 'flex', gap: 8, alignItems: 'center', marginTop: 4 }}>
+                          <div key={ci} style={{ display: 'flex', gap: tokens.spacingVerticalS, alignItems: 'center', marginTop: tokens.spacingVerticalXS}}>
                             <Input value={c.name} placeholder="column" onChange={(_, d) => setBTables((p) => p.map((x, i) => i === ti ? { ...x, columns: x.columns.map((y, j) => j === ci ? { ...y, name: d.value } : y) } : x))} />
                             <Select value={c.dataType} onChange={(_, d) => setBTables((p) => p.map((x, i) => i === ti ? { ...x, columns: x.columns.map((y, j) => j === ci ? { ...y, dataType: d.value as BuilderColumn['dataType'] } : y) } : x))}>
                               {PBI_COL_TYPES.map((tp) => <option key={tp} value={tp}>{tp}</option>)}
@@ -13013,27 +13013,27 @@ export function SemanticModelEditor({ item, id }: { item: FabricItemType; id: st
                               onClick={() => setBTables((p) => p.map((x, i) => i === ti ? { ...x, columns: x.columns.filter((_, j) => j !== ci) } : x))} />
                           </div>
                         ))}
-                        <Button size="small" appearance="outline" icon={<Add20Regular />} style={{ marginTop: 4 }}
+                        <Button size="small" appearance="outline" icon={<Add20Regular />} style={{ marginTop: tokens.spacingVerticalXS}}
                           onClick={() => setBTables((p) => p.map((x, i) => i === ti ? { ...x, columns: [...x.columns, { name: '', dataType: 'String' }] } : x))}>Add column</Button>
-                        <Caption1 style={{ marginTop: 8 }}>Measures (DAX)</Caption1>
+                        <Caption1 style={{ marginTop: tokens.spacingVerticalS}}>Measures (DAX)</Caption1>
                         {t.measures.map((m, mi) => (
-                          <div key={mi} style={{ display: 'flex', gap: 8, alignItems: 'center', marginTop: 4 }}>
+                          <div key={mi} style={{ display: 'flex', gap: tokens.spacingVerticalS, alignItems: 'center', marginTop: tokens.spacingVerticalXS}}>
                             <Input value={m.name} placeholder="MeasureName" onChange={(_, d) => setBTables((p) => p.map((x, i) => i === ti ? { ...x, measures: x.measures.map((y, j) => j === mi ? { ...y, name: d.value } : y) } : x))} />
                             <Input value={m.expression} placeholder="SUM(Sales[Amount])" style={{ flex: 1, fontFamily: 'Consolas, monospace' }} onChange={(_, d) => setBTables((p) => p.map((x, i) => i === ti ? { ...x, measures: x.measures.map((y, j) => j === mi ? { ...y, expression: d.value } : y) } : x))} />
                             <Button appearance="subtle" icon={<Delete20Regular />} aria-label="Remove measure"
                               onClick={() => setBTables((p) => p.map((x, i) => i === ti ? { ...x, measures: x.measures.filter((_, j) => j !== mi) } : x))} />
                           </div>
                         ))}
-                        <Button size="small" appearance="outline" icon={<Add20Regular />} style={{ marginTop: 4 }}
+                        <Button size="small" appearance="outline" icon={<Add20Regular />} style={{ marginTop: tokens.spacingVerticalXS}}
                           onClick={() => setBTables((p) => p.map((x, i) => i === ti ? { ...x, measures: [...x.measures, { name: '', expression: '' }] } : x))}>Add measure</Button>
                       </div>
                     ))}
-                    <Button appearance="outline" icon={<Add20Regular />} style={{ marginTop: 8 }}
+                    <Button appearance="outline" icon={<Add20Regular />} style={{ marginTop: tokens.spacingVerticalS}}
                       onClick={() => setBTables((p) => [...p, { name: `Table${p.length + 1}`, columns: [{ name: 'Id', dataType: 'Int64' }], measures: [] }])}>Add table</Button>
 
-                    <Subtitle2 style={{ marginTop: 16 }}>Relationships</Subtitle2>
+                    <Subtitle2 style={{ marginTop: tokens.spacingVerticalL}}>Relationships</Subtitle2>
                     {bRels.map((rl, ri) => (
-                      <div key={ri} style={{ display: 'flex', gap: 8, alignItems: 'center', marginTop: 4, flexWrap: 'wrap' }}>
+                      <div key={ri} style={{ display: 'flex', gap: tokens.spacingVerticalS, alignItems: 'center', marginTop: tokens.spacingVerticalXS, flexWrap: 'wrap' }}>
                         <Input value={rl.fromTable} placeholder="fromTable" onChange={(_, d) => setBRels((p) => p.map((x, i) => i === ri ? { ...x, fromTable: d.value } : x))} style={{ width: 140 }} />
                         <Input value={rl.fromColumn} placeholder="fromColumn" onChange={(_, d) => setBRels((p) => p.map((x, i) => i === ri ? { ...x, fromColumn: d.value } : x))} style={{ width: 140 }} />
                         <ArrowSync20Regular />
@@ -13042,16 +13042,16 @@ export function SemanticModelEditor({ item, id }: { item: FabricItemType; id: st
                         <Button appearance="subtle" icon={<Delete20Regular />} aria-label="Remove relationship" onClick={() => setBRels((p) => p.filter((_, i) => i !== ri))} />
                       </div>
                     ))}
-                    <Button size="small" appearance="outline" icon={<Add20Regular />} style={{ marginTop: 4 }}
+                    <Button size="small" appearance="outline" icon={<Add20Regular />} style={{ marginTop: tokens.spacingVerticalXS}}
                       onClick={() => setBRels((p) => [...p, { name: `rel-${p.length + 1}`, fromTable: '', fromColumn: '', toTable: '', toColumn: '', crossFilteringBehavior: 'OneDirection' }])}>Add relationship</Button>
 
-                    <div style={{ display: 'flex', gap: 8, alignItems: 'center', marginTop: 16 }}>
+                    <div style={{ display: 'flex', gap: tokens.spacingVerticalS, alignItems: 'center', marginTop: tokens.spacingVerticalL}}>
                       <Button appearance="primary" icon={<Save20Regular />} disabled={bBusy || !workspaceId || !bModelName.trim()} onClick={buildModel}>
                         {bBusy ? 'Creating…' : 'Create model'}
                       </Button>
                       {!workspaceId && <Caption1>Select a workspace first.</Caption1>}
                     </div>
-                    {bMsg && <MessageBar intent={bMsg.ok ? 'success' : 'error'} style={{ marginTop: 8 }}><MessageBarBody>{bMsg.text}</MessageBarBody></MessageBar>}
+                    {bMsg && <MessageBar intent={bMsg.ok ? 'success' : 'error'} style={{ marginTop: tokens.spacingVerticalS}}><MessageBarBody>{bMsg.text}</MessageBarBody></MessageBar>}
                   </>
                 )}
                 {tab === 'measures' && (
@@ -13067,7 +13067,7 @@ export function SemanticModelEditor({ item, id }: { item: FabricItemType; id: st
                         {xmlaPersistence === true && <> {' '}<Badge appearance="tint" color="success">XMLA persistence ready</Badge></>}
                       </MessageBarBody>
                     </MessageBar>
-                    <div style={{ display: 'flex', gap: 12, flexWrap: 'wrap', marginTop: 8 }}>
+                    <div style={{ display: 'flex', gap: tokens.spacingVerticalM, flexWrap: 'wrap', marginTop: tokens.spacingVerticalS}}>
                       <Field label="Table" style={{ minWidth: 200 }}>
                         <Select value={measureTable} onChange={(_, d) => setMeasureTable(d.value)}>
                           <option value="">(select a table)</option>
@@ -13087,7 +13087,7 @@ export function SemanticModelEditor({ item, id }: { item: FabricItemType; id: st
                     <Field
                       label="DAX expression"
                       hint="e.g. CALCULATE(SUM('Sales'[Amount]), ALL('Date')). Validate before saving."
-                      style={{ marginTop: 8 }}
+                      style={{ marginTop: tokens.spacingVerticalS}}
                     >
                       <MonacoTextarea
                         value={daxExpr}
@@ -13098,7 +13098,7 @@ export function SemanticModelEditor({ item, id }: { item: FabricItemType; id: st
                         ariaLabel="DAX expression editor"
                       />
                     </Field>
-                    <div style={{ display: 'flex', gap: 8, alignItems: 'center', marginTop: 8 }}>
+                    <div style={{ display: 'flex', gap: tokens.spacingVerticalS, alignItems: 'center', marginTop: tokens.spacingVerticalS}}>
                       <Button
                         appearance="primary"
                         icon={<Play20Regular />}
@@ -13118,11 +13118,11 @@ export function SemanticModelEditor({ item, id }: { item: FabricItemType; id: st
                         {saveBusy ? 'Saving…' : 'Save to model (XMLA)'}
                       </Button>
                       {daxResult?.ok && (
-                        <Badge appearance="filled" color="success">valid · probe value: <code style={{ marginLeft: 4 }}>{daxResult.value === null || daxResult.value === undefined ? 'NULL' : String(daxResult.value)}</code></Badge>
+                        <Badge appearance="filled" color="success">valid · probe value: <code style={{ marginLeft: tokens.spacingHorizontalXS}}>{daxResult.value === null || daxResult.value === undefined ? 'NULL' : String(daxResult.value)}</code></Badge>
                       )}
                     </div>
                     {daxResult && !daxResult.ok && (
-                      <MessageBar intent="error" style={{ marginTop: 8 }}>
+                      <MessageBar intent="error" style={{ marginTop: tokens.spacingVerticalS}}>
                         <MessageBarBody>
                           <MessageBarTitle>DAX validation failed</MessageBarTitle>
                           {daxResult.error}
@@ -13130,7 +13130,7 @@ export function SemanticModelEditor({ item, id }: { item: FabricItemType; id: st
                       </MessageBar>
                     )}
                     {saveResult && (
-                      <MessageBar intent={saveResult.ok ? 'success' : 'warning'} style={{ marginTop: 8 }}>
+                      <MessageBar intent={saveResult.ok ? 'success' : 'warning'} style={{ marginTop: tokens.spacingVerticalS}}>
                         <MessageBarBody>
                           <MessageBarTitle>{saveResult.ok ? 'Saved to model' : 'Not persisted'}</MessageBarTitle>
                           {saveResult.text}
@@ -13142,13 +13142,13 @@ export function SemanticModelEditor({ item, id }: { item: FabricItemType; id: st
 
                     {/* DAX Copilot — Loom-native NL2DAX / explain / optimize / describe.
                         Synapse-backed; no Power BI on this path. */}
-                    <Subtitle2 style={{ marginTop: 20 }}>DAX Copilot</Subtitle2>
+                    <Subtitle2 style={{ marginTop: tokens.spacingVerticalXL }}>DAX Copilot</Subtitle2>
                     <Caption1 style={{ color: tokens.colorNeutralForeground3 }}>
                       Generate, explain, or optimize DAX against this Loom-native model. Grounded on the model
                       schema and evaluated via Synapse — no Power BI workspace required. A generated measure
                       auto-inserts into the editor above.
                     </Caption1>
-                    <div className={s.assistBar} style={{ marginTop: 8, borderRadius: 6, border: `1px solid ${tokens.colorNeutralStroke2}` }}>
+                    <div className={s.assistBar} style={{ marginTop: tokens.spacingVerticalS, borderRadius: tokens.borderRadiusLarge, border: `1px solid ${tokens.colorNeutralStroke2}` }}>
                       <Sparkle16Regular />
                       <Input
                         value={daxCopilotPrompt}
@@ -13169,12 +13169,12 @@ export function SemanticModelEditor({ item, id }: { item: FabricItemType; id: st
                       </Button>
                     </div>
                     {daxCopilotErr && (
-                      <MessageBar intent="error" style={{ marginTop: 8 }}>
+                      <MessageBar intent="error" style={{ marginTop: tokens.spacingVerticalS}}>
                         <MessageBarBody><MessageBarTitle>DAX Copilot</MessageBarTitle>{daxCopilotErr}</MessageBarBody>
                       </MessageBar>
                     )}
                     {daxCopilotResult && (
-                      <div className={s.card} style={{ marginTop: 8 }}>
+                      <div className={s.card} style={{ marginTop: tokens.spacingVerticalS}}>
                         <pre className={s.assistResult}>{daxCopilotResult}</pre>
                       </div>
                     )}
@@ -13182,17 +13182,17 @@ export function SemanticModelEditor({ item, id }: { item: FabricItemType; id: st
                     {/* Bulk AI auto-description — generate descriptions for ALL
                         tables/columns/measures in one pass (Fabric Build 2026 #36).
                         Azure-native (AOAI); persists to the Loom-native model. */}
-                    <Subtitle2 style={{ marginTop: 20 }}>AI auto-description (bulk)</Subtitle2>
-                    <div style={{ marginTop: 8 }}>
+                    <Subtitle2 style={{ marginTop: tokens.spacingVerticalXL }}>AI auto-description (bulk)</Subtitle2>
+                    <div style={{ marginTop: tokens.spacingVerticalS}}>
                       <BulkDescribeAction modelId={id} />
                     </div>
 
-                    <Subtitle2 style={{ marginTop: 16 }}>Existing measures</Subtitle2>
+                    <Subtitle2 style={{ marginTop: tokens.spacingVerticalL}}>Existing measures</Subtitle2>
                     {(detail?.tables || []).flatMap((t) => (t.measures || []).map((m) => (
-                      <div key={`${t.name}-${m.name}`} className={s.card} style={{ marginTop: 8 }}>
+                      <div key={`${t.name}-${m.name}`} className={s.card} style={{ marginTop: tokens.spacingVerticalS}}>
                         <Caption1>{t.name}</Caption1>
                         <div style={{ fontWeight: 600 }}>{m.name}</div>
-                        <pre style={{ margin: 0, fontFamily: 'Consolas, monospace', fontSize: 12, whiteSpace: 'pre-wrap' }}>{m.expression || '—'}</pre>
+                        <pre style={{ margin: 0, fontFamily: 'Consolas, monospace', fontSize: tokens.fontSizeBase200, whiteSpace: 'pre-wrap' }}>{m.expression || '—'}</pre>
                       </div>
                     )))}
                     {((detail?.tables || []).flatMap((t) => t.measures || []).length === 0) && (
@@ -13217,7 +13217,7 @@ export function SemanticModelEditor({ item, id }: { item: FabricItemType; id: st
                       </MessageBarBody>
                     </MessageBar>
                     {detail?.dataset?.targetStorageMode === 'Push' && (
-                      <MessageBar intent="warning" style={{ marginTop: 8 }}>
+                      <MessageBar intent="warning" style={{ marginTop: tokens.spacingVerticalS}}>
                         <MessageBarBody>
                           <MessageBarTitle>Push datasets do not support XMLA aggregations</MessageBarTitle>
                           This model is a push dataset; aggregation tables are written over the XMLA endpoint, which push
@@ -13225,7 +13225,7 @@ export function SemanticModelEditor({ item, id }: { item: FabricItemType; id: st
                         </MessageBarBody>
                       </MessageBar>
                     )}
-                    <div style={{ display: 'flex', flexDirection: 'column', gap: 12, marginTop: 12, maxWidth: 920 }}>
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalM, marginTop: tokens.spacingVerticalM, maxWidth: 920 }}>
                       <Field label="Aggregation table name" required style={{ maxWidth: 420 }}>
                         <Input value={aggTableName} onChange={(_, d) => setAggTableName(d.value)} placeholder="Sales_Agg" />
                       </Field>
@@ -13235,7 +13235,7 @@ export function SemanticModelEditor({ item, id }: { item: FabricItemType; id: st
 
                       <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
                         <Subtitle2>Column mappings ({aggAltMaps.length})</Subtitle2>
-                        <div style={{ display: 'flex', gap: 8 }}>
+                        <div style={{ display: 'flex', gap: tokens.spacingVerticalS}}>
                           <Button size="small" appearance="outline" onClick={seedAltMapsFromTable} disabled={!detail?.tables?.length} title="seed starter mappings from the first table's columns (editable)">Seed from first table</Button>
                           <Button size="small" appearance="outline" icon={<Add20Regular />} onClick={addAltMap}>Add mapping</Button>
                         </div>
@@ -13288,7 +13288,7 @@ export function SemanticModelEditor({ item, id }: { item: FabricItemType; id: st
                         <MonacoTextarea value={aggProbeQuery} onChange={setAggProbeQuery} language="sql" height={90} ariaLabel="Probe DAX query" />
                       </Field>
 
-                      <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+                      <div style={{ display: 'flex', gap: tokens.spacingVerticalS, alignItems: 'center' }}>
                         <Button appearance="primary" icon={<Save20Regular />}
                           onClick={createAggregation}
                           disabled={aggBusy || !datasetId || !aggTableName.trim() || !aggPartitionExpr.trim() || aggAltMaps.length === 0 || detail?.dataset?.targetStorageMode === 'Push'}>
@@ -13299,7 +13299,7 @@ export function SemanticModelEditor({ item, id }: { item: FabricItemType; id: st
                       {aggMsg && <MessageBar intent={aggMsg.ok ? 'success' : (aggMsg.text.includes('XMLA endpoint not configured') ? 'warning' : 'error')}><MessageBarBody>{aggMsg.text}</MessageBarBody></MessageBar>}
                       {aggProbeResult && aggProbeResult.length > 0 && (
                         <div className={s.tableWrap}>
-                          <Subtitle2 style={{ marginBottom: 4 }}>Probe result ({aggProbeResult.length} row{aggProbeResult.length === 1 ? '' : 's'})</Subtitle2>
+                          <Subtitle2 style={{ marginBottom: tokens.spacingVerticalXS}}>Probe result ({aggProbeResult.length} row{aggProbeResult.length === 1 ? '' : 's'})</Subtitle2>
                           <Table aria-label="Probe result" size="small">
                             <TableHeader><TableRow>
                               {Object.keys(aggProbeResult[0]).map((k) => <TableHeaderCell key={k}>{k}</TableHeaderCell>)}
@@ -13359,18 +13359,18 @@ export function SemanticModelEditor({ item, id }: { item: FabricItemType; id: st
                       </MessageBarBody>
                     </MessageBar>
                     {irGate && (
-                      <MessageBar intent="warning" style={{ marginTop: 8 }}>
+                      <MessageBar intent="warning" style={{ marginTop: tokens.spacingVerticalS}}>
                         <MessageBarBody><MessageBarTitle>Azure Analysis Services not configured</MessageBarTitle>{irGate}</MessageBarBody>
                       </MessageBar>
                     )}
-                    <div style={{ display: 'flex', flexDirection: 'column', gap: 10, marginTop: 12, maxWidth: 580 }}>
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalM, marginTop: tokens.spacingVerticalM, maxWidth: 580 }}>
                       <Field label="Table" required>
                         <Select value={irTableName} onChange={(_, d) => setIrTableName(d.value)}>
                           <option value="">(select a table)</option>
                           {(detail?.tables || []).map((t) => <option key={t.name} value={t.name}>{t.name}</option>)}
                         </Select>
                       </Field>
-                      <div style={{ display: 'flex', gap: 8, alignItems: 'flex-end' }}>
+                      <div style={{ display: 'flex', gap: tokens.spacingVerticalS, alignItems: 'flex-end' }}>
                         <Field label="Archive data starting (keep)" style={{ flex: 1 }}>
                           <SpinButton min={1} value={irRollingWindowPeriods} onChange={(_, d) => setIrRollingWindowPeriods(Math.max(1, Number(d.value ?? d.displayValue ?? irRollingWindowPeriods)))} />
                         </Field>
@@ -13380,7 +13380,7 @@ export function SemanticModelEditor({ item, id }: { item: FabricItemType; id: st
                           </Select>
                         </Field>
                       </div>
-                      <div style={{ display: 'flex', gap: 8, alignItems: 'flex-end' }}>
+                      <div style={{ display: 'flex', gap: tokens.spacingVerticalS, alignItems: 'flex-end' }}>
                         <Field label="Incrementally refresh data in the last" style={{ flex: 1 }}>
                           <SpinButton min={1} value={irIncrementalPeriods} onChange={(_, d) => setIrIncrementalPeriods(Math.max(1, Number(d.value ?? d.displayValue ?? irIncrementalPeriods)))} />
                         </Field>
@@ -13401,7 +13401,7 @@ export function SemanticModelEditor({ item, id }: { item: FabricItemType; id: st
                       <Field label="Effective date override (ISO, optional — overrides &quot;today&quot; for the rolling window)">
                         <Input value={irEffectiveDate} onChange={(_, d) => setIrEffectiveDate(d.value)} placeholder="2025-06-08" />
                       </Field>
-                      <div style={{ display: 'flex', gap: 8 }}>
+                      <div style={{ display: 'flex', gap: tokens.spacingVerticalS}}>
                         <Button appearance="primary" icon={<Save20Regular />} disabled={irBusy || !workspaceId || !datasetId || !irTableName} onClick={saveIrPolicy}>
                           {irBusy ? 'Applying…' : 'Apply refresh policy'}
                         </Button>
@@ -13414,8 +13414,8 @@ export function SemanticModelEditor({ item, id }: { item: FabricItemType; id: st
 
                     {irPartitions.length > 0 && (
                       <>
-                        <Subtitle2 style={{ marginTop: 18 }}>Partition receipt ({irPartitions.length})</Subtitle2>
-                        <div className={s.tableWrap} style={{ marginTop: 6 }}>
+                        <Subtitle2 style={{ marginTop: tokens.spacingVerticalXL }}>Partition receipt ({irPartitions.length})</Subtitle2>
+                        <div className={s.tableWrap} style={{ marginTop: tokens.spacingVerticalS}}>
                           <Table aria-label="Partitions" size="small">
                             <TableHeader><TableRow>
                               <TableHeaderCell>Partition</TableHeaderCell>
@@ -13429,7 +13429,7 @@ export function SemanticModelEditor({ item, id }: { item: FabricItemType; id: st
                                   <TableCell>
                                     <Badge appearance={p.storageMode === 'DirectQuery' ? 'filled' : 'outline'} color={p.storageMode === 'DirectQuery' ? 'brand' : 'informative'}>{p.storageMode}</Badge>
                                   </TableCell>
-                                  <TableCell className={s.cell}><code style={{ fontSize: 11 }}>{p.queryDefinition?.slice(0, 140) || '—'}</code></TableCell>
+                                  <TableCell className={s.cell}><code style={{ fontSize: tokens.fontSizeBase100}}>{p.queryDefinition?.slice(0, 140) || '—'}</code></TableCell>
                                 </TableRow>
                               ))}
                             </TableBody>
@@ -13438,12 +13438,12 @@ export function SemanticModelEditor({ item, id }: { item: FabricItemType; id: st
                       </>
                     )}
 
-                    <Subtitle2 style={{ marginTop: 22 }}>Enhanced refresh (apply policy)</Subtitle2>
+                    <Subtitle2 style={{ marginTop: tokens.spacingVerticalXXL }}>Enhanced refresh (apply policy)</Subtitle2>
                     <Caption1 style={{ color: tokens.colorNeutralForeground3 }}>
                       POST /refreshes with <code>commitMode</code>, <code>applyRefreshPolicy</code> and <code>effectiveDate</code>.
                       Refreshes the rolling Import partitions per the policy; the historical and live DirectQuery partitions stay intact.
                     </Caption1>
-                    <div style={{ display: 'flex', flexDirection: 'column', gap: 8, marginTop: 8, maxWidth: 580 }}>
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalS, marginTop: tokens.spacingVerticalS, maxWidth: 580 }}>
                       <Switch label="Apply refresh policy (creates / reshuffles partitions)" checked={enhApplyPolicy} onChange={(_, d) => setEnhApplyPolicy(d.checked)} />
                       <Field label="Commit mode">
                         <Select value={enhCommitMode} onChange={(_, d) => setEnhCommitMode(d.value as 'transactional' | 'partialBatch')}>
@@ -13460,7 +13460,7 @@ export function SemanticModelEditor({ item, id }: { item: FabricItemType; id: st
                       {enhMsg && <MessageBar intent={enhMsg.ok ? 'success' : 'error'}><MessageBarBody>{enhMsg.text}</MessageBarBody></MessageBar>}
                     </div>
 
-                    <MessageBar intent="info" style={{ marginTop: 18 }}>
+                    <MessageBar intent="info" style={{ marginTop: tokens.spacingVerticalXL }}>
                       <MessageBarBody>
                         <MessageBarTitle>Scheduled refresh trigger</MessageBarTitle>
                         To run this enhanced refresh on a timer, author a Synapse / ADF ScheduleTrigger with a Web Activity
@@ -13478,11 +13478,11 @@ export function SemanticModelEditor({ item, id }: { item: FabricItemType; id: st
                     <Caption1 style={{ color: tokens.colorNeutralForeground3 }}>
                       Mirrors the Power BI service Scheduled refresh pane. Writes via PATCH /datasets/{'{'}id{'}'}/refreshSchedule.
                     </Caption1>
-                    <div style={{ display: 'flex', flexDirection: 'column', gap: 10, marginTop: 10, maxWidth: 560 }}>
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalM, marginTop: tokens.spacingVerticalM, maxWidth: 560 }}>
                       <Switch label="Keep your data up to date (enable scheduled refresh)" checked={schedEnabled} onChange={(_, d) => setSchedEnabled(d.checked)} />
                       <div>
                         <Caption1>Refresh days</Caption1>
-                        <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', marginTop: 4 }}>
+                        <div style={{ display: 'flex', gap: tokens.spacingVerticalS, flexWrap: 'wrap', marginTop: tokens.spacingVerticalXS}}>
                           {DAYS.map((day) => (
                             <Button key={day} size="small" appearance={schedDays.includes(day) ? 'primary' : 'outline'} onClick={() => toggleSchedDay(day)}>{day.slice(0, 3)}</Button>
                           ))}
@@ -13500,14 +13500,14 @@ export function SemanticModelEditor({ item, id }: { item: FabricItemType; id: st
                           <option value="MailOnFailure">Email the dataset owner on failure</option>
                         </Select>
                       </Field>
-                      <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+                      <div style={{ display: 'flex', gap: tokens.spacingVerticalS, alignItems: 'center' }}>
                         <Button appearance="primary" icon={<Save20Regular />} disabled={schedBusy} onClick={saveSchedule}>{schedBusy ? 'Saving…' : 'Apply'}</Button>
                         <Button appearance="outline" disabled={takeoverBusy} onClick={takeOver} title="Take ownership of the dataset (needed if you are not the owner) before editing the schedule">{takeoverBusy ? 'Taking over…' : 'Take over dataset'}</Button>
                       </div>
                       {schedMsg && <MessageBar intent={schedMsg.ok ? 'success' : 'error'}><MessageBarBody>{schedMsg.text}</MessageBarBody></MessageBar>}
                     </div>
 
-                    <Subtitle2 style={{ marginTop: 20 }}>Row-level &amp; object-level security</Subtitle2>
+                    <Subtitle2 style={{ marginTop: tokens.spacingVerticalXL }}>Row-level &amp; object-level security</Subtitle2>
                     <Caption1 style={{ color: tokens.colorNeutralForeground3 }}>
                       RLS role filters and OLS table/column permissions are authored on the dedicated <strong>Security (RLS/OLS)</strong> tab, which deploys real TMSL roles through the Analysis-Services XMLA endpoint and includes a Test-as-role probe.
                     </Caption1>
@@ -13579,10 +13579,10 @@ export function SemanticModelEditor({ item, id }: { item: FabricItemType; id: st
                   />
                 )}
                 {tab === 'direct-lake' && (
-                  <div style={{ display: 'flex', flexDirection: 'column', gap: 14, maxWidth: 820 }}>
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalL, maxWidth: 820 }}>
                     <div>
                       <Subtitle2>Direct Lake (shim)</Subtitle2>
-                      <Caption1 style={{ color: tokens.colorNeutralForeground3, display: 'block', marginTop: 2 }}>
+                      <Caption1 style={{ color: tokens.colorNeutralForeground3, display: 'block', marginTop: tokens.spacingVerticalXXS }}>
                         Azure-native parity for Fabric Direct Lake. The shim keeps a warm AAS (Power BI Premium XMLA)
                         cache fresh from an ADLS Gen2 Delta source — triggered by <code>_delta_log</code> Event Grid
                         notifications — so the model reflects new Delta rows within the freshness SLA.
@@ -13611,7 +13611,7 @@ export function SemanticModelEditor({ item, id }: { item: FabricItemType; id: st
                     ) : (
                       <>
                         {dlEventGrid && (
-                          <div style={{ display: 'flex', gap: 12, alignItems: 'center', flexWrap: 'wrap' }}>
+                          <div style={{ display: 'flex', gap: tokens.spacingVerticalM, alignItems: 'center', flexWrap: 'wrap' }}>
                             <Badge appearance="filled" color={dlEventGrid.subscriptionState === 'Succeeded' ? 'success' : 'warning'}>
                               Event Grid: {dlEventGrid.subscriptionState}
                             </Badge>
@@ -13631,7 +13631,7 @@ export function SemanticModelEditor({ item, id }: { item: FabricItemType; id: st
 
                         <div>
                           <Caption1 style={{ fontWeight: 600 }}>Per-table refresh policy</Caption1>
-                          <Caption1 style={{ color: tokens.colorNeutralForeground3, display: 'block', marginTop: 2, marginBottom: 6 }}>
+                          <Caption1 style={{ color: tokens.colorNeutralForeground3, display: 'block', marginTop: tokens.spacingVerticalXXS, marginBottom: tokens.spacingVerticalS}}>
                             One row per table in the model. Partition is the incremental Direct-Lake sweet spot — set the
                             partition column the Delta directory layout encodes (e.g. <code>event_date</code>).
                           </Caption1>
@@ -13670,7 +13670,7 @@ export function SemanticModelEditor({ item, id }: { item: FabricItemType; id: st
                           </div>
                         </div>
 
-                        <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+                        <div style={{ display: 'flex', gap: tokens.spacingVerticalS, alignItems: 'center' }}>
                           <Button appearance="primary" icon={<Save20Regular />} disabled={dlBusy || dlLoading} onClick={saveDirectLake}>
                             {dlBusy ? 'Saving…' : 'Configure shim'}
                           </Button>
@@ -13682,7 +13682,7 @@ export function SemanticModelEditor({ item, id }: { item: FabricItemType; id: st
 
                         <div>
                           <Caption1 style={{ fontWeight: 600 }}>Shim run log (last {dlRuns.length})</Caption1>
-                          <div className={s.tableWrap} style={{ marginTop: 6 }}>
+                          <div className={s.tableWrap} style={{ marginTop: tokens.spacingVerticalS}}>
                             <Table aria-label="Shim refresh runs" size="small">
                               <TableHeader><TableRow>
                                 <TableHeaderCell>Request</TableHeaderCell>
@@ -13720,7 +13720,7 @@ export function SemanticModelEditor({ item, id }: { item: FabricItemType; id: st
                   <DqSourcePanel datasetId={datasetId} itemId={id} workspaceId={workspaceId} />
                 )}
                 {tab === 'governance' && datasetId && (
-                  <div style={{ display: 'flex', flexDirection: 'column', gap: 20 }}>
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalXL }}>
                     {/* F17 — read-only sensitivity label inherited from the model's
                         upstream lineage source (warehouse / lakehouse it's built on). */}
                     <UpstreamSensitivityField itemId={id} />
@@ -13741,7 +13741,7 @@ export function SemanticModelEditor({ item, id }: { item: FabricItemType; id: st
                 )}
                 {tab === 'copilot' && <SemanticModelCopilotPane id={id} />}
                 {tab === 'calcGroups' && (
-                  <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalS}}>
                     <MessageBar intent="info">
                       <MessageBarBody>
                         <MessageBarTitle>Calculation groups</MessageBarTitle>
@@ -13764,7 +13764,7 @@ export function SemanticModelEditor({ item, id }: { item: FabricItemType; id: st
                             onClick={() => setCalcGroups((prev) => prev.filter((_, i) => i !== gi))} />
                         </div>
                         {cg.items.map((ci, ii) => (
-                          <div key={ii} className={s.card} style={{ marginTop: 8 }}>
+                          <div key={ii} className={s.card} style={{ marginTop: tokens.spacingVerticalS}}>
                             <div className={s.toolbar}>
                               <Field label="Item name" style={{ minWidth: 180 }}>
                                 <Input value={ci.name} placeholder="YTD"
@@ -13780,16 +13780,16 @@ export function SemanticModelEditor({ item, id }: { item: FabricItemType; id: st
                             <Caption1>DAX expression — use <code>SELECTEDMEASURE()</code></Caption1>
                             <MonacoTextarea value={ci.expression} language="sql" height={80} minHeight={60} ariaLabel="Calculation item DAX"
                               onChange={(v) => setCalcGroups((prev) => prev.map((g, gi2) => gi2 !== gi ? g : { ...g, items: g.items.map((it, j) => j === ii ? { ...it, expression: v } : it) }))} />
-                            <Caption1 style={{ marginTop: 4 }}>Dynamic format string (optional DAX — e.g. <code>SELECTEDMEASUREFORMATSTRING()</code>)</Caption1>
+                            <Caption1 style={{ marginTop: tokens.spacingVerticalXS}}>Dynamic format string (optional DAX — e.g. <code>SELECTEDMEASUREFORMATSTRING()</code>)</Caption1>
                             <MonacoTextarea value={ci.formatStringDefinition || ''} language="sql" height={50} minHeight={40} ariaLabel="Format string DAX"
                               onChange={(v) => setCalcGroups((prev) => prev.map((g, gi2) => gi2 !== gi ? g : { ...g, items: g.items.map((it, j) => j === ii ? { ...it, formatStringDefinition: v || undefined } : it) }))} />
                           </div>
                         ))}
-                        <Button size="small" icon={<Add20Regular />} style={{ marginTop: 8, alignSelf: 'flex-start' }}
+                        <Button size="small" icon={<Add20Regular />} style={{ marginTop: tokens.spacingVerticalS, alignSelf: 'flex-start' }}
                           onClick={() => setCalcGroups((prev) => prev.map((g, i) => i !== gi ? g : { ...g, items: [...g.items, { name: 'New item', expression: 'SELECTEDMEASURE()' }] }))}>Add item</Button>
                       </div>
                     ))}
-                    <div className={s.toolbar} style={{ marginTop: 12 }}>
+                    <div className={s.toolbar} style={{ marginTop: tokens.spacingVerticalM}}>
                       <Button icon={<Add20Regular />}
                         onClick={() => setCalcGroups((prev) => [...prev, { name: 'New group', precedence: 10, items: [{ name: 'Current', expression: 'SELECTEDMEASURE()' }] }])}>Add group</Button>
                       <Button appearance="primary" icon={<Save20Regular />} disabled={cgBusy || calcGroups.length === 0 || !datasetId}
@@ -13799,7 +13799,7 @@ export function SemanticModelEditor({ item, id }: { item: FabricItemType; id: st
                   </div>
                 )}
                 {tab === 'fieldParams' && (
-                  <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalS}}>
                     <MessageBar intent="info">
                       <MessageBarBody>
                         <MessageBarTitle>Field parameters</MessageBarTitle>
@@ -13818,7 +13818,7 @@ export function SemanticModelEditor({ item, id }: { item: FabricItemType; id: st
                             onClick={() => setFieldParams((prev) => prev.filter((_, i) => i !== fi))} />
                         </div>
                         {fp.fields.map((f, fj) => (
-                          <div key={fj} style={{ display: 'flex', gap: 8, alignItems: 'flex-end', marginTop: 6, flexWrap: 'wrap' }}>
+                          <div key={fj} style={{ display: 'flex', gap: tokens.spacingVerticalS, alignItems: 'flex-end', marginTop: tokens.spacingVerticalS, flexWrap: 'wrap' }}>
                             <Field label="Display name" style={{ minWidth: 160 }}>
                               <Input value={f.displayName} placeholder="Total Sales"
                                 onChange={(_, d) => setFieldParams((prev) => prev.map((p, pi) => pi !== fi ? p : { ...p, fields: p.fields.map((ff, j) => j === fj ? { ...ff, displayName: d.value } : ff) }))} />
@@ -13835,15 +13835,15 @@ export function SemanticModelEditor({ item, id }: { item: FabricItemType; id: st
                               onClick={() => setFieldParams((prev) => prev.map((p, pi) => pi !== fi ? p : { ...p, fields: p.fields.filter((_, j) => j !== fj) }))} />
                           </div>
                         ))}
-                        <Caption1 style={{ marginTop: 8 }}>Generated DAX</Caption1>
-                        <pre className={s.assistResult} style={{ marginTop: 4, padding: '6px 8px', border: `1px solid ${tokens.colorNeutralStroke2}`, borderRadius: 4, whiteSpace: 'pre-wrap' }}>
+                        <Caption1 style={{ marginTop: tokens.spacingVerticalS}}>Generated DAX</Caption1>
+                        <pre className={s.assistResult} style={{ marginTop: tokens.spacingVerticalXS, padding: `${tokens.spacingVerticalS} ${tokens.spacingHorizontalS}`, border: `1px solid ${tokens.colorNeutralStroke2}`, borderRadius: tokens.borderRadiusMedium, whiteSpace: 'pre-wrap' }}>
 {`${fp.name} = {\n${fp.fields.map((f, i) => `\t("${f.displayName}", NAMEOF(${f.fieldRef}), ${typeof f.order === 'number' ? f.order : i})`).join(',\n')}\n}`}
                         </pre>
-                        <Button size="small" icon={<Add20Regular />} style={{ marginTop: 8, alignSelf: 'flex-start' }}
+                        <Button size="small" icon={<Add20Regular />} style={{ marginTop: tokens.spacingVerticalS, alignSelf: 'flex-start' }}
                           onClick={() => setFieldParams((prev) => prev.map((p, i) => i !== fi ? p : { ...p, fields: [...p.fields, { displayName: 'New field', fieldRef: "'Table'[Column]", order: p.fields.length }] }))}>Add field</Button>
                       </div>
                     ))}
-                    <div className={s.toolbar} style={{ marginTop: 12 }}>
+                    <div className={s.toolbar} style={{ marginTop: tokens.spacingVerticalM}}>
                       <Button icon={<Add20Regular />}
                         onClick={() => setFieldParams((prev) => [...prev, { name: 'New Parameter', fields: [{ displayName: 'Field 1', fieldRef: "'Table'[Column]", order: 0 }] }])}>Add parameter</Button>
                       <Button appearance="primary" icon={<Save20Regular />} disabled={fpBusy || fieldParams.length === 0 || !datasetId}
@@ -13854,7 +13854,7 @@ export function SemanticModelEditor({ item, id }: { item: FabricItemType; id: st
                 )}
 
                 {tab === 'direct-lake-query' && (
-                  <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalM}}>
                     <MessageBar intent="info">
                       <MessageBarBody>
                         <MessageBarTitle>Direct Lake query with transparent Serverless fallback</MessageBarTitle>
@@ -13867,8 +13867,8 @@ export function SemanticModelEditor({ item, id }: { item: FabricItemType; id: st
                       </MessageBarBody>
                     </MessageBar>
 
-                    <div style={{ display: 'flex', gap: 8, alignItems: 'flex-end', flexWrap: 'wrap' }}>
-                      <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+                    <div style={{ display: 'flex', gap: tokens.spacingVerticalS, alignItems: 'flex-end', flexWrap: 'wrap' }}>
+                      <div style={{ display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalXS}}>
                         <Label htmlFor="dl-table-picker">Table</Label>
                         {(detail?.tables && detail.tables.length > 0) ? (
                           <Dropdown
@@ -13893,7 +13893,7 @@ export function SemanticModelEditor({ item, id }: { item: FabricItemType; id: st
                           />
                         )}
                       </div>
-                      <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+                      <div style={{ display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalXS}}>
                         <Label htmlFor="dl-max-rows">Max rows</Label>
                         <Input
                           id="dl-max-rows"
@@ -13916,8 +13916,8 @@ export function SemanticModelEditor({ item, id }: { item: FabricItemType; id: st
                     {dlqLoading && <Spinner size="small" label="Querying…" labelPosition="after" />}
 
                     {dlResult && (
-                      <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
-                        <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
+                      <div style={{ display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalS}}>
+                        <div style={{ display: 'flex', gap: tokens.spacingVerticalS, alignItems: 'center', flexWrap: 'wrap' }}>
                           {dlResult.servingFrom === 'warm-cache' && (
                             <Badge appearance="filled" color="success">Serving from: warm cache</Badge>
                           )}
@@ -13956,12 +13956,12 @@ export function SemanticModelEditor({ item, id }: { item: FabricItemType; id: st
                         )}
 
                         {dlResult.ok && dlResult.columns && dlResult.rows && (
-                          <div style={{ overflowX: 'auto', maxHeight: 360, border: `1px solid ${tokens.colorNeutralStroke2}`, borderRadius: 4 }}>
-                            <table style={{ borderCollapse: 'collapse', width: '100%', fontSize: 12 }}>
+                          <div style={{ overflowX: 'auto', maxHeight: 360, border: `1px solid ${tokens.colorNeutralStroke2}`, borderRadius: tokens.borderRadiusMedium }}>
+                            <table style={{ borderCollapse: 'collapse', width: '100%', fontSize: tokens.fontSizeBase200}}>
                               <thead>
                                 <tr>
                                   {dlResult.columns.map((c) => (
-                                    <th key={c} style={{ padding: '4px 8px', background: tokens.colorNeutralBackground2, textAlign: 'left', fontWeight: 600, position: 'sticky', top: 0 }}>{c}</th>
+                                    <th key={c} style={{ padding: `${tokens.spacingVerticalXS} ${tokens.spacingHorizontalS}`, background: tokens.colorNeutralBackground2, textAlign: 'left', fontWeight: 600, position: 'sticky', top: 0 }}>{c}</th>
                                   ))}
                                 </tr>
                               </thead>
@@ -13969,7 +13969,7 @@ export function SemanticModelEditor({ item, id }: { item: FabricItemType; id: st
                                 {dlResult.rows.slice(0, 200).map((row, ri) => (
                                   <tr key={ri}>
                                     {(row as unknown[]).map((cell, ci) => (
-                                      <td key={ci} style={{ padding: '3px 8px', borderBottom: `1px solid ${tokens.colorNeutralStroke3}` }}>
+                                      <td key={ci} style={{ padding: `${tokens.spacingVerticalXXS} ${tokens.spacingHorizontalS}`, borderBottom: `1px solid ${tokens.colorNeutralStroke3}` }}>
                                         {cell === null || cell === undefined ? <em style={{ opacity: 0.5 }}>null</em> : String(cell)}
                                       </td>
                                     ))}
@@ -13998,23 +13998,23 @@ export function SemanticModelEditor({ item, id }: { item: FabricItemType; id: st
             <Field label="Column name" required>
               <Input value={calcColName} onChange={(_, d) => setCalcColName(d.value)} placeholder="Margin" />
             </Field>
-            <Field label="Data type" style={{ marginTop: 8 }}>
+            <Field label="Data type" style={{ marginTop: tokens.spacingVerticalS}}>
               <Select value={calcColType} onChange={(_, d) => setCalcColType(d.value)}>
                 {SM_DATA_TYPES.map((t) => <option key={t} value={t}>{t}</option>)}
               </Select>
             </Field>
-            <Field label="Data category" style={{ marginTop: 8 }}>
+            <Field label="Data category" style={{ marginTop: tokens.spacingVerticalS}}>
               <Select value={calcColCat} onChange={(_, d) => setCalcColCat(d.value)}>
                 <option value="">— none —</option>
                 {SM_DATA_CATEGORIES.map((c) => <option key={c} value={c}>{c}</option>)}
               </Select>
             </Field>
-            <Field label="Display folder" style={{ marginTop: 8 }}>
+            <Field label="Display folder" style={{ marginTop: tokens.spacingVerticalS}}>
               <Input value={calcColFolder} onChange={(_, d) => setCalcColFolder(d.value)} placeholder="e.g. Finance" />
             </Field>
-            <Caption1 style={{ marginTop: 8 }}>DAX expression</Caption1>
+            <Caption1 style={{ marginTop: tokens.spacingVerticalS}}>DAX expression</Caption1>
             <MonacoTextarea value={calcColExpr} onChange={setCalcColExpr} language="sql" height={120} minHeight={80} ariaLabel="Calculated column DAX" />
-            {calcMsg && <MessageBar intent={calcMsg.ok ? 'success' : 'error'} style={{ marginTop: 8 }}><MessageBarBody>{calcMsg.text}</MessageBarBody></MessageBar>}
+            {calcMsg && <MessageBar intent={calcMsg.ok ? 'success' : 'error'} style={{ marginTop: tokens.spacingVerticalS}}><MessageBarBody>{calcMsg.text}</MessageBarBody></MessageBar>}
           </DialogContent>
           <DialogActions>
             <Button appearance="primary" disabled={calcBusy || !calcColName.trim() || !calcColExpr.trim()} onClick={addCalcColumn}>
@@ -14034,9 +14034,9 @@ export function SemanticModelEditor({ item, id }: { item: FabricItemType; id: st
             <Field label="Table name" required>
               <Input value={calcTableName} onChange={(_, d) => setCalcTableName(d.value)} placeholder="DimDate" />
             </Field>
-            <Caption1 style={{ marginTop: 8 }}>DAX table expression</Caption1>
+            <Caption1 style={{ marginTop: tokens.spacingVerticalS}}>DAX table expression</Caption1>
             <MonacoTextarea value={calcTableExpr} onChange={setCalcTableExpr} language="sql" height={120} minHeight={80} ariaLabel="Calculated table DAX" />
-            {calcMsg && <MessageBar intent={calcMsg.ok ? 'success' : 'error'} style={{ marginTop: 8 }}><MessageBarBody>{calcMsg.text}</MessageBarBody></MessageBar>}
+            {calcMsg && <MessageBar intent={calcMsg.ok ? 'success' : 'error'} style={{ marginTop: tokens.spacingVerticalS}}><MessageBarBody>{calcMsg.text}</MessageBarBody></MessageBar>}
           </DialogContent>
           <DialogActions>
             <Button appearance="primary" disabled={calcBusy || !calcTableName.trim() || !calcTableExpr.trim()} onClick={addCalcTable}>
@@ -14234,13 +14234,13 @@ function ReportCopilotPanel({ reportId, reportName }: { reportId: string; report
   const totalVisuals = pages.reduce((n, p) => n + (p.visuals?.length || 0), 0);
 
   return (
-    <div className={s.card} style={{ marginTop: 8 }}>
-      <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 8 }}>
+    <div className={s.card} style={{ marginTop: tokens.spacingVerticalS}}>
+      <div style={{ display: 'flex', alignItems: 'center', gap: tokens.spacingVerticalS, marginBottom: tokens.spacingVerticalS}}>
         <Sparkle16Regular />
         <Subtitle2>Report Copilot</Subtitle2>
         <Badge appearance="tint" color="brand">Loom-native · Synapse</Badge>
       </div>
-      <Caption1 style={{ display: 'block', marginBottom: 8 }}>
+      <Caption1 style={{ display: 'block', marginBottom: tokens.spacingVerticalS}}>
         Generate a narrative summary of {reportName ? `“${reportName}”` : 'this report'} grounded on real aggregates from the bound
         CSA Loom semantic model (Synapse Dedicated SQL pool), and get a suggested visual you can add to the report. No Power BI required.
       </Caption1>
@@ -14251,14 +14251,14 @@ function ReportCopilotPanel({ reportId, reportName }: { reportId: string; report
         rows={2}
         disabled={running}
       />
-      <div style={{ display: 'flex', gap: 8, alignItems: 'center', marginTop: 8 }}>
+      <div style={{ display: 'flex', gap: tokens.spacingVerticalS, alignItems: 'center', marginTop: tokens.spacingVerticalS}}>
         <Button appearance="primary" icon={running ? <Spinner size="tiny" /> : <Sparkle16Regular />} disabled={running || !prompt.trim()} onClick={run}>
           {running ? 'Working…' : 'Generate narrative & visual'}
         </Button>
       </div>
 
       {aoaiGate && (
-        <MessageBar intent="warning" style={{ marginTop: 8 }}>
+        <MessageBar intent="warning" style={{ marginTop: tokens.spacingVerticalS}}>
           <MessageBarBody>
             <MessageBarTitle>Copilot model not deployed</MessageBarTitle>
             {aoaiGate} Deploy a gpt-4o / gpt-4.1 class model in Azure AI Foundry, then set it under Admin → Tenant settings → Copilot &amp; Agents.
@@ -14266,26 +14266,26 @@ function ReportCopilotPanel({ reportId, reportName }: { reportId: string; report
         </MessageBar>
       )}
       {topError && (
-        <MessageBar intent="error" style={{ marginTop: 8 }}><MessageBarBody>{topError}</MessageBarBody></MessageBar>
+        <MessageBar intent="error" style={{ marginTop: tokens.spacingVerticalS}}><MessageBarBody>{topError}</MessageBarBody></MessageBar>
       )}
 
       {narrative && (
-        <div className={s.card} style={{ marginTop: 8, backgroundColor: tokens.colorNeutralBackground2 }}>
-          <Subtitle2 style={{ display: 'block', marginBottom: 4 }}>Narrative summary</Subtitle2>
+        <div className={s.card} style={{ marginTop: tokens.spacingVerticalS, backgroundColor: tokens.colorNeutralBackground2 }}>
+          <Subtitle2 style={{ display: 'block', marginBottom: tokens.spacingVerticalXS}}>Narrative summary</Subtitle2>
           <Body1 style={{ whiteSpace: 'pre-wrap' }}>{narrative}</Body1>
         </div>
       )}
 
       {pending && (
-        <MessageBar intent="info" style={{ marginTop: 8 }}>
+        <MessageBar intent="info" style={{ marginTop: tokens.spacingVerticalS}}>
           <MessageBarBody>
             <MessageBarTitle>Suggested visual</MessageBarTitle>
-            <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap', marginTop: 4 }}>
+            <div style={{ display: 'flex', gap: tokens.spacingVerticalS, alignItems: 'center', flexWrap: 'wrap', marginTop: tokens.spacingVerticalXS}}>
               <Badge appearance="filled" color="brand">{pending.visualType}</Badge>
               <span><strong>{pending.title}</strong></span>
               <Caption1>field: {pending.field}</Caption1>
             </div>
-            <Caption1 style={{ display: 'block', marginTop: 4, fontFamily: 'var(--loom-font-mono, ui-monospace, monospace)' }}>{pending.sql}</Caption1>
+            <Caption1 style={{ display: 'block', marginTop: tokens.spacingVerticalXS, fontFamily: 'var(--loom-font-mono, ui-monospace, monospace)' }}>{pending.sql}</Caption1>
           </MessageBarBody>
           <MessageBarActions>
             <Button appearance="primary" icon={applyBusy ? <Spinner size="tiny" /> : <Add20Regular />} disabled={applyBusy} onClick={addVisual}>
@@ -14296,18 +14296,18 @@ function ReportCopilotPanel({ reportId, reportName }: { reportId: string; report
         </MessageBar>
       )}
       {applyMsg && (
-        <MessageBar intent={applyMsg.ok ? 'success' : 'error'} style={{ marginTop: 8 }}><MessageBarBody>{applyMsg.text}</MessageBarBody></MessageBar>
+        <MessageBar intent={applyMsg.ok ? 'success' : 'error'} style={{ marginTop: tokens.spacingVerticalS}}><MessageBarBody>{applyMsg.text}</MessageBarBody></MessageBar>
       )}
 
-      <div className={s.card} style={{ marginTop: 8 }}>
-        <Subtitle2 style={{ display: 'block', marginBottom: 6 }}>Report content (Loom-native) · {totalVisuals} visual{totalVisuals === 1 ? '' : 's'}</Subtitle2>
+      <div className={s.card} style={{ marginTop: tokens.spacingVerticalS}}>
+        <Subtitle2 style={{ display: 'block', marginBottom: tokens.spacingVerticalS}}>Report content (Loom-native) · {totalVisuals} visual{totalVisuals === 1 ? '' : 's'}</Subtitle2>
         {pages.length === 0 && <Caption1>No Loom-native visuals yet. Generate one above to add the first.</Caption1>}
         {pages.map((p, i) => (
-          <div key={p.name || i} style={{ marginBottom: 6 }}>
+          <div key={p.name || i} style={{ marginBottom: tokens.spacingVerticalS}}>
             <Caption1><strong>{p.displayName || p.name}</strong></Caption1>
             {(p.visuals || []).length === 0 && <div><Caption1 style={{ color: tokens.colorNeutralForeground3 }}>— no visuals</Caption1></div>}
             {(p.visuals || []).map((v, j) => (
-              <div key={j} style={{ display: 'flex', gap: 8, alignItems: 'center', padding: '2px 0' }}>
+              <div key={j} style={{ display: 'flex', gap: tokens.spacingVerticalS, alignItems: 'center', padding: `${tokens.spacingVerticalXXS} 0` }}>
                 <Badge appearance="outline" color="brand">{v.type}</Badge>
                 <span>{v.title}</span>
                 {v.field && <Caption1 style={{ color: tokens.colorNeutralForeground3 }}>· {v.field}</Caption1>}
@@ -14730,7 +14730,7 @@ function ReportLikeEditor({
     <ItemEditorChrome item={item} id={id} ribbon={ribbon}
       leftPanel={
         <div className={s.treePad}>
-          <Subtitle2 style={{ marginBottom: 8 }}>{kind === 'paginated' ? 'Paginated reports' : 'Reports'}</Subtitle2>
+          <Subtitle2 style={{ marginBottom: tokens.spacingVerticalS}}>{kind === 'paginated' ? 'Paginated reports' : 'Reports'}</Subtitle2>
           {!workspaceId && <Caption1>Select a workspace.</Caption1>}
           {reports && reports.length === 0 && <Caption1>No {kind === 'paginated' ? 'paginated ' : ''}reports in this workspace.</Caption1>}
           <Tree aria-label="Reports">
@@ -14776,7 +14776,7 @@ function ReportLikeEditor({
           {exportErr && <MessageBar intent="error"><MessageBarBody><MessageBarTitle>Export failed</MessageBarTitle>{exportErr}</MessageBarBody></MessageBar>}
           {kind === 'report' && copilotOpen && <ReportCopilotPanel reportId={id} reportName={report?.name} />}
           {!powerBiConfigured && (
-            <MessageBar intent="info" style={{ marginBottom: 12 }}>
+            <MessageBar intent="info" style={{ marginBottom: tokens.spacingVerticalM}}>
               <MessageBarBody>
                 <MessageBarTitle>Power BI embed is opt-in</MessageBarTitle>
                 The Console identity isn&rsquo;t registered in Power BI / not in any workspace. This editor shows report metadata. To enable embedding, dataset refresh, export, and the visual viewer, register the Console UAMI in your Power BI tenant and add it to a workspace. <a href="https://learn.microsoft.com/power-bi/admin/service-principal-api-considerations" target="_blank" rel="noreferrer">Power BI service principal setup</a>.
@@ -14784,13 +14784,13 @@ function ReportLikeEditor({
             </MessageBar>
           )}
           {powerBiConfigured && kind !== 'paginated' && (
-            <TabList selectedValue={reportView} onTabSelect={(_, d) => setReportView(d.value as 'design' | 'view')} style={{ marginBottom: 8 }}>
+            <TabList selectedValue={reportView} onTabSelect={(_, d) => setReportView(d.value as 'design' | 'view')} style={{ marginBottom: tokens.spacingVerticalS}}>
               <Tab value="design" icon={<DataBarVertical20Regular />}>Visual designer</Tab>
               <Tab value="view" icon={<Eye20Regular />}>Live embed</Tab>
             </TabList>
           )}
           {powerBiConfigured && kind !== 'paginated' && reportView === 'design' && report && report.datasetId && (
-            <div className={s.card} style={{ marginBottom: 8 }}>
+            <div className={s.card} style={{ marginBottom: tokens.spacingVerticalS}}>
               <ReportVisualDesigner workspaceId={workspaceId} datasetId={report.datasetId} reportId={reportId} />
             </div>
           )}
@@ -14821,15 +14821,15 @@ function ReportLikeEditor({
                 {report.webUrl && <Caption1><a href={report.webUrl} target="_blank" rel="noreferrer">Open in Power BI</a></Caption1>}
               </div>
               {kind !== 'paginated' && reportId && (
-                <div className={s.card} style={{ marginTop: 8 }}>
+                <div className={s.card} style={{ marginTop: tokens.spacingVerticalS}}>
                   <EndorsementControl workspaceId={workspaceId} itemId={reportId} itemType="reports" />
                 </div>
               )}
-              <div className={s.card} style={{ marginTop: 8 }}>
+              <div className={s.card} style={{ marginTop: tokens.spacingVerticalS}}>
                 <ManageAccessPanel workspaceId={workspaceId} />
               </div>
               {kind !== 'paginated' && reportId && (
-                <div className={s.card} style={{ marginTop: 8 }}>
+                <div className={s.card} style={{ marginTop: tokens.spacingVerticalS}}>
                   <ReportSubscriptionsPanel
                     reportId={reportId}
                     workspaceId={workspaceId}
@@ -14840,9 +14840,9 @@ function ReportLikeEditor({
               )}
               {!powerBiConfigured ? (
                 <div className={s.card}>
-                  <Subtitle2 style={{ marginBottom: 12 }}>Report metadata (Loom-native view)</Subtitle2>
-                  <Caption1 style={{ marginBottom: 8, display: 'block' }}>To embed the live report and enable refresh/export, configure Power BI workspace access above.</Caption1>
-                  <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+                  <Subtitle2 style={{ marginBottom: tokens.spacingVerticalM}}>Report metadata (Loom-native view)</Subtitle2>
+                  <Caption1 style={{ marginBottom: tokens.spacingVerticalS, display: 'block' }}>To embed the live report and enable refresh/export, configure Power BI workspace access above.</Caption1>
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalS}}>
                     <div><strong>Name:</strong> {report?.name || '—'}</div>
                     <div><strong>Type:</strong> {report?.reportType || (kind === 'paginated' ? 'PaginatedReport' : 'PowerBIReport')}</div>
                     <div><strong>Dataset ID:</strong> {report?.datasetId || '—'}</div>
@@ -14852,8 +14852,8 @@ function ReportLikeEditor({
               ) : kind === 'paginated' ? (
                 embed ? (
                   <div style={{ flex: '1 1 auto', minWidth: 0 }}>
-                    {viewerErr && <MessageBar intent="error" style={{ marginBottom: 8 }}><MessageBarBody>{viewerErr}</MessageBarBody></MessageBar>}
-                    <MessageBar intent="info" style={{ marginBottom: 8 }}>
+                    {viewerErr && <MessageBar intent="error" style={{ marginBottom: tokens.spacingVerticalS}}><MessageBarBody>{viewerErr}</MessageBarBody></MessageBar>}
+                    <MessageBar intent="info" style={{ marginBottom: tokens.spacingVerticalS}}>
                       <MessageBarBody>
                         <MessageBarTitle>Paginated report — in-place embed</MessageBarTitle>
                         Rendered live via the Power BI paginated viewer (IPaginatedReportLoadConfiguration).
@@ -14895,10 +14895,10 @@ function ReportLikeEditor({
                   </MessageBarBody>
                 </MessageBar>
               ) : embed ? (
-                <div style={{ display: 'flex', gap: 12, alignItems: 'flex-start' }}>
-                  <div style={{ width: 220, flex: '0 0 auto', display: 'flex', flexDirection: 'column', gap: 12 }}>
+                <div style={{ display: 'flex', gap: tokens.spacingVerticalM, alignItems: 'flex-start' }}>
+                  <div style={{ width: 220, flex: '0 0 auto', display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalM}}>
                     <div className={s.card}>
-                      <Subtitle2 style={{ marginBottom: 6 }}>Pages ({pages.length})</Subtitle2>
+                      <Subtitle2 style={{ marginBottom: tokens.spacingVerticalS}}>Pages ({pages.length})</Subtitle2>
                       {pages.length === 0 && <Caption1>No pages reported.</Caption1>}
                       <Tree aria-label="Report pages">
                         {pages.map((p) => (
@@ -14909,23 +14909,23 @@ function ReportLikeEditor({
                       </Tree>
                     </div>
                     <div className={s.card}>
-                      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 6 }}>
+                      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: tokens.spacingVerticalS}}>
                         <Subtitle2>Bookmarks ({bookmarks.length})</Subtitle2>
                         <Button size="small" appearance="subtle" icon={<ArrowSync20Regular />} onClick={reloadBookmarks} title="reload report bookmarks" aria-label="Reload report bookmarks" />
                       </div>
                       {bookmarks.length === 0 && <Caption1>No bookmarks. Use Capture bookmark.</Caption1>}
-                      <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+                      <div style={{ display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalXS}}>
                         {bookmarks.map((b) => (
                           <Button key={b.name} size="small" appearance="subtle" onClick={() => applyBookmark(b.name)} style={{ justifyContent: 'flex-start' }}>{b.displayName || b.name}</Button>
                         ))}
                       </div>
-                      <div style={{ display: 'flex', gap: 6, marginTop: 6 }}>
+                      <div style={{ display: 'flex', gap: tokens.spacingVerticalS, marginTop: tokens.spacingVerticalS}}>
                         <Button size="small" appearance="outline" icon={<Add20Regular />} onClick={captureBookmark}>Capture</Button>
                         <Button size="small" appearance={slideshow ? 'primary' : 'outline'} icon={<Play20Regular />} onClick={toggleSlideshow}>{slideshow ? 'Stop' : 'Play'}</Button>
                       </div>
                     </div>
                     <div className={s.card}>
-                      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 6 }}>
+                      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: tokens.spacingVerticalS}}>
                         <Subtitle2>Selection</Subtitle2>
                         <Button size="small" appearance="outline" onClick={() => setShowThemeDialog(true)} title="apply a report theme (report.applyTheme)">Theme…</Button>
                       </div>
@@ -14938,7 +14938,7 @@ function ReportLikeEditor({
                           <Caption1 style={{ display: 'block', color: tokens.colorNeutralForeground3 }}>
                             {lastSelection.pointCount} point(s){lastSelection.filterCount > 0 ? ` · ${lastSelection.filterCount} filter(s)` : ''}
                           </Caption1>
-                          <Button size="small" appearance="subtle" onClick={() => setLastSelection(null)} style={{ marginTop: 4 }}>Clear</Button>
+                          <Button size="small" appearance="subtle" onClick={() => setLastSelection(null)} style={{ marginTop: tokens.spacingVerticalXS}}>Clear</Button>
                         </>
                       ) : (
                         <Caption1 style={{ color: tokens.colorNeutralForeground3 }}>Click a data point to cross-highlight; use a hierarchy axis to drill down/up.</Caption1>
@@ -14946,9 +14946,9 @@ function ReportLikeEditor({
                     </div>
                   </div>
                   <div style={{ flex: '1 1 auto', minWidth: 0 }}>
-                    {viewerErr && <MessageBar intent="error" style={{ marginBottom: 8 }}><MessageBarBody>{viewerErr}</MessageBarBody></MessageBar>}
+                    {viewerErr && <MessageBar intent="error" style={{ marginBottom: tokens.spacingVerticalS}}><MessageBarBody>{viewerErr}</MessageBarBody></MessageBar>}
                     {drillContext && drillContext.length > 0 && (
-                      <MessageBar intent="info" style={{ marginBottom: 8 }}>
+                      <MessageBar intent="info" style={{ marginBottom: tokens.spacingVerticalS}}>
                         <MessageBarBody>
                           <MessageBarTitle>Drill-through context · {drillContext.length} filter{drillContext.length > 1 ? 's' : ''} carried</MessageBarTitle>
                           {drillContext.slice(0, 6).map((f: any, i: number) => (
@@ -14985,7 +14985,7 @@ function ReportLikeEditor({
               <DialogBody>
                 <DialogTitle>Apply report theme</DialogTitle>
                 <DialogContent>
-                  <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalM}}>
                     <Caption1>
                       Pick a built-in Loom theme or paste a Power BI theme JSON. Applied live to the embedded
                       report via <code>report.applyTheme</code> — the same engine the Power BI service uses.
@@ -15010,7 +15010,7 @@ function ReportLikeEditor({
                         onChange={(_, d) => setThemeJson(d.value)}
                         placeholder={'{\n  "name": "My theme",\n  "dataColors": ["#0F6CBD", "#13A10E"]\n}'}
                         rows={12}
-                        style={{ fontFamily: 'Consolas, monospace', fontSize: 12 }}
+                        style={{ fontFamily: 'Consolas, monospace', fontSize: tokens.fontSizeBase200}}
                       />
                     </Field>
                     {themeErr && <MessageBar intent="error"><MessageBarBody><MessageBarTitle>Theme failed to apply</MessageBarTitle>{themeErr}</MessageBarBody></MessageBar>}
@@ -15078,7 +15078,7 @@ function LoomVisual({ visual, state }: { visual: LoomVisualDef; state?: VisualSt
     <div>
       <Caption1><strong>{visual.title || '(untitled)'}</strong></Caption1>
       {visual.type !== 'table' && visual.type !== 'card' && (
-        <MessageBar intent="info" style={{ margin: '4px 0' }}>
+        <MessageBar intent="info" style={{ margin: `${tokens.spacingVerticalXS} 0` }}>
           <MessageBarBody>Chart type &ldquo;{visual.type}&rdquo; renders its data as a table; a charting library lands in a follow-up.</MessageBarBody>
         </MessageBar>
       )}
@@ -15172,7 +15172,7 @@ function LoomNativeReportEditor({ item, id }: { item: FabricItemType; id: string
     <ItemEditorChrome item={item} id={id} ribbon={ribbon}
       leftPanel={
         <div className={s.treePad}>
-          <Subtitle2 style={{ marginBottom: 8 }}>Pages ({pages.length})</Subtitle2>
+          <Subtitle2 style={{ marginBottom: tokens.spacingVerticalS}}>Pages ({pages.length})</Subtitle2>
           {pages.length === 0 && !loading && <Caption1>No pages defined.</Caption1>}
           <Tree aria-label="Report pages">
             {pages.map((p, i) => (
@@ -15204,8 +15204,8 @@ function LoomNativeReportEditor({ item, id }: { item: FabricItemType; id: string
           )}
           {detail && page && (
             <div className={s.card}>
-              <Subtitle2 style={{ marginBottom: 8 }}>{page.displayName || page.name}</Subtitle2>
-              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(320px, 1fr))', gap: 12 }}>
+              <Subtitle2 style={{ marginBottom: tokens.spacingVerticalS}}>{page.displayName || page.name}</Subtitle2>
+              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(320px, 1fr))', gap: tokens.spacingVerticalM}}>
                 {(page.visuals || []).map((v, i) => (
                   <div key={i} className={s.card}>
                     {bound
@@ -15606,7 +15606,7 @@ function PaginatedReportDesigner({ item, id }: { item: FabricItemType; id: strin
       {/* Designer (Azure-native DEFAULT) vs. opt-in Power BI live preview. The
           preview tab is disabled-with-reason until Power BI is configured, so
           there is never a dead control (no-vaporware.md). */}
-      <TabList selectedValue={designView} onTabSelect={(_, d) => setDesignView(d.value as 'designer' | 'preview')} style={{ marginBottom: 8 }}>
+      <TabList selectedValue={designView} onTabSelect={(_, d) => setDesignView(d.value as 'designer' | 'preview')} style={{ marginBottom: tokens.spacingVerticalS}}>
         <Tab value="designer" icon={<Table20Regular />}>Designer</Tab>
         <Tab value="preview" icon={<Eye20Regular />} disabled={!powerBiConfigured}
           title={powerBiConfigured ? 'Embed a published Power BI paginated report in place' : 'Power BI embed is opt-in; the Console identity is not registered in any Power BI workspace'}>
@@ -15616,8 +15616,8 @@ function PaginatedReportDesigner({ item, id }: { item: FabricItemType; id: strin
 
       {designView === 'preview' && (
         <div style={{ flex: '1 1 auto', minWidth: 0 }}>
-          <div className={s.toolbar} style={{ marginBottom: 8, alignItems: 'end' }}>
-            <Badge appearance="filled" color="brand" style={{ marginBottom: 6 }}>Power BI live preview</Badge>
+          <div className={s.toolbar} style={{ marginBottom: tokens.spacingVerticalS, alignItems: 'end' }}>
+            <Badge appearance="filled" color="brand" style={{ marginBottom: tokens.spacingVerticalS}}>Power BI live preview</Badge>
             <WorkspacePicker value={pbiWorkspaceId} onChange={(v) => { setPbiWorkspaceId(v); setPbiReportId(''); }} {...pbiWs} />
             <Field label="Published paginated report" style={{ minWidth: 280 }}>
               <Select value={pbiReportId} onChange={(_, d) => setPbiReportId((d as any).value)} disabled={!pbiReports || pbiReports.length === 0}>
@@ -15631,9 +15631,9 @@ function PaginatedReportDesigner({ item, id }: { item: FabricItemType; id: strin
               {pbiListBusy ? 'Reloading…' : 'Reload'}
             </Button>
           </div>
-          {pbiListErr && <MessageBar intent="error" style={{ marginBottom: 8 }}><MessageBarBody><MessageBarTitle>Could not list paginated reports</MessageBarTitle>{pbiListErr}</MessageBarBody></MessageBar>}
+          {pbiListErr && <MessageBar intent="error" style={{ marginBottom: tokens.spacingVerticalS}}><MessageBarBody><MessageBarTitle>Could not list paginated reports</MessageBarTitle>{pbiListErr}</MessageBarBody></MessageBar>}
           {pbiReports && pbiReports.length === 0 && !pbiListErr && (
-            <MessageBar intent="warning" style={{ marginBottom: 8 }}>
+            <MessageBar intent="warning" style={{ marginBottom: tokens.spacingVerticalS}}>
               <MessageBarBody>
                 <MessageBarTitle>No published paginated reports</MessageBarTitle>
                 This Power BI workspace has no paginated (RDL) reports to embed. Publish one to Power BI (or pick a different
@@ -15641,11 +15641,11 @@ function PaginatedReportDesigner({ item, id }: { item: FabricItemType; id: strin
               </MessageBarBody>
             </MessageBar>
           )}
-          {viewerErr && <MessageBar intent="error" style={{ marginBottom: 8 }}><MessageBarBody>{viewerErr}</MessageBarBody></MessageBar>}
+          {viewerErr && <MessageBar intent="error" style={{ marginBottom: tokens.spacingVerticalS}}><MessageBarBody>{viewerErr}</MessageBarBody></MessageBar>}
           {pbiReportId && (
             embed ? (
               <>
-                <MessageBar intent="info" style={{ marginBottom: 8 }}>
+                <MessageBar intent="info" style={{ marginBottom: tokens.spacingVerticalS}}>
                   <MessageBarBody>
                     <MessageBarTitle>Paginated report — in-place embed</MessageBarTitle>
                     Rendered live via the Power BI paginated viewer (IPaginatedReportLoadConfiguration).
@@ -15687,8 +15687,8 @@ function PaginatedReportDesigner({ item, id }: { item: FabricItemType; id: strin
         <>
           {/* Report + page setup */}
           <div className={s.card}>
-            <Subtitle2 style={{ display: 'block', marginBottom: 8 }}>Report</Subtitle2>
-            <div style={{ display: 'flex', gap: 12, flexWrap: 'wrap', alignItems: 'end' }}>
+            <Subtitle2 style={{ display: 'block', marginBottom: tokens.spacingVerticalS}}>Report</Subtitle2>
+            <div style={{ display: 'flex', gap: tokens.spacingVerticalM, flexWrap: 'wrap', alignItems: 'end' }}>
               <Field label="Name" style={{ minWidth: 260 }}>
                 <Input value={def.name} onChange={(_, d) => patch((x) => ({ ...x, name: d.value }))} />
               </Field>
@@ -15809,9 +15809,9 @@ function TablixDesignSurface({ tablix, dataset, onChange, onDelete }: {
 
   return (
     <div className={s.card}>
-      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8 }}>
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: tokens.spacingVerticalS}}>
         <Subtitle2>Tablix · {tablix.name}</Subtitle2>
-        <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+        <div style={{ display: 'flex', gap: tokens.spacingVerticalS, alignItems: 'center' }}>
           <Switch label="Column headers" checked={tablix.showColumnHeaders}
             onChange={(_, d) => onChange({ ...tablix, showColumnHeaders: d.checked })} />
           <Switch label="Page break" checked={tablix.pageBreak}
@@ -15819,7 +15819,7 @@ function TablixDesignSurface({ tablix, dataset, onChange, onDelete }: {
           <Button appearance="subtle" icon={<Delete20Regular />} onClick={onDelete}>Delete tablix</Button>
         </div>
       </div>
-      <Caption1 style={{ display: 'block', marginBottom: 8 }}>
+      <Caption1 style={{ display: 'block', marginBottom: tokens.spacingVerticalS}}>
         Dataset: {dataset?.name || '—'} · row groups: {tablix.rowGroups.length ? tablix.rowGroups.join(', ') : 'none'}
       </Caption1>
       <div className={s.tableWrap}>
@@ -15841,7 +15841,7 @@ function TablixDesignSurface({ tablix, dataset, onChange, onDelete }: {
                     <Input size="small" value={tablix.headerRow[ci] ?? col} onChange={(_, d) => setHeader(ci, d.value)} />
                   </TableCell>
                   <TableCell>
-                    <div style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
+                    <div style={{ display: 'flex', gap: tokens.spacingVerticalS, alignItems: 'center' }}>
                       <Dropdown size="small" style={{ minWidth: 110 }}
                         selectedOptions={[parsed.agg]} value={parsed.agg || '(value)'}
                         onOptionSelect={(_, d) => setExpr(ci, aggExpr(d.optionValue || '', parsed.field || col))}>
@@ -15888,7 +15888,7 @@ function DataSourceDialog({ open, editing, onClose, onSave, onDelete }: {
         <DialogBody>
           <DialogTitle>{editing ? 'Edit data source' : 'Add data source'}</DialogTitle>
           <DialogContent>
-            <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+            <div style={{ display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalM}}>
               <Field label="Name" required><Input value={name} onChange={(_, d) => setName(d.value)} /></Field>
               <Field label="Type">
                 <Dropdown selectedOptions={[type]} value={type} onOptionSelect={(_, d) => setType((d.optionValue as RdlDataSourceType) || 'AzureSQL')}>
@@ -15964,7 +15964,7 @@ function DatasetDialog({ open, editing, dataSources, reportId, onClose, onSave, 
         <DialogBody>
           <DialogTitle>{editing ? 'Edit dataset' : 'Add dataset'}</DialogTitle>
           <DialogContent>
-            <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+            <div style={{ display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalM}}>
               <Field label="Name" required><Input value={name} onChange={(_, d) => setName(d.value)} /></Field>
               <Field label="Data source">
                 <Dropdown selectedOptions={[dataSourceId]} value={dataSources.find((d) => d.id === dataSourceId)?.name || ''}
@@ -15975,7 +15975,7 @@ function DatasetDialog({ open, editing, dataSources, reportId, onClose, onSave, 
               <Field label="Query (T-SQL)">
                 <MonacoTextarea value={query} onChange={setQuery} language="sql" minHeight={160} />
               </Field>
-              <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+              <div style={{ display: 'flex', gap: tokens.spacingVerticalS, alignItems: 'center' }}>
                 <Button appearance="secondary" icon={<Play20Regular />} onClick={runPreview} disabled={previewBusy || !dataSourceId}>
                   {previewBusy ? 'Running…' : 'Run preview'}
                 </Button>
@@ -15983,7 +15983,7 @@ function DatasetDialog({ open, editing, dataSources, reportId, onClose, onSave, 
               </div>
               {fields.length > 0 && (
                 <Field label={`Fields (${fields.length})`}>
-                  <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
+                  <div style={{ display: 'flex', gap: tokens.spacingVerticalS, flexWrap: 'wrap' }}>
                     {fields.map((f) => <Badge key={f.name} appearance="outline">{f.name}: {f.type}</Badge>)}
                   </div>
                 </Field>
@@ -16061,7 +16061,7 @@ function AddTablixWizard({ open, datasets, onClose, onCreate }: {
         <DialogBody>
           <DialogTitle>Add tablix</DialogTitle>
           <DialogContent>
-            <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+            <div style={{ display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalM}}>
               <Field label="Name"><Input value={name} onChange={(_, d) => setName(d.value)} /></Field>
               <Field label="Dataset">
                 <Dropdown selectedOptions={[datasetId]} value={ds?.name || ''} onOptionSelect={(_, d) => onPickDataset(d.optionValue || '')}>
@@ -16084,9 +16084,9 @@ function AddTablixWizard({ open, datasets, onClose, onCreate }: {
               </Field>
               {columns.length > 0 && (
                 <Field label="Column headers">
-                  <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalS}}>
                     {columns.map((c) => (
-                      <div key={c} style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+                      <div key={c} style={{ display: 'flex', gap: tokens.spacingVerticalS, alignItems: 'center' }}>
                         <Badge appearance="outline" style={{ minWidth: 120 }}>{c}</Badge>
                         <Input size="small" value={headers[c] ?? c} onChange={(_, d) => setHeaders((h) => ({ ...h, [c]: d.value }))} />
                       </div>
@@ -16129,7 +16129,7 @@ function ParameterDialog({ open, editing, onClose, onSave, onDelete }: {
         <DialogBody>
           <DialogTitle>{editing ? 'Edit parameter' : 'Add parameter'}</DialogTitle>
           <DialogContent>
-            <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+            <div style={{ display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalM}}>
               <Field label="Name" required><Input value={name} disabled={!!editing} onChange={(_, d) => setName(d.value)} /></Field>
               <Field label="Type">
                 <Dropdown selectedOptions={[type]} value={type} onOptionSelect={(_, d) => setType((d.optionValue as RdlParameter['type']) || 'String')}>
@@ -16381,7 +16381,7 @@ export function DashboardEditor({ item, id }: { item: FabricItemType; id: string
     <ItemEditorChrome item={item} id={id} ribbon={dashRibbon}
       leftPanel={
         <div className={s.treePad}>
-          <Subtitle2 style={{ marginBottom: 8 }}>Power BI dashboards</Subtitle2>
+          <Subtitle2 style={{ marginBottom: tokens.spacingVerticalS}}>Power BI dashboards</Subtitle2>
           {!workspaceId && <Caption1>Select a workspace to link a Power BI dashboard (optional).</Caption1>}
           {dashboards && dashboards.length === 0 && <Caption1>No dashboards in this workspace.</Caption1>}
           <Tree aria-label="Dashboards">
@@ -16419,7 +16419,7 @@ export function DashboardEditor({ item, id }: { item: FabricItemType; id: string
               <div style={{
                 display: 'grid',
                 gridTemplateColumns: narrow ? '1fr' : 'repeat(12, 1fr)',
-                gap: 12, paddingTop: 12,
+                gap: tokens.spacingVerticalM, paddingTop: 12,
               }}>
                 {/* Pinned Power BI tiles (single-tile embed) */}
                 {tiles.map((t) => {
@@ -16427,10 +16427,10 @@ export function DashboardEditor({ item, id }: { item: FabricItemType; id: string
                   return (
                     <div key={t.id} style={{
                       gridColumn: span(pos?.w ?? t.colSpan ?? 4),
-                      border: `1px solid ${tokens.colorNeutralStroke2}`, borderRadius: 8,
+                      border: `1px solid ${tokens.colorNeutralStroke2}`, borderRadius: tokens.borderRadiusXLarge,
                       overflow: 'hidden', minHeight: 220, position: 'relative', background: tokens.colorNeutralBackground1,
                     }}>
-                      <div style={{ display: 'flex', alignItems: 'center', gap: 6, padding: '6px 10px', borderBottom: `1px solid ${tokens.colorNeutralStroke2}` }}>
+                      <div style={{ display: 'flex', alignItems: 'center', gap: tokens.spacingVerticalS, padding: `${tokens.spacingVerticalS} ${tokens.spacingHorizontalM}`, borderBottom: `1px solid ${tokens.colorNeutralStroke2}` }}>
                         <Pin20Regular />
                         <Caption1 style={{ fontWeight: 600, flex: 1 }}>{t.title || t.subTitle || 'Power BI tile'}</Caption1>
                         {t.reportId && (
@@ -16580,10 +16580,10 @@ function LoomTileCard({ tile, result, onRefresh, onFullscreen, onRemove }: {
   };
   return (
     <div style={{
-      border: `1px solid ${tokens.colorNeutralStroke2}`, borderRadius: 8,
+      border: `1px solid ${tokens.colorNeutralStroke2}`, borderRadius: tokens.borderRadiusXLarge,
       background: tokens.colorNeutralBackground1, minHeight: 220, display: 'flex', flexDirection: 'column',
     }}>
-      <div style={{ display: 'flex', alignItems: 'center', gap: 6, padding: '6px 10px', borderBottom: `1px solid ${tokens.colorNeutralStroke2}` }}>
+      <div style={{ display: 'flex', alignItems: 'center', gap: tokens.spacingVerticalS, padding: `${tokens.spacingVerticalS} ${tokens.spacingHorizontalM}`, borderBottom: `1px solid ${tokens.colorNeutralStroke2}` }}>
         {kindIcon[tile.kind]}
         <Caption1 style={{ fontWeight: 600, flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{tile.title}</Caption1>
         <Badge appearance="tint" size="small">{kindLabel[tile.kind]}</Badge>
@@ -16592,7 +16592,7 @@ function LoomTileCard({ tile, result, onRefresh, onFullscreen, onRemove }: {
         <Tooltip content="Fullscreen" relationship="label"><Button size="small" appearance="subtle" icon={<ArrowMaximize20Regular />} onClick={onFullscreen} /></Tooltip>
         <Tooltip content="Remove tile" relationship="label"><Button size="small" appearance="subtle" icon={<Delete20Regular />} onClick={onRemove} /></Tooltip>
       </div>
-      <div style={{ padding: 10, flex: 1 }}>
+      <div style={{ padding: tokens.spacingVerticalM, flex: 1 }}>
         <LoomTileBody tile={tile} result={result} />
       </div>
     </div>
@@ -16620,8 +16620,8 @@ function PinnedPbiTile({ workspaceId, dashboardId, tile }: { workspaceId: string
     })();
     return () => { cancelled = true; };
   }, [workspaceId, dashboardId, tile.id, tile.embedUrl]);
-  if (err) return <div style={{ padding: 10 }}><Caption1 style={{ color: tokens.colorPaletteRedForeground1 }}>{err}</Caption1></div>;
-  if (!tok) return <div style={{ padding: 10 }}><Spinner size="tiny" label="Embedding tile…" /></div>;
+  if (err) return <div style={{ padding: tokens.spacingVerticalM }}><Caption1 style={{ color: tokens.colorPaletteRedForeground1 }}>{err}</Caption1></div>;
+  if (!tok) return <div style={{ padding: tokens.spacingVerticalM }}><Spinner size="tiny" label="Embedding tile…" /></div>;
   return <PowerBIEmbedFrame embedType="tile" id={tile.id} embedUrl={tok.embedUrl} accessToken={tok.token} height={180} />;
 }
 
@@ -16678,19 +16678,19 @@ function PinTileDialog({ dashboardItemId, workspaceId, dashboards, selectedDashW
               )}
             </MessageBar>
             {!workspaceId && <MessageBar intent="warning"><MessageBarBody>Select a Power BI workspace first (the clone API is a Power BI REST call).</MessageBarBody></MessageBar>}
-            <Field label="Source dashboard" style={{ marginTop: 8 }}>
+            <Field label="Source dashboard" style={{ marginTop: tokens.spacingVerticalS}}>
               <Select value={sourceDash} onChange={(_, d) => { setSourceDash(d.value); setTileId(''); }}>
                 <option value="">— choose —</option>
                 {dashboards.map((d) => <option key={d.id} value={d.id}>{d.displayName}</option>)}
               </Select>
             </Field>
-            <Field label="Tile to clone" style={{ marginTop: 8 }}>
+            <Field label="Tile to clone" style={{ marginTop: tokens.spacingVerticalS}}>
               <Select value={tileId} onChange={(_, d) => setTileId(d.value)} disabled={srcTiles.length === 0}>
                 <option value="">{srcTiles.length === 0 ? '— pick a source dashboard with tiles —' : '— choose —'}</option>
                 {srcTiles.map((t) => <option key={t.id} value={t.id}>{t.title || t.subTitle || t.id}</option>)}
               </Select>
             </Field>
-            {err && <MessageBar intent="error" style={{ marginTop: 8 }}><MessageBarBody>{err}</MessageBarBody></MessageBar>}
+            {err && <MessageBar intent="error" style={{ marginTop: tokens.spacingVerticalS}}><MessageBarBody>{err}</MessageBarBody></MessageBar>}
           </DialogContent>
           <DialogActions>
             <Button appearance="secondary" onClick={onClose}>Cancel</Button>
@@ -16778,29 +16778,29 @@ function QaTileDialog({ dashboardItemId, workspaceId, onClose, onAdd }: {
               {aasMode ? ' Azure Analysis Services' : ' the selected Power BI semantic model'}. Edit the DAX before adding if needed.
             </MessageBarBody></MessageBar>
             {!aasMode && (
-              <Field label="Semantic model (dataset)" style={{ marginTop: 8 }}>
+              <Field label="Semantic model (dataset)" style={{ marginTop: tokens.spacingVerticalS}}>
                 <Select value={datasetId} onChange={(_, d) => setDatasetId(d.value)}>
                   <option value="">{datasets.length === 0 ? '— select a Power BI workspace with datasets —' : '— choose —'}</option>
                   {datasets.map((d) => <option key={d.id} value={d.id}>{d.name}</option>)}
                 </Select>
               </Field>
             )}
-            <Field label="Question" style={{ marginTop: 8 }}>
+            <Field label="Question" style={{ marginTop: tokens.spacingVerticalS}}>
               <Textarea value={nl} onChange={(_, d) => setNl(d.value)} placeholder="e.g. Show total sales by region for the last 12 months" rows={2} />
             </Field>
-            <Button appearance="primary" icon={busy ? <Spinner size="tiny" /> : <Sparkle20Regular />} disabled={!nl.trim() || busy} onClick={ask} style={{ marginTop: 8 }}>Ask Copilot</Button>
+            <Button appearance="primary" icon={busy ? <Spinner size="tiny" /> : <Sparkle20Regular />} disabled={!nl.trim() || busy} onClick={ask} style={{ marginTop: tokens.spacingVerticalS}}>Ask Copilot</Button>
             {dax && (
               <>
-                <Field label="Generated DAX (editable)" style={{ marginTop: 12 }}>
-                  <Textarea value={dax} onChange={(_, d) => setDax(d.value)} rows={4} style={{ fontFamily: 'Consolas, monospace', fontSize: 12 }} />
+                <Field label="Generated DAX (editable)" style={{ marginTop: tokens.spacingVerticalM}}>
+                  <Textarea value={dax} onChange={(_, d) => setDax(d.value)} rows={4} style={{ fontFamily: 'Consolas, monospace', fontSize: tokens.fontSizeBase200}} />
                 </Field>
-                <Button appearance="secondary" icon={<Play20Regular />} onClick={runEdited} disabled={busy} style={{ marginTop: 8 }}>Run DAX</Button>
+                <Button appearance="secondary" icon={<Play20Regular />} onClick={runEdited} disabled={busy} style={{ marginTop: tokens.spacingVerticalS}}>Run DAX</Button>
               </>
             )}
-            {err && <MessageBar intent="warning" style={{ marginTop: 8 }}><MessageBarBody>{err}</MessageBarBody></MessageBar>}
+            {err && <MessageBar intent="warning" style={{ marginTop: tokens.spacingVerticalS}}><MessageBarBody>{err}</MessageBarBody></MessageBar>}
             {result && result.ok && (
-              <div style={{ marginTop: 12 }}>
-                <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 6 }}>
+              <div style={{ marginTop: tokens.spacingVerticalM}}>
+                <div style={{ display: 'flex', alignItems: 'center', gap: tokens.spacingVerticalS, marginBottom: tokens.spacingVerticalS}}>
                   <Label>Visual</Label>
                   <Select value={viz} onChange={(_, d) => setViz(d.value as TileVizKind)}>
                     {(['table', 'stat', 'bar', 'column', 'line', 'pie'] as TileVizKind[]).map((v) => <option key={v} value={v}>{v}</option>)}
@@ -16809,7 +16809,7 @@ function QaTileDialog({ dashboardItemId, workspaceId, onClose, onAdd }: {
                     <Input value={title} onChange={(_, d) => setTitle(d.value)} placeholder="optional" />
                   </Field>
                 </div>
-                <div style={{ border: `1px solid ${tokens.colorNeutralStroke2}`, borderRadius: 6, padding: 8, maxHeight: 240, overflow: 'auto' }}>
+                <div style={{ border: `1px solid ${tokens.colorNeutralStroke2}`, borderRadius: tokens.borderRadiusLarge, padding: tokens.spacingVerticalS, maxHeight: 240, overflow: 'auto' }}>
                   <TileVisual viz={viz as TileViz} result={result} />
                 </div>
               </div>
@@ -16872,12 +16872,12 @@ function StreamingTileDialog({ dashboardItemId, onClose, onAdd }: {
               <strong> ADX table</strong> that the Event Hub data connection ingests into — the tile auto-refreshes on
               your interval. Fully Azure-native (no Power BI / Fabric).
             </MessageBarBody></MessageBar>
-            <Field label="KQL query" style={{ marginTop: 8 }}>
+            <Field label="KQL query" style={{ marginTop: tokens.spacingVerticalS}}>
               <Textarea value={kql} onChange={(_, d) => setKql(d.value)} rows={4}
                 placeholder={'Events\n| where Timestamp > ago(1h)\n| summarize count() by bin(Timestamp, 1m)\n| render timechart'}
-                style={{ fontFamily: 'Consolas, monospace', fontSize: 12 }} />
+                style={{ fontFamily: 'Consolas, monospace', fontSize: tokens.fontSizeBase200}} />
             </Field>
-            <div style={{ display: 'flex', gap: 12, marginTop: 8, flexWrap: 'wrap' }}>
+            <div style={{ display: 'flex', gap: tokens.spacingVerticalM, marginTop: tokens.spacingVerticalS, flexWrap: 'wrap' }}>
               <Field label="Database (blank = default)">
                 <Input value={database} onChange={(_, d) => setDatabase(d.value)} placeholder="ADX database" />
               </Field>
@@ -16893,10 +16893,10 @@ function StreamingTileDialog({ dashboardItemId, onClose, onAdd }: {
                 <Input value={title} onChange={(_, d) => setTitle(d.value)} placeholder="optional" />
               </Field>
             </div>
-            <Button appearance="secondary" icon={busy ? <Spinner size="tiny" /> : <Play20Regular />} onClick={test} disabled={!kql.trim() || busy} style={{ marginTop: 8 }}>Test query</Button>
-            {err && <MessageBar intent="warning" style={{ marginTop: 8 }}><MessageBarBody>{err}</MessageBarBody></MessageBar>}
+            <Button appearance="secondary" icon={busy ? <Spinner size="tiny" /> : <Play20Regular />} onClick={test} disabled={!kql.trim() || busy} style={{ marginTop: tokens.spacingVerticalS}}>Test query</Button>
+            {err && <MessageBar intent="warning" style={{ marginTop: tokens.spacingVerticalS}}><MessageBarBody>{err}</MessageBarBody></MessageBar>}
             {result?.ok && (
-              <div style={{ marginTop: 12, border: `1px solid ${tokens.colorNeutralStroke2}`, borderRadius: 6, padding: 8, maxHeight: 240, overflow: 'auto' }}>
+              <div style={{ marginTop: tokens.spacingVerticalM, border: `1px solid ${tokens.colorNeutralStroke2}`, borderRadius: tokens.borderRadiusLarge, padding: tokens.spacingVerticalS, maxHeight: 240, overflow: 'auto' }}>
                 <TileVisual viz={viz as TileViz} result={result} />
               </div>
             )}
@@ -17020,10 +17020,10 @@ function ScRollupEditor({ goal, childCount, onChange }: {
     onChange({ statusRules: [...rules, { operator: '>=', threshold: 0, metricKind: 'value', status: 'on-track' }] });
   const removeRule = (idx: number) =>
     onChange({ statusRules: rules.filter((_, i) => i !== idx) });
-  const fieldRow: React.CSSProperties = { display: 'flex', gap: 6, alignItems: 'center', flexWrap: 'wrap' };
+  const fieldRow: React.CSSProperties = { display: 'flex', gap: tokens.spacingVerticalS, alignItems: 'center', flexWrap: 'wrap' };
   return (
-    <div style={{ border: `1px solid ${tokens.colorNeutralStroke2}`, borderRadius: 6, padding: 8, display: 'flex', flexDirection: 'column', gap: 8, background: tokens.colorNeutralBackground2 }}>
-      <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
+    <div style={{ border: `1px solid ${tokens.colorNeutralStroke2}`, borderRadius: tokens.borderRadiusLarge, padding: tokens.spacingVerticalS, display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalS, background: tokens.colorNeutralBackground2 }}>
+      <div style={{ display: 'flex', alignItems: 'center', gap: tokens.spacingVerticalS, flexWrap: 'wrap' }}>
         <Caption1 style={{ fontWeight: 600 }}>{goal.name || goal.id}</Caption1>
         {childCount > 0 && <Badge appearance="outline" color="brand">Parent · {childCount} {childCount === 1 ? 'child' : 'children'}</Badge>}
         <ScStatusBadge status={goal.status} />
@@ -17070,7 +17070,7 @@ function ScRollupEditor({ goal, childCount, onChange }: {
       ))}
       <div style={fieldRow}>
         <Button size="small" appearance="subtle" icon={<Add20Regular />} onClick={addRule}>Add rule</Button>
-        <Label size="small" style={{ marginLeft: 12 }}>Otherwise</Label>
+        <Label size="small" style={{ marginLeft: tokens.spacingHorizontalM}}>Otherwise</Label>
         <Select size="small" value={goal.otherwiseStatus || ''} aria-label={`${goal.name || goal.id} otherwise status`}
           onChange={(_: unknown, d: any) => onChange({ otherwiseStatus: (d.value || undefined) as StatusColor | undefined })}>
           <option value="">Not Started (default)</option>
@@ -17343,7 +17343,7 @@ export function ScorecardEditor({ item, id }: { item: FabricItemType; id: string
     <ItemEditorChrome item={item} id={id} ribbon={scRibbon}
       leftPanel={
         <div className={s.treePad}>
-          <Subtitle2 style={{ marginBottom: 8 }}>Scorecards</Subtitle2>
+          <Subtitle2 style={{ marginBottom: tokens.spacingVerticalS}}>Scorecards</Subtitle2>
           {!workspaceId && <Caption1>Select a workspace.</Caption1>}
           {scorecards && scorecards.length === 0 && <Caption1>No scorecards in this workspace.</Caption1>}
           <Tree aria-label="Scorecards">
@@ -17409,9 +17409,9 @@ export function ScorecardEditor({ item, id }: { item: FabricItemType; id: string
                           >
                             <TableCell>
                               <span style={{ paddingLeft: isSub ? 20 : 0 }}>
-                                {isSub && <span style={{ color: tokens.colorNeutralForeground3, marginRight: 4 }}>↳</span>}
+                                {isSub && <span style={{ color: tokens.colorNeutralForeground3, marginRight: tokens.spacingHorizontalXS}}>↳</span>}
                                 {g.name || g.id || '—'}
-                                {g.connectedMetric && <DatabaseLink20Regular style={{ marginLeft: 6, verticalAlign: 'middle' }} title="connected metric" />}
+                                {g.connectedMetric && <DatabaseLink20Regular style={{ marginLeft: tokens.spacingHorizontalS, verticalAlign: 'middle' }} title="connected metric" />}
                               </span>
                             </TableCell>
                             <TableCell>
@@ -17442,7 +17442,7 @@ export function ScorecardEditor({ item, id }: { item: FabricItemType; id: string
                             <TableCell>{g.dueDate || '—'}</TableCell>
                             <TableCell>
                               {g.id && (
-                                <div style={{ display: 'flex', gap: 4 }}>
+                                <div style={{ display: 'flex', gap: tokens.spacingVerticalXS}}>
                                   <Button size="small" appearance="subtle" icon={<Add20Regular />} onClick={(e) => { e.stopPropagation(); openCheckIn(g.id!); }}>Check in</Button>
                                   <Button size="small" appearance="subtle" icon={<DatabaseLink20Regular />} onClick={(e) => { e.stopPropagation(); openBinder(g.id!); }}>Bind</Button>
                                   <Button size="small" appearance="subtle" icon={<List20Regular />} onClick={(e) => { e.stopPropagation(); openHistory(g.id!); }}>History</Button>
@@ -17458,8 +17458,8 @@ export function ScorecardEditor({ item, id }: { item: FabricItemType; id: string
               )}
 
               {configOpen && (
-                <div style={{ marginTop: 12, display: 'flex', flexDirection: 'column', gap: 8 }}>
-                  <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
+                <div style={{ marginTop: tokens.spacingVerticalM, display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalS}}>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: tokens.spacingVerticalS, flexWrap: 'wrap' }}>
                     <Subtitle2>Rollup &amp; status rules</Subtitle2>
                     <Button size="small" appearance="primary" disabled={configBusy || draft.length === 0} onClick={saveConfig}>
                       {configBusy ? 'Saving…' : 'Save config'}
@@ -17471,7 +17471,7 @@ export function ScorecardEditor({ item, id }: { item: FabricItemType; id: string
                   {draft.length === 0 ? (
                     <Caption1>No goals to configure.</Caption1>
                   ) : (
-                    <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalM}}>
                       {draft.map((g, i) => (
                         <ScRollupEditor
                           key={g.id || i}
@@ -17496,22 +17496,22 @@ export function ScorecardEditor({ item, id }: { item: FabricItemType; id: string
                   <Field label="Value" required>
                     <SpinButton value={Number(entryValue) || 0} onChange={(_: unknown, d: any) => setEntryValue(String(d.value ?? (d.displayValue ?? '')))} style={{ width: '100%' }} />
                   </Field>
-                  <Field label="Target (optional)" style={{ marginTop: 8 }}>
+                  <Field label="Target (optional)" style={{ marginTop: tokens.spacingVerticalS}}>
                     <Input value={entryTarget} onChange={(_: unknown, d: any) => setEntryTarget(d.value)} type="number" style={{ width: '100%' }} />
                   </Field>
-                  <Field label="Status" style={{ marginTop: 8 }}>
+                  <Field label="Status" style={{ marginTop: tokens.spacingVerticalS}}>
                     <Select value={entryStatus} onChange={(_: unknown, d: any) => setEntryStatus(d.value as ScorecardGoalStatusUi | '')}>
                       <option value="">(unchanged)</option>
                       {SC_STATUS_OPTIONS.map((o) => <option key={o.value} value={o.value}>{o.label}</option>)}
                     </Select>
                   </Field>
-                  <Field label="Check-in date" style={{ marginTop: 8 }}>
+                  <Field label="Check-in date" style={{ marginTop: tokens.spacingVerticalS}}>
                     <Input value={entryDate} onChange={(_: unknown, d: any) => setEntryDate(d.value)} type="date" style={{ width: '100%' }} />
                   </Field>
-                  <Field label="Note (optional)" style={{ marginTop: 8 }}>
+                  <Field label="Note (optional)" style={{ marginTop: tokens.spacingVerticalS}}>
                     <Textarea value={entryNote} onChange={(_: unknown, d: any) => setEntryNote(d.value)} style={{ width: '100%' }} />
                   </Field>
-                  {entryErr && <MessageBar intent="error" style={{ marginTop: 8 }}><MessageBarBody>{entryErr}</MessageBarBody></MessageBar>}
+                  {entryErr && <MessageBar intent="error" style={{ marginTop: tokens.spacingVerticalS}}><MessageBarBody>{entryErr}</MessageBarBody></MessageBar>}
                 </DialogContent>
                 <DialogActions>
                   <Button appearance="secondary" onClick={() => setEntryOpen(null)}>Cancel</Button>
@@ -17531,7 +17531,7 @@ export function ScorecardEditor({ item, id }: { item: FabricItemType; id: string
                     The goal&apos;s current value is pulled live from a DAX measure in a Power BI / Azure Analysis
                     Services semantic model. No Fabric capacity required — evaluation runs via Power BI executeQueries.
                   </Caption1>
-                  <Field label="Semantic model (dataset)" required style={{ marginTop: 8 }}>
+                  <Field label="Semantic model (dataset)" required style={{ marginTop: tokens.spacingVerticalS}}>
                     {bindDatasets.length > 0 ? (
                       <Dropdown
                         selectedOptions={bindDatasetId ? [bindDatasetId] : []}
@@ -17545,15 +17545,15 @@ export function ScorecardEditor({ item, id }: { item: FabricItemType; id: string
                       <Input value={bindDatasetId} onChange={(_: unknown, d: any) => setBindDatasetId(d.value)} placeholder="Power BI dataset id (GUID)" style={{ width: '100%' }} />
                     )}
                   </Field>
-                  <Field label="DAX expression" required style={{ marginTop: 8 }} hint="a measure reference like [Total Revenue] or an inline scalar like SUM(Sales[Amount])">
+                  <Field label="DAX expression" required style={{ marginTop: tokens.spacingVerticalS}} hint="a measure reference like [Total Revenue] or an inline scalar like SUM(Sales[Amount])">
                     <MonacoTextarea value={bindDax} onChange={setBindDax} language="plaintext" minHeight={80} />
                   </Field>
                   {bindTestValue !== undefined && (
-                    <MessageBar intent="success" style={{ marginTop: 8 }}>
+                    <MessageBar intent="success" style={{ marginTop: tokens.spacingVerticalS}}>
                       <MessageBarBody>Live value: <strong>{bindTestValue === null ? '(null)' : bindTestValue}</strong></MessageBarBody>
                     </MessageBar>
                   )}
-                  {bindErr && <MessageBar intent="error" style={{ marginTop: 8 }}><MessageBarBody>{bindErr}</MessageBarBody></MessageBar>}
+                  {bindErr && <MessageBar intent="error" style={{ marginTop: tokens.spacingVerticalS}}><MessageBarBody>{bindErr}</MessageBarBody></MessageBar>}
                 </DialogContent>
                 <DialogActions>
                   <Button appearance="secondary" onClick={() => setBindOpen(null)}>Cancel</Button>

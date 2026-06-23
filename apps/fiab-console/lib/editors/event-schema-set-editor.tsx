@@ -35,31 +35,31 @@ import type { FabricItemType } from '@/lib/catalog/fabric-item-types';
 import type { RibbonTab } from '@/lib/components/ribbon';
 
 const useStyles = makeStyles({
-  pad: { padding: 16, display: 'flex', flexDirection: 'column', gap: 12, flex: 1, minHeight: 0 },
-  toolbar: { display: 'flex', gap: 8, alignItems: 'flex-end', flexWrap: 'wrap' },
-  treePad: { padding: 8 },
-  tabs: { borderBottom: `1px solid ${tokens.colorNeutralStroke2}`, padding: '8px 8px 0' },
+  pad: { padding: tokens.spacingVerticalL, display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalM, flex: 1, minHeight: 0 },
+  toolbar: { display: 'flex', gap: tokens.spacingHorizontalS, alignItems: 'flex-end', flexWrap: 'wrap' },
+  treePad: { padding: tokens.spacingHorizontalS },
+  tabs: { borderBottom: `1px solid ${tokens.colorNeutralStroke2}`, padding: `${tokens.spacingVerticalS} ${tokens.spacingHorizontalS} 0` },
   tableWrap: { overflow: 'auto', maxHeight: 320, border: `1px solid ${tokens.colorNeutralStroke2}`, borderRadius: tokens.borderRadiusMedium },
   selectedRow: {
     backgroundColor: tokens.colorNeutralBackground1Selected,
     boxShadow: `inset 3px 0 0 0 ${tokens.colorBrandStroke1}`,
   },
   cell: { fontFamily: tokens.fontFamilyMonospace, fontSize: tokens.fontSizeBase200, whiteSpace: 'nowrap' },
-  liveHint: { display: 'flex', alignItems: 'center', gap: 6, color: tokens.colorNeutralForeground3 },
-  field: { display: 'flex', flexDirection: 'column', gap: 4, minWidth: 240 },
+  liveHint: { display: 'flex', alignItems: 'center', gap: tokens.spacingHorizontalXS, color: tokens.colorNeutralForeground3 },
+  field: { display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalXS, minWidth: 240 },
   mono: { fontFamily: tokens.fontFamilyMonospace, fontSize: tokens.fontSizeBase200 },
-  section: { display: 'flex', flexDirection: 'column', gap: 8 },
-  policyHeader: { display: 'flex', alignItems: 'center', gap: 8 },
+  section: { display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalS },
+  policyHeader: { display: 'flex', alignItems: 'center', gap: tokens.spacingHorizontalS },
   versionCard: {
     border: `1px solid ${tokens.colorNeutralStroke2}`,
     borderRadius: tokens.borderRadiusMedium,
-    padding: 12,
+    padding: tokens.spacingVerticalM,
     display: 'flex',
     flexDirection: 'column',
-    gap: 6,
+    gap: tokens.spacingVerticalXS,
     backgroundColor: tokens.colorNeutralBackground1,
   },
-  versionHead: { display: 'flex', alignItems: 'center', gap: 8 },
+  versionHead: { display: 'flex', alignItems: 'center', gap: tokens.spacingHorizontalS },
   pre: {
     fontFamily: tokens.fontFamilyMonospace,
     fontSize: tokens.fontSizeBase200,
@@ -68,15 +68,15 @@ const useStyles = makeStyles({
     maxHeight: 220,
     overflow: 'auto',
     backgroundColor: tokens.colorNeutralBackground3,
-    padding: 8,
+    padding: tokens.spacingVerticalS,
     borderRadius: tokens.borderRadiusMedium,
     margin: 0,
   },
-  violationList: { margin: '4px 0 0', paddingLeft: 18, display: 'flex', flexDirection: 'column', gap: 4 },
+  violationList: { margin: `${tokens.spacingVerticalXS} 0 0`, paddingLeft: 18, display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalXS },
   settingsGrid: {
     display: 'grid',
     gridTemplateColumns: 'max-content 1fr',
-    gap: '6px 16px',
+    gap: `${tokens.spacingVerticalXS} ${tokens.spacingHorizontalL}`,
     alignItems: 'center',
     maxWidth: 640,
   },
@@ -324,7 +324,7 @@ export function EventSchemaSetEditor({ item, id }: Props) {
     <ItemEditorChrome item={item} id={id} ribbon={ribbon}
       leftPanel={
         <div className={s.treePad}>
-          <Subtitle2 style={{ marginBottom: 8 }}>Schema sets</Subtitle2>
+          <Subtitle2 style={{ marginBottom: tokens.spacingVerticalS }}>Schema sets</Subtitle2>
           {!workspaceId && <Caption1>Select a workspace.</Caption1>}
           {workspaceId && sets === null && <Spinner size="tiny" label="Loading…" />}
           {sets && sets.length === 0 && <Caption1>No schema sets yet.</Caption1>}

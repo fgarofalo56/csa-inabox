@@ -88,9 +88,9 @@ const SOURCE_SYNC_NOTE: Record<string, string> = {
 };
 
 const useStyles = makeStyles({
-  tableWrap: { overflow: 'auto', maxHeight: 320, border: `1px solid ${tokens.colorNeutralStroke2}`, borderRadius: 4 },
-  tableLoading: { display: 'flex', alignItems: 'center', padding: tokens.spacingVerticalM, marginTop: 8 },
-  cell: { fontFamily: 'Consolas, monospace', fontSize: 12, whiteSpace: 'nowrap' },
+  tableWrap: { overflow: 'auto', maxHeight: 320, border: `1px solid ${tokens.colorNeutralStroke2}`, borderRadius: tokens.borderRadiusMedium },
+  tableLoading: { display: 'flex', alignItems: 'center', padding: tokens.spacingVerticalM, marginTop: tokens.spacingVerticalS },
+  cell: { fontFamily: 'Consolas, monospace', fontSize: tokens.fontSizeBase200, whiteSpace: 'nowrap' },
   grid: { display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(200px, 1fr))', gap: tokens.spacingHorizontalS },
   card: {
     position: 'relative',
@@ -103,7 +103,7 @@ const useStyles = makeStyles({
     ':focus-visible': { outline: `2px solid ${tokens.colorStrokeFocus2}`, outlineOffset: '1px' },
   },
   cardActive: { outline: `2px solid ${tokens.colorBrandStroke1}`, outlineOffset: '-1px', backgroundColor: tokens.colorBrandBackground2 },
-  cardIcon: { display: 'flex', alignItems: 'center', justifyContent: 'center', width: '34px', height: '34px', flexShrink: 0, borderRadius: tokens.borderRadiusMedium, color: '#fff' },
+  cardIcon: { display: 'flex', alignItems: 'center', justifyContent: 'center', width: '34px', height: '34px', flexShrink: 0, borderRadius: tokens.borderRadiusMedium, color: tokens.colorNeutralForegroundOnBrand },
   cardLabel: { minWidth: 0, overflow: 'hidden', '& > *': { overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' } },
   cardCheck: { marginLeft: 'auto', flexShrink: 0, color: tokens.colorBrandForeground1 },
   wizard: { display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalL, minWidth: '560px', maxWidth: '640px' },
@@ -384,7 +384,7 @@ export function MirrorSourceWizard(props: MirrorSourceWizardProps) {
               <div>
                 <div className={s.stepHead}><span className={s.stepNum}>1</span><Subtitle2>Choose a source</Subtitle2></div>
                 <Caption1 style={{ color: tokens.colorNeutralForeground3 }}>Each source mirrors into ADLS Bronze Delta — no Fabric capacity required.</Caption1>
-                <div className={s.grid} style={{ marginTop: 8 }}>
+                <div className={s.grid} style={{ marginTop: tokens.spacingVerticalS }}>
                   {MIRROR_SOURCES.map((src) => {
                     const active = createSrc === src.id;
                     return (
@@ -414,7 +414,7 @@ export function MirrorSourceWizard(props: MirrorSourceWizardProps) {
                     ? 'Oracle reaches its source through an on-prem data gateway (self-hosted integration runtime). Create a connection-string / SQL-password connection (sync user credential → Key Vault), then enter the host, service name, gateway, and sync user below.'
                     : 'Pick a saved connection or create one. Credentials are stored in Key Vault — choose SQL password / connection string / service principal so the source accepts the login (no “token-identified principal” errors).'}
                 </Caption1>
-                <div className={s.connRow} style={{ marginTop: 8 }}>
+                <div className={s.connRow} style={{ marginTop: tokens.spacingVerticalS }}>
                   <Field style={{ flex: 1 }}>
                     <Dropdown placeholder={compatibleConns.length ? 'Select a connection' : 'No saved connections for this source'}
                       value={pickedConn ? pickedConn.name : ''} selectedOptions={connId ? [connId] : []}
@@ -429,13 +429,13 @@ export function MirrorSourceWizard(props: MirrorSourceWizardProps) {
                   <Button appearance="outline" icon={<PlugConnected20Regular />} onClick={() => setConnBuilderOpen(true)}>New connection</Button>
                 </div>
                 {pickedConn && (
-                  <div className={s.connRow} style={{ marginTop: 6 }}>
+                  <div className={s.connRow} style={{ marginTop: tokens.spacingVerticalS }}>
                     {pickedConn.hasSecret ? <Key16Regular /> : <CheckmarkCircle16Filled style={{ color: tokens.colorPaletteGreenForeground1 }} />}
                     <Caption1>Auth: <strong>{pickedConn.authMethod}</strong>{pickedConn.hasSecret ? ' (secret in Key Vault)' : ''}</Caption1>
                   </div>
                 )}
                 {isBigQuery ? (
-                  <div style={{ display: 'flex', gap: 12, marginTop: 10 }}>
+                  <div style={{ display: 'flex', gap: tokens.spacingHorizontalM, marginTop: tokens.spacingVerticalL }}>
                     <Field label="GCP project id" required hint="The Google Cloud project that owns the dataset." style={{ flex: 1 }}>
                       <Input value={projectId} onChange={(_, d) => { setProjectId(d.value); setVerify({ status: 'idle' }); }} placeholder="my-gcp-project" />
                     </Field>
@@ -445,7 +445,7 @@ export function MirrorSourceWizard(props: MirrorSourceWizardProps) {
                   </div>
                 ) : isOracle ? (
                   <>
-                    <div style={{ display: 'flex', gap: 12, marginTop: 10 }}>
+                    <div style={{ display: 'flex', gap: tokens.spacingHorizontalM, marginTop: tokens.spacingVerticalL }}>
                       <Field label="Host" required hint="Oracle listener host (and :port if not 1521)." style={{ flex: 1 }}>
                         <Input value={createServer} onChange={(_, d) => { setCreateServer(d.value); setVerify({ status: 'idle' }); }} placeholder="oracle.contoso.com:1521" disabled={!!pickedConn?.host} />
                       </Field>
@@ -453,7 +453,7 @@ export function MirrorSourceWizard(props: MirrorSourceWizardProps) {
                         <Input value={serviceName} onChange={(_, d) => { setServiceName(d.value); setVerify({ status: 'idle' }); }} placeholder="ORCLPDB1" />
                       </Field>
                     </div>
-                    <div style={{ display: 'flex', gap: 12, marginTop: 10 }}>
+                    <div style={{ display: 'flex', gap: tokens.spacingHorizontalM, marginTop: tokens.spacingVerticalL }}>
                       <Field label="On-prem data gateway (SHIR)" required hint="The self-hosted integration runtime / on-prem data gateway that can reach Oracle." style={{ flex: 1 }}>
                         <Input value={gateway} onChange={(_, d) => setGateway(d.value)} placeholder="loom-onprem-ir" />
                       </Field>
@@ -466,13 +466,13 @@ export function MirrorSourceWizard(props: MirrorSourceWizardProps) {
                   // Cosmos DB: account + database come from the Cosmos connection;
                   // the change-feed engine never uses a SQL server FQDN, so only
                   // the database is collected here (no Server field).
-                  <div style={{ display: 'flex', gap: 12, marginTop: 10 }}>
+                  <div style={{ display: 'flex', gap: tokens.spacingHorizontalM, marginTop: tokens.spacingVerticalL }}>
                     <Field label="Database" required hint="The Cosmos database to mirror (account is taken from the connection)." style={{ flex: 1 }}>
                       <Input value={createDb} onChange={(_, d) => { setCreateDb(d.value); setVerify({ status: 'idle' }); }} placeholder="prod" disabled={!!pickedConn?.database} />
                     </Field>
                   </div>
                 ) : (
-                  <div style={{ display: 'flex', gap: 12, marginTop: 10 }}>
+                  <div style={{ display: 'flex', gap: tokens.spacingHorizontalM, marginTop: tokens.spacingVerticalL }}>
                     <Field label="Server / host" style={{ flex: 1 }}>
                       <Input value={createServer} onChange={(_, d) => setCreateServer(d.value)} placeholder="server.database.windows.net" disabled={!!pickedConn?.host} />
                     </Field>
@@ -481,14 +481,14 @@ export function MirrorSourceWizard(props: MirrorSourceWizardProps) {
                     </Field>
                   </div>
                 )}
-                <div style={{ marginTop: 10 }}>
+                <div style={{ marginTop: tokens.spacingVerticalL }}>
                   <Button size="small" appearance="outline" icon={<CheckmarkCircle16Filled />} disabled={verify.status === 'busy'} onClick={runVerify}>
                     {verify.status === 'busy' ? 'Verifying…' : 'Verify connection'}
                   </Button>
                 </div>
-                {verify.status === 'ok' && <MessageBar intent="success" style={{ marginTop: 8 }}><MessageBarBody>{verify.msg}</MessageBarBody></MessageBar>}
-                {verify.status === 'warn' && <MessageBar intent="info" style={{ marginTop: 8 }}><MessageBarBody>{verify.msg}</MessageBarBody></MessageBar>}
-                {verify.status === 'err' && <MessageBar intent="error" style={{ marginTop: 8 }}><MessageBarBody>{verify.msg}</MessageBarBody></MessageBar>}
+                {verify.status === 'ok' && <MessageBar intent="success" style={{ marginTop: tokens.spacingVerticalS }}><MessageBarBody>{verify.msg}</MessageBarBody></MessageBar>}
+                {verify.status === 'warn' && <MessageBar intent="info" style={{ marginTop: tokens.spacingVerticalS }}><MessageBarBody>{verify.msg}</MessageBarBody></MessageBar>}
+                {verify.status === 'err' && <MessageBar intent="error" style={{ marginTop: tokens.spacingVerticalS }}><MessageBarBody>{verify.msg}</MessageBarBody></MessageBar>}
               </div>
 
               <Divider />
@@ -531,7 +531,7 @@ export function MirrorSourceWizard(props: MirrorSourceWizardProps) {
                     </div>
                   </div>
                 )}
-                <div style={{ display: 'flex', gap: 8, alignItems: 'center', marginTop: 8 }}>
+                <div style={{ display: 'flex', gap: tokens.spacingHorizontalS, alignItems: 'center', marginTop: tokens.spacingVerticalS }}>
                   <Button size="small" appearance="outline" icon={<ArrowSync20Regular />} disabled={tablesLoading} onClick={loadSourceTables}>
                     {tablesLoading ? 'Loading…' : 'Load tables'}
                   </Button>
@@ -546,9 +546,9 @@ export function MirrorSourceWizard(props: MirrorSourceWizardProps) {
                 {tablesLoading && (
                   <div className={s.tableLoading}><Spinner size="tiny" label="Discovering tables…" labelPosition="after" /></div>
                 )}
-                {!tablesLoading && tablesMsg && <Caption1 style={{ display: 'block', marginTop: 6, color: tokens.colorNeutralForeground3 }}>{tablesMsg}</Caption1>}
+                {!tablesLoading && tablesMsg && <Caption1 style={{ display: 'block', marginTop: tokens.spacingVerticalS, color: tokens.colorNeutralForeground3 }}>{tablesMsg}</Caption1>}
                 {!tablesLoading && availTables && availTables.length > 0 && (
-                  <div className={s.tableWrap} style={{ maxHeight: 180, marginTop: 8 }}>
+                  <div className={s.tableWrap} style={{ maxHeight: 180, marginTop: tokens.spacingVerticalS }}>
                     <Table size="small" aria-label="Source tables">
                       <TableHeader>
                         <TableRow>
@@ -583,10 +583,10 @@ export function MirrorSourceWizard(props: MirrorSourceWizardProps) {
               {/* Step 4 — name + review */}
               <div>
                 <div className={s.stepHead}><span className={s.stepNum}>4</span><Subtitle2>Name &amp; create</Subtitle2></div>
-                <Field label="Name" required style={{ marginTop: 8 }}>
+                <Field label="Name" required style={{ marginTop: tokens.spacingVerticalS }}>
                   <Input value={createName} onChange={(_, d) => setCreateName(d.value)} placeholder="prod-sales-mirror" />
                 </Field>
-                <div className={s.summary} style={{ marginTop: 10 }}>
+                <div className={s.summary} style={{ marginTop: tokens.spacingVerticalL }}>
                   <span className={s.sumKey}>Source</span><span>{srcDef.name}</span>
                   <span className={s.sumKey}>Connection</span><span>{pickedConn ? `${pickedConn.name} (${pickedConn.authMethod})` : 'manual / managed identity'}</span>
                   {isBigQuery ? (
@@ -612,7 +612,7 @@ export function MirrorSourceWizard(props: MirrorSourceWizardProps) {
                   {createSrc === 'Snowflake' && (<><span className={s.sumKey}>Iceberg</span><span>{includeIceberg ? 'Iceberg tables included' : 'standard tables only'}</span></>)}
                   <span className={s.sumKey}>Target</span><span>ADLS Bronze Delta</span>
                 </div>
-                {createErr && <MessageBar intent="error" style={{ marginTop: 8 }}><MessageBarBody>{createErr}</MessageBarBody></MessageBar>}
+                {createErr && <MessageBar intent="error" style={{ marginTop: tokens.spacingVerticalS }}><MessageBarBody>{createErr}</MessageBarBody></MessageBar>}
               </div>
             </div>
           </DialogContent>

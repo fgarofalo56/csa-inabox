@@ -69,34 +69,34 @@ import { QueryParamsBar, substituteDbx, type QueryParam } from './components/que
 import { ResultVisualize } from './components/result-visualize';
 
 const useStyles = makeStyles({
-  pad: { padding: 16, display: 'flex', flexDirection: 'column', gap: 12, minHeight: 0, flex: 1 },
-  toolbar: { display: 'flex', gap: 12, alignItems: 'center', flexWrap: 'wrap' },
+  pad: { padding: tokens.spacingVerticalL, display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalM, minHeight: 0, flex: 1 },
+  toolbar: { display: 'flex', gap: tokens.spacingHorizontalM, alignItems: 'center', flexWrap: 'wrap' },
   editor: {
     width: '100%', minHeight: 200,
-    fontFamily: 'Consolas, "Cascadia Code", monospace', fontSize: 13, padding: 12,
-    border: `1px solid ${tokens.colorNeutralStroke2}`, borderRadius: 4,
+    fontFamily: 'Consolas, "Cascadia Code", monospace', fontSize: tokens.fontSizeBase300, padding: tokens.spacingVerticalM,
+    border: `1px solid ${tokens.colorNeutralStroke2}`, borderRadius: tokens.borderRadiusMedium,
     backgroundColor: tokens.colorNeutralBackground3, color: tokens.colorNeutralForeground1,
     resize: 'vertical',
   },
-  resultBox: { borderTop: `1px solid ${tokens.colorNeutralStroke2}`, paddingTop: 12, minHeight: 200 },
-  resultMeta: { display: 'flex', gap: 12, alignItems: 'center', marginBottom: 8 },
-  resultActions: { marginLeft: 'auto', display: 'flex', gap: 4 },
-  tableWrap: { overflow: 'auto', maxHeight: 360, border: `1px solid ${tokens.colorNeutralStroke2}`, borderRadius: 4 },
-  cell: { fontFamily: 'Consolas, monospace', fontSize: 12, whiteSpace: 'nowrap' },
-  treePad: { padding: 8 },
+  resultBox: { borderTop: `1px solid ${tokens.colorNeutralStroke2}`, paddingTop: tokens.spacingVerticalM, minHeight: 200 },
+  resultMeta: { display: 'flex', gap: tokens.spacingHorizontalM, alignItems: 'center', marginBottom: tokens.spacingVerticalS },
+  resultActions: { marginLeft: 'auto', display: 'flex', gap: tokens.spacingHorizontalXS },
+  tableWrap: { overflow: 'auto', maxHeight: 360, border: `1px solid ${tokens.colorNeutralStroke2}`, borderRadius: tokens.borderRadiusMedium },
+  cell: { fontFamily: 'Consolas, monospace', fontSize: tokens.fontSizeBase200, whiteSpace: 'nowrap' },
+  treePad: { padding: tokens.spacingHorizontalS },
   treeRow: {
-    display: 'flex', alignItems: 'center', gap: 4, padding: '3px 6px', borderRadius: 4,
+    display: 'flex', alignItems: 'center', gap: tokens.spacingHorizontalXS, padding: `3px ${tokens.spacingHorizontalXS}`, borderRadius: tokens.borderRadiusMedium,
     ':hover': { backgroundColor: tokens.colorNeutralBackground2Hover },
   },
   treeDelete: { opacity: 0, ':hover': { opacity: 1 } },
   cellList: { display: 'flex', flexDirection: 'column', gap: 0, minHeight: 0 },
   cellOutput: {
     border: `1px solid ${tokens.colorNeutralStroke2}`, borderTop: 'none',
-    borderRadius: '0 0 4px 4px', padding: 8, marginBottom: 4,
+    borderRadius: `0 0 ${tokens.borderRadiusMedium} ${tokens.borderRadiusMedium}`, padding: tokens.spacingVerticalS, marginBottom: tokens.spacingVerticalXS,
     backgroundColor: tokens.colorNeutralBackground2,
   },
   cellPre: {
-    fontFamily: 'Consolas, monospace', fontSize: 12, whiteSpace: 'pre-wrap',
+    fontFamily: 'Consolas, monospace', fontSize: tokens.fontSizeBase200, whiteSpace: 'pre-wrap',
     margin: 0, maxHeight: 320, overflow: 'auto', color: tokens.colorNeutralForeground1,
   },
   // ---- Unity Catalog write-path dialog layout (tokenized, no raw inline styles) ----
@@ -362,9 +362,9 @@ function kvToMap(rows: KvRow[]): Record<string, string> | undefined {
 // Each row has a key + value input and a remove button; "Add tag" appends a row.
 function KvTagEditor({ rows, setRows }: { rows: KvRow[]; setRows: (r: KvRow[]) => void }) {
   return (
-    <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+    <div style={{ display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalXS }}>
       {rows.map((r, i) => (
-        <div key={i} style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+        <div key={i} style={{ display: 'flex', gap: tokens.spacingHorizontalS, alignItems: 'center' }}>
           <Input
             style={{ flex: 1 }} value={r.key} placeholder="key (e.g. team)"
             aria-label={`Tag ${i + 1} key`}
@@ -1135,7 +1135,7 @@ function UnityCatalogWriteDialogs(props: UcWriteDialogsProps) {
                       </MessageBar>
                     ) : (
                       <>
-                        <div style={{ display: 'flex', gap: 8, alignItems: 'flex-end' }}>
+                        <div style={{ display: 'flex', gap: tokens.spacingHorizontalS, alignItems: 'flex-end' }}>
                           <Field label="New owner" style={{ flex: 1 }} hint="user email, group name, or service-principal applicationId">
                             <Input value={grOwner} onChange={(_, d) => setGrOwner(d.value)} placeholder="data-platform-admins" />
                           </Field>
@@ -2048,7 +2048,7 @@ export function DatabricksSqlWarehouseEditor({ item, id }: { item: FabricItemTyp
       ribbon={ribbon}
       leftPanel={
         <div className={s.treePad}>
-          <div style={{ display: 'flex', gap: 4, marginBottom: 6, flexWrap: 'wrap' }}>
+          <div style={{ display: 'flex', gap: tokens.spacingHorizontalXS, marginBottom: tokens.spacingVerticalXS, flexWrap: 'wrap' }}>
             <Tooltip content="Create catalog (UC REST)" relationship="label">
               <Button size="small" appearance="outline" icon={<Add20Regular />} onClick={() => setUcCreateCatalogOpen(true)}>Catalog</Button>
             </Tooltip>
@@ -2385,7 +2385,7 @@ export function DatabricksSqlWarehouseEditor({ item, id }: { item: FabricItemTyp
           />
           <QueryParamsBar sql={sqlText} onChange={setQueryParams} />
           {result?.ok && (result.rows?.length ?? 0) > 0 && (
-            <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+            <div style={{ display: 'flex', gap: tokens.spacingHorizontalS, alignItems: 'center' }}>
               <Button
                 size="small"
                 appearance={showViz ? 'primary' : 'outline'}
@@ -2419,7 +2419,7 @@ export function DatabricksSqlWarehouseEditor({ item, id }: { item: FabricItemTyp
               <DialogBody>
                 <DialogTitle>Edit warehouse — {selectedWarehouse?.name || warehouseId}</DialogTitle>
                 <DialogContent>
-                  <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalM }}>
                     {editError && (
                       <MessageBar intent="error"><MessageBarBody><MessageBarTitle>Edit failed</MessageBarTitle>{editError}</MessageBarBody></MessageBar>
                     )}
@@ -2441,7 +2441,7 @@ export function DatabricksSqlWarehouseEditor({ item, id }: { item: FabricItemTyp
                         ))}
                       </Dropdown>
                     </Field>
-                    <div style={{ display: 'flex', gap: 12 }}>
+                    <div style={{ display: 'flex', gap: tokens.spacingHorizontalM }}>
                       <Field label="Min clusters" style={{ flex: 1 }} hint="Scaling floor (1–30)">
                         <Input type="number" value={String(editMinClusters)}
                           onChange={(_, d) => setEditMinClusters(Math.max(1, Number(d.value) || 1))} />
@@ -2509,10 +2509,10 @@ export function DatabricksSqlWarehouseEditor({ item, id }: { item: FabricItemTyp
               <DialogBody>
                 <DialogTitle>
                   {gov ? 'Create dedicated SQL pool' : 'Create SQL warehouse'}
-                  {gov && <Badge appearance="outline" color="brand" style={{ marginLeft: 8 }}>Gov · Synapse Dedicated Pool</Badge>}
+                  {gov && <Badge appearance="outline" color="brand" style={{ marginLeft: tokens.spacingHorizontalS }}>Gov · Synapse Dedicated Pool</Badge>}
                 </DialogTitle>
                 <DialogContent>
-                  <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalM }}>
                     {createError && (
                       <MessageBar intent="error"><MessageBarBody><MessageBarTitle>Create failed</MessageBarTitle>{createError}</MessageBarBody></MessageBar>
                     )}
@@ -2576,7 +2576,7 @@ export function DatabricksSqlWarehouseEditor({ item, id }: { item: FabricItemTyp
                           label="Photon acceleration"
                           onChange={(_, d) => setCreatePhoton(!!d.checked)}
                         />
-                        <div style={{ display: 'flex', gap: 12 }}>
+                        <div style={{ display: 'flex', gap: tokens.spacingHorizontalM }}>
                           <Field label="Min clusters" style={{ flex: 1 }} hint="Scaling floor (1–30)">
                             <Input type="number" value={String(createMinClusters)}
                               onChange={(_, d) => setCreateMinClusters(Math.max(1, Number(d.value) || 1))} />
@@ -2648,7 +2648,7 @@ export function DatabricksSqlWarehouseEditor({ item, id }: { item: FabricItemTyp
               <DialogBody>
                 <DialogTitle>Delete {gov ? 'dedicated pool' : 'warehouse'} — {selectedWarehouse?.name || warehouseId}</DialogTitle>
                 <DialogContent>
-                  <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalM }}>
                     {deleteError && (
                       <MessageBar intent="error"><MessageBarBody><MessageBarTitle>Delete failed</MessageBarTitle>{deleteError}</MessageBarBody></MessageBar>
                     )}
@@ -2718,7 +2718,7 @@ export function DatabricksSqlWarehouseEditor({ item, id }: { item: FabricItemTyp
                             <TableCell>{q.user_name || '—'}</TableCell>
                             <TableCell>{q.rows_produced ?? '—'}</TableCell>
                             <TableCell style={{ maxWidth: 360, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-                              <code style={{ fontSize: 11 }}>{q.query_text?.slice(0, 200) || (q.error_message ? `ERR: ${q.error_message}` : '—')}</code>
+                              <code style={{ fontSize: tokens.fontSizeBase100 }}>{q.query_text?.slice(0, 200) || (q.error_message ? `ERR: ${q.error_message}` : '—')}</code>
                             </TableCell>
                             <TableCell>
                               <Button
@@ -2762,8 +2762,8 @@ export function DatabricksSqlWarehouseEditor({ item, id }: { item: FabricItemTyp
                     </MessageBar>
                   )}
                   {profileData && !profileBusy && (
-                    <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
-                      <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'center' }}>
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalM }}>
+                      <div style={{ display: 'flex', gap: tokens.spacingHorizontalS, flexWrap: 'wrap', alignItems: 'center' }}>
                         <Badge appearance="filled" color={profileData.status === 'FINISHED' ? 'success' : profileData.status === 'FAILED' ? 'danger' : 'informative'}>
                           {profileData.status}
                         </Badge>
@@ -2834,9 +2834,9 @@ export function DatabricksSqlWarehouseEditor({ item, id }: { item: FabricItemTyp
                       )}
                       {profileData.plans != null && (
                         <pre style={{
-                          fontFamily: 'Consolas, monospace', fontSize: 11, overflow: 'auto',
+                          fontFamily: 'Consolas, monospace', fontSize: tokens.fontSizeBase100, overflow: 'auto',
                           maxHeight: 320, backgroundColor: tokens.colorNeutralBackground3,
-                          padding: 8, borderRadius: 4, margin: 0,
+                          padding: tokens.spacingVerticalS, borderRadius: tokens.borderRadiusMedium, margin: 0,
                         }}>
                           {JSON.stringify(profileData.plans, null, 2)}
                         </pre>
@@ -2964,7 +2964,7 @@ export function DatabricksSqlWarehouseEditor({ item, id }: { item: FabricItemTyp
               <DialogBody>
                 <DialogTitle>Save as table (CTAS)</DialogTitle>
                 <DialogContent>
-                  <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalM }}>
                     {ctasError && (
                       <MessageBar intent="error"><MessageBarBody><MessageBarTitle>CTAS failed</MessageBarTitle>{ctasError}</MessageBarBody></MessageBar>
                     )}
@@ -2972,7 +2972,7 @@ export function DatabricksSqlWarehouseEditor({ item, id }: { item: FabricItemTyp
                       Wraps the editor SELECT as <code>CREATE TABLE `catalog`.`schema`.`name` USING DELTA AS SELECT …</code>{' '}
                       and runs it on the warehouse. Requires <code>CREATE TABLE</code> + <code>USE SCHEMA</code> + <code>USE CATALOG</code> on the target.
                     </Caption1>
-                    <div style={{ display: 'flex', gap: 8 }}>
+                    <div style={{ display: 'flex', gap: tokens.spacingHorizontalS }}>
                       <Field label="Catalog" required style={{ flex: 1 }}>
                         {catalogs.length > 0 ? (
                           <Dropdown value={ctasCatalog} selectedOptions={ctasCatalog ? [ctasCatalog] : []}
@@ -3015,7 +3015,7 @@ export function DatabricksSqlWarehouseEditor({ item, id }: { item: FabricItemTyp
               <DialogBody>
                 <DialogTitle>Clone table (Delta)</DialogTitle>
                 <DialogContent>
-                  <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalM }}>
                     {cloneError && (
                       <MessageBar intent="error"><MessageBarBody><MessageBarTitle>Clone failed</MessageBarTitle>{cloneError}</MessageBarBody></MessageBar>
                     )}
@@ -3567,7 +3567,7 @@ export function DatabricksNotebookEditor({ item, id }: { item: FabricItemType; i
               role="button"
               tabIndex={0}
               aria-label={`${isDir ? 'Toggle' : 'Open'} ${o.path}`}
-              style={{ display: 'flex', alignItems: 'center', gap: 6, flex: 1, cursor: 'pointer', minWidth: 0 }}
+              style={{ display: 'flex', alignItems: 'center', gap: tokens.spacingHorizontalXS, flex: 1, cursor: 'pointer', minWidth: 0 }}
               onClick={() => isDir ? toggle(o.path) : isNb ? openNotebook(o.path, o.language) : undefined}
               onKeyDown={(e) => {
                 if (e.key === 'Enter' || e.key === ' ') {
@@ -3632,7 +3632,7 @@ export function DatabricksNotebookEditor({ item, id }: { item: FabricItemType; i
       ribbon={ribbonNb}
       leftPanel={
         <div className={s.treePad}>
-          <div style={{ display: 'flex', gap: 6, marginBottom: 6 }}>
+          <div style={{ display: 'flex', gap: tokens.spacingHorizontalXS, marginBottom: tokens.spacingVerticalXS }}>
             <Input
               value={rootPath}
               onChange={(_, d) => setRootPath(d.value || '/Workspace')}
@@ -4734,10 +4734,10 @@ export function DatabricksJobEditor({ item, id }: { item: FabricItemType; id: st
           {activeTab === 'tasks' && (
             <>
               <PipelineDagView activities={dagActivities} emptyHint="No tasks yet. Click Add task." />
-              <div style={{ display: 'flex', gap: 16, alignItems: 'flex-start' }}>
+              <div style={{ display: 'flex', gap: tokens.spacingHorizontalL, alignItems: 'flex-start' }}>
                 {/* Task list */}
                 <div style={{ minWidth: 220 }}>
-                  <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 6 }}>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: tokens.spacingHorizontalXS, marginBottom: tokens.spacingVerticalXS }}>
                     <Subtitle2 style={{ flex: 1 }}>Tasks</Subtitle2>
                     <Button size="small" icon={<Add20Regular />} appearance="outline" onClick={addTask}>Add</Button>
                   </div>
@@ -4750,8 +4750,8 @@ export function DatabricksJobEditor({ item, id }: { item: FabricItemType; id: st
                       onClick={() => setActiveTaskKey(t.task_key)}
                       onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); setActiveTaskKey(t.task_key); } }}
                       style={{
-                        padding: 6, cursor: 'pointer', borderRadius: 3, marginBottom: 2,
-                        display: 'flex', alignItems: 'center', gap: 6,
+                        padding: tokens.spacingVerticalXS, cursor: 'pointer', borderRadius: tokens.borderRadiusMedium, marginBottom: tokens.spacingVerticalXXS,
+                        display: 'flex', alignItems: 'center', gap: tokens.spacingHorizontalXS,
                         background: activeTaskKey === t.task_key ? tokens.colorNeutralBackground2Selected : undefined,
                       }}
                     >
@@ -4772,8 +4772,8 @@ export function DatabricksJobEditor({ item, id }: { item: FabricItemType; id: st
 
                 {/* Task detail editor */}
                 {activeTask && (
-                  <div style={{ flex: 1, display: 'flex', flexDirection: 'column', gap: 10, minWidth: 0 }}>
-                    <div style={{ display: 'flex', gap: 12, flexWrap: 'wrap' }}>
+                  <div style={{ flex: 1, display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalS, minWidth: 0 }}>
+                    <div style={{ display: 'flex', gap: tokens.spacingHorizontalM, flexWrap: 'wrap' }}>
                       <Field label="Task key" style={{ flex: 1, minWidth: 160 }}>
                         <Input value={activeTask.task_key}
                           onChange={(_, d) => renameTaskKey(activeTask.task_key, d.value)} />
@@ -4832,7 +4832,7 @@ export function DatabricksJobEditor({ item, id }: { item: FabricItemType; id: st
                     )}
                     {activeTask.task_type === 'python_wheel_task' && (
                       <>
-                        <div style={{ display: 'flex', gap: 12 }}>
+                        <div style={{ display: 'flex', gap: tokens.spacingHorizontalM }}>
                           <Field label="Package name" style={{ flex: 1 }}>
                             <Input value={activeTask.wheel_package}
                               onChange={(_, d) => patchTask(activeTask.task_key, { wheel_package: d.value })} />
@@ -4884,7 +4884,7 @@ export function DatabricksJobEditor({ item, id }: { item: FabricItemType; id: st
                               onChange={(_, d) => patchTask(activeTask.task_key, { sql_warehouse_id: d.value })} />
                           )}
                         </Field>
-                        <div style={{ display: 'flex', gap: 12 }}>
+                        <div style={{ display: 'flex', gap: tokens.spacingHorizontalM }}>
                           <Field label="Query id (saved query)" style={{ flex: 1 }}>
                             <Input value={activeTask.sql_query_id}
                               onChange={(_, d) => patchTask(activeTask.task_key, { sql_query_id: d.value })} />
@@ -4902,7 +4902,7 @@ export function DatabricksJobEditor({ item, id }: { item: FabricItemType; id: st
                           <Textarea rows={4} value={activeTask.dbt_commands}
                             onChange={(_, d) => patchTask(activeTask.task_key, { dbt_commands: d.value })} />
                         </Field>
-                        <div style={{ display: 'flex', gap: 12 }}>
+                        <div style={{ display: 'flex', gap: tokens.spacingHorizontalM }}>
                           <Field label="Project directory" style={{ flex: 1 }}>
                             <Input value={activeTask.dbt_project_directory}
                               onChange={(_, d) => patchTask(activeTask.task_key, { dbt_project_directory: d.value })} />
@@ -4960,7 +4960,7 @@ export function DatabricksJobEditor({ item, id }: { item: FabricItemType; id: st
                       <>
                         <Divider />
                         <Subtitle2>Compute</Subtitle2>
-                        <div style={{ display: 'flex', gap: 12, alignItems: 'flex-end', flexWrap: 'wrap' }}>
+                        <div style={{ display: 'flex', gap: tokens.spacingHorizontalM, alignItems: 'flex-end', flexWrap: 'wrap' }}>
                           <Field label="Cluster">
                             <Dropdown
                               value={activeTask.compute === 'new' ? 'New job cluster' : 'Existing cluster'}
@@ -5021,7 +5021,7 @@ export function DatabricksJobEditor({ item, id }: { item: FabricItemType; id: st
                     {/* Dependencies + reliability */}
                     <Divider />
                     <Subtitle2>Depends on</Subtitle2>
-                    <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+                    <div style={{ display: 'flex', gap: tokens.spacingHorizontalS, flexWrap: 'wrap' }}>
                       {tasks.filter((t) => t.task_key !== activeTask.task_key).length === 0 && (
                         <Caption1>No other tasks to depend on. Add a task to build a multi-task DAG.</Caption1>
                       )}
@@ -5057,7 +5057,7 @@ export function DatabricksJobEditor({ item, id }: { item: FabricItemType; id: st
 
                     <Divider />
                     <Subtitle2>Retries &amp; timeout</Subtitle2>
-                    <div style={{ display: 'flex', gap: 12, flexWrap: 'wrap' }}>
+                    <div style={{ display: 'flex', gap: tokens.spacingHorizontalM, flexWrap: 'wrap' }}>
                       <Field label="Max retries">
                         <Input type="number" value={String(activeTask.max_retries)}
                           onChange={(_, d) => patchTask(activeTask.task_key, { max_retries: Number(d.value) || 0 })} />
@@ -5079,7 +5079,7 @@ export function DatabricksJobEditor({ item, id }: { item: FabricItemType; id: st
 
           {/* ---------------- SCHEDULE TAB ---------------- */}
           {activeTab === 'schedule' && (
-            <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+            <div style={{ display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalM }}>
               <Field label="Trigger type">
                 <Dropdown
                   value={triggerType === 'none' ? 'None (manual / API only)'
@@ -5096,7 +5096,7 @@ export function DatabricksJobEditor({ item, id }: { item: FabricItemType; id: st
                 </Dropdown>
               </Field>
               {triggerType === 'cron' && (
-                <div style={{ display: 'flex', gap: 12, alignItems: 'flex-end', flexWrap: 'wrap' }}>
+                <div style={{ display: 'flex', gap: tokens.spacingHorizontalM, alignItems: 'flex-end', flexWrap: 'wrap' }}>
                   <Field label="Quartz cron expression" hint="e.g. 0 0 2 * * ?  (daily 02:00)">
                     <Input value={cron} onChange={(_, d) => { setCron(d.value); markDirty(); }} />
                   </Field>
@@ -5131,8 +5131,8 @@ export function DatabricksJobEditor({ item, id }: { item: FabricItemType; id: st
 
           {/* ---------------- SETTINGS TAB ---------------- */}
           {activeTab === 'settings' && (
-            <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
-              <div style={{ display: 'flex', gap: 12, flexWrap: 'wrap' }}>
+            <div style={{ display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalM }}>
+              <div style={{ display: 'flex', gap: tokens.spacingHorizontalM, flexWrap: 'wrap' }}>
                 <Field label="Max concurrent runs">
                   <Input type="number" value={String(maxConcurrent)}
                     onChange={(_, d) => { setMaxConcurrent(Number(d.value) || 1); markDirty(); }} />
@@ -5148,7 +5148,7 @@ export function DatabricksJobEditor({ item, id }: { item: FabricItemType; id: st
               <Field label="Job parameters (key=default per line)" hint="Surfaced as job_parameters on run-now">
                 <Textarea rows={3} value={jobParamsText} onChange={(_, d) => { setJobParamsText(d.value); markDirty(); }} />
               </Field>
-              <div style={{ display: 'flex', gap: 12, flexWrap: 'wrap' }}>
+              <div style={{ display: 'flex', gap: tokens.spacingHorizontalM, flexWrap: 'wrap' }}>
                 <Field label="Email on failure (comma-separated)" style={{ flex: 1, minWidth: 240 }}>
                   <Input value={emailOnFailure} onChange={(_, d) => { setEmailOnFailure(d.value); markDirty(); }} />
                 </Field>
@@ -5162,7 +5162,7 @@ export function DatabricksJobEditor({ item, id }: { item: FabricItemType; id: st
           {/* ---------------- RUNS TAB ---------------- */}
           {activeTab === 'runs' && (
             <>
-              <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: tokens.spacingHorizontalS }}>
                 <Subtitle2 style={{ flex: 1 }}>Run history</Subtitle2>
                 <Button size="small" appearance="outline" icon={<ArrowSync20Regular />} onClick={refreshRuns}>Refresh</Button>
                 <Button size="small" appearance="primary" icon={<Play20Regular />} disabled={!canRunNow} onClick={runNow}>
@@ -5222,7 +5222,7 @@ export function DatabricksJobEditor({ item, id }: { item: FabricItemType; id: st
                   {outBusy && <Spinner size="small" label="Loading run output…" labelPosition="after" />}
                   {outError && <MessageBar intent="error"><MessageBarBody><MessageBarTitle>Failed</MessageBarTitle>{outError}</MessageBarBody></MessageBar>}
                   {outData?.run && (
-                    <div style={{ marginBottom: 8 }}>
+                    <div style={{ marginBottom: tokens.spacingVerticalS }}>
                       <Badge appearance="outline" color={runStateColor(outData.run.state?.result_state)}>
                         {outData.run.state?.life_cycle_state || '—'}{outData.run.state?.result_state ? ` · ${outData.run.state.result_state}` : ''}
                       </Badge>
@@ -5535,7 +5535,7 @@ export function DatabricksClusterEditor({ item, id }: { item: FabricItemType; id
       ribbon={ribbonCluster}
       leftPanel={
         <div className={s.treePad}>
-          <div style={{ display: 'flex', gap: 6, marginBottom: 6 }}>
+          <div style={{ display: 'flex', gap: tokens.spacingHorizontalXS, marginBottom: tokens.spacingVerticalXS }}>
             <Subtitle2 style={{ flex: 1 }}>Clusters ({clusters.length})</Subtitle2>
             <Button size="small" icon={<Add20Regular />} aria-label="New cluster" onClick={() => {
               setClusterId(null); setCluster(null); setName(''); setEvents([]);
@@ -5555,12 +5555,12 @@ export function DatabricksClusterEditor({ item, id }: { item: FabricItemType; id
               onClick={() => selectCluster(c.cluster_id)}
               onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); selectCluster(c.cluster_id); } }}
               style={{
-                padding: 6, cursor: 'pointer', borderRadius: 3,
+                padding: tokens.spacingVerticalXS, cursor: 'pointer', borderRadius: tokens.borderRadiusMedium,
                 background: clusterId === c.cluster_id ? tokens.colorNeutralBackground2Selected : undefined,
               }}
             >
               <Body1>{c.cluster_name || c.cluster_id}</Body1>
-              <div style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
+              <div style={{ display: 'flex', gap: tokens.spacingHorizontalXS, alignItems: 'center' }}>
                 <Badge appearance="filled" color={clusterStateColor(c.state)} size="small">{c.state || '?'}</Badge>
                 <Caption1>{c.node_type_id || '—'}</Caption1>
               </div>
@@ -5620,7 +5620,7 @@ export function DatabricksClusterEditor({ item, id }: { item: FabricItemType; id
           <Field label="Cluster name">
             <Input value={name} onChange={(_, d) => setName(d.value)} />
           </Field>
-          <div style={{ display: 'flex', gap: 12 }}>
+          <div style={{ display: 'flex', gap: tokens.spacingHorizontalM }}>
             <Field label="Node type" style={{ flex: 1 }}>
               <Dropdown
                 value={nodeType}
@@ -5646,7 +5646,7 @@ export function DatabricksClusterEditor({ item, id }: { item: FabricItemType; id
               </Dropdown>
             </Field>
           </div>
-          <div style={{ display: 'flex', gap: 12, alignItems: 'flex-end' }}>
+          <div style={{ display: 'flex', gap: tokens.spacingHorizontalM, alignItems: 'flex-end' }}>
             <Switch checked={autoscale} onChange={(_, d) => setAutoscale(!!d.checked)} label="Autoscale" />
             {autoscale ? (
               <>
@@ -5673,7 +5673,7 @@ export function DatabricksClusterEditor({ item, id }: { item: FabricItemType; id
 
           {clusterId && (
             <>
-              <div style={{ borderBottom: `1px solid ${tokens.colorNeutralStroke2}`, marginTop: 12 }}>
+              <div style={{ borderBottom: `1px solid ${tokens.colorNeutralStroke2}`, marginTop: tokens.spacingVerticalM }}>
                 <TabList selectedValue={detailTab} onTabSelect={(_, d) => setDetailTab(d.value as 'config' | 'libraries' | 'init' | 'events')}>
                   <Tab value="config">Spark config ({Object.keys(cluster?.spark_conf || {}).length})</Tab>
                   <Tab value="libraries">Libraries ({libraries.length})</Tab>
@@ -5696,8 +5696,8 @@ export function DatabricksClusterEditor({ item, id }: { item: FabricItemType; id
                         <TableBody>
                           {Object.entries(cluster.spark_conf).map(([k, v]) => (
                             <TableRow key={k}>
-                              <TableCell><code style={{ fontSize: 12 }}>{k}</code></TableCell>
-                              <TableCell style={{ fontFamily: 'Consolas, monospace', fontSize: 12 }}>{v}</TableCell>
+                              <TableCell><code style={{ fontSize: tokens.fontSizeBase200 }}>{k}</code></TableCell>
+                              <TableCell style={{ fontFamily: 'Consolas, monospace', fontSize: tokens.fontSizeBase200 }}>{v}</TableCell>
                             </TableRow>
                           ))}
                         </TableBody>
@@ -5738,9 +5738,9 @@ export function DatabricksClusterEditor({ item, id }: { item: FabricItemType; id
                             return (
                               <TableRow key={i}>
                                 <TableCell><Badge appearance="outline">{t}</Badge></TableCell>
-                                <TableCell><code style={{ fontSize: 12 }}>{coords}</code></TableCell>
+                                <TableCell><code style={{ fontSize: tokens.fontSizeBase200 }}>{coords}</code></TableCell>
                                 <TableCell><Badge appearance="filled" color={lib.status === 'INSTALLED' ? 'success' : lib.status === 'FAILED' ? 'danger' : 'warning'}>{lib.status || '—'}</Badge></TableCell>
-                                <TableCell style={{ fontSize: 11 }}>{(lib.messages || []).join('; ') || '—'}</TableCell>
+                                <TableCell style={{ fontSize: tokens.fontSizeBase100 }}>{(lib.messages || []).join('; ') || '—'}</TableCell>
                               </TableRow>
                             );
                           })}
@@ -5777,7 +5777,7 @@ export function DatabricksClusterEditor({ item, id }: { item: FabricItemType; id
                             return (
                               <TableRow key={i}>
                                 <TableCell><Badge appearance="outline">{src}</Badge></TableCell>
-                                <TableCell><code style={{ fontSize: 12 }}>{dest}</code></TableCell>
+                                <TableCell><code style={{ fontSize: tokens.fontSizeBase200 }}>{dest}</code></TableCell>
                               </TableRow>
                             );
                           })}

@@ -155,8 +155,8 @@ function GlossarySection({
   }, [dataProductId, onLinksChange]);
 
   return (
-    <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
-      <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+    <div style={{ display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalM }}>
+      <div style={{ display: 'flex', alignItems: 'center', gap: tokens.spacingHorizontalS }}>
         <Library20Regular />
         <Subtitle2>Glossary terms</Subtitle2>
       </div>
@@ -164,7 +164,7 @@ function GlossarySection({
 
       {gate && <MessageBar intent="warning"><MessageBarBody>{gate}</MessageBarBody></MessageBar>}
 
-      <div style={{ display: 'grid', gridTemplateColumns: '1fr 2fr auto', gap: 12, alignItems: 'flex-end' }}>
+      <div style={{ display: 'grid', gridTemplateColumns: '1fr 2fr auto', gap: tokens.spacingHorizontalM, alignItems: 'flex-end' }}>
         <Field label="Glossary (domain)">
           <Dropdown
             placeholder={glossaries.length === 0 ? 'Default glossary' : 'All glossaries'}
@@ -186,7 +186,7 @@ function GlossarySection({
       </div>
 
       {results.length > 0 && (
-        <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+        <div style={{ display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalS }}>
           <Caption1 style={{ color: tokens.colorNeutralForeground3 }}>{results.length} term{results.length === 1 ? '' : 's'} — select to attach</Caption1>
           <Table size="small" aria-label="Glossary search results">
             <TableHeader><TableRow>
@@ -199,7 +199,7 @@ function GlossarySection({
                 <TableRow key={t.guid}>
                   <TableCell><Checkbox checked={selected.has(t.guid)} onChange={() => toggle(t.guid)} aria-label={`Select ${t.name || t.guid}`} /></TableCell>
                   <TableCell><strong>{t.name || '(unnamed)'}</strong></TableCell>
-                  <TableCell><code style={{ fontSize: 11 }}>{t.qualifiedName || t.guid}</code></TableCell>
+                  <TableCell><code style={{ fontSize: tokens.fontSizeBase100 }}>{t.qualifiedName || t.guid}</code></TableCell>
                 </TableRow>
               ))}
             </TableBody>
@@ -212,7 +212,7 @@ function GlossarySection({
 
       {msg && <MessageBar intent={msg.intent}><MessageBarBody>{msg.text}</MessageBarBody></MessageBar>}
 
-      <Subtitle2 style={{ marginTop: 4 }}>Linked terms ({links.length})</Subtitle2>
+      <Subtitle2 style={{ marginTop: tokens.spacingVerticalXS }}>Linked terms ({links.length})</Subtitle2>
       <Table size="small" aria-label="Linked glossary terms">
         <TableHeader><TableRow>
           <TableHeaderCell>Term</TableHeaderCell>
@@ -224,7 +224,7 @@ function GlossarySection({
           {links.map((l) => (
             <TableRow key={l.guid || l.name}>
               <TableCell><strong>{l.name}</strong></TableCell>
-              <TableCell><code style={{ fontSize: 11 }}>{l.guid?.slice(0, 12) || '—'}</code></TableCell>
+              <TableCell><code style={{ fontSize: tokens.fontSizeBase100 }}>{l.guid?.slice(0, 12) || '—'}</code></TableCell>
               <TableCell><RemoveMenu onRemove={() => removeLink(l)} /></TableCell>
             </TableRow>
           ))}
@@ -287,13 +287,13 @@ function OkrSection({ dataProductId }: { dataProductId: string }) {
   }, [dataProductId, load]);
 
   return (
-    <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
-      <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+    <div style={{ display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalM }}>
+      <div style={{ display: 'flex', alignItems: 'center', gap: tokens.spacingHorizontalS }}>
         <Target20Regular />
         <Subtitle2>OKRs</Subtitle2>
       </div>
       <Body1>Track the objectives & key results this data product supports.</Body1>
-      <div style={{ display: 'grid', gridTemplateColumns: '2fr 1fr 1fr 1fr 1fr', gap: 12, alignItems: 'flex-end' }}>
+      <div style={{ display: 'grid', gridTemplateColumns: '2fr 1fr 1fr 1fr 1fr', gap: tokens.spacingHorizontalM, alignItems: 'flex-end' }}>
         <Field label="Objective"><Input value={name} onChange={(_, d) => setName(d.value)} placeholder="Improve data freshness" /></Field>
         <Field label="Metric"><Input value={metric} onChange={(_, d) => setMetric(d.value)} placeholder="Lag (min)" /></Field>
         <Field label="Target"><Input value={target} onChange={(_, d) => setTarget(d.value)} placeholder="15" /></Field>
@@ -366,8 +366,8 @@ function CdeSection({ dataProductId, refreshKey }: { dataProductId: string; refr
   useEffect(() => { load(); }, [load, refreshKey]);
 
   return (
-    <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
-      <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+    <div style={{ display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalM }}>
+      <div style={{ display: 'flex', alignItems: 'center', gap: tokens.spacingHorizontalS }}>
         <ShieldTask20Regular />
         <Subtitle2>Critical Data Elements</Subtitle2>
         <Badge appearance="outline">read-only</Badge>
@@ -389,8 +389,8 @@ function CdeSection({ dataProductId, refreshKey }: { dataProductId: string; refr
             {cdes.map((c) => (
               <TableRow key={c.typeName}>
                 <TableCell><strong>{c.displayName}</strong></TableCell>
-                <TableCell><code style={{ fontSize: 11 }}>{c.typeName}</code></TableCell>
-                <TableCell>{c.assetName || <code style={{ fontSize: 11 }}>{c.assetGuid.slice(0, 12)}</code>}</TableCell>
+                <TableCell><code style={{ fontSize: tokens.fontSizeBase100 }}>{c.typeName}</code></TableCell>
+                <TableCell>{c.assetName || <code style={{ fontSize: tokens.fontSizeBase100 }}>{c.assetGuid.slice(0, 12)}</code>}</TableCell>
               </TableRow>
             ))}
           </TableBody>
@@ -425,7 +425,7 @@ export function LinkedResourcesPanel({
     );
   }
   return (
-    <div style={{ display: 'flex', flexDirection: 'column', gap: 28 }}>
+    <div style={{ display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalXXL }}>
       <GlossarySection dataProductId={dataProductId} links={glossaryLinks} onLinksChange={onGlossaryLinksChange} />
       <OkrSection dataProductId={dataProductId} />
       <CdeSection dataProductId={dataProductId} refreshKey={datasetsKey} />

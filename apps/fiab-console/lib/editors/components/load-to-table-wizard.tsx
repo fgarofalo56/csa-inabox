@@ -44,17 +44,17 @@ import {
 } from '@/lib/azure/load-to-table-codegen';
 
 const useStyles = makeStyles({
-  body: { display: 'flex', flexDirection: 'column', gap: 14, minWidth: 480 },
-  steps: { display: 'flex', gap: 6, alignItems: 'center', marginBottom: 4 },
+  body: { display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalL, minWidth: 480 },
+  steps: { display: 'flex', gap: tokens.spacingHorizontalS, alignItems: 'center', marginBottom: tokens.spacingVerticalXS },
   summary: {
-    display: 'flex', flexDirection: 'column', gap: 6,
-    padding: 12, borderRadius: 6,
+    display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalS,
+    padding: tokens.spacingVerticalM, borderRadius: tokens.borderRadiusLarge,
     backgroundColor: tokens.colorNeutralBackground3,
     border: `1px solid ${tokens.colorNeutralStroke2}`,
   },
-  row: { display: 'flex', justifyContent: 'space-between', gap: 16 },
-  mono: { fontFamily: 'Consolas, monospace', fontSize: 12, wordBreak: 'break-all' },
-  center: { display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 12, padding: 24 },
+  row: { display: 'flex', justifyContent: 'space-between', gap: tokens.spacingHorizontalL },
+  mono: { fontFamily: 'Consolas, monospace', fontSize: tokens.fontSizeBase200, wordBreak: 'break-all' },
+  center: { display: 'flex', flexDirection: 'column', alignItems: 'center', gap: tokens.spacingVerticalM, padding: tokens.spacingVerticalXXL },
 });
 
 interface ComputeTarget { id: string; name: string; kind: string; state?: string }
@@ -181,7 +181,7 @@ export function LoadToTableWizard(props: LoadToTableWizardProps) {
                   <Field label="Source file">
                     <div className={s.mono}>{container}/{path}</div>
                   </Field>
-                  <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+                  <div style={{ display: 'flex', gap: tokens.spacingHorizontalS, alignItems: 'center' }}>
                     <Caption1>Detected format:</Caption1>
                     <Badge appearance="tint" color={detectedFormat ? 'brand' : 'warning'}>{hint.label}</Badge>
                     {detectedFormat ? (

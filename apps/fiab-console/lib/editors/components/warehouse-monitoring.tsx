@@ -66,18 +66,18 @@ const useStyles = makeStyles({
   toolbar: { display: 'flex', alignItems: 'center', gap: tokens.spacingHorizontalM, flexWrap: 'wrap' },
   kpis: { display: 'flex', gap: tokens.spacingHorizontalL, flexWrap: 'wrap' },
   kpi: {
-    display: 'flex', flexDirection: 'column', gap: '2px',
-    padding: '10px 14px',
+    display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalXXS,
+    padding: `${tokens.spacingVerticalS} ${tokens.spacingHorizontalM}`,
     border: `1px solid ${tokens.colorNeutralStroke2}`,
     borderRadius: tokens.borderRadiusLarge,
     backgroundColor: tokens.colorNeutralBackground1,
     minWidth: '130px',
   },
-  kpiValue: { fontSize: '22px', fontWeight: 700, color: tokens.colorBrandForeground1, lineHeight: 1.1 },
-  kpiLabel: { fontSize: '11px', color: tokens.colorNeutralForeground3 },
+  kpiValue: { fontSize: tokens.fontSizeBase500, fontWeight: 700, color: tokens.colorBrandForeground1, lineHeight: 1.1 },
+  kpiLabel: { fontSize: tokens.fontSizeBase100, color: tokens.colorNeutralForeground3 },
   code: {
     fontFamily: tokens.fontFamilyMonospace,
-    fontSize: '11px',
+    fontSize: tokens.fontSizeBase100,
     whiteSpace: 'pre-wrap',
     wordBreak: 'break-word',
     margin: 0,
@@ -86,7 +86,7 @@ const useStyles = makeStyles({
     backgroundColor: tokens.colorNeutralBackground3,
     border: `1px solid ${tokens.colorNeutralStroke2}`,
     borderRadius: tokens.borderRadiusMedium,
-    padding: '10px',
+    padding: tokens.spacingVerticalS,
   },
 });
 
@@ -173,7 +173,7 @@ export function WarehouseMonitoringTab({
       key: 'text', label: 'Query', width: 360, filterType: 'text',
       getValue: (r) => r.text,
       render: (r) => (
-        <code style={{ fontSize: 11 }} title={r.text}>
+        <code style={{ fontSize: tokens.fontSizeBase100 }} title={r.text}>
           {r.text ? (r.text.length > 160 ? `${r.text.slice(0, 159)}…` : r.text) : '—'}
         </code>
       ),

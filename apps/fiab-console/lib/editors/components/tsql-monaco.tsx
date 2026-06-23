@@ -45,9 +45,9 @@ import {
 } from '@/lib/azure/sql-templates';
 
 const useStyles = makeStyles({
-  root: { display: 'flex', flexDirection: 'column', gap: 8, minHeight: 0, flex: 1 },
-  toolbar: { display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' },
-  spacer: { marginLeft: 'auto', display: 'flex', gap: 4, alignItems: 'center' },
+  root: { display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalS, minHeight: 0, flex: 1 },
+  toolbar: { display: 'flex', gap: tokens.spacingHorizontalS, alignItems: 'center', flexWrap: 'wrap' },
+  spacer: { marginLeft: 'auto', display: 'flex', gap: tokens.spacingHorizontalXS, alignItems: 'center' },
   note: { color: tokens.colorNeutralForeground3 },
 });
 

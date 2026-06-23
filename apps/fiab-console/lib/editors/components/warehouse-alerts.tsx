@@ -102,14 +102,14 @@ const SEVERITIES: { value: string; label: string }[] = [
 const TIMEZONES = ['UTC', 'America/New_York', 'America/Chicago', 'America/Denver', 'America/Los_Angeles'];
 
 const useStyles = makeStyles({
-  body: { display: 'flex', flexDirection: 'column', gap: '16px', minWidth: '640px', maxWidth: '880px' },
-  toolbar: { display: 'flex', gap: '8px', alignItems: 'center', flexWrap: 'wrap' },
+  body: { display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalL, minWidth: '640px', maxWidth: '880px' },
+  toolbar: { display: 'flex', gap: tokens.spacingHorizontalS, alignItems: 'center', flexWrap: 'wrap' },
   spacer: { marginLeft: 'auto' },
-  editorPane: { display: 'flex', flexDirection: 'column', gap: '12px', minHeight: '300px' },
-  fieldRow: { display: 'flex', gap: '12px', flexWrap: 'wrap' },
-  fieldCol: { display: 'flex', flexDirection: 'column', gap: '6px', minWidth: '220px', flex: 1 },
+  editorPane: { display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalM, minHeight: '300px' },
+  fieldRow: { display: 'flex', gap: tokens.spacingHorizontalM, flexWrap: 'wrap' },
+  fieldCol: { display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalXS, minWidth: '220px', flex: 1 },
   hint: { color: tokens.colorNeutralForeground3 },
-  tableWrap: { overflow: 'auto', maxHeight: '300px', border: `1px solid ${tokens.colorNeutralStroke2}`, borderRadius: '4px' },
+  tableWrap: { overflow: 'auto', maxHeight: '300px', border: `1px solid ${tokens.colorNeutralStroke2}`, borderRadius: tokens.borderRadiusMedium },
 });
 
 export interface WarehouseAlertsProps {
@@ -251,7 +251,7 @@ export function WarehouseAlerts({ engine, id, warehouseId, open, onOpenChange }:
       <DialogSurface style={{ maxWidth: '920px', width: '95vw' }}>
         <DialogBody>
           <DialogTitle>
-            <span style={{ display: 'inline-flex', alignItems: 'center', gap: 8 }}>
+            <span style={{ display: 'inline-flex', alignItems: 'center', gap: tokens.spacingHorizontalS }}>
               <Alert20Regular /> Alerts
               <Badge appearance="outline" color={isMonitor ? 'warning' : 'brand'}>
                 {isMonitor ? 'Azure Monitor (scheduled query rule)' : 'Databricks SQL Alerts'}

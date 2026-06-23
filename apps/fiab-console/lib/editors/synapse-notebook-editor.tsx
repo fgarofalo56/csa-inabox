@@ -68,57 +68,57 @@ interface AmlScheduleRow {
 }
 
 const useStyles = makeStyles({
-  pad: { padding: 16, display: 'flex', flexDirection: 'column', gap: 12, minHeight: 0, flex: 1 },
-  toolbar: { display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' },
+  pad: { padding: tokens.spacingVerticalL, display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalM, minHeight: 0, flex: 1 },
+  toolbar: { display: 'flex', gap: tokens.spacingHorizontalS, alignItems: 'center', flexWrap: 'wrap' },
   spacer: { flex: 1 },
-  treePad: { padding: 8 },
-  cells: { display: 'flex', flexDirection: 'column', gap: 10, overflow: 'auto', flex: 1, minHeight: 0, paddingRight: 4 },
+  treePad: { padding: tokens.spacingVerticalS },
+  cells: { display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalS, overflow: 'auto', flex: 1, minHeight: 0, paddingRight: tokens.spacingHorizontalXS },
   cell: {
-    border: `1px solid ${tokens.colorNeutralStroke2}`, borderRadius: 6,
+    border: `1px solid ${tokens.colorNeutralStroke2}`, borderRadius: tokens.borderRadiusLarge,
     backgroundColor: tokens.colorNeutralBackground1, display: 'flex', flexDirection: 'column',
   },
   cellActive: { border: `1px solid ${tokens.colorBrandStroke1}` },
   cellHeader: {
-    display: 'flex', alignItems: 'center', gap: 6, padding: '4px 8px',
+    display: 'flex', alignItems: 'center', gap: tokens.spacingHorizontalXS, padding: `${tokens.spacingVerticalXS} ${tokens.spacingHorizontalS}`,
     backgroundColor: tokens.colorNeutralBackground2, borderBottom: `1px solid ${tokens.colorNeutralStroke2}`,
-    borderRadius: '6px 6px 0 0',
+    borderRadius: `${tokens.borderRadiusLarge} ${tokens.borderRadiusLarge} 0 0`,
   },
   output: {
-    fontFamily: 'Consolas, "Cascadia Code", monospace', fontSize: 12, whiteSpace: 'pre-wrap',
-    padding: 10, borderTop: `1px solid ${tokens.colorNeutralStroke2}`,
+    fontFamily: 'Consolas, "Cascadia Code", monospace', fontSize: tokens.fontSizeBase200, whiteSpace: 'pre-wrap',
+    padding: tokens.spacingVerticalS, borderTop: `1px solid ${tokens.colorNeutralStroke2}`,
     backgroundColor: tokens.colorNeutralBackground3, maxHeight: 280, overflow: 'auto',
   },
   outputErr: { color: tokens.colorPaletteRedForeground1, backgroundColor: tokens.colorPaletteRedBackground1 },
-  md: { padding: 12, fontSize: 14, lineHeight: 1.5, color: tokens.colorNeutralForeground1 },
-  tag: { fontFamily: 'Consolas, monospace', color: tokens.colorNeutralForeground3, fontSize: 11 },
+  md: { padding: tokens.spacingVerticalM, fontSize: tokens.fontSizeBase300, lineHeight: 1.5, color: tokens.colorNeutralForeground1 },
+  tag: { fontFamily: 'Consolas, monospace', color: tokens.colorNeutralForeground3, fontSize: tokens.fontSizeBase100 },
   collapsedHint: {
-    fontFamily: 'Consolas, "Cascadia Code", monospace', fontSize: 12,
-    color: tokens.colorNeutralForeground3, padding: '8px 12px',
+    fontFamily: 'Consolas, "Cascadia Code", monospace', fontSize: tokens.fontSizeBase200,
+    color: tokens.colorNeutralForeground3, padding: `${tokens.spacingVerticalS} ${tokens.spacingHorizontalM}`,
     borderTop: `1px dashed ${tokens.colorNeutralStroke2}`, cursor: 'pointer',
   },
   outlineHead: {
-    display: 'flex', alignItems: 'center', gap: 6,
-    padding: '8px 4px 4px', color: tokens.colorNeutralForeground3,
+    display: 'flex', alignItems: 'center', gap: tokens.spacingHorizontalXS,
+    padding: `${tokens.spacingVerticalS} ${tokens.spacingHorizontalXS} ${tokens.spacingVerticalXS}`, color: tokens.colorNeutralForeground3,
   },
   outlineItem: {
     display: 'block', width: '100%', textAlign: 'left', cursor: 'pointer',
-    padding: '2px 4px', borderRadius: 4, border: 'none', background: 'none',
-    color: tokens.colorNeutralForeground2, fontSize: 13,
+    padding: `${tokens.spacingVerticalXXS} ${tokens.spacingHorizontalXS}`, borderRadius: tokens.borderRadiusMedium, border: 'none', background: 'none',
+    color: tokens.colorNeutralForeground2, fontSize: tokens.fontSizeBase300,
     ':hover': { backgroundColor: tokens.colorNeutralBackground1Hover },
   },
-  outlineEmpty: { padding: '2px 4px', color: tokens.colorNeutralForeground3, fontSize: 12 },
-  addBar: { display: 'flex', gap: 8, justifyContent: 'center', padding: '4px 0' },
-  richOut: { borderTop: `1px solid ${tokens.colorNeutralStroke2}`, backgroundColor: tokens.colorNeutralBackground1, padding: 10, maxHeight: 320, overflow: 'auto' },
+  outlineEmpty: { padding: `${tokens.spacingVerticalXXS} ${tokens.spacingHorizontalXS}`, color: tokens.colorNeutralForeground3, fontSize: tokens.fontSizeBase200 },
+  addBar: { display: 'flex', gap: tokens.spacingHorizontalS, justifyContent: 'center', padding: `${tokens.spacingVerticalXS} 0` },
+  richOut: { borderTop: `1px solid ${tokens.colorNeutralStroke2}`, backgroundColor: tokens.colorNeutralBackground1, padding: tokens.spacingVerticalS, maxHeight: 320, overflow: 'auto' },
   richTable: { width: 'max-content', minWidth: '100%' },
   richImg: { maxWidth: '100%', display: 'block' },
-  richHtml: { overflow: 'auto', fontSize: 13 },
+  richHtml: { overflow: 'auto', fontSize: tokens.fontSizeBase300 },
   assistBar: {
-    display: 'flex', gap: 6, padding: '4px 8px', alignItems: 'center',
+    display: 'flex', gap: tokens.spacingHorizontalXS, padding: `${tokens.spacingVerticalXS} ${tokens.spacingHorizontalS}`, alignItems: 'center',
     borderTop: `1px solid ${tokens.colorNeutralStroke2}`,
     backgroundColor: tokens.colorNeutralBackground2,
   },
   assistResult: {
-    fontFamily: 'Consolas, "Cascadia Code", monospace', fontSize: 12,
+    fontFamily: 'Consolas, "Cascadia Code", monospace', fontSize: tokens.fontSizeBase200,
     whiteSpace: 'pre-wrap', margin: 0, overflowX: 'auto',
   },
 });
@@ -817,7 +817,7 @@ export function SynapseNotebookEditor({ item, id }: { item: FabricItemType; id: 
             <Caption1>Workspace not configured.</Caption1>
           ) : (
             <>
-              <div style={{ display: 'flex', gap: 4, marginBottom: 8 }}>
+              <div style={{ display: 'flex', gap: tokens.spacingHorizontalXS, marginBottom: tokens.spacingVerticalS }}>
                 <Input
                   size="small" placeholder="new notebook name" value={newName}
                   onChange={(_, d) => setNewName(d.value)}
@@ -1037,8 +1037,8 @@ export function SynapseNotebookEditor({ item, id }: { item: FabricItemType; id: 
             </MessageBar>
           )}
           {!gate && schedulesConfigured && (
-            <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
-              <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+            <div style={{ display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalXS }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: tokens.spacingHorizontalS }}>
                 <Caption1>Schedules ({schedules.length})</Caption1>
                 <Button size="small" appearance="subtle" onClick={refreshSchedules}>Refresh</Button>
               </div>
@@ -1318,7 +1318,7 @@ function NotebookCellView(props: {
 
       {/* Suggestion / explanation result */}
       {!cell.collapsed && (assistView === 'suggestion' || assistView === 'explain-result') && assistResult && (
-        <MessageBar intent={assistView === 'explain-result' ? 'info' : 'success'} style={{ margin: '4px 0 0' }}>
+        <MessageBar intent={assistView === 'explain-result' ? 'info' : 'success'} style={{ margin: `${tokens.spacingVerticalXS} 0 0` }}>
           <MessageBarBody>
             <pre className={s.assistResult}>{assistResult}</pre>
           </MessageBarBody>
@@ -1336,7 +1336,7 @@ function NotebookCellView(props: {
 
       {/* Assist error / honest config gate */}
       {!cell.collapsed && assistError && (
-        <MessageBar intent="error" style={{ margin: '4px 0 0' }}>
+        <MessageBar intent="error" style={{ margin: `${tokens.spacingVerticalXS} 0 0` }}>
           <MessageBarBody>{assistError}</MessageBarBody>
           <MessageBarActions>
             <Button size="small" onClick={() => setAssistError(null)}>Dismiss</Button>

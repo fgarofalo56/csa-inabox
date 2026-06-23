@@ -97,20 +97,20 @@ function arr<T>(v: unknown): T[] {
 }
 
 const useStyles = makeStyles({
-  pad: { padding: '16px', display: 'flex', flexDirection: 'column', gap: '12px' },
+  pad: { padding: tokens.spacingVerticalL, display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalM },
   monaco: {
     width: '100%', minHeight: '180px',
     fontFamily: 'Consolas, "Cascadia Code", monospace',
-    fontSize: '13px', padding: '12px',
+    fontSize: tokens.fontSizeBase200, padding: tokens.spacingVerticalM,
     border: `1px solid ${tokens.colorNeutralStroke2}`,
-    borderRadius: '4px',
+    borderRadius: tokens.borderRadiusMedium,
     backgroundColor: tokens.colorNeutralBackground3,
     color: tokens.colorNeutralForeground1,
     resize: 'vertical',
   },
-  tabBar: { padding: '8px 16px 0', borderBottom: `1px solid ${tokens.colorNeutralStroke2}` },
-  card: { padding: '12px', border: `1px solid ${tokens.colorNeutralStroke2}`, borderRadius: '6px' },
-  cardGrid: { display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(220px, 1fr))', gap: '12px' },
+  tabBar: { padding: `${tokens.spacingVerticalS} ${tokens.spacingHorizontalL} 0`, borderBottom: `1px solid ${tokens.colorNeutralStroke2}` },
+  card: { padding: tokens.spacingVerticalM, border: `1px solid ${tokens.colorNeutralStroke2}`, borderRadius: tokens.borderRadiusLarge },
+  cardGrid: { display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(220px, 1fr))', gap: tokens.spacingVerticalM },
 
   /* ---- Data-agent build tab — sectioned, card-based, web-3.0 ---- */
   daSection: {
@@ -151,53 +151,53 @@ const useStyles = makeStyles({
     flex: 1,
     minHeight: 0,
     height: '62vh',
-    gap: '10px',
+    gap: tokens.spacingVerticalS,
   },
-  chatHead: { display: 'flex', flexDirection: 'column', gap: '2px', flexShrink: 0 },
+  chatHead: { display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalXXS, flexShrink: 0 },
   chatThread: {
     flex: 1,
     minHeight: 0,
     overflowY: 'auto',
     border: `1px solid ${tokens.colorNeutralStroke2}`,
-    borderRadius: '6px',
-    padding: '12px',
+    borderRadius: tokens.borderRadiusLarge,
+    padding: tokens.spacingVerticalM,
     backgroundColor: tokens.colorNeutralBackground2,
     display: 'flex',
     flexDirection: 'column',
-    gap: '12px',
+    gap: tokens.spacingVerticalM,
   },
-  chatRowUser: { alignSelf: 'flex-end', maxWidth: '85%', display: 'flex', flexDirection: 'column', alignItems: 'flex-end', gap: '4px' },
-  chatRowBot: { alignSelf: 'flex-start', maxWidth: '85%', display: 'flex', flexDirection: 'column', alignItems: 'flex-start', gap: '4px' },
+  chatRowUser: { alignSelf: 'flex-end', maxWidth: '85%', display: 'flex', flexDirection: 'column', alignItems: 'flex-end', gap: tokens.spacingVerticalXS },
+  chatRowBot: { alignSelf: 'flex-start', maxWidth: '85%', display: 'flex', flexDirection: 'column', alignItems: 'flex-start', gap: tokens.spacingVerticalXS },
   bubbleUser: {
-    padding: '8px 12px', borderRadius: '12px 12px 2px 12px',
+    padding: `${tokens.spacingVerticalS} ${tokens.spacingHorizontalM}`, borderRadius: '12px 12px 2px 12px',
     backgroundColor: tokens.colorBrandBackground,
     color: tokens.colorNeutralForegroundOnBrand,
-    whiteSpace: 'pre-wrap', wordBreak: 'break-word', fontSize: '14px', lineHeight: '20px',
+    whiteSpace: 'pre-wrap', wordBreak: 'break-word', fontSize: tokens.fontSizeBase300, lineHeight: '20px',
   },
   bubbleBot: {
-    padding: '8px 12px', borderRadius: '12px 12px 12px 2px',
+    padding: `${tokens.spacingVerticalS} ${tokens.spacingHorizontalM}`, borderRadius: '12px 12px 12px 2px',
     backgroundColor: tokens.colorNeutralBackground1,
     border: `1px solid ${tokens.colorNeutralStroke2}`,
     color: tokens.colorNeutralForeground1,
-    whiteSpace: 'pre-wrap', wordBreak: 'break-word', fontSize: '14px', lineHeight: '20px',
+    whiteSpace: 'pre-wrap', wordBreak: 'break-word', fontSize: tokens.fontSizeBase300, lineHeight: '20px',
   },
   bubbleErr: {
-    padding: '8px 12px', borderRadius: '12px 12px 12px 2px',
+    padding: `${tokens.spacingVerticalS} ${tokens.spacingHorizontalM}`, borderRadius: '12px 12px 12px 2px',
     backgroundColor: tokens.colorStatusDangerBackground1,
     border: `1px solid ${tokens.colorStatusDangerBorder1}`,
     color: tokens.colorStatusDangerForeground1,
-    whiteSpace: 'pre-wrap', wordBreak: 'break-word', fontSize: '14px', lineHeight: '20px',
+    whiteSpace: 'pre-wrap', wordBreak: 'break-word', fontSize: tokens.fontSizeBase300, lineHeight: '20px',
   },
-  chatMeta: { color: tokens.colorNeutralForeground3, fontSize: '11px', paddingLeft: '4px' },
+  chatMeta: { color: tokens.colorNeutralForeground3, fontSize: tokens.fontSizeBase100, paddingLeft: tokens.spacingHorizontalXS },
   chatComposer: {
-    display: 'flex', gap: '8px', alignItems: 'flex-end', flexShrink: 0,
-    paddingTop: '4px',
+    display: 'flex', gap: tokens.spacingHorizontalS, alignItems: 'flex-end', flexShrink: 0,
+    paddingTop: tokens.spacingVerticalXS,
   },
   chatSource: {
-    fontFamily: 'monospace', fontSize: '12px',
+    fontFamily: 'monospace', fontSize: tokens.fontSizeBase200,
     backgroundColor: tokens.colorNeutralBackground3,
-    padding: '8px', borderRadius: '4px', overflowX: 'auto',
-    marginTop: '4px', whiteSpace: 'pre', color: tokens.colorNeutralForeground1,
+    padding: tokens.spacingVerticalS, borderRadius: tokens.borderRadiusMedium, overflowX: 'auto',
+    marginTop: tokens.spacingVerticalXS, whiteSpace: 'pre', color: tokens.colorNeutralForeground1,
   },
 
   /* ---- Ontology data-bindings + Activator triggers (v3.28) ---- */
@@ -286,7 +286,7 @@ const useStyles = makeStyles({
   },
   planKpiRow: { display: 'flex', gap: tokens.spacingHorizontalM, flexWrap: 'wrap' },
   planKpi: {
-    display: 'flex', flexDirection: 'column', gap: '2px', minWidth: '140px', flex: '1 1 140px',
+    display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalXXS, minWidth: '140px', flex: '1 1 140px',
     padding: tokens.spacingVerticalM, borderRadius: tokens.borderRadiusLarge,
     border: `1px solid ${tokens.colorNeutralStroke2}`, borderLeftWidth: '4px', borderLeftColor: tokens.colorBrandStroke1,
     backgroundColor: tokens.colorNeutralBackground1,
@@ -434,7 +434,7 @@ function SaveBar({ saving, savedAt, error, onSave, extraRight, dirty }: {
   dirty?: boolean;
 }) {
   return (
-    <div style={{ display: 'flex', alignItems: 'center', gap: 12, padding: '8px 0', borderTop: `1px solid ${tokens.colorNeutralStroke2}` }}>
+    <div style={{ display: 'flex', alignItems: 'center', gap: tokens.spacingHorizontalM, padding: `${tokens.spacingVerticalS} 0`, borderTop: `1px solid ${tokens.colorNeutralStroke2}` }}>
       <Button appearance="primary" onClick={onSave} disabled={saving || dirty === false}>
         {saving ? 'Saving…' : dirty === false ? 'Saved' : 'Save (Ctrl+S)'}
       </Button>
@@ -553,7 +553,7 @@ export function GraphqlApiEditor({ item, id }: { item: FabricItemType; id: strin
             label={state.subscriptionRequired ? 'Yes' : 'No (anonymous)'}
           />
         </Field>
-        <Subtitle2 style={{ marginTop: 8 }}>Schema (SDL)</Subtitle2>
+        <Subtitle2 style={{ marginTop: tokens.spacingVerticalS }}>Schema (SDL)</Subtitle2>
         <MonacoTextarea value={state.sdl} onChange={(v) => setState((p) => ({ ...p, sdl: v }))} language="graphql" height={260} minHeight={200} ariaLabel="GraphQL SDL" />
         {state.lastPublishedAt && (
           <Caption1 style={{ color: tokens.colorNeutralForeground3 }}>
@@ -567,7 +567,7 @@ export function GraphqlApiEditor({ item, id }: { item: FabricItemType; id: strin
         )}
 
         {/* Test query console — runs against the published APIM GraphQL endpoint. */}
-        <Subtitle2 style={{ marginTop: 8 }}>Test query console</Subtitle2>
+        <Subtitle2 style={{ marginTop: tokens.spacingVerticalS }}>Test query console</Subtitle2>
         <Caption1 style={{ color: tokens.colorNeutralForeground3 }}>Runs against the published APIM GraphQL endpoint. Publish first if you haven&apos;t.</Caption1>
         <MonacoTextarea value={queryText} onChange={setQueryText} language="graphql" height={140} minHeight={100} ariaLabel="GraphQL query" />
         <Caption1>Variables (JSON, optional)</Caption1>
@@ -704,14 +704,14 @@ export function UserDataFunctionEditor({ item, id }: { item: FabricItemType; id:
       id={id}
       ribbon={ribbon}
       leftPanel={
-        <div style={{ padding: 8 }}>
-          <Caption1 style={{ padding: '4px 8px', color: tokens.colorNeutralForeground3 }}>Functions ({functions.length})</Caption1>
-          {functions.length === 0 && <Body1 style={{ padding: 8, color: tokens.colorNeutralForeground3 }}>No <code>@udf.function()</code> definitions found.</Body1>}
+        <div style={{ padding: tokens.spacingVerticalS }}>
+          <Caption1 style={{ padding: `${tokens.spacingVerticalXS} ${tokens.spacingHorizontalS}`, color: tokens.colorNeutralForeground3 }}>Functions ({functions.length})</Caption1>
+          {functions.length === 0 && <Body1 style={{ padding: tokens.spacingVerticalS, color: tokens.colorNeutralForeground3 }}>No <code>@udf.function()</code> definitions found.</Body1>}
           <Tree aria-label="Functions">
             {functions.map((f) => (
               <TreeItem key={f.name} itemType="leaf" onClick={() => setTestFn(f.name)} style={{ background: f.name === (testFn || functions[0]?.name) ? tokens.colorNeutralBackground2 : undefined }}>
                 <TreeItemLayout>
-                  <span style={{ fontFamily: 'monospace', fontSize: 12 }}>{f.name}({f.params.map((p) => p.name).join(', ')})</span>
+                  <span style={{ fontFamily: 'monospace', fontSize: tokens.fontSizeBase200 }}>{f.name}({f.params.map((p) => p.name).join(', ')})</span>
                 </TreeItemLayout>
               </TreeItem>
             ))}
@@ -721,17 +721,17 @@ export function UserDataFunctionEditor({ item, id }: { item: FabricItemType; id:
       main={
         <div className={s.pad}>
           {loading && <Spinner size="small" label="Loading…" labelPosition="after" />}
-          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12 }}>
+          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: tokens.spacingHorizontalM }}>
             <Field label="Runtime"><Input value="python (fabric-user-data-functions)" disabled /></Field>
             <Field label="Default entrypoint"><Input value={state.entrypoint} onChange={(_, d) => setState((p) => ({ ...p, entrypoint: d.value }))} /></Field>
           </div>
 
-          <Subtitle2 style={{ marginTop: 8 }}>function_app.py</Subtitle2>
+          <Subtitle2 style={{ marginTop: tokens.spacingVerticalS }}>function_app.py</Subtitle2>
           <MonacoTextarea value={state.source} onChange={(v) => setState((p) => ({ ...p, source: v }))} language="python" height={280} minHeight={200} ariaLabel="Function source" />
 
           {/* Test / Run panel */}
-          <Subtitle2 style={{ marginTop: 8 }}>Test / Run</Subtitle2>
-          <div style={{ border: `1px solid ${tokens.colorNeutralStroke2}`, borderRadius: 6, padding: 12, display: 'flex', flexDirection: 'column', gap: 8 }}>
+          <Subtitle2 style={{ marginTop: tokens.spacingVerticalS }}>Test / Run</Subtitle2>
+          <div style={{ border: `1px solid ${tokens.colorNeutralStroke2}`, borderRadius: tokens.borderRadiusLarge, padding: tokens.spacingVerticalM, display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalS }}>
             <Field label="Function">
               <Dropdown
                 placeholder={functions.length ? 'Select a function' : 'No functions to run'}
@@ -760,12 +760,12 @@ export function UserDataFunctionEditor({ item, id }: { item: FabricItemType; id:
           </div>
 
           {/* Manage connections */}
-          <Subtitle2 style={{ marginTop: 8 }}>Manage connections (Fabric data sources)</Subtitle2>
+          <Subtitle2 style={{ marginTop: tokens.spacingVerticalS }}>Manage connections (Fabric data sources)</Subtitle2>
           <Input value={state.connections} onChange={(_, d) => setState((p) => ({ ...p, connections: d.value }))} placeholder="fin-warehouse, ldn-gold-lakehouse" />
 
           {/* Library management */}
-          <Subtitle2 style={{ marginTop: 8 }}>Library management</Subtitle2>
-          <div style={{ display: 'flex', gap: 8, alignItems: 'flex-end', flexWrap: 'wrap' }}>
+          <Subtitle2 style={{ marginTop: tokens.spacingVerticalS }}>Library management</Subtitle2>
+          <div style={{ display: 'flex', gap: tokens.spacingHorizontalS, alignItems: 'flex-end', flexWrap: 'wrap' }}>
             <Field label="Package"><Input value={libName} onChange={(_, d) => setLibName(d.value)} placeholder="numpy" /></Field>
             <Field label="Version"><Input value={libVer} onChange={(_, d) => setLibVer(d.value)} placeholder="2.0.0" style={{ width: 120 }} /></Field>
             <Field label="Type">
@@ -799,7 +799,7 @@ export function UserDataFunctionEditor({ item, id }: { item: FabricItemType; id:
               <DialogBody>
                 <DialogTitle>Generate invocation code — {selectedFn?.name}</DialogTitle>
                 <DialogContent>
-                  <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalM }}>
                     <TabList selectedValue={genTarget} onTabSelect={(_, d) => setGenTarget(d.value as typeof genTarget)}>
                       <Tab value="notebook">Notebook</Tab>
                       <Tab value="python">Python client</Tab>
@@ -945,14 +945,14 @@ export function VariableLibraryEditor({ item, id }: { item: FabricItemType; id: 
                     <TableCell><Input value={v.name} onChange={(_, d) => update(i, { name: d.value })} /></TableCell>
                     <TableCell>
                       <select value={v.type} onChange={(e) => update(i, { type: e.target.value as VarType })}
-                        style={{ padding: 4, borderRadius: 4, border: `1px solid ${tokens.colorNeutralStroke2}`, background: tokens.colorNeutralBackground1, color: tokens.colorNeutralForeground1 }}>
+                        style={{ padding: tokens.spacingVerticalXS, borderRadius: tokens.borderRadiusMedium, border: `1px solid ${tokens.colorNeutralStroke2}`, background: tokens.colorNeutralBackground1, color: tokens.colorNeutralForeground1 }}>
                         {Object.entries(VAR_TYPE_LABELS).map(([t, label]) => (
                           <option key={t} value={t}>{label}</option>
                         ))}
                       </select>
                     </TableCell>
                     <TableCell>
-                      <div style={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
+                      <div style={{ display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalXXS }}>
                         <Input value={val} onChange={(_, d) => update(i, { [valueKey]: d.value } as any)}
                           placeholder={VAR_TYPE_PLACEHOLDERS[v.type]} />
                         {validationErr && <Caption1 style={{ color: tokens.colorPaletteRedForeground1 }}>{validationErr}</Caption1>}
@@ -1618,7 +1618,7 @@ export function OntologyEditor({ item, id }: { item: FabricItemType; id: string 
         <div className={s.ontoSourceGrid}>
           <div>
             <Subtitle2>Source ({classes.length} classes)</Subtitle2>
-            <Caption1 style={{ display: 'block', marginBottom: 6, color: tokens.colorNeutralForeground3 }}>
+            <Caption1 style={{ display: 'block', marginBottom: tokens.spacingVerticalSNudge, color: tokens.colorNeutralForeground3 }}>
               One class per line — DSL: <code>ClassName : ParentClass -- description</code> (parent and
               description optional). Example: <code>Account : Party -- a customer account</code>. Indentation is
               ignored; <code>Child : Parent</code> defines the IS_A hierarchy.
@@ -1626,7 +1626,7 @@ export function OntologyEditor({ item, id }: { item: FabricItemType; id: string 
             {/* Warn when nothing parses, so the editor doesn't silently produce a
                 0-class ontology that materialize/bind/run-action can't act on. */}
             {classes.length === 0 && (state.source || '').trim().length > 0 && (
-              <MessageBar intent="warning" style={{ marginBottom: 6 }}>
+              <MessageBar intent="warning" style={{ marginBottom: tokens.spacingVerticalSNudge }}>
                 <MessageBarBody>
                   The source has content but parsed to <strong>0 classes</strong>. Each class needs its own line
                   in the form <code>ClassName : ParentClass -- description</code>. Fix the grammar above and the
@@ -1645,18 +1645,18 @@ export function OntologyEditor({ item, id }: { item: FabricItemType; id: string 
                 <TreeItem itemType="leaf" key={c.name}>
                   <TreeItemLayout>
                     <strong>{c.name}</strong>
-                    {c.parent && <Caption1 style={{ marginLeft: 6, color: tokens.colorNeutralForeground3 }}>: {c.parent}</Caption1>}
+                    {c.parent && <Caption1 style={{ marginLeft: tokens.spacingHorizontalSNudge, color: tokens.colorNeutralForeground3 }}>: {c.parent}</Caption1>}
                   </TreeItemLayout>
                 </TreeItem>
               ))}
             </Tree>
-            <Subtitle2 style={{ marginTop: 12 }}>Hierarchy graph</Subtitle2>
+            <Subtitle2 style={{ marginTop: tokens.spacingVerticalM }}>Hierarchy graph</Subtitle2>
             <OntologyHierarchyViz classes={classes} />
-            <Button appearance="primary" disabled={materializing || classes.length === 0} onClick={materializeToGraphModel} style={{ marginTop: 8, alignSelf: 'flex-start' }}>
+            <Button appearance="primary" disabled={materializing || classes.length === 0} onClick={materializeToGraphModel} style={{ marginTop: tokens.spacingVerticalS, alignSelf: 'flex-start' }}>
               {materializing ? 'Materializing…' : `Materialize as graph-model (${classes.length} class${classes.length === 1 ? '' : 'es'})`}
             </Button>
             {matMsg && (
-              <MessageBar intent={matMsg.startsWith('Failed') ? 'error' : 'success'} style={{ marginTop: 8 }}>
+              <MessageBar intent={matMsg.startsWith('Failed') ? 'error' : 'success'} style={{ marginTop: tokens.spacingVerticalS }}>
                 <MessageBarBody>{matMsg}</MessageBarBody>
               </MessageBar>
             )}
@@ -1991,7 +1991,7 @@ export function GraphModelEditor({ item, id }: { item: FabricItemType; id: strin
         {loading && <Spinner size="small" label="Loading…" labelPosition="after" />}
         <Caption1>Target ADX database</Caption1>
         <Input value={state.database} onChange={(_, d) => setState((p) => ({ ...p, database: d.value }))} />
-        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12 }}>
+        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: tokens.spacingHorizontalM }}>
           <div>
             <Subtitle2>Node types</Subtitle2>
             <GraphTypeEditor kind="node" types={arr(state.nodes)}
@@ -2003,7 +2003,7 @@ export function GraphModelEditor({ item, id }: { item: FabricItemType; id: strin
               onChange={(next) => setState((p) => ({ ...p, edges: next }))} />
           </div>
         </div>
-        <Subtitle2 style={{ marginTop: 8 }}>Schema graph</Subtitle2>
+        <Subtitle2 style={{ marginTop: tokens.spacingVerticalS }}>Schema graph</Subtitle2>
         <Caption1 style={{ color: tokens.colorNeutralForeground3 }}>
           Node types are vertices; edge types whose properties carry <code>srcType</code> / <code>dstType</code> connect them, others link to a shared hub.
         </Caption1>
@@ -2018,7 +2018,7 @@ export function GraphModelEditor({ item, id }: { item: FabricItemType; id: strin
               {matResult.created && (
                 <ul style={{ margin: '4px 0 0 16px', padding: 0 }}>
                   {matResult.created.map((c: any, i: number) => (
-                    <li key={i} style={{ fontFamily: 'monospace', fontSize: 12 }}>
+                    <li key={i} style={{ fontFamily: 'monospace', fontSize: tokens.fontSizeBase200 }}>
                       {c.ok ? '[ok]' : '[err]'} {c.kind}:{c.name}{c.error ? ` — ${c.error}` : ''}
                     </li>
                   ))}
@@ -2062,7 +2062,7 @@ export function GraphModelEditor({ item, id }: { item: FabricItemType; id: strin
                 <Field label="Relationship name" required>
                   <Input value={newName} onChange={(_, d) => setNewName(d.value)} placeholder="PLACED" />
                 </Field>
-                <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12 }}>
+                <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: tokens.spacingHorizontalM }}>
                   <Field label="From entity">
                     <Dropdown value={edgeSrc} selectedOptions={edgeSrc ? [edgeSrc] : []} onOptionSelect={(_, d) => setEdgeSrc(d.optionValue || '')} placeholder="(optional)">
                       {arr<{ name: string }>(state.nodes).map((n) => <Option key={n.name} value={n.name}>{n.name}</Option>)}
@@ -2421,7 +2421,7 @@ function PlanSettingsFlyout({
 
               <div style={{ height: 1, background: tokens.colorNeutralStroke2 }} />
 
-              <Subtitle2 style={{ display: 'flex', alignItems: 'center', gap: 6 }}><Database20Regular /> Backing store (writeback)</Subtitle2>
+              <Subtitle2 style={{ display: 'flex', alignItems: 'center', gap: tokens.spacingHorizontalSNudge }}><Database20Regular /> Backing store (writeback)</Subtitle2>
               {backing?.configured ? (
                 <MessageBar intent="success">
                   <MessageBarBody>
@@ -2617,11 +2617,11 @@ function PlanningSheetPanel({
           <TableHeader>
             <TableRow>
               <TableHeaderCell style={{ minWidth: 200 }}>
-                <span style={{ display: 'inline-flex', alignItems: 'center', gap: 4 }}><Money20Regular /> Line item</span>
+                <span style={{ display: 'inline-flex', alignItems: 'center', gap: tokens.spacingHorizontalXS }}><Money20Regular /> Line item</span>
               </TableHeaderCell>
               {sheet.periods.map((p) => (
                 <TableHeaderCell key={p.id} style={{ minWidth: 90 }}>
-                  <span style={{ display: 'inline-flex', alignItems: 'center', gap: 2 }}>
+                  <span style={{ display: 'inline-flex', alignItems: 'center', gap: tokens.spacingHorizontalXXS }}>
                     <Input size="small" value={p.label} onChange={(_, d) => renamePeriod(p.id, d.value)} style={{ maxWidth: 70 }} aria-label="Period label" />
                     {sheet.periods.length > 1 && <Button size="small" appearance="transparent" icon={<Dismiss16Regular />} onClick={() => removePeriod(p.id)} aria-label="Remove period" />}
                   </span>
@@ -2912,7 +2912,7 @@ function PlanPowerTablePanel({
               <TableRow>
                 {(['sheetName', 'lineItem', 'period', 'scenario', 'value'] as PlanRowSortKey[]).map((k) => (
                   <TableHeaderCell key={k} className={s.planSortable} onClick={() => toggleSort(k)}>
-                    <span style={{ display: 'inline-flex', alignItems: 'center', gap: 4 }}>{colName[k]}<SortIcon k={k} /></span>
+                    <span style={{ display: 'inline-flex', alignItems: 'center', gap: tokens.spacingHorizontalXS }}>{colName[k]}<SortIcon k={k} /></span>
                   </TableHeaderCell>
                 ))}
               </TableRow>
@@ -2927,7 +2927,7 @@ function PlanPowerTablePanel({
                     <TableCell>{row.period}</TableCell>
                     <TableCell><Badge appearance="outline">{row.scenario}</Badge></TableCell>
                     <TableCell>
-                      <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                      <div style={{ display: 'flex', alignItems: 'center', gap: tokens.spacingHorizontalSNudge }}>
                         <Input type="number" value={String(row.value || '')} onChange={(_, d) => editCell(row, d.value)} style={{ maxWidth: 110 }} aria-label={`${row.lineItem} ${row.period} ${row.scenario}`} />
                         {drift && <Badge appearance="tint" color="warning" title={`Azure SQL has ${sqlByKey![row.key]}`}>SQL {fmtNum(sqlByKey![row.key])}</Badge>}
                       </div>
@@ -3085,7 +3085,7 @@ function PlanIntelligencePanel({
         {bars.length === 0 ? (
           <div className={s.planEmpty}><Body1>No project tasks yet — add tasks (with due dates) on the <strong>Project tasks</strong> tab to populate the Gantt.</Body1></div>
         ) : (
-          <div style={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalXXS }}>
             {bars.map((b, i) => (
               <div key={i} className={s.ganttRow}>
                 <Caption1 className={s.ganttLabel} title={b.title}>{b.title}</Caption1>
@@ -3356,14 +3356,14 @@ export function PlanEditor({ item, id }: { item: FabricItemType; id: string }) {
                 plan metrics write back to a linked semantic model via XMLA (no Fabric / Power Automate).
               </MessageBarBody>
             </MessageBar>
-            <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
+            <div style={{ display: 'flex', gap: tokens.spacingHorizontalS, alignItems: 'center', flexWrap: 'wrap' }}>
               <Badge appearance="filled" color="brand">{total} task{total === 1 ? '' : 's'}</Badge>
               <Badge appearance="outline">to-do: {todo}</Badge>
               <Badge appearance="filled" color="warning">doing: {doing}</Badge>
               <Badge appearance="filled" color="success">done: {done}</Badge>
               {overdue > 0 && <Badge appearance="filled" color="danger">overdue: {overdue}</Badge>}
-              <Caption1 style={{ marginLeft: 8 }}>{pct}% complete</Caption1>
-              <div style={{ flex: 1, height: 6, backgroundColor: tokens.colorNeutralBackground3, borderRadius: 3, overflow: 'hidden', minWidth: 120, maxWidth: 240 }}>
+              <Caption1 style={{ marginLeft: tokens.spacingHorizontalS }}>{pct}% complete</Caption1>
+              <div style={{ flex: 1, height: 6, backgroundColor: tokens.colorNeutralBackground3, borderRadius: tokens.borderRadiusSmall, overflow: 'hidden', minWidth: 120, maxWidth: 240 }}>
                 <div style={{ width: `${pct}%`, height: '100%', backgroundColor: tokens.colorBrandStroke1, transition: 'width 0.2s' }} />
               </div>
             </div>
@@ -3384,7 +3384,7 @@ export function PlanEditor({ item, id }: { item: FabricItemType; id: string }) {
                     <TableCell><Input type="date" value={t.due} onChange={(_, d) => update(i, { due: d.value })} /></TableCell>
                     <TableCell>
                       <select value={t.status} onChange={(e) => update(i, { status: e.target.value as PlanTask['status'] })}
-                        style={{ padding: 4, borderRadius: 4, border: `1px solid ${tokens.colorNeutralStroke2}`, background: tokens.colorNeutralBackground1, color: tokens.colorNeutralForeground1 }}>
+                        style={{ padding: tokens.spacingVerticalXS, borderRadius: tokens.borderRadiusMedium, border: `1px solid ${tokens.colorNeutralStroke2}`, background: tokens.colorNeutralBackground1, color: tokens.colorNeutralForeground1 }}>
                         <option value="todo">todo</option><option value="doing">doing</option><option value="done">done</option>
                       </select>
                     </TableCell>
@@ -3599,7 +3599,7 @@ export function MapEditor({ item, id }: { item: FabricItemType; id: string }) {
         </TabList>
 
         {tab === 'data' && (
-          <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalS }}>
             <Subtitle2>Data source</Subtitle2>
             <Caption1>Bind this map to a Lakehouse table, a KQL query, or an Ontology entity. Loom runs it against the real Azure backend (Synapse Serverless / ADX / Weave) — no Power BI or Fabric required.</Caption1>
             <Field label="Source">
@@ -3623,7 +3623,7 @@ export function MapEditor({ item, id }: { item: FabricItemType; id: string }) {
                 <Field label="Table / view (or use a SQL query below)">
                   <Input value={binding.table || ''} onChange={(_, d) => setBinding({ table: d.value })} placeholder="[dbo].[stores]" />
                 </Field>
-                <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+                <div style={{ display: 'flex', gap: tokens.spacingHorizontalS, flexWrap: 'wrap' }}>
                   <Field label="Latitude column"><Input value={binding.latCol || ''} onChange={(_, d) => setBinding({ latCol: d.value })} placeholder="lat" /></Field>
                   <Field label="Longitude column"><Input value={binding.lonCol || ''} onChange={(_, d) => setBinding({ lonCol: d.value })} placeholder="lon" /></Field>
                   <Field label="Value column (optional)"><Input value={binding.valueCol || ''} onChange={(_, d) => setBinding({ valueCol: d.value })} placeholder="revenue" /></Field>
@@ -3647,7 +3647,7 @@ export function MapEditor({ item, id }: { item: FabricItemType; id: string }) {
                     {(kqlItems || []).map((k) => <Option key={k.id} value={k.id} text={k.displayName}>{k.displayName}</Option>)}
                   </Dropdown>
                 </Field>
-                <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+                <div style={{ display: 'flex', gap: tokens.spacingHorizontalS, flexWrap: 'wrap' }}>
                   <Field label="Table"><Input value={binding.table || ''} onChange={(_, d) => setBinding({ table: d.value })} placeholder="Sightings" /></Field>
                   <Field label="Latitude column"><Input value={binding.latCol || ''} onChange={(_, d) => setBinding({ latCol: d.value })} placeholder="lat" /></Field>
                   <Field label="Longitude column"><Input value={binding.lonCol || ''} onChange={(_, d) => setBinding({ lonCol: d.value })} placeholder="lon" /></Field>
@@ -3671,7 +3671,7 @@ export function MapEditor({ item, id }: { item: FabricItemType; id: string }) {
                     {(ontologyItems || []).map((o) => <Option key={o.id} value={o.id} text={o.displayName}>{o.displayName}</Option>)}
                   </Dropdown>
                 </Field>
-                <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+                <div style={{ display: 'flex', gap: tokens.spacingHorizontalS, flexWrap: 'wrap' }}>
                   <Field label="Object type (declared class)"><Input value={binding.objectType || ''} onChange={(_, d) => setBinding({ objectType: d.value })} placeholder="Store" /></Field>
                   <Field label="Latitude property"><Input value={binding.latProp || ''} onChange={(_, d) => setBinding({ latProp: d.value })} placeholder="lat" /></Field>
                   <Field label="Longitude property"><Input value={binding.lonProp || ''} onChange={(_, d) => setBinding({ lonProp: d.value })} placeholder="lon" /></Field>
@@ -3682,16 +3682,16 @@ export function MapEditor({ item, id }: { item: FabricItemType; id: string }) {
             )}
 
             {binding.source && (
-              <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+              <div style={{ display: 'flex', gap: tokens.spacingHorizontalS, alignItems: 'center' }}>
                 <Button appearance="primary" disabled={running} onClick={runBinding}>{running ? 'Binding…' : 'Run binding'}</Button>
                 <Caption1>Runs the source live, then renders the rows in the layers below.</Caption1>
               </div>
             )}
             {runMsg && <MessageBar intent={runMsg.intent}><MessageBarBody>{runMsg.text}</MessageBarBody></MessageBar>}
 
-            <Subtitle2 style={{ marginTop: 8 }}>Layers</Subtitle2>
+            <Subtitle2 style={{ marginTop: tokens.spacingVerticalS }}>Layers</Subtitle2>
             {layers.map((l) => (
-              <div key={l.id} style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap', border: `1px solid ${tokens.colorNeutralStroke2}`, borderRadius: 6, padding: 8 }}>
+              <div key={l.id} style={{ display: 'flex', gap: tokens.spacingHorizontalS, alignItems: 'center', flexWrap: 'wrap', border: `1px solid ${tokens.colorNeutralStroke2}`, borderRadius: tokens.borderRadiusLarge, padding: tokens.spacingVerticalS }}>
                 <Switch checked={l.enabled !== false} onChange={(_, d) => setLayer(l.id, { enabled: d.checked })} label={l.type} />
                 {(l.type === 'heatmap' || l.type === 'cluster' || l.type === 'choropleth' || l.type === 'point') && (
                   <Field label="Weight property" style={{ minWidth: 140 }}>
@@ -3810,7 +3810,7 @@ export function OperationsAgentEditor({ item, id }: { item: FabricItemType; id: 
           </MessageBarBody>
         </MessageBar>
         {deployedAgentId && (
-          <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
+          <div style={{ display: 'flex', gap: tokens.spacingHorizontalS, alignItems: 'center', flexWrap: 'wrap' }}>
             <Caption1>Deployed agent:</Caption1>
             <Badge appearance="filled" color="success">{deployedAgentId}</Badge>
             {state.foundryProjectId && <Badge appearance="outline">project {state.foundryProjectId}</Badge>}
@@ -3820,7 +3820,7 @@ export function OperationsAgentEditor({ item, id }: { item: FabricItemType; id: 
         {/* v3.28 Phase 4.5: functional setState so deploy/reload doesn't clobber typing. */}
         <Caption1>System prompt</Caption1>
         <Textarea value={state.systemPrompt} onChange={(_, d) => setState((p) => ({ ...p, systemPrompt: d.value }))} rows={6} />
-        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12 }}>
+        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: tokens.spacingHorizontalM }}>
           <div><Caption1>Model</Caption1><Input value={state.model} onChange={(_, d) => setState((p) => ({ ...p, model: d.value }))} /></div>
           <div><Caption1>Tools (comma)</Caption1><Input value={state.tools} onChange={(_, d) => setState((p) => ({ ...p, tools: d.value }))} /></div>
           <div><Caption1>Eventhouse binding</Caption1><Input value={state.eventhouse} onChange={(_, d) => setState((p) => ({ ...p, eventhouse: d.value }))} placeholder="eventhouse item id" /></div>
@@ -3838,7 +3838,7 @@ export function OperationsAgentEditor({ item, id }: { item: FabricItemType; id: 
                 <>Agent <code>{deployResult.agentId}</code> upserted in project <code>{deployResult.projectId}</code>. The Foundry Agent Service is now the source of truth for runtime behavior.</>
               )}
               {deployResult.error && <div>{deployResult.error}</div>}
-              {deployResult.hint && <div style={{ marginTop: 4 }}><em>Hint:</em> {deployResult.hint}</div>}
+              {deployResult.hint && <div style={{ marginTop: tokens.spacingVerticalXS }}><em>Hint:</em> {deployResult.hint}</div>}
             </MessageBarBody>
           </MessageBar>
         )}
@@ -4291,9 +4291,9 @@ export function DataAgentEditor({ item, id }: { item: FabricItemType; id: string
                     </Field>
                     {daSupportsExampleQueries(src.type) ? (
                       <Field label="Example question → query pairs (few-shot)">
-                        <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+                        <div style={{ display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalSNudge }}>
                           {arr<{ question: string; query: string }>(src.examples).map((ex, i) => (
-                            <div key={i} style={{ display: 'grid', gridTemplateColumns: '1fr 1fr auto', gap: 6 }}>
+                            <div key={i} style={{ display: 'grid', gridTemplateColumns: '1fr 1fr auto', gap: tokens.spacingHorizontalSNudge }}>
                               <Input value={ex.question} placeholder="question" onChange={(_, d) => updateSourceExamples(src.id, (arr) => arr.map((e, j) => j === i ? { ...e, question: d.value } : e))} />
                               <Input value={ex.query} placeholder="SQL / KQL / GQL" onChange={(_, d) => updateSourceExamples(src.id, (arr) => arr.map((e, j) => j === i ? { ...e, query: d.value } : e))} />
                               <Button size="small" appearance="subtle" onClick={() => updateSourceExamples(src.id, (arr) => arr.filter((_, j) => j !== i))}>×</Button>
@@ -4312,7 +4312,7 @@ export function DataAgentEditor({ item, id }: { item: FabricItemType; id: string
                   </div>
                 ))}
                 {sources.length === 0 && (
-                  <MessageBar intent="info"><MessageBarBody><Sparkle20Regular style={{ verticalAlign: 'middle', marginRight: 6 }} />Attach up to five typed sources. Each becomes a grounded tool for the agent. Test chat and Publish both need at least one.</MessageBarBody></MessageBar>
+                  <MessageBar intent="info"><MessageBarBody><Sparkle20Regular style={{ verticalAlign: 'middle', marginRight: tokens.spacingHorizontalSNudge }} />Attach up to five typed sources. Each becomes a grounded tool for the agent. Test chat and Publish both need at least one.</MessageBarBody></MessageBar>
                 )}
               </div>
               <SaveBar
@@ -4352,7 +4352,7 @@ export function DataAgentEditor({ item, id }: { item: FabricItemType; id: string
           {tab === 'test' && (
             <div className={s.chatShell}>
               <div className={s.chatHead}>
-                <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                <div style={{ display: 'flex', alignItems: 'center', gap: tokens.spacingHorizontalS }}>
                   <Subtitle2>Test chat</Subtitle2>
                   <Badge appearance="tint" color="brand">live · grounded</Badge>
                   <div style={{ flex: 1 }} />
@@ -4385,7 +4385,7 @@ export function DataAgentEditor({ item, id }: { item: FabricItemType; id: string
               <div ref={threadRef} className={s.chatThread} aria-live="polite">
                 {chat.length === 0 && !asking && (
                   <div style={{ margin: 'auto', textAlign: 'center', color: tokens.colorNeutralForeground3 }}>
-                    <Body1 style={{ display: 'block', marginBottom: 4 }}>Ask the agent a question to start a thread.</Body1>
+                    <Body1 style={{ display: 'block', marginBottom: tokens.spacingVerticalXS }}>Ask the agent a question to start a thread.</Body1>
                     <Caption1>e.g. “What was total revenue by region last quarter?”</Caption1>
                   </div>
                 )}
@@ -4401,16 +4401,16 @@ export function DataAgentEditor({ item, id }: { item: FabricItemType; id: string
                       {m.content || (m.error ? 'Unknown error' : '')}
                     </div>
                     {m.role === 'assistant' && !m.error && tools.length > 0 && (
-                      <details style={{ marginTop: 2 }} open={tools.length > 1}>
-                        <summary style={{ cursor: 'pointer', fontSize: 12, color: tokens.colorNeutralForeground2 }}>
+                      <details style={{ marginTop: tokens.spacingVerticalXXS }} open={tools.length > 1}>
+                        <summary style={{ cursor: 'pointer', fontSize: tokens.fontSizeBase200, color: tokens.colorNeutralForeground2 }}>
                           🛠 Tools used ({tools.length})
                         </summary>
                         {tools.map((t, ti) => (
-                          <div key={ti} style={{ marginTop: 4 }}>
+                          <div key={ti} style={{ marginTop: tokens.spacingVerticalXS }}>
                             <Caption1 style={{ color: tokens.colorNeutralForeground2 }}>
                               <strong>{t.source}</strong>{t.type ? ` · ${t.type}` : ''} · {t.action}
                               {t.executed && (
-                                <Badge appearance="tint" color="success" size="extra-small" style={{ marginLeft: 6 }}>
+                                <Badge appearance="tint" color="success" size="extra-small" style={{ marginLeft: tokens.spacingHorizontalSNudge }}>
                                   ✓ ran · {t.rowCount ?? 0} row{t.rowCount === 1 ? '' : 's'}
                                 </Badge>
                               )}
@@ -4420,7 +4420,7 @@ export function DataAgentEditor({ item, id }: { item: FabricItemType; id: string
                               <DataAgentResultViz tool={t} />
                             )}
                             {!t.executed && t.gate && (
-                              <Caption1 style={{ color: tokens.colorPaletteYellowForeground1, display: 'block', marginTop: 2 }}>
+                              <Caption1 style={{ color: tokens.colorPaletteYellowForeground1, display: 'block', marginTop: tokens.spacingVerticalXXS }}>
                                 ⚠ {t.gate}
                               </Caption1>
                             )}
@@ -4434,7 +4434,7 @@ export function DataAgentEditor({ item, id }: { item: FabricItemType; id: string
                 {asking && (
                   <div className={s.chatRowBot}>
                     <span className={s.chatMeta}>Agent</span>
-                    <div className={s.bubbleBot} style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                    <div className={s.bubbleBot} style={{ display: 'flex', alignItems: 'center', gap: tokens.spacingHorizontalS }}>
                       <Spinner size="tiny" /> Thinking…
                     </div>
                   </div>
@@ -4467,13 +4467,13 @@ export function DataAgentEditor({ item, id }: { item: FabricItemType; id: string
             <>
               <Subtitle2>Publish to Foundry Agent Service</Subtitle2>
               <Caption1>Publishing upserts a prompt-agent (instructions + typed sources as tools) into the Foundry project. Consumers (Foundry agents, Copilot Studio) read the description to decide when to call this agent.</Caption1>
-              <Caption1 style={{ marginTop: 6 }}>Description (orchestrators see this)</Caption1>
+              <Caption1 style={{ marginTop: tokens.spacingVerticalSNudge }}>Description (orchestrators see this)</Caption1>
               <Textarea value={state.description || ''} rows={3} onChange={(_, d) => setState((p) => ({ ...p, description: d.value }))} placeholder="Answers finance questions grounded on the FY warehouse + revenue semantic model." />
-              <div style={{ display: 'flex', gap: 8, marginTop: 8 }}>
+              <div style={{ display: 'flex', gap: tokens.spacingHorizontalS, marginTop: tokens.spacingVerticalS }}>
                 <Button appearance="primary" onClick={publish} disabled={publishing || saving || sources.length === 0}>{publishing ? 'Publishing…' : 'Publish'}</Button>
               </div>
               {state.publishedAt && (
-                <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap', marginTop: 6 }}>
+                <div style={{ display: 'flex', gap: tokens.spacingHorizontalS, alignItems: 'center', flexWrap: 'wrap', marginTop: tokens.spacingVerticalSNudge }}>
                   <Badge appearance="filled" color="success">published</Badge>
                   <Caption1 style={{ color: tokens.colorNeutralForeground3 }}>{new Date(state.publishedAt).toLocaleString()}</Caption1>
                 </div>
@@ -4485,38 +4485,38 @@ export function DataAgentEditor({ item, id }: { item: FabricItemType; id: string
                       {publishResult.ok ? 'Published' : publishResult.deferred ? 'Foundry Agent Service not configured' : 'Publish failed'}
                     </MessageBarTitle>
                     {publishResult.ok && (
-                      <div style={{ marginTop: 4 }}>
+                      <div style={{ marginTop: tokens.spacingVerticalXS }}>
                         Connect from Foundry / Copilot Studio with this GUID pair (mark both as secrets):
-                        <div style={{ fontFamily: 'monospace', fontSize: 12, marginTop: 4 }}>
+                        <div style={{ fontFamily: 'monospace', fontSize: tokens.fontSizeBase200, marginTop: tokens.spacingVerticalXS }}>
                           workspace-id (project): <strong>{publishResult.workspaceId}</strong><br />
                           artifact-id (agent): <strong>{publishResult.artifactId}</strong>
                         </div>
-                        <Caption1 style={{ marginTop: 6, display: 'block' }}>
+                        <Caption1 style={{ marginTop: tokens.spacingVerticalSNudge, display: 'block' }}>
                           Copilot Studio: Agents → + Add → Microsoft Fabric → pick this published agent.
                           Foundry: Management Center → Connected resources → new Microsoft Fabric connection.
                         </Caption1>
                       </div>
                     )}
                     {publishResult.error && <div>{publishResult.error}</div>}
-                    {publishResult.hint && <div style={{ marginTop: 4 }}><em>Hint:</em> {publishResult.hint}</div>}
+                    {publishResult.hint && <div style={{ marginTop: tokens.spacingVerticalXS }}><em>Hint:</em> {publishResult.hint}</div>}
                   </MessageBarBody>
                 </MessageBar>
               )}
 
               {/* ---- Publish to Microsoft 365 Copilot (Copilot Studio) ---- */}
               <div role="separator" aria-orientation="horizontal" style={{ height: 1, background: tokens.colorNeutralStroke2, margin: `${tokens.spacingVerticalXL} 0` }} />
-              <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: tokens.spacingHorizontalS }}>
                 <Subtitle2>Publish to Microsoft 365 Copilot</Subtitle2>
                 <Badge appearance="tint" color="brand">Copilot Studio</Badge>
               </div>
-              <Caption1 style={{ display: 'block', marginTop: 2, maxWidth: 720, color: tokens.colorNeutralForeground2 }}>
+              <Caption1 style={{ display: 'block', marginTop: tokens.spacingVerticalXXS, maxWidth: 720, color: tokens.colorNeutralForeground2 }}>
                 Surfaces this data agent as a Copilot Studio agent and enables the Teams + Microsoft 365 Copilot channel,
                 so users can discover and chat with it in M365 Copilot. After publishing, a tenant admin approves it in the
                 Microsoft 365 admin center (Agents → All agents → Requests).
               </Caption1>
-              {!m365EnvLoaded && <Spinner size="tiny" label="Loading Power Platform environments…" labelPosition="after" style={{ marginTop: 8 }} />}
+              {!m365EnvLoaded && <Spinner size="tiny" label="Loading Power Platform environments…" labelPosition="after" style={{ marginTop: tokens.spacingVerticalS }} />}
               {m365EnvLoaded && m365Envs.length === 0 && (
-                <MessageBar intent="warning" style={{ marginTop: 8 }}>
+                <MessageBar intent="warning" style={{ marginTop: tokens.spacingVerticalS }}>
                   <MessageBarBody>
                     <MessageBarTitle>No Power Platform environment available</MessageBarTitle>
                     <div>
@@ -4524,13 +4524,13 @@ export function DataAgentEditor({ item, id }: { item: FabricItemType; id: string
                       Set <code>LOOM_COPILOT_STUDIO_ENVIRONMENT_ID</code> and the Dataverse app-user creds
                       (<code>LOOM_DATAVERSE_CLIENT_ID</code> / <code>LOOM_DATAVERSE_CLIENT_SECRET</code> / <code>LOOM_DATAVERSE_TENANT_ID</code>) on the console app.
                     </div>
-                    {m365EnvError && <div style={{ marginTop: 4 }}><em>Detail:</em> {m365EnvError}</div>}
+                    {m365EnvError && <div style={{ marginTop: tokens.spacingVerticalXS }}><em>Detail:</em> {m365EnvError}</div>}
                   </MessageBarBody>
                 </MessageBar>
               )}
               {m365EnvLoaded && m365Envs.length > 0 && (
                 <>
-                  <Field label="Power Platform environment" style={{ marginTop: 8, maxWidth: 480 }}>
+                  <Field label="Power Platform environment" style={{ marginTop: tokens.spacingVerticalS, maxWidth: 480 }}>
                     <Dropdown
                       value={m365Envs.find((e) => e.id === m365EnvId)?.displayName || ''}
                       selectedOptions={m365EnvId ? [m365EnvId] : []}
@@ -4544,9 +4544,9 @@ export function DataAgentEditor({ item, id }: { item: FabricItemType; id: string
                     checked={m365Available}
                     onChange={(_, d) => setM365Available(d.checked)}
                     label="Make agent available in Microsoft 365 Copilot (uncheck for Teams only)"
-                    style={{ marginTop: 4 }}
+                    style={{ marginTop: tokens.spacingVerticalXS }}
                   />
-                  <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginTop: 12, flexWrap: 'wrap' }}>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: tokens.spacingHorizontalM, marginTop: tokens.spacingVerticalM, flexWrap: 'wrap' }}>
                     <Button
                       appearance="primary"
                       onClick={publishM365}
@@ -4569,7 +4569,7 @@ export function DataAgentEditor({ item, id }: { item: FabricItemType; id: string
                 </>
               )}
               {state.m365Copilot?.publishedAt && (
-                <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap', marginTop: 6 }}>
+                <div style={{ display: 'flex', gap: tokens.spacingHorizontalS, alignItems: 'center', flexWrap: 'wrap', marginTop: tokens.spacingVerticalSNudge }}>
                   <Badge appearance="filled" color="success">M365 Copilot</Badge>
                   <Caption1 style={{ color: tokens.colorNeutralForeground3 }}>
                     Published {new Date(state.m365Copilot.publishedAt).toLocaleString()} · agent <code>{state.m365Copilot.agentName}</code>
@@ -4577,19 +4577,19 @@ export function DataAgentEditor({ item, id }: { item: FabricItemType; id: string
                 </div>
               )}
               {m365Result && (
-                <MessageBar intent={m365Result.ok ? 'success' : m365Result.deferred ? 'warning' : 'error'} style={{ marginTop: 8 }}>
+                <MessageBar intent={m365Result.ok ? 'success' : m365Result.deferred ? 'warning' : 'error'} style={{ marginTop: tokens.spacingVerticalS }}>
                   <MessageBarBody>
                     <MessageBarTitle>
                       {m365Result.ok ? 'Published to Microsoft 365 Copilot' : m365Result.deferred ? 'Copilot Studio not configured' : 'M365 Copilot publish failed'}
                     </MessageBarTitle>
                     {m365Result.ok && (
-                      <div style={{ marginTop: 4 }}>
+                      <div style={{ marginTop: tokens.spacingVerticalXS }}>
                         Copilot Studio agent <strong>{m365Result.agentName}</strong> ({m365Result.agentState || 'published'}) is now on the
                         Teams + Microsoft 365 Copilot channel{m365Result.m365CopilotEnabled ? ' with M365 Copilot enabled' : ' (Teams only)'}.
                       </div>
                     )}
                     {m365Result.error && <div>{m365Result.error}</div>}
-                    {m365Result.hint && <div style={{ marginTop: 4 }}><em>Next:</em> {m365Result.hint}</div>}
+                    {m365Result.hint && <div style={{ marginTop: tokens.spacingVerticalXS }}><em>Next:</em> {m365Result.hint}</div>}
                   </MessageBarBody>
                 </MessageBar>
               )}
@@ -4601,53 +4601,53 @@ export function DataAgentEditor({ item, id }: { item: FabricItemType; id: string
               <Subtitle2>Run-steps inspector</Subtitle2>
               <Caption1>Run a question through a PUBLISHED Foundry agent and trace the run steps it executed (tool calls / queries / message creation). Requires the agent to be published and LOOM_FOUNDRY_PROJECT_ENDPOINT configured.</Caption1>
               {inspectGate && (
-                <MessageBar intent="warning" style={{ marginTop: 8 }}>
+                <MessageBar intent="warning" style={{ marginTop: tokens.spacingVerticalS }}>
                   <MessageBarBody>
                     <MessageBarTitle>Foundry Agent Service not configured</MessageBarTitle>
                     <div>{inspectGate}</div>
                   </MessageBarBody>
                 </MessageBar>
               )}
-              <div style={{ display: 'flex', gap: 8, alignItems: 'flex-end', flexWrap: 'wrap', marginTop: 8 }}>
+              <div style={{ display: 'flex', gap: tokens.spacingHorizontalS, alignItems: 'flex-end', flexWrap: 'wrap', marginTop: tokens.spacingVerticalS }}>
                 <Field label="Published agent (name / artifact id)">
                   <Input value={inspectAgent} onChange={(_, d) => setInspectAgent(d.value)} placeholder="from Publish (artifact-id)" style={{ minWidth: 300 }} />
                 </Field>
               </div>
-              <Textarea value={inspectQuestion} rows={2} onChange={(_, d) => setInspectQuestion(d.value)} placeholder="Ask a question to trace through the agent…" style={{ marginTop: 8 }} />
-              <div style={{ marginTop: 8 }}>
+              <Textarea value={inspectQuestion} rows={2} onChange={(_, d) => setInspectQuestion(d.value)} placeholder="Ask a question to trace through the agent…" style={{ marginTop: tokens.spacingVerticalS }} />
+              <div style={{ marginTop: tokens.spacingVerticalS }}>
                 <Button appearance="primary" onClick={runInspect} disabled={inspecting || !inspectAgent.trim() || !inspectQuestion.trim()}>{inspecting ? 'Running…' : 'Run + inspect'}</Button>
               </div>
               {inspectResult && inspectResult.ok && inspectResult.data && (
-                <div style={{ marginTop: 12 }}>
-                  <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
+                <div style={{ marginTop: tokens.spacingVerticalM }}>
+                  <div style={{ display: 'flex', gap: tokens.spacingHorizontalS, alignItems: 'center', flexWrap: 'wrap' }}>
                     <Badge appearance="filled" color={inspectResult.data.status === 'completed' ? 'success' : inspectResult.data.status === 'failed' ? 'danger' : 'warning'}>{inspectResult.data.status}</Badge>
                     <Caption1 style={{ color: tokens.colorNeutralForeground3 }}>run {inspectResult.data.runId}</Caption1>
                   </div>
-                  {inspectResult.data.lastError && <MessageBar intent="error" style={{ marginTop: 6 }}><MessageBarBody>{inspectResult.data.lastError}</MessageBarBody></MessageBar>}
+                  {inspectResult.data.lastError && <MessageBar intent="error" style={{ marginTop: tokens.spacingVerticalSNudge }}><MessageBarBody>{inspectResult.data.lastError}</MessageBarBody></MessageBar>}
                   {inspectResult.data.answer && (
-                    <div style={{ marginTop: 8 }}><Subtitle2>Answer</Subtitle2><div style={{ whiteSpace: 'pre-wrap' }}>{inspectResult.data.answer}</div></div>
+                    <div style={{ marginTop: tokens.spacingVerticalS }}><Subtitle2>Answer</Subtitle2><div style={{ whiteSpace: 'pre-wrap' }}>{inspectResult.data.answer}</div></div>
                   )}
-                  <Subtitle2 style={{ marginTop: 10 }}>Run steps ({inspectResult.data.steps?.length || 0})</Subtitle2>
+                  <Subtitle2 style={{ marginTop: tokens.spacingVerticalS }}>Run steps ({inspectResult.data.steps?.length || 0})</Subtitle2>
                   {(inspectResult.data.steps || []).map((st: any, i: number) => (
-                    <div key={st.id || i} style={{ border: `1px solid ${tokens.colorNeutralStroke2}`, borderRadius: 6, padding: 8, marginTop: 6 }}>
-                      <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+                    <div key={st.id || i} style={{ border: `1px solid ${tokens.colorNeutralStroke2}`, borderRadius: tokens.borderRadiusLarge, padding: tokens.spacingVerticalS, marginTop: tokens.spacingVerticalSNudge }}>
+                      <div style={{ display: 'flex', gap: tokens.spacingHorizontalS, alignItems: 'center' }}>
                         <Badge appearance="outline">{st.type}</Badge>
                         <Badge appearance="filled" color={st.status === 'completed' ? 'success' : st.status === 'failed' ? 'danger' : 'informative'}>{st.status}</Badge>
                       </div>
                       {(st.toolCalls || []).map((tc: any, j: number) => (
-                        <div key={j} style={{ marginTop: 6, fontFamily: 'monospace', fontSize: 12 }}>
+                        <div key={j} style={{ marginTop: tokens.spacingVerticalSNudge, fontFamily: 'monospace', fontSize: tokens.fontSizeBase200 }}>
                           <div><strong>{tc.type}{tc.name ? ` · ${tc.name}` : ''}</strong></div>
                           {tc.input && <div style={{ whiteSpace: 'pre-wrap', color: tokens.colorNeutralForeground3 }}>{tc.input}</div>}
                           {tc.output && <div style={{ whiteSpace: 'pre-wrap' }}>{tc.output}</div>}
                         </div>
                       ))}
-                      {st.error && <div style={{ color: tokens.colorPaletteRedForeground1, marginTop: 4 }}>{st.error}</div>}
+                      {st.error && <div style={{ color: tokens.colorPaletteRedForeground1, marginTop: tokens.spacingVerticalXS }}>{st.error}</div>}
                     </div>
                   ))}
                 </div>
               )}
               {inspectResult && !inspectResult.ok && !inspectGate && (
-                <MessageBar intent="error" style={{ marginTop: 8 }}><MessageBarBody>{inspectResult.error || 'Run failed'}</MessageBarBody></MessageBar>
+                <MessageBar intent="error" style={{ marginTop: tokens.spacingVerticalS }}><MessageBarBody>{inspectResult.error || 'Run failed'}</MessageBarBody></MessageBar>
               )}
             </>
           )}

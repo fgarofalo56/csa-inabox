@@ -41,17 +41,17 @@ import { ForceDirectedGraph, extractGraph } from '@/lib/components/graph/force-d
 import { cypherToKql, TranslationError } from '@/lib/azure/cypher-kql-translator';
 
 const useStyles = makeStyles({
-  pad: { padding: 16, display: 'flex', flexDirection: 'column', gap: 12 },
+  pad: { padding: tokens.spacingVerticalL, display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalM },
   editor: {
     width: '100%', minHeight: 160,
-    fontFamily: 'Consolas, monospace', fontSize: 13, padding: 12,
-    border: `1px solid ${tokens.colorNeutralStroke2}`, borderRadius: 4,
+    fontFamily: 'Consolas, monospace', fontSize: tokens.fontSizeBase300, padding: tokens.spacingHorizontalM,
+    border: `1px solid ${tokens.colorNeutralStroke2}`, borderRadius: tokens.borderRadiusMedium,
     backgroundColor: tokens.colorNeutralBackground3, color: tokens.colorNeutralForeground1,
     resize: 'vertical',
   },
-  treePad: { padding: 12, display: 'flex', flexDirection: 'column', gap: 12 },
-  field: { display: 'flex', flexDirection: 'column', gap: 4 },
-  tableWrap: { overflow: 'auto', maxHeight: 320, border: `1px solid ${tokens.colorNeutralStroke2}`, borderRadius: 4 },
+  treePad: { padding: tokens.spacingHorizontalM, display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalM },
+  field: { display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalXS },
+  tableWrap: { overflow: 'auto', maxHeight: 320, border: `1px solid ${tokens.colorNeutralStroke2}`, borderRadius: tokens.borderRadiusMedium },
   // Vector store surfaces
   toolbar: { display: 'flex', gap: tokens.spacingHorizontalS, alignItems: 'center', flexWrap: 'wrap' },
   searchRow: { display: 'flex', gap: tokens.spacingHorizontalM, alignItems: 'flex-end', flexWrap: 'wrap' },
@@ -123,7 +123,7 @@ function ResultsPreview({ result }: { result: any }) {
     );
   }
   return (
-    <pre style={{ fontSize: 12, maxHeight: 320, overflow: 'auto', background: tokens.colorNeutralBackground3, padding: 8, borderRadius: 4 }}>
+    <pre style={{ fontSize: tokens.fontSizeBase200, maxHeight: 320, overflow: 'auto', background: tokens.colorNeutralBackground3, padding: tokens.spacingVerticalS, borderRadius: tokens.borderRadiusMedium }}>
       {JSON.stringify(result, null, 2)}
     </pre>
   );
@@ -191,8 +191,8 @@ export function CosmosGremlinGraphEditor({ item, id }: { item: FabricItemType; i
             <Input value={endpoint || '— not configured —'} readOnly placeholder="wss://<acct>.gremlin.cosmos.azure.com:443/" />
             <Caption1>Configured via <code>LOOM_COSMOS_GREMLIN_ENDPOINT</code>. Editing here is not honored by the BFF.</Caption1>
           </div>
-          <Caption1 style={{ marginTop: 8 }}>Use the buttons below to quick-load <code>g.V()</code> / <code>g.E()</code> previews.</Caption1>
-          <div style={{ display: 'flex', gap: 4, marginTop: 8 }}>
+          <Caption1 style={{ marginTop: tokens.spacingVerticalS }}>Use the buttons below to quick-load <code>g.V()</code> / <code>g.E()</code> previews.</Caption1>
+          <div style={{ display: 'flex', gap: tokens.spacingHorizontalXS, marginTop: tokens.spacingVerticalS }}>
             <Button size="small" onClick={showVertices} disabled={loading}>Vertices</Button>
             <Button size="small" onClick={showEdges} disabled={loading}>Edges</Button>
           </div>
@@ -209,7 +209,7 @@ export function CosmosGremlinGraphEditor({ item, id }: { item: FabricItemType; i
             </MessageBarBody>
           </MessageBar>
           <MonacoTextarea value={query} onChange={setQuery} language="javascript" height={200} minHeight={160} ariaLabel="Gremlin query" />
-          <div style={{ display: 'flex', gap: 8 }}>
+          <div style={{ display: 'flex', gap: tokens.spacingHorizontalS }}>
             <Button appearance="primary" icon={<Play20Regular />} disabled={loading} onClick={run}>Run</Button>
             <Button appearance="secondary" disabled={loading} onClick={showVertices}>Quick: Vertices</Button>
             <Button appearance="secondary" disabled={loading} onClick={showEdges}>Quick: Edges</Button>
@@ -237,7 +237,7 @@ function GremlinViz({ result }: { result: any }) {
   if (!graph) return null;
   return (
     <div>
-      <Caption1 style={{ marginBottom: 4 }}>Force-directed graph view ({graph.nodes.length} nodes, {graph.edges.length} edges)</Caption1>
+      <Caption1 style={{ marginBottom: tokens.spacingVerticalXS }}>Force-directed graph view ({graph.nodes.length} nodes, {graph.edges.length} edges)</Caption1>
       <ForceDirectedGraph nodes={graph.nodes} edges={graph.edges} />
     </div>
   );
@@ -302,7 +302,7 @@ export function CypherGraphEditor({ item, id }: { item: FabricItemType; id: stri
       ribbon={ribbon}
       leftPanel={<div className={s.treePad}>
         <Caption1>Cypher → KQL bridge. Backed by ADX <code>make-graph</code> + <code>graph-match</code>.</Caption1>
-        <div className={s.field} style={{ marginTop: 8 }}>
+        <div className={s.field} style={{ marginTop: tokens.spacingVerticalS }}>
           <Label>Source table</Label>
           <Input value={sourceTable} onChange={(_: unknown, d: any) => setSourceTable(d.value)} placeholder="GraphSnapshot" />
           <Caption1>The ADX table that holds the graph snapshot (output of <code>make-graph</code>).</Caption1>
@@ -329,13 +329,13 @@ export function CypherGraphEditor({ item, id }: { item: FabricItemType; id: stri
           {translated && (
             <div>
               <Caption1>Translated KQL:</Caption1>
-              <pre style={{ fontFamily: 'Consolas, monospace', fontSize: 12, backgroundColor: tokens.colorNeutralBackground2, padding: 8, borderRadius: 4, whiteSpace: 'pre-wrap' }}>{translated}</pre>
+              <pre style={{ fontFamily: 'Consolas, monospace', fontSize: tokens.fontSizeBase200, backgroundColor: tokens.colorNeutralBackground2, padding: tokens.spacingVerticalS, borderRadius: tokens.borderRadiusMedium, whiteSpace: 'pre-wrap' }}>{translated}</pre>
             </div>
           )}
           <Button appearance="primary" icon={<Play20Regular />} disabled={loading} onClick={run}>Run</Button>
           {cypherGraph && (
             <div>
-              <Caption1 style={{ marginBottom: 4 }}>Force-directed graph view ({cypherGraph.nodes.length} nodes, {cypherGraph.edges.length} edges)</Caption1>
+              <Caption1 style={{ marginBottom: tokens.spacingVerticalXS }}>Force-directed graph view ({cypherGraph.nodes.length} nodes, {cypherGraph.edges.length} edges)</Caption1>
               <ForceDirectedGraph nodes={cypherGraph.nodes} edges={cypherGraph.edges} />
             </div>
           )}
@@ -421,9 +421,9 @@ export function GqlGraphEditor({ item, id }: { item: FabricItemType; id: string 
       leftPanel={
         <div className={s.treePad}>
           <Caption1>ISO GQL standard. Pick a backend below.</Caption1>
-          <div className={s.field} style={{ marginTop: 8 }}>
+          <div className={s.field} style={{ marginTop: tokens.spacingVerticalS }}>
             <Label>Backend</Label>
-            <select value={backend} onChange={(e) => setBackend(e.target.value as GqlBackend)} style={{ padding: 6 }}>
+            <select value={backend} onChange={(e) => setBackend(e.target.value as GqlBackend)} style={{ padding: tokens.spacingHorizontalXS }}>
               <option value="adx-graph">Azure Data Explorer (KQL graph — default, no Fabric)</option>
               <option value="cosmos-gremlin-translate">Cosmos Gremlin (best-effort translate)</option>
               <option value="persist-only">Persist-only (no dispatch)</option>
@@ -459,12 +459,12 @@ export function GqlGraphEditor({ item, id }: { item: FabricItemType; id: string 
           {result?.translated && (
             <div>
               <Caption1>Translated Gremlin:</Caption1>
-              <pre style={{ fontFamily: 'Consolas, monospace', fontSize: 12, backgroundColor: tokens.colorNeutralBackground2, padding: 8, borderRadius: 4, whiteSpace: 'pre-wrap' }}>{result.translated}</pre>
+              <pre style={{ fontFamily: 'Consolas, monospace', fontSize: tokens.fontSizeBase200, backgroundColor: tokens.colorNeutralBackground2, padding: tokens.spacingVerticalS, borderRadius: tokens.borderRadiusMedium, whiteSpace: 'pre-wrap' }}>{result.translated}</pre>
             </div>
           )}
           {gqlGraph && (
             <div>
-              <Caption1 style={{ marginBottom: 4 }}>Force-directed graph view ({gqlGraph.nodes.length} nodes, {gqlGraph.edges.length} edges)</Caption1>
+              <Caption1 style={{ marginBottom: tokens.spacingVerticalXS }}>Force-directed graph view ({gqlGraph.nodes.length} nodes, {gqlGraph.edges.length} edges)</Caption1>
               <ForceDirectedGraph nodes={gqlGraph.nodes} edges={gqlGraph.edges} />
             </div>
           )}
@@ -817,7 +817,7 @@ export function VectorStoreEditor({ item, id }: { item: FabricItemType; id: stri
       }
       main={
         <>
-          <div style={{ padding: '8px 16px 0', borderBottom: `1px solid ${tokens.colorNeutralStroke2}` }}>
+          <div style={{ padding: `${tokens.spacingVerticalS} ${tokens.spacingHorizontalL} 0`, borderBottom: `1px solid ${tokens.colorNeutralStroke2}` }}>
             <TabList selectedValue={tab} onTabSelect={(_: unknown, d: any) => setTab(d.value)}>
               <Tab value="schema">Index schema</Tab>
               <Tab value="documents">Add documents</Tab>

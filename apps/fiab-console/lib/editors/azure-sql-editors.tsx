@@ -90,26 +90,26 @@ function resultsToJson(columns: string[], rows: unknown[][]): string {
 }
 
 const useStyles = makeStyles({
-  pad: { padding: 16, display: 'flex', flexDirection: 'column', gap: 12, minHeight: 0, flex: 1 },
-  toolbar: { display: 'flex', gap: 12, alignItems: 'center', flexWrap: 'wrap' },
+  pad: { padding: tokens.spacingVerticalL, display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalM, minHeight: 0, flex: 1 },
+  toolbar: { display: 'flex', gap: tokens.spacingHorizontalM, alignItems: 'center', flexWrap: 'wrap' },
   editor: {
     width: '100%', minHeight: 200,
-    fontFamily: 'Consolas, "Cascadia Code", monospace', fontSize: 13, padding: 12,
-    border: `1px solid ${tokens.colorNeutralStroke2}`, borderRadius: 4,
+    fontFamily: 'Consolas, "Cascadia Code", monospace', fontSize: tokens.fontSizeBase300, padding: tokens.spacingVerticalM,
+    border: `1px solid ${tokens.colorNeutralStroke2}`, borderRadius: tokens.borderRadiusMedium,
     backgroundColor: tokens.colorNeutralBackground3, color: tokens.colorNeutralForeground1,
     resize: 'vertical',
   },
-  resultBox: { borderTop: `1px solid ${tokens.colorNeutralStroke2}`, paddingTop: 12, minHeight: 200 },
-  resultMeta: { display: 'flex', gap: 12, alignItems: 'center', marginBottom: 8, flexWrap: 'wrap' },
-  resultActions: { marginLeft: 'auto', display: 'flex', gap: 4 },
-  tableWrap: { overflow: 'auto', maxHeight: 360, border: `1px solid ${tokens.colorNeutralStroke2}`, borderRadius: 4 },
-  cell: { fontFamily: 'Consolas, monospace', fontSize: 12, whiteSpace: 'nowrap' },
-  treePad: { padding: 8 },
-  formRow: { display: 'flex', flexDirection: 'column', gap: 4, marginBottom: 12 },
+  resultBox: { borderTop: `1px solid ${tokens.colorNeutralStroke2}`, paddingTop: tokens.spacingVerticalM, minHeight: 200 },
+  resultMeta: { display: 'flex', gap: tokens.spacingHorizontalM, alignItems: 'center', marginBottom: tokens.spacingVerticalS, flexWrap: 'wrap' },
+  resultActions: { marginLeft: 'auto', display: 'flex', gap: tokens.spacingHorizontalXS },
+  tableWrap: { overflow: 'auto', maxHeight: 360, border: `1px solid ${tokens.colorNeutralStroke2}`, borderRadius: tokens.borderRadiusMedium },
+  cell: { fontFamily: 'Consolas, monospace', fontSize: tokens.fontSizeBase200, whiteSpace: 'nowrap' },
+  treePad: { padding: tokens.spacingVerticalS },
+  formRow: { display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalXS, marginBottom: tokens.spacingVerticalM },
   fullWidth: { width: '100%' },
   // SQL database schema-object browser (left pane)
   sqlLeftPane: {
-    padding: 8,
+    padding: tokens.spacingVerticalS,
     display: 'flex',
     flexDirection: 'column',
     gap: tokens.spacingVerticalS,
@@ -584,12 +584,12 @@ export function AzureSqlServerEditor({ item, id }: { item: FabricItemType; id: s
                 FQDN: <code>{selected.fqdn}</code>
                 <Tooltip content="Copy FQDN" relationship="label">
                   <Button size="small" appearance="subtle" icon={<Copy20Regular />} aria-label="Copy server FQDN"
-                    onClick={() => navigator.clipboard?.writeText(selected.fqdn)} style={{ marginLeft: 4 }} />
+                    onClick={() => navigator.clipboard?.writeText(selected.fqdn)} style={{ marginLeft: tokens.spacingHorizontalXXS }} />
                 </Tooltip>
               </Body1>
               <Body1>AAD admin login: <code>{selected.administratorLogin || '— set via Microsoft.Sql/servers/administrators —'}</code></Body1>
 
-              <div className={s.dbTableToolbar} style={{ marginTop: 12 }}>
+              <div className={s.dbTableToolbar} style={{ marginTop: tokens.spacingVerticalM }}>
                 <Subtitle2>Databases</Subtitle2>
                 <Input
                   size="small"
@@ -609,7 +609,7 @@ export function AzureSqlServerEditor({ item, id }: { item: FabricItemType; id: s
               </div>
               {loading ? (
                 <div className={s.tableWrap}>
-                  <Spinner size="small" label="Loading databases…" labelPosition="after" style={{ padding: 24 }} />
+                  <Spinner size="small" label="Loading databases…" labelPosition="after" style={{ padding: tokens.spacingVerticalXXL }} />
                 </div>
               ) : databases.length === 0 ? (
                 <div className={s.tableWrap}>
@@ -695,7 +695,7 @@ export function AzureSqlServerEditor({ item, id }: { item: FabricItemType; id: s
                   {fwError && (
                     <MessageBar intent="error"><MessageBarBody><MessageBarTitle>Firewall API error</MessageBarTitle>{fwError}</MessageBarBody></MessageBar>
                   )}
-                  <div style={{ overflow: 'auto', marginTop: 8, marginBottom: 12 }}>
+                  <div style={{ overflow: 'auto', marginTop: tokens.spacingVerticalS, marginBottom: tokens.spacingVerticalM }}>
                     <Table aria-label="Firewall rules" size="small">
                       <TableHeader><TableRow>
                         <TableHeaderCell>Name</TableHeaderCell>
@@ -710,8 +710,8 @@ export function AzureSqlServerEditor({ item, id }: { item: FabricItemType; id: s
                         {fwRules.map((r) => (
                           <TableRow key={r.name}>
                             <TableCell><strong>{r.name}</strong></TableCell>
-                            <TableCell><code style={{ fontSize: 11 }}>{r.startIpAddress}</code></TableCell>
-                            <TableCell><code style={{ fontSize: 11 }}>{r.endIpAddress}</code></TableCell>
+                            <TableCell><code style={{ fontSize: tokens.fontSizeBase100 }}>{r.startIpAddress}</code></TableCell>
+                            <TableCell><code style={{ fontSize: tokens.fontSizeBase100 }}>{r.endIpAddress}</code></TableCell>
                             <TableCell>
                               <Tooltip content={`Delete firewall rule ${r.name}`} relationship="label">
                                 <Button size="small" appearance="subtle" icon={<Delete20Regular />} aria-label={`Delete firewall rule ${r.name}`} disabled={fwBusy} onClick={() => setConfirmDeleteRule(r.name)}>Delete</Button>
@@ -723,7 +723,7 @@ export function AzureSqlServerEditor({ item, id }: { item: FabricItemType; id: s
                     </Table>
                   </div>
                   <Subtitle2>Add rule</Subtitle2>
-                  <div style={{ display: 'grid', gridTemplateColumns: '2fr 1fr 1fr', gap: 12, marginTop: 8 }}>
+                  <div style={{ display: 'grid', gridTemplateColumns: '2fr 1fr 1fr', gap: tokens.spacingVerticalM, marginTop: tokens.spacingVerticalS }}>
                     <Field label="Name"><Input value={newRuleName} onChange={(_, d) => setNewRuleName(d.value)} placeholder="allow-corp-vpn" /></Field>
                     <Field label="Start IP"><Input value={newRuleStart} onChange={(_, d) => setNewRuleStart(d.value)} placeholder="0.0.0.0" /></Field>
                     <Field label="End IP"><Input value={newRuleEnd} onChange={(_, d) => setNewRuleEnd(d.value)} placeholder="0.0.0.0" /></Field>
@@ -1049,7 +1049,7 @@ export function AzureSqlDatabaseEditor({ item, id }: { item: FabricItemType; id:
               value={server}
               onChange={(e) => { setServer(e.target.value); setDatabase(''); }}
               disabled={srv.loading || (srv.servers?.length ?? 0) === 0}
-              style={{ padding: 6, borderRadius: 4, border: `1px solid ${tokens.colorNeutralStroke2}`, background: tokens.colorNeutralBackground1, color: tokens.colorNeutralForeground1 }}
+              style={{ padding: tokens.spacingVerticalXS, borderRadius: tokens.borderRadiusMedium, border: `1px solid ${tokens.colorNeutralStroke2}`, background: tokens.colorNeutralBackground1, color: tokens.colorNeutralForeground1 }}
             >
               {srv.loading && <option value="">Loading servers…</option>}
               {!srv.loading && (srv.servers?.length ?? 0) === 0 && (
@@ -1069,7 +1069,7 @@ export function AzureSqlDatabaseEditor({ item, id }: { item: FabricItemType; id:
               value={database}
               onChange={(e) => setDatabase(e.target.value)}
               disabled={!server || dbs.loading || (dbs.databases?.length ?? 0) === 0}
-              style={{ padding: 6, borderRadius: 4, border: `1px solid ${tokens.colorNeutralStroke2}`, background: tokens.colorNeutralBackground1, color: tokens.colorNeutralForeground1 }}
+              style={{ padding: tokens.spacingVerticalXS, borderRadius: tokens.borderRadiusMedium, border: `1px solid ${tokens.colorNeutralStroke2}`, background: tokens.colorNeutralBackground1, color: tokens.colorNeutralForeground1 }}
             >
               {!server && <option value="">Select a server first</option>}
               {server && dbs.loading && <option value="">Loading databases…</option>}
@@ -1204,7 +1204,7 @@ export function AzureSqlDatabaseEditor({ item, id }: { item: FabricItemType; id:
                 </MessageBarBody>
               </MessageBar>
               <Button onClick={toggleMirror} icon={<ShieldKeyhole20Regular />}>Enable / Refresh mirror</Button>
-              {mirrorState && <pre style={{ fontSize: 12, background: tokens.colorNeutralBackground3, padding: 8, borderRadius: 4 }}>{JSON.stringify(mirrorState, null, 2)}</pre>}
+              {mirrorState && <pre style={{ fontSize: tokens.fontSizeBase200, background: tokens.colorNeutralBackground3, padding: tokens.spacingVerticalS, borderRadius: tokens.borderRadiusMedium }}>{JSON.stringify(mirrorState, null, 2)}</pre>}
             </>
           )}
           {tab === 'replication' && (
@@ -1232,7 +1232,7 @@ export function AzureSqlDatabaseEditor({ item, id }: { item: FabricItemType; id:
                 </MessageBarBody>
               </MessageBar>
               <Button onClick={probe2025} icon={<Sparkle20Regular />}>Probe engine</Button>
-              {sql2025State && <pre style={{ fontSize: 12, background: tokens.colorNeutralBackground3, padding: 8, borderRadius: 4 }}>{JSON.stringify(sql2025State, null, 2)}</pre>}
+              {sql2025State && <pre style={{ fontSize: tokens.fontSizeBase200, background: tokens.colorNeutralBackground3, padding: tokens.spacingVerticalS, borderRadius: tokens.borderRadiusMedium }}>{JSON.stringify(sql2025State, null, 2)}</pre>}
             </>
           )}
 
@@ -1249,7 +1249,7 @@ export function AzureSqlDatabaseEditor({ item, id }: { item: FabricItemType; id:
                     <select
                       value={replicaServer}
                       onChange={(e) => setReplicaServer(e.target.value)}
-                      style={{ padding: 6, borderRadius: 4, border: `1px solid ${tokens.colorNeutralStroke2}`, background: tokens.colorNeutralBackground1, color: tokens.colorNeutralForeground1 }}
+                      style={{ padding: tokens.spacingVerticalXS, borderRadius: tokens.borderRadiusMedium, border: `1px solid ${tokens.colorNeutralStroke2}`, background: tokens.colorNeutralBackground1, color: tokens.colorNeutralForeground1 }}
                     >
                       <option value="">Select a replica server</option>
                       {(srv.servers || []).filter((sv) => sv.name !== server).map((sv) => (
@@ -1400,7 +1400,7 @@ export function SqlManagedInstanceEditor({ item, id }: { item: FabricItemType; i
                     <TableCell>{i.state}</TableCell>
                     <TableCell>{i.location}</TableCell>
                     <TableCell>{i.sku?.name}</TableCell>
-                    <TableCell><code style={{ fontSize: 11 }}>{i.fqdn}</code></TableCell>
+                    <TableCell><code style={{ fontSize: tokens.fontSizeBase100 }}>{i.fqdn}</code></TableCell>
                   </TableRow>
                 ))}
               </TableBody>
@@ -1482,7 +1482,7 @@ export function SqlServer2025VectorIndexEditor({ item, id }: { item: FabricItemT
               value={server}
               onChange={(e) => { setServer(e.target.value); setDatabase(''); }}
               disabled={srv.loading || (srv.servers?.length ?? 0) === 0}
-              style={{ padding: 6, borderRadius: 4, border: `1px solid ${tokens.colorNeutralStroke2}`, background: tokens.colorNeutralBackground1, color: tokens.colorNeutralForeground1 }}
+              style={{ padding: tokens.spacingVerticalXS, borderRadius: tokens.borderRadiusMedium, border: `1px solid ${tokens.colorNeutralStroke2}`, background: tokens.colorNeutralBackground1, color: tokens.colorNeutralForeground1 }}
             >
               {srv.loading && <option value="">Loading servers…</option>}
               {!srv.loading && (srv.servers?.length ?? 0) === 0 && (
@@ -1502,7 +1502,7 @@ export function SqlServer2025VectorIndexEditor({ item, id }: { item: FabricItemT
               value={database}
               onChange={(e) => setDatabase(e.target.value)}
               disabled={!server || dbs.loading || (dbs.databases?.length ?? 0) === 0}
-              style={{ padding: 6, borderRadius: 4, border: `1px solid ${tokens.colorNeutralStroke2}`, background: tokens.colorNeutralBackground1, color: tokens.colorNeutralForeground1 }}
+              style={{ padding: tokens.spacingVerticalXS, borderRadius: tokens.borderRadiusMedium, border: `1px solid ${tokens.colorNeutralStroke2}`, background: tokens.colorNeutralBackground1, color: tokens.colorNeutralForeground1 }}
             >
               {!server && <option value="">Select a server first</option>}
               {server && dbs.loading && <option value="">Loading databases…</option>}

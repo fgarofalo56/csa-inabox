@@ -34,13 +34,13 @@ import type { FabricItemType } from '@/lib/catalog/fabric-item-types';
 import type { RibbonTab } from '@/lib/components/ribbon';
 
 const useStyles = makeStyles({
-  pad: { padding: 16, display: 'flex', flexDirection: 'column', gap: 12, flex: 1, minHeight: 0 },
-  toolbar: { display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' },
-  treePad: { padding: 8 },
-  tabs: { borderBottom: `1px solid ${tokens.colorNeutralStroke2}`, padding: '8px 8px 0' },
-  tableWrap: { overflow: 'auto', maxHeight: 360, border: `1px solid ${tokens.colorNeutralStroke2}`, borderRadius: 4 },
-  cell: { fontFamily: 'Consolas, monospace', fontSize: 12, whiteSpace: 'nowrap' },
-  field: { display: 'flex', flexDirection: 'column', gap: 4, minWidth: 240 },
+  pad: { padding: tokens.spacingVerticalL, display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalM, flex: 1, minHeight: 0 },
+  toolbar: { display: 'flex', gap: tokens.spacingHorizontalS, alignItems: 'center', flexWrap: 'wrap' },
+  treePad: { padding: tokens.spacingVerticalS },
+  tabs: { borderBottom: `1px solid ${tokens.colorNeutralStroke2}`, padding: `${tokens.spacingVerticalS} ${tokens.spacingHorizontalS} 0` },
+  tableWrap: { overflow: 'auto', maxHeight: 360, border: `1px solid ${tokens.colorNeutralStroke2}`, borderRadius: tokens.borderRadiusMedium },
+  cell: { fontFamily: 'Consolas, monospace', fontSize: tokens.fontSizeBase200, whiteSpace: 'nowrap' },
+  field: { display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalXS, minWidth: 240 },
 });
 
 interface WorkspaceLite { id: string; name: string; isOnDedicatedCapacity?: boolean }
@@ -257,7 +257,7 @@ export function MirroredDatabricksEditor({ item, id }: Props) {
     <ItemEditorChrome item={item} id={id} ribbon={ribbon}
       leftPanel={
         <div className={s.treePad}>
-          <Subtitle2 style={{ marginBottom: 8 }}>Mirrored Databricks</Subtitle2>
+          <Subtitle2 style={{ marginBottom: tokens.spacingVerticalS }}>Mirrored Databricks</Subtitle2>
           {!workspaceId && <Caption1>Select a workspace.</Caption1>}
           {workspaceId && mirrors === null && <Spinner size="tiny" label="Loading…" />}
           {mirrors && mirrors.length === 0 && !listErr && <Caption1>No mirrors yet.</Caption1>}
@@ -498,7 +498,7 @@ export function MirroredDatabricksEditor({ item, id }: Props) {
                         <MessageBarBody>
                           <MessageBarTitle>Query it</MessageBarTitle>
                           Connect any T-SQL client to the endpoint above and run e.g.
-                          <code style={{ display: 'block', marginTop: 4, fontFamily: 'Consolas, monospace' }}>
+                          <code style={{ display: 'block', marginTop: tokens.spacingVerticalXS, fontFamily: 'Consolas, monospace' }}>
                             USE [{sqlInfo.database || 'loom_dbxmirror_…'}]; SELECT TOP 100 * FROM [dbo].[&lt;schema&gt;_&lt;table&gt;];
                           </code>
                           Each view reads the UC table&apos;s Delta files directly (OPENROWSET FORMAT=&apos;delta&apos;) over ADLS Gen2 — Azure-native, no Fabric.

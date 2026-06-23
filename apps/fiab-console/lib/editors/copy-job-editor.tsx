@@ -36,15 +36,19 @@ import type { RibbonTab } from '@/lib/components/ribbon';
 import { CopyJobWizard, type CopyJobSpec } from '@/lib/components/pipeline/copy-job/wizard';
 
 const useStyles = makeStyles({
-  tabBar: { padding: '8px 16px 0', borderBottom: `1px solid ${tokens.colorNeutralStroke2}` },
-  body: { padding: 20, display: 'flex', flexDirection: 'column', gap: 14, maxWidth: 920 },
-  toolbar: { display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' },
-  specGrid: { display: 'grid', gridTemplateColumns: 'minmax(140px, 200px) 1fr', rowGap: 6, columnGap: 16, alignItems: 'baseline' },
+  tabBar: {
+    paddingTop: tokens.spacingVerticalS, paddingLeft: tokens.spacingHorizontalL,
+    paddingRight: tokens.spacingHorizontalL, paddingBottom: 0,
+    borderBottom: `1px solid ${tokens.colorNeutralStroke2}`,
+  },
+  body: { padding: tokens.spacingVerticalXL, display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalM, maxWidth: 920 },
+  toolbar: { display: 'flex', gap: tokens.spacingHorizontalS, alignItems: 'center', flexWrap: 'wrap' },
+  specGrid: { display: 'grid', gridTemplateColumns: 'minmax(140px, 200px) 1fr', rowGap: tokens.spacingVerticalXS, columnGap: tokens.spacingHorizontalL, alignItems: 'baseline' },
   label: { color: tokens.colorNeutralForeground3 },
-  mono: { fontFamily: 'Consolas, "Cascadia Code", monospace', fontSize: 12 },
+  mono: { fontFamily: 'Consolas, "Cascadia Code", monospace', fontSize: tokens.fontSizeBase200 },
   card: {
-    border: `1px solid ${tokens.colorNeutralStroke2}`, borderRadius: 8, padding: 14,
-    display: 'flex', flexDirection: 'column', gap: 8, backgroundColor: tokens.colorNeutralBackground1,
+    border: `1px solid ${tokens.colorNeutralStroke2}`, borderRadius: tokens.borderRadiusXLarge, padding: tokens.spacingVerticalM,
+    display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalS, backgroundColor: tokens.colorNeutralBackground1,
   },
 });
 

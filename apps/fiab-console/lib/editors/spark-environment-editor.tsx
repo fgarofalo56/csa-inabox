@@ -41,21 +41,21 @@ import type { RibbonTab } from '@/lib/components/ribbon';
 import { KeyValueGrid } from '@/lib/components/ui/key-value-grid';
 
 const useStyles = makeStyles({
-  tabBar: { padding: '8px 16px 0', borderBottom: `1px solid ${tokens.colorNeutralStroke2}` },
-  tabBody: { padding: '20px', display: 'flex', flexDirection: 'column', gap: '12px', maxWidth: '880px' },
-  row: { display: 'flex', gap: '16px', flexWrap: 'wrap' },
-  field: { flex: 1, minWidth: '220px', display: 'flex', flexDirection: 'column', gap: '4px' },
+  tabBar: { padding: `${tokens.spacingVerticalS} ${tokens.spacingHorizontalL} 0`, borderBottom: `1px solid ${tokens.colorNeutralStroke2}` },
+  tabBody: { padding: tokens.spacingVerticalXL, display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalM, maxWidth: '880px' },
+  row: { display: 'flex', gap: tokens.spacingVerticalL, flexWrap: 'wrap' },
+  field: { flex: 1, minWidth: '220px', display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalXS },
   footer: {
     borderTop: `1px solid ${tokens.colorNeutralStroke2}`,
-    padding: '16px', display: 'flex', flexDirection: 'column', gap: '12px',
+    padding: tokens.spacingVerticalL, display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalM,
     background: tokens.colorNeutralBackground2,
   },
-  toolbar: { display: 'flex', gap: '8px', alignItems: 'center', flexWrap: 'wrap' },
-  mono: { fontFamily: 'Consolas, "Cascadia Code", monospace', fontSize: '12px' },
+  toolbar: { display: 'flex', gap: tokens.spacingVerticalS, alignItems: 'center', flexWrap: 'wrap' },
+  mono: { fontFamily: 'Consolas, "Cascadia Code", monospace', fontSize: tokens.fontSizeBase200 },
   pre: {
-    width: '100%', maxHeight: '220px', overflow: 'auto', padding: '10px', margin: 0,
-    fontFamily: 'Consolas, "Cascadia Code", monospace', fontSize: '12px',
-    border: `1px solid ${tokens.colorNeutralStroke2}`, borderRadius: '4px',
+    width: '100%', maxHeight: '220px', overflow: 'auto', padding: tokens.spacingVerticalS, margin: 0,
+    fontFamily: 'Consolas, "Cascadia Code", monospace', fontSize: tokens.fontSizeBase200,
+    border: `1px solid ${tokens.colorNeutralStroke2}`, borderRadius: tokens.borderRadiusMedium,
     background: tokens.colorNeutralBackground3, color: tokens.colorNeutralForeground1,
     whiteSpace: 'pre-wrap',
   },

@@ -19,43 +19,43 @@ import { BundleContentBar } from '@/lib/components/bundle-content-bar';
 import type { FabricItemType } from '@/lib/catalog/fabric-item-types';
 
 const useStyles = makeStyles({
-  meta: { display: 'flex', gap: '8px', alignItems: 'center' },
+  meta: { display: 'flex', gap: tokens.spacingHorizontalS, alignItems: 'center' },
   // Fill the window: the editor body grows to the viewport instead of a fixed
   // 70vh / 400px, so the canvas gets the room ADF/Fabric give it.
-  layout: { display: 'flex', flexDirection: 'column', gap: '8px', height: 'calc(100vh - 112px)', minHeight: '520px' },
+  layout: { display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalS, height: 'calc(100vh - 112px)', minHeight: '520px' },
   body: {
     display: 'grid',
-    gap: '8px',
+    gap: tokens.spacingHorizontalS,
     flex: 1,
     minHeight: 0,
   },
   leftPanel: {
     backgroundColor: tokens.colorNeutralBackground1,
     border: `1px solid ${tokens.colorNeutralStroke2}`,
-    borderRadius: '4px',
+    borderRadius: tokens.borderRadiusMedium,
     overflow: 'auto',
     minHeight: 0,
   },
   rightPanel: {
     backgroundColor: tokens.colorNeutralBackground1,
     border: `1px solid ${tokens.colorNeutralStroke2}`,
-    borderRadius: '4px',
+    borderRadius: tokens.borderRadiusMedium,
     overflow: 'auto',
     minHeight: 0,
-    padding: '8px',
+    padding: tokens.spacingVerticalS,
   },
   // Thin rail shown when the left panel is collapsed — a single expand button.
   collapsedRail: {
-    display: 'flex', flexDirection: 'column', alignItems: 'center', paddingTop: 4,
+    display: 'flex', flexDirection: 'column', alignItems: 'center', paddingTop: tokens.spacingVerticalXS,
     backgroundColor: tokens.colorNeutralBackground1,
     border: `1px solid ${tokens.colorNeutralStroke2}`,
-    borderRadius: '4px',
+    borderRadius: tokens.borderRadiusMedium,
   },
   collapseToggle: { alignSelf: 'flex-end' },
   mainPanel: {
     backgroundColor: tokens.colorNeutralBackground1,
     border: `1px solid ${tokens.colorNeutralStroke2}`,
-    borderRadius: '4px',
+    borderRadius: tokens.borderRadiusMedium,
     overflow: 'auto',
     minHeight: 0,
     display: 'flex',
@@ -64,11 +64,11 @@ const useStyles = makeStyles({
   singlePanel: {
     backgroundColor: tokens.colorNeutralBackground1,
     border: `1px solid ${tokens.colorNeutralStroke2}`,
-    borderRadius: '4px',
+    borderRadius: tokens.borderRadiusMedium,
     overflow: 'auto',
     minHeight: 0,
     flex: 1,
-    padding: '16px',
+    padding: tokens.spacingVerticalL,
   },
 });
 
@@ -138,7 +138,7 @@ export function ItemEditorChrome({ item, id, ribbon, leftPanel, main, rightPanel
                 <Tooltip content="Collapse panel" relationship="label">
                   <Button className={styles.collapseToggle} appearance="subtle" size="small"
                     icon={<PanelLeftContract20Regular />} aria-label="Collapse panel"
-                    onClick={() => setLeftCollapsed(true)} style={{ float: 'right', margin: 2 }} />
+                    onClick={() => setLeftCollapsed(true)} style={{ float: 'right', margin: tokens.spacingVerticalXXS }} />
                 </Tooltip>
                 {leftPanel}
               </div>

@@ -37,29 +37,33 @@ import { ComputePicker } from '@/lib/components/compute-picker';
 import { PipelineEditorCore } from './pipeline-editor-core';
 
 const useStyles = makeStyles({
-  pad: { padding: 16, display: 'flex', flexDirection: 'column', gap: 12 },
-  form: { padding: 20, display: 'flex', flexDirection: 'column', gap: 12, maxWidth: 720 },
-  row: { display: 'flex', gap: 12 },
-  field: { flex: 1, display: 'flex', flexDirection: 'column', gap: 4 },
+  pad: { padding: tokens.spacingVerticalL, display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalM },
+  form: { padding: tokens.spacingVerticalXL, display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalM, maxWidth: 720 },
+  row: { display: 'flex', gap: tokens.spacingHorizontalM },
+  field: { flex: 1, display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalXS },
   monaco: {
     width: '100%', minHeight: 200,
-    fontFamily: 'Consolas, "Cascadia Code", monospace', fontSize: 13, padding: 12,
-    border: `1px solid ${tokens.colorNeutralStroke2}`, borderRadius: 4,
+    fontFamily: 'Consolas, "Cascadia Code", monospace', fontSize: tokens.fontSizeBase300, padding: tokens.spacingVerticalM,
+    border: `1px solid ${tokens.colorNeutralStroke2}`, borderRadius: tokens.borderRadiusMedium,
     backgroundColor: tokens.colorNeutralBackground3, color: tokens.colorNeutralForeground1,
     resize: 'vertical',
   },
-  tabBar: { padding: '8px 16px 0', borderBottom: `1px solid ${tokens.colorNeutralStroke2}` },
-  card: { padding: 12, border: `1px solid ${tokens.colorNeutralStroke2}`, borderRadius: 6 },
-  cardGrid: { display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(220px, 1fr))', gap: 12 },
+  tabBar: {
+    paddingTop: tokens.spacingVerticalS, paddingLeft: tokens.spacingHorizontalL,
+    paddingRight: tokens.spacingHorizontalL, paddingBottom: 0,
+    borderBottom: `1px solid ${tokens.colorNeutralStroke2}`,
+  },
+  card: { padding: tokens.spacingVerticalM, border: `1px solid ${tokens.colorNeutralStroke2}`, borderRadius: tokens.borderRadiusLarge },
+  cardGrid: { display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(220px, 1fr))', gap: tokens.spacingVerticalM },
   // Grouped config section — a subtle card so Location / Format / Table
   // reference read as distinct steps rather than one flat run of inputs.
   section: {
-    display: 'flex', flexDirection: 'column', gap: 10, padding: 14,
-    border: `1px solid ${tokens.colorNeutralStroke2}`, borderRadius: 8,
+    display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalM, padding: tokens.spacingVerticalM,
+    border: `1px solid ${tokens.colorNeutralStroke2}`, borderRadius: tokens.borderRadiusXLarge,
     backgroundColor: tokens.colorNeutralBackground2,
   },
   hint: { color: tokens.colorNeutralForeground3 },
-  switchField: { flex: 1, display: 'flex', flexDirection: 'column', justifyContent: 'flex-end', paddingBottom: 2 },
+  switchField: { flex: 1, display: 'flex', flexDirection: 'column', justifyContent: 'flex-end', paddingBottom: tokens.spacingVerticalXXS },
 });
 
 // ============================================================
@@ -336,7 +340,7 @@ export function SynapseSparkPoolEditor({ item, id }: { item: FabricItemType; id:
   return (
     <ItemEditorChrome item={item} id={id} ribbon={ribbon}
       leftPanel={
-        <div style={{ padding: 8 }}>
+        <div style={{ padding: tokens.spacingVerticalS }}>
           <Tree aria-label="Spark pools" defaultOpenItems={['pools']}>
             <TreeItem itemType="branch" value="pools">
               <TreeItemLayout iconBefore={<Server20Regular />}>Pools ({pools.length})</TreeItemLayout>
@@ -355,7 +359,7 @@ export function SynapseSparkPoolEditor({ item, id }: { item: FabricItemType; id:
       }
       main={
         <div className={s.pad}>
-          <div style={{ display: 'flex', gap: 12, alignItems: 'center' }}>
+          <div style={{ display: 'flex', gap: tokens.spacingHorizontalM, alignItems: 'center' }}>
             <Badge appearance="filled" color={state === 'Succeeded' ? 'success' : state === 'Provisioning' ? 'warning' : 'informative'}>{state}</Badge>
             <Badge appearance="outline">{pool?.properties.nodeSize || '—'}</Badge>
             <Badge appearance="outline">{pool?.properties.sparkVersion || 'Spark —'}</Badge>
@@ -939,7 +943,7 @@ export function AdfDatasetEditor({ item, id }: { item: FabricItemType; id: strin
   return (
     <ItemEditorChrome item={item} id={id} ribbon={ribbon}
       leftPanel={
-        <div style={{ padding: 8 }}>
+        <div style={{ padding: tokens.spacingVerticalS }}>
           <Tree aria-label="ADF datasets" defaultOpenItems={['d']}>
             <TreeItem itemType="branch" value="d">
               <TreeItemLayout iconBefore={<Database20Regular />}>Datasets ({datasets.length})</TreeItemLayout>
@@ -952,12 +956,12 @@ export function AdfDatasetEditor({ item, id }: { item: FabricItemType; id: strin
               </Tree>
             </TreeItem>
           </Tree>
-          <Button size="small" appearance="outline" onClick={createNew} style={{ marginTop: 8 }}>+ New dataset</Button>
+          <Button size="small" appearance="outline" onClick={createNew} style={{ marginTop: tokens.spacingVerticalS }}>+ New dataset</Button>
         </div>
       }
       main={
         <div className={s.form}>
-          <div style={{ display: 'flex', gap: 12, alignItems: 'center' }}>
+          <div style={{ display: 'flex', gap: tokens.spacingHorizontalM, alignItems: 'center' }}>
             <Badge appearance="filled" color="brand">{selected || '(no dataset)'}</Badge>
             <Badge appearance="outline">{type}</Badge>
             <Button appearance="primary" icon={<Save20Regular />} disabled={busy || !selected} onClick={save} style={{ marginLeft: 'auto' }}>Save</Button>
@@ -1063,7 +1067,7 @@ export function AdfDatasetEditor({ item, id }: { item: FabricItemType; id: strin
               </div>
             </div>
           )}
-          <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginTop: 8 }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: tokens.spacingHorizontalM, marginTop: tokens.spacingVerticalS }}>
             <Subtitle2>Schema ({ds?.properties.schema?.length || 0} columns)</Subtitle2>
             <Button size="small" icon={<Add20Regular />} disabled={!selected} onClick={addColumn}>Add column</Button>
             {(ds?.properties.schema?.length || 0) > 0 && (
@@ -1316,7 +1320,7 @@ export function AdfTriggerEditor({ item, id }: { item: FabricItemType; id: strin
   return (
     <ItemEditorChrome item={item} id={id} ribbon={ribbon}
       leftPanel={
-        <div style={{ padding: 8 }}>
+        <div style={{ padding: tokens.spacingVerticalS }}>
           <Tree aria-label="ADF triggers" defaultOpenItems={['t']}>
             <TreeItem itemType="branch" value="t">
               <TreeItemLayout iconBefore={<Server20Regular />}>Triggers ({triggers.length})</TreeItemLayout>
@@ -1329,12 +1333,12 @@ export function AdfTriggerEditor({ item, id }: { item: FabricItemType; id: strin
               </Tree>
             </TreeItem>
           </Tree>
-          <Button size="small" appearance="outline" onClick={createNew} style={{ marginTop: 8 }}>+ New trigger</Button>
+          <Button size="small" appearance="outline" onClick={createNew} style={{ marginTop: tokens.spacingVerticalS }}>+ New trigger</Button>
         </div>
       }
       main={
         <div className={s.form}>
-          <div style={{ display: 'flex', gap: 12, alignItems: 'center' }}>
+          <div style={{ display: 'flex', gap: tokens.spacingHorizontalM, alignItems: 'center' }}>
             <Badge appearance="filled" color="brand">{selected || '(no trigger)'}</Badge>
             <Badge appearance="filled" color={runtimeState === 'Started' ? 'success' : 'informative'}>{runtimeState}</Badge>
             <Button appearance="primary" icon={<Save20Regular />} disabled={busy || !selected} onClick={save}>Save</Button>
@@ -1371,14 +1375,14 @@ export function AdfTriggerEditor({ item, id }: { item: FabricItemType; id: strin
               <div className={s.field}><Caption1>Time zone</Caption1><Input value={timeZone} onChange={(_, d) => setTimeZone(d.value)} /></div>
             </div>
           )}
-          <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginTop: 8 }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: tokens.spacingHorizontalM, marginTop: tokens.spacingVerticalS }}>
             <Subtitle2>Pipeline parameters</Subtitle2>
             <Button size="small" icon={<Add20Regular />} onClick={() => setParamRows((r) => [...r, { key: '', value: '' }])}>Add parameter</Button>
           </div>
           <Caption1>Values passed to <code>{targetPipeline || 'the pipeline'}</code> each time the trigger fires. Strings or JSON literals.</Caption1>
           {paramRows.length === 0 && <Caption1>No parameters — the pipeline runs with its defaults.</Caption1>}
           {paramRows.map((row, i) => (
-            <div key={i} style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+            <div key={i} style={{ display: 'flex', gap: tokens.spacingHorizontalS, alignItems: 'center' }}>
               <Input style={{ flex: 1 }} placeholder="name" value={row.key}
                 onChange={(_, d) => setParamRows((rs) => rs.map((x, j) => j === i ? { ...x, key: d.value } : x))} />
               <Input style={{ flex: 2 }} placeholder='value (e.g. "raw/2026" or 5)' value={row.value}
@@ -1493,7 +1497,7 @@ export function UsqlJobEditor({ item, id }: { item: FabricItemType; id: string }
         </MessageBar>
         <Subtitle2>U-SQL source</Subtitle2>
         <textarea className={s.monaco} spellCheck={false} value={usql} onChange={(e) => setUsql(e.target.value)} aria-label="U-SQL editor" />
-        <div style={{ display: 'flex', gap: 8 }}>
+        <div style={{ display: 'flex', gap: tokens.spacingHorizontalS }}>
           <Button appearance="primary" icon={<ArrowSync20Regular />} onClick={() => setPyspark(convertUsqlToPyspark(usql))}>
             Convert to PySpark
           </Button>

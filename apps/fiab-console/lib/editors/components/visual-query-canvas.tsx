@@ -152,7 +152,7 @@ const useStyles = makeStyles({
   },
   empty: {
     position: 'absolute', inset: 0, display: 'flex', alignItems: 'center', justifyContent: 'center',
-    pointerEvents: 'none', color: tokens.colorNeutralForeground3, zIndex: 1, textAlign: 'center', padding: 24,
+    pointerEvents: 'none', color: tokens.colorNeutralForeground3, zIndex: 1, textAlign: 'center', padding: tokens.spacingVerticalXXL,
   },
   sqlBar: { display: 'flex', gap: tokens.spacingHorizontalM, alignItems: 'center', flexWrap: 'wrap' },
   resultBar: { display: 'flex', gap: tokens.spacingHorizontalS, alignItems: 'center', flexWrap: 'wrap' },
@@ -172,12 +172,12 @@ const useStyles = makeStyles({
     color: tokens.colorNeutralForeground3,
   },
   cell: {
-    fontFamily: 'Consolas, "Cascadia Code", monospace', fontSize: 12,
+    fontFamily: 'Consolas, "Cascadia Code", monospace', fontSize: tokens.fontSizeBase200,
     whiteSpace: 'nowrap', maxWidth: 360, overflow: 'hidden', textOverflow: 'ellipsis',
   },
   nullCell: { color: tokens.colorNeutralForeground4, fontStyle: 'italic' },
-  aggRow: { display: 'flex', gap: 4, alignItems: 'center' },
-  checkList: { display: 'flex', flexDirection: 'column', gap: 2, maxHeight: 180, overflowY: 'auto', paddingLeft: 2 },
+  aggRow: { display: 'flex', gap: tokens.spacingHorizontalXS, alignItems: 'center' },
+  checkList: { display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalXXS, maxHeight: 180, overflowY: 'auto', paddingLeft: tokens.spacingHorizontalXXS },
 });
 
 // ============================================================
@@ -219,11 +219,11 @@ function VqFlowNodeImpl({ data, selected }: NodeProps) {
       data-vq-label={d.label}
       aria-label={`${d.kind} ${d.label}`}
       style={{
-        position: 'relative', width: 186, padding: '10px 12px', borderRadius: 6,
+        position: 'relative', width: 186, padding: `${tokens.spacingVerticalS} ${tokens.spacingHorizontalM}`, borderRadius: tokens.borderRadiusLarge,
         background: tokens.colorNeutralBackground1,
         border: `1px solid ${selected ? tokens.colorBrandStroke1 : tokens.colorNeutralStroke2}`,
         boxShadow: selected ? `0 0 0 2px ${tokens.colorBrandBackground2}` : '0 1px 2px rgba(0,0,0,0.06)',
-        display: 'flex', gap: 8, alignItems: 'flex-start', cursor: 'pointer', userSelect: 'none',
+        display: 'flex', gap: tokens.spacingHorizontalS, alignItems: 'flex-start', cursor: 'pointer', userSelect: 'none',
       }}
     >
       {d.kind !== 'source' && !isJoin && (
@@ -237,10 +237,10 @@ function VqFlowNodeImpl({ data, selected }: NodeProps) {
       )}
       <Handle id="out" type="source" position={Position.Right} style={{ ...HANDLE, right: -6, top: '50%', border: `2px solid ${color}` }} />
 
-      <div style={{ width: 6, alignSelf: 'stretch', borderRadius: 2, background: color }} />
+      <div style={{ width: 6, alignSelf: 'stretch', borderRadius: tokens.borderRadiusSmall, background: color }} />
       <div style={{ color, display: 'flex', alignItems: 'center', flexShrink: 0 }}>{stepIcon(d.kind)}</div>
-      <div style={{ display: 'flex', flexDirection: 'column', gap: 2, minWidth: 0, flex: 1 }}>
-        <div style={{ fontWeight: 600, fontSize: 13, color: tokens.colorNeutralForeground1, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{d.label}</div>
+      <div style={{ display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalXXS, minWidth: 0, flex: 1 }}>
+        <div style={{ fontWeight: 600, fontSize: tokens.fontSizeBase300, color: tokens.colorNeutralForeground1, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{d.label}</div>
         <Badge appearance="filled" size="small" style={{ backgroundColor: color, color: '#fff', alignSelf: 'flex-start' }}>{d.kind}</Badge>
       </div>
     </div>
@@ -685,9 +685,9 @@ function CanvasInner(props: VisualQueryCanvasProps) {
           <MessageBarBody>
             <MessageBarTitle>Grant the Console identity a SQL login</MessageBarTitle>
             {result.gate?.reason || result.error || 'The Console managed identity is not a SQL login on this pool/warehouse.'}
-            {result.gate?.remediation && <div style={{ marginTop: 6 }}>{result.gate.remediation}</div>}
+            {result.gate?.remediation && <div style={{ marginTop: tokens.spacingVerticalXS }}>{result.gate.remediation}</div>}
             {result.gate?.sql && (
-              <pre style={{ marginTop: 8, padding: 8, borderRadius: 6, overflowX: 'auto', fontSize: 12, fontFamily: tokens.fontFamilyMonospace, whiteSpace: 'pre' }}>
+              <pre style={{ marginTop: tokens.spacingVerticalS, padding: tokens.spacingVerticalS, borderRadius: tokens.borderRadiusLarge, overflowX: 'auto', fontSize: tokens.fontSizeBase200, fontFamily: tokens.fontFamilyMonospace, whiteSpace: 'pre' }}>
                 {result.gate.sql}
               </pre>
             )}
@@ -797,7 +797,7 @@ function CanvasInner(props: VisualQueryCanvasProps) {
                   </Dropdown>
                 </Field>
               )}
-              <div style={{ display: 'flex', gap: 8 }}>
+              <div style={{ display: 'flex', gap: tokens.spacingHorizontalS }}>
                 <Field label="Schema" style={{ flex: 1 }}>
                   <Input value={addSchema} placeholder={dialect === 'tsql' ? 'dbo' : '(optional)'} onChange={(_, d) => setAddSchema(d.value)} />
                 </Field>
@@ -851,7 +851,7 @@ function StepInspector({
   const d = node.data as unknown as VqNodeData;
 
   return (
-    <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+    <div style={{ display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalS }}>
       <Label weight="semibold">Step · {d.kind}</Label>
 
       {d.kind === 'source' && (

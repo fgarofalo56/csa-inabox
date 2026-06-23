@@ -119,53 +119,53 @@ const VALUE_ROLES = new Set<VisualWellRole>(['value', 'valueLine', 'target']);
 const SINGLE_ROLES = new Set<VisualWellRole>(['matrixColumn', 'location', 'target']);
 
 const useStyles = makeStyles({
-  root: { display: 'flex', gap: '12px', alignItems: 'stretch', minHeight: '560px', minWidth: 0 },
+  root: { display: 'flex', gap: tokens.spacingVerticalM, alignItems: 'stretch', minHeight: '560px', minWidth: 0 },
   gallery: {
-    flex: '0 0 168px', display: 'flex', flexDirection: 'column', gap: '6px',
-    border: `1px solid ${tokens.colorNeutralStroke2}`, borderRadius: '10px',
-    padding: '10px', backgroundColor: tokens.colorNeutralBackground1, overflowY: 'auto', maxHeight: '720px',
+    flex: '0 0 168px', display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalXS,
+    border: `1px solid ${tokens.colorNeutralStroke2}`, borderRadius: tokens.borderRadiusXLarge,
+    padding: tokens.spacingVerticalS, backgroundColor: tokens.colorNeutralBackground1, overflowY: 'auto', maxHeight: '720px',
   },
-  galleryGrid: { display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: '6px' },
+  galleryGrid: { display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: tokens.spacingHorizontalXS },
   galleryTile: {
     display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center',
-    gap: '2px', padding: '8px 4px', borderRadius: '8px', cursor: 'pointer',
+    gap: tokens.spacingVerticalXXS, padding: `${tokens.spacingVerticalS} ${tokens.spacingHorizontalXS}`, borderRadius: tokens.borderRadiusXLarge, cursor: 'pointer',
     border: `1px solid ${tokens.colorNeutralStroke2}`, backgroundColor: tokens.colorNeutralBackground1,
     minHeight: '52px', textAlign: 'center',
   },
   galleryTileActive: { border: `2px solid ${tokens.colorBrandStroke1}`, backgroundColor: tokens.colorBrandBackground2 },
-  tileLabel: { fontSize: '9px', lineHeight: '11px', color: tokens.colorNeutralForeground2 },
+  tileLabel: { fontSize: tokens.fontSizeBase100, lineHeight: '11px', color: tokens.colorNeutralForeground2 },
   canvas: {
-    flex: '1 1 auto', minWidth: 0, display: 'flex', flexDirection: 'column', gap: '10px',
-    border: `1px solid ${tokens.colorNeutralStroke2}`, borderRadius: '10px', padding: '14px',
+    flex: '1 1 auto', minWidth: 0, display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalS,
+    border: `1px solid ${tokens.colorNeutralStroke2}`, borderRadius: tokens.borderRadiusXLarge, padding: tokens.spacingVerticalM,
     backgroundColor: tokens.colorNeutralBackground1,
   },
   panes: {
-    flex: '0 0 300px', display: 'flex', flexDirection: 'column', gap: '8px',
-    border: `1px solid ${tokens.colorNeutralStroke2}`, borderRadius: '10px',
-    padding: '10px', backgroundColor: tokens.colorNeutralBackground1, overflowY: 'auto', maxHeight: '720px',
+    flex: '0 0 300px', display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalS,
+    border: `1px solid ${tokens.colorNeutralStroke2}`, borderRadius: tokens.borderRadiusXLarge,
+    padding: tokens.spacingVerticalS, backgroundColor: tokens.colorNeutralBackground1, overflowY: 'auto', maxHeight: '720px',
   },
-  well: { display: 'flex', flexDirection: 'column', gap: '4px', marginBottom: '10px' },
-  wellRow: { display: 'flex', gap: '4px', alignItems: 'center' },
+  well: { display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalXS, marginBottom: tokens.spacingVerticalS },
+  wellRow: { display: 'flex', gap: tokens.spacingHorizontalXS, alignItems: 'center' },
   filterCard: {
-    display: 'flex', flexDirection: 'column', gap: '6px', padding: '8px',
-    border: `1px solid ${tokens.colorNeutralStroke2}`, borderRadius: '8px', marginBottom: '8px',
+    display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalXS, padding: tokens.spacingVerticalS,
+    border: `1px solid ${tokens.colorNeutralStroke2}`, borderRadius: tokens.borderRadiusXLarge, marginBottom: tokens.spacingVerticalS,
   },
-  scopeLabel: { fontWeight: 600, fontSize: '12px', marginTop: '6px', color: tokens.colorNeutralForeground2 },
+  scopeLabel: { fontWeight: 600, fontSize: tokens.fontSizeBase200, marginTop: tokens.spacingVerticalXS, color: tokens.colorNeutralForeground2 },
   daxBox: {
-    fontFamily: 'ui-monospace, Consolas, monospace', fontSize: '11px', whiteSpace: 'pre-wrap',
-    backgroundColor: tokens.colorNeutralBackground3, borderRadius: '8px', padding: '10px',
+    fontFamily: 'ui-monospace, Consolas, monospace', fontSize: tokens.fontSizeBase100, whiteSpace: 'pre-wrap',
+    backgroundColor: tokens.colorNeutralBackground3, borderRadius: tokens.borderRadiusXLarge, padding: tokens.spacingVerticalS,
     border: `1px solid ${tokens.colorNeutralStroke2}`, maxHeight: '220px', overflow: 'auto',
     color: tokens.colorNeutralForeground2,
   },
-  cardGrid: { display: 'flex', flexWrap: 'wrap', gap: '12px' },
+  cardGrid: { display: 'flex', flexWrap: 'wrap', gap: tokens.spacingVerticalM },
   bigCard: {
-    minWidth: '160px', padding: '16px 20px', borderRadius: '10px',
+    minWidth: '160px', padding: `${tokens.spacingVerticalL} ${tokens.spacingHorizontalXL}`, borderRadius: tokens.borderRadiusXLarge,
     border: `1px solid ${tokens.colorNeutralStroke2}`, backgroundColor: tokens.colorNeutralBackground2,
-    display: 'flex', flexDirection: 'column', gap: '4px',
+    display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalXS,
   },
   bigValue: { fontSize: '30px', fontWeight: 700, color: tokens.colorBrandForeground1 },
-  grid: { width: '100%', borderCollapse: 'collapse', fontSize: '12px' },
-  meta: { fontSize: '11px', color: tokens.colorNeutralForeground3 },
+  grid: { width: '100%', borderCollapse: 'collapse', fontSize: tokens.fontSizeBase200 },
+  meta: { fontSize: tokens.fontSizeBase100, color: tokens.colorNeutralForeground3 },
 });
 
 export interface ReportVisualDesignerProps {
@@ -316,7 +316,7 @@ export function ReportVisualDesigner({ workspaceId, datasetId, reportId, tables:
   return (
     <div>
       {tablesErr && (
-        <MessageBar intent="warning" style={{ marginBottom: 10 }}>
+        <MessageBar intent="warning" style={{ marginBottom: tokens.spacingVerticalS }}>
           <MessageBarBody>
             <MessageBarTitle>Could not load model fields</MessageBarTitle>
             {tablesErr}. Confirm the Console UAMI is a Member/Contributor on this workspace and the dataset exposes tables.
@@ -326,13 +326,13 @@ export function ReportVisualDesigner({ workspaceId, datasetId, reportId, tables:
       <div className={s.root}>
         {/* ── Gallery ── */}
         <div className={s.gallery}>
-          <Subtitle2 style={{ marginBottom: 4 }}>Visualizations</Subtitle2>
+          <Subtitle2 style={{ marginBottom: tokens.spacingVerticalXS }}>Visualizations</Subtitle2>
           {galleryTiles}
         </div>
 
         {/* ── Canvas ── */}
         <div className={s.canvas}>
-          <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: tokens.spacingHorizontalS }}>
             <Badge appearance="filled" color="brand">{VISUAL_CATALOG.find((c) => c.type === visualType)?.label}</Badge>
             {busy && <Spinner size="tiny" label="Querying…" />}
             <div style={{ flex: 1 }} />
@@ -361,7 +361,7 @@ export function ReportVisualDesigner({ workspaceId, datasetId, reportId, tables:
           {/* Per-visual DAX receipt (Performance-Analyzer-style "Copy query"). */}
           {showDax && (
             <div>
-              <Caption1 className={s.meta} style={{ marginBottom: 4, display: 'block' }}>
+              <Caption1 className={s.meta} style={{ marginBottom: tokens.spacingVerticalXS, display: 'block' }}>
                 Generated DAX (this is the query Power BI runs for this visual):
               </Caption1>
               <pre className={s.daxBox}>{lastDax || dax}</pre>
@@ -501,13 +501,13 @@ function GridCanvas({ columns, rowMatrix, styles }: { columns: string[]; rowMatr
       <table className={styles.grid}>
         <thead>
           <tr>{columns.map((c, i) => (
-            <th key={i} style={{ textAlign: 'left', borderBottom: `1px solid ${tokens.colorNeutralStroke2}`, padding: '6px 10px', position: 'sticky', top: 0, background: tokens.colorNeutralBackground1 }}>{c}</th>
+            <th key={i} style={{ textAlign: 'left', borderBottom: `1px solid ${tokens.colorNeutralStroke2}`, padding: `${tokens.spacingVerticalXS} ${tokens.spacingHorizontalS}`, position: 'sticky', top: 0, background: tokens.colorNeutralBackground1 }}>{c}</th>
           ))}</tr>
         </thead>
         <tbody>
           {shown.map((r, ri) => (
             <tr key={ri}>{r.map((v, ci) => (
-              <td key={ci} style={{ borderBottom: `1px solid ${tokens.colorNeutralStroke3}`, padding: '5px 10px' }}>{cell(v)}</td>
+              <td key={ci} style={{ borderBottom: `1px solid ${tokens.colorNeutralStroke3}`, padding: `${tokens.spacingVerticalXS} ${tokens.spacingHorizontalS}` }}>{cell(v)}</td>
             ))}</tr>
           ))}
         </tbody>
@@ -678,7 +678,7 @@ function FormatPane({
 }: { format: DaxFormatDef; setFormat: (f: DaxFormatDef) => void; valueCount: number; styles: Styles }) {
   const colors = format.colors || DEFAULT_COLORS.slice(0, Math.max(1, valueCount));
   return (
-    <div style={{ paddingTop: 8, display: 'flex', flexDirection: 'column', gap: 12 }}>
+    <div style={{ paddingTop: tokens.spacingVerticalS, display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalM }}>
       <Field label="Title">
         <Input size="small" value={format.title || ''} placeholder="Visual title"
           onChange={(_, d) => setFormat({ ...format, title: d.value })} />
@@ -699,7 +699,7 @@ function FormatPane({
       </Field>
       <div>
         <Caption1 style={{ fontWeight: 600 }}>Series colors</Caption1>
-        <div className={styles.wellRow} style={{ flexWrap: 'wrap', marginTop: 4 }}>
+        <div className={styles.wellRow} style={{ flexWrap: 'wrap', marginTop: tokens.spacingVerticalXS }}>
           {colors.map((c, i) => (
             <input key={i} type="color" value={c} aria-label={`series ${i + 1} color`}
               onChange={(e) => {
@@ -757,7 +757,7 @@ function FiltersPane({
                 </Field>
               </div>
             ))}
-            <Button size="small" appearance="outline" icon={<Add20Regular />} style={{ marginBottom: 8 }}
+            <Button size="small" appearance="outline" icon={<Add20Regular />} style={{ marginBottom: tokens.spacingVerticalS }}
               onClick={() => { const next = { ...filters }; next[scope.key] = [...list, { column: '', type: 'in', values: [] }]; setFilters(next); }}>
               Add filter
             </Button>

@@ -66,12 +66,12 @@ interface DeleteDataProductDialogProps {
 }
 
 const useStyles = makeStyles({
-  body: { display: 'flex', flexDirection: 'column', gap: '14px', minWidth: '460px' },
+  body: { display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalL, minWidth: '460px' },
   hint: { color: tokens.colorNeutralForeground3 },
-  checks: { display: 'flex', flexDirection: 'column', gap: '6px', margin: '2px 0' },
-  checkRow: { display: 'flex', alignItems: 'center', gap: '8px' },
+  checks: { display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalS, margin: `${tokens.spacingVerticalXXS} 0` },
+  checkRow: { display: 'flex', alignItems: 'center', gap: tokens.spacingHorizontalS },
   okIcon: { color: tokens.colorPaletteGreenForeground1 },
-  blockers: { margin: '4px 0 0 18px', display: 'flex', flexDirection: 'column', gap: '6px' },
+  blockers: { margin: `${tokens.spacingVerticalXS} 0 0 18px`, display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalS },
 });
 
 export function DeleteDataProductDialog({
@@ -148,8 +148,8 @@ export function DeleteDataProductDialog({
         <DialogBody>
           <DialogTitle>
             {canDelete
-              ? <><Delete20Regular style={{ verticalAlign: 'middle', marginRight: 8 }} />Delete &ldquo;{name}&rdquo;</>
-              : <><Warning20Regular style={{ verticalAlign: 'middle', marginRight: 8 }} />Cannot delete — preconditions not met</>}
+              ? <><Delete20Regular style={{ verticalAlign: 'middle', marginRight: tokens.spacingHorizontalS }} />Delete &ldquo;{name}&rdquo;</>
+              : <><Warning20Regular style={{ verticalAlign: 'middle', marginRight: tokens.spacingHorizontalS }} />Cannot delete — preconditions not met</>}
           </DialogTitle>
           <DialogContent>
             <div className={s.body}>
@@ -227,7 +227,7 @@ export function DeleteDataProductDialog({
                         <MessageBarTitle>Delete failed</MessageBarTitle>
                         {deleteErr}
                         {deleteBlockers && deleteBlockers.length > 0 && (
-                          <ul style={{ margin: '6px 0 0 18px' }}>
+                          <ul style={{ margin: `${tokens.spacingVerticalS} 0 0 18px` }}>
                             {deleteBlockers.map((b, i) => <li key={i}>{b}</li>)}
                           </ul>
                         )}

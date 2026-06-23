@@ -62,7 +62,7 @@ const useStyles = makeStyles({
     overflow: 'auto', maxHeight: '460px',
   },
   json: {
-    margin: 0, fontSize: '11px', fontFamily: 'Consolas, monospace',
+    margin: 0, fontSize: tokens.fontSizeBase100, fontFamily: 'Consolas, monospace',
     whiteSpace: 'pre-wrap', wordBreak: 'break-all',
     backgroundColor: tokens.colorNeutralBackground3,
     ...shorthands.padding(tokens.spacingVerticalM, tokens.spacingHorizontalM),
@@ -429,7 +429,7 @@ export function GremlinGraphCanvas({ itemId }: GremlinGraphCanvasProps) {
                     tabIndex={0}
                     aria-label={`Vertex ${n.label || n.id}`}
                   >
-                    <circle cx={n.x} cy={n.y} r={active ? 13 : 9} fill={colorFor(n.group ?? n.label)} stroke="#fff" strokeWidth={1.5} />
+                    <circle cx={n.x} cy={n.y} r={active ? 13 : 9} fill={colorFor(n.group ?? n.label)} stroke={tokens.colorNeutralForegroundOnBrand} strokeWidth={1.5} />
                     <text x={n.x} y={n.y - 15} textAnchor="middle" fontSize="11" fill={tokens.colorNeutralForeground1}>
                       {String(n.label || n.id).slice(0, 24)}
                     </text>
@@ -448,22 +448,22 @@ export function GremlinGraphCanvas({ itemId }: GremlinGraphCanvasProps) {
             )}
             {selectedNode && (
               <>
-                <div style={{ fontWeight: 600, fontSize: 14, marginBottom: 4 }}>{selectedNode.label || selectedNode.id}</div>
+                <div style={{ fontWeight: 600, fontSize: tokens.fontSizeBase300, marginBottom: tokens.spacingVerticalXS }}>{selectedNode.label || selectedNode.id}</div>
                 <Caption1>id: {selectedNode.id}</Caption1>
-                <div style={{ marginTop: 8, display: 'flex', flexDirection: 'column', gap: 4 }}>
+                <div style={{ marginTop: tokens.spacingVerticalS, display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalXS }}>
                   <Button size="small" appearance="secondary" icon={<BranchCompare20Regular />}
                     onClick={() => { setEFrom(selectedNode.id); setMutError(null); setAddEdgeOpen(true); }}>
                     Add edge from here
                   </Button>
                 </div>
-                <pre style={{ marginTop: 8, fontSize: 11, fontFamily: 'Consolas, monospace', whiteSpace: 'pre-wrap', wordBreak: 'break-all' }}>
+                <pre style={{ marginTop: tokens.spacingVerticalS, fontSize: tokens.fontSizeBase100, fontFamily: 'Consolas, monospace', whiteSpace: 'pre-wrap', wordBreak: 'break-all' }}>
                   {JSON.stringify(flattenProps(selectedNode.properties), null, 2)}
                 </pre>
               </>
             )}
             {selectedEdge && (
               <>
-                <div style={{ fontWeight: 600, fontSize: 14, marginBottom: 4 }}>Edge: {selectedEdge.label || '(unlabeled)'}</div>
+                <div style={{ fontWeight: 600, fontSize: tokens.fontSizeBase300, marginBottom: tokens.spacingVerticalXS }}>Edge: {selectedEdge.label || '(unlabeled)'}</div>
                 <Caption1>from: {selectedEdge.source}</Caption1>
                 <Caption1>to: {selectedEdge.target}</Caption1>
               </>
@@ -478,7 +478,7 @@ export function GremlinGraphCanvas({ itemId }: GremlinGraphCanvasProps) {
           <DialogBody>
             <DialogTitle>Add vertex (g.addV)</DialogTitle>
             <DialogContent>
-              <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+              <div style={{ display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalM }}>
                 <Field label="Vertex label" required>
                   <Input value={vLabel} onChange={(_, d) => setVLabel(d.value)} placeholder="person" />
                 </Field>
@@ -525,7 +525,7 @@ export function GremlinGraphCanvas({ itemId }: GremlinGraphCanvasProps) {
           <DialogBody>
             <DialogTitle>Add edge (g.addE)</DialogTitle>
             <DialogContent>
-              <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+              <div style={{ display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalM }}>
                 <Field label="From vertex id" required>
                   <Input value={eFrom} onChange={(_, d) => setEFrom(d.value)} placeholder="source vertex id" />
                 </Field>

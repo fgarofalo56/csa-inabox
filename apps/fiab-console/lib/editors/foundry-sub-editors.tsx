@@ -48,24 +48,24 @@ import {
 } from '@/lib/prompt-flow/flow-dag';
 
 const useStyles = makeStyles({
-  pad: { padding: 16, display: 'flex', flexDirection: 'column', gap: 12, minHeight: 0, flex: 1 },
-  toolbar: { display: 'flex', gap: 12, alignItems: 'center', flexWrap: 'wrap' },
+  pad: { padding: tokens.spacingVerticalL, display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalM, minHeight: 0, flex: 1 },
+  toolbar: { display: 'flex', gap: tokens.spacingHorizontalM, alignItems: 'center', flexWrap: 'wrap' },
   monaco: {
     width: '100%', minHeight: 220,
-    fontFamily: 'Consolas, "Cascadia Code", monospace', fontSize: 13, padding: 12,
-    border: `1px solid ${tokens.colorNeutralStroke2}`, borderRadius: 4,
+    fontFamily: 'Consolas, "Cascadia Code", monospace', fontSize: tokens.fontSizeBase300, padding: tokens.spacingVerticalM,
+    border: `1px solid ${tokens.colorNeutralStroke2}`, borderRadius: tokens.borderRadiusMedium,
     backgroundColor: tokens.colorNeutralBackground3, color: tokens.colorNeutralForeground1,
     resize: 'vertical',
   },
-  tableWrap: { overflow: 'auto', maxHeight: 480, border: `1px solid ${tokens.colorNeutralStroke2}`, borderRadius: 4 },
-  cell: { fontSize: 12, whiteSpace: 'nowrap', maxWidth: 360, overflow: 'hidden', textOverflow: 'ellipsis' },
-  empty: { padding: 16, color: tokens.colorNeutralForeground3, fontStyle: 'italic' },
-  card: { padding: 12, border: `1px solid ${tokens.colorNeutralStroke2}`, borderRadius: 6 },
-  formRow: { display: 'grid', gridTemplateColumns: '160px 1fr', gap: '6px 16px', alignItems: 'center' },
+  tableWrap: { overflow: 'auto', maxHeight: 480, border: `1px solid ${tokens.colorNeutralStroke2}`, borderRadius: tokens.borderRadiusMedium },
+  cell: { fontSize: tokens.fontSizeBase200, whiteSpace: 'nowrap', maxWidth: 360, overflow: 'hidden', textOverflow: 'ellipsis' },
+  empty: { padding: tokens.spacingVerticalL, color: tokens.colorNeutralForeground3, fontStyle: 'italic' },
+  card: { padding: tokens.spacingVerticalM, border: `1px solid ${tokens.colorNeutralStroke2}`, borderRadius: tokens.borderRadiusLarge },
+  formRow: { display: 'grid', gridTemplateColumns: '160px 1fr', gap: `${tokens.spacingVerticalXS} ${tokens.spacingHorizontalL}`, alignItems: 'center' },
   // Search Explorer query-options grid (label / control pairs, wraps responsively).
-  optGrid: { display: 'grid', gridTemplateColumns: 'max-content minmax(220px, 1fr)', gap: '8px 12px', alignItems: 'center' },
+  optGrid: { display: 'grid', gridTemplateColumns: 'max-content minmax(220px, 1fr)', gap: `${tokens.spacingVerticalS} ${tokens.spacingHorizontalM}`, alignItems: 'center' },
   // One vector-query builder row.
-  vqRow: { display: 'flex', gap: '8px', alignItems: 'flex-end', flexWrap: 'wrap', marginTop: '8px' },
+  vqRow: { display: 'flex', gap: tokens.spacingHorizontalS, alignItems: 'flex-end', flexWrap: 'wrap', marginTop: tokens.spacingVerticalS },
   // Editable field-designer cell — compact controls inside the grid.
   fdInput: { minWidth: '120px' },
   fdNum: { width: '90px' },
@@ -124,7 +124,7 @@ function renderHighlights(
   const entries = Object.entries(highlights);
   if (!entries.length) return '—';
   return (
-    <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+    <div style={{ display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalXS }}>
       {entries.map(([field, snippets], fi) => (
         <div key={fi}>
           <Caption1 style={{ color: tokens.colorNeutralForeground3 }}>{field}: </Caption1>
@@ -229,7 +229,7 @@ export function ProjectEditor({ item, id }: { item: FabricItemType; id: string }
             <span>Display name</span><Input value={newDisplay} onChange={(_, d) => setNewDisplay(d.value)} placeholder="My Project" />
             <span>Description</span><Input value={newDesc} onChange={(_, d) => setNewDesc(d.value)} />
           </div>
-          <div className={s.toolbar} style={{ marginTop: 8 }}>
+          <div className={s.toolbar} style={{ marginTop: tokens.spacingVerticalS }}>
             <Button appearance="primary" onClick={save} disabled={creating}>{creating ? 'Creating…' : 'Create project'}</Button>
             {saveMsg && <Caption1>{saveMsg}</Caption1>}
           </div>
@@ -551,7 +551,7 @@ export function PromptFlowEditor({ item, id }: { item: FabricItemType; id: strin
                     </Table>
                   </div>
                 )}
-                <Subtitle2 style={{ marginTop: 8 }}>Final output</Subtitle2>
+                <Subtitle2 style={{ marginTop: tokens.spacingVerticalS }}>Final output</Subtitle2>
                 <pre className={s.monaco} style={{ minHeight: 80 }}>{JSON.stringify(finalOutput, null, 2)}</pre>
               </div>
             ) : <ErrorBar msg={runResult.error} hint={runResult.hint} notDeployed={runResult.notDeployed} />
@@ -642,7 +642,7 @@ export function EvaluationEditor({ item, id }: { item: FabricItemType; id: strin
           <span>Model deployment</span><Input value={form.modelDeployment} onChange={(_, d) => setForm((f) => ({ ...f, modelDeployment: d.value }))} placeholder="gpt-4o-mini" />
           <span>Evaluators</span><Input value={form.evaluators} onChange={(_, d) => setForm((f) => ({ ...f, evaluators: d.value }))} placeholder="comma-separated" />
         </div>
-        <div className={s.toolbar} style={{ marginTop: 8 }}>
+        <div className={s.toolbar} style={{ marginTop: tokens.spacingVerticalS }}>
           <Button appearance="primary" onClick={create} disabled={busy}>{busy ? 'Submitting…' : 'Create evaluation'}</Button>
           {msg && <Caption1>{msg}</Caption1>}
         </div>
@@ -1154,7 +1154,7 @@ export function TracingEditor({ item, id }: { item: FabricItemType; id: string }
 
       {traceId && (
         <>
-          <div className={s.toolbar} style={{ marginTop: 12 }}>
+          <div className={s.toolbar} style={{ marginTop: tokens.spacingVerticalM }}>
             <Subtitle2>Span tree · {traceId.slice(0, 16)}…</Subtitle2>
             <Button size="small" onClick={() => loadDetail(traceId)}>Reload spans</Button>
             <Button size="small" appearance="subtle" onClick={() => setTraceId(null)}>Close</Button>
@@ -1263,7 +1263,7 @@ function AiSearchBindPicker({ id, onBound }: { id: string; onBound: () => void }
         </MessageBar>
       )}
       {state.data?.listError && !state.data?.notDeployed && <ErrorBar msg={state.data.listError} />}
-      <div className={s.toolbar} style={{ marginTop: 8 }}>
+      <div className={s.toolbar} style={{ marginTop: tokens.spacingVerticalS }}>
         <Field label="Existing index">
           <Dropdown value={pick} selectedOptions={pick ? [pick] : []}
             placeholder={state.loading ? 'Loading…' : (indexes.length ? 'Select an index' : 'No indexes on service')}
@@ -1387,7 +1387,7 @@ function SemanticConfigDesigner({
         </Caption1>
       )}
       {configs.map((c, ci) => (
-        <div key={ci} className={s.card} style={{ marginTop: 8 }}>
+        <div key={ci} className={s.card} style={{ marginTop: tokens.spacingVerticalS }}>
           <div className={s.toolbar}>
             <Field label="Name" style={{ minWidth: 220 }}>
               <Input size="small" value={c.name} aria-label={`semantic-${ci}-name`}
@@ -1404,17 +1404,17 @@ function SemanticConfigDesigner({
               {eligible.map((f) => (<Option key={f} value={f}>{f}</Option>))}
             </Dropdown>
             <span>Content fields (up to 3)</span>
-            <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
+            <div style={{ display: 'flex', gap: tokens.spacingHorizontalXS, flexWrap: 'wrap' }}>
               {[0, 1, 2].map((slot) => contentPicker(ci, slot, c.prioritizedFields.prioritizedContentFields?.[slot]?.fieldName || ''))}
             </div>
             <span>Keyword fields (up to 5)</span>
-            <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
+            <div style={{ display: 'flex', gap: tokens.spacingHorizontalXS, flexWrap: 'wrap' }}>
               {[0, 1, 2, 3, 4].map((slot) => keywordPicker(ci, slot, c.prioritizedFields.prioritizedKeywordsFields?.[slot]?.fieldName || ''))}
             </div>
           </div>
         </div>
       ))}
-      <div className={s.toolbar} style={{ marginTop: 8 }}>
+      <div className={s.toolbar} style={{ marginTop: tokens.spacingVerticalS }}>
         <Button appearance="primary" disabled={saving || !dirty} onClick={save}>{saving ? 'Saving…' : 'Save semantic configuration'}</Button>
         {dirty && <Caption1 style={{ color: tokens.colorPaletteRedForeground1 }}>Unsaved changes</Caption1>}
       </div>
@@ -1484,8 +1484,8 @@ function VectorSearchDesigner({
       </Caption1>
 
       {/* Algorithms */}
-      <div className={s.toolbar} style={{ marginTop: 8 }}>
-        <Subtitle2 style={{ fontSize: 13 }}>Algorithms ({algorithms.length})</Subtitle2>
+      <div className={s.toolbar} style={{ marginTop: tokens.spacingVerticalS }}>
+        <Subtitle2 style={{ fontSize: tokens.fontSizeBase300 }}>Algorithms ({algorithms.length})</Subtitle2>
         <Button size="small" onClick={addAlgo}>＋ Add algorithm</Button>
       </div>
       <div className={s.tableWrap}>
@@ -1540,8 +1540,8 @@ function VectorSearchDesigner({
       </div>
 
       {/* Profiles */}
-      <div className={s.toolbar} style={{ marginTop: 12 }}>
-        <Subtitle2 style={{ fontSize: 13 }}>Profiles ({profiles.length})</Subtitle2>
+      <div className={s.toolbar} style={{ marginTop: tokens.spacingVerticalM }}>
+        <Subtitle2 style={{ fontSize: tokens.fontSizeBase300 }}>Profiles ({profiles.length})</Subtitle2>
         <Button size="small" onClick={addProfile} disabled={!algoNames.length}>＋ Add profile</Button>
       </div>
       <div className={s.tableWrap}>
@@ -1569,7 +1569,7 @@ function VectorSearchDesigner({
         </Table>
       </div>
 
-      <div className={s.toolbar} style={{ marginTop: 8 }}>
+      <div className={s.toolbar} style={{ marginTop: tokens.spacingVerticalS }}>
         <Button appearance="primary" disabled={saving || !dirty} onClick={save}>{saving ? 'Saving…' : 'Save vector config'}</Button>
         {dirty && <Caption1 style={{ color: tokens.colorPaletteRedForeground1 }}>Unsaved changes</Caption1>}
       </div>
@@ -1618,8 +1618,8 @@ function IndexerSchedulePanel({
   };
 
   return (
-    <div className={s.card} style={{ marginTop: 8 }}>
-      <Subtitle2 style={{ fontSize: 13 }}>Schedule — {indexer}</Subtitle2>
+    <div className={s.card} style={{ marginTop: tokens.spacingVerticalS }}>
+      <Subtitle2 style={{ fontSize: tokens.fontSizeBase300 }}>Schedule — {indexer}</Subtitle2>
       <div className={s.optGrid}>
         <span>Recurrence</span>
         <Dropdown size="small" value={preset || '(no schedule)'} selectedOptions={preset ? [preset] : ['']} placeholder="(no schedule)" aria-label={`schedule-${indexer}-preset`}
@@ -1651,7 +1651,7 @@ function IndexerSchedulePanel({
         Min 5 minutes (PT5M), max 24 hours (P1D). On a schedule the indexer runs automatically; pausing keeps the
         definition but stops runs. Saved via PUT /indexers/{indexer}.
       </Caption1>
-      <div className={s.toolbar} style={{ marginTop: 8 }}>
+      <div className={s.toolbar} style={{ marginTop: tokens.spacingVerticalS }}>
         <Button size="small" appearance="primary" disabled={saving} onClick={() => save(false)}>{saving ? 'Saving…' : 'Save schedule'}</Button>
         <Button size="small" disabled={saving} onClick={() => save(true)}>Remove schedule</Button>
       </div>
@@ -2097,7 +2097,7 @@ export function AiSearchIndexEditor({ item, id }: { item: FabricItemType; id: st
                             </TableCell>
                             <TableCell className={s.cell}>
                               {vector ? (
-                                <div className={s.toolbar} style={{ gap: 6 }}>
+                                <div className={s.toolbar} style={{ gap: tokens.spacingHorizontalXS }}>
                                   <Input size="small" type="number" className={s.fdNum} aria-label={`field-${i}-dimensions`}
                                     value={f.dimensions != null ? String(f.dimensions) : ''} placeholder="dims"
                                     onChange={(_, d) => patchFieldRow(i, { dimensions: d.value ? Number(d.value) : undefined })} />
@@ -2127,7 +2127,7 @@ export function AiSearchIndexEditor({ item, id }: { item: FabricItemType; id: st
                     </TableBody>
                   </Table>
                 </div>
-                <div className={s.toolbar} style={{ marginTop: 8 }}>
+                <div className={s.toolbar} style={{ marginTop: tokens.spacingVerticalS }}>
                   <Button appearance="primary" disabled={savingFields || !fieldsDirty} onClick={saveFields}>{savingFields ? 'Saving…' : 'Save fields'}</Button>
                   <Button disabled={!fieldsDirty} onClick={() => { setFieldRows((idx.fields || []).map(apiFieldToRow)); setFieldsDirty(false); setFieldsMsg(null); }}>Revert</Button>
                   {fieldsDirty && <Caption1 style={{ color: tokens.colorPaletteRedForeground1 }}>Unsaved changes</Caption1>}
@@ -2158,7 +2158,7 @@ export function AiSearchIndexEditor({ item, id }: { item: FabricItemType; id: st
                 <Subtitle2>Advanced — full definition (JSON)</Subtitle2>
                 <Caption1>The complete index definition, including vectorSearch profiles/algorithms, semantic configurations, scoring profiles and custom analyzers. Save issues a real PUT /indexes/{idx.name}.</Caption1>
                 <MonacoTextarea value={schemaText} onChange={(v) => { setSchemaText(v); setSchemaDirty(true); }} language="json" minHeight={260} />
-                <div className={s.toolbar} style={{ marginTop: 8 }}>
+                <div className={s.toolbar} style={{ marginTop: tokens.spacingVerticalS }}>
                   <Button appearance="primary" disabled={savingSchema || !schemaDirty} onClick={saveSchema}>{savingSchema ? 'Saving…' : 'Save definition'}</Button>
                   <Button onClick={() => { setSchemaText(JSON.stringify(idx, null, 2)); setSchemaDirty(false); setSchemaMsg(null); }} disabled={!schemaDirty}>Revert</Button>
                   {schemaDirty && <Caption1 style={{ color: tokens.colorPaletteRedForeground1 }}>Unsaved changes</Caption1>}
@@ -2198,7 +2198,7 @@ export function AiSearchIndexEditor({ item, id }: { item: FabricItemType; id: st
                           onChange={(_, d) => setSemanticConfig(d.value)} placeholder="no semantic config on this index — name one" />
                       )}
                       <span>Answers / Captions</span>
-                      <div className={s.toolbar} style={{ gap: 16 }}>
+                      <div className={s.toolbar} style={{ gap: tokens.spacingHorizontalL }}>
                         <Checkbox label="answers (extractive)" checked={answersOn} onChange={(_, d) => setAnswersOn(!!d.checked)} />
                         <Checkbox label="captions (extractive)" checked={captionsOn} onChange={(_, d) => setCaptionsOn(!!d.checked)} />
                       </div>
@@ -2243,7 +2243,7 @@ export function AiSearchIndexEditor({ item, id }: { item: FabricItemType; id: st
                   {highlightFields.trim() && (
                     <>
                       <span>Highlight tags</span>
-                      <div className={s.toolbar} style={{ gap: 8 }}>
+                      <div className={s.toolbar} style={{ gap: tokens.spacingHorizontalS }}>
                         <Input value={highlightPreTag} onChange={(_, d) => setHighlightPreTag(d.value)} aria-label="highlightPreTag" placeholder="<em>" style={{ maxWidth: 120 }} />
                         <Input value={highlightPostTag} onChange={(_, d) => setHighlightPostTag(d.value)} aria-label="highlightPostTag" placeholder="</em>" style={{ maxWidth: 120 }} />
                       </div>
@@ -2253,9 +2253,9 @@ export function AiSearchIndexEditor({ item, id }: { item: FabricItemType; id: st
 
                 {/* Faceting — pick facetable fields to bucket results by. */}
                 {facetableFields.length > 0 && (
-                  <div style={{ marginTop: 8 }}>
+                  <div style={{ marginTop: tokens.spacingVerticalS }}>
                     <Caption1><strong>Facets</strong> — bucket results by a facetable field (returned under <code>@search.facets</code>).</Caption1>
-                    <div className={s.toolbar} style={{ gap: 12, flexWrap: 'wrap' }}>
+                    <div className={s.toolbar} style={{ gap: tokens.spacingHorizontalM, flexWrap: 'wrap' }}>
                       {facetableFields.map((f) => (
                         <Checkbox key={f} label={f} checked={selectedFacets.includes(f)}
                           aria-label={`facet-${f}`} onChange={(_, d) => toggleFacet(f, !!d.checked)} />
@@ -2265,7 +2265,7 @@ export function AiSearchIndexEditor({ item, id }: { item: FabricItemType; id: st
                 )}
 
                 {/* Vector-query builder (k-NN / hybrid). */}
-                <Subtitle2 style={{ marginTop: 12 }}>Vector queries</Subtitle2>
+                <Subtitle2 style={{ marginTop: tokens.spacingVerticalM }}>Vector queries</Subtitle2>
                 <Caption1>
                   Add a vector query for k-NN or hybrid search. <code>text</code> uses integrated
                   vectorization (the service embeds the text via the field's vectorizer);
@@ -2310,15 +2310,15 @@ export function AiSearchIndexEditor({ item, id }: { item: FabricItemType; id: st
                     <Button size="small" appearance="subtle" onClick={() => removeVectorQuery(i)} aria-label={`vq-${i}-remove`}>Remove</Button>
                   </div>
                 ))}
-                <Button size="small" style={{ marginTop: 8 }} onClick={addVectorQuery}>＋ Add vector query</Button>
+                <Button size="small" style={{ marginTop: tokens.spacingVerticalS }} onClick={addVectorQuery}>＋ Add vector query</Button>
 
-                <div className={s.toolbar} style={{ marginTop: 12 }}>
+                <div className={s.toolbar} style={{ marginTop: tokens.spacingVerticalM }}>
                   <Button appearance="primary" onClick={runSearch} disabled={searching}>{searching ? 'Searching…' : 'Run query'}</Button>
                 </div>
 
                 {/* Raw request JSON actually posted to /docs/search. */}
                 {lastQueryBody && (
-                  <div style={{ marginTop: 8 }}>
+                  <div style={{ marginTop: tokens.spacingVerticalS }}>
                     <Caption1>Request body (POST /indexes/{idx.name}/docs/search):</Caption1>
                     <pre className={s.monaco} style={{ minHeight: 0, maxHeight: 200, overflow: 'auto' }}>{JSON.stringify(lastQueryBody, null, 2)}</pre>
                   </div>
@@ -2385,9 +2385,9 @@ export function AiSearchIndexEditor({ item, id }: { item: FabricItemType; id: st
                   <span>Text</span><Input value={analyzeTxt} onChange={(_, d) => setAnalyzeTxt(d.value)} placeholder="The quick brown fox" />
                   <span>Analyzer</span><Input value={analyzer} onChange={(_, d) => setAnalyzer(d.value)} placeholder="standard.lucene" />
                 </div>
-                <Button appearance="primary" style={{ marginTop: 8 }} onClick={runAnalyze} disabled={!analyzeTxt}>Analyze</Button>
+                <Button appearance="primary" style={{ marginTop: tokens.spacingVerticalS }} onClick={runAnalyze} disabled={!analyzeTxt}>Analyze</Button>
                 {analyzeRes && (analyzeRes.ok
-                  ? <Caption1 style={{ marginTop: 8 }}>Tokens: {(analyzeRes.result?.tokens || []).map((t: any) => t.token).join(' · ') || '—'}</Caption1>
+                  ? <Caption1 style={{ marginTop: tokens.spacingVerticalS }}>Tokens: {(analyzeRes.result?.tokens || []).map((t: any) => t.token).join(' · ') || '—'}</Caption1>
                   : <ErrorBar msg={analyzeRes.error} hint={analyzeRes.hint} notDeployed={analyzeRes.notDeployed} />)}
               </div>
             </>
@@ -2406,7 +2406,7 @@ export function AiSearchIndexEditor({ item, id }: { item: FabricItemType; id: st
                   </>)}
                 </div>
               ) : <Caption1>Statistics not available (collected every few minutes; reload to refresh).</Caption1>}
-              <Button style={{ marginTop: 8 }} onClick={reloadDetail}>Reload statistics</Button>
+              <Button style={{ marginTop: tokens.spacingVerticalS }} onClick={reloadDetail}>Reload statistics</Button>
             </div>
           )}
 
@@ -2429,7 +2429,7 @@ export function AiSearchIndexEditor({ item, id }: { item: FabricItemType; id: st
                         <TableBody>
                           {(indexerData.indexers || []).map((ix: any) => (
                             <TableRow key={ix.name}>
-                              <TableCell className={s.cell}><strong>{ix.name}</strong>{ix.targetsThisIndex && <Badge color="brand" style={{ marginLeft: 6 }}>this index</Badge>}</TableCell>
+                              <TableCell className={s.cell}><strong>{ix.name}</strong>{ix.targetsThisIndex && <Badge color="brand" style={{ marginLeft: tokens.spacingHorizontalXS }}>this index</Badge>}</TableCell>
                               <TableCell className={s.cell}>{ix.targetIndexName || '—'}</TableCell>
                               <TableCell className={s.cell}>{ix.dataSourceName || '—'}</TableCell>
                               <TableCell className={s.cell}>{ix.skillsetName || '—'}</TableCell>
@@ -2465,15 +2465,15 @@ export function AiSearchIndexEditor({ item, id }: { item: FabricItemType; id: st
                       />
                     );
                   })()}
-                  <Subtitle2 style={{ marginTop: 12 }}>Data sources ({(indexerData.dataSources || []).length})</Subtitle2>
+                  <Subtitle2 style={{ marginTop: tokens.spacingVerticalM }}>Data sources ({(indexerData.dataSources || []).length})</Subtitle2>
                   {(indexerData.dataSources || []).length === 0 ? <Caption1>No data sources.</Caption1> : (
                     <Caption1>{(indexerData.dataSources || []).map((d: any) => `${d.name}${d.type ? ` (${d.type})` : ''}`).join(' · ')}</Caption1>
                   )}
-                  <Subtitle2 style={{ marginTop: 12 }}>Skillsets ({(indexerData.skillsets || []).length})</Subtitle2>
+                  <Subtitle2 style={{ marginTop: tokens.spacingVerticalM }}>Skillsets ({(indexerData.skillsets || []).length})</Subtitle2>
                   {(indexerData.skillsets || []).length === 0 ? <Caption1>No skillsets.</Caption1> : (
                     <Caption1>{(indexerData.skillsets || []).map((sk: any) => `${sk.name} (${sk.skillCount} skills)`).join(' · ')}</Caption1>
                   )}
-                  <Button style={{ marginTop: 8 }} onClick={loadIndexers}>Reload</Button>
+                  <Button style={{ marginTop: tokens.spacingVerticalS }} onClick={loadIndexers}>Reload</Button>
                 </>
               ) : <Spinner size="small" />}
             </>

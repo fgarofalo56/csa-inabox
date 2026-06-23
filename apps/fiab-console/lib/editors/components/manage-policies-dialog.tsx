@@ -35,14 +35,14 @@ import {
 } from '@/lib/types/access-policy';
 
 const useStyles = makeStyles({
-  section: { display: 'flex', flexDirection: 'column', gap: '10px' },
-  results: { maxHeight: '180px', overflowY: 'auto', borderRadius: '4px', border: `1px solid ${tokens.colorNeutralStroke2}`, padding: '4px' },
-  row: { display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '6px 8px', borderRadius: '4px', cursor: 'pointer', ':hover': { backgroundColor: tokens.colorNeutralBackground1Hover } },
-  chips: { display: 'flex', flexWrap: 'wrap', gap: '6px', marginTop: '6px' },
-  chip: { display: 'inline-flex', alignItems: 'center', gap: '6px', padding: '4px 8px', borderRadius: '4px', backgroundColor: tokens.colorNeutralBackground3, fontSize: '12px' },
+  section: { display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalL },
+  results: { maxHeight: '180px', overflowY: 'auto', borderRadius: tokens.borderRadiusMedium, border: `1px solid ${tokens.colorNeutralStroke2}`, padding: tokens.spacingVerticalXS },
+  row: { display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: `${tokens.spacingVerticalS} ${tokens.spacingHorizontalS}`, borderRadius: tokens.borderRadiusMedium, cursor: 'pointer', ':hover': { backgroundColor: tokens.colorNeutralBackground1Hover } },
+  chips: { display: 'flex', flexWrap: 'wrap', gap: tokens.spacingHorizontalS, marginTop: tokens.spacingVerticalS },
+  chip: { display: 'inline-flex', alignItems: 'center', gap: tokens.spacingHorizontalS, padding: `${tokens.spacingVerticalXS} ${tokens.spacingHorizontalS}`, borderRadius: tokens.borderRadiusMedium, backgroundColor: tokens.colorNeutralBackground3, fontSize: tokens.fontSizeBase200 },
   chipBtn: { cursor: 'pointer', display: 'inline-flex', alignItems: 'center', color: tokens.colorNeutralForeground3, ':hover': { color: tokens.colorNeutralForeground1 } },
-  purposeForm: { display: 'grid', gridTemplateColumns: '1fr 2fr auto', gap: '8px', alignItems: 'flex-end' },
-  tierRow: { display: 'flex', alignItems: 'center', flexWrap: 'wrap', gap: '6px', padding: '8px', borderRadius: '6px', backgroundColor: tokens.colorNeutralBackground2 },
+  purposeForm: { display: 'grid', gridTemplateColumns: '1fr 2fr auto', gap: tokens.spacingHorizontalS, alignItems: 'flex-end' },
+  tierRow: { display: 'flex', alignItems: 'center', flexWrap: 'wrap', gap: tokens.spacingHorizontalS, padding: tokens.spacingVerticalS, borderRadius: tokens.borderRadiusLarge, backgroundColor: tokens.colorNeutralBackground2 },
 });
 
 // ---------------------------------------------------------------------------
@@ -115,20 +115,20 @@ function PrincipalPicker({
         onChange={(_e, d) => setQ(d.value)}
         placeholder={kind === 'user' ? 'Search by display name or UPN' : 'Search by group name'}
         contentBefore={<Search16Regular />}
-        style={{ marginTop: 8 }}
+        style={{ marginTop: tokens.spacingVerticalS }}
       />
       {err && (
-        <MessageBar intent="warning" style={{ marginTop: 8 }}>
+        <MessageBar intent="warning" style={{ marginTop: tokens.spacingVerticalS }}>
           <MessageBarBody>
             <MessageBarTitle>{err.message}</MessageBarTitle>
-            {err.remediation && <div style={{ marginTop: 4 }}>{err.remediation}</div>}
+            {err.remediation && <div style={{ marginTop: tokens.spacingVerticalXS }}>{err.remediation}</div>}
           </MessageBarBody>
         </MessageBar>
       )}
       {q.trim() && !err && (
-        <div className={styles.results} style={{ marginTop: 8 }}>
+        <div className={styles.results} style={{ marginTop: tokens.spacingVerticalS }}>
           {loading && <Spinner size="tiny" label="Searching Entra…" />}
-          {!loading && hits.length === 0 && <div style={{ padding: 8, color: tokens.colorNeutralForeground3 }}>No matches.</div>}
+          {!loading && hits.length === 0 && <div style={{ padding: tokens.spacingVerticalS, color: tokens.colorNeutralForeground3 }}>No matches.</div>}
           {hits.map((h) => (
             <div
               key={h.id}
@@ -261,7 +261,7 @@ export function ManagePoliciesDialog({ open, productId, isPublished, onClose, on
         <DialogBody>
           <DialogTitle>Manage policies</DialogTitle>
           <DialogContent>
-            <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
+            <div style={{ display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalL }}>
               {isPublished && (
                 <MessageBar intent="warning">
                   <MessageBarBody>
@@ -376,7 +376,7 @@ export function ManagePoliciesDialog({ open, productId, isPublished, onClose, on
                     ) : (
                       <div className={styles.tierRow}>
                         {tiers.map((t, i) => (
-                          <span key={t.key} style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}>
+                          <span key={t.key} style={{ display: 'inline-flex', alignItems: 'center', gap: tokens.spacingHorizontalS }}>
                             <Badge appearance="filled" color="brand">
                               {t.label}{t.detail ? `: ${t.detail}` : ''}
                             </Badge>

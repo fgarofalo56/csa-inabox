@@ -40,38 +40,40 @@ import { KeyValueGrid } from '@/lib/components/ui/key-value-grid';
 import { CopilotTopicCanvas } from './copilot-topic-canvas';
 
 const useStyles = makeStyles({
-  pad: { padding: 16, display: 'flex', flexDirection: 'column', gap: 12, minHeight: 0, flex: 1 },
-  toolbar: { display: 'flex', gap: 12, alignItems: 'center', flexWrap: 'wrap' },
-  form: { display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12, alignItems: 'start' },
-  formCol: { display: 'flex', flexDirection: 'column', gap: 12 },
-  cardGrid: { display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(260px, 1fr))', gap: 12 },
-  card: { padding: 12, border: `1px solid ${tokens.colorNeutralStroke2}`, borderRadius: 6, display: 'flex', flexDirection: 'column', gap: 8 },
-  kpiGrid: { display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(180px, 1fr))', gap: 12 },
-  kpi: { padding: 12, border: `1px solid ${tokens.colorNeutralStroke2}`, borderRadius: 6, display: 'flex', flexDirection: 'column', gap: 4 },
-  kpiValue: { fontSize: 28, fontWeight: 600 },
-  treePad: { padding: 8 },
+  pad: { padding: tokens.spacingVerticalL, display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalM, minHeight: 0, flex: 1 },
+  toolbar: { display: 'flex', gap: tokens.spacingHorizontalM, alignItems: 'center', flexWrap: 'wrap' },
+  form: { display: 'grid', gridTemplateColumns: '1fr 1fr', gap: tokens.spacingVerticalM, alignItems: 'start' },
+  formCol: { display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalM },
+  cardGrid: { display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(260px, 1fr))', gap: tokens.spacingVerticalM },
+  card: { padding: tokens.spacingVerticalM, border: `1px solid ${tokens.colorNeutralStroke2}`, borderRadius: tokens.borderRadiusLarge, display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalS },
+  kpiGrid: { display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(180px, 1fr))', gap: tokens.spacingVerticalM },
+  kpi: { padding: tokens.spacingVerticalM, border: `1px solid ${tokens.colorNeutralStroke2}`, borderRadius: tokens.borderRadiusLarge, display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalXS },
+  kpiValue: { fontSize: tokens.fontSizeBase700, fontWeight: 600 },
+  treePad: { padding: tokens.spacingVerticalS },
   spark: {
-    height: 60, display: 'flex', alignItems: 'flex-end', gap: 2,
-    border: `1px solid ${tokens.colorNeutralStroke2}`, borderRadius: 4, padding: 6,
+    height: 60, display: 'flex', alignItems: 'flex-end', gap: tokens.spacingHorizontalXXS,
+    border: `1px solid ${tokens.colorNeutralStroke2}`, borderRadius: tokens.borderRadiusMedium, padding: tokens.spacingVerticalXS,
     backgroundColor: tokens.colorNeutralBackground3,
   },
-  bar: { flex: 1, backgroundColor: tokens.colorBrandBackground, borderRadius: 2 },
-  tagRow: { display: 'flex', flexWrap: 'wrap', gap: 6 },
-  chatWrap: { display: 'flex', flexDirection: 'column', gap: 8, maxWidth: 720 },
+  bar: { flex: 1, backgroundColor: tokens.colorBrandBackground, borderRadius: tokens.borderRadiusSmall },
+  tagRow: { display: 'flex', flexWrap: 'wrap', gap: tokens.spacingHorizontalXS },
+  chatWrap: { display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalS, maxWidth: 720 },
   chatLog: {
-    height: 360, overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: 8,
-    border: `1px solid ${tokens.colorNeutralStroke2}`, borderRadius: 6, padding: 12,
+    height: 360, overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalS,
+    border: `1px solid ${tokens.colorNeutralStroke2}`, borderRadius: tokens.borderRadiusLarge, padding: tokens.spacingVerticalM,
     backgroundColor: tokens.colorNeutralBackground2,
   },
   msgUser: {
-    alignSelf: 'flex-end', maxWidth: '75%', padding: '8px 12px', borderRadius: 12,
+    alignSelf: 'flex-end', maxWidth: '75%', paddingTop: tokens.spacingVerticalS, paddingBottom: tokens.spacingVerticalS, paddingLeft: tokens.spacingHorizontalM, paddingRight: tokens.spacingHorizontalM,
+    borderRadius: tokens.borderRadiusXLarge,
     backgroundColor: tokens.colorBrandBackground, color: tokens.colorNeutralForegroundOnBrand,
   },
   msgBot: {
-    alignSelf: 'flex-start', maxWidth: '75%', padding: '8px 12px', borderRadius: 12,
+    alignSelf: 'flex-start', maxWidth: '75%', paddingTop: tokens.spacingVerticalS, paddingBottom: tokens.spacingVerticalS, paddingLeft: tokens.spacingHorizontalM, paddingRight: tokens.spacingHorizontalM,
+    borderRadius: tokens.borderRadiusXLarge,
     backgroundColor: tokens.colorNeutralBackground1, border: `1px solid ${tokens.colorNeutralStroke2}`,
   },
-  chatInputRow: { display: 'flex', gap: 8, alignItems: 'flex-end' },
+  chatInputRow: { display: 'flex', gap: tokens.spacingHorizontalS, alignItems: 'flex-end' },
 });
 
 // ============================================================
@@ -165,7 +167,7 @@ function ErrorBar({ error, hint }: { error: string | null; hint?: string }) {
       <MessageBarBody>
         <MessageBarTitle>Copilot Studio call failed</MessageBarTitle>
         {error}
-        {hint && <div style={{ marginTop: 4 }}><Caption1>{hint}</Caption1></div>}
+        {hint && <div style={{ marginTop: tokens.spacingVerticalXXS }}><Caption1>{hint}</Caption1></div>}
       </MessageBarBody>
     </MessageBar>
   );
@@ -1265,7 +1267,7 @@ function TestChatPanel({ agentId }: { agentId: string }) {
         <MessageBar intent={error.includes('Direct Line secret') ? 'warning' : 'error'}>
           <MessageBarBody>
             <MessageBarTitle>{error.includes('Direct Line secret') ? 'Test chat not configured' : 'Test chat error'}</MessageBarTitle>
-            {error}{hint && <div style={{ marginTop: 4 }}><Caption1>{hint}</Caption1></div>}
+            {error}{hint && <div style={{ marginTop: tokens.spacingVerticalXXS }}><Caption1>{hint}</Caption1></div>}
           </MessageBarBody>
         </MessageBar>
       )}

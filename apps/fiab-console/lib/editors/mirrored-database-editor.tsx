@@ -40,11 +40,11 @@ import type { FabricItemType } from '@/lib/catalog/fabric-item-types';
 import type { RibbonTab } from '@/lib/components/ribbon';
 
 const useStyles = makeStyles({
-  pad: { padding: 16, display: 'flex', flexDirection: 'column', gap: 12, flex: 1, minHeight: 0 },
-  toolbar: { display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' },
-  treePad: { padding: 8 },
-  tableWrap: { overflow: 'auto', maxHeight: 320, border: `1px solid ${tokens.colorNeutralStroke2}`, borderRadius: 4 },
-  cell: { fontFamily: 'Consolas, monospace', fontSize: 12, whiteSpace: 'nowrap' },
+  pad: { padding: tokens.spacingVerticalL, display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalM, flex: 1, minHeight: 0 },
+  toolbar: { display: 'flex', gap: tokens.spacingHorizontalS, alignItems: 'center', flexWrap: 'wrap' },
+  treePad: { padding: tokens.spacingVerticalS },
+  tableWrap: { overflow: 'auto', maxHeight: 320, border: `1px solid ${tokens.colorNeutralStroke2}`, borderRadius: tokens.borderRadiusMedium },
+  cell: { fontFamily: 'Consolas, monospace', fontSize: tokens.fontSizeBase200, whiteSpace: 'nowrap' },
 });
 
 interface WorkspaceLite { id: string; name: string; isOnDedicatedCapacity?: boolean; }
@@ -319,7 +319,7 @@ export function MirroredDatabaseEditor({ item, id }: Props) {
     <ItemEditorChrome item={item} id={id} ribbon={ribbon}
       leftPanel={
         <div className={s.treePad}>
-          <Subtitle2 style={{ marginBottom: 8 }}>Mirrored databases</Subtitle2>
+          <Subtitle2 style={{ marginBottom: tokens.spacingVerticalS }}>Mirrored databases</Subtitle2>
           {!workspaceId && <Caption1>Select a workspace.</Caption1>}
           {workspaceId && mirrors === null && <Spinner size="tiny" label="Loading…" />}
           {mirrors && mirrors.length === 0 && !listErr && <Caption1>No mirrored databases.</Caption1>}
@@ -345,7 +345,7 @@ export function MirroredDatabaseEditor({ item, id }: Props) {
             <OneLakeSecurityTab itemId={id} itemType="mirrored-database" container="bronze" workspaceId={workspaceId || undefined} fabricItemId={mirrorId || undefined} />
           )}
           {view === 'monitor' && (
-            <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+            <div style={{ display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalM }}>
               <div className={s.toolbar}>
                 <Badge appearance="filled" color="brand">Replication monitor</Badge>
                 <Button appearance="outline" icon={<ArrowSync20Regular />} disabled={monitorLoading || !mirrorId} onClick={() => void loadMonitor()}>
@@ -423,7 +423,7 @@ export function MirroredDatabaseEditor({ item, id }: Props) {
                               {t.status}
                             </Badge>
                             {t.mode && (
-                              <Badge appearance="outline" size="small" style={{ marginLeft: 6 }}
+                              <Badge appearance="outline" size="small" style={{ marginLeft: tokens.spacingHorizontalSNudge }}
                                 color={t.mode === 'incremental' ? 'success' : 'informative'}>
                                 {t.mode === 'incremental' ? 'Incremental' : 'Snapshot'}
                               </Badge>
@@ -456,7 +456,7 @@ export function MirroredDatabaseEditor({ item, id }: Props) {
           <>
           <div className={s.toolbar}>
             <Badge appearance="filled" color="brand">Mirrored Database</Badge>
-            <div style={{ display: 'flex', flexDirection: 'column', gap: 4, minWidth: 280 }}>
+            <div style={{ display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalXS, minWidth: 280 }}>
               <Caption1>Workspace</Caption1>
               <Select value={workspaceId} onChange={(_, d) => setWorkspaceId(d.value)} disabled={ws.loading || (ws.workspaces?.length ?? 0) === 0}>
                 {!workspaceId && <option value="">{ws.loading ? 'Loading workspaces…' : 'Select a workspace'}</option>}
@@ -532,7 +532,7 @@ export function MirroredDatabaseEditor({ item, id }: Props) {
                 <MessageBarTitle>No workspaces yet</MessageBarTitle>
                 Create a workspace first, then return here to mirror a database into it.
                 <br />
-                <Button appearance="primary" size="small" style={{ marginTop: 6 }}
+                <Button appearance="primary" size="small" style={{ marginTop: tokens.spacingVerticalSNudge }}
                   onClick={() => { try { window.location.assign('/workspaces'); } catch { /* noop */ } }}>
                   Go to workspaces
                 </Button>
@@ -577,7 +577,7 @@ export function MirroredDatabaseEditor({ item, id }: Props) {
 
           {mirrorId && detail && (
             <>
-              <div style={{ display: 'flex', alignItems: 'center', gap: 12, flexWrap: 'wrap' }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: tokens.spacingHorizontalM, flexWrap: 'wrap' }}>
                 <Badge appearance="filled" color={statusColor(status)}>{status || 'Unknown'}</Badge>
                 <Caption1>id: <code>{mirrorId.slice(0, 8)}</code></Caption1>
                 {detail.status?.error && <Caption1 style={{ color: tokens.colorPaletteRedForeground1 }}>{detail.status.error}</Caption1>}
@@ -610,7 +610,7 @@ export function MirroredDatabaseEditor({ item, id }: Props) {
                               appearance="tint"
                               color={t.mode === 'incremental' ? 'success' : 'informative'}
                               size="small"
-                              style={{ marginLeft: 6 }}
+                              style={{ marginLeft: tokens.spacingHorizontalSNudge }}
                               title={t.syncVersion != null ? `Change-tracking watermark: v${t.syncVersion}` : undefined}
                             >
                               {t.mode === 'incremental' ? 'Incremental' : 'Snapshot'}

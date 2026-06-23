@@ -39,9 +39,9 @@ import type { RibbonTab } from '@/lib/components/ribbon';
 import { MonacoTextarea } from '@/lib/components/editor/monaco-textarea';
 
 const useStyles = makeStyles({
-  pad: { padding: 16, display: 'flex', flexDirection: 'column', gap: 12, flex: 1, minHeight: 0 },
-  toolbar: { display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' },
-  treePad: { padding: 8 },
+  pad: { padding: tokens.spacingVerticalL, display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalM, flex: 1, minHeight: 0 },
+  toolbar: { display: 'flex', gap: tokens.spacingHorizontalS, alignItems: 'center', flexWrap: 'wrap' },
+  treePad: { padding: tokens.spacingHorizontalS },
 });
 
 interface WorkspaceLite { id: string; name: string; isOnDedicatedCapacity?: boolean; }
@@ -263,7 +263,7 @@ export function DataflowGen2Editor({ item, id }: Props) {
     <ItemEditorChrome item={item} id={id} ribbon={ribbon}
       leftPanel={
         <div className={s.treePad}>
-          <Subtitle2 style={{ marginBottom: 8 }}>Dataflows Gen2</Subtitle2>
+          <Subtitle2 style={{ marginBottom: tokens.spacingVerticalS }}>Dataflows Gen2</Subtitle2>
           {!workspaceId && <Caption1>Select a workspace.</Caption1>}
           {workspaceId && dataflows === null && <Spinner size="tiny" label="Loading…" />}
           {dataflows && dataflows.length === 0 && !listErr && <Caption1>No dataflows.</Caption1>}
@@ -285,7 +285,7 @@ export function DataflowGen2Editor({ item, id }: Props) {
             <Badge appearance="outline" color={config?.backend === 'fabric' ? 'warning' : 'success'}>
               {config?.backend === 'fabric' ? 'Fabric (opt-in)' : 'Azure-native (ADF)'}
             </Badge>
-            <div style={{ display: 'flex', flexDirection: 'column', gap: 4, minWidth: 280 }}>
+            <div style={{ display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalXS, minWidth: 280 }}>
               <Caption1>Workspace</Caption1>
               <Select value={workspaceId} onChange={(_, d) => setWorkspaceId(d.value)} disabled={ws.loading || (ws.workspaces?.length ?? 0) === 0}>
                 {!workspaceId && <option value="">{ws.loading ? 'Loading workspaces…' : 'Select a workspace'}</option>}
@@ -304,7 +304,7 @@ export function DataflowGen2Editor({ item, id }: Props) {
                   <DialogTitle>Create dataflow Gen2</DialogTitle>
                   <DialogContent>
                     <Input placeholder="displayName" value={createName} onChange={(_, d) => setCreateName(d.value)} style={{ width: '100%' }} />
-                    {createErr && <MessageBar intent="error" style={{ marginTop: 8 }}><MessageBarBody>{createErr}</MessageBarBody></MessageBar>}
+                    {createErr && <MessageBar intent="error" style={{ marginTop: tokens.spacingVerticalS }}><MessageBarBody>{createErr}</MessageBarBody></MessageBar>}
                   </DialogContent>
                   <DialogActions>
                     <Button appearance="secondary" onClick={() => setCreateOpen(false)}>Cancel</Button>
@@ -369,7 +369,7 @@ export function DataflowGen2Editor({ item, id }: Props) {
 
           {tab === 'authoring' && (
             isM ? (
-              <div style={{ display: 'flex', gap: 12, flex: 1, minHeight: 0 }}>
+              <div style={{ display: 'flex', gap: tokens.spacingHorizontalM, flex: 1, minHeight: 0 }}>
                 <PowerQueryHost
                   mScript={defText}
                   onChange={(v) => { setDefText(v); setDirty(true); }}

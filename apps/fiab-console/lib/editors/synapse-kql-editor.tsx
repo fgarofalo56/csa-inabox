@@ -36,12 +36,12 @@ import {
 import { useCallback, useEffect, useState } from 'react';
 
 const useStyles = makeStyles({
-  body: { display: 'flex', flexDirection: 'column', gap: 12, height: '100%', overflow: 'hidden' },
-  conn: { display: 'flex', gap: 12, flexWrap: 'wrap' },
+  body: { display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalM, height: '100%', overflow: 'hidden' },
+  conn: { display: 'flex', gap: tokens.spacingHorizontalM, flexWrap: 'wrap' },
   connField: { minWidth: 220 },
-  toolbar: { display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' },
+  toolbar: { display: 'flex', gap: tokens.spacingHorizontalS, alignItems: 'center', flexWrap: 'wrap' },
   editor: {
-    fontFamily: 'Consolas, "Cascadia Code", monospace', fontSize: '13px',
+    fontFamily: 'Consolas, "Cascadia Code", monospace', fontSize: tokens.fontSizeBase300,
   },
   resultWrap: {
     flex: 1, minHeight: 0, overflow: 'auto',
@@ -185,7 +185,7 @@ export function SynapseKqlEditor({ name, onClose }: SynapseKqlEditorProps) {
       </DrawerHeader>
       <DrawerBody>
         {loading ? (
-          <div style={{ padding: 16 }}><Spinner label="Loading KQL script…" /></div>
+          <div style={{ padding: tokens.spacingVerticalL }}><Spinner label="Loading KQL script…" /></div>
         ) : (
           <div className={s.body}>
             {error && (

@@ -38,7 +38,7 @@ const useStyles = makeStyles({
   pathRow: { display: 'flex', alignItems: 'center', gap: tokens.spacingHorizontalS, flexWrap: 'wrap' },
   code: {
     fontFamily: 'Consolas, monospace', fontSize: tokens.fontSizeBase200,
-    backgroundColor: tokens.colorNeutralBackground3, padding: '2px 6px',
+    backgroundColor: tokens.colorNeutralBackground3, padding: `${tokens.spacingVerticalXXS} ${tokens.spacingHorizontalS}`,
     borderRadius: tokens.borderRadiusSmall, wordBreak: 'break-all', flex: 1, minWidth: 0,
   },
   row: { display: 'flex', alignItems: 'center', gap: tokens.spacingHorizontalM, flexWrap: 'wrap' },
@@ -199,7 +199,7 @@ export function OpenMirrorConfig({ mirrorId, workspaceId, tableName = 'default' 
 
   return (
     <div className={s.root}>
-      <Subtitle2><CloudArrowUp20Regular style={{ verticalAlign: 'middle', marginRight: 6 }} />Open mirroring (push Parquet → managed Delta)</Subtitle2>
+      <Subtitle2><CloudArrowUp20Regular style={{ verticalAlign: 'middle', marginRight: tokens.spacingHorizontalS }} />Open mirroring (push Parquet → managed Delta)</Subtitle2>
       <Caption1 style={{ color: tokens.colorNeutralForeground3 }}>
         A producer pushes Parquet to the landing zone below; Loom merges it into a managed Delta table on a Synapse
         Spark batch — no Microsoft Fabric required. Add <code>_metadata.json</code> with <code>keyColumns</code> +
@@ -212,41 +212,41 @@ export function OpenMirrorConfig({ mirrorId, workspaceId, tableName = 'default' 
 
       {/* Landing zone */}
       <Card className={s.card}>
-        <CardHeader header={<Body1><CloudArrowUp20Regular style={{ verticalAlign: 'middle', marginRight: 6 }} />Landing zone</Body1>}
+        <CardHeader header={<Body1><CloudArrowUp20Regular style={{ verticalAlign: 'middle', marginRight: tokens.spacingHorizontalS }} />Landing zone</Body1>}
           description={<Caption1 style={{ color: tokens.colorNeutralForeground3 }}>Producers push Parquet here, under <code>&lt;table&gt;/</code>.</Caption1>} />
         <div className={s.pathRow}>
           <span className={s.code}>{cfg?.landingPath || '(LOOM_LANDING_URL not set)'}</span>
           <Button size="small" appearance="outline" icon={<Copy16Regular />} onClick={() => copy(cfg?.landingPath)}>Copy</Button>
         </div>
-        <Caption1 style={{ color: tokens.colorNeutralForeground3, marginTop: 6 }}>
+        <Caption1 style={{ color: tokens.colorNeutralForeground3, marginTop: tokens.spacingVerticalS }}>
           Target table: <code>{cfg?.tableName || tableName}</code> → drop files at <code>{(cfg?.landingPath || '')}/{cfg?.tableName || tableName}/*.parquet</code>
         </Caption1>
       </Card>
 
       {/* Producer credentials */}
       <Card className={s.card}>
-        <CardHeader header={<Body1><Key20Regular style={{ verticalAlign: 'middle', marginRight: 6 }} />Producer credentials</Body1>}
+        <CardHeader header={<Body1><Key20Regular style={{ verticalAlign: 'middle', marginRight: tokens.spacingHorizontalS }} />Producer credentials</Body1>}
           description={<Caption1 style={{ color: tokens.colorNeutralForeground3 }}>How the external producer authenticates to push Parquet.</Caption1>} />
         <TabList selectedValue={credTab} onTabSelect={(_, d) => setCredTab(d.value as 'sas' | 'rbac')} size="small">
           <Tab value="rbac" icon={<PeopleTeam20Regular />}>RBAC (recommended)</Tab>
           <Tab value="sas" icon={<Key20Regular />}>SAS token</Tab>
         </TabList>
         {credTab === 'rbac' && (
-          <div style={{ marginTop: 8 }}>
+          <div style={{ marginTop: tokens.spacingVerticalS }}>
             <Caption1>
               Grant the producer principal <strong>Storage Blob Data Contributor</strong> scoped to the landing container:
             </Caption1>
-            <div className={s.pathRow} style={{ marginTop: 6 }}>
+            <div className={s.pathRow} style={{ marginTop: tokens.spacingVerticalS }}>
               <span className={s.code}>{rbacScope}</span>
               <Button size="small" appearance="outline" icon={<Copy16Regular />} onClick={() => copy(rbacScope)}>Copy scope</Button>
             </div>
-            <Caption1 style={{ display: 'block', marginTop: 6, color: tokens.colorNeutralForeground3 }}>
+            <Caption1 style={{ display: 'block', marginTop: tokens.spacingVerticalS, color: tokens.colorNeutralForeground3 }}>
               <code>az role assignment create --role "Storage Blob Data Contributor" --assignee &lt;producer-principal&gt; --scope /subscriptions/&lt;sub&gt;/resourceGroups/&lt;rg&gt;/providers/{rbacScope}</code>
             </Caption1>
           </div>
         )}
         {credTab === 'sas' && (
-          <div style={{ marginTop: 8 }}>
+          <div style={{ marginTop: tokens.spacingVerticalS }}>
             {sas
               ? (
                 <MessageBar intent="warning">
@@ -264,7 +264,7 @@ export function OpenMirrorConfig({ mirrorId, workspaceId, tableName = 'default' 
 
       {/* Merge schedule + key columns */}
       <Card className={s.card}>
-        <CardHeader header={<Body1><Clock20Regular style={{ verticalAlign: 'middle', marginRight: 6 }} />Merge schedule</Body1>}
+        <CardHeader header={<Body1><Clock20Regular style={{ verticalAlign: 'middle', marginRight: tokens.spacingHorizontalS }} />Merge schedule</Body1>}
           description={<Caption1 style={{ color: tokens.colorNeutralForeground3 }}>How often new Parquet is folded into Delta.</Caption1>} />
         <div className={s.row}>
           <Field label="Schedule">
@@ -283,7 +283,7 @@ export function OpenMirrorConfig({ mirrorId, workspaceId, tableName = 'default' 
           </Field>
         </div>
         {schedule !== 'on-demand' && (
-          <Caption1 style={{ display: 'block', marginTop: 6, color: tokens.colorNeutralForeground3 }}>
+          <Caption1 style={{ display: 'block', marginTop: tokens.spacingVerticalS, color: tokens.colorNeutralForeground3 }}>
             Recurring schedules run by wiring an ADF / Synapse scheduled trigger (or Logic App timer) to POST this
             route. "Merge now" runs the same merge immediately.
           </Caption1>
@@ -292,16 +292,16 @@ export function OpenMirrorConfig({ mirrorId, workspaceId, tableName = 'default' 
 
       {/* Last merge + actions */}
       <Card className={s.card}>
-        <CardHeader header={<Body1><DataTrending20Regular style={{ verticalAlign: 'middle', marginRight: 6 }} />Merge status</Body1>} />
+        <CardHeader header={<Body1><DataTrending20Regular style={{ verticalAlign: 'middle', marginRight: tokens.spacingHorizontalS }} />Merge status</Body1>} />
         <div className={s.row}>
           <Badge appearance="filled" color={statusColor(cfg?.lastMergeStatus)}>{cfg?.lastMergeStatus || 'No merge yet'}</Badge>
           {cfg?.lastMergeJobId != null && <Caption1>Job id: <code>{cfg.lastMergeJobId}</code></Caption1>}
           {cfg?.lastMergeAt && <Caption1>Last run: {cfg.lastMergeAt}</Caption1>}
         </div>
         {cfg?.lastMergeError && (
-          <Caption1 style={{ display: 'block', marginTop: 4, color: tokens.colorPaletteRedForeground1 }}>{cfg.lastMergeError}</Caption1>
+          <Caption1 style={{ display: 'block', marginTop: tokens.spacingVerticalXS, color: tokens.colorPaletteRedForeground1 }}>{cfg.lastMergeError}</Caption1>
         )}
-        <div className={s.row} style={{ marginTop: 10 }}>
+        <div className={s.row} style={{ marginTop: tokens.spacingVerticalL }}>
           <Button appearance="primary" icon={merging ? <Spinner size="tiny" /> : <Play20Regular />} disabled={merging} onClick={mergeNow}>
             {merging ? 'Submitting…' : 'Merge now'}
           </Button>
@@ -310,9 +310,9 @@ export function OpenMirrorConfig({ mirrorId, workspaceId, tableName = 'default' 
           </Button>
         </div>
         {cfg?.openrowset && (
-          <div style={{ marginTop: 10 }}>
+          <div style={{ marginTop: tokens.spacingVerticalL }}>
             <Caption1 style={{ color: tokens.colorNeutralForeground3 }}>Query the managed Delta table (Synapse Serverless):</Caption1>
-            <div className={s.pathRow} style={{ marginTop: 4 }}>
+            <div className={s.pathRow} style={{ marginTop: tokens.spacingVerticalXS }}>
               <span className={s.code}>{cfg.openrowset}</span>
               <Button size="small" appearance="outline" icon={<Copy16Regular />} onClick={() => copy(cfg.openrowset)}>Copy SQL</Button>
             </div>

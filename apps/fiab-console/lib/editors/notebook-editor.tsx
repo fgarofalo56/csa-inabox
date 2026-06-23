@@ -53,27 +53,27 @@ import { runtimeFromComputeKind, starterCellFor, RUNTIME_LABEL, type ClusterRunt
 // below the component declarations.
 
 const useStyles = makeStyles({
-  pad: { padding: 16, display: 'flex', flexDirection: 'column', gap: 12, flex: 1, minHeight: 0, position: 'relative' },
+  pad: { padding: tokens.spacingVerticalL, display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalM, flex: 1, minHeight: 0, position: 'relative' },
   // Bottom-align so the label+control groups (Compute backend / Workspace /
   // Compute target / Environment) and the bare action buttons (Refresh / Manage
   // / Import / New) line up on one baseline instead of the buttons floating
   // mid-height — which made the row read as crammed/overlapping. Wider gap +
   // row-gap gives the labels breathing room when the row wraps.
-  toolbar: { display: 'flex', columnGap: 20, rowGap: 12, alignItems: 'flex-end', flexWrap: 'wrap', padding: '4px 4px 12px', borderBottom: `1px solid ${tokens.colorNeutralStroke2}`, marginBottom: 4 },
+  toolbar: { display: 'flex', columnGap: tokens.spacingHorizontalXL, rowGap: tokens.spacingVerticalM, alignItems: 'flex-end', flexWrap: 'wrap', padding: `${tokens.spacingVerticalXS} ${tokens.spacingHorizontalXS} ${tokens.spacingVerticalM}`, borderBottom: `1px solid ${tokens.colorNeutralStroke2}`, marginBottom: tokens.spacingVerticalXS },
   toolDivider: { alignSelf: 'stretch', minHeight: 36 },
   editor: {
     width: '100%', minHeight: 280,
-    fontFamily: 'Consolas, "Cascadia Code", monospace', fontSize: 13, padding: 12,
-    border: `1px solid ${tokens.colorNeutralStroke2}`, borderRadius: 4,
+    fontFamily: 'Consolas, "Cascadia Code", monospace', fontSize: tokens.fontSizeBase300, padding: tokens.spacingVerticalM,
+    border: `1px solid ${tokens.colorNeutralStroke2}`, borderRadius: tokens.borderRadiusMedium,
     backgroundColor: tokens.colorNeutralBackground3, color: tokens.colorNeutralForeground1,
     resize: 'vertical',
   },
-  treePad: { padding: 8 },
-  tableWrap: { overflow: 'auto', maxHeight: 240, border: `1px solid ${tokens.colorNeutralStroke2}`, borderRadius: 4 },
-  cell: { fontFamily: 'Consolas, monospace', fontSize: 12, whiteSpace: 'nowrap' },
+  treePad: { padding: tokens.spacingVerticalS },
+  tableWrap: { overflow: 'auto', maxHeight: 240, border: `1px solid ${tokens.colorNeutralStroke2}`, borderRadius: tokens.borderRadiusMedium },
+  cell: { fontFamily: 'Consolas, monospace', fontSize: tokens.fontSizeBase200, whiteSpace: 'nowrap' },
   // Bottom-left session status badge — overlays the editor surface like the
   // Synapse Studio session indicator (Idle / Running / Error).
-  statusBadge: { position: 'absolute', bottom: 12, left: 12, zIndex: 5 },
+  statusBadge: { position: 'absolute', bottom: tokens.spacingVerticalM, left: tokens.spacingHorizontalM, zIndex: 5 },
 });
 
 interface WorkspaceLite { id: string; name: string; isOnDedicatedCapacity?: boolean; }
@@ -1463,7 +1463,7 @@ export function NotebookEditor({ item, id }: Props) {
     <ItemEditorChrome item={item} id={id} ribbon={ribbon}
       leftPanel={
         <div className={s.treePad}>
-          <Subtitle2 style={{ marginBottom: 8 }}>Notebooks</Subtitle2>
+          <Subtitle2 style={{ marginBottom: tokens.spacingVerticalS }}>Notebooks</Subtitle2>
           {!workspaceId && <Caption1>Select a workspace.</Caption1>}
           {workspaceId && notebooks === null && <Spinner size="tiny" label="Loading…" />}
           {notebooks && notebooks.length === 0 && !listErr && <Caption1>No notebooks in this workspace.</Caption1>}
@@ -1480,7 +1480,7 @@ export function NotebookEditor({ item, id }: Props) {
           {/* Phase 2: Data items pane — Fabric "Explorer" tab equivalent */}
           {notebookId && (
             <>
-              <Subtitle2 style={{ marginTop: 16, marginBottom: 4 }}>Data items</Subtitle2>
+              <Subtitle2 style={{ marginTop: tokens.spacingVerticalL, marginBottom: tokens.spacingVerticalXS }}>Data items</Subtitle2>
               {attachedSources.length === 0 ? (
                 <Caption1>No sources attached. Attach a Lakehouse so cells can read its OneLake mount.</Caption1>
               ) : (
@@ -1492,11 +1492,11 @@ export function NotebookEditor({ item, id }: Props) {
                       <TreeItemLayout
                         iconBefore={<Notebook20Regular />}
                       >
-                        <div style={{ display: 'flex', flexDirection: 'column', gap: 2, width: '100%' }}>
-                          <div style={{ display: 'flex', alignItems: 'center', gap: 6, width: '100%' }}>
+                        <div style={{ display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalXXS, width: '100%' }}>
+                          <div style={{ display: 'flex', alignItems: 'center', gap: tokens.spacingHorizontalXS, width: '100%' }}>
                             <span style={{ flex: 1 }}>
                               {src.isDefault ? <strong>{src.displayName}</strong> : src.displayName}
-                              {src.isDefault && <Badge appearance="outline" color="brand" size="small" style={{ marginLeft: 6 }}>default</Badge>}
+                              {src.isDefault && <Badge appearance="outline" color="brand" size="small" style={{ marginLeft: tokens.spacingHorizontalXS }}>default</Badge>}
                             </span>
                             {!src.isDefault && (
                               <Button size="small" appearance="subtle" onClick={(e) => { e.stopPropagation(); promoteDefault(src.id); }}>Pin</Button>
@@ -1507,9 +1507,9 @@ export function NotebookEditor({ item, id }: Props) {
                               exposes as loom_lakehouses['<name>'] — copyable. An
                               honest gate tooltip when storage isn't configured. */}
                           {resolved?.abfss && (
-                            <div style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
+                            <div style={{ display: 'flex', alignItems: 'center', gap: tokens.spacingVerticalXS }}>
                               <Caption1
-                                style={{ flex: 1, fontFamily: tokens.fontFamilyMonospace, fontSize: 11, color: tokens.colorNeutralForeground3, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}
+                                style={{ flex: 1, fontFamily: tokens.fontFamilyMonospace, fontSize: tokens.fontSizeBase100, color: tokens.colorNeutralForeground3, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}
                                 title={resolved.abfss}
                               >{resolved.abfss}</Caption1>
                               <Tooltip content={`Copy abfss path (use as loom_lakehouses['${src.displayName}'])`} relationship="label">
@@ -1524,7 +1524,7 @@ export function NotebookEditor({ item, id }: Props) {
                           )}
                           {!resolved?.abfss && resolved?.hint && (
                             <Tooltip content={resolved.hint} relationship="description">
-                              <Caption1 style={{ display: 'flex', alignItems: 'center', gap: 4, color: tokens.colorPaletteYellowForeground1, fontSize: 11 }}>
+                              <Caption1 style={{ display: 'flex', alignItems: 'center', gap: tokens.spacingVerticalXS, color: tokens.colorPaletteYellowForeground1, fontSize: tokens.fontSizeBase100 }}>
                                 <Info16Regular /> path not configured
                               </Caption1>
                             </Tooltip>
@@ -1536,7 +1536,7 @@ export function NotebookEditor({ item, id }: Props) {
                   })}
                 </Tree>
               )}
-              <Button size="small" appearance="outline" icon={<Add20Regular />} onClick={openAttach} disabled={!workspaceId} style={{ marginTop: 8, alignSelf: 'flex-start' }}>
+              <Button size="small" appearance="outline" icon={<Add20Regular />} onClick={openAttach} disabled={!workspaceId} style={{ marginTop: tokens.spacingVerticalS, alignSelf: 'flex-start' }}>
                 Add data items
               </Button>
             </>
@@ -1558,7 +1558,7 @@ export function NotebookEditor({ item, id }: Props) {
             {/* Compute backend toggle — Loom-native Spark/Databricks vs the
                 Azure ML Compute Instance path. Default Loom; flip to Azure ML
                 for a CI + datastores. No Fabric dependency on either path. */}
-            <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+            <div style={{ display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalXS }}>
               <Caption1>Compute backend</Caption1>
               <div style={{ display: 'flex', gap: 0 }}>
                 <Button
@@ -1576,7 +1576,7 @@ export function NotebookEditor({ item, id }: Props) {
                 >Azure ML</Button>
               </div>
             </div>
-            <div style={{ display: 'flex', flexDirection: 'column', gap: 4, minWidth: 240 }}>
+            <div style={{ display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalXS, minWidth: 240 }}>
               <Caption1>Workspace</Caption1>
               <Select aria-label="Workspace" value={workspaceId} onChange={(_, d) => setWorkspaceId(d.value)} disabled={ws.loading || (ws.workspaces?.length ?? 0) === 0}>
                 {!workspaceId && <option value="">{ws.loading ? 'Loading workspaces…' : 'Select a workspace'}</option>}
@@ -1585,9 +1585,9 @@ export function NotebookEditor({ item, id }: Props) {
                 ))}
               </Select>
             </div>
-            <div style={{ display: 'flex', flexDirection: 'column', gap: 4, minWidth: 280 }}>
+            <div style={{ display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalXS, minWidth: 280 }}>
               <Caption1>{workspaceType === 'aml' ? 'Compute Instance' : 'Compute target'}</Caption1>
-              <div style={{ display: 'flex', gap: 8, alignItems: 'flex-end' }}>
+              <div style={{ display: 'flex', gap: tokens.spacingVerticalS, alignItems: 'flex-end' }}>
                 <div style={{ flex: 1 }}>
                   <Select aria-label="Compute target" value={computeId} onChange={(_, d) => setComputeId(d.value)} disabled={cp.loading || cp.computes.length === 0}>
                     {!computeId && <option value="">{cp.loading ? 'Loading compute…' : (workspaceType === 'aml' ? 'Select a Compute Instance' : 'Select compute')}</option>}
@@ -1635,9 +1635,9 @@ export function NotebookEditor({ item, id }: Props) {
             <Divider vertical className={s.toolDivider} />
             <Button appearance="outline" icon={<ArrowSync20Regular />} onClick={() => workspaceId && loadList(workspaceId)} disabled={!workspaceId}>Refresh</Button>
             {/* Library & Environment: compact AML environment selector (Fabric ribbon parity). */}
-            <div style={{ display: 'flex', flexDirection: 'column', gap: 4, minWidth: 240 }}>
+            <div style={{ display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalXS, minWidth: 240 }}>
               <Caption1>Environment (libraries)</Caption1>
-              <div style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
+              <div style={{ display: 'flex', gap: tokens.spacingHorizontalXS, alignItems: 'center' }}>
                 <Select
                   aria-label="AML environment"
                   style={{ flex: 1 }}
@@ -1682,12 +1682,12 @@ export function NotebookEditor({ item, id }: Props) {
                 <DialogBody>
                   <DialogTitle>{workspaceType === 'aml' ? 'New notebook (Azure ML)' : 'Create notebook'}</DialogTitle>
                   <DialogContent>
-                    <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
-                      <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalS }}>
+                      <div style={{ display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalXS }}>
                         <Caption1>Name</Caption1>
                         <Input placeholder="My notebook" value={createName} onChange={(_, d) => setCreateName(d.value)} style={{ width: '100%' }} />
                       </div>
-                      <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+                      <div style={{ display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalXS }}>
                         <Caption1>Kernel</Caption1>
                         <Select aria-label="Kernel" value={createKernel} onChange={(_, d) => setCreateKernel(d.value as 'python' | 'r')}>
                           <option value="python">Python 3.10</option>
@@ -1799,11 +1799,11 @@ export function NotebookEditor({ item, id }: Props) {
                     <Caption1>No lakehouses found in this workspace. Create one first from the workspace +New menu.</Caption1>
                   )}
                   {availableLakehouses && availableLakehouses.length > 0 && (
-                    <div style={{ display: 'flex', flexDirection: 'column', gap: 4, maxHeight: 320, overflow: 'auto' }}>
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalXS, maxHeight: 320, overflow: 'auto' }}>
                       {availableLakehouses.map((lh) => {
                         const already = attachedSources.some(s => s.kind === 'lakehouse' && s.id === lh.id);
                         return (
-                          <div key={lh.id} style={{ display: 'flex', alignItems: 'center', gap: 8, padding: 6, border: `1px solid ${tokens.colorNeutralStroke2}`, borderRadius: 4 }}>
+                          <div key={lh.id} style={{ display: 'flex', alignItems: 'center', gap: tokens.spacingVerticalS, padding: tokens.spacingVerticalXS, border: `1px solid ${tokens.colorNeutralStroke2}`, borderRadius: tokens.borderRadiusMedium }}>
                             <div style={{ flex: 1 }}>
                               <Subtitle2>{lh.displayName}</Subtitle2>
                               {lh.description && <Caption1 style={{ display: 'block' }}>{lh.description}</Caption1>}
@@ -1885,14 +1885,14 @@ export function NotebookEditor({ item, id }: Props) {
                 {sessionReceipt.driverMemory ? ` · ${String(sessionReceipt.driverMemory)} driver memory` : ''}
                 {typeof sessionReceipt.heartbeatTimeoutInSecond === 'number' ? ` · ${Math.round((sessionReceipt.heartbeatTimeoutInSecond as number) / 60)} min timeout` : ''}
                 <br />
-                <code style={{ fontSize: 11 }}>{JSON.stringify(sessionReceipt)}</code>
+                <code style={{ fontSize: tokens.fontSizeBase100 }}>{JSON.stringify(sessionReceipt)}</code>
               </MessageBarBody>
             </MessageBar>
           )}
 
           {notebookId && (
             <>
-              <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: tokens.spacingVerticalS }}>
                 {dirty && <Badge appearance="outline" color="warning">unsaved</Badge>}
                 <Caption1>{cells.length} cell{cells.length === 1 ? '' : 's'} · default lang <code>{defaultLang}</code></Caption1>
                 <div style={{ flex: 1 }} />
@@ -1905,7 +1905,7 @@ export function NotebookEditor({ item, id }: Props) {
                   <option value="tsql">T-SQL</option>
                 </Select>
               </div>
-              <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+              <div style={{ display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalXS }}>
                 <CellAdder
                   onAddCode={() => insertCell(-1, 'code')}
                   onAddMarkdown={() => insertCell(-1, 'markdown')}
@@ -1915,7 +1915,7 @@ export function NotebookEditor({ item, id }: Props) {
                     key={c.id}
                     onDragOver={(e) => { if (dragIndexRef.current != null) { e.preventDefault(); setDragOverId(c.id); } }}
                     onDrop={(e) => { e.preventDefault(); onCellDrop(idx); }}
-                    style={dragOverId === c.id ? { outline: `2px dashed ${tokens.colorBrandStroke1}`, outlineOffset: 2, borderRadius: 4 } : undefined}
+                    style={dragOverId === c.id ? { outline: `2px dashed ${tokens.colorBrandStroke1}`, outlineOffset: 2, borderRadius: tokens.borderRadiusMedium } : undefined}
                   >
                     {c.type === 'code' ? (
                       <CodeCell
@@ -1983,7 +1983,7 @@ export function NotebookEditor({ item, id }: Props) {
                   </div>
                 ))}
               </div>
-              <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: tokens.spacingVerticalS }}>
                 <Subtitle2>Run history ({jobs.length})</Subtitle2>
                 <Button size="small" appearance="subtle" icon={<ArrowSync20Regular />} onClick={() => loadJobs(workspaceId, notebookId)}>Refresh</Button>
               </div>

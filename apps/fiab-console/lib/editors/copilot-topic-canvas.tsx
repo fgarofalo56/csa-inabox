@@ -32,23 +32,23 @@ import {
 } from '@/lib/copilot-studio/topic-model';
 
 const useStyles = makeStyles({
-  wrap: { display: 'flex', flexDirection: 'column', gap: 12, minWidth: 0 },
-  toolbar: { display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' },
-  steps: { display: 'flex', flexDirection: 'column', gap: 10 },
+  wrap: { display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalM, minWidth: 0 },
+  toolbar: { display: 'flex', gap: tokens.spacingHorizontalS, alignItems: 'center', flexWrap: 'wrap' },
+  steps: { display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalM },
   node: {
-    border: `1px solid ${tokens.colorNeutralStroke2}`, borderRadius: 6,
-    padding: 12, display: 'flex', flexDirection: 'column', gap: 8,
+    border: `1px solid ${tokens.colorNeutralStroke2}`, borderRadius: tokens.borderRadiusLarge,
+    padding: tokens.spacingVerticalM, display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalS,
     backgroundColor: tokens.colorNeutralBackground1,
   },
-  nodeHead: { display: 'flex', alignItems: 'center', gap: 8, justifyContent: 'space-between' },
-  nodeHeadLeft: { display: 'flex', alignItems: 'center', gap: 8 },
-  nodeActions: { display: 'flex', gap: 4 },
-  addRow: { display: 'flex', gap: 6, flexWrap: 'wrap' },
+  nodeHead: { display: 'flex', alignItems: 'center', gap: tokens.spacingHorizontalS, justifyContent: 'space-between' },
+  nodeHeadLeft: { display: 'flex', alignItems: 'center', gap: tokens.spacingHorizontalS },
+  nodeActions: { display: 'flex', gap: tokens.spacingHorizontalXS },
+  addRow: { display: 'flex', gap: tokens.spacingHorizontalXS, flexWrap: 'wrap' },
   branch: {
-    border: `1px dashed ${tokens.colorNeutralStroke2}`, borderRadius: 4,
-    padding: 8, display: 'flex', flexDirection: 'column', gap: 6, marginTop: 4,
+    border: `1px dashed ${tokens.colorNeutralStroke2}`, borderRadius: tokens.borderRadiusMedium,
+    padding: tokens.spacingVerticalS, display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalXS, marginTop: tokens.spacingVerticalXXS,
   },
-  phraseRow: { display: 'flex', gap: 6, alignItems: 'center' },
+  phraseRow: { display: 'flex', gap: tokens.spacingHorizontalXS, alignItems: 'center' },
 });
 
 // Each step carries a client id for stable React keys; kept out of the model.
@@ -311,7 +311,7 @@ function ConditionBody({ step, onPatch }: { step: ConditionStep & { _id: string 
   const firstMessage = (b: ConditionStep['branches'][number]) =>
     (b.steps.find((x) => x.kind === 'message') as any)?.text || '';
   return (
-    <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+    <div style={{ display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalXS }}>
       <Caption1>Branch on a condition; each branch can reply with a message. Use Code view for richer branch bodies.</Caption1>
       {step.branches.map((b, bi) => (
         <div key={bi} className={s.branch}>

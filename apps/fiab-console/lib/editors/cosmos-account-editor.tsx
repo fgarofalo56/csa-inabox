@@ -61,7 +61,7 @@ const useStyles = makeStyles({
     backgroundColor: tokens.colorNeutralBackground2,
   },
   tab: {
-    display: 'flex', alignItems: 'center', gap: 6, padding: '6px 8px 6px 12px',
+    display: 'flex', alignItems: 'center', gap: tokens.spacingHorizontalXS, paddingTop: tokens.spacingVerticalXS, paddingBottom: tokens.spacingVerticalXS, paddingRight: tokens.spacingHorizontalS, paddingLeft: tokens.spacingHorizontalM,
     borderRight: `1px solid ${tokens.colorNeutralStroke2}`,
     borderTop: '2px solid transparent',
     cursor: 'pointer', whiteSpace: 'nowrap', userSelect: 'none',
@@ -75,9 +75,9 @@ const useStyles = makeStyles({
     color: tokens.colorNeutralForeground1,
     fontWeight: tokens.fontWeightSemibold,
   },
-  tabLabel: { display: 'flex', alignItems: 'center', gap: 6 },
+  tabLabel: { display: 'flex', alignItems: 'center', gap: tokens.spacingHorizontalXS },
   tabClose: { minWidth: 16, width: 16, height: 16, padding: 0 },
-  panel: { flex: 1, minHeight: 0, overflow: 'auto', padding: '10px 12px', display: 'flex', flexDirection: 'column' },
+  panel: { flex: 1, minHeight: 0, overflow: 'auto', paddingTop: tokens.spacingVerticalM, paddingBottom: tokens.spacingVerticalM, paddingLeft: tokens.spacingHorizontalM, paddingRight: tokens.spacingHorizontalM, display: 'flex', flexDirection: 'column' },
 });
 
 interface WorkTab {
@@ -393,7 +393,7 @@ function GremlinExplorerPanel({ id }: { id: string }) {
   // LOOM_COSMOS_GREMLIN_ENDPOINT; this client mirror is informational only.
   const endpoint = process.env.NEXT_PUBLIC_LOOM_COSMOS_GREMLIN_ENDPOINT || '';
   return (
-    <div style={{ display: 'flex', flexDirection: 'column', gap: 12, minHeight: 0 }}>
+    <div style={{ display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalM, minHeight: 0 }}>
       <MessageBar intent={endpoint ? 'info' : 'warning'}>
         <MessageBarBody>
           <MessageBarTitle>Cosmos Gremlin (graph) API</MessageBarTitle>

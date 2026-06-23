@@ -128,7 +128,7 @@ function TableCardNodeImpl({ data, selected }: NodeProps) {
       style={{
         position: 'relative',
         width: NODE_W,
-        borderRadius: 8,
+        borderRadius: tokens.borderRadiusXLarge,
         background: tokens.colorNeutralBackground1,
         border: `1px solid ${selected ? tokens.colorBrandStroke1 : tokens.colorNeutralStroke2}`,
         boxShadow: selected ? `0 0 0 2px ${tokens.colorBrandBackground2}` : '0 1px 2px rgba(0,0,0,0.08)',
@@ -138,8 +138,8 @@ function TableCardNodeImpl({ data, selected }: NodeProps) {
     >
       {/* Header bar */}
       <div style={{
-        display: 'flex', alignItems: 'center', gap: 6,
-        padding: '6px 10px',
+        display: 'flex', alignItems: 'center', gap: tokens.spacingHorizontalS,
+        padding: `${tokens.spacingVerticalS} ${tokens.spacingHorizontalL}`,
         background: tokens.colorNeutralBackground2,
         borderBottom: `1px solid ${tokens.colorNeutralStroke2}`,
       }}>
@@ -163,15 +163,15 @@ function TableCardNodeImpl({ data, selected }: NodeProps) {
             className="nodrag"
             style={{
               position: 'relative',
-              display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8,
-              padding: '2px 12px', fontSize: 11, minHeight: 18,
+              display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: tokens.spacingHorizontalS,
+              padding: `${tokens.spacingVerticalXXS} ${tokens.spacingHorizontalM}`, fontSize: tokens.fontSizeBase100, minHeight: 18,
             }}
           >
             <Handle
               type="target" position={Position.Left} id={`col:${c.name}`}
               style={{ width: 7, height: 7, background: tokens.colorNeutralStroke1, border: 'none', left: -3 }}
             />
-            <span style={{ display: 'flex', alignItems: 'center', gap: 4, overflow: 'hidden' }}>
+            <span style={{ display: 'flex', alignItems: 'center', gap: tokens.spacingHorizontalXS, overflow: 'hidden' }}>
               {c.isPk && <span style={{ color: 'var(--loom-accent-amber, #b8860b)', display: 'inline-flex' }}><Key16Regular fontSize={12} /></span>}
               <span style={{
                 color: tokens.colorNeutralForeground1,
@@ -187,12 +187,12 @@ function TableCardNodeImpl({ data, selected }: NodeProps) {
           </div>
         ))}
         {cols.length > shown.length && (
-          <Caption1 style={{ color: tokens.colorNeutralForeground4, padding: '2px 12px' }}>
+          <Caption1 style={{ color: tokens.colorNeutralForeground4, padding: `${tokens.spacingVerticalXXS} ${tokens.spacingHorizontalM}` }}>
             +{cols.length - shown.length} more
           </Caption1>
         )}
         {cols.length === 0 && (
-          <Caption1 style={{ color: tokens.colorNeutralForeground4, padding: '4px 12px' }}>(no columns)</Caption1>
+          <Caption1 style={{ color: tokens.colorNeutralForeground4, padding: `${tokens.spacingVerticalXS} ${tokens.spacingHorizontalM}` }}>(no columns)</Caption1>
         )}
       </div>
     </div>
@@ -248,17 +248,17 @@ const useStyles = makeStyles({
     overflow: 'hidden',
     backgroundColor: tokens.colorNeutralBackground3,
     border: `1px solid ${tokens.colorNeutralStroke2}`,
-    borderRadius: '8px',
+    borderRadius: tokens.borderRadiusXLarge,
   },
   toolbar: {
-    display: 'flex', gap: '4px', alignItems: 'center',
+    display: 'flex', gap: tokens.spacingHorizontalXS, alignItems: 'center',
     backgroundColor: tokens.colorNeutralBackground1,
     border: `1px solid ${tokens.colorNeutralStroke2}`,
-    borderRadius: '6px', padding: '4px',
+    borderRadius: tokens.borderRadiusLarge, padding: tokens.spacingHorizontalXS,
   },
   empty: {
     position: 'absolute', inset: '0', display: 'flex', flexDirection: 'column',
-    alignItems: 'center', justifyContent: 'center', gap: '6px', textAlign: 'center', padding: '24px',
+    alignItems: 'center', justifyContent: 'center', gap: tokens.spacingVerticalS, textAlign: 'center', padding: tokens.spacingHorizontalXXL,
   },
 });
 
@@ -316,7 +316,7 @@ function ModelViewCanvasInner({
           targetHandle: `col:${r.toColumn}`,
           type: 'smoothstep',
           label: `${ends.from} — ${ends.to}${r.crossFilter === 'both' ? ' ⇄' : ''}`,
-          labelStyle: { fontSize: 10, fill: tokens.colorNeutralForeground2 },
+          labelStyle: { fontSize: tokens.fontSizeBase100, fill: tokens.colorNeutralForeground2 },
           animated: false,
           style: {
             stroke: color,
@@ -441,13 +441,13 @@ function ModelViewCanvasInner({
           <DialogBody>
             <DialogTitle>Create relationship</DialogTitle>
             <DialogContent>
-              <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+              <div style={{ display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalM }}>
                 {err && (
                   <MessageBar intent="error"><MessageBarBody><MessageBarTitle>Could not create</MessageBarTitle>{err}</MessageBarBody></MessageBar>
                 )}
                 {draft && (
                   <>
-                    <div style={{ display: 'flex', gap: 12 }}>
+                    <div style={{ display: 'flex', gap: tokens.spacingHorizontalM }}>
                       <Field label="From table" style={{ flex: 1 }}>
                         <Input value={draft.fromTable} readOnly aria-label="From table" />
                       </Field>
@@ -461,7 +461,7 @@ function ModelViewCanvasInner({
                         </Dropdown>
                       </Field>
                     </div>
-                    <div style={{ display: 'flex', gap: 12 }}>
+                    <div style={{ display: 'flex', gap: tokens.spacingHorizontalM }}>
                       <Field label="To table" style={{ flex: 1 }}>
                         <Input value={draft.toTable} readOnly aria-label="To table" />
                       </Field>
@@ -475,7 +475,7 @@ function ModelViewCanvasInner({
                         </Dropdown>
                       </Field>
                     </div>
-                    <div style={{ display: 'flex', gap: 12 }}>
+                    <div style={{ display: 'flex', gap: tokens.spacingHorizontalM }}>
                       <Field label="Cardinality" style={{ flex: 1 }}>
                         <Dropdown
                           value={cardinality}
@@ -564,8 +564,8 @@ function buildUrl(engine: ModelEngine, id: string, query?: Record<string, string
 }
 
 const panelStyles = makeStyles({
-  wrap: { display: 'flex', flexDirection: 'column', gap: 12 },
-  measuresHead: { display: 'flex', alignItems: 'center', gap: 8 },
+  wrap: { display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalM },
+  measuresHead: { display: 'flex', alignItems: 'center', gap: tokens.spacingHorizontalS },
 });
 
 export function ModelViewPanel({ engine, id, query, ready, notReadyMessage, measureKind, onUseInQuery }: ModelViewPanelProps) {
@@ -717,7 +717,7 @@ export function ModelViewPanel({ engine, id, query, ready, notReadyMessage, meas
           New measure
         </Button>
       </div>
-      <div style={{ overflow: 'auto', maxHeight: 240, border: `1px solid ${tokens.colorNeutralStroke2}`, borderRadius: 4 }}>
+      <div style={{ overflow: 'auto', maxHeight: 240, border: `1px solid ${tokens.colorNeutralStroke2}`, borderRadius: tokens.borderRadiusMedium }}>
         <Table aria-label="Measures" size="small">
           <TableHeader>
             <TableRow>
@@ -736,7 +736,7 @@ export function ModelViewPanel({ engine, id, query, ready, notReadyMessage, meas
                 <TableCell>{m.schema ? `${m.schema}.${m.name}` : m.name}</TableCell>
                 <TableCell><Badge appearance="outline" color={m.kind === 'cosmos' ? 'informative' : 'brand'}>{m.kind}</Badge></TableCell>
                 <TableCell style={{ maxWidth: 420, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-                  <code style={{ fontSize: 11 }}>{m.expression.slice(0, 160)}</code>
+                  <code style={{ fontSize: tokens.fontSizeBase100 }}>{m.expression.slice(0, 160)}</code>
                 </TableCell>
                 <TableCell>
                   <Tooltip content="Load this measure into the Query tab" relationship="label">
@@ -762,7 +762,7 @@ export function ModelViewPanel({ engine, id, query, ready, notReadyMessage, meas
           <DialogBody>
             <DialogTitle>New measure</DialogTitle>
             <DialogContent>
-              <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+              <div style={{ display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalM }}>
                 {mErr && (
                   <MessageBar intent="error"><MessageBarBody><MessageBarTitle>Could not save measure</MessageBarTitle>{mErr}</MessageBarBody></MessageBar>
                 )}
@@ -773,7 +773,7 @@ export function ModelViewPanel({ engine, id, query, ready, notReadyMessage, meas
                       : 'A Databricks measure is stored as Loom tabular metadata and is usable as a query CTE (no Power BI / Fabric dependency).'}
                   </MessageBarBody>
                 </MessageBar>
-                <div style={{ display: 'flex', gap: 12 }}>
+                <div style={{ display: 'flex', gap: tokens.spacingHorizontalM }}>
                   {measureKind === 'tvf' && (
                     <Field label="Schema" style={{ width: 160 }}>
                       <Input value={mSchema} onChange={(_, d) => setMSchema(d.value)} placeholder="dbo" />

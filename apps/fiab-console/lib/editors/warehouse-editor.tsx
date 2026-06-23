@@ -217,15 +217,15 @@ export function useWarehouseCopilot(
 const useStyles = makeStyles({
   assistBar: {
     display: 'flex',
-    gap: '6px',
-    padding: '4px 8px',
+    gap: tokens.spacingHorizontalXS,
+    padding: `${tokens.spacingVerticalXS} ${tokens.spacingHorizontalS}`,
     alignItems: 'center',
     borderTop: `1px solid ${tokens.colorNeutralStroke2}`,
     backgroundColor: tokens.colorNeutralBackground2,
   },
   assistResult: {
     fontFamily: 'Consolas, "Cascadia Code", monospace',
-    fontSize: '12px',
+    fontSize: tokens.fontSizeBase200,
     whiteSpace: 'pre-wrap',
     margin: 0,
     overflowX: 'auto',
@@ -385,7 +385,7 @@ export function WarehouseCopilotPanels({ copilot }: { copilot: WarehouseCopilot 
       {(copilot.view === 'suggestion' || copilot.view === 'explain-result') && copilot.result && (
         <MessageBar
           intent={copilot.view === 'explain-result' ? 'info' : 'success'}
-          style={{ margin: '4px 0 0' }}
+          style={{ margin: `${tokens.spacingVerticalXS} 0 0` }}
         >
           <MessageBarBody>
             <pre className={s.assistResult}>{copilot.result}</pre>
@@ -403,7 +403,7 @@ export function WarehouseCopilotPanels({ copilot }: { copilot: WarehouseCopilot 
         </MessageBar>
       )}
       {copilot.error && (
-        <MessageBar intent="error" style={{ margin: '4px 0 0' }}>
+        <MessageBar intent="error" style={{ margin: `${tokens.spacingVerticalXS} 0 0` }}>
           <MessageBarBody>{copilot.error}</MessageBarBody>
           <MessageBarActions>
             <Button size="small" onClick={copilot.dismissError}>

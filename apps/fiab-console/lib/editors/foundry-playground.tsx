@@ -91,32 +91,32 @@ const TASK_LABEL: Record<string, string> = {
 const PAGE_SIZE = 12;
 
 const useCatalogStyles = makeStyles({
-  root: { padding: 16, display: 'flex', flexDirection: 'column', gap: 12, minHeight: 0, flex: 1, overflow: 'auto' },
-  header: { display: 'flex', flexDirection: 'column', gap: 4 },
+  root: { padding: tokens.spacingVerticalL, display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalM, minHeight: 0, flex: 1, overflow: 'auto' },
+  header: { display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalXS },
   leaderboard: {
-    display: 'flex', alignItems: 'center', gap: 12, padding: '10px 14px', flexWrap: 'wrap',
-    backgroundColor: tokens.colorNeutralBackground2, border: `1px solid ${tokens.colorNeutralStroke2}`, borderRadius: 8,
+    display: 'flex', alignItems: 'center', gap: tokens.spacingHorizontalM, padding: `${tokens.spacingVerticalS} ${tokens.spacingHorizontalM}`, flexWrap: 'wrap',
+    backgroundColor: tokens.colorNeutralBackground2, border: `1px solid ${tokens.colorNeutralStroke2}`, borderRadius: tokens.borderRadiusLarge,
   },
-  filterBar: { display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'flex-end' },
+  filterBar: { display: 'flex', gap: tokens.spacingHorizontalS, flexWrap: 'wrap', alignItems: 'flex-end' },
   filterField: { minWidth: 150 },
-  countRow: { display: 'flex', alignItems: 'baseline', gap: 12, flexWrap: 'wrap' },
-  grid: { display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(280px, 1fr))', gap: 12 },
+  countRow: { display: 'flex', alignItems: 'baseline', gap: tokens.spacingHorizontalM, flexWrap: 'wrap' },
+  grid: { display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(280px, 1fr))', gap: tokens.spacingVerticalM },
   card: {
-    display: 'flex', flexDirection: 'column', gap: 8, padding: 14, cursor: 'pointer',
+    display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalS, padding: tokens.spacingVerticalM, cursor: 'pointer',
     ...shorthands.transition('box-shadow', '120ms'),
     ':hover': { boxShadow: tokens.shadow8 },
   },
   cardSelectable: { outline: `2px solid ${tokens.colorBrandStroke1}` },
-  cardTop: { display: 'flex', alignItems: 'center', gap: 10 },
+  cardTop: { display: 'flex', alignItems: 'center', gap: tokens.spacingHorizontalS },
   cardTitle: { display: 'flex', flexDirection: 'column', gap: 0, minWidth: 0 },
-  tagRow: { display: 'flex', gap: 6, flexWrap: 'wrap' },
-  pager: { display: 'flex', gap: 8, alignItems: 'center', justifyContent: 'center', paddingTop: 8 },
+  tagRow: { display: 'flex', gap: tokens.spacingHorizontalXS, flexWrap: 'wrap' },
+  pager: { display: 'flex', gap: tokens.spacingHorizontalS, alignItems: 'center', justifyContent: 'center', paddingTop: tokens.spacingVerticalS },
   // detail panel
-  detail: { padding: 16, display: 'flex', flexDirection: 'column', gap: 12, minHeight: 0, flex: 1, overflow: 'auto' },
-  detailHead: { display: 'flex', alignItems: 'center', gap: 12 },
-  metaGrid: { display: 'grid', gridTemplateColumns: 'auto 1fr', gap: '6px 16px', alignItems: 'baseline', maxWidth: 640 },
-  metaKey: { color: tokens.colorNeutralForeground3, fontSize: 12 },
-  empty: { padding: 24, color: tokens.colorNeutralForeground3, fontStyle: 'italic', textAlign: 'center' },
+  detail: { padding: tokens.spacingVerticalL, display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalM, minHeight: 0, flex: 1, overflow: 'auto' },
+  detailHead: { display: 'flex', alignItems: 'center', gap: tokens.spacingHorizontalM },
+  metaGrid: { display: 'grid', gridTemplateColumns: 'auto 1fr', gap: `${tokens.spacingVerticalXS} ${tokens.spacingHorizontalL}`, alignItems: 'baseline', maxWidth: 640 },
+  metaKey: { color: tokens.colorNeutralForeground3, fontSize: tokens.fontSizeBase200 },
+  empty: { padding: tokens.spacingVerticalXXL, color: tokens.colorNeutralForeground3, fontStyle: 'italic', textAlign: 'center' },
 });
 
 function providerColor(p?: string): 'brand' | 'success' | 'warning' | 'danger' | 'important' | 'informative' | 'subtle' {
@@ -210,7 +210,7 @@ function DeployDialog({ model, open, onClose, onDeployed, acct }: {
         <DialogBody>
           <DialogTitle>Deploy {model?.name}</DialogTitle>
           <DialogContent>
-            <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+            <div style={{ display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalM }}>
               <Caption1>{model?.publisher} · {model?.inferenceTasks.map((t) => TASK_LABEL[t] || t).join(', ')}</Caption1>
               <Field label="Deployment name" required>
                 <Input value={deploymentName} onChange={(_, d) => setDeploymentName(d.value)} placeholder={model?.name} />
@@ -436,24 +436,24 @@ export function ModelCatalogPanel({ active, nonce, acct = null }: { active: bool
 
 const useChatStyles = makeStyles({
   root: { display: 'grid', gridTemplateColumns: '280px 1fr 300px', gap: 0, minHeight: 0, flex: 1, overflow: 'hidden' },
-  pane: { display: 'flex', flexDirection: 'column', gap: 12, padding: 16, overflow: 'auto', minHeight: 0 },
+  pane: { display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalM, padding: tokens.spacingVerticalL, overflow: 'auto', minHeight: 0 },
   leftPane: { borderRight: `1px solid ${tokens.colorNeutralStroke2}` },
   rightPane: { borderLeft: `1px solid ${tokens.colorNeutralStroke2}` },
   centerPane: { padding: 0 },
-  paneTitle: { display: 'flex', alignItems: 'center', gap: 8 },
-  thread: { flex: 1, overflow: 'auto', display: 'flex', flexDirection: 'column', gap: 12, padding: 16, minHeight: 0 },
-  bubbleRow: { display: 'flex', gap: 10, maxWidth: '85%' },
+  paneTitle: { display: 'flex', alignItems: 'center', gap: tokens.spacingHorizontalS },
+  thread: { flex: 1, overflow: 'auto', display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalM, padding: tokens.spacingVerticalL, minHeight: 0 },
+  bubbleRow: { display: 'flex', gap: tokens.spacingHorizontalS, maxWidth: '85%' },
   bubbleRowUser: { alignSelf: 'flex-end', flexDirection: 'row-reverse' },
   bubble: {
-    padding: '10px 14px', borderRadius: 10, whiteSpace: 'pre-wrap', wordBreak: 'break-word',
+    padding: `${tokens.spacingVerticalS} ${tokens.spacingHorizontalM}`, borderRadius: tokens.borderRadiusLarge, whiteSpace: 'pre-wrap', wordBreak: 'break-word',
     backgroundColor: tokens.colorNeutralBackground3,
   },
   bubbleUser: { backgroundColor: tokens.colorBrandBackground2, color: tokens.colorNeutralForeground1 },
-  composer: { display: 'flex', gap: 8, alignItems: 'flex-end', padding: 16, borderTop: `1px solid ${tokens.colorNeutralStroke2}` },
+  composer: { display: 'flex', gap: tokens.spacingHorizontalS, alignItems: 'flex-end', padding: tokens.spacingVerticalL, borderTop: `1px solid ${tokens.colorNeutralStroke2}` },
   composerInput: { flex: 1 },
-  sliderRow: { display: 'flex', flexDirection: 'column', gap: 2 },
+  sliderRow: { display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalXXS },
   sliderHead: { display: 'flex', justifyContent: 'space-between', alignItems: 'baseline' },
-  centerHead: { display: 'flex', alignItems: 'center', gap: 12, padding: '12px 16px', borderBottom: `1px solid ${tokens.colorNeutralStroke2}`, flexWrap: 'wrap' },
+  centerHead: { display: 'flex', alignItems: 'center', gap: tokens.spacingHorizontalM, padding: `${tokens.spacingVerticalM} ${tokens.spacingHorizontalL}`, borderBottom: `1px solid ${tokens.colorNeutralStroke2}`, flexWrap: 'wrap' },
   empty: { margin: 'auto', color: tokens.colorNeutralForeground3, textAlign: 'center', maxWidth: 420 },
 });
 
@@ -552,7 +552,7 @@ response = client.chat.completions.create(
 print(response.choices[0].message.content)`, [deployment, system, temperature, maxTokens, topP, stopSeq]);
 
   if (!active) return null;
-  if (deps.loading) return <div style={{ padding: 16 }}><Spinner size="small" label="Loading deployments…" labelPosition="after" /></div>;
+  if (deps.loading) return <div style={{ padding: tokens.spacingVerticalL }}><Spinner size="small" label="Loading deployments…" labelPosition="after" /></div>;
 
   const noChatModel = !deps.error && deployments.length === 0;
 
@@ -584,12 +584,12 @@ print(response.choices[0].message.content)`, [deployment, system, temperature, m
         </div>
 
         {deps.error && (
-          <div style={{ padding: 16 }}>
+          <div style={{ padding: tokens.spacingVerticalL }}>
             <GateBar title="Could not list deployments" msg={deps.error} hint={deps.hint} intent={deps.notDeployed ? 'warning' : 'error'} />
           </div>
         )}
         {noChatModel && (
-          <div style={{ padding: 16 }}>
+          <div style={{ padding: tokens.spacingVerticalL }}>
             <GateBar title="No model deployed" intent="warning"
               msg="There are no model deployments on this account yet."
               hint="Open the Model catalog tab, pick a chat-completion model (e.g. gpt-4o-mini) and Deploy it, then return here to chat." />
@@ -600,7 +600,7 @@ print(response.choices[0].message.content)`, [deployment, system, temperature, m
           {thread.length === 0 && !noChatModel && (
             <div className={s.empty}>
               <ChatMultiple24Regular fontSize={32} />
-              <Body1 block style={{ marginTop: 8 }}>Start chatting with your deployed model.</Body1>
+              <Body1 block style={{ marginTop: tokens.spacingVerticalS }}>Start chatting with your deployed model.</Body1>
               <Caption1>Messages call the real Azure OpenAI chat/completions endpoint for the selected deployment.</Caption1>
             </div>
           )}
@@ -654,7 +654,7 @@ print(response.choices[0].message.content)`, [deployment, system, temperature, m
           <Input value={stopSeq} onChange={(_, d) => setStopSeq(d.value)} placeholder="e.g. \n, ###" />
         </Field>
         <Divider />
-        <div style={{ display: 'flex', gap: 8 }}>
+        <div style={{ display: 'flex', gap: tokens.spacingHorizontalS }}>
           <Button size="small" icon={<Code20Regular />} onClick={() => setShowCode(true)}>View code</Button>
           <Button size="small" appearance="primary" icon={<Rocket20Regular />}
             onClick={() => window.open('https://ai.azure.com/resource/deployments', '_blank', 'noopener,noreferrer')}>Deploy</Button>
@@ -666,7 +666,7 @@ print(response.choices[0].message.content)`, [deployment, system, temperature, m
           <DialogBody>
             <DialogTitle>View code — Python (Azure OpenAI SDK)</DialogTitle>
             <DialogContent>
-              <pre style={{ whiteSpace: 'pre-wrap', fontFamily: 'Consolas, monospace', fontSize: 12, background: tokens.colorNeutralBackground3, padding: 12, borderRadius: 6 }}>{codeSnippet}</pre>
+              <pre style={{ whiteSpace: 'pre-wrap', fontFamily: 'Consolas, monospace', fontSize: tokens.fontSizeBase200, background: tokens.colorNeutralBackground3, padding: tokens.spacingVerticalM, borderRadius: tokens.borderRadiusLarge }}>{codeSnippet}</pre>
             </DialogContent>
             <DialogActions>
               <Button onClick={() => navigator.clipboard?.writeText(codeSnippet)}>Copy</Button>
@@ -682,10 +682,10 @@ print(response.choices[0].message.content)`, [deployment, system, temperature, m
 // ============================================================ Playgrounds landing
 
 const useLandingStyles = makeStyles({
-  root: { padding: 16, display: 'flex', flexDirection: 'column', gap: 12, overflow: 'auto', flex: 1, minHeight: 0 },
-  grid: { display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(240px, 1fr))', gap: 12 },
-  tile: { display: 'flex', flexDirection: 'column', gap: 8, padding: 16 },
-  tileHead: { display: 'flex', alignItems: 'center', gap: 10 },
+  root: { padding: tokens.spacingVerticalL, display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalM, overflow: 'auto', flex: 1, minHeight: 0 },
+  grid: { display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(240px, 1fr))', gap: tokens.spacingVerticalM },
+  tile: { display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalS, padding: tokens.spacingVerticalL },
+  tileHead: { display: 'flex', alignItems: 'center', gap: tokens.spacingHorizontalS },
 });
 
 export function PlaygroundsLandingPanel({ active, onOpenChat, onOpenImages, onOpenAudio }: {
@@ -720,15 +720,15 @@ export function PlaygroundsLandingPanel({ active, onOpenChat, onOpenImages, onOp
 // ============================================================ Images playground
 
 const useMediaStyles = makeStyles({
-  root: { padding: 16, display: 'flex', flexDirection: 'column', gap: 12, overflow: 'auto', flex: 1, minHeight: 0 },
-  twoCol: { display: 'grid', gridTemplateColumns: 'minmax(280px, 360px) 1fr', gap: 16, alignItems: 'start' },
-  panel: { display: 'flex', flexDirection: 'column', gap: 12, padding: 16 },
+  root: { padding: tokens.spacingVerticalL, display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalM, overflow: 'auto', flex: 1, minHeight: 0 },
+  twoCol: { display: 'grid', gridTemplateColumns: 'minmax(280px, 360px) 1fr', gap: tokens.spacingHorizontalL, alignItems: 'start' },
+  panel: { display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalM, padding: tokens.spacingVerticalL },
   // Result panel keeps a stable height so the empty / loading placeholder reads
   // as an intentional, centered drop-zone rather than a collapsed card.
-  resultPanel: { display: 'flex', flexDirection: 'column', gap: 12, padding: 16, minHeight: 320 },
-  resultGrid: { display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(220px, 1fr))', gap: 12 },
-  img: { width: '100%', maxHeight: 360, objectFit: 'contain', backgroundColor: tokens.colorNeutralBackground3, borderRadius: 8, border: `1px solid ${tokens.colorNeutralStroke2}` },
-  empty: { margin: 'auto', color: tokens.colorNeutralForeground3, textAlign: 'center', padding: 24 },
+  resultPanel: { display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalM, padding: tokens.spacingVerticalL, minHeight: 320 },
+  resultGrid: { display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(220px, 1fr))', gap: tokens.spacingVerticalM },
+  img: { width: '100%', maxHeight: 360, objectFit: 'contain', backgroundColor: tokens.colorNeutralBackground3, borderRadius: tokens.borderRadiusLarge, border: `1px solid ${tokens.colorNeutralStroke2}` },
+  empty: { margin: 'auto', color: tokens.colorNeutralForeground3, textAlign: 'center', padding: tokens.spacingVerticalXXL },
 });
 
 /** Heuristic: which deployed models can generate images. */
@@ -808,7 +808,7 @@ print(result.data[0].url)`, [deployment, prompt, n, size, quality, style]);
 
   return (
     <div className={s.root}>
-      <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+      <div style={{ display: 'flex', alignItems: 'center', gap: tokens.spacingHorizontalS }}>
         <Image24Regular /><Subtitle1>Images playground</Subtitle1>
         <Badge appearance="tint" color="brand">Preview</Badge>
       </div>
@@ -852,7 +852,7 @@ print(result.data[0].url)`, [deployment, prompt, n, size, quality, style]);
             <Field label="Number of images">
               <Input type="number" value={n} onChange={(_, d) => setN(d.value)} min={1} max={4} />
             </Field>
-            <div style={{ display: 'flex', gap: 8 }}>
+            <div style={{ display: 'flex', gap: tokens.spacingHorizontalS }}>
               <Button appearance="primary" icon={<Image24Regular />} disabled={busy || !deployment || !prompt.trim()} onClick={generate}>{busy ? 'Generating…' : 'Generate'}</Button>
               <Button icon={<Code20Regular />} onClick={() => setShowCode(true)}>View code</Button>
             </div>
@@ -861,11 +861,11 @@ print(result.data[0].url)`, [deployment, prompt, n, size, quality, style]);
           <Card className={s.resultPanel}>
             <Subtitle2>Result</Subtitle2>
             {busy ? <div className={s.empty}><Spinner size="small" label="Generating image…" labelPosition="after" /></div> : images.length === 0 ? (
-              <div className={s.empty}><Image24Regular fontSize={32} /><Body1 block style={{ marginTop: 8 }}>Generated images appear here.</Body1></div>
+              <div className={s.empty}><Image24Regular fontSize={32} /><Body1 block style={{ marginTop: tokens.spacingVerticalS }}>Generated images appear here.</Body1></div>
             ) : (
               <div className={s.resultGrid}>
                 {images.map((img, i) => (
-                  <div key={i} style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+                  <div key={i} style={{ display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalXS }}>
                     <img className={s.img} alt={img.revised_prompt || `Generated image ${i + 1}`}
                       src={img.url || (img.b64_json ? `data:image/png;base64,${img.b64_json}` : '')} />
                     {img.revised_prompt ? <Caption1>{img.revised_prompt}</Caption1> : null}
@@ -882,7 +882,7 @@ print(result.data[0].url)`, [deployment, prompt, n, size, quality, style]);
           <DialogBody>
             <DialogTitle>View code — Python (Azure OpenAI SDK)</DialogTitle>
             <DialogContent>
-              <pre style={{ whiteSpace: 'pre-wrap', fontFamily: 'Consolas, monospace', fontSize: 12, background: tokens.colorNeutralBackground3, padding: 12, borderRadius: 6 }}>{codeSnippet}</pre>
+              <pre style={{ whiteSpace: 'pre-wrap', fontFamily: 'Consolas, monospace', fontSize: tokens.fontSizeBase200, background: tokens.colorNeutralBackground3, padding: tokens.spacingVerticalM, borderRadius: tokens.borderRadiusLarge }}>{codeSnippet}</pre>
             </DialogContent>
             <DialogActions>
               <Button onClick={() => navigator.clipboard?.writeText(codeSnippet)}>Copy</Button>
@@ -936,7 +936,7 @@ export function AudioPlaygroundPanel({ active, nonce, acct = null }: { active: b
 
   return (
     <div className={s.root}>
-      <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+      <div style={{ display: 'flex', alignItems: 'center', gap: tokens.spacingHorizontalS }}>
         <MicRecord24Regular /><Subtitle1>Audio playground</Subtitle1>
         <Badge appearance="tint" color="brand">Preview</Badge>
       </div>

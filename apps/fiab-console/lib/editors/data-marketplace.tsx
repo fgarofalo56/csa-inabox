@@ -41,32 +41,32 @@ import type { FabricItemType } from '@/lib/catalog/fabric-item-types';
 import type { RibbonTab } from '@/lib/components/ribbon';
 
 const useStyles = makeStyles({
-  pad: { padding: 16, display: 'flex', flexDirection: 'column', gap: 12, flex: 1, minHeight: 0 },
-  tabs: { borderBottom: `1px solid ${tokens.colorNeutralStroke2}`, paddingBottom: 4 },
-  searchRow: { display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' },
+  pad: { padding: tokens.spacingHorizontalL, display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalM, flex: 1, minHeight: 0 },
+  tabs: { borderBottom: `1px solid ${tokens.colorNeutralStroke2}`, paddingBottom: tokens.spacingVerticalXS },
+  searchRow: { display: 'flex', gap: tokens.spacingHorizontalS, alignItems: 'center', flexWrap: 'wrap' },
   hint: { color: tokens.colorNeutralForeground3 },
-  discoverBody: { display: 'grid', gridTemplateColumns: 'minmax(220px, 250px) 1fr', gap: 16, minHeight: 0, flex: 1 },
+  discoverBody: { display: 'grid', gridTemplateColumns: 'minmax(220px, 250px) 1fr', gap: tokens.spacingHorizontalL, minHeight: 0, flex: 1 },
   facetPanel: {
-    display: 'flex', flexDirection: 'column', gap: 12, overflowY: 'auto',
-    borderRight: `1px solid ${tokens.colorNeutralStroke2}`, paddingRight: 12, maxHeight: 540,
+    display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalM, overflowY: 'auto',
+    borderRight: `1px solid ${tokens.colorNeutralStroke2}`, paddingRight: tokens.spacingHorizontalM, maxHeight: 540,
   },
-  facetGroup: { display: 'flex', flexDirection: 'column', gap: 2 },
-  facetRow: { display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 4 },
-  results: { display: 'flex', flexDirection: 'column', gap: 10, overflowY: 'auto', maxHeight: 560 },
-  chips: { display: 'flex', gap: 6, flexWrap: 'wrap', alignItems: 'center' },
-  resultCard: { padding: 12 },
-  cardMeta: { display: 'flex', gap: 6, flexWrap: 'wrap', marginTop: 6, alignItems: 'center' },
-  cardActions: { display: 'flex', gap: 8, marginTop: 8 },
-  domainGrid: { display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(200px, 1fr))', gap: 12 },
-  domainCard: { padding: 16, cursor: 'pointer', display: 'flex', flexDirection: 'column', gap: 6 },
-  field: { display: 'flex', flexDirection: 'column', gap: 4, minWidth: 220 },
-  formGrid: { display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(240px, 1fr))', gap: 12 },
+  facetGroup: { display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalXXS },
+  facetRow: { display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: tokens.spacingHorizontalXS },
+  results: { display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalS, overflowY: 'auto', maxHeight: 560 },
+  chips: { display: 'flex', gap: tokens.spacingHorizontalS, flexWrap: 'wrap', alignItems: 'center' },
+  resultCard: { padding: tokens.spacingHorizontalM },
+  cardMeta: { display: 'flex', gap: tokens.spacingHorizontalS, flexWrap: 'wrap', marginTop: tokens.spacingVerticalS, alignItems: 'center' },
+  cardActions: { display: 'flex', gap: tokens.spacingHorizontalS, marginTop: tokens.spacingVerticalS },
+  domainGrid: { display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(200px, 1fr))', gap: tokens.spacingHorizontalM },
+  domainCard: { padding: tokens.spacingHorizontalL, cursor: 'pointer', display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalS },
+  field: { display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalXS, minWidth: 220 },
+  formGrid: { display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(240px, 1fr))', gap: tokens.spacingHorizontalM },
   receipt: {
-    fontFamily: 'Consolas, monospace', fontSize: 11, whiteSpace: 'pre-wrap',
-    background: tokens.colorNeutralBackground2, padding: 8, borderRadius: 4,
+    fontFamily: 'Consolas, monospace', fontSize: tokens.fontSizeBase100, whiteSpace: 'pre-wrap',
+    background: tokens.colorNeutralBackground2, padding: tokens.spacingVerticalS, borderRadius: tokens.borderRadiusSmall,
     maxHeight: 220, overflow: 'auto',
   },
-  empty: { padding: 24, textAlign: 'center', color: tokens.colorNeutralForeground3 },
+  empty: { padding: tokens.spacingHorizontalXXL, textAlign: 'center', color: tokens.colorNeutralForeground3 },
 });
 
 const PRODUCT_TYPES = ['Lakehouse', 'Warehouse', 'Dataset', 'Semantic model', 'KQL database', 'Report', 'API', 'Notebook'];
@@ -702,7 +702,7 @@ function PublishTab({
                   </Select>
                 </Field>
               </div>
-              <Field label="Description" className={styles.field} style={{ marginTop: 12 }}>
+              <Field label="Description" className={styles.field} style={{ marginTop: tokens.spacingVerticalM }}>
                 <Textarea value={desc} onChange={(_, d) => setDesc(d.value)} />
               </Field>
               {err && <MessageBar intent="error"><MessageBarBody>{err}</MessageBarBody></MessageBar>}

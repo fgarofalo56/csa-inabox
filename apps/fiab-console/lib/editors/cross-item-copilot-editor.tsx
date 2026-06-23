@@ -434,7 +434,7 @@ export function CopilotConsoleView({ embedded = false, contextSlug = 'default', 
                   {status.aoai?.ok
                     ? `AOAI reachable (${status.aoai.deployment}) · ${status.tools?.count ?? 0} tools registered.`
                     : `AOAI not reachable — ${status.aoai?.error || 'unknown'}. ${status.tools?.count ?? 0} tools still callable directly via the right rail.`}
-                  {status.aoai?.remediation && <div style={{ marginTop: 6, fontSize: 12 }}>{status.aoai.remediation}</div>}
+                  {status.aoai?.remediation && <div style={{ marginTop: tokens.spacingVerticalS, fontSize: tokens.fontSizeBase200 }}>{status.aoai.remediation}</div>}
                 </MessageBarBody>
                 <MessageBarActions>
                   {!status.aoai?.ok && (

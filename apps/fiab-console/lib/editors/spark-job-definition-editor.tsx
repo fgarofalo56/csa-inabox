@@ -44,26 +44,26 @@ import type { RibbonTab } from '@/lib/components/ribbon';
 import { KeyValueGrid } from '@/lib/components/ui/key-value-grid';
 
 const useStyles = makeStyles({
-  tabBar: { padding: '8px 16px 0', borderBottom: `1px solid ${tokens.colorNeutralStroke2}` },
-  tabBody: { padding: 20, display: 'flex', flexDirection: 'column', gap: 12, maxWidth: 900 },
-  row: { display: 'flex', gap: 12 },
-  field: { flex: 1, display: 'flex', flexDirection: 'column', gap: 4 },
-  fileRow: { display: 'flex', gap: 8, alignItems: 'flex-end' },
-  refList: { display: 'flex', flexDirection: 'column', gap: 6 },
-  refItem: { display: 'flex', gap: 8, alignItems: 'center' },
+  tabBar: { padding: `${tokens.spacingVerticalS} ${tokens.spacingHorizontalL} 0`, borderBottom: `1px solid ${tokens.colorNeutralStroke2}` },
+  tabBody: { padding: tokens.spacingVerticalXL, display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalM, maxWidth: 900 },
+  row: { display: 'flex', gap: tokens.spacingHorizontalM },
+  field: { flex: 1, display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalXS },
+  fileRow: { display: 'flex', gap: tokens.spacingHorizontalS, alignItems: 'flex-end' },
+  refList: { display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalS },
+  refItem: { display: 'flex', gap: tokens.spacingHorizontalS, alignItems: 'center' },
   refUri: {
-    flex: 1, fontFamily: 'Consolas, "Cascadia Code", monospace', fontSize: 12,
-    padding: '4px 8px', borderRadius: 4, backgroundColor: tokens.colorNeutralBackground3,
+    flex: 1, fontFamily: 'Consolas, "Cascadia Code", monospace', fontSize: tokens.fontSizeBase200,
+    padding: `${tokens.spacingVerticalXS} ${tokens.spacingHorizontalS}`, borderRadius: tokens.borderRadiusMedium, backgroundColor: tokens.colorNeutralBackground3,
     overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
   },
-  toolbar: { display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap', marginTop: 8 },
-  resultBox: { marginTop: 8, borderTop: `1px solid ${tokens.colorNeutralStroke2}`, paddingTop: 12 },
-  mono: { fontFamily: 'Consolas, "Cascadia Code", monospace', fontSize: 12 },
+  toolbar: { display: 'flex', gap: tokens.spacingHorizontalS, alignItems: 'center', flexWrap: 'wrap', marginTop: tokens.spacingVerticalS },
+  resultBox: { marginTop: tokens.spacingVerticalS, borderTop: `1px solid ${tokens.colorNeutralStroke2}`, paddingTop: tokens.spacingVerticalM },
+  mono: { fontFamily: 'Consolas, "Cascadia Code", monospace', fontSize: tokens.fontSizeBase200 },
   logPre: {
-    margin: 0, maxHeight: 320, overflow: 'auto', padding: 10,
-    fontFamily: 'Consolas, "Cascadia Code", monospace', fontSize: 12, lineHeight: '1.4',
+    margin: 0, maxHeight: 320, overflow: 'auto', padding: tokens.spacingVerticalS,
+    fontFamily: 'Consolas, "Cascadia Code", monospace', fontSize: tokens.fontSizeBase200, lineHeight: '1.4',
     backgroundColor: tokens.colorNeutralBackground3, color: tokens.colorNeutralForeground1,
-    borderRadius: 4, whiteSpace: 'pre-wrap', wordBreak: 'break-all',
+    borderRadius: tokens.borderRadiusMedium, whiteSpace: 'pre-wrap', wordBreak: 'break-all',
   },
 });
 
@@ -520,7 +520,7 @@ export function SparkJobDefinitionEditor({ item, id }: { item: FabricItemType; i
                   placeholder={'--input gold/sales\n--output gold/sales_agg'} />
               </div>
 
-              <Subtitle2 style={{ marginTop: 8 }}>Reference files</Subtitle2>
+              <Subtitle2 style={{ marginTop: tokens.spacingVerticalS }}>Reference files</Subtitle2>
               <Caption1>Optional additional files staged with the job. Paste abfss:// URIs, one per line.</Caption1>
               <div className={styles.row}>
                 <div className={styles.field}>
@@ -693,7 +693,7 @@ export function SparkJobDefinitionEditor({ item, id }: { item: FabricItemType; i
                 )}
 
                 {runs.length > 0 && (
-                  <div style={{ marginTop: 12 }}>
+                  <div style={{ marginTop: tokens.spacingVerticalM }}>
                     <Body1Strong>Driver logs</Body1Strong>
                     <Accordion multiple collapsible
                       onToggle={(_, d) => {
@@ -711,7 +711,7 @@ export function SparkJobDefinitionEditor({ item, id }: { item: FabricItemType; i
                             {logs[r.id]?.error && <ErrBar error={logs[r.id]!.error!} />}
                             {logs[r.id]?.text !== undefined && (
                               <>
-                                <Button size="small" appearance="subtle" onClick={() => loadLog(r.id)} style={{ marginBottom: 6 }}>
+                                <Button size="small" appearance="subtle" onClick={() => loadLog(r.id)} style={{ marginBottom: tokens.spacingVerticalXS }}>
                                   Reload log
                                 </Button>
                                 <pre className={styles.logPre}>{logs[r.id]!.text}</pre>

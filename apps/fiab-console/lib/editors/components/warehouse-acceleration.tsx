@@ -56,22 +56,22 @@ interface AccelerationStatus {
 }
 
 const useStyles = makeStyles({
-  header: { display: 'flex', alignItems: 'center', gap: '8px' },
+  header: { display: 'flex', alignItems: 'center', gap: tokens.spacingHorizontalS },
   hint: { color: tokens.colorNeutralForeground3 },
   badges: {
     display: 'flex',
-    gap: '6px',
+    gap: tokens.spacingHorizontalXS,
     alignItems: 'center',
     flexWrap: 'wrap',
-    marginBottom: '4px',
+    marginBottom: tokens.spacingVerticalXS,
   },
   // Each acceleration tier is a self-contained card so the GPU (opt-in) and
   // result-set-caching (Azure-native) tiers read as distinct, scannable units.
   card: {
     display: 'flex',
     flexDirection: 'column',
-    gap: '8px',
-    padding: '14px 16px',
+    gap: tokens.spacingVerticalS,
+    padding: `${tokens.spacingVerticalM} ${tokens.spacingHorizontalL}`,
     borderRadius: tokens.borderRadiusLarge,
     border: `1px solid ${tokens.colorNeutralStroke2}`,
     backgroundColor: tokens.colorNeutralBackground1,
@@ -79,16 +79,16 @@ const useStyles = makeStyles({
   cardHeader: {
     display: 'flex',
     alignItems: 'center',
-    gap: '8px',
+    gap: tokens.spacingHorizontalS,
     color: tokens.colorNeutralForeground1,
   },
   cardTitle: { fontWeight: tokens.fontWeightSemibold },
-  row: { display: 'flex', alignItems: 'center', gap: '12px' },
-  cardStack: { display: 'flex', flexDirection: 'column', gap: '12px', paddingTop: '8px' },
+  row: { display: 'flex', alignItems: 'center', gap: tokens.spacingHorizontalM },
+  cardStack: { display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalM, paddingTop: tokens.spacingVerticalS },
   footnote: {
     color: tokens.colorNeutralForeground3,
     display: 'block',
-    paddingTop: '8px',
+    paddingTop: tokens.spacingVerticalS,
   },
 });
 
@@ -289,12 +289,12 @@ export function WarehouseAcceleration({
             )}
 
             {notice && (
-              <MessageBar intent="success" style={{ marginTop: 8 }}>
+              <MessageBar intent="success" style={{ marginTop: tokens.spacingVerticalS }}>
                 <MessageBarBody>{notice}</MessageBarBody>
               </MessageBar>
             )}
             {error && (
-              <MessageBar intent="error" style={{ marginTop: 8 }}>
+              <MessageBar intent="error" style={{ marginTop: tokens.spacingVerticalS }}>
                 <MessageBarBody>{error}</MessageBarBody>
               </MessageBar>
             )}

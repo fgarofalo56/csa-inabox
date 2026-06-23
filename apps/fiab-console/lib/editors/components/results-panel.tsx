@@ -63,13 +63,13 @@ export interface BatchQueryResponse {
 }
 
 const useStyles = makeStyles({
-  box: { borderTop: `1px solid ${tokens.colorNeutralStroke2}`, paddingTop: 12, minHeight: 160, display: 'flex', flexDirection: 'column', gap: 8, minWidth: 0 },
-  meta: { display: 'flex', gap: 12, alignItems: 'center', flexWrap: 'wrap' },
-  actions: { marginLeft: 'auto', display: 'flex', gap: 4, alignItems: 'center' },
+  box: { borderTop: `1px solid ${tokens.colorNeutralStroke2}`, paddingTop: tokens.spacingVerticalM, minHeight: 160, display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalS, minWidth: 0 },
+  meta: { display: 'flex', gap: tokens.spacingHorizontalM, alignItems: 'center', flexWrap: 'wrap' },
+  actions: { marginLeft: 'auto', display: 'flex', gap: tokens.spacingHorizontalXS, alignItems: 'center' },
   search: { minWidth: 220 },
-  tableWrap: { overflow: 'auto', maxHeight: 360, border: `1px solid ${tokens.colorNeutralStroke2}`, borderRadius: 4 },
-  cell: { fontFamily: 'Consolas, monospace', fontSize: 12, whiteSpace: 'nowrap' },
-  selRow: { display: 'flex', gap: 12, alignItems: 'center', flexWrap: 'wrap' },
+  tableWrap: { overflow: 'auto', maxHeight: 360, border: `1px solid ${tokens.colorNeutralStroke2}`, borderRadius: tokens.borderRadiusMedium },
+  cell: { fontFamily: 'Consolas, monospace', fontSize: tokens.fontSizeBase200, whiteSpace: 'nowrap' },
+  selRow: { display: 'flex', gap: tokens.spacingHorizontalM, alignItems: 'center', flexWrap: 'wrap' },
 });
 
 export function formatCell(v: unknown): string {

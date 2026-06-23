@@ -54,19 +54,19 @@ import {
 } from './_ml-experiment-utils';
 
 const useStyles = makeStyles({
-  pad: { padding: '12px', display: 'flex', flexDirection: 'column', gap: '12px' },
+  pad: { padding: tokens.spacingVerticalM, display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalM },
   card: {
     border: `1px solid ${tokens.colorNeutralStroke2}`,
     borderRadius: tokens.borderRadiusMedium,
-    padding: '12px',
+    padding: tokens.spacingVerticalM,
     background: tokens.colorNeutralBackground1,
   },
-  toolbar: { display: 'flex', gap: '8px', alignItems: 'flex-end', flexWrap: 'wrap' },
+  toolbar: { display: 'flex', gap: tokens.spacingHorizontalS, alignItems: 'flex-end', flexWrap: 'wrap' },
   sortHeader: { cursor: 'pointer', userSelect: 'none' },
-  mono: { fontFamily: 'monospace', fontSize: '12px' },
-  legendRow: { display: 'flex', alignItems: 'center', gap: '6px' },
-  swatch: { width: '12px', height: '12px', borderRadius: '2px', display: 'inline-block' },
-  treeRow: { display: 'flex', alignItems: 'center', gap: '4px', padding: '2px 0', fontSize: '13px' },
+  mono: { fontFamily: 'monospace', fontSize: tokens.fontSizeBase200 },
+  legendRow: { display: 'flex', alignItems: 'center', gap: tokens.spacingHorizontalSNudge },
+  swatch: { width: '12px', height: '12px', borderRadius: tokens.borderRadiusSmall, display: 'inline-block' },
+  treeRow: { display: 'flex', alignItems: 'center', gap: tokens.spacingHorizontalXS, padding: `${tokens.spacingVerticalXXS} 0`, fontSize: tokens.fontSizeBase300 },
 });
 
 interface MlflowExperimentLite { experimentId: string; name: string; lastUpdateTime?: number; tags?: Record<string, string> }
@@ -111,7 +111,7 @@ function MetricStepChart({ series, metricLabel }: { series: ChartSeries[]; metri
   const yTicks = [yMin, (yMin + yMax) / 2, yMax];
   return (
     <svg width="100%" viewBox={`0 0 ${W} ${H}`} role="img" aria-label={`Metric ${metricLabel} step chart`}
-      style={{ border: `1px solid ${tokens.colorNeutralStroke2}`, borderRadius: 6, background: tokens.colorNeutralBackground2, maxWidth: W }}>
+      style={{ border: `1px solid ${tokens.colorNeutralStroke2}`, borderRadius: tokens.borderRadiusLarge, background: tokens.colorNeutralBackground2, maxWidth: W }}>
       {yTicks.map((t, i) => (
         <g key={i}>
           <line x1={padL} y1={sy(t)} x2={W - padR} y2={sy(t)} stroke={tokens.colorNeutralStroke3} strokeWidth={1} />
@@ -156,7 +156,7 @@ function ParallelCoordinates({ runs, axes }: { runs: MlflowRunLite[]; axes: Para
   const valY = (norm: number) => padT + innerH - norm * innerH;
   return (
     <svg width="100%" viewBox={`0 0 ${W} ${H}`} role="img" aria-label="Parallel coordinates of selected runs"
-      style={{ border: `1px solid ${tokens.colorNeutralStroke2}`, borderRadius: 6, background: tokens.colorNeutralBackground2, maxWidth: W }}>
+      style={{ border: `1px solid ${tokens.colorNeutralStroke2}`, borderRadius: tokens.borderRadiusLarge, background: tokens.colorNeutralBackground2, maxWidth: W }}>
       {/* axes */}
       {axes.map((ax, i) => (
         <g key={columnId(ax.col)}>
@@ -250,8 +250,8 @@ function ArtifactTree({ runId }: { runId: string }) {
             </span>
           )}
           <span>{node.path.split('/').pop() || node.path}</span>
-          {!node.isDir && <Caption1 style={{ color: tokens.colorNeutralForeground3, marginLeft: 8 }}>{fmtBytes(node.fileSize)}</Caption1>}
-          {node.isDir && loading[node.path] && <Spinner size="extra-tiny" style={{ marginLeft: 8 }} />}
+          {!node.isDir && <Caption1 style={{ color: tokens.colorNeutralForeground3, marginLeft: tokens.spacingHorizontalS }}>{fmtBytes(node.fileSize)}</Caption1>}
+          {node.isDir && loading[node.path] && <Spinner size="extra-tiny" style={{ marginLeft: tokens.spacingHorizontalS }} />}
         </div>,
       ];
       if (node.isDir && isOpen) rows.push(...renderLevel(node.path, depth + 1));
@@ -525,7 +525,7 @@ function MlExperimentEditorBody({ item, id }: { item: FabricItemType; id: string
 
           {!loading && configured && (
             <>
-              <div style={{ display: 'flex', alignItems: 'baseline', gap: 12, flexWrap: 'wrap' }}>
+              <div style={{ display: 'flex', alignItems: 'baseline', gap: tokens.spacingHorizontalM, flexWrap: 'wrap' }}>
                 <Subtitle2>Experiment: {experiment?.name || id}</Subtitle2>
                 <Caption1 style={{ color: tokens.colorNeutralForeground3 }}>
                   {experiment?.experimentId ? `id ${experiment.experimentId} · ` : ''}{runs.length} run(s)
@@ -540,7 +540,7 @@ function MlExperimentEditorBody({ item, id }: { item: FabricItemType; id: string
 
               {/* ---------- RUNS ---------- */}
               {view === 'runs' && (
-                <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+                <div style={{ display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalMNudge }}>
                   <div className={s.toolbar}>
                     <Field label="Filter rows (name / param / metric)" style={{ minWidth: 240 }}>
                       <Input value={localSearch} onChange={(_, d) => setLocalSearch(d.value)} placeholder="e.g. lr, accuracy, run-42" />
@@ -642,9 +642,9 @@ function MlExperimentEditorBody({ item, id }: { item: FabricItemType; id: string
 
               {/* ---------- DETAIL ---------- */}
               {view === 'detail' && selectedRun && (
-                <div className={s.card} style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+                <div className={s.card} style={{ display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalM }}>
                   <Subtitle2>Run: {selectedRun.runName || selectedRun.runId}</Subtitle2>
-                  <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+                  <div style={{ display: 'flex', gap: tokens.spacingHorizontalS, flexWrap: 'wrap' }}>
                     <Badge appearance="outline" color={statusColor(selectedRun.status)}>{selectedRun.status || '—'}</Badge>
                     <Badge appearance="outline">start: {fmtEpochMs(selectedRun.startTime)}</Badge>
                     <Badge appearance="outline">end: {fmtEpochMs(selectedRun.endTime)}</Badge>
@@ -659,7 +659,7 @@ function MlExperimentEditorBody({ item, id }: { item: FabricItemType; id: string
                   </TabList>
 
                   {detailTab === 'metrics' && (
-                    <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalS }}>
                       <div className={s.toolbar}>
                         <Field label="Metric">
                           <Dropdown
@@ -734,13 +734,13 @@ function MlExperimentEditorBody({ item, id }: { item: FabricItemType; id: string
 
               {/* ---------- COMPARE ---------- */}
               {view === 'compare' && (
-                <div className={s.card} style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+                <div className={s.card} style={{ display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalM }}>
                   <Subtitle2>Compare {checkedRuns.length} runs</Subtitle2>
                   {checkedRuns.length < 2 ? (
                     <MessageBar intent="info"><MessageBarBody>Select at least 2 runs (checkboxes in the Runs tab) to compare.</MessageBarBody></MessageBar>
                   ) : (
                     <>
-                      <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+                      <div style={{ display: 'flex', gap: tokens.spacingHorizontalS, flexWrap: 'wrap' }}>
                         {checkedRuns.map((r, i) => (
                           <span key={r.runId} className={s.legendRow}>
                             <span className={s.swatch} style={{ background: compareColor(i) }} />
@@ -768,12 +768,12 @@ function MlExperimentEditorBody({ item, id }: { item: FabricItemType; id: string
                         ? <MetricStepChart metricLabel={compareMetric} series={compareSeries} />
                         : !compareLoading && compareMetric && <Caption1 style={{ color: tokens.colorNeutralForeground3 }}>No step history for <code>{compareMetric}</code> on the selected runs.</Caption1>}
 
-                      <Subtitle2 style={{ marginTop: 8 }}>Parallel coordinates</Subtitle2>
+                      <Subtitle2 style={{ marginTop: tokens.spacingVerticalS }}>Parallel coordinates</Subtitle2>
                       {parallelAxes.length > 0
                         ? <ParallelCoordinates runs={checkedRuns} axes={parallelAxes} />
                         : <Caption1 style={{ color: tokens.colorNeutralForeground3 }}>No numeric metrics/params to plot across the selected runs.</Caption1>}
 
-                      <Subtitle2 style={{ marginTop: 8 }}>Side-by-side</Subtitle2>
+                      <Subtitle2 style={{ marginTop: tokens.spacingVerticalS }}>Side-by-side</Subtitle2>
                       <div style={{ overflowX: 'auto' }}>
                         <Table aria-label="Compare runs" size="small">
                           <TableHeader>

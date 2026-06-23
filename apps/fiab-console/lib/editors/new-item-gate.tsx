@@ -41,18 +41,18 @@ import type { FabricItemType } from '@/lib/catalog/fabric-item-types';
 import type { RibbonTab } from '@/lib/components/ribbon';
 
 const useStyles = makeStyles({
-  pad: { padding: 16, display: 'flex', flexDirection: 'column', gap: 16, maxWidth: 640 },
-  field: { display: 'flex', flexDirection: 'column', gap: 4 },
-  actions: { display: 'flex', gap: 12, alignItems: 'center', marginTop: 4 },
-  list: { display: 'flex', flexDirection: 'column', gap: 6, marginTop: 4 },
+  pad: { padding: tokens.spacingVerticalL, display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalL, maxWidth: 640 },
+  field: { display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalXS },
+  actions: { display: 'flex', gap: tokens.spacingHorizontalM, alignItems: 'center', marginTop: tokens.spacingVerticalXS },
+  list: { display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalS, marginTop: tokens.spacingVerticalXS },
   row: {
-    display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 12,
-    padding: '8px 12px', border: `1px solid ${tokens.colorNeutralStroke2}`, borderRadius: 6,
+    display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: tokens.spacingHorizontalM,
+    padding: `${tokens.spacingVerticalS} ${tokens.spacingHorizontalM}`, border: `1px solid ${tokens.colorNeutralStroke2}`, borderRadius: tokens.borderRadiusLarge,
     cursor: 'pointer',
   },
   rowActive: {
-    display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 12,
-    padding: '8px 12px', border: `2px solid ${tokens.colorBrandStroke1}`, borderRadius: 6,
+    display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: tokens.spacingHorizontalM,
+    padding: `${tokens.spacingVerticalS} ${tokens.spacingHorizontalM}`, border: `2px solid ${tokens.colorBrandStroke1}`, borderRadius: tokens.borderRadiusLarge,
     background: tokens.colorBrandBackground2, cursor: 'pointer',
   },
 });

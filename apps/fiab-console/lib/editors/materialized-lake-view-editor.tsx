@@ -54,22 +54,22 @@ import {
 } from '@/lib/azure/materialized-lake-view-model';
 
 const useStyles = makeStyles({
-  tabBar: { padding: '8px 16px 0', borderBottom: `1px solid ${tokens.colorNeutralStroke2}` },
-  tabBody: { padding: 20, display: 'flex', flexDirection: 'column', gap: 12, maxWidth: 1000 },
-  row: { display: 'flex', gap: 12, flexWrap: 'wrap' },
-  field: { flex: 1, minWidth: 180, display: 'flex', flexDirection: 'column', gap: 4 },
-  toolbar: { display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' },
-  mono: { fontFamily: 'Consolas, "Cascadia Code", monospace', fontSize: 12 },
+  tabBar: { padding: `${tokens.spacingVerticalS} ${tokens.spacingHorizontalL} 0`, borderBottom: `1px solid ${tokens.colorNeutralStroke2}` },
+  tabBody: { padding: tokens.spacingVerticalXXL, display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalM, maxWidth: 1000 },
+  row: { display: 'flex', gap: tokens.spacingHorizontalM, flexWrap: 'wrap' },
+  field: { flex: 1, minWidth: 180, display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalXS },
+  toolbar: { display: 'flex', gap: tokens.spacingHorizontalS, alignItems: 'center', flexWrap: 'wrap' },
+  mono: { fontFamily: 'Consolas, "Cascadia Code", monospace', fontSize: tokens.fontSizeBase200 },
   pre: {
-    margin: 0, maxHeight: 280, overflow: 'auto', padding: 10,
-    fontFamily: 'Consolas, "Cascadia Code", monospace', fontSize: 12, lineHeight: '1.4',
+    margin: 0, maxHeight: 280, overflow: 'auto', padding: tokens.spacingVerticalMNudge,
+    fontFamily: 'Consolas, "Cascadia Code", monospace', fontSize: tokens.fontSizeBase200, lineHeight: '1.4',
     backgroundColor: tokens.colorNeutralBackground3, color: tokens.colorNeutralForeground1,
-    borderRadius: 4, whiteSpace: 'pre-wrap', wordBreak: 'break-word',
+    borderRadius: tokens.borderRadiusMedium, whiteSpace: 'pre-wrap', wordBreak: 'break-word',
   },
-  constraintRow: { display: 'flex', gap: 8, alignItems: 'flex-end' },
-  lineageBox: { display: 'flex', flexDirection: 'column', gap: 6 },
-  lineageRow: { display: 'flex', gap: 8, alignItems: 'center', padding: '4px 0' },
-  chip: { padding: '2px 8px', borderRadius: 12, backgroundColor: tokens.colorNeutralBackground3, fontSize: 12 },
+  constraintRow: { display: 'flex', gap: tokens.spacingHorizontalS, alignItems: 'flex-end' },
+  lineageBox: { display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalSNudge },
+  lineageRow: { display: 'flex', gap: tokens.spacingHorizontalS, alignItems: 'center', padding: `${tokens.spacingVerticalXS} 0` },
+  chip: { padding: `${tokens.spacingVerticalXXS} ${tokens.spacingHorizontalS}`, borderRadius: tokens.borderRadiusCircular, backgroundColor: tokens.colorNeutralBackground3, fontSize: tokens.fontSizeBase200 },
 });
 
 const ACTIVE_STATES = new Set(['starting', 'running', 'busy', 'not_started', 'recovering']);
@@ -463,7 +463,7 @@ export function MaterializedLakeViewEditor({ item, id }: { item: FabricItemType;
                 keyLabel="Property" valueLabel="Value"
                 keyPlaceholder="delta.enableChangeDataFeed" valuePlaceholder="true" addLabel="Add property" />
 
-              <Body1Strong style={{ marginTop: 8 }}>Generated statement</Body1Strong>
+              <Body1Strong style={{ marginTop: tokens.spacingVerticalS }}>Generated statement</Body1Strong>
               <pre className={styles.pre}>{generatedDdl}</pre>
               {liveSources.length > 0 && (
                 <Caption1>Derived sources: {liveSources.join(', ')}</Caption1>
@@ -559,7 +559,7 @@ export function MaterializedLakeViewEditor({ item, id }: { item: FabricItemType;
                 {busy && <Spinner size="tiny" />}
               </div>
 
-              <Body1Strong style={{ marginTop: 8 }}>Refresh "Refresh materialized lake view" ADF pipeline</Body1Strong>
+              <Body1Strong style={{ marginTop: tokens.spacingVerticalS }}>Refresh "Refresh materialized lake view" ADF pipeline</Body1Strong>
               <Caption1>Create the ADF pipeline an operator schedules for recurring refresh — its single activity calls back into this view's refresh endpoint.</Caption1>
               {adfStatus && <MessageBar intent="success"><MessageBarBody>{adfStatus}</MessageBarBody></MessageBar>}
               <div className={styles.toolbar}>
@@ -567,7 +567,7 @@ export function MaterializedLakeViewEditor({ item, id }: { item: FabricItemType;
                 <Button onClick={() => createAdfPipeline(true)} disabled={busy}>Create + run now</Button>
               </div>
 
-              <Body1Strong style={{ marginTop: 8 }}>Run history</Body1Strong>
+              <Body1Strong style={{ marginTop: tokens.spacingVerticalS }}>Run history</Body1Strong>
               {runs.length === 0 ? (
                 <EmptyState
                   icon={<DataLine20Regular />}

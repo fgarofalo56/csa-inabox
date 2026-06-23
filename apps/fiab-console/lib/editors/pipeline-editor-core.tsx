@@ -53,10 +53,10 @@ import type { FabricItemType } from '@/lib/catalog/fabric-item-types';
 import type { RibbonTab } from '@/lib/components/ribbon';
 
 const useStyles = makeStyles({
-  pad: { padding: 16, display: 'flex', flexDirection: 'column', gap: 12 },
-  gate: { padding: 16, display: 'flex', flexDirection: 'column', gap: 16, maxWidth: 720 },
-  row: { display: 'flex', gap: 12, alignItems: 'flex-end', flexWrap: 'wrap' },
-  field: { flex: 1, minWidth: 220, display: 'flex', flexDirection: 'column', gap: 4 },
+  pad: { padding: tokens.spacingVerticalL, display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalM },
+  gate: { padding: tokens.spacingVerticalL, display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalL, maxWidth: 720 },
+  row: { display: 'flex', gap: tokens.spacingHorizontalM, alignItems: 'flex-end', flexWrap: 'wrap' },
+  field: { flex: 1, minWidth: 220, display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalXS },
 });
 
 export interface ActivityTemplate {
@@ -516,14 +516,14 @@ export function PipelineEditorCore({
               {bindGate}
               {preview && Array.isArray(preview?.properties?.activities) && preview.properties.activities.length > 0 && (
                 <div>
-                  <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap', marginBottom: 8 }}>
+                  <div style={{ display: 'flex', gap: tokens.spacingVerticalS, alignItems: 'center', flexWrap: 'wrap', marginBottom: tokens.spacingVerticalS }}>
                     <Subtitle2>Starter graph from this app</Subtitle2>
                     <Badge appearance="outline">
                       {preview.properties.activities.length} activit{preview.properties.activities.length === 1 ? 'y' : 'ies'}
                     </Badge>
                     <Badge appearance="filled" color="informative">Preview · read-only</Badge>
                   </div>
-                  <Body1 style={{ display: 'block', color: tokens.colorNeutralForeground3, marginBottom: 8 }}>
+                  <Body1 style={{ display: 'block', color: tokens.colorNeutralForeground3, marginBottom: tokens.spacingVerticalS }}>
                     This pipeline was installed from an app with a fully built-out activity graph
                     (every activity, dependency, and parameter shown below). Bind it to a real
                     {` ${config.containerLabel}`} pipeline above to push this graph live and enable
@@ -543,7 +543,7 @@ export function PipelineEditorCore({
                   <Body1 style={{ display: 'block', color: tokens.colorNeutralForeground3 }}>
                     Pick which Azure Data Factory backs this pipeline — across every subscription your account can see (Azure Resource Graph, your RBAC).
                   </Body1>
-                  <div style={{ marginTop: 8 }}>
+                  <div style={{ marginTop: tokens.spacingVerticalS }}>
                     <AzureResourcePicker
                       type="Microsoft.DataFactory/factories"
                       label="Data Factory"
@@ -553,7 +553,7 @@ export function PipelineEditorCore({
                     />
                   </div>
                   {factory && (
-                    <MessageBar intent="info" style={{ marginTop: 8 }}>
+                    <MessageBar intent="info" style={{ marginTop: tokens.spacingVerticalS }}>
                       <MessageBarBody>
                         <MessageBarTitle>Factory selected: {factory.name}</MessageBarTitle>
                         Pipeline binding below lists pipelines from the deployment-default factory
@@ -568,7 +568,7 @@ export function PipelineEditorCore({
               )}
               <div>
                 <Subtitle2>Bind to an existing pipeline</Subtitle2>
-                <div className={s.row} style={{ marginTop: 8 }}>
+                <div className={s.row} style={{ marginTop: tokens.spacingVerticalS }}>
                   <div className={s.field}>
                     <Field label={`Pipeline in this ${config.containerLabel}`}>
                       <Dropdown
@@ -592,7 +592,7 @@ export function PipelineEditorCore({
                 <Body1 style={{ display: 'block', color: tokens.colorNeutralForeground3 }}>
                   Creates an empty pipeline in the {config.containerLabel} via the real REST API and binds this item to it.
                 </Body1>
-                <div className={s.row} style={{ marginTop: 8 }}>
+                <div className={s.row} style={{ marginTop: tokens.spacingVerticalS }}>
                   <div className={s.field}>
                     <Field label="New pipeline name">
                       <Input value={newName} onChange={(_, d) => setNewName(d.value)} placeholder="ingest_orders" />
@@ -609,7 +609,7 @@ export function PipelineEditorCore({
             </div>
           ) : (
             <>
-              <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
+              <div style={{ display: 'flex', gap: tokens.spacingVerticalS, alignItems: 'center', flexWrap: 'wrap' }}>
                 <Badge appearance="filled" color="brand">{bound}</Badge>
                 <Badge appearance="outline">{activityCount} activit{activityCount === 1 ? 'y' : 'ies'}</Badge>
                 {dirty && <Badge appearance="outline" color="warning">unsaved</Badge>}
@@ -661,7 +661,7 @@ export function PipelineEditorCore({
               )}
               {tab === 'runs' && (
                 <div style={{ overflow: 'auto' }}>
-                  <div style={{ display: 'flex', gap: 12, alignItems: 'flex-end', flexWrap: 'wrap', marginBottom: 8 }}>
+                  <div style={{ display: 'flex', gap: tokens.spacingVerticalM, alignItems: 'flex-end', flexWrap: 'wrap', marginBottom: tokens.spacingVerticalS }}>
                     <Field label="Window">
                       <Dropdown
                         value={runsAfterDays === 1 ? 'Last 24 hours' : runsAfterDays === 14 ? 'Last 14 days' : runsAfterDays === 30 ? 'Last 30 days' : 'Last 7 days'}
@@ -698,7 +698,7 @@ export function PipelineEditorCore({
                       {runs.length === 0 && (<TableRow><TableCell colSpan={5}><Caption1>No runs in window.</Caption1></TableCell></TableRow>)}
                       {runs.map((r) => (
                         <TableRow key={r.runId}>
-                          <TableCell><code style={{ fontSize: 11 }}>{r.runId.slice(0, 8)}…</code></TableCell>
+                          <TableCell><code style={{ fontSize: tokens.fontSizeBase100 }}>{r.runId.slice(0, 8)}…</code></TableCell>
                           <TableCell><Badge appearance="filled" color={r.status === 'Succeeded' ? 'success' : r.status === 'Failed' ? 'danger' : r.status === 'InProgress' ? 'warning' : 'informative'}>{r.status || '—'}</Badge></TableCell>
                           <TableCell>{r.runStart ? new Date(r.runStart).toLocaleString() : '—'}</TableCell>
                           <TableCell>{r.durationInMs != null ? `${(r.durationInMs / 1000).toFixed(1)}s` : '—'}</TableCell>
@@ -759,7 +759,7 @@ export function PipelineEditorCore({
                 <DialogTitle>Triggers — {bound}</DialogTitle>
                 <DialogContent>
                   <Caption1>Schedule triggers that fire this pipeline. Start/stop or create a daily schedule trigger inline (real REST).</Caption1>
-                  <div style={{ overflow: 'auto', marginTop: 8, marginBottom: 12 }}>
+                  <div style={{ overflow: 'auto', marginTop: tokens.spacingVerticalS, marginBottom: tokens.spacingVerticalM }}>
                     <Table aria-label="Triggers for pipeline" size="small">
                       <TableHeader><TableRow>
                         <TableHeaderCell>Name</TableHeaderCell>
@@ -775,7 +775,7 @@ export function PipelineEditorCore({
                             <TableCell><code>{t.type || '—'}</code></TableCell>
                             <TableCell><Badge appearance="filled" color={t.runtimeState === 'Started' ? 'success' : t.runtimeState === 'Stopped' ? 'informative' : 'warning'}>{t.runtimeState || '—'}</Badge></TableCell>
                             <TableCell>
-                              <div style={{ display: 'flex', gap: 4 }}>
+                              <div style={{ display: 'flex', gap: tokens.spacingVerticalXS }}>
                                 <Button size="small" disabled={triggersBusy || t.runtimeState === 'Started'} onClick={() => triggerAction(t.name, 'start')}>Start</Button>
                                 <Button size="small" disabled={triggersBusy || t.runtimeState !== 'Started'} onClick={() => triggerAction(t.name, 'stop')}>Stop</Button>
                                 <Button size="small" appearance="subtle" disabled={triggersBusy} onClick={() => triggerAction(t.name, 'delete')}>Delete</Button>
@@ -787,12 +787,12 @@ export function PipelineEditorCore({
                     </Table>
                   </div>
                   <Subtitle2>Create new daily schedule trigger</Subtitle2>
-                  <div style={{ display: 'grid', gridTemplateColumns: '2fr 1fr 1fr', gap: 12, marginTop: 8 }}>
+                  <div style={{ display: 'grid', gridTemplateColumns: '2fr 1fr 1fr', gap: tokens.spacingVerticalM, marginTop: tokens.spacingVerticalS }}>
                     <Field label="Name"><Input value={newTriggerName} onChange={(_, d) => setNewTriggerName(d.value)} placeholder="daily-orders" /></Field>
                     <Field label="UTC hour (0-23)"><Input type="number" min={0} max={23} value={String(newTriggerHour)} onChange={(_, d) => setNewTriggerHour(Math.max(0, Math.min(23, Number(d.value) || 0)))} /></Field>
                     <Field label="Minute (0-59)"><Input type="number" min={0} max={59} value={String(newTriggerMinute)} onChange={(_, d) => setNewTriggerMinute(Math.max(0, Math.min(59, Number(d.value) || 0)))} /></Field>
                   </div>
-                  {triggersError && (<MessageBar intent="error" style={{ marginTop: 12 }}><MessageBarBody><MessageBarTitle>Trigger action failed</MessageBarTitle>{triggersError}</MessageBarBody></MessageBar>)}
+                  {triggersError && (<MessageBar intent="error" style={{ marginTop: tokens.spacingVerticalM }}><MessageBarBody><MessageBarTitle>Trigger action failed</MessageBarTitle>{triggersError}</MessageBarBody></MessageBar>)}
                 </DialogContent>
                 <DialogActions>
                   <Button appearance="secondary" onClick={() => setTriggersOpen(false)} disabled={triggersBusy}>Close</Button>
