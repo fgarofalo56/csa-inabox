@@ -504,22 +504,33 @@ jobs:
             bash scripts/csa-loom/upsert-hub-dns-arecords.sh \
             || echo "::warning::Hub private-DNS A-record sweep incomplete — the deploy SP needs Private DNS Zone Contributor on $ADMIN_RG + Reader on $DLZ_RG. DLZ data planes may be unreachable from the Console until re-run."
 
-      - name: DNS Private Resolver for P2S VPN clients (auto-resolve the private estate) — Refs #1549
-        # DAY-ONE VPN DNS. P2S clients can't query Azure DNS (168.63.129.16) directly,
-        # so without this they can't resolve any privatelink.* FQDN and fall back to
-        # fragile per-client hosts files. This ensures a DNS Private Resolver inbound
-        # endpoint in the hub VNet (bicep declares the subnet + resolver; this sets the
-        # static inbound IP if missing) and points the hub VNet's custom DNS at it — the
-        # VPN gateway then auto-pushes that DNS server to clients. The resolver answers
-        # from every hub-linked privatelink zone and forwards public names to Azure DNS
-        # (so the gateway control plane stays healthy). Idempotent. Admins must
-        # re-download the VPN profile after first run so it carries the new DNS server.
+      - name: AI private endpoints (AOAI + Foundry) so copilot/agents resolve — Refs #1549
+        # DAY-ONE no-public AI reachability. The AOAI + AI Foundry (kind=AIServices)
+        # accounts' public FQDNs CNAME into privatelink.cognitiveservices/openai/
+        # services.ai zones that are hub-linked. Without a private endpoint those zones
+        # are EMPTY -> in-VNet resolution returns NXDOMAIN -> EVERY copilot/chat/agent/
+        # tool call fails with "fetch failed" (root-caused 2026-06-23). This creates the
+        # PEs + the services.ai zone + DNS-zone-groups so the Console resolves them
+        # privately. Idempotent.
+        run: |
+          set -uo pipefail
+          chmod +x scripts/csa-loom/ensure-ai-private-endpoints.sh
+          ADMIN_SUB="$ADMIN_SUB" REGION="$REGION" ADMIN_RG="$ADMIN_RG" \
+            bash scripts/csa-loom/ensure-ai-private-endpoints.sh \
+            || echo "::warning::AI private-endpoint setup incomplete — copilot/agents may be unreachable until re-run (deploy SP needs Network Contributor on $ADMIN_RG)."
+
+      - name: DNS Private Resolver resource (VPN; NOT VNet DNS) — Refs #1549
+        # Ensures the DNS Private Resolver resource exists for potential VPN use, but
+        # deliberately does NOT set it as the hub VNet DNS — doing so made the Console
+        # use it and it proved INTERMITTENT for recursive public->private AI lookups
+        # (caused the "fetch failed" outage). Hub VNet stays on Azure-default DNS; VPN
+        # clients use the hosts-file block. See docs/fiab/vpn-access.md.
         run: |
           set -uo pipefail
           chmod +x scripts/csa-loom/ensure-vpn-dns-resolver.sh
           ADMIN_SUB="$ADMIN_SUB" REGION="$REGION" ADMIN_RG="$ADMIN_RG" \
             bash scripts/csa-loom/ensure-vpn-dns-resolver.sh \
-            || echo "::warning::DNS Private Resolver setup incomplete — the deploy SP needs Network Contributor on $ADMIN_RG. VPN clients will need hosts-file entries until re-run."
+            || echo "::warning::DNS Private Resolver resource setup incomplete (non-blocking)."
 
       - name: Grant Console UAMI Synapse RBAC (in-VNET, NO public access) — Refs #1549
         # NO-PUBLIC day-one fix. The Synapse workspace is publicNetworkAccess=Disabled

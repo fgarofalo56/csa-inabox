@@ -51,11 +51,17 @@ az dns-resolver inbound-endpoint show -g "$ADMIN_RG" --dns-resolver-name "$RESOL
   az dns-resolver inbound-endpoint create -g "$ADMIN_RG" --dns-resolver-name "$RESOLVER" -n inbound -l "$REGION" $S \
     --ip-configurations "[{private-ip-address:'${INBOUND_IP}',private-ip-allocation-method:Static,id:${SUBID}}]" -o none
 
-echo ">>> point hub VNet DNS at the resolver (${INBOUND_IP})"
-CUR=$(az network vnet show -g "$ADMIN_RG" -n "$VNET" $S --query "dhcpOptions.dnsServers" -o tsv 2>/dev/null || true)
-if [ "$CUR" != "$INBOUND_IP" ]; then
-  az network vnet update -g "$ADMIN_RG" -n "$VNET" $S --dns-servers "$INBOUND_IP" -o none
-fi
-echo "✓ Resolver live at ${INBOUND_IP}; VNet DNS set. P2S clients now resolve every"
-echo "  private FQDN automatically — admins must RE-DOWNLOAD the VPN profile so it"
-echo "  carries the new DNS server, then reconnect. No hosts file needed."
+# DO NOT point the hub VNet DNS at the resolver.
+# Reverted 2026-06-23: setting the VNet's custom DNS to this resolver made the
+# CONSOLE use it too, and the resolver proved INTERMITTENT for recursive
+# public->private lookups (an AI Services FQDN like *.cognitiveservices.azure.com
+# CNAMEs into a linked privatelink zone) -> sporadic ENOTFOUND -> "fetch failed"
+# on ALL copilot/chat/agent/tool calls. The hub VNet stays on Azure-default DNS
+# (168.63.129.16), which reliably honors linked private zones for in-VNet
+# resources. The resolver resource is left in place but UNUSED as VNet DNS.
+#
+# VPN clients resolve the private estate via the hosts-file block on the
+# Admin -> Network & DNS page (see docs/fiab/vpn-access.md). Re-enabling
+# resolver-pushed DNS would require root-causing the resolver flakiness first.
+echo "✓ Resolver resource ensured at ${INBOUND_IP} (NOT set as VNet DNS — see comment)."
+echo "  Hub VNet stays on Azure-default DNS. VPN clients use the hosts-file block."

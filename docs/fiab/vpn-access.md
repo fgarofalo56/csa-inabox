@@ -29,27 +29,24 @@ Loom VNets are routed to you over the tunnel. This is day-one config.
    config**. Unzip it.
 3. Azure VPN Client → **+ → Import** → select `AzureVPN/azurevpnconfig.xml`.
 4. **Connect** and sign in with your Microsoft Entra ID (the admin / metastore-admin account).
-5. DNS resolution — **works automatically** via an **Azure DNS Private Resolver**
-   in the hub VNet (inbound endpoint `10.0.9.4`). The hub VNet's custom DNS points
-   at it, and the VPN gateway **auto-pushes that DNS server to your client** in the
-   downloaded profile. The resolver answers from every `privatelink.*` zone linked
-   to the hub VNet (admin-plane **and** the DLZ Databricks zone) and forwards public
-   names to Azure DNS — so the normal service FQDNs (`*.azuredatabricks.net`,
+5. DNS resolution — use the **hosts-file block** from the admin page. Copy the
+   block under **Admin → Network & DNS** (every private-endpoint FQDN → its private
+   IP) into `C:\Windows\System32\drivers\etc\hosts` (open the editor as admin) or
+   `/etc/hosts`. Then the service FQDNs (`*.azuredatabricks.net`,
    `*.documents.azure.com`, `*.sql.azuresynapse.net`, `web.azuresynapse.net`, …)
-   resolve to their private IPs over the tunnel with **no host-file edit needed**.
+   resolve to their private IPs over the tunnel.
 
-   > **If you set up the VPN before this was in place, re-download the VPN client
-   > config** (step 2) and re-import it — the profile must carry the new DNS server
-   > (`10.0.9.4`). Reconnect afterward.
+   > **Browser "Secure DNS" (DNS-over-HTTPS) bypasses the OS hosts file.** If pages
+   > still resolve to public IPs, turn it off: Edge `edge://settings/privacy` →
+   > *Use secure DNS* → **off**; Chrome `chrome://settings/security` → same; then
+   > fully restart the browser.
 
-   > **Browser "Secure DNS" (DNS-over-HTTPS) bypasses all OS/VPN DNS.** If pages
-   > still resolve to public IPs after reconnecting, turn it off: Edge
-   > `edge://settings/privacy` → *Use secure DNS* → **off**; Chrome
-   > `chrome://settings/security` → *Use secure DNS* → **off**. Then fully restart
-   > the browser.
-   - *Fallback / air-gapped resolver:* the admin page still publishes a copy/paste
-     **hosts-file block** (FQDN → private IP) if you'd rather pin entries in
-     `C:\Windows\System32\drivers\etc\hosts` or `/etc/hosts`.
+   > **Note:** an Azure DNS Private Resolver exists in the hub VNet, but it is **not**
+   > wired as the VNet DNS — pushing resolver-based DNS to clients also forced the
+   > in-VNet Console onto it, where it proved intermittent for recursive
+   > public→private (AI Services) lookups. The hub VNet stays on Azure-default DNS;
+   > clients use the hosts-file block above. Auto-push DNS can be revisited once the
+   > resolver flakiness is root-caused.
 
 Now you can reach the backends over the tunnel — e.g. Synapse Studio
 (`web.azuresynapse.net`), the Databricks workspace, AI Search, Cosmos, Key Vault,
