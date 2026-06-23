@@ -127,13 +127,13 @@ const USER_SCHEMA_FILTER =
 // picker just shows the table name, which is all it needs).
 const LIST_TABLES_SQL =
   `SELECT t.object_id AS objectId, s.name AS [schema], t.name AS name,
-          t.type AS type, o.type_desc AS typeDesc,
+          t.type AS [type], o.type_desc AS typeDesc,
           t.create_date AS createDate, t.modify_date AS modifyDate,
           ISNULL((
             SELECT SUM(p.row_count)
             FROM sys.dm_db_partition_stats p
             WHERE p.object_id = t.object_id AND p.index_id IN (0,1)
-          ), 0) AS rowCount
+          ), 0) AS [rowCount]
    FROM sys.tables t
    JOIN sys.schemas s ON s.schema_id = t.schema_id
    JOIN sys.objects o ON o.object_id = t.object_id
@@ -144,7 +144,7 @@ const LIST_TABLES_SQL =
 // scalar subquery in the SELECT list (the construct the MPP parser rejects).
 const LIST_TABLES_SQL_MPP =
   `SELECT t.object_id AS objectId, s.name AS [schema], t.name AS name,
-          t.type AS type, o.type_desc AS typeDesc,
+          t.type AS [type], o.type_desc AS typeDesc,
           t.create_date AS createDate, t.modify_date AS modifyDate
    FROM sys.tables t
    JOIN sys.schemas s ON s.schema_id = t.schema_id
