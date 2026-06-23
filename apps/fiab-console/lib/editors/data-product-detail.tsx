@@ -192,6 +192,48 @@ function ResultTable({ columns, rows }: { columns: string[]; rows: unknown[][] }
 }
 
 // ------------------------------------------------------------------
+// Try it — live ADX sample preview of the product's backing data.
+// Shared by the owner detail + the consumer marketplace view so
+// "Try it" is present regardless of who is viewing the product.
+// ------------------------------------------------------------------
+function DataProductTryItPanel({ id }: { id: string }) {
+  const [loading, setLoading] = useState(false);
+  const [result, setResult] = useState<{ table?: string; kql?: string; columns: string[]; rows: unknown[][]; executionMs?: number } | null>(null);
+  const [err, setErr] = useState<string | null>(null);
+  const [gate, setGate] = useState<{ missing: string } | null>(null);
+  const run = useCallback(async () => {
+    setLoading(true); setErr(null); setGate(null);
+    try {
+      const r = await fetch(`/api/data-products/${encodeURIComponent(id)}/preview`, { method: 'POST' });
+      const j = await r.json().catch(() => ({}));
+      if (j.ok) setResult({ table: j.table, kql: j.kql, columns: j.columns || [], rows: j.rows || [], executionMs: j.executionMs });
+      else if (j.gate) setGate(j.gate);
+      else setErr(j.error || `HTTP ${r.status}`);
+    } catch (e: any) { setErr(e?.message || String(e)); }
+    finally { setLoading(false); }
+  }, [id]);
+  return (
+    <div style={{ display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalM, marginTop: tokens.spacingVerticalM }}>
+      <Caption1 style={{ color: tokens.colorNeutralForeground3 }}>
+        Preview this data product&rsquo;s live data — a read-only sample (top 25 rows) from its backing Azure Data Explorer table.
+      </Caption1>
+      {result?.kql && <pre style={{ fontSize: tokens.fontSizeBase200, backgroundColor: tokens.colorNeutralBackground3, padding: tokens.spacingVerticalS, borderRadius: tokens.borderRadiusMedium, overflowX: 'auto' }}>{result.kql}</pre>}
+      <div style={{ display: 'flex', gap: tokens.spacingHorizontalM, alignItems: 'center' }}>
+        <Button appearance="primary" icon={loading ? undefined : <Play20Regular />} disabled={loading} onClick={run}>
+          {loading ? 'Running…' : result ? 'Run again' : 'Run sample query'}
+        </Button>
+        {loading && <Spinner size="tiny" label="Querying ADX…" />}
+        {result && !loading && <Caption1>{result.rows.length} row{result.rows.length !== 1 ? 's' : ''} from <strong>{result.table}</strong>{result.executionMs !== undefined ? ` (${result.executionMs}ms)` : ''}</Caption1>}
+      </div>
+      {gate && <MessageBar intent="warning"><MessageBarBody><MessageBarTitle>Data preview not configured</MessageBarTitle>Set <code>{gate.missing}</code> (the ADX cluster URI) to enable live data preview on this deployment.</MessageBarBody></MessageBar>}
+      {err && <MessageBar intent="error"><MessageBarBody>{err}</MessageBarBody></MessageBar>}
+      {result && result.columns.length > 0 && <ResultTable columns={result.columns} rows={result.rows} />}
+      {result && result.columns.length === 0 && !err && <Caption1 style={{ color: tokens.colorNeutralForeground3 }}>No rows returned.</Caption1>}
+    </div>
+  );
+}
+
+// ------------------------------------------------------------------
 // Trigger-scan card — picks a real Purview source + scan.
 // ------------------------------------------------------------------
 function TriggerScanCard({ id }: { id: string }) {
@@ -570,7 +612,7 @@ export function DataProductDetailEditor({ item: itemProp, id }: { item?: FabricI
   const [loading, setLoading] = useState(id !== 'new');
   const [loadErr, setLoadErr] = useState<string | null>(null);
 
-  const [tab, setTab] = useState<'details' | 'observability'>('details');
+  const [tab, setTab] = useState<'details' | 'observability' | 'tryit'>('details');
   const [showEmpty, setShowEmpty] = useState(false);
 
   // Owner contact-label editing (persisted via PATCH).
@@ -726,9 +768,10 @@ export function DataProductDetailEditor({ item: itemProp, id }: { item?: FabricI
           </div>
         </div>
 
-        <TabList selectedValue={tab} onTabSelect={(_, d) => setTab(d.value as 'details' | 'observability')}>
+        <TabList selectedValue={tab} onTabSelect={(_, d) => setTab(d.value as 'details' | 'observability' | 'tryit')}>
           <Tab value="details">Details</Tab>
           <Tab value="observability">Data Observability</Tab>
+          <Tab value="tryit" icon={<Play20Regular />}>Try it</Tab>
         </TabList>
 
         {tab === 'details' && (
@@ -913,6 +956,8 @@ export function DataProductDetailEditor({ item: itemProp, id }: { item?: FabricI
             />
           </div>
         )}
+
+        {tab === 'tryit' && <DataProductTryItPanel id={id} />}
       </div>
     );
   })();
