@@ -54,9 +54,24 @@ Storage, and the Internal APIM gateway (`apim-…azure-api.net`).
 > SQL (e.g. the Delta Sharing `GRANT`s) from a host whose public IP is on the
 > workspace IP access list.
 
-## Firewall allowlist
+## Firewall — why there's no "add the VPN subnet" IP rule
 
-The P2S client pool `172.16.201.0/24` and the hub/DLZ VNet ranges are added to
-the VNet/IP firewall rules of services that accept them (AI Search, ACR, Storage,
-Key Vault, Cosmos, Synapse). Private-endpoint services don't need an IP rule
-(the PE bypasses the firewall).
+A common ask is *"add the VPN client subnet to every firewall."* **Azure rejects
+that** — service firewall **IP rules only accept public IPs**; the P2S client
+pool (`172.16.201.0/24`) is RFC-1918 private and is refused
+(`overlaps with private or reserved IPs`). So the reachability model is **not**
+IP rules — it's:
+
+- **Private-endpoint services** (Cosmos, Synapse, Storage, ADLS, Event Hubs,
+  ADF, Key Vault, AI Search, ACR — all `publicNetworkAccess = Disabled`):
+  reached over the tunnel via the PE private IP. The PE **bypasses** the firewall
+  entirely, so no IP rule is needed — just routing (gateway transit, done) +
+  name resolution (hosts-file / private DNS).
+- **Public-endpoint + IP-ACL services without a PE** (e.g. the Databricks
+  workspace): give them a **front-end private endpoint** (then they join the row
+  above), or **force-tunnel** the VPN and allow the gateway's **egress public IP**
+  in their IP access list. The private client-pool can't be the source for a
+  public endpoint.
+
+Net: once connected + hosts-file in place, every private-endpoint service is
+reachable; the only extra step is a front-end PE for any IP-ACL-only service.
