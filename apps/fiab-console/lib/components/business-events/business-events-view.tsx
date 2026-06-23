@@ -437,6 +437,8 @@ function PublishDialog({ type, onPublished }: { type: EventType; onPublished: ()
   const [open, setOpen] = useState(false);
   const [subject, setSubject] = useState('');
   const [values, setValues] = useState<Record<string, string>>({});
+  /** Key-value rows for each json-typed field. Serialized to JSON string in `values` on every change. */
+  const [jsonRows, setJsonRows] = useState<Record<string, { key: string; value: string }[]>>({});
   const [publishing, setPublishing] = useState(false);
   const [result, setResult] = useState<string | null>(null);
   const [err, setErr] = useState<string | null>(null);
@@ -446,6 +448,24 @@ function PublishDialog({ type, onPublished }: { type: EventType; onPublished: ()
   const [channelStatus, setChannelStatus] = useState<
     { channel: Channel; ok: boolean; detail: string }[]
   >([]);
+
+  /** Update rows for a json field and sync the serialized JSON string into `values`. */
+  const updateJsonRows = useCallback(
+    (fieldName: string, updater: (prev: { key: string; value: string }[]) => { key: string; value: string }[]) => {
+      setJsonRows((prev) => {
+        const next = updater(prev[fieldName] ?? []);
+        // Build the object and serialize; an empty/all-blank set → empty object
+        const obj: Record<string, string> = {};
+        for (const { key, value } of next) {
+          const k = key.trim();
+          if (k) obj[k] = value;
+        }
+        setValues((v) => ({ ...v, [fieldName]: JSON.stringify(obj) }));
+        return { ...prev, [fieldName]: next };
+      });
+    },
+    [],
+  );
 
   const coerce = useCallback((f: EventField, raw: string): unknown => {
     if (raw === '' && !f.required) return undefined;
@@ -552,7 +572,37 @@ function PublishDialog({ type, onPublished }: { type: EventType; onPublished: ()
                       <Option value="true">true</Option><Option value="false">false</Option>
                     </Dropdown>
                   ) : f.type === 'json' ? (
-                    <Textarea value={values[f.name] || ''} onChange={(_, d) => setValues((p) => ({ ...p, [f.name]: d.value }))} placeholder='{ "key": "value" }' />
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalXS }}>
+                      {(jsonRows[f.name] ?? []).map((row, i) => (
+                        <div key={i} style={{ display: 'flex', gap: tokens.spacingHorizontalXS, alignItems: 'center' }}>
+                          <Input
+                            placeholder="key"
+                            value={row.key}
+                            onChange={(_, d) => updateJsonRows(f.name, (prev) => prev.map((r, idx) => idx === i ? { ...r, key: d.value } : r))}
+                            style={{ flex: '1 1 0', minWidth: 0 }}
+                          />
+                          <Input
+                            placeholder="value"
+                            value={row.value}
+                            onChange={(_, d) => updateJsonRows(f.name, (prev) => prev.map((r, idx) => idx === i ? { ...r, value: d.value } : r))}
+                            style={{ flex: '2 1 0', minWidth: 0 }}
+                          />
+                          <Button
+                            appearance="subtle"
+                            size="small"
+                            aria-label="Remove row"
+                            onClick={() => updateJsonRows(f.name, (prev) => prev.filter((_, idx) => idx !== i))}
+                          >×</Button>
+                        </div>
+                      ))}
+                      <Button
+                        appearance="outline"
+                        size="small"
+                        icon={<Add20Regular />}
+                        onClick={() => updateJsonRows(f.name, (prev) => [...prev, { key: '', value: '' }])}
+                        style={{ alignSelf: 'flex-start' }}
+                      >Add entry</Button>
+                    </div>
                   ) : (
                     <Input
                       type={f.type === 'number' ? 'number' : f.type === 'datetime' ? 'datetime-local' : 'text'}

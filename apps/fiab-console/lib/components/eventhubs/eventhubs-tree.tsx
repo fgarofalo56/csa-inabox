@@ -161,7 +161,8 @@ export function EventHubsDataExplorerDialog({ open, hub, onClose }: EventHubsDat
 
   // ---- Send panel ----
   const [bodyText, setBodyText] = useState('{\n  "message": "hello from Loom"\n}');
-  const [propsText, setPropsText] = useState('');
+  /** Key-value rows for the UserProperties object. Replaces the raw-JSON Textarea. */
+  const [propRows, setPropRows] = useState<{ key: string; value: string }[]>([]);
   const [partitionKey, setPartitionKey] = useState('');
   const [repeat, setRepeat] = useState(1);
   const [sending, setSending] = useState(false);
@@ -183,31 +184,25 @@ export function EventHubsDataExplorerDialog({ open, hub, onClose }: EventHubsDat
     if (open) {
       setTab('send');
       setSendErr(null); setSendMsg(null);
+      setPropRows([]);
       setPeekErr(null); setPeekGate(null); setEvents([]); setExpanded({});
     }
   }, [open, hub]);
 
-  function parseProps(): Record<string, string | number | boolean> | null {
-    const t = propsText.trim();
-    if (!t) return {};
-    try {
-      const parsed = JSON.parse(t);
-      if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
-        return parsed as Record<string, string | number | boolean>;
-      }
-      setSendErr('Properties must be a JSON object, e.g. {"source":"loom"}.');
-      return null;
-    } catch {
-      setSendErr('Properties is not valid JSON.');
-      return null;
+  /** Build the UserProperties object from the key-value rows. Duplicate/blank keys are skipped. */
+  function buildProps(): Record<string, string> {
+    const result: Record<string, string> = {};
+    for (const { key, value } of propRows) {
+      const k = key.trim();
+      if (k) result[k] = value;
     }
+    return result;
   }
 
   const doSend = useCallback(async () => {
     setSendErr(null); setSendMsg(null);
     if (!bodyText.trim()) { setSendErr('Event body is required.'); return; }
-    const properties = parseProps();
-    if (properties === null) return;
+    const properties = buildProps();
     const count = Math.max(1, Math.min(100, repeat));
     // Body is sent as-is; if it parses as JSON we forward the parsed object so
     // it is serialized once on the wire, otherwise we send the raw string.
@@ -234,7 +229,7 @@ export function EventHubsDataExplorerDialog({ open, hub, onClose }: EventHubsDat
     } finally {
       setSending(false);
     }
-  }, [bodyText, propsText, partitionKey, repeat, hub]);
+  }, [bodyText, propRows, partitionKey, repeat, hub]);
 
   const doPeek = useCallback(async () => {
     setPeekErr(null); setPeekGate(null); setEvents([]); setExpanded({});
@@ -281,8 +276,38 @@ export function EventHubsDataExplorerDialog({ open, hub, onClose }: EventHubsDat
                 <Field label="Event body" hint="Plain text or a JSON document. Published to the event hub via the real REST data plane.">
                   <Textarea value={bodyText} onChange={(_, v) => setBodyText(v.value)} rows={6} resize="vertical" textarea={{ style: { fontFamily: tokens.fontFamilyMonospace } }} />
                 </Field>
-                <Field label="Custom properties (JSON object, optional)" hint='Sent as UserProperties, e.g. {"source":"loom","priority":1}.'>
-                  <Textarea value={propsText} onChange={(_, v) => setPropsText(v.value)} rows={2} resize="vertical" placeholder='{"source":"loom"}' textarea={{ style: { fontFamily: tokens.fontFamilyMonospace } }} />
+                <Field label="Custom properties (optional)" hint="Sent as UserProperties on the event. Each row is one key → value pair.">
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalXS }}>
+                    {propRows.map((row, i) => (
+                      <div key={i} style={{ display: 'flex', gap: tokens.spacingHorizontalXS, alignItems: 'center' }}>
+                        <Input
+                          placeholder="key"
+                          value={row.key}
+                          onChange={(_, v) => setPropRows((prev) => prev.map((r, idx) => idx === i ? { ...r, key: v.value } : r))}
+                          style={{ flex: '1 1 0', minWidth: 0 }}
+                        />
+                        <Input
+                          placeholder="value"
+                          value={row.value}
+                          onChange={(_, v) => setPropRows((prev) => prev.map((r, idx) => idx === i ? { ...r, value: v.value } : r))}
+                          style={{ flex: '2 1 0', minWidth: 0 }}
+                        />
+                        <Button
+                          appearance="subtle"
+                          size="small"
+                          aria-label="Remove property"
+                          onClick={() => setPropRows((prev) => prev.filter((_, idx) => idx !== i))}
+                        >×</Button>
+                      </div>
+                    ))}
+                    <Button
+                      appearance="outline"
+                      size="small"
+                      icon={<Add20Regular />}
+                      onClick={() => setPropRows((prev) => [...prev, { key: '', value: '' }])}
+                      style={{ alignSelf: 'flex-start' }}
+                    >Add property</Button>
+                  </div>
                 </Field>
                 <div className={d.row}>
                   <Field label="Partition key (optional)" className={d.grow}>

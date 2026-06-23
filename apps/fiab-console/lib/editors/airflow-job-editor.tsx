@@ -54,6 +54,15 @@ interface DagLite {
   next_dagrun?: string;
 }
 
+interface DagRunLite {
+  dag_run_id: string;
+  state?: string;
+  run_type?: string;
+  logical_date?: string;
+  start_date?: string;
+  end_date?: string;
+}
+
 interface Props { item: FabricItemType; id: string }
 
 export function AirflowJobEditor({ item, id }: Props) {
@@ -66,6 +75,12 @@ export function AirflowJobEditor({ item, id }: Props) {
   const [tab, setTab] = useState<string>('dags');
   const [dags, setDags] = useState<DagLite[] | null>(null);
   const [dagsErr, setDagsErr] = useState<{ error: string; code?: string; hint?: string } | null>(null);
+
+  // Runs tab
+  const [runsDagId, setRunsDagId] = useState('');
+  const [runs, setRuns] = useState<DagRunLite[] | null>(null);
+  const [runsErr, setRunsErr] = useState<{ error: string; code?: string; hint?: string } | null>(null);
+  const [runsLoading, setRunsLoading] = useState(false);
 
   // Create dialog
   const [createOpen, setCreateOpen] = useState(false);
@@ -121,11 +136,31 @@ export function AirflowJobEditor({ item, id }: Props) {
     } catch (e: any) { setDagsErr({ error: e?.message || String(e) }); setDags([]); }
   }, []);
 
+  const loadRuns = useCallback(async (wsId: string, jid: string, dagId: string) => {
+    setRuns(null); setRunsErr(null); setRunsLoading(true);
+    try {
+      const r = await fetch(`/api/items/airflow-job/${encodeURIComponent(jid)}/dag-runs?workspaceId=${encodeURIComponent(wsId)}&dagId=${encodeURIComponent(dagId)}`);
+      const j = await r.json();
+      if (!j.ok) { setRunsErr({ error: j.error, code: j.code, hint: j.hint }); setRuns([]); return; }
+      setRuns(j.runs || []);
+    } catch (e: any) { setRunsErr({ error: e?.message || String(e) }); setRuns([]); }
+    finally { setRunsLoading(false); }
+  }, []);
+
   useEffect(() => { if (workspaceId) loadList(workspaceId); }, [workspaceId, loadList]);
   useEffect(() => { if (workspaceId && jobId) loadDetail(workspaceId, jobId); }, [workspaceId, jobId, loadDetail]);
   useEffect(() => {
-    if (tab === 'dags' && workspaceId && jobId && active && dags === null) loadDags(workspaceId, jobId);
+    // DAGs power both the DAGs tab and the Runs-tab DAG picker.
+    if ((tab === 'dags' || tab === 'runs') && workspaceId && jobId && active && dags === null) loadDags(workspaceId, jobId);
   }, [tab, workspaceId, jobId, active, dags, loadDags]);
+  // Default the Runs DAG picker to the first DAG once the list arrives.
+  useEffect(() => {
+    if (tab === 'runs' && !runsDagId && dags && dags.length) setRunsDagId(dags[0].dag_id);
+  }, [tab, runsDagId, dags]);
+  // Load runs whenever the selected DAG changes (within the Runs tab).
+  useEffect(() => {
+    if (tab === 'runs' && workspaceId && jobId && runsDagId) loadRuns(workspaceId, jobId, runsDagId);
+  }, [tab, workspaceId, jobId, runsDagId, loadRuns]);
 
   const create = useCallback(async () => {
     if (!workspaceId || !cName.trim()) return;
@@ -304,19 +339,75 @@ export function AirflowJobEditor({ item, id }: Props) {
             )}
 
             {tab === 'runs' && (
-              <MessageBar intent="info">
-                <MessageBarBody>
-                  <MessageBarTitle>DAG runs surface in a follow-up</MessageBarTitle>
-                  The Airflow REST `/api/v1/dags/{'{dag_id}'}/dagRuns` endpoint is wired in PR #404. For now use the webserver UI directly: {active?.webserverUrl ? <a href={active.webserverUrl} target="_blank" rel="noreferrer">{active.webserverUrl}</a> : '(configure the webserver URL first)'}.
-                </MessageBarBody>
-              </MessageBar>
+              <>
+                {!active && <Caption1>Select a job first.</Caption1>}
+                {active && (
+                  <>
+                    <div style={{ display: 'flex', gap: tokens.spacingHorizontalS, alignItems: 'flex-end', marginBottom: tokens.spacingVerticalM }}>
+                      <Field label="DAG" style={{ minWidth: 280 }}>
+                        <Select value={runsDagId} onChange={(_, d) => setRunsDagId(d.value)} disabled={!dags || !dags.length}>
+                          {(dags || []).map((d) => <option key={d.dag_id} value={d.dag_id}>{d.dag_id}</option>)}
+                          {dags && !dags.length && <option value="">No DAGs found</option>}
+                        </Select>
+                      </Field>
+                      <Button appearance="secondary" disabled={!runsDagId || runsLoading}
+                        onClick={() => runsDagId && loadRuns(workspaceId, jobId, runsDagId)}>
+                        {runsLoading ? 'Refreshing…' : 'Refresh'}
+                      </Button>
+                    </div>
+                    {runsErr && (
+                      <MessageBar intent={runsErr.code === 'NO_WEBSERVER' ? 'warning' : 'error'}>
+                        <MessageBarBody>
+                          <MessageBarTitle>{runsErr.code === 'NO_WEBSERVER' ? 'Webserver not configured' : 'Could not load runs'}</MessageBarTitle>
+                          {runsErr.error}{runsErr.hint ? ` — ${runsErr.hint}` : ''}
+                        </MessageBarBody>
+                      </MessageBar>
+                    )}
+                    {runs === null && runsLoading && <Spinner size="small" label="Loading runs…" />}
+                    {runs && !runs.length && !runsErr && <Caption1>No runs yet for this DAG.</Caption1>}
+                    {runs && runs.length > 0 && (
+                      <div className={s.tableWrap}>
+                        <Table size="small">
+                          <TableHeader>
+                            <TableRow>
+                              <TableHeaderCell>State</TableHeaderCell>
+                              <TableHeaderCell>Run ID</TableHeaderCell>
+                              <TableHeaderCell>Type</TableHeaderCell>
+                              <TableHeaderCell>Started</TableHeaderCell>
+                              <TableHeaderCell>Ended</TableHeaderCell>
+                            </TableRow>
+                          </TableHeader>
+                          <TableBody>
+                            {runs.map((r) => (
+                              <TableRow key={r.dag_run_id}>
+                                <TableCell>
+                                  <Badge appearance="filled" color={
+                                    r.state === 'success' ? 'success'
+                                      : r.state === 'failed' ? 'danger'
+                                      : r.state === 'running' ? 'brand'
+                                      : 'informative'
+                                  }>{r.state || 'unknown'}</Badge>
+                                </TableCell>
+                                <TableCell>{r.dag_run_id}</TableCell>
+                                <TableCell>{r.run_type || '—'}</TableCell>
+                                <TableCell>{r.start_date?.replace('T', ' ').replace(/\..*/, '') || '—'}</TableCell>
+                                <TableCell>{r.end_date?.replace('T', ' ').replace(/\..*/, '') || '—'}</TableCell>
+                              </TableRow>
+                            ))}
+                          </TableBody>
+                        </Table>
+                      </div>
+                    )}
+                  </>
+                )}
+              </>
             )}
 
             {tab === 'connections' && (
               <MessageBar intent="info">
                 <MessageBarBody>
                   <MessageBarTitle>Airflow connections</MessageBarTitle>
-                  Airflow connections (HTTP, AWS, Azure, etc.) are managed in the Airflow webserver Admin UI. Open <code>{active?.webserverUrl || '(configure URL)'}/connection/list/</code> with the webserver admin role. A Loom-side proxy is tracked under PR #405.
+                  Connections (HTTP, AWS, Azure, etc.) are an Airflow-native construct, managed in the Airflow webserver Admin UI. Open <code>{active?.webserverUrl || '(configure URL)'}/connection/list/</code> with the webserver admin role to add or edit them.
                 </MessageBarBody>
               </MessageBar>
             )}

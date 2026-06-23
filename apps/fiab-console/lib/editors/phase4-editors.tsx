@@ -3803,10 +3803,10 @@ export function OperationsAgentEditor({ item, id }: { item: FabricItemType; id: 
     <ItemEditorChrome item={item} id={id} ribbon={ribbon} main={
       <div className={s.pad}>
         {loading && <Spinner size="small" label="Loading…" labelPosition="after" />}
-        <MessageBar intent="warning">
+        <MessageBar intent="info">
           <MessageBarBody>
-            <MessageBarTitle>Phase 1: Foundry Agent deploy stub</MessageBarTitle>
-            Agent config persists to Cosmos and the <strong>Deploy to Foundry</strong> button pushes a prompt-agent definition (instructions + model + tools) to the Azure AI Foundry Agent Service. Playbook generation, 5-minute polling, Activator + Power Automate handshake, and Teams notifications are tracked in <code>docs/fiab/operations-agent-parity-spec.md</code> for follow-up sessions.
+            <MessageBarTitle>Foundry-deployed operations agent</MessageBarTitle>
+            This agent&rsquo;s instructions, model, and tools are saved to your workspace. <strong>Deploy to Foundry</strong> publishes the agent definition to the Azure AI Foundry Agent Service, where it runs against your connected data and tools.
           </MessageBarBody>
         </MessageBar>
         {deployedAgentId && (

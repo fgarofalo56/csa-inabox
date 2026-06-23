@@ -2359,10 +2359,6 @@ export function EventhouseEditor({ item, id }: { item: FabricItemType; id: strin
               </DialogBody>
             </DialogSurface>
           </Dialog>
-          <Button appearance="outline" icon={<Add20Regular />} disabled
-            title="KQL database shortcut (ReadOnlyFollowing) requires a Fabric-managed eventhouse; the standalone ADX cluster hosts ReadWrite databases only">
-            +Database shortcut
-          </Button>
         </div>
 
         {state?.ok && (

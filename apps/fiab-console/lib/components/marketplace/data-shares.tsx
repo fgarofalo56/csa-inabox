@@ -279,10 +279,32 @@ function MountShareButton({
 function AddProviderDialog({ open, setOpen, onDone }: { open: boolean; setOpen: (b: boolean) => void; onDone: () => void }) {
   const s = useStyles();
   const [name, setName] = useState('');
-  const [profile, setProfile] = useState('');
+  const [endpoint, setEndpoint] = useState('');
+  const [bearerToken, setBearerToken] = useState('');
+  const [version, setVersion] = useState('1');
   const [comment, setComment] = useState('');
+  const [showPaste, setShowPaste] = useState(false);
+  const [pasteText, setPasteText] = useState('');
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<string | null>(null);
+
+  // Convenience: a provider hands you a Delta Sharing activation FILE (JSON).
+  // Rather than make the JSON the config surface (no-freeform-config), we parse
+  // it into the structured fields so the form stays the source of truth.
+  const autofillFromProfile = () => {
+    setErr(null);
+    try {
+      const p = JSON.parse(pasteText);
+      if (p.endpoint) setEndpoint(String(p.endpoint));
+      if (p.bearerToken) setBearerToken(String(p.bearerToken));
+      if (p.shareCredentialsVersion != null) setVersion(String(p.shareCredentialsVersion));
+      setShowPaste(false);
+      setPasteText('');
+    } catch {
+      setErr('That doesn’t look like a valid activation profile (expected JSON with endpoint + bearerToken).');
+    }
+  };
+
   return (
     <Dialog open={open} onOpenChange={(_, d) => setOpen(d.open)}>
       <DialogSurface>
@@ -290,31 +312,61 @@ function AddProviderDialog({ open, setOpen, onDone }: { open: boolean; setOpen: 
           <DialogTitle>Add an inbound provider</DialogTitle>
           <DialogContent>
             <Caption1 className={s.hint}>
-              Paste the recipient activation file (credential JSON) a provider shared with you — e.g. from a Databricks
-              Marketplace listing or a third party using open Delta Sharing.
+              Enter the Delta Sharing connection a provider gave you (e.g. from a Databricks Marketplace listing or a
+              third party using open Delta Sharing). Have the activation <em>file</em>? Use “Paste activation file” to fill it in.
             </Caption1>
-            <Field label="Provider name" required style={{ marginTop: 8 }}>
+            <Field label="Provider name" required style={{ marginTop: tokens.spacingVerticalS }}>
               <Input value={name} onChange={(_, d) => setName(d.value)} placeholder="acme-weather-data" />
             </Field>
-            <Field label="Recipient activation profile (JSON)" required style={{ marginTop: 8 }}>
-              <Textarea value={profile} onChange={(_, d) => setProfile(d.value)} rows={5}
-                placeholder='{"shareCredentialsVersion":1,"endpoint":"https://…","bearerToken":"…"}' />
+            <Field label="Sharing endpoint URL" required style={{ marginTop: tokens.spacingVerticalS }}>
+              <Input type="url" value={endpoint} onChange={(_, d) => setEndpoint(d.value)}
+                placeholder="https://sharing.delta.io/delta-sharing/" />
             </Field>
-            <Field label="Comment" style={{ marginTop: 8 }}>
+            <Field label="Bearer token" required style={{ marginTop: tokens.spacingVerticalS }}>
+              <Input type="password" value={bearerToken} onChange={(_, d) => setBearerToken(d.value)}
+                placeholder="Token from the activation file" />
+            </Field>
+            <Field label="Credentials version" style={{ marginTop: tokens.spacingVerticalS }}>
+              <Select value={version} onChange={(_, d) => setVersion(d.value)}>
+                <option value="1">1</option>
+              </Select>
+            </Field>
+            <Field label="Comment" style={{ marginTop: tokens.spacingVerticalS }}>
               <Input value={comment} onChange={(_, d) => setComment(d.value)} />
             </Field>
+            <div style={{ marginTop: tokens.spacingVerticalS }}>
+              <Button size="small" appearance="subtle" onClick={() => setShowPaste((v) => !v)}>
+                {showPaste ? 'Hide activation file paste' : 'Paste activation file (JSON) to auto-fill…'}
+              </Button>
+            </div>
+            {showPaste && (
+              <Field label="Activation profile (JSON)" style={{ marginTop: tokens.spacingVerticalS }}>
+                <Textarea value={pasteText} onChange={(_, d) => setPasteText(d.value)} rows={4}
+                  placeholder='{"shareCredentialsVersion":1,"endpoint":"https://…","bearerToken":"…"}' />
+                <div style={{ marginTop: tokens.spacingVerticalXS }}>
+                  <Button size="small" appearance="secondary" disabled={!pasteText.trim()} onClick={autofillFromProfile}>
+                    Auto-fill from file
+                  </Button>
+                </div>
+              </Field>
+            )}
             {err && <MessageBar intent="error"><MessageBarBody>{err}</MessageBarBody></MessageBar>}
           </DialogContent>
           <DialogActions>
-            <Button appearance="primary" disabled={busy || !name || !profile} onClick={async () => {
+            <Button appearance="primary" disabled={busy || !name || !endpoint || !bearerToken} onClick={async () => {
               setBusy(true); setErr(null);
+              const profile = JSON.stringify({
+                shareCredentialsVersion: Number(version) || 1,
+                endpoint: endpoint.trim(),
+                bearerToken: bearerToken.trim(),
+              });
               const r = await fetch('/api/marketplace/sharing/providers', {
                 method: 'POST', headers: { 'content-type': 'application/json' },
                 body: JSON.stringify({ name, recipient_profile_str: profile, comment }),
               });
               const j = await r.json(); setBusy(false);
               if (!j.ok) { setErr(j.error || 'Failed'); return; }
-              setOpen(false); setName(''); setProfile(''); setComment(''); onDone();
+              setOpen(false); setName(''); setEndpoint(''); setBearerToken(''); setVersion('1'); setComment(''); onDone();
             }}>{busy ? 'Adding…' : 'Add provider'}</Button>
             <DialogTrigger disableButtonEnhancement><Button appearance="secondary">Cancel</Button></DialogTrigger>
           </DialogActions>
