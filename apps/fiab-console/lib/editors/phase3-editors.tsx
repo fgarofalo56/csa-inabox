@@ -66,6 +66,7 @@ import {
 } from '@/lib/components/adx/schema-diagram-canvas';
 import { KustoResultsGrid } from '@/lib/components/adx/kusto-results-grid';
 import { TimeSeriesChart } from '@/lib/components/adx/time-series-chart';
+import { LoomChart, type LoomChartType } from '@/lib/components/charts/loom-chart';
 import { ModelViewPanel } from './components/model-view-canvas';
 import { PbiModelViewPanel } from './components/pbi-model-view-panel';
 import { PowerBiTree } from '@/lib/components/powerbi/powerbi-tree';
@@ -15057,11 +15058,21 @@ type LoomReportDetail = {
 };
 type VisualState = { rows: Array<Record<string, unknown>>; loading: boolean; err: string | null };
 
-/** Render a single visual's AAS query result (card = big value, else table). */
+/** Chart type values that LoomChart handles natively. */
+const CHART_TYPES: ReadonlySet<string> = new Set(['bar', 'column', 'line', 'area', 'donut', 'pie', 'scatter']);
+
+/** Render a single visual's AAS query result.
+ *  - card  → big KPI number
+ *  - bar / column / line / area / donut / pie / scatter → real SVG chart
+ *  - table → Fluent Table
+ *  - anything else with non-numeric rows → table fallback (no "follow-up" messaging)
+ */
 function LoomVisual({ visual, state }: { visual: LoomVisualDef; state?: VisualState }) {
   if (!state || state.loading) return <Spinner size="tiny" label="Querying model…" />;
   if (state.err) return <MessageBar intent="error"><MessageBarBody>{state.err}</MessageBarBody></MessageBar>;
   const rows = state.rows;
+
+  // ── Card visual ──────────────────────────────────────────────────────────
   if (visual.type === 'card' && rows.length >= 1) {
     const val = Object.values(rows[0])[0];
     return (
@@ -15073,15 +15084,31 @@ function LoomVisual({ visual, state }: { visual: LoomVisualDef; state?: VisualSt
       </div>
     );
   }
+
+  // ── Chart visual ─────────────────────────────────────────────────────────
+  if (CHART_TYPES.has(visual.type)) {
+    // Detect whether the data actually has a numeric column; if not, degrade
+    // to a plain table (no accusatory banner, no "follow-up" wording).
+    const hasNumeric = rows.length > 0 && Object.values(rows[0]).some(
+      (v) => v != null && v !== '' && !Number.isNaN(Number(v)),
+    );
+    if (hasNumeric) {
+      return (
+        <LoomChart
+          type={visual.type as LoomChartType}
+          rows={rows}
+          title={visual.title}
+          height={240}
+        />
+      );
+    }
+  }
+
+  // ── Table / non-numeric fallback ─────────────────────────────────────────
   const cols = rows.length ? Object.keys(rows[0]) : [];
   return (
     <div>
       <Caption1><strong>{visual.title || '(untitled)'}</strong></Caption1>
-      {visual.type !== 'table' && visual.type !== 'card' && (
-        <MessageBar intent="info" style={{ margin: `${tokens.spacingVerticalXS} 0` }}>
-          <MessageBarBody>Chart type &ldquo;{visual.type}&rdquo; renders its data as a table; a charting library lands in a follow-up.</MessageBarBody>
-        </MessageBar>
-      )}
       {rows.length === 0 ? <Caption1>No rows returned.</Caption1> : (
         <Table size="small">
           <TableHeader><TableRow>{cols.map((c) => <TableHeaderCell key={c}>{c}</TableHeaderCell>)}</TableRow></TableHeader>

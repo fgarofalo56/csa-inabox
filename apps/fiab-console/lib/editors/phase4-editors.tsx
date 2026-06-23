@@ -49,6 +49,7 @@ import type { FabricItemType } from '@/lib/catalog/fabric-item-types';
 import type { RibbonTab } from '@/lib/components/ribbon';
 import { MonacoTextarea } from '@/lib/components/editor/monaco-textarea';
 import { ComputePicker } from '@/lib/components/compute-picker';
+import { KeyValueRows } from '@/lib/components/ui/key-value-rows';
 import { ForceDirectedGraph } from '@/lib/components/graph/force-directed-graph';
 import { GeoJsonMap, type MapLayer, type MapLayerType } from '@/lib/components/graph/geojson-map';
 import { GraphTypeEditor } from '@/lib/components/graph/graph-type-editor';
@@ -1300,8 +1301,10 @@ function WeaveInstancePanel({
                 </Field>
               )}
               {(a.kind === 'create' || a.kind === 'update') && (
-                <Field label="Properties (JSON object of scalars)">
-                  <Textarea value={runParams[`${a.name}.props`] || ''} onChange={(_, d) => setRunParams((p) => ({ ...p, [`${a.name}.props`]: d.value }))} placeholder='{"name": "Acme"}' resize="vertical" />
+                <Field label="Properties">
+                  <KeyValueRows key={`${a.name}.props`} value={runParams[`${a.name}.props`] || ''}
+                    onChange={(json) => setRunParams((p) => ({ ...p, [`${a.name}.props`]: json }))}
+                    keyPlaceholder="name" valuePlaceholder="Acme" />
                 </Field>
               )}
               <Button appearance="secondary" icon={runningAction === a.name ? <Spinner size="tiny" /> : <Play20Regular />} onClick={() => runAction(a)} disabled={runningAction === a.name} className={s.ontoStartBtn}>
