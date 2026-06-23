@@ -3,12 +3,12 @@
 import { clientFetch } from '@/lib/client-fetch';
 import { useEffect, useState } from 'react';
 import {
-  Body1, Caption1, Button, MessageBar, MessageBarBody, MessageBarTitle,
+  Body1, Caption1, Button, MessageBar, MessageBarBody,
   Input, makeStyles, tokens,
 } from '@fluentui/react-components';
 import { AdminShell } from '@/lib/components/admin-shell';
 import { SignInRequired } from '@/lib/components/sign-in-required';
-import { ServiceCard } from '@/lib/components/admin-scaling/service-card';
+import { ServiceCard, type UtilizationSnapshot } from '@/lib/components/admin-scaling/service-card';
 import { ScalePicker } from '@/lib/components/admin-scaling/scale-picker';
 import { CostPreview } from '@/lib/components/admin-scaling/cost-preview';
 import { LoomDataTable, type LoomColumn } from '@/lib/components/ui/loom-data-table';
@@ -68,7 +68,6 @@ const useStyles = makeStyles({
   italicNote: { fontStyle: 'italic', color: tokens.colorNeutralForeground3 },
   errorText: { color: tokens.colorPaletteRedForeground1 },
   okText: { color: tokens.colorPaletteGreenForeground1 },
-  trailing: { marginTop: tokens.spacingVerticalXXL },
   // MCP persistence sub-section inside the Container Apps card
   mcpSection: {
     borderTop: `1px solid ${tokens.colorNeutralStroke2}`,
@@ -168,6 +167,11 @@ export default function ScalingPage() {
   const [mcpSel, setMcpSel] = useState<{ mountPath?: string; accessMode?: 'ReadWrite' | 'ReadOnly' }>({});
   const [mcpState, setMcpState] = useState<{ applying?: boolean; error?: string; ok?: string }>({});
 
+  // Utilization snapshots from /api/admin/scaling/utilization (Azure Monitor).
+  // Key = ARM resource type (lowercase). Loading until the fetch settles.
+  const [utilData, setUtilData] = useState<Record<string, UtilizationSnapshot> | null>(null);
+  const [utilLoading, setUtilLoading] = useState(true);
+
   useEffect(() => {
     // Fire every GET in parallel but populate each card independently as its
     // own response lands — one slow backend no longer holds the whole page on
@@ -190,6 +194,22 @@ export default function ScalingPage() {
     jsonGet('/api/admin/scaling/container-apps').then(when(setAcaData));
     jsonGet('/api/admin/scaling/foundry-compute').then(when(setFoundryData));
     jsonGet('/api/admin/mcp-servers/deploy').then(when(setMcpData));
+
+    // Utilization: fire separately so a Monitor timeout never delays the SKU dials.
+    jsonGet('/api/admin/scaling/utilization').then(when((u: any) => {
+      if (u?.ok && Array.isArray(u.items)) {
+        const byType: Record<string, UtilizationSnapshot> = {};
+        for (const item of u.items) {
+          if (item?.resourceType) byType[item.resourceType] = item as UtilizationSnapshot;
+        }
+        setUtilData(byType);
+      } else {
+        // Route returned an error (Monitor not configured, 503, etc.) — mark all
+        // as unavailable so cards show "—" rather than spinning indefinitely.
+        setUtilData({});
+      }
+      setUtilLoading(false);
+    }));
 
     return () => { cancelled = true; };
   }, []);
@@ -632,7 +652,7 @@ export default function ScalingPage() {
 
       <div className={styles.grid}>
 
-        {/* Fabric / Power BI capacities */}
+        {/* Fabric / Power BI capacities — no ARM Monitor metric for cu_percentage in Gov */}
         <ServiceCard
           title="Fabric / Power BI Capacity"
           subtitle="F-SKU (F2 → F2048) for Fabric; P-SKU for Power BI Premium."
@@ -641,6 +661,8 @@ export default function ScalingPage() {
             title: 'Capacity unavailable',
             body: `${capacityData.error}${capacityData.hint ? ' — ' + capacityData.hint : ''}`,
           } : undefined}
+          utilization={utilData?.['microsoft.fabric/capacities']}
+          utilizationLoading={utilLoading}
           controls={
             <LoomDataTable
               columns={capacityColumns}
@@ -659,6 +681,8 @@ export default function ScalingPage() {
           subtitle="DW100c → DW30000c — scale-out via ARM PATCH on sqlPools/{n}."
           loading={!dwuData}
           gateMessage={dwuData && !dwuData.ok ? { title: 'Synapse not configured', body: `${dwuData.error}${dwuData.hint ? ' — ' + dwuData.hint : ''}` } : undefined}
+          utilization={utilData?.['microsoft.synapse/workspaces/sqlpools']}
+          utilizationLoading={utilLoading}
           controls={
             <LoomDataTable
               columns={dwuColumns}
@@ -678,6 +702,8 @@ export default function ScalingPage() {
           loading={!adxData}
           gateMessage={adxData && !adxData.ok ? { title: 'ADX not configured', body: `${adxData.error}${adxData.hint ? ' — ' + adxData.hint : ''}` } : undefined}
           currentLabel={adxData?.cluster ? `${adxData.cluster.sku?.name} · ${adxData.cluster.sku?.capacity || 1} instance(s) · ${adxData.cluster.state || 'Running'}` : undefined}
+          utilization={utilData?.['microsoft.kusto/clusters']}
+          utilizationLoading={utilLoading}
           controls={adxData?.cluster && (
             <ScalePicker label="Target tier" options={skuOpts(ADX_SKUS)} value={adxSku || adxData.cluster.sku?.name} onChange={setAdxSku} />
           )}
@@ -695,12 +721,14 @@ export default function ScalingPage() {
           }}
         />
 
-        {/* Databricks SQL Warehouse */}
+        {/* Databricks SQL Warehouse — no ARM Monitor metric; shows "—" honestly */}
         <ServiceCard
           title="Databricks SQL Warehouse"
           subtitle="cluster_size (2X-Small → 4X-Large) via /api/2.0/sql/warehouses/{id}/edit."
           loading={!whData}
           gateMessage={whData && !whData.ok ? { title: 'Databricks not configured', body: whData.error } : undefined}
+          utilization={utilData?.['microsoft.databricks/warehouse']}
+          utilizationLoading={utilLoading}
           controls={
             <LoomDataTable
               columns={whColumns}
@@ -713,12 +741,14 @@ export default function ScalingPage() {
           }
         />
 
-        {/* Databricks Cluster */}
+        {/* Databricks Cluster — no ARM Monitor metric; shows "—" honestly */}
         <ServiceCard
           title="Databricks Cluster"
           subtitle="node_type_id + num_workers via /api/2.0/clusters/edit."
           loading={!clusterData}
           gateMessage={clusterData && !clusterData.ok ? { title: 'Databricks not configured', body: clusterData.error } : undefined}
+          utilization={utilData?.['microsoft.databricks/cluster']}
+          utilizationLoading={utilLoading}
           controls={
             <LoomDataTable
               columns={clusterColumns}
@@ -738,6 +768,8 @@ export default function ScalingPage() {
           loading={!searchData}
           gateMessage={searchData && !searchData.ok ? { title: 'AI Search not configured', body: `${searchData.error}${searchData.hint ? ' — ' + searchData.hint : ''}` } : undefined}
           currentLabel={searchData?.service ? `${searchData.service.sku?.name} · ${searchData.service.replicaCount}R × ${searchData.service.partitionCount}P · ${searchData.service.status || 'Running'}` : undefined}
+          utilization={utilData?.['microsoft.search/searchservices']}
+          utilizationLoading={utilLoading}
           controls={searchData?.service && (
             <>
               <ScalePicker label="SKU" options={skuOpts(SEARCH_SKUS)} value={searchSel.sku || searchData.service.sku?.name} onChange={(v) => setSearchSel({ ...searchSel, sku: v })} />
@@ -781,6 +813,8 @@ export default function ScalingPage() {
           loading={!apimData}
           gateMessage={apimData && !apimData.ok ? { title: 'APIM not configured', body: `${apimData.error}${apimData.hint ? ' — ' + apimData.hint : ''}` } : undefined}
           currentLabel={apimData?.service ? `${apimData.service.sku?.name} × ${apimData.service.sku?.capacity} · ${apimData.service.provisioningState || 'Succeeded'}` : undefined}
+          utilization={utilData?.['microsoft.apimanagement/service']}
+          utilizationLoading={utilLoading}
           controls={apimData?.service && (
             <>
               <ScalePicker label="SKU" options={skuOpts(APIM_SKUS)} value={apimSel.sku || apimData.service.sku?.name} onChange={(v) => setApimSel({ ...apimSel, sku: v })} />
@@ -813,6 +847,8 @@ export default function ScalingPage() {
           subtitle="Per-container RU/s (manual) or autoscale max RU/s."
           loading={!cosmosData}
           gateMessage={cosmosData && !cosmosData.ok ? { title: 'Cosmos not configured', body: `${cosmosData.error}${cosmosData.hint ? ' — ' + cosmosData.hint : ''}` } : undefined}
+          utilization={utilData?.['microsoft.documentdb/databaseaccounts']}
+          utilizationLoading={utilLoading}
           controls={
             <LoomDataTable
               columns={cosmosColumns}
@@ -831,6 +867,8 @@ export default function ScalingPage() {
           subtitle="workload profile (Consumption / D-/E-series) + replicas."
           loading={!acaData}
           gateMessage={acaData && !acaData.ok ? { title: 'Container Apps not configured', body: `${acaData.error}${acaData.hint ? ' — ' + acaData.hint : ''}` } : undefined}
+          utilization={utilData?.['microsoft.app/containerapps']}
+          utilizationLoading={utilLoading}
           controls={
             <>
               <LoomDataTable
@@ -906,6 +944,8 @@ export default function ScalingPage() {
           title="AI Foundry — AML compute"
           subtitle="vmSize + min/max nodes for AmlCompute targets. Requires a Microsoft.MachineLearningServices/workspaces resource."
           loading={!foundryData}
+          utilization={utilData?.['microsoft.machinelearningservices/workspaces/computes']}
+          utilizationLoading={utilLoading}
           gateMessage={
             foundryData && !foundryData.ok
               ? {
@@ -927,17 +967,6 @@ export default function ScalingPage() {
         />
 
       </div>
-
-      <MessageBar intent="info" className={styles.trailing}>
-        <MessageBarTitle>Utilization metrics deferred</MessageBarTitle>
-        <MessageBarBody>
-          Current-utilization indicators (DBU / CPU / req-rate / RU consumption)
-          require Azure Monitor metrics per resource — that's a separate piece of
-          work. Today this page surfaces only the dial; the admin runs the scale
-          decision themselves. Per .claude/rules/no-vaporware.md we do not show
-          AI-hallucinated utilization numbers.
-        </MessageBarBody>
-      </MessageBar>
     </AdminShell>
   );
 }

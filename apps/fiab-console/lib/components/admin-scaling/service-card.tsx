@@ -4,7 +4,7 @@ import { ReactNode } from 'react';
 import {
   Body1, Subtitle2, Caption1, Badge, Button, Spinner,
   MessageBar, MessageBarBody, MessageBarTitle,
-  makeStyles, tokens,
+  makeStyles, tokens, ProgressBar,
 } from '@fluentui/react-components';
 
 /**
@@ -21,6 +21,15 @@ import {
  * existing callers keep working without changes (the grid wires per-service
  * accents for the full Web-3.0 look).
  */
+/** Shape of one resolved utilization snapshot from /api/admin/scaling/utilization */
+export interface UtilizationSnapshot {
+  available: boolean;
+  value?: number;
+  label?: string;
+  unit?: string;
+  reason?: string;
+}
+
 const useStyles = makeStyles({
   card: {
     position: 'relative',
@@ -52,13 +61,46 @@ const useStyles = makeStyles({
   footer: { display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: tokens.spacingHorizontalM },
   current: { color: tokens.colorNeutralForeground2, fontSize: tokens.fontSizeBase200 },
   footerCaption: { color: tokens.colorNeutralForeground3 },
+  // Utilization indicator: a compact labeled bar shown at the top-right of the
+  // header alongside the status badge. Never blocks the card — loading shows a
+  // thin indeterminate bar; n/a shows muted text.
+  utilWrap: {
+    display: 'flex',
+    flexDirection: 'column',
+    alignItems: 'flex-end',
+    gap: tokens.spacingVerticalXXS,
+    minWidth: '80px',
+    flexShrink: 0,
+  },
+  utilLabel: {
+    fontSize: tokens.fontSizeBase100,
+    color: tokens.colorNeutralForeground3,
+    textTransform: 'uppercase',
+    letterSpacing: '0.05em',
+    fontWeight: tokens.fontWeightSemibold,
+    lineHeight: 1,
+  },
+  utilValue: {
+    fontSize: tokens.fontSizeBase300,
+    fontWeight: tokens.fontWeightSemibold,
+    color: tokens.colorBrandForeground1,
+    lineHeight: 1,
+  },
+  utilNA: {
+    fontSize: tokens.fontSizeBase300,
+    color: tokens.colorNeutralForeground4,
+    lineHeight: 1,
+  },
+  utilBar: {
+    width: '80px',
+  },
 });
 
 export function ServiceCard({
   title, subtitle, currentLabel, statusBadge, lastChanged,
   controls, costPreview, gateMessage,
   loading, dirty, applying, onApply, applyError, applyOk,
-  accent, icon,
+  accent, icon, utilization, utilizationLoading,
 }: {
   title: string;
   subtitle: string;
@@ -78,9 +120,50 @@ export function ServiceCard({
   accent?: string;
   /** Optional service glyph rendered in the accent-colored icon-wrap. */
   icon?: ReactNode;
+  /**
+   * Current-utilization snapshot from /api/admin/scaling/utilization.
+   * When provided, a compact labeled indicator appears at the top-right of
+   * the card header. Only shows a real number when available:true; shows "—"
+   * when available:false. Never blocks rendering — pass undefined while loading.
+   */
+  utilization?: UtilizationSnapshot;
+  /** When true, a thin indeterminate bar replaces the utilization value. */
+  utilizationLoading?: boolean;
 }) {
   const styles = useStyles();
   const bar = accent || tokens.colorBrandStroke1;
+
+  // Format the utilization value as a short human-readable string.
+  // For percentage metrics round to 1 decimal; for counts format with SI suffix.
+  function fmtUtil(snap: UtilizationSnapshot): string {
+    if (!snap.available || snap.value === undefined) return '—';
+    const v = snap.value;
+    const u = (snap.unit || '').toLowerCase();
+    if (u === 'percent' || u === '%') return `${v.toFixed(1)} %`;
+    if (u === 'bytes') {
+      if (v >= 1e9) return `${(v / 1e9).toFixed(1)} GB`;
+      if (v >= 1e6) return `${(v / 1e6).toFixed(1)} MB`;
+      if (v >= 1e3) return `${(v / 1e3).toFixed(0)} KB`;
+      return `${v.toFixed(0)} B`;
+    }
+    if (u === 'nanocores' || u === 'nanocores (avg)') {
+      // 1 core = 1_000_000_000 nanocores; show as mCPU (millicores) for readability
+      return `${(v / 1_000_000).toFixed(0)} mCPU`;
+    }
+    // Generic: counts etc. Use comma-thousands for readability
+    if (v >= 1e6) return `${(v / 1e6).toFixed(1)}M`;
+    if (v >= 1e3) return `${(v / 1e3).toFixed(1)}k`;
+    return v.toFixed(v % 1 === 0 ? 0 : 1);
+  }
+
+  // Bar value [0..1] for percentage metrics; null for non-percent metrics (no bar).
+  function barValue(snap: UtilizationSnapshot): number | null {
+    if (!snap.available || snap.value === undefined) return null;
+    const u = (snap.unit || '').toLowerCase();
+    if (u === 'percent' || u === '%') return Math.min(1, snap.value / 100);
+    return null;
+  }
+
   return (
     <section className={styles.card} aria-label={`${title} scaling card`}>
       <div className={styles.accent} style={{ backgroundColor: bar }} aria-hidden />
@@ -91,6 +174,30 @@ export function ServiceCard({
             <Subtitle2 className={styles.titleName}>{title}</Subtitle2>
             <Caption1 className={styles.titleSub}>{subtitle}</Caption1>
           </div>
+        </div>
+        {/* Utilization indicator — shown at header right, never blocks the card */}
+        <div className={styles.utilWrap} aria-label={utilization?.label ? `Current utilization: ${utilization.label}` : 'Current utilization'}>
+          <Caption1 className={styles.utilLabel}>
+            {utilization?.label || 'Utilization'}
+          </Caption1>
+          {utilizationLoading ? (
+            <ProgressBar thickness="thin" className={styles.utilBar} aria-label="Loading utilization…" />
+          ) : utilization?.available ? (
+            <>
+              <span className={styles.utilValue}>{fmtUtil(utilization)}</span>
+              {barValue(utilization) !== null && (
+                <ProgressBar
+                  value={barValue(utilization)!}
+                  thickness="thin"
+                  className={styles.utilBar}
+                  aria-label={`${utilization.label || 'Utilization'}: ${fmtUtil(utilization)}`}
+                  color={barValue(utilization)! > 0.85 ? 'error' : barValue(utilization)! > 0.65 ? 'warning' : 'success'}
+                />
+              )}
+            </>
+          ) : (
+            <span className={styles.utilNA} title={utilization?.reason || 'Metric not available'}>—</span>
+          )}
         </div>
         {statusBadge && (
           <Badge appearance="filled" color={statusBadge.intent === 'danger' ? 'danger' : statusBadge.intent === 'info' ? 'informative' : statusBadge.intent || 'success'}>
