@@ -115,6 +115,16 @@ const USER_SCHEMA_FILTER =
 // Read-only user-table catalog query (no user input — server/database are
 // resolved per item, never interpolated). Shared by listTables (UAMI) and
 // listTablesWithAuth (credential-backed).
+//
+// The full-engine variant carries an approximate row count via a *correlated
+// scalar subquery* in the SELECT list — fine on Azure SQL DB / Fabric SQL
+// database, but **rejected by the MPP engines** (Synapse dedicated SQL pool +
+// Fabric Warehouse), whose parser does not allow a scalar subquery in the SELECT
+// list (it fails at the `AS rowCount` alias → "Incorrect syntax near 'AS'") and
+// which don't expose `sys.dm_db_partition_stats` the same way. So we pick the
+// dialect from {@link detectSqlBackendKind}: full-engine connections get row
+// counts; MPP connections get the no-subquery variant (count omitted — the
+// picker just shows the table name, which is all it needs).
 const LIST_TABLES_SQL =
   `SELECT t.object_id AS objectId, s.name AS [schema], t.name AS name,
           t.type AS type, o.type_desc AS typeDesc,
@@ -129,6 +139,23 @@ const LIST_TABLES_SQL =
    JOIN sys.objects o ON o.object_id = t.object_id
    WHERE t.is_ms_shipped = 0
    ORDER BY s.name, t.name;`;
+
+// MPP-engine (Synapse dedicated SQL pool / Fabric Warehouse) table-list — no
+// scalar subquery in the SELECT list (the construct the MPP parser rejects).
+const LIST_TABLES_SQL_MPP =
+  `SELECT t.object_id AS objectId, s.name AS [schema], t.name AS name,
+          t.type AS type, o.type_desc AS typeDesc,
+          t.create_date AS createDate, t.modify_date AS modifyDate
+   FROM sys.tables t
+   JOIN sys.schemas s ON s.schema_id = t.schema_id
+   JOIN sys.objects o ON o.object_id = t.object_id
+   WHERE t.is_ms_shipped = 0
+   ORDER BY s.name, t.name;`;
+
+/** Pick the table-list dialect for the connection's TDS backend. */
+function listTablesSqlFor(server: string): string {
+  return detectSqlBackendKind(server) === 'sqldb' ? LIST_TABLES_SQL : LIST_TABLES_SQL_MPP;
+}
 
 export async function listSchemas(server: string, database: string): Promise<SqlSchemaRow[]> {
   const rows = await executeParameterized<any>(
@@ -146,7 +173,7 @@ export async function listTables(server: string, database: string): Promise<SqlO
   const rows = await executeParameterized<any>(
     server,
     database,
-    LIST_TABLES_SQL,
+    listTablesSqlFor(server),
   );
   return rows.map(shapeObject);
 }
@@ -164,9 +191,10 @@ export async function listTablesWithAuth(
   database: string,
   auth?: SqlExplicitAuth,
 ): Promise<SqlObjectRow[]> {
+  const sql = listTablesSqlFor(server);
   const rows = auth
-    ? await executeWithCredential<any>(server, database, LIST_TABLES_SQL, auth)
-    : await executeParameterized<any>(server, database, LIST_TABLES_SQL);
+    ? await executeWithCredential<any>(server, database, sql, auth)
+    : await executeParameterized<any>(server, database, sql);
   return rows.map(shapeObject);
 }
 

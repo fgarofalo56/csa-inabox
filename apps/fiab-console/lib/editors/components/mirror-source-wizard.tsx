@@ -22,7 +22,7 @@
 
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import {
-  Subtitle2, Body1, Caption1, Button, Input, Field, Dropdown, Option, Divider, Checkbox,
+  Subtitle2, Body1, Caption1, Button, Input, Field, Dropdown, Option, OptionGroup, Divider, Checkbox,
   Table, TableBody, TableRow, TableCell, TableHeader, TableHeaderCell, Spinner,
   MessageBar, MessageBarBody,
   Dialog, DialogSurface, DialogTitle, DialogBody, DialogContent, DialogActions,
@@ -254,8 +254,17 @@ export function MirrorSourceWizard(props: MirrorSourceWizardProps) {
     setAvailTables(null); setTablesMsg(null); setVerify({ status: 'idle' }); setCreateErr(null);
   }, [open, editing, initialSrc, loadConnections]);
 
+  // Connections recommended for this source (type matches the source's backends)
+  // vs everything else the user has created. We NEVER hide a created connection —
+  // an operator who made a connection must always be able to pick it (the strict
+  // type filter used to drop every non-exact-match connection). Recommended ones
+  // surface first; the rest appear under "Other connections".
   const compatibleConns = useMemo(
     () => connections.filter((c) => srcDef.connTypes.includes(c.type)),
+    [connections, srcDef],
+  );
+  const otherConns = useMemo(
+    () => connections.filter((c) => !srcDef.connTypes.includes(c.type)),
     [connections, srcDef],
   );
   const pickedConn = useMemo(() => connections.find((c) => c.id === connId) || null, [connections, connId]);
@@ -416,17 +425,31 @@ export function MirrorSourceWizard(props: MirrorSourceWizardProps) {
                 </Caption1>
                 <div className={s.connRow} style={{ marginTop: tokens.spacingVerticalS }}>
                   <Field style={{ flex: 1 }}>
-                    <Dropdown placeholder={compatibleConns.length ? 'Select a connection' : 'No saved connections for this source'}
+                    <Dropdown placeholder={connections.length ? 'Select a connection' : 'No saved connections yet — create one'}
                       value={pickedConn ? pickedConn.name : ''} selectedOptions={connId ? [connId] : []}
                       onOptionSelect={(_, d) => setConnId(d.optionValue || '')}>
-                      {compatibleConns.map((c) => (
-                        <Option key={c.id} value={c.id} text={c.name}>
-                          {c.name} · {c.authMethod}{c.hasSecret ? ' · Key Vault' : ''}
-                        </Option>
-                      ))}
+                      {compatibleConns.length > 0 && (
+                        <OptionGroup label="Recommended for this source">
+                          {compatibleConns.map((c) => (
+                            <Option key={c.id} value={c.id} text={c.name}>
+                              {c.name} · {c.authMethod}{c.hasSecret ? ' · Key Vault' : ''}
+                            </Option>
+                          ))}
+                        </OptionGroup>
+                      )}
+                      {otherConns.length > 0 && (
+                        <OptionGroup label="Other connections">
+                          {otherConns.map((c) => (
+                            <Option key={c.id} value={c.id} text={c.name}>
+                              {c.name} · {c.type} · {c.authMethod}{c.hasSecret ? ' · Key Vault' : ''}
+                            </Option>
+                          ))}
+                        </OptionGroup>
+                      )}
                     </Dropdown>
                   </Field>
-                  <Button appearance="outline" icon={<PlugConnected20Regular />} onClick={() => setConnBuilderOpen(true)}>New connection</Button>
+                  <Button appearance="outline" icon={<PlugConnected20Regular />}
+                    onClick={() => setConnBuilderOpen(true)}>New connection</Button>
                 </div>
                 {pickedConn && (
                   <div className={s.connRow} style={{ marginTop: tokens.spacingVerticalS }}>

@@ -42,7 +42,7 @@ import {
   Flash20Regular,
   Globe20Regular,
   Code20Regular,
-  Variable20Regular,
+  BracesVariable20Regular as Variable20Regular,
   CheckmarkCircle20Regular,
   DismissCircle20Regular,
   Compose20Regular,

@@ -47,7 +47,7 @@ import {
   DocumentBulletList20Regular, DataUsage20Regular, Database20Regular,
   BrainCircuit20Regular, TextBulletListSquare20Regular, BranchFork20Regular,
   Bug20Regular, ChevronDown16Regular, ChevronRight16Regular,
-  BrainCircuit16Regular, Dismiss16Regular, Add16Regular,
+  BrainCircuit20Regular as BrainCircuit16Regular, Dismiss16Regular, Add16Regular,
 } from '@fluentui/react-icons';
 
 const useStyles = makeStyles({
