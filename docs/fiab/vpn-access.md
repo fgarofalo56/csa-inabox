@@ -29,12 +29,16 @@ Loom VNets are routed to you over the tunnel. This is day-one config.
    config**. Unzip it.
 3. Azure VPN Client → **+ → Import** → select `AzureVPN/azurevpnconfig.xml`.
 4. **Connect** and sign in with your Microsoft Entra ID (the admin / metastore-admin account).
-5. Resolve service FQDNs to their private IPs — pick one:
-   - **Hosts file (simplest):** copy the **hosts-file block** from the same page
-     into `C:\Windows\System32\drivers\etc\hosts` (run editor as admin) or
-     `/etc/hosts`. It maps every private-endpoint FQDN → private IP.
-   - **Private DNS:** point your resolver at the VNet's Azure-provided DNS, or
-     link the `privatelink.*` zones to your client's resolver.
+5. DNS resolution — **works automatically.** Every `privatelink.*` zone is
+   linked to the hub VNet, and every private endpoint (admin-plane **and** the
+   DLZ data services — Cosmos, Synapse, Storage, Event Hubs, ADF, Databricks)
+   has a DNS-zone-group that registers its FQDN → private IP. So once connected,
+   the normal service FQDNs (`*.azuredatabricks.net`, `*.documents.azure.com`,
+   `*.sql.azuresynapse.net`, `web.azuresynapse.net`, …) resolve to private IPs
+   over the tunnel with **no host-file edit needed**.
+   - *Fallback / air-gapped resolver:* the same admin page still publishes a
+     copy/paste **hosts-file block** (FQDN → private IP) if you prefer to pin it
+     in `C:\Windows\System32\drivers\etc\hosts` or `/etc/hosts`.
 
 Now you can reach the backends over the tunnel — e.g. Synapse Studio
 (`web.azuresynapse.net`), the Databricks workspace, AI Search, Cosmos, Key Vault,
