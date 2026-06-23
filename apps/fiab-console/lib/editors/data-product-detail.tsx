@@ -44,7 +44,7 @@ import {
   ArrowSync20Regular, ArrowClockwise20Regular, BookRegular, BranchFork20Regular,
   CheckmarkCircle16Filled, CheckmarkCircleRegular, DatabaseRegular, DataTrending20Regular,
   DocumentText20Regular, Edit20Regular, KeyRegular, LockClosedRegular, Open16Regular,
-  PersonRegular, Pulse20Regular, ScanType20Regular, ShieldTask20Regular,
+  PersonRegular, Play20Regular, Pulse20Regular, ScanType20Regular, ShieldTask20Regular,
 } from '@fluentui/react-icons';
 import { ItemEditorChrome } from './item-editor-chrome';
 import { RequestAccessDialog } from './components/request-access-dialog';
@@ -959,6 +959,21 @@ const useConsumerStyles = makeStyles({
   sectionTitle: { display: 'flex', alignItems: 'center', gap: tokens.spacingHorizontalXS, fontWeight: tokens.fontWeightSemibold },
   chips: { display: 'flex', flexWrap: 'wrap', gap: tokens.spacingHorizontalXS },
   empty: { color: tokens.colorNeutralForeground3 },
+  // Try it tab
+  tryItCaption: { color: tokens.colorNeutralForeground3 },
+  tryItKql: {
+    fontFamily: 'Consolas, "Cascadia Code", monospace',
+    fontSize: tokens.fontSizeBase100,
+    color: tokens.colorNeutralForeground3,
+    background: tokens.colorNeutralBackground3,
+    borderRadius: tokens.borderRadiusMedium,
+    padding: `${tokens.spacingVerticalXS} ${tokens.spacingHorizontalS}`,
+    whiteSpace: 'pre' as const,
+    overflowX: 'auto' as const,
+    margin: 0,
+  },
+  tryItActions: { display: 'flex', alignItems: 'center', gap: tokens.spacingHorizontalS, flexWrap: 'wrap' as const },
+  tryItScroll: { overflowX: 'auto', maxHeight: '360px', marginTop: tokens.spacingVerticalS },
 });
 
 const STATUS_COLOR: Record<AccessRequestStatus, 'warning' | 'success' | 'danger' | 'brand'> = {
@@ -975,12 +990,44 @@ export function ConsumerDataProductDetail({ id }: { id: string }) {
   const [dialogOpen, setDialogOpen] = useState(false);
   const [myRequests, setMyRequests] = useState<AccessRequest[]>([]);
 
+  // Try it tab state
+  const [tryItLoading, setTryItLoading] = useState(false);
+  const [tryItResult, setTryItResult] = useState<{
+    database: string; table: string; kql: string;
+    columns: string[]; columnTypes: string[]; rows: unknown[][];
+    executionMs?: number;
+  } | null>(null);
+  const [tryItError, setTryItError] = useState<string | null>(null);
+  const [tryItGate, setTryItGate] = useState<{ missing: string } | null>(null);
+
   const loadMyRequests = useCallback(async () => {
     try {
       const r = await fetch(`/api/data-products/${id}/access-requests`);
       const j = await r.json();
       if (j.ok) setMyRequests(j.requests ?? []);
     } catch { /* non-fatal; the request panel just stays empty */ }
+  }, [id]);
+
+  const runPreview = useCallback(async () => {
+    setTryItLoading(true);
+    setTryItError(null);
+    setTryItGate(null);
+    setTryItResult(null);
+    try {
+      const r = await fetch(`/api/data-products/${id}/preview`, { method: 'POST' });
+      const j = await r.json();
+      if (j.ok) {
+        setTryItResult(j);
+      } else if (j.gate) {
+        setTryItGate(j.gate);
+      } else {
+        setTryItError(j.error || 'Preview failed');
+      }
+    } catch (e: any) {
+      setTryItError(e?.message || String(e));
+    } finally {
+      setTryItLoading(false);
+    }
   }, [id]);
 
   useEffect(() => {
@@ -1041,6 +1088,7 @@ export function ConsumerDataProductDetail({ id }: { id: string }) {
         <Tab value="overview" icon={<BookRegular />}>Overview</Tab>
         <Tab value="datasets" icon={<DatabaseRegular />}>Datasets</Tab>
         <Tab value="glossary" icon={<BookRegular />}>Glossary</Tab>
+        <Tab value="tryit" icon={<Play20Regular />}>Try it</Tab>
         <Tab value="access" icon={<KeyRegular />}>My data access</Tab>
       </TabList>
 
@@ -1109,6 +1157,81 @@ export function ConsumerDataProductDetail({ id }: { id: string }) {
                 {(state.glossaryLinks ?? []).map((g) => (
                   <Badge key={g.guid || g.name} appearance="tint" color="brand">{g.name}</Badge>
                 ))}
+              </div>
+            )}
+          </Card>
+        )}
+
+        {activeTab === 'tryit' && (
+          <Card className={s.card}>
+            <Text className={s.sectionTitle}><Play20Regular /> Try it — sample data preview</Text>
+            <Caption1 className={s.tryItCaption}>
+              Run a live sample query against the backing Azure Data Explorer table for this data product.
+              Returns up to 25 rows.
+            </Caption1>
+            {tryItResult && (
+              <pre className={s.tryItKql}>{tryItResult.kql}</pre>
+            )}
+            <div className={s.tryItActions}>
+              <Button
+                appearance="primary"
+                icon={tryItLoading ? undefined : <Play20Regular />}
+                disabled={tryItLoading}
+                onClick={runPreview}
+              >
+                {tryItLoading ? 'Running…' : tryItResult ? 'Run again' : 'Run sample query'}
+              </Button>
+              {tryItLoading && <Spinner size="tiny" label="Querying ADX…" />}
+              {tryItResult && !tryItLoading && (
+                <Caption1 className={s.tryItCaption}>
+                  {tryItResult.rows.length} row{tryItResult.rows.length !== 1 ? 's' : ''} from{' '}
+                  <strong>{tryItResult.table}</strong>
+                  {tryItResult.executionMs !== undefined ? ` (${tryItResult.executionMs}ms)` : ''}
+                </Caption1>
+              )}
+            </div>
+            {tryItGate && (
+              <MessageBar intent="warning">
+                <MessageBarBody>
+                  <MessageBarTitle>ADX not configured</MessageBarTitle>
+                  Set the <code>{tryItGate.missing}</code> environment variable to enable live data preview on this deployment.
+                </MessageBarBody>
+              </MessageBar>
+            )}
+            {tryItError && (
+              <MessageBar intent="error">
+                <MessageBarBody>{tryItError}</MessageBarBody>
+              </MessageBar>
+            )}
+            {tryItResult && tryItResult.rows.length === 0 && (
+              <Caption1 className={s.empty}>
+                The query returned no rows. The table may be empty.
+              </Caption1>
+            )}
+            {tryItResult && tryItResult.rows.length > 0 && (
+              <div className={s.tryItScroll}>
+                <Table size="small" aria-label={`Sample data from ${tryItResult.table}`}>
+                  <TableHeader>
+                    <TableRow>
+                      {tryItResult.columns.map((col) => (
+                        <TableHeaderCell key={col}>{col}</TableHeaderCell>
+                      ))}
+                    </TableRow>
+                  </TableHeader>
+                  <TableBody>
+                    {tryItResult.rows.map((row, ri) => (
+                      <TableRow key={ri}>
+                        {(row as unknown[]).map((cell, ci) => (
+                          <TableCell key={ci}>
+                            {cell === null || cell === undefined
+                              ? <span className={s.empty}>null</span>
+                              : String(cell)}
+                          </TableCell>
+                        ))}
+                      </TableRow>
+                    ))}
+                  </TableBody>
+                </Table>
               </div>
             )}
           </Card>
