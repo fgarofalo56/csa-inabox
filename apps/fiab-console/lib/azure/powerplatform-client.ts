@@ -1219,8 +1219,13 @@ function mapPowerApp(a: any, opts?: { instanceUrl?: string }): PowerApp {
 const FLOW_API_VERSION = '2016-11-01';
 
 export async function listFlows(envId: string): Promise<PowerAutomateFlow[]> {
+  // List Flows as Admin (V2). The V1 path (.../environments/{env}/flows) was
+  // retired by Microsoft ("The List Flows as Admin API is no longer supported.
+  // Please use the List Flows as Admin (V2) API."). V2 inserts /v2/ before
+  // /flows and returns identifying info only (displayName/state/timestamps);
+  // the full definition is fetched per-flow via getFlow/getFlowDefinition.
   const j = await call<{ value: any[] }>(
-    `${FLOW_BASE}/providers/Microsoft.ProcessSimple/scopes/admin/environments/${encodeURIComponent(envId)}/flows`,
+    `${FLOW_BASE}/providers/Microsoft.ProcessSimple/scopes/admin/environments/${encodeURIComponent(envId)}/v2/flows`,
     FLOW_SCOPE,
     { query: { 'api-version': FLOW_API_VERSION } },
   );

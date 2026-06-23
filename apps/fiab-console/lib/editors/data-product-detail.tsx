@@ -542,7 +542,7 @@ function LinkList({ items }: { items?: { label: string; url: string }[] }) {
  * not own the product, the CONSUMER (F15) read-only surface. Owner detection is
  * server-authoritative (`isOwner` from GET /api/data-products/[id]).
  */
-export function DataProductDetailEditor({ item, id }: { item: FabricItemType; id: string }) {
+export function DataProductDetailEditor({ item, id }: { item?: FabricItemType; id: string }) {
   const s = useStyles();
   const router = useRouter();
   const pathname = usePathname();
@@ -552,9 +552,9 @@ export function DataProductDetailEditor({ item, id }: { item: FabricItemType; id
   // (Back / "Done") drops the param and re-renders the read-first details view.
   const editView = searchParams?.get('view') === 'edit';
   const gotoEdit = useCallback((tab?: string) => {
-    const base = pathname || `/items/${item.slug}/${id}`;
+    const base = pathname || `/items/${item?.slug ?? 'data-product'}/${id}`;
     router.push(`${base}?view=edit${tab ? `&tab=${tab}` : ''}`);
-  }, [pathname, item.slug, id, router]);
+  }, [pathname, item?.slug, id, router]);
 
   const [product, setProduct] = useState<DataProductDoc | null>(null);
   const [isOwner, setIsOwner] = useState<boolean | null>(null);
