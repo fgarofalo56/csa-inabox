@@ -24,7 +24,7 @@ import { useCallback, useEffect, useMemo, useState } from 'react';
 import {
   Subtitle2, Body1, Caption1, Button, Input, Field, Dropdown, Option, OptionGroup, Divider, Checkbox,
   Table, TableBody, TableRow, TableCell, TableHeader, TableHeaderCell, Spinner,
-  MessageBar, MessageBarBody,
+  MessageBar, MessageBarBody, MessageBarTitle,
   Dialog, DialogSurface, DialogTitle, DialogBody, DialogContent, DialogActions,
   makeStyles, tokens,
 } from '@fluentui/react-components';
@@ -42,7 +42,7 @@ export interface MirrorTableSpec { schema: string; table: string }
  * Mirroring source types → display name, an accent color, and the Loom
  * Connection types that can back them. Each gets its own card in the wizard.
  */
-export const MIRROR_SOURCES: { id: string; name: string; accent: string; connTypes: string[] }[] = [
+export const MIRROR_SOURCES: { id: string; name: string; accent: string; connTypes: string[]; external?: string }[] = [
   { id: 'AzureSqlDatabase', name: 'Azure SQL Database', accent: '#0078d4', connTypes: ['azure-sql', 'generic-sql'] },
   { id: 'AzureSqlMI', name: 'Azure SQL Managed Instance', accent: '#0063b1', connTypes: ['azure-sql', 'generic-sql'] },
   { id: 'AzurePostgreSql', name: 'Azure Database for PostgreSQL', accent: '#336791', connTypes: ['postgres'] },
@@ -53,6 +53,11 @@ export const MIRROR_SOURCES: { id: string; name: string; accent: string; connTyp
   { id: 'SqlServer2025', name: 'SQL Server 2025', accent: '#a4262c', connTypes: ['generic-sql'] },
   { id: 'MSSQL', name: 'SQL Server 2016-2022', accent: '#a4262c', connTypes: ['generic-sql'] },
   { id: 'GenericMirror', name: 'Open mirroring', accent: '#5c2d91', connTypes: ['azure-sql', 'postgres', 'cosmos', 'storage-adls', 'generic-sql'] },
+  // Databricks Unity Catalog is a *dedicated* Loom item type (`mirrored-databricks`)
+  // — it mounts a UC catalog read-only into OneLake (metastore + catalog selection,
+  // not server/database/tables), so this card routes to that editor instead of the
+  // generic mirrored-database flow. `external` = the deep link to its New editor.
+  { id: 'DatabricksUC', name: 'Databricks Unity Catalog', accent: '#ff3621', connTypes: [], external: '/items/mirrored-databricks/new' },
 ];
 
 /** Sources whose connection needs a GCP project id + dataset rather than a SQL server FQDN. */
@@ -432,6 +437,23 @@ export function MirrorSourceWizard(props: MirrorSourceWizardProps) {
                 </div>
               </div>
 
+              {srcDef.external && (
+                <MessageBar intent="info" style={{ marginTop: tokens.spacingVerticalM }}>
+                  <MessageBarBody>
+                    <MessageBarTitle>Databricks Unity Catalog mirror</MessageBarTitle>
+                    A Unity Catalog mirror is a dedicated Loom item type — it mounts a Databricks UC
+                    catalog read-only into OneLake (you pick a metastore + catalog; there is no
+                    server/database or per-table picker). Open its editor to create one.
+                    <div style={{ marginTop: tokens.spacingVerticalS }}>
+                      <Button appearance="primary" as="a" href={srcDef.external} icon={<Database20Regular />}>
+                        Create a Databricks Unity Catalog mirror
+                      </Button>
+                    </div>
+                  </MessageBarBody>
+                </MessageBar>
+              )}
+
+              {!srcDef.external && (<>
               <Divider />
 
               {/* Step 2 — connection (Key Vault-backed auth) */}
@@ -686,13 +708,16 @@ export function MirrorSourceWizard(props: MirrorSourceWizardProps) {
                 </div>
                 {createErr && <MessageBar intent="error" style={{ marginTop: tokens.spacingVerticalS }}><MessageBarBody>{createErr}</MessageBarBody></MessageBar>}
               </div>
+              </>)}
             </div>
           </DialogContent>
           <DialogActions>
             <Button appearance="secondary" onClick={onClose}>Cancel</Button>
-            <Button appearance="primary" icon={<Add20Regular />} disabled={createBusy || !createName.trim()} onClick={submit}>
-              {createBusy ? (editing ? 'Saving…' : 'Creating…') : (editing ? 'Save changes' : 'Create mirror')}
-            </Button>
+            {!srcDef.external && (
+              <Button appearance="primary" icon={<Add20Regular />} disabled={createBusy || !createName.trim()} onClick={submit}>
+                {createBusy ? (editing ? 'Saving…' : 'Creating…') : (editing ? 'Save changes' : 'Create mirror')}
+              </Button>
+            )}
           </DialogActions>
         </DialogBody>
       </DialogSurface>
