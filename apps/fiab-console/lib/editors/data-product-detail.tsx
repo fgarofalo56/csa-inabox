@@ -49,6 +49,7 @@ import {
 import { ItemEditorChrome } from './item-editor-chrome';
 import { RequestAccessDialog } from './components/request-access-dialog';
 import type { FabricItemType } from '@/lib/catalog/fabric-item-types';
+import { findItemType } from '@/lib/catalog/fabric-item-types';
 import type { RibbonTab } from '@/lib/components/ribbon';
 import type {
   DataProductDoc, DataProductDetailResponse, DataProductOwner,
@@ -542,7 +543,12 @@ function LinkList({ items }: { items?: { label: string; url: string }[] }) {
  * not own the product, the CONSUMER (F15) read-only surface. Owner detection is
  * server-authoritative (`isOwner` from GET /api/data-products/[id]).
  */
-export function DataProductDetailEditor({ item, id }: { item?: FabricItemType; id: string }) {
+export function DataProductDetailEditor({ item: itemProp, id }: { item?: FabricItemType; id: string }) {
+  // The /data-products/[id] consumer page mounts this WITHOUT the item prop.
+  // Default to the data-product catalog type so ItemEditorChrome + the owner
+  // edit form (which read item.displayName/description/category/slug) render
+  // instead of crashing the whole page.
+  const item = itemProp ?? findItemType('data-product')!;
   const s = useStyles();
   const router = useRouter();
   const pathname = usePathname();
