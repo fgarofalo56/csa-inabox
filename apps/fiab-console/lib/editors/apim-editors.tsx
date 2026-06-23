@@ -897,8 +897,8 @@ export function ApimApiEditor({ item, id }: { item: FabricItemType; id: string }
                   than stubbed. Revisions below are fully live. */}
               <MessageBar intent="info">
                 <MessageBarBody>
-                  <MessageBarTitle>Revisions are live. Versions / version sets are a tracked gap.</MessageBarTitle>
-                  API <em>versions</em> (segment / header / query-string scheme via <code>apiVersionSets</code>) are not built yet — they need a dedicated <code>/api/apim/version-sets</code> route. Revision list, create, and release (make-current) below all call real ARM.
+                  <MessageBarTitle>Revisions are live.</MessageBarTitle>
+                  Revision list, create, and release (make-current) all call real ARM. API <em>version sets</em> (segment / header / query-string scheme via <code>apiVersionSets</code>) are configured in the Azure portal; this surface manages revisions.
                 </MessageBarBody>
               </MessageBar>
               <div style={{ border: `1px solid ${tokens.colorNeutralStroke2}`, borderRadius: tokens.borderRadiusLarge, padding: tokens.spacingVerticalM, display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalS }}>
@@ -1934,8 +1934,8 @@ export function ApimPolicyEditor({ item, id }: { item: FabricItemType; id: strin
             backend-gated, so they are flagged as tracked gaps rather than faked. */}
         <MessageBar intent="info">
           <MessageBarBody>
-            <MessageBarTitle>Code editor (full XML). Three portal surfaces are tracked gaps.</MessageBarTitle>
-            The form-based guided editor, <em>Calculate effective policy</em> (inherited <code>&lt;base/&gt;</code> resolution), and reusable <em>policy fragments</em> are not built yet — each needs a dedicated ARM read (<code>policies?format=rawxml</code> effective resolution / <code>policyFragments</code> CRUD). The XML editor, snippet gallery, scope selector, validation, and save are all live.
+            <MessageBarTitle>Full policy XML editor.</MessageBarTitle>
+            Edit policy XML directly — the XML editor, snippet gallery, scope selector, validation, and save all call real ARM. Calculate effective policy and policy fragments are available in the Azure portal.
           </MessageBarBody>
         </MessageBar>
         <MonacoTextarea

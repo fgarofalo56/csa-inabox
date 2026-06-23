@@ -516,10 +516,10 @@ export function ApimTree({
             <TreeItemLayout iconBefore={<Warning20Regular />}>More (in the editor / coming)</TreeItemLayout>
             <Tree>
               {[
-                ['Policy XML editor', 'Global / API / product policy XML — edit it in the APIM editor’s "Open policy editor" action (/items/apim-policy/...). Tree-level scope picker not built yet.'],
-                ['API operations authoring', 'Add/edit/delete operations with parameters + per-operation policy. Today operations are imported via the OpenAPI document in the API editor; manual authoring is coming.'],
-                ['OpenAPI import wizard', 'Multi-step import (validate + map + preview) — today ＋New API takes an OpenAPI link inline, and the editor has full inline/link/WSDL/GraphQL import.'],
-                ['Revisions & versions', 'API revisions + version sets — wired in the API editor’s Revisions tab; a tree-level version-set view is coming.'],
+                [‘Policy XML editor’, ‘Global / API / product policy XML — open the APIM policy editor from the API editor’s "Open policy editor" action. Full XML editing, snippet gallery, scope selector, validation, and save are live.’],
+                [‘API operations authoring’, ‘Add/edit/delete operations with parameters + per-operation policy. Today operations are imported via the OpenAPI document in the API editor; manual authoring is coming.’],
+                [‘OpenAPI import wizard’, ‘Multi-step import (validate + map + preview) — today ＋New API takes an OpenAPI link inline, and the editor has full inline/link/WSDL/GraphQL import.’],
+                [‘Revisions & versions’, ‘API revisions + version sets — revisions are fully live in the API editor’s Revisions tab (list, create, release); a tree-level version-set view is coming.’],
               ].map(([label, why]) => (
                 <TreeItem key={label} itemType="leaf" value={`coming-${label}`}>
                   <Tooltip content={why} relationship="description">

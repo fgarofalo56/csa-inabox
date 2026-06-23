@@ -562,8 +562,8 @@ export function FactoryResourcesTree({
               )}
               {createGroup === 'dataflow' && (
                 <Caption1 style={{ display: 'block', marginTop: 8, color: tokens.colorNeutralForeground3 }}>
-                  Creates an empty Mapping Data Flow. Add sources, transformations and sinks by editing the
-                  data flow JSON in the Manage hub (full visual data-flow designer is a follow-up).
+                  Creates an empty Mapping Data Flow. Edit the data flow definition — add sources,
+                  transformations, and sinks — in the Manage hub data flow JSON editor.
                 </Caption1>
               )}
               {createGroup === 'trigger' && (
