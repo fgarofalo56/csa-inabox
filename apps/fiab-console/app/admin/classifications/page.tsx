@@ -40,7 +40,7 @@ interface ScanSource { id: string; name: string; kind?: string }
 interface ScanDef { id: string; name: string; kind?: string }
 
 const useStyles = makeStyles({
-  field: { display: 'flex', flexDirection: 'column', gap: '12px' },
+  field: { display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalM },
   banner: { marginBottom: tokens.spacingVerticalL },
   explainerList: { margin: '8px 0 0 0', paddingLeft: '20px' },
 });

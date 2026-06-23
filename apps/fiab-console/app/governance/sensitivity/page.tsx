@@ -55,11 +55,11 @@ function labelColor(l: string): 'subtle' | 'informative' | 'warning' | 'danger' 
   return 'subtle';
 }
 function labelHex(l: string): string {
-  if (l === 'Highly Confidential' || l === 'Restricted') return '#c50f1f';
-  if (l === 'Confidential') return '#bc4b09';
-  if (l === 'Internal') return '#0f6cbd';
-  if (l === 'Public' || l === 'General') return '#107c10';
-  return '#8a8886';
+  if (l === 'Highly Confidential' || l === 'Restricted') return tokens.colorPaletteRedForeground1;
+  if (l === 'Confidential') return tokens.colorPaletteDarkOrangeForeground1;
+  if (l === 'Internal') return tokens.colorBrandForeground1;
+  if (l === 'Public' || l === 'General') return tokens.colorPaletteGreenForeground1;
+  return tokens.colorNeutralForeground3;
 }
 
 export default function SensitivityPage() {
@@ -90,7 +90,7 @@ export default function SensitivityPage() {
       key: 'open', label: '', sortable: false, filterable: false, width: 90,
       render: (it) => (
         <a href={`/items/${it.itemType}/${it.id}`} onClick={(e) => e.stopPropagation()}
-           style={{ display: 'inline-flex', alignItems: 'center', gap: 4, fontSize: 12 }}>
+           style={{ display: 'inline-flex', alignItems: 'center', gap: tokens.spacingHorizontalXS, fontSize: tokens.fontSizeBase200 }}>
           Open <Open16Regular />
         </a>
       ),
@@ -99,7 +99,7 @@ export default function SensitivityPage() {
 
   return (
     <GovernanceShell sectionTitle="Sensitivity labels">
-      <Body1 style={{ color: tokens.colorNeutralForeground3, marginBottom: 12 }}>
+      <Body1 style={{ color: tokens.colorNeutralForeground3, marginBottom: tokens.spacingVerticalM }}>
         Distribution of Microsoft Purview Information Protection labels across your tenant's data assets,
         derived live from each item's <code>state.sensitivityLabel</code> field.
       </Body1>
@@ -134,11 +134,11 @@ export default function SensitivityPage() {
             </div>
           </div>
 
-          <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginBottom: 8 }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: tokens.spacingHorizontalM, marginBottom: tokens.spacingVerticalS }}>
             <Subtitle2 style={{ display: 'block' }}>Label distribution</Subtitle2>
             <Caption1 style={{ color: tokens.colorNeutralForeground3 }}>Click a label to filter the items below.</Caption1>
             <a href="https://purview.microsoft.com/informationprotection/labels" target="_blank" rel="noreferrer"
-               style={{ marginLeft: 'auto', display: 'inline-flex', alignItems: 'center', gap: 4, fontSize: 12 }}>
+               style={{ marginLeft: 'auto', display: 'inline-flex', alignItems: 'center', gap: tokens.spacingHorizontalXS, fontSize: tokens.fontSizeBase200 }}>
               Manage labels in Microsoft Purview <Open16Regular />
             </a>
           </div>
@@ -162,9 +162,9 @@ export default function SensitivityPage() {
             })}
           </div>
 
-          <Subtitle2 style={{ display: 'block', marginBottom: 8 }}>
+          <Subtitle2 style={{ display: 'block', marginBottom: tokens.spacingVerticalS }}>
             Labeled items ({(selectedLabel ? data.items.filter((i) => i.label === selectedLabel) : data.items).length})
-            {selectedLabel && <Button size="small" appearance="subtle" onClick={() => setSelectedLabel(null)} style={{ marginLeft: 8 }}>Clear filter ({selectedLabel})</Button>}
+            {selectedLabel && <Button size="small" appearance="subtle" onClick={() => setSelectedLabel(null)} style={{ marginLeft: tokens.spacingHorizontalS }}>Clear filter ({selectedLabel})</Button>}
           </Subtitle2>
           <LoomDataTable<LabeledItem>
             columns={itemColumns}

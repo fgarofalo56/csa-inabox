@@ -64,11 +64,11 @@ interface LoadData {
 }
 
 const useStyles = makeStyles({
-  swatch: { width: '14px', height: '14px', borderRadius: '3px', display: 'inline-block', verticalAlign: 'middle', flexShrink: 0 },
+  swatch: { width: '14px', height: '14px', borderRadius: tokens.borderRadiusSmall, display: 'inline-block', verticalAlign: 'middle', flexShrink: 0 },
   pickerRow: { display: 'flex', gap: tokens.spacingHorizontalL, alignItems: 'flex-end', flexWrap: 'wrap', marginBottom: tokens.spacingVerticalM },
-  field: { display: 'flex', flexDirection: 'column', gap: '4px', minWidth: '260px' },
-  optRow: { display: 'flex', alignItems: 'center', gap: '8px' },
-  opts: { display: 'flex', flexDirection: 'column', gap: '8px', marginTop: tokens.spacingVerticalS },
+  field: { display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalXS, minWidth: '260px' },
+  optRow: { display: 'flex', alignItems: 'center', gap: tokens.spacingHorizontalS },
+  opts: { display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalS, marginTop: tokens.spacingVerticalS },
   labelDropdown: { minWidth: '260px' },
   pickerDivider: { marginTop: tokens.spacingVerticalM, marginBottom: tokens.spacingVerticalM },
   selCount: { display: 'block', marginBottom: tokens.spacingVerticalS, color: tokens.colorNeutralForeground2 },

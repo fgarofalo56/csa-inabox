@@ -62,7 +62,7 @@ const useStyles = makeStyles({
   },
   titleRow: { display: 'flex', alignItems: 'center', gap: tokens.spacingHorizontalS },
   grants: { display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalS, marginTop: tokens.spacingVerticalM },
-  empty: { padding: tokens.spacingVerticalXXL, color: tokens.colorNeutralForeground3, fontSize: '13px' },
+  empty: { padding: tokens.spacingVerticalXXL, color: tokens.colorNeutralForeground3, fontSize: tokens.fontSizeBase300 },
   wsPicker: { maxWidth: '480px', marginBottom: tokens.spacingVerticalL },
   hidden: { display: 'none' },
   fieldNote: { marginTop: tokens.spacingVerticalXS },

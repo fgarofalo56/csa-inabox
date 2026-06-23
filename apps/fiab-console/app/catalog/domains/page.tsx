@@ -74,28 +74,28 @@ interface ClassicResponse {
 }
 
 const useStyles = makeStyles({
-  intro: { display: 'block', color: tokens.colorNeutralForeground3, marginBottom: '16px', maxWidth: '760px' },
-  toolbar: { display: 'flex', alignItems: 'center', gap: '12px', marginBottom: '16px' },
+  intro: { display: 'block', color: tokens.colorNeutralForeground3, marginBottom: tokens.spacingVerticalL, maxWidth: '760px' },
+  toolbar: { display: 'flex', alignItems: 'center', gap: tokens.spacingHorizontalM, marginBottom: tokens.spacingVerticalL },
   grow: { flex: 1 },
   card: {
     border: `1px solid ${tokens.colorNeutralStroke2}`,
     borderRadius: tokens.borderRadiusLarge,
     backgroundColor: tokens.colorNeutralBackground1,
-    padding: '20px',
-    marginBottom: '20px',
+    padding: tokens.spacingVerticalXL,
+    marginBottom: tokens.spacingVerticalXL,
     boxShadow: tokens.shadow2,
   },
-  cardHead: { display: 'flex', alignItems: 'center', gap: '10px', marginBottom: '4px' },
+  cardHead: { display: 'flex', alignItems: 'center', gap: tokens.spacingHorizontalS, marginBottom: tokens.spacingVerticalXXS },
   cardIcon: { color: tokens.colorBrandForeground1 },
-  cardDesc: { display: 'block', color: tokens.colorNeutralForeground3, marginBottom: '16px', maxWidth: '720px' },
-  nameCell: { display: 'flex', alignItems: 'center', gap: '8px', minWidth: 0 },
+  cardDesc: { display: 'block', color: tokens.colorNeutralForeground3, marginBottom: tokens.spacingVerticalL, maxWidth: '720px' },
+  nameCell: { display: 'flex', alignItems: 'center', gap: tokens.spacingHorizontalS, minWidth: 0 },
   termDesc: {
     color: tokens.colorNeutralForeground3,
     display: '-webkit-box', WebkitLineClamp: 2, WebkitBoxOrient: 'vertical', overflow: 'hidden',
   },
   count: { color: tokens.colorNeutralForeground3, fontWeight: 400 },
-  field: { display: 'flex', flexDirection: 'column', gap: 4, marginBottom: 12 },
-  linkBadges: { display: 'flex', gap: 6 },
+  field: { display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalXXS, marginBottom: tokens.spacingVerticalM },
+  linkBadges: { display: 'flex', gap: tokens.spacingHorizontalXS },
 });
 
 type EditMode = 'create' | 'subdomain' | 'edit' | 'move';
@@ -240,7 +240,7 @@ export default function CatalogDomainsPage() {
         </span>
       ),
     },
-    { key: 'id', label: 'ID', width: 130, sortable: true, filterable: true, getValue: (d) => d.id, render: (d) => <code style={{ fontSize: 11 }}>{d.id}</code> },
+    { key: 'id', label: 'ID', width: 130, sortable: true, filterable: true, getValue: (d) => d.id, render: (d) => <code style={{ fontSize: tokens.fontSizeBase100 }}>{d.id}</code> },
     {
       key: 'parent', label: 'Parent', width: 150, sortable: true, filterable: true,
       getValue: (d) => d.parentId ? (nameById[d.parentId] || d.parentId) : 'Root',
@@ -310,7 +310,7 @@ export default function CatalogDomainsPage() {
       <PurviewGate status={purview} surface="Domains" reload={reloadStatus} />
 
       {unity && !unity.configured && (
-        <MessageBar intent="info" style={{ marginBottom: 16 }}>
+        <MessageBar intent="info" style={{ marginBottom: tokens.spacingVerticalL }}>
           <MessageBarBody>
             <MessageBarTitle>Unity Catalog mirror inactive</MessageBarTitle>
             {unity.hint || 'Set LOOM_DATABRICKS_HOSTNAME and grant the console UAMI CREATE CATALOG on the metastore to mirror domains as Unity Catalog catalogs/schemas. Domains remain fully usable without it.'}
@@ -319,12 +319,12 @@ export default function CatalogDomainsPage() {
       )}
 
       {error && (
-        <MessageBar intent="error" style={{ marginBottom: 16 }}>
+        <MessageBar intent="error" style={{ marginBottom: tokens.spacingVerticalL }}>
           <MessageBarBody><MessageBarTitle>Couldn&apos;t load domains</MessageBarTitle>{error}</MessageBarBody>
         </MessageBar>
       )}
       {actionErr && (
-        <MessageBar intent="error" style={{ marginBottom: 16 }}>
+        <MessageBar intent="error" style={{ marginBottom: tokens.spacingVerticalL }}>
           <MessageBarBody>{actionErr}</MessageBarBody>
         </MessageBar>
       )}
@@ -350,7 +350,7 @@ export default function CatalogDomainsPage() {
 
       {/* Classic Purview Data Map catalog (read live when a Purview account exists). */}
       {(unified || !live) && (
-        <MessageBar intent="info" style={{ marginBottom: 20 }}>
+        <MessageBar intent="info" style={{ marginBottom: tokens.spacingVerticalXL }}>
           <MessageBarBody>
             <MessageBarTitle>{unified?.title || 'Purview Data Map catalog'}</MessageBarTitle>
             {unified?.detail ||

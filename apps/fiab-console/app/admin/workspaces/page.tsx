@@ -39,7 +39,7 @@ const useStyles = makeStyles({
     backgroundColor: tokens.colorPaletteBlueBackground2, color: tokens.colorPaletteBlueForeground2,
   },
   nameText: { display: 'flex', flexDirection: 'column', minWidth: 0 },
-  openLink: { display: 'inline-flex', alignItems: 'center', gap: '4px', fontSize: '12px' },
+  openLink: { display: 'inline-flex', alignItems: 'center', gap: tokens.spacingHorizontalXS, fontSize: tokens.fontSizeBase200 },
 });
 
 export default function AdminWorkspacesPage() {

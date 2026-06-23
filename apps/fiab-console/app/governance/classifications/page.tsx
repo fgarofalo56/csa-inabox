@@ -23,7 +23,7 @@ const SENSITIVITIES = ['Public', 'Internal', 'Confidential', 'Highly Confidentia
 const useStyles = makeStyles({
   empty: { padding: tokens.spacingVerticalXXL, color: tokens.colorNeutralForeground3, fontSize: tokens.fontSizeBase200, textAlign: 'center' },
   taxRow: { display: 'flex', alignItems: 'center', gap: tokens.spacingHorizontalM, flexWrap: 'wrap' },
-  swatch: { width: '12px', height: '12px', borderRadius: '3px', flexShrink: 0 },
+  swatch: { width: '12px', height: '12px', borderRadius: tokens.borderRadiusSmall, flexShrink: 0 },
   addRow: { display: 'flex', gap: tokens.spacingHorizontalS, alignItems: 'end', flexWrap: 'wrap' },
 });
 
@@ -93,7 +93,7 @@ export default function ClassificationsPage() {
         <span>
           {c.samples.slice(0, 3).map((sm) => (
             <a key={sm.id} href={`/items/${sm.itemType}/${sm.id}`} onClick={(e) => e.stopPropagation()}
-               style={{ display: 'inline-flex', alignItems: 'center', gap: 4, marginRight: 12, fontSize: 12 }}>
+               style={{ display: 'inline-flex', alignItems: 'center', gap: tokens.spacingHorizontalXS, marginRight: tokens.spacingHorizontalM, fontSize: tokens.fontSizeBase200 }}>
               {sm.displayName} <Open16Regular />
             </a>
           ))}
@@ -105,7 +105,7 @@ export default function ClassificationsPage() {
 
   return (
     <GovernanceShell sectionTitle="Classifications">
-      <Body1 style={{ color: tokens.colorNeutralForeground3, marginBottom: 12 }}>
+      <Body1 style={{ color: tokens.colorNeutralForeground3, marginBottom: tokens.spacingVerticalM }}>
         Distinct classifications applied across your tenant's data assets, derived live from each item's
         <code> state.classifications</code> array.
       </Body1>

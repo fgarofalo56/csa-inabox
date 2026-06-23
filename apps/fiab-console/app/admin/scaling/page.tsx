@@ -37,11 +37,11 @@ const APIM_SKUS = ['Developer','Basic','Standard','Premium','BasicV2','StandardV
 const ACA_PROFILES = ['Consumption','D4','D8','D16','D32','E4','E8','E16','E32'];
 
 const useStyles = makeStyles({
-  intro: { color: tokens.colorNeutralForeground2, lineHeight: 1.55, marginBottom: '16px' },
+  intro: { color: tokens.colorNeutralForeground2, lineHeight: 1.55, marginBottom: tokens.spacingVerticalL },
   grid: {
     display: 'grid',
     gridTemplateColumns: 'repeat(auto-fill, minmax(420px, 1fr))',
-    gap: '16px',
+    gap: tokens.spacingHorizontalL,
   },
   // numeric input widths (replaces inline style={{ width: N }})
   inlineNumber: { width: '100px' },
@@ -50,36 +50,36 @@ const useStyles = makeStyles({
   // uppercase micro-label above a numeric input (replaces repeated inline
   // textTransform/letterSpacing/fontSize literals)
   fieldLabel: {
-    fontSize: '11px',
+    fontSize: tokens.fontSizeBase100,
     textTransform: 'uppercase',
     letterSpacing: '0.06em',
     color: tokens.colorNeutralForeground3,
     fontWeight: 600,
   },
   // a labelled control stack (label over input)
-  cellStack: { display: 'flex', flexDirection: 'column', gap: '4px' },
+  cellStack: { display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalXS },
   // a row of controls inside one table cell
-  controlRow: { display: 'flex', gap: '12px', alignItems: 'flex-end', flexWrap: 'wrap' },
+  controlRow: { display: 'flex', gap: tokens.spacingHorizontalM, alignItems: 'flex-end', flexWrap: 'wrap' },
   // resource (name + current state) cell
-  resourceCell: { display: 'flex', flexDirection: 'column', gap: '2px' },
+  resourceCell: { display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalXXS },
   subtle: { color: tokens.colorNeutralForeground3 },
   // apply button + inline status, stacked
-  applyCell: { display: 'flex', flexDirection: 'column', gap: '6px', alignItems: 'flex-start' },
+  applyCell: { display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalS, alignItems: 'flex-start' },
   italicNote: { fontStyle: 'italic', color: tokens.colorNeutralForeground3 },
   errorText: { color: tokens.colorPaletteRedForeground1 },
   okText: { color: tokens.colorPaletteGreenForeground1 },
-  trailing: { marginTop: '24px' },
+  trailing: { marginTop: tokens.spacingVerticalXXL },
   // MCP persistence sub-section inside the Container Apps card
   mcpSection: {
     borderTop: `1px solid ${tokens.colorNeutralStroke2}`,
-    paddingTop: '10px',
-    marginTop: '8px',
+    paddingTop: tokens.spacingVerticalS,
+    marginTop: tokens.spacingVerticalS,
     display: 'flex',
     flexDirection: 'column',
-    gap: '6px',
+    gap: tokens.spacingVerticalS,
   },
   mcpSectionLabel: {
-    fontSize: '11px',
+    fontSize: tokens.fontSizeBase100,
     textTransform: 'uppercase',
     letterSpacing: '0.06em',
     color: tokens.colorNeutralForeground2,
@@ -87,14 +87,14 @@ const useStyles = makeStyles({
   },
   mcpBox: {
     border: `1px solid ${tokens.colorNeutralStroke2}`,
-    borderRadius: '4px',
-    padding: '10px',
+    borderRadius: tokens.borderRadiusSmall,
+    padding: tokens.spacingVerticalS,
     display: 'flex',
     flexDirection: 'column',
-    gap: '8px',
+    gap: tokens.spacingVerticalS,
   },
-  statusError: { display: 'block', marginTop: '6px', color: tokens.colorPaletteRedForeground1 },
-  statusOk: { display: 'block', marginTop: '6px', color: tokens.colorPaletteGreenForeground1 },
+  statusError: { display: 'block', marginTop: tokens.spacingVerticalS, color: tokens.colorPaletteRedForeground1 },
+  statusOk: { display: 'block', marginTop: tokens.spacingVerticalS, color: tokens.colorPaletteGreenForeground1 },
 });
 
 async function jsonPost(url: string, body: unknown): Promise<any> {

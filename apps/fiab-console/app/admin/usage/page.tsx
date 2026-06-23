@@ -89,7 +89,7 @@ const useStyles = makeStyles({
     gap: tokens.spacingHorizontalXS,
   },
   filterLabel: {
-    fontSize: '12px',
+    fontSize: tokens.fontSizeBase200,
     color: tokens.colorNeutralForeground3,
     textTransform: 'uppercase',
     letterSpacing: '0.04em',
@@ -109,13 +109,13 @@ const useStyles = makeStyles({
     gap: tokens.spacingVerticalXS,
   },
   statVal: {
-    fontSize: '30px',
+    fontSize: tokens.fontSizeHero800,
     lineHeight: '34px',
     fontWeight: tokens.fontWeightSemibold,
     color: tokens.colorBrandForeground1,
   },
   statLabel: {
-    fontSize: '12px',
+    fontSize: tokens.fontSizeBase200,
     color: tokens.colorNeutralForeground3,
     textTransform: 'uppercase',
     letterSpacing: '0.04em',
@@ -144,7 +144,7 @@ const useStyles = makeStyles({
   },
   barActive: { backgroundColor: tokens.colorNeutralBackground2Selected },
   barLabel: {
-    fontSize: '13px',
+    fontSize: tokens.fontSizeBase300,
     minWidth: '150px',
     maxWidth: '150px',
     overflow: 'hidden',
@@ -169,7 +169,7 @@ const useStyles = makeStyles({
     borderRadius: tokens.borderRadiusSmall,
   },
   barCount: {
-    fontSize: '12px',
+    fontSize: tokens.fontSizeBase200,
     color: tokens.colorNeutralForeground2,
     minWidth: '64px',
     textAlign: 'right',
@@ -177,7 +177,7 @@ const useStyles = makeStyles({
   sparkRow: {
     display: 'flex',
     alignItems: 'flex-end',
-    gap: '2px',
+    gap: tokens.spacingHorizontalXXS,
     height: '80px',
     marginTop: tokens.spacingVerticalS,
   },
@@ -203,7 +203,7 @@ const useStyles = makeStyles({
     display: 'inline-flex',
     alignItems: 'center',
     gap: tokens.spacingHorizontalXS,
-    fontSize: '12px',
+    fontSize: tokens.fontSizeBase200,
     color: tokens.colorBrandForeground1,
   },
   loadingBox: {
@@ -218,7 +218,7 @@ const useStyles = makeStyles({
     borderRadius: tokens.borderRadiusMedium,
   },
   featureSelect: { minWidth: '180px' },
-  docIcon: { fontSize: '14px', verticalAlign: 'middle' },
+  docIcon: { fontSize: tokens.fontSizeBase300, verticalAlign: 'middle' },
 });
 
 export default function UsagePage() {
@@ -520,39 +520,35 @@ export default function UsagePage() {
 
           <Section title="Distribution" bare>
             <div className={s.twoCol}>
-              <Section title={undefined}>
-                <div className={s.panel}>
-                  <Subtitle2>Items by type</Subtitle2>
-                  {data.itemsByType.length === 0 && <Caption1 className={s.muted}>No items yet.</Caption1>}
-                  {data.itemsByType.slice(0, 15).map((row) => (
-                    <div key={row.type} className={s.bar}>
-                      <span className={s.barLabel}>{itemVisual(row.type).label}</span>
-                      <div className={s.barTrack}>
-                        {/* dynamic: fill width scales with the item count */}
-                        <div className={s.barFill} style={{ width: `${(row.count / maxType) * 100}%` }} />
-                      </div>
-                      <span className={s.barCount}>{row.count}</span>
+              <div className={s.panel}>
+                <Subtitle2>Items by type</Subtitle2>
+                {data.itemsByType.length === 0 && <Caption1 className={s.muted}>No items yet.</Caption1>}
+                {data.itemsByType.slice(0, 15).map((row) => (
+                  <div key={row.type} className={s.bar}>
+                    <span className={s.barLabel}>{itemVisual(row.type).label}</span>
+                    <div className={s.barTrack}>
+                      {/* dynamic: fill width scales with the item count */}
+                      <div className={s.barFill} style={{ width: `${(row.count / maxType) * 100}%` }} />
                     </div>
-                  ))}
-                </div>
-              </Section>
+                    <span className={s.barCount}>{row.count}</span>
+                  </div>
+                ))}
+              </div>
 
-              <Section title={undefined}>
-                <div className={s.panel}>
-                  <Subtitle2>Items by workspace (top 20)</Subtitle2>
-                  {data.itemsByWorkspace.length === 0 && <Caption1 className={s.muted}>No items yet.</Caption1>}
-                  {data.itemsByWorkspace.map((row) => (
-                    <div key={row.workspaceId} className={s.bar}>
-                      <span className={s.barLabel}>{row.workspaceName}</span>
-                      <div className={s.barTrack}>
-                        {/* dynamic: fill width scales with the item count */}
-                        <div className={s.barFill} style={{ width: `${(row.count / maxWs) * 100}%` }} />
-                      </div>
-                      <span className={s.barCount}>{row.count}</span>
+              <div className={s.panel}>
+                <Subtitle2>Items by workspace (top 20)</Subtitle2>
+                {data.itemsByWorkspace.length === 0 && <Caption1 className={s.muted}>No items yet.</Caption1>}
+                {data.itemsByWorkspace.map((row) => (
+                  <div key={row.workspaceId} className={s.bar}>
+                    <span className={s.barLabel}>{row.workspaceName}</span>
+                    <div className={s.barTrack}>
+                      {/* dynamic: fill width scales with the item count */}
+                      <div className={s.barFill} style={{ width: `${(row.count / maxWs) * 100}%` }} />
                     </div>
-                  ))}
-                </div>
-              </Section>
+                    <span className={s.barCount}>{row.count}</span>
+                  </div>
+                ))}
+              </div>
             </div>
           </Section>
 

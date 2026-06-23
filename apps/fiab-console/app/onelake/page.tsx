@@ -314,7 +314,7 @@ const useStyles = makeStyles({
     textTransform: 'uppercase',
     letterSpacing: '0.06em',
     fontWeight: tokens.fontWeightSemibold,
-    fontSize: '11px',
+    fontSize: tokens.fontSizeBase100,
     marginBottom: tokens.spacingVerticalXS,
   },
   railItem: {
@@ -365,8 +365,8 @@ const useStyles = makeStyles({
     display: 'inline-flex',
     alignItems: 'center',
     gap: tokens.spacingHorizontalXS,
-    paddingTop: '4px',
-    paddingBottom: '4px',
+    paddingTop: tokens.spacingVerticalXXS,
+    paddingBottom: tokens.spacingVerticalXXS,
     paddingLeft: tokens.spacingHorizontalM,
     paddingRight: tokens.spacingHorizontalM,
     borderRadius: tokens.borderRadiusCircular,
@@ -456,7 +456,7 @@ const useStyles = makeStyles({
   detailsChipIcon: { width: '26px', height: '26px' },
   nameIconGlyph: { width: '16px', height: '16px' },
   metaNote: { color: tokens.colorNeutralForeground3, display: 'block', marginTop: tokens.spacingVerticalS },
-  wsEmpty: { padding: '4px 8px', color: tokens.colorNeutralForeground3 },
+  wsEmpty: { paddingTop: tokens.spacingVerticalXXS, paddingBottom: tokens.spacingVerticalXXS, paddingLeft: tokens.spacingHorizontalS, paddingRight: tokens.spacingHorizontalS, color: tokens.colorNeutralForeground3 },
   errorBarSpaced: { marginTop: tokens.spacingVerticalM },
   treeWrap: {
     border: `1px solid ${tokens.colorNeutralStroke2}`,
@@ -504,9 +504,9 @@ function TablesTab({ itemId }: { itemId: string }) {
   }
   if (tables === null) {
     return (
-      <Skeleton aria-label="Loading Delta tables" style={{ display: 'flex', flexDirection: 'column', gap: 8, padding: '8px 0' }}>
+      <Skeleton aria-label="Loading Delta tables" style={{ display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalS, padding: `${tokens.spacingVerticalS} 0` }}>
         {[...Array(5)].map((_, i) => (
-          <div key={i} style={{ display: 'flex', alignItems: 'center', gap: 8, paddingLeft: i % 2 === 0 ? 0 : 20 }}>
+          <div key={i} style={{ display: 'flex', alignItems: 'center', gap: tokens.spacingHorizontalS, paddingLeft: i % 2 === 0 ? 0 : tokens.spacingHorizontalXL }}>
             <SkeletonItem shape="rectangle" style={{ width: 16, height: 16, flexShrink: 0 }} />
             <SkeletonItem shape="rectangle" style={{ width: `${55 + (i * 11) % 35}%`, height: 14 }} />
           </div>

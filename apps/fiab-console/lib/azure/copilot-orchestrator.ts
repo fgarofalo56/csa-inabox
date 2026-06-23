@@ -1098,13 +1098,50 @@ function isUnsupportedSamplingParam(body: string): boolean {
     && /temperature|top_p/i.test(body);
 }
 
+/**
+ * Unwrap a thrown fetch/network error into a human-readable cause chain. Node's
+ * `fetch` surfaces only `"fetch failed"` as the message and hides the real
+ * reason (ENOTFOUND / ECONNREFUSED / ETIMEDOUT / cert errors) in `.cause`. This
+ * walks the chain so server logs name the actual failure instead of the opaque
+ * wrapper that was being streamed to the chat widget.
+ */
+export function describeFetchError(e: any): string {
+  const parts: string[] = [];
+  let cur: any = e;
+  let depth = 0;
+  while (cur && depth < 5) {
+    const code = cur.code ? `[${cur.code}]` : '';
+    const m = cur.message || String(cur);
+    parts.push(`${cur.name || 'Error'}${code}: ${m}`);
+    if (cur.errno !== undefined || cur.syscall || cur.hostname) {
+      parts.push(`(syscall=${cur.syscall || '?'} errno=${cur.errno ?? '?'} host=${cur.hostname || '?'})`);
+    }
+    cur = cur.cause;
+    depth++;
+  }
+  return parts.join(' ← ');
+}
+
+/** AOAI host for logging without leaking the full URL/keys. */
+function aoaiHost(endpoint: string): string {
+  try { return new URL(endpoint).host; } catch { return endpoint; }
+}
+
 async function callAoai(
   target: AoaiTarget,
   messages: ChatMessage[],
   tools: unknown[],
 ): Promise<any> {
   const url = `${target.endpoint}/openai/deployments/${encodeURIComponent(target.deployment)}/chat/completions?api-version=${target.apiVersion}`;
-  const token = await aoaiToken();
+  let token: string;
+  try {
+    token = await aoaiToken();
+  } catch (e: any) {
+    console.error(
+      `[copilot] AOAI token acquisition FAILED for host=${aoaiHost(target.endpoint)}: ${describeFetchError(e)}`,
+    );
+    throw new Error(`AOAI auth failed (could not acquire a managed-identity token): ${e?.message || e}`);
+  }
   const base: Record<string, unknown> = { messages, tools, tool_choice: 'auto' };
 
   // First attempt sends temperature for determinism; if the model rejects it,
@@ -1117,7 +1154,17 @@ async function callAoai(
       body: JSON.stringify(withTemperature ? { ...base, temperature: 0.2 } : base),
     }, LLM_FETCH_TIMEOUT_MS);
 
-  let res = await send(true);
+  let res: Response;
+  try {
+    res = await send(true);
+  } catch (e: any) {
+    console.error(
+      `[copilot] AOAI chat-completions fetch THREW for host=${aoaiHost(target.endpoint)} deployment=${target.deployment}: ${describeFetchError(e)}`,
+    );
+    throw new Error(
+      `AOAI chat endpoint unreachable (${aoaiHost(target.endpoint)}): ${describeFetchError(e)}`,
+    );
+  }
   if (res.status === 400) {
     const t = await res.text();
     if (isUnsupportedSamplingParam(t)) {

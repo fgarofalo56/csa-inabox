@@ -46,11 +46,11 @@ const useStyles = makeStyles({
 function covCell(value: number, total: number, color: string) {
   const pct = total ? Math.round(100 * value / total) : 0;
   return (
-    <div style={{ display: 'flex', alignItems: 'center', gap: 8, minWidth: 0 }}>
-      <div style={{ flex: 1, height: 6, borderRadius: 3, backgroundColor: tokens.colorNeutralBackground4, overflow: 'hidden' }}>
-        <div style={{ width: `${pct}%`, height: '100%', backgroundColor: color, borderRadius: 3 }} />
+    <div style={{ display: 'flex', alignItems: 'center', gap: tokens.spacingHorizontalS, minWidth: 0 }}>
+      <div style={{ flex: 1, height: 6, borderRadius: tokens.borderRadiusSmall, backgroundColor: tokens.colorNeutralBackground4, overflow: 'hidden' }}>
+        <div style={{ width: `${pct}%`, height: '100%', backgroundColor: color, borderRadius: tokens.borderRadiusSmall }} />
       </div>
-      <span style={{ fontSize: 12, whiteSpace: 'nowrap' }}>{value} ({pct}%)</span>
+      <span style={{ fontSize: tokens.fontSizeBase200, whiteSpace: 'nowrap' }}>{value} ({pct}%)</span>
     </div>
   );
 }
@@ -75,7 +75,7 @@ export default function InsightsPage() {
 
   return (
     <GovernanceShell sectionTitle="Insights">
-      <Body1 style={{ color: tokens.colorNeutralForeground3, marginBottom: 12 }}>
+      <Body1 style={{ color: tokens.colorNeutralForeground3, marginBottom: tokens.spacingVerticalM }}>
         Tenant-wide governance KPIs derived live from your Cosmos catalog + audit log.
       </Body1>
 
@@ -134,11 +134,11 @@ export default function InsightsPage() {
             </div>
           </div>
 
-          <Subtitle2 style={{ display: 'block', marginBottom: 8 }}>Coverage by item type</Subtitle2>
+          <Subtitle2 style={{ display: 'block', marginBottom: tokens.spacingVerticalS }}>Coverage by item type</Subtitle2>
           {data.coverage.length === 0 ? (
             <Caption1 style={{ color: tokens.colorNeutralForeground3 }}>No items yet.</Caption1>
           ) : (
-            <div style={{ marginBottom: 20 }}>
+            <div style={{ marginBottom: tokens.spacingVerticalXL }}>
               <LoomDataTable
                 ariaLabel="Coverage by item type"
                 getRowId={(c) => c.type}
@@ -149,35 +149,35 @@ export default function InsightsPage() {
                   {
                     key: 'labeled', label: 'Sensitivity labeled', sortable: true, width: 260,
                     getValue: (c) => (c.total ? c.labeled / c.total : 0),
-                    render: (c) => covCell(c.labeled, c.total, '#bc4b09'),
+                    render: (c) => covCell(c.labeled, c.total, tokens.colorPaletteDarkOrangeForeground1),
                   },
                   {
                     key: 'classified', label: 'Classified', sortable: true, width: 220,
                     getValue: (c) => (c.total ? c.classified / c.total : 0),
-                    render: (c) => covCell(c.classified, c.total, '#0f6cbd'),
+                    render: (c) => covCell(c.classified, c.total, tokens.colorBrandForeground1),
                   },
                   {
                     key: 'owned', label: 'Owned', sortable: true, width: 220,
                     getValue: (c) => (c.total ? c.owned / c.total : 0),
-                    render: (c) => covCell(c.owned, c.total, '#8764b8'),
+                    render: (c) => covCell(c.owned, c.total, tokens.colorPalettePurpleForeground2),
                   },
                   {
                     key: 'endorsed', label: 'Endorsed', sortable: true, width: 220,
                     getValue: (c) => (c.total ? c.endorsed / c.total : 0),
-                    render: (c) => covCell(c.endorsed, c.total, '#107c10'),
+                    render: (c) => covCell(c.endorsed, c.total, tokens.colorPaletteGreenForeground1),
                   },
                 ] as LoomColumn<CoverageRow>[]}
               />
             </div>
           )}
 
-          <Subtitle2 style={{ display: 'block', marginBottom: 8 }}>Policy effectiveness</Subtitle2>
+          <Subtitle2 style={{ display: 'block', marginBottom: tokens.spacingVerticalS }}>Policy effectiveness</Subtitle2>
           {(!data.policies || data.policies.length === 0) ? (
-            <Caption1 style={{ color: tokens.colorNeutralForeground3, display: 'block', marginBottom: 20 }}>
+            <Caption1 style={{ color: tokens.colorNeutralForeground3, display: 'block', marginBottom: tokens.spacingVerticalXL }}>
               No governance policies defined yet. Create policies in Governance → Policies.
             </Caption1>
           ) : (
-            <div style={{ marginBottom: 20 }}>
+            <div style={{ marginBottom: tokens.spacingVerticalXL }}>
               <LoomDataTable
                 ariaLabel="Policy effectiveness"
                 getRowId={(p) => p.name}
@@ -218,13 +218,13 @@ export default function InsightsPage() {
                 {
                   key: 'classifications', label: 'Classifications', sortable: false, filterable: true,
                   getValue: (it) => it.classifications.join(' '),
-                  render: (it) => <>{it.classifications.map((c) => <Badge key={c} appearance="tint" size="small" style={{ marginRight: 4 }}>{c}</Badge>)}<strong style={{ marginLeft: 4 }}>({it.count})</strong></>,
+                  render: (it) => <>{it.classifications.map((c) => <Badge key={c} appearance="tint" size="small" style={{ marginRight: tokens.spacingHorizontalXS }}>{c}</Badge>)}<strong style={{ marginLeft: tokens.spacingHorizontalXS }}>({it.count})</strong></>,
                 },
                 {
                   key: 'open', label: '', sortable: false, filterable: false, width: 90,
                   render: (it) => (
                     <a href={`/items/${it.itemType}/${it.id}`}
-                       style={{ display: 'inline-flex', alignItems: 'center', gap: 4, fontSize: 12 }}>
+                       style={{ display: 'inline-flex', alignItems: 'center', gap: tokens.spacingHorizontalXS, fontSize: tokens.fontSizeBase200 }}>
                       Open <Open16Regular />
                     </a>
                   ),

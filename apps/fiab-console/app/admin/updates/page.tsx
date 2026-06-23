@@ -38,10 +38,10 @@ const useMdStyles = makeStyles({
     marginBottom: tokens.spacingVerticalXS,
     paddingLeft: '20px',
   },
-  item: { marginBottom: '2px' },
+  item: { marginBottom: tokens.spacingVerticalXXS },
   pre: {
     fontFamily: 'Consolas, monospace',
-    fontSize: '12px',
+    fontSize: tokens.fontSizeBase200,
     padding: tokens.spacingVerticalS,
     backgroundColor: tokens.colorNeutralBackground3,
     borderRadius: tokens.borderRadiusMedium,
@@ -155,7 +155,7 @@ function MarkdownNotes({ text }: { text: string }) {
         if (b.kind === 'h') {
           const size = b.level === 1 ? 18 : b.level === 2 ? 16 : 14;
           // dynamic: heading size + top gap are computed from the markdown heading level / position
-          return <div key={i} className={md.heading} style={{ fontSize: size, marginTop: i ? 12 : 0 }}>{renderInline(b.text, i, md.codeSpan)}</div>;
+          return <div key={i} className={md.heading} style={{ fontSize: size, marginTop: i ? tokens.spacingVerticalS : 0 }}>{renderInline(b.text, i, md.codeSpan)}</div>;
         }
         if (b.kind === 'ul') {
           return (
@@ -213,39 +213,39 @@ const useStyles = makeStyles({
     display: 'flex', alignItems: 'center', gap: tokens.spacingHorizontalXL, flexWrap: 'wrap',
   },
   vBadge: {
-    padding: '8px 16px', borderRadius: tokens.borderRadiusLarge,
+    padding: `${tokens.spacingVerticalS} ${tokens.spacingHorizontalL}`, borderRadius: tokens.borderRadiusLarge,
     backgroundColor: tokens.colorNeutralBackground1,
     border: `1px solid ${tokens.colorNeutralStroke2}`,
-    fontFamily: 'Consolas, monospace', fontSize: '18px', fontWeight: 600,
+    fontFamily: 'Consolas, monospace', fontSize: tokens.fontSizeBase500, fontWeight: 600,
   },
   actions: { display: 'flex', gap: tokens.spacingHorizontalS, marginTop: tokens.spacingVerticalL, flexWrap: 'wrap' },
   notes: {
     padding: tokens.spacingVerticalM, marginTop: tokens.spacingVerticalM, borderRadius: tokens.borderRadiusMedium,
     backgroundColor: tokens.colorNeutralBackground2,
     border: `1px solid ${tokens.colorNeutralStroke2}`,
-    fontSize: '13px', maxHeight: '360px', overflowY: 'auto',
+    fontSize: tokens.fontSizeBase300, maxHeight: '360px', overflowY: 'auto',
   },
   flow: {
     marginTop: tokens.spacingVerticalL, padding: tokens.spacingVerticalM,
     backgroundColor: tokens.colorNeutralBackground2, borderRadius: tokens.borderRadiusMedium,
-    fontSize: '12px', color: tokens.colorNeutralForeground3, lineHeight: 1.5,
+    fontSize: tokens.fontSizeBase200, color: tokens.colorNeutralForeground3, lineHeight: 1.5,
   },
   heroCol: { flex: 1, minWidth: '160px' },
   badgeWrap: { marginTop: tokens.spacingVerticalS },
-  buildLine: { marginTop: '4px', color: tokens.colorNeutralForeground3, fontFamily: 'Consolas, monospace', fontSize: '11px' },
-  applyList: { marginTop: tokens.spacingVerticalM, display: 'flex', flexDirection: 'column', gap: '6px' },
+  buildLine: { marginTop: tokens.spacingVerticalXXS, color: tokens.colorNeutralForeground3, fontFamily: 'Consolas, monospace', fontSize: tokens.fontSizeBase100 },
+  applyList: { marginTop: tokens.spacingVerticalM, display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalS },
   applyRow: {
     display: 'flex', alignItems: 'center', gap: tokens.spacingHorizontalS,
-    padding: '6px 10px', borderRadius: tokens.borderRadiusMedium,
+    padding: `${tokens.spacingVerticalXS} ${tokens.spacingHorizontalS}`, borderRadius: tokens.borderRadiusMedium,
     backgroundColor: tokens.colorNeutralBackground2,
     border: `1px solid ${tokens.colorNeutralStroke2}`,
   },
-  applyName: { fontFamily: 'Consolas, monospace', fontSize: '13px', minWidth: '180px' },
-  applyImage: { fontFamily: 'Consolas, monospace', fontSize: '11px', color: tokens.colorNeutralForeground3, overflowWrap: 'anywhere' },
+  applyName: { fontFamily: 'Consolas, monospace', fontSize: tokens.fontSizeBase300, minWidth: '180px' },
+  applyImage: { fontFamily: 'Consolas, monospace', fontSize: tokens.fontSizeBase100, color: tokens.colorNeutralForeground3, overflowWrap: 'anywhere' },
   ok: { color: tokens.colorPaletteGreenForeground1 },
   fail: { color: tokens.colorPaletteRedForeground1 },
   dim: { color: tokens.colorNeutralForeground3 },
-  dialogList: { margin: '8px 0 0', paddingLeft: '18px', fontSize: '13px' },
+  dialogList: { margin: `${tokens.spacingVerticalS} 0 0`, paddingLeft: '18px', fontSize: tokens.fontSizeBase300 },
 });
 
 export default function UpdatesPage() {

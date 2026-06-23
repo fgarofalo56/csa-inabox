@@ -42,12 +42,16 @@ const useStyles = makeStyles({
   titleWrap: { display: 'flex', alignItems: 'center', gap: tokens.spacingHorizontalS, minWidth: 0 },
   iconWrap: {
     width: '40px', height: '40px', borderRadius: tokens.borderRadiusMedium, flexShrink: 0,
-    display: 'inline-flex', alignItems: 'center', justifyContent: 'center', color: '#fff',
+    display: 'inline-flex', alignItems: 'center', justifyContent: 'center',
+    color: tokens.colorNeutralForegroundOnBrand,
   },
-  title: { display: 'flex', flexDirection: 'column', gap: '2px', minWidth: 0 },
+  title: { display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalXXS, minWidth: 0 },
+  titleName: { overflow: 'hidden', textOverflow: 'ellipsis' },
+  titleSub: { color: tokens.colorNeutralForeground3 },
   controls: { display: 'flex', gap: tokens.spacingHorizontalM, flexWrap: 'wrap', alignItems: 'flex-end' },
   footer: { display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: tokens.spacingHorizontalM },
-  current: { color: tokens.colorNeutralForeground2, fontSize: '12px' },
+  current: { color: tokens.colorNeutralForeground2, fontSize: tokens.fontSizeBase200 },
+  footerCaption: { color: tokens.colorNeutralForeground3 },
 });
 
 export function ServiceCard({
@@ -84,8 +88,8 @@ export function ServiceCard({
         <div className={styles.titleWrap}>
           {icon && <span className={styles.iconWrap} style={{ backgroundColor: bar }} aria-hidden>{icon}</span>}
           <div className={styles.title}>
-            <Subtitle2 style={{ overflow: 'hidden', textOverflow: 'ellipsis' }}>{title}</Subtitle2>
-            <Caption1 style={{ color: tokens.colorNeutralForeground3 }}>{subtitle}</Caption1>
+            <Subtitle2 className={styles.titleName}>{title}</Subtitle2>
+            <Caption1 className={styles.titleSub}>{subtitle}</Caption1>
           </div>
         </div>
         {statusBadge && (
@@ -125,7 +129,7 @@ export function ServiceCard({
           )}
 
           <div className={styles.footer}>
-            <Caption1 style={{ color: tokens.colorNeutralForeground3 }}>
+            <Caption1 className={styles.footerCaption}>
               {lastChanged ? `Last changed: ${lastChanged}` : 'No changes recorded'}
             </Caption1>
             {onApply && (

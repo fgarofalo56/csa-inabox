@@ -53,7 +53,7 @@ export default function AssetDetailPage() {
         <MessageBar intent="warning">
           <MessageBarBody>
             <strong>Asset detail unavailable:</strong> {error}
-            {hint && <pre style={{ marginTop: 8, fontSize: 11, whiteSpace: 'pre-wrap' }}>{JSON.stringify(hint, null, 2)}</pre>}
+            {hint && <pre style={{ marginTop: tokens.spacingVerticalS, fontSize: tokens.fontSizeBase100, whiteSpace: 'pre-wrap' }}>{JSON.stringify(hint, null, 2)}</pre>}
           </MessageBarBody>
         </MessageBar>
       )}
@@ -64,10 +64,10 @@ export default function AssetDetailPage() {
         </TabList>
       )}
       {detail && selectedTab === 'overview' && (
-        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 16 }}>
+        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: tokens.spacingHorizontalL }}>
           <Card>
             <CardHeader header={<Subtitle2>Overview</Subtitle2>} />
-            <div style={{ padding: 12 }}>
+            <div style={{ padding: tokens.spacingVerticalM }}>
               {source === 'unity-catalog' && detail.detail && (
                 <>
                   <div><strong>Full name:</strong> {detail.detail.full_name}</div>
@@ -87,7 +87,7 @@ export default function AssetDetailPage() {
               )}
               {detail.upstreamLink && (
                 <a href={detail.upstreamLink} target="_blank" rel="noreferrer" style={{
-                  display: 'inline-flex', alignItems: 'center', gap: 4, marginTop: 12, fontSize: 13,
+                  display: 'inline-flex', alignItems: 'center', gap: tokens.spacingHorizontalXS, marginTop: tokens.spacingVerticalM, fontSize: tokens.fontSizeBase300,
                 }}>
                   Open in upstream tool <Open16Regular />
                 </a>
@@ -98,7 +98,7 @@ export default function AssetDetailPage() {
           {source === 'unity-catalog' && detail.detail?.columns?.length > 0 && (
             <Card>
               <CardHeader header={<Subtitle2>Schema</Subtitle2>} />
-              <div style={{ padding: 12 }}>
+              <div style={{ padding: tokens.spacingVerticalM }}>
                 <Table aria-label="Schema">
                   <TableHeader><TableRow>
                     <TableHeaderCell>Column</TableHeaderCell>
@@ -122,7 +122,7 @@ export default function AssetDetailPage() {
           {source === 'purview' && detail.detail?.entity?.classifications && (
             <Card>
               <CardHeader header={<Subtitle2>Classifications</Subtitle2>} />
-              <div style={{ padding: 12, display: 'flex', gap: 6, flexWrap: 'wrap' }}>
+              <div style={{ padding: tokens.spacingVerticalM, display: 'flex', gap: tokens.spacingHorizontalXS, flexWrap: 'wrap' }}>
                 {detail.detail.entity.classifications.map((c: any) => (
                   <Badge key={c.typeName} appearance="filled" color="severe">{c.typeName}</Badge>
                 ))}
@@ -133,7 +133,7 @@ export default function AssetDetailPage() {
           {source === 'onelake' && detail.detail && !detail.detail._error && (
             <Card>
               <CardHeader header={<Subtitle2>OneLake item</Subtitle2>} />
-              <div style={{ padding: 12 }}>
+              <div style={{ padding: tokens.spacingVerticalM }}>
                 <div><strong>Display name:</strong> {detail.detail.displayName}</div>
                 <div><strong>Type:</strong> {detail.detail.type || '—'}</div>
                 <div><strong>Workspace:</strong> {workspaceId}</div>
@@ -145,7 +145,7 @@ export default function AssetDetailPage() {
           {source === 'onelake' && Array.isArray(detail.shortcuts) && detail.shortcuts.length > 0 && (
             <Card style={{ gridColumn: '1 / -1' }}>
               <CardHeader header={<Subtitle2>Shortcuts</Subtitle2>} />
-              <div style={{ padding: 12 }}>
+              <div style={{ padding: tokens.spacingVerticalM }}>
                 <Table aria-label="Shortcuts">
                   <TableHeader>
                     <TableRow>
@@ -159,7 +159,7 @@ export default function AssetDetailPage() {
                       <TableRow key={`${sc.path}/${sc.name}/${i}`}>
                         <TableCell><code>{sc.name}</code></TableCell>
                         <TableCell>{sc.path}</TableCell>
-                        <TableCell><pre style={{ margin: 0, fontSize: 11 }}>{JSON.stringify(sc.target, null, 2)}</pre></TableCell>
+                        <TableCell><pre style={{ margin: 0, fontSize: tokens.fontSizeBase100 }}>{JSON.stringify(sc.target, null, 2)}</pre></TableCell>
                       </TableRow>
                     ))}
                   </TableBody>
@@ -174,7 +174,7 @@ export default function AssetDetailPage() {
                 header={<Subtitle2>AI auto-description</Subtitle2>}
                 description={<Caption1>Bulk-generate descriptions for all tables, columns, and measures</Caption1>}
               />
-              <div style={{ padding: 12 }}>
+              <div style={{ padding: tokens.spacingVerticalM }}>
                 <BulkDescribeAction modelId={id} workspaceId={workspaceId} />
               </div>
             </Card>
@@ -182,7 +182,7 @@ export default function AssetDetailPage() {
 
           <Card style={{ gridColumn: '1 / -1' }}>
             <CardHeader header={<Subtitle2>Cross-source actions</Subtitle2>} />
-            <div style={{ padding: 12 }}>
+            <div style={{ padding: tokens.spacingVerticalM }}>
               <CrossSourceActions
                 source={source as 'purview' | 'unity-catalog' | 'onelake'}
                 id={id}

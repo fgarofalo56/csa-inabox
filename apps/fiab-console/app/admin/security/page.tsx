@@ -24,7 +24,11 @@ import {
   MessageBar, MessageBarBody, MessageBarTitle,
   makeStyles, tokens,
 } from '@fluentui/react-components';
-import { ArrowSync24Regular, Shield24Regular } from '@fluentui/react-icons';
+import {
+  ArrowSync24Regular, Shield24Regular,
+  ShieldRegular, DataUsageRegular, TagRegular,
+  LockClosedRegular, EyeRegular, HistoryRegular,
+} from '@fluentui/react-icons';
 import { AdminShell } from '@/lib/components/admin-shell';
 import { PurviewPanel } from '@/lib/components/admin-security/purview-panel';
 import { MipPanel } from '@/lib/components/admin-security/mip-panel';
@@ -62,8 +66,8 @@ const useStyles = makeStyles({
     border: `1px solid ${tokens.colorNeutralStroke2}`,
     backgroundColor: tokens.colorNeutralBackground2,
   },
-  statVal: { fontSize: '24px', fontWeight: 600, color: tokens.colorBrandForeground1 },
-  statLabel: { fontSize: '12px', color: tokens.colorNeutralForeground3, marginTop: tokens.spacingVerticalXXS },
+  statVal: { fontSize: tokens.fontSizeBase600, fontWeight: 600, color: tokens.colorBrandForeground1 },
+  statLabel: { fontSize: tokens.fontSizeBase200, color: tokens.colorNeutralForeground3, marginTop: tokens.spacingVerticalXXS },
   bar: { height: '6px', backgroundColor: tokens.colorNeutralBackground3, borderRadius: tokens.borderRadiusSmall, overflow: 'hidden', marginTop: tokens.spacingVerticalS },
   barFill: { height: '100%', backgroundColor: tokens.colorBrandBackground, borderRadius: tokens.borderRadiusSmall },
   twoCol: {
@@ -71,7 +75,7 @@ const useStyles = makeStyles({
     gap: tokens.spacingHorizontalL,
   },
   chip: {
-    fontSize: '11px',
+    fontSize: tokens.fontSizeBase100,
     paddingTop: tokens.spacingVerticalXS,
     paddingBottom: tokens.spacingVerticalXS,
     paddingLeft: tokens.spacingHorizontalS,
@@ -119,12 +123,12 @@ export default function SecurityPage() {
         selectedValue={tab}
         onTabSelect={(_e: SelectTabEvent, d: SelectTabData) => setTab(d.value as TopTab)}
       >
-        <Tab value="overview">Overview</Tab>
-        <Tab value="purview">Purview</Tab>
-        <Tab value="mip">Information Protection</Tab>
-        <Tab value="dlp">DLP</Tab>
-        <Tab value="dspm">DSPM for AI</Tab>
-        <Tab value="audit">Audit</Tab>
+        <Tab value="overview" icon={<ShieldRegular />}>Overview</Tab>
+        <Tab value="purview" icon={<DataUsageRegular />}>Purview</Tab>
+        <Tab value="mip" icon={<TagRegular />}>Information Protection</Tab>
+        <Tab value="dlp" icon={<LockClosedRegular />}>DLP</Tab>
+        <Tab value="dspm" icon={<EyeRegular />}>DSPM for AI</Tab>
+        <Tab value="audit" icon={<HistoryRegular />}>Audit</Tab>
       </TabList>
 
       {tab === 'overview' && <OverviewTab />}

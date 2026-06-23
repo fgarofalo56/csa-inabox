@@ -50,18 +50,18 @@ interface ApiResponse {
 }
 
 const useStyles = makeStyles({
-  intro: { display: 'block', color: tokens.colorNeutralForeground3, marginBottom: '16px', maxWidth: '760px' },
+  intro: { display: 'block', color: tokens.colorNeutralForeground3, marginBottom: tokens.spacingVerticalL, maxWidth: '760px' },
   toolbar: {
-    display: 'flex', alignItems: 'center', gap: '12px', marginBottom: '16px',
-    paddingBottom: '12px', borderBottom: `1px solid ${tokens.colorNeutralStroke2}`,
+    display: 'flex', alignItems: 'center', gap: tokens.spacingHorizontalM, marginBottom: tokens.spacingVerticalL,
+    paddingBottom: tokens.spacingVerticalM, borderBottom: `1px solid ${tokens.colorNeutralStroke2}`,
   },
   grow: { flex: 1 },
-  infoBar: { marginBottom: '16px' },
-  actionCell: { display: 'flex', gap: '8px' },
-  dialogFields: { display: 'flex', flexDirection: 'column', gap: '12px', minWidth: '400px' },
-  row: { display: 'flex', gap: '8px' },
+  infoBar: { marginBottom: tokens.spacingVerticalL },
+  actionCell: { display: 'flex', gap: tokens.spacingHorizontalS },
+  dialogFields: { display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalM, minWidth: '400px' },
+  row: { display: 'flex', gap: tokens.spacingHorizontalS },
   conditionalsSection: {
-    display: 'flex', flexDirection: 'column', gap: '8px', padding: '12px',
+    display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalS, padding: tokens.spacingVerticalM,
     backgroundColor: tokens.colorNeutralBackground2, borderRadius: tokens.borderRadiusMedium,
   },
 });
@@ -195,13 +195,13 @@ export default function DataQualityPage() {
 
       <MessageBar intent="info" className={s.infoBar}>
         <MessageBarBody>
-          <MessageBarTitle>Execution deferred</MessageBarTitle>
-          Rules you define here are evaluated on the next scan run. Real-time enforcement can be enabled via the scan configuration in Scans &amp; sources.
+          <MessageBarTitle>When rules run</MessageBarTitle>
+          Rules you define here are evaluated during scan runs. Configure continuous enforcement in a scan&rsquo;s settings under Scans &amp; sources.
         </MessageBarBody>
       </MessageBar>
 
       {error && (
-        <MessageBar intent="error" style={{ marginBottom: 16 }}>
+        <MessageBar intent="error" style={{ marginBottom: tokens.spacingVerticalL }}>
           <MessageBarBody><MessageBarTitle>Error loading rules</MessageBarTitle>{error}</MessageBarBody>
         </MessageBar>
       )}
@@ -229,7 +229,7 @@ export default function DataQualityPage() {
             <DialogTitle>{editingRule ? 'Edit rule' : 'New data-quality rule'}</DialogTitle>
             <DialogContent>
               {dialogError && dialogError.length > 0 && (
-                <MessageBar intent="error" style={{ marginBottom: 12 }}>
+                <MessageBar intent="error" style={{ marginBottom: tokens.spacingVerticalM }}>
                   <MessageBarBody>{dialogError.map((e, i) => <div key={i}>{e}</div>)}</MessageBarBody>
                 </MessageBar>
               )}

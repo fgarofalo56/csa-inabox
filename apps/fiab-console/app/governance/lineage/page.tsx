@@ -239,10 +239,10 @@ function LineageInner() {
 
   return (
     <GovernanceShell sectionTitle="Lineage">
-      <Body1 style={{ color: tokens.colorNeutralForeground3, marginBottom: 12 }}>
+      <Body1 style={{ color: tokens.colorNeutralForeground3, marginBottom: tokens.spacingVerticalM }}>
         End-to-end relationships across your tenant's items, derived from typed references in each item's state.
         {source && (
-          <Badge appearance="outline" color={source === 'purview' ? 'brand' : 'informative'} size="small" style={{ marginLeft: 8 }}>
+          <Badge appearance="outline" color={source === 'purview' ? 'brand' : 'informative'} size="small" style={{ marginLeft: tokens.spacingHorizontalS }}>
             source: {source}
           </Badge>
         )}
@@ -257,7 +257,7 @@ function LineageInner() {
             {focusId && focusLabel && (
               <Badge appearance="tint" color="brand" size="large">
                 Focused: {focusLabel}
-                <Button size="small" appearance="transparent" onClick={() => { setFocusId(null); setSelectedId(null); }} style={{ minWidth: 'auto', marginLeft: 4 }}>Show all</Button>
+                <Button size="small" appearance="transparent" onClick={() => { setFocusId(null); setSelectedId(null); }} style={{ minWidth: 'auto', marginLeft: tokens.spacingHorizontalXS }}>Show all</Button>
               </Badge>
             )}
             <Badge appearance="tint" color="informative" size="medium">{filteredNodes.length} items</Badge>
@@ -341,21 +341,21 @@ function LineageInner() {
                     <rect
                       width={180} height={NODE_HEIGHT}
                       rx={6}
-                      fill="#fff"
-                      stroke={sel ? '#0078d4' : '#d0d0d0'}
+                      fill={tokens.colorNeutralBackground1}
+                      stroke={sel ? tokens.colorBrandStroke1 : tokens.colorNeutralStroke2}
                       strokeWidth={sel ? 2 : 1}
                     />
                     <rect width={5} height={NODE_HEIGHT} rx={6} fill={typeColor(n.type)} />
-                    <text x={14} y={20} fontSize={12} fontWeight={600} fill="#111">
+                    <text x={14} y={20} fontSize={12} fontWeight={600} fill={tokens.colorNeutralForeground1}>
                       {n.label.length > 24 ? n.label.slice(0, 24) + '…' : n.label}
                     </text>
-                    <text x={14} y={38} fontSize={10} fill="#666">{n.type}</text>
-                    <text x={14} y={50} fontSize={10} fill="#999">
+                    <text x={14} y={38} fontSize={10} fill={tokens.colorNeutralForeground3}>{n.type}</text>
+                    <text x={14} y={50} fontSize={10} fill={tokens.colorNeutralForeground3}>
                       ws: {(wsNameById.get(n.workspaceId) || n.workspaceId).slice(0, 22)}
                     </text>
                     {/* F15 — propagation status dot (top-right corner of the node). */}
                     {n.propagation && (
-                      <circle cx={168} cy={12} r={5} fill={PROP_DOT[n.propagation.status]} stroke="#fff" strokeWidth={1}>
+                      <circle cx={168} cy={12} r={5} fill={PROP_DOT[n.propagation.status]} stroke={tokens.colorNeutralBackground1} strokeWidth={1}>
                         <title>
                           {STATUS_LABEL[n.propagation.status]}
                           {n.propagation.expectedLabel ? ` — expected: ${n.propagation.expectedLabel}` : ''}
@@ -372,8 +372,8 @@ function LineageInner() {
           <div className={s.legend}>
             <strong>Legend:</strong>
             {Object.entries(ITEM_COLORS).slice(0, 8).map(([type, color]) => (
-              <span key={type} style={{ display: 'inline-flex', alignItems: 'center', gap: 4 }}>
-                <span style={{ width: 10, height: 10, background: color, borderRadius: 2, display: 'inline-block' }} />
+              <span key={type} style={{ display: 'inline-flex', alignItems: 'center', gap: tokens.spacingHorizontalXS }}>
+                <span style={{ width: 10, height: 10, background: color, borderRadius: tokens.borderRadiusSmall, display: 'inline-block' }} />
                 {type}
               </span>
             ))}
@@ -383,8 +383,8 @@ function LineageInner() {
           <div className={s.legend} style={{ paddingTop: 0 }}>
             <strong>Label propagation:</strong>
             {(['in-sync', 'pending', 'overridden', 'unlabeled', 'no-upstream'] as PropagationStatus[]).map((st) => (
-              <span key={st} style={{ display: 'inline-flex', alignItems: 'center', gap: 4 }}>
-                <span style={{ width: 10, height: 10, background: PROP_DOT[st], borderRadius: 999, display: 'inline-block' }} />
+              <span key={st} style={{ display: 'inline-flex', alignItems: 'center', gap: tokens.spacingHorizontalXS }}>
+                <span style={{ width: 10, height: 10, background: PROP_DOT[st], borderRadius: tokens.borderRadiusCircular, display: 'inline-block' }} />
                 {STATUS_LABEL[st]}
               </span>
             ))}
@@ -393,11 +393,11 @@ function LineageInner() {
           {selected && (
             <div className={s.detail}>
               <Subtitle2>{selected.label}</Subtitle2>
-              <Caption1 style={{ display: 'block', marginBottom: 8 }}>
+              <Caption1 style={{ display: 'block', marginBottom: tokens.spacingVerticalS }}>
                 {selected.type} · workspace {wsNameById.get(selected.workspaceId) || selected.workspaceId} · rank {ranks.get(selected.id) ?? 0}
               </Caption1>
               {selected.propagation && (
-                <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 8, flexWrap: 'wrap' }}>
+                <div style={{ display: 'flex', alignItems: 'center', gap: tokens.spacingHorizontalS, marginBottom: tokens.spacingVerticalS, flexWrap: 'wrap' }}>
                   <Badge appearance="filled" color={STATUS_COLOR[selected.propagation.status]} size="small">
                     {STATUS_LABEL[selected.propagation.status]}
                   </Badge>
@@ -418,21 +418,21 @@ function LineageInner() {
                 href={`/items/${selected.type}/${selected.id}`}
                 target="_blank"
                 rel="noreferrer"
-                style={{ display: 'inline-flex', alignItems: 'center', gap: 4, fontSize: 12 }}
+                style={{ display: 'inline-flex', alignItems: 'center', gap: tokens.spacingHorizontalXS, fontSize: tokens.fontSizeBase200 }}
               >
                 Open editor <Open16Regular />
               </a>
 
               <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: tokens.spacingHorizontalL, marginTop: tokens.spacingVerticalM }}>
                 <div>
-                  <Caption1 style={{ display: 'block', marginBottom: 4 }}>
+                  <Caption1 style={{ display: 'block', marginBottom: tokens.spacingVerticalXS }}>
                     <strong>Upstream ({selectedUpstream.length})</strong> — items that feed this one
                   </Caption1>
                   {selectedUpstream.length === 0 && <Caption1 style={{ color: tokens.colorNeutralForeground3 }}>None</Caption1>}
                   {selectedUpstream.map((e, i) => {
                     const src = byId.get(e.from);
                     return (
-                      <div key={i} style={{ fontSize: 12, padding: '2px 0' }}>
+                      <div key={i} style={{ fontSize: tokens.fontSizeBase200, padding: '2px 0' }}>
                         ← <a href={`/items/${src?.type}/${src?.id}`}>{src?.label || e.from}</a>
                         <span style={{ color: tokens.colorNeutralForeground3 }}> · {e.via}</span>
                       </div>
@@ -440,14 +440,14 @@ function LineageInner() {
                   })}
                 </div>
                 <div>
-                  <Caption1 style={{ display: 'block', marginBottom: 4 }}>
+                  <Caption1 style={{ display: 'block', marginBottom: tokens.spacingVerticalXS }}>
                     <strong>Downstream ({selectedDownstream.length})</strong> — items that depend on this one
                   </Caption1>
                   {selectedDownstream.length === 0 && <Caption1 style={{ color: tokens.colorNeutralForeground3 }}>None</Caption1>}
                   {selectedDownstream.map((e, i) => {
                     const dst = byId.get(e.to);
                     return (
-                      <div key={i} style={{ fontSize: 12, padding: '2px 0' }}>
+                      <div key={i} style={{ fontSize: tokens.fontSizeBase200, padding: '2px 0' }}>
                         → <a href={`/items/${dst?.type}/${dst?.id}`}>{dst?.label || e.to}</a>
                         <span style={{ color: tokens.colorNeutralForeground3 }}> · {e.via}</span>
                       </div>

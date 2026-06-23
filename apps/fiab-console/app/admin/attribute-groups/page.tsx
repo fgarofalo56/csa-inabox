@@ -48,7 +48,7 @@ const useStyles = makeStyles({
     display: 'flex', alignItems: 'center', gap: tokens.spacingHorizontalS,
     padding: tokens.spacingVerticalS, borderBottom: `1px solid ${tokens.colorNeutralStroke2}`,
   },
-  attrMain: { display: 'flex', flexDirection: 'column', flex: '1 1 auto', minWidth: 0, gap: '2px' },
+  attrMain: { display: 'flex', flexDirection: 'column', flex: '1 1 auto', minWidth: 0, gap: tokens.spacingVerticalXXS },
   attrName: { fontWeight: tokens.fontWeightSemibold },
   attrMeta: { display: 'flex', gap: tokens.spacingHorizontalXS, alignItems: 'center', flexWrap: 'wrap' },
   attrEditor: {

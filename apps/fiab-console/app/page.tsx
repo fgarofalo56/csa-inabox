@@ -21,12 +21,12 @@ const useStyles = makeStyles({
     background: 'var(--loom-hero-bg)',
     color: 'white',
     paddingTop: '48px', paddingRight: '56px', paddingBottom: '48px', paddingLeft: '56px',
-    borderRadius: '18px',
+    borderRadius: tokens.borderRadiusXLarge,
     marginBottom: '32px',
     display: 'flex',
     alignItems: 'center',
-    gap: '40px',
-    boxShadow: '0 12px 32px rgba(31, 111, 235, 0.18)',
+    gap: tokens.spacingHorizontalXXXL,
+    boxShadow: tokens.shadow16,
     position: 'relative',
     overflow: 'hidden',
   },
@@ -38,19 +38,19 @@ const useStyles = makeStyles({
   },
   heroCopy: { flex: 1, position: 'relative' },
   heroTitle: { color: 'white', fontWeight: 700, letterSpacing: '-0.01em' },
-  heroSub: { color: 'rgba(255,255,255,0.92)', fontSize: '16px', lineHeight: 1.6, maxWidth: '720px', marginTop: '14px' },
-  heroChips: { display: 'flex', gap: '10px', flexWrap: 'wrap', marginTop: '24px' },
+  heroSub: { color: 'rgba(255,255,255,0.92)', fontSize: tokens.fontSizeBase400, lineHeight: 1.6, maxWidth: '720px', marginTop: tokens.spacingVerticalM },
+  heroChips: { display: 'flex', gap: tokens.spacingHorizontalS, flexWrap: 'wrap', marginTop: tokens.spacingVerticalXL },
   chip: {
-    fontSize: '12px',
+    fontSize: tokens.fontSizeBase200,
     paddingTop: '7px', paddingRight: '14px', paddingBottom: '7px', paddingLeft: '14px',
-    borderRadius: '999px',
+    borderRadius: tokens.borderRadiusCircular,
     backgroundColor: 'rgba(255,255,255,0.22)', border: '1px solid rgba(255,255,255,0.35)',
     color: 'white', lineHeight: 1.4, fontWeight: 500,
     whiteSpace: 'nowrap',
   },
-  sectionTitle: { marginTop: '36px', marginBottom: '16px', display: 'flex', alignItems: 'baseline', gap: '12px', flexWrap: 'wrap' },
+  sectionTitle: { marginTop: tokens.spacingVerticalXXL, marginBottom: tokens.spacingVerticalL, display: 'flex', alignItems: 'baseline', gap: tokens.spacingHorizontalM, flexWrap: 'wrap' },
   grid: {
-    display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(280px, 1fr))', gap: '20px',
+    display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(280px, 1fr))', gap: tokens.spacingHorizontalXL,
   },
   card: {
     paddingTop: '24px', paddingRight: '24px', paddingBottom: '24px', paddingLeft: '24px',
@@ -59,7 +59,7 @@ const useStyles = makeStyles({
     transition: 'transform 0.15s, box-shadow 0.15s, border-color 0.15s',
     border: `1px solid ${tokens.colorNeutralStroke2}`,
     backgroundColor: tokens.colorNeutralBackground1,
-    borderRadius: '12px',
+    borderRadius: tokens.borderRadiusLarge,
     textDecoration: 'none',
     color: tokens.colorNeutralForeground1,
     ':hover': {
@@ -69,9 +69,9 @@ const useStyles = makeStyles({
     },
   },
   cardIcon: {
-    width: '44px', height: '44px', borderRadius: '12px',
+    width: '44px', height: '44px', borderRadius: tokens.borderRadiusLarge,
     display: 'flex', alignItems: 'center', justifyContent: 'center',
-    color: 'white', marginBottom: '18px', flexShrink: 0,
+    color: tokens.colorNeutralForegroundOnBrand, marginBottom: tokens.spacingVerticalL, flexShrink: 0,
   },
   cardTitle: { marginBottom: '8px', lineHeight: 1.3, display: 'block' },
   cardBody: { color: tokens.colorNeutralForeground3, margin: 0, lineHeight: 1.55, display: 'block' },
@@ -137,7 +137,7 @@ export default function HomePage() {
       <div className={s.sectionTitle}>
         <Title3 as="h2">Get started</Title3>
         <Caption1 style={{ color: tokens.colorNeutralForeground3 }}>
-          Press <kbd style={{ padding: '1px 6px', border: `1px solid ${tokens.colorNeutralStroke2}`, borderRadius: 4 }}>/</kbd> to search, <kbd style={{ padding: '1px 6px', border: `1px solid ${tokens.colorNeutralStroke2}`, borderRadius: 4 }}>Ctrl K</kbd> for the command palette
+          Press <kbd style={{ padding: '1px 6px', border: `1px solid ${tokens.colorNeutralStroke2}`, borderRadius: tokens.borderRadiusSmall }}>/</kbd> to search, <kbd style={{ padding: '1px 6px', border: `1px solid ${tokens.colorNeutralStroke2}`, borderRadius: tokens.borderRadiusSmall }}>Ctrl K</kbd> for the command palette
         </Caption1>
       </div>
       <div className={s.grid}>

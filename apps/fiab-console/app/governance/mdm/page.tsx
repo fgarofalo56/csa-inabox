@@ -50,14 +50,14 @@ const STRATEGIES: { value: Strategy; label: string }[] = [
 ];
 
 const useStyles = makeStyles({
-  intro: { display: 'block', color: tokens.colorNeutralForeground3, marginBottom: 16, maxWidth: 760 },
-  row: { display: 'flex', gap: 12, flexWrap: 'wrap', alignItems: 'flex-end' },
-  fields: { display: 'flex', flexDirection: 'column', gap: 12, minWidth: 520, maxHeight: '64vh', overflowY: 'auto' },
-  attrRow: { display: 'flex', gap: 8, alignItems: 'flex-end' },
-  sub: { display: 'block', marginTop: 12, marginBottom: 6 },
+  intro: { display: 'block', color: tokens.colorNeutralForeground3, marginBottom: tokens.spacingVerticalL, maxWidth: 760 },
+  row: { display: 'flex', gap: tokens.spacingHorizontalM, flexWrap: 'wrap', alignItems: 'flex-end' },
+  fields: { display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalM, minWidth: 520, maxHeight: '64vh', overflowY: 'auto' },
+  attrRow: { display: 'flex', gap: tokens.spacingHorizontalS, alignItems: 'flex-end' },
+  sub: { display: 'block', marginTop: tokens.spacingVerticalM, marginBottom: tokens.spacingVerticalXS },
   bar: { flex: 1, minWidth: 60, maxWidth: 140, height: 6, backgroundColor: tokens.colorNeutralBackground3, borderRadius: tokens.borderRadiusCircular, overflow: 'hidden' },
   barFill: { height: '100%', display: 'block' },
-  pctCell: { display: 'flex', alignItems: 'center', gap: 8 },
+  pctCell: { display: 'flex', alignItems: 'center', gap: tokens.spacingHorizontalS },
 });
 
 export default function GovernanceMdmPage() {
@@ -78,7 +78,7 @@ export default function GovernanceMdmPage() {
         Define golden-record match + survivorship models, manage reference-data code lists, run match/merge on your workspace
         Databricks SQL Warehouse, and steward the resulting golden records. Self-built on Azure — no Microsoft Fabric, no partner MDM SaaS.
       </Caption1>
-      <TabList selectedValue={tab} onTabSelect={(_, d) => setTab(d.value as any)} style={{ marginBottom: 16 }}>
+      <TabList selectedValue={tab} onTabSelect={(_, d) => setTab(d.value as any)} style={{ marginBottom: tokens.spacingVerticalL }}>
         <Tab value="models">Models</Tab>
         <Tab value="refdata">Reference data</Tab>
         <Tab value="match">Match</Tab>
@@ -129,7 +129,7 @@ function ModelsTab({ models, loading, reload }: { models: MdmModel[]; loading: b
     { key: 'golden', label: 'Golden table', sortable: true, filterable: true, getValue: (x) => x.goldenTable, render: (x) => <Caption1>{x.goldenTable}</Caption1> },
     { key: 'attrs', label: 'Match / Surv.', width: 120, getValue: (x) => x.matchAttributes.length, render: (x) => <Caption1>{x.matchAttributes.length} / {x.survivorship.length}</Caption1> },
     { key: 'actions', label: 'Actions', width: 96, render: (x) => (
-      <span style={{ display: 'flex', gap: 8 }} onClick={(e) => e.stopPropagation()}>
+      <span style={{ display: 'flex', gap: tokens.spacingHorizontalS }} onClick={(e) => e.stopPropagation()}>
         <Button size="small" appearance="transparent" icon={<Edit20Regular />} onClick={() => openEdit(x)} aria-label="Edit" />
         <Button size="small" appearance="transparent" icon={<Delete20Regular />} onClick={() => del(x.id)} aria-label="Delete" />
       </span>) },
@@ -140,7 +140,7 @@ function ModelsTab({ models, loading, reload }: { models: MdmModel[]; loading: b
 
   return (
     <Section title="MDM models" actions={
-      <span style={{ display: 'flex', gap: 8 }}>
+      <span style={{ display: 'flex', gap: tokens.spacingHorizontalS }}>
         <Button icon={<ArrowSync24Regular />} onClick={reload}>Refresh</Button>
         <Button appearance="primary" icon={<Add24Regular />} onClick={openNew}>New model</Button>
       </span>}>
@@ -151,7 +151,7 @@ function ModelsTab({ models, loading, reload }: { models: MdmModel[]; loading: b
           <DialogBody>
             <DialogTitle>{editing ? 'Edit model' : 'New MDM model'}</DialogTitle>
             <DialogContent>
-              {errs && <MessageBar intent="error" style={{ marginBottom: 12 }}><MessageBarBody>{errs.map((e, i) => <div key={i}>{e}</div>)}</MessageBarBody></MessageBar>}
+              {errs && <MessageBar intent="error" style={{ marginBottom: tokens.spacingVerticalM }}><MessageBarBody>{errs.map((e, i) => <div key={i}>{e}</div>)}</MessageBarBody></MessageBar>}
               <div className={s.fields}>
                 <div className={s.row}>
                   <Field label="Model name" required style={{ flex: 1 }}><Input value={m.name} onChange={(_, d) => setM({ ...m, name: d.value })} placeholder="Customer golden" /></Field>
@@ -254,7 +254,7 @@ function RefDataTab() {
     { key: 'entries', label: 'Entries', sortable: true, width: 100, getValue: (x) => x.entries.length, render: (x) => <Caption1>{x.entries.length}</Caption1> },
     { key: 'version', label: 'Version', sortable: true, width: 100, getValue: (x) => x.version, render: (x) => <Badge appearance="outline" size="small">v{x.version}</Badge> },
     { key: 'actions', label: 'Actions', width: 96, render: (x) => (
-      <span style={{ display: 'flex', gap: 8 }} onClick={(e) => e.stopPropagation()}>
+      <span style={{ display: 'flex', gap: tokens.spacingHorizontalS }} onClick={(e) => e.stopPropagation()}>
         <Button size="small" appearance="transparent" icon={<Edit20Regular />} onClick={() => openEdit(x)} aria-label="Edit" />
         <Button size="small" appearance="transparent" icon={<Delete20Regular />} onClick={() => del(x.id)} aria-label="Delete" />
       </span>) },
@@ -262,11 +262,11 @@ function RefDataTab() {
 
   return (
     <Section title="Reference data" actions={
-      <span style={{ display: 'flex', gap: 8 }}>
+      <span style={{ display: 'flex', gap: tokens.spacingHorizontalS }}>
         <Button icon={<ArrowSync24Regular />} onClick={load}>Refresh</Button>
         <Button appearance="primary" icon={<Add24Regular />} onClick={openNew}>New set</Button>
       </span>}>
-      {error && <MessageBar intent="error" style={{ marginBottom: 12 }}><MessageBarBody>{error}</MessageBarBody></MessageBar>}
+      {error && <MessageBar intent="error" style={{ marginBottom: tokens.spacingVerticalM }}><MessageBarBody>{error}</MessageBarBody></MessageBar>}
       {!sets ? <Spinner label="Loading reference data…" /> : (
         <LoomDataTable<RefSet> columns={cols} rows={sets} getRowId={(x) => x.id} empty="No reference-data sets yet. Create a managed code list (e.g. Country, Currency, Status)." />
       )}
@@ -356,7 +356,7 @@ function MatchTab({ models }: { models: MdmModel[] }) {
     { key: 'steward', label: 'Stewardship', width: 150, getValue: (c) => (approved.has(pairKey(c.idA, c.idB)) ? 1 : 0), render: (c) => {
       const isApproved = approved.has(pairKey(c.idA, c.idB));
       return (
-        <span onClick={(e) => e.stopPropagation()} style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+        <span onClick={(e) => e.stopPropagation()} style={{ display: 'flex', alignItems: 'center', gap: tokens.spacingHorizontalS }}>
           {isApproved
             ? <><Badge appearance="filled" color="success" size="small">Approved</Badge><Button size="small" appearance="transparent" onClick={() => revoke(c)} aria-label="Revoke approval">Revoke</Button></>
             : <Button size="small" icon={<CheckmarkCircle20Regular />} onClick={() => approve(c)}>Approve merge</Button>}
@@ -367,7 +367,7 @@ function MatchTab({ models }: { models: MdmModel[] }) {
 
   return (
     <Section title="Match candidates" actions={<Button appearance="primary" icon={<Play20Regular />} onClick={run} disabled={busy || !modelId}>{busy ? 'Matching…' : 'Run match'}</Button>}>
-      <div className={s.row} style={{ marginBottom: 16 }}>
+      <div className={s.row} style={{ marginBottom: tokens.spacingVerticalL }}>
         <Field label="Model" style={{ minWidth: 260 }}>
           <Dropdown selectedOptions={modelId ? [modelId] : []} value={models.find((m) => m.id === modelId)?.name || ''} onOptionSelect={(_, d) => setModelId(d.optionValue || '')} placeholder="Pick a model">
             {models.map((m) => <Option key={m.id} value={m.id}>{m.name}</Option>)}
@@ -375,10 +375,10 @@ function MatchTab({ models }: { models: MdmModel[] }) {
         </Field>
         <Field label="Min score %" style={{ minWidth: 140 }}><Input type="number" value={minScore} onChange={(_, d) => setMinScore(d.value)} /></Field>
       </div>
-      {gate && <MessageBar intent="warning" style={{ marginBottom: 12 }}><MessageBarBody><MessageBarTitle>Databricks not configured</MessageBarTitle>{gate.error} Set <code>{gate.missing}</code> on the Console (admin-plane bicep).</MessageBarBody></MessageBar>}
-      {error && <MessageBar intent="error" style={{ marginBottom: 12 }}><MessageBarBody>{error}</MessageBarBody></MessageBar>}
+      {gate && <MessageBar intent="warning" style={{ marginBottom: tokens.spacingVerticalM }}><MessageBarBody><MessageBarTitle>Databricks not configured</MessageBarTitle>{gate.error} Set <code>{gate.missing}</code> on the Console (admin-plane bicep).</MessageBarBody></MessageBar>}
+      {error && <MessageBar intent="error" style={{ marginBottom: tokens.spacingVerticalM }}><MessageBarBody>{error}</MessageBarBody></MessageBar>}
       {candidates && <>
-        <MessageBar intent="info" style={{ marginBottom: 12 }}><MessageBarBody>
+        <MessageBar intent="info" style={{ marginBottom: tokens.spacingVerticalM }}><MessageBarBody>
           Approving a pair is an explicit stewardship action — approved pairs are unioned into the golden cluster on the next merge, so fuzzy duplicates that don’t share every exact attribute still survive into one golden record. {approved.size} pair(s) approved for this model.
         </MessageBarBody></MessageBar>
         <LoomDataTable<MatchCandidate> columns={cols} rows={candidates} getRowId={(c) => `${c.idA}|${c.idB}`} empty="No candidate pairs at or above the threshold." />
@@ -431,22 +431,22 @@ function GoldenTab({ models }: { models: MdmModel[] }) {
 
   return (
     <Section title="Golden records" actions={
-      <span style={{ display: 'flex', gap: 8 }}>
+      <span style={{ display: 'flex', gap: tokens.spacingHorizontalS }}>
         <Button onClick={load} disabled={busy || !modelId} icon={<ArrowSync24Regular />}>Load</Button>
         <Button appearance="primary" onClick={merge} disabled={merging || !modelId} icon={<Play20Regular />}>{merging ? 'Merging…' : 'Run merge'}</Button>
       </span>}>
-      <div className={s.row} style={{ marginBottom: 16 }}>
+      <div className={s.row} style={{ marginBottom: tokens.spacingVerticalL }}>
         <Field label="Model" style={{ minWidth: 260 }}>
           <Dropdown selectedOptions={modelId ? [modelId] : []} value={models.find((m) => m.id === modelId)?.name || ''} onOptionSelect={(_, d) => setModelId(d.optionValue || '')} placeholder="Pick a model">
             {models.map((m) => <Option key={m.id} value={m.id}>{m.name}</Option>)}
           </Dropdown>
         </Field>
       </div>
-      {gate && <MessageBar intent="warning" style={{ marginBottom: 12 }}><MessageBarBody><MessageBarTitle>Databricks not configured</MessageBarTitle>{gate.error} Set <code>{gate.missing}</code> on the Console (admin-plane bicep).</MessageBarBody></MessageBar>}
-      {info && <MessageBar intent="success" style={{ marginBottom: 12 }}><MessageBarBody>{info}</MessageBarBody></MessageBar>}
-      {error && <MessageBar intent="error" style={{ marginBottom: 12 }}><MessageBarBody>{error}</MessageBarBody></MessageBar>}
+      {gate && <MessageBar intent="warning" style={{ marginBottom: tokens.spacingVerticalM }}><MessageBarBody><MessageBarTitle>Databricks not configured</MessageBarTitle>{gate.error} Set <code>{gate.missing}</code> on the Console (admin-plane bicep).</MessageBarBody></MessageBar>}
+      {info && <MessageBar intent="success" style={{ marginBottom: tokens.spacingVerticalM }}><MessageBarBody>{info}</MessageBarBody></MessageBar>}
+      {error && <MessageBar intent="error" style={{ marginBottom: tokens.spacingVerticalM }}><MessageBarBody>{error}</MessageBarBody></MessageBar>}
       {data && <>
-        {data.goldenTable && <Caption1 style={{ display: 'block', marginBottom: 8 }}>Table: <strong>{data.goldenTable}</strong> · {data.rows.length} record(s) shown</Caption1>}
+        {data.goldenTable && <Caption1 style={{ display: 'block', marginBottom: tokens.spacingVerticalS }}>Table: <strong>{data.goldenTable}</strong> · {data.rows.length} record(s) shown</Caption1>}
         <LoomDataTable<unknown[]> columns={cols} rows={data.rows} getRowId={rowId} empty="No golden records. Run a merge to produce them." />
       </>}
     </Section>
@@ -474,7 +474,7 @@ function RunsTab() {
   ];
   return (
     <Section title="MDM run history" actions={<Button icon={<ArrowSync24Regular />} onClick={load}>Refresh</Button>}>
-      {error && <MessageBar intent="error" style={{ marginBottom: 12 }}><MessageBarBody>{error}</MessageBarBody></MessageBar>}
+      {error && <MessageBar intent="error" style={{ marginBottom: tokens.spacingVerticalM }}><MessageBarBody>{error}</MessageBarBody></MessageBar>}
       {!runs ? <Spinner label="Loading runs…" /> : (
         <LoomDataTable<MdmRun> columns={cols} rows={runs} getRowId={(r) => r.id} empty="No match/merge runs yet." />
       )}
