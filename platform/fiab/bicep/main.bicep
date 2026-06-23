@@ -724,8 +724,8 @@ var redisSkuCapacity = redisIsPremium ? 1 : 0
 
 // ---------- User access patterns ----------
 
-@description('Deploy a P2S VPN Gateway (AAD-auth, OpenVPN) in the hub VNet. ~30 min provisioning, ~$30/mo. Default off.')
-param vpnGatewayEnabled bool = false
+@description('Deploy a P2S VPN Gateway (AAD-auth, OpenVPN) in the hub VNet so admins can reach the private-by-default estate (private endpoints, Internal APIM, firewall services) day-one via the admin Network & DNS page. ~30 min provisioning, ~$30/mo.')
+param vpnGatewayEnabled bool = true
 
 @description('Deploy Application Gateway v2 + WAF in front of the Console. ~15 min provisioning, ~$250/mo. Default off.')
 param appGatewayEnabled bool = false

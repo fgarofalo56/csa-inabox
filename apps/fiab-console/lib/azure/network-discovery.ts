@@ -42,6 +42,7 @@ const SUBSCRIPTIONS_API = '2022-12-01';
 const PE_API = '2024-03-01';
 const NIC_API = '2024-03-01';
 const NSG_API = '2024-05-01';
+const VPN_API = '2023-11-01';
 
 const uamiClientId = process.env.LOOM_UAMI_CLIENT_ID || process.env.AZURE_CLIENT_ID;
 const credential: ChainedTokenCredential | DefaultAzureCredential = uamiClientId
@@ -833,5 +834,112 @@ export async function getVnetDataGatewayReadiness(): Promise<VnetDataGatewayRead
   try { vnets = await listVirtualNetworks(); } catch { /* delegation list degrades to empty */ }
 
   return evaluateVnetGatewayReadiness(cloud, rpState, vnets);
+}
+
+// ============================================================
+// Point-to-Site (P2S) VPN gateway — admin remote access to the
+// private-by-default estate (private endpoints + Internal APIM + firewall'd
+// services). Powers the admin Network & DNS "VPN access" card.
+// ============================================================
+
+export interface VpnGatewayInfo {
+  found: boolean;
+  id?: string;
+  name?: string;
+  resourceGroup?: string;
+  subscriptionId?: string;
+  provisioningState?: string;     // Succeeded | Updating | Failed
+  ready: boolean;                 // true only when Succeeded (profile can be generated)
+  publicIp?: string;
+  clientAddressPool?: string[];   // e.g. ["172.16.201.0/24"]
+  vpnAuthTypes?: string[];        // ["AAD"]
+  vpnClientProtocols?: string[];  // ["OpenVPN"]
+  /** VNet ranges reachable once connected (the gateway's VNet + peered spokes). */
+  reachableRanges?: string[];
+}
+
+/** Find the P2S VPN gateway across the target subscriptions. Returns the first
+ *  `Vpn`-type virtualNetworkGateway with a P2S client config. */
+export async function findVpnGateway(): Promise<VpnGatewayInfo> {
+  const subs = await targetSubscriptionIds();
+  for (const sub of subs) {
+    let gws: any[] = [];
+    try {
+      gws = await armList<any>(`/subscriptions/${sub}/providers/Microsoft.Network/virtualNetworkGateways?api-version=${VPN_API}`);
+    } catch { continue; }
+    const gw = gws.find((g) => g?.properties?.gatewayType === 'Vpn' && g?.properties?.vpnClientConfiguration);
+    if (!gw) continue;
+    const p = gw.properties || {};
+    const vpnCfg = p.vpnClientConfiguration || {};
+    // Public IP (best-effort: resolve the first ipConfiguration's public IP).
+    let publicIp: string | undefined;
+    try {
+      const pipId: string | undefined = p.ipConfigurations?.[0]?.properties?.publicIPAddress?.id;
+      if (pipId) {
+        const pip = await armGet<any>(`${stripArmBase(pipId)}?api-version=${PE_API}`);
+        publicIp = pip?.properties?.ipAddress;
+      }
+    } catch { /* public IP best-effort */ }
+    // Reachable ranges = the gateway VNet's address space + peered VNets.
+    const reachable = new Set<string>();
+    try {
+      const vnetId: string | undefined = p.ipConfigurations?.[0]?.properties?.subnet?.id?.split('/subnets/')[0];
+      if (vnetId) {
+        const vnet = await armGet<any>(`${stripArmBase(vnetId)}?api-version=${PE_API}`);
+        for (const a of (vnet?.properties?.addressSpace?.addressPrefixes || [])) reachable.add(a);
+        for (const peer of (vnet?.properties?.virtualNetworkPeerings || [])) {
+          for (const a of (peer?.properties?.remoteAddressSpace?.addressPrefixes || peer?.properties?.remoteVirtualNetworkAddressSpace?.addressPrefixes || [])) reachable.add(a);
+        }
+      }
+    } catch { /* reachable ranges best-effort */ }
+    const rg = String(gw.id).split('/resourceGroups/')[1]?.split('/')[0];
+    return {
+      found: true,
+      id: gw.id,
+      name: gw.name,
+      resourceGroup: rg,
+      subscriptionId: sub,
+      provisioningState: p.provisioningState,
+      ready: p.provisioningState === 'Succeeded',
+      publicIp,
+      clientAddressPool: vpnCfg.vpnClientAddressPool?.addressPrefixes,
+      vpnAuthTypes: vpnCfg.vpnAuthenticationTypes,
+      vpnClientProtocols: vpnCfg.vpnClientProtocols,
+      reachableRanges: Array.from(reachable),
+    };
+  }
+  return { found: false, ready: false };
+}
+
+/** Generate a P2S VPN client profile and return its download URL. The gateway
+ *  `generatevpnprofile` API is a long-running operation (202 + Location); we
+ *  poll until it returns the profile URL string. Requires the gateway to be
+ *  fully provisioned. */
+export async function generateVpnProfile(gatewayId: string): Promise<string> {
+  const token = await armToken();
+  const url = `${armBase()}${stripArmBase(gatewayId)}/generatevpnprofile?api-version=${VPN_API}`;
+  let res = await fetchWithTimeout(url, {
+    method: 'POST',
+    headers: { authorization: `Bearer ${token}`, 'content-type': 'application/json' },
+    body: JSON.stringify({ authenticationMethod: 'EAPTLS' }),
+    cache: 'no-store',
+  });
+  // 200 → body is the URL string directly. 202 → poll Location until 200.
+  let guard = 0;
+  while (res.status === 202 && guard < 30) {
+    guard += 1;
+    const loc = res.headers.get('location') || res.headers.get('azure-asyncoperation');
+    if (!loc) break;
+    await new Promise((r) => setTimeout(r, 4000));
+    res = await fetchWithTimeout(loc, { headers: { authorization: `Bearer ${token}` }, cache: 'no-store' });
+  }
+  const text = await res.text();
+  if (!res.ok) {
+    throw new NetworkDiscoveryError(`generatevpnprofile failed (${res.status}): ${text.slice(0, 240)}`, res.status);
+  }
+  // The body is a JSON-encoded string URL (e.g. "https://...zip").
+  let out: string;
+  try { out = JSON.parse(text); } catch { out = text; }
+  return String(out).replace(/^"|"$/g, '');
 }
 

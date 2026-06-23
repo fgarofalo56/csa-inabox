@@ -232,6 +232,122 @@ function VnetGatewayCard() {
   );
 }
 
+interface VpnGw {
+  found: boolean; ready: boolean; name?: string; provisioningState?: string;
+  publicIp?: string; clientAddressPool?: string[]; vpnAuthTypes?: string[];
+  vpnClientProtocols?: string[]; reachableRanges?: string[];
+}
+
+/** Point-to-site VPN access — download the client profile + setup steps so an
+ *  admin can reach the private-by-default estate (private endpoints, Internal
+ *  APIM, firewall'd services) from their workstation. Pairs with the hosts-file
+ *  block below (which maps every FQDN → private IP). */
+function VpnAccessCard() {
+  const [gw, setGw] = useState<VpnGw | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [busy, setBusy] = useState(false);
+  const [msg, setMsg] = useState<string | null>(null);
+
+  useEffect(() => {
+    let alive = true;
+    (async () => {
+      try {
+        const r = await fetch('/api/network/vpn-profile');
+        const j = await r.json();
+        if (alive) setGw(j?.gateway ?? { found: false, ready: false });
+      } catch { if (alive) setGw({ found: false, ready: false }); }
+      finally { if (alive) setLoading(false); }
+    })();
+    return () => { alive = false; };
+  }, []);
+
+  const download = useCallback(async () => {
+    setBusy(true); setMsg(null);
+    try {
+      const r = await fetch('/api/network/vpn-profile', { method: 'POST' });
+      const j = await r.json();
+      if (j?.ok && j.profileUrl) {
+        window.open(j.profileUrl, '_blank', 'noopener');
+        setMsg('Profile generated — the download (AzureVPN/OpenVPN config zip) opened in a new tab.');
+      } else {
+        setMsg(`${j?.error || 'Could not generate the profile.'}${j?.hint ? ' — ' + j.hint : ''}`);
+      }
+    } catch (e: any) { setMsg(e?.message || String(e)); }
+    finally { setBusy(false); }
+  }, []);
+
+  return (
+    <div style={card}>
+      <div style={head}>
+        <ShieldLock24Regular />
+        <Subtitle2>VPN access (point-to-site)</Subtitle2>
+        {gw?.found && (
+          <Badge appearance="tint" color={gw.ready ? 'success' : 'warning'} style={{ marginLeft: 'auto' }}>
+            {gw.ready ? 'Ready' : (gw.provisioningState || 'Provisioning')}
+          </Badge>
+        )}
+      </div>
+
+      <Body1 style={{ marginBottom: 12 }}>
+        Connect from your workstation to reach the private-by-default Azure backends — private endpoints,
+        the Internal API Management gateway, and firewall-protected services (Databricks, AI Search, Synapse,
+        Cosmos, Key Vault, Storage). Sign-in is your Microsoft Entra ID (no certificates).
+      </Body1>
+
+      {loading && <Spinner size="tiny" label="Checking VPN gateway…" />}
+
+      {!loading && !gw?.found && (
+        <MessageBar intent="warning">
+          <MessageBarBody>
+            <MessageBarTitle>No VPN gateway provisioned yet</MessageBarTitle>
+            Deploy the day-one VPN gateway (bicep module <code>admin-plane/vpn-gateway.bicep</code>). It provisions a
+            point-to-site Entra-ID gateway on the hub VNet GatewaySubnet.
+          </MessageBarBody>
+        </MessageBar>
+      )}
+
+      {!loading && gw?.found && !gw.ready && (
+        <MessageBar intent="info">
+          <MessageBarBody>
+            <MessageBarTitle>Gateway is still provisioning ({gw.provisioningState})</MessageBarTitle>
+            A VPN gateway takes ~30–45 minutes to create on first deploy. The download unlocks automatically once it’s Ready.
+          </MessageBarBody>
+        </MessageBar>
+      )}
+
+      {!loading && gw?.found && (
+        <>
+          <Table size="small" style={{ marginBottom: 12 }}>
+            <TableBody>
+              <TableRow><TableCell><Body1Strong>Gateway</Body1Strong></TableCell><TableCell>{gw.name} {gw.publicIp ? `· ${gw.publicIp}` : ''}</TableCell></TableRow>
+              <TableRow><TableCell><Body1Strong>Auth · protocol</Body1Strong></TableCell><TableCell>{(gw.vpnAuthTypes || []).join(', ') || 'AAD'} · {(gw.vpnClientProtocols || []).join(', ') || 'OpenVPN'}</TableCell></TableRow>
+              <TableRow><TableCell><Body1Strong>Client IP pool</Body1Strong></TableCell><TableCell>{(gw.clientAddressPool || []).join(', ')}</TableCell></TableRow>
+              <TableRow><TableCell><Body1Strong>Reaches (routed)</Body1Strong></TableCell><TableCell>{(gw.reachableRanges || []).join(', ') || '—'}</TableCell></TableRow>
+            </TableBody>
+          </Table>
+
+          <Button appearance="primary" icon={<PlugConnected24Regular />} disabled={!gw.ready || busy} onClick={download}>
+            {busy ? 'Generating…' : 'Download VPN client config'}
+          </Button>
+          {msg && <MessageBar intent="info" style={{ marginTop: 10 }}><MessageBarBody>{msg}</MessageBarBody></MessageBar>}
+
+          <Divider style={{ margin: '14px 0' }} />
+          <Body1Strong>Setup (one time)</Body1Strong>
+          <ol style={{ margin: '6px 0 0 18px', lineHeight: 1.7 }}>
+            <li>Install the <strong>Azure VPN Client</strong> (Microsoft Store on Windows, or the macOS App Store).</li>
+            <li>Click <strong>Download VPN client config</strong> above and unzip it.</li>
+            <li>In the Azure VPN Client: <em>+ → Import</em>, choose the <code>azurevpnconfig.xml</code> from the <code>AzureVPN</code> folder.</li>
+            <li><strong>Connect</strong> and sign in with your Microsoft Entra ID (the metastore/admin account).</li>
+            <li>For service FQDN resolution, paste the <strong>hosts-file block below</strong> into your hosts file
+              (<code>C:\Windows\System32\drivers\etc\hosts</code> or <code>/etc/hosts</code>) — it maps every private-endpoint
+              FQDN to its private IP. Then you can reach Databricks, Synapse Studio, AI Search, etc. over the tunnel.</li>
+          </ol>
+        </>
+      )}
+    </div>
+  );
+}
+
 export function NetworkPane() {
   const [data, setData] = useState<ApiResp | null>(null);
   const [loading, setLoading] = useState(true);
@@ -520,7 +636,10 @@ export function NetworkPane() {
         </Body1>
       </div>
 
-      {/* 5 · VNet data gateway (Fabric tenant capability) — honest gate */}
+      {/* 5 · Point-to-site VPN access (download + setup + reaches the private estate) */}
+      <VpnAccessCard />
+
+      {/* 6 · VNet data gateway (Fabric tenant capability) — honest gate */}
       <VnetGatewayCard />
 
       <Caption1>

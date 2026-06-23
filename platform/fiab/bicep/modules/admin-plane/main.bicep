@@ -223,8 +223,8 @@ param adxAutoscaleMaximum int = 10
 
 // ---------- User access patterns (Bastion is always-on; these add reach) ----------
 
-@description('Deploy a P2S VPN Gateway in the hub VNet (AAD auth, OpenVPN). ~30 min provisioning, ~$30/mo. Lets admin laptops reach the internal Console without Bastion. Default off — set true when ready.')
-param vpnGatewayEnabled bool = false
+@description('Deploy a P2S VPN Gateway in the hub VNet (AAD auth, OpenVPN). ~30 min provisioning, ~$30/mo. Lets admin laptops reach the internal Console + the private-by-default estate (private endpoints, Internal APIM, firewall services) day-one via the admin Network & DNS page.')
+param vpnGatewayEnabled bool = true
 
 @description('Deploy Application Gateway v2 + WAF v2 in front of the Console (public IP, in-VNet backend). ~15 min provisioning, ~$250/mo. Default off.')
 param appGatewayEnabled bool = false
