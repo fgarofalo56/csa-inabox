@@ -2146,6 +2146,12 @@ module appDeployments 'app-deployments.bicep' = if (containerPlatform == 'contai
             // "Log Analytics Reader" on this workspace + "Monitoring Reader"
             // on the sub for metrics/activity/health/alerts.
             { name: 'LOOM_LOG_ANALYTICS_WORKSPACE_ID', value: monitoring.outputs.lawCustomerId }
+            // Synapse Spark → Loom Log Analytics emission. Every Loom Spark session
+            // ships SparkListenerEvent/SparkMetrics to this workspace (the SAME LAW
+            // as above) via spark.synapse.logAnalytics.* confs — surfaced under
+            // Monitor → Spark. Workspace id = customerId; key = secretRef (below).
+            { name: 'LOOM_SPARK_LA_WORKSPACE_ID', value: monitoring.outputs.lawCustomerId }
+            { name: 'LOOM_SPARK_LA_KEY', secretRef: 'spark-la-key' }
             // Console-runtime OTel gate (deploy-readiness). instrumentation.ts
             // reads this BEFORE importing @azure/monitor-opentelemetry — when
             // empty the SDK is never loaded (no SIGSEGV), when 'true' it inits
@@ -3347,6 +3353,9 @@ module appDeployments 'app-deployments.bicep' = if (containerPlatform == 'contai
             sessionSecretKvBacked
               ? { name: 'session-secret', keyVaultUrl: '${keyvault.outputs.keyVaultUri}secrets/session-secret', identity: identity.outputs.uamiConsoleId }
               : { name: 'session-secret', value: empty(loomSessionSecret) ? guid(resourceGroup().id, 'loom-session-secret-v1') : loomSessionSecret }
+            // Synapse Spark → LA shared key (LOOM_SPARK_LA_KEY secretRef). Always
+            // present — sourced from the always-deployed monitoring LAW's listKeys.
+            { name: 'spark-la-key', value: monitoring.outputs.lawSharedKey }
           ],
           !empty(effectiveMsalClientId) ? [
             // MSAL client secret — KV-backed when the entra-app-registration
