@@ -46,6 +46,7 @@ import { portalLink as defenderPortalLink, portalSteps, powershellScript, canAut
 import { SignInRequired } from '@/lib/components/sign-in-required';
 import { ActivityFeedPane } from '@/lib/components/activity-feed-pane';
 import { MonitorHubPane } from '@/lib/panes/monitor-hub';
+import { SparkObservabilityPane } from '@/lib/panes/spark-observability';
 import { RefreshSummaryPane } from '@/lib/panes/refresh-summary';
 import { MetricChart } from '@/lib/components/monitor/metric-chart';
 import { KqlChart, type KqlChartType } from '@/lib/components/monitor/kql-chart';
@@ -168,9 +169,9 @@ function StatCardSkeleton() {
   );
 }
 
-type TabKey = 'overview' | 'activities' | 'metrics' | 'logs' | 'diagnostics' | 'activity' | 'items' | 'refresh' | 'alerts' | 'cost' | 'security' | 'maintenance';
+type TabKey = 'overview' | 'activities' | 'spark' | 'metrics' | 'logs' | 'diagnostics' | 'activity' | 'items' | 'refresh' | 'alerts' | 'cost' | 'security' | 'maintenance';
 
-const TAB_KEYS: TabKey[] = ['overview', 'activities', 'metrics', 'logs', 'diagnostics', 'activity', 'items', 'refresh', 'alerts', 'cost', 'security', 'maintenance'];
+const TAB_KEYS: TabKey[] = ['overview', 'activities', 'spark', 'metrics', 'logs', 'diagnostics', 'activity', 'items', 'refresh', 'alerts', 'cost', 'security', 'maintenance'];
 
 export function MonitorPane() {
   const styles = useStyles();
@@ -196,6 +197,7 @@ export function MonitorPane() {
       >
         <Tab value="overview">Overview</Tab>
         <Tab value="activities">Activities</Tab>
+        <Tab value="spark">Spark</Tab>
         <Tab value="metrics">Metrics</Tab>
         <Tab value="logs">Logs (KQL)</Tab>
         <Tab value="diagnostics">Diagnostics</Tab>
@@ -211,6 +213,7 @@ export function MonitorPane() {
       {/* Only the active tab mounts → its fetch only fires when shown. */}
       {tab === 'overview' && <OverviewTab onUnauth={onUnauth} />}
       {tab === 'activities' && <MonitorHubPane />}
+      {tab === 'spark' && <SparkObservabilityPane />}
       {tab === 'metrics' && <MetricsTab onUnauth={onUnauth} />}
       {tab === 'logs' && <LogsTab onUnauth={onUnauth} />}
       {tab === 'diagnostics' && <DiagnosticsTab onUnauth={onUnauth} />}
