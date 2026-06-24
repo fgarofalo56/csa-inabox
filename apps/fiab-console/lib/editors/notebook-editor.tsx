@@ -26,7 +26,7 @@ import {
 import {
   Play20Regular, Add20Regular, Save20Regular, ArrowSync20Regular, Delete20Regular, Notebook20Regular,
   History20Regular, ArrowUpload20Regular, Open20Regular, Library20Regular, Settings20Regular, Sparkle20Regular, BracesVariable20Regular,
-  Copy20Regular, Info16Regular,
+  Copy20Regular, Info16Regular, ChevronDown20Regular, ChevronUp20Regular, Server20Regular,
 } from '@fluentui/react-icons';
 import { ItemEditorChrome } from './item-editor-chrome';
 import type { FabricItemType } from '@/lib/catalog/fabric-item-types';
@@ -60,6 +60,13 @@ const useStyles = makeStyles({
   // mid-height — which made the row read as crammed/overlapping. Wider gap +
   // row-gap gives the labels breathing room when the row wraps.
   toolbar: { display: 'flex', columnGap: tokens.spacingHorizontalXL, rowGap: tokens.spacingVerticalM, alignItems: 'flex-end', flexWrap: 'wrap', padding: `${tokens.spacingVerticalXS} ${tokens.spacingHorizontalXS} ${tokens.spacingVerticalM}`, borderBottom: `1px solid ${tokens.colorNeutralStroke2}`, marginBottom: tokens.spacingVerticalXS },
+  // Slim always-visible bar: Run + selected-compute summary + the Compute &
+  // setup disclosure + Copilot. Keeps the notebook header to one compact row
+  // when the full config is collapsed (the default) so cells get the space.
+  computeBar: { display: 'flex', alignItems: 'center', columnGap: tokens.spacingHorizontalM, rowGap: tokens.spacingVerticalS, flexWrap: 'wrap', padding: `${tokens.spacingVerticalS} ${tokens.spacingHorizontalXS}`, borderBottom: `1px solid ${tokens.colorNeutralStroke2}`, marginBottom: tokens.spacingVerticalXS },
+  computeSummary: { display: 'flex', alignItems: 'center', gap: tokens.spacingHorizontalXS, minWidth: 0, color: tokens.colorNeutralForeground2 },
+  computeSummaryName: { maxWidth: '320px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' },
+  setupCollapsible: { borderBottom: `1px solid ${tokens.colorNeutralStroke2}`, marginBottom: tokens.spacingVerticalXS },
   toolDivider: { alignSelf: 'stretch', minHeight: '36px' },
   editor: {
     width: '100%', minHeight: '280px',
@@ -279,6 +286,15 @@ export function NotebookEditor({ item, id }: Props) {
   const [sessionStatus, setSessionStatus] = useState<'Idle' | 'Running' | 'Error'>('Idle');
   const [sessionReceipt, setSessionReceipt] = useState<Record<string, unknown> | null>(null);
 
+  // Compute & setup chrome (backend toggle, workspace/compute pickers,
+  // environment, configure-session, history, …) is collapsed by default so the
+  // cells get the vertical space — it previously filled ~half the notebook.
+  // A slim always-visible bar keeps Run + the selected-compute summary handy;
+  // the full config expands on demand. Auto-expands once if no compute is
+  // selected so a brand-new notebook still surfaces the picker.
+  const [setupOpen, setSetupOpen] = useState(false);
+  const autoOpenedSetupRef = useRef(false);
+
   // Schema hint for inline code completion (ghost text): the attached
   // lakehouse / warehouse / KQL sources. Grounds AOAI suggestions in the
   // real items this notebook is bound to (no Fabric dependency).
@@ -344,6 +360,15 @@ export function NotebookEditor({ item, id }: Props) {
   // instead of cold-starting on every run.
   const [startingCompute, setStartingCompute] = useState(false);
   const selectedCompute = cp.computes.find(c => c.id === computeId) || null;
+  // Open the collapsed setup once if compute finished loading with nothing
+  // selected, so a new notebook still surfaces the picker. Ref-guarded so a
+  // user who deliberately collapses it isn't fought on the next render.
+  useEffect(() => {
+    if (!cp.loading && !computeId && !autoOpenedSetupRef.current) {
+      autoOpenedSetupRef.current = true;
+      setSetupOpen(true);
+    }
+  }, [cp.loading, computeId]);
   // Runtime derived from the attached compute. Drives cluster-aware IntelliSense
   // (dbutils vs mssparkutils vs azure.ai.ml) + Copilot grounding. Defaults to
   // Synapse Spark (the validated Livy path) when nothing is selected yet.
@@ -1553,8 +1578,50 @@ export function NotebookEditor({ item, id }: Props) {
       main={
         <div style={{ display: 'flex', flex: 1, minHeight: 0 }}>
         <div className={s.pad} style={{ flex: 1, minWidth: 0 }}>
-          <div className={s.toolbar}>
+          {/* Slim always-visible compute bar: Run + selected-compute summary +
+              the Compute & setup disclosure + Copilot. The full configuration
+              (backend / workspace / compute / environment / session) collapses
+              below so the cells get the vertical space (operator request). */}
+          <div className={s.computeBar}>
             <Badge appearance="filled" color="brand">Loom Notebook</Badge>
+            <Button
+              appearance="primary"
+              icon={<Play20Regular />}
+              disabled={running || !notebookId || !computeId}
+              title={!notebookId ? 'Open or create a notebook first'
+                : !computeId ? 'Select a compute target first (open Compute & setup)'
+                : undefined}
+              onClick={run}
+            >{running ? 'Queuing…' : 'Run'}</Button>
+            {computeId ? (
+              <span className={s.computeSummary}>
+                <Server20Regular />
+                <Caption1 className={s.computeSummaryName} title={selectedCompute?.name || computeId}>
+                  {selectedCompute?.name || computeId}
+                </Caption1>
+                {selectedCompute?.state && (
+                  <Badge appearance="filled" size="small" color={isComputeRunning(selectedCompute?.state) ? 'success' : 'warning'}>
+                    {selectedCompute.state}
+                  </Badge>
+                )}
+                <Badge appearance="outline" size="small" color={clusterRuntime === 'databricks' ? 'important' : clusterRuntime === 'azure-ml' ? 'success' : 'brand'}>
+                  {RUNTIME_LABEL[clusterRuntime]} syntax
+                </Badge>
+              </span>
+            ) : (
+              <Caption1 style={{ color: tokens.colorNeutralForeground3 }}>No compute selected</Caption1>
+            )}
+            <Button
+              appearance="subtle"
+              icon={setupOpen ? <ChevronUp20Regular /> : <ChevronDown20Regular />}
+              aria-expanded={setupOpen}
+              onClick={() => setSetupOpen((v) => !v)}
+              title="Show or hide compute backend, workspace, environment, and session settings"
+            >{setupOpen ? 'Hide setup' : 'Compute & setup'}</Button>
+            <Button appearance={copilotOpen ? 'primary' : 'outline'} icon={<Sparkle20Regular />} onClick={() => setCopilotOpen((v) => !v)}>Copilot</Button>
+          </div>
+          {setupOpen && (
+          <div className={s.toolbar}>
             {/* Compute backend toggle — Loom-native Spark/Databricks vs the
                 Azure ML Compute Instance path. Default Loom; flip to Azure ML
                 for a CI + datastores. No Fabric dependency on either path. */}
@@ -1711,15 +1778,6 @@ export function NotebookEditor({ item, id }: Props) {
               Ctrl+S still works from anywhere.
             */}
             <Button
-              appearance="primary"
-              icon={<Play20Regular />}
-              disabled={running || !notebookId || !computeId}
-              title={!notebookId ? 'Open or create a notebook first'
-                : !computeId ? 'Select a compute target first'
-                : undefined}
-              onClick={run}
-            >{running ? 'Queuing…' : 'Run'}</Button>
-            <Button
               appearance="outline"
               icon={<Settings20Regular />}
               disabled={cfgSaving}
@@ -1741,10 +1799,10 @@ export function NotebookEditor({ item, id }: Props) {
                 icon={<Open20Regular />}
               >Open in VS Code for Web</Button>
             )}
-            <Button appearance={copilotOpen ? 'primary' : 'outline'} icon={<Sparkle20Regular />} onClick={() => setCopilotOpen(v => !v)}>Copilot</Button>
             <Button appearance="outline" icon={<BracesVariable20Regular />} disabled={!notebookId} onClick={() => setVariablesOpen(true)}>Variables</Button>
             <Button appearance="subtle" icon={<Delete20Regular />} disabled={!notebookId} onClick={del}>Delete</Button>
           </div>
+          )}
 
           {/* Phase 3: HistoryDrawer — right-side OverlayDrawer wired to /jobs */}
           <HistoryDrawer
@@ -1884,8 +1942,39 @@ export function NotebookEditor({ item, id }: Props) {
                 {sessionReceipt.executorMemory ? ` · ${String(sessionReceipt.executorMemory)} executor memory` : ''}
                 {sessionReceipt.driverMemory ? ` · ${String(sessionReceipt.driverMemory)} driver memory` : ''}
                 {typeof sessionReceipt.heartbeatTimeoutInSecond === 'number' ? ` · ${Math.round((sessionReceipt.heartbeatTimeoutInSecond as number) / 60)} min timeout` : ''}
-                <br />
-                <code style={{ fontSize: tokens.fontSizeBase100 }}>{JSON.stringify(sessionReceipt)}</code>
+                {/* Honest raw Livy receipt — collapsed by default so it never
+                    overflows the banner (the compact JSON is a single space-free
+                    token that otherwise ran off the right edge) and doesn't eat
+                    vertical space. Expand to read the full session-create body,
+                    wrapped at any width. */}
+                <details style={{ marginTop: tokens.spacingVerticalXS }}>
+                  <summary
+                    style={{
+                      cursor: 'pointer',
+                      fontSize: tokens.fontSizeBase200,
+                      color: tokens.colorNeutralForeground3,
+                      userSelect: 'none',
+                    }}
+                  >Raw Livy receipt</summary>
+                  <code
+                    style={{
+                      display: 'block',
+                      marginTop: tokens.spacingVerticalXS,
+                      padding: tokens.spacingVerticalXS,
+                      borderRadius: tokens.borderRadiusSmall,
+                      backgroundColor: tokens.colorNeutralBackground3,
+                      color: tokens.colorNeutralForeground3,
+                      fontFamily: tokens.fontFamilyMonospace,
+                      fontSize: tokens.fontSizeBase100,
+                      whiteSpace: 'pre-wrap',
+                      overflowWrap: 'anywhere',
+                      wordBreak: 'break-word',
+                      maxWidth: '100%',
+                      minWidth: 0,
+                      boxSizing: 'border-box',
+                    }}
+                  >{JSON.stringify(sessionReceipt, null, 2)}</code>
+                </details>
               </MessageBarBody>
             </MessageBar>
           )}
