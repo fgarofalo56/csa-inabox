@@ -55,6 +55,35 @@ session hung pre-PE), `f37c177c` (Mirror demo post-PE) in ws be0de3d7.
 **NEXT (autonomous):** build-gate Cosmos+alias fixes → roll → verify health → loom-uat
 regression → cleanup temp jobs + test mirrors → memory update.
 
+### Update — rev 65 live + verifications (2026-06-24, continued)
+- **Cosmos consumption + reserved-alias fixes ROLLED** (sha `4032e1cb` → centralus
+  `loom-console--0000065`, Healthy/100%). Build clean (0 errors).
+- **Notebook UI fixes VERIFIED live on rev 65**: collapsed "Compute & setup" → single slim
+  bar (Run + compute summary + Copilot); green-bar fix in same build. Both UI complaints resolved.
+- **§6 data-product DEEP PASS — A-grade, no defects.** Drove the full New-data-product
+  wizard live end-to-end: 3 steps, rich Purview-parity Type list, REAL Microsoft Graph owner
+  search, honest Purview-domain + custom-attribute gates, **Create succeeded** (item `0fd4a18b`)
+  → detail editor renders (Details / Data Observability / **Try it** tabs). Earlier
+  item.slug/displayName crash confirmed fixed.
+- **loom-uat regression DONE** (`loom-uat-pbl0tau`, no-cuts ribbon sweep across ~29 item
+  editors, in-VNet vs live rev 65): **`UAT_RESULT pass=26 fail=3 skip=0 realFails=0`** — NO
+  regressions from tonight's changes (prior run was 25/4). The 3 fails are all non-real and
+  identical-class to prior runs: (1) data-product "Save" primary action — the detail view uses
+  an Edit-dialog flow, not a ribbon Save (spec expectation; verified working live); (2) lakehouse
+  Permissions = 30s timeout (slow live-ARM load, not a cut); (3) apim-api "Edit OpenAPI" reported
+  ABSENT — but the label is exactly right (apim-editors.tsx:665) and the ribbon renders disabled
+  actions (ribbon.tsx:226), so it's present-but-disabled when the API is new/unsaved (honest
+  `disabled: isNew` gate) — a spec-context nuance, NOT a real cut. All three are attended-review
+  spec-polish items, not product defects.
+
+### CLEANUP for attended review (deletion deferred overnight for safety)
+- Temp ACA jobs: ✅ already deleted (loom-mpe-uami, loom-pe-verify).
+- Test mirrors (ws be0de3d7): KEEP adventureworks-mirror-e2e + e2e-CosmosDb-loom (proven demos);
+  DELETE the redundant e2e-AzureSqlMI / e2e-SqlServer2025 / e2e-MSSQL / e2e-GenericMirror /
+  e2e-pg2-{postgres,weave,loom} / e2e-Postgres-{postgres,weave,loom}.
+- Test notebooks: 46e0a4b9 (old pre-PE), f37c177c (post-PE demo — KEEP for §1 if wanted).
+- Test data product: 0fd4a18b "Overnight QA — Mirror E2E data product" (DRAFT).
+
 ## ✅ DONE this session (live + verified) — do NOT redo
 - Publish-as-API weave (MPP table-list + source-not-found fallback)
 - Permissions/bronze RBAC resource-group self-heal (Resource Graph)
