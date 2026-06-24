@@ -877,6 +877,12 @@ export interface LivySessionSizing {
   driverMemory?: string;     // e.g. "4g"
   driverCores?: number;
   heartbeatTimeoutInSecond?: number;  // session idle timeout
+  /**
+   * spark.* properties for the Livy session `conf` (from a config preset, the
+   * notebook config builder, and/or the Synapse→Log-Analytics diagnostic
+   * defaults). Applied at session create — a conf change needs a new session.
+   */
+  conf?: Record<string, string>;
 }
 
 export async function createLivySessionAsync(
@@ -899,6 +905,10 @@ export async function createLivySessionAsync(
   };
   if (typeof sizing?.heartbeatTimeoutInSecond === 'number' && sizing.heartbeatTimeoutInSecond > 0) {
     request.heartbeatTimeoutInSecond = sizing.heartbeatTimeoutInSecond;
+  }
+  // spark.* properties (preset + builder + Synapse→LA diagnostics) → Livy `conf`.
+  if (sizing?.conf && Object.keys(sizing.conf).length) {
+    request.conf = { ...sizing.conf };
   }
   const r = await callDev(
     `/livyApi/versions/${LIVY_API}/sparkPools/${poolName}/sessions`,

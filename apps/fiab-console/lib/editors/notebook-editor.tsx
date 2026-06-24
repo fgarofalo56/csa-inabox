@@ -1937,50 +1937,52 @@ export function NotebookEditor({ item, id }: Props) {
               the running Spark session. numExecutors here is what the session
               actually runs with — confirms the Configure-session sizing. */}
           {sessionReceipt && typeof sessionReceipt.numExecutors === 'number' && (
-            <MessageBar intent="success">
-              <MessageBarBody>
-                <MessageBarTitle>Spark session{sessionReceipt.reused ? ' (reused)' : ''}</MessageBarTitle>
-                Session {String(sessionReceipt.id ?? '—')} · <strong>{String(sessionReceipt.numExecutors)} executors</strong>
-                {sessionReceipt.executorMemory ? ` · ${String(sessionReceipt.executorMemory)} executor memory` : ''}
-                {sessionReceipt.driverMemory ? ` · ${String(sessionReceipt.driverMemory)} driver memory` : ''}
-                {typeof sessionReceipt.heartbeatTimeoutInSecond === 'number' ? ` · ${Math.round((sessionReceipt.heartbeatTimeoutInSecond as number) / 60)} min timeout` : ''}
-                {/* Honest raw Livy receipt — collapsed by default so it never
-                    overflows the banner (the compact JSON is a single space-free
-                    token that otherwise ran off the right edge) and doesn't eat
-                    vertical space. Expand to read the full session-create body,
-                    wrapped at any width. */}
-                <details style={{ marginTop: tokens.spacingVerticalXS }}>
-                  <summary
-                    style={{
-                      cursor: 'pointer',
-                      fontSize: tokens.fontSizeBase200,
-                      color: tokens.colorNeutralForeground3,
-                      userSelect: 'none',
-                    }}
-                  >Raw Livy receipt</summary>
-                  <code
-                    style={{
-                      display: 'block',
-                      marginTop: tokens.spacingVerticalXS,
-                      padding: tokens.spacingVerticalXS,
-                      borderRadius: tokens.borderRadiusSmall,
-                      backgroundColor: tokens.colorNeutralBackground3,
-                      color: tokens.colorNeutralForeground3,
-                      fontFamily: tokens.fontFamilyMonospace,
-                      fontSize: tokens.fontSizeBase100,
-                      whiteSpace: 'pre-wrap',
-                      overflowWrap: 'anywhere',
-                      wordBreak: 'break-word',
-                      maxWidth: '100%',
-                      minWidth: 0,
-                      maxHeight: 220,
-                      overflow: 'auto',
-                      boxSizing: 'border-box',
-                    }}
-                  >{JSON.stringify(sessionReceipt, null, 2)}</code>
-                </details>
-              </MessageBarBody>
-            </MessageBar>
+            <div style={{ display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalXS, minWidth: 0, maxWidth: '100%' }}>
+              <MessageBar intent="success">
+                <MessageBarBody style={{ minWidth: 0, overflowWrap: 'anywhere' }}>
+                  <MessageBarTitle>Spark session{sessionReceipt.reused ? ' (reused)' : ''}</MessageBarTitle>
+                  Session {String(sessionReceipt.id ?? '—')} · <strong>{String(sessionReceipt.numExecutors)} executors</strong>
+                  {sessionReceipt.executorMemory ? ` · ${String(sessionReceipt.executorMemory)} executor memory` : ''}
+                  {sessionReceipt.driverMemory ? ` · ${String(sessionReceipt.driverMemory)} driver memory` : ''}
+                  {typeof sessionReceipt.heartbeatTimeoutInSecond === 'number' ? ` · ${Math.round((sessionReceipt.heartbeatTimeoutInSecond as number) / 60)} min timeout` : ''}
+                </MessageBarBody>
+              </MessageBar>
+              {/* Honest raw Livy receipt rendered as a SEPARATE block BELOW the
+                  banner — NOT inside the MessageBar. A tall expanding <details>
+                  inside MessageBarBody broke the bar's icon/body alignment when
+                  opened. Collapsed by default; bounded + wrapped + scrollable so
+                  expanding it just grows this block downward, cleanly. */}
+              <details style={{ minWidth: 0, maxWidth: '100%' }}>
+                <summary
+                  style={{
+                    cursor: 'pointer',
+                    fontSize: tokens.fontSizeBase200,
+                    color: tokens.colorNeutralForeground3,
+                    userSelect: 'none',
+                  }}
+                >Raw Livy receipt</summary>
+                <code
+                  style={{
+                    display: 'block',
+                    marginTop: tokens.spacingVerticalXS,
+                    padding: tokens.spacingHorizontalS,
+                    borderRadius: tokens.borderRadiusSmall,
+                    backgroundColor: tokens.colorNeutralBackground3,
+                    color: tokens.colorNeutralForeground3,
+                    fontFamily: tokens.fontFamilyMonospace,
+                    fontSize: tokens.fontSizeBase100,
+                    whiteSpace: 'pre-wrap',
+                    overflowWrap: 'anywhere',
+                    wordBreak: 'break-word',
+                    maxWidth: '100%',
+                    minWidth: 0,
+                    maxHeight: 220,
+                    overflow: 'auto',
+                    boxSizing: 'border-box',
+                  }}
+                >{JSON.stringify(sessionReceipt, null, 2)}</code>
+              </details>
+            </div>
           )}
 
           {notebookId && (

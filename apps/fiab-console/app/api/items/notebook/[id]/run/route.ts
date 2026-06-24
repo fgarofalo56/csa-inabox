@@ -182,11 +182,22 @@ export async function POST(req: NextRequest, ctx: { params: Promise<{ id: string
       const rawCfg = (body?.sessionConfig && typeof body.sessionConfig === 'object')
         ? body.sessionConfig
         : (state.sparkSessionSizing && typeof state.sparkSessionSizing === 'object' ? state.sparkSessionSizing : null);
-      const sizing = rawCfg ? {
-        numExecutors: typeof rawCfg.numExecutors === 'number' ? rawCfg.numExecutors : undefined,
-        executorMemory: typeof rawCfg.executorMemory === 'string' ? rawCfg.executorMemory : undefined,
-        driverMemory: typeof rawCfg.driverMemory === 'string' ? rawCfg.driverMemory : undefined,
-        heartbeatTimeoutInSecond: typeof rawCfg.heartbeatTimeoutInSecond === 'number' ? rawCfg.heartbeatTimeoutInSecond : undefined,
+      // Merge the user's preset / config-builder spark.* confs with the
+      // Synapse→Loom Log Analytics diagnostic defaults (env-gated; {} when LA is
+      // not configured) so EVERY Loom Spark session ships its logging events,
+      // metrics, and listener events to the Loom Log Analytics workspace. User
+      // confs win on key conflicts. NO freeform JSON — these are structured
+      // key/value pairs from the preset catalog + the dialog's row builder.
+      const { synapseLogAnalyticsConf } = await import('@/lib/spark/config-presets');
+      const laConf = synapseLogAnalyticsConf();
+      const userConf = (rawCfg && rawCfg.conf && typeof rawCfg.conf === 'object') ? rawCfg.conf as Record<string, string> : {};
+      const mergedConf: Record<string, string> = { ...laConf, ...userConf };
+      const sizing = (rawCfg || Object.keys(mergedConf).length) ? {
+        numExecutors: typeof rawCfg?.numExecutors === 'number' ? rawCfg.numExecutors : undefined,
+        executorMemory: typeof rawCfg?.executorMemory === 'string' ? rawCfg.executorMemory : undefined,
+        driverMemory: typeof rawCfg?.driverMemory === 'string' ? rawCfg.driverMemory : undefined,
+        heartbeatTimeoutInSecond: typeof rawCfg?.heartbeatTimeoutInSecond === 'number' ? rawCfg.heartbeatTimeoutInSecond : undefined,
+        conf: Object.keys(mergedConf).length ? mergedConf : undefined,
       } : undefined;
       const sizingKey = sizing ? JSON.stringify(sizing) : '';
 
