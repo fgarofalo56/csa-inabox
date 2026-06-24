@@ -35,9 +35,11 @@ import {
   ArrowSync20Regular, Add20Regular, Delete20Regular, Share20Regular,
   CloudArrowDown20Regular, Copy20Regular, Database20Regular,
   CloudArrowDown24Regular, Share24Regular, Person24Regular,
+  DatabaseSearch20Regular, DatabaseSearch24Regular,
 } from '@fluentui/react-icons';
 import { TileGrid } from '@/lib/components/ui/tile-grid';
 import { EmptyState } from '@/lib/components/empty-state';
+import { ShareExplorerDialog } from '@/lib/components/marketplace/share-explorer';
 
 const useStyles = makeStyles({
   pad: { display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalL, minHeight: 0, flex: 1 },
@@ -68,6 +70,7 @@ interface ShareObj { name: string; data_object_type?: string; shared_as?: string
 interface Share { name: string; comment?: string; owner?: string; objects?: ShareObj[] }
 interface Recipient { name: string; authentication_type?: string; comment?: string; tokens?: Array<{ activation_url?: string }> }
 interface Provider { name: string; comment?: string; data_provider_global_metastore_id?: string; shares?: Share[] }
+interface MountedCatalog { name: string; provider_name?: string; share_name?: string; comment?: string; catalog_type?: string }
 
 async function jget(url: string) {
   const r = await fetch(url);
@@ -89,6 +92,12 @@ export function DataShares() {
 
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<string | null>(null);
+
+  // Explore/Query dialog — opened from a successful mount OR the mounted-catalogs
+  // list, scoped to a single subscribed catalog. Lifted here so both entry points
+  // share one dialog instance.
+  const [explore, setExplore] = useState<{ open: boolean; catalog: string | null }>({ open: false, catalog: null });
+  const openExplore = useCallback((catalog: string) => setExplore({ open: true, catalog }), []);
 
   const handleGate = (status: number, j: any): boolean => {
     if (status === 501 && j?.gated) { setGate({ error: j.error, hint: j.hint, missing: j.missing }); return true; }
@@ -155,7 +164,10 @@ export function DataShares() {
       {err && <MessageBar intent="error"><MessageBarBody>{err}</MessageBarBody></MessageBar>}
 
       {tab === 'inbound' && !gate && (
-        <InboundPanel providers={providers} styles={s} onChange={loadInbound} busy={busy} setBusy={setBusy} />
+        <InboundPanel
+          providers={providers} host={host} styles={s} onChange={loadInbound}
+          busy={busy} setBusy={setBusy} onExplore={openExplore}
+        />
       )}
       {tab === 'outbound' && !gate && (
         <OutboundPanel
@@ -163,6 +175,13 @@ export function DataShares() {
           onChange={loadOutbound} busy={busy} setBusy={setBusy}
         />
       )}
+
+      <ShareExplorerDialog
+        open={explore.open}
+        setOpen={(o) => setExplore((prev) => ({ ...prev, open: o }))}
+        catalog={explore.catalog}
+        host={host}
+      />
     </div>
   );
 }
@@ -170,13 +189,15 @@ export function DataShares() {
 /* ----------------------------- INBOUND ----------------------------- */
 
 function InboundPanel({
-  providers, styles, onChange, busy, setBusy,
+  providers, host, styles, onChange, busy, setBusy, onExplore,
 }: {
   providers: Provider[] | null;
+  host: string | null;
   styles: ReturnType<typeof useStyles>;
   onChange: () => void;
   busy: boolean;
   setBusy: (b: boolean) => void;
+  onExplore: (catalog: string) => void;
 }) {
   const [addOpen, setAddOpen] = useState(false);
 
@@ -213,7 +234,7 @@ function InboundPanel({
               {(p.shares || []).length === 0
                 ? <Caption1 className={styles.hint}>No shares exposed to you.</Caption1>
                 : (p.shares || []).map((sh) => (
-                    <MountShareButton key={sh.name} provider={p.name} share={sh.name} onDone={onChange} busy={busy} setBusy={setBusy} />
+                    <MountShareButton key={sh.name} provider={p.name} share={sh.name} onDone={onChange} busy={busy} setBusy={setBusy} onExplore={onExplore} />
                   ))}
             </div>
             <div className={styles.cardActions}>
@@ -228,19 +249,99 @@ function InboundPanel({
         ))}
       </TileGrid>
 
+      <Divider />
+
+      <MountedCatalogs styles={styles} onExplore={onExplore} reloadKey={providers} />
+
       <AddProviderDialog open={addOpen} setOpen={setAddOpen} onDone={onChange} />
     </>
   );
 }
 
+/**
+ * MountedCatalogs — the subscribed shares that are now read-only Unity Catalog
+ * catalogs on the bound workspace. This is the "use it" surface: each mounted
+ * catalog gets an Explore / Query action that opens the in-Loom catalog explorer.
+ */
+function MountedCatalogs({
+  styles, onExplore, reloadKey,
+}: { styles: ReturnType<typeof useStyles>; onExplore: (catalog: string) => void; reloadKey: unknown }) {
+  const [catalogs, setCatalogs] = useState<MountedCatalog[] | null>(null);
+  const [err, setErr] = useState<string | null>(null);
+
+  const load = useCallback(async () => {
+    setErr(null); setCatalogs(null);
+    const { status, j } = await jget('/api/marketplace/sharing/catalogs');
+    if (!j.ok) {
+      // A gate here is non-fatal for this section — the providers list above
+      // already carries the primary gate; just show a short note.
+      setErr(j.error || `HTTP ${status}`); setCatalogs([]); return;
+    }
+    setCatalogs(j.catalogs || []);
+  }, []);
+
+  // Reload when the providers list changes (e.g. just after a successful mount).
+  useEffect(() => { void load(); }, [load, reloadKey]);
+
+  return (
+    <>
+      <div className={styles.row}>
+        <DatabaseSearch20Regular />
+        <Subtitle2>Subscribed shares — explore &amp; query</Subtitle2>
+        <Button appearance="subtle" size="small" icon={<ArrowSync20Regular />} onClick={() => { void load(); }}>Refresh</Button>
+      </div>
+      <Caption1 className={styles.hint}>
+        Each subscribed share is mounted as a read-only catalog. Open one to browse its schemas and tables, preview
+        data, and run read-only SQL — live against the Databricks SQL warehouse, no copies.
+      </Caption1>
+
+      {catalogs === null && <Spinner size="tiny" />}
+      {err && <Caption1 className={styles.hint}>{err}</Caption1>}
+      {catalogs && catalogs.length === 0 && !err && (
+        <EmptyState
+          icon={<DatabaseSearch24Regular />}
+          title="No subscribed shares yet"
+          body="Subscribe to one of the provider shares above. Once mounted, it appears here as a read-only catalog you can explore and query directly inside Loom."
+        />
+      )}
+      {catalogs && catalogs.length > 0 && (
+        <TileGrid minTileWidth={280}>
+          {catalogs.map((c) => (
+            <Card key={c.name} className={styles.card}>
+              <CardHeader
+                image={<Database20Regular />}
+                header={<Body1><b>{c.name}</b></Body1>}
+                description={
+                  <Caption1 className={styles.hint}>
+                    {c.share_name ? `Share: ${c.provider_name ? `${c.provider_name}.` : ''}${c.share_name}` : (c.comment || 'Delta Sharing catalog')}
+                  </Caption1>
+                }
+              />
+              <div className={styles.cardActions}>
+                <Button size="small" appearance="primary" icon={<DatabaseSearch20Regular />} onClick={() => onExplore(c.name)}>
+                  Explore &amp; query
+                </Button>
+              </div>
+            </Card>
+          ))}
+        </TileGrid>
+      )}
+    </>
+  );
+}
+
 function MountShareButton({
-  provider, share, onDone, busy, setBusy,
-}: { provider: string; share: string; onDone: () => void; busy: boolean; setBusy: (b: boolean) => void }) {
+  provider, share, onDone, busy, setBusy, onExplore,
+}: { provider: string; share: string; onDone: () => void; busy: boolean; setBusy: (b: boolean) => void; onExplore: (catalog: string) => void }) {
   const [open, setOpen] = useState(false);
   const [catalog, setCatalog] = useState(`${provider}_${share}`.replace(/[^a-zA-Z0-9_]/g, '_'));
   const [msg, setMsg] = useState<string | null>(null);
+  // Set to the mounted catalog name on success so the success state can offer
+  // the in-Loom "Explore / Query" action (the missing "use it" path).
+  const [mounted, setMounted] = useState<string | null>(null);
+  const reset = () => { setMsg(null); setMounted(null); };
   return (
-    <Dialog open={open} onOpenChange={(_, d) => setOpen(d.open)}>
+    <Dialog open={open} onOpenChange={(_, d) => { setOpen(d.open); if (!d.open) reset(); }}>
       <DialogTrigger disableButtonEnhancement>
         <Button size="small" icon={<Database20Regular />}>Subscribe: {share}</Button>
       </DialogTrigger>
@@ -248,7 +349,7 @@ function MountShareButton({
         <DialogBody>
           <DialogTitle>Subscribe to {provider}.{share}</DialogTitle>
           <DialogContent>
-            {msg ? <MessageBar intent="success"><MessageBarBody>{msg}</MessageBarBody></MessageBar> : (
+            {msg ? <MessageBar intent={mounted ? 'success' : 'error'}><MessageBarBody>{msg}</MessageBarBody></MessageBar> : (
               <Field label="New catalog name" hint="The share is mounted as a read-only Unity Catalog catalog.">
                 <Input value={catalog} onChange={(_, d) => setCatalog(d.value)} />
               </Field>
@@ -264,11 +365,23 @@ function MountShareButton({
                 });
                 const j = await r.json();
                 setBusy(false);
-                setMsg(j.ok ? `Mounted as catalog "${catalog}". Query it from any SQL warehouse or notebook.` : (j.error || 'Mount failed'));
-                if (j.ok) onDone();
+                if (j.ok) {
+                  setMounted(catalog);
+                  setMsg(`Mounted as read-only catalog "${catalog}". Explore and query it right here in Loom.`);
+                  onDone();
+                } else {
+                  setMounted(null);
+                  setMsg(j.error || 'Mount failed');
+                }
               }}>Subscribe</Button>
             )}
-            <DialogTrigger disableButtonEnhancement><Button appearance="secondary" onClick={() => setMsg(null)}>Close</Button></DialogTrigger>
+            {mounted && (
+              <Button appearance="primary" icon={<DatabaseSearch20Regular />}
+                onClick={() => { const c = mounted; setOpen(false); reset(); onExplore(c); }}>
+                Explore &amp; query
+              </Button>
+            )}
+            <DialogTrigger disableButtonEnhancement><Button appearance="secondary" onClick={reset}>Close</Button></DialogTrigger>
           </DialogActions>
         </DialogBody>
       </DialogSurface>
