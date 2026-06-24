@@ -53,7 +53,7 @@ const useStyles = makeStyles({
     zIndex: 999,
   },
   header: {
-    display: 'flex', alignItems: 'center', gap: tokens.spacingHorizontalS,
+    display: 'flex', alignItems: 'center', flexWrap: 'wrap', gap: tokens.spacingHorizontalS,
     padding: '4px 8px',
     backgroundColor: tokens.colorNeutralBackground2,
     borderBottom: `1px solid ${tokens.colorNeutralStroke2}`,
@@ -94,6 +94,9 @@ const useStyles = makeStyles({
     fontFamily: 'Consolas, monospace',
     fontSize: tokens.fontSizeBase200,
     whiteSpace: 'pre-wrap',
+    overflowWrap: 'anywhere',
+    wordBreak: 'break-word',
+    maxWidth: '100%',
     borderTop: `1px solid ${tokens.colorNeutralStroke2}`,
     backgroundColor: tokens.colorNeutralBackground2,
     maxHeight: '240px',
@@ -560,6 +563,7 @@ export function CodeCell({ cell, active, onFocus, onChange, onRun, onStop, onDel
                   <pre style={{
                     fontFamily: 'Consolas, monospace', fontSize: 12, margin: 0, maxHeight: 240,
                     overflow: 'auto', padding: 8, borderRadius: 4, whiteSpace: 'pre-wrap',
+                    overflowWrap: 'anywhere', wordBreak: 'break-word', maxWidth: '100%',
                     backgroundColor: tokens.colorNeutralBackground3,
                     border: `1px solid ${tokens.colorNeutralStroke2}`,
                   }}>
@@ -638,17 +642,45 @@ export function CodeCell({ cell, active, onFocus, onChange, onRun, onStop, onDel
         <Button size="small" appearance="subtle" icon={<Delete16Regular />} onClick={(e) => { e.stopPropagation(); onDelete?.(); }} aria-label="Delete cell" />
       </div>
       {!collapsed && (
-        <MonacoTextarea
-          value={cell.source}
-          onChange={setSource}
-          language={(cell.lang || 'pyspark') as MonacoLanguage}
-          readOnly={locked}
-          height={maximized ? 'calc(100% - 200px)' : 160}
-          minHeight={80}
-          ariaLabel={`Code cell ${cell.id}`}
-          className={mergeClasses(locked && s.editorLocked)}
-          onReady={handleEditorReady}
-        />
+        maximized ? (
+          <MonacoTextarea
+            value={cell.source}
+            onChange={setSource}
+            language={(cell.lang || 'pyspark') as MonacoLanguage}
+            readOnly={locked}
+            height={'calc(100% - 200px)'}
+            minHeight={80}
+            ariaLabel={`Code cell ${cell.id}`}
+            className={mergeClasses(locked && s.editorLocked)}
+            onReady={handleEditorReady}
+          />
+        ) : (
+          // Vertically resizable editor wrapper: click-drag the bottom edge to
+          // enlarge the code area. Monaco fills the wrapper (height='100%' +
+          // automaticLayout) so it reflows as the user drags.
+          <div
+            style={{
+              resize: 'vertical',
+              overflow: 'hidden',
+              minHeight: 120,
+              height: 160,
+              boxSizing: 'border-box',
+              maxWidth: '100%',
+            }}
+          >
+            <MonacoTextarea
+              value={cell.source}
+              onChange={setSource}
+              language={(cell.lang || 'pyspark') as MonacoLanguage}
+              readOnly={locked}
+              height={'100%'}
+              minHeight={80}
+              ariaLabel={`Code cell ${cell.id}`}
+              className={mergeClasses(locked && s.editorLocked)}
+              onReady={handleEditorReady}
+            />
+          </div>
+        )
       )}
       {!collapsed && cell.output && (() => {
         // Rich display(): prefer the structured payload; fall back to the raw

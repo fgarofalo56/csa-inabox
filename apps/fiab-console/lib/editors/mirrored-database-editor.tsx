@@ -367,7 +367,7 @@ export function MirroredDatabaseEditor({ item, id }: Props) {
 
               {/* ADF pipeline-run telemetry bar (provisioner-backed Bronze-copy pipeline). */}
               {monitorData?.adfLastRun && (
-                <Caption1 style={{ color: tokens.colorNeutralForeground3 }}>
+                <Caption1 style={{ color: tokens.colorNeutralForeground3, overflowWrap: 'anywhere', wordBreak: 'break-word' }}>
                   ADF pipeline <strong>{monitorData.adfLastRun.pipelineName}</strong> · last run <strong>{monitorData.adfLastRun.status}</strong>
                   {monitorData.adfLastRun.runStart ? ` · started ${new Date(monitorData.adfLastRun.runStart).toLocaleString()}` : ''}
                   {monitorData.adfLastRun.durationMs != null ? ` · ${Math.round(monitorData.adfLastRun.durationMs / 1000)}s` : ''}
@@ -456,7 +456,7 @@ export function MirroredDatabaseEditor({ item, id }: Props) {
           <>
           <div className={s.toolbar}>
             <Badge appearance="filled" color="brand">Mirrored Database</Badge>
-            <div style={{ display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalXS, minWidth: 280 }}>
+            <div style={{ display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalXS, minWidth: 280, maxWidth: '100%' }}>
               <Caption1>Workspace</Caption1>
               <Select value={workspaceId} onChange={(_, d) => setWorkspaceId(d.value)} disabled={ws.loading || (ws.workspaces?.length ?? 0) === 0}>
                 {!workspaceId && <option value="">{ws.loading ? 'Loading workspaces…' : 'Select a workspace'}</option>}
@@ -558,12 +558,12 @@ export function MirroredDatabaseEditor({ item, id }: Props) {
             </MessageBar>
           )}
           {detail?.lastRun?.cdcName && (
-            <Caption1 style={{ color: tokens.colorNeutralForeground3 }}>
+            <Caption1 style={{ color: tokens.colorNeutralForeground3, overflowWrap: 'anywhere', wordBreak: 'break-word' }}>
               ADF CDC: <code>{detail.lastRun.cdcName}</code> · landing <code>{detail.lastRun.basePath}</code>
             </Caption1>
           )}
           {detail?.source?.server && (
-            <Caption1 style={{ color: tokens.colorNeutralForeground3 }}>
+            <Caption1 style={{ color: tokens.colorNeutralForeground3, overflowWrap: 'anywhere', wordBreak: 'break-word' }}>
               Source: <strong>{detail.source.sourceType || 'SQL'}</strong> · <code>{detail.source.server}</code> / <code>{detail.source.database}</code>
               {detail.source.connectionId ? ' · Key Vault connection bound' : ''}
               {Array.isArray(detail.source.tables) && detail.source.tables.length ? ` · ${detail.source.tables.length} table(s) selected` : ''}

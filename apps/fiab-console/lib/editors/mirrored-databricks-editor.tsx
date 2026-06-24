@@ -40,6 +40,7 @@ const useStyles = makeStyles({
   tabs: { borderBottom: `1px solid ${tokens.colorNeutralStroke2}`, padding: `${tokens.spacingVerticalS} ${tokens.spacingHorizontalS} 0` },
   tableWrap: { overflow: 'auto', maxHeight: '360px', border: `1px solid ${tokens.colorNeutralStroke2}`, borderRadius: tokens.borderRadiusMedium },
   cell: { fontFamily: 'Consolas, monospace', fontSize: tokens.fontSizeBase200, whiteSpace: 'nowrap' },
+  commentCell: { overflowWrap: 'anywhere', wordBreak: 'break-word', minWidth: 0 },
   field: { display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalXS, minWidth: '240px' },
 });
 
@@ -362,8 +363,8 @@ export function MirroredDatabricksEditor({ item, id }: Props) {
                 {active && (
                   <>
                     <Subtitle2>{active.displayName}</Subtitle2>
-                    <Caption1>Catalog: <code>{active.catalogName || '—'}</code></Caption1>
-                    <Caption1>Hostname: <code>{active.hostname || process.env.NEXT_PUBLIC_LOOM_DATABRICKS_HOSTNAME || '(uses LOOM_DATABRICKS_HOSTNAME)'}</code></Caption1>
+                    <Caption1>Catalog: <code style={{ overflowWrap: 'anywhere', wordBreak: 'break-word' }}>{active.catalogName || '—'}</code></Caption1>
+                    <Caption1>Hostname: <code style={{ overflowWrap: 'anywhere', wordBreak: 'break-word' }}>{active.hostname || process.env.NEXT_PUBLIC_LOOM_DATABRICKS_HOSTNAME || '(uses LOOM_DATABRICKS_HOSTNAME)'}</code></Caption1>
                     <MessageBar intent="info">
                       <MessageBarBody>
                         <MessageBarTitle>How Loom drives this</MessageBarTitle>
@@ -404,7 +405,7 @@ export function MirroredDatabricksEditor({ item, id }: Props) {
                           <TableRow key={sc.full_name || sc.name}>
                             <TableCell className={s.cell}>{sc.name}</TableCell>
                             <TableCell className={s.cell}>{sc.full_name || '—'}</TableCell>
-                            <TableCell>{sc.comment || '—'}</TableCell>
+                            <TableCell className={s.commentCell}>{sc.comment || '—'}</TableCell>
                             <TableCell>
                               <Button size="small" appearance="primary" onClick={() => { setSchemaName(sc.name); setTables(null); setTab('tables'); }}>Browse tables</Button>
                             </TableCell>
@@ -461,7 +462,7 @@ export function MirroredDatabricksEditor({ item, id }: Props) {
                             <TableCell className={s.cell}>{t.name}</TableCell>
                             <TableCell>{t.table_type || '—'}</TableCell>
                             <TableCell>{t.data_source_format || '—'}</TableCell>
-                            <TableCell>{t.comment || '—'}</TableCell>
+                            <TableCell className={s.commentCell}>{t.comment || '—'}</TableCell>
                           </TableRow>
                         ))}
                       </TableBody>
@@ -492,13 +493,13 @@ export function MirroredDatabricksEditor({ item, id }: Props) {
                           to a Synapse Serverless SQL endpoint{sqlInfo.viewCount ? <> with <strong>{sqlInfo.viewCount}</strong> Delta view(s)</> : ''}.
                         </MessageBarBody>
                       </MessageBar>
-                      <Caption1>Endpoint: <code>{sqlInfo.endpoint || '(set LOOM_SYNAPSE_WORKSPACE)'}</code></Caption1>
-                      <Caption1>Database: <code>{sqlInfo.database || '—'}</code></Caption1>
+                      <Caption1>Endpoint: <code style={{ overflowWrap: 'anywhere', wordBreak: 'break-word' }}>{sqlInfo.endpoint || '(set LOOM_SYNAPSE_WORKSPACE)'}</code></Caption1>
+                      <Caption1>Database: <code style={{ overflowWrap: 'anywhere', wordBreak: 'break-word' }}>{sqlInfo.database || '—'}</code></Caption1>
                       <MessageBar intent="info">
                         <MessageBarBody>
                           <MessageBarTitle>Query it</MessageBarTitle>
                           Connect any T-SQL client to the endpoint above and run e.g.
-                          <code style={{ display: 'block', marginTop: tokens.spacingVerticalXS, fontFamily: 'Consolas, monospace' }}>
+                          <code style={{ display: 'block', marginTop: tokens.spacingVerticalXS, fontFamily: 'Consolas, monospace', whiteSpace: 'pre-wrap', overflowWrap: 'anywhere', wordBreak: 'break-word', maxWidth: '100%' }}>
                             USE [{sqlInfo.database || 'loom_dbxmirror_…'}]; SELECT TOP 100 * FROM [dbo].[&lt;schema&gt;_&lt;table&gt;];
                           </code>
                           Each view reads the UC table&apos;s Delta files directly (OPENROWSET FORMAT=&apos;delta&apos;) over ADLS Gen2 — Azure-native, no Fabric.

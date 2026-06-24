@@ -43,9 +43,9 @@ const useStyles = makeStyles({
   pad: { padding: tokens.spacingVerticalL, display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalM, minHeight: 0, flex: 1 },
   toolbar: { display: 'flex', gap: tokens.spacingHorizontalM, alignItems: 'center', flexWrap: 'wrap' },
   form: { display: 'grid', gridTemplateColumns: '1fr 1fr', gap: tokens.spacingVerticalM, alignItems: 'start' },
-  formCol: { display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalM },
+  formCol: { display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalM, minWidth: 0 },
   cardGrid: { display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(260px, 1fr))', gap: tokens.spacingVerticalM },
-  card: { padding: tokens.spacingVerticalM, border: `1px solid ${tokens.colorNeutralStroke2}`, borderRadius: tokens.borderRadiusLarge, display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalS },
+  card: { padding: tokens.spacingVerticalM, border: `1px solid ${tokens.colorNeutralStroke2}`, borderRadius: tokens.borderRadiusLarge, display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalS, minWidth: 0 },
   kpiGrid: { display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(180px, 1fr))', gap: tokens.spacingVerticalM },
   kpi: { padding: tokens.spacingVerticalM, border: `1px solid ${tokens.colorNeutralStroke2}`, borderRadius: tokens.borderRadiusLarge, display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalXS },
   kpiValue: { fontSize: tokens.fontSizeBase700, fontWeight: 600 },
@@ -67,11 +67,13 @@ const useStyles = makeStyles({
     alignSelf: 'flex-end', maxWidth: '75%', paddingTop: tokens.spacingVerticalS, paddingBottom: tokens.spacingVerticalS, paddingLeft: tokens.spacingHorizontalM, paddingRight: tokens.spacingHorizontalM,
     borderRadius: tokens.borderRadiusXLarge,
     backgroundColor: tokens.colorBrandBackground, color: tokens.colorNeutralForegroundOnBrand,
+    overflowWrap: 'anywhere', wordBreak: 'break-word', whiteSpace: 'pre-wrap',
   },
   msgBot: {
     alignSelf: 'flex-start', maxWidth: '75%', paddingTop: tokens.spacingVerticalS, paddingBottom: tokens.spacingVerticalS, paddingLeft: tokens.spacingHorizontalM, paddingRight: tokens.spacingHorizontalM,
     borderRadius: tokens.borderRadiusXLarge,
     backgroundColor: tokens.colorNeutralBackground1, border: `1px solid ${tokens.colorNeutralStroke2}`,
+    overflowWrap: 'anywhere', wordBreak: 'break-word', whiteSpace: 'pre-wrap',
   },
   chatInputRow: { display: 'flex', gap: tokens.spacingHorizontalS, alignItems: 'flex-end' },
 });
@@ -639,7 +641,7 @@ function KnowledgePanel({ envId, agentId }: { envId: string; agentId: string }) 
               <TableRow key={k.id}>
                 <TableCell>{k.name}</TableCell>
                 <TableCell><Badge appearance="outline">{k.type}</Badge></TableCell>
-                <TableCell>{k.uri || '—'}</TableCell>
+                <TableCell><span style={{ overflowWrap: 'anywhere', wordBreak: 'break-word' }}>{k.uri || '—'}</span></TableCell>
                 <TableCell>{k.status || '—'}</TableCell>
                 <TableCell>
                   <Button size="small" icon={<Delete20Regular />} appearance="subtle" onClick={() => remove(k.id)}>Remove</Button>
@@ -982,7 +984,7 @@ function ActionsPanel({ envId, agentId }: { envId: string; agentId: string }) {
               <TableRow key={a.id}>
                 <TableCell>{a.name}</TableCell>
                 <TableCell><Badge appearance="outline">{a.type || '—'}</Badge></TableCell>
-                <TableCell>{a.flowId || a.connectorId || '—'}</TableCell>
+                <TableCell><span style={{ overflowWrap: 'anywhere', wordBreak: 'break-word' }}>{a.flowId || a.connectorId || '—'}</span></TableCell>
                 <TableCell>
                   <Badge appearance="outline" color={a.enabled ? 'success' : 'severe'}>{a.enabled ? 'Enabled' : 'Disabled'}</Badge>
                 </TableCell>
@@ -1115,7 +1117,7 @@ function ChannelsPanel({ envId, agentId, refreshSignal }: { envId: string; agent
                   : <Badge appearance="outline">Not published</Badge>}
               </div>
               <Caption1>{ct.description}</Caption1>
-              {existing?.embedUrl && <Caption1>Embed: <code>{existing.embedUrl}</code></Caption1>}
+              {existing?.embedUrl && <Caption1>Embed: <code style={{ overflowWrap: 'anywhere', wordBreak: 'break-word' }}>{existing.embedUrl}</code></Caption1>}
               {gates[ct.type] && (
                 <MessageBar intent="warning">
                   <MessageBarBody>

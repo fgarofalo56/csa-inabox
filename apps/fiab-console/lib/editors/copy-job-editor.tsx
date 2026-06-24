@@ -43,9 +43,9 @@ const useStyles = makeStyles({
   },
   body: { padding: tokens.spacingVerticalXL, display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalM, maxWidth: '920px' },
   toolbar: { display: 'flex', gap: tokens.spacingHorizontalS, alignItems: 'center', flexWrap: 'wrap' },
-  specGrid: { display: 'grid', gridTemplateColumns: 'minmax(140px, 200px) 1fr', rowGap: tokens.spacingVerticalXS, columnGap: tokens.spacingHorizontalL, alignItems: 'baseline' },
-  label: { color: tokens.colorNeutralForeground3 },
-  mono: { fontFamily: 'Consolas, "Cascadia Code", monospace', fontSize: tokens.fontSizeBase200 },
+  specGrid: { display: 'grid', gridTemplateColumns: 'minmax(140px, 200px) minmax(0, 1fr)', rowGap: tokens.spacingVerticalXS, columnGap: tokens.spacingHorizontalL, alignItems: 'baseline' },
+  label: { color: tokens.colorNeutralForeground3, minWidth: 0, overflowWrap: 'anywhere' },
+  mono: { fontFamily: 'Consolas, "Cascadia Code", monospace', fontSize: tokens.fontSizeBase200, minWidth: 0, overflowWrap: 'anywhere', wordBreak: 'break-word' },
   card: {
     border: `1px solid ${tokens.colorNeutralStroke2}`, borderRadius: tokens.borderRadiusXLarge, padding: tokens.spacingVerticalM,
     display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalS, backgroundColor: tokens.colorNeutralBackground1,
@@ -367,7 +367,7 @@ export function CopyJobEditor({ item, id }: { item: FabricItemType; id: string }
             )}
 
             {tab === 'runs' && (
-              <div className={styles.card}>
+              <div className={styles.card} style={{ minWidth: 0, overflowX: 'auto' }}>
                 <div className={styles.toolbar}>
                   <Subtitle2>Recent runs</Subtitle2>
                   <Caption1 className={styles.label}>pipeline loom-copy-{id.substring(0, 8)}…</Caption1>
@@ -399,7 +399,7 @@ export function CopyJobEditor({ item, id }: { item: FabricItemType; id: string }
                           <TableCell>{fmtTs(r.runStart)}</TableCell>
                           <TableCell>{fmtTs(r.runEnd)}</TableCell>
                           <TableCell>{r.durationInMs ? `${(r.durationInMs / 1000).toFixed(1)}s` : '—'}</TableCell>
-                          <TableCell>{r.message || '—'}</TableCell>
+                          <TableCell style={{ overflowWrap: 'anywhere', wordBreak: 'break-word', minWidth: 0 }}>{r.message || '—'}</TableCell>
                         </TableRow>
                       ))}
                     </TableBody>

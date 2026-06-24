@@ -38,17 +38,21 @@ const useStyles = makeStyles({
   node: {
     border: `1px solid ${tokens.colorNeutralStroke2}`, borderRadius: tokens.borderRadiusLarge,
     padding: tokens.spacingVerticalM, display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalS,
-    backgroundColor: tokens.colorNeutralBackground1,
+    backgroundColor: tokens.colorNeutralBackground1, minWidth: 0,
   },
-  nodeHead: { display: 'flex', alignItems: 'center', gap: tokens.spacingHorizontalS, justifyContent: 'space-between' },
-  nodeHeadLeft: { display: 'flex', alignItems: 'center', gap: tokens.spacingHorizontalS },
-  nodeActions: { display: 'flex', gap: tokens.spacingHorizontalXS },
+  nodeHead: { display: 'flex', alignItems: 'center', gap: tokens.spacingHorizontalS, justifyContent: 'space-between', minWidth: 0 },
+  nodeHeadLeft: {
+    display: 'flex', alignItems: 'center', gap: tokens.spacingHorizontalS, minWidth: 0,
+    overflowWrap: 'anywhere', wordBreak: 'break-word',
+  },
+  nodeActions: { display: 'flex', gap: tokens.spacingHorizontalXS, flexShrink: 0 },
   addRow: { display: 'flex', gap: tokens.spacingHorizontalXS, flexWrap: 'wrap' },
   branch: {
     border: `1px dashed ${tokens.colorNeutralStroke2}`, borderRadius: tokens.borderRadiusMedium,
     padding: tokens.spacingVerticalS, display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalXS, marginTop: tokens.spacingVerticalXXS,
+    minWidth: 0,
   },
-  phraseRow: { display: 'flex', gap: tokens.spacingHorizontalXS, alignItems: 'center' },
+  phraseRow: { display: 'flex', gap: tokens.spacingHorizontalXS, alignItems: 'center', minWidth: 0 },
 });
 
 // Each step carries a client id for stable React keys; kept out of the model.
@@ -182,7 +186,7 @@ export function CopilotTopicCanvas({ flowYaml, triggerPhrases, onChange, ariaLab
         {triggerPhrases.length === 0 && <Caption1>No trigger phrases yet — add at least one.</Caption1>}
         {triggerPhrases.map((p, i) => (
           <div key={i} className={s.phraseRow}>
-            <Input style={{ flex: 1 }} value={p} placeholder="e.g. reset my password" onChange={(_, d) => setPhrase(i, d.value)} />
+            <Input style={{ flex: 1, minWidth: 0 }} value={p} placeholder="e.g. reset my password" onChange={(_, d) => setPhrase(i, d.value)} />
             <Button size="small" appearance="subtle" icon={<Delete20Regular />} onClick={() => removePhrase(i)} aria-label="Remove phrase" />
           </div>
         ))}

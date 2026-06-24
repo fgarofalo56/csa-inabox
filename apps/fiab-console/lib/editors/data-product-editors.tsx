@@ -26,8 +26,8 @@ import type { RibbonTab } from '@/lib/components/ribbon';
 const useStyles = makeStyles({
   pad: { padding: tokens.spacingHorizontalL, display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalM },
   grid: { display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(280px, 1fr))', gap: tokens.spacingHorizontalM },
-  card: { padding: tokens.spacingHorizontalM, cursor: 'pointer', border: `1px solid ${tokens.colorNeutralStroke2}`, borderRadius: tokens.borderRadiusMedium },
-  cardActive: { padding: tokens.spacingHorizontalM, border: `2px solid ${tokens.colorBrandStroke1}`, borderRadius: tokens.borderRadiusMedium, background: tokens.colorBrandBackground2 },
+  card: { padding: tokens.spacingHorizontalM, cursor: 'pointer', border: `1px solid ${tokens.colorNeutralStroke2}`, borderRadius: tokens.borderRadiusMedium, minWidth: 0, overflowWrap: 'anywhere', wordBreak: 'break-word' },
+  cardActive: { padding: tokens.spacingHorizontalM, border: `2px solid ${tokens.colorBrandStroke1}`, borderRadius: tokens.borderRadiusMedium, background: tokens.colorBrandBackground2, minWidth: 0, overflowWrap: 'anywhere', wordBreak: 'break-word' },
   treePad: { padding: tokens.spacingHorizontalM, display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalS },
   field: { display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalXS },
   tableWrap: { overflow: 'auto', maxHeight: '360px', border: `1px solid ${tokens.colorNeutralStroke2}`, borderRadius: tokens.borderRadiusSmall },
@@ -196,8 +196,8 @@ export function DataProductTemplateEditor({ item, id }: { item: FabricItemType; 
                     {selected.components.map((c, i) => (
                       <TableRow key={i}>
                         <TableCell><strong>{c.label}</strong></TableCell>
-                        <TableCell><code style={{ fontSize: tokens.fontSizeBase200 }}>{c.slug}</code></TableCell>
-                        <TableCell>{c.description}</TableCell>
+                        <TableCell><code style={{ fontSize: tokens.fontSizeBase200, overflowWrap: 'anywhere', wordBreak: 'break-word' }}>{c.slug}</code></TableCell>
+                        <TableCell style={{ overflowWrap: 'anywhere', wordBreak: 'break-word' }}>{c.description}</TableCell>
                       </TableRow>
                     ))}
                   </TableBody>
@@ -231,7 +231,7 @@ export function DataProductTemplateEditor({ item, id }: { item: FabricItemType; 
                   <MessageBar intent="warning">
                     <MessageBarBody>
                       <MessageBarTitle>Workspaces not reachable</MessageBarTitle>
-                      {ws.error}
+                      <span style={{ overflowWrap: 'anywhere', wordBreak: 'break-word' }}>{ws.error}</span>
                     </MessageBarBody>
                   </MessageBar>
                 )}
@@ -248,7 +248,7 @@ export function DataProductTemplateEditor({ item, id }: { item: FabricItemType; 
                     <MessageBarTitle>{result.ok ? 'Instantiated' : 'Instantiation failed'}</MessageBarTitle>
                     {result.ok
                       ? <>Created <strong>{result.created?.length || 0}</strong> child items.{(result.errors?.length || 0) > 0 && ` ${result.errors.length} component(s) failed.`}</>
-                      : (result.error || 'Unknown error')}
+                      : <span style={{ overflowWrap: 'anywhere', wordBreak: 'break-word' }}>{result.error || 'Unknown error'}</span>}
                   </MessageBarBody>
                 </MessageBar>
               )}
@@ -332,7 +332,7 @@ export function DataProductInstanceEditor({ item, id }: { item: FabricItemType; 
       </div>}
       main={
         <div className={s.pad}>
-          {err && <MessageBar intent="error"><MessageBarBody>{err}</MessageBarBody></MessageBar>}
+          {err && <MessageBar intent="error"><MessageBarBody><span style={{ overflowWrap: 'anywhere', wordBreak: 'break-word' }}>{err}</span></MessageBarBody></MessageBar>}
           <Subtitle2>Components ({components.length})</Subtitle2>
           <div className={s.tableWrap}>
             <Table size="small">
@@ -347,16 +347,16 @@ export function DataProductInstanceEditor({ item, id }: { item: FabricItemType; 
                   const h = health[c.itemId];
                   return (
                     <TableRow key={c.itemId}>
-                      <TableCell><a href={`/items/${c.slug}/${c.itemId}`}>{c.displayName}</a></TableCell>
-                      <TableCell><code style={{ fontSize: tokens.fontSizeBase200 }}>{c.slug}</code></TableCell>
-                      <TableCell><code style={{ fontSize: tokens.fontSizeBase100 }}>{c.itemId}</code></TableCell>
+                      <TableCell style={{ overflowWrap: 'anywhere', wordBreak: 'break-word' }}><a href={`/items/${c.slug}/${c.itemId}`}>{c.displayName}</a></TableCell>
+                      <TableCell><code style={{ fontSize: tokens.fontSizeBase200, overflowWrap: 'anywhere', wordBreak: 'break-word' }}>{c.slug}</code></TableCell>
+                      <TableCell><code style={{ fontSize: tokens.fontSizeBase100, overflowWrap: 'anywhere', wordBreak: 'break-word' }}>{c.itemId}</code></TableCell>
                       <TableCell>
                         {!h && <Caption1 style={{ color: tokens.colorNeutralForeground3 }}>Click "Check component health"</Caption1>}
                         {h?.status === 'ok' && <Badge appearance="filled" color="success">OK</Badge>}
                         {h?.status === 'stale' && <Badge appearance="filled" color="warning">Stale</Badge>}
                         {h?.status === 'missing' && <Badge appearance="filled" color="danger">Missing</Badge>}
                         {h?.status === 'unknown' && <Badge appearance="outline">Unknown</Badge>}
-                        {h?.detail && <Caption1 style={{ marginLeft: 6, color: tokens.colorNeutralForeground3 }}>{h.detail}</Caption1>}
+                        {h?.detail && <Caption1 style={{ marginLeft: tokens.spacingHorizontalXS, color: tokens.colorNeutralForeground3, overflowWrap: 'anywhere', wordBreak: 'break-word' }}>{h.detail}</Caption1>}
                       </TableCell>
                     </TableRow>
                   );
@@ -368,7 +368,7 @@ export function DataProductInstanceEditor({ item, id }: { item: FabricItemType; 
             <MessageBar intent="warning">
               <MessageBarBody>
                 <MessageBarTitle>Partial failures during instantiation</MessageBarTitle>
-                {errors.map((e, i) => (<div key={i}><code>{e.slug}</code>: {e.error}</div>))}
+                {errors.map((e, i) => (<div key={i} style={{ overflowWrap: 'anywhere', wordBreak: 'break-word' }}><code>{e.slug}</code>: {e.error}</div>))}
               </MessageBarBody>
             </MessageBar>
           )}

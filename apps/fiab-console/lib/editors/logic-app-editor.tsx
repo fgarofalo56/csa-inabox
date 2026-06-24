@@ -43,13 +43,14 @@ const useStyles = makeStyles({
   pad: { padding: tokens.spacingHorizontalL, display: 'flex', flexDirection: 'column', gap: tokens.spacingHorizontalM, flex: 1, minHeight: 0 },
   tabs: { borderBottom: `1px solid ${tokens.colorNeutralStroke2}`, padding: '8px 8px 0' },
   toolbar: { display: 'flex', gap: tokens.spacingHorizontalS, alignItems: 'center', flexWrap: 'wrap' },
-  flow: { display: 'flex', flexDirection: 'column', gap: 0, alignItems: 'stretch', maxWidth: '760px' },
+  flow: { display: 'flex', flexDirection: 'column', gap: 0, alignItems: 'stretch', maxWidth: '760px', width: '100%', minWidth: 0 },
   node: {
     border: `1px solid ${tokens.colorNeutralStroke1}`,
     borderRadius: tokens.borderRadiusXLarge,
     padding: '10px 14px',
     backgroundColor: tokens.colorNeutralBackground1,
     display: 'flex', flexDirection: 'column', gap: tokens.spacingHorizontalXS,
+    minWidth: 0, maxWidth: '100%', boxSizing: 'border-box',
   },
   trigger: { borderLeft: `4px solid ${tokens.colorBrandStroke1}` },
   action: { borderLeft: `4px solid ${tokens.colorPaletteBlueBorderActive}` },
@@ -57,12 +58,18 @@ const useStyles = makeStyles({
   branchKids: { marginLeft: '28px', marginTop: tokens.spacingVerticalS, display: 'flex', flexDirection: 'column', gap: 0 },
   connector: { display: 'flex', justifyContent: 'center', color: tokens.colorNeutralForeground3, padding: '2px 0' },
   nodeHead: { display: 'flex', gap: tokens.spacingHorizontalS, alignItems: 'center', flexWrap: 'wrap' },
-  cfg: { fontFamily: 'Consolas, monospace', fontSize: tokens.fontSizeBase200, color: tokens.colorNeutralForeground2, wordBreak: 'break-all' },
+  cfg: { fontFamily: 'Consolas, monospace', fontSize: tokens.fontSizeBase200, color: tokens.colorNeutralForeground2, wordBreak: 'break-word', overflowWrap: 'anywhere', minWidth: 0, maxWidth: '100%' },
+  outputsBlob: {
+    fontFamily: 'Consolas, monospace', fontSize: tokens.fontSizeBase200, whiteSpace: 'pre-wrap', overflowWrap: 'anywhere',
+    color: tokens.colorNeutralForeground2, backgroundColor: tokens.colorNeutralBackground3,
+    borderRadius: tokens.borderRadiusMedium, padding: tokens.spacingHorizontalMNudge,
+    border: `1px solid ${tokens.colorNeutralStroke2}`, maxHeight: '280px', overflow: 'auto',
+  },
   runAfter: { color: tokens.colorNeutralForeground3 },
   tableWrap: { overflow: 'auto', maxHeight: '420px', border: `1px solid ${tokens.colorNeutralStroke2}`, borderRadius: tokens.borderRadiusMedium },
-  cell: { fontFamily: 'Consolas, monospace', fontSize: tokens.fontSizeBase200 },
+  cell: { fontFamily: 'Consolas, monospace', fontSize: tokens.fontSizeBase200, wordBreak: 'break-word', overflowWrap: 'anywhere' },
   runOut: {
-    fontFamily: 'Consolas, monospace', fontSize: tokens.fontSizeBase200, whiteSpace: 'pre-wrap',
+    fontFamily: 'Consolas, monospace', fontSize: tokens.fontSizeBase200, whiteSpace: 'pre-wrap', overflowWrap: 'anywhere',
     backgroundColor: tokens.colorNeutralBackground3, borderRadius: tokens.borderRadiusMedium, padding: tokens.spacingHorizontalMNudge,
     border: `1px solid ${tokens.colorNeutralStroke2}`, maxHeight: '200px', overflow: 'auto',
   },
@@ -377,7 +384,7 @@ export function LogicAppEditor({ item, id }: Props) {
                 {definition.outputs && Object.keys(definition.outputs).length > 0 && (
                   <>
                     <Subtitle2 style={{ marginTop: 12 }}>Outputs</Subtitle2>
-                    <div className={s.cfg}>{JSON.stringify(definition.outputs, null, 2)}</div>
+                    <div className={s.outputsBlob}>{JSON.stringify(definition.outputs, null, 2)}</div>
                   </>
                 )}
               </>

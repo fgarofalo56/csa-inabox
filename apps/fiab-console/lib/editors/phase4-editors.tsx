@@ -100,7 +100,7 @@ function arr<T>(v: unknown): T[] {
 const useStyles = makeStyles({
   pad: { padding: tokens.spacingVerticalL, display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalM },
   monaco: {
-    width: '100%', minHeight: '180px',
+    width: '100%', minHeight: '180px', maxWidth: '100%',
     fontFamily: 'Consolas, "Cascadia Code", monospace',
     fontSize: tokens.fontSizeBase200, padding: tokens.spacingVerticalM,
     border: `1px solid ${tokens.colorNeutralStroke2}`,
@@ -108,6 +108,8 @@ const useStyles = makeStyles({
     backgroundColor: tokens.colorNeutralBackground3,
     color: tokens.colorNeutralForeground1,
     resize: 'vertical',
+    overflowWrap: 'anywhere',
+    wordBreak: 'break-word',
   },
   tabBar: { padding: `${tokens.spacingVerticalS} ${tokens.spacingHorizontalL} 0`, borderBottom: `1px solid ${tokens.colorNeutralStroke2}` },
   card: { padding: tokens.spacingVerticalM, border: `1px solid ${tokens.colorNeutralStroke2}`, borderRadius: tokens.borderRadiusLarge },
@@ -203,9 +205,9 @@ const useStyles = makeStyles({
 
   /* ---- Ontology data-bindings + Activator triggers (v3.28) ---- */
   ontoBindGrid: {
-    display: 'grid', gridTemplateColumns: '1fr 1fr', gap: tokens.spacingHorizontalL,
+    display: 'grid', gridTemplateColumns: 'minmax(0, 1fr) minmax(0, 1fr)', gap: tokens.spacingHorizontalL,
     marginTop: tokens.spacingVerticalS,
-    '@media (max-width: 900px)': { gridTemplateColumns: '1fr' },
+    '@media (max-width: 900px)': { gridTemplateColumns: 'minmax(0, 1fr)' },
   },
   ontoSection: {
     display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalM,
@@ -227,8 +229,8 @@ const useStyles = makeStyles({
     ':hover': { backgroundColor: tokens.colorNeutralBackground1Hover, boxShadow: tokens.shadow2 },
   },
   ontoSourceGrid: {
-    display: 'grid', gridTemplateColumns: '1fr 320px', gap: tokens.spacingHorizontalL,
-    '@media (max-width: 900px)': { gridTemplateColumns: '1fr' },
+    display: 'grid', gridTemplateColumns: 'minmax(0, 1fr) 320px', gap: tokens.spacingHorizontalL,
+    '@media (max-width: 900px)': { gridTemplateColumns: 'minmax(0, 1fr)' },
   },
   ontoBindRowSpacer: { flex: 1 },
   ontoEmpty: {
@@ -722,7 +724,7 @@ export function UserDataFunctionEditor({ item, id }: { item: FabricItemType; id:
       main={
         <div className={s.pad}>
           {loading && <Spinner size="small" label="Loading…" labelPosition="after" />}
-          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: tokens.spacingHorizontalM }}>
+          <div style={{ display: 'grid', gridTemplateColumns: 'minmax(0, 1fr) minmax(0, 1fr)', gap: tokens.spacingHorizontalM }}>
             <Field label="Runtime"><Input value="python (fabric-user-data-functions)" disabled /></Field>
             <Field label="Default entrypoint"><Input value={state.entrypoint} onChange={(_, d) => setState((p) => ({ ...p, entrypoint: d.value }))} /></Field>
           </div>
@@ -1994,13 +1996,13 @@ export function GraphModelEditor({ item, id }: { item: FabricItemType; id: strin
         {loading && <Spinner size="small" label="Loading…" labelPosition="after" />}
         <Caption1>Target ADX database</Caption1>
         <Input value={state.database} onChange={(_, d) => setState((p) => ({ ...p, database: d.value }))} />
-        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: tokens.spacingHorizontalM }}>
-          <div>
+        <div style={{ display: 'grid', gridTemplateColumns: 'minmax(0, 1fr) minmax(0, 1fr)', gap: tokens.spacingHorizontalM }}>
+          <div style={{ minWidth: 0 }}>
             <Subtitle2>Node types</Subtitle2>
             <GraphTypeEditor kind="node" types={arr(state.nodes)}
               onChange={(next) => setState((p) => ({ ...p, nodes: next }))} />
           </div>
-          <div>
+          <div style={{ minWidth: 0 }}>
             <Subtitle2>Edge types</Subtitle2>
             <GraphTypeEditor kind="edge" types={arr(state.edges)}
               onChange={(next) => setState((p) => ({ ...p, edges: next }))} />
@@ -2021,7 +2023,7 @@ export function GraphModelEditor({ item, id }: { item: FabricItemType; id: strin
               {matResult.created && (
                 <ul style={{ margin: '4px 0 0 16px', padding: 0 }}>
                   {matResult.created.map((c: any, i: number) => (
-                    <li key={i} style={{ fontFamily: 'monospace', fontSize: tokens.fontSizeBase200 }}>
+                    <li key={i} style={{ fontFamily: 'monospace', fontSize: tokens.fontSizeBase200, overflowWrap: 'anywhere' }}>
                       {c.ok ? '[ok]' : '[err]'} {c.kind}:{c.name}{c.error ? ` — ${c.error}` : ''}
                     </li>
                   ))}
@@ -2065,7 +2067,7 @@ export function GraphModelEditor({ item, id }: { item: FabricItemType; id: strin
                 <Field label="Relationship name" required>
                   <Input value={newName} onChange={(_, d) => setNewName(d.value)} placeholder="PLACED" />
                 </Field>
-                <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: tokens.spacingHorizontalM }}>
+                <div style={{ display: 'grid', gridTemplateColumns: 'minmax(0, 1fr) minmax(0, 1fr)', gap: tokens.spacingHorizontalM }}>
                   <Field label="From entity">
                     <Dropdown value={edgeSrc} selectedOptions={edgeSrc ? [edgeSrc] : []} onOptionSelect={(_, d) => setEdgeSrc(d.optionValue || '')} placeholder="(optional)">
                       {arr<{ name: string }>(state.nodes).map((n) => <Option key={n.name} value={n.name}>{n.name}</Option>)}
@@ -3823,11 +3825,11 @@ export function OperationsAgentEditor({ item, id }: { item: FabricItemType; id: 
         {/* v3.28 Phase 4.5: functional setState so deploy/reload doesn't clobber typing. */}
         <Caption1>System prompt</Caption1>
         <Textarea value={state.systemPrompt} onChange={(_, d) => setState((p) => ({ ...p, systemPrompt: d.value }))} rows={6} />
-        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: tokens.spacingHorizontalM }}>
-          <div><Caption1>Model</Caption1><Input value={state.model} onChange={(_, d) => setState((p) => ({ ...p, model: d.value }))} /></div>
-          <div><Caption1>Tools (comma)</Caption1><Input value={state.tools} onChange={(_, d) => setState((p) => ({ ...p, tools: d.value }))} /></div>
-          <div><Caption1>Eventhouse binding</Caption1><Input value={state.eventhouse} onChange={(_, d) => setState((p) => ({ ...p, eventhouse: d.value }))} placeholder="eventhouse item id" /></div>
-          <div><Caption1>Ontology binding</Caption1><Input value={state.ontology} onChange={(_, d) => setState((p) => ({ ...p, ontology: d.value }))} placeholder="ontology item id" /></div>
+        <div style={{ display: 'grid', gridTemplateColumns: 'minmax(0, 1fr) minmax(0, 1fr)', gap: tokens.spacingHorizontalM }}>
+          <div style={{ minWidth: 0 }}><Caption1>Model</Caption1><Input value={state.model} onChange={(_, d) => setState((p) => ({ ...p, model: d.value }))} /></div>
+          <div style={{ minWidth: 0 }}><Caption1>Tools (comma)</Caption1><Input value={state.tools} onChange={(_, d) => setState((p) => ({ ...p, tools: d.value }))} /></div>
+          <div style={{ minWidth: 0 }}><Caption1>Eventhouse binding</Caption1><Input value={state.eventhouse} onChange={(_, d) => setState((p) => ({ ...p, eventhouse: d.value }))} placeholder="eventhouse item id" /></div>
+          <div style={{ minWidth: 0 }}><Caption1>Ontology binding</Caption1><Input value={state.ontology} onChange={(_, d) => setState((p) => ({ ...p, ontology: d.value }))} placeholder="ontology item id" /></div>
         </div>
         {deployResult && (
           <MessageBar intent={deployResult.ok ? 'success' : deployResult.deferred ? 'warning' : 'error'}>
@@ -4296,7 +4298,7 @@ export function DataAgentEditor({ item, id }: { item: FabricItemType; id: string
                       <Field label="Example question → query pairs (few-shot)">
                         <div style={{ display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalSNudge }}>
                           {arr<{ question: string; query: string }>(src.examples).map((ex, i) => (
-                            <div key={i} style={{ display: 'grid', gridTemplateColumns: '1fr 1fr auto', gap: tokens.spacingHorizontalSNudge }}>
+                            <div key={i} style={{ display: 'grid', gridTemplateColumns: 'minmax(0, 1fr) minmax(0, 1fr) auto', gap: tokens.spacingHorizontalSNudge }}>
                               <Input value={ex.question} placeholder="question" onChange={(_, d) => updateSourceExamples(src.id, (arr) => arr.map((e, j) => j === i ? { ...e, question: d.value } : e))} />
                               <Input value={ex.query} placeholder="SQL / KQL / GQL" onChange={(_, d) => updateSourceExamples(src.id, (arr) => arr.map((e, j) => j === i ? { ...e, query: d.value } : e))} />
                               <Button size="small" appearance="subtle" onClick={() => updateSourceExamples(src.id, (arr) => arr.filter((_, j) => j !== i))}>×</Button>
@@ -4628,7 +4630,7 @@ export function DataAgentEditor({ item, id }: { item: FabricItemType; id: string
                   </div>
                   {inspectResult.data.lastError && <MessageBar intent="error" style={{ marginTop: tokens.spacingVerticalSNudge }}><MessageBarBody>{inspectResult.data.lastError}</MessageBarBody></MessageBar>}
                   {inspectResult.data.answer && (
-                    <div style={{ marginTop: tokens.spacingVerticalS }}><Subtitle2>Answer</Subtitle2><div style={{ whiteSpace: 'pre-wrap' }}>{inspectResult.data.answer}</div></div>
+                    <div style={{ marginTop: tokens.spacingVerticalS }}><Subtitle2>Answer</Subtitle2><div style={{ whiteSpace: 'pre-wrap', overflowWrap: 'anywhere' }}>{inspectResult.data.answer}</div></div>
                   )}
                   <Subtitle2 style={{ marginTop: tokens.spacingVerticalS }}>Run steps ({inspectResult.data.steps?.length || 0})</Subtitle2>
                   {(inspectResult.data.steps || []).map((st: any, i: number) => (
@@ -4638,10 +4640,10 @@ export function DataAgentEditor({ item, id }: { item: FabricItemType; id: string
                         <Badge appearance="filled" color={st.status === 'completed' ? 'success' : st.status === 'failed' ? 'danger' : 'informative'}>{st.status}</Badge>
                       </div>
                       {(st.toolCalls || []).map((tc: any, j: number) => (
-                        <div key={j} style={{ marginTop: tokens.spacingVerticalSNudge, fontFamily: 'monospace', fontSize: tokens.fontSizeBase200 }}>
+                        <div key={j} style={{ marginTop: tokens.spacingVerticalSNudge, fontFamily: 'monospace', fontSize: tokens.fontSizeBase200, minWidth: 0, overflowWrap: 'anywhere' }}>
                           <div><strong>{tc.type}{tc.name ? ` · ${tc.name}` : ''}</strong></div>
-                          {tc.input && <div style={{ whiteSpace: 'pre-wrap', color: tokens.colorNeutralForeground3 }}>{tc.input}</div>}
-                          {tc.output && <div style={{ whiteSpace: 'pre-wrap' }}>{tc.output}</div>}
+                          {tc.input && <div style={{ whiteSpace: 'pre-wrap', overflowWrap: 'anywhere', color: tokens.colorNeutralForeground3 }}>{tc.input}</div>}
+                          {tc.output && <div style={{ whiteSpace: 'pre-wrap', overflowWrap: 'anywhere' }}>{tc.output}</div>}
                         </div>
                       ))}
                       {st.error && <div style={{ color: tokens.colorPaletteRedForeground1, marginTop: tokens.spacingVerticalXS }}>{st.error}</div>}

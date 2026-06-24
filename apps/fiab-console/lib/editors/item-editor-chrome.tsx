@@ -35,6 +35,7 @@ const useStyles = makeStyles({
     borderRadius: tokens.borderRadiusMedium,
     overflow: 'auto',
     minHeight: 0,
+    minWidth: 0,
   },
   rightPanel: {
     backgroundColor: tokens.colorNeutralBackground1,
@@ -42,6 +43,7 @@ const useStyles = makeStyles({
     borderRadius: tokens.borderRadiusMedium,
     overflow: 'auto',
     minHeight: 0,
+    minWidth: 0,
     padding: tokens.spacingVerticalS,
   },
   // Thin rail shown when the left panel is collapsed — a single expand button.
@@ -58,6 +60,7 @@ const useStyles = makeStyles({
     borderRadius: tokens.borderRadiusMedium,
     overflow: 'auto',
     minHeight: 0,
+    minWidth: 0,
     display: 'flex',
     flexDirection: 'column',
   },
@@ -67,6 +70,7 @@ const useStyles = makeStyles({
     borderRadius: tokens.borderRadiusMedium,
     overflow: 'auto',
     minHeight: 0,
+    minWidth: 0,
     flex: 1,
     padding: tokens.spacingVerticalL,
   },
@@ -99,7 +103,7 @@ export function ItemEditorChrome({ item, id, ribbon, leftPanel, main, rightPanel
     ? {
         gridTemplateColumns: [
           ...(leftPanel ? [leftCollapsed ? '32px' : 'minmax(220px, 280px)'] : []),
-          '1fr',
+          'minmax(0, 1fr)',
           ...(rightPanel ? ['minmax(280px, 340px)'] : []),
         ].join(' '),
       }

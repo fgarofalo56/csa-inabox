@@ -63,10 +63,10 @@ const useStyles = makeStyles({
   },
   toolbar: { display: 'flex', gap: tokens.spacingHorizontalS, alignItems: 'flex-end', flexWrap: 'wrap' },
   sortHeader: { cursor: 'pointer', userSelect: 'none' },
-  mono: { fontFamily: 'monospace', fontSize: tokens.fontSizeBase200 },
-  legendRow: { display: 'flex', alignItems: 'center', gap: tokens.spacingHorizontalSNudge },
+  mono: { fontFamily: 'monospace', fontSize: tokens.fontSizeBase200, overflowWrap: 'anywhere', wordBreak: 'break-word' },
+  legendRow: { display: 'flex', alignItems: 'center', gap: tokens.spacingHorizontalSNudge, minWidth: 0, overflowWrap: 'anywhere', wordBreak: 'break-word' },
   swatch: { width: '12px', height: '12px', borderRadius: tokens.borderRadiusSmall, display: 'inline-block' },
-  treeRow: { display: 'flex', alignItems: 'center', gap: tokens.spacingHorizontalXS, padding: `${tokens.spacingVerticalXXS} 0`, fontSize: tokens.fontSizeBase300 },
+  treeRow: { display: 'flex', alignItems: 'center', gap: tokens.spacingHorizontalXS, padding: `${tokens.spacingVerticalXXS} 0`, fontSize: tokens.fontSizeBase300, minWidth: 0 },
 });
 
 interface MlflowExperimentLite { experimentId: string; name: string; lastUpdateTime?: number; tags?: Record<string, string> }
@@ -249,7 +249,7 @@ function ArtifactTree({ runId }: { runId: string }) {
               <Document16Regular style={{ margin: '0 4px' }} />
             </span>
           )}
-          <span>{node.path.split('/').pop() || node.path}</span>
+          <span style={{ minWidth: 0, overflowWrap: 'anywhere', wordBreak: 'break-word' }}>{node.path.split('/').pop() || node.path}</span>
           {!node.isDir && <Caption1 style={{ color: tokens.colorNeutralForeground3, marginLeft: tokens.spacingHorizontalS }}>{fmtBytes(node.fileSize)}</Caption1>}
           {node.isDir && loading[node.path] && <Spinner size="extra-tiny" style={{ marginLeft: tokens.spacingHorizontalS }} />}
         </div>,
@@ -681,18 +681,20 @@ function MlExperimentEditorBody({ item, id }: { item: FabricItemType; id: string
                         <MetricStepChart metricLabel={detailMetric} series={[{ runId: selectedRun.runId, label: selectedRun.runName || selectedRun.runId, color: compareColor(0), points: detailHistory }]} />
                       )}
                       {selectedRun.metrics.length > 0 && (
-                        <Table aria-label="Latest metric values" size="small">
-                          <TableHeader><TableRow><TableHeaderCell>Metric</TableHeaderCell><TableHeaderCell>Latest value</TableHeaderCell><TableHeaderCell>Step</TableHeaderCell></TableRow></TableHeader>
-                          <TableBody>
-                            {selectedRun.metrics.map((m) => (
-                              <TableRow key={m.key}>
-                                <TableCell className={s.mono}>{m.key}</TableCell>
-                                <TableCell className={s.mono}>{m.value}</TableCell>
-                                <TableCell className={s.mono}>{m.step ?? '—'}</TableCell>
-                              </TableRow>
-                            ))}
-                          </TableBody>
-                        </Table>
+                        <div style={{ overflowX: 'auto', maxWidth: '100%' }}>
+                          <Table aria-label="Latest metric values" size="small">
+                            <TableHeader><TableRow><TableHeaderCell>Metric</TableHeaderCell><TableHeaderCell>Latest value</TableHeaderCell><TableHeaderCell>Step</TableHeaderCell></TableRow></TableHeader>
+                            <TableBody>
+                              {selectedRun.metrics.map((m) => (
+                                <TableRow key={m.key}>
+                                  <TableCell className={s.mono}>{m.key}</TableCell>
+                                  <TableCell className={s.mono}>{m.value}</TableCell>
+                                  <TableCell className={s.mono}>{m.step ?? '—'}</TableCell>
+                                </TableRow>
+                              ))}
+                            </TableBody>
+                          </Table>
+                        </div>
                       )}
                     </div>
                   )}
@@ -701,14 +703,16 @@ function MlExperimentEditorBody({ item, id }: { item: FabricItemType; id: string
                     selectedRun.params.length === 0
                       ? <Caption1 style={{ color: tokens.colorNeutralForeground3 }}>No params logged.</Caption1>
                       : (
-                        <Table aria-label="Run params" size="small">
-                          <TableHeader><TableRow><TableHeaderCell>Key</TableHeaderCell><TableHeaderCell>Value</TableHeaderCell></TableRow></TableHeader>
-                          <TableBody>
-                            {selectedRun.params.map((p) => (
-                              <TableRow key={p.key}><TableCell className={s.mono}>{p.key}</TableCell><TableCell className={s.mono}>{p.value}</TableCell></TableRow>
-                            ))}
-                          </TableBody>
-                        </Table>
+                        <div style={{ overflowX: 'auto', maxWidth: '100%' }}>
+                          <Table aria-label="Run params" size="small">
+                            <TableHeader><TableRow><TableHeaderCell>Key</TableHeaderCell><TableHeaderCell>Value</TableHeaderCell></TableRow></TableHeader>
+                            <TableBody>
+                              {selectedRun.params.map((p) => (
+                                <TableRow key={p.key}><TableCell className={s.mono}>{p.key}</TableCell><TableCell className={s.mono}>{p.value}</TableCell></TableRow>
+                              ))}
+                            </TableBody>
+                          </Table>
+                        </div>
                       )
                   )}
 
@@ -717,14 +721,16 @@ function MlExperimentEditorBody({ item, id }: { item: FabricItemType; id: string
                     return tags.length === 0
                       ? <Caption1 style={{ color: tokens.colorNeutralForeground3 }}>No user tags (mlflow.* system tags hidden).</Caption1>
                       : (
-                        <Table aria-label="Run tags" size="small">
-                          <TableHeader><TableRow><TableHeaderCell>Key</TableHeaderCell><TableHeaderCell>Value</TableHeaderCell></TableRow></TableHeader>
-                          <TableBody>
-                            {tags.map((t) => (
-                              <TableRow key={t.key}><TableCell className={s.mono}>{t.key}</TableCell><TableCell className={s.mono}>{t.value}</TableCell></TableRow>
-                            ))}
-                          </TableBody>
-                        </Table>
+                        <div style={{ overflowX: 'auto', maxWidth: '100%' }}>
+                          <Table aria-label="Run tags" size="small">
+                            <TableHeader><TableRow><TableHeaderCell>Key</TableHeaderCell><TableHeaderCell>Value</TableHeaderCell></TableRow></TableHeader>
+                            <TableBody>
+                              {tags.map((t) => (
+                                <TableRow key={t.key}><TableCell className={s.mono}>{t.key}</TableCell><TableCell className={s.mono}>{t.value}</TableCell></TableRow>
+                              ))}
+                            </TableBody>
+                          </Table>
+                        </div>
                       );
                   })()}
 

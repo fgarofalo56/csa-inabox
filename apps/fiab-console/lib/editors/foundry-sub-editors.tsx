@@ -51,10 +51,12 @@ const useStyles = makeStyles({
   pad: { padding: tokens.spacingVerticalL, display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalM, minHeight: 0, flex: 1 },
   toolbar: { display: 'flex', gap: tokens.spacingHorizontalM, alignItems: 'center', flexWrap: 'wrap' },
   monaco: {
-    width: '100%', minHeight: '220px',
+    width: '100%', maxWidth: '100%', minHeight: '220px', boxSizing: 'border-box',
     fontFamily: 'Consolas, "Cascadia Code", monospace', fontSize: tokens.fontSizeBase300, padding: tokens.spacingVerticalM,
     border: `1px solid ${tokens.colorNeutralStroke2}`, borderRadius: tokens.borderRadiusMedium,
     backgroundColor: tokens.colorNeutralBackground3, color: tokens.colorNeutralForeground1,
+    // Long single-line JSON / receipts must wrap + stay bounded, never run off-screen.
+    whiteSpace: 'pre-wrap', overflowWrap: 'anywhere', wordBreak: 'break-word', overflow: 'auto',
     resize: 'vertical',
   },
   tableWrap: { overflow: 'auto', maxHeight: '480px', border: `1px solid ${tokens.colorNeutralStroke2}`, borderRadius: tokens.borderRadiusMedium },
@@ -552,7 +554,7 @@ export function PromptFlowEditor({ item, id }: { item: FabricItemType; id: strin
                   </div>
                 )}
                 <Subtitle2 style={{ marginTop: tokens.spacingVerticalS }}>Final output</Subtitle2>
-                <pre className={s.monaco} style={{ minHeight: 80 }}>{JSON.stringify(finalOutput, null, 2)}</pre>
+                <pre className={s.monaco} style={{ minHeight: 80, maxHeight: 360 }}>{JSON.stringify(finalOutput, null, 2)}</pre>
               </div>
             ) : <ErrorBar msg={runResult.error} hint={runResult.hint} notDeployed={runResult.notDeployed} />
           )}
@@ -871,7 +873,7 @@ export function ContentSafetyEditor({ item, id }: { item: FabricItemType; id: st
                 <Button appearance="primary" onClick={() => analyze('image')} disabled={busy || !imgB64}>Analyze image</Button>
               </div>
               {result && (result.ok
-                ? <pre className={s.monaco}>{JSON.stringify(result.result, null, 2)}</pre>
+                ? <pre className={s.monaco} style={{ maxHeight: 420 }}>{JSON.stringify(result.result, null, 2)}</pre>
                 : <ErrorBar msg={result.error} hint={result.hint} notDeployed={result.notDeployed} />)}
             </>
           )

@@ -57,18 +57,21 @@ const useStyles = makeStyles({
   // small form-specific helpers — no primitive covers these.
   muted: { color: tokens.colorNeutralForeground3 },
   mutedBlock: { color: tokens.colorNeutralForeground3, display: 'block', marginBottom: tokens.spacingVerticalM },
-  cellStack: { display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalXXS, minWidth: 0 },
+  cellStack: {
+    display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalXXS,
+    minWidth: 0, overflowWrap: 'anywhere', wordBreak: 'break-word',
+  },
   formHead: {
     display: 'flex', alignItems: 'center', gap: tokens.spacingHorizontalS,
     marginBottom: tokens.spacingVerticalS, marginTop: tokens.spacingVerticalL,
   },
   formHeadIcon: { color: tokens.colorBrandForeground1, flexShrink: 0 },
   registerGrid: {
-    display: 'grid', gridTemplateColumns: '1fr auto',
+    display: 'grid', gridTemplateColumns: 'minmax(0, 1fr) auto',
     gap: tokens.spacingHorizontalM, alignItems: 'end',
   },
   scanGrid: {
-    display: 'grid', gridTemplateColumns: '1fr 1fr',
+    display: 'grid', gridTemplateColumns: 'minmax(0, 1fr) minmax(0, 1fr)',
     gap: tokens.spacingHorizontalM, marginTop: tokens.spacingVerticalS,
   },
   receipt: {

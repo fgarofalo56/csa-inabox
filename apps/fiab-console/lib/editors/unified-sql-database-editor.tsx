@@ -136,7 +136,7 @@ const useStyles = makeStyles({
   cell: { fontFamily: 'Consolas, monospace', fontSize: tokens.fontSizeBase200, whiteSpace: 'nowrap' },
   treePad: { padding: tokens.spacingVerticalS, display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalS },
   formRow: { display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalXS },
-  formGrid: { display: 'grid', gridTemplateColumns: '1fr 1fr', gap: tokens.spacingHorizontalM },
+  formGrid: { display: 'grid', gridTemplateColumns: 'repeat(2, minmax(0, 1fr))', gap: tokens.spacingHorizontalM },
   select: {
     padding: tokens.spacingVerticalXS, borderRadius: tokens.borderRadiusMedium, border: `1px solid ${tokens.colorNeutralStroke2}`,
     background: tokens.colorNeutralBackground1, color: tokens.colorNeutralForeground1,
@@ -148,7 +148,7 @@ const useStyles = makeStyles({
     flex: 1, minHeight: '360px', border: `1px solid ${tokens.colorNeutralStroke2}`,
     borderRadius: tokens.borderRadiusMedium, overflow: 'hidden',
   },
-  ruleGrid: { display: 'grid', gridTemplateColumns: '2fr 1fr 1fr auto', gap: tokens.spacingHorizontalM, alignItems: 'end' },
+  ruleGrid: { display: 'grid', gridTemplateColumns: 'minmax(0, 2fr) minmax(0, 1fr) minmax(0, 1fr) auto', gap: tokens.spacingHorizontalM, alignItems: 'end' },
   // ---- Saved queries panel ----
   qpToolbar: { display: 'flex', gap: tokens.spacingHorizontalS, alignItems: 'center', flexWrap: 'wrap' },
   qpFolders: { display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalL, marginTop: tokens.spacingVerticalXS },
@@ -164,10 +164,10 @@ const useStyles = makeStyles({
   qpMeta: { color: tokens.colorNeutralForeground3, fontSize: tokens.fontSizeBase100, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' },
   qpEmpty: { color: tokens.colorNeutralForeground3, fontStyle: 'italic', padding: `${tokens.spacingVerticalS} 0` },
   // ── Copilot side pane (Query tab) ──
-  queryRow: { display: 'flex', gap: tokens.spacingHorizontalM, alignItems: 'stretch', minHeight: 0 },
-  queryMain: { flex: 1, minWidth: 0, display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalS },
+  queryRow: { display: 'flex', gap: tokens.spacingHorizontalM, alignItems: 'stretch', minHeight: 0, flexWrap: 'wrap' },
+  queryMain: { flex: 1, minWidth: '320px', display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalS },
   copilotPane: {
-    width: '340px', flexShrink: 0, display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalS,
+    flexGrow: 0, flexShrink: 1, flexBasis: '340px', minWidth: 0, maxWidth: '100%', display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalS,
     border: `1px solid ${tokens.colorNeutralStroke2}`, borderRadius: tokens.borderRadiusLarge, padding: tokens.spacingVerticalS,
     background: tokens.colorNeutralBackground2, maxHeight: '560px',
   },
@@ -1745,7 +1745,7 @@ export function UnifiedSqlDatabaseEditor({ item, id }: { item: FabricItemType; i
               <div className={s.toolbar}>
                 <Badge appearance="filled" color="brand">{family === 'postgres' ? 'PostgreSQL' : family === 'managed-instance' ? 'SQL MI' : 'Azure SQL'}</Badge>
                 <Caption1>server: <strong>{server || 'not set'}</strong>{family !== 'managed-instance' && <>, db: <strong>{database || 'not set'}</strong></>}</Caption1>
-                <div style={{ marginLeft: 'auto', display: 'flex', gap: tokens.spacingVerticalS }}>
+                <div style={{ marginLeft: 'auto', display: 'flex', flexWrap: 'wrap', gap: tokens.spacingHorizontalS }}>
                   <Tooltip content={family !== 'azure-sql' ? 'SQL Copilot is Azure SQL (T-SQL) only' : !(server && database) ? 'Connect a server + database first' : 'Fix / Explain / NL→T-SQL + inline ghost text'} relationship="label">
                     <Button appearance={copilotOpen ? 'primary' : 'outline'} icon={copilotOpen ? <Sparkle20Filled /> : <Sparkle20Regular />}
                       onClick={() => setCopilotOpen((v) => !v)} disabled={family !== 'azure-sql'}>
@@ -2124,7 +2124,7 @@ export function UnifiedSqlDatabaseEditor({ item, id }: { item: FabricItemType; i
                 <MessageBar intent="info">
                   <MessageBarBody>
                     <MessageBarTitle>One-time: grant the factory managed identity write access</MessageBarTitle>
-                    <code style={{ fontSize: tokens.fontSizeBase100, whiteSpace: 'pre-wrap' }}>{getDataMsg.factoryMiPrincipalHint}</code>
+                    <code style={{ display: 'block', maxWidth: '100%', fontSize: tokens.fontSizeBase100, whiteSpace: 'pre-wrap', overflowWrap: 'anywhere', wordBreak: 'break-word' }}>{getDataMsg.factoryMiPrincipalHint}</code>
                   </MessageBarBody>
                 </MessageBar>
               )}
@@ -2230,7 +2230,7 @@ export function UnifiedSqlDatabaseEditor({ item, id }: { item: FabricItemType; i
                         </Caption1>
                         {t.openrowset && (
                           <div className={s.cell} style={{ whiteSpace: 'pre-wrap', display: 'flex', gap: tokens.spacingVerticalXS, alignItems: 'flex-start' }}>
-                            <code style={{ flex: 1 }}>{t.openrowset}</code>
+                            <code style={{ flex: 1, minWidth: 0, overflowWrap: 'anywhere', wordBreak: 'break-word' }}>{t.openrowset}</code>
                             <Tooltip content="Copy Synapse Serverless query" relationship="label">
                               <Button size="small" appearance="subtle" icon={<Copy20Regular />}
                                 onClick={() => navigator.clipboard?.writeText(String(t.openrowset))} />

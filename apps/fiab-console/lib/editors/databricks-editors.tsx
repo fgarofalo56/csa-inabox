@@ -97,6 +97,7 @@ const useStyles = makeStyles({
   },
   cellPre: {
     fontFamily: 'Consolas, monospace', fontSize: tokens.fontSizeBase200, whiteSpace: 'pre-wrap',
+    overflowWrap: 'anywhere', wordBreak: 'break-word',
     margin: 0, maxHeight: '320px', overflow: 'auto', color: tokens.colorNeutralForeground1,
   },
   // ---- Unity Catalog write-path dialog layout (tokenized, no raw inline styles) ----
@@ -2835,6 +2836,7 @@ export function DatabricksSqlWarehouseEditor({ item, id }: { item: FabricItemTyp
                       {profileData.plans != null && (
                         <pre style={{
                           fontFamily: 'Consolas, monospace', fontSize: tokens.fontSizeBase100, overflow: 'auto',
+                          whiteSpace: 'pre-wrap', overflowWrap: 'anywhere', wordBreak: 'break-word',
                           maxHeight: 320, backgroundColor: tokens.colorNeutralBackground3,
                           padding: tokens.spacingVerticalS, borderRadius: tokens.borderRadiusMedium, margin: 0,
                         }}>

@@ -393,18 +393,18 @@ function GremlinExplorerPanel({ id }: { id: string }) {
   // LOOM_COSMOS_GREMLIN_ENDPOINT; this client mirror is informational only.
   const endpoint = process.env.NEXT_PUBLIC_LOOM_COSMOS_GREMLIN_ENDPOINT || '';
   return (
-    <div style={{ display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalM, minHeight: 0 }}>
+    <div style={{ display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalM, flex: 1, minHeight: 0 }}>
       <MessageBar intent={endpoint ? 'info' : 'warning'}>
         <MessageBarBody>
           <MessageBarTitle>Cosmos Gremlin (graph) API</MessageBarTitle>
           {endpoint ? (
-            <>Connected to <code>{endpoint}</code> (server-bound via <code>LOOM_COSMOS_GREMLIN_ENDPOINT</code>).
+            <>Connected to <code style={{ overflowWrap: 'anywhere', wordBreak: 'break-word' }}>{endpoint}</code> (server-bound via <code style={{ overflowWrap: 'anywhere', wordBreak: 'break-word' }}>LOOM_COSMOS_GREMLIN_ENDPOINT</code>).
               Run a traversal below — <code>g.V()</code>/<code>g.E()</code> results render on the
               force-directed canvas; <code>addV</code>/<code>addE</code> persist to the live graph.</>
           ) : (
             <>No Gremlin runtime endpoint is bound. The Gremlin API needs a dedicated
               <strong> EnableGremlin</strong> account (deploy{' '}
-              <code>cosmos-graph-vector.bicep</code>), then set <code>LOOM_COSMOS_GREMLIN_ENDPOINT</code>
+              <code style={{ overflowWrap: 'anywhere', wordBreak: 'break-word' }}>cosmos-graph-vector.bicep</code>), then set <code style={{ overflowWrap: 'anywhere', wordBreak: 'break-word' }}>LOOM_COSMOS_GREMLIN_ENDPOINT</code>
               {' '}on the Console Container App. The canvas below still renders and reports the precise
               gate returned by the backend.</>
           )}

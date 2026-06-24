@@ -50,14 +50,14 @@ import type { RibbonTab } from '@/lib/components/ribbon';
 const useStyles = makeStyles({
   pad: { padding: tokens.spacingVerticalL, display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalM },
   monaco: {
-    width: '100%', minHeight: '180px',
+    width: '100%', minHeight: '180px', maxWidth: '100%', boxSizing: 'border-box',
     fontFamily: 'Consolas, "Cascadia Code", monospace',
     fontSize: tokens.fontSizeBase300, padding: tokens.spacingVerticalM,
     border: `1px solid ${tokens.colorNeutralStroke2}`,
     borderRadius: tokens.borderRadiusMedium,
     backgroundColor: tokens.colorNeutralBackground3,
     color: tokens.colorNeutralForeground1,
-    resize: 'vertical',
+    resize: 'vertical', overflowWrap: 'anywhere',
   },
   card: { padding: tokens.spacingVerticalM, border: `1px solid ${tokens.colorNeutralStroke2}`, borderRadius: tokens.borderRadiusLarge },
 });
@@ -618,6 +618,7 @@ function MlModelEditorBody({ item, id }: { item: FabricItemType; id: string }) {
                           </MessageBarBody>
                         </MessageBar>
                       )}
+                      <div style={{ overflowX: 'auto', maxWidth: '100%' }}>
                       <Table aria-label="Model versions" size="small">
                         <TableHeader><TableRow>
                           <TableHeaderCell>Version</TableHeaderCell>
@@ -645,6 +646,7 @@ function MlModelEditorBody({ item, id }: { item: FabricItemType; id: string }) {
                           })}
                         </TableBody>
                       </Table>
+                      </div>
                     </>
                   )}
 
@@ -671,6 +673,7 @@ function MlModelEditorBody({ item, id }: { item: FabricItemType; id: string }) {
                       {endpoints.length === 0
                         ? <Caption1 style={{ color: tokens.colorNeutralForeground3 }}>No managed online endpoints in this workspace yet.</Caption1>
                         : (
+                          <div style={{ overflowX: 'auto', maxWidth: '100%' }}>
                           <Table aria-label="Online endpoints" size="small">
                             <TableHeader><TableRow>
                               <TableHeaderCell>Endpoint</TableHeaderCell>
@@ -689,6 +692,7 @@ function MlModelEditorBody({ item, id }: { item: FabricItemType; id: string }) {
                               ))}
                             </TableBody>
                           </Table>
+                          </div>
                         )}
                     </>
                   )}

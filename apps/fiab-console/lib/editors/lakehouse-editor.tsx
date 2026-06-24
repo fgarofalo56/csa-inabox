@@ -2936,7 +2936,7 @@ export function LakehouseEditor({ item, id }: Props) {
                                   {bundleDeltaTables.map((t) => (
                                     <TableRow key={t.name}>
                                       <TableCell><strong>{t.name}</strong></TableCell>
-                                      <TableCell><code style={{ fontSize: tokens.fontSizeBase100, whiteSpace: 'pre-wrap' }}>{t.ddl}</code></TableCell>
+                                      <TableCell><code style={{ fontSize: tokens.fontSizeBase100, whiteSpace: 'pre-wrap', overflowWrap: 'anywhere' }}>{t.ddl}</code></TableCell>
                                       <TableCell className={s.cell}>{t.sampleRows?.length ?? 0}</TableCell>
                                       <TableCell>
                                         <Menu>
@@ -3417,7 +3417,7 @@ export function LakehouseEditor({ item, id }: Props) {
                                       <CloudLink20Regular style={{ verticalAlign: 'middle', marginRight: 4 }} />
                                       <strong>{sc.name}</strong>
                                     </TableCell>
-                                    <TableCell><code style={{ fontSize: tokens.fontSizeBase100 }}>{sc.target}</code></TableCell>
+                                    <TableCell><code style={{ fontSize: tokens.fontSizeBase100, overflowWrap: 'anywhere', wordBreak: 'break-word' }}>{sc.target}</code></TableCell>
                                     <TableCell>{sc.description || '—'}</TableCell>
                                     <TableCell>
                                       {live ? (
@@ -3465,7 +3465,7 @@ export function LakehouseEditor({ item, id }: Props) {
                               <CloudLink20Regular style={{ verticalAlign: 'middle', marginRight: 4 }} />
                               <strong>{sc.name}</strong>
                             </TableCell>
-                            <TableCell><code style={{ fontSize: tokens.fontSizeBase100 }}>{sc.fullPath}</code></TableCell>
+                            <TableCell><code style={{ fontSize: tokens.fontSizeBase100, overflowWrap: 'anywhere', wordBreak: 'break-word' }}>{sc.fullPath}</code></TableCell>
                             <TableCell>
                               <Badge appearance="outline" color={sc.targetType === 'adls' || sc.targetType === 'internal' ? 'brand' : 'warning'}>
                                 {sc.targetType}
@@ -3690,7 +3690,7 @@ export function LakehouseEditor({ item, id }: Props) {
                   {scStep === 1 && (
                     <>
                       <Caption1>Choose the source to virtualize into <strong>{shortcutLakehouseId}</strong>. ADLS Gen2 and internal Loom lakehouse work on the Console UAMI; external clouds (S3, GCS, Dataverse) store credentials in Key Vault.</Caption1>
-                      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: tokens.spacingHorizontalS, marginTop: tokens.spacingVerticalM }}>
+                      <div style={{ display: 'grid', gridTemplateColumns: 'minmax(0,1fr) minmax(0,1fr)', gap: tokens.spacingHorizontalS, marginTop: tokens.spacingVerticalM }}>
                         {SHORTCUT_SOURCE_CARDS.map((src) => (
                           <Button
                             key={src.type}
@@ -3768,7 +3768,7 @@ export function LakehouseEditor({ item, id }: Props) {
                                 </Field>
                               </div>
                               {scAcctHost && scAdlsContainer && (
-                                <Caption1 style={{ fontFamily: 'Consolas, monospace', color: tokens.colorBrandForeground1 }}>
+                                <Caption1 style={{ fontFamily: 'Consolas, monospace', color: tokens.colorBrandForeground1, overflowWrap: 'anywhere', wordBreak: 'break-word' }}>
                                   abfss://{scAdlsContainer}@{scAcctHost}/{(extCreds.selectedPath || scAdlsPath).replace(/^\/+/, '')}
                                 </Caption1>
                               )}
@@ -3837,7 +3837,7 @@ export function LakehouseEditor({ item, id }: Props) {
                             />
                           </Field>
                           {(scType === 's3' || scType === 'gcs') && extCreds.bucket && (
-                            <Caption1 style={{ fontFamily: 'Consolas, monospace', color: tokens.colorBrandForeground1 }}>
+                            <Caption1 style={{ fontFamily: 'Consolas, monospace', color: tokens.colorBrandForeground1, overflowWrap: 'anywhere', wordBreak: 'break-word' }}>
                               {scType === 's3' ? 's3' : 'gs'}://{extCreds.bucket}/{(extCreds.selectedPath || '').replace(/^\/+/, '')}
                             </Caption1>
                           )}
@@ -3942,7 +3942,7 @@ export function LakehouseEditor({ item, id }: Props) {
                       <MessageBar intent="info">
                         <MessageBarBody>
                           Will create <strong>{scKind === 'tables' ? 'Tables' : 'Files'}/{[scParentPath.trim(), scName.trim()].filter(Boolean).join('/')}</strong>
-                          {' '}pointing at <code>{scType === 'internal' ? `internal://${scInternalContainer}${scInternalPath ? `/${scInternalPath.replace(/^\/+/, '')}` : ''}` : scType === 'sharepoint' ? (scSpSelection ? `sharepoint://${scSpSelection.driveId}/${scSpSelection.path}` : '(select a SharePoint/OneDrive item)') : (scTargetUri || '(set the target)')}</code>.
+                          {' '}pointing at <code style={{ overflowWrap: 'anywhere', wordBreak: 'break-word' }}>{scType === 'internal' ? `internal://${scInternalContainer}${scInternalPath ? `/${scInternalPath.replace(/^\/+/, '')}` : ''}` : scType === 'sharepoint' ? (scSpSelection ? `sharepoint://${scSpSelection.driveId}/${scSpSelection.path}` : '(select a SharePoint/OneDrive item)') : (scTargetUri || '(set the target)')}</code>.
                           {scKind === 'tables' && ' A real external table is registered and queryable from the SQL tab.'}
                         </MessageBarBody>
                       </MessageBar>
@@ -4090,12 +4090,12 @@ export function LakehouseEditor({ item, id }: Props) {
                     <Table size="small">
                       <TableBody>
                         <TableRow><TableCell><strong>Name</strong></TableCell><TableCell className={s.cell}>{leafName(propsEntry.name)}</TableCell></TableRow>
-                        <TableRow><TableCell><strong>Path</strong></TableCell><TableCell className={s.cell}>/{propsEntry.name}</TableCell></TableRow>
+                        <TableRow><TableCell><strong>Path</strong></TableCell><TableCell className={s.cell} style={{ whiteSpace: 'normal', overflowWrap: 'anywhere', wordBreak: 'break-word' }}>/{propsEntry.name}</TableCell></TableRow>
                         <TableRow><TableCell><strong>Container</strong></TableCell><TableCell className={s.cell}>{activeContainer}</TableCell></TableRow>
                         <TableRow><TableCell><strong>Type</strong></TableCell><TableCell>{propsEntry.isDirectory ? 'Directory' : 'File'}</TableCell></TableRow>
                         {!propsEntry.isDirectory && <TableRow><TableCell><strong>Size</strong></TableCell><TableCell className={s.cell}>{formatBytes(propsEntry.size)}</TableCell></TableRow>}
                         <TableRow><TableCell><strong>Last modified</strong></TableCell><TableCell className={s.cell}>{propsEntry.lastModified ? new Date(propsEntry.lastModified).toLocaleString() : '—'}</TableCell></TableRow>
-                        {propsEntry.etag && <TableRow><TableCell><strong>ETag</strong></TableCell><TableCell className={s.cell}>{propsEntry.etag}</TableCell></TableRow>}
+                        {propsEntry.etag && <TableRow><TableCell><strong>ETag</strong></TableCell><TableCell className={s.cell} style={{ whiteSpace: 'normal', overflowWrap: 'anywhere', wordBreak: 'break-word' }}>{propsEntry.etag}</TableCell></TableRow>}
                       </TableBody>
                     </Table>
                   )}
@@ -4167,7 +4167,7 @@ export function LakehouseEditor({ item, id }: Props) {
                         </Table>
                       </div>
                       <Subtitle2>Grant access</Subtitle2>
-                      <div style={{ display: 'grid', gridTemplateColumns: '2fr 1fr 2fr', gap: tokens.spacingHorizontalM, marginTop: tokens.spacingVerticalS }}>
+                      <div style={{ display: 'grid', gridTemplateColumns: 'minmax(0,2fr) minmax(0,1fr) minmax(0,2fr)', gap: tokens.spacingHorizontalM, marginTop: tokens.spacingVerticalS }}>
                         <Field label="Principal object id" required>
                           <Input value={newPrincipalId} onChange={(_, d) => setNewPrincipalId(d.value)} placeholder="11111111-2222-3333-4444-555555555555" />
                         </Field>
@@ -4234,7 +4234,7 @@ export function LakehouseEditor({ item, id }: Props) {
                         </Table>
                       </div>
                       <Subtitle2>Grant table SELECT</Subtitle2>
-                      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: tokens.spacingHorizontalM, marginTop: tokens.spacingVerticalS }}>
+                      <div style={{ display: 'grid', gridTemplateColumns: 'minmax(0,1fr) minmax(0,1fr)', gap: tokens.spacingHorizontalM, marginTop: tokens.spacingVerticalS }}>
                         {renderPrincipalPicker()}
                         <Field label="Table / view" required>
                           <Dropdown
@@ -4288,7 +4288,7 @@ export function LakehouseEditor({ item, id }: Props) {
                         </Table>
                       </div>
                       <Subtitle2>Grant column SELECT</Subtitle2>
-                      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: tokens.spacingHorizontalM, marginTop: tokens.spacingVerticalS }}>
+                      <div style={{ display: 'grid', gridTemplateColumns: 'minmax(0,1fr) minmax(0,1fr)', gap: tokens.spacingHorizontalM, marginTop: tokens.spacingVerticalS }}>
                         {renderPrincipalPicker()}
                         <Field label="Table / view" required>
                           <Dropdown
@@ -4306,7 +4306,7 @@ export function LakehouseEditor({ item, id }: Props) {
                       {selTableId != null && (
                         <div style={{ marginTop: tokens.spacingVerticalM }}>
                           <Caption1>Columns to expose ({selColIds.length} selected)</Caption1>
-                          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: tokens.spacingHorizontalXS, maxHeight: 200, overflow: 'auto', border: `1px solid ${tokens.colorNeutralStroke2}`, borderRadius: tokens.borderRadiusMedium, padding: tokens.spacingVerticalS, marginTop: tokens.spacingVerticalXS }}>
+                          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, minmax(0,1fr))', gap: tokens.spacingHorizontalXS, maxHeight: 200, overflow: 'auto', border: `1px solid ${tokens.colorNeutralStroke2}`, borderRadius: tokens.borderRadiusMedium, padding: tokens.spacingVerticalS, marginTop: tokens.spacingVerticalXS }}>
                             {sqlCols.length === 0 && <Caption1>No columns.</Caption1>}
                             {sqlCols.map((c) => (
                               <Checkbox
@@ -4358,7 +4358,7 @@ export function LakehouseEditor({ item, id }: Props) {
                         </Table>
                       </div>
                       <Subtitle2>Create row-level security policy</Subtitle2>
-                      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: tokens.spacingHorizontalM, marginTop: tokens.spacingVerticalS }}>
+                      <div style={{ display: 'grid', gridTemplateColumns: 'minmax(0,1fr) minmax(0,1fr) minmax(0,1fr)', gap: tokens.spacingHorizontalM, marginTop: tokens.spacingVerticalS }}>
                         <Field label="Table" required>
                           <Dropdown
                             placeholder="Select a table"
@@ -4541,7 +4541,7 @@ export function LakehouseEditor({ item, id }: Props) {
                       <MessageBarBody>
                         <MessageBarTitle>Clustering applied</MessageBarTitle>
                         ALTER TABLE … CLUSTER BY ran. Run OPTIMIZE in a notebook to re-cluster existing rows.
-                        {lcSql ? <><br /><code style={{ fontSize: tokens.fontSizeBase100 }}>{lcSql}</code></> : null}
+                        {lcSql ? <><br /><code style={{ fontSize: tokens.fontSizeBase100, whiteSpace: 'pre-wrap', overflowWrap: 'anywhere', display: 'block' }}>{lcSql}</code></> : null}
                       </MessageBarBody>
                     </MessageBar>
                   )}
@@ -4659,7 +4659,7 @@ export function LakehouseEditor({ item, id }: Props) {
                         UniForm is on. Delta generates Iceberg V2 metadata after the next write transaction
                         (or immediately for existing data). If the table has deletion vectors, run{' '}
                         <code>REORG TABLE … APPLY (UPGRADE UNIFORM(ICEBERG_COMPAT_VERSION=2))</code> in a notebook.
-                        {icebergSql ? <><br /><code style={{ fontSize: tokens.fontSizeBase100 }}>{icebergSql}</code></> : null}
+                        {icebergSql ? <><br /><code style={{ fontSize: tokens.fontSizeBase100, whiteSpace: 'pre-wrap', overflowWrap: 'anywhere', display: 'block' }}>{icebergSql}</code></> : null}
                       </MessageBarBody>
                     </MessageBar>
                   )}

@@ -53,6 +53,10 @@ const useStyles = makeStyles({
   hint: { color: tokens.colorNeutralForeground3 },
   // Sticky header keeps the runs columns visible while scrolling history.
   runsHeader: { position: 'sticky', top: 0, zIndex: 1, backgroundColor: tokens.colorNeutralBackground1 },
+  // Long backend error / submit-status strings must wrap, never push the drawer wide.
+  statusText: { overflowWrap: 'anywhere', wordBreak: 'break-word', minWidth: 0 },
+  // The Livy result string can be long; let it wrap inside its cell.
+  resultCell: { overflowWrap: 'anywhere', wordBreak: 'break-word', maxWidth: '220px' },
 });
 
 type SparkLanguage = 'PySpark' | 'Spark' | 'SparkR';
@@ -228,7 +232,7 @@ export function SynapseSparkEditor({ name, onClose }: SynapseSparkEditorProps) {
         ) : (
           <div className={s.body}>
             {error && (
-              <MessageBar intent="error"><MessageBarBody><MessageBarTitle>Error</MessageBarTitle>{error}</MessageBarBody></MessageBar>
+              <MessageBar intent="error"><MessageBarBody className={s.statusText}><MessageBarTitle>Error</MessageBarTitle>{error}</MessageBarBody></MessageBar>
             )}
 
             <div className={s.toolbar}>
@@ -242,10 +246,10 @@ export function SynapseSparkEditor({ name, onClose }: SynapseSparkEditorProps) {
             </div>
 
             {submitGate && (
-              <MessageBar intent="warning"><MessageBarBody><MessageBarTitle>Cannot submit yet</MessageBarTitle>{submitGate}</MessageBarBody></MessageBar>
+              <MessageBar intent="warning"><MessageBarBody className={s.statusText}><MessageBarTitle>Cannot submit yet</MessageBarTitle>{submitGate}</MessageBarBody></MessageBar>
             )}
             {submitMsg && (
-              <MessageBar intent="info"><MessageBarBody>{submitMsg}</MessageBarBody></MessageBar>
+              <MessageBar intent="info"><MessageBarBody className={s.statusText}>{submitMsg}</MessageBarBody></MessageBar>
             )}
 
             <TabList selectedValue={tab} onTabSelect={(_, d) => setTab(d.value as any)}>
@@ -348,7 +352,7 @@ export function SynapseSparkEditor({ name, onClose }: SynapseSparkEditorProps) {
                           <TableCell>
                             <Badge size="small" appearance="tint" color={r.state === 'success' ? 'success' : r.state === 'error' || r.state === 'dead' || r.state === 'killed' ? 'danger' : 'informative'}>{r.state || '—'}</Badge>
                           </TableCell>
-                          <TableCell>{r.result || '—'}</TableCell>
+                          <TableCell className={s.resultCell}>{r.result || '—'}</TableCell>
                           <TableCell className={s.appIdCell} title={r.appId || undefined}>{r.appId || '—'}</TableCell>
                           <TableCell>{r.submittedAt || '—'}</TableCell>
                         </TableRow>

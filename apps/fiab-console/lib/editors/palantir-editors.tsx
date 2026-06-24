@@ -39,9 +39,9 @@ import type { FabricItemType } from '@/lib/catalog/fabric-item-types';
 import type { RibbonTab } from '@/lib/components/ribbon';
 
 const useStyles = makeStyles({
-  pad: { padding: tokens.spacingVerticalL, display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalL },
+  pad: { padding: tokens.spacingVerticalL, display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalL, minWidth: 0 },
   section: {
-    display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalM,
+    display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalM, minWidth: 0,
     padding: tokens.spacingVerticalL, borderRadius: tokens.borderRadiusXLarge,
     border: `1px solid ${tokens.colorNeutralStroke2}`, backgroundColor: tokens.colorNeutralBackground1,
   },
@@ -50,18 +50,18 @@ const useStyles = makeStyles({
     display: 'flex', alignItems: 'center', justifyContent: 'center', width: '32px', height: '32px',
     borderRadius: tokens.borderRadiusMedium, backgroundColor: tokens.colorBrandBackground2, color: tokens.colorBrandForeground1,
   },
-  hint: { color: tokens.colorNeutralForeground3 },
+  hint: { color: tokens.colorNeutralForeground3, minWidth: 0, overflowWrap: 'anywhere', wordBreak: 'break-word' },
   addBar: {
     display: 'flex', gap: tokens.spacingHorizontalS, alignItems: 'flex-end', flexWrap: 'wrap',
     padding: tokens.spacingVerticalM, borderRadius: tokens.borderRadiusLarge, backgroundColor: tokens.colorNeutralBackground2,
   },
   row: {
-    display: 'flex', alignItems: 'center', gap: tokens.spacingHorizontalS,
+    display: 'flex', alignItems: 'center', gap: tokens.spacingHorizontalS, flexWrap: 'wrap', minWidth: 0,
     padding: tokens.spacingVerticalS, borderRadius: tokens.borderRadiusMedium,
     border: `1px solid ${tokens.colorNeutralStroke2}`, backgroundColor: tokens.colorNeutralBackground1,
   },
   spacer: { flex: 1 },
-  grid2: { display: 'grid', gridTemplateColumns: '1fr 1fr', gap: tokens.spacingHorizontalM },
+  grid2: { display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(min(280px, 100%), 1fr))', gap: tokens.spacingHorizontalM },
   modeBar: {
     display: 'flex', alignItems: 'center', gap: tokens.spacingHorizontalM, flexWrap: 'wrap',
     padding: `${tokens.spacingVerticalS} ${tokens.spacingHorizontalM}`,
@@ -74,7 +74,7 @@ const useStyles = makeStyles({
     backgroundColor: tokens.colorNeutralBackground2, border: `1px solid ${tokens.colorNeutralStroke2}`,
   },
   codeWrap: {
-    display: 'flex', flexDirection: 'column', overflow: 'hidden',
+    display: 'flex', flexDirection: 'column', overflow: 'hidden', minWidth: 0,
     borderRadius: tokens.borderRadiusMedium, border: `1px solid ${tokens.colorNeutralStroke2}`,
   },
   codeHead: {
@@ -84,10 +84,11 @@ const useStyles = makeStyles({
   },
   code: {
     fontFamily: tokens.fontFamilyMonospace, fontSize: tokens.fontSizeBase200, lineHeight: '18px',
-    whiteSpace: 'pre', overflow: 'auto', maxHeight: '420px', margin: 0,
+    whiteSpace: 'pre', overflow: 'auto', minHeight: '120px', maxHeight: '60vh', margin: 0,
+    resize: 'vertical', boxSizing: 'border-box',
     padding: tokens.spacingVerticalM, backgroundColor: tokens.colorNeutralBackground2,
   },
-  tableWrap: { overflowX: 'auto', borderRadius: tokens.borderRadiusMedium, border: `1px solid ${tokens.colorNeutralStroke2}` },
+  tableWrap: { overflowX: 'auto', minWidth: 0, borderRadius: tokens.borderRadiusMedium, border: `1px solid ${tokens.colorNeutralStroke2}` },
   empty: {
     display: 'flex', alignItems: 'center', justifyContent: 'center', gap: tokens.spacingHorizontalS,
     padding: tokens.spacingVerticalXL, color: tokens.colorNeutralForeground3, textAlign: 'center',
@@ -100,7 +101,7 @@ const useStyles = makeStyles({
   },
   mutedCaption: { color: tokens.colorNeutralForeground3 },
   errorCaption: { color: tokens.colorPaletteRedForeground1 },
-  dialogForm: { display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalM, minWidth: '420px' },
+  dialogForm: { display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalM, minWidth: 'min(420px, 100%)', maxWidth: '100%' },
   dialogScroll: { maxHeight: '52vh', overflowY: 'auto', paddingRight: tokens.spacingHorizontalXS },
 });
 
@@ -1019,7 +1020,7 @@ export function HealthCheckEditor({ item, id }: { item: FabricItemType; id: stri
             {checkType === 'freshness' && <Field label="Stale after (minutes)"><Input type="number" value={thresholdMinutes} onChange={(_, d) => setThresholdMinutes(d.value)} /></Field>}
             {checkType === 'rowcount' && <Field label="Min rows in window"><Input type="number" value={minRows} onChange={(_, d) => setMinRows(d.value)} /></Field>}
           </div>
-          {checkType === 'custom' && <Field label="KQL condition (fires when it returns rows)"><Textarea value={customKql} onChange={(_, d) => setCustomKql(d.value)} placeholder={'MyTable\n| where TimeGenerated > ago(1h)\n| summarize n=count()\n| where n == 0'} rows={4} /></Field>}
+          {checkType === 'custom' && <Field label="KQL condition (fires when it returns rows)"><Textarea value={customKql} onChange={(_, d) => setCustomKql(d.value)} placeholder={'MyTable\n| where TimeGenerated > ago(1h)\n| summarize n=count()\n| where n == 0'} rows={4} resize="vertical" /></Field>}
           <div className={s.addBar}>
             <Field label="Evaluate every"><Dropdown value={evalFreq} selectedOptions={[evalFreq]} onOptionSelect={(_, d) => setEvalFreq(d.optionValue || 'PT5M')}>
               <Option value="PT5M">5 minutes</Option><Option value="PT15M">15 minutes</Option><Option value="PT1H">1 hour</Option>

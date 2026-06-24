@@ -133,7 +133,7 @@ function ResultsPanel({
     return (
       <div className={s.resultBox}>
         <MessageBar intent={result.canceled ? 'warning' : 'error'}>
-          <MessageBarBody>
+          <MessageBarBody style={{ overflowWrap: 'anywhere', wordBreak: 'break-word', minWidth: 0 }}>
             <MessageBarTitle>{result.canceled ? 'Query canceled' : 'Query failed'}</MessageBarTitle>
             {result.error || 'Unknown error'} {result.code && <Caption1>· {result.code}</Caption1>}
           </MessageBarBody>
@@ -1189,12 +1189,12 @@ export function SynapseDedicatedSqlPoolEditor({ item, id }: { item: FabricItemTy
           <ResultsPanel result={result} loading={loading} />
           {ctasReceipt && (
             <MessageBar intent="success">
-              <MessageBarBody><MessageBarTitle>Table created</MessageBarTitle>{ctasReceipt}</MessageBarBody>
+              <MessageBarBody style={{ overflowWrap: 'anywhere', wordBreak: 'break-word', minWidth: 0 }}><MessageBarTitle>Table created</MessageBarTitle>{ctasReceipt}</MessageBarBody>
             </MessageBar>
           )}
           {siReceipt && (
             <MessageBar intent="success">
-              <MessageBarBody><MessageBarTitle>Table materialized</MessageBarTitle>{siReceipt}</MessageBarBody>
+              <MessageBarBody style={{ overflowWrap: 'anywhere', wordBreak: 'break-word', minWidth: 0 }}><MessageBarTitle>Table materialized</MessageBarTitle>{siReceipt}</MessageBarBody>
             </MessageBar>
           )}
           </>
@@ -1252,7 +1252,7 @@ export function SynapseDedicatedSqlPoolEditor({ item, id }: { item: FabricItemTy
                   {qhBusy && <Spinner size="tiny" label="Loading…" labelPosition="after" />}
                   {qhError && (
                     <MessageBar intent="error">
-                      <MessageBarBody><MessageBarTitle>Failed</MessageBarTitle>{qhError}</MessageBarBody>
+                      <MessageBarBody style={{ overflowWrap: 'anywhere', wordBreak: 'break-word', minWidth: 0 }}><MessageBarTitle>Failed</MessageBarTitle>{qhError}</MessageBarBody>
                     </MessageBar>
                   )}
                   <div className={s.tableWrap} style={{ maxHeight: '55vh' }}>
@@ -1313,7 +1313,7 @@ export function SynapseDedicatedSqlPoolEditor({ item, id }: { item: FabricItemTy
                 <DialogContent>
                   <div style={{ display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalM }}>
                     {ctasError && (
-                      <MessageBar intent="error"><MessageBarBody><MessageBarTitle>CTAS failed</MessageBarTitle>{ctasError}</MessageBarBody></MessageBar>
+                      <MessageBar intent="error"><MessageBarBody style={{ overflowWrap: 'anywhere', wordBreak: 'break-word', minWidth: 0 }}><MessageBarTitle>CTAS failed</MessageBarTitle>{ctasError}</MessageBarBody></MessageBar>
                     )}
                     <Caption1>
                       Emits <code>CREATE TABLE [schema].[name] WITH (DISTRIBUTION = …, …INDEX) AS SELECT …</code>.
@@ -1378,7 +1378,7 @@ export function SynapseDedicatedSqlPoolEditor({ item, id }: { item: FabricItemTy
                 <DialogContent>
                   <div style={{ display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalM }}>
                     {siError && (
-                      <MessageBar intent="error"><MessageBarBody><MessageBarTitle>SELECT INTO failed</MessageBarTitle>{siError}</MessageBarBody></MessageBar>
+                      <MessageBar intent="error"><MessageBarBody style={{ overflowWrap: 'anywhere', wordBreak: 'break-word', minWidth: 0 }}><MessageBarTitle>SELECT INTO failed</MessageBarTitle>{siError}</MessageBarBody></MessageBar>
                     )}
                     <MessageBar intent="warning">
                       <MessageBarBody>

@@ -44,8 +44,10 @@ import { downloadBlob, resultsToCsv, resultsToJson } from './components/result-e
 
 const useStyles = makeStyles({
   pad: { padding: tokens.spacingVerticalL, display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalM, minHeight: 0, flex: 1 },
-  toolbar: { display: 'flex', gap: tokens.spacingHorizontalM, alignItems: 'center', flexWrap: 'wrap' },
-  connect: { display: 'flex', gap: tokens.spacingHorizontalS, alignItems: 'center' },
+  toolbar: { display: 'flex', gap: tokens.spacingHorizontalM, alignItems: 'center', flexWrap: 'wrap', minWidth: 0 },
+  connect: { display: 'flex', gap: tokens.spacingHorizontalS, alignItems: 'center', minWidth: 0 },
+  endpointBadge: { maxWidth: '100%', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' },
+  errorText: { overflowWrap: 'anywhere', wordBreak: 'break-word' },
   editorWrap: { minHeight: '220px' },
   resultBox: { borderTop: `1px solid ${tokens.colorNeutralStroke2}`, paddingTop: tokens.spacingVerticalM, minHeight: '200px', display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalS },
   resultMeta: { display: 'flex', gap: tokens.spacingHorizontalM, alignItems: 'center', flexWrap: 'wrap' },
@@ -54,6 +56,7 @@ const useStyles = makeStyles({
   cell: { fontFamily: 'Consolas, monospace', fontSize: tokens.fontSizeBase200, whiteSpace: 'nowrap' },
   messages: {
     fontFamily: 'Consolas, monospace', fontSize: tokens.fontSizeBase200, whiteSpace: 'pre-wrap',
+    overflowWrap: 'anywhere', wordBreak: 'break-word',
     backgroundColor: tokens.colorNeutralBackground3, borderRadius: tokens.borderRadiusMedium, padding: tokens.spacingVerticalM,
     color: tokens.colorNeutralForeground2, maxHeight: '280px', overflow: 'auto', margin: 0,
   },
@@ -419,7 +422,8 @@ export function SynapseServerlessSqlEditor({ item, id }: { item: FabricItemType;
                 {databases.map((db) => <Option key={db} value={db}>{db}</Option>)}
               </Dropdown>
             </div>
-            <Badge appearance="outline" color={endpoint ? 'success' : 'severe'}>
+            <Badge appearance="outline" color={endpoint ? 'success' : 'severe'}
+              className={s.endpointBadge} title={endpoint || 'endpoint not configured'}>
               {endpoint || 'endpoint not configured'}
             </Badge>
             <Button appearance="primary" icon={<Play20Regular />} disabled={loading} onClick={run} style={{ marginLeft: 'auto' }}>
@@ -504,7 +508,7 @@ export function SynapseServerlessSqlEditor({ item, id }: { item: FabricItemType;
                 <Caption1>Messages (PRINT, RAISERROR, DDL receipts and errors) appear here after you Run.</Caption1>
               ) : !result.ok ? (
                 <MessageBar intent="error">
-                  <MessageBarBody>
+                  <MessageBarBody className={s.errorText}>
                     <MessageBarTitle>Query failed{result.sqlNumber ? ` (Msg ${result.sqlNumber})` : ''}</MessageBarTitle>
                     {result.error || 'Unknown error'}{result.code ? ` · ${result.code}` : ''}
                   </MessageBarBody>

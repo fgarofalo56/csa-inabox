@@ -62,6 +62,9 @@ const useStyles = makeStyles({
     fontVariantNumeric: 'tabular-nums',
   },
   emptyNote: { display: 'block', marginTop: tokens.spacingVerticalS, color: tokens.colorNeutralForeground3 },
+  // Long backend error / gate strings (Kusto / ARM messages) must wrap, not push
+  // the MessageBar — and the drawer — into horizontal overflow.
+  msgText: { minWidth: 0, overflowWrap: 'anywhere', wordBreak: 'break-word' },
 });
 
 interface KqlScriptProps { content?: { query?: string; currentConnection?: { poolName?: string; databaseName?: string; type?: string } } }
@@ -189,7 +192,7 @@ export function SynapseKqlEditor({ name, onClose }: SynapseKqlEditorProps) {
         ) : (
           <div className={s.body}>
             {error && (
-              <MessageBar intent="error"><MessageBarBody><MessageBarTitle>Error</MessageBarTitle>{error}</MessageBarBody></MessageBar>
+              <MessageBar intent="error"><MessageBarBody className={s.msgText}><MessageBarTitle>Error</MessageBarTitle>{error}</MessageBarBody></MessageBar>
             )}
 
             <div className={s.conn}>
@@ -239,10 +242,10 @@ export function SynapseKqlEditor({ name, onClose }: SynapseKqlEditorProps) {
             </Field>
 
             {runGate && (
-              <MessageBar intent="warning"><MessageBarBody><MessageBarTitle>Connection needed</MessageBarTitle>{runGate}</MessageBarBody></MessageBar>
+              <MessageBar intent="warning"><MessageBarBody className={s.msgText}><MessageBarTitle>Connection needed</MessageBarTitle>{runGate}</MessageBarBody></MessageBar>
             )}
             {runError && (
-              <MessageBar intent="error"><MessageBarBody><MessageBarTitle>Query failed</MessageBarTitle>{runError}</MessageBarBody></MessageBar>
+              <MessageBar intent="error"><MessageBarBody className={s.msgText}><MessageBarTitle>Query failed</MessageBarTitle>{runError}</MessageBarBody></MessageBar>
             )}
 
             {result && (

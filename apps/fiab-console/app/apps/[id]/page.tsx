@@ -46,6 +46,8 @@ const useStyles = makeStyles({
     marginBottom: tokens.spacingVerticalXXL,
     color: tokens.colorNeutralForeground2,
     maxWidth: '76ch',
+    overflowWrap: 'anywhere',
+    wordBreak: 'break-word',
   },
   items: {
     display: 'grid',
@@ -134,7 +136,7 @@ export default function AppDetailPage() {
     return (
       <PageShell title="App not found">
         <MessageBar intent="warning">
-          <MessageBarBody>No app with id <code>{params.id}</code> in this tenant.</MessageBarBody>
+          <MessageBarBody style={{ overflowWrap: 'anywhere', wordBreak: 'break-word', minWidth: 0 }}>No app with id <code>{params.id}</code> in this tenant.</MessageBarBody>
         </MessageBar>
         <div style={{ marginTop: tokens.spacingVerticalL }}>
           <Button icon={<ArrowLeft24Regular />} onClick={() => router.push('/apps')}>

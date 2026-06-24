@@ -69,13 +69,13 @@ const useObsStyles = makeStyles({
   gaugeHead: { display: 'flex', alignItems: 'baseline', gap: tokens.spacingHorizontalS },
   cardGrid: { display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(320px, 1fr))', gap: tokens.spacingHorizontalM },
   actionGrid: { display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(280px, 1fr))', gap: tokens.spacingHorizontalM },
-  card: { padding: tokens.spacingHorizontalM },
+  card: { padding: tokens.spacingHorizontalM, minWidth: 0 },
   kql: {
     fontFamily: 'Consolas, "Cascadia Code", monospace', fontSize: tokens.fontSizeBase100,
     color: tokens.colorNeutralForeground3, whiteSpace: 'pre-wrap', wordBreak: 'break-all',
     margin: 0, marginTop: tokens.spacingVerticalXS,
   },
-  scroll: { overflowX: 'auto', maxHeight: '260px' },
+  scroll: { overflowX: 'auto', maxWidth: '100%', maxHeight: '260px' },
 });
 
 // ------------------------------------------------------------------
@@ -217,7 +217,7 @@ function DataProductTryItPanel({ id }: { id: string }) {
       <Caption1 style={{ color: tokens.colorNeutralForeground3 }}>
         Preview this data product&rsquo;s live data — a read-only sample (top 25 rows) from its backing Azure Data Explorer table.
       </Caption1>
-      {result?.kql && <pre style={{ fontSize: tokens.fontSizeBase200, backgroundColor: tokens.colorNeutralBackground3, padding: tokens.spacingVerticalS, borderRadius: tokens.borderRadiusMedium, overflowX: 'auto' }}>{result.kql}</pre>}
+      {result?.kql && <pre style={{ fontSize: tokens.fontSizeBase200, backgroundColor: tokens.colorNeutralBackground3, padding: tokens.spacingVerticalS, borderRadius: tokens.borderRadiusMedium, overflowX: 'auto', maxWidth: '100%', margin: 0 }}>{result.kql}</pre>}
       <div style={{ display: 'flex', gap: tokens.spacingHorizontalM, alignItems: 'center' }}>
         <Button appearance="primary" icon={loading ? undefined : <Play20Regular />} disabled={loading} onClick={run}>
           {loading ? 'Running…' : result ? 'Run again' : 'Run sample query'}
@@ -516,8 +516,8 @@ const useStyles = makeStyles({
   actions: { display: 'flex', alignItems: 'center', gap: tokens.spacingHorizontalS },
   body: { display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalL },
   card: { padding: tokens.spacingHorizontalM },
-  grid2: { display: 'grid', gridTemplateColumns: 'max-content 1fr', columnGap: tokens.spacingHorizontalL, rowGap: tokens.spacingVerticalS, alignItems: 'center' },
-  attrGrid: { display: 'grid', gridTemplateColumns: 'minmax(160px, 240px) 1fr', columnGap: tokens.spacingHorizontalL, rowGap: tokens.spacingVerticalS },
+  grid2: { display: 'grid', gridTemplateColumns: 'max-content minmax(0, 1fr)', columnGap: tokens.spacingHorizontalL, rowGap: tokens.spacingVerticalS, alignItems: 'center' },
+  attrGrid: { display: 'grid', gridTemplateColumns: 'minmax(160px, 240px) minmax(0, 1fr)', columnGap: tokens.spacingHorizontalL, rowGap: tokens.spacingVerticalS, overflowWrap: 'anywhere', wordBreak: 'break-word' },
   sectionTitle: { display: 'flex', alignItems: 'center', gap: tokens.spacingHorizontalS, marginTop: tokens.spacingVerticalXS },
   contactRow: { display: 'flex', alignItems: 'center', gap: tokens.spacingHorizontalS, marginBottom: tokens.spacingVerticalS, flexWrap: 'wrap' },
   contactName: { minWidth: '180px' },
@@ -1004,9 +1004,9 @@ const useConsumerStyles = makeStyles({
   ownerLine: { color: tokens.colorNeutralForeground3 },
   actions: { marginTop: tokens.spacingVerticalS },
   tabContent: { paddingTop: tokens.spacingVerticalM, display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalM },
-  metaGrid: { display: 'grid', gridTemplateColumns: 'max-content 1fr', columnGap: tokens.spacingHorizontalXL, rowGap: tokens.spacingVerticalS, alignItems: 'baseline' },
+  metaGrid: { display: 'grid', gridTemplateColumns: 'max-content minmax(0, 1fr)', columnGap: tokens.spacingHorizontalXL, rowGap: tokens.spacingVerticalS, alignItems: 'baseline', overflowWrap: 'anywhere', wordBreak: 'break-word' },
   metaLabel: { color: tokens.colorNeutralForeground3, fontWeight: tokens.fontWeightSemibold },
-  card: { padding: tokens.spacingHorizontalL, display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalS },
+  card: { padding: tokens.spacingHorizontalL, display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalS, minWidth: 0 },
   sectionTitle: { display: 'flex', alignItems: 'center', gap: tokens.spacingHorizontalXS, fontWeight: tokens.fontWeightSemibold },
   chips: { display: 'flex', flexWrap: 'wrap', gap: tokens.spacingHorizontalXS },
   empty: { color: tokens.colorNeutralForeground3 },
@@ -1021,10 +1021,11 @@ const useConsumerStyles = makeStyles({
     padding: `${tokens.spacingVerticalXS} ${tokens.spacingHorizontalS}`,
     whiteSpace: 'pre' as const,
     overflowX: 'auto' as const,
+    maxWidth: '100%',
     margin: 0,
   },
   tryItActions: { display: 'flex', alignItems: 'center', gap: tokens.spacingHorizontalS, flexWrap: 'wrap' as const },
-  tryItScroll: { overflowX: 'auto', maxHeight: '360px', marginTop: tokens.spacingVerticalS },
+  tryItScroll: { overflowX: 'auto', maxWidth: '100%', maxHeight: '360px', marginTop: tokens.spacingVerticalS },
 });
 
 const STATUS_COLOR: Record<AccessRequestStatus, 'warning' | 'success' | 'danger' | 'brand'> = {

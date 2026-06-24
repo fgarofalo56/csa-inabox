@@ -46,8 +46,12 @@ import { LineChart, BarChart, StatTile, type LineSeries, type Bar } from '@/lib/
 const useStyles = makeStyles({
   pad: { padding: tokens.spacingVerticalL, display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalM, minHeight: 0, flex: 1 },
   tabBar: { padding: `${tokens.spacingVerticalS} ${tokens.spacingHorizontalL} 0`, borderBottom: `1px solid ${tokens.colorNeutralStroke2}`, overflowX: 'auto' },
-  metaGrid: { display: 'grid', gridTemplateColumns: 'auto 1fr', gap: `${tokens.spacingVerticalXS} ${tokens.spacingHorizontalL}`, alignItems: 'baseline' },
+  // `minmax(0,1fr)` so a long unbroken value (Discovery URL, endpoint, principal
+  // id) wraps instead of forcing the grid — and therefore the page — wider.
+  metaGrid: { display: 'grid', gridTemplateColumns: 'auto minmax(0, 1fr)', gap: `${tokens.spacingVerticalXS} ${tokens.spacingHorizontalL}`, alignItems: 'baseline' },
   metaKey: { color: tokens.colorNeutralForeground3, fontSize: tokens.fontSizeBase200 },
+  // Value cells in metaGrid: wrap long strings rather than overflow horizontally.
+  metaVal: { minWidth: 0, overflowWrap: 'anywhere', wordBreak: 'break-word' },
   tableWrap: { overflow: 'auto', maxHeight: '460px', border: `1px solid ${tokens.colorNeutralStroke2}`, borderRadius: tokens.borderRadiusMedium },
   cell: { fontSize: tokens.fontSizeBase200, whiteSpace: 'nowrap', maxWidth: '360px', overflow: 'hidden', textOverflow: 'ellipsis' },
   empty: { padding: tokens.spacingVerticalL, color: tokens.colorNeutralForeground3, fontStyle: 'italic' },
@@ -76,6 +80,10 @@ const useStyles = makeStyles({
     borderRadius: tokens.borderRadiusLarge,
     backgroundColor: tokens.colorNeutralBackground1,
     boxShadow: tokens.shadow2,
+    // Fixed-width SVG charts (width={420}/{620}) can exceed a narrow grid track;
+    // scroll inside the card rather than pushing the page wider.
+    minWidth: 0,
+    overflowX: 'auto',
   },
   chartTitle: { fontWeight: 600 },
   chartCaption: { color: tokens.colorNeutralForeground3 },
@@ -183,7 +191,7 @@ function OverviewPanel({ nonce, onWorkspace }: { nonce: number; onWorkspace?: (w
         {rows.map(([k, v]) => (
           <>
             <span key={`k-${k}`} className={s.metaKey}>{k}</span>
-            <span key={`v-${k}`}>{v ?? '—'}</span>
+            <span key={`v-${k}`} className={s.metaVal}>{v ?? '—'}</span>
           </>
         ))}
       </div>
@@ -533,9 +541,9 @@ function NetworkingPanel({ active, nonce, acct }: { active: boolean; nonce: numb
           </div>
           {msg && <MessageBar intent="info"><MessageBarBody>{msg}</MessageBarBody></MessageBar>}
           <div className={s.metaGrid}>
-            <span className={s.metaKey}>Default ACL action</span><span>{net.defaultAction || '—'}</span>
-            <span className={s.metaKey}>IP rules</span><span>{(Array.isArray(net.ipRules) ? net.ipRules : []).join(', ') || '—'}</span>
-            <span className={s.metaKey}>VNet rules</span><span>{(Array.isArray(net.virtualNetworkRules) ? net.virtualNetworkRules : []).length}</span>
+            <span className={s.metaKey}>Default ACL action</span><span className={s.metaVal}>{net.defaultAction || '—'}</span>
+            <span className={s.metaKey}>IP rules</span><span className={s.metaVal}>{(Array.isArray(net.ipRules) ? net.ipRules : []).join(', ') || '—'}</span>
+            <span className={s.metaKey}>VNet rules</span><span className={s.metaVal}>{(Array.isArray(net.virtualNetworkRules) ? net.virtualNetworkRules : []).length}</span>
           </div>
           <Subtitle2 style={{ marginTop: tokens.spacingVerticalS }}>Private endpoints</Subtitle2>
           {(Array.isArray(net.privateEndpoints) ? net.privateEndpoints : []).length === 0 ? <EmptyText>No private endpoint connections.</EmptyText> : (
@@ -904,8 +912,8 @@ function CreateEvalDialog({ open, onClose, onCreated, acct }: { open: boolean; o
               <Body1 style={{ fontWeight: 600 }}>Testing criteria (graders)</Body1>
               {rows.map((c, i) => (
                 <div key={i} style={{ display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalXS, padding: tokens.spacingVerticalS, border: `1px solid ${tokens.colorNeutralStroke2}`, borderRadius: tokens.borderRadiusLarge }}>
-                  <div style={{ display: 'flex', gap: tokens.spacingHorizontalS, alignItems: 'flex-end' }}>
-                    <Field label="Grader type" style={{ flex: 1 }}>
+                  <div style={{ display: 'flex', gap: tokens.spacingHorizontalS, alignItems: 'flex-end', flexWrap: 'wrap' }}>
+                    <Field label="Grader type" style={{ flex: 1, minWidth: 0 }}>
                       <Dropdown value={GRADER_LABEL[c.type]} selectedOptions={[c.type]} onOptionSelect={(_, d) => d.optionValue && setRow(i, { type: d.optionValue as CriterionRow['type'] })}>
                         {(Object.keys(GRADER_LABEL) as CriterionRow['type'][]).map((t) => <Option key={t} value={t}>{GRADER_LABEL[t]}</Option>)}
                       </Dropdown>
@@ -1059,8 +1067,8 @@ function EvalDetailCard({ evalItem }: { evalItem: EvalSummary }) {
   return (
     <div className={s.detailCard}>
       <Body1 style={{ fontWeight: 600 }}>Evaluation details</Body1>
-      <div style={{ display: 'grid', gridTemplateColumns: 'auto 1fr', gap: `${tokens.spacingVerticalXXS} ${tokens.spacingHorizontalL}`, alignItems: 'baseline' }}>
-        <Caption1>ID</Caption1><Caption1 style={{ fontFamily: 'monospace' }}>{evalItem.id}</Caption1>
+      <div style={{ display: 'grid', gridTemplateColumns: 'auto minmax(0, 1fr)', gap: `${tokens.spacingVerticalXXS} ${tokens.spacingHorizontalL}`, alignItems: 'baseline' }}>
+        <Caption1>ID</Caption1><Caption1 style={{ fontFamily: 'monospace', overflowWrap: 'anywhere', wordBreak: 'break-word' }}>{evalItem.id}</Caption1>
         <Caption1>Data-source type</Caption1><Caption1>{dsc?.type || 'custom'}</Caption1>
         <Caption1>Item schema fields</Caption1>
         <div style={{ display: 'flex', gap: tokens.spacingHorizontalXS, flexWrap: 'wrap' }}>
@@ -1558,7 +1566,7 @@ function FineTuningPanel({ active, nonce, acct }: { active: boolean; nonce: numb
       {jobsState.error && <GateBar msg={jobsState.error} hint={jobsState.hint} notDeployed={jobsState.notDeployed} />}
       {msg && <MessageBar intent={msg.intent}><MessageBarBody>{msg.text}{msg.hint ? <><br /><Caption1>{msg.hint}</Caption1></> : null}</MessageBarBody></MessageBar>}
 
-      <div style={{ display: 'grid', gridTemplateColumns: 'minmax(280px, 360px) 1fr', gap: tokens.spacingHorizontalL, alignItems: 'start' }}>
+      <div style={{ display: 'grid', gridTemplateColumns: 'minmax(280px, 360px) minmax(0, 1fr)', gap: tokens.spacingHorizontalL, alignItems: 'start' }}>
         {/* Upload training data */}
         <div style={{ display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalS, padding: tokens.spacingVerticalM, border: `1px solid ${tokens.colorNeutralStroke2}`, borderRadius: tokens.borderRadiusLarge }}>
           <Body1 style={{ fontWeight: 600 }}>Upload training data</Body1>

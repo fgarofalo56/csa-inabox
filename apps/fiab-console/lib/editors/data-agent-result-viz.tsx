@@ -37,27 +37,34 @@ const useStyles = makeStyles({
     marginTop: tokens.spacingVerticalS,
   },
   head: {
-    display: 'flex', alignItems: 'center', gap: tokens.spacingHorizontalS,
+    display: 'flex', alignItems: 'center', flexWrap: 'wrap', gap: tokens.spacingHorizontalS,
     padding: `${tokens.spacingVerticalXS} ${tokens.spacingHorizontalM}`,
     borderBottom: `1px solid ${tokens.colorNeutralStroke3}`,
     background: tokens.colorNeutralBackground3,
   },
-  headTitle: { fontWeight: tokens.fontWeightSemibold, color: tokens.colorNeutralForeground1, fontSize: tokens.fontSizeBase200 },
+  headTitle: {
+    fontWeight: tokens.fontWeightSemibold, color: tokens.colorNeutralForeground1, fontSize: tokens.fontSizeBase200,
+    minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
+  },
   spacer: { flex: 1 },
   toggle: { display: 'inline-flex', gap: tokens.spacingHorizontalXXS },
   body: { padding: tokens.spacingHorizontalM },
   // KPI
   kpiWrap: { display: 'flex', flexWrap: 'wrap', gap: tokens.spacingHorizontalL },
   kpi: {
-    display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalXXS, minWidth: '120px',
+    display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalXXS, minWidth: '120px', maxWidth: '100%',
     padding: tokens.spacingHorizontalM, borderRadius: tokens.borderRadiusMedium,
     background: tokens.colorNeutralBackground1, border: `1px solid ${tokens.colorNeutralStroke2}`,
   },
   kpiValue: {
     fontSize: tokens.fontSizeBase500, fontWeight: tokens.fontWeightBold,
     color: tokens.colorBrandForeground1, fontVariantNumeric: 'tabular-nums',
+    overflowWrap: 'anywhere', wordBreak: 'break-word',
   },
-  kpiLabel: { color: tokens.colorNeutralForeground3, fontSize: tokens.fontSizeBase200, textTransform: 'uppercase', letterSpacing: '0.04em' },
+  kpiLabel: {
+    color: tokens.colorNeutralForeground3, fontSize: tokens.fontSizeBase200, textTransform: 'uppercase', letterSpacing: '0.04em',
+    overflowWrap: 'anywhere', wordBreak: 'break-word',
+  },
   // table
   tableWrap: { overflowX: 'auto', maxHeight: '320px', overflowY: 'auto' },
   table: { borderCollapse: 'collapse', width: '100%', fontSize: tokens.fontSizeBase200 },

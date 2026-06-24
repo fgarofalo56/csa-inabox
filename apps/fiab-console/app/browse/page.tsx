@@ -87,6 +87,10 @@ const useStyles = makeStyles({
     fontSize: '13px',
     textAlign: 'center',
     lineHeight: 1.6,
+    // Guard against a long unbroken search query (rendered inline below)
+    // forcing horizontal overflow of this dashed container.
+    overflowWrap: 'anywhere',
+    wordBreak: 'break-word',
   },
   spinnerWrap: {
     padding: tokens.spacingVerticalM,

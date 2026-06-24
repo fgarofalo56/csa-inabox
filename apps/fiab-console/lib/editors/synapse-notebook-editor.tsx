@@ -85,16 +85,18 @@ const useStyles = makeStyles({
   },
   output: {
     fontFamily: 'Consolas, "Cascadia Code", monospace', fontSize: tokens.fontSizeBase200, whiteSpace: 'pre-wrap',
+    overflowWrap: 'anywhere', wordBreak: 'break-word', maxWidth: '100%', minWidth: 0, boxSizing: 'border-box',
     padding: tokens.spacingVerticalS, borderTop: `1px solid ${tokens.colorNeutralStroke2}`,
     backgroundColor: tokens.colorNeutralBackground3, maxHeight: '280px', overflow: 'auto',
   },
   outputErr: { color: tokens.colorPaletteRedForeground1, backgroundColor: tokens.colorPaletteRedBackground1 },
-  md: { padding: tokens.spacingVerticalM, fontSize: tokens.fontSizeBase300, lineHeight: 1.5, color: tokens.colorNeutralForeground1 },
+  md: { padding: tokens.spacingVerticalM, fontSize: tokens.fontSizeBase300, lineHeight: 1.5, color: tokens.colorNeutralForeground1, overflowWrap: 'anywhere', wordBreak: 'break-word', maxWidth: '100%', minWidth: 0 },
   tag: { fontFamily: 'Consolas, monospace', color: tokens.colorNeutralForeground3, fontSize: tokens.fontSizeBase100 },
   collapsedHint: {
     fontFamily: 'Consolas, "Cascadia Code", monospace', fontSize: tokens.fontSizeBase200,
     color: tokens.colorNeutralForeground3, padding: `${tokens.spacingVerticalS} ${tokens.spacingHorizontalM}`,
     borderTop: `1px dashed ${tokens.colorNeutralStroke2}`, cursor: 'pointer',
+    overflowWrap: 'anywhere', wordBreak: 'break-word', maxWidth: '100%', minWidth: 0,
   },
   outlineHead: {
     display: 'flex', alignItems: 'center', gap: tokens.spacingHorizontalXS,
@@ -104,6 +106,7 @@ const useStyles = makeStyles({
     display: 'block', width: '100%', textAlign: 'left', cursor: 'pointer',
     padding: `${tokens.spacingVerticalXXS} ${tokens.spacingHorizontalXS}`, borderRadius: tokens.borderRadiusMedium, border: 'none', background: 'none',
     color: tokens.colorNeutralForeground2, fontSize: tokens.fontSizeBase300,
+    overflowWrap: 'anywhere', wordBreak: 'break-word', minWidth: 0, boxSizing: 'border-box',
     ':hover': { backgroundColor: tokens.colorNeutralBackground1Hover },
   },
   outlineEmpty: { padding: `${tokens.spacingVerticalXXS} ${tokens.spacingHorizontalXS}`, color: tokens.colorNeutralForeground3, fontSize: tokens.fontSizeBase200 },
@@ -119,7 +122,9 @@ const useStyles = makeStyles({
   },
   assistResult: {
     fontFamily: 'Consolas, "Cascadia Code", monospace', fontSize: tokens.fontSizeBase200,
-    whiteSpace: 'pre-wrap', margin: 0, overflowX: 'auto',
+    whiteSpace: 'pre-wrap', overflowWrap: 'anywhere', wordBreak: 'break-word',
+    margin: 0, maxWidth: '100%', minWidth: 0, boxSizing: 'border-box',
+    maxHeight: '240px', overflow: 'auto',
   },
 });
 
@@ -1301,7 +1306,7 @@ function NotebookCellView(props: {
               if (e.key === 'Enter' && assistPrompt.trim()) callAssist('generate');
               if (e.key === 'Escape') setAssistView('idle');
             }}
-            style={{ flex: 1 }} autoFocus aria-label="AI code generation prompt" />
+            style={{ flex: 1, minWidth: 0 }} autoFocus aria-label="AI code generation prompt" />
           <Button size="small" appearance="primary" disabled={!assistPrompt.trim()}
             onClick={() => callAssist('generate')}>Generate</Button>
           <Button size="small" onClick={() => { setAssistView('idle'); setAssistPrompt(''); }}>Cancel</Button>

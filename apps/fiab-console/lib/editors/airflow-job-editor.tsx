@@ -343,8 +343,8 @@ export function AirflowJobEditor({ item, id }: Props) {
                 {!active && <Caption1>Select a job first.</Caption1>}
                 {active && (
                   <>
-                    <div style={{ display: 'flex', gap: tokens.spacingHorizontalS, alignItems: 'flex-end', marginBottom: tokens.spacingVerticalM }}>
-                      <Field label="DAG" style={{ minWidth: 280 }}>
+                    <div style={{ display: 'flex', gap: tokens.spacingHorizontalS, alignItems: 'flex-end', marginBottom: tokens.spacingVerticalM, flexWrap: 'wrap' }}>
+                      <Field label="DAG" style={{ minWidth: 280, flex: 1 }}>
                         <Select value={runsDagId} onChange={(_, d) => setRunsDagId(d.value)} disabled={!dags || !dags.length}>
                           {(dags || []).map((d) => <option key={d.dag_id} value={d.dag_id}>{d.dag_id}</option>)}
                           {dags && !dags.length && <option value="">No DAGs found</option>}
@@ -407,7 +407,7 @@ export function AirflowJobEditor({ item, id }: Props) {
               <MessageBar intent="info">
                 <MessageBarBody>
                   <MessageBarTitle>Airflow connections</MessageBarTitle>
-                  Connections (HTTP, AWS, Azure, etc.) are an Airflow-native construct, managed in the Airflow webserver Admin UI. Open <code>{active?.webserverUrl || '(configure URL)'}/connection/list/</code> with the webserver admin role to add or edit them.
+                  Connections (HTTP, AWS, Azure, etc.) are an Airflow-native construct, managed in the Airflow webserver Admin UI. Open <code style={{ overflowWrap: 'anywhere', wordBreak: 'break-word' }}>{active?.webserverUrl || '(configure URL)'}/connection/list/</code> with the webserver admin role to add or edit them.
                 </MessageBarBody>
               </MessageBar>
             )}

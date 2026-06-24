@@ -46,11 +46,11 @@ const useStyles = makeStyles({
   pad: {
     padding: tokens.spacingVerticalL,
     display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalM,
-    minHeight: 0, flex: 1, overflowY: 'auto',
+    minHeight: 0, minWidth: 0, flex: 1, overflowY: 'auto',
   },
   treePad: { padding: tokens.spacingVerticalM, display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalM },
   treeHeader: { display: 'flex', alignItems: 'center', gap: tokens.spacingHorizontalSNudge },
-  hint: { color: tokens.colorNeutralForeground3 },
+  hint: { color: tokens.colorNeutralForeground3, overflowWrap: 'anywhere', wordBreak: 'break-word' },
   field: { display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalXS },
   tabStrip: {
     paddingInline: tokens.spacingHorizontalL,
@@ -67,7 +67,7 @@ const useStyles = makeStyles({
   },
   grow: { flex: 1, minWidth: '160px' },
   narrow: { width: '120px' },
-  graphWrap: { display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalXS },
+  graphWrap: { display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalXS, minWidth: 0, maxWidth: '100%' },
   graphCaption: { color: tokens.colorNeutralForeground3 },
   resultHeader: { display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: tokens.spacingHorizontalM, flexWrap: 'wrap' },
 });
@@ -94,7 +94,7 @@ function GateBar({ result, what }: { result: any; what: string }) {
   const isGate = result.code === 'not_configured' || result.status === 503;
   return (
     <MessageBar intent={isGate ? 'warning' : 'error'}>
-      <MessageBarBody>
+      <MessageBarBody style={{ overflowWrap: 'anywhere', wordBreak: 'break-word', minWidth: 0 }}>
         <MessageBarTitle>{isGate ? `${what} backend not configured` : `${what} failed`}</MessageBarTitle>
         {result.error || 'Unknown error'}
       </MessageBarBody>

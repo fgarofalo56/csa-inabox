@@ -136,7 +136,9 @@ const useStyles = makeStyles({
   stepConnectorDone: { background: tokens.colorPaletteGreenBorder1 },
   fieldRow: { display: 'flex', gap: tokens.spacingHorizontalM, flexWrap: 'wrap' },
   navRow: { display: 'flex', gap: tokens.spacingHorizontalS, justifyContent: 'space-between', marginTop: tokens.spacingVerticalS },
-  reviewGrid: { display: 'grid', gridTemplateColumns: 'max-content 1fr', rowGap: tokens.spacingVerticalXS, columnGap: tokens.spacingHorizontalL, fontSize: tokens.fontSizeBase300 },
+  reviewGrid: { display: 'grid', gridTemplateColumns: 'max-content minmax(0, 1fr)', rowGap: tokens.spacingVerticalXS, columnGap: tokens.spacingHorizontalL, fontSize: tokens.fontSizeBase300 },
+  reviewValue: { minWidth: 0, overflowWrap: 'anywhere', wordBreak: 'break-word' },
+  tableScroll: { overflowX: 'auto', maxWidth: '100%' },
   statusCell: { display: 'inline-flex', alignItems: 'center', gap: tokens.spacingHorizontalXS },
   uriHint: {
     fontFamily: tokens.fontFamilyMonospace,
@@ -649,7 +651,7 @@ export function AutoMlEditor({ item, id }: { item: FabricItemType; id: string })
                 <div className={styles.reviewGrid}>
                   <Caption1>Task</Caption1><Body1>{task}</Body1>
                   <Caption1>Datastore</Caption1><Body1>{datastore || '—'}</Body1>
-                  <Caption1>Training data URI</Caption1><Body1 style={{ fontFamily: 'monospace', fontSize: tokens.fontSizeBase200 }}>{trainingDataUri || '—'}</Body1>
+                  <Caption1>Training data URI</Caption1><Body1 className={styles.reviewValue} style={{ fontFamily: 'monospace', fontSize: tokens.fontSizeBase200 }}>{trainingDataUri || '—'}</Body1>
                   <Caption1>Target column</Caption1><Body1>{targetColumn || '—'}</Body1>
                   {task === 'Forecasting' && (<><Caption1>Time column</Caption1><Body1>{timeColumn || '—'}</Body1></>)}
                   {task === 'Forecasting' && timeSeriesIds.trim() && (<><Caption1>Series IDs</Caption1><Body1>{timeSeriesIds}</Body1></>)}
@@ -726,6 +728,7 @@ export function AutoMlEditor({ item, id }: { item: FabricItemType; id: string })
               </div>
             )}
             {filteredJobs.length > 0 && (
+              <div className={styles.tableScroll}>
               <Table size="small">
                 <TableHeader>
                   <TableRow>
@@ -772,6 +775,7 @@ export function AutoMlEditor({ item, id }: { item: FabricItemType; id: string })
                   })}
                 </TableBody>
               </Table>
+              </div>
             )}
           </div>
         )}

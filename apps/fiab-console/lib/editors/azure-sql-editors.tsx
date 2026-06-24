@@ -723,7 +723,7 @@ export function AzureSqlServerEditor({ item, id }: { item: FabricItemType; id: s
                     </Table>
                   </div>
                   <Subtitle2>Add rule</Subtitle2>
-                  <div style={{ display: 'grid', gridTemplateColumns: '2fr 1fr 1fr', gap: tokens.spacingVerticalM, marginTop: tokens.spacingVerticalS }}>
+                  <div style={{ display: 'grid', gridTemplateColumns: 'minmax(0, 2fr) minmax(0, 1fr) minmax(0, 1fr)', gap: tokens.spacingVerticalM, marginTop: tokens.spacingVerticalS }}>
                     <Field label="Name"><Input value={newRuleName} onChange={(_, d) => setNewRuleName(d.value)} placeholder="allow-corp-vpn" /></Field>
                     <Field label="Start IP"><Input value={newRuleStart} onChange={(_, d) => setNewRuleStart(d.value)} placeholder="0.0.0.0" /></Field>
                     <Field label="End IP"><Input value={newRuleEnd} onChange={(_, d) => setNewRuleEnd(d.value)} placeholder="0.0.0.0" /></Field>
@@ -1204,7 +1204,7 @@ export function AzureSqlDatabaseEditor({ item, id }: { item: FabricItemType; id:
                 </MessageBarBody>
               </MessageBar>
               <Button onClick={toggleMirror} icon={<ShieldKeyhole20Regular />}>Enable / Refresh mirror</Button>
-              {mirrorState && <pre style={{ fontSize: tokens.fontSizeBase200, background: tokens.colorNeutralBackground3, padding: tokens.spacingVerticalS, borderRadius: tokens.borderRadiusMedium }}>{JSON.stringify(mirrorState, null, 2)}</pre>}
+              {mirrorState && <pre style={{ fontSize: tokens.fontSizeBase200, background: tokens.colorNeutralBackground3, padding: tokens.spacingVerticalS, borderRadius: tokens.borderRadiusMedium, maxWidth: '100%', maxHeight: 360, overflow: 'auto', whiteSpace: 'pre-wrap', overflowWrap: 'anywhere', wordBreak: 'break-word', boxSizing: 'border-box', margin: 0 }}>{JSON.stringify(mirrorState, null, 2)}</pre>}
             </>
           )}
           {tab === 'replication' && (
@@ -1232,7 +1232,7 @@ export function AzureSqlDatabaseEditor({ item, id }: { item: FabricItemType; id:
                 </MessageBarBody>
               </MessageBar>
               <Button onClick={probe2025} icon={<Sparkle20Regular />}>Probe engine</Button>
-              {sql2025State && <pre style={{ fontSize: tokens.fontSizeBase200, background: tokens.colorNeutralBackground3, padding: tokens.spacingVerticalS, borderRadius: tokens.borderRadiusMedium }}>{JSON.stringify(sql2025State, null, 2)}</pre>}
+              {sql2025State && <pre style={{ fontSize: tokens.fontSizeBase200, background: tokens.colorNeutralBackground3, padding: tokens.spacingVerticalS, borderRadius: tokens.borderRadiusMedium, maxWidth: '100%', maxHeight: 360, overflow: 'auto', whiteSpace: 'pre-wrap', overflowWrap: 'anywhere', wordBreak: 'break-word', boxSizing: 'border-box', margin: 0 }}>{JSON.stringify(sql2025State, null, 2)}</pre>}
             </>
           )}
 

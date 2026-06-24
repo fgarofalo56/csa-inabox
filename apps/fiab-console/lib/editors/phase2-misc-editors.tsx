@@ -51,9 +51,11 @@ const useStyles = makeStyles({
   status: { display: 'flex', gap: tokens.spacingHorizontalS, alignItems: 'center' },
   resultBox: { marginTop: tokens.spacingVerticalL, borderTop: `1px solid ${tokens.colorNeutralStroke2}`, paddingTop: tokens.spacingVerticalM },
   mono: { fontFamily: 'Consolas, "Cascadia Code", monospace', fontSize: tokens.fontSizeBase200 },
+  msgCell: { overflowWrap: 'anywhere', wordBreak: 'break-word', minWidth: 0, maxWidth: '420px' },
   builderHeader: {
     display: 'flex', alignItems: 'center', gap: tokens.spacingHorizontalS, flexWrap: 'wrap',
     color: tokens.colorNeutralForeground2,
+    minWidth: 0, overflowWrap: 'anywhere', wordBreak: 'break-word',
   },
   emptyState: {
     display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center',
@@ -67,21 +69,22 @@ const useStyles = makeStyles({
   },
   emptyIcon: { fontSize: '28px', color: tokens.colorNeutralForeground4 },
   fileGrid: {
-    display: 'grid', gridTemplateColumns: '260px 1fr', gap: tokens.spacingHorizontalM,
+    display: 'grid', gridTemplateColumns: 'minmax(0, 260px) minmax(0, 1fr)', gap: tokens.spacingHorizontalM,
     minHeight: '360px', alignItems: 'stretch',
   },
   fileList: {
-    display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalXXS,
+    display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalXXS, minWidth: 0,
     border: `1px solid ${tokens.colorNeutralStroke2}`, borderRadius: tokens.borderRadiusMedium,
     backgroundColor: tokens.colorNeutralBackground2,
-    padding: tokens.spacingVerticalXS, overflowY: 'auto', maxHeight: '480px',
+    padding: tokens.spacingVerticalXS, overflow: 'auto', maxHeight: '480px',
   },
   fileBtn: { justifyContent: 'flex-start', fontFamily: tokens.fontFamilyMonospace, fontSize: tokens.fontSizeBase200 },
   filePane: { display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalXS, minWidth: 0 },
   filePaneHeader: {
-    display: 'flex', alignItems: 'center', gap: tokens.spacingHorizontalS,
+    display: 'flex', alignItems: 'center', gap: tokens.spacingHorizontalS, minWidth: 0,
     fontFamily: tokens.fontFamilyMonospace, fontSize: tokens.fontSizeBase200,
     color: tokens.colorNeutralForeground2,
+    overflowWrap: 'anywhere', wordBreak: 'break-word',
   },
   json: {
     width: '100%', minHeight: '120px', padding: tokens.spacingVerticalS,
@@ -845,7 +848,7 @@ export function DbtJobEditor({ item, id }: { item: FabricItemType; id: string })
                           </TableCell>
                           <TableCell>{fmtTs(r.start_time)}</TableCell>
                           <TableCell>{fmtTs(r.end_time)}</TableCell>
-                          <TableCell>{r.state?.state_message || '—'}</TableCell>
+                          <TableCell className={styles.msgCell}>{r.state?.state_message || '—'}</TableCell>
                         </TableRow>
                       ))}
                     </TableBody>

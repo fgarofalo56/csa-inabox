@@ -53,7 +53,7 @@ import { runtimeFromComputeKind, starterCellFor, RUNTIME_LABEL, type ClusterRunt
 // below the component declarations.
 
 const useStyles = makeStyles({
-  pad: { padding: tokens.spacingVerticalL, display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalM, flex: 1, minHeight: 0, position: 'relative' },
+  pad: { padding: tokens.spacingVerticalL, display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalM, flex: 1, minHeight: 0, minWidth: 0, overflowY: 'auto', position: 'relative' },
   // Bottom-align so the label+control groups (Compute backend / Workspace /
   // Compute target / Environment) and the bare action buttons (Refresh / Manage
   // / Import / New) line up on one baseline instead of the buttons floating
@@ -768,14 +768,16 @@ export function NotebookEditor({ item, id }: Props) {
         pollInterval = cold ? 2000 : 600;
         if (p.output) {
           if (p.output.status === 'ok') {
-            const txt = p.output.textPlain || JSON.stringify(p.output.data || {}, null, 2);
-            setRunMsg(`✓ Completed:\n${txt}`);
+            // Keep the status line SHORT — the full cell output renders below
+            // each cell. Dumping textPlain/JSON here ran off-screen.
+            setRunMsg('✓ Completed');
             setSessionStatus('Idle');
           } else if (p.output.status === 'error') {
-            setRunMsg(`✗ Error: ${p.output.ename} ${p.output.evalue}${p.output.traceback ? '\n' + (Array.isArray(p.output.traceback) ? p.output.traceback.join('\n') : p.output.traceback) : ''}`);
+            // Concise error: ename + evalue only (no full traceback blob).
+            setRunMsg(`✗ Error: ${[p.output.ename, p.output.evalue].filter(Boolean).join(' ')}`);
             setSessionStatus('Error');
           } else {
-            setRunMsg(`Completed: ${JSON.stringify(p.output)}`);
+            setRunMsg('✓ Completed');
             setSessionStatus('Idle');
           }
           break;
@@ -1929,7 +1931,7 @@ export function NotebookEditor({ item, id }: Props) {
               </MessageBarBody>
             </MessageBar>
           )}
-          {runMsg && <MessageBar intent="info"><MessageBarBody>{runMsg}</MessageBarBody></MessageBar>}
+          {runMsg && <MessageBar intent="info"><MessageBarBody style={{ overflowWrap: 'anywhere', wordBreak: 'break-word', minWidth: 0 }}>{runMsg}</MessageBarBody></MessageBar>}
 
           {/* Honest receipt: the real Livy session-create body that provisioned
               the running Spark session. numExecutors here is what the session
@@ -1971,6 +1973,8 @@ export function NotebookEditor({ item, id }: Props) {
                       wordBreak: 'break-word',
                       maxWidth: '100%',
                       minWidth: 0,
+                      maxHeight: 220,
+                      overflow: 'auto',
                       boxSizing: 'border-box',
                     }}
                   >{JSON.stringify(sessionReceipt, null, 2)}</code>

@@ -899,7 +899,7 @@ export function DataPipelineEditor({ item, id }: Props) {
               </MessageBar>
               <div style={{
                 display: 'grid',
-                gridTemplateColumns: 'repeat(auto-fill, minmax(220px, 1fr))',
+                gridTemplateColumns: 'repeat(auto-fill, minmax(min(220px, 100%), 1fr))',
                 gap: 12,
               }}>
                 {/* Card: Start with a blank canvas */}
@@ -914,6 +914,7 @@ export function DataPipelineEditor({ item, id }: Props) {
                     borderRadius: tokens.borderRadiusLarge,
                     backgroundColor: tokens.colorNeutralBackground1,
                     display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalS,
+                    minWidth: 0, overflowWrap: 'anywhere',
                   }}
                   onClick={canCreate ? () => setCreateOpen(true) : undefined}
                   onKeyDown={(e) => { if (canCreate && (e.key === 'Enter' || e.key === ' ')) { e.preventDefault(); setCreateOpen(true); } }}
@@ -938,6 +939,7 @@ export function DataPipelineEditor({ item, id }: Props) {
                     borderRadius: tokens.borderRadiusLarge,
                     backgroundColor: tokens.colorNeutralBackground1,
                     display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalS,
+                    minWidth: 0, overflowWrap: 'anywhere',
                   }}
                   onClick={seeding ? undefined : practiceWithSampleData}
                   onKeyDown={(e) => { if (!seeding && (e.key === 'Enter' || e.key === ' ')) { e.preventDefault(); practiceWithSampleData(); } }}
@@ -963,6 +965,7 @@ export function DataPipelineEditor({ item, id }: Props) {
                     borderRadius: tokens.borderRadiusLarge,
                     backgroundColor: tokens.colorNeutralBackground1,
                     display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalS,
+                    minWidth: 0, overflowWrap: 'anywhere',
                   }}
                   onClick={() => setGalleryOpen(true)}
                   onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); setGalleryOpen(true); } }}
@@ -1203,7 +1206,7 @@ export function DataPipelineEditor({ item, id }: Props) {
                     <TableBody>
                       {triggers.map((t) => (
                         <TableRow key={t.name}>
-                          <TableCell><code>{t.name}</code></TableCell>
+                          <TableCell><code style={{ overflowWrap: 'anywhere', wordBreak: 'break-word' }}>{t.name}</code></TableCell>
                           <TableCell>{t.type}</TableCell>
                           <TableCell>
                             <Badge size="small" color={t.runtimeState === 'Started' ? 'success' : 'subtle'}>

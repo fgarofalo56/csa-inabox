@@ -135,7 +135,7 @@ export default function ConnectionsPage() {
         </span>
       ),
     },
-    { key: 'host', label: 'Host', sortable: true, filterable: true, getValue: (c) => c.host || '—', render: (c) => <code style={{ fontSize: 11 }}>{c.host || '—'}</code> },
+    { key: 'host', label: 'Host', sortable: true, filterable: true, getValue: (c) => c.host || '—', render: (c) => <code style={{ fontSize: 11, overflowWrap: 'anywhere', wordBreak: 'break-word', maxWidth: '100%', display: 'inline-block' }}>{c.host || '—'}</code> },
     { key: 'database', label: 'Database', sortable: true, filterable: true, getValue: (c) => c.database || '—', render: (c) => c.database || '—' },
     {
       key: 'actions', label: '', sortable: false, filterable: false, width: 90,

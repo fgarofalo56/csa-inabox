@@ -165,7 +165,13 @@ const useStyles = makeStyles({
     backgroundColor: tokens.colorNeutralBackground3,
     padding: `${tokens.spacingVerticalXXS} ${tokens.spacingHorizontalXS}`,
     borderRadius: tokens.borderRadiusSmall,
+    overflowWrap: 'anywhere',
+    wordBreak: 'break-word',
   },
+  // Long object names / messages / errors must wrap inside table cells, never
+  // push the table (and the whole surface) into horizontal overflow.
+  wrapCell: { overflowWrap: 'anywhere', wordBreak: 'break-word', minWidth: 0 },
+  tableScroll: { width: '100%', overflowX: 'auto' },
 });
 
 function severityBadge(sev: Severity) {
@@ -471,26 +477,28 @@ export function SqlMigrationWizard() {
                   <Text size={200}>No findings match the selected severities.</Text>
                 </div>
               ) : (
-                <Table size="small" aria-label="Compatibility findings" style={{ marginTop: tokens.spacingVerticalS }}>
-                  <TableHeader>
-                    <TableRow>
-                      <TableHeaderCell style={{ width: 110 }}>Severity</TableHeaderCell>
-                      <TableHeaderCell style={{ width: 220 }}>Object</TableHeaderCell>
-                      <TableHeaderCell>Issue</TableHeaderCell>
-                      <TableHeaderCell>Handling</TableHeaderCell>
-                    </TableRow>
-                  </TableHeader>
-                  <TableBody>
-                    {visibleFindings.map((f, i) => (
-                      <TableRow key={`${f.object}-${f.rule}-${i}`}>
-                        <TableCell>{severityBadge(f.severity)}</TableCell>
-                        <TableCell><span className={s.monoCode}>{f.object}</span></TableCell>
-                        <TableCell>{f.message}</TableCell>
-                        <TableCell>{f.remediation || '—'}</TableCell>
+                <div className={s.tableScroll} style={{ marginTop: tokens.spacingVerticalS }}>
+                  <Table size="small" aria-label="Compatibility findings">
+                    <TableHeader>
+                      <TableRow>
+                        <TableHeaderCell style={{ width: 110 }}>Severity</TableHeaderCell>
+                        <TableHeaderCell style={{ width: 220 }}>Object</TableHeaderCell>
+                        <TableHeaderCell>Issue</TableHeaderCell>
+                        <TableHeaderCell>Handling</TableHeaderCell>
                       </TableRow>
-                    ))}
-                  </TableBody>
-                </Table>
+                    </TableHeader>
+                    <TableBody>
+                      {visibleFindings.map((f, i) => (
+                        <TableRow key={`${f.object}-${f.rule}-${i}`}>
+                          <TableCell>{severityBadge(f.severity)}</TableCell>
+                          <TableCell className={s.wrapCell}><span className={s.monoCode}>{f.object}</span></TableCell>
+                          <TableCell className={s.wrapCell}>{f.message}</TableCell>
+                          <TableCell className={s.wrapCell}>{f.remediation || '—'}</TableCell>
+                        </TableRow>
+                      ))}
+                    </TableBody>
+                  </Table>
+                </div>
               )}
             </>
           )}
@@ -574,30 +582,32 @@ export function SqlMigrationWizard() {
                   {importResp.summary.applied} applied · {importResp.summary.failed} failed · {importResp.summary.total} total
                 </MessageBarBody>
               </MessageBar>
-              <Table size="small" aria-label="Import results" style={{ marginTop: tokens.spacingVerticalS }}>
-                <TableHeader>
-                  <TableRow>
-                    <TableHeaderCell>Status</TableHeaderCell>
-                    <TableHeaderCell>Kind</TableHeaderCell>
-                    <TableHeaderCell>Object</TableHeaderCell>
-                    <TableHeaderCell>Detail</TableHeaderCell>
-                  </TableRow>
-                </TableHeader>
-                <TableBody>
-                  {importResp.results?.map((r, i) => (
-                    <TableRow key={`${r.name}-${i}`}>
-                      <TableCell>
-                        {r.status === 'applied'
-                          ? <Badge color="success" appearance="tint" icon={<CheckmarkCircle20Filled />}>Applied</Badge>
-                          : <Badge color="danger" appearance="tint" icon={<Warning20Filled />}>Failed</Badge>}
-                      </TableCell>
-                      <TableCell>{r.kind}</TableCell>
-                      <TableCell><span className={s.monoCode}>{r.name}</span></TableCell>
-                      <TableCell>{r.error || (r.status === 'applied' ? 'OK' : '—')}</TableCell>
+              <div className={s.tableScroll} style={{ marginTop: tokens.spacingVerticalS }}>
+                <Table size="small" aria-label="Import results">
+                  <TableHeader>
+                    <TableRow>
+                      <TableHeaderCell>Status</TableHeaderCell>
+                      <TableHeaderCell>Kind</TableHeaderCell>
+                      <TableHeaderCell>Object</TableHeaderCell>
+                      <TableHeaderCell>Detail</TableHeaderCell>
                     </TableRow>
-                  ))}
-                </TableBody>
-              </Table>
+                  </TableHeader>
+                  <TableBody>
+                    {importResp.results?.map((r, i) => (
+                      <TableRow key={`${r.name}-${i}`}>
+                        <TableCell>
+                          {r.status === 'applied'
+                            ? <Badge color="success" appearance="tint" icon={<CheckmarkCircle20Filled />}>Applied</Badge>
+                            : <Badge color="danger" appearance="tint" icon={<Warning20Filled />}>Failed</Badge>}
+                        </TableCell>
+                        <TableCell>{r.kind}</TableCell>
+                        <TableCell className={s.wrapCell}><span className={s.monoCode}>{r.name}</span></TableCell>
+                        <TableCell className={s.wrapCell}>{r.error || (r.status === 'applied' ? 'OK' : '—')}</TableCell>
+                      </TableRow>
+                    ))}
+                  </TableBody>
+                </Table>
+              </div>
             </>
           )}
         </Card>

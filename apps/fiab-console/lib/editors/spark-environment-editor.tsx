@@ -51,14 +51,16 @@ const useStyles = makeStyles({
     background: tokens.colorNeutralBackground2,
   },
   toolbar: { display: 'flex', gap: tokens.spacingVerticalS, alignItems: 'center', flexWrap: 'wrap' },
-  mono: { fontFamily: 'Consolas, "Cascadia Code", monospace', fontSize: tokens.fontSizeBase200 },
+  mono: { fontFamily: 'Consolas, "Cascadia Code", monospace', fontSize: tokens.fontSizeBase200, overflowWrap: 'anywhere', wordBreak: 'break-word' },
   pre: {
-    width: '100%', maxHeight: '220px', overflow: 'auto', padding: tokens.spacingVerticalS, margin: 0,
+    width: '100%', maxWidth: '100%', maxHeight: '320px', overflow: 'auto', padding: tokens.spacingVerticalS, margin: 0,
     fontFamily: 'Consolas, "Cascadia Code", monospace', fontSize: tokens.fontSizeBase200,
     border: `1px solid ${tokens.colorNeutralStroke2}`, borderRadius: tokens.borderRadiusMedium,
     background: tokens.colorNeutralBackground3, color: tokens.colorNeutralForeground1,
-    whiteSpace: 'pre-wrap',
+    whiteSpace: 'pre-wrap', overflowWrap: 'anywhere', wordBreak: 'break-word', boxSizing: 'border-box',
+    resize: 'vertical', minHeight: '120px',
   },
+  tableScroll: { width: '100%', maxWidth: '100%', overflowX: 'auto' },
 });
 
 const NODE_SIZES = ['Small', 'Medium', 'Large', 'XLarge', 'XXLarge'] as const;
@@ -520,6 +522,7 @@ export function SparkEnvironmentEditor({ item, id }: { item: FabricItemType; id:
               {customLibraries.length === 0 ? (
                 <Caption1>No custom libraries uploaded yet.</Caption1>
               ) : (
+                <div className={styles.tableScroll}>
                 <Table size="small" aria-label="Custom libraries">
                   <TableHeader>
                     <TableRow>
@@ -545,6 +548,7 @@ export function SparkEnvironmentEditor({ item, id }: { item: FabricItemType; id:
                     ))}
                   </TableBody>
                 </Table>
+                </div>
               )}
             </>
           )}
@@ -633,6 +637,7 @@ export function SparkEnvironmentEditor({ item, id }: { item: FabricItemType; id:
           </div>
           {candidates && candidates.length === 0 && <Caption1>No notebooks or Spark job definitions in your workspaces yet.</Caption1>}
           {candidates && candidates.length > 0 && (
+            <div className={styles.tableScroll}>
             <Table size="small" aria-label="Attach candidates">
               <TableHeader>
                 <TableRow>
@@ -662,6 +667,7 @@ export function SparkEnvironmentEditor({ item, id }: { item: FabricItemType; id:
                 ))}
               </TableBody>
             </Table>
+            </div>
           )}
         </div>
       </>

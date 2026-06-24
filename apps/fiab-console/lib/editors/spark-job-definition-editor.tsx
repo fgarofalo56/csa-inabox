@@ -46,21 +46,23 @@ import { KeyValueGrid } from '@/lib/components/ui/key-value-grid';
 const useStyles = makeStyles({
   tabBar: { padding: `${tokens.spacingVerticalS} ${tokens.spacingHorizontalL} 0`, borderBottom: `1px solid ${tokens.colorNeutralStroke2}` },
   tabBody: { padding: tokens.spacingVerticalXL, display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalM, maxWidth: '900px' },
-  row: { display: 'flex', gap: tokens.spacingHorizontalM },
-  field: { flex: 1, display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalXS },
-  fileRow: { display: 'flex', gap: tokens.spacingHorizontalS, alignItems: 'flex-end' },
+  row: { display: 'flex', gap: tokens.spacingHorizontalM, flexWrap: 'wrap' },
+  field: { flex: 1, minWidth: 0, display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalXS },
+  fileRow: { display: 'flex', gap: tokens.spacingHorizontalS, alignItems: 'flex-end', flexWrap: 'wrap' },
   refList: { display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalS },
   refItem: { display: 'flex', gap: tokens.spacingHorizontalS, alignItems: 'center' },
   refUri: {
-    flex: 1, fontFamily: 'Consolas, "Cascadia Code", monospace', fontSize: tokens.fontSizeBase200,
+    flex: 1, minWidth: 0, fontFamily: 'Consolas, "Cascadia Code", monospace', fontSize: tokens.fontSizeBase200,
     padding: `${tokens.spacingVerticalXS} ${tokens.spacingHorizontalS}`, borderRadius: tokens.borderRadiusMedium, backgroundColor: tokens.colorNeutralBackground3,
     overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
   },
   toolbar: { display: 'flex', gap: tokens.spacingHorizontalS, alignItems: 'center', flexWrap: 'wrap', marginTop: tokens.spacingVerticalS },
-  resultBox: { marginTop: tokens.spacingVerticalS, borderTop: `1px solid ${tokens.colorNeutralStroke2}`, paddingTop: tokens.spacingVerticalM },
-  mono: { fontFamily: 'Consolas, "Cascadia Code", monospace', fontSize: tokens.fontSizeBase200 },
+  resultBox: { marginTop: tokens.spacingVerticalS, borderTop: `1px solid ${tokens.colorNeutralStroke2}`, paddingTop: tokens.spacingVerticalM, minWidth: 0 },
+  tableScroll: { overflowX: 'auto', maxWidth: '100%' },
+  mono: { fontFamily: 'Consolas, "Cascadia Code", monospace', fontSize: tokens.fontSizeBase200, overflowWrap: 'anywhere', wordBreak: 'break-word' },
   logPre: {
-    margin: 0, maxHeight: '320px', overflow: 'auto', padding: tokens.spacingVerticalS,
+    margin: 0, minHeight: '120px', maxHeight: '320px', overflow: 'auto', resize: 'vertical', boxSizing: 'border-box',
+    padding: tokens.spacingVerticalS,
     fontFamily: 'Consolas, "Cascadia Code", monospace', fontSize: tokens.fontSizeBase200, lineHeight: '1.4',
     backgroundColor: tokens.colorNeutralBackground3, color: tokens.colorNeutralForeground1,
     borderRadius: tokens.borderRadiusMedium, whiteSpace: 'pre-wrap', wordBreak: 'break-all',
@@ -650,6 +652,7 @@ export function SparkJobDefinitionEditor({ item, id }: { item: FabricItemType; i
                 {runs.length === 0 ? (
                   <Caption1>No runs yet. Configure the Definition tab and Submit a batch.</Caption1>
                 ) : (
+                  <div className={styles.tableScroll}>
                   <Table size="small" aria-label="Spark batch runs">
                     <TableHeader>
                       <TableRow>
@@ -690,6 +693,7 @@ export function SparkJobDefinitionEditor({ item, id }: { item: FabricItemType; i
                       })}
                     </TableBody>
                   </Table>
+                  </div>
                 )}
 
                 {runs.length > 0 && (

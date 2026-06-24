@@ -42,6 +42,8 @@ const useStyles = makeStyles({
   pad: { padding: tokens.spacingVerticalL, display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalM, flex: 1, minHeight: 0 },
   toolbar: { display: 'flex', gap: tokens.spacingHorizontalS, alignItems: 'center', flexWrap: 'wrap' },
   treePad: { padding: tokens.spacingHorizontalS },
+  // Long dynamic strings (errors, receipts, env-var lists, paths) must wrap, never overflow the surface.
+  breakText: { overflowWrap: 'anywhere', wordBreak: 'break-word', minWidth: 0, maxWidth: '100%' },
 });
 
 interface WorkspaceLite { id: string; name: string; isOnDedicatedCapacity?: boolean; }
@@ -304,7 +306,7 @@ export function DataflowGen2Editor({ item, id }: Props) {
                   <DialogTitle>Create dataflow Gen2</DialogTitle>
                   <DialogContent>
                     <Input placeholder="displayName" value={createName} onChange={(_, d) => setCreateName(d.value)} style={{ width: '100%' }} />
-                    {createErr && <MessageBar intent="error" style={{ marginTop: tokens.spacingVerticalS }}><MessageBarBody>{createErr}</MessageBarBody></MessageBar>}
+                    {createErr && <MessageBar intent="error" style={{ marginTop: tokens.spacingVerticalS }}><MessageBarBody className={s.breakText}>{createErr}</MessageBarBody></MessageBar>}
                   </DialogContent>
                   <DialogActions>
                     <Button appearance="secondary" onClick={() => setCreateOpen(false)}>Cancel</Button>
@@ -321,7 +323,7 @@ export function DataflowGen2Editor({ item, id }: Props) {
 
           {config && !config.adfConfigured && config.backend !== 'fabric' && (
             <MessageBar intent="warning">
-              <MessageBarBody>
+              <MessageBarBody className={s.breakText}>
                 <MessageBarTitle>Data Factory not configured</MessageBarTitle>
                 Authoring + Save work, but Run needs ADF. Set <code>{config.adfMissing || 'LOOM_ADF_NAME / LOOM_DLZ_RG / LOOM_SUBSCRIPTION_ID'}</code> on
                 the Console app — deployed by <code>platform/fiab/bicep/modules/landing-zone/adf.bicep</code>.
@@ -331,17 +333,17 @@ export function DataflowGen2Editor({ item, id }: Props) {
 
           {(ws.error || listErr) && (
             <MessageBar intent="error">
-              <MessageBarBody>
+              <MessageBarBody className={s.breakText}>
                 <MessageBarTitle>Workspace list unavailable</MessageBarTitle>
                 {ws.error || listErr}
                 {(ws.hint || listHint) && <><br /><Caption1>{ws.hint || listHint}</Caption1></>}
               </MessageBarBody>
             </MessageBar>
           )}
-          {detailErr && <MessageBar intent="error"><MessageBarBody>{detailErr}</MessageBarBody></MessageBar>}
+          {detailErr && <MessageBar intent="error"><MessageBarBody className={s.breakText}>{detailErr}</MessageBarBody></MessageBar>}
           {runMsg && (
             <MessageBar intent={runOk === false ? 'error' : runOk ? 'success' : 'info'}>
-              <MessageBarBody>
+              <MessageBarBody className={s.breakText}>
                 {runMsg}
                 {runHint && <><br /><Caption1>{runHint}</Caption1></>}
               </MessageBarBody>
@@ -357,7 +359,7 @@ export function DataflowGen2Editor({ item, id }: Props) {
             </MessageBar>
           )}
           {dataflowId && dirty && <Badge appearance="outline" color="warning" style={{ alignSelf: 'flex-start' }}>unsaved</Badge>}
-          {dataflowId && <Caption1>Definition part: <code>{partPath}</code></Caption1>}
+          {dataflowId && <Caption1 className={s.breakText}>Definition part: <code>{partPath}</code></Caption1>}
 
           <div style={{ borderBottom: `1px solid ${tokens.colorNeutralStroke2}` }}>
             <TabList selectedValue={tab} onTabSelect={(_, d) => setTab(d.value as 'authoring' | 'output' | 'script')}>

@@ -85,7 +85,7 @@ const useStyles = makeStyles({
   tabBar: { display: 'flex', gap: tokens.spacingHorizontalXS, borderBottom: `1px solid ${tokens.colorNeutralStroke2}`, marginBottom: tokens.spacingVerticalS, flexWrap: 'wrap' },
   tabBtn: { borderBottomWidth: '2px', borderBottomStyle: 'solid', borderBottomColor: 'transparent', borderRadius: 0 },
   tabBtnActive: { borderBottomColor: tokens.colorBrandStroke1, color: tokens.colorBrandForeground1 },
-  mono: { fontFamily: 'Consolas, monospace', fontSize: tokens.fontSizeBase200, whiteSpace: 'pre', overflow: 'auto', maxHeight: '480px', backgroundColor: tokens.colorNeutralBackground2, padding: tokens.spacingHorizontalM, borderRadius: tokens.borderRadiusMedium },
+  mono: { fontFamily: 'Consolas, monospace', fontSize: tokens.fontSizeBase200, whiteSpace: 'pre', overflow: 'auto', overflowWrap: 'anywhere', maxWidth: '100%', maxHeight: '480px', resize: 'vertical', boxSizing: 'border-box', backgroundColor: tokens.colorNeutralBackground2, padding: tokens.spacingHorizontalM, borderRadius: tokens.borderRadiusMedium },
   pillRow: { display: 'flex', gap: tokens.spacingHorizontalS, flexWrap: 'wrap' },
 });
 
@@ -663,7 +663,7 @@ function DeploySourcePanel({ cfg, mutate, onClose, onDeployed }: {
           <MessageBarTitle>Deploy gated / failed</MessageBarTitle>
           {result.error}
           {result.remediation && (
-            <Caption1>
+            <Caption1 style={{ display: 'block', overflowWrap: 'anywhere' }}>
               {result.remediation.message}
               {result.remediation.module && <><br />Module: <code>{result.remediation.module}</code></>}
               {result.remediation.command && <><br /><code>{result.remediation.command}</code></>}
@@ -783,7 +783,7 @@ function EntitiesStage({ cfg, mutate, activeEntity, setActiveEntity }: {
       <Divider />
 
       {/* Defined entities + editor */}
-      <div style={{ display: 'grid', gridTemplateColumns: 'minmax(180px, 240px) 1fr', gap: tokens.spacingHorizontalM }}>
+      <div style={{ display: 'grid', gridTemplateColumns: 'minmax(180px, 240px) minmax(0, 1fr)', gap: tokens.spacingHorizontalM }}>
         <div className={s.entityList}>
           {cfg.entities.length === 0 && <Caption1>No entities yet.</Caption1>}
           {cfg.entities.map((e) => (
@@ -799,7 +799,7 @@ function EntitiesStage({ cfg, mutate, activeEntity, setActiveEntity }: {
           ))}
         </div>
 
-        <div>
+        <div style={{ minWidth: 0, overflowX: 'auto' }}>
           {!active && <Caption1>Select an entity to edit its REST, GraphQL, fields, permissions, relationships, and cache.</Caption1>}
           {active && (
             <>

@@ -45,6 +45,8 @@ const useStyles = makeStyles({
   tableWrap: { overflow: 'auto', maxHeight: '360px', border: `1px solid ${tokens.colorNeutralStroke2}`, borderRadius: tokens.borderRadiusMedium },
   cell: { fontFamily: 'Consolas, monospace', fontSize: tokens.fontSizeBase200, whiteSpace: 'nowrap' },
   field: { display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalXS, minWidth: '240px' },
+  propsPane: { display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalXS, minWidth: 0, maxWidth: '100%' },
+  breakAll: { overflowWrap: 'anywhere', wordBreak: 'break-word' },
 });
 
 interface WorkspaceLite { id: string; name: string }
@@ -275,7 +277,7 @@ WHERE is_ms_shipped = 0;`,
 
             {listErr && (
               <MessageBar intent={listErr.code === 'NO_FABRIC_WS' ? 'warning' : 'error'}>
-                <MessageBarBody>
+                <MessageBarBody className={s.breakAll}>
                   <MessageBarTitle>{listErr.code === 'NO_FABRIC_WS' ? 'No Fabric workspace attached' : 'Fabric error'}</MessageBarTitle>
                   {listErr.error}
                   {listErr.hint && <><br /><Caption1>{listErr.hint}</Caption1></>}
@@ -319,7 +321,7 @@ WHERE is_ms_shipped = 0;`,
                     />
                     {sqlBusy && <Spinner size="small" label="Executing…" labelPosition="after" />}
                     {!sqlBusy && sqlResult && !sqlResult.ok && (
-                      <MessageBar intent="error"><MessageBarBody><MessageBarTitle>Query failed</MessageBarTitle>{sqlResult.error}</MessageBarBody></MessageBar>
+                      <MessageBar intent="error"><MessageBarBody className={s.breakAll}><MessageBarTitle>Query failed</MessageBarTitle>{sqlResult.error}</MessageBarBody></MessageBar>
                     )}
                     {!sqlBusy && sqlResult?.ok && (sqlResult.columns?.length ?? 0) > 0 && (
                       <div className={s.tableWrap}>
@@ -359,12 +361,12 @@ WHERE is_ms_shipped = 0;`,
             )}
 
             {tab === 'properties' && active && (
-              <>
-                <Subtitle2>{active.displayName}</Subtitle2>
-                <Caption1>id: <code>{active.id}</code></Caption1>
-                {active.description && <Caption1>{active.description}</Caption1>}
-                <Caption1>Fabric workspace: <code>{fabricWsId || '(not attached)'}</code></Caption1>
-              </>
+              <div className={s.propsPane}>
+                <Subtitle2 className={s.breakAll}>{active.displayName}</Subtitle2>
+                <Caption1 className={s.breakAll}>id: <code>{active.id}</code></Caption1>
+                {active.description && <Caption1 className={s.breakAll}>{active.description}</Caption1>}
+                <Caption1 className={s.breakAll}>Fabric workspace: <code>{fabricWsId || '(not attached)'}</code></Caption1>
+              </div>
             )}
           </div>
         </>

@@ -55,21 +55,22 @@ import {
 
 const useStyles = makeStyles({
   tabBar: { padding: `${tokens.spacingVerticalS} ${tokens.spacingHorizontalL} 0`, borderBottom: `1px solid ${tokens.colorNeutralStroke2}` },
-  tabBody: { padding: tokens.spacingVerticalXXL, display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalM, maxWidth: '1000px' },
+  tabBody: { padding: tokens.spacingVerticalXXL, display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalM, maxWidth: '1000px', minWidth: 0 },
   row: { display: 'flex', gap: tokens.spacingHorizontalM, flexWrap: 'wrap' },
   field: { flex: 1, minWidth: '180px', display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalXS },
   toolbar: { display: 'flex', gap: tokens.spacingHorizontalS, alignItems: 'center', flexWrap: 'wrap' },
-  mono: { fontFamily: 'Consolas, "Cascadia Code", monospace', fontSize: tokens.fontSizeBase200 },
+  mono: { fontFamily: 'Consolas, "Cascadia Code", monospace', fontSize: tokens.fontSizeBase200, overflowWrap: 'anywhere' },
   pre: {
-    margin: 0, maxHeight: '280px', overflow: 'auto', padding: tokens.spacingVerticalMNudge,
+    margin: 0, maxHeight: '280px', overflow: 'auto', maxWidth: '100%', padding: tokens.spacingVerticalMNudge,
     fontFamily: 'Consolas, "Cascadia Code", monospace', fontSize: tokens.fontSizeBase200, lineHeight: '1.4',
     backgroundColor: tokens.colorNeutralBackground3, color: tokens.colorNeutralForeground1,
-    borderRadius: tokens.borderRadiusMedium, whiteSpace: 'pre-wrap', wordBreak: 'break-word',
+    borderRadius: tokens.borderRadiusMedium, whiteSpace: 'pre-wrap', wordBreak: 'break-word', overflowWrap: 'anywhere',
   },
-  constraintRow: { display: 'flex', gap: tokens.spacingHorizontalS, alignItems: 'flex-end' },
+  constraintRow: { display: 'flex', gap: tokens.spacingHorizontalS, alignItems: 'flex-end', flexWrap: 'wrap' },
   lineageBox: { display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalSNudge },
-  lineageRow: { display: 'flex', gap: tokens.spacingHorizontalS, alignItems: 'center', padding: `${tokens.spacingVerticalXS} 0` },
-  chip: { padding: `${tokens.spacingVerticalXXS} ${tokens.spacingHorizontalS}`, borderRadius: tokens.borderRadiusCircular, backgroundColor: tokens.colorNeutralBackground3, fontSize: tokens.fontSizeBase200 },
+  lineageRow: { display: 'flex', gap: tokens.spacingHorizontalS, alignItems: 'center', padding: `${tokens.spacingVerticalXS} 0`, flexWrap: 'wrap', minWidth: 0 },
+  chip: { padding: `${tokens.spacingVerticalXXS} ${tokens.spacingHorizontalS}`, borderRadius: tokens.borderRadiusCircular, backgroundColor: tokens.colorNeutralBackground3, fontSize: tokens.fontSizeBase200, overflowWrap: 'anywhere', minWidth: 0, maxWidth: '100%' },
+  statusBar: { overflowWrap: 'anywhere', wordBreak: 'break-word', minWidth: 0 },
 });
 
 const ACTIVE_STATES = new Set(['starting', 'running', 'busy', 'not_started', 'recovering']);
@@ -88,7 +89,7 @@ function ErrBar({ error, title = 'Operation failed' }: { error: string | null; t
   if (!error) return null;
   return (
     <MessageBar intent="error">
-      <MessageBarBody><MessageBarTitle>{title}</MessageBarTitle>{error}</MessageBarBody>
+      <MessageBarBody style={{ overflowWrap: 'anywhere', wordBreak: 'break-word', minWidth: 0 }}><MessageBarTitle>{title}</MessageBarTitle>{error}</MessageBarBody>
     </MessageBar>
   );
 }
@@ -97,7 +98,7 @@ function GateBar({ gate }: { gate: { error?: string; remediation?: string; link?
   if (!gate) return null;
   return (
     <MessageBar intent="warning">
-      <MessageBarBody>
+      <MessageBarBody style={{ overflowWrap: 'anywhere', wordBreak: 'break-word', minWidth: 0 }}>
         <MessageBarTitle>Configuration required</MessageBarTitle>
         {gate.error} {gate.remediation}
         {gate.link && <> <a href={gate.link} target="_blank" rel="noreferrer">Learn more</a>.</>}
@@ -551,7 +552,7 @@ export function MaterializedLakeViewEditor({ item, id }: { item: FabricItemType;
             <>
               <Subtitle2>Refresh</Subtitle2>
               <Caption1>A full refresh runs a Synapse Spark batch that executes the definition, enforces constraints, and (re)writes the managed Delta table.</Caption1>
-              {refreshMsg && <MessageBar intent="success"><MessageBarBody>{refreshMsg}</MessageBarBody></MessageBar>}
+              {refreshMsg && <MessageBar intent="success"><MessageBarBody className={styles.statusBar}>{refreshMsg}</MessageBarBody></MessageBar>}
               <div className={styles.toolbar}>
                 <Button appearance="primary" icon={<Play16Regular />} onClick={doRefresh} disabled={busy}>Run full refresh</Button>
                 <Button icon={<ArrowSync16Regular />} onClick={loadRuns} disabled={busy}>Refresh runs</Button>
@@ -561,7 +562,7 @@ export function MaterializedLakeViewEditor({ item, id }: { item: FabricItemType;
 
               <Body1Strong style={{ marginTop: tokens.spacingVerticalS }}>Refresh "Refresh materialized lake view" ADF pipeline</Body1Strong>
               <Caption1>Create the ADF pipeline an operator schedules for recurring refresh — its single activity calls back into this view's refresh endpoint.</Caption1>
-              {adfStatus && <MessageBar intent="success"><MessageBarBody>{adfStatus}</MessageBarBody></MessageBar>}
+              {adfStatus && <MessageBar intent="success"><MessageBarBody className={styles.statusBar}>{adfStatus}</MessageBarBody></MessageBar>}
               <div className={styles.toolbar}>
                 <Button icon={<Branch16Regular />} onClick={() => createAdfPipeline(false)} disabled={busy}>Create / update pipeline</Button>
                 <Button onClick={() => createAdfPipeline(true)} disabled={busy}>Create + run now</Button>

@@ -52,7 +52,7 @@ const useStyles = makeStyles({
   pad: { padding: tokens.spacingVerticalL, display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalM, minHeight: 0, flex: 1 },
   tabBar: { padding: `${tokens.spacingVerticalS} ${tokens.spacingHorizontalL} 0`, borderBottom: `1px solid ${tokens.colorNeutralStroke2}` },
   toolbar: { display: 'flex', gap: tokens.spacingHorizontalM, alignItems: 'center', flexWrap: 'wrap' },
-  metaGrid: { display: 'grid', gridTemplateColumns: 'auto 1fr', gap: `${tokens.spacingVerticalXS} ${tokens.spacingHorizontalL}`, alignItems: 'baseline' },
+  metaGrid: { display: 'grid', gridTemplateColumns: 'auto minmax(0, 1fr)', gap: `${tokens.spacingVerticalXS} ${tokens.spacingHorizontalL}`, alignItems: 'baseline', minWidth: 0, overflowWrap: 'anywhere', wordBreak: 'break-word' },
   metaKey: { color: tokens.colorNeutralForeground3, fontSize: tokens.fontSizeBase200 },
   tableWrap: { overflow: 'auto', maxHeight: '480px', border: `1px solid ${tokens.colorNeutralStroke2}`, borderRadius: tokens.borderRadiusMedium },
   // Keep the header visible while scrolling long metadata lists (up to 500 rows).
@@ -80,7 +80,7 @@ const useStyles = makeStyles({
     border: `1px solid ${tokens.colorNeutralStroke2}`,
     backgroundColor: tokens.colorNeutralBackground2,
   },
-  row2: { display: 'grid', gridTemplateColumns: '1fr 1fr', gap: tokens.spacingVerticalM },
+  row2: { display: 'grid', gridTemplateColumns: 'minmax(0, 1fr) minmax(0, 1fr)', gap: tokens.spacingVerticalM },
 });
 
 // SKU options the BAP create API accepts (Microsoft Learn: New-AdminPowerAppEnvironment
@@ -2269,6 +2269,7 @@ export function AiBuilderModelEditor({ item, id }: { item: FabricItemType; id: s
                 <Field label="Predict request (JSON)">
                   <Textarea
                     rows={6}
+                    resize="vertical"
                     value={predictJson}
                     onChange={(_, d) => setPredictJson(d.value)}
                     style={{ fontFamily: 'Consolas, monospace', fontSize: tokens.fontSizeBase200 }}
@@ -2281,7 +2282,7 @@ export function AiBuilderModelEditor({ item, id }: { item: FabricItemType; id: s
                 </div>
                 {predictResult && (
                   <div className={s.tableWrap} style={{ padding: tokens.spacingVerticalS }}>
-                    <pre style={{ margin: 0, fontSize: tokens.fontSizeBase200, whiteSpace: 'pre-wrap' }}>{predictResult}</pre>
+                    <pre style={{ margin: 0, fontSize: tokens.fontSizeBase200, whiteSpace: 'pre-wrap', overflowWrap: 'anywhere', wordBreak: 'break-word' }}>{predictResult}</pre>
                   </div>
                 )}
               </>

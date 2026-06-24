@@ -53,6 +53,10 @@ const useStyles = makeStyles({
   tableWrap: { overflow: 'auto', maxHeight: '360px', border: `1px solid ${tokens.colorNeutralStroke2}`, borderRadius: tokens.borderRadiusMedium },
   cell: { fontFamily: 'Consolas, monospace', fontSize: tokens.fontSizeBase200, whiteSpace: 'nowrap' },
   field: { display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalXS, minWidth: '220px' },
+  // Long ARM / REST error strings must wrap and stay bounded instead of forcing
+  // the editor to scroll horizontally.
+  errBody: { overflowWrap: 'anywhere', wordBreak: 'break-word', maxWidth: '100%' },
+  errScroll: { overflowWrap: 'anywhere', wordBreak: 'break-word', maxWidth: '100%', maxHeight: '180px', overflowY: 'auto' },
 });
 
 interface WorkspaceLite { id: string; name: string }
@@ -264,7 +268,7 @@ export function MountedAdfEditor({ item, id }: Props) {
                         <Field label="Subscription id" required><Input value={cSub} onChange={(_, d) => setCSub(d.value)} placeholder="00000000-0000-0000-0000-000000000000" /></Field>
                         <Field label="Resource group" required><Input value={cRg} onChange={(_, d) => setCRg(d.value)} placeholder="rg-data" /></Field>
                         <Field label="Factory name" required><Input value={cFactory} onChange={(_, d) => setCFactory(d.value)} placeholder="adf-prod" /></Field>
-                        {cErr && <MessageBar intent="error"><MessageBarBody>{cErr}</MessageBarBody></MessageBar>}
+                        {cErr && <MessageBar intent="error"><MessageBarBody className={s.errBody}>{cErr}</MessageBarBody></MessageBar>}
                         <MessageBar intent="info">
                           <MessageBarBody>
                             The Loom Console UAMI must hold <strong>Data Factory Contributor</strong> (or at least Reader) on the referenced factory. Grant via portal IAM or <code>az role assignment create</code>.
@@ -282,17 +286,17 @@ export function MountedAdfEditor({ item, id }: Props) {
               </div>
             )}
 
-            {ws.error && <MessageBar intent="error"><MessageBarBody>{ws.error}</MessageBarBody></MessageBar>}
-            {detailErr && <MessageBar intent="error"><MessageBarBody><MessageBarTitle>ARM error</MessageBarTitle>{detailErr}</MessageBarBody></MessageBar>}
+            {ws.error && <MessageBar intent="error"><MessageBarBody className={s.errBody}>{ws.error}</MessageBarBody></MessageBar>}
+            {detailErr && <MessageBar intent="error"><MessageBarBody className={s.errScroll}><MessageBarTitle>ARM error</MessageBarTitle>{detailErr}</MessageBarBody></MessageBar>}
             {partialErr && (
               <MessageBar intent="warning">
-                <MessageBarBody>
+                <MessageBarBody className={s.errScroll}>
                   <MessageBarTitle>Partial load</MessageBarTitle>
                   Some ARM calls failed: {Object.entries(partialErr).map(([k, v]) => <div key={k}><strong>{k}</strong>: {v}</div>)}
                 </MessageBarBody>
               </MessageBar>
             )}
-            {runMsg && <MessageBar intent={runMsg.startsWith('Run started') ? 'success' : 'error'}><MessageBarBody>{runMsg}</MessageBarBody></MessageBar>}
+            {runMsg && <MessageBar intent={runMsg.startsWith('Run started') ? 'success' : 'error'}><MessageBarBody className={s.errBody}>{runMsg}</MessageBarBody></MessageBar>}
 
             {tab === 'pipelines' && (
               <>
@@ -532,7 +536,7 @@ function DataFlowsTab() {
         {selected && <Button appearance="subtle" icon={<Delete20Regular />} onClick={() => del(selected)}>Delete</Button>}
       </div>
 
-      {err && <MessageBar intent="error"><MessageBarBody><MessageBarTitle>ADF REST error</MessageBarTitle>{err}</MessageBarBody></MessageBar>}
+      {err && <MessageBar intent="error"><MessageBarBody className={s.errScroll}><MessageBarTitle>ADF REST error</MessageBarTitle>{err}</MessageBarBody></MessageBar>}
 
       <MappingDataFlowDesigner name={selected} datasets={datasets} reloadKey={reloadKey} />
     </div>
@@ -721,7 +725,8 @@ const nodeTypes = { dfNode: DfNode };
 const useDesignerStyles = makeStyles({
   shell: { display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalS, flex: 1, minHeight: 0 },
   topbar: { display: 'flex', gap: tokens.spacingHorizontalS, alignItems: 'center', flexWrap: 'wrap' },
-  threePane: { display: 'flex', flex: 1, minHeight: '460px', gap: tokens.spacingHorizontalS },
+  // Let the user drag the data-flow designer taller; bounded + scrollable children.
+  threePane: { display: 'flex', flex: 1, minHeight: '460px', gap: tokens.spacingHorizontalS, resize: 'vertical', overflow: 'hidden', boxSizing: 'border-box' },
   palette: {
     flexShrink: 0, width: '200px', padding: tokens.spacingVerticalS, display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalSNudge,
     border: `1px solid ${tokens.colorNeutralStroke2}`, borderRadius: tokens.borderRadiusMedium,
@@ -735,10 +740,12 @@ const useDesignerStyles = makeStyles({
   },
   canvasCol: { flex: 1, minWidth: 0, border: `1px solid ${tokens.colorNeutralStroke2}`, borderRadius: tokens.borderRadiusMedium, overflow: 'hidden' },
   configCol: {
-    flexShrink: 0, width: '300px', padding: tokens.spacingVerticalM, display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalMNudge,
+    flexShrink: 0, width: '300px', minWidth: 0, padding: tokens.spacingVerticalM, display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalMNudge,
     border: `1px solid ${tokens.colorNeutralStroke2}`, borderRadius: tokens.borderRadiusMedium,
     backgroundColor: tokens.colorNeutralBackground1, overflow: 'auto',
   },
+  // Long ADF REST error / save-result strings wrap + stay bounded.
+  errBody: { overflowWrap: 'anywhere', wordBreak: 'break-word', maxWidth: '100%', maxHeight: '180px', overflowY: 'auto' },
 });
 
 interface DesignerProps {
@@ -935,8 +942,8 @@ function InnerDesigner({ name, datasets, reloadKey }: DesignerProps) {
       </div>
 
       {loading && <Spinner size="small" label="Reading data flow from ADF…" labelPosition="after" />}
-      {err && <MessageBar intent="error"><MessageBarBody><MessageBarTitle>ADF REST error</MessageBarTitle>{err}</MessageBarBody></MessageBar>}
-      {msg && <MessageBar intent={msg.startsWith('Save failed') ? 'error' : 'success'}><MessageBarBody>{msg}</MessageBarBody></MessageBar>}
+      {err && <MessageBar intent="error"><MessageBarBody className={s.errBody}><MessageBarTitle>ADF REST error</MessageBarTitle>{err}</MessageBarBody></MessageBar>}
+      {msg && <MessageBar intent={msg.startsWith('Save failed') ? 'error' : 'success'}><MessageBarBody className={s.errBody}>{msg}</MessageBarBody></MessageBar>}
       {previewGate && (
         <MessageBar intent="warning">
           <MessageBarBody>

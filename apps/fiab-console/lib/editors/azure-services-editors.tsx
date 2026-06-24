@@ -42,11 +42,11 @@ const useStyles = makeStyles({
   row: { display: 'flex', gap: tokens.spacingHorizontalM },
   field: { flex: 1, display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalXS },
   monaco: {
-    width: '100%', minHeight: '200px',
+    width: '100%', minHeight: '200px', maxWidth: '100%', boxSizing: 'border-box',
     fontFamily: 'Consolas, "Cascadia Code", monospace', fontSize: tokens.fontSizeBase300, padding: tokens.spacingVerticalM,
     border: `1px solid ${tokens.colorNeutralStroke2}`, borderRadius: tokens.borderRadiusMedium,
     backgroundColor: tokens.colorNeutralBackground3, color: tokens.colorNeutralForeground1,
-    resize: 'vertical',
+    resize: 'vertical', overflow: 'auto',
   },
   tabBar: {
     paddingTop: tokens.spacingVerticalS, paddingLeft: tokens.spacingHorizontalL,
@@ -359,7 +359,7 @@ export function SynapseSparkPoolEditor({ item, id }: { item: FabricItemType; id:
       }
       main={
         <div className={s.pad}>
-          <div style={{ display: 'flex', gap: tokens.spacingHorizontalM, alignItems: 'center' }}>
+          <div style={{ display: 'flex', gap: tokens.spacingHorizontalM, alignItems: 'center', flexWrap: 'wrap' }}>
             <Badge appearance="filled" color={state === 'Succeeded' ? 'success' : state === 'Provisioning' ? 'warning' : 'informative'}>{state}</Badge>
             <Badge appearance="outline">{pool?.properties.nodeSize || '—'}</Badge>
             <Badge appearance="outline">{pool?.properties.sparkVersion || 'Spark —'}</Badge>
@@ -961,7 +961,7 @@ export function AdfDatasetEditor({ item, id }: { item: FabricItemType; id: strin
       }
       main={
         <div className={s.form}>
-          <div style={{ display: 'flex', gap: tokens.spacingHorizontalM, alignItems: 'center' }}>
+          <div style={{ display: 'flex', gap: tokens.spacingHorizontalM, alignItems: 'center', flexWrap: 'wrap' }}>
             <Badge appearance="filled" color="brand">{selected || '(no dataset)'}</Badge>
             <Badge appearance="outline">{type}</Badge>
             <Button appearance="primary" icon={<Save20Regular />} disabled={busy || !selected} onClick={save} style={{ marginLeft: 'auto' }}>Save</Button>
@@ -1338,7 +1338,7 @@ export function AdfTriggerEditor({ item, id }: { item: FabricItemType; id: strin
       }
       main={
         <div className={s.form}>
-          <div style={{ display: 'flex', gap: tokens.spacingHorizontalM, alignItems: 'center' }}>
+          <div style={{ display: 'flex', gap: tokens.spacingHorizontalM, alignItems: 'center', flexWrap: 'wrap' }}>
             <Badge appearance="filled" color="brand">{selected || '(no trigger)'}</Badge>
             <Badge appearance="filled" color={runtimeState === 'Started' ? 'success' : 'informative'}>{runtimeState}</Badge>
             <Button appearance="primary" icon={<Save20Regular />} disabled={busy || !selected} onClick={save}>Save</Button>

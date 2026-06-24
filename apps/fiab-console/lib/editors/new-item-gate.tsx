@@ -41,20 +41,22 @@ import type { FabricItemType } from '@/lib/catalog/fabric-item-types';
 import type { RibbonTab } from '@/lib/components/ribbon';
 
 const useStyles = makeStyles({
-  pad: { padding: tokens.spacingVerticalL, display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalL, maxWidth: '640px' },
+  pad: { padding: tokens.spacingVerticalL, display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalL, maxWidth: '640px', minWidth: 0 },
   field: { display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalXS },
-  actions: { display: 'flex', gap: tokens.spacingHorizontalM, alignItems: 'center', marginTop: tokens.spacingVerticalXS },
-  list: { display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalS, marginTop: tokens.spacingVerticalXS },
+  actions: { display: 'flex', flexWrap: 'wrap', gap: tokens.spacingHorizontalM, alignItems: 'center', marginTop: tokens.spacingVerticalXS },
+  list: { display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalS, marginTop: tokens.spacingVerticalXS, minWidth: 0 },
   row: {
     display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: tokens.spacingHorizontalM,
     padding: `${tokens.spacingVerticalS} ${tokens.spacingHorizontalM}`, border: `1px solid ${tokens.colorNeutralStroke2}`, borderRadius: tokens.borderRadiusLarge,
-    cursor: 'pointer',
+    cursor: 'pointer', minWidth: 0,
   },
   rowActive: {
     display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: tokens.spacingHorizontalM,
     padding: `${tokens.spacingVerticalS} ${tokens.spacingHorizontalM}`, border: `2px solid ${tokens.colorBrandStroke1}`, borderRadius: tokens.borderRadiusLarge,
-    background: tokens.colorBrandBackground2, cursor: 'pointer',
+    background: tokens.colorBrandBackground2, cursor: 'pointer', minWidth: 0,
   },
+  rowText: { minWidth: 0, overflowWrap: 'anywhere', wordBreak: 'break-word' },
+  errText: { overflowWrap: 'anywhere', wordBreak: 'break-word' },
 });
 
 interface WorkspaceLite { id: string; name: string }
@@ -137,7 +139,7 @@ export function NewItemCreateGate({ item, createLabel, intro }: CreateGateProps)
           <MessageBar intent="warning">
             <MessageBarBody>
               <MessageBarTitle>Workspaces not reachable</MessageBarTitle>
-              {ws.error}
+              <span className={s.errText}>{ws.error}</span>
               <br /><Caption1>Cosmos `workspaces` container must be reachable and the Console UAMI granted data access.</Caption1>
             </MessageBarBody>
           </MessageBar>
@@ -151,7 +153,7 @@ export function NewItemCreateGate({ item, createLabel, intro }: CreateGateProps)
           </MessageBar>
         )}
         {error && (
-          <MessageBar intent="error"><MessageBarBody><MessageBarTitle>Create failed</MessageBarTitle>{error}</MessageBarBody></MessageBar>
+          <MessageBar intent="error"><MessageBarBody><MessageBarTitle>Create failed</MessageBarTitle><span className={s.errText}>{error}</span></MessageBarBody></MessageBar>
         )}
 
         <div className={s.field}>
@@ -279,7 +281,7 @@ export function NewItemBrowseGate({ item, endpoint, listKey, mapEntity, openSlug
           <MessageBar intent="warning">
             <MessageBarBody>
               <MessageBarTitle>Registry not reachable</MessageBarTitle>
-              {error}
+              <span className={s.errText}>{error}</span>
               {gateHint && <><br /><Caption1>{gateHint}</Caption1></>}
             </MessageBarBody>
           </MessageBar>
@@ -295,7 +297,7 @@ export function NewItemBrowseGate({ item, endpoint, listKey, mapEntity, openSlug
             <div key={r.id} className={selected === r.id ? s.rowActive : s.row}
               onClick={() => setSelected(r.id)} role="button" tabIndex={0}
               onKeyDown={(e) => { if (e.key === 'Enter') setSelected(r.id); }}>
-              <div>
+              <div className={s.rowText}>
                 <Body1><strong>{r.name}</strong></Body1>
                 {r.detail && <Caption1 style={{ display: 'block', color: tokens.colorNeutralForeground3 }}>{r.detail}</Caption1>}
               </div>

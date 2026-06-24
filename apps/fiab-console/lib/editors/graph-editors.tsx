@@ -64,6 +64,7 @@ const useStyles = makeStyles({
   jsonView: {
     fontFamily: tokens.fontFamilyMonospace, fontSize: tokens.fontSizeBase200,
     maxHeight: '320px', overflow: 'auto', margin: 0,
+    whiteSpace: 'pre-wrap', overflowWrap: 'anywhere', wordBreak: 'break-word',
     backgroundColor: tokens.colorNeutralBackground3,
     color: tokens.colorNeutralForeground1,
     ...shorthands.padding(tokens.spacingVerticalM, tokens.spacingHorizontalM),
@@ -78,7 +79,7 @@ const useStyles = makeStyles({
   },
   emptyIcon: { color: tokens.colorNeutralForeground4 },
   scoreCell: { fontVariantNumeric: 'tabular-nums', fontFamily: tokens.fontFamilyMonospace },
-  monoCell: { fontFamily: tokens.fontFamilyMonospace, fontSize: tokens.fontSizeBase200 },
+  monoCell: { fontFamily: tokens.fontFamilyMonospace, fontSize: tokens.fontSizeBase200, overflowWrap: 'anywhere', wordBreak: 'break-word', minWidth: 0 },
 });
 
 const SAMPLE_GREMLIN = `// Find vertices labeled "person", their friends, and the company they work for.
@@ -123,7 +124,7 @@ function ResultsPreview({ result }: { result: any }) {
     );
   }
   return (
-    <pre style={{ fontSize: tokens.fontSizeBase200, maxHeight: 320, overflow: 'auto', background: tokens.colorNeutralBackground3, padding: tokens.spacingVerticalS, borderRadius: tokens.borderRadiusMedium }}>
+    <pre style={{ fontSize: tokens.fontSizeBase200, maxHeight: 320, overflow: 'auto', whiteSpace: 'pre-wrap', overflowWrap: 'anywhere', wordBreak: 'break-word', background: tokens.colorNeutralBackground3, padding: tokens.spacingVerticalS, borderRadius: tokens.borderRadiusMedium }}>
       {JSON.stringify(result, null, 2)}
     </pre>
   );
@@ -329,7 +330,7 @@ export function CypherGraphEditor({ item, id }: { item: FabricItemType; id: stri
           {translated && (
             <div>
               <Caption1>Translated KQL:</Caption1>
-              <pre style={{ fontFamily: 'Consolas, monospace', fontSize: tokens.fontSizeBase200, backgroundColor: tokens.colorNeutralBackground2, padding: tokens.spacingVerticalS, borderRadius: tokens.borderRadiusMedium, whiteSpace: 'pre-wrap' }}>{translated}</pre>
+              <pre style={{ fontFamily: 'Consolas, monospace', fontSize: tokens.fontSizeBase200, backgroundColor: tokens.colorNeutralBackground2, padding: tokens.spacingVerticalS, borderRadius: tokens.borderRadiusMedium, whiteSpace: 'pre-wrap', overflowWrap: 'anywhere', wordBreak: 'break-word', maxWidth: '100%' }}>{translated}</pre>
             </div>
           )}
           <Button appearance="primary" icon={<Play20Regular />} disabled={loading} onClick={run}>Run</Button>
@@ -459,7 +460,7 @@ export function GqlGraphEditor({ item, id }: { item: FabricItemType; id: string 
           {result?.translated && (
             <div>
               <Caption1>Translated Gremlin:</Caption1>
-              <pre style={{ fontFamily: 'Consolas, monospace', fontSize: tokens.fontSizeBase200, backgroundColor: tokens.colorNeutralBackground2, padding: tokens.spacingVerticalS, borderRadius: tokens.borderRadiusMedium, whiteSpace: 'pre-wrap' }}>{result.translated}</pre>
+              <pre style={{ fontFamily: 'Consolas, monospace', fontSize: tokens.fontSizeBase200, backgroundColor: tokens.colorNeutralBackground2, padding: tokens.spacingVerticalS, borderRadius: tokens.borderRadiusMedium, whiteSpace: 'pre-wrap', overflowWrap: 'anywhere', wordBreak: 'break-word', maxWidth: '100%' }}>{result.translated}</pre>
             </div>
           )}
           {gqlGraph && (
@@ -875,22 +876,24 @@ export function VectorStoreEditor({ item, id }: { item: FabricItemType; id: stri
                       <Subtitle2>Live index fields — {liveIndex.name}</Subtitle2>
                       <Badge appearance="tint" color="success">{(liveIndex.fields || []).length} fields</Badge>
                     </div>
-                    <Table aria-label="Index fields" size="small">
-                      <TableHeader><TableRow>
-                        <TableHeaderCell>Field</TableHeaderCell><TableHeaderCell>Type</TableHeaderCell>
-                        <TableHeaderCell>Key</TableHeaderCell><TableHeaderCell>Dimensions</TableHeaderCell>
-                      </TableRow></TableHeader>
-                      <TableBody>
-                        {(liveIndex.fields || []).map((f: any) => (
-                          <TableRow key={f.name}>
-                            <TableCell><strong>{f.name}</strong></TableCell>
-                            <TableCell className={s.monoCell}>{f.type}</TableCell>
-                            <TableCell>{f.key ? <Badge appearance="tint" color="brand">key</Badge> : ''}</TableCell>
-                            <TableCell className={s.scoreCell}>{f.dimensions || ''}</TableCell>
-                          </TableRow>
-                        ))}
-                      </TableBody>
-                    </Table>
+                    <div style={{ overflowX: 'auto', maxWidth: '100%' }}>
+                      <Table aria-label="Index fields" size="small">
+                        <TableHeader><TableRow>
+                          <TableHeaderCell>Field</TableHeaderCell><TableHeaderCell>Type</TableHeaderCell>
+                          <TableHeaderCell>Key</TableHeaderCell><TableHeaderCell>Dimensions</TableHeaderCell>
+                        </TableRow></TableHeader>
+                        <TableBody>
+                          {(liveIndex.fields || []).map((f: any) => (
+                            <TableRow key={f.name}>
+                              <TableCell><strong>{f.name}</strong></TableCell>
+                              <TableCell className={s.monoCell}>{f.type}</TableCell>
+                              <TableCell>{f.key ? <Badge appearance="tint" color="brand">key</Badge> : ''}</TableCell>
+                              <TableCell className={s.scoreCell}>{f.dimensions || ''}</TableCell>
+                            </TableRow>
+                          ))}
+                        </TableBody>
+                      </Table>
+                    </div>
                   </>
                 )}
               </>

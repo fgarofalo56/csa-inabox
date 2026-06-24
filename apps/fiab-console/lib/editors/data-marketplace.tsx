@@ -47,15 +47,15 @@ const useStyles = makeStyles({
   hint: { color: tokens.colorNeutralForeground3 },
   discoverBody: { display: 'grid', gridTemplateColumns: 'minmax(220px, 250px) 1fr', gap: tokens.spacingHorizontalL, minHeight: 0, flex: 1 },
   facetPanel: {
-    display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalM, overflowY: 'auto',
-    borderRight: `1px solid ${tokens.colorNeutralStroke2}`, paddingRight: tokens.spacingHorizontalM, maxHeight: '540px',
+    display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalM, overflowY: 'auto', minWidth: 0, minHeight: 0,
+    borderRight: `1px solid ${tokens.colorNeutralStroke2}`, paddingRight: tokens.spacingHorizontalM,
   },
-  facetGroup: { display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalXXS },
-  facetRow: { display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: tokens.spacingHorizontalXS },
-  results: { display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalS, overflowY: 'auto', maxHeight: '560px' },
+  facetGroup: { display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalXXS, minWidth: 0 },
+  facetRow: { display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: tokens.spacingHorizontalXS, minWidth: 0 },
+  results: { display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalS, overflowY: 'auto', minWidth: 0, minHeight: 0 },
   chips: { display: 'flex', gap: tokens.spacingHorizontalS, flexWrap: 'wrap', alignItems: 'center' },
-  resultCard: { padding: tokens.spacingHorizontalM },
-  cardMeta: { display: 'flex', gap: tokens.spacingHorizontalS, flexWrap: 'wrap', marginTop: tokens.spacingVerticalS, alignItems: 'center' },
+  resultCard: { padding: tokens.spacingHorizontalM, minWidth: 0 },
+  cardMeta: { display: 'flex', gap: tokens.spacingHorizontalS, flexWrap: 'wrap', marginTop: tokens.spacingVerticalS, alignItems: 'center', minWidth: 0 },
   cardActions: { display: 'flex', gap: tokens.spacingHorizontalS, marginTop: tokens.spacingVerticalS },
   domainGrid: { display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(200px, 1fr))', gap: tokens.spacingHorizontalM },
   domainCard: { padding: tokens.spacingHorizontalL, cursor: 'pointer', display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalS },
@@ -63,10 +63,12 @@ const useStyles = makeStyles({
   formGrid: { display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(240px, 1fr))', gap: tokens.spacingHorizontalM },
   receipt: {
     fontFamily: 'Consolas, monospace', fontSize: tokens.fontSizeBase100, whiteSpace: 'pre-wrap',
+    overflowWrap: 'anywhere', wordBreak: 'break-word', maxWidth: '100%', boxSizing: 'border-box',
     background: tokens.colorNeutralBackground2, padding: tokens.spacingVerticalS, borderRadius: tokens.borderRadiusSmall,
-    maxHeight: '220px', overflow: 'auto',
+    minHeight: '120px', maxHeight: '320px', overflow: 'auto', resize: 'vertical',
   },
   empty: { padding: tokens.spacingHorizontalXXL, textAlign: 'center', color: tokens.colorNeutralForeground3 },
+  cellWrap: { overflowWrap: 'anywhere', wordBreak: 'break-word', minWidth: 0 },
 });
 
 const PRODUCT_TYPES = ['Lakehouse', 'Warehouse', 'Dataset', 'Semantic model', 'KQL database', 'Report', 'API', 'Notebook'];
@@ -443,7 +445,7 @@ export function DataProductsMarketplace() {
               <TableBody>
                 {requests.map((r) => (
                   <TableRow key={r.id}>
-                    <TableCell>{r.summary || r.productId}</TableCell>
+                    <TableCell className={s.cellWrap}>{r.summary || r.productId}</TableCell>
                     <TableCell>{new Date(r.requestedAt).toLocaleString()}</TableCell>
                     <TableCell><Badge appearance="outline">{r.permission}</Badge></TableCell>
                     <TableCell><Badge appearance="tint" color="warning">{r.status}</Badge></TableCell>
@@ -626,7 +628,7 @@ function PublishTab({
               const status = String(st.publishStatus || 'Draft');
               return (
                 <TableRow key={p.id}>
-                  <TableCell>{p.displayName}</TableCell>
+                  <TableCell className={styles.cellWrap}>{p.displayName}</TableCell>
                   <TableCell>{String(st.domain || '—')}</TableCell>
                   <TableCell>{String(st.productType || '—')}</TableCell>
                   <TableCell>

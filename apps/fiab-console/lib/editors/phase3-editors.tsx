@@ -159,7 +159,9 @@ const useStyles = makeStyles({
   },
   assistResult: {
     fontFamily: 'Consolas, "Cascadia Code", monospace', fontSize: tokens.fontSizeBase200,
-    whiteSpace: 'pre-wrap', margin: 0, overflowX: 'auto',
+    whiteSpace: 'pre-wrap', margin: 0,
+    overflowWrap: 'anywhere', wordBreak: 'break-word', maxWidth: '100%',
+    maxHeight: '320px', overflow: 'auto',
   },
   // Live auto-refresh status pill — mirrors Fabric Real-Time Dashboard's
   // "live" affordance so the user can see the continuous cadence is firing.
@@ -6888,7 +6890,7 @@ export function KqlDashboardEditor({ item, id }: { item: FabricItemType; id: str
           const rowSpan = Math.max(1, Math.min(8, t.h || 2));
           const dsName = t.dataSourceId ? (dataSources.find((d) => d.id === t.dataSourceId)?.name || t.dataSourceId) : (t.database || defaultDb);
           return (
-            <div key={i} className={s.card} style={{ gridColumn: `span ${span}`, gridRow: `span ${rowSpan}`, display: 'flex', flexDirection: 'column' }}>
+            <div key={i} className={s.card} style={{ gridColumn: `span ${span}`, gridRow: `span ${rowSpan}`, display: 'flex', flexDirection: 'column', minWidth: 0 }}>
               <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
                 <div>
                   <Caption1 style={{ color: tokens.colorNeutralForeground3 }}>{t.viz.toUpperCase()} · {dsName}</Caption1>
@@ -12935,7 +12937,7 @@ export function SemanticModelEditor({ item, id }: { item: FabricItemType; id: st
                         <summary style={{ cursor: 'pointer' }}>
                           <Caption1>TMSL receipt (apply offline: <code>Invoke-ASCmd -Server &quot;asazure://…&quot; -Query &lt;tmsl&gt;</code>)</Caption1>
                         </summary>
-                        <pre style={{ maxHeight: 240, overflow: 'auto', fontSize: tokens.fontSizeBase100, fontFamily: 'Consolas, monospace', background: tokens.colorNeutralBackground2, padding: tokens.spacingVerticalS, borderRadius: tokens.borderRadiusMedium, marginTop: tokens.spacingVerticalXS}}>
+                        <pre style={{ maxHeight: 240, overflow: 'auto', fontSize: tokens.fontSizeBase100, fontFamily: 'Consolas, monospace', background: tokens.colorNeutralBackground2, padding: tokens.spacingVerticalS, borderRadius: tokens.borderRadiusMedium, marginTop: tokens.spacingVerticalXS, whiteSpace: 'pre-wrap', overflowWrap: 'anywhere', maxWidth: '100%'}}>
                           {tmslReceipt.slice(0, 4000)}
                         </pre>
                       </details>
@@ -13193,7 +13195,7 @@ export function SemanticModelEditor({ item, id }: { item: FabricItemType; id: st
                       <div key={`${t.name}-${m.name}`} className={s.card} style={{ marginTop: tokens.spacingVerticalS}}>
                         <Caption1>{t.name}</Caption1>
                         <div style={{ fontWeight: 600 }}>{m.name}</div>
-                        <pre style={{ margin: 0, fontFamily: 'Consolas, monospace', fontSize: tokens.fontSizeBase200, whiteSpace: 'pre-wrap' }}>{m.expression || '—'}</pre>
+                        <pre style={{ margin: 0, fontFamily: 'Consolas, monospace', fontSize: tokens.fontSizeBase200, whiteSpace: 'pre-wrap', overflowWrap: 'anywhere', maxWidth: '100%' }}>{m.expression || '—'}</pre>
                       </div>
                     )))}
                     {((detail?.tables || []).flatMap((t) => t.measures || []).length === 0) && (
@@ -16478,7 +16480,7 @@ export function DashboardEditor({ item, id }: { item: FabricItemType; id: string
                 {loomTiles.map((t) => {
                   const pos = layout[t.id];
                   return (
-                    <div key={t.id} style={{ gridColumn: span(pos?.w ?? t.w ?? 4) }}>
+                    <div key={t.id} style={{ gridColumn: span(pos?.w ?? t.w ?? 4), minWidth: 0 }}>
                       <LoomTileCard
                         tile={t}
                         result={loomResults[t.id]}

@@ -114,7 +114,7 @@ const useCatalogStyles = makeStyles({
   // detail panel
   detail: { padding: tokens.spacingVerticalL, display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalM, minHeight: 0, flex: 1, overflow: 'auto' },
   detailHead: { display: 'flex', alignItems: 'center', gap: tokens.spacingHorizontalM },
-  metaGrid: { display: 'grid', gridTemplateColumns: 'auto 1fr', gap: `${tokens.spacingVerticalXS} ${tokens.spacingHorizontalL}`, alignItems: 'baseline', maxWidth: '640px' },
+  metaGrid: { display: 'grid', gridTemplateColumns: 'auto minmax(0, 1fr)', gap: `${tokens.spacingVerticalXS} ${tokens.spacingHorizontalL}`, alignItems: 'baseline', maxWidth: '640px', overflowWrap: 'anywhere', wordBreak: 'break-word' },
   metaKey: { color: tokens.colorNeutralForeground3, fontSize: tokens.fontSizeBase200 },
   empty: { padding: tokens.spacingVerticalXXL, color: tokens.colorNeutralForeground3, fontStyle: 'italic', textAlign: 'center' },
 });
@@ -435,7 +435,7 @@ export function ModelCatalogPanel({ active, nonce, acct = null }: { active: bool
 // ============================================================ Chat playground
 
 const useChatStyles = makeStyles({
-  root: { display: 'grid', gridTemplateColumns: '280px 1fr 300px', gap: 0, minHeight: 0, flex: 1, overflow: 'hidden' },
+  root: { display: 'grid', gridTemplateColumns: '280px minmax(0, 1fr) 300px', gap: 0, minHeight: 0, flex: 1, overflow: 'hidden' },
   pane: { display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalM, padding: tokens.spacingVerticalL, overflow: 'auto', minHeight: 0 },
   leftPane: { borderRight: `1px solid ${tokens.colorNeutralStroke2}` },
   rightPane: { borderLeft: `1px solid ${tokens.colorNeutralStroke2}` },
@@ -445,7 +445,7 @@ const useChatStyles = makeStyles({
   bubbleRow: { display: 'flex', gap: tokens.spacingHorizontalS, maxWidth: '85%' },
   bubbleRowUser: { alignSelf: 'flex-end', flexDirection: 'row-reverse' },
   bubble: {
-    padding: `${tokens.spacingVerticalS} ${tokens.spacingHorizontalM}`, borderRadius: tokens.borderRadiusLarge, whiteSpace: 'pre-wrap', wordBreak: 'break-word',
+    minWidth: 0, padding: `${tokens.spacingVerticalS} ${tokens.spacingHorizontalM}`, borderRadius: tokens.borderRadiusLarge, whiteSpace: 'pre-wrap', wordBreak: 'break-word', overflowWrap: 'anywhere',
     backgroundColor: tokens.colorNeutralBackground3,
   },
   bubbleUser: { backgroundColor: tokens.colorBrandBackground2, color: tokens.colorNeutralForeground1 },
@@ -666,7 +666,7 @@ print(response.choices[0].message.content)`, [deployment, system, temperature, m
           <DialogBody>
             <DialogTitle>View code — Python (Azure OpenAI SDK)</DialogTitle>
             <DialogContent>
-              <pre style={{ whiteSpace: 'pre-wrap', fontFamily: 'Consolas, monospace', fontSize: tokens.fontSizeBase200, background: tokens.colorNeutralBackground3, padding: tokens.spacingVerticalM, borderRadius: tokens.borderRadiusLarge }}>{codeSnippet}</pre>
+              <pre style={{ whiteSpace: 'pre-wrap', overflowWrap: 'anywhere', wordBreak: 'break-word', maxWidth: '100%', maxHeight: '60vh', overflow: 'auto', fontFamily: 'Consolas, monospace', fontSize: tokens.fontSizeBase200, background: tokens.colorNeutralBackground3, padding: tokens.spacingVerticalM, borderRadius: tokens.borderRadiusLarge }}>{codeSnippet}</pre>
             </DialogContent>
             <DialogActions>
               <Button onClick={() => navigator.clipboard?.writeText(codeSnippet)}>Copy</Button>
@@ -721,7 +721,7 @@ export function PlaygroundsLandingPanel({ active, onOpenChat, onOpenImages, onOp
 
 const useMediaStyles = makeStyles({
   root: { padding: tokens.spacingVerticalL, display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalM, overflow: 'auto', flex: 1, minHeight: 0 },
-  twoCol: { display: 'grid', gridTemplateColumns: 'minmax(280px, 360px) 1fr', gap: tokens.spacingHorizontalL, alignItems: 'start' },
+  twoCol: { display: 'grid', gridTemplateColumns: 'minmax(280px, 360px) minmax(0, 1fr)', gap: tokens.spacingHorizontalL, alignItems: 'start' },
   panel: { display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalM, padding: tokens.spacingVerticalL },
   // Result panel keeps a stable height so the empty / loading placeholder reads
   // as an intentional, centered drop-zone rather than a collapsed card.
@@ -882,7 +882,7 @@ print(result.data[0].url)`, [deployment, prompt, n, size, quality, style]);
           <DialogBody>
             <DialogTitle>View code — Python (Azure OpenAI SDK)</DialogTitle>
             <DialogContent>
-              <pre style={{ whiteSpace: 'pre-wrap', fontFamily: 'Consolas, monospace', fontSize: tokens.fontSizeBase200, background: tokens.colorNeutralBackground3, padding: tokens.spacingVerticalM, borderRadius: tokens.borderRadiusLarge }}>{codeSnippet}</pre>
+              <pre style={{ whiteSpace: 'pre-wrap', overflowWrap: 'anywhere', wordBreak: 'break-word', maxWidth: '100%', maxHeight: '60vh', overflow: 'auto', fontFamily: 'Consolas, monospace', fontSize: tokens.fontSizeBase200, background: tokens.colorNeutralBackground3, padding: tokens.spacingVerticalM, borderRadius: tokens.borderRadiusLarge }}>{codeSnippet}</pre>
             </DialogContent>
             <DialogActions>
               <Button onClick={() => navigator.clipboard?.writeText(codeSnippet)}>Copy</Button>
@@ -958,7 +958,7 @@ export function AudioPlaygroundPanel({ active, nonce, acct = null }: { active: b
             <Field label="Audio file (mp3 / wav / m4a / ogg / flac)" required>
               <input type="file" accept="audio/*,.mp3,.wav,.m4a,.ogg,.flac,.webm" onChange={(e) => setFile(e.target.files?.[0] || null)} />
             </Field>
-            {file ? <Caption1>{file.name} · {(file.size / 1024).toFixed(0)} KB</Caption1> : null}
+            {file ? <Caption1 style={{ overflowWrap: 'anywhere', wordBreak: 'break-word', minWidth: 0 }}>{file.name} · {(file.size / 1024).toFixed(0)} KB</Caption1> : null}
             <Button appearance="primary" icon={<MicRecord24Regular />} disabled={busy || !deployment || !file} onClick={transcribe}>{busy ? 'Transcribing…' : 'Transcribe'}</Button>
             {msg && <MessageBar intent={msg.intent}><MessageBarBody>{msg.text}{msg.hint ? <><br /><Caption1>{msg.hint}</Caption1></> : null}</MessageBarBody></MessageBar>}
           </Card>

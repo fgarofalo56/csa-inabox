@@ -70,7 +70,7 @@ const useStyles = makeStyles({
     overflow: 'auto', whiteSpace: 'pre',
   },
   cardGrid: { display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(220px, 1fr))', gap: tokens.spacingVerticalM },
-  card: { padding: tokens.spacingVerticalM, border: `1px solid ${tokens.colorNeutralStroke2}`, borderRadius: tokens.borderRadiusLarge },
+  card: { padding: tokens.spacingVerticalM, border: `1px solid ${tokens.colorNeutralStroke2}`, borderRadius: tokens.borderRadiusLarge, minWidth: 0, overflowWrap: 'anywhere', wordBreak: 'break-word' },
   protocolRow: { display: 'flex', gap: tokens.spacingHorizontalM, flexWrap: 'wrap' },
 });
 
@@ -812,7 +812,7 @@ export function ApimApiEditor({ item, id }: { item: FabricItemType; id: string }
                       <TableRow key={op.name}>
                         <TableCell><Badge appearance="tint" color={op.method === 'GET' ? 'success' : op.method === 'DELETE' ? 'danger' : 'brand'}>{op.method}</Badge></TableCell>
                         <TableCell>{op.displayName || op.name}</TableCell>
-                        <TableCell><code>{op.urlTemplate}</code></TableCell>
+                        <TableCell><code style={{ wordBreak: 'break-all', overflowWrap: 'anywhere' }}>{op.urlTemplate}</code></TableCell>
                         <TableCell>
                           <div style={{ display: 'flex', gap: tokens.spacingHorizontalXS }}>
                             <Button size="small" onClick={() => openEditOp(op.name)}>Edit</Button>
@@ -878,11 +878,11 @@ export function ApimApiEditor({ item, id }: { item: FabricItemType; id: string }
                     )}
                   </div>
                   <Caption1 style={{ color: tokens.colorNeutralForeground3 }}>Response headers</Caption1>
-                  <div className={s.specViewer} style={{ maxHeight: 140 }}>
+                  <div className={s.specViewer} style={{ maxHeight: 140, whiteSpace: 'pre-wrap', overflowWrap: 'anywhere' }}>
                     {Object.entries(testResp.headers).map(([k, v]) => `${k}: ${v}`).join('\n')}
                   </div>
                   <Caption1 style={{ color: tokens.colorNeutralForeground3 }}>Response body</Caption1>
-                  <div className={s.specViewer}>{testResp.body || '(empty)'}</div>
+                  <div className={s.specViewer} style={{ whiteSpace: 'pre-wrap', overflowWrap: 'anywhere' }}>{testResp.body || '(empty)'}</div>
                 </div>
               )}
             </div>
@@ -946,7 +946,7 @@ export function ApimApiEditor({ item, id }: { item: FabricItemType; id: string }
                     <TableBody>
                       {revs.data.releases.map((r: any) => (
                         <TableRow key={r.id || r.name}>
-                          <TableCell><code>{r.name}</code></TableCell>
+                          <TableCell><code style={{ wordBreak: 'break-all', overflowWrap: 'anywhere' }}>{r.name}</code></TableCell>
                           <TableCell>{r.notes || '—'}</TableCell>
                           <TableCell>{r.createdDateTime || '—'}</TableCell>
                         </TableRow>
@@ -1486,7 +1486,7 @@ export function ApimProductEditor({ item, id }: { item: FabricItemType; id: stri
                   {apis.data.productApis.map((a: any) => (
                     <TableRow key={a.name}>
                       <TableCell><strong>{a.displayName}</strong> <Caption1>· {a.name}</Caption1></TableCell>
-                      <TableCell><code>{a.path}</code></TableCell>
+                      <TableCell><code style={{ wordBreak: 'break-all', overflowWrap: 'anywhere' }}>{a.path}</code></TableCell>
                       <TableCell><Button size="small" icon={<Delete20Regular />} onClick={() => removeApi(a.name)} disabled={apiBusy}>Remove</Button></TableCell>
                     </TableRow>
                   ))}
@@ -1528,7 +1528,7 @@ export function ApimProductEditor({ item, id }: { item: FabricItemType; id: stri
                     const revealed = subKeys[sub.name];
                     return (
                       <TableRow key={sub.name}>
-                        <TableCell><code>{sub.name}</code></TableCell>
+                        <TableCell><code style={{ wordBreak: 'break-all', overflowWrap: 'anywhere' }}>{sub.name}</code></TableCell>
                         <TableCell>{sub.displayName || '—'}</TableCell>
                         <TableCell>
                           {['active', 'suspended'].includes(sub.state) ? (
@@ -3292,15 +3292,15 @@ export function DataProductEditor({ item, id }: { item: FabricItemType; id: stri
                   <TableBody>
                     {lineage.nodes.map((n: any) => (
                       <TableRow key={n.id}>
-                        <TableCell>{n.label || n.id}</TableCell>
-                        <TableCell><code>{n.type || '—'}</code></TableCell>
+                        <TableCell style={{ wordBreak: 'break-word', overflowWrap: 'anywhere' }}>{n.label || n.id}</TableCell>
+                        <TableCell><code style={{ wordBreak: 'break-all', overflowWrap: 'anywhere' }}>{n.type || '—'}</code></TableCell>
                         <TableCell>{n.source || 'purview'}</TableCell>
                       </TableRow>
                     ))}
                   </TableBody>
                 </Table>
                 <Subtitle2>Edges ({lineage.edges.length})</Subtitle2>
-                <div className={s.specViewer} style={{ maxHeight: 200 }}>
+                <div className={s.specViewer} style={{ maxHeight: 200, whiteSpace: 'pre-wrap', overflowWrap: 'anywhere' }}>
                   {lineage.edges.map((e: any, i: number) => `${e.from} → ${e.to}${e.label ? ` (${e.label})` : ''}`).join('\n') || '(no edges)'}
                 </div>
               </>

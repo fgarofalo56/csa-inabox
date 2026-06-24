@@ -53,8 +53,8 @@ import type { FabricItemType } from '@/lib/catalog/fabric-item-types';
 import type { RibbonTab } from '@/lib/components/ribbon';
 
 const useStyles = makeStyles({
-  pad: { padding: tokens.spacingVerticalL, display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalM },
-  gate: { padding: tokens.spacingVerticalL, display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalL, maxWidth: '720px' },
+  pad: { padding: tokens.spacingVerticalL, display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalM, minWidth: 0, maxWidth: '100%' },
+  gate: { padding: tokens.spacingVerticalL, display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalL, maxWidth: '720px', minWidth: 0 },
   row: { display: 'flex', gap: tokens.spacingHorizontalM, alignItems: 'flex-end', flexWrap: 'wrap' },
   field: { flex: 1, minWidth: '220px', display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalXS },
 });
@@ -609,8 +609,8 @@ export function PipelineEditorCore({
             </div>
           ) : (
             <>
-              <div style={{ display: 'flex', gap: tokens.spacingVerticalS, alignItems: 'center', flexWrap: 'wrap' }}>
-                <Badge appearance="filled" color="brand">{bound}</Badge>
+              <div style={{ display: 'flex', gap: tokens.spacingVerticalS, alignItems: 'center', flexWrap: 'wrap', minWidth: 0 }}>
+                <Badge appearance="filled" color="brand" style={{ maxWidth: '100%', overflowWrap: 'anywhere', wordBreak: 'break-word', height: 'auto' }}>{bound}</Badge>
                 <Badge appearance="outline">{activityCount} activit{activityCount === 1 ? 'y' : 'ies'}</Badge>
                 {dirty && <Badge appearance="outline" color="warning">unsaved</Badge>}
                 {validation && <Badge appearance="filled" color={validation.ok ? 'success' : 'danger'}>{validation.ok ? 'Validated' : 'Invalid'}</Badge>}
@@ -787,7 +787,7 @@ export function PipelineEditorCore({
                     </Table>
                   </div>
                   <Subtitle2>Create new daily schedule trigger</Subtitle2>
-                  <div style={{ display: 'grid', gridTemplateColumns: '2fr 1fr 1fr', gap: tokens.spacingVerticalM, marginTop: tokens.spacingVerticalS }}>
+                  <div style={{ display: 'grid', gridTemplateColumns: 'minmax(0,2fr) minmax(0,1fr) minmax(0,1fr)', gap: tokens.spacingVerticalM, marginTop: tokens.spacingVerticalS }}>
                     <Field label="Name"><Input value={newTriggerName} onChange={(_, d) => setNewTriggerName(d.value)} placeholder="daily-orders" /></Field>
                     <Field label="UTC hour (0-23)"><Input type="number" min={0} max={23} value={String(newTriggerHour)} onChange={(_, d) => setNewTriggerHour(Math.max(0, Math.min(23, Number(d.value) || 0)))} /></Field>
                     <Field label="Minute (0-59)"><Input type="number" min={0} max={59} value={String(newTriggerMinute)} onChange={(_, d) => setNewTriggerMinute(Math.max(0, Math.min(59, Number(d.value) || 0)))} /></Field>

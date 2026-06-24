@@ -63,9 +63,12 @@ const useStyles = makeStyles({
     borderRadius: tokens.borderRadiusLarge,
     border: `1px dashed ${tokens.colorNeutralStroke2}`,
     color: tokens.colorNeutralForeground3,
-    fontSize: '13px',
+    fontSize: tokens.fontSizeBase200,
     textAlign: 'center',
     lineHeight: 1.6,
+    maxWidth: '100%',
+    overflowWrap: 'anywhere',
+    wordBreak: 'break-word',
   },
   spinnerWrap: {
     padding: tokens.spacingVerticalM,

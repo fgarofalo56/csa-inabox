@@ -58,12 +58,17 @@ const useStyles = makeStyles({
     borderBottom: `1px solid ${tokens.colorNeutralStroke2}`,
   },
   body: { flex: 1, overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalS, paddingRight: tokens.spacingHorizontalXS },
-  msg: { padding: `${tokens.spacingVerticalS} ${tokens.spacingHorizontalM}`, borderRadius: tokens.borderRadiusXLarge, maxWidth: '95%', fontSize: tokens.fontSizeBase300 },
-  msgCopilot: { backgroundColor: tokens.colorNeutralBackground2, alignSelf: 'flex-start', borderTopLeftRadius: '4px' },
-  msgYou: { backgroundColor: tokens.colorBrandBackground2, alignSelf: 'flex-end', borderTopRightRadius: '4px' },
+  msg: {
+    padding: `${tokens.spacingVerticalS} ${tokens.spacingHorizontalM}`, borderRadius: tokens.borderRadiusXLarge,
+    maxWidth: '95%', fontSize: tokens.fontSizeBase300, minWidth: 0,
+    overflowWrap: 'anywhere', wordBreak: 'break-word',
+  },
+  msgCopilot: { backgroundColor: tokens.colorNeutralBackground2, alignSelf: 'flex-start', borderTopLeftRadius: tokens.borderRadiusSmall },
+  msgYou: { backgroundColor: tokens.colorBrandBackground2, alignSelf: 'flex-end', borderTopRightRadius: tokens.borderRadiusSmall },
   stepRow: {
-    display: 'flex', alignItems: 'center', gap: tokens.spacingHorizontalS,
+    display: 'flex', alignItems: 'center', flexWrap: 'wrap', gap: tokens.spacingHorizontalS, minWidth: 0,
     color: tokens.colorNeutralForeground3, fontSize: tokens.fontSizeBase200, paddingLeft: tokens.spacingHorizontalXXS, marginTop: tokens.spacingVerticalXS,
+    overflowWrap: 'anywhere', wordBreak: 'break-word',
   },
   composer: { display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalS, paddingTop: tokens.spacingVerticalS, borderTop: `1px solid ${tokens.colorNeutralStroke2}` },
   picker: {
@@ -71,8 +76,9 @@ const useStyles = makeStyles({
     maxHeight: '168px', overflowY: 'auto', backgroundColor: tokens.colorNeutralBackground1,
   },
   pickItem: {
-    display: 'flex', alignItems: 'center', gap: tokens.spacingHorizontalS, padding: `${tokens.spacingVerticalXS} ${tokens.spacingHorizontalS}`,
-    cursor: 'pointer', fontSize: tokens.fontSizeBase200,
+    display: 'flex', alignItems: 'center', flexWrap: 'wrap', gap: tokens.spacingHorizontalS, minWidth: 0,
+    padding: `${tokens.spacingVerticalXS} ${tokens.spacingHorizontalS}`,
+    cursor: 'pointer', fontSize: tokens.fontSizeBase200, overflowWrap: 'anywhere', wordBreak: 'break-word',
     ':hover': { backgroundColor: tokens.colorNeutralBackground2Hover },
   },
 });

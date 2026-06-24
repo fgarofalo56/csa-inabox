@@ -35,7 +35,7 @@ import type { FabricItemType } from '@/lib/catalog/fabric-item-types';
 import type { RibbonTab } from '@/lib/components/ribbon';
 
 const useStyles = makeStyles({
-  pad: { padding: tokens.spacingVerticalL, display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalM, flex: 1, minHeight: 0 },
+  pad: { padding: tokens.spacingVerticalL, display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalM, flex: 1, minHeight: 0, minWidth: 0, overflowY: 'auto' },
   toolbar: { display: 'flex', gap: tokens.spacingHorizontalS, alignItems: 'flex-end', flexWrap: 'wrap' },
   treePad: { padding: tokens.spacingHorizontalS },
   tabs: { borderBottom: `1px solid ${tokens.colorNeutralStroke2}`, padding: `${tokens.spacingVerticalS} ${tokens.spacingHorizontalS} 0` },
@@ -44,10 +44,10 @@ const useStyles = makeStyles({
     backgroundColor: tokens.colorNeutralBackground1Selected,
     boxShadow: `inset 3px 0 0 0 ${tokens.colorBrandStroke1}`,
   },
-  cell: { fontFamily: tokens.fontFamilyMonospace, fontSize: tokens.fontSizeBase200, whiteSpace: 'nowrap' },
+  cell: { fontFamily: tokens.fontFamilyMonospace, fontSize: tokens.fontSizeBase200, overflowWrap: 'anywhere', wordBreak: 'break-word' },
   liveHint: { display: 'flex', alignItems: 'center', gap: tokens.spacingHorizontalXS, color: tokens.colorNeutralForeground3 },
   field: { display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalXS, minWidth: '240px' },
-  mono: { fontFamily: tokens.fontFamilyMonospace, fontSize: tokens.fontSizeBase200 },
+  mono: { fontFamily: tokens.fontFamilyMonospace, fontSize: tokens.fontSizeBase200, overflowWrap: 'anywhere', wordBreak: 'break-word', minWidth: 0 },
   section: { display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalS },
   policyHeader: { display: 'flex', alignItems: 'center', gap: tokens.spacingHorizontalS },
   versionCard: {
@@ -75,7 +75,7 @@ const useStyles = makeStyles({
   violationList: { margin: `${tokens.spacingVerticalXS} 0 0`, paddingLeft: '18px', display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalXS },
   settingsGrid: {
     display: 'grid',
-    gridTemplateColumns: 'max-content 1fr',
+    gridTemplateColumns: 'max-content minmax(0, 1fr)',
     gap: `${tokens.spacingVerticalXS} ${tokens.spacingHorizontalL}`,
     alignItems: 'center',
     maxWidth: '640px',

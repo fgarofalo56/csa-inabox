@@ -60,6 +60,7 @@ const useStyles = makeStyles({
     boxShadow: tokens.shadow8,
     display: 'flex',
     alignItems: 'center',
+    flexWrap: 'wrap',
     gap: tokens.spacingHorizontalL,
   },
   heroIcon: {
@@ -138,7 +139,10 @@ const useStyles = makeStyles({
     gap: tokens.spacingVerticalXS,
   },
   composerRow: { display: 'flex', gap: tokens.spacingHorizontalS, alignItems: 'flex-end' },
-  composerFoot: { display: 'flex', alignItems: 'center', gap: tokens.spacingHorizontalS, color: tokens.colorNeutralForeground3 },
+  composerFoot: { display: 'flex', alignItems: 'center', flexWrap: 'wrap', gap: tokens.spacingHorizontalS, color: tokens.colorNeutralForeground3 },
+  // Long backend error / remediation strings (AOAI errors, URLs) must wrap
+  // inside the status MessageBar rather than force horizontal overflow.
+  bannerText: { overflowWrap: 'anywhere', wordBreak: 'break-word', minWidth: 0 },
 });
 
 /**
@@ -429,7 +433,7 @@ export function CopilotConsoleView({ embedded = false, contextSlug = 'default', 
           <div className={s.banners}>
             {status && !status.ready && (
               <MessageBar intent={status.aoai?.ok ? 'warning' : 'info'}>
-                <MessageBarBody>
+                <MessageBarBody className={s.bannerText}>
                   <MessageBarTitle>Orchestrator status</MessageBarTitle>
                   {status.aoai?.ok
                     ? `AOAI reachable (${status.aoai.deployment}) · ${status.tools?.count ?? 0} tools registered.`
@@ -448,7 +452,7 @@ export function CopilotConsoleView({ embedded = false, contextSlug = 'default', 
             )}
             {aoaiUnavailable && (
               <MessageBar intent="warning">
-                <MessageBarBody>
+                <MessageBarBody className={s.bannerText}>
                   <MessageBarTitle>No AOAI deployment</MessageBarTitle>
                   {aoaiUnavailable}
                 </MessageBarBody>
@@ -459,7 +463,7 @@ export function CopilotConsoleView({ embedded = false, contextSlug = 'default', 
             )}
             {topError && (
               <MessageBar intent="error">
-                <MessageBarBody><MessageBarTitle>Orchestrator error</MessageBarTitle>{topError}</MessageBarBody>
+                <MessageBarBody className={s.bannerText}><MessageBarTitle>Orchestrator error</MessageBarTitle>{topError}</MessageBarBody>
               </MessageBar>
             )}
           </div>

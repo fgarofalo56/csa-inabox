@@ -586,18 +586,18 @@ export function StreamAnalyticsJobEditor({ item, id }: { item: FabricItemType; i
           )}
 
           {tab === 'builder' && (
-            <div style={{ display: 'grid', gridTemplateColumns: '1fr 360px', gap: tokens.spacingHorizontalL }}>
-              <div style={{ display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalS }}>
+            <div style={{ display: 'grid', gridTemplateColumns: 'minmax(0, 1fr) minmax(0, 360px)', gap: tokens.spacingHorizontalL }}>
+              <div style={{ display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalS, minWidth: 0 }}>
                 <Subtitle2>Guided transform builder</Subtitle2>
                 <Caption1>
                   Configure a filter / aggregate / window / join through guided fields. The
                   generated SAQL compiles to this job&apos;s transformation — no hand-written query.
                 </Caption1>
-                <div style={{ display: 'flex', gap: tokens.spacingHorizontalS }}>
-                  <Field label="Source alias (FROM)" style={{ flex: 1 }}>
+                <div style={{ display: 'flex', gap: tokens.spacingHorizontalS, flexWrap: 'wrap' }}>
+                  <Field label="Source alias (FROM)" style={{ flex: 1, minWidth: 0 }}>
                     <Input value={builderSource} onChange={(_, d) => setBuilderSource(d.value)} aria-label="Builder source alias" />
                   </Field>
-                  <Field label="Destination alias (INTO)" style={{ flex: 1 }}>
+                  <Field label="Destination alias (INTO)" style={{ flex: 1, minWidth: 0 }}>
                     <Input value={builderSink} onChange={(_, d) => setBuilderSink(d.value)} aria-label="Builder sink alias" />
                   </Field>
                 </div>
@@ -616,7 +616,7 @@ export function StreamAnalyticsJobEditor({ item, id }: { item: FabricItemType; i
                   </Button>
                 </div>
               </div>
-              <div style={{ borderLeft: `1px solid ${tokens.colorNeutralStroke2}`, paddingLeft: tokens.spacingHorizontalL, maxHeight: 560, overflowY: 'auto' }}>
+              <div style={{ borderLeft: `1px solid ${tokens.colorNeutralStroke2}`, paddingLeft: tokens.spacingHorizontalL, maxHeight: 560, overflowY: 'auto', minWidth: 0 }}>
                 <AsaTransformInspector
                   value={builderTransform}
                   sources={[{ kind: 'eventhub', name: builderSource || 'input' }]}
@@ -690,7 +690,7 @@ export function StreamAnalyticsJobEditor({ item, id }: { item: FabricItemType; i
                     <MessageBarBody>
                       <MessageBarTitle>Test {testResult.status}</MessageBarTitle>
                       {`${(testResult.rows || []).length} output row(s) returned at ${new Date().toLocaleTimeString()}.`}
-                      {testResult.outputUri && <><br /><Caption1>Output written to: {String(testResult.outputUri).slice(0, 120)}</Caption1></>}
+                      {testResult.outputUri && <><br /><Caption1 style={{ overflowWrap: 'anywhere', wordBreak: 'break-word' }}>Output written to: {String(testResult.outputUri).slice(0, 120)}</Caption1></>}
                     </MessageBarBody>
                   </MessageBar>
                   {(testResult.rows || []).length > 0 && (

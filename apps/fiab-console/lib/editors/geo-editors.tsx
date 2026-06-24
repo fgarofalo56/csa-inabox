@@ -144,7 +144,9 @@ const useStyles = makeStyles({
     margin: '0', padding: tokens.spacingVerticalM, borderRadius: tokens.borderRadiusMedium,
     border: `1px solid ${tokens.colorNeutralStroke2}`,
     backgroundColor: tokens.colorNeutralBackground2, color: tokens.colorNeutralForeground1,
-    whiteSpace: 'pre-wrap', wordBreak: 'break-word', maxHeight: '240px', overflow: 'auto',
+    whiteSpace: 'pre-wrap', wordBreak: 'break-word', overflowWrap: 'anywhere',
+    maxWidth: '100%', maxHeight: '240px', overflow: 'auto', boxSizing: 'border-box',
+    resize: 'vertical',
   },
   enrichGroup: {
     display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalS,
@@ -163,8 +165,9 @@ const useStyles = makeStyles({
     display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalXXS,
   },
   bboxValue: {
-    display: 'block', color: tokens.colorNeutralForeground3,
-    fontFamily: 'Consolas, monospace', fontSize: tokens.fontSizeBase100, wordBreak: 'break-all',
+    display: 'block', color: tokens.colorNeutralForeground3, maxWidth: '100%',
+    fontFamily: 'Consolas, monospace', fontSize: tokens.fontSizeBase100,
+    wordBreak: 'break-all', overflowWrap: 'anywhere',
   },
   // Last-run header row (title + run badges + timestamp).
   runHeader: { display: 'flex', alignItems: 'center', gap: tokens.spacingHorizontalS, flexWrap: 'wrap' },
@@ -185,7 +188,7 @@ const useStyles = makeStyles({
   runMono: {
     padding: `${tokens.spacingVerticalXS} ${tokens.spacingHorizontalS}`, verticalAlign: 'top',
     borderBottom: `1px solid ${tokens.colorNeutralStroke3}`,
-    fontFamily: 'Consolas, monospace', wordBreak: 'break-all',
+    fontFamily: 'Consolas, monospace', wordBreak: 'break-all', overflowWrap: 'anywhere',
   },
 });
 
@@ -421,7 +424,7 @@ function GeoSchemaPanel({ columns, rows, geomColumn }: { columns: string[]; rows
               {isGeom && <Badge appearance="tint" color="brand" size="small">geometry</Badge>}
               {enc && <Badge appearance="outline" color="informative" size="small">{enc}</Badge>}
             </div>
-            <Caption1 style={{ color: tokens.colorNeutralForeground3, fontFamily: 'Consolas, monospace', fontSize: '11px' }}>{preview}{cell != null && String(cell).length > 64 ? '…' : ''}</Caption1>
+            <Caption1 style={{ color: tokens.colorNeutralForeground3, fontFamily: 'Consolas, monospace', fontSize: tokens.fontSizeBase100, overflowWrap: 'anywhere', wordBreak: 'break-word' }}>{preview}{cell != null && String(cell).length > 64 ? '…' : ''}</Caption1>
           </div>
         );
       })}
