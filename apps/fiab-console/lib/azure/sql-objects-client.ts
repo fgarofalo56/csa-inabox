@@ -203,7 +203,7 @@ export async function listViews(server: string, database: string): Promise<SqlOb
     server,
     database,
     `SELECT v.object_id AS objectId, s.name AS [schema], v.name AS name,
-            v.type AS type, o.type_desc AS typeDesc,
+            v.type AS [type], o.type_desc AS typeDesc,
             v.create_date AS createDate, v.modify_date AS modifyDate
      FROM sys.views v
      JOIN sys.schemas s ON s.schema_id = v.schema_id
@@ -219,7 +219,7 @@ export async function listProcedures(server: string, database: string): Promise<
     server,
     database,
     `SELECT p.object_id AS objectId, s.name AS [schema], p.name AS name,
-            p.type AS type, o.type_desc AS typeDesc,
+            p.type AS [type], o.type_desc AS typeDesc,
             p.create_date AS createDate, p.modify_date AS modifyDate
      FROM sys.procedures p
      JOIN sys.schemas s ON s.schema_id = p.schema_id
@@ -236,7 +236,7 @@ export async function listFunctions(server: string, database: string): Promise<S
     server,
     database,
     `SELECT o.object_id AS objectId, s.name AS [schema], o.name AS name,
-            o.type AS type, o.type_desc AS typeDesc,
+            o.type AS [type], o.type_desc AS typeDesc,
             o.create_date AS createDate, o.modify_date AS modifyDate
      FROM sys.objects o
      JOIN sys.schemas s ON s.schema_id = o.schema_id
@@ -251,7 +251,7 @@ export async function listTableTypes(server: string, database: string): Promise<
     server,
     database,
     `SELECT tt.type_table_object_id AS objectId, s.name AS [schema], tt.name AS name,
-            'TT' AS type, 'USER_TABLE_TYPE' AS typeDesc,
+            'TT' AS [type], 'USER_TABLE_TYPE' AS typeDesc,
             NULL AS createDate, NULL AS modifyDate
      FROM sys.table_types tt
      JOIN sys.schemas s ON s.schema_id = tt.schema_id
@@ -629,7 +629,7 @@ export async function listIndexes(
     `SELECT
        i.index_id AS indexId,
        i.name AS name,
-       i.type AS type,
+       i.type AS [type],
        i.type_desc AS typeDesc,
        i.is_unique AS isUnique,
        i.is_primary_key AS isPrimaryKey,

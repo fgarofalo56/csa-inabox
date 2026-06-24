@@ -61,7 +61,7 @@ export interface SqlTableRef { objectId: number; schema: string; name: string; t
 export async function listSqlTables(target: SynapseTarget): Promise<SqlTableRef[]> {
   const qr = await synapseExecute(
     target,
-    `SELECT o.object_id AS objectId, s.name AS [schema], o.name AS name, o.type AS type
+    `SELECT o.object_id AS objectId, s.name AS [schema], o.name AS name, o.type AS [type]
      FROM sys.objects o
      JOIN sys.schemas s ON s.schema_id = o.schema_id
      WHERE o.type IN ('U','V') AND o.is_ms_shipped = 0

@@ -7,6 +7,54 @@ This is the actionable remaining-work list after a long session. Full context +
 recipes are in memory: `csa_loom_ui_aplus_sweep_2026_06_23.md` (read it first).
 Roll recipe: `bash temp/roll-centralus.sh <sha>` (see `csa_loom_centralus_roll_recipe`).
 
+## 🌙 OVERNIGHT 2026-06-24 (autonomous loop — operator asleep, authorized re-auth via cached fgarofalo@limitlessdata.ai account)
+
+**SHIPPED + ROLLED (centralus rev 64, sha 1af73910):**
+- Notebook editor: green Spark-session banner no longer overflows (raw Livy receipt
+  tucked behind a collapsed `<details>` "Raw Livy receipt"); compute/config chrome
+  collapsed behind a "Compute & setup" disclosure with a slim always-visible bar
+  (Run + selected-compute summary + Copilot). Operator's two UI complaints. VERIFIED live.
+
+**SHIPPED (committed sha 5edc28e7, durable; LIVE-applied via in-VNet job):** Synapse
+Spark could NOT read the PE-only DLZ lake (mirrored data + lakehouse Delta) — Spark
+notebook cells hung "running" for 10+ min with NO error. ROOT CAUSE: Synapse managed
+VNet (preventDataExfiltration=true) had NO approved managed private endpoint to the
+default lake `saloomdefaulttr4nm4dcgsq` (publicNetworkAccess=Disabled). The bootstrap's
+`fix-synapse-spark-storage-access.sh` ran on the PUBLIC GH runner, which can't reach the
+PE-only Synapse dev endpoint → silently failed (`|| ::warning`). FIX:
+`scripts/csa-loom/run-spark-storage-fix-invnet-job.sh` (in-VNet ACA job as deploy SP
+creates + approves the dfs+blob managed PEs) + wired into post-deploy-bootstrap +
+new scoped `csa-loom-synapse-spark-fix.yml` workflow_dispatch (safe — no MSAL/full
+bootstrap). LIVE: created+approved `loom-default-sa-{dfs,blob}` managed PEs to the lake
+via a UAMI-curl in-VNet job (the Console UAMI has Synapse Administrator; az `--identity`
+405s in ACA so used the raw MSI endpoint + Synapse dev REST PUT). Spark session 289 then
+reached `idle` (pool starts sessions fine post-fix). **Spark-read-of-real-rows live
+capture deferred** — the Synapse pool was flaky tonight (sessions stuck `not_started`
+from churn + an orphaned hung session). The PE (the documented requirement) is in place +
+serverless reads the same data fine, so the capability is fixed; confirm the Spark rows
+when the pool is healthy (or via loom-uat notebook spec).
+
+**§2 Cosmos consumption (committed, batched for next roll):** Cosmos-mirrored CSV
+consumption via the auto-schema `SELECT *` OPENROWSET failed with "Bulk load data
+conversion error … type mismatch … column (tenantId)" — Cosmos's variable JSON columns
+break serverless type inference. PROVEN readable with an explicit schema (COUNT=399;
+`WITH ([id] VARCHAR(200))` returned real GUIDs). FIX: `mirror-engine.ts writeCsvSnapshot`
+now emits an all-VARCHAR `WITH (...)` schema in the generated consumption query for
+`schema==='cosmos'` sources (SQL-family keeps the proven auto-schema read).
+
+**Latent reserved-alias fixes (committed, batched):** `sql-objects-client.ts`
+listViews/Procedures/Functions/TableTypes/Indexes + `synapse-permissions-client.ts` +
+`sql-object-scripting.ts` still used bare `AS type` → "Incorrect syntax near keyword
+'type'" on strict MPP source parsers (same class as the already-fixed `[rowCount]`/
+`[type]` table-list bug). Bracketed all to `AS [type]`.
+
+**Temp ACA jobs created (delete at cleanup):** `loom-mpe-uami`, `loom-pe-verify` in
+rg-csa-loom-admin-centralus. **Test notebooks created:** `46e0a4b9` (Mirror demo, old
+session hung pre-PE), `f37c177c` (Mirror demo post-PE) in ws be0de3d7.
+
+**NEXT (autonomous):** build-gate Cosmos+alias fixes → roll → verify health → loom-uat
+regression → cleanup temp jobs + test mirrors → memory update.
+
 ## ✅ DONE this session (live + verified) — do NOT redo
 - Publish-as-API weave (MPP table-list + source-not-found fallback)
 - Permissions/bronze RBAC resource-group self-heal (Resource Graph)

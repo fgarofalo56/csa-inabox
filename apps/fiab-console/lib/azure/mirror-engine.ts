@@ -235,9 +235,19 @@ async function writeCsvSnapshot(
   await uploadFile(BRONZE, `${folder}/snapshot.csv`, buf, 'text/csv');
 
   const folderUrl = pathToHttpsUrl(BRONZE, `${folder}/`);
+  // Cosmos containers serialize nested / variable-shape JSON fields into the CSV,
+  // so the serverless auto-schema (`SELECT *`) infers a column type from the first
+  // rows and then fails on a later row ("Bulk load data conversion error … type
+  // mismatch … column N"). Emit an explicit all-VARCHAR WITH schema (column names
+  // from the snapshot header) for Cosmos sources so the provided consumption query
+  // is robust. SQL-family columns are cleanly typed, so they keep the simpler
+  // auto-schema read (already proven against AdventureWorks).
+  const withClause = schema === 'cosmos' && columns.length
+    ? ` WITH (${columns.map((c) => `[${String(c).replace(/]/g, ']]')}] VARCHAR(8000)`).join(', ')})`
+    : '';
   const openrowset =
     `SELECT TOP 100 * FROM OPENROWSET(BULK '${folderUrl}', ` +
-    `FORMAT = 'CSV', PARSER_VERSION = '2.0', HEADER_ROW = TRUE) AS rows`;
+    `FORMAT = 'CSV', PARSER_VERSION = '2.0', HEADER_ROW = TRUE)${withClause} AS rows`;
   return { schema, table, status: 'replicated', mode: 'snapshot', rows: rows.length, bytes: buf.length, truncated, lastSync, path: folderUrl, openrowset };
 }
 
