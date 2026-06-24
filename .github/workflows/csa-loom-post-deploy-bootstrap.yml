@@ -567,6 +567,33 @@ jobs:
             bash scripts/csa-loom/grant-synapse-rbac-invnet-job.sh \
             || echo "::warning::In-VNET Synapse RBAC grant job did not complete — warehouse/serverless provisioning may still ELOGIN. Check the CAE Log Analytics ContainerAppConsoleLogs_CL."
 
+      - name: Create Synapse managed PE to the default lake (in-VNET — Spark storage)
+        # On a PE-only managed-VNet workspace (preventDataExfiltration), Spark
+        # notebooks/jobs can only read the default ADLS lake (mirrored data +
+        # lakehouse Delta) over an APPROVED managed private endpoint — otherwise
+        # the ABFS read HANGS on a blocked egress (cell "running" for minutes, no
+        # error). The standalone fix-synapse-spark-storage-access.sh below runs on
+        # THIS public runner and fails silently on a PE-only workspace (the dev
+        # endpoint is private). Run the create+approve IN-VNET as the deploy SP,
+        # where the dev endpoint is reachable — same pattern as the RBAC grant.
+        run: |
+          set -uo pipefail
+          CAE_NAME=$(az containerapp env list -g "$ADMIN_RG" --subscription "$ADMIN_SUB" \
+            --query "[?contains(name,'cae') || contains(name,'loom')].name | [0]" -o tsv 2>/dev/null || true)
+          if [ -z "${CAE_NAME:-}" ]; then
+            echo "::warning::No Container App Environment in $ADMIN_RG — skipping the in-VNET Synapse Spark storage fix."
+            exit 0
+          fi
+          echo "Console CAE for in-VNET Spark storage fix: $CAE_NAME"
+          chmod +x scripts/csa-loom/run-spark-storage-fix-invnet-job.sh
+          ADMIN_RG="$ADMIN_RG" ADMIN_SUB="$ADMIN_SUB" CAE="$CAE_NAME" \
+          DLZ_SUB="$DLZ_SUB" SYNAPSE_WS="$SYNAPSE_WS" \
+          DEPLOY_SP_CLIENT_ID="${{ secrets.AZURE_CLIENT_ID }}" \
+          DEPLOY_SP_SECRET="${{ secrets.AZURE_CLIENT_SECRET }}" \
+          DEPLOY_SP_TENANT="${{ secrets.AZURE_TENANT_ID }}" \
+            bash scripts/csa-loom/run-spark-storage-fix-invnet-job.sh \
+            || echo "::warning::In-VNET Synapse Spark storage-fix job did not complete — Spark notebooks may hang reading the lake. Check the CAE Log Analytics (ContainerName_s=='sparkfix')."
+
       - name: Enable Synapse public access (temp — OPT-IN ONLY, default OFF)
         # DEFAULT OFF (no public network access — the in-VNET grant above replaces it).
         # The sqlcmd CREATE LOGIN/USER steps below need to reach the SQL data-plane
