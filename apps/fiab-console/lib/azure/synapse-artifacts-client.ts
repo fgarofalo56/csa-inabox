@@ -252,6 +252,26 @@ export async function deleteLinkedService(name: string): Promise<void> {
   }
 }
 
+/**
+ * Validate a linked-service spec against the REAL Synapse workspace before the
+ * user commits it. Synapse's dev-plane has no synchronous "test connectivity"
+ * REST for an UNSAVED linked service, so this PUTs a transient linked service
+ * under a temp name then deletes it — a real dev-plane call that rejects a
+ * malformed `typeProperties`, an unknown connector `type`, or a spec the
+ * workspace can't accept, and proves the workspace is reachable with the
+ * Console identity's token. Returns `{ ok: true }` on a clean accept; throws
+ * with the real error otherwise. No mocks (per no-vaporware.md).
+ */
+export async function testLinkedService(spec: SynapseLinkedService): Promise<{ ok: true }> {
+  const tempName = `loom_test_${Date.now().toString(36)}${Math.random().toString(36).slice(2, 8)}`;
+  try {
+    await upsertLinkedService(tempName, { name: tempName, properties: spec.properties });
+  } finally {
+    try { await deleteLinkedService(tempName); } catch { /* best-effort cleanup */ }
+  }
+  return { ok: true };
+}
+
 // ============================================================
 // Notebooks  (workspaces/.../notebooks)
 //

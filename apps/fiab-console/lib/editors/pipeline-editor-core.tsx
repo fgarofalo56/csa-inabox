@@ -29,8 +29,10 @@ import {
   DocumentTable20Regular, Play20Regular, Server20Regular,
   ArrowSync20Regular, Save20Regular, Bug20Regular, Checkmark20Regular,
   Clock20Regular, Link20Regular, Add20Regular, Settings20Regular,
+  PlugConnected20Regular, Database20Regular,
 } from '@fluentui/react-icons';
 import { ManagePanel } from '@/lib/components/pipeline/manage-panel';
+import { PipelineManageHub } from '@/lib/components/pipeline/pipeline-manage-hub';
 import { FactoryResourcesTree } from '@/lib/components/pipeline/factory-resources-tree';
 import { AdfCdcEditor } from '@/lib/adf/adf-cdc-editor';
 import { SynapseWorkspaceTree } from '@/lib/components/pipeline/synapse-workspace-tree';
@@ -128,6 +130,13 @@ export function PipelineEditorCore({
 
   // ---- Manage (factory resources) dialog state — ADF only ----
   const [manageOpen, setManageOpen] = useState(false);
+  // Catalog-driven Manage hub (connector gallery + dataset wizard) — Wave-2
+  // authoring foundation, surfaced additively alongside the quick ManagePanel.
+  const [manageHubOpen, setManageHubOpen] = useState(false);
+  const [manageHubTab, setManageHubTab] = useState<'linked-services' | 'datasets' | 'integration-runtimes'>('linked-services');
+  const openManageHub = useCallback((t: 'linked-services' | 'datasets' | 'integration-runtimes') => {
+    setManageHubTab(t); setManageHubOpen(true);
+  }, []);
   const [openCdc, setOpenCdc] = useState<string | null>(null);
   // Bump to force the navigator (ADF Factory Resources / Synapse Workspace
   // Resources) to re-list after a bind/create/manage action mutates the backend.
@@ -441,7 +450,9 @@ export function PipelineEditorCore({
     // backend is selected on the ManagePanel below.
     const manageGroup: RibbonTab['groups'] = [{
       label: 'Manage', actions: [
-        { label: 'Manage', icon: <Settings20Regular />, onClick: () => setManageOpen(true), title: isAdf ? 'Linked services, datasets and integration runtimes' : 'Linked services and datasets' },
+        { label: 'Manage', icon: <Settings20Regular />, onClick: () => setManageOpen(true), title: isAdf ? 'Linked services, datasets and integration runtimes (quick)' : 'Linked services and datasets (quick)' },
+        { label: 'Linked services', icon: <PlugConnected20Regular />, onClick: () => openManageHub('linked-services'), title: 'Connector gallery — browse 30+ connectors and create a connection' },
+        { label: 'Datasets', icon: <Database20Regular />, onClick: () => openManageHub('datasets'), title: 'New dataset wizard — connector → connection → shape → schema' },
       ],
     }];
     return [
@@ -462,7 +473,7 @@ export function PipelineEditorCore({
         ] },
       ] },
     ];
-  }, [config.supportsValidate, isAdf, busy, bound, dirty, save, kick, validate, openTriggers]);
+  }, [config.supportsValidate, isAdf, busy, bound, dirty, save, kick, validate, openTriggers, openManageHub]);
 
   // ------------------------------------------------------------------
   // Render
@@ -724,6 +735,23 @@ export function PipelineEditorCore({
                 else setWorkspaceRefreshKey((k) => k + 1);
               }
             }}
+          />
+
+          {/* Catalog-driven Manage hub — connector gallery + dataset wizard
+              (Wave-2 authoring foundation). Factory/workspace-level; the
+              item-scoped IR tab is not used here (the factory IRs live in the
+              quick ManagePanel above), so itemId/workspaceId are omitted. */}
+          <PipelineManageHub
+            open={manageHubOpen}
+            onOpenChange={(open) => {
+              setManageHubOpen(open);
+              if (!open) {
+                if (isAdf) setFactoryRefreshKey((k) => k + 1);
+                else setWorkspaceRefreshKey((k) => k + 1);
+              }
+            }}
+            engine={isAdf ? 'adf' : 'synapse'}
+            initialTab={manageHubTab}
           />
 
           {/* Change Data Capture (preview) detail panel — opened from the

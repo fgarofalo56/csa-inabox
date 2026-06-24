@@ -891,6 +891,29 @@ export async function deleteLinkedService(name: string): Promise<void> {
   }
 }
 
+/**
+ * Validate a linked-service spec against the REAL factory before the user
+ * commits it. ADF has no synchronous "test connectivity" REST for an UNSAVED
+ * linked service (connectivity tests run through an IR data-plane endpoint), so
+ * this does the honest next best thing: it PUTs a transient linked service
+ * under a temp name and immediately deletes it. The PUT is a real ARM call that
+ * rejects a malformed `typeProperties` shape, an unknown connector `type`, or a
+ * spec the factory can't accept — surfacing those as a real error — and the
+ * round-trip also proves the factory is reachable with the Console identity's
+ * token. Returns `{ ok: true }` on a clean accept; throws with the ARM error
+ * text otherwise. No mocks (per no-vaporware.md).
+ */
+export async function testLinkedService(spec: AdfLinkedService): Promise<{ ok: true }> {
+  const tempName = `loom_test_${Date.now().toString(36)}${Math.random().toString(36).slice(2, 8)}`;
+  try {
+    await upsertLinkedService(tempName, { name: tempName, properties: spec.properties });
+  } finally {
+    // Best-effort cleanup — never let a failed delete mask the validation result.
+    try { await deleteLinkedService(tempName); } catch { /* leave no-op */ }
+  }
+  return { ok: true };
+}
+
 // ============================================================
 // Integration runtimes
 //
@@ -1002,6 +1025,25 @@ export async function deleteIntegrationRuntime(name: string): Promise<void> {
   if (!r.ok && r.status !== 200 && r.status !== 204) {
     throw new Error(`deleteIntegrationRuntime failed ${r.status}: ${await r.text()}`);
   }
+}
+
+export interface AdfIntegrationRuntimeAuthKeys { authKey1?: string; authKey2?: string }
+
+/**
+ * Retrieve the registration ("install") keys for a Self-Hosted IR. These are
+ * the keys an operator pastes into the Microsoft Integration Runtime gateway
+ * installed on the on-prem/VM node to register it with this factory.
+ *
+ * ADF management-plane action:
+ *   POST .../integrationruntimes/{name}/listAuthKeys
+ *
+ * Grounded in @azure/arm-datafactory IntegrationRuntimes.listAuthKeys →
+ * IntegrationRuntimeAuthKeys { authKey1, authKey2 }. The keys are secrets — the
+ * BFF returns them only to an authenticated session and never persists them.
+ */
+export async function listIntegrationRuntimeAuthKeys(name: string): Promise<AdfIntegrationRuntimeAuthKeys> {
+  const r = await call(`${base()}/integrationruntimes/${encodeURIComponent(name)}/listAuthKeys?api-version=${API}`, { method: 'POST' });
+  return jsonOrThrow<AdfIntegrationRuntimeAuthKeys>(r, `listIntegrationRuntimeAuthKeys(${name})`);
 }
 
 /**

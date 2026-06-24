@@ -43,9 +43,11 @@ import {
   Play20Regular, Add20Regular, Save20Regular, ArrowSync20Regular, Delete20Regular, Flow20Regular,
   Checkmark20Regular, Bug20Regular, Clock20Regular, Settings20Regular, CloudArrowUp20Regular,
   ArrowDownload20Regular, ArrowUpload20Regular, AppsList20Regular,
+  PlugConnected20Regular, Database20Regular,
 } from '@fluentui/react-icons';
 import { ItemEditorChrome } from './item-editor-chrome';
 import { ManagePanel } from '@/lib/components/pipeline/manage-panel';
+import { PipelineManageHub } from '@/lib/components/pipeline/pipeline-manage-hub';
 import { ActivityPalette } from '@/lib/components/pipeline/palette';
 import { PipelineCanvas, type CanvasHandle } from '@/lib/components/pipeline/canvas';
 import { PropertiesPanel } from '@/lib/components/pipeline/properties-panel';
@@ -232,6 +234,13 @@ export function DataPipelineEditor({ item, id }: Props) {
   // Manage hub (linked services / datasets) — Synapse-backed, the Azure-native
   // default for the Fabric data pipeline item.
   const [manageOpen, setManageOpen] = useState(false);
+  // Catalog-driven Manage hub (connector gallery + dataset wizard + IR manager)
+  // — the Wave-2 authoring foundation, surfaced additively alongside ManagePanel.
+  const [manageHubOpen, setManageHubOpen] = useState(false);
+  const [manageHubTab, setManageHubTab] = useState<'linked-services' | 'datasets' | 'integration-runtimes'>('linked-services');
+  const openManageHub = useCallback((tab: 'linked-services' | 'datasets' | 'integration-runtimes') => {
+    setManageHubTab(tab); setManageHubOpen(true);
+  }, []);
   const [triggerName, setTriggerName] = useState('');
   const [triggerBusy, setTriggerBusy] = useState(false);
   const [triggerErr, setTriggerErr] = useState<string | null>(null);
@@ -767,7 +776,9 @@ export function DataPipelineEditor({ item, id }: Props) {
           { label: validating ? 'Validating…' : 'Validate', icon: <Checkmark20Regular />, onClick: canValidate ? validate : undefined, disabled: !canValidate },
         ]},
         { label: 'Manage', actions: [
-          { label: 'Manage', icon: <Settings20Regular />, onClick: () => setManageOpen(true), title: 'Linked services and datasets' },
+          { label: 'Manage', icon: <Settings20Regular />, onClick: () => setManageOpen(true), title: 'Linked services and datasets (quick)' },
+          { label: 'Linked services', icon: <PlugConnected20Regular />, onClick: () => openManageHub('linked-services'), title: 'Connector gallery — browse 30+ connectors and create a connection' },
+          { label: 'Datasets', icon: <Database20Regular />, onClick: () => openManageHub('datasets'), title: 'New dataset wizard — connector → connection → shape → schema' },
         ]},
         { label: 'Run', actions: [
           { label: publishing ? 'Publishing…' : 'Publish', icon: <CloudArrowUp20Regular />, onClick: pipelineId && !publishing ? publish : undefined, disabled: !pipelineId || publishing, title: 'Deploy this pipeline to Azure Data Factory so it can Run / Debug / schedule' },
@@ -813,7 +824,7 @@ export function DataPipelineEditor({ item, id }: Props) {
     validating, canValidate, validate, running, canRun, run, debugging, canDebug, debug,
     publish, publishing,
     pipelineId, canDelete, del, showGrid, snapToGrid, outputPinned,
-    exportPipeline,
+    exportPipeline, openManageHub,
   ]);
 
   // ============ Render ============
@@ -1248,6 +1259,17 @@ export function DataPipelineEditor({ item, id }: Props) {
 
           {/* Manage hub — linked services / datasets (Synapse-backed) */}
           <ManagePanel open={manageOpen} backend="synapse" onOpenChange={setManageOpen} />
+
+          {/* Catalog-driven Manage hub — connector gallery + dataset wizard
+              (Synapse-backed; IR tab is ADF-only and stays hidden here). */}
+          <PipelineManageHub
+            open={manageHubOpen}
+            onOpenChange={setManageHubOpen}
+            engine="synapse"
+            initialTab={manageHubTab}
+            itemId={pipelineId || undefined}
+            workspaceId={workspaceId || undefined}
+          />
 
           {/* Create dialog */}
           <Dialog open={createOpen} onOpenChange={(_, d) => setCreateOpen(d.open)}>
