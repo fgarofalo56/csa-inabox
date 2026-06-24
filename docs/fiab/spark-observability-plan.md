@@ -58,9 +58,14 @@ Grounded in MS Learn: Synapse [create-spark-configuration], Synapse Spark→LA
   + `LOOM_SPARK_LA_KEYVAULT_NAME`/`_SECRET` (a KV secret holding the LA shared key) on the
   console app via `main.bicep` apps[].env + the post-deploy bootstrap. Prefer KV over the
   inline `LOOM_SPARK_LA_KEY`.
-- ALSO set the same `spark.synapse.logAnalytics.*` as the Synapse **pool default Spark
-  configuration** (bicep `Microsoft.Synapse/workspaces/bigDataPools` `sparkConfigProperties`
-  or an Apache Spark configuration artifact) so even non-Loom-launched jobs emit to LA.
+- ~~ALSO set the same `spark.synapse.logAnalytics.*` as the Synapse **pool default**~~
+  **DECLINED (secret-safety):** the pool `sparkConfigProperties.content` is plaintext in
+  the ARM template, so embedding `spark.synapse.logAnalytics.secret` (the LA shared key)
+  there leaks a secret. The shipped **session-level** emission (key from the console
+  `spark-la-key` secret, applied per Livy session) is the secure equivalent and covers
+  every Loom-launched job. The only safe pool-default is the KV-backed variant
+  (`spark.synapse.logAnalytics.keyVault.{name,key}` + a Synapse linked service + pool-MSI
+  KV access) — a larger, optional lift, not required for parity.
 - Migrate to the **Log Ingestion API (DCR-based)** per the Learn doc when the Data Collector
   API path is retired: create a DCR + DCE targeting the Loom LA custom tables; swap the
   `spark.synapse.diagnostic.*` confs. (Confs are env-driven, so this is an env/bicep change.)
