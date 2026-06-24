@@ -76,6 +76,22 @@ regression → cleanup temp jobs + test mirrors → memory update.
   `disabled: isNew` gate) — a spec-context nuance, NOT a real cut. All three are attended-review
   spec-polish items, not product defects.
 
+### §2 mirror INCREMENTAL (CDC) sync — FIXED + FULLY VERIFIED (rev 66 + 67)
+SQL-family mirrors always full-snapshotted because change tracking never enabled. Two bugs,
+both fixed + rolled + verified live on adventureworks-mirror-e2e (12 tables, db_owner granted):
+1. **DB-level** (rev 66, sha 809e46f6): the enable check used `sys.databases.is_change_tracking_on`
+   → "Invalid column name" on the source → CT never turned on. Fixed to `sys.change_tracking_databases`.
+2. **Table-level** (rev 67, sha 071b80f7): once DB-level CT was on, `changeTrackingStatus` returned
+   non-null so `enableChangeTracking` (which also enables table-level CT) was skipped → CHANGETABLE
+   failed "Change tracking is not enabled on table 'X'". Fixed to also enable when `ct.minValid === null`
+   in BOTH the incremental-attempt and post-snapshot watermark paths.
+VERIFICATION (live, 3 Starts): Start 1 → CT enabled, full snapshot (12 tables, real rows). Start 2 →
+BuildVersion `incremental`, others "CT not enabled on table". Start 3 (after rev 67) → all 11 flip to
+"CT enabled this run". **Start 4 → all 12 tables `mode:incremental` ("No changes since the last sync"),**
+fast (<30s, no re-snapshot). SQL-family mirror path is now COMPLETE: snapshot + serverless query +
+lakehouse shortcuts + Spark-read (managed PE) + **incremental CDC** all proven. Graceful snapshot
+fallback preserved for no-PK tables / failures.
+
 ### §3 Front Door client-JS caching — RESOLVED (no change needed)
 Checked the live AFD profile `fd-loom-k6mvh5sm6z7do` route `console-route`: `cacheConfiguration`
 is **null** — Front Door caching is already OFF, so FD does NOT cache the HTML/RSC document.
