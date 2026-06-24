@@ -128,7 +128,7 @@ export function PropertiesPanel({ activity, allActivities, parameters, variables
   // service pickers. One shared fetch (real ARM REST via the BFF routes); on an
   // unconfigured factory the routes 503 and `gateError` names the missing env
   // var so each tab shows an honest MessageBar instead of going blank.
-  const { datasets, linkedServices, gateError } = useCopyResources();
+  const { datasets, linkedServices, gateError, reload: reloadCopyResources } = useCopyResources();
   // Names-only list for the legacy (non-Copy) Source/Sink tab.
   const datasetNames = datasets.map((d) => d.name).filter(Boolean);
 
@@ -270,17 +270,19 @@ export function PropertiesPanel({ activity, allActivities, parameters, variables
         )}
 
         {tab === 'source' && isCopyActivity && (
-          <SourceTab activity={activity} datasets={datasets} gateError={gateError}
+          <SourceTab activity={activity} datasets={datasets} linkedServices={linkedServices} gateError={gateError}
             parameters={parameters} variables={variables} allActivities={allActivities}
-            onPatch={onPatch} />
+            onPatch={onPatch} onDatasetsChanged={() => { void reloadCopyResources(); }} />
         )}
         {tab === 'sink' && isCopyActivity && (
-          <SinkTab activity={activity} datasets={datasets} gateError={gateError}
+          <SinkTab activity={activity} datasets={datasets} linkedServices={linkedServices} gateError={gateError}
             parameters={parameters} variables={variables} allActivities={allActivities}
-            onPatch={onPatch} />
+            onPatch={onPatch} onDatasetsChanged={() => { void reloadCopyResources(); }} />
         )}
         {tab === 'mapping' && isCopyActivity && (
-          <MappingTab activity={activity} datasets={datasets} onPatch={onPatch} />
+          <MappingTab activity={activity} datasets={datasets}
+            parameters={parameters} variables={variables} allActivities={allActivities}
+            onPatch={onPatch} />
         )}
         {tab === 'copy-settings' && isCopyActivity && (
           <CopySettingsTab activity={activity} linkedServices={linkedServices}
