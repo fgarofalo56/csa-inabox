@@ -274,6 +274,43 @@ export function synapseLogAnalyticsConfigured(env: NodeJS.ProcessEnv = process.e
   return Object.keys(synapseLogAnalyticsConf(env)).length > 0;
 }
 
+// ----------------------------------------------------------------------------
+// Secret redaction — keep injected secrets (e.g. the LA shared key in
+// spark.synapse.logAnalytics.secret) out of any receipt shown in the UI or
+// returned to the client. The session conf legitimately CARRIES the secret so
+// Synapse can authenticate the LA emitter, but the Livy session object echoes
+// it back, so we mask it before display / before returning over the wire.
+// ----------------------------------------------------------------------------
+
+/** Conf/receipt key (lowercased) whose VALUE is a secret and must be masked. */
+const SECRET_KEY_RE = /secret|password|token|sharedkey|accountkey|connectionstring|apikey|credential/i;
+const REDACTED = '***redacted***';
+
+/** Mask secret-bearing values in a flat spark conf record (e.g. logAnalytics.secret). */
+export function redactSparkConf(conf: Record<string, string> | undefined): Record<string, string> | undefined {
+  if (!conf) return conf;
+  const out: Record<string, string> = {};
+  for (const [k, v] of Object.entries(conf)) out[k] = SECRET_KEY_RE.test(k) && v ? REDACTED : v;
+  return out;
+}
+
+/**
+ * Deep-redact a Livy session receipt (or any object) for safe display / return:
+ * masks every string value whose key looks like a secret. Pure — returns a new
+ * object, leaves the input untouched.
+ */
+export function redactReceiptSecrets<T>(obj: T): T {
+  if (Array.isArray(obj)) return obj.map((x) => redactReceiptSecrets(x)) as unknown as T;
+  if (obj && typeof obj === 'object') {
+    const out: Record<string, unknown> = {};
+    for (const [k, v] of Object.entries(obj as Record<string, unknown>)) {
+      out[k] = SECRET_KEY_RE.test(k) && typeof v === 'string' && v ? REDACTED : redactReceiptSecrets(v);
+    }
+    return out as unknown as T;
+  }
+  return obj;
+}
+
 /**
  * Databricks cluster-log delivery destination. Returns the `cluster_log_conf`
  * object for clusters/create so driver/worker/event logs persist (and can be

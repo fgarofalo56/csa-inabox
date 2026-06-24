@@ -41,6 +41,7 @@ import {
   SessionConfigDialog, toConfigureOptions, sessionConfigEquals, normalizeSessionConfig,
   DEFAULT_SESSION_CONFIG, type SessionConfig,
 } from '@/lib/components/notebook/session-config-dialog';
+import { redactReceiptSecrets } from '@/lib/spark/config-presets';
 import { CopilotChatPane } from '@/lib/components/notebook/copilot-chat-pane';
 import { setCopilotContext } from '@/lib/components/copilot-pane';
 import { VariablesPane, type VarRow } from '@/lib/components/notebook/variables-pane';
@@ -1980,7 +1981,7 @@ export function NotebookEditor({ item, id }: Props) {
                     overflow: 'auto',
                     boxSizing: 'border-box',
                   }}
-                >{JSON.stringify(sessionReceipt, null, 2)}</code>
+                >{JSON.stringify(redactReceiptSecrets(sessionReceipt), null, 2)}</code>
               </details>
             </div>
           )}

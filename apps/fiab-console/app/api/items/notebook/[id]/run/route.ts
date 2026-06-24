@@ -190,6 +190,10 @@ export async function POST(req: NextRequest, ctx: { params: Promise<{ id: string
       // key/value pairs from the preset catalog + the dialog's row builder.
       const { synapseLogAnalyticsConf } = await import('@/lib/spark/config-presets');
       const laConf = synapseLogAnalyticsConf();
+      // The LA shared key rides in laConf so Synapse can authenticate the emitter;
+      // it must NEVER be persisted to Cosmos or returned to the client in the
+      // receipt. redactReceiptSecrets() masks it at both exits (below).
+      const { redactReceiptSecrets } = await import('@/lib/spark/config-presets');
       const userConf = (rawCfg && rawCfg.conf && typeof rawCfg.conf === 'object') ? rawCfg.conf as Record<string, string> : {};
       const mergedConf: Record<string, string> = { ...laConf, ...userConf };
       const sizing = (rawCfg || Object.keys(mergedConf).length) ? {
@@ -271,7 +275,7 @@ export async function POST(req: NextRequest, ctx: { params: Promise<{ id: string
           state: {
             ...state,
             pendingRuns,
-            sparkSession: { pool, id: sessionId, kind: effectiveSessKind, sizingKey, request: sessionReceipt },
+            sparkSession: { pool, id: sessionId, kind: effectiveSessKind, sizingKey, request: redactReceiptSecrets(sessionReceipt) },
             ...(rawCfg ? { sparkSessionSizing: rawCfg } : {}),
           },
           updatedAt: new Date().toISOString(),
@@ -288,9 +292,11 @@ export async function POST(req: NextRequest, ctx: { params: Promise<{ id: string
         // Honest receipt: the real Livy session-create body that provisioned
         // (or is reusing) this session — `numExecutors` here is what the Spark
         // session actually runs with.
-        session: sessionReceipt
-          ? { id: sessionId, state: sessState, reused, ...sessionReceipt }
-          : { id: sessionId, state: sessState, reused },
+        session: redactReceiptSecrets(
+          sessionReceipt
+            ? { id: sessionId, state: sessState, reused, ...sessionReceipt }
+            : { id: sessionId, state: sessState, reused },
+        ),
         sourcePreview: code.slice(0, 200),
       });
     }
