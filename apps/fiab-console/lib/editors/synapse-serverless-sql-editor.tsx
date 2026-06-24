@@ -438,6 +438,8 @@ export function SynapseServerlessSqlEditor({ item, id }: { item: FabricItemType;
               language="tsql"
               height={260}
               minHeight={220}
+              autoHeight
+              maxHeight={640}
               ariaLabel="Serverless T-SQL editor"
               onReady={onEditorReady}
             />

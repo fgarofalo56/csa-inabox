@@ -655,31 +655,21 @@ export function CodeCell({ cell, active, onFocus, onChange, onRun, onStop, onDel
             onReady={handleEditorReady}
           />
         ) : (
-          // Vertically resizable editor wrapper: click-drag the bottom edge to
-          // enlarge the code area. Monaco fills the wrapper (height='100%' +
-          // automaticLayout) so it reflows as the user drags.
-          <div
-            style={{
-              resize: 'vertical',
-              overflow: 'hidden',
-              minHeight: 120,
-              height: 160,
-              boxSizing: 'border-box',
-              maxWidth: '100%',
-            }}
-          >
-            <MonacoTextarea
-              value={cell.source}
-              onChange={setSource}
-              language={(cell.lang || 'pyspark') as MonacoLanguage}
-              readOnly={locked}
-              height={'100%'}
-              minHeight={80}
-              ariaLabel={`Code cell ${cell.id}`}
-              className={mergeClasses(locked && s.editorLocked)}
-              onReady={handleEditorReady}
-            />
-          </div>
+          // Auto-fit: the editor grows to its content height (min 120px, up to
+          // 720px then scrolls) so the cell shows everything by default without
+          // the user dragging. Maximize is still available for large edits.
+          <MonacoTextarea
+            value={cell.source}
+            onChange={setSource}
+            language={(cell.lang || 'pyspark') as MonacoLanguage}
+            readOnly={locked}
+            autoHeight
+            minHeight={120}
+            maxHeight={720}
+            ariaLabel={`Code cell ${cell.id}`}
+            className={mergeClasses(locked && s.editorLocked)}
+            onReady={handleEditorReady}
+          />
         )
       )}
       {!collapsed && cell.output && (() => {

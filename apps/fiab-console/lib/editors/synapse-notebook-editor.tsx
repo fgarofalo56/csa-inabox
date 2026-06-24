@@ -50,6 +50,7 @@ import { ItemEditorChrome } from './item-editor-chrome';
 import type { FabricItemType } from '@/lib/catalog/fabric-item-types';
 import type { RibbonTab } from '@/lib/components/ribbon';
 import { MonacoTextarea, type MonacoLanguage } from '@/lib/components/editor/monaco-textarea';
+import { renderMarkdown } from '@/lib/notebook/render-markdown';
 import { registerInlineCompletion, type InlineCompletionContext } from '@/lib/components/editor/inline-completion';
 import { useInlineCompleteToggle } from '@/lib/components/editor/use-inline-complete-toggle';
 import { CellAdder } from '@/lib/components/notebook/cell-adder';
@@ -90,7 +91,21 @@ const useStyles = makeStyles({
     backgroundColor: tokens.colorNeutralBackground3, maxHeight: '280px', overflow: 'auto',
   },
   outputErr: { color: tokens.colorPaletteRedForeground1, backgroundColor: tokens.colorPaletteRedBackground1 },
-  md: { padding: tokens.spacingVerticalM, fontSize: tokens.fontSizeBase300, lineHeight: 1.5, color: tokens.colorNeutralForeground1, overflowWrap: 'anywhere', wordBreak: 'break-word', maxWidth: '100%', minWidth: 0 },
+  md: {
+    padding: tokens.spacingVerticalM, fontSize: tokens.fontSizeBase300, lineHeight: 1.5,
+    color: tokens.colorNeutralForeground1, overflowWrap: 'anywhere', wordBreak: 'break-word',
+    maxWidth: '100%', minWidth: 0, overflowX: 'auto',
+    '& table.md-table': { borderCollapse: 'collapse', width: 'auto', maxWidth: '100%', margin: `${tokens.spacingVerticalS} 0`, fontSize: tokens.fontSizeBase200 },
+    '& table.md-table th, & table.md-table td': { border: `1px solid ${tokens.colorNeutralStroke2}`, padding: `${tokens.spacingVerticalXS} ${tokens.spacingHorizontalM}`, textAlign: 'left', verticalAlign: 'top' },
+    '& table.md-table th': { backgroundColor: tokens.colorNeutralBackground3, fontWeight: tokens.fontWeightSemibold },
+    '& table.md-table tr:nth-child(even) td': { backgroundColor: tokens.colorNeutralBackground2 },
+    '& pre.md-code': { backgroundColor: tokens.colorNeutralBackground3, border: `1px solid ${tokens.colorNeutralStroke2}`, borderRadius: tokens.borderRadiusMedium, padding: tokens.spacingHorizontalM, overflowX: 'auto', fontFamily: tokens.fontFamilyMonospace, fontSize: tokens.fontSizeBase200 },
+    '& code': { fontFamily: tokens.fontFamilyMonospace, fontSize: '0.92em' },
+    '& blockquote': { margin: `${tokens.spacingVerticalS} 0`, paddingLeft: tokens.spacingHorizontalM, borderLeft: `3px solid ${tokens.colorNeutralStroke1}`, color: tokens.colorNeutralForeground2 },
+    '& ul, & ol': { paddingLeft: tokens.spacingHorizontalXL, margin: `${tokens.spacingVerticalXS} 0` },
+    '& img': { maxWidth: '100%', borderRadius: tokens.borderRadiusSmall },
+    '& a': { color: tokens.colorBrandForegroundLink },
+  },
   tag: { fontFamily: 'Consolas, monospace', color: tokens.colorNeutralForeground3, fontSize: tokens.fontSizeBase100 },
   collapsedHint: {
     fontFamily: 'Consolas, "Cascadia Code", monospace', fontSize: tokens.fontSizeBase200,
@@ -264,19 +279,8 @@ function cellsToIpynb(cells: EditorCell[], pool: string | null, env?: string | n
   };
 }
 
-// Minimal markdown render (headings/bold/italic/code/links/bullets) — matches the
-// existing markdown-cell renderer used elsewhere in the console.
-function renderMarkdown(src: string): string {
-  let html = src.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
-  html = html.replace(/^### (.+)$/gm, '<h3>$1</h3>').replace(/^## (.+)$/gm, '<h2>$1</h2>').replace(/^# (.+)$/gm, '<h1>$1</h1>');
-  html = html.replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>');
-  html = html.replace(/(^|[^*])\*([^*\n]+)\*/g, '$1<em>$2</em>');
-  html = html.replace(/`([^`\n]+)`/g, '<code>$1</code>');
-  html = html.replace(/\[([^\]]+)\]\(([^)]+)\)/g, '<a href="$2" target="_blank" rel="noreferrer">$1</a>');
-  html = html.replace(/^(?:- (.+)(?:\n|$))+/gm, (block) => '<ul>' + block.split('\n').filter(Boolean).map((l) => '<li>' + l.replace(/^- /, '') + '</li>').join('') + '</ul>');
-  html = html.split(/\n\n+/).map((p) => /<\/(h\d|ul|ol|pre)>/.test(p) ? p : '<p>' + p.replace(/\n/g, '<br/>') + '</p>').join('');
-  return html;
-}
+// Markdown rendering uses the shared GFM renderer (tables / fenced code / lists /
+// blockquotes / HR) — lib/notebook/render-markdown, imported at the top of the file.
 
 interface SparkPoolLite { name: string; properties?: { nodeSize?: string; sparkVersion?: string } }
 
@@ -1217,7 +1221,7 @@ function NotebookCellView(props: {
             ⋯ markdown collapsed — click to expand
           </div>
         ) : mdEditing ? (
-          <MonacoTextarea value={cell.source} onChange={(v) => props.onChange({ source: v })} language="plaintext" height={120} minHeight={80} ariaLabel="Markdown source" />
+          <MonacoTextarea value={cell.source} onChange={(v) => props.onChange({ source: v })} language="markdown" height={120} minHeight={80} autoHeight maxHeight={600} ariaLabel="Markdown source" />
         ) : (
           <div className={s.md} onDoubleClick={() => setMdEditing(true)}
             // eslint-disable-next-line react/no-danger
@@ -1291,7 +1295,7 @@ function NotebookCellView(props: {
         </div>
       ) : (
         <MonacoTextarea value={cell.source} onChange={(v) => props.onChange({ source: v })}
-          language={KIND_TO_MONACO[cell.lang]} height={140} minHeight={80} ariaLabel={`${cell.lang} code cell`}
+          language={KIND_TO_MONACO[cell.lang]} height={140} minHeight={80} autoHeight maxHeight={720} ariaLabel={`${cell.lang} code cell`}
           onReady={handleEditorReady} />
       )}
 

@@ -481,6 +481,8 @@ export function SynapseServerlessSqlPoolEditor({ item, id }: { item: FabricItemT
             dialectLabel="T-SQL"
             height={240}
             minHeight={200}
+            autoHeight
+            maxHeight={640}
             ariaLabel="Serverless T-SQL editor"
             onReady={handleEditorReady}
             resultError={result && !result.ok ? result.error || null : null}
@@ -1180,6 +1182,8 @@ export function SynapseDedicatedSqlPoolEditor({ item, id }: { item: FabricItemTy
             dialectLabel="T-SQL"
             height={240}
             minHeight={200}
+            autoHeight
+            maxHeight={640}
             ariaLabel="Dedicated T-SQL editor"
             onReady={handleEditorReady}
             resultError={result && !result.ok ? result.error || null : null}

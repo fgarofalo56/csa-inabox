@@ -25,7 +25,7 @@
  */
 
 import dynamic from 'next/dynamic';
-import { useCallback, useEffect, useRef } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { tokens } from '@fluentui/react-components';
 import type { OnMount, OnChange } from '@monaco-editor/react';
 
@@ -92,6 +92,14 @@ export interface MonacoTextareaProps {
   readOnly?: boolean;
   height?: number | string;
   minHeight?: number;
+  /**
+   * Auto-fit the editor height to its content (grows/shrinks as you type) so a
+   * cell shows everything without manual dragging — clamped between minHeight
+   * and maxHeight (then it scrolls). Overrides `height` while on.
+   */
+  autoHeight?: boolean;
+  /** Upper bound for autoHeight before the editor scrolls. Default 720px. */
+  maxHeight?: number;
   className?: string;
   ariaLabel?: string;
   /** Show minimap. Default off for narrow cells. */
@@ -314,6 +322,8 @@ export function MonacoTextarea({
   readOnly = false,
   height = 240,
   minHeight,
+  autoHeight = false,
+  maxHeight = 720,
   className,
   ariaLabel,
   minimap = false,
@@ -324,6 +334,10 @@ export function MonacoTextarea({
   const editorRef = useRef<any>(null);
   const monacoRef = useRef<any>(null);
   const monacoLang = mapLanguage(language);
+  // Content-driven height (autoHeight mode): the editor reports its content size
+  // and we size the container to it, clamped between minHeight and maxHeight, so
+  // a cell auto-expands to fit everything without the user dragging.
+  const [autoH, setAutoH] = useState<number | undefined>(undefined);
 
   const onMount: OnMount = useCallback((editor, monaco) => {
     editorRef.current = editor;
@@ -332,8 +346,19 @@ export function MonacoTextarea({
     if (monacoLang === 'kusto') registerKustoLanguageOnce(monaco);
     if (monacoLang === 'dax') registerDaxLanguageOnce(monaco);
     monaco.editor.setTheme(detectTheme());
+    if (autoHeight) {
+      const floor = minHeight ?? 80;
+      const applyAuto = () => {
+        const ch = editor.getContentHeight();
+        const clamped = Math.min(maxHeight, Math.max(floor, Math.ceil(ch) + 2));
+        setAutoH(clamped);
+        try { editor.layout(); } catch { /* layout best-effort */ }
+      };
+      editor.onDidContentSizeChange(applyAuto);
+      applyAuto();
+    }
     onReady?.(editor, monaco);
-  }, [monacoLang, onReady]);
+  }, [monacoLang, onReady, autoHeight, minHeight, maxHeight]);
 
   // Watch for dark/light class flips on <html> and resync the theme.
   useEffect(() => {
@@ -356,7 +381,7 @@ export function MonacoTextarea({
       aria-label={ariaLabel}
       aria-readonly={readOnly}
       style={{
-        height,
+        height: autoHeight ? (autoH ?? minHeight ?? 120) : height,
         minHeight,
         border: `1px solid ${tokens.colorNeutralStroke2}`,
         borderRadius: 4,
