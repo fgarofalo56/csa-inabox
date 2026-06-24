@@ -259,9 +259,14 @@ export async function deleteFirewallRule(serverNameOrId: string, ruleName: strin
 // honest gate when LOOM_POSTGRES_AAD_USER is unset (per no-vaporware.md).
 // ============================================================
 
-/** Entra token scope for Azure DB for PostgreSQL (Commercial default; Gov override via env). */
+/** Entra token scope for Azure DB for PostgreSQL (Commercial default; Gov override via env).
+ *  Resource = the Microsoft-documented OSS-RDBMS app `ossrdbms-aad.database.windows.net`.
+ *  (The `.azure.com` variant is NOT registered as a first-party app in some tenants →
+ *  AADSTS500011 "resource principal not found" at token time, breaking every Postgres
+ *  AAD connection incl. mirroring + Weave. Verified live: switching to .windows.net let
+ *  the Console UAMI connect to the source. Gov override stays via LOOM_POSTGRES_AAD_SCOPE.) */
 function pgAadScope(): string {
-  return process.env.LOOM_POSTGRES_AAD_SCOPE || 'https://ossrdbms-aad.database.azure.com/.default';
+  return process.env.LOOM_POSTGRES_AAD_SCOPE || 'https://ossrdbms-aad.database.windows.net/.default';
 }
 
 export interface PgQueryResult {

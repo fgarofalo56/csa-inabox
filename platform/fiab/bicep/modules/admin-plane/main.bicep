@@ -2215,9 +2215,12 @@ module appDeployments 'app-deployments.bicep' = if (containerPlatform == 'contai
             { name: 'LOOM_SYNAPSE_SQL_SUFFIX', value: loomSynapseSqlSuffix }
             { name: 'LOOM_POSTGRES_AAD_USER', value: loomPostgresAadUser }
             // PostgreSQL Entra-auth cloud portability (read by postgres-flex-client.ts).
-            // Commercial / GCC use the Commercial OSS RDBMS scope + .azure.com host;
+            // Commercial / GCC use the Microsoft-documented OSS RDBMS scope
+            // (ossrdbms-aad.database.windows.net — the .azure.com variant is not a
+            // registered first-party app in some tenants → AADSTS500011 at token time,
+            // breaking Postgres AAD connections incl. mirroring + Weave; verified live).
             // GCC-High / IL5 (Azure US Government) use the US-Gov scope + .usgovcloudapi.net.
-            { name: 'LOOM_POSTGRES_AAD_SCOPE', value: boundary == 'GCC-High' || boundary == 'IL5' ? 'https://ossrdbms-aad.database.usgovcloudapi.net/.default' : 'https://ossrdbms-aad.database.azure.com/.default' }
+            { name: 'LOOM_POSTGRES_AAD_SCOPE', value: boundary == 'GCC-High' || boundary == 'IL5' ? 'https://ossrdbms-aad.database.usgovcloudapi.net/.default' : 'https://ossrdbms-aad.database.windows.net/.default' }
             { name: 'LOOM_POSTGRES_HOST_SUFFIX', value: boundary == 'GCC-High' || boundary == 'IL5' ? 'postgres.database.usgovcloudapi.net' : 'postgres.database.azure.com' }
             // Weave (Semantic Ontology) graph store — object/link/action instance
             // write-back over Apache AGE (lib/azure/weave-ontology-store.ts). When
