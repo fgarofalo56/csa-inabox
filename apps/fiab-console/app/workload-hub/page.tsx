@@ -84,11 +84,11 @@ const useStyles = makeStyles({
   },
   heroText: { flex: 1, minWidth: '320px' },
   heroTitle: {
-    fontSize: '24px', fontWeight: 700, lineHeight: 1.3,
+    fontSize: tokens.fontSizeBase600, fontWeight: 700, lineHeight: 1.3,
     letterSpacing: '-0.01em', marginBottom: tokens.spacingVerticalS,
   },
   heroBody: {
-    color: tokens.colorNeutralForeground2, fontSize: '14px',
+    color: tokens.colorNeutralForeground2, fontSize: tokens.fontSizeBase300,
     lineHeight: 1.55, maxWidth: '680px',
   },
   heroStats: { display: 'flex', gap: tokens.spacingHorizontalL, flexWrap: 'wrap' },
@@ -106,7 +106,7 @@ const useStyles = makeStyles({
     color: tokens.colorBrandForeground1, lineHeight: 1.1,
   },
   heroStatLabel: {
-    fontSize: '12px', color: tokens.colorNeutralForeground3,
+    fontSize: tokens.fontSizeBase200, color: tokens.colorNeutralForeground3,
     marginTop: tokens.spacingVerticalXS,
   },
   countBadges: {

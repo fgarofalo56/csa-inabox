@@ -95,6 +95,8 @@ const useStyles = makeStyles({
     WebkitLineClamp: 3,
     WebkitBoxOrient: 'vertical',
     overflow: 'hidden',
+    overflowWrap: 'anywhere',
+    wordBreak: 'break-word',
   },
 });
 

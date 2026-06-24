@@ -37,7 +37,7 @@ const useStyles = makeStyles({
   header: { display: 'flex', alignItems: 'center', gap: tokens.spacingHorizontalM },
   headIcon: { color: tokens.colorBrandForeground1 },
   intro: { color: tokens.colorNeutralForeground2, maxWidth: '780px' },
-  bar: { display: 'flex', alignItems: 'center', gap: tokens.spacingHorizontalS },
+  bar: { display: 'flex', alignItems: 'center', gap: tokens.spacingHorizontalS, flexWrap: 'wrap' },
   toggleSlot: { marginLeft: 'auto' },
   authLine: { display: 'inline-flex', alignItems: 'center', gap: tokens.spacingHorizontalXS },
   tileFooter: { display: 'inline-flex', alignItems: 'center', gap: tokens.spacingHorizontalXS, flexWrap: 'wrap' },

@@ -52,7 +52,7 @@ const useStyles = makeStyles({
   items: {
     display: 'grid',
     gap: tokens.spacingHorizontalM,
-    gridTemplateColumns: 'repeat(auto-fill, minmax(260px, 1fr))',
+    gridTemplateColumns: 'repeat(auto-fill, minmax(min(260px, 100%), 1fr))',
   },
   itemCard: {
     padding: tokens.spacingVerticalM,
@@ -150,7 +150,7 @@ export default function AppDetailPage() {
   return (
     <PageShell title={app.name}
       actions={
-        <div style={{ display: 'flex', gap: 8 }}>
+        <div style={{ display: 'flex', gap: tokens.spacingHorizontalS, flexWrap: 'wrap' }}>
           <Button icon={<ArrowLeft24Regular />} appearance="subtle" onClick={() => router.push('/apps')}>
             All apps
           </Button>

@@ -89,7 +89,7 @@ const useStyles = makeStyles({
     boxShadow: tokens.shadow2,
     minWidth: 0,
   },
-  statHead: { display: 'flex', alignItems: 'center', gap: tokens.spacingHorizontalM },
+  statHead: { display: 'flex', alignItems: 'center', gap: tokens.spacingHorizontalM, minWidth: 0 },
   chip: {
     flexShrink: 0,
     display: 'inline-flex',
@@ -104,8 +104,16 @@ const useStyles = makeStyles({
     fontWeight: tokens.fontWeightSemibold,
     lineHeight: 1.1,
     color: tokens.colorNeutralForeground1,
+    minWidth: 0,
+    overflowWrap: 'anywhere',
+    wordBreak: 'break-word',
   },
-  statLabel: { fontSize: tokens.fontSizeBase200, color: tokens.colorNeutralForeground3 },
+  statLabel: {
+    fontSize: tokens.fontSizeBase200,
+    color: tokens.colorNeutralForeground3,
+    overflowWrap: 'anywhere',
+    wordBreak: 'break-word',
+  },
   bar: {
     height: '6px',
     backgroundColor: tokens.colorNeutralBackground3,
@@ -158,8 +166,8 @@ const useStyles = makeStyles({
     },
   },
   navBody: { display: 'flex', flexDirection: 'column', gap: '2px', minWidth: 0 },
-  navTitle: { fontWeight: tokens.fontWeightSemibold },
-  navDesc: { color: tokens.colorNeutralForeground3 },
+  navTitle: { fontWeight: tokens.fontWeightSemibold, overflowWrap: 'anywhere', wordBreak: 'break-word' },
+  navDesc: { color: tokens.colorNeutralForeground3, overflowWrap: 'anywhere', wordBreak: 'break-word' },
   typeChip: {
     display: 'inline-flex',
     alignItems: 'center',
