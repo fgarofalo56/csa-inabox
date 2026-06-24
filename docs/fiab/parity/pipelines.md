@@ -36,18 +36,18 @@ Source UIs (ground every wave in these, per `ui-parity.md`):
   - ❌ Full activity catalog parity (Lookup, GetMetadata, ForEach, If/Switch/Until, Wait, Execute Pipeline, Web/Webhook, Stored Proc, Script, Notebook, Spark, Databricks, HDInsight, Filter, Set/Append Variable, Validation, Delete, Fail) each with their settings tabs.
   - ❌ Pipeline parameters / variables / triggers (schedule, tumbling, storage-event, custom) / debug + monitor parity.
 
-## Coverage matrix (build ✅ / honest-gate ⚠️ / MISSING ❌) — to be filled per wave
+## Coverage matrix (build ✅ / honest-gate ⚠️ / MISSING ❌)
 
-| Capability | ADF | Synapse | Loom today | Target |
+| Capability | ADF | Synapse | Loom (built) | Wave |
 |---|---|---|---|---|
-| Linked service gallery + per-connector config | ✅ | ✅ | ❌ | ✅ |
-| Dataset new/select + schema | ✅ | ✅ | ❌ | ✅ |
-| Integration runtimes (Azure/SHIR/SSIS) | ✅ | ✅ (Azure/SHIR) | partial | ✅ |
-| Copy activity source/sink/mapping/settings | ✅ | ✅ | ❌ | ✅ |
-| Dynamic content / expression builder | ✅ | ✅ | ❌ | ✅ |
-| Mapping data flows designer | ✅ | ✅ | ❌ | ✅ |
-| Control-flow activities (full set) | ✅ | ✅ | partial | ✅ |
-| Parameters / variables / triggers / debug | ✅ | ✅ | partial | ✅ |
+| Linked service gallery + per-connector config (31 connectors, extensible) | ✅ | ✅ | ✅ | 1 |
+| Dataset new/select + schema | ✅ | ✅ | ✅ | 1 |
+| Integration runtimes (Azure/SHIR/SSIS) | ✅ | ✅ (Azure/SHIR) | ✅ | 1 |
+| Copy activity source/sink/mapping/settings | ✅ | ✅ | ✅ | 2 |
+| Dynamic content / expression builder (84 fns + system vars) | ✅ | ✅ | ✅ | 3 |
+| Control-flow + external activities (35) | ✅ | ✅ | ✅ | 4 |
+| Mapping data flows designer (25 transforms) | ✅ | ✅ | ✅ (debug ⚠️ Spark-gated) | 5 |
+| Parameters / variables / triggers / debug + monitor | ✅ | ✅ | 🔨 in flight | 6 |
 
 ## Proposed build waves (each grounds in Learn + ships against the real REST)
 
@@ -61,4 +61,12 @@ Source UIs (ground every wave in these, per `ui-parity.md`):
 Per pipeline FLAVOR the operator named (Synapse / ADF / integrated / "classic"): the UI is one builder that targets the right backend — ADF REST (`adf-client`) vs Synapse artifacts REST (`synapse-dev-client`) — selected by the item type. Same surface, theme-applied; backend differs.
 
 ## Status
-- 2026-06-24: plan authored; gap-scan done. **Awaiting operator decision on build approach (multi-agent workflow vs wave-by-wave) + first wave** before executing. The VNet subnet-delegation fix (separate ask) is shipped.
+- 2026-06-24: plan authored; gap-scan done.
+- 2026-06-24: operator chose the multi-agent-workflow approach + "all of it". Built via 6 sequential workflows (research → build → integrate + build-gate each), all `pnpm build` ✓ verified:
+  - **Wave 1** (a492e71e, LIVE rev 78): connector-catalog (31) + linked-service gallery + dataset wizard + IR manager + manage-hub.
+  - **Wave 2** (c1b4b96c, LIVE rev 79): copy-activity catalog + Source/Sink/Mapping/Settings (12 tests).
+  - **Wave 3** (a006490a, LIVE rev 80): 84-fn expression catalog + system vars + dynamic-content panel + ExpressionField wired across fields.
+  - **Wave 4** (0eca8bd7, committed): 35-activity catalog + catalog-driven forms + container drill-into.
+  - **Wave 5** (82737c69, committed): Mapping Data Flow designer (25 transforms, DFS round-trip, DF expression builder, debug honest-gated) + mapping-dataflow-editor + ExecuteDataFlow picker.
+  - **Wave 6** (in flight): parameters/variables + all 4 trigger types + debug run + monitor.
+- NEXT: build-gate Wave 6 → ONE roll (rev 81) carrying Waves 4→6 → combined live click-through of the whole pipeline builder → mark this doc A-grade (zero ❌). The VNet subnet-delegation + Delta-Sharing CREATE-CATALOG + day-one SQL warehouse fixes (separate asks) shipped earlier this session.
