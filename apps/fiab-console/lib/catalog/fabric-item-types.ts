@@ -321,6 +321,30 @@ export const FABRIC_ITEM_TYPES: readonly FabricItemType[] = [
       ],
       "docsUrl": "https://learn.microsoft.com/fabric/data-factory/dataflows-gen2-overview"
     } },
+  { slug: 'mapping-dataflow', displayName: 'Mapping data flow', restType: 'MappingDataFlow', category: 'Data Factory',
+    description: 'Visually design a Spark-executed data flow — Source, schema/row transformations, and Sink — that runs on an integration runtime.',
+    learnContent: {
+      "overview": "A Mapping data flow is a visually-designed, Spark-executed data transformation. You draw a graph of Source → transformation → Sink nodes on a canvas and Azure Data Factory / Synapse compiles it to a Data Flow Script that runs on a scaled-out Spark cluster (an integration runtime with data-flow compute) — no hand-written Spark code. In CSA Loom it is Azure-native: the flow is a real Microsoft.DataFactory/factories/dataflows resource (type: MappingDataFlow) on the deployment-default Data Factory, and pipelines invoke it with an Execute data flow activity. It is DISTINCT from Dataflow Gen2 (Power Query / M) — same goal, different engine and authoring model.",
+      "steps": [
+        {
+          "title": "Add a source",
+          "body": "Drop a Source node and bind a dataset (the reusable connector object). Sources can allow schema drift and validate the projected schema."
+        },
+        {
+          "title": "Add transformations",
+          "body": "Use the ＋ on a stream to add transformations — Select, Derived column, Filter, Join, Aggregate, Pivot, Window, Conditional split, and more. Each opens a structured settings panel; column logic uses the data-flow expression (Spark column DSL)."
+        },
+        {
+          "title": "Add a sink",
+          "body": "Terminate each branch in a Sink node bound to a destination dataset, with insert/update/upsert/delete row policies and key columns."
+        },
+        {
+          "title": "Debug + run",
+          "body": "Turn on Data flow debug to preview rows at each transformation — this needs a live Spark data-flow debug cluster (an Azure IR with data-flow compute); without one the preview is an honest gate, never faked. Run the flow in production from a pipeline's Execute data flow activity."
+        }
+      ],
+      "docsUrl": "https://learn.microsoft.com/azure/data-factory/concepts-data-flow-overview"
+    } },
   { slug: 'copy-job', displayName: 'Copy job', restType: 'CopyJob', category: 'Data Factory',
     description: 'Wizard-driven bulk ingestion from any supported connector.',
     learnContent: {

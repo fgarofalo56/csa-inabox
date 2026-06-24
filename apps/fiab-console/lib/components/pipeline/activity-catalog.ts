@@ -727,7 +727,7 @@ export function nextNameSuffix(activities: PipelineActivity[], prefix: string): 
  * (`'dataset'`) or the linked-service-gallery LinkedServicePicker
  * (`'linkedService'`). `undefined` ⇒ a normal field (text/expr/select/…).
  */
-export type ActivityFieldRef = 'dataset' | 'linkedService';
+export type ActivityFieldRef = 'dataset' | 'linkedService' | 'dataFlow';
 
 /**
  * A single activity-settings field. Extends the Wave-1 `ConfigField` (key,
@@ -1040,7 +1040,7 @@ export const ACTIVITIES: ActivityDef[] = [
     hasInnerActivities: false, referencesDataset: false, referencesLinkedService: false,
     settings: [
       { key: 'dataflow', path: 'dataflow.referenceName', label: 'Data flow', kind: 'text', required: true,
-        hint: 'The mapping data flow to run.' },
+        ref: 'dataFlow', hint: 'The mapping data flow to run.' },
       { key: 'compute.computeType', label: 'Compute type', kind: 'select',
         options: [
           { value: 'General', label: 'General purpose' },

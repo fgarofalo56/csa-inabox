@@ -27,6 +27,7 @@ import {
 import { ExpressionField, isDynamicExpression } from './expression-field';
 import { DatasetSelectOrCreate, type DatasetProvider } from './dataset-wizard';
 import { LinkedServicePicker, type LinkedServiceEngine } from './linked-service-gallery';
+import { DataFlowPicker } from './dataflow-picker';
 import { activityByType, type ActivityDef, type ActivitySettingField } from './activity-catalog';
 import { branchesOf, totalInnerCount } from './drill-path';
 import type { PipelineActivity, PipelineParameter, PipelineVariable } from './types';
@@ -712,6 +713,20 @@ function CatalogFieldRenderer({
         required={field.required}
         hint={field.hint}
         provider={engine}
+        onChange={(name) => write(name)}
+      />
+    );
+  }
+
+  // — MAPPING DATA FLOW reference → DataFlowPicker (lists published flows) —
+  if (field.ref === 'dataFlow') {
+    return (
+      <DataFlowPicker
+        label={field.label}
+        required={field.required}
+        hint={field.hint}
+        provider={engine}
+        value={typeof raw === 'string' ? raw : ''}
         onChange={(name) => write(name)}
       />
     );

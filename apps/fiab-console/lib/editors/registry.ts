@@ -30,6 +30,11 @@ export const EDITOR_REGISTRY: Record<string, EditorComponent> = {
   'notebook':             reg(() => import('./notebook-editor'),          'NotebookEditor'),
   'data-pipeline':        reg(() => import('./data-pipeline-editor'),     'DataPipelineEditor'),
   'dataflow':             reg(() => import('./dataflow-gen2-editor'),     'DataflowGen2Editor'),
+  // Mapping data flow — the ADF/Synapse SPARK-based visual data flow designer
+  // (DISTINCT from the Power Query / Dataflow Gen2 above). Hosts the React Flow
+  // graph of Source / transformation / Sink nodes that compiles to the Data
+  // Flow Script Spark runs; round-trips via /api/adf/dataflows.
+  'mapping-dataflow':     reg(() => import('./mapping-dataflow-editor'),  'MappingDataFlowEditor'),
   'mirrored-database':    reg(() => import('./mirrored-database-editor'), 'MirroredDatabaseEditor'),
   'mirrored-databricks':  reg(() => import('./mirrored-databricks-editor'), 'MirroredDatabricksEditor'),
   'mounted-adf':          reg(() => import('./mounted-adf-editor'),       'MountedAdfEditor'),
