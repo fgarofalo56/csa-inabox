@@ -739,11 +739,14 @@ async function probeDeltaSharing(): Promise<CheckResult> {
   // one-step fix a Databricks metastore admin runs (the UAMI cannot self-grant).
   const grantScript = [
     '# Grant the Console UAMI the Unity Catalog metastore SHARING privileges so the',
-    '# Marketplace "Data shares" flow works — inbound (CREATE PROVIDER, add a share',
-    '# from an activation file) AND outbound (CREATE SHARE/RECIPIENT). Run as a',
-    '# Databricks METASTORE ADMIN (the UAMI cannot grant itself). Paste in a',
-    '# Databricks SQL editor / notebook, or use scripts/csa-loom/grant-databricks-delta-sharing.sh.',
+    '# Marketplace "Data shares" flow works end-to-end — inbound: CREATE PROVIDER',
+    '# (register the share from an activation file) + CREATE CATALOG (subscribe =',
+    '# create a catalog from the share so you can query it); outbound: CREATE SHARE',
+    '# + CREATE RECIPIENT. Run as a Databricks METASTORE ADMIN (the UAMI cannot',
+    '# grant itself). Paste in a Databricks SQL editor / notebook, or use',
+    '# scripts/csa-loom/grant-databricks-delta-sharing.sh.',
     `GRANT CREATE PROVIDER  ON METASTORE TO \`${CTX.uamiClientId}\`;`,
+    `GRANT CREATE CATALOG   ON METASTORE TO \`${CTX.uamiClientId}\`;`,
     `GRANT CREATE SHARE     ON METASTORE TO \`${CTX.uamiClientId}\`;`,
     `GRANT CREATE RECIPIENT ON METASTORE TO \`${CTX.uamiClientId}\`;`,
   ].join('\n');
@@ -782,7 +785,7 @@ async function probeDeltaSharing(): Promise<CheckResult> {
   const p = r.privileges;
   return {
     ...base, status: 'warn',
-    detail: `The Console UAMI lacks Unity Catalog metastore sharing privileges on '${r.metastoreName || 'the metastore'}' (CREATE PROVIDER: ${p.createProvider ? 'yes' : 'NO'}, CREATE SHARE: ${p.createShare ? 'yes' : 'NO'}, CREATE RECIPIENT: ${p.createRecipient ? 'yes' : 'NO'}). Adding an inbound Delta share from an activation file needs CREATE PROVIDER.${r.message ? ' ' + r.message : ''}`,
+    detail: `The Console UAMI lacks Unity Catalog metastore sharing privileges on '${r.metastoreName || 'the metastore'}' (CREATE PROVIDER: ${p.createProvider ? 'yes' : 'NO'}, CREATE CATALOG: ${p.createCatalog ? 'yes' : 'NO'}, CREATE SHARE: ${p.createShare ? 'yes' : 'NO'}, CREATE RECIPIENT: ${p.createRecipient ? 'yes' : 'NO'}). Adding an inbound share from an activation file needs CREATE PROVIDER; SUBSCRIBING (create a catalog from the share so you can query it) needs CREATE CATALOG.${r.message ? ' ' + r.message : ''}`,
     remediation: 'A Databricks metastore admin grants the Console UAMI CREATE PROVIDER / SHARE / RECIPIENT on the metastore — the UAMI cannot self-grant. Run scripts/csa-loom/grant-databricks-delta-sharing.sh, or paste the SQL below in a Databricks SQL editor as metastore admin. This grant should be applied day-one by the post-deploy bootstrap.',
     redeploy: true, portalSteps, fixScript: grantScript,
     docs: 'https://learn.microsoft.com/azure/databricks/data-governance/unity-catalog/manage-privileges/',

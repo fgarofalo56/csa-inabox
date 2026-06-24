@@ -1,15 +1,18 @@
 name: csa-loom-grant-delta-sharing
 
-# Grants the Loom Console UAMI the Unity Catalog metastore SHARING privileges
-# (CREATE SHARE / RECIPIENT / PROVIDER) so the Marketplace "Data shares →
-# Shared by me" publish flow works. account_admin (set by the bootstrap) does
-# NOT include these data-plane privileges, so create-share fails with
-# "User does not have CREATE SHARE on Metastore".
+# Grants the Loom Console UAMI the FULL Unity Catalog metastore SHARING privilege
+# set so the Marketplace "Data shares" flow works END-TO-END:
+#   CREATE PROVIDER  — register an inbound share from an activation file
+#   CREATE CATALOG   — subscribe = create a catalog from the share (so it's queryable)
+#   CREATE SHARE     — publish outbound shares ("Shared by me")
+#   CREATE RECIPIENT — publish outbound recipients
+# account_admin (set by the bootstrap) does NOT include these data-plane
+# privileges, so create-share / create-provider / create-catalog fail with
+# "User does not have CREATE <X> on Metastore".
 #
 # Runs as the limitlessdata_deploy SP, which is a Databricks account admin
-# (≈ metastore admin), so it can grant. Safe + targeted: NO MSAL app-reg / no
-# full bootstrap. Idempotent. Inbound subscribe needs only workspace access and
-# already works without this.
+# (≈ metastore admin), so it can grant — NO operator PAT needed. Safe + targeted:
+# NO MSAL app-reg / no full bootstrap. Idempotent.
 #
 # Defaults target the live centralus deployment; override inputs for others.
 
@@ -62,8 +65,8 @@ jobs:
           echo "    metastore_id=${METASTORE_ID}"
           [[ -z "$METASTORE_ID" || "$METASTORE_ID" == "null" ]] && { echo "ERROR: could not resolve metastore_id (is the deploy SP a workspace/metastore admin on ${HOST}?)" >&2; exit 1; }
 
-          echo ">>> Granting CREATE SHARE / CREATE RECIPIENT / CREATE PROVIDER to ${UAMI}"
-          BODY="$(jq -n --arg p "$UAMI" '{changes:[{principal:$p, add:["CREATE_SHARE","CREATE_RECIPIENT","CREATE_PROVIDER"]}]}')"
+          echo ">>> Granting CREATE PROVIDER / CREATE CATALOG / CREATE SHARE / CREATE RECIPIENT to ${UAMI}"
+          BODY="$(jq -n --arg p "$UAMI" '{changes:[{principal:$p, add:["CREATE_PROVIDER","CREATE_CATALOG","CREATE_SHARE","CREATE_RECIPIENT"]}]}')"
           CODE="$(curl -s -o /tmp/grant.json -w '%{http_code}' "${auth[@]}" -X PATCH \
             "https://${HOST}/api/2.1/unity-catalog/permissions/metastore/${METASTORE_ID}" -d "$BODY")"
           echo "    PATCH status: ${CODE}"

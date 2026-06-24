@@ -1135,8 +1135,9 @@ export interface DeltaSharingReadiness {
   /** The Console UAMI application (client) id — the UC principal grants target. */
   uamiPrincipal?: string;
   isMetastoreAdmin: boolean;
-  privileges: { createProvider: boolean; createShare: boolean; createRecipient: boolean };
-  /** Add an inbound share from an activation file (CREATE PROVIDER) is possible. */
+  privileges: { createProvider: boolean; createShare: boolean; createRecipient: boolean; createCatalog: boolean };
+  /** Full inbound flow possible: register the provider (CREATE PROVIDER) AND
+   *  subscribe = create a catalog from the share (CREATE CATALOG). */
   canConsumeInbound: boolean;
   /** Publish outbound shares + recipients is possible. */
   canPublish: boolean;
@@ -1180,7 +1181,7 @@ export async function deltaSharingReadiness(): Promise<DeltaSharingReadiness> {
   const owner: string | undefined = summary?.owner;
   const isAdmin = !!(uami && owner && String(owner).toLowerCase() === uami.toLowerCase());
 
-  let priv = { createProvider: isAdmin, createShare: isAdmin, createRecipient: isAdmin };
+  let priv = { createProvider: isAdmin, createShare: isAdmin, createRecipient: isAdmin, createCatalog: isAdmin };
   let message: string | undefined;
 
   if (!isAdmin && metastoreId && uami) {
@@ -1200,6 +1201,7 @@ export async function deltaSharingReadiness(): Promise<DeltaSharingReadiness> {
         createProvider: assigned.has('CREATE_PROVIDER'),
         createShare: assigned.has('CREATE_SHARE'),
         createRecipient: assigned.has('CREATE_RECIPIENT'),
+        createCatalog: assigned.has('CREATE_CATALOG'),
       };
     } catch (e: any) {
       // The UAMI may not be allowed to READ the metastore grant table (that read
@@ -1209,7 +1211,10 @@ export async function deltaSharingReadiness(): Promise<DeltaSharingReadiness> {
     }
   }
 
-  const canConsumeInbound = isAdmin || priv.createProvider;
+  // Consuming an inbound share end-to-end needs BOTH: register the provider
+  // (CREATE PROVIDER) AND subscribe = create a catalog from the share (CREATE
+  // CATALOG). The operator hit the second one after we'd only granted the first.
+  const canConsumeInbound = isAdmin || (priv.createProvider && priv.createCatalog);
   const canPublish = isAdmin || (priv.createShare && priv.createRecipient);
   const reason: DeltaSharingReadiness['reason'] = (canConsumeInbound && canPublish) ? 'ready' : 'privileges_missing';
 

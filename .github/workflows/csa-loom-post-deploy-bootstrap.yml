@@ -816,6 +816,32 @@ jobs:
             echo
           fi
 
+      - name: Grant Databricks Delta Sharing metastore privileges (UAMI)
+        # Day-one fix so the Marketplace "Data shares" flow works END-TO-END
+        # without operator confusion: grant the Console UAMI the FULL UC metastore
+        # sharing set — CREATE PROVIDER (register an inbound share from an
+        # activation file) + CREATE CATALOG (subscribe = create a catalog from the
+        # share so it's queryable) + CREATE SHARE / CREATE RECIPIENT (publish
+        # outbound). account_admin does NOT include these data-plane privileges;
+        # the deploy SP (a Databricks account ≈ metastore admin) PATCHes them. The
+        # UAMI must already be SCIM-provisioned (previous step). Idempotent +
+        # best-effort (skips cleanly when no Databricks workspace is bound).
+        continue-on-error: true
+        run: |
+          set -uo pipefail
+          if [ -z "${DBX_HOST:-}" ]; then echo "::notice::No Databricks host bound — skipping Delta Sharing grant."; exit 0; fi
+          UAMI="${CONSOLE_UAMI_CLIENT:-}"
+          if [ -z "$UAMI" ]; then echo "::notice::CONSOLE_UAMI_CLIENT unset — skipping Delta Sharing grant."; exit 0; fi
+          TOKEN=$(az account get-access-token --resource 2ff814a6-3304-4ab8-85cb-cd0e6f879c1d --query accessToken -o tsv)
+          auth=(-H "Authorization: Bearer ${TOKEN}" -H "Content-Type: application/json")
+          MID=$(curl -sf "${auth[@]}" "https://$DBX_HOST/api/2.1/unity-catalog/metastore_summary" | jq -r '.metastore_id' 2>/dev/null || true)
+          if [ -z "$MID" ] || [ "$MID" = "null" ]; then echo "::warning::Could not resolve metastore_id on $DBX_HOST (is the deploy SP a metastore admin?). Skipping Delta Sharing grant."; exit 0; fi
+          echo ">>> Granting CREATE PROVIDER/CATALOG/SHARE/RECIPIENT to $UAMI on metastore $MID"
+          BODY=$(jq -n --arg p "$UAMI" '{changes:[{principal:$p, add:["CREATE_PROVIDER","CREATE_CATALOG","CREATE_SHARE","CREATE_RECIPIENT"]}]}')
+          CODE=$(curl -s -o /tmp/ds_grant.json -w '%{http_code}' "${auth[@]}" -X PATCH "https://$DBX_HOST/api/2.1/unity-catalog/permissions/metastore/$MID" -d "$BODY")
+          echo "    Delta Sharing grant PATCH: $CODE"; cat /tmp/ds_grant.json 2>/dev/null || true
+          if [ "$CODE" = "200" ]; then echo "✓ Delta Sharing metastore grants applied to $UAMI"; else echo "::warning::Delta Sharing grant returned $CODE (non-fatal — re-run csa-loom-grant-delta-sharing.yml)"; fi
+
       - name: Databricks reachability fallback (IP access-list for Console egress)
         # #1466 FALLBACK to the databricks_ui_api Private Endpoint (databricks.bicep).
         # PRIMARY day-one fix: the PE + privatelink.azuredatabricks.net DNS zone make
