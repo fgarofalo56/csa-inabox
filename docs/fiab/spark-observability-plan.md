@@ -28,9 +28,32 @@ Grounded in MS Learn: Synapse [create-spark-configuration], Synapse Spark→LA
   until `LOOM_SPARK_LA_WORKSPACE_ID` + `LOOM_SPARK_LA_KEY` (or `LOOM_SPARK_LA_KEYVAULT_NAME`
   + `_SECRET`) are set.
 
+## ✅ SHIPPED (later commits)
+- **Databricks cluster preset BUILDER** (commit 5bb6db3b) — `compute-picker`
+  NewClusterDialog: preset picker (5 Databricks-targeted profiles) applying
+  autoscale min/max + Photon + Spot + auto-terminate + curated `spark_conf` in one
+  click; Photon/Spot toggles; min/max autoscale; structured key/value spark_conf
+  builder (no JSON; dynamicAllocation hidden). compute-targets POST expands
+  presetId → DatabricksShape + databricksConfFor(); ClusterSpec gained
+  runtime_engine / azure_attributes / cluster_log_conf; databricksClusterLogConf()
+  honest-gated on LOOM_DATABRICKS_CLUSTER_LOG_PATH.
+- **Monitor → Spark surface** (commit 6d744114) — a new "Spark" tab under Monitor:
+  `lib/azure/spark-monitor.ts` (listSparkApplications over SparkListenerEvent_CL +
+  DatabricksJobs, isfuzzy + column_ifexists; getSparkAppMetrics; PURE recommendTuning()
+  heuristic engine — 12 unit tests; sparkNativeDiagLinks), `/api/monitor/spark` BFF
+  (honest gate), `lib/panes/spark-observability.tsx` (sortable app table → drill-down
+  metric cards + tuning-rec cards w/ conf chips → native Spark-UI/History-Server links).
+- **Synapse→LA emission wired LIVE** (rev rolling as bjpbgi276): set
+  `LOOM_SPARK_LA_WORKSPACE_ID=01273839-…` + `LOOM_SPARK_LA_KEY=secretref:spark-la-key`
+  (console secret = LA primary shared key) on the live console, so every Loom Spark
+  session now emits SparkListenerEvent/SparkMetrics to law-csa-loom-centralus and the
+  Monitor → Spark tab shows real data. STILL NEEDS the durable bicep (wave 1 below).
+
 ## ⏳ NEXT WAVES (designed, ready to build)
 
 ### 1. Wire the Synapse→LA env + pool default (infra)
+> Live env is SET (see SHIPPED above); the remaining work here is the DURABLE bicep
+> (apps[].env + KV secret) + the Synapse pool default + the DCR migration.
 - Set `LOOM_SPARK_LA_WORKSPACE_ID` (the Loom LA workspace GUID — live = `01273839-800f-4fef-86bf-85e94cdf3a65`)
   + `LOOM_SPARK_LA_KEYVAULT_NAME`/`_SECRET` (a KV secret holding the LA shared key) on the
   console app via `main.bicep` apps[].env + the post-deploy bootstrap. Prefer KV over the
