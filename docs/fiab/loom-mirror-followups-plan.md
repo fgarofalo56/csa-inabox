@@ -76,6 +76,15 @@ regression → cleanup temp jobs + test mirrors → memory update.
   `disabled: isNew` gate) — a spec-context nuance, NOT a real cut. All three are attended-review
   spec-polish items, not product defects.
 
+### §3 Front Door client-JS caching — RESOLVED (no change needed)
+Checked the live AFD profile `fd-loom-k6mvh5sm6z7do` route `console-route`: `cacheConfiguration`
+is **null** — Front Door caching is already OFF, so FD does NOT cache the HTML/RSC document.
+The post-roll "stale client JS until hard-refresh" is therefore **browser-side** HTTP caching,
+not Front Door. The §3 premise (add an FD rule to not cache the document) doesn't apply. If we
+ever want to reduce browser staleness further, that's an app-side Cache-Control header tweak on
+the SSR/RSC responses (Next.js), NOT an FD change — and content-hashed `/_next/static/*` chunks
+are already immutable/safe. Closing §3; hard-refresh remains the mitigation after a client roll.
+
 ### CLEANUP for attended review (deletion deferred overnight for safety)
 - Temp ACA jobs: ✅ already deleted (loom-mpe-uami, loom-pe-verify).
 - Test mirrors (ws be0de3d7): KEEP adventureworks-mirror-e2e + e2e-CosmosDb-loom (proven demos);
@@ -83,6 +92,27 @@ regression → cleanup temp jobs + test mirrors → memory update.
   e2e-pg2-{postgres,weave,loom} / e2e-Postgres-{postgres,weave,loom}.
 - Test notebooks: 46e0a4b9 (old pre-PE), f37c177c (post-PE demo — KEEP for §1 if wanted).
 - Test data product: 0fd4a18b "Overnight QA — Mirror E2E data product" (DRAFT).
+
+### REMAINING FOLLOW-UPS (attended / operator-gated — NOT done overnight, with leads)
+- **§1 Spark-row live screenshot**: managed PE is in place; re-run the notebook on a calm
+  Synapse pool (or add a notebook spec to loom-uat) to capture the actual rows. Capability fixed.
+- **§2 Postgres E2E**: needs a real PG DB WITH user tables (the weave PG dbs tried don't exist;
+  LOOM_WEAVE_PG_* are empty). Token plumbing is correct (scopeToResource strips /.default; scope
+  is .windows.net). The live MSI-400 errors are STALE (pre-.windows.net-fix). Seed a table or wire
+  a real PG db, then re-Start on rev 65.
+- **§2 Snowflake/BigQuery/Oracle**: external SaaS — need a KV credential (operator pre-seeds).
+- **§2 Databricks UC / Open-mirroring**: Databricks clusters terminated; UC + Parquet-landing need setup.
+- **Mirror incremental (CDC) — latent**: `mirror-engine.ts:294` checks
+  `SELECT is_change_tracking_on FROM sys.databases` → errors "Invalid column name" on the source,
+  so SQL-family mirrors always full-snapshot (graceful fallback). LIKELY FIX: use
+  `IF EXISTS (SELECT 1 FROM sys.change_tracking_databases WHERE database_id = DB_ID())` instead.
+  Low blast radius (falls back to snapshot) but needs a live re-Start to verify — deferred to attended.
+- **§4 lakehouse Permissions 30s UAT timeout**: GET /api/items/[type]/[id]/permissions is Cosmos-fast
+  (no slow ARM in the hot path), so the timeout is page-render/navigation timing or live-ARM latency —
+  needs attended live timing to pinpoint; not a clear code fix.
+- **§5 Dataverse verify**: day-one MSAL-app fallback is wired; needs a Dataverse env + one-time
+  "Promote To Admin" to verify (no env in this deployment).
+- **§7 cleanup**: deletion deferred for safety (list above) — one-click attended cleanup.
 
 ## ✅ DONE this session (live + verified) — do NOT redo
 - Publish-as-API weave (MPP table-list + source-not-found fallback)
