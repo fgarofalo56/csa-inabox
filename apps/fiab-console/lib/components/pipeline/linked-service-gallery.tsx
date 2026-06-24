@@ -56,6 +56,7 @@ import {
   CONNECTORS, connectorByType,
   type ConnectorDef, type ConnectorAuthOption, type ConfigField,
 } from '@/lib/pipeline/connector-catalog';
+import { ExpressionField } from './expression-field';
 
 // ---------------------------------------------------------------------------
 // Engine → BFF route bindings.
@@ -211,6 +212,28 @@ function CatalogFieldControl({
 }) {
   const hint = field.hint
     + (field.supportsDynamic ? (field.hint ? ' ' : '') + 'Supports @{…} dynamic content.' : '');
+
+  // Dynamic-capable text / multiline field → the shared ExpressionField wrapper,
+  // giving the portal's "Add dynamic content" + IntelliSense exactly where ADF
+  // allows an @{…} expression on a connection setting (e.g. endpoint, database,
+  // path). No pipeline context here (linked services are authored stand-alone),
+  // so the picker offers system variables + the function library; the @-string
+  // round-trips verbatim onto typeProperties on the upsert. Secret fields are
+  // never expression-bound (they stay password inputs → secureString).
+  if (field.supportsDynamic && (field.kind === 'text' || field.kind === 'multiline') && !field.secret) {
+    return (
+      <ExpressionField
+        label={field.label}
+        hint={field.hint}
+        required={field.required}
+        placeholder={field.placeholder}
+        multiline={field.kind === 'multiline'}
+        supportsDynamic
+        value={value === undefined || value === null ? '' : String(value)}
+        onChange={onChange}
+      />
+    );
+  }
 
   if (field.kind === 'boolean') {
     return (

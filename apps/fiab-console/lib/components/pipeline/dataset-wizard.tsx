@@ -60,6 +60,7 @@ import {
   CONNECTORS, connectorByType,
   type ConnectorDef, type ConnectorAuthOption, type ConfigField,
 } from '@/lib/pipeline/connector-catalog';
+import { ExpressionField } from './expression-field';
 import type { AdfDataset } from '@/lib/azure/adf-client';
 
 // ---------------------------------------------------------------------------
@@ -278,6 +279,26 @@ function FieldControl({
           {(field.options || []).map((o) => <Option key={o.value} value={o.value}>{o.label}</Option>)}
         </Dropdown>
       </Field>
+    );
+  }
+  // Dynamic-capable text / multiline field → the shared ExpressionField wrapper,
+  // so dataset location settings (container / folder / file / schema / table)
+  // get the portal's "Add dynamic content" + IntelliSense exactly where ADF
+  // allows an @{…} expression. No pipeline context here (datasets/linked
+  // services are authored stand-alone), so the picker offers system variables +
+  // the function library; the @-string round-trips verbatim on the upsert.
+  if (field.supportsDynamic && (field.kind === 'text' || field.kind === 'multiline') && !field.secret) {
+    return (
+      <ExpressionField
+        label={field.label}
+        hint={field.hint}
+        required={field.required}
+        placeholder={field.placeholder}
+        multiline={field.kind === 'multiline'}
+        supportsDynamic
+        value={value}
+        onChange={onChange}
+      />
     );
   }
   const inputType = field.kind === 'password' ? 'password' : field.kind === 'number' ? 'number' : 'text';

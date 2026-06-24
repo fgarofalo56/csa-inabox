@@ -15,7 +15,7 @@
 import {
   Field, Input, Switch, Select, Caption1, tokens,
 } from '@fluentui/react-components';
-import { ExpressionField } from '../dynamic-content';
+import { ExpressionField } from '../expression-field';
 import type { ConfigField } from '@/lib/pipeline/connector-catalog';
 import type { PipelineActivity, PipelineParameter, PipelineVariable } from '../types';
 import type { AdfDataset, AdfLinkedService } from '@/lib/azure/adf-client';
@@ -45,6 +45,9 @@ export interface CopyFieldListProps {
   parameters: PipelineParameter[];
   variables: PipelineVariable[];
   allActivities: PipelineActivity[];
+  /** True when the Copy activity is nested inside a ForEach — only then are the
+   *  `@item()` / `@iterationItem()` iterator accessors offered in the picker. */
+  inForEach?: boolean;
 }
 
 /** Decide if a field's `showIf` condition is currently satisfied. */
@@ -60,6 +63,7 @@ function visible(field: ConfigField, values: Record<string, unknown>): boolean {
 
 export function CopyFieldList({
   fields, values, onPatch, activity, parameters, variables, allActivities,
+  inForEach = false,
 }: CopyFieldListProps) {
   return (
     <>
@@ -107,6 +111,8 @@ export function CopyFieldList({
               value={typeof raw === 'string' ? raw : ''}
               onChange={(v) => onPatch(f.key, v || undefined)}
               multiline
+              supportsDynamic
+              inForEach={inForEach}
               placeholder={f.placeholder}
               parameters={parameters} variables={variables} activities={allActivities}
               selfName={activity.name}
@@ -143,6 +149,8 @@ export function CopyFieldList({
               hint={f.hint}
               value={typeof raw === 'string' ? raw : ''}
               onChange={(v) => onPatch(f.key, v || undefined)}
+              supportsDynamic
+              inForEach={inForEach}
               placeholder={f.placeholder}
               parameters={parameters} variables={variables} activities={allActivities}
               selfName={activity.name}

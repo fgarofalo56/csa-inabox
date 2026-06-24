@@ -21,7 +21,7 @@ import {
   Field, Input, Dropdown, Option, Switch, Caption1, Button, Spinner,
   MessageBar, MessageBarBody, MessageBarTitle,
 } from '@fluentui/react-components';
-import { ExpressionField } from './dynamic-content';
+import { ExpressionField } from './expression-field';
 import type { PipelineActivity, PipelineParameter, PipelineVariable } from './types';
 
 type FieldKind = 'text' | 'number' | 'bool' | 'select' | 'multiselect' | 'expr' | 'expr-multiline';
@@ -571,6 +571,8 @@ export function ActivityForm({
             required={fld.required}
             placeholder={fld.placeholder}
             multiline={fld.kind === 'expr-multiline'}
+            supportsDynamic
+            inForEach={activity.type === 'ForEach'}
             value={strVal}
             parameters={parameters}
             variables={variables}
