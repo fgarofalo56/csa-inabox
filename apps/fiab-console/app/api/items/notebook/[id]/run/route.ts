@@ -217,6 +217,7 @@ export async function POST(req: NextRequest, ctx: { params: Promise<{ id: string
       let sessionId: number | undefined;
       let sessState = 'starting';
       let reused = false;
+      let displayLoaded = false;
       let sessionReceipt: Record<string, unknown> | null = null;
       const saved = state.sparkSession;
       const savedKey = saved && typeof saved.sizingKey === 'string' ? saved.sizingKey : '';
@@ -226,6 +227,7 @@ export async function POST(req: NextRequest, ctx: { params: Promise<{ id: string
           if (['idle', 'busy', 'starting', 'not_started'].includes(live.state)) {
             sessionId = saved.id; sessState = live.state; reused = true;
             sessionReceipt = saved.request || null;
+            displayLoaded = (saved as any).displayLoaded === true;
           }
         } catch { /* stale/expired → fall through to create */ }
       }
@@ -233,19 +235,6 @@ export async function POST(req: NextRequest, ctx: { params: Promise<{ id: string
         const sess = await createLivySessionAsync(pool, effectiveSessKind, undefined, sizing);
         sessionId = sess.id; sessState = sess.state;
         sessionReceipt = sess.request;
-
-        // Rich display() — inject the ai-display.py helper as statement 0 of a
-        // FRESH pyspark session so display(df) emits the Loom rich-display MIME.
-        // Opt-in via LOOM_RICH_DISPLAY=1 (Azure-native, no Fabric dependency).
-        // Skipped on reuse (loaded once per session) and for non-pyspark kinds.
-        // Non-fatal: if it fails, display() falls back to the built-in table.
-        if ((process.env.LOOM_RICH_DISPLAY || '').trim() === '1' && sessKind === 'pyspark') {
-          try {
-            const { submitLivyStatement } = await import('@/lib/azure/synapse-dev-client');
-            const { AI_DISPLAY_PREAMBLE } = await import('@/lib/notebook/ai-display-preamble');
-            await submitLivyStatement(pool, sessionId, { code: AI_DISPLAY_PREAMBLE, kind: 'pyspark' });
-          } catch { /* non-fatal — display() degrades to the built-in renderer */ }
-        }
 
         // Auto-mount attached lakehouses (issue #655) — inject the
         // `loom_lakehouses` abfss preamble as a session statement on a FRESH
@@ -263,6 +252,24 @@ export async function POST(req: NextRequest, ctx: { params: Promise<{ id: string
           } catch { /* non-fatal — user can still type paths manually */ }
         }
       }
+
+      // Rich display() helper — ensure it is loaded ONCE per session, for BOTH
+      // fresh AND reused pyspark sessions. Injecting only on a fresh session left
+      // display() undefined on a REUSED session that predated the helper — the
+      // live "NameError: name 'display' is not defined" symptom. The helper is
+      // idempotent in-kernel (sys._loom_display_v1); displayLoaded (persisted in
+      // sparkSession) keeps us from re-submitting it on every cell run. Submitted
+      // BEFORE the cell statement (the poll route submits the cell), so Livy's
+      // FIFO ordering guarantees display() is defined by the time the cell runs.
+      // Opt-in via LOOM_RICH_DISPLAY=1 (Azure-native, no Fabric). Non-fatal.
+      if ((process.env.LOOM_RICH_DISPLAY || '').trim() === '1' && effectiveSessKind === 'pyspark' && !displayLoaded && typeof sessionId === 'number') {
+        try {
+          const { submitLivyStatement } = await import('@/lib/azure/synapse-dev-client');
+          const { AI_DISPLAY_PREAMBLE } = await import('@/lib/notebook/ai-display-preamble');
+          await submitLivyStatement(pool, sessionId, { code: AI_DISPLAY_PREAMBLE, kind: 'pyspark' });
+          displayLoaded = true;
+        } catch { /* non-fatal — display() degrades to the built-in renderer */ }
+      }
       const runIdStr = `spark:${pool}:${sessionId}`;
 
       // Persist the (possibly new) session for reuse + the per-cell pending run.
@@ -275,7 +282,7 @@ export async function POST(req: NextRequest, ctx: { params: Promise<{ id: string
           state: {
             ...state,
             pendingRuns,
-            sparkSession: { pool, id: sessionId, kind: effectiveSessKind, sizingKey, request: redactReceiptSecrets(sessionReceipt) },
+            sparkSession: { pool, id: sessionId, kind: effectiveSessKind, sizingKey, request: redactReceiptSecrets(sessionReceipt), displayLoaded },
             ...(rawCfg ? { sparkSessionSizing: rawCfg } : {}),
           },
           updatedAt: new Date().toISOString(),
