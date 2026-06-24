@@ -586,9 +586,15 @@ async function snapshotTable(
     if (savedSyncVersion !== undefined && savedSyncVersion !== null) {
       try {
         const ct = await changeTrackingStatus(src.server, src.database, t.schema, t.table);
-        if (!ct) {
-          // CT not enabled at the DB level — try to turn it on for next run, then
-          // full-snapshot now (it can't read deltas the very run it's enabled).
+        if (!ct || ct.minValid === null) {
+          // CT not usable for this table yet — either DB-level CT is off (ct null)
+          // OR table-level CT is off (minValid null, even though DB-level CT is on).
+          // enableChangeTracking is idempotent at BOTH levels, so call it for both
+          // cases, then full-snapshot now (a table can't read deltas the very run CT
+          // is enabled). The next Start syncs incrementally. (Previously this only
+          // handled DB-level-off; once DB-level CT was on, table-level CT was never
+          // enabled and the CHANGETABLE read failed with "Change tracking is not
+          // enabled on table 'X'" forever.)
           try {
             await enableChangeTracking(src.server, src.database, t.schema, t.table);
             fallbackNote = 'Change tracking enabled this run; the next Start will sync incrementally.';
@@ -628,11 +634,15 @@ async function snapshotTable(
     // on full snapshots and never reaches the incremental path.
     try {
       let ctNow = await changeTrackingStatus(src.server, src.database, t.schema, t.table);
-      if (!ctNow) {
+      // Enable when DB-level CT is off (ctNow null) OR table-level CT is off for
+      // this table (minValid null, even though DB-level CT is on) — otherwise
+      // CHANGE_TRACKING_MIN_VALID_VERSION(table) stays NULL and the table never
+      // reaches the incremental path.
+      if (!ctNow || ctNow.minValid === null) {
         try {
           await enableChangeTracking(src.server, src.database, t.schema, t.table);
           ctNow = await changeTrackingStatus(src.server, src.database, t.schema, t.table);
-          if (ctNow && !fallbackNote) result.note = 'Change tracking enabled this run; the next Start will sync incrementally.';
+          if (ctNow && ctNow.minValid !== null && !fallbackNote) result.note = 'Change tracking enabled this run; the next Start will sync incrementally.';
         } catch (ce: any) {
           if (!fallbackNote) result.note =
             'Change tracking could not be enabled — the next Start will re-snapshot. ' +
