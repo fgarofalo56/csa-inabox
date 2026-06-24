@@ -1252,7 +1252,14 @@ export function DataPipelineEditor({ item, id }: Props) {
               )}
 
               {topTab === 'output' && (
-                <OutputPane workspaceId={workspaceId} pipelineId={pipelineId} />
+                <OutputPane
+                  workspaceId={workspaceId}
+                  pipelineId={pipelineId}
+                  pipelineParams={parameters}
+                  paramNames={parameters.map((p) => p.name)}
+                  variableNames={variables.map((v) => v.name)}
+                  activityNames={activities.map((a) => a.name)}
+                />
               )}
             </TopTabs>
           )}
@@ -1293,6 +1300,7 @@ export function DataPipelineEditor({ item, id }: Props) {
             open={scheduleOpen}
             onClose={() => { setScheduleOpen(false); setTriggerErr(null); }}
             onCreate={createTriggerWith}
+            onActivate={(name) => startStopTrigger(name, 'start')}
             pipelineParams={parameters}
             kvAvailable={paramSources.kvAvailable}
             appConfigAvailable={paramSources.appConfigAvailable}

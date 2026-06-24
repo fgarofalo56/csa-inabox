@@ -98,12 +98,19 @@ export async function POST(req: NextRequest, ctx: { params: { id: string } }) {
     // schedule/event triggers use the `pipelines[]` array.
     const props: any = { ...body.properties, type };
     if (type === 'TumblingWindowTrigger') {
-      if (!props.pipeline) props.pipeline = { pipelineReference: pipelineRef, parameters: {} };
+      // The wizard may emit a parameters-only `pipeline` scaffold (trigger-output
+      // mappings) without a pipelineReference — always (re)bind it to THIS
+      // pipeline so the upsert has a valid one-to-one reference.
+      if (!props.pipeline) props.pipeline = { parameters: {} };
+      props.pipeline.pipelineReference = pipelineRef;
       props.pipeline.parameters = { ...(props.pipeline.parameters || {}), ...resolvedParams };
       delete props.pipelines;
     } else if (!(props.pipelines && props.pipelines.length > 0)) {
       props.pipelines = [{ pipelineReference: pipelineRef, parameters: { ...resolvedParams } }];
     } else {
+      // Honor any caller-supplied parameters (trigger-output @-expressions) but
+      // ensure the first reference always points at this pipeline.
+      props.pipelines[0].pipelineReference = props.pipelines[0].pipelineReference || pipelineRef;
       props.pipelines[0].parameters = { ...(props.pipelines[0].parameters || {}), ...resolvedParams };
     }
     const wired: AdfTrigger = { name: body.name, properties: props };

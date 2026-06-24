@@ -44,6 +44,8 @@ import { BackendStateBar } from '@/lib/components/backend-state-bar';
 import { extractActivities, writeActivitiesToSpec, type PipelineActivity } from '@/lib/components/pipeline/pipeline-dag-view';
 import { PipelineDesigner, type PipelineDesignerHandle } from '@/lib/components/pipeline/pipeline-designer';
 import { ParametersPane, VariablesPane, SettingsPane } from '@/lib/components/pipeline/pipeline-config-panes';
+import { TriggerWizard } from '@/lib/components/pipeline/trigger-wizard';
+import type { ParamBinding } from '@/lib/components/pipeline/param-source-picker';
 import {
   paramsFromSpec, paramsToSpec, varsFromSpec, varsToSpec,
   type PipelineParameter, type PipelineVariable, type PipelineSpec,
@@ -152,9 +154,15 @@ export function PipelineEditorCore({
   const [triggersList, setTriggersList] = useState<Array<{ name: string; type?: string; runtimeState?: string }>>([]);
   const [triggersBusy, setTriggersBusy] = useState(false);
   const [triggersError, setTriggersError] = useState<string | null>(null);
-  const [newTriggerName, setNewTriggerName] = useState('');
-  const [newTriggerHour, setNewTriggerHour] = useState(0);
-  const [newTriggerMinute, setNewTriggerMinute] = useState(0);
+  // Deepened "Add trigger → New" wizard (Schedule / Tumbling / Storage event /
+  // Custom event + trigger-parameter mapping). Replaces the inline schedule-only
+  // form; the existing list (start/stop/delete) stays in the manage dialog.
+  const [triggerWizardOpen, setTriggerWizardOpen] = useState(false);
+  // Which schedule-time param sources the deployment exposes (KV / App Config),
+  // surfaced as the honest gate hint inside the wizard's value-source picker.
+  const [paramSources, setParamSources] = useState<{ kvAvailable: boolean; appConfigAvailable: boolean }>(
+    { kvAvailable: true, appConfigAvailable: true },
+  );
 
   // ------------------------------------------------------------------
   // Binding
@@ -303,6 +311,7 @@ export function PipelineEditorCore({
         type: t.properties?.type || t.type,
         runtimeState: t.properties?.runtimeState || t.runtimeState,
       })));
+      if (data.paramSources) setParamSources(data.paramSources);
     } catch (e: any) { setTriggersError(e?.message || String(e)); }
   }, [apiBase]);
 
@@ -322,34 +331,30 @@ export function PipelineEditorCore({
     finally { setTriggersBusy(false); }
   }, [apiBase, loadTriggers]);
 
-  const createTrigger = useCallback(async () => {
-    if (!newTriggerName.trim()) return;
+  // Create ANY ADF trigger type from the deepened guided wizard's structured
+  // payload (no cron / no JSON). `properties` is the assembled ADF trigger
+  // `properties` object; `paramBindings` carry per-parameter VALUE sources
+  // (direct / Key Vault / App Config) the BFF route resolves server-side. The
+  // wizard already bakes trigger-output expressions into properties.pipelines[].
+  const createTriggerWith = useCallback(async (
+    name: string,
+    properties: Record<string, unknown>,
+    paramBindings: Record<string, ParamBinding>,
+  ) => {
+    if (!bound || !name.trim()) return;
     setTriggersBusy(true); setTriggersError(null);
     try {
-      const now = new Date(); now.setUTCSeconds(0, 0);
       const res = await fetch(`${apiBase}/triggers`, {
         method: 'POST', headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({
-          name: newTriggerName.trim(),
-          properties: {
-            type: 'ScheduleTrigger',
-            runtimeState: 'Stopped',
-            typeProperties: {
-              recurrence: {
-                frequency: 'Day', interval: 1, startTime: now.toISOString(), timeZone: 'UTC',
-                schedule: { hours: [newTriggerHour], minutes: [newTriggerMinute] },
-              },
-            },
-          },
-        }),
+        body: JSON.stringify({ name: name.trim(), properties, parameterBindings: paramBindings }),
       });
       const { ok, error: e } = await safePipelineJson(res);
       if (!ok) throw new Error(e || 'create failed');
-      setNewTriggerName('');
+      setTriggerWizardOpen(false);
       await loadTriggers();
     } catch (e: any) { setTriggersError(e?.message || String(e)); }
     finally { setTriggersBusy(false); }
-  }, [apiBase, newTriggerName, newTriggerHour, newTriggerMinute, loadTriggers]);
+  }, [apiBase, bound, loadTriggers]);
 
   // ------------------------------------------------------------------
   // Activities — extracted from the spec; the designer (palette + canvas)
@@ -654,7 +659,12 @@ export function PipelineEditorCore({
                 />
               )}
               {tab === 'parameters' && (
-                <ParametersPane parameters={pipelineParameters} onChange={setPipelineParameters} />
+                <ParametersPane
+                  parameters={pipelineParameters}
+                  variables={pipelineVariables}
+                  onChange={setPipelineParameters}
+                  pipelineId={id}
+                />
               )}
               {tab === 'variables' && (
                 <VariablesPane variables={pipelineVariables} onChange={setPipelineVariables} />
@@ -786,7 +796,10 @@ export function PipelineEditorCore({
               <DialogBody>
                 <DialogTitle>Triggers — {bound}</DialogTitle>
                 <DialogContent>
-                  <Caption1>Schedule triggers that fire this pipeline. Start/stop or create a daily schedule trigger inline (real REST).</Caption1>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: tokens.spacingHorizontalS, flexWrap: 'wrap' }}>
+                    <Caption1 style={{ flex: 1, minWidth: '200px' }}>Triggers that fire this pipeline — schedule, tumbling window, storage event, or custom event. Start / stop / delete existing ones, or create a new one with the guided wizard (real ARM REST).</Caption1>
+                    <Button size="small" appearance="primary" icon={<Add20Regular />} disabled={triggersBusy} onClick={() => { setTriggersError(null); setTriggerWizardOpen(true); }}>New trigger</Button>
+                  </div>
                   <div style={{ overflow: 'auto', marginTop: tokens.spacingVerticalS, marginBottom: tokens.spacingVerticalM }}>
                     <Table aria-label="Triggers for pipeline" size="small">
                       <TableHeader><TableRow>
@@ -814,21 +827,31 @@ export function PipelineEditorCore({
                       </TableBody>
                     </Table>
                   </div>
-                  <Subtitle2>Create new daily schedule trigger</Subtitle2>
-                  <div style={{ display: 'grid', gridTemplateColumns: 'minmax(0,2fr) minmax(0,1fr) minmax(0,1fr)', gap: tokens.spacingVerticalM, marginTop: tokens.spacingVerticalS }}>
-                    <Field label="Name"><Input value={newTriggerName} onChange={(_, d) => setNewTriggerName(d.value)} placeholder="daily-orders" /></Field>
-                    <Field label="UTC hour (0-23)"><Input type="number" min={0} max={23} value={String(newTriggerHour)} onChange={(_, d) => setNewTriggerHour(Math.max(0, Math.min(23, Number(d.value) || 0)))} /></Field>
-                    <Field label="Minute (0-59)"><Input type="number" min={0} max={59} value={String(newTriggerMinute)} onChange={(_, d) => setNewTriggerMinute(Math.max(0, Math.min(59, Number(d.value) || 0)))} /></Field>
-                  </div>
                   {triggersError && (<MessageBar intent="error" style={{ marginTop: tokens.spacingVerticalM }}><MessageBarBody><MessageBarTitle>Trigger action failed</MessageBarTitle>{triggersError}</MessageBarBody></MessageBar>)}
                 </DialogContent>
                 <DialogActions>
                   <Button appearance="secondary" onClick={() => setTriggersOpen(false)} disabled={triggersBusy}>Close</Button>
-                  <Button appearance="primary" onClick={createTrigger} disabled={triggersBusy || !newTriggerName.trim()}>{triggersBusy ? 'Working…' : 'Create trigger'}</Button>
                 </DialogActions>
               </DialogBody>
             </DialogSurface>
           </Dialog>
+
+          {/* Deepened "Add trigger → New" wizard — Schedule / Tumbling window /
+              Storage event / Custom event with structured controls + per-param
+              trigger-output / value-source mapping (no cron / no JSON). Created
+              triggers round-trip the trigger JSON on the real ARM REST. */}
+          <TriggerWizard
+            open={triggerWizardOpen}
+            onClose={() => { setTriggerWizardOpen(false); setTriggersError(null); }}
+            onCreate={createTriggerWith}
+            onActivate={(name) => triggerAction(name, 'start')}
+            pipelineParams={pipelineParameters}
+            engine={isAdf ? 'adf' : 'synapse'}
+            kvAvailable={paramSources.kvAvailable}
+            appConfigAvailable={paramSources.appConfigAvailable}
+            busy={triggersBusy}
+            error={triggersError}
+          />
         </div>
       }
     />
