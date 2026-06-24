@@ -290,8 +290,15 @@ async function writeDeltaCsv(
  */
 async function enableChangeTracking(server: string, database: string, schema: string, table: string): Promise<void> {
   // DB-level: turn CT on with a 7-day retention window if it isn't already on.
+  // Use sys.change_tracking_databases (the portable catalog view of CT-enabled
+  // databases) rather than sys.databases.is_change_tracking_on — the latter
+  // errors "Invalid column name 'is_change_tracking_on'" against the source
+  // (the column isn't exposed in that query context), which forced every
+  // SQL-family mirror down the full-snapshot fallback. change_tracking_databases
+  // is queryable with VIEW DATABASE STATE (db_owner has it) and is the documented
+  // way to test whether CT is on for the current database.
   await executeParameterized(server, database,
-    `IF (SELECT is_change_tracking_on FROM sys.databases WHERE database_id = DB_ID()) = 0 ` +
+    `IF NOT EXISTS (SELECT 1 FROM sys.change_tracking_databases WHERE database_id = DB_ID()) ` +
     `BEGIN ALTER DATABASE ${bracket(database)} SET CHANGE_TRACKING = ON (CHANGE_RETENTION = 7 DAYS, AUTO_CLEANUP = ON) END`);
   // Table-level: enable CT on the specific table if it isn't already tracked.
   await executeParameterized(server, database,
