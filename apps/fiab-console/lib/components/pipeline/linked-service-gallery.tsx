@@ -47,6 +47,7 @@ import {
 import {
   Add20Regular, Add24Regular, ChevronLeft20Regular, ArrowClockwise20Regular,
   Dismiss24Regular, PlugConnected20Regular, CheckmarkCircle20Filled,
+  Edit20Regular, Delete20Regular,
   Storage24Regular, Folder24Regular, Database24Regular, Cloud24Regular,
   Globe24Regular, Apps24Regular, Document24Regular, DataTrending24Regular,
   WeatherSnowflake24Regular, DataUsage24Regular, DocumentTable24Regular,
@@ -188,6 +189,7 @@ const useStyles = makeStyles({
   },
   existingRowSel: { border: `1px solid ${tokens.colorBrandStroke1}`, backgroundColor: tokens.colorBrandBackground2 },
   existingName: { display: 'flex', flexDirection: 'column', minWidth: 0 },
+  rowActions: { display: 'flex', alignItems: 'center', gap: tokens.spacingHorizontalXS, flexShrink: 0 },
 
   // picker
   pickerRow: { display: 'flex', alignItems: 'flex-end', gap: tokens.spacingHorizontalS, minWidth: 0, flexWrap: 'wrap' },
@@ -349,6 +351,66 @@ function buildProperties(
   };
 }
 
+// ---------------------------------------------------------------------------
+// Reverse-mapping: given an existing linked service's `properties`, reconstruct
+// the form state (auth option index + field values + description) so the SAME
+// per-connector structured form can prefill for EDIT. Secrets never round-trip
+// from ARM (they come back as `{ type: 'SecureString' }` with no `value`), so a
+// secret field stays blank — the operator re-enters it only to change it.
+// ---------------------------------------------------------------------------
+
+interface PrefillState {
+  authIdx: number;
+  values: Record<string, FieldValue>;
+  description: string;
+}
+
+/** Pull a scalar form value out of a raw typeProperties entry (unwraps the ADF
+ *  secureString / AzureKeyVaultSecret object shapes to a plain string where one
+ *  is readable; otherwise leaves the field blank). */
+function scalarFromTypeProp(raw: unknown, field: ConfigField): FieldValue | undefined {
+  if (raw === undefined || raw === null) return undefined;
+  if (typeof raw === 'object') {
+    // SecureString from ARM has no readable `value` — leave secret blank.
+    const v = (raw as any).value;
+    if (typeof v === 'string') return v;
+    return undefined;
+  }
+  if (field.kind === 'boolean') return raw === true || raw === 'true';
+  if (field.kind === 'number') { const n = Number(raw); return Number.isFinite(n) ? n : undefined; }
+  return raw as FieldValue;
+}
+
+/** Score how well an auth option matches the existing typeProperties: count the
+ *  auth's own (non-common) keys present in typeProperties. The best-scoring
+ *  option is the one the linked service was created with. */
+function prefillFromProperties(
+  def: ConnectorDef,
+  properties: { typeProperties?: Record<string, unknown>; description?: string } | undefined,
+): PrefillState {
+  const tp = (properties?.typeProperties || {}) as Record<string, unknown>;
+  const commonKeys = new Set((def.commonFields || []).map((f) => f.key));
+
+  let bestIdx = 0;
+  let bestScore = -1;
+  def.authOptions.forEach((opt, i) => {
+    const ownKeys = opt.fields.map((f) => f.key).filter((k) => !commonKeys.has(k));
+    // Auth options with no own fields (e.g. system-assigned MI) score 0 and only
+    // win when nothing else matched — exactly the "no extra settings" case.
+    const score = ownKeys.length === 0 ? 0 : ownKeys.filter((k) => k in tp).length;
+    if (score > bestScore) { bestScore = score; bestIdx = i; }
+  });
+
+  const auth = def.authOptions[bestIdx];
+  const values: Record<string, FieldValue> = {};
+  const all = [...(def.commonFields || []), ...((auth?.fields) || [])];
+  for (const f of all) {
+    const v = scalarFromTypeProp(tp[f.key], f);
+    if (v !== undefined) values[f.key] = v;
+  }
+  return { authIdx: bestIdx, values, description: String(properties?.description || '') };
+}
+
 // ===========================================================================
 // Existing linked-service row shape (from the GET { ok, linkedServices }).
 // ===========================================================================
@@ -365,20 +427,25 @@ function existingType(ls: ExistingLs): string | undefined {
 // ===========================================================================
 
 function ConnectorConfigForm({
-  engine, def, onBack, onCreated,
+  engine, def, onBack, onCreated, editName, initial,
 }: {
   engine: LinkedServiceEngine;
   def: ConnectorDef;
   onBack: () => void;
   onCreated: (name: string) => void;
+  /** When set, the form is in EDIT mode: name is fixed and the upsert overwrites it. */
+  editName?: string;
+  /** Prefilled state (auth option + field values + description) for edit mode. */
+  initial?: PrefillState;
 }) {
   const s = useStyles();
   const Glyph = connectorGlyph(def);
+  const isEdit = !!editName;
 
-  const [name, setName] = useState('');
-  const [description, setDescription] = useState('');
-  const [authIdx, setAuthIdx] = useState(0);
-  const [values, setValues] = useState<Record<string, FieldValue>>({});
+  const [name, setName] = useState(editName || '');
+  const [description, setDescription] = useState(initial?.description || '');
+  const [authIdx, setAuthIdx] = useState(initial?.authIdx ?? 0);
+  const [values, setValues] = useState<Record<string, FieldValue>>(initial?.values || {});
   const [errors, setErrors] = useState<Record<string, string>>({});
   const [submitErr, setSubmitErr] = useState<string | null>(null);
   const [submitting, setSubmitting] = useState(false);
@@ -421,13 +488,15 @@ function ConnectorConfigForm({
 
   const create = useCallback(async () => {
     setSubmitErr(null);
-    const nm = name.trim();
+    const nm = (editName || name).trim();
     if (!NAME_RE.test(nm)) { setSubmitErr('Name must be 1-260 chars: letters, digits, and underscore only.'); return; }
     const errs = validate(def, auth, values);
     if (Object.keys(errs).length) { setErrors(errs); return; }
     setSubmitting(true);
     try {
       const properties = buildProperties(def, auth, values, description);
+      // POST is an upsert (PUT under the hood) — reusing the existing name on
+      // edit overwrites the linked service in place.
       const r = await clientFetch(routeBase(engine), {
         method: 'POST', headers: { 'content-type': 'application/json' },
         body: JSON.stringify({ name: nm, properties }),
@@ -437,7 +506,7 @@ function ConnectorConfigForm({
       onCreated(nm);
     } catch (e: any) { setSubmitErr(e?.message || String(e)); }
     finally { setSubmitting(false); }
-  }, [engine, def, auth, values, name, description, onCreated]);
+  }, [engine, def, auth, values, name, editName, description, onCreated]);
 
   return (
     <div className={s.root}>
@@ -445,7 +514,7 @@ function ConnectorConfigForm({
         <div className={s.configHead}>
           <Button appearance="subtle" icon={<ChevronLeft20Regular />} onClick={onBack}>Back</Button>
           <Glyph className={s.cardIcon} />
-          <Subtitle2>New {def.name} linked service</Subtitle2>
+          <Subtitle2>{isEdit ? `Edit ${editName}` : `New ${def.name} linked service`}</Subtitle2>
         </div>
       </div>
       <Caption1 style={{ color: tokens.colorNeutralForeground3 }}>{def.description}</Caption1>
@@ -454,9 +523,16 @@ function ConnectorConfigForm({
         <Field
           label="Name"
           required
-          validationMessage={!name || NAME_RE.test(name.trim()) ? undefined : 'Letters, digits, and underscore only.'}>
-          <Input value={name} placeholder={`e.g. ${def.type}_conn`} onChange={(_, d) => { setName(d.value); setSubmitErr(null); }} />
+          hint={isEdit ? 'Name is fixed when editing an existing linked service.' : undefined}
+          validationMessage={isEdit || !name || NAME_RE.test(name.trim()) ? undefined : 'Letters, digits, and underscore only.'}>
+          <Input value={name} disabled={isEdit} placeholder={`e.g. ${def.type}_conn`} onChange={(_, d) => { setName(d.value); setSubmitErr(null); }} />
         </Field>
+        {isEdit && (
+          <Caption1 style={{ color: tokens.colorNeutralForeground3 }}>
+            Secret fields (keys, passwords, SAS) are never read back from Azure — leave them blank to keep the
+            current value, or re-enter to change it.
+          </Caption1>
+        )}
 
         <Field label="Description">
           <Input value={description} placeholder="Optional" onChange={(_, d) => setDescription(d.value)} />
@@ -494,8 +570,8 @@ function ConnectorConfigForm({
         {submitErr && <MessageBar intent="error"><MessageBarBody>{submitErr}</MessageBarBody></MessageBar>}
 
         <div className={s.formActions}>
-          <Button appearance="primary" icon={<PlugConnected20Regular />} disabled={submitting || !name.trim()} onClick={create}>
-            {submitting ? 'Creating…' : 'Create'}
+          <Button appearance="primary" icon={<PlugConnected20Regular />} disabled={submitting || !(editName || name).trim()} onClick={create}>
+            {submitting ? (isEdit ? 'Saving…' : 'Creating…') : (isEdit ? 'Save' : 'Create')}
           </Button>
           <Button appearance="secondary" icon={testing ? <Spinner size="tiny" /> : <ArrowClockwise20Regular />} disabled={testing || submitting} onClick={test}>
             {testing ? 'Testing…' : 'Test connection'}
@@ -585,22 +661,34 @@ function ConnectorGalleryGrid({ onPick }: { onPick: (def: ConnectorDef) => void 
 // Select-existing list (real linked services already on the factory/workspace).
 // ===========================================================================
 
+interface ExistingLinkedServicesHandle { reload: () => void }
+
 function ExistingLinkedServices({
-  engine, selectedName, onSelected,
+  engine, selectedName, onSelected, onEdit, refreshKey,
 }: {
   engine: LinkedServiceEngine;
   selectedName?: string;
-  onSelected: (name: string) => void;
+  /** Select mode: clicking the row's button picks the linked service. */
+  onSelected?: (name: string) => void;
+  /**
+   * Manage mode: when provided, each row gets an Edit + Delete action instead of
+   * "Select". Edit loads the full linked service and opens the prefilled form.
+   */
+  onEdit?: (name: string, type?: string) => void;
+  /** Bump to force a reload (e.g. after an edit upsert / create elsewhere). */
+  refreshKey?: number;
 }) {
   const s = useStyles();
   const [rows, setRows] = useState<ExistingLs[] | null>(null);
   const [err, setErr] = useState<string | null>(null);
   const [gate, setGate] = useState<{ missing: string } | null>(null);
+  const [busyName, setBusyName] = useState<string | null>(null);
+  const manageMode = !!onEdit;
 
   const load = useCallback(async () => {
     setErr(null); setGate(null);
     try {
-      const r = await clientFetch(routeBase(engine));
+      const r = await clientFetch(routeBase(engine), { cache: 'no-store' });
       const j = await r.json().catch(() => ({}));
       if (r.status === 503 && j?.missing) { setGate({ missing: j.missing }); setRows([]); return; }
       if (!r.ok || !j?.ok) { setErr(j?.error || `HTTP ${r.status}`); setRows([]); return; }
@@ -608,12 +696,24 @@ function ExistingLinkedServices({
     } catch (e: any) { setErr(e?.message || String(e)); setRows([]); }
   }, [engine]);
 
-  useEffect(() => { void load(); }, [load]);
+  useEffect(() => { void load(); }, [load, refreshKey]);
+
+  const remove = useCallback(async (name: string) => {
+    if (typeof window !== 'undefined' && !window.confirm(`Delete linked service "${name}"? This cannot be undone.`)) return;
+    setBusyName(name); setErr(null);
+    try {
+      const r = await clientFetch(`${routeBase(engine)}?name=${encodeURIComponent(name)}`, { method: 'DELETE' }, 30000);
+      const j = await r.json().catch(() => ({}));
+      if (!r.ok || !j?.ok) { setErr(j?.error || `HTTP ${r.status}`); return; }
+      await load();
+    } catch (e: any) { setErr(e?.message || String(e)); }
+    finally { setBusyName(null); }
+  }, [engine, load]);
 
   return (
     <div className={s.root}>
       <div className={s.headRow}>
-        <Subtitle2>Existing linked services</Subtitle2>
+        <Subtitle2>Existing linked services{rows ? ` (${rows.length})` : ''}</Subtitle2>
         <Tooltip content="Refresh" relationship="label">
           <Button appearance="subtle" icon={<ArrowClockwise20Regular />} onClick={() => { setRows(null); void load(); }} aria-label="Refresh" />
         </Tooltip>
@@ -646,6 +746,7 @@ function ExistingLinkedServices({
             const def = t ? connectorByType(t) : undefined;
             const Glyph = def ? connectorGlyph(def) : DocumentTable24Regular;
             const sel = selectedName === ls.name;
+            const rowBusy = busyName === ls.name;
             return (
               <div key={ls.name} className={`${s.existingRow}${sel ? ` ${s.existingRowSel}` : ''}`}>
                 <div className={s.configHead}>
@@ -655,9 +756,22 @@ function ExistingLinkedServices({
                     <Caption1 style={{ color: tokens.colorNeutralForeground3 }}>{def?.name || t || 'Linked service'}</Caption1>
                   </div>
                 </div>
-                <Button size="small" appearance={sel ? 'primary' : 'secondary'} onClick={() => onSelected(ls.name)}>
-                  {sel ? 'Selected' : 'Select'}
-                </Button>
+                {manageMode ? (
+                  <div className={s.rowActions}>
+                    <Tooltip content={def ? 'Edit' : 'No structured editor for this connector type'} relationship="label">
+                      <Button size="small" appearance="secondary" icon={<Edit20Regular />} disabled={!def || rowBusy}
+                        onClick={() => onEdit!(ls.name, t)}>Edit</Button>
+                    </Tooltip>
+                    <Tooltip content="Delete" relationship="label">
+                      <Button size="small" appearance="subtle" icon={rowBusy ? <Spinner size="tiny" /> : <Delete20Regular />}
+                        disabled={rowBusy} aria-label={`Delete ${ls.name}`} onClick={() => void remove(ls.name)} />
+                    </Tooltip>
+                  </div>
+                ) : (
+                  <Button size="small" appearance={sel ? 'primary' : 'secondary'} onClick={() => onSelected?.(ls.name)}>
+                    {sel ? 'Selected' : 'Select'}
+                  </Button>
+                )}
               </div>
             );
           })}
@@ -680,19 +794,71 @@ export interface LinkedServiceGalleryProps {
   hideExisting?: boolean;
   /** The currently-selected linked-service name (highlighted in the existing list). */
   selectedName?: string;
+  /**
+   * Manage mode (Manage hub): the "Existing" tab lists linked services with Edit
+   * + Delete actions (instead of "Select"). Edit loads the full linked service
+   * (real GET) and reopens the SAME per-connector structured form prefilled, so
+   * the operator can change fields and save (upsert in place). Defaults to the
+   * select-existing behavior used by the dataset/Copy pickers.
+   */
+  manage?: boolean;
 }
 
+/** State for an in-progress EDIT of an existing linked service. */
+interface EditTarget { name: string; def: ConnectorDef; initial: PrefillState }
+
 export function LinkedServiceGallery({
-  engine = 'adf', onSelected, hideExisting, selectedName,
+  engine = 'adf', onSelected, hideExisting, selectedName, manage,
 }: LinkedServiceGalleryProps) {
   const s = useStyles();
-  const [tab, setTab] = useState<'new' | 'existing'>('new');
+  const [tab, setTab] = useState<'new' | 'existing'>(manage ? 'existing' : 'new');
   const [picked, setPicked] = useState<ConnectorDef | null>(null);
+  const [editing, setEditing] = useState<EditTarget | null>(null);
+  const [editLoading, setEditLoading] = useState(false);
+  const [editErr, setEditErr] = useState<string | null>(null);
+  // Bump to force the existing-list to re-fetch after an edit upsert / create.
+  const [existingRefresh, setExistingRefresh] = useState(0);
 
   const handleCreated = useCallback((nm: string) => {
     setPicked(null);
+    setExistingRefresh((k) => k + 1);
     onSelected?.(nm);
   }, [onSelected]);
+
+  // Load the full linked service then open the prefilled config form (edit mode).
+  const beginEdit = useCallback(async (name: string, type?: string) => {
+    const def = type ? connectorByType(type) : undefined;
+    if (!def) { setEditErr(`No structured editor for connector type "${type || 'unknown'}".`); return; }
+    setEditErr(null); setEditLoading(true);
+    try {
+      const r = await clientFetch(`${routeBase(engine)}/${encodeURIComponent(name)}`, { cache: 'no-store' });
+      const j = await r.json().catch(() => ({}));
+      if (!r.ok || !j?.ok) { setEditErr(j?.error || `HTTP ${r.status}`); return; }
+      const properties = j.linkedService?.properties as { typeProperties?: Record<string, unknown>; description?: string } | undefined;
+      setEditing({ name, def, initial: prefillFromProperties(def, properties) });
+    } catch (e: any) { setEditErr(e?.message || String(e)); }
+    finally { setEditLoading(false); }
+  }, [engine]);
+
+  const handleSaved = useCallback((nm: string) => {
+    setEditing(null);
+    setExistingRefresh((k) => k + 1);
+    onSelected?.(nm);
+  }, [onSelected]);
+
+  // EDIT form (prefilled) takes precedence over the create flow.
+  if (editing) {
+    return (
+      <ConnectorConfigForm
+        engine={engine}
+        def={editing.def}
+        editName={editing.name}
+        initial={editing.initial}
+        onBack={() => setEditing(null)}
+        onCreated={handleSaved}
+      />
+    );
+  }
 
   if (picked) {
     return (
@@ -710,16 +876,26 @@ export function LinkedServiceGallery({
       {!hideExisting && (
         <TabList selectedValue={tab} onTabSelect={(_, d) => setTab(d.value as 'new' | 'existing')}>
           <Tab value="new" icon={<Add20Regular />}>New</Tab>
-          <Tab value="existing" icon={<PlugConnected20Regular />}>Select existing</Tab>
+          <Tab value="existing" icon={<PlugConnected20Regular />}>{manage ? 'Existing' : 'Select existing'}</Tab>
         </TabList>
       )}
 
+      {editErr && <MessageBar intent="error"><MessageBarBody>{editErr}</MessageBarBody></MessageBar>}
+      {editLoading && <Spinner size="tiny" label="Loading linked service…" />}
+
       {tab === 'new' || hideExisting ? (
         <ConnectorGalleryGrid onPick={setPicked} />
+      ) : manage ? (
+        <ExistingLinkedServices
+          engine={engine}
+          refreshKey={existingRefresh}
+          onEdit={(nm, t) => void beginEdit(nm, t)}
+        />
       ) : (
         <ExistingLinkedServices
           engine={engine}
           selectedName={selectedName}
+          refreshKey={existingRefresh}
           onSelected={(nm) => onSelected?.(nm)}
         />
       )}

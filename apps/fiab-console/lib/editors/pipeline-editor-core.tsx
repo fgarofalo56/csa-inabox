@@ -456,8 +456,9 @@ export function PipelineEditorCore({
     const manageGroup: RibbonTab['groups'] = [{
       label: 'Manage', actions: [
         { label: 'Manage', icon: <Settings20Regular />, onClick: () => setManageOpen(true), title: isAdf ? 'Linked services, datasets and integration runtimes (quick)' : 'Linked services and datasets (quick)' },
-        { label: 'Linked services', icon: <PlugConnected20Regular />, onClick: () => openManageHub('linked-services'), title: 'Connector gallery — browse 30+ connectors and create a connection' },
-        { label: 'Datasets', icon: <Database20Regular />, onClick: () => openManageHub('datasets'), title: 'New dataset wizard — connector → connection → shape → schema' },
+        { label: 'Linked services', icon: <PlugConnected20Regular />, onClick: () => openManageHub('linked-services'), title: 'Connector gallery — browse 30+ connectors, create, edit and delete connections' },
+        { label: 'Datasets', icon: <Database20Regular />, onClick: () => openManageHub('datasets'), title: 'Dataset wizard — create, edit and delete datasets (connector → connection → shape → schema)' },
+        { label: 'Integration runtimes', icon: <Server20Regular />, onClick: () => openManageHub('integration-runtimes'), title: 'Azure auto-resolve / Self-Hosted / Azure-SSIS integration runtimes' },
       ],
     }];
     return [
@@ -747,10 +748,11 @@ export function PipelineEditorCore({
             }}
           />
 
-          {/* Catalog-driven Manage hub — connector gallery + dataset wizard
-              (Wave-2 authoring foundation). Factory/workspace-level; the
-              item-scoped IR tab is not used here (the factory IRs live in the
-              quick ManagePanel above), so itemId/workspaceId are omitted. */}
+          {/* Catalog-driven Manage hub — connector gallery (create/edit/delete
+              linked services) + dataset wizard (create/edit/delete) + the
+              Integration runtimes tab. Factory/workspace-level; the ADF IR tab is
+              factory-scoped (deployment-default factory via /api/adf/
+              integration-runtimes), so itemId/workspaceId are not needed. */}
           <PipelineManageHub
             open={manageHubOpen}
             onOpenChange={(open) => {

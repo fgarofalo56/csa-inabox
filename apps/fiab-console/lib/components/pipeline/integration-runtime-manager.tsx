@@ -17,8 +17,11 @@
  * activity's "Run on" picker) can both create-new AND select-existing.
  *
  * Self-Hosted IRs surface their install (auth) keys on demand, and Self-Hosted
- * / Azure-SSIS IRs can be started / stopped / deleted. Every call goes to
- * `/api/items/data-pipeline/[id]/integration-runtimes` (real ARM via adf-client).
+ * / Azure-SSIS IRs can be started / stopped / deleted. Calls go to either the
+ * item-scoped `/api/items/data-pipeline/[id]/integration-runtimes` route, or —
+ * when `factoryScoped` — the deployment-default `/api/adf/integration-runtimes`
+ * route (the Manage hub uses this; IRs are factory-scoped). Real ARM via
+ * adf-client, no mocks.
  *
  * Fluent UI v9 + Loom design tokens only — no hard-coded px / hex.
  */
@@ -113,10 +116,17 @@ function isLifecycleManaged(row: IrRow): boolean {
 // ===========================================================================
 
 export interface IntegrationRuntimeManagerProps {
-  /** The data-pipeline item id (route param). */
-  itemId: string;
-  /** The workspace (Cosmos partition key) the item lives in. */
-  workspaceId: string;
+  /** The data-pipeline item id (route param). Required unless `factoryScoped`. */
+  itemId?: string;
+  /** The workspace (Cosmos partition key) the item lives in. Required unless `factoryScoped`. */
+  workspaceId?: string;
+  /**
+   * When true, manage the IRs of the deployment-default Data Factory directly via
+   * `/api/adf/integration-runtimes` (no item / workspace binding needed). This is
+   * the path the pipeline editor's Manage hub uses — IRs are factory-scoped, and
+   * the factory is the env-pinned default. Defaults to the item-scoped route.
+   */
+  factoryScoped?: boolean;
   /** Pipeline engine — scopes the offered IR types (Synapse excludes Azure-SSIS). */
   engine?: PipelineEngine;
   /**
@@ -131,10 +141,17 @@ export interface IntegrationRuntimeManagerProps {
 type WizardStage = 'list' | 'pick-type' | 'config';
 
 export function IntegrationRuntimeManager({
-  itemId, workspaceId, engine = 'adf', onSelect, selectedName,
+  itemId, workspaceId, factoryScoped, engine = 'adf', onSelect, selectedName,
 }: IntegrationRuntimeManagerProps) {
   const s = useStyles();
-  const base = `/api/items/data-pipeline/${encodeURIComponent(itemId)}/integration-runtimes?workspaceId=${encodeURIComponent(workspaceId)}`;
+  // Factory-scoped: the deployment-default ADF route (no item/workspace). Otherwise
+  // the item-scoped route (resolves the factory behind a data-pipeline item).
+  const base = factoryScoped
+    ? `/api/adf/integration-runtimes`
+    : `/api/items/data-pipeline/${encodeURIComponent(itemId || '')}/integration-runtimes?workspaceId=${encodeURIComponent(workspaceId || '')}`;
+  // The DELETE adds `name` as a query param; pick the right separator since the
+  // factory route has no existing query string.
+  const qSep = base.includes('?') ? '&' : '?';
 
   const [rows, setRows] = useState<IrRow[] | null>(null);
   const [loadErr, setLoadErr] = useState<string | null>(null);
@@ -226,7 +243,7 @@ export function IntegrationRuntimeManager({
     setBusyName(irName);
     try {
       const r = action === 'delete'
-        ? await clientFetch(`${base}&name=${encodeURIComponent(irName)}`, { method: 'DELETE' }, 30000)
+        ? await clientFetch(`${base}${qSep}name=${encodeURIComponent(irName)}`, { method: 'DELETE' }, 30000)
         : await clientFetch(base, {
             method: 'POST', headers: { 'content-type': 'application/json' },
             body: JSON.stringify({ name: irName, action }),
@@ -236,7 +253,7 @@ export function IntegrationRuntimeManager({
       await load();
     } catch (e: any) { setLoadErr(e?.message || String(e)); }
     finally { setBusyName(null); }
-  }, [base, load]);
+  }, [base, qSep, load]);
 
   const showKeys = useCallback(async (irName: string) => {
     setKeysFor(irName); setKeys(null); setKeysErr(null); setKeysBusy(true);

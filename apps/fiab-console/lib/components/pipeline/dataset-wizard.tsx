@@ -587,17 +587,34 @@ const STEP_LABEL: Record<Step, string> = {
   connector: 'Connector', connection: 'Connection', shape: 'Dataset type', schema: 'Schema',
 };
 
+/**
+ * EDIT mode: load an existing dataset by name, resolve its connector from the
+ * dataset `type`, prefill the linked service + location + schema, and let the
+ * operator change fields and Save (upsert overwrites the same name). The wizard
+ * opens on the "Dataset type" step (connector is fixed by the existing dataset);
+ * Back still reaches the "Connection" step to re-pick the linked service.
+ */
+export interface DatasetEditTarget {
+  /** The existing dataset name (fixed; the upsert overwrites it). */
+  name: string;
+}
+
 export interface DatasetWizardProps {
   open: boolean;
   onClose: () => void;
   provider?: DatasetProvider;
   /** Fires with the created dataset's name after a successful upsert. */
   onCreated?: (datasetName: string) => void;
+  /** When set, the wizard loads this dataset and runs in EDIT mode (save in place). */
+  edit?: DatasetEditTarget | null;
+  /** Fires after a successful edit-save (so the caller can refresh its list). */
+  onSaved?: (datasetName: string) => void;
 }
 
-export function DatasetWizard({ open, onClose, provider = 'adf', onCreated }: DatasetWizardProps) {
+export function DatasetWizard({ open, onClose, provider = 'adf', onCreated, edit, onSaved }: DatasetWizardProps) {
   const styles = useStyles();
   const routes = routesFor(provider);
+  const isEdit = !!edit;
 
   const [step, setStep] = useState<Step>('connector');
   // Step 1
@@ -616,6 +633,8 @@ export function DatasetWizard({ open, onClose, provider = 'adf', onCreated }: Da
   // Submit
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<string | null>(null);
+  // Edit-load state
+  const [editLoading, setEditLoading] = useState(false);
 
   // The linked-services route is the same gate as datasets; probe it once so we
   // can show the honest infra-gate inside the connection step's picker.
@@ -637,8 +656,64 @@ export function DatasetWizard({ open, onClose, provider = 'adf', onCreated }: Da
   function reset() {
     setStep('connector'); setCategory('azure'); setQuery(''); setConnector(null);
     setLinkedService(''); setDatasetTypeIdx(0); setDatasetName(''); setLocVals({});
-    setColumns([]); setBusy(false); setErr(null);
+    setColumns([]); setBusy(false); setErr(null); setEditLoading(false);
   }
+
+  // EDIT mode: load the existing dataset (real GET) and prefill the wizard. The
+  // dataset `type` selects the connector + its dataset-type index; file-like
+  // datasets nest their location under `typeProperties.location`, table-like
+  // datasets carry the shape members flat on `typeProperties`. Schema columns
+  // (name + ADF type) prefill the optional schema step.
+  useEffect(() => {
+    if (!open || !edit) return;
+    let alive = true;
+    setEditLoading(true); setErr(null);
+    (async () => {
+      try {
+        const r = await clientFetch(`${routes.datasets}/${encodeURIComponent(edit.name)}`, { cache: 'no-store' });
+        const j = await r.json().catch(() => ({}));
+        if (!alive) return;
+        if (!r.ok || !j?.ok) { setErr(String(j?.error || `HTTP ${r.status}`)); setEditLoading(false); return; }
+        const props = (j.dataset?.properties || {}) as AdfDataset['properties'];
+        const dsType = String(props.type || '');
+        const conn = CONNECTORS.find((c) => c.datasetTypes.some((dt) => dt.type === dsType)) || null;
+        const dtIdx = conn ? Math.max(0, conn.datasetTypes.findIndex((dt) => dt.type === dsType)) : 0;
+
+        // Reverse-map typeProperties → location field values (unwrapping a nested
+        // `location` object for file-like datasets).
+        const tp = (props.typeProperties || {}) as Record<string, unknown>;
+        const locSource = (tp.location && typeof tp.location === 'object') ? tp.location as Record<string, unknown> : tp;
+        const dt = conn?.datasetTypes[dtIdx];
+        const nextLoc: Record<string, string> = {};
+        for (const f of (dt?.locationFields || [])) {
+          const v = locSource[f.key];
+          if (v === undefined || v === null) continue;
+          nextLoc[f.key] = typeof v === 'boolean' ? (v ? 'true' : '') : String(v);
+        }
+
+        const cols: SchemaColumn[] = Array.isArray(props.schema)
+          ? (props.schema as any[])
+              .filter((c) => c && typeof c.name === 'string')
+              .map((c) => ({ name: String(c.name), type: String(c.type || 'String') }))
+          : [];
+
+        setConnector(conn);
+        setDatasetTypeIdx(dtIdx);
+        setDatasetName(edit.name);
+        setLinkedService(String(props.linkedServiceName?.referenceName || ''));
+        setLocVals(nextLoc);
+        setColumns(cols);
+        // Connector is fixed in edit; start on the "Dataset type" step (Back still
+        // reaches "Connection" to re-pick the linked service).
+        setStep(conn ? 'shape' : 'connection');
+        setEditLoading(false);
+      } catch (e: any) {
+        if (!alive) return;
+        setErr(e?.message || String(e)); setEditLoading(false);
+      }
+    })();
+    return () => { alive = false; };
+  }, [open, edit, routes.datasets]);
 
   const connectors = useMemo(() => {
     const q = query.trim().toLowerCase();
@@ -708,14 +783,16 @@ export function DatasetWizard({ open, onClose, provider = 'adf', onCreated }: Da
       };
 
       const name = datasetName.trim();
+      // POST is an upsert (PUT under the hood) — reusing the existing name on
+      // edit overwrites the dataset in place.
       const r = await clientFetch(routes.datasets, {
         method: 'POST', headers: { 'content-type': 'application/json' },
         body: JSON.stringify({ name, properties }),
       });
       const j = await r.json().catch(() => ({}));
       if (!r.ok || !j?.ok) { setErr(String(j?.error || `HTTP ${r.status}`)); return; }
-      const created = String(j?.dataset?.name || name);
-      onCreated?.(created);
+      const saved = String(j?.dataset?.name || name);
+      if (isEdit) onSaved?.(saved); else onCreated?.(saved);
       reset();
       onClose();
     } catch (e: any) {
@@ -733,11 +810,12 @@ export function DatasetWizard({ open, onClose, provider = 'adf', onCreated }: Da
         <DialogBody>
           <DialogTitle>
             <span style={{ display: 'inline-flex', alignItems: 'center', gap: tokens.spacingHorizontalS }}>
-              <Database20Regular /> New dataset
+              <Database20Regular /> {isEdit ? `Edit dataset — ${edit?.name}` : 'New dataset'}
               <Caption1 style={{ color: tokens.colorNeutralForeground3 }}>({providerLabel(provider)})</Caption1>
             </span>
           </DialogTitle>
           <DialogContent>
+            {editLoading && <Spinner size="tiny" label="Loading dataset…" style={{ marginBottom: tokens.spacingVerticalM }} />}
             {/* Step indicator */}
             <div className={styles.steps} role="list" aria-label="Wizard steps">
               {STEP_ORDER.map((s, i) => (
@@ -820,8 +898,8 @@ export function DatasetWizard({ open, onClose, provider = 'adf', onCreated }: Da
             {step === 'shape' && connector && (
               <div className={styles.form}>
                 <ConnectorHead connector={connector} />
-                <Field label="Dataset name" required hint="Letters, digits, and underscore (1–260 chars).">
-                  <Input value={datasetName} onChange={(_, d) => setDatasetName(d.value)} placeholder={`${datasetType?.type || connector.type}_ds`} />
+                <Field label="Dataset name" required hint={isEdit ? 'Name is fixed when editing an existing dataset.' : 'Letters, digits, and underscore (1–260 chars).'}>
+                  <Input value={datasetName} disabled={isEdit} onChange={(_, d) => setDatasetName(d.value)} placeholder={`${datasetType?.type || connector.type}_ds`} />
                 </Field>
                 {connector.datasetTypes.length > 1 ? (
                   <Field label="Dataset type" required hint="The format / shape this connector exposes.">
@@ -912,7 +990,7 @@ export function DatasetWizard({ open, onClose, provider = 'adf', onCreated }: Da
             {err && (
               <MessageBar intent="error" style={{ marginTop: tokens.spacingVerticalM }}>
                 <MessageBarBody>
-                  <MessageBarTitle>Could not create dataset</MessageBarTitle>
+                  <MessageBarTitle>Could not {isEdit ? 'save' : 'create'} dataset</MessageBarTitle>
                   {err}
                 </MessageBarBody>
               </MessageBar>
@@ -920,9 +998,9 @@ export function DatasetWizard({ open, onClose, provider = 'adf', onCreated }: Da
           </DialogContent>
           <DialogActions>
             <Button appearance="secondary" onClick={() => { reset(); onClose(); }}>Cancel</Button>
-            {step !== 'connector' && (
+            {step !== 'connector' && step !== (isEdit ? 'connection' : 'connector') && (
               <Button appearance="subtle" icon={<ArrowLeft20Regular />}
-                onClick={() => setStep(STEP_ORDER[Math.max(0, stepIdx - 1)])}>
+                onClick={() => setStep(STEP_ORDER[Math.max(isEdit ? 1 : 0, stepIdx - 1)])}>
                 Back
               </Button>
             )}
@@ -939,7 +1017,7 @@ export function DatasetWizard({ open, onClose, provider = 'adf', onCreated }: Da
             {step === 'schema' && (
               <Button appearance="primary" icon={busy ? <Spinner size="tiny" /> : <Database20Regular />}
                 disabled={!canFinish} onClick={finish}>
-                {busy ? 'Creating…' : 'Create dataset'}
+                {busy ? (isEdit ? 'Saving…' : 'Creating…') : (isEdit ? 'Save dataset' : 'Create dataset')}
               </Button>
             )}
           </DialogActions>

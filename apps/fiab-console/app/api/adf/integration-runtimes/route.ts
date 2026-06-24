@@ -4,8 +4,9 @@
  *   GET    /api/adf/integration-runtimes            → { ok, runtimes: [{...ir, state}] }
  *          (each IR enriched with its live state via getStatus)
  *   POST   /api/adf/integration-runtimes
- *          body { name, properties }              → upsert (Managed | SelfHosted)
- *          body { name, action: 'start'|'stop' }  → lifecycle (SelfHosted node set)
+ *          body { name, properties }                → upsert (Managed | SelfHosted)
+ *          body { name, action: 'start'|'stop' }    → lifecycle (SelfHosted node set)
+ *          body { name, action: 'authKeys' }        → Self-Hosted install (auth) keys
  *   DELETE /api/adf/integration-runtimes?name=NAME → delete
  *
  * Factory is the env-pinned default; honest 503 gate when LOOM_SUBSCRIPTION_ID /
@@ -18,6 +19,7 @@ import {
   adfConfigGate,
   listIntegrationRuntimes, getIntegrationRuntimeStatus, upsertIntegrationRuntime,
   startIntegrationRuntime, stopIntegrationRuntime, deleteIntegrationRuntime,
+  listIntegrationRuntimeAuthKeys,
   type AdfIntegrationRuntime,
 } from '@/lib/azure/adf-client';
 
@@ -78,6 +80,10 @@ export async function POST(req: NextRequest) {
   try {
     if (body.action === 'start') { await startIntegrationRuntime(name); return NextResponse.json({ ok: true, action: 'start' }); }
     if (body.action === 'stop')  { await stopIntegrationRuntime(name);  return NextResponse.json({ ok: true, action: 'stop' }); }
+    if (body.action === 'authKeys') {
+      const authKeys = await listIntegrationRuntimeAuthKeys(name);
+      return NextResponse.json({ ok: true, authKeys });
+    }
 
     const properties = body?.properties as AdfIntegrationRuntime['properties'] | undefined;
     if (!properties || (properties.type !== 'Managed' && properties.type !== 'SelfHosted')) {

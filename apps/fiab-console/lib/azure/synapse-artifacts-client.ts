@@ -170,6 +170,11 @@ export async function listDatasets(): Promise<SynapseDataset[]> {
   return listAll<SynapseDataset>('datasets', 'listDatasets');
 }
 
+export async function getDataset(name: string): Promise<SynapseDataset> {
+  const r = await callDev(`/datasets/${encodeURIComponent(name)}?api-version=${DEV_API}`);
+  return jsonOrThrow<SynapseDataset>(r, `getDataset(${name})`);
+}
+
 export async function upsertDataset(name: string, spec: SynapseDataset): Promise<SynapseDataset> {
   const r = await callDev(`/datasets/${encodeURIComponent(name)}?api-version=${DEV_API}`, {
     method: 'PUT',
@@ -235,6 +240,11 @@ export interface SynapseLinkedService extends SynapseArtifact {
 
 export async function listLinkedServices(): Promise<SynapseLinkedService[]> {
   return listAll<SynapseLinkedService>('linkedservices', 'listLinkedServices');
+}
+
+export async function getLinkedService(name: string): Promise<SynapseLinkedService> {
+  const r = await callDev(`/linkedservices/${encodeURIComponent(name)}?api-version=${DEV_API}`);
+  return jsonOrThrow<SynapseLinkedService>(r, `getLinkedService(${name})`);
 }
 
 export async function upsertLinkedService(name: string, spec: SynapseLinkedService): Promise<SynapseLinkedService> {
