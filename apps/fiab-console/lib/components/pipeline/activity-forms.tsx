@@ -18,10 +18,17 @@
 
 import { useState } from 'react';
 import {
-  Field, Input, Dropdown, Option, Switch, Caption1, Button, Spinner,
-  MessageBar, MessageBarBody, MessageBarTitle,
+  Field, Input, Dropdown, Option, Switch, Caption1, Subtitle2, Badge, Button, Spinner,
+  MessageBar, MessageBarBody, MessageBarTitle, tokens, makeStyles,
 } from '@fluentui/react-components';
-import { ExpressionField } from './expression-field';
+import {
+  Branch20Regular, ArrowEnterRegular, Open16Regular,
+} from '@fluentui/react-icons';
+import { ExpressionField, isDynamicExpression } from './expression-field';
+import { DatasetSelectOrCreate, type DatasetProvider } from './dataset-wizard';
+import { LinkedServicePicker, type LinkedServiceEngine } from './linked-service-gallery';
+import { activityByType, type ActivityDef, type ActivitySettingField } from './activity-catalog';
+import { branchesOf, totalInnerCount } from './drill-path';
 import type { PipelineActivity, PipelineParameter, PipelineVariable } from './types';
 
 type FieldKind = 'text' | 'number' | 'bool' | 'select' | 'multiselect' | 'expr' | 'expr-multiline';
@@ -298,8 +305,26 @@ export const ACTIVITY_FORMS: Record<string, FieldSpec[]> = {
  */
 export const COPY_TABBED_TYPES = new Set(['Copy']);
 
+/**
+ * Whether the structured (non-JSON) Settings form should render for `type`.
+ *
+ * True when EITHER a hand-tuned flat schema exists in {@link ACTIVITY_FORMS}
+ * (HDInsight, Approval, the originals), OR the data-driven activity inventory
+ * ({@link activityByType}) has a non-empty `settings[]` spec, OR the activity is
+ * a control-flow container (ForEach / If / Switch / Until) — containers always
+ * get the structured form so their condition field + inner-activity affordance
+ * render instead of a raw `typeProperties` JSON textarea.
+ *
+ * Copy stays excluded (`COPY_TABBED_TYPES`) so its dedicated four-tab editor is
+ * used; everything else with an inventory entry now renders a structured form,
+ * eliminating the raw-JSON fallback for the whole ADF / Synapse activity set.
+ */
 export function hasActivityForm(type: string | undefined): boolean {
-  return !!type && Array.isArray(ACTIVITY_FORMS[type]) && ACTIVITY_FORMS[type].length > 0;
+  if (!type || COPY_TABBED_TYPES.has(type)) return false;
+  if (Array.isArray(ACTIVITY_FORMS[type]) && ACTIVITY_FORMS[type].length > 0) return true;
+  const def = activityByType(type);
+  if (def && (def.settings.length > 0 || def.hasInnerActivities)) return true;
+  return false;
 }
 
 /** Read the Loom discriminator (`_loomKind`) off an activity, if present. */
@@ -358,7 +383,45 @@ export interface ActivityFormProps {
   workspaceId?: string;
   /** API slug for the editor host (default 'data-pipeline'). */
   apiSlug?: string;
+  /**
+   * Drill into a container activity's inner-activity sub-canvas. Threaded down
+   * from the designer (which owns the drill-path model) so the container form's
+   * "Edit inner activities" affordance navigates the EXISTING canvas instead of
+   * rebuilding nesting here. Omit to hide the affordance's button.
+   */
+  onDrillInto?: (name: string) => void;
 }
+
+/**
+ * Map the editor host API slug to the dataset / linked-service backend engine
+ * the pickers self-fetch against. ADF (`data-pipeline`) is the default; a
+ * Synapse-hosted pipeline editor passes a slug containing "synapse".
+ */
+function engineForSlug(apiSlug: string): DatasetProvider & LinkedServiceEngine {
+  return /synapse/i.test(apiSlug) ? 'synapse' : 'adf';
+}
+
+const useFormStyles = makeStyles({
+  innerCard: {
+    display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalS,
+    padding: tokens.spacingHorizontalM,
+    borderRadius: tokens.borderRadiusLarge,
+    border: `1px solid ${tokens.colorNeutralStroke2}`,
+    backgroundColor: tokens.colorNeutralBackground2,
+    boxShadow: tokens.shadow4,
+  },
+  innerHead: {
+    display: 'flex', alignItems: 'center', gap: tokens.spacingHorizontalS,
+  },
+  branchRow: {
+    display: 'flex', alignItems: 'center', justifyContent: 'space-between',
+    gap: tokens.spacingHorizontalS, flexWrap: 'wrap',
+    padding: `${tokens.spacingVerticalXS} 0`,
+  },
+  branchList: {
+    display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalXXS,
+  },
+});
 
 /**
  * Approval-specific helper rendered above the typed fields when the activity is
@@ -445,18 +508,16 @@ function ApprovalTriggerUrlFetcher({
   );
 }
 
-/** Renders the typed form for the activity's type, or null if none is defined. */
-export function ActivityForm({
-  activity, onPatch, parameters, variables, allActivities,
+// =============================================================================
+// LEGACY flat-schema form (ACTIVITY_FORMS) — preserves every originally-wired
+// activity form exactly (HDInsight cluster gate, Approval Logic-App fetcher,
+// Wait/SetVariable/…). Activities WITHOUT a flat schema fall through to
+// <CatalogSettingsForm/> below.
+// =============================================================================
+function LegacyActivityForm({
+  schema, loomKind, activity, onPatch, parameters, variables, allActivities,
   itemId, workspaceId, apiSlug = 'data-pipeline', pipelineId,
-}: ActivityFormProps) {
-  // Discriminate Loom palette variants that share an ADF wire type (e.g.
-  // Approval vs plain Webhook — both ADF type `WebHook`) via `_loomKind`.
-  const loomKind = activityLoomKind(activity);
-  const schema = (loomKind && ACTIVITY_FORMS[loomKind])
-    ? ACTIVITY_FORMS[loomKind]
-    : (activity.type ? ACTIVITY_FORMS[activity.type] : undefined);
-  if (!schema) return null;
+}: ActivityFormProps & { schema: FieldSpec[]; loomKind?: string }) {
   const tp = (activity.typeProperties as any) || {};
 
   const patchTp = (path: string, value: unknown) => {
@@ -493,10 +554,6 @@ export function ActivityForm({
           </MessageBarBody>
         </MessageBar>
       )}
-      <Caption1>
-        Typed configuration for <strong>{loomKind === 'ApprovalWebhook' ? 'Approval (Logic App)' : activity.type}</strong> — the same fields the Azure portal exposes.
-        Expression fields offer <em>Add dynamic content</em> + IntelliSense.
-      </Caption1>
       {loomKind === 'ApprovalWebhook' && (
         <ApprovalTriggerUrlFetcher
           activity={activity}
@@ -584,6 +641,320 @@ export function ActivityForm({
           />
         );
       })}
+    </>
+  );
+}
+
+// =============================================================================
+// CATALOG-DRIVEN form — the generic renderer over an ActivityDef.settings[]
+// (ActivitySettingField). Covers EVERY activity in the ACTIVITIES inventory:
+// Iteration & conditionals, Move & transform, Synapse, Databricks, HDInsight,
+// General, Azure Function & ML. Per loom-no-freeform-config it renders typed
+// Fluent controls — DatasetPicker for `ref:'dataset'` activities (Lookup /
+// GetMetadata / Delete / Validation), LinkedServicePicker for
+// `ref:'linkedService'` (StoredProcedure / Script / Databricks / HDInsight /
+// Function / ML / U-SQL auth + log stores), and ExpressionField for any field
+// ADF allows dynamic (`supportsDynamic`). Values round-trip on the real PUT.
+// =============================================================================
+
+/** Evaluate a field's `showIf` against the resolved typeProperties + root. */
+function fieldVisible(field: ActivitySettingField, read: (path: string) => unknown): boolean {
+  if (!field.showIf) return true;
+  const cur = read(field.showIf.key);
+  const want = field.showIf.equals;
+  // Booleans compare against the string 'true'/'false' the inventory uses.
+  if (typeof cur === 'boolean') return String(cur) === want;
+  return (cur == null ? '' : String(cur)) === want;
+}
+
+/** Resolve a settings field's effective dotted path (key when no `path`). */
+function fieldPath(field: ActivitySettingField): string {
+  return field.path || field.key;
+}
+
+function CatalogFieldRenderer({
+  field, activity, engine, onPatch, parameters, variables, allActivities,
+  pipelineId, workspaceId, read,
+}: {
+  field: ActivitySettingField;
+  activity: PipelineActivity;
+  engine: DatasetProvider & LinkedServiceEngine;
+  onPatch: (patch: Partial<PipelineActivity>) => void;
+  parameters: PipelineParameter[];
+  variables: PipelineVariable[];
+  allActivities: PipelineActivity[];
+  pipelineId?: string;
+  workspaceId?: string;
+  /** Reader for showIf siblings (typeProperties- or root-relative per field). */
+  read: (path: string) => unknown;
+}) {
+  const tp = (activity.typeProperties as any) || {};
+  const path = fieldPath(field);
+
+  const writeTp = (value: unknown) => onPatch({ typeProperties: setPath(tp, path, value) });
+  const writeRoot = (value: unknown) => {
+    const cloned = JSON.parse(JSON.stringify(activity));
+    const updated = setPath(cloned, path, value);
+    const topKey = path.split('.')[0] as keyof PipelineActivity;
+    onPatch({ [topKey]: (updated as any)[topKey] } as Partial<PipelineActivity>);
+  };
+  const write = field.rootPath ? writeRoot : writeTp;
+
+  const raw = field.rootPath ? getPath(activity, path) : getPath(tp, path);
+  const strVal = raw == null ? '' : typeof raw === 'object' ? JSON.stringify(raw) : String(raw);
+
+  // — Factory DATASET reference → DatasetPicker (self-fetching + create-new) —
+  if (field.ref === 'dataset') {
+    return (
+      <DatasetSelectOrCreate
+        label={field.label}
+        value={typeof raw === 'string' ? raw : ''}
+        required={field.required}
+        hint={field.hint}
+        provider={engine}
+        onChange={(name) => write(name)}
+      />
+    );
+  }
+
+  // — LINKED-SERVICE reference → LinkedServicePicker (gallery + create-new) —
+  if (field.ref === 'linkedService') {
+    return (
+      <LinkedServicePicker
+        engine={engine}
+        label={field.label}
+        required={field.required}
+        value={typeof raw === 'string' ? raw : ''}
+        onSelected={(name) => write(name)}
+      />
+    );
+  }
+
+  if (field.kind === 'boolean') {
+    return (
+      <Field label={field.label} hint={field.hint}>
+        <Switch checked={raw === true || raw === 'true'} onChange={(_, d) => write(d.checked)} />
+      </Field>
+    );
+  }
+
+  if (field.kind === 'select') {
+    return (
+      <Field label={field.label} required={field.required} hint={field.hint}>
+        <Dropdown
+          value={strVal}
+          selectedOptions={strVal ? [strVal] : []}
+          onOptionSelect={(_, d) => write(d.optionValue)}
+        >
+          {(field.options || []).map((o) => <Option key={o.value} value={o.value}>{o.label}</Option>)}
+        </Dropdown>
+      </Field>
+    );
+  }
+
+  if (field.kind === 'number') {
+    // A numeric field that ADF lets be dynamic must accept an @-expression.
+    if (field.supportsDynamic) {
+      return (
+        <ExpressionField
+          label={field.label} hint={field.hint} required={field.required}
+          placeholder={field.placeholder} value={strVal} supportsDynamic
+          inForEach={activity.type === 'ForEach'}
+          parameters={parameters} variables={variables} activities={allActivities}
+          selfName={activity.name} pipelineId={pipelineId} workspaceId={workspaceId}
+          onChange={(v) => write(v === '' ? undefined : (isDynamicExpression(v) ? v : Number(v)))}
+        />
+      );
+    }
+    return (
+      <Field label={field.label} required={field.required} hint={field.hint}>
+        <Input type="number" value={strVal} placeholder={field.placeholder}
+          onChange={(_, d) => write(d.value === '' ? undefined : Number(d.value))} />
+      </Field>
+    );
+  }
+
+  // text / multiline. Dynamic-capable fields bind ExpressionField; otherwise a
+  // plain typed control (still no JSON textarea).
+  if (field.supportsDynamic) {
+    return (
+      <ExpressionField
+        label={field.label} hint={field.hint} required={field.required}
+        placeholder={field.placeholder} multiline={field.kind === 'multiline'}
+        supportsDynamic inForEach={activity.type === 'ForEach'}
+        value={strVal} parameters={parameters} variables={variables}
+        activities={allActivities} selfName={activity.name}
+        pipelineId={pipelineId} workspaceId={workspaceId}
+        onChange={(v) => write(v)}
+      />
+    );
+  }
+  return (
+    <Field label={field.label} required={field.required} hint={field.hint}>
+      <Input value={strVal} placeholder={field.placeholder} onChange={(_, d) => write(d.value)} />
+    </Field>
+  );
+}
+
+function CatalogSettingsForm({
+  def, activity, onPatch, parameters, variables, allActivities,
+  pipelineId, workspaceId, apiSlug = 'data-pipeline',
+}: ActivityFormProps & { def: ActivityDef }) {
+  const engine = engineForSlug(apiSlug);
+  const tp = (activity.typeProperties as any) || {};
+  // showIf siblings read against root for rootPath fields, else typeProperties.
+  const read = (path: string) => getPath(tp, path);
+
+  // Honest infra-gate: HDInsight activities target an AzureHDInsight cluster
+  // linked service (the activity-root linkedServiceName). Surface the env var
+  // when unset — same gate the legacy HDI forms show.
+  const showHdiGate = HDI_ACTIVITY_TYPES.has(activity.type || '')
+    && !activity.linkedServiceName?.referenceName;
+
+  return (
+    <>
+      {showHdiGate && (
+        <MessageBar intent="warning">
+          <MessageBarBody>
+            <MessageBarTitle>No HDInsight cluster linked service configured</MessageBarTitle>
+            Pick (or create) an <code>Azure HDInsight</code> linked service in the{' '}
+            <em>HDI cluster linked service</em> field below, or set{' '}
+            <code>LOOM_HDINSIGHT_LINKED_SERVICE</code> in your deployment to pre-fill it.
+          </MessageBarBody>
+        </MessageBar>
+      )}
+      {def.settings
+        .filter((f) => fieldVisible(f, read))
+        .map((field) => (
+          <CatalogFieldRenderer
+            key={fieldPath(field)}
+            field={field}
+            activity={activity}
+            engine={engine}
+            onPatch={onPatch}
+            parameters={parameters}
+            variables={variables}
+            allActivities={allActivities}
+            pipelineId={pipelineId}
+            workspaceId={workspaceId}
+            read={read}
+          />
+        ))}
+    </>
+  );
+}
+
+// =============================================================================
+// SUB-ACTIVITY affordance — for control-flow containers (ForEach / If / Switch
+// / Until). The canvas + drill-path model OWN nesting; this is a summary +
+// "Edit inner activities" launcher that DRILLS the existing canvas via the
+// designer-provided `onDrillInto` callback. It never rebuilds the canvas.
+// =============================================================================
+function SubActivityAffordance({
+  activity, onDrillInto,
+}: {
+  activity: PipelineActivity;
+  onDrillInto?: (name: string) => void;
+}) {
+  const s = useFormStyles();
+  const branches = branchesOf(activity);
+  const total = totalInnerCount(activity);
+  if (branches.length === 0) return null;
+
+  return (
+    <div className={s.innerCard}>
+      <div className={s.innerHead}>
+        <Branch20Regular />
+        <Subtitle2>Inner activities</Subtitle2>
+        <Badge appearance="tint" color="brand" size="small">
+          {total} total
+        </Badge>
+      </div>
+      <Caption1 style={{ color: tokens.colorNeutralForeground3 }}>
+        {activity.type === 'ForEach' && 'Activities run once per item in the loop. '}
+        {activity.type === 'Until' && 'Activities run repeatedly until the expression is true. '}
+        {activity.type === 'IfCondition' && 'Activities run on the matching True / False branch. '}
+        {activity.type === 'Switch' && 'Activities run on the matching case (or Default). '}
+        Open the sub-canvas to add and wire the inner activities.
+      </Caption1>
+      <div className={s.branchList}>
+        {branches.map((b) => (
+          <div key={b.label} className={s.branchRow}>
+            <span style={{ display: 'flex', alignItems: 'center', gap: tokens.spacingHorizontalXS }}>
+              <Badge appearance="outline" size="small">{b.label}</Badge>
+              <Caption1 style={{ color: tokens.colorNeutralForeground3 }}>
+                {b.count} activit{b.count === 1 ? 'y' : 'ies'}
+              </Caption1>
+            </span>
+          </div>
+        ))}
+      </div>
+      <div>
+        <Button
+          appearance="primary"
+          size="small"
+          icon={onDrillInto ? <ArrowEnterRegular /> : <Open16Regular />}
+          disabled={!onDrillInto}
+          onClick={() => onDrillInto?.(activity.name)}
+        >
+          Edit inner activities
+        </Button>
+        {!onDrillInto && (
+          <Caption1 style={{ display: 'block', marginTop: tokens.spacingVerticalXXS, color: tokens.colorNeutralForeground3 }}>
+            Double-click the container on the canvas (or use its pencil button) to drill into its sub-canvas.
+          </Caption1>
+        )}
+      </div>
+    </div>
+  );
+}
+
+/**
+ * Renders the typed Settings form for the activity's type. Routing:
+ *   1. A hand-tuned flat schema in ACTIVITY_FORMS (HDInsight / Approval / the
+ *      originals) → render it verbatim (preserves every existing wiring).
+ *   2. Otherwise a data-driven inventory entry (ACTIVITIES) → the generic
+ *      CatalogSettingsForm (DatasetPicker / LinkedServicePicker / ExpressionField
+ *      / typed controls) covering the rest of the ADF / Synapse activity set.
+ *   3. Container activities (ForEach / If / Switch / Until) ALSO get the
+ *      sub-activity affordance wired to the canvas drill-path.
+ * Returns null only for activities with no schema, no inventory entry, and no
+ * nesting (the caller then shows the raw-JSON fallback).
+ */
+export function ActivityForm(props: ActivityFormProps) {
+  const { activity, onDrillInto } = props;
+  // Discriminate Loom palette variants that share an ADF wire type (e.g.
+  // Approval vs plain Webhook — both ADF type `WebHook`) via `_loomKind`.
+  const loomKind = activityLoomKind(activity);
+  const flatSchema = (loomKind && ACTIVITY_FORMS[loomKind])
+    ? ACTIVITY_FORMS[loomKind]
+    : (activity.type ? ACTIVITY_FORMS[activity.type] : undefined);
+  const def = activityByType(activity.type);
+  const isContainer = !!def?.hasInnerActivities;
+
+  const headerName = loomKind === 'ApprovalWebhook'
+    ? 'Approval (Logic App)'
+    : (def?.displayName || activity.type || 'activity');
+
+  // Nothing to render structurally → let the caller fall back to raw JSON.
+  if (!flatSchema && (!def || (def.settings.length === 0 && !isContainer))) return null;
+
+  return (
+    <>
+      <Caption1>
+        Typed configuration for <strong>{headerName}</strong> — the same fields the
+        Azure portal / Fabric exposes. Expression fields offer <em>Add dynamic content</em> + IntelliSense.
+      </Caption1>
+
+      {flatSchema ? (
+        <LegacyActivityForm {...props} schema={flatSchema} loomKind={loomKind} />
+      ) : def && def.settings.length > 0 ? (
+        <CatalogSettingsForm {...props} def={def} />
+      ) : null}
+
+      {isContainer && (
+        <SubActivityAffordance activity={activity} onDrillInto={onDrillInto} />
+      )}
     </>
   );
 }

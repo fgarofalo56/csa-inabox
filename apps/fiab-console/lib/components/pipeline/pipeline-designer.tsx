@@ -509,6 +509,7 @@ export const PipelineDesigner = forwardRef<PipelineDesignerHandle, PipelineDesig
             parameters={parameters}
             variables={variables}
             parentActivity={currentContainer || null}
+            onDrillInto={drillInto}
             onPatch={(patch) => { if (selected) patchActivity(selected.name, patch); }}
             onDelete={() => { if (selected) deleteActivity(selected.name); }}
             itemId={itemId}

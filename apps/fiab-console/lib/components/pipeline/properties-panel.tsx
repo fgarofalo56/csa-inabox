@@ -103,6 +103,12 @@ export interface PropertiesPanelProps {
    * ForEach, where concurrent variable writes are not thread-safe.
    */
   parentActivity?: PipelineActivity | null;
+  /**
+   * Drill into a container activity's inner-activity sub-canvas. Threaded from
+   * the designer so the Settings form's "Edit inner activities" affordance
+   * navigates the existing canvas. Omit to render the affordance read-only.
+   */
+  onDrillInto?: (name: string) => void;
 }
 
 type TabId =
@@ -116,7 +122,7 @@ type TabId =
   | 'parameters'
   | 'user-props';
 
-export function PropertiesPanel({ activity, allActivities, parameters, variables, onPatch, onDelete, layout = 'rail', itemId, pipelineId, workspaceId, apiSlug, parentActivity = null }: PropertiesPanelProps) {
+export function PropertiesPanel({ activity, allActivities, parameters, variables, onPatch, onDelete, layout = 'rail', itemId, pipelineId, workspaceId, apiSlug, parentActivity = null, onDrillInto }: PropertiesPanelProps) {
   const s = useStyles();
   const rootClass = layout === 'dock' ? s.dockRoot : s.root;
   const [tab, setTab] = useState<TabId>('general');
@@ -409,6 +415,7 @@ export function PropertiesPanel({ activity, allActivities, parameters, variables
                   pipelineId={pipelineId}
                   workspaceId={workspaceId}
                   apiSlug={apiSlug}
+                  onDrillInto={onDrillInto}
                 />
                 <Accordion collapsible>
                   <AccordionItem value="raw-json">
@@ -475,6 +482,13 @@ export function PropertiesPanel({ activity, allActivities, parameters, variables
                 />
               </Field>
             </div>
+            <Field label="Secure input">
+              <Switch
+                checked={!!(activity.policy as any)?.secureInput}
+                label="Don't log input for monitoring"
+                onChange={(_, d) => onPatch({ policy: { ...(activity.policy || {}), secureInput: d.checked } })}
+              />
+            </Field>
             <Field label="Secure output">
               <Switch
                 checked={!!(activity.policy as any)?.secureOutput}
