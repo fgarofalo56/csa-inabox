@@ -987,6 +987,16 @@ export interface ClusterSpec {
   spark_conf?: Record<string, string>;
   custom_tags?: Record<string, string>;
   driver_node_type_id?: string;
+  /** Vectorized engine. 'PHOTON' enables Photon; 'STANDARD' (or omit) for OSS Spark. */
+  runtime_engine?: 'PHOTON' | 'STANDARD';
+  /** Azure VM availability — Spot for cost-optimized workers (driver stays on-demand). */
+  azure_attributes?: {
+    availability?: 'ON_DEMAND_AZURE' | 'SPOT_WITH_FALLBACK_AZURE' | 'SPOT_AZURE';
+    first_on_demand?: number;
+    spot_bid_max_price?: number;
+  };
+  /** Driver/worker/event-log delivery target so logs persist + can be ingested. */
+  cluster_log_conf?: { dbfs?: { destination: string }; volumes?: { destination: string } };
 }
 
 export async function listClusters(): Promise<Cluster[]> {

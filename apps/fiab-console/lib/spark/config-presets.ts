@@ -273,3 +273,23 @@ export function synapseLogAnalyticsConf(env: NodeJS.ProcessEnv = process.env): S
 export function synapseLogAnalyticsConfigured(env: NodeJS.ProcessEnv = process.env): boolean {
   return Object.keys(synapseLogAnalyticsConf(env)).length > 0;
 }
+
+/**
+ * Databricks cluster-log delivery destination. Returns the `cluster_log_conf`
+ * object for clusters/create so driver/worker/event logs persist (and can be
+ * ingested into Loom LA / reviewed via the native Spark UI). Honest gate: returns
+ * undefined when `LOOM_DATABRICKS_CLUSTER_LOG_PATH` is unset — clusters are then
+ * created without log delivery rather than with a broken path.
+ *
+ * A `dbfs:`-prefixed path → DBFS delivery (legacy); anything else (a
+ * `/Volumes/<cat>/<schema>/<vol>/...` UC path) → Volumes delivery (preferred).
+ */
+export function databricksClusterLogConf(
+  env: NodeJS.ProcessEnv = process.env,
+): { dbfs?: { destination: string }; volumes?: { destination: string } } | undefined {
+  const path = (env.LOOM_DATABRICKS_CLUSTER_LOG_PATH || '').trim();
+  if (!path) return undefined;
+  return path.startsWith('dbfs:')
+    ? { dbfs: { destination: path } }
+    : { volumes: { destination: path } };
+}
