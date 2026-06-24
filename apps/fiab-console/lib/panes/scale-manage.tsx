@@ -58,7 +58,7 @@ export interface ScaleManageDrawerProps {
 const useStyles = makeStyles({
   body: { display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalM, paddingTop: tokens.spacingVerticalS },
   meta: { display: 'flex', alignItems: 'center', gap: tokens.spacingHorizontalS, flexWrap: 'wrap' },
-  type: { fontFamily: 'Consolas, monospace', fontSize: '12px', color: tokens.colorNeutralForeground3 },
+  type: { fontFamily: 'Consolas, monospace', fontSize: '12px', color: tokens.colorNeutralForeground3, minWidth: 0, overflowWrap: 'anywhere', wordBreak: 'break-word' },
   controls: { display: 'flex', alignItems: 'flex-end', gap: tokens.spacingHorizontalS, flexWrap: 'wrap' },
   row: { display: 'flex', alignItems: 'center', gap: tokens.spacingHorizontalS, flexWrap: 'wrap' },
   sub: {

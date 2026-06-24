@@ -102,20 +102,20 @@ interface ObjectRow {
 }
 
 const useStyles = makeStyles({
-  root: { display: 'flex', flexDirection: 'column', gap: '16px' },
+  root: { display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalL },
   // Single command bar: workspace picker (left) + status badges + actions (right).
   // PageShell owns the page <h1>, so the pane does NOT repeat an "Activator" title.
   commandBar: {
     display: 'flex',
     alignItems: 'flex-end',
-    gap: '12px',
+    gap: tokens.spacingHorizontalM,
     flexWrap: 'wrap',
-    rowGap: '12px',
+    rowGap: tokens.spacingVerticalM,
   },
-  badges: { display: 'flex', alignItems: 'center', gap: '8px', flexWrap: 'wrap', paddingBottom: '4px' },
+  badges: { display: 'flex', alignItems: 'center', gap: tokens.spacingHorizontalS, flexWrap: 'wrap', paddingBottom: tokens.spacingVerticalXS },
   spacer: { flex: 1 },
-  bar: { display: 'flex', alignItems: 'center', gap: '12px', flexWrap: 'wrap' },
-  actions: { display: 'flex', gap: '6px', alignItems: 'center', paddingBottom: '1px' },
+  bar: { display: 'flex', alignItems: 'center', gap: tokens.spacingHorizontalM, flexWrap: 'wrap' },
+  actions: { display: 'flex', gap: tokens.spacingHorizontalXS, alignItems: 'center', paddingBottom: '1px' },
   mono: {
     fontFamily: tokens.fontFamilyMonospace,
     fontSize: tokens.fontSizeBase200,
@@ -124,18 +124,18 @@ const useStyles = makeStyles({
     textOverflow: 'ellipsis',
     display: 'block',
   },
-  picker: { display: 'flex', flexDirection: 'column', gap: '4px', minWidth: '260px' },
+  picker: { display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalXS, minWidth: '260px' },
   loadingWrap: {
     display: 'flex',
     justifyContent: 'center',
     alignItems: 'center',
-    padding: '32px',
+    padding: tokens.spacingVerticalXXL,
   },
   footer: {
     color: tokens.colorNeutralForeground3,
-    paddingTop: '4px',
+    paddingTop: tokens.spacingVerticalXS,
     borderTop: `1px solid ${tokens.colorNeutralStroke2}`,
-    marginTop: '4px',
+    marginTop: tokens.spacingVerticalXS,
   },
 });
 

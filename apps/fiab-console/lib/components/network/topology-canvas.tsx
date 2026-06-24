@@ -99,7 +99,7 @@ const useStyles = makeStyles({
     overflow: 'hidden',
   },
   detailRow: { marginBottom: '10px' },
-  mono: { fontFamily: 'Consolas, monospace', fontSize: '12px' },
+  mono: { fontFamily: 'Consolas, monospace', fontSize: '12px', overflowWrap: 'anywhere', wordBreak: 'break-word' },
   legend: {
     display: 'flex',
     flexWrap: 'wrap',

@@ -274,7 +274,7 @@ function VerifyResult({ data }: { data: VerifyData | null }) {
   const s = useStyles();
   if (!data) return null;
   return (
-    <div className={s.card} style={{ gap: 8 }}>
+    <div className={s.card} style={{ gap: tokens.spacingVerticalS }}>
       <Subtitle2>Verification — admin (Console UAMI) view</Subtitle2>
       <Caption1>
         Bound masks: {data.masksApplied.length} · bound row filters: {data.rowFiltersApplied.length} ·

@@ -45,11 +45,11 @@ const useStyles = makeStyles({
     border: `1px solid ${tokens.colorNeutralStroke2}`, borderRadius: tokens.borderRadiusLarge, padding: tokens.spacingHorizontalL,
     display: 'flex', flexDirection: 'column', gap: tokens.spacingHorizontalM, backgroundColor: tokens.colorNeutralBackground1,
   },
-  grid2: { display: 'grid', gridTemplateColumns: '1fr 1fr', gap: tokens.spacingHorizontalM },
+  grid2: { display: 'grid', gridTemplateColumns: 'minmax(0, 1fr) minmax(0, 1fr)', gap: tokens.spacingHorizontalM },
   permRow: { display: 'flex', gap: tokens.spacingHorizontalM, flexWrap: 'wrap' },
   actions: { display: 'flex', gap: tokens.spacingHorizontalS, alignItems: 'center', flexWrap: 'wrap' },
   tableWrap: { overflow: 'auto', maxHeight: '320px', border: `1px solid ${tokens.colorNeutralStroke2}`, borderRadius: tokens.borderRadiusMedium },
-  mono: { fontFamily: 'Consolas, monospace', fontSize: tokens.fontSizeBase200 },
+  mono: { fontFamily: 'Consolas, monospace', fontSize: tokens.fontSizeBase200, overflowWrap: 'anywhere', wordBreak: 'break-word' },
 });
 
 // ------------------------------------------------------------------

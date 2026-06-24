@@ -28,7 +28,7 @@ interface AgentRow { name: string; description?: string }
 const NONE = '__none__';
 
 const useStyles = makeStyles({
-  grid: { display: 'grid', gridTemplateColumns: '1fr 1fr', gap: tokens.spacingHorizontalL, rowGap: tokens.spacingVerticalM },
+  grid: { display: 'grid', gridTemplateColumns: 'minmax(0, 1fr) minmax(0, 1fr)', gap: tokens.spacingHorizontalL, rowGap: tokens.spacingVerticalM },
   full: { gridColumn: '1 / -1' },
   hint: { color: tokens.colorNeutralForeground3, fontSize: '12px' },
 });

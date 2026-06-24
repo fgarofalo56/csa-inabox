@@ -26,6 +26,7 @@ const useStyles = makeStyles({
   },
   keyCode: {
     flexGrow: 1,
+    minWidth: 0,
     fontFamily: tokens.fontFamilyMonospace,
     fontSize: tokens.fontSizeBase200,
     ...shorthands.padding(tokens.spacingVerticalS, tokens.spacingHorizontalM),

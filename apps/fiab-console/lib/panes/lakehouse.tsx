@@ -58,12 +58,13 @@ async function listTables(id: string): Promise<Table[]> {
 }
 
 const useStyles = makeStyles({
-  root: { display: 'grid', gridTemplateColumns: '320px 1fr', gap: '24px', height: '100%' },
+  root: { display: 'grid', gridTemplateColumns: '320px minmax(0, 1fr)', gap: tokens.spacingHorizontalXXL, height: '100%' },
   panel: {
+    minWidth: 0,
     backgroundColor: tokens.colorNeutralBackground1,
     border: `1px solid ${tokens.colorNeutralStroke2}`,
-    borderRadius: '4px',
-    padding: '16px',
+    borderRadius: tokens.borderRadiusSmall,
+    padding: tokens.spacingVerticalL,
   },
   header: { display: 'flex', alignItems: 'center', gap: '12px', marginBottom: '16px', flexWrap: 'wrap' },
   spacer: { flex: 1 },
@@ -174,7 +175,7 @@ export function LakehousePane() {
                 <Tab value="schema">Schema</Tab>
               </TabList>
               <div className={styles.meta}>
-                <Body1Strong>Name</Body1Strong><Body1>{selected.schema}.{selected.name}</Body1>
+                <Body1Strong>Name</Body1Strong><Body1 style={{ minWidth: 0, overflowWrap: 'anywhere', wordBreak: 'break-word' }}>{selected.schema}.{selected.name}</Body1>
                 <Body1Strong>Format</Body1Strong><Body1>{selected.format}</Body1>
                 {selected.status && (<><Body1Strong>Status</Body1Strong><Body1>{selected.status}</Body1></>)}
                 <Body1Strong>Rows</Body1Strong><Body1>{typeof selected.rowCount === 'number' ? selected.rowCount.toLocaleString() : '—'}</Body1>
@@ -182,7 +183,7 @@ export function LakehousePane() {
                 <Body1Strong>Latest version</Body1Strong><Body1>{typeof selected.latestVersion === 'number' ? `v${selected.latestVersion}` : '—'}</Body1>
               </div>
               {selected.ddl && (
-                <pre style={{ marginTop: 16, fontSize: 12, whiteSpace: 'pre-wrap', fontFamily: 'Cascadia Code, Consolas, monospace' }}>{selected.ddl}</pre>
+                <pre style={{ marginTop: 16, fontSize: 12, whiteSpace: 'pre-wrap', overflowWrap: 'anywhere', wordBreak: 'break-word', maxWidth: '100%', maxHeight: 360, overflow: 'auto', fontFamily: 'Cascadia Code, Consolas, monospace' }}>{selected.ddl}</pre>
               )}
             </>
           ) : (

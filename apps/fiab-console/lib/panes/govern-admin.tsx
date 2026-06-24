@@ -114,9 +114,11 @@ const useStyles = makeStyles({
   copilotRow: { display: 'flex', alignItems: 'flex-start', gap: tokens.spacingHorizontalM, flexWrap: 'wrap' },
   copilotInput: { flex: 1, minWidth: '260px' },
   copilotAnswer: {
-    whiteSpace: 'pre-wrap', padding: tokens.spacingVerticalM, borderRadius: tokens.borderRadiusMedium,
+    whiteSpace: 'pre-wrap', overflowWrap: 'anywhere', wordBreak: 'break-word',
+    padding: tokens.spacingVerticalM, borderRadius: tokens.borderRadiusMedium,
     backgroundColor: tokens.colorNeutralBackground2, color: tokens.colorNeutralForeground1,
     fontSize: tokens.fontSizeBase300, lineHeight: 1.5,
+    maxHeight: '420px', overflowY: 'auto',
   },
   actionCards: {
     display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(280px, 1fr))', gap: tokens.spacingHorizontalL,
@@ -323,7 +325,7 @@ function ViewMorePanel() {
             <iframe
               title="Managed Grafana governance dashboard"
               src={data.iframeUrl}
-              style={{ width: '100%', height: 600, border: `1px solid ${tokens.colorNeutralStroke2}`, borderRadius: 8 }}
+              style={{ width: '100%', height: 600, border: `1px solid ${tokens.colorNeutralStroke2}`, borderRadius: tokens.borderRadiusMedium }}
             />
           )}
         </>
@@ -455,7 +457,7 @@ function ProtectSecureComplyTab({ posture, gates }: { posture: PostureDoc; gates
         ) : (
           <>
             <div className={s.scanRow}>
-              <div style={{ display: 'flex', flexDirection: 'column', gap: 4, minWidth: 220 }}>
+              <div style={{ display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalXS, minWidth: 220 }}>
                 <Caption1>Registered source</Caption1>
                 <Dropdown
                   placeholder={sources === null ? 'Loading sources…' : 'Select a source'}
@@ -467,7 +469,7 @@ function ProtectSecureComplyTab({ posture, gates }: { posture: PostureDoc; gates
                   {(sources || []).map((src) => <Option key={src.name} value={src.name}>{src.name}</Option>)}
                 </Dropdown>
               </div>
-              <div style={{ display: 'flex', flexDirection: 'column', gap: 4, minWidth: 220 }}>
+              <div style={{ display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalXS, minWidth: 220 }}>
                 <Caption1>Scan</Caption1>
                 <Dropdown
                   placeholder={selSource ? 'Select a scan' : 'Pick a source first'}

@@ -52,9 +52,9 @@ const CATEGORY_LABEL: Record<AuditCategory, string> = {
 const CATEGORY_ORDER: AuditCategory[] = ['identity', 'data-plane', 'permissions', 'azure-services', 'catalog-governance', 'ai-copilot', 'builders', 'security', 'enrichment'];
 
 const card: React.CSSProperties = {
-  padding: 20, border: `1px solid ${tokens.colorNeutralStroke2}`,
+  padding: tokens.spacingVerticalXL, border: `1px solid ${tokens.colorNeutralStroke2}`,
   borderRadius: tokens.borderRadiusXLarge, backgroundColor: tokens.colorNeutralBackground1,
-  marginBottom: 20, boxShadow: tokens.shadow4,
+  marginBottom: tokens.spacingVerticalXL, boxShadow: tokens.shadow4,
 };
 const head: React.CSSProperties = { display: 'flex', alignItems: 'center', gap: 10, marginBottom: 14 };
 
@@ -214,11 +214,11 @@ export function HealthPane() {
                     {r.fixId && <Badge appearance="tint" size="small" color="brand">auto-fixable</Badge>}
                     {r.redeploy && r.status !== 'pass' && <Badge appearance="tint" size="small">needs redeploy / grant</Badge>}
                   </div>
-                  <Body1 style={{ display: 'block', marginTop: 2, color: tokens.colorNeutralForeground2 }}>{r.detail}</Body1>
+                  <Body1 style={{ display: 'block', marginTop: 2, color: tokens.colorNeutralForeground2, overflowWrap: 'anywhere', wordBreak: 'break-word' }}>{r.detail}</Body1>
                   {r.status !== 'pass' && r.remediation && (
                     <div style={{ marginTop: 8, padding: 10, borderRadius: 6, background: tokens.colorNeutralBackground3, border: `1px solid ${tokens.colorNeutralStroke2}` }}>
                       <Caption1 style={{ color: tokens.colorNeutralForeground2 }}>Remediation</Caption1>
-                      <Body1 style={{ display: 'block', marginTop: 2 }}>{r.remediation}</Body1>
+                      <Body1 style={{ display: 'block', marginTop: 2, overflowWrap: 'anywhere', wordBreak: 'break-word' }}>{r.remediation}</Body1>
                       {r.docs && (
                         <a href={r.docs} target={r.docs.startsWith('http') ? '_blank' : undefined} rel="noreferrer"
                           style={{ color: tokens.colorBrandForeground1, fontSize: 12 }}>Open reference →</a>
@@ -252,7 +252,7 @@ export function HealthPane() {
                                   {copiedId === r.id ? 'Copied ✓' : 'Copy script'}
                                 </Button>
                               </div>
-                              <pre style={{ marginTop: 6, padding: 10, borderRadius: 6, background: tokens.colorNeutralBackground4, color: tokens.colorNeutralForeground1, overflowX: 'auto', fontSize: 12, fontFamily: 'Consolas, "Cascadia Code", monospace', whiteSpace: 'pre', lineHeight: 1.5 }}>
+                              <pre style={{ marginTop: 6, padding: 10, borderRadius: 6, background: tokens.colorNeutralBackground4, color: tokens.colorNeutralForeground1, overflow: 'auto', maxWidth: '100%', maxHeight: 320, fontSize: 12, fontFamily: 'Consolas, "Cascadia Code", monospace', whiteSpace: 'pre', lineHeight: 1.5 }}>
                                 {r.fixScript}
                               </pre>
                               <Caption1 style={{ color: tokens.colorNeutralForeground3 }}>

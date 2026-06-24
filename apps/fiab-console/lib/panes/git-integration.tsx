@@ -59,8 +59,8 @@ const useStyles = makeStyles({
     padding: '14px', borderRadius: tokens.borderRadiusMedium,
     border: `1px solid ${tokens.colorNeutralStroke2}`, backgroundColor: tokens.colorNeutralBackground1,
   },
-  meta: { fontSize: '12px', color: tokens.colorNeutralForeground3 },
-  mono: { fontFamily: tokens.fontFamilyMonospace, fontSize: '12px' },
+  meta: { fontSize: '12px', color: tokens.colorNeutralForeground3, minWidth: 0, overflowWrap: 'anywhere', wordBreak: 'break-word' },
+  mono: { fontFamily: tokens.fontFamilyMonospace, fontSize: '12px', overflowWrap: 'anywhere', wordBreak: 'break-word' },
   spacer: { flex: 1 },
   grow: { flex: 1 },
   loading: {

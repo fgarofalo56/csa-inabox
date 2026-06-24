@@ -44,7 +44,7 @@ import {
 } from '@/lib/clients/workspace-roles-client';
 
 const useStyles = makeStyles({
-  body: { display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalM },
+  body: { display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalM, minWidth: 0, maxWidth: '100%' },
   toolbar: { display: 'flex', alignItems: 'center', gap: tokens.spacingHorizontalS },
   spacer: { flex: 1 },
   empty: {
@@ -169,6 +169,7 @@ export function WorkspaceAccessPane({ workspaceId, workspaceName }: WorkspaceAcc
       )}
 
       {data && rows.length > 0 && (
+        <div style={{ overflowX: 'auto', maxWidth: '100%' }}>
         <Table aria-label="Workspace role assignments" size="small">
           <TableHeader>
             <TableRow>
@@ -222,6 +223,7 @@ export function WorkspaceAccessPane({ workspaceId, workspaceName }: WorkspaceAcc
             })}
           </TableBody>
         </Table>
+        </div>
       )}
 
       <AddMemberDialog

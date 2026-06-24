@@ -161,8 +161,9 @@ const useStyles = makeStyles({
   inlineLoad: { display: 'flex', alignItems: 'center', gap: tokens.spacingHorizontalS },
   doneCenter: { display: 'flex', flexDirection: 'column', alignItems: 'center', gap: tokens.spacingVerticalM, textAlign: 'center', padding: tokens.spacingVerticalL },
   hubCardBody: { display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalS, minWidth: 0 },
-  preWrap: { whiteSpace: 'pre-wrap' },
-  preWrapTop: { whiteSpace: 'pre-wrap', marginTop: tokens.spacingVerticalXS },
+  preWrap: { whiteSpace: 'pre-wrap', overflowWrap: 'anywhere', wordBreak: 'break-word' },
+  preWrapTop: { whiteSpace: 'pre-wrap', marginTop: tokens.spacingVerticalXS, overflowWrap: 'anywhere', wordBreak: 'break-word' },
+  preWrapScroll: { whiteSpace: 'pre-wrap', marginTop: tokens.spacingVerticalXS, overflowWrap: 'anywhere', wordBreak: 'break-word', maxHeight: '240px', overflow: 'auto', maxWidth: '100%' },
   successIcon: { color: tokens.colorPaletteGreenForeground1 },
 });
 
@@ -462,7 +463,7 @@ export function AddLandingZoneWizardPane() {
                   <>
                     <div className={styles.preWrapTop}>{grant.remediation || grant.error || 'Unknown error.'}</div>
                     {grant.commands?.length ? (
-                      <pre className={styles.preWrapTop}>{grant.commands.join('\n')}</pre>
+                      <pre className={styles.preWrapScroll}>{grant.commands.join('\n')}</pre>
                     ) : null}
                   </>
                 ) : (
@@ -474,7 +475,7 @@ export function AddLandingZoneWizardPane() {
                   </>
                 )}
                 {(!grant || !grant.ok) && (
-                  <div style={{ marginTop: 10 }}>
+                  <div style={{ marginTop: tokens.spacingVerticalM }}>
                     <Button
                       appearance="primary"
                       size="small"

@@ -40,14 +40,16 @@ import { findItemType } from '@/lib/catalog/fabric-item-types';
 import { getItemTypeIcon } from '@/lib/components/item-type-icon';
 
 const useStyles = makeStyles({
-  toolbar: { display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '8px' },
+  toolbar: { display: 'flex', alignItems: 'center', gap: tokens.spacingHorizontalS, marginBottom: tokens.spacingVerticalS, flexWrap: 'wrap' },
   spacer: { flex: 1 },
   treeShell: {
     border: `1px solid ${tokens.colorNeutralStroke2}`,
-    borderRadius: '8px',
+    borderRadius: tokens.borderRadiusMedium,
     backgroundColor: tokens.colorNeutralBackground1,
-    padding: '8px',
+    padding: tokens.spacingVerticalS,
     minHeight: '240px',
+    maxHeight: '70vh',
+    overflow: 'auto',
   },
   rootDrop: {
     padding: '4px 8px', borderRadius: '4px', fontSize: '12px',
@@ -59,11 +61,11 @@ const useStyles = makeStyles({
     backgroundColor: tokens.colorBrandBackground2Hover,
     color: tokens.colorBrandForeground1,
   },
-  itemRow: { display: 'flex', alignItems: 'center', gap: '6px' },
+  itemRow: { display: 'flex', alignItems: 'center', gap: tokens.spacingHorizontalXS, minWidth: 0, overflowWrap: 'anywhere', wordBreak: 'break-word' },
   badge: { marginLeft: '6px' },
   empty: {
-    padding: '32px', textAlign: 'center', color: tokens.colorNeutralForeground3,
-    border: `1px dashed ${tokens.colorNeutralStroke2}`, borderRadius: '12px', lineHeight: 1.6,
+    padding: tokens.spacingVerticalXXL, textAlign: 'center', color: tokens.colorNeutralForeground3,
+    border: `1px dashed ${tokens.colorNeutralStroke2}`, borderRadius: tokens.borderRadiusLarge, lineHeight: 1.6,
   },
   treeItemDragOver: {
     outline: `2px solid ${tokens.colorBrandStroke1}`, outlineOffset: '-2px', borderRadius: '4px',

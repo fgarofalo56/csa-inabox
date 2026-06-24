@@ -42,7 +42,7 @@ const KIND_META: Record<Scalable['kind'], { label: string; icon: ReactNode; acce
 };
 
 const useStyles = makeStyles({
-  grid: { display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(320px, 1fr))', gap: tokens.spacingHorizontalL },
+  grid: { display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(min(320px, 100%), 1fr))', gap: tokens.spacingHorizontalL },
   card: {
     position: 'relative', overflow: 'hidden',
     padding: tokens.spacingVerticalL, borderRadius: tokens.borderRadiusXLarge,

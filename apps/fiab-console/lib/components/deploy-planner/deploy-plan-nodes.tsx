@@ -52,7 +52,7 @@ function SubscriptionNodeImpl({ data, width, height, selected }: NodeProps) {
       data-plan-subscription={d.name}
       style={{
         width: width ?? 360, height: height ?? 240,
-        borderRadius: 10,
+        borderRadius: tokens.borderRadiusLarge,
         border: `2px solid ${selected ? tokens.colorBrandStroke1 : tint}`,
         background: `${tint}0d`,
         boxSizing: 'border-box',
@@ -78,7 +78,7 @@ function DomainNodeImpl({ data, width, height, selected }: NodeProps) {
       data-plan-domain={d.name}
       style={{
         width: width ?? 300, height: height ?? 150,
-        borderRadius: 8,
+        borderRadius: tokens.borderRadiusMedium,
         border: `1.5px ${selected ? 'solid' : 'dashed'} ${selected ? tokens.colorBrandStroke1 : tokens.colorNeutralStroke1}`,
         background: tokens.colorNeutralBackground1,
         boxSizing: 'border-box',
@@ -114,7 +114,7 @@ function ServiceNodeImpl({ data, selected }: NodeProps) {
       style={{
         width: 132,
         display: 'flex', alignItems: 'center', gap: 8,
-        padding: '6px 9px', borderRadius: 8,
+        padding: '6px 9px', borderRadius: tokens.borderRadiusMedium,
         background: tokens.colorNeutralBackground1,
         border: `1px solid ${selected ? tokens.colorBrandStroke1 : tokens.colorNeutralStroke2}`,
         boxShadow: selected ? `0 0 0 2px ${tokens.colorBrandBackground2}` : '0 1px 2px rgba(0,0,0,0.06)',

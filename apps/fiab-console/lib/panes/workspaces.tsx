@@ -28,12 +28,12 @@ import { listWorkspaces, createWorkspace, type Workspace } from '@/lib/api/works
 import { SignInRequired } from '@/lib/components/sign-in-required';
 
 const useStyles = makeStyles({
-  header: { display: 'flex', alignItems: 'center', marginBottom: '20px', gap: '16px' },
+  header: { display: 'flex', alignItems: 'center', marginBottom: tokens.spacingVerticalXL, gap: tokens.spacingHorizontalL, flexWrap: 'wrap' },
   spacer: { flex: 1 },
   grid: {
     display: 'grid',
-    gridTemplateColumns: 'repeat(auto-fill, minmax(280px, 1fr))',
-    gap: '16px',
+    gridTemplateColumns: 'repeat(auto-fill, minmax(min(280px, 100%), 1fr))',
+    gap: tokens.spacingHorizontalL,
   },
   card: {
     paddingTop: '20px', paddingRight: '20px', paddingBottom: '20px', paddingLeft: '20px',
@@ -43,6 +43,7 @@ const useStyles = makeStyles({
     color: tokens.colorNeutralForeground1,
     textDecoration: 'none',
     display: 'flex', flexDirection: 'column',
+    minWidth: 0,
     minHeight: '140px',
     cursor: 'pointer',
     transition: 'transform 0.15s, box-shadow 0.15s, border-color 0.15s',
@@ -52,8 +53,8 @@ const useStyles = makeStyles({
       borderColor: tokens.colorBrandStroke1,
     },
   },
-  cardName: { fontSize: '15px', fontWeight: 600, lineHeight: 1.3, marginBottom: '8px' },
-  cardDesc: { fontSize: '13px', color: tokens.colorNeutralForeground2, lineHeight: 1.45, marginBottom: '10px' },
+  cardName: { fontSize: '15px', fontWeight: 600, lineHeight: 1.3, marginBottom: '8px', overflowWrap: 'anywhere', wordBreak: 'break-word' },
+  cardDesc: { fontSize: '13px', color: tokens.colorNeutralForeground2, lineHeight: 1.45, marginBottom: '10px', overflowWrap: 'anywhere', wordBreak: 'break-word' },
   meta: { fontSize: '11px', color: tokens.colorNeutralForeground3, marginTop: 'auto' },
   empty: {
     paddingTop: '32px', paddingRight: '32px', paddingBottom: '32px', paddingLeft: '32px',
@@ -63,7 +64,7 @@ const useStyles = makeStyles({
     borderRadius: '12px',
     lineHeight: 1.6,
   },
-  formCol: { display: 'flex', flexDirection: 'column', gap: '12px' },
+  formCol: { display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalM, minWidth: 0 },
 });
 
 function CreateWorkspaceDialog() {

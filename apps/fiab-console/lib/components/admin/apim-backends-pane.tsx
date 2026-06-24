@@ -361,14 +361,14 @@ export function ApimBackendsPane() {
                 </Field>
                 {form.authMode === 'authorization' && (
                   <div style={{ display: 'flex', gap: tokens.spacingHorizontalM }}>
-                    <Field label="Scheme" required style={{ flex: 1 }}>
+                    <Field label="Scheme" required style={{ flex: 1, minWidth: 0 }}>
                       <Input
                         value={form.authScheme}
                         placeholder="Bearer"
                         onChange={(_, d) => setForm((f) => ({ ...f, authScheme: d.value }))}
                       />
                     </Field>
-                    <Field label="Parameter (token)" required style={{ flex: 2 }}>
+                    <Field label="Parameter (token)" required style={{ flex: 2, minWidth: 0 }}>
                       <Input
                         type="password"
                         value={form.authParameter}
@@ -380,14 +380,14 @@ export function ApimBackendsPane() {
                 )}
                 {(form.authMode === 'header' || form.authMode === 'query') && (
                   <div style={{ display: 'flex', gap: tokens.spacingHorizontalM }}>
-                    <Field label={form.authMode === 'header' ? 'Header name' : 'Query parameter name'} required style={{ flex: 1 }}>
+                    <Field label={form.authMode === 'header' ? 'Header name' : 'Query parameter name'} required style={{ flex: 1, minWidth: 0 }}>
                       <Input
                         value={form.authParamName}
                         placeholder={form.authMode === 'header' ? 'x-api-key' : 'code'}
                         onChange={(_, d) => setForm((f) => ({ ...f, authParamName: d.value }))}
                       />
                     </Field>
-                    <Field label="Value" required style={{ flex: 2 }}>
+                    <Field label="Value" required style={{ flex: 2, minWidth: 0 }}>
                       <Input
                         type="password"
                         value={form.authParameter}

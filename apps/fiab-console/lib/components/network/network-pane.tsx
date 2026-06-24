@@ -62,9 +62,10 @@ const card: React.CSSProperties = {
   borderRadius: tokens.borderRadiusXLarge, backgroundColor: tokens.colorNeutralBackground1,
   marginBottom: 20, boxShadow: tokens.shadow4,
 };
-const head: React.CSSProperties = { display: 'flex', alignItems: 'center', gap: 10, marginBottom: 14 };
+const head: React.CSSProperties = { display: 'flex', alignItems: 'center', gap: 10, marginBottom: 14, flexWrap: 'wrap', minWidth: 0 };
 const codeBox: React.CSSProperties = {
-  fontFamily: 'Consolas, monospace', fontSize: 12, whiteSpace: 'pre', overflowX: 'auto',
+  fontFamily: 'Consolas, monospace', fontSize: 12, whiteSpace: 'pre', overflow: 'auto',
+  maxHeight: 320, maxWidth: '100%',
   background: tokens.colorNeutralBackground3, border: `1px solid ${tokens.colorNeutralStroke2}`,
   borderRadius: 6, padding: 12, margin: 0,
 };
@@ -219,7 +220,7 @@ function VnetGatewayCard() {
           {r.delegatedSubnets.length > 0 && (
             <Body1 style={{ display: 'block', marginTop: 10 }}>
               Delegated subnet(s) ready for a gateway:{' '}
-              <code>{r.delegatedSubnets.map((s) => `${s.vnet}/${s.subnet}`).join(', ')}</code>
+              <code style={{ overflowWrap: 'anywhere', wordBreak: 'break-word' }}>{r.delegatedSubnets.map((s) => `${s.vnet}/${s.subnet}`).join(', ')}</code>
             </Body1>
           )}
           <Divider style={{ margin: '12px 0' }} />

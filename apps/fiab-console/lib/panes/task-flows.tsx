@@ -289,7 +289,7 @@ function TaskFlowCanvasInner({ workspaceId, flow, items, onBack }: CanvasProps) 
           <DialogBody>
             <DialogTitle>{stepDialog?.mode === 'edit' ? 'Edit step' : 'Add step'}</DialogTitle>
             <DialogContent>
-              <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+              <div style={{ display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalM }}>
                 <Field label="Step label" required>
                   <Input value={stepLabel} onChange={(_e, d) => setStepLabel(d.value)} placeholder="Ingest raw data" autoFocus />
                 </Field>
@@ -503,7 +503,7 @@ export function TaskFlowsPane({ workspaceId }: TaskFlowsPaneProps): JSX.Element 
           <DialogBody>
             <DialogTitle>New task flow</DialogTitle>
             <DialogContent>
-              <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+              <div style={{ display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalM }}>
                 <Field label="Name" required>
                   <Input value={newName} onChange={(_e, d) => setNewName(d.value)} placeholder="Bronze → Silver → Gold" autoFocus
                     onKeyDown={(e) => { if (e.key === 'Enter') void createNew(); }} />

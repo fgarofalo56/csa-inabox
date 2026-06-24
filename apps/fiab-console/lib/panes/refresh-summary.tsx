@@ -303,7 +303,7 @@ export function RefreshSummaryPane() {
             <DialogTitle>{detail?.displayName || detail?.pipelineName || 'Run detail'}</DialogTitle>
             <DialogContent>
               {detail && (
-                <div style={{ display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalS }}>
+                <div style={{ display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalS, minWidth: 0, maxHeight: '60vh', overflow: 'auto' }}>
                   <div><Caption1>Item type</Caption1><div><Text>{detail.itemType}</Text></div></div>
                   {detail.workspaceName && (
                     <div><Caption1>Workspace</Caption1><div><Text>{detail.workspaceName}</Text></div></div>
@@ -313,7 +313,7 @@ export function RefreshSummaryPane() {
                   <div><Caption1>Duration</Caption1><div><Text>{fmtDuration(detail.lastRunDurationMs)}</Text></div></div>
                   {detail.lastRunError && (
                     <MessageBar intent="error">
-                      <MessageBarBody>{detail.lastRunError}</MessageBarBody>
+                      <MessageBarBody style={{ overflowWrap: 'anywhere', wordBreak: 'break-word' }}>{detail.lastRunError}</MessageBarBody>
                     </MessageBar>
                   )}
                   <div><Caption1>Next scheduled run</Caption1><div><Text>{fmtTime(detail.nextRunAt)}</Text></div></div>
@@ -327,7 +327,7 @@ export function RefreshSummaryPane() {
                     </div>
                   )}
                   {detail.lastRunId && (
-                    <div><Caption1>Run id</Caption1><div><Text>{detail.lastRunId}</Text></div></div>
+                    <div><Caption1>Run id</Caption1><div style={{ overflowWrap: 'anywhere', wordBreak: 'break-word' }}><Text>{detail.lastRunId}</Text></div></div>
                   )}
                 </div>
               )}

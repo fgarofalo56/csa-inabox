@@ -265,7 +265,7 @@ export function CopilotAgentsConfig() {
         <MessageBar intent="success" icon={<Sparkle20Regular />}>
           <MessageBarBody>
             <MessageBarTitle>Copilot is linked and working</MessageBarTitle>
-            Chat model <code>{effectiveChat}</code> on <code>{(effectiveEndpoint || '').replace(/^https:\/\//, '')}</code>.
+            Chat model <code style={{ overflowWrap: 'anywhere', wordBreak: 'break-word' }}>{effectiveChat}</code> on <code style={{ overflowWrap: 'anywhere', wordBreak: 'break-word' }}>{(effectiveEndpoint || '').replace(/^https:\/\//, '')}</code>.
             {linkedFromEnv
               ? ' Inherited from this deployment’s AI Foundry env defaults (LOOM_AOAI_ENDPOINT / LOOM_AOAI_DEPLOYMENT). Save to pin these as the explicit tenant choice, or pick different deployments below.'
               : ' From the saved tenant configuration below.'}
@@ -278,7 +278,7 @@ export function CopilotAgentsConfig() {
           <MessageBarBody>
             <MessageBarTitle>No Azure AI Foundry account resolved</MessageBarTitle>
             {accountsError.hint || accountsError.error}
-            <div style={{ marginTop: 4, fontSize: 12 }}>
+            <div style={{ marginTop: tokens.spacingVerticalXS, fontSize: '12px' }}>
               Provision an AIServices account via{' '}
               <code>platform/fiab/bicep/modules/admin-plane/ai-foundry.bicep</code> and grant the
               Console UAMI <code>Cognitive Services Contributor</code>. You can still type a

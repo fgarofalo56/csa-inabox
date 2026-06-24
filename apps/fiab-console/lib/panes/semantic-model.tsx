@@ -108,15 +108,16 @@ const useStyles = makeStyles({
   fieldLabel: { color: tokens.colorNeutralForeground2, fontWeight: 600 },
   dbGrid: {
     display: 'grid',
-    gridTemplateColumns: 'repeat(auto-fill, minmax(220px, 1fr))',
-    gap: '10px',
+    gridTemplateColumns: 'repeat(auto-fill, minmax(min(220px, 100%), 1fr))',
+    gap: tokens.spacingHorizontalS,
   },
   dbTile: {
     ...shorthands.border('1px', 'solid', tokens.colorNeutralStroke2),
     borderRadius: tokens.borderRadiusMedium,
     backgroundColor: tokens.colorNeutralBackground2,
-    paddingTop: '12px', paddingRight: '14px', paddingBottom: '12px', paddingLeft: '14px',
-    display: 'flex', flexDirection: 'column', gap: '6px',
+    paddingTop: tokens.spacingVerticalM, paddingRight: tokens.spacingHorizontalM, paddingBottom: tokens.spacingVerticalM, paddingLeft: tokens.spacingHorizontalM,
+    minWidth: 0,
+    display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalXS,
     transitionProperty: 'box-shadow, border-color, transform',
     transitionDuration: tokens.durationNormal,
     transitionTimingFunction: tokens.curveEasyEase,
@@ -126,11 +127,12 @@ const useStyles = makeStyles({
     },
   },
   dbName: {
-    display: 'flex', alignItems: 'center', gap: '6px', fontWeight: 600,
+    display: 'flex', alignItems: 'center', gap: tokens.spacingHorizontalXS, fontWeight: 600,
     color: tokens.colorNeutralForeground1,
+    minWidth: 0, overflowWrap: 'anywhere', wordBreak: 'break-word',
   },
   tileIcon: { color: tokens.colorBrandForeground1, display: 'flex', flexShrink: 0 },
-  badgeRow: { display: 'flex', gap: '6px', flexWrap: 'wrap' },
+  badgeRow: { display: 'flex', gap: tokens.spacingHorizontalXS, flexWrap: 'wrap' },
   meta: { color: tokens.colorNeutralForeground3 },
 });
 

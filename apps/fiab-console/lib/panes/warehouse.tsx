@@ -80,6 +80,7 @@ const useStyles = makeStyles({
     whiteSpace: 'pre',
     overflow: 'auto',
     maxHeight: '420px',
+    maxWidth: '100%',
     margin: 0,
     padding: tokens.spacingVerticalM,
     color: tokens.colorNeutralForeground1,

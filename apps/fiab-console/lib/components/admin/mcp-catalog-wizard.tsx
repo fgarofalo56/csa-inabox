@@ -124,6 +124,11 @@ const useStyles = makeStyles({
     marginTop: tokens.spacingVerticalS,
     fontSize: tokens.fontSizeBase100,
     whiteSpace: 'pre-wrap',
+    overflowWrap: 'anywhere',
+    wordBreak: 'break-word',
+    maxWidth: '100%',
+    maxHeight: '240px',
+    overflow: 'auto',
     backgroundColor: tokens.colorNeutralBackground3,
     padding: tokens.spacingHorizontalS,
     borderRadius: tokens.borderRadiusMedium,
@@ -404,7 +409,7 @@ function DeployedServers({
   return (
     <div className={s.deployedWrap}>
       <Text weight="semibold">Deployed from library</Text>
-      <Table aria-label="Deployed catalog MCP servers" style={{ marginTop: 8 }}>
+      <Table aria-label="Deployed catalog MCP servers" style={{ marginTop: tokens.spacingVerticalS }}>
         <TableHeader>
           <TableRow>
             <TableHeaderCell

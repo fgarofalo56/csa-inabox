@@ -468,7 +468,7 @@ export function validateRlsPredicate(s: string): string | null {
 const useRlsStyles = makeStyles({
   root: { display: 'flex', flexDirection: 'column', gap: '10px' },
   header: { display: 'flex', alignItems: 'center', gap: '8px' },
-  pickers: { display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: '12px' },
+  pickers: { display: 'grid', gridTemplateColumns: 'repeat(3, minmax(0, 1fr))', gap: '12px' },
   counter: { display: 'flex', justifyContent: 'space-between', alignItems: 'center' },
   actions: { display: 'flex', gap: '8px', justifyContent: 'flex-end' },
   note: {

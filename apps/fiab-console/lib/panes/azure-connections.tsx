@@ -76,14 +76,14 @@ interface LawSummary {
 }
 
 const useStyles = makeStyles({
-  body: { display: 'flex', flexDirection: 'column', gap: '20px' },
-  section: { display: 'flex', flexDirection: 'column', gap: '10px' },
-  sectionHead: { display: 'flex', alignItems: 'center', gap: '8px' },
-  form: { display: 'flex', flexDirection: 'column', gap: '10px', padding: '12px', borderRadius: tokens.borderRadiusMedium, border: `1px solid ${tokens.colorNeutralStroke2}`, backgroundColor: tokens.colorNeutralBackground2 },
-  row: { display: 'flex', alignItems: 'flex-end', gap: '10px', flexWrap: 'wrap' },
+  body: { display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalXL, minWidth: 0 },
+  section: { display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalS, minWidth: 0 },
+  sectionHead: { display: 'flex', alignItems: 'center', gap: tokens.spacingHorizontalS },
+  form: { display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalS, padding: tokens.spacingVerticalM, borderRadius: tokens.borderRadiusMedium, border: `1px solid ${tokens.colorNeutralStroke2}`, backgroundColor: tokens.colorNeutralBackground2, minWidth: 0 },
+  row: { display: 'flex', alignItems: 'flex-end', gap: tokens.spacingHorizontalS, flexWrap: 'wrap' },
   grow: { flex: 1, minWidth: '220px' },
-  empty: { padding: '16px', textAlign: 'center', color: tokens.colorNeutralForeground3, border: `1px dashed ${tokens.colorNeutralStroke2}`, borderRadius: tokens.borderRadiusMedium },
-  detail: { fontSize: '11px', color: tokens.colorNeutralForeground3 },
+  empty: { padding: tokens.spacingVerticalL, textAlign: 'center', color: tokens.colorNeutralForeground3, border: `1px dashed ${tokens.colorNeutralStroke2}`, borderRadius: tokens.borderRadiusMedium, overflowWrap: 'anywhere', wordBreak: 'break-word' },
+  detail: { fontSize: '11px', color: tokens.colorNeutralForeground3, overflowWrap: 'anywhere', wordBreak: 'break-word' },
 });
 
 function statusBadge(status: ConnectionStatus): { color: 'success' | 'warning' | 'danger'; label: string } {
@@ -191,7 +191,7 @@ function GateBar({ conn, workspaceId, onRetry }: { conn: AzureConnection; worksp
         <MessageBarBody>
           <MessageBarTitle>Missing role: {conn.roleGate.missing}</MessageBarTitle>
           {conn.roleGate.hint}
-          <div style={{ marginTop: 8 }}>
+          <div style={{ marginTop: tokens.spacingVerticalS }}>
             <Button size="small" appearance="primary" onClick={retry} disabled={retrying}>
               {retrying ? 'Retrying…' : 'Retry'}
             </Button>
@@ -206,7 +206,7 @@ function GateBar({ conn, workspaceId, onRetry }: { conn: AzureConnection; worksp
         <MessageBarBody>
           <MessageBarTitle>Connectivity probe failed</MessageBarTitle>
           {conn.statusDetail || 'The data-plane probe failed.'}
-          <div style={{ marginTop: 8 }}>
+          <div style={{ marginTop: tokens.spacingVerticalS }}>
             <Button size="small" appearance="primary" onClick={retry} disabled={retrying}>
               {retrying ? 'Retrying…' : 'Retry'}
             </Button>

@@ -234,13 +234,13 @@ export function OrgVisualsPane() {
       </Section>
 
       {gate && (
-        <div style={{ marginBottom: 16 }}>
+        <div style={{ marginBottom: tokens.spacingVerticalL }}>
           <NotConfiguredBar surface="Organizational visuals" hint={gate} />
         </div>
       )}
-      {error && <MessageBar intent="error" style={{ marginBottom: 16 }}><MessageBarBody><MessageBarTitle>Could not load visuals</MessageBarTitle>{error}</MessageBarBody></MessageBar>}
-      {actionErr && <MessageBar intent="error" style={{ marginBottom: 16 }}><MessageBarBody>{actionErr}</MessageBarBody></MessageBar>}
-      {okMsg && <MessageBar intent="success" style={{ marginBottom: 16 }}><MessageBarBody>{okMsg}</MessageBarBody></MessageBar>}
+      {error && <MessageBar intent="error" style={{ marginBottom: tokens.spacingVerticalL }}><MessageBarBody><MessageBarTitle>Could not load visuals</MessageBarTitle>{error}</MessageBarBody></MessageBar>}
+      {actionErr && <MessageBar intent="error" style={{ marginBottom: tokens.spacingVerticalL }}><MessageBarBody>{actionErr}</MessageBarBody></MessageBar>}
+      {okMsg && <MessageBar intent="success" style={{ marginBottom: tokens.spacingVerticalL }}><MessageBarBody>{okMsg}</MessageBarBody></MessageBar>}
 
       <Section title="Upload a custom visual">
         <div className={s.uploadGrid}>
