@@ -40,7 +40,9 @@ const useStyles = makeStyles({
   intro: { color: tokens.colorNeutralForeground2, lineHeight: 1.55, marginBottom: tokens.spacingVerticalL },
   grid: {
     display: 'grid',
-    gridTemplateColumns: 'repeat(auto-fill, minmax(420px, 1fr))',
+    // min(420px, 100%) lets the track shrink below 420px on narrow viewports
+    // instead of forcing a 420px column (and horizontal page overflow).
+    gridTemplateColumns: 'repeat(auto-fill, minmax(min(420px, 100%), 1fr))',
     gap: tokens.spacingHorizontalL,
   },
   // numeric input widths (replaces inline style={{ width: N }})
@@ -66,8 +68,10 @@ const useStyles = makeStyles({
   // apply button + inline status, stacked
   applyCell: { display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalS, alignItems: 'flex-start' },
   italicNote: { fontStyle: 'italic', color: tokens.colorNeutralForeground3 },
-  errorText: { color: tokens.colorPaletteRedForeground1 },
-  okText: { color: tokens.colorPaletteGreenForeground1 },
+  // backend error/ok strings can be long & unbroken (URLs, ARM ids, tokens) —
+  // wrap so they never push the card/cell wider than its column.
+  errorText: { color: tokens.colorPaletteRedForeground1, overflowWrap: 'anywhere', wordBreak: 'break-word' },
+  okText: { color: tokens.colorPaletteGreenForeground1, overflowWrap: 'anywhere', wordBreak: 'break-word' },
   // MCP persistence sub-section inside the Container Apps card
   mcpSection: {
     borderTop: `1px solid ${tokens.colorNeutralStroke2}`,
@@ -92,8 +96,8 @@ const useStyles = makeStyles({
     flexDirection: 'column',
     gap: tokens.spacingVerticalS,
   },
-  statusError: { display: 'block', marginTop: tokens.spacingVerticalS, color: tokens.colorPaletteRedForeground1 },
-  statusOk: { display: 'block', marginTop: tokens.spacingVerticalS, color: tokens.colorPaletteGreenForeground1 },
+  statusError: { display: 'block', marginTop: tokens.spacingVerticalS, color: tokens.colorPaletteRedForeground1, overflowWrap: 'anywhere', wordBreak: 'break-word' },
+  statusOk: { display: 'block', marginTop: tokens.spacingVerticalS, color: tokens.colorPaletteGreenForeground1, overflowWrap: 'anywhere', wordBreak: 'break-word' },
 });
 
 async function jsonPost(url: string, body: unknown): Promise<any> {

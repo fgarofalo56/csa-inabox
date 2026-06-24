@@ -151,7 +151,7 @@ export default function IrmPage() {
 
   return (
     <GovernanceShell sectionTitle="Insider risk" sectionBadge="IRM">
-      <Body1 style={{ color: tokens.colorNeutralForeground3, marginBottom: 12 }}>
+      <Body1 style={{ color: tokens.colorNeutralForeground3, marginBottom: tokens.spacingVerticalM }}>
         Insider-risk indicators computed live over your lakehouse audit log and Azure Monitor — unusual data
         volume (cumulative exfiltration), off-hours / weekend access, and privileged-access anomalies. No
         Microsoft Fabric or Purview-IRM dependency.
@@ -164,7 +164,7 @@ export default function IrmPage() {
             value={`Last ${days} days`}
             selectedOptions={[String(days)]}
             onOptionSelect={(_, dt) => { const d = Number(dt.optionValue); setDays(d); load(d); }}
-            style={{ minWidth: 150 }}
+            style={{ minWidth: '150px' }}
           >
             {[7, 14, 30, 60, 90].map((d) => <Option key={d} value={String(d)}>{`Last ${d} days`}</Option>)}
           </Dropdown>
@@ -185,7 +185,7 @@ export default function IrmPage() {
       )}
 
       {data?.gates?.la && (
-        <MessageBar intent="warning" style={{ marginBottom: 12 }}>
+        <MessageBar intent="warning" style={{ marginBottom: tokens.spacingVerticalM }}>
           <MessageBarBody>
             <MessageBarTitle>Azure Monitor signals not configured</MessageBarTitle>
             {data.gates.la}
@@ -302,7 +302,7 @@ export default function IrmPage() {
             )}
           </div>
           {data.findings.length === 0 ? (
-            <MessageBar intent="success" style={{ marginBottom: 20 }}>
+            <MessageBar intent="success" style={{ marginBottom: tokens.spacingVerticalXL }}>
               <MessageBarBody>
                 <MessageBarTitle>No insider-risk indicators triggered</MessageBarTitle>
                 No actor exceeded the configured thresholds over the last {data.windowDays} days across
@@ -310,7 +310,7 @@ export default function IrmPage() {
               </MessageBarBody>
             </MessageBar>
           ) : (
-            <div style={{ marginBottom: 20 }}>
+            <div style={{ marginBottom: tokens.spacingVerticalXL }}>
               <LoomDataTable
                 ariaLabel="Insider-risk indicators"
                 getRowId={(f) => `${f.actor}:${f.indicatorId}`}
@@ -349,7 +349,7 @@ export default function IrmPage() {
             )}
           </div>
           {data.topActors.length === 0 ? (
-            <Caption1 style={{ color: tokens.colorNeutralForeground3, display: 'flex', alignItems: 'center', gap: 6 }}>
+            <Caption1 style={{ color: tokens.colorNeutralForeground3, display: 'flex', alignItems: 'center', gap: tokens.spacingHorizontalSNudge }}>
               <ShieldError24Regular style={{ color: tokens.colorPaletteGreenForeground1 }} /> No flagged actors.
             </Caption1>
           ) : (

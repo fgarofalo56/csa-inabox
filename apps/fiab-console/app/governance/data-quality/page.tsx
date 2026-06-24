@@ -246,7 +246,7 @@ function RunTab() {
     { key: 'pct', label: 'Pass %', sortable: true, width: 180, getValue: (r) => r.percentage ?? -1, render: (r) => r.percentage == null ? <Caption1>—</Caption1> : (
       <span className={s.pctCell}><span className={s.bar}><span className={s.barFill} style={{ width: `${r.percentage}%`, backgroundColor: pctColor(r.percentage) }} /></span><Text size={200}>{r.percentage.toFixed(1)}%</Text></span>) },
     { key: 'passed', label: 'Result', sortable: true, width: 100, getValue: (r) => (r.passed ? 1 : 0), render: (r) => <Badge appearance="tint" color={r.passed ? 'success' : 'danger'} size="small">{r.passed ? 'Pass' : 'Fail'}</Badge> },
-    { key: 'detail', label: 'Detail', filterable: true, getValue: (r) => r.detail, render: (r) => <Caption1>{r.detail}</Caption1> },
+    { key: 'detail', label: 'Detail', filterable: true, getValue: (r) => r.detail, render: (r) => <Caption1 style={{ overflowWrap: 'anywhere', wordBreak: 'break-word' }}>{r.detail}</Caption1> },
   ];
 
   return (
@@ -272,13 +272,13 @@ function RunTab() {
         <Field label="Tables (comma-sep, optional)" style={{ flex: 1, minWidth: 220 }}><Input value={tables} onChange={(_, d) => setTables(d.value)} placeholder="all enabled rules if blank" /></Field>
       </div>
 
-      {gate && <MessageBar intent="warning" style={{ marginBottom: 12 }}><MessageBarBody><MessageBarTitle>Engine not configured</MessageBarTitle>{gate.error} Set the <code>{gate.missing}</code> app setting on the Console (admin-plane bicep).</MessageBarBody></MessageBar>}
+      {gate && <MessageBar intent="warning" style={{ marginBottom: 12 }}><MessageBarBody><MessageBarTitle>Engine not configured</MessageBarTitle>{gate.error} Set the <code style={{ overflowWrap: 'anywhere', wordBreak: 'break-word' }}>{gate.missing}</code> app setting on the Console (admin-plane bicep).</MessageBarBody></MessageBar>}
       {error && <MessageBar intent="error" style={{ marginBottom: 12 }}><MessageBarBody>{error}</MessageBarBody></MessageBar>}
 
       {run && (<>
         <div className={s.toolbar}>
           <Text className={s.scoreBig} style={{ color: run.score == null ? tokens.colorNeutralForeground3 : pctColor(run.score) }}>{run.score == null ? '—' : `${run.score}%`}</Text>
-          <span><Subtitle2>Composite score</Subtitle2><br /><Caption1>{run.passingRules}/{run.ruleCount} rules passed · {run.backend} · {run.target}</Caption1></span>
+          <span style={{ minWidth: 0 }}><Subtitle2>Composite score</Subtitle2><br /><Caption1 style={{ overflowWrap: 'anywhere', wordBreak: 'break-word' }}>{run.passingRules}/{run.ruleCount} rules passed · {run.backend} · {run.target}</Caption1></span>
         </div>
         <LoomDataTable<RuleResult> columns={cols} rows={run.breakdown} getRowId={(r) => r.ruleId} empty="No applicable enabled rules for this target." />
       </>)}
@@ -367,7 +367,7 @@ function MonitorsTab() {
         <Button appearance="primary" onClick={load} disabled={busy || !table.trim()} style={{ alignSelf: 'flex-end' }}>Load</Button>
       </div>
 
-      {gate && <MessageBar intent="warning" style={{ marginBottom: 12 }}><MessageBarBody><MessageBarTitle>Databricks not configured</MessageBarTitle>{gate.error} Set <code>{gate.missing}</code> on the Console (admin-plane bicep).</MessageBarBody></MessageBar>}
+      {gate && <MessageBar intent="warning" style={{ marginBottom: 12 }}><MessageBarBody><MessageBarTitle>Databricks not configured</MessageBarTitle>{gate.error} Set <code style={{ overflowWrap: 'anywhere', wordBreak: 'break-word' }}>{gate.missing}</code> on the Console (admin-plane bicep).</MessageBarBody></MessageBar>}
       {error && <MessageBar intent="error" style={{ marginBottom: 12 }}><MessageBarBody>{error}</MessageBarBody></MessageBar>}
 
       {data && <>
@@ -383,7 +383,7 @@ function MonitorsTab() {
         {constraints.length === 0 ? <Caption1>No Delta CHECK constraints on this table yet.</Caption1> : (
           <LoomDataTable<DeltaConstraint> columns={[
             { key: 'name', label: 'Constraint', sortable: true, filterable: true, getValue: (c) => c.name, render: (c) => <Body1>{c.name}</Body1> },
-            { key: 'expr', label: 'Expression', filterable: true, getValue: (c) => c.expression, render: (c) => <Caption1 style={{ fontFamily: 'monospace' }}>{c.expression}</Caption1> },
+            { key: 'expr', label: 'Expression', filterable: true, getValue: (c) => c.expression, render: (c) => <Caption1 style={{ fontFamily: 'monospace', overflowWrap: 'anywhere', wordBreak: 'break-word' }}>{c.expression}</Caption1> },
             { key: 'drop', label: '', width: 80, render: (c) => <Button size="small" appearance="transparent" icon={<Delete20Regular />} onClick={() => action({ action: 'drop-constraint', name: c.name })} aria-label="Drop" /> },
           ]} rows={constraints} getRowId={(c) => c.name} empty="No constraints." />
         )}
@@ -392,7 +392,7 @@ function MonitorsTab() {
         {monitor ? (<>
           <div className={s.toolbar}>
             <Badge appearance="tint" color="success">{monitor.status || 'active'}</Badge>
-            {monitor.profileMetricsTableName && <Caption1>Metrics: {monitor.profileMetricsTableName}</Caption1>}
+            {monitor.profileMetricsTableName && <Caption1 style={{ overflowWrap: 'anywhere', wordBreak: 'break-word', minWidth: 0 }}>Metrics: {monitor.profileMetricsTableName}</Caption1>}
             <Button onClick={() => action({ action: 'refresh-monitor' })} disabled={busy} icon={<ArrowSync24Regular />}>Refresh metrics</Button>
           </div>
           {refreshes.length > 0 && (

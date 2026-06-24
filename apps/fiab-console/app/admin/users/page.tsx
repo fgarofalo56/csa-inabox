@@ -93,7 +93,7 @@ const useStyles = makeStyles({
   },
   userText: { display: 'flex', flexDirection: 'column', minWidth: 0 },
   adminLinks: { display: 'flex', gap: tokens.spacingHorizontalM, alignItems: 'center' },
-  link: { display: 'inline-flex', alignItems: 'center', gap: tokens.spacingHorizontalXS, fontSize: tokens.fontSizeBase200, color: tokens.colorBrandForeground1 },
+  link: { display: 'inline-flex', alignItems: 'center', gap: tokens.spacingHorizontalXS, fontSize: tokens.fontSizeBase200, color: tokens.colorBrandForeground1, minWidth: 0, overflowWrap: 'anywhere', wordBreak: 'break-word' },
   rolesCell: { display: 'flex', alignItems: 'center', gap: tokens.spacingHorizontalXS, flexWrap: 'wrap' },
   expandBtn: {
     display: 'inline-flex', alignItems: 'center', gap: tokens.spacingHorizontalXXS, cursor: 'pointer',
@@ -106,7 +106,12 @@ const useStyles = makeStyles({
     textAlign: 'left', padding: `${tokens.spacingVerticalXXS} ${tokens.spacingHorizontalS}`, borderBottom: `1px solid ${tokens.colorNeutralStroke2}`,
     color: tokens.colorNeutralForeground3, fontWeight: tokens.fontWeightSemibold,
   },
-  wsRoleCell: { padding: `${tokens.spacingVerticalXXS} ${tokens.spacingHorizontalS}`, borderBottom: `1px solid ${tokens.colorNeutralStroke3}` },
+  wsRoleCell: {
+    padding: `${tokens.spacingVerticalXXS} ${tokens.spacingHorizontalS}`,
+    borderBottom: `1px solid ${tokens.colorNeutralStroke3}`,
+    overflowWrap: 'anywhere',
+    wordBreak: 'break-word',
+  },
   selfStart: { alignSelf: 'flex-start' },
 });
 

@@ -21,7 +21,7 @@ interface Resp {
 
 const useStyles = makeStyles({
   statsRow: {
-    display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(180px, 1fr))',
+    display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(min(180px, 100%), 1fr))',
     gap: tokens.spacingHorizontalM, marginBottom: tokens.spacingVerticalXL,
   },
   statCard: {
@@ -33,7 +33,7 @@ const useStyles = makeStyles({
   statVal: { fontSize: tokens.fontSizeHero700, fontWeight: tokens.fontWeightSemibold, color: tokens.colorBrandForeground1 },
   statLabel: { fontSize: tokens.fontSizeBase200, color: tokens.colorNeutralForeground3 },
   empty: { padding: tokens.spacingVerticalXXL, color: tokens.colorNeutralForeground3, fontSize: tokens.fontSizeBase200, textAlign: 'center' },
-  labelGrid: { display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(200px, 1fr))', gap: tokens.spacingHorizontalM, marginBottom: tokens.spacingVerticalXL },
+  labelGrid: { display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(min(200px, 100%), 1fr))', gap: tokens.spacingHorizontalM, marginBottom: tokens.spacingVerticalXL },
   labelCard: {
     display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalS, padding: tokens.spacingVerticalL, cursor: 'pointer',
     border: `1px solid ${tokens.colorNeutralStroke2}`, borderLeftWidth: '4px',
@@ -134,7 +134,7 @@ export default function SensitivityPage() {
             </div>
           </div>
 
-          <div style={{ display: 'flex', alignItems: 'center', gap: tokens.spacingHorizontalM, marginBottom: tokens.spacingVerticalS }}>
+          <div style={{ display: 'flex', alignItems: 'center', flexWrap: 'wrap', gap: tokens.spacingHorizontalM, marginBottom: tokens.spacingVerticalS }}>
             <Subtitle2 style={{ display: 'block' }}>Label distribution</Subtitle2>
             <Caption1 style={{ color: tokens.colorNeutralForeground3 }}>Click a label to filter the items below.</Caption1>
             <a href="https://purview.microsoft.com/informationprotection/labels" target="_blank" rel="noreferrer"

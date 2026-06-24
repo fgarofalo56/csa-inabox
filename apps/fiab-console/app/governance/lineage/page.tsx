@@ -59,7 +59,7 @@ const useStyles = makeStyles({
     minHeight: '480px',
   },
   legend: {
-    display: 'flex', gap: tokens.spacingHorizontalL, alignItems: 'center',
+    display: 'flex', flexWrap: 'wrap', gap: tokens.spacingHorizontalL, alignItems: 'center',
     padding: tokens.spacingVerticalM,
     color: tokens.colorNeutralForeground3, fontSize: tokens.fontSizeBase200,
   },
@@ -392,8 +392,8 @@ function LineageInner() {
 
           {selected && (
             <div className={s.detail}>
-              <Subtitle2>{selected.label}</Subtitle2>
-              <Caption1 style={{ display: 'block', marginBottom: tokens.spacingVerticalS }}>
+              <Subtitle2 style={{ overflowWrap: 'anywhere', wordBreak: 'break-word' }}>{selected.label}</Subtitle2>
+              <Caption1 style={{ display: 'block', marginBottom: tokens.spacingVerticalS, overflowWrap: 'anywhere', wordBreak: 'break-word' }}>
                 {selected.type} · workspace {wsNameById.get(selected.workspaceId) || selected.workspaceId} · rank {ranks.get(selected.id) ?? 0}
               </Caption1>
               {selected.propagation && (
@@ -423,7 +423,7 @@ function LineageInner() {
                 Open editor <Open16Regular />
               </a>
 
-              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: tokens.spacingHorizontalL, marginTop: tokens.spacingVerticalM }}>
+              <div style={{ display: 'grid', gridTemplateColumns: 'minmax(0, 1fr) minmax(0, 1fr)', gap: tokens.spacingHorizontalL, marginTop: tokens.spacingVerticalM }}>
                 <div>
                   <Caption1 style={{ display: 'block', marginBottom: tokens.spacingVerticalXS }}>
                     <strong>Upstream ({selectedUpstream.length})</strong> — items that feed this one
@@ -432,7 +432,7 @@ function LineageInner() {
                   {selectedUpstream.map((e, i) => {
                     const src = byId.get(e.from);
                     return (
-                      <div key={i} style={{ fontSize: tokens.fontSizeBase200, padding: '2px 0' }}>
+                      <div key={i} style={{ fontSize: tokens.fontSizeBase200, padding: '2px 0', overflowWrap: 'anywhere', wordBreak: 'break-word' }}>
                         ← <a href={`/items/${src?.type}/${src?.id}`}>{src?.label || e.from}</a>
                         <span style={{ color: tokens.colorNeutralForeground3 }}> · {e.via}</span>
                       </div>
@@ -447,7 +447,7 @@ function LineageInner() {
                   {selectedDownstream.map((e, i) => {
                     const dst = byId.get(e.to);
                     return (
-                      <div key={i} style={{ fontSize: tokens.fontSizeBase200, padding: '2px 0' }}>
+                      <div key={i} style={{ fontSize: tokens.fontSizeBase200, padding: '2px 0', overflowWrap: 'anywhere', wordBreak: 'break-word' }}>
                         → <a href={`/items/${dst?.type}/${dst?.id}`}>{dst?.label || e.to}</a>
                         <span style={{ color: tokens.colorNeutralForeground3 }}> · {e.via}</span>
                       </div>

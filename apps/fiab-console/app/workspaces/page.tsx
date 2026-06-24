@@ -1157,7 +1157,7 @@ export default function WorkspacesPage() {
       {/* Bulk-delete result */}
       {bulkResult && (
         <MessageBar intent={bulkResult.failed.length > 0 ? 'warning' : 'success'}>
-          <MessageBarBody>
+          <MessageBarBody style={{ overflowWrap: 'anywhere', wordBreak: 'break-word', minWidth: 0 }}>
             Deleted {bulkResult.deleted.length} workspace
             {bulkResult.deleted.length === 1 ? '' : 's'}.
             {bulkResult.failed.length > 0 && (
@@ -1181,7 +1181,7 @@ export default function WorkspacesPage() {
                   (lakehouses, notebooks, reports, etc.) from Cosmos. This cannot be undone.
                 </Body1>
                 <div style={{ maxHeight: 180, overflowY: 'auto' }}>
-                  <ul style={{ margin: 0, paddingLeft: 18 }}>
+                  <ul style={{ margin: 0, paddingLeft: 18, overflowWrap: 'anywhere', wordBreak: 'break-word' }}>
                     {Array.from(selected).slice(0, 50).map(id => (
                       <li key={id}>{nameById.get(id) ?? id}</li>
                     ))}

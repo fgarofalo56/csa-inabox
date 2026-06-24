@@ -343,6 +343,7 @@ const useStyles = makeStyles({
   },
   railItemText: {
     flex: 1,
+    minWidth: 0,
     overflow: 'hidden',
     textOverflow: 'ellipsis',
     whiteSpace: 'nowrap',
@@ -439,7 +440,7 @@ const useStyles = makeStyles({
   detailsActions: { display: 'flex', gap: tokens.spacingHorizontalS, flexWrap: 'wrap' },
   metaGrid: {
     display: 'grid',
-    gridTemplateColumns: 'auto 1fr',
+    gridTemplateColumns: 'auto minmax(0, 1fr)',
     columnGap: tokens.spacingHorizontalL,
     rowGap: tokens.spacingVerticalS,
     fontSize: tokens.fontSizeBase300,

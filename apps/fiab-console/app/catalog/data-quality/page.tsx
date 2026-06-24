@@ -58,8 +58,9 @@ const useStyles = makeStyles({
   grow: { flex: 1 },
   infoBar: { marginBottom: tokens.spacingVerticalL },
   actionCell: { display: 'flex', gap: tokens.spacingHorizontalS },
-  dialogFields: { display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalM, minWidth: '400px' },
-  row: { display: 'flex', gap: tokens.spacingHorizontalS },
+  dialogFields: { display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalM, minWidth: '400px', maxWidth: '100%' },
+  row: { display: 'flex', gap: tokens.spacingHorizontalS, flexWrap: 'wrap' },
+  scopeCell: { overflowWrap: 'anywhere', wordBreak: 'break-word' },
   conditionalsSection: {
     display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalS, padding: tokens.spacingVerticalM,
     backgroundColor: tokens.colorNeutralBackground2, borderRadius: tokens.borderRadiusMedium,
@@ -172,7 +173,7 @@ export default function DataQualityPage() {
 
   const ruleColumns: LoomColumn<DataQualityRule>[] = [
     { key: 'name', label: 'Name', sortable: true, filterable: true, getValue: (r) => r.name, render: (r) => <Body1><strong>{r.name}</strong></Body1> },
-    { key: 'scope', label: 'Scope', sortable: true, filterable: true, getValue: (r) => r.scope, render: (r) => <Caption1>{r.scope}</Caption1> },
+    { key: 'scope', label: 'Scope', sortable: true, filterable: true, getValue: (r) => r.scope, render: (r) => <Caption1 className={s.scopeCell}>{r.scope}</Caption1> },
     { key: 'check', label: 'Check', sortable: true, filterable: true, width: 140, getValue: (r) => r.check, render: (r) => <Badge appearance="tint" size="small">{r.check}</Badge> },
     { key: 'threshold', label: 'Threshold', sortable: true, filterable: false, width: 110, getValue: (r) => r.threshold, render: (r) => <Caption1>{r.threshold}{r.check === 'freshness' ? 'd' : '%'}</Caption1> },
     { key: 'enabled', label: 'Status', sortable: true, filterable: false, width: 110, getValue: (r) => (r.enabled ? 1 : 0), render: (r) => <Badge appearance="tint" color={r.enabled ? 'success' : 'warning'} size="small">{r.enabled ? 'Enabled' : 'Disabled'}</Badge> },
@@ -239,7 +240,7 @@ export default function DataQualityPage() {
                 </Field>
 
                 <div className={s.row}>
-                  <Field label="Scope type" style={{ flex: 1 }}>
+                  <Field label="Scope type" style={{ flex: 1, minWidth: 0 }}>
                     <Dropdown
                       selectedOptions={[draftScopeType]} value={SCOPE_PREFIXES.find((sp) => sp.value === draftScopeType)?.label || ''}
                       onOptionSelect={(_, d) => setDraftScopeType((d.optionValue as any) || 'table')}
@@ -247,7 +248,7 @@ export default function DataQualityPage() {
                       {SCOPE_PREFIXES.map((sp) => <Option key={sp.value} value={sp.value}>{sp.label}</Option>)}
                     </Dropdown>
                   </Field>
-                  <Field label={draftScopeType === 'table' ? 'Table name' : 'Column (table.column)'} style={{ flex: 2 }}>
+                  <Field label={draftScopeType === 'table' ? 'Table name' : 'Column (table.column)'} style={{ flex: 2, minWidth: 0 }}>
                     <Input value={draftScopeName} onChange={(_, d) => setDraftScopeName(d.value)}
                       placeholder={draftScopeType === 'table' ? 'my_table' : 'my_table.customer_id'} />
                   </Field>
@@ -276,10 +277,10 @@ export default function DataQualityPage() {
                 {draftCheck === 'range' && (
                   <div className={s.conditionalsSection}>
                     <div className={s.row}>
-                      <Field label="Min" style={{ flex: 1 }}>
+                      <Field label="Min" style={{ flex: 1, minWidth: 0 }}>
                         <Input type="number" value={draftMin} onChange={(_, d) => setDraftMin(d.value)} />
                       </Field>
-                      <Field label="Max" style={{ flex: 1 }}>
+                      <Field label="Max" style={{ flex: 1, minWidth: 0 }}>
                         <Input type="number" value={draftMax} onChange={(_, d) => setDraftMax(d.value)} />
                       </Field>
                     </div>

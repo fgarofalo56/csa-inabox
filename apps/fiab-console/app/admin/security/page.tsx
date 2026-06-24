@@ -58,7 +58,7 @@ const useStyles = makeStyles({
   intro: { color: tokens.colorNeutralForeground3, marginBottom: tokens.spacingVerticalL },
   topTabs: { marginBottom: tokens.spacingVerticalL },
   statsRow: {
-    display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(180px, 1fr))',
+    display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(min(180px, 100%), 1fr))',
     gap: tokens.spacingHorizontalM,
   },
   statCard: {
@@ -71,7 +71,7 @@ const useStyles = makeStyles({
   bar: { height: '6px', backgroundColor: tokens.colorNeutralBackground3, borderRadius: tokens.borderRadiusSmall, overflow: 'hidden', marginTop: tokens.spacingVerticalS },
   barFill: { height: '100%', backgroundColor: tokens.colorBrandBackground, borderRadius: tokens.borderRadiusSmall },
   twoCol: {
-    display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(360px, 1fr))',
+    display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(min(360px, 100%), 1fr))',
     gap: tokens.spacingHorizontalL,
   },
   chip: {
@@ -84,8 +84,10 @@ const useStyles = makeStyles({
     backgroundColor: tokens.colorPaletteBlueBackground2,
     color: tokens.colorPaletteBlueForeground2,
     marginRight: tokens.spacingHorizontalXS, display: 'inline-block', marginBottom: tokens.spacingVerticalXS,
+    maxWidth: '100%', overflowWrap: 'anywhere', wordBreak: 'break-word',
   },
   refresh: { display: 'flex', justifyContent: 'flex-end', marginBottom: tokens.spacingVerticalM },
+  errText: { overflowWrap: 'anywhere', wordBreak: 'break-word' },
 });
 
 function labelColor(l: string): any {
@@ -204,7 +206,7 @@ function OverviewTab() {
         <MessageBar intent="error" className={a.messageBar}>
           <MessageBarBody>
             <MessageBarTitle>Could not load security dashboard</MessageBarTitle>
-            {error}
+            <span className={s.errText}>{error}</span>
           </MessageBarBody>
         </MessageBar>
       )}

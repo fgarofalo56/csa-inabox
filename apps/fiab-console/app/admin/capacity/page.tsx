@@ -147,8 +147,9 @@ const useStyles = makeStyles({
     backgroundColor: tokens.colorNeutralBackground2,
   },
   totalVal: { fontSize: tokens.fontSizeBase500, fontWeight: 700, fontVariantNumeric: 'tabular-nums' },
-  detailMeta: { display: 'grid', gridTemplateColumns: 'auto 1fr', gap: `${tokens.spacingVerticalXS} ${tokens.spacingHorizontalL}`, marginBottom: tokens.spacingVerticalL, fontSize: tokens.fontSizeBase300 },
+  detailMeta: { display: 'grid', gridTemplateColumns: 'auto minmax(0, 1fr)', gap: `${tokens.spacingVerticalXS} ${tokens.spacingHorizontalL}`, marginBottom: tokens.spacingVerticalL, fontSize: tokens.fontSizeBase300 },
   detailKey: { color: tokens.colorNeutralForeground3, fontWeight: 600 },
+  detailVal: { minWidth: 0, overflowWrap: 'anywhere', wordBreak: 'break-word' },
   chartGrid: { display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(240px, 1fr))', gap: tokens.spacingHorizontalM },
   vizLinks: { display: 'flex', gap: tokens.spacingHorizontalS, flexWrap: 'wrap', marginBottom: tokens.spacingVerticalL },
 });
@@ -347,11 +348,11 @@ function DetailPane({ res, viz, onClose }: { res: AzureRes; viz: VizConfig | nul
       </DrawerHeader>
       <DrawerBody>
         <div className={styles.detailMeta}>
-          <span className={styles.detailKey}>Type</span><span>{res.type}</span>
-          <span className={styles.detailKey}>Resource group</span><span>{res.resourceGroup}</span>
-          <span className={styles.detailKey}>Region</span><span>{res.location}</span>
-          {res.sku || res.kind ? <><span className={styles.detailKey}>SKU / Kind</span><span>{res.sku || res.kind}</span></> : null}
-          {res.provisioningState ? <><span className={styles.detailKey}>State</span><span>{res.provisioningState}</span></> : null}
+          <span className={styles.detailKey}>Type</span><span className={styles.detailVal}>{res.type}</span>
+          <span className={styles.detailKey}>Resource group</span><span className={styles.detailVal}>{res.resourceGroup}</span>
+          <span className={styles.detailKey}>Region</span><span className={styles.detailVal}>{res.location}</span>
+          {res.sku || res.kind ? <><span className={styles.detailKey}>SKU / Kind</span><span className={styles.detailVal}>{res.sku || res.kind}</span></> : null}
+          {res.provisioningState ? <><span className={styles.detailKey}>State</span><span className={styles.detailVal}>{res.provisioningState}</span></> : null}
         </div>
 
         <div className={styles.vizLinks}>

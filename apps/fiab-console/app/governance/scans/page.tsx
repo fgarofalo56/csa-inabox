@@ -42,7 +42,7 @@ const SOURCE_KINDS = [
 
 const useStyles = makeStyles({
   empty: { padding: tokens.spacingVerticalXXL, color: tokens.colorNeutralForeground3, fontSize: tokens.fontSizeBase200, textAlign: 'center' },
-  form: { display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalM, minWidth: '380px' },
+  form: { display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalM, minWidth: '380px', maxWidth: '100%' },
 });
 
 function runColor(status?: string): 'success' | 'danger' | 'warning' | 'informative' {
@@ -147,7 +147,7 @@ export default function GovernanceScansPage() {
   const sourceColumns: LoomColumn<Source>[] = [
     { key: 'name', label: 'Name', sortable: true, filterable: true, getValue: (src) => src.name, render: (src) => <strong>{src.name}</strong> },
     { key: 'kind', label: 'Kind', sortable: true, filterable: true, getValue: (src) => src.kind || '—', render: (src) => <Badge appearance="outline" size="small">{src.kind || '—'}</Badge> },
-    { key: 'endpoint', label: 'Endpoint', sortable: true, filterable: true, getValue: (src) => src.endpoint || '—', render: (src) => <code style={{ fontSize: 11 }}>{src.endpoint || '—'}</code> },
+    { key: 'endpoint', label: 'Endpoint', sortable: true, filterable: true, getValue: (src) => src.endpoint || '—', render: (src) => <code style={{ fontSize: 11, overflowWrap: 'anywhere', wordBreak: 'break-word' }}>{src.endpoint || '—'}</code> },
     { key: 'collectionId', label: 'Collection', sortable: true, filterable: true, getValue: (src) => src.collectionId || '—', render: (src) => src.collectionId || '—' },
     {
       key: 'actions', label: '', sortable: false, filterable: false, width: 160,
@@ -247,18 +247,18 @@ export default function GovernanceScansPage() {
           )}
           {scans?.map((sc) => (
             <div key={sc.id} style={{ marginBottom: 16, paddingBottom: 12, borderBottom: `1px solid ${tokens.colorNeutralStroke2}` }}>
-              <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 6 }}>
-                <Subtitle2>{sc.name}</Subtitle2>
+              <div style={{ display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: 8, marginBottom: 6 }}>
+                <Subtitle2 style={{ minWidth: 0, overflowWrap: 'anywhere', wordBreak: 'break-word' }}>{sc.name}</Subtitle2>
                 {sc.kind && <Badge appearance="outline" size="small">{sc.kind}</Badge>}
                 <div style={{ flex: 1 }} />
                 <Button size="small" icon={<Play20Regular />} onClick={() => triggerRun(sc.name)}>Run now</Button>
                 <Button size="small" appearance="subtle" onClick={() => loadRuns(sc.name)}>History</Button>
               </div>
               {(runsByScan[sc.name] || []).map((run) => (
-                <div key={run.runId} style={{ fontSize: 12, padding: '2px 0', display: 'flex', gap: 8, alignItems: 'center' }}>
+                <div key={run.runId} style={{ fontSize: 12, padding: '2px 0', display: 'flex', flexWrap: 'wrap', gap: 8, alignItems: 'center' }}>
                   <Badge appearance="tint" color={runColor(run.status)} size="small">{run.status || '—'}</Badge>
                   <span style={{ color: tokens.colorNeutralForeground3 }}>{run.startTime ? new Date(run.startTime).toLocaleString() : run.runId}</span>
-                  {run.errorMessage && <span style={{ color: tokens.colorPaletteRedForeground1 }}>· {run.errorMessage}</span>}
+                  {run.errorMessage && <span style={{ color: tokens.colorPaletteRedForeground1, minWidth: 0, overflowWrap: 'anywhere', wordBreak: 'break-word' }}>· {run.errorMessage}</span>}
                 </div>
               ))}
             </div>

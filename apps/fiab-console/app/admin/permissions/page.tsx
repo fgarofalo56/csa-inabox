@@ -67,10 +67,11 @@ const useStyles = makeStyles({
   hidden: { display: 'none' },
   fieldNote: { marginTop: tokens.spacingVerticalXS },
   minW0: { minWidth: 0 },
-  capDesc: { display: 'block', marginTop: tokens.spacingVerticalXS },
+  capDesc: { display: 'block', marginTop: tokens.spacingVerticalXS, overflowWrap: 'anywhere' },
   capId: {
     display: 'block', marginTop: tokens.spacingVerticalXS,
     fontFamily: 'monospace', color: tokens.colorNeutralForeground3,
+    overflowWrap: 'anywhere', wordBreak: 'break-word',
   },
   noteStack: { marginTop: tokens.spacingVerticalS },
 });

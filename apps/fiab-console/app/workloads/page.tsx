@@ -45,7 +45,7 @@ const useStyles = makeStyles({
     paddingBottom: tokens.spacingVerticalL, borderBottom: `1px solid ${tokens.colorNeutralStroke2}`,
   },
   toolbarSpacer: { flex: 1 },
-  section: { marginBottom: '32px' },
+  section: { marginBottom: tokens.spacingVerticalXXL },
   sectionHeader: {
     display: 'flex', alignItems: 'center', gap: tokens.spacingHorizontalM, marginBottom: tokens.spacingVerticalM,
   },
@@ -57,8 +57,8 @@ const useStyles = makeStyles({
   },
   grid: {
     display: 'grid',
-    gridTemplateColumns: 'repeat(auto-fill, minmax(320px, 1fr))',
-    gap: '14px',
+    gridTemplateColumns: 'repeat(auto-fill, minmax(min(320px, 100%), 1fr))',
+    gap: tokens.spacingHorizontalL,
   },
   card: {
     padding: tokens.spacingHorizontalL, borderRadius: tokens.borderRadiusXLarge,
@@ -76,7 +76,7 @@ const useStyles = makeStyles({
   cardHeader: { display: 'flex', alignItems: 'flex-start', gap: tokens.spacingHorizontalM },
   cardActions: { position: 'absolute', top: tokens.spacingVerticalS, right: tokens.spacingHorizontalS },
   cardRel: { position: 'relative' },
-  dialogCol: { display: 'flex', flexDirection: 'column', gap: tokens.spacingHorizontalM, minWidth: '440px' },
+  dialogCol: { display: 'flex', flexDirection: 'column', gap: tokens.spacingHorizontalM, minWidth: '440px', maxWidth: '100%' },
   iconBox: {
     width: '40px', height: '40px', borderRadius: tokens.borderRadiusXLarge,
     display: 'flex', alignItems: 'center', justifyContent: 'center',
@@ -93,11 +93,12 @@ const useStyles = makeStyles({
     backgroundColor: tokens.colorNeutralBackground3,
   },
   titleCol: { display: 'flex', flexDirection: 'column', gap: tokens.spacingHorizontalXXS, minWidth: 0, flex: 1 },
-  name: { fontSize: '15px', fontWeight: 600, color: tokens.colorNeutralForeground1 },
+  name: { fontSize: '15px', fontWeight: 600, color: tokens.colorNeutralForeground1, overflowWrap: 'anywhere', wordBreak: 'break-word', minWidth: 0 },
   desc: {
     fontSize: '13px', color: tokens.colorNeutralForeground2, lineHeight: 1.45,
     overflow: 'hidden', display: '-webkit-box',
     WebkitLineClamp: 3, WebkitBoxOrient: 'vertical',
+    overflowWrap: 'anywhere', wordBreak: 'break-word', minWidth: 0,
   },
   features: { display: 'flex', gap: tokens.spacingHorizontalXS, flexWrap: 'wrap', marginTop: tokens.spacingVerticalXS },
   pill: {
@@ -107,7 +108,7 @@ const useStyles = makeStyles({
     whiteSpace: 'nowrap',
   },
   empty: {
-    padding: '32px', borderRadius: '10px',
+    padding: '32px', borderRadius: tokens.borderRadiusXLarge,
     border: `1px dashed ${tokens.colorNeutralStroke2}`,
     color: tokens.colorNeutralForeground3,
     fontSize: '13px', textAlign: 'center',

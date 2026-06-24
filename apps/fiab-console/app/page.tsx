@@ -36,7 +36,7 @@ const useStyles = makeStyles({
     background: 'radial-gradient(circle at 90% 10%, rgba(255,255,255,0.18), transparent 45%), radial-gradient(circle at 10% 110%, rgba(216,159,61,0.30), transparent 50%)',
     pointerEvents: 'none',
   },
-  heroCopy: { flex: 1, position: 'relative' },
+  heroCopy: { flex: 1, minWidth: 0, position: 'relative' },
   heroTitle: { color: 'white', fontWeight: 700, letterSpacing: '-0.01em' },
   heroSub: { color: 'rgba(255,255,255,0.92)', fontSize: tokens.fontSizeBase400, lineHeight: 1.6, maxWidth: '720px', marginTop: tokens.spacingVerticalM },
   heroChips: { display: 'flex', gap: tokens.spacingHorizontalS, flexWrap: 'wrap', marginTop: tokens.spacingVerticalXL },

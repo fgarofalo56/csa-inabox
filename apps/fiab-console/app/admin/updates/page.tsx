@@ -217,6 +217,7 @@ const useStyles = makeStyles({
     backgroundColor: tokens.colorNeutralBackground1,
     border: `1px solid ${tokens.colorNeutralStroke2}`,
     fontFamily: 'Consolas, monospace', fontSize: tokens.fontSizeBase500, fontWeight: 600,
+    overflowWrap: 'anywhere',
   },
   actions: { display: 'flex', gap: tokens.spacingHorizontalS, marginTop: tokens.spacingVerticalL, flexWrap: 'wrap' },
   notes: {
@@ -240,12 +241,13 @@ const useStyles = makeStyles({
     backgroundColor: tokens.colorNeutralBackground2,
     border: `1px solid ${tokens.colorNeutralStroke2}`,
   },
-  applyName: { fontFamily: 'Consolas, monospace', fontSize: tokens.fontSizeBase300, minWidth: '180px' },
-  applyImage: { fontFamily: 'Consolas, monospace', fontSize: tokens.fontSizeBase100, color: tokens.colorNeutralForeground3, overflowWrap: 'anywhere' },
+  applyName: { fontFamily: 'Consolas, monospace', fontSize: tokens.fontSizeBase300, minWidth: '180px', overflowWrap: 'anywhere' },
+  applyImage: { flex: 1, minWidth: 0, fontFamily: 'Consolas, monospace', fontSize: tokens.fontSizeBase100, color: tokens.colorNeutralForeground3, overflowWrap: 'anywhere' },
   ok: { color: tokens.colorPaletteGreenForeground1 },
-  fail: { color: tokens.colorPaletteRedForeground1 },
-  dim: { color: tokens.colorNeutralForeground3 },
-  dialogList: { margin: `${tokens.spacingVerticalS} 0 0`, paddingLeft: '18px', fontSize: tokens.fontSizeBase300 },
+  fail: { flex: 1, minWidth: 0, color: tokens.colorPaletteRedForeground1, overflowWrap: 'anywhere', wordBreak: 'break-word' },
+  dim: { flex: 1, minWidth: 0, color: tokens.colorNeutralForeground3, overflowWrap: 'anywhere' },
+  dialogList: { margin: `${tokens.spacingVerticalS} 0 0`, paddingLeft: '18px', fontSize: tokens.fontSizeBase300, overflowWrap: 'anywhere' },
+  codeWrap: { overflowWrap: 'anywhere', wordBreak: 'break-word' },
 });
 
 export default function UpdatesPage() {
@@ -427,12 +429,12 @@ export default function UpdatesPage() {
                   {applyGate.missingImages && applyGate.missingImages.length > 0 && (
                     <ul className={s.dialogList}>
                       {applyGate.missingImages.map((m) => (
-                        <li key={m.app}><code>{m.ref}</code> (HTTP {m.status})</li>
+                        <li key={m.app}><code className={s.codeWrap}>{m.ref}</code> (HTTP {m.status})</li>
                       ))}
                     </ul>
                   )}
                   {applyGate.missingEnv && applyGate.missingEnv.length > 0 && (
-                    <div>Set: <code>{applyGate.missingEnv.join(', ')}</code></div>
+                    <div>Set: <code className={s.codeWrap}>{applyGate.missingEnv.join(', ')}</code></div>
                   )}
                 </MessageBarBody>
               </MessageBar>

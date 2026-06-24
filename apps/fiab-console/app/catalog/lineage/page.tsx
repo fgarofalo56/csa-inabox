@@ -9,7 +9,8 @@ import {
 
 const useStyles = makeStyles({
   form: {
-    display: 'grid', gridTemplateColumns: '1fr 2fr 1fr auto', gap: tokens.spacingHorizontalM, alignItems: 'flex-end',
+    display: 'grid', gridTemplateColumns: 'minmax(0, 1fr) minmax(0, 2fr) minmax(0, 1fr) auto', gap: tokens.spacingHorizontalM, alignItems: 'flex-end',
+    maxWidth: '100%',
     marginBottom: tokens.spacingVerticalL, padding: tokens.spacingVerticalM, border: `1px solid ${tokens.colorNeutralStroke2}`, borderRadius: tokens.borderRadiusLarge,
   },
 });

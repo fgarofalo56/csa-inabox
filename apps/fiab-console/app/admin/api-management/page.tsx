@@ -29,6 +29,7 @@ interface GateResponse {
 
 const useStyles = makeStyles({
   intro: { color: tokens.colorNeutralForeground2, lineHeight: 1.55, marginBottom: tokens.spacingVerticalL },
+  gateBody: { overflowWrap: 'anywhere', wordBreak: 'break-word' },
 });
 
 export default function ApiManagementPage() {
@@ -81,7 +82,7 @@ export default function ApiManagementPage() {
         </Body1>
         <MessageBar intent="warning">
           <MessageBarTitle>APIM not configured</MessageBarTitle>
-          <MessageBarBody>
+          <MessageBarBody className={styles.gateBody}>
             {gate.reason} — {gate.hint}
           </MessageBarBody>
         </MessageBar>

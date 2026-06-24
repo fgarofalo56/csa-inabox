@@ -42,7 +42,11 @@ interface ScanDef { id: string; name: string; kind?: string }
 const useStyles = makeStyles({
   field: { display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalM },
   banner: { marginBottom: tokens.spacingVerticalL },
-  explainerList: { margin: '8px 0 0 0', paddingLeft: '20px' },
+  explainerList: { marginTop: tokens.spacingVerticalS, marginBottom: 0, marginLeft: 0, marginRight: 0, paddingLeft: tokens.spacingHorizontalXL },
+  // Wrap long no-space tokens (env-var names, bicep paths, error strings) inside
+  // MessageBars so they break onto the next line instead of forcing horizontal
+  // overflow on narrow viewports.
+  bannerBody: { overflowWrap: 'anywhere', wordBreak: 'break-word' },
 });
 
 const CLASSIFICATION_OPTIONS = ['PII', 'PHI', 'PCI', 'Confidential', 'Internal', 'Public', 'Restricted', 'Other'];
@@ -178,36 +182,36 @@ export default function ClassificationsPage() {
       {/* Live Purview sync state — replaces the old static "applied on next scan" banner. */}
       {!purviewConfigured ? (
         <MessageBar intent='warning' className={s.banner}>
-          <MessageBarBody>
+          <MessageBarBody className={s.bannerBody}>
             <MessageBarTitle>Microsoft Purview not provisioned</MessageBarTitle>
             Rules are saved to the Loom catalog. To push them as Purview custom classification rules and run scans, set <code>LOOM_PURVIEW_ACCOUNT</code> (deployed by <code>platform/fiab/bicep/modules/admin-plane/catalog.bicep</code>) and grant the Console UAMI <strong>Data Source Administrator</strong> on the root collection.
           </MessageBarBody>
         </MessageBar>
       ) : sync?.error ? (
         <MessageBar intent='error' className={s.banner}>
-          <MessageBarBody>
+          <MessageBarBody className={s.bannerBody}>
             <MessageBarTitle>Purview sync failed</MessageBarTitle>
             {sync.error} — verify the Console UAMI holds <strong>Data Source Administrator</strong> on <code>{purview?.account}</code> (root collection). Rules are still saved in the Loom catalog.
           </MessageBarBody>
         </MessageBar>
       ) : sync?.synced ? (
         <MessageBar intent='success' className={s.banner}>
-          <MessageBarBody>
+          <MessageBarBody className={s.bannerBody}>
             <MessageBarTitle>Synced to Microsoft Purview</MessageBarTitle>
             {sync.ruleCount} classification rule(s) pushed to <code>{sync.account}</code>{sync.scanRulesets?.length ? ` and included in scan rule sets: ${sync.scanRulesets.map((rs) => rs.name).join(', ')}` : ''}. Use <strong>Run scan now</strong> to apply them. Existing classifications on assets are not removed retroactively.
           </MessageBarBody>
         </MessageBar>
       ) : (
         <MessageBar intent='info' className={s.banner}>
-          <MessageBarBody>
+          <MessageBarBody className={s.bannerBody}>
             <MessageBarTitle>Connected to Microsoft Purview</MessageBarTitle>
             Account <code>{purview?.account}</code>. Adding or deleting a rule syncs it to Purview automatically; use <strong>Sync to Purview</strong> to re-push the full taxonomy, then <strong>Run scan now</strong>.
           </MessageBarBody>
         </MessageBar>
       )}
 
-      {error && <MessageBar intent='error' className={s.banner}><MessageBarBody><MessageBarTitle>Could not load rules</MessageBarTitle>{error}</MessageBarBody></MessageBar>}
-      {actionErr && <MessageBar intent='error' className={s.banner}><MessageBarBody>{actionErr}</MessageBarBody></MessageBar>}
+      {error && <MessageBar intent='error' className={s.banner}><MessageBarBody className={s.bannerBody}><MessageBarTitle>Could not load rules</MessageBarTitle>{error}</MessageBarBody></MessageBar>}
+      {actionErr && <MessageBar intent='error' className={s.banner}><MessageBarBody className={s.bannerBody}>{actionErr}</MessageBarBody></MessageBar>}
 
       <Section
         title='Classification rules'
@@ -349,7 +353,7 @@ function RunScanDialog({ open, onClose, account }: { open: boolean; onClose: () 
                   {(scans || []).map((sc) => <Option key={sc.id || sc.name} value={sc.name}>{sc.name}</Option>)}
                 </Dropdown>
               </div>
-              {msg && <MessageBar intent={msg.intent}><MessageBarBody>{msg.text}</MessageBarBody></MessageBar>}
+              {msg && <MessageBar intent={msg.intent}><MessageBarBody className={s.bannerBody}>{msg.text}</MessageBarBody></MessageBar>}
             </div>
           </DialogContent>
           <DialogActions>

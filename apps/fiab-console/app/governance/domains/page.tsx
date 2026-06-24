@@ -94,17 +94,17 @@ export default function GovernanceDomainsPage() {
 
   return (
     <GovernanceShell sectionTitle="Domains">
-      <MessageBar intent="info" style={{ marginBottom: 16 }}>
+      <MessageBar intent="info" style={{ marginBottom: tokens.spacingVerticalL }}>
         <MessageBarBody>
           <MessageBarTitle>Read-only catalog view</MessageBarTitle>
           Manage domains, assign workspaces, and configure delegated settings from the{' '}
-          <Link href="/admin/domains" style={{ fontWeight: 600 }}>Admin portal → Domains</Link>.
+          <Link href="/admin/domains" style={{ fontWeight: tokens.fontWeightSemibold }}>Admin portal → Domains</Link>.
         </MessageBarBody>
       </MessageBar>
 
       {error && (
-        <MessageBar intent="error" style={{ marginBottom: 16 }}>
-          <MessageBarBody><MessageBarTitle>Could not load domains</MessageBarTitle>{error}</MessageBarBody>
+        <MessageBar intent="error" style={{ marginBottom: tokens.spacingVerticalL }}>
+          <MessageBarBody style={{ overflowWrap: 'anywhere', wordBreak: 'break-word' }}><MessageBarTitle>Could not load domains</MessageBarTitle>{error}</MessageBarBody>
         </MessageBar>
       )}
 
@@ -123,7 +123,7 @@ export default function GovernanceDomainsPage() {
         <MessageBar intent="info">
           <MessageBarBody>
             No domains defined yet. Create your first domain in the{' '}
-            <Link href="/admin/domains" style={{ fontWeight: 600 }}>Admin portal → Domains</Link>.
+            <Link href="/admin/domains" style={{ fontWeight: tokens.fontWeightSemibold }}>Admin portal → Domains</Link>.
           </MessageBarBody>
         </MessageBar>
       ) : (
@@ -133,13 +133,13 @@ export default function GovernanceDomainsPage() {
               <div className={s.cardHead}>
                 <DomainImageChip imageKey={d.imageKey} icon={d.icon} themeColor={d.themeColor} fallbackColor={d.color} size={44} />
                 <div style={{ minWidth: 0 }}>
-                  <Subtitle2 style={{ display: 'block' }}>{d.name}</Subtitle2>
-                  <Caption1 style={{ color: tokens.colorNeutralForeground3 }}>
+                  <Subtitle2 style={{ display: 'block', overflowWrap: 'anywhere', wordBreak: 'break-word' }}>{d.name}</Subtitle2>
+                  <Caption1 style={{ color: tokens.colorNeutralForeground3, overflowWrap: 'anywhere', wordBreak: 'break-word' }}>
                     {d.parentId ? `Subdomain of ${nameById[d.parentId] || d.parentId}` : 'Root domain'}
                   </Caption1>
                 </div>
               </div>
-              {d.description && <Body1 style={{ color: tokens.colorNeutralForeground2 }}>{d.description}</Body1>}
+              {d.description && <Body1 style={{ color: tokens.colorNeutralForeground2, overflowWrap: 'anywhere', wordBreak: 'break-word' }}>{d.description}</Body1>}
               <div className={s.badgeRow}>
                 <Badge appearance="tint" color={d.workspaceCount ? 'brand' : 'subtle'} size="small">
                   {d.workspaceCount || 0} workspace{(d.workspaceCount || 0) === 1 ? '' : 's'}

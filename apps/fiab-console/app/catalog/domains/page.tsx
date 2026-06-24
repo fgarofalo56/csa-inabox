@@ -92,6 +92,7 @@ const useStyles = makeStyles({
   termDesc: {
     color: tokens.colorNeutralForeground3,
     display: '-webkit-box', WebkitLineClamp: 2, WebkitBoxOrient: 'vertical', overflow: 'hidden',
+    overflowWrap: 'anywhere', wordBreak: 'break-word', minWidth: 0,
   },
   count: { color: tokens.colorNeutralForeground3, fontWeight: 400 },
   field: { display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalXXS, marginBottom: tokens.spacingVerticalM },
@@ -240,7 +241,7 @@ export default function CatalogDomainsPage() {
         </span>
       ),
     },
-    { key: 'id', label: 'ID', width: 130, sortable: true, filterable: true, getValue: (d) => d.id, render: (d) => <code style={{ fontSize: tokens.fontSizeBase100 }}>{d.id}</code> },
+    { key: 'id', label: 'ID', width: 130, sortable: true, filterable: true, getValue: (d) => d.id, render: (d) => <code style={{ fontSize: tokens.fontSizeBase100, overflowWrap: 'anywhere', wordBreak: 'break-word' }}>{d.id}</code> },
     {
       key: 'parent', label: 'Parent', width: 150, sortable: true, filterable: true,
       getValue: (d) => d.parentId ? (nameById[d.parentId] || d.parentId) : 'Root',

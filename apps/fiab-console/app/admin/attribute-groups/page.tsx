@@ -49,8 +49,8 @@ const useStyles = makeStyles({
     padding: tokens.spacingVerticalS, borderBottom: `1px solid ${tokens.colorNeutralStroke2}`,
   },
   attrMain: { display: 'flex', flexDirection: 'column', flex: '1 1 auto', minWidth: 0, gap: tokens.spacingVerticalXXS },
-  attrName: { fontWeight: tokens.fontWeightSemibold },
-  attrMeta: { display: 'flex', gap: tokens.spacingHorizontalXS, alignItems: 'center', flexWrap: 'wrap' },
+  attrName: { fontWeight: tokens.fontWeightSemibold, overflowWrap: 'anywhere', wordBreak: 'break-word' },
+  attrMeta: { display: 'flex', gap: tokens.spacingHorizontalXS, alignItems: 'center', flexWrap: 'wrap', minWidth: 0, overflowWrap: 'anywhere' },
   attrEditor: {
     display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalS,
     border: `1px solid ${tokens.colorNeutralStroke2}`, borderRadius: tokens.borderRadiusMedium,
@@ -58,6 +58,7 @@ const useStyles = makeStyles({
   },
   attrHeadRow: {
     display: 'flex', alignItems: 'center', justifyContent: 'space-between',
+    gap: tokens.spacingHorizontalS, flexWrap: 'wrap',
     marginBottom: tokens.spacingVerticalS,
   },
   reorderCol: { display: 'flex', flexDirection: 'column' },

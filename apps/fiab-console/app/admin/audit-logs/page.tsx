@@ -73,9 +73,14 @@ const useStyles = makeStyles({
     alignItems: 'flex-end',
   },
   mono: {
-    fontFamily: 'Consolas, monospace',
-    fontSize: '12px',
+    fontFamily: tokens.fontFamilyMonospace,
+    fontSize: tokens.fontSizeBase200,
     color: tokens.colorNeutralForeground2,
+    // Long IDs / JSON change blobs must wrap inside the (clipped) table cell
+    // instead of being truncated mid-character or spilling into a neighbor.
+    overflowWrap: 'anywhere',
+    wordBreak: 'break-word',
+    minWidth: 0,
   },
   count: { color: tokens.colorNeutralForeground3, whiteSpace: 'nowrap' },
   loadingBox: {

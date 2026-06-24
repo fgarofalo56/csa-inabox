@@ -153,7 +153,7 @@ const useStyles = makeStyles({
   listTitle: { fontWeight: tokens.fontWeightSemibold, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' },
   listTitleRow: { display: 'flex', alignItems: 'center', gap: tokens.spacingHorizontalS, minWidth: 0 },
   listSummary: { color: tokens.colorNeutralForeground3, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' },
-  listLinks: { display: 'flex', alignItems: 'center', gap: tokens.spacingHorizontalM, flexShrink: 0 },
+  listLinks: { display: 'flex', alignItems: 'center', gap: tokens.spacingHorizontalM, flexShrink: 0, flexWrap: 'wrap', justifyContent: 'flex-end' },
   listPrimary: {
     display: 'inline-flex', alignItems: 'center', gap: '4px',
     color: tokens.colorBrandForeground1, fontWeight: tokens.fontWeightSemibold,

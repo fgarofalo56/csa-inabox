@@ -36,9 +36,9 @@ import { getItemTypeColor } from '@/lib/components/item-type-icon';
 
 const useStyles = makeStyles({
   back: { marginBottom: tokens.spacingVerticalM },
-  header: { display: 'flex', alignItems: 'center', gap: tokens.spacingHorizontalL, marginBottom: tokens.spacingVerticalS },
+  header: { display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: tokens.spacingHorizontalL, marginBottom: tokens.spacingVerticalS },
   spacer: { flex: 1 },
-  meta: { fontSize: '11px', color: tokens.colorNeutralForeground3 },
+  meta: { fontSize: '11px', color: tokens.colorNeutralForeground3, overflowWrap: 'anywhere', wordBreak: 'break-word', minWidth: 0 },
   tabs: { marginBottom: tokens.spacingVerticalM },
 });
 
@@ -58,7 +58,7 @@ export default function WorkspaceDetailPage(props: { params: Promise<{ id: strin
       title={ws?.name ?? 'Workspace'}
       subtitle={ws?.description}
       actions={ws ? (
-        <div style={{ display: 'flex', gap: 4 }}>
+        <div style={{ display: 'flex', flexWrap: 'wrap', gap: tokens.spacingHorizontalXS }}>
           <ManageAccessPane workspaceId={ws.id} />
           <WorkspaceSettingsDrawer workspace={ws} />
           <NewItemDialog workspaceId={ws.id} />

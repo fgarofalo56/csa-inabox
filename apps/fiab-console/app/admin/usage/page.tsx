@@ -153,6 +153,7 @@ const useStyles = makeStyles({
   },
   barTrack: {
     flex: 1,
+    minWidth: 0,
     height: '8px',
     backgroundColor: tokens.colorNeutralBackground3,
     borderRadius: tokens.borderRadiusSmall,
@@ -219,6 +220,12 @@ const useStyles = makeStyles({
   },
   featureSelect: { minWidth: '180px' },
   docIcon: { fontSize: tokens.fontSizeBase300, verticalAlign: 'middle' },
+  /** Inline env-var token inside a MessageBar — long unbroken names must wrap
+   * rather than force horizontal overflow on narrow viewports. */
+  codeToken: {
+    overflowWrap: 'anywhere',
+    wordBreak: 'break-word',
+  },
 });
 
 export default function UsagePage() {
@@ -442,7 +449,7 @@ export default function UsagePage() {
                 <MessageBar intent="info">
                   <MessageBarBody>
                     <MessageBarTitle>Active-user telemetry not connected</MessageBarTitle>
-                    Set <code>LOOM_LOG_ANALYTICS_WORKSPACE_ID</code> (and grant the Console UAMI{' '}
+                    Set <code className={s.codeToken}>LOOM_LOG_ANALYTICS_WORKSPACE_ID</code> (and grant the Console UAMI{' '}
                     <strong>Log Analytics Reader</strong> on the workspace) to read daily active users from the
                     Loom Console request telemetry. Inventory and edit activity below come from Cosmos and are
                     always live.
@@ -480,7 +487,7 @@ export default function UsagePage() {
                 <MessageBar intent="info">
                   <MessageBarBody>
                     <MessageBarTitle>Feature-adoption telemetry not connected</MessageBarTitle>
-                    Set <code>LOOM_LOG_ANALYTICS_WORKSPACE_ID</code> to break down requests + distinct users by
+                    Set <code className={s.codeToken}>LOOM_LOG_ANALYTICS_WORKSPACE_ID</code> to break down requests + distinct users by
                     feature. Click a feature to drill the most-active-items table to that feature&apos;s traffic.
                   </MessageBarBody>
                 </MessageBar>
@@ -618,7 +625,7 @@ export default function UsagePage() {
                   <MessageBarBody>
                     <MessageBarTitle>Embedded analytics not configured</MessageBarTitle>
                     The native charts above are fully live. To embed a curated report, set{' '}
-                    <code>{embed.hint?.missingEnvVar || 'LOOM_USAGE_REPORT_KIND'}</code>
+                    <code className={s.codeToken}>{embed.hint?.missingEnvVar || 'LOOM_USAGE_REPORT_KIND'}</code>
                     {embed.hint?.followUp ? ` — ${embed.hint.followUp}` : '.'}
                   </MessageBarBody>
                   {embed.hint?.bicepStatus && (

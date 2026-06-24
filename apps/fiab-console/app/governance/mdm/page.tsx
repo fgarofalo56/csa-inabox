@@ -125,8 +125,8 @@ function ModelsTab({ models, loading, reload }: { models: MdmModel[]; loading: b
   const cols: LoomColumn<MdmModel>[] = [
     { key: 'name', label: 'Model', sortable: true, filterable: true, getValue: (x) => x.name, render: (x) => <Body1><strong>{x.name}</strong></Body1> },
     { key: 'entity', label: 'Entity', sortable: true, filterable: true, width: 140, getValue: (x) => x.entity, render: (x) => <Badge appearance="tint" size="small">{x.entity}</Badge> },
-    { key: 'source', label: 'Source table', sortable: true, filterable: true, getValue: (x) => x.sourceTable, render: (x) => <Caption1>{x.sourceTable}</Caption1> },
-    { key: 'golden', label: 'Golden table', sortable: true, filterable: true, getValue: (x) => x.goldenTable, render: (x) => <Caption1>{x.goldenTable}</Caption1> },
+    { key: 'source', label: 'Source table', sortable: true, filterable: true, getValue: (x) => x.sourceTable, render: (x) => <Caption1 style={{ display: 'block', overflowWrap: 'anywhere', wordBreak: 'break-word' }}>{x.sourceTable}</Caption1> },
+    { key: 'golden', label: 'Golden table', sortable: true, filterable: true, getValue: (x) => x.goldenTable, render: (x) => <Caption1 style={{ display: 'block', overflowWrap: 'anywhere', wordBreak: 'break-word' }}>{x.goldenTable}</Caption1> },
     { key: 'attrs', label: 'Match / Surv.', width: 120, getValue: (x) => x.matchAttributes.length, render: (x) => <Caption1>{x.matchAttributes.length} / {x.survivorship.length}</Caption1> },
     { key: 'actions', label: 'Actions', width: 96, render: (x) => (
       <span style={{ display: 'flex', gap: tokens.spacingHorizontalS }} onClick={(e) => e.stopPropagation()}>
@@ -349,8 +349,8 @@ function MatchTab({ models }: { models: MdmModel[] }) {
   }
 
   const cols: LoomColumn<MatchCandidate>[] = [
-    { key: 'a', label: 'Record A', sortable: true, filterable: true, getValue: (c) => c.idA, render: (c) => <Caption1>{c.idA}{c.sourceA ? ` (${c.sourceA})` : ''}</Caption1> },
-    { key: 'b', label: 'Record B', sortable: true, filterable: true, getValue: (c) => c.idB, render: (c) => <Caption1>{c.idB}{c.sourceB ? ` (${c.sourceB})` : ''}</Caption1> },
+    { key: 'a', label: 'Record A', sortable: true, filterable: true, getValue: (c) => c.idA, render: (c) => <Caption1 style={{ display: 'block', overflowWrap: 'anywhere', wordBreak: 'break-word' }}>{c.idA}{c.sourceA ? ` (${c.sourceA})` : ''}</Caption1> },
+    { key: 'b', label: 'Record B', sortable: true, filterable: true, getValue: (c) => c.idB, render: (c) => <Caption1 style={{ display: 'block', overflowWrap: 'anywhere', wordBreak: 'break-word' }}>{c.idB}{c.sourceB ? ` (${c.sourceB})` : ''}</Caption1> },
     { key: 'score', label: 'Match score', sortable: true, width: 200, getValue: (c) => c.score, render: (c) => (
       <span className={s.pctCell}><span className={s.bar}><span className={s.barFill} style={{ width: `${c.score}%`, backgroundColor: c.score >= 95 ? 'var(--loom-accent-green)' : 'var(--loom-accent-amber)' }} /></span><Text size={200}>{c.score.toFixed(1)}%</Text></span>) },
     { key: 'steward', label: 'Stewardship', width: 150, getValue: (c) => (approved.has(pairKey(c.idA, c.idB)) ? 1 : 0), render: (c) => {
@@ -424,7 +424,7 @@ function GoldenTab({ models }: { models: MdmModel[] }) {
   const cols: LoomColumn<unknown[]>[] = (data?.columns || []).map((c, i) => ({
     key: c, label: c, sortable: true, filterable: true,
     getValue: (row) => { const v = (row as unknown[])[i]; return v == null ? '' : String(v); },
-    render: (row) => <Caption1>{(() => { const v = (row as unknown[])[i]; return v == null ? '—' : Array.isArray(v) ? v.join(', ') : String(v); })()}</Caption1>,
+    render: (row) => <Caption1 style={{ display: 'block', overflowWrap: 'anywhere', wordBreak: 'break-word' }}>{(() => { const v = (row as unknown[])[i]; return v == null ? '—' : Array.isArray(v) ? v.join(', ') : String(v); })()}</Caption1>,
   }));
   const goldenIdIdx = (data?.columns || []).findIndex((c) => c.toLowerCase() === 'golden_id');
   const rowId = (row: unknown[]) => (goldenIdIdx >= 0 ? String(row[goldenIdIdx]) : JSON.stringify(row));
@@ -469,7 +469,7 @@ function RunsTab() {
     { key: 'model', label: 'Model', sortable: true, filterable: true, getValue: (r) => r.modelName, render: (r) => <Body1>{r.modelName}</Body1> },
     { key: 'kind', label: 'Type', sortable: true, width: 110, getValue: (r) => r.kind, render: (r) => <Badge appearance="tint" size="small">{r.kind}</Badge> },
     { key: 'count', label: 'Count', sortable: true, width: 100, getValue: (r) => r.count ?? -1, render: (r) => <Caption1>{r.count ?? '—'}</Caption1> },
-    { key: 'detail', label: 'Detail', filterable: true, getValue: (r) => r.detail || '', render: (r) => <Caption1>{r.detail}</Caption1> },
+    { key: 'detail', label: 'Detail', filterable: true, getValue: (r) => r.detail || '', render: (r) => <Caption1 style={{ display: 'block', overflowWrap: 'anywhere', wordBreak: 'break-word' }}>{r.detail}</Caption1> },
     { key: 'by', label: 'Run by', sortable: true, filterable: true, getValue: (r) => r.ranBy, render: (r) => <Caption1>{r.ranBy}</Caption1> },
   ];
   return (

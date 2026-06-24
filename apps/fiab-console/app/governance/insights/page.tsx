@@ -213,12 +213,17 @@ export default function InsightsPage() {
                 {
                   key: 'displayName', label: 'Item', sortable: true, filterable: true,
                   getValue: (it) => it.displayName,
-                  render: (it) => <><strong>{it.displayName}</strong><Caption1 style={{ display: 'block', color: tokens.colorNeutralForeground3 }}>{it.itemType}</Caption1></>,
+                  render: (it) => <div style={{ minWidth: 0, overflowWrap: 'anywhere' }}><strong>{it.displayName}</strong><Caption1 style={{ display: 'block', color: tokens.colorNeutralForeground3 }}>{it.itemType}</Caption1></div>,
                 },
                 {
                   key: 'classifications', label: 'Classifications', sortable: false, filterable: true,
                   getValue: (it) => it.classifications.join(' '),
-                  render: (it) => <>{it.classifications.map((c) => <Badge key={c} appearance="tint" size="small" style={{ marginRight: tokens.spacingHorizontalXS }}>{c}</Badge>)}<strong style={{ marginLeft: tokens.spacingHorizontalXS }}>({it.count})</strong></>,
+                  render: (it) => (
+                    <div style={{ display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: tokens.spacingHorizontalXS, minWidth: 0 }}>
+                      {it.classifications.map((c) => <Badge key={c} appearance="tint" size="small">{c}</Badge>)}
+                      <strong>({it.count})</strong>
+                    </div>
+                  ),
                 },
                 {
                   key: 'open', label: '', sortable: false, filterable: false, width: 90,

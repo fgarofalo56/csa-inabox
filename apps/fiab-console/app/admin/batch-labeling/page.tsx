@@ -67,7 +67,7 @@ const useStyles = makeStyles({
   swatch: { width: '14px', height: '14px', borderRadius: tokens.borderRadiusSmall, display: 'inline-block', verticalAlign: 'middle', flexShrink: 0 },
   pickerRow: { display: 'flex', gap: tokens.spacingHorizontalL, alignItems: 'flex-end', flexWrap: 'wrap', marginBottom: tokens.spacingVerticalM },
   field: { display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalXS, minWidth: '260px' },
-  optRow: { display: 'flex', alignItems: 'center', gap: tokens.spacingHorizontalS },
+  optRow: { display: 'flex', alignItems: 'center', gap: tokens.spacingHorizontalS, flexWrap: 'wrap', minWidth: 0 },
   opts: { display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalS, marginTop: tokens.spacingVerticalS },
   labelDropdown: { minWidth: '260px' },
   pickerDivider: { marginTop: tokens.spacingVerticalM, marginBottom: tokens.spacingVerticalM },

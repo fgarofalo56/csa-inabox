@@ -121,9 +121,9 @@ export default function ClassificationsPage() {
             {types.map((t) => (
               <div key={t.id} className={s.taxRow}>
                 <span className={s.swatch} style={{ backgroundColor: t.color || tokens.colorNeutralStroke1 }} />
-                <strong style={{ minWidth: 140 }}>{t.name}</strong>
+                <strong style={{ minWidth: 140, overflowWrap: 'anywhere', wordBreak: 'break-word' }}>{t.name}</strong>
                 <Badge appearance="tint" size="small">{t.sensitivity}</Badge>
-                <Caption1 style={{ color: tokens.colorNeutralForeground3, flex: 1 }}>{t.description || ''}</Caption1>
+                <Caption1 style={{ color: tokens.colorNeutralForeground3, flex: 1, minWidth: 0, overflowWrap: 'anywhere', wordBreak: 'break-word' }}>{t.description || ''}</Caption1>
                 <Button size="small" appearance="subtle" icon={<Delete16Regular />} disabled={taxBusy}
                   aria-label={`Remove ${t.name}`} onClick={() => removeType(t.id)} />
               </div>
