@@ -725,6 +725,70 @@ async function probeDatabricks(): Promise<CheckResult> {
   }
 }
 
+async function probeDeltaSharing(): Promise<CheckResult> {
+  const base = { id: 'probe-delta-sharing', category: 'azure-services' as const, title: 'Delta Sharing — inbound providers + publishing', severity: 'recommended' as const };
+  if (!has('LOOM_DATABRICKS_HOSTNAME') && !has('LOOM_DATABRICKS_HOSTNAMES')) {
+    return {
+      ...base, status: 'warn',
+      detail: 'Databricks / Unity Catalog not bound — Delta Sharing needs a Databricks workspace.',
+      remediation: 'Set LOOM_DATABRICKS_HOSTNAME to enable the Marketplace "Data shares" flow (subscribe to inbound Delta shares from an activation file + publish outbound shares). Delta Sharing is an Azure Databricks Unity Catalog feature (no Fabric dependency).',
+      redeploy: true,
+    };
+  }
+  // The grant SQL/script, pre-filled with THIS deployment's UAMI principal — the
+  // one-step fix a Databricks metastore admin runs (the UAMI cannot self-grant).
+  const grantScript = [
+    '# Grant the Console UAMI the Unity Catalog metastore SHARING privileges so the',
+    '# Marketplace "Data shares" flow works — inbound (CREATE PROVIDER, add a share',
+    '# from an activation file) AND outbound (CREATE SHARE/RECIPIENT). Run as a',
+    '# Databricks METASTORE ADMIN (the UAMI cannot grant itself). Paste in a',
+    '# Databricks SQL editor / notebook, or use scripts/csa-loom/grant-databricks-delta-sharing.sh.',
+    `GRANT CREATE PROVIDER  ON METASTORE TO \`${CTX.uamiClientId}\`;`,
+    `GRANT CREATE SHARE     ON METASTORE TO \`${CTX.uamiClientId}\`;`,
+    `GRANT CREATE RECIPIENT ON METASTORE TO \`${CTX.uamiClientId}\`;`,
+  ].join('\n');
+  const portalSteps = [
+    `Open the Databricks workspace SQL editor (or a notebook) as a metastore admin: https://${env('LOOM_DATABRICKS_HOSTNAME')}.`,
+    'Run the three GRANT statements below (they grant the Console UAMI CREATE PROVIDER / SHARE / RECIPIENT on the metastore).',
+    'Inbound (adding a share from an activation file) needs CREATE PROVIDER; publishing outbound needs CREATE SHARE + CREATE RECIPIENT.',
+    'Return here and click Re-run audit — this check turns green once the grant lands.',
+  ];
+  let r: import('@/lib/azure/unity-catalog-client').DeltaSharingReadiness;
+  try {
+    const { deltaSharingReadiness } = await import('@/lib/azure/unity-catalog-client');
+    r = await withTimeout(deltaSharingReadiness(), 8000);
+  } catch (e: any) {
+    return {
+      ...base, status: 'warn',
+      detail: `Delta Sharing readiness probe failed: ${e?.message || String(e)}`,
+      remediation: 'Confirm the Console UAMI is SCIM-provisioned into the Databricks workspace and the workspace is reachable, then grant the metastore sharing privileges (below).',
+      redeploy: true, portalSteps, fixScript: grantScript,
+    };
+  }
+  if (r.reason === 'not_configured') {
+    return { ...base, status: 'warn', detail: r.message || 'Databricks not bound.', remediation: 'Set LOOM_DATABRICKS_HOSTNAME to enable Delta Sharing.', redeploy: true };
+  }
+  if (r.reason === 'unreachable') {
+    return { ...base, status: 'warn', detail: r.message || 'Unity Catalog metastore unreachable.', remediation: 'Verify the workspace is network-reachable and the Console UAMI is SCIM-provisioned into it.', redeploy: true, docs: 'https://learn.microsoft.com/azure/databricks/data-sharing/' };
+  }
+  if (r.reason === 'ready') {
+    return {
+      ...base, status: 'pass',
+      detail: `Delta Sharing ready on metastore '${r.metastoreName}' — the Console UAMI can add inbound providers (activation-file shares) and publish outbound shares/recipients. Open (token) sharing scope: ${r.externalSharingEnabled ? 'enabled (INTERNAL_AND_EXTERNAL)' : 'internal-only'}.`,
+      docs: 'https://learn.microsoft.com/azure/databricks/data-sharing/',
+    };
+  }
+  // privileges_missing — the live error the operator hit (CREATE PROVIDER denied).
+  const p = r.privileges;
+  return {
+    ...base, status: 'warn',
+    detail: `The Console UAMI lacks Unity Catalog metastore sharing privileges on '${r.metastoreName || 'the metastore'}' (CREATE PROVIDER: ${p.createProvider ? 'yes' : 'NO'}, CREATE SHARE: ${p.createShare ? 'yes' : 'NO'}, CREATE RECIPIENT: ${p.createRecipient ? 'yes' : 'NO'}). Adding an inbound Delta share from an activation file needs CREATE PROVIDER.${r.message ? ' ' + r.message : ''}`,
+    remediation: 'A Databricks metastore admin grants the Console UAMI CREATE PROVIDER / SHARE / RECIPIENT on the metastore — the UAMI cannot self-grant. Run scripts/csa-loom/grant-databricks-delta-sharing.sh, or paste the SQL below in a Databricks SQL editor as metastore admin. This grant should be applied day-one by the post-deploy bootstrap.',
+    redeploy: true, portalSteps, fixScript: grantScript,
+    docs: 'https://learn.microsoft.com/azure/databricks/data-governance/unity-catalog/manage-privileges/',
+  };
+}
+
 async function probeDlpGraphRoles(): Promise<CheckResult> {
   const base = { id: 'probe-dlp-graph-roles', category: 'catalog-governance' as const, title: 'DLP / Information-Protection Graph roles', severity: 'optional' as const };
   if (env('LOOM_DLP_ENABLED') !== 'true') {
@@ -824,16 +888,17 @@ export interface AuditReport {
 /** Run the full self-audit. `now` is passed in so the engine stays pure. */
 export async function runSelfAudit(now: string): Promise<AuditReport> {
   const results: CheckResult[] = ENV_CHECKS.map(evalEnv);
-  const [cosmos, aoai, purviewMap, searchGov, databricks, dlpRoles, posture] = await Promise.all([
+  const [cosmos, aoai, purviewMap, searchGov, databricks, deltaSharing, dlpRoles, posture] = await Promise.all([
     probeCosmos(),
     probeAoai(),
     probePurviewDataMap(),
     probeGovernanceSearchIndex(),
     probeDatabricks(),
+    probeDeltaSharing(),
     probeDlpGraphRoles(),
     probePostureFunction(),
   ]);
-  results.push(cosmos, aoai, purviewMap, searchGov, databricks, dlpRoles, posture, ...securityChecks());
+  results.push(cosmos, aoai, purviewMap, searchGov, databricks, deltaSharing, dlpRoles, posture, ...securityChecks());
 
   // Augment specific findings whose fix needs more than (or wasn't given) the
   // generic env-var recipe — RBAC/Graph grants, and the security env-checks.

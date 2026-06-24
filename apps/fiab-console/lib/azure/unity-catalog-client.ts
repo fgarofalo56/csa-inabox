@@ -1111,3 +1111,112 @@ export async function searchUnity(q: string, limit = 50): Promise<UCSearchHit[]>
   }
   return hits;
 }
+
+// ============================================================
+// Delta Sharing readiness — does the Console identity actually have what it
+// needs to consume inbound shares (CREATE PROVIDER) + publish outbound (CREATE
+// SHARE/RECIPIENT) on the Unity Catalog metastore? Surfaced in the System Health
+// self-audit + the Marketplace data-shares gate so the enabled/grantable state
+// is visible (and the exact grant is one click away). Best-effort + degrades
+// gracefully — never throws (returns a reason + the remediation hint instead).
+// ============================================================
+
+export interface DeltaSharingReadiness {
+  /** A Databricks workspace + UC metastore is bound (LOOM_DATABRICKS_HOSTNAME). */
+  configured: boolean;
+  /** The metastore_summary read succeeded. */
+  reachable: boolean;
+  host?: string;
+  metastoreName?: string;
+  metastoreId?: string;
+  /** INTERNAL | INTERNAL_AND_EXTERNAL — EXTERNAL ⇒ open (token) sharing allowed. */
+  deltaSharingScope?: string;
+  externalSharingEnabled: boolean;
+  /** The Console UAMI application (client) id — the UC principal grants target. */
+  uamiPrincipal?: string;
+  isMetastoreAdmin: boolean;
+  privileges: { createProvider: boolean; createShare: boolean; createRecipient: boolean };
+  /** Add an inbound share from an activation file (CREATE PROVIDER) is possible. */
+  canConsumeInbound: boolean;
+  /** Publish outbound shares + recipients is possible. */
+  canPublish: boolean;
+  reason: 'ready' | 'not_configured' | 'privileges_missing' | 'unreachable' | 'unknown';
+  message?: string;
+}
+
+export async function deltaSharingReadiness(): Promise<DeltaSharingReadiness> {
+  const uami = (process.env.LOOM_UAMI_CLIENT_ID || process.env.AZURE_CLIENT_ID || '').trim();
+  const base: DeltaSharingReadiness = {
+    configured: false, reachable: false, externalSharingEnabled: false,
+    uamiPrincipal: uami || undefined, isMetastoreAdmin: false,
+    privileges: { createProvider: false, createShare: false, createRecipient: false },
+    canConsumeInbound: false, canPublish: false, reason: 'unknown',
+  };
+
+  let hosts: string[] = [];
+  try {
+    hosts = await resolveWorkspaceHostnames();
+  } catch {
+    return { ...base, reason: 'not_configured', message: 'No Databricks workspace bound (LOOM_DATABRICKS_HOSTNAME unset). Delta Sharing is a Unity Catalog feature and needs a Databricks workspace.' };
+  }
+  if (!hosts.length) {
+    return { ...base, reason: 'not_configured', message: 'No Databricks workspace bound. Delta Sharing needs a Databricks workspace + Unity Catalog metastore.' };
+  }
+  const host = hosts[0];
+
+  let summary: any;
+  try {
+    // metastore_summary is readable by any workspace user and returns the
+    // assigned metastore + its delta-sharing scope + owner in one call.
+    summary = await ucFetch<any>(host, '/api/2.1/unity-catalog/metastore-summary');
+  } catch (e: any) {
+    return { ...base, configured: true, host, reason: 'unreachable', message: `Could not read the Unity Catalog metastore summary: ${e?.message || e}. Confirm the Console UAMI is SCIM-provisioned into the workspace and the workspace is network-reachable.` };
+  }
+
+  const metastoreId: string | undefined = summary?.metastore_id;
+  const metastoreName: string | undefined = summary?.name;
+  const scope: string | undefined = summary?.delta_sharing_scope;
+  const externalSharingEnabled = typeof scope === 'string' && /EXTERNAL/i.test(scope);
+  const owner: string | undefined = summary?.owner;
+  const isAdmin = !!(uami && owner && String(owner).toLowerCase() === uami.toLowerCase());
+
+  let priv = { createProvider: isAdmin, createShare: isAdmin, createRecipient: isAdmin };
+  let message: string | undefined;
+
+  if (!isAdmin && metastoreId && uami) {
+    try {
+      const perms = await ucFetch<any>(
+        host,
+        `/api/2.1/unity-catalog/permissions/metastore/${encodeURIComponent(metastoreId)}`,
+        { query: { principal: uami } },
+      );
+      const assigned = new Set<string>();
+      for (const a of perms?.privilege_assignments || []) {
+        if (!a?.principal || String(a.principal).toLowerCase() === uami.toLowerCase()) {
+          for (const p of a?.privileges || []) assigned.add(String(p).toUpperCase());
+        }
+      }
+      priv = {
+        createProvider: assigned.has('CREATE_PROVIDER'),
+        createShare: assigned.has('CREATE_SHARE'),
+        createRecipient: assigned.has('CREATE_RECIPIENT'),
+      };
+    } catch (e: any) {
+      // The UAMI may not be allowed to READ the metastore grant table (that read
+      // itself needs metastore-admin in some configs). Leave privileges false and
+      // surface the grant remediation honestly rather than claiming ready.
+      message = `Could not read the metastore grant table for the Console identity (${e?.message || e}). If Delta Sharing isn't working, apply the CREATE PROVIDER / SHARE / RECIPIENT grant.`;
+    }
+  }
+
+  const canConsumeInbound = isAdmin || priv.createProvider;
+  const canPublish = isAdmin || (priv.createShare && priv.createRecipient);
+  const reason: DeltaSharingReadiness['reason'] = (canConsumeInbound && canPublish) ? 'ready' : 'privileges_missing';
+
+  return {
+    configured: true, reachable: true, host, metastoreName, metastoreId,
+    deltaSharingScope: scope, externalSharingEnabled, uamiPrincipal: uami,
+    isMetastoreAdmin: isAdmin, privileges: priv, canConsumeInbound, canPublish,
+    reason, message,
+  };
+}
