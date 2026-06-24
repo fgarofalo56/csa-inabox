@@ -749,9 +749,13 @@ export function evaluateVnetGatewayReadiness(
       status: delegatedSubnets.length ? 'met' : 'unmet',
       detail: delegatedSubnets.length
         ? `Delegated subnet(s): ${delegatedSubnets.map((s) => `${s.vnet}/${s.subnet}`).join(', ')}.`
-        : 'No subnet is delegated to Microsoft.PowerPlatform/vnetaccesslinks. Delegate a dedicated ' +
-          'subnet (the reserved GatewaySubnet cannot be used) and grant the creator ' +
-          'Microsoft.Network/virtualNetworks/subnets/join/action.',
+        : 'No subnet is delegated to Microsoft.PowerPlatform/vnetaccesslinks. Loom now provisions a ' +
+          'dedicated delegated subnet (snet-pp-vnet-gateway) DAY-ONE in the hub VNet — redeploy ' +
+          'admin-plane/network.bicep (or, on a VNet that predates this, run: az network vnet subnet ' +
+          'create -g <hub-rg> --vnet-name <hub-vnet> -n snet-pp-vnet-gateway --address-prefixes ' +
+          '<cidr>.10.0/24 --delegations Microsoft.PowerPlatform/vnetaccesslinks). The reserved ' +
+          'GatewaySubnet cannot be used. When you create the Power Platform enterprise policy, grant ' +
+          'its principal Microsoft.Network/virtualNetworks/subnets/join/action on this subnet.',
       azureDetectable: true,
       docUrl: VNET_GW_CREATE_DOC,
     },
