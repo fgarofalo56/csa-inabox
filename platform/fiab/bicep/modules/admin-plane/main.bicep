@@ -1036,7 +1036,7 @@ var loomPipelineBackend = loomBackends.?pipeline ?? 'synapse'
 @allowed(['adf-cdc', 'synapse-link', 'fabric'])
 param loomMirrorBackend string = 'adf-cdc'
 
-@description('Azure-native backend selectors for Fabric-flavored items, bundled into one object to stay under the ARM 256-parameter template limit. Each key defaults to the Azure-native path; set a value to "fabric"/"powerbi" to opt into the Fabric/Power BI alternative for that item (per no-fabric-dependency rule). The orgVisuals key is an opt-out toggle (default "enabled") for the Embed codes (F22) + Organizational visuals (F23) container grant + LOOM_ORG_VISUALS_URL env — set "disabled" to honest-gate those panes while keeping the medallion lake wired.')
+@description('Azure-native backend selectors for Fabric-flavored items, bundled into one object to stay under the ARM 256-parameter template limit. Each key defaults to the Azure-native path; set a value to "fabric"/"powerbi" to opt into the Fabric/Power BI alternative for that item (per no-fabric-dependency rule). The orgVisuals key is an opt-out toggle (default "enabled") for the Embed codes (F22) + Organizational visuals (F23) container grant + LOOM_ORG_VISUALS_URL env — set "disabled" to honest-gate those panes while keeping the medallion lake wired. The powerBiMcpClientId / powerBiMcpEndpoint keys configure the OPT-IN Power BI remote MCP server (Copilot agentic, preview): set powerBiMcpClientId to an Entra app (client) id to enable the per-user On-Behalf-Of Power BI MCP path (LOOM_POWERBI_MCP_CLIENT_ID / LOOM_POWERBI_MCP_ENDPOINT); empty (default) keeps the Azure-native semantic-model/report authoring path and the honest Copilot gate.')
 param loomBackends object = {
   event: 'eventhubs'
   activator: 'azure-monitor'
@@ -1054,6 +1054,13 @@ param loomBackends object = {
   // every downstream LOOM_WAREHOUSE_BACKEND / LOOM_PIPELINE_BACKEND env is unchanged.
   warehouse: 'synapse-dedicated'
   pipeline: 'synapse'
+  // Power BI remote MCP server (Copilot agentic / preview) — STRICTLY OPT-IN
+  // (no-fabric-dependency). Folded here (not a standalone param) to stay under
+  // the ARM 256-param ceiling. Empty client id = opt-out (Azure-native authoring
+  // stays default + honest Copilot gate). Set powerBiMcpClientId to opt in; the
+  // endpoint defaults to the Commercial host (override for sovereign clouds).
+  powerBiMcpClientId: ''
+  powerBiMcpEndpoint: 'https://api.fabric.microsoft.com/v1/mcp/powerbi'
 }
 
 
@@ -1081,6 +1088,62 @@ param loomAasServerUrl string = ''
 
 @description('HTTPS XMLA endpoint for semantic-model authoring that requires the XMLA write surface (e.g. Automatic aggregations, RLS/OLS role authoring). Azure-native default: an Azure Analysis Services server (https://<server>.asazure.windows.net/xmla, or .asazure.usgovcloudapi.net in Gov). A Power BI Premium / Fabric capacity XMLA endpoint (https://api.powerbi.com/xmla, https://api.powerbigov.us/xmla) is an opt-in alternative selected purely by URL. Empty = the Aggregations + Security surfaces render but show an honest MessageBar gate (no Fabric dependency).')
 param loomPowerbiXmlaEndpoint string = ''
+
+// ---------------------------------------------------------------------------
+// Power BI remote MCP server (Copilot agentic / preview) — STRICTLY OPT-IN.
+//
+// The Power BI MCP server is an already-hosted REMOTE Streamable-HTTP endpoint
+// (https://api.fabric.microsoft.com/v1/mcp/powerbi) that exposes schema-aware
+// QUERY of semantic models + Copilot-powered DAX generation (read-only, run
+// under the signed-in user's RBAC). It does NOT fit the MCP_DEPLOY_CATALOG
+// (pull-an-OCI-image → Container App) shape; it is surfaced as a new
+// "remote built-in" MCP catalog source (lib/mcp/catalog.ts REMOTE_BUILTIN_MCP)
+// and consumed by the existing copilot/MCP infra (buildMcpShim → mcp-client).
+//
+// AUTH = Microsoft Entra ID OAuth On-Behalf-Of the signed-in user (authMethod
+// 'entra-obo'). There is NO service secret for this endpoint: at login the
+// Console mints a delegated Power BI token (acquireTokenSilent) on resource
+// https://analysis.windows.net/powerbi/api with delegated scopes
+// Dataset.Read.All, MLModel.Execute.All, Workspace.Read.All, caches it
+// per-user (lib/azure/pbi-user-token-store.ts), and mcp-client sends it as the
+// Bearer header. This REUSES the EXISTING confidential client
+// (LOOM_MSAL_CLIENT_ID + the loom-msal-client-secret KV secretRef wired below),
+// so NO new secret literal/param is introduced here.
+//
+// no-fabric-dependency: this is OPT-IN ONLY and never on a default code path —
+// Loom's Azure-native semantic-model + report authoring (Cosmos / AAS / the
+// dax-tools/report-tools/tabular-read-tool) stays the day-one DEFAULT. When
+// loomPowerBiMcpClientId is empty the env vars below are NOT emitted, so the
+// Copilot surface renders an honest MessageBar gate naming the exact env var
+// (LOOM_POWERBI_MCP_CLIENT_ID), the Entra app reg (3 delegated Power BI Service
+// permissions Dataset.Read.All / MLModel.Execute.All / Workspace.Read.All +
+// admin consent), and the Power BI tenant setting a PBI admin must enable
+// ("Users can use the Power BI Model Context Protocol server endpoint (preview)").
+//
+// Folded into the loomBackends object (consumed via the same-named vars below)
+// to stay under the ARM 256-parameter template limit — the identical pattern
+// already used for loomWarehouseBackend / loomPipelineBackend in this file.
+// Adding standalone params here would push the template to 258 params and fail
+// the bicep max-params hard limit (ARM allows at most 256). The opt-in contract
+// is unchanged: the operator opts IN by setting loomBackends.powerBiMcpClientId
+// (the Entra app/client id) and, optionally, loomBackends.powerBiMcpEndpoint
+// for a sovereign-cloud host; the day-one default is empty ⇒ the LOOM_POWERBI_MCP_*
+// env vars are NOT emitted ⇒ the Copilot surface shows the honest MessageBar gate.
+//   loomPowerBiMcpClientId — Entra app (client) id used for the per-user
+//     On-Behalf-Of token that authenticates the Power BI remote MCP server
+//     (Copilot agentic, preview). When set, the Console mints a delegated
+//     Power BI token (acquireTokenSilent on https://analysis.windows.net/powerbi/api,
+//     scopes Dataset.Read.All + MLModel.Execute.All + Workspace.Read.All) per
+//     signed-in user and calls the MCP endpoint. REQUIRES: this Entra app holds
+//     the 3 delegated Power BI Service permissions + tenant admin consent, AND a
+//     Power BI admin has enabled the tenant setting "Users can use the Power BI
+//     Model Context Protocol server endpoint (preview)". No new secret — OBO
+//     reuses the existing LOOM_MSAL_CLIENT_SECRET confidential client.
+//   loomPowerBiMcpEndpoint — HTTPS Streamable-HTTP endpoint of the Power BI
+//     remote MCP server. Defaults to the Commercial host; override only for a
+//     sovereign-cloud Power BI MCP host.
+var loomPowerBiMcpClientId = loomBackends.?powerBiMcpClientId ?? ''
+var loomPowerBiMcpEndpoint = loomBackends.?powerBiMcpEndpoint ?? 'https://api.fabric.microsoft.com/v1/mcp/powerbi'
 
 // NOTE: loomAasDatabase (TMSL Catalog) is declared once earlier in this file
 // (defaulted to 'model'). The column-editor path reuses the same param.
@@ -2769,6 +2832,25 @@ module appDeployments 'app-deployments.bicep' = if (containerPlatform == 'contai
           // to AAS / the honest config-gate.
           !empty(loomPowerbiXmlaEndpoint) ? [
             { name: 'LOOM_POWERBI_XMLA_ENDPOINT', value: loomPowerbiXmlaEndpoint }
+          ] : [],
+          // Power BI remote MCP server (Copilot agentic / preview) — STRICTLY
+          // OPT-IN per no-fabric-dependency.md. Only emitted when an Entra app
+          // (client) id is supplied; absence keeps the Azure-native
+          // semantic-model/report authoring path as the DEFAULT and lets the
+          // Copilot surface render the honest MessageBar gate (naming this env
+          // var, the Entra app's 3 delegated Power BI Service permissions +
+          // admin consent, and the Power BI tenant setting a PBI admin must
+          // enable). NO secret here: the runtime mints a per-user On-Behalf-Of
+          // delegated Power BI token (lib/azure/pbi-user-token-store.ts) using
+          // the EXISTING LOOM_MSAL_CLIENT_SECRET confidential client and sends
+          // it as the Bearer header (mcp-client authMethod 'entra-obo'). The
+          // remote-builtin catalog entry (lib/mcp/catalog.ts) carries the
+          // resource + delegated scopes; the Console reads only the client id +
+          // endpoint from here. This flows through the existing buildMcpShim →
+          // mcp_powerbiremote_* tool registration — no parallel system.
+          !empty(loomPowerBiMcpClientId) ? [
+            { name: 'LOOM_POWERBI_MCP_CLIENT_ID', value: loomPowerBiMcpClientId }
+            { name: 'LOOM_POWERBI_MCP_ENDPOINT', value: loomPowerBiMcpEndpoint }
           ] : [],
           !empty(loomStorageAccount) ? [
             { name: 'LOOM_BRONZE_URL',  value: 'https://${loomStorageAccount}.dfs.${environment().suffixes.storage}/bronze' }

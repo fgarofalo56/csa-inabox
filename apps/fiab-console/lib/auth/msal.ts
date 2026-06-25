@@ -16,6 +16,7 @@ import {
   PublicClientApplication,
   type Configuration,
 } from '@azure/msal-node';
+import { getPbiScope } from '@/lib/azure/cloud-endpoints';
 
 function authorityHost(): string {
   const cloud = (process.env.AZURE_CLOUD || 'AzureCloud').toLowerCase();
@@ -125,9 +126,25 @@ export interface UserClaims {
 
 /**
  * Acquire a token on-behalf-of the calling user for the requested
- * downstream scope. The user's session token is exchanged for a new
- * token scoped to (for example) Databricks SQL Warehouse / Synapse /
- * Power BI XMLA / ADX.
+ * downstream scope. The user's session token (a raw user assertion) is
+ * exchanged for a new token scoped to (for example) Databricks SQL Warehouse /
+ * Synapse / Power BI XMLA / ADX.
+ *
+ * POWER BI REMOTE MCP — which path mints the token:
+ *   - DEFAULT Console path: it does NOT call this OBO exchange. The signed-in
+ *     user's Power BI token is minted at login via
+ *     `acquireTokenSilent({ account, scopes: pbiOboScopes() })` and cached
+ *     (encrypted at rest) in the Cosmos pbi-user-token-store — the exact mirror
+ *     of the SQL user-token store. The chat orchestrator / MCP client then reads
+ *     that cached token back per-call (the session cookie holds claims only, not
+ *     a raw assertion, so silent-then-cache is the only workable path there).
+ *   - FALLBACK path: `acquireOboToken(userAssertion, pbiOboScopes())` — used
+ *     only where a RAW user assertion is actually available (e.g. the
+ *     internal-token MAF callback path), exchanging it on_behalf_of for the same
+ *     Power BI delegated scopes.
+ * Both are OPT-IN only (gated on LOOM_POWERBI_MCP_CLIENT_ID + the Power BI
+ * tenant setting) and never run on a default code path — Loom's Azure-native
+ * semantic-model / report authoring stays the default (no-fabric-dependency).
  */
 export async function acquireOboToken(
   userAssertion: string,
@@ -142,4 +159,49 @@ export async function acquireOboToken(
     throw new Error('OBO token acquisition failed');
   }
   return result.accessToken;
+}
+
+// ---------------------------------------------------------------------------
+// Power BI remote-MCP delegated (OBO) scopes — opt-in only
+// ---------------------------------------------------------------------------
+
+/**
+ * The three READ-ONLY Power BI delegated permissions the opt-in Power BI remote
+ * MCP server (https://api.fabric.microsoft.com/v1/mcp/powerbi) requests
+ * on-behalf-of the signed-in user: schema-aware QUERY of semantic models +
+ * Copilot-powered DAX generation, all under the user's own RBAC. These are the
+ * UNPREFIXED scope names; `pbiOboScopes()` prepends the sovereign-cloud-aware
+ * resource audience. Kept in lock-step with `REMOTE_BUILTIN_MCP.delegatedScopes`
+ * (lib/mcp/catalog.ts) — change both together.
+ */
+const PBI_DELEGATED_SCOPES = [
+  'Dataset.Read.All',
+  'MLModel.Execute.All',
+  'Workspace.Read.All',
+] as const;
+
+/**
+ * Resource-prefixed, sovereign-cloud-aware delegated scopes for the Power BI
+ * remote MCP OBO exchange. On Commercial this is, e.g.:
+ *   ['https://analysis.windows.net/powerbi/api/Dataset.Read.All',
+ *    'https://analysis.windows.net/powerbi/api/MLModel.Execute.All',
+ *    'https://analysis.windows.net/powerbi/api/Workspace.Read.All']
+ * and on GCC / GCC-High / DoD the audience shifts to the matching
+ * `analysis.usgovcloudapi.net` / `high.…` / `mil.…` host. The audience is
+ * derived from the canonical gov-aware `getPbiScope()` (its `/.default` suffix
+ * stripped) so the `analysis.* powerbi/api` host literal lives in exactly ONE
+ * place (cloud-endpoints.ts) and every sovereign boundary resolves correctly.
+ *
+ * Single source of truth for the Power BI OBO scope strings so callers
+ * (app/auth/callback's `acquireTokenSilent`, and the `acquireOboToken`
+ * assertion-fallback above) don't duplicate them. OPT-IN only — invoked solely
+ * when the Power BI remote MCP has been opted into (LOOM_POWERBI_MCP_CLIENT_ID +
+ * the Power BI tenant setting); never on a default code path
+ * (no-fabric-dependency).
+ */
+export function pbiOboScopes(): string[] {
+  // getPbiScope() → 'https://<analysis-host>/powerbi/api/.default'; strip the
+  // trailing '/.default' to recover the bare resource audience to prefix.
+  const resource = getPbiScope().replace(/\/\.default$/i, '');
+  return PBI_DELEGATED_SCOPES.map((scope) => `${resource}/${scope}`);
 }

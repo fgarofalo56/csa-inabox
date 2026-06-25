@@ -11,6 +11,19 @@
  * sync with buildDefaultRegistry(); /api/copilot/status reports the live
  * number.)
  *
+ * Power BI agentic (opt-in remote MCP): the Power BI remote MCP server
+ * (api.fabric.microsoft.com/v1/mcp/powerbi) is NOT a new default-path Fabric
+ * host. Its schema-aware semantic-model query + Copilot-DAX tools auto-register
+ * through buildMcpShim as `mcp_powerbiremote_*` ONLY when opted into
+ * (LOOM_POWERBI_MCP_CLIENT_ID + the PBI-admin tenant setting), and run under a
+ * per-USER Entra OBO bearer (pbi-user-token-store) — never the Console UAMI,
+ * never on the default path. The lightweight `powerbi_mcp_status` meta-tool
+ * reports that opt-in/connection state honestly (config + cached-token) so the
+ * Copilot can answer "connect Power BI" conversationally without contacting any
+ * Fabric host. Loom's Azure-native semantic-model/report authoring (dax_* /
+ * tabular_* / report_*) stays the day-one DEFAULT — see
+ * .claude/rules/no-fabric-dependency.md.
+ *
  * Sovereign clouds: the Fabric / Power BI / Activator tools hit
  * api.fabric.microsoft.com / api.powerbi.com, which have NO GCC-High / IL5 /
  * DoD endpoint (Fabric) or a separate sovereign host (Power BI →
@@ -79,6 +92,13 @@ import { asTable, asSummary } from '@/lib/components/copilot-result-tagger';
 import { buildActivatorTools } from '@/lib/copilot/activator-tools';
 import { resolvePersona, type CopilotPersonaDef } from './copilot-personas';
 import { registerDaxTools } from '@/lib/copilot/dax-tools';
+// Opt-in Power BI remote MCP (no-fabric-dependency): config state + per-user
+// delegated token. Used ONLY by the powerbi_mcp_status meta-tool below — never
+// to reach a Fabric/Power BI host on a default path. The remote MCP's tools
+// auto-register through buildMcpShim (entra-obo) when opted into.
+import { isPbiMcpConfigured, REMOTE_BUILTIN_MCP } from '@/lib/mcp/catalog';
+import { getPbiUserToken } from './pbi-user-token-store';
+import { POWERBI_REMOTE_MCP_GATE_TEXT } from '@/lib/copilot/powerbi-skills';
 
 // ---------- item-type slug normalization (build-assist robustness) ----------
 // The model often guesses item-type slugs with underscores or marketing names
@@ -616,6 +636,56 @@ export function buildDefaultRegistry(): LoomToolRegistry {
     handler: async ({ workspaceId, datasetId, notifyOption }) => {
       assertFabricFamilyAvailable('powerbi');
       return powerbi.refreshDataset(workspaceId, datasetId, { notifyOption: notifyOption || 'NoNotification' });
+    },
+  });
+  // powerbi_mcp_status — connection-state reporter for the OPT-IN Power BI remote
+  // MCP server (api.fabric.microsoft.com/v1/mcp/powerbi). Unlike the powerbi_*
+  // tools above it does NOT call assertFabricFamilyAvailable and never contacts a
+  // Fabric host: it only reads config (LOOM_POWERBI_MCP_CLIENT_ID via
+  // isPbiMcpConfigured) and whether THIS user has a still-valid cached delegated
+  // Power BI token (pbi-user-token-store). So it answers "connect Power BI / why
+  // isn't the Power BI MCP available" honestly on any cloud — surfacing the exact
+  // remediation (env var + Entra app reg + tenant setting) when not ready, with
+  // the Azure-native authoring tools still the default (no-fabric-dependency,
+  // no-vaporware).
+  r.register({
+    name: 'powerbi_mcp_status',
+    service: 'Power BI',
+    description:
+      'Report whether the OPT-IN Power BI remote MCP server is connectable for the current user. ' +
+      'Returns { configured, endpoint, tenantSetting, hasUserToken, ready, remediation } — `configured` ' +
+      'reflects whether the Entra app reg env var LOOM_POWERBI_MCP_CLIENT_ID is set, `hasUserToken` ' +
+      'whether the signed-in user has a still-valid cached delegated Power BI token, and `ready` when ' +
+      'both hold (its mcp_powerbiremote_* query + Copilot-DAX tools are then live). Use this to answer ' +
+      '"can I connect Power BI" / "why is the Power BI MCP unavailable"; when not ready, relay the ' +
+      'returned remediation. The Azure-native semantic-model/report authoring tools (dax_* / tabular_* / ' +
+      'report_*) work WITHOUT this — never claim a Power BI capability unless ready is true.',
+    whenToUse: 'Check if the opt-in Power BI remote MCP is connected for this user ("connect Power BI").',
+    parameters: obj({}),
+    handler: async (_args, ctx) => {
+      const configured = isPbiMcpConfigured();
+      // Real Cosmos read — null when the user never consented the PBI scopes or
+      // the cached token expired. No Fabric host is contacted here.
+      const hasUserToken = configured && !!(await getPbiUserToken(ctx.userOid));
+      const ready = configured && hasUserToken;
+      let remediation: string | undefined;
+      if (!configured) {
+        remediation = POWERBI_REMOTE_MCP_GATE_TEXT;
+      } else if (!hasUserToken) {
+        remediation =
+          'The Power BI remote MCP is configured, but you have no valid cached Power BI token. ' +
+          'Sign out and sign back in so Loom can mint a delegated token on your behalf (consent the ' +
+          'Power BI scopes Dataset.Read.All, MLModel.Execute.All, Workspace.Read.All). A Power BI admin ' +
+          `must also have enabled the tenant setting "${REMOTE_BUILTIN_MCP.tenantSetting}".`;
+      }
+      return {
+        configured,
+        endpoint: REMOTE_BUILTIN_MCP.endpoint,
+        tenantSetting: REMOTE_BUILTIN_MCP.tenantSetting,
+        hasUserToken,
+        ready,
+        ...(remediation ? { remediation } : {}),
+      };
     },
   });
 
@@ -1625,6 +1695,16 @@ export async function* orchestrate(opts: OrchestrateOptions): AsyncIterable<Orch
   // Best-effort: a missing/unreachable MCP server never breaks the chat. Skip
   // entirely for a scoped persona registry (registryOverride / registry) —
   // those expose a deliberately tight tool set.
+  //
+  // buildMcpShim is passed `userOid`: for the opt-in Power BI remote MCP (an
+  // `entra-obo` server) it resolves getPbiUserToken(userOid) and threads that
+  // per-USER delegated Power BI token through tools/list + tools/call, so its
+  // mcp_powerbiremote_* tools auto-register and run under the signed-in user's
+  // own Power BI RBAC — not the Console UAMI. When the user has no cached token
+  // (never consented / expired) that server is silently skipped here; the
+  // powerbi_mcp_status tool reports the honest remediation on demand. No Fabric
+  // host is contacted unless this opt-in server is configured + consented
+  // (no-fabric-dependency).
   if (!opts.registryOverride && !opts.registry) {
     try {
       const { buildMcpShim } = await import('./mcp-shim');

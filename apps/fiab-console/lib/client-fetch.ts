@@ -17,6 +17,15 @@
  * error/empty view (the non-resolving-catch half of the fix). A caller-supplied
  * signal is composed so component-unmount aborts still propagate.
  *
+ * It also carries SAME-SESSION CREDENTIALS by default (`credentials:'include'`)
+ * so the encrypted `loom_session` cookie reaches first-party /api BFF routes and
+ * `getSession()` authenticates the request — matching a bare same-origin
+ * `fetch`. Without this, callers behind the deployment edge (Front Door /
+ * NEXT_PUBLIC_API_BASE) get a spurious 401 `{error:'unauthenticated'}`. A
+ * caller-supplied `credentials` still wins (it follows the default in the init
+ * spread). clientFetch is only used for first-party /api routes, so this is a
+ * same-origin call with no third-party cookie exposure.
+ *
  * Pure transport — cloud-invariant, no Fabric/Azure host knowledge here.
  */
 
@@ -61,7 +70,16 @@ export async function clientFetch(
   }
 
   try {
-    return await fetch(input, { ...init, signal: controller.signal });
+    // `credentials:'include'` is placed BEFORE `...init` so it is the DEFAULT
+    // yet a caller-supplied `credentials` still wins, and `signal` stays our
+    // composed controller. This carries the encrypted `loom_session` cookie to
+    // first-party /api BFF routes so `getSession()` authenticates the request
+    // the same way a bare same-origin `fetch` does — without it, callers like
+    // the Manage-hub linked-services/datasets/integration-runtime panels reach
+    // the BFF unauthenticated at the deployment edge (Front Door /
+    // NEXT_PUBLIC_API_BASE) and get a spurious 401 {error:'unauthenticated'}.
+    // Same-origin first-party use only — no third-party cookie exposure.
+    return await fetch(input, { credentials: 'include', ...init, signal: controller.signal });
   } catch (err) {
     // Relabel the timeout-driven abort. The browser surfaces an AbortError whose
     // message is "signal is aborted without reason" — useless to an operator.

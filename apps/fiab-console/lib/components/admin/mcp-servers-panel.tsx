@@ -17,12 +17,12 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import {
   Button, Dialog, DialogTrigger, DialogContent, DialogBody, DialogTitle,
-  Dropdown, Option, Field, Input, Checkbox, Spinner, Badge,
+  Dropdown, Option, Field, Input, Checkbox, Spinner, Badge, Link,
   MessageBar, MessageBarBody, MessageBarTitle,
   Caption1, Body1, Text, makeStyles, tokens, Divider,
   Table, TableHeader, TableRow, TableHeaderCell, TableBody, TableCell,
 } from '@fluentui/react-components';
-import { Add20Regular, Edit20Regular, Delete20Regular, ArrowClockwise20Regular, Checkmark20Regular, Sparkle20Regular, Search20Regular, PlugDisconnected24Regular } from '@fluentui/react-icons';
+import { Add20Regular, Edit20Regular, Delete20Regular, ArrowClockwise20Regular, Checkmark20Regular, Sparkle20Regular, Search20Regular, PlugDisconnected24Regular, DataPie24Regular, Open16Regular } from '@fluentui/react-icons';
 import { Section } from '@/lib/components/ui/section';
 import { McpCatalogBrowser } from '@/lib/components/admin/mcp-catalog-wizard';
 import type { McpServerConfig, McpServerConfigDoc } from '@/lib/types/mcp-config';
@@ -103,6 +103,41 @@ const useStyles = makeStyles({
     textOverflow: 'ellipsis',
     whiteSpace: 'nowrap',
   },
+  // ── Power BI (remote) opt-in card ──────────────────────────────────────────
+  pbiCard: {
+    display: 'flex',
+    flexDirection: 'column',
+    gap: tokens.spacingVerticalM,
+    marginTop: tokens.spacingVerticalM,
+    padding: tokens.spacingHorizontalL,
+    borderRadius: tokens.borderRadiusLarge,
+    border: `${tokens.strokeWidthThin} solid ${tokens.colorBrandStroke2}`,
+    backgroundColor: tokens.colorNeutralBackground1,
+    boxShadow: tokens.shadow4,
+    transitionProperty: 'box-shadow',
+    transitionDuration: tokens.durationNormal,
+    transitionTimingFunction: tokens.curveEasyEase,
+    ':hover': { boxShadow: tokens.shadow16 },
+  },
+  pbiHead: { display: 'flex', alignItems: 'center', gap: tokens.spacingHorizontalM },
+  pbiIcon: { color: tokens.colorBrandForeground1, display: 'flex', alignItems: 'center', flexShrink: 0 },
+  pbiTitleCol: { display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalXXS, minWidth: 0 },
+  pbiTitleRow: { display: 'flex', alignItems: 'center', gap: tokens.spacingHorizontalS, flexWrap: 'wrap' },
+  pbiDesc: { color: tokens.colorNeutralForeground2 },
+  kvRow: { display: 'flex', gap: tokens.spacingHorizontalM, alignItems: 'baseline', flexWrap: 'wrap' },
+  kvKey: { color: tokens.colorNeutralForeground3, minWidth: '96px', flexShrink: 0 },
+  kvVal: { color: tokens.colorNeutralForeground1, overflowWrap: 'anywhere', wordBreak: 'break-word', fontFamily: tokens.fontFamilyMonospace },
+  scopeWrap: { display: 'flex', flexWrap: 'wrap', gap: tokens.spacingHorizontalXS, marginTop: tokens.spacingVerticalXS },
+  pbiFoot: {
+    display: 'flex',
+    alignItems: 'center',
+    gap: tokens.spacingHorizontalS,
+    flexWrap: 'wrap',
+    marginTop: tokens.spacingVerticalS,
+    paddingTop: tokens.spacingVerticalM,
+    borderTop: `${tokens.strokeWidthThin} solid ${tokens.colorNeutralStroke2}`,
+  },
+  docsLink: { display: 'inline-flex', alignItems: 'center', gap: tokens.spacingHorizontalXXS, fontSize: tokens.fontSizeBase200 },
 });
 
 function McpServerForm({
@@ -496,6 +531,334 @@ function BridgeMcpCard({
   );
 }
 
+/**
+ * Status shape returned by GET /api/admin/mcp-servers/powerbi. Unconfigured =>
+ * { configured:false, gate }; configured => the full opt-in descriptor + the
+ * registered-row state + per-user OBO token readiness. Mirrors the route exactly.
+ */
+interface PowerBiGate {
+  message: string;
+  envVar: string;
+  endpointEnv: string;
+  tenantSetting: string;
+  delegatedScopes: string[];
+  resource: string;
+  entraAppRegDoc: string;
+  tenantSettingDoc: string;
+}
+interface PowerBiStatus {
+  ok: boolean;
+  configured: boolean;
+  gate?: PowerBiGate;
+  id?: string;
+  name?: string;
+  category?: string;
+  endpoint?: string;
+  transport?: string;
+  auth?: string;
+  resource?: string;
+  clientId?: string;
+  delegatedScopes?: string[];
+  scopeUris?: string[];
+  tenantSetting?: string;
+  entraAppRegDoc?: string;
+  tenantSettingDoc?: string;
+  preview?: boolean;
+  optIn?: boolean;
+  registered?: boolean;
+  serverId?: string;
+  enabled?: boolean;
+  lastTestResult?: { at: string; toolCount: number; error?: string };
+  tokenReady?: boolean;
+  tokenNote?: string;
+}
+
+/**
+ * PowerBiRemoteMcpCard — the opt-in "Power BI (remote)" connect affordance.
+ *
+ * Surfaces the remote Power BI Model Context Protocol server (preview): an
+ * already-hosted Microsoft Streamable-HTTP endpoint reached with a per-USER
+ * Microsoft Entra OAuth On-Behalf-Of bearer (delegated, under the signed-in
+ * user's Power BI RBAC). It is STRICTLY OPT-IN and config-gated — read from GET
+ * /api/admin/mcp-servers/powerbi:
+ *   • configured:false → honest Fluent MessageBar (intent="warning") naming the
+ *     exact env var (LOOM_POWERBI_MCP_CLIENT_ID), the Power BI admin tenant
+ *     setting, and links to the Entra app-reg + tenant-setting docs. No raw
+ *     error, no empty stub (no-vaporware).
+ *   • configured:true → a Web-3.0 card (Loom tokens, elevation, Preview badge)
+ *     showing the endpoint, the three delegated scopes, the tenant-setting
+ *     requirement, per-user token readiness, plus a real Test connection button
+ *     (POST .../test-connection) and a Connect/Register button (POST .../powerbi).
+ *
+ * no-fabric-dependency: this is the ONLY Power BI / Fabric host the panel can
+ * reach and it never appears on a default path — Loom's Azure-native
+ * semantic-model + report authoring stays the day-one default.
+ */
+function PowerBiRemoteMcpCard({
+  onChanged,
+  busy,
+}: {
+  onChanged: () => void;
+  busy: boolean;
+}) {
+  const s = useStyles();
+  const [status, setStatus] = useState<PowerBiStatus | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [testing, setTesting] = useState(false);
+  const [testError, setTestError] = useState<string | null>(null);
+  const [testResult, setTestResult] = useState<{ toolCount: number; tools?: Array<{ name: string; description?: string }> } | null>(null);
+  const [connecting, setConnecting] = useState(false);
+  const [connectError, setConnectError] = useState<string | null>(null);
+  const [connectNote, setConnectNote] = useState<string | null>(null);
+
+  const refresh = useCallback(async () => {
+    try {
+      const r = await fetch('/api/admin/mcp-servers/powerbi');
+      const j = await r.json();
+      setStatus(j && j.ok ? j : null);
+    } catch {
+      setStatus(null);
+    }
+  }, []);
+
+  useEffect(() => {
+    let cancelled = false;
+    fetch('/api/admin/mcp-servers/powerbi')
+      .then((r) => r.json())
+      .then((j) => { if (!cancelled) setStatus(j && j.ok ? j : null); })
+      .catch(() => { if (!cancelled) setStatus(null); })
+      .finally(() => { if (!cancelled) setLoading(false); });
+    return () => { cancelled = true; };
+  }, []);
+
+  // entra-obo McpServerConfig for the Test connection probe (no secret — the
+  // per-user OBO token is resolved server-side from pbi-user-token-store).
+  const testConnection = useCallback(async () => {
+    if (!status?.configured || !status.endpoint) return;
+    setTesting(true); setTestError(null); setTestResult(null);
+    try {
+      const config: McpServerConfig = {
+        name: status.name || 'Power BI (remote)',
+        endpoint: status.endpoint,
+        authMethod: 'entra-obo',
+        oboResource: status.resource,
+        oboScopes: status.delegatedScopes,
+        enabled: true,
+        source: 'remote-builtin',
+        catalogId: status.id,
+      };
+      const r = await fetch('/api/admin/mcp-servers/test-connection', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ config }),
+      });
+      const j = await r.json();
+      if (!j.ok) { setTestError(j.error || 'Test failed'); return; }
+      setTestResult({ toolCount: j.toolCount, tools: j.tools });
+    } catch (e: any) {
+      setTestError(e?.message || String(e));
+    } finally { setTesting(false); }
+  }, [status]);
+
+  const connect = useCallback(async () => {
+    setConnecting(true); setConnectError(null); setConnectNote(null);
+    try {
+      const r = await fetch('/api/admin/mcp-servers/powerbi', { method: 'POST' });
+      const j = await r.json();
+      if (!j.ok) {
+        setConnectError(j.gate?.message || j.error || `HTTP ${r.status}`);
+        return;
+      }
+      // Surface the server-side connectivity probe honestly (no-vaporware): a
+      // 403 (tenant setting still off) or a not-yet-consented token reports here
+      // rather than implying a fake "connected".
+      const probe = j.probe || {};
+      if (probe.reachable) {
+        setConnectNote(`Connected — ${probe.toolCount ?? 0} Power BI tool${probe.toolCount === 1 ? '' : 's'} discovered.`);
+      } else if (probe.skipped) {
+        setConnectNote(probe.reason || 'Registered. Sign in again and consent the Power BI scopes to enable per-user access.');
+      } else if (probe.error) {
+        setConnectError(`Registered, but the live Power BI MCP probe failed: ${probe.error}`);
+      }
+      await refresh();
+      onChanged();
+    } catch (e: any) {
+      setConnectError(e?.message || String(e));
+    } finally { setConnecting(false); }
+  }, [refresh, onChanged]);
+
+  if (loading || !status) return null;
+
+  // Not opted in → honest warning gate (no-fabric-dependency + no-vaporware).
+  if (!status.configured) {
+    const g = status.gate;
+    return (
+      <MessageBar intent="warning" icon={<DataPie24Regular />}>
+        <MessageBarBody>
+          <MessageBarTitle>Power BI (remote) MCP — opt-in, not configured</MessageBarTitle>
+          {g?.message}
+          <Caption1 className={s.gateDetail}>
+            Set <code>{g?.envVar}</code> on the console to an Entra app (client) id whose registration
+            requests the delegated Power BI scopes{g?.delegatedScopes?.length ? ` (${g.delegatedScopes.join(', ')})` : ''}
+            {g?.resource ? <> on <code>{g.resource}</code></> : null}, and have a Power BI admin enable the tenant
+            setting “{g?.tenantSetting}”. Optionally override the endpoint with <code>{g?.endpointEnv}</code>.
+            {(g?.entraAppRegDoc || g?.tenantSettingDoc) && (
+              <span className={s.scopeWrap}>
+                {g?.entraAppRegDoc && (
+                  <Link href={g.entraAppRegDoc} target="_blank" rel="noreferrer" className={s.docsLink}>
+                    <Open16Regular /> Register an Entra app
+                  </Link>
+                )}
+                {g?.tenantSettingDoc && (
+                  <Link href={g.tenantSettingDoc} target="_blank" rel="noreferrer" className={s.docsLink}>
+                    <Open16Regular /> Power BI tenant settings
+                  </Link>
+                )}
+              </span>
+            )}
+          </Caption1>
+        </MessageBarBody>
+      </MessageBar>
+    );
+  }
+
+  // Opted in → rich connect card.
+  const lastErr = status.registered ? status.lastTestResult?.error : undefined;
+  return (
+    <div className={s.pbiCard}>
+      <div className={s.pbiHead}>
+        <span className={s.pbiIcon}><DataPie24Regular /></span>
+        <div className={s.pbiTitleCol}>
+          <div className={s.pbiTitleRow}>
+            <Text weight="semibold">{status.name || 'Power BI (remote)'}</Text>
+            {status.preview && <Badge appearance="tint" color="brand" size="small">Preview</Badge>}
+            <Badge appearance="outline" color="informative" size="small">Opt-in</Badge>
+            {status.registered && <Badge appearance="tint" color="success" size="small">Connected</Badge>}
+          </div>
+          <Caption1 className={s.meta}>{status.category || 'Power BI / Fabric'}</Caption1>
+        </div>
+      </div>
+
+      <Body1 className={s.pbiDesc}>
+        Schema-aware query of Power BI semantic models plus Copilot-powered DAX generation —
+        read-only, under your own Power BI RBAC via Microsoft Entra On-Behalf-Of. Loom’s
+        Azure-native semantic-model &amp; report authoring stays the default; this only augments it
+        when explicitly connected.
+      </Body1>
+
+      <div className={s.kvRow}>
+        <Caption1 className={s.kvKey}>Endpoint</Caption1>
+        <Caption1 className={s.kvVal}>{status.endpoint}</Caption1>
+      </div>
+      <div className={s.kvRow}>
+        <Caption1 className={s.kvKey}>Transport</Caption1>
+        <Caption1 className={s.kvVal}>Streamable HTTP · {status.auth || 'entra-obo'} (per-user)</Caption1>
+      </div>
+      {status.clientId && (
+        <div className={s.kvRow}>
+          <Caption1 className={s.kvKey}>Entra client</Caption1>
+          <Caption1 className={s.kvVal}>{status.clientId}</Caption1>
+        </div>
+      )}
+
+      <div>
+        <Caption1 className={s.kvKey}>Delegated scopes</Caption1>
+        <div className={s.scopeWrap}>
+          {(status.delegatedScopes || []).map((sc) => (
+            <Badge key={sc} appearance="outline" color="brand" size="small">{sc}</Badge>
+          ))}
+        </div>
+      </div>
+
+      {/* Honest infra requirement — the PBI-admin tenant setting cannot be probed
+          from the console, so it is surfaced as copy, not asserted. */}
+      <MessageBar intent="info">
+        <MessageBarBody>
+          A Power BI admin must enable the tenant setting “{status.tenantSetting}” for this endpoint
+          to respond; the first call returns a 403 until it is on.
+        </MessageBarBody>
+      </MessageBar>
+
+      {/* Per-user OBO token readiness (captured at login when scopes were consented). */}
+      {!status.tokenReady && (
+        <MessageBar intent="warning">
+          <MessageBarBody>
+            <MessageBarTitle>Power BI sign-in required</MessageBarTitle>
+            {status.tokenNote || 'Sign in again and consent the Power BI scopes to enable per-user access; no Power BI access token is cached for your account yet.'}
+          </MessageBarBody>
+        </MessageBar>
+      )}
+
+      {lastErr && (
+        <MessageBar intent="warning">
+          <MessageBarBody>
+            <MessageBarTitle>Last connectivity check failed</MessageBarTitle>
+            {lastErr}
+          </MessageBarBody>
+        </MessageBar>
+      )}
+
+      {testError && (
+        <MessageBar intent="error">
+          <MessageBarBody><MessageBarTitle>Test failed</MessageBarTitle>{testError}</MessageBarBody>
+        </MessageBar>
+      )}
+      {testResult && (
+        <MessageBar intent="success">
+          <MessageBarBody>
+            <MessageBarTitle>Connection successful</MessageBarTitle>
+            Found {testResult.toolCount} tool{testResult.toolCount === 1 ? '' : 's'}
+            {testResult.tools && testResult.tools.length > 0 && (
+              <div className={s.toolList}>
+                {testResult.tools.map((t) => <div key={t.name}>{t.name}</div>)}
+              </div>
+            )}
+          </MessageBarBody>
+        </MessageBar>
+      )}
+      {connectError && (
+        <MessageBar intent="error">
+          <MessageBarBody><MessageBarTitle>Connect failed</MessageBarTitle>{connectError}</MessageBarBody>
+        </MessageBar>
+      )}
+      {connectNote && !connectError && (
+        <MessageBar intent="success">
+          <MessageBarBody>{connectNote}</MessageBarBody>
+        </MessageBar>
+      )}
+
+      <div className={s.pbiFoot}>
+        {status.entraAppRegDoc && (
+          <Link href={status.entraAppRegDoc} target="_blank" rel="noreferrer" className={s.docsLink}>
+            <Open16Regular /> Entra app
+          </Link>
+        )}
+        {status.tenantSettingDoc && (
+          <Link href={status.tenantSettingDoc} target="_blank" rel="noreferrer" className={s.docsLink}>
+            <Open16Regular /> Tenant setting
+          </Link>
+        )}
+        <div className={s.spacer} />
+        <Button
+          icon={<ArrowClockwise20Regular />}
+          onClick={() => void testConnection()}
+          disabled={testing || connecting || busy}
+        >
+          {testing ? 'Testing…' : 'Test connection'}
+        </Button>
+        <Button
+          appearance="primary"
+          icon={status.registered ? <Checkmark20Regular /> : <Add20Regular />}
+          onClick={() => void connect()}
+          disabled={connecting || testing || busy}
+        >
+          {connecting ? 'Connecting…' : status.registered ? 'Re-register' : 'Connect Power BI'}
+        </Button>
+      </div>
+    </div>
+  );
+}
+
 export function McpServersPanel() {
   const s = useStyles();
   const [servers, setServers] = useState<McpServerConfigDoc[]>([]);
@@ -622,6 +985,12 @@ export function McpServersPanel() {
       <BuiltinMcpCard servers={servers} onRegister={(config) => save(undefined, config)} busy={saving} />
 
       <BridgeMcpCard servers={servers} onRegister={(config) => save(undefined, config)} busy={saving} />
+
+      {/* Power BI (remote) MCP — opt-in, config-gated (LOOM_POWERBI_MCP_CLIENT_ID
+          + a Power BI admin tenant setting). Registers itself via its own
+          /powerbi route (authMethod 'entra-obo', source 'remote-builtin'); on
+          success we reload the list so the new row appears below. */}
+      <PowerBiRemoteMcpCard onChanged={() => void load()} busy={saving} />
 
       <Divider />
       <Text weight="semibold">Browse library</Text>

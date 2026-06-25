@@ -9,7 +9,8 @@ import { getMsalClient } from '@/lib/auth/msal';
 import { encodeSessionCookie, COOKIE_NAME, MAX_AGE_SECS } from '@/lib/auth/session';
 import { saveUserToken } from '@/lib/azure/user-token-store';
 import { saveUserSqlToken } from '@/lib/azure/sql-user-token-store';
-import { armBase, getSqlSuffix } from '@/lib/azure/cloud-endpoints';
+import { savePbiUserToken } from '@/lib/azure/pbi-user-token-store';
+import { armBase, getSqlSuffix, getPbiScope } from '@/lib/azure/cloud-endpoints';
 import type { UserClaims } from '@/lib/auth/msal';
 
 export const runtime = 'nodejs';
@@ -69,6 +70,59 @@ async function captureUserSqlToken(
   } catch {
     // SQL scope not consented / not available — query routes set to "user's
     // identity" mode surface an honest gate instead of a silent failure.
+  }
+}
+
+/**
+ * Best-effort capture of the user's Power BI delegated access token for the
+ * remote Power BI Model Context Protocol server (preview). This is the OBO
+ * audience the PBI remote MCP runs under — every call into
+ * `https://api.fabric.microsoft.com/v1/mcp/powerbi` is authorized On-Behalf-Of
+ * the signed-in user with their own Power BI RBAC.
+ *
+ * OPT-IN ONLY (no-fabric-dependency.md): this runs SOLELY when
+ * `LOOM_POWERBI_MCP_CLIENT_ID` is set — i.e. an operator has explicitly opted
+ * into the Power BI remote MCP and registered the Entra app. With the var
+ * unset (the day-one default), this is a no-op and Loom's Azure-native
+ * semantic-model / report authoring path is unaffected. No Fabric / Power BI
+ * host is ever reached on the default path.
+ *
+ * The three delegated scopes (Dataset.Read.All, MLModel.Execute.All,
+ * Workspace.Read.All) are requested on the Power BI audience resource, whose
+ * sovereign-correct host comes from `getPbiScope()` (Commercial
+ * `analysis.windows.net/powerbi/api`; the GCC / GCC-High / DoD analysis hosts
+ * otherwise) — never a hard-coded Commercial literal.
+ *
+ * Same swallow-all contract as the ARM / SQL captures: ANY failure (var unset,
+ * scope not consented, silent-acquire fails, Cosmos unavailable) is swallowed so
+ * login proceeds unchanged. When no token is cached, the PBI MCP client surfaces
+ * an honest "sign in again / consent Power BI scopes" gate rather than failing
+ * mid-call. The token is never logged and is encrypted at rest by the store.
+ */
+async function captureUserPbiToken(
+  client: ReturnType<typeof getMsalClient>,
+  account: import('@azure/msal-node').AccountInfo,
+  oid: string,
+): Promise<void> {
+  // Opt-in gate: skip entirely unless the operator wired the PBI remote MCP.
+  if (!process.env.LOOM_POWERBI_MCP_CLIENT_ID?.trim()) return;
+  try {
+    // Power BI audience resource (no `/.default` suffix), sovereign-cloud aware.
+    const pbiResource = getPbiScope().replace(/\/\.default$/i, '');
+    const tok = await client.acquireTokenSilent({
+      account,
+      scopes: [
+        `${pbiResource}/Dataset.Read.All`,
+        `${pbiResource}/MLModel.Execute.All`,
+        `${pbiResource}/Workspace.Read.All`,
+      ],
+    });
+    if (tok?.accessToken) {
+      await savePbiUserToken(oid, tok.accessToken, tok.expiresOn ?? null);
+    }
+  } catch {
+    // PBI scopes not consented / not available — the remote PBI MCP surfaces an
+    // honest config gate. Loom's Azure-native authoring path is the default.
   }
 }
 
@@ -141,6 +195,12 @@ export async function GET(req: NextRequest) {
     // identity" data-access mode on SQL analytics endpoints (F10). Same
     // best-effort contract — neither gate blocks the login flow.
     await captureUserSqlToken(client, account, claims.oid);
+    // Additive + non-breaking + OPT-IN: capture the user's Power BI delegated
+    // token ONLY when the operator has opted into the remote Power BI MCP
+    // (LOOM_POWERBI_MCP_CLIENT_ID set). No-op otherwise — the Azure-native
+    // semantic-model / report authoring path stays the day-one default. Same
+    // best-effort contract — neither gate blocks the login flow.
+    await captureUserPbiToken(client, account, claims.oid);
     return htmlRedirect('/', cookieValue);
   } catch (e) {
     const msg = (e as Error).message ?? 'unknown';

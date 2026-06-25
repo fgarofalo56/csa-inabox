@@ -16,6 +16,7 @@
  */
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useRouter } from 'next/navigation';
 import {
   Subtitle2, Body1, Caption1, Badge, Button, Input, Dropdown, Option, Field,
   Tab, TabList, Spinner, RadioGroup, Radio,
@@ -56,6 +57,7 @@ import { AzureResourcePicker } from '@/lib/components/azure/azure-resource-picke
 import { LinkedServiceGallery } from '@/lib/components/pipeline/linked-service-gallery';
 import { IntegrationRuntimeManager } from '@/lib/components/pipeline/integration-runtime-manager';
 import type { PipelineRuntimeContext } from '@/lib/components/pipeline/types';
+import { createItem } from '@/lib/api/workspaces';
 import type { FabricItemType } from '@/lib/catalog/fabric-item-types';
 import type { RibbonTab } from '@/lib/components/ribbon';
 
@@ -122,6 +124,16 @@ export function PipelineEditorCore({
   runtimeContext?: PipelineRuntimeContext;
 }) {
   const s = useStyles();
+  const router = useRouter();
+  // A `/new` route lands here with the literal id "new" and NO Cosmos item yet
+  // (e.g. "+ New item" opened from home, before any workspace is chosen). We must
+  // NOT drive the per-item bind / spec / run routes with "new" — loadPipelineItem
+  // 404s on it ("Item new (<slug>) not found"). Instead we guard those effects
+  // off and render a create-gate that creates a REAL Loom item first, then
+  // redirects to the real GUID where the existing bind/run/save flow works.
+  const isNew = id === 'new';
+  // Per-item route base. Only ever fetched for a REAL id — every per-item effect
+  // below short-circuits while `isNew`, so this never carries the literal "new".
   const apiBase = `/api/items/${config.slug}/${encodeURIComponent(id)}`;
 
   // ---- Binding state ----
@@ -137,6 +149,21 @@ export function PipelineEditorCore({
   const [newName, setNewName] = useState<string>('');       // create-new input
   const [bindBusy, setBindBusy] = useState(false);
   const [bindError, setBindError] = useState<string | null>(null);
+
+  // ---- New-item create gate (isNew only) ----
+  // A `/new` route has no Cosmos item, so binding can't run. The gate picks a
+  // Loom workspace + name and creates a REAL item via createItem (no mock), then
+  // redirects to its GUID. itemType MUST equal config.slug ('adf-pipeline' |
+  // 'synapse-pipeline') because the bind route's loadPipelineItem filters Cosmos
+  // on c.itemType=@t — the created type has to match the slug the editor binds
+  // through, or the per-item routes 404 after redirect.
+  const [createWorkspaces, setCreateWorkspaces] = useState<Array<{ id: string; name: string }> | null>(null);
+  const [createWsError, setCreateWsError] = useState<string | null>(null);
+  const [createWsLoading, setCreateWsLoading] = useState(isNew);
+  const [createWorkspaceId, setCreateWorkspaceId] = useState('');
+  const [createName, setCreateName] = useState('');
+  const [createBusy, setCreateBusy] = useState(false);
+  const [createError, setCreateError] = useState<string | null>(null);
 
   // Effective runtime: the explicit runtimeContext wins (unified editor), else
   // it's inferred from the slug. Azure-native 'adf' is the DEFAULT per
@@ -218,6 +245,10 @@ export function PipelineEditorCore({
   // Binding
   // ------------------------------------------------------------------
   const loadBinding = useCallback(async () => {
+    // Never GET /api/items/<slug>/new/bind — the route 404s on the literal "new"
+    // (no Cosmos doc), which used to paint a spurious red bind-error banner on a
+    // fresh /new before any user action. The create-gate handles `isNew`.
+    if (isNew) { setBindingLoading(false); return; }
     setBindingLoading(true); setBindError(null);
     try {
       const res = await fetch(`${apiBase}/bind`);
@@ -233,12 +264,54 @@ export function PipelineEditorCore({
     } finally {
       setBindingLoading(false);
     }
-  }, [apiBase, pickName]);
+  }, [apiBase, pickName, isNew]);
 
   useEffect(() => { loadBinding(); }, [loadBinding]);
 
+  // Load the Loom workspace catalog for the create-gate picker (isNew only).
+  // Reuses the {ok, workspaces:[{id,name}]} shape every editor's picker expects.
+  useEffect(() => {
+    if (!isNew) return;
+    let cancelled = false;
+    (async () => {
+      setCreateWsLoading(true); setCreateWsError(null);
+      try {
+        const r = await fetch('/api/loom/workspaces');
+        const j = await r.json();
+        if (cancelled) return;
+        if (!j.ok) { setCreateWsError(j.error || `HTTP ${r.status}`); setCreateWorkspaces([]); }
+        else { setCreateWorkspaces(Array.isArray(j.workspaces) ? j.workspaces : []); }
+      } catch (e: any) {
+        if (!cancelled) { setCreateWsError(e?.message || String(e)); setCreateWorkspaces([]); }
+      } finally {
+        if (!cancelled) setCreateWsLoading(false);
+      }
+    })();
+    return () => { cancelled = true; };
+  }, [isNew]);
+
+  // Create a REAL Loom pipeline item, then reopen the page on its GUID. After
+  // the redirect the existing bind/run/save flow works against the real item
+  // via the matching slug. No mock; Azure-native adf/synapse default.
+  const createPipelineItem = useCallback(async () => {
+    if (!createWorkspaceId || !createName.trim() || createBusy) return;
+    setCreateBusy(true); setCreateError(null);
+    try {
+      const created = await createItem(createWorkspaceId, {
+        itemType: config.slug,            // MUST equal the bind route's slug
+        displayName: createName.trim(),
+      });
+      router.replace(`/items/${encodeURIComponent(config.slug)}/${encodeURIComponent(created.id)}`);
+    } catch (e: any) {
+      setCreateError(e?.message || String(e));
+      setCreateBusy(false);               // keep busy through the redirect on success
+    }
+  }, [createWorkspaceId, createName, createBusy, config.slug, router]);
+
   const bindTo = useCallback(async (name: string, create: boolean) => {
-    if (!name.trim()) return;
+    // Binding only makes sense for a real, persisted item — a `/new` route has
+    // no GUID to bind against (the create-gate creates one first).
+    if (isNew || !name.trim()) return;
     setBindBusy(true); setBindError(null);
     try {
       const res = await fetch(`${apiBase}/bind`, {
@@ -257,7 +330,7 @@ export function PipelineEditorCore({
     } finally {
       setBindBusy(false);
     }
-  }, [apiBase, loadBinding]);
+  }, [apiBase, loadBinding, isNew]);
 
   // Create a NEW Data Factory across any subscription/RG the operator can reach,
   // then select it (setFactory) so binding can proceed against it. Real ARM PUT
@@ -326,8 +399,10 @@ export function PipelineEditorCore({
   }, [apiBase, runsAfterDays, runsStatus]);
 
   useEffect(() => {
-    if (bound) { loadPipeline(); loadRuns(); }
-  }, [bound, loadPipeline, loadRuns]);
+    // Spec + runs only load for a real, bound item. `bound` stays null while
+    // `isNew` (loadBinding short-circuits), so this never targets "new".
+    if (bound && !isNew) { loadPipeline(); loadRuns(); }
+  }, [bound, isNew, loadPipeline, loadRuns]);
 
   const save = useCallback(async () => {
     if (!bound) return;
@@ -581,6 +656,98 @@ export function PipelineEditorCore({
       </MessageBarBody>
     </MessageBar>
   );
+
+  // ------------------------------------------------------------------
+  // [BUG A] New-item create gate. A `/new` route (e.g. "+ New item" from home)
+  // has no Cosmos item, so the per-item bind route can't run with the literal
+  // "new" (it 404s). Render a create-gate that creates a REAL Loom item first,
+  // then redirects to its GUID where the full bind/run/save flow takes over.
+  // This single change fixes BOTH the data-pipeline delegation path
+  // (AdfPipelineEditor / SynapsePipelineEditor) and the direct
+  // /items/adf-pipeline/new + /items/synapse-pipeline/new routes — all funnel
+  // through PipelineEditorCore. All hooks above run unconditionally, so this
+  // early return is hooks-safe.
+  // ------------------------------------------------------------------
+  if (isNew) {
+    const wsList = createWorkspaces || [];
+    const noWorkspaces = !createWsLoading && !createWsError && wsList.length === 0;
+    const selectedWsName = wsList.find((w) => w.id === createWorkspaceId)?.name || '';
+    const canCreate = !createBusy && !!createWorkspaceId && !!createName.trim();
+    const createRibbon: RibbonTab[] = [
+      { id: 'home', label: 'Home', groups: [
+        { label: 'New', actions: [
+          { label: createBusy ? 'Creating…' : 'Create pipeline', icon: <Add20Regular />,
+            onClick: canCreate ? createPipelineItem : undefined, disabled: !canCreate,
+            title: !createWorkspaceId ? 'Select a workspace' : !createName.trim() ? 'Enter a pipeline name' : undefined },
+        ] },
+      ] },
+    ];
+    return (
+      <ItemEditorChrome item={item} id={id} ribbon={createRibbon} main={
+        <div className={s.gate}>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalS }}>
+            <Subtitle2>New {isAdf ? 'Data Factory' : 'Synapse'} pipeline</Subtitle2>
+            <Body1 style={{ display: 'block', color: tokens.colorNeutralForeground3 }}>
+              Pick a Loom workspace and name this pipeline. Loom creates the item, then opens the
+              full editor where you bind it to a real {config.containerLabel} pipeline and
+              Save / Run / Validate / Triggers run against the real Azure backend.
+            </Body1>
+          </div>
+
+          {createWsError && (
+            <MessageBar intent="warning">
+              <MessageBarBody>
+                <MessageBarTitle>Workspaces not reachable</MessageBarTitle>
+                {createWsError}
+                <br /><Caption1>The Cosmos `workspaces` container must be reachable and the Console UAMI granted data access.</Caption1>
+              </MessageBarBody>
+            </MessageBar>
+          )}
+          {noWorkspaces && (
+            <MessageBar intent="warning">
+              <MessageBarBody>
+                <MessageBarTitle>Create or select a workspace first</MessageBarTitle>
+                You don’t have any Loom workspaces yet. Create one (Home → New workspace), then return to create a pipeline.
+              </MessageBarBody>
+            </MessageBar>
+          )}
+
+          <Field label="Workspace">
+            <Dropdown
+              placeholder={createWsLoading ? 'Loading workspaces…' : noWorkspaces ? 'No workspaces available' : 'Select a workspace'}
+              value={selectedWsName}
+              selectedOptions={createWorkspaceId ? [createWorkspaceId] : []}
+              disabled={createWsLoading || noWorkspaces || createBusy}
+              onOptionSelect={(_, d) => setCreateWorkspaceId(d.optionValue || '')}
+            >
+              {wsList.map((w) => (<Option key={w.id} value={w.id} text={w.name}>{w.name}</Option>))}
+            </Dropdown>
+          </Field>
+          <Field label="Pipeline name">
+            <Input
+              value={createName}
+              onChange={(_, d) => setCreateName(d.value)}
+              placeholder="ingest_orders"
+              disabled={createBusy}
+              onKeyDown={(e) => { if (e.key === 'Enter' && canCreate) createPipelineItem(); }}
+            />
+          </Field>
+          <div className={s.row}>
+            <Button appearance="primary" icon={<Add20Regular />} onClick={createPipelineItem} disabled={!canCreate}>
+              {createBusy ? 'Creating…' : 'Create pipeline'}
+            </Button>
+            {createBusy && <Spinner size="tiny" />}
+          </div>
+          {createError && (
+            <MessageBar intent="error"><MessageBarBody><MessageBarTitle>Create failed</MessageBarTitle>{createError}</MessageBarBody></MessageBar>
+          )}
+          <Caption1 style={{ color: tokens.colorNeutralForeground3 }}>
+            Creates the item in Cosmos and opens the full editor, where binding + the primary actions run against the real backend.
+          </Caption1>
+        </div>
+      } />
+    );
+  }
 
   return (
     <ItemEditorChrome item={item} id={id} ribbon={ribbon}

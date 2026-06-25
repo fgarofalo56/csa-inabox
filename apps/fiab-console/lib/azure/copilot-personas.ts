@@ -27,6 +27,15 @@
  */
 
 import type { ToolDef } from './copilot-orchestrator';
+// Power BI authoring skill descriptors are SINGLE-SOURCED in
+// lib/copilot/powerbi-skills.ts (the same module the cross-item-copilot UI panel
+// imports). Import — never re-declare — so the orchestrator's injected guidance
+// and the UI panel can never drift on divergent tool lists again.
+import {
+  POWERBI_AUTHORING_SKILLS,
+  POWERBI_MCP_TOOL_PREFIX,
+  type LoomCopilotSkill,
+} from '../copilot/powerbi-skills';
 
 export type CopilotPersona =
   | 'notebook'
@@ -451,6 +460,114 @@ CSA Loom is Azure-native. NEVER mention Microsoft Fabric or Power BI. Use the te
   },
 };
 
+// =============================================================================
+// Power BI authoring agent skills (POWERBI_AUTHORING_SKILLS) — on-demand,
+// Azure-native by DEFAULT (Power BI Copilot integration).
+//
+// SINGLE SOURCE OF TRUTH: the descriptors + the opt-in remote-MCP tool-name
+// prefix live in lib/copilot/powerbi-skills.ts — the SAME module the
+// cross-item-copilot UI panel imports. They are imported (not re-declared) here
+// and re-exported under this module's historical names, so the orchestrator's
+// injected guidance and the UI panel can never drift on divergent tool lists.
+//
+// CSA Loom's DEFAULT semantic-model + report authoring path is Azure-native:
+// the tabular layer over a Synapse Dedicated SQL pool + the Loom-native report
+// renderer. NO Microsoft Fabric / Power BI workspace is required day-one. The
+// descriptors capture BEST-PRACTICE GUIDANCE from Microsoft's open-source Power
+// BI authoring agent skills (github.com/microsoft/skills-for-fabric, plugin
+// `powerbi-authoring`) and the orchestrator injects it as an extra system block
+// so the built-in Copilot is grounded in those practices on the Azure-native path.
+//
+// The Power BI *remote MCP* tools (mcp_powerbiremote_*) are STRICTLY OPT-IN
+// (per .claude/rules/no-fabric-dependency.md): they exist in the tool registry
+// ONLY once an admin connects the remote Power BI MCP server (Entra app + the
+// Power BI tenant setting). When absent there is no gate in the loop — the
+// guidance simply grounds the Azure-native tools. `pbiMcpToolPrefix` names the
+// tool-name prefix those opt-in tools carry so a toolPrefixes-scoped persona
+// (e.g. the DAX Copilot, copilot-personas-dax.ts) can surface them ONLY when
+// the server is connected.
+// =============================================================================
+
+/** Re-exported from the single source (lib/copilot/powerbi-skills.ts) so this
+ *  module's historical importers keep working while the descriptors stay
+ *  single-sourced and can never diverge from the cross-item-copilot UI panel. */
+export { POWERBI_AUTHORING_SKILLS };
+export type { LoomCopilotSkill };
+
+/** Backward-compatible alias for the opt-in Power BI remote-MCP tool-name prefix
+ *  (canonical name POWERBI_MCP_TOOL_PREFIX in lib/copilot/powerbi-skills.ts).
+ *  A toolPrefixes-scoped persona surfaces those tools ONLY when the remote server
+ *  is connected (they don't exist in the registry until then — no loop gate). */
+export const POWERBI_REMOTE_MCP_TOOL_PREFIX = POWERBI_MCP_TOOL_PREFIX;
+
+/** Skill ids that ground the semantic-model authoring surface (DAX persona /
+ *  semantic-model pane). */
+export const SEMANTIC_MODEL_SKILL_IDS = ['semantic-model-authoring'] as const;
+
+/** Skill ids that ground the report authoring surface (Report Copilot). */
+export const REPORT_SKILL_IDS = [
+  'power-bi-report-authoring',
+  'power-bi-report-design',
+  'power-bi-report-planner',
+  'power-bi-report-management',
+] as const;
+
+/** Resolve skill descriptors by id (first-seen order; unknown ids dropped). */
+export function skillsByIds(ids: readonly string[]): LoomCopilotSkill[] {
+  return ids
+    .map((id) => POWERBI_AUTHORING_SKILLS.find((s) => s.id === id))
+    .filter((s): s is LoomCopilotSkill => Boolean(s));
+}
+
+/** The semantic-model authoring skills (Azure-native DAX + tabular grounding). */
+export const SEMANTIC_MODEL_SKILLS: LoomCopilotSkill[] = skillsByIds(SEMANTIC_MODEL_SKILL_IDS);
+
+/** The report authoring / design / planning / management skills. */
+export const REPORT_SKILLS: LoomCopilotSkill[] = skillsByIds(REPORT_SKILL_IDS);
+
+/**
+ * Render the on-demand Power BI authoring guidance as a system-prompt block,
+ * appended to a persona's system message so the built-in Copilot is grounded in
+ * the open-source Power BI authoring best practices on the DEFAULT Azure-native
+ * path. Returns '' for an empty list (nothing appended). No Fabric / Power BI
+ * workspace is needed for the guidance itself.
+ */
+export function skillSystemBlock(skills: LoomCopilotSkill[]): string {
+  if (!skills || skills.length === 0) return '';
+  const lines: string[] = [];
+  lines.push('\n\n--- Power BI authoring skills (best-practice guidance) ---');
+  lines.push(
+    'The notes below are adapted from Microsoft’s open-source Power BI authoring agent skills ' +
+      '(github.com/microsoft/skills-for-fabric, plugin `powerbi-authoring`). They apply to the ' +
+      'DEFAULT CSA Loom Azure-native authoring path (the tabular layer over a Synapse Dedicated SQL ' +
+      'pool + the Loom-native report renderer) — no Microsoft Fabric or Power BI workspace is required.',
+  );
+  for (const s of skills) {
+    lines.push(`\n• ${s.name} — when to use: ${s.whenToUse}`);
+    lines.push(`  ${s.guidance}`);
+    if (s.toolNames.length) lines.push(`  Loom-native tools: ${s.toolNames.join(', ')}.`);
+    if (s.pbiMcpToolPrefix) {
+      lines.push(
+        `  When the OPT-IN Power BI remote MCP server is connected, the ${s.pbiMcpToolPrefix}* tools ` +
+          'additionally let you query the live semantic model / generate DAX under the signed-in ' +
+          'user’s Power BI permissions; if those tools are absent, use the Loom-native tools above.',
+      );
+    }
+  }
+  return lines.join('\n');
+}
+
+/**
+ * Distinct opt-in Power BI remote-MCP tool-name prefixes across the given skills
+ * (defaults to all). A toolPrefixes-scoped persona (e.g. the DAX Copilot in
+ * copilot-personas-dax.ts) spreads these into its `toolPrefixes` so the remote
+ * PBI query/DAX tools surface ONLY when the server is connected — they do not
+ * exist in the registry until then, so no gate is needed in the loop.
+ */
+export function pbiMcpToolPrefixes(skills: LoomCopilotSkill[] = POWERBI_AUTHORING_SKILLS): string[] {
+  return [...new Set(skills.map((s) => s.pbiMcpToolPrefix).filter((p): p is string => Boolean(p)))];
+}
+
 /**
  * Report Copilot persona type + definition (Loom-native report builder).
  * Kept under a dedicated `ReportCopilotPersona` type so it coexists with the
@@ -499,7 +616,13 @@ Rules:
 - Never suggest a visual whose field does not appear in the query result columns.
 - You are inside CSA Loom — NEVER say "in Power BI" or "in Microsoft Fabric". Name the Azure backend
   (Synapse Dedicated SQL pool) when relevant.
-- Keep tool arguments as concrete strings (real SQL, real column names), never freeform JSON config.`,
+- Keep tool arguments as concrete strings (real SQL, real column names), never freeform JSON config.` +
+    // Ground the Report Copilot in the open-source Power BI report-authoring /
+    // design / planning / management best practices — on the DEFAULT
+    // Azure-native path (no Fabric / Power BI workspace). The Power BI remote MCP
+    // tools stay opt-in; this route runs a scoped registry, so only the
+    // Loom-native report tools above are ever advertised.
+    skillSystemBlock(REPORT_SKILLS),
   allowedTools: new Set(['report_query_model', 'report_suggest_visual']),
 };
 
@@ -547,7 +670,8 @@ export type ContextSlug =
   | 'lakehouse' // Lakehouse (ADLS Gen2 + Delta) editor
   | 'data-pipeline' // Pipeline / Integrate editor
   | 'kql-database' // ADX / KQL editor
-  | 'data-agent'; // Data Agent editor
+  | 'data-agent' // Data Agent editor
+  | 'semantic-model'; // Semantic-model (Loom-native tabular) editor — DAX + AI-readiness
 
 /**
  * Server-assembled context the persona's systemPrompt() interpolates. The
@@ -830,6 +954,47 @@ export const PERSONA_REGISTRY: Record<ContextSlug, PersonaEntry> = {
       `Help the user configure sources, author concise grounding instructions, and craft example ` +
       `questions. Use item_configure to persist changes to the agent the user owns.` +
       groundingBlock(p, { queryLabel: 'Active agent configuration' }),
+  },
+
+  'semantic-model': {
+    title: 'Semantic Model Copilot',
+    greeting:
+      'I’m your Semantic Model Copilot. I can author and explain DAX measures, inspect the model’s ' +
+      'tables and relationships, and improve its AI-readiness — all on the Loom-native tabular layer.',
+    toolCatalog: [
+      'dax_model_context',
+      'dax_nl2measure',
+      'dax_explain',
+      'dax_optimize',
+      'dax_describe_model',
+      'dax_save_descriptions',
+      'dax_eval_probe',
+      'tabular_list_models',
+      'tabular_list_tables',
+      'tabular_list_measures',
+      'tabular_eval_dax',
+      'item_list',
+      'item_configure',
+      'workspace_list',
+      'loom_self_audit',
+    ],
+    suggestedPrompts: [
+      'Write a year-over-year growth measure',
+      'Explain this DAX measure',
+      'Describe the measures for AI-readiness',
+      'Review the model’s star schema',
+    ],
+    // Day-one Azure-native authoring grounded in the Power BI semantic-model
+    // authoring skill (no Fabric). The opt-in Power BI remote MCP query/DAX
+    // tools surface only via the toolPrefixes-scoped DAX persona once connected.
+    systemPrompt: (p) =>
+      `${LOOM_PREAMBLE}\n\nYou are the CSA Loom Semantic Model Copilot. The model is a Loom-native ` +
+      `tabular layer backed by an Azure Synapse Dedicated SQL pool (T-SQL) — NOT Microsoft Fabric and ` +
+      `NOT Power BI. Author, explain, and optimize DAX measures and improve the model’s AI-readiness, ` +
+      `grounding every expression in the REAL tables, columns, and measures from the model context ` +
+      `(call dax_model_context / tabular_list_* first; never invent names).` +
+      skillSystemBlock(SEMANTIC_MODEL_SKILLS) +
+      groundingBlock(p, { queryLabel: 'Active DAX expression / measure in the editor' }),
   },
 };
 

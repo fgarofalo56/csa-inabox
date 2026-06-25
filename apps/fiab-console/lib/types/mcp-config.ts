@@ -16,10 +16,39 @@ export interface McpServerConfig {
   name: string;
   /** HTTP endpoint of the MCP server (https://...). */
   endpoint: string;
-  /** Auth method: "header" (Authorization header) or "key-vault" (resolve from Key Vault). */
-  authMethod: 'header' | 'key-vault';
-  /** Raw header value (for authMethod: "header") or Key Vault secret ref (for authMethod: "key-vault"). */
+  /**
+   * Auth method the runtime uses to mint the Authorization header for this server:
+   *  - "header"     — send `authValue` verbatim as the Authorization header.
+   *  - "key-vault"  — resolve a Bearer credential from a Key Vault secret ref in `authValue`.
+   *  - "entra-obo"  — mint a per-USER Microsoft Entra OAuth On-Behalf-Of bearer at call
+   *    time (delegated, under the signed-in user's RBAC). Used by the opt-in remote
+   *    built-in Power BI MCP server (api.fabric.microsoft.com/v1/mcp/powerbi). The user
+   *    token is minted/cached per-user in the Cosmos pbi-user-token-store (mirroring
+   *    sql-user-token-store) and threaded into the MCP client as `userToken` — it is
+   *    NEVER stored on this doc. There is no static secret for entra-obo at all, which
+   *    keeps the secrets-via-Key-Vault / no-literal-credential invariant intact.
+   */
+  authMethod: 'header' | 'key-vault' | 'entra-obo';
+  /**
+   * Raw header value (for authMethod: "header") or Key Vault secret ref (for
+   * authMethod: "key-vault"). UNUSED for authMethod "entra-obo" — that path carries no
+   * static secret (the per-user OBO token is resolved from pbi-user-token-store at call
+   * time, never persisted here).
+   */
   authValue?: string;
+  /**
+   * Entra OBO resource (audience) the delegated token targets. Used ONLY when
+   * authMethod === "entra-obo". For the Power BI remote MCP this is
+   * 'https://analysis.windows.net/powerbi/api'.
+   */
+  oboResource?: string;
+  /**
+   * Delegated scopes requested on `oboResource` when minting the per-user OBO token.
+   * Used ONLY when authMethod === "entra-obo". For the Power BI remote MCP these are
+   * the three read-only delegated scopes: Dataset.Read.All, MLModel.Execute.All,
+   * Workspace.Read.All (resolved to `${oboResource}/<scope>` at acquisition time).
+   */
+  oboScopes?: string[];
   /** Optional description / usage notes. */
   description?: string;
   /** Whether this server is enabled for tool discovery. */
@@ -41,11 +70,18 @@ export interface McpServerConfig {
    */
   secretRefs?: Record<string, string>;
   /**
-   * Origin of this server. 'external' (default) = an endpoint a tenant admin
-   * registered manually. 'catalog' = a vetted server Loom deployed as an Azure
-   * Container App (see McpDeployment below).
+   * Origin of this server.
+   *  - 'external' (default) = an endpoint a tenant admin registered manually.
+   *  - 'catalog' = a vetted server Loom deployed as an Azure Container App
+   *    (see McpDeployment below).
+   *  - 'remote-builtin' = an already-hosted remote HTTPS Streamable-HTTP endpoint
+   *    Loom connects to (not deployed by Loom), authenticated per-user via Entra OBO.
+   *    The opt-in Power BI remote MCP (REMOTE_BUILTIN_MCP in lib/mcp/catalog.ts) is the
+   *    sole entry today — it is OPT-IN and config-gated (LOOM_POWERBI_MCP_CLIENT_ID +
+   *    the Power BI tenant setting), never on a default code path. Loom's Azure-native
+   *    semantic-model / report authoring stays the default (no-fabric-dependency).
    */
-  source?: 'external' | 'catalog';
+  source?: 'external' | 'catalog' | 'remote-builtin';
   /** Deployment metadata — present only when source === 'catalog'. */
   deployment?: McpDeployment;
 }

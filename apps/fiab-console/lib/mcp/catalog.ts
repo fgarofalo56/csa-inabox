@@ -38,7 +38,16 @@
  * it is already connectable.
  *
  * no-fabric-dependency: Azure MCP + Postgres-on-Azure-Database + Kubernetes/AKS
- * are the Azure-native defaults. Zero Fabric / Power BI hosts are referenced.
+ * are the Azure-native defaults. The two DEPLOYABLE catalogs in this file
+ * (MCP_CATALOG / MCP_DEPLOY_CATALOG — "pull an image, host it as a Container
+ * App") reference ZERO Fabric / Power BI hosts on the default path. The ONE
+ * Power BI entry — REMOTE_BUILTIN_MCP at the bottom of this file — is a separate
+ * "remote built-in" family: an already-hosted Microsoft HTTPS Streamable-HTTP
+ * endpoint reached with a per-USER Entra OBO bearer, NOT a deployable image. It
+ * is strictly OPT-IN (gated on LOOM_POWERBI_MCP_CLIENT_ID + a PBI-admin tenant
+ * setting) and is never wired onto a default code path; Loom's Azure-native
+ * semantic-model / report authoring stays the day-one default. See
+ * REMOTE_BUILTIN_MCP + isPbiMcpConfigured() below.
  */
 
 /** Capability grouping for the catalog picker. */
@@ -1364,5 +1373,138 @@ export function govMetaFor(id: string): McpGovMeta | undefined {
  */
 export function deployCatalogWithGovMeta(): Array<{ entry: McpCatalogEntry; gov: McpGovMeta | undefined }> {
   return MCP_DEPLOY_CATALOG.map((entry) => ({ entry, gov: govMetaFor(entry.id) }));
+}
+
+// ── Remote built-in MCP (opt-in) — Power BI remote MCP server ─────────────────
+//
+// A THIRD catalog family, distinct from BOTH arrays above. The Power BI remote
+// MCP server is NOT a deployable image (you do not pull an OCI image and host it
+// as a Container App). It is an ALREADY-HOSTED remote HTTPS Streamable-HTTP
+// endpoint that Microsoft operates, reached with a per-USER Microsoft Entra ID
+// OAuth On-Behalf-Of bearer — delegated, running under the signed-in user's
+// Power BI RBAC. Its tools are schema-aware QUERY of Power BI semantic models
+// plus Copilot-powered DAX generation (read-only).
+//
+// WHY IT IS NOT IN MCP_DEPLOY_CATALOG: that catalog's contract is "pull image →
+// deploy as a Container App → register the resulting internal endpoint". This
+// server has no image to host and no static credential — it carries per-user
+// delegated auth. So it extends the EXISTING External-MCP "built-in/connect"
+// family as a new `source: 'remote-builtin'` instead of duplicating the deploy
+// pipeline. The register flow turns this descriptor into an McpServerConfig row
+// with authMethod 'entra-obo' (oboResource = resource, oboScopes =
+// delegatedScopes); buildMcpShim then advertises its tools as
+// `mcp_powerbiremote_*`, threading the per-user token resolved from the Cosmos
+// pbi-user-token-store (mirroring sql-user-token-store) as the `userToken` arg.
+//
+// no-fabric-dependency: this is the SOLE Power BI / Fabric host in this file and
+// it is STRICTLY OPT-IN. It is reachable ONLY when a tenant admin has (a) set
+// LOOM_POWERBI_MCP_CLIENT_ID to an Entra app registration that requests the
+// three delegated Power BI scopes, and (b) enabled the Power BI admin-portal
+// tenant setting named in `tenantSetting`. Absent either, isPbiMcpConfigured()
+// is false and the consumer renders an honest Fluent MessageBar gate (naming the
+// env var + the tenant setting + the Entra app reg) — never a silent failure,
+// never a default-path call to api.fabric.microsoft.com. Loom's Azure-native
+// semantic-model / report authoring (the dax-tools / report-tools /
+// tabular-read-tool surface) remains the day-one DEFAULT; this endpoint only
+// augments it when explicitly connected.
+//
+// no-vaporware: when configured, the MCP runtime makes a REAL Streamable-HTTP
+// JSON-RPC call to `endpoint` with `Authorization: Bearer <user OBO token>`.
+// That token is minted at login via acquireTokenSilent against the scope URIs
+// from pbiMcpScopeUris() (`${resource}/<scope>`), cached per-user, and refreshed
+// on demand — no mock array, no stored secret (the token never lands in
+// McpServerConfig or this file).
+
+/**
+ * Descriptor for the Power BI remote MCP server. Unlike DeployableMcpServer /
+ * McpCatalogEntry (both "pull an image, host it"), this is an already-hosted
+ * remote endpoint with per-user Entra OBO auth. Field literal types pin the
+ * shared contract the sibling files (mcp-config, mcp-client, pbi-user-token-store,
+ * auth/callback) read.
+ */
+export interface RemoteBuiltinMcp {
+  /** Stable slug id. */
+  id: 'powerbi-remote';
+  /** Display name for the picker card. */
+  name: 'Power BI (remote)';
+  /** Category label — its own family, intentionally NOT an McpCategory member. */
+  category: 'Power BI / Fabric';
+  /** Resolved HTTPS endpoint (LOOM_POWERBI_MCP_ENDPOINT override, else defaultEndpoint). */
+  endpoint: string;
+  /** Native transport — already exposes a Streamable-HTTP JSON-RPC endpoint. */
+  transport: 'http';
+  /** Per-user Microsoft Entra ID OAuth On-Behalf-Of bearer (delegated). */
+  auth: 'entra-obo';
+  /** OBO resource (audience) the delegated scopes belong to. */
+  resource: 'https://analysis.windows.net/powerbi/api';
+  /** The three read-only delegated Power BI scopes (without the resource prefix). */
+  delegatedScopes: ['Dataset.Read.All', 'MLModel.Execute.All', 'Workspace.Read.All'];
+  /** Env var holding the Entra app (client) id that requests the scopes. Presence ⇒ opted-in. */
+  clientIdEnv: 'LOOM_POWERBI_MCP_CLIENT_ID';
+  /** Env var that overrides the endpoint. */
+  endpointEnv: 'LOOM_POWERBI_MCP_ENDPOINT';
+  /** Endpoint used when endpointEnv is unset. */
+  defaultEndpoint: 'https://api.fabric.microsoft.com/v1/mcp/powerbi';
+  /** The Power BI admin-portal tenant setting a PBI admin must enable. */
+  tenantSetting: 'Users can use the Power BI Model Context Protocol server endpoint (preview)';
+  /** Preview feature → catalog "Preview" badge. */
+  preview: true;
+  /** Opt-in only — never wired onto a default code path. */
+  optIn: true;
+}
+
+/** Default Power BI remote MCP endpoint (Microsoft-hosted) used when the env override is unset. */
+export const POWERBI_MCP_DEFAULT_ENDPOINT =
+  'https://api.fabric.microsoft.com/v1/mcp/powerbi' as const;
+
+/**
+ * The Power BI remote MCP catalog entry (opt-in). `endpoint` resolves from
+ * LOOM_POWERBI_MCP_ENDPOINT, falling back to the Microsoft-hosted default. This
+ * descriptor is inert until isPbiMcpConfigured() is true — it never triggers a
+ * Fabric/Power BI call on its own.
+ */
+export const REMOTE_BUILTIN_MCP: RemoteBuiltinMcp = {
+  id: 'powerbi-remote',
+  name: 'Power BI (remote)',
+  category: 'Power BI / Fabric',
+  endpoint: process.env.LOOM_POWERBI_MCP_ENDPOINT?.trim() || POWERBI_MCP_DEFAULT_ENDPOINT,
+  transport: 'http',
+  auth: 'entra-obo',
+  resource: 'https://analysis.windows.net/powerbi/api',
+  delegatedScopes: ['Dataset.Read.All', 'MLModel.Execute.All', 'Workspace.Read.All'],
+  clientIdEnv: 'LOOM_POWERBI_MCP_CLIENT_ID',
+  endpointEnv: 'LOOM_POWERBI_MCP_ENDPOINT',
+  defaultEndpoint: POWERBI_MCP_DEFAULT_ENDPOINT,
+  tenantSetting: 'Users can use the Power BI Model Context Protocol server endpoint (preview)',
+  preview: true,
+  optIn: true,
+};
+
+/**
+ * True when the Power BI remote MCP server has been OPTED INTO — i.e. an Entra
+ * app (client) id is configured via LOOM_POWERBI_MCP_CLIENT_ID. When false, the
+ * Power BI MCP is NOT registered or called on ANY path (no-fabric-dependency);
+ * consumers must render the honest MessageBar gate naming the env var + the
+ * tenant setting + the Entra app reg (no-vaporware).
+ *
+ * NOTE: the PBI-admin tenant setting (REMOTE_BUILTIN_MCP.tenantSetting) is a
+ * runtime grant that cannot be probed from here — surface it in the gate copy
+ * alongside this flag, and let the first real Streamable-HTTP call report a 403
+ * if the setting is still off.
+ */
+export function isPbiMcpConfigured(): boolean {
+  return !!process.env.LOOM_POWERBI_MCP_CLIENT_ID?.trim();
+}
+
+/**
+ * The three delegated Power BI scopes as fully-qualified scope URIs
+ * (`${resource}/${scope}`) — exactly what acquireTokenSilent / the OBO exchange
+ * requests when minting the per-user Power BI token at login. Single-sources the
+ * scope list so the token store and MCP client never hard-code it.
+ */
+export function pbiMcpScopeUris(): string[] {
+  return REMOTE_BUILTIN_MCP.delegatedScopes.map(
+    (scope) => `${REMOTE_BUILTIN_MCP.resource}/${scope}`,
+  );
 }
 

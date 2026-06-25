@@ -5,8 +5,14 @@
  *  - left: workload category list
  *  - right: item type grid for the selected category
  *
- * On select, navigates to /items/[slug]/new where the per-item-type
- * editor handles the create + redirect to /items/[slug]/[id].
+ * On select we ALWAYS create a real Cosmos item first, then redirect to
+ * /items/[slug]/[realId]. When opened with a `workspaceId` we scope to it.
+ * When opened from home (no prop) we resolve the caller's default (newest)
+ * workspace and scope creation to that — so the home path never lands on the
+ * literal /items/[slug]/new route with a non-existent id (which made the
+ * per-item editor drive its bind route with the id "new" and 404). Only if no
+ * workspace can be resolved do we fall back to pushing /items/[slug]/new, where
+ * the per-item editor renders a create-gate (a safe, non-error landing).
  */
 
 import { useState, useMemo, useEffect } from 'react';
@@ -34,7 +40,7 @@ import {
   Caption1,
 } from '@fluentui/react-components';
 import { Add24Regular, Search20Regular, ArrowLeft20Regular } from '@fluentui/react-icons';
-import { createItem, getWorkspace } from '@/lib/api/workspaces';
+import { createItem, getWorkspace, listWorkspaces } from '@/lib/api/workspaces';
 import { CustomAttributesForm, type AttributeValues } from '@/lib/components/wizard/custom-attributes-form';
 import {
   type AttributeGroup,
@@ -202,17 +208,39 @@ export function NewItemDialog({ defaultCategory, workspaceId }: Props = {}) {
   const [customAttrs, setCustomAttrs] = useState<AttributeValues>({});
   const [attrGroups, setAttrGroups] = useState<AttributeGroup[]>([]);
   const [showAttrValidation, setShowAttrValidation] = useState(false);
+  // Home/no-workspace entry: the caller's default (newest) workspace, resolved
+  // best-effort on open so the same create-then-redirect flow can run against a
+  // REAL workspace. null until resolved (or when the tenant has none — then
+  // onPick falls back to the editor's /new create-gate).
+  const [resolvedWorkspaceId, setResolvedWorkspaceId] = useState<string | null>(null);
+
+  // The workspace creation scopes to: the explicit prop when present, else the
+  // resolved default. undefined => not yet known (loading) or none exists.
+  const effectiveWorkspaceId: string | undefined = workspaceId ?? resolvedWorkspaceId ?? undefined;
+
+  // When opened from home (no workspaceId prop), resolve the caller's default
+  // workspace (newest first). Tenant-scoped + credentialed via the shared API
+  // client, so the create flow can scope to a real workspace instead of the
+  // literal /new route. Best-effort — failure/empty leaves it unresolved.
+  useEffect(() => {
+    if (workspaceId || !open) return;
+    let cancelled = false;
+    listWorkspaces()
+      .then((ws) => { if (!cancelled) setResolvedWorkspaceId(ws[0]?.id ?? null); })
+      .catch(() => { if (!cancelled) setResolvedWorkspaceId(null); });
+    return () => { cancelled = true; };
+  }, [workspaceId, open]);
 
   // Resolve the workspace's domain once, so the Custom attributes step knows
   // which schema to render. Best-effort — failure just means no custom attrs.
   useEffect(() => {
-    if (!workspaceId || !open) return;
+    if (!effectiveWorkspaceId || !open) return;
     let cancelled = false;
-    getWorkspace(workspaceId)
+    getWorkspace(effectiveWorkspaceId)
       .then((ws) => { if (!cancelled) setWsDomain(ws.domain || null); })
       .catch(() => { if (!cancelled) setWsDomain(null); });
     return () => { cancelled = true; };
-  }, [workspaceId, open]);
+  }, [effectiveWorkspaceId, open]);
 
   const items = useMemo(() => {
     const q = query.trim().toLowerCase();
@@ -260,7 +288,7 @@ export function NewItemDialog({ defaultCategory, workspaceId }: Props = {}) {
    * catalog entry so the configure pane reads head.createConfig.
    */
   function onPick(item: FabricItemType, seed?: { runtime?: string; templateId?: string }) {
-    if (workspaceId) {
+    if (effectiveWorkspaceId) {
       // When the click came from a searchOnly result, derive the seed from the
       // item itself (its runtimePreset/templateId) unless one was passed.
       const effectiveSeed = seed ?? (isSearchOnly(item) ? seedFor(item) : undefined);
@@ -277,6 +305,9 @@ export function NewItemDialog({ defaultCategory, workspaceId }: Props = {}) {
       setCreateTemplate(effectiveSeed?.templateId ?? defaultChoiceValue(cfg?.templates));
       return;
     }
+    // No workspace could be resolved (tenant has none, or the list is still
+    // loading). Fall back to the per-item /new route, where the editor renders
+    // a create-gate — a safe, non-error landing rather than a bind 404.
     setOpen(false);
     router.push(`/items/${item.slug}/new`);
   }
@@ -287,7 +318,7 @@ export function NewItemDialog({ defaultCategory, workspaceId }: Props = {}) {
   );
 
   async function createInline() {
-    if (!workspaceId || !picked || !displayName.trim()) return;
+    if (!effectiveWorkspaceId || !picked || !displayName.trim()) return;
     // F17: block creation when a required custom attribute has no value.
     if (missingRequired.length > 0) {
       setShowAttrValidation(true);
@@ -307,7 +338,7 @@ export function NewItemDialog({ defaultCategory, workspaceId }: Props = {}) {
         runtimeChoice?.slug ?? templateChoice?.slug ??
         picked.aliasOf ?? picked.templateOf ?? picked.slug;
 
-      const item = await createItem(workspaceId, {
+      const item = await createItem(effectiveWorkspaceId, {
         itemType: headSlug,
         displayName: displayName.trim(),
         customAttributes: Object.keys(customAttrs).length ? customAttrs : undefined,
@@ -364,7 +395,7 @@ export function NewItemDialog({ defaultCategory, workspaceId }: Props = {}) {
               : 'New item'}
           </DialogTitle>
           <DialogContent>
-            {picked && workspaceId ? (
+            {picked && effectiveWorkspaceId ? (
               <div className={styles.configPane}>
                 <Button appearance="subtle" icon={<ArrowLeft20Regular />}
                   onClick={() => { setPicked(null); setError(null); }}>
@@ -502,7 +533,7 @@ export function NewItemDialog({ defaultCategory, workspaceId }: Props = {}) {
             <DialogTrigger disableButtonEnhancement>
               <Button appearance="secondary">Cancel</Button>
             </DialogTrigger>
-            {picked && workspaceId && (
+            {picked && effectiveWorkspaceId && (
               <Button appearance="primary"
                 disabled={!displayName.trim() || creating}
                 onClick={createInline}>
