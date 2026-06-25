@@ -228,6 +228,13 @@ export const FABRIC_ITEM_TYPES: readonly FabricItemType[] = [
     } },
   { slug: 'notebook', displayName: 'Notebook', restType: 'Notebook', category: 'Data Engineering',
     description: 'Interactive Spark / Python authoring with cells and outputs.',
+    createConfig: {
+      runtimes: [
+        { value: 'spark', label: 'Spark notebook (Synapse/Fabric)', desc: 'Azure-native default — interactive PySpark/Python on a Synapse Spark pool (or opt-in Databricks/Fabric); reads/writes Lakehouse Delta.', default: true, slug: 'notebook' },
+        { value: 'synapse', label: 'Synapse notebook', desc: 'Multi-language Spark cells (PySpark/Scala/SQL/.NET) on a Synapse Big Data pool via Livy, authored over the Synapse dev plane.', slug: 'synapse-notebook' },
+        { value: 'databricks', label: 'Databricks notebook', desc: 'Explicit choice — PySpark/SQL/R/Scala cells on a Databricks cluster with Unity Catalog + Photon; never auto-selected.', slug: 'databricks-notebook' },
+      ],
+    },
     learnContent: {
       "overview": "A Notebook is interactive Spark/Python authoring with cells and outputs. In Loom it attaches to a Synapse Spark pool or a Databricks cluster and reads/writes Lakehouse Delta tables. Use it for data engineering and data science work that needs code.",
       "steps": [
@@ -634,7 +641,7 @@ export const FABRIC_ITEM_TYPES: readonly FabricItemType[] = [
       ],
       "docsUrl": "https://learn.microsoft.com/azure/azure-sql/database/sql-database-paas-overview"
     } },
-  { slug: 'postgres-flexible-server', displayName: 'PostgreSQL Flexible Server', restType: 'PostgresFlexibleServer', category: 'Databases',
+  { slug: 'postgres-flexible-server', displayName: 'PostgreSQL Flexible Server', restType: 'PostgresFlexibleServer', category: 'Databases', searchOnly: true,
     description: 'Azure Database for PostgreSQL Flexible Server — list/provision via ARM, databases + firewall, schema browser, catalog registration.',
     learnContent: {
       "overview": "Azure Database for PostgreSQL Flexible Server (Microsoft.DBforPostgreSQL/flexibleServers) is a fully-managed PostgreSQL service. In CSA Loom you list existing servers across the subscription, provision new ones via ARM PUT, manage databases + firewall rules, browse schema, and register the server as a OneLake/Purview catalog asset. In-database query execution is an honest infra-gate until the pg driver + LOOM_POSTGRES_QUERY_LIVE are wired.",
@@ -1350,7 +1357,7 @@ export const FABRIC_ITEM_TYPES: readonly FabricItemType[] = [
 
   // --- Azure-native services, surfaced 1:1 in Loom (no studio jumps) ---
   // Synapse Analytics
-  { slug: 'synapse-dedicated-sql-pool',  displayName: 'Synapse dedicated SQL pool',  restType: 'SynapseDedicatedSqlPool',  category: 'Synapse Analytics',
+  { slug: 'synapse-dedicated-sql-pool',  displayName: 'Synapse dedicated SQL pool',  restType: 'SynapseDedicatedSqlPool',  category: 'Synapse Analytics', searchOnly: true,
     description: 'Provisioned, MPP T-SQL warehouse. Query editor, monitoring, scaling — native in Loom.',
     learnContent: {
       "overview": "A Synapse dedicated SQL pool is a provisioned MPP T-SQL warehouse (formerly SQL DW). In Loom it is wired via ARM REST for pause/resume and TDS query on workspace.sql.azuresynapse.net through the Console MI. It auto-pauses to control cost.",
@@ -1374,7 +1381,7 @@ export const FABRIC_ITEM_TYPES: readonly FabricItemType[] = [
       ],
       "docsUrl": "https://learn.microsoft.com/azure/synapse-analytics/sql-data-warehouse/sql-data-warehouse-overview-what-is"
     } },
-  { slug: 'synapse-notebook',            displayName: 'Synapse notebook',            restType: 'SynapseNotebook',          category: 'Synapse Analytics',
+  { slug: 'synapse-notebook',            displayName: 'Synapse notebook',            restType: 'SynapseNotebook',          category: 'Synapse Analytics', searchOnly: true,
     description: 'Spark notebook designer — multi-cell PySpark/Scala/SQL on a Synapse Big Data pool.',
     learnContent: {
       "overview": "A Synapse notebook is the Spark authoring surface in Synapse Studio — multi-language cells (PySpark, Spark Scala, Spark SQL, SparkR, .NET Spark C#) run interactively on a Synapse Big Data pool via Livy. In Loom it reads/writes the workspace notebook artifact over the Synapse dev plane and runs cells against a live Livy session through the Console MI.",
@@ -1463,7 +1470,7 @@ export const FABRIC_ITEM_TYPES: readonly FabricItemType[] = [
       "docsUrl": "https://learn.microsoft.com/azure/synapse-analytics/data-integration/concepts-data-factory-differences"
     } },
   // Azure Databricks
-  { slug: 'databricks-notebook',         displayName: 'Databricks notebook',         restType: 'DatabricksNotebook',        category: 'Azure Databricks',
+  { slug: 'databricks-notebook',         displayName: 'Databricks notebook',         restType: 'DatabricksNotebook',        category: 'Azure Databricks', searchOnly: true,
     description: 'Databricks notebook cells (PySpark / SQL / R / Scala) with cluster attach.',
     learnContent: {
       "overview": "A Databricks notebook runs PySpark/SQL/R/Scala cells with cluster attach, Unity Catalog governance, and Photon execution. In Loom it is wired against the Loom-deployed Databricks workspace via Container App MI and AAD bearer tokens.",
@@ -2320,6 +2327,14 @@ export const FABRIC_ITEM_TYPES: readonly FabricItemType[] = [
     } },
   { slug: 'azure-sql-database',          displayName: 'Azure SQL database',          restType: 'AzureSqlDatabase',          category: 'Azure SQL Database',
     description: 'Per-database T-SQL editor (TDS + AAD), Fabric mirroring config, geo-replication, vector index.',
+    createConfig: {
+      runtimes: [
+        { value: 'azure-sql', label: 'Azure SQL Database', desc: 'Azure-native default — fully-managed PaaS database; T-SQL over TDS+AAD, geo-replication, vector index.', default: true, slug: 'azure-sql-database' },
+        { value: 'synapse-pool', label: 'Synapse dedicated SQL pool', desc: 'Provisioned MPP T-SQL warehouse (formerly SQL DW); pause/resume + TDS query over the Synapse SQL endpoint.', slug: 'synapse-dedicated-sql-pool' },
+        { value: 'postgres', label: 'PostgreSQL Flexible Server', desc: 'Azure Database for PostgreSQL Flexible Server — ARM provision, databases + firewall, schema, catalog registration.', slug: 'postgres-flexible-server' },
+        { value: 'sql-mi', label: 'SQL Managed Instance', desc: 'Near-100% SQL Server compatibility for lift-and-shift; instance listing + state (TDS-via-PE execution per the MI editor).', slug: 'azure-sql-managed-instance' },
+      ],
+    },
     learnContent: {
       "overview": "An Azure SQL database is a fully-managed PaaS database. In Loom you get a per-database T-SQL editor (TDS + AAD), Fabric mirroring config, geo-replication, and vector index — wired via ARM and TDS through the azure-sql-client.",
       "steps": [
@@ -2342,7 +2357,7 @@ export const FABRIC_ITEM_TYPES: readonly FabricItemType[] = [
       ],
       "docsUrl": "https://learn.microsoft.com/azure/azure-sql/database/sql-database-paas-overview"
     } },
-  { slug: 'azure-sql-managed-instance',  displayName: 'SQL Managed Instance',        restType: 'AzureSqlManagedInstance',   category: 'Azure SQL Database',
+  { slug: 'azure-sql-managed-instance',  displayName: 'SQL Managed Instance',        restType: 'AzureSqlManagedInstance',   category: 'Azure SQL Database', searchOnly: true,
     description: 'Microsoft.Sql/managedInstances — listing + state. Editor execution deferred to v3.x (TDS via PE).',
     learnContent: {
       "overview": "An Azure SQL Managed Instance (Microsoft.Sql/managedInstances) gives near-100% SQL Server compatibility for lift-and-shift. In Loom this surface lists instances and state; editor execution (TDS via private endpoint) is deferred to a later v3.x release.",

@@ -329,7 +329,13 @@ export function NewItemDialog({ defaultCategory, workspaceId }: Props = {}) {
       // own catalog runtimePreset in page.tsx — that path is unaffected.
       let qs = '';
       const runtimeDefault = defaultChoiceValue(cfg?.runtimes);
-      if (cfg?.runtimes && createRuntime && createRuntime !== runtimeDefault) {
+      const runtimeChoice = cfg?.runtimes?.find((c) => c.value === createRuntime);
+      // Forward ?runtime= ONLY for a same-head runtime LOCK (the pipeline family,
+      // where the choice has no slug and stays on the head editor). When the choice
+      // routes to its OWN slug (engine reroute — notebook/SQL families), the target
+      // editor is the engine's own editor and ignores runtimePreset, so a ?runtime=
+      // param would be meaningless query noise — skip it.
+      if (cfg?.runtimes && createRuntime && createRuntime !== runtimeDefault && !runtimeChoice?.slug) {
         qs += `${qs ? '&' : '?'}runtime=${encodeURIComponent(createRuntime)}`;
       }
       if (createTemplate && createTemplate !== 'blank') {
