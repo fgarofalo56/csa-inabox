@@ -110,7 +110,7 @@ const useStyles = makeStyles({
     display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalXS,
   },
   statLabel: { fontSize: tokens.fontSizeBase100, color: tokens.colorNeutralForeground3, fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.05em' },
-  statValue: { fontSize: tokens.fontSizeBase700, fontWeight: 700, lineHeight: 1.1 },
+  statValue: { fontSize: tokens.fontSizeHero700, fontWeight: 700, lineHeight: 1.1 },
   statAccentSuccess: { color: tokens.colorPaletteGreenForeground1 },
   statAccentWarn: { color: tokens.colorPaletteYellowForeground1 },
   statAccentDanger: { color: tokens.colorPaletteRedForeground1 },

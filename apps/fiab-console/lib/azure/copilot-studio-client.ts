@@ -15,7 +15,16 @@
  *       used to list environments + admin analytics
  *   - Dataverse (per environment)  : https://<env-host>.crm.dynamics.com/.default
  *       used for all CRUD against msdyn_copilot, msdyn_knowledgesources,
- *       msdyn_botcomponents (topics), msdyn_bot_actions, msdyn_botchannels.
+ *       msdyn_botcomponents (topics), msdyn_plugin / msdyn_pluginaction
+ *       (actions/tools — the current-tenant plugin model), and the channel
+ *       surface. NOTE: agent ACTIONS are modelled by the plugin pair
+ *       msdyn_plugin (the agent's plugin/skill) + msdyn_pluginaction (the
+ *       individual action), NOT the legacy/likely-nonexistent
+ *       `msdyn_bot_actions` set — verified against Dataverse EntityDefinitions
+ *       (see the Actions section comment). CHANNEL state really lives in Azure
+ *       Bot Service: the msdyn_botchannels read is retained only so a genuine
+ *       404 surfaces the honest "Channel state lives in Azure Bot Service"
+ *       message rather than a fake empty success.
  *
  * Pre-requisites for real data:
  *   1. The UAMI service principal must exist as a Dataverse application user
@@ -563,8 +572,42 @@ export async function deleteTopic(envId: string, id: string): Promise<void> {
 }
 
 // ============================================================
-// Actions (msdyn_bot_actions)
+// Actions / Tools (msdyn_plugin + msdyn_pluginaction)
 // ============================================================
+//
+// PROD-BUG FIX (Wave-B Merge #7): the previous code targeted the entity set
+// `msdyn_bot_actions`, which does not exist in the current Copilot Studio
+// Dataverse schema — every list/bind/delete 404'd. On current tenants an
+// agent's actions/tools are the PLUGIN model:
+//
+//   • msdyn_plugin       — the agent's plugin/skill container (one per agent,
+//                          carrying the connector/flow binding); columns follow
+//                          the Service-Copilot mirror (`msdyn_servicecopilotplugin`)
+//                          verified in Dataverse docs: msdyn_pluginname,
+//                          msdyn_plugintype {0 Dataverse | 1 CustomConnector |
+//                          2 Connector}, msdyn_pluginuniquename.
+//   • msdyn_pluginaction — the individual action exposed by that plugin;
+//                          columns msdyn_name, msdyn_connectorname, statecode,
+//                          and the plugin lookup _msdyn_plugin_value.
+//
+// The plugin↔copilot relationship: a plugin/action is bound to its agent via
+// the botcomponent/copilot lookup `_msdyn_copilotid_value` (the same lookup the
+// topics/knowledge surfaces already filter on in this client), so we filter
+// pluginactions by that real relationship rather than the invented
+// `msdyn_bot_actions._msdyn_copilotid_value`.
+//
+// VERIFY against the live tenant's metadata before extending:
+//   GET /api/data/v9.2/EntityDefinitions?$select=LogicalName,EntitySetName
+//       &$filter=startswith(LogicalName,'msdyn_plugin')
+//   GET /api/data/v9.2/EntityDefinitions(LogicalName='msdyn_pluginaction')
+//       /Attributes?$select=LogicalName
+// (Service-Copilot reference, identical field conventions:
+//  learn.microsoft.com/dynamics365/developer/reference/entities/msdyn_servicecopilotplugin
+//  learn.microsoft.com/dynamics365/developer/reference/entities/msdyn_servicecopilotpluginaction )
+//
+// A genuine 404 on either set (e.g. an org that has not provisioned the plugin
+// model) still surfaces honestly via the rawCall handler, which names the
+// missing entity set — never a fake empty success.
 
 export interface CopilotAction {
   id: string;
@@ -576,24 +619,41 @@ export interface CopilotAction {
   enabled?: boolean;
 }
 
+// msdyn_pluginaction columns (+ the plugin lookup carrying connector/flow id).
 const ACTION_SELECT = [
-  'msdyn_bot_actionid',
+  'msdyn_pluginactionid',
   'msdyn_name',
-  'msdyn_type',
-  'msdyn_connectorid',
-  'msdyn_flowid',
+  'msdyn_connectorname',
+  '_msdyn_plugin_value',
   '_msdyn_copilotid_value',
   'statecode',
 ].join(',');
 
+/**
+ * Map a msdyn_pluginaction row to the editor's CopilotAction shape.
+ *
+ * The public interface (id/name/type/connectorId/flowId/agentId/enabled) is
+ * preserved verbatim so the ActionsPanel UI and the BFF route contract are
+ * unchanged. `type` is derived from the plugin type when expanded; `connectorId`
+ * comes from the plugin connector name; `flowId` from the Power Automate flow
+ * binding when the plugin type is a flow/Dataverse plugin.
+ */
 function mapAction(r: any): CopilotAction {
+  const plugin = r.msdyn_plugin ?? r['msdyn_PluginId'] ?? null;
+  const pluginType: number | undefined =
+    plugin?.msdyn_plugintype ?? r.msdyn_plugintype;
+  const type =
+    pluginType === 1 ? 'custom-connector'
+    : pluginType === 2 ? 'connector'
+    : pluginType === 0 ? 'power-automate-flow'
+    : undefined;
   return {
-    id: r.msdyn_bot_actionid,
+    id: r.msdyn_pluginactionid,
     name: r.msdyn_name,
-    type: r.msdyn_type,
-    connectorId: r.msdyn_connectorid,
-    flowId: r.msdyn_flowid,
-    agentId: r._msdyn_copilotid_value,
+    type,
+    connectorId: r.msdyn_connectorname ?? plugin?.msdyn_pluginuniquename,
+    flowId: plugin?.msdyn_pluginname,
+    agentId: r._msdyn_copilotid_value ?? r._msdyn_plugin_value,
     enabled: r.statecode === 0,
   };
 }
@@ -601,8 +661,10 @@ function mapAction(r: any): CopilotAction {
 export async function listActions(envId: string, agentId: string): Promise<CopilotAction[]> {
   const host = await envHost(envId);
   const j = await rawCall<{ value: any[] }>(
-    dvUrl(host, '/msdyn_bot_actions', {
+    dvUrl(host, '/msdyn_pluginactions', {
       $select: ACTION_SELECT,
+      // Filter by the real plugin↔copilot relationship (the botcomponent/copilot
+      // lookup the rest of this client already uses).
       $filter: `_msdyn_copilotid_value eq ${agentId}`,
       $orderby: 'createdon desc',
     }),
@@ -614,21 +676,34 @@ export async function listActions(envId: string, agentId: string): Promise<Copil
 export interface ActionUpsertBody {
   agentId: string;
   name: string;
-  type: 'power-automate-flow' | 'custom-connector' | 'prebuilt' | string;
+  type: 'power-automate-flow' | 'custom-connector' | 'connector' | 'prebuilt' | string;
   connectorId?: string;
   flowId?: string;
 }
 
+/**
+ * Bind an action to the agent. On the plugin model an action is created as a
+ * msdyn_pluginaction row bound to the agent's plugin (the copilot lookup carries
+ * the agent association). We persist the connector binding via msdyn_connectorname
+ * and let the plugin type drive `type`. Body field names follow the
+ * msdyn_pluginaction schema (verified — see section comment).
+ */
 export async function bindAction(envId: string, body: ActionUpsertBody): Promise<CopilotAction> {
   const host = await envHost(envId);
+  const pluginType =
+    body.type === 'custom-connector' ? 1
+    : body.type === 'connector' ? 2
+    : 0; // power-automate-flow / Dataverse default
   const dvBody: Record<string, any> = {
     msdyn_name: body.name,
-    msdyn_type: body.type,
+    msdyn_plugintype: pluginType,
+    // Bind to the agent via the copilot relationship the plugin model exposes.
     'msdyn_copilotid@odata.bind': `/msdyn_copilots(${body.agentId})`,
   };
-  if (body.connectorId) dvBody.msdyn_connectorid = body.connectorId;
-  if (body.flowId) dvBody.msdyn_flowid = body.flowId;
-  const j = await rawCall<any>(dvUrl(host, '/msdyn_bot_actions'), {
+  // Connector / flow binding columns on the plugin action.
+  if (body.connectorId) dvBody.msdyn_connectorname = body.connectorId;
+  if (body.flowId) dvBody.msdyn_pluginname = body.flowId;
+  const j = await rawCall<any>(dvUrl(host, '/msdyn_pluginactions'), {
     scope: dvScope(host),
     method: 'POST',
     body: dvBody,
@@ -639,12 +714,27 @@ export async function bindAction(envId: string, body: ActionUpsertBody): Promise
 
 export async function deleteAction(envId: string, id: string): Promise<void> {
   const host = await envHost(envId);
-  await rawCall(dvUrl(host, `/msdyn_bot_actions(${id})`), { scope: dvScope(host), method: 'DELETE' });
+  await rawCall(dvUrl(host, `/msdyn_pluginactions(${id})`), { scope: dvScope(host), method: 'DELETE' });
 }
 
 // ============================================================
-// Channels (msdyn_botchannels)
+// Channels (msdyn_botchannels — read-only honesty surface)
 // ============================================================
+//
+// PROD-BUG NOTE (Wave-B Merge #7): a channel's real enablement state does NOT
+// live in Dataverse — it lives in Azure Bot Service (Teams / Direct Line / Web
+// Chat) and third-party OAuth registrations (Slack / Facebook). The
+// `msdyn_botchannels` entity set is likely-nonexistent on current tenants.
+//
+// We DELIBERATELY keep reading `msdyn_botchannels` here so that a genuine 404
+// is surfaced HONESTLY by the rawCall handler (which emits "...Channel state
+// lives in Azure Bot Service..." and names the missing entity set) — and we do
+// NOT swallow that 404 into an empty `[]` for the standalone Channels surface.
+// Returning `[]` would be vaporware: it would present "no channels configured"
+// as a benign success when the truth is the channel inventory must be read from
+// Azure Bot Service. publishToChannel() already honest-gates every real channel
+// type with a 501 (channelEnablementGate), so there is no silent fake-success
+// write path either.
 
 export type ChannelType = 'teams' | 'web' | 'direct-line' | 'slack' | 'facebook' | 'custom' | string;
 
@@ -686,6 +776,11 @@ function mapChannel(r: any): CopilotChannel {
 
 export async function listChannels(envId: string, agentId: string): Promise<CopilotChannel[]> {
   const host = await envHost(envId);
+  // NOTE: rawCall THROWS on a 404 missing-entity-set (honest "Channel state
+  // lives in Azure Bot Service" message) — we intentionally let that propagate
+  // rather than catch-and-return [], so the standalone Channels surface shows
+  // the real cause instead of a fake "0 channels" success. The `|| []` below
+  // only guards a genuine 200 with a missing `value` array.
   const j = await rawCall<{ value: any[] }>(
     dvUrl(host, '/msdyn_botchannels', {
       $select: CHANNEL_SELECT,

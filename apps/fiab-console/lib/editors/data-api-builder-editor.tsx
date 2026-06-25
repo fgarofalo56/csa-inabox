@@ -396,7 +396,7 @@ function DabBuilder({ item, id }: { item: FabricItemType; id: string }) {
             <EntitiesStage cfg={cfg} mutate={mutate} activeEntity={activeEntity} setActiveEntity={setActiveEntity} />
           )}
           {stage === 'runtime' && <RuntimeStage cfg={cfg} mutate={mutate} />}
-          {stage === 'preview' && <PreviewStage cfg={cfg} id={id} />}
+          {stage === 'preview' && <PreviewStage cfg={cfg} id={id} mutate={mutate} />}
           {stage === 'config' && <ConfigStage cfg={cfg} id={id} />}
         </div>
       }
@@ -1280,7 +1280,7 @@ function RuntimeStage({ cfg, mutate }: { cfg: DabConfig; mutate: (fn: (c: DabCon
 
 // --- Stage 4: Preview & publish --------------------------------------------
 
-function PreviewStage({ cfg, id }: { cfg: DabConfig; id: string }) {
+function PreviewStage({ cfg, id, mutate }: { cfg: DabConfig; id: string; mutate: (fn: (c: DabConfig) => DabConfig) => void }) {
   const s = useStyles();
   const [probe, setProbe] = useState<{ ok: boolean; gate?: { missing: string }; error?: string; baseUrl?: string; probe?: any } | null>(null);
   const [probing, setProbing] = useState(false);
@@ -1297,6 +1297,11 @@ function PreviewStage({ cfg, id }: { cfg: DabConfig; id: string }) {
   const [apiId, setApiId] = useState(`dab-${id.substring(0, 8)}`);
   const [apiPath, setApiPath] = useState(`dab/${id.substring(0, 8)}`);
   const [publishResult, setPublishResult] = useState<string | null>(null);
+  // API surface to publish into APIM — DAB emits BOTH a REST and a GraphQL
+  // endpoint from the same dab-config.json (Merge #4: API-for-GraphQL folds
+  // into Data API builder). REST imports the runtime's permission-aware
+  // OpenAPI doc; GraphQL surfaces the runtime's `/graphql` endpoint.
+  const [apiType, setApiType] = useState<'rest' | 'graphql'>('rest');
 
   const doProbe = useCallback(async () => {
     setProbing(true);
@@ -1348,12 +1353,21 @@ function PreviewStage({ cfg, id }: { cfg: DabConfig; id: string }) {
     try {
       const r = await fetch(`/api/dab/${encodeURIComponent(id)}/publish`, {
         method: 'POST', headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ apiId, path: apiPath, restBasePath: cfg.runtime.rest.path }),
+        // The publish route imports the runtime's OpenAPI doc (REST) today; the
+        // graphql/graphqlPath flags are forward-compatible hints so the route
+        // can branch on a native GraphQL import when that path lands (unknown
+        // fields are ignored by the current handler — no faked success).
+        body: JSON.stringify({
+          apiId, path: apiPath, restBasePath: cfg.runtime.rest.path,
+          ...(apiType === 'graphql'
+            ? { graphql: true, graphqlPath: cfg.runtime.graphql.path }
+            : {}),
+        }),
       });
       const j = await r.json();
       setPublishResult(JSON.stringify(j, null, 2));
     } catch (e: any) { setPublishResult(`Error: ${e?.message || e}`); }
-  }, [apiId, apiPath, cfg.runtime.rest.path, id]);
+  }, [apiId, apiPath, cfg.runtime.rest.path, cfg.runtime.graphql.path, apiType, id]);
 
   const gated = probe && !probe.ok && probe.gate;
 
@@ -1406,13 +1420,62 @@ function PreviewStage({ cfg, id }: { cfg: DabConfig; id: string }) {
         {gqlResult && <pre className={s.mono}>{gqlResult}</pre>}
       </div>
 
-      {/* Publish to APIM */}
+      {/* Publish to APIM — REST (OpenAPI import) or GraphQL (endpoint surface). */}
       <div className={s.card}>
-        <span className={s.cardHeader}><CloudArrowUp20Regular /><Caption1>Publish to APIM (imports the runtime&apos;s OpenAPI as a REST API)</Caption1></span>
+        <span className={s.cardHeader}><CloudArrowUp20Regular /><Caption1>Publish to APIM — expose this Data API&apos;s REST or GraphQL surface through the gateway</Caption1></span>
+        <div className={s.field}>
+          <Label>API type</Label>
+          <div className={s.pillRow}>
+            <Button size="small" appearance={apiType === 'rest' ? 'primary' : 'outline'} icon={<Globe20Regular />}
+              onClick={() => setApiType('rest')}>REST</Button>
+            <Button size="small" appearance={apiType === 'graphql' ? 'primary' : 'outline'} icon={<Code20Regular />}
+              onClick={() => setApiType('graphql')}>GraphQL</Button>
+          </div>
+          <Caption1>
+            {apiType === 'rest'
+              ? 'Imports the runtime’s permission-aware OpenAPI v3 document into APIM as a REST API.'
+              : 'Publishes the GraphQL endpoint the same dab-config.json already emits (single /graphql contract).'}
+          </Caption1>
+        </div>
+
+        {apiType === 'graphql' && (
+          <>
+            {/* GraphQL must be enabled on the runtime for the endpoint to exist;
+                reuse the runtime.graphql config the RuntimeStage already owns. */}
+            {!cfg.runtime.graphql.enabled && (
+              <MessageBar intent="warning"><MessageBarBody>
+                <MessageBarTitle>GraphQL is disabled on the runtime</MessageBarTitle>
+                The GraphQL endpoint won&apos;t be served until <code>runtime.graphql.enabled</code> is on.
+                {' '}<Button size="small" appearance="transparent" icon={<Code20Regular />}
+                  onClick={() => mutate((c) => { c.runtime.graphql.enabled = true; return c; })}>
+                  Enable GraphQL endpoint
+                </Button>
+                {' '}then Save the config.
+              </MessageBarBody></MessageBar>
+            )}
+            <div className={s.field}>
+              <Label>GraphQL endpoint</Label>
+              <Input readOnly
+                value={`${probe?.baseUrl || '<runtime>'}${cfg.runtime.graphql.path}`}
+                aria-label="GraphQL endpoint URL" />
+              <Caption1>Derived from the live runtime base URL + <code>runtime.graphql.path</code>. Test it with the GraphQL tester above.</Caption1>
+            </div>
+            <MessageBar intent="info"><MessageBarBody>
+              <MessageBarTitle>GraphQL publish via APIM is a REST (OpenAPI) import today</MessageBarTitle>
+              The gateway publish path currently imports the runtime&apos;s OpenAPI v3 document, so the GraphQL
+              endpoint is registered behind the same REST-import flow (a single <code>POST /graphql</code> operation).
+              Native GraphQL passthrough in APIM is planned; until then this surfaces the real GraphQL endpoint URL
+              above and publishes it through the existing import rather than faking a separate GraphQL API.
+            </MessageBarBody></MessageBar>
+          </>
+        )}
+
         <div className={s.row}>
           <div className={s.field}><Label>API id</Label><Input value={apiId} onChange={(_, d) => setApiId(d.value)} /></div>
           <div className={s.field}><Label>API path</Label><Input value={apiPath} onChange={(_, d) => setApiPath(d.value)} /></div>
-          <Button appearance="primary" icon={<CloudArrowUp20Regular />} onClick={publish} disabled={!probe?.ok}>Publish</Button>
+          <Button appearance="primary" icon={<CloudArrowUp20Regular />} onClick={publish} disabled={!probe?.ok}>
+            {apiType === 'graphql' ? 'Publish GraphQL endpoint' : 'Publish'}
+          </Button>
         </div>
         {publishResult && <pre className={s.mono}>{publishResult}</pre>}
       </div>

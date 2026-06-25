@@ -354,10 +354,38 @@ type GqlBackend = 'adx-graph' | 'fabric-graph' | 'cosmos-gremlin-translate' | 'p
 
 export function GqlGraphEditor({ item, id }: { item: FabricItemType; id: string }) {
   const s = useStyles();
+  // Wave-B merge #5: cypher-graph folds into gql-graph. A `lang` toggle lets
+  // this editor accept either ISO GQL (default, unchanged behavior) or
+  // openCypher. In openCypher mode it reuses the SAME cypherToKql translator
+  // CypherGraphEditor uses (against `sourceTable`) and POSTs the emitted KQL to
+  // the kql-database query route — exactly as CypherGraphEditor does — so both
+  // languages ultimately target ADX make-graph/graph-match. CypherGraphEditor
+  // stays registered so already-created cypher-graph instances keep opening.
+  const [lang, setLang] = useState<'gql' | 'cypher'>('gql');
   const [query, setQuery] = useState<string>(SAMPLE_GQL);
   const [backend, setBackend] = useState<GqlBackend>('adx-graph');
+  const [sourceTable, setSourceTable] = useState('GraphSnapshot');
+  const [translated, setTranslated] = useState<string>('');
+  const [translateErr, setTranslateErr] = useState<string | null>(null);
   const [result, setResult] = useState<any>(null);
   const [loading, setLoading] = useState(false);
+
+  // Toggle the editor language; swap to the matching sample so the editor is
+  // never left holding the other dialect's syntax. Only replaces the buffer
+  // when it still holds the *other* dialect's untouched sample (so user edits
+  // are preserved when toggling back and forth).
+  const toggleLang = useCallback(() => {
+    setLang((prev) => {
+      const next = prev === 'gql' ? 'cypher' : 'gql';
+      setQuery((q) => {
+        if (next === 'cypher' && q === SAMPLE_GQL) return SAMPLE_CYPHER;
+        if (next === 'gql' && q === SAMPLE_CYPHER) return SAMPLE_GQL;
+        return q;
+      });
+      setTranslated(''); setTranslateErr(null);
+      return next;
+    });
+  }, []);
 
   // v3.27: F-vaporware fix — Run button now actually does something.
   // For Fabric Graph backend we POST to the Fabric Graph executeQuery
@@ -367,9 +395,29 @@ export function GqlGraphEditor({ item, id }: { item: FabricItemType; id: string 
   // persist-only we honestly save the query to item state without
   // pretending to execute it.
   const run = useCallback(async () => {
-    setLoading(true); setResult(null);
+    setLoading(true); setResult(null); setTranslateErr(null); setTranslated('');
     try {
-      if (backend === 'adx-graph') {
+      // openCypher on the Azure-native ADX backend: translate to KQL graph
+      // operators (reusing CypherGraphEditor's translator) then run via the
+      // kql-database query route, which executeQuery's the self-contained
+      // make-graph/graph-match pipeline the translator emits.
+      if (lang === 'cypher' && backend === 'adx-graph') {
+        let kqlBody: string;
+        try {
+          kqlBody = cypherToKql(query, sourceTable);
+          setTranslated(kqlBody);
+        } catch (e) {
+          const tErr = e instanceof TranslationError ? e : new TranslationError(String(e));
+          setTranslateErr(`${tErr.message}${tErr.hint ? ` — ${tErr.hint}` : ''}`);
+          setLoading(false);
+          return;
+        }
+        const r = await fetch(`/api/items/kql-database/${id}/query`, {
+          method: 'POST', headers: { 'content-type': 'application/json' },
+          body: JSON.stringify({ kql: kqlBody }),
+        });
+        setResult(await r.json());
+      } else if (backend === 'adx-graph') {
         // Azure-native default — runs make-graph + graph-match on ADX (no Fabric).
         const r = await fetch(`/api/items/gql-graph/${id}/query`, {
           method: 'POST', headers: { 'content-type': 'application/json' },
@@ -398,7 +446,7 @@ export function GqlGraphEditor({ item, id }: { item: FabricItemType; id: string 
       }
     } catch (e: any) { setResult({ ok: false, error: e?.message || String(e) }); }
     finally { setLoading(false); }
-  }, [backend, id, query]);
+  }, [backend, id, query, lang, sourceTable]);
 
   const gqlGraph = useMemo(() => {
     if (!result || !result.ok) return null;
@@ -411,9 +459,10 @@ export function GqlGraphEditor({ item, id }: { item: FabricItemType; id: string 
     { id: 'home', label: 'Home', groups: [
       { label: 'Query', actions: [
         { label: loading ? 'Running…' : backend === 'persist-only' ? 'Save query' : 'Run', onClick: loading ? undefined : run, disabled: loading },
+        { label: `Language: ${lang === 'cypher' ? 'openCypher' : 'GQL'}`, onClick: toggleLang },
       ]},
     ]},
-  ], [loading, run, backend]);
+  ], [loading, run, backend, lang, toggleLang]);
 
   return (
     <ItemEditorChrome
@@ -421,39 +470,100 @@ export function GqlGraphEditor({ item, id }: { item: FabricItemType; id: string 
       ribbon={ribbon}
       leftPanel={
         <div className={s.treePad}>
-          <Caption1>ISO GQL standard. Pick a backend below.</Caption1>
+          <Caption1>ISO GQL / openCypher. Pick a language and backend below.</Caption1>
+          <div className={s.field} style={{ marginTop: tokens.spacingVerticalS }}>
+            <Label>Language</Label>
+            <Dropdown
+              aria-label="Language"
+              value={lang === 'cypher' ? 'openCypher → KQL (ADX make-graph)' : 'ISO GQL (39075:2024)'}
+              selectedOptions={[lang]}
+              onOptionSelect={(_, d) => { const v = d.optionValue as 'gql' | 'cypher'; if (v && v !== lang) toggleLang(); }}
+            >
+              <Option value="gql">ISO GQL (39075:2024)</Option>
+              <Option value="cypher">openCypher → KQL (ADX make-graph)</Option>
+            </Dropdown>
+            <Caption1>
+              {lang === 'cypher'
+                ? <>openCypher translates to ADX <code>graph-match</code> against the source table, then runs via the KQL query route — same engine as GQL.</>
+                : <>GQL runs natively on the selected backend (ADX <code>make-graph</code> by default).</>}
+            </Caption1>
+          </div>
+          {lang === 'cypher' && (
+            <div className={s.field} style={{ marginTop: tokens.spacingVerticalS }}>
+              <Label>Source table</Label>
+              <Input value={sourceTable} onChange={(_: unknown, d: any) => setSourceTable(d.value)} placeholder="GraphSnapshot" />
+              <Caption1>The ADX table that holds the graph snapshot (input to <code>make-graph</code>).</Caption1>
+            </div>
+          )}
           <div className={s.field} style={{ marginTop: tokens.spacingVerticalS }}>
             <Label>Backend</Label>
-            <select value={backend} onChange={(e) => setBackend(e.target.value as GqlBackend)} style={{ padding: tokens.spacingHorizontalXS }}>
-              <option value="adx-graph">Azure Data Explorer (KQL graph — default, no Fabric)</option>
-              <option value="cosmos-gremlin-translate">Cosmos Gremlin (best-effort translate)</option>
-              <option value="persist-only">Persist-only (no dispatch)</option>
-              <option value="fabric-graph">Fabric Graph REST (opt-in — gated on workspace)</option>
-            </select>
+            <Dropdown
+              aria-label="Backend"
+              value={{ 'adx-graph': 'Azure Data Explorer (KQL graph — default, no Fabric)', 'cosmos-gremlin-translate': 'Cosmos Gremlin (best-effort translate)', 'persist-only': 'Persist-only (no dispatch)', 'fabric-graph': 'Fabric Graph REST (opt-in — gated on workspace)' }[backend]}
+              selectedOptions={[backend]}
+              onOptionSelect={(_, d) => setBackend(d.optionValue as GqlBackend)}
+            >
+              <Option value="adx-graph">Azure Data Explorer (KQL graph — default, no Fabric)</Option>
+              <Option value="cosmos-gremlin-translate">Cosmos Gremlin (best-effort translate)</Option>
+              <Option value="persist-only">Persist-only (no dispatch)</Option>
+              <Option value="fabric-graph">Fabric Graph REST (opt-in — gated on workspace)</Option>
+            </Dropdown>
+            {lang === 'cypher' && backend !== 'adx-graph' && (
+              <Caption1>openCypher translation is wired for the <strong>Azure Data Explorer</strong> backend. Switch to GQL or ADX to run.</Caption1>
+            )}
           </div>
         </div>
       }
       main={
         <div className={s.pad}>
-          <MessageBar intent={backend === 'persist-only' ? 'warning' : 'info'}>
-            <MessageBarBody>
-              <MessageBarTitle>
-                {backend === 'fabric-graph' && 'Fabric Graph REST'}
-                {backend === 'cosmos-gremlin-translate' && 'Cosmos Gremlin best-effort'}
-                {backend === 'persist-only' && 'Persist-only mode'}
-              </MessageBarTitle>
-              {backend === 'fabric-graph' && (
-                <>Fabric Graph <code>executeQuery</code> endpoint is preview. Run dispatches to <code>/api/items/gql-graph/[id]/query</code> — returns 501 with a documented gate when <code>LOOM_FABRIC_GRAPH_WORKSPACE</code> isn't bound.</>
-              )}
-              {backend === 'cosmos-gremlin-translate' && (
-                <>The Cosmos Gremlin route accepts <code>lang: 'gql'</code> for best-effort pattern translation. Complex GQL paths may fall back to Gremlin equivalents or return a translation-failed error.</>
-              )}
-              {backend === 'persist-only' && (
-                <>Run saves the query to item state and does <strong>not</strong> dispatch — this is the honest no-backend mode. Switch the backend dropdown to actually execute.</>
-              )}
-            </MessageBarBody>
-          </MessageBar>
-          <MonacoTextarea value={query} onChange={setQuery} language="sql" height={200} minHeight={160} ariaLabel="GQL editor" />
+          {lang === 'cypher' ? (
+            <MessageBar intent="info">
+              <MessageBarBody>
+                <MessageBarTitle>openCypher on ADX</MessageBarTitle>
+                Type Cypher; the translator emits KQL <code>graph-match</code> against{' '}
+                <code>{sourceTable}</code> and runs it on Azure Data Explorer. Switch{' '}
+                <em>Language</em> to GQL in the ribbon (or left panel) to write ISO GQL instead.
+              </MessageBarBody>
+            </MessageBar>
+          ) : (
+            <MessageBar intent={backend === 'persist-only' ? 'warning' : 'info'}>
+              <MessageBarBody>
+                <MessageBarTitle>
+                  {backend === 'adx-graph' && 'GQL on Azure Data Explorer'}
+                  {backend === 'fabric-graph' && 'Fabric Graph REST'}
+                  {backend === 'cosmos-gremlin-translate' && 'Cosmos Gremlin best-effort'}
+                  {backend === 'persist-only' && 'Persist-only mode'}
+                </MessageBarTitle>
+                {backend === 'adx-graph' && (
+                  <>ISO GQL runs natively on the Kusto graph engine via <code>make-graph</code> + <code>graph-match</code> — the same Azure-native backend openCypher targets. No Microsoft Fabric required.</>
+                )}
+                {backend === 'fabric-graph' && (
+                  <>Fabric Graph <code>executeQuery</code> endpoint is preview. Run dispatches to <code>/api/items/gql-graph/[id]/query</code> — returns 501 with a documented gate when <code>LOOM_FABRIC_GRAPH_WORKSPACE</code> isn't bound.</>
+                )}
+                {backend === 'cosmos-gremlin-translate' && (
+                  <>The Cosmos Gremlin route accepts <code>lang: 'gql'</code> for best-effort pattern translation. Complex GQL paths may fall back to Gremlin equivalents or return a translation-failed error.</>
+                )}
+                {backend === 'persist-only' && (
+                  <>Run saves the query to item state and does <strong>not</strong> dispatch — this is the honest no-backend mode. Switch the backend dropdown to actually execute.</>
+                )}
+              </MessageBarBody>
+            </MessageBar>
+          )}
+          <MonacoTextarea value={query} onChange={setQuery} language="sql" height={200} minHeight={160} ariaLabel={lang === 'cypher' ? 'openCypher editor' : 'GQL editor'} />
+          {translateErr && (
+            <MessageBar intent="error">
+              <MessageBarBody>
+                <MessageBarTitle>Cypher → KQL translation failed</MessageBarTitle>
+                {translateErr} — switch Language to GQL and write the query by hand, or simplify the pattern.
+              </MessageBarBody>
+            </MessageBar>
+          )}
+          {translated && (
+            <div>
+              <Caption1>Translated KQL:</Caption1>
+              <pre style={{ fontFamily: 'Consolas, monospace', fontSize: tokens.fontSizeBase200, backgroundColor: tokens.colorNeutralBackground2, padding: tokens.spacingVerticalS, borderRadius: tokens.borderRadiusMedium, whiteSpace: 'pre-wrap', overflowWrap: 'anywhere', wordBreak: 'break-word', maxWidth: '100%' }}>{translated}</pre>
+            </div>
+          )}
           <Button appearance="primary" icon={<Play20Regular />} disabled={loading} onClick={run}>
             {loading ? 'Running…' : backend === 'persist-only' ? 'Save query' : 'Run'}
           </Button>

@@ -87,6 +87,8 @@ export interface FabricItemType {
    * under the unified Loom Marketplace (/marketplace).
    */
   coreSurface?: boolean;
+  /** This slug is a DEDUP DUPLICATE consolidated into a canonical sibling (Wave-B catalog merge). The New-item gallery filters it out (you create the canonical one instead), BUT the slug stays fully resolvable — findItemType() returns it and its editor + per-item BFF routes keep working so ALREADY-CREATED instances still open. NEVER also delete the editor/routes an existing instance loads. Azure-native default per no-fabric-dependency.md. */
+  hiddenFromGallery?: boolean;
   /**
    * This slug is an alias/preset of another item type; the editor + new-item flow
    * resolve to aliasOf's editor (the unified one), while this entry's own slug +
@@ -235,7 +237,7 @@ export const FABRIC_ITEM_TYPES: readonly FabricItemType[] = [
       ],
       "docsUrl": "https://learn.microsoft.com/fabric/data-engineering/spark-job-definition"
     } },
-  { slug: 'environment', displayName: 'Environment', restType: 'Environment', category: 'Data Engineering',
+  { slug: 'environment', displayName: 'Environment', restType: 'Environment', category: 'Data Engineering', hiddenFromGallery: true,
     description: 'Reusable Spark settings and library bundle for notebooks and jobs.',
     learnContent: {
       "overview": "An Environment is a reusable bundle of Spark settings and libraries that you attach to notebooks and Spark job definitions. In Loom the spec persists to Cosmos and Apply to pool PUTs it onto the Synapse Spark pool.",
@@ -560,7 +562,7 @@ export const FABRIC_ITEM_TYPES: readonly FabricItemType[] = [
     } },
 
   // Databases
-  { slug: 'sql-database', displayName: 'SQL database', restType: 'AzureDatabase', category: 'Databases',
+  { slug: 'sql-database', displayName: 'SQL database', restType: 'AzureDatabase', category: 'Databases', hiddenFromGallery: true,
     description: 'Unified Azure database surface — Azure SQL DB, SQL Managed Instance, or PostgreSQL Flexible Server. Tenant inventory, provision, query, schema, and OneLake/Purview catalog.',
     learnContent: {
       "overview": "In CSA Loom the SQL database surface is backed by real Azure database services — Azure SQL Database, SQL Managed Instance, and Azure Database for PostgreSQL Flexible Server — not Fabric SQL. It lists existing deployments across the subscription via ARM, lets you connect to one, provision new ones (ARM PUT), run SQL over the live TDS path, browse the schema, and register the database as a governed OneLake/Purview catalog asset.",
@@ -622,7 +624,7 @@ export const FABRIC_ITEM_TYPES: readonly FabricItemType[] = [
       ],
       "docsUrl": "https://learn.microsoft.com/fabric/real-time-intelligence/eventhouse"
     } },
-  { slug: 'workspace-monitor', displayName: 'Workspace monitoring', restType: 'Eventhouse', category: 'Real-Time Intelligence',
+  { slug: 'workspace-monitor', displayName: 'Workspace monitoring', restType: 'Eventhouse', category: 'Real-Time Intelligence', hiddenFromGallery: true,
     description: 'Read-only ADX database of platform usage/performance telemetry, fed by Azure Monitor diagnostic settings.',
     learnContent: {
       "overview": "Workspace monitoring is the Azure-native parity for Fabric's monitoring Eventhouse: a read-only Azure Data Explorer database on the shared Loom ADX cluster that holds the platform's own usage and performance telemetry. Diagnostic settings on every Loom resource route logs + metrics to Log Analytics; a data-export rule streams them to ADX so operators can query and dashboard them with KQL — no Microsoft Fabric required.",
@@ -986,7 +988,7 @@ export const FABRIC_ITEM_TYPES: readonly FabricItemType[] = [
       ],
       "docsUrl": "https://learn.microsoft.com/fabric/fundamentals/fabric-iq"
     } },
-  { slug: 'operations-agent', displayName: 'Operations agent', restType: 'OperationsAgent', category: 'Fabric IQ', preview: true,
+  { slug: 'operations-agent', displayName: 'Operations agent', restType: 'OperationsAgent', category: 'Fabric IQ', preview: true, hiddenFromGallery: true,
     description: 'Monitor real-time data and recommend actions via Activator + Power Automate.',
     learnContent: {
       "overview": "An Operations agent monitors real-time data and recommends actions via Activator and Power Automate (preview). In Loom it watches items and workspaces, flags drift, opens incidents in the audit log, and proposes remediations via the Cross-item Copilot.",
@@ -1225,7 +1227,7 @@ export const FABRIC_ITEM_TYPES: readonly FabricItemType[] = [
       ],
       "docsUrl": "https://learn.microsoft.com/azure/data-api-builder/overview"
     } },
-  { slug: 'graphql-api', displayName: 'API for GraphQL', restType: 'GraphQLApi', category: 'APIs and functions',
+  { slug: 'graphql-api', displayName: 'API for GraphQL', restType: 'GraphQLApi', category: 'APIs and functions', hiddenFromGallery: true,
     description: 'Single GraphQL endpoint over Warehouse / Lakehouse / SQL DB / mirrored DBs.',
     learnContent: {
       "overview": "An API for GraphQL exposes a single GraphQL endpoint over Warehouse, Lakehouse, SQL DB, or mirrored databases. In Loom it auto-generates CRUD plus custom resolvers. Use it to give app developers one typed endpoint over your data.",
@@ -1952,7 +1954,7 @@ export const FABRIC_ITEM_TYPES: readonly FabricItemType[] = [
       ],
       "docsUrl": "https://learn.microsoft.com/microsoft-copilot-studio/fundamentals-what-is-copilot-studio"
     } },
-  { slug: 'copilot-studio-knowledge',    displayName: 'Copilot knowledge source',    restType: 'CopilotKnowledgeSource',    category: 'Copilot Studio',
+  { slug: 'copilot-studio-knowledge',    displayName: 'Copilot knowledge source',    restType: 'CopilotKnowledgeSource',    category: 'Copilot Studio', hiddenFromGallery: true,
     description: 'Grounding source for an agent — URL, file, SharePoint site, or Dataverse table.',
     learnContent: {
       "overview": "A Copilot knowledge source grounds an agent — URL, file, SharePoint site, or Dataverse table. In Loom you pick an agent, then list and add sources via the Dataverse-backed BFF.",
@@ -1976,7 +1978,7 @@ export const FABRIC_ITEM_TYPES: readonly FabricItemType[] = [
       ],
       "docsUrl": "https://learn.microsoft.com/microsoft-copilot-studio/nlu-generative-answers"
     } },
-  { slug: 'copilot-studio-topic',        displayName: 'Copilot topic',               restType: 'CopilotTopic',              category: 'Copilot Studio',
+  { slug: 'copilot-studio-topic',        displayName: 'Copilot topic',               restType: 'CopilotTopic',              category: 'Copilot Studio', hiddenFromGallery: true,
     description: 'Trigger-phrase-driven dialog flow authored in Copilot Studio YAML.',
     learnContent: {
       "overview": "A Copilot topic is a trigger-phrase-driven dialog flow authored in Copilot Studio YAML. In Loom you pick an agent, list topics, and edit trigger phrases plus the flow YAML via the BFF.",
@@ -2000,7 +2002,7 @@ export const FABRIC_ITEM_TYPES: readonly FabricItemType[] = [
       ],
       "docsUrl": "https://learn.microsoft.com/microsoft-copilot-studio/authoring-create-edit-topics"
     } },
-  { slug: 'copilot-studio-action',       displayName: 'Copilot action',              restType: 'CopilotAction',             category: 'Copilot Studio',
+  { slug: 'copilot-studio-action',       displayName: 'Copilot action',              restType: 'CopilotAction',             category: 'Copilot Studio', hiddenFromGallery: true,
     description: 'Power Automate flow, custom connector, or prebuilt action bound to a Copilot Studio agent.',
     learnContent: {
       "overview": "A Copilot action is a Power Automate flow, custom connector, or prebuilt action bound to a Copilot Studio agent. In Loom you pick an agent and manage its action list via the BFF.",
@@ -2024,7 +2026,7 @@ export const FABRIC_ITEM_TYPES: readonly FabricItemType[] = [
       ],
       "docsUrl": "https://learn.microsoft.com/microsoft-copilot-studio/authoring-actions"
     } },
-  { slug: 'copilot-studio-channel',      displayName: 'Copilot channel',             restType: 'CopilotChannel',            category: 'Copilot Studio',
+  { slug: 'copilot-studio-channel',      displayName: 'Copilot channel',             restType: 'CopilotChannel',            category: 'Copilot Studio', hiddenFromGallery: true,
     description: 'Publish an agent to Teams, Web chat, Direct Line, Slack, or a custom channel.',
     learnContent: {
       "overview": "A Copilot channel publishes an agent to Teams, web chat, Direct Line, Slack, or a custom channel. In Loom you pick an agent and publish-to-channel via the BFF.",
@@ -2048,7 +2050,7 @@ export const FABRIC_ITEM_TYPES: readonly FabricItemType[] = [
       ],
       "docsUrl": "https://learn.microsoft.com/microsoft-copilot-studio/publication-fundamentals-publish-channels"
     } },
-  { slug: 'copilot-studio-analytics',    displayName: 'Copilot analytics',           restType: 'CopilotAnalytics',          category: 'Copilot Studio',
+  { slug: 'copilot-studio-analytics',    displayName: 'Copilot analytics',           restType: 'CopilotAnalytics',          category: 'Copilot Studio', hiddenFromGallery: true,
     description: 'Sessions, resolution rate, escalation rate, and CSAT for a Copilot Studio agent (last 30 days by default).',
     learnContent: {
       "overview": "Copilot analytics shows sessions, resolution rate, escalation rate, and CSAT for a Copilot Studio agent (last 30 days by default). In Loom you pick an agent and view KPI cards sourced via the BFF.",
@@ -2491,7 +2493,7 @@ export const FABRIC_ITEM_TYPES: readonly FabricItemType[] = [
       ],
       "docsUrl": "https://learn.microsoft.com/azure/cosmos-db/gremlin/introduction"
     } },
-  { slug: 'cypher-graph',                displayName: 'Cypher graph',                restType: 'CypherGraph',               category: 'Azure Graph + Vector',
+  { slug: 'cypher-graph',                displayName: 'Cypher graph',                restType: 'CypherGraph',               category: 'Azure Graph + Vector', hiddenFromGallery: true,
     description: 'openCypher dialect over Cosmos / Neptune-compatible / ADX graph plugin.',
     learnContent: {
       "overview": "A Cypher graph lets Neo4j-trained engineers use the openCypher dialect; in Loom it is translated to ADX make-graph/graph-match operators and dispatched via the KQL database query route — server-side, no Spark or Gremlin, millisecond-scale up to ~10M edges.",

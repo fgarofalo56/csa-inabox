@@ -37,8 +37,11 @@ import {
   Settings20Regular, Money20Regular, BranchFork20Regular,
   Table20Regular, ChartMultiple20Regular,
   ArrowDownload16Regular, ArrowSortUp16Regular, ArrowSortDown16Regular,
-  Save16Regular, DataTrending20Regular, Play20Regular,
+  Save16Regular, DataTrending20Regular, Play20Regular, Pulse20Regular,
 } from '@fluentui/react-icons';
+import { useQuery } from '@tanstack/react-query';
+import { getItem } from '@/lib/api/workspaces';
+import type { MonitorRuleRecord } from '@/lib/azure/activator-monitor';
 import { ItemEditorChrome } from './item-editor-chrome';
 import { NewItemBrowseGate } from './new-item-gate';
 import { safeModelJson } from './model-fetch';
@@ -3936,10 +3939,10 @@ export function DataAgentEditor({ item, id }: { item: FabricItemType; id: string
   });
   // Initial tab honors a ?tab= deep-link (the /data-agent pane's "Configure"
   // and "Publish…" actions route here with ?tab=copilot / ?tab=publish).
-  const [tab, setTab] = useState<'build' | 'copilot' | 'test' | 'publish' | 'inspect'>(() => {
+  const [tab, setTab] = useState<'build' | 'copilot' | 'test' | 'publish' | 'inspect' | 'monitor'>(() => {
     if (typeof window === 'undefined') return 'build';
     const t = new URLSearchParams(window.location.search).get('tab');
-    return (t === 'copilot' || t === 'test' || t === 'publish' || t === 'inspect') ? t : 'build';
+    return (t === 'copilot' || t === 'test' || t === 'publish' || t === 'inspect' || t === 'monitor') ? t : 'build';
   });
 
   // ---- source picker data (real Loom items) ----
@@ -4212,6 +4215,7 @@ export function DataAgentEditor({ item, id }: { item: FabricItemType; id: string
         { label: 'Test chat', onClick: () => setTab('test') },
         { label: 'Publish', onClick: () => setTab('publish') },
         { label: 'Run inspector', onClick: () => setTab('inspect') },
+        { label: 'Monitoring', onClick: () => setTab('monitor') },
       ]},
     ]},
   ], [save, saving, dirty]);
@@ -4226,6 +4230,7 @@ export function DataAgentEditor({ item, id }: { item: FabricItemType; id: string
             <Tab value="test">Test chat</Tab>
             <Tab value="publish">Publish</Tab>
             <Tab value="inspect">Run inspector</Tab>
+            <Tab value="monitor">Monitoring</Tab>
           </TabList>
         </div>
         <div className={s.pad}>
@@ -4666,8 +4671,249 @@ export function DataAgentEditor({ item, id }: { item: FabricItemType; id: string
               )}
             </>
           )}
+
+          {tab === 'monitor' && <DataAgentMonitoringPanel id={id} />}
         </div>
       </>
     } />
+  );
+}
+
+// ----- Data Agent → Monitoring (Wave-B merge #6) --------------------------------
+// operations-agent's monitoring capability folds into data-agent here, OPTIONALLY:
+// a Monitoring tab that creates + lists Azure-native scheduled-query alert rules
+// (Microsoft.Insights/scheduledQueryRules + action group) for this agent's data.
+// Backend is the EXISTING activator rules route — no new BFF route:
+//   GET  /api/items/activator/[id]/rules?workspaceId=...   → MonitorRuleRecord[]
+//   POST /api/items/activator/[id]/rules?workspaceId=...    → create one rule
+//   POST .../rules?workspaceId=&trigger=<ruleId>            → run the rule's KQL now
+// Per no-fabric-dependency.md the default backend is Azure Monitor (no Fabric).
+// The route's honest Monitor infra-gate (set LOOM_LOG_ANALYTICS_RESOURCE_ID /
+// LOOM_ALERT_RG, grant Monitoring Contributor) is surfaced VERBATIM. The
+// workspaceId is read from the page-primed ['item','data-agent',id] React Query
+// cache (useItemState doesn't expose it). OperationsAgentEditor is untouched and
+// stays registered so already-created operations-agent instances open as before.
+const DA_SEVERITY_OPTS: { value: number; label: string }[] = [
+  { value: 0, label: '0 — Critical' },
+  { value: 1, label: '1 — Error' },
+  { value: 2, label: '2 — Warning' },
+  { value: 3, label: '3 — Informational' },
+  { value: 4, label: '4 — Verbose' },
+];
+const DA_FREQ_OPTS = ['PT5M', 'PT15M', 'PT30M', 'PT1H', 'PT6H', 'P1D'];
+const DA_WINDOW_OPTS = ['PT5M', 'PT15M', 'PT30M', 'PT1H', 'PT6H', 'PT24H'];
+
+function DataAgentMonitoringPanel({ id }: { id: string }) {
+  const s = useStyles();
+  // workspaceId comes from the page-primed item record (the page hydrates
+  // ['item','data-agent',id]); read the SAME key so we reuse that cache and the
+  // activator rules route gets the required ?workspaceId=.
+  const itemQ = useQuery({
+    queryKey: ['item', 'data-agent', id],
+    queryFn: () => getItem('data-agent', id),
+    enabled: !!id && id !== 'new',
+  });
+  const workspaceId = itemQ.data?.workspaceId || '';
+
+  const [rules, setRules] = useState<MonitorRuleRecord[]>([]);
+  const [loading, setLoading] = useState(false);
+  const [listErr, setListErr] = useState<string | null>(null);
+  const [gate, setGate] = useState<{ reason?: string; remediation?: string } | null>(null);
+
+  // New-rule form (no JSON — typed fields mirroring the activator rule wizard).
+  const [ruleName, setRuleName] = useState('');
+  const [query, setQuery] = useState('');
+  const [sourceTable, setSourceTable] = useState('');
+  const [severity, setSeverity] = useState(2);
+  const [evalFreq, setEvalFreq] = useState('PT5M');
+  const [winSize, setWinSize] = useState('PT5M');
+  const [creating, setCreating] = useState(false);
+  const [createErr, setCreateErr] = useState<string | null>(null);
+
+  // Trigger-now feedback per rule.
+  const [triggerResult, setTriggerResult] = useState<{ ruleId: string; fired: boolean; count: number } | null>(null);
+  const [triggering, setTriggering] = useState<string | null>(null);
+
+  const loadRules = useCallback(async () => {
+    if (!workspaceId) return;
+    setLoading(true); setListErr(null); setGate(null);
+    try {
+      const r = await fetch(`/api/items/activator/${encodeURIComponent(id)}/rules?workspaceId=${encodeURIComponent(workspaceId)}`);
+      const j = await r.json().catch(() => ({}));
+      if (!j?.ok) {
+        setRules([]);
+        if (j?.gate) setGate(j.gate);
+        setListErr(j?.error || `HTTP ${r.status}`);
+        return;
+      }
+      setRules(Array.isArray(j.rules) ? j.rules : []);
+    } catch (e: any) {
+      setRules([]); setListErr(e?.message || String(e));
+    } finally { setLoading(false); }
+  }, [id, workspaceId]);
+
+  useEffect(() => { if (workspaceId) loadRules(); }, [workspaceId, loadRules]);
+
+  const createRule = useCallback(async () => {
+    if (!ruleName.trim() || !workspaceId) return;
+    setCreating(true); setCreateErr(null); setGate(null);
+    const body: Record<string, unknown> = {
+      name: ruleName.trim(),
+      severity, evaluationFrequency: evalFreq, windowSize: winSize,
+    };
+    if (query.trim()) body.query = query.trim();
+    if (sourceTable.trim()) body.sourceTable = sourceTable.trim();
+    try {
+      const r = await fetch(`/api/items/activator/${encodeURIComponent(id)}/rules?workspaceId=${encodeURIComponent(workspaceId)}`, {
+        method: 'POST', headers: { 'content-type': 'application/json' },
+        body: JSON.stringify(body),
+      });
+      const j = await r.json().catch(() => ({}));
+      if (!j?.ok) {
+        if (j?.gate) setGate(j.gate);
+        setCreateErr(j?.error || j?.gate?.remediation || `HTTP ${r.status}`);
+        return;
+      }
+      setRuleName(''); setQuery(''); setSourceTable('');
+      await loadRules();
+    } catch (e: any) {
+      setCreateErr(e?.message || String(e));
+    } finally { setCreating(false); }
+  }, [ruleName, query, sourceTable, severity, evalFreq, winSize, id, workspaceId, loadRules]);
+
+  const triggerNow = useCallback(async (ruleId: string) => {
+    if (!workspaceId) return;
+    setTriggering(ruleId); setTriggerResult(null); setListErr(null); setGate(null);
+    try {
+      const r = await fetch(`/api/items/activator/${encodeURIComponent(id)}/rules?workspaceId=${encodeURIComponent(workspaceId)}&trigger=${encodeURIComponent(ruleId)}`, { method: 'POST' });
+      const j = await r.json().catch(() => ({}));
+      if (!j?.ok) {
+        if (j?.gate) setGate(j.gate);
+        setListErr(j?.error || j?.gate?.remediation || `HTTP ${r.status}`);
+        return;
+      }
+      setTriggerResult({ ruleId, fired: !!j.fired, count: typeof j.count === 'number' ? j.count : (Array.isArray(j.rows) ? j.rows.length : 0) });
+    } catch (e: any) {
+      setListErr(e?.message || String(e));
+    } finally { setTriggering(null); }
+  }, [id, workspaceId]);
+
+  if (id === 'new') {
+    return (
+      <MessageBar intent="info">
+        <MessageBarBody>Save this data agent first — Monitoring creates Azure Monitor alert rules scoped to this agent, which needs a persisted item.</MessageBarBody>
+      </MessageBar>
+    );
+  }
+
+  return (
+    <div className={s.daSection}>
+      <div className={s.daSectionHead}>
+        <span className={s.daSectionIcon}><Pulse20Regular /></span>
+        <Subtitle2>Monitoring</Subtitle2>
+        <Badge appearance="tint" color="brand">Azure Monitor</Badge>
+        <div style={{ flex: 1 }} />
+        <Button size="small" appearance="subtle" icon={<ArrowSync16Regular />} onClick={loadRules} disabled={loading || !workspaceId}>Refresh</Button>
+      </div>
+      <Caption1 style={{ color: tokens.colorNeutralForeground3 }}>
+        Watch this agent&rsquo;s data with scheduled-query alert rules. Each rule is a real
+        <strong> Microsoft.Insights/scheduledQueryRule</strong> (+ action group) that runs your KQL on the Log
+        Analytics workspace on a cadence and fires when rows are returned — no Microsoft Fabric required.
+      </Caption1>
+
+      {itemQ.isLoading && <Spinner size="tiny" label="Loading agent…" labelPosition="after" />}
+      {itemQ.data && !workspaceId && (
+        <MessageBar intent="warning"><MessageBarBody>
+          Couldn&rsquo;t resolve this agent&rsquo;s workspace. Open the agent from its workspace so Monitoring can scope alert rules to it.
+        </MessageBarBody></MessageBar>
+      )}
+
+      {/* Honest Azure Monitor infra-gate (NOT a Fabric gate) — verbatim from the route. */}
+      {gate && (
+        <MessageBar intent="warning">
+          <MessageBarBody>
+            <MessageBarTitle>Azure Monitor not configured</MessageBarTitle>
+            {gate.reason && <div>{gate.reason}</div>}
+            {gate.remediation && <div style={{ marginTop: tokens.spacingVerticalXS }}><em>To enable:</em> {gate.remediation}</div>}
+          </MessageBarBody>
+        </MessageBar>
+      )}
+
+      {/* New rule (typed wizard — no freeform JSON). */}
+      <div className={s.daAddBar} style={{ flexDirection: 'column', alignItems: 'stretch' }}>
+        <div style={{ display: 'flex', gap: tokens.spacingHorizontalS, flexWrap: 'wrap', alignItems: 'flex-end' }}>
+          <Field label="Rule name" style={{ minWidth: 200 }}>
+            <Input value={ruleName} onChange={(_, d) => setRuleName(d.value)} placeholder="e.g. High error rate" />
+          </Field>
+          <Field label="Severity">
+            <Dropdown
+              value={DA_SEVERITY_OPTS.find((o) => o.value === severity)?.label}
+              selectedOptions={[String(severity)]}
+              onOptionSelect={(_, d) => d.optionValue != null && setSeverity(Number(d.optionValue))}
+            >
+              {DA_SEVERITY_OPTS.map((o) => <Option key={o.value} value={String(o.value)}>{o.label}</Option>)}
+            </Dropdown>
+          </Field>
+          <Field label="Evaluate every">
+            <Dropdown value={evalFreq} selectedOptions={[evalFreq]} onOptionSelect={(_, d) => d.optionValue && setEvalFreq(d.optionValue)}>
+              {DA_FREQ_OPTS.map((o) => <Option key={o} value={o}>{o}</Option>)}
+            </Dropdown>
+          </Field>
+          <Field label="Lookback window">
+            <Dropdown value={winSize} selectedOptions={[winSize]} onOptionSelect={(_, d) => d.optionValue && setWinSize(d.optionValue)}>
+              {DA_WINDOW_OPTS.map((o) => <Option key={o} value={o}>{o}</Option>)}
+            </Dropdown>
+          </Field>
+        </div>
+        <Field label="Alert KQL (Log Analytics)" hint="The rule fires when this query returns one or more rows. Leave blank to alert on any new row in the source table below.">
+          <Textarea value={query} rows={3} onChange={(_, d) => setQuery(d.value)} placeholder={'AppEvents\n| where Level == "Error"\n| where TimeGenerated > ago(15m)'} />
+        </Field>
+        <div style={{ display: 'flex', gap: tokens.spacingHorizontalS, flexWrap: 'wrap', alignItems: 'flex-end' }}>
+          <Field label="Source table (optional)" hint="Used to compose the query when Alert KQL is blank." style={{ minWidth: 240 }}>
+            <Input value={sourceTable} onChange={(_, d) => setSourceTable(d.value)} placeholder="AppEvents" />
+          </Field>
+          <Button appearance="primary" icon={<Add20Regular />} onClick={createRule} disabled={creating || !ruleName.trim() || !workspaceId}>
+            {creating ? 'Creating…' : 'Create alert rule'}
+          </Button>
+        </div>
+        {createErr && !gate && <Caption1 style={{ color: tokens.colorPaletteRedForeground1 }}>{createErr}</Caption1>}
+      </div>
+
+      {/* Rule list. */}
+      {loading && <Spinner size="tiny" label="Loading rules…" labelPosition="after" />}
+      {!loading && rules.length === 0 && !gate && !listErr && (
+        <MessageBar intent="info"><MessageBarBody>
+          <Pulse20Regular style={{ verticalAlign: 'middle', marginRight: tokens.spacingHorizontalSNudge }} />
+          No alert rules yet. Create one above to monitor this agent&rsquo;s data on Azure Monitor.
+        </MessageBarBody></MessageBar>
+      )}
+      {!loading && listErr && !gate && (
+        <MessageBar intent="error"><MessageBarBody>{listErr}</MessageBarBody></MessageBar>
+      )}
+      {rules.map((r) => (
+        <div key={r.id} className={s.daSrcCard}>
+          <div className={s.daSrcHead}>
+            <span className={s.daSrcIcon}><Pulse20Regular /></span>
+            <strong>{r.name}</strong>
+            <Badge appearance="tint" color={r.state === 'Active' ? 'success' : 'warning'}>{r.state}</Badge>
+            <Badge appearance="outline">sev {r.severity}</Badge>
+            <Badge appearance="outline">{r.evaluationFrequency} / {r.windowSize}</Badge>
+            <div style={{ flex: 1 }} />
+            <Button size="small" appearance="subtle" icon={<Play20Regular />} onClick={() => triggerNow(r.id)} disabled={triggering === r.id || !workspaceId}>
+              {triggering === r.id ? 'Running…' : 'Trigger now'}
+            </Button>
+          </div>
+          {r.query && <pre className={s.chatSource}>{r.query}</pre>}
+          {r.note && <Caption1 style={{ color: tokens.colorPaletteYellowForeground1 }}>⚠ {r.note}</Caption1>}
+          {triggerResult && triggerResult.ruleId === r.id && (
+            <Caption1 style={{ color: triggerResult.fired ? tokens.colorPaletteRedForeground1 : tokens.colorNeutralForeground3 }}>
+              {triggerResult.fired
+                ? `Would fire — ${triggerResult.count} matching row${triggerResult.count === 1 ? '' : 's'} right now.`
+                : 'No matching rows right now — the rule would not fire.'}
+            </Caption1>
+          )}
+        </div>
+      ))}
+    </div>
   );
 }

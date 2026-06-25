@@ -143,6 +143,11 @@ export function NewItemDialog({ defaultCategory, workspaceId }: Props = {}) {
       // Core surfaces (e.g. data-marketplace) are reached from a top-level nav
       // destination, not "created" per workspace — never offer them here.
       if (i.coreSurface) return false;
+      // Wave-B dedup duplicates are consolidated into a canonical sibling — the
+      // gallery hides them (you create the canonical one) but the slug stays
+      // fully resolvable so ALREADY-CREATED instances still open their editor +
+      // BFF routes. Azure-native default per no-fabric-dependency.md.
+      if (i.hiddenFromGallery) return false;
       if (q) {
         // when searching, ignore the category filter so the user finds
         // results across all workloads

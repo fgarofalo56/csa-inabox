@@ -69,7 +69,7 @@ const useStyles = makeStyles({
     transitionTimingFunction: tokens.curveEasyEase,
     ':hover': { boxShadow: tokens.shadow16 },
   },
-  kpiValue: { fontSize: tokens.fontSizeBase700, fontWeight: 600 },
+  kpiValue: { fontSize: tokens.fontSizeHero700, fontWeight: 600 },
   treePad: { padding: tokens.spacingVerticalS },
   sectionHeader: { display: 'flex', alignItems: 'center', gap: tokens.spacingHorizontalXS, color: tokens.colorNeutralForeground1 },
   sectionIcon: { color: tokens.colorBrandForeground1, display: 'inline-flex', alignItems: 'center' },
@@ -297,7 +297,7 @@ export function CopilotStudioAgentEditor({ item, id }: { item: FabricItemType; i
   // Phase 4.5 — dirty flag protects in-flight edits from being clobbered by
   // the agents-list reload that runs after save/refresh/publish.
   const [dirty, setDirty] = useState(false);
-  const [tab, setTab] = useState<'edit' | 'knowledge' | 'topics' | 'actions' | 'channels' | 'test'>('edit');
+  const [tab, setTab] = useState<'edit' | 'knowledge' | 'topics' | 'actions' | 'channels' | 'test' | 'analytics'>('edit');
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [success, setSuccess] = useState<string | null>(null);
@@ -443,8 +443,8 @@ export function CopilotStudioAgentEditor({ item, id }: { item: FabricItemType; i
           { label: 'Channels', onClick: () => setTab('channels') },
           { label: 'Test', onClick: () => setTab('test'), disabled: !selectedId,
             title: selectedId ? undefined : 'Test — save the agent first, then chat with it over Direct Line' },
-          { label: 'Analytics', disabled: true,
-            title: 'Analytics — open the dedicated Copilot Analytics editor (not a tab in the Agent editor)' },
+          { label: 'Analytics', onClick: () => setTab('analytics'), disabled: !selectedId,
+            title: selectedId ? undefined : 'Analytics — select a saved agent first to view conversation KPIs' },
         ]},
       ]},
     ];
@@ -521,6 +521,7 @@ export function CopilotStudioAgentEditor({ item, id }: { item: FabricItemType; i
             <Tab value="actions" icon={<Flow20Regular />}>Actions</Tab>
             <Tab value="channels" icon={<Channel20Regular />}>Channels</Tab>
             <Tab value="test" icon={<Chat20Regular />}>Test</Tab>
+            <Tab value="analytics" icon={<DataBarVertical20Regular />}>Analytics</Tab>
           </TabList>
           {tab === 'edit' && (
             <div className={s.form}>
@@ -547,6 +548,7 @@ export function CopilotStudioAgentEditor({ item, id }: { item: FabricItemType; i
           {tab === 'actions' && <InlineActions envId={envId} agentId={selectedId} />}
           {tab === 'channels' && <InlineChannels envId={envId} agentId={selectedId} />}
           {tab === 'test' && <TestChatPanel agentId={selectedId} />}
+          {tab === 'analytics' && <AnalyticsPanel envId={envId} agentId={selectedId} />}
         </div>
       }
     />
@@ -1377,14 +1379,30 @@ function TestChatPanel({ agentId }: { agentId: string }) {
 }
 
 // ============================================================
-// CopilotAnalyticsEditor
+// AnalyticsPanel + CopilotAnalyticsEditor
 // ============================================================
 
-export function CopilotAnalyticsEditor({ item, id }: { item: FabricItemType; id: string }) {
+/**
+ * AnalyticsPanel — KPI cards + daily-session bar chart over the existing
+ * Azure-native analytics route (/api/items/copilot-studio-analytics/[agentId]).
+ * Extracted verbatim from CopilotAnalyticsEditor's body so it can be reused as
+ * the Agent editor's "Analytics" tab without rewriting any behavior. Owns its
+ * own `days`/`data`/`error`/`loading` state and the in-panel window toolbar.
+ *
+ * `days`/`onDaysChange` are optional: when supplied the window is controlled by
+ * the caller (the standalone editor lifts it so its ribbon timeframe buttons
+ * still drive the fetch); when omitted the panel manages the window internally
+ * (the embedded Agent-editor tab uses this uncontrolled mode).
+ */
+function AnalyticsPanel({
+  envId, agentId, days: daysProp, onDaysChange,
+}: { envId: string; agentId: string; days?: number; onDaysChange?: (d: number) => void }) {
   const s = useStyles();
-  const [envId, setEnvId] = useState('');
-  const [agentId, setAgentId] = useState('');
-  const [days, setDays] = useState(30);
+  const [daysState, setDaysState] = useState(30);
+  const days = daysProp ?? daysState;
+  const setDays = useCallback((d: number) => {
+    if (onDaysChange) onDaysChange(d); else setDaysState(d);
+  }, [onDaysChange]);
   const [data, setData] = useState<Analytics | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
@@ -1404,8 +1422,86 @@ export function CopilotAnalyticsEditor({ item, id }: { item: FabricItemType; id:
 
   const maxDaily = useMemo(() => Math.max(1, ...(data?.daily || []).map((d) => d.sessions)), [data]);
 
-  // Wire the timeframe ribbon to the inline `days` state. Each window button
-  // sets the days count, which drives the analytics fetch via `refresh`.
+  if (!agentId) return (
+    <EmptyState
+      icon={<DataBarVertical20Regular />}
+      title="Select an agent"
+      body="Pick an environment and agent to view conversation KPIs — sessions, resolution/escalation rates, CSAT, and a daily-session chart."
+    />
+  );
+  return (
+    <div className={s.formCol}>
+      <div className={s.toolbar}>
+        <Caption1>Window:</Caption1>
+        {[7, 30, 90].map((d) => (
+          <Button key={d} size="small" appearance={d === days ? 'primary' : 'outline'} onClick={() => setDays(d)}>{d}d</Button>
+        ))}
+        <Button appearance="subtle" icon={<ArrowSync20Regular />} onClick={refresh} disabled={loading}>Refresh</Button>
+      </div>
+      <ErrorBar error={error} hint={TENANT_HINT} />
+      {loading && <Spinner size="small" label="Loading analytics…" labelPosition="after" />}
+      {/* H3 — when no real analytics backend produced data, show an honest
+          gate instead of fabricated all-zero KPI tiles. */}
+      {data && !data.available && (
+        <MessageBar intent="warning">
+          <MessageBarBody>
+            <MessageBarTitle>Analytics backend not available</MessageBarTitle>
+            {data.gateReason ||
+              'No measured telemetry was returned for this agent/window. ' +
+              'Conversation KPIs require the Dataverse session/transcript tables + Application Insights pipeline.'}
+          </MessageBarBody>
+        </MessageBar>
+      )}
+      {data && data.available && (
+        <>
+          <div className={s.kpiGrid}>
+            <div className={s.kpi}>
+              <Caption1>Sessions ({data.windowDays}d)</Caption1>
+              <div className={s.kpiValue}>{(data.sessions ?? 0).toLocaleString()}</div>
+            </div>
+            <div className={s.kpi}>
+              <Caption1>Resolved</Caption1>
+              <div className={s.kpiValue}>{(data.resolvedSessions ?? 0).toLocaleString()}</div>
+              {data.resolutionRate !== undefined && <Caption1>{(data.resolutionRate * 100).toFixed(1)}% resolution rate</Caption1>}
+            </div>
+            <div className={s.kpi}>
+              <Caption1>Escalated</Caption1>
+              <div className={s.kpiValue}>{(data.escalatedSessions ?? 0).toLocaleString()}</div>
+              {data.escalationRate !== undefined && <Caption1>{(data.escalationRate * 100).toFixed(1)}% escalation rate</Caption1>}
+            </div>
+            <div className={s.kpi}>
+              <Caption1>CSAT</Caption1>
+              <div className={s.kpiValue}>{data.satisfactionScore !== undefined ? data.satisfactionScore.toFixed(2) : '—'}</div>
+            </div>
+          </div>
+          <Subtitle2 className={s.sectionHeader}>
+            <span className={s.sectionIcon}><DataBarVertical20Regular /></span>
+            Daily sessions
+          </Subtitle2>
+          {(data.daily && data.daily.length > 0) ? (
+            <div className={s.spark} aria-label="Daily session bar chart">
+              {data.daily.map((d, i) => (
+                <div key={i} className={s.bar} style={{ height: `${(d.sessions / maxDaily) * 100}%` }} title={`${d.date}: ${d.sessions}`} />
+              ))}
+            </div>
+          ) : (
+            <Caption1>No daily data returned for this window.</Caption1>
+          )}
+        </>
+      )}
+    </div>
+  );
+}
+
+export function CopilotAnalyticsEditor({ item, id }: { item: FabricItemType; id: string }) {
+  const s = useStyles();
+  const [envId, setEnvId] = useState('');
+  const [agentId, setAgentId] = useState('');
+  const [days, setDays] = useState(30);
+
+  // Wire the timeframe ribbon to the lifted `days` state. Each window button
+  // sets the days count, which drives the analytics fetch inside AnalyticsPanel
+  // via its controlled `days`/`onDaysChange` props.
   const ribbon: RibbonTab[] = useMemo(() => [
     { id: 'home', label: 'Home', groups: [{ label: 'Window', actions: [
       { label: '7d', onClick: () => setDays(7) },
@@ -1423,64 +1519,7 @@ export function CopilotAnalyticsEditor({ item, id }: { item: FabricItemType; id:
         <div className={s.pad}>
           <EnvironmentPicker value={envId} onChange={(v) => { setEnvId(v); setAgentId(''); }} />
           <AgentPicker envId={envId} value={agentId} onChange={setAgentId} />
-          <div className={s.toolbar}>
-            <Caption1>Window:</Caption1>
-            {[7, 30, 90].map((d) => (
-              <Button key={d} size="small" appearance={d === days ? 'primary' : 'outline'} onClick={() => setDays(d)}>{d}d</Button>
-            ))}
-            <Button appearance="subtle" icon={<ArrowSync20Regular />} onClick={refresh} disabled={loading}>Refresh</Button>
-          </div>
-          <ErrorBar error={error} hint={TENANT_HINT} />
-          {loading && <Spinner size="small" label="Loading analytics…" labelPosition="after" />}
-          {/* H3 — when no real analytics backend produced data, show an honest
-              gate instead of fabricated all-zero KPI tiles. */}
-          {data && !data.available && (
-            <MessageBar intent="warning">
-              <MessageBarBody>
-                <MessageBarTitle>Analytics backend not available</MessageBarTitle>
-                {data.gateReason ||
-                  'No measured telemetry was returned for this agent/window. ' +
-                  'Conversation KPIs require the Dataverse session/transcript tables + Application Insights pipeline.'}
-              </MessageBarBody>
-            </MessageBar>
-          )}
-          {data && data.available && (
-            <>
-              <div className={s.kpiGrid}>
-                <div className={s.kpi}>
-                  <Caption1>Sessions ({data.windowDays}d)</Caption1>
-                  <div className={s.kpiValue}>{(data.sessions ?? 0).toLocaleString()}</div>
-                </div>
-                <div className={s.kpi}>
-                  <Caption1>Resolved</Caption1>
-                  <div className={s.kpiValue}>{(data.resolvedSessions ?? 0).toLocaleString()}</div>
-                  {data.resolutionRate !== undefined && <Caption1>{(data.resolutionRate * 100).toFixed(1)}% resolution rate</Caption1>}
-                </div>
-                <div className={s.kpi}>
-                  <Caption1>Escalated</Caption1>
-                  <div className={s.kpiValue}>{(data.escalatedSessions ?? 0).toLocaleString()}</div>
-                  {data.escalationRate !== undefined && <Caption1>{(data.escalationRate * 100).toFixed(1)}% escalation rate</Caption1>}
-                </div>
-                <div className={s.kpi}>
-                  <Caption1>CSAT</Caption1>
-                  <div className={s.kpiValue}>{data.satisfactionScore !== undefined ? data.satisfactionScore.toFixed(2) : '—'}</div>
-                </div>
-              </div>
-              <Subtitle2 className={s.sectionHeader}>
-                <span className={s.sectionIcon}><DataBarVertical20Regular /></span>
-                Daily sessions
-              </Subtitle2>
-              {(data.daily && data.daily.length > 0) ? (
-                <div className={s.spark} aria-label="Daily session bar chart">
-                  {data.daily.map((d, i) => (
-                    <div key={i} className={s.bar} style={{ height: `${(d.sessions / maxDaily) * 100}%` }} title={`${d.date}: ${d.sessions}`} />
-                  ))}
-                </div>
-              ) : (
-                <Caption1>No daily data returned for this window.</Caption1>
-              )}
-            </>
-          )}
+          <AnalyticsPanel envId={envId} agentId={agentId} days={days} onDaysChange={setDays} />
         </div>
       }
     />
