@@ -36,6 +36,7 @@ import {
   MicRecord24Regular, Speaker224Regular, Send24Filled, Delete20Regular,
   Code20Regular, ChevronLeft20Regular, Trophy20Regular, ArrowSwap20Regular,
   Apps24Regular, Options24Regular, Grid24Regular, DocumentText24Regular,
+  Open16Regular,
 } from '@fluentui/react-icons';
 import { EmptyState } from '../components/empty-state';
 import { TileGrid } from '../components/ui/tile-grid';
@@ -581,8 +582,21 @@ print(response.choices[0].message.content)`, [deployment, system, temperature, m
         </Field>
         <Divider />
         <Body1Strong>Add your data</Body1Strong>
-        <Caption1>Ground answers in Azure AI Search or Blob. Configure a data connection on the Connections tab, then reference it here.</Caption1>
-        <Button size="small" onClick={() => window.open('https://ai.azure.com/resource/playground/chat', '_blank', 'noopener,noreferrer')}>Add a data source</Button>
+        {/*
+         * Honest external hand-off (no-vaporware §"allowed with disclosure").
+         * In-product "On Your Data" grounding (a data-source picker that threads a
+         * `data_sources` array through /api/foundry/chat → chatCompletion as the
+         * Azure OpenAI extra_body.data_sources) is not wired yet — chat/route.ts +
+         * foundry-cs-client accept only deployment/messages/temperature/maxTokens/
+         * topP/stop. Until that lands this control is labelled + iconned as an
+         * explicit hand-off to the Foundry portal, not an implied in-product action.
+         * TODO(parity): build the in-playground AI Search/Blob grounding flow.
+         */}
+        <Caption1>Ground answers in Azure AI Search or Blob. Configure a data connection on the Connections tab, then wire grounding in the Foundry portal.</Caption1>
+        <Button size="small" appearance="transparent" icon={<Open16Regular />} iconPosition="after"
+          onClick={() => window.open('https://ai.azure.com/resource/playground/chat', '_blank', 'noopener,noreferrer')}>
+          Configure data grounding in Foundry
+        </Button>
         <Divider />
         <Body1Strong>Tools</Body1Strong>
         <Caption1>Function tools and the code interpreter attach per-deployment in the Foundry agent surface.</Caption1>
