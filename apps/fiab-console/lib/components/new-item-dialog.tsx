@@ -329,7 +329,7 @@ export function NewItemDialog({ defaultCategory, workspaceId }: Props = {}) {
       // own catalog runtimePreset in page.tsx — that path is unaffected.
       let qs = '';
       const runtimeDefault = defaultChoiceValue(cfg?.runtimes);
-      const runtimeChoice = cfg?.runtimes?.find((c) => c.value === createRuntime);
+      // `runtimeChoice` is already resolved above (headSlug computation). Reuse it.
       // Forward ?runtime= ONLY for a same-head runtime LOCK (the pipeline family,
       // where the choice has no slug and stays on the head editor). When the choice
       // routes to its OWN slug (engine reroute — notebook/SQL families), the target
