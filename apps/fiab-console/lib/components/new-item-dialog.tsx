@@ -25,6 +25,8 @@ import {
   Badge,
   MessageBar,
   MessageBarBody,
+  RadioGroup,
+  Radio,
   makeStyles,
   tokens,
   Subtitle2,
@@ -41,9 +43,65 @@ import {
 import {
   FABRIC_ITEM_TYPES,
   WORKLOAD_CATEGORIES,
+  findItemType,
   type FabricItemType,
   type WorkloadCategory,
 } from '@/lib/catalog/fabric-item-types';
+
+/**
+ * WAVE C — unified create-step contract. These mirror the optional
+ * `createConfig` / `searchOnly` fields the catalog (lib/catalog/fabric-item-types.ts)
+ * carries on consolidated head items. They are declared here so the dialog
+ * compiles ahead of / independently of the catalog wave; once the catalog adds
+ * the fields to `FabricItemType` these widen to the same shape (structurally
+ * identical), and items WITHOUT createConfig keep the name-only inline create
+ * (no regression). Azure-native option is `default:true`; Fabric is opt-in only
+ * per no-fabric-dependency.md.
+ */
+interface CreateConfigChoice {
+  /** stable value persisted/forwarded; runtimes => PipelineRuntime ('adf'|'synapse'|'fabric'),
+   *  templates => templateId (or 'blank'). */
+  value: string;
+  label: string;
+  desc: string;
+  /** exactly one per axis — the Azure-native one. */
+  default?: boolean;
+  /** Wave-D hook (unused this wave): route this choice to a DIFFERENT head slug/editor. */
+  slug?: string;
+}
+interface CreateConfig {
+  /** forwarded as ?runtime= */
+  runtimes?: CreateConfigChoice[];
+  /** forwarded as &templateId= */
+  templates?: CreateConfigChoice[];
+}
+
+/** Read the optional Wave-C catalog flags off a catalog entry without depending
+ *  on the catalog wave having landed (structural, fully back-compatible). */
+function getCreateConfig(i: FabricItemType | null | undefined): CreateConfig | undefined {
+  return (i as unknown as { createConfig?: CreateConfig } | null | undefined)?.createConfig;
+}
+function isSearchOnly(i: FabricItemType): boolean {
+  return Boolean((i as unknown as { searchOnly?: boolean }).searchOnly);
+}
+/** Resolve a picked entry (possibly a searchOnly alias/template) to its head
+ *  catalog entry, where the createConfig lives. Falls back to the entry itself. */
+function resolveHead(i: FabricItemType): FabricItemType {
+  const headSlug = i.aliasOf ?? i.templateOf ?? i.slug;
+  return findItemType(headSlug) ?? i;
+}
+/** Pre-selection seed so a searchOnly click pre-selects the matching radio. */
+function seedFor(i: FabricItemType): { runtime?: string; templateId?: string } | undefined {
+  if (i.runtimePreset && i.templateId) return { runtime: i.runtimePreset, templateId: i.templateId };
+  if (i.templateId) return { templateId: i.templateId };
+  if (i.runtimePreset) return { runtime: i.runtimePreset };
+  return undefined;
+}
+/** Pick the default value for an axis (the choice flagged default:true). */
+function defaultChoiceValue(choices?: CreateConfigChoice[]): string {
+  if (!choices || choices.length === 0) return '';
+  return (choices.find((c) => c.default) ?? choices[0]).value;
+}
 
 const useStyles = makeStyles({
   surface: { maxWidth: '960px', width: '90vw' },
@@ -96,6 +154,23 @@ const useStyles = makeStyles({
   },
   cardHeader: { display: 'flex', alignItems: 'center', gap: '6px' },
   badges: { display: 'flex', gap: '4px', marginTop: '4px' },
+  // WAVE C — configure step (Name + per-axis RadioGroup). Loom tokens only.
+  configPane: {
+    display: 'flex',
+    flexDirection: 'column',
+    rowGap: tokens.spacingVerticalM,
+  },
+  axisGroup: {
+    display: 'flex',
+    flexDirection: 'column',
+    rowGap: tokens.spacingVerticalXS,
+  },
+  radioLabel: {
+    display: 'flex',
+    flexDirection: 'column',
+    rowGap: tokens.spacingVerticalXXS,
+  },
+  radioDesc: { color: tokens.colorNeutralForeground3 },
 });
 
 interface Props {
@@ -116,6 +191,11 @@ export function NewItemDialog({ defaultCategory, workspaceId }: Props = {}) {
   const [displayName, setDisplayName] = useState('');
   const [creating, setCreating] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  // WAVE C — unified create-step selections. Seeded from picked.createConfig
+  // defaults (or a searchOnly seed) in onPick; forwarded as ?runtime/&templateId
+  // into the editor. Items WITHOUT createConfig leave these unused.
+  const [createRuntime, setCreateRuntime] = useState('');
+  const [createTemplate, setCreateTemplate] = useState('');
   // F17: domain-scoped custom attributes for the inline create step. The
   // workspace's domain drives which admin-defined attribute groups apply.
   const [wsDomain, setWsDomain] = useState<string | null>(null);
@@ -149,30 +229,52 @@ export function NewItemDialog({ defaultCategory, workspaceId }: Props = {}) {
       // BFF routes. Azure-native default per no-fabric-dependency.md.
       if (i.hiddenFromGallery) return false;
       if (q) {
-        // when searching, ignore the category filter so the user finds
-        // results across all workloads
+        // WAVE C — searchOnly items (consolidated presets/templates folded into a
+        // single head item in browse) MUST still be findable by keyword. So in
+        // the SEARCH branch we do NOT exclude them; ignore the category filter
+        // so the user finds results across all workloads.
         return (
           i.displayName.toLowerCase().includes(q) ||
           i.description.toLowerCase().includes(q) ||
           i.category.toLowerCase().includes(q)
         );
       }
-      return i.category === category;
+      // WAVE C — browse mode (empty query): hide searchOnly items; the user
+      // creates the single head item, then picks the preset/template in the
+      // configure step.
+      return i.category === category && !isSearchOnly(i);
     });
   }, [category, query]);
 
   function reset() {
     setPicked(null); setDisplayName(''); setError(null); setCreating(false);
     setCustomAttrs({}); setAttrGroups([]); setShowAttrValidation(false);
+    setCreateRuntime(''); setCreateTemplate('');
   }
 
-  function onPick(item: FabricItemType) {
+  /**
+   * WAVE C — onPick may receive an optional `seed` so a searchOnly click
+   * pre-selects the matching radio (adf-pipeline -> {runtime:'adf'},
+   * synapse-pipeline -> {runtime:'synapse'}, geo-pipeline -> {templateId:'geo-enrich'}).
+   * When the picked entry is a searchOnly alias/template, we resolve to its HEAD
+   * catalog entry so the configure pane reads head.createConfig.
+   */
+  function onPick(item: FabricItemType, seed?: { runtime?: string; templateId?: string }) {
     if (workspaceId) {
-      // Two-step: prompt for name, then create directly.
-      setPicked(item);
+      // When the click came from a searchOnly result, derive the seed from the
+      // item itself (its runtimePreset/templateId) unless one was passed.
+      const effectiveSeed = seed ?? (isSearchOnly(item) ? seedFor(item) : undefined);
+      // The configure pane reads createConfig off the HEAD entry. A searchOnly
+      // alias/template folds into its head (e.g. adf-pipeline -> data-pipeline).
+      const head = isSearchOnly(item) ? resolveHead(item) : item;
+      const cfg = getCreateConfig(head);
+      setPicked(head);
       setDisplayName('');
       setError(null);
       setCustomAttrs({}); setShowAttrValidation(false);
+      // Seed the radios: explicit seed wins; otherwise the createConfig default.
+      setCreateRuntime(effectiveSeed?.runtime ?? defaultChoiceValue(cfg?.runtimes));
+      setCreateTemplate(effectiveSeed?.templateId ?? defaultChoiceValue(cfg?.templates));
       return;
     }
     setOpen(false);
@@ -194,14 +296,47 @@ export function NewItemDialog({ defaultCategory, workspaceId }: Props = {}) {
     }
     setCreating(true); setError(null);
     try {
+      const cfg = getCreateConfig(picked);
+      // WAVE C — the head item to create. The selected choice's `slug` (Wave-D
+      // hook; undefined for the pipeline family) wins; otherwise the resolved
+      // head: aliasOf ?? templateOf ?? slug. For the pipeline family every
+      // choice has no slug, so this falls to picked's own slug = 'data-pipeline'.
+      const runtimeChoice = cfg?.runtimes?.find((c) => c.value === createRuntime);
+      const templateChoice = cfg?.templates?.find((c) => c.value === createTemplate);
+      const headSlug =
+        runtimeChoice?.slug ?? templateChoice?.slug ??
+        picked.aliasOf ?? picked.templateOf ?? picked.slug;
+
       const item = await createItem(workspaceId, {
-        itemType: picked.slug,
+        itemType: headSlug,
         displayName: displayName.trim(),
         customAttributes: Object.keys(customAttrs).length ? customAttrs : undefined,
       });
       setOpen(false);
+
+      // WAVE C — carry the configure-step choices into the editor as query
+      // overrides. Items WITHOUT createConfig append nothing (no regression).
+      //
+      // Runtime is a SEED, not a lock, for a plain head create: page.tsx maps
+      // any ?runtime= into runtimePreset, which the unified pipeline editor
+      // treats as a LOCK (runtimeLocked = !!runtimePreset). So only forward
+      // ?runtime= when the user picked a runtime AWAY FROM the createConfig
+      // default — i.e. an explicit, intentional choice (e.g. Synapse/Fabric, or
+      // the synapse-pipeline searchOnly seed). Leaving the Azure-native default
+      // (ADF) selected appends nothing, so the editor's runtime switcher stays
+      // user-changeable per its documented contract (data-pipeline-editor.tsx
+      // §229-235). Alias slugs (adf-/synapse-pipeline) keep their lock via their
+      // own catalog runtimePreset in page.tsx — that path is unaffected.
+      let qs = '';
+      const runtimeDefault = defaultChoiceValue(cfg?.runtimes);
+      if (cfg?.runtimes && createRuntime && createRuntime !== runtimeDefault) {
+        qs += `${qs ? '&' : '?'}runtime=${encodeURIComponent(createRuntime)}`;
+      }
+      if (createTemplate && createTemplate !== 'blank') {
+        qs += `${qs ? '&' : '?'}templateId=${encodeURIComponent(createTemplate)}`;
+      }
       reset();
-      router.push(`/items/${item.itemType}/${item.id}`);
+      router.push(`/items/${item.itemType}/${item.id}${qs}`);
     } catch (e) {
       setError((e as Error).message);
       setCreating(false);
@@ -216,11 +351,15 @@ export function NewItemDialog({ defaultCategory, workspaceId }: Props = {}) {
       <DialogSurface className={styles.surface}>
         <DialogBody>
           <DialogTitle>
-            {picked ? `Name your ${picked.displayName.toLowerCase()}` : 'New item'}
+            {picked
+              // WAVE C — with a createConfig present, prefer the head display
+              // name (e.g. 'Data pipeline') since the picked entry IS the head.
+              ? `Name your ${picked.displayName.toLowerCase()}`
+              : 'New item'}
           </DialogTitle>
           <DialogContent>
             {picked && workspaceId ? (
-              <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+              <div className={styles.configPane}>
                 <Button appearance="subtle" icon={<ArrowLeft20Regular />}
                   onClick={() => { setPicked(null); setError(null); }}>
                   Back to types
@@ -230,6 +369,65 @@ export function NewItemDialog({ defaultCategory, workspaceId }: Props = {}) {
                          placeholder={`My ${picked.displayName.toLowerCase()}`}
                          onKeyDown={(e) => { if (e.key === 'Enter') createInline(); }} />
                 </Field>
+                {/* WAVE C — unified create step. When the head item carries a
+                    createConfig, render one RadioGroup per axis (no-freeform-config).
+                    The Azure-native option is the default; Fabric is opt-in only.
+                    Items WITHOUT createConfig skip this and keep the name-only
+                    pane (no regression). */}
+                {(() => {
+                  const cfg = getCreateConfig(picked);
+                  if (!cfg) return null;
+                  return (
+                    <>
+                      {cfg.runtimes && cfg.runtimes.length > 0 && (
+                        <Field label="Runtime" className={styles.axisGroup}>
+                          <RadioGroup
+                            value={createRuntime}
+                            onChange={(_, d) => setCreateRuntime(d.value)}
+                          >
+                            {cfg.runtimes.map((c) => (
+                              <Radio
+                                key={c.value}
+                                value={c.value}
+                                label={{
+                                  children: (
+                                    <span className={styles.radioLabel}>
+                                      <Body1>{c.label}</Body1>
+                                      <Caption1 className={styles.radioDesc}>{c.desc}</Caption1>
+                                    </span>
+                                  ),
+                                }}
+                              />
+                            ))}
+                          </RadioGroup>
+                        </Field>
+                      )}
+                      {cfg.templates && cfg.templates.length > 0 && (
+                        <Field label="Template" className={styles.axisGroup}>
+                          <RadioGroup
+                            value={createTemplate}
+                            onChange={(_, d) => setCreateTemplate(d.value)}
+                          >
+                            {cfg.templates.map((c) => (
+                              <Radio
+                                key={c.value}
+                                value={c.value}
+                                label={{
+                                  children: (
+                                    <span className={styles.radioLabel}>
+                                      <Body1>{c.label}</Body1>
+                                      <Caption1 className={styles.radioDesc}>{c.desc}</Caption1>
+                                    </span>
+                                  ),
+                                }}
+                              />
+                            ))}
+                          </RadioGroup>
+                        </Field>
+                      )}
+                    </>
+                  );
+                })()}
                 {/* F17: per-domain custom attributes. Renders nothing when the
                     workspace has no domain or no group applies. */}
                 <CustomAttributesForm

@@ -58,6 +58,28 @@ export interface LearnContent {
   sampleData?: string[];
 }
 
+export interface CreateConfigChoice {
+  /** stable value persisted/forwarded; for `runtimes` this is a PipelineRuntime
+   *  ('adf'|'synapse'|'fabric'); for `templates` this is a templateId resolved by
+   *  lib/components/pipeline/templates/catalog.ts (or 'blank' for none). */
+  value: string;
+  label: string;
+  desc: string;
+  default?: boolean;        // exactly one per axis; the Azure-native one
+  /** Wave-D EXTENSION (declared now, unused this wave): route this choice to a
+   *  DIFFERENT head slug/editor. When set, the configure step creates an item of
+   *  THIS slug instead of the dialog's head item. Lets one "Notebook"/"SQL
+   *  database" head fan out to Spark/Synapse/Databricks or azure-sql/synapse-pool/
+   *  postgres editors. Omitted (undefined) => use the head item's own slug, which
+   *  is exactly the pipeline family's behavior. */
+  slug?: string;
+}
+
+export interface CreateConfig {
+  runtimes?: CreateConfigChoice[];   // -> forwarded as runtimePreset
+  templates?: CreateConfigChoice[];  // -> forwarded as templateId
+}
+
 export interface FabricItemType {
   /** Route slug — used at /items/[slug]/[id] */
   slug: string;
@@ -105,6 +127,21 @@ export interface FabricItemType {
   templateOf?: string;
   /** Template id resolved by lib/components/pipeline/templates/catalog.ts. */
   templateId?: string;
+  /** HIDDEN from the default browse grid, but STILL returned by search. Distinct
+   *  from hiddenFromGallery (fully hidden everywhere). Use for consolidated
+   *  presets/templates that fold into a single head item in browse, yet must stay
+   *  findable by keyword ("adf"/"synapse"/"geo"). The slug stays fully resolvable
+   *  (findItemType + the alias/template resolution in /items/[type]/[id]/page.tsx)
+   *  so ALREADY-CREATED instances open unchanged. Azure-native default per
+   *  no-fabric-dependency.md. */
+  searchOnly?: boolean;
+  /** Reusable create-step descriptor. When present, the New-item dialog's
+   *  CONFIGURE step renders a RadioGroup/cards for each axis (no-freeform-config),
+   *  then forwards the chosen runtimePreset + templateId into createItem -> editor.
+   *  Items WITHOUT createConfig keep the current name-only inline create (no
+   *  regression). The Azure-native option MUST be `default:true`; Fabric is opt-in
+   *  only (never default) per no-fabric-dependency.md. */
+  createConfig?: CreateConfig;
   /** Learn / Getting started popup content. Required for every type. */
   learnContent?: LearnContent;
 }
@@ -293,6 +330,17 @@ export const FABRIC_ITEM_TYPES: readonly FabricItemType[] = [
   // Data Factory
   { slug: 'data-pipeline', displayName: 'Data pipeline', restType: 'DataPipeline', category: 'Data Factory',
     description: 'Orchestrate Copy, Lookup, ForEach, Notebook, Stored procedure, Web, and more.',
+    createConfig: {
+      runtimes: [
+        { value: 'adf', label: 'Azure Data Factory', desc: 'Azure-native default — standalone ADF factory, 90+ activities, Self-hosted IR for on-prem.', default: true },
+        { value: 'synapse', label: 'Synapse', desc: 'Run inside a Synapse workspace, reusing its linked services + integration runtimes.' },
+        { value: 'fabric', label: 'Microsoft Fabric (opt-in)', desc: 'Opt-in only — requires a bound Fabric workspace; never the default.' },
+      ],
+      templates: [
+        { value: 'blank', label: 'Blank pipeline', desc: 'Start from an empty canvas.', default: true },
+        { value: 'geo-enrich', label: 'Geo-enrichment', desc: 'Pre-wired H3 index + reverse-geocode (Azure Maps) + buffer over a points dataset; runs on ADF.' },
+      ],
+    },
     learnContent: {
       "overview": "A Data pipeline is visual ETL/ELT orchestration — Copy, Lookup, ForEach, Notebook, Stored procedure, Web and more. Azure-native by default: authored on the standalone Azure Data Factory runtime (or a Synapse workspace), with Microsoft Fabric available as an opt-in runtime. Shares run history with notebooks and dataflows.",
       "steps": [
@@ -1390,7 +1438,7 @@ export const FABRIC_ITEM_TYPES: readonly FabricItemType[] = [
       "docsUrl": "https://learn.microsoft.com/azure/synapse-analytics/spark/apache-spark-pool-configurations"
     } },
   { slug: 'synapse-pipeline',            displayName: 'Synapse pipeline',            restType: 'SynapsePipeline',           category: 'Synapse Analytics',
-    runtimePreset: 'synapse',
+    aliasOf: 'data-pipeline', runtimePreset: 'synapse', searchOnly: true,
     description: 'Synapse Integrate canvas — pipelines, dataflows, triggers native to Synapse.',
     learnContent: {
       "overview": "A Synapse pipeline is the Synapse Integrate canvas — ADF-shaped pipelines, dataflows, and triggers that run inside a Synapse workspace. In Loom it reuses Synapse-attached linked services and integration runtimes.",
@@ -1513,7 +1561,7 @@ export const FABRIC_ITEM_TYPES: readonly FabricItemType[] = [
     } },
   // Azure Data Factory (separate from Fabric Data Factory)
   { slug: 'adf-pipeline',                displayName: 'ADF pipeline',                restType: 'AdfPipeline',               category: 'Azure Data Factory',
-    aliasOf: 'data-pipeline', runtimePreset: 'adf',
+    aliasOf: 'data-pipeline', runtimePreset: 'adf', searchOnly: true,
     description: 'The ADF-runtime preset of the Data pipeline — classic Azure Data Factory: 90+ activities, IR-aware, on-prem via Self-hosted IR.',
     learnContent: {
       "overview": "An ADF pipeline is the ADF-runtime preset of the unified Data pipeline — a classic Azure Data Factory pipeline with 90+ activities, integration-runtime-aware, and on-prem reach via Self-hosted IR. It opens the same unified pipeline editor as Data pipeline with the runtime locked to Azure Data Factory (the Azure-native default), reusing ADF linked services and integration runtimes. Already-created ADF pipeline items and their existing routes keep working unchanged.",
@@ -2417,7 +2465,7 @@ export const FABRIC_ITEM_TYPES: readonly FabricItemType[] = [
       "docsUrl": "https://learn.microsoft.com/azure/synapse-analytics/sql/query-parquet-files"
     } },
   { slug: 'geo-pipeline',                displayName: 'Geo pipeline',                restType: 'GeoPipeline',               category: 'Azure Geoanalytics',
-    templateOf: 'data-pipeline', templateId: 'geo-enrich', runtimePreset: 'adf',
+    templateOf: 'data-pipeline', templateId: 'geo-enrich', runtimePreset: 'adf', searchOnly: true,
     description: 'A Data-pipeline template that builds a real geo-enrichment pipeline (H3 index, reverse geocode, buffer) pre-wired against Azure Maps + ADF.',
     learnContent: {
       "overview": "A Geo pipeline is a Data-pipeline TEMPLATE for geo enrichment. On instantiate it builds a REAL Azure Data Factory pipeline whose activities are already wired — H3 indexing, reverse geocode against Azure Maps, and buffer generation — with parameters (enrichH3, reverseGeocode, bufferMeters) you can tune; it runs as-is on the Azure-native ADF runtime, no empty seeded pipeline. Newly created geo pipelines instantiate the geo-enrich template into a Data pipeline (runtime ADF) and run via the unified run path; already-created geo items keep their existing route and run unchanged.",

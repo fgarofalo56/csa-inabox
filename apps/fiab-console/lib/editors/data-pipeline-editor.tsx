@@ -384,6 +384,17 @@ export function DataPipelineEditor({ item, id, runtimePreset, templateId }: Prop
           nextSpec = textToSpec(decoded);
         }
       }
+      // Contract F race-guard: on the primary inline-create flow loadDetail
+      // resolves the just-persisted (still-empty) definition. If the template
+      // seed has already fired, an empty load here would clobber the seeded
+      // geo-enrich canvas — so never overwrite a seeded template with an empty
+      // spec. A real saved pipeline (non-empty activities) always loads.
+      const loadedActivities = nextSpec?.properties?.activities?.length ?? 0;
+      if (templateSeeded.current && loadedActivities === 0) {
+        setDirty(false);
+        setSelectedActivity(null);
+        return;
+      }
       setSpec(nextSpec || STARTER);
       setDirty(false);
       setSelectedActivity(null);
@@ -808,22 +819,32 @@ export function DataPipelineEditor({ item, id, runtimePreset, templateId }: Prop
     );
   }, [dispatchToast]);
 
-  // ── Contract F: when opened to create a NEW pipeline with a templateId (e.g.
-  //    the geo-pipeline alias → 'geo-enrich'), instantiate that template's
-  //    complete, ADF-runnable spec onto the canvas once on mount. Guarded to a
-  //    fresh/new item with an empty canvas so we never clobber a loaded pipeline.
+  // ── Contract F: when opened with a templateId (e.g. the geo-pipeline alias →
+  //    'geo-enrich'), instantiate that template's complete, ADF-runnable spec
+  //    onto the canvas once. This must fire for BOTH the legacy no-workspace
+  //    flow (id==='new', router.push('/items/geo-pipeline/new')) AND the primary
+  //    Wave-C inline-create flow, where new-item-dialog.tsx persists the
+  //    data-pipeline item FIRST then navigates to
+  //    /items/data-pipeline/<REAL_ID>?runtime=adf&templateId=geo-enrich. In that
+  //    case `id` is a real persisted id and loadDetail loads the still-empty
+  //    STARTER definition — so the seed MUST run on a freshly-created item too,
+  //    else the user gets a BLANK pipeline instead of the geo-enrichment they
+  //    picked (a no-vaporware violation). We no longer gate on id==='new';
+  //    instead we seed whenever the loaded canvas is still empty. Re-seeding is
+  //    impossible (templateSeeded ref) and a saved pipeline is never clobbered
+  //    (activities.length>0 guard). `activities.length` is in the deps so the
+  //    seed re-evaluates AFTER loadDetail resolves the empty persisted spec.
   const templateSeeded = useRef(false);
   useEffect(() => {
     if (templateSeeded.current) return;
     if (!templateId) return;
-    if (id && id !== 'new') return;
     if (activities.length > 0) return;
     const t = PIPELINE_TEMPLATES.find((x) => x.id === templateId);
     if (!t) return;
     templateSeeded.current = true;
     instantiateTemplate(t.spec, t);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [templateId, id, instantiateTemplate]);
+  }, [templateId, id, activities.length, instantiateTemplate]);
 
   // Create any ADF trigger type from the guided wizard's payload (no JSON/cron).
   // paramBindings carry per-parameter value sources (direct / Key Vault / App
@@ -999,10 +1020,17 @@ export function DataPipelineEditor({ item, id, runtimePreset, templateId }: Prop
   // unified editor.) 'fabric' keeps this file's existing body below.
   //
   // Exception (Contract F): when this editor is hosting a TEMPLATE instantiation
-  // (templateId set on a new item, e.g. the geo-pipeline alias → 'geo-enrich'),
-  // we stay on THIS file's own canvas so the seeded, ADF-runnable spec is
-  // visible and editable here (the delegate editors take no spec/template prop).
-  const hostTemplate = !!templateId && (!id || id === 'new');
+  // (templateId set, e.g. the geo-pipeline alias → 'geo-enrich'), we stay on
+  // THIS file's own canvas so the seeded, ADF-runnable spec is visible and
+  // editable here (the delegate editors take no spec/template prop). This holds
+  // for the legacy id==='new' flow AND the primary Wave-C inline-create flow,
+  // where the data-pipeline item is persisted FIRST and we arrive with a real
+  // id plus ?templateId=… — delegating to <AdfPipelineEditor> there would show a
+  // BLANK pipeline (it has no spec prop), dropping the geo-enrichment the user
+  // picked. A `templateId` is only present for templated creates (geo-pipeline /
+  // templated data-pipeline); plain adf-pipeline / synapse-pipeline instances
+  // carry none, so they still delegate exactly as before (back-compat intact).
+  const hostTemplate = !!templateId;
   if (!hostTemplate && (runtime === 'adf' || runtime === 'synapse')) {
     return (
       <div style={{ display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalS, minHeight: 0, flex: 1 }}>

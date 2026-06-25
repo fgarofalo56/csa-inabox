@@ -13,7 +13,7 @@ import { use } from "react";
  */
 
 import { notFound } from 'next/navigation';
-import { useRouter } from 'next/navigation';
+import { useRouter, useSearchParams } from 'next/navigation';
 import { useQuery } from '@tanstack/react-query';
 import { Spinner, MessageBar, MessageBarBody } from '@fluentui/react-components';
 import { findItemType } from '@/lib/catalog/fabric-item-types';
@@ -22,6 +22,7 @@ import { ItemEditorChrome } from '@/lib/editors/item-editor-chrome';
 import { EmptyState } from '@/lib/components/empty-state';
 import { getItem, type WorkspaceItem } from '@/lib/api/workspaces';
 import type { RibbonTab } from '@/lib/components/ribbon';
+import type { PipelineRuntime } from '@/lib/components/pipeline/types';
 
 /** Generic ribbon. The Share group's Share + Permissions actions navigate to
  *  the universal item-permissions page (/items/[type]/[id]/permissions) which
@@ -50,6 +51,18 @@ export default function ItemEditorPage(props: Props) {
   const params = use(props.params);
   const { type, id } = params;
   const router = useRouter();
+  // [WAVE-C] The unified create-step (new-item-dialog configure step) creates a
+  // HEAD instance (e.g. `data-pipeline`) and carries the user's chosen runtime /
+  // template forward via the query string — `?runtime=adf&templateId=geo-enrich`.
+  // The head catalog entry has no runtimePreset/templateId of its own, so these
+  // params are the ONLY carrier of the configure-step choice into the editor.
+  // When present they OVERRIDE the catalog-derived values; when absent every
+  // existing route (alias/template instances, direct navigations) behaves
+  // identically to today (no regression). Azure-native default (adf) per
+  // no-fabric-dependency.md; Fabric stays opt-in only.
+  const sp = useSearchParams();
+  const runtimeOverride = sp.get('runtime') as PipelineRuntime | null;
+  const templateOverride = sp.get('templateId');
   const item = findItemType(type);
   if (!item) notFound();
 
@@ -108,11 +121,18 @@ export default function ItemEditorPage(props: Props) {
   // fallback view.
   if (Editor) {
     // Pass the ORIGINAL `item` (display name / Learn) plus the resolved
-    // runtime preset + template id from the catalog. With both undefined the
-    // editor behaves identically to today (no regression). `runtimePreset`
-    // locks the unified pipeline editor's runtime selector (adf default per
-    // no-fabric-dependency.md); `templateId` pre-wires its spec (e.g. geo-enrich).
-    return <Editor item={item} id={id} runtimePreset={item.runtimePreset} templateId={applyTemplate ? item.templateId : undefined} />;
+    // runtime preset + template id. With all undefined the editor behaves
+    // identically to today (no regression). `runtimePreset` locks the unified
+    // pipeline editor's runtime selector (adf default per no-fabric-dependency.md);
+    // `templateId` pre-wires its spec (e.g. geo-enrich).
+    // [WAVE-C] The configure-step query params WIN over the catalog-derived
+    // values when present: a head-item create (data-pipeline) has no catalog
+    // runtimePreset/templateId, so the URL is the carrier of the chosen
+    // preset/template. Absent params fall back to the catalog values, so
+    // alias/template instances and direct navigations are unchanged.
+    const runtimePreset = runtimeOverride ?? item.runtimePreset;
+    const templateId = templateOverride ?? (applyTemplate ? item.templateId : undefined);
+    return <Editor item={item} id={id} runtimePreset={runtimePreset} templateId={templateId} />;
   }
 
   if (!isNew && q.isLoading) {
