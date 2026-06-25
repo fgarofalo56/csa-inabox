@@ -562,6 +562,30 @@ export const FABRIC_ITEM_TYPES: readonly FabricItemType[] = [
       ],
       "docsUrl": "https://learn.microsoft.com/azure/data-factory/airflow-overview"
     } },
+  { slug: 'linked-service', displayName: 'Linked service', restType: 'LinkedService', category: 'Data Factory',
+    description: 'A reusable connection definition — the bind target for pipelines, datasets, and data flows. 31-connector gallery over Azure Data Factory (default) or a Synapse workspace.',
+    learnContent: {
+      "overview": "A Linked service is a first-class, reusable connection definition (connection string + authentication) that pipelines, datasets, Copy activities, and Mapping data flows bind to — exactly the Azure Data Factory / Synapse Studio Manage-hub 'Linked services' object. In CSA Loom it is Azure-native: every connection is a real Microsoft.DataFactory/factories/linkedservices (or Synapse workspace linkedservices) resource created via ARM / the Synapse dev plane. The editor is the 31-connector gallery in manage mode — browse by category, fill the per-connector structured form (auth selector + fields, secrets as secureString — never freeform JSON), Test connection, then create. No Microsoft Fabric capacity or workspace is required.",
+      "steps": [
+        { "title": "Pick a backend", "body": "Choose Azure Data Factory (the deployment-default factory) or a Synapse workspace. ADF is the Azure-native default; both share the same {name, properties} contract." },
+        { "title": "Browse the connector gallery", "body": "Search or browse 31 connectors grouped by Azure / Database / File / NoSQL / Generic protocol / Services & apps, then pick one." },
+        { "title": "Fill the structured form", "body": "Select an authentication method (Managed Identity, key, SAS, service principal) and complete its fields. Secrets are stored as ARM secureString — never round-tripped as plaintext." },
+        { "title": "Test + create", "body": "Run Test connection (a real validate round-trip via the BFF), then Create — a real ARM / Synapse upsert. Edit and Delete existing linked services from the same surface." }
+      ],
+      "docsUrl": "https://learn.microsoft.com/azure/data-factory/concepts-linked-services"
+    } },
+  { slug: 'integration-runtime', displayName: 'Integration runtime', restType: 'IntegrationRuntime', category: 'Data Factory',
+    description: 'Azure, Self-Hosted, or Azure-SSIS compute that powers activity dispatch, data movement, and data-flow execution for pipelines.',
+    learnContent: {
+      "overview": "An Integration runtime (IR) is the compute infrastructure Azure Data Factory / Synapse pipelines use for activity dispatch, data movement, SSIS package execution, and data-flow Spark execution. In CSA Loom it is Azure-native: every IR is a real Microsoft.DataFactory/factories/integrationruntimes resource on the deployment-default factory, created and managed via ARM (no mocks). The editor is the IR manager — list IRs with live status, create Azure / Self-Hosted / Azure-SSIS IRs from structured forms, reveal Self-Hosted install (auth) keys, and start / stop / delete lifecycle-managed IRs. When no factory env (LOOM_SUBSCRIPTION_ID / LOOM_DLZ_RG / LOOM_ADF_NAME) is set the surface still renders and shows an honest infra-gate. No Microsoft Fabric dependency.",
+      "steps": [
+        { "title": "Choose a type", "body": "Azure IR (managed, region-pinned cloud compute), Self-Hosted IR (a gateway to private / on-prem data), or Azure-SSIS IR (lift-and-shift SSIS packages)." },
+        { "title": "Configure + create", "body": "Fill the type's structured form (region, compute size, node count) — never freeform JSON — then create via a real ARM PUT." },
+        { "title": "Register Self-Hosted nodes", "body": "Reveal the install (auth) keys and register the Microsoft Integration Runtime on each gateway machine to reach private / on-prem data." },
+        { "title": "Manage lifecycle", "body": "Start, stop, and delete Self-Hosted / Azure-SSIS runtimes; the built-in AutoResolveIntegrationRuntime is always available by default." }
+      ],
+      "docsUrl": "https://learn.microsoft.com/azure/data-factory/concepts-integration-runtime"
+    } },
 
   // Data Warehouse
   { slug: 'warehouse', displayName: 'Warehouse', restType: 'Warehouse', category: 'Data Warehouse',
@@ -587,6 +611,18 @@ export const FABRIC_ITEM_TYPES: readonly FabricItemType[] = [
         }
       ],
       "docsUrl": "https://learn.microsoft.com/fabric/data-warehouse/data-warehousing"
+    } },
+  { slug: 'sql-analytics-endpoint', displayName: 'SQL analytics endpoint', restType: 'SQLEndpoint', category: 'Data Warehouse',
+    description: 'Read-only T-SQL analyst surface auto-attachable to a lakehouse / warehouse / mirror — Synapse serverless SQL over the Delta in ADLS. SELECT, CREATE VIEW / PROC, and object / row-level grants.',
+    learnContent: {
+      "overview": "A SQL analytics endpoint is the read-only T-SQL consumption surface that sits over a lakehouse, warehouse, or mirrored database — the analyst's query layer, exactly like Fabric's auto-provisioned SQL analytics endpoint. In CSA Loom it is Azure-native: the endpoint is Azure Synapse serverless SQL querying the Delta / Parquet that lives in ADLS Gen2 (OPENROWSET / external tables), so it needs no Microsoft Fabric or Power BI workspace. The editor is the Synapse Studio-style SQL-script surface: an object explorer (views / procs / TVFs / external tables), a Monaco T-SQL editor with catalog IntelliSense, a connect-to-database dropdown, Run / Run-selection, and a Results | Messages pane. It supports SELECT, CREATE OR ALTER VIEW / PROCEDURE / inline-TVF, and object / row-level security grants (GRANT / DENY, security policies). Backed by the real serverless TDS endpoint (LOOM_SYNAPSE_WORKSPACE); when unset the surface still renders and shows an honest infra-gate.",
+      "steps": [
+        { "title": "Connect to the endpoint", "body": "The endpoint binds to the deployment Synapse serverless SQL pool over the lake's Delta in ADLS. Pick a database in the Connect-to dropdown (master + user databases created via CREATE DATABASE)." },
+        { "title": "Explore + query", "body": "Browse views, stored procedures, table-valued functions, and external tables in the object explorer; write T-SQL in the Monaco editor with catalog-driven IntelliSense and Run (Ctrl+Enter) or Run selection." },
+        { "title": "Create consumption objects", "body": "Use the New view / New procedure / New function templates to author CREATE OR ALTER VIEW / PROCEDURE / inline TVF over OPENROWSET (serverless does not support scalar UDFs — the templates emit iTVFs and say so)." },
+        { "title": "Grant access", "body": "Apply object-level GRANT / DENY and row-level security (security policies + predicate functions) so analysts get a governed, read-only consumption surface. Export results to CSV / JSON or Open in Excel." }
+      ],
+      "docsUrl": "https://learn.microsoft.com/azure/synapse-analytics/sql/on-demand-workspace-overview"
     } },
 
   // Data Warehouse — DEPRECATED datamart (migration-only; no create path).

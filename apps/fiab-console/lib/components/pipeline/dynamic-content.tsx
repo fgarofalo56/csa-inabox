@@ -176,6 +176,138 @@ function previewLine(v: string, max = 120): string {
   return flat.length > max ? `${flat.slice(0, max)}…` : flat;
 }
 
+// ---------------------------------------------------------------------------
+// Monaco IntelliSense for the ADF / Synapse / Fabric expression language.
+//
+// A SINGLE completion provider is registered against the 'plaintext' language
+// (the expression editor's language) the first time any editor mounts. Because
+// one provider serves EVERY <ExpressionField/> on the page, it must not close
+// over a single field's props. Instead each editor publishes its live context
+// (parameters / variables / sibling activities / scope) into `exprContexts`
+// keyed by its Monaco model URI, and the provider looks up the context for the
+// model being completed. This is what makes the "type and press Ctrl+Space for
+// IntelliSense" promise REAL (no-vaporware): the completions are the documented
+// function catalog PLUS this pipeline's actual parameters, variables, system
+// variables, and activity outputs — filtered by what's typed and inserted at
+// the cursor with the correct leading '@'.
+// ---------------------------------------------------------------------------
+
+interface ExprCompletionContext {
+  parameters: PipelineParameter[];
+  variables: PipelineVariable[];
+  activities: PipelineActivity[];
+  selfName?: string;
+  hideIterationVars: boolean;
+}
+
+const exprContexts = new Map<string, ExprCompletionContext>();
+let exprProviderRegistered = false;
+
+function registerExprCompletionProvider(monaco: any): void {
+  if (exprProviderRegistered) return;
+  exprProviderRegistered = true;
+  monaco.languages.registerCompletionItemProvider('plaintext', {
+    // '@' starts an expression; '.' opens the member chain. Ctrl+Space always
+    // works regardless of trigger character.
+    triggerCharacters: ['@', '.'],
+    provideCompletionItems: (model: any, position: any) => {
+      const ctx = exprContexts.get(model.uri.toString());
+      const word = model.getWordUntilPosition(position);
+      const range = {
+        startLineNumber: position.lineNumber,
+        endLineNumber: position.lineNumber,
+        startColumn: word.startColumn,
+        endColumn: word.endColumn,
+      };
+      // ADF puts '@' only at the START of a value; everything nested is bare.
+      // Decide the leading prefix from the text before the replaced word.
+      const before: string = model.getValueInRange({
+        startLineNumber: 1,
+        startColumn: 1,
+        endLineNumber: position.lineNumber,
+        endColumn: word.startColumn,
+      });
+      const precededByAt = before.endsWith('@');
+      const atRoot = before.trim() === '';
+      const lead = atRoot && !precededByAt ? '@' : '';
+
+      const Kind = monaco.languages.CompletionItemKind;
+      const suggestions: any[] = [];
+
+      // 1) This pipeline's parameters — @pipeline().parameters.<name>
+      for (const p of ctx?.parameters ?? []) {
+        suggestions.push({
+          label: `@pipeline().parameters.${p.name}`,
+          kind: Kind.Field,
+          detail: `Pipeline parameter · ${p.type}`,
+          documentation: `Pipeline parameter '${p.name}' (${p.type}).`,
+          insertText: `${lead}pipeline().parameters.${p.name}`,
+          filterText: `@pipeline().parameters.${p.name} ${p.name}`,
+          sortText: `0_param_${p.name}`,
+          range,
+        });
+      }
+      // 2) This pipeline's variables — @variables('<name>')
+      for (const v of ctx?.variables ?? []) {
+        suggestions.push({
+          label: `@variables('${v.name}')`,
+          kind: Kind.Variable,
+          detail: `Variable · ${v.type}`,
+          documentation: `Pipeline variable '${v.name}' (${v.type}).`,
+          insertText: `${lead}variables('${v.name}')`,
+          filterText: `@variables('${v.name}') ${v.name}`,
+          sortText: `0_var_${v.name}`,
+          range,
+        });
+      }
+      // 3) Sibling activity outputs — @activity('<name>').output
+      for (const a of ctx?.activities ?? []) {
+        if (a.name === ctx?.selfName) continue;
+        suggestions.push({
+          label: `@activity('${a.name}').output`,
+          kind: Kind.Reference,
+          detail: `Activity output · ${a.type ?? 'activity'}`,
+          documentation: `Output of the '${a.name}' activity. Drill into fields, e.g. @activity('${a.name}').output.firstRow.`,
+          insertText: `${lead}activity('${a.name}').output`,
+          filterText: `@activity('${a.name}').output ${a.name}`,
+          sortText: `0_act_${a.name}`,
+          range,
+        });
+      }
+      // 4) System variables — @pipeline().RunId / @item() / @trigger().*
+      for (const sv of SYSTEM_VARIABLES) {
+        if (sv.scope === 'iteration' && ctx?.hideIterationVars) continue;
+        suggestions.push({
+          label: sv.name,
+          kind: Kind.Variable,
+          detail: 'System variable',
+          documentation: sv.description,
+          insertText: `${lead}${sv.insert}`,
+          filterText: sv.name,
+          sortText: `1_${sv.name}`,
+          range,
+        });
+      }
+      // 5) The full function catalog — signature in detail, doc in the panel.
+      for (const c of EXPRESSION_CATEGORIES) {
+        for (const fn of c.functions) {
+          suggestions.push({
+            label: fn.name,
+            kind: Kind.Function,
+            detail: fn.signature,
+            documentation: { value: `${fn.description}\n\n\`${fn.signature}\`` },
+            insertText: `${lead}${fn.insert}`,
+            filterText: fn.name,
+            sortText: `2_${c.id}_${fn.name}`,
+            range,
+          });
+        }
+      }
+      return { suggestions };
+    },
+  });
+}
+
 export function ExpressionField({
   label, hint, value, onChange, placeholder, multiline, required,
   parameters = [], variables = [], activities = [], selfName, disabled,
@@ -190,6 +322,7 @@ export function ExpressionField({
   const [sampleValues, setSampleValues] = useState<Record<string, string>>({});
   const editorRef = useRef<any>(null);
   const monacoRef = useRef<any>(null);
+  const modelUriRef = useRef<string | null>(null);
 
   const openBuilder = useCallback(() => {
     setDraft(value || ''); setSearch(''); setEvalResult(null); setOpen(true);
@@ -218,36 +351,34 @@ export function ExpressionField({
     insertToken(expr);
   }, [draft, insertToken]);
 
+  // Publish this editor's live completion context (params / vars / activities /
+  // scope) so the shared Monaco provider can offer them for THIS model.
+  const publishExprContext = useCallback(() => {
+    const uri = modelUriRef.current;
+    if (!uri) return;
+    exprContexts.set(uri, {
+      parameters, variables, activities, selfName, hideIterationVars,
+    });
+  }, [parameters, variables, activities, selfName, hideIterationVars]);
+
   const onReady = useCallback((editor: any, monaco: any) => {
     editorRef.current = editor;
     monacoRef.current = monaco;
-    // Register a completion provider once for plaintext expressions.
-    if (!(monaco as any).__loomExprCompletions) {
-      (monaco as any).__loomExprCompletions = true;
-      monaco.languages.registerCompletionItemProvider('plaintext', {
-        triggerCharacters: ['@', '.', '('],
-        provideCompletionItems: () => {
-          const suggestions = [
-            ...EXPRESSION_CATEGORIES.flatMap((c) => c.functions.map((fn) => ({
-              label: fn.name,
-              kind: monaco.languages.CompletionItemKind.Function,
-              detail: fn.signature,
-              documentation: fn.description,
-              insertText: fn.name,
-            }))),
-            ...SYSTEM_VARIABLES.map((v) => ({
-              label: v.name,
-              kind: monaco.languages.CompletionItemKind.Variable,
-              detail: 'System variable',
-              documentation: v.description,
-              insertText: v.insert,
-            })),
-          ];
-          return { suggestions };
-        },
+    registerExprCompletionProvider(monaco);
+    const uri: string | null = editor.getModel?.()?.uri?.toString?.() ?? null;
+    modelUriRef.current = uri;
+    if (uri) {
+      exprContexts.set(uri, {
+        parameters, variables, activities, selfName, hideIterationVars,
       });
+      // Drop the context when this editor's model is disposed (dialog closed)
+      // so the map doesn't leak stale entries.
+      editor.onDidDispose?.(() => { exprContexts.delete(uri); });
     }
-  }, []);
+  }, [parameters, variables, activities, selfName, hideIterationVars]);
+
+  // Keep the published context fresh if props change while the dialog is open.
+  useEffect(() => { publishExprContext(); }, [publishExprContext]);
 
   const commit = useCallback(() => { onChange(draft); setOpen(false); }, [draft, onChange]);
 

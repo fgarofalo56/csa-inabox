@@ -10,6 +10,8 @@ import { encodeSessionCookie, COOKIE_NAME, MAX_AGE_SECS } from '@/lib/auth/sessi
 import { saveUserToken } from '@/lib/azure/user-token-store';
 import { saveUserSqlToken } from '@/lib/azure/sql-user-token-store';
 import { savePbiUserToken } from '@/lib/azure/pbi-user-token-store';
+import { saveUserOboToken } from '@/lib/azure/mcp-obo-token-store';
+import { REMOTE_BUILTIN_MCP_CATALOG, msRemoteMcpScopeUris } from '@/lib/mcp/catalog';
 import { armBase, getSqlSuffix, getPbiScope } from '@/lib/azure/cloud-endpoints';
 import type { UserClaims } from '@/lib/auth/msal';
 
@@ -126,6 +128,77 @@ async function captureUserPbiToken(
   }
 }
 
+/**
+ * Best-effort capture of the signed-in user's per-resource delegated tokens for
+ * every ENABLED remote Microsoft MCP server that authenticates via Entra
+ * On-Behalf-Of (AI Foundry / Microsoft Graph / M365 / Teams / OneDrive-SharePoint
+ * / Sentinel / Admin Center / Dataverse). This GENERALIZES the Power BI capture
+ * above rather than adding a parallel system: instead of one hard-coded Power BI
+ * audience it walks REMOTE_BUILTIN_MCP_CATALOG and, for each entra-obo server an
+ * admin has OPTED INTO (entry.configured()), mints the user's delegated token
+ * against that server's own OBO scope URIs (msRemoteMcpScopeUris) and caches it
+ * keyed by the server's oboResource via saveUserOboToken — exactly the per-user
+ * token mcp-shim later threads as `userToken` for the `mcp_<slug>_*` tool calls.
+ *
+ * OPT-IN ONLY (no-fabric-dependency.md): Microsoft Learn (auth 'none', the sole
+ * default-on server) needs no token and is skipped; every entra-obo server stays
+ * inert until its enableEnv toggle is set AND the shared Loom confidential client
+ * (LOOM_MSAL_CLIENT_ID) is present, so with nothing opted in this is a no-op and
+ * no Fabric / Power BI host is ever reached. The ARM and Power BI audiences are
+ * already login-cached above (captureUserArmToken / captureUserPbiToken, with the
+ * sovereign-correct scope) and read back through mcp-obo-token-store's delegation,
+ * so they are skipped here to avoid a redundant, sovereign-mismatched re-acquire.
+ *
+ * Same swallow-all contract as the ARM / SQL / PBI captures, applied PER SERVER:
+ * a consent failure on one server (delegated scope not consented, admin consent
+ * missing, silent-acquire fails, Cosmos unavailable) is swallowed and surfaces
+ * later as that server's honest admin-panel gate (entry.gate) — it never blocks
+ * login and never leaks into chat. Tokens are never logged and are encrypted at
+ * rest by the store. Same-audience servers (e.g. the Graph-backed M365 / Teams /
+ * OneDrive-SharePoint / Admin Center) share one acquire (deduped by resource).
+ */
+async function captureUserMsRemoteMcpTokens(
+  client: ReturnType<typeof getMsalClient>,
+  account: import('@azure/msal-node').AccountInfo,
+  oid: string,
+): Promise<void> {
+  // ARM + Power BI audiences are already cached by the dedicated captures above
+  // (and delegated back through mcp-obo-token-store) — skip them here.
+  const loginCachedIds = new Set(['azure-arm', 'powerbi-remote']);
+  const acquired = new Set<string>();
+  for (const entry of REMOTE_BUILTIN_MCP_CATALOG) {
+    if (entry.auth !== 'entra-obo' || loginCachedIds.has(entry.id)) continue;
+    if (!entry.configured()) continue;
+    const scopeUris = msRemoteMcpScopeUris(entry.id);
+    if (scopeUris.length === 0) continue; // resource not resolvable → honest gate stays
+    // The OBO audience this token is keyed by — mirrors the catalog's derivation:
+    // the explicit oboResource, else the configured endpoint's origin (per-org
+    // servers like Dataverse). saveUserOboToken normalizes it to the cache key
+    // that mcp-shim later reads with the same resource.
+    let resource = (entry.oboResource ?? '').trim();
+    if (!resource) {
+      try {
+        resource = new URL(entry.endpoint).origin;
+      } catch {
+        continue; // no resolvable audience → leave the honest gate in place
+      }
+    }
+    resource = resource.replace(/\/+$/, '');
+    if (acquired.has(resource)) continue; // one token serves every same-audience server
+    acquired.add(resource);
+    try {
+      const tok = await client.acquireTokenSilent({ account, scopes: scopeUris });
+      if (tok?.accessToken) {
+        await saveUserOboToken(oid, resource, tok.accessToken, tok.expiresOn ?? null);
+      }
+    } catch {
+      // Delegated scope / admin consent not granted for this server — its
+      // admin-panel gate surfaces the exact remediation; login proceeds and chat
+      // is unaffected (no-vaporware: honest gate, never a silent mid-call failure).
+    }
+  }
+}
+
 function origin(req: NextRequest): string {
   const host = req.headers.get('x-forwarded-host') ?? req.headers.get('host') ?? 'localhost:3000';
   const proto = req.headers.get('x-forwarded-proto') ?? (host.startsWith('localhost') ? 'http' : 'https');
@@ -201,6 +274,15 @@ export async function GET(req: NextRequest) {
     // semantic-model / report authoring path stays the day-one default. Same
     // best-effort contract — neither gate blocks the login flow.
     await captureUserPbiToken(client, account, claims.oid);
+    // Additive + non-breaking + OPT-IN: generalize the Power BI capture to every
+    // ENABLED remote Microsoft MCP server that uses Entra OBO (AI Foundry / Graph
+    // / M365 / Teams / OneDrive-SharePoint / Sentinel / Admin Center / Dataverse).
+    // No-op unless an admin has opted one in (each is endpoint/scope/toggle gated
+    // + reuses the shared Loom confidential client). Microsoft Learn (the sole
+    // default-on server) needs no token. Same best-effort contract — a per-server
+    // consent failure surfaces as that server's honest admin gate, never blocks
+    // login, and never reaches a Fabric/Power BI host on the default path.
+    await captureUserMsRemoteMcpTokens(client, account, claims.oid);
     return htmlRedirect('/', cookieValue);
   } catch (e) {
     const msg = (e as Error).message ?? 'unknown';

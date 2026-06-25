@@ -841,9 +841,19 @@ export function ReleaseEnvironmentEditor({ item, id }: { item: FabricItemType; i
         body: JSON.stringify({ fromStage, toStage, note: promoNote.trim() || undefined, environmentDefinition: envDef.trim() || undefined }),
       });
       const j = await r.json().catch(() => ({}));
-      if (!j?.ok) { setPromoMsg({ intent: 'error', text: j?.error || `HTTP ${r.status}` }); return; }
+      if (!j?.ok) {
+        const text = j?.gate ? `${j.gate.reason} ${j.gate.remediation}` : (j?.error || `HTTP ${r.status}`);
+        setPromoMsg({ intent: 'error', text });
+        return;
+      }
       setPromotions(Array.isArray(j.promotions) ? j.promotions : []);
-      setPromoMsg({ intent: 'success', text: `Promoted ${fromStage} → ${toStage}.` });
+      const dep = j.deployedEnvironment;
+      setPromoMsg({
+        intent: 'success',
+        text: dep
+          ? `Promoted ${fromStage} → ${toStage}. Azure Deployment Environment "${dep.name}" → ${dep.provisioningState}.`
+          : `Promoted ${fromStage} → ${toStage}.`,
+      });
       setPromoNote('');
     } catch (e: any) { setPromoMsg({ intent: 'error', text: e?.message || String(e) }); }
   }, [id, fromStage, toStage, promoNote, envDef]);

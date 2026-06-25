@@ -64,6 +64,16 @@ export const EDITOR_REGISTRY: Record<string, EditorComponent> = {
   'spark-environment':    reg(() => import('./spark-environment-editor'), 'SparkEnvironmentEditor'),
   'copy-job':             reg(() => import('./copy-job-editor'),          'CopyJobEditor'),
   'dbt-job':              reg(() => import('./phase2-misc-editors'),      'DbtJobEditor'),
+  // Data Factory connection objects as first-class creatable items. The
+  // standalone editors wrap the shared pipeline gallery / IR manager (read-only)
+  // in manage/factory-scoped mode; real ARM via /api/adf (+ /api/synapse).
+  // Azure-native default, Fabric opt-in — per no-fabric-dependency.md.
+  'linked-service':       reg(() => import('./linked-service-editor'),    'LinkedServiceEditor'),
+  'integration-runtime':  reg(() => import('./integration-runtime-editor'), 'IntegrationRuntimeEditor'),
+  // Read-only T-SQL analyst consumption surface over a lakehouse/warehouse/mirror
+  // — Azure Synapse serverless SQL over the Delta in ADLS (no Fabric). Reuses the
+  // serverless SQL editor surface; BFF re-exports the serverless query/schema/objects.
+  'sql-analytics-endpoint': reg(() => import('./sql-analytics-endpoint-editor'), 'SqlAnalyticsEndpointEditor'),
 
   // Phase 3
   'eventhouse':           reg(() => import('./phase3-editors'),           'EventhouseEditor'),

@@ -36,6 +36,15 @@ import {
   POWERBI_MCP_TOOL_PREFIX,
   type LoomCopilotSkill,
 } from '../copilot/powerbi-skills';
+// The ~30 open-source Microsoft agent skills (github.com/microsoft/skills) are
+// SINGLE-SOURCED in lib/copilot/ms-skills.ts, where they EXTEND the Power BI
+// skill plumbing (the SAME LoomCopilotSkill shape, widened additively with
+// optional mcpToolPrefix? + attribution?) — no parallel system. Import the
+// descriptors + type (never re-declare) so the orchestrator's injected guidance,
+// the pane personas below, and the admin MCP panel can never drift on divergent
+// tool lists. The renderer + per-pane groupings live in THIS file, mirroring the
+// Power BI skillsByIds / SEMANTIC_MODEL_SKILLS / skillSystemBlock wiring.
+import { MS_AGENT_SKILLS, type MsAgentSkill } from '../copilot/ms-skills';
 
 export type CopilotPersona =
   | 'notebook'
@@ -770,6 +779,104 @@ You decompose user requests into concrete tool calls against the registered CSA 
 If a tool errors, surface the error clearly and either retry with corrected inputs or abandon ` +
   `that branch and explain why.`;
 
+// =============================================================================
+// Microsoft agent skills (MS_AGENT_SKILLS) — the open-source ~30 skills from
+// github.com/microsoft/skills, EXTENDING the Power BI skill plumbing above (same
+// LoomCopilotSkill shape, single-sourced in lib/copilot/ms-skills.ts). They
+// ground the built-in Copilot in Microsoft best practices on the DEFAULT
+// Azure-native path — NO Microsoft Fabric / Power BI workspace is required. The
+// live Microsoft MCP tools each skill can ALSO use are OPT-IN and surface only
+// once the server is connected; Microsoft Learn (mcp_mslearn_*) is the SOLE
+// default-on server (auth none, zero config) per no-fabric-dependency.md. This
+// wiring mirrors the Power BI skillsByIds / SEMANTIC_MODEL_SKILLS / skillSystemBlock
+// path exactly — pure data + selectors, no Azure SDK, no network.
+// =============================================================================
+
+/** Re-export from the single source so this module's importers (and the admin
+ *  MCP panel) share the SAME descriptors — never re-declared, never divergent. */
+export { MS_AGENT_SKILLS };
+export type { MsAgentSkill };
+
+/** Resolve MS skill descriptors by id (first-seen order; unknown ids dropped).
+ *  Mirrors {@link skillsByIds} for the Power BI skills. */
+export function msSkillsByIds(ids: readonly string[]): MsAgentSkill[] {
+  return ids
+    .map((id) => MS_AGENT_SKILLS.find((s) => s.id === id))
+    .filter((s): s is MsAgentSkill => Boolean(s));
+}
+
+/**
+ * MS-skill id groupings PER PANE. Each Copilot pane gets a SMALL, relevant
+ * subset (never all ~30) so its system prompt stays focused, mirroring
+ * SEMANTIC_MODEL_SKILL_IDS / REPORT_SKILL_IDS for the Power BI skills. Every id
+ * must exist in MS_AGENT_SKILLS (msSkillsByIds drops unknowns). The cross-item
+ * 'default' persona gets the broadest architect + docs + deploy grounding.
+ */
+export const MS_SKILL_IDS: Record<ContextSlug, readonly string[]> = {
+  // Cross-item Copilot: solution architecture, authoritative docs, and the
+  // prepare/validate deploy bookends ground every general request.
+  default: ['cloud-solution-architect', 'microsoft-docs', 'azure-prepare', 'azure-validate'],
+  // Warehouse (Synapse dedicated SQL pool): resource lookup, cost/right-sizing
+  // (scale the pool), and current docs.
+  warehouse: ['azure-resource-lookup', 'azure-cost', 'microsoft-docs'],
+  // Notebook (Synapse Spark over ADLS+Delta): lake storage, AI app patterns, docs.
+  notebook: ['azure-storage', 'azure-ai', 'microsoft-docs'],
+  // Lakehouse (ADLS Gen2 + Delta): direct storage skill + resource lookup + docs.
+  lakehouse: ['azure-storage', 'azure-resource-lookup', 'microsoft-docs'],
+  // Pipeline (Synapse Integrate / ADF): deploy/provision, lake sinks, docs.
+  'data-pipeline': ['azure-deploy', 'azure-storage', 'microsoft-docs'],
+  // KQL / ADX: the Kusto + KQL-authoring skills, plus docs.
+  'kql-database': ['azure-kusto', 'kql', 'microsoft-docs'],
+  // Data Agent: Foundry IQ knowledge bases, Azure AI patterns, Foundry projects.
+  'data-agent': ['foundry-iq-knowledge-bases', 'azure-ai', 'microsoft-foundry'],
+  // Semantic model (Loom-native tabular): AI-readiness patterns + docs (the
+  // Power BI semantic-model skill already grounds the DAX/modeling surface).
+  'semantic-model': ['azure-ai', 'microsoft-docs'],
+};
+
+/**
+ * Render the MS agent-skill guidance as a system-prompt block appended to a
+ * persona's system message — the MS analogue of {@link skillSystemBlock} for the
+ * Power BI skills. Grounds the built-in Copilot in Microsoft best practices on
+ * the DEFAULT Azure-native path; attributed to github.com/microsoft/skills.
+ * Returns '' for an empty list (nothing appended). No Microsoft Fabric / Power BI
+ * workspace is required for the guidance itself — and the only default-on MS MCP
+ * named here is Microsoft Learn (no auth), so no Fabric host is on any path.
+ */
+export function msSkillSystemBlock(skills: MsAgentSkill[]): string {
+  if (!skills || skills.length === 0) return '';
+  const lines: string[] = [];
+  lines.push('\n\n--- Microsoft agent skills (best-practice guidance) ---');
+  lines.push(
+    'The notes below are adapted from the open-source Microsoft agent skills ' +
+      '(github.com/microsoft/skills). They apply to the DEFAULT CSA Loom Azure-native path — ' +
+      'no Microsoft Fabric or Power BI workspace is required. Each names the REAL Loom tools it ' +
+      'drives; the live Microsoft MCP tools it can ALSO use are OPT-IN and surface only once an ' +
+      'admin connects that server, EXCEPT the Microsoft Learn MCP (mcp_mslearn_*), which is ' +
+      'default-on (auth none, zero config, live day-one).',
+  );
+  for (const s of skills) {
+    lines.push(`\n• ${s.name} — when to use: ${s.whenToUse}`);
+    lines.push(`  ${s.guidance}`);
+    if (s.toolNames.length) lines.push(`  Loom-native tools: ${s.toolNames.join(', ')}.`);
+    if (s.mcpToolPrefix) {
+      lines.push(
+        `  When the Microsoft MCP server behind the ${s.mcpToolPrefix}* tools is connected, those ` +
+          'tools additionally run live under the signed-in user’s delegated identity / the server’s ' +
+          'configured credential; if absent, use the Loom-native tools above. (Microsoft Learn’s ' +
+          'mcp_mslearn_* server is connected by default.)',
+      );
+    }
+  }
+  return lines.join('\n');
+}
+
+/** The MS-skill system block for a pane, resolved from {@link MS_SKILL_IDS}.
+ *  Appended to each persona's systemPrompt below (and the 'default' persona). */
+export function msSkillBlockForPane(slug: ContextSlug): string {
+  return msSkillSystemBlock(msSkillsByIds(MS_SKILL_IDS[slug] ?? []));
+}
+
 // ---------------------------------------------------------------------------
 // The registry.
 // ---------------------------------------------------------------------------
@@ -787,7 +894,9 @@ export const PERSONA_REGISTRY: Record<ContextSlug, PersonaEntry> = {
       'Run a deployment self-audit',
       'Create a data pipeline',
     ],
-    systemPrompt: () => DEFAULT_SYSTEM_PROMPT,
+    // Ground the cross-item Copilot in the Microsoft agent skills (architect +
+    // docs + deploy bookends) on the DEFAULT Azure-native path.
+    systemPrompt: () => DEFAULT_SYSTEM_PROMPT + msSkillBlockForPane('default'),
   },
 
   warehouse: {
@@ -821,6 +930,7 @@ export const PERSONA_REGISTRY: Record<ContextSlug, PersonaEntry> = {
       `what it does. When the user asks to OPTIMIZE, prefer T-SQL window functions, CTAS, and ` +
       `partition-elimination patterns; cite the real table/column names from the schema. Never use ` +
       `generic placeholders like "your_table".` +
+      msSkillBlockForPane('warehouse') +
       groundingBlock(p, { queryLabel: 'Active SQL query in the editor' }),
   },
 
@@ -844,6 +954,7 @@ export const PERSONA_REGISTRY: Record<ContextSlug, PersonaEntry> = {
       `Synapse Spark notebook. Use PySpark / Python idioms and reference the user’s ACTUAL ` +
       `variable, DataFrame, and column names from the cell text. Prefer Delta-on-ADLS operations ` +
       `(spark.read.format("delta")) over any Fabric / OneLake API.` +
+      msSkillBlockForPane('notebook') +
       groundingBlock(p, { queryLabel: 'Current notebook cell' }),
   },
 
@@ -872,6 +983,7 @@ export const PERSONA_REGISTRY: Record<ContextSlug, PersonaEntry> = {
       `Delta tables registered for Synapse serverless SQL. Use lakehouse_list / lakehouse_read to ` +
       `browse and synapse_serverless_query (OPENROWSET over Delta) to query. Ground every path and ` +
       `table reference in the real container layout — never invent paths.` +
+      msSkillBlockForPane('lakehouse') +
       groundingBlock(p, { queryLabel: 'Active query in the editor' }),
   },
 
@@ -900,6 +1012,7 @@ export const PERSONA_REGISTRY: Record<ContextSlug, PersonaEntry> = {
       `Integrate or Azure Data Factory. Help the user list, trigger, and compose pipeline ` +
       `activities (Copy, Notebook, Dataflow, Lookup, ForEach). Reference the real activity and ` +
       `dataset names from the editor; never invent pipeline names.` +
+      msSkillBlockForPane('data-pipeline') +
       groundingBlock(p, { queryLabel: 'Active pipeline definition' }),
   },
 
@@ -926,6 +1039,7 @@ export const PERSONA_REGISTRY: Record<ContextSlug, PersonaEntry> = {
       `Explorer (ADX / Kusto) cluster — the CSA Loom Eventhouse. Use idiomatic KQL operators ` +
       `(summarize, bin, make-series, project, where). When the user asks to EXPLAIN, reference the ` +
       `EXACT active KQL below. Ground table/column references in the real schema.` +
+      msSkillBlockForPane('kql-database') +
       groundingBlock(p, { queryLabel: 'Active KQL query in the editor' }),
   },
 
@@ -953,6 +1067,7 @@ export const PERSONA_REGISTRY: Record<ContextSlug, PersonaEntry> = {
       `language questions grounded in CSA Loom data sources (Synapse SQL, ADX, lakehouse Delta). ` +
       `Help the user configure sources, author concise grounding instructions, and craft example ` +
       `questions. Use item_configure to persist changes to the agent the user owns.` +
+      msSkillBlockForPane('data-agent') +
       groundingBlock(p, { queryLabel: 'Active agent configuration' }),
   },
 
@@ -994,6 +1109,7 @@ export const PERSONA_REGISTRY: Record<ContextSlug, PersonaEntry> = {
       `grounding every expression in the REAL tables, columns, and measures from the model context ` +
       `(call dax_model_context / tabular_list_* first; never invent names).` +
       skillSystemBlock(SEMANTIC_MODEL_SKILLS) +
+      msSkillBlockForPane('semantic-model') +
       groundingBlock(p, { queryLabel: 'Active DAX expression / measure in the editor' }),
   },
 };

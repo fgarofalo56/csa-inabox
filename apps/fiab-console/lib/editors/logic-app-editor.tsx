@@ -32,7 +32,7 @@ import {
 } from '@fluentui/react-components';
 import {
   Play20Regular, ArrowSync20Regular, Flash20Regular, Branch20Regular,
-  ArrowRight16Regular, Options20Regular, ArrowExportLtr20Regular,
+  ArrowRight16Regular, Options20Regular, ArrowExportLtr20Regular, Save20Regular,
 } from '@fluentui/react-icons';
 import { EmptyState } from '@/lib/components/empty-state';
 import { ItemEditorChrome } from './item-editor-chrome';
@@ -233,6 +233,13 @@ export function LogicAppEditor({ item, id }: Props) {
   const [running, setRunning] = useState(false);
   const [runRes, setRunRes] = useState<RunResponse | null>(null);
 
+  // Editable WDL code view — the real authoring surface. Persisted via PUT
+  // (ARM Microsoft.Logic/workflows when bound, always to Cosmos state).
+  const [draft, setDraft] = useState<string>('');
+  const [dirty, setDirty] = useState(false);
+  const [savingDef, setSavingDef] = useState(false);
+  const [saveMsg, setSaveMsg] = useState<{ intent: 'success' | 'error'; text: string } | null>(null);
+
   const load = useCallback(async () => {
     if (!workspaceId || id === 'new') { setDetail({ ok: true, definition: { triggers: {}, actions: {} } }); return; }
     setLoadErr(null);
@@ -254,6 +261,33 @@ export function LogicAppEditor({ item, id }: Props) {
   const paramValues = detail?.parameters || {};
   const bound = !!detail?.logicApp?.bound;
   const definitionJson = useMemo(() => JSON.stringify(definition, null, 2), [definition]);
+
+  // Re-seed the editable draft whenever a fresh definition loads (and the user
+  // hasn't started editing).
+  useEffect(() => { if (!dirty) setDraft(definitionJson); }, [definitionJson, dirty]);
+
+  const saveDefinition = useCallback(async () => {
+    if (!workspaceId || id === 'new') {
+      setSaveMsg({ intent: 'error', text: 'Save the item before editing its workflow definition.' });
+      return;
+    }
+    let parsed: unknown;
+    try { parsed = JSON.parse(draft); }
+    catch (e: any) { setSaveMsg({ intent: 'error', text: `Invalid JSON: ${e?.message || String(e)}` }); return; }
+    setSavingDef(true); setSaveMsg(null);
+    try {
+      const r = await fetch(`/api/items/logic-app/${encodeURIComponent(id)}?workspaceId=${encodeURIComponent(workspaceId)}`, {
+        method: 'PUT', headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ definition: parsed }),
+      });
+      const j = await r.json().catch(() => ({}));
+      if (!j?.ok) { setSaveMsg({ intent: 'error', text: j?.error || `HTTP ${r.status}` }); return; }
+      setDirty(false);
+      setSaveMsg({ intent: 'success', text: j.upserted ? 'Saved + deployed to Azure Logic App (ARM).' : 'Saved to workspace (deploy by binding a live Logic App).' });
+      await load();
+    } catch (e: any) { setSaveMsg({ intent: 'error', text: e?.message || String(e) }); }
+    finally { setSavingDef(false); }
+  }, [workspaceId, id, draft, load]);
 
   const runTrigger = useCallback(async () => {
     if (!workspaceId) return;
@@ -351,7 +385,7 @@ export function LogicAppEditor({ item, id }: Props) {
                   <EmptyState
                     icon={<Flash20Regular />}
                     title="No triggers or actions yet"
-                    body="This workflow has no triggers or actions defined. This Designer is a read-only flow view; add a trigger and actions to the workflow's Workflow Definition Language definition where the app is authored, then re-install/deploy to populate it here."
+                    body="This workflow has no triggers or actions defined. The Designer is a read-only flow view — open the Code view tab to add a trigger and actions to the Workflow Definition Language definition, then Save to deploy."
                   />
                 ) : (
                 <div className={s.flow}>
@@ -415,19 +449,31 @@ export function LogicAppEditor({ item, id }: Props) {
 
             {detail && tab === 'code' && (
               <>
-                <Body1>Workflow Definition Language (WDL) — read-only view of the deployed definition.</Body1>
+                <Body1>Workflow Definition Language (WDL) — edit the triggers, actions, and parameters here.</Body1>
                 <Caption1 style={{ color: tokens.colorNeutralForeground3, display: 'block', marginBottom: tokens.spacingVerticalS }}>
-                  The Designer tab shows a read-only flow of this workflow&apos;s triggers and actions; this Code tab shows
-                  the deployed Workflow Definition Language (WDL). To change triggers/actions, edit the workflow&apos;s WDL
-                  definition where the app is authored and re-install/deploy.
+                  This is the authoring surface: change triggers/actions in the WDL JSON and <strong>Save</strong>.
+                  {bound
+                    ? ' Saving deploys the workflow to the bound Azure Logic App via ARM (PUT Microsoft.Logic/workflows) and persists it.'
+                    : ' Saving persists to the workspace; bind/deploy a live Logic App (set LOOM_LOGIC_SUB / LOOM_LOGIC_RG / LOOM_LOGIC_LOCATION + grant the Console UAMI "Logic App Contributor") to push it to ARM.'}
+                  {' '}The Designer tab renders this same definition as a read-only flow.
                 </Caption1>
+                {saveMsg && (
+                  <MessageBar intent={saveMsg.intent}><MessageBarBody>{saveMsg.text}</MessageBarBody></MessageBar>
+                )}
+                <div className={s.toolbar}>
+                  <Button appearance="primary" icon={<Save20Regular />} disabled={savingDef || !dirty} onClick={saveDefinition}>
+                    {savingDef ? 'Saving…' : 'Save workflow'}
+                  </Button>
+                  <Button appearance="subtle" disabled={!dirty} onClick={() => { setDraft(definitionJson); setDirty(false); setSaveMsg(null); }}>
+                    Revert
+                  </Button>
+                </div>
                 <MonacoTextarea
-                  value={definitionJson}
-                  onChange={() => { /* intentional: this is a read-only view of the deployed WDL */ }}
+                  value={draft}
+                  onChange={(v) => { setDraft(v); setDirty(true); }}
                   language="json"
-                  readOnly
                   height={520}
-                  ariaLabel="Workflow definition JSON (read-only)"
+                  ariaLabel="Workflow definition JSON (editable)"
                 />
               </>
             )}

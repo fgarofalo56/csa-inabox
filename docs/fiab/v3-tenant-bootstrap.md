@@ -1131,6 +1131,204 @@ honest gate (deploy via the AKS/Helm path instead). For an existing Container
 Apps deployment, the three env vars are set automatically by a redeploy; no extra
 manual grant is needed beyond the bicep-wired roles above.
 
+## Microsoft MCP servers + agent skills (remote built-in + deployable) {#microsoft-mcp-servers}
+
+CSA Loom integrates the curated **Microsoft MCP servers** (`github.com/microsoft/mcp`)
+and the **~30 Microsoft agent skills** (`github.com/microsoft/skills`) by
+**extending the already-committed Power BI remote-MCP plumbing** — it is **not** a
+parallel system. The remote servers register as the same `McpServerConfig` shape
+the Power BI path uses (`lib/types/mcp-config.ts`, `source: 'remote-builtin'`),
+are reached by the same client (`lib/azure/mcp-client.ts` `resolveAuthHeader` +
+threaded per-user `userToken`), advertised by the same `buildMcpShim()` as
+`mcp_<slug>_<tool>`, and gated exactly like `isPbiMcpConfigured()` —
+per-server `configured()` in `lib/mcp/catalog.ts` `REMOTE_BUILTIN_MCP_CATALOG`.
+The skills (`lib/copilot/ms-skills.ts`, mirroring `lib/copilot/powerbi-skills.ts`)
+are **Azure-native by default** and bind to a server's MCP tool prefix only once
+that server is connected — they need **no bicep toggle and no tenant action**.
+
+Admin surface: **Admin → Tenant settings → External MCP Tools → "Microsoft MCP
+servers"** (`lib/components/admin/mcp-servers-panel.tsx`, BFF
+`app/api/admin/mcp-servers/ms-remote/route.ts` — `GET` returns the honest gate
+when unconfigured, `?probe=1` makes a **real** `initialize → tools/list`
+handshake). Deployable Microsoft entries appear automatically in the existing
+**Browse library** picker (`McpCatalogBrowser`).
+
+### Rule posture (read first)
+
+Per [`no-fabric-dependency.md`](../../.claude/rules/no-fabric-dependency.md):
+**Microsoft Learn is the SOLE default-on server** — Microsoft-hosted, GA, **no
+auth, zero config**, zero Fabric/Power BI dependency — so a clean deploy ships
+live MCP tools day-one. **Every other server is strictly opt-in** and is never
+reached on a default code path. **Microsoft Fabric** and **Fabric RTI** are
+present only as explicit Fabric-family opt-ins in the deployable catalog
+(`govSafe:false`, `externalHosts:['api.fabric.microsoft.com']`,
+`defaultRecommended:false`) — `api.fabric.microsoft.com` / `api.powerbi.com` are
+touched **only** when one of those is explicitly enabled.
+
+Per [`no-vaporware.md`](../../.claude/rules/no-vaporware.md): each opt-in server
+is gated on **both** its `*Enabled` toggle **and** a confirmed endpoint. Where a
+Microsoft remote host is not yet GA the `defaultEndpoint` is empty, so the
+Console renders the honest Fluent `MessageBar` gate (naming the exact env var /
+OBO scope / Key Vault secret / tenant consent) rather than calling an unconfirmed
+host. Secrets are **never literals** — the OBO servers carry no static secret
+(they reuse the existing confidential client), and GitHub's PAT is a Key Vault
+`secretRef` only.
+
+### Microsoft Learn — on by default, NO action {#ms-mcp-learn}
+
+`LOOM_MS_LEARN_MCP_ENABLED` defaults `'true'` and `listMcpServers` /
+`buildMcpShim` inject a **synthetic enabled Learn row**, so
+`microsoft_docs_search` / `microsoft_docs_fetch` / `microsoft_code_sample_search`
+tools are advertised to the Copilot orchestrator with zero config. Endpoint:
+`https://learn.microsoft.com/api/mcp` (no `Authorization` header). Nothing to do.
+
+- To **disable** it (or in air-gapped IL5, where `learn.microsoft.com` is
+  external egress — `il5.bicepparam` sets it off): `loomBackends.mcp.learnEnabled = 'false'`.
+- To **override** the endpoint (e.g. add `?maxTokenBudget=2000`):
+  `loomBackends.mcp.learnEndpoint = '<url>'`.
+
+### Per-server opt-in — Entra On-Behalf-Of servers {#ms-mcp-obo}
+
+ARM, Foundry, Microsoft Graph, Microsoft 365, Teams, OneDrive/SharePoint,
+Sentinel, Admin Center, and Dataverse authenticate with **per-user Microsoft
+Entra On-Behalf-Of** (`authMethod: 'entra-obo'`). They **reuse the existing Loom
+confidential client** (`LOOM_MSAL_CLIENT_ID` + the `loom-msal-client-secret` Key
+Vault secret already wired for sign-in and for Power BI) to exchange the
+signed-in user's token for each server's `oboResource` — **no new secret, no new
+param**. Each runs under the signed-in user's own RBAC.
+
+To turn one on you do **two** things: (1) **enable it** (set the
+`loomBackends.mcp.*Enabled` key — and the `*Endpoint` key where the host is not
+yet GA), and (2) **admin-consent the delegated scopes** on the Loom app
+registration for that server's OBO resource (the one-time tenant action that ARM
+RBAC cannot perform). Until both are done the server's card shows the honest gate.
+
+| Server | `loomBackends.mcp.*` keys | OBO resource | Delegated scope(s) to consent on the Loom app | Endpoint (provenance) |
+|---|---|---|---|---|
+| Azure Resources (ARM) | `armEnabled='true'`, `armEndpoint` (self-hosted) | `https://management.azure.com` | `user_impersonation` (= [Prerequisite B](#prereq-azure-svc-mgmt-consent), already consented for Connections) | self-host the Azure MCP server with OBO on Container Apps → set `armEndpoint` |
+| Microsoft Foundry | `foundryEnabled='true'` | `https://ai.azure.com` | `.default` (the app's Foundry perms) | `https://mcp.ai.azure.com` (preview; public endpoint only) |
+| Microsoft Graph (Enterprise) | `graphEnabled='true'` | `https://graph.microsoft.com` | the `MCP.*` delegated Graph permissions + admin consent (read-only) | `https://mcp.svc.cloud.microsoft/enterprise` (preview) |
+| Microsoft Sentinel | `sentinelEnabled='true'` | `https://sentinel.microsoft.com` | `.default` + the **Security Reader** role (or higher) on the Sentinel data lake (Azure RBAC) | `https://sentinel.microsoft.com/mcp/data-exploration` (preview) |
+| Microsoft 365 | `m365Enabled='true'`, `m365Endpoint` (required) | `https://graph.microsoft.com` | `Mail.Read`, `Calendars.Read`, `Files.Read.All` | endpoint **not yet GA** — supply `m365Endpoint` |
+| Microsoft Teams | `teamsEnabled='true'`, `teamsEndpoint` (required) | `https://graph.microsoft.com` | `Team.ReadBasic.All`, `Channel.ReadBasic.All`, `ChannelMessage.Read.All`, `Chat.Read` | endpoint **not yet GA** — supply `teamsEndpoint` |
+| OneDrive & SharePoint | `onedriveEnabled='true'`, `onedriveEndpoint` (required) | `https://graph.microsoft.com` | `Files.Read.All`, `Sites.Read.All` | endpoint **not yet GA** — supply `onedriveEndpoint` |
+| Microsoft 365 Admin Center | `adminCenterEnabled='true'`, `adminCenterEndpoint` (required) | `https://graph.microsoft.com` | `Directory.Read.All` | endpoint **not yet GA** — supply `adminCenterEndpoint` |
+| Microsoft Dataverse | `LOOM_DATAVERSE_MCP_ENABLED='true'`, `LOOM_DATAVERSE_MCP_ENDPOINT` (per-org, required) | your org origin (derived from the endpoint) | `.default` + the [Power Platform SP grant](#usage-analytics-embed) + the Dataverse **MCP tenant setting** (admin center → Environment → Settings → Product → Features) | per-org `https://<org>.crm.dynamics.com/api/mcp` |
+
+> ARM reuses the **same** `Azure Service Management / user_impersonation` consent
+> already required by Connections ([Prerequisite B](#prereq-azure-svc-mgmt-consent))
+> — if Connections cross-sub discovery works, ARM-MCP OBO will too. Sentinel's
+> requirement is an **Azure RBAC role** (Security Reader on the data lake), an
+> honest Azure infra gate, not a Fabric one.
+
+**One-time delegated-scope consent (generic recipe).** A Global / Application
+Administrator adds the scopes to the Loom app registration and grants admin
+consent **once per OBO resource**. Example for the Microsoft 365 server (Graph
+delegated scopes); repeat the `for` loop with the scope set from the table above
+for Teams / OneDrive-SharePoint / Admin Center:
+
+```bash
+# Loom MSAL app registration (the confidential client reused for OBO):
+LOOM_APP_ID=$LOOM_MSAL_CLIENT_ID
+GRAPH=00000003-0000-0000-c000-000000000000
+GRAPH_SP=$(az ad sp list --filter "appId eq '$GRAPH'" --query "[0].id" -o tsv)
+
+# Resolve each delegated scope's id by value and add it to the app reg:
+for SCOPE in Mail.Read Calendars.Read Files.Read.All; do
+  SID=$(az ad sp show --id "$GRAPH_SP" \
+    --query "oauth2PermissionScopes[?value=='$SCOPE'].id | [0]" -o tsv)
+  az ad app permission add --id "$LOOM_APP_ID" --api "$GRAPH" \
+    --api-permissions "$SID=Scope"
+done
+
+# Grant admin consent once (covers every scope added above):
+az ad app permission admin-consent --id "$LOOM_APP_ID"
+```
+
+For ARM (`https://management.azure.com`, `user_impersonation`) use the
+[Prerequisite B](#prereq-azure-svc-mgmt-consent) recipe verbatim
+(resource app `797f4846-ba00-4fd7-ba43-dac1f8f63013`). For Microsoft Graph
+(Enterprise), add the tenant's `MCP.*` delegated Graph permissions in the same
+way and admin-consent.
+
+**Sovereign clouds.** The OBO resource hosts above are Commercial. In GCC-High /
+IL5, point the resource/endpoint at the sovereign equivalents (`graph.microsoft.us`
+/ `dod-graph.microsoft.us`, `management.usgovcloudapi.net`) via the `*Scope` /
+`*Endpoint` keys; most of these remote servers are Commercial-only in preview, so
+leave them off until a sovereign endpoint is published (the honest gate stays up).
+
+### Per-server opt-in — GitHub (Key Vault PAT, NOT Entra) {#ms-mcp-github}
+
+The GitHub remote MCP server (`https://api.githubcopilot.com/mcp`) uses **GitHub
+OAuth / PAT — not Entra**, so there is **no OBO exchange**. Supply a PAT via Key
+Vault `secretRef` **only** (never a literal):
+
+1. Store a fine-grained GitHub PAT in the Loom Key Vault, e.g.:
+
+   ```bash
+   az keyvault secret set --vault-name <loom-vault> \
+     --name loom-github-mcp-pat --value '<ghp_...>'
+   ```
+
+2. Point the Console at it: `loomBackends.mcp.githubPatKvSecret = 'loom-github-mcp-pat'`
+   and `loomBackends.mcp.githubEnabled = 'true'` (override `githubEndpoint` for
+   GitHub Enterprise). Bicep wires `LOOM_GITHUB_MCP_PAT_SECRET` as a `secretRef`
+   to the KV-backed Container App secret `loom-github-mcp-pat`; the client sends
+   `Authorization: Bearer <PAT>`. Absent the secret name ⇒ honest KV-secret gate.
+
+### Deployable Microsoft servers (catalog browser) {#ms-mcp-deployable}
+
+Azure MCP, Microsoft SQL (Data API builder), Azure DevOps, AKS, MarkItDown,
+NuGet, and Playwright are **stdio** servers in `MCP_CATALOG` (`source:'microsoft'`,
+`hostVia:'container-apps'`). They appear in the Browse library and follow the
+existing [deploy wizard](#mcp-catalog-deploy): host as an internal Container App
+(stdio → HTTPS), then auto-register. Where Microsoft does not yet publish a
+first-party **public** container image (AKS, NuGet, the Fabric servers), the
+entry carries a required **`IMAGE_REF`** field → honest "build from source, push
+to your ACR, set the image ref" gate (no fabricated image). **Microsoft Fabric**
+and **Fabric RTI** are listed here **only** as explicit Fabric-family opt-ins
+(category `Analytics`, `govSafe:false`) — filtered out of gov boundaries and never
+auto-deployed; Loom's Azure-native ADX / Synapse / Data API builder analytics
+stays the day-one default.
+
+### Verify
+
+Open **Admin → External MCP Tools → Microsoft MCP servers**. Microsoft Learn
+shows **Connected (default-on, no auth)**. Each opt-in card shows either its
+honest gate (naming the exact `*Enabled` / `*Endpoint` / scope / KV secret /
+tenant consent) or **Connected** once configured; click **Test connection**
+(`?probe=1`) for a real `initialize → tools/list` handshake. In a Copilot pane,
+the relevant Microsoft skill (e.g. a Sentinel hunting or Graph lookup skill)
+appears and, when its server is connected, calls the `mcp_<slug>_<tool>` surface.
+
+### Bicep sync
+
+- **Toggles + endpoints + scopes** are folded into the **`loomBackends.mcp`**
+  sub-object (same single-object trick as `loomBackends.warehouse` /
+  `loomBackends.pipeline` / `loomBackends.powerBiMcpClientId`, to stay under the
+  ARM 256-parameter limit): keys `learnEnabled` / `learnEndpoint`,
+  `armEnabled` / `armEndpoint` / `armScope`, `foundryEnabled` / `foundryEndpoint` /
+  `foundryScope`, `graphEnabled` / `graphEndpoint` / `graphScope`, `m365*`,
+  `teams*`, `onedrive*`, `sentinel*`, `adminCenter*`, `githubEnabled` /
+  `githubEndpoint` / `githubPatKvSecret`. Read at runtime (no `.bicepparam` edit
+  needed) and wired to the Console as the `LOOM_*_MCP_*` env vars in
+  `platform/fiab/bicep/modules/admin-plane/main.bicep` (apps[].env). See the
+  catalog comment block in `params/commercial-full.bicepparam`.
+- **`LOOM_MS_LEARN_MCP_ENABLED` defaults `'true'`** (the synthetic Learn row);
+  `il5.bicepparam` sets it `'false'` (external-egress air-gap).
+- **OBO reuses the existing confidential client** — `LOOM_MSAL_CLIENT_ID` + the
+  `loom-msal-client-secret` Key Vault `secretRef` already emitted by the MSAL
+  block. **No new secret literal, no new param.**
+- **GitHub PAT** is a Key Vault `secretRef` (ACA secret `loom-github-mcp-pat`),
+  emitted only when `githubPatKvSecret` is set — never a literal.
+- The **delegated-scope admin consent** per OBO resource and the **Dataverse /
+  Power Platform tenant settings** are directory/tenant grants that intentionally
+  cannot be expressed in ARM/bicep — hence this runbook.
+- **Skills** (`lib/copilot/ms-skills.ts`) need no bicep — they are injected into
+  the pane system prompts by `lib/copilot/copilot-personas.ts` /
+  `lib/azure/copilot-orchestrator.ts` and are Azure-native unless their MS MCP
+  server is connected.
+
 ## Eventstream MQTT/Kafka mTLS certificates (Key Vault) {#eventstream-mtls-certs}
 
 The Real-Time Hub **Connect source → MQTT** dialog (and the Kafka secure-

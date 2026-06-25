@@ -28,6 +28,7 @@ import {
 import {
   Add20Regular, ArrowSync20Regular, Save20Regular, FlowchartCircle20Regular,
   History20Regular, PlugConnected20Regular, Settings20Regular, Apps20Regular,
+  Play16Regular, Pause16Regular, Play16Filled, DocumentText16Regular,
 } from '@fluentui/react-icons';
 import { EmptyState } from '@/lib/components/empty-state';
 import { ItemEditorChrome } from './item-editor-chrome';
@@ -113,6 +114,18 @@ export function AirflowJobEditor({ item, id }: Props) {
   const [settingsBusy, setSettingsBusy] = useState(false);
   const [settingsMsg, setSettingsMsg] = useState<string | null>(null);
   const [settingsErr, setSettingsErr] = useState<string | null>(null);
+
+  // DAG actions (trigger / pause-unpause)
+  const [busyDag, setBusyDag] = useState<string | null>(null);
+  const [actionMsg, setActionMsg] = useState<{ intent: 'success' | 'error'; text: string } | null>(null);
+
+  // Logs dialog
+  const [logsOpen, setLogsOpen] = useState(false);
+  const [logsRun, setLogsRun] = useState<DagRunLite | null>(null);
+  const [logsTasks, setLogsTasks] = useState<any[] | null>(null);
+  const [logsErr, setLogsErr] = useState<string | null>(null);
+  const [logText, setLogText] = useState<string | null>(null);
+  const [logTaskId, setLogTaskId] = useState<string | null>(null);
 
   useEffect(() => {
     fetch('/api/loom/workspaces').then(r => r.json()).then(j => {
@@ -215,6 +228,59 @@ export function AirflowJobEditor({ item, id }: Props) {
     } catch (e: any) { setSettingsErr(e?.message || String(e)); }
     finally { setSettingsBusy(false); }
   }, [workspaceId, jobId, editUrl, editGit, loadDetail]);
+
+  const triggerRun = useCallback(async (dagId: string) => {
+    if (!workspaceId || !jobId) return;
+    setBusyDag(dagId); setActionMsg(null);
+    try {
+      const r = await fetch(`/api/items/airflow-job/${encodeURIComponent(jobId)}/dag-runs?workspaceId=${encodeURIComponent(workspaceId)}`, {
+        method: 'POST', headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ dagId }),
+      });
+      const j = await r.json();
+      if (!j.ok) { setActionMsg({ intent: 'error', text: j.error || 'trigger failed' }); return; }
+      setActionMsg({ intent: 'success', text: `Triggered ${dagId} — run ${j.run?.dag_run_id || ''} (${j.run?.state || 'queued'})` });
+      if (tab === 'runs' && runsDagId === dagId) loadRuns(workspaceId, jobId, dagId);
+    } catch (e: any) { setActionMsg({ intent: 'error', text: e?.message || String(e) }); }
+    finally { setBusyDag(null); }
+  }, [workspaceId, jobId, tab, runsDagId, loadRuns]);
+
+  const togglePause = useCallback(async (dagId: string, isPaused: boolean) => {
+    if (!workspaceId || !jobId) return;
+    setBusyDag(dagId); setActionMsg(null);
+    try {
+      const r = await fetch(`/api/items/airflow-job/${encodeURIComponent(jobId)}/dags?workspaceId=${encodeURIComponent(workspaceId)}`, {
+        method: 'PATCH', headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ dagId, isPaused }),
+      });
+      const j = await r.json();
+      if (!j.ok) { setActionMsg({ intent: 'error', text: j.error || 'pause toggle failed' }); return; }
+      setActionMsg({ intent: 'success', text: `${dagId} ${j.is_paused ? 'paused' : 'unpaused'}` });
+      setDags((cur) => (cur || []).map((d) => d.dag_id === dagId ? { ...d, is_paused: j.is_paused } : d));
+    } catch (e: any) { setActionMsg({ intent: 'error', text: e?.message || String(e) }); }
+    finally { setBusyDag(null); }
+  }, [workspaceId, jobId]);
+
+  const openLogs = useCallback(async (run: DagRunLite) => {
+    if (!workspaceId || !jobId || !runsDagId) return;
+    setLogsOpen(true); setLogsRun(run); setLogsTasks(null); setLogsErr(null); setLogText(null); setLogTaskId(null);
+    try {
+      const r = await fetch(`/api/items/airflow-job/${encodeURIComponent(jobId)}/task-logs?workspaceId=${encodeURIComponent(workspaceId)}&dagId=${encodeURIComponent(runsDagId)}&runId=${encodeURIComponent(run.dag_run_id)}`);
+      const j = await r.json();
+      if (!j.ok) { setLogsErr(j.error || 'failed to load task instances'); setLogsTasks([]); return; }
+      setLogsTasks(j.tasks || []);
+    } catch (e: any) { setLogsErr(e?.message || String(e)); setLogsTasks([]); }
+  }, [workspaceId, jobId, runsDagId]);
+
+  const fetchTaskLog = useCallback(async (taskId: string, tryNumber?: number) => {
+    if (!workspaceId || !jobId || !runsDagId || !logsRun) return;
+    setLogTaskId(taskId); setLogText(null);
+    try {
+      const r = await fetch(`/api/items/airflow-job/${encodeURIComponent(jobId)}/task-logs?workspaceId=${encodeURIComponent(workspaceId)}&dagId=${encodeURIComponent(runsDagId)}&runId=${encodeURIComponent(logsRun.dag_run_id)}&taskId=${encodeURIComponent(taskId)}&tryNumber=${encodeURIComponent(String(tryNumber || 1))}`);
+      const j = await r.json();
+      setLogText(j.ok ? (j.log || '(empty log)') : (j.error || 'failed to load log'));
+    } catch (e: any) { setLogText(e?.message || String(e)); }
+  }, [workspaceId, jobId, runsDagId, logsRun]);
 
   const ribbon: RibbonTab[] = useMemo(() => [
     { id: 'home', label: 'Home', groups: [
@@ -351,6 +417,9 @@ export function AirflowJobEditor({ item, id }: Props) {
                     primaryAction={{ label: 'Refresh DAGs', onClick: () => workspaceId && jobId && loadDags(workspaceId, jobId) }}
                   />
                 )}
+                {actionMsg && (
+                  <MessageBar intent={actionMsg.intent}><MessageBarBody>{actionMsg.text}</MessageBarBody></MessageBar>
+                )}
                 {dags && dags.length > 0 && (
                   <div className={s.tableWrap}>
                     <Table aria-label="Airflow DAGs" size="small">
@@ -361,6 +430,7 @@ export function AirflowJobEditor({ item, id }: Props) {
                         <TableHeaderCell>Schedule</TableHeaderCell>
                         <TableHeaderCell>Next run</TableHeaderCell>
                         <TableHeaderCell>Owners</TableHeaderCell>
+                        <TableHeaderCell>Actions</TableHeaderCell>
                       </TableRow></TableHeader>
                       <TableBody>
                         {dags.map(d => (
@@ -371,6 +441,19 @@ export function AirflowJobEditor({ item, id }: Props) {
                             <TableCell className={s.cell}>{d.schedule_interval || '—'}</TableCell>
                             <TableCell className={s.cell}>{d.next_dagrun?.replace('T', ' ').replace(/\..*/, '') || '—'}</TableCell>
                             <TableCell>{(d.owners || []).join(', ') || '—'}</TableCell>
+                            <TableCell>
+                              <div style={{ display: 'flex', gap: tokens.spacingHorizontalXS }}>
+                                <Button size="small" appearance="primary" icon={<Play16Filled />}
+                                  disabled={busyDag === d.dag_id} onClick={() => triggerRun(d.dag_id)}>
+                                  {busyDag === d.dag_id ? '…' : 'Trigger'}
+                                </Button>
+                                <Button size="small" appearance="outline"
+                                  icon={d.is_paused ? <Play16Regular /> : <Pause16Regular />}
+                                  disabled={busyDag === d.dag_id} onClick={() => togglePause(d.dag_id, !d.is_paused)}>
+                                  {d.is_paused ? 'Unpause' : 'Pause'}
+                                </Button>
+                              </div>
+                            </TableCell>
                           </TableRow>
                         ))}
                       </TableBody>
@@ -435,6 +518,7 @@ export function AirflowJobEditor({ item, id }: Props) {
                               <TableHeaderCell>Type</TableHeaderCell>
                               <TableHeaderCell>Started</TableHeaderCell>
                               <TableHeaderCell>Ended</TableHeaderCell>
+                              <TableHeaderCell>Tasks</TableHeaderCell>
                             </TableRow>
                           </TableHeader>
                           <TableBody>
@@ -452,6 +536,11 @@ export function AirflowJobEditor({ item, id }: Props) {
                                 <TableCell>{r.run_type || '—'}</TableCell>
                                 <TableCell>{r.start_date?.replace('T', ' ').replace(/\..*/, '') || '—'}</TableCell>
                                 <TableCell>{r.end_date?.replace('T', ' ').replace(/\..*/, '') || '—'}</TableCell>
+                                <TableCell>
+                                  <Button size="small" appearance="outline" icon={<DocumentText16Regular />} onClick={() => openLogs(r)}>
+                                    Tasks &amp; logs
+                                  </Button>
+                                </TableCell>
                               </TableRow>
                             ))}
                           </TableBody>
@@ -498,6 +587,58 @@ export function AirflowJobEditor({ item, id }: Props) {
                 )}
               </>
             )}
+
+            <Dialog open={logsOpen} onOpenChange={(_, d) => setLogsOpen(d.open)}>
+              <DialogSurface style={{ maxWidth: '90vw', width: 820 }}>
+                <DialogBody>
+                  <DialogTitle>Run {logsRun?.dag_run_id} — task instances &amp; logs</DialogTitle>
+                  <DialogContent>
+                    {logsErr && <MessageBar intent="error"><MessageBarBody>{logsErr}</MessageBarBody></MessageBar>}
+                    {!logsErr && logsTasks === null && <Spinner size="tiny" label="Loading task instances…" />}
+                    {logsTasks && logsTasks.length === 0 && !logsErr && <Caption1>No task instances for this run.</Caption1>}
+                    {logsTasks && logsTasks.length > 0 && (
+                      <Table size="small" aria-label="Task instances">
+                        <TableHeader><TableRow>
+                          <TableHeaderCell>Task</TableHeaderCell>
+                          <TableHeaderCell>State</TableHeaderCell>
+                          <TableHeaderCell>Operator</TableHeaderCell>
+                          <TableHeaderCell>Log</TableHeaderCell>
+                        </TableRow></TableHeader>
+                        <TableBody>
+                          {logsTasks.map((t: any) => (
+                            <TableRow key={t.task_id}>
+                              <TableCell className={s.cell}>{t.task_id}</TableCell>
+                              <TableCell>
+                                <Badge appearance="filled" color={
+                                  t.state === 'success' ? 'success' : t.state === 'failed' ? 'danger' : t.state === 'running' ? 'brand' : 'informative'
+                                }>{t.state || 'none'}</Badge>
+                              </TableCell>
+                              <TableCell className={s.cell}>{t.operator || '—'}</TableCell>
+                              <TableCell>
+                                <Button size="small" appearance="outline" onClick={() => fetchTaskLog(t.task_id, t.try_number)}>View</Button>
+                              </TableCell>
+                            </TableRow>
+                          ))}
+                        </TableBody>
+                      </Table>
+                    )}
+                    {logTaskId && (
+                      <>
+                        <Caption1 style={{ display: 'block', marginTop: tokens.spacingVerticalS }}>Log — {logTaskId}</Caption1>
+                        <div style={{
+                          fontFamily: 'Consolas, monospace', fontSize: tokens.fontSizeBase200, whiteSpace: 'pre-wrap',
+                          overflow: 'auto', maxHeight: 320, border: `1px solid ${tokens.colorNeutralStroke2}`,
+                          borderRadius: tokens.borderRadiusMedium, padding: tokens.spacingHorizontalS, background: tokens.colorNeutralBackground3,
+                        }}>{logText ?? 'Loading…'}</div>
+                      </>
+                    )}
+                  </DialogContent>
+                  <DialogActions>
+                    <Button appearance="secondary" onClick={() => setLogsOpen(false)}>Close</Button>
+                  </DialogActions>
+                </DialogBody>
+              </DialogSurface>
+            </Dialog>
           </div>
         </>
       }

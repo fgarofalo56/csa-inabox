@@ -111,6 +111,72 @@ param loomGovernPbiReportId    = readEnvironmentVariable('LOOM_GOVERN_PBI_REPORT
 // Off by default — the reports can also live on the F64 capacity above.
 param pbiEmbeddedEnabled       = bool(readEnvironmentVariable('LOOM_PBI_EMBEDDED_ENABLED', 'false'))
 
+// =====================================================================
+// Microsoft MCP servers + agent skills (curated github.com/microsoft/mcp +
+// github.com/microsoft/skills) — EXTENDS the Power BI MCP plumbing above; it is
+// NOT a parallel system. The remote built-ins reuse the same RemoteBuiltinMcp
+// shape (lib/mcp/catalog.ts → REMOTE_BUILTIN_MCP_CATALOG), the same per-user
+// auth paths (lib/azure/mcp-client.ts: 'entra-obo' / 'key-vault' / no-auth
+// 'none'), and the same admin connect/status/?probe=1 BFF contract the Power BI
+// route established. Each entry carries an honest Fluent gate (no-vaporware):
+// until it is enabled AND configured its admin card names the EXACT env / KV
+// secret / consent it needs, and ?probe=1 runs a REAL initialize→tools/list
+// handshake — no stub.
+//
+// no-fabric-dependency: Microsoft Learn (no-auth, Microsoft-hosted, GA) is the
+// SOLE default-ON remote MCP. Every other Microsoft server is strictly opt-in
+// and OFF by default; Microsoft Fabric + Fabric RTI are explicit Fabric-family
+// opt-ins (govSafe:false, never on a default path — api.fabric.microsoft.com is
+// reached ONLY when that server is explicitly enabled). No api.fabric /
+// api.powerbi host is ever touched on a default path.
+//
+// All toggles below are READ AT RUNTIME from these env vars (no .bicepparam
+// edit needed) and fold into the admin-plane loomBackends.mcp sub-object — the
+// same single-object trick the Azure-native backend selectors use to stay under
+// the ARM 256-parameter limit, so no new top-level scalar param is added here.
+//
+//   Microsoft Learn (DEFAULT ON — Reference; no auth, zero config, live day-one)
+//     LOOM_MS_LEARN_MCP_ENABLED   default 'true'  (set 'false' to disable; IL5
+//                                 air-gap sets 'false' — learn.microsoft.com is
+//                                 external egress, see il5.bicepparam)
+//     LOOM_MS_LEARN_MCP_ENDPOINT  default https://learn.microsoft.com/api/mcp
+//                                 (override e.g. to add ?maxTokenBudget=2000)
+//
+//   Entra On-Behalf-Of opt-ins (DEFAULT OFF) — each REUSES the existing Loom
+//   confidential client (LOOM_MSAL_CLIENT_ID + the loom-msal-client-secret KV
+//   secret) for the per-user OBO exchange; NO new secret literal is introduced.
+//   Set _ENABLED='true' (+ _ENDPOINT where the endpoint is not yet GA):
+//     LOOM_AZURE_ARM_MCP_ENABLED / _ENDPOINT     OBO https://management.azure.com/user_impersonation (self-host Azure MCP w/ OBO)
+//     LOOM_FOUNDRY_MCP_ENABLED                   https://mcp.ai.azure.com — OBO https://ai.azure.com/.default (preview)
+//     LOOM_MS_GRAPH_MCP_ENABLED                  https://mcp.svc.cloud.microsoft/enterprise — OBO https://graph.microsoft.com/.default (needs MCP.* delegated Graph perms + admin consent; read-only, preview)
+//     LOOM_SENTINEL_MCP_ENABLED                  https://sentinel.microsoft.com/mcp/data-exploration — OBO https://sentinel.microsoft.com/.default (Security Reader+, preview)
+//     LOOM_M365_MCP_ENABLED / _ENDPOINT          OBO https://graph.microsoft.com/.default — endpoint not yet GA, supply it (preview)
+//     LOOM_TEAMS_MCP_ENABLED / _ENDPOINT         OBO https://graph.microsoft.com/.default — endpoint not yet GA, supply it (preview)
+//     LOOM_ONEDRIVE_SHAREPOINT_MCP_ENABLED / _ENDPOINT   OBO https://graph.microsoft.com/.default — endpoint not yet GA, supply it (preview)
+//     LOOM_ADMIN_CENTER_MCP_ENABLED / _ENDPOINT  OBO https://graph.microsoft.com/.default — endpoint not yet GA, supply it (preview)
+//     LOOM_DATAVERSE_MCP_ENABLED / _ENDPOINT     per-org https://<org>.crm.dynamics.com/api/mcp — OBO <org>/.default; also enable the Dataverse MCP tenant setting in the Power Platform admin center (preview)
+//
+//   GitHub (DEFAULT OFF) — GitHub OAuth / PAT, NOT Entra (no OBO). Supply the
+//   PAT via Key Vault secretRef ONLY — never a literal:
+//     LOOM_GITHUB_MCP_ENABLED
+//     LOOM_GITHUB_MCP_PAT_SECRET  = the Key Vault SECRET NAME holding the PAT
+//                                   (sent as Authorization: Bearer <PAT>)
+//     LOOM_GITHUB_MCP_ENDPOINT    default https://api.githubcopilot.com/mcp
+//                                   (override for GitHub Enterprise)
+//
+//   Deployable Microsoft servers (Azure MCP, Microsoft SQL, Dataverse, Azure
+//   DevOps, AKS, Markitdown, NuGet, Playwright) surface automatically in the
+//   existing MCP catalog browser, hosted stdio→Container Apps; where no
+//   first-party PUBLIC container image exists yet they carry an honest
+//   IMAGE_REF gate (no-vaporware). Microsoft Fabric + Fabric RTI are present
+//   ONLY as explicit Fabric-family opt-ins, never recommended/default.
+//
+//   The ~30 agent skills (lib/copilot/ms-skills.ts, attributed to
+//   github.com/microsoft/skills) are Azure-native by default and bind to the
+//   relevant MS MCP tool prefix only once that server is connected — they need
+//   no bicep toggle. See docs/fiab/parity for the per-server inventory.
+// =====================================================================
+
 // Network
 param hubVnetCidr = '10.0.0.0/16'
 

@@ -60,7 +60,10 @@ export type McpCategory =
   | 'Browser Automation'
   | 'Observability'
   | 'Productivity'
-  | 'Infrastructure';
+  | 'Infrastructure'
+  // Added for the Microsoft-official MCP servers (github.com/microsoft/mcp):
+  | 'Developer' // Azure DevOps, NuGet, MarkItDown
+  | 'Analytics'; // Microsoft Fabric family (explicit opt-in)
 
 /** Upstream packaging / launch mechanism. */
 export type McpRuntime = 'npx' | 'uvx' | 'pip' | 'docker';
@@ -144,6 +147,14 @@ export interface DeployableMcpServer {
    * approved gov proxy (or be hidden) in gcc/gcc-high/il5. [] = self-contained.
    */
   externalHosts: string[];
+  /**
+   * Fabric-family flag (additive, optional). When true this server reaches
+   * Microsoft Fabric / Power BI hosts and REQUIRES a Fabric capacity — it is an
+   * EXPLICIT opt-in only (govSafe:false + defaultRecommended:false), never on a
+   * default code path (no-fabric-dependency). Absent/false for every Azure-native
+   * default entry.
+   */
+  fabricFamily?: boolean;
 }
 
 /**
@@ -873,6 +884,198 @@ export const MCP_CATALOG: readonly DeployableMcpServer[] = [
     defaultRecommended: false,
     externalHosts: [],
   },
+
+  // ── Tier 1 (cont.): Microsoft-official MCP servers (github.com/microsoft/mcp) ──
+  // stdio servers → host on Container Apps for an HTTPS endpoint, then register
+  // (requiresHosting()). All Azure-native (no Fabric/Power BI host) on the default
+  // path. Azure MCP + Playwright are already listed above — left untouched.
+  // Confirmed via microsoft_docs_search (2026-06): Azure MCP (@azure/mcp), Azure
+  // DevOps (@azure-devops/mcp), SQL via Data API builder, MarkItDown (markitdown-mcp).
+  {
+    id: 'microsoft-sql',
+    name: 'Microsoft SQL (Data API builder)',
+    desc: 'Natural-language → SQL over Azure SQL / SQL Server via the SQL MCP Server shipped in Data API builder (DAB 1.7+/2.0). Typed read/query tools backed by DAB entity RBAC + caching — no fragile NL string parsing. Deploy the DAB image as a Container App with your connection string + entity config, then register the resulting /mcp endpoint.',
+    category: 'Database',
+    image: 'mcr.microsoft.com/azure-databases/data-api-builder:latest',
+    runtime: 'docker',
+    transport: 'stdio',
+    hostVia: 'container-apps',
+    configSchema: [
+      {
+        key: 'DATABASE_CONNECTION_STRING',
+        label: 'Azure SQL / SQL Server connection string',
+        kind: 'connection-string',
+        secret: true,
+        required: true,
+        hint: 'Target Azure SQL Database or SQL Server over the VNet. Prefer a read-only login. Stored in Key Vault.',
+      },
+    ],
+    source: 'microsoft',
+    repo: 'Azure/data-api-builder',
+    govSafe: true,
+    airGapSafe: true,
+    license: 'MIT',
+    defaultRecommended: false,
+    externalHosts: [],
+  },
+  {
+    id: 'azure-devops',
+    name: 'Azure DevOps',
+    desc: 'Work items, pull requests, pipelines, repos, and wiki for Azure DevOps Services as Copilot tools. Local server runs via `npx @azure-devops/mcp <org>` (Entra ID / PAT) — host on Container Apps for an HTTPS endpoint. A Microsoft-hosted remote variant (https://mcp.dev.azure.com/<org>, Entra OAuth) also exists for clients that support it.',
+    category: 'Developer',
+    runtime: 'npx',
+    package: '@azure-devops/mcp',
+    transport: 'stdio',
+    hostVia: 'container-apps',
+    configSchema: [
+      {
+        key: 'ADO_ORGANIZATION',
+        label: 'Azure DevOps organization',
+        kind: 'arg',
+        secret: false,
+        required: true,
+        hint: 'Your Azure DevOps org name (e.g. "contoso"). The org must be connected to Microsoft Entra ID.',
+      },
+    ],
+    source: 'microsoft',
+    repo: 'microsoft/azure-devops-mcp',
+    govSafe: true,
+    airGapSafe: false,
+    license: 'MIT',
+    defaultRecommended: false,
+    externalHosts: ['dev.azure.com'],
+  },
+  {
+    id: 'aks',
+    name: 'Azure Kubernetes Service (AKS)',
+    desc: 'AKS-aware cluster operations — diagnostics, kubectl, and Azure resource correlation — via the Azure aks-mcp server. No first-party PUBLIC OCI image is published yet, so provide an image reference (build from source per the repo) and deploy it as a Container App.',
+    category: 'Infrastructure',
+    runtime: 'docker',
+    transport: 'stdio',
+    hostVia: 'container-apps',
+    configSchema: [
+      {
+        key: 'IMAGE_REF',
+        label: 'Container image reference',
+        kind: 'arg',
+        secret: false,
+        required: true,
+        hint: 'No first-party public image yet. Build aks-mcp from source (Azure/aks-mcp), push to your ACR, and set the image ref here.',
+      },
+    ],
+    source: 'microsoft',
+    repo: 'Azure/aks-mcp',
+    govSafe: true,
+    airGapSafe: false,
+    license: 'MIT',
+    defaultRecommended: false,
+    externalHosts: [],
+  },
+  {
+    id: 'markitdown',
+    name: 'MarkItDown',
+    desc: 'Convert PDFs, Office documents, images, audio, and HTML to clean Markdown for LLM grounding via the markitdown-mcp server. Runs fully locally (no external calls) — host on Container Apps for an HTTPS endpoint.',
+    category: 'Developer',
+    runtime: 'uvx',
+    package: 'markitdown-mcp',
+    transport: 'stdio',
+    hostVia: 'container-apps',
+    configSchema: [],
+    source: 'microsoft',
+    repo: 'microsoft/markitdown',
+    govSafe: true,
+    airGapSafe: true,
+    license: 'MIT',
+    defaultRecommended: false,
+    externalHosts: [],
+  },
+  {
+    id: 'nuget',
+    name: 'NuGet',
+    desc: 'Query NuGet package metadata, versions, and dependencies as Copilot tools (NuGet MCP server, run via `dnx`). No first-party PUBLIC OCI image is published yet, so provide an image reference and deploy it as a Container App. Reaches the configured NuGet feed (api.nuget.org by default).',
+    category: 'Developer',
+    runtime: 'docker',
+    transport: 'stdio',
+    hostVia: 'container-apps',
+    configSchema: [
+      {
+        key: 'IMAGE_REF',
+        label: 'Container image reference',
+        kind: 'arg',
+        secret: false,
+        required: true,
+        hint: 'No first-party public image yet. Package the NuGet MCP server into an image, push to your ACR, and set the image ref here.',
+      },
+    ],
+    source: 'microsoft',
+    repo: 'microsoft/mcp',
+    govSafe: true,
+    airGapSafe: false,
+    license: 'MIT',
+    defaultRecommended: false,
+    externalHosts: ['api.nuget.org'],
+  },
+
+  // ── Fabric family — EXPLICIT opt-in ONLY (no-fabric-dependency) ───────────────
+  // These reach api.fabric.microsoft.com and REQUIRE a Microsoft Fabric capacity.
+  // govSafe:false + defaultRecommended:false + fabricFamily:true ⇒ filtered out of
+  // gov boundaries, never auto-deployed, never on any default code path. Loom's
+  // Azure-native analytics (ADX / Synapse / Data API builder) stays the day-one
+  // default; these only augment it when an admin explicitly browses + deploys them.
+  {
+    id: 'fabric',
+    name: 'Microsoft Fabric (Core)',
+    desc: 'OPT-IN Fabric-family server. Workspace / item / permission / capacity operations against Microsoft Fabric. The Core server is Microsoft-hosted at https://api.fabric.microsoft.com/v1/mcp/core (Entra OAuth); the local server (microsoft/mcp → Fabric.Mcp.Server) has no first-party public image. REQUIRES a Fabric capacity — NOT gov-safe, never on a default path.',
+    category: 'Analytics',
+    runtime: 'docker',
+    transport: 'stdio',
+    hostVia: 'container-apps',
+    configSchema: [
+      {
+        key: 'IMAGE_REF',
+        label: 'Container image reference',
+        kind: 'arg',
+        secret: false,
+        required: true,
+        hint: 'No first-party public image. Build Fabric.Mcp.Server from source (microsoft/mcp), push to your ACR, and set the image ref — or point a remote MCP client at the Microsoft-hosted Core endpoint.',
+      },
+    ],
+    source: 'microsoft',
+    repo: 'microsoft/mcp',
+    govSafe: false,
+    airGapSafe: false,
+    license: 'MIT',
+    defaultRecommended: false,
+    externalHosts: ['api.fabric.microsoft.com'],
+    fabricFamily: true,
+  },
+  {
+    id: 'fabric-rti',
+    name: 'Microsoft Fabric RTI (Real-Time Intelligence)',
+    desc: 'OPT-IN Fabric-family server. Eventhouse (NL→KQL) and Activator (rules / alerts) operations against Fabric Real-Time Intelligence, Microsoft-hosted under https://api.fabric.microsoft.com/v1/mcp. REQUIRES a Fabric capacity — NOT gov-safe, never on a default path. Loom\'s Azure-native equivalent is Azure Data Explorer (ADX) + Azure Monitor alerts.',
+    category: 'Analytics',
+    runtime: 'docker',
+    transport: 'stdio',
+    hostVia: 'container-apps',
+    configSchema: [
+      {
+        key: 'IMAGE_REF',
+        label: 'Container image reference',
+        kind: 'arg',
+        secret: false,
+        required: true,
+        hint: 'No first-party public image. Package the Fabric RTI MCP server into an image and set the ref — or point a remote MCP client at the Microsoft-hosted remote endpoint.',
+      },
+    ],
+    source: 'microsoft',
+    repo: 'microsoft/mcp',
+    govSafe: false,
+    airGapSafe: false,
+    license: 'MIT',
+    defaultRecommended: false,
+    externalHosts: ['api.fabric.microsoft.com'],
+    fabricFamily: true,
+  },
 ];
 
 // ── Selectors ────────────────────────────────────────────────────────────────
@@ -1506,5 +1709,469 @@ export function pbiMcpScopeUris(): string[] {
   return REMOTE_BUILTIN_MCP.delegatedScopes.map(
     (scope) => `${REMOTE_BUILTIN_MCP.resource}/${scope}`,
   );
+}
+
+// ── Generalized remote built-in MCP catalog — Microsoft MCP servers ───────────
+//
+// This GENERALIZES the Power BI remote-builtin pattern above (RemoteBuiltinMcp +
+// isPbiMcpConfigured) to the broader set of Microsoft-operated, already-hosted
+// HTTPS Streamable-HTTP MCP servers (github.com/microsoft/mcp + Microsoft Learn /
+// Graph / Foundry / Sentinel / Azure DevOps / GitHub). It is NOT a parallel
+// system: every entry registers as the SAME McpServerConfig shape the Power BI
+// path uses (source 'remote-builtin', authMethod 'header' for no-auth, 'entra-obo'
+// for delegated, 'key-vault' for a stored PAT), is reached by the SAME mcp-client
+// (resolveAuthHeader + threaded userToken), and is advertised by the SAME
+// buildMcpShim as `mcp_<slug>_<tool>`. Only the per-server token lookup
+// (keyed by oboResource) and the honest gate copy differ.
+//
+// no-fabric-dependency: Microsoft Learn (auth 'none') is the SOLE default-on
+// entry — it has zero Fabric/Power BI dependency and zero config. EVERY other
+// entry is opt-in: an entra-obo server stays inert until its enableEnv toggle is
+// 'true' AND the shared Loom confidential client (LOOM_MSAL_CLIENT_ID) is present;
+// GitHub stays inert until its Key Vault PAT secret name is set. No api.fabric /
+// api.powerbi host appears on any default path — the Power BI entry projected in
+// below is gated exactly as before (isPbiMcpConfigured()).
+//
+// no-vaporware: each entry carries a REAL endpoint (confirmed via
+// microsoft_docs_search 2026-06 where a GA/preview host exists) or, where the
+// host is not yet GA, an EMPTY defaultEndpoint + a required endpointEnv so the
+// server can never be reached until an admin supplies the published endpoint.
+// `gate` names the exact env var / Key Vault secret / tenant setting / consent
+// the consumer's Fluent MessageBar must surface when configured() is false.
+// OBO servers carry NO static secret (the per-user token never lands here).
+
+/**
+ * A generalized remote built-in MCP server descriptor — broader and string-typed
+ * (vs. the literal-typed Power BI `RemoteBuiltinMcp`) so one shape covers Learn
+ * (no auth), the Entra-OBO servers (ARM/Foundry/Graph/M365/Teams/OneDrive-
+ * SharePoint/Sentinel/Admin-Center/Dataverse), and GitHub (Key Vault PAT). Every
+ * entry is an already-hosted HTTPS Streamable-HTTP endpoint — NOT a deployable
+ * image — reached per-user; it maps onto McpServerConfig with source
+ * 'remote-builtin'.
+ */
+export interface RemoteBuiltinMcpEntry {
+  /** Stable slug id (also the buildMcpShim tool-prefix seed). */
+  id: string;
+  /** Display name for the picker card. */
+  name: string;
+  /** Category label (free-form — its own family, not constrained to McpCategory). */
+  category: string;
+  /** One-line summary of the server's tool surface. */
+  desc: string;
+  /** Resolved HTTPS endpoint (endpointEnv override, else defaultEndpoint). */
+  endpoint: string;
+  /** Env var that overrides the endpoint. */
+  endpointEnv: string;
+  /**
+   * Endpoint used when endpointEnv is unset. EMPTY ('') when the Microsoft host
+   * is not yet GA — the admin MUST supply endpointEnv before the server is usable
+   * (no-vaporware: never a speculative host on a live path).
+   */
+  defaultEndpoint: string;
+  /** Native transport — already exposes a Streamable-HTTP JSON-RPC endpoint. */
+  transport: 'http';
+  /**
+   * Auth model:
+   *  - 'none'      ⇒ no Authorization header (Microsoft Learn). Maps to
+   *    McpServerConfig.authMethod 'header' with an empty authValue.
+   *  - 'entra-obo' ⇒ per-user Entra On-Behalf-Of bearer for oboResource/oboScopes.
+   *  - 'key-vault' ⇒ a stored secret (GitHub PAT) resolved from Key Vault.
+   */
+  auth: 'none' | 'entra-obo' | 'key-vault';
+  /** OBO resource (audience) for entra-obo. '' ⇒ derive from the endpoint origin. */
+  oboResource?: string;
+  /** Delegated scopes (without the resource prefix) for entra-obo. */
+  oboScopes?: string[];
+  /** Opt-in toggle env var ('true' enables). Absent for Learn's default-on path. */
+  enableEnv?: string;
+  /** Key Vault secret NAME env var holding the bearer token (GitHub PAT). */
+  secretRefEnv?: string;
+  /** A tenant/admin setting the consumer must surface in the gate (no probe possible). */
+  tenantSetting?: string;
+  /** True only for Microsoft Learn — the sole default-on server (no-fabric-dependency). */
+  defaultOn: boolean;
+  /** Preview feature → catalog "Preview" badge. */
+  preview: boolean;
+  /** Opt-in only — never wired onto a default code path (false only for Learn). */
+  optIn: boolean;
+  /** Upstream attribution (repo / Learn doc) shown on the card. */
+  attribution: string;
+  /** Honest gate copy: the exact env / secret / scope / consent to provision. */
+  gate: string;
+  /**
+   * True when this server is OPTED INTO (mirrors isPbiMcpConfigured()'s contract,
+   * per-entry). Read live from process.env so tests/admin toggles take effect
+   * without a reload. Learn is configured unless explicitly disabled.
+   */
+  configured: () => boolean;
+}
+
+/** Resolve a remote endpoint: endpointEnv override, else defaultEndpoint. */
+function resolveRemoteEndpoint(endpointEnv: string, defaultEndpoint: string): string {
+  return process.env[endpointEnv]?.trim() || defaultEndpoint;
+}
+
+/** True unless the named env var is explicitly 'false' (case-insensitive). */
+function enabledUnlessFalse(env: string): boolean {
+  return (process.env[env]?.trim().toLowerCase() ?? 'true') !== 'false';
+}
+
+/** True when the named env var is explicitly 'true' (case-insensitive). */
+function enabledWhenTrue(env: string): boolean {
+  return process.env[env]?.trim().toLowerCase() === 'true';
+}
+
+/** The shared Loom confidential client used for every per-user OBO exchange. */
+function hasOboClient(): boolean {
+  return !!process.env.LOOM_MSAL_CLIENT_ID?.trim();
+}
+
+/** Safe origin of a URL ('' on parse failure) — used to derive a per-org OBO audience. */
+function safeOrigin(url: string): string {
+  try {
+    return new URL(url).origin;
+  } catch {
+    return '';
+  }
+}
+
+/**
+ * The Power BI remote MCP entry projected into the generalized shape, UNCHANGED
+ * in behavior — same endpoint, same delegated scopes, same opt-in gate
+ * (isPbiMcpConfigured()). Lets the admin "Microsoft MCP servers" surface render
+ * Power BI alongside the other remote built-ins without duplicating its config.
+ */
+const POWERBI_REMOTE_ENTRY: RemoteBuiltinMcpEntry = {
+  id: REMOTE_BUILTIN_MCP.id,
+  name: REMOTE_BUILTIN_MCP.name,
+  category: REMOTE_BUILTIN_MCP.category,
+  desc: 'Schema-aware query of Power BI semantic models + Copilot DAX generation (read-only) via the Microsoft-hosted Power BI remote MCP server. OPT-IN Fabric/Power BI family — never on a default path (no-fabric-dependency); Loom\'s Azure-native semantic-model / report authoring is the day-one default.',
+  endpoint: REMOTE_BUILTIN_MCP.endpoint,
+  endpointEnv: REMOTE_BUILTIN_MCP.endpointEnv,
+  defaultEndpoint: REMOTE_BUILTIN_MCP.defaultEndpoint,
+  transport: 'http',
+  auth: 'entra-obo',
+  oboResource: REMOTE_BUILTIN_MCP.resource,
+  oboScopes: [...REMOTE_BUILTIN_MCP.delegatedScopes],
+  enableEnv: REMOTE_BUILTIN_MCP.clientIdEnv,
+  tenantSetting: REMOTE_BUILTIN_MCP.tenantSetting,
+  defaultOn: false,
+  preview: REMOTE_BUILTIN_MCP.preview,
+  optIn: REMOTE_BUILTIN_MCP.optIn,
+  attribution: 'learn.microsoft.com (Power BI MCP)',
+  gate: 'Opt-in. Set LOOM_POWERBI_MCP_CLIENT_ID to an Entra app that requests the read-only Power BI delegated scopes (Dataset.Read.All, MLModel.Execute.All, Workspace.Read.All) and enable the Power BI admin-portal MCP tenant setting. OPT-IN Fabric/Power BI family — never on a default path.',
+  configured: () => isPbiMcpConfigured(),
+};
+
+/**
+ * The generalized remote built-in MCP catalog. Microsoft Learn is the SOLE
+ * default-on entry (no auth, no config, no Fabric dependency); everything else is
+ * opt-in and inert until its gate is satisfied. The Power BI entry is projected
+ * in at the end, unchanged.
+ *
+ * Endpoint provenance (microsoft_docs_search, 2026-06):
+ *  - ms-learn       : https://learn.microsoft.com/api/mcp                 (GA, no auth) ✅
+ *  - ms-foundry     : https://mcp.ai.azure.com                            (preview)    ✅
+ *  - github         : https://api.githubcopilot.com/mcp                   (GA)         ✅
+ *  - ms-graph       : https://mcp.svc.cloud.microsoft/enterprise          (preview)    ✅
+ *  - ms-sentinel    : https://sentinel.microsoft.com/mcp/data-exploration (preview)    ✅
+ *  - dataverse      : https://<org>.crm.dynamics.com/api/mcp              (per-org)    ✅
+ *  - azure-arm      : self-hosted Azure MCP w/ OBO (no fixed Microsoft host) → endpoint-env-gated
+ *  - m365 / teams / onedrive-sharepoint / admin-center : remote host not yet GA → endpoint-env-gated
+ *
+ * NOTE on dataverse: confirmation showed the Dataverse MCP server is a REMOTE,
+ * already-hosted per-environment endpoint (https://<org>.crm.dynamics.com/api/mcp)
+ * with delegated Entra auth — NOT a pull-an-image deployable. Per no-vaporware it
+ * is modeled here in the remote family (where it fits the real auth/transport)
+ * rather than fabricated as a deployable image in MCP_CATALOG.
+ */
+export const REMOTE_BUILTIN_MCP_CATALOG: RemoteBuiltinMcpEntry[] = [
+  {
+    id: 'ms-learn',
+    name: 'Microsoft Learn',
+    category: 'Reference',
+    desc: 'Search + fetch official Microsoft / Azure documentation and code samples (microsoft_docs_search / microsoft_docs_fetch / microsoft_code_sample_search). Microsoft-hosted, GA, NO authentication — live day-one with zero config.',
+    endpoint: resolveRemoteEndpoint('LOOM_MS_LEARN_MCP_ENDPOINT', 'https://learn.microsoft.com/api/mcp'),
+    endpointEnv: 'LOOM_MS_LEARN_MCP_ENDPOINT',
+    defaultEndpoint: 'https://learn.microsoft.com/api/mcp',
+    transport: 'http',
+    auth: 'none',
+    enableEnv: 'LOOM_MS_LEARN_MCP_ENABLED',
+    defaultOn: true,
+    preview: false,
+    optIn: false,
+    attribution: 'github.com/microsoftdocs/mcp',
+    gate: 'On by default (no auth, no config). Set LOOM_MS_LEARN_MCP_ENABLED=false to disable, or LOOM_MS_LEARN_MCP_ENDPOINT to override the endpoint (e.g. add ?maxTokenBudget=2000).',
+    configured: () => enabledUnlessFalse('LOOM_MS_LEARN_MCP_ENABLED'),
+  },
+  {
+    id: 'azure-arm',
+    name: 'Azure Resources (ARM)',
+    category: 'Azure',
+    desc: 'Manage / query Azure resources via natural language (Azure MCP Server) under your delegated Entra identity. Self-host the Azure MCP server with on-behalf-of auth on Container Apps, then set its HTTPS endpoint.',
+    endpoint: resolveRemoteEndpoint('LOOM_AZURE_ARM_MCP_ENDPOINT', ''),
+    endpointEnv: 'LOOM_AZURE_ARM_MCP_ENDPOINT',
+    defaultEndpoint: '',
+    transport: 'http',
+    auth: 'entra-obo',
+    oboResource: 'https://management.azure.com',
+    oboScopes: ['user_impersonation'],
+    enableEnv: 'LOOM_AZURE_ARM_MCP_ENABLED',
+    defaultOn: false,
+    preview: true,
+    optIn: true,
+    attribution: 'github.com/microsoft/mcp',
+    gate: 'Opt-in. Self-host the Azure MCP server with OBO (learn.microsoft.com → azure-mcp-server / deploy-remote-mcp-server-on-behalf-of), then set LOOM_AZURE_ARM_MCP_ENDPOINT and LOOM_AZURE_ARM_MCP_ENABLED=true. Reuses the Loom confidential client (LOOM_MSAL_CLIENT_ID) for the per-user OBO exchange against https://management.azure.com/user_impersonation.',
+    configured: () =>
+      enabledWhenTrue('LOOM_AZURE_ARM_MCP_ENABLED') &&
+      hasOboClient() &&
+      !!process.env.LOOM_AZURE_ARM_MCP_ENDPOINT?.trim(),
+  },
+  {
+    id: 'ms-foundry',
+    name: 'Microsoft Foundry',
+    category: 'Azure',
+    desc: 'Interact with Microsoft Foundry projects / agents via the Microsoft-hosted Foundry MCP Server (https://mcp.ai.azure.com). Preview; delegated Entra auth against https://ai.azure.com.',
+    endpoint: resolveRemoteEndpoint('LOOM_FOUNDRY_MCP_ENDPOINT', 'https://mcp.ai.azure.com'),
+    endpointEnv: 'LOOM_FOUNDRY_MCP_ENDPOINT',
+    defaultEndpoint: 'https://mcp.ai.azure.com',
+    transport: 'http',
+    auth: 'entra-obo',
+    oboResource: 'https://ai.azure.com',
+    oboScopes: ['.default'],
+    enableEnv: 'LOOM_FOUNDRY_MCP_ENABLED',
+    defaultOn: false,
+    preview: true,
+    optIn: true,
+    attribution: 'learn.microsoft.com/azure/foundry/mcp',
+    gate: 'Opt-in (preview). Set LOOM_FOUNDRY_MCP_ENABLED=true. Reuses the Loom confidential client (LOOM_MSAL_CLIENT_ID) for the per-user OBO exchange against https://ai.azure.com/.default. Note: the hosted Foundry MCP server does not support network isolation (public endpoint only).',
+    configured: () => enabledWhenTrue('LOOM_FOUNDRY_MCP_ENABLED') && hasOboClient(),
+  },
+  {
+    id: 'github',
+    name: 'GitHub',
+    category: 'Source Control',
+    desc: 'Repositories, issues, pull requests, Actions, and code search via the Microsoft-hosted GitHub MCP server (https://api.githubcopilot.com/mcp). Uses GitHub OAuth / PAT (NOT Entra) — supply a PAT via Key Vault.',
+    endpoint: resolveRemoteEndpoint('LOOM_GITHUB_MCP_ENDPOINT', 'https://api.githubcopilot.com/mcp'),
+    endpointEnv: 'LOOM_GITHUB_MCP_ENDPOINT',
+    defaultEndpoint: 'https://api.githubcopilot.com/mcp',
+    transport: 'http',
+    auth: 'key-vault',
+    secretRefEnv: 'LOOM_GITHUB_MCP_PAT_SECRET',
+    enableEnv: 'LOOM_GITHUB_MCP_ENABLED',
+    defaultOn: false,
+    preview: false,
+    optIn: true,
+    attribution: 'github.com/github/github-mcp-server',
+    gate: 'Opt-in. Store a GitHub PAT in Key Vault and set LOOM_GITHUB_MCP_PAT_SECRET to the secret NAME (sent as Authorization: Bearer <PAT>). GitHub uses GitHub OAuth / PAT, not Entra — there is no OBO exchange. Optionally override the endpoint via LOOM_GITHUB_MCP_ENDPOINT for GitHub Enterprise.',
+    configured: () => !!process.env.LOOM_GITHUB_MCP_PAT_SECRET?.trim(),
+  },
+  {
+    id: 'ms-graph',
+    name: 'Microsoft Graph (Enterprise)',
+    category: 'Productivity',
+    desc: 'Query Microsoft Entra tenant data (users, groups, apps, devices) in natural language via the Microsoft MCP Server for Enterprise (https://mcp.svc.cloud.microsoft/enterprise → Microsoft Graph). Preview, read-only; delegated Entra auth (MCP.* admin consent).',
+    endpoint: resolveRemoteEndpoint('LOOM_MS_GRAPH_MCP_ENDPOINT', 'https://mcp.svc.cloud.microsoft/enterprise'),
+    endpointEnv: 'LOOM_MS_GRAPH_MCP_ENDPOINT',
+    defaultEndpoint: 'https://mcp.svc.cloud.microsoft/enterprise',
+    transport: 'http',
+    auth: 'entra-obo',
+    oboResource: 'https://graph.microsoft.com',
+    oboScopes: ['.default'],
+    enableEnv: 'LOOM_MS_GRAPH_MCP_ENABLED',
+    defaultOn: false,
+    preview: true,
+    optIn: true,
+    attribution: 'learn.microsoft.com/graph/mcp-server',
+    gate: 'Opt-in (preview). Grant the Loom app the MCP.* delegated Graph permissions + admin consent, then set LOOM_MS_GRAPH_MCP_ENABLED=true. Reuses LOOM_MSAL_CLIENT_ID for the per-user OBO exchange against https://graph.microsoft.com/.default. Read-only; respects the signed-in user\'s Graph permissions (100 calls/min/user).',
+    configured: () => enabledWhenTrue('LOOM_MS_GRAPH_MCP_ENABLED') && hasOboClient(),
+  },
+  {
+    id: 'm365',
+    name: 'Microsoft 365',
+    category: 'Productivity',
+    desc: 'Microsoft 365 productivity data (mail, calendar, files) via a Microsoft 365 remote MCP endpoint over Microsoft Graph. Endpoint not yet GA — supply it explicitly. Preview, delegated Entra auth.',
+    endpoint: resolveRemoteEndpoint('LOOM_M365_MCP_ENDPOINT', ''),
+    endpointEnv: 'LOOM_M365_MCP_ENDPOINT',
+    defaultEndpoint: '',
+    transport: 'http',
+    auth: 'entra-obo',
+    oboResource: 'https://graph.microsoft.com',
+    oboScopes: ['.default'],
+    enableEnv: 'LOOM_M365_MCP_ENABLED',
+    defaultOn: false,
+    preview: true,
+    optIn: true,
+    attribution: 'github.com/microsoft/mcp',
+    gate: 'Opt-in (preview). The Microsoft 365 remote MCP endpoint is not yet GA — set LOOM_M365_MCP_ENDPOINT to the published endpoint and LOOM_M365_MCP_ENABLED=true. Reuses LOOM_MSAL_CLIENT_ID for the per-user OBO exchange against https://graph.microsoft.com/.default.',
+    configured: () =>
+      enabledWhenTrue('LOOM_M365_MCP_ENABLED') &&
+      hasOboClient() &&
+      !!process.env.LOOM_M365_MCP_ENDPOINT?.trim(),
+  },
+  {
+    id: 'teams',
+    name: 'Microsoft Teams',
+    category: 'Productivity',
+    desc: 'Microsoft Teams chats, channels, and meeting context via a Teams remote MCP endpoint over Microsoft Graph. Endpoint not yet GA — supply it explicitly. Preview, delegated Entra auth.',
+    endpoint: resolveRemoteEndpoint('LOOM_TEAMS_MCP_ENDPOINT', ''),
+    endpointEnv: 'LOOM_TEAMS_MCP_ENDPOINT',
+    defaultEndpoint: '',
+    transport: 'http',
+    auth: 'entra-obo',
+    oboResource: 'https://graph.microsoft.com',
+    oboScopes: ['.default'],
+    enableEnv: 'LOOM_TEAMS_MCP_ENABLED',
+    defaultOn: false,
+    preview: true,
+    optIn: true,
+    attribution: 'github.com/microsoft/mcp',
+    gate: 'Opt-in (preview). The Microsoft Teams remote MCP endpoint is not yet GA — set LOOM_TEAMS_MCP_ENDPOINT and LOOM_TEAMS_MCP_ENABLED=true. Reuses LOOM_MSAL_CLIENT_ID for the per-user OBO exchange against https://graph.microsoft.com/.default.',
+    configured: () =>
+      enabledWhenTrue('LOOM_TEAMS_MCP_ENABLED') &&
+      hasOboClient() &&
+      !!process.env.LOOM_TEAMS_MCP_ENDPOINT?.trim(),
+  },
+  {
+    id: 'onedrive-sharepoint',
+    name: 'OneDrive & SharePoint',
+    category: 'Productivity',
+    desc: 'OneDrive / SharePoint document search and retrieval via a remote MCP endpoint over Microsoft Graph. Endpoint not yet GA — supply it explicitly. Preview, delegated Entra auth.',
+    endpoint: resolveRemoteEndpoint('LOOM_ONEDRIVE_SHAREPOINT_MCP_ENDPOINT', ''),
+    endpointEnv: 'LOOM_ONEDRIVE_SHAREPOINT_MCP_ENDPOINT',
+    defaultEndpoint: '',
+    transport: 'http',
+    auth: 'entra-obo',
+    oboResource: 'https://graph.microsoft.com',
+    oboScopes: ['.default'],
+    enableEnv: 'LOOM_ONEDRIVE_SHAREPOINT_MCP_ENABLED',
+    defaultOn: false,
+    preview: true,
+    optIn: true,
+    attribution: 'github.com/microsoft/mcp',
+    gate: 'Opt-in (preview). The OneDrive / SharePoint remote MCP endpoint is not yet GA — set LOOM_ONEDRIVE_SHAREPOINT_MCP_ENDPOINT and LOOM_ONEDRIVE_SHAREPOINT_MCP_ENABLED=true. Reuses LOOM_MSAL_CLIENT_ID for the per-user OBO exchange against https://graph.microsoft.com/.default.',
+    configured: () =>
+      enabledWhenTrue('LOOM_ONEDRIVE_SHAREPOINT_MCP_ENABLED') &&
+      hasOboClient() &&
+      !!process.env.LOOM_ONEDRIVE_SHAREPOINT_MCP_ENDPOINT?.trim(),
+  },
+  {
+    id: 'ms-sentinel',
+    name: 'Microsoft Sentinel',
+    category: 'Observability',
+    desc: 'Natural-language threat hunting and data exploration over the Microsoft Sentinel data lake + Defender via the Microsoft-hosted Sentinel MCP server (https://sentinel.microsoft.com/mcp/data-exploration). Preview; delegated Entra auth (Security Reader+).',
+    endpoint: resolveRemoteEndpoint('LOOM_SENTINEL_MCP_ENDPOINT', 'https://sentinel.microsoft.com/mcp/data-exploration'),
+    endpointEnv: 'LOOM_SENTINEL_MCP_ENDPOINT',
+    defaultEndpoint: 'https://sentinel.microsoft.com/mcp/data-exploration',
+    transport: 'http',
+    auth: 'entra-obo',
+    oboResource: 'https://sentinel.microsoft.com',
+    oboScopes: ['.default'],
+    enableEnv: 'LOOM_SENTINEL_MCP_ENABLED',
+    defaultOn: false,
+    preview: true,
+    optIn: true,
+    attribution: 'learn.microsoft.com/azure/sentinel/datalake/sentinel-mcp-overview',
+    gate: 'Opt-in (preview). Requires at least the Security Reader role on the Sentinel data lake. Set LOOM_SENTINEL_MCP_ENABLED=true. Reuses LOOM_MSAL_CLIENT_ID for the per-user OBO exchange against https://sentinel.microsoft.com/.default. Optionally point LOOM_SENTINEL_MCP_ENDPOINT at a custom tool collection (.../mcp/custom/<name>).',
+    configured: () => enabledWhenTrue('LOOM_SENTINEL_MCP_ENABLED') && hasOboClient(),
+  },
+  {
+    id: 'admin-center',
+    name: 'Microsoft 365 Admin Center',
+    category: 'Productivity',
+    desc: 'Microsoft 365 admin / tenant management insights via a Microsoft admin-center remote MCP endpoint over Microsoft Graph. Endpoint not yet GA — supply it explicitly. Preview, delegated Entra auth.',
+    endpoint: resolveRemoteEndpoint('LOOM_ADMIN_CENTER_MCP_ENDPOINT', ''),
+    endpointEnv: 'LOOM_ADMIN_CENTER_MCP_ENDPOINT',
+    defaultEndpoint: '',
+    transport: 'http',
+    auth: 'entra-obo',
+    oboResource: 'https://graph.microsoft.com',
+    oboScopes: ['.default'],
+    enableEnv: 'LOOM_ADMIN_CENTER_MCP_ENABLED',
+    defaultOn: false,
+    preview: true,
+    optIn: true,
+    attribution: 'github.com/microsoft/mcp',
+    gate: 'Opt-in (preview). The Microsoft 365 Admin Center remote MCP endpoint is not yet GA — set LOOM_ADMIN_CENTER_MCP_ENDPOINT and LOOM_ADMIN_CENTER_MCP_ENABLED=true. Reuses LOOM_MSAL_CLIENT_ID for the per-user OBO exchange against https://graph.microsoft.com/.default.',
+    configured: () =>
+      enabledWhenTrue('LOOM_ADMIN_CENTER_MCP_ENABLED') &&
+      hasOboClient() &&
+      !!process.env.LOOM_ADMIN_CENTER_MCP_ENDPOINT?.trim(),
+  },
+  {
+    id: 'dataverse',
+    name: 'Microsoft Dataverse',
+    category: 'Database',
+    desc: 'Query / insert / update Dataverse tables + schema in natural language via the Microsoft-hosted Dataverse MCP server (per-environment https://<org>.crm.dynamics.com/api/mcp). Delegated Entra auth; respects Dataverse security roles + row-level security.',
+    endpoint: resolveRemoteEndpoint('LOOM_DATAVERSE_MCP_ENDPOINT', ''),
+    endpointEnv: 'LOOM_DATAVERSE_MCP_ENDPOINT',
+    defaultEndpoint: '',
+    transport: 'http',
+    auth: 'entra-obo',
+    oboResource: '', // per-org — derived from the endpoint origin at OBO time
+    oboScopes: ['.default'],
+    enableEnv: 'LOOM_DATAVERSE_MCP_ENABLED',
+    tenantSetting:
+      'Power Platform admin center → Environment → Settings → Product → Features → Dataverse Model Context Protocol → "Allow MCP clients to interact with Dataverse MCP server"',
+    defaultOn: false,
+    preview: true,
+    optIn: true,
+    attribution: 'learn.microsoft.com/power-apps/maker/data-platform/data-platform-mcp',
+    gate: 'Opt-in (preview). Set LOOM_DATAVERSE_MCP_ENDPOINT to your environment URL + /api/mcp (e.g. https://contoso.crm.dynamics.com/api/mcp), enable the Dataverse MCP tenant setting in the Power Platform admin center, and set LOOM_DATAVERSE_MCP_ENABLED=true. Reuses LOOM_MSAL_CLIENT_ID for the per-user OBO exchange (audience = your org origin + /.default).',
+    configured: () =>
+      enabledWhenTrue('LOOM_DATAVERSE_MCP_ENABLED') &&
+      hasOboClient() &&
+      !!process.env.LOOM_DATAVERSE_MCP_ENDPOINT?.trim(),
+  },
+  // Power BI projected in unchanged (gated by isPbiMcpConfigured()).
+  POWERBI_REMOTE_ENTRY,
+];
+
+// ── Selectors (mirror the Power BI helpers, generalized over the catalog) ──────
+
+/** Look up a single remote built-in entry by id. */
+export function msRemoteMcp(id: string): RemoteBuiltinMcpEntry | undefined {
+  return REMOTE_BUILTIN_MCP_CATALOG.find((e) => e.id === id);
+}
+
+/**
+ * True when the named remote built-in server is OPTED INTO / live (generalized
+ * isPbiMcpConfigured()). False (or unknown id) ⇒ the consumer renders the honest
+ * MessageBar gate from entry.gate; the server is registered/called on NO path.
+ */
+export function msRemoteMcpConfigured(id: string): boolean {
+  return msRemoteMcp(id)?.configured() ?? false;
+}
+
+/**
+ * Fully-qualified OBO scope URIs (`${resource}/${scope}`) for an entra-obo entry —
+ * exactly what the per-user OBO exchange requests (generalized pbiMcpScopeUris()).
+ * For a per-org server (oboResource '', e.g. Dataverse) the resource is derived
+ * from the configured endpoint's origin. Returns [] for non-OBO entries or when
+ * the resource cannot be resolved.
+ */
+export function msRemoteMcpScopeUris(id: string): string[] {
+  const e = msRemoteMcp(id);
+  if (!e || e.auth !== 'entra-obo') return [];
+  const base =
+    e.oboResource && e.oboResource.trim()
+      ? e.oboResource.trim()
+      : e.endpoint
+        ? safeOrigin(e.endpoint)
+        : '';
+  if (!base) return [];
+  const resource = base.replace(/\/+$/, '');
+  return (e.oboScopes ?? []).map((scope) => `${resource}/${scope}`);
+}
+
+/**
+ * The remote built-in servers that are LIVE day-one with zero per-server config —
+ * i.e. defaultOn AND currently configured(). In practice this is Microsoft Learn
+ * (unless LOOM_MS_LEARN_MCP_ENABLED=false). listMcpServers / buildMcpShim inject
+ * these as synthetic enabled rows so their tools are advertised without any admin
+ * action (no-fabric-dependency: Learn is the SOLE default-on server).
+ */
+export function defaultOnRemoteMcps(): RemoteBuiltinMcpEntry[] {
+  return REMOTE_BUILTIN_MCP_CATALOG.filter((e) => e.defaultOn && e.configured());
 }
 

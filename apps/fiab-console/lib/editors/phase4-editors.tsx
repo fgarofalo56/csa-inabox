@@ -903,6 +903,29 @@ export function VariableLibraryEditor({ item, id }: { item: FabricItemType; id: 
   }));
   const valueKey = tab === 'default' ? 'default' : tab;
 
+  // Resolve panel — calls the real dereference layer (/resolve), which pulls
+  // secret-ref variables out of Key Vault and expands @{variables.NAME}.
+  const [resolved, setResolved] = useState<Array<{ name: string; type: string; value: string; secret: boolean; resolvedFromKv?: boolean; error?: string }> | null>(null);
+  const [resolveBusy, setResolveBusy] = useState(false);
+  const [resolveErr, setResolveErr] = useState<string | null>(null);
+  const [expandText, setExpandText] = useState('@{variables.ENV}/batch?size=@{variables.BatchSize}');
+  const [expandOut, setExpandOut] = useState<string | null>(null);
+  const runResolve = useCallback(async () => {
+    if (id === 'new') { setResolveErr('Save the library before resolving.'); return; }
+    setResolveBusy(true); setResolveErr(null);
+    try {
+      const r = await fetch(`/api/items/variable-library/${encodeURIComponent(id)}/resolve`, {
+        method: 'POST', headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ valueSet: tab, text: expandText }),
+      });
+      const j = await r.json();
+      if (!j.ok) { setResolveErr(j.error || 'resolve failed'); setResolved([]); return; }
+      setResolved(j.resolved || []);
+      setExpandOut(j.expanded ?? null);
+    } catch (e: any) { setResolveErr(e?.message || String(e)); setResolved([]); }
+    finally { setResolveBusy(false); }
+  }, [id, tab, expandText]);
+
   const ribbon: RibbonTab[] = useMemo(() => [
     { id: 'home', label: 'Home', groups: [
       { label: 'Variables', actions: [
@@ -982,6 +1005,43 @@ export function VariableLibraryEditor({ item, id }: { item: FabricItemType; id: 
             </TableBody>
           </Table>
           <Button onClick={addRow} style={{ alignSelf: 'flex-start' }}>+ New variable</Button>
+
+          {/* Resolve / dereference — the real substitution layer. */}
+          <div className={s.secHead} style={{ marginTop: tokens.spacingVerticalM }}><Play20Regular className={s.secHeadIcon} /><Subtitle2>Resolve values ({tab})</Subtitle2></div>
+          <Caption1 style={{ color: tokens.colorNeutralForeground3 }}>
+            Resolves every variable for the <strong>{tab}</strong> value set and expands <code>@{'{'}variables.NAME{'}'}</code> below.
+            <code> secret-ref</code> variables are dereferenced from Key Vault (value masked).
+          </Caption1>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalS }}>
+            <Textarea value={expandText} onChange={(_, d) => setExpandText(d.value)} rows={2} placeholder="@{variables.ENV}/path" />
+            <Button appearance="primary" onClick={runResolve} disabled={resolveBusy || id === 'new'} style={{ alignSelf: 'flex-start' }}>
+              {resolveBusy ? 'Resolving…' : 'Resolve'}
+            </Button>
+            {resolveErr && <MessageBar intent="error"><MessageBarBody>{resolveErr}</MessageBarBody></MessageBar>}
+            {expandOut != null && (
+              <>
+                <Caption1>Expanded</Caption1>
+                <div className={s.monaco} style={{ whiteSpace: 'pre-wrap', overflow: 'auto', maxHeight: 120 }}>{expandOut || '(empty)'}</div>
+              </>
+            )}
+            {resolved && resolved.length > 0 && (
+              <Table size="small" aria-label="Resolved values">
+                <TableHeader><TableRow><TableHeaderCell>Name</TableHeaderCell><TableHeaderCell>Type</TableHeaderCell><TableHeaderCell>Resolved value</TableHeaderCell></TableRow></TableHeader>
+                <TableBody>
+                  {resolved.map((rv) => (
+                    <TableRow key={rv.name}>
+                      <TableCell><strong>{rv.name}</strong></TableCell>
+                      <TableCell>{rv.type}{rv.secret && rv.resolvedFromKv ? <> <Badge appearance="tint" color="success">Key Vault</Badge></> : null}</TableCell>
+                      <TableCell style={{ fontFamily: 'monospace' }}>
+                        {rv.error ? <Caption1 style={{ color: tokens.colorPaletteRedForeground1 }}>{rv.error}</Caption1> : (rv.value || '(empty)')}
+                      </TableCell>
+                    </TableRow>
+                  ))}
+                </TableBody>
+              </Table>
+            )}
+          </div>
+
           <SaveBar saving={saving} savedAt={savedAt} error={error} dirty={dirty} onSave={() => save()} />
         </div>
       </>

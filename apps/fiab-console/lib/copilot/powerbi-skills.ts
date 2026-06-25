@@ -118,6 +118,23 @@ export interface LoomCopilotSkill {
    */
   pbiMcpToolPrefix?: string;
   /**
+   * GENERAL form of {@link pbiMcpToolPrefix} for ANY connected Microsoft MCP
+   * server (not just Power BI). When set, the OPT-IN tools whose names start
+   * with this prefix (e.g. `mcp_learn_`, `mcp_azure_`, `mcp_graph_`) belong to
+   * this skill and are surfaced only once that server is connected. This is the
+   * single field the sibling `ms-skills.ts` descriptors use — they REUSE this
+   * same interface rather than declaring a parallel type. `pbiMcpToolPrefix`
+   * remains the Power BI-specific alias so the existing skills are unchanged.
+   */
+  mcpToolPrefix?: string;
+  /**
+   * Optional upstream credit line (e.g. "github.com/microsoft/skills") shown by
+   * descriptors sourced from an open-source skill repo. The Power BI skills here
+   * carry their attribution inline in `guidance`; `ms-skills.ts` sets this field
+   * so its attribution is machine-readable for the admin UI and analytics.
+   */
+  attribution?: string;
+  /**
    * Pane / persona slugs this skill is relevant to. The orchestrator calls
    * {@link skillsForPane} with the active editor's slug. Uses item-type slugs
    * ('semantic-model', 'report') plus the catch-all 'powerbi' so a dedicated

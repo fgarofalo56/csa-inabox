@@ -1036,7 +1036,7 @@ var loomPipelineBackend = loomBackends.?pipeline ?? 'synapse'
 @allowed(['adf-cdc', 'synapse-link', 'fabric'])
 param loomMirrorBackend string = 'adf-cdc'
 
-@description('Azure-native backend selectors for Fabric-flavored items, bundled into one object to stay under the ARM 256-parameter template limit. Each key defaults to the Azure-native path; set a value to "fabric"/"powerbi" to opt into the Fabric/Power BI alternative for that item (per no-fabric-dependency rule). The orgVisuals key is an opt-out toggle (default "enabled") for the Embed codes (F22) + Organizational visuals (F23) container grant + LOOM_ORG_VISUALS_URL env — set "disabled" to honest-gate those panes while keeping the medallion lake wired. The powerBiMcpClientId / powerBiMcpEndpoint keys configure the OPT-IN Power BI remote MCP server (Copilot agentic, preview): set powerBiMcpClientId to an Entra app (client) id to enable the per-user On-Behalf-Of Power BI MCP path (LOOM_POWERBI_MCP_CLIENT_ID / LOOM_POWERBI_MCP_ENDPOINT); empty (default) keeps the Azure-native semantic-model/report authoring path and the honest Copilot gate.')
+@description('Azure-native backend selectors for Fabric-flavored items, bundled into one object to stay under the ARM 256-parameter template limit. Each key defaults to the Azure-native path; set a value to "fabric"/"powerbi" to opt into the Fabric/Power BI alternative for that item (per no-fabric-dependency rule). The orgVisuals key is an opt-out toggle (default "enabled") for the Embed codes (F22) + Organizational visuals (F23) container grant + LOOM_ORG_VISUALS_URL env — set "disabled" to honest-gate those panes while keeping the medallion lake wired. The powerBiMcpClientId / powerBiMcpEndpoint keys configure the OPT-IN Power BI remote MCP server (Copilot agentic, preview): set powerBiMcpClientId to an Entra app (client) id to enable the per-user On-Behalf-Of Power BI MCP path (LOOM_POWERBI_MCP_CLIENT_ID / LOOM_POWERBI_MCP_ENDPOINT); empty (default) keeps the Azure-native semantic-model/report authoring path and the honest Copilot gate. The mcp key bundles the Microsoft MCP-server config (github.com/microsoft/mcp): Microsoft Learn is the sole default-on entry (no-auth, no Fabric dependency); ARM/Foundry/Graph/M365/Teams/OneDrive/Sentinel/Admin-Center are Entra On-Behalf-Of opt-ins (reusing the existing MSAL confidential client) and GitHub is a Key-Vault-PAT opt-in — each OFF until its toggle + confirmed endpoint are set, so no unconfirmed/Fabric host is ever on a default path.')
 param loomBackends object = {
   event: 'eventhubs'
   activator: 'azure-monitor'
@@ -1061,6 +1061,62 @@ param loomBackends object = {
   // endpoint defaults to the Commercial host (override for sovereign clouds).
   powerBiMcpClientId: ''
   powerBiMcpEndpoint: 'https://api.fabric.microsoft.com/v1/mcp/powerbi'
+  // Microsoft MCP servers (github.com/microsoft/mcp) + agent skills
+  // (github.com/microsoft/skills) — folded here (not standalone params) to stay
+  // under the ARM 256-param ceiling, the SAME trick as powerBiMcpClientId /
+  // loomWarehouseBackend / loomPipelineBackend. STRICTLY OPT-IN per
+  // no-fabric-dependency.md EXCEPT Microsoft Learn (no-auth, streamable-http),
+  // the ONLY default-on entry (no Fabric/Power BI/Entra dependency, confirmed GA
+  // host). Every other remote is OFF until its *Enabled toggle is set AND its
+  // endpoint is confirmed + set — an empty endpoint keeps an unconfirmed/preview
+  // host OFF a default code path (the "endpoint-env gate" the design requires).
+  // The Entra On-Behalf-Of (OBO) remotes reuse the EXISTING LOOM_MSAL_CLIENT_ID
+  // + loom-msal-client-secret confidential client (no new secret/param); GitHub
+  // uses a GitHub PAT stored in Key Vault (githubPatKvSecret → secretRef), NOT
+  // Entra. Microsoft Fabric / Fabric RTI stay explicit Fabric-family opt-ins
+  // surfaced via lib/mcp/catalog.ts (govSafe:false) — never wired on this path.
+  mcp: {
+    // Microsoft Learn — the ONLY default-on MS MCP server. No auth, streamable
+    // HTTP, no Fabric/Power BI dependency. Endpoint confirmed via Learn docs
+    // (learn.microsoft.com/training/support/mcp). Set learnEnabled '' to opt out.
+    learnEnabled: 'true'
+    learnEndpoint: 'https://learn.microsoft.com/api/mcp'
+    // Entra OBO opt-in remotes. <x>Enabled empty = off (honest gate); <x>Endpoint
+    // empty = unconfirmed-host gate (kept off any default path until the operator
+    // confirms the GA endpoint + OBO scope and sets both). <x>Scope is the OBO
+    // resource/.default the Console exchanges the signed-in user's MSAL token for.
+    armEnabled: ''
+    armEndpoint: ''
+    armScope: ''
+    foundryEnabled: ''
+    foundryEndpoint: ''
+    foundryScope: ''
+    graphEnabled: ''
+    graphEndpoint: ''
+    graphScope: ''
+    m365Enabled: ''
+    m365Endpoint: ''
+    m365Scope: ''
+    teamsEnabled: ''
+    teamsEndpoint: ''
+    teamsScope: ''
+    onedriveEnabled: ''
+    onedriveEndpoint: ''
+    onedriveScope: ''
+    sentinelEnabled: ''
+    sentinelEndpoint: ''
+    sentinelScope: ''
+    adminCenterEnabled: ''
+    adminCenterEndpoint: ''
+    adminCenterScope: ''
+    // GitHub remote MCP (api.githubcopilot.com/mcp) — GitHub OAuth PAT, NOT
+    // Entra. Store the PAT in Key Vault and set githubPatKvSecret to its KV
+    // secret name; empty = honest KV-secret gate (no env, no secret emitted).
+    // githubEndpoint overrides the default GitHub MCP host.
+    githubEnabled: ''
+    githubEndpoint: ''
+    githubPatKvSecret: ''
+  }
 }
 
 
@@ -1144,6 +1200,79 @@ param loomPowerbiXmlaEndpoint string = ''
 //     sovereign-cloud Power BI MCP host.
 var loomPowerBiMcpClientId = loomBackends.?powerBiMcpClientId ?? ''
 var loomPowerBiMcpEndpoint = loomBackends.?powerBiMcpEndpoint ?? 'https://api.fabric.microsoft.com/v1/mcp/powerbi'
+
+// ---------------------------------------------------------------------------
+// Microsoft MCP servers + agent skills — EXTENDS the Power BI remote-MCP
+// plumbing above; NO parallel system.
+//
+// These are curated Microsoft-hosted MCP servers (github.com/microsoft/mcp)
+// surfaced as "remote built-in" catalog rows (lib/mcp/catalog.ts
+// REMOTE_BUILTIN_MCP_CATALOG) and consumed by the SAME copilot/MCP infra the
+// Power BI server uses (buildMcpShim → mcp-client → listMcpTools/callMcpTool).
+// The ~30 agent skills (github.com/microsoft/skills, lib/copilot/ms-skills.ts)
+// follow the powerbi-skills.ts descriptor shape and bind to Azure-native Loom
+// tools by default, lighting up the matching MS MCP tool prefix when connected.
+//
+// no-fabric-dependency.md contract (identical intent to the Power BI MCP block
+// above): Microsoft Learn is the SOLE default-on entry — a no-auth,
+// Streamable-HTTP endpoint (https://learn.microsoft.com/api/mcp, confirmed via
+// Learn docs) with ZERO Fabric/Power BI/Entra dependency, so it satisfies the
+// "100% functional without a real Fabric capacity" rule and is injected as a
+// synthetic enabled row day-one (LOOM_MS_LEARN_MCP_ENABLED defaults 'true').
+// EVERY other server is STRICTLY OPT-IN and never on a default code path:
+//   * ARM (mcp.management.azure.com), Foundry (mcp.ai.azure.com),
+//     Graph/M365/Teams/OneDrive-SharePoint/Sentinel/Admin-Center — Entra
+//     On-Behalf-Of (authMethod 'entra-obo'). They REUSE the existing
+//     LOOM_MSAL_CLIENT_ID + the loom-msal-client-secret KV secretRef wired for
+//     Power BI/Dataverse below to exchange the signed-in user's token for the
+//     server's oboResource — NO new secret literal, NO new param.
+//   * GitHub (api.githubcopilot.com/mcp) — GitHub OAuth, NOT Entra. The PAT is
+//     read from Key Vault via a secretRef (LOOM_GITHUB_MCP_PAT_SECRET), never a
+//     literal; absent KV secret name ⇒ honest gate.
+// Per the design caveat, each opt-in server is gated on BOTH its *Enabled toggle
+// AND a confirmed endpoint: an empty endpoint var means an unconfirmed/preview
+// GA host is NEVER reached on a default path (the Console renders the honest
+// MessageBar gate naming the exact env var / OBO scope / KV secret instead).
+// Microsoft Fabric + Fabric RTI are explicit Fabric-family opt-ins surfaced via
+// MCP_CATALOG (govSafe:false, externalHosts:['api.fabric.microsoft.com']) — they
+// are NEVER wired on this path, so no api.fabric/api.powerbi host appears here.
+//
+// Folded into loomBackends.mcp (consumed via the same-named vars below) to stay
+// under the ARM 256-parameter template limit — the identical trick used for
+// loomWarehouseBackend / loomPipelineBackend / loomPowerBiMcpClientId above.
+var loomMcpBackends = loomBackends.?mcp ?? {}
+// Microsoft Learn — the only default-on server (no auth, no Fabric dep).
+var loomMsLearnMcpEnabled = loomMcpBackends.?learnEnabled ?? 'true'
+var loomMsLearnMcpEndpoint = loomMcpBackends.?learnEndpoint ?? 'https://learn.microsoft.com/api/mcp'
+// Entra-OBO opt-ins — toggle '' = off (gate); endpoint '' = unconfirmed-host gate.
+var loomAzureArmMcpEnabled = loomMcpBackends.?armEnabled ?? ''
+var loomAzureArmMcpEndpoint = loomMcpBackends.?armEndpoint ?? ''
+var loomAzureArmMcpScope = loomMcpBackends.?armScope ?? ''
+var loomFoundryMcpEnabled = loomMcpBackends.?foundryEnabled ?? ''
+var loomFoundryMcpEndpoint = loomMcpBackends.?foundryEndpoint ?? ''
+var loomFoundryMcpScope = loomMcpBackends.?foundryScope ?? ''
+var loomGraphMcpEnabled = loomMcpBackends.?graphEnabled ?? ''
+var loomGraphMcpEndpoint = loomMcpBackends.?graphEndpoint ?? ''
+var loomGraphMcpScope = loomMcpBackends.?graphScope ?? ''
+var loomM365McpEnabled = loomMcpBackends.?m365Enabled ?? ''
+var loomM365McpEndpoint = loomMcpBackends.?m365Endpoint ?? ''
+var loomM365McpScope = loomMcpBackends.?m365Scope ?? ''
+var loomTeamsMcpEnabled = loomMcpBackends.?teamsEnabled ?? ''
+var loomTeamsMcpEndpoint = loomMcpBackends.?teamsEndpoint ?? ''
+var loomTeamsMcpScope = loomMcpBackends.?teamsScope ?? ''
+var loomOnedriveMcpEnabled = loomMcpBackends.?onedriveEnabled ?? ''
+var loomOnedriveMcpEndpoint = loomMcpBackends.?onedriveEndpoint ?? ''
+var loomOnedriveMcpScope = loomMcpBackends.?onedriveScope ?? ''
+var loomSentinelMcpEnabled = loomMcpBackends.?sentinelEnabled ?? ''
+var loomSentinelMcpEndpoint = loomMcpBackends.?sentinelEndpoint ?? ''
+var loomSentinelMcpScope = loomMcpBackends.?sentinelScope ?? ''
+var loomAdminCenterMcpEnabled = loomMcpBackends.?adminCenterEnabled ?? ''
+var loomAdminCenterMcpEndpoint = loomMcpBackends.?adminCenterEndpoint ?? ''
+var loomAdminCenterMcpScope = loomMcpBackends.?adminCenterScope ?? ''
+// GitHub — GitHub OAuth PAT in Key Vault (NOT Entra); '' secret name = gate.
+var loomGithubMcpEnabled = loomMcpBackends.?githubEnabled ?? ''
+var loomGithubMcpEndpoint = loomMcpBackends.?githubEndpoint ?? ''
+var loomGithubMcpPatKvSecret = loomMcpBackends.?githubPatKvSecret ?? ''
 
 // NOTE: loomAasDatabase (TMSL Catalog) is declared once earlier in this file
 // (defaulted to 'model'). The column-editor path reuses the same param.
@@ -2852,6 +2981,66 @@ module appDeployments 'app-deployments.bicep' = if (containerPlatform == 'contai
             { name: 'LOOM_POWERBI_MCP_CLIENT_ID', value: loomPowerBiMcpClientId }
             { name: 'LOOM_POWERBI_MCP_ENDPOINT', value: loomPowerBiMcpEndpoint }
           ] : [],
+          // Microsoft MCP servers (github.com/microsoft/mcp) + agent skills
+          // (github.com/microsoft/skills) — EXTENDS the Power BI remote-MCP
+          // plumbing above (lib/mcp/catalog.ts REMOTE_BUILTIN_MCP_CATALOG →
+          // buildMcpShim → mcp-client). Emitted UNCONDITIONALLY so Microsoft
+          // Learn (no-auth, no Fabric dep) is live day-one with zero config:
+          // LOOM_MS_LEARN_MCP_ENABLED defaults 'true' and listMcpServers /
+          // buildMcpShim inject the synthetic enabled Learn row. Every other
+          // server is OPT-IN and OFF by default — its *_ENABLED toggle is empty
+          // (honest gate) AND its *_ENDPOINT is empty (so an unconfirmed/preview
+          // GA host is NEVER on a default code path; the Console renders the
+          // honest MessageBar gate naming the exact env var / OBO scope until the
+          // operator confirms + sets the endpoint). The ARM/Foundry/Graph/M365/
+          // Teams/OneDrive/Sentinel/Admin-Center remotes use Entra On-Behalf-Of
+          // (mcp-client authMethod 'entra-obo'): they REUSE the existing
+          // LOOM_MSAL_CLIENT_ID + loom-msal-client-secret confidential client
+          // (emitted in the MSAL block below) to exchange the signed-in user's
+          // token for each server's *_SCOPE — NO new secret/param here. GitHub
+          // (LOOM_GITHUB_MCP_*) uses a GitHub-OAuth PAT read from Key Vault via
+          // secretRef (LOOM_GITHUB_MCP_PAT_SECRET), never a literal — emitted in
+          // its own gated array below. Microsoft Fabric / Fabric RTI stay
+          // explicit Fabric-family catalog opt-ins (govSafe:false) — never wired
+          // here, so no api.fabric / api.powerbi host appears on this path.
+          [
+            { name: 'LOOM_MS_LEARN_MCP_ENABLED', value: loomMsLearnMcpEnabled }
+            { name: 'LOOM_MS_LEARN_MCP_ENDPOINT', value: loomMsLearnMcpEndpoint }
+            { name: 'LOOM_AZURE_ARM_MCP_ENABLED', value: loomAzureArmMcpEnabled }
+            { name: 'LOOM_AZURE_ARM_MCP_ENDPOINT', value: loomAzureArmMcpEndpoint }
+            { name: 'LOOM_AZURE_ARM_MCP_SCOPE', value: loomAzureArmMcpScope }
+            { name: 'LOOM_FOUNDRY_MCP_ENABLED', value: loomFoundryMcpEnabled }
+            { name: 'LOOM_FOUNDRY_MCP_ENDPOINT', value: loomFoundryMcpEndpoint }
+            { name: 'LOOM_FOUNDRY_MCP_SCOPE', value: loomFoundryMcpScope }
+            { name: 'LOOM_GRAPH_MCP_ENABLED', value: loomGraphMcpEnabled }
+            { name: 'LOOM_GRAPH_MCP_ENDPOINT', value: loomGraphMcpEndpoint }
+            { name: 'LOOM_GRAPH_MCP_SCOPE', value: loomGraphMcpScope }
+            { name: 'LOOM_M365_MCP_ENABLED', value: loomM365McpEnabled }
+            { name: 'LOOM_M365_MCP_ENDPOINT', value: loomM365McpEndpoint }
+            { name: 'LOOM_M365_MCP_SCOPE', value: loomM365McpScope }
+            { name: 'LOOM_TEAMS_MCP_ENABLED', value: loomTeamsMcpEnabled }
+            { name: 'LOOM_TEAMS_MCP_ENDPOINT', value: loomTeamsMcpEndpoint }
+            { name: 'LOOM_TEAMS_MCP_SCOPE', value: loomTeamsMcpScope }
+            { name: 'LOOM_ONEDRIVE_MCP_ENABLED', value: loomOnedriveMcpEnabled }
+            { name: 'LOOM_ONEDRIVE_MCP_ENDPOINT', value: loomOnedriveMcpEndpoint }
+            { name: 'LOOM_ONEDRIVE_MCP_SCOPE', value: loomOnedriveMcpScope }
+            { name: 'LOOM_SENTINEL_MCP_ENABLED', value: loomSentinelMcpEnabled }
+            { name: 'LOOM_SENTINEL_MCP_ENDPOINT', value: loomSentinelMcpEndpoint }
+            { name: 'LOOM_SENTINEL_MCP_SCOPE', value: loomSentinelMcpScope }
+            { name: 'LOOM_ADMINCENTER_MCP_ENABLED', value: loomAdminCenterMcpEnabled }
+            { name: 'LOOM_ADMINCENTER_MCP_ENDPOINT', value: loomAdminCenterMcpEndpoint }
+            { name: 'LOOM_ADMINCENTER_MCP_SCOPE', value: loomAdminCenterMcpScope }
+            { name: 'LOOM_GITHUB_MCP_ENABLED', value: loomGithubMcpEnabled }
+            { name: 'LOOM_GITHUB_MCP_ENDPOINT', value: loomGithubMcpEndpoint }
+          ],
+          // GitHub remote MCP PAT (GitHub OAuth, NOT Entra) — injected via
+          // secretRef from the KV-backed ACA secret 'loom-github-mcp-pat' (added
+          // to the secrets concat below). Only emitted when the operator stored a
+          // PAT in Key Vault and set loomBackends.mcp.githubPatKvSecret to its
+          // secret name; absence ⇒ honest KV-secret gate. Never a literal.
+          !empty(loomGithubMcpPatKvSecret) ? [
+            { name: 'LOOM_GITHUB_MCP_PAT_SECRET', secretRef: 'loom-github-mcp-pat' }
+          ] : [],
           !empty(loomStorageAccount) ? [
             { name: 'LOOM_BRONZE_URL',  value: 'https://${loomStorageAccount}.dfs.${environment().suffixes.storage}/bronze' }
             { name: 'LOOM_SILVER_URL',  value: 'https://${loomStorageAccount}.dfs.${environment().suffixes.storage}/silver' }
@@ -3471,6 +3660,17 @@ module appDeployments 'app-deployments.bicep' = if (containerPlatform == 'contai
           // get. Set a dedicated LOOM_CI_TOKEN secret to isolate CI if desired.
           (copilotMafActive || loomIqMcpEnabled || loomPipelineCiEnabled) ? [
             { name: 'loom-internal-token', value: loomInternalToken }
+          ] : [],
+          // GitHub remote MCP PAT (github.com/microsoft/mcp GitHub server) —
+          // GitHub OAuth, NOT Entra. KV-backed secret, NEVER a literal: read at
+          // deploy time from the Loom Key Vault secret the operator created and
+          // named via loomBackends.mcp.githubPatKvSecret. Only present when that
+          // name is set (else no secret + the env's honest gate fires). The
+          // Console UAMI already holds Key Vault Secrets User (keyvault.bicep).
+          // The Entra On-Behalf-Of MS MCP servers need NO secret here — they
+          // reuse the loom-msal-client-secret confidential client above.
+          !empty(loomGithubMcpPatKvSecret) ? [
+            { name: 'loom-github-mcp-pat', keyVaultUrl: '${keyvault.outputs.keyVaultUri}secrets/${loomGithubMcpPatKvSecret}', identity: identity.outputs.uamiConsoleId }
           ] : []
         )
       }

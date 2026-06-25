@@ -96,9 +96,22 @@ import { registerDaxTools } from '@/lib/copilot/dax-tools';
 // delegated token. Used ONLY by the powerbi_mcp_status meta-tool below — never
 // to reach a Fabric/Power BI host on a default path. The remote MCP's tools
 // auto-register through buildMcpShim (entra-obo) when opted into.
-import { isPbiMcpConfigured, REMOTE_BUILTIN_MCP } from '@/lib/mcp/catalog';
+import {
+  isPbiMcpConfigured,
+  REMOTE_BUILTIN_MCP,
+  REMOTE_BUILTIN_MCP_CATALOG,
+  msRemoteMcpConfigured,
+} from '@/lib/mcp/catalog';
 import { getPbiUserToken } from './pbi-user-token-store';
 import { POWERBI_REMOTE_MCP_GATE_TEXT } from '@/lib/copilot/powerbi-skills';
+// Microsoft agent-skill descriptors (github.com/microsoft/skills). They REUSE the
+// Power BI skill plumbing (the same LoomCopilotSkill contract + selector shape),
+// extended additively for the curated Microsoft MCP servers (github.com/microsoft/mcp).
+// Injected below as connection-aware, per-pane guidance — NO new tool loop, no
+// parallel system. Microsoft Learn is the sole default-on MCP; every other server
+// is opt-in and emits an honest catalog gate until connected (no-fabric-dependency,
+// no-vaporware).
+import { msSkillSystemBlocksForPane, msMcpPrefix } from '@/lib/copilot/ms-skills';
 
 // ---------- item-type slug normalization (build-assist robustness) ----------
 // The model often guesses item-type slugs with underscores or marketing names
@@ -1643,6 +1656,36 @@ async function* orchestrateViaMaf(
   }
 }
 
+/**
+ * The set of Microsoft MCP `mcp_<slug>_` tool prefixes CONNECTED for this turn —
+ * the authoritative input to {@link msSkillSystemBlocksForPane} so an MS skill
+ * advertises its remote-MCP tools ONLY when they are genuinely live
+ * (no-vaporware). A prefix counts as connected when EITHER:
+ *   (a) buildMcpShim actually registered tools under it in `reg` (the strongest
+ *       signal — and, for an entra-obo server, the only proof the signed-in user
+ *       truly holds a delegated token for THIS turn); OR
+ *   (b) its backing remote-builtin server is enabled/configured per the catalog
+ *       (msRemoteMcpConfigured) — this is what surfaces the DEFAULT-ON, no-auth
+ *       Microsoft Learn MCP as live day-one with zero config.
+ * Anything not connected falls through to the honest, single-sourced catalog gate
+ * inside the skill block. Mirrors how `pbiMcpToolPrefix` gates the Power BI
+ * remote MCP — same plumbing, generalized.
+ */
+function msConnectedMcpPrefixes(reg: LoomToolRegistry): string[] {
+  const prefixes = REMOTE_BUILTIN_MCP_CATALOG.map((e) => msMcpPrefix(e.id));
+  const connected = new Set<string>();
+  // (b) enabled/configured servers (covers the default-on Microsoft Learn MCP).
+  REMOTE_BUILTIN_MCP_CATALOG.forEach((e, i) => {
+    if (msRemoteMcpConfigured(e.id)) connected.add(prefixes[i]);
+  });
+  // (a) prefixes the per-user MCP shim actually registered tools under.
+  const names = reg.list().map((t) => t.name);
+  for (const p of prefixes) {
+    if (names.some((n) => n.startsWith(p))) connected.add(p);
+  }
+  return [...connected];
+}
+
 export async function* orchestrate(opts: OrchestrateOptions): AsyncIterable<OrchestratorStep> {
   const { prompt, sessionId, userOid } = opts;
   // Copilot surface tag for per-persona usage metering (string, defaults to
@@ -1759,6 +1802,22 @@ export async function* orchestrate(opts: OrchestrateOptions): AsyncIterable<Orch
       role: 'system',
       content: `Current editor context (JSON): ${JSON.stringify(opts.personaContext).slice(0, 4000)}`,
     });
+  }
+  // Microsoft agent-skill guidance (github.com/microsoft/skills) for the active
+  // pane, injected as an ADDITIONAL system message alongside the persona/context
+  // above — additive, never replacing the pane system prompt. Each block frames
+  // the Azure-native DEFAULT tools and, only when the backing Microsoft MCP
+  // server is genuinely connected for this turn (msConnectedMcpPrefixes), also
+  // advertises its mcp_<slug>_* tools; otherwise it emits the honest catalog gate
+  // (naming the exact env/secret/scope/consent) and never claims an unconnected
+  // capability. Pure guidance — the tool loop below is unchanged. Reuses the same
+  // skill plumbing as the Power BI skills (no parallel system); empty string when
+  // no MS skill applies to this pane, so nothing extra is injected.
+  const msSkillBlocks = msSkillSystemBlocksForPane(opts.contextSlug, {
+    connectedPrefixes: msConnectedMcpPrefixes(reg),
+  });
+  if (msSkillBlocks) {
+    messages.push({ role: 'system', content: msSkillBlocks });
   }
   messages.push({ role: 'user', content: prompt });
 

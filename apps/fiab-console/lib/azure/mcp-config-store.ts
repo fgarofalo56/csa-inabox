@@ -9,6 +9,7 @@
  */
 
 import { mcpServersContainer } from './cosmos-client';
+import { defaultOnRemoteMcps, msRemoteMcp, type RemoteBuiltinMcpEntry } from '../mcp/catalog';
 import type { McpServerConfig, McpServerConfigDoc } from '../types/mcp-config';
 
 const TTL_MS = 30_000;
@@ -17,13 +18,85 @@ interface CacheEntry<T> { value: T | null; at: number }
 const _cache = new Map<string, CacheEntry<McpServerConfigDoc[]>>();
 
 /**
+ * Project a generalized remote built-in MCP descriptor (lib/mcp/catalog.ts) onto
+ * the persisted `McpServerConfig` shape, so a synthetic (un-persisted) default-on
+ * server flows through `buildMcpShim` exactly like a registered row.
+ *
+ * `catalogId` is set to the descriptor id so `mcpToolPrefixSlug` (mcp-shim.ts)
+ * derives the stable `mcp_<slug>_<tool>` prefix from it (e.g. 'ms-learn' →
+ * `mcp_mslearn_*`) — the same single-source-of-truth naming the Power BI row uses.
+ * Auth maps straight across: 'none' (Microsoft Learn — no Authorization header),
+ * 'entra-obo' (per-user delegated token, keyed by `oboResourceKey` = the descriptor
+ * id), or 'key-vault' (a stored PAT secret NAME, never a literal — GitHub).
+ */
+function remoteBuiltinToConfig(e: RemoteBuiltinMcpEntry): McpServerConfig {
+  const cfg: McpServerConfig = {
+    name: e.name,
+    endpoint: e.endpoint,
+    authMethod: e.auth, // 'none' | 'entra-obo' | 'key-vault' — all valid McpServerConfig authMethods
+    enabled: true,
+    source: 'remote-builtin',
+    catalogId: e.id,
+    description: e.desc,
+  };
+  if (e.auth === 'entra-obo') {
+    cfg.oboResource = e.oboResource || undefined; // '' (per-org, e.g. Dataverse) → derived from endpoint at OBO time
+    cfg.oboScopes = e.oboScopes;
+    cfg.oboResourceKey = e.id; // per-resource per-user token lookup key (no secret)
+  } else if (e.auth === 'key-vault' && e.secretRefEnv) {
+    // Key Vault secret NAME (never the value) lives in the env var the descriptor names.
+    const secretName = process.env[e.secretRefEnv]?.trim();
+    if (secretName) cfg.authValue = secretName;
+  }
+  return cfg;
+}
+
+/**
+ * Apply the remote built-in MCP policy to a tenant's persisted server list:
+ *
+ *  1. **Drop opted-out remote-builtin rows.** A `source: 'remote-builtin'` row
+ *     whose descriptor `configured()` is now false (its enable-env toggle was
+ *     cleared, the shared OBO client / endpoint went away, or a PAT secret name
+ *     was removed) must NEVER be advertised — otherwise `buildMcpShim` would try
+ *     to reach an opted-out Microsoft server. Rows with no matching descriptor
+ *     (manually-registered remote endpoints we don't model) are kept as-is.
+ *  2. **Fold in the default-on synthetic rows.** The single source of the
+ *     "Microsoft Learn is live day-one with zero config" behavior
+ *     (no-fabric-dependency: Learn is the SOLE default-on server — public,
+ *     no-auth, no Fabric/Power BI dependency). `defaultOnRemoteMcps()` already
+ *     filters on `defaultOn && configured()`, so Learn drops out automatically
+ *     when `LOOM_MS_LEARN_MCP_ENABLED=false`. We only append a synthetic row when
+ *     the same descriptor id isn't already persisted (admin-registered) — no
+ *     duplicate. Consumed by `buildMcpShim` (tool discovery) + the admin panel.
+ */
+function decorateMcpServers(persisted: McpServerConfig[]): McpServerConfig[] {
+  const kept = persisted.filter((srv) => {
+    if (srv.source !== 'remote-builtin' || !srv.catalogId) return true;
+    const d = msRemoteMcp(srv.catalogId);
+    return d ? d.configured() : true;
+  });
+  const present = new Set(
+    kept.filter((s) => s.source === 'remote-builtin' && s.catalogId).map((s) => s.catalogId),
+  );
+  const synthetic = defaultOnRemoteMcps()
+    .filter((e) => !present.has(e.id))
+    .map(remoteBuiltinToConfig);
+  return synthetic.length ? [...kept, ...synthetic] : kept;
+}
+
+/**
  * List all enabled MCP servers for a tenant. Cached.
+ *
+ * The persisted Cosmos rows are decorated via `decorateMcpServers()` on every
+ * call (including cache hits and the Cosmos-error fallback) so the env-driven
+ * remote built-in policy — drop opted-out Microsoft servers, inject the default-on
+ * Microsoft Learn row — is always evaluated live, never frozen into the cache.
  */
 export async function listMcpServers(tenantId: string): Promise<McpServerConfig[]> {
   if (!tenantId) return [];
   const hit = _cache.get(tenantId);
   if (hit && Date.now() - hit.at < TTL_MS) {
-    return (hit.value || []).map((doc) => stripDoc(doc));
+    return decorateMcpServers((hit.value || []).map((doc) => stripDoc(doc)));
   }
   try {
     const c = await mcpServersContainer();
@@ -34,10 +107,12 @@ export async function listMcpServers(tenantId: string): Promise<McpServerConfig[
     const { resources } = await c.items.query<McpServerConfigDoc>(q).fetchAll();
     const value = resources || [];
     _cache.set(tenantId, { value, at: Date.now() });
-    return value.map((doc) => stripDoc(doc));
+    return decorateMcpServers(value.map((doc) => stripDoc(doc)));
   } catch (e: any) {
     _cache.set(tenantId, { value: null, at: Date.now() });
-    return [];
+    // Cosmos unreachable: still advertise the default-on Microsoft Learn row so its
+    // tools are live day-one even before any persisted MCP config exists.
+    return decorateMcpServers([]);
   }
 }
 
