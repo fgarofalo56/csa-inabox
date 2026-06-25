@@ -20,6 +20,7 @@ import {
 } from '@fluentui/react-components';
 import { Sparkle20Regular, Add20Regular, Database20Regular, Dismiss16Regular } from '@fluentui/react-icons';
 import { safeModelJson } from './model-fetch';
+import { EmptyState } from '../components/empty-state';
 import type { DaSource, DaSourceType } from './_family-utils';
 
 const useStyles = makeStyles({
@@ -35,6 +36,11 @@ const useStyles = makeStyles({
     gap: tokens.spacingVerticalS,
     minWidth: 0,
     maxWidth: '100%',
+    backgroundColor: tokens.colorNeutralBackground1,
+    boxShadow: tokens.shadow4,
+    transitionProperty: 'box-shadow',
+    transitionDuration: tokens.durationNormal,
+    ':hover': { boxShadow: tokens.shadow16 },
   },
   cardHead: { display: 'flex', alignItems: 'center', flexWrap: 'wrap', gap: tokens.spacingHorizontalS, minWidth: 0 },
   spacer: { flex: 1 },
@@ -155,12 +161,11 @@ export function DataAgentConfigCopilotPanel({ id, sources, ensureSaved, onApply 
 
   if (!sources.length) {
     return (
-      <MessageBar intent="info">
-        <MessageBarBody>
-          <Sparkle20Regular className={styles.headIcon} />
-          Add at least one source in the <strong>Build</strong> tab before using Config Copilot.
-        </MessageBarBody>
-      </MessageBar>
+      <EmptyState
+        icon={<Sparkle20Regular />}
+        title="No sources to ground on yet"
+        body="Add at least one source in the Build tab before using Config Copilot. The copilot reads each source's real schema to generate example question → query pairs and per-field descriptions."
+      />
     );
   }
 

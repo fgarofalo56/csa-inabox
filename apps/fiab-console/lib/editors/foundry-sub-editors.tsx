@@ -20,13 +20,19 @@
 
 import { useCallback, useEffect, useMemo, useState, type ReactNode } from 'react';
 import {
-  Subtitle2, Body1, Caption1, Badge, Button, Input, Textarea, Spinner, Field, Dropdown, Option,
+  Subtitle2, Body1, Caption1, Badge, Button, Input, Textarea, SkeletonItem, Field, Dropdown, Option,
   Checkbox,
   Table, TableHeader, TableRow, TableHeaderCell, TableBody, TableCell,
   Tab, TabList,
   MessageBar, MessageBarBody, MessageBarTitle,
   makeStyles, tokens,
 } from '@fluentui/react-components';
+import {
+  BrainCircuit20Regular, FlowchartCircle20Regular, ChartMultiple20Regular,
+  ShieldTask20Regular, Search20Regular, BranchCompare20Regular,
+  Server20Regular, Database20Regular,
+} from '@fluentui/react-icons';
+import { EmptyState } from '@/lib/components/empty-state';
 import { ItemEditorChrome } from './item-editor-chrome';
 import type { FabricItemType } from '@/lib/catalog/fabric-item-types';
 import type { RibbonTab } from '@/lib/components/ribbon';
@@ -59,10 +65,24 @@ const useStyles = makeStyles({
     whiteSpace: 'pre-wrap', overflowWrap: 'anywhere', wordBreak: 'break-word', overflow: 'auto',
     resize: 'vertical',
   },
-  tableWrap: { overflow: 'auto', maxHeight: '480px', border: `1px solid ${tokens.colorNeutralStroke2}`, borderRadius: tokens.borderRadiusMedium },
+  tableWrap: { overflow: 'auto', maxHeight: '480px', border: `1px solid ${tokens.colorNeutralStroke2}`, borderRadius: tokens.borderRadiusLarge, boxShadow: tokens.shadow4 },
   cell: { fontSize: tokens.fontSizeBase200, whiteSpace: 'nowrap', maxWidth: '360px', overflow: 'hidden', textOverflow: 'ellipsis' },
   empty: { padding: tokens.spacingVerticalL, color: tokens.colorNeutralForeground3, fontStyle: 'italic' },
-  card: { padding: tokens.spacingVerticalM, border: `1px solid ${tokens.colorNeutralStroke2}`, borderRadius: tokens.borderRadiusLarge },
+  card: {
+    padding: tokens.spacingVerticalM, border: `1px solid ${tokens.colorNeutralStroke2}`,
+    borderRadius: tokens.borderRadiusLarge, backgroundColor: tokens.colorNeutralBackground1,
+    boxShadow: tokens.shadow4, transition: 'box-shadow 0.15s ease-in-out',
+    ':hover': { boxShadow: tokens.shadow16 },
+  },
+  // Section / tab header with a leading Fluent icon — modern, consistent affordance.
+  sectionHead: { display: 'flex', alignItems: 'center', gap: tokens.spacingHorizontalS },
+  sectionIcon: { color: tokens.colorBrandForeground1, display: 'flex', alignItems: 'center' },
+  // Loading skeleton stack — replaces a bare spinner for table/list loads.
+  skeletonStack: {
+    display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalS,
+    padding: tokens.spacingVerticalM, border: `1px solid ${tokens.colorNeutralStroke2}`,
+    borderRadius: tokens.borderRadiusLarge, boxShadow: tokens.shadow4,
+  },
   formRow: { display: 'grid', gridTemplateColumns: '160px 1fr', gap: `${tokens.spacingVerticalXS} ${tokens.spacingHorizontalL}`, alignItems: 'center' },
   // Search Explorer query-options grid (label / control pairs, wraps responsively).
   optGrid: { display: 'grid', gridTemplateColumns: 'max-content minmax(220px, 1fr)', gap: `${tokens.spacingVerticalS} ${tokens.spacingHorizontalM}`, alignItems: 'center' },
@@ -105,6 +125,36 @@ function ErrorBar({ msg, hint, notDeployed }: { msg: string; hint?: string; notD
         {msg}{hint ? ` — ${hint}` : ''}
       </MessageBarBody>
     </MessageBar>
+  );
+}
+
+/**
+ * Loading skeleton for a table/list load — a polished placeholder shown while
+ * data is in flight, replacing a bare `<Spinner size="small" />` so the layout
+ * doesn't jump and the wait reads as intentional.
+ */
+function TableSkeleton({ rows = 4 }: { rows?: number }) {
+  const s = useStyles();
+  return (
+    <div className={s.skeletonStack} aria-hidden>
+      {Array.from({ length: rows }).map((_, i) => (
+        <SkeletonItem key={i} size={24} />
+      ))}
+    </div>
+  );
+}
+
+/**
+ * SectionHead — a `Subtitle2` heading with a leading brand-tinted Fluent icon,
+ * for the modern "icon per section" look shared across Loom editors.
+ */
+function SectionHead({ icon, children }: { icon: ReactNode; children: ReactNode }) {
+  const s = useStyles();
+  return (
+    <div className={s.sectionHead}>
+      <span className={s.sectionIcon} aria-hidden>{icon}</span>
+      <Subtitle2>{children}</Subtitle2>
+    </div>
   );
 }
 
@@ -222,7 +272,7 @@ export function ProjectEditor({ item, id }: { item: FabricItemType; id: string }
   if (isNew) {
     return <Shell item={item} id={id} ribbon={ribbon}>
       <div className={s.pad}>
-        <Subtitle2>AI Foundry projects</Subtitle2>
+        <SectionHead icon={<BrainCircuit20Regular />}>AI Foundry projects</SectionHead>
         <Caption1>Child workspaces of the Foundry hub. Inherit hub-level connections; scope flows + evaluations + data assets.</Caption1>
         <div className={s.card}>
           <Subtitle2>New project</Subtitle2>
@@ -236,7 +286,10 @@ export function ProjectEditor({ item, id }: { item: FabricItemType; id: string }
             {saveMsg && <Caption1>{saveMsg}</Caption1>}
           </div>
         </div>
-        {list.loading ? <Spinner size="small" /> : list.error ? <ErrorBar msg={list.error} hint={list.hint} notDeployed={list.notDeployed} /> : (
+        {list.loading ? <TableSkeleton /> : list.error ? <ErrorBar msg={list.error} hint={list.hint} notDeployed={list.notDeployed} /> : (list.data?.projects || []).length === 0 ? (
+          <EmptyState icon={<BrainCircuit20Regular />} title="No projects yet"
+            body="Create a project above to scope flows, evaluations, and data assets under this Foundry hub." />
+        ) : (
           <div className={s.tableWrap}>
             <Table size="small">
               <TableHeader><TableRow>
@@ -262,9 +315,9 @@ export function ProjectEditor({ item, id }: { item: FabricItemType; id: string }
 
   return <Shell item={item} id={id} ribbon={ribbon}>
     <div className={s.pad}>
-      {detail.loading ? <Spinner size="small" /> : detail.error ? <ErrorBar msg={detail.error} hint={detail.hint} notDeployed={detail.notDeployed} /> : detail.data?.project ? (
+      {detail.loading ? <TableSkeleton rows={3} /> : detail.error ? <ErrorBar msg={detail.error} hint={detail.hint} notDeployed={detail.notDeployed} /> : detail.data?.project ? (
         <>
-          <Subtitle2>{detail.data.project.displayName || detail.data.project.name}</Subtitle2>
+          <SectionHead icon={<BrainCircuit20Regular />}>{detail.data.project.displayName || detail.data.project.name}</SectionHead>
           <Body1>{detail.data.project.description || '—'}</Body1>
           <div className={s.formRow}>
             <span>Name</span><span>{detail.data.project.name}</span>
@@ -537,7 +590,7 @@ export function PromptFlowEditor({ item, id }: { item: FabricItemType; id: strin
           {runResult && (
             runResult.ok ? (
               <div className={s.card}>
-                <Subtitle2>Run output</Subtitle2>
+                <SectionHead icon={<FlowchartCircle20Regular />}>Run output</SectionHead>
                 {perNode.length > 0 && (
                   <div className={s.tableWrap}>
                     <Table size="small" aria-label="Per-node outputs">
@@ -614,7 +667,10 @@ export function EvaluationEditor({ item, id }: { item: FabricItemType; id: strin
   return <Shell item={item} id={id} ribbon={ribbon}>
     <div className={s.pad}>
       <ProjectPicker value={project} onChange={setProject} />
-      {project && (list.loading ? <Spinner size="small" /> : list.error ? <ErrorBar msg={list.error} hint={list.hint} notDeployed={list.notDeployed} /> : (
+      {project && (list.loading ? <TableSkeleton /> : list.error ? <ErrorBar msg={list.error} hint={list.hint} notDeployed={list.notDeployed} /> : (list.data?.evaluations || []).length === 0 ? (
+        <EmptyState icon={<BranchCompare20Regular />} title="No evaluations yet"
+          body="Create an evaluation below to score a dataset against quality metrics (groundedness, relevance, fluency) for this project." />
+      ) : (
         <div className={s.tableWrap}>
           <Table size="small">
             <TableHeader><TableRow>
@@ -847,7 +903,7 @@ export function ContentSafetyEditor({ item, id }: { item: FabricItemType; id: st
 
   return <Shell item={item} id={id} ribbon={ribbon}>
     <div className={s.pad}>
-      <Subtitle2>Content Safety</Subtitle2>
+      <SectionHead icon={<ShieldTask20Regular />}>Content Safety</SectionHead>
       <Caption1>Live text &amp; image moderation, real RAI content-filter policies (per-category severity thresholds), and custom term/regex blocklists against the Azure AI Content Safety harm categories (hate, self-harm, sexual, violence).</Caption1>
 
       <TabList selectedValue={tab} onTabSelect={(_, d) => setTab(d.value as typeof tab)}>
@@ -891,7 +947,7 @@ export function ContentSafetyEditor({ item, id }: { item: FabricItemType; id: st
                   <Button size="small" onClick={reloadPolicies}>Reload</Button>
                 </div>
                 <Caption1>Responsible-AI content filters on the model-hosting account (Microsoft.CognitiveServices/accounts/raiPolicies). Each category has an independent severity threshold per source — these are the real persisted policy values used by your model deployments.</Caption1>
-                {policies.loading ? <Spinner size="small" /> : policies.error ? <ErrorBar msg={policies.error} hint={policies.hint} notDeployed={policies.notDeployed} /> : (
+                {policies.loading ? <TableSkeleton /> : policies.error ? <ErrorBar msg={policies.error} hint={policies.hint} notDeployed={policies.notDeployed} /> : (
                   <div className={s.tableWrap}>
                     <Table size="small" aria-label="RAI policies">
                       <TableHeader><TableRow>
@@ -981,7 +1037,7 @@ export function ContentSafetyEditor({ item, id }: { item: FabricItemType; id: st
               <Button size="small" onClick={reloadBlocklists}>Reload</Button>
             </div>
             <Caption1>Custom term / regex blocklists on the Content Safety data-plane. Attach one to a content-filter policy (Content filters tab) to enforce it. Max 10,000 terms total across all lists; 128 chars per term.</Caption1>
-            {blocklists.loading ? <Spinner size="small" /> : blocklists.error ? <ErrorBar msg={blocklists.error} hint={blocklists.hint} notDeployed={blocklists.notDeployed} /> : (
+            {blocklists.loading ? <TableSkeleton /> : blocklists.error ? <ErrorBar msg={blocklists.error} hint={blocklists.hint} notDeployed={blocklists.notDeployed} /> : (
               <div className={s.tableWrap}>
                 <Table size="small" aria-label="Blocklists">
                   <TableHeader><TableRow>
@@ -1031,7 +1087,7 @@ export function ContentSafetyEditor({ item, id }: { item: FabricItemType; id: st
                 <Checkbox label="Regex" checked={itemRegex} onChange={(_, d) => setItemRegex(!!d.checked)} />
                 <Button appearance="primary" disabled={blBusy || !itemText.trim()} onClick={addItem}>Add item</Button>
               </div>
-              {items.loading ? <Spinner size="small" /> : items.error ? <ErrorBar msg={items.error} /> : (
+              {items.loading ? <TableSkeleton rows={3} /> : items.error ? <ErrorBar msg={items.error} /> : (
                 <div className={s.tableWrap}>
                   <Table size="small" aria-label="Blocklist items">
                     <TableHeader><TableRow>
@@ -1119,14 +1175,17 @@ export function TracingEditor({ item, id }: { item: FabricItemType; id: string }
 
   return <Shell item={item} id={id} ribbon={ribbon}>
     <div className={s.pad}>
-      <Subtitle2>Foundry traces</Subtitle2>
+      <SectionHead icon={<ChartMultiple20Regular />}>Foundry traces</SectionHead>
       <Caption1>GenAI traces from the hub’s Application Insights. Click a trace to drill into its full span tree (model calls, tool calls, token usage).</Caption1>
       <div className={s.toolbar}>
         <Field label="Window (hrs)"><Input type="number" value={String(hours)} onChange={(_, d) => setHours(Number(d.value) || 24)} /></Field>
         <Field label="Operation"><Input value={op} onChange={(_, d) => setOp(d.value)} placeholder="(any)" /></Field>
         <Button onClick={reload}>Reload</Button>
       </div>
-      {state.loading ? <Spinner size="small" /> : state.error ? <ErrorBar msg={state.error} hint={state.hint} notDeployed={state.notDeployed} /> : (
+      {state.loading ? <TableSkeleton rows={6} /> : state.error ? <ErrorBar msg={state.error} hint={state.hint} notDeployed={state.notDeployed} /> : (state.data?.traces || []).length === 0 ? (
+        <EmptyState icon={<ChartMultiple20Regular />} title="No traces in this window"
+          body="No GenAI traces were captured in the selected time window. Widen the window or run a flow/agent to generate traces, then reload." />
+      ) : (
         <div className={s.tableWrap}>
           <Table size="small">
             <TableHeader><TableRow>
@@ -1157,12 +1216,13 @@ export function TracingEditor({ item, id }: { item: FabricItemType; id: string }
       {traceId && (
         <>
           <div className={s.toolbar} style={{ marginTop: tokens.spacingVerticalM }}>
-            <Subtitle2>Span tree · {traceId.slice(0, 16)}…</Subtitle2>
+            <SectionHead icon={<FlowchartCircle20Regular />}>Span tree · {traceId.slice(0, 16)}…</SectionHead>
             <Button size="small" onClick={() => loadDetail(traceId)}>Reload spans</Button>
             <Button size="small" appearance="subtle" onClick={() => setTraceId(null)}>Close</Button>
           </div>
-          {detail.loading ? <Spinner size="small" /> : detail.error ? <ErrorBar msg={detail.error} hint={detail.hint} notDeployed={detail.notDeployed} /> : tree.length === 0 ? (
-            <div className={s.empty}>No spans found for this trace.</div>
+          {detail.loading ? <TableSkeleton rows={4} /> : detail.error ? <ErrorBar msg={detail.error} hint={detail.hint} notDeployed={detail.notDeployed} /> : tree.length === 0 ? (
+            <EmptyState icon={<FlowchartCircle20Regular />} title="No spans for this trace"
+              body="This trace did not record any spans, or they have not yet been ingested into Application Insights. Reload spans to retry." />
           ) : (
             <div className={s.tableWrap}>
               <Table size="small" aria-label="Span tree">
@@ -1956,9 +2016,12 @@ export function AiSearchIndexEditor({ item, id }: { item: FabricItemType; id: st
   if (isNew && !navIndex) {
     return chrome(
       <div className={s.pad}>
-        <Subtitle2>Azure AI Search indexes</Subtitle2>
+        <SectionHead icon={<Search20Regular />}>Azure AI Search indexes</SectionHead>
         <Caption1>Pick an index from the service navigator on the left to manage its schema, run queries, and drive its indexers — or use ＋ New to create indexes, indexers, data sources, skillsets, synonym maps and aliases.</Caption1>
-        {list.loading ? <Spinner size="small" /> : list.error ? <ErrorBar msg={list.error} hint={list.hint} notDeployed={list.notDeployed} /> : (
+        {list.loading ? <TableSkeleton /> : list.error ? <ErrorBar msg={list.error} hint={list.hint} notDeployed={list.notDeployed} /> : (list.data?.indexes || []).length === 0 ? (
+          <EmptyState icon={<Search20Regular />} title="No indexes on this service"
+            body="Use ＋ New in the service navigator on the left to create your first index, then design its fields, vector profiles, and indexers here." />
+        ) : (
           <div className={s.tableWrap}>
             <Table size="small">
               <TableHeader><TableRow><TableHeaderCell>Name</TableHeaderCell><TableHeaderCell>Fields</TableHeaderCell><TableHeaderCell>Vector</TableHeaderCell></TableRow></TableHeader>
@@ -2000,7 +2063,7 @@ export function AiSearchIndexEditor({ item, id }: { item: FabricItemType; id: st
 
   return chrome(
     <div className={s.pad}>
-      {detail.loading ? <Spinner size="small" /> : detail.error ? (
+      {detail.loading ? <TableSkeleton rows={6} /> : detail.error ? (
         <>
           <ErrorBar msg={detail.error} hint={detail.hint} notDeployed={detail.notDeployed} />
           {!navIndex && <AiSearchBindPicker id={id} onBound={reloadDetail} />}
@@ -2008,7 +2071,7 @@ export function AiSearchIndexEditor({ item, id }: { item: FabricItemType; id: st
       ) : idx && (
         <>
           <div className={s.toolbar}>
-            <Subtitle2>Index: {idx.name}</Subtitle2>
+            <SectionHead icon={<Search20Regular />}>Index: {idx.name}</SectionHead>
             {idx.vectorSearch && <Badge color="brand">vector</Badge>}
             {idx.semantic && <Badge color="success">semantic</Badge>}
             {(detail.data as any)?.source === 'bundle' && <Badge color="warning">bundle template</Badge>}
@@ -2415,7 +2478,7 @@ export function AiSearchIndexEditor({ item, id }: { item: FabricItemType; id: st
           {/* ---- Indexers tab ---- */}
           {tab === 'indexers' && (
             <>
-              {indexersLoading ? <Spinner size="small" /> : indexerData && !indexerData.ok ? (
+              {indexersLoading ? <TableSkeleton /> : indexerData && !indexerData.ok ? (
                 <ErrorBar msg={indexerData.error} hint={indexerData.hint} notDeployed={indexerData.notDeployed} />
               ) : indexerData?.ok ? (
                 <>
@@ -2477,7 +2540,7 @@ export function AiSearchIndexEditor({ item, id }: { item: FabricItemType; id: st
                   )}
                   <Button style={{ marginTop: tokens.spacingVerticalS }} onClick={loadIndexers}>Reload</Button>
                 </>
-              ) : <Spinner size="small" />}
+              ) : <TableSkeleton />}
             </>
           )}
         </>
@@ -2526,7 +2589,7 @@ export function ComputeEditor({ item, id }: { item: FabricItemType; id: string }
   if (isNew) {
     return <Shell item={item} id={id} ribbon={ribbon}>
       <div className={s.pad}>
-        <Subtitle2>Foundry computes</Subtitle2>
+        <SectionHead icon={<Server20Regular />}>Foundry computes</SectionHead>
         <div className={s.card}>
           <Subtitle2>New compute</Subtitle2>
           <div className={s.formRow}>
@@ -2548,7 +2611,10 @@ export function ComputeEditor({ item, id }: { item: FabricItemType; id: string }
           <Button appearance="primary" onClick={create} disabled={busy || !form.name}>{busy ? 'Creating…' : 'Create compute'}</Button>
           {msg && <Caption1> {msg}</Caption1>}
         </div>
-        {list.loading ? <Spinner size="small" /> : list.error ? <ErrorBar msg={list.error} hint={list.hint} notDeployed={list.notDeployed} /> : (
+        {list.loading ? <TableSkeleton /> : list.error ? <ErrorBar msg={list.error} hint={list.hint} notDeployed={list.notDeployed} /> : (list.data?.computes || []).length === 0 ? (
+          <EmptyState icon={<Server20Regular />} title="No compute targets yet"
+            body="Create an AmlCompute cluster or ComputeInstance above to run flows, evaluations, and notebooks in this Foundry workspace." />
+        ) : (
           <div className={s.tableWrap}>
             <Table size="small">
               <TableHeader><TableRow>
@@ -2579,9 +2645,9 @@ export function ComputeEditor({ item, id }: { item: FabricItemType; id: string }
 
   return <Shell item={item} id={id} ribbon={ribbon}>
     <div className={s.pad}>
-      {detail.loading ? <Spinner size="small" /> : detail.error ? <ErrorBar msg={detail.error} hint={detail.hint} notDeployed={detail.notDeployed} /> : detail.data?.compute && (
+      {detail.loading ? <TableSkeleton rows={4} /> : detail.error ? <ErrorBar msg={detail.error} hint={detail.hint} notDeployed={detail.notDeployed} /> : detail.data?.compute && (
         <>
-          <Subtitle2>{detail.data.compute.name}</Subtitle2>
+          <SectionHead icon={<Server20Regular />}>{detail.data.compute.name}</SectionHead>
           <div className={s.formRow}>
             <span>Type</span><span>{detail.data.compute.computeType}</span>
             <span>VM</span><span>{detail.data.compute.vmSize || '—'}</span>
@@ -2640,7 +2706,7 @@ export function DatasetEditor({ item, id }: { item: FabricItemType; id: string }
   if (isNew) {
     return <Shell item={item} id={id} ribbon={ribbon}>
       <div className={s.pad}>
-        <Subtitle2>Foundry datasets</Subtitle2>
+        <SectionHead icon={<Database20Regular />}>Foundry datasets</SectionHead>
         <div className={s.toolbar}>
           <Field label="Scope">
             <Dropdown value={project || 'hub'} selectedOptions={[project || 'hub']}
@@ -2678,7 +2744,10 @@ export function DatasetEditor({ item, id }: { item: FabricItemType; id: string }
           <Button appearance="primary" onClick={create} disabled={!form.name || !form.dataUri}>Create asset</Button>
           {msg && <Caption1> {msg}</Caption1>}
         </div>
-        {list.loading ? <Spinner size="small" /> : list.error ? <ErrorBar msg={list.error} hint={list.hint} notDeployed={list.notDeployed} /> : (
+        {list.loading ? <TableSkeleton /> : list.error ? <ErrorBar msg={list.error} hint={list.hint} notDeployed={list.notDeployed} /> : filtered.length === 0 ? (
+          <EmptyState icon={<Database20Regular />} title="No data assets yet"
+            body="Register a uri_file, uri_folder, or mltable asset above to use it in flows, evaluations, and training jobs. Adjust the scope or type filter to broaden the list." />
+        ) : (
           <div className={s.tableWrap}>
             <Table size="small">
               <TableHeader><TableRow>
@@ -2704,9 +2773,9 @@ export function DatasetEditor({ item, id }: { item: FabricItemType; id: string }
 
   return <Shell item={item} id={id} ribbon={ribbon}>
     <div className={s.pad}>
-      {detail.loading ? <Spinner size="small" /> : detail.error ? <ErrorBar msg={detail.error} hint={detail.hint} notDeployed={detail.notDeployed} /> : detail.data?.asset && (
+      {detail.loading ? <TableSkeleton rows={4} /> : detail.error ? <ErrorBar msg={detail.error} hint={detail.hint} notDeployed={detail.notDeployed} /> : detail.data?.asset && (
         <>
-          <Subtitle2>{detail.data.asset.name}</Subtitle2>
+          <SectionHead icon={<Database20Regular />}>{detail.data.asset.name}</SectionHead>
           <Body1>{detail.data.asset.description || '—'}</Body1>
           <div className={s.tableWrap}>
             <Table size="small">

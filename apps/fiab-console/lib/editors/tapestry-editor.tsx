@@ -34,8 +34,10 @@ import {
 import {
   Play20Regular, Search20Regular, ArrowClockwise20Regular,
   Database20Regular,
+  Organization24Regular, Map24Regular, DataLine24Regular,
 } from '@fluentui/react-icons';
 import { ItemEditorChrome } from './item-editor-chrome';
+import { EmptyState } from '@/lib/components/empty-state';
 import type { FabricItemType } from '@/lib/catalog/fabric-item-types';
 import type { RibbonTab } from '@/lib/components/ribbon';
 import { ForceDirectedGraph, extractGraph, type GraphNode } from '@/lib/components/graph/force-directed-graph';
@@ -288,9 +290,9 @@ export function TapestryEditor({ item, id }: { item: FabricItemType; id: string 
         <>
           <div className={s.tabStrip}>
             <TabList selectedValue={tab} onTabSelect={(_: unknown, d: any) => setTab(d.value)}>
-              <Tab value="link">Link analysis</Tab>
-              <Tab value="geo">Geo</Tab>
-              <Tab value="timeline">Timeline</Tab>
+              <Tab value="link" icon={<Organization24Regular />}>Link analysis</Tab>
+              <Tab value="geo" icon={<Map24Regular />}>Geo</Tab>
+              <Tab value="timeline" icon={<DataLine24Regular />}>Timeline</Tab>
             </TabList>
           </div>
           <div className={s.pad}>
@@ -352,6 +354,15 @@ export function TapestryEditor({ item, id }: { item: FabricItemType; id: string 
                 {linkResult?.ok && !linkGraph && (
                   <MessageBar intent="info"><MessageBarBody>Query returned {linkResult.rowCount ?? 0} row(s) but no Source/Target edges to plot. Try a different analysis or a smaller hop count.</MessageBarBody></MessageBar>
                 )}
+                {!linkLoading && !linkResult && (
+                  <EmptyState
+                    icon={<Organization24Regular />}
+                    title="No graph yet"
+                    body="Pick an analysis (pattern, shortest path, components, or neighborhood), set the hop depth, and run it to build a force-directed graph over the Node_*/Edge_* ADX tables. Click a node to set the shared seed for the Geo and Timeline panes."
+                    primaryAction={{ label: linkLoading ? 'Running…' : 'Run link analysis', onClick: runLink }}
+                    secondaryAction={{ label: seeding ? 'Loading sample…' : 'Load sample graph', onClick: loadSampleGraph, appearance: 'secondary' }}
+                  />
+                )}
               </>
             )}
 
@@ -388,6 +399,15 @@ export function TapestryEditor({ item, id }: { item: FabricItemType; id: string 
                 )}
                 {geoResult?.ok && (geoResult.count ?? 0) === 0 && (
                   <MessageBar intent="info"><MessageBarBody>No nodes carry lat/lon properties yet. Seed the investigation dataset (kind=investigation) — Person/Org/Location nodes carry coordinates.</MessageBarBody></MessageBar>
+                )}
+                {!geoLoading && !geoResult && (
+                  <EmptyState
+                    icon={<Map24Regular />}
+                    title="No entities plotted"
+                    body="Plot the located entities to project node lat/lon coordinates onto a live map. A vector overlay renders without Azure Maps; set NEXT_PUBLIC_LOOM_AZURE_MAPS_KEY to layer a raster basemap behind it."
+                    primaryAction={{ label: geoLoading ? 'Loading…' : 'Plot located entities', onClick: runGeo }}
+                    secondaryAction={{ label: seeding ? 'Loading sample…' : 'Load sample graph', onClick: loadSampleGraph, appearance: 'secondary' }}
+                  />
                 )}
               </>
             )}
@@ -433,6 +453,15 @@ export function TapestryEditor({ item, id }: { item: FabricItemType; id: string 
                       totalRowCount={timelineResult.rowCount}
                     />
                   </>
+                )}
+                {!timelineLoading && !timelineResult && (
+                  <EmptyState
+                    icon={<DataLine24Regular />}
+                    title="No timeline yet"
+                    body="Choose a bin window (hourly, daily, or weekly) and run the timeline to bin every Edge_* event by window and relationship label, so you can see how the graph's relationships evolve over time."
+                    primaryAction={{ label: timelineLoading ? 'Running…' : 'Run timeline', onClick: runTimeline }}
+                    secondaryAction={{ label: seeding ? 'Loading sample…' : 'Load sample graph', onClick: loadSampleGraph, appearance: 'secondary' }}
+                  />
                 )}
               </>
             )}

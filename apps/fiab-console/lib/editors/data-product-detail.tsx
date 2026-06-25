@@ -47,6 +47,7 @@ import {
   PersonRegular, Play20Regular, Pulse20Regular, ScanType20Regular, ShieldTask20Regular,
 } from '@fluentui/react-icons';
 import { ItemEditorChrome } from './item-editor-chrome';
+import { EmptyState } from '@/lib/components/empty-state';
 import { RequestAccessDialog } from './components/request-access-dialog';
 import type { FabricItemType } from '@/lib/catalog/fabric-item-types';
 import { findItemType } from '@/lib/catalog/fabric-item-types';
@@ -69,7 +70,13 @@ const useObsStyles = makeStyles({
   gaugeHead: { display: 'flex', alignItems: 'baseline', gap: tokens.spacingHorizontalS },
   cardGrid: { display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(320px, 1fr))', gap: tokens.spacingHorizontalM },
   actionGrid: { display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(280px, 1fr))', gap: tokens.spacingHorizontalM },
-  card: { padding: tokens.spacingHorizontalM, minWidth: 0 },
+  card: {
+    padding: tokens.spacingHorizontalM, minWidth: 0,
+    borderRadius: tokens.borderRadiusLarge,
+    boxShadow: tokens.shadow4,
+    transition: 'box-shadow 0.15s ease, transform 0.15s ease',
+    ':hover': { boxShadow: tokens.shadow16, transform: 'translateY(-1px)' },
+  },
   kql: {
     fontFamily: 'Consolas, "Cascadia Code", monospace', fontSize: tokens.fontSizeBase100,
     color: tokens.colorNeutralForeground3, whiteSpace: 'pre-wrap', wordBreak: 'break-all',
@@ -376,7 +383,7 @@ export function ObservabilityTabContent({ id, obs, loading, err, refresh }: {
       {loading && !obs && <Spinner size="tiny" label="Loading observability…" />}
 
       {/* ---- Health-action cards ---- */}
-      <Subtitle2><Pulse20Regular style={{ verticalAlign: 'middle', marginRight: 6 }} />Health actions</Subtitle2>
+      <Subtitle2><Pulse20Regular style={{ verticalAlign: 'middle', marginRight: tokens.spacingHorizontalXS }} />Health actions</Subtitle2>
       <div className={s.actionGrid}>
         <ActionCard id={id} action="rerun-dq-check" title="Re-run DQ checks" desc="Recompute the data-quality score from live ADX KQL against the product's tables." icon={<ArrowClockwise20Regular />} onDone={refresh} />
         <ActionCard id={id} action="refresh-lineage" title="Refresh lineage" desc="Re-pull the Purview classic Data Map Atlas lineage subgraph." icon={<BranchFork20Regular />} onDone={refresh} />
@@ -384,7 +391,7 @@ export function ObservabilityTabContent({ id, obs, loading, err, refresh }: {
       </div>
 
       {/* ---- Data-health charts (ADX) ---- */}
-      <Subtitle2><DataTrending20Regular style={{ verticalAlign: 'middle', marginRight: 6 }} />Data health (Azure Data Explorer)</Subtitle2>
+      <Subtitle2><DataTrending20Regular style={{ verticalAlign: 'middle', marginRight: tokens.spacingHorizontalXS }} />Data health (Azure Data Explorer)</Subtitle2>
       {adxGate ? (
         <MessageBar intent="warning">
           <MessageBarBody>
@@ -440,7 +447,7 @@ export function ObservabilityTabContent({ id, obs, loading, err, refresh }: {
       )}
 
       {/* ---- Lineage graph (Purview classic Data Map) ---- */}
-      <Subtitle2><BranchFork20Regular style={{ verticalAlign: 'middle', marginRight: 6 }} />Lineage (Microsoft Purview Data Map)</Subtitle2>
+      <Subtitle2><BranchFork20Regular style={{ verticalAlign: 'middle', marginRight: tokens.spacingHorizontalXS }} />Lineage (Microsoft Purview Data Map)</Subtitle2>
       {purviewGate ? (
         <MessageBar intent="warning">
           <MessageBarBody>
@@ -515,7 +522,13 @@ const useStyles = makeStyles({
   avatars: { display: 'flex', alignItems: 'center', gap: tokens.spacingHorizontalXS },
   actions: { display: 'flex', alignItems: 'center', gap: tokens.spacingHorizontalS },
   body: { display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalL },
-  card: { padding: tokens.spacingHorizontalM },
+  card: {
+    padding: tokens.spacingHorizontalM,
+    borderRadius: tokens.borderRadiusLarge,
+    boxShadow: tokens.shadow4,
+    transition: 'box-shadow 0.15s ease, transform 0.15s ease',
+    ':hover': { boxShadow: tokens.shadow16, transform: 'translateY(-1px)' },
+  },
   grid2: { display: 'grid', gridTemplateColumns: 'max-content minmax(0, 1fr)', columnGap: tokens.spacingHorizontalL, rowGap: tokens.spacingVerticalS, alignItems: 'center' },
   attrGrid: { display: 'grid', gridTemplateColumns: 'minmax(160px, 240px) minmax(0, 1fr)', columnGap: tokens.spacingHorizontalL, rowGap: tokens.spacingVerticalS, overflowWrap: 'anywhere', wordBreak: 'break-word' },
   sectionTitle: { display: 'flex', alignItems: 'center', gap: tokens.spacingHorizontalS, marginTop: tokens.spacingVerticalXS },
@@ -1006,7 +1019,13 @@ const useConsumerStyles = makeStyles({
   tabContent: { paddingTop: tokens.spacingVerticalM, display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalM },
   metaGrid: { display: 'grid', gridTemplateColumns: 'max-content minmax(0, 1fr)', columnGap: tokens.spacingHorizontalXL, rowGap: tokens.spacingVerticalS, alignItems: 'baseline', overflowWrap: 'anywhere', wordBreak: 'break-word' },
   metaLabel: { color: tokens.colorNeutralForeground3, fontWeight: tokens.fontWeightSemibold },
-  card: { padding: tokens.spacingHorizontalL, display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalS, minWidth: 0 },
+  card: {
+    padding: tokens.spacingHorizontalL, display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalS, minWidth: 0,
+    borderRadius: tokens.borderRadiusLarge,
+    boxShadow: tokens.shadow4,
+    transition: 'box-shadow 0.15s ease, transform 0.15s ease',
+    ':hover': { boxShadow: tokens.shadow16, transform: 'translateY(-1px)' },
+  },
   sectionTitle: { display: 'flex', alignItems: 'center', gap: tokens.spacingHorizontalXS, fontWeight: tokens.fontWeightSemibold },
   chips: { display: 'flex', flexWrap: 'wrap', gap: tokens.spacingHorizontalXS },
   empty: { color: tokens.colorNeutralForeground3 },
@@ -1171,7 +1190,11 @@ export function ConsumerDataProductDetail({ id }: { id: string }) {
           <Card className={s.card}>
             <Text className={s.sectionTitle}><DatabaseRegular /> Datasets</Text>
             {(state.datasets ?? []).length === 0 ? (
-              <Caption1 className={s.empty}>This data product has no published datasets.</Caption1>
+              <EmptyState
+                icon={<DatabaseRegular />}
+                title="No published datasets"
+                body="This data product has no datasets published to it yet. Datasets appear here once the owner adds and publishes them."
+              />
             ) : (
               <Table size="small" aria-label="Datasets">
                 <TableHeader>
@@ -1203,7 +1226,11 @@ export function ConsumerDataProductDetail({ id }: { id: string }) {
           <Card className={s.card}>
             <Text className={s.sectionTitle}><BookRegular /> Glossary terms</Text>
             {(state.glossaryLinks ?? []).length === 0 ? (
-              <Caption1 className={s.empty}>No glossary terms are linked to this data product.</Caption1>
+              <EmptyState
+                icon={<BookRegular />}
+                title="No linked glossary terms"
+                body="No business glossary terms are linked to this data product yet. Linked terms appear here once the owner associates them."
+              />
             ) : (
               <div className={s.chips}>
                 {(state.glossaryLinks ?? []).map((g) => (
@@ -1293,10 +1320,12 @@ export function ConsumerDataProductDetail({ id }: { id: string }) {
           <Card className={s.card}>
             <Text className={s.sectionTitle}><KeyRegular /> My data access</Text>
             {myRequests.length === 0 ? (
-              <Caption1 className={s.empty}>
-                You have no access requests for this data product yet. Use{' '}
-                <strong>Request access</strong> above to submit one.
-              </Caption1>
+              <EmptyState
+                icon={<KeyRegular />}
+                title="No access requests yet"
+                body="You have not requested access to this data product yet. Submit a purpose-bound request to get started."
+                primaryAction={isOwner ? undefined : { label: 'Request access', onClick: () => setDialogOpen(true) }}
+              />
             ) : (
               <Table size="small" aria-label="My access requests">
                 <TableHeader>

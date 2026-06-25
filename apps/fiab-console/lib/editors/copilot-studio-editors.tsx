@@ -38,6 +38,7 @@ import type { FabricItemType } from '@/lib/catalog/fabric-item-types';
 import type { RibbonTab } from '@/lib/components/ribbon';
 import { KeyValueGrid } from '@/lib/components/ui/key-value-grid';
 import { CopilotTopicCanvas } from './copilot-topic-canvas';
+import { EmptyState } from '@/lib/components/empty-state';
 
 const useStyles = makeStyles({
   pad: { padding: tokens.spacingVerticalL, display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalM, minHeight: 0, flex: 1 },
@@ -45,11 +46,33 @@ const useStyles = makeStyles({
   form: { display: 'grid', gridTemplateColumns: '1fr 1fr', gap: tokens.spacingVerticalM, alignItems: 'start' },
   formCol: { display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalM, minWidth: 0 },
   cardGrid: { display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(260px, 1fr))', gap: tokens.spacingVerticalM },
-  card: { padding: tokens.spacingVerticalM, border: `1px solid ${tokens.colorNeutralStroke2}`, borderRadius: tokens.borderRadiusLarge, display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalS, minWidth: 0 },
+  card: {
+    padding: tokens.spacingVerticalM, border: `1px solid ${tokens.colorNeutralStroke2}`,
+    borderRadius: tokens.borderRadiusLarge, display: 'flex', flexDirection: 'column',
+    gap: tokens.spacingVerticalS, minWidth: 0,
+    backgroundColor: tokens.colorNeutralBackground1,
+    boxShadow: tokens.shadow4,
+    transitionProperty: 'box-shadow, transform',
+    transitionDuration: tokens.durationNormal,
+    transitionTimingFunction: tokens.curveEasyEase,
+    ':hover': { boxShadow: tokens.shadow16, transform: 'translateY(-1px)' },
+  },
   kpiGrid: { display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(180px, 1fr))', gap: tokens.spacingVerticalM },
-  kpi: { padding: tokens.spacingVerticalM, border: `1px solid ${tokens.colorNeutralStroke2}`, borderRadius: tokens.borderRadiusLarge, display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalXS },
+  kpi: {
+    padding: tokens.spacingVerticalM, border: `1px solid ${tokens.colorNeutralStroke2}`,
+    borderRadius: tokens.borderRadiusLarge, display: 'flex', flexDirection: 'column',
+    gap: tokens.spacingVerticalXS,
+    backgroundColor: tokens.colorNeutralBackground1,
+    boxShadow: tokens.shadow4,
+    transitionProperty: 'box-shadow',
+    transitionDuration: tokens.durationNormal,
+    transitionTimingFunction: tokens.curveEasyEase,
+    ':hover': { boxShadow: tokens.shadow16 },
+  },
   kpiValue: { fontSize: tokens.fontSizeBase700, fontWeight: 600 },
   treePad: { padding: tokens.spacingVerticalS },
+  sectionHeader: { display: 'flex', alignItems: 'center', gap: tokens.spacingHorizontalXS, color: tokens.colorNeutralForeground1 },
+  sectionIcon: { color: tokens.colorBrandForeground1, display: 'inline-flex', alignItems: 'center' },
   spark: {
     height: '60px', display: 'flex', alignItems: 'flex-end', gap: tokens.spacingHorizontalXXS,
     border: `1px solid ${tokens.colorNeutralStroke2}`, borderRadius: tokens.borderRadiusMedium, padding: tokens.spacingVerticalXS,
@@ -595,7 +618,13 @@ function KnowledgePanel({ envId, agentId }: { envId: string; agentId: string }) 
     } finally { setBusy(false); }
   }, [envId, refresh]);
 
-  if (!agentId) return <Caption1>Pick an agent to manage knowledge sources.</Caption1>;
+  if (!agentId) return (
+    <EmptyState
+      icon={<BookOpen20Regular />}
+      title="Select an agent"
+      body="Pick an environment and agent to view and add knowledge sources (URL, file, SharePoint, or Dataverse table)."
+    />
+  );
   return (
     <div className={s.formCol}>
       <ErrorBar error={error} hint={TENANT_HINT} />
@@ -622,9 +651,16 @@ function KnowledgePanel({ envId, agentId }: { envId: string; agentId: string }) 
           <Button appearance="primary" icon={<Add20Regular />} disabled={busy || !form.type} onClick={add}>Add</Button>
         </div>
       </div>
-      <Subtitle2>Sources ({items?.length ?? 0})</Subtitle2>
-      {items === null ? <Spinner size="tiny" /> : items.length === 0 ? (
-        <Caption1>No knowledge sources yet.</Caption1>
+      <Subtitle2 className={s.sectionHeader}>
+        <span className={s.sectionIcon}><BookOpen20Regular /></span>
+        Sources ({items?.length ?? 0})
+      </Subtitle2>
+      {items === null ? <Spinner size="tiny" label="Loading knowledge sources…" labelPosition="after" /> : items.length === 0 ? (
+        <EmptyState
+          icon={<BookOpen20Regular />}
+          title="No knowledge sources yet"
+          body="Ground this agent's answers in your content. Add a URL, file, SharePoint site, or Dataverse table using the form above."
+        />
       ) : (
         <Table size="small">
           <TableHeader>
@@ -790,7 +826,13 @@ function TopicsPanel({ envId, agentId }: { envId: string; agentId: string }) {
     } finally { setBusy(false); }
   }, [envId, selectedId, refresh]);
 
-  if (!agentId) return <Caption1>Pick an agent to manage topics.</Caption1>;
+  if (!agentId) return (
+    <EmptyState
+      icon={<Chat20Regular />}
+      title="Select an agent"
+      body="Pick an environment and agent to author conversation topics — trigger phrases plus a structured topic canvas."
+    />
+  );
   return (
     <div className={s.formCol}>
       <ErrorBar error={error} hint={TENANT_HINT} />
@@ -813,7 +855,14 @@ function TopicsPanel({ envId, agentId }: { envId: string; agentId: string }) {
           <Field label="Topic name" required>
             <Input id="topic-name-input" value={form.name} onChange={(_, d) => setFormField('name', d.value)} />
           </Field>
-          <Subtitle2>Existing topics ({topics?.length ?? 0})</Subtitle2>
+          <Subtitle2 className={s.sectionHeader}>
+            <span className={s.sectionIcon}><Chat20Regular /></span>
+            Existing topics ({topics?.length ?? 0})
+          </Subtitle2>
+          {topics === null && <Spinner size="tiny" label="Loading topics…" labelPosition="after" />}
+          {topics !== null && topics.length === 0 && (
+            <Caption1 style={{ color: tokens.colorNeutralForeground3 }}>No topics yet — create one above.</Caption1>
+          )}
           {(topics || []).map((t) => (
             <div key={t.id} className={s.card} style={{ cursor: 'pointer', borderColor: t.id === selectedId ? tokens.colorBrandStroke1 : undefined }}
                  onClick={() => {
@@ -936,7 +985,13 @@ function ActionsPanel({ envId, agentId }: { envId: string; agentId: string }) {
     } finally { setBusy(false); }
   }, [envId, refresh]);
 
-  if (!agentId) return <Caption1>Pick an agent to manage actions.</Caption1>;
+  if (!agentId) return (
+    <EmptyState
+      icon={<Flow20Regular />}
+      title="Select an agent"
+      body="Pick an environment and agent to bind actions — Power Automate flows, custom connectors, or prebuilt actions."
+    />
+  );
   return (
     <div className={s.formCol}>
       <ErrorBar error={error} hint={TENANT_HINT} />
@@ -965,9 +1020,16 @@ function ActionsPanel({ envId, agentId }: { envId: string; agentId: string }) {
           <Button appearance="primary" icon={<Add20Regular />} disabled={busy || !form.name} onClick={bind}>Bind action</Button>
         </div>
       </div>
-      <Subtitle2>Bound actions ({items?.length ?? 0})</Subtitle2>
-      {items === null ? <Spinner size="tiny" /> : items.length === 0 ? (
-        <Caption1>No actions bound to this agent yet.</Caption1>
+      <Subtitle2 className={s.sectionHeader}>
+        <span className={s.sectionIcon}><Flow20Regular /></span>
+        Bound actions ({items?.length ?? 0})
+      </Subtitle2>
+      {items === null ? <Spinner size="tiny" label="Loading actions…" labelPosition="after" /> : items.length === 0 ? (
+        <EmptyState
+          icon={<Flow20Regular />}
+          title="No actions bound yet"
+          body="Let this agent take action by binding a Power Automate flow, a custom connector, or a prebuilt action using the form above."
+        />
       ) : (
         <Table size="small">
           <TableHeader>
@@ -1100,7 +1162,13 @@ function ChannelsPanel({ envId, agentId, refreshSignal }: { envId: string; agent
     finally { setBusy(null); }
   }, [envId, agentId, configText, refresh]);
 
-  if (!agentId) return <Caption1>Pick an agent to publish channels.</Caption1>;
+  if (!agentId) return (
+    <EmptyState
+      icon={<Channel20Regular />}
+      title="Select an agent"
+      body="Pick an environment and agent to publish it to channels — Teams, web chat, Direct Line, Slack, Facebook, or a custom channel."
+    />
+  );
   const byType = new Map((items || []).map((c) => [c.type, c]));
   return (
     <div className={s.formCol}>
@@ -1258,7 +1326,13 @@ function TestChatPanel({ agentId }: { agentId: string }) {
     finally { setSending(false); }
   }, [token, conversationId, draft, poll]);
 
-  if (!agentId) return <Caption1>Pick an agent to open the test chat.</Caption1>;
+  if (!agentId) return (
+    <EmptyState
+      icon={<Chat20Regular />}
+      title="Save the agent to test it"
+      body="Once an agent is selected and saved, connect over Bot Framework Direct Line to chat with it — the same channel the in-product test panel uses."
+    />
+  );
   return (
     <div className={s.chatWrap}>
       <Caption1>
@@ -1392,7 +1466,10 @@ export function CopilotAnalyticsEditor({ item, id }: { item: FabricItemType; id:
                   <div className={s.kpiValue}>{data.satisfactionScore !== undefined ? data.satisfactionScore.toFixed(2) : '—'}</div>
                 </div>
               </div>
-              <Subtitle2>Daily sessions</Subtitle2>
+              <Subtitle2 className={s.sectionHeader}>
+                <span className={s.sectionIcon}><DataBarVertical20Regular /></span>
+                Daily sessions
+              </Subtitle2>
               {(data.daily && data.daily.length > 0) ? (
                 <div className={s.spark} aria-label="Daily session bar chart">
                   {data.daily.map((d, i) => (
@@ -1483,10 +1560,20 @@ export function CopilotTemplateLibraryEditor({ item, id }: { item: FabricItemTyp
           <EnvironmentPicker value={envId} onChange={setEnvId} label="Target environment" />
           <ErrorBar error={error} hint={TENANT_HINT} />
           {result && <MessageBar intent="success"><MessageBarBody><MessageBarTitle>Template instantiated</MessageBarTitle>{result.msg}</MessageBarBody></MessageBar>}
-          {templates === null ? <Spinner size="small" label="Loading templates…" labelPosition="after" /> : (
+          {templates === null ? <Spinner size="small" label="Loading templates…" labelPosition="after" /> : templates.length === 0 ? (
+            <EmptyState
+              icon={<Library20Regular />}
+              title="No templates available"
+              body="The CSA template library is empty for this deployment. Templates are seeded into Cosmos — check the catalog seed or refresh."
+              primaryAction={{ label: 'Refresh', onClick: refresh, appearance: 'outline' }}
+            />
+          ) : (
             byCategory.map(([cat, tmpls]) => (
               <div key={cat} className={s.formCol}>
-                <Subtitle2>{cat}</Subtitle2>
+                <Subtitle2 className={s.sectionHeader}>
+                  <span className={s.sectionIcon}><Library20Regular /></span>
+                  {cat}
+                </Subtitle2>
                 <div className={s.cardGrid}>
                   {tmpls.map((t) => (
                     <div key={t.id} className={s.card}>

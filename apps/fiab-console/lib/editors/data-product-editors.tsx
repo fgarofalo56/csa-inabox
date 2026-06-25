@@ -15,10 +15,14 @@ import { useEffect, useMemo, useState, useCallback } from 'react';
 import {
   Subtitle2, Body1, Caption1, Badge, Button, Card, CardHeader, Input, Label,
   Table, TableHeader, TableRow, TableHeaderCell, TableBody, TableCell,
-  MessageBar, MessageBarBody, MessageBarTitle,
+  MessageBar, MessageBarBody, MessageBarTitle, Spinner, Skeleton, SkeletonItem,
   makeStyles, tokens,
 } from '@fluentui/react-components';
-import { Add20Regular, BoxToolbox20Regular, Rocket20Regular, Search20Regular } from '@fluentui/react-icons';
+import {
+  Add20Regular, BoxToolbox20Regular, Rocket20Regular, Search20Regular,
+  AppsListDetail20Regular, GridDots20Regular, HeartPulse20Regular, Box20Regular,
+} from '@fluentui/react-icons';
+import { EmptyState } from '@/lib/components/empty-state';
 import { ItemEditorChrome } from './item-editor-chrome';
 import type { FabricItemType } from '@/lib/catalog/fabric-item-types';
 import type { RibbonTab } from '@/lib/components/ribbon';
@@ -26,11 +30,38 @@ import type { RibbonTab } from '@/lib/components/ribbon';
 const useStyles = makeStyles({
   pad: { padding: tokens.spacingHorizontalL, display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalM },
   grid: { display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(280px, 1fr))', gap: tokens.spacingHorizontalM },
-  card: { padding: tokens.spacingHorizontalM, cursor: 'pointer', border: `1px solid ${tokens.colorNeutralStroke2}`, borderRadius: tokens.borderRadiusMedium, minWidth: 0, overflowWrap: 'anywhere', wordBreak: 'break-word' },
-  cardActive: { padding: tokens.spacingHorizontalM, border: `2px solid ${tokens.colorBrandStroke1}`, borderRadius: tokens.borderRadiusMedium, background: tokens.colorBrandBackground2, minWidth: 0, overflowWrap: 'anywhere', wordBreak: 'break-word' },
+  card: {
+    padding: tokens.spacingHorizontalM,
+    cursor: 'pointer',
+    border: `1px solid ${tokens.colorNeutralStroke2}`,
+    borderRadius: tokens.borderRadiusLarge,
+    boxShadow: tokens.shadow4,
+    backgroundColor: tokens.colorNeutralBackground1,
+    transition: 'box-shadow 0.15s ease, transform 0.15s ease, border-color 0.15s ease',
+    minWidth: 0,
+    overflowWrap: 'anywhere',
+    wordBreak: 'break-word',
+    ':hover': {
+      boxShadow: tokens.shadow16,
+      transform: 'translateY(-2px)',
+      border: `1px solid ${tokens.colorBrandStroke1}`,
+    },
+  },
+  cardActive: {
+    padding: tokens.spacingHorizontalM,
+    border: `2px solid ${tokens.colorBrandStroke1}`,
+    borderRadius: tokens.borderRadiusLarge,
+    boxShadow: tokens.shadow16,
+    backgroundColor: tokens.colorBrandBackground2,
+    minWidth: 0,
+    overflowWrap: 'anywhere',
+    wordBreak: 'break-word',
+  },
   treePad: { padding: tokens.spacingHorizontalM, display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalS },
   field: { display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalXS },
   tableWrap: { overflow: 'auto', maxHeight: '360px', border: `1px solid ${tokens.colorNeutralStroke2}`, borderRadius: tokens.borderRadiusSmall },
+  sectionHeader: { display: 'flex', alignItems: 'center', gap: tokens.spacingHorizontalXS },
+  searchInput: { maxWidth: '420px' },
 });
 
 interface Template {
@@ -149,7 +180,7 @@ export function DataProductTemplateEditor({ item, id }: { item: FabricItemType; 
       ribbon={ribbon}
       leftPanel={
         <div className={s.treePad}>
-          <Subtitle2>Templates ({templates.length})</Subtitle2>
+          <Subtitle2 className={s.sectionHeader}><AppsListDetail20Regular />Templates ({templates.length})</Subtitle2>
           <Caption1>CSA-curated push-button patterns. Click a card to inspect components + est. cost.</Caption1>
         </div>
       }
@@ -162,19 +193,42 @@ export function DataProductTemplateEditor({ item, id }: { item: FabricItemType; 
               onChange={(_, d) => setFilter(d.value)}
               placeholder="Search templates by name, category, or component…"
               contentBefore={<Search20Regular />}
-              style={{ maxWidth: 420 }}
+              className={s.searchInput}
             />
-            <div className={s.grid}>
-              {filtered.map((t) => (
-                <div key={t.slug} className={s.card} onClick={() => setSelected(t)}>
-                  <Subtitle2>{t.displayName}</Subtitle2>
-                  <Caption1>{t.category} · ~${t.estimatedMonthlyCostUsd.toLocaleString()}/mo</Caption1>
-                  <Body1 style={{ marginTop: tokens.spacingVerticalS }}>{t.description}</Body1>
-                  <Caption1 style={{ marginTop: tokens.spacingVerticalS }}>{t.components.length} components</Caption1>
-                </div>
-              ))}
-              {filtered.length === 0 && <Caption1>No templates match "{filter}".</Caption1>}
-            </div>
+            {refreshing && templates.length === 0 ? (
+              <div className={s.grid} aria-busy="true">
+                {Array.from({ length: 6 }).map((_, i) => (
+                  <div key={i} className={s.card} style={{ cursor: 'default' }}>
+                    <Skeleton aria-label="Loading templates">
+                      <SkeletonItem size={24} style={{ width: '70%', marginBottom: tokens.spacingVerticalS }} />
+                      <SkeletonItem size={16} style={{ width: '50%', marginBottom: tokens.spacingVerticalS }} />
+                      <SkeletonItem size={16} style={{ width: '90%', marginBottom: tokens.spacingVerticalXS }} />
+                      <SkeletonItem size={16} style={{ width: '40%' }} />
+                    </Skeleton>
+                  </div>
+                ))}
+              </div>
+            ) : filtered.length === 0 ? (
+              <EmptyState
+                icon={filter ? <Search20Regular /> : <BoxToolbox20Regular />}
+                title={filter ? 'No matching templates' : 'No templates available'}
+                body={filter
+                  ? `No templates match "${filter}". Try a different name, category, or component.`
+                  : 'CSA-curated data-product templates will appear here. Use Refresh to reload the library.'}
+                primaryAction={filter ? { label: 'Clear search', onClick: () => setFilter(''), appearance: 'secondary' } : undefined}
+              />
+            ) : (
+              <div className={s.grid}>
+                {filtered.map((t) => (
+                  <div key={t.slug} className={s.card} onClick={() => setSelected(t)}>
+                    <Subtitle2>{t.displayName}</Subtitle2>
+                    <Caption1>{t.category} · ~${t.estimatedMonthlyCostUsd.toLocaleString()}/mo</Caption1>
+                    <Body1 style={{ marginTop: tokens.spacingVerticalS }}>{t.description}</Body1>
+                    <Caption1 style={{ marginTop: tokens.spacingVerticalS }}>{t.components.length} components</Caption1>
+                  </div>
+                ))}
+              </div>
+            )}
             </>
           ) : (
             <>
@@ -184,7 +238,7 @@ export function DataProductTemplateEditor({ item, id }: { item: FabricItemType; 
               <Subtitle2>{selected.displayName}</Subtitle2>
               <Caption1>{selected.category} · estimated ~${selected.estimatedMonthlyCostUsd.toLocaleString()}/mo</Caption1>
               <Body1>{selected.description}</Body1>
-              <Subtitle2 style={{ marginTop: tokens.spacingVerticalM }}>Components</Subtitle2>
+              <Subtitle2 className={s.sectionHeader} style={{ marginTop: tokens.spacingVerticalM }}><BoxToolbox20Regular />Components</Subtitle2>
               <div className={s.tableWrap}>
                 <Table size="small">
                   <TableHeader><TableRow>
@@ -325,15 +379,26 @@ export function DataProductInstanceEditor({ item, id }: { item: FabricItemType; 
         { label: 'Health', onClick: refreshHealth },
       ] }] }]}
       leftPanel={<div className={s.treePad}>
-        <Subtitle2>Instance</Subtitle2>
+        <Subtitle2 className={s.sectionHeader}><Box20Regular />Instance</Subtitle2>
         <Caption1>{instance?.displayName || '—'}</Caption1>
         <Caption1>Template: <code>{instance?.state?.template || '—'}</code></Caption1>
-        <Button size="small" onClick={refreshHealth} style={{ marginTop: tokens.spacingVerticalS, alignSelf: 'flex-start' }}>Check component health</Button>
+        <Button size="small" icon={<HeartPulse20Regular />} onClick={refreshHealth} style={{ marginTop: tokens.spacingVerticalS, alignSelf: 'flex-start' }}>Check component health</Button>
       </div>}
       main={
         <div className={s.pad}>
           {err && <MessageBar intent="error"><MessageBarBody><span style={{ overflowWrap: 'anywhere', wordBreak: 'break-word' }}>{err}</span></MessageBarBody></MessageBar>}
-          <Subtitle2>Components ({components.length})</Subtitle2>
+          {id !== 'new' && !instance && !err ? (
+            <Spinner size="small" label="Loading instance…" labelPosition="after" style={{ justifyContent: 'flex-start' }} />
+          ) : components.length === 0 ? (
+            <EmptyState
+              icon={<BoxToolbox20Regular />}
+              title="No components yet"
+              body="This data product has no spawned components. Instantiate from a CSA-curated template to populate this instance with its child items."
+              primaryAction={{ label: 'Browse templates', href: '/items/data-product-template/new' }}
+            />
+          ) : (
+          <>
+          <Subtitle2 className={s.sectionHeader}><GridDots20Regular />Components ({components.length})</Subtitle2>
           <div className={s.tableWrap}>
             <Table size="small">
               <TableHeader><TableRow>
@@ -371,6 +436,8 @@ export function DataProductInstanceEditor({ item, id }: { item: FabricItemType; 
                 {errors.map((e, i) => (<div key={i} style={{ overflowWrap: 'anywhere', wordBreak: 'break-word' }}><code>{e.slug}</code>: {e.error}</div>))}
               </MessageBarBody>
             </MessageBar>
+          )}
+          </>
           )}
         </div>
       }

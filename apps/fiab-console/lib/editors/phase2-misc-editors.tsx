@@ -20,7 +20,7 @@
  */
 
 import {
-  Subtitle2, Caption1, Body1, Input, Dropdown, Option, Button, Badge, Textarea,
+  Subtitle2, Caption1, Input, Dropdown, Option, Button, Badge, Textarea,
   MessageBar, MessageBarBody, MessageBarTitle, Spinner,
   Table, TableHeader, TableRow, TableHeaderCell, TableBody, TableCell,
   Tab, TabList,
@@ -33,8 +33,10 @@ import type { FabricItemType } from '@/lib/catalog/fabric-item-types';
 import type { RibbonTab } from '@/lib/components/ribbon';
 import { KeyValueGrid } from '@/lib/components/ui/key-value-grid';
 import { ComputePicker } from '@/lib/components/compute-picker';
+import { EmptyState } from '@/lib/components/empty-state';
 import {
   DocumentRegular, DocumentSettingsRegular, CodeRegular, DocumentTextRegular, HistoryRegular,
+  BoxRegular, SettingsRegular, LibraryRegular, ServerRegular,
 } from '@fluentui/react-icons';
 import { DbtModelGraph } from '@/lib/components/dbt/dbt-model-graph';
 import { MonacoTextarea } from '@/lib/components/editor/monaco-textarea';
@@ -50,24 +52,15 @@ const useStyles = makeStyles({
   toolbar: { display: 'flex', gap: tokens.spacingHorizontalS, alignItems: 'center', flexWrap: 'wrap', marginTop: tokens.spacingVerticalS },
   status: { display: 'flex', gap: tokens.spacingHorizontalS, alignItems: 'center' },
   resultBox: { marginTop: tokens.spacingVerticalL, borderTop: `1px solid ${tokens.colorNeutralStroke2}`, paddingTop: tokens.spacingVerticalM },
-  mono: { fontFamily: 'Consolas, "Cascadia Code", monospace', fontSize: tokens.fontSizeBase200 },
+  sectionHeader: { display: 'flex', alignItems: 'center', gap: tokens.spacingHorizontalS, color: tokens.colorNeutralForeground1 },
+  sectionIcon: { color: tokens.colorBrandForeground1, fontSize: tokens.lineHeightBase400, display: 'flex' },
+  mono: { fontFamily: tokens.fontFamilyMonospace, fontSize: tokens.fontSizeBase200 },
   msgCell: { overflowWrap: 'anywhere', wordBreak: 'break-word', minWidth: 0, maxWidth: '420px' },
   builderHeader: {
     display: 'flex', alignItems: 'center', gap: tokens.spacingHorizontalS, flexWrap: 'wrap',
     color: tokens.colorNeutralForeground2,
     minWidth: 0, overflowWrap: 'anywhere', wordBreak: 'break-word',
   },
-  emptyState: {
-    display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center',
-    gap: tokens.spacingVerticalXS, textAlign: 'center',
-    padding: `${tokens.spacingVerticalXXL} ${tokens.spacingHorizontalL}`,
-    color: tokens.colorNeutralForeground3,
-    border: `1px dashed ${tokens.colorNeutralStroke2}`,
-    borderRadius: tokens.borderRadiusLarge,
-    backgroundColor: tokens.colorNeutralBackground2,
-    marginTop: tokens.spacingVerticalS,
-  },
-  emptyIcon: { fontSize: '28px', color: tokens.colorNeutralForeground4 },
   fileGrid: {
     display: 'grid', gridTemplateColumns: 'minmax(0, 260px) minmax(0, 1fr)', gap: tokens.spacingHorizontalM,
     minHeight: '360px', alignItems: 'stretch',
@@ -88,7 +81,7 @@ const useStyles = makeStyles({
   },
   json: {
     width: '100%', minHeight: '120px', padding: tokens.spacingVerticalS,
-    fontFamily: 'Consolas, "Cascadia Code", monospace', fontSize: tokens.fontSizeBase200,
+    fontFamily: tokens.fontFamilyMonospace, fontSize: tokens.fontSizeBase200,
     border: `1px solid ${tokens.colorNeutralStroke2}`, borderRadius: tokens.borderRadiusMedium,
     backgroundColor: tokens.colorNeutralBackground3, color: tokens.colorNeutralForeground1,
     resize: 'vertical',
@@ -358,14 +351,20 @@ export function EnvironmentEditor({ item, id }: { item: FabricItemType; id: stri
 
           {tab === 'requirements' && (
             <>
-              <Subtitle2>requirements.txt</Subtitle2>
+              <div className={styles.sectionHeader}>
+                <LibraryRegular className={styles.sectionIcon} />
+                <Subtitle2>requirements.txt</Subtitle2>
+              </div>
               <Textarea value={requirements} onChange={(_, d) => { setRequirements(d.value); setDirty(true); }} rows={10}
                 placeholder={'pandas==2.2.2\nscikit-learn==1.4.2\nmlflow==2.13.0'} />
             </>
           )}
           {tab === 'conf' && (
             <>
-              <Subtitle2>Spark configuration</Subtitle2>
+              <div className={styles.sectionHeader}>
+                <SettingsRegular className={styles.sectionIcon} />
+                <Subtitle2>Spark configuration</Subtitle2>
+              </div>
               <Caption1>Key/value pairs passed to the Spark session (spark.conf).</Caption1>
               <KeyValueGrid value={confText} onChange={(v) => { setConfText(v); setDirty(true); }}
                 keyLabel="Conf key" valueLabel="Value"
@@ -374,14 +373,20 @@ export function EnvironmentEditor({ item, id }: { item: FabricItemType; id: stri
           )}
           {tab === 'jars' && (
             <>
-              <Subtitle2>Custom JAR URIs (one per line)</Subtitle2>
+              <div className={styles.sectionHeader}>
+                <BoxRegular className={styles.sectionIcon} />
+                <Subtitle2>Custom JAR URIs (one per line)</Subtitle2>
+              </div>
               <Textarea value={jarsText} onChange={(_, d) => { setJarsText(d.value); setDirty(true); }} rows={6}
                 placeholder={'abfss://libs@<account>.dfs.core.windows.net/myudf.jar'} />
             </>
           )}
           {tab === 'apply' && (
             <>
-              <Subtitle2>Target Spark pool</Subtitle2>
+              <div className={styles.sectionHeader}>
+                <ServerRegular className={styles.sectionIcon} />
+                <Subtitle2>Target Spark pool</Subtitle2>
+              </div>
               <div className={styles.field}>
                 <Caption1>Pool</Caption1>
                 <Dropdown value={targetPool} selectedOptions={targetPool ? [targetPool] : []}
@@ -817,13 +822,16 @@ export function DbtJobEditor({ item, id }: { item: FabricItemType; id: string })
                 </div>
               )}
               <div className={styles.resultBox}>
-                <Subtitle2>Recent runs</Subtitle2>
+                <div className={styles.sectionHeader}>
+                  <HistoryRegular className={styles.sectionIcon} />
+                  <Subtitle2>Recent runs</Subtitle2>
+                </div>
                 {runs.length === 0 ? (
-                  <div className={styles.emptyState}>
-                    <HistoryRegular className={styles.emptyIcon} />
-                    <Body1>No runs yet</Body1>
-                    <Caption1>Databricks job runs appear here; Synapse / Fabric runs show their log above.</Caption1>
-                  </div>
+                  <EmptyState
+                    icon={<HistoryRegular />}
+                    title="No runs yet"
+                    body="Databricks job runs appear here; Synapse / Fabric runs show their log above. Run dbt to kick off the first run."
+                  />
                 ) : (
                   <Table size="small" aria-label="dbt runs">
                     <TableHeader>

@@ -41,9 +41,12 @@ import {
 import {
   ArrowSortUp16Regular, ArrowSortDown16Regular, ArrowSort16Regular,
   Folder16Regular, Document16Regular, ChevronRight16Regular, ChevronDown16Regular,
+  BeakerRegular, DataHistogramRegular, DataLineRegular, ChartMultipleRegular,
+  TableSimpleRegular, FlashRegular,
 } from '@fluentui/react-icons';
 import { ItemEditorChrome } from './item-editor-chrome';
 import { NewItemBrowseGate } from './new-item-gate';
+import { EmptyState } from '@/lib/components/empty-state';
 import type { FabricItemType } from '@/lib/catalog/fabric-item-types';
 import type { RibbonTab } from '@/lib/components/ribbon';
 import {
@@ -57,10 +60,15 @@ const useStyles = makeStyles({
   pad: { padding: tokens.spacingVerticalM, display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalM },
   card: {
     border: `1px solid ${tokens.colorNeutralStroke2}`,
-    borderRadius: tokens.borderRadiusMedium,
+    borderRadius: tokens.borderRadiusLarge,
     padding: tokens.spacingVerticalM,
     background: tokens.colorNeutralBackground1,
+    boxShadow: tokens.shadow4,
+    transition: 'box-shadow 0.15s ease, transform 0.15s ease',
+    ':hover': { boxShadow: tokens.shadow16 },
   },
+  sectionHeader: { display: 'flex', alignItems: 'center', gap: tokens.spacingHorizontalSNudge },
+  sectionIcon: { color: tokens.colorBrandForeground1, display: 'inline-flex', flexShrink: 0 },
   toolbar: { display: 'flex', gap: tokens.spacingHorizontalS, alignItems: 'flex-end', flexWrap: 'wrap' },
   sortHeader: { cursor: 'pointer', userSelect: 'none' },
   mono: { fontFamily: 'monospace', fontSize: tokens.fontSizeBase200, overflowWrap: 'anywhere', wordBreak: 'break-word' },
@@ -242,11 +250,11 @@ function ArtifactTree({ runId }: { runId: string }) {
               style={{ cursor: 'pointer', display: 'inline-flex', alignItems: 'center' }}
             >
               {isOpen ? <ChevronDown16Regular /> : <ChevronRight16Regular />}
-              <Folder16Regular style={{ margin: '0 4px' }} />
+              <Folder16Regular style={{ margin: `0 ${tokens.spacingHorizontalXS}`, color: tokens.colorBrandForeground1 }} />
             </span>
           ) : (
-            <span style={{ display: 'inline-flex', alignItems: 'center', paddingLeft: 16 }}>
-              <Document16Regular style={{ margin: '0 4px' }} />
+            <span style={{ display: 'inline-flex', alignItems: 'center', paddingLeft: tokens.spacingHorizontalL }}>
+              <Document16Regular style={{ margin: `0 ${tokens.spacingHorizontalXS}`, color: tokens.colorNeutralForeground3 }} />
             </span>
           )}
           <span style={{ minWidth: 0, overflowWrap: 'anywhere', wordBreak: 'break-word' }}>{node.path.split('/').pop() || node.path}</span>
@@ -526,7 +534,10 @@ function MlExperimentEditorBody({ item, id }: { item: FabricItemType; id: string
           {!loading && configured && (
             <>
               <div style={{ display: 'flex', alignItems: 'baseline', gap: tokens.spacingHorizontalM, flexWrap: 'wrap' }}>
-                <Subtitle2>Experiment: {experiment?.name || id}</Subtitle2>
+                <span className={s.sectionHeader}>
+                  <BeakerRegular className={s.sectionIcon} aria-hidden />
+                  <Subtitle2>Experiment: {experiment?.name || id}</Subtitle2>
+                </span>
                 <Caption1 style={{ color: tokens.colorNeutralForeground3 }}>
                   {experiment?.experimentId ? `id ${experiment.experimentId} · ` : ''}{runs.length} run(s)
                 </Caption1>
@@ -562,13 +573,11 @@ function MlExperimentEditorBody({ item, id }: { item: FabricItemType; id: string
                   </div>
 
                   {runs.length === 0 ? (
-                    <MessageBar intent="info">
-                      <MessageBarBody>
-                        <MessageBarTitle>No runs for this experiment</MessageBarTitle>
-                        Log a run with <code>mlflow.start_run()</code> + <code>mlflow.log_metric()</code> under{' '}
-                        <strong>{experiment?.name || id}</strong>.
-                      </MessageBarBody>
-                    </MessageBar>
+                    <EmptyState
+                      icon={<BeakerRegular />}
+                      title="No runs for this experiment"
+                      body={`Log a run with mlflow.start_run() + mlflow.log_metric() under "${experiment?.name || id}", then reload to see its runs, metric step charts, params, tags, and artifacts.`}
+                    />
                   ) : (
                     <div style={{ overflowX: 'auto' }}>
                       <Table aria-label="MLflow runs" size="small">
@@ -643,7 +652,10 @@ function MlExperimentEditorBody({ item, id }: { item: FabricItemType; id: string
               {/* ---------- DETAIL ---------- */}
               {view === 'detail' && selectedRun && (
                 <div className={s.card} style={{ display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalM }}>
-                  <Subtitle2>Run: {selectedRun.runName || selectedRun.runId}</Subtitle2>
+                  <span className={s.sectionHeader}>
+                    <FlashRegular className={s.sectionIcon} aria-hidden />
+                    <Subtitle2>Run: {selectedRun.runName || selectedRun.runId}</Subtitle2>
+                  </span>
                   <div style={{ display: 'flex', gap: tokens.spacingHorizontalS, flexWrap: 'wrap' }}>
                     <Badge appearance="outline" color={statusColor(selectedRun.status)}>{selectedRun.status || '—'}</Badge>
                     <Badge appearance="outline">start: {fmtEpochMs(selectedRun.startTime)}</Badge>
@@ -741,7 +753,10 @@ function MlExperimentEditorBody({ item, id }: { item: FabricItemType; id: string
               {/* ---------- COMPARE ---------- */}
               {view === 'compare' && (
                 <div className={s.card} style={{ display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalM }}>
-                  <Subtitle2>Compare {checkedRuns.length} runs</Subtitle2>
+                  <span className={s.sectionHeader}>
+                    <ChartMultipleRegular className={s.sectionIcon} aria-hidden />
+                    <Subtitle2>Compare {checkedRuns.length} runs</Subtitle2>
+                  </span>
                   {checkedRuns.length < 2 ? (
                     <MessageBar intent="info"><MessageBarBody>Select at least 2 runs (checkboxes in the Runs tab) to compare.</MessageBarBody></MessageBar>
                   ) : (
@@ -755,7 +770,10 @@ function MlExperimentEditorBody({ item, id }: { item: FabricItemType; id: string
                         ))}
                       </div>
 
-                      <Subtitle2>Overlaid metric step chart</Subtitle2>
+                      <span className={s.sectionHeader}>
+                        <DataLineRegular className={s.sectionIcon} aria-hidden />
+                        <Subtitle2>Overlaid metric step chart</Subtitle2>
+                      </span>
                       <div className={s.toolbar}>
                         <Field label="Metric">
                           <Dropdown
@@ -774,12 +792,18 @@ function MlExperimentEditorBody({ item, id }: { item: FabricItemType; id: string
                         ? <MetricStepChart metricLabel={compareMetric} series={compareSeries} />
                         : !compareLoading && compareMetric && <Caption1 style={{ color: tokens.colorNeutralForeground3 }}>No step history for <code>{compareMetric}</code> on the selected runs.</Caption1>}
 
-                      <Subtitle2 style={{ marginTop: tokens.spacingVerticalS }}>Parallel coordinates</Subtitle2>
+                      <span className={s.sectionHeader} style={{ marginTop: tokens.spacingVerticalS }}>
+                        <DataHistogramRegular className={s.sectionIcon} aria-hidden />
+                        <Subtitle2>Parallel coordinates</Subtitle2>
+                      </span>
                       {parallelAxes.length > 0
                         ? <ParallelCoordinates runs={checkedRuns} axes={parallelAxes} />
                         : <Caption1 style={{ color: tokens.colorNeutralForeground3 }}>No numeric metrics/params to plot across the selected runs.</Caption1>}
 
-                      <Subtitle2 style={{ marginTop: tokens.spacingVerticalS }}>Side-by-side</Subtitle2>
+                      <span className={s.sectionHeader} style={{ marginTop: tokens.spacingVerticalS }}>
+                        <TableSimpleRegular className={s.sectionIcon} aria-hidden />
+                        <Subtitle2>Side-by-side</Subtitle2>
+                      </span>
                       <div style={{ overflowX: 'auto' }}>
                         <Table aria-label="Compare runs" size="small">
                           <TableHeader>

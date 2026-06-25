@@ -114,6 +114,9 @@ const useStyles = makeStyles({
   tabBar: { padding: `${tokens.spacingVerticalS} ${tokens.spacingHorizontalL} 0`, borderBottom: `1px solid ${tokens.colorNeutralStroke2}` },
   card: { padding: tokens.spacingVerticalM, border: `1px solid ${tokens.colorNeutralStroke2}`, borderRadius: tokens.borderRadiusLarge },
   cardGrid: { display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(220px, 1fr))', gap: tokens.spacingVerticalM },
+  /* Icon + title section header for icon-less Subtitle2 sections. */
+  secHead: { display: 'flex', alignItems: 'center', gap: tokens.spacingHorizontalS },
+  secHeadIcon: { color: tokens.colorBrandForeground1, flexShrink: 0 },
 
   /* ---- Data-agent build tab — sectioned, card-based, web-3.0 ---- */
   daSection: {
@@ -136,8 +139,9 @@ const useStyles = makeStyles({
     padding: tokens.spacingVerticalM, borderRadius: tokens.borderRadiusLarge,
     border: `1px solid ${tokens.colorNeutralStroke2}`, borderLeftWidth: '4px', borderLeftColor: tokens.colorBrandStroke1,
     backgroundColor: tokens.colorNeutralBackground1,
+    boxShadow: tokens.shadow4,
     transitionProperty: 'box-shadow', transitionDuration: tokens.durationFaster,
-    ':hover': { boxShadow: tokens.shadow4 },
+    ':hover': { boxShadow: tokens.shadow16 },
   },
   daSrcHead: { display: 'flex', alignItems: 'center', gap: tokens.spacingHorizontalS },
   daSrcIcon: {
@@ -247,6 +251,9 @@ const useStyles = makeStyles({
     padding: tokens.spacingVerticalM, borderRadius: tokens.borderRadiusLarge,
     border: `1px solid ${tokens.colorNeutralStroke2}`, borderLeftWidth: '4px', borderLeftColor: tokens.colorBrandStroke1,
     backgroundColor: tokens.colorNeutralBackground1,
+    boxShadow: tokens.shadow4,
+    transitionProperty: 'box-shadow', transitionDuration: tokens.durationFaster,
+    ':hover': { boxShadow: tokens.shadow16 },
   },
   ontoActionHead: { display: 'flex', alignItems: 'center', gap: tokens.spacingHorizontalS, flexWrap: 'wrap' },
   ontoTableWrap: {
@@ -293,6 +300,9 @@ const useStyles = makeStyles({
     padding: tokens.spacingVerticalM, borderRadius: tokens.borderRadiusLarge,
     border: `1px solid ${tokens.colorNeutralStroke2}`, borderLeftWidth: '4px', borderLeftColor: tokens.colorBrandStroke1,
     backgroundColor: tokens.colorNeutralBackground1,
+    boxShadow: tokens.shadow4,
+    transitionProperty: 'box-shadow', transitionDuration: tokens.durationFaster,
+    ':hover': { boxShadow: tokens.shadow16 },
   },
   planKpiValue: { fontSize: tokens.fontSizeHero700, fontWeight: tokens.fontWeightSemibold, lineHeight: tokens.lineHeightHero700 },
   planInsight: {
@@ -536,7 +546,7 @@ export function GraphqlApiEditor({ item, id }: { item: FabricItemType; id: strin
     <ItemEditorChrome item={item} id={id} ribbon={ribbon} main={
       <div className={s.pad}>
         {loading && <Spinner size="small" label="Loading…" labelPosition="after" />}
-        <Subtitle2>API configuration</Subtitle2>
+        <div className={s.secHead}><Settings20Regular className={s.secHeadIcon} /><Subtitle2>API configuration</Subtitle2></div>
         {/* v3.28 Phase 4.5: functional setState so publish-to-APIM (which calls
             setState(next) after the request) doesn't clobber concurrent typing. */}
         <Caption1>Display name</Caption1>
@@ -556,7 +566,7 @@ export function GraphqlApiEditor({ item, id }: { item: FabricItemType; id: strin
             label={state.subscriptionRequired ? 'Yes' : 'No (anonymous)'}
           />
         </Field>
-        <Subtitle2 style={{ marginTop: tokens.spacingVerticalS }}>Schema (SDL)</Subtitle2>
+        <div className={s.secHead} style={{ marginTop: tokens.spacingVerticalS }}><Table20Regular className={s.secHeadIcon} /><Subtitle2>Schema (SDL)</Subtitle2></div>
         <MonacoTextarea value={state.sdl} onChange={(v) => setState((p) => ({ ...p, sdl: v }))} language="graphql" height={260} minHeight={200} ariaLabel="GraphQL SDL" />
         {state.lastPublishedAt && (
           <Caption1 style={{ color: tokens.colorNeutralForeground3 }}>
@@ -570,7 +580,7 @@ export function GraphqlApiEditor({ item, id }: { item: FabricItemType; id: strin
         )}
 
         {/* Test query console — runs against the published APIM GraphQL endpoint. */}
-        <Subtitle2 style={{ marginTop: tokens.spacingVerticalS }}>Test query console</Subtitle2>
+        <div className={s.secHead} style={{ marginTop: tokens.spacingVerticalS }}><Play20Regular className={s.secHeadIcon} /><Subtitle2>Test query console</Subtitle2></div>
         <Caption1 style={{ color: tokens.colorNeutralForeground3 }}>Runs against the published APIM GraphQL endpoint. Publish first if you haven&apos;t.</Caption1>
         <MonacoTextarea value={queryText} onChange={setQueryText} language="graphql" height={140} minHeight={100} ariaLabel="GraphQL query" />
         <Caption1>Variables (JSON, optional)</Caption1>
@@ -729,11 +739,11 @@ export function UserDataFunctionEditor({ item, id }: { item: FabricItemType; id:
             <Field label="Default entrypoint"><Input value={state.entrypoint} onChange={(_, d) => setState((p) => ({ ...p, entrypoint: d.value }))} /></Field>
           </div>
 
-          <Subtitle2 style={{ marginTop: tokens.spacingVerticalS }}>function_app.py</Subtitle2>
+          <div className={s.secHead} style={{ marginTop: tokens.spacingVerticalS }}><Flash20Regular className={s.secHeadIcon} /><Subtitle2>function_app.py</Subtitle2></div>
           <MonacoTextarea value={state.source} onChange={(v) => setState((p) => ({ ...p, source: v }))} language="python" height={280} minHeight={200} ariaLabel="Function source" />
 
           {/* Test / Run panel */}
-          <Subtitle2 style={{ marginTop: tokens.spacingVerticalS }}>Test / Run</Subtitle2>
+          <div className={s.secHead} style={{ marginTop: tokens.spacingVerticalS }}><Play20Regular className={s.secHeadIcon} /><Subtitle2>Test / Run</Subtitle2></div>
           <div style={{ border: `1px solid ${tokens.colorNeutralStroke2}`, borderRadius: tokens.borderRadiusLarge, padding: tokens.spacingVerticalM, display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalS }}>
             <Field label="Function">
               <Dropdown
@@ -763,11 +773,11 @@ export function UserDataFunctionEditor({ item, id }: { item: FabricItemType; id:
           </div>
 
           {/* Manage connections */}
-          <Subtitle2 style={{ marginTop: tokens.spacingVerticalS }}>Manage connections (Fabric data sources)</Subtitle2>
+          <div className={s.secHead} style={{ marginTop: tokens.spacingVerticalS }}><Link20Regular className={s.secHeadIcon} /><Subtitle2>Manage connections (Fabric data sources)</Subtitle2></div>
           <Input value={state.connections} onChange={(_, d) => setState((p) => ({ ...p, connections: d.value }))} placeholder="fin-warehouse, ldn-gold-lakehouse" />
 
           {/* Library management */}
-          <Subtitle2 style={{ marginTop: tokens.spacingVerticalS }}>Library management</Subtitle2>
+          <div className={s.secHead} style={{ marginTop: tokens.spacingVerticalS }}><DataUsage20Regular className={s.secHeadIcon} /><Subtitle2>Library management</Subtitle2></div>
           <div style={{ display: 'flex', gap: tokens.spacingHorizontalS, alignItems: 'flex-end', flexWrap: 'wrap' }}>
             <Field label="Package"><Input value={libName} onChange={(_, d) => setLibName(d.value)} placeholder="numpy" /></Field>
             <Field label="Version"><Input value={libVer} onChange={(_, d) => setLibVer(d.value)} placeholder="2.0.0" style={{ width: 120 }} /></Field>
@@ -1998,17 +2008,17 @@ export function GraphModelEditor({ item, id }: { item: FabricItemType; id: strin
         <Input value={state.database} onChange={(_, d) => setState((p) => ({ ...p, database: d.value }))} />
         <div style={{ display: 'grid', gridTemplateColumns: 'minmax(0, 1fr) minmax(0, 1fr)', gap: tokens.spacingHorizontalM }}>
           <div style={{ minWidth: 0 }}>
-            <Subtitle2>Node types</Subtitle2>
+            <div className={s.secHead}><BranchFork20Regular className={s.secHeadIcon} /><Subtitle2>Node types</Subtitle2></div>
             <GraphTypeEditor kind="node" types={arr(state.nodes)}
               onChange={(next) => setState((p) => ({ ...p, nodes: next }))} />
           </div>
           <div style={{ minWidth: 0 }}>
-            <Subtitle2>Edge types</Subtitle2>
+            <div className={s.secHead}><Link20Regular className={s.secHeadIcon} /><Subtitle2>Edge types</Subtitle2></div>
             <GraphTypeEditor kind="edge" types={arr(state.edges)}
               onChange={(next) => setState((p) => ({ ...p, edges: next }))} />
           </div>
         </div>
-        <Subtitle2 style={{ marginTop: tokens.spacingVerticalS }}>Schema graph</Subtitle2>
+        <div className={s.secHead} style={{ marginTop: tokens.spacingVerticalS }}><ChartMultiple20Regular className={s.secHeadIcon} /><Subtitle2>Schema graph</Subtitle2></div>
         <Caption1 style={{ color: tokens.colorNeutralForeground3 }}>
           Node types are vertices; edge types whose properties carry <code>srcType</code> / <code>dstType</code> connect them, others link to a shared hub.
         </Caption1>

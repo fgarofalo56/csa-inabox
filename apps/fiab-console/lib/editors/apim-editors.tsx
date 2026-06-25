@@ -33,6 +33,7 @@ import {
   ChevronDown16Regular,
 } from '@fluentui/react-icons';
 import { ItemEditorChrome } from './item-editor-chrome';
+import { EmptyState } from '@/lib/components/empty-state';
 import { ManagePoliciesDialog } from './components/manage-policies-dialog';
 import { policyTiers, type DataProductAccessPolicy } from '@/lib/types/access-policy';
 import { useObservability, DqScoreGauge, ObservabilityTabContent } from './data-product-detail';
@@ -70,7 +71,26 @@ const useStyles = makeStyles({
     overflow: 'auto', whiteSpace: 'pre',
   },
   cardGrid: { display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(220px, 1fr))', gap: tokens.spacingVerticalM },
-  card: { padding: tokens.spacingVerticalM, border: `1px solid ${tokens.colorNeutralStroke2}`, borderRadius: tokens.borderRadiusLarge, minWidth: 0, overflowWrap: 'anywhere', wordBreak: 'break-word' },
+  card: {
+    padding: tokens.spacingVerticalM,
+    border: `1px solid ${tokens.colorNeutralStroke2}`,
+    borderRadius: tokens.borderRadiusLarge,
+    minWidth: 0, overflowWrap: 'anywhere', wordBreak: 'break-word',
+    backgroundColor: tokens.colorNeutralBackground1,
+    boxShadow: tokens.shadow4,
+    transition: 'box-shadow 0.15s ease, transform 0.15s ease',
+    ':hover': { boxShadow: tokens.shadow16, transform: 'translateY(-1px)' },
+  },
+  // Elevated section panel — used for the "Create revision" composer so it reads
+  // as a polished card rather than a flat bordered box.
+  panel: {
+    border: `1px solid ${tokens.colorNeutralStroke2}`,
+    borderRadius: tokens.borderRadiusLarge,
+    backgroundColor: tokens.colorNeutralBackground1,
+    boxShadow: tokens.shadow4,
+    padding: tokens.spacingVerticalM,
+    display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalS,
+  },
   protocolRow: { display: 'flex', gap: tokens.spacingHorizontalM, flexWrap: 'wrap' },
 });
 
@@ -761,7 +781,7 @@ export function ApimApiEditor({ item, id }: { item: FabricItemType; id: string }
               </div>
 
               <div style={{ display: 'flex', alignItems: 'center', gap: tokens.spacingHorizontalM, marginTop: tokens.spacingVerticalS }}>
-                <Subtitle2>OpenAPI spec</Subtitle2>
+                <Subtitle2><Document20Regular style={{ verticalAlign: 'text-bottom', marginRight: tokens.spacingHorizontalXS }} />OpenAPI spec</Subtitle2>
                 <Badge appearance="outline">{spec.data?.format || 'openapi+json'}</Badge>
                 <Button size="small" icon={<Copy20Regular />} onClick={copySpec} disabled={!spec.data?.value}>Copy</Button>
                 <Button size="small" icon={<ArrowSync20Regular />} onClick={loadSpec}>Refresh</Button>
@@ -779,9 +799,20 @@ export function ApimApiEditor({ item, id }: { item: FabricItemType; id: string }
                 </MessageBar>
               )}
               {!spec.loading && !spec.error && (
-                <div className={s.specViewer} role="region" aria-label="OpenAPI spec (read-only)">
-                  {spec.data?.value || (isNew ? 'Save the API first, then import a spec.' : '(no spec attached to this API)')}
-                </div>
+                spec.data?.value ? (
+                  <div className={s.specViewer} role="region" aria-label="OpenAPI spec (read-only)">
+                    {spec.data.value}
+                  </div>
+                ) : (
+                  <EmptyState
+                    icon={<Document20Regular />}
+                    title="No spec attached"
+                    body={isNew
+                      ? 'Save the API first, then import or author an OpenAPI document to attach a spec.'
+                      : 'This API has no inline OpenAPI document yet. Use “Edit OpenAPI” to author one, or “Import API” to attach a spec.'}
+                    primaryAction={isNew ? undefined : { label: 'Edit OpenAPI', onClick: openSpecEditor }}
+                  />
+                )
               )}
             </>
           )}
@@ -901,8 +932,8 @@ export function ApimApiEditor({ item, id }: { item: FabricItemType; id: string }
                   Revision list, create, and release (make-current) all call real ARM. API <em>version sets</em> (segment / header / query-string scheme via <code>apiVersionSets</code>) are configured in the Azure portal; this surface manages revisions.
                 </MessageBarBody>
               </MessageBar>
-              <div style={{ border: `1px solid ${tokens.colorNeutralStroke2}`, borderRadius: tokens.borderRadiusLarge, padding: tokens.spacingVerticalM, display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalS }}>
-                <Subtitle2>Create revision</Subtitle2>
+              <div className={s.panel}>
+                <Subtitle2><BranchFork20Regular style={{ verticalAlign: 'text-bottom', marginRight: tokens.spacingHorizontalXS }} />Create revision</Subtitle2>
                 <div style={{ display: 'flex', gap: tokens.spacingHorizontalM, alignItems: 'flex-end', flexWrap: 'wrap' }}>
                   <Field label="Revision number"><Input value={newRev} onChange={(_, d) => setNewRev(d.value)} placeholder="2" style={{ width: 100 }} /></Field>
                   <Field label="Description" style={{ flex: 1, minWidth: 200 }}><Input value={newRevDesc} onChange={(_, d) => setNewRevDesc(d.value)} placeholder="Added new operation" /></Field>
@@ -2884,7 +2915,7 @@ export function DataProductEditor({ item, id }: { item: FabricItemType; id: stri
               Missing env var: <code>{purviewHint.missingEnvVar}</code>.{' '}
               Bicep module: <code>{purviewHint.bicepModule}</code> — {purviewHint.bicepStatus}{' '}
               Required Purview roles (granted via the Purview portal, NOT ARM RBAC):
-              <ul style={{ margin: '6px 0 6px 18px' }}>
+              <ul style={{ marginTop: tokens.spacingVerticalXS, marginBottom: tokens.spacingVerticalXS, marginLeft: tokens.spacingHorizontalL, marginRight: 0 }}>
                 {purviewHint.rolesRequired.map((r) => (
                   <li key={r.name}><strong>{r.name}</strong> at {r.scope} — {r.reason}</li>
                 ))}
@@ -3078,7 +3109,7 @@ export function DataProductEditor({ item, id }: { item: FabricItemType; id: stri
             </div>
             {state.bundle.length > 0 && (
               <>
-                <Subtitle2 style={{ marginTop: tokens.spacingVerticalS }}>Bundle preview</Subtitle2>
+                <Subtitle2 style={{ marginTop: tokens.spacingVerticalS }}><Library20Regular style={{ verticalAlign: 'text-bottom', marginRight: tokens.spacingHorizontalXS }} />Bundle preview</Subtitle2>
                 <div className={s.cardGrid}>
                   {state.bundle.map((b, i) => <div key={i} className={s.card}>{b}</div>)}
                 </div>
@@ -3286,7 +3317,7 @@ export function DataProductEditor({ item, id }: { item: FabricItemType; id: stri
             {lineageErr && <MessageBar intent="warning"><MessageBarBody>{lineageErr}</MessageBarBody></MessageBar>}
             {lineage && (
               <>
-                <Subtitle2>Nodes ({lineage.nodes.length})</Subtitle2>
+                <Subtitle2><Database20Regular style={{ verticalAlign: 'text-bottom', marginRight: tokens.spacingHorizontalXS }} />Nodes ({lineage.nodes.length})</Subtitle2>
                 <Table size="small" aria-label="Lineage nodes">
                   <TableHeader><TableRow><TableHeaderCell>Asset</TableHeaderCell><TableHeaderCell>Type</TableHeaderCell><TableHeaderCell>Source</TableHeaderCell></TableRow></TableHeader>
                   <TableBody>
@@ -3299,7 +3330,7 @@ export function DataProductEditor({ item, id }: { item: FabricItemType; id: stri
                     ))}
                   </TableBody>
                 </Table>
-                <Subtitle2>Edges ({lineage.edges.length})</Subtitle2>
+                <Subtitle2><BranchFork20Regular style={{ verticalAlign: 'text-bottom', marginRight: tokens.spacingHorizontalXS }} />Edges ({lineage.edges.length})</Subtitle2>
                 <div className={s.specViewer} style={{ maxHeight: 200, whiteSpace: 'pre-wrap', overflowWrap: 'anywhere' }}>
                   {lineage.edges.map((e: any, i: number) => `${e.from} → ${e.to}${e.label ? ` (${e.label})` : ''}`).join('\n') || '(no edges)'}
                 </div>
@@ -3322,7 +3353,7 @@ export function DataProductEditor({ item, id }: { item: FabricItemType; id: stri
             <Button appearance="primary" icon={<Add20Regular />} onClick={() => setPoliciesOpen(true)} disabled={isNew} title={isNew ? 'Create the data product first' : undefined} style={{ alignSelf: 'flex-start' }}>
               Manage policies
             </Button>
-            <Subtitle2>Permitted purposes</Subtitle2>
+            <Subtitle2><Library20Regular style={{ verticalAlign: 'text-bottom', marginRight: tokens.spacingHorizontalXS }} />Permitted purposes</Subtitle2>
             <Table size="small" aria-label="Permitted purposes">
               <TableHeader><TableRow><TableHeaderCell>Purpose</TableHeaderCell><TableHeaderCell>Description</TableHeaderCell></TableRow></TableHeader>
               <TableBody>
@@ -3332,7 +3363,7 @@ export function DataProductEditor({ item, id }: { item: FabricItemType; id: stri
                 ))}
               </TableBody>
             </Table>
-            <Subtitle2>Approval sequence</Subtitle2>
+            <Subtitle2><BranchFork20Regular style={{ verticalAlign: 'text-bottom', marginRight: tokens.spacingHorizontalXS }} />Approval sequence</Subtitle2>
             {state.accessPolicy && policyTiers(state.accessPolicy).length > 0 ? (
               <Table size="small" aria-label="Approval sequence">
                 <TableHeader><TableRow><TableHeaderCell>Tier</TableHeaderCell><TableHeaderCell>Approver / detail</TableHeaderCell></TableRow></TableHeader>

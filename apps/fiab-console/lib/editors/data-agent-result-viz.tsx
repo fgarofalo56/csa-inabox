@@ -53,8 +53,17 @@ const useStyles = makeStyles({
   kpiWrap: { display: 'flex', flexWrap: 'wrap', gap: tokens.spacingHorizontalL },
   kpi: {
     display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalXXS, minWidth: '120px', maxWidth: '100%',
-    padding: tokens.spacingHorizontalM, borderRadius: tokens.borderRadiusMedium,
+    padding: tokens.spacingHorizontalM, borderRadius: tokens.borderRadiusLarge,
     background: tokens.colorNeutralBackground1, border: `1px solid ${tokens.colorNeutralStroke2}`,
+    boxShadow: tokens.shadow4,
+    transitionProperty: 'box-shadow, border-color', transitionDuration: tokens.durationNormal,
+    ':hover': {
+      boxShadow: tokens.shadow16,
+      borderTopColor: tokens.colorBrandStroke1,
+      borderRightColor: tokens.colorBrandStroke1,
+      borderBottomColor: tokens.colorBrandStroke1,
+      borderLeftColor: tokens.colorBrandStroke1,
+    },
   },
   kpiValue: {
     fontSize: tokens.fontSizeBase500, fontWeight: tokens.fontWeightBold,

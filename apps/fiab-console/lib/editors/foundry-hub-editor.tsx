@@ -34,6 +34,14 @@ import {
   Field, Dropdown, Option,
   makeStyles, tokens,
 } from '@fluentui/react-components';
+import {
+  Home24Regular, Bot24Regular, Apps24Regular, Play24Regular, Chat24Regular,
+  Image24Regular, MicRecord24Regular, PlugConnected24Regular, BrainCircuit24Regular,
+  Beaker24Regular, ClipboardTaskListLtr24Regular, DataTrending24Regular, Gauge24Regular,
+  Globe24Regular, ShieldKeyhole24Regular, Key24Regular, History24Regular,
+  Server24Regular, Database24Regular, TaskListSquareLtr24Regular, Box24Regular,
+} from '@fluentui/react-icons';
+import { EmptyState } from '@/lib/components/empty-state';
 import { ItemEditorChrome } from './item-editor-chrome';
 import type { FabricItemType } from '@/lib/catalog/fabric-item-types';
 import type { RibbonTab } from '@/lib/components/ribbon';
@@ -55,6 +63,31 @@ const useStyles = makeStyles({
   tableWrap: { overflow: 'auto', maxHeight: '460px', border: `1px solid ${tokens.colorNeutralStroke2}`, borderRadius: tokens.borderRadiusMedium },
   cell: { fontSize: tokens.fontSizeBase200, whiteSpace: 'nowrap', maxWidth: '360px', overflow: 'hidden', textOverflow: 'ellipsis' },
   empty: { padding: tokens.spacingVerticalL, color: tokens.colorNeutralForeground3, fontStyle: 'italic' },
+  // Compact, designed empty for stacked sub-section empties (icon chip + copy in
+  // a dashed card) — lighter than the full hero EmptyState so several can stack
+  // in one panel without ballooning its height.
+  emptyCompact: {
+    display: 'flex',
+    alignItems: 'center',
+    gap: tokens.spacingHorizontalM,
+    padding: tokens.spacingVerticalM,
+    border: `1px dashed ${tokens.colorNeutralStroke2}`,
+    borderRadius: tokens.borderRadiusLarge,
+    backgroundColor: tokens.colorNeutralBackground1,
+    color: tokens.colorNeutralForeground3,
+  },
+  emptyChip: {
+    flexShrink: 0,
+    width: '40px',
+    height: '40px',
+    borderRadius: tokens.borderRadiusCircular,
+    backgroundImage: `linear-gradient(135deg, ${tokens.colorBrandBackground2}, ${tokens.colorBrandBackground})`,
+    display: 'flex',
+    alignItems: 'center',
+    justifyContent: 'center',
+    color: tokens.colorNeutralForegroundOnBrand,
+    fontSize: '20px',
+  },
   toolbar: { display: 'flex', gap: tokens.spacingHorizontalM, alignItems: 'center', flexWrap: 'wrap' },
   secret: { fontFamily: 'monospace', fontSize: tokens.fontSizeBase200, wordBreak: 'break-all' },
   // Stat tiles laid out as an even responsive grid (no ragged flex-wrap rows).
@@ -79,7 +112,9 @@ const useStyles = makeStyles({
     border: `1px solid ${tokens.colorNeutralStroke2}`,
     borderRadius: tokens.borderRadiusLarge,
     backgroundColor: tokens.colorNeutralBackground1,
-    boxShadow: tokens.shadow2,
+    boxShadow: tokens.shadow4,
+    transition: 'box-shadow 0.15s ease',
+    ':hover': { boxShadow: tokens.shadow16 },
     // Fixed-width SVG charts (width={420}/{620}) can exceed a narrow grid track;
     // scroll inside the card rather than pushing the page wider.
     minWidth: 0,
@@ -96,6 +131,23 @@ const useStyles = makeStyles({
     border: `1px solid ${tokens.colorNeutralStroke2}`,
     borderRadius: tokens.borderRadiusLarge,
     backgroundColor: tokens.colorNeutralBackground1,
+    boxShadow: tokens.shadow4,
+    transition: 'box-shadow 0.15s ease',
+    ':hover': { boxShadow: tokens.shadow16 },
+  },
+  // Reusable elevated panel for the fine-tuning upload / create-job + criterion
+  // cards that were previously flat (border only, no elevation).
+  panelCard: {
+    display: 'flex',
+    flexDirection: 'column',
+    gap: tokens.spacingVerticalS,
+    padding: tokens.spacingVerticalM,
+    border: `1px solid ${tokens.colorNeutralStroke2}`,
+    borderRadius: tokens.borderRadiusLarge,
+    backgroundColor: tokens.colorNeutralBackground1,
+    boxShadow: tokens.shadow4,
+    transition: 'box-shadow 0.15s ease',
+    ':hover': { boxShadow: tokens.shadow16 },
   },
 });
 
@@ -129,9 +181,25 @@ function GateBar({ msg, hint, notDeployed }: { msg: string; hint?: string; notDe
   );
 }
 
-function EmptyText({ children }: { children: React.ReactNode }) {
+// Compact designed empty (gradient icon chip + copy in a dashed card) in place
+// of the former bare italic line. Used for stacked sub-section empties; the
+// existing descriptive copy at each call site flows through as the body, so no
+// call-site changes are needed — only the visual treatment is upgraded.
+function EmptyText({ children, icon }: { children: React.ReactNode; icon?: React.ReactNode }) {
   const s = useStyles();
-  return <div className={s.empty}>{children}</div>;
+  return (
+    <div className={s.emptyCompact} role="status">
+      <div className={s.emptyChip} aria-hidden>{icon ?? <Box24Regular />}</div>
+      <Body1>{children}</Body1>
+    </div>
+  );
+}
+
+// Full-pane hero empty (gradient illustration + icon + body) for panels whose
+// entire body is empty (Overview, Connections, Computes, Datastores, Jobs).
+function EmptyPane({ title, body, icon }: { title: string; body: string; icon?: React.ReactNode }) {
+  const s = useStyles();
+  return <div className={s.pad}><EmptyState icon={icon ?? <Box24Regular />} title={title} body={body} /></div>;
 }
 
 function useLazyFetch<T>(url: string, active: boolean, nonce: number = 0, acct: FoundryAccount | null = null) {
@@ -168,7 +236,7 @@ function OverviewPanel({ nonce, onWorkspace }: { nonce: number; onWorkspace?: (w
   if (ws.loading) return <div className={s.pad}><Spinner size="small" label="Loading hub…" labelPosition="after" /></div>;
   if (ws.error) return <div className={s.pad}><GateBar msg={ws.error} hint={ws.hint} notDeployed={ws.notDeployed} /></div>;
   const w = ws.data?.workspace;
-  if (!w) return <div className={s.pad}><EmptyText>No workspace data.</EmptyText></div>;
+  if (!w) return <EmptyPane icon={<Home24Regular />} title="No workspace data" body="No hub workspace metadata was returned for the selected account." />;
   const rows: [string, React.ReactNode][] = [
     ['Name', w.name],
     ['Friendly name', w.friendlyName || '—'],
@@ -207,7 +275,7 @@ function ConnectionsPanel({ active, nonce }: { active: boolean; nonce: number })
   if (st.loading) return <div className={s.pad}><Spinner size="small" label="Loading connections…" labelPosition="after" /></div>;
   if (st.error) return <div className={s.pad}><GateBar msg={st.error} hint={st.hint} notDeployed={st.notDeployed} /></div>;
   const items = Array.isArray(st.data?.connections) ? st.data!.connections : [];
-  if (!items.length) return <div className={s.pad}><EmptyText>No connections registered on this hub yet.</EmptyText></div>;
+  if (!items.length) return <EmptyPane icon={<PlugConnected24Regular />} title="No connections yet" body="No connections are registered on this hub yet. Connections link the hub to Azure OpenAI, AI Search, storage and other resources." />;
   return (
     <div className={s.pad}>
       <Caption1>{items.length} connection(s)</Caption1>
@@ -696,7 +764,7 @@ function ComputesPanel({ active, nonce }: { active: boolean; nonce: number }) {
   if (st.loading) return <div className={s.pad}><Spinner size="small" label="Loading computes…" labelPosition="after" /></div>;
   if (st.error) return <div className={s.pad}><GateBar msg={st.error} hint={st.hint} notDeployed={st.notDeployed} /></div>;
   const items = Array.isArray(st.data?.computes) ? st.data!.computes : [];
-  if (!items.length) return <div className={s.pad}><EmptyText>No computes attached.</EmptyText></div>;
+  if (!items.length) return <EmptyPane icon={<Server24Regular />} title="No computes attached" body="No compute instances or clusters are attached to this hub yet." />;
   return (
     <div className={s.pad}>
       <Caption1>{items.length} compute(s)</Caption1>
@@ -733,7 +801,7 @@ function DatastoresPanel({ active, nonce }: { active: boolean; nonce: number }) 
   if (st.loading) return <div className={s.pad}><Spinner size="small" label="Loading datastores…" labelPosition="after" /></div>;
   if (st.error) return <div className={s.pad}><GateBar msg={st.error} hint={st.hint} notDeployed={st.notDeployed} /></div>;
   const items = Array.isArray(st.data?.datastores) ? st.data!.datastores : [];
-  if (!items.length) return <div className={s.pad}><EmptyText>No datastores registered.</EmptyText></div>;
+  if (!items.length) return <EmptyPane icon={<Database24Regular />} title="No datastores registered" body="No datastores are registered on this hub yet. Datastores connect the hub to blob, ADLS Gen2 and other storage." />;
   return (
     <div className={s.pad}>
       <Caption1>{items.length} datastore(s)</Caption1>
@@ -771,7 +839,7 @@ function JobsPanel({ active, nonce }: { active: boolean; nonce: number }) {
   if (st.error) return <div className={s.pad}><GateBar msg={st.error} hint={st.hint} notDeployed={st.notDeployed} /></div>;
   const jobs = Array.isArray(st.data?.jobs) ? st.data!.jobs : [];
   const exps = Array.isArray(st.data?.experiments) ? st.data!.experiments : [];
-  if (!jobs.length) return <div className={s.pad}><EmptyText>No jobs in this hub.</EmptyText></div>;
+  if (!jobs.length) return <EmptyPane icon={<TaskListSquareLtr24Regular />} title="No jobs in this hub" body="No experiment jobs or runs have been recorded for this hub yet." />;
   return (
     <div className={s.pad}>
       <Subtitle2>Experiments</Subtitle2>
@@ -1568,7 +1636,7 @@ function FineTuningPanel({ active, nonce, acct }: { active: boolean; nonce: numb
 
       <div style={{ display: 'grid', gridTemplateColumns: 'minmax(280px, 360px) minmax(0, 1fr)', gap: tokens.spacingHorizontalL, alignItems: 'start' }}>
         {/* Upload training data */}
-        <div style={{ display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalS, padding: tokens.spacingVerticalM, border: `1px solid ${tokens.colorNeutralStroke2}`, borderRadius: tokens.borderRadiusLarge }}>
+        <div className={s.panelCard}>
           <Body1 style={{ fontWeight: 600 }}>Upload training data</Body1>
           <Caption1>JSONL with chat-format examples (one <code>{'{ "messages": [...] }'}</code> per line).</Caption1>
           <input type="file" accept=".jsonl,.json,text/plain" disabled={uploading} onChange={(e) => { const f = e.target.files?.[0]; if (f) upload(f); }} />
@@ -1587,7 +1655,7 @@ function FineTuningPanel({ active, nonce, acct }: { active: boolean; nonce: numb
         </div>
 
         {/* Create job */}
-        <div style={{ display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalS, padding: tokens.spacingVerticalM, border: `1px solid ${tokens.colorNeutralStroke2}`, borderRadius: tokens.borderRadiusLarge }}>
+        <div className={s.panelCard}>
           <Body1 style={{ fontWeight: 600 }}>Create a fine-tuning job</Body1>
           <Field label="Base model">
             {fineTunable.length ? (
@@ -1873,26 +1941,26 @@ export function FoundryHubEditor({ item, id }: { item: FabricItemType; id: strin
         )}
         <div className={s.tabBar}>
           <TabList selectedValue={tab} onTabSelect={(_, d) => setTab(d.value as string)}>
-            <Tab value="overview">Overview</Tab>
-            <Tab value="agents">Agents</Tab>
-            <Tab value="catalog">Model catalog</Tab>
-            <Tab value="playgrounds">Playgrounds</Tab>
-            <Tab value="chat">Chat</Tab>
-            <Tab value="images">Images</Tab>
-            <Tab value="audio">Audio</Tab>
-            <Tab value="connections">Connections</Tab>
-            <Tab value="models">Models + endpoints</Tab>
-            <Tab value="fine-tuning">Fine-tuning</Tab>
-            <Tab value="evaluations">Evaluations</Tab>
-            <Tab value="monitoring">Monitoring</Tab>
-            <Tab value="quota">Quota + usage</Tab>
-            <Tab value="networking">Networking</Tab>
-            <Tab value="identity">Identity / RBAC</Tab>
-            <Tab value="keys">Keys / endpoints</Tab>
-            <Tab value="activity">Activity log</Tab>
-            <Tab value="computes">Computes</Tab>
-            <Tab value="datastores">Datastores</Tab>
-            <Tab value="jobs">Jobs</Tab>
+            <Tab value="overview" icon={<Home24Regular />}>Overview</Tab>
+            <Tab value="agents" icon={<Bot24Regular />}>Agents</Tab>
+            <Tab value="catalog" icon={<Apps24Regular />}>Model catalog</Tab>
+            <Tab value="playgrounds" icon={<Play24Regular />}>Playgrounds</Tab>
+            <Tab value="chat" icon={<Chat24Regular />}>Chat</Tab>
+            <Tab value="images" icon={<Image24Regular />}>Images</Tab>
+            <Tab value="audio" icon={<MicRecord24Regular />}>Audio</Tab>
+            <Tab value="connections" icon={<PlugConnected24Regular />}>Connections</Tab>
+            <Tab value="models" icon={<BrainCircuit24Regular />}>Models + endpoints</Tab>
+            <Tab value="fine-tuning" icon={<Beaker24Regular />}>Fine-tuning</Tab>
+            <Tab value="evaluations" icon={<ClipboardTaskListLtr24Regular />}>Evaluations</Tab>
+            <Tab value="monitoring" icon={<DataTrending24Regular />}>Monitoring</Tab>
+            <Tab value="quota" icon={<Gauge24Regular />}>Quota + usage</Tab>
+            <Tab value="networking" icon={<Globe24Regular />}>Networking</Tab>
+            <Tab value="identity" icon={<ShieldKeyhole24Regular />}>Identity / RBAC</Tab>
+            <Tab value="keys" icon={<Key24Regular />}>Keys / endpoints</Tab>
+            <Tab value="activity" icon={<History24Regular />}>Activity log</Tab>
+            <Tab value="computes" icon={<Server24Regular />}>Computes</Tab>
+            <Tab value="datastores" icon={<Database24Regular />}>Datastores</Tab>
+            <Tab value="jobs" icon={<TaskListSquareLtr24Regular />}>Jobs</Tab>
           </TabList>
         </div>
         {tab === 'overview' && <OverviewPanel nonce={nonce} onWorkspace={onWorkspace} />}

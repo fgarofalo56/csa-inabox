@@ -77,6 +77,7 @@ import { BulkDescribeAction } from '@/lib/components/catalog/bulk-describe-actio
 import { UpstreamSensitivityField } from '@/lib/components/governance/upstream-sensitivity-field';
 import { ItemEditorChrome } from './item-editor-chrome';
 import { NotConfiguredBar, type NotConfiguredHint } from '@/lib/components/admin-security/not-configured-bar';
+import { EmptyState } from '@/lib/components/empty-state';
 import type {
   RdlReportDefinition, RdlDataSource, RdlDataset, RdlTablix, RdlParameter,
   RdlField, RdlDataSourceType, RdlExportFormat,
@@ -167,7 +168,7 @@ const useStyles = makeStyles({
   // "live" affordance so the user can see the continuous cadence is firing.
   livePill: {
     display: 'inline-flex', alignItems: 'center', gap: tokens.spacingVerticalS,
-    padding: `${tokens.spacingVerticalXXS} ${tokens.spacingHorizontalS}`, borderRadius: '9999px',
+    padding: `${tokens.spacingVerticalXXS} ${tokens.spacingHorizontalS}`, borderRadius: tokens.borderRadiusCircular,
     backgroundColor: tokens.colorNeutralBackground3,
     border: `1px solid ${tokens.colorNeutralStroke2}`,
     color: tokens.colorNeutralForeground3,
@@ -369,7 +370,7 @@ function StatCard({ columns, rows, conditionalRules }: { columns: string[]; rows
     <div role="img" aria-label="stat card" style={{
       display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center',
       padding: tokens.spacingVerticalL, minHeight: 120, border: `1px solid ${tokens.colorNeutralStroke2}`, borderRadius: tokens.borderRadiusLarge,
-      background: deco?.bg ?? tokens.colorNeutralBackground1,
+      background: deco?.bg ?? tokens.colorNeutralBackground1, boxShadow: tokens.shadow4,
     }}>
       <div style={{ display: 'flex', alignItems: 'center', gap: tokens.spacingVerticalS }}>
         {deco?.icon && <span style={{ display: 'inline-flex', color: deco.fg ?? tokens.colorBrandForeground1 }}>{deco.icon}</span>}
@@ -721,7 +722,15 @@ function KqlResultsPanel({ result, loading, itemId, itemType }: { result: KqlRes
     return <div className={s.resultBox}><Spinner size="small" label="Executing KQL…" labelPosition="after" /></div>;
   }
   if (!result) {
-    return <div className={s.resultBox}><Caption1>Click <strong>Run</strong> to execute. Results appear here.</Caption1></div>;
+    return (
+      <div className={s.resultBox}>
+        <EmptyState
+          icon={<Play20Regular />}
+          title="No results yet"
+          body="Run the query to execute it against the cluster — results, charts, and the | render visualization appear here."
+        />
+      </div>
+    );
   }
   if (!result.ok) {
     return (
@@ -765,7 +774,11 @@ function KqlResultsPanel({ result, loading, itemId, itemType }: { result: KqlRes
         </Caption1>
       )}
       {rows.length === 0 ? (
-        <Caption1>Query returned no rows.</Caption1>
+        <EmptyState
+          icon={<DataBarVertical20Regular />}
+          title="Query returned no rows"
+          body="The query executed successfully but produced no rows. Adjust the time range or filters and run it again."
+        />
       ) : viz !== 'table' ? (
         <TileVisual viz={viz} result={result} />
       ) : (
@@ -1230,7 +1243,7 @@ function EhStatTile({ label, value, hint }: { label: string; value: string; hint
     <div style={{
       padding: tokens.spacingVerticalL, minHeight: 92, border: `1px solid ${tokens.colorNeutralStroke2}`,
       borderRadius: tokens.borderRadiusLarge, background: tokens.colorNeutralBackground1, display: 'flex',
-      flexDirection: 'column', gap: tokens.spacingVerticalXXS,
+      flexDirection: 'column', gap: tokens.spacingVerticalXXS, boxShadow: tokens.shadow4,
     }}>
       <Caption1 style={{ color: tokens.colorNeutralForeground3 }}>{label}</Caption1>
       <div style={{ fontSize: tokens.fontSizeBase600, fontWeight: 700, color: tokens.colorBrandForeground1, lineHeight: 1.15 }}>{value}</div>
@@ -2367,9 +2380,9 @@ export function EventhouseEditor({ item, id }: { item: FabricItemType; id: strin
         {state?.ok && (
           <div className={s.tabBar}>
             <TabList selectedValue={activeTab} onTabSelect={(_: unknown, d: any) => setActiveTab(d.value as EhTab)}>
-              <Tab value="overview">System overview</Tab>
-              <Tab value="databases">Databases ({dbCount})</Tab>
-              <Tab value="capacity">Capacity</Tab>
+              <Tab value="overview" icon={<Info20Regular />}>System overview</Tab>
+              <Tab value="databases" icon={<Database20Regular />}>Databases ({dbCount})</Tab>
+              <Tab value="capacity" icon={<DataBarVertical20Regular />}>Capacity</Tab>
             </TabList>
           </div>
         )}
@@ -8151,9 +8164,9 @@ export function EventstreamEditor({ item, id }: { item: FabricItemType; id: stri
         )}
 
         <TabList selectedValue={activeTab} onTabSelect={(_: unknown, d: any) => setActiveTab((d.value as 'designer' | 'sql' | 'json') || 'designer')}>
-          <Tab value="designer">Visual designer</Tab>
-          <Tab value="sql">SQL operator</Tab>
-          <Tab value="json">JSON</Tab>
+          <Tab value="designer" icon={<Flowchart20Regular />}>Visual designer</Tab>
+          <Tab value="sql" icon={<MathFormula20Regular />}>SQL operator</Tab>
+          <Tab value="json" icon={<Form20Regular />}>JSON</Tab>
         </TabList>
 
         {activeTab === 'designer' && (
@@ -9228,8 +9241,8 @@ export function ActivatorEditor({ item, id }: { item: FabricItemType; id: string
           {selectedId && (
             <>
               <TabList selectedValue={activeView} onTabSelect={(_: unknown, d: any) => setActiveView(d.value as 'rules' | 'history')}>
-                <Tab value="rules">Rules{rules.length ? ` (${rules.length})` : ''}</Tab>
-                <Tab value="history">Run history</Tab>
+                <Tab value="rules" icon={<List20Regular />}>Rules{rules.length ? ` (${rules.length})` : ''}</Tab>
+                <Tab value="history" icon={<ArrowSync20Regular />}>Run history</Tab>
               </TabList>
 
               {activeView === 'rules' && (
@@ -10278,7 +10291,11 @@ export function WarehouseEditor({ item, id }: { item: FabricItemType; id: string
                 <ResultVisualize columns={result.columns || []} rows={result.rows || []} />
               )}
               {(result.rows?.length ?? 0) === 0 ? (
-                <Caption1>Query returned no rows.</Caption1>
+                <EmptyState
+                  icon={<DataBarVertical20Regular />}
+                  title="Query returned no rows"
+                  body="The T-SQL statement ran successfully but produced no rows. Adjust the predicates and run it again."
+                />
               ) : (
                 <div style={{ overflow: 'auto', maxHeight: 360, border: `1px solid ${tokens.colorNeutralStroke2}`, borderRadius: tokens.borderRadiusMedium }}>
                   <Table aria-label="Query results" size="small">
@@ -14885,7 +14902,7 @@ function ReportLikeEditor({
                     </MessageBarBody>
                   </MessageBar>
                 ) : (
-                  <div style={{ display: 'flex', justifyContent: 'center', padding: '48px 0' }}>
+                  <div style={{ display: 'flex', justifyContent: 'center', padding: `${tokens.spacingVerticalXXXL} 0` }}>
                     <Spinner size="medium" label="Loading paginated report embed…" labelPosition="below" />
                   </div>
                 )
@@ -15704,7 +15721,7 @@ function PaginatedReportDesigner({ item, id }: { item: FabricItemType; id: strin
                 </MessageBarBody>
               </MessageBar>
             ) : (
-              <div style={{ display: 'flex', justifyContent: 'center', padding: '48px 0' }}>
+              <div style={{ display: 'flex', justifyContent: 'center', padding: `${tokens.spacingVerticalXXXL} 0` }}>
                 <Spinner size="medium" label="Loading paginated report embed…" labelPosition="below" />
               </div>
             )

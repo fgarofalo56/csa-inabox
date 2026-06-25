@@ -44,6 +44,10 @@ const useStyles = makeStyles({
     display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalM, minWidth: 0,
     padding: tokens.spacingVerticalL, borderRadius: tokens.borderRadiusXLarge,
     border: `1px solid ${tokens.colorNeutralStroke2}`, backgroundColor: tokens.colorNeutralBackground1,
+    boxShadow: tokens.shadow4,
+    transitionProperty: 'box-shadow, transform', transitionDuration: tokens.durationNormal,
+    transitionTimingFunction: tokens.curveEasyEase,
+    ':hover': { boxShadow: tokens.shadow16, transform: 'translateY(-1px)' },
   },
   sectionHead: { display: 'flex', alignItems: 'center', gap: tokens.spacingHorizontalS },
   sectionIcon: {
@@ -88,7 +92,7 @@ const useStyles = makeStyles({
     resize: 'vertical', boxSizing: 'border-box',
     padding: tokens.spacingVerticalM, backgroundColor: tokens.colorNeutralBackground2,
   },
-  tableWrap: { overflowX: 'auto', minWidth: 0, borderRadius: tokens.borderRadiusMedium, border: `1px solid ${tokens.colorNeutralStroke2}` },
+  tableWrap: { overflowX: 'auto', minWidth: 0, borderRadius: tokens.borderRadiusLarge, border: `1px solid ${tokens.colorNeutralStroke2}`, boxShadow: tokens.shadow4 },
   empty: {
     display: 'flex', alignItems: 'center', justifyContent: 'center', gap: tokens.spacingHorizontalS,
     padding: tokens.spacingVerticalXL, color: tokens.colorNeutralForeground3, textAlign: 'center',
@@ -99,6 +103,10 @@ const useStyles = makeStyles({
     display: 'flex', alignItems: 'center', gap: tokens.spacingHorizontalM,
     paddingTop: tokens.spacingVerticalS, borderTop: `1px solid ${tokens.colorNeutralStroke2}`,
   },
+  fieldWide: { minWidth: '280px' },
+  fieldStep: { minWidth: '260px' },
+  fieldMed: { minWidth: '200px' },
+  fieldNarrow: { minWidth: '140px' },
   mutedCaption: { color: tokens.colorNeutralForeground3 },
   errorCaption: { color: tokens.colorPaletteRedForeground1 },
   dialogForm: { display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalM, minWidth: 'min(420px, 100%)', maxWidth: '100%' },
@@ -419,7 +427,7 @@ export function WorkshopAppEditor({ item, id }: { item: FabricItemType; id: stri
             <MessageBar intent="warning"><MessageBarBody>No ontologies found. Create an Ontology item first, then bind it here.</MessageBarBody></MessageBar>
           ) : (
             <div className={s.addBar}>
-              <Field label="Ontology" style={{ minWidth: 280 }}>
+              <Field label="Ontology" className={s.fieldWide}>
                 <Dropdown value={onto.ontologies.find((o) => o.id === (pickOnto || onto.boundOntologyId))?.displayName || ''}
                   selectedOptions={[(pickOnto || onto.boundOntologyId)]}
                   onOptionSelect={(_, d) => setPickOnto(d.optionValue || '')} placeholder="Select an ontology">
@@ -477,7 +485,7 @@ export function WorkshopAppEditor({ item, id }: { item: FabricItemType; id: stri
             <Field label="Kind"><Dropdown value={actKind} selectedOptions={[actKind]} onOptionSelect={(_, d) => setActKind((d.optionValue as 'create' | 'update' | 'delete') || 'create')}>
               <Option value="create">create</Option><Option value="update">update</Option><Option value="delete">delete</Option>
             </Dropdown></Field>
-            <Field label="Object type" style={{ minWidth: 200 }}>
+            <Field label="Object type" className={s.fieldMed}>
               <Dropdown value={actEntity} selectedOptions={actEntity ? [actEntity] : []} onOptionSelect={(_, d) => setActEntity(d.optionValue || '')} placeholder={classes.length ? 'Select object' : 'Bind an ontology first'}>
                 {classes.map((c) => <Option key={c.name} value={c.name}>{c.name}</Option>)}
               </Dropdown>
@@ -625,7 +633,7 @@ export function OntologySdkEditor({ item, id }: { item: FabricItemType; id: stri
             <MessageBar intent="warning"><MessageBarBody>No ontologies found. Create an Ontology item first, then bind it here.</MessageBarBody></MessageBar>
           ) : (
             <div className={s.addBar}>
-              <Field label="Ontology" style={{ minWidth: 280 }}>
+              <Field label="Ontology" className={s.fieldWide}>
                 <Dropdown value={onto.ontologies.find((o) => o.id === (pickOnto || onto.boundOntologyId))?.displayName || ''}
                   selectedOptions={[(pickOnto || onto.boundOntologyId)]} onOptionSelect={(_, d) => setPickOnto(d.optionValue || '')} placeholder="Select an ontology">
                   {onto.ontologies.map((o) => <Option key={o.id} value={o.id} text={o.displayName}>{`${o.displayName} (${o.classCount} objects)`}</Option>)}
@@ -736,7 +744,7 @@ export function SlateAppEditor({ item, id }: { item: FabricItemType; id: string 
             <Field label="Kind"><Dropdown value={wKind} selectedOptions={[wKind]} onOptionSelect={(_, d) => setWKind((d.optionValue as 'table' | 'chart' | 'metric') || 'table')}>
               <Option value="table">table</Option><Option value="metric">metric</Option><Option value="chart">chart</Option>
             </Dropdown></Field>
-            <Field label="Query path" style={{ minWidth: 200 }}><Input value={wQuery} onChange={(_, d) => setWQuery(d.value)} placeholder="order" /></Field>
+            <Field label="Query path" className={s.fieldMed}><Input value={wQuery} onChange={(_, d) => setWQuery(d.value)} placeholder="order" /></Field>
             <Button appearance="primary" icon={<Add20Regular />} disabled={!wTitle.trim() || !wQuery.trim()} onClick={addWidget}>Add widget</Button>
           </div>
           {widgets.length === 0 ? <div className={s.empty}><Caption1>No widgets yet.</Caption1></div> : widgets.map((w) => (
@@ -880,10 +888,10 @@ export function ReleaseEnvironmentEditor({ item, id }: { item: FabricItemType; i
         <div className={s.section}>
           <SectionHead icon={<Flash20Regular />} title="Promote" hint="Record a promotion between two stages." />
           <div className={s.addBar}>
-            <Field label="From" style={{ minWidth: 140 }}><Dropdown value={fromStage} selectedOptions={fromStage ? [fromStage] : []} onOptionSelect={(_, d) => setFromStage(d.optionValue || '')} placeholder="from">
+            <Field label="From" className={s.fieldNarrow}><Dropdown value={fromStage} selectedOptions={fromStage ? [fromStage] : []} onOptionSelect={(_, d) => setFromStage(d.optionValue || '')} placeholder="from">
               {stages.map((st) => <Option key={st.id} value={st.name}>{st.name}</Option>)}
             </Dropdown></Field>
-            <Field label="To" style={{ minWidth: 140 }}><Dropdown value={toStage} selectedOptions={toStage ? [toStage] : []} onOptionSelect={(_, d) => setToStage(d.optionValue || '')} placeholder="to">
+            <Field label="To" className={s.fieldNarrow}><Dropdown value={toStage} selectedOptions={toStage ? [toStage] : []} onOptionSelect={(_, d) => setToStage(d.optionValue || '')} placeholder="to">
               {stages.map((st) => <Option key={st.id} value={st.name}>{st.name}</Option>)}
             </Dropdown></Field>
             {devCenter && <Field label="Environment definition"><Input value={envDef} onChange={(_, d) => setEnvDef(d.value)} placeholder="loom-app-env" /></Field>}
@@ -1219,7 +1227,7 @@ export function AipLogicEditor({ item, id }: { item: FabricItemType; id: string 
             <MessageBar intent="warning"><MessageBarBody>No ontologies found. Create an Ontology item first, then bind it here to ground this function on the Weave.</MessageBarBody></MessageBar>
           ) : (
             <div className={s.addBar}>
-              <Field label="Bound ontology" style={{ minWidth: 280 }}>
+              <Field label="Bound ontology" className={s.fieldWide}>
                 <Dropdown
                   value={state.boundOntologyName || (onto.boundOntologyId ? '(bound)' : 'None — runs ungrounded')}
                   selectedOptions={[String(onto.boundOntologyId || state.boundOntologyId || '')]}
@@ -1269,7 +1277,7 @@ export function AipLogicEditor({ item, id }: { item: FabricItemType; id: string 
               <Option value="llm-prompt">LLM prompt</Option><Option value="extract">extract</Option><Option value="branch">branch</Option>
             </Dropdown></Field>
             <Field label="Step name"><Input value={stepName} onChange={(_, d) => setStepName(d.value)} placeholder="Summarize" /></Field>
-            <Field label="Instruction" style={{ minWidth: 260 }}><Input value={stepPrompt} onChange={(_, d) => setStepPrompt(d.value)} placeholder="Summarize {customerId} risk" /></Field>
+            <Field label="Instruction" className={s.fieldStep}><Input value={stepPrompt} onChange={(_, d) => setStepPrompt(d.value)} placeholder="Summarize {customerId} risk" /></Field>
             <Button appearance="primary" icon={<Add20Regular />} onClick={addStep}>Add step</Button>
           </div>
           {steps.length === 0 ? <div className={s.empty}><Caption1>No steps yet — add at least one to invoke.</Caption1></div> : steps.map((st, n) => (

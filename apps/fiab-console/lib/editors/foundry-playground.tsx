@@ -24,7 +24,7 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
-  Subtitle1, Subtitle2, Body1, Body1Strong, Caption1, Badge, Spinner, Button,
+  Subtitle1, Subtitle2, Body1Strong, Caption1, Badge, Spinner, Button,
   SearchBox, Dropdown, Option, Slider, Label, Field, Input, Textarea, Tooltip,
   Card, Avatar, Divider, Tag,
   Dialog, DialogSurface, DialogTitle, DialogBody, DialogContent, DialogActions,
@@ -35,7 +35,10 @@ import {
   Search24Regular, Rocket20Regular, ChatMultiple24Regular, Image24Regular,
   MicRecord24Regular, Speaker224Regular, Send24Filled, Delete20Regular,
   Code20Regular, ChevronLeft20Regular, Trophy20Regular, ArrowSwap20Regular,
+  Apps24Regular, Options24Regular, Grid24Regular, DocumentText24Regular,
 } from '@fluentui/react-icons';
+import { EmptyState } from '../components/empty-state';
+import { TileGrid } from '../components/ui/tile-grid';
 
 // ============================================================ shared
 
@@ -103,8 +106,9 @@ const useCatalogStyles = makeStyles({
   grid: { display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(280px, 1fr))', gap: tokens.spacingVerticalM },
   card: {
     display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalS, padding: tokens.spacingVerticalM, cursor: 'pointer',
+    boxShadow: tokens.shadow4, borderRadius: tokens.borderRadiusLarge,
     ...shorthands.transition('box-shadow', '120ms'),
-    ':hover': { boxShadow: tokens.shadow8 },
+    ':hover': { boxShadow: tokens.shadow16 },
   },
   cardSelectable: { outline: `2px solid ${tokens.colorBrandStroke1}` },
   cardTop: { display: 'flex', alignItems: 'center', gap: tokens.spacingHorizontalS },
@@ -376,7 +380,10 @@ export function ModelCatalogPanel({ active, nonce, acct = null }: { active: bool
   return (
     <div className={s.root}>
       <div className={s.header}>
-        <Subtitle1>Model catalog</Subtitle1>
+        <div style={{ display: 'flex', alignItems: 'center', gap: tokens.spacingHorizontalS }}>
+          <Apps24Regular />
+          <Subtitle1>Model catalog</Subtitle1>
+        </div>
         <Caption1>Explore and deploy foundation models{state.account?.name ? ` to ${state.account.name}` : ''}{state.account?.location ? ` · ${state.account.location}` : ''}.</Caption1>
       </div>
 
@@ -407,14 +414,21 @@ export function ModelCatalogPanel({ active, nonce, acct = null }: { active: bool
       </div>
 
       <div className={s.countRow}>
-        <Subtitle2>Models {filtered.length}</Subtitle2>
+        <div style={{ display: 'flex', alignItems: 'center', gap: tokens.spacingHorizontalXS }}>
+          <Grid24Regular />
+          <Subtitle2>Models {filtered.length}</Subtitle2>
+        </div>
         {filtered.length !== models.length ? <Caption1>of {models.length} deployable to this account</Caption1> : null}
         <div style={{ flex: 1 }} />
         <Button size="small" onClick={load}>Reload</Button>
       </div>
 
       {pageModels.length === 0 ? (
-        <div className={s.empty}>No models match the current filters.</div>
+        <EmptyState
+          icon={<Search24Regular />}
+          title="No models match the current filters"
+          body="No deployable models match your search and filter selection. Clear a filter or broaden your search term to see more of the catalog."
+        />
       ) : (
         <div className={s.grid}>
           {pageModels.map((m) => <ModelCard key={m.id} m={m} onClick={() => setSelected(m)} />)}
@@ -577,6 +591,7 @@ print(response.choices[0].message.content)`, [deployment, system, temperature, m
       {/* CENTER — Chat */}
       <div className={`${s.pane} ${s.centerPane}`}>
         <div className={s.centerHead}>
+          <ChatMultiple24Regular />
           <Subtitle2>Chat</Subtitle2>
           <div style={{ flex: 1 }} />
           <Button size="small" icon={<Delete20Regular />} appearance="subtle" onClick={() => setThread([])} disabled={!thread.length}>Clear chat</Button>
@@ -598,11 +613,11 @@ print(response.choices[0].message.content)`, [deployment, system, temperature, m
 
         <div className={s.thread} ref={threadRef}>
           {thread.length === 0 && !noChatModel && (
-            <div className={s.empty}>
-              <ChatMultiple24Regular fontSize={32} />
-              <Body1 block style={{ marginTop: tokens.spacingVerticalS }}>Start chatting with your deployed model.</Body1>
-              <Caption1>Messages call the real Azure OpenAI chat/completions endpoint for the selected deployment.</Caption1>
-            </div>
+            <EmptyState
+              icon={<ChatMultiple24Regular />}
+              title="Start chatting with your deployed model"
+              body="Messages call the real Azure OpenAI chat/completions endpoint for the selected deployment. Type below and press Enter to begin."
+            />
           )}
           {thread.map((m, i) => (
             <div key={i} className={`${s.bubbleRow} ${m.role === 'user' ? s.bubbleRowUser : ''}`}>
@@ -625,7 +640,7 @@ print(response.choices[0].message.content)`, [deployment, system, temperature, m
 
       {/* RIGHT — Configuration */}
       <div className={`${s.pane} ${s.rightPane}`}>
-        <Subtitle2>Configuration</Subtitle2>
+        <div className={s.paneTitle}><Options24Regular /><Subtitle2>Configuration</Subtitle2></div>
         <Field label="Deployment">
           <Dropdown value={deployment} selectedOptions={deployment ? [deployment] : []}
             placeholder={deployments.length ? 'Select a deployment' : 'No deployments'}
@@ -683,8 +698,13 @@ print(response.choices[0].message.content)`, [deployment, system, temperature, m
 
 const useLandingStyles = makeStyles({
   root: { padding: tokens.spacingVerticalL, display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalM, overflow: 'auto', flex: 1, minHeight: 0 },
-  grid: { display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(240px, 1fr))', gap: tokens.spacingVerticalM },
-  tile: { display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalS, padding: tokens.spacingVerticalL },
+  header: { display: 'flex', alignItems: 'center', gap: tokens.spacingHorizontalS },
+  tile: {
+    display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalS, padding: tokens.spacingVerticalL,
+    boxShadow: tokens.shadow4, borderRadius: tokens.borderRadiusLarge,
+    ...shorthands.transition('box-shadow', '120ms'),
+    ':hover': { boxShadow: tokens.shadow16 },
+  },
   tileHead: { display: 'flex', alignItems: 'center', gap: tokens.spacingHorizontalS },
 });
 
@@ -701,9 +721,12 @@ export function PlaygroundsLandingPanel({ active, onOpenChat, onOpenImages, onOp
   ];
   return (
     <div className={s.root}>
-      <Subtitle1>Playgrounds</Subtitle1>
+      <div className={s.header}>
+        <Apps24Regular />
+        <Subtitle1>Playgrounds</Subtitle1>
+      </div>
       <Caption1>Try your deployed models before wiring them into an app. Chat, Images and Audio call the real Azure OpenAI data-plane; each gates honestly on a model of that modality being deployed.</Caption1>
-      <div className={s.grid}>
+      <TileGrid minTileWidth={240}>
         {tiles.map((t) => (
           <Card key={t.key} className={s.tile}>
             <div className={s.tileHead}>{t.icon}<Body1Strong>{t.title}</Body1Strong></div>
@@ -712,7 +735,7 @@ export function PlaygroundsLandingPanel({ active, onOpenChat, onOpenImages, onOp
             {t.action}
           </Card>
         ))}
-      </div>
+      </TileGrid>
     </div>
   );
 }
@@ -722,10 +745,10 @@ export function PlaygroundsLandingPanel({ active, onOpenChat, onOpenImages, onOp
 const useMediaStyles = makeStyles({
   root: { padding: tokens.spacingVerticalL, display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalM, overflow: 'auto', flex: 1, minHeight: 0 },
   twoCol: { display: 'grid', gridTemplateColumns: 'minmax(280px, 360px) minmax(0, 1fr)', gap: tokens.spacingHorizontalL, alignItems: 'start' },
-  panel: { display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalM, padding: tokens.spacingVerticalL },
+  panel: { display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalM, padding: tokens.spacingVerticalL, boxShadow: tokens.shadow4, borderRadius: tokens.borderRadiusLarge },
   // Result panel keeps a stable height so the empty / loading placeholder reads
   // as an intentional, centered drop-zone rather than a collapsed card.
-  resultPanel: { display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalM, padding: tokens.spacingVerticalL, minHeight: '320px' },
+  resultPanel: { display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalM, padding: tokens.spacingVerticalL, minHeight: '320px', boxShadow: tokens.shadow4, borderRadius: tokens.borderRadiusLarge },
   resultGrid: { display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(220px, 1fr))', gap: tokens.spacingVerticalM },
   img: { width: '100%', maxHeight: '360px', objectFit: 'contain', backgroundColor: tokens.colorNeutralBackground3, borderRadius: tokens.borderRadiusLarge, border: `1px solid ${tokens.colorNeutralStroke2}` },
   empty: { margin: 'auto', color: tokens.colorNeutralForeground3, textAlign: 'center', padding: tokens.spacingVerticalXXL },
@@ -859,9 +882,13 @@ print(result.data[0].url)`, [deployment, prompt, n, size, quality, style]);
             {msg && <MessageBar intent={msg.intent}><MessageBarBody>{msg.text}{msg.hint ? <><br /><Caption1>{msg.hint}</Caption1></> : null}</MessageBarBody></MessageBar>}
           </Card>
           <Card className={s.resultPanel}>
-            <Subtitle2>Result</Subtitle2>
+            <div style={{ display: 'flex', alignItems: 'center', gap: tokens.spacingHorizontalS }}><Image24Regular /><Subtitle2>Result</Subtitle2></div>
             {busy ? <div className={s.empty}><Spinner size="small" label="Generating image…" labelPosition="after" /></div> : images.length === 0 ? (
-              <div className={s.empty}><Image24Regular fontSize={32} /><Body1 block style={{ marginTop: tokens.spacingVerticalS }}>Generated images appear here.</Body1></div>
+              <EmptyState
+                icon={<Image24Regular />}
+                title="Generated images appear here"
+                body="Enter a prompt and select a size, quality and style, then Generate to render images from the deployed image model."
+              />
             ) : (
               <div className={s.resultGrid}>
                 {images.map((img, i) => (
@@ -963,7 +990,7 @@ export function AudioPlaygroundPanel({ active, nonce, acct = null }: { active: b
             {msg && <MessageBar intent={msg.intent}><MessageBarBody>{msg.text}{msg.hint ? <><br /><Caption1>{msg.hint}</Caption1></> : null}</MessageBarBody></MessageBar>}
           </Card>
           <Card className={s.resultPanel}>
-            <Subtitle2>Transcript</Subtitle2>
+            <div style={{ display: 'flex', alignItems: 'center', gap: tokens.spacingHorizontalS }}><DocumentText24Regular /><Subtitle2>Transcript</Subtitle2></div>
             {busy ? <div className={s.empty}><Spinner size="small" label="Transcribing…" labelPosition="after" /></div> : (
               <Textarea value={text} readOnly resize="vertical" rows={12} placeholder="The transcript appears here after you upload an audio file and click Transcribe." />
             )}

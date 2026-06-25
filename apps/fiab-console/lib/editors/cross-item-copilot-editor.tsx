@@ -54,9 +54,9 @@ const useStyles = makeStyles({
     padding: `${tokens.spacingVerticalL} ${tokens.spacingHorizontalXXL}`,
     color: tokens.colorNeutralForegroundOnBrand,
     background:
-      'radial-gradient(900px 300px at 10% -40%, #7c3aed 0%, transparent 55%),' +
-      'radial-gradient(700px 320px at 98% 140%, #0078d4 0%, transparent 55%),' +
-      'linear-gradient(135deg, #2a1458 0%, #1a1342 55%, #0b1e3f 100%)',
+      'radial-gradient(900px 300px at 10% -40%, var(--loom-accent-violet) 0%, transparent 55%),' +
+      'radial-gradient(700px 320px at 98% 140%, var(--loom-accent-blue) 0%, transparent 55%),' +
+      'linear-gradient(135deg, #2a1458 0%, var(--loom-navy-800) 55%, #0b1e3f 100%)',
     boxShadow: tokens.shadow8,
     display: 'flex',
     alignItems: 'center',
@@ -71,7 +71,7 @@ const useStyles = makeStyles({
     background: 'linear-gradient(135deg, rgba(255,255,255,0.25), rgba(255,255,255,0.08))',
     border: '1px solid rgba(255,255,255,0.25)',
   },
-  heroText: { display: 'flex', flexDirection: 'column', gap: '2px', minWidth: 0, flex: 1 },
+  heroText: { display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalXXS, minWidth: 0, flex: 1 },
   heroTitle: { color: tokens.colorNeutralForegroundOnBrand, margin: 0, lineHeight: 1.1 },
   heroLead: { color: 'rgba(255,255,255,0.82)' },
 
@@ -89,6 +89,7 @@ const useStyles = makeStyles({
     backgroundColor: tokens.colorNeutralBackground1,
     border: `1px solid ${tokens.colorNeutralStroke2}`,
     borderRadius: tokens.borderRadiusLarge,
+    boxShadow: tokens.shadow4,
     padding: tokens.spacingVerticalM,
     minHeight: 0,
     overflow: 'hidden',
@@ -97,6 +98,7 @@ const useStyles = makeStyles({
     backgroundColor: tokens.colorNeutralBackground1,
     border: `1px solid ${tokens.colorNeutralStroke2}`,
     borderRadius: tokens.borderRadiusLarge,
+    boxShadow: tokens.shadow4,
     display: 'flex',
     flexDirection: 'column',
     minWidth: 0,
@@ -129,6 +131,11 @@ const useStyles = makeStyles({
     display: 'inline-flex', alignItems: 'center', justifyContent: 'center',
     background: 'linear-gradient(135deg, rgba(124,58,237,0.18), rgba(0,120,212,0.12))',
     color: tokens.colorBrandForeground1,
+  },
+  emptyBody: { maxWidth: '520px' },
+  exampleRow: {
+    display: 'flex', flexWrap: 'wrap', gap: tokens.spacingHorizontalS,
+    justifyContent: 'center', marginTop: tokens.spacingVerticalS,
   },
   composer: {
     flexShrink: 0,
@@ -474,12 +481,12 @@ export function CopilotConsoleView({ embedded = false, contextSlug = 'default', 
             <div className={s.emptyState}>
               <span className={s.emptyIcon}><BotSparkle24Filled fontSize={30} /></span>
               <Title3>Ask CSA Loom Copilot</Title3>
-              <Body1 style={{ maxWidth: 520 }}>
+              <Body1 className={s.emptyBody}>
                 One prompt, orchestrated across every wired service — Synapse, Lakehouse,
                 Databricks, APIM, ADX, ADF, Power BI, and the AI Foundry hub. Copilot picks
                 the right tools and runs them against real backends.
               </Body1>
-              <div style={{ display: 'flex', flexWrap: 'wrap', gap: tokens.spacingHorizontalS, justifyContent: 'center', marginTop: tokens.spacingVerticalS }}>
+              <div className={s.exampleRow}>
                 {EXAMPLE_PROMPTS.map((ex) => (
                   <Button key={ex} appearance="outline" size="small" onClick={() => setComposer(ex)}>{ex}</Button>
                 ))}
