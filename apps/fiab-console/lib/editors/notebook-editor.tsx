@@ -27,7 +27,9 @@ import {
   Play20Regular, Add20Regular, Save20Regular, ArrowSync20Regular, Delete20Regular, Notebook20Regular,
   History20Regular, ArrowUpload20Regular, Open20Regular, Library20Regular, Settings20Regular, Sparkle20Regular, BracesVariable20Regular,
   Copy20Regular, Info16Regular, ChevronDown20Regular, ChevronUp20Regular, Server20Regular,
+  Notebook16Regular, Database16Regular, History16Regular, Database24Regular,
 } from '@fluentui/react-icons';
+import { EmptyState } from '@/lib/components/empty-state';
 import { ItemEditorChrome } from './item-editor-chrome';
 import type { FabricItemType } from '@/lib/catalog/fabric-item-types';
 import type { RibbonTab } from '@/lib/components/ribbon';
@@ -82,6 +84,23 @@ const useStyles = makeStyles({
   // Bottom-left session status badge — overlays the editor surface like the
   // Synapse Studio session indicator (Idle / Running / Error).
   statusBadge: { position: 'absolute', bottom: tokens.spacingVerticalM, left: tokens.spacingHorizontalM, zIndex: 5 },
+  // Section header with a leading Fluent icon — gives each sidebar/main
+  // section a glyph so they read as part of the same polished product
+  // (Web 3.0 rule) instead of bare text labels.
+  sectionHeader: { display: 'flex', alignItems: 'center', gap: tokens.spacingHorizontalXS, color: tokens.colorNeutralForeground2 },
+  // Attach-Lakehouse picker row — a selectable list card. Elevated +
+  // rounded so it reads as a tappable card with depth, lifting on hover,
+  // instead of a flat bordered box.
+  lakehouseCard: {
+    display: 'flex', alignItems: 'center', gap: tokens.spacingVerticalS,
+    padding: tokens.spacingVerticalS,
+    border: `1px solid ${tokens.colorNeutralStroke2}`,
+    borderRadius: tokens.borderRadiusLarge,
+    backgroundColor: tokens.colorNeutralBackground1,
+    boxShadow: tokens.shadow4,
+    transition: 'box-shadow 120ms ease, border-color 120ms ease',
+    ':hover': { boxShadow: tokens.shadow16, border: `1px solid ${tokens.colorBrandStroke1}` },
+  },
 });
 
 interface WorkspaceLite { id: string; name: string; isOnDedicatedCapacity?: boolean; }
@@ -1491,7 +1510,9 @@ export function NotebookEditor({ item, id }: Props) {
     <ItemEditorChrome item={item} id={id} ribbon={ribbon}
       leftPanel={
         <div className={s.treePad}>
-          <Subtitle2 style={{ marginBottom: tokens.spacingVerticalS }}>Notebooks</Subtitle2>
+          <Subtitle2 className={s.sectionHeader} style={{ marginBottom: tokens.spacingVerticalS }}>
+            <Notebook16Regular /> Notebooks
+          </Subtitle2>
           {!workspaceId && <Caption1>Select a workspace.</Caption1>}
           {workspaceId && notebooks === null && <Spinner size="tiny" label="Loading…" />}
           {notebooks && notebooks.length === 0 && !listErr && <Caption1>No notebooks in this workspace.</Caption1>}
@@ -1508,7 +1529,9 @@ export function NotebookEditor({ item, id }: Props) {
           {/* Phase 2: Data items pane — Fabric "Explorer" tab equivalent */}
           {notebookId && (
             <>
-              <Subtitle2 style={{ marginTop: tokens.spacingVerticalL, marginBottom: tokens.spacingVerticalXS }}>Data items</Subtitle2>
+              <Subtitle2 className={s.sectionHeader} style={{ marginTop: tokens.spacingVerticalL, marginBottom: tokens.spacingVerticalXS }}>
+                <Database16Regular /> Data items
+              </Subtitle2>
               {attachedSources.length === 0 ? (
                 <Caption1>No sources attached. Attach a Lakehouse so cells can read its OneLake mount.</Caption1>
               ) : (
@@ -1857,14 +1880,19 @@ export function NotebookEditor({ item, id }: Props) {
                 <DialogContent>
                   {availableLakehouses === null && <Spinner size="tiny" label="Loading lakehouses…" />}
                   {availableLakehouses && availableLakehouses.length === 0 && (
-                    <Caption1>No lakehouses found in this workspace. Create one first from the workspace +New menu.</Caption1>
+                    <EmptyState
+                      icon={<Database24Regular />}
+                      title="No lakehouses in this workspace"
+                      body="Create a Lakehouse first from the workspace +New menu, then attach it so cells can read its OneLake mount."
+                      primaryAction={{ label: 'Refresh', onClick: loadLakehouses, appearance: 'outline' }}
+                    />
                   )}
                   {availableLakehouses && availableLakehouses.length > 0 && (
-                    <div style={{ display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalXS, maxHeight: 320, overflow: 'auto' }}>
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalS, maxHeight: 320, overflow: 'auto', padding: tokens.spacingHorizontalXXS }}>
                       {availableLakehouses.map((lh) => {
                         const already = attachedSources.some(s => s.kind === 'lakehouse' && s.id === lh.id);
                         return (
-                          <div key={lh.id} style={{ display: 'flex', alignItems: 'center', gap: tokens.spacingVerticalS, padding: tokens.spacingVerticalXS, border: `1px solid ${tokens.colorNeutralStroke2}`, borderRadius: tokens.borderRadiusMedium }}>
+                          <div key={lh.id} className={s.lakehouseCard}>
                             <div style={{ flex: 1 }}>
                               <Subtitle2>{lh.displayName}</Subtitle2>
                               {lh.description && <Caption1 style={{ display: 'block' }}>{lh.description}</Caption1>}
@@ -2080,7 +2108,7 @@ export function NotebookEditor({ item, id }: Props) {
                 ))}
               </div>
               <div style={{ display: 'flex', alignItems: 'center', gap: tokens.spacingVerticalS }}>
-                <Subtitle2>Run history ({jobs.length})</Subtitle2>
+                <Subtitle2 className={s.sectionHeader}><History16Regular /> Run history ({jobs.length})</Subtitle2>
                 <Button size="small" appearance="subtle" icon={<ArrowSync20Regular />} onClick={() => loadJobs(workspaceId, notebookId)}>Refresh</Button>
               </div>
               <div className={s.tableWrap}>

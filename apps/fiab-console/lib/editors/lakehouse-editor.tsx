@@ -44,6 +44,7 @@ import {
   Copy20Regular,
 } from '@fluentui/react-icons';
 import { ItemEditorChrome } from './item-editor-chrome';
+import { EmptyState } from '@/lib/components/empty-state';
 import { DeltaMaintenanceDialog } from './components/delta-maintenance-dialog';
 import { TierDialog, type BlobAccessTier } from '@/lib/components/onelake/tier-dialog';
 import { parseDdlColumns } from '@/lib/azure/delta-maintenance';
@@ -1282,7 +1283,7 @@ export function LakehouseEditor({ item, id }: Props) {
   const renderPrincipalPicker = useCallback(() => (
     <Field label="Principal (Entra user)" required>
       {selectedPrincipal ? (
-        <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: tokens.spacingHorizontalS }}>
           <Badge appearance="tint" color="brand">{selectedPrincipal.upn}</Badge>
           <Button size="small" appearance="subtle" onClick={() => { setSelectedPrincipal(null); setPrincipalQuery(''); }}>Change</Button>
         </div>
@@ -2331,7 +2332,7 @@ export function LakehouseEditor({ item, id }: Props) {
         <div className={s.treePad}>
           {/* Primary lakehouse — always bold to distinguish it from references. */}
           <Caption1 style={{ display: 'block', padding: `${tokens.spacingVerticalXXS} 0 ${tokens.spacingVerticalS}`, fontWeight: tokens.fontWeightBold }}>
-            <Database20Regular style={{ verticalAlign: 'middle', marginRight: 4 }} />
+            <Database20Regular style={{ verticalAlign: 'middle', marginRight: tokens.spacingHorizontalXS }} />
             {itemQ.data?.displayName ?? 'Primary lakehouse'}
           </Caption1>
           {containers === null && <Spinner size="tiny" label="Loading containers…" labelPosition="after" />}
@@ -2367,7 +2368,7 @@ export function LakehouseEditor({ item, id }: Props) {
               Tables/ dir, grouped by schema, with Delta/non-Delta icons and
               loading / broken / empty badges. Shown once a container is picked. */}
           {activeContainer && (liveTables !== null || liveTablesLoading || liveTablesError) && (
-            <Tree aria-label="Live Delta catalog" defaultOpenItems={['live-tables', `live-schema-${activeContainer}`]} style={{ marginTop: 12 }}>
+            <Tree aria-label="Live Delta catalog" defaultOpenItems={['live-tables', `live-schema-${activeContainer}`]} style={{ marginTop: tokens.spacingVerticalM }}>
               <TreeItem itemType="branch" value="live-tables">
                 <TreeItemLayout
                   iconBefore={<TableSimple20Regular />}
@@ -2433,7 +2434,7 @@ export function LakehouseEditor({ item, id }: Props) {
             <Tree
               aria-label="Planned lakehouse structure from app bundle"
               defaultOpenItems={['bundle', 'bundle-folders', 'bundle-tables', 'bundle-shortcuts']}
-              style={{ marginTop: 12 }}
+              style={{ marginTop: tokens.spacingVerticalM }}
             >
               <TreeItem itemType="branch" value="bundle">
                 <TreeItemLayout iconBefore={<Database20Regular />}>Starter structure (app bundle)</TreeItemLayout>
@@ -2491,9 +2492,9 @@ export function LakehouseEditor({ item, id }: Props) {
           )}
 
           {/* ── Reference lakehouses (F8) ─────────────────────────────── */}
-          <div style={{ display: 'flex', alignItems: 'center', gap: tokens.spacingHorizontalXS, marginTop: 14, padding: `${tokens.spacingVerticalXS} 0` }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: tokens.spacingHorizontalXS, marginTop: tokens.spacingVerticalL, padding: `${tokens.spacingVerticalXS} 0` }}>
             <Caption1 style={{ flex: 1, fontWeight: tokens.fontWeightSemibold }}>
-              <LinkMultiple20Regular style={{ verticalAlign: 'middle', marginRight: 4 }} />
+              <LinkMultiple20Regular style={{ verticalAlign: 'middle', marginRight: tokens.spacingHorizontalXS }} />
               References
             </Caption1>
             <Tooltip content={isNewItem ? 'Save the lakehouse first' : 'Add an in-workspace lakehouse to browse side-by-side'} relationship="label">
@@ -2517,7 +2518,7 @@ export function LakehouseEditor({ item, id }: Props) {
                   <TreeItemLayout
                     iconBefore={<Database20Regular />}
                     aside={
-                      <span style={{ display: 'inline-flex', alignItems: 'center', gap: 4 }}>
+                      <span style={{ display: 'inline-flex', alignItems: 'center', gap: tokens.spacingHorizontalXS }}>
                         <Badge appearance="outline" size="small" color="informative">ref</Badge>
                         {!ref.reachable && (
                           <Tooltip relationship="label" content="The Console UAMI cannot reach this lakehouse's containers. Grant it Storage Blob Data Reader on the referenced storage account.">
@@ -2609,14 +2610,14 @@ export function LakehouseEditor({ item, id }: Props) {
           )}
           <div className={s.tabs}>
             <TabList selectedValue={tab} onTabSelect={(_, d) => setTab(d.value as string)}>
-              <Tab value="files">Files</Tab>
-              <Tab value="tables">Tables</Tab>
-              <Tab value="history">History</Tab>
-              <Tab value="schemas">Schemas</Tab>
-              <Tab value="preview">Preview</Tab>
-              <Tab value="sql">SQL</Tab>
-              <Tab value="shortcuts">Shortcuts</Tab>
-              <Tab value="security">Security</Tab>
+              <Tab value="files" icon={<DocumentTable20Regular />}>Files</Tab>
+              <Tab value="tables" icon={<TableSimple20Regular />}>Tables</Tab>
+              <Tab value="history" icon={<History20Regular />}>History</Tab>
+              <Tab value="schemas" icon={<Database20Regular />}>Schemas</Tab>
+              <Tab value="preview" icon={<Eye20Regular />}>Preview</Tab>
+              <Tab value="sql" icon={<Play20Regular />}>SQL</Tab>
+              <Tab value="shortcuts" icon={<CloudLink20Regular />}>Shortcuts</Tab>
+              <Tab value="security" icon={<ShieldTask20Regular />}>Security</Tab>
             </TabList>
           </div>
           <div className={s.pad}>
@@ -2759,7 +2760,7 @@ export function LakehouseEditor({ item, id }: Props) {
                     } : undefined}
                   >
                     {isDragOver && (
-                      <div style={{ padding: tokens.spacingVerticalS, textAlign: 'center', color: tokens.colorBrandForeground1, fontWeight: 600 }}>
+                      <div style={{ padding: tokens.spacingVerticalS, textAlign: 'center', color: tokens.colorBrandForeground1, fontWeight: tokens.fontWeightSemibold }}>
                         Drop files or a folder to upload into /{currentPrefix || ''} (folder tree preserved)
                       </div>
                     )}
@@ -2918,7 +2919,7 @@ export function LakehouseEditor({ item, id }: Props) {
                         </MessageBar>
                         {bundleDeltaTables.length > 0 && (
                           <>
-                            <Caption1 style={{ display: 'block', marginTop: 12 }}>
+                            <Caption1 style={{ display: 'block', marginTop: tokens.spacingVerticalM }}>
                               <strong>Planned tables from the installed app bundle</strong> — run the load/DDL in a
                               notebook against the live lakehouse to materialize these.
                             </Caption1>
@@ -2983,7 +2984,7 @@ export function LakehouseEditor({ item, id }: Props) {
                   // its tables, with a "Move to schema…" action per table.
                   if (schemasEnabled) {
                     return (
-                      <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+                      <div style={{ display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalM }}>
                         <Caption1>
                           Schema-enabled lakehouse — tables are grouped by schema. Manage schemas in the <strong>Schemas</strong> tab.
                         </Caption1>
@@ -2994,7 +2995,7 @@ export function LakehouseEditor({ item, id }: Props) {
                           const childTables = childListing && childListing !== 'loading' && !('error' in (childListing as any))
                             ? (childListing as PathEntry[]).filter((e) => e.isDirectory) : [];
                           return (
-                            <div key={schemaDir.name} style={{ border: `1px solid ${tokens.colorNeutralStroke2}`, borderRadius: tokens.borderRadiusLarge, padding: tokens.spacingVerticalM }}>
+                            <div key={schemaDir.name} style={{ border: `1px solid ${tokens.colorNeutralStroke2}`, borderRadius: tokens.borderRadiusLarge, padding: tokens.spacingVerticalM, backgroundColor: tokens.colorNeutralBackground1, boxShadow: tokens.shadow4 }}>
                               <div style={{ display: 'flex', alignItems: 'center', gap: tokens.spacingHorizontalS, marginBottom: tokens.spacingVerticalS }}>
                                 <Database20Regular />
                                 <Subtitle2>{schemaName}</Subtitle2>
@@ -3211,7 +3212,7 @@ export function LakehouseEditor({ item, id }: Props) {
                             <TableCell>
                               <Button size="small" appearance="outline" icon={<Eye20Regular />}
                                 disabled={historyPreviewLoading}
-                                style={{ marginRight: 4 }}
+                                style={{ marginRight: tokens.spacingHorizontalXS }}
                                 onClick={() => historyTable && previewAsOf(historyTable, row.version)}>
                                 Preview
                               </Button>
@@ -3233,7 +3234,7 @@ export function LakehouseEditor({ item, id }: Props) {
                 )}
                 {!historyPreviewLoading && historyPreviewResult && (
                   <>
-                    <Subtitle2 style={{ marginTop: 12 }}>
+                    <Subtitle2 style={{ marginTop: tokens.spacingVerticalM }}>
                       Preview — {leafName(historyTable || '')} @ version {historyPreviewVersion}
                     </Subtitle2>
                     {!historyPreviewResult.ok ? (
@@ -3414,7 +3415,7 @@ export function LakehouseEditor({ item, id }: Props) {
                                 return (
                                   <TableRow key={sc.name}>
                                     <TableCell>
-                                      <CloudLink20Regular style={{ verticalAlign: 'middle', marginRight: 4 }} />
+                                      <CloudLink20Regular style={{ verticalAlign: 'middle', marginRight: tokens.spacingHorizontalXS }} />
                                       <strong>{sc.name}</strong>
                                     </TableCell>
                                     <TableCell><code style={{ fontSize: tokens.fontSizeBase100, overflowWrap: 'anywhere', wordBreak: 'break-word' }}>{sc.target}</code></TableCell>
@@ -3462,7 +3463,7 @@ export function LakehouseEditor({ item, id }: Props) {
                             style={selectedShortcut?.id === sc.id ? { outline: `2px solid ${tokens.colorBrandStroke1}`, outlineOffset: -2 } : undefined}
                           >
                             <TableCell>
-                              <CloudLink20Regular style={{ verticalAlign: 'middle', marginRight: 4 }} />
+                              <CloudLink20Regular style={{ verticalAlign: 'middle', marginRight: tokens.spacingHorizontalXS }} />
                               <strong>{sc.name}</strong>
                             </TableCell>
                             <TableCell><code style={{ fontSize: tokens.fontSizeBase100, overflowWrap: 'anywhere', wordBreak: 'break-word' }}>{sc.fullPath}</code></TableCell>
@@ -3519,8 +3520,22 @@ export function LakehouseEditor({ item, id }: Props) {
 
             {tab === 'preview' && (
               <>
-                {!activePath && <Caption1>Select a file in the Files tab.</Caption1>}
-                {activePath?.isDirectory && <Caption1>{leafName(activePath.name)} is a directory — select a file.</Caption1>}
+                {!activePath && (
+                  <EmptyState
+                    icon={<Eye20Regular />}
+                    title="No file selected"
+                    body="Pick a Parquet, CSV, or JSON file in the Files tab to preview its first rows via OPENROWSET."
+                    primaryAction={{ label: 'Go to Files', appearance: 'primary', onClick: () => setTab('files') }}
+                  />
+                )}
+                {activePath?.isDirectory && (
+                  <EmptyState
+                    icon={<Folder20Regular />}
+                    title={`${leafName(activePath.name)} is a folder`}
+                    body="Folders can't be previewed. Select a file inside this folder to see its rows."
+                    primaryAction={{ label: 'Go to Files', appearance: 'primary', onClick: () => setTab('files') }}
+                  />
+                )}
                 {activePath && !activePath.isDirectory && (
                   <>
                     <div className={s.toolbar}>
@@ -3701,7 +3716,7 @@ export function LakehouseEditor({ item, id }: Props) {
                             <span style={{ display: 'flex', alignItems: 'center', gap: tokens.spacingHorizontalSNudge, width: '100%' }}>
                               <ShortcutSourceLogo type={src.type} size={28} />
                               <span style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-start', gap: tokens.spacingVerticalXXS, minWidth: 0 }}>
-                                <span style={{ fontWeight: 600 }}>{src.label}</span>
+                                <span style={{ fontWeight: tokens.fontWeightSemibold }}>{src.label}</span>
                                 <Caption1 style={{ color: tokens.colorNeutralForeground3, whiteSpace: 'normal' }}>{src.blurb}</Caption1>
                                 <Badge appearance="tint" color={src.uamiReady ? 'success' : 'warning'} size="small">
                                   {src.uamiReady ? 'UAMI-ready' : 'Key Vault credential'}
@@ -3736,7 +3751,7 @@ export function LakehouseEditor({ item, id }: Props) {
                       {scType === 'adls' && (
                         <>
                           <Field label="Source">
-                            <div style={{ display: 'flex', gap: 8 }}>
+                            <div style={{ display: 'flex', gap: tokens.spacingHorizontalS }}>
                               <Button size="small" appearance={scAdlsMode === 'picker' ? 'primary' : 'outline'} onClick={() => setScAdlsMode('picker')}>In-tenant account</Button>
                               <Button size="small" appearance={scAdlsMode === 'external' ? 'primary' : 'outline'} onClick={() => setScAdlsMode('external')}>External (URI + SAS/key)</Button>
                             </div>
@@ -4033,13 +4048,13 @@ export function LakehouseEditor({ item, id }: Props) {
                     containers. Write actions stay disabled on references.
                   </Caption1>
                   {refsError && (
-                    <MessageBar intent="error" style={{ marginTop: 8 }}><MessageBarBody>{refsError}</MessageBarBody></MessageBar>
+                    <MessageBar intent="error" style={{ marginTop: tokens.spacingVerticalS }}><MessageBarBody>{refsError}</MessageBarBody></MessageBar>
                   )}
                   {(() => {
                     const referenced = new Set((references ?? []).map((r) => r.id));
                     const addable = workspaceLakehouses.filter((lh) => lh.id !== id && !referenced.has(lh.id));
                     return (
-                      <Table size="small" style={{ marginTop: 12 }} aria-label="Workspace lakehouses">
+                      <Table size="small" style={{ marginTop: tokens.spacingVerticalM }} aria-label="Workspace lakehouses">
                         <TableHeader>
                           <TableRow>
                             <TableHeaderCell>Lakehouse</TableHeaderCell>
@@ -4050,7 +4065,7 @@ export function LakehouseEditor({ item, id }: Props) {
                           {addable.map((lh) => (
                             <TableRow key={lh.id}>
                               <TableCell>
-                                <Database20Regular style={{ verticalAlign: 'middle', marginRight: 4 }} />
+                                <Database20Regular style={{ verticalAlign: 'middle', marginRight: tokens.spacingHorizontalXS }} />
                                 {lh.displayName}
                               </TableCell>
                               <TableCell>
@@ -4115,7 +4130,7 @@ export function LakehouseEditor({ item, id }: Props) {
                   <TabList
                     selectedValue={permsTab}
                     onTabSelect={(_, d) => selectPermsTab(d.value as PermsTab)}
-                    style={{ marginBottom: 12 }}
+                    style={{ marginBottom: tokens.spacingVerticalM }}
                   >
                     <Tab value="object">Object (RBAC)</Tab>
                     <Tab value="table">Table</Tab>
@@ -4194,7 +4209,7 @@ export function LakehouseEditor({ item, id }: Props) {
                           </Dropdown>
                         </Field>
                       </div>
-                      <div style={{ marginTop: 12, display: 'flex', justifyContent: 'flex-end' }}>
+                      <div style={{ marginTop: tokens.spacingVerticalM, display: 'flex', justifyContent: 'flex-end' }}>
                         <Button appearance="primary" onClick={grantPerm} disabled={permsBusy || !newPrincipalId.trim()}>
                           {permsBusy ? 'Working…' : 'Grant role'}
                         </Button>
@@ -4395,17 +4410,17 @@ export function LakehouseEditor({ item, id }: Props) {
                           </Dropdown>
                         </Field>
                       </div>
-                      <Caption1 style={{ display: 'block', marginTop: 8 }}>
+                      <Caption1 style={{ display: 'block', marginTop: tokens.spacingVerticalS }}>
                         Predicate: rows are visible when the filter column equals <code>{rlsSubject}</code> or the
                         caller is <code>db_owner</code>.
                       </Caption1>
-                      <div style={{ marginTop: 12, display: 'flex', justifyContent: 'flex-end' }}>
+                      <div style={{ marginTop: tokens.spacingVerticalM, display: 'flex', justifyContent: 'flex-end' }}>
                         <Button appearance="primary" onClick={createRls} disabled={permsBusy || selTableId == null || rlsFilterColId == null}>
                           Create policy
                         </Button>
                       </div>
 
-                      <div style={{ marginTop: 20, paddingTop: 16, borderTop: `1px solid ${tokens.colorNeutralStroke2}` }}>
+                      <div style={{ marginTop: tokens.spacingVerticalXL, paddingTop: tokens.spacingVerticalL, borderTop: `1px solid ${tokens.colorNeutralStroke2}` }}>
                         <OnelakeRlsPredicateEditor
                           tables={sqlTables}
                           onSaved={() => loadSqlPerms('row')}
@@ -4480,8 +4495,8 @@ export function LakehouseEditor({ item, id }: Props) {
                   </Field>
 
                   {/* ---- Liquid clustering (Fabric F12 parity → real ALTER TABLE … CLUSTER BY) ---- */}
-                  <Subtitle2 style={{ marginTop: 12 }}>Liquid clustering</Subtitle2>
-                  <MessageBar intent="info" style={{ marginBottom: 4 }}>
+                  <Subtitle2 style={{ marginTop: tokens.spacingVerticalM }}>Liquid clustering</Subtitle2>
+                  <MessageBar intent="info" style={{ marginBottom: tokens.spacingVerticalXS }}>
                     <MessageBarBody>
                       Liquid clustering replaces static partitioning and ZORDER. On save, Loom runs a
                       real <code>ALTER TABLE delta.`abfss://…` CLUSTER BY (&lt;columns&gt;)</code> on the
@@ -4613,7 +4628,7 @@ export function LakehouseEditor({ item, id }: Props) {
                   </Field>
                   {icebergEndpoint && (
                     <div style={{ display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalSNudge, padding: `${tokens.spacingVerticalMNudge} ${tokens.spacingHorizontalM}`, borderRadius: tokens.borderRadiusMedium, background: tokens.colorNeutralBackground3, border: `1px solid ${tokens.colorNeutralStroke2}` }}>
-                      <Caption1 style={{ fontWeight: 600 }}>Iceberg endpoint (metadata path readers point at)</Caption1>
+                      <Caption1 style={{ fontWeight: tokens.fontWeightSemibold }}>Iceberg endpoint (metadata path readers point at)</Caption1>
                       {([
                         ['ADLS path (abfss)', icebergEndpoint.abfss],
                         ['Iceberg catalog / metadata folder (HTTPS)', icebergEndpoint.httpsMetadataFolder],

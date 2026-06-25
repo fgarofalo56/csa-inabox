@@ -32,10 +32,15 @@ import {
 } from '@fluentui/react-components';
 import {
   Dismiss24Regular, Play16Regular, Save16Regular, ArrowSync16Regular,
+  DocumentData24Regular, TableSearch24Regular,
 } from '@fluentui/react-icons';
 import { useCallback, useEffect, useState } from 'react';
+import { EmptyState } from '../components/empty-state';
 
 const useStyles = makeStyles({
+  // Header title leads with a section icon (matches sibling editors / polished surfaces).
+  titleRow: { display: 'flex', alignItems: 'center', gap: tokens.spacingHorizontalS },
+  titleIcon: { color: tokens.colorBrandForeground1, flexShrink: 0 },
   body: { display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalM, height: '100%', overflow: 'hidden' },
   conn: { display: 'flex', gap: tokens.spacingHorizontalM, flexWrap: 'wrap' },
   connField: { minWidth: '220px' },
@@ -61,7 +66,6 @@ const useStyles = makeStyles({
     maxWidth: '320px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
     fontVariantNumeric: 'tabular-nums',
   },
-  emptyNote: { display: 'block', marginTop: tokens.spacingVerticalS, color: tokens.colorNeutralForeground3 },
   // Long backend error / gate strings (Kusto / ARM messages) must wrap, not push
   // the MessageBar — and the drawer — into horizontal overflow.
   msgText: { minWidth: 0, overflowWrap: 'anywhere', wordBreak: 'break-word' },
@@ -183,7 +187,10 @@ export function SynapseKqlEditor({ name, onClose }: SynapseKqlEditorProps) {
         <DrawerHeaderTitle
           action={<Button appearance="subtle" aria-label="Close" icon={<Dismiss24Regular />} onClick={onClose} />}
         >
-          KQL script · {name}
+          <span className={s.titleRow}>
+            <DocumentData24Regular className={s.titleIcon} aria-hidden />
+            KQL script · {name}
+          </span>
         </DrawerHeaderTitle>
       </DrawerHeader>
       <DrawerBody>
@@ -257,7 +264,12 @@ export function SynapseKqlEditor({ name, onClose }: SynapseKqlEditorProps) {
                   {result.truncated && <Badge appearance="tint" color="warning">Truncated to first 5000</Badge>}
                 </div>
                 {result.columns.length === 0 ? (
-                  <Caption1 className={s.emptyNote}>Query returned no columns.</Caption1>
+                  <EmptyState
+                    icon={<TableSearch24Regular />}
+                    title="No columns returned"
+                    body="The query ran successfully but produced no tabular columns. Adjust the KQL projection (or add a column to the result) and run again."
+                    primaryAction={{ label: running ? 'Running…' : 'Run again', onClick: run }}
+                  />
                 ) : (
                   <Table size="small" aria-label="Query results">
                     <TableHeader className={s.resultHeader}>

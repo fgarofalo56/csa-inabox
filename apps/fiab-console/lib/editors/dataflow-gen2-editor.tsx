@@ -30,6 +30,7 @@ import {
   Sparkle20Regular,
 } from '@fluentui/react-icons';
 import { ItemEditorChrome } from './item-editor-chrome';
+import { EmptyState } from '@/lib/components/empty-state';
 import { PowerQueryHost } from '@/lib/components/pipeline/dataflow/power-query-host';
 import { DataflowCopilotPane } from '@/lib/components/pipeline/dataflow/dataflow-copilot-pane';
 import { DestinationPicker } from '@/lib/components/pipeline/dataflow/destination-picker';
@@ -265,7 +266,9 @@ export function DataflowGen2Editor({ item, id }: Props) {
     <ItemEditorChrome item={item} id={id} ribbon={ribbon}
       leftPanel={
         <div className={s.treePad}>
-          <Subtitle2 style={{ marginBottom: tokens.spacingVerticalS }}>Dataflows Gen2</Subtitle2>
+          <Subtitle2 style={{ marginBottom: tokens.spacingVerticalS, display: 'flex', alignItems: 'center', gap: tokens.spacingHorizontalXS }}>
+            <Flow20Regular /> Dataflows Gen2
+          </Subtitle2>
           {!workspaceId && <Caption1>Select a workspace.</Caption1>}
           {workspaceId && dataflows === null && <Spinner size="tiny" label="Loading…" />}
           {dataflows && dataflows.length === 0 && !listErr && <Caption1>No dataflows.</Caption1>}
@@ -351,12 +354,12 @@ export function DataflowGen2Editor({ item, id }: Props) {
           )}
 
           {!dataflowId && (
-            <MessageBar intent="info">
-              <MessageBarBody>
-                Pick a dataflow from the left rail (or click <strong>New</strong>) to author its
-                Power Query, set an output destination, and Run it on ADF — no Fabric required.
-              </MessageBarBody>
-            </MessageBar>
+            <EmptyState
+              icon={<Flow20Regular />}
+              title="No dataflow selected"
+              body="Pick a dataflow from the left rail to author its Power Query, set an output destination, and Run it on ADF — no Fabric required."
+              primaryAction={canCreate ? { label: 'New dataflow', onClick: () => setCreateOpen(true) } : undefined}
+            />
           )}
           {dataflowId && dirty && <Badge appearance="outline" color="warning" style={{ alignSelf: 'flex-start' }}>unsaved</Badge>}
           {dataflowId && <Caption1 className={s.breakText}>Definition part: <code>{partPath}</code></Caption1>}

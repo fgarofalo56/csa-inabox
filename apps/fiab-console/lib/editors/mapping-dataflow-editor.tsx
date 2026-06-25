@@ -51,6 +51,11 @@ const useStyles = makeStyles({
   loading: {
     display: 'flex', alignItems: 'center', gap: tokens.spacingHorizontalS,
     padding: tokens.spacingVerticalXXL, justifyContent: 'center',
+    backgroundColor: tokens.colorNeutralBackground1,
+    borderRadius: tokens.borderRadiusLarge,
+    border: `1px solid ${tokens.colorNeutralStroke2}`,
+    boxShadow: tokens.shadow4,
+    color: tokens.colorNeutralForeground3,
   },
   breakText: { overflowWrap: 'anywhere', wordBreak: 'break-word', minWidth: 0, maxWidth: '100%' },
 });

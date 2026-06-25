@@ -61,6 +61,7 @@ import { ShareDialog } from './components/share-dialog';
 import { SqlScalePanel } from './components/sql-scale-panel';
 import { useJobsStore } from '@/lib/state/jobs-store';
 import { SqlPerformanceDashboard } from '@/lib/editors/components/sql-performance-dashboard';
+import { EmptyState } from '@/lib/components/empty-state';
 import type { FabricItemType } from '@/lib/catalog/fabric-item-types';
 import type { RibbonTab } from '@/lib/components/ribbon';
 
@@ -141,7 +142,13 @@ const useStyles = makeStyles({
     padding: tokens.spacingVerticalXS, borderRadius: tokens.borderRadiusMedium, border: `1px solid ${tokens.colorNeutralStroke2}`,
     background: tokens.colorNeutralBackground1, color: tokens.colorNeutralForeground1,
   },
-  card: { border: `1px solid ${tokens.colorNeutralStroke2}`, borderRadius: tokens.borderRadiusLarge, padding: tokens.spacingVerticalM, display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalS },
+  card: {
+    border: `1px solid ${tokens.colorNeutralStroke2}`, borderRadius: tokens.borderRadiusLarge, padding: tokens.spacingVerticalM,
+    display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalS,
+    backgroundColor: tokens.colorNeutralBackground1, boxShadow: tokens.shadow4,
+    transition: 'box-shadow 0.15s ease-in-out',
+    ':hover': { boxShadow: tokens.shadow16 },
+  },
   fullWidth: { width: '100%' },
   resultActions: { marginLeft: 'auto', display: 'flex', gap: tokens.spacingHorizontalXS },
   treeWrap: {
@@ -169,7 +176,7 @@ const useStyles = makeStyles({
   copilotPane: {
     flexGrow: 0, flexShrink: 1, flexBasis: '340px', minWidth: 0, maxWidth: '100%', display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalS,
     border: `1px solid ${tokens.colorNeutralStroke2}`, borderRadius: tokens.borderRadiusLarge, padding: tokens.spacingVerticalS,
-    background: tokens.colorNeutralBackground2, maxHeight: '560px',
+    background: tokens.colorNeutralBackground2, maxHeight: '560px', boxShadow: tokens.shadow4,
   },
   copilotHead: { display: 'flex', alignItems: 'center', gap: tokens.spacingHorizontalXS, flexWrap: 'wrap' },
   copilotHeadActions: { marginLeft: 'auto', display: 'flex', gap: tokens.spacingHorizontalXS },
@@ -193,7 +200,13 @@ const useStyles = makeStyles({
     borderRadius: tokens.borderRadiusMedium, padding: `${tokens.spacingVerticalXS} ${tokens.spacingHorizontalS}`, whiteSpace: 'pre-wrap', wordBreak: 'break-word',
     margin: `${tokens.spacingVerticalXS} 0`,
   },
-  connCard: { border: `1px solid ${tokens.colorNeutralStroke2}`, borderRadius: tokens.borderRadiusLarge, padding: tokens.spacingVerticalM, display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalS, marginTop: tokens.spacingVerticalL },
+  connCard: {
+    border: `1px solid ${tokens.colorNeutralStroke2}`, borderRadius: tokens.borderRadiusLarge, padding: tokens.spacingVerticalM,
+    display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalS, marginTop: tokens.spacingVerticalL,
+    backgroundColor: tokens.colorNeutralBackground1, boxShadow: tokens.shadow4,
+    transition: 'box-shadow 0.15s ease-in-out',
+    ':hover': { boxShadow: tokens.shadow16 },
+  },
   connCodeWrap: { position: 'relative', background: tokens.colorNeutralBackground3, borderRadius: tokens.borderRadiusMedium, padding: tokens.spacingVerticalS },
   connCode: { fontFamily: 'Consolas, monospace', fontSize: tokens.fontSizeBase100, whiteSpace: 'pre-wrap', wordBreak: 'break-all', margin: 0, color: tokens.colorNeutralForeground1 },
   connCopyBtn: { position: 'absolute', top: tokens.spacingVerticalXS, right: tokens.spacingHorizontalXS },
@@ -578,7 +591,13 @@ function SqlServerAdminPanel({
   }
 
   if (!server) {
-    return <Caption1>Pick a server on the <strong>Connect</strong> tab (or in the left pane) to manage firewall, Microsoft Entra admin, and geo-replication.</Caption1>;
+    return (
+      <EmptyState
+        icon={<ShieldKeyhole20Regular />}
+        title="No server selected"
+        body="Pick a server on the Connect tab (or in the left pane) to manage firewall rules, the Microsoft Entra admin, and active geo-replication."
+      />
+    );
   }
 
   return (
@@ -622,7 +641,7 @@ function SqlServerAdminPanel({
       {/* Microsoft Entra admin — Microsoft.Sql/servers/administrators (Azure SQL only) */}
       {family === 'azure-sql' ? (
         <div className={s.card}>
-          <Subtitle2>Microsoft Entra admin — {server}</Subtitle2>
+          <Subtitle2><PeopleTeam20Regular style={{ verticalAlign: 'middle' }} /> Microsoft Entra admin — {server}</Subtitle2>
           <MessageBar intent="info"><MessageBarBody>
             <MessageBarTitle>Microsoft.Sql/servers/administrators</MessageBarTitle>
             Sets the server's Microsoft Entra (Azure AD) admin via ARM. The console UAMI itself must be the Entra admin (or a member of the admin group) for the TDS query path to authenticate.
@@ -638,7 +657,7 @@ function SqlServerAdminPanel({
         </div>
       ) : (
         <div className={s.card}>
-          <Subtitle2>Microsoft Entra admin</Subtitle2>
+          <Subtitle2><PeopleTeam20Regular style={{ verticalAlign: 'middle' }} /> Microsoft Entra admin</Subtitle2>
           <MessageBar intent="warning"><MessageBarBody>
             <MessageBarTitle>Entra auth on PostgreSQL is principal-based</MessageBarTitle>
             PostgreSQL flexible servers don't expose a single server-level <code>administrators</code> ARM resource; Entra principals are created in-engine via <code>pgaadauth_create_principal</code>. The Query tab runs over the real <code>pg</code> wire protocol with an Entra token — register the console identity once (<code>SELECT * FROM pgaadauth_create_principal('&lt;console-uami-name&gt;', false, false)</code>) and set <code>LOOM_POSTGRES_AAD_USER</code> to that name. Honest gate — not a fake form.
@@ -649,7 +668,7 @@ function SqlServerAdminPanel({
       {/* Geo-replication — createMode=Secondary (Azure SQL only) */}
       {family === 'azure-sql' ? (
         <div className={s.card}>
-          <Subtitle2>Active geo-replication — {database || '(select a database)'}</Subtitle2>
+          <Subtitle2><BranchFork20Regular style={{ verticalAlign: 'middle' }} /> Active geo-replication — {database || '(select a database)'}</Subtitle2>
           <MessageBar intent="info"><MessageBarBody>
             <MessageBarTitle>Microsoft.Sql/servers/databases · createMode=Secondary</MessageBarTitle>
             Creates a readable geo-secondary of the selected database on a replica server via ARM REST. Long-running; ARM continues async after acceptance.
@@ -679,7 +698,7 @@ function SqlServerAdminPanel({
         </div>
       ) : (
         <div className={s.card}>
-          <Subtitle2>Geo-replication</Subtitle2>
+          <Subtitle2><BranchFork20Regular style={{ verticalAlign: 'middle' }} /> Geo-replication</Subtitle2>
           <MessageBar intent="warning"><MessageBarBody>
             <MessageBarTitle>PostgreSQL read replicas use a distinct ARM surface</MessageBarTitle>
             PG flexible-server read replicas are created via <code>Microsoft.DBforPostgreSQL/flexibleServers</code> with <code>createMode=Replica</code> + <code>sourceServerResourceId</code>, not the Azure SQL secondary-database path. Wire a PG replica route to manage it here. Honest gate.
@@ -1573,7 +1592,7 @@ export function UnifiedSqlDatabaseEditor({ item, id }: { item: FabricItemType; i
               {/* ---- Connection strings (ADO.NET / JDBC / ODBC / PHP / Go) ---- */}
               {family === 'azure-sql' && serverFqdn && (
                 <div className={s.connCard}>
-                  <Subtitle2>Connection strings</Subtitle2>
+                  <Subtitle2><PlugConnected20Regular style={{ verticalAlign: 'middle' }} /> Connection strings</Subtitle2>
                   {!database ? (
                     <Caption1>Select a database (left pane or a <strong>Connect</strong> button above) to generate driver-ready strings.</Caption1>
                   ) : (
@@ -1792,7 +1811,7 @@ export function UnifiedSqlDatabaseEditor({ item, id }: { item: FabricItemType; i
                   )}
                   {copilotEligible && (
                     <Caption1>
-                      <Sparkle20Regular style={{ verticalAlign: 'middle', fontSize: 14 }} /> Copilot inline completion is on while the pane is open —
+                      <Sparkle20Regular style={{ verticalAlign: 'middle', fontSize: tokens.fontSizeBase200 }} /> Copilot inline completion is on while the pane is open —
                       write <code>-- describe what you want</code> on a new line and press <strong>Tab</strong> to accept the ghost-text T-SQL.
                     </Caption1>
                   )}
@@ -1895,7 +1914,11 @@ export function UnifiedSqlDatabaseEditor({ item, id }: { item: FabricItemType; i
           {tab === 'schema' && (
             <>
               {!server ? (
-                <Caption1>Pick a server on the <strong>Connect</strong> tab (or left pane) to browse database objects.</Caption1>
+                <EmptyState
+                  icon={<Table20Regular />}
+                  title="No database selected"
+                  body="Pick a server on the Connect tab (or the left pane) to browse tables, views, procedures, functions, and schemas over live TDS."
+                />
               ) : family === 'azure-sql' ? (
                 <>
                   <div className={s.toolbar}>
@@ -1957,7 +1980,11 @@ export function UnifiedSqlDatabaseEditor({ item, id }: { item: FabricItemType; i
             family === 'azure-sql'
               ? (server && database
                   ? <SqlSecurityPanel itemType="azure-sql-database" itemId={id} server={server} database={database} />
-                  : <Caption1>Pick a server + database on the <strong>Connect</strong> tab to manage object/column GRANT, Row-Level Security and Dynamic Data Masking.</Caption1>)
+                  : <EmptyState
+                      icon={<ShieldKeyhole20Regular />}
+                      title="No database selected"
+                      body="Pick a server and database on the Connect tab to manage object/column GRANT, Row-Level Security, and Dynamic Data Masking."
+                    />)
               : (
                 <MessageBar intent="info">
                   <MessageBarBody>
@@ -1973,7 +2000,11 @@ export function UnifiedSqlDatabaseEditor({ item, id }: { item: FabricItemType; i
             family === 'azure-sql'
               ? (server && database
                   ? <ShareDialog itemId={id} server={server} database={database} open={true} />
-                  : <Caption1>Pick an Azure SQL server + database on the <strong>Connect</strong> tab to assign Azure RBAC roles at the database scope.</Caption1>)
+                  : <EmptyState
+                      icon={<PeopleTeam20Regular />}
+                      title="No database selected"
+                      body="Pick an Azure SQL server and database on the Connect tab to assign Azure RBAC roles at the database scope."
+                    />)
               : (
                 <MessageBar intent="info">
                   <MessageBarBody>
@@ -2131,7 +2162,7 @@ export function UnifiedSqlDatabaseEditor({ item, id }: { item: FabricItemType; i
 
               {/* Run receipt — verify rows landed via a COUNT(*) in the Query tab. */}
               <div className={s.card}>
-                <Subtitle2>Pipeline run receipt</Subtitle2>
+                <Subtitle2><Play20Regular style={{ verticalAlign: 'middle' }} /> Pipeline run receipt</Subtitle2>
                 <Caption1>
                   After running the pipeline / dataflow in ADF Studio, paste its <strong>Run ID</strong> and click{' '}
                   <strong>Check count delta</strong> — it switches to the Query tab with a <code>SELECT COUNT(*)</code>{' '}
@@ -2305,7 +2336,11 @@ export function UnifiedSqlDatabaseEditor({ item, id }: { item: FabricItemType; i
                       id={id} server={server} database={database}
                       currentSku={databasesFull.find((d) => d.name === database)?.sku}
                     />
-                  : <Caption1>Pick a server <strong>and</strong> database on the <strong>Connect</strong> tab to change its compute &amp; storage (DTU / vCore / serverless).</Caption1>)
+                  : <EmptyState
+                      icon={<TopSpeed20Regular />}
+                      title="No database selected"
+                      body="Pick a server and database on the Connect tab to change its compute & storage (DTU / vCore / serverless auto-pause and max storage)."
+                    />)
               : (
                 <MessageBar intent="info">
                   <MessageBarBody>

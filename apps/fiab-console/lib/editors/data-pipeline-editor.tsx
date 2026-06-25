@@ -44,8 +44,10 @@ import {
   Checkmark20Regular, Bug20Regular, Clock20Regular, Settings20Regular, CloudArrowUp20Regular,
   ArrowDownload20Regular, ArrowUpload20Regular, AppsList20Regular,
   PlugConnected20Regular, Database20Regular,
+  Flow24Regular, NumberSymbol20Regular, Tag20Regular, Code20Regular, CalendarClock20Regular,
 } from '@fluentui/react-icons';
 import { ItemEditorChrome } from './item-editor-chrome';
+import { TileGrid } from '@/lib/components/ui/tile-grid';
 import { ManagePanel } from '@/lib/components/pipeline/manage-panel';
 import { PipelineManageHub } from '@/lib/components/pipeline/pipeline-manage-hub';
 import { ActivityPalette } from '@/lib/components/pipeline/palette';
@@ -108,7 +110,7 @@ const useStyles = makeStyles({
   splitterGrip: {
     width: '44px',
     height: '4px',
-    borderRadius: '2px',
+    borderRadius: tokens.borderRadiusCircular,
     backgroundColor: tokens.colorNeutralStroke1,
   },
   configDock: {
@@ -119,6 +121,45 @@ const useStyles = makeStyles({
     borderRadius: tokens.borderRadiusSmall,
     minHeight: '120px',
   },
+
+  // ── Web-5.0 polish: elevated, interactive start-cards (blank / practice /
+  //    templates). Flat→shadow4, hover→shadow16, brand-accented hairline. ──
+  startCard: {
+    cursor: 'pointer',
+    padding: tokens.spacingHorizontalXL,
+    border: `1px solid ${tokens.colorNeutralStroke2}`,
+    borderRadius: tokens.borderRadiusLarge,
+    backgroundColor: tokens.colorNeutralBackground1,
+    boxShadow: tokens.shadow4,
+    display: 'flex',
+    flexDirection: 'column',
+    gap: tokens.spacingVerticalS,
+    minWidth: 0,
+    overflowWrap: 'anywhere',
+    transitionProperty: 'box-shadow, border-color, transform',
+    transitionDuration: tokens.durationNormal,
+    transitionTimingFunction: tokens.curveEasyEase,
+    ':hover': {
+      boxShadow: tokens.shadow16,
+      borderTopColor: tokens.colorBrandStroke1,
+      borderRightColor: tokens.colorBrandStroke1,
+      borderBottomColor: tokens.colorBrandStroke1,
+      borderLeftColor: tokens.colorBrandStroke1,
+    },
+  },
+  startCardDisabled: {
+    cursor: 'not-allowed',
+    opacity: 0.6,
+    ':hover': {
+      boxShadow: tokens.shadow4,
+      borderTopColor: tokens.colorNeutralStroke2,
+      borderRightColor: tokens.colorNeutralStroke2,
+      borderBottomColor: tokens.colorNeutralStroke2,
+      borderLeftColor: tokens.colorNeutralStroke2,
+    },
+  },
+  cardIcon: { color: tokens.colorBrandForeground1, fontSize: '24px' },
+  sectionHead: { display: 'flex', alignItems: 'center', gap: tokens.spacingHorizontalXS },
 });
 
 interface WorkspaceLite { id: string; name: string; isOnDedicatedCapacity?: boolean; }
@@ -832,7 +873,10 @@ export function DataPipelineEditor({ item, id }: Props) {
     <ItemEditorChrome item={item} id={id} ribbon={ribbon}
       leftPanel={
         <div className={s.treePad}>
-          <Subtitle2 style={{ marginBottom: tokens.spacingVerticalS }}>Pipelines</Subtitle2>
+          <div className={s.sectionHead} style={{ marginBottom: tokens.spacingVerticalS }}>
+            <Flow24Regular style={{ color: tokens.colorBrandForeground1 }} />
+            <Subtitle2>Pipelines</Subtitle2>
+          </div>
           {!workspaceId && <Caption1>Select a workspace.</Caption1>}
           {workspaceId && pipelines === null && <Spinner size="tiny" label="Loading…" />}
           {pipelines && pipelines.length === 0 && !listErr && <Caption1>No pipelines.</Caption1>}
@@ -908,29 +952,16 @@ export function DataPipelineEditor({ item, id }: Props) {
                   and pipeline from the left rail, click <strong>New pipeline</strong>, or start from a card below.
                 </MessageBarBody>
               </MessageBar>
-              <div style={{
-                display: 'grid',
-                gridTemplateColumns: 'repeat(auto-fill, minmax(min(220px, 100%), 1fr))',
-                gap: 12,
-              }}>
+              <TileGrid minTileWidth={220}>
                 {/* Card: Start with a blank canvas */}
                 <div
                   role="button"
                   tabIndex={0}
-                  style={{
-                    cursor: canCreate ? 'pointer' : 'not-allowed',
-                    opacity: canCreate ? 1 : 0.6,
-                    padding: tokens.spacingHorizontalXL,
-                    border: `1px solid ${tokens.colorNeutralStroke2}`,
-                    borderRadius: tokens.borderRadiusLarge,
-                    backgroundColor: tokens.colorNeutralBackground1,
-                    display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalS,
-                    minWidth: 0, overflowWrap: 'anywhere',
-                  }}
+                  className={mergeClasses(s.startCard, !canCreate && s.startCardDisabled)}
                   onClick={canCreate ? () => setCreateOpen(true) : undefined}
                   onKeyDown={(e) => { if (canCreate && (e.key === 'Enter' || e.key === ' ')) { e.preventDefault(); setCreateOpen(true); } }}
                 >
-                  <Add20Regular style={{ color: tokens.colorBrandForeground1 }} />
+                  <Add20Regular className={s.cardIcon} />
                   <Subtitle2>Start with blank canvas</Subtitle2>
                   <Caption1 style={{ color: tokens.colorNeutralForeground3 }}>
                     Create an empty pipeline and drag activities from the palette.
@@ -943,21 +974,14 @@ export function DataPipelineEditor({ item, id }: Props) {
                   role="button"
                   tabIndex={0}
                   aria-busy={seeding}
-                  style={{
-                    cursor: seeding ? 'default' : 'pointer',
-                    padding: tokens.spacingHorizontalXL,
-                    border: `1px solid ${tokens.colorNeutralStroke2}`,
-                    borderRadius: tokens.borderRadiusLarge,
-                    backgroundColor: tokens.colorNeutralBackground1,
-                    display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalS,
-                    minWidth: 0, overflowWrap: 'anywhere',
-                  }}
+                  className={s.startCard}
+                  style={seeding ? { cursor: 'default' } : undefined}
                   onClick={seeding ? undefined : practiceWithSampleData}
                   onKeyDown={(e) => { if (!seeding && (e.key === 'Enter' || e.key === ' ')) { e.preventDefault(); practiceWithSampleData(); } }}
                 >
                   {seeding
                     ? <Spinner size="extra-small" label="Seeding ADLS…" />
-                    : <CloudArrowUp20Regular style={{ color: tokens.colorBrandForeground1 }} />}
+                    : <CloudArrowUp20Regular className={s.cardIcon} />}
                   <Subtitle2>Practice with sample data</Subtitle2>
                   <Caption1 style={{ color: tokens.colorNeutralForeground3 }}>
                     Seed a real CSV to ADLS Gen2, run an auto-generated copy pipeline,
@@ -969,25 +993,17 @@ export function DataPipelineEditor({ item, id }: Props) {
                 <div
                   role="button"
                   tabIndex={0}
-                  style={{
-                    cursor: 'pointer',
-                    padding: tokens.spacingHorizontalXL,
-                    border: `1px solid ${tokens.colorNeutralStroke2}`,
-                    borderRadius: tokens.borderRadiusLarge,
-                    backgroundColor: tokens.colorNeutralBackground1,
-                    display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalS,
-                    minWidth: 0, overflowWrap: 'anywhere',
-                  }}
+                  className={s.startCard}
                   onClick={() => setGalleryOpen(true)}
                   onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); setGalleryOpen(true); } }}
                 >
-                  <AppsList20Regular style={{ color: tokens.colorBrandForeground1 }} />
+                  <AppsList20Regular className={s.cardIcon} />
                   <Subtitle2>Templates gallery</Subtitle2>
                   <Caption1 style={{ color: tokens.colorNeutralForeground3 }}>
                     Curated templates: incremental copy, metadata-driven, ForEach patterns.
                   </Caption1>
                 </div>
-              </div>
+              </TileGrid>
             </div>
           )}
 
@@ -1057,7 +1073,10 @@ export function DataPipelineEditor({ item, id }: Props) {
 
               {topTab === 'parameters' && (
                 <div className={s.tabBody}>
-                  <Subtitle2>Pipeline parameters</Subtitle2>
+                  <div className={s.sectionHead}>
+                    <NumberSymbol20Regular style={{ color: tokens.colorBrandForeground1 }} />
+                    <Subtitle2>Pipeline parameters</Subtitle2>
+                  </div>
                   <Caption1>Typed inputs passed in at run time. Reference with <code>@pipeline().parameters.&lt;name&gt;</code>.</Caption1>
                   <Table size="small">
                     <TableHeader>
@@ -1126,7 +1145,10 @@ export function DataPipelineEditor({ item, id }: Props) {
 
               {topTab === 'variables' && (
                 <div className={s.tabBody}>
-                  <Subtitle2>Pipeline variables</Subtitle2>
+                  <div className={s.sectionHead}>
+                    <Tag20Regular style={{ color: tokens.colorBrandForeground1 }} />
+                    <Subtitle2>Pipeline variables</Subtitle2>
+                  </div>
                   <Caption1>Scoped variables you can SetVariable / AppendVariable from activities.</Caption1>
                   <Table size="small">
                     <TableHeader>
@@ -1191,7 +1213,10 @@ export function DataPipelineEditor({ item, id }: Props) {
 
               {topTab === 'settings' && (
                 <div className={s.tabBody}>
-                  <Subtitle2>Pipeline settings</Subtitle2>
+                  <div className={s.sectionHead}>
+                    <Settings20Regular style={{ color: tokens.colorBrandForeground1 }} />
+                    <Subtitle2>Pipeline settings</Subtitle2>
+                  </div>
                   <Field label="Description">
                     <Textarea value={spec.properties.description || ''} rows={3}
                       onChange={(_, d) => patchSpec((prev) => ({
@@ -1211,7 +1236,10 @@ export function DataPipelineEditor({ item, id }: Props) {
                       }))} />
                   </Field>
 
-                  <Subtitle2 style={{ marginTop: tokens.spacingVerticalL }}>Active triggers ({triggers.length})</Subtitle2>
+                  <div className={s.sectionHead} style={{ marginTop: tokens.spacingVerticalL }}>
+                    <CalendarClock20Regular style={{ color: tokens.colorBrandForeground1 }} />
+                    <Subtitle2>Active triggers ({triggers.length})</Subtitle2>
+                  </div>
                   {triggers.length === 0 && <Caption1>No triggers wired to this pipeline yet.</Caption1>}
                   <Table size="small">
                     <TableBody>
@@ -1234,7 +1262,10 @@ export function DataPipelineEditor({ item, id }: Props) {
                     </TableBody>
                   </Table>
 
-                  <Subtitle2 style={{ marginTop: tokens.spacingVerticalL }}>Raw spec</Subtitle2>
+                  <div className={s.sectionHead} style={{ marginTop: tokens.spacingVerticalL }}>
+                    <Code20Regular style={{ color: tokens.colorBrandForeground1 }} />
+                    <Subtitle2>Raw spec</Subtitle2>
+                  </div>
                   <Caption1>Edit pipeline JSON directly. Saved on Save.</Caption1>
                   <MonacoTextarea
                     value={specToText(spec)}

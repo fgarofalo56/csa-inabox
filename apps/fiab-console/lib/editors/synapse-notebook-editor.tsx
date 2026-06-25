@@ -45,6 +45,7 @@ import {
   Save20Regular, Code16Regular, TextDescription16Regular,
   Eye16Regular, Edit16Regular, TextBulletListTree20Regular,
   Sparkle16Regular, Sparkle16Filled, Wrench16Regular, Info16Regular,
+  CalendarClock20Regular,
 } from '@fluentui/react-icons';
 import { ItemEditorChrome } from './item-editor-chrome';
 import type { FabricItemType } from '@/lib/catalog/fabric-item-types';
@@ -55,6 +56,7 @@ import { registerInlineCompletion, type InlineCompletionContext } from '@/lib/co
 import { useInlineCompleteToggle } from '@/lib/components/editor/use-inline-complete-toggle';
 import { CellAdder } from '@/lib/components/notebook/cell-adder';
 import { ScheduleWizard, type ScheduleCreateParams } from '@/lib/components/notebook/schedule-wizard';
+import { EmptyState } from '@/lib/components/empty-state';
 
 /** Shaped AML schedule row returned by /api/notebook/[id]/schedule. */
 interface AmlScheduleRow {
@@ -77,8 +79,10 @@ const useStyles = makeStyles({
   cell: {
     border: `1px solid ${tokens.colorNeutralStroke2}`, borderRadius: tokens.borderRadiusLarge,
     backgroundColor: tokens.colorNeutralBackground1, display: 'flex', flexDirection: 'column',
+    boxShadow: tokens.shadow4, transition: 'box-shadow 0.15s ease-in-out',
+    ':hover': { boxShadow: tokens.shadow16 },
   },
-  cellActive: { border: `1px solid ${tokens.colorBrandStroke1}` },
+  cellActive: { border: `1px solid ${tokens.colorBrandStroke1}`, boxShadow: tokens.shadow16 },
   cellHeader: {
     display: 'flex', alignItems: 'center', gap: tokens.spacingHorizontalXS, padding: `${tokens.spacingVerticalXS} ${tokens.spacingHorizontalS}`,
     backgroundColor: tokens.colorNeutralBackground2, borderBottom: `1px solid ${tokens.colorNeutralStroke2}`,
@@ -141,6 +145,15 @@ const useStyles = makeStyles({
     margin: 0, maxWidth: '100%', minWidth: 0, boxSizing: 'border-box',
     maxHeight: '240px', overflow: 'auto',
   },
+  scheduleCard: {
+    display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalS,
+    padding: tokens.spacingVerticalM,
+    border: `1px solid ${tokens.colorNeutralStroke2}`, borderRadius: tokens.borderRadiusLarge,
+    backgroundColor: tokens.colorNeutralBackground1,
+    boxShadow: tokens.shadow4, transition: 'box-shadow 0.15s ease-in-out',
+    ':hover': { boxShadow: tokens.shadow16 },
+  },
+  scheduleHead: { display: 'flex', alignItems: 'center', gap: tokens.spacingHorizontalS },
 });
 
 // ── IPYNB ⇄ editor-cell mapping ───────────────────────────────────────────────
@@ -1046,15 +1059,20 @@ export function SynapseNotebookEditor({ item, id }: { item: FabricItemType; id: 
             </MessageBar>
           )}
           {!gate && schedulesConfigured && (
-            <div style={{ display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalXS }}>
-              <div style={{ display: 'flex', alignItems: 'center', gap: tokens.spacingHorizontalS }}>
-                <Caption1>Schedules ({schedules.length})</Caption1>
+            <div className={s.scheduleCard}>
+              <div className={s.scheduleHead}>
+                <CalendarClock20Regular />
+                <Subtitle2>Schedules ({schedules.length})</Subtitle2>
+                <div className={s.spacer} />
                 <Button size="small" appearance="subtle" onClick={refreshSchedules}>Refresh</Button>
               </div>
               {schedules.length === 0 ? (
-                <Caption1 style={{ color: tokens.colorNeutralForeground3 }}>
-                  No schedules — click <strong>Schedule</strong> in the ribbon to create one.
-                </Caption1>
+                <EmptyState
+                  icon={<CalendarClock20Regular />}
+                  title="No schedules yet"
+                  body="Run this notebook on a recurrence with an Azure ML job schedule. Click Schedule in the ribbon to create one."
+                  primaryAction={openName ? { label: 'Create schedule', onClick: () => setScheduleWizardOpen(true) } : undefined}
+                />
               ) : (
                 <Table size="extra-small" aria-label="Notebook schedules">
                   <TableHeader>

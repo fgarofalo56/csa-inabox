@@ -20,7 +20,7 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import {
-  Subtitle2, Caption1, Badge, Button, Spinner, Select, Tab, TabList,
+  Subtitle2, Caption1, Badge, Button, Spinner, Skeleton, SkeletonItem, Select, Tab, TabList,
   Table, TableHeader, TableRow, TableHeaderCell, TableBody, TableCell,
   MessageBar, MessageBarBody, MessageBarTitle, MessageBarActions,
   Dialog, DialogSurface, DialogBody, DialogTitle, DialogContent, DialogActions,
@@ -30,9 +30,10 @@ import {
 import {
   Add20Regular, ArrowSync20Regular, Delete20Regular, Play20Regular, Pause20Regular, Database20Regular,
   PlugConnected20Regular, CheckmarkCircle16Filled, ShieldTask20Regular, DatabasePlugConnected20Regular,
-  Eye20Regular, Stop20Regular, ArrowCounterclockwise20Regular,
+  Eye20Regular, Stop20Regular, ArrowCounterclockwise20Regular, Table20Regular, PulseSquare20Regular,
 } from '@fluentui/react-icons';
 import { ItemEditorChrome } from './item-editor-chrome';
+import { EmptyState } from '@/lib/components/empty-state';
 import { OneLakeSecurityTab } from './components/onelake-security-tab';
 import { OpenMirrorConfig } from './components/open-mirror-config';
 import { MirrorSourceWizard, type MirrorTableSpec } from './components/mirror-source-wizard';
@@ -43,8 +44,11 @@ const useStyles = makeStyles({
   pad: { padding: tokens.spacingVerticalL, display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalM, flex: 1, minHeight: 0 },
   toolbar: { display: 'flex', gap: tokens.spacingHorizontalS, alignItems: 'center', flexWrap: 'wrap' },
   treePad: { padding: tokens.spacingVerticalS },
-  tableWrap: { overflow: 'auto', maxHeight: '320px', border: `1px solid ${tokens.colorNeutralStroke2}`, borderRadius: tokens.borderRadiusMedium },
+  tableWrap: { overflow: 'auto', maxHeight: '320px', border: `1px solid ${tokens.colorNeutralStroke2}`, borderRadius: tokens.borderRadiusLarge, boxShadow: tokens.shadow4 },
   cell: { fontFamily: 'Consolas, monospace', fontSize: tokens.fontSizeBase200, whiteSpace: 'nowrap' },
+  sectionHead: { display: 'flex', alignItems: 'center', gap: tokens.spacingHorizontalS },
+  sectionIcon: { color: tokens.colorBrandForeground1, flexShrink: 0 },
+  wsField: { display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalXS, minWidth: '280px', maxWidth: '100%' },
 });
 
 interface WorkspaceLite { id: string; name: string; isOnDedicatedCapacity?: boolean; }
@@ -319,10 +323,26 @@ export function MirroredDatabaseEditor({ item, id }: Props) {
     <ItemEditorChrome item={item} id={id} ribbon={ribbon}
       leftPanel={
         <div className={s.treePad}>
-          <Subtitle2 style={{ marginBottom: tokens.spacingVerticalS }}>Mirrored databases</Subtitle2>
+          <div className={s.sectionHead} style={{ marginBottom: tokens.spacingVerticalS }}>
+            <Database20Regular className={s.sectionIcon} aria-hidden />
+            <Subtitle2>Mirrored databases</Subtitle2>
+          </div>
           {!workspaceId && <Caption1>Select a workspace.</Caption1>}
-          {workspaceId && mirrors === null && <Spinner size="tiny" label="Loading…" />}
-          {mirrors && mirrors.length === 0 && !listErr && <Caption1>No mirrored databases.</Caption1>}
+          {workspaceId && mirrors === null && (
+            <Skeleton aria-label="Loading mirrored databases…">
+              <SkeletonItem size={16} style={{ marginBottom: tokens.spacingVerticalXS }} />
+              <SkeletonItem size={16} style={{ width: '80%', marginBottom: tokens.spacingVerticalXS }} />
+              <SkeletonItem size={16} style={{ width: '60%' }} />
+            </Skeleton>
+          )}
+          {mirrors && mirrors.length === 0 && !listErr && (
+            <EmptyState
+              icon={<Database20Regular />}
+              title="No mirrored databases"
+              body="This workspace has no mirrored databases yet. Create one to replicate an Azure SQL, SQL Server, Snowflake, Cosmos DB, or PostgreSQL source into ADLS Bronze."
+              primaryAction={{ label: 'New mirror', onClick: openNew }}
+            />
+          )}
           <Tree aria-label="Mirrored databases">
             {(mirrors || []).map((m) => (
               <TreeItem key={m.id} itemType="leaf" value={m.id} onClick={() => setMirrorId(m.id)}>
@@ -347,7 +367,7 @@ export function MirroredDatabaseEditor({ item, id }: Props) {
           {view === 'monitor' && (
             <div style={{ display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalM }}>
               <div className={s.toolbar}>
-                <Badge appearance="filled" color="brand">Replication monitor</Badge>
+                <Badge appearance="filled" color="brand" icon={<PulseSquare20Regular />}>Replication monitor</Badge>
                 <Button appearance="outline" icon={<ArrowSync20Regular />} disabled={monitorLoading || !mirrorId} onClick={() => void loadMonitor()}>
                   {monitorLoading ? 'Refreshing…' : 'Refresh'}
                 </Button>
@@ -396,7 +416,25 @@ export function MirroredDatabaseEditor({ item, id }: Props) {
 
               {lifecycleMsg && <MessageBar intent="info"><MessageBarBody>{lifecycleMsg}</MessageBarBody></MessageBar>}
               {monitorErr && <MessageBar intent="error"><MessageBarBody>{monitorErr}</MessageBarBody></MessageBar>}
-              {!mirrorId && <Caption1>Select a mirrored database from the left panel to view monitor data.</Caption1>}
+              {!mirrorId && (
+                <EmptyState
+                  icon={<Eye20Regular />}
+                  title="Select a mirrored database"
+                  body="Choose a mirrored database from the left panel to view its per-table replication status, row counts, landing files, and last-sync telemetry."
+                />
+              )}
+
+              {/* Loading skeleton — monitor snapshot in flight, nothing rendered yet. */}
+              {mirrorId && monitorData === null && monitorLoading && !monitorErr && (
+                <div className={s.tableWrap} style={{ padding: tokens.spacingVerticalM }}>
+                  <Skeleton aria-label="Loading replication monitor…">
+                    <SkeletonItem size={16} style={{ marginBottom: tokens.spacingVerticalS }} />
+                    <SkeletonItem size={12} style={{ width: '90%', marginBottom: tokens.spacingVerticalXS }} />
+                    <SkeletonItem size={12} style={{ width: '75%', marginBottom: tokens.spacingVerticalXS }} />
+                    <SkeletonItem size={12} style={{ width: '60%' }} />
+                  </Skeleton>
+                </div>
+              )}
 
               {/* Per-table replication monitor grid (real backend). */}
               {monitorData?.tables && (
@@ -455,8 +493,8 @@ export function MirroredDatabaseEditor({ item, id }: Props) {
           {view === 'mirror' && (
           <>
           <div className={s.toolbar}>
-            <Badge appearance="filled" color="brand">Mirrored Database</Badge>
-            <div style={{ display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalXS, minWidth: 280, maxWidth: '100%' }}>
+            <Badge appearance="filled" color="brand" icon={<Database20Regular />}>Mirrored Database</Badge>
+            <div className={s.wsField}>
               <Caption1>Workspace</Caption1>
               <Select value={workspaceId} onChange={(_, d) => setWorkspaceId(d.value)} disabled={ws.loading || (ws.workspaces?.length ?? 0) === 0}>
                 {!workspaceId && <option value="">{ws.loading ? 'Loading workspaces…' : 'Select a workspace'}</option>}
@@ -582,6 +620,19 @@ export function MirroredDatabaseEditor({ item, id }: Props) {
             />
           )}
 
+          {/* Detail in flight — a mirror is selected but its status/tables snapshot
+              hasn't resolved yet (and no error surfaced). */}
+          {mirrorId && !detail && !detailErr && (
+            <div className={s.tableWrap} style={{ padding: tokens.spacingVerticalM }}>
+              <Skeleton aria-label="Loading mirror detail…">
+                <SkeletonItem size={16} style={{ width: '40%', marginBottom: tokens.spacingVerticalS }} />
+                <SkeletonItem size={12} style={{ marginBottom: tokens.spacingVerticalXS }} />
+                <SkeletonItem size={12} style={{ width: '85%', marginBottom: tokens.spacingVerticalXS }} />
+                <SkeletonItem size={12} style={{ width: '65%' }} />
+              </Skeleton>
+            </div>
+          )}
+
           {mirrorId && detail && (
             <>
               <div style={{ display: 'flex', alignItems: 'center', gap: tokens.spacingHorizontalM, flexWrap: 'wrap' }}>
@@ -590,7 +641,10 @@ export function MirroredDatabaseEditor({ item, id }: Props) {
                 {detail.status?.error && <Caption1 style={{ color: tokens.colorPaletteRedForeground1 }}>{detail.status.error}</Caption1>}
               </div>
 
-              <Subtitle2>Tables replication ({tables?.length ?? 0})</Subtitle2>
+              <div className={s.sectionHead}>
+                <Table20Regular className={s.sectionIcon} aria-hidden />
+                <Subtitle2>Tables replication ({tables?.length ?? 0})</Subtitle2>
+              </div>
               <div className={s.tableWrap}>
                 <Table aria-label="Tables" size="small">
                   <TableHeader><TableRow>

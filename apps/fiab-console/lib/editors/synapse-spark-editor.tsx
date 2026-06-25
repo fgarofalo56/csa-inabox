@@ -35,8 +35,10 @@ import {
 } from '@fluentui/react-components';
 import {
   Dismiss24Regular, Play16Regular, Save16Regular, ArrowSync16Regular,
+  DocumentSettings20Regular, Server20Regular, History20Regular, History24Regular,
 } from '@fluentui/react-icons';
 import { useCallback, useEffect, useState } from 'react';
+import { EmptyState } from '../components/empty-state';
 
 const useStyles = makeStyles({
   body: { display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalM, height: '100%', overflow: 'hidden' },
@@ -57,6 +59,15 @@ const useStyles = makeStyles({
   statusText: { overflowWrap: 'anywhere', wordBreak: 'break-word', minWidth: 0 },
   // The Livy result string can be long; let it wrap inside its cell.
   resultCell: { overflowWrap: 'anywhere', wordBreak: 'break-word', maxWidth: '220px' },
+  // Centered loading panes (initial load + runs grid) — never a bare flush-left spinner.
+  loadingPane: {
+    display: 'flex', alignItems: 'center', justifyContent: 'center',
+    minHeight: '240px', padding: tokens.spacingVerticalXXL,
+  },
+  runsLoading: {
+    display: 'flex', alignItems: 'center', justifyContent: 'center',
+    minHeight: '200px', padding: tokens.spacingVerticalL,
+  },
 });
 
 type SparkLanguage = 'PySpark' | 'Spark' | 'SparkR';
@@ -228,7 +239,7 @@ export function SynapseSparkEditor({ name, onClose }: SynapseSparkEditorProps) {
       </DrawerHeader>
       <DrawerBody>
         {loading ? (
-          <div style={{ padding: tokens.spacingVerticalL }}><Spinner label="Loading Spark job definition…" /></div>
+          <div className={s.loadingPane}><Spinner label="Loading Spark job definition…" /></div>
         ) : (
           <div className={s.body}>
             {error && (
@@ -253,9 +264,9 @@ export function SynapseSparkEditor({ name, onClose }: SynapseSparkEditorProps) {
             )}
 
             <TabList selectedValue={tab} onTabSelect={(_, d) => setTab(d.value as any)}>
-              <Tab value="definition">Definition</Tab>
-              <Tab value="compute">Spark compute</Tab>
-              <Tab value="runs">Runs</Tab>
+              <Tab value="definition" icon={<DocumentSettings20Regular />}>Definition</Tab>
+              <Tab value="compute" icon={<Server20Regular />}>Spark compute</Tab>
+              <Tab value="runs" icon={<History20Regular />}>Runs</Tab>
             </TabList>
 
             {tab === 'definition' && (
@@ -332,8 +343,15 @@ export function SynapseSparkEditor({ name, onClose }: SynapseSparkEditorProps) {
                   <Button appearance="subtle" icon={<ArrowSync16Regular />} disabled={runsLoading} onClick={loadRuns}>Refresh runs</Button>
                   {runsLoading && <Spinner size="tiny" />}
                 </div>
-                {runs.length === 0 ? (
-                  <Caption1>No batch runs yet. Submit the definition to start one.</Caption1>
+                {runsLoading && runs.length === 0 ? (
+                  <div className={s.runsLoading}><Spinner label="Loading batch runs…" /></div>
+                ) : runs.length === 0 ? (
+                  <EmptyState
+                    icon={<History24Regular />}
+                    title="No batch runs yet"
+                    body="Submit the definition to start a Livy batch run against the target Spark pool. Runs and their state will appear here."
+                    primaryAction={{ label: submitting ? 'Submitting…' : 'Submit', onClick: submit }}
+                  />
                 ) : (
                   <Table size="small" aria-label="Spark batch runs">
                     <TableHeader className={s.runsHeader}>

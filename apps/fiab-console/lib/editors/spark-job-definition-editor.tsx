@@ -31,21 +31,28 @@
 
 import {
   Subtitle2, Caption1, Body1Strong, Input, Dropdown, Option, Button, Badge, Textarea,
-  MessageBar, MessageBarBody, MessageBarTitle, Spinner, Switch, Tooltip,
+  MessageBar, MessageBarBody, MessageBarTitle, Spinner, SkeletonItem, Switch, Tooltip,
   Table, TableHeader, TableRow, TableHeaderCell, TableBody, TableCell,
   Tab, TabList, Accordion, AccordionHeader, AccordionItem, AccordionPanel,
   makeStyles, tokens,
 } from '@fluentui/react-components';
-import { ArrowUpload16Regular, Dismiss16Regular } from '@fluentui/react-icons';
+import {
+  ArrowUpload16Regular, Dismiss16Regular,
+  DocumentText20Regular, Server20Regular, Rocket20Regular, History20Regular,
+  DocumentMultiple20Regular,
+} from '@fluentui/react-icons';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { ItemEditorChrome } from './item-editor-chrome';
 import type { FabricItemType } from '@/lib/catalog/fabric-item-types';
 import type { RibbonTab } from '@/lib/components/ribbon';
 import { KeyValueGrid } from '@/lib/components/ui/key-value-grid';
+import { EmptyState } from '@/lib/components/empty-state';
 
 const useStyles = makeStyles({
   tabBar: { padding: `${tokens.spacingVerticalS} ${tokens.spacingHorizontalL} 0`, borderBottom: `1px solid ${tokens.colorNeutralStroke2}` },
   tabBody: { padding: tokens.spacingVerticalXL, display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalM, maxWidth: '900px' },
+  sectionHeader: { display: 'flex', alignItems: 'center', gap: tokens.spacingHorizontalS, color: tokens.colorBrandForeground1 },
+  skeletonStack: { display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalS, marginTop: tokens.spacingVerticalS },
   row: { display: 'flex', gap: tokens.spacingHorizontalM, flexWrap: 'wrap' },
   field: { flex: 1, minWidth: 0, display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalXS },
   fileRow: { display: 'flex', gap: tokens.spacingHorizontalS, alignItems: 'flex-end', flexWrap: 'wrap' },
@@ -63,7 +70,7 @@ const useStyles = makeStyles({
   logPre: {
     margin: 0, minHeight: '120px', maxHeight: '320px', overflow: 'auto', resize: 'vertical', boxSizing: 'border-box',
     padding: tokens.spacingVerticalS,
-    fontFamily: 'Consolas, "Cascadia Code", monospace', fontSize: tokens.fontSizeBase200, lineHeight: '1.4',
+    fontFamily: 'Consolas, "Cascadia Code", monospace', fontSize: tokens.fontSizeBase200, lineHeight: tokens.lineHeightBase200,
     backgroundColor: tokens.colorNeutralBackground3, color: tokens.colorNeutralForeground1,
     borderRadius: tokens.borderRadiusMedium, whiteSpace: 'pre-wrap', wordBreak: 'break-all',
   },
@@ -105,6 +112,17 @@ function ErrBar({ error }: { error: string | null }) {
         {error}
       </MessageBarBody>
     </MessageBar>
+  );
+}
+
+function RunsSkeleton({ rows = 4 }: { rows?: number }) {
+  const styles = useStyles();
+  return (
+    <div className={styles.skeletonStack} aria-hidden>
+      {Array.from({ length: rows }).map((_, i) => (
+        <SkeletonItem key={i} size={24} />
+      ))}
+    </div>
   );
 }
 
@@ -470,7 +488,7 @@ export function SparkJobDefinitionEditor({ item, id }: { item: FabricItemType; i
           {/* ---------------- Definition ---------------- */}
           {tab === 'definition' && (
             <>
-              <Subtitle2>Definition</Subtitle2>
+              <Subtitle2 className={styles.sectionHeader}><DocumentText20Regular />Definition</Subtitle2>
               <div className={styles.row}>
                 <div className={styles.field}>
                   <Caption1>Language</Caption1>
@@ -522,7 +540,9 @@ export function SparkJobDefinitionEditor({ item, id }: { item: FabricItemType; i
                   placeholder={'--input gold/sales\n--output gold/sales_agg'} />
               </div>
 
-              <Subtitle2 style={{ marginTop: tokens.spacingVerticalS }}>Reference files</Subtitle2>
+              <Subtitle2 className={styles.sectionHeader} style={{ marginTop: tokens.spacingVerticalS }}>
+                <DocumentMultiple20Regular />Reference files
+              </Subtitle2>
               <Caption1>Optional additional files staged with the job. Paste abfss:// URIs, one per line.</Caption1>
               <div className={styles.row}>
                 <div className={styles.field}>
@@ -558,7 +578,7 @@ export function SparkJobDefinitionEditor({ item, id }: { item: FabricItemType; i
           {/* ---------------- Spark Compute ---------------- */}
           {tab === 'compute' && (
             <>
-              <Subtitle2>Spark compute</Subtitle2>
+              <Subtitle2 className={styles.sectionHeader}><Server20Regular />Spark compute</Subtitle2>
               <Caption1>Resource sizing for the batch driver and executors. Leave blank to inherit the pool defaults.</Caption1>
               <div className={styles.row}>
                 <div className={styles.field}>
@@ -596,7 +616,7 @@ export function SparkJobDefinitionEditor({ item, id }: { item: FabricItemType; i
           {/* ---------------- Optimization ---------------- */}
           {tab === 'optimization' && (
             <>
-              <Subtitle2>Optimization</Subtitle2>
+              <Subtitle2 className={styles.sectionHeader}><Rocket20Regular />Optimization</Subtitle2>
               <Switch checked={retryEnabled} label="Retry policy"
                 onChange={(_, d) => { setRetryEnabled(d.checked); markDirty(); }} />
               {retryEnabled && (
@@ -648,9 +668,16 @@ export function SparkJobDefinitionEditor({ item, id }: { item: FabricItemType; i
               </div>
 
               <div className={styles.resultBox}>
-                <Subtitle2>Run history</Subtitle2>
-                {runs.length === 0 ? (
-                  <Caption1>No runs yet. Configure the Definition tab and Submit a batch.</Caption1>
+                <Subtitle2 className={styles.sectionHeader}><History20Regular />Run history</Subtitle2>
+                {loading && runs.length === 0 ? (
+                  <RunsSkeleton rows={4} />
+                ) : runs.length === 0 ? (
+                  <EmptyState
+                    icon={<History20Regular />}
+                    title="No runs yet"
+                    body="Configure the Definition tab, then submit a batch to launch a Synapse Livy run. Submitted runs appear here with live status, results, and driver logs."
+                    primaryAction={{ label: busy ? 'Submitting…' : 'Submit batch', onClick: canSubmit ? submit : undefined }}
+                  />
                 ) : (
                   <div className={styles.tableScroll}>
                   <Table size="small" aria-label="Spark batch runs">

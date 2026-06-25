@@ -16,7 +16,7 @@
 
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import {
-  Subtitle2, Body1, Caption1, Badge, Button, Spinner, Input, Label,
+  Subtitle2, Body1, Caption1, Badge, Button, Spinner, Skeleton, SkeletonItem, Input, Label,
   Tree, TreeItem, TreeItemLayout,
   Table, TableHeader, TableRow, TableHeaderCell, TableBody, TableCell,
   MessageBar, MessageBarBody, MessageBarTitle,
@@ -29,8 +29,10 @@ import {
   ShieldKeyhole20Regular, Globe20Regular, Sparkle20Regular,
   ArrowDownload20Regular, Delete20Regular, Copy20Regular, Stop20Regular,
   ArrowSync20Regular, Dismiss20Regular, DocumentSearch20Regular,
+  TableSimple20Regular, DatabaseMultiple20Regular,
 } from '@fluentui/react-icons';
 import { ItemEditorChrome } from './item-editor-chrome';
+import { EmptyState } from '@/lib/components/empty-state';
 import { BackendStateBar } from '@/lib/components/backend-state-bar';
 import { SqlDbTree } from '@/lib/components/sqldb/sqldb-tree';
 import type { FabricItemType } from '@/lib/catalog/fabric-item-types';
@@ -102,7 +104,22 @@ const useStyles = makeStyles({
   resultBox: { borderTop: `1px solid ${tokens.colorNeutralStroke2}`, paddingTop: tokens.spacingVerticalM, minHeight: '200px' },
   resultMeta: { display: 'flex', gap: tokens.spacingHorizontalM, alignItems: 'center', marginBottom: tokens.spacingVerticalS, flexWrap: 'wrap' },
   resultActions: { marginLeft: 'auto', display: 'flex', gap: tokens.spacingHorizontalXS },
-  tableWrap: { overflow: 'auto', maxHeight: '360px', border: `1px solid ${tokens.colorNeutralStroke2}`, borderRadius: tokens.borderRadiusMedium },
+  tableWrap: {
+    overflow: 'auto', maxHeight: '360px',
+    border: `1px solid ${tokens.colorNeutralStroke2}`, borderRadius: tokens.borderRadiusLarge,
+    backgroundColor: tokens.colorNeutralBackground1,
+    boxShadow: tokens.shadow4,
+    transition: 'box-shadow 0.15s ease',
+    ':hover': { boxShadow: tokens.shadow16 },
+  },
+  // Icon + title section header (e.g. "Databases", "Managed Instances").
+  sectionHeader: {
+    display: 'flex',
+    alignItems: 'center',
+    gap: tokens.spacingHorizontalS,
+    color: tokens.colorNeutralForeground1,
+  },
+  sectionHeaderIcon: { color: tokens.colorBrandForeground1, display: 'flex' },
   cell: { fontFamily: 'Consolas, monospace', fontSize: tokens.fontSizeBase200, whiteSpace: 'nowrap' },
   treePad: { padding: tokens.spacingVerticalS },
   formRow: { display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalXS, marginBottom: tokens.spacingVerticalM },
@@ -161,16 +178,6 @@ const useStyles = makeStyles({
     backgroundColor: tokens.colorNeutralBackground1Selected,
     ':hover': { backgroundColor: tokens.colorNeutralBackground1Selected },
   },
-  dbEmpty: {
-    display: 'flex',
-    flexDirection: 'column',
-    alignItems: 'center',
-    justifyContent: 'center',
-    gap: tokens.spacingVerticalXS,
-    padding: tokens.spacingVerticalXXL,
-    color: tokens.colorNeutralForeground3,
-    textAlign: 'center',
-  },
 });
 
 interface QueryResponse {
@@ -193,8 +200,28 @@ function formatCell(v: unknown): string {
 
 function ResultsPanel({ result, loading }: { result: QueryResponse | null; loading: boolean }) {
   const s = useStyles();
-  if (loading) return (<div className={s.resultBox}><Spinner size="small" label="Executing T-SQL…" labelPosition="after" /></div>);
-  if (!result) return (<div className={s.resultBox}><Caption1>Click <strong>Run</strong> to execute.</Caption1></div>);
+  if (loading) return (
+    <div className={s.resultBox}>
+      <div className={s.resultMeta}>
+        <Spinner size="tiny" label="Executing T-SQL…" labelPosition="after" />
+      </div>
+      <Skeleton aria-label="Executing query…">
+        <SkeletonItem size={16} style={{ width: '40%' }} />
+        <SkeletonItem size={12} />
+        <SkeletonItem size={12} style={{ width: '90%' }} />
+        <SkeletonItem size={12} style={{ width: '75%' }} />
+      </Skeleton>
+    </div>
+  );
+  if (!result) return (
+    <div className={s.resultBox}>
+      <EmptyState
+        icon={<Play20Regular />}
+        title="No results yet"
+        body="Write T-SQL above, then click Run to execute it over AAD-authenticated TDS and see the rows here."
+      />
+    </div>
+  );
   if (!result.ok) {
     return (
       <div className={s.resultBox}>
@@ -234,7 +261,11 @@ function ResultsPanel({ result, loading }: { result: QueryResponse | null; loadi
         )}
       </div>
       {rows.length === 0 ? (
-        <Caption1>Query returned no rows.</Caption1>
+        <EmptyState
+          icon={<TableSimple20Regular />}
+          title="Query returned no rows"
+          body="The statement executed successfully but produced an empty result set."
+        />
       ) : (
         <div className={s.tableWrap}>
           <Table aria-label="Query results" size="small">
@@ -568,10 +599,25 @@ export function AzureSqlServerEditor({ item, id }: { item: FabricItemType; id: s
             <BackendStateBar error={error} title="Azure SQL" />
           )}
           {!selected ? (
-            <Caption1>Pick a server on the left to inspect its databases.</Caption1>
+            loading ? (
+              <Skeleton aria-label="Loading SQL servers…">
+                <SkeletonItem size={16} style={{ width: '32%' }} />
+                <SkeletonItem size={12} />
+                <SkeletonItem size={12} style={{ width: '85%' }} />
+              </Skeleton>
+            ) : (
+              <EmptyState
+                icon={<Server20Regular />}
+                title="Select a SQL server"
+                body="Pick a server in the left tree to inspect its databases, firewall rules, and Microsoft Entra admin over live ARM."
+              />
+            )
           ) : (
             <>
-              <Subtitle2>{selected.name}</Subtitle2>
+              <Subtitle2 className={s.sectionHeader}>
+                <span className={s.sectionHeaderIcon}><Server20Regular /></span>
+                {selected.name}
+              </Subtitle2>
               <div className={s.toolbar}>
                 <Badge appearance="filled" color={selected.state === 'Ready' ? 'success' : 'informative'}>{selected.state || 'Unknown'}</Badge>
                 <Badge appearance="outline">{selected.location}</Badge>
@@ -590,7 +636,10 @@ export function AzureSqlServerEditor({ item, id }: { item: FabricItemType; id: s
               <Body1>AAD admin login: <code>{selected.administratorLogin || '— set via Microsoft.Sql/servers/administrators —'}</code></Body1>
 
               <div className={s.dbTableToolbar} style={{ marginTop: tokens.spacingVerticalM }}>
-                <Subtitle2>Databases</Subtitle2>
+                <Subtitle2 className={s.sectionHeader}>
+                  <span className={s.sectionHeaderIcon}><DatabaseMultiple20Regular /></span>
+                  Databases
+                </Subtitle2>
                 <Input
                   size="small"
                   className={s.dbSearch}
@@ -609,24 +658,26 @@ export function AzureSqlServerEditor({ item, id }: { item: FabricItemType; id: s
               </div>
               {loading ? (
                 <div className={s.tableWrap}>
-                  <Spinner size="small" label="Loading databases…" labelPosition="after" style={{ padding: tokens.spacingVerticalXXL }} />
+                  <Skeleton aria-label="Loading databases…" style={{ padding: tokens.spacingVerticalXL }}>
+                    <SkeletonItem size={16} style={{ width: '30%' }} />
+                    <SkeletonItem size={12} />
+                    <SkeletonItem size={12} style={{ width: '90%' }} />
+                    <SkeletonItem size={12} style={{ width: '70%' }} />
+                  </Skeleton>
                 </div>
               ) : databases.length === 0 ? (
-                <div className={s.tableWrap}>
-                  <div className={s.dbEmpty}>
-                    <Database20Regular />
-                    <Body1>No databases on <strong>{selected.name}</strong></Body1>
-                    <Caption1>Create one with <code>az sql db create</code> or in the portal, then Refresh.</Caption1>
-                  </div>
-                </div>
+                <EmptyState
+                  icon={<Database20Regular />}
+                  title={`No databases on ${selected.name}`}
+                  body="Create one with `az sql db create` or in the Azure portal, then Refresh to see it listed here."
+                />
               ) : visibleDatabases.length === 0 ? (
-                <div className={s.tableWrap}>
-                  <div className={s.dbEmpty}>
-                    <DocumentSearch20Regular />
-                    <Body1>No databases match <strong>“{dbFilter}”</strong></Body1>
-                    <Button size="small" appearance="subtle" onClick={() => setDbFilter('')}>Clear filter</Button>
-                  </div>
-                </div>
+                <EmptyState
+                  icon={<DocumentSearch20Regular />}
+                  title={`No databases match “${dbFilter}”`}
+                  body="No database on this server matches the current filter. Clear it to see them all."
+                  primaryAction={{ label: 'Clear filter', appearance: 'secondary', onClick: () => setDbFilter('') }}
+                />
               ) : (
                 <div className={s.tableWrap}>
                   <Table aria-label="Databases" size="small" sortable>
@@ -1341,7 +1392,15 @@ export function SqlManagedInstanceEditor({ item, id }: { item: FabricItemType; i
       leftPanel={
         selectedFqdn
           ? <SqlDbTree workspaceId="" itemId="new" server={selectedFqdn} database={navDb} />
-          : <div className={s.treePad}><Caption1>Select a managed instance below to browse its schemas, tables, and views over the private endpoint.</Caption1></div>
+          : (
+            <div className={s.treePad}>
+              <EmptyState
+                icon={<Database20Regular />}
+                title="No instance selected"
+                body="Select a managed instance below to browse its schemas, tables, and views over the private endpoint."
+              />
+            </div>
+          )
       }
       main={
         <div className={s.pad}>
@@ -1374,38 +1433,58 @@ export function SqlManagedInstanceEditor({ item, id }: { item: FabricItemType; i
               <>
                 <Caption1>Browsing: <strong>{selectedFqdn}</strong></Caption1>
                 <Label htmlFor="mi-nav-db">DB</Label>
-                <Input id="mi-nav-db" size="small" value={navDb} onChange={(_, d) => setNavDb(d.value || 'master')} style={{ width: 140 }} />
+                <Input id="mi-nav-db" size="small" value={navDb} onChange={(_, d) => setNavDb(d.value || 'master')} style={{ width: '140px' }} />
                 <Button size="small" appearance="subtle" onClick={() => setSelectedFqdn('')}>Clear</Button>
               </>
             )}
             {loading && <Spinner size="tiny" label="Loading…" labelPosition="after" />}
           </div>
           {err && <BackendStateBar error={err} title="Azure SQL" />}
-          <Subtitle2>Managed Instances ({instances.length})</Subtitle2>
-          <div className={s.tableWrap}>
-            <Table size="small">
-              <TableHeader><TableRow>
-                <TableHeaderCell>Name</TableHeaderCell>
-                <TableHeaderCell>State</TableHeaderCell>
-                <TableHeaderCell>Location</TableHeaderCell>
-                <TableHeaderCell>SKU</TableHeaderCell>
-                <TableHeaderCell>FQDN</TableHeaderCell>
-              </TableRow></TableHeader>
-              <TableBody>
-                {instances.map((i: any) => (
-                  <TableRow key={i.id}
-                    onClick={() => i.fqdn && setSelectedFqdn(i.fqdn)}
-                    style={{ cursor: i.fqdn ? 'pointer' : 'default', background: i.fqdn && i.fqdn === selectedFqdn ? tokens.colorNeutralBackground1Selected : undefined }}>
-                    <TableCell><strong>{i.name}</strong></TableCell>
-                    <TableCell>{i.state}</TableCell>
-                    <TableCell>{i.location}</TableCell>
-                    <TableCell>{i.sku?.name}</TableCell>
-                    <TableCell><code style={{ fontSize: tokens.fontSizeBase100 }}>{i.fqdn}</code></TableCell>
-                  </TableRow>
-                ))}
-              </TableBody>
-            </Table>
-          </div>
+          <Subtitle2 className={s.sectionHeader}>
+            <span className={s.sectionHeaderIcon}><DatabaseMultiple20Regular /></span>
+            Managed Instances ({instances.length})
+          </Subtitle2>
+          {loading ? (
+            <div className={s.tableWrap}>
+              <Skeleton aria-label="Loading managed instances…" style={{ padding: tokens.spacingVerticalXL }}>
+                <SkeletonItem size={16} style={{ width: '30%' }} />
+                <SkeletonItem size={12} />
+                <SkeletonItem size={12} style={{ width: '90%' }} />
+                <SkeletonItem size={12} style={{ width: '70%' }} />
+              </Skeleton>
+            </div>
+          ) : instances.length === 0 && !err ? (
+            <EmptyState
+              icon={<Database20Regular />}
+              title="No managed instances found"
+              body="Provision one with `Microsoft.Sql/managedInstances` via bicep or the Azure portal, then Refresh to see it listed here."
+            />
+          ) : (
+            <div className={s.tableWrap}>
+              <Table size="small">
+                <TableHeader><TableRow>
+                  <TableHeaderCell>Name</TableHeaderCell>
+                  <TableHeaderCell>State</TableHeaderCell>
+                  <TableHeaderCell>Location</TableHeaderCell>
+                  <TableHeaderCell>SKU</TableHeaderCell>
+                  <TableHeaderCell>FQDN</TableHeaderCell>
+                </TableRow></TableHeader>
+                <TableBody>
+                  {instances.map((i: any) => (
+                    <TableRow key={i.id}
+                      onClick={() => i.fqdn && setSelectedFqdn(i.fqdn)}
+                      style={{ cursor: i.fqdn ? 'pointer' : 'default', background: i.fqdn && i.fqdn === selectedFqdn ? tokens.colorNeutralBackground1Selected : undefined }}>
+                      <TableCell><strong>{i.name}</strong></TableCell>
+                      <TableCell>{i.state}</TableCell>
+                      <TableCell>{i.location}</TableCell>
+                      <TableCell>{i.sku?.name}</TableCell>
+                      <TableCell><code style={{ fontSize: tokens.fontSizeBase100 }}>{i.fqdn}</code></TableCell>
+                    </TableRow>
+                  ))}
+                </TableBody>
+              </Table>
+            </div>
+          )}
         </div>
       }
     />

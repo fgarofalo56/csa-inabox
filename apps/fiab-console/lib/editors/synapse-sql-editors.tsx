@@ -31,6 +31,7 @@ import {
   Eye20Regular, Form20Regular, MathFormula20Regular,
 } from '@fluentui/react-icons';
 import { ItemEditorChrome } from './item-editor-chrome';
+import { EmptyState } from '@/lib/components/empty-state';
 import { WarehouseMonitoringTab } from './components/warehouse-monitoring';
 import { ConnectionDetailsPanel } from './components/connection-details';
 import { ModelViewPanel } from './components/model-view-canvas';
@@ -125,7 +126,11 @@ function ResultsPanel({
   if (!result) {
     return (
       <div className={s.resultBox}>
-        <Caption1>Click <strong>Run</strong> to execute. Results appear here.</Caption1>
+        <EmptyState
+          icon={<DataBarVertical20Regular />}
+          title="No results yet"
+          body="Write a T-SQL statement above and click Run to execute. Results — rows, timing and a one-click chart — appear here."
+        />
       </div>
     );
   }
@@ -175,7 +180,11 @@ function ResultsPanel({
       </div>
       {showViz && rows.length > 0 && <ResultVisualize columns={columns} rows={rows} />}
       {rows.length === 0 ? (
-        <Caption1>Query returned no rows.</Caption1>
+        <EmptyState
+          icon={<DocumentTable20Regular />}
+          title="Query returned no rows"
+          body="The statement executed successfully against the live endpoint but matched no rows. Adjust the predicate and run again."
+        />
       ) : (
         <div className={s.tableWrap}>
           <Table aria-label="Query results" size="small">

@@ -30,7 +30,10 @@ import {
   MessageBar, MessageBarBody, MessageBarTitle,
   makeStyles, tokens,
 } from '@fluentui/react-components';
-import { Play20Regular, ArrowDownload20Regular } from '@fluentui/react-icons';
+import {
+  Play20Regular, ArrowDownload20Regular,
+  Table20Regular, TextBulletListSquare20Regular, Server16Regular,
+} from '@fluentui/react-icons';
 import { ItemEditorChrome } from './item-editor-chrome';
 import { ConnectionDetailsPanel } from './components/connection-details';
 import type { FabricItemType } from '@/lib/catalog/fabric-item-types';
@@ -408,7 +411,7 @@ export function SynapseServerlessSqlEditor({ item, id }: { item: FabricItemType;
             </MessageBar>
           )}
           <div className={s.toolbar}>
-            <Badge appearance="filled" color="brand">Serverless</Badge>
+            <Badge appearance="filled" color="brand" icon={<Server16Regular />}>Serverless</Badge>
             <div className={s.connect}>
               <Label size="small" htmlFor="connect-db">Connect to</Label>
               <Dropdown
@@ -447,8 +450,8 @@ export function SynapseServerlessSqlEditor({ item, id }: { item: FabricItemType;
 
           <div className={s.resultBox}>
             <TabList selectedValue={resultTab} onTabSelect={(_, d) => setResultTab(d.value as 'results' | 'messages')} size="small">
-              <Tab value="results">Results</Tab>
-              <Tab value="messages">Messages{result?.messages?.length ? ` (${result.messages.length})` : ''}</Tab>
+              <Tab value="results" icon={<Table20Regular />}>Results</Tab>
+              <Tab value="messages" icon={<TextBulletListSquare20Regular />}>Messages{result?.messages?.length ? ` (${result.messages.length})` : ''}</Tab>
             </TabList>
 
             {loading && <Spinner size="small" label="Executing T-SQL…" labelPosition="after" />}

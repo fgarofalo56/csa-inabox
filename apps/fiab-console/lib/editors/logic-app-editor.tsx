@@ -32,8 +32,9 @@ import {
 } from '@fluentui/react-components';
 import {
   Play20Regular, ArrowSync20Regular, Flash20Regular, Branch20Regular,
-  ArrowRight16Regular,
+  ArrowRight16Regular, Options20Regular, ArrowExportLtr20Regular,
 } from '@fluentui/react-icons';
+import { EmptyState } from '@/lib/components/empty-state';
 import { ItemEditorChrome } from './item-editor-chrome';
 import { MonacoTextarea } from '@/lib/components/editor/monaco-textarea';
 import type { FabricItemType } from '@/lib/catalog/fabric-item-types';
@@ -41,22 +42,26 @@ import type { RibbonTab } from '@/lib/components/ribbon';
 
 const useStyles = makeStyles({
   pad: { padding: tokens.spacingHorizontalL, display: 'flex', flexDirection: 'column', gap: tokens.spacingHorizontalM, flex: 1, minHeight: 0 },
-  tabs: { borderBottom: `1px solid ${tokens.colorNeutralStroke2}`, padding: '8px 8px 0' },
+  tabs: { borderBottom: `1px solid ${tokens.colorNeutralStroke2}`, paddingTop: tokens.spacingVerticalS, paddingLeft: tokens.spacingHorizontalS, paddingRight: tokens.spacingHorizontalS },
   toolbar: { display: 'flex', gap: tokens.spacingHorizontalS, alignItems: 'center', flexWrap: 'wrap' },
   flow: { display: 'flex', flexDirection: 'column', gap: 0, alignItems: 'stretch', maxWidth: '760px', width: '100%', minWidth: 0 },
   node: {
     border: `1px solid ${tokens.colorNeutralStroke1}`,
     borderRadius: tokens.borderRadiusXLarge,
-    padding: '10px 14px',
+    paddingTop: tokens.spacingVerticalSNudge, paddingBottom: tokens.spacingVerticalSNudge,
+    paddingLeft: tokens.spacingHorizontalM, paddingRight: tokens.spacingHorizontalM,
     backgroundColor: tokens.colorNeutralBackground1,
+    boxShadow: tokens.shadow4,
     display: 'flex', flexDirection: 'column', gap: tokens.spacingHorizontalXS,
     minWidth: 0, maxWidth: '100%', boxSizing: 'border-box',
+    transition: 'box-shadow 0.15s ease',
+    ':hover': { boxShadow: tokens.shadow16 },
   },
   trigger: { borderLeft: `4px solid ${tokens.colorBrandStroke1}` },
   action: { borderLeft: `4px solid ${tokens.colorPaletteBlueBorderActive}` },
   branch: { borderLeft: `4px solid ${tokens.colorPaletteMarigoldBorderActive}` },
-  branchKids: { marginLeft: '28px', marginTop: tokens.spacingVerticalS, display: 'flex', flexDirection: 'column', gap: 0 },
-  connector: { display: 'flex', justifyContent: 'center', color: tokens.colorNeutralForeground3, padding: '2px 0' },
+  branchKids: { marginLeft: tokens.spacingHorizontalXXL, marginTop: tokens.spacingVerticalS, display: 'flex', flexDirection: 'column', gap: 0 },
+  connector: { display: 'flex', justifyContent: 'center', color: tokens.colorNeutralForeground3, paddingTop: tokens.spacingVerticalXXS, paddingBottom: tokens.spacingVerticalXXS },
   nodeHead: { display: 'flex', gap: tokens.spacingHorizontalS, alignItems: 'center', flexWrap: 'wrap' },
   cfg: { fontFamily: 'Consolas, monospace', fontSize: tokens.fontSizeBase200, color: tokens.colorNeutralForeground2, wordBreak: 'break-word', overflowWrap: 'anywhere', minWidth: 0, maxWidth: '100%' },
   outputsBlob: {
@@ -66,7 +71,12 @@ const useStyles = makeStyles({
     border: `1px solid ${tokens.colorNeutralStroke2}`, maxHeight: '280px', overflow: 'auto',
   },
   runAfter: { color: tokens.colorNeutralForeground3 },
-  tableWrap: { overflow: 'auto', maxHeight: '420px', border: `1px solid ${tokens.colorNeutralStroke2}`, borderRadius: tokens.borderRadiusMedium },
+  sectionHead: { display: 'flex', alignItems: 'center', gap: tokens.spacingHorizontalS, color: tokens.colorNeutralForeground2 },
+  tableWrap: {
+    overflow: 'auto', maxHeight: '420px',
+    border: `1px solid ${tokens.colorNeutralStroke2}`, borderRadius: tokens.borderRadiusLarge,
+    boxShadow: tokens.shadow4,
+  },
   cell: { fontFamily: 'Consolas, monospace', fontSize: tokens.fontSizeBase200, wordBreak: 'break-word', overflowWrap: 'anywhere' },
   runOut: {
     fontFamily: 'Consolas, monospace', fontSize: tokens.fontSizeBase200, whiteSpace: 'pre-wrap', overflowWrap: 'anywhere',
@@ -337,10 +347,14 @@ export function LogicAppEditor({ item, id }: Props) {
                     </MessageBarBody>
                   </MessageBar>
                 )}
+                {triggerNames.length === 0 && Object.keys(actions).length === 0 ? (
+                  <EmptyState
+                    icon={<Flash20Regular />}
+                    title="No triggers or actions yet"
+                    body="This workflow has no triggers or actions defined. Add a trigger and actions to its Workflow Definition Language definition to build out the designer flow."
+                  />
+                ) : (
                 <div className={s.flow}>
-                  {triggerNames.length === 0 && Object.keys(actions).length === 0 && (
-                    <Caption1>This workflow has no triggers or actions yet.</Caption1>
-                  )}
                   {triggerNames.map((tn, i) => (
                     <div key={tn}>
                       {i > 0 && <div className={s.connector}>↓</div>}
@@ -350,13 +364,20 @@ export function LogicAppEditor({ item, id }: Props) {
                   {triggerNames.length > 0 && Object.keys(actions).length > 0 && <div className={s.connector}>↓</div>}
                   <FlowBody actions={actions} />
                 </div>
+                )}
               </>
             )}
 
             {detail && tab === 'parameters' && (
               <>
-                <Subtitle2>Definition parameters</Subtitle2>
-                {Object.keys(wdlParams).length === 0 && <Caption1>No parameters declared.</Caption1>}
+                <Subtitle2 className={s.sectionHead}><Options20Regular />Definition parameters</Subtitle2>
+                {Object.keys(wdlParams).length === 0 && (
+                  <EmptyState
+                    icon={<Options20Regular />}
+                    title="No parameters declared"
+                    body="This workflow declares no Workflow Definition Language parameters. Parameters and their deploy-time values appear here once the definition declares them."
+                  />
+                )}
                 {Object.keys(wdlParams).length > 0 && (
                   <div className={s.tableWrap}>
                     <Table aria-label="Workflow parameters" size="small">
@@ -383,7 +404,9 @@ export function LogicAppEditor({ item, id }: Props) {
                 )}
                 {definition.outputs && Object.keys(definition.outputs).length > 0 && (
                   <>
-                    <Subtitle2 style={{ marginTop: 12 }}>Outputs</Subtitle2>
+                    <Subtitle2 className={s.sectionHead} style={{ marginTop: tokens.spacingVerticalM }}>
+                      <ArrowExportLtr20Regular />Outputs
+                    </Subtitle2>
                     <div className={s.outputsBlob}>{JSON.stringify(definition.outputs, null, 2)}</div>
                   </>
                 )}

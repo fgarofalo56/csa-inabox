@@ -273,7 +273,7 @@ export function PipelineCopilotPane({ apiBase, bound, onApplySpec }: PipelineCop
               tabIndex={0}
               onClick={() => pickConnection(c.name)}
               onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); pickConnection(c.name); } }}>
-              <PlugConnected20Regular style={{ fontSize: 14 }} />
+              <PlugConnected20Regular style={{ fontSize: tokens.fontSizeBase300 }} />
               <strong>{c.name}</strong>
               <Caption1 style={{ color: tokens.colorNeutralForeground3 }}>{c.type}</Caption1>
               {c.capable.map((cap) => (

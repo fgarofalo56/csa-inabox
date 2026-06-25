@@ -17,7 +17,7 @@
 
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import {
-  Subtitle2, Body1, Caption1, Badge, Button, Spinner, Input, Textarea, Field,
+  Subtitle2, Body1, Caption1, Badge, Button, Spinner, SkeletonItem, Input, Textarea, Field,
   Tree, TreeItem, TreeItemLayout, Select,
   Tab, TabList,
   Table, TableHeader, TableRow, TableHeaderCell, TableBody, TableCell,
@@ -27,7 +27,9 @@ import {
 } from '@fluentui/react-components';
 import {
   Add20Regular, ArrowSync20Regular, Save20Regular, FlowchartCircle20Regular,
+  History20Regular, PlugConnected20Regular, Settings20Regular, Apps20Regular,
 } from '@fluentui/react-icons';
+import { EmptyState } from '@/lib/components/empty-state';
 import { ItemEditorChrome } from './item-editor-chrome';
 import type { FabricItemType } from '@/lib/catalog/fabric-item-types';
 import type { RibbonTab } from '@/lib/components/ribbon';
@@ -37,10 +39,24 @@ const useStyles = makeStyles({
   toolbar: { display: 'flex', gap: tokens.spacingHorizontalS, alignItems: 'center', flexWrap: 'wrap' },
   treePad: { padding: tokens.spacingVerticalS },
   tabs: { borderBottom: `1px solid ${tokens.colorNeutralStroke2}`, paddingTop: tokens.spacingVerticalS, paddingLeft: tokens.spacingHorizontalS, paddingRight: tokens.spacingHorizontalS, paddingBottom: 0 },
-  tableWrap: { overflow: 'auto', maxHeight: '360px', border: `1px solid ${tokens.colorNeutralStroke2}`, borderRadius: tokens.borderRadiusMedium },
+  tableWrap: { overflow: 'auto', maxHeight: '360px', border: `1px solid ${tokens.colorNeutralStroke2}`, borderRadius: tokens.borderRadiusLarge, boxShadow: tokens.shadow4 },
   cell: { fontFamily: 'Consolas, monospace', fontSize: tokens.fontSizeBase200, whiteSpace: 'nowrap' },
   field: { display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalXS, minWidth: '240px' },
+  skeletonStack: { display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalS, padding: tokens.spacingVerticalM, border: `1px solid ${tokens.colorNeutralStroke2}`, borderRadius: tokens.borderRadiusLarge, boxShadow: tokens.shadow4 },
+  runsPickerRow: { display: 'flex', gap: tokens.spacingHorizontalS, alignItems: 'flex-end', marginBottom: tokens.spacingVerticalM, flexWrap: 'wrap' },
+  runsDagField: { minWidth: '280px', flex: 1 },
 });
+
+function TableSkeleton({ rows = 4 }: { rows?: number }) {
+  const s = useStyles();
+  return (
+    <div className={s.skeletonStack} aria-hidden>
+      {Array.from({ length: rows }).map((_, i) => (
+        <SkeletonItem key={i} size={24} />
+      ))}
+    </div>
+  );
+}
 
 interface WorkspaceLite { id: string; name: string }
 interface JobLite { id: string; displayName: string; webserverUrl?: string | null; gitRepo?: string | null }
@@ -224,7 +240,14 @@ export function AirflowJobEditor({ item, id }: Props) {
           <Subtitle2 style={{ marginBottom: tokens.spacingVerticalS }}>Airflow jobs</Subtitle2>
           {!workspaceId && <Caption1>Select a workspace.</Caption1>}
           {workspaceId && jobs === null && <Spinner size="tiny" label="Loading…" />}
-          {jobs && jobs.length === 0 && <Caption1>No Airflow jobs yet.</Caption1>}
+          {jobs && jobs.length === 0 && (
+            <EmptyState
+              icon={<Apps20Regular />}
+              title="No Airflow jobs yet"
+              body="Create an Apache Airflow job to orchestrate DAGs against your webserver."
+              primaryAction={{ label: 'New job', onClick: () => setCreateOpen(true) }}
+            />
+          )}
           <Tree aria-label="Airflow jobs">
             {(jobs || []).map(j => (
               <TreeItem key={j.id} itemType="leaf" value={j.id} onClick={() => setJobId(j.id)}>
@@ -241,10 +264,10 @@ export function AirflowJobEditor({ item, id }: Props) {
         <>
           <div className={s.tabs}>
             <TabList selectedValue={tab} onTabSelect={(_, d) => setTab(d.value as string)}>
-              <Tab value="dags">DAGs</Tab>
-              <Tab value="runs">Runs</Tab>
-              <Tab value="connections">Connections</Tab>
-              <Tab value="settings">Settings</Tab>
+              <Tab value="dags" icon={<FlowchartCircle20Regular />}>DAGs</Tab>
+              <Tab value="runs" icon={<History20Regular />}>Runs</Tab>
+              <Tab value="connections" icon={<PlugConnected20Regular />}>Connections</Tab>
+              <Tab value="settings" icon={<Settings20Regular />}>Settings</Tab>
             </TabList>
           </div>
           <div className={s.pad}>
@@ -288,7 +311,14 @@ export function AirflowJobEditor({ item, id }: Props) {
 
             {tab === 'dags' && (
               <>
-                {!jobId && <Caption1>Pick a job from the left panel.</Caption1>}
+                {!jobId && (
+                  <EmptyState
+                    icon={<FlowchartCircle20Regular />}
+                    title="No job selected"
+                    body="Pick an Airflow job from the left panel to list its DAGs, or create a new one."
+                    primaryAction={workspaceId ? { label: 'New job', onClick: () => setCreateOpen(true) } : undefined}
+                  />
+                )}
                 {jobId && !active?.webserverUrl && (
                   <MessageBar intent="warning">
                     <MessageBarBody>
@@ -298,7 +328,12 @@ export function AirflowJobEditor({ item, id }: Props) {
                     </MessageBarBody>
                   </MessageBar>
                 )}
-                {jobId && active?.webserverUrl && dags === null && <Spinner size="small" label="Calling Airflow REST…" labelPosition="after" />}
+                {jobId && active?.webserverUrl && dags === null && (
+                  <>
+                    <Spinner size="small" label="Calling Airflow REST…" labelPosition="after" />
+                    <TableSkeleton rows={4} />
+                  </>
+                )}
                 {dagsErr && (
                   <MessageBar intent={dagsErr.code === 'NO_WEBSERVER' ? 'warning' : 'error'}>
                     <MessageBarBody>
@@ -308,7 +343,14 @@ export function AirflowJobEditor({ item, id }: Props) {
                     </MessageBarBody>
                   </MessageBar>
                 )}
-                {dags && dags.length === 0 && !dagsErr && <Caption1>No DAGs on this webserver.</Caption1>}
+                {dags && dags.length === 0 && !dagsErr && (
+                  <EmptyState
+                    icon={<FlowchartCircle20Regular />}
+                    title="No DAGs on this webserver"
+                    body="The Airflow webserver responded with no DAGs. Sync your DAG source repo or refresh once DAGs are deployed."
+                    primaryAction={{ label: 'Refresh DAGs', onClick: () => workspaceId && jobId && loadDags(workspaceId, jobId) }}
+                  />
+                )}
                 {dags && dags.length > 0 && (
                   <div className={s.tableWrap}>
                     <Table aria-label="Airflow DAGs" size="small">
@@ -340,11 +382,17 @@ export function AirflowJobEditor({ item, id }: Props) {
 
             {tab === 'runs' && (
               <>
-                {!active && <Caption1>Select a job first.</Caption1>}
+                {!active && (
+                  <EmptyState
+                    icon={<History20Regular />}
+                    title="No job selected"
+                    body="Select an Airflow job from the left panel to browse its DAG run history."
+                  />
+                )}
                 {active && (
                   <>
-                    <div style={{ display: 'flex', gap: tokens.spacingHorizontalS, alignItems: 'flex-end', marginBottom: tokens.spacingVerticalM, flexWrap: 'wrap' }}>
-                      <Field label="DAG" style={{ minWidth: 280, flex: 1 }}>
+                    <div className={s.runsPickerRow}>
+                      <Field label="DAG" className={s.runsDagField}>
                         <Select value={runsDagId} onChange={(_, d) => setRunsDagId(d.value)} disabled={!dags || !dags.length}>
                           {(dags || []).map((d) => <option key={d.dag_id} value={d.dag_id}>{d.dag_id}</option>)}
                           {dags && !dags.length && <option value="">No DAGs found</option>}
@@ -363,8 +411,20 @@ export function AirflowJobEditor({ item, id }: Props) {
                         </MessageBarBody>
                       </MessageBar>
                     )}
-                    {runs === null && runsLoading && <Spinner size="small" label="Loading runs…" />}
-                    {runs && !runs.length && !runsErr && <Caption1>No runs yet for this DAG.</Caption1>}
+                    {runs === null && runsLoading && (
+                      <>
+                        <Spinner size="small" label="Loading runs…" />
+                        <TableSkeleton rows={4} />
+                      </>
+                    )}
+                    {runs && !runs.length && !runsErr && (
+                      <EmptyState
+                        icon={<History20Regular />}
+                        title="No runs yet for this DAG"
+                        body="This DAG has no run history yet. Trigger a run from the Airflow webserver, then refresh."
+                        primaryAction={{ label: 'Refresh', onClick: () => runsDagId && loadRuns(workspaceId, jobId, runsDagId) }}
+                      />
+                    )}
                     {runs && runs.length > 0 && (
                       <div className={s.tableWrap}>
                         <Table size="small">
@@ -414,7 +474,13 @@ export function AirflowJobEditor({ item, id }: Props) {
 
             {tab === 'settings' && (
               <>
-                {!active && <Caption1>Select a job first.</Caption1>}
+                {!active && (
+                  <EmptyState
+                    icon={<Settings20Regular />}
+                    title="No job selected"
+                    body="Select an Airflow job from the left panel to configure its webserver URL and DAG source repo."
+                  />
+                )}
                 {active && (
                   <>
                     <Field label="Airflow webserver URL" required hint="The URL the BFF will hit /api/v1/dags against.">

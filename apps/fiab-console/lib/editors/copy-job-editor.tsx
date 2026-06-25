@@ -22,15 +22,19 @@
  */
 
 import {
-  Subtitle2, Caption1, Body1, Button, Badge, Spinner, Divider,
+  Subtitle2, Caption1, Body1, Button, Badge, Spinner, Skeleton, SkeletonItem, Divider,
   MessageBar, MessageBarBody, MessageBarTitle,
   Table, TableHeader, TableRow, TableHeaderCell, TableBody, TableCell,
   Tab, TabList,
   makeStyles, tokens,
 } from '@fluentui/react-components';
+import {
+  SettingsRegular, BookmarkRegular, HistoryRegular, CopyRegular,
+} from '@fluentui/react-icons';
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { ItemEditorChrome } from './item-editor-chrome';
 import { NewItemCreateGate } from './new-item-gate';
+import { EmptyState } from '@/lib/components/empty-state';
 import type { FabricItemType } from '@/lib/catalog/fabric-item-types';
 import type { RibbonTab } from '@/lib/components/ribbon';
 import { CopyJobWizard, type CopyJobSpec } from '@/lib/components/pipeline/copy-job/wizard';
@@ -49,7 +53,15 @@ const useStyles = makeStyles({
   card: {
     border: `1px solid ${tokens.colorNeutralStroke2}`, borderRadius: tokens.borderRadiusXLarge, padding: tokens.spacingVerticalM,
     display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalS, backgroundColor: tokens.colorNeutralBackground1,
+    boxShadow: tokens.shadow4,
+    transitionProperty: 'box-shadow', transitionDuration: tokens.durationNormal,
+    ':hover': { boxShadow: tokens.shadow16 },
   },
+  sectionHeader: {
+    display: 'flex', alignItems: 'center', gap: tokens.spacingHorizontalS,
+    color: tokens.colorNeutralForeground2,
+  },
+  sectionIcon: { color: tokens.colorBrandForeground1, display: 'inline-flex', fontSize: tokens.fontSizeBase400 },
 });
 
 interface PipelineRunDTO {
@@ -249,8 +261,8 @@ export function CopyJobEditor({ item, id }: { item: FabricItemType; id: string }
         <div>
           <div className={styles.tabBar}>
             <TabList selectedValue={tab} onTabSelect={(_, d) => setTab(d.value as 'settings' | 'runs')}>
-              <Tab value="settings">Settings</Tab>
-              <Tab value="runs">Runs</Tab>
+              <Tab value="settings" icon={<SettingsRegular />}>Settings</Tab>
+              <Tab value="runs" icon={<HistoryRegular />}>Runs</Tab>
             </TabList>
           </div>
 
@@ -260,7 +272,16 @@ export function CopyJobEditor({ item, id }: { item: FabricItemType; id: string }
                 <MessageBarBody><MessageBarTitle>Operation failed</MessageBarTitle>{err || loadError}</MessageBarBody>
               </MessageBar>
             ) : null}
-            {loading && <Spinner size="small" label="Loading copy job…" labelPosition="after" />}
+            {loading && (
+              <div className={styles.card} aria-label="Loading copy job">
+                <Skeleton aria-label="Loading copy job…">
+                  <SkeletonItem size={16} style={{ width: '40%' }} />
+                  <SkeletonItem size={12} />
+                  <SkeletonItem size={12} style={{ width: '80%' }} />
+                  <SkeletonItem size={12} style={{ width: '60%' }} />
+                </Skeleton>
+              </div>
+            )}
 
             {ls.error && (
               <MessageBar intent="warning">
@@ -285,7 +306,10 @@ export function CopyJobEditor({ item, id }: { item: FabricItemType; id: string }
 
                 <div className={styles.card}>
                   <div className={styles.toolbar}>
-                    <Subtitle2>Configuration</Subtitle2>
+                    <span className={styles.sectionHeader}>
+                      <CopyRegular className={styles.sectionIcon} aria-hidden />
+                      <Subtitle2>Configuration</Subtitle2>
+                    </span>
                     <Button appearance="primary" size="small" onClick={() => setWizardOpen(true)} disabled={busy}>
                       {configured ? 'Edit in wizard' : 'Configure wizard'}
                     </Button>
@@ -314,7 +338,10 @@ export function CopyJobEditor({ item, id }: { item: FabricItemType; id: string }
 
                 {tracksCheckpoint && (
                   <div className={styles.card}>
-                    <Subtitle2>{isCdc ? 'CDC checkpoint (LSN)' : 'Watermark'}</Subtitle2>
+                    <span className={styles.sectionHeader}>
+                      <BookmarkRegular className={styles.sectionIcon} aria-hidden />
+                      <Subtitle2>{isCdc ? 'CDC checkpoint (LSN)' : 'Watermark'}</Subtitle2>
+                    </span>
                     {isCdc && (
                       <Caption1 className={styles.label}>
                         CDC mode reads net inserts, updates, and deletes from the source via{' '}
@@ -369,12 +396,20 @@ export function CopyJobEditor({ item, id }: { item: FabricItemType; id: string }
             {tab === 'runs' && (
               <div className={styles.card} style={{ minWidth: 0, overflowX: 'auto' }}>
                 <div className={styles.toolbar}>
-                  <Subtitle2>Recent runs</Subtitle2>
+                  <span className={styles.sectionHeader}>
+                    <HistoryRegular className={styles.sectionIcon} aria-hidden />
+                    <Subtitle2>Recent runs</Subtitle2>
+                  </span>
                   <Caption1 className={styles.label}>pipeline loom-copy-{id.substring(0, 8)}…</Caption1>
                   <Button appearance="secondary" size="small" onClick={loadRuns} disabled={busy}>Refresh</Button>
                 </div>
                 {runs.length === 0 ? (
-                  <Caption1 className={styles.label}>No runs yet.</Caption1>
+                  <EmptyState
+                    icon={<HistoryRegular />}
+                    title="No runs yet"
+                    body="This copy job hasn't run. Configure the source, destination, and copy mode, then click Run now to move data — each run will appear here with its status, duration, and message."
+                    primaryAction={canRun ? { label: 'Run now', onClick: run } : { label: 'Configure wizard', onClick: () => setWizardOpen(true) }}
+                  />
                 ) : (
                   <Table size="small" aria-label="Pipeline runs">
                     <TableHeader>

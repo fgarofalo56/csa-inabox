@@ -32,8 +32,13 @@ import {
   Select,
   makeStyles, tokens,
 } from '@fluentui/react-components';
-import { Play20Regular, Pause20Regular, ArrowSync20Regular, Save20Regular, Beaker20Regular, Add20Regular, Delete20Regular } from '@fluentui/react-icons';
+import {
+  Play20Regular, Pause20Regular, ArrowSync20Regular, Save20Regular, Beaker20Regular, Add20Regular, Delete20Regular,
+  Code20Regular, ArrowImport20Regular, ArrowExportLtr20Regular, MathFormula20Regular,
+  ChartMultiple20Regular, Flow20Regular, DataUsage20Regular, Filter20Regular,
+} from '@fluentui/react-icons';
 import { ItemEditorChrome } from './item-editor-chrome';
+import { EmptyState } from '@/lib/components/empty-state';
 import type { FabricItemType } from '@/lib/catalog/fabric-item-types';
 import type { RibbonTab } from '@/lib/components/ribbon';
 import { MonacoTextarea } from '@/lib/components/editor/monaco-textarea';
@@ -55,7 +60,25 @@ const useStyles = makeStyles({
     backgroundColor: tokens.colorNeutralBackground3, color: tokens.colorNeutralForeground1,
     resize: 'vertical',
   },
-  tableWrap: { overflow: 'auto', maxHeight: '320px', border: `1px solid ${tokens.colorNeutralStroke2}`, borderRadius: tokens.borderRadiusMedium },
+  tableWrap: { overflow: 'auto', maxHeight: '320px', border: `1px solid ${tokens.colorNeutralStroke2}`, borderRadius: tokens.borderRadiusLarge, boxShadow: tokens.shadow4 },
+  // Icon + heading row used by section/tab headers so each pane reads as the
+  // same polished product (matches sibling editors' section affordance).
+  sectionHead: {
+    display: 'flex', alignItems: 'center', gap: tokens.spacingHorizontalS,
+    color: tokens.colorBrandForeground1,
+  },
+  // Job-summary block: an elevated card (shadow4 → shadow16 on hover) with a
+  // large radius so the monitoring summary isn't a flat bare div.
+  summaryCard: {
+    display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalXXS,
+    padding: tokens.spacingVerticalM,
+    backgroundColor: tokens.colorNeutralBackground1,
+    border: `1px solid ${tokens.colorNeutralStroke2}`,
+    borderRadius: tokens.borderRadiusLarge,
+    boxShadow: tokens.shadow4,
+    transition: 'box-shadow 0.15s ease-in-out',
+    ':hover': { boxShadow: tokens.shadow16 },
+  },
 });
 
 interface AsaJob {
@@ -461,7 +484,14 @@ export function StreamAnalyticsJobEditor({ item, id }: { item: FabricItemType; i
         <div className={s.pad}>
           <Subtitle2>ASA jobs ({jobs?.length ?? '…'})</Subtitle2>
           {jobs === null && <Spinner size="tiny" label="Loading…" />}
-          {jobs && jobs.length === 0 && !error && <Caption1>No Stream Analytics jobs in the configured scope.</Caption1>}
+          {jobs && jobs.length === 0 && !error && (
+            <EmptyState
+              icon={<Flow20Regular />}
+              title="No Stream Analytics jobs"
+              body="No Stream Analytics jobs exist in the configured scope. Provision an ASA job, then refresh to author its query, inputs, and outputs."
+              primaryAction={{ label: 'Refresh', appearance: 'outline', onClick: () => loadList() }}
+            />
+          )}
           {(jobs || []).map(j => (
             <Button key={j.name} appearance={selected === j.name ? 'primary' : 'subtle'} onClick={() => setSelected(j.name)}>
               {j.name}
@@ -568,13 +598,13 @@ export function StreamAnalyticsJobEditor({ item, id }: { item: FabricItemType; i
 
           <div className={s.tabBar}>
             <TabList selectedValue={tab} onTabSelect={(_, d) => setTab(d.value as typeof tab)}>
-              <Tab value="query">Query</Tab>
-              <Tab value="builder">Query Builder</Tab>
-              <Tab value="test">Test</Tab>
-              <Tab value="inputs">Inputs ({job?.inputs?.length ?? 0})</Tab>
-              <Tab value="outputs">Outputs ({job?.outputs?.length ?? 0})</Tab>
-              <Tab value="functions">Functions ({job?.functions?.length ?? 0})</Tab>
-              <Tab value="monitoring">Monitoring</Tab>
+              <Tab value="query" icon={<Code20Regular />}>Query</Tab>
+              <Tab value="builder" icon={<Filter20Regular />}>Query Builder</Tab>
+              <Tab value="test" icon={<Beaker20Regular />}>Test</Tab>
+              <Tab value="inputs" icon={<ArrowImport20Regular />}>Inputs ({job?.inputs?.length ?? 0})</Tab>
+              <Tab value="outputs" icon={<ArrowExportLtr20Regular />}>Outputs ({job?.outputs?.length ?? 0})</Tab>
+              <Tab value="functions" icon={<MathFormula20Regular />}>Functions ({job?.functions?.length ?? 0})</Tab>
+              <Tab value="monitoring" icon={<ChartMultiple20Regular />}>Monitoring</Tab>
             </TabList>
           </div>
 
@@ -588,7 +618,7 @@ export function StreamAnalyticsJobEditor({ item, id }: { item: FabricItemType; i
           {tab === 'builder' && (
             <div style={{ display: 'grid', gridTemplateColumns: 'minmax(0, 1fr) minmax(0, 360px)', gap: tokens.spacingHorizontalL }}>
               <div style={{ display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalS, minWidth: 0 }}>
-                <Subtitle2>Guided transform builder</Subtitle2>
+                <div className={s.sectionHead}><Filter20Regular /><Subtitle2>Guided transform builder</Subtitle2></div>
                 <Caption1>
                   Configure a filter / aggregate / window / join through guided fields. The
                   generated SAQL compiles to this job&apos;s transformation — no hand-written query.
@@ -602,7 +632,7 @@ export function StreamAnalyticsJobEditor({ item, id }: { item: FabricItemType; i
                   </Field>
                 </div>
                 <Divider />
-                <Subtitle2>Generated SAQL</Subtitle2>
+                <div className={s.sectionHead}><Code20Regular /><Subtitle2>Generated SAQL</Subtitle2></div>
                 <MonacoTextarea value={builderSaql} onChange={() => {}} language="sql" height={220} readOnly ariaLabel="Builder generated SAQL" />
                 <div style={{ display: 'flex', gap: tokens.spacingHorizontalS, flexWrap: 'wrap' }}>
                   <Button appearance="outline" icon={<Save20Regular />} onClick={() => { setQuery(builderSaql); setTab('query'); }}>
@@ -629,7 +659,7 @@ export function StreamAnalyticsJobEditor({ item, id }: { item: FabricItemType; i
 
           {tab === 'test' && (
             <div style={{ display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalS }}>
-              <Subtitle2>Test query with sample data</Subtitle2>
+              <div className={s.sectionHead}><Beaker20Regular /><Subtitle2>Test query with sample data</Subtitle2></div>
               <Caption1>
                 <strong>Compile</strong> validates the current Query against ASA (no infra needed).
                 <strong> Run test</strong> streams the sample events below through ASA and returns the
@@ -788,9 +818,9 @@ export function StreamAnalyticsJobEditor({ item, id }: { item: FabricItemType; i
 
           {tab === 'monitoring' && (
             <div style={{ display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalM }}>
-              <Subtitle2>Job summary</Subtitle2>
-              <div>
-                <Caption1 style={{ display: 'block', marginTop: tokens.spacingVerticalXS }}>State: <strong>{jobState}</strong></Caption1>
+              <div className={s.sectionHead}><DataUsage20Regular /><Subtitle2>Job summary</Subtitle2></div>
+              <div className={s.summaryCard}>
+                <Caption1 style={{ display: 'block' }}>State: <strong>{jobState}</strong></Caption1>
                 <Caption1 style={{ display: 'block' }}>Last output event time: {job?.lastOutputEventTime || '—'}</Caption1>
                 <Caption1 style={{ display: 'block' }}>SKU: {job?.sku || '—'}</Caption1>
                 <Caption1 style={{ display: 'block' }}>Streaming Units: {job?.streamingUnits ?? '—'}</Caption1>
@@ -806,7 +836,7 @@ export function StreamAnalyticsJobEditor({ item, id }: { item: FabricItemType; i
               )}
 
               <div style={{ display: 'flex', gap: tokens.spacingHorizontalS, alignItems: 'center', flexWrap: 'wrap' }}>
-                <Subtitle2>Live metrics (last 1 hour, 5-minute grain)</Subtitle2>
+                <div className={s.sectionHead}><ChartMultiple20Regular /><Subtitle2>Live metrics (last 1 hour, 5-minute grain)</Subtitle2></div>
                 <Button size="small" appearance="outline" icon={<ArrowSync20Regular />}
                   onClick={() => loadMetrics(selected)} disabled={metricsLoading || !selected}>
                   {metricsLoading ? 'Loading…' : 'Refresh'}
@@ -826,7 +856,12 @@ export function StreamAnalyticsJobEditor({ item, id }: { item: FabricItemType; i
                 </div>
               )}
               {metrics && metrics.length === 0 && !metricsError && (
-                <Caption1>No metric series returned for this job in the selected window.</Caption1>
+                <EmptyState
+                  icon={<ChartMultiple20Regular />}
+                  title="No metrics in this window"
+                  body="Azure Monitor returned no metric series for this job in the selected window. Metrics appear once the job is Running and emitting events — refresh after it warms up."
+                  primaryAction={{ label: 'Refresh', appearance: 'outline', onClick: () => loadMetrics(selected) }}
+                />
               )}
             </div>
           )}
