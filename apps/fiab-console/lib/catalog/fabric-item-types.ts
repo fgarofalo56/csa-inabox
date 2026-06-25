@@ -2829,6 +2829,59 @@ export const FABRIC_ITEM_TYPES: readonly FabricItemType[] = [
       ],
       "docsUrl": "https://learn.microsoft.com/azure/logic-apps/workflow-definition-language-schema"
     } },
+
+  // --- wave2-a — genuinely-missing Azure-native messaging + lakehouse items ---
+  // All Azure-native by default (no Fabric / OneLake / Power BI dependency per
+  // no-fabric-dependency.md); each reuses an existing Azure client and a real
+  // ARM/data-plane backend with an honest infra gate (no-vaporware.md).
+  { slug: 'event-hubs-namespace',        displayName: 'Event Hubs namespace',        restType: 'Microsoft.EventHub/namespaces', category: 'Real-Time Intelligence',
+    description: 'Azure Event Hubs namespace + event hubs — the Kafka-compatible messaging backbone behind Eventstreams. Real ARM.',
+    learnContent: {
+      "overview": "An Event Hubs namespace is the standalone Azure Event Hubs resource (Microsoft.EventHub/namespaces) that the Eventstream consumes — the big-data streaming + Kafka-compatible ingestion backbone. In Loom it is a navigator over the deployment-pinned namespace: it shows namespace properties (SKU, TLS, capture) and lets you create, list, and delete event hubs (entities) and consumer groups against the real ARM REST. Azure-native — no Microsoft Fabric required.",
+      "steps": [
+        { "title": "Bind the namespace", "body": "The editor targets the deployment namespace (LOOM_EVENTHUB_NAMESPACE). If unset it shows an honest gate naming the env var + the Contributor role the Console UAMI needs." },
+        { "title": "Create an event hub", "body": "Name a hub and pick a partition count + retention; Loom PUTs Microsoft.EventHub/namespaces/{ns}/eventhubs over real ARM." },
+        { "title": "Add consumer groups", "body": "Create consumer groups on a hub so independent readers each track their own offset." },
+        { "title": "Wire it downstream", "body": "Point an Eventstream, Stream Analytics job, or KQL ingestion at the hub — the namespace is the source." }
+      ],
+      "docsUrl": "https://learn.microsoft.com/azure/event-hubs/event-hubs-about"
+    } },
+  { slug: 'service-bus-namespace',       displayName: 'Service Bus namespace',       restType: 'Microsoft.ServiceBus/namespaces', category: 'Real-Time Intelligence',
+    description: 'Azure Service Bus namespace + queues/topics — enterprise message broker with FIFO, sessions, and pub/sub. Real ARM.',
+    learnContent: {
+      "overview": "A Service Bus namespace is the standalone Azure Service Bus resource (Microsoft.ServiceBus/namespaces) — an enterprise message broker for reliable queues (point-to-point) and topics/subscriptions (publish-subscribe) with ordering, sessions, dead-lettering, and duplicate detection. In Loom it is a navigator over the deployment-pinned namespace: it shows namespace properties and creates, lists, and deletes queues and topics against the real ARM REST. Azure-native — no Microsoft Fabric required.",
+      "steps": [
+        { "title": "Bind the namespace", "body": "The editor targets the deployment namespace (LOOM_SERVICEBUS_NAMESPACE). If unset it shows an honest gate naming the env var + the Contributor role the Console UAMI needs." },
+        { "title": "Create a queue", "body": "Name a queue and set max size + lock duration; Loom PUTs Microsoft.ServiceBus/namespaces/{ns}/queues over real ARM for point-to-point messaging." },
+        { "title": "Create a topic", "body": "Create a topic for publish-subscribe fan-out; subscribers each get their own copy of every message." },
+        { "title": "Connect producers + consumers", "body": "Apps authenticate with Entra ID (local auth disabled by default) and send/receive against the queue or topic." }
+      ],
+      "docsUrl": "https://learn.microsoft.com/azure/service-bus-messaging/service-bus-messaging-overview"
+    } },
+  { slug: 'event-grid-topic',            displayName: 'Event Grid topic',            restType: 'Microsoft.EventGrid/topics', category: 'Real-Time Intelligence',
+    description: 'Azure Event Grid custom topic + event subscriptions — reactive event routing with CloudEvents schema. Real ARM.',
+    learnContent: {
+      "overview": "An Event Grid topic is an Azure Event Grid custom topic (Microsoft.EventGrid/topics) — a reactive, push-based event router. Publishers POST events to the topic endpoint and event subscriptions fan them out to handlers (Functions, webhooks, Event Hubs, Service Bus) with filtering and retry. In Loom it shows the topic endpoint + access keys, lists event subscriptions, and creates/deletes custom topics against the real ARM REST using the CloudEvents v1.0 schema by default. Azure-native — no Microsoft Fabric required.",
+      "steps": [
+        { "title": "Bind the resource group", "body": "The editor targets the deployment Event Grid scope (LOOM_EVENTGRID_SUB / RG). If unset it shows an honest gate naming the env vars + the EventGrid Contributor role." },
+        { "title": "Create a custom topic", "body": "Name a topic; Loom PUTs Microsoft.EventGrid/topics with the CloudEvents v1.0 input schema (idempotent) over real ARM." },
+        { "title": "Inspect endpoint + keys", "body": "The editor surfaces the topic endpoint and access keys publishers use to POST events." },
+        { "title": "Review subscriptions", "body": "List the event subscriptions that route this topic's events to handlers, with their filters and delivery destinations." }
+      ],
+      "docsUrl": "https://learn.microsoft.com/azure/event-grid/custom-topics"
+    } },
+  { slug: 'lakehouse-shortcut',          displayName: 'Lakehouse shortcut',          restType: 'LakehouseShortcut', category: 'Data Engineering',
+    description: 'An ADLS external-location pointer (abfss shortcut) — read external Delta/Parquet in place without copying. Azure-native OneLake-shortcut equivalent.',
+    learnContent: {
+      "overview": "A Lakehouse shortcut is the Azure-native equivalent of a OneLake shortcut: a named pointer to external Delta/Parquet that a lakehouse reads IN PLACE without copying. In Loom it targets an ADLS Gen2 path (container + path, resolved to an abfss:// location) on the deployment data lake; Loom verifies the target resolves by listing it via the ADLS client (no data movement) and persists the pointer as a workspace item. SQL/Spark over the lakehouse then reads the shortcut's Delta directly. No Microsoft Fabric / OneLake dependency — pure ADLS Gen2.",
+      "steps": [
+        { "title": "Name the shortcut", "body": "Give the shortcut a name; it appears under the lakehouse's shortcuts as a virtual folder." },
+        { "title": "Point at external data", "body": "Choose a target ADLS container + path (or paste an abfss:// location). Loom resolves it to the lake's abfss root." },
+        { "title": "Verify resolution", "body": "Loom lists the target path via the ADLS client to confirm the pointer resolves — proving access WITHOUT copying a single byte." },
+        { "title": "Query in place", "body": "Spark / serverless SQL over the lakehouse reads the shortcut's Delta/Parquet directly at query time; the data is never duplicated." }
+      ],
+      "docsUrl": "https://learn.microsoft.com/azure/storage/blobs/data-lake-storage-introduction"
+    } },
 ];
 
 export const WORKLOAD_CATEGORIES: readonly WorkloadCategory[] = [

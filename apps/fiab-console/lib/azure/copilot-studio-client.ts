@@ -596,18 +596,50 @@ export async function deleteTopic(envId: string, id: string): Promise<void> {
 // pluginactions by that real relationship rather than the invented
 // `msdyn_bot_actions._msdyn_copilotid_value`.
 //
-// VERIFY against the live tenant's metadata before extending:
-//   GET /api/data/v9.2/EntityDefinitions?$select=LogicalName,EntitySetName
-//       &$filter=startswith(LogicalName,'msdyn_plugin')
-//   GET /api/data/v9.2/EntityDefinitions(LogicalName='msdyn_pluginaction')
-//       /Attributes?$select=LogicalName
-// (Service-Copilot reference, identical field conventions:
-//  learn.microsoft.com/dynamics365/developer/reference/entities/msdyn_servicecopilotplugin
-//  learn.microsoft.com/dynamics365/developer/reference/entities/msdyn_servicecopilotpluginaction )
+// CONFIRMED action columns (round-2). Verified against the Service-Copilot
+// mirror entity msdyn_servicecopilotpluginaction — the documented twin of the
+// msdyn_pluginaction container this client targets, identical field conventions
+// (learn.microsoft.com/dynamics365/developer/reference/entities/msdyn_servicecopilotpluginaction):
+//   • msdyn_name                  — action display name (writable)
+//   • msdyn_connectorname         — connector binding (writable String) ✅
+//   • msdyn_actionuniquename      — action's unique name (writable String,
+//                                   MaxLength 1000) — the Power Automate flow's
+//                                   unique name is the documented value here ✅
+//   • msdyn_parameterconfiguration — input/output parameter mapping serialised
+//                                   as JSON (writable Memo, MaxLength 1,048,576);
+//                                   there is NO per-parameter child entity ✅
+//   • statecode / _msdyn_copilotid_value — state + agent association
+// msdyn_pluginname / msdyn_plugintype / msdyn_pluginuniquename are columns on
+// the PLUGIN CONTAINER (msdyn_servicecopilotplugin), NOT on the action row, so
+// they are never written to the action here (that was the round-1 bug).
 //
 // A genuine 404 on either set (e.g. an org that has not provisioned the plugin
 // model) still surfaces honestly via the rawCall handler, which names the
-// missing entity set — never a fake empty success.
+// missing entity set — never a fake empty success. A column variant absent on a
+// given org's msdyn_pluginaction is caught by the undeclared-property handler.
+
+/**
+ * A single mapped input/output parameter for an action (Copilot Studio
+ * "Inputs / Outputs" surface). Structured + typed so the editor renders a
+ * mapping GRID (dropdowns + typed inputs), never a freeform JSON textarea
+ * (no-freeform-config). Persisted to the action's msdyn_parameterconfiguration
+ * Memo column as JSON — the same shape Copilot Studio itself serialises.
+ */
+export interface ActionParameter {
+  /** Parameter name (the input/output identifier). */
+  name: string;
+  /** Whether this is an input the agent fills or an output it reads. */
+  direction: 'input' | 'output';
+  /** Logical data type (String | Number | Boolean | Date | Choice | Table). */
+  type: string;
+  /**
+   * "How will the agent fill this input?" — 'dynamic' = Dynamically fill,
+   * 'value' = Set as a value (then `value` carries the literal/variable/Power Fx).
+   */
+  valueKind?: 'dynamic' | 'value';
+  /** The literal / variable / Power Fx expression when valueKind === 'value'. */
+  value?: string;
+}
 
 export interface CopilotAction {
   id: string;
@@ -617,17 +649,51 @@ export interface CopilotAction {
   flowId?: string;
   agentId?: string;
   enabled?: boolean;
+  /** Mapped input/output parameters parsed from msdyn_parameterconfiguration. */
+  parameters?: ActionParameter[];
 }
 
 // msdyn_pluginaction columns (+ the plugin lookup carrying connector/flow id).
+// Round-2: select the confirmed action unique-name + parameter-config columns so
+// the bound mapping round-trips back into the editor grid.
 const ACTION_SELECT = [
   'msdyn_pluginactionid',
   'msdyn_name',
   'msdyn_connectorname',
+  'msdyn_actionuniquename',
+  'msdyn_parameterconfiguration',
   '_msdyn_plugin_value',
   '_msdyn_copilotid_value',
   'statecode',
 ].join(',');
+
+/**
+ * Parse the action's msdyn_parameterconfiguration Memo JSON into the typed
+ * ActionParameter[] the editor grid renders. Best-effort: malformed/legacy JSON
+ * NEVER throws — a bound action with an unreadable mapping still lists.
+ */
+function parseActionParameters(raw: any): ActionParameter[] | undefined {
+  if (typeof raw !== 'string' || !raw.trim()) return undefined;
+  try {
+    const obj = JSON.parse(raw);
+    const arr = Array.isArray(obj) ? obj : Array.isArray(obj?.parameters) ? obj.parameters : null;
+    if (!Array.isArray(arr)) return undefined;
+    const out: ActionParameter[] = [];
+    for (const p of arr) {
+      if (!p || typeof p.name !== 'string') continue;
+      out.push({
+        name: p.name,
+        direction: p.direction === 'output' ? 'output' : 'input',
+        type: typeof p.type === 'string' && p.type ? p.type : 'String',
+        valueKind: p.valueKind === 'value' ? 'value' : p.valueKind === 'dynamic' ? 'dynamic' : undefined,
+        value: typeof p.value === 'string' ? p.value : undefined,
+      });
+    }
+    return out.length ? out : undefined;
+  } catch {
+    return undefined;
+  }
+}
 
 /**
  * Map a msdyn_pluginaction row to the editor's CopilotAction shape.
@@ -652,10 +718,37 @@ function mapAction(r: any): CopilotAction {
     name: r.msdyn_name,
     type,
     connectorId: r.msdyn_connectorname ?? plugin?.msdyn_pluginuniquename,
-    flowId: plugin?.msdyn_pluginname,
+    // Round-2: the flow's unique name is the confirmed action column
+    // msdyn_actionuniquename (msdyn_pluginname is a plugin-container column,
+    // absent on the action row). Fall back to the expanded plugin name only.
+    flowId: r.msdyn_actionuniquename ?? plugin?.msdyn_pluginname,
     agentId: r._msdyn_copilotid_value ?? r._msdyn_plugin_value,
     enabled: r.statecode === 0,
+    parameters: parseActionParameters(r.msdyn_parameterconfiguration),
   };
+}
+
+// Memoised per host+attribute: does this org's msdyn_pluginaction expose the
+// given column? This is the HONEST entity-check the parameter-mapping write
+// depends on — if the column is absent we throw a precise 422 naming the
+// EntityDefinitions/Attributes probe rather than silently dropping the mapping.
+const _actionAttrCache = new Map<string, Promise<boolean>>();
+function actionEntitySupportsAttribute(host: string, attribute: string): Promise<boolean> {
+  const key = `${host}|${attribute}`;
+  const cached = _actionAttrCache.get(key);
+  if (cached) return cached;
+  const safe = attribute.replace(/'/g, "''");
+  const probe = rawCall<{ value: any[] }>(
+    dvUrl(host, `/EntityDefinitions(LogicalName='msdyn_pluginaction')/Attributes`, {
+      $select: 'LogicalName',
+      $filter: `LogicalName eq '${safe}'`,
+    }),
+    { scope: dvScope(host) },
+  )
+    .then((j) => Array.isArray(j?.value) && j.value.length > 0)
+    .catch(() => false);
+  _actionAttrCache.set(key, probe);
+  return probe;
 }
 
 export async function listActions(envId: string, agentId: string): Promise<CopilotAction[]> {
@@ -679,14 +772,44 @@ export interface ActionUpsertBody {
   type: 'power-automate-flow' | 'custom-connector' | 'connector' | 'prebuilt' | string;
   connectorId?: string;
   flowId?: string;
+  /**
+   * Mapped input/output parameters (the Inputs/Outputs grid). Persisted to the
+   * action's msdyn_parameterconfiguration Memo column as JSON. Optional and
+   * backward-compatible: when absent the action binds exactly as before.
+   */
+  parameters?: ActionParameter[];
+}
+
+const PARAM_CONFIG_ATTR = 'msdyn_parameterconfiguration';
+
+/** Serialise the mapped parameters into the action's Memo column JSON. */
+function serializeActionParameters(parameters: ActionParameter[]): string {
+  return JSON.stringify({
+    version: 1,
+    parameters: parameters.map((p) => ({
+      name: p.name,
+      direction: p.direction === 'output' ? 'output' : 'input',
+      type: p.type || 'String',
+      valueKind: p.valueKind === 'value' ? 'value' : 'dynamic',
+      value: p.valueKind === 'value' ? (p.value ?? '') : undefined,
+    })),
+  });
 }
 
 /**
  * Bind an action to the agent. On the plugin model an action is created as a
  * msdyn_pluginaction row bound to the agent's plugin (the copilot lookup carries
  * the agent association). We persist the connector binding via msdyn_connectorname
- * and let the plugin type drive `type`. Body field names follow the
- * msdyn_pluginaction schema (verified — see section comment).
+ * and let the plugin type drive `type`. Body field names follow the CONFIRMED
+ * msdyn_(servicecopilot)pluginaction schema (see section comment):
+ *   • connectorId → msdyn_connectorname     (confirmed writable on the action)
+ *   • flowId      → msdyn_actionuniquename   (confirmed writable on the action;
+ *                                             the flow's unique name is the
+ *                                             documented value — NOT
+ *                                             msdyn_pluginname, which is a
+ *                                             plugin-container column)
+ *   • parameters  → msdyn_parameterconfiguration (Memo JSON), gated on an
+ *                   honest EntityDefinitions/Attributes pre-flight check.
  */
 export async function bindAction(envId: string, body: ActionUpsertBody): Promise<CopilotAction> {
   const host = await envHost(envId);
@@ -694,19 +817,70 @@ export async function bindAction(envId: string, body: ActionUpsertBody): Promise
     body.type === 'custom-connector' ? 1
     : body.type === 'connector' ? 2
     : 0; // power-automate-flow / Dataverse default
+  // When a parameter mapping is supplied, confirm the action entity actually
+  // exposes the Memo column FIRST. If it is absent we throw an honest 422 (the
+  // action is NOT created — no partial/fake success, and the mapping is never
+  // silently dropped) naming the exact metadata probe to run.
+  let parameterConfiguration: string | undefined;
+  if (body.parameters?.length) {
+    const supported = await actionEntitySupportsAttribute(host, PARAM_CONFIG_ATTR);
+    if (!supported) {
+      throw new CopilotStudioError(
+        `Parameter mapping cannot be persisted: column '${PARAM_CONFIG_ATTR}' was not found on ` +
+        `the msdyn_pluginaction entity in this environment. Verify it via ` +
+        `GET /api/data/v9.2/EntityDefinitions(LogicalName='msdyn_pluginaction')/Attributes` +
+        `?$select=LogicalName&$filter=LogicalName eq '${PARAM_CONFIG_ATTR}'. ` +
+        `The action was not created so no partial mapping is left behind.`,
+        422, { attribute: PARAM_CONFIG_ATTR, gated: true },
+      );
+    }
+    parameterConfiguration = serializeActionParameters(body.parameters);
+  }
   const dvBody: Record<string, any> = {
     msdyn_name: body.name,
     msdyn_plugintype: pluginType,
     // Bind to the agent via the copilot relationship the plugin model exposes.
     'msdyn_copilotid@odata.bind': `/msdyn_copilots(${body.agentId})`,
   };
-  // Connector / flow binding columns on the plugin action.
+  // Connector / flow binding columns on the plugin action (confirmed names).
   if (body.connectorId) dvBody.msdyn_connectorname = body.connectorId;
-  if (body.flowId) dvBody.msdyn_pluginname = body.flowId;
+  if (body.flowId) dvBody.msdyn_actionuniquename = body.flowId;
+  if (parameterConfiguration !== undefined) dvBody[PARAM_CONFIG_ATTR] = parameterConfiguration;
   const j = await rawCall<any>(dvUrl(host, '/msdyn_pluginactions'), {
     scope: dvScope(host),
     method: 'POST',
     body: dvBody,
+    headers: { prefer: 'return=representation' },
+  });
+  return mapAction(j);
+}
+
+/**
+ * Update the input/output parameter mapping of an already-bound action. Runs the
+ * same honest EntityDefinitions/Attributes pre-flight as bindAction — a missing
+ * Memo column throws 422 rather than silently no-op'ing — then PATCHes the
+ * action's msdyn_parameterconfiguration column. Real Dataverse write, no stub.
+ */
+export async function updateActionParameters(
+  envId: string,
+  id: string,
+  parameters: ActionParameter[],
+): Promise<CopilotAction> {
+  const host = await envHost(envId);
+  const supported = await actionEntitySupportsAttribute(host, PARAM_CONFIG_ATTR);
+  if (!supported) {
+    throw new CopilotStudioError(
+      `Parameter mapping cannot be persisted: column '${PARAM_CONFIG_ATTR}' was not found on ` +
+      `the msdyn_pluginaction entity in this environment. Verify it via ` +
+      `GET /api/data/v9.2/EntityDefinitions(LogicalName='msdyn_pluginaction')/Attributes` +
+      `?$select=LogicalName&$filter=LogicalName eq '${PARAM_CONFIG_ATTR}'.`,
+      422, { attribute: PARAM_CONFIG_ATTR, gated: true },
+    );
+  }
+  const j = await rawCall<any>(dvUrl(host, `/msdyn_pluginactions(${id})`), {
+    scope: dvScope(host),
+    method: 'PATCH',
+    body: { [PARAM_CONFIG_ATTR]: serializeActionParameters(parameters) },
     headers: { prefer: 'return=representation' },
   });
   return mapAction(j);
@@ -844,6 +1018,15 @@ function channelEnablementGate(channelType: ChannelType): string | null {
         'verify token configured on the Azure Bot Service Facebook channel, and the Messenger ' +
         'webhook subscription. Configure it on the Azure Bot resource; a Dataverse row does not ' +
         'establish the Messenger webhook.'
+      );
+    case 'custom':
+      return (
+        'A custom channel maps to Copilot Studio’s "publish to a mobile or custom app" ' +
+        '(a Direct Line token + endpoint your app exchanges) or an Azure Bot Service relay bot ' +
+        'with a custom adapter — NOT a Dataverse row. Provision Direct Line on the Azure Bot ' +
+        'resource and set LOOM_COPILOT_DIRECTLINE_SECRET, and/or register the Azure Bot ' +
+        '(LOOM_BOTSERVICE_RESOURCE_ID) for a custom-adapter relay. A msdyn_botchannels insert does ' +
+        'not wire a custom channel, so Loom will not report it published off one.'
       );
     default:
       return null;

@@ -231,6 +231,15 @@ export const EDITOR_REGISTRY: Record<string, EditorComponent> = {
   'release-environment':         reg(() => import('./palantir-editors'),       'ReleaseEnvironmentEditor'),
   'health-check':                reg(() => import('./palantir-editors'),       'HealthCheckEditor'),
   'aip-logic':                   reg(() => import('./palantir-editors'),       'AipLogicEditor'),
+
+  // wave2-a — Azure-native messaging + lakehouse-shortcut items. Each is a
+  // navigator over a deployment-pinned Azure resource (real ARM / data-plane via
+  // the existing eventhubs / eventgrid / adls clients) with an honest infra gate.
+  // Azure-native default — no Fabric / OneLake required (no-fabric-dependency.md).
+  'event-hubs-namespace':        reg(() => import('./event-hubs-namespace-editor'), 'EventHubsNamespaceEditor'),
+  'service-bus-namespace':       reg(() => import('./service-bus-namespace-editor'), 'ServiceBusNamespaceEditor'),
+  'event-grid-topic':            reg(() => import('./event-grid-topic-editor'),    'EventGridTopicEditor'),
+  'lakehouse-shortcut':          reg(() => import('./lakehouse-shortcut-editor'),  'LakehouseShortcutEditor'),
 };
 
 export function getEditor(slug: string): EditorComponent | null {

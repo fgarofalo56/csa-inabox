@@ -138,6 +138,22 @@ interface Topic {
   modifiedOn?: string;
 }
 
+// Copilot Studio action input/output parameter — mirrors the portal's
+// "Inputs / Outputs" surface. Grounded in Learn ("Manage topic inputs and
+// outputs"): every parameter has a name, a data type, and a direction; for
+// inputs, "How will the agent fill this input?" is either Dynamically fill
+// (the agent populates it from context, default) or Set as a value (a literal,
+// an existing variable, or a Power Fx formula). Copilot Studio persists the
+// whole mapping as JSON in the action's msdyn_parameterconfiguration Memo
+// column — there is no per-parameter child entity.
+interface ActionParameter {
+  name: string;
+  direction: 'input' | 'output';
+  type: string;
+  valueKind?: 'dynamic' | 'value';
+  value?: string;
+}
+
 interface Action {
   id: string;
   name: string;
@@ -145,6 +161,7 @@ interface Action {
   connectorId?: string;
   flowId?: string;
   enabled?: boolean;
+  parameters?: ActionParameter[];
 }
 
 interface Channel {
@@ -950,6 +967,11 @@ const ACTION_TYPE_LABELS: Record<string, string> = {
   'prebuilt': 'Prebuilt action',
 };
 
+// Data types offered for an action input/output parameter, matching the type
+// picker on Copilot Studio's "Inputs / Outputs" surface (Learn: Manage topic
+// inputs and outputs).
+const PARAM_DATA_TYPES = ['String', 'Number', 'Boolean', 'Date', 'Choice', 'Table'];
+
 function ActionsPanel({ envId, agentId }: { envId: string; agentId: string }) {
   const s = useStyles();
   const [items, setItems] = useState<Action[] | null>(null);
@@ -970,6 +992,11 @@ function ActionsPanel({ envId, agentId }: { envId: string; agentId: string }) {
   const [connectors, setConnectors] = useState<{ name: string; displayName: string; isCustomApi?: boolean; tier?: string }[] | null>(null);
   const [flowGate, setFlowGate] = useState<string | null>(null);
   const [connectorGate, setConnectorGate] = useState<string | null>(null);
+  // Structured input/output parameter mapping for the action being bound — the
+  // portal's "Inputs / Outputs" surface. No-freeform-config: typed rows, never
+  // a JSON textarea. Submitted with the bind so Copilot Studio persists them in
+  // the action's msdyn_parameterconfiguration Memo column.
+  const [params, setParams] = useState<ActionParameter[]>([]);
 
   const refresh = useCallback(async () => {
     if (!envId || !agentId) { setItems(null); return; }
@@ -1031,9 +1058,22 @@ function ActionsPanel({ envId, agentId }: { envId: string; agentId: string }) {
     : true;
 
   // Switching type clears any previously-picked reference so the payload only
-  // ever carries the reference that matches the selected type.
+  // ever carries the reference that matches the selected type. Parameters are
+  // action-shaped, so reset them too.
   const setType = useCallback((type: string) => {
     setForm((f) => ({ ...f, type, connectorId: '', flowId: '' }));
+    setParams([]);
+  }, []);
+
+  // Parameter-mapping row helpers (structured edits, no hand-typed JSON).
+  const addParam = useCallback(() => {
+    setParams((p) => [...p, { name: '', direction: 'input', type: 'String', valueKind: 'dynamic', value: '' }]);
+  }, []);
+  const updateParam = useCallback((idx: number, patch: Partial<ActionParameter>) => {
+    setParams((p) => p.map((row, i) => (i === idx ? { ...row, ...patch } : row)));
+  }, []);
+  const removeParam = useCallback((idx: number) => {
+    setParams((p) => p.filter((_, i) => i !== idx));
   }, []);
 
   const bind = useCallback(async () => {
@@ -1042,15 +1082,19 @@ function ActionsPanel({ envId, agentId }: { envId: string; agentId: string }) {
     try {
       const r = await fetch('/api/items/copilot-studio-action', {
         method: 'POST', headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ envId, agentId, ...form }),
+        // Submit the structured parameter mapping with the bind. The action
+        // route + client persist it into msdyn_parameterconfiguration (or
+        // honest-gate with a 422 entity-check, surfaced via ErrorBar).
+        body: JSON.stringify({ envId, agentId, ...form, parameters: params }),
       });
       const j = await r.json();
       if (!j.ok) { setError(j.error || 'bind failed'); return; }
       setForm({ name: '', type: 'power-automate-flow', connectorId: '', flowId: '' });
+      setParams([]);
       await refresh();
     } catch (e: any) { setError(e?.message || String(e)); }
     finally { setBusy(false); }
-  }, [envId, agentId, form, refOk, refresh]);
+  }, [envId, agentId, form, params, refOk, refresh]);
 
   const remove = useCallback(async (aid: string) => {
     if (!envId) return;
@@ -1142,6 +1186,112 @@ function ActionsPanel({ envId, agentId }: { envId: string; agentId: string }) {
             </Caption1>
           </Field>
         )}
+        {/* Inputs / outputs — the action's parameter mapping, mirroring Copilot
+            Studio's "Inputs / Outputs" surface (Learn: Manage topic inputs and
+            outputs). Structured rows only (no-freeform-config); submitted with
+            the bind and persisted as JSON in msdyn_parameterconfiguration. */}
+        <div style={{ gridColumn: '1 / -1', display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalS, minWidth: 0 }}>
+          <Subtitle2 className={s.sectionHeader}>
+            <span className={s.sectionIcon}><Flow20Regular /></span>
+            Inputs / outputs ({params.length})
+          </Subtitle2>
+          <Caption1 style={{ color: tokens.colorNeutralForeground3 }}>
+            Map this action&apos;s input and output parameters. For an input, choose how the agent fills it —
+            &quot;Dynamically fill&quot; lets the agent populate it from context, or &quot;Set as a value&quot; binds a
+            literal, an existing variable, or a Power Fx expression.
+          </Caption1>
+          {params.length > 0 && (
+            <Table size="small">
+              <TableHeader>
+                <TableRow>
+                  <TableHeaderCell>Name</TableHeaderCell>
+                  <TableHeaderCell>Direction</TableHeaderCell>
+                  <TableHeaderCell>Type</TableHeaderCell>
+                  <TableHeaderCell>Fill</TableHeaderCell>
+                  <TableHeaderCell>Value / binding</TableHeaderCell>
+                  <TableHeaderCell />
+                </TableRow>
+              </TableHeader>
+              <TableBody>
+                {params.map((p, i) => {
+                  const isInput = p.direction === 'input';
+                  const setByValue = isInput && p.valueKind === 'value';
+                  return (
+                    <TableRow key={i}>
+                      <TableCell>
+                        <Input
+                          size="small"
+                          aria-label="Parameter name"
+                          placeholder="e.g. accountId"
+                          value={p.name}
+                          onChange={(_, d) => updateParam(i, { name: d.value })}
+                        />
+                      </TableCell>
+                      <TableCell>
+                        <Dropdown
+                          size="small"
+                          aria-label="Direction"
+                          value={isInput ? 'Input' : 'Output'}
+                          selectedOptions={[p.direction]}
+                          onOptionSelect={(_, d) => d.optionValue && updateParam(i, { direction: d.optionValue as 'input' | 'output' })}
+                        >
+                          <Option value="input" text="Input">Input</Option>
+                          <Option value="output" text="Output">Output</Option>
+                        </Dropdown>
+                      </TableCell>
+                      <TableCell>
+                        <Dropdown
+                          size="small"
+                          aria-label="Data type"
+                          value={p.type}
+                          selectedOptions={[p.type]}
+                          onOptionSelect={(_, d) => d.optionValue && updateParam(i, { type: d.optionValue })}
+                        >
+                          {PARAM_DATA_TYPES.map((t) => <Option key={t} value={t} text={t}>{t}</Option>)}
+                        </Dropdown>
+                      </TableCell>
+                      <TableCell>
+                        <Dropdown
+                          size="small"
+                          aria-label="How will the agent fill this input?"
+                          disabled={!isInput}
+                          value={!isInput ? '—' : (p.valueKind === 'value' ? 'Set as a value' : 'Dynamically fill')}
+                          selectedOptions={[p.valueKind || 'dynamic']}
+                          onOptionSelect={(_, d) => d.optionValue && updateParam(i, { valueKind: d.optionValue as 'dynamic' | 'value' })}
+                        >
+                          <Option value="dynamic" text="Dynamically fill">Dynamically fill</Option>
+                          <Option value="value" text="Set as a value">Set as a value</Option>
+                        </Dropdown>
+                      </TableCell>
+                      <TableCell>
+                        <Input
+                          size="small"
+                          aria-label="Value or binding"
+                          placeholder={setByValue ? 'literal, variable, or Power Fx' : 'agent-filled'}
+                          disabled={!setByValue}
+                          value={p.value || ''}
+                          onChange={(_, d) => updateParam(i, { value: d.value })}
+                        />
+                      </TableCell>
+                      <TableCell>
+                        <Button
+                          size="small"
+                          icon={<Delete20Regular />}
+                          appearance="subtle"
+                          aria-label="Remove parameter"
+                          onClick={() => removeParam(i)}
+                        />
+                      </TableCell>
+                    </TableRow>
+                  );
+                })}
+              </TableBody>
+            </Table>
+          )}
+          <div>
+            <Button size="small" icon={<Add20Regular />} appearance="outline" onClick={addParam}>Add parameter</Button>
+          </div>
+        </div>
         <div style={{ alignSelf: 'end' }}>
           <Button appearance="primary" icon={<Add20Regular />} disabled={busy || !form.name || !refOk} onClick={bind}>Bind action</Button>
         </div>
@@ -1163,6 +1313,7 @@ function ActionsPanel({ envId, agentId }: { envId: string; agentId: string }) {
               <TableHeaderCell>Name</TableHeaderCell>
               <TableHeaderCell>Type</TableHeaderCell>
               <TableHeaderCell>Reference</TableHeaderCell>
+              <TableHeaderCell>Parameters</TableHeaderCell>
               <TableHeaderCell>State</TableHeaderCell>
               <TableHeaderCell />
             </TableRow>
@@ -1173,6 +1324,19 @@ function ActionsPanel({ envId, agentId }: { envId: string; agentId: string }) {
                 <TableCell>{a.name}</TableCell>
                 <TableCell><Badge appearance="outline">{a.type || '—'}</Badge></TableCell>
                 <TableCell><span style={{ overflowWrap: 'anywhere', wordBreak: 'break-word' }}>{a.flowId || a.connectorId || '—'}</span></TableCell>
+                <TableCell>
+                  {a.parameters && a.parameters.length > 0 ? (
+                    <div className={s.tagRow}>
+                      <Badge appearance="outline">{a.parameters.length}</Badge>
+                      {a.parameters.slice(0, 4).map((p, i) => (
+                        <Badge key={i} size="small" appearance="outline" color={p.direction === 'output' ? 'informative' : 'brand'}>
+                          {p.name || '(unnamed)'}
+                        </Badge>
+                      ))}
+                      {a.parameters.length > 4 && <Caption1>+{a.parameters.length - 4}</Caption1>}
+                    </div>
+                  ) : <Caption1 style={{ color: tokens.colorNeutralForeground3 }}>—</Caption1>}
+                </TableCell>
                 <TableCell>
                   <Badge appearance="outline" color={a.enabled ? 'success' : 'severe'}>{a.enabled ? 'Enabled' : 'Disabled'}</Badge>
                 </TableCell>
@@ -1231,7 +1395,7 @@ const CHANNEL_TYPES: { type: string; label: string; description: string }[] = [
   { type: 'direct-line', label: 'Direct Line', description: 'REST/Websocket endpoint for custom clients.' },
   { type: 'slack', label: 'Slack', description: 'Publish to a Slack workspace via the Bot Framework Slack connector.' },
   { type: 'facebook', label: 'Facebook', description: 'Publish to a Facebook Page via Messenger.' },
-  { type: 'custom', label: 'Custom channel', description: 'Adapter-backed custom channel; provide raw JSON config.' },
+  { type: 'custom', label: 'Custom channel', description: 'Relay to a mobile or custom app via a Direct Line secret/endpoint, or an Azure Bot Service relay bot with a custom adapter — not a Dataverse channel insert.' },
 ];
 
 function ChannelsPanel({ envId, agentId, refreshSignal }: { envId: string; agentId: string; refreshSignal?: number }) {
