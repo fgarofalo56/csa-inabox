@@ -31,13 +31,14 @@ import {
 } from '@xyflow/react';
 import '@xyflow/react/dist/style.css';
 import {
-  Badge, Button, Caption1, Text, Tooltip, makeStyles, tokens,
+  Badge, Button, Caption1, Text, Tooltip, makeStyles, mergeClasses, tokens,
 } from '@fluentui/react-components';
 import {
   FullScreenMaximize20Regular, Organization20Regular,
   DocumentTable16Regular, Table16Regular, MathFormula16Regular, Link16Regular,
   Play16Regular, Delete16Regular,
 } from '@fluentui/react-icons';
+import { accentGradient, accentTint, portStyle } from '@/lib/components/canvas/canvas-node-kit';
 
 // ---------------------------------------------------------------------------
 // Public model — kept in sync with the schema-graph BFF route
@@ -93,7 +94,123 @@ export interface SchemaEntityNodeData {
   [key: string]: unknown;
 }
 
+// Token-only node chrome, parity with canvas-node-kit (rail + gradient header +
+// elevation-on-hover + accent selected-ring). No raw px (bar the 11px handle
+// geometry React Flow needs, owned by portStyle), no hex, theme-aware.
+const useNodeStyles = makeStyles({
+  node: {
+    position: 'relative',
+    display: 'flex',
+    flexDirection: 'column',
+    overflow: 'hidden',
+    borderRadius: tokens.borderRadiusLarge,
+    background: tokens.colorNeutralBackground1,
+    border: `1px solid ${tokens.colorNeutralStroke2}`,
+    boxShadow: tokens.shadow4,
+    cursor: 'pointer',
+    userSelect: 'none',
+    transitionProperty: 'box-shadow, transform',
+    transitionDuration: tokens.durationNormal,
+    transitionTimingFunction: tokens.curveEasyEase,
+    ':hover': {
+      boxShadow: tokens.shadow16,
+      transform: 'translateY(-1px)',
+    },
+    '@media (prefers-reduced-motion: reduce)': {
+      transitionDuration: '0.01ms',
+      ':hover': { transform: 'none' },
+    },
+  },
+  nodeSelected: {
+    border: `1px solid ${tokens.colorBrandStroke1}`,
+    boxShadow: `0 0 0 2px ${tokens.colorBrandBackground2}`,
+  },
+  rail: {
+    position: 'absolute',
+    left: 0,
+    top: 0,
+    bottom: 0,
+    width: '6px',
+    borderRadius: tokens.borderRadiusSmall,
+    zIndex: 1,
+  },
+  header: {
+    display: 'flex',
+    alignItems: 'center',
+    gap: tokens.spacingHorizontalS,
+    marginLeft: '6px',
+    paddingTop: tokens.spacingVerticalXS,
+    paddingBottom: tokens.spacingVerticalXS,
+    paddingLeft: tokens.spacingHorizontalS,
+    paddingRight: tokens.spacingHorizontalXS,
+    borderTopRightRadius: tokens.borderRadiusMedium,
+  },
+  iconChip: {
+    flexShrink: 0,
+    width: '24px',
+    height: '24px',
+    borderRadius: tokens.borderRadiusMedium,
+    display: 'flex',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  title: {
+    flex: 1,
+    minWidth: 0,
+  },
+  actionBtn: {
+    flexShrink: 0,
+    minWidth: '24px',
+    width: '24px',
+    height: '24px',
+    paddingTop: 0,
+    paddingBottom: 0,
+    paddingLeft: 0,
+    paddingRight: 0,
+  },
+  actionBtnDanger: {
+    color: tokens.colorPaletteRedForeground1,
+  },
+  meta: {
+    display: 'flex',
+    alignItems: 'center',
+    gap: tokens.spacingHorizontalXS,
+    flexWrap: 'wrap',
+    marginLeft: '6px',
+    paddingLeft: tokens.spacingHorizontalS,
+    paddingRight: tokens.spacingHorizontalXS,
+    paddingTop: tokens.spacingVerticalXXS,
+  },
+  colList: {
+    display: 'flex',
+    flexDirection: 'column',
+    gap: tokens.spacingVerticalXXS,
+    marginLeft: '6px',
+    paddingLeft: tokens.spacingHorizontalS,
+    paddingRight: tokens.spacingHorizontalXS,
+    paddingTop: tokens.spacingVerticalXXS,
+    paddingBottom: tokens.spacingVerticalS,
+  },
+  colRow: {
+    display: 'flex',
+    justifyContent: 'space-between',
+    gap: tokens.spacingHorizontalS,
+    fontSize: tokens.fontSizeBase200,
+  },
+  colName: {
+    color: tokens.colorNeutralForeground2,
+    overflow: 'hidden',
+    textOverflow: 'ellipsis',
+    whiteSpace: 'nowrap',
+  },
+  colType: {
+    color: tokens.colorNeutralForeground4,
+    flexShrink: 0,
+  },
+});
+
 function SchemaEntityNodeImpl({ data, selected }: NodeProps) {
+  const ns = useNodeStyles();
   const { node, onQuery, onDelete } = data as SchemaEntityNodeData;
   const style = styleForKind(node.kind);
   const Icon = style.Icon;
@@ -106,49 +223,44 @@ function SchemaEntityNodeImpl({ data, selected }: NodeProps) {
       data-schema-node-id={node.id}
       data-schema-node-kind={node.kind}
       aria-label={`${style.label} ${node.name}`}
-      style={{
-        position: 'relative',
-        width: NODE_W,
-        padding: '8px 10px',
-        borderRadius: 8,
-        background: tokens.colorNeutralBackground1,
-        border: `1px solid ${selected ? tokens.colorBrandStroke1 : tokens.colorNeutralStroke2}`,
-        borderLeft: `4px solid ${style.color}`,
-        boxShadow: selected ? `0 0 0 2px ${tokens.colorBrandBackground2}` : '0 1px 2px rgba(0,0,0,0.08)',
-        display: 'flex',
-        flexDirection: 'column',
-        gap: 4,
-        cursor: 'pointer',
-        userSelect: 'none',
-      }}
+      className={mergeClasses(ns.node, selected && ns.nodeSelected)}
+      style={{ width: NODE_W }}
     >
-      <Handle type="target" position={Position.Left} style={{ width: 8, height: 8, background: style.color, border: 'none', left: -4 }} />
+      {/* Accent rail anchoring the kind colour (kit parity). */}
+      <span className={ns.rail} style={{ background: style.color }} aria-hidden="true" />
 
-      <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-        <span style={{ color: style.color, display: 'inline-flex' }}><Icon fontSize={16} /></span>
-        <Text size={200} weight="semibold" truncate wrap={false} style={{ flex: 1 }}>{node.name}</Text>
+      <Handle
+        type="target"
+        position={Position.Left}
+        style={{ ...portStyle('in', style.color), left: -6 }}
+      />
+
+      {/* Gradient header — icon chip + title + inline actions (kit parity). */}
+      <div className={ns.header} style={{ background: accentGradient(style.color) }}>
+        <span className={ns.iconChip} style={{ background: accentTint(style.color, 14), color: style.color }} aria-hidden="true">
+          <Icon fontSize={16} />
+        </span>
+        <Text size={200} weight="semibold" truncate wrap={false} className={ns.title}>{node.name}</Text>
         {/* Inline actions — className="nodrag" so the node stays draggable. */}
         <Tooltip content={node.kind === 'function' ? 'Query this function' : 'Query this entity'} relationship="label">
           <Button
-            size="small" appearance="subtle" className="nodrag"
+            size="small" appearance="subtle" className={mergeClasses('nodrag', ns.actionBtn)}
             icon={<Play16Regular />} aria-label={`Query ${node.name}`}
             data-action="query"
             onClick={(e) => { e.stopPropagation(); onQuery(node.name, node.kind); }}
-            style={{ minWidth: 24, width: 24, height: 24, padding: 0 }}
           />
         </Tooltip>
         <Tooltip content={`Delete this ${style.label.toLowerCase()}`} relationship="label">
           <Button
-            size="small" appearance="subtle" className="nodrag"
+            size="small" appearance="subtle" className={mergeClasses('nodrag', ns.actionBtn, ns.actionBtnDanger)}
             icon={<Delete16Regular />} aria-label={`Delete ${node.name}`}
             data-action="delete"
             onClick={(e) => { e.stopPropagation(); onDelete(node.name, node.kind); }}
-            style={{ minWidth: 24, width: 24, height: 24, padding: 0, color: tokens.colorPaletteRedForeground1 }}
           />
         </Tooltip>
       </div>
 
-      <div style={{ display: 'flex', alignItems: 'center', gap: 4, flexWrap: 'wrap' }}>
+      <div className={ns.meta}>
         <Caption1 style={{ color: tokens.colorNeutralForeground3 }}>{style.label}</Caption1>
         {node.kind === 'materialized-view' && node.sourceTable && (
           <Badge size="extra-small" appearance="tint" color="informative">on {node.sourceTable}</Badge>
@@ -164,11 +276,11 @@ function SchemaEntityNodeImpl({ data, selected }: NodeProps) {
       </div>
 
       {shownCols.length > 0 && (
-        <div style={{ display: 'flex', flexDirection: 'column', gap: 1, marginTop: 2 }}>
+        <div className={ns.colList}>
           {shownCols.map((c) => (
-            <div key={c.name} style={{ display: 'flex', justifyContent: 'space-between', gap: 8, fontSize: 11 }}>
-              <span style={{ color: tokens.colorNeutralForeground2, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{c.name}</span>
-              <span style={{ color: tokens.colorNeutralForeground4, flexShrink: 0 }}>{c.type}</span>
+            <div key={c.name} className={ns.colRow}>
+              <span className={ns.colName}>{c.name}</span>
+              <span className={ns.colType}>{c.type}</span>
             </div>
           ))}
           {cols.length > shownCols.length && (
@@ -177,7 +289,11 @@ function SchemaEntityNodeImpl({ data, selected }: NodeProps) {
         </div>
       )}
 
-      <Handle type="source" position={Position.Right} style={{ width: 8, height: 8, background: style.color, border: 'none', right: -4 }} />
+      <Handle
+        type="source"
+        position={Position.Right}
+        style={{ ...portStyle('out', style.color), right: -6 }}
+      />
     </div>
   );
 }
@@ -222,25 +338,37 @@ const useStyles = makeStyles({
     overflow: 'hidden',
     backgroundColor: tokens.colorNeutralBackground3,
     border: `1px solid ${tokens.colorNeutralStroke2}`,
-    borderRadius: '8px',
+    borderRadius: tokens.borderRadiusLarge,
   },
   toolbar: {
-    display: 'flex', gap: '4px', alignItems: 'center',
+    display: 'flex', gap: tokens.spacingHorizontalXS, alignItems: 'center',
     backgroundColor: tokens.colorNeutralBackground1,
     border: `1px solid ${tokens.colorNeutralStroke2}`,
-    borderRadius: '6px', padding: '4px',
+    borderRadius: tokens.borderRadiusMedium,
+    padding: tokens.spacingHorizontalXS,
+    boxShadow: tokens.shadow4,
   },
   legend: {
-    display: 'flex', flexWrap: 'wrap', gap: '8px', maxWidth: '360px',
+    display: 'flex', flexWrap: 'wrap', gap: tokens.spacingHorizontalS, maxWidth: '360px',
     backgroundColor: tokens.colorNeutralBackground1,
     border: `1px solid ${tokens.colorNeutralStroke2}`,
-    borderRadius: '6px', padding: '6px 8px',
+    borderRadius: tokens.borderRadiusMedium,
+    paddingTop: tokens.spacingVerticalXS,
+    paddingBottom: tokens.spacingVerticalXS,
+    paddingLeft: tokens.spacingHorizontalS,
+    paddingRight: tokens.spacingHorizontalS,
+    boxShadow: tokens.shadow4,
   },
-  legendItem: { display: 'flex', alignItems: 'center', gap: '4px' },
-  legendSwatch: { width: '10px', height: '10px', borderRadius: '2px', display: 'inline-block' },
+  legendItem: { display: 'flex', alignItems: 'center', gap: tokens.spacingHorizontalXS },
+  legendSwatch: {
+    width: '10px', height: '10px',
+    borderRadius: tokens.borderRadiusSmall,
+    display: 'inline-block',
+  },
   empty: {
     position: 'absolute', inset: '0', display: 'flex', flexDirection: 'column',
-    alignItems: 'center', justifyContent: 'center', gap: '6px', textAlign: 'center', padding: '24px',
+    alignItems: 'center', justifyContent: 'center', gap: tokens.spacingVerticalS,
+    textAlign: 'center', padding: tokens.spacingHorizontalXXL,
   },
 });
 

@@ -32,6 +32,7 @@ import {
 import {
   Play20Regular, AddCircle20Regular, BranchCompare20Regular,
   ZoomIn20Regular, ZoomOut20Regular, ArrowReset20Regular, Delete16Regular,
+  CircleSmall20Filled,
 } from '@fluentui/react-icons';
 import { MonacoTextarea } from '@/lib/components/editor/monaco-textarea';
 import { extractGraph, type GraphNode, type GraphEdge } from '@/lib/components/graph/force-directed-graph';
@@ -62,7 +63,7 @@ const useStyles = makeStyles({
     overflow: 'auto', maxHeight: '460px',
   },
   json: {
-    margin: 0, fontSize: tokens.fontSizeBase100, fontFamily: 'Consolas, monospace',
+    margin: 0, fontSize: tokens.fontSizeBase100, fontFamily: tokens.fontFamilyMonospace,
     whiteSpace: 'pre-wrap', wordBreak: 'break-all',
     backgroundColor: tokens.colorNeutralBackground3,
     ...shorthands.padding(tokens.spacingVerticalM, tokens.spacingHorizontalM),
@@ -90,11 +91,26 @@ function hash(s: string): number {
   return h;
 }
 
+/**
+ * Theme-aware accent ramp from the `--loom-accent-*` CSS vars (light + dark
+ * defined in app/globals.css). SVG presentation attrs accept `var(...)`, so the
+ * returned string resolves correctly as a `fill`. Replaces the old hardcoded
+ * hex palette — every vertex colour now flows through the Loom accent tokens.
+ */
+const ACCENT_RAMP = [
+  'var(--loom-accent-blue)',
+  'var(--loom-accent-emerald)',
+  'var(--loom-accent-orange)',
+  'var(--loom-accent-violet)',
+  'var(--loom-accent-teal)',
+  'var(--loom-accent-amber)',
+  'var(--loom-accent-magenta)',
+];
+
 function colorFor(group?: string | number): string {
-  if (group == null) return '#0078d4';
-  const palette = ['#0078d4', '#107c10', '#d83b01', '#5c2d91', '#008272', '#bf6900', '#a30075'];
-  const idx = typeof group === 'number' ? group : Math.abs(hash(String(group))) % palette.length;
-  return palette[idx % palette.length];
+  if (group == null) return ACCENT_RAMP[0];
+  const idx = typeof group === 'number' ? group : Math.abs(hash(String(group))) % ACCENT_RAMP.length;
+  return ACCENT_RAMP[idx % ACCENT_RAMP.length];
 }
 
 /** Fruchterman-Reingold force layout — bounded iterations, deterministic seed. */
@@ -390,6 +406,10 @@ export function GremlinGraphCanvas({ itemId }: GremlinGraphCanvasProps) {
               <marker id="gremlin-arrow" markerWidth="10" markerHeight="10" refX="22" refY="3" orient="auto">
                 <path d="M0,0 L0,6 L9,3 z" fill={tokens.colorNeutralForeground3} />
               </marker>
+              {/* Soft elevation under each vertex so nodes read as raised cards. */}
+              <filter id="gremlin-node-shadow" x="-50%" y="-50%" width="200%" height="200%">
+                <feDropShadow dx="0" dy="1" stdDeviation="1.5" floodColor={tokens.colorNeutralShadowAmbient} floodOpacity="0.45" />
+              </filter>
             </defs>
             <g transform={`translate(${view.tx},${view.ty}) scale(${view.scale})`}>
               {graph.edges.map((e, i) => {
@@ -429,7 +449,26 @@ export function GremlinGraphCanvas({ itemId }: GremlinGraphCanvasProps) {
                     tabIndex={0}
                     aria-label={`Vertex ${n.label || n.id}`}
                   >
-                    <circle cx={n.x} cy={n.y} r={active ? 13 : 9} fill={colorFor(n.group ?? n.label)} stroke={tokens.colorNeutralForegroundOnBrand} strokeWidth={1.5} />
+                    <circle
+                      cx={n.x} cy={n.y} r={active ? 13 : 9}
+                      fill={colorFor(n.group ?? n.label)}
+                      stroke={tokens.colorNeutralForegroundOnBrand}
+                      strokeWidth={1.5}
+                      filter="url(#gremlin-node-shadow)"
+                    />
+                    {/* Icon-forward glyph centered in the vertex circle. */}
+                    <foreignObject
+                      x={n.x - (active ? 9 : 7)} y={n.y - (active ? 9 : 7)}
+                      width={active ? 18 : 14} height={active ? 18 : 14}
+                      pointerEvents="none" aria-hidden="true"
+                    >
+                      <div style={{
+                        display: 'flex', alignItems: 'center', justifyContent: 'center',
+                        width: '100%', height: '100%', color: tokens.colorNeutralForegroundOnBrand,
+                      }}>
+                        <CircleSmall20Filled style={{ width: '100%', height: '100%' }} />
+                      </div>
+                    </foreignObject>
                     <text x={n.x} y={n.y - 15} textAnchor="middle" fontSize="11" fill={tokens.colorNeutralForeground1}>
                       {String(n.label || n.id).slice(0, 24)}
                     </text>
@@ -456,7 +495,7 @@ export function GremlinGraphCanvas({ itemId }: GremlinGraphCanvasProps) {
                     Add edge from here
                   </Button>
                 </div>
-                <pre style={{ marginTop: tokens.spacingVerticalS, fontSize: tokens.fontSizeBase100, fontFamily: 'Consolas, monospace', whiteSpace: 'pre-wrap', wordBreak: 'break-all' }}>
+                <pre style={{ marginTop: tokens.spacingVerticalS, fontSize: tokens.fontSizeBase100, fontFamily: tokens.fontFamilyMonospace, whiteSpace: 'pre-wrap', wordBreak: 'break-all' }}>
                   {JSON.stringify(flattenProps(selectedNode.properties), null, 2)}
                 </pre>
               </>

@@ -60,6 +60,10 @@ import {
 } from '@fluentui/react-icons';
 import { MonacoTextarea } from '@/lib/components/editor/monaco-textarea';
 import {
+  CanvasNode, CATEGORY_ACCENT, portStyle,
+  type CanvasVisual, type CanvasNodeCategory,
+} from '@/lib/components/canvas/canvas-node-kit';
+import {
   compileGraph,
   VQ_JOIN_KINDS, VQ_AGG_FUNCS, VQ_SORT_DIRS,
   VQ_CAST_TYPES_TSQL, VQ_CAST_TYPES_SPARK,
@@ -163,10 +167,10 @@ const useStyles = makeStyles({
     border: `1px solid ${tokens.colorNeutralStroke2}`,
     borderRadius: tokens.borderRadiusMedium,
   },
-  cell: { fontFamily: 'Consolas, "Cascadia Code", monospace', fontSize: tokens.fontSizeBase200, whiteSpace: 'nowrap', maxWidth: '360px', overflow: 'hidden', textOverflow: 'ellipsis' },
+  cell: { fontFamily: tokens.fontFamilyMonospace, fontSize: tokens.fontSizeBase200, whiteSpace: 'nowrap', maxWidth: '360px', overflow: 'hidden', textOverflow: 'ellipsis' },
   nullCell: { color: tokens.colorNeutralForeground4, fontStyle: 'italic' },
   aggRow: { display: 'flex', gap: tokens.spacingHorizontalXS, alignItems: 'center' },
-  checkList: { display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalXS, maxHeight: '170px', overflowY: 'auto', paddingLeft: '2px' },
+  checkList: { display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalXS, maxHeight: '170px', overflowY: 'auto', paddingLeft: tokens.spacingHorizontalXXS },
   wizardCard: {
     display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalXS, padding: tokens.spacingVerticalM,
     borderRadius: tokens.borderRadiusLarge,
@@ -178,20 +182,22 @@ const useStyles = makeStyles({
 });
 
 // ============================================================
-// Node colours + icons
+// Node category + icons
 // ============================================================
 
-// Node accent colours: source uses the brand blue token; transform/join/sink keep
-// their vivid hex values — no Fluent v9 "solid vivid" palette tokens exist for
-// purple (#7719aa), green (#107c10), or red (#c50f1f) that would preserve the
-// same luminosity as the Background2 variants, so they are left as literals.
-const STEP_COLOR: Record<VqStepKind, string> = {
-  source: tokens.colorBrandBackground,
-  filter: '#7719aa', 'select-columns': '#7719aa', 'keep-top-rows': '#7719aa',
-  'group-by': '#7719aa', sort: '#7719aa', derive: '#7719aa', rename: '#7719aa',
-  cast: '#7719aa', dedup: '#7719aa',
-  join: '#107c10', union: '#107c10',
-  sink: '#c50f1f',
+// VqStepKind → one of the 5 Web-5.0 canvas categories (drives the accent var +
+// gradient header via the shared kit, theme-aware light + dark). This mirrors
+// the engine-bound visual-query-canvas STEP_CATEGORY map this builder claims
+// parity with: source/sink = move (blue), the transform steps = transform
+// (violet), join/union (the two-input merges) = iteration (amber). No raw hex —
+// every colour resolves through CATEGORY_ACCENT → `--loom-accent-*`.
+const STEP_CATEGORY: Record<VqStepKind, CanvasNodeCategory> = {
+  source: 'move',
+  filter: 'transform', 'select-columns': 'transform', 'keep-top-rows': 'transform',
+  'group-by': 'transform', sort: 'transform', derive: 'transform', rename: 'transform',
+  cast: 'transform', dedup: 'transform',
+  join: 'iteration', union: 'iteration',
+  sink: 'move',
 };
 
 function stepIcon(kind: VqStepKind) {
@@ -222,45 +228,40 @@ const STEP_LABEL: Record<VqStepKind, string> = {
   sink: 'Sink (target)',
 };
 
-const HANDLE: React.CSSProperties = { width: 11, height: 11, borderRadius: '50%', zIndex: 3 };
 const TWO_INPUT = new Set<VqStepKind>(['join', 'union']);
 
 function WarpNodeImpl({ data, selected }: NodeProps) {
   const d = data as unknown as VqNodeData;
-  const color = STEP_COLOR[d.kind] || '#7719aa';
+  const category = STEP_CATEGORY[d.kind] || 'transform';
+  const accent = CATEGORY_ACCENT[category];
   const twoIn = TWO_INPUT.has(d.kind);
   const isSink = d.kind === 'sink';
+  const visual: CanvasVisual = { icon: stepIcon(d.kind), category, accent };
   return (
-    <div
-      data-warp-kind={d.kind}
-      aria-label={`${d.kind} ${d.label}`}
-      style={{
-        position: 'relative', width: 190, padding: `10px ${tokens.spacingHorizontalM}`, borderRadius: 6,
-        background: tokens.colorNeutralBackground1,
-        border: `1px solid ${selected ? tokens.colorBrandStroke1 : tokens.colorNeutralStroke2}`,
-        boxShadow: selected ? `0 0 0 2px ${tokens.colorBrandBackground2}` : '0 1px 2px rgba(0,0,0,0.06)',
-        display: 'flex', gap: tokens.spacingHorizontalS, alignItems: 'flex-start', cursor: 'pointer', userSelect: 'none',
+    <CanvasNode
+      width={190}
+      title={d.label}
+      typeLabel={STEP_LABEL[d.kind]}
+      visual={visual}
+      selected={selected}
+      rootProps={{
+        'data-warp-kind': d.kind,
+        'aria-label': `${d.kind} ${d.label}`,
       }}
     >
       {d.kind !== 'source' && !twoIn && (
-        <Handle id="in" type="target" position={Position.Left} style={{ ...HANDLE, left: -6, top: '50%', background: tokens.colorNeutralBackground1, border: `2px solid ${tokens.colorBrandStroke1}` }} />
+        <Handle id="in" type="target" position={Position.Left} style={{ ...portStyle('in', accent), left: -6, top: '50%' }} />
       )}
       {twoIn && (
         <>
-          <Handle id="in-left" type="target" position={Position.Left} style={{ ...HANDLE, left: -6, top: '34%', background: tokens.colorNeutralBackground1, border: `2px solid ${tokens.colorBrandStroke1}` }} />
-          <Handle id="in-right" type="target" position={Position.Left} style={{ ...HANDLE, left: -6, top: '70%', background: tokens.colorNeutralBackground1, border: `2px solid ${color}` }} />
+          <Handle id="in-left" type="target" position={Position.Left} style={{ ...portStyle('in', accent), left: -6, top: '34%' }} />
+          <Handle id="in-right" type="target" position={Position.Left} style={{ ...portStyle('out', accent), left: -6, top: '70%' }} />
         </>
       )}
       {!isSink && (
-        <Handle id="out" type="source" position={Position.Right} style={{ ...HANDLE, right: -6, top: '50%', background: tokens.colorNeutralBackground1, border: `2px solid ${color}` }} />
+        <Handle id="out" type="source" position={Position.Right} style={{ ...portStyle('out', accent), right: -6, top: '50%' }} />
       )}
-      <div style={{ width: 6, alignSelf: 'stretch', borderRadius: 2, background: color }} />
-      <div style={{ color, display: 'flex', alignItems: 'center', flexShrink: 0 }}>{stepIcon(d.kind)}</div>
-      <div style={{ display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalXS, minWidth: 0, flex: 1 }}>
-        <div style={{ fontWeight: 600, fontSize: 13, color: tokens.colorNeutralForeground1, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{d.label}</div>
-        <Badge appearance="filled" size="small" style={{ backgroundColor: color, color: tokens.colorNeutralForegroundInverted, alignSelf: 'flex-start' }}>{STEP_LABEL[d.kind]}</Badge>
-      </div>
-    </div>
+    </CanvasNode>
   );
 }
 const WarpNode = memo(WarpNodeImpl);
@@ -730,8 +731,8 @@ function CanvasInner(props: WarpTransformCanvasProps) {
           <MessageBarBody>
             <MessageBarTitle>Grant the Console identity a SQL login</MessageBarTitle>
             {result.gate?.reason || result.error}
-            {result.gate?.remediation && <div style={{ marginTop: 6 }}>{result.gate.remediation}</div>}
-            {result.gate?.sql && <pre style={{ marginTop: tokens.spacingVerticalS, padding: tokens.spacingVerticalS, borderRadius: 6, overflowX: 'auto', fontSize: tokens.fontSizeBase200, fontFamily: tokens.fontFamilyMonospace, whiteSpace: 'pre' }}>{result.gate.sql}</pre>}
+            {result.gate?.remediation && <div style={{ marginTop: tokens.spacingVerticalXS }}>{result.gate.remediation}</div>}
+            {result.gate?.sql && <pre style={{ marginTop: tokens.spacingVerticalS, padding: tokens.spacingVerticalS, borderRadius: tokens.borderRadiusMedium, overflowX: 'auto', fontSize: tokens.fontSizeBase200, fontFamily: tokens.fontFamilyMonospace, whiteSpace: 'pre' }}>{result.gate.sql}</pre>}
           </MessageBarBody>
         </MessageBar>
       )}
@@ -740,7 +741,7 @@ function CanvasInner(props: WarpTransformCanvasProps) {
       )}
       {!running && result?.ok && (
         <>
-          <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
+          <div style={{ display: 'flex', gap: tokens.spacingHorizontalS, alignItems: 'center', flexWrap: 'wrap' }}>
             <Badge appearance="filled" color="success">{result.rowCount ?? resultRows.length} rows</Badge>
             {result.executionMs !== undefined && <Caption1>· {result.executionMs} ms</Caption1>}
             {result.truncated && <Badge appearance="outline" color="warning">truncated</Badge>}
@@ -765,7 +766,7 @@ function CanvasInner(props: WarpTransformCanvasProps) {
             <DialogTitle>Add a source table</DialogTitle>
             <DialogContent>
               <Caption1>Enter the schema and table/path. Its columns load from the run target for the step pickers.</Caption1>
-              <div style={{ display: 'flex', gap: 8, marginTop: 8 }}>
+              <div style={{ display: 'flex', gap: tokens.spacingHorizontalS, marginTop: tokens.spacingVerticalS }}>
                 <Field label="Schema / catalog" style={{ flex: 1 }}>
                   <Input value={addSchema} placeholder={dialect === 'tsql' ? 'dbo' : '(optional)'} onChange={(_, d) => setAddSchema(d.value)} />
                 </Field>
@@ -788,7 +789,7 @@ function CanvasInner(props: WarpTransformCanvasProps) {
           <DialogBody>
             <DialogTitle>New transform from a pattern</DialogTitle>
             <DialogContent>
-              <Body1 style={{ display: 'block', marginBottom: 12, color: tokens.colorNeutralForeground2 }}>
+              <Body1 style={{ display: 'block', marginBottom: tokens.spacingVerticalM, color: tokens.colorNeutralForeground2 }}>
                 Lay down a starter graph so you don't begin on a blank canvas. Pick a pattern, then fill in the source tables and columns on the canvas.
               </Body1>
               <div className={s.wizardGrid}>
@@ -816,7 +817,7 @@ function CanvasInner(props: WarpTransformCanvasProps) {
               <Field label="Name" required>
                 <Input value={saveName} onChange={(_, d) => setSaveName(d.value)} placeholder="Daily revenue by city" />
               </Field>
-              <Field label="Workspace" required style={{ marginTop: 8 }}>
+              <Field label="Workspace" required style={{ marginTop: tokens.spacingVerticalS }}>
                 <Dropdown
                   value={workspaces.find((w) => w.id === saveWs)?.name || ''}
                   selectedOptions={saveWs ? [saveWs] : []}
@@ -826,7 +827,7 @@ function CanvasInner(props: WarpTransformCanvasProps) {
                   {workspaces.map((w) => <Option key={w.id} value={w.id} text={w.name}>{w.name}</Option>)}
                 </Dropdown>
               </Field>
-              {saveMsg && <Text style={{ display: 'block', marginTop: 8, color: saveMsg === 'Saved.' ? tokens.colorPaletteGreenForeground1 : tokens.colorPaletteRedForeground1 }}>{saveMsg}</Text>}
+              {saveMsg && <Text style={{ display: 'block', marginTop: tokens.spacingVerticalS, color: saveMsg === 'Saved.' ? tokens.colorPaletteGreenForeground1 : tokens.colorPaletteRedForeground1 }}>{saveMsg}</Text>}
             </DialogContent>
             <DialogActions>
               <Button appearance="secondary" onClick={() => setSaveOpen(false)}>Cancel</Button>
@@ -870,7 +871,7 @@ function NodeInspector({
 }) {
   const d = node.data as unknown as VqNodeData;
   return (
-    <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+    <div style={{ display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalS }}>
       <Label weight="semibold">{STEP_LABEL[d.kind]}</Label>
 
       {d.kind === 'source' && (
@@ -1034,7 +1035,7 @@ function DeriveForm({ d, dialect, onPatch, s }: { d: VqNodeData; dialect: SqlDia
       <Label size="small">Computed columns</Label>
       <Caption1 style={{ color: tokens.colorNeutralForeground3 }}>Each is a column name plus a SQL expression — the allowed 1:1 builder slot.</Caption1>
       {cols.map((c, i) => (
-        <div key={i} style={{ display: 'flex', flexDirection: 'column', gap: 4, borderLeft: `2px solid ${tokens.colorNeutralStroke2}`, paddingLeft: 8 }}>
+        <div key={i} style={{ display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalXS, borderLeft: `2px solid ${tokens.colorNeutralStroke2}`, paddingLeft: tokens.spacingHorizontalS }}>
           <div className={s.aggRow}>
             <Input style={{ flex: 1 }} placeholder="new_column" value={c.name} onChange={(_, data) => update(i, { name: data.value })} aria-label={`Derived column ${i + 1} name`} />
             <Button size="small" appearance="subtle" icon={<Delete20Regular />} onClick={() => remove(i)} aria-label={`Remove derived column ${i + 1}`} />

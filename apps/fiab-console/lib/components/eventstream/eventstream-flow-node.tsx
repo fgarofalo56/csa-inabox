@@ -17,11 +17,15 @@
 
 import { memo } from 'react';
 import { Handle, Position, type NodeProps } from '@xyflow/react';
-import { Badge, Caption1, tokens } from '@fluentui/react-components';
+import type { JSX } from 'react';
 import {
   CloudArrowUp20Regular, Filter20Regular, DatabaseArrowRight20Regular,
   Database20Regular, Flowchart20Regular, BranchFork20Regular,
 } from '@fluentui/react-icons';
+import {
+  CanvasNode, CATEGORY_ACCENT, portStyle,
+  type CanvasNodeCategory, type CanvasVisual,
+} from '@/lib/components/canvas/canvas-node-kit';
 
 export type NodeRole = 'source' | 'transform' | 'sink';
 
@@ -33,14 +37,21 @@ export interface EsNodeData {
   [key: string]: unknown;
 }
 
-// Loom-themed accent per role (left swatch + badge).
-const ROLE_COLOR: Record<NodeRole, string> = {
-  source: '#0078d4',     // blue
-  transform: '#7719aa',  // purple
-  sink: '#107c10',       // green
+/** Node width (matches the kit's pipeline/data-flow sizing contract). */
+const NODE_WIDTH = 200;
+
+/**
+ * Role → one of the kit's 5 canvas categories, driving the theme-aware accent
+ * (CATEGORY_ACCENT) + gradient header + rail. Sources move data in, sinks are
+ * the controlled endpoints, transforms reshape.
+ */
+const ROLE_CATEGORY: Record<NodeRole, CanvasNodeCategory> = {
+  source: 'move',        // --loom-accent-blue
+  transform: 'transform', // --loom-accent-violet
+  sink: 'control',       // --loom-accent-teal
 };
 
-function roleIcon(role: NodeRole, kind: string) {
+function roleIcon(role: NodeRole, kind: string): JSX.Element {
   if (role === 'source') return <CloudArrowUp20Regular />;
   if (role === 'sink') return kind === 'kusto' ? <Database20Regular /> : <DatabaseArrowRight20Regular />;
   // transform
@@ -49,53 +60,47 @@ function roleIcon(role: NodeRole, kind: string) {
   return <Flowchart20Regular />;
 }
 
-const HANDLE: React.CSSProperties = {
-  width: 11, height: 11, borderRadius: '50%',
-  background: tokens.colorNeutralBackground1, zIndex: 3,
-};
+/** Resolve the kit visual (glyph + category + accent var) for an eventstream node. */
+function eventstreamVisual(role: NodeRole, kind: string): CanvasVisual {
+  const category = ROLE_CATEGORY[role];
+  return { icon: roleIcon(role, kind), category, accent: CATEGORY_ACCENT[category] };
+}
 
 function EventstreamFlowNodeImpl({ data, selected }: NodeProps) {
   const d = data as EsNodeData;
-  const color = ROLE_COLOR[d.role];
+  const visual = eventstreamVisual(d.role, d.kind);
 
   return (
-    <div
-      data-es-role={d.role}
-      data-es-name={d.label}
-      aria-label={`${d.role} ${d.label}`}
-      style={{
-        position: 'relative',
-        width: 184,
-        padding: '10px 12px',
-        borderRadius: 6,
-        background: tokens.colorNeutralBackground1,
-        border: `1px solid ${selected ? tokens.colorBrandStroke1 : tokens.colorNeutralStroke2}`,
-        boxShadow: selected ? `0 0 0 2px ${tokens.colorBrandBackground2}` : '0 1px 2px rgba(0,0,0,0.06)',
-        display: 'flex', gap: 8, alignItems: 'flex-start', cursor: 'pointer', userSelect: 'none',
+    <CanvasNode
+      width={NODE_WIDTH}
+      title={d.label}
+      visual={visual}
+      selected={selected}
+      typeLabel={d.kind}
+      description={d.subtitle}
+      rootProps={{
+        'data-es-role': d.role,
+        'data-es-name': d.label,
+        'aria-label': `${d.role} ${d.label}`,
       }}
     >
       {d.role !== 'source' && (
-        <Handle id="in" type="target" position={Position.Left}
-          style={{ ...HANDLE, left: -6, border: `2px solid ${tokens.colorBrandStroke1}` }} />
+        <Handle
+          id="in"
+          type="target"
+          position={Position.Left}
+          style={{ ...portStyle('in', visual.accent), left: -6 }}
+        />
       )}
       {d.role !== 'sink' && (
-        <Handle id="out" type="source" position={Position.Right}
-          style={{ ...HANDLE, right: -6, border: `2px solid ${color}` }} />
+        <Handle
+          id="out"
+          type="source"
+          position={Position.Right}
+          style={{ ...portStyle('out', visual.accent), right: -6 }}
+        />
       )}
-
-      <div style={{ width: 6, alignSelf: 'stretch', borderRadius: 2, background: color }} />
-      <div style={{ color, display: 'flex', alignItems: 'center', flexShrink: 0 }}>{roleIcon(d.role, d.kind)}</div>
-      <div style={{ display: 'flex', flexDirection: 'column', gap: 2, minWidth: 0, flex: 1 }}>
-        <div style={{
-          fontWeight: 600, fontSize: 13, color: tokens.colorNeutralForeground1,
-          whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis',
-        }}>{d.label}</div>
-        <Badge appearance="filled" size="small" style={{ backgroundColor: color, color: '#fff', alignSelf: 'flex-start' }}>
-          {d.kind}
-        </Badge>
-        {d.subtitle && <Caption1 style={{ color: tokens.colorNeutralForeground3 }}>{d.subtitle}</Caption1>}
-      </div>
-    </div>
+    </CanvasNode>
   );
 }
 

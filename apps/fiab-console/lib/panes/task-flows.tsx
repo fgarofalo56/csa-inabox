@@ -17,11 +17,13 @@
  */
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import type { JSX } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import {
   ReactFlow, ReactFlowProvider, Background, BackgroundVariant, Controls, MiniMap, Panel,
   Handle, Position, useNodesState, useEdgesState, addEdge,
   type Node, type Edge, type Connection, type NodeProps, type NodeTypes,
+  type EdgeProps, type EdgeTypes,
 } from '@xyflow/react';
 import '@xyflow/react/dist/style.css';
 import {
@@ -44,31 +46,40 @@ import {
   type WorkspaceItem, type TaskFlow, type TaskFlowStep, type TaskFlowEdge,
 } from '@/lib/api/workspaces';
 import { findItemType } from '@/lib/catalog/fabric-item-types';
-import { getItemTypeIcon } from '@/lib/components/item-type-icon';
+import {
+  CanvasNode, CanvasEdge, portStyle, CATEGORY_ACCENT,
+  type CanvasVisual,
+} from '@/lib/components/canvas/canvas-node-kit';
+
+/**
+ * Theme-aware step accent. Task-flow steps are a single visual family, so they
+ * share one accent var (blue, matching the `move` bucket) — sourced from the
+ * kit's CATEGORY_ACCENT single-source-of-truth. Resolves to the
+ * `--loom-accent-blue` CSS var defined light + dark in app/globals.css; the kit
+ * owns every tint/gradient/color-mix downstream.
+ */
+const STEP_ACCENT = CATEGORY_ACCENT.move;
 
 const useStyles = makeStyles({
-  root: { display: 'flex', flexDirection: 'column', gap: '12px' },
-  toolbar: { display: 'flex', alignItems: 'center', gap: '8px' },
+  root: { display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalM },
+  toolbar: { display: 'flex', alignItems: 'center', gap: tokens.spacingHorizontalS },
   spacer: { flex: 1 },
   canvasShell: {
     position: 'relative', height: '560px', minHeight: '400px',
-    border: `1px solid ${tokens.colorNeutralStroke2}`, borderRadius: '8px',
+    border: `1px solid ${tokens.colorNeutralStroke2}`, borderRadius: tokens.borderRadiusLarge,
     overflow: 'hidden', backgroundColor: tokens.colorNeutralBackground3,
   },
-  node: {
-    minWidth: '160px', maxWidth: '220px',
-    padding: '8px 12px', borderRadius: '8px',
-    backgroundColor: tokens.colorNeutralBackground1,
-    border: `1px solid ${tokens.colorNeutralStroke1}`,
-    boxShadow: tokens.shadow4,
-  },
-  nodeSelected: { border: `2px solid ${tokens.colorBrandStroke1}` },
-  nodeRow: { display: 'flex', alignItems: 'center', gap: '6px' },
+  nodeRow: { display: 'flex', alignItems: 'center', gap: tokens.spacingHorizontalS },
   empty: {
-    padding: '32px', textAlign: 'center', color: tokens.colorNeutralForeground3,
-    border: `1px dashed ${tokens.colorNeutralStroke2}`, borderRadius: '12px', lineHeight: 1.6,
+    padding: tokens.spacingVerticalXXL, textAlign: 'center', color: tokens.colorNeutralForeground3,
+    border: `1px dashed ${tokens.colorNeutralStroke2}`, borderRadius: tokens.borderRadiusXLarge, lineHeight: 1.6,
   },
+  // Spacing wrapper for the empty-state CTA (token-driven, no raw px).
+  emptyCta: { marginTop: tokens.spacingVerticalM },
 });
+
+/** Width contract for a task-flow step card (kept identical to prior min/max). */
+const STEP_NODE_WIDTH = 210;
 
 // --- Custom node ----------------------------------------------------------
 
@@ -79,30 +90,52 @@ interface StepNodeData extends Record<string, unknown> {
   note?: string;
 }
 
+/**
+ * Task-flow step visual — the single step accent (blue / `move`) with the
+ * flow-step glyph. The glyph inherits the kit icon-chip's accent colour (no
+ * forced hex), so it stays theme-aware in light + dark.
+ */
+const STEP_VISUAL: CanvasVisual = {
+  icon: <Flowchart20Regular />,
+  category: 'move',
+  accent: STEP_ACCENT,
+};
+
 function TaskFlowStepNode({ data, selected }: NodeProps) {
-  const s = useStyles();
   const d = data as StepNodeData;
   const meta = d.itemType ? findItemType(d.itemType) : undefined;
-  const icon = d.itemType ? getItemTypeIcon(d.itemType, meta?.category) : <Flowchart20Regular />;
+  // Linked-item identity + note surface in the kit's body description slot —
+  // accent-tinted badge for the linked item, neutral caption for the note.
+  const linkedLabel = d.itemId && meta ? meta.displayName : undefined;
+  const description = [linkedLabel, d.note].filter(Boolean).join(' · ') || undefined;
   return (
-    <div className={`${s.node} ${selected ? s.nodeSelected : ''}`}>
-      <Handle type="target" position={Position.Left} />
-      <div className={s.nodeRow}>
-        <span style={{ display: 'flex' }}>{icon}</span>
-        <Text weight="semibold" size={300}>{d.label}</Text>
-      </div>
-      {d.itemId && meta && (
-        <Caption1 style={{ color: tokens.colorNeutralForeground3 }}>{meta.displayName}</Caption1>
-      )}
-      {d.note && (
-        <Caption1 style={{ color: tokens.colorNeutralForeground3, display: 'block', marginTop: 2 }}>{d.note}</Caption1>
-      )}
-      <Handle type="source" position={Position.Right} />
-    </div>
+    <CanvasNode
+      width={STEP_NODE_WIDTH}
+      title={d.label}
+      visual={STEP_VISUAL}
+      selected={selected}
+      typeLabel={linkedLabel ?? 'Step'}
+      description={description}
+    >
+      {/* Caller-owned ports — handle ids/types/positions unchanged from prior. */}
+      <Handle type="target" position={Position.Left} style={portStyle('in', STEP_ACCENT)} />
+      <Handle type="source" position={Position.Right} style={portStyle('out', STEP_ACCENT)} />
+    </CanvasNode>
   );
 }
 
 const nodeTypes: NodeTypes = { step: TaskFlowStepNode };
+
+// --- Custom edge ----------------------------------------------------------
+// Wrap the shared kit CanvasEdge with the step accent so flow connectors match
+// the rest of the Loom canvas visual language (typed bezier). Geometry, ids,
+// and wiring are unchanged from the prior smoothstep edges.
+
+function TaskFlowEdgeComponent(props: EdgeProps) {
+  return <CanvasEdge {...props} stroke={STEP_ACCENT} />;
+}
+
+const edgeTypes: EdgeTypes = { taskflow: TaskFlowEdgeComponent };
 
 // --- Canvas (inner — must be inside ReactFlowProvider) --------------------
 
@@ -127,7 +160,7 @@ function flowToNodes(flow: TaskFlow): Node[] {
 }
 function flowToEdges(flow: TaskFlow): Edge[] {
   return (flow.edges || []).map((e) => ({
-    id: e.id, source: e.source, target: e.target, label: e.label, type: 'smoothstep',
+    id: e.id, source: e.source, target: e.target, label: e.label, type: 'taskflow',
   }));
 }
 
@@ -204,7 +237,7 @@ function TaskFlowCanvasInner({ workspaceId, flow, items, onBack }: CanvasProps) 
   }, [onEdgesChange, markDirty]);
 
   const onConnect = useCallback((conn: Connection) => {
-    setEdges((eds) => addEdge({ ...conn, id: uid('e'), type: 'smoothstep' }, eds));
+    setEdges((eds) => addEdge({ ...conn, id: uid('e'), type: 'taskflow' }, eds));
     markDirty();
   }, [setEdges, markDirty]);
 
@@ -263,6 +296,7 @@ function TaskFlowCanvasInner({ workspaceId, flow, items, onBack }: CanvasProps) 
           nodes={nodes}
           edges={edges}
           nodeTypes={nodeTypes}
+          edgeTypes={edgeTypes}
           onNodesChange={handleNodesChange}
           onEdgesChange={handleEdgesChange}
           onConnect={onConnect}
@@ -472,7 +506,7 @@ export function TaskFlowsPane({ workspaceId }: TaskFlowsPaneProps): JSX.Element 
       {!flowsQ.isLoading && flows.length === 0 && (
         <div className={s.empty}>
           <Body1>No task flows yet. A task flow is a visual canvas that maps the steps of a process and links each step to a real item in this workspace.</Body1>
-          <div style={{ marginTop: 12 }}>
+          <div className={s.emptyCta}>
             <Button appearance="primary" icon={<Add20Regular />} onClick={() => setCreateOpen(true)}>New task flow</Button>
           </div>
         </div>

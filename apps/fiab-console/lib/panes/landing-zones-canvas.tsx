@@ -20,12 +20,23 @@ import {
 } from '@xyflow/react';
 import '@xyflow/react/dist/style.css';
 import { makeStyles, tokens, Subtitle2, Body1 } from '@fluentui/react-components';
+import { Building20Regular, Box20Regular } from '@fluentui/react-icons';
+import { accentTint } from '@/lib/components/canvas/canvas-node-kit';
 import type { LandingZone, HubCoords, DlzAttachState } from '@/lib/setup/landing-zones-model';
 
+/**
+ * Attach-state → theme-aware accent var + tinted background (the kit's
+ * `accentTint` owns the color-mix so light + dark both read correctly — the
+ * project's mermaid/dark-mode lesson: light-only pastels break under dark).
+ *   attached → emerald, detached → amber, unknown → neutral.
+ */
+const ACCENT_EMERALD = 'var(--loom-accent-emerald)';
+const ACCENT_AMBER = 'var(--loom-accent-amber)';
+
 const STATE_STYLE: Record<DlzAttachState, { bg: string; border: string; label: string }> = {
-  attached: { bg: '#F0FDF4', border: '#16A34A', label: 'Attached' },
-  detached: { bg: '#FFF7ED', border: '#B45309', label: 'Needs repair' },
-  unknown: { bg: '#F5F5F5', border: tokens.colorNeutralStroke2, label: 'Unknown' },
+  attached: { bg: accentTint(ACCENT_EMERALD, 8), border: ACCENT_EMERALD, label: 'Attached' },
+  detached: { bg: accentTint(ACCENT_AMBER, 8), border: ACCENT_AMBER, label: 'Needs repair' },
+  unknown: { bg: tokens.colorNeutralBackground2, border: tokens.colorNeutralStroke2, label: 'Unknown' },
 };
 
 const useStyles = makeStyles({
@@ -42,20 +53,25 @@ const useStyles = makeStyles({
     borderRadius: tokens.borderRadiusLarge, overflow: 'hidden',
   },
   legend: {
-    display: 'flex', flexWrap: 'wrap', columnGap: '12px', rowGap: '6px',
-    padding: '8px 10px', backgroundColor: tokens.colorNeutralBackground1,
+    display: 'flex', flexWrap: 'wrap',
+    columnGap: tokens.spacingHorizontalM, rowGap: tokens.spacingVerticalXS,
+    paddingTop: tokens.spacingVerticalXS, paddingBottom: tokens.spacingVerticalXS,
+    paddingLeft: tokens.spacingHorizontalS, paddingRight: tokens.spacingHorizontalS,
+    backgroundColor: tokens.colorNeutralBackground1,
     border: `1px solid ${tokens.colorNeutralStroke2}`,
     borderRadius: tokens.borderRadiusMedium, boxShadow: tokens.shadow8,
   },
   legendItem: {
-    display: 'inline-flex', alignItems: 'center', gap: '6px',
-    fontSize: '11px', color: tokens.colorNeutralForeground2, whiteSpace: 'nowrap',
+    display: 'inline-flex', alignItems: 'center', gap: tokens.spacingHorizontalXS,
+    fontSize: tokens.fontSizeBase200, color: tokens.colorNeutralForeground2, whiteSpace: 'nowrap',
   },
-  legendSwatch: { width: '12px', height: '12px', borderRadius: '3px', flexShrink: 0 },
+  legendSwatch: { width: '12px', height: '12px', borderRadius: tokens.borderRadiusSmall, flexShrink: 0 },
   empty: {
     position: 'absolute', inset: 0, display: 'flex', flexDirection: 'column',
-    alignItems: 'center', justifyContent: 'center', gap: '8px',
-    textAlign: 'center', padding: '24px',
+    alignItems: 'center', justifyContent: 'center', gap: tokens.spacingVerticalS,
+    textAlign: 'center',
+    paddingTop: tokens.spacingVerticalXXL, paddingBottom: tokens.spacingVerticalXXL,
+    paddingLeft: tokens.spacingHorizontalXXL, paddingRight: tokens.spacingHorizontalXXL,
   },
 });
 
@@ -92,14 +108,27 @@ function layout(hub: HubCoords | null, zones: LandingZone[]): { nodes: Node[]; e
     id: HUB_ID, type: 'default', position: { x: cx - 90, y: cy - 36 },
     draggable: false, selectable: false,
     style: {
-      width: 180, padding: '10px 12px', borderRadius: 10, textAlign: 'center',
-      backgroundColor: tokens.colorBrandBackground2, border: `2px solid ${tokens.colorBrandStroke1}`,
+      width: 180,
+      paddingTop: tokens.spacingVerticalS, paddingBottom: tokens.spacingVerticalS,
+      paddingLeft: tokens.spacingHorizontalM, paddingRight: tokens.spacingHorizontalM,
+      borderRadius: tokens.borderRadiusLarge, textAlign: 'center',
+      backgroundColor: tokens.colorBrandBackground2,
+      border: `2px solid ${tokens.colorBrandStroke1}`,
+      boxShadow: tokens.shadow8,
     },
     data: {
       label: (
         <div style={{ lineHeight: 1.3 }}>
-          <div style={{ fontWeight: 700, fontSize: 13 }}>🏛️ CSA Loom hub</div>
-          <div style={{ fontSize: 10, color: tokens.colorNeutralForeground3 }}>
+          <div style={{
+            display: 'inline-flex', alignItems: 'center', justifyContent: 'center',
+            gap: tokens.spacingHorizontalXS,
+            fontWeight: tokens.fontWeightBold, fontSize: tokens.fontSizeBase300,
+            color: tokens.colorNeutralForeground1,
+          }}>
+            <Building20Regular style={{ width: 16, height: 16, color: tokens.colorBrandForeground1 }} />
+            CSA Loom hub
+          </div>
+          <div style={{ fontSize: tokens.fontSizeBase100, color: tokens.colorNeutralForeground3 }}>
             {hub?.boundary || '—'} · {hub?.location || '—'}
           </div>
         </div>
@@ -115,17 +144,30 @@ function layout(hub: HubCoords | null, zones: LandingZone[]): { nodes: Node[]; e
     nodes.push({
       id: z.id, type: 'default', position: { x, y },
       style: {
-        width: 160, padding: '8px 10px', borderRadius: 8, fontSize: 11, textAlign: 'center',
+        width: 160,
+        paddingTop: tokens.spacingVerticalS, paddingBottom: tokens.spacingVerticalS,
+        paddingLeft: tokens.spacingHorizontalS, paddingRight: tokens.spacingHorizontalS,
+        borderRadius: tokens.borderRadiusMedium, fontSize: tokens.fontSizeBase200,
+        textAlign: 'center',
         backgroundColor: st.bg, border: `2px solid ${st.border}`, cursor: 'pointer',
+        boxShadow: tokens.shadow4,
       },
       data: {
         zone: z,
         label: (
           <div style={{ lineHeight: 1.3 }} title={z.rg}>
-            <div style={{ fontWeight: 600, fontSize: 12 }}>📦 {z.domainName}</div>
-            <div style={{ fontSize: 9, color: tokens.colorNeutralForeground3 }}>{z.region}</div>
+            <div style={{
+              display: 'inline-flex', alignItems: 'center', justifyContent: 'center',
+              gap: tokens.spacingHorizontalXS,
+              fontWeight: tokens.fontWeightSemibold, fontSize: tokens.fontSizeBase200,
+              color: tokens.colorNeutralForeground1,
+            }}>
+              <Box20Regular style={{ width: 16, height: 16, color: st.border }} />
+              {z.domainName}
+            </div>
+            <div style={{ fontSize: tokens.fontSizeBase100, color: tokens.colorNeutralForeground3 }}>{z.region}</div>
             {z.crossSubscription && (
-              <div style={{ fontSize: 8, marginTop: 2, color: '#B45309' }}>cross-subscription</div>
+              <div style={{ fontSize: tokens.fontSizeBase100, marginTop: tokens.spacingVerticalXXS, color: ACCENT_AMBER }}>cross-subscription</div>
             )}
           </div>
         ),
@@ -136,7 +178,7 @@ function layout(hub: HubCoords | null, zones: LandingZone[]): { nodes: Node[]; e
       animated: z.attachState === 'attached',
       markerEnd: { type: MarkerType.ArrowClosed },
       style: {
-        stroke: z.attachState === 'detached' ? '#B45309' : tokens.colorBrandBackground,
+        stroke: z.attachState === 'detached' ? ACCENT_AMBER : tokens.colorBrandBackground,
         strokeWidth: 1.5,
         strokeDasharray: z.attachState === 'detached' ? '4,3' : undefined,
       },

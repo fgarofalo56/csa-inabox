@@ -24,24 +24,29 @@ import {
 import '@xyflow/react/dist/style.css';
 import {
   Button, Badge, Caption1, Body1, Input, Dropdown, Option, Label, Field, SpinButton,
-  Divider, Textarea, Text,
+  Divider, Text,
   tokens, makeStyles, shorthands,
 } from '@fluentui/react-components';
 import {
-  Add20Regular, Delete20Regular, DatabaseRegular, TableRegular,
+  Add20Regular, Delete20Regular, DatabaseMultiple20Regular, Table20Regular,
 } from '@fluentui/react-icons';
 import { MonacoTextarea } from '@/lib/components/editor/monaco-textarea';
+import { CanvasNode, accentTint, portStyle, type CanvasVisual } from '@/lib/components/canvas/canvas-node-kit';
 import type {
   DbtProjectGraph, DbtSource, DbtModel, DbtTest, DbtTarget, MedallionLayer, Materialization, DbtAdapter,
 } from '@/lib/dbt/dbt-project-model';
 import { defaultMaterializationForLayer } from '@/lib/dbt/dbt-project-model';
 
-const LAYER_COLOR: Record<MedallionLayer, string> = {
-  bronze: '#a16207',
-  silver: '#64748b',
-  gold: '#b45309',
+// Theme-aware medallion accents — same `--loom-accent-*` CSS-var pattern (light
+// + dark, defined in app/globals.css) that lineage-canvas / schema-diagram use.
+// No hardcoded hex: bronze→amber, silver→teal, gold→gold (amber-bright); the raw
+// source feeds map to blue.
+const LAYER_ACCENT: Record<MedallionLayer, string> = {
+  bronze: 'var(--loom-accent-amber)',
+  silver: 'var(--loom-accent-teal)',
+  gold: 'var(--loom-accent-gold)',
 };
-const SOURCE_COLOR = '#0ea5e9';
+const SOURCE_ACCENT = 'var(--loom-accent-blue)';
 
 const useStyles = makeStyles({
   designer: {
@@ -79,35 +84,21 @@ const useStyles = makeStyles({
     ...shorthands.borderRadius(tokens.borderRadiusMedium),
     ...shorthands.padding(tokens.spacingVerticalXS, tokens.spacingHorizontalXS),
   },
-  node: {
-    minWidth: '160px',
-    maxWidth: '220px',
-    ...shorthands.padding('8px', '10px'),
-    ...shorthands.borderRadius(tokens.borderRadiusMedium),
-    backgroundColor: tokens.colorNeutralBackground1,
-    ...shorthands.border('2px', 'solid', tokens.colorNeutralStroke2),
-    boxShadow: tokens.shadow4,
-  },
-  nodeSelected: { ...shorthands.border('2px', 'solid', tokens.colorBrandStroke1) },
-  nodeTitle: { display: 'flex', alignItems: 'center', gap: '6px', fontWeight: 600, fontSize: tokens.fontSizeBase300 },
-  nodeLabel: { overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', minWidth: 0 },
-  nodeIcon: { flexShrink: 0 },
-  nodeSub: { fontSize: tokens.fontSizeBase200, color: tokens.colorNeutralForeground3, fontFamily: tokens.fontFamilyMonospace, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' },
-  testRow: { display: 'flex', gap: '4px', alignItems: 'center' },
   inspectorForm: { display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalS },
   twoCol: { display: 'flex', gap: tokens.spacingHorizontalS },
   flex1: { flex: 1 },
   testCard: {
-    display: 'flex', flexDirection: 'column', gap: '4px',
+    display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalXXS,
     ...shorthands.border('1px', 'solid', tokens.colorNeutralStroke2),
     ...shorthands.padding(tokens.spacingVerticalXS, tokens.spacingHorizontalXS),
     ...shorthands.borderRadius(tokens.borderRadiusSmall),
     backgroundColor: tokens.colorNeutralBackground2,
   },
-  testTopRow: { display: 'flex', gap: '4px', alignItems: 'center' },
+  testTopRow: { display: 'flex', gap: tokens.spacingHorizontalXS, alignItems: 'center' },
   emptyHint: {
     position: 'absolute', inset: 0, display: 'flex', alignItems: 'center', justifyContent: 'center',
-    pointerEvents: 'none', color: tokens.colorNeutralForeground3, zIndex: 1, textAlign: 'center', padding: '24px',
+    pointerEvents: 'none', color: tokens.colorNeutralForeground3, zIndex: 1, textAlign: 'center',
+    ...shorthands.padding(tokens.spacingVerticalXXL, tokens.spacingHorizontalXXL),
   },
 });
 
@@ -124,33 +115,71 @@ interface DbtNodeData {
   [k: string]: unknown;
 }
 
+/** Node width contract — fits inside the COL_GAP column stride, matches the
+ * pipeline canvas node footprint so dbt nodes read as the same family. */
+const DBT_NODE_W = 200;
+
+/** Resolve the theme-aware accent for a medallion model layer (amber/teal/gold)
+ * or the neutral stroke when a layer is somehow absent. */
+function layerAccent(layer?: MedallionLayer): string {
+  return layer ? LAYER_ACCENT[layer] : tokens.colorNeutralStroke2;
+}
+
 function SourceFlowNode({ data, selected }: NodeProps) {
-  const s = useStyles();
   const d = data as unknown as DbtNodeData;
+  const visual: CanvasVisual = {
+    icon: <DatabaseMultiple20Regular />,
+    category: 'move',
+    accent: SOURCE_ACCENT,
+  };
   return (
-    <div className={`${s.node} ${selected ? s.nodeSelected : ''}`} style={{ borderColor: selected ? undefined : SOURCE_COLOR }}>
-      <Handle type="source" position={Position.Right} />
-      <div className={s.nodeTitle}><DatabaseRegular className={s.nodeIcon} /> <span className={s.nodeLabel} title={d.label}>{d.label}</span></div>
-      {d.subtitle && <div className={s.nodeSub} title={d.subtitle}>{d.subtitle}</div>}
-      <Badge size="extra-small" appearance="tint" color="informative">source</Badge>
-    </div>
+    <CanvasNode
+      width={DBT_NODE_W}
+      title={d.label}
+      visual={visual}
+      selected={selected}
+      typeLabel="Source"
+      description={d.subtitle}
+      badges={<Badge size="small" appearance="tint" color="informative">source()</Badge>}
+    >
+      <Handle type="source" position={Position.Right} style={portStyle('out', SOURCE_ACCENT)} />
+    </CanvasNode>
   );
 }
 
 function ModelFlowNode({ data, selected }: NodeProps) {
-  const s = useStyles();
   const d = data as unknown as DbtNodeData;
-  const color = d.layer ? LAYER_COLOR[d.layer] : tokens.colorNeutralStroke2;
+  const accent = layerAccent(d.layer);
+  const visual: CanvasVisual = {
+    icon: <Table20Regular />,
+    category: 'transform',
+    accent,
+  };
   return (
-    <div className={`${s.node} ${selected ? s.nodeSelected : ''}`} style={{ borderColor: selected ? undefined : color }}>
-      <Handle type="target" position={Position.Left} />
-      <Handle type="source" position={Position.Right} />
-      <div className={s.nodeTitle}><TableRegular className={s.nodeIcon} /> <span className={s.nodeLabel} title={d.label}>{d.label}</span></div>
-      {d.subtitle && <div className={s.nodeSub} title={d.subtitle}>{d.subtitle}</div>}
-      <div style={{ display: 'flex', gap: 4 }}>
-        <Badge size="extra-small" appearance="filled" style={{ backgroundColor: color }}>{d.layer}</Badge>
-      </div>
-    </div>
+    <CanvasNode
+      width={DBT_NODE_W}
+      title={d.label}
+      visual={visual}
+      selected={selected}
+      typeLabel={d.layer ?? 'model'}
+      description={d.subtitle}
+      badges={(
+        <Badge
+          size="small"
+          appearance="tint"
+          style={{
+            backgroundColor: accentTint(accent, 16),
+            color: accent,
+            borderColor: accentTint(accent, 32),
+          }}
+        >
+          {d.layer}
+        </Badge>
+      )}
+    >
+      <Handle type="target" position={Position.Left} style={portStyle('in', accent)} />
+      <Handle type="source" position={Position.Right} style={portStyle('out', accent)} />
+    </CanvasNode>
   );
 }
 
@@ -372,8 +401,8 @@ function CanvasInner({ sources, models, selected, onSelect, onAddSource, onAddMo
           zoomable
           nodeColor={(n) => {
             const d = n.data as unknown as DbtNodeData;
-            if (d?.kind === 'source') return SOURCE_COLOR;
-            return d?.layer ? LAYER_COLOR[d.layer] : tokens.colorNeutralStroke2;
+            if (d?.kind === 'source') return SOURCE_ACCENT;
+            return layerAccent(d?.layer);
           }}
           nodeStrokeWidth={2}
           style={{ backgroundColor: tokens.colorNeutralBackground1 }}

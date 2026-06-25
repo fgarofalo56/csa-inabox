@@ -38,14 +38,25 @@ import {
   Dialog, DialogSurface, DialogBody, DialogTitle, DialogContent, DialogActions,
   Table, TableHeader, TableRow, TableHeaderCell, TableBody, TableCell,
   MessageBar, MessageBarBody, MessageBarTitle,
-  makeStyles, tokens,
+  makeStyles, mergeClasses, tokens,
 } from '@fluentui/react-components';
 import {
   FullScreenMaximize20Regular, Organization20Regular,
-  DocumentTable16Regular, Key16Regular, Add20Regular, Delete16Regular,
+  DocumentTable16Regular, Key16Regular, Add20Regular,
   MathFormula20Regular, Play16Regular,
 } from '@fluentui/react-icons';
+import { accentTint, accentGradient, portStyle } from '@/lib/components/canvas/canvas-node-kit';
 import { MonacoTextarea } from '@/lib/components/editor/monaco-textarea';
+
+/**
+ * Table-card accent — theme-aware `--loom-accent-blue` (defined light + dark in
+ * app/globals.css). The Model-view card deliberately is NOT forced into the
+ * shared `CanvasNode` shape: a table card carries per-column connect handles
+ * (key-to-key relationship drawing), which `CanvasNode` does not model. Instead
+ * it reuses the kit's token-only tint/gradient helpers so the chrome (gradient
+ * header, icon chip, accent rail, hover elevation) reads as the same product.
+ */
+const TABLE_ACCENT = 'var(--loom-accent-blue)';
 
 // ---------------------------------------------------------------------------
 // Public model — kept in sync with the model BFF routes
@@ -115,7 +126,128 @@ export interface TableCardNodeData {
   [key: string]: unknown;
 }
 
+/**
+ * Table-card chrome — token-only, theme-aware, hover-elevated, mirroring the
+ * shared `CanvasNode` look (accent rail + gradient header + icon chip + hover
+ * shadow4→shadow16) without forcing this card into the kit's node shape, which
+ * does not model per-column connect handles. All motion is gated behind
+ * `prefers-reduced-motion: reduce`.
+ */
+const nodeStyles = makeStyles({
+  card: {
+    position: 'relative',
+    width: `${NODE_W}px`,
+    borderRadius: tokens.borderRadiusXLarge,
+    background: tokens.colorNeutralBackground1,
+    border: `1px solid ${tokens.colorNeutralStroke2}`,
+    boxShadow: tokens.shadow4,
+    userSelect: 'none',
+    overflow: 'hidden',
+    transitionProperty: 'box-shadow, transform',
+    transitionDuration: tokens.durationNormal,
+    transitionTimingFunction: tokens.curveEasyEase,
+    ':hover': {
+      boxShadow: tokens.shadow16,
+      transform: 'translateY(-1px)',
+    },
+    '@media (prefers-reduced-motion: reduce)': {
+      transitionDuration: '0.01ms',
+      ':hover': { transform: 'none' },
+    },
+  },
+  cardSelected: {
+    border: `1px solid ${tokens.colorBrandStroke1}`,
+    boxShadow: `0 0 0 2px ${TABLE_ACCENT}`,
+  },
+  // Accent rail down the left edge (anchors the table category colour).
+  rail: {
+    position: 'absolute',
+    left: 0,
+    top: 0,
+    bottom: 0,
+    width: '6px',
+    background: TABLE_ACCENT,
+    zIndex: 1,
+  },
+  header: {
+    display: 'flex',
+    alignItems: 'center',
+    gap: tokens.spacingHorizontalS,
+    paddingTop: tokens.spacingVerticalS,
+    paddingBottom: tokens.spacingVerticalS,
+    paddingLeft: tokens.spacingHorizontalM,
+    paddingRight: tokens.spacingHorizontalS,
+    marginLeft: '6px',
+    background: accentGradient(TABLE_ACCENT),
+    borderBottom: `1px solid ${tokens.colorNeutralStroke2}`,
+  },
+  iconChip: {
+    flexShrink: 0,
+    width: '24px',
+    height: '24px',
+    borderRadius: tokens.borderRadiusMedium,
+    display: 'flex',
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: accentTint(TABLE_ACCENT, 14),
+    color: TABLE_ACCENT,
+  },
+  cols: {
+    display: 'flex',
+    flexDirection: 'column',
+    marginLeft: '6px',
+  },
+  colRow: {
+    position: 'relative',
+    display: 'flex',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    gap: tokens.spacingHorizontalS,
+    paddingTop: tokens.spacingVerticalXXS,
+    paddingBottom: tokens.spacingVerticalXXS,
+    paddingLeft: tokens.spacingHorizontalM,
+    paddingRight: tokens.spacingHorizontalM,
+    fontSize: tokens.fontSizeBase100,
+    minHeight: '18px',
+  },
+  // Primary-key rows get a faint accent wash so keys read first.
+  colRowPk: {
+    background: accentTint(TABLE_ACCENT, 6),
+  },
+  colName: {
+    display: 'flex',
+    alignItems: 'center',
+    gap: tokens.spacingHorizontalXS,
+    overflow: 'hidden',
+  },
+  keyGlyph: {
+    display: 'inline-flex',
+    color: 'var(--loom-accent-amber)',
+  },
+  colType: {
+    color: tokens.colorNeutralForeground4,
+    flexShrink: 0,
+  },
+  more: {
+    color: tokens.colorNeutralForeground4,
+    paddingTop: tokens.spacingVerticalXXS,
+    paddingBottom: tokens.spacingVerticalXXS,
+    paddingLeft: tokens.spacingHorizontalM,
+    paddingRight: tokens.spacingHorizontalM,
+    marginLeft: '6px',
+  },
+  empty: {
+    color: tokens.colorNeutralForeground4,
+    paddingTop: tokens.spacingVerticalXS,
+    paddingBottom: tokens.spacingVerticalXS,
+    paddingLeft: tokens.spacingHorizontalM,
+    paddingRight: tokens.spacingHorizontalM,
+    marginLeft: '6px',
+  },
+});
+
 function TableCardNodeImpl({ data, selected }: NodeProps) {
+  const styles = nodeStyles();
   const { table } = data as TableCardNodeData;
   const cols = table.columns || [];
   const shown = cols.slice(0, MAX_COLS);
@@ -125,74 +257,58 @@ function TableCardNodeImpl({ data, selected }: NodeProps) {
       id={`model-table-${table.id}`}
       data-model-table-id={table.id}
       aria-label={`Table ${table.id}`}
-      style={{
-        position: 'relative',
-        width: NODE_W,
-        borderRadius: tokens.borderRadiusXLarge,
-        background: tokens.colorNeutralBackground1,
-        border: `1px solid ${selected ? tokens.colorBrandStroke1 : tokens.colorNeutralStroke2}`,
-        boxShadow: selected ? `0 0 0 2px ${tokens.colorBrandBackground2}` : '0 1px 2px rgba(0,0,0,0.08)',
-        userSelect: 'none',
-        overflow: 'hidden',
-      }}
+      className={mergeClasses(styles.card, selected && styles.cardSelected)}
     >
-      {/* Header bar */}
-      <div style={{
-        display: 'flex', alignItems: 'center', gap: tokens.spacingHorizontalS,
-        padding: `${tokens.spacingVerticalS} ${tokens.spacingHorizontalL}`,
-        background: tokens.colorNeutralBackground2,
-        borderBottom: `1px solid ${tokens.colorNeutralStroke2}`,
-      }}>
-        <span style={{ color: 'var(--loom-accent-blue)', display: 'inline-flex' }}><DocumentTable16Regular fontSize={16} /></span>
+      {/* Accent rail anchoring the table category colour. */}
+      <span className={styles.rail} aria-hidden="true" />
+
+      {/* Gradient header — icon chip + table name + schema badge. */}
+      <div className={styles.header}>
+        <span className={styles.iconChip} aria-hidden="true"><DocumentTable16Regular fontSize={16} /></span>
         <Text size={200} weight="semibold" truncate wrap={false} style={{ flex: 1 }}>{table.name}</Text>
         <Badge size="extra-small" appearance="tint" color="informative">{table.schema}</Badge>
       </div>
 
       {/* Whole-card target/source handles (used as a fallback when a precise
           column handle isn't grabbed). */}
-      <Handle type="target" position={Position.Left} id="__table" style={{ width: 8, height: 8, background: 'var(--loom-accent-blue)', border: 'none', left: -4, top: 16 }} />
-      <Handle type="source" position={Position.Right} id="__table" style={{ width: 8, height: 8, background: 'var(--loom-accent-blue)', border: 'none', right: -4, top: 16 }} />
+      <Handle type="target" position={Position.Left} id="__table" style={{ ...portStyle('in', TABLE_ACCENT), left: -6, top: 16 }} />
+      <Handle type="source" position={Position.Right} id="__table" style={{ ...portStyle('out', TABLE_ACCENT), right: -6, top: 16 }} />
 
       {/* Column rows — each carries a column-level source + target handle so a
           relationship can be drawn key-to-key. `nodrag` keeps clicks from
           dragging the whole card. */}
-      <div style={{ display: 'flex', flexDirection: 'column' }}>
+      <div className={styles.cols}>
         {shown.map((c) => (
           <div
             key={c.name}
-            className="nodrag"
-            style={{
-              position: 'relative',
-              display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: tokens.spacingHorizontalS,
-              padding: `${tokens.spacingVerticalXXS} ${tokens.spacingHorizontalM}`, fontSize: tokens.fontSizeBase100, minHeight: 18,
-            }}
+            className={mergeClasses('nodrag', styles.colRow, c.isPk && styles.colRowPk)}
           >
             <Handle
               type="target" position={Position.Left} id={`col:${c.name}`}
-              style={{ width: 7, height: 7, background: tokens.colorNeutralStroke1, border: 'none', left: -3 }}
+              style={{ ...portStyle('in', TABLE_ACCENT), left: -6 }}
             />
-            <span style={{ display: 'flex', alignItems: 'center', gap: tokens.spacingHorizontalXS, overflow: 'hidden' }}>
-              {c.isPk && <span style={{ color: 'var(--loom-accent-amber, #b8860b)', display: 'inline-flex' }}><Key16Regular fontSize={12} /></span>}
+            <span className={styles.colName}>
+              {c.isPk && <span className={styles.keyGlyph}><Key16Regular fontSize={12} /></span>}
               <span style={{
                 color: tokens.colorNeutralForeground1,
-                fontWeight: c.isPk ? 600 : 400,
+                fontWeight: c.isPk ? tokens.fontWeightSemibold : tokens.fontWeightRegular,
                 overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
               }}>{c.name}</span>
             </span>
-            <span style={{ color: tokens.colorNeutralForeground4, flexShrink: 0 }}>{c.type}</span>
+            <span className={styles.colType}>{c.type}</span>
             <Handle
               type="source" position={Position.Right} id={`col:${c.name}`}
-              style={{ width: 7, height: 7, background: tokens.colorNeutralStroke1, border: 'none', right: -3 }}
+              style={{ ...portStyle('out', TABLE_ACCENT), right: -6 }}
             />
           </div>
         ))}
         {cols.length > shown.length && (
-          <Caption1 style={{ color: tokens.colorNeutralForeground4, padding: `${tokens.spacingVerticalXXS} ${tokens.spacingHorizontalM}` }}>
+          <Caption1 className={styles.more}>
             +{cols.length - shown.length} more
           </Caption1>
         )}
         {cols.length === 0 && (
-          <Caption1 style={{ color: tokens.colorNeutralForeground4, padding: `${tokens.spacingVerticalXS} ${tokens.spacingHorizontalM}` }}>(no columns)</Caption1>
+          <Caption1 className={styles.empty}>(no columns)</Caption1>
         )}
       </div>
     </div>
@@ -315,6 +431,11 @@ function ModelViewCanvasInner({
           sourceHandle: `col:${r.fromColumn}`,
           targetHandle: `col:${r.toColumn}`,
           type: 'smoothstep',
+          // FLAG: the `⇄` is a cardinality/cross-filter notation marker rendered
+          // inside the edge LABEL text (the Power BI Model-view "both directions"
+          // glyph), not a UI icon — Fluent icons can't be embedded in a React
+          // Flow string edge label. Acceptable per the kit rules as a textual
+          // cardinality marker alongside the `1`/`*` ends.
           label: `${ends.from} — ${ends.to}${r.crossFilter === 'both' ? ' ⇄' : ''}`,
           labelStyle: { fontSize: tokens.fontSizeBase100, fill: tokens.colorNeutralForeground2 },
           animated: false,
@@ -539,6 +660,8 @@ interface ModelResponse {
   state?: string;
   /** Honest gate text surfaced when the backing compute is offline. */
   notice?: string;
+  /** Route's own compute probe — false when the backing compute is offline. */
+  computeReady?: boolean;
 }
 
 export interface ModelViewPanelProps {

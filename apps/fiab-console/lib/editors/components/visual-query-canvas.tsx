@@ -51,6 +51,10 @@ import {
 } from '@/lib/editors/components/delta-preview-grid-utils';
 import { MonacoTextarea } from '@/lib/components/editor/monaco-textarea';
 import {
+  CanvasNode, CATEGORY_ACCENT, portStyle,
+  type CanvasVisual, type CanvasNodeCategory,
+} from '@/lib/components/canvas/canvas-node-kit';
+import {
   compileGraph,
   VQ_JOIN_KINDS,
   VQ_AGG_FUNCS,
@@ -184,14 +188,26 @@ const useStyles = makeStyles({
 // React Flow custom node
 // ============================================================
 
-const STEP_COLOR: Record<VqStepKind, string> = {
-  source: '#0078d4',
-  filter: '#7719aa',
-  'select-columns': '#7719aa',
-  'keep-top-rows': '#7719aa',
-  'group-by': '#7719aa',
-  sort: '#7719aa',
-  join: '#107c10',
+/**
+ * VqStepKind → one of the 5 Web-5.0 canvas categories (drives the accent var +
+ * gradient header via the shared kit). source = move (blue); the transform
+ * steps = transform (violet); join (Merge) = iteration (amber).
+ */
+const STEP_CATEGORY: Record<VqStepKind, CanvasNodeCategory> = {
+  source: 'move',
+  filter: 'transform',
+  'select-columns': 'transform',
+  'keep-top-rows': 'transform',
+  'group-by': 'transform',
+  sort: 'transform',
+  join: 'iteration',
+  // Wave-3 Warp transform-builder steps — all transform-flavored except sink (move).
+  derive: 'transform',
+  rename: 'transform',
+  cast: 'transform',
+  dedup: 'transform',
+  union: 'iteration',
+  sink: 'move',
 };
 
 function stepIcon(kind: VqStepKind) {
@@ -207,43 +223,41 @@ function stepIcon(kind: VqStepKind) {
   }
 }
 
-const HANDLE: React.CSSProperties = { width: 11, height: 11, borderRadius: '50%', background: tokens.colorNeutralBackground1, zIndex: 3 };
+/** Header type-label for a step kind ('Source' for the source node). */
+function STEP_LABEL_FOR(kind: VqStepKind): string {
+  return kind === 'source' ? 'Source' : STEP_LABEL[kind];
+}
 
 function VqFlowNodeImpl({ data, selected }: NodeProps) {
   const d = data as unknown as VqNodeData;
-  const color = STEP_COLOR[d.kind] || '#7719aa';
+  const category = STEP_CATEGORY[d.kind] || 'transform';
+  const accent = CATEGORY_ACCENT[category];
   const isJoin = d.kind === 'join';
+  const visual: CanvasVisual = { icon: stepIcon(d.kind), category, accent };
   return (
-    <div
-      data-vq-kind={d.kind}
-      data-vq-label={d.label}
-      aria-label={`${d.kind} ${d.label}`}
-      style={{
-        position: 'relative', width: 186, padding: `${tokens.spacingVerticalS} ${tokens.spacingHorizontalM}`, borderRadius: tokens.borderRadiusLarge,
-        background: tokens.colorNeutralBackground1,
-        border: `1px solid ${selected ? tokens.colorBrandStroke1 : tokens.colorNeutralStroke2}`,
-        boxShadow: selected ? `0 0 0 2px ${tokens.colorBrandBackground2}` : '0 1px 2px rgba(0,0,0,0.06)',
-        display: 'flex', gap: tokens.spacingHorizontalS, alignItems: 'flex-start', cursor: 'pointer', userSelect: 'none',
+    <CanvasNode
+      width={186}
+      title={d.label}
+      typeLabel={STEP_LABEL_FOR(d.kind)}
+      visual={visual}
+      selected={selected}
+      rootProps={{
+        'data-vq-kind': d.kind,
+        'data-vq-label': d.label,
+        'aria-label': `${d.kind} ${d.label}`,
       }}
     >
       {d.kind !== 'source' && !isJoin && (
-        <Handle id="in" type="target" position={Position.Left} style={{ ...HANDLE, left: -6, top: '50%', border: `2px solid ${tokens.colorBrandStroke1}` }} />
+        <Handle id="in" type="target" position={Position.Left} style={{ ...portStyle('in', accent), left: -6, top: '50%' }} />
       )}
       {isJoin && (
         <>
-          <Handle id="in-left" type="target" position={Position.Left} style={{ ...HANDLE, left: -6, top: '34%', border: `2px solid ${tokens.colorBrandStroke1}` }} />
-          <Handle id="in-right" type="target" position={Position.Left} style={{ ...HANDLE, left: -6, top: '70%', border: `2px solid ${color}` }} />
+          <Handle id="in-left" type="target" position={Position.Left} style={{ ...portStyle('in', accent), left: -6, top: '34%' }} />
+          <Handle id="in-right" type="target" position={Position.Left} style={{ ...portStyle('out', accent), left: -6, top: '70%' }} />
         </>
       )}
-      <Handle id="out" type="source" position={Position.Right} style={{ ...HANDLE, right: -6, top: '50%', border: `2px solid ${color}` }} />
-
-      <div style={{ width: 6, alignSelf: 'stretch', borderRadius: tokens.borderRadiusSmall, background: color }} />
-      <div style={{ color, display: 'flex', alignItems: 'center', flexShrink: 0 }}>{stepIcon(d.kind)}</div>
-      <div style={{ display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalXXS, minWidth: 0, flex: 1 }}>
-        <div style={{ fontWeight: 600, fontSize: tokens.fontSizeBase300, color: tokens.colorNeutralForeground1, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{d.label}</div>
-        <Badge appearance="filled" size="small" style={{ backgroundColor: color, color: '#fff', alignSelf: 'flex-start' }}>{d.kind}</Badge>
-      </div>
-    </div>
+      <Handle id="out" type="source" position={Position.Right} style={{ ...portStyle('out', accent), right: -6, top: '50%' }} />
+    </CanvasNode>
   );
 }
 const VqFlowNode = memo(VqFlowNodeImpl);
@@ -824,6 +838,13 @@ const STEP_LABEL: Record<Exclude<VqStepKind, 'source'>, string> = {
   'group-by': 'Group by',
   sort: 'Sort rows',
   join: 'Merge',
+  // Wave-3 Warp transform-builder steps.
+  derive: 'Derived column',
+  rename: 'Rename columns',
+  cast: 'Change type',
+  dedup: 'Remove duplicates',
+  union: 'Append (Union)',
+  sink: 'Sink',
 };
 
 function formatCell(v: unknown): string {

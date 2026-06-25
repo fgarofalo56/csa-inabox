@@ -30,6 +30,7 @@ import {
 import '@xyflow/react/dist/style.css';
 import { Badge, Caption1, tokens, makeStyles } from '@fluentui/react-components';
 import { itemVisual } from '@/lib/components/ui/item-type-visual';
+import { accentTint, accentGradient } from '@/lib/components/canvas/canvas-node-kit';
 
 export interface DiagramSpoke {
   /** subscription id the DLZ lands in */
@@ -73,26 +74,42 @@ interface SubData { name: string; boundary?: string; region?: string; role: stri
 interface DomData { name: string; [k: string]: unknown }
 interface SvcData { type: string; label: string; [k: string]: unknown }
 
-const BOUNDARY_TINT: Record<string, string> = {
-  Commercial: '#0078d4', GCC: '#5c2d91', 'GCC-High': '#5c2d91', IL5: '#a4262c', DoD: '#a4262c',
+/** Boundary → theme-aware accent var (cleared-boundary chrome of the subscription frame). */
+const BOUNDARY_ACCENT: Record<string, string> = {
+  Commercial: 'var(--loom-accent-blue)',
+  GCC: 'var(--loom-accent-plum)',
+  'GCC-High': 'var(--loom-accent-plum)',
+  IL5: 'var(--loom-accent-red)',
+  DoD: 'var(--loom-accent-red)',
+};
+
+/** DLZ service `type` → theme-aware accent var (per-service-family colour on the leaf cards). */
+const SVC_ACCENT: Record<string, string> = {
+  lakehouse: 'var(--loom-accent-blue)',
+  warehouse: 'var(--loom-accent-green)',
+  'databricks-cluster': 'var(--loom-accent-red)',
+  'kql-database': 'var(--loom-accent-orange)',
+  'synapse-spark-pool': 'var(--loom-accent-azure)',
 };
 
 function SubNode({ data, width, height, selected }: NodeProps) {
   const d = data as SubData;
-  const tint = BOUNDARY_TINT[d.boundary || 'Commercial'] || '#0078d4';
+  const accent = BOUNDARY_ACCENT[d.boundary || 'Commercial'] || 'var(--loom-accent-blue)';
   return (
     <div style={{
-      width: width ?? SUB_W, height: height ?? 240, borderRadius: 10,
-      border: `2px solid ${selected ? tokens.colorBrandStroke1 : tint}`,
-      background: `${tint}0d`, boxSizing: 'border-box',
+      width: width ?? SUB_W, height: height ?? 240, borderRadius: tokens.borderRadiusLarge,
+      border: `2px solid ${selected ? tokens.colorBrandStroke1 : accent}`,
+      background: accentTint(accent, 5), boxSizing: 'border-box',
     }}>
       <div style={{
-        display: 'flex', alignItems: 'center', gap: 8, padding: '6px 10px',
-        borderBottom: `1px solid ${tint}40`, background: `${tint}1a`,
-        borderTopLeftRadius: 8, borderTopRightRadius: 8,
+        display: 'flex', alignItems: 'center', gap: tokens.spacingHorizontalS,
+        paddingTop: tokens.spacingVerticalXS, paddingBottom: tokens.spacingVerticalXS,
+        paddingLeft: tokens.spacingHorizontalS, paddingRight: tokens.spacingHorizontalS,
+        borderBottom: `1px solid ${accentTint(accent, 40)}`, background: accentGradient(accent),
+        borderTopLeftRadius: tokens.borderRadiusLarge, borderTopRightRadius: tokens.borderRadiusLarge,
       }}>
-        <span style={{ fontWeight: 700, fontSize: 13, color: tokens.colorNeutralForeground1 }}>{d.name}</span>
-        <Badge appearance="tint" size="small" style={{ color: tint }}>{d.role}</Badge>
+        <span style={{ fontWeight: tokens.fontWeightBold, fontSize: tokens.fontSizeBase300, color: tokens.colorNeutralForeground1 }}>{d.name}</span>
+        <Badge appearance="tint" size="small" style={{ color: accent, backgroundColor: accentTint(accent, 14) }}>{d.role}</Badge>
         {d.region && <Caption1 style={{ color: tokens.colorNeutralForeground3 }}>{d.region}</Caption1>}
       </div>
     </div>
@@ -103,15 +120,17 @@ function DomNode({ data, width, height }: NodeProps) {
   const d = data as DomData;
   return (
     <div style={{
-      width: width ?? DOMAIN_W, height: height ?? 150, borderRadius: 8,
+      width: width ?? DOMAIN_W, height: height ?? 150, borderRadius: tokens.borderRadiusMedium,
       border: `1.5px dashed ${tokens.colorNeutralStroke1}`,
       background: tokens.colorNeutralBackground1, boxSizing: 'border-box',
     }}>
       <div style={{
         display: 'flex', alignItems: 'center', justifyContent: 'space-between',
-        padding: '4px 8px', borderBottom: `1px solid ${tokens.colorNeutralStroke2}`,
+        paddingTop: tokens.spacingVerticalXXS, paddingBottom: tokens.spacingVerticalXXS,
+        paddingLeft: tokens.spacingHorizontalS, paddingRight: tokens.spacingHorizontalS,
+        borderBottom: `1px solid ${tokens.colorNeutralStroke2}`,
       }}>
-        <span style={{ fontWeight: 600, fontSize: 12, color: tokens.colorNeutralForeground1 }}>{d.name}</span>
+        <span style={{ fontWeight: tokens.fontWeightSemibold, fontSize: tokens.fontSizeBase200, color: tokens.colorNeutralForeground1 }}>{d.name}</span>
         <Caption1 style={{ color: tokens.colorNeutralForeground3 }}>DLZ</Caption1>
       </div>
     </div>
@@ -122,22 +141,25 @@ function SvcNode({ data }: NodeProps) {
   const d = data as SvcData;
   const v = itemVisual(d.type);
   const Icon = v.icon;
+  const accent = SVC_ACCENT[d.type] || 'var(--loom-accent-teal)';
   return (
     <div style={{
-      width: SVC_W, display: 'flex', alignItems: 'center', gap: 8,
-      padding: '6px 9px', borderRadius: 8, background: tokens.colorNeutralBackground1,
+      width: SVC_W, display: 'flex', alignItems: 'center', gap: tokens.spacingHorizontalS,
+      paddingTop: tokens.spacingVerticalXS, paddingBottom: tokens.spacingVerticalXS,
+      paddingLeft: tokens.spacingHorizontalS, paddingRight: tokens.spacingHorizontalS,
+      borderRadius: tokens.borderRadiusMedium, background: tokens.colorNeutralBackground1,
       border: `1px solid ${tokens.colorNeutralStroke2}`,
-      boxShadow: '0 1px 2px rgba(0,0,0,0.06)', boxSizing: 'border-box',
+      boxShadow: tokens.shadow4, boxSizing: 'border-box',
     }}>
       <span aria-hidden style={{
-        flexShrink: 0, width: 26, height: 26, borderRadius: 6,
-        background: `${v.color}1f`, color: v.color,
+        flexShrink: 0, width: 26, height: 26, borderRadius: tokens.borderRadiusMedium,
+        background: accentTint(accent, 14), color: accent,
         display: 'inline-flex', alignItems: 'center', justifyContent: 'center',
       }}>
         <Icon style={{ width: 16, height: 16 }} />
       </span>
       <span style={{
-        flex: 1, minWidth: 0, fontSize: 11, fontWeight: 500,
+        flex: 1, minWidth: 0, fontSize: tokens.fontSizeBase100, fontWeight: tokens.fontWeightMedium,
         color: tokens.colorNeutralForeground1,
         whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis',
       }}>{d.label}</span>
